@@ -9,7 +9,7 @@ Status: final draft (2026-10-11). Milestone 1 (the core loop) is implemented; se
 **A song is a program whose only input is time.**
 
 - **What a song is made of:**
-  - **Graphs** describe how it sounds. They are written in TypeScript or edited as nodes.
+  - **Graphs** describe how it sounds. The TypeScript code is the source of truth, and the node editor is a live, two-way view of it, the way Xcode's canvas relates to SwiftUI code: drag a knob or a cable and the code changes.
   - **Timeline data** is what gets played: notes, automation, masks, audio clips and tempo.
   - The graph is the source of truth for behaviour. Per-clip behaviour comes from masks, never from per-clip changes to the graph.
 - **How it runs:** a compiler checks the whole song, and a small Rust core plays it.
@@ -18,6 +18,7 @@ Status: final draft (2026-10-11). Milestone 1 (the core loop) is implemented; se
   - schedules and runs graphs
   - hosts sandboxed DSP code
   - stores the project
+- **Professional from the start:** audio clips (warping, resampling, comping) are as first-class as notes, and the plugins producers already use (CLAP, VST3, AU) run as ordinary nodes beside the open WebAssembly ones.
 - **Who uses it:** artists build songs from packages that others publish. AI agents work on the same project through the same API as the GUI, but they never get the final say.
 
 ## Principles
@@ -25,14 +26,15 @@ Status: final draft (2026-10-11). Milestone 1 (the core loop) is implemented; se
 1. **The minimal-core rule.** Something belongs in the core only if it can't be a package, or if making it a package would break a guarantee: safety, determinism, or a single source of truth. Everything else is a package.
 2. **No privileged packages.** The standard library uses the same plugin interface as everyone else. If the standard library can't be built as an ordinary package, the plugin system is missing something, and that gets fixed in the core.
 3. **Time is the only invariant.** Every signal is a function of song time. Kernels (compiled DSP code) see time only through their input ports.
-4. **Deterministic.** The same project and lockfile always give the same audio, bit for bit, on every machine. That makes caching, testing and reproducibility work.
+4. **Deterministic wherever it can be.** WebAssembly kernels give the same audio, bit for bit, on every machine, which makes caching, testing and reproducibility work. Hosted plugins (CLAP/VST3/AU) can't promise that, so they are marked impure: never cached, and reported as such. A song using only open kernels is fully reproducible.
 5. **Files are the truth.** A project is a folder of text and assets, and it diffs in git. The engine is the only writer at runtime, and every client goes through it.
 6. **Behaviour, data and layout are kept apart:**
    - Code is behaviour.
-   - The timeline is data.
+   - The timeline, audio and plugin state are data.
    - `layout.json` only controls how things are drawn.
-7. **Agents are clients, not features.** There is no AI built into the app. Agents get the same commands as the GUI, plus a way to "hear" the song, plus variants they can propose.
-8. **The artist decides.** Agents propose on variants, and locks protect what the artist doesn't want touched.
+7. **Code is the source of truth; the graph is a view you can edit.** Every edit in the node editor becomes a small, checked change to the code (see [Editing code from the graph](#editing-code-from-the-graph)). Turning a knob is instant; the new value is written into the code when you let go.
+8. **Agents are clients, not features.** There is no AI built into the app. Agents get the same commands as the GUI, plus a way to "hear" the song, plus variants they can propose.
+9. **The artist decides.** Agents propose on variants, and locks protect what the artist doesn't want touched.
 
 ## Layers
 
@@ -96,13 +98,14 @@ type Note = {
 
 ### Nodes
 
-A node is one of two things:
-- a **kernel instance**: compiled DSP from a package
+A node is one of three things:
+- a **kernel instance**: open, sandboxed WebAssembly DSP from a package
+- a **plugin instance**: a CLAP, VST3 or AU plugin, with its saved state stored as data (see [Hosted plugins](#hosted-plugins))
 - a **module instance**: a graph from a package or from your project
 
 Every node is:
 - **Causal.** Its output at time `t` depends only on its inputs up to `t`, plus any **look-ahead** it declares.
-- **Deterministic.** Kernels run in a sandbox with no access to a clock, randomness, threads or I/O. Random numbers come from seeds passed in as inputs.
+- **Deterministic** (kernels). Kernels run in a sandbox with no access to a clock, randomness, threads or I/O. Random numbers come from seeds passed in as inputs. Plugins are the exception and are marked impure.
 - **Explicit about latency.** Every kernel declares its latency, and the planner compensates automatically.
 
 ### Lanes and clips
@@ -114,11 +117,25 @@ A **lane** is a typed input of a module that the timeline fills in.
 | `lane.notes(id)` | `Events<Note>` | notes |
 | `lane.control(id, unit, default)` | `Control<U>` | breakpoints with curves |
 | `lane.mask(id)` | `Control<Unit01>` | breakpoints, default 0 |
-| `lane.audio(id)` | `Audio` | references to assets, with gain and fades |
+| `lane.audio(id)` | `Audio` | audio clips (see [Audio clips](#audio-clips)) |
 
 The song itself also has lanes for **tempo** and **sections**. Sections are arrangement markers such as `intro` and `chorus`, stored as `Events<Section>`.
 
 **Clips are always data and never code.** Where clips overlap on a lane, the later one wins. In gaps, the lane's default value applies.
+
+Per-clip behaviour has two forms, both data:
+- **Clip properties:** gain, fades, reverse, pitch, a start offset into the source, warp markers. The lane applies them as it plays the clip.
+- **Masks:** 0..1 control lanes that switch graph behaviour on and off over time.
+
+Behaviour that needs its own effect chain (one chop through its own delay) goes on its own lane or track. The graph itself never changes per clip.
+
+### Audio clips
+
+Audio is the centre of a lot of modern production, so audio clips are first-class:
+- **A clip** refers to an asset (content-addressed, in `assets/`), with a start offset, a length, gain, fades, reverse, and a pitch shift in semitones.
+- **Warping:** warp markers pin positions in the source to beats. Between markers, the audio is time-stretched to follow the tempo map. Stretching is a package kernel (std ships one), applied offline and cached, so playback stays cheap and deterministic.
+- **Takes and comping:** a recording pass adds takes to a lane. A comp is clip data that picks regions from takes.
+- **Bounce and resample:** any signal over any time range can be rendered to a new asset and dropped onto an audio lane, to chop it, reverse it and process it again. Because rendering is deterministic, a bounce of open kernels can always be reproduced. This loop (render, chop, render again) is central to sound design, and it is data all the way down.
 
 ### Modules and tracks
 
@@ -156,9 +173,9 @@ poly(notes, n => voice(n), { voices: 16, steal: "oldest" })
 
 This is the whole core. If something isn't listed here, it lives in a package or a host.
 
-### 1. Graph IR: seven ops
+### 1. Graph IR: eight ops
 
-The IR is the compiled form of a song: a JSON graph of nodes. Every graph, however it was authored, compiles down to these seven ops:
+The IR is the compiled form of a song: a JSON graph of nodes. Every graph, however it was authored, compiles down to these ops (seven are implemented; `plugin` is next):
 
 | Op | Meaning |
 |---|---|
@@ -169,6 +186,7 @@ The IR is the compiled form of a song: a JSON graph of nodes. Every graph, howev
 | `poly` | maps a voice subgraph over `Events<Note>` and sums the results |
 | `feedback` | an explicitly delayed edge, the only way to form a loop |
 | `import` | another module's export |
+| `plugin` | a hosted CLAP/VST3/AU plugin instance: its ports, its state (an asset), its reported latency; impure |
 
 Each module also lists its `exports`. The **validator** checks the IR independently of whatever produced it:
 - signal kinds and units
@@ -204,8 +222,23 @@ The planner turns validated IR into a plan the runtime can execute:
   - Each instance's memory is capped (32 MB). A CPU budget is still to come.
   - Rust kernels use the `m2-kernel` crate: implement `Kernel` and call `export!(name, Type)`.
   - Assets (for samplers and impulse responses) are passed in as read-only data when the kernel starts.
+- **The realtime model.** A professional session has 50–150 tracks and hundreds of plugin instances, so:
+  - **Parallel.** The planner partitions the graph, roughly one partition per track plus buses, and schedules partitions on a thread pool as their inputs complete. Each partition owns its own WebAssembly store, so partitions never share mutable state.
+  - **Realtime-safe.** Nothing on the audio thread allocates, locks or waits on the compiler. Voice pools, buffers and plans are built off-thread and handed over.
+  - **A fast path for values.** Changing a constant (a knob) updates the running plan in place without recompiling. Only structural changes (adding, removing or rewiring nodes) build a new plan, which is swapped in at a block boundary.
+  - **Latency compensation** is required once plugins are hosted: plugins report latency, and the planner delays parallel paths to match.
+  - **Monitoring.** Live input (recording, playing an instrument) takes a low-latency path that skips caches.
 - **Render and taps.** `render(range, taps)` renders a time range and returns audio, plus the values of any signal you ask for (for example, a meter kernel's output). Rendered results are **cached by a hash of what produced them** and invalidated only downstream of an edit. Freezing a track just means keeping its cache.
 - **The audio device:** output, input and MIDI in. This is the one place the core touches hardware.
+
+### Hosted plugins
+
+Producers rely on plugins that will never be rewritten as WebAssembly, so hosting them is part of the core runtime, not an optional extra:
+- **CLAP first** (open standard, clean threading and state model), then VST3, then AU on macOS.
+- A plugin is a graph node with typed ports: audio in and out, notes in for instruments, and its parameters exposed as control inputs, so they can be automated and connected like any other input.
+- **Its state is data.** The plugin's saved state is an asset referenced from code (`state: "bass-space"`), so the code stays readable and the state diffs as a file.
+- **Out of process, optionally.** Plugins can run in a separate host process so a crash can't take down the session (at a small latency cost). This can be chosen per plugin.
+- **Impure:** never cached, never assumed reproducible. Renders that include them say so.
 
 ### 4. Script sandbox
 
@@ -267,7 +300,7 @@ These live elsewhere on purpose:
 - Derived clocks, sections-as-masks, mute and solo (packages)
 - Meters and analysis (meters are package kernels; spectrograms and reports come from a host tool)
 - The GUI, node editor, piano roll, MCP server and variants (hosts)
-- CLAP/VST/AU bridges (an optional host feature, and **not** reproducible)
+- Plugin *packages*. Hosting CLAP/VST3/AU plugins is in the core runtime (see [Hosted plugins](#hosted-plugins)); the plugins themselves are installed by the user like in any DAW.
 
 ---
 
@@ -332,7 +365,7 @@ index = "src/index.ts"
 |---|---|---|---|
 | Graph modules and tools | TypeScript run in the sandbox | describe graphs only | yes |
 | Kernels | WebAssembly with no host imports | memory- and CPU-bounded | yes, bit-identical |
-| Native bridges (CLAP/VST3/AU) | existing commercial plugins | full trust; opt-in, with a warning | no: marked impure, never cached |
+| Hosted plugins (CLAP/VST3/AU) | the plugins producers already use | full trust, like any DAW; optionally out of process | no: marked impure, never cached |
 
 ### Versioning and lockfile
 
@@ -447,13 +480,26 @@ export function bass(notes: Events, o: { cutoff?: Value; drive?: Value } = {}): 
 
 There is no tempo and there are no sections in this code. Both are timeline data, edited on the song's own lanes.
 
-### Node editor and code, kept in sync
+### Editing code from the graph
 
-- **The TypeScript is the source of truth.** The editor draws nodes from the IR (each node points back to its source location), placed using `layout.json`.
-- A GUI edit is a `std/edit`-style tool that outputs `file.patch` ops. Those make small changes to the code's syntax tree and keep formatting and comments.
-- **Canonical subset:** straight-line `const x = node(...)` code can be fully edited in the GUI. Loops, conditionals and helper functions appear as collapsed **group nodes** with typed ports, which you can open to see the code. This is how node groups work in Blender.
+**The TypeScript is the source of truth. The node editor is a live view of it that can also edit it,** like SwiftUI code and Xcode's canvas. The detailed problem statement, handed to a specialist to design the implementation, is [`docs/code-graph-editing-brief.md`](code-graph-editing-brief.md). Current thinking:
 
----
+1. **A declarative house style.** A track is a list of named `const` bindings and a `return`. Every editor gesture maps to a small text change:
+
+   | In the graph | In the code |
+   |---|---|
+   | turn a knob | change one literal, e.g. `0.3` → `0.45` |
+   | connect a cable | change one argument to a binding's name |
+   | add a node | insert `const x = …;` before the `return` |
+   | delete a node | remove the binding |
+   | automate a knob | `0.3` → `lane.control("mix", "unit01", 0.3)` |
+   | rename a node | rename the binding everywhere it is used |
+
+2. **Binding names are node identity.** `cutoff` is the node. Editor positions (in `layout.json`) and hot-swap state are keyed by it.
+3. **The compiler records exact spans** for every node and every argument, so "this knob" points at "these characters".
+4. **Every GUI edit is verified by the compiler.** The editor produces a patch, the song is rebuilt, and the result must equal exactly the graph change that was made; otherwise the patch is rolled back and that control is shown as not editable from the graph.
+5. **Code outside the house style is a sealed box.** Loops, helpers and imported instruments (`bass(...)`) appear as group nodes whose arguments can be edited but whose insides can't, unless they live in the project, where you can open them.
+6. **Knob turns take a fast path.** While dragging, values go straight to the running engine; the literal is written into the code when you let go (debounced).
 
 ## Agents
 
@@ -532,13 +578,15 @@ Agents can't listen, so they need another way to judge the result. `render` with
 
 ## Risks and open questions
 
-1. **WebAssembly kernel speed.** Ahead-of-time compiled WebAssembly should come within about 1.5× of native when processing blocks. M1 benchmarks it against the native `m2-dsp` code, and the result is a go/no-go decision. If it's too slow, trusted packages could ship native code behind the same ABI; that would be the only exception to "no privileged packages".
+1. **WebAssembly kernel speed.** Measured at 1.78× native (see Implementation status), which passed the M1 gate. Large sessions still need the parallel runtime model. If it's too slow, trusted packages could ship native code behind the same ABI; that would be the only exception to "no privileged packages".
 2. **Speed of per-voice instances in `poly`.** Cloning a kernel's memory for each voice is fast in wasmtime. Running a voice body for many voices at once in a single kernel call can be added later without changing the ABI.
-3. **GUI edits beyond the canonical subset.** The group-node fallback has to feel good, not like a dead end.
+3. **Editing code from the graph** is the hardest engineering in the project and decides whether artists accept it. It is being designed separately (see the brief) and will be proven early on a real track file.
 4. **Live input and recording.** Recording writes data to lanes. Monitoring live input needs a low-latency path that skips the cache, which is a core runtime concern.
 5. **The JavaScript engine.** QuickJS is small and deterministic, but slow for very large generated graphs. Builds happen at edit time, not on the audio thread, so this should be fine. Revisit if needed.
 6. **Kernel parameter changes while playing**, e.g. a sampler swapping its asset, require re-initialising the kernel. The planner treats this as replacing the node.
 7. **Naming and governance of std versus the community:** who maintains `std`, and what is required to get into it.
+8. **Plugin hosting** brings threading, crashes, latency reporting and state formats that differ per plugin. CLAP first keeps the first version small; running plugins out of process is the safety valve.
+9. **Time-stretch quality** decides whether warped audio sounds professional. The std stretch kernel must be good, and the stretch kernel is a package so better ones can replace it.
 
 ## Implementation status
 
@@ -591,7 +639,11 @@ New code lives alongside the current crates in this repo. The old engine keeps r
 
 1. **The core loop, end to end (decision gate).** Done: see [Implementation status](#implementation-status). Imports, cycle diagnostics, `feedback`, `std/mix` and `follow`/`duck`, originally planned for later, shipped here too.
 2. **Correctness.** Done: a fixed block grid, exact note starts, voice tails via `k_active`, seek by replay, strict NaN errors, and `check` meaning playable.
-3. **The editing session** (`m2-session`):
+3. **Three experiments, before building the session,** because each shapes the session and runtime:
+   - **Code ↔ graph editing:** open `tracks/bass.ts` as a graph; drag a knob, rewire a cable, add and delete a node, automate a parameter; every change lands as a minimal, compiler-verified code edit (see the brief).
+   - **A hosted plugin:** one open-source CLAP instrument and one CLAP effect as graph nodes, with state saved as an asset and latency reported.
+   - **Audio first:** an audio clip with warp markers through a std stretch kernel, plus bounce-to-clip.
+4. **The editing session** (`m2-session`):
    - stable ids for tracks, lanes, clips and notes
    - project revisions
    - atomic transactions over code and timeline data, each carrying its base revision so concurrent edits can't silently overwrite each other
@@ -599,8 +651,8 @@ New code lives alongside the current crates in this repo. The old engine keeps r
    - **draft versus accepted:** files on disk are the draft, and the engine plays the last revision that validated
    - locks, checked at that acceptance point
    - local packages pinned by hash before any fetching from git
-4. **One complete workflow in the desktop app,** through an adapter from the existing UI to the new session: open the example → play → move a clip → edit automation → change code while a note is held → have an invalid edit rejected → undo → save and reopen. Seeking uses reset-and-replay at first. This milestone also includes hot swap with stable ids and real-time playback.
-5. **A minimal node-to-code edit:** one GUI gesture that becomes an exact edit to the source.
-6. **The agent surface:** MCP generated from the session API, `render` taps, `std/meters`, the analysis tool and spectrograms, variants.
-7. **Breadth:** a complete `std` (port every current instrument and effect, then retire `m2-graph`, `m2-render` and the old engine), sections, latency compensation, audio lanes, git package resolution, render caching and checkpoints.
-8. **The full node editor:** read-only first, then the canonical subset, then group nodes.
+5. **One complete workflow in the desktop app,** through an adapter from the existing UI to the new session: open the example → play → move a clip → edit automation → change code while a note is held → have an invalid edit rejected → undo → save and reopen. Seeking uses reset-and-replay at first. This milestone also includes hot swap with stable ids, real-time playback, and the parallel, realtime-safe runtime model.
+6. **The node editor on the code-first model:** the house-style operations from the experiment, in the app.
+7. **The agent surface:** MCP generated from the session API, `render` taps, `std/meters`, the analysis tool and spectrograms, variants.
+8. **Breadth:** a complete `std` (port every current instrument and effect, then retire `m2-graph`, `m2-render` and the old engine), sections, latency compensation, audio lanes, git package resolution, render caching and checkpoints.
+9. **The full node editor:** group nodes, opening project modules, multi-file edits.
