@@ -27,6 +27,10 @@ export interface ViewNode {
   line: number | null;
   knobs: Knob[];
   readonly: { label: string; expression: string; reason: string; file: string | null; line: number | null }[];
+  /** The `const` this node's signal is bound to, if a cable can start here. */
+  outlet: string | null;
+  /** Inputs connected by a cable: `label ← name`. */
+  inlets: { id: string; label: string; name: string; from: string }[];
 }
 
 export interface ModuleView { name: string; track: boolean; nodes: ViewNode[]; edges: [string, string][] }
@@ -57,6 +61,10 @@ export const graphApi = {
   cancel: (session: number, id: string, gesture: string) => call("/preview/cancel", { session, id, gesture }),
   set: (session: number, revision: number, id: string, gesture: string, value: number, expect: number) =>
     call<{ file: string; before: string; after: string; revision: number }>("/set", { session, revision, id, gesture, value, expect }),
+  connect: (session: number, revision: number, from: string, to: string) =>
+    call<{ file: string; before: string; after: string; revision: number }>("/connect", { session, revision, from, to }),
+  disconnect: (session: number, revision: number, id: string) =>
+    call<{ file: string; before: string; after: string; revision: number }>("/disconnect", { session, revision, id }),
   transport: (action: "play" | "stop" | "toggle" | "restart") => call("/transport", { action }),
 };
 
@@ -102,9 +110,10 @@ const HEAD_H = 46;
 const KNOB_ROW_H = 84;
 const KNOBS_PER_ROW = 3;
 const EXPRESSION_ROW_H = 64;
+const INLET_ROW_H = 32;
 
 export const nodeHeight = (n: ViewNode) =>
-  HEAD_H + Math.ceil(n.knobs.length / KNOBS_PER_ROW) * KNOB_ROW_H + (n.knobs.length ? 8 : 0) + n.readonly.length * EXPRESSION_ROW_H;
+  HEAD_H + Math.ceil(n.knobs.length / KNOBS_PER_ROW) * KNOB_ROW_H + (n.knobs.length ? 8 : 0) + n.readonly.length * EXPRESSION_ROW_H + n.inlets.length * INLET_ROW_H;
 
 export interface Placed { node: ViewNode; x: number; y: number; h: number }
 

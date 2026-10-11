@@ -1,0 +1,222 @@
+//! Cables are names in code. Connecting and disconnecting each change one input, are
+//! verified against the graph, and leave the rest of the file as it was.
+
+use std::path::{Path, PathBuf};
+
+use super::*;
+
+struct Fixture(PathBuf);
+
+impl Fixture {
+    fn new(body: &str) -> Self {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("m2-cable-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fixture = Self(dir);
+        fixture.write(body);
+        fixture
+    }
+
+    fn write(&self, body: &str) {
+        let source = format!(
+            r#"import {{ hz, khz, song }} from "@m2/core";
+import {{ lfo }} from "std/control";
+import {{ osc, svf }} from "std/dsp";
+import {{ add, xrange }} from "std/math";
+{body}
+"#
+        );
+        std::fs::write(self.0.join("song.ts"), source).unwrap();
+    }
+
+    fn open(&self) -> Session {
+        let mut packages = PackageSet::default();
+        packages.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
+        Session::open(&self.0, packages).unwrap()
+    }
+
+    fn source(&self) -> String {
+        std::fs::read_to_string(self.0.join("song.ts")).unwrap()
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+const WOBBLE: &str = "const wobble = xrange(lfo(time.beats, { period: 0.5 }), hz(200), khz(2.5));";
+
+fn outlet(s: &Session, name: &str) -> Outlet {
+    s.outlets().into_iter().find(|o| o.name == name).unwrap_or_else(|| panic!("no outlet `{name}`"))
+}
+
+fn control(s: &Session, literal: &str) -> Control {
+    s.controls().into_iter().find(|c| c.literal == literal).unwrap_or_else(|| panic!("no control `{literal}`"))
+}
+
+/// The kernel input that reads `port` in the song module, as `kernel.input`.
+fn readers(s: &Session, port: &str) -> Vec<String> {
+    let mut found = vec![];
+    for m in &s.accepted().compiled.ir.modules {
+        walk(&m.nodes, &mut |n| {
+            if let Op::Kernel { kernel, inputs } = &n.op {
+                found.extend(inputs.iter().filter(|(_, r)| *r == port).map(|(p, _)| format!("{kernel}.{p}")));
+            }
+        });
+    }
+    found
+}
+
+#[test]
+fn connecting_writes_the_name_in_place_of_the_value_and_rewires_only_that_input() {
+    let fixture = Fixture::new(&format!(
+        "export default song(({{ time }}) => {{\n  {WOBBLE}\n  return add(osc.sine(hz(800)), osc.saw(hz(55)));\n}});"
+    ));
+    let mut s = fixture.open();
+    let before = fixture.source();
+    let (wobble, freq) = (outlet(&s, "wobble"), control(&s, "800"));
+    let edited = s.connect(wobble.revision, &wobble.id, &freq.id).unwrap();
+    assert_eq!((edited.before.as_str(), edited.after.as_str(), edited.revision), ("hz(800)", "wobble", 2));
+    assert_eq!(fixture.source(), before.replace("osc.sine(hz(800))", "osc.sine(wobble)"));
+    assert_eq!(readers(&s, &outlet(&s, "wobble").port), ["std:sine.freq"]);
+    assert!(s.controls().iter().any(|c| c.literal == "55"), "the other oscillator keeps its value");
+}
+
+#[test]
+fn a_plain_number_control_can_be_connected() {
+    let fixture = Fixture::new(&format!(
+        "export default song(({{ time }}) => {{\n  {WOBBLE}\n  const level = lfo(time.beats);\n  return svf.lowpass(osc.saw(hz(55)), wobble, 0.7);\n}});"
+    ));
+    let mut s = fixture.open();
+    let (level, q) = (outlet(&s, "level"), control(&s, "0.7"));
+    let edited = s.connect(level.revision, &level.id, &q.id).unwrap();
+    assert_eq!((edited.before.as_str(), edited.after.as_str()), ("0.7", "level"));
+    assert!(fixture.source().contains("svf.lowpass(osc.saw(hz(55)), wobble, level)"));
+}
+
+#[test]
+fn disconnecting_writes_the_declared_default_and_undo_restores_the_cable() {
+    let fixture = Fixture::new(&format!(
+        "export default song(({{ time }}) => {{\n  {WOBBLE}\n  return svf.lowpass(osc.saw(hz(55)), wobble);\n}});"
+    ));
+    let mut s = fixture.open();
+    let before = fixture.source();
+    let inlet = s.inlets().into_iter().find(|i| i.name == "wobble").expect("the cutoff is connected");
+    assert_eq!((inlet.path.as_slice(), inlet.from.as_str()), (&["1".to_string()][..], outlet(&s, "wobble").id.as_str()));
+    let edited = s.disconnect(inlet.revision, &inlet.id).unwrap();
+    // std:svf declares `cutoff = 1000`, in hz, and the file imports `hz`.
+    assert_eq!((edited.before.as_str(), edited.after.as_str()), ("wobble", "hz(1000)"));
+    assert_eq!(fixture.source(), before.replace("svf.lowpass(osc.saw(hz(55)), wobble)", "svf.lowpass(osc.saw(hz(55)), hz(1000))"));
+    assert!(s.inlets().is_empty());
+    assert_eq!(control(&s, "1000").value, 1000.0);
+
+    s.undo().unwrap();
+    assert_eq!(fixture.source(), before);
+    assert_eq!(s.inlets().len(), 1);
+}
+
+#[test]
+fn connect_then_disconnect_is_an_exact_round_trip_through_the_graph() {
+    let fixture = Fixture::new(&format!(
+        "export default song(({{ time }}) => {{\n  {WOBBLE}\n  return svf.lowpass(osc.saw(hz(55)), hz(1000));\n}});"
+    ));
+    let mut s = fixture.open();
+    let before = fixture.source();
+    let original = canonical(&s.accepted().compiled.ir);
+    let (wobble, cutoff) = (outlet(&s, "wobble"), control(&s, "1000"));
+    s.connect(wobble.revision, &wobble.id, &cutoff.id).unwrap();
+    let inlet = s.inlets().pop().unwrap();
+    s.disconnect(inlet.revision, &inlet.id).unwrap();
+    assert_eq!(fixture.source(), before);
+    assert_eq!(canonical(&s.accepted().compiled.ir), original);
+}
+
+#[test]
+fn undo_of_a_connection_restores_the_value() {
+    let fixture = Fixture::new(&format!("export default song(({{ time }}) => {{\n  {WOBBLE}\n  return osc.sine(khz(0.8));\n}});"));
+    let mut s = fixture.open();
+    let before = fixture.source();
+    let (wobble, freq) = (outlet(&s, "wobble"), control(&s, "0.8"));
+    s.connect(wobble.revision, &wobble.id, &freq.id).unwrap();
+    assert!(fixture.source().contains("osc.sine(wobble)"));
+    let undone = s.undo().unwrap();
+    assert_eq!((undone.before.as_str(), undone.after.as_str()), ("wobble", "khz(0.8)"));
+    assert_eq!(fixture.source(), before);
+    assert_eq!(control(&s, "0.8").value, 800.0);
+}
+
+#[test]
+fn a_cable_carries_past_an_unrelated_save() {
+    let fixture = Fixture::new(&format!("export default song(({{ time }}) => {{\n  {WOBBLE}\n  return osc.sine(hz(800));\n}});"));
+    let mut s = fixture.open();
+    let (wobble, freq) = (outlet(&s, "wobble"), control(&s, "800"));
+    let saved = fixture.source().replacen("import", "// A comment saved elsewhere.\nimport", 1);
+    std::fs::write(fixture.0.join("song.ts"), &saved).unwrap();
+    s.connect(wobble.revision, &wobble.id, &freq.id).unwrap();
+    assert_eq!(fixture.source(), saved.replace("osc.sine(hz(800))", "osc.sine(wobble)"));
+}
+
+#[test]
+fn connecting_refuses_what_would_not_be_one_honest_input_change() {
+    // Declared after the value: the name would not exist there yet.
+    let fixture = Fixture::new(&format!(
+        "export default song(({{ time }}) => {{\n  const tone = osc.sine(hz(800));\n  {WOBBLE}\n  return add(tone, osc.saw(wobble));\n}});"
+    ));
+    let mut s = fixture.open();
+    let (wobble, freq) = (outlet(&s, "wobble"), control(&s, "800"));
+    assert!(matches!(s.connect(wobble.revision, &wobble.id, &freq.id), Err(EditError::Rejected(m)) if m.contains("declared after")));
+
+    // Into its own declaration.
+    let lo = control(&s, "200");
+    assert!(matches!(s.connect(wobble.revision, &wobble.id, &lo.id), Err(EditError::Rejected(_))));
+
+    // An audio signal into a frequency: the build refuses the kinds.
+    let fixture = Fixture::new("export default song(() => {\n  const tone = osc.saw(hz(55));\n  return osc.sine(hz(800));\n});");
+    let mut s = fixture.open();
+    let (tone, freq) = (outlet(&s, "tone"), control(&s, "800"));
+    let before = fixture.source();
+    assert!(matches!(s.connect(tone.revision, &tone.id, &freq.id), Err(EditError::Rejected(_))));
+    assert_eq!(fixture.source(), before);
+    assert_eq!(s.accepted().number, 1);
+}
+
+#[test]
+fn only_const_bindings_of_one_top_level_signal_are_outlets() {
+    let fixture = Fixture::new(
+        "export default song(({ time }) => {\n  let changing = lfo(time.beats);\n  const fixed = lfo(time.beats);\n  const tones = [1, 2].map(() => osc.sine(hz(800)));\n  return add(osc.sine(xrange(fixed, hz(100), hz(200))), osc.saw(xrange(changing, hz(100), hz(200))));\n});",
+    );
+    let s = fixture.open();
+    let names: Vec<String> = s.outlets().into_iter().map(|o| o.name).collect();
+    assert_eq!(names, ["fixed"]);
+}
+
+#[test]
+fn an_input_without_a_declared_default_stays_connected() {
+    // xrange's `lo` reaches std:xrange, whose ports declare no default.
+    let fixture = Fixture::new(
+        "export default song(({ time }) => {\n  const low = xrange(lfo(time.beats), hz(50), hz(100));\n  const sweep = xrange(lfo(time.beats), low, hz(900));\n  return osc.sine(sweep);\n});",
+    );
+    let mut s = fixture.open();
+    let before = fixture.source();
+    let inlet = s.inlets().into_iter().find(|i| i.name == "low").unwrap();
+    assert!(matches!(s.disconnect(inlet.revision, &inlet.id), Err(EditError::Rejected(m)) if m.contains("no default")));
+    assert_eq!(fixture.source(), before);
+}
+
+#[test]
+fn a_component_that_builds_differently_for_a_signal_is_refused_by_the_graph_check() {
+    // osc.sine converts a pitch with an extra node: the candidate compiles, but it is
+    // not the old graph with one input rewired, so only the comparison can catch it.
+    let fixture = Fixture::new(
+        "import { semis } from \"@m2/core\";\nimport { range } from \"std/math\";\nexport default song(({ time }) => {\n  const pitch = range(lfo(time.beats), semis(48), semis(60));\n  return osc.sine(hz(800));\n});",
+    );
+    let mut s = fixture.open();
+    let before = fixture.source();
+    let (pitch, freq) = (outlet(&s, "pitch"), control(&s, "800"));
+    let refused = s.connect(pitch.revision, &pitch.id, &freq.id);
+    assert!(matches!(&refused, Err(EditError::Rejected(m)) if m.contains("would change more")), "{refused:?}");
+    assert_eq!(fixture.source(), before);
+}

@@ -15,7 +15,7 @@ use anyhow::{Context, Result, anyhow};
 use m2_ir::Origin;
 use m2_play::Player;
 use m2_runtime::{PackageSet, Renderer};
-use m2_session::Session;
+use m2_session::{EditError, Edited, Session};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 
@@ -258,6 +258,29 @@ impl Graph {
         }
     }
 
+    /// Connect a named signal to a control's input, in code. The graph changes shape,
+    /// so the player is rebuilt (at the current position) rather than patched.
+    pub fn connect(&self, token: u64, revision: u64, from: &str, to: &str) -> Result<Value> {
+        self.restructure(token, |session| session.connect(revision, from, to))
+    }
+
+    /// Disconnect a cable, writing the input's declared default in code.
+    pub fn disconnect(&self, token: u64, revision: u64, id: &str) -> Result<Value> {
+        self.restructure(token, |session| session.disconnect(revision, id))
+    }
+
+    fn restructure(&self, token: u64, edit: impl FnOnce(&mut Session) -> Result<Edited, EditError>) -> Result<Value> {
+        let mut open = self.open.lock();
+        let o = open.as_mut().context("no project is open")?;
+        o.check_token(token)?;
+        let player = self.player()?;
+        let result = edit(&mut o.session);
+        // Whatever happened, play the accepted revision; previews belong to the old one.
+        o.restore(&player)?;
+        let e = result.map_err(|e| anyhow!("{e}"))?;
+        Ok(json!({"file": e.file, "before": e.before, "after": e.after, "revision": e.revision}))
+    }
+
     pub fn transport(&self, action: &str) -> Result<()> {
         let player = self.player()?;
         match action {
@@ -453,6 +476,51 @@ mod tests {
         assert!(graph.set(token, revision, &id, "drag", 950.0, Some(800.0)).is_err());
         assert!(std::fs::read_to_string(fixture.0.join("song.ts")).unwrap().contains("hz(801)"));
         assert!(graph.open.lock().as_ref().unwrap().previews.is_empty());
+    }
+
+    #[test]
+    fn a_cable_edit_closes_previews_and_plays_the_new_graph() {
+        let fixture = Fixture::new();
+        fixture.write("export default song(() => {\n  const tone = osc.saw(hz(110));\n  return osc.sine(hz(800));\n});\n");
+        let graph = fixture.open();
+        let (token, revision, id) = control(&graph);
+        graph.preview(token, revision, &id, "drag", 900.0).unwrap();
+        // An audio signal can't drive a frequency: refused, and the preview is closed.
+        let from = "song.ts#0";
+        assert!(graph.connect(token, revision, from, &id).is_err());
+        let open = graph.open.lock();
+        let o = open.as_ref().unwrap();
+        assert!(o.previews.is_empty());
+        assert_eq!((o.playing, o.session.accepted().number), (revision, revision));
+        drop(open);
+        assert!(graph.connect(token + 1, revision, from, &id).is_err(), "another session's request is refused");
+    }
+
+    #[test]
+    fn connecting_and_disconnecting_play_each_new_revision() {
+        let fixture = Fixture::new();
+        fixture.write(
+            "import { lfo } from 'std/control';\nimport { xrange } from 'std/math';\nexport default song(({ time }) => {\n  const sweep = xrange(lfo(time.beats), hz(100), hz(200));\n  return osc.sine(hz(800));\n});\n",
+        );
+        let graph = fixture.open();
+        let (token, revision, id) = control(&graph);
+        let outlet = graph.open.lock().as_ref().unwrap().session.outlets()[0].id.clone();
+        let connected = graph.connect(token, revision, &outlet, &id).unwrap();
+        assert_eq!((connected["before"].as_str(), connected["after"].as_str()), (Some("hz(800)"), Some("sweep")));
+        let inlet = {
+            let open = graph.open.lock();
+            let o = open.as_ref().unwrap();
+            assert_eq!(o.playing, o.session.accepted().number);
+            o.session.inlets()[0].id.clone()
+        };
+        let revision = connected["revision"].as_u64().unwrap();
+        let disconnected = graph.disconnect(token, revision, &inlet).unwrap();
+        // std:sine declares `freq = 440`.
+        assert_eq!(disconnected["after"], "hz(440)");
+        let open = graph.open.lock();
+        let o = open.as_ref().unwrap();
+        assert_eq!(o.playing, o.session.accepted().number);
+        assert!(std::fs::read_to_string(fixture.0.join("song.ts")).unwrap().contains("osc.sine(hz(440))"));
     }
 
     #[test]

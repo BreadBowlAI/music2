@@ -67,15 +67,62 @@ function GraphBar({ graph }: { graph: GraphState }) {
   );
 }
 
+/** A cable being dragged from a node's output, in the module's coordinates. */
+interface Cable { from: string; name: string; x0: number; y0: number; x: number; y: number }
+
 function ModuleSection({ module, session, revision, editable }: { module: ModuleView; session: number; revision: number; editable: boolean }) {
   const { placed, width, height } = useMemo(() => layout(module), [module]);
+  const toast = useStore((s) => s.toast);
+  const area = useRef<HTMLDivElement>(null);
+  const [cable, setCable] = useState<Cable | null>(null);
+
+  // Drag from an output onto a knob: the knob's value is replaced by the signal's name.
+  const startCable = (node: ViewNode, e: React.PointerEvent) => {
+    const box = area.current?.getBoundingClientRect();
+    const p = placed.get(node.id);
+    if (!box || !p || !node.outlet || e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const at = (ev: PointerEvent | React.PointerEvent) => ({ x: ev.clientX - box.left, y: ev.clientY - box.top });
+    const gesture = { session, revision, from: node.id, name: node.outlet };
+    setCable({ from: node.id, name: node.outlet, x0: p.x + NODE_W, y0: p.y + 23, ...at(e) });
+    const move = (ev: PointerEvent) => setCable((c) => c && { ...c, ...at(ev) });
+    const end = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      setCable(null);
+      if (ev.type !== "pointerup") return;
+      const target = document.elementFromPoint(ev.clientX, ev.clientY)?.closest<HTMLElement>("[data-knob-id]");
+      if (!target || !area.current?.contains(target)) return;
+      graphApi
+        .connect(gesture.session, gesture.revision, gesture.from, target.dataset.knobId!)
+        .then((c) => toast(`${c.file}: ${c.before} → ${c.after}`))
+        .catch((error) => toast(error instanceof Error ? error.message : String(error)));
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+  };
+
   return (
     <section className="w-max min-w-full rounded-2xl bg-ink-900 ring-1 ring-black/[0.05] p-4" data-module={module.name}>
       <div className="flex items-baseline gap-2 mb-3">
         <h2 className="text-sm font-semibold text-ink-100">{module.name === "song" ? "Song" : module.name}</h2>
         <span className="text-xs text-ink-400">{module.track ? "track" : "mix"}</span>
       </div>
-      <div className="relative" style={{ width, height }}>
+      <div ref={area} className="relative" style={{ width, height }} data-cabling={cable ? true : undefined}>
+        <svg className="absolute inset-0 pointer-events-none overflow-visible z-10" width={width} height={height}>
+          {cable && (
+            <path
+              d={`M ${cable.x0} ${cable.y0} C ${cable.x0 + 60} ${cable.y0}, ${cable.x - 60} ${cable.y}, ${cable.x} ${cable.y}`}
+              stroke="var(--color-pop-500)"
+              strokeWidth="2"
+              strokeDasharray="5 4"
+              fill="none"
+            />
+          )}
+        </svg>
         <svg className="absolute inset-0 pointer-events-none overflow-visible" width={width} height={height}>
           {module.edges.map(([a, b]) => {
             const p = placed.get(a), q = placed.get(b);
@@ -86,7 +133,15 @@ function ModuleSection({ module, session, revision, editable }: { module: Module
           })}
         </svg>
         {[...placed.values()].map(({ node, x, y, h }) => (
-          <NodeCard key={node.id} node={node} session={session} revision={revision} editable={editable} style={{ left: x, top: y, width: NODE_W, height: h }} />
+          <NodeCard
+            key={node.id}
+            node={node}
+            session={session}
+            revision={revision}
+            editable={editable}
+            onCable={startCable}
+            style={{ left: x, top: y, width: NODE_W, height: h }}
+          />
         ))}
       </div>
     </section>
@@ -102,7 +157,27 @@ const KIND_STYLE: Record<ViewNode["kind"], string> = {
   export: "bg-ink-850",
 };
 
-function NodeCard({ node, session, revision, editable, style }: { node: ViewNode; session: number; revision: number; editable: boolean; style: React.CSSProperties }) {
+function NodeCard({
+  node,
+  session,
+  revision,
+  editable,
+  onCable,
+  style,
+}: {
+  node: ViewNode;
+  session: number;
+  revision: number;
+  editable: boolean;
+  onCable: (node: ViewNode, e: React.PointerEvent) => void;
+  style: React.CSSProperties;
+}) {
+  const toast = useStore((s) => s.toast);
+  const disconnect = (id: string) =>
+    graphApi
+      .disconnect(session, revision, id)
+      .then((c) => toast(`${c.file}: ${c.before} → ${c.after}`))
+      .catch((error) => toast(error instanceof Error ? error.message : String(error)));
   return (
     <div
       className={clsx("absolute rounded-xl ring-1 ring-black/[0.07] shadow-sm flex flex-col", KIND_STYLE[node.kind])}
@@ -120,6 +195,39 @@ function NodeCard({ node, session, revision, editable, style }: { node: ViewNode
           </span>
         )}
       </div>
+      {node.outlet && (
+        <button
+          className={clsx(
+            "absolute -right-[7px] top-[16px] size-3.5 rounded-full ring-2 ring-ink-900 transition-transform",
+            editable ? "bg-pop-500 cursor-crosshair hover:scale-125" : "bg-ink-500 pointer-events-none",
+          )}
+          data-outlet={node.outlet}
+          aria-label={`Connect ${node.outlet}`}
+          title={editable ? `Drag onto a knob to connect ${node.outlet}` : "Fix the code errors before connecting."}
+          disabled={!editable}
+          onPointerDown={(e) => onCable(node, e)}
+        />
+      )}
+      {node.inlets.map((inlet) => (
+        <div
+          key={inlet.id}
+          className="h-8 shrink-0 px-3 flex items-center gap-1.5 border-t border-black/[0.05] text-xs min-w-0"
+          data-inlet={inlet.label}
+        >
+          <span className="text-ink-400 truncate">{inlet.label}</span>
+          <span className="text-ink-400">←</span>
+          <span className="font-mono text-ink-200 truncate">{inlet.name}</span>
+          <button
+            className="ml-auto shrink-0 size-5 grid place-items-center rounded text-ink-400 hover:text-ink-100 hover:bg-black/5 disabled:opacity-40 disabled:pointer-events-none"
+            title={`Disconnect ${inlet.name} (writes the input's default)`}
+            aria-label={`Disconnect ${inlet.name} from ${inlet.label}`}
+            disabled={!editable}
+            onClick={() => void disconnect(inlet.id)}
+          >
+            <X className="size-3" />
+          </button>
+        </div>
+      ))}
       {node.knobs.length > 0 && (
         <div className="grid grid-cols-3 auto-rows-[84px] px-1 pb-2">
           {node.knobs.map((k) => (
@@ -290,7 +398,15 @@ function KnobControl({ knob, session, revision, editable }: { knob: KnobInfo; se
     : `${shared}${knob.file}:${knob.line}  (written as ${knob.literal})`;
 
   return (
-    <div data-knob={knob.label} data-value={value} data-shared={knob.uses > 1 || undefined} aria-disabled={disabled} title={title}>
+    <div
+      data-knob={knob.label}
+      data-knob-id={editable ? knob.id : undefined}
+      data-value={value}
+      data-shared={knob.uses > 1 || undefined}
+      aria-disabled={disabled}
+      title={title}
+      className="rounded-lg [[data-cabling]_&]:ring-2 [[data-cabling]_&]:ring-pop-500/40 [[data-cabling]_&:hover]:bg-pop-500/10"
+    >
       <div inert={disabled} className={clsx(disabled && "opacity-45 pointer-events-none")}>
         <Knob
           value={Math.min(1, Math.max(0, toUnit(descriptor, value)))}

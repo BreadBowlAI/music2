@@ -15,7 +15,7 @@ use m2_ir::{Kernels, Node, Op, PortKind, Unit, split_ref};
 use m2_script::sites::{Arg, Site};
 use serde::Serialize;
 
-use crate::edit::{Control, Session};
+use crate::edit::{Control, Inlet, Session};
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct GraphView {
@@ -47,6 +47,22 @@ pub struct ViewNode {
     pub knobs: Vec<Knob>,
     /// Values that are valid code but have no supported source edit.
     pub readonly: Vec<ReadOnly>,
+    /// The `const` this node's signal is bound to, if a cable can start here. Cables
+    /// name the node by its id.
+    pub outlet: Option<String>,
+    /// Inputs connected by a cable.
+    pub inlets: Vec<InletView>,
+}
+
+/// An input connected by a cable, as the canvas shows it.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct InletView {
+    /// What disconnecting names.
+    pub id: String,
+    pub label: String,
+    /// The name written there, and the node it comes from.
+    pub name: String,
+    pub from: String,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -102,9 +118,7 @@ fn range(unit: Option<Unit>, v: f64) -> (f64, f64, bool) {
 /// is written, if it is one of the call's arguments or nested object properties.
 fn path_in(site: &Site, start: u32, end: u32) -> Option<Vec<String>> {
     fn find(a: &Arg, start: u32, end: u32, path: &mut Vec<String>) -> bool {
-        let (s, e) = match a {
-            Arg::Number { start, end, .. } | Arg::Object { start, end, .. } | Arg::Other { start, end } => (*start, *end),
-        };
+        let (s, e) = a.span();
         if (s, e) == (start, end) {
             return true;
         }
@@ -125,6 +139,20 @@ fn path_in(site: &Site, start: u32, end: u32) -> Option<Vec<String>> {
     })
 }
 
+/// The smallest call among `groups` whose source contains the inlet's name.
+fn innermost(groups: &[Group], sites: &HashMap<u32, &Site>, inlet: &Inlet) -> Option<Group> {
+    groups
+        .iter()
+        .filter_map(|g| match g {
+            Group::Site(s) => {
+                sites.get(s).filter(|x| x.file == inlet.file && x.start <= inlet.start() && inlet.end() <= x.end).map(|x| (x.end - x.start, g))
+            }
+            _ => None,
+        })
+        .min_by_key(|(len, _)| *len)
+        .map(|(_, g)| g.clone())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Group {
     Site(u32),
@@ -140,6 +168,8 @@ impl Session {
         let in_project = |id: u32| sites.get(&id).is_some_and(|s| s.in_project);
         let controls: HashMap<(u32, Vec<String>), Control> =
             self.controls().into_iter().map(|c| ((c.origin.site, c.origin.arg.clone()), c)).collect();
+        let outlets = self.outlets();
+        let inlets = self.inlets();
 
         let mut modules = vec![];
         for m in &rev.compiled.ir.modules {
@@ -235,9 +265,7 @@ impl Session {
                     let exact = at.arg(&o.arg);
                     let arg = exact.or_else(|| o.arg.first()?.parse::<usize>().ok().and_then(|i| at.args.get(i)));
                     let Some(arg) = arg else { continue };
-                    let (start, end) = match arg {
-                        Arg::Number { start, end, .. } | Arg::Object { start, end, .. } | Arg::Other { start, end } => (*start, *end),
-                    };
+                    let (start, end) = arg.span();
                     let expression = rev
                         .snapshot
                         .files
@@ -280,6 +308,38 @@ impl Session {
                     uses: c.uses,
                 });
             }
+            // Cables end on the innermost call containing the name, like knobs.
+            let mut connected: BTreeMap<Group, Vec<InletView>> = BTreeMap::new();
+            for inlet in &inlets {
+                let Some(outlet) = outlets.iter().find(|o| o.id == inlet.from && o.module == m.name) else { continue };
+                let home = innermost(&groups, &sites, inlet).unwrap_or(Group::Site(inlet.site));
+                // Name it after its property, or else the one port it feeds in that call.
+                let label = if inlet.path.len() > 1 {
+                    inlet.path[1..].join(".")
+                } else {
+                    let port = all
+                        .iter()
+                        .filter(|k| call_group(k).as_ref() == Some(&home))
+                        .flat_map(|k| match &k.op {
+                            Op::Kernel { inputs, .. } | Op::Plugin { inputs, .. } => {
+                                inputs.iter().filter(|(_, r)| outlet.reads(r)).map(|(p, _)| p.clone()).collect()
+                            }
+                            _ => vec![],
+                        })
+                        .collect::<Vec<_>>();
+                    match port.as_slice() {
+                        [one] => one.clone(),
+                        _ => format!("input {}", inlet.path[0].parse::<usize>().map_or(0, |i| i + 1)),
+                    }
+                };
+                connected.entry(home).or_default().push(InletView {
+                    id: inlet.id.clone(),
+                    label,
+                    name: inlet.name.clone(),
+                    from: outlet.id.clone(),
+                });
+            }
+
             let group_of = |n: &Node| -> Option<Group> {
                 if matches!(n.op, Op::Const { .. }) {
                     return n.origin.as_ref().and_then(|o| homes.get(&(o.site, o.arg.clone())).cloned());
@@ -317,6 +377,10 @@ impl Session {
                     }
                 };
                 ids.insert(g.clone(), id.clone());
+                let outlet = match g {
+                    Group::Site(s) => outlets.iter().find(|o| o.site == *s && o.module == m.name).map(|o| o.name.clone()),
+                    _ => None,
+                };
                 nodes.push(ViewNode {
                     id: id.clone(),
                     label,
@@ -325,6 +389,8 @@ impl Session {
                     line,
                     knobs: knobs.get(g).cloned().unwrap_or_default(),
                     readonly: readonly.get(g).cloned().unwrap_or_default(),
+                    outlet,
+                    inlets: connected.get(g).cloned().unwrap_or_default(),
                 });
                 id
             };
@@ -334,7 +400,7 @@ impl Session {
                 }
             }
             // Values whose source call made no node of its own.
-            for g in knobs.keys().chain(readonly.keys()) {
+            for g in knobs.keys().chain(readonly.keys()).chain(connected.keys()) {
                 add(g, None, &mut nodes);
             }
 
@@ -376,6 +442,8 @@ impl Session {
                     line: None,
                     knobs: vec![],
                     readonly: vec![],
+                    outlet: None,
+                    inlets: vec![],
                 });
                 if let Some(from) = source(r).and_then(group_of).and_then(|g| ids.get(&g).cloned()) {
                     edges.push((from, id));

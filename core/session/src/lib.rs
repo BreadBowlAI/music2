@@ -17,7 +17,7 @@ use m2_ir::{Diagnostic, Flat, Ir, Kind};
 use m2_runtime::PackageSet;
 use m2_song::{Project, slug};
 
-pub use edit::{Audition, Committed, Control, EditError, Revision, Session};
+pub use edit::{Audition, Committed, Control, EditError, Edited, Inlet, Outlet, Revision, Session};
 pub use view::{GraphView, Knob, ModuleView, ViewNode};
 
 /// A project that is ready to render.
@@ -26,6 +26,8 @@ pub struct Compiled {
     pub flat: Flat,
     /// The call sites that origins in the IR refer to.
     pub sites: Vec<m2_script::sites::Site>,
+    /// What each call returned, when it was a signal.
+    pub outputs: Vec<m2_script::Output>,
     /// Problems that don't stop the song from playing, such as unused lane files.
     pub warnings: Vec<Diagnostic>,
 }
@@ -39,7 +41,7 @@ pub fn compile_sources(project: &Project, packages: &mut PackageSet, sources: Ha
     let mut opts = m2_script::Options::new(&project.dir, &project.entry());
     opts.packages = packages.packages().map(|p| (p.name.clone(), p.dir.clone())).collect();
     opts.sources = sources;
-    let m2_script::Build { ir, sites } = m2_script::build_full(&opts)?;
+    let m2_script::Build { ir, sites, outputs } = m2_script::build_full(&opts)?;
 
     let mut diags = names(&ir);
     diags.extend(plugins(project, &ir, packages));
@@ -62,7 +64,7 @@ pub fn compile_sources(project: &Project, packages: &mut PackageSet, sources: Ha
         .into_iter()
         .map(|f| Diagnostic { message: "no lane uses this file".into(), src: Some(relative(&project.dir, &f)), ..Default::default() })
         .collect();
-    Ok(Compiled { ir, flat: flat.expect("no diagnostics means the graph checked"), sites, warnings })
+    Ok(Compiled { ir, flat: flat.expect("no diagnostics means the graph checked"), sites, outputs, warnings })
 }
 
 /// Module names become file names (`Lead Vox` → `timeline/lead-vox.*.json`), so two

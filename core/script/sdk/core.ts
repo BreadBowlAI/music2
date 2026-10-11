@@ -200,6 +200,17 @@ function push(scope: Scope, op: Record<string, unknown>, origin?: Origin): strin
 
 const at = (site: number | undefined): Origin | undefined => (site === undefined ? undefined : { site });
 
+/** What each call returned, when it was a signal: how the editor finds what a binding holds. */
+type Output = { site: number; module: string; ref: string; top: boolean };
+let outputs: Output[] = [];
+
+function produced<T>(site: number | undefined, value: T): T {
+  if (site !== undefined && value instanceof Signal) {
+    outputs.push({ site, module: value.scope.module.name, ref: value.ref, top: value.scope.parent === null });
+  }
+  return value;
+}
+
 function visible(s: Signal, from: Scope): boolean {
   for (let at: Scope | null = from; at; at = at.parent) if (at === s.scope) return true;
   return false;
@@ -235,7 +246,7 @@ export function kernel<K = unknown>(id: string, inputs: Record<string, Value | u
   const scope = need(`kernel("${id}")`);
   const ins: Record<string, string> = {};
   for (const [k, v] of Object.entries(inputs)) if (v !== undefined) ins[k] = ref(v, `${id} input "${k}"`);
-  return new KernelNode<K>(push(scope, { op: "kernel", kernel: id, inputs: ins }, at(site)), scope);
+  return produced(site, new KernelNode<K>(push(scope, { op: "kernel", kernel: id, inputs: ins }, at(site)), scope));
 }
 
 /**
@@ -260,7 +271,7 @@ export function plugin(id: string, inputs: { state?: string; [port: string]: Val
   }
   const op: Record<string, unknown> = { op: "plugin", plugin: id, inputs: ins };
   if (state !== undefined) op.state = state;
-  return new KernelNode<AudioKind>(push(scope, op, at(site)), scope);
+  return produced(site, new KernelNode<AudioKind>(push(scope, op, at(site)), scope));
 }
 
 /**
@@ -295,7 +306,7 @@ export function poly(notes: Events, voice: (note: Note) => Audio, opts: { voices
     current = outer;
   }
   const id = push(outer, { op: "poly", events, voices: opts.voices ?? 16, body: { nodes: body.nodes, out } }, at(site));
-  return new Signal<AudioKind>(id, outer);
+  return produced(site, new Signal<AudioKind>(id, outer));
 }
 
 /** A signal read one block late, which is the only way to close a loop. Call `.set()` with its input. */
@@ -315,7 +326,7 @@ export function feedback<K = unknown>(kind: "audio<1>" | "audio<2>" | `control<$
   const scope = need("feedback");
   const id = push(scope, { op: "feedback", kind, input: null }, at(site));
   feedbacks.push({ node: () => scope.nodes.find((n) => n.id === id), module: scope.module.name });
-  return new Feedback<K>(id, scope);
+  return produced(site, new Feedback<K>(id, scope));
 }
 
 // ---------------------------------------------------------------- components
@@ -344,7 +355,7 @@ export function component<F extends (...args: any[]) => any>(desc: { controls: s
     if (site === undefined) return fn(...args);
     frames.push(site);
     try {
-      return fn(...args);
+      return produced(site, fn(...args));
     } finally {
       frames.pop();
     }
@@ -407,23 +418,23 @@ function ctxFor(m: ModuleBuild): Ctx {
       notes(id) {
         const site = takeSite();
         declareLane(m, id, "events<note>");
-        return laneNode(id, undefined, site);
+        return produced(site, laneNode(id, undefined, site));
       },
       control(id, unit, fallback) {
         const site = takeSite();
         const v = fallback instanceof Quantity ? amounts.get(fallback)! : fallback;
         declareLane(m, id, `control<${unit}>`, v ?? 0);
-        return laneNode(id, unit, site);
+        return produced(site, laneNode(id, unit, site));
       },
       mask(id) {
         const site = takeSite();
         declareLane(m, id, "control<unit01>", 0);
-        return laneNode(id, "unit01", site);
+        return produced(site, laneNode(id, "unit01", site));
       },
       audio(id, channels = 2) {
         const site = takeSite();
         declareLane(m, id, `audio<${channels}>`);
-        return laneNode(id, undefined, site);
+        return produced(site, laneNode(id, undefined, site));
       },
     },
     time: {
@@ -499,12 +510,14 @@ function run(name: string, isTrack: boolean, fn: (ctx: Ctx) => unknown, src?: st
 export function __build(root: unknown): string {
   const r = root as any;
   if (!r || r[TRACK] !== "song") throw new Error("song.ts must `export default song(...)`");
+  outputs = [];
   const built = [run("song", false, r.fn, r.src)];
   for (const [name, t] of tracks) built.push(run(name, true, t.fn, t.src));
   for (const f of feedbacks) {
     const n = f.node();
     if (n && n.input === null) throw new Error(`${f.module}: a feedback() was never given its input with .set()`);
   }
+  (globalThis as any).__m2_outputs = JSON.stringify(outputs);
   return JSON.stringify({
     ir: 0,
     root: { module: "song", export: "out" },
