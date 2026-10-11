@@ -75,6 +75,7 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .route("/api/graph/close", post(graph_close))
         .route("/api/graph/status", get(graph_status))
         .route("/api/graph/preview", post(graph_preview))
+        .route("/api/graph/preview/cancel", post(graph_cancel_preview))
         .route("/api/graph/set", post(graph_set))
         .route("/api/graph/transport", post(graph_transport))
         .fallback_service(spa)
@@ -501,19 +502,39 @@ async fn graph_status(State(s): S) -> Json<Value> {
 
 #[derive(Deserialize)]
 struct PreviewReq {
-    origin: m2_ir::Origin,
+    session: u64,
+    revision: u64,
+    id: String,
+    gesture: String,
     value: f64,
 }
 
 async fn graph_preview(State(s): S, Json(r): Json<PreviewReq>) -> ApiResult {
-    s.graph.preview(r.origin, r.value)?;
+    let state = s.clone();
+    blocking(move || state.graph.preview(r.session, r.revision, &r.id, &r.gesture, r.value)).await?;
+    Ok(Json(json!({})))
+}
+
+#[derive(Deserialize)]
+struct CancelPreviewReq {
+    session: u64,
+    revision: u64,
+    id: String,
+    gesture: String,
+}
+
+async fn graph_cancel_preview(State(s): S, Json(r): Json<CancelPreviewReq>) -> ApiResult {
+    let state = s.clone();
+    blocking(move || state.graph.cancel_preview(r.session, r.revision, &r.id, &r.gesture)).await?;
     Ok(Json(json!({})))
 }
 
 #[derive(Deserialize)]
 struct SetReq {
+    session: u64,
     revision: u64,
     id: String,
+    gesture: String,
     value: f64,
     #[serde(default)]
     expect: Option<f64>,
@@ -521,7 +542,7 @@ struct SetReq {
 
 async fn graph_set(State(s): S, Json(r): Json<SetReq>) -> ApiResult {
     let state = s.clone();
-    let result = blocking(move || state.graph.set(r.revision, &r.id, r.value, r.expect)).await;
+    let result = blocking(move || state.graph.set(r.session, r.revision, &r.id, &r.gesture, r.value, r.expect)).await;
     let _ = s.events.send(json!({"t": "graph"}).to_string());
     Ok(Json(result?))
 }

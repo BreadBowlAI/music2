@@ -1,6 +1,8 @@
 # Code and graph editing design
 
-Design proposal, 11 October 2026. Responds to [the editing brief](code-graph-editing-brief.md) and builds on [Song as a program](song-as-program.md). The APIs below are proposed APIs. Implementation, a working editing prototype, and measured editing benchmarks are subsequent work.
+Design proposal, 11 October 2026. Responds to [the editing brief](code-graph-editing-brief.md) and builds on [Song as a program](song-as-program.md). The APIs below describe the broader design, not a claim that every operation is implemented.
+
+**Current implementation:** the canvas supports a restricted literal-editing subset with a `LiteralLens` that reads a numeric source range and proposes a replacement. Identity resolution and independent candidate verification remain in `Session`. Direct literals, negative literals without intervening comments, unit constructors and unambiguous object properties are editable; computed/indirect expressions and ambiguous objects are read-only. Shared recorded unit values have a named source node and visible consumer connections. Preview requests identify the open project session, revision and control; they use the same numeric normalization as save. Invalid drafts disable edits. Structural gestures, generalized alias tracing, multi-client preview leases and the performance measurements below remain future work.
 
 **Build a source editor whose second interface is a component graph.** Compile TypeScript into both an authoring graph and the existing execution graph. Give each editable argument a small, checked source lens: a way to read its value and propose a precise text change. Let components declare their musical controls, and retain those controls as addressable values in the runtime.
 

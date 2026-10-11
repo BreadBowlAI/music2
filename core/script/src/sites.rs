@@ -18,8 +18,10 @@
 //! are left alone: they get no site, and so no editable values, but keep their
 //! meaning exactly.
 
+use std::collections::HashMap;
+
 use oxc::allocator::Allocator;
-use oxc::ast::ast::{Argument, CallExpression, Expression, ObjectPropertyKind, UnaryOperator};
+use oxc::ast::ast::{Argument, BindingPattern, CallExpression, Expression, ObjectPropertyKind, PropertyKind, UnaryOperator, VariableDeclarator};
 use oxc::ast_visit::{Visit, walk};
 use oxc::parser::Parser;
 use oxc::span::{GetSpan, SourceType};
@@ -40,6 +42,10 @@ pub struct Site {
     pub line: u32,
     /// The callee as written: `bass`, `osc.saw`, `lane.notes`.
     pub callee: String,
+    /// The directly declared variable initialized by this call, when present.
+    /// A display label only: aliases and uses do not change the call's identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding: Option<String>,
     /// Whether the file is the project's own (not an installed package).
     #[serde(default)]
     pub in_project: bool,
@@ -50,9 +56,10 @@ pub struct Site {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Arg {
-    /// A number literal, possibly negated: the bytes a knob may rewrite.
+    /// A number literal, possibly negated: exactly the bytes a knob may rewrite.
+    /// Surrounding parentheses and comments are outside this range.
     Number { start: u32, end: u32, value: f64 },
-    /// An object literal; its plain properties by key.
+    /// An object literal with only unique, plain properties by key.
     Object { start: u32, end: u32, props: Vec<(String, Arg)> },
     /// Anything else (an identifier, a call, a spread …).
     Other { start: u32, end: u32 },
@@ -103,28 +110,44 @@ impl Instrumented {
     }
 }
 
-fn arg(e: &Expression) -> Arg {
+fn arg(source: &str, e: &Expression) -> Arg {
     let s = e.span();
     match e {
         Expression::NumericLiteral(n) => Arg::Number { start: s.start, end: s.end, value: n.value },
         Expression::UnaryExpression(u) if u.operator == UnaryOperator::UnaryNegation => match &u.argument {
-            Expression::NumericLiteral(n) => Arg::Number { start: s.start, end: s.end, value: -n.value },
+            // Replacing a sign and its number must not consume a comment between
+            // them. Whitespace is safe; commented negation stays code-only.
+            Expression::NumericLiteral(n) if source[s.start as usize..n.span.start as usize].trim() == "-" => {
+                Arg::Number { start: s.start, end: s.end, value: -n.value }
+            }
             _ => Arg::Other { start: s.start, end: s.end },
         },
-        Expression::ParenthesizedExpression(p) => match arg(&p.expression) {
-            Arg::Number { value, .. } => Arg::Number { start: s.start, end: s.end, value },
+        Expression::ParenthesizedExpression(p) => match arg(source, &p.expression) {
+            number @ Arg::Number { .. } => number,
             _ => Arg::Other { start: s.start, end: s.end },
         },
         Expression::ObjectExpression(o) => {
             let mut props = vec![];
             for p in &o.properties {
-                if let ObjectPropertyKind::ObjectProperty(p) = p
-                    && !p.computed
-                    && !p.method
-                    && let Some(k) = p.key.static_name()
-                {
-                    props.push((k.to_string(), if p.shorthand { Arg::Other { start: p.span.start, end: p.span.end } } else { arg(&p.value) }));
+                let ObjectPropertyKind::ObjectProperty(p) = p else {
+                    return Arg::Other { start: s.start, end: s.end };
+                };
+                // A spread, computed key, duplicate, or accessor may determine
+                // the runtime value instead of the literal at this source path.
+                // Do not infer ownership from the value it happens to have now.
+                if p.computed || p.method || p.kind != PropertyKind::Init {
+                    return Arg::Other { start: s.start, end: s.end };
                 }
+                let Some(k) = p.key.static_name() else {
+                    return Arg::Other { start: s.start, end: s.end };
+                };
+                if props.iter().any(|(key, _)| key == k.as_ref()) {
+                    return Arg::Other { start: s.start, end: s.end };
+                }
+                props.push((
+                    k.to_string(),
+                    if p.shorthand { Arg::Other { start: p.span.start, end: p.span.end } } else { arg(source, &p.value) },
+                ));
             }
             Arg::Object { start: s.start, end: s.end, props }
         }
@@ -151,11 +174,27 @@ struct Collect<'s> {
     file: String,
     next_id: u32,
     sites: Vec<Site>,
+    /// Direct variable initializers, keyed by the call's original byte range.
+    bindings: HashMap<(u32, u32), String>,
     /// `(offset, sort key, text)`.
     inserts: Vec<(u32, (u8, i64), String)>,
 }
 
 impl<'a> Visit<'a> for Collect<'_> {
+    fn visit_variable_declarator(&mut self, it: &VariableDeclarator<'a>) {
+        if let BindingPattern::BindingIdentifier(binding) = &it.id
+            && let Some(mut initializer) = it.init.as_ref()
+        {
+            while let Expression::ParenthesizedExpression(p) = initializer {
+                initializer = &p.expression;
+            }
+            if let Expression::CallExpression(call) = initializer {
+                self.bindings.insert((call.span.start, call.span.end), binding.name.to_string());
+            }
+        }
+        walk::walk_variable_declarator(self, it);
+    }
+
     fn visit_call_expression(&mut self, it: &CallExpression<'a>) {
         let id = self.next_id;
         let target = match it.arguments.last() {
@@ -179,10 +218,11 @@ impl<'a> Visit<'a> for Collect<'_> {
             let line = self.source[..it.span.start as usize].matches('\n').count() as u32 + 1;
             let args = it.arguments.iter().map(|a| match a {
                 Argument::SpreadElement(s) => Arg::Other { start: s.span.start, end: s.span.end },
-                a => arg(a.to_expression()),
+                a => arg(self.source, a.to_expression()),
             });
             let callee = self.source[it.callee.span().start as usize..it.callee.span().end as usize].to_string();
-            self.sites.push(Site { id, file: self.file.clone(), ordinal: 0, start: it.span.start, end: it.span.end, line, callee, in_project: false, args: args.collect() });
+            let binding = self.bindings.get(&(it.span.start, it.span.end)).cloned();
+            self.sites.push(Site { id, file: self.file.clone(), ordinal: 0, start: it.span.start, end: it.span.end, line, callee, binding, in_project: false, args: args.collect() });
         }
         walk::walk_call_expression(self, it);
     }
@@ -199,7 +239,7 @@ pub fn instrument(file: &str, source: &str, first_id: u32) -> Result<Instrumente
         let col = before.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
         return Err(format!("{file}:{line}:{col}: {}", e.message));
     }
-    let mut c = Collect { source, file: file.to_string(), next_id: first_id, sites: vec![], inserts: vec![] };
+    let mut c = Collect { source, file: file.to_string(), next_id: first_id, sites: vec![], bindings: HashMap::new(), inserts: vec![] };
     c.visit_program(&ret.program);
     let mut sites = c.sites;
     sites.sort_by_key(|s| (s.start, std::cmp::Reverse(s.end)));
@@ -268,6 +308,106 @@ mod tests {
         assert!(matches!(pan, Arg::Number { start, end, value } if &src[*start as usize..*end as usize] == "0.3" && *value == 0.3));
         let db = i.sites.iter().find(|s| &src[s.start as usize..s.end as usize] == "db(-6)").unwrap();
         assert!(matches!(db.args[0], Arg::Number { start, end, value } if &src[start as usize..end as usize] == "-6" && value == -6.0));
+    }
+
+    #[test]
+    fn numeric_edits_preserve_surrounding_parentheses_and_comments() {
+        for (src, expected, value) in [
+            ("hz((/* before */ 800 /* after */));", "hz((/* before */ 950 /* after */));", 800.0),
+            ("hz(((/* before */ -800 /* after */)));", "hz(((/* before */ 950 /* after */)));", -800.0),
+            ("hz((0x320));", "hz((950));", 800.0),
+            ("hz((8_00));", "hz((950));", 800.0),
+        ] {
+            let i = instrument("t.ts", src, 0).unwrap();
+            let Arg::Number { start, end, value: actual } = i.sites[0].args[0] else {
+                panic!("expected an editable literal in {src}");
+            };
+            assert_eq!(actual, value);
+            let mut edited = src.to_string();
+            edited.replace_range(start as usize..end as usize, "950");
+            assert_eq!(edited, expected);
+        }
+    }
+
+    #[test]
+    fn commented_negation_is_read_only() {
+        for src in ["db(-/* keep me */6);", "db(- // keep me\n6);", "db((-/* keep me */6));"] {
+            let i = instrument("t.ts", src, 0).unwrap();
+            assert!(matches!(i.sites[0].args[0], Arg::Other { .. }), "{src}");
+        }
+        let i = instrument("t.ts", "db(- 6);", 0).unwrap();
+        assert!(matches!(i.sites[0].args[0], Arg::Number { value: -6.0, .. }));
+    }
+
+    #[test]
+    fn ambiguous_objects_have_no_editable_property_paths() {
+        for src in [
+            "f({ cutoff: 800, ...other });",
+            "f({ ...other, cutoff: 800 });",
+            "f({ cutoff: 800, cutoff: 800 });",
+            "f({ cutoff: 800, 'cutoff': 800 });",
+            "f({ 1: 800, '1': 800 });",
+            "f({ cutoff: 800, [key]: 800 });",
+            "f({ cutoff: 800, get value() { return 800; } });",
+            "f({ cutoff: 800, set value(v) {} });",
+            "f({ cutoff: 800, method() {} });",
+        ] {
+            let i = instrument("t.ts", src, 0).unwrap();
+            let site = &i.sites[0];
+            assert!(matches!(site.args[0], Arg::Other { .. }), "{src}");
+            assert!(site.arg(&["0".into(), "cutoff".into()]).is_none(), "{src}");
+        }
+    }
+
+    #[test]
+    fn ordinary_nested_object_paths_remain_editable() {
+        let src = "f({ left: { cutoff: (/* Hz */ 800) }, right: { cutoff: 800, ...other }, input, 'gain': -6 });";
+        let i = instrument("t.ts", src, 0).unwrap();
+        let site = &i.sites[0];
+        assert!(
+            matches!(site.arg(&["0".into(), "left".into(), "cutoff".into()]), Some(Arg::Number { start, end, value: 800.0 }) if &src[*start as usize..*end as usize] == "800")
+        );
+        assert!(site.arg(&["0".into(), "right".into(), "cutoff".into()]).is_none());
+        assert!(matches!(site.arg(&["0".into(), "input".into()]), Some(Arg::Other { .. })));
+        assert!(matches!(site.arg(&["0".into(), "gain".into()]), Some(Arg::Number { value: -6.0, .. })));
+    }
+
+    #[test]
+    fn names_only_direct_call_initializers() {
+        let src = r#"
+            export const cutoff: number = hz(800);
+            const gain = ((/* label comes from syntax */ db(-6)));
+            const sound = filter(input, hz(900));
+            const alias = cutoff;
+            const calculated = hz(1000) * 2;
+            const { value } = makeValue(1);
+            const delayed = () => hz(1100);
+            const pair = [hz(1200)];
+            hz(1300);
+        "#;
+        let i = instrument("t.ts", src, 0).unwrap();
+        let bindings: Vec<_> = i.sites.iter().map(|site| (&src[site.start as usize..site.end as usize], site.binding.as_deref())).collect();
+        assert_eq!(bindings, vec![
+            ("hz(800)", Some("cutoff")),
+            ("db(-6)", Some("gain")),
+            ("filter(input, hz(900))", Some("sound")),
+            ("hz(900)", None),
+            ("hz(1000)", None),
+            ("makeValue(1)", None),
+            ("hz(1100)", None),
+            ("hz(1200)", None),
+            ("hz(1300)", None),
+        ]);
+    }
+
+    #[test]
+    fn source_binding_is_optional_in_serialized_sites() {
+        let i = instrument("t.ts", "const cutoff = hz(800);", 0).unwrap();
+        let mut serialized = serde_json::to_value(&i.sites[0]).unwrap();
+        assert_eq!(serialized["binding"], "cutoff");
+        serialized.as_object_mut().unwrap().remove("binding");
+        let restored: Site = serde_json::from_value(serialized).unwrap();
+        assert_eq!(restored.binding, None);
     }
 
     #[test]

@@ -205,7 +205,11 @@ fn run() -> Result<()> {
                     let to: Vec<&str> = m.edges.iter().filter(|(a, _)| *a == n.id).filter_map(|(_, b)| m.nodes.iter().find(|x| x.id == *b)).map(|x| x.label.as_str()).collect();
                     println!("  {:22} {:7}{at}{}", n.label, n.kind, if to.is_empty() { String::new() } else { format!("  → {}", to.join(", ")) });
                     for k in &n.knobs {
-                        println!("      {:14} {:>9} {:9} [{} … {}]{}  `{}`", k.label, k.value, k.unit.unwrap_or("number"), k.min, k.max, if k.log { " log" } else { "" }, k.literal);
+                        let shared = if k.uses > 1 { format!("  shared ×{}", k.uses) } else { String::new() };
+                        println!("      {:14} {:>9} {:9} [{} … {}]{}  `{}`{shared}", k.label, k.value, k.unit.unwrap_or("number"), k.min, k.max, if k.log { " log" } else { "" }, k.literal);
+                    }
+                    for r in &n.readonly {
+                        println!("      {:14} `{}`  (edit in code: {})", r.label, r.expression, r.reason);
                     }
                 }
             }

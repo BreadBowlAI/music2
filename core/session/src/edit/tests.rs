@@ -10,7 +10,7 @@ fn std_packages() -> PackageSet {
     p
 }
 
-/// A fresh copy of `examples/first-song`.
+/// A fresh copy of the stable editing fixture, independent of demo knob changes.
 fn first_song() -> PathBuf {
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!("m2-edit-test-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
@@ -21,7 +21,7 @@ fn first_song() -> PathBuf {
             if f.is_dir() { copy(&f, &t) } else { std::fs::copy(&f, &t).unwrap(); }
         }
     }
-    copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song"), &dir);
+    copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/first-song"), &dir);
     dir
 }
 
@@ -146,7 +146,7 @@ fn verification_rejects_an_edit_that_changes_something_else() {
     let mut s = Session::open(&dir, std_packages()).unwrap();
     let pan = control(&s, "song.ts", "0.hats.pan");
     let gain = s.controls().into_iter().find(|c| c.file == "song.ts" && c.literal == "-6").unwrap();
-    let r = s.apply(Path::new("song.ts"), pan.start, pan.end, "0.9", &gain.origin, gain.value + 1.0, gain.value);
+    let r = s.apply(Path::new("song.ts"), pan.lens.start, pan.lens.end, "0.9", &gain.origin, gain.value + 1.0, gain.value);
     assert!(matches!(&r, Err(EditError::Rejected(why)) if why.contains("more than this value")), "{r:?}");
     assert_eq!(std::fs::read_to_string(&song).unwrap(), original);
     assert_eq!(s.accepted().number, 1);

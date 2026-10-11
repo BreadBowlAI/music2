@@ -14,6 +14,7 @@ export interface Knob {
   max: number;
   log: boolean;
   origin: Origin;
+  uses: number;
   file: string;
   line: number;
 }
@@ -25,13 +26,14 @@ export interface ViewNode {
   file: string | null;
   line: number | null;
   knobs: Knob[];
+  readonly: { label: string; expression: string; reason: string; file: string | null; line: number | null }[];
 }
 
 export interface ModuleView { name: string; track: boolean; nodes: ViewNode[]; edges: [string, string][] }
 
 export interface GraphView { revision: number; modules: ModuleView[]; draft_errors: string[] }
 
-export interface GraphState { name: string; dir: string; view: GraphView; playing: boolean; seconds: number }
+export interface GraphState { session: number; name: string; dir: string; view: GraphView; playing: boolean; seconds: number }
 
 const auth: Record<string, string> = token ? { "x-m2-token": token } : {};
 
@@ -51,9 +53,10 @@ export const graphApi = {
   open: (path: string) => call<GraphState>("/open", { path }),
   close: () => call("/close", {}),
   status: () => call<{ playing: boolean; seconds: number }>("/status"),
-  preview: (origin: Origin, value: number) => call("/preview", { origin, value }),
-  set: (revision: number, id: string, value: number, expect: number) =>
-    call<{ file: string; before: string; after: string; revision: number }>("/set", { revision, id, value, expect }),
+  preview: (session: number, revision: number, id: string, gesture: string, value: number) => call("/preview", { session, revision, id, gesture, value }),
+  cancel: (session: number, revision: number, id: string, gesture: string) => call("/preview/cancel", { session, revision, id, gesture }),
+  set: (session: number, revision: number, id: string, gesture: string, value: number, expect: number) =>
+    call<{ file: string; before: string; after: string; revision: number }>("/set", { session, revision, id, gesture, value, expect }),
   transport: (action: "play" | "stop" | "toggle" | "restart") => call("/transport", { action }),
 };
 
@@ -98,8 +101,10 @@ const GAP_Y = 20;
 const HEAD_H = 46;
 const KNOB_ROW_H = 84;
 const KNOBS_PER_ROW = 3;
+const EXPRESSION_ROW_H = 64;
 
-export const nodeHeight = (n: ViewNode) => HEAD_H + Math.ceil(n.knobs.length / KNOBS_PER_ROW) * KNOB_ROW_H + (n.knobs.length ? 8 : 0);
+export const nodeHeight = (n: ViewNode) =>
+  HEAD_H + Math.ceil(n.knobs.length / KNOBS_PER_ROW) * KNOB_ROW_H + (n.knobs.length ? 8 : 0) + n.readonly.length * EXPRESSION_ROW_H;
 
 export interface Placed { node: ViewNode; x: number; y: number; h: number }
 

@@ -97,6 +97,10 @@ The new core is in `core/`, the standard library in `std/`, and the CLI in `apps
 - [`examples/with-plugins`](examples/with-plugins): Surge XT and Airwindows Consolidated (CLAP) as graph nodes, with automation and saved state. Needs both plugins installed.
 - [`examples/resample`](examples/resample): bounce a track to audio, then chop, reverse, pitch and stretch it on an audio lane.
 
+TypeScript stays the source of truth. Canvas editing supports directly written numbers at recorded control inputs, including unit constructors such as `hz(800)` and plain object properties. Parentheses and surrounding comments survive edits. At these inputs, computed or indirect values, and objects containing spreads, duplicate keys, computed keys, getters or methods, remain valid code but show **edit in code** instead of a knob. A shared value such as `const cutoff = hz(800)` appears as one value node connected to its consumers; changing it changes every recorded use. A bare numeric alias such as `const cutoff = 800` is not traced back to its declaration. Raw kernel numbers without recorded source ownership do not expose controls or expression rows.
+
+Preview and save resolve the same control in the current project session and source revision. Saves still compile a candidate and independently check the expected graph change before writing. Invalid source keeps the last accepted graph and audio, with knobs disabled until the source compiles. This first editable subset supports value changes; adding nodes, deleting nodes and rewiring connections remain future work.
+
 ```bash
 cargo run --release -p m2 -- build examples/first-song            # run the TypeScript, check the graph
 cargo run --release -p m2 -- render examples/first-song out.wav   # render to WAV

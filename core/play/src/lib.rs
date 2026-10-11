@@ -114,9 +114,21 @@ impl Player {
                 let (tx, rx) = bounded::<Msg>(1024);
                 let (retired_tx, retired) = bounded::<Box<Renderer>>(8);
                 let shared = Arc::new(Shared::default());
-                let mut cb = Callback { renderer: None, playing: false, scratch: vec![[0.0; 2]; 8192], rx, retired: retired_tx, shared: shared.clone() };
+                let mut cb = Callback {
+                    renderer: None,
+                    playing: false,
+                    scratch: vec![[0.0; 2]; 8192],
+                    rx,
+                    retired: retired_tx,
+                    shared: shared.clone(),
+                };
                 let sample_rate = config.sample_rate;
-                let stream = device.build_output_stream::<f32, _, _>(config, move |data: &mut [f32], _| cb.fill(data, channels), |e| eprintln!("music2: audio stream error: {e}"), None)?;
+                let stream = device.build_output_stream::<f32, _, _>(
+                    config,
+                    move |data: &mut [f32], _| cb.fill(data, channels),
+                    |e| eprintln!("music2: audio stream error: {e}"),
+                    None,
+                )?;
                 stream.play()?;
                 Ok((stream, Player { tx, shared, sample_rate, device: name }, retired))
             };
@@ -137,13 +149,14 @@ impl Player {
     }
 
     /// The same player, rendering into nothing in real time: no device, no sound.
-    fn silent() -> Result<Player> {
+    pub fn silent() -> Result<Player> {
         const SR: u32 = 48_000;
         const FRAMES: usize = 480;
         let (tx, rx) = bounded::<Msg>(1024);
         let (retired_tx, retired) = bounded::<Box<Renderer>>(8);
         let shared = Arc::new(Shared::default());
-        let mut cb = Callback { renderer: None, playing: false, scratch: vec![[0.0; 2]; FRAMES], rx, retired: retired_tx, shared: shared.clone() };
+        let mut cb =
+            Callback { renderer: None, playing: false, scratch: vec![[0.0; 2]; FRAMES], rx, retired: retired_tx, shared: shared.clone() };
         std::thread::Builder::new().name("m2-play-silent".into()).spawn(move || {
             let mut buf = vec![0.0f32; FRAMES * 2];
             loop {
@@ -174,6 +187,12 @@ impl Player {
         let _ = self.tx.try_send(Msg::SetConst(origin, value));
     }
 
+    /// Deliver an accepted value or rollback even when previews filled the queue.
+    /// Call from the host's worker thread; this waits for room in the audio queue.
+    pub fn commit_const(&self, origin: Origin, value: f64) -> Result<()> {
+        self.tx.send(Msg::SetConst(origin, value)).map_err(|_| anyhow!("the audio player stopped"))
+    }
+
     /// Frames the playing renderer has rendered.
     pub fn position(&self) -> u64 {
         self.shared.position.load(Ordering::Relaxed)
@@ -181,5 +200,36 @@ impl Player {
 
     pub fn is_playing(&self) -> bool {
         self.shared.playing.load(Ordering::Relaxed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn committed_values_wait_for_room_instead_of_being_dropped() {
+        let (tx, rx) = bounded(1);
+        tx.send(Msg::Play).unwrap();
+        let player = Player { tx, shared: Arc::new(Shared::default()), sample_rate: 48_000, device: "test".into() };
+        let origin = Origin { site: 3, arg: vec!["0".into()], scale: None };
+        let sent = origin.clone();
+        let (started_tx, started) = bounded(1);
+        let (done_tx, done) = bounded(1);
+        let commit = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let result = player.commit_const(sent, 950.0);
+            done_tx.send(()).unwrap();
+            result
+        });
+        started.recv().unwrap();
+        assert!(done.recv_timeout(std::time::Duration::from_millis(20)).is_err(), "a full queue must wait instead of dropping the commit");
+        assert!(matches!(rx.recv().unwrap(), Msg::Play));
+        let Msg::SetConst(actual, value) = rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap() else {
+            panic!("expected the committed value")
+        };
+        assert_eq!(actual, origin);
+        assert_eq!(value, 950.0);
+        commit.join().unwrap().unwrap();
     }
 }

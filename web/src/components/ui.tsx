@@ -66,11 +66,18 @@ export function Knob({
   onChange,
   onStart,
   onEnd,
+  onCancel,
   color = "var(--color-pop-500)",
   title,
   display,
-}: { value: number; label: string; onChange: (v: number) => void; onStart?: () => void; onEnd?: () => void; color?: string; title?: string; display?: string }) {
-  const drag = useRef<{ y: number; v: number } | null>(null);
+}: { value: number; label: string; onChange: (v: number) => void; onStart?: () => void; onEnd?: () => void; onCancel?: () => void; color?: string; title?: string; display?: string }) {
+  const drag = useRef<{ pointer: number; y: number; v: number } | null>(null);
+  const finish = (pointer: number, cancelled: boolean) => {
+    if (drag.current?.pointer !== pointer) return;
+    drag.current = null;
+    if (cancelled && onCancel) onCancel();
+    else onEnd?.();
+  };
   const a0 = -135, a1 = 135;
   const angle = a0 + (a1 - a0) * value;
   const arc = (from: number, to: number) => {
@@ -86,19 +93,19 @@ export function Knob({
         height="40"
         className="cursor-ns-resize touch-none"
         onPointerDown={(e) => {
-          (e.target as Element).setPointerCapture(e.pointerId);
-          drag.current = { y: e.clientY, v: value };
+          if (drag.current || e.button !== 0) return;
+          e.currentTarget.setPointerCapture(e.pointerId);
+          drag.current = { pointer: e.pointerId, y: e.clientY, v: value };
           onStart?.();
         }}
         onPointerMove={(e) => {
-          if (!drag.current) return;
+          if (!drag.current || drag.current.pointer !== e.pointerId) return;
           const v = Math.min(1, Math.max(0, drag.current.v + (drag.current.y - e.clientY) / 160));
           if (Math.abs(v - value) > 0.002) onChange(v);
         }}
-        onPointerUp={() => {
-          drag.current = null;
-          onEnd?.();
-        }}
+        onPointerUp={(e) => finish(e.pointerId, false)}
+        onPointerCancel={(e) => finish(e.pointerId, true)}
+        onLostPointerCapture={(e) => finish(e.pointerId, true)}
         onDoubleClick={() => onChange(0.5)}
       >
         <path d={arc(a0, a1)} stroke="var(--color-ink-600)" strokeWidth="3.5" fill="none" strokeLinecap="round" />

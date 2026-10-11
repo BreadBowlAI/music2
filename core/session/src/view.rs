@@ -8,7 +8,8 @@
 //! Edges are the connections between those calls. The view is derived from the
 //! accepted revision every time; nothing about it is saved.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::Path;
 
 use m2_ir::{Kernels, Node, Op, PortKind, Unit, split_ref};
 use m2_script::sites::{Arg, Site};
@@ -44,6 +45,17 @@ pub struct ViewNode {
     pub file: Option<String>,
     pub line: Option<u32>,
     pub knobs: Vec<Knob>,
+    /// Values that are valid code but have no supported source edit.
+    pub readonly: Vec<ReadOnly>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct ReadOnly {
+    pub label: String,
+    pub expression: String,
+    pub reason: String,
+    pub file: Option<String>,
+    pub line: Option<u32>,
 }
 
 /// A control as the canvas shows it.
@@ -61,6 +73,7 @@ pub struct Knob {
     pub origin: m2_ir::Origin,
     pub file: String,
     pub line: u32,
+    pub uses: usize,
 }
 
 /// A sensible knob range for a unit, widened to include the current value.
@@ -125,7 +138,8 @@ impl Session {
         let rev = self.accepted();
         let sites: HashMap<u32, &Site> = rev.compiled.sites.iter().map(|s| (s.id, s)).collect();
         let in_project = |id: u32| sites.get(&id).is_some_and(|s| s.in_project);
-        let controls: HashMap<(u32, Vec<String>), Control> = self.controls().into_iter().map(|c| ((c.origin.site, c.origin.arg.clone()), c)).collect();
+        let controls: HashMap<(u32, Vec<String>), Control> =
+            self.controls().into_iter().map(|c| ((c.origin.site, c.origin.arg.clone()), c)).collect();
 
         let mut modules = vec![];
         for m in &rev.compiled.ir.modules {
@@ -142,7 +156,7 @@ impl Session {
             collect(&m.nodes, &mut all);
             let by_id: HashMap<&str, &Node> = all.iter().map(|n| (n.id.as_str(), *n)).collect();
 
-            let group_of = |n: &Node| -> Option<Group> {
+            let call_group = |n: &Node| -> Option<Group> {
                 if matches!(n.op, Op::Const { .. }) {
                     return None;
                 }
@@ -156,34 +170,51 @@ impl Session {
                 }
             };
 
-            // Knobs: each control goes on the innermost call containing where it was written.
+            // A direct value belongs to the innermost containing call. A shared
+            // source gets its own node, so consumers cannot look independently editable.
             let mut knobs: BTreeMap<Group, Vec<Knob>> = BTreeMap::new();
+            let mut readonly: BTreeMap<Group, Vec<ReadOnly>> = BTreeMap::new();
+            let mut homes: HashMap<(u32, Vec<String>), Group> = HashMap::new();
             let groups: Vec<Group> = {
-                let mut g: Vec<Group> = all.iter().filter_map(|n| group_of(n)).collect();
+                let mut g: Vec<Group> = all.iter().filter_map(|n| call_group(n)).collect();
                 g.sort();
                 g.dedup();
                 g
             };
+            let mut seen = HashSet::new();
             for n in &all {
                 let (Op::Const { .. }, Some(o)) = (&n.op, &n.origin) else { continue };
-                let Some(c) = controls.get(&(o.site, o.arg.clone())) else { continue };
-                if knobs.values().flatten().any(|k| k.id == c.id) {
+                let key = (o.site, o.arg.clone());
+                let Some(at) = sites.get(&o.site).filter(|s| s.in_project && !o.arg.is_empty()) else { continue };
+                if !seen.insert(key.clone()) {
                     continue;
                 }
-                let at = sites[&o.site];
-                let home = groups
-                    .iter()
-                    .filter_map(|g| match g {
-                        Group::Site(s) => sites.get(s).filter(|x| x.file == at.file && x.start <= at.start && at.end <= x.end).map(|x| (x.end - x.start, g)),
-                        _ => None,
-                    })
-                    .min_by_key(|(len, _)| *len)
-                    .map(|(_, g)| g.clone())
-                    .unwrap_or(Group::Site(o.site));
+                let control = controls.get(&key);
+                let home = if control.is_some_and(|c| c.uses > 1) {
+                    Group::Site(o.site)
+                } else {
+                    groups
+                        .iter()
+                        .filter_map(|g| match g {
+                            Group::Site(s) => sites
+                                .get(s)
+                                .filter(|x| x.file == at.file && x.start <= at.start && at.end <= x.end)
+                                .map(|x| (x.end - x.start, g)),
+                            _ => None,
+                        })
+                        .min_by_key(|(len, _)| *len)
+                        .map(|(_, g)| g.clone())
+                        .unwrap_or(Group::Site(o.site))
+                };
+                homes.insert(key, home.clone());
                 // Name it after its property, or the port it feeds, or its call.
                 let consumer = all.iter().find_map(|k| match &k.op {
-                    Op::Kernel { kernel, inputs } => inputs.iter().find(|(_, r)| split_ref(r).0 == n.id).map(|(p, _)| (self.packages.kernel(kernel), p.clone())),
-                    Op::Plugin { plugin, inputs, .. } => inputs.iter().find(|(_, r)| split_ref(r).0 == n.id).map(|(p, _)| (self.packages.plugin(plugin), p.clone())),
+                    Op::Kernel { kernel, inputs } => {
+                        inputs.iter().find(|(_, r)| split_ref(r).0 == n.id).map(|(p, _)| (self.packages.kernel(kernel), p.clone()))
+                    }
+                    Op::Plugin { plugin, inputs, .. } => {
+                        inputs.iter().find(|(_, r)| split_ref(r).0 == n.id).map(|(p, _)| (self.packages.plugin(plugin), p.clone()))
+                    }
                     _ => None,
                 });
                 // A unit value like `db(-6)` written as a property is named by where it
@@ -197,6 +228,36 @@ impl Session {
                     path[1..].join(".")
                 } else {
                     consumer.as_ref().map(|(_, p)| p.clone()).unwrap_or_else(|| at.callee.clone())
+                };
+                let Some(c) = control else {
+                    // For an ambiguous object, the whole argument is the smallest
+                    // expression we can honestly identify. Never guess a property.
+                    let exact = at.arg(&o.arg);
+                    let arg = exact.or_else(|| o.arg.first()?.parse::<usize>().ok().and_then(|i| at.args.get(i)));
+                    let Some(arg) = arg else { continue };
+                    let (start, end) = match arg {
+                        Arg::Number { start, end, .. } | Arg::Object { start, end, .. } | Arg::Other { start, end } => (*start, *end),
+                    };
+                    let expression = rev
+                        .snapshot
+                        .files
+                        .get(Path::new(&at.file))
+                        .and_then(|text| text.get(start as usize..end as usize))
+                        .unwrap_or("")
+                        .to_string();
+                    let reason = if exact.is_none() {
+                        "This property has no unambiguous literal in the source object."
+                    } else {
+                        "Only a directly written number can be edited here."
+                    };
+                    readonly.entry(home).or_default().push(ReadOnly {
+                        label,
+                        expression,
+                        reason: reason.into(),
+                        file: Some(at.file.clone()),
+                        line: Some(at.line),
+                    });
+                    continue;
                 };
                 let port_unit = consumer.and_then(|(sig, p)| match sig?.inputs.iter().find(|i| i.name == p)?.kind {
                     PortKind::Control(u) => u,
@@ -216,8 +277,15 @@ impl Session {
                     origin: c.origin.clone(),
                     file: c.file.clone(),
                     line: c.line,
+                    uses: c.uses,
                 });
             }
+            let group_of = |n: &Node| -> Option<Group> {
+                if matches!(n.op, Op::Const { .. }) {
+                    return n.origin.as_ref().and_then(|o| homes.get(&(o.site, o.arg.clone())).cloned());
+                }
+                call_group(n)
+            };
 
             // Nodes, in order of first appearance.
             let mut nodes: Vec<ViewNode> = vec![];
@@ -229,35 +297,45 @@ impl Session {
                 let (id, label, kind, file, line) = match g {
                     Group::Site(s) => {
                         let site = sites[s];
-                        let kind = if matches!(n.map(|n| &n.op), Some(Op::Lane { .. })) && n.is_some_and(|n| n.within.is_empty()) { "lane" } else { "call" };
+                        let kind = if !groups.contains(g) {
+                            "value"
+                        } else if matches!(n.map(|n| &n.op), Some(Op::Lane { .. })) && n.is_some_and(|n| n.within.is_empty()) {
+                            "lane"
+                        } else {
+                            "call"
+                        };
                         let label = match n.map(|n| &n.op) {
                             Some(Op::Lane { lane }) if kind == "lane" => lane.clone(),
+                            _ if kind == "value" => site.binding.clone().unwrap_or_else(|| site.callee.clone()),
                             _ => site.callee.clone(),
                         };
                         (format!("{}#{}", site.file, site.ordinal), label, kind, Some(site.file.clone()), Some(site.line))
                     }
                     Group::Time(of) => (format!("time:{of}"), format!("time.{of}"), "time", None, None),
-                    Group::Import(module, export) => (format!("import:{module}.{export}"), format!("{module}.{export}"), "import", None, None),
+                    Group::Import(module, export) => {
+                        (format!("import:{module}.{export}"), format!("{module}.{export}"), "import", None, None)
+                    }
                 };
                 ids.insert(g.clone(), id.clone());
-                nodes.push(ViewNode { id: id.clone(), label, kind, file, line, knobs: knobs.get(g).cloned().unwrap_or_default() });
+                nodes.push(ViewNode {
+                    id: id.clone(),
+                    label,
+                    kind,
+                    file,
+                    line,
+                    knobs: knobs.get(g).cloned().unwrap_or_default(),
+                    readonly: readonly.get(g).cloned().unwrap_or_default(),
+                });
                 id
             };
             for n in &all {
-                if let Some(g) = group_of(n) {
+                if let Some(g) = call_group(n) {
                     add(&g, Some(n), &mut nodes);
                 }
             }
-            // Knobs whose call made no node of its own (a value written outside any call).
-            for (g, ks) in &knobs {
-                if !ids.contains_key(g)
-                    && let Group::Site(s) = g
-                {
-                    let site = sites[s];
-                    let id = format!("{}#{}", site.file, site.ordinal);
-                    ids.insert(g.clone(), id.clone());
-                    nodes.push(ViewNode { id, label: site.callee.clone(), kind: "value", file: Some(site.file.clone()), line: Some(site.line), knobs: ks.clone() });
-                }
+            // Values whose source call made no node of its own.
+            for g in knobs.keys().chain(readonly.keys()) {
+                add(g, None, &mut nodes);
             }
 
             // Edges between groups.
@@ -290,7 +368,15 @@ impl Session {
             }
             for (name, r) in &m.exports {
                 let id = format!("export:{name}");
-                nodes.push(ViewNode { id: id.clone(), label: name.clone(), kind: "export", file: None, line: None, knobs: vec![] });
+                nodes.push(ViewNode {
+                    id: id.clone(),
+                    label: name.clone(),
+                    kind: "export",
+                    file: None,
+                    line: None,
+                    knobs: vec![],
+                    readonly: vec![],
+                });
                 if let Some(from) = source(r).and_then(group_of).and_then(|g| ids.get(&g).cloned()) {
                     edges.push((from, id));
                 }

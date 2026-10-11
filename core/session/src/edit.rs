@@ -19,10 +19,13 @@ use std::path::{Path, PathBuf};
 
 use m2_ir::{Diagnostic, Ir, Node, Op, Origin, Unit};
 use m2_runtime::PackageSet;
-use m2_script::sites::{Arg, Site};
+use m2_script::sites::Site;
 use m2_song::{Project, Snapshot};
 
 use crate::{Compiled, compile_sources};
+
+mod lens;
+use lens::LiteralLens;
 
 /// One accepted state of the project.
 pub struct Revision {
@@ -52,8 +55,7 @@ pub struct Control {
     /// How many graph nodes use it (a helper called twice gives two).
     pub uses: usize,
     pub origin: Origin,
-    start: u32,
-    end: u32,
+    lens: LiteralLens,
 }
 
 /// An accepted change.
@@ -75,9 +77,13 @@ pub enum EditError {
     NotFound(String),
     /// The files changed since the edit's revision in a way that touches its target.
     /// List the controls again and retry.
-    Stale { current: u64 },
+    Stale {
+        current: u64,
+    },
     /// The value is not what the caller expected: someone else changed it.
-    Conflict { current: f64 },
+    Conflict {
+        current: f64,
+    },
     /// The files on disk don't compile, so there is no base to edit.
     DraftInvalid(Vec<Diagnostic>),
     /// The edit didn't compile, or didn't change exactly what it should have.
@@ -91,7 +97,9 @@ impl std::fmt::Display for EditError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             EditError::NotFound(id) => write!(f, "no control `{id}` in that revision"),
-            EditError::Stale { current } => write!(f, "the code changed around this control; it is revision {current} now, list the controls again"),
+            EditError::Stale { current } => {
+                write!(f, "the code changed around this control; it is revision {current} now, list the controls again")
+            }
             EditError::Conflict { current } => write!(f, "the value changed elsewhere (it is now {current})"),
             EditError::DraftInvalid(d) => write!(f, "the project doesn't compile right now ({} problems), so it can't be edited", d.len()),
             EditError::Rejected(why) => write!(f, "edit rejected: {why}"),
@@ -141,7 +149,7 @@ fn carry(old: &str, new: &str, start: usize, end: usize) -> Option<usize> {
         return Some(start);
     }
     let p = old.bytes().zip(new.bytes()).take_while(|(a, b)| a == b).count();
-    let s = old[p..].bytes().rev().zip(new[p..].bytes().rev()).take_while(|(a, b)| a == b).count();
+    let s = old.as_bytes()[p..].iter().rev().zip(new.as_bytes()[p..].iter().rev()).take_while(|(a, b)| a == b).count();
     let to = if end <= p {
         start
     } else if start >= old.len() - s {
@@ -150,12 +158,6 @@ fn carry(old: &str, new: &str, start: usize, end: usize) -> Option<usize> {
         return None;
     };
     (new.get(to..to + (end - start)) == old.get(start..end)).then_some(to)
-}
-
-/// The shortest decimal that reads back as `v` (valid JavaScript).
-fn format_number(v: f64) -> String {
-    let s = format!("{v}");
-    if s == "-0" { "0".into() } else { s }
 }
 
 /// The IR with source positions removed, for comparing two builds.
@@ -294,14 +296,8 @@ impl Session {
                 return;
             }
             let Some(site) = rev.compiled.sites.iter().find(|s| s.id == o.site && s.in_project) else { return };
-            let Some(Arg::Number { start, end, value: written }) = site.arg(&o.arg) else { return };
-            let scale = o.scale.unwrap_or(1.0);
-            // The written number must be what made the value (not a computed one).
-            if written * scale != *value {
-                return;
-            }
             let Some(text) = rev.snapshot.files.get(Path::new(&site.file)) else { return };
-            let Some(literal) = text.get(*start as usize..*end as usize) else { return };
+            let Some(lens) = LiteralLens::read(site, o, text, *value) else { return };
             let id = format!("{}#{}/{}", site.file, site.ordinal, o.arg.join("."));
             found.entry(id.clone()).and_modify(|c| c.uses += 1).or_insert_with(|| Control {
                 id,
@@ -309,13 +305,12 @@ impl Session {
                 file: site.file.clone(),
                 line: site.line,
                 value: *value,
-                literal: literal.to_string(),
+                literal: lens.literal.clone(),
                 unit: *unit,
-                scale,
+                scale: lens.scale,
                 uses: 1,
                 origin: o.clone(),
-                start: *start,
-                end: *end,
+                lens,
             });
         };
         for m in &rev.compiled.ir.modules {
@@ -337,8 +332,10 @@ impl Session {
             let past = self.past.iter().find(|p| p.number == at)?;
             let (old, arg) = site_by_id(&past.sites, id)?;
             let file = Path::new(&old.file);
-            let to = carry(past.snapshot.files.get(file)?, self.accepted.snapshot.files.get(file)?, old.start as usize, old.end as usize)? as u32;
-            let site = self.accepted.compiled.sites.iter().find(|s| s.file == old.file && s.start == to && s.end == to + (old.end - old.start))?;
+            let to = carry(past.snapshot.files.get(file)?, self.accepted.snapshot.files.get(file)?, old.start as usize, old.end as usize)?
+                as u32;
+            let site =
+                self.accepted.compiled.sites.iter().find(|s| s.file == old.file && s.start == to && s.end == to + (old.end - old.start))?;
             find(&format!("{}#{}/{}", site.file, site.ordinal, arg.join(".")))
         };
         carried().ok_or(stale)
@@ -361,20 +358,62 @@ impl Session {
         {
             return Err(EditError::Conflict { current: c.value });
         }
-        let text = format_number(value / c.scale);
-        let written: f64 = text.parse().expect("format_number writes Rust-readable numbers");
-        self.apply(Path::new(&c.file), c.start, c.end, &text, &c.origin, written * c.scale, c.value)
+        let edit = c.lens.propose(value)?;
+        if edit.value == c.value {
+            // Closing a preview at its starting value is a real gesture, but not
+            // a source edit. Preserve spellings such as `0x320`, `8e2` and `-0`.
+            return Ok(Committed {
+                revision: self.accepted.number,
+                file: c.file,
+                before: c.literal.clone(),
+                after: c.literal,
+                origin: c.origin,
+                value: c.value,
+            });
+        }
+        self.apply(Path::new(&c.file), c.lens.start, c.lens.end, &edit.text, &c.origin, edit.value, c.value)
+    }
+
+    /// Resolve a live edit using exactly the same literal lens as a saved edit.
+    /// Preview never carries an old origin into a different accepted graph. The
+    /// host watches/refreshes the draft separately; no build runs on this path.
+    pub fn preview(&self, at: u64, id: &str, value: f64) -> Result<(Origin, f64), EditError> {
+        if !self.draft_errors.is_empty() {
+            return Err(EditError::DraftInvalid(self.draft_errors.clone()));
+        }
+        if at != self.accepted.number {
+            return Err(EditError::Stale { current: self.accepted.number });
+        }
+        let c = self.resolve(at, id)?;
+        let edit = c.lens.propose(value)?;
+        Ok((c.origin, edit.value))
     }
 
     /// Replace bytes `start..end` of one file with `text`, which must set the constant
     /// at `origin` to `value`; verify, write, accept, and record for undo.
     #[allow(clippy::too_many_arguments)]
-    fn apply(&mut self, file: &Path, start: u32, end: u32, text: &str, origin: &Origin, value: f64, value_before: f64) -> Result<Committed, EditError> {
+    fn apply(
+        &mut self,
+        file: &Path,
+        start: u32,
+        end: u32,
+        text: &str,
+        origin: &Origin,
+        value: f64,
+        value_before: f64,
+    ) -> Result<Committed, EditError> {
         let name = file.display().to_string();
         let old = self.accepted.snapshot.files.get(file).cloned().ok_or_else(|| EditError::NotFound(name.clone()))?;
         let before = old[start as usize..end as usize].to_string();
         if before == text {
-            return Ok(Committed { revision: self.accepted.number, file: name, before, after: text.to_string(), origin: origin.clone(), value });
+            return Ok(Committed {
+                revision: self.accepted.number,
+                file: name,
+                before,
+                after: text.to_string(),
+                origin: origin.clone(),
+                value,
+            });
         }
         let new = format!("{}{text}{}", &old[..start as usize], &old[end as usize..]);
         let mut snapshot = self.accepted.snapshot.clone();
@@ -403,7 +442,15 @@ impl Session {
 
         self.draft = snapshot.clone();
         let number = self.accept(snapshot, project, candidate);
-        self.history.push(Change { revision: number, file: file.to_path_buf(), start, before: before.clone(), after: text.to_string(), origin: origin.clone(), value_before });
+        self.history.push(Change {
+            revision: number,
+            file: file.to_path_buf(),
+            start,
+            before: before.clone(),
+            after: text.to_string(),
+            origin: origin.clone(),
+            value_before,
+        });
         Ok(Committed { revision: number, file: name, before, after: text.to_string(), origin: origin.clone(), value })
     }
 
@@ -444,3 +491,6 @@ impl Session {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod restricted_tests;
