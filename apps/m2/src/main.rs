@@ -20,6 +20,7 @@ USAGE:
             [--place Track.lane@beat] [--force]
                                          render a track (or the whole song) to assets/<asset-name>.wav,
                                          optionally placing it as a clip on an audio lane
+  m2 graph <project> [--json]            the graph the canvas shows: calls, their knobs, connections
   m2 controls <project>                  every number written in the project that the graph can edit
   m2 set <project> <control> <value> [--expect V]
                                          change one, verified by the compiler (values in the control's units)
@@ -187,6 +188,26 @@ fn run() -> Result<()> {
                 std::fs::create_dir_all(lane_file.parent().expect("has a parent"))?;
                 std::fs::write(&lane_file, serde_json::to_string_pretty(&data)? + "\n")?;
                 println!("placed it on {track}.{lane} at beat {beat} ({})", lane_file.display());
+            }
+        }
+        Some("graph") => {
+            let s = m2_session::Session::open(Path::new(&arg(1)?), packages()?).map_err(report)?;
+            let v = s.view();
+            if args.iter().any(|a| a == "--json") {
+                println!("{}", serde_json::to_string_pretty(&v)?);
+                return Ok(());
+            }
+            println!("revision {}", v.revision);
+            for m in &v.modules {
+                println!("\n{}{}", m.name, if m.track { " (track)" } else { "" });
+                for n in &m.nodes {
+                    let at = n.file.as_ref().map(|f| format!("  {f}:{}", n.line.unwrap_or(0))).unwrap_or_default();
+                    let to: Vec<&str> = m.edges.iter().filter(|(a, _)| *a == n.id).filter_map(|(_, b)| m.nodes.iter().find(|x| x.id == *b)).map(|x| x.label.as_str()).collect();
+                    println!("  {:22} {:7}{at}{}", n.label, n.kind, if to.is_empty() { String::new() } else { format!("  → {}", to.join(", ")) });
+                    for k in &n.knobs {
+                        println!("      {:14} {:>9} {:9} [{} … {}]{}  `{}`", k.label, k.value, k.unit.unwrap_or("number"), k.min, k.max, if k.log { " log" } else { "" }, k.literal);
+                    }
+                }
             }
         }
         Some("controls") => {

@@ -240,3 +240,41 @@ fn undo_restores_any_javascript_number_spelling() {
         std::fs::remove_dir_all(dir).ok();
     }
 }
+
+#[test]
+fn the_view_shows_the_calls_written_in_the_project() {
+    let dir = first_song();
+    let s = Session::open(&dir, std_packages()).unwrap();
+    let v = s.view();
+    let module = |name: &str| v.modules.iter().find(|m| m.name == name).unwrap();
+    let node = |m: &crate::ModuleView, label: &str| m.nodes.iter().find(|n| n.label == label).cloned().unwrap_or_else(|| panic!("no {label} in {}: {:?}", m.name, m.nodes.iter().map(|n| &n.label).collect::<Vec<_>>()));
+
+    // The bass track is a handful of calls, not the kernels they expand into.
+    let bass = module("Bass");
+    let labels: Vec<&str> = bass.nodes.iter().map(|n| n.label.as_str()).collect();
+    for want in ["cutoff", "drop", "notes", "time.beats", "lfo", "xrange", "blend", "bass", "out"] {
+        assert!(labels.contains(&want), "{want} missing from {labels:?}");
+    }
+    assert!(bass.nodes.len() < 14, "{labels:?}");
+    let knob = |n: &crate::ViewNode, l: &str| n.knobs.iter().find(|k| k.label == l).cloned().unwrap_or_else(|| panic!("no knob {l} on {}", n.label));
+    assert_eq!(knob(&node(bass, "lfo"), "period").value, 0.5);
+    let hi = knob(&node(bass, "xrange"), "hi");
+    assert_eq!((hi.value, hi.literal.as_str(), hi.unit, hi.log), (2500.0, "2.5", Some("hz"), true));
+    let edge = |m: &crate::ModuleView, a: &str, b: &str| {
+        let id = |l: &str| node(m, l).id;
+        m.edges.contains(&(id(a), id(b)))
+    };
+    assert!(edge(bass, "lfo", "xrange") && edge(bass, "xrange", "blend") && edge(bass, "blend", "bass") && edge(bass, "bass", "out"));
+    assert!(edge(bass, "notes", "bass"));
+    assert_eq!(node(bass, "cutoff").kind, "lane");
+
+    // The mixer carries the channel knobs, named by where they are written.
+    let song = module("song");
+    let mixer = node(song, "mixer");
+    let pan = knob(&mixer, "hats.pan");
+    assert_eq!((pan.value, pan.min, pan.max), (0.3, -1.0, 1.0), "pan feeds a bipolar port");
+    assert_eq!(knob(&mixer, "hats.db").value, -6.0);
+    assert_eq!(knob(&node(song, "duck"), "depth").value, -9.0);
+    assert!(edge(song, "Kick.env", "duck") && edge(song, "duck", "mixer") && edge(song, "mixer", "master"));
+    std::fs::remove_dir_all(dir).ok();
+}

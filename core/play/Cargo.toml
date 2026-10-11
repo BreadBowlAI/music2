@@ -1,0 +1,13 @@
+[package]
+name = "m2-play"
+description = "Plays a music2 renderer on the audio device, with live value changes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+m2-ir.workspace = true
+m2-runtime.workspace = true
+anyhow.workspace = true
+cpal.workspace = true
+crossbeam-channel.workspace = true

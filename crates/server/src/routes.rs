@@ -70,6 +70,13 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .route("/api/settings", get(get_settings))
         .route("/api/peaks/{asset}", get(peaks))
         .route("/api/plugin", get(plugin_def))
+        .route("/api/graph", get(graph_get))
+        .route("/api/graph/open", post(graph_open))
+        .route("/api/graph/close", post(graph_close))
+        .route("/api/graph/status", get(graph_status))
+        .route("/api/graph/preview", post(graph_preview))
+        .route("/api/graph/set", post(graph_set))
+        .route("/api/graph/transport", post(graph_transport))
         .fallback_service(spa)
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth))
         .with_state(state)
@@ -461,4 +468,71 @@ struct PluginQuery {
 async fn plugin_def(State(s): S, Query(q): Query<PluginQuery>) -> ApiResult {
     let def = s.session.lock().registry.get(&q.id).ok_or_else(|| err("no such plugin"))?;
     Ok(Json(serde_json::to_value(def.as_ref())?))
+}
+
+// ---------------------------------------------------------------- graph projects (new core)
+
+async fn graph_get(State(s): S) -> Result<Json<Value>, ApiError> {
+    s.graph.state().map(Json).ok_or_else(|| err("no project is open"))
+}
+
+#[derive(Deserialize)]
+struct GraphOpenReq {
+    path: PathBuf,
+}
+
+async fn graph_open(State(s): S, Json(r): Json<GraphOpenReq>) -> ApiResult {
+    let state = s.clone();
+    let v = blocking(move || state.graph.open(&r.path)).await?;
+    let _ = s.events.send(json!({"t": "graph"}).to_string());
+    Ok(Json(v))
+}
+
+async fn graph_close(State(s): S) -> ApiResult {
+    s.graph.close();
+    let _ = s.events.send(json!({"t": "graph"}).to_string());
+    Ok(Json(json!({})))
+}
+
+async fn graph_status(State(s): S) -> Json<Value> {
+    let (playing, seconds) = s.graph.transport_state();
+    Json(json!({"playing": playing, "seconds": seconds}))
+}
+
+#[derive(Deserialize)]
+struct PreviewReq {
+    origin: m2_ir::Origin,
+    value: f64,
+}
+
+async fn graph_preview(State(s): S, Json(r): Json<PreviewReq>) -> ApiResult {
+    s.graph.preview(r.origin, r.value)?;
+    Ok(Json(json!({})))
+}
+
+#[derive(Deserialize)]
+struct SetReq {
+    revision: u64,
+    id: String,
+    value: f64,
+    #[serde(default)]
+    expect: Option<f64>,
+}
+
+async fn graph_set(State(s): S, Json(r): Json<SetReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.set(r.revision, &r.id, r.value, r.expect)).await;
+    let _ = s.events.send(json!({"t": "graph"}).to_string());
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct GraphTransportReq {
+    action: String,
+}
+
+async fn graph_transport(State(s): S, Json(r): Json<GraphTransportReq>) -> ApiResult {
+    let state = s.clone();
+    blocking(move || state.graph.transport(&r.action)).await?;
+    Ok(Json(json!({})))
 }

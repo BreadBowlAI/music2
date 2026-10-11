@@ -6,7 +6,7 @@
 //! the menu bar, file dialogs, Finder integration, "unsaved changes" prompts, and native
 //! right-click menus (the UI builds those through Tauri's menu API).
 //!
-//!   music2-desktop [song.m2song]
+//!   music2-desktop [song.m2song | project-folder/]
 //!   MUSIC2_DEV_URL=http://localhost:5173 music2-desktop   # load the UI from Vite (engine on :4100)
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -27,6 +27,13 @@ pub struct Native {
 
 fn main() {
     let song = std::env::args().skip(1).find(|a| a.ends_with(".m2song")).map(PathBuf::from);
+    // A folder with a song.ts is a song-as-program project, shown as a graph. Anything
+    // else that isn't a song is reported rather than ignored.
+    let project = std::env::args().skip(1).map(PathBuf::from).find(|p| p.join("song.ts").is_file());
+    let unknown: Vec<String> = std::env::args()
+        .skip(1)
+        .filter(|a| !a.starts_with('-') && !a.ends_with(".m2song") && !PathBuf::from(a).join("song.ts").is_file())
+        .collect();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![actions::action])
@@ -41,6 +48,16 @@ fn main() {
             })?;
             let engine = running.state.clone();
             publish_session(&running.url, &engine.token);
+            if let Some(dir) = &project
+                && let Err(e) = actions::open_project(&engine, dir)
+            {
+                eprintln!("music2: couldn't open {}: {e:#}", dir.display());
+                engine.toast(format!("Couldn't open {}: {e:#}", dir.display()));
+            }
+            for a in &unknown {
+                eprintln!("music2: `{a}` is not a song or a project folder (a folder with song.ts)");
+                engine.toast(format!("`{a}` is not a song or a project folder (a folder with song.ts)"));
+            }
             app.manage(Native { engine: engine.clone() });
             app.set_menu(menu::build(app.handle())?)?;
 

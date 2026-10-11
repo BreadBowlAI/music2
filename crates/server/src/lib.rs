@@ -5,6 +5,7 @@
 //! `music2-desktop` hosts it in-process, and also calls the file operations on
 //! [`AppState`] directly. Local scripts reach the same API with the session token.
 
+pub mod graph;
 mod patch;
 mod routes;
 
@@ -36,6 +37,8 @@ pub struct AppState {
     /// The desktop app sets a fresh one per launch so other local software and web pages
     /// can't drive the engine.
     pub token: String,
+    /// A song-as-program project (the new core), shown as a graph.
+    pub graph: graph::Graph,
 }
 
 impl AppState {
@@ -215,11 +218,13 @@ pub fn start(opts: ServeOptions) -> Result<Running> {
         ui_rev: AtomicU64::new(1),
         events,
         token: opts.token,
+        graph: graph::Graph::default(),
     });
     for e in plugin_errors {
         state.toast(e);
     }
     spawn_audio_sync(state.clone());
+    spawn_graph_watch(state.clone());
 
     let listener = std::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], opts.port)))?;
     listener.set_nonblocking(true)?;
@@ -235,6 +240,21 @@ pub fn start(opts: ServeOptions) -> Result<Running> {
         });
     })?;
     Ok(Running { url, state })
+}
+
+/// Pick up edits to the open graph project made outside the app, and tell clients.
+fn spawn_graph_watch(state: Arc<AppState>) {
+    std::thread::Builder::new()
+        .name("music2-graph".into())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_millis(300));
+                if state.graph.poll() {
+                    let _ = state.events.send(json!({"t": "graph"}).to_string());
+                }
+            }
+        })
+        .expect("spawn graph watcher");
 }
 
 /// Keep the audio thread's renderer in step with the session, and

@@ -517,7 +517,19 @@ Simplified for now:
 - **Instrumentation only where it provably keeps meaning:** calls with arguments, plain `f()`, and `obj.m()` with no optional link. `(obj.m)()`, `obj.m!()`, `super.m()` and optional chains are left alone; they get no editable site but keep their exact meaning. An end-to-end test runs these forms through the instrumented build.
 - **Undo restores the original bytes** (`0x6e`, `1_10`, `(110)` …) and verifies with the value it recorded, rather than reparsing JavaScript number syntax.
 
-**Next:** connect and disconnect, add and delete nodes, automate a control, editing omitted arguments (inserting them), and then the graph canvas itself.
+**The canvas, first slice (knobs only).** In the desktop app, *File → Open Project Folder…* (or `music2-desktop <project-folder>`) opens a project as a graph.
+- **The view** (`core/session/src/view.rs`) shows the calls written in the project, not the kernels they expand into. `component()` records which call each node was made inside, so everything `bass(...)` builds is one node.
+  - Knobs sit on the innermost call that contains where their number is written.
+  - Knobs are named by property path (`hats.pan`, `hats.db`) or by the port they feed (`hi`, `period`), with a range from their unit (log for Hz, seconds and beats).
+  - `m2 graph <project>` prints the same view.
+- **Playback** (`core/play`, `m2-play`) is the new core's one touch point with the audio device. A knob drag previews live (`set_const`, sent at most every 30 ms). Releasing commits through the session.
+  - The running renderer isn't rebuilt for a value commit, because the committed graph equals the playing one with that value.
+  - Edits made elsewhere are picked up every 300 ms and rebuild the renderer at the current position.
+  - `M2_AUDIO=none` runs it silently on a clock, for tests.
+- **Server:** `GET /api/graph`, plus `open`, `close`, `status`, `preview`, `set` and `transport` under `/api/graph/`. Clients refresh on the `{"t":"graph"}` WebSocket event.
+- **A headless UI test** (`crates/server/examples/headless.rs` plus a puppeteer script) caught a real bug: releasing a knob committed a stale mid-drag value (0.65) while you heard the final one (0.7). It now commits exactly the value shown at release, and a fast-drag check guards it.
+
+**Next:** edges routed around cards, saved node positions (`layout.json`), then structural edits: connect and disconnect, add and delete nodes, automate a control, and editing omitted arguments.
 
 ## Agents
 

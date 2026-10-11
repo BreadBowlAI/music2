@@ -64,6 +64,9 @@ pub struct Committed {
     /// What the edited range said before and says now.
     pub before: String,
     pub after: String,
+    /// The value that changed, and what it is now (in its units).
+    pub origin: Origin,
+    pub value: f64,
 }
 
 #[derive(Debug, PartialEq)]
@@ -371,7 +374,7 @@ impl Session {
         let old = self.accepted.snapshot.files.get(file).cloned().ok_or_else(|| EditError::NotFound(name.clone()))?;
         let before = old[start as usize..end as usize].to_string();
         if before == text {
-            return Ok(Committed { revision: self.accepted.number, file: name, before, after: text.to_string() });
+            return Ok(Committed { revision: self.accepted.number, file: name, before, after: text.to_string(), origin: origin.clone(), value });
         }
         let new = format!("{}{text}{}", &old[..start as usize], &old[end as usize..]);
         let mut snapshot = self.accepted.snapshot.clone();
@@ -401,7 +404,7 @@ impl Session {
         self.draft = snapshot.clone();
         let number = self.accept(snapshot, project, candidate);
         self.history.push(Change { revision: number, file: file.to_path_buf(), start, before: before.clone(), after: text.to_string(), origin: origin.clone(), value_before });
-        Ok(Committed { revision: number, file: name, before, after: text.to_string() })
+        Ok(Committed { revision: number, file: name, before, after: text.to_string(), origin: origin.clone(), value })
     }
 
     /// Undo the last accepted edit: restore its exact original bytes, if they haven't

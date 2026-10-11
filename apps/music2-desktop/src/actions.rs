@@ -57,6 +57,13 @@ fn perform(app: &AppHandle, id: &str, args: Value) -> anyhow::Result<()> {
                 engine.open_song(&path)?;
             }
         }
+        "open_project" => {
+            // A song-as-program project: a folder with song.ts. Shown as a graph.
+            let picked = app.dialog().file().set_title("Open Project Folder").blocking_pick_folder();
+            if let Some(dir) = picked.and_then(|p| p.into_path().ok()) {
+                open_project(&engine, &dir)?;
+            }
+        }
         "open_path" => {
             let path = PathBuf::from(args["path"].as_str().unwrap_or_default());
             if keep_going(app)? {
@@ -203,4 +210,11 @@ fn ext(p: &Path) -> String {
 
 fn file_name(p: &Path) -> String {
     p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+}
+
+/// Open a song-as-program project folder and tell the UI to show it.
+pub fn open_project(engine: &m2_server::AppState, dir: &Path) -> anyhow::Result<()> {
+    engine.graph.open(dir)?;
+    let _ = engine.events.send(serde_json::json!({"t": "graph"}).to_string());
+    Ok(())
 }

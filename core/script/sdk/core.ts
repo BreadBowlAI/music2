@@ -99,7 +99,10 @@ export type Note = {
 // ---------------------------------------------------------------- building
 
 type Origin = { site: number; arg?: string[]; scale?: number };
-type IrNode = { id: string; op: string; src?: string; origin?: Origin; [k: string]: unknown };
+type IrNode = { id: string; op: string; src?: string; origin?: Origin; within?: number[]; [k: string]: unknown };
+
+/** Component calls being built right now, outermost first. */
+const frames: number[] = [];
 type LaneDecl = { id: string; kind: string; default?: number };
 
 class ModuleBuild {
@@ -159,6 +162,7 @@ function push(scope: Scope, op: Record<string, unknown>, origin?: Origin): strin
     const src = callsite();
     if (src) node.src = src;
   }
+  if (frames.length) node.within = [...frames];
   scope.nodes.push(node);
   return id;
 }
@@ -306,7 +310,13 @@ export function component<F extends (...args: any[]) => any>(desc: { controls: s
         if (i < args.length) args[i] = controlAt(args[i], rest, [first], site, scope);
       }
     }
-    return fn(...args);
+    if (site === undefined) return fn(...args);
+    frames.push(site);
+    try {
+      return fn(...args);
+    } finally {
+      frames.pop();
+    }
   }) as F;
 }
 

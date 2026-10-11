@@ -2478,6 +2478,17 @@ name = "m2-kernel"
 version = "0.1.0"
 
 [[package]]
+name = "m2-play"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cpal",
+ "crossbeam-channel",
+ "m2-ir",
+ "m2-runtime",
+]
+
+[[package]]
 name = "m2-plugins"
 version = "0.1.0"
 dependencies = [
@@ -2548,8 +2559,12 @@ dependencies = [
  "m2-audio-io",
  "m2-engine",
  "m2-graph",
+ "m2-ir",
+ "m2-play",
  "m2-project",
  "m2-render",
+ "m2-runtime",
+ "m2-session",
  "m2-theory",
  "open",
  "parking_lot",
@@ -2568,6 +2583,7 @@ dependencies = [
  "m2-runtime",
  "m2-script",
  "m2-song",
+ "serde",
 ]
 
 [[package]]

@@ -8,6 +8,7 @@
 //! revisions, verified value edits and undo.
 
 pub mod edit;
+pub mod view;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -17,6 +18,7 @@ use m2_runtime::PackageSet;
 use m2_song::{Project, slug};
 
 pub use edit::{Committed, Control, EditError, Revision, Session};
+pub use view::{GraphView, Knob, ModuleView, ViewNode};
 
 /// A project that is ready to render.
 pub struct Compiled {

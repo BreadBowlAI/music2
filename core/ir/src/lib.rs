@@ -78,6 +78,10 @@ pub struct Node {
     /// Which call made this node, and for constants which argument holds the value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<Origin>,
+    /// The component calls (sites) this node was made inside, outermost first: the
+    /// `bass(...)` call for every node the bass instrument builds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub within: Vec<u32>,
 }
 
 /// Where a node came from in the source: a call site (see `m2_script::sites`) and,

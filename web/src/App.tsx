@@ -11,15 +11,25 @@ import SidePanel from "./components/SidePanel";
 import Settings from "./components/Settings";
 import Library from "./components/Library";
 import Toasts from "./components/Toasts";
+import GraphCanvas from "./components/GraphCanvas";
+import { graphApi } from "./lib/graph";
 import { isMac, native, nativeAction, onFileDrop, onMenu } from "./lib/native";
 
 let first = true;
+
+/** Fetch the open graph project, if any. */
+const refreshGraph = () =>
+  graphApi
+    .get()
+    .then((graph) => useStore.getState().set({ graph }))
+    .catch(() => useStore.getState().set({ graph: null }));
 
 export default function App() {
   const server = useStore((s) => s.server);
   const modal = useStore((s) => s.modal);
   const selectedClip = useStore((s) => s.selectedClip);
   const connected = useStore((s) => s.connected);
+  const graph = useStore((s) => s.graph);
 
   useEffect(() => {
     const { set, toast } = useStore.getState();
@@ -40,9 +50,14 @@ export default function App() {
           set({ tick: msg });
         } else if (msg.t === "toast") {
           toast(msg.text);
+        } else if (msg.t === "graph") {
+          void refreshGraph();
         }
       },
-      (c) => set({ connected: c }),
+      (c) => {
+        set({ connected: c });
+        if (c) void refreshGraph();
+      },
     );
   }, []);
 
@@ -112,6 +127,15 @@ export default function App() {
     );
   }
 
+  if (graph) {
+    return (
+      <div className="h-full">
+        <GraphCanvas graph={graph} />
+        <Toasts />
+      </div>
+    );
+  }
+
   const showRoll = (() => {
     const f = findClip(server.song, selectedClip);
     return f?.clip.content.type === "midi";
@@ -174,6 +198,7 @@ export async function appCommand(id: string) {
       st.set({ selectedClip: null });
       return;
     case "play":
+      if (st.graph) return void graphApi.transport("toggle");
       return void api.transport("toggle");
     case "home":
       return void api.transport("seek", 0);

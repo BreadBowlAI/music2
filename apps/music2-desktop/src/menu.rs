@@ -8,7 +8,7 @@ use tauri::{AppHandle, Emitter, Wry};
 use crate::actions;
 
 /// Item ids handled natively (see `actions::run`); every other id goes to the UI.
-const NATIVE: &[&str] = &["new", "open", "save", "save_as", "import", "export", "reveal", "quit"];
+const NATIVE: &[&str] = &["new", "open", "open_project", "save", "save_as", "import", "export", "reveal", "quit"];
 
 pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let item = |id: &str, text: &str, accel: Option<&str>| {
@@ -36,6 +36,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let file = SubmenuBuilder::new(app, "File")
         .item(&item("new", "New Song", Some("CmdOrCtrl+N"))?)
         .item(&item("open", "Open…", Some("CmdOrCtrl+O"))?)
+        .item(&item("open_project", "Open Project Folder…", Some("CmdOrCtrl+Alt+O"))?)
         .item(&item("library", "Song Library…", Some("CmdOrCtrl+Shift+O"))?)
         .separator()
         .item(&item("save", "Save", Some("CmdOrCtrl+S"))?)

@@ -38,6 +38,8 @@ pub struct Site {
     pub end: u32,
     /// 1-based line of the call's start.
     pub line: u32,
+    /// The callee as written: `bass`, `osc.saw`, `lane.notes`.
+    pub callee: String,
     /// Whether the file is the project's own (not an installed package).
     #[serde(default)]
     pub in_project: bool,
@@ -179,7 +181,8 @@ impl<'a> Visit<'a> for Collect<'_> {
                 Argument::SpreadElement(s) => Arg::Other { start: s.span.start, end: s.span.end },
                 a => arg(a.to_expression()),
             });
-            self.sites.push(Site { id, file: self.file.clone(), ordinal: 0, start: it.span.start, end: it.span.end, line, in_project: false, args: args.collect() });
+            let callee = self.source[it.callee.span().start as usize..it.callee.span().end as usize].to_string();
+            self.sites.push(Site { id, file: self.file.clone(), ordinal: 0, start: it.span.start, end: it.span.end, line, callee, in_project: false, args: args.collect() });
         }
         walk::walk_call_expression(self, it);
     }

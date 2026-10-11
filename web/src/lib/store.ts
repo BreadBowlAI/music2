@@ -1,12 +1,15 @@
 import { create } from "zustand";
 import { api } from "./api";
 import type { Id, ServerState, Tick } from "./types";
+import type { GraphState } from "./graph";
 
 export type SideTab = "track" | "sounds";
 export interface Toast { id: number; text: string; action?: { label: string; run: () => void } }
 
 interface Store {
   server: ServerState | null;
+  /** An open song-as-program project (the new core), shown as a graph. */
+  graph: GraphState | null;
   tick: Tick;
   connected: boolean;
   selectedTrack: Id | null;
@@ -30,6 +33,7 @@ let toastId = 0;
 
 export const useStore = create<Store>((set, get) => ({
   server: null,
+  graph: null,
   tick: { playhead: 0, playing: false, master: 0, peaks: {} },
   connected: false,
   selectedTrack: null,
