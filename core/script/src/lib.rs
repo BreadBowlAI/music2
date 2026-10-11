@@ -15,6 +15,7 @@ pub mod sites;
 
 use m2_ir::{Body, Diagnostic, Ir};
 use oxc::allocator::Allocator;
+use serde::{Deserialize, Serialize};
 use oxc::codegen::{Codegen, CodegenOptions};
 use oxc::parser::Parser;
 use oxc::semantic::SemanticBuilder;
@@ -56,6 +57,20 @@ pub struct Build {
     pub ir: Ir,
     /// Every call site in the project and package files that ran.
     pub sites: Vec<sites::Site>,
+    /// What each call that ran returned, when it was a signal.
+    pub outputs: Vec<Output>,
+}
+
+/// A signal returned by a call: what `const wobble = lfo(...)` holds.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Output {
+    pub site: u32,
+    pub module: String,
+    /// The port reference in that module's nodes.
+    #[serde(rename = "ref")]
+    pub port: String,
+    /// Whether it is at the module's top level (not inside a `poly` voice).
+    pub top: bool,
 }
 
 impl Options {
@@ -297,8 +312,8 @@ pub fn build_full(opts: &Options) -> Result<Build, Vec<Diagnostic>> {
     rt.set_loader(Resolve(state.clone()), Load(state.clone()));
     let ctx = Context::full(&rt).map_err(|e| err(e.to_string()))?;
 
-    let result: Result<String, Diagnostic> = ctx.with(|ctx| {
-        let run = || -> rquickjs::Result<String> {
+    let result: Result<(String, String), Diagnostic> = ctx.with(|ctx| {
+        let run = || -> rquickjs::Result<(String, String)> {
             ctx.eval::<(), _>(PRELUDE)?;
             let g = ctx.globals();
             g.set("__m2_project", format!("{}/", project.display()))?;
@@ -308,18 +323,19 @@ pub fn build_full(opts: &Options) -> Result<Build, Vec<Diagnostic>> {
                 serde_json::to_string(&entry.to_string_lossy()).expect("string")
             );
             Module::evaluate(ctx.clone(), "<main>", main)?.finish::<()>()?;
-            g.get("__m2_out")
+            Ok((g.get("__m2_out")?, g.get("__m2_outputs")?))
         };
         run().catch(&ctx).map_err(|e| caught(&state.borrow(), e, Instant::now() > deadline))
     });
-    let json = result.map_err(|d| vec![d])?;
+    let (json, outputs) = result.map_err(|d| vec![d])?;
+    let outputs: Vec<Output> = serde_json::from_str(&outputs).map_err(|e| err(format!("the SDK produced invalid outputs: {e}")))?;
     let mut ir: Ir = serde_json::from_str(&json).map_err(|e| err(format!("the SDK produced invalid IR: {e}")))?;
     let st = state.borrow();
     for m in &mut ir.modules {
         m.src = m.src.as_deref().map(|s| st.remap(s));
         remap_nodes(&st, &mut m.nodes);
     }
-    Ok(Build { ir, sites: st.sites.clone() })
+    Ok(Build { ir, sites: st.sites.clone(), outputs })
 }
 
 fn remap_nodes(st: &State, nodes: &mut [m2_ir::Node]) {

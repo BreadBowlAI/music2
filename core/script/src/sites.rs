@@ -21,7 +21,10 @@
 use std::collections::HashMap;
 
 use oxc::allocator::Allocator;
-use oxc::ast::ast::{Argument, BindingPattern, CallExpression, Expression, ObjectPropertyKind, PropertyKind, UnaryOperator, VariableDeclarator};
+use oxc::ast::ast::{
+    Argument, BindingPattern, CallExpression, Expression, ImportDeclarationSpecifier, ObjectPropertyKind, PropertyKind, Statement, UnaryOperator,
+    VariableDeclaration, VariableDeclarationKind,
+};
 use oxc::ast_visit::{Visit, walk};
 use oxc::parser::Parser;
 use oxc::span::{GetSpan, SourceType};
@@ -46,6 +49,9 @@ pub struct Site {
     /// A display label only: aliases and uses do not change the call's identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binding: Option<String>,
+    /// Whether that variable is a `const`, so its name always means this call's result.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub constant: bool,
     /// Whether the file is the project's own (not an installed package).
     #[serde(default)]
     pub in_project: bool,
@@ -61,11 +67,22 @@ pub enum Arg {
     Number { start: u32, end: u32, value: f64 },
     /// An object literal with only unique, plain properties by key.
     Object { start: u32, end: u32, props: Vec<(String, Arg)> },
+    /// A bare variable name, such as `wobble`: what a cable is in code.
+    Name { start: u32, end: u32, name: String },
     /// Anything else (an identifier, a call, a spread …).
     Other { start: u32, end: u32 },
 }
 
 impl Arg {
+    /// The argument's byte range in the source.
+    pub fn span(&self) -> (u32, u32) {
+        match self {
+            Arg::Number { start, end, .. } | Arg::Object { start, end, .. } | Arg::Name { start, end, .. } | Arg::Other { start, end } => {
+                (*start, *end)
+            }
+        }
+    }
+
     /// Follow a path of property keys into nested object literals.
     pub fn at<'a>(&'a self, path: &[String]) -> Option<&'a Arg> {
         match path.split_first() {
@@ -126,6 +143,7 @@ fn arg(source: &str, e: &Expression) -> Arg {
             number @ Arg::Number { .. } => number,
             _ => Arg::Other { start: s.start, end: s.end },
         },
+        Expression::Identifier(i) => Arg::Name { start: s.start, end: s.end, name: i.name.to_string() },
         Expression::ObjectExpression(o) => {
             let mut props = vec![];
             for p in &o.properties {
@@ -175,24 +193,27 @@ struct Collect<'s> {
     next_id: u32,
     sites: Vec<Site>,
     /// Direct variable initializers, keyed by the call's original byte range.
-    bindings: HashMap<(u32, u32), String>,
+    bindings: HashMap<(u32, u32), (String, bool)>,
     /// `(offset, sort key, text)`.
     inserts: Vec<(u32, (u8, i64), String)>,
 }
 
 impl<'a> Visit<'a> for Collect<'_> {
-    fn visit_variable_declarator(&mut self, it: &VariableDeclarator<'a>) {
-        if let BindingPattern::BindingIdentifier(binding) = &it.id
-            && let Some(mut initializer) = it.init.as_ref()
-        {
-            while let Expression::ParenthesizedExpression(p) = initializer {
-                initializer = &p.expression;
-            }
-            if let Expression::CallExpression(call) = initializer {
-                self.bindings.insert((call.span.start, call.span.end), binding.name.to_string());
+    fn visit_variable_declaration(&mut self, it: &VariableDeclaration<'a>) {
+        for declarator in &it.declarations {
+            if let BindingPattern::BindingIdentifier(binding) = &declarator.id
+                && let Some(mut initializer) = declarator.init.as_ref()
+            {
+                while let Expression::ParenthesizedExpression(p) = initializer {
+                    initializer = &p.expression;
+                }
+                if let Expression::CallExpression(call) = initializer {
+                    let constant = it.kind == VariableDeclarationKind::Const;
+                    self.bindings.insert((call.span.start, call.span.end), (binding.name.to_string(), constant));
+                }
             }
         }
-        walk::walk_variable_declarator(self, it);
+        walk::walk_variable_declaration(self, it);
     }
 
     fn visit_call_expression(&mut self, it: &CallExpression<'a>) {
@@ -221,14 +242,52 @@ impl<'a> Visit<'a> for Collect<'_> {
                 a => arg(self.source, a.to_expression()),
             });
             let callee = self.source[it.callee.span().start as usize..it.callee.span().end as usize].to_string();
-            let binding = self.bindings.get(&(it.span.start, it.span.end)).cloned();
-            self.sites.push(Site { id, file: self.file.clone(), ordinal: 0, start: it.span.start, end: it.span.end, line, callee, binding, in_project: false, args: args.collect() });
+            let (binding, constant) = match self.bindings.get(&(it.span.start, it.span.end)) {
+                Some((name, constant)) => (Some(name.clone()), *constant),
+                None => (None, false),
+            };
+            self.sites.push(Site {
+                id,
+                file: self.file.clone(),
+                ordinal: 0,
+                start: it.span.start,
+                end: it.span.end,
+                line,
+                callee,
+                binding,
+                constant,
+                in_project: false,
+                args: args.collect(),
+            });
         }
         walk::walk_call_expression(self, it);
     }
 }
 
 /// Instrument `source` (TypeScript). Site ids start at `first_id`.
+/// The names a file imports from `module` under their own name (`import { hz } from
+/// "@m2/core"`, not `import { hz as h }`): what generated code may call by that name.
+pub fn imported_names(source: &str, module: &str) -> Vec<String> {
+    let allocator = Allocator::default();
+    let ret = Parser::new(&allocator, source, SourceType::ts()).parse();
+    let mut names = vec![];
+    for statement in &ret.program.body {
+        let Statement::ImportDeclaration(import) = statement else { continue };
+        if import.source.value != module || import.import_kind.is_type() {
+            continue;
+        }
+        for specifier in import.specifiers.iter().flatten() {
+            if let ImportDeclarationSpecifier::ImportSpecifier(s) = specifier
+                && !s.import_kind.is_type()
+                && s.imported.name() == s.local.name
+            {
+                names.push(s.local.name.to_string());
+            }
+        }
+    }
+    names
+}
+
 pub fn instrument(file: &str, source: &str, first_id: u32) -> Result<Instrumented, String> {
     let allocator = Allocator::default();
     let ret = Parser::new(&allocator, source, SourceType::ts()).parse();

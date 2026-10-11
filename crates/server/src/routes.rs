@@ -77,6 +77,8 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .route("/api/graph/preview", post(graph_preview))
         .route("/api/graph/preview/cancel", post(graph_cancel_preview))
         .route("/api/graph/set", post(graph_set))
+        .route("/api/graph/connect", post(graph_connect))
+        .route("/api/graph/disconnect", post(graph_disconnect))
         .route("/api/graph/transport", post(graph_transport))
         .fallback_service(spa)
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth))
@@ -542,6 +544,35 @@ struct SetReq {
 async fn graph_set(State(s): S, Json(r): Json<SetReq>) -> ApiResult {
     let state = s.clone();
     let result = blocking(move || state.graph.set(r.session, r.revision, &r.id, &r.gesture, r.value, r.expect)).await;
+    let _ = s.events.send(json!({"t": "graph"}).to_string());
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct ConnectReq {
+    session: u64,
+    revision: u64,
+    from: String,
+    to: String,
+}
+
+async fn graph_connect(State(s): S, Json(r): Json<ConnectReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.connect(r.session, r.revision, &r.from, &r.to)).await;
+    let _ = s.events.send(json!({"t": "graph"}).to_string());
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct DisconnectReq {
+    session: u64,
+    revision: u64,
+    id: String,
+}
+
+async fn graph_disconnect(State(s): S, Json(r): Json<DisconnectReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.disconnect(r.session, r.revision, &r.id)).await;
     let _ = s.events.send(json!({"t": "graph"}).to_string());
     Ok(Json(result?))
 }

@@ -24,6 +24,10 @@ USAGE:
   m2 controls <project>                  every number written in the project that the graph can edit
   m2 set <project> <control> <value> [--expect V]
                                          change one, verified by the compiler (values in the control's units)
+  m2 cables <project>                    named signals a cable can start from, and the inputs cables reach
+  m2 connect <project> <signal> <control>
+                                         write a signal's name in place of a control's value, verified
+  m2 disconnect <project> <input>        write the input's declared default in place of the name, verified
   m2 plugins [clap:<id>]                 list installed CLAP plugins, or one plugin's ports
   m2 plugin-state <project> <name> clap:<id> [--force]
                                          save a plugin's default state to assets/plugin-state/<name>.bin
@@ -232,6 +236,27 @@ fn run() -> Result<()> {
             let at = s.accepted().number;
             let c = s.set(at, &id, value, expect).map_err(|e| anyhow!("{e}"))?;
             println!("{}: `{}` → `{}` (revision {}, verified in {:.0} ms)", c.file, c.before, c.after, c.revision, t.elapsed().as_secs_f64() * 1000.0);
+        }
+        Some("cables") => {
+            let s = m2_session::Session::open(Path::new(&arg(1)?), packages()?).map_err(report)?;
+            println!("revision {}", s.accepted().number);
+            for o in s.outlets() {
+                println!("signal {:30} {:16} {}  {}:{}", o.id, o.name, o.module, o.file, o.line);
+            }
+            for i in s.inlets() {
+                println!("input  {:30} ← {:14} from {}  {}:{}", i.id, i.name, i.from, i.file, i.line);
+            }
+        }
+        Some(command @ ("connect" | "disconnect")) => {
+            let mut s = m2_session::Session::open(Path::new(&arg(1)?), packages()?).map_err(report)?;
+            let t = Instant::now();
+            let at = s.accepted().number;
+            let e = match command {
+                "connect" => s.connect(at, &arg(2)?, &arg(3)?),
+                _ => s.disconnect(at, &arg(2)?),
+            }
+            .map_err(|e| anyhow!("{e}"))?;
+            println!("{}: `{}` → `{}` (revision {}, verified in {:.0} ms)", e.file, e.before, e.after, e.revision, t.elapsed().as_secs_f64() * 1000.0);
         }
         Some("plugins") => match args.get(1) {
             None => {
