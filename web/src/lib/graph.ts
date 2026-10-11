@@ -54,7 +54,7 @@ export const graphApi = {
   close: () => call("/close", {}),
   status: () => call<{ playing: boolean; seconds: number }>("/status"),
   preview: (session: number, revision: number, id: string, gesture: string, value: number) => call("/preview", { session, revision, id, gesture, value }),
-  cancel: (session: number, revision: number, id: string, gesture: string) => call("/preview/cancel", { session, revision, id, gesture }),
+  cancel: (session: number, id: string, gesture: string) => call("/preview/cancel", { session, id, gesture }),
   set: (session: number, revision: number, id: string, gesture: string, value: number, expect: number) =>
     call<{ file: string; before: string; after: string; revision: number }>("/set", { session, revision, id, gesture, value, expect }),
   transport: (action: "play" | "stop" | "toggle" | "restart") => call("/transport", { action }),

@@ -3,7 +3,7 @@
 // Results keep the unit of their inputs where it is known, so `add(note.pitch, 12)`
 // is still a pitch and `osc.saw` converts it to a frequency.
 
-import { component, kernel, Quantity, unitOf, withUnit, type Control, type Signal, type Value } from "@m2/core";
+import { component, kernel, unitOf, withUnit, type Control, type Signal, type Value } from "@m2/core";
 
 /** `a + b`: two audio signals, or two controls of the same unit. */
 export const add = component({ controls: ["0", "1"] }, <S extends Signal>(a: S | Value, b: S | Value): S => withUnit(kernel("std:add", { a, b }), unitOf(a) ?? unitOf(b)) as any);
@@ -21,9 +21,8 @@ export function sum<S extends Signal>(...xs: S[]): S {
   return xs.slice(1).reduce((acc, x) => add(acc, x), xs[0]);
 }
 
-/** Pitch in semitones (60 = middle C) to frequency. */
+/** Pitch in semitones (60 = middle C) to frequency. A node, so a written pitch stays editable. */
 export function mtof(pitch: Value): Control<"hz"> {
-  if (pitch instanceof Quantity) return new Quantity(440 * 2 ** ((pitch.value - 69) / 12), "hz") as any;
   return withUnit(kernel("std:mtof", { pitch }), "hz") as any;
 }
 

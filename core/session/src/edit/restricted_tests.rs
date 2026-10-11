@@ -240,3 +240,51 @@ fn an_unrelated_non_ascii_comment_edit_can_carry_a_control_to_the_new_revision()
     session.set(control.revision, &control.id, 950.0, Some(800.0)).unwrap();
     assert_eq!(fixture.source(), changed.replace("hz(800)", "hz(950)"));
 }
+
+fn song(body: &str) -> String {
+    format!(
+        r#"import {{ hz, semis, song }} from "@m2/core";
+import {{ osc }} from "std/dsp";
+import {{ add, mtof, scale }} from "std/math";
+{body}
+"#
+    )
+}
+
+#[test]
+fn graph_values_cannot_escape_into_javascript_arithmetic() {
+    // Each would let a number affect the song where the graph, and so a knob, can't see it.
+    for escape in ["base.value * 2", "base * 2", "Number(`${base}`)", "osc.sine(base) * 2", "Math.max(base, 2)"] {
+        let fixture = ProjectFixture::new(&song(&format!(
+            "const base = hz(800);\nexport default song(() => add(osc.sine(base), osc.saw({escape})));"
+        )));
+        let mut packages = PackageSet::default();
+        packages.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
+        let Err(errors) = Session::open(&fixture.0, packages) else { panic!("{escape} compiled") };
+        let message = errors.iter().map(|e| e.to_string()).collect::<String>();
+        assert!(message.contains("not a JavaScript number") && message.contains("scale(x, 2)"), "{escape}: {message}");
+    }
+}
+
+#[test]
+fn a_value_used_twice_through_graph_operations_is_one_knob_that_commits() {
+    let fixture = ProjectFixture::new(&song(
+        "const base = hz(800);\nexport default song(() => add(osc.sine(base), osc.saw(scale(base, 2))));",
+    ));
+    let mut session = fixture.open();
+    let base = session.controls().into_iter().find(|c| c.literal == "800").unwrap();
+    assert_eq!(base.uses, 2, "both oscillators read it");
+    let audition = session.preview(base.revision, &base.id, 900.0).unwrap();
+    let committed = session.set(base.revision, &base.id, 900.0, Some(800.0)).unwrap();
+    assert_eq!((committed.origin, committed.value), (audition.origin, audition.value));
+    assert!(fixture.source().contains("const base = hz(900);"));
+}
+
+#[test]
+fn a_pitch_converted_to_frequency_stays_editable() {
+    let fixture = ProjectFixture::new(&song("export default song(() => osc.sine(mtof(semis(60))));"));
+    let mut session = fixture.open();
+    let pitch = session.controls().into_iter().find(|c| c.literal == "60").expect("the pitch is a knob");
+    session.set(pitch.revision, &pitch.id, 62.0, Some(60.0)).unwrap();
+    assert!(fixture.source().contains("mtof(semis(62))"));
+}
