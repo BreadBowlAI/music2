@@ -21,6 +21,18 @@ export class Signal<K = unknown> {
     /** The unit, when known here (lanes, constants, note fields). */
     readonly unit?: Unit,
   ) {}
+
+  [Symbol.toPrimitive](): never {
+    throw new TypeError(notANumber("a signal"));
+  }
+}
+
+/**
+ * Values in the graph are not JavaScript numbers: the graph only sees what is built
+ * from them, so arithmetic in JavaScript would hide them from knobs and the editor.
+ */
+function notANumber(what: string): string {
+  return `${what} is part of the sound graph, not a JavaScript number. Use graph operations such as scale(x, 2) or add(x, y) from std/math instead of arithmetic`;
 }
 
 export type Audio = Signal<AudioKind>;
@@ -45,17 +57,36 @@ export function unitOf(v: unknown): Unit | undefined {
   return v instanceof Signal || v instanceof Quantity ? v.unit : undefined;
 }
 
-/** A number with a unit, from `hz(440)`, `db(-6)`, … */
+/** The numbers inside quantities. Only the core reads them, when it builds the graph. */
+const amounts = new WeakMap<Quantity, number>();
+
+/**
+ * A number with a unit, from `hz(440)`, `db(-6)`, … It is opaque: its number goes
+ * into the graph, never into JavaScript, so every use of it stays editable.
+ */
 export class Quantity<U extends Unit = Unit> {
   constructor(
-    readonly value: number,
+    value: number,
     readonly unit: U,
     /** @internal The call that wrote it, so the editor can find the number. */
     readonly site?: number,
-    /** @internal `value` is the written number times this (`khz` is 1000). */
+    /** @internal The number is the written one times this (`khz` is 1000). */
     readonly scale: number = 1,
-  ) {}
+  ) {
+    amounts.set(this, value);
+  }
+
+  [Symbol.toPrimitive](): never {
+    throw new TypeError(notANumber(`${this.unit} value`));
+  }
 }
+
+// Not in the type, so editors flag `.value`; at run time it explains what to do instead.
+Object.defineProperty(Quantity.prototype, "value", {
+  get(this: Quantity): never {
+    throw new TypeError(notANumber(`${this.unit} value`));
+  },
+});
 
 /** The call site the running call was made from (set by instrumentation), once. */
 function takeSite(): number | undefined {
@@ -190,7 +221,7 @@ function ref(v: Value, what: string): string {
   }
   if (v instanceof Quantity) {
     const origin = v.site === undefined ? undefined : { site: v.site, arg: ["0"], ...(v.scale !== 1 ? { scale: v.scale } : {}) };
-    return push(scope, { op: "const", value: v.value, unit: v.unit }, origin);
+    return push(scope, { op: "const", value: amounts.get(v)!, unit: v.unit }, origin);
   }
   throw new TypeError(`${what}: expected a signal, a number or a quantity like hz(440), got ${typeof v}`);
 }
@@ -380,7 +411,7 @@ function ctxFor(m: ModuleBuild): Ctx {
       },
       control(id, unit, fallback) {
         const site = takeSite();
-        const v = fallback instanceof Quantity ? fallback.value : fallback;
+        const v = fallback instanceof Quantity ? amounts.get(fallback)! : fallback;
         declareLane(m, id, `control<${unit}>`, v ?? 0);
         return laneNode(id, unit, site);
       },

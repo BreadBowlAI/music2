@@ -123,7 +123,7 @@ function NodeCard({ node, session, revision, editable, style }: { node: ViewNode
       {node.knobs.length > 0 && (
         <div className="grid grid-cols-3 auto-rows-[84px] px-1 pb-2">
           {node.knobs.map((k) => (
-            <KnobControl key={`${revision}:${editable}:${k.id}`} knob={k} session={session} revision={revision} editable={editable} />
+            <KnobControl key={`${editable}:${k.id}`} knob={k} session={session} revision={revision} editable={editable} />
           ))}
         </div>
       )}
@@ -164,8 +164,9 @@ function KnobControl({ knob, session, revision, editable }: { knob: KnobInfo; se
   const toast = useStore((s) => s.toast);
   const [value, setValue] = useState(knob.value);
   const [saving, setSaving] = useState(false);
-  // Each gesture captures its identity and value mapping. Revision/session changes
-  // remount the control, so an old drag cannot become a new control's edit.
+  // Each gesture captures its identity, revision and value mapping. A save elsewhere
+  // doesn't end it: the server carries it to the new revision, or refuses it as stale
+  // if the save touched this value. Session changes remount the control.
   const latest = useRef(knob.value);
   const dragging = useRef<Gesture | null>(null);
   const active = useRef<Gesture | null>(null);
@@ -220,7 +221,7 @@ function KnobControl({ knob, session, revision, editable }: { knob: KnobInfo; se
     if (gesture.cancelled || gesture.submitted) return Promise.resolve();
     gesture.cancelled = true;
     if (active.current === gesture) active.current = null;
-    return gesture.previews.then(() => graphApi.cancel(gesture.session, gesture.revision, gesture.knob.id, gesture.token)).catch((error) => {
+    return gesture.previews.then(() => graphApi.cancel(gesture.session, gesture.knob.id, gesture.token)).catch((error) => {
       if (mounted.current) toast(error instanceof Error ? error.message : String(error));
     });
   };
