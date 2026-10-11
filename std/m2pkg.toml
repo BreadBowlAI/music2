@@ -1,0 +1,157 @@
+# The music2 standard library. An ordinary package: nothing here is special to the core.
+#
+# Port syntax: "name: kind [= default]".
+#   kinds: audio<1|2|*>, control<unit|*>, events<note>, and * (any kind).
+#   Ports using `*` share one type variable per kernel, so `add(a: *, b: *) -> out: *`
+#   adds two audio signals or two controls of the same unit.
+#   units: hz db gain semitones seconds beats unit01 bipolar scalar
+
+[package]
+name = "std"
+version = "0.1.0"
+license = "MIT"
+description = "Oscillators, envelopes, filters, mixing, dynamics, and the instruments built from them"
+wasm = "kernels/std.wasm"
+
+# ---------------------------------------------------------------- oscillators
+
+[[kernel]]
+name = "sine"
+description = "Sine oscillator"
+inputs = ["freq: control<hz> = 440"]
+outputs = ["out: audio<1>"]
+
+[[kernel]]
+name = "saw"
+description = "Band-limited sawtooth oscillator"
+inputs = ["freq: control<hz> = 440"]
+outputs = ["out: audio<1>"]
+
+[[kernel]]
+name = "square"
+description = "Band-limited pulse oscillator"
+inputs = ["freq: control<hz> = 440", "width: control<unit01> = 0.5"]
+outputs = ["out: audio<1>"]
+
+[[kernel]]
+name = "tri"
+description = "Triangle oscillator"
+inputs = ["freq: control<hz> = 440"]
+outputs = ["out: audio<1>"]
+
+[[kernel]]
+name = "noise"
+description = "White noise; the same seed always gives the same noise"
+inputs = ["seed: control<scalar> = 1"]
+outputs = ["out: audio<1>"]
+
+# ---------------------------------------------------------------- envelopes and modulation
+
+[[kernel]]
+name = "adsr"
+description = "Attack/decay/sustain/release envelope driven by a gate"
+inputs = [
+  "gate: control<unit01>",
+  "attack: control<seconds> = 0.005",
+  "decay: control<seconds> = 0.2",
+  "sustain: control<unit01> = 0.7",
+  "release: control<seconds> = 0.2",
+]
+outputs = ["out: control<unit01>"]
+
+[[kernel]]
+name = "follow"
+description = "Envelope follower: how loud the input is right now, 0..1"
+inputs = ["in: audio<*>", "attack: control<seconds> = 0.002", "release: control<seconds> = 0.12"]
+outputs = ["out: control<unit01>"]
+
+[[kernel]]
+name = "lfo"
+description = "Beat-synced LFO, 0..1. Shapes: 0 sine, 1 triangle, 2 saw, 3 square"
+inputs = [
+  "beats: control<beats>",
+  "period: control<beats> = 1",
+  "shape: control<scalar> = 0",
+  "phase: control<unit01> = 0",
+]
+outputs = ["out: control<unit01>"]
+
+# ---------------------------------------------------------------- math
+
+[[kernel]]
+name = "scale"
+description = "Multiply a signal by a gain"
+inputs = ["in: *", "by: control<gain> = 1"]
+outputs = ["out: *"]
+
+[[kernel]]
+name = "add"
+description = "Add two signals of the same kind"
+inputs = ["a: *", "b: *"]
+outputs = ["out: *"]
+
+[[kernel]]
+name = "blend"
+description = "Crossfade: a at m = 0, b at m = 1"
+inputs = ["a: *", "b: *", "m: control<unit01>"]
+outputs = ["out: *"]
+
+[[kernel]]
+name = "mtof"
+description = "Pitch in semitones (60 = middle C) to frequency"
+inputs = ["pitch: control<semitones>"]
+outputs = ["out: control<hz>"]
+
+[[kernel]]
+name = "range"
+description = "Map 0..1 linearly onto lo..hi"
+inputs = ["x: control<unit01>", "lo: control<*>", "hi: control<*>"]
+outputs = ["out: control<*>"]
+
+[[kernel]]
+name = "xrange"
+description = "Map 0..1 exponentially onto lo..hi (for frequencies and times)"
+inputs = ["x: control<unit01>", "lo: control<*>", "hi: control<*>"]
+outputs = ["out: control<*>"]
+
+# ---------------------------------------------------------------- mixing
+
+[[kernel]]
+name = "gain"
+description = "Gain in dB, smoothed"
+inputs = ["in: audio<*>", "db: control<db> = 0"]
+outputs = ["out: audio<*>"]
+
+[[kernel]]
+name = "pan"
+description = "Equal-power pan, mono to stereo"
+inputs = ["in: audio<1>", "pan: control<bipolar> = 0"]
+outputs = ["out: audio<2>"]
+
+# ---------------------------------------------------------------- filters
+
+[[kernel]]
+name = "svf"
+description = "State-variable filter with lowpass, bandpass and highpass outputs"
+inputs = ["in: audio<*>", "cutoff: control<hz> = 1000", "q: control<scalar> = 0.707"]
+outputs = ["lp: audio<*>", "bp: audio<*>", "hp: audio<*>"]
+
+# ---------------------------------------------------------------- dynamics and colour
+
+[[kernel]]
+name = "drive"
+description = "Soft saturation"
+inputs = ["in: audio<*>", "amount: control<db> = 6"]
+outputs = ["out: audio<*>"]
+
+[[kernel]]
+name = "duck"
+description = "Turn the input down by `depth` dB while `side` is high (sidechain)"
+inputs = ["in: audio<*>", "side: control<unit01>", "depth: control<db> = -8"]
+outputs = ["out: audio<*>"]
+
+[[kernel]]
+name = "limit"
+description = "Peak limiter with a hard ceiling"
+inputs = ["in: audio<*>", "ceiling: control<db> = -1"]
+outputs = ["out: audio<*>"]

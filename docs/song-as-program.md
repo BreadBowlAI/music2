@@ -2,7 +2,7 @@
 
 The design for the next music2. Music production as a software engineering problem.
 
-Status: final draft (2026-10-11). Nothing here is implemented yet.
+Status: final draft (2026-10-11). Milestone 1 (the core loop) is implemented; see [Implementation status](#implementation-status).
 
 ## Summary
 
@@ -73,9 +73,12 @@ There are three kinds of signal, and every connection has exactly one kind:
 | `Control<U>` | a continuous value with a unit | block rate, smoothly interpolated within each block |
 | `Events<T>` | discrete things at an instant or over a span | exact to the sample |
 
-**Units** are part of the type. The core defines a fixed set: `Hz`, `dB`, `Gain`, `Semitones`, `Seconds`, `Beats`, `Unit01` (0..1) and `Bipolar` (-1..1).
+**Units** are part of the type. The core defines a fixed set: `hz`, `db`, `gain` (linear), `semitones`, `seconds`, `beats`, `unit01` (0..1), `bipolar` (-1..1) and `scalar` (unitless).
 - Connecting signals with mismatched units is a compile error.
+- A few safe widenings are allowed: `unit01` fits where `gain` or `scalar` is expected, and `bipolar` and `gain` fit `scalar`.
+- In TypeScript a unit is attached with a function, since JavaScript numbers can't carry one: `hz(800)`, `db(-6)`, `ms(30)`. A plain number is an **untyped literal** that fits any unit.
 - Conversions are standard-library kernels.
+- Kernel ports can be **generic**: `*` (any kind), `audio<*>` (any channel count) and `control<*>` (any unit). All of a kernel's `*` ports share one type variable, so `add(a: *, b: *) -> *` adds two audio signals or two controls of the same unit, but never one of each. A mono signal feeding a stereo port is copied to both channels.
 
 **Masks** are `Control<Unit01>`, and **gates** are masks that are only ever 0 or 1. Masks are how per-clip and per-section behaviour is expressed without changing the graph.
 
@@ -187,13 +190,18 @@ The planner turns validated IR into a plan the runtime can execute:
 
 - Processes audio in blocks, either in real time to the audio device or offline as fast as possible.
 - **Hot swap:** a new plan is compiled on a worker thread and handed to the audio thread without locking. Nodes whose stable ids match carry their state over, so reverb tails don't cut off and held notes keep sounding.
-- **The kernel ABI: WebAssembly**, run with wasmtime. Kernels are compiled ahead of time, NaN values are canonicalised, and relaxed SIMD is disabled, so output is bit-identical on every machine. Each kernel gets fixed memory and a CPU budget.
-  - A kernel module exports exactly three functions:
-    - `init(sample_rate, max_block)`
-    - `reset()`
-    - `process(frames)`
-  - Its input and output port buffers live in its own memory, at addresses its manifest declares.
-  - **No host imports.** A kernel cannot reach anything outside its own ports.
+- **The kernel ABI: WebAssembly**, run with wasmtime (Cranelift). Relaxed SIMD is disabled, so output is bit-identical on every machine.
+  - NaN bit patterns are the one thing WebAssembly doesn't pin down. Canonicalising them cost 4.6× in the M1 benchmark, so the runtime doesn't. Instead it silences any non-finite output sample and reports it, because a NaN means a kernel is broken anyway.
+  - A package ships one `.wasm` module that can hold many kernels, and every graph node gets **its own instance**, so a kernel's state is just its instance's memory. For a kernel named `k`, the module exports:
+    - `k_init(sample_rate, max_block, channels)`
+    - `k_ports()`: the number of inputs and outputs, which the host checks against the manifest
+    - `k_port(i)`: the address of port buffer `i` (inputs first, then outputs; channel-major, `2 × max_block` floats)
+    - `k_reset()`
+    - `k_process(frames)`
+    - plus `m2_abi()` and `memory`, once per module
+  - **No host imports.** A module that imports anything is rejected at load, so a kernel can't reach anything outside its own ports.
+  - Each instance's memory is capped (32 MB). A CPU budget is still to come.
+  - Rust kernels use the `m2-kernel` crate: implement `Kernel` and call `export!(name, Type)`.
   - Assets (for samplers and impulse responses) are passed in as read-only data when the kernel starts.
 - **Render and taps.** `render(range, taps)` renders a time range and returns audio, plus the values of any signal you ask for (for example, a meter kernel's output). Rendered results are **cached by a hash of what produced them** and invalidated only downstream of an edit. Freezing a track just means keeping its cache.
 - **The audio device:** output, input and MIDI in. This is the one place the core touches hardware.
@@ -204,7 +212,7 @@ The planner turns validated IR into a plan the runtime can execute:
 - The sandbox has no file access, no network and no clock, and randomness only comes from seeds. Running a module can only **describe a graph**.
 - That sandbox is what keeps code packages as safe to install as data, which today's `m2plug` format guarantees by being pure data.
 - The `@m2/core` TypeScript SDK is part of the core. It is small: the signal and unit types, `track`/`module`/`song`, `lane`, `poly`, `feedback`, and graph-handle recording.
-- Typed bindings for kernels are **generated from package manifests**. Running `tsc` is an optional extra check for editors; it is never what decides whether a song compiles.
+- Typed bindings for kernels will be **generated from package manifests**. In M1, std's wrappers (`std/dsp` and the rest) are written by hand over `kernel("std:svf", {...})`. Running `tsc` is an optional extra check for editors; it is never what decides whether a song compiles.
 
 ### 5. Project, transactions and undo
 
@@ -366,48 +374,74 @@ my-song/
 
 ## Authoring
 
+This is the real `examples/first-song` project, which builds and renders today.
+
 ```ts
 // tracks/kick.ts
-import { track, Hz } from "@m2/core";
-import { drums } from "std/instruments";
+import { ms, track } from "@m2/core";
 import { follow } from "std/dsp";
+import { kick } from "std/instruments";
 
 export default track("Kick", ({ lane }) => {
-  const out = drums.kick(lane.notes("hits"), { tune: 48*Hz, decay: 0.3 });
-  return { out, env: follow(out) };
+  const out = kick(lane.notes("hits"));
+  // Exported so other tracks can duck to the kick.
+  return { out, env: follow(out, { release: ms(150) }) };
 });
 ```
 
 ```ts
 // tracks/bass.ts
-import { track, poly, Hz, kHz } from "@m2/core";
-import { osc, adsr, vca, svf } from "std/dsp";
-import { lfo, blend } from "std/control";
-import { every } from "std/time";
+import { hz, khz, track } from "@m2/core";
+import { blend, lfo } from "std/control";
+import { bass } from "std/instruments";
+import { xrange } from "std/math";
 
 export default track("Bass", ({ lane, time }) => {
-  const notes  = lane.notes("notes");
-  const cutoff = lane.control("cutoff", Hz, 800*Hz);
-  const drop   = lane.mask("drop");                               // per-clip behaviour → mask
+  const cutoff = lane.control("cutoff", "hz", hz(500)); // automation, drawn on the timeline
+  const drop = lane.mask("drop"); // 1 where the wobble should take over
 
-  const voice  = poly(notes, n => vca(osc.saw(n.pitch, { unison: 3 }), adsr(n.gate)));
-  const wobble = lfo.sine(every(time.beats, "1/8")).range(200*Hz, 2*kHz);
-  return { out: svf.lowpass(voice, blend(cutoff, wobble, drop)) };
+  const wobble = xrange(lfo(time.beats, { period: 0.5 }), hz(200), khz(2.5));
+  return bass(lane.notes("notes"), { cutoff: blend(cutoff, wobble, drop) });
 });
 ```
 
 ```ts
 // song.ts
-import { song, dB } from "@m2/core";
-import { mixer, master } from "std/mix";
+import { song, db } from "@m2/core";
 import { duck } from "std/fx";
-import kick from "./tracks/kick";
+import { master, mixer } from "std/mix";
 import bass from "./tracks/bass";
+import hats from "./tracks/hats";
+import keys from "./tracks/keys";
+import kick from "./tracks/kick";
 
-export default song(() => {
-  const mix = mixer({ kick: kick.out, bass: duck(bass.out, kick.env, { depth: -8*dB }) });
-  return master(mix.out, { ceiling: -1*dB });
-});
+export default song(() =>
+  master(
+    mixer({
+      kick: kick.out,
+      hats: { in: hats.out, db: db(-6), pan: 0.3 },
+      // Sidechain: the bass ducks whenever the kick hits.
+      bass: duck(bass.out, kick.env, { depth: db(-9) }),
+      keys: { in: keys.out, db: db(-5), pan: -0.25 },
+    }),
+  ),
+);
+```
+
+`bass()` from `std/instruments` is an ordinary function that builds a `poly` voice out of `std/dsp` parts:
+
+```ts
+export function bass(notes: Events, o: { cutoff?: Value; drive?: Value } = {}): Audio {
+  const cutoff = o.cutoff ?? hz(600);
+  const v = poly(notes, (n) => {
+    const body = add(osc.saw(n.pitch), scale(osc.square(add(n.pitch, -12)), 0.5));
+    const env = adsr(n.gate, { attack: ms(3), decay: secs(0.3), sustain: 0.6, release: ms(80) });
+    const fenv = adsr(n.gate, { attack: ms(2), decay: secs(0.18), sustain: 0.2, release: ms(80) });
+    const f = svf.lowpass(body, xrange(fenv, cutoff, scale(cutoff, 4)), 1.1);
+    return vca(f, scale(env, n.velocity));
+  }, { voices: 4 });
+  return drive(v, o.drive ?? 4);
+}
 ```
 
 There is no tempo and there are no sections in this code. Both are timeline data, edited on the song's own lanes.
@@ -472,8 +506,8 @@ Agents can't listen, so they need another way to judge the result. `render` with
 - **Git:** code, timeline data and the lockfile all diff and merge as text.
 - **Tests** run inside the sandbox:
   ```ts
-  test("drop doesn't clip", () => expect(render(song, section("drop"))).toPeakBelow(-1*dB));
-  test("intro is quiet",   () => expect(render(song, section("intro"))).toLoudnessBelow(-18*LUFS));
+  test("drop doesn't clip", () => expect(render(song, section("drop"))).toPeakBelow(db(-1)));
+  test("intro is quiet",   () => expect(render(song, section("intro"))).toLoudnessBelow(lufs(-18)));
   ```
 - **Lint rules** are package tools that read the IR and the timeline: notes outside the key, a bass masking the kick with no ducking, unused exports, a mask lane that is never used.
 - **Incremental renders:** results are cached by hash, so an edit only re-renders what is downstream of it.
@@ -504,6 +538,40 @@ Agents can't listen, so they need another way to judge the result. `render` with
 5. **The JavaScript engine.** QuickJS is small and deterministic, but slow for very large generated graphs. Builds happen at edit time, not on the audio thread, so this should be fine. Revisit if needed.
 6. **Kernel parameter changes while playing**, e.g. a sampler swapping its asset, require re-initialising the kernel. The planner treats this as replacing the node.
 7. **Naming and governance of std versus the community:** who maintains `std`, and what is required to get into it.
+
+## Implementation status
+
+**M1, the core loop, is done.** `m2 render examples/first-song out.wav` runs the whole pipeline: TypeScript in the sandbox → IR → checker → WebAssembly kernels → WAV.
+
+| Piece | Where |
+|---|---|
+| IR (seven ops), kinds and units, kernel signatures, the checker | `core/ir` (`m2-ir`) |
+| Project folder, timeline files, tempo map | `core/song` (`m2-song`) |
+| Package loading, kernel host, `poly`, `feedback`, renderer | `core/runtime` (`m2-runtime`) |
+| TypeScript sandbox (oxc + QuickJS) and the `@m2/core` SDK | `core/script` (`m2-script`, `sdk/core.ts`) |
+| Kernel authoring kit for Rust | `core/kernel` (`m2-kernel`) |
+| The `std` package: manifest, 20 kernels, TypeScript modules | `std/` (kernels built with `std/build.sh`) |
+| CLI: `m2 build`, `m2 render`, `m2 kernels` | `apps/m2` |
+| Example song | `examples/first-song` |
+
+**Measured:**
+- **The decision gate passes.** The same kernel source runs **1.62× slower as WebAssembly than native**: 16 voices of saw → filter → envelope render **48× faster than real time** (`cargo run --release -p m2-runtime --example bench`).
+- The example song (4 tracks, 22 voices, 264 kernel instances) renders 17.5 s of audio in 0.46 s, and two renders are byte-identical.
+
+**Settled while building:**
+- `std` is **one package** whose modules are imported as `std/dsp`, `std/math`, `std/control`, `std/fx`, `std/mix` and `std/instruments`. Kernel ids are `package:kernel`, e.g. `std:svf`.
+- Units in TypeScript are functions (`hz(800)`), and plain numbers are untyped literals.
+- `feedback()` declares its kind up front (`feedback("audio<1>")`), and its input is given later with `.set()`.
+- Inside `poly`, a voice can read any signal from its module. Lanes, imports and `time` are always created at module level, so voices never contain them.
+- The sandbox deletes `Date`, makes `Math.random` throw, can only import project files, `@m2/core` and installed packages, and stops a build after 10 s or 256 MB.
+
+**Not built yet** (each belongs to a later milestone):
+- latency compensation (every std kernel reports 0)
+- audio lanes
+- sections
+- stable ids from source positions (ids are counters until hot swap needs them)
+- per-kernel CPU budgets
+- event-producing kernels: today only a notes lane can feed `poly`
 
 ## Build plan
 

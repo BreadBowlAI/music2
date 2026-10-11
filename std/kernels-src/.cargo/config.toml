@@ -1,0 +1,3 @@
+[target.wasm32-unknown-unknown]
+# Each node gets its own instance, so keep the per-instance stack small.
+rustflags = ["-C", "link-arg=-zstack-size=65536"]

@@ -1,0 +1,10 @@
+[package]
+name = "m2-ir"
+description = "The music2 graph IR: kinds and units, kernel signatures, and the checker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

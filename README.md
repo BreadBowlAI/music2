@@ -6,6 +6,8 @@ There's no AI inside the app, and no beginner mode: every tool is visible. Every
 
 See [`docs/music2-design.md`](docs/music2-design.md) for the product and architecture, and [`docs/filmcraft-architecture.md`](docs/filmcraft-architecture.md) for the research it borrows from.
 
+**Next direction: songs as programs.** A new, minimal core is being built alongside the app: songs are TypeScript graphs, and every instrument and effect is a package. See [`docs/song-as-program.md`](docs/song-as-program.md) and [Song as a program (new core)](#song-as-a-program-new-core).
+
 ## Run it
 
 music2 is a native Mac app (Tauri): the React UI in a system web view, around the Rust engine, which makes the sound.
@@ -88,6 +90,24 @@ music2-cli plugin check my-pad.m2plug.json      # validate before publishing
 music2-cli plugin add github:you/m2-glitter-pad  # installs m2plug.json from the repo
 ```
 
+## Song as a program (new core)
+
+The new core is in `core/`, the standard library in `std/`, and the CLI in `apps/m2`. A project is a folder of TypeScript modules plus timeline JSON; see [`examples/first-song`](examples/first-song).
+
+```bash
+cargo run --release -p m2 -- build examples/first-song            # run the TypeScript, check the graph
+cargo run --release -p m2 -- render examples/first-song out.wav   # render to WAV
+cargo run --release -p m2 -- kernels                              # every kernel and its typed ports
+std/build.sh                                                      # rebuild std's WebAssembly kernels
+cargo run --release -p m2-runtime --example bench                 # WebAssembly vs native speed
+```
+
+Errors point at the TypeScript line that caused them. Feeding a dB value into an oscillator's frequency gives:
+
+```
+tracks/bass.ts:12:24: [Bass/n10] input `freq` expects control<hz>, got control<db>
+```
+
 ## Layout
 
 | Layer | Crates |
@@ -99,5 +119,6 @@ music2-cli plugin add github:you/m2-glitter-pad  # installs m2plug.json from the
 | L2 plugin standard | `crates/graph` |
 | L1 models | `crates/project`, `crates/dsp` |
 | L0 foundations | `crates/time`, `crates/theory` |
+| New core | `core/ir`, `core/song`, `core/runtime`, `core/script`, `core/kernel`; CLI `apps/m2`; package `std/` |
 
 `cargo test --workspace` runs the test suite. For automated UI tests, the UI also opens in headless Chrome at the app's engine URL, given `window.__M2__ = {native: false, token}`; URL params like `?select=Hook&tab=sounds` set up a state.

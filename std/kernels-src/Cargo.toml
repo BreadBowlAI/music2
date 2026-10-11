@@ -1,0 +1,23 @@
+[package]
+name = "m2-std-kernels"
+description = "The std package's kernels, compiled to std/kernels/std.wasm"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+# Built for wasm32-unknown-unknown by std/build.sh, separately from the main workspace.
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+m2-kernel = { path = "../../core/kernel" }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

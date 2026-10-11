@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "apps/*"]
+members = ["crates/*", "core/*", "apps/*"]
+exclude = ["std/kernels-src"]
 
 [workspace.package]
 version = "0.1.0"
@@ -17,6 +18,11 @@ m2-render = { path = "crates/render" }
 m2-engine = { path = "crates/engine" }
 m2-audio-io = { path = "crates/audio-io" }
 m2-server = { path = "crates/server" }
+m2-ir = { path = "core/ir" }
+m2-kernel = { path = "core/kernel" }
+m2-song = { path = "core/song" }
+m2-runtime = { path = "core/runtime" }
+m2-script = { path = "core/script" }
 
 anyhow = "1"
 thiserror = "2"
@@ -32,6 +38,11 @@ axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.7", features = ["fs"] }
 open = "5"
+toml = "1"
+wasmtime = { version = "49", default-features = false, features = ["anyhow", "cranelift", "runtime", "std"] }
+rquickjs = { version = "0.14", features = ["loader"] }
+oxc = { version = "0.153", features = ["transformer", "codegen", "semantic"] }
+bytemuck = "1"
 
 [profile.dev]
 opt-level = 1

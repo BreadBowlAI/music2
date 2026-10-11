@@ -1,0 +1,12 @@
+[package]
+name = "m2-song"
+description = "A music2 project folder: manifest, timeline data and the tempo map"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true

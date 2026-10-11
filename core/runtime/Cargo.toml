@@ -1,0 +1,20 @@
+[package]
+name = "m2-runtime"
+description = "Runs checked music2 graphs: the WebAssembly kernel host, poly voices, rendering"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+m2-ir.workspace = true
+m2-song.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+toml.workspace = true
+wasmtime.workspace = true
+bytemuck.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+m2-kernel.workspace = true
+m2-std-kernels = { path = "../../std/kernels-src" }
