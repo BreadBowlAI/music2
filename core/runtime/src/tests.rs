@@ -179,7 +179,7 @@ fn std_manifest_matches_its_kernels() {
         };
         let tempo = TempoMap::constant(120.0);
         let tl = Timeline::default();
-        let mut b = Builder { store: &mut store, packages: &pk, timeline: &tl, tempo: &tempo, sample_rate: 48_000.0 };
+        let mut b = Builder { store: &mut store, packages: &pk, timeline: &tl, tempo: &tempo, sample_rate: 48_000.0, assets: None, audio: Default::default() };
         b.kernel(&node, &id, 1, &inputs).unwrap_or_else(|e| panic!("{e:#}"));
     }
 }
@@ -441,5 +441,145 @@ fn voices_end_when_their_envelope_closes_but_not_while_echoes_remain() {
     assert_eq!(r.active_voices(), 1, "silent between echoes, but echoes are coming");
     r.render(20.0).unwrap();
     assert_eq!(r.active_voices(), 0, "the echoes died away");
+    std::fs::remove_dir_all(dir).ok();
+}
+
+// ---------------------------------------------------------------- audio lanes
+
+/// A song that plays one stereo audio lane, with the given assets and clips.
+fn audio_song(assets: &[(&str, Vec<Vec<f32>>, u32)], clips: Value) -> (Ir, Timeline, PathBuf) {
+    let ir = song(json!([{"id": "a", "op": "lane", "lane": "clips"}]), "a", json!([{"id": "clips", "kind": "audio<2>"}]));
+    let (tl, dir) = timeline(&[("song.json", json!({"tempo": [{"beat": 0, "bpm": 120}]})), ("song.clips.json", json!({"clips": clips}))]);
+    std::fs::create_dir_all(dir.join("assets")).unwrap();
+    for (name, data, sr) in assets {
+        audio::write_wav(&dir.join("assets").join(name), data, *sr).unwrap();
+    }
+    (ir, tl, dir)
+}
+
+fn render_audio(ir: &Ir, tl: &Timeline, dir: &Path, seconds: f64) -> Vec<[f32; 2]> {
+    let pk = std_packages();
+    let flat = check(ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
+    Renderer::build(&flat, tl, &pk, SR, Some(&dir.join("assets"))).unwrap().render(seconds).unwrap()
+}
+
+fn sine(hz: f64, seconds: f64, sr: u32) -> Vec<f32> {
+    (0..(seconds * sr as f64) as usize).map(|i| (i as f64 / sr as f64 * hz * std::f64::consts::TAU).sin() as f32 * 0.5).collect()
+}
+
+/// Frequency from upward zero crossings.
+fn freq(x: &[[f32; 2]]) -> f64 {
+    let n = x.windows(2).filter(|w| w[0][0] < 0.0 && w[1][0] >= 0.0).count();
+    n as f64 / (x.len() as f64 / SR as f64)
+}
+
+#[test]
+fn clips_land_on_their_sample_with_gain_and_fades() {
+    let dc = vec![vec![0.5f32; 48_000]];
+    let (ir, tl, dir) = audio_song(&[("dc.wav", dc, SR)], json!([{"start": 1, "length": 1, "asset": "dc.wav", "gain_db": -6, "fade_out": 0.1}]));
+    let out = render_audio(&ir, &tl, &dir, 1.5);
+    // 120 bpm: beat 1 is sample 24 000; the clip lasts one beat (24 000 samples).
+    assert_eq!(out[23_999], [0.0, 0.0]);
+    let g = 0.5 * 10f32.powf(-6.0 / 20.0);
+    assert!((out[24_000][0] - g).abs() < 1e-6 && out[24_000][0] == out[24_000][1], "mono assets play on both channels");
+    assert!((out[30_000][0] - g).abs() < 1e-6);
+    assert!(out[47_990][0] < 0.01 * g, "faded out by the end");
+    assert_eq!(out[48_000], [0.0, 0.0]);
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn pitch_without_warp_is_varispeed_and_with_warp_keeps_timing() {
+    let (ir, tl, dir) = audio_song(
+        &[("a440.wav", vec![sine(440.0, 3.0, SR)], SR)],
+        json!([
+            {"start": 0, "length": 2, "asset": "a440.wav", "pitch": 12},
+            {"start": 4, "length": 2, "asset": "a440.wav", "warp": [[0, 0], [2, 2]]},
+            {"start": 8, "length": 2, "asset": "a440.wav", "warp": [[0, 0], [2, 2]], "pitch": 12}
+        ]),
+    );
+    let out = render_audio(&ir, &tl, &dir, 5.0);
+    let s = |a: f64, b: f64| &out[(a * SR as f64) as usize..(b * SR as f64) as usize];
+    // Varispeed: an octave up is twice the frequency.
+    assert!((freq(s(0.1, 0.9)) - 880.0).abs() < 5.0, "{}", freq(s(0.1, 0.9)));
+    // Warped: two seconds of source squeezed into one (two beats at 120 bpm), same pitch.
+    assert!((freq(s(2.1, 2.9)) - 440.0).abs() < 8.0, "{}", freq(s(2.1, 2.9)));
+    assert!(s(2.1, 2.9).iter().all(|f| f[0].abs() <= 0.6));
+    // Warped and transposed: same timing, an octave up.
+    assert!((freq(s(4.1, 4.9)) - 880.0).abs() < 12.0, "{}", freq(s(4.1, 4.9)));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn reverse_and_other_sample_rates() {
+    let ramp: Vec<f32> = (0..24_000).map(|i| i as f32 / 24_000.0).collect();
+    let (ir, tl, dir) = audio_song(
+        &[("ramp.wav", vec![ramp], SR), ("a441.wav", vec![sine(441.0, 2.0, 44_100)], 44_100)],
+        json!([
+            {"start": 0, "length": 1, "asset": "ramp.wav", "reverse": true},
+            {"start": 2, "length": 2, "asset": "a441.wav"}
+        ]),
+    );
+    let out = render_audio(&ir, &tl, &dir, 2.0);
+    assert!(out[100][0] > 0.99 && out[23_900][0] < 0.01, "plays backwards");
+    assert!((freq(&out[48_000 + 4_800..96_000 - 4_800]) - 441.0).abs() < 3.0, "a 44.1 kHz asset keeps its pitch at 48 kHz");
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn a_bounce_placed_as_a_clip_reproduces_the_original() {
+    // Render a synth, write it as an asset, play it back from an audio lane: identical.
+    let synth = song(
+        json!([
+            {"id": "o", "op": "kernel", "kernel": "std:saw", "inputs": {"freq": "f"}},
+            {"id": "f", "op": "const", "value": 110, "unit": "hz"},
+            {"id": "x", "op": "kernel", "kernel": "std:svf", "inputs": {"in": "o"}},
+        ]),
+        "x.lp",
+        json!([]),
+    );
+    let original = render(&synth, &Timeline::default(), 1.0);
+    let channels = vec![original.iter().map(|f| f[0]).collect::<Vec<f32>>(), original.iter().map(|f| f[1]).collect()];
+    let (ir, tl, dir) = audio_song(&[("bounce.wav", channels, SR)], json!([{"start": 0, "length": 2, "asset": "bounce.wav"}]));
+    let played = render_audio(&ir, &tl, &dir, 1.0);
+    assert!(played == original, "the bounce plays back bit for bit");
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn audio_lanes_seek_exactly() {
+    let (ir, tl, dir) = audio_song(
+        &[("a440.wav", vec![sine(440.0, 3.0, SR)], SR)],
+        json!([{"start": 0.5, "length": 3, "asset": "a440.wav", "warp": [[0, 0], [3, 3]], "fade_in": 0.05}]),
+    );
+    let pk = std_packages();
+    let flat = check(&ir, &pk).unwrap();
+    let mut r = Renderer::build(&flat, &tl, &pk, SR, Some(&dir.join("assets"))).unwrap();
+    let full = r.render(2.0).unwrap();
+    r.seek(30_011).unwrap();
+    let part = r.render(0.5).unwrap();
+    assert!(part[..] == full[30_011..30_011 + part.len()]);
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+#[ignore = "prints measurements; run with --ignored --nocapture"]
+fn stretch_quality_report() {
+    let (ir, tl, dir) = audio_song(
+        &[("a440.wav", vec![sine(440.0, 3.0, SR)], SR)],
+        json!([
+            {"start": 0, "length": 2, "asset": "a440.wav", "warp": [[0, 0], [2, 2]]},
+            {"start": 4, "length": 2, "asset": "a440.wav", "warp": [[0, 0], [1, 2]]},
+            {"start": 8, "length": 2, "asset": "a440.wav", "warp": [[0, 0], [2, 2]], "pitch": 12}
+        ]),
+    );
+    let out = render_audio(&ir, &tl, &dir, 5.0);
+    for (name, a) in [("2x faster", 0.1), ("2x slower", 2.1), ("faster + octave", 4.1)] {
+        let s = &out[(a * SR as f64) as usize..((a + 0.8) * SR as f64) as usize];
+        // Level per 10 ms window: a clean stretch of a sine keeps a constant level.
+        let w: Vec<f32> = s.chunks(480).map(|c| c.iter().fold(0.0f32, |m, f| m.max(f[0].abs()))).collect();
+        let (lo, hi) = (w.iter().cloned().fold(f32::MAX, f32::min), w.iter().cloned().fold(0.0, f32::max));
+        println!("{name}: {:.1} Hz, level {lo:.3}..{hi:.3} ({:.1} dB ripple)", freq(s), 20.0 * (hi / lo).log10());
+    }
     std::fs::remove_dir_all(dir).ok();
 }

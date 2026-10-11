@@ -92,12 +92,17 @@ music2-cli plugin add github:you/m2-glitter-pad  # installs m2plug.json from the
 
 ## Song as a program (new core)
 
-The new core is in `core/`, the standard library in `std/`, and the CLI in `apps/m2`. A project is a folder of TypeScript modules plus timeline JSON; see [`examples/first-song`](examples/first-song).
+The new core is in `core/`, the standard library in `std/`, and the CLI in `apps/m2`. A project is a folder of TypeScript modules plus timeline JSON and assets. Examples:
+- [`examples/first-song`](examples/first-song): std instruments, automation, a sidechain, a mask.
+- [`examples/with-plugins`](examples/with-plugins): Surge XT and Airwindows Consolidated (CLAP) as graph nodes, with automation and saved state. Needs both plugins installed.
+- [`examples/resample`](examples/resample): bounce a track to audio, then chop, reverse, pitch and stretch it on an audio lane.
 
 ```bash
 cargo run --release -p m2 -- build examples/first-song            # run the TypeScript, check the graph
 cargo run --release -p m2 -- render examples/first-song out.wav   # render to WAV
 cargo run --release -p m2 -- kernels                              # every kernel and its typed ports
+cargo run --release -p m2 -- plugins                              # installed CLAP plugins (and `plugins clap:<id>` for ports)
+cargo run --release -p m2 -- bounce examples/resample keys-bounce --track Keys --force   # render a track to an asset
 std/build.sh                                                      # rebuild std's WebAssembly kernels
 cargo run --release -p m2-runtime --example bench                 # WebAssembly vs native speed
 ```
@@ -119,6 +124,6 @@ tracks/bass.ts:12:24: [Bass/n10] input `freq` expects control<hz>, got control<d
 | L2 plugin standard | `crates/graph` |
 | L1 models | `crates/project`, `crates/dsp` |
 | L0 foundations | `crates/time`, `crates/theory` |
-| New core | `core/ir`, `core/song`, `core/runtime`, `core/script`, `core/kernel`; CLI `apps/m2`; package `std/` |
+| New core | `core/ir`, `core/song`, `core/runtime`, `core/script`, `core/session`, `core/plugins`, `core/kernel`; CLI `apps/m2`; package `std/` |
 
 `cargo test --workspace` runs the test suite. For automated UI tests, the UI also opens in headless Chrome at the app's engine URL, given `window.__M2__ = {native: false, token}`; URL params like `?select=Hook&tab=sounds` set up a state.

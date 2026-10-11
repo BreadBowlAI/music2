@@ -21,12 +21,13 @@ pub struct Compiled {
     pub warnings: Vec<Diagnostic>,
 }
 
-pub fn compile(project: &Project, packages: &PackageSet) -> Result<Compiled, Vec<Diagnostic>> {
+pub fn compile(project: &Project, packages: &mut PackageSet) -> Result<Compiled, Vec<Diagnostic>> {
     let mut opts = m2_script::Options::new(&project.dir, &project.entry());
     opts.packages = packages.packages().map(|p| (p.name.clone(), p.dir.clone())).collect();
     let ir = m2_script::build(&opts)?;
 
     let mut diags = names(&ir);
+    diags.extend(plugins(project, &ir, packages));
     let flat = match m2_ir::check(&ir, packages) {
         Ok(f) => Some(f),
         Err(d) => {
@@ -66,6 +67,32 @@ fn names(ir: &Ir) -> Vec<Diagnostic> {
     diags
 }
 
+/// Describe the hosted plugins the song uses, and check their saved states exist.
+fn plugins(project: &Project, ir: &Ir, packages: &mut PackageSet) -> Vec<Diagnostic> {
+    let mut diags = vec![];
+    let mut ids = vec![];
+    for m in &ir.modules {
+        for n in &m.nodes {
+            if let m2_ir::Op::Plugin { plugin, state, .. } = &n.op {
+                ids.push(plugin.as_str());
+                if let Some(s) = state {
+                    let path = m2_runtime::plugin_state_path(&project.dir.join("assets"), s);
+                    if !path.exists() {
+                        diags.push(Diagnostic {
+                            message: format!("no saved plugin state `{s}` ({}); create it with `m2 plugin-state`", relative(&project.dir, &path)),
+                            module: Some(m.name.clone()),
+                            node: Some(n.id.clone()),
+                            src: n.src.clone(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    diags.extend(packages.describe_plugins(ids).into_iter().map(Diagnostic::new));
+    diags
+}
+
 /// Every lane's data must parse as the lane's kind.
 fn timeline(project: &Project, ir: &Ir) -> Vec<Diagnostic> {
     let tl = &project.timeline;
@@ -78,7 +105,13 @@ fn timeline(project: &Project, ir: &Ir) -> Vec<Diagnostic> {
             let result = match lane.kind {
                 Kind::Events(_) => tl.notes(&m.name, &lane.id).map(drop),
                 Kind::Control(_) => tl.control(&m.name, &lane.id).map(drop),
-                Kind::Audio(_) => Ok(()),
+                Kind::Audio(_) => tl.audio(&m.name, &lane.id).and_then(|clips| {
+                    for c in clips {
+                        let path = project.dir.join("assets").join(&c.asset);
+                        m2_runtime::audio::load_wav(&path).map_err(|e| anyhow::anyhow!("clip at beat {}: {e:#}", c.start))?;
+                    }
+                    Ok(())
+                }),
             };
             if let Err(e) = result {
                 diags.push(Diagnostic {
@@ -128,7 +161,7 @@ export default song(() => k.out);
 "#;
 
     fn compile_dir(dir: &Path) -> Result<Compiled, Vec<Diagnostic>> {
-        compile(&Project::open(dir).unwrap(), &std_packages())
+        compile(&Project::open(dir).unwrap(), &mut std_packages())
     }
 
     #[test]

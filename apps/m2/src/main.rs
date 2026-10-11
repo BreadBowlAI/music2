@@ -16,6 +16,13 @@ USAGE:
   m2 render <project> <out.wav> [--sr 48000] [--from S] [--seconds N]
                                          render to WAV; --from starts S seconds in
   m2 kernels [--json]                    list every kernel and its typed ports
+  m2 bounce <project> <asset-name> [--track NAME] [--export out] [--from S] [--seconds N]
+            [--place Track.lane@beat] [--force]
+                                         render a track (or the whole song) to assets/<asset-name>.wav,
+                                         optionally placing it as a clip on an audio lane
+  m2 plugins [clap:<id>]                 list installed CLAP plugins, or one plugin's ports
+  m2 plugin-state <project> <name> clap:<id> [--force]
+                                         save a plugin's default state to assets/plugin-state/<name>.bin
 
 The std package is found at $M2_STD, or next to this source tree.
 ";
@@ -45,7 +52,7 @@ fn packages() -> Result<PackageSet> {
 }
 
 /// Compile a project, printing diagnostics on failure and warnings on success.
-fn compile(dir: &Path, packages: &PackageSet) -> Result<(Project, Ir, Flat)> {
+fn compile(dir: &Path, packages: &mut PackageSet) -> Result<(Project, Ir, Flat)> {
     let project = Project::open(dir)?;
     let c = m2_session::compile(&project, packages).map_err(report)?;
     for w in &c.warnings {
@@ -66,8 +73,8 @@ fn run() -> Result<()> {
     let arg = |i: usize| args.get(i).cloned().ok_or_else(|| anyhow!("missing argument\n\n{USAGE}"));
     match args.first().map(String::as_str) {
         Some("check" | "build") => {
-            let pk = packages()?;
-            let (project, ir, flat) = compile(Path::new(&arg(1)?), &pk)?;
+            let mut pk = packages()?;
+            let (project, ir, flat) = compile(Path::new(&arg(1)?), &mut pk)?;
             if args.iter().any(|a| a == "--json") {
                 println!("{}", serde_json::to_string_pretty(&ir)?);
                 return Ok(());
@@ -75,8 +82,8 @@ fn run() -> Result<()> {
             summary(&project, &ir, &flat);
         }
         Some("render") => {
-            let pk = packages()?;
-            let (project, _, flat) = compile(Path::new(&arg(1)?), &pk)?;
+            let mut pk = packages()?;
+            let (project, _, flat) = compile(Path::new(&arg(1)?), &mut pk)?;
             let out = PathBuf::from(arg(2)?);
             let sr: u32 = flag(&args, "--sr").map(|v| v.parse()).transpose().context("--sr")?.unwrap_or(48_000);
             let tempo = project.timeline.tempo()?;
@@ -89,7 +96,7 @@ fn run() -> Result<()> {
                 bail!("nothing to render (check --from and --seconds; the timeline may be empty)");
             }
             let t = Instant::now();
-            let mut r = Renderer::new(&flat, &project.timeline, &pk, sr)?;
+            let mut r = Renderer::for_project(&flat, &project, &pk, sr)?;
             r.seek((from * sr as f64).round() as u64)?;
             let frames = r.render(seconds)?;
             write_wav(&out, &frames, sr)?;
@@ -121,6 +128,109 @@ fn run() -> Result<()> {
                     println!("{:12} ({}) -> ({})\n             {}", s.id, ports(&s.inputs).join(", "), ports(&s.outputs).join(", "), s.description);
                 }
             }
+        }
+        Some("bounce") => {
+            let mut pk = packages()?;
+            let (project, mut ir, _) = compile(Path::new(&arg(1)?), &mut pk)?;
+            let name = arg(2)?;
+            if name.contains(['/', '\\']) || name.starts_with('.') {
+                bail!("the asset name is a file name in assets/, like `keys-bounce`");
+            }
+            let file = if name.ends_with(".wav") { name.clone() } else { format!("{name}.wav") };
+            if let Some(track) = flag(&args, "--track") {
+                let export = flag(&args, "--export").unwrap_or_else(|| "out".into());
+                ir.root = m2_ir::Root { module: track, export };
+            }
+            let flat = m2_ir::check(&ir, &pk).map_err(report)?;
+            let impure = flat.order.iter().any(|&i| matches!(flat.nodes[i].op, FOp::Plugin { .. }));
+            let sr: u32 = flag(&args, "--sr").map(|v| v.parse()).transpose().context("--sr")?.unwrap_or(48_000);
+            let tempo = project.timeline.tempo()?;
+            let from: f64 = flag(&args, "--from").map(|v| v.parse()).transpose().context("--from")?.unwrap_or(0.0);
+            let seconds: f64 = match flag(&args, "--seconds") {
+                Some(v) => v.parse().context("--seconds")?,
+                None => tempo.seconds_at(project.timeline.end()) + 2.0 - from,
+            };
+            let assets = project.dir.join("assets");
+            let path = assets.join(&file);
+            if path.exists() && !args.iter().any(|a| a == "--force") {
+                bail!("{} exists (pass --force to replace it)", path.display());
+            }
+            let mut r = Renderer::for_project(&flat, &project, &pk, sr)?;
+            r.seek((from * sr as f64).round() as u64)?;
+            let frames = r.render(seconds)?;
+            std::fs::create_dir_all(&assets)?;
+            let channels = vec![frames.iter().map(|f| f[0]).collect::<Vec<f32>>(), frames.iter().map(|f| f[1]).collect()];
+            m2_runtime::audio::write_wav(&path, &channels, sr)?;
+            // Where it came from, so a bounce of open kernels can always be reproduced.
+            let provenance = serde_json::json!({
+                "bounced_from": {"module": ir.root.module, "export": ir.root.export},
+                "from_seconds": from, "seconds": seconds, "sample_rate": sr,
+                "reproducible": !impure,
+            });
+            std::fs::write(assets.join(format!("{file}.json")), serde_json::to_string_pretty(&provenance)? + "\n")?;
+            println!("bounced {}/{} ({seconds:.2}s) to {}{}", ir.root.module, ir.root.export, path.display(), if impure { " (includes plugins: not reproducible)" } else { "" });
+            if let Some(place) = flag(&args, "--place") {
+                let (target, beat) = place.split_once('@').ok_or_else(|| anyhow!("--place takes Track.lane@beat"))?;
+                let (track, lane) = target.split_once('.').ok_or_else(|| anyhow!("--place takes Track.lane@beat"))?;
+                let beat: f64 = beat.parse().context("--place beat")?;
+                let length = tempo.beat_at(tempo.seconds_at(beat) + seconds) - beat;
+                let lane_file = project.dir.join("timeline").join(format!("{}.{lane}.json", m2_song::slug(track)));
+                let mut data: serde_json::Value = match std::fs::read_to_string(&lane_file) {
+                    Ok(t) => serde_json::from_str(&t).with_context(|| format!("reading {}", lane_file.display()))?,
+                    Err(_) => serde_json::json!({"clips": []}),
+                };
+                let clips = data["clips"].as_array_mut().ok_or_else(|| anyhow!("{} has no clips list", lane_file.display()))?;
+                clips.push(serde_json::json!({"start": beat, "length": (length * 1e6).round() / 1e6, "asset": file}));
+                std::fs::create_dir_all(lane_file.parent().expect("has a parent"))?;
+                std::fs::write(&lane_file, serde_json::to_string_pretty(&data)? + "\n")?;
+                println!("placed it on {track}.{lane} at beat {beat} ({})", lane_file.display());
+            }
+        }
+        Some("plugins") => match args.get(1) {
+            None => {
+                let (found, errors) = m2_plugins::scan();
+                for f in found {
+                    println!("clap:{:40} {} {} ({})", f.id, f.name, f.version, f.features.join(", "));
+                }
+                for e in errors {
+                    eprintln!("warning: {e}");
+                }
+            }
+            Some(id) => {
+                let mut pk = PackageSet::default();
+                if let Some(e) = pk.describe_plugins([id.as_str()]).into_iter().next() {
+                    bail!(e);
+                }
+                let sig = m2_ir::Kernels::plugin(&pk, id).expect("described");
+                let info = pk.plugin_info(id).expect("described");
+                println!("{} ({}), latency {} samples", sig.id, sig.description, sig.latency);
+                let params: std::collections::HashMap<&str, &m2_plugins::Param> =
+                    m2_plugins::param_port_names(&info.params).into_iter().zip(&info.params).map(|(n, p)| (sig.inputs.iter().find(|i| i.name == n).map_or("", |i| i.name.as_str()), p)).collect();
+                for p in &sig.inputs {
+                    match params.get(p.name.as_str()) {
+                        Some(q) => println!("  in  {:28} {}  {}..{}, default {}  ({})", p.name, p.kind, q.min, q.max, q.default, q.name),
+                        None => println!("  in  {:28} {}", p.name, p.kind),
+                    }
+                }
+                for p in &sig.outputs {
+                    println!("  out {:28} {}", p.name, p.kind);
+                }
+            }
+        },
+        Some("plugin-state") => {
+            let project = Project::open(Path::new(&arg(1)?))?;
+            let name = arg(2)?;
+            let id = arg(3)?;
+            let clap_id = id.strip_prefix("clap:").ok_or_else(|| anyhow!("plugin ids start with `clap:`"))?;
+            let path = m2_runtime::plugin_state_path(&project.dir.join("assets"), &name);
+            if path.exists() && !args.iter().any(|a| a == "--force") {
+                bail!("{} exists (pass --force to replace it)", path.display());
+            }
+            let inst = m2_plugins::Instance::new(&m2_plugins::find(clap_id)?, 48_000.0, 128)?;
+            let bytes = inst.save_state()?;
+            std::fs::create_dir_all(path.parent().expect("has a parent"))?;
+            std::fs::write(&path, &bytes)?;
+            println!("saved {} bytes of {} state to {}", bytes.len(), inst.info.found.name, path.display());
         }
         _ => print!("{USAGE}"),
     }

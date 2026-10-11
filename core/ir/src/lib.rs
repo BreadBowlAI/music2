@@ -1,8 +1,8 @@
 //! The music2 graph IR.
 //!
 //! Every song, however it was written, compiles to this: modules made of nodes, where
-//! every node is one of seven ops (`lane`, `time`, `const`, `kernel`, `poly`,
-//! `feedback`, `import`). [`check`] validates an IR independently of whatever produced
+//! every node is one of eight ops (`lane`, `time`, `const`, `kernel`, `poly`,
+//! `feedback`, `import`, `plugin`). [`check`] validates an IR independently of whatever produced
 //! it and flattens it into one typed, ordered [`Flat`] graph for the runtime.
 //!
 //! Port references are strings: `"n3.lp"` is output `lp` of node `n3`, and a bare
@@ -93,6 +93,15 @@ pub enum Op {
     Feedback { kind: Kind, input: String },
     /// Another module's export.
     Import { module: String, export: String },
+    /// A hosted plugin (`clap:<plugin id>`). Inputs are `in` (audio), `notes` (from a
+    /// notes lane) and parameters by port name. `state` names a saved state asset.
+    Plugin {
+        plugin: String,
+        #[serde(default)]
+        inputs: BTreeMap<String, String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        state: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -118,6 +127,7 @@ impl Op {
             Op::Poly { .. } => "poly",
             Op::Feedback { .. } => "feedback",
             Op::Import { .. } => "import",
+            Op::Plugin { .. } => "plugin",
         }
     }
 }

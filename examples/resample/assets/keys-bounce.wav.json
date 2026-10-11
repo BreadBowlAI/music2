@@ -1,0 +1,10 @@
+{
+  "bounced_from": {
+    "export": "out",
+    "module": "Keys"
+  },
+  "from_seconds": 0.0,
+  "reproducible": true,
+  "sample_rate": 48000,
+  "seconds": 4.0
+}

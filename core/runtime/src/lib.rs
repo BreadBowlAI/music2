@@ -18,11 +18,12 @@
 //!   identical. A NaN or infinity is an error in strict mode (the default) and is
 //!   silenced in live mode.
 
+pub mod audio;
 pub mod packages;
 
 use anyhow::{Context, Result, bail};
 use m2_ir::{FNode, FOp, Flat, Input, Kind, NoteField, PortRef, TimeOf};
-use m2_song::{AbsNote, ControlLane, TempoMap, Timeline};
+use m2_song::{AbsNote, ControlLane, Project, TempoMap, Timeline};
 use wasmtime::{Instance, Memory, Store, StoreLimits, StoreLimitsBuilder, TypedFunc};
 
 pub use packages::{Package, PackageSet};
@@ -44,6 +45,8 @@ struct Block {
     /// Beat of each frame, in full precision, for lane lookups.
     beats64: [f64; BLOCK],
     sample_rate: f64,
+    /// Tempo at the block's start, for plugins that sync to the host.
+    bpm: f64,
     strict: bool,
 }
 
@@ -105,12 +108,111 @@ struct PolyNode {
     born: u64,
 }
 
+/// A hosted plugin and what feeds it.
+struct PluginNode {
+    name: String,
+    inst: m2_plugins::Instance,
+    audio_in: Option<Input>,
+    notes: Vec<SampleNote>,
+    next: usize,
+    /// Sounding notes: (note id, key, end sample).
+    playing: Vec<(i32, i16, u64)>,
+    note_ids: i32,
+    /// (parameter id, input, value last sent).
+    params: Vec<(u32, Input, Option<f32>)>,
+}
+
+/// How often automation is sampled for plugins, in samples.
+const PARAM_STEP: usize = 16;
+
+impl PluginNode {
+    fn process(&mut self, b: &Block, bufs: &[Vec<Buf>], out: &mut Buf) -> Result<()> {
+        use m2_plugins::Event;
+        let (start, end) = (b.start, b.start + BLOCK as u64);
+        let mut events = vec![];
+        // Note-offs first so a key can be struck again at the same sample.
+        self.playing.retain(|&(id, key, stop)| {
+            if stop < end {
+                events.push(Event::NoteOff { time: stop.saturating_sub(start) as u32, id, key });
+                false
+            } else {
+                true
+            }
+        });
+        while self.next < self.notes.len() && self.notes[self.next].start < start {
+            self.next += 1;
+        }
+        while self.next < self.notes.len() && self.notes[self.next].start < end {
+            let n = self.notes[self.next];
+            self.next += 1;
+            self.note_ids += 1;
+            let key = n.pitch.round().clamp(0.0, 127.0) as i16;
+            let time = (n.start - start) as u32;
+            events.push(Event::NoteOn { time, id: self.note_ids, key, velocity: n.velocity as f64 });
+            let tune = n.pitch as f64 - key as f64;
+            if tune.abs() > 1e-6 {
+                events.push(Event::Tuning { time, id: self.note_ids, key, semitones: tune });
+            }
+            if n.end < end {
+                events.push(Event::NoteOff { time: (n.end - start) as u32, id: self.note_ids, key });
+            } else {
+                self.playing.push((self.note_ids, key, n.end));
+            }
+        }
+        for (id, input, last) in &mut self.params {
+            match input {
+                Input::Const(v) => {
+                    if last.is_none() {
+                        events.push(Event::Param { time: 0, id: *id, value: *v });
+                        *last = Some(*v as f32);
+                    }
+                }
+                Input::Unset => {}
+                Input::Port { src, .. } => {
+                    let s = &bufs[src.node][src.port];
+                    for f in (0..BLOCK).step_by(PARAM_STEP) {
+                        if *last != Some(s[f]) {
+                            events.push(Event::Param { time: f as u32, id: *id, value: s[f] as f64 });
+                            *last = Some(s[f]);
+                        }
+                    }
+                }
+            }
+        }
+        let ins: Vec<&[f32]> = match &self.audio_in {
+            Some(Input::Port { src, src_channels, .. }) => (0..*src_channels as usize).map(|c| &bufs[src.node][src.port][c * BLOCK..(c + 1) * BLOCK]).collect(),
+            _ => vec![],
+        };
+        let mut outs: Vec<&mut [f32]> = out.chunks_mut(BLOCK).collect();
+        let transport = m2_plugins::Transport { beats: b.beats64[0], seconds: b.seconds[0] as f64, bpm: b.bpm };
+        self.inst.process(BLOCK as u32, &ins, &mut outs, &events, transport).with_context(|| self.name.clone())?;
+        if b.strict
+            && let Some(at) = out.iter().position(|x| !x.is_finite())
+        {
+            bail!("{} produced {} at {:.3}s", self.name, out[at], (b.start + (at % BLOCK) as u64) as f64 / b.sample_rate);
+        }
+        Ok(())
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        self.inst.reset()?;
+        self.next = 0;
+        self.playing.clear();
+        for p in &mut self.params {
+            p.2 = None;
+        }
+        Ok(())
+    }
+}
+
 enum Exec {
     Control { lane: ControlLane, default: f32 },
+    Audio(audio::AudioLane),
     Notes,
     Time(TimeOf),
     Const(f32),
     Kernel(Box<KernelNode>),
+    Plugin(Box<PluginNode>),
     Poly(Box<PolyNode>),
     /// A delay of exactly `BLOCK` samples; `ring` is indexed by absolute sample mod `BLOCK`.
     Feedback { input: PortRef, ring: Buf },
@@ -132,6 +234,10 @@ struct Builder<'a> {
     timeline: &'a Timeline,
     tempo: &'a TempoMap,
     sample_rate: f64,
+    /// The project's `assets/` folder, where plugin state lives.
+    assets: Option<&'a std::path::Path>,
+    /// Audio files used by clips, loaded once.
+    audio: audio::Assets,
 }
 
 impl Builder<'_> {
@@ -150,10 +256,14 @@ impl Builder<'_> {
                     Exec::Control { lane: self.timeline.control(module, lane)?, default: *default as f32 }
                 }
                 FOp::Lane { kind: Kind::Events(_), .. } => Exec::Notes,
-                FOp::Lane { kind: Kind::Audio(_), lane, .. } => bail!("{}: audio lanes (`{lane}`) aren't supported yet", n.name),
+                FOp::Lane { module, lane, kind: Kind::Audio(ch), .. } => {
+                    let clips = self.timeline.audio(module, lane)?;
+                    Exec::Audio(audio::AudioLane::build(&clips, &mut self.audio, self.tempo, self.sample_rate, *ch as usize).with_context(|| format!("{}: lane `{lane}`", n.name))?)
+                }
                 FOp::Time(t) => Exec::Time(*t),
                 FOp::Const(v) => Exec::Const(*v as f32),
                 FOp::Kernel { kernel, channels, inputs } => Exec::Kernel(Box::new(self.kernel(n, kernel, *channels, inputs)?)),
+                FOp::Plugin { plugin, inputs, state, .. } => Exec::Plugin(Box::new(self.plugin(nodes, n, plugin, inputs, state.as_deref())?)),
                 FOp::Poly { lane, voices, voice, .. } => {
                     if in_voice {
                         bail!("{}: poly inside poly", n.name);
@@ -187,6 +297,27 @@ impl Builder<'_> {
     fn sample_note(&self, n: &AbsNote) -> SampleNote {
         let at = |beat: f64| (self.tempo.seconds_at(beat) * self.sample_rate).round().max(0.0) as u64;
         SampleNote { start: at(n.start), end: at(n.end), pitch: n.pitch as f32, velocity: n.velocity as f32 }
+    }
+
+    fn plugin(&mut self, nodes: &[FNode], n: &FNode, id: &str, inputs: &[Input], state: Option<&str>) -> Result<PluginNode> {
+        let info = self.packages.plugin_info(id).with_context(|| format!("{}: plugin `{id}` was not described", n.name))?;
+        let mut inst = m2_plugins::Instance::new(&info.found, self.sample_rate, BLOCK as u32).with_context(|| n.name.clone())?;
+        if let Some(name) = state {
+            let path = plugin_state_path(self.assets.with_context(|| format!("{}: plugin state needs a project folder", n.name))?, name);
+            let bytes = std::fs::read(&path).with_context(|| format!("{}: reading plugin state {}", n.name, path.display()))?;
+            inst.load_state(&bytes).with_context(|| format!("{}: loading {}", n.name, path.display()))?;
+        }
+        let mut it = inputs.iter();
+        let audio_in = if info.audio_in.is_some() { it.next().cloned() } else { None };
+        let mut notes = vec![];
+        if info.note_in
+            && let Some(Input::Port { src, .. }) = it.next()
+            && let FOp::Lane { module, lane, .. } = &nodes[src.node].op
+        {
+            notes = self.timeline.notes(module, lane)?.iter().map(|a| self.sample_note(a)).filter(|n| n.end > n.start).collect();
+        }
+        let params = info.params.iter().zip(it).filter(|(_, i)| !matches!(i, Input::Unset)).map(|(p, i)| (p.id, i.clone(), None)).collect();
+        Ok(PluginNode { name: n.name.clone(), inst, audio_in, notes, next: 0, playing: vec![], note_ids: 0, params })
     }
 
     fn kernel(&mut self, n: &FNode, id: &str, channels: u8, inputs: &[Input]) -> Result<KernelNode> {
@@ -254,6 +385,11 @@ impl<T> WasmContext<T> for wasmtime::Result<T> {
     }
 }
 
+/// Where a named plugin state is stored in a project's `assets/` folder.
+pub fn plugin_state_path(assets: &std::path::Path, name: &str) -> std::path::PathBuf {
+    assets.join("plugin-state").join(format!("{name}.bin"))
+}
+
 fn floats(data: &mut [u8], ptr: usize, len: usize) -> &mut [f32] {
     bytemuck::cast_slice_mut(&mut data[ptr..ptr + len * 4])
 }
@@ -277,6 +413,7 @@ impl Graph {
                         }
                     }
                 }
+                Exec::Audio(lane) => lane.fill(&mut out[0], BLOCK, seg.off, b.start + seg.off as u64, seg.n),
                 Exec::Notes | Exec::Const(_) => {}
                 Exec::Time(TimeOf::Beats) => out[0][seg.range(0)].copy_from_slice(&b.beats[seg.off..seg.off + n]),
                 Exec::Time(TimeOf::Seconds) => out[0][seg.range(0)].copy_from_slice(&b.seconds[seg.off..seg.off + n]),
@@ -307,6 +444,7 @@ impl Graph {
                     }
                 }
                 Exec::Poly(p) => p.process(store, b, bufs, &mut out[0])?,
+                Exec::Plugin(p) => p.process(b, bufs, &mut out[0])?,
                 Exec::Feedback { ring, .. } => {
                     for c in 0..out[0].len() / BLOCK {
                         for f in 0..n {
@@ -361,6 +499,7 @@ impl Graph {
         for e in &mut self.exec {
             match e {
                 Exec::Kernel(k) => k.reset.call(&mut *store, ())?,
+                Exec::Plugin(p) => p.reset()?,
                 Exec::Feedback { ring, .. } => ring.fill(0.0),
                 Exec::Poly(p) => {
                     p.next = 0;
@@ -495,12 +634,22 @@ pub struct Renderer {
 }
 
 impl Renderer {
+    /// A renderer for a project: like [`Self::new`], with access to the project's
+    /// assets (plugin state).
+    pub fn for_project(flat: &Flat, project: &Project, packages: &PackageSet, sample_rate: u32) -> Result<Renderer> {
+        Renderer::build(flat, &project.timeline, packages, sample_rate, Some(&project.dir.join("assets")))
+    }
+
     pub fn new(flat: &Flat, timeline: &Timeline, packages: &PackageSet, sample_rate: u32) -> Result<Renderer> {
+        Renderer::build(flat, timeline, packages, sample_rate, None)
+    }
+
+    fn build(flat: &Flat, timeline: &Timeline, packages: &PackageSet, sample_rate: u32, assets: Option<&std::path::Path>) -> Result<Renderer> {
         let limits = StoreLimitsBuilder::new().memory_size(KERNEL_MEMORY).instances(1_000_000).memories(1_000_000).tables(1_000_000).build();
         let mut store = Store::new(&packages.engine, limits);
         store.limiter(|l| l);
         let tempo = timeline.tempo()?;
-        let graph = Builder { store: &mut store, packages, timeline, tempo: &tempo, sample_rate: sample_rate as f64 }.graph(&flat.nodes, &flat.order, false)?;
+        let graph = Builder { store: &mut store, packages, timeline, tempo: &tempo, sample_rate: sample_rate as f64, assets, audio: audio::Assets::new(assets) }.graph(&flat.nodes, &flat.order, false)?;
         Ok(Renderer {
             store,
             graph,
@@ -528,6 +677,7 @@ impl Renderer {
             seconds: [0.0; BLOCK],
             beats64: [0.0; BLOCK],
             sample_rate: self.sample_rate,
+            bpm: self.tempo.bpm_at(self.tempo.beat_at(self.next_block as f64 / self.sample_rate)),
             strict: self.strict,
         };
         for f in 0..BLOCK {

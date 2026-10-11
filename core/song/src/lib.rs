@@ -142,6 +142,12 @@ impl TempoMap {
         s.beat + (seconds - at) * s.bpm / 60.0
     }
 
+    /// Tempo at a beat.
+    pub fn bpm_at(&self, beat: f64) -> f64 {
+        let i = self.segs.partition_point(|(s, _)| s.beat <= beat).saturating_sub(1);
+        self.segs[i].0.bpm
+    }
+
     pub fn segments(&self) -> Vec<TempoSegment> {
         self.segs.iter().map(|(s, _)| *s).collect()
     }
@@ -230,6 +236,39 @@ pub struct ControlClip {
     pub points: Vec<(f64, f64)>,
 }
 
+/// A clip on an audio lane: part of an asset, placed on the timeline.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub struct AudioClip {
+    /// Position and length on the timeline, in beats.
+    pub start: f64,
+    pub length: f64,
+    /// A file in the project's `assets/` folder (WAV).
+    pub asset: String,
+    /// Where in the asset the clip starts, in seconds.
+    #[serde(default)]
+    pub offset: f64,
+    #[serde(default)]
+    pub gain_db: f64,
+    /// Fade lengths in seconds.
+    #[serde(default)]
+    pub fade_in: f64,
+    #[serde(default)]
+    pub fade_out: f64,
+    /// Play the clip backwards (the audio as placed, reversed).
+    #[serde(default)]
+    pub reverse: bool,
+    /// Transpose in semitones. Without warp markers this is varispeed (faster and
+    /// higher together); with warp markers, timing follows the markers and only the
+    /// pitch changes.
+    #[serde(default)]
+    pub pitch: f64,
+    /// Warp markers `[source_seconds, beat]`, beats relative to the clip start. The
+    /// audio between markers is time-stretched (keeping its pitch) so each marked
+    /// moment lands on its beat, following the tempo map.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warp: Vec<(f64, f64)>,
+}
+
 /// A note in song time.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AbsNote {
@@ -301,6 +340,25 @@ impl Timeline {
         }
         out.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.pitch.total_cmp(&b.pitch)));
         Ok(out)
+    }
+
+    /// The clips of an audio lane, sorted by start, with warp markers sorted.
+    pub fn audio(&self, module: &str, lane: &str) -> Result<Vec<AudioClip>> {
+        let mut clips = self.clips::<AudioClip>(module, lane)?;
+        for c in &mut clips {
+            if c.length <= 0.0 || c.offset < 0.0 || c.fade_in < 0.0 || c.fade_out < 0.0 {
+                bail!("clip at beat {}: length must be positive, and offset and fades can't be negative", c.start);
+            }
+            if c.asset.contains("..") || Path::new(&c.asset).is_absolute() {
+                bail!("clip at beat {}: assets are files inside the project's assets/ folder, not `{}`", c.start, c.asset);
+            }
+            c.warp.sort_by(|a, b| a.1.total_cmp(&b.1));
+            if c.warp.windows(2).any(|w| w[1].0 <= w[0].0 || w[1].1 <= w[0].1) {
+                bail!("clip at beat {}: warp markers must move forward in both source time and beats", c.start);
+            }
+        }
+        clips.sort_by(|a, b| a.start.total_cmp(&b.start));
+        Ok(clips)
     }
 
     pub fn control(&self, module: &str, lane: &str) -> Result<ControlLane> {
@@ -401,6 +459,23 @@ mod tests {
         assert_eq!(lane.value_at(5.0, 9.0), 1.0);
         assert_eq!(lane.value_at(7.0, 9.0), 5.0);
         assert_eq!(lane.value_at(8.0, 9.0), 9.0);
+    }
+
+    #[test]
+    fn audio_clips_parse_with_defaults_and_validate() {
+        let mut t = Timeline::default();
+        let file = |v: serde_json::Value| (PathBuf::from("x.json"), v);
+        t.files.insert(("vox".into(), "takes".into()), file(serde_json::json!({"clips": [
+            {"start": 4, "length": 2, "asset": "vox.wav", "warp": [[1.0, 1], [0.0, 0]]},
+            {"start": 0, "length": 1, "asset": "vox.wav", "reverse": true, "pitch": -12}]})));
+        let c = t.audio("Vox", "takes").unwrap();
+        assert_eq!(c[0].start, 0.0);
+        assert!(c[0].reverse && c[0].pitch == -12.0 && c[0].gain_db == 0.0);
+        assert_eq!(c[1].warp, vec![(0.0, 0.0), (1.0, 1.0)]);
+        t.files.insert(("vox".into(), "bad".into()), file(serde_json::json!({"clips": [{"start": 0, "length": 1, "asset": "../secret.wav"}]})));
+        assert!(t.audio("Vox", "bad").is_err());
+        t.files.insert(("vox".into(), "bad".into()), file(serde_json::json!({"clips": [{"start": 0, "length": 1, "asset": "a.wav", "warp": [[0, 0], [1, 0]]}]})));
+        assert!(t.audio("Vox", "bad").is_err());
     }
 
     #[test]

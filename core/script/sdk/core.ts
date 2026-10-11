@@ -175,6 +175,30 @@ export function kernel<K = unknown>(id: string, inputs: Record<string, Value | u
 }
 
 /**
+ * A hosted plugin (CLAP), e.g. `plugin("clap:org.surge-synth-team.surge-xt", { notes, state: "lead" })`.
+ * Inputs are `in` (audio), `notes` (a notes lane) and any parameter by its port name
+ * (`m2 plugins <id>` lists them). `state` names a saved state in `assets/plugin-state/`.
+ */
+export function plugin(id: string, inputs: { state?: string; [port: string]: Value | string | undefined } = {}): KernelNode<AudioKind> {
+  const scope = need(`plugin("${id}")`);
+  const ins: Record<string, string> = {};
+  let state: string | undefined;
+  for (const [k, v] of Object.entries(inputs)) {
+    if (v === undefined) continue;
+    if (k === "state") {
+      if (typeof v !== "string") throw new Error(`plugin("${id}"): state must be the name of a saved state`);
+      state = v;
+    } else {
+      if (typeof v === "string") throw new Error(`plugin("${id}") input "${k}": expected a signal or a number, got a string`);
+      ins[k] = ref(v, `${id} input "${k}"`);
+    }
+  }
+  const op: Record<string, unknown> = { op: "plugin", plugin: id, inputs: ins };
+  if (state !== undefined) op.state = state;
+  return new KernelNode<AudioKind>(push(scope, op), scope);
+}
+
+/**
  * Run `voice` once per sounding note and sum the results. Inside the voice, `note`
  * holds that note's pitch, gate and velocity, and every signal from outside is
  * still readable.
@@ -239,6 +263,8 @@ export type Ctx = {
     control<U extends Unit>(id: string, unit: U, fallback?: number | Quantity<U>): Control<U>;
     /** A 0..1 lane that is 0 where no clip is. Use it to switch behaviour on and off over time. */
     mask(id: string): Mask;
+    /** Audio clips from the timeline (stereo unless `channels` is 1). */
+    audio(id: string, channels?: 1 | 2): Audio;
   };
   time: { readonly beats: Control<"beats">; readonly seconds: Control<"seconds"> };
 };
@@ -276,6 +302,10 @@ function ctxFor(m: ModuleBuild): Ctx {
       mask(id) {
         declareLane(m, id, "control<unit01>", 0);
         return laneNode(id, "unit01");
+      },
+      audio(id, channels = 2) {
+        declareLane(m, id, `audio<${channels}>`);
+        return laneNode(id);
       },
     },
     time: {

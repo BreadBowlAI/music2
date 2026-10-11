@@ -54,11 +54,13 @@ impl Package {
     }
 }
 
-/// Every package a song can use, and the kernels they declare.
+/// Every package a song can use, the kernels they declare, and the hosted plugins
+/// a song has asked about.
 pub struct PackageSet {
     pub engine: Engine,
     packages: BTreeMap<String, Package>,
     kernels: HashMap<String, (KernelSig, String)>,
+    plugins: HashMap<String, (KernelSig, m2_plugins::Info)>,
 }
 
 /// The engine every kernel runs in.
@@ -76,7 +78,7 @@ pub fn engine() -> Engine {
 
 impl Default for PackageSet {
     fn default() -> Self {
-        PackageSet { engine: engine(), packages: BTreeMap::new(), kernels: HashMap::new() }
+        PackageSet { engine: engine(), packages: BTreeMap::new(), kernels: HashMap::new(), plugins: HashMap::new() }
     }
 }
 
@@ -122,6 +124,28 @@ impl PackageSet {
         self.kernels.values().map(|(s, _)| s)
     }
 
+    /// Look up hosted plugins by graph id (`clap:<plugin id>`), so the checker can type
+    /// them. Each is instantiated once to read its ports and parameters.
+    pub fn describe_plugins<'a>(&mut self, ids: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+        let mut errors = vec![];
+        for id in ids {
+            if self.plugins.contains_key(id) {
+                continue;
+            }
+            match describe_plugin(id) {
+                Ok(d) => {
+                    self.plugins.insert(id.to_string(), d);
+                }
+                Err(e) => errors.push(format!("{e:#}")),
+            }
+        }
+        errors
+    }
+
+    pub fn plugin_info(&self, id: &str) -> Option<&m2_plugins::Info> {
+        self.plugins.get(id).map(|(_, i)| i)
+    }
+
     /// The compiled module holding kernel `id`, and the kernel's export prefix.
     pub(crate) fn module_for<'a>(&'a self, id: &'a str) -> Option<(&'a Module, &'a str)> {
         let (_, pkg) = self.kernels.get(id)?;
@@ -134,6 +158,38 @@ impl Kernels for PackageSet {
     fn kernel(&self, id: &str) -> Option<&KernelSig> {
         self.kernels.get(id).map(|(s, _)| s)
     }
+
+    fn plugin(&self, id: &str) -> Option<&KernelSig> {
+        self.plugins.get(id).map(|(s, _)| s)
+    }
+}
+
+/// A plugin as typed ports: `in: audio<n>`, `notes: events<note>`, one control per
+/// parameter (in the plugin's own units, as `scalar`, optional), and `out: audio<n>`.
+fn describe_plugin(id: &str) -> Result<(KernelSig, m2_plugins::Info)> {
+    let Some(clap_id) = id.strip_prefix("clap:") else { bail!("plugin ids start with `clap:`, not `{id}`") };
+    let found = m2_plugins::find(clap_id)?;
+    let info = m2_plugins::Instance::new(&found, 48_000.0, 128)?.info.clone();
+    let mut inputs = vec![];
+    if let Some(c) = info.audio_in {
+        inputs.push(m2_ir::PortSig { name: "in".into(), kind: m2_ir::PortKind::Audio(Some(c.clamp(1, 2) as u8)), default: None });
+    }
+    if info.note_in {
+        inputs.push(m2_ir::PortSig { name: "notes".into(), kind: m2_ir::PortKind::Events(m2_ir::EventType::Note), default: None });
+    }
+    for name in m2_plugins::param_port_names(&info.params) {
+        // No default: an unconnected parameter keeps the plugin's own value.
+        inputs.push(m2_ir::PortSig { name, kind: m2_ir::PortKind::Control(Some(m2_ir::Unit::Scalar)), default: None });
+    }
+    let out = info.audio_out.context("plugins without an audio output aren't supported")?.clamp(1, 2) as u8;
+    let sig = KernelSig {
+        id: id.to_string(),
+        description: format!("{} by {}", info.found.name, info.found.vendor),
+        inputs,
+        outputs: vec![m2_ir::PortSig { name: "out".into(), kind: m2_ir::PortKind::Audio(Some(out)), default: None }],
+        latency: info.latency,
+    };
+    Ok((sig, info))
 }
 
 /// The kernel ABI version this runtime speaks (see `m2-kernel`).

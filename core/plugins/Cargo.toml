@@ -1,0 +1,11 @@
+[package]
+name = "m2-plugins"
+description = "Hosts CLAP plugins as music2 graph nodes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap-sys = "0.5"
+libloading = "0.8"

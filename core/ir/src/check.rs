@@ -53,6 +53,8 @@ pub enum Input {
     Port { src: PortRef, src_channels: u8, channels: u8 },
     /// Unconnected (the port's default) or connected to a constant.
     Const(f64),
+    /// Unconnected plugin parameter: the plugin keeps its own value (from its saved state).
+    Unset,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -62,6 +64,8 @@ pub enum FOp {
     Const(f64),
     /// `inputs` are in the kernel's declared order; `channels` is passed to `init`.
     Kernel { kernel: String, channels: u8, inputs: Vec<Input> },
+    /// A hosted plugin; `inputs` are in its signature's order (`in`, `notes`, parameters).
+    Plugin { plugin: String, inputs: Vec<Input>, channels: u8, state: Option<String> },
     /// `lane` is the notes lane node feeding the voices.
     Poly { lane: usize, voices: u32, voice: Box<Voice>, channels: u8 },
     Feedback { input: PortRef, channels: u8 },
@@ -75,11 +79,11 @@ impl FOp {
     /// Nodes in the same graph this op reads in the current block.
     pub fn deps(&self) -> Vec<usize> {
         match self {
-            FOp::Kernel { inputs, .. } => inputs
+            FOp::Kernel { inputs, .. } | FOp::Plugin { inputs, .. } => inputs
                 .iter()
                 .filter_map(|i| match i {
                     Input::Port { src, .. } => Some(src.node),
-                    Input::Const(_) => None,
+                    Input::Const(_) | Input::Unset => None,
                 })
                 .collect(),
             FOp::Poly { lane, voice, .. } => {
@@ -158,9 +162,6 @@ impl<'a> Scope<'a> for Song {
             let have: Vec<&str> = m.lanes.iter().map(|l| l.id.as_str()).collect();
             format!("no lane `{lane}` declared (lanes: {})", if have.is_empty() { "none".into() } else { have.join(", ") })
         })?;
-        if matches!(d.kind, Kind::Audio(_)) {
-            return Err(format!("lane `{lane}`: audio lanes aren't supported yet"));
-        }
         let op = FOp::Lane { module: m.name.clone(), lane: lane.to_string(), kind: d.kind, default: d.default.unwrap_or(0.0) };
         Ok((op, d.kind))
     }
@@ -348,9 +349,12 @@ impl<'a> Checker<'a> {
     }
 
     fn port_index(&self, node: &Node, port: &str) -> Result<usize, String> {
-        if let Op::Kernel { kernel, .. } = &node.op
-            && let Some(sig) = self.kernels.kernel(kernel)
-        {
+        let sig = match &node.op {
+            Op::Kernel { kernel, .. } => self.kernels.kernel(kernel).map(|s| (kernel, s)),
+            Op::Plugin { plugin, .. } => self.kernels.plugin(plugin).map(|s| (plugin, s)),
+            _ => None,
+        };
+        if let Some((kernel, sig)) = sig {
             return sig.output_index(port).ok_or_else(|| {
                 let have: Vec<&str> = sig.outputs.iter().map(|p| p.name.as_str()).collect();
                 format!("`{kernel}` has no output `{port}` (outputs: {})", have.join(", "))
@@ -369,7 +373,11 @@ impl<'a> Checker<'a> {
         let mut res = Vec::with_capacity(n);
         for &(m, node) in items {
             let r = match &node.op {
-                Op::Kernel { inputs, .. } => {
+                Op::Plugin { .. } if scope.in_voice() => {
+                    self.diags.push(diag(m, Some(node), "plugins can't be inside poly: an instrument plugin plays all the notes itself"));
+                    Res::Broken
+                }
+                Op::Kernel { inputs, .. } | Op::Plugin { inputs, .. } => {
                     let mut v = vec![];
                     for (port, r) in inputs {
                         match scope.resolve(self, m, r) {
@@ -444,6 +452,7 @@ impl<'a> Checker<'a> {
                     let (m, node) = items[i];
                     let what = match &node.op {
                         Op::Kernel { kernel, .. } => format!(" ({kernel})"),
+                        Op::Plugin { plugin, .. } => format!(" ({plugin})"),
                         op => format!(" ({})", op.name()),
                     };
                     format!("{}/{}{}", m.name, node.id, what)
@@ -474,9 +483,12 @@ impl<'a> Checker<'a> {
                     Ok((FOp::Time(*of), vec![Kind::Control(Some(u))]))
                 }
                 (Op::Const { value, unit }, _) => Ok((FOp::Const(*value), vec![Kind::Control(*unit)])),
-                (Op::Kernel { kernel, .. }, Res::Kernel(conns)) => {
-                    let Some(sig) = self.kernels.kernel(kernel) else {
-                        self.diags.push(diag(m, Some(node), format!("unknown kernel `{kernel}`")));
+                (Op::Kernel { kernel, .. } | Op::Plugin { plugin: kernel, .. }, Res::Kernel(conns)) => {
+                    let is_plugin = matches!(node.op, Op::Plugin { .. });
+                    let sig = if is_plugin { self.kernels.plugin(kernel) } else { self.kernels.kernel(kernel) };
+                    let Some(sig) = sig else {
+                        let what = if is_plugin { "plugin (is it installed?)" } else { "kernel" };
+                        self.diags.push(diag(m, Some(node), format!("unknown {what} `{kernel}`")));
                         continue;
                     };
                     if sig.latency > 0 {
@@ -497,11 +509,15 @@ impl<'a> Checker<'a> {
                         continue;
                     }
                     let unknown: Vec<&str> = conns.iter().map(|(p, _)| p.as_str()).filter(|p| !sig.inputs.iter().any(|s| s.name == *p)).collect();
-                    if !unknown.is_empty() {
+                    let notes_not_lane = is_plugin
+                        && typed_conns.get("notes").is_some_and(|(p, _)| !matches!(ops.get(p.node), Some(Some(FOp::Lane { .. }))));
+                    if notes_not_lane {
+                        Err("a plugin's notes must come straight from a notes lane".into())
+                    } else if !unknown.is_empty() {
                         let have: Vec<&str> = sig.inputs.iter().map(|p| p.name.as_str()).collect();
                         Err(format!("`{kernel}` has no input `{}` (inputs: {})", unknown.join("`, `"), have.join(", ")))
                     } else {
-                        type_kernel(sig, &typed_conns).map(|(mut inputs, channels, outs)| {
+                        type_kernel(sig, &typed_conns, is_plugin).map(|(mut inputs, channels, outs)| {
                             for inp in &mut inputs {
                                 if let Input::Port { src, .. } = inp
                                     && let Some(Some(FOp::Const(v))) = ops.get(src.node)
@@ -509,7 +525,11 @@ impl<'a> Checker<'a> {
                                     *inp = Input::Const(*v);
                                 }
                             }
-                            (FOp::Kernel { kernel: kernel.clone(), channels, inputs }, outs)
+                            let op = match &node.op {
+                                Op::Plugin { state, .. } => FOp::Plugin { plugin: kernel.clone(), inputs, channels: outs.first().map_or(2, |k| k.channels()), state: state.clone() },
+                                _ => FOp::Kernel { kernel: kernel.clone(), channels, inputs },
+                            };
+                            (op, outs)
                         })
                     }
                 }
@@ -605,7 +625,7 @@ fn body_refs(body: &Body) -> Vec<&str> {
     let mut v = vec![body.out.as_str()];
     for n in &body.nodes {
         match &n.op {
-            Op::Kernel { inputs, .. } => v.extend(inputs.values().map(String::as_str)),
+            Op::Kernel { inputs, .. } | Op::Plugin { inputs, .. } => v.extend(inputs.values().map(String::as_str)),
             Op::Feedback { input, .. } => v.push(input),
             _ => {}
         }
@@ -684,7 +704,9 @@ fn join(a: Kind, b: Kind) -> Result<Kind, String> {
 
 /// Unify a kernel's type variables with what is connected to it.
 /// Returns the inputs in declared order, the channel count, and the output kinds.
-fn type_kernel(sig: &KernelSig, conns: &HashMap<&str, (PortRef, Kind)>) -> Result<(Vec<Input>, u8, Vec<Kind>), String> {
+/// `plugin`: the node is a hosted plugin, so `notes` may take events and unconnected
+/// parameters are left to the plugin.
+fn type_kernel(sig: &KernelSig, conns: &HashMap<&str, (PortRef, Kind)>, plugin: bool) -> Result<(Vec<Input>, u8, Vec<Kind>), String> {
     let mut any: Option<Kind> = None;
     let mut chans: Option<u8> = None;
     let mut unit: Option<Unit> = None;
@@ -693,13 +715,15 @@ fn type_kernel(sig: &KernelSig, conns: &HashMap<&str, (PortRef, Kind)>) -> Resul
         let k = match (conns.get(p.name.as_str()), p.default) {
             (Some((_, k)), _) => *k,
             (None, Some(_)) => Kind::Control(None),
+            // A plugin's unconnected inputs are silence (audio, notes) or its own value (parameters).
+            (None, None) if plugin => continue,
             (None, None) => {
                 errs.push(format!("input `{}` ({}) is not connected", p.name, p.kind));
                 continue;
             }
         };
         let mismatch = || format!("input `{}` expects {}, got {k}", p.name, p.kind);
-        if matches!(k, Kind::Events(_)) {
+        if matches!(k, Kind::Events(_)) && !(plugin && matches!(p.kind, PortKind::Events(_))) {
             errs.push(format!("input `{}`: events can't feed a kernel; play notes with poly", p.name));
             continue;
         }
@@ -756,6 +780,7 @@ fn type_kernel(sig: &KernelSig, conns: &HashMap<&str, (PortRef, Kind)>) -> Resul
                 };
                 Input::Port { src: *src, src_channels: k.channels(), channels: dst }
             }
+            None if plugin && p.default.is_none() => Input::Unset,
             None => Input::Const(p.default.unwrap_or(0.0)),
         })
         .collect();
@@ -950,8 +975,8 @@ mod tests {
         };
         let e = check(&ir(json!([{"id": "o", "op": "kernel", "kernel": "t:saw"}, {"id": "x", "op": "kernel", "kernel": "t:look", "inputs": {"in": "o"}}]), json!([])), &k).unwrap_err();
         assert!(e[0].message.contains("latency compensation"), "{}", e[0]);
-        let e = check(&ir(json!([{"id": "x", "op": "lane", "lane": "vox"}]), json!([{"id": "vox", "kind": "audio<2>"}])), &k).unwrap_err();
-        assert!(e[0].message.contains("audio lanes"), "{}", e[0]);
+        // Audio lanes are supported: a lane can be the song's output.
+        assert!(check(&ir(json!([{"id": "x", "op": "lane", "lane": "vox"}]), json!([{"id": "vox", "kind": "audio<2>"}])), &k).is_ok());
         let e = check(
             &ir(json!([{"id": "n", "op": "lane", "lane": "n"}, {"id": "x", "op": "kernel", "kernel": "t:add", "inputs": {"a": "n", "b": "n"}}]), json!([{"id": "n", "kind": "events<note>"}])),
             &k,

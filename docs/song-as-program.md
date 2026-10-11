@@ -175,7 +175,7 @@ This is the whole core. If something isn't listed here, it lives in a package or
 
 ### 1. Graph IR: eight ops
 
-The IR is the compiled form of a song: a JSON graph of nodes. Every graph, however it was authored, compiles down to these ops (seven are implemented; `plugin` is next):
+The IR is the compiled form of a song: a JSON graph of nodes. Every graph, however it was authored, compiles down to these eight ops:
 
 | Op | Meaning |
 |---|---|
@@ -624,9 +624,38 @@ Agents can't listen, so they need another way to judge the result. `render` with
 - Inside `poly`, a voice can read any signal from its module. Lanes, imports and `time` are always created at module level, so voices never contain them.
 - The sandbox deletes `Date`, makes `Math.random` throw, can only import project files, `@m2/core` and installed packages, and stops a build after 10 s or 256 MB.
 
+**Experiment: hosted plugins (CLAP), done.** `core/plugins` (`m2-plugins`) hosts CLAP plugins, tested with Surge XT, Surge XT Effects and Airwindows Consolidated:
+- A plugin is a graph node: `plugin("clap:<id>", { in, notes, <param>: value, state: "name" })`.
+  - Notes reach it at their exact sample offsets, with tuning for pitches between keys.
+  - Parameters are typed ports that can be automated from lanes, sampled every 16 samples.
+  - Song position and tempo are passed in as transport.
+- **An unconnected parameter keeps the plugin's own value** (a new input form, `Unset`). Without it, connecting nothing would have reset every knob of a loaded patch.
+- **State is an asset:** `m2 plugin-state` saves it, and `check` fails if a referenced state is missing. Save and load round-trip exactly.
+- `m2 plugins` lists installed plugins; `m2 plugins <id>` shows each parameter's port, range and default.
+- **Plugins can't be inside `poly`:** an instrument plugin plays all the notes itself.
+
+What it taught:
+- **Purity is per plugin.** Surge XT renders differently every run (random oscillator phases), while Airwindows is bit-identical. The host could detect this by rendering twice and comparing, and bouncing is the answer for impure ones.
+- **Much of a plugin's sound lives in its state,** not its parameters. Surge's default patch has the filter off; Airwindows chooses its algorithm in state. Code should be able to name stepped values (`a_filter_1_type: "LP 24 dB"`); `value_text` exists in the host for this.
+- **Parameters are normalised 0..1,** so the `scalar` unit is right but says little. Display text per parameter is the useful information.
+
+Not done yet: running plugins out of process, plugin editor windows, and latency compensation (plugins that report latency are rejected for now).
+
+**Experiment: audio first, done.**
+- **Audio lanes:** `lane.audio("clips")`. A clip carries an asset, offset, gain, fades, reverse and pitch, plus warp markers `[source_seconds, beat]`.
+- **Pitch** without warp markers is varispeed; with them, timing follows the markers and only pitch changes.
+- **Rendering:** clips are rendered once when the renderer is built, so playback is a copy, and seeking and block-size invariance hold exactly.
+- **Warping** uses WSOLA with any time map. A sine stretched to half or double speed keeps its frequency exactly, with no level ripple. Assets at other sample rates are resampled (cubic).
+- **Bounce:** `m2 bounce <project> <name> --track T [--place Track.lane@beat]` renders any export to a 32-bit float asset, with a provenance file that records whether it's reproducible (no plugins).
+  - A bounce placed back as a clip plays bit for bit like the original.
+  - `examples/resample` runs the whole loop: bounce a synth, then chop, reverse, pitch and stretch it.
+
+What it taught:
+- **Pre-rendering clips is simple and exact,** but costs memory for long sessions. The realtime engine will stream from a disk cache keyed by the clip's content.
+- **Stretching is in the core runtime for now** (`core/runtime/src/audio.rs`). Moving it into a package, as the design wants, needs an *offline kernel* ABI: whole buffers in, whole buffers out, with a time map. That's a small, well-defined extension.
+
 **Not built yet** (each belongs to a later milestone):
 - latency compensation (rejected at check time until then)
-- audio lanes (rejected at check time)
 - sections
 - stable ids from source positions (ids are counters until hot swap needs them)
 - per-kernel CPU budgets
@@ -641,8 +670,8 @@ New code lives alongside the current crates in this repo. The old engine keeps r
 2. **Correctness.** Done: a fixed block grid, exact note starts, voice tails via `k_active`, seek by replay, strict NaN errors, and `check` meaning playable.
 3. **Three experiments, before building the session,** because each shapes the session and runtime:
    - **Code ↔ graph editing:** open `tracks/bass.ts` as a graph; drag a knob, rewire a cable, add and delete a node, automate a parameter; every change lands as a minimal, compiler-verified code edit (see the brief).
-   - **A hosted plugin:** one open-source CLAP instrument and one CLAP effect as graph nodes, with state saved as an asset and latency reported.
-   - **Audio first:** an audio clip with warp markers through a std stretch kernel, plus bounce-to-clip.
+   - **A hosted plugin:** done (see Implementation status).
+   - **Audio first:** done (see Implementation status); the stretch kernel still needs to move into a package.
 4. **The editing session** (`m2-session`):
    - stable ids for tracks, lanes, clips and notes
    - project revisions

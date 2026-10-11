@@ -88,6 +88,10 @@ impl KernelSig {
 /// Where the checker looks up kernels. Implemented by the runtime's package set.
 pub trait Kernels {
     fn kernel(&self, id: &str) -> Option<&KernelSig>;
+    /// The signature of an installed plugin, as ports: `in`, `notes`, parameters, `out`.
+    fn plugin(&self, _id: &str) -> Option<&KernelSig> {
+        None
+    }
 }
 
 impl Kernels for std::collections::HashMap<String, KernelSig> {

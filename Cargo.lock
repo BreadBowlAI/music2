@@ -466,6 +466,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "clap-sys"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a76abbdb2907f6fd97fb6bc0b7be96b77d328f2dd9669d1075cc03369ed22154"
+
+[[package]]
 name = "cobs"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2314,7 +2320,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e9ec52138abedcc58dc17a7c6c0c00a2bdb4f3427c7f63fa97fd0d859155caf"
 dependencies = [
  "gtk-sys",
- "libloading",
+ "libloading 0.7.4",
  "once_cell",
 ]
 
@@ -2341,6 +2347,16 @@ checksum = "b67380fd3b2fbe7527a606e18729d21c6f3951633d0500574c4dc22d2d638b9f"
 dependencies = [
  "cfg-if",
  "winapi",
+]
+
+[[package]]
+name = "libloading"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
+dependencies = [
+ "cfg-if",
+ "windows-link",
 ]
 
 [[package]]
@@ -2398,6 +2414,7 @@ dependencies = [
  "anyhow",
  "hound",
  "m2-ir",
+ "m2-plugins",
  "m2-runtime",
  "m2-script",
  "m2-session",
@@ -2461,6 +2478,15 @@ name = "m2-kernel"
 version = "0.1.0"
 
 [[package]]
+name = "m2-plugins"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap-sys",
+ "libloading 0.8.9",
+]
+
+[[package]]
 name = "m2-project"
 version = "0.1.0"
 dependencies = [
@@ -2488,8 +2514,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytemuck",
+ "hound",
  "m2-ir",
  "m2-kernel",
+ "m2-plugins",
  "m2-song",
  "m2-std-kernels",
  "serde",
@@ -2534,6 +2562,7 @@ dependencies = [
 name = "m2-session"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "m2-ir",
  "m2-runtime",
  "m2-script",
