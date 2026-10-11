@@ -1,0 +1,22 @@
+[package]
+name = "m2-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+m2-theory.workspace = true
+m2-project.workspace = true
+m2-graph.workspace = true
+m2-render.workspace = true
+m2-engine.workspace = true
+m2-audio-io.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+parking_lot.workspace = true
+axum.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+open.workspace = true
+dirs.workspace = true

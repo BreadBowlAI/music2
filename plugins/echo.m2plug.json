@@ -1,0 +1,13 @@
+{
+  "m2plug": "0.1", "id": "m2/echo", "name": "Echo", "kind": "effect",
+  "description": "Tempo-synced ping-pong delay. Time goes from a 16th note to a whole bar.",
+  "tags": ["delay", "echo"],
+  "macros": [
+    {"id": "time", "name": "Time", "default": 0.18, "description": "0 = 1/16 note, 1 = one bar"},
+    {"id": "feedback", "name": "Repeats", "default": 0.4},
+    {"id": "mix", "name": "Amount", "default": 0.3}
+  ],
+  "graph": {"nodes": [
+    {"id": "dly", "type": "delay", "params": {"time": {"macro": "time", "from": 0.25, "to": 4, "curve": "exp"}, "feedback": {"macro": "feedback", "from": 0, "to": 0.85}, "mix": {"macro": "mix", "from": 0, "to": 0.8}, "pingpong": 1}, "inputs": {"in": "in"}}
+  ], "out": "dly"}
+}

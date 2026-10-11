@@ -1,0 +1,12 @@
+{
+  "m2plug": "0.1", "id": "m2/space", "name": "Space", "kind": "effect",
+  "description": "Reverb. Puts the sound in a room, a hall, or a cathedral.",
+  "tags": ["reverb", "space"],
+  "macros": [
+    {"id": "size", "name": "Size", "default": 0.6},
+    {"id": "mix", "name": "Amount", "default": 0.35}
+  ],
+  "graph": {"nodes": [
+    {"id": "verb", "type": "reverb", "params": {"size": {"macro": "size", "from": 0.2, "to": 0.97}, "damp": 0.45, "mix": {"macro": "mix", "from": 0, "to": 0.8}}, "inputs": {"in": "in"}}
+  ], "out": "verb"}
+}

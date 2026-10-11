@@ -1,0 +1,13 @@
+{
+  "m2plug": "0.1", "id": "m2/master", "name": "Master", "kind": "effect",
+  "description": "Gentle master chain: low cut, glue compression, and a limiter.",
+  "tags": ["master", "mastering"],
+  "macros": [
+    {"id": "loudness", "name": "Loudness", "default": 0.4}
+  ],
+  "graph": {"nodes": [
+    {"id": "eq", "type": "eq", "params": {"low_cut": 28}, "inputs": {"in": "in"}},
+    {"id": "comp", "type": "comp", "params": {"threshold": -16, "ratio": 2, "attack": 0.02, "release": 0.2, "makeup": {"macro": "loudness", "from": 0, "to": 8}}, "inputs": {"in": "eq"}},
+    {"id": "lim", "type": "limit", "params": {"ceiling": -0.8}, "inputs": {"in": "comp"}}
+  ], "out": "lim"}
+}

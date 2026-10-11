@@ -1,0 +1,83 @@
+{
+  "m2plug": "0.1",
+  "id": "m2/drums",
+  "name": "Pop Kit",
+  "kind": "kit",
+  "description": "Synthesized dance-pop drum kit. Kick 36, snare 38, clap 39, hat 42, open hat 46, crash 49, tom 45, shaker 70 (General MIDI).",
+  "tags": ["drums", "kit", "dance", "pop"],
+  "macros": [
+    {"id": "punch", "name": "Kick length", "default": 0.4},
+    {"id": "snap", "name": "Snap", "default": 0.5, "description": "Snare and clap length"},
+    {"id": "brightness", "name": "Hat brightness", "default": 0.5}
+  ],
+  "pads": [
+    {"pitch": 36, "name": "Kick", "voice": {"nodes": [
+      {"id": "penv", "type": "env", "params": {"a": 0.0005, "d": 0.045, "s": 0, "r": 0.04}},
+      {"id": "pf", "type": "map", "params": {"mul": 170, "add": 47}, "inputs": {"in": "penv"}},
+      {"id": "body", "type": "osc", "params": {"wave": "sine"}, "inputs": {"freq": "pf"}},
+      {"id": "aenv", "type": "env", "params": {"a": 0.0005, "d": {"macro": "punch", "from": 0.2, "to": 0.8}, "s": 0, "r": 0.05}},
+      {"id": "amp", "type": "vca", "params": {"gain": 1.0, "velocity": 0.5}, "inputs": {"in": "body", "cv": "aenv"}},
+      {"id": "noise", "type": "noise", "params": {"level": 0.6}},
+      {"id": "cenv", "type": "env", "params": {"a": 0.0002, "d": 0.006, "s": 0, "r": 0.005}},
+      {"id": "click", "type": "vca", "params": {"gain": 0.35}, "inputs": {"in": "noise", "cv": "cenv"}},
+      {"id": "out", "type": "drive", "params": {"drive": 4, "mix": 0.6}, "inputs": {"in": ["amp", "click"]}}
+    ], "out": "out"}},
+    {"pitch": 38, "name": "Snare", "voice": {"nodes": [
+      {"id": "tone", "type": "osc", "params": {"wave": "triangle", "fixed": 190}},
+      {"id": "tenv", "type": "env", "params": {"a": 0.0005, "d": 0.08, "s": 0, "r": 0.05}},
+      {"id": "body", "type": "vca", "params": {"gain": 0.6}, "inputs": {"in": "tone", "cv": "tenv"}},
+      {"id": "noise", "type": "noise"},
+      {"id": "hp", "type": "filter", "params": {"mode": "hp", "cutoff": 1500, "q": 0.7}, "inputs": {"in": "noise"}},
+      {"id": "nenv", "type": "env", "params": {"a": 0.0005, "d": {"macro": "snap", "from": 0.08, "to": 0.3}, "s": 0, "r": 0.05}},
+      {"id": "sn", "type": "vca", "params": {"gain": 0.55, "velocity": 0.6}, "inputs": {"in": "hp", "cv": "nenv"}},
+      {"id": "out", "type": "mix", "inputs": {"in": ["body", "sn"]}}
+    ], "out": "out"}},
+    {"pitch": 39, "name": "Clap", "voice": {"nodes": [
+      {"id": "noise", "type": "noise"},
+      {"id": "bp", "type": "filter", "params": {"mode": "bp", "cutoff": 1150, "q": 1.3}, "inputs": {"in": "noise"}},
+      {"id": "flutter", "type": "lfo", "params": {"wave": "square", "rate": 90, "depth": 0.5, "offset": 0.5}},
+      {"id": "fenv", "type": "env", "params": {"a": 0.0005, "d": 0.03, "s": 0, "r": 0.02}},
+      {"id": "burst", "type": "vca", "inputs": {"in": "flutter", "cv": "fenv"}},
+      {"id": "tail", "type": "env", "params": {"a": 0.0005, "d": {"macro": "snap", "from": 0.1, "to": 0.35}, "s": 0, "r": 0.05}},
+      {"id": "shape", "type": "mix", "inputs": {"in": ["burst", "tail"]}},
+      {"id": "amp", "type": "vca", "params": {"gain": 1.6, "velocity": 0.6}, "inputs": {"in": "bp", "cv": "shape"}}
+    ], "out": "amp"}},
+    {"pitch": 42, "name": "Hat", "choke": 1, "voice": {"nodes": [
+      {"id": "noise", "type": "noise"},
+      {"id": "hp", "type": "filter", "params": {"mode": "hp", "cutoff": {"macro": "brightness", "from": 5000, "to": 11000, "curve": "exp"}, "q": 0.8}, "inputs": {"in": "noise"}},
+      {"id": "env", "type": "env", "params": {"a": 0.0005, "d": 0.045, "s": 0, "r": 0.02}},
+      {"id": "amp", "type": "vca", "params": {"gain": 0.45, "velocity": 0.8}, "inputs": {"in": "hp", "cv": "env"}}
+    ], "out": "amp"}},
+    {"pitch": 46, "name": "Open hat", "choke": 1, "voice": {"nodes": [
+      {"id": "noise", "type": "noise"},
+      {"id": "hp", "type": "filter", "params": {"mode": "hp", "cutoff": {"macro": "brightness", "from": 4500, "to": 9500, "curve": "exp"}, "q": 0.8}, "inputs": {"in": "noise"}},
+      {"id": "env", "type": "env", "params": {"a": 0.001, "d": 0.33, "s": 0, "r": 0.1}},
+      {"id": "amp", "type": "vca", "params": {"gain": 0.35, "velocity": 0.7}, "inputs": {"in": "hp", "cv": "env"}}
+    ], "out": "amp"}},
+    {"pitch": 49, "name": "Crash", "voice": {"nodes": [
+      {"id": "noise", "type": "noise"},
+      {"id": "hp", "type": "filter", "params": {"mode": "hp", "cutoff": 4000, "q": 0.6}, "inputs": {"in": "noise"}},
+      {"id": "env", "type": "env", "params": {"a": 0.001, "d": 1.6, "s": 0, "r": 0.3}},
+      {"id": "amp", "type": "vca", "params": {"gain": 0.28, "velocity": 0.6}, "inputs": {"in": "hp", "cv": "env"}}
+    ], "out": "amp"}},
+    {"pitch": 45, "name": "Tom", "voice": {"nodes": [
+      {"id": "penv", "type": "env", "params": {"a": 0.0005, "d": 0.09, "s": 0, "r": 0.05}},
+      {"id": "pf", "type": "map", "params": {"mul": 90, "add": 115}, "inputs": {"in": "penv"}},
+      {"id": "body", "type": "osc", "params": {"wave": "sine"}, "inputs": {"freq": "pf"}},
+      {"id": "aenv", "type": "env", "params": {"a": 0.0005, "d": 0.35, "s": 0, "r": 0.05}},
+      {"id": "amp", "type": "vca", "params": {"gain": 0.8, "velocity": 0.6}, "inputs": {"in": "body", "cv": "aenv"}}
+    ], "out": "amp"}},
+    {"pitch": 70, "name": "Shaker", "voice": {"nodes": [
+      {"id": "noise", "type": "noise"},
+      {"id": "bp", "type": "filter", "params": {"mode": "bp", "cutoff": 6000, "q": 1.4}, "inputs": {"in": "noise"}},
+      {"id": "env", "type": "env", "params": {"a": 0.008, "d": 0.06, "s": 0, "r": 0.02}},
+      {"id": "amp", "type": "vca", "params": {"gain": 0.6, "velocity": 0.8}, "inputs": {"in": "bp", "cv": "env"}}
+    ], "out": "amp"}}
+  ],
+  "post": {
+    "nodes": [
+      {"id": "glue", "type": "comp", "params": {"threshold": -14, "ratio": 3, "attack": 0.006, "release": 0.1, "makeup": 2}, "inputs": {"in": "in"}}
+    ],
+    "out": "glue"
+  }
+}

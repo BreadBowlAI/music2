@@ -1,0 +1,33 @@
+{
+  "m2plug": "0.1",
+  "id": "m2/bass",
+  "name": "Pump Bass",
+  "kind": "instrument",
+  "description": "Punchy saw + sub bass with optional grit and pump. Built for offbeat dance-pop basslines.",
+  "tags": ["bass", "sub", "dance"],
+  "polyphony": 4,
+  "macros": [
+    {"id": "tone", "name": "Tone", "default": 0.4},
+    {"id": "grit", "name": "Grit", "default": 0.25},
+    {"id": "pump", "name": "Pump", "default": 0.3}
+  ],
+  "voice": {
+    "nodes": [
+      {"id": "saw", "type": "osc", "params": {"wave": "saw", "level": 0.55}},
+      {"id": "sub", "type": "osc", "params": {"wave": "sine", "octave": -1, "level": 0.9}},
+      {"id": "fenv", "type": "env", "params": {"a": 0.002, "d": 0.18, "s": 0.2, "r": 0.1}},
+      {"id": "flt", "type": "filter", "params": {"mode": "lp", "cutoff": {"macro": "tone", "from": 120, "to": 2000, "curve": "exp"}, "q": 1.1, "mod_amount": 2.5},
+       "inputs": {"in": "saw", "mod": "fenv"}},
+      {"id": "aenv", "type": "env", "params": {"a": 0.003, "d": 0.25, "s": 0.75, "r": 0.06}},
+      {"id": "amp", "type": "vca", "params": {"gain": 0.3, "velocity": 0.4}, "inputs": {"in": ["flt", "sub"], "cv": "aenv"}}
+    ],
+    "out": "amp"
+  },
+  "post": {
+    "nodes": [
+      {"id": "dirt", "type": "drive", "params": {"drive": {"macro": "grit", "from": 0, "to": 18}, "mix": 0.8}, "inputs": {"in": "in"}},
+      {"id": "duck", "type": "pump", "params": {"depth": {"macro": "pump", "from": 0, "to": 0.8}, "release": 0.45}, "inputs": {"in": "dirt"}}
+    ],
+    "out": "duck"
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "music2",
+  "version": "0.1.0",
+  "identifier": "com.suite2.music2",
+  "build": {
+    "beforeBuildCommand": {
+      "script": "npm run build",
+      "cwd": "../../web"
+    }
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app"
+    ],
+    "category": "Music",
+    "shortDescription": "AI-native music studio",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../../web/dist/": "web/"
+    },
+    "fileAssociations": [
+      {
+        "ext": [
+          "m2song"
+        ],
+        "name": "music2 Song",
+        "description": "music2 song",
+        "role": "Editor",
+        "mimeType": "application/x-music2-song"
+      }
+    ],
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
+  }
+}

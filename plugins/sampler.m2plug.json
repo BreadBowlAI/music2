@@ -1,0 +1,23 @@
+{
+  "m2plug": "0.1",
+  "id": "m2/sampler",
+  "name": "Sampler",
+  "kind": "instrument",
+  "description": "Plays any sound across the keyboard. Generated sounds become instruments through this.",
+  "tags": ["sampler", "generated"],
+  "asset_slots": ["sample"],
+  "macros": [
+    {"id": "tone", "name": "Tone", "default": 1.0},
+    {"id": "release", "name": "Release", "default": 0.3},
+    {"id": "loop", "name": "Loop", "default": 0.0, "description": "Loop the sample while the note is held"}
+  ],
+  "voice": {
+    "nodes": [
+      {"id": "smp", "type": "sampler", "params": {"asset": "sample", "loop": {"macro": "loop", "from": 0, "to": 1}}},
+      {"id": "flt", "type": "filter", "params": {"mode": "lp", "cutoff": {"macro": "tone", "from": 300, "to": 20000, "curve": "exp"}, "q": 0.7}, "inputs": {"in": "smp"}},
+      {"id": "aenv", "type": "env", "params": {"a": 0.003, "d": 1.0, "s": 1.0, "r": {"macro": "release", "from": 0.02, "to": 2.0, "curve": "exp"}}},
+      {"id": "amp", "type": "vca", "params": {"gain": 0.8, "velocity": 0.6}, "inputs": {"in": "flt", "cv": "aenv"}}
+    ],
+    "out": "amp"
+  }
+}

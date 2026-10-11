@@ -1,0 +1,12 @@
+{
+  "m2plug": "0.1", "id": "m2/filter", "name": "Filter", "kind": "effect",
+  "description": "Low-pass filter. Turn cutoff down for a muffled 'next room' sound, sweep it up for builds.",
+  "tags": ["filter", "sweep", "build"],
+  "macros": [
+    {"id": "cutoff", "name": "Cutoff", "default": 1.0},
+    {"id": "resonance", "name": "Resonance", "default": 0.2}
+  ],
+  "graph": {"nodes": [
+    {"id": "lp", "type": "filter", "params": {"mode": "lp", "cutoff": {"macro": "cutoff", "from": 120, "to": 20000, "curve": "exp"}, "q": {"macro": "resonance", "from": 0.6, "to": 6, "curve": "exp"}}, "inputs": {"in": "in"}}
+  ], "out": "lp"}
+}

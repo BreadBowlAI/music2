@@ -1,0 +1,19 @@
+{
+  "m2plug": "0.1", "id": "m2/eq", "name": "Tone", "kind": "effect",
+  "description": "Three-band EQ with a low cut. 0.5 is flat.",
+  "tags": ["eq", "tone"],
+  "macros": [
+    {"id": "low", "name": "Low", "default": 0.5},
+    {"id": "mid", "name": "Mid", "default": 0.5},
+    {"id": "high", "name": "High", "default": 0.5},
+    {"id": "low_cut", "name": "Low cut", "default": 0.0}
+  ],
+  "graph": {"nodes": [
+    {"id": "eq", "type": "eq", "params": {
+      "low": {"macro": "low", "from": -12, "to": 12},
+      "mid": {"macro": "mid", "from": -12, "to": 12},
+      "high": {"macro": "high", "from": -12, "to": 12},
+      "low_cut": {"macro": "low_cut", "from": 20, "to": 600, "curve": "exp"}
+    }, "inputs": {"in": "in"}}
+  ], "out": "eq"}
+}

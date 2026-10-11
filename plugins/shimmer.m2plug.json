@@ -1,0 +1,12 @@
+{
+  "m2plug": "0.1", "id": "m2/shimmer", "name": "Shimmer", "kind": "effect",
+  "description": "Chorus. Makes sounds wider and dreamier.",
+  "tags": ["chorus", "width"],
+  "macros": [
+    {"id": "rate", "name": "Speed", "default": 0.3},
+    {"id": "mix", "name": "Amount", "default": 0.5}
+  ],
+  "graph": {"nodes": [
+    {"id": "cho", "type": "chorus", "params": {"rate": {"macro": "rate", "from": 0.1, "to": 3, "curve": "exp"}, "depth": 6, "mix": {"macro": "mix", "from": 0, "to": 0.9}}, "inputs": {"in": "in"}}
+  ], "out": "cho"}
+}
