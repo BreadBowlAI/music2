@@ -95,7 +95,7 @@ impl PackageSet {
                 let wasm_path = dir.join(w);
                 let bytes = std::fs::read(&wasm_path).with_context(|| format!("reading {}", wasm_path.display()))?;
                 let module = Module::new(&self.engine, &bytes).wctx(|| format!("compiling {}", wasm_path.display()))?;
-                verify_module(&module, &m.kernel).with_context(|| format!("package `{name}`: {}", wasm_path.display()))?;
+                verify_module(&self.engine, &module, &m.kernel).with_context(|| format!("package `{name}`: {}", wasm_path.display()))?;
                 Some(module)
             }
             None if !m.kernel.is_empty() => bail!("package `{name}` declares kernels but no `wasm` file"),
@@ -136,8 +136,11 @@ impl Kernels for PackageSet {
     }
 }
 
-/// Kernels are sandboxed: no imports at all, and exactly the ABI exports.
-fn verify_module(module: &Module, kernels: &[KernelDecl]) -> Result<()> {
+/// The kernel ABI version this runtime speaks (see `m2-kernel`).
+pub const KERNEL_ABI: u32 = 0;
+
+/// Kernels are sandboxed: no imports at all, the ABI exports, and the right ABI version.
+fn verify_module(engine: &Engine, module: &Module, kernels: &[KernelDecl]) -> Result<()> {
     if let Some(i) = module.imports().next() {
         bail!("kernels can't import anything, but this module imports `{}::{}`", i.module(), i.name());
     }
@@ -161,6 +164,12 @@ fn verify_module(module: &Module, kernels: &[KernelDecl]) -> Result<()> {
     if !matches!(exports.get("memory"), Some(ExternType::Memory(_))) {
         bail!("missing export `memory`");
     }
+    let mut store = wasmtime::Store::new(engine, ());
+    let instance = wasmtime::Instance::new(&mut store, module, &[]).wctx(|| "instantiating")?;
+    let abi = instance.get_typed_func::<(), u32>(&mut store, "m2_abi")?.call(&mut store, ())?;
+    if abi != KERNEL_ABI {
+        bail!("built for kernel ABI v{abi}, but this runtime speaks v{KERNEL_ABI}");
+    }
     for k in kernels {
         let n = &k.name;
         func(&format!("{n}_init"), &[ValType::F32, ValType::I32, ValType::I32], &[])?;
@@ -168,6 +177,7 @@ fn verify_module(module: &Module, kernels: &[KernelDecl]) -> Result<()> {
         func(&format!("{n}_port"), &[ValType::I32], &[ValType::I32])?;
         func(&format!("{n}_reset"), &[], &[])?;
         func(&format!("{n}_process"), &[ValType::I32], &[])?;
+        func(&format!("{n}_active"), &[], &[ValType::I32])?;
     }
     Ok(())
 }

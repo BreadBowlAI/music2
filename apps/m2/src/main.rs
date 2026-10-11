@@ -12,8 +12,9 @@ use m2_song::Project;
 const USAGE: &str = "m2: build, check and render music2 projects
 
 USAGE:
-  m2 build <project> [--json]            run the TypeScript, check the graph, print a summary (or the IR)
-  m2 render <project> <out.wav> [--sr 48000] [--seconds N]
+  m2 check <project> [--json]            run the TypeScript, check the graph and timeline, print a summary (or the IR)
+  m2 render <project> <out.wav> [--sr 48000] [--from S] [--seconds N]
+                                         render to WAV; --from starts S seconds in
   m2 kernels [--json]                    list every kernel and its typed ports
 
 The std package is found at $M2_STD, or next to this source tree.
@@ -43,14 +44,14 @@ fn packages() -> Result<PackageSet> {
     Ok(p)
 }
 
-/// Build and check a project, printing diagnostics on failure.
+/// Compile a project, printing diagnostics on failure and warnings on success.
 fn compile(dir: &Path, packages: &PackageSet) -> Result<(Project, Ir, Flat)> {
     let project = Project::open(dir)?;
-    let mut opts = m2_script::Options::new(&project.dir, &project.entry());
-    opts.packages = packages.packages().map(|p| (p.name.clone(), p.dir.clone())).collect();
-    let ir = m2_script::build(&opts).map_err(report)?;
-    let flat = m2_ir::check(&ir, packages).map_err(report)?;
-    Ok((project, ir, flat))
+    let c = m2_session::compile(&project, packages).map_err(report)?;
+    for w in &c.warnings {
+        eprintln!("warning: {w}");
+    }
+    Ok((project, c.ir, c.flat))
 }
 
 fn report(diags: Vec<Diagnostic>) -> anyhow::Error {
@@ -64,7 +65,7 @@ fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let arg = |i: usize| args.get(i).cloned().ok_or_else(|| anyhow!("missing argument\n\n{USAGE}"));
     match args.first().map(String::as_str) {
-        Some("build") => {
+        Some("check" | "build") => {
             let pk = packages()?;
             let (project, ir, flat) = compile(Path::new(&arg(1)?), &pk)?;
             if args.iter().any(|a| a == "--json") {
@@ -79,15 +80,17 @@ fn run() -> Result<()> {
             let out = PathBuf::from(arg(2)?);
             let sr: u32 = flag(&args, "--sr").map(|v| v.parse()).transpose().context("--sr")?.unwrap_or(48_000);
             let tempo = project.timeline.tempo()?;
+            let from: f64 = flag(&args, "--from").map(|v| v.parse()).transpose().context("--from")?.unwrap_or(0.0);
             let seconds = match flag(&args, "--seconds") {
                 Some(s) => s.parse().context("--seconds")?,
-                None => tempo.seconds_at(project.timeline.end()) + 2.0,
+                None => tempo.seconds_at(project.timeline.end()) + 2.0 - from,
             };
-            if seconds <= 0.0 {
-                bail!("nothing to render: the timeline is empty (pass --seconds)");
+            if seconds <= 0.0 || from < 0.0 {
+                bail!("nothing to render (check --from and --seconds; the timeline may be empty)");
             }
             let t = Instant::now();
             let mut r = Renderer::new(&flat, &project.timeline, &pk, sr)?;
+            r.seek((from * sr as f64).round() as u64)?;
             let frames = r.render(seconds)?;
             write_wav(&out, &frames, sr)?;
             let peak = frames.iter().fold(0.0f32, |m, f| m.max(f[0].abs()).max(f[1].abs()));
@@ -98,9 +101,6 @@ fn run() -> Result<()> {
                 seconds / took,
                 20.0 * peak.max(1e-9).log10()
             );
-            if r.non_finite() > 0 {
-                eprintln!("warning: {} samples were NaN or infinite and were silenced; a kernel is misbehaving", r.non_finite());
-            }
         }
         Some("kernels") => {
             let pk = packages()?;
@@ -148,10 +148,6 @@ fn summary(project: &Project, ir: &Ir, flat: &Flat) {
         }
     }
     println!("  output {}; {} nodes to run, {kernels} kernel instances, {voices} voices", flat.out_kind, flat.order.len());
-    let used: Vec<(String, String)> = ir.modules.iter().flat_map(|m| m.lanes.iter().map(|l| (m.name.clone(), l.id.clone()))).collect();
-    for f in project.timeline.unused(&used) {
-        println!("  warning: {} is not used by any lane", f.display());
-    }
 }
 
 fn write_wav(path: &Path, frames: &[[f32; 2]], sr: u32) -> Result<()> {

@@ -164,6 +164,12 @@ impl Kernel for Adsr {
             out[i] = self.value;
         }
     }
+
+    /// Only the release holds sound back: attack and decay need the gate, which is off
+    /// once a voice's note is over.
+    fn active(&self) -> bool {
+        self.stage == Stage::Release
+    }
 }
 
 export!(adsr, Adsr);
@@ -454,6 +460,67 @@ impl Kernel for Svf {
 }
 
 export!(svf, Svf);
+
+// ---------------------------------------------------------------- time effects
+
+/// Longest delay time, in seconds.
+const MAX_DELAY: f32 = 2.0;
+
+/// Feedback delay with a dry/wet mix. Inputs: in, time, feedback, mix.
+pub struct Delay {
+    sr: f32,
+    lines: Vec<Vec<f32>>,
+    pos: usize,
+    /// Samples since anything audible was written into a line.
+    quiet: usize,
+}
+
+impl Kernel for Delay {
+    const INPUTS: usize = 4;
+    const OUTPUTS: usize = 1;
+
+    fn new(sample_rate: f32, channels: usize) -> Self {
+        let len = (MAX_DELAY * sample_rate) as usize + 2;
+        Delay { sr: sample_rate, lines: vec![vec![0.0; len]; channels], pos: 0, quiet: usize::MAX }
+    }
+
+    fn process(&mut self, io: &mut Io) {
+        let len = self.lines[0].len();
+        let start = self.pos;
+        let mut quietest = usize::MAX;
+        for ch in 0..self.lines.len() {
+            let ([x, time, fb, mix], [out]) = io.ports([(0, ch), (1, 0), (2, 0), (3, 0)], [(0, ch)]);
+            let line = &mut self.lines[ch];
+            let mut pos = start;
+            let mut quiet = self.quiet;
+            for i in 0..out.len() {
+                let d = (time[i].clamp(0.0, MAX_DELAY) * self.sr).max(1.0);
+                let back = d.floor() as usize;
+                let frac = d - back as f32;
+                let a = line[(pos + len - back) % len];
+                let b = line[(pos + len - back - 1) % len];
+                let wet = a + (b - a) * frac;
+                let w = x[i] + wet * fb[i].clamp(0.0, 0.95);
+                line[pos] = w;
+                quiet = if w.abs() > 1e-5 { 0 } else { quiet.saturating_add(1) };
+                let m = mix[i].clamp(0.0, 1.0);
+                out[i] = x[i] * (1.0 - m) + wet * m;
+                pos = (pos + 1) % len;
+            }
+            quietest = quietest.min(quiet);
+            if ch + 1 == self.lines.len() {
+                self.pos = pos;
+            }
+        }
+        self.quiet = quietest;
+    }
+
+    fn active(&self) -> bool {
+        self.quiet < self.lines[0].len()
+    }
+}
+
+export!(delay, Delay);
 
 // ---------------------------------------------------------------- dynamics and colour
 

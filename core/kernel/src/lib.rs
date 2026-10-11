@@ -15,6 +15,7 @@
 //! | `k_port(index: u32) -> u32` | address of a port buffer: inputs first, then outputs, in manifest order |
 //! | `k_reset()` | back to the state right after `init` |
 //! | `k_process(frames: u32)` | read inputs, write outputs, for `frames` samples |
+//! | `k_active() -> u32` | 1 while the kernel holds sound that will still come out (a delay line, a release) |
 //!
 //! Every port buffer holds `PORT_CHANNELS × max_block` floats, channel-major: channel
 //! `c` starts at `c × max_block`. Control ports use channel 0 only. `channels` is the
@@ -42,6 +43,15 @@ pub trait Kernel {
     /// Build fresh state. `reset` calls this again, so it must not depend on history.
     fn new(sample_rate: f32, channels: usize) -> Self;
     fn process(&mut self, io: &mut Io);
+    /// Whether sound this kernel has already taken in can still come out later: echoes
+    /// in a delay line, a reverb tail, an envelope's release. Brief ringing (a filter)
+    /// doesn't count, and neither does sound a kernel makes from nothing (an
+    /// oscillator): a voice is gated by its envelopes, not by its sources.
+    /// The host ends a `poly` voice only when its note is over, its output is quiet
+    /// and no kernel in it is active.
+    fn active(&self) -> bool {
+        false
+    }
 }
 
 /// The port buffers for one `process` call.
@@ -141,6 +151,10 @@ impl<K: Kernel> Host<K> {
         }
     }
 
+    pub fn active(&self) -> bool {
+        self.kernel.active()
+    }
+
     pub fn process(&mut self, frames: u32) {
         let (ins, outs) = self.ports.split_at_mut(K::INPUTS);
         let mut io = Io { ins, outs, max_block: self.max_block, frames: (frames as usize).min(self.max_block), channels: self.channels };
@@ -186,6 +200,11 @@ macro_rules! export {
             #[unsafe(export_name = concat!(stringify!($name), "_process"))]
             pub extern "C" fn process(frames: u32) {
                 host().process(frames)
+            }
+
+            #[unsafe(export_name = concat!(stringify!($name), "_active"))]
+            pub extern "C" fn active() -> u32 {
+                host().active() as u32
             }
         }
     };

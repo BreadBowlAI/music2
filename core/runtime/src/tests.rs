@@ -183,3 +183,263 @@ fn std_manifest_matches_its_kernels() {
         b.kernel(&node, &id, 1, &inputs).unwrap_or_else(|e| panic!("{e:#}"));
     }
 }
+
+// Regression tests for bugs reported in review (2026-10-11).
+
+#[test]
+fn output_does_not_depend_on_the_callers_buffer_size() {
+    let ir = song(
+        json!([
+            {"id": "x", "op": "kernel", "kernel": "std:noise"},
+            {"id": "fb", "op": "feedback", "kind": "audio<1>", "input": "sum"},
+            {"id": "half", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "fb", "by": "h"}},
+            {"id": "h", "op": "const", "value": 0.5},
+            {"id": "sum", "op": "kernel", "kernel": "std:add", "inputs": {"a": "x", "b": "half"}},
+        ]),
+        "sum",
+        json!([]),
+    );
+    let pk = std_packages();
+    let flat = check(&ir, &pk).unwrap();
+    let mut one = vec![[0.0; 2]; 512];
+    Renderer::new(&flat, &Timeline::default(), &pk, SR).unwrap().process(&mut one).unwrap();
+    let mut r = Renderer::new(&flat, &Timeline::default(), &pk, SR).unwrap();
+    let mut pieces = vec![[0.0; 2]; 512];
+    for chunk in pieces.chunks_mut(64) {
+        r.process(chunk).unwrap();
+    }
+    let first_diff = one.iter().zip(&pieces).position(|(a, b)| a != b);
+    assert_eq!(first_diff, None, "renders differ from frame {first_diff:?}");
+}
+
+#[test]
+fn a_stolen_voice_plays_until_the_new_note_starts() {
+    let ir = song(
+        json!([
+            {"id": "n", "op": "lane", "lane": "notes"},
+            {"id": "v", "op": "poly", "events": "n", "voices": 1, "body": {"out": "amp", "nodes": [
+                {"id": "p", "op": "lane", "lane": "pitch"},
+                {"id": "g", "op": "lane", "lane": "gate"},
+                {"id": "hz", "op": "kernel", "kernel": "std:mtof", "inputs": {"pitch": "p"}},
+                {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "hz"}},
+                {"id": "amp", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "g"}}]}},
+        ]),
+        "v",
+        json!([{"id": "notes", "kind": "events<note>"}]),
+    );
+    // 120 bpm at 48 kHz: 96 samples is 0.004 beats.
+    let (tl, dir) = timeline(&[("song.notes.json", json!({"clips": [{"start": 0, "length": 1, "notes": [
+        {"pitch": 69, "start": 0, "length": 1}, {"pitch": 81, "start": 0.004, "length": 0.5}]}]}))]);
+    let out = render(&ir, &tl, 0.01);
+    assert!(peak(&out[1..96]) > 0.0, "the first note is silent before the second one starts");
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// A voice with a delay and a feedback loop inside, notes at odd sample positions,
+/// and a stolen voice: everything that depends on how a block is split.
+fn tricky() -> (Ir, Timeline, PathBuf) {
+    let ir = song(
+        json!([
+            {"id": "n", "op": "lane", "lane": "notes"},
+            {"id": "v", "op": "poly", "events": "n", "voices": 2, "body": {"out": "mix", "nodes": [
+                {"id": "p", "op": "lane", "lane": "pitch"},
+                {"id": "g", "op": "lane", "lane": "gate"},
+                {"id": "hz", "op": "kernel", "kernel": "std:mtof", "inputs": {"pitch": "p"}},
+                {"id": "o", "op": "kernel", "kernel": "std:saw", "inputs": {"freq": "hz"}},
+                {"id": "e", "op": "kernel", "kernel": "std:adsr", "inputs": {"gate": "g"}},
+                {"id": "a", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "e"}},
+                {"id": "fb", "op": "feedback", "kind": "audio<1>", "input": "mix"},
+                {"id": "q", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "fb", "by": "h"}},
+                {"id": "h", "op": "const", "value": 0.3},
+                {"id": "mix", "op": "kernel", "kernel": "std:add", "inputs": {"a": "a", "b": "q"}}]}},
+            {"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "v"}},
+        ]),
+        "d",
+        json!([{"id": "notes", "kind": "events<note>"}]),
+    );
+    let (tl, dir) = timeline(&[("song.notes.json", json!({"clips": [{"start": 0, "length": 4, "notes": [
+        {"pitch": 57, "start": 0.0013, "length": 0.3}, {"pitch": 64, "start": 0.0071, "length": 0.2},
+        {"pitch": 69, "start": 0.0109, "length": 0.5}, {"pitch": 60, "start": 0.61, "length": 0.05}]}]}))]);
+    (ir, tl, dir)
+}
+
+#[test]
+fn every_buffer_size_gives_the_same_samples() {
+    let (ir, tl, dir) = tricky();
+    let pk = std_packages();
+    let flat = check(&ir, &pk).unwrap();
+    let total = 24_000;
+    let mut reference = vec![[0.0; 2]; total];
+    Renderer::new(&flat, &tl, &pk, SR).unwrap().process(&mut reference).unwrap();
+    assert!(peak(&reference) > 0.1);
+    for size in [1, 7, 64, 100, 129, 1000] {
+        let mut r = Renderer::new(&flat, &tl, &pk, SR).unwrap();
+        let mut out = vec![[0.0; 2]; total];
+        for chunk in out.chunks_mut(size) {
+            r.process(chunk).unwrap();
+        }
+        let diff = reference.iter().zip(&out).position(|(a, b)| a != b);
+        assert_eq!(diff, None, "buffer size {size} differs from frame {diff:?}");
+    }
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn seeking_gives_the_same_samples_as_a_full_render() {
+    let (ir, tl, dir) = tricky();
+    let pk = std_packages();
+    let flat = check(&ir, &pk).unwrap();
+    let mut r = Renderer::new(&flat, &tl, &pk, SR).unwrap();
+    let full = r.render(1.0).unwrap();
+    for from in [0u64, 1, 5_000, 12_345] {
+        r.seek(from).unwrap();
+        assert_eq!(r.position(), from);
+        let mut part = vec![[0.0; 2]; 6_000];
+        r.process(&mut part).unwrap();
+        assert!(part[..] == full[from as usize..from as usize + 6_000], "seek to {from} differs");
+    }
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn echoes_inside_a_voice_outlive_its_note() {
+    let ir = song(
+        json!([
+            {"id": "n", "op": "lane", "lane": "notes"},
+            {"id": "v", "op": "poly", "events": "n", "voices": 1, "body": {"out": "d", "nodes": [
+                {"id": "p", "op": "lane", "lane": "pitch"},
+                {"id": "g", "op": "lane", "lane": "gate"},
+                {"id": "hz", "op": "kernel", "kernel": "std:mtof", "inputs": {"pitch": "p"}},
+                {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "hz"}},
+                {"id": "a", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "g"}},
+                {"id": "t", "op": "const", "value": 0.25, "unit": "seconds"},
+                {"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "a", "time": "t", "mix": "m"}},
+                {"id": "m", "op": "const", "value": 0.5}]}},
+        ]),
+        "v",
+        json!([{"id": "notes", "kind": "events<note>"}]),
+    );
+    // A 50 ms note at 120 bpm (0.1 beats); the echo comes 250 ms after it starts.
+    let (tl, dir) = timeline(&[("song.notes.json", json!({"clips": [{"start": 0, "length": 4, "notes": [{"pitch": 69, "start": 0, "length": 0.1}]}]}))]);
+    let out = render(&ir, &tl, 1.0);
+    let at = |s: f64| (s * SR as f64) as usize;
+    assert!(peak(&out[at(0.1)..at(0.24)]) < 1e-3, "silent between the note and its echo");
+    assert!(peak(&out[at(0.25)..at(0.30)]) > 0.1, "the first echo is heard");
+    assert!(peak(&out[at(0.50)..at(0.55)]) > 0.02, "the second echo is heard");
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn strict_mode_names_the_kernel_that_broke() {
+    let ir = song(
+        json!([
+            {"id": "p", "op": "const", "value": 100000, "unit": "semitones"},
+            {"id": "hz", "op": "kernel", "kernel": "std:mtof", "inputs": {"pitch": "p"}},
+            {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "hz"}},
+        ]),
+        "o",
+        json!([]),
+    );
+    let pk = std_packages();
+    let flat = check(&ir, &pk).unwrap();
+    let e = Renderer::new(&flat, &Timeline::default(), &pk, SR).unwrap().render(0.01).unwrap_err();
+    assert!(e.to_string().contains("song/hz produced inf"), "{e}");
+}
+
+/// A package folder holding one hand-written kernel module.
+fn package(wat: &str) -> PathBuf {
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let dir = std::env::temp_dir().join(format!("m2-pkg-test-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("k.wasm"), wat).unwrap();
+    std::fs::write(
+        dir.join("m2pkg.toml"),
+        "[package]\nname = \"t\"\nversion = \"0.1.0\"\nwasm = \"k.wasm\"\n\n[[kernel]]\nname = \"k\"\noutputs = [\"out: audio<1>\"]\n",
+    )
+    .unwrap();
+    dir
+}
+
+const KERNEL_EXPORTS: &str = r#"
+  (memory (export "memory") 1)
+  (func (export "k_init") (param f32 i32 i32))
+  (func (export "k_ports") (result i32) (i32.const 1))
+  (func (export "k_port") (param i32) (result i32) (i32.const 1024))
+  (func (export "k_reset"))
+  (func (export "k_process") (param i32))
+  (func (export "k_active") (result i32) (i32.const 0))"#;
+
+#[test]
+fn packages_must_be_sandboxed_and_speak_our_abi() {
+    let ok = package(&format!("(module (func (export \"m2_abi\") (result i32) (i32.const 0)) {KERNEL_EXPORTS})"));
+    PackageSet::default().load(&ok).unwrap();
+
+    let wrong_abi = package(&format!("(module (func (export \"m2_abi\") (result i32) (i32.const 7)) {KERNEL_EXPORTS})"));
+    let e = PackageSet::default().load(&wrong_abi).map(|_| ()).unwrap_err();
+    assert!(format!("{e:#}").contains("ABI v7"), "{e:#}");
+
+    let imports = package(&format!("(module (import \"env\" \"now\" (func)) (func (export \"m2_abi\") (result i32) (i32.const 0)) {KERNEL_EXPORTS})"));
+    let e = PackageSet::default().load(&imports).map(|_| ()).unwrap_err();
+    assert!(format!("{e:#}").contains("can't import anything"), "{e:#}");
+
+    let missing = package("(module (func (export \"m2_abi\") (result i32) (i32.const 0)) (memory (export \"memory\") 1))");
+    let e = PackageSet::default().load(&missing).map(|_| ()).unwrap_err();
+    assert!(format!("{e:#}").contains("missing export `k_init`"), "{e:#}");
+
+    for d in [ok, wrong_abi, imports, missing] {
+        std::fs::remove_dir_all(d).ok();
+    }
+}
+
+#[test]
+fn voices_end_when_their_envelope_closes_but_not_while_echoes_remain() {
+    // saw → filter → amp: the oscillator never stops, but the voice is over once the
+    // envelope has released.
+    let synth = song(
+        json!([
+            {"id": "n", "op": "lane", "lane": "notes"},
+            {"id": "v", "op": "poly", "events": "n", "voices": 4, "body": {"out": "amp", "nodes": [
+                {"id": "p", "op": "lane", "lane": "pitch"},
+                {"id": "g", "op": "lane", "lane": "gate"},
+                {"id": "hz", "op": "kernel", "kernel": "std:mtof", "inputs": {"pitch": "p"}},
+                {"id": "o", "op": "kernel", "kernel": "std:saw", "inputs": {"freq": "hz"}},
+                {"id": "f", "op": "kernel", "kernel": "std:svf", "inputs": {"in": "o"}},
+                {"id": "e", "op": "kernel", "kernel": "std:adsr", "inputs": {"gate": "g"}},
+                {"id": "amp", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "f.lp", "by": "e"}}]}},
+        ]),
+        "v",
+        json!([{"id": "notes", "kind": "events<note>"}]),
+    );
+    let (tl, dir) = timeline(&[("song.notes.json", json!({"clips": [{"start": 0, "length": 4, "notes": [{"pitch": 60, "start": 0, "length": 0.2}]}]}))]);
+    let pk = std_packages();
+    let mut r = Renderer::new(&check(&synth, &pk).unwrap(), &tl, &pk, SR).unwrap();
+    r.render(0.05).unwrap();
+    assert_eq!(r.active_voices(), 1);
+    r.render(1.0).unwrap();
+    assert_eq!(r.active_voices(), 0, "the voice ended after its release");
+    std::fs::remove_dir_all(dir).ok();
+
+    // The same short note through a delay inside the voice stays alive between echoes.
+    let echo = song(
+        json!([
+            {"id": "n", "op": "lane", "lane": "notes"},
+            {"id": "v", "op": "poly", "events": "n", "voices": 1, "body": {"out": "d", "nodes": [
+                {"id": "p", "op": "lane", "lane": "pitch"},
+                {"id": "g", "op": "lane", "lane": "gate"},
+                {"id": "hz", "op": "kernel", "kernel": "std:mtof", "inputs": {"pitch": "p"}},
+                {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "hz"}},
+                {"id": "a", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "g"}},
+                {"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "a", "time": "t"}},
+                {"id": "t", "op": "const", "value": 0.5, "unit": "seconds"}]}},
+        ]),
+        "v",
+        json!([{"id": "notes", "kind": "events<note>"}]),
+    );
+    let (tl, dir) = timeline(&[("song.notes.json", json!({"clips": [{"start": 0, "length": 4, "notes": [{"pitch": 60, "start": 0, "length": 0.1}]}]}))]);
+    let mut r = Renderer::new(&check(&echo, &pk).unwrap(), &tl, &pk, SR).unwrap();
+    r.render(0.3).unwrap();
+    assert_eq!(r.active_voices(), 1, "silent between echoes, but echoes are coming");
+    r.render(20.0).unwrap();
+    assert_eq!(r.active_voices(), 0, "the echoes died away");
+    std::fs::remove_dir_all(dir).ok();
+}

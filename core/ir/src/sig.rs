@@ -51,6 +51,9 @@ impl KernelSig {
             outputs: parse_all(outputs).map_err(|e| format!("kernel `{id}`: {e}"))?,
             latency,
         };
+        if let Some(p) = sig.inputs.iter().find(|p| matches!(p.kind, PortKind::Events(_))) {
+            return Err(format!("kernel `{id}`: input `{}`: kernels can't take events yet (notes reach kernels through poly)", p.name));
+        }
         if sig.outputs.is_empty() {
             return Err(format!("kernel `{id}`: needs at least one output"));
         }
@@ -113,5 +116,6 @@ mod tests {
         let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
         assert!(KernelSig::parse("p:k", "", &s(&["a: control<hz>"]), &s(&["out: *"]), 0).is_err());
         assert!(KernelSig::parse("p:k", "", &s(&["a: *"]), &s(&["out: *"]), 0).is_ok());
+        assert!(KernelSig::parse("p:k", "", &s(&["n: events<note>"]), &s(&["out: audio<1>"]), 0).is_err());
     }
 }

@@ -1,0 +1,12 @@
+[package]
+name = "m2-session"
+description = "Compiles a music2 project into something playable, with diagnostics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+m2-ir.workspace = true
+m2-song.workspace = true
+m2-runtime.workspace = true
+m2-script.workspace = true

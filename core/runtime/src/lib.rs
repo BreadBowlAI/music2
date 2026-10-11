@@ -1,9 +1,22 @@
 //! Runs a checked song graph.
 //!
-//! Audio is processed in blocks of [`BLOCK`] samples. Every kernel node is its own
-//! WebAssembly instance; `poly` keeps a fixed pool of voice graphs, so rendering never
-//! instantiates anything after start. The same project always renders to the same
-//! samples.
+//! # Render specification
+//!
+//! - Audio is processed on a fixed grid of [`BLOCK`]-sample blocks starting at sample 0.
+//!   How many frames a caller asks for at a time never changes the result.
+//! - Controls, gates and time are computed per sample.
+//! - `feedback` is a delay of exactly [`BLOCK`] samples.
+//! - A `poly` voice changes note at the exact sample the note starts: the voice graph
+//!   is processed up to that sample with the old note, reset, then continues with the
+//!   new one. Where a voice graph is split is decided by note data alone.
+//! - A voice ends once its note is over, its output is quiet (-80 dB) for a block and
+//!   no kernel in it reports `active` (an envelope still releasing, echoes in a delay).
+//! - Every kernel instance starts from `init` and is reset when its voice is reused.
+//!   Rendering from sample `s` is defined as rendering from 0 and dropping what comes
+//!   before `s`; [`Renderer::seek`] does exactly that.
+//! - Given the same project, packages, sample rate and this runtime, output is bit-
+//!   identical. A NaN or infinity is an error in strict mode (the default) and is
+//!   silenced in live mode.
 
 pub mod packages;
 
@@ -19,18 +32,39 @@ pub const BLOCK: usize = 128;
 /// Memory one kernel instance may use.
 const KERNEL_MEMORY: usize = 32 << 20;
 
-/// Per-block timing shared by every node.
+/// Output below this is "quiet" when deciding whether a voice has finished (-80 dB).
+const QUIET: f32 = 1e-4;
+
+/// Per-block timing shared by every node. Blocks are always [`BLOCK`] samples.
 struct Block {
-    frames: usize,
     /// Absolute sample of the block's first frame.
     start: u64,
     beats: [f32; BLOCK],
     seconds: [f32; BLOCK],
     /// Beat of each frame, in full precision, for lane lookups.
     beats64: [f64; BLOCK],
+    sample_rate: f64,
+    strict: bool,
 }
 
-/// One output port's samples, channel-major, `channels × BLOCK`.
+/// The part of a block a graph is processing: frames `off..off + n`.
+#[derive(Clone, Copy)]
+struct Seg {
+    off: usize,
+    n: usize,
+}
+
+impl Seg {
+    const WHOLE: Seg = Seg { off: 0, n: BLOCK };
+
+    fn range(self, ch: usize) -> std::ops::Range<usize> {
+        let s = ch * BLOCK + self.off;
+        s..s + self.n
+    }
+}
+
+/// One output port's samples, channel-major, `channels × BLOCK`, indexed by position in
+/// the block.
 type Buf = Vec<f32>;
 
 struct KernelNode {
@@ -38,6 +72,7 @@ struct KernelNode {
     memory: Memory,
     reset: TypedFunc<(), ()>,
     process: TypedFunc<u32, ()>,
+    active: TypedFunc<(), u32>,
     in_ptrs: Vec<usize>,
     out_ptrs: Vec<usize>,
     inputs: Vec<Input>,
@@ -56,9 +91,9 @@ struct SampleNote {
 struct VoiceSlot {
     graph: Graph,
     note: Option<SampleNote>,
-    /// When the voice started, for stealing the oldest.
+    /// When the voice last started a note, for stealing the oldest.
     born: u64,
-    quiet_blocks: u32,
+    /// Whether the graph has run since its last reset.
     dirty: bool,
 }
 
@@ -77,7 +112,8 @@ enum Exec {
     Const(f32),
     Kernel(Box<KernelNode>),
     Poly(Box<PolyNode>),
-    Feedback { input: PortRef, prev: Buf },
+    /// A delay of exactly `BLOCK` samples; `ring` is indexed by absolute sample mod `BLOCK`.
+    Feedback { input: PortRef, ring: Buf },
     NoteField(NoteField),
     Capture(PortRef),
 }
@@ -123,15 +159,15 @@ impl Builder<'_> {
                         bail!("{}: poly inside poly", n.name);
                     }
                     let FOp::Lane { module, lane: lane_id, .. } = &nodes[*lane].op else { bail!("{}: poly needs a notes lane", n.name) };
-                    let notes = self.timeline.notes(module, lane_id)?.iter().map(|a| self.sample_note(a)).collect();
+                    let notes = self.timeline.notes(module, lane_id)?.iter().map(|a| self.sample_note(a)).filter(|n| n.end > n.start).collect();
                     let mut slots = Vec::with_capacity(*voices as usize);
                     for _ in 0..*voices {
                         let graph = self.graph(&voice.nodes, &voice.order, true).with_context(|| format!("{}: voice", n.name))?;
-                        slots.push(VoiceSlot { graph, note: None, born: 0, quiet_blocks: 0, dirty: false });
+                        slots.push(VoiceSlot { graph, note: None, born: 0, dirty: false });
                     }
                     Exec::Poly(Box::new(PolyNode { notes, next: 0, voices: slots, out: voice.out, born: 0 }))
                 }
-                FOp::Feedback { input, channels } => Exec::Feedback { input: *input, prev: vec![0.0; *channels as usize * BLOCK] },
+                FOp::Feedback { input, channels } => Exec::Feedback { input: *input, ring: vec![0.0; *channels as usize * BLOCK] },
                 FOp::NoteField(f) => Exec::NoteField(*f),
                 FOp::Capture(p) => Exec::Capture(*p),
             };
@@ -163,6 +199,7 @@ impl Builder<'_> {
         let port = instance.get_typed_func::<u32, u32>(&mut *store, &f("port"))?;
         let reset = instance.get_typed_func::<(), ()>(&mut *store, &f("reset"))?;
         let process = instance.get_typed_func::<u32, ()>(&mut *store, &f("process"))?;
+        let active = instance.get_typed_func::<(), u32>(&mut *store, &f("active"))?;
         let memory = instance.get_memory(&mut *store, "memory").context("kernel has no memory")?;
         init.call(&mut *store, (self.sample_rate as f32, BLOCK as u32, channels as u32))?;
 
@@ -197,6 +234,7 @@ impl Builder<'_> {
             memory,
             reset,
             process,
+            active,
             in_ptrs: ptrs,
             out_ptrs,
             inputs: inputs.to_vec(),
@@ -220,31 +258,28 @@ fn floats(data: &mut [u8], ptr: usize, len: usize) -> &mut [f32] {
     bytemuck::cast_slice_mut(&mut data[ptr..ptr + len * 4])
 }
 
-struct VoiceState {
-    note: SampleNote,
-}
-
 impl Graph {
-    fn process(&mut self, store: &mut Store<StoreLimits>, b: &Block, outer: Option<&[Vec<Buf>]>, voice: Option<&VoiceState>) -> Result<()> {
-        let frames = b.frames;
+    /// Process frames `seg` of block `b`. Buffers are indexed by position in the block.
+    fn process(&mut self, store: &mut Store<StoreLimits>, b: &Block, seg: Seg, outer: Option<&[Vec<Buf>]>, note: Option<SampleNote>) -> Result<()> {
+        let n = seg.n;
         for oi in 0..self.order.len() {
             let i = self.order[oi];
             let mut out = std::mem::take(&mut self.bufs[i]);
             let bufs = &self.bufs;
             match &mut self.exec[i] {
                 Exec::Control { lane, default } => {
-                    let o = &mut out[0][..frames];
+                    let o = &mut out[0][seg.range(0)];
                     if lane.is_empty() {
                         o.fill(*default);
                     } else {
-                        for (x, &beat) in o.iter_mut().zip(&b.beats64) {
+                        for (x, &beat) in o.iter_mut().zip(&b.beats64[seg.off..]) {
                             *x = lane.value_at(beat, *default as f64) as f32;
                         }
                     }
                 }
                 Exec::Notes | Exec::Const(_) => {}
-                Exec::Time(TimeOf::Beats) => out[0][..frames].copy_from_slice(&b.beats[..frames]),
-                Exec::Time(TimeOf::Seconds) => out[0][..frames].copy_from_slice(&b.seconds[..frames]),
+                Exec::Time(TimeOf::Beats) => out[0][seg.range(0)].copy_from_slice(&b.beats[seg.off..seg.off + n]),
+                Exec::Time(TimeOf::Seconds) => out[0][seg.range(0)].copy_from_slice(&b.seconds[seg.off..seg.off + n]),
                 Exec::Kernel(k) => {
                     let data = k.memory.data_mut(&mut *store);
                     for (inp, &ptr) in k.inputs.iter().zip(&k.in_ptrs) {
@@ -252,117 +287,191 @@ impl Graph {
                             let s = &bufs[src.node][src.port];
                             for c in 0..*channels as usize {
                                 let sc = if c < *src_channels as usize { c } else { 0 };
-                                floats(data, ptr + c * BLOCK * 4, frames).copy_from_slice(&s[sc * BLOCK..sc * BLOCK + frames]);
+                                floats(data, ptr + c * BLOCK * 4, n).copy_from_slice(&s[seg.range(sc)]);
                             }
                         }
                     }
-                    k.process.call(&mut *store, frames as u32).wctx(|| format!("{} crashed", k.name))?;
+                    k.process.call(&mut *store, n as u32).wctx(|| format!("{} crashed", k.name))?;
                     let data = k.memory.data_mut(&mut *store);
                     for (o, (&ptr, &ch)) in out.iter_mut().zip(k.out_ptrs.iter().zip(&k.out_channels)) {
                         for c in 0..ch as usize {
-                            o[c * BLOCK..c * BLOCK + frames].copy_from_slice(floats(data, ptr + c * BLOCK * 4, frames));
+                            let dst = &mut o[seg.range(c)];
+                            dst.copy_from_slice(floats(data, ptr + c * BLOCK * 4, n));
+                            if b.strict
+                                && let Some(at) = dst.iter().position(|x| !x.is_finite())
+                            {
+                                let t = (b.start + (seg.off + at) as u64) as f64 / b.sample_rate;
+                                bail!("{} produced {} at {t:.3}s", k.name, dst[at]);
+                            }
                         }
                     }
                 }
                 Exec::Poly(p) => p.process(store, b, bufs, &mut out[0])?,
-                Exec::Feedback { prev, .. } => out[0].copy_from_slice(prev),
-                Exec::NoteField(f) => {
-                    let v = voice.expect("note fields only run in voices");
-                    let n = v.note;
-                    let o = &mut out[0][..frames];
-                    match f {
-                        NoteField::Pitch => o.fill(n.pitch),
-                        NoteField::Velocity => o.fill(n.velocity),
+                Exec::Feedback { ring, .. } => {
+                    for c in 0..out[0].len() / BLOCK {
+                        for f in 0..n {
+                            let at = (b.start as usize + seg.off + f) % BLOCK;
+                            out[0][c * BLOCK + seg.off + f] = ring[c * BLOCK + at];
+                        }
+                    }
+                }
+                Exec::NoteField(field) => {
+                    let note = note.expect("note fields only run in voices");
+                    let o = &mut out[0][seg.range(0)];
+                    match field {
+                        NoteField::Pitch => o.fill(note.pitch),
+                        NoteField::Velocity => o.fill(note.velocity),
                         NoteField::Pressure | NoteField::Timbre => o.fill(0.0),
                         NoteField::Gate => {
                             for (k, x) in o.iter_mut().enumerate() {
-                                let t = b.start + k as u64;
-                                *x = (t >= n.start && t < n.end) as u8 as f32;
+                                let t = b.start + (seg.off + k) as u64;
+                                *x = (t >= note.start && t < note.end) as u8 as f32;
                             }
                         }
                     }
                 }
                 Exec::Capture(p) => {
                     let src = &outer.expect("captures only run in voices")[p.node][p.port];
-                    let len = out[0].len().min(src.len());
-                    out[0][..len].copy_from_slice(&src[..len]);
+                    for c in 0..out[0].len() / BLOCK {
+                        out[0][seg.range(c)].copy_from_slice(&src[seg.range(c.min(src.len() / BLOCK - 1))]);
+                    }
                 }
             }
             self.bufs[i] = out;
         }
-        // Feedback reads its input one block later.
+        // Feedback stores its input for `BLOCK` samples later.
         for i in 0..self.exec.len() {
-            if let Exec::Feedback { input, prev } = &mut self.exec[i] {
+            if let Exec::Feedback { input, ring } = &mut self.exec[i] {
                 let src = &self.bufs[input.node][input.port];
                 let src_ch = src.len() / BLOCK;
-                for c in 0..prev.len() / BLOCK {
+                for c in 0..ring.len() / BLOCK {
                     let sc = if c < src_ch { c } else { 0 };
-                    prev[c * BLOCK..c * BLOCK + frames].copy_from_slice(&src[sc * BLOCK..sc * BLOCK + frames]);
+                    for f in 0..n {
+                        let at = (b.start as usize + seg.off + f) % BLOCK;
+                        ring[c * BLOCK + at] = src[sc * BLOCK + seg.off + f];
+                    }
                 }
             }
         }
         Ok(())
     }
 
+    /// Back to the state right after building.
     fn reset(&mut self, store: &mut Store<StoreLimits>) -> Result<()> {
         for e in &mut self.exec {
             match e {
                 Exec::Kernel(k) => k.reset.call(&mut *store, ())?,
-                Exec::Feedback { prev, .. } => prev.fill(0.0),
+                Exec::Feedback { ring, .. } => ring.fill(0.0),
+                Exec::Poly(p) => {
+                    p.next = 0;
+                    p.born = 0;
+                    for v in &mut p.voices {
+                        if v.dirty {
+                            v.graph.reset(store)?;
+                        }
+                        *v = VoiceSlot { graph: std::mem::replace(&mut v.graph, Graph::empty()), note: None, born: 0, dirty: false };
+                    }
+                }
                 _ => {}
             }
         }
         Ok(())
     }
+
+    fn empty() -> Graph {
+        Graph { exec: vec![], order: vec![], bufs: vec![] }
+    }
+
+    /// Whether any kernel still holds sound that will come out later.
+    fn active(&self, store: &mut Store<StoreLimits>) -> Result<bool> {
+        for e in &self.exec {
+            match e {
+                Exec::Kernel(k) if k.active.call(&mut *store, ())? != 0 => return Ok(true),
+                Exec::Feedback { ring, .. } if ring.iter().any(|x| x.abs() > QUIET) => return Ok(true),
+                _ => {}
+            }
+        }
+        Ok(false)
+    }
 }
 
 impl PolyNode {
     fn process(&mut self, store: &mut Store<StoreLimits>, b: &Block, outer: &[Vec<Buf>], out: &mut Buf) -> Result<()> {
-        let end = b.start + b.frames as u64;
-        // Skip notes that started before this block and were never heard (seeking).
+        let end = b.start + BLOCK as u64;
+        // Notes that started before this block were never heard (seeking skips them).
         while self.next < self.notes.len() && self.notes[self.next].start < b.start {
             self.next += 1;
         }
+        // Assign this block's notes to voices, in time order.
+        let mut plan: Vec<Vec<(usize, SampleNote)>> = vec![vec![]; self.voices.len()];
+        let mut busy: Vec<bool> = self.voices.iter().map(|v| v.note.is_some()).collect();
         while self.next < self.notes.len() && self.notes[self.next].start < end {
             let note = self.notes[self.next];
             self.next += 1;
-            let slot = match self.voices.iter().position(|v| v.note.is_none()) {
+            let slot = match busy.iter().position(|b| !b) {
                 Some(i) => i,
                 None => (0..self.voices.len()).min_by_key(|&i| self.voices[i].born).expect("at least one voice"),
             };
-            let v = &mut self.voices[slot];
-            if v.dirty {
-                v.graph.reset(store)?;
-            }
             self.born += 1;
-            v.note = Some(note);
-            v.born = self.born;
-            v.quiet_blocks = 0;
-            v.dirty = true;
+            self.voices[slot].born = self.born;
+            busy[slot] = true;
+            plan[slot].push(((note.start - b.start) as usize, note));
         }
 
         out.fill(0.0);
         let out_ch = out.len() / BLOCK;
-        for v in &mut self.voices {
-            let Some(note) = v.note else { continue };
-            v.graph.process(store, b, Some(outer), Some(&VoiceState { note }))?;
-            let vo = &v.graph.bufs[self.out.node][self.out.port];
-            let v_ch = vo.len() / BLOCK;
+        for (v, plan) in self.voices.iter_mut().zip(plan) {
+            if v.note.is_none() && plan.is_empty() {
+                continue;
+            }
+            // Split the block wherever this voice starts a new note.
+            let mut at = 0;
+            let mut segs: Vec<(Seg, SampleNote, bool)> = vec![];
+            let mut current = v.note;
+            for (off, note) in plan {
+                if let Some(c) = current
+                    && off > at
+                {
+                    segs.push((Seg { off: at, n: off - at }, c, false));
+                }
+                segs.push((Seg { off, n: 0 }, note, true));
+                current = Some(note);
+                at = off;
+            }
+            if let Some(c) = current {
+                segs.push((Seg { off: at, n: BLOCK - at }, c, false));
+            }
             let mut peak = 0.0f32;
-            for c in 0..out_ch {
-                let sc = if c < v_ch { c } else { 0 };
-                for f in 0..b.frames {
-                    let x = vo[sc * BLOCK + f];
-                    out[c * BLOCK + f] += x;
-                    peak = peak.max(x.abs());
+            for (seg, note, starts) in segs {
+                if starts {
+                    if v.dirty {
+                        v.graph.reset(store)?;
+                    }
+                    v.dirty = true;
+                    v.note = Some(note);
+                    peak = 0.0;
+                    continue;
+                }
+                if seg.n == 0 {
+                    continue;
+                }
+                v.graph.process(store, b, seg, Some(outer), Some(note))?;
+                let vo = &v.graph.bufs[self.out.node][self.out.port];
+                let v_ch = vo.len() / BLOCK;
+                for c in 0..out_ch {
+                    let sc = if c < v_ch { c } else { 0 };
+                    for (o, x) in out[seg.range(c)].iter_mut().zip(&vo[seg.range(sc)]) {
+                        *o += x;
+                        peak = peak.max(x.abs());
+                    }
                 }
             }
-            // A released voice is freed once it has been quiet (-80 dB) for two blocks.
-            if end >= note.end {
-                v.quiet_blocks = if peak < 1e-4 { v.quiet_blocks + 1 } else { 0 };
-                if v.quiet_blocks >= 2 {
-                    v.note = None;
-                }
+            if let Some(note) = v.note
+                && note.end <= end
+                && peak < QUIET
+                && !v.graph.active(store)?
+            {
+                v.note = None;
             }
         }
         Ok(())
@@ -376,7 +485,12 @@ pub struct Renderer {
     out: PortRef,
     tempo: TempoMap,
     sample_rate: f64,
-    pos: u64,
+    /// Start of the next block to process.
+    next_block: u64,
+    /// Frames already rendered but not yet handed out.
+    pending: std::collections::VecDeque<[f32; 2]>,
+    delivered: u64,
+    strict: bool,
     non_finite: u64,
 }
 
@@ -387,39 +501,71 @@ impl Renderer {
         store.limiter(|l| l);
         let tempo = timeline.tempo()?;
         let graph = Builder { store: &mut store, packages, timeline, tempo: &tempo, sample_rate: sample_rate as f64 }.graph(&flat.nodes, &flat.order, false)?;
-        Ok(Renderer { store, graph, out: flat.out, tempo, sample_rate: sample_rate as f64, pos: 0, non_finite: 0 })
+        Ok(Renderer {
+            store,
+            graph,
+            out: flat.out,
+            tempo,
+            sample_rate: sample_rate as f64,
+            next_block: 0,
+            pending: Default::default(),
+            delivered: 0,
+            strict: true,
+            non_finite: 0,
+        })
+    }
+
+    /// Strict (the default): a NaN or infinity from any kernel is an error naming it.
+    /// Live: such samples are silenced at the output and counted in [`Self::non_finite`].
+    pub fn set_strict(&mut self, strict: bool) {
+        self.strict = strict;
+    }
+
+    fn block(&mut self) -> Result<()> {
+        let mut b = Block {
+            start: self.next_block,
+            beats: [0.0; BLOCK],
+            seconds: [0.0; BLOCK],
+            beats64: [0.0; BLOCK],
+            sample_rate: self.sample_rate,
+            strict: self.strict,
+        };
+        for f in 0..BLOCK {
+            let s = (b.start + f as u64) as f64 / self.sample_rate;
+            let beat = self.tempo.beat_at(s);
+            b.seconds[f] = s as f32;
+            b.beats[f] = beat as f32;
+            b.beats64[f] = beat;
+        }
+        self.graph.process(&mut self.store, &b, Seg::WHOLE, None, None)?;
+        let o = &self.graph.bufs[self.out.node][self.out.port];
+        let stereo = o.len() >= 2 * BLOCK;
+        for f in 0..BLOCK {
+            let mut frame = [o[f], if stereo { o[BLOCK + f] } else { o[f] }];
+            for x in &mut frame {
+                if !x.is_finite() {
+                    if self.strict {
+                        bail!("the song's output became {x} at {:.3}s", (b.start + f as u64) as f64 / self.sample_rate);
+                    }
+                    *x = 0.0;
+                    self.non_finite += 1;
+                }
+            }
+            self.pending.push_back(frame);
+        }
+        self.next_block += BLOCK as u64;
+        Ok(())
     }
 
     /// Render the next `out.len()` frames, stereo.
     pub fn process(&mut self, out: &mut [[f32; 2]]) -> Result<()> {
-        let mut done = 0;
-        while done < out.len() {
-            let frames = (out.len() - done).min(BLOCK);
-            let mut b = Block { frames, start: self.pos, beats: [0.0; BLOCK], seconds: [0.0; BLOCK], beats64: [0.0; BLOCK] };
-            for f in 0..frames {
-                let s = (self.pos + f as u64) as f64 / self.sample_rate;
-                let beat = self.tempo.beat_at(s);
-                b.seconds[f] = s as f32;
-                b.beats[f] = beat as f32;
-                b.beats64[f] = beat;
+        for frame in out.iter_mut() {
+            if self.pending.is_empty() {
+                self.block()?;
             }
-            self.graph.process(&mut self.store, &b, None, None)?;
-            let o = &self.graph.bufs[self.out.node][self.out.port];
-            let stereo = o.len() >= 2 * BLOCK;
-            for f in 0..frames {
-                let l = o[f];
-                let mut frame = [l, if stereo { o[BLOCK + f] } else { l }];
-                for x in &mut frame {
-                    if !x.is_finite() {
-                        *x = 0.0;
-                        self.non_finite += 1;
-                    }
-                }
-                out[done + f] = frame;
-            }
-            self.pos += frames as u64;
-            done += frames;
+            *frame = self.pending.pop_front().expect("a block was just rendered");
         }
+        self.delivered += out.len() as u64;
         Ok(())
     }
 
@@ -430,12 +576,32 @@ impl Renderer {
         Ok(out)
     }
 
-    pub fn position(&self) -> u64 {
-        self.pos
+    /// Continue from sample `to`, exactly as if everything before it had been rendered.
+    /// Implemented by resetting and replaying from 0.
+    pub fn seek(&mut self, to: u64) -> Result<()> {
+        self.graph.reset(&mut self.store)?;
+        self.next_block = 0;
+        self.pending.clear();
+        self.delivered = 0;
+        let mut scratch = vec![[0.0; 2]; 4096];
+        while self.delivered < to {
+            let n = (to - self.delivered).min(scratch.len() as u64) as usize;
+            self.process(&mut scratch[..n])?;
+        }
+        Ok(())
     }
 
-    /// Output samples that were NaN or infinite and were replaced with silence.
-    /// Non-zero means some kernel is broken.
+    /// Frames handed out so far (the playback position).
+    pub fn position(&self) -> u64 {
+        self.delivered
+    }
+
+    /// Voices currently sounding, across every `poly`.
+    pub fn active_voices(&self) -> usize {
+        self.graph.exec.iter().map(|e| if let Exec::Poly(p) = e { p.voices.iter().filter(|v| v.note.is_some()).count() } else { 0 }).sum()
+    }
+
+    /// Samples silenced in live mode because they were NaN or infinite.
     pub fn non_finite(&self) -> u64 {
         self.non_finite
     }

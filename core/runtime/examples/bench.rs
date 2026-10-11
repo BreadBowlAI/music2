@@ -60,8 +60,7 @@ struct NativeVoice {
 }
 
 fn copy<A: Kernel, B: Kernel>(from: &mut Host<A>, port: usize, to: &mut Host<B>, to_port: usize, frames: usize) {
-    let src: Vec<f32> = from.port_mut(port)[..frames].to_vec();
-    to.port_mut(to_port)[..frames].copy_from_slice(&src);
+    to.port_mut(to_port)[..frames].copy_from_slice(&from.port_mut(port)[..frames]);
 }
 
 fn native() -> f64 {

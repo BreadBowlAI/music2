@@ -311,6 +311,11 @@ impl Timeline {
         Ok(ControlLane { clips })
     }
 
+    /// The file holding a lane's clips, if there is one.
+    pub fn lane_file(&self, module: &str, lane: &str) -> Option<&Path> {
+        self.files.get(&(slug(module), lane.to_string())).map(|(p, _)| p.as_path())
+    }
+
     /// Lane files that no declared lane uses.
     pub fn unused(&self, used: &[(String, String)]) -> Vec<PathBuf> {
         self.files.iter().filter(|(k, _)| !used.iter().any(|(m, l)| slug(m) == k.0 && *l == k.1)).map(|(_, (p, _))| p.clone()).collect()

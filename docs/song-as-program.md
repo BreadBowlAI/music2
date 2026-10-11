@@ -198,7 +198,8 @@ The planner turns validated IR into a plan the runtime can execute:
     - `k_port(i)`: the address of port buffer `i` (inputs first, then outputs; channel-major, `2 × max_block` floats)
     - `k_reset()`
     - `k_process(frames)`
-    - plus `m2_abi()` and `memory`, once per module
+    - `k_active()`: whether sound the kernel has already taken in can still come out later (echoes in a delay line, an envelope's release). Brief filter ringing and sound made from nothing (an oscillator) don't count. A `poly` voice ends only when its note is over, its output is quiet, and no kernel in it is active.
+    - plus `m2_abi()` (checked against the runtime's ABI version at load) and `memory`, once per module
   - **No host imports.** A module that imports anything is rejected at load, so a kernel can't reach anything outside its own ports.
   - Each instance's memory is capped (32 MB). A CPU budget is still to come.
   - Rust kernels use the `m2-kernel` crate: implement `Kernel` and call `export!(name, Type)`.
@@ -555,8 +556,18 @@ Agents can't listen, so they need another way to judge the result. `render` with
 | Example song | `examples/first-song` |
 
 **Measured:**
-- **The decision gate passes.** The same kernel source runs **1.62× slower as WebAssembly than native**: 16 voices of saw → filter → envelope render **48× faster than real time** (`cargo run --release -p m2-runtime --example bench`).
-- The example song (4 tracks, 22 voices, 264 kernel instances) renders 17.5 s of audio in 0.46 s, and two renders are byte-identical.
+- **The decision gate passes.** The same kernel source runs **1.62× slower as WebAssembly than native**: 16 voices of saw → filter → envelope render **48× faster than real time** (`cargo run --release -p m2-runtime --example bench`). The correctness milestone below (fixed schedule, exact note starts, strict checks) costs about 10%: now **1.78×**, 44× real time.
+- The example song (4 tracks, 22 voices, 264 kernel instances) renders 17.5 s of audio in 0.51 s, and two renders are byte-identical.
+
+**Correctness milestone (after review), done.** The render specification at the top of `core/runtime/src/lib.rs` is now what the code does, with a regression test for each rule:
+- **A fixed block grid.** Audio is processed in 128-sample blocks from sample 0, whatever buffer size the caller asks for. The output is identical for buffer sizes 1, 7, 64, 100, 129 and 1000.
+- **Feedback** is a delay of exactly 128 samples. It is no longer "the previous call".
+- **Voice changes at the exact sample.** A voice changes note at the sample where the note starts. A stolen voice keeps playing its old note until then, and its graph is split at that point.
+- **Voices end** when their note is over, their output is quiet, and no kernel in them is `active`, so echoes inside a voice survive note-off.
+- **Seeking.** `seek(s)` resets and replays, so a section render is byte-identical to the same slice of a full render (`m2 render --from`).
+- **NaN and infinity.** A non-finite sample is an error in strict mode (the default) that names the kernel, e.g. `song/hz produced inf at 0.000s`. In live mode it is silenced and counted.
+- **`check` means playable.** `m2 check` and `m2 render` share one compile step (`m2-session`). It validates every lane's timeline data against the lane's kind and rejects track names that would share timeline files. It also rejects nonzero kernel latency, audio lanes, and events feeding kernels until they are supported. Unused lane files are warnings.
+- **Packages** must not import anything, must export the full ABI, and must report the runtime's ABI version.
 
 **Settled while building:**
 - `std` is **one package** whose modules are imported as `std/dsp`, `std/math`, `std/control`, `std/fx`, `std/mix` and `std/instruments`. Kernel ids are `package:kernel`, e.g. `std:svf`.
@@ -566,27 +577,30 @@ Agents can't listen, so they need another way to judge the result. `render` with
 - The sandbox deletes `Date`, makes `Math.random` throw, can only import project files, `@m2/core` and installed packages, and stops a build after 10 s or 256 MB.
 
 **Not built yet** (each belongs to a later milestone):
-- latency compensation (every std kernel reports 0)
-- audio lanes
+- latency compensation (rejected at check time until then)
+- audio lanes (rejected at check time)
 - sections
 - stable ids from source positions (ids are counters until hot swap needs them)
 - per-kernel CPU budgets
 - event-producing kernels: today only a notes lane can feed `poly`
+- render caching and checkpoints (seeking replays from 0)
 
 ## Build plan
 
-New code lives alongside the current crates in this repo. The old engine keeps running the app until M6.
+New code lives alongside the current crates in this repo. The old engine keeps running the app until the new core can carry a complete workflow. After review, the plan proves editing early and defers breadth.
 
-1. **The core loop, end to end (decision gate).**
-   - Core: IR with the seven ops, kinds and units, the validator, the planner, the runtime with the wasmtime kernel host, and the script sandbox.
-   - First kernels in `std/dsp`: `osc`, `adsr`, `vca`, `svf`, ported from `m2-dsp`.
-   - CLI: `music2 build` and `music2 render`.
-   - Demo: a bass track renders to a WAV.
-   - Benchmark: WebAssembly kernels against native `m2-dsp`.
-2. **Projects:** timeline data files, `tx`, undo, `music2.toml`/`music2.lock`, git package resolution, `std` resolved as a package.
-3. **Many modules:** `import`, cycle diagnostics, latency compensation, `feedback`, plus `std/mix`, `std/arrange`, `follow`/`duck`.
-4. **Real time:** hot swap with stable ids, audio-device playback in the desktop app, file watching.
-5. **The agent surface:** MCP generated from the core API, `render` taps, `std/meters`, the analysis tool and spectrograms, variants, locks.
-6. **A complete std:** port every current instrument and effect. Retire `m2-graph`, `m2-render` and the old `m2-engine` commands.
-7. **The timeline UI on the new core:** reuse the arrangement and piano roll, add a lane for each declared lane.
-8. **The node editor:** read-only first, then editing the canonical subset, then group nodes.
+1. **The core loop, end to end (decision gate).** Done: see [Implementation status](#implementation-status). Imports, cycle diagnostics, `feedback`, `std/mix` and `follow`/`duck`, originally planned for later, shipped here too.
+2. **Correctness.** Done: a fixed block grid, exact note starts, voice tails via `k_active`, seek by replay, strict NaN errors, and `check` meaning playable.
+3. **The editing session** (`m2-session`):
+   - stable ids for tracks, lanes, clips and notes
+   - project revisions
+   - atomic transactions over code and timeline data, each carrying its base revision so concurrent edits can't silently overwrite each other
+   - undo
+   - **draft versus accepted:** files on disk are the draft, and the engine plays the last revision that validated
+   - locks, checked at that acceptance point
+   - local packages pinned by hash before any fetching from git
+4. **One complete workflow in the desktop app,** through an adapter from the existing UI to the new session: open the example → play → move a clip → edit automation → change code while a note is held → have an invalid edit rejected → undo → save and reopen. Seeking uses reset-and-replay at first. This milestone also includes hot swap with stable ids and real-time playback.
+5. **A minimal node-to-code edit:** one GUI gesture that becomes an exact edit to the source.
+6. **The agent surface:** MCP generated from the session API, `render` taps, `std/meters`, the analysis tool and spectrograms, variants.
+7. **Breadth:** a complete `std` (port every current instrument and effect, then retire `m2-graph`, `m2-render` and the old engine), sections, latency compensation, audio lanes, git package resolution, render caching and checkpoints.
+8. **The full node editor:** read-only first, then the canonical subset, then group nodes.

@@ -136,6 +136,19 @@ description = "State-variable filter with lowpass, bandpass and highpass outputs
 inputs = ["in: audio<*>", "cutoff: control<hz> = 1000", "q: control<scalar> = 0.707"]
 outputs = ["lp: audio<*>", "bp: audio<*>", "hp: audio<*>"]
 
+# ---------------------------------------------------------------- time effects
+
+[[kernel]]
+name = "delay"
+description = "Feedback delay, up to 2 seconds, with a dry/wet mix"
+inputs = [
+  "in: audio<*>",
+  "time: control<seconds> = 0.25",
+  "feedback: control<unit01> = 0.3",
+  "mix: control<unit01> = 0.3",
+]
+outputs = ["out: audio<*>"]
+
 # ---------------------------------------------------------------- dynamics and colour
 
 [[kernel]]

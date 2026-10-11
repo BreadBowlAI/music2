@@ -23,6 +23,7 @@ m2-kernel = { path = "core/kernel" }
 m2-song = { path = "core/song" }
 m2-runtime = { path = "core/runtime" }
 m2-script = { path = "core/script" }
+m2-session = { path = "core/session" }
 
 anyhow = "1"
 thiserror = "2"

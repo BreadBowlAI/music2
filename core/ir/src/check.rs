@@ -158,6 +158,9 @@ impl<'a> Scope<'a> for Song {
             let have: Vec<&str> = m.lanes.iter().map(|l| l.id.as_str()).collect();
             format!("no lane `{lane}` declared (lanes: {})", if have.is_empty() { "none".into() } else { have.join(", ") })
         })?;
+        if matches!(d.kind, Kind::Audio(_)) {
+            return Err(format!("lane `{lane}`: audio lanes aren't supported yet"));
+        }
         let op = FOp::Lane { module: m.name.clone(), lane: lane.to_string(), kind: d.kind, default: d.default.unwrap_or(0.0) };
         Ok((op, d.kind))
     }
@@ -476,6 +479,10 @@ impl<'a> Checker<'a> {
                         self.diags.push(diag(m, Some(node), format!("unknown kernel `{kernel}`")));
                         continue;
                     };
+                    if sig.latency > 0 {
+                        self.diags.push(diag(m, Some(node), format!("`{kernel}` adds {} samples of latency, and latency compensation isn't implemented yet", sig.latency)));
+                        continue;
+                    }
                     let mut typed_conns = HashMap::new();
                     let mut upstream_broken = false;
                     for (port, p) in conns {
@@ -692,6 +699,10 @@ fn type_kernel(sig: &KernelSig, conns: &HashMap<&str, (PortRef, Kind)>) -> Resul
             }
         };
         let mismatch = || format!("input `{}` expects {}, got {k}", p.name, p.kind);
+        if matches!(k, Kind::Events(_)) {
+            errs.push(format!("input `{}`: events can't feed a kernel; play notes with poly", p.name));
+            continue;
+        }
         match p.kind {
             PortKind::Any => match any.map_or(Ok(k), |a| join(a, k)) {
                 Ok(j) => any = Some(j),
@@ -925,6 +936,28 @@ mod tests {
             {"name": "song", "nodes": [{"id": "k", "op": "import", "module": "Kick", "export": "out"}], "exports": {"out": "k"}}]}));
         let e = check(&missing, &kernels()).unwrap_err();
         assert!(e.iter().any(|d| d.message.contains("no module `Kick`")), "{e:?}");
+    }
+
+    #[test]
+    fn unsupported_things_are_rejected_at_check_time() {
+        let mut k = kernels();
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        k.insert("t:look".into(), KernelSig::parse("t:look", "", &s(&["in: audio<1>"]), &s(&["out: audio<1>"]), 64).unwrap());
+        let ir = |nodes: serde_json::Value, lanes: serde_json::Value| {
+            serde_json::from_value::<Ir>(json!({"ir": 0, "root": {"module": "song", "export": "out"},
+                "modules": [{"name": "song", "lanes": lanes, "nodes": nodes, "exports": {"out": "x"}}]}))
+            .unwrap()
+        };
+        let e = check(&ir(json!([{"id": "o", "op": "kernel", "kernel": "t:saw"}, {"id": "x", "op": "kernel", "kernel": "t:look", "inputs": {"in": "o"}}]), json!([])), &k).unwrap_err();
+        assert!(e[0].message.contains("latency compensation"), "{}", e[0]);
+        let e = check(&ir(json!([{"id": "x", "op": "lane", "lane": "vox"}]), json!([{"id": "vox", "kind": "audio<2>"}])), &k).unwrap_err();
+        assert!(e[0].message.contains("audio lanes"), "{}", e[0]);
+        let e = check(
+            &ir(json!([{"id": "n", "op": "lane", "lane": "n"}, {"id": "x", "op": "kernel", "kernel": "t:add", "inputs": {"a": "n", "b": "n"}}]), json!([{"id": "n", "kind": "events<note>"}])),
+            &k,
+        )
+        .unwrap_err();
+        assert!(e[0].message.contains("events can't feed a kernel"), "{}", e[0]);
     }
 
     #[test]
