@@ -518,14 +518,13 @@ async fn graph_preview(State(s): S, Json(r): Json<PreviewReq>) -> ApiResult {
 #[derive(Deserialize)]
 struct CancelPreviewReq {
     session: u64,
-    revision: u64,
     id: String,
     gesture: String,
 }
 
 async fn graph_cancel_preview(State(s): S, Json(r): Json<CancelPreviewReq>) -> ApiResult {
     let state = s.clone();
-    blocking(move || state.graph.cancel_preview(r.session, r.revision, &r.id, &r.gesture)).await?;
+    blocking(move || state.graph.cancel_preview(r.session, &r.id, &r.gesture)).await?;
     Ok(Json(json!({})))
 }
 

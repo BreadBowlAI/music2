@@ -181,8 +181,10 @@ fn audition_and_commit_use_the_same_unit_conversion_without_preview_writing_code
     let fixture = ProjectFixture::new(&original);
     let mut session = fixture.open();
     let control = session.controls().into_iter().next().unwrap();
-    let (origin, preview_value) = session.preview(control.revision, &control.id, 950.0).unwrap();
+    let audition = session.preview(control.revision, &control.id, 950.0).unwrap();
+    let (origin, preview_value) = (audition.origin, audition.value);
     assert_eq!(origin, control.origin);
+    assert_eq!(audition.current, 800.0);
     assert_eq!(preview_value, 950.0);
     assert_eq!(fixture.source(), original);
     assert_eq!(session.accepted().number, control.revision);
@@ -205,16 +207,23 @@ fn audition_refuses_stale_controls_invalid_drafts_and_nonfinite_values() {
     assert!(matches!(session.preview(control.revision, "song.ts#999/0", 950.0), Err(EditError::NotFound(_))));
     assert_eq!(fixture.source(), original);
 
+    // An unrelated save carries the drag forward to the new revision.
     std::fs::write(fixture.0.join("song.ts"), format!("// Saved elsewhere.\n{original}")).unwrap();
     assert!(session.refresh());
-    assert_eq!(session.preview(control.revision, &control.id, 950.0), Err(EditError::Stale { current: 2 }));
+    let carried = session.preview(control.revision, &control.id, 950.0).unwrap();
+    let current = session.controls().into_iter().next().unwrap();
+    assert_eq!((carried.id.as_str(), &carried.origin, carried.value), (current.id.as_str(), &current.origin, 950.0));
 
+    // A save that touches the control's own call makes the old drag stale.
+    std::fs::write(fixture.0.join("song.ts"), format!("// Saved elsewhere.\n{}", original.replace("hz(800)", "hz(801)"))).unwrap();
+    assert!(session.refresh());
+    assert_eq!(session.preview(control.revision, &control.id, 950.0), Err(EditError::Stale { current: 3 }));
     let current = session.controls().into_iter().next().unwrap();
     std::fs::write(fixture.0.join("song.ts"), "(").unwrap();
     assert!(session.refresh());
     assert!(matches!(session.preview(current.revision, &current.id, 950.0), Err(EditError::DraftInvalid(_))));
-    assert_eq!(session.accepted().number, 2);
-    assert_eq!(session.controls()[0].value, 800.0);
+    assert_eq!(session.accepted().number, 3);
+    assert_eq!(session.controls()[0].value, 801.0);
 }
 
 #[test]

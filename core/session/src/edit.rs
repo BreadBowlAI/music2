@@ -58,6 +58,19 @@ pub struct Control {
     lens: LiteralLens,
 }
 
+/// Where a previewed value lands in the accepted revision.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Audition {
+    /// The control's id in the accepted revision (it may differ from the id it was
+    /// named by, if the files changed without touching it).
+    pub id: String,
+    pub origin: Origin,
+    /// The value the preview plays, exactly as a commit would write it.
+    pub value: f64,
+    /// The value in the accepted revision, to return to if the preview is cancelled.
+    pub current: f64,
+}
+
 /// An accepted change.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Committed {
@@ -377,16 +390,17 @@ impl Session {
     /// Resolve a live edit using exactly the same literal lens as a saved edit.
     /// Preview never carries an old origin into a different accepted graph. The
     /// host watches/refreshes the draft separately; no build runs on this path.
-    pub fn preview(&self, at: u64, id: &str, value: f64) -> Result<(Origin, f64), EditError> {
+    ///
+    /// Like [`Session::set`], the control is carried forward from revision `at` when the
+    /// files changed without touching it, so an unrelated save during a drag doesn't end
+    /// the drag; a change that touched it makes the preview stale.
+    pub fn preview(&self, at: u64, id: &str, value: f64) -> Result<Audition, EditError> {
         if !self.draft_errors.is_empty() {
             return Err(EditError::DraftInvalid(self.draft_errors.clone()));
         }
-        if at != self.accepted.number {
-            return Err(EditError::Stale { current: self.accepted.number });
-        }
         let c = self.resolve(at, id)?;
         let edit = c.lens.propose(value)?;
-        Ok((c.origin, edit.value))
+        Ok(Audition { id: c.id, origin: c.origin, value: edit.value, current: c.value })
     }
 
     /// Replace bytes `start..end` of one file with `text`, which must set the constant

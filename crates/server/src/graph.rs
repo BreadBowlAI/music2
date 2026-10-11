@@ -28,6 +28,7 @@ struct Open {
 }
 
 struct Preview {
+    /// The control's id as the gesture named it when it started.
     id: String,
     gesture: String,
     /// Baselines belong to the renderer revision, never a newly adopted source.
@@ -79,8 +80,11 @@ impl Open {
         Ok(())
     }
 
-    fn check_owner(&self, id: &str, gesture: &str) -> Result<()> {
-        if self.previews.iter().any(|p| p.revision == self.session.accepted().number && p.id == id && p.gesture != gesture) {
+    /// Gestures name controls by the revision they started in, so ownership is
+    /// decided by the value in the playing graph, not by the name.
+    fn check_owner(&self, origin: &Origin, gesture: &str) -> Result<()> {
+        let accepted = self.session.accepted().number;
+        if self.previews.iter().any(|p| p.revision == accepted && p.origin.same_value(origin) && p.gesture != gesture) {
             return Err(anyhow!("this control is being edited by another gesture"));
         }
         Ok(())
@@ -183,22 +187,22 @@ impl Graph {
         let mut open = self.open.lock();
         let o = open.as_mut().context("no project is open")?;
         o.check_token(token)?;
-        o.check_owner(id, gesture)?;
         let player = self.player()?;
+        // The session carries the control forward across saves that didn't touch it.
         match o.session.preview(revision, id, value) {
-            Ok((origin, value)) => {
+            Ok(audition) => {
+                o.check_owner(&audition.origin, gesture)?;
                 o.sync(&player)?;
-                if !o.previews.iter().any(|p| p.origin.same_value(&origin)) {
-                    let control = o.session.controls().into_iter().find(|c| c.id == id).context("the control disappeared")?;
+                if !o.previews.iter().any(|p| p.origin.same_value(&audition.origin)) {
                     o.previews.push(Preview {
                         id: id.into(),
                         gesture: gesture.into(),
                         revision: o.playing,
-                        origin: origin.clone(),
-                        baseline: control.value,
+                        origin: audition.origin.clone(),
+                        baseline: audition.current,
                     });
                 }
-                player.set_const(origin, value);
+                player.set_const(audition.origin, audition.value);
                 Ok(())
             }
             Err(error) => {
@@ -208,11 +212,12 @@ impl Graph {
         }
     }
 
-    /// Close only the preview owned by this gesture. Old callbacks are harmless.
-    pub fn cancel_preview(&self, token: u64, revision: u64, id: &str, gesture: &str) -> Result<()> {
+    /// Close only the preview owned by this gesture. Old callbacks are harmless:
+    /// a preview from an older renderer was already discarded with it.
+    pub fn cancel_preview(&self, token: u64, id: &str, gesture: &str) -> Result<()> {
         let mut open = self.open.lock();
         let Some(o) = open.as_mut() else { return Ok(()) };
-        if token != o.token || revision != o.session.accepted().number || revision != o.playing {
+        if token != o.token {
             return Ok(());
         }
         o.cancel(&self.player()?, id, gesture)
@@ -223,21 +228,21 @@ impl Graph {
         let mut open = self.open.lock();
         let o = open.as_mut().context("no project is open")?;
         o.check_token(token)?;
-        o.check_owner(id, gesture)?;
         let player = self.player()?;
         o.session.refresh();
-        let before = o.session.accepted().number;
-        if revision != before {
-            o.reject(&player, id, gesture)?;
-            return Err(anyhow!("the code changed; it is revision {before} now, refresh the graph before editing"));
+        if let Ok(target) = o.session.preview(revision, id, value) {
+            o.check_owner(&target.origin, gesture)?;
         }
+        let before = o.session.accepted().number;
+        // The session carries the edit forward from `revision` if the code changed
+        // without touching the control, and refuses it as stale otherwise.
         match o.session.set(revision, id, value, expect) {
             Ok(c) => {
                 // Only a verified single value edit can update the existing renderer.
                 // set() may refresh again and adopt unrelated source changes first.
                 let single_edit = c.before != c.after && c.revision == before + 1;
                 if o.playing == before && (single_edit || c.revision == before) {
-                    o.previews.retain(|p| p.id != id);
+                    o.previews.retain(|p| p.gesture != gesture);
                     o.restore_previews(&player)?;
                     player.commit_const(c.origin.clone(), c.value)?;
                     o.playing = c.revision;
@@ -359,12 +364,12 @@ mod tests {
         let graph = fixture.open();
         let (token, revision, id) = control(&graph);
         graph.preview(token, revision, &id, "owner", 900.0).unwrap();
-        graph.cancel_preview(token, revision, &id, "old-gesture").unwrap();
+        graph.cancel_preview(token, &id, "old-gesture").unwrap();
         assert!(graph.preview(token, revision, &id, "other", 1000.0).is_err());
         assert!(graph.set(token, revision, &id, "other", 1000.0, Some(800.0)).is_err());
         assert_eq!(graph.open.lock().as_ref().unwrap().previews.len(), 1);
         assert_eq!(graph.open.lock().as_ref().unwrap().previews[0].gesture, "owner");
-        graph.cancel_preview(token, revision, &id, "owner").unwrap();
+        graph.cancel_preview(token, &id, "owner").unwrap();
         assert!(graph.open.lock().as_ref().unwrap().previews.is_empty());
         assert_eq!(control(&graph), (token, revision, id));
     }
@@ -380,28 +385,74 @@ mod tests {
         graph.preview(current, revision, &id, "new", 900.0).unwrap();
         assert!(graph.preview(old, revision, &id, "old", 1000.0).is_err());
         assert!(graph.set(old, revision, &id, "old", 1000.0, Some(800.0)).is_err());
-        graph.cancel_preview(old, revision, &id, "new").unwrap();
+        graph.cancel_preview(old, &id, "new").unwrap();
         assert_eq!(graph.open.lock().as_ref().unwrap().previews.len(), 1);
         assert_eq!(control(&graph), (current, revision, id));
     }
 
     #[test]
-    fn stale_commit_after_source_insertion_rebuilds_instead_of_patching_an_old_origin() {
+    fn a_commit_carried_past_inserted_code_rebuilds_instead_of_patching_an_old_origin() {
         let fixture = Fixture::new();
         let graph = fixture.open();
         let (token, revision, id) = control(&graph);
         graph.preview(token, revision, &id, "drag", 900.0).unwrap();
         let old_origin = graph.open.lock().as_ref().unwrap().previews[0].origin.clone();
         fixture.write("const first = hz(123);\nconst second = hz(456);\nexport default song(() => osc.sine(hz(800)));\n");
-        assert!(graph.set(token, revision, &id, "drag", 950.0, Some(800.0)).is_err());
+        // The inserted calls shift the control's position in the graph. The commit is
+        // carried to it, and the player is rebuilt rather than patched at the old one.
+        graph.set(token, revision, &id, "drag", 950.0, Some(800.0)).unwrap();
         let open = graph.open.lock();
         let o = open.as_ref().unwrap();
-        assert!(o.session.accepted().number > revision);
+        assert!(o.session.accepted().number > revision + 1);
         assert_eq!(o.playing, o.session.accepted().number);
         assert!(o.previews.is_empty());
-        let current = o.session.controls().into_iter().find(|c| c.value == 800.0).unwrap();
+        let current = o.session.controls().into_iter().find(|c| c.value == 950.0).unwrap();
         assert_ne!(current.origin, old_origin);
-        assert!(!std::fs::read_to_string(fixture.0.join("song.ts")).unwrap().contains("950"));
+        let source = std::fs::read_to_string(fixture.0.join("song.ts")).unwrap();
+        assert!(source.contains("hz(123)") && source.contains("hz(456)") && source.contains("hz(950)"));
+    }
+
+    #[test]
+    fn an_unrelated_save_during_a_drag_keeps_the_drag_and_commits_it() {
+        let fixture = Fixture::new();
+        fixture.write("// notes\nexport default song(() => osc.sine(hz(800)));\n");
+        let graph = fixture.open();
+        let (token, revision, id) = control(&graph);
+        graph.preview(token, revision, &id, "drag", 900.0).unwrap();
+        fixture.write("// notes, edited elsewhere\nexport default song(() => osc.sine(hz(800)));\n");
+        assert!(graph.poll());
+        // The drag goes on, still named by the revision it started in.
+        graph.preview(token, revision, &id, "drag", 920.0).unwrap();
+        {
+            let open = graph.open.lock();
+            let o = open.as_ref().unwrap();
+            assert_eq!(o.playing, o.session.accepted().number);
+            assert_eq!((o.previews.len(), o.previews[0].baseline), (1, 800.0));
+        }
+        // Another gesture can't take the carried control.
+        assert!(graph.preview(token, revision + 1, &id, "other", 1000.0).is_err());
+        let result = graph.set(token, revision, &id, "drag", 950.0, Some(800.0)).unwrap();
+        assert_eq!(result["after"], "950");
+        let source = std::fs::read_to_string(fixture.0.join("song.ts")).unwrap();
+        assert!(source.contains("// notes, edited elsewhere") && source.contains("hz(950)"));
+        let open = graph.open.lock();
+        let o = open.as_ref().unwrap();
+        assert!(o.previews.is_empty());
+        assert_eq!(o.playing, o.session.accepted().number);
+    }
+
+    #[test]
+    fn a_save_that_touches_the_dragged_value_ends_the_drag() {
+        let fixture = Fixture::new();
+        let graph = fixture.open();
+        let (token, revision, id) = control(&graph);
+        graph.preview(token, revision, &id, "drag", 900.0).unwrap();
+        fixture.write("export default song(() => osc.sine(hz(801)));\n");
+        assert!(graph.poll());
+        assert!(graph.preview(token, revision, &id, "drag", 920.0).is_err());
+        assert!(graph.set(token, revision, &id, "drag", 950.0, Some(800.0)).is_err());
+        assert!(std::fs::read_to_string(fixture.0.join("song.ts")).unwrap().contains("hz(801)"));
+        assert!(graph.open.lock().as_ref().unwrap().previews.is_empty());
     }
 
     #[test]

@@ -15,7 +15,7 @@ export default song(() =>
       hats: { in: hats.out, db: db(-34.7), pan: -0.0577 },
       // Sidechain: the bass ducks whenever the kick hits.
       bass: duck(bass.out, kick.env, { depth: db(-42.9) }),
-      keys: { in: keys.out, db: db(-11.5), pan: -0.528 },
+      keys: { in: keys.out, db: db(-11.5), pan: -0.542 },
     }),
   ),
 );
