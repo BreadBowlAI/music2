@@ -102,6 +102,8 @@ cargo run --release -p m2 -- build examples/first-song            # run the Type
 cargo run --release -p m2 -- render examples/first-song out.wav   # render to WAV
 cargo run --release -p m2 -- kernels                              # every kernel and its typed ports
 cargo run --release -p m2 -- plugins                              # installed CLAP plugins (and `plugins clap:<id>` for ports)
+cargo run --release -p m2 -- controls examples/first-song         # every number the graph editor can change
+cargo run --release -p m2 -- set examples/first-song 'song.ts#2/0.hats.pan' 0.45 --expect 0.3   # verified one-token edit
 cargo run --release -p m2 -- bounce examples/resample keys-bounce --track Keys --force   # render a track to an asset
 std/build.sh                                                      # rebuild std's WebAssembly kernels
 cargo run --release -p m2-runtime --example bench                 # WebAssembly vs native speed

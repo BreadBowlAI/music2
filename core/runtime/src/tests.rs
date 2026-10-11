@@ -174,6 +174,7 @@ fn std_manifest_matches_its_kernels() {
             name: id.clone(),
             module: "t".into(),
             src: None,
+            origin: None,
             op: FOp::Const(0.0),
             outputs: sig.outputs.iter().map(|_| Kind::Audio(1)).collect(),
         };

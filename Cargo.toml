@@ -43,7 +43,7 @@ open = "5"
 toml = "1"
 wasmtime = { version = "49", default-features = false, features = ["anyhow", "cranelift", "runtime", "std"] }
 rquickjs = { version = "0.14", features = ["loader"] }
-oxc = { version = "0.153", features = ["transformer", "codegen", "semantic"] }
+oxc = { version = "0.153", features = ["transformer", "codegen", "semantic", "ast_visit"] }
 bytemuck = "1"
 
 [profile.dev]

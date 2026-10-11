@@ -11,6 +11,8 @@ use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+pub mod sites;
+
 use m2_ir::{Body, Diagnostic, Ir};
 use oxc::allocator::Allocator;
 use oxc::codegen::{Codegen, CodegenOptions};
@@ -28,6 +30,8 @@ const CORE: &str = "@m2/core";
 
 /// Runs before anything else: remove what would make a build non-deterministic.
 const PRELUDE: &str = r#"
+globalThis.__m2_site = -1;
+globalThis.__m2s = function (site, value) { globalThis.__m2_site = site; return value; };
 delete globalThis.Date;
 Math.random = () => { throw new Error("Math.random isn't available: songs must render the same every time. Use a seeded generator."); };
 "#;
@@ -42,6 +46,16 @@ pub struct Options {
     pub packages: Vec<(String, PathBuf)>,
     pub memory_limit: usize,
     pub time_limit: Duration,
+    /// File contents to use instead of what is on disk, by canonical path. Lets the
+    /// session build a candidate edit without writing it.
+    pub sources: HashMap<PathBuf, String>,
+}
+
+/// What a build produces.
+pub struct Build {
+    pub ir: Ir,
+    /// Every call site in the project and package files that ran.
+    pub sites: Vec<sites::Site>,
 }
 
 impl Options {
@@ -52,6 +66,7 @@ impl Options {
             packages: vec![],
             memory_limit: 256 << 20,
             time_limit: Duration::from_secs(10),
+            sources: HashMap::new(),
         }
     }
 }
@@ -71,11 +86,19 @@ impl LineMap {
     }
 }
 
+struct LoadedFile {
+    original: String,
+    instrumented: Option<sites::Instrumented>,
+    map: LineMap,
+}
+
 #[derive(Default)]
 struct State {
     project: PathBuf,
     packages: Vec<(String, PathBuf)>,
-    maps: HashMap<String, LineMap>,
+    sources: HashMap<PathBuf, String>,
+    files: HashMap<String, LoadedFile>,
+    sites: Vec<sites::Site>,
 }
 
 impl State {
@@ -87,9 +110,28 @@ impl State {
             _ => return at.to_string(),
         };
         let (Some(line), Some(col)) = (line, col) else { return at.to_string() };
-        let pos = self.maps.get(file).and_then(|m| m.lookup(line.saturating_sub(1), col.saturating_sub(1)));
-        let (line, col) = pos.map_or((line, col), |(l, c)| (l + 1, c + 1));
+        let Some(f) = self.files.get(file) else { return format!("{}:{line}:{col}", self.display(file)) };
+        let (line, col) = match f.map.lookup(line.saturating_sub(1), col.saturating_sub(1)) {
+            // Map from the instrumented text back to the original.
+            Some((l, c)) => match &f.instrumented {
+                Some(inst) => {
+                    let off = offset_of(&inst.code, l as usize, c as usize);
+                    let (l, c) = line_col(&f.original, inst.original_offset(off as u32) as usize);
+                    (l as u32, c as u32)
+                }
+                None => (l + 1, c + 1),
+            },
+            None => (line, col),
+        };
         format!("{}:{line}:{col}", self.display(file))
+    }
+
+    /// `file:line:col` of a site's start.
+    fn site_src(&self, site: u32) -> Option<String> {
+        let s = self.sites.iter().find(|s| s.id == site)?;
+        let f = self.files.values().find(|f| f.instrumented.as_ref().is_some_and(|i| i.sites.iter().any(|x| x.id == site)))?;
+        let (l, c) = line_col(&f.original, s.start as usize);
+        Some(format!("{}:{l}:{c}", s.file))
     }
 
     fn display(&self, file: &str) -> String {
@@ -129,6 +171,13 @@ fn strip(path: &str, source: &str) -> Result<(String, LineMap), String> {
         map.tokens.sort_unstable();
     }
     Ok((out.code, map))
+}
+
+/// Byte offset of a 0-based line and column (in characters).
+fn offset_of(text: &str, line: usize, col: usize) -> usize {
+    let start: usize = text.split_inclusive('\n').take(line).map(str::len).sum();
+    let rest = &text[start.min(text.len())..];
+    start + rest.char_indices().nth(col).map_or(rest.len(), |(i, _)| i)
 }
 
 fn line_col(source: &str, offset: usize) -> (usize, usize) {
@@ -195,24 +244,50 @@ struct Load(Rc<RefCell<State>>);
 
 impl Loader for Load {
     fn load<'js>(&mut self, ctx: &Ctx<'js>, name: &str, _: Option<ImportAttributes<'js>>) -> rquickjs::Result<Module<'js, rquickjs::module::Declared>> {
-        let source = if name == CORE {
-            SDK.to_string()
+        let fail = |e: String| rquickjs::Error::new_loading_message(name, e);
+        let mut st = self.0.borrow_mut();
+        let (original, instrumented) = if name == CORE {
+            (SDK.to_string(), None)
         } else {
-            std::fs::read_to_string(name).map_err(|e| rquickjs::Error::new_loading_message(name, e.to_string()))?
+            let source = match st.sources.get(Path::new(name)) {
+                Some(s) => s.clone(),
+                None => std::fs::read_to_string(name).map_err(|e| fail(e.to_string()))?,
+            };
+            let first = st.sites.last().map_or(0, |s| s.id + 1);
+            let mut inst = sites::instrument(&st.display(name), &source, first).map_err(fail)?;
+            let in_project = Path::new(name).starts_with(&st.project);
+            for s in &mut inst.sites {
+                s.in_project = in_project;
+            }
+            st.sites.extend(inst.sites.iter().cloned());
+            (source, Some(inst))
         };
-        let (js, map) = strip(name, &source).map_err(|e| rquickjs::Error::new_loading_message(name, e))?;
-        self.0.borrow_mut().maps.insert(name.to_string(), map);
+        let code = instrumented.as_ref().map_or(original.as_str(), |i| i.code.as_str());
+        let (js, map) = strip(name, code).map_err(fail)?;
+        st.files.insert(name.to_string(), LoadedFile { original, instrumented, map });
+        drop(st);
         Module::declare(ctx.clone(), name, js)
     }
 }
 
 /// Run the song and return its IR, or what went wrong.
 pub fn build(opts: &Options) -> Result<Ir, Vec<Diagnostic>> {
+    build_full(opts).map(|b| b.ir)
+}
+
+/// Like [`build`], also returning the call sites the IR's origins refer to.
+pub fn build_full(opts: &Options) -> Result<Build, Vec<Diagnostic>> {
     let err = |m: String| vec![Diagnostic::new(m)];
     let project = opts.project.canonicalize().map_err(|e| err(format!("{}: {e}", opts.project.display())))?;
     let entry = opts.entry.canonicalize().map_err(|e| err(format!("{}: {e}", opts.entry.display())))?;
     let packages: Vec<(String, PathBuf)> = opts.packages.iter().filter_map(|(n, d)| Some((n.clone(), d.canonicalize().ok()?))).collect();
-    let state = Rc::new(RefCell::new(State { project: project.clone(), packages: packages.clone(), maps: HashMap::new() }));
+    let state = Rc::new(RefCell::new(State {
+        project: project.clone(),
+        packages: packages.clone(),
+        sources: opts.sources.clone(),
+        files: HashMap::new(),
+        sites: vec![],
+    }));
 
     let rt = Runtime::new().map_err(|e| err(e.to_string()))?;
     rt.set_memory_limit(opts.memory_limit);
@@ -244,12 +319,13 @@ pub fn build(opts: &Options) -> Result<Ir, Vec<Diagnostic>> {
         m.src = m.src.as_deref().map(|s| st.remap(s));
         remap_nodes(&st, &mut m.nodes);
     }
-    Ok(ir)
+    Ok(Build { ir, sites: st.sites.clone() })
 }
 
 fn remap_nodes(st: &State, nodes: &mut [m2_ir::Node]) {
     for n in nodes {
-        n.src = n.src.as_deref().map(|s| st.remap(s));
+        // A node made by a known call points exactly at it; otherwise use the stack.
+        n.src = n.origin.as_ref().and_then(|o| st.site_src(o.site)).or_else(|| n.src.as_deref().map(|s| st.remap(s)));
         if let m2_ir::Op::Poly { body: Body { nodes, .. }, .. } = &mut n.op {
             remap_nodes(st, nodes);
         }

@@ -4,27 +4,40 @@
 //! succeeds, the song renders. It runs the TypeScript, checks the graph, and validates
 //! every lane's timeline data against the lane's declared kind.
 //!
-//! This crate will grow into the editing session (revisions, transactions, undo).
+//! [`Session`] (in `edit`) is the editing session built on it: a source snapshot,
+//! revisions, verified value edits and undo.
+
+pub mod edit;
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use m2_ir::{Diagnostic, Flat, Ir, Kind};
 use m2_runtime::PackageSet;
 use m2_song::{Project, slug};
 
+pub use edit::{Committed, Control, EditError, Session};
+
 /// A project that is ready to render.
 pub struct Compiled {
     pub ir: Ir,
     pub flat: Flat,
+    /// The call sites that origins in the IR refer to.
+    pub sites: Vec<m2_script::sites::Site>,
     /// Problems that don't stop the song from playing, such as unused lane files.
     pub warnings: Vec<Diagnostic>,
 }
 
 pub fn compile(project: &Project, packages: &mut PackageSet) -> Result<Compiled, Vec<Diagnostic>> {
+    compile_sources(project, packages, HashMap::new())
+}
+
+/// [`compile`], with some files' contents supplied instead of read from disk.
+pub fn compile_sources(project: &Project, packages: &mut PackageSet, sources: HashMap<PathBuf, String>) -> Result<Compiled, Vec<Diagnostic>> {
     let mut opts = m2_script::Options::new(&project.dir, &project.entry());
     opts.packages = packages.packages().map(|p| (p.name.clone(), p.dir.clone())).collect();
-    let ir = m2_script::build(&opts)?;
+    opts.sources = sources;
+    let m2_script::Build { ir, sites } = m2_script::build_full(&opts)?;
 
     let mut diags = names(&ir);
     diags.extend(plugins(project, &ir, packages));
@@ -47,7 +60,7 @@ pub fn compile(project: &Project, packages: &mut PackageSet) -> Result<Compiled,
         .into_iter()
         .map(|f| Diagnostic { message: "no lane uses this file".into(), src: Some(relative(&project.dir, &f)), ..Default::default() })
         .collect();
-    Ok(Compiled { ir, flat: flat.expect("no diagnostics means the graph checked"), warnings })
+    Ok(Compiled { ir, flat: flat.expect("no diagnostics means the graph checked"), sites, warnings })
 }
 
 /// Module names become file names (`Lead Vox` → `timeline/lead-vox.*.json`), so two

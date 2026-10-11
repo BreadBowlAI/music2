@@ -50,20 +50,39 @@ export class Quantity<U extends Unit = Unit> {
   constructor(
     readonly value: number,
     readonly unit: U,
+    /** @internal The call that wrote it, so the editor can find the number. */
+    readonly site?: number,
+    /** @internal `value` is the written number times this (`khz` is 1000). */
+    readonly scale: number = 1,
   ) {}
 }
 
-export const hz = (v: number) => new Quantity(v, "hz");
-export const khz = (v: number) => new Quantity(v * 1000, "hz");
-export const db = (v: number) => new Quantity(v, "db");
-export const linear = (v: number) => new Quantity(v, "gain");
-export const semis = (v: number) => new Quantity(v, "semitones");
-export const secs = (v: number) => new Quantity(v, "seconds");
-export const ms = (v: number) => new Quantity(v / 1000, "seconds");
-export const beats = (v: number) => new Quantity(v, "beats");
-export const frac = (v: number) => new Quantity(v, "unit01");
-export const bipolar = (v: number) => new Quantity(v, "bipolar");
-export const scalar = (v: number) => new Quantity(v, "scalar");
+/** The call site the running call was made from (set by instrumentation), once. */
+function takeSite(): number | undefined {
+  const g = globalThis as any;
+  const s = g.__m2_site;
+  g.__m2_site = -1;
+  return typeof s === "number" && s >= 0 ? s : undefined;
+}
+
+const unitFn =
+  <U extends Unit>(unit: U, scale = 1) =>
+  (v: number): Quantity<U> => {
+    const site = takeSite();
+    return new Quantity(v * scale, unit, site, scale);
+  };
+
+export const hz = unitFn("hz");
+export const khz = unitFn("hz", 1000);
+export const db = unitFn("db");
+export const linear = unitFn("gain");
+export const semis = unitFn("semitones");
+export const secs = unitFn("seconds");
+export const ms = unitFn("seconds", 0.001);
+export const beats = unitFn("beats");
+export const frac = unitFn("unit01");
+export const bipolar = unitFn("bipolar");
+export const scalar = unitFn("scalar");
 
 /** Anything that can feed an input: a signal, a plain number (fits any unit), or a quantity. */
 export type Value<K = unknown> = Signal<K> | number | Quantity;
@@ -79,7 +98,8 @@ export type Note = {
 
 // ---------------------------------------------------------------- building
 
-type IrNode = { id: string; op: string; src?: string; [k: string]: unknown };
+type Origin = { site: number; arg?: string[]; scale?: number };
+type IrNode = { id: string; op: string; src?: string; origin?: Origin; [k: string]: unknown };
 type LaneDecl = { id: string; kind: string; default?: number };
 
 class ModuleBuild {
@@ -131,14 +151,19 @@ function callsite(): string | undefined {
   return fallback;
 }
 
-function push(scope: Scope, op: Record<string, unknown>): string {
+function push(scope: Scope, op: Record<string, unknown>, origin?: Origin): string {
   const id = `n${scope.module.counter++}`;
   const node: IrNode = { id, op: op.op as string, ...op };
-  const src = callsite();
-  if (src) node.src = src;
+  if (origin) node.origin = origin;
+  else {
+    const src = callsite();
+    if (src) node.src = src;
+  }
   scope.nodes.push(node);
   return id;
 }
+
+const at = (site: number | undefined): Origin | undefined => (site === undefined ? undefined : { site });
 
 function visible(s: Signal, from: Scope): boolean {
   for (let at: Scope | null = from; at; at = at.parent) if (at === s.scope) return true;
@@ -159,7 +184,10 @@ function ref(v: Value, what: string): string {
     if (!Number.isFinite(v)) throw new Error(`${what}: ${v} is not a finite number`);
     return push(scope, { op: "const", value: v });
   }
-  if (v instanceof Quantity) return push(scope, { op: "const", value: v.value, unit: v.unit });
+  if (v instanceof Quantity) {
+    const origin = v.site === undefined ? undefined : { site: v.site, arg: ["0"], ...(v.scale !== 1 ? { scale: v.scale } : {}) };
+    return push(scope, { op: "const", value: v.value, unit: v.unit }, origin);
+  }
   throw new TypeError(`${what}: expected a signal, a number or a quantity like hz(440), got ${typeof v}`);
 }
 
@@ -168,10 +196,11 @@ function ref(v: Value, what: string): string {
  * Unset inputs use the kernel's defaults.
  */
 export function kernel<K = unknown>(id: string, inputs: Record<string, Value | undefined> = {}): KernelNode<K> {
+  const site = takeSite();
   const scope = need(`kernel("${id}")`);
   const ins: Record<string, string> = {};
   for (const [k, v] of Object.entries(inputs)) if (v !== undefined) ins[k] = ref(v, `${id} input "${k}"`);
-  return new KernelNode<K>(push(scope, { op: "kernel", kernel: id, inputs: ins }), scope);
+  return new KernelNode<K>(push(scope, { op: "kernel", kernel: id, inputs: ins }, at(site)), scope);
 }
 
 /**
@@ -180,6 +209,7 @@ export function kernel<K = unknown>(id: string, inputs: Record<string, Value | u
  * (`m2 plugins <id>` lists them). `state` names a saved state in `assets/plugin-state/`.
  */
 export function plugin(id: string, inputs: { state?: string; [port: string]: Value | string | undefined } = {}): KernelNode<AudioKind> {
+  const site = takeSite();
   const scope = need(`plugin("${id}")`);
   const ins: Record<string, string> = {};
   let state: string | undefined;
@@ -195,7 +225,7 @@ export function plugin(id: string, inputs: { state?: string; [port: string]: Val
   }
   const op: Record<string, unknown> = { op: "plugin", plugin: id, inputs: ins };
   if (state !== undefined) op.state = state;
-  return new KernelNode<AudioKind>(push(scope, op), scope);
+  return new KernelNode<AudioKind>(push(scope, op, at(site)), scope);
 }
 
 /**
@@ -204,6 +234,7 @@ export function plugin(id: string, inputs: { state?: string; [port: string]: Val
  * still readable.
  */
 export function poly(notes: Events, voice: (note: Note) => Audio, opts: { voices?: number } = {}): Audio {
+  const site = takeSite();
   const outer = need("poly");
   const events = ref(notes, "poly notes");
   const body = new Scope(outer.module, outer);
@@ -228,7 +259,7 @@ export function poly(notes: Events, voice: (note: Note) => Audio, opts: { voices
   } finally {
     current = outer;
   }
-  const id = push(outer, { op: "poly", events, voices: opts.voices ?? 16, body: { nodes: body.nodes, out } });
+  const id = push(outer, { op: "poly", events, voices: opts.voices ?? 16, body: { nodes: body.nodes, out } }, at(site));
   return new Signal<AudioKind>(id, outer);
 }
 
@@ -245,10 +276,52 @@ export class Feedback<K = unknown> extends Signal<K> {
 const feedbacks: { node: () => IrNode | undefined; module: string }[] = [];
 
 export function feedback<K = unknown>(kind: "audio<1>" | "audio<2>" | `control<${Unit}>`): Feedback<K> {
+  const site = takeSite();
   const scope = need("feedback");
-  const id = push(scope, { op: "feedback", kind, input: null });
+  const id = push(scope, { op: "feedback", kind, input: null }, at(site));
   feedbacks.push({ node: () => scope.nodes.find((n) => n.id === id), module: scope.module.name });
   return new Feedback<K>(id, scope);
+}
+
+// ---------------------------------------------------------------- components
+
+/**
+ * Declare which arguments of a function are *controls*: numbers that can change
+ * while the song plays (a cutoff, a gain), as opposed to settings that shape the
+ * graph (a voice count, a filter mode). Paths are a positional index and then
+ * property keys, with `*` for any key: `"1"`, `"1.cutoff"`, `"0.*.pan"`.
+ *
+ * Each plain number found at a control path becomes a constant node that remembers
+ * where it was written, so the editor can show it as a knob and change it live. The
+ * function receives a signal there instead of the number.
+ */
+export function component<F extends (...args: any[]) => any>(desc: { controls: string[] }, fn: F): F {
+  const patterns = desc.controls.map((p) => p.split("."));
+  return ((...args: unknown[]) => {
+    const site = takeSite();
+    if (site !== undefined && current) {
+      const scope = current;
+      for (const [first, ...rest] of patterns) {
+        const i = Number(first);
+        if (i < args.length) args[i] = controlAt(args[i], rest, [first], site, scope);
+      }
+    }
+    return fn(...args);
+  }) as F;
+}
+
+function controlAt(v: unknown, rest: string[], path: string[], site: number, scope: Scope): unknown {
+  if (rest.length === 0) {
+    if (typeof v === "number" && Number.isFinite(v)) return new Signal(push(scope, { op: "const", value: v }, { site, arg: path }), scope);
+    return v;
+  }
+  if (!v || typeof v !== "object" || v instanceof Signal || v instanceof Quantity || Array.isArray(v)) return v;
+  const [key, ...more] = rest;
+  const copy: Record<string, unknown> = { ...(v as Record<string, unknown>) };
+  for (const k of key === "*" ? Object.keys(copy) : [key]) {
+    if (k in copy) copy[k] = controlAt(copy[k], more, [...path, k], site, scope);
+  }
+  return copy;
 }
 
 // ---------------------------------------------------------------- modules
@@ -281,7 +354,7 @@ function declareLane(m: ModuleBuild, id: string, kind: string, fallback?: number
 }
 
 function ctxFor(m: ModuleBuild): Ctx {
-  const laneNode = (id: string, unit?: Unit) => new Signal<any>(push(m.root, { op: "lane", lane: id }), m.root, unit);
+  const laneNode = (id: string, unit?: Unit, site?: number) => new Signal<any>(push(m.root, { op: "lane", lane: id }, at(site)), m.root, unit);
   const time = (of: "beats" | "seconds") => {
     let s = m.time.get(of);
     if (!s) m.time.set(of, (s = new Signal(push(m.root, { op: "time", of }), m.root, of)));
@@ -291,21 +364,25 @@ function ctxFor(m: ModuleBuild): Ctx {
     name: m.name,
     lane: {
       notes(id) {
+        const site = takeSite();
         declareLane(m, id, "events<note>");
-        return laneNode(id);
+        return laneNode(id, undefined, site);
       },
       control(id, unit, fallback) {
+        const site = takeSite();
         const v = fallback instanceof Quantity ? fallback.value : fallback;
         declareLane(m, id, `control<${unit}>`, v ?? 0);
-        return laneNode(id, unit);
+        return laneNode(id, unit, site);
       },
       mask(id) {
+        const site = takeSite();
         declareLane(m, id, "control<unit01>", 0);
-        return laneNode(id, "unit01");
+        return laneNode(id, "unit01", site);
       },
       audio(id, channels = 2) {
+        const site = takeSite();
         declareLane(m, id, `audio<${channels}>`);
-        return laneNode(id);
+        return laneNode(id, undefined, site);
       },
     },
     time: {

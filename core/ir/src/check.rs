@@ -10,7 +10,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use crate::kind::{EventType, Kind, PortKind, Unit};
 use crate::sig::{KernelSig, Kernels};
-use crate::{Body, Diagnostic, Ir, Module, Node, Op, TimeOf, split_ref};
+use crate::{Body, Diagnostic, Ir, Module, Node, Op, Origin, TimeOf, split_ref};
 
 /// Output `port` of node `node` in a [`Flat`] or [`Voice`] graph.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -105,6 +105,9 @@ pub struct FNode {
     pub name: String,
     pub module: String,
     pub src: Option<String>,
+    /// Where it was written. Constants with an origin stay addressable (never folded
+    /// into kernel inputs) so their value can change while the song plays.
+    pub origin: Option<Origin>,
     pub op: FOp,
     pub outputs: Vec<Kind>,
 }
@@ -521,6 +524,7 @@ impl<'a> Checker<'a> {
                             for inp in &mut inputs {
                                 if let Input::Port { src, .. } = inp
                                     && let Some(Some(FOp::Const(v))) = ops.get(src.node)
+                                    && items.get(src.node).is_some_and(|(_, n)| n.origin.is_none())
                                 {
                                     *inp = Input::Const(*v);
                                 }
@@ -590,6 +594,7 @@ impl<'a> Checker<'a> {
                 name: format!("{}/{}", m.name, node.id),
                 module: m.name.clone(),
                 src: node.src.clone(),
+                origin: node.origin.clone(),
                 op: op.unwrap_or(FOp::Const(0.0)),
                 outputs: k.clone().unwrap_or_default(),
             })
@@ -597,7 +602,7 @@ impl<'a> Checker<'a> {
         let mut order = order;
         for (j, (op, k)) in extras.into_iter().enumerate() {
             let module = items.first().map(|(m, _)| m.name.clone()).unwrap_or_default();
-            nodes.push(FNode { name: format!("{module}/capture{j}"), module, src: None, op, outputs: vec![k] });
+            nodes.push(FNode { name: format!("{module}/capture{j}"), module, src: None, origin: None, op, outputs: vec![k] });
             order.insert(j, n + j);
         }
         Some((nodes, order, kinds))

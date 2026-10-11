@@ -482,24 +482,36 @@ There is no tempo and there are no sections in this code. Both are timeline data
 
 ### Editing code from the graph
 
-**The TypeScript is the source of truth. The node editor is a live view of it that can also edit it,** like SwiftUI code and Xcode's canvas. The detailed problem statement, handed to a specialist to design the implementation, is [`docs/code-graph-editing-brief.md`](code-graph-editing-brief.md). Current thinking:
+**The TypeScript is the source of truth. The node editor is a live view of it that can also edit it,** like SwiftUI code and Xcode's canvas. The problem was handed to a specialist ([brief](code-graph-editing-brief.md)), whose proposal is in [`code-graph-editing-design.md`](code-graph-editing-design.md).
 
-1. **A declarative house style.** A track is a list of named `const` bindings and a `return`. Every editor gesture maps to a small text change:
+**Decision (2026-10-11).**
 
-   | In the graph | In the code |
-   |---|---|
-   | turn a knob | change one literal, e.g. `0.3` → `0.45` |
-   | connect a cable | change one argument to a binding's name |
-   | add a node | insert `const x = …;` before the `return` |
-   | delete a node | remove the binding |
-   | automate a knob | `0.3` → `lane.control("mix", "unit01", 0.3)` |
-   | rename a node | rename the binding everywhere it is used |
+Adopted from the proposal:
+- **Identity belongs to a call occurrence (a *site*), not a binding name.** Unnamed inline calls are as editable as named ones, and nothing forces every value into a binding. This replaces my earlier rules 1 and 2.
+- **Controls vs settings.** Controls are numbers that can change while playing; settings shape the graph (voice counts, modes). A function declares which arguments are controls with `component({ controls: ["1", "0.*.pan"] }, fn)`. Each plain number at a control path becomes an addressable constant.
+- **Three states:** draft (files on disk), accepted (the last revision that compiled) and preview (a live value on the accepted plan).
+- **Verification in a candidate snapshot built from memory.** Files are written only after an edit verifies, and never written then rolled back.
+- **Small edits at byte ranges.** Files are never reprinted.
+- **Constants stay addressable through optimisation,** so a preview can reach them.
+- **Exact call sites by instrumentation.** I tested the alternative: QuickJS's stack positions can't tell nested calls apart (`svf.lowpass(...)` and the `vca(...)` around it report the same column).
 
-2. **Binding names are node identity.** `cutoff` is the node. Editor positions (in `layout.json`) and hot-swap state are keyed by it.
-3. **The compiler records exact spans** for every node and every argument, so "this knob" points at "these characters".
-4. **Every GUI edit is verified by the compiler.** The editor produces a patch, the song is rebuilt, and the result must equal exactly the graph change that was made; otherwise the patch is rolled back and that control is shown as not editable from the graph.
-5. **Code outside the house style is a sealed box.** Loops, helpers and imported instruments (`bass(...)`) appear as group nodes whose arguments can be edited but whose insides can't, unless they live in the project, where you can open them.
-6. **Knob turns take a fast path.** While dragging, values go straight to the running engine; the literal is written into the code when you let go (debounced).
+Simplified for now:
+- **Verification:** "the candidate's graph equals the accepted graph with exactly this change". Components aren't re-expanded in isolation under an effect contract.
+- **Concurrency:** re-read from disk before every edit, an `expect` value guard, and a write guard. There is no semantic read-set tracking yet.
+- **History:** in memory. The durable journal, crash recovery, editor bridge and preview leases come later.
+
+**Built (first slice):**
+- **Call-site instrumentation** (`core/script/src/sites.rs`). Each call records its site right before it is invoked: `f(a, __m2s(7, b))`, `__m2s(7, obj).m()`, `(__m2s(7), f)()`. Evaluation order and `this` are unchanged. A site table keeps every call's byte range and argument structure.
+- **Exact source locations.** The IR's `origin` names the site and argument path of every node, so `src` locations are exact.
+- **The session** (`core/session/src/edit.rs`):
+  - `controls()` lists every number in the project's own files that feeds the graph. A control's id is `file#call/arg`, e.g. `song.ts#2/0.hats.pan`.
+  - `set(id, value, expect)` writes the shortest decimal that reads back exactly, keeping unit spelling (`khz(2.5)` set to 900 Hz becomes `khz(0.9)`). It verifies, writes, and bumps the revision.
+  - `undo()` is guarded.
+  - `refresh()` keeps the accepted revision playing while a draft doesn't compile.
+- **Live preview:** `Renderer::set_const(origin, value)` changes a constant everywhere it is used, voices included, at the next block. A test checks that the preview renders bit-identically to the committed edit.
+- **CLI:** `m2 controls <project>` and `m2 set <project> <id> <value> [--expect V]`. A verified edit of the example takes about 5 ms after opening.
+
+**Next:** connect and disconnect, add and delete nodes, automate a control, editing omitted arguments (inserting them), and then the graph canvas itself.
 
 ## Agents
 

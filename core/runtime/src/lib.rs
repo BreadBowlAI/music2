@@ -22,7 +22,7 @@ pub mod audio;
 pub mod packages;
 
 use anyhow::{Context, Result, bail};
-use m2_ir::{FNode, FOp, Flat, Input, Kind, NoteField, PortRef, TimeOf};
+use m2_ir::{FNode, FOp, Flat, Input, Kind, NoteField, Origin, PortRef, TimeOf};
 use m2_song::{AbsNote, ControlLane, Project, TempoMap, Timeline};
 use wasmtime::{Instance, Memory, Store, StoreLimits, StoreLimitsBuilder, TypedFunc};
 
@@ -222,6 +222,8 @@ enum Exec {
 
 struct Graph {
     exec: Vec<Exec>,
+    /// Where each constant was written, for live value changes.
+    origins: Vec<Option<Origin>>,
     order: Vec<usize>,
     /// `bufs[node][port]`.
     bufs: Vec<Vec<Buf>>,
@@ -291,7 +293,7 @@ impl Builder<'_> {
                 }
             }
         }
-        Ok(Graph { exec, order: order.to_vec(), bufs })
+        Ok(Graph { exec, origins: nodes.iter().map(|n| n.origin.clone()).collect(), order: order.to_vec(), bufs })
     }
 
     fn sample_note(&self, n: &AbsNote) -> SampleNote {
@@ -518,7 +520,31 @@ impl Graph {
     }
 
     fn empty() -> Graph {
-        Graph { exec: vec![], order: vec![], bufs: vec![] }
+        Graph { exec: vec![], origins: vec![], order: vec![], bufs: vec![] }
+    }
+
+    /// Change every constant written at `origin`, including inside voices. Returns how
+    /// many were changed.
+    fn set_const(&mut self, origin: &Origin, value: f32) -> usize {
+        let mut n = 0;
+        for (i, e) in self.exec.iter_mut().enumerate() {
+            match e {
+                Exec::Const(v) if self.origins[i].as_ref().is_some_and(|o| o.same_value(origin)) => {
+                    *v = value;
+                    for b in &mut self.bufs[i] {
+                        b.fill(value);
+                    }
+                    n += 1;
+                }
+                Exec::Poly(p) => {
+                    for voice in &mut p.voices {
+                        n += voice.graph.set_const(origin, value);
+                    }
+                }
+                _ => {}
+            }
+        }
+        n
     }
 
     /// Whether any kernel still holds sound that will come out later.
@@ -744,6 +770,13 @@ impl Renderer {
     /// Frames handed out so far (the playback position).
     pub fn position(&self) -> u64 {
         self.delivered
+    }
+
+    /// Change a written constant while playing: the value takes effect at the next
+    /// block, with no rebuild. `value` is in the constant's own units (the source
+    /// number times its scale). Returns how many nodes it reached (0: not found).
+    pub fn set_const(&mut self, origin: &Origin, value: f64) -> usize {
+        self.graph.set_const(origin, value as f32)
     }
 
     /// Voices currently sounding, across every `poly`.

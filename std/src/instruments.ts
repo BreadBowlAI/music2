@@ -3,13 +3,13 @@
 // Each one takes a notes lane and returns audio. They are ordinary functions, so
 // copy one into your project and change it if you want something different.
 
-import { hz, ms, poly, secs, type Audio, type Events, type Value } from "@m2/core";
+import { component, hz, ms, poly, secs, type Audio, type Events, type Value } from "@m2/core";
 import { adsr, noise, osc, svf, vca } from "./dsp";
 import { drive } from "./fx";
 import { add, scale, xrange } from "./math";
 
 /** A punchy bass: saw plus a sub square, through a lowpass that opens on each note. */
-export function bass(notes: Events, o: { cutoff?: Value; drive?: Value; voices?: number } = {}): Audio {
+export const bass = component({ controls: ["1.cutoff", "1.drive"] }, function bass(notes: Events, o: { cutoff?: Value; drive?: Value; voices?: number } = {}): Audio {
   const cutoff = o.cutoff ?? hz(600);
   const v = poly(
     notes,
@@ -23,10 +23,10 @@ export function bass(notes: Events, o: { cutoff?: Value; drive?: Value; voices?:
     { voices: o.voices ?? 4 },
   );
   return drive(v, o.drive ?? 4);
-}
+});
 
 /** A sine kick with a fast pitch drop. */
-export function kick(notes: Events, o: { tune?: Value; decay?: Value } = {}): Audio {
+export const kick = component({ controls: ["1.tune", "1.decay"] }, function kick(notes: Events, o: { tune?: Value; decay?: Value } = {}): Audio {
   return poly(
     notes,
     (n) => {
@@ -37,10 +37,10 @@ export function kick(notes: Events, o: { tune?: Value; decay?: Value } = {}): Au
     },
     { voices: 2 },
   );
-}
+});
 
 /** Closed hi-hat: highpassed noise with a short envelope. */
-export function hat(notes: Events, o: { decay?: Value } = {}): Audio {
+export const hat = component({ controls: ["1.decay"] }, function hat(notes: Events, o: { decay?: Value } = {}): Audio {
   return poly(
     notes,
     (n) => {
@@ -49,10 +49,10 @@ export function hat(notes: Events, o: { decay?: Value } = {}): Audio {
     },
     { voices: 4 },
   );
-}
+});
 
 /** A bright pluck for chords and arps. */
-export function pluck(notes: Events, o: { brightness?: Value; voices?: number } = {}): Audio {
+export const pluck = component({ controls: ["1.brightness"] }, function pluck(notes: Events, o: { brightness?: Value; voices?: number } = {}): Audio {
   return poly(
     notes,
     (n) => {
@@ -63,10 +63,10 @@ export function pluck(notes: Events, o: { brightness?: Value; voices?: number } 
     },
     { voices: o.voices ?? 12 },
   );
-}
+});
 
 /** A soft pad: two detuned saws, slow envelope, gentle filter. */
-export function pad(notes: Events, o: { cutoff?: Value; voices?: number } = {}): Audio {
+export const pad = component({ controls: ["1.cutoff"] }, function pad(notes: Events, o: { cutoff?: Value; voices?: number } = {}): Audio {
   return poly(
     notes,
     (n) => {
@@ -76,4 +76,4 @@ export function pad(notes: Events, o: { cutoff?: Value; voices?: number } = {}):
     },
     { voices: o.voices ?? 12 },
   );
-}
+});

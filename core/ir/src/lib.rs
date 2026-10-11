@@ -19,6 +19,13 @@ use serde::{Deserialize, Serialize};
 
 pub use check::{Flat, FNode, FOp, Input, NoteField, PortRef, Voice, check};
 pub use kind::{EventType, Kind, PortKind, Unit};
+
+impl Origin {
+    /// Whether two origins name the same written value (site and argument).
+    pub fn same_value(&self, other: &Origin) -> bool {
+        self.site == other.site && self.arg == other.arg
+    }
+}
 pub use sig::{KernelSig, Kernels, PortSig};
 
 pub const IR_VERSION: u32 = 0;
@@ -68,6 +75,21 @@ pub struct Node {
     /// Source location, `file:line:col`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub src: Option<String>,
+    /// Which call made this node, and for constants which argument holds the value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
+}
+
+/// Where a node came from in the source: a call site (see `m2_script::sites`) and,
+/// for a constant, the path to its argument (`["1"]`, `["0", "hats", "pan"]`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Origin {
+    pub site: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub arg: Vec<String>,
+    /// The constant is the source number times this (`khz(2.5)` has scale 1000).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

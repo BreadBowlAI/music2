@@ -20,6 +20,9 @@ USAGE:
             [--place Track.lane@beat] [--force]
                                          render a track (or the whole song) to assets/<asset-name>.wav,
                                          optionally placing it as a clip on an audio lane
+  m2 controls <project>                  every number written in the project that the graph can edit
+  m2 set <project> <control> <value> [--expect V]
+                                         change one, verified by the compiler (values in the control's units)
   m2 plugins [clap:<id>]                 list installed CLAP plugins, or one plugin's ports
   m2 plugin-state <project> <name> clap:<id> [--force]
                                          save a plugin's default state to assets/plugin-state/<name>.bin
@@ -185,6 +188,23 @@ fn run() -> Result<()> {
                 std::fs::write(&lane_file, serde_json::to_string_pretty(&data)? + "\n")?;
                 println!("placed it on {track}.{lane} at beat {beat} ({})", lane_file.display());
             }
+        }
+        Some("controls") => {
+            let s = m2_session::Session::open(Path::new(&arg(1)?), packages()?).map_err(report)?;
+            for c in s.controls() {
+                let unit = c.unit.map_or("number".to_string(), |u| u.name().to_string());
+                let uses = if c.uses > 1 { format!("  ({} uses)", c.uses) } else { String::new() };
+                println!("{:34} {:>10} {:10} {}:{} `{}`{uses}", c.id, c.value, unit, c.file, c.line, c.literal);
+            }
+        }
+        Some("set") => {
+            let mut s = m2_session::Session::open(Path::new(&arg(1)?), packages()?).map_err(report)?;
+            let id = arg(2)?;
+            let value: f64 = arg(3)?.parse().context("value")?;
+            let expect: Option<f64> = flag(&args, "--expect").map(|v| v.parse()).transpose().context("--expect")?;
+            let t = Instant::now();
+            let c = s.set(&id, value, expect).map_err(|e| anyhow!("{e}"))?;
+            println!("{}: `{}` → `{}` (revision {}, verified in {:.0} ms)", c.file, c.before, c.after, c.revision, t.elapsed().as_secs_f64() * 1000.0);
         }
         Some("plugins") => match args.get(1) {
             None => {

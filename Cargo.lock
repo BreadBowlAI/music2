@@ -2534,6 +2534,7 @@ dependencies = [
  "m2-ir",
  "oxc",
  "rquickjs",
+ "serde",
  "serde_json",
 ]
 
@@ -3148,6 +3149,7 @@ checksum = "47227b70b4ced82b59e55ceddb717df795511852d1ab82241b0ff06dadea897a"
 dependencies = [
  "oxc_allocator",
  "oxc_ast",
+ "oxc_ast_visit",
  "oxc_codegen",
  "oxc_diagnostics",
  "oxc_parser",
