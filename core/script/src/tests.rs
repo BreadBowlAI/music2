@@ -133,3 +133,44 @@ export default song(() => osc.sine(440));
     assert!(ir.modules[0].nodes.iter().any(|n| matches!(&n.op, Op::Kernel { kernel, .. } if kernel == "std:sine")));
     std::fs::remove_dir_all(dir).ok();
 }
+
+#[test]
+fn instrumentation_keeps_javascript_semantics() {
+    // Every expression here would behave differently if instrumentation changed
+    // receivers, short-circuiting or evaluation order; the song throws if any does.
+    let dir = project(&[(
+        "song.ts",
+        r#"import { song, kernel } from "@m2/core";
+
+class A { v = 1; get() { return this.v; } get2(x: number) { return this.v + x; } }
+class B extends A { get() { return super.get() + 1; } get2(x: number) { return super.get2(x) * 10; } }
+const a = new A();
+const b = new B();
+const none: any = null;
+const order: string[] = [];
+const log = (s: string) => { order.push(s); return s; };
+function three(x: string, y: string, z: string) { return x + y + z; }
+
+const checks: [string, unknown, unknown][] = [
+  ["parenthesised callee", (a.get)(), 1],
+  ["non-null callee", a.get!(), 1],
+  ["super call", b.get(), 2],
+  ["super call with args", b.get2(1), 20],
+  ["optional chain, no args", none?.inner.method(), undefined],
+  ["optional call, no args", none?.(), undefined],
+  ["optional chain, args", none?.inner.method(log("never")), undefined],
+  ["member call with args", a.get2(4), 5],
+  ["spread args", three(...["x", "y", "z"]), "xyz"],
+  ["evaluation order", three(log("1"), log("2"), log("3")), "123"],
+];
+for (const [what, got, want] of checks) {
+  if (got !== want) throw new Error(`${what}: got ${String(got)}, want ${String(want)}`);
+}
+if (order.join("") !== "123") throw new Error(`evaluation order: ${order.join("")}`);
+
+export default song(() => kernel("std:sine"));
+"#,
+    )]);
+    build_in(&dir).unwrap_or_else(|e| panic!("{e:?}"));
+    std::fs::remove_dir_all(dir).ok();
+}

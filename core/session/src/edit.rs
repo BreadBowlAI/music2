@@ -1,36 +1,50 @@
-//! The editing session: the authority that accepts revisions of a project.
+//! The editing session: the one authority that accepts revisions of a project.
 //!
-//! It keeps a snapshot of the project's source files and the last revision that
-//! compiled ("accepted"). Files on disk are the draft: [`Session::refresh`] picks up
-//! edits made elsewhere, and if they don't compile the accepted revision keeps playing.
+//! A [`Revision`] is immutable: one snapshot of the project's text files (code,
+//! timeline, manifest), the project parsed from it, and the graph compiled from it.
+//! Everything shown or played comes from the accepted revision, so its code, graph and
+//! timeline always belong together. Files on disk are the draft; [`Session::refresh`]
+//! accepts them only if they compile, and otherwise keeps the accepted revision.
 //!
-//! Edits from the graph editor or an agent are structured operations, never text.
-//! This first slice supports one: set a written number ([`Session::set`]). Every edit
-//! is compiled as a candidate from memory and accepted only if the new graph equals
-//! the old graph with exactly that change; only then is the file written, and only if
-//! the file on disk still matches the snapshot. Undo is the guarded inverse.
+//! Edits are structured operations, never text. This slice supports one: set a
+//! written number. An edit names the revision it was planned against. If the files
+//! changed since, its target is carried forward only when no change touched it (its
+//! call lies entirely outside the changed bytes and reads the same); otherwise it is
+//! refused as stale. The edit is compiled as a candidate from memory and accepted only
+//! if the new graph equals the old one with exactly that change; then the file is
+//! written, if the disk still matches. Undo is the same operation, inverted.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 
 use m2_ir::{Diagnostic, Ir, Node, Op, Origin, Unit};
 use m2_runtime::PackageSet;
 use m2_script::sites::{Arg, Site};
-use m2_song::Project;
+use m2_song::{Project, Snapshot};
 
 use crate::{Compiled, compile_sources};
+
+/// One accepted state of the project.
+pub struct Revision {
+    pub number: u64,
+    pub snapshot: Snapshot,
+    pub project: Project,
+    pub compiled: Compiled,
+}
 
 /// A number written in the project's code that the graph can show as a knob.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Control {
     /// `file#call/arg`: the file, the call's position among the file's calls, and the
-    /// argument path. Stable while calls before it in the file don't change.
+    /// argument path. Meaningful together with `revision`.
     pub id: String,
+    /// The accepted revision this control was read from.
+    pub revision: u64,
     pub file: String,
     pub line: u32,
     /// The current value, in the constant's units (written number × scale).
     pub value: f64,
-    /// The text written in the code, e.g. `0.3` or `2.5` (in `khz(2.5)`).
+    /// The text written in the code, e.g. `0.3`, or `2.5` in `khz(2.5)`.
     pub literal: String,
     pub unit: Option<Unit>,
     /// The constant is the written number times this.
@@ -38,7 +52,6 @@ pub struct Control {
     /// How many graph nodes use it (a helper called twice gives two).
     pub uses: usize,
     pub origin: Origin,
-    /// Byte range of the number in the file.
     start: u32,
     end: u32,
 }
@@ -55,15 +68,18 @@ pub struct Committed {
 
 #[derive(Debug, PartialEq)]
 pub enum EditError {
-    /// No such control in the current revision.
+    /// No such control in that revision.
     NotFound(String),
+    /// The files changed since the edit's revision in a way that touches its target.
+    /// List the controls again and retry.
+    Stale { current: u64 },
     /// The value is not what the caller expected: someone else changed it.
     Conflict { current: f64 },
-    /// The files on disk don't currently compile, so there is no base to edit.
+    /// The files on disk don't compile, so there is no base to edit.
     DraftInvalid(Vec<Diagnostic>),
     /// The edit didn't compile, or didn't change exactly what it should have.
     Rejected(String),
-    /// The file changed on disk between planning and writing.
+    /// The file changed on disk while the edit was being made.
     WriteConflict(String),
     Io(String),
 }
@@ -71,7 +87,8 @@ pub enum EditError {
 impl std::fmt::Display for EditError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            EditError::NotFound(id) => write!(f, "no control `{id}` in the current revision"),
+            EditError::NotFound(id) => write!(f, "no control `{id}` in that revision"),
+            EditError::Stale { current } => write!(f, "the code changed around this control; it is revision {current} now, list the controls again"),
             EditError::Conflict { current } => write!(f, "the value changed elsewhere (it is now {current})"),
             EditError::DraftInvalid(d) => write!(f, "the project doesn't compile right now ({} problems), so it can't be edited", d.len()),
             EditError::Rejected(why) => write!(f, "edit rejected: {why}"),
@@ -81,10 +98,10 @@ impl std::fmt::Display for EditError {
     }
 }
 
-/// One undoable change: a range of one file.
+/// One undoable change: a byte range of one file, with the values on either side.
 struct Change {
-    path: PathBuf,
-    file: String,
+    revision: u64,
+    file: PathBuf,
     start: u32,
     before: String,
     after: String,
@@ -92,37 +109,44 @@ struct Change {
     value_before: f64,
 }
 
+/// What an earlier revision looked like, for carrying edits forward.
+struct Past {
+    number: u64,
+    snapshot: Snapshot,
+    sites: Vec<Site>,
+}
+
+/// How many past revisions an edit can be planned against.
+const PAST: usize = 64;
+
 pub struct Session {
-    pub project: Project,
     pub packages: PackageSet,
-    /// The source snapshot: every `.ts` file in the project, by canonical path.
-    files: BTreeMap<PathBuf, String>,
-    /// Bumps on every accepted edit and every change picked up from disk.
-    pub revision: u64,
-    accepted: Compiled,
-    /// Why the files on disk don't compile, if they don't.
+    dir: PathBuf,
+    accepted: Revision,
+    /// The latest snapshot read from disk.
+    draft: Snapshot,
+    /// Why the draft doesn't compile, if it doesn't.
     pub draft_errors: Vec<Diagnostic>,
+    past: VecDeque<Past>,
     history: Vec<Change>,
 }
 
-fn read_sources(dir: &Path) -> std::io::Result<BTreeMap<PathBuf, String>> {
-    let mut out = BTreeMap::new();
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(d) = stack.pop() {
-        for e in std::fs::read_dir(&d)?.flatten() {
-            let p = e.path();
-            let name = e.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') || name == "node_modules" || name == "assets" {
-                continue;
-            }
-            if p.is_dir() {
-                stack.push(p);
-            } else if p.extension().is_some_and(|x| x == "ts") {
-                out.insert(p.canonicalize()?, std::fs::read_to_string(&p)?);
-            }
-        }
+/// Where bytes `start..end` of `old` are in `new`, if no change touched them.
+/// Conservative: everything between the first and last difference counts as changed.
+fn carry(old: &str, new: &str, start: usize, end: usize) -> Option<usize> {
+    if old == new {
+        return Some(start);
     }
-    Ok(out)
+    let p = old.bytes().zip(new.bytes()).take_while(|(a, b)| a == b).count();
+    let s = old[p..].bytes().rev().zip(new[p..].bytes().rev()).take_while(|(a, b)| a == b).count();
+    let to = if end <= p {
+        start
+    } else if start >= old.len() - s {
+        start + new.len() - old.len()
+    } else {
+        return None;
+    };
+    (new.get(to..to + (end - start)) == old.get(start..end)).then_some(to)
 }
 
 /// The shortest decimal that reads back as `v` (valid JavaScript).
@@ -149,7 +173,7 @@ fn without_src(ir: &Ir) -> Ir {
     ir
 }
 
-/// `ir` with every constant written at `origin` set to `value`.
+/// `ir` with every constant written at `origin` set to `value`, and how many there were.
 fn with_value(ir: &Ir, origin: &Origin, value: f64) -> (Ir, usize) {
     fn nodes(ns: &mut [Node], origin: &Origin, value: f64) -> usize {
         let mut n = 0;
@@ -171,41 +195,85 @@ fn with_value(ir: &Ir, origin: &Origin, value: f64) -> (Ir, usize) {
     (ir, n)
 }
 
+fn walk(ns: &[Node], f: &mut impl FnMut(&Node)) {
+    for n in ns {
+        f(n);
+        if let Op::Poly { body, .. } = &n.op {
+            walk(&body.nodes, f);
+        }
+    }
+}
+
+fn site_by_id<'a>(sites: &'a [Site], id: &str) -> Option<(&'a Site, Vec<String>)> {
+    let (call, arg) = id.split_once('/')?;
+    let (file, ordinal) = call.rsplit_once('#')?;
+    let ordinal: u32 = ordinal.parse().ok()?;
+    let site = sites.iter().find(|s| s.file == file && s.ordinal == ordinal)?;
+    Some((site, arg.split('.').map(str::to_string).collect()))
+}
+
+fn build(project: &Project, snapshot: &Snapshot, packages: &mut PackageSet) -> Result<Compiled, Vec<Diagnostic>> {
+    compile_sources(project, packages, snapshot.sources().map(|(p, t)| (p, t.clone())).collect())
+}
+
 impl Session {
     pub fn open(dir: &Path, packages: PackageSet) -> Result<Session, Vec<Diagnostic>> {
         let mut packages = packages;
-        let project = Project::open(dir).map_err(|e| vec![Diagnostic::new(format!("{e:#}"))])?;
-        let files = read_sources(&project.dir).map_err(|e| vec![Diagnostic::new(e.to_string())])?;
-        let accepted = compile_sources(&project, &mut packages, files.clone().into_iter().collect())?;
-        Ok(Session { project, packages, files, revision: 1, accepted, draft_errors: vec![], history: vec![] })
+        let err = |e: anyhow::Error| vec![Diagnostic::new(format!("{e:#}"))];
+        let snapshot = Snapshot::read(dir).map_err(err)?;
+        let project = Project::from_snapshot(&snapshot).map_err(err)?;
+        let compiled = build(&project, &snapshot, &mut packages)?;
+        Ok(Session {
+            packages,
+            dir: snapshot.dir.clone(),
+            draft: snapshot.clone(),
+            accepted: Revision { number: 1, snapshot, project, compiled },
+            draft_errors: vec![],
+            past: VecDeque::new(),
+            history: vec![],
+        })
     }
 
-    /// The last revision that compiled.
-    pub fn accepted(&self) -> &Compiled {
+    /// The last revision that compiled. Everything shown or played comes from it.
+    pub fn accepted(&self) -> &Revision {
         &self.accepted
     }
 
-    /// Pick up changes made on disk. Returns whether anything changed. If the new
-    /// files don't compile, the accepted revision stays and `draft_errors` says why.
-    pub fn refresh(&mut self) -> bool {
-        let Ok(files) = read_sources(&self.project.dir) else { return false };
-        let project = Project::open(&self.project.dir);
-        let timeline_changed = project.as_ref().is_ok_and(|p| p.timeline.end() != self.project.timeline.end());
-        if files == self.files && !timeline_changed {
-            return false;
+    fn accept(&mut self, snapshot: Snapshot, project: Project, compiled: Compiled) -> u64 {
+        let number = self.accepted.number + 1;
+        let old = std::mem::replace(&mut self.accepted, Revision { number, snapshot, project, compiled });
+        self.past.push_back(Past { number: old.number, snapshot: old.snapshot, sites: old.compiled.sites });
+        if self.past.len() > PAST {
+            self.past.pop_front();
         }
-        self.files = files;
-        self.revision += 1;
-        match project {
-            Ok(p) => self.project = p,
+        number
+    }
+
+    /// Pick up changes made on disk: code, timeline or manifest. They are accepted if
+    /// they compile; otherwise the accepted revision stays and `draft_errors` says why.
+    /// Returns whether the draft changed.
+    pub fn refresh(&mut self) -> bool {
+        let snapshot = match Snapshot::read(&self.dir) {
+            Ok(s) => s,
             Err(e) => {
                 self.draft_errors = vec![Diagnostic::new(format!("{e:#}"))];
                 return true;
             }
+        };
+        if snapshot == self.draft {
+            return false;
         }
-        match compile_sources(&self.project, &mut self.packages, self.files.clone().into_iter().collect()) {
-            Ok(c) => {
-                self.accepted = c;
+        self.draft = snapshot.clone();
+        if snapshot == self.accepted.snapshot {
+            self.draft_errors.clear();
+            return true;
+        }
+        let built = Project::from_snapshot(&snapshot)
+            .map_err(|e| vec![Diagnostic::new(format!("{e:#}"))])
+            .and_then(|p| build(&p, &snapshot, &mut self.packages).map(|c| (p, c)));
+        match built {
+            Ok((project, compiled)) => {
+                self.accept(snapshot, project, compiled);
                 self.draft_errors.clear();
             }
             Err(d) => self.draft_errors = d,
@@ -213,66 +281,70 @@ impl Session {
         true
     }
 
-    fn site(&self, id: u32) -> Option<&Site> {
-        self.accepted.sites.iter().find(|s| s.id == id)
-    }
-
-    fn path_of(&self, file: &str) -> Option<PathBuf> {
-        self.project.dir.join(file).canonicalize().ok().filter(|p| self.files.contains_key(p))
-    }
-
     /// Every number written in the project's own files that feeds the graph.
     pub fn controls(&self) -> Vec<Control> {
+        let rev = &self.accepted;
         let mut found: BTreeMap<String, Control> = BTreeMap::new();
         let mut visit = |n: &Node| {
             let (Op::Const { value, unit }, Some(o)) = (&n.op, &n.origin) else { return };
             if o.arg.is_empty() {
                 return;
             }
-            let Some(site) = self.site(o.site).filter(|s| s.in_project) else { return };
+            let Some(site) = rev.compiled.sites.iter().find(|s| s.id == o.site && s.in_project) else { return };
             let Some(Arg::Number { start, end, value: written }) = site.arg(&o.arg) else { return };
             let scale = o.scale.unwrap_or(1.0);
             // The written number must be what made the value (not a computed one).
             if written * scale != *value {
                 return;
             }
-            let Some(text) = self.path_of(&site.file).and_then(|p| self.files.get(&p)) else { return };
+            let Some(text) = rev.snapshot.files.get(Path::new(&site.file)) else { return };
+            let Some(literal) = text.get(*start as usize..*end as usize) else { return };
             let id = format!("{}#{}/{}", site.file, site.ordinal, o.arg.join("."));
-            found
-                .entry(id.clone())
-                .and_modify(|c| c.uses += 1)
-                .or_insert_with(|| Control {
-                    id,
-                    file: site.file.clone(),
-                    line: site.line,
-                    value: *value,
-                    literal: text[*start as usize..*end as usize].to_string(),
-                    unit: *unit,
-                    scale,
-                    uses: 1,
-                    origin: o.clone(),
-                    start: *start,
-                    end: *end,
-                });
+            found.entry(id.clone()).and_modify(|c| c.uses += 1).or_insert_with(|| Control {
+                id,
+                revision: rev.number,
+                file: site.file.clone(),
+                line: site.line,
+                value: *value,
+                literal: literal.to_string(),
+                unit: *unit,
+                scale,
+                uses: 1,
+                origin: o.clone(),
+                start: *start,
+                end: *end,
+            });
         };
-        fn walk(ns: &[Node], f: &mut impl FnMut(&Node)) {
-            for n in ns {
-                f(n);
-                if let Op::Poly { body, .. } = &n.op {
-                    walk(&body.nodes, f);
-                }
-            }
-        }
-        for m in &self.accepted.ir.modules {
+        for m in &rev.compiled.ir.modules {
             walk(&m.nodes, &mut visit);
         }
         found.into_values().collect()
     }
 
-    /// Set a written number. `value` is in the control's units (so `khz(2.5)` set to
-    /// 900 is written as `khz(0.9)`). With `expect`, the edit only applies if the
-    /// value is still what the caller last saw.
-    pub fn set(&mut self, id: &str, value: f64, expect: Option<f64>) -> Result<Committed, EditError> {
+    /// The control `id` named at revision `at`, as it is in the accepted revision.
+    fn resolve(&self, at: u64, id: &str) -> Result<Control, EditError> {
+        let current = self.controls();
+        let find = |id: &str| current.iter().find(|c| c.id == id).cloned();
+        if at == self.accepted.number {
+            return find(id).ok_or_else(|| EditError::NotFound(id.to_string()));
+        }
+        // Carry the target from revision `at`: its call must be untouched and in place.
+        let stale = EditError::Stale { current: self.accepted.number };
+        let carried = || -> Option<Control> {
+            let past = self.past.iter().find(|p| p.number == at)?;
+            let (old, arg) = site_by_id(&past.sites, id)?;
+            let file = Path::new(&old.file);
+            let to = carry(past.snapshot.files.get(file)?, self.accepted.snapshot.files.get(file)?, old.start as usize, old.end as usize)? as u32;
+            let site = self.accepted.compiled.sites.iter().find(|s| s.file == old.file && s.start == to && s.end == to + (old.end - old.start))?;
+            find(&format!("{}#{}/{}", site.file, site.ordinal, arg.join(".")))
+        };
+        carried().ok_or(stale)
+    }
+
+    /// Set a written number. `at` is the revision the caller's control came from.
+    /// `value` is in the control's units (so `khz(2.5)` set to 900 is written as
+    /// `khz(0.9)`). With `expect`, the edit applies only if the value is still that.
+    pub fn set(&mut self, at: u64, id: &str, value: f64, expect: Option<f64>) -> Result<Committed, EditError> {
         self.refresh();
         if !self.draft_errors.is_empty() {
             return Err(EditError::DraftInvalid(self.draft_errors.clone()));
@@ -280,35 +352,36 @@ impl Session {
         if !value.is_finite() {
             return Err(EditError::Rejected(format!("{value} is not a number that can be written")));
         }
-        let c = self.controls().into_iter().find(|c| c.id == id).ok_or_else(|| EditError::NotFound(id.to_string()))?;
+        let c = self.resolve(at, id)?;
         if let Some(e) = expect
             && e != c.value
         {
             return Err(EditError::Conflict { current: c.value });
         }
         let text = format_number(value / c.scale);
-        let path = self.path_of(&c.file).ok_or_else(|| EditError::NotFound(id.to_string()))?;
-        self.apply(&path, &c.file, c.start, c.end, &text, &c.origin, c.value)
+        let written: f64 = text.parse().expect("format_number writes Rust-readable numbers");
+        self.apply(Path::new(&c.file), c.start, c.end, &text, &c.origin, written * c.scale, c.value)
     }
 
-    /// Replace bytes `start..end` of one file, verify, write, and record for undo.
+    /// Replace bytes `start..end` of one file with `text`, which must set the constant
+    /// at `origin` to `value`; verify, write, accept, and record for undo.
     #[allow(clippy::too_many_arguments)]
-    fn apply(&mut self, path: &Path, file: &str, start: u32, end: u32, text: &str, origin: &Origin, value_before: f64) -> Result<Committed, EditError> {
-        let old = self.files[path].clone();
+    fn apply(&mut self, file: &Path, start: u32, end: u32, text: &str, origin: &Origin, value: f64, value_before: f64) -> Result<Committed, EditError> {
+        let name = file.display().to_string();
+        let old = self.accepted.snapshot.files.get(file).cloned().ok_or_else(|| EditError::NotFound(name.clone()))?;
         let before = old[start as usize..end as usize].to_string();
         if before == text {
-            return Ok(Committed { revision: self.revision, file: file.to_string(), before, after: text.to_string() });
+            return Ok(Committed { revision: self.accepted.number, file: name, before, after: text.to_string() });
         }
         let new = format!("{}{text}{}", &old[..start as usize], &old[end as usize..]);
+        let mut snapshot = self.accepted.snapshot.clone();
+        snapshot.files.insert(file.to_path_buf(), new.clone());
 
-        // Build the candidate from memory, then check it changed exactly one value.
-        let mut sources: HashMap<PathBuf, String> = self.files.clone().into_iter().collect();
-        sources.insert(path.to_path_buf(), new.clone());
-        let candidate = compile_sources(&self.project, &mut self.packages, sources).map_err(|d| {
-            EditError::Rejected(d.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("; "))
-        })?;
-        let written: f64 = text.parse().map_err(|_| EditError::Rejected(format!("`{text}` is not a number")))?;
-        let (expected, changed) = with_value(&self.accepted.ir, origin, written * origin.scale.unwrap_or(1.0));
+        // Build the candidate from memory; it must change exactly this value.
+        let project = Project::from_snapshot(&snapshot).map_err(|e| EditError::Rejected(format!("{e:#}")))?;
+        let candidate = build(&project, &snapshot, &mut self.packages)
+            .map_err(|d| EditError::Rejected(d.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("; ")))?;
+        let (expected, changed) = with_value(&self.accepted.compiled.ir, origin, value);
         if changed == 0 {
             return Err(EditError::Rejected("the control is no longer in the graph".into()));
         }
@@ -316,45 +389,51 @@ impl Session {
             return Err(EditError::Rejected("the edit would change more than this value".into()));
         }
 
-        // Write only if the file on disk is still the snapshot.
-        let disk = std::fs::read_to_string(path).map_err(|e| EditError::Io(e.to_string()))?;
+        // Write only if the file on disk is still what was accepted.
+        let path = self.dir.join(file);
+        let disk = std::fs::read_to_string(&path).map_err(|e| EditError::Io(e.to_string()))?;
         if disk != old {
-            return Err(EditError::WriteConflict(file.to_string()));
+            return Err(EditError::WriteConflict(name));
         }
-        let tmp = path.with_extension("ts.m2tmp");
-        std::fs::write(&tmp, &new).and_then(|_| std::fs::rename(&tmp, path)).map_err(|e| EditError::Io(e.to_string()))?;
+        let tmp = path.with_extension("m2tmp");
+        std::fs::write(&tmp, &new).and_then(|_| std::fs::rename(&tmp, &path)).map_err(|e| EditError::Io(e.to_string()))?;
 
-        self.files.insert(path.to_path_buf(), new);
-        self.accepted = candidate;
-        self.revision += 1;
-        self.history.push(Change {
-            path: path.to_path_buf(),
-            file: file.to_string(),
-            start,
-            before: before.clone(),
-            after: text.to_string(),
-            origin: origin.clone(),
-            value_before,
-        });
-        Ok(Committed { revision: self.revision, file: file.to_string(), before, after: text.to_string() })
+        self.draft = snapshot.clone();
+        let number = self.accept(snapshot, project, candidate);
+        self.history.push(Change { revision: number, file: file.to_path_buf(), start, before: before.clone(), after: text.to_string(), origin: origin.clone(), value_before });
+        Ok(Committed { revision: number, file: name, before, after: text.to_string() })
     }
 
-    /// Undo the last accepted edit, if its text is still there.
+    /// Undo the last accepted edit: restore its exact original bytes, if they haven't
+    /// been edited since (other changes in the file are kept).
     pub fn undo(&mut self) -> Result<Committed, EditError> {
         self.refresh();
-        let Some(c) = self.history.pop() else { return Err(EditError::NotFound("nothing to undo".into())) };
-        let current = self.files.get(&c.path).cloned().unwrap_or_default();
-        let end = c.start as usize + c.after.len();
-        if current.get(c.start as usize..end) != Some(c.after.as_str()) {
-            self.history.push(c);
-            return Err(EditError::Rejected("the edited text has changed since; undo would overwrite it".into()));
+        if !self.draft_errors.is_empty() {
+            return Err(EditError::DraftInvalid(self.draft_errors.clone()));
         }
-        let result = self.apply(&c.path, &c.file, c.start, end as u32, &c.before, &c.origin, c.value_before);
-        // Undoing is not itself undoable here; drop the record `apply` pushed.
-        if result.is_ok() {
-            self.history.pop();
+        let Some(c) = self.history.pop() else { return Err(EditError::NotFound("nothing to undo".into())) };
+        let then = if c.revision == self.accepted.number {
+            Some(&self.accepted.snapshot)
         } else {
+            self.past.iter().find(|p| p.number == c.revision).map(|p| &p.snapshot)
+        };
+        let end = c.start as usize + c.after.len();
+        let start = then
+            .and_then(|s| s.files.get(&c.file))
+            .zip(self.accepted.snapshot.files.get(&c.file))
+            .and_then(|(was, now)| carry(was, now, c.start as usize, end));
+        let Some(start) = start else {
             self.history.push(c);
+            return Err(EditError::Rejected("that value has been edited since; undo would overwrite it".into()));
+        };
+        let end = start + c.after.len();
+        let result = self.apply(&c.file, start as u32, end as u32, &c.before, &c.origin, c.value_before, f64::NAN);
+        match result {
+            // Undo is not itself recorded for undo.
+            Ok(_) => {
+                self.history.pop();
+            }
+            Err(_) => self.history.push(c),
         }
         result
     }

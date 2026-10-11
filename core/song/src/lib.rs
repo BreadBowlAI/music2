@@ -53,20 +53,63 @@ pub struct Project {
     pub timeline: Timeline,
 }
 
+/// Every text file a revision of a project depends on (code, timeline data, the
+/// manifest), read once. A revision is built from one snapshot, so its code, graph
+/// and timeline always belong together. Binary assets (audio, plugin state) are
+/// referenced by name and not part of it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Snapshot {
+    pub dir: PathBuf,
+    /// Contents by path relative to `dir`.
+    pub files: BTreeMap<PathBuf, String>,
+}
+
+impl Snapshot {
+    pub fn read(dir: &Path) -> Result<Snapshot> {
+        let dir = dir.canonicalize().with_context(|| format!("opening project {}", dir.display()))?;
+        let mut files = BTreeMap::new();
+        let mut stack = vec![dir.clone()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).with_context(|| format!("reading {}", d.display()))?.flatten() {
+                let p = e.path();
+                let name = e.file_name().to_string_lossy().to_string();
+                if name.starts_with('.') || name == "node_modules" || name == "assets" {
+                    continue;
+                }
+                if p.is_dir() {
+                    stack.push(p);
+                } else if matches!(p.extension().and_then(|x| x.to_str()), Some("ts" | "json" | "toml")) {
+                    let rel = p.strip_prefix(&dir).expect("inside the project").to_path_buf();
+                    files.insert(rel, std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?);
+                }
+            }
+        }
+        Ok(Snapshot { dir, files })
+    }
+
+    /// The TypeScript files, by absolute path.
+    pub fn sources(&self) -> impl Iterator<Item = (PathBuf, &String)> {
+        self.files.iter().filter(|(p, _)| p.extension().is_some_and(|x| x == "ts")).map(|(p, t)| (self.dir.join(p), t))
+    }
+}
+
 impl Project {
     pub fn open(dir: &Path) -> Result<Project> {
-        let dir = dir.canonicalize().with_context(|| format!("opening project {}", dir.display()))?;
-        let manifest_path = dir.join("music2.toml");
-        let manifest: Manifest = if manifest_path.exists() {
-            toml::from_str(&std::fs::read_to_string(&manifest_path)?).with_context(|| format!("reading {}", manifest_path.display()))?
-        } else {
-            Manifest::default()
+        Project::from_snapshot(&Snapshot::read(dir)?)
+    }
+
+    /// Build a project from a snapshot, without reading the disk.
+    pub fn from_snapshot(snap: &Snapshot) -> Result<Project> {
+        let manifest: Manifest = match snap.files.get(Path::new("music2.toml")) {
+            Some(text) => toml::from_str(text).context("reading music2.toml")?,
+            None => Manifest::default(),
         };
-        if !dir.join(&manifest.project.entry).exists() {
-            bail!("{} has no {}", dir.display(), manifest.project.entry);
+        if !snap.files.contains_key(Path::new(&manifest.project.entry)) {
+            bail!("{} has no {}", snap.dir.display(), manifest.project.entry);
         }
-        let timeline = Timeline::load(&dir.join("timeline"))?;
-        Ok(Project { dir, manifest, timeline })
+        let lanes = snap.files.iter().filter(|(p, _)| p.parent() == Some(Path::new("timeline")) && p.extension().is_some_and(|x| x == "json"));
+        let timeline = Timeline::from_files(lanes.map(|(p, t)| (snap.dir.join(p), t.as_str())))?;
+        Ok(Project { dir: snap.dir.clone(), manifest, timeline })
     }
 
     pub fn entry(&self) -> PathBuf {
@@ -292,21 +335,29 @@ struct LaneFile<T> {
 
 impl Timeline {
     pub fn load(dir: &Path) -> Result<Timeline> {
+        let Ok(entries) = std::fs::read_dir(dir) else { return Ok(Timeline::default()) };
+        let mut texts = vec![];
+        for p in entries.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "json")) {
+            texts.push((p.clone(), std::fs::read_to_string(&p)?));
+        }
+        Timeline::from_files(texts.iter().map(|(p, t)| (p.clone(), t.as_str())))
+    }
+
+    /// Parse lane files given as `(path, contents)`.
+    pub fn from_files<'a>(files: impl IntoIterator<Item = (PathBuf, &'a str)>) -> Result<Timeline> {
         let mut t = Timeline::default();
-        let Ok(entries) = std::fs::read_dir(dir) else { return Ok(t) };
-        let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "json")).collect();
-        paths.sort();
-        for path in paths {
-            let text = std::fs::read_to_string(&path)?;
+        let mut files: Vec<(PathBuf, &str)> = files.into_iter().collect();
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        for (path, text) in files {
             let stem = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
             if stem == "song" {
-                t.song = Some(serde_json::from_str(&text).with_context(|| format!("reading {}", path.display()))?);
+                t.song = Some(serde_json::from_str(text).with_context(|| format!("reading {}", path.display()))?);
                 continue;
             }
             let Some((module, lane)) = stem.split_once('.') else {
                 bail!("{}: lane files are named <track>.<lane>.json", path.display());
             };
-            let v = serde_json::from_str(&text).with_context(|| format!("reading {}", path.display()))?;
+            let v = serde_json::from_str(text).with_context(|| format!("reading {}", path.display()))?;
             t.files.insert((module.to_string(), lane.to_string()), (path, v));
         }
         Ok(t)

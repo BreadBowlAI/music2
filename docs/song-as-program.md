@@ -511,6 +511,12 @@ Simplified for now:
 - **Live preview:** `Renderer::set_const(origin, value)` changes a constant everywhere it is used, voices included, at the next block. A test checks that the preview renders bit-identically to the committed edit.
 - **CLI:** `m2 controls <project>` and `m2 set <project> <id> <value> [--expect V]`. A verified edit of the example takes about 5 ms after opening.
 
+**Correctness rules** (after review, each with a regression test):
+- **A revision is immutable and complete.** It is one snapshot of every text file (code, timeline, manifest) read once, the project parsed from it, and the graph compiled from it. Everything shown or played comes from the accepted revision. A draft that doesn't compile, including bad timeline data, never replaces any part of it.
+- **Edits name the revision they were planned against.** If the files changed since, the target is carried forward only if no change touched it: its call lies wholly outside the changed bytes and reads the same in place. Otherwise the edit is refused as stale. A carried-forward edit never lands on a different knob.
+- **Instrumentation only where it provably keeps meaning:** calls with arguments, plain `f()`, and `obj.m()` with no optional link. `(obj.m)()`, `obj.m!()`, `super.m()` and optional chains are left alone; they get no editable site but keep their exact meaning. An end-to-end test runs these forms through the instrumented build.
+- **Undo restores the original bytes** (`0x6e`, `1_10`, `(110)` …) and verifies with the value it recorded, rather than reparsing JavaScript number syntax.
+
 **Next:** connect and disconnect, add and delete nodes, automate a control, editing omitted arguments (inserting them), and then the graph canvas itself.
 
 ## Agents

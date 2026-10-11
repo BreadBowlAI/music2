@@ -7,11 +7,16 @@
 //! source made it. Positions reported by the JavaScript engine are not precise enough
 //! for this: nested calls on one line share positions.
 //!
-//! The instrumentation keeps evaluation order and `this`:
+//! The instrumentation keeps evaluation order, `this` and short-circuiting:
 //! - `f(a, b)` → `f(a, __m2s(ID, b))`: the last argument is evaluated, then the site
-//!   is recorded, then `f` is called.
-//! - `obj.m()` → `__m2s(ID, obj).m()`.
-//! - `f()` → `(__m2s(ID), f)()`.
+//!   is recorded, then `f` is called. Inside an optional chain the arguments, and so
+//!   the recording, are skipped exactly when the call is.
+//! - `obj.m()` → `__m2s(ID, obj).m()`, only when no part of the callee is optional.
+//! - `f()` → `(__m2s(ID), f)()`, only for a plain identifier.
+//!
+//! Other zero-argument calls (`(obj.m)()`, `obj.m!()`, `super.m()`, `a?.b.m()`, …)
+//! are left alone: they get no site, and so no editable values, but keep their
+//! meaning exactly.
 
 use oxc::allocator::Allocator;
 use oxc::ast::ast::{Argument, CallExpression, Expression, ObjectPropertyKind, UnaryOperator};
@@ -125,6 +130,20 @@ fn arg(e: &Expression) -> Arg {
     }
 }
 
+/// Whether wrapping `e` as a call receiver keeps its meaning: not `super`, and no
+/// optional link anywhere in its chain (which would short-circuit the whole call).
+fn plain_object(e: &Expression) -> bool {
+    match e {
+        Expression::Super(_) => false,
+        Expression::ChainExpression(_) => false,
+        Expression::StaticMemberExpression(m) => !m.optional && plain_object(&m.object),
+        Expression::ComputedMemberExpression(m) => !m.optional && plain_object(&m.object),
+        Expression::PrivateFieldExpression(m) => !m.optional && plain_object(&m.object),
+        Expression::CallExpression(c) => !c.optional && plain_object(&c.callee),
+        _ => true,
+    }
+}
+
 struct Collect<'s> {
     source: &'s str,
     file: String,
@@ -140,12 +159,12 @@ impl<'a> Visit<'a> for Collect<'_> {
         let target = match it.arguments.last() {
             Some(Argument::SpreadElement(s)) => Some((s.argument.span(), false)),
             Some(a) => Some((a.to_expression().span(), false)),
+            None if it.optional => None,
             None => match &it.callee {
-                Expression::StaticMemberExpression(m) if !matches!(m.object, Expression::Super(_)) => Some((m.object.span(), false)),
-                Expression::ComputedMemberExpression(m) if !matches!(m.object, Expression::Super(_)) => Some((m.object.span(), false)),
-                Expression::PrivateFieldExpression(m) => Some((m.object.span(), false)),
-                Expression::Super(_) => None,
-                callee => Some((callee.span(), true)),
+                Expression::Identifier(i) => Some((i.span, true)),
+                Expression::StaticMemberExpression(m) if !m.optional && plain_object(&m.object) => Some((m.object.span(), false)),
+                Expression::ComputedMemberExpression(m) if !m.optional && plain_object(&m.object) => Some((m.object.span(), false)),
+                _ => None,
             },
         };
         if let Some((span, sequence)) = target {
@@ -223,6 +242,18 @@ mod tests {
         ]);
         assert!(matches!(s[0].args[1], Arg::Number { value, .. } if value == 0.5));
         assert!(matches!(s[3].args[0], Arg::Number { value, .. } if value == 110.0));
+    }
+
+    #[test]
+    fn leaves_receiver_sensitive_zero_argument_calls_alone() {
+        for src in ["(obj.get)();", "obj.get!();", "super.get();", "obj?.inner.method();", "obj?.m();", "f?.();", "a.b?.c.d();"] {
+            let i = instrument("t.ts", src, 0).unwrap();
+            assert_eq!(i.code, src, "{src} must not be rewritten");
+            assert!(i.sites.is_empty());
+        }
+        // With arguments, the recording sits inside the arguments, so it is skipped
+        // exactly when an optional chain skips the call.
+        assert_eq!(instrument("t.ts", "obj?.m(1);", 0).unwrap().code, "obj?.m(__m2s(0, 1));");
     }
 
     #[test]

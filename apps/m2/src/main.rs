@@ -191,6 +191,7 @@ fn run() -> Result<()> {
         }
         Some("controls") => {
             let s = m2_session::Session::open(Path::new(&arg(1)?), packages()?).map_err(report)?;
+            println!("revision {}", s.accepted().number);
             for c in s.controls() {
                 let unit = c.unit.map_or("number".to_string(), |u| u.name().to_string());
                 let uses = if c.uses > 1 { format!("  ({} uses)", c.uses) } else { String::new() };
@@ -203,7 +204,8 @@ fn run() -> Result<()> {
             let value: f64 = arg(3)?.parse().context("value")?;
             let expect: Option<f64> = flag(&args, "--expect").map(|v| v.parse()).transpose().context("--expect")?;
             let t = Instant::now();
-            let c = s.set(&id, value, expect).map_err(|e| anyhow!("{e}"))?;
+            let at = s.accepted().number;
+            let c = s.set(at, &id, value, expect).map_err(|e| anyhow!("{e}"))?;
             println!("{}: `{}` → `{}` (revision {}, verified in {:.0} ms)", c.file, c.before, c.after, c.revision, t.elapsed().as_secs_f64() * 1000.0);
         }
         Some("plugins") => match args.get(1) {

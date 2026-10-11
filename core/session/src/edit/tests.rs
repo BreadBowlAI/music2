@@ -32,7 +32,8 @@ fn control(s: &Session, file: &str, arg: &str) -> Control {
 }
 
 fn render(s: &mut Session, preview: Option<(&Origin, f64)>) -> Vec<[f32; 2]> {
-    let mut r = Renderer::for_project(&s.accepted().flat, &s.project, &s.packages, 48_000).unwrap();
+    let rev = s.accepted();
+    let mut r = Renderer::for_project(&rev.compiled.flat, &rev.project, &s.packages, 48_000).unwrap();
     if let Some((o, v)) = preview {
         assert!(r.set_const(o, v) > 0, "the preview reached the graph");
     }
@@ -60,7 +61,7 @@ fn an_edit_changes_only_its_bytes_and_preview_sounds_like_the_commit() {
     let pan = control(&s, "song.ts", "0.hats.pan");
 
     let previewed = render(&mut s, Some((&pan.origin, 0.45)));
-    let c = s.set(&pan.id, 0.45, Some(0.3)).unwrap();
+    let c = s.set(pan.revision, &pan.id, 0.45, Some(0.3)).unwrap();
     assert_eq!((c.before.as_str(), c.after.as_str(), c.revision), ("0.3", "0.45", 2));
     let edited = std::fs::read_to_string(&song).unwrap();
     assert_eq!(edited, original.replacen("pan: 0.3", "pan: 0.45", 1), "only the number changed");
@@ -82,7 +83,7 @@ fn units_keep_their_spelling() {
     let original = std::fs::read_to_string(&bass).unwrap();
     let mut s = Session::open(&dir, std_packages()).unwrap();
     let id = s.controls().into_iter().find(|c| c.file == "tracks/bass.ts" && c.literal == "2.5").unwrap().id;
-    s.set(&id, 900.0, None).unwrap();
+    s.set(1, &id, 900.0, None).unwrap();
     assert_eq!(std::fs::read_to_string(&bass).unwrap(), original.replacen("khz(2.5)", "khz(0.9)", 1));
     std::fs::remove_dir_all(dir).ok();
 }
@@ -97,13 +98,18 @@ fn unrelated_saves_survive_and_overlapping_ones_conflict() {
     // Someone else adds a comment while the knob is being dragged.
     let external = std::fs::read_to_string(&song).unwrap().replacen("// The root module", "// Edited elsewhere.\n// The root module", 1);
     std::fs::write(&song, &external).unwrap();
-    s.set(&pan.id, 0.45, Some(0.3)).unwrap();
+    s.set(pan.revision, &pan.id, 0.45, Some(0.3)).unwrap();
     let now = std::fs::read_to_string(&song).unwrap();
     assert!(now.starts_with("// Edited elsewhere.\n") && now.contains("pan: 0.45"), "both edits are kept");
 
-    // Someone else changes the same number: conflict, nothing written.
+    // Someone else changes the same number: the old id is stale, nothing is written.
+    let pan = control(&s, "song.ts", "0.hats.pan");
     std::fs::write(&song, now.replacen("pan: 0.45", "pan: 0.2", 1)).unwrap();
-    assert_eq!(s.set(&pan.id, 0.6, Some(0.45)), Err(EditError::Conflict { current: 0.2 }));
+    assert_eq!(s.set(pan.revision, &pan.id, 0.6, Some(0.45)), Err(EditError::Stale { current: 4 }));
+    // Listed again, it shows 0.2; a caller still expecting 0.45 gets a conflict.
+    let pan = control(&s, "song.ts", "0.hats.pan");
+    assert_eq!(pan.value, 0.2);
+    assert_eq!(s.set(pan.revision, &pan.id, 0.6, Some(0.45)), Err(EditError::Conflict { current: 0.2 }));
     assert!(std::fs::read_to_string(&song).unwrap().contains("pan: 0.2"));
     // And undo refuses to overwrite it.
     assert!(matches!(s.undo(), Err(EditError::Rejected(_))));
@@ -120,11 +126,13 @@ fn a_broken_draft_keeps_playing_the_accepted_revision() {
     std::fs::write(&song, good.replacen("master(", "master((", 1)).unwrap();
     assert!(s.refresh());
     assert!(!s.draft_errors.is_empty());
-    assert!(matches!(s.set(&pan.id, 0.5, None), Err(EditError::DraftInvalid(_))));
+    assert!(matches!(s.set(pan.revision, &pan.id, 0.5, None), Err(EditError::DraftInvalid(_))));
+    // Inspecting the last working graph stays safe while the draft is broken.
+    assert_eq!(control(&s, "song.ts", "0.hats.pan").literal, "0.3");
     assert!(render(&mut s, None).iter().any(|f| f[0] != 0.0), "the accepted revision still plays");
     // Fixing the file makes it editable again.
     std::fs::write(&song, &good).unwrap();
-    s.set(&pan.id, 0.5, None).unwrap();
+    s.set(pan.revision, &pan.id, 0.5, None).unwrap();
     std::fs::remove_dir_all(dir).ok();
 }
 
@@ -138,10 +146,97 @@ fn verification_rejects_an_edit_that_changes_something_else() {
     let mut s = Session::open(&dir, std_packages()).unwrap();
     let pan = control(&s, "song.ts", "0.hats.pan");
     let gain = s.controls().into_iter().find(|c| c.file == "song.ts" && c.literal == "-6").unwrap();
-    let path = song.canonicalize().unwrap();
-    let r = s.apply(&path, "song.ts", pan.start, pan.end, "0.9", &gain.origin, gain.value);
+    let r = s.apply(Path::new("song.ts"), pan.start, pan.end, "0.9", &gain.origin, gain.value + 1.0, gain.value);
     assert!(matches!(&r, Err(EditError::Rejected(why)) if why.contains("more than this value")), "{r:?}");
     assert_eq!(std::fs::read_to_string(&song).unwrap(), original);
-    assert_eq!(s.revision, 1);
+    assert_eq!(s.accepted().number, 1);
     std::fs::remove_dir_all(dir).ok();
+}
+
+/// A project from the given files, in a fresh temp dir.
+fn project(files: &[(&str, &str)]) -> PathBuf {
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let dir = std::env::temp_dir().join(format!("m2-edit-proj-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
+    for (name, text) in files {
+        let p = dir.join(name);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    }
+    dir
+}
+
+const TWO_OSCS: &str = r#"import { hz, song } from "@m2/core";
+import { osc } from "std/dsp";
+import { add } from "std/math";
+
+export default song(() => {
+  const s = osc.sine(hz(110));
+  const w = osc.saw(hz(220));
+  return add(s, w);
+});
+"#;
+
+#[test]
+fn a_stale_id_still_edits_the_knob_it_named() {
+    let dir = project(&[("song.ts", TWO_OSCS)]);
+    let mut s = Session::open(&dir, std_packages()).unwrap();
+    let sine = s.controls().into_iter().find(|c| c.literal == "110").unwrap();
+    // Two calls are inserted above it elsewhere, which shifts call positions.
+    let edited = TWO_OSCS.replace("  const s =", "  const t = osc.tri(hz(55));\n  const u = osc.tri(hz(66));\n  const s =");
+    std::fs::write(dir.join("song.ts"), &edited).unwrap();
+    s.set(sine.revision, &sine.id, 330.0, Some(110.0)).unwrap();
+    let now = std::fs::read_to_string(dir.join("song.ts")).unwrap();
+    assert_eq!(now, edited.replace("osc.sine(hz(110))", "osc.sine(hz(330))"), "the sine changed, nothing else");
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn a_stale_id_whose_call_changed_is_refused() {
+    let dir = project(&[("song.ts", TWO_OSCS)]);
+    let mut s = Session::open(&dir, std_packages()).unwrap();
+    let sine = s.controls().into_iter().find(|c| c.literal == "110").unwrap();
+    let edited = TWO_OSCS.replace("osc.sine(hz(110))", "osc.sine(hz(115))");
+    std::fs::write(dir.join("song.ts"), &edited).unwrap();
+    assert_eq!(s.set(sine.revision, &sine.id, 330.0, None), Err(EditError::Stale { current: 2 }));
+    assert_eq!(std::fs::read_to_string(dir.join("song.ts")).unwrap(), edited);
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn a_draft_with_bad_timeline_data_doesnt_replace_the_accepted_timeline() {
+    let dir = first_song();
+    let mut s = Session::open(&dir, std_packages()).unwrap();
+    let notes = dir.join("timeline/bass.notes.json");
+    let text = std::fs::read_to_string(&notes).unwrap();
+    std::fs::write(&notes, text.replacen("\"A1\"", "\"H9\"", 1).replacen("\"length\": 32", "\"length\": 40", 1)).unwrap();
+    assert!(s.refresh());
+    assert!(!s.draft_errors.is_empty(), "H9 is not a pitch");
+    assert!(render(&mut s, None).iter().any(|f| f[0] != 0.0), "the accepted revision, with its own timeline, still renders");
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn timeline_changes_are_picked_up_even_when_the_length_stays() {
+    let dir = first_song();
+    let mut s = Session::open(&dir, std_packages()).unwrap();
+    let song = dir.join("timeline/song.json");
+    std::fs::write(&song, std::fs::read_to_string(&song).unwrap().replace("124", "62")).unwrap();
+    assert!(s.refresh());
+    assert_eq!(s.accepted().number, 2);
+    assert_eq!(s.accepted().project.timeline.tempo().unwrap().bpm_at(0.0), 62.0);
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn undo_restores_any_javascript_number_spelling() {
+    for spelling in ["0x6e", "1_10", "(110)", "110.0", "1.1e2"] {
+        let src = TWO_OSCS.replace("hz(110)", &format!("hz({spelling})"));
+        let dir = project(&[("song.ts", &src)]);
+        let mut s = Session::open(&dir, std_packages()).unwrap();
+        let c = s.controls().into_iter().find(|c| c.value == 110.0).unwrap_or_else(|| panic!("{spelling} is a control"));
+        s.set(c.revision, &c.id, 330.0, Some(110.0)).unwrap();
+        s.undo().unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("song.ts")).unwrap(), src, "{spelling} restored byte for byte");
+        std::fs::remove_dir_all(dir).ok();
+    }
 }

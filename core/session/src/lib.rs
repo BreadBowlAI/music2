@@ -16,7 +16,7 @@ use m2_ir::{Diagnostic, Flat, Ir, Kind};
 use m2_runtime::PackageSet;
 use m2_song::{Project, slug};
 
-pub use edit::{Committed, Control, EditError, Session};
+pub use edit::{Committed, Control, EditError, Revision, Session};
 
 /// A project that is ready to render.
 pub struct Compiled {
