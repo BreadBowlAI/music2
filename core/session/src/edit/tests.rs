@@ -146,7 +146,7 @@ fn verification_rejects_an_edit_that_changes_something_else() {
     let mut s = Session::open(&dir, std_packages()).unwrap();
     let pan = control(&s, "song.ts", "0.hats.pan");
     let gain = s.controls().into_iter().find(|c| c.file == "song.ts" && c.literal == "-6").unwrap();
-    let r = s.apply(Path::new("song.ts"), pan.lens.start, pan.lens.end, "0.9", &gain.origin, gain.value + 1.0, gain.value);
+    let r = s.apply(Path::new("song.ts"), pan.lens.start, pan.lens.end, "0.9", &gain.origin, gain.value + 1.0, Some(gain.value));
     assert!(matches!(&r, Err(EditError::Rejected(why)) if why.contains("more than this value")), "{r:?}");
     assert_eq!(std::fs::read_to_string(&song).unwrap(), original);
     assert_eq!(s.accepted().number, 1);

@@ -8,6 +8,7 @@
 //! revisions, verified value edits and undo.
 
 pub mod edit;
+pub mod timeline;
 pub mod view;
 
 use std::collections::HashMap;
@@ -18,6 +19,7 @@ use m2_runtime::PackageSet;
 use m2_song::{Project, slug};
 
 pub use edit::{Audition, Committed, Control, EditError, Edited, Inlet, Outlet, Revision, Session};
+pub use timeline::{TimelineLane, TimelineTrack, TimelineView};
 pub use view::{GraphView, Knob, ModuleView, ViewNode};
 
 /// A project that is ready to render.

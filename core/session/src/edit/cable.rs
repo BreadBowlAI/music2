@@ -127,20 +127,29 @@ fn rewire(ir: &Ir, module: &str, removed: &[(String, String, f64)], to: &str) ->
         return Err(EditError::Rejected("a cable can only connect signals within one track".into()));
     }
     let ids: BTreeSet<&str> = removed.iter().map(|(_, id, _)| id.as_str()).collect();
+    Ok(excise(ir, module, &ids, &|r| ids.contains(split_ref(r).0), to).expect("every reader of a constant reads its output"))
+}
+
+/// `ir` with nodes `ids` of `module` taken out, and every reference for which `output`
+/// holds reading `to` instead. None if anything else still read a removed node.
+pub(super) fn excise(ir: &Ir, module: &str, ids: &BTreeSet<&str>, output: &dyn Fn(&str) -> bool, to: &str) -> Option<Ir> {
     let mut ir = ir.clone();
-    let m = ir.modules.iter_mut().find(|m| m.name == module).expect("the constants are in this module");
+    let m = ir.modules.iter_mut().find(|m| m.name == module)?;
+    let dangling = std::cell::Cell::new(false);
     let swap = |r: &mut String| {
-        if ids.contains(split_ref(r).0) {
+        if output(r) {
             *r = to.to_string();
+        } else if ids.contains(split_ref(r).0) {
+            dangling.set(true);
         }
     };
     refs(&mut m.nodes, &mut m.exports, &|ns: &mut Vec<Node>| ns.retain(|n| !ids.contains(n.id.as_str())), &swap);
-    Ok(ir)
+    (!dangling.get()).then_some(ir)
 }
 
 /// Apply `nodes` to every node list (outermost first) and `swap` to every port
 /// reference in a module.
-fn refs(
+pub(super) fn refs(
     nodes: &mut Vec<Node>,
     exports: &mut BTreeMap<String, String>,
     each: &dyn Fn(&mut Vec<Node>),
@@ -166,7 +175,7 @@ fn refs(
 }
 
 /// `ir` for comparison: nodes numbered by position, without source positions.
-fn canonical(ir: &Ir) -> Ir {
+pub(super) fn canonical(ir: &Ir) -> Ir {
     let mut ir = ir.clone();
     for m in &mut ir.modules {
         m.src = None;
@@ -306,7 +315,7 @@ impl Session {
 
     /// The site of call `file#ordinal` from revision `at`, as it is in the accepted
     /// revision: carried forward only if no change touched it.
-    fn current_site(&self, at: u64, call: &str) -> Result<&Site, EditError> {
+    pub(super) fn current_site(&self, at: u64, call: &str) -> Result<&Site, EditError> {
         let parse = || {
             let (file, ordinal) = call.rsplit_once('#')?;
             Some((file, ordinal.parse::<u32>().ok()?))
@@ -332,7 +341,7 @@ impl Session {
         self.outlets().into_iter().find(|o| o.site == site).ok_or_else(|| EditError::Rejected(format!("`{id}` is not a named signal a cable can start from")))
     }
 
-    fn ready(&mut self) -> Result<(), EditError> {
+    pub(super) fn ready(&mut self) -> Result<(), EditError> {
         self.refresh();
         if !self.draft_errors.is_empty() {
             return Err(EditError::DraftInvalid(self.draft_errors.clone()));
@@ -405,7 +414,7 @@ impl Session {
         let file = candidate.file.display().to_string();
         let (before, after) = (candidate.before.clone(), candidate.after.clone());
         let base = self.accepted.number;
-        let revision = self.commit(candidate, Undo::Exact { base })?;
+        let revision = self.commit(candidate, Some(Undo::Exact { base }))?;
         Ok(Edited { revision, file, before, after })
     }
 }

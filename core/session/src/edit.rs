@@ -25,6 +25,7 @@ use m2_song::{Project, Snapshot};
 use crate::{Compiled, compile_sources};
 
 mod cable;
+mod effect;
 mod lens;
 pub use cable::{Inlet, Outlet};
 use lens::LiteralLens;
@@ -144,12 +145,12 @@ struct Change {
     undo: Undo,
 }
 
-/// How undoing a change is verified.
+/// How reverting a change is verified.
 enum Undo {
-    /// A value edit: undo sets the value back, carried past later unrelated edits.
-    Value { origin: Origin, value_before: f64 },
-    /// A structural edit: undo restores revision `base` exactly, so it is allowed only
-    /// while the change is the latest revision.
+    /// A value edit: reverting sets the value back, carried past later unrelated edits.
+    Value { origin: Origin, value_before: f64, value_after: f64 },
+    /// A structural edit: reverting restores revision `base` exactly, so it is allowed
+    /// only while the change is the latest revision.
     Exact { base: u64 },
 }
 
@@ -187,6 +188,8 @@ pub struct Session {
     pub draft_errors: Vec<Diagnostic>,
     past: VecDeque<Past>,
     history: Vec<Change>,
+    /// Undone changes, as their inverses, newest last. Any new edit clears it.
+    redo: Vec<Change>,
 }
 
 /// Where bytes `start..end` of `old` are in `new`, if no change touched them.
@@ -283,6 +286,7 @@ impl Session {
             draft_errors: vec![],
             past: VecDeque::new(),
             history: vec![],
+            redo: vec![],
         })
     }
 
@@ -418,7 +422,7 @@ impl Session {
                 value: c.value,
             });
         }
-        self.apply(Path::new(&c.file), c.lens.start, c.lens.end, &edit.text, &c.origin, edit.value, c.value)
+        self.apply(Path::new(&c.file), c.lens.start, c.lens.end, &edit.text, &c.origin, edit.value, Some(c.value))
     }
 
     /// Resolve a live edit using exactly the same literal lens as a saved edit.
@@ -438,7 +442,8 @@ impl Session {
     }
 
     /// Replace bytes `start..end` of one file with `text`, which must set the constant
-    /// at `origin` to `value`; verify, write, accept, and record for undo.
+    /// at `origin` to `value`; verify, write and accept. With the value it replaces, it is
+    /// recorded for undo.
     #[allow(clippy::too_many_arguments)]
     fn apply(
         &mut self,
@@ -448,7 +453,7 @@ impl Session {
         text: &str,
         origin: &Origin,
         value: f64,
-        value_before: f64,
+        value_before: Option<f64>,
     ) -> Result<Committed, EditError> {
         let name = file.display().to_string();
         let old = self.accepted.snapshot.files.get(file).ok_or_else(|| EditError::NotFound(name.clone()))?;
@@ -472,17 +477,40 @@ impl Session {
             return Err(EditError::Rejected("the edit would change more than this value".into()));
         }
         let (before, after) = (c.before.clone(), c.after.clone());
-        let number = self.commit(c, Undo::Value { origin: origin.clone(), value_before })?;
+        let record = value_before.map(|value_before| Undo::Value { origin: origin.clone(), value_before, value_after: value });
+        let number = self.commit(c, record)?;
         Ok(Committed { revision: number, file: name, before, after, origin: origin.clone(), value })
     }
 
     /// Build the accepted revision with bytes `start..end` of `file` replaced by `text`,
     /// from memory.
     fn candidate(&mut self, file: &Path, start: u32, end: u32, text: &str) -> Result<Candidate, EditError> {
+        self.candidate_edits(file, &[(start, end, text.to_string())])
+    }
+
+    /// [`Session::candidate`] with several non-overlapping replacements in one file. The
+    /// candidate records the smallest range covering them all.
+    fn candidate_edits(&mut self, file: &Path, edits: &[(u32, u32, String)]) -> Result<Candidate, EditError> {
         let old = self.accepted.snapshot.files.get(file).cloned().ok_or_else(|| EditError::NotFound(file.display().to_string()))?;
-        let before = old.get(start as usize..end as usize).ok_or_else(|| EditError::Rejected("the edit is outside the file".into()))?;
-        let before = before.to_string();
-        let new = format!("{}{text}{}", &old[..start as usize], &old[end as usize..]);
+        let mut edits = edits.to_vec();
+        edits.sort_by_key(|(start, ..)| *start);
+        let outside = || EditError::Rejected("the edit is outside the file".into());
+        if edits.is_empty() || edits.windows(2).any(|w| w[0].1 > w[1].0) || old.get(..edits.last().expect("some").1 as usize).is_none() {
+            return Err(outside());
+        }
+        let mut new = String::new();
+        let mut at = 0;
+        for (start, end, text) in &edits {
+            new += old.get(at..*start as usize).ok_or_else(outside)?;
+            new += text;
+            at = *end as usize;
+        }
+        new += &old[at..];
+        let (start, end) = (edits[0].0, edits.last().expect("some").1);
+        let grown = new.len() as i64 - old.len() as i64;
+        let before = old[start as usize..end as usize].to_string();
+        let text = new[start as usize..(end as i64 + grown) as usize].to_string();
+        let text = text.as_str();
         let mut snapshot = self.accepted.snapshot.clone();
         snapshot.files.insert(file.to_path_buf(), new.clone());
         let project = Project::from_snapshot(&snapshot).map_err(|e| EditError::Rejected(format!("{e:#}")))?;
@@ -491,9 +519,10 @@ impl Session {
         Ok(Candidate { file: file.to_path_buf(), start, old, before, after: text.to_string(), new, snapshot, project, compiled })
     }
 
-    /// Write a verified candidate if the file on disk is still what was accepted, accept
-    /// it, and record it for undo. Returns the new revision.
-    fn commit(&mut self, c: Candidate, undo: Undo) -> Result<u64, EditError> {
+    /// Write a verified candidate if the file on disk is still what was accepted, and
+    /// accept it. With `record`, it is a new edit: recorded for undo, ending any redo.
+    /// Returns the new revision.
+    fn commit(&mut self, c: Candidate, record: Option<Undo>) -> Result<u64, EditError> {
         let path = self.dir.join(&c.file);
         let disk = std::fs::read_to_string(&path).map_err(|e| EditError::Io(e.to_string()))?;
         if disk != c.old {
@@ -504,64 +533,112 @@ impl Session {
 
         self.draft = c.snapshot.clone();
         let number = self.accept(c.snapshot, c.project, c.compiled);
-        self.history.push(Change { revision: number, file: c.file, start: c.start, before: c.before, after: c.after, undo });
+        if let Some(undo) = record {
+            self.history.push(Change { revision: number, file: c.file, start: c.start, before: c.before, after: c.after, undo });
+            self.redo.clear();
+        }
         Ok(number)
     }
 
-    /// Undo the last accepted edit: restore its exact original bytes, if they haven't
-    /// been edited since (other changes in the file are kept).
+    /// The snapshot of revision `number`, if it is the accepted one or still remembered.
+    fn snapshot(&self, number: u64) -> Option<&Snapshot> {
+        if number == self.accepted.number {
+            return Some(&self.accepted.snapshot);
+        }
+        self.past.iter().find(|p| p.number == number).map(|p| &p.snapshot)
+    }
+
+    /// Undo the last edit made in this session: restore its exact original bytes, if
+    /// they haven't been edited since (other changes in the file are kept).
     pub fn undo(&mut self) -> Result<Edited, EditError> {
+        self.step(false)
+    }
+
+    /// Redo the last undone edit, verified the same way.
+    pub fn redo(&mut self) -> Result<Edited, EditError> {
+        self.step(true)
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.history.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
+
+    /// Revert the newest change on one stack and record its inverse on the other.
+    fn step(&mut self, redo: bool) -> Result<Edited, EditError> {
         self.refresh();
         if !self.draft_errors.is_empty() {
             return Err(EditError::DraftInvalid(self.draft_errors.clone()));
         }
-        let Some(c) = self.history.pop() else { return Err(EditError::NotFound("nothing to undo".into())) };
-        // Undo is not itself recorded for undo.
-        let len = self.history.len();
-        let result = self.revert(&c);
-        self.history.truncate(len);
-        if result.is_err() {
-            self.history.push(c);
+        let what = if redo { "nothing to redo" } else { "nothing to undo" };
+        let stack = if redo { &mut self.redo } else { &mut self.history };
+        let Some(c) = stack.pop() else { return Err(EditError::NotFound(what.into())) };
+        match self.revert(&c) {
+            Ok((edited, inverse)) => {
+                if redo { &mut self.history } else { &mut self.redo }.push(inverse);
+                Ok(edited)
+            }
+            Err(e) => {
+                if redo { &mut self.redo } else { &mut self.history }.push(c);
+                Err(e)
+            }
         }
-        result
     }
 
-    /// Apply the inverse of `c`, verified as its kind of edit requires. Not recorded.
-    fn revert(&mut self, c: &Change) -> Result<Edited, EditError> {
+    /// Apply the inverse of `c`, verified as its kind of edit requires, without
+    /// recording it. Returns what changed and the change that would revert it again.
+    fn revert(&mut self, c: &Change) -> Result<(Edited, Change), EditError> {
         let file = c.file.display().to_string();
         match &c.undo {
-            Undo::Value { origin, value_before } => {
-                let then = if c.revision == self.accepted.number {
-                    Some(&self.accepted.snapshot)
-                } else {
-                    self.past.iter().find(|p| p.number == c.revision).map(|p| &p.snapshot)
-                };
+            Undo::Value { origin, value_before, value_after } => {
                 let end = c.start as usize + c.after.len();
-                let start = then
+                let start = self
+                    .snapshot(c.revision)
                     .and_then(|s| s.files.get(&c.file))
                     .zip(self.accepted.snapshot.files.get(&c.file))
                     .and_then(|(was, now)| carry(was, now, c.start as usize, end))
                     .ok_or_else(|| EditError::Rejected("that value has been edited since; undo would overwrite it".into()))?;
                 let end = start + c.after.len();
-                let done = self.apply(&c.file, start as u32, end as u32, &c.before, origin, *value_before, f64::NAN)?;
-                Ok(Edited { revision: done.revision, file, before: done.before, after: done.after })
+                let done = self.apply(&c.file, start as u32, end as u32, &c.before, origin, *value_before, None)?;
+                let inverse = Change {
+                    revision: done.revision,
+                    file: c.file.clone(),
+                    start: start as u32,
+                    before: c.after.clone(),
+                    after: c.before.clone(),
+                    undo: Undo::Value { origin: origin.clone(), value_before: *value_after, value_after: *value_before },
+                };
+                Ok((Edited { revision: done.revision, file, before: done.before, after: done.after }, inverse))
             }
             Undo::Exact { base } => {
-                // Restoring the bytes must give back exactly the revision the edit was
-                // made on, which was accepted then, so it means exactly that graph.
-                let changed = || EditError::Rejected("the code changed since this edit; undo it in the code".into());
-                if c.revision != self.accepted.number {
+                // The code must be exactly as the change left it, and restoring the bytes
+                // must give back exactly the revision it was made on, which was accepted
+                // then, so it means exactly that graph.
+                let changed = || EditError::Rejected("the code changed since this edit; change it in the code".into());
+                if self.snapshot(c.revision) != Some(&self.accepted.snapshot) {
                     return Err(changed());
                 }
-                let base = self.past.iter().find(|p| p.number == *base).ok_or_else(changed)?.snapshot.clone();
+                let base = self.snapshot(*base).ok_or_else(changed)?.clone();
                 let end = c.start + c.after.len() as u32;
                 let candidate = self.candidate(&c.file, c.start, end, &c.before)?;
                 if candidate.snapshot != base {
                     return Err(changed());
                 }
                 let (before, after) = (candidate.before.clone(), candidate.after.clone());
-                let revision = self.commit(candidate, Undo::Exact { base: self.accepted.number })?;
-                Ok(Edited { revision, file, before, after })
+                let undone = self.accepted.number;
+                let revision = self.commit(candidate, None)?;
+                let inverse = Change {
+                    revision,
+                    file: c.file.clone(),
+                    start: c.start,
+                    before: c.after.clone(),
+                    after: c.before.clone(),
+                    undo: Undo::Exact { base: undone },
+                };
+                Ok((Edited { revision, file, before, after }, inverse))
             }
         }
     }

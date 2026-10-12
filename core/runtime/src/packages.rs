@@ -15,6 +15,20 @@ struct Manifest {
     package: Info,
     #[serde(default)]
     kernel: Vec<KernelDecl>,
+    #[serde(default)]
+    effect: Vec<Effect>,
+}
+
+/// An effect a package offers to put after any audio: a function exported by one of its
+/// modules that takes the audio as its first argument and returns audio.
+#[derive(Clone, Debug, Deserialize, serde::Serialize, PartialEq)]
+pub struct Effect {
+    /// The module to import it from, e.g. `std/fx`.
+    pub module: String,
+    /// The exported function, e.g. `delay`.
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
 }
 
 #[derive(Deserialize)]
@@ -44,6 +58,7 @@ pub struct Package {
     pub version: String,
     pub description: String,
     pub dir: PathBuf,
+    pub effects: Vec<Effect>,
     module: Option<Module>,
 }
 
@@ -108,7 +123,19 @@ impl PackageSet {
             let sig = KernelSig::parse(&id, &k.description, &k.inputs, &k.outputs, k.latency).map_err(anyhow::Error::msg)?;
             self.kernels.insert(id, (sig, name.clone()));
         }
-        let pkg = Package { name: name.clone(), version: m.package.version, description: m.package.description, dir: dir.to_path_buf(), module };
+        for e in &m.effect {
+            if !e.module.strip_prefix(&name).is_some_and(|sub| sub.starts_with('/')) {
+                bail!("package `{name}`: effect `{}` must come from one of its own modules, not `{}`", e.name, e.module);
+            }
+        }
+        let pkg = Package {
+            name: name.clone(),
+            version: m.package.version,
+            description: m.package.description,
+            dir: dir.to_path_buf(),
+            effects: m.effect,
+            module,
+        };
         Ok(self.packages.entry(name).or_insert(pkg))
     }
 
@@ -118,6 +145,11 @@ impl PackageSet {
 
     pub fn packages(&self) -> impl Iterator<Item = &Package> {
         self.packages.values()
+    }
+
+    /// Every effect the loaded packages offer.
+    pub fn effects(&self) -> impl Iterator<Item = &Effect> {
+        self.packages.values().flat_map(|p| &p.effects)
     }
 
     pub fn kernel_sigs(&self) -> impl Iterator<Item = &KernelSig> {

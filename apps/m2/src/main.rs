@@ -28,6 +28,10 @@ USAGE:
   m2 connect <project> <signal> <control>
                                          write a signal's name in place of a control's value, verified
   m2 disconnect <project> <input>        write the input's declared default in place of the name, verified
+  m2 effects <project>                   the effects packages offer, and the calls they can go after
+  m2 add-effect <project> <call> <module>.<effect>
+                                         wrap a call's audio in an effect (e.g. std/fx.delay), verified
+  m2 remove-effect <project> <call>      take an effect out, leaving what it was applied to, verified
   m2 plugins [clap:<id>]                 list installed CLAP plugins, or one plugin's ports
   m2 plugin-state <project> <name> clap:<id> [--force]
                                          save a plugin's default state to assets/plugin-state/<name>.bin
@@ -246,6 +250,34 @@ fn run() -> Result<()> {
             for i in s.inlets() {
                 println!("input  {:30} ← {:14} from {}  {}:{}", i.id, i.name, i.from, i.file, i.line);
             }
+        }
+        Some("effects") => {
+            let s = m2_session::Session::open(Path::new(&arg(1)?), packages()?).map_err(report)?;
+            println!("revision {}", s.accepted().number);
+            for e in s.effects() {
+                println!("effect {:24} {}", format!("{}.{}", e.module, e.name), e.description);
+            }
+            for m in s.view().modules {
+                for n in m.nodes.iter().filter(|n| n.audio || n.effect.is_some()) {
+                    let removable = n.effect.as_ref().map_or(String::new(), |e| format!("  (removable {e})"));
+                    println!("audio  {:30} {:16} {}{removable}", n.id, n.label, m.name);
+                }
+            }
+        }
+        Some(command @ ("add-effect" | "remove-effect")) => {
+            let mut s = m2_session::Session::open(Path::new(&arg(1)?), packages()?).map_err(report)?;
+            let t = Instant::now();
+            let at = s.accepted().number;
+            let e = match command {
+                "add-effect" => {
+                    let effect = arg(3)?;
+                    let (module, name) = effect.rsplit_once('.').context("name the effect as <module>.<name>, e.g. std/fx.delay")?;
+                    s.add_effect(at, &arg(2)?, module, name)
+                }
+                _ => s.remove_effect(at, &arg(2)?),
+            }
+            .map_err(|e| anyhow!("{e}"))?;
+            println!("{}: `{}` → `{}` (revision {}, verified in {:.0} ms)", e.file, e.before, e.after, e.revision, t.elapsed().as_secs_f64() * 1000.0);
         }
         Some(command @ ("connect" | "disconnect")) => {
             let mut s = m2_session::Session::open(Path::new(&arg(1)?), packages()?).map_err(report)?;

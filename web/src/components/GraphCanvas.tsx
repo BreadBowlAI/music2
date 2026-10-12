@@ -1,17 +1,83 @@
 import clsx from "clsx";
-import { FileCode2, Pause, Play, SkipBack, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { display, fromUnit, graphApi, layout, NODE_W, toUnit, type GraphState, type Knob as KnobInfo, type ModuleView, type ViewNode } from "../lib/graph";
+import { FileCode2, Pause, Play, Plus, Redo2, SkipBack, Trash2, Undo2, X } from "lucide-react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  display,
+  fromUnit,
+  graphApi,
+  layout,
+  NODE_W,
+  toUnit,
+  type Effect,
+  type GraphState,
+  type GraphStatus,
+  type Knob as KnobInfo,
+  type ModuleView,
+  type ViewNode,
+} from "../lib/graph";
 import { isMac } from "../lib/native";
 import { useStore } from "../lib/store";
+import SongTimeline, { trackColor } from "./SongTimeline";
 import { Button, Knob } from "./ui";
 
-/** A song-as-program project: its code, shown as a graph you can play and tweak. */
+const PANEL_KEY = "m2.graph.panel";
+const clampPanel = (h: number) => Math.round(Math.min(Math.max(h, 120), window.innerHeight * 0.8));
+
+/** A song-as-program project: its timeline, and below it the selected module's code as a graph to play and tweak. */
 export default function GraphCanvas({ graph }: { graph: GraphState }) {
-  const { view } = graph;
+  const { view, timeline } = graph;
+  const toast = useStore((s) => s.toast);
+
+  const [status, setStatus] = useState<GraphStatus>({ playing: graph.playing, seconds: graph.seconds, beat: graph.beat });
+  const poll = useCallback(() => graphApi.status().then(setStatus).catch(() => {}), []);
+  useEffect(() => {
+    void poll();
+    const t = setInterval(poll, 200);
+    return () => clearInterval(t);
+  }, [poll]);
+  const seek = useCallback(
+    (beat: number) => void graphApi.seek(beat).then(poll, (error) => toast(error instanceof Error ? error.message : String(error))),
+    [poll, toast],
+  );
+
+  // One selection for the timeline and the panel. If an edit removes the module, the default shows.
+  const [picked, setPicked] = useState<string | null>(null);
+  const tabs = [...view.modules.filter((m) => m.name === "song"), ...view.modules.filter((m) => m.name !== "song")];
+  const module = view.modules.find((m) => m.name === picked) ?? view.modules.find((m) => m.track) ?? tabs[0];
+
+  const panel = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState(() => {
+    try {
+      const saved = Number(localStorage.getItem(PANEL_KEY));
+      if (saved > 0) return clampPanel(saved);
+    } catch {}
+    return clampPanel(window.innerHeight * 0.45);
+  });
+  const resize = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || !panel.current) return;
+    e.preventDefault();
+    const handle = e.currentTarget;
+    // From the height on screen, which the CSS clamp may hold below the saved one.
+    const y0 = e.clientY, h0 = panel.current.offsetHeight;
+    let h = h0;
+    handle.setPointerCapture(e.pointerId);
+    const move = (ev: PointerEvent) => setHeight((h = clampPanel(h0 - (ev.clientY - y0))));
+    const end = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+      handle.removeEventListener("pointercancel", end);
+      try {
+        localStorage.setItem(PANEL_KEY, String(h));
+      } catch {}
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+  };
+
   return (
     <div className="h-full flex flex-col">
-      <GraphBar graph={graph} />
+      <GraphBar graph={graph} status={status} onSeek={seek} />
       {view.draft_errors.length > 0 && (
         <div className="px-5 py-2.5 bg-amber-500/10 border-b border-amber-600/20 text-[13px] text-amber-900 space-y-0.5">
           <div className="font-medium">The code doesn't compile right now. Playing and showing the last version that did. Knobs will unlock when the code compiles.</div>
@@ -20,22 +86,71 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
           ))}
         </div>
       )}
-      <div className="flex-1 overflow-auto p-6 space-y-6" data-testid="graph">
-        {view.modules.map((m) => (
-          <ModuleSection key={`${graph.session}:${m.name}`} module={m} session={graph.session} revision={view.revision} editable={view.draft_errors.length === 0} />
-        ))}
+      <SongTimeline timeline={timeline} beat={status.beat} playing={status.playing} selected={module?.name} onSelect={setPicked} onSeek={seek} />
+      <div
+        data-testid="split"
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Resize the graph panel"
+        title="Drag to resize"
+        className="group h-2 shrink-0 grid place-items-center cursor-row-resize bg-ink-900 border-y border-black/[0.06] hover:bg-ink-850"
+        onPointerDown={resize}
+      >
+        <div className="w-10 h-[3px] rounded-full bg-ink-600 group-hover:bg-pop-500/60 transition-colors" />
+      </div>
+      <div ref={panel} className="shrink-0 min-h-[120px] max-h-[80vh] flex flex-col bg-ink-950" style={{ height }}>
+        <div role="tablist" aria-label="Modules" className="h-11 shrink-0 flex items-center gap-1 px-3 bg-ink-900 border-b border-black/[0.06] overflow-x-auto">
+          {tabs.map((m) => {
+            const color = trackColor(timeline, m.name);
+            return (
+              <button
+                key={m.name}
+                role="tab"
+                aria-selected={m === module}
+                data-module-tab={m.name}
+                onClick={() => setPicked(m.name)}
+                className={clsx(
+                  "h-7 px-3 shrink-0 rounded-lg text-[13px] font-medium inline-flex items-center gap-2 cursor-pointer transition-colors",
+                  m === module ? "bg-ink-700 text-ink-100" : "text-ink-400 hover:text-ink-100 hover:bg-ink-850",
+                )}
+              >
+                {color && <span className="size-2 rounded-full" style={{ background: color }} />}
+                {m.name === "song" ? "Song" : m.name}
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex-1 min-h-0 overflow-auto p-4" data-testid="graph">
+          {module && (
+            <ModuleSection
+              key={`${graph.session}:${module.name}`}
+              module={module}
+              session={graph.session}
+              revision={view.revision}
+              editable={view.draft_errors.length === 0}
+              effects={graph.effects}
+            />
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-function GraphBar({ graph }: { graph: GraphState }) {
-  const [status, setStatus] = useState({ playing: graph.playing, seconds: graph.seconds });
-  useEffect(() => {
-    const t = setInterval(() => graphApi.status().then(setStatus).catch(() => {}), 200);
-    return () => clearInterval(t);
-  }, []);
+/** Undo or redo an edit to the open graph project's code. */
+export async function graphUndo(session: number, id: "undo" | "redo") {
+  const toast = useStore.getState().toast;
+  await (id === "redo" ? graphApi.redo(session) : graphApi.undo(session))
+    .then((c) => toast(`${id === "redo" ? "Redid" : "Undid"}: ${c.file} ${c.before} → ${c.after}`))
+    .catch((error) => toast(error instanceof Error ? error.message : String(error)));
+}
+
+function GraphBar({ graph, status, onSeek }: { graph: GraphState; status: GraphStatus; onSeek: (beat: number) => void }) {
   const time = `${Math.floor(status.seconds / 60)}:${(status.seconds % 60).toFixed(1).padStart(4, "0")}`;
+  const bpb = graph.timeline.beats_per_bar;
+  // Playback sits on whole frames, so a seek to a beat can land a hair before it.
+  const beat = Math.round(status.beat * 1000) / 1000;
+  const position = `${Math.floor(beat / bpb) + 1}.${Math.floor(beat % bpb) + 1}`;
   return (
     <header data-tauri-drag-region className={clsx("h-16 shrink-0 flex items-center gap-3 px-4 border-b border-black/[0.06] bg-ink-900", isMac && "pl-[88px]")}>
       <div data-tauri-drag-region className="size-8 rounded-xl pop-gradient grid place-items-center shadow-lg shadow-pop-500/15">
@@ -51,14 +166,35 @@ function GraphBar({ graph }: { graph: GraphState }) {
       >
         {status.playing ? <Pause className="size-5 fill-current" /> : <Play className="size-5 fill-current translate-x-[1px]" />}
       </button>
-      <Button onClick={() => graphApi.transport("restart")} title="Back to start" className="!px-2.5">
+      <Button onClick={() => onSeek(0)} title="Back to start" className="!px-2.5">
         <SkipBack className="size-4" />
       </Button>
-      <span className="font-mono text-[15px] tabular-nums text-ink-100 w-16">{time}</span>
+      <div className="flex items-baseline gap-2.5 font-mono tabular-nums">
+        <span className="text-[15px] text-ink-100 min-w-12" title="Bar and beat">{position}</span>
+        <span className="text-xs text-ink-400 w-12" title="Time">{time}</span>
+      </div>
       <div data-tauri-drag-region className="flex-1 flex items-center justify-center gap-2">
         <span className="text-[15px] font-semibold text-ink-100">{graph.name}</span>
         <span className="text-xs text-ink-400 font-mono" title="Every accepted change to the code is a new revision">rev {graph.view.revision}</span>
       </div>
+      <Button
+        onClick={() => void graphUndo(graph.session, "undo")}
+        disabled={!graph.can_undo}
+        title={`Undo the last change to the code (${isMac ? "⌘Z" : "Ctrl+Z"})`}
+        aria-label="Undo"
+        className="!px-2.5"
+      >
+        <Undo2 className="size-4" />
+      </Button>
+      <Button
+        onClick={() => void graphUndo(graph.session, "redo")}
+        disabled={!graph.can_redo}
+        title={`Redo (${isMac ? "⇧⌘Z" : "Ctrl+Shift+Z"})`}
+        aria-label="Redo"
+        className="!px-2.5"
+      >
+        <Redo2 className="size-4" />
+      </Button>
       <span className="text-xs text-ink-400 truncate max-w-[280px]" title={graph.dir}>{graph.dir}</span>
       <Button onClick={() => graphApi.close()} title="Close the project" className="!px-2.5">
         <X className="size-4" />
@@ -70,7 +206,20 @@ function GraphBar({ graph }: { graph: GraphState }) {
 /** A cable being dragged from a node's output, in the module's coordinates. */
 interface Cable { from: string; name: string; x0: number; y0: number; x: number; y: number }
 
-function ModuleSection({ module, session, revision, editable }: { module: ModuleView; session: number; revision: number; editable: boolean }) {
+/** Memoized: the playback status re-renders the canvas five times a second. */
+const ModuleSection = memo(function ModuleSection({
+  module,
+  session,
+  revision,
+  editable,
+  effects,
+}: {
+  module: ModuleView;
+  session: number;
+  revision: number;
+  editable: boolean;
+  effects: Effect[];
+}) {
   const { placed, width, height } = useMemo(() => layout(module), [module]);
   const toast = useStore((s) => s.toast);
   const area = useRef<HTMLDivElement>(null);
@@ -139,6 +288,7 @@ function ModuleSection({ module, session, revision, editable }: { module: Module
             session={session}
             revision={revision}
             editable={editable}
+            effects={effects}
             onCable={startCable}
             style={{ left: x, top: y, width: NODE_W, height: h }}
           />
@@ -146,7 +296,7 @@ function ModuleSection({ module, session, revision, editable }: { module: Module
       </div>
     </section>
   );
-}
+});
 
 const KIND_STYLE: Record<ViewNode["kind"], string> = {
   call: "bg-ink-800",
@@ -162,6 +312,7 @@ function NodeCard({
   session,
   revision,
   editable,
+  effects,
   onCable,
   style,
 }: {
@@ -169,10 +320,14 @@ function NodeCard({
   session: number;
   revision: number;
   editable: boolean;
+  effects: Effect[];
   onCable: (node: ViewNode, e: React.PointerEvent) => void;
   style: React.CSSProperties;
 }) {
   const toast = useStore((s) => s.toast);
+  const [picking, setPicking] = useState(false);
+  const edited = (p: Promise<{ file: string; before: string; after: string }>) =>
+    p.then((c) => toast(`${c.file}: ${c.before} → ${c.after}`)).catch((error) => toast(error instanceof Error ? error.message : String(error)));
   const disconnect = (id: string) =>
     graphApi
       .disconnect(session, revision, id)
@@ -194,7 +349,57 @@ function NodeCard({
             {node.file.split("/").pop()}:{node.line}
           </span>
         )}
+        {node.effect && (
+          <button
+            className="shrink-0 size-6 grid place-items-center rounded-md text-ink-400 hover:text-ink-100 hover:bg-black/5 disabled:opacity-40 disabled:pointer-events-none"
+            title={`Remove ${node.effect}, keeping what it was applied to`}
+            aria-label={`Remove ${node.effect}`}
+            disabled={!editable}
+            onClick={() => void edited(graphApi.removeEffect(session, revision, node.id))}
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        )}
+        {node.audio && effects.length > 0 && (
+          <button
+            className={clsx(
+              "shrink-0 size-6 grid place-items-center rounded-md text-ink-400 hover:text-ink-100 hover:bg-black/5 disabled:opacity-40 disabled:pointer-events-none",
+              picking && "bg-black/5 text-ink-100",
+            )}
+            title="Add an effect after this"
+            aria-label={`Add an effect after ${node.label}`}
+            aria-expanded={picking}
+            disabled={!editable}
+            onClick={() => setPicking((p) => !p)}
+          >
+            <Plus className="size-3.5" />
+          </button>
+        )}
       </div>
+      {picking && (
+        <div
+          className="absolute z-20 right-1 top-10 w-52 rounded-lg bg-ink-900 ring-1 ring-black/10 shadow-lg py-1"
+          role="menu"
+          onMouseLeave={() => setPicking(false)}
+        >
+          <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-ink-400">Add after {node.label}</div>
+          {effects.map((effect) => (
+            <button
+              key={`${effect.module}.${effect.name}`}
+              role="menuitem"
+              data-effect={effect.name}
+              className="w-full text-left px-3 py-1.5 hover:bg-black/5 flex items-baseline gap-2"
+              onClick={() => {
+                setPicking(false);
+                void edited(graphApi.addEffect(session, revision, node.id, effect));
+              }}
+            >
+              <span className="font-mono text-xs text-ink-100">{effect.name}</span>
+              <span className="text-[11px] text-ink-400 truncate">{effect.description}</span>
+            </button>
+          ))}
+        </div>
+      )}
       {node.outlet && (
         <button
           className={clsx(
@@ -262,6 +467,8 @@ interface Gesture {
   start: number;
   previews: Promise<void>;
   previewed: boolean;
+  /** Let go: from here it commits, even if the control unmounts. */
+  released: boolean;
   cancelled: boolean;
   submitted: boolean;
   failed: boolean;
@@ -274,7 +481,9 @@ function KnobControl({ knob, session, revision, editable }: { knob: KnobInfo; se
   const [saving, setSaving] = useState(false);
   // Each gesture captures its identity, revision and value mapping. A save elsewhere
   // doesn't end it: the server carries it to the new revision, or refuses it as stale
-  // if the save touched this value. Session changes remount the control.
+  // if the save touched this value. Session changes remount the control. Unmounting
+  // cancels a drag, but a released knob still commits: selecting another module right
+  // after letting go must not lose the value.
   const latest = useRef(knob.value);
   const dragging = useRef<Gesture | null>(null);
   const active = useRef<Gesture | null>(null);
@@ -291,7 +500,7 @@ function KnobControl({ knob, session, revision, editable }: { knob: KnobInfo; se
       timer.current = null;
       pending.current = null;
       dragging.current = null;
-      if (active.current) void cancel(active.current);
+      if (active.current && !active.current.released) void cancel(active.current);
     };
   }, []);
 
@@ -316,8 +525,9 @@ function KnobControl({ knob, session, revision, editable }: { knob: KnobInfo; se
     if (gesture.failed) return;
     gesture.failed = true;
     void cancel(gesture);
+    // A released knob reports even from a closed panel: its value didn't save.
+    if (mounted.current || gesture.released) toast(error instanceof Error ? error.message : String(error));
     if (!mounted.current) return;
-    toast(error instanceof Error ? error.message : String(error));
     setValue(knob.value);
     latest.current = knob.value;
     refresh();
@@ -337,7 +547,7 @@ function KnobControl({ knob, session, revision, editable }: { knob: KnobInfo; se
   const begin = (): Gesture => {
     const gesture: Gesture = {
       token: crypto.randomUUID(), session, revision, knob, start: knob.value,
-      previews: Promise.resolve(), previewed: false, cancelled: false, submitted: false, failed: false,
+      previews: Promise.resolve(), previewed: false, released: false, cancelled: false, submitted: false, failed: false,
     };
     active.current = gesture;
     return gesture;
@@ -364,11 +574,12 @@ function KnobControl({ knob, session, revision, editable }: { knob: KnobInfo; se
       if (active.current === gesture) active.current = null;
       return;
     }
+    gesture.released = true;
     committing.current = true;
     setSaving(true);
     try {
       await gesture.previews;
-      if (!mounted.current || gesture.failed || gesture.cancelled) {
+      if (gesture.failed || gesture.cancelled) {
         void cancel(gesture);
         return;
       }
@@ -376,7 +587,7 @@ function KnobControl({ knob, session, revision, editable }: { knob: KnobInfo; se
       // final audition message may have been dropped by the audio queue.
       gesture.submitted = true;
       const change = await graphApi.set(gesture.session, gesture.revision, gesture.knob.id, gesture.token, v, gesture.start);
-      if (mounted.current && change.before !== change.after) toast(`${change.file}: ${change.before} → ${change.after}`);
+      if (change.before !== change.after) toast(`${change.file}: ${change.before} → ${change.after}`);
       refresh();
     } catch (error) {
       // Rejections restore audio on the server. An owner-checked cancellation

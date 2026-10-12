@@ -9,6 +9,7 @@
 //! changes.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result, anyhow};
@@ -16,8 +17,14 @@ use m2_ir::Origin;
 use m2_play::Player;
 use m2_runtime::{PackageSet, Renderer};
 use m2_session::{EditError, Edited, Session};
+use m2_song::TempoMap;
 use parking_lot::Mutex;
+use serde::Serialize;
 use serde_json::{Value, json};
+
+/// How far past the song's last clip, or past where playback is, a seek may go: it
+/// replays the song from the start while holding the project.
+const SEEK_ROOM: f64 = 1024.0;
 
 struct Open {
     token: u64,
@@ -25,6 +32,8 @@ struct Open {
     /// The accepted revision the player is playing.
     playing: u64,
     previews: Vec<Preview>,
+    /// The playing revision's tempo map, shared with [`Graph::status`].
+    tempo: Arc<Mutex<Option<TempoMap>>>,
 }
 
 struct Preview {
@@ -37,10 +46,22 @@ struct Preview {
     baseline: f64,
 }
 
+/// Whether the player is playing, and where: in seconds, and in beats of the accepted
+/// revision's tempo map (0 with no project open).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub struct Status {
+    pub playing: bool,
+    pub seconds: f64,
+    pub beat: f64,
+}
+
 #[derive(Default)]
 pub struct Graph {
     open: Mutex<Option<Open>>,
     player: Mutex<Option<Player>>,
+    /// Kept apart from `open`, which seeks and edits hold while they replay the song,
+    /// so status (the playhead) never waits for them. None with no project open.
+    tempo: Arc<Mutex<Option<TempoMap>>>,
     next_session: AtomicU64,
 }
 
@@ -55,10 +76,12 @@ fn packages() -> Result<PackageSet> {
     Ok(p)
 }
 
-/// A renderer for the accepted revision, positioned at `frame`.
+/// A renderer for the accepted revision, positioned at `frame`. It replays in live mode,
+/// as the player plays: a NaN on the way is silenced, not an error.
 fn renderer(session: &Session, sample_rate: u32, frame: u64) -> Result<Renderer> {
     let rev = session.accepted();
     let mut r = Renderer::for_project(&rev.compiled.flat, &rev.project, &session.packages, sample_rate)?;
+    r.set_strict(false);
     r.seek(frame)?;
     Ok(r)
 }
@@ -100,15 +123,26 @@ impl Open {
         Ok(())
     }
 
+    /// Play `r`, a renderer for the accepted revision, playing or stopped as before.
+    /// Previews belonged to the old one.
+    fn play(&mut self, player: &Player, r: Renderer) {
+        let rev = self.session.accepted();
+        // Status reads the position under this lock too, so it never pairs one renderer's
+        // position with the other's tempo.
+        let mut tempo = self.tempo.lock();
+        player.load(r);
+        *tempo = Some(rev.tempo());
+        self.playing = rev.number;
+        self.previews.clear();
+    }
+
     /// Source refresh can happen inside an edit, independently of the file watcher.
     fn sync(&mut self, player: &Player) -> Result<bool> {
-        let accepted = self.session.accepted().number;
-        if accepted == self.playing {
+        if self.session.accepted().number == self.playing {
             return Ok(false);
         }
-        player.load(renderer(&self.session, player.sample_rate, player.position())?);
-        self.playing = accepted;
-        self.previews.clear();
+        let r = renderer(&self.session, player.sample_rate, player.position())?;
+        self.play(player, r);
         Ok(true)
     }
 
@@ -142,11 +176,11 @@ impl Graph {
         let mut open = self.open.lock();
         let player = self.player()?;
         let new_renderer = renderer(&session, player.sample_rate, 0)?;
-        player.stop();
-        player.load(new_renderer);
-        let playing = session.accepted().number;
         let token = self.next_session.fetch_add(1, Ordering::Relaxed) + 1;
-        *open = Some(Open { token, session, playing, previews: vec![] });
+        let mut o = Open { token, session, playing: 0, previews: vec![], tempo: self.tempo.clone() };
+        player.stop();
+        o.play(&player, new_renderer);
+        *open = Some(o);
         drop(open);
         self.state().context("no project")
     }
@@ -157,29 +191,59 @@ impl Graph {
             p.stop();
         }
         *open = None;
+        *self.tempo.lock() = None;
     }
 
-    /// The view, the project's name and folder, and the transport.
+    /// The view, the timeline, the project's name and folder, and the transport.
     pub fn state(&self) -> Option<Value> {
         let open = self.open.lock();
         let o = open.as_ref()?;
         let rev = o.session.accepted();
-        let (playing, seconds) = self.transport_state();
+        let status = self.status();
         Some(json!({
             "session": o.token,
             "name": rev.project.manifest.project.name,
             "dir": rev.project.dir,
             "view": o.session.view(),
-            "playing": playing,
-            "seconds": seconds,
+            "timeline": o.session.timeline(),
+            "can_undo": o.session.can_undo(),
+            "can_redo": o.session.can_redo(),
+            "effects": o.session.effects(),
+            "playing": status.playing,
+            "seconds": status.seconds,
+            "beat": status.beat,
         }))
     }
 
-    pub fn transport_state(&self) -> (bool, f64) {
-        match self.player.lock().as_ref() {
-            Some(p) => (p.is_playing(), p.position() as f64 / p.sample_rate as f64),
-            None => (false, 0.0),
+    /// Where playback is. It doesn't wait for the project, which seeks and edits hold
+    /// while they replay the song: meanwhile the old renderer plays on, and so does this.
+    pub fn status(&self) -> Status {
+        let Some(p) = self.player.lock().clone() else { return Status::default() };
+        let tempo = self.tempo.lock();
+        let seconds = p.position() as f64 / p.sample_rate as f64;
+        Status { playing: p.is_playing(), seconds, beat: tempo.as_ref().map_or(0.0, |t| t.beat_at(seconds)) }
+    }
+
+    /// Move playback to `beat` (at least 0) of the accepted revision, playing or not.
+    /// The renderer is rebuilt there, so previews of the old one close.
+    pub fn seek(&self, beat: f64) -> Result<()> {
+        if !beat.is_finite() {
+            return Err(anyhow!("can't seek to beat {beat}"));
         }
+        let mut open = self.open.lock();
+        let o = open.as_mut().context("no project is open")?;
+        let player = self.player()?;
+        let rev = o.session.accepted();
+        let tempo = rev.tempo();
+        let now = tempo.beat_at(player.position() as f64 / player.sample_rate as f64);
+        let limit = rev.project.timeline.end().max(now) + SEEK_ROOM;
+        if beat > limit {
+            return Err(anyhow!("can't seek to beat {beat}: seeking replays the song from its start, up to beat {limit:.0} at most"));
+        }
+        let frame = (tempo.seconds_at(beat.max(0.0)) * player.sample_rate as f64).round() as u64;
+        let r = renderer(&o.session, player.sample_rate, frame)?;
+        o.play(&player, r);
+        Ok(())
     }
 
     /// Change a value in the playing audio only (while a knob is dragged).
@@ -269,6 +333,25 @@ impl Graph {
         self.restructure(token, |session| session.disconnect(revision, id))
     }
 
+    /// Put one of the packages' effects after a call's audio, in code.
+    pub fn add_effect(&self, token: u64, revision: u64, call: &str, module: &str, name: &str) -> Result<Value> {
+        self.restructure(token, |session| session.add_effect(revision, call, module, name))
+    }
+
+    /// Take an effect out, leaving what it was applied to.
+    pub fn remove_effect(&self, token: u64, revision: u64, call: &str) -> Result<Value> {
+        self.restructure(token, |session| session.remove_effect(revision, call))
+    }
+
+    /// Undo the last edit made through this session (knob or cable).
+    pub fn undo(&self, token: u64) -> Result<Value> {
+        self.restructure(token, Session::undo)
+    }
+
+    pub fn redo(&self, token: u64) -> Result<Value> {
+        self.restructure(token, Session::redo)
+    }
+
     fn restructure(&self, token: u64, edit: impl FnOnce(&mut Session) -> Result<Edited, EditError>) -> Result<Value> {
         let mut open = self.open.lock();
         let o = open.as_mut().context("no project is open")?;
@@ -288,13 +371,7 @@ impl Graph {
             "stop" => player.stop(),
             "toggle" if player.is_playing() => player.stop(),
             "toggle" => player.play(),
-            "restart" => {
-                let mut open = self.open.lock();
-                let o = open.as_mut().context("no project is open")?;
-                player.load(renderer(&o.session, player.sample_rate, 0)?);
-                o.playing = o.session.accepted().number;
-                o.previews.clear();
-            }
+            "restart" => self.seek(0.0)?,
             other => return Err(anyhow!("unknown transport action {other}")),
         }
         Ok(())
@@ -306,13 +383,14 @@ impl Graph {
         let Some(o) = open.as_mut() else { return false };
         let changed = o.session.refresh();
         let mut synced = false;
-        if let Some(p) = self.player.lock().as_ref() {
+        // A clone: syncing replays the song, and status waits for the player's lock.
+        if let Some(p) = self.player.lock().clone() {
             if !o.session.draft_errors.is_empty()
-                && let Err(e) = o.restore_previews(p)
+                && let Err(e) = o.restore_previews(&p)
             {
                 eprintln!("music2: couldn't restore the preview: {e:#}");
             }
-            match o.sync(p) {
+            match o.sync(&p) {
                 Ok(s) => synced = s,
                 Err(e) => eprintln!("music2: couldn't rebuild the graph: {e:#}"),
             }
@@ -524,6 +602,52 @@ mod tests {
     }
 
     #[test]
+    fn undo_and_redo_play_each_revision_they_make() {
+        let fixture = Fixture::new();
+        let graph = fixture.open();
+        let (token, revision, id) = control(&graph);
+        assert_eq!(graph.state().unwrap()["can_undo"], false);
+        graph.set(token, revision, &id, "drag", 950.0, Some(800.0)).unwrap();
+        assert_eq!(graph.state().unwrap()["can_undo"], true);
+        let undone = graph.undo(token).unwrap();
+        assert_eq!((undone["before"].as_str(), undone["after"].as_str()), (Some("950"), Some("800")));
+        let state = graph.state().unwrap();
+        assert_eq!((&state["can_undo"], &state["can_redo"]), (&json!(false), &json!(true)));
+        {
+            let open = graph.open.lock();
+            let o = open.as_ref().unwrap();
+            assert_eq!(o.playing, o.session.accepted().number);
+            assert_eq!(o.session.controls()[0].value, 800.0);
+        }
+        graph.redo(token).unwrap();
+        assert!(std::fs::read_to_string(fixture.0.join("song.ts")).unwrap().contains("hz(950)"));
+        assert!(graph.undo(token + 1).is_err(), "another session's request is refused");
+    }
+
+    #[test]
+    fn effects_are_listed_added_and_removed_and_the_player_follows() {
+        let fixture = Fixture::new();
+        let graph = fixture.open();
+        let state = graph.state().unwrap();
+        let (token, revision) = (state["session"].as_u64().unwrap(), state["view"]["revision"].as_u64().unwrap());
+        assert!(state["effects"].as_array().unwrap().iter().any(|e| e["name"] == "delay" && e["module"] == "std/fx"));
+        let node = state["view"]["modules"][0]["nodes"].as_array().unwrap().iter().find(|n| n["audio"] == true).unwrap().clone();
+        let call = node["id"].as_str().unwrap();
+        let added = graph.add_effect(token, revision, call, "std/fx", "delay").unwrap();
+        assert_eq!(added["after"], "delay(osc.sine(hz(800)))");
+        let state = graph.state().unwrap();
+        let delay = state["view"]["modules"][0]["nodes"].as_array().unwrap().iter().find(|n| n["effect"] == "delay").unwrap().clone();
+        {
+            let open = graph.open.lock();
+            let o = open.as_ref().unwrap();
+            assert_eq!(o.playing, o.session.accepted().number);
+        }
+        let revision = state["view"]["revision"].as_u64().unwrap();
+        graph.remove_effect(token, revision, delay["id"].as_str().unwrap()).unwrap();
+        assert!(std::fs::read_to_string(fixture.0.join("song.ts")).unwrap().contains("song(() => osc.sine(hz(800)))"));
+    }
+
+    #[test]
     fn poll_restores_invalid_drafts_and_syncs_already_refreshed_sources() {
         let fixture = Fixture::new();
         let graph = fixture.open();
@@ -575,6 +699,106 @@ mod tests {
         assert!(o.previews.is_empty());
         assert_eq!(o.playing, revision);
         assert_eq!(o.session.controls()[0].value, 950.0);
+    }
+
+    /// Wait for the player's thread to catch up.
+    fn eventually(what: &str, done: impl Fn() -> bool) {
+        let start = std::time::Instant::now();
+        while !done() {
+            assert!(start.elapsed() < std::time::Duration::from_secs(5), "timed out waiting until {what}");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn seeking_keeps_playing_or_stopped_and_status_counts_beats_in_the_tempo() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.0.join("timeline")).unwrap();
+        std::fs::write(fixture.0.join("timeline/song.json"), r#"{"tempo": [{"beat": 0, "bpm": 120}, {"beat": 4, "bpm": 60}]}"#).unwrap();
+        let graph = fixture.open();
+        let state = graph.state().unwrap();
+        assert_eq!(state["timeline"]["tempo"], json!([{"beat": 0.0, "bpm": 120.0}, {"beat": 4.0, "bpm": 60.0}]));
+        assert_eq!((&state["timeline"]["end"], &state["beat"]), (&json!(4.0), &json!(0.0)));
+
+        // Stopped, the position moves at once and stays there.
+        graph.seek(2.0).unwrap();
+        assert_eq!(graph.status(), Status { playing: false, seconds: 1.0, beat: 2.0 }, "at 120 bpm, 1 second is 2 beats");
+        graph.seek(8.0).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        assert_eq!(graph.status(), Status { playing: false, seconds: 6.0, beat: 8.0 }, "then 4 beats at 60 bpm");
+        graph.seek(-3.0).unwrap();
+        assert_eq!(graph.status().beat, 0.0);
+        assert!(graph.seek(f64::NAN).is_err());
+
+        // Playing, it goes on playing from there.
+        graph.transport("play").unwrap();
+        eventually("it plays", || graph.status().playing);
+        graph.seek(4.0).unwrap();
+        eventually("it plays on from beat 4", || graph.status().beat > 4.0);
+        assert!(graph.status().playing);
+        graph.transport("stop").unwrap();
+        eventually("it stops", || !graph.status().playing);
+        graph.seek(1.0).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        assert_eq!(graph.status(), Status { playing: false, seconds: 0.5, beat: 1.0 });
+
+        // Seeking replays from the start, so it stays within reach of the song.
+        assert!(graph.seek(4.0 + SEEK_ROOM + 1.0).is_err());
+        assert_eq!(graph.status().beat, 1.0);
+
+        let closed = Graph { player: Mutex::new(Some(Player::silent().unwrap())), ..Graph::default() };
+        assert!(closed.seek(1.0).is_err(), "no project is open");
+        assert_eq!(closed.status().beat, 0.0);
+        graph.close();
+        assert_eq!(graph.status().beat, 0.0);
+    }
+
+    #[test]
+    fn seeking_replays_past_a_nan_the_way_playback_does() {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.0.join("timeline")).unwrap();
+        // 1e39 overflows to infinity: a kernel produces non-finite samples from beat 8.
+        std::fs::write(fixture.0.join("timeline/song.g.json"), r#"{"clips": [{"start": 8, "length": 8, "points": [[0, 1e39]]}]}"#).unwrap();
+        fixture.write("import { vca } from 'std/dsp';\nexport default song(({ lane }) => vca(osc.sine(hz(440)), lane.control(\"g\", \"gain\", 1)));\n");
+        let graph = fixture.open();
+        graph.seek(12.0).unwrap();
+        assert_eq!(graph.status().beat, 12.0);
+    }
+
+    #[test]
+    fn status_does_not_wait_for_the_project() {
+        let fixture = Fixture::new();
+        let graph = &fixture.open();
+        graph.seek(2.0).unwrap();
+        // As a seek or an edit does while it replays the song.
+        let held = graph.open.lock();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::scope(|s| {
+            s.spawn(move || tx.send(graph.status()).unwrap());
+            let status = rx.recv_timeout(std::time::Duration::from_secs(2)).expect("status answers while the project is held");
+            assert_eq!(status.beat, 2.0);
+            drop(held);
+        });
+    }
+
+    #[test]
+    fn seeking_closes_previews_and_plays_the_accepted_revision() {
+        let fixture = Fixture::new();
+        let graph = fixture.open();
+        let (token, revision, id) = control(&graph);
+        graph.preview(token, revision, &id, "drag", 900.0).unwrap();
+        fixture.write("export default song(() => osc.sine(hz(700)));\n");
+        {
+            let mut open = graph.open.lock();
+            let o = open.as_mut().unwrap();
+            assert!(o.session.refresh());
+            assert_ne!(o.playing, o.session.accepted().number);
+        }
+        graph.seek(4.0).unwrap();
+        let open = graph.open.lock();
+        let o = open.as_ref().unwrap();
+        assert!(o.previews.is_empty());
+        assert_eq!(o.playing, o.session.accepted().number);
     }
 
     #[test]

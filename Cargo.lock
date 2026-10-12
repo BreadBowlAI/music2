@@ -2486,6 +2486,8 @@ dependencies = [
  "crossbeam-channel",
  "m2-ir",
  "m2-runtime",
+ "m2-song",
+ "serde_json",
 ]
 
 [[package]]
@@ -2565,6 +2567,7 @@ dependencies = [
  "m2-render",
  "m2-runtime",
  "m2-session",
+ "m2-song",
  "m2-theory",
  "open",
  "parking_lot",
@@ -2584,6 +2587,7 @@ dependencies = [
  "m2-script",
  "m2-song",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -26,7 +26,7 @@ use m2_ir::{FNode, FOp, Flat, Input, Kind, NoteField, Origin, PortRef, TimeOf};
 use m2_song::{AbsNote, ControlLane, Project, TempoMap, Timeline};
 use wasmtime::{Instance, Memory, Store, StoreLimits, StoreLimitsBuilder, TypedFunc};
 
-pub use packages::{Package, PackageSet};
+pub use packages::{Effect, Package, PackageSet};
 
 pub const BLOCK: usize = 128;
 

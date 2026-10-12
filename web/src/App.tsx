@@ -11,7 +11,7 @@ import SidePanel from "./components/SidePanel";
 import Settings from "./components/Settings";
 import Library from "./components/Library";
 import Toasts from "./components/Toasts";
-import GraphCanvas from "./components/GraphCanvas";
+import GraphCanvas, { graphUndo } from "./components/GraphCanvas";
 import { graphApi } from "./lib/graph";
 import { isMac, native, nativeAction, onFileDrop, onMenu } from "./lib/native";
 
@@ -130,7 +130,7 @@ export default function App() {
   if (graph) {
     return (
       <div className="h-full">
-        <GraphCanvas graph={graph} />
+        <GraphCanvas key={graph.session} graph={graph} />
         <Toasts />
       </div>
     );
@@ -179,6 +179,7 @@ export async function appCommand(id: string) {
     case "redo": {
       // In a text field, undo the typing, like any native app.
       if (editing()) return void document.execCommand(id);
+      if (st.graph) return void graphUndo(st.graph.session, id);
       const r = await (id === "redo" ? api.redo() : api.undo()).catch(() => null);
       if (r?.label) st.toast(`${id === "redo" ? "Redid" : "Undid"} ${r.label}`);
       return;
@@ -201,6 +202,7 @@ export async function appCommand(id: string) {
       if (st.graph) return void graphApi.transport("toggle");
       return void api.transport("toggle");
     case "home":
+      if (st.graph) return void graphApi.seek(0);
       return void api.transport("seek", 0);
     case "loop":
       return void api.loop(!server.looping);

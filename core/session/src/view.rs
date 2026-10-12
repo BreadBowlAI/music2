@@ -11,7 +11,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
-use m2_ir::{Kernels, Node, Op, PortKind, Unit, split_ref};
+use m2_ir::{Kernels, Kind, Node, Op, PortKind, Unit, split_ref};
 use m2_script::sites::{Arg, Site};
 use serde::Serialize;
 
@@ -52,6 +52,10 @@ pub struct ViewNode {
     pub outlet: Option<String>,
     /// Inputs connected by a cable.
     pub inlets: Vec<InletView>,
+    /// Whether its result is audio, which an effect can go after.
+    pub audio: bool,
+    /// The effect this node is, if it can be removed.
+    pub effect: Option<String>,
 }
 
 /// An input connected by a cable, as the canvas shows it.
@@ -137,6 +141,26 @@ fn path_in(site: &Site, start: u32, end: u32) -> Option<Vec<String>> {
         let mut path = vec![i.to_string()];
         find(a, start, end, &mut path).then_some(path)
     })
+}
+
+impl Session {
+    /// Whether call `site` returned one audio signal, as the checked graph types it.
+    fn audio_out(&self, site: u32) -> bool {
+        let compiled = &self.accepted().compiled;
+        let mut outputs = compiled.outputs.iter().filter(|o| o.site == site);
+        let (Some(output), None) = (outputs.next(), outputs.next()) else { return false };
+        let (id, port) = split_ref(&output.port);
+        let Some(module) = compiled.ir.modules.iter().find(|m| m.name == output.module) else { return false };
+        let Some(node) = module.nodes.iter().find(|n| n.id == id) else { return false };
+        let index = match &node.op {
+            Op::Kernel { kernel, .. } => self.packages.kernel(kernel).and_then(|s| s.output_index(port)),
+            Op::Plugin { plugin, .. } => self.packages.plugin(plugin).and_then(|s| s.output_index(port)),
+            _ => Some(0),
+        };
+        let name = format!("{}/{id}", output.module);
+        let checked = compiled.flat.nodes.iter().find(|n| n.name == name);
+        matches!(index.and_then(|i| checked?.outputs.get(i)), Some(Kind::Audio(_)))
+    }
 }
 
 /// The smallest call among `groups` whose source contains the inlet's name.
@@ -381,6 +405,10 @@ impl Session {
                     Group::Site(s) => outlets.iter().find(|o| o.site == *s && o.module == m.name).map(|o| o.name.clone()),
                     _ => None,
                 };
+                let (audio, effect) = match g {
+                    Group::Site(s) if kind == "call" => (self.audio_out(*s), self.effect_at(sites[s]).map(|e| e.name)),
+                    _ => (false, None),
+                };
                 nodes.push(ViewNode {
                     id: id.clone(),
                     label,
@@ -391,6 +419,8 @@ impl Session {
                     readonly: readonly.get(g).cloned().unwrap_or_default(),
                     outlet,
                     inlets: connected.get(g).cloned().unwrap_or_default(),
+                    audio,
+                    effect,
                 });
                 id
             };
@@ -444,6 +474,8 @@ impl Session {
                     readonly: vec![],
                     outlet: None,
                     inlets: vec![],
+                    audio: false,
+                    effect: None,
                 });
                 if let Some(from) = source(r).and_then(group_of).and_then(|g| ids.get(&g).cloned()) {
                     edges.push((from, id));

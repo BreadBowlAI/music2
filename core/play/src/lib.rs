@@ -27,6 +27,11 @@ enum Msg {
 struct Shared {
     /// Frames rendered by the current renderer (its playback position).
     position: AtomicU64,
+    /// Renderers `load` sent that the audio thread hasn't taken yet, and where the last
+    /// one starts. Until it is taken, that is the position: a block of the renderer it
+    /// replaces may still finish and store its own.
+    loading: AtomicU64,
+    loaded: AtomicU64,
     playing: AtomicBool,
 }
 
@@ -41,9 +46,16 @@ struct Callback {
 
 impl Callback {
     fn fill(&mut self, data: &mut [f32], channels: usize) {
+        self.receive();
+        self.render(data, channels);
+    }
+
+    fn receive(&mut self) {
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
                 Msg::Swap(r) => {
+                    self.shared.position.store(r.position(), Ordering::Relaxed);
+                    self.shared.loading.fetch_sub(1, Ordering::Release);
                     if let Some(old) = self.renderer.replace(r) {
                         let _ = self.retired.try_send(old);
                     }
@@ -57,6 +69,9 @@ impl Callback {
                 }
             }
         }
+    }
+
+    fn render(&mut self, data: &mut [f32], channels: usize) {
         let frames = data.len() / channels.max(1);
         let (Some(r), true) = (&mut self.renderer, self.playing) else {
             data.fill(0.0);
@@ -168,9 +183,12 @@ impl Player {
         Ok(Player { tx, shared, sample_rate: SR, device: "none".into() })
     }
 
-    /// Play `renderer` from its current position (seek it first if needed).
+    /// Play `renderer` from its current position (seek it first if needed). That is the
+    /// position from now on, playing or stopped.
     pub fn load(&self, mut renderer: Renderer) {
         renderer.set_strict(false);
+        self.shared.loaded.store(renderer.position(), Ordering::Relaxed);
+        self.shared.loading.fetch_add(1, Ordering::Release);
         let _ = self.tx.send(Msg::Swap(Box::new(renderer)));
     }
 
@@ -195,7 +213,11 @@ impl Player {
 
     /// Frames the playing renderer has rendered.
     pub fn position(&self) -> u64 {
-        self.shared.position.load(Ordering::Relaxed)
+        if self.shared.loading.load(Ordering::Acquire) > 0 {
+            self.shared.loaded.load(Ordering::Relaxed)
+        } else {
+            self.shared.position.load(Ordering::Relaxed)
+        }
     }
 
     pub fn is_playing(&self) -> bool {
@@ -231,5 +253,45 @@ mod tests {
         assert_eq!(actual, origin);
         assert_eq!(value, 950.0);
         commit.join().unwrap().unwrap();
+    }
+
+    /// A renderer of silence, at `frame`.
+    fn silence(frame: u64) -> Renderer {
+        let ir: m2_ir::Ir = serde_json::from_value(serde_json::json!({"ir": 0, "root": {"module": "song", "export": "out"},
+            "modules": [{"name": "song", "lanes": [{"id": "a", "kind": "audio<2>"}], "nodes": [{"id": "x", "op": "lane", "lane": "a"}], "exports": {"out": "x"}}]}))
+        .unwrap();
+        let packages = m2_runtime::PackageSet::default();
+        let flat = m2_ir::check(&ir, &packages).unwrap();
+        let mut r = Renderer::new(&flat, &m2_song::Timeline::default(), &packages, 48_000).unwrap();
+        r.seek(frame).unwrap();
+        r
+    }
+
+    #[test]
+    fn a_block_of_the_replaced_renderer_does_not_undo_a_load() {
+        let (tx, rx) = bounded(8);
+        let (retired, _old) = bounded(8);
+        let shared = Arc::new(Shared::default());
+        let player = Player { tx, shared: shared.clone(), sample_rate: 48_000, device: "test".into() };
+        let mut cb = Callback { renderer: None, playing: false, scratch: vec![[0.0; 2]; 64], rx, retired, shared };
+        let mut data = vec![0.0; 128];
+        player.load(silence(0));
+        player.play();
+        cb.fill(&mut data, 2);
+        assert_eq!(player.position(), 64);
+        // The load lands while the audio thread renders a block of the old renderer.
+        cb.receive();
+        player.load(silence(4800));
+        cb.render(&mut data, 2);
+        assert_eq!(player.position(), 4800);
+        cb.fill(&mut data, 2);
+        assert_eq!(player.position(), 4864);
+        // Stopped, the loaded position holds at once and stays.
+        player.stop();
+        cb.fill(&mut data, 2);
+        player.load(silence(96_000));
+        assert_eq!(player.position(), 96_000);
+        cb.fill(&mut data, 2);
+        assert_eq!(player.position(), 96_000);
     }
 }

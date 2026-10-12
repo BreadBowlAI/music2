@@ -164,6 +164,10 @@ impl TempoMap {
                 let prev = segments[i - 1];
                 secs += (s.beat - prev.beat) * 60.0 / prev.bpm;
             }
+            // Of segments at one beat, the last written is the one in effect.
+            if segs.last().is_some_and(|(prev, _): &(TempoSegment, f64)| prev.beat == s.beat) {
+                segs.pop();
+            }
             segs.push((*s, secs));
         }
         Ok(TempoMap { segs })
@@ -378,10 +382,15 @@ impl Timeline {
         }
     }
 
+    /// The clips of a notes lane as written: each note relative to its clip.
+    pub fn note_clips(&self, module: &str, lane: &str) -> Result<Vec<NoteClip>> {
+        self.clips(module, lane)
+    }
+
     /// The notes of a notes lane in song time, cut to their clips, sorted by start.
     pub fn notes(&self, module: &str, lane: &str) -> Result<Vec<AbsNote>> {
         let mut out = vec![];
-        for c in self.clips::<NoteClip>(module, lane)? {
+        for c in self.note_clips(module, lane)? {
             for n in &c.notes {
                 let (s, e) = (n.start.max(0.0), (n.start + n.length).min(c.length));
                 if e > s {
@@ -471,6 +480,11 @@ impl ControlLane {
     pub fn is_empty(&self) -> bool {
         self.clips.is_empty()
     }
+
+    /// The clips as written, each with its points sorted.
+    pub fn clips(&self) -> &[ControlClip] {
+        &self.clips
+    }
 }
 
 #[cfg(test)]
@@ -487,6 +501,15 @@ mod tests {
             assert!((t.beat_at(t.seconds_at(b)) - b).abs() < 1e-9);
         }
         assert!(TempoMap::new(vec![TempoSegment { beat: 1.0, bpm: 120.0 }]).is_err());
+    }
+
+    #[test]
+    fn of_two_tempos_at_one_beat_the_later_is_kept() {
+        let seg = |beat, bpm| TempoSegment { beat, bpm };
+        let t = TempoMap::new(vec![seg(4.0, 90.0), seg(0.0, 120.0), seg(0.0, 60.0), seg(4.0, 30.0)]).unwrap();
+        assert_eq!(t.segments(), [seg(0.0, 60.0), seg(4.0, 30.0)]);
+        assert_eq!((t.seconds_at(4.0), t.seconds_at(5.0)), (4.0, 6.0));
+        assert!(TempoMap::new(vec![seg(0.0, 5.0), seg(0.0, 60.0)]).is_err(), "every tempo written is checked");
     }
 
     #[test]

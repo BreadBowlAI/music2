@@ -78,8 +78,13 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .route("/api/graph/preview/cancel", post(graph_cancel_preview))
         .route("/api/graph/set", post(graph_set))
         .route("/api/graph/connect", post(graph_connect))
+        .route("/api/graph/effect/add", post(graph_add_effect))
+        .route("/api/graph/effect/remove", post(graph_remove_effect))
+        .route("/api/graph/undo", post(graph_undo))
+        .route("/api/graph/redo", post(graph_redo))
         .route("/api/graph/disconnect", post(graph_disconnect))
         .route("/api/graph/transport", post(graph_transport))
+        .route("/api/graph/seek", post(graph_seek))
         .fallback_service(spa)
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth))
         .with_state(state)
@@ -475,8 +480,10 @@ async fn plugin_def(State(s): S, Query(q): Query<PluginQuery>) -> ApiResult {
 
 // ---------------------------------------------------------------- graph projects (new core)
 
-async fn graph_get(State(s): S) -> Result<Json<Value>, ApiError> {
-    s.graph.state().map(Json).ok_or_else(|| err("no project is open"))
+/// Off the async threads: it waits for an edit or a seek in progress, which holds the project.
+async fn graph_get(State(s): S) -> ApiResult {
+    let state = s.clone();
+    Ok(Json(blocking(move || state.graph.state().ok_or_else(|| anyhow::anyhow!("no project is open"))).await?))
 }
 
 #[derive(Deserialize)]
@@ -498,8 +505,7 @@ async fn graph_close(State(s): S) -> ApiResult {
 }
 
 async fn graph_status(State(s): S) -> Json<Value> {
-    let (playing, seconds) = s.graph.transport_state();
-    Json(json!({"playing": playing, "seconds": seconds}))
+    Json(json!(s.graph.status()))
 }
 
 #[derive(Deserialize)]
@@ -564,6 +570,50 @@ async fn graph_connect(State(s): S, Json(r): Json<ConnectReq>) -> ApiResult {
 }
 
 #[derive(Deserialize)]
+struct EffectReq {
+    session: u64,
+    revision: u64,
+    call: String,
+    #[serde(default)]
+    module: String,
+    #[serde(default)]
+    name: String,
+}
+
+async fn graph_add_effect(State(s): S, Json(r): Json<EffectReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.add_effect(r.session, r.revision, &r.call, &r.module, &r.name)).await;
+    let _ = s.events.send(json!({"t": "graph"}).to_string());
+    Ok(Json(result?))
+}
+
+async fn graph_remove_effect(State(s): S, Json(r): Json<EffectReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.remove_effect(r.session, r.revision, &r.call)).await;
+    let _ = s.events.send(json!({"t": "graph"}).to_string());
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct SessionReq {
+    session: u64,
+}
+
+async fn graph_undo(State(s): S, Json(r): Json<SessionReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.undo(r.session)).await;
+    let _ = s.events.send(json!({"t": "graph"}).to_string());
+    Ok(Json(result?))
+}
+
+async fn graph_redo(State(s): S, Json(r): Json<SessionReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.redo(r.session)).await;
+    let _ = s.events.send(json!({"t": "graph"}).to_string());
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
 struct DisconnectReq {
     session: u64,
     revision: u64,
@@ -585,5 +635,17 @@ struct GraphTransportReq {
 async fn graph_transport(State(s): S, Json(r): Json<GraphTransportReq>) -> ApiResult {
     let state = s.clone();
     blocking(move || state.graph.transport(&r.action)).await?;
+    Ok(Json(json!({})))
+}
+
+#[derive(Deserialize)]
+struct SeekReq {
+    beat: f64,
+}
+
+/// Seeking doesn't change the view, so clients aren't told to refresh.
+async fn graph_seek(State(s): S, Json(r): Json<SeekReq>) -> ApiResult {
+    let state = s.clone();
+    blocking(move || state.graph.seek(r.beat)).await?;
     Ok(Json(json!({})))
 }

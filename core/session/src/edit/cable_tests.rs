@@ -220,3 +220,56 @@ fn a_component_that_builds_differently_for_a_signal_is_refused_by_the_graph_chec
     assert!(matches!(&refused, Err(EditError::Rejected(m)) if m.contains("would change more")), "{refused:?}");
     assert_eq!(fixture.source(), before);
 }
+
+#[test]
+fn undo_and_redo_walk_values_and_cables_back_and_forth() {
+    let fixture = Fixture::new(&format!("export default song(({{ time }}) => {{\n  {WOBBLE}\n  return osc.sine(hz(800));\n}});"));
+    let mut s = fixture.open();
+    let start = fixture.source();
+    let freq = control(&s, "800");
+    s.set(freq.revision, &freq.id, 900.0, Some(800.0)).unwrap();
+    let tuned = fixture.source();
+    let (wobble, freq) = (outlet(&s, "wobble"), control(&s, "900"));
+    s.connect(wobble.revision, &wobble.id, &freq.id).unwrap();
+    let wired = fixture.source();
+    assert!(!s.can_redo());
+
+    s.undo().unwrap();
+    assert_eq!(fixture.source(), tuned);
+    s.undo().unwrap();
+    assert_eq!(fixture.source(), start);
+    assert!(!s.can_undo() && s.can_redo());
+    assert!(matches!(s.undo(), Err(EditError::NotFound(_))));
+
+    let redone = s.redo().unwrap();
+    assert_eq!((redone.before.as_str(), redone.after.as_str()), ("800", "900"));
+    assert_eq!(fixture.source(), tuned);
+    s.redo().unwrap();
+    assert_eq!(fixture.source(), wired);
+    assert!(!s.can_redo());
+
+    // Undo again, then a new edit: the undone change can no longer be redone.
+    s.undo().unwrap();
+    let freq = control(&s, "900");
+    s.set(freq.revision, &freq.id, 950.0, Some(900.0)).unwrap();
+    assert!(!s.can_redo());
+    assert!(matches!(s.redo(), Err(EditError::NotFound(_))));
+    s.undo().unwrap();
+    s.undo().unwrap();
+    assert_eq!(fixture.source(), start);
+}
+
+#[test]
+fn a_cable_undo_refused_after_another_change_stays_available() {
+    let fixture = Fixture::new(&format!("export default song(({{ time }}) => {{\n  {WOBBLE}\n  return osc.sine(hz(800));\n}});"));
+    let mut s = fixture.open();
+    let (wobble, freq) = (outlet(&s, "wobble"), control(&s, "800"));
+    s.connect(wobble.revision, &wobble.id, &freq.id).unwrap();
+    // Someone saves an unrelated change: restoring the old bytes would no longer
+    // give back the exact revision, so undo refuses and keeps the change.
+    let saved = fixture.source().replacen("import", "// Saved elsewhere.\nimport", 1);
+    std::fs::write(fixture.0.join("song.ts"), &saved).unwrap();
+    assert!(matches!(s.undo(), Err(EditError::Rejected(_))));
+    assert!(s.can_undo());
+    assert_eq!(fixture.source(), saved);
+}

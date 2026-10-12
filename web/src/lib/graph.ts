@@ -31,13 +31,65 @@ export interface ViewNode {
   outlet: string | null;
   /** Inputs connected by a cable: `label ← name`. */
   inlets: { id: string; label: string; name: string; from: string }[];
+  /** Whether its result is audio, which an effect can go after. */
+  audio: boolean;
+  /** The effect this node is, if it can be removed. */
+  effect: string | null;
 }
+
+export interface Effect { module: string; name: string; description: string }
 
 export interface ModuleView { name: string; track: boolean; nodes: ViewNode[]; edges: [string, string][] }
 
 export interface GraphView { revision: number; modules: ModuleView[]; draft_errors: string[] }
 
-export interface GraphState { session: number; name: string; dir: string; view: GraphView; playing: boolean; seconds: number }
+/** Note starts and control point beats are relative to their clip's start. */
+export interface NoteClip { start: number; length: number; notes: { pitch: number; start: number; length: number; velocity: number }[] }
+export interface ControlClip { start: number; length: number; points: [number, number][] }
+export interface AudioClip { start: number; length: number; asset: string }
+
+export type TimelineLane =
+  | { id: string; kind: "notes"; clips: NoteClip[] }
+  | {
+      id: string;
+      kind: "control";
+      unit?: string | null;
+      default?: number | null;
+      /** The range to draw values in: the unit's, or what the values span. */
+      min: number;
+      max: number;
+      clips: ControlClip[];
+    }
+  | { id: string; kind: "audio"; channels: number; clips: AudioClip[] };
+
+/** A module that is a track or declares lanes; `module` is its ModuleView name. */
+export interface TimelineTrack { module: string; track: boolean; lanes: TimelineLane[] }
+
+/** What the accepted revision plays, in beats. */
+export interface TimelineView {
+  beats_per_bar: number;
+  tempo: { beat: number; bpm: number }[];
+  /** Where the last clip ends, at least one bar. */
+  end: number;
+  tracks: TimelineTrack[];
+}
+
+/** Where playback is; `beat` counts with the accepted revision's tempo map. */
+export interface GraphStatus { playing: boolean; seconds: number; beat: number }
+
+/** The open project, and where playback was when it was read. */
+export interface GraphState extends GraphStatus {
+  session: number;
+  name: string;
+  dir: string;
+  view: GraphView;
+  timeline: TimelineView;
+  /** Whether an edit made here can be undone or redone. */
+  can_undo: boolean;
+  can_redo: boolean;
+  /** Effects the packages offer to put after audio. */
+  effects: Effect[];
+}
 
 const auth: Record<string, string> = token ? { "x-m2-token": token } : {};
 
@@ -56,7 +108,9 @@ export const graphApi = {
   get: () => call<GraphState>(""),
   open: (path: string) => call<GraphState>("/open", { path }),
   close: () => call("/close", {}),
-  status: () => call<{ playing: boolean; seconds: number }>("/status"),
+  status: () => call<GraphStatus>("/status"),
+  /** Move playback to a beat, playing or not. */
+  seek: (beat: number) => call("/seek", { beat }),
   preview: (session: number, revision: number, id: string, gesture: string, value: number) => call("/preview", { session, revision, id, gesture, value }),
   cancel: (session: number, id: string, gesture: string) => call("/preview/cancel", { session, id, gesture }),
   set: (session: number, revision: number, id: string, gesture: string, value: number, expect: number) =>
@@ -65,6 +119,12 @@ export const graphApi = {
     call<{ file: string; before: string; after: string; revision: number }>("/connect", { session, revision, from, to }),
   disconnect: (session: number, revision: number, id: string) =>
     call<{ file: string; before: string; after: string; revision: number }>("/disconnect", { session, revision, id }),
+  addEffect: (session: number, revision: number, node: string, effect: Effect) =>
+    call<{ file: string; before: string; after: string; revision: number }>("/effect/add", { session, revision, call: node, module: effect.module, name: effect.name }),
+  removeEffect: (session: number, revision: number, node: string) =>
+    call<{ file: string; before: string; after: string; revision: number }>("/effect/remove", { session, revision, call: node }),
+  undo: (session: number) => call<{ file: string; before: string; after: string; revision: number }>("/undo", { session }),
+  redo: (session: number) => call<{ file: string; before: string; after: string; revision: number }>("/redo", { session }),
   transport: (action: "play" | "stop" | "toggle" | "restart") => call("/transport", { action }),
 };
 
