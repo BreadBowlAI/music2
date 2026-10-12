@@ -7,6 +7,9 @@
 //! set. Edits made elsewhere (a text editor, an agent) are picked up by [`Graph::poll`],
 //! which rebuilds the renderer at the current position when the accepted revision
 //! changes.
+//!
+//! Every change is announced with what needs attention in the revision it leaves (see
+//! [`Graph::news`]): lane data no lane reads, and why the draft doesn't compile.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -69,6 +72,9 @@ pub struct Graph {
     /// The code editor's files with edits not yet saved, as it last said, and the project
     /// (its token) it said so for: the app asks before closing or replacing that project.
     unsaved: Mutex<(u64, Vec<String>)>,
+    /// What every change is announced with (see [`Graph::news`]). Apart from `open` like
+    /// `tempo`, so announcing a change never waits for an edit or a seek.
+    news: Mutex<Value>,
 }
 
 fn packages() -> Result<PackageSet> {
@@ -192,6 +198,7 @@ impl Graph {
         o.play(&player, new_renderer);
         // Read while still holding the project: another open meanwhile can't answer for this one.
         let state = self.snapshot(&o);
+        self.publish(Some(&o));
         *open = Some(o);
         Ok(state)
     }
@@ -203,6 +210,28 @@ impl Graph {
         }
         *open = None;
         *self.tempo.lock() = None;
+        self.publish(None);
+    }
+
+    /// What every change to the open project is announced with: its session, the accepted
+    /// revision, the warnings that revision has (with their fixes) and the draft's problems.
+    /// Empty with no project open.
+    pub fn news(&self) -> Value {
+        self.news.lock().clone()
+    }
+
+    /// Keep what [`Graph::news`] says up to date with `o`. Called wherever the open project
+    /// may have changed, while it is still held.
+    fn publish(&self, o: Option<&Open>) {
+        *self.news.lock() = match o {
+            Some(o) => json!({
+                "session": o.token,
+                "revision": o.session.accepted().number,
+                "warnings": o.session.warnings(),
+                "diagnostics": files::diagnostics(&o.session),
+            }),
+            None => json!({}),
+        };
     }
 
     /// The view, the timeline, the project's name and folder, and the transport.
@@ -224,6 +253,7 @@ impl Graph {
             "can_redo": o.session.can_redo(),
             "effects": o.session.effects(),
             "diagnostics": files::diagnostics(&o.session),
+            "warnings": o.session.warnings(),
             "playing": status.playing,
             "seconds": status.seconds,
             "beat": status.beat,
@@ -336,7 +366,9 @@ impl Graph {
         let before = o.session.accepted().number;
         // The session carries the edit forward from `revision` if the code changed
         // without touching the control, and refuses it as stale otherwise.
-        match o.session.set(revision, id, value, expect) {
+        let set = o.session.set(revision, id, value, expect);
+        self.publish(Some(o));
+        match set {
             Ok(c) => {
                 // Only a verified single value edit can update the existing renderer.
                 // set() may refresh again and adopt unrelated source changes first.
@@ -385,6 +417,16 @@ impl Graph {
         self.restructure(token, |session| session.write_notes(revision, module, lane, clips))
     }
 
+    /// Move lane data no lane reads to `module`'s lane `lane` (see [`Session::relink`]).
+    pub fn relink(&self, token: u64, revision: u64, from: &str, module: &str, lane: &str) -> Result<Value> {
+        self.restructure(token, |session| session.relink(revision, Path::new(from), module, lane))
+    }
+
+    /// Delete lane data no lane reads (see [`Session::delete_data`]); undo puts it back.
+    pub fn delete_data(&self, token: u64, revision: u64, file: &str) -> Result<Value> {
+        self.restructure(token, |session| session.delete_data(revision, Path::new(file)))
+    }
+
     /// Undo the last edit made through this session (knob or cable).
     pub fn undo(&self, token: u64) -> Result<Value> {
         self.restructure(token, Session::undo)
@@ -400,6 +442,7 @@ impl Graph {
         o.check_token(token)?;
         let player = self.player()?;
         let result = edit(&mut o.session);
+        self.publish(Some(o));
         // Whatever happened, play the accepted revision; previews belong to the old one.
         o.restore(&player)?;
         let e = result.map_err(|e| anyhow!("{e}"))?;
@@ -424,6 +467,9 @@ impl Graph {
         let mut open = self.open.lock();
         let Some(o) = open.as_mut() else { return false };
         let changed = o.session.refresh();
+        if changed {
+            self.publish(Some(o));
+        }
         let mut synced = false;
         // A clone: syncing replays the song, and status waits for the player's lock.
         if let Some(p) = self.player.lock().clone() {
@@ -466,6 +512,7 @@ impl Graph {
             let before = o.session.accepted().snapshot.files.get(Path::new(path)).cloned();
             files::write(&o.session.accepted().project.dir, path, base, text)?;
             o.session.saved(Path::new(path), before);
+            self.publish(Some(o));
         }
         self.poll();
         self.state().context("no project is open")
@@ -768,6 +815,59 @@ mod tests {
         graph.undo(token).unwrap();
         assert!(!fixture.0.join("timeline/kick.hits.json").exists(), "undo removes the file the write created");
         assert!(synced(&graph));
+    }
+
+    /// A Kick track renamed Kicks in its code, with its notes left under the old name.
+    fn renamed_kick(fixture: &Fixture) {
+        fixture.write(
+            "import { track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+             const k = track('Kicks', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n",
+        );
+        std::fs::create_dir_all(fixture.0.join("timeline")).unwrap();
+        let notes = r#"{"clips": [{"start": 0, "length": 4, "notes": [{"pitch": "C1", "start": 0, "length": 1}]}]}"#;
+        std::fs::write(fixture.0.join("timeline/kick.hits.json"), notes).unwrap();
+    }
+
+    #[test]
+    fn data_a_rename_left_behind_is_a_warning_whose_fixes_play_and_undo() {
+        let fixture = Fixture::new();
+        renamed_kick(&fixture);
+        let graph = fixture.open();
+        let state = graph.state().unwrap();
+        let (token, revision) = (state["session"].as_u64().unwrap(), state["view"]["revision"].as_u64().unwrap());
+        let warning = &state["warnings"][0];
+        assert_eq!((&warning["code"], &warning["file"]), (&json!("data.unclaimed"), &json!("timeline/kick.hits.json")));
+        assert_eq!(warning["title"], "Notes on kick › hits aren't playing", "{warning}");
+        assert!(warning["message"].as_str().unwrap().starts_with("There's no track called kick any more."), "{warning}");
+        let (from, to) = ("timeline/kick.hits.json", "timeline/kicks.hits.json");
+        let relink = json!({"fix": "relink", "from": from, "to": to, "module": "Kicks", "lane": "hits", "likely": true});
+        assert_eq!(warning["fixes"], json!([relink, {"fix": "delete_data", "file": "timeline/kick.hits.json"}]));
+        let news = graph.news();
+        assert_eq!((&news["session"], &news["revision"], &news["warnings"]), (&json!(token), &json!(revision), &state["warnings"]));
+
+        let synced = |graph: &Graph| graph.open.lock().as_ref().map(|o| o.playing == o.session.accepted().number).unwrap();
+        let clips = |graph: &Graph| graph.state().unwrap()["timeline"]["tracks"][0]["lanes"][0]["clips"].as_array().unwrap().len();
+        let elsewhere = graph.relink(token + 1, revision, "timeline/kick.hits.json", "Kicks", "hits");
+        assert!(elsewhere.is_err(), "another session's request is refused");
+        let moved = graph.relink(token, revision, "timeline/kick.hits.json", "Kicks", "hits").unwrap();
+        assert_eq!((&moved["before"], &moved["after"]), (&json!("unused notes"), &json!("Kicks › hits")));
+        assert!(fixture.0.join("timeline/kicks.hits.json").exists() && !fixture.0.join("timeline/kick.hits.json").exists());
+        assert_eq!((graph.state().unwrap()["warnings"].clone(), clips(&graph)), (json!([]), 1), "the track plays its notes");
+        assert_eq!(graph.news()["warnings"], json!([]));
+        assert!(synced(&graph));
+
+        graph.undo(token).unwrap();
+        assert!(fixture.0.join("timeline/kick.hits.json").exists() && synced(&graph));
+        assert_eq!((graph.news()["warnings"][0]["file"].clone(), clips(&graph)), (json!("timeline/kick.hits.json"), 0));
+        let revision = graph.state().unwrap()["view"]["revision"].as_u64().unwrap();
+        let deleted = graph.delete_data(token, revision, "timeline/kick.hits.json").unwrap();
+        assert_eq!(deleted["after"], "deleted");
+        assert!(!fixture.0.join("timeline/kick.hits.json").exists() && graph.news()["warnings"] == json!([]));
+        graph.undo(token).unwrap();
+        assert!(fixture.0.join("timeline/kick.hits.json").exists() && synced(&graph));
+        assert!(graph.delete_data(token, revision, "song.ts").is_err(), "only data no lane reads");
+        graph.close();
+        assert_eq!(graph.news(), json!({}));
     }
 
     #[test]

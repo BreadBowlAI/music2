@@ -66,9 +66,16 @@ impl AppState {
         (std::mem::take(&mut *unheard), self.events.subscribe())
     }
 
-    /// Tell every client to fetch the project again: it was opened, closed or edited.
+    /// Tell every client to fetch the project again: it was opened, closed or edited. The
+    /// event carries the revision and what needs attention in it (see [`graph::Graph::news`]),
+    /// so a client that only listens hears every warning too.
     pub fn graph_changed(&self) {
-        let _ = self.events.send(json!({"t": "graph"}).to_string());
+        let mut event = match self.graph.news() {
+            serde_json::Value::Object(news) => news,
+            _ => serde_json::Map::new(),
+        };
+        event.insert("t".into(), json!("graph"));
+        let _ = self.events.send(serde_json::Value::Object(event).to_string());
     }
 }
 
@@ -147,6 +154,28 @@ mod tests {
         assert!(events.try_recv().unwrap().contains("live"));
         drop(events);
         assert!(s.subscribe().0.is_empty());
+    }
+
+    /// Every change is announced with what needs attention in the revision it leaves.
+    #[test]
+    fn a_graph_event_carries_the_revision_and_its_warnings() {
+        let dir = std::env::temp_dir().join(format!("m2-server-news-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("timeline")).unwrap();
+        let song = "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+                    const k = track('Kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n";
+        std::fs::write(dir.join("song.ts"), song).unwrap();
+        std::fs::write(dir.join("timeline/kick.old.json"), r#"{"clips": []}"#).unwrap();
+        let s = AppState::new(String::new(), graph::Graph::silent());
+        let (_, mut events) = s.subscribe();
+        s.graph_changed();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&events.try_recv().unwrap()).unwrap(), json!({"t": "graph"}));
+        s.graph.open(&dir).unwrap();
+        s.graph_changed();
+        let event: serde_json::Value = serde_json::from_str(&events.try_recv().unwrap()).unwrap();
+        assert_eq!((&event["t"], &event["revision"], &event["diagnostics"]), (&json!("graph"), &json!(1), &json!([])));
+        let warning = &event["warnings"][0];
+        assert_eq!((&warning["code"], &warning["file"]), (&json!("data.unclaimed"), &json!("timeline/kick.old.json")));
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

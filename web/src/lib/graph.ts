@@ -120,7 +120,24 @@ export interface GraphState extends GraphStatus {
   effects: Effect[];
   /** Why the files on disk don't compile, if they don't: the draft's problems. */
   diagnostics: Problem[];
+  /** What needs attention in the revision shown, though it plays: lane data no lane reads. */
+  warnings: Warning[];
 }
+
+/**
+ * Something that needs attention but doesn't stop the song playing: what is wrong in a few words
+ * (`title`), then why and what to do (`message`); `file` is project-relative.
+ */
+export interface Warning { code: string; title: string; message: string; file: string; fixes: Fix[] }
+
+/**
+ * A way to fix a warning, applied only when asked: move lane data no lane reads to the lane it
+ * belongs to now (`module` › `lane`, written to `to`), or delete it. Undo takes either back.
+ * `likely` marks the one lane the data plainly belongs to, offered in one click.
+ */
+export type Fix =
+  | { fix: "relink"; from: string; to: string; module: string; lane: string; likely: boolean }
+  | { fix: "delete_data"; file: string };
 
 /** One reason the draft doesn't compile; `file` is project-relative (or a package's, `std/src/dsp.ts`), line and col 1-based. */
 export interface Problem { file: string | null; line: number | null; col: number | null; message: string; module?: string }
@@ -182,6 +199,12 @@ export const graphApi = {
   /** Rewrite a notes lane with every clip it is to have. Prefer `writeLane`, which queues. */
   lane: (session: number, revision: number, module: string, lane: string, clips: NoteClip[]) =>
     call<{ file: string; before: string; after: string; revision: number }>("/lane", { session, revision, module, lane, clips }),
+  /** A warning's fix: move lane data no lane reads to `module`'s lane `lane`. */
+  relink: (session: number, revision: number, from: string, module: string, lane: string) =>
+    call<{ file: string; before: string; after: string; revision: number }>("/relink", { session, revision, from, module, lane }),
+  /** A warning's other fix: delete lane data no lane reads. */
+  deleteData: (session: number, revision: number, file: string) =>
+    call<{ file: string; before: string; after: string; revision: number }>("/data/delete", { session, revision, file }),
   undo: (session: number) => call<{ file: string; before: string; after: string; revision: number }>("/undo", { session }),
   redo: (session: number) => call<{ file: string; before: string; after: string; revision: number }>("/redo", { session }),
   transport: (action: "play" | "stop" | "toggle" | "restart") => call("/transport", { action }),

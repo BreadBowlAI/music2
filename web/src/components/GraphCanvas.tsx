@@ -5,6 +5,7 @@ import { editorHooks, findNoteClip, graphApi, type ClipRef, type GraphState, typ
 import { exportSong, useExport } from "../lib/exporting";
 import { isMac, kbd } from "../lib/native";
 import { useStore } from "../lib/store";
+import Attention from "./Attention";
 import CodeView from "./CodeView";
 import { NodeGraph } from "./NodeGraph";
 import NoteView from "./NoteView";
@@ -118,6 +119,7 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
           }}
         />
       )}
+      <Attention graph={graph} />
       <SongTimeline
         timeline={timeline}
         revision={graph.view.revision}

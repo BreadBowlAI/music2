@@ -2,7 +2,26 @@
 
 Design proposal, 11 October 2026. Responds to [the editing brief](code-graph-editing-brief.md) and builds on [Song as a program](song-as-program.md). The APIs below describe the broader design, not a claim that every operation is implemented.
 
-**Current implementation:** the canvas supports a restricted literal-editing subset with a `LiteralLens` that reads a numeric source range and proposes a replacement. Identity resolution and independent candidate verification remain in `Session`. Direct literals, negative literals without intervening comments, unit constructors and unambiguous object properties are editable; computed/indirect expressions and ambiguous objects are read-only. Shared recorded unit values have a named source node and visible consumer connections. Preview requests identify the open project session, revision and control; they use the same numeric normalization as save. Invalid drafts disable edits. Unit values are opaque to JavaScript (no `.value`, no arithmetic), so every use of a written value is visible to the graph. Previews and commits carry a drag across saves that don't touch its value. Cables (`edit/cable.rs`) connect and disconnect within one file: an outlet is a `const` bound to a call that returned one top-level signal (the SDK records each call's output); connecting writes its name in place of a control's written value, and disconnecting writes the default the receiving ports declare, refusing when they declare none. Both are verified by comparing graphs up to node numbering: connecting must equal the old graph with that value's constants rewired to the outlet, and disconnecting must give a graph that rewires back to the old one. Effects (`edit/effect.rs`): packages declare insertable effects in their manifest (`[[effect]]`); adding one wraps a call's audio where it is written (`pluck(…)` → `delay(pluck(…))`, importing the name if needed), and removing unwraps it. Both are verified by taking the effect call's own nodes out and reading its input in place of its output, which must give exactly the graph without it. Undo and redo cover every edit made through the session; a structural edit is reverted only while the code is exactly as that edit left it. Cross-file cables (exports/imports), adding and deleting arbitrary nodes, generalized alias tracing, multi-client preview leases and the performance measurements below remain future work.
+**The [architecture contract](architecture.md) (2026-10-12) is normative** and wins wherever it disagrees with this proposal. This page keeps the reasoning, and the design of the editor side (lenses, planners, the canvas), which moves into `crates/editor`. Superseded sections are marked and point to the contract.
+
+| Section | Status | In the contract |
+|---|---|---|
+| [The essential decisions](#the-essential-decisions), [The code artists write](#the-code-artists-write) | Adopted, except decision 5's second sentence and the example's track signature | [WRITE-6, WRITE-9](architecture.md#expectations-and-the-delta), [ID-4](architecture.md#keys) |
+| [Components declare their own interface](#components-declare-their-own-interface) | Superseded in shape; reasoning kept | [Component descriptors](architecture.md#component-descriptors) |
+| [Two derived graphs and one source](#two-derived-graphs-and-one-source) | Not built; editor side | [WRITE-10](architecture.md#expectations-and-the-delta) |
+| [Identity and lifetime](#identity-and-lifetime) | Superseded | [Identity](architecture.md#identity) |
+| [Source lenses and minimal edits](#source-lenses-and-minimal-edits) | Current design for `crates/editor` | [WRITE-9](architecture.md#expectations-and-the-delta) |
+| [Exact verification](#exact-verification) | Superseded | [Expectations and the delta](architecture.md#expectations-and-the-delta) |
+| [Instant preview and accepted playback](#instant-preview-and-accepted-playback) | Superseded in part | [Gesture leases](architecture.md#gesture-leases), [Cells](architecture.md#cells) |
+| [Concurrent editing and undo](#concurrent-editing-and-undo) | Superseded | [Writes](architecture.md#writes) |
+| [The operation protocol](#the-operation-protocol) | Superseded | [WRITE-3 to WRITE-5](architecture.md#the-two-write-primitives) |
+| [The twelve hard cases](#the-twelve-hard-cases) | Current; cases 10 and 11 updated | [Opening a project](architecture.md#opening-a-project), [Identity](architecture.md#identity) |
+| [Changes to the existing implementation](#changes-to-the-existing-implementation) | Status as of 2026-10-11 | [Order of work](architecture.md#order-of-work) |
+| [Prototype sequence and acceptance tests](#prototype-sequence-and-acceptance-tests) | Sequence superseded; fixture table kept as editor tests | [Order of work](architecture.md#order-of-work) |
+| [Performance budget](#performance-budget) | Superseded | [Planes of change](architecture.md#planes-of-change) |
+| [Alternatives and remaining questions](#alternatives-and-remaining-questions) | Current | — |
+
+**Current implementation:** the canvas supports a restricted literal-editing subset with a `LiteralLens` that reads a numeric source range and proposes a replacement. Identity resolution and independent candidate verification remain in `Session`. Direct literals, negative literals without intervening comments, unit constructors and unambiguous object properties are editable; computed/indirect expressions and ambiguous objects are read-only. Shared recorded unit values have a named source node and visible consumer connections. Preview requests identify the open project session, revision and control; they use the same numeric normalization as save. Invalid drafts disable edits. Unit values are opaque to JavaScript (no `.value`, no arithmetic), so every use of a written value is visible to the graph. Previews and commits carry a drag across saves that don't touch its value, which the contract keeps for leases ([WRITE-22](architecture.md#gesture-leases)). Since step 1, value undo finds its control by where its bytes are, never by a stale origin, and the app shows lane data no lane reads, with Relink and Delete fixes ([DIAG-6](architecture.md#fixes)). Cables (`edit/cable.rs`) connect and disconnect within one file: an outlet is a `const` bound to a call that returned one top-level signal (the SDK records each call's output); connecting writes its name in place of a control's written value, and disconnecting writes the default the receiving ports declare, refusing when they declare none. Both are verified by comparing graphs up to node numbering: connecting must equal the old graph with that value's constants rewired to the outlet, and disconnecting must give a graph that rewires back to the old one. Effects (`edit/effect.rs`): packages declare insertable effects in their manifest (`[[effect]]`); adding one wraps a call's audio where it is written (`pluck(…)` → `delay(pluck(…))`, importing the name if needed), and removing unwraps it. Both are verified by taking the effect call's own nodes out and reading its input in place of its output, which must give exactly the graph without it. Undo and redo cover every edit made through the session; a structural edit is reverted only while the code is exactly as that edit left it. Cross-file cables (exports/imports), adding and deleting arbitrary nodes, generalized alias tracing, multi-client preview leases and the performance measurements below remain future work.
 
 **Built:**
 - `LiteralLens` edits of written literals (`core/session/src/edit/lens.rs`), and sites (`core/script/src/sites.rs`).
@@ -11,14 +30,14 @@ Design proposal, 11 October 2026. Responds to [the editing brief](code-graph-edi
 - Undo and redo through the session.
 
 **Not built yet:**
-- The descriptor-style `component()` below. What was built is `component({ controls: [...] }, fn)`, which only names the control paths.
-- `key()`.
+- The descriptor-style `component()` below. What was built is `component({ controls: [...] }, fn)`, which only names the control paths. (Step 5 builds the contract's shape: [Component descriptors](architecture.md#component-descriptors).)
+- `key()`. (Step 4: [ID-7](architecture.md#keys).)
 - The split into `EditCapability` and `BuildArtifacts`.
 - Inserting omitted arguments, and reset to default. (Double-clicking a knob sets the middle of its range.)
 - Rename, automate, extract, and connecting across tracks.
-- Preview leases, the journal and crash recovery, and the editor bridge.
-- The `EditRequest`/`EditResult` prepare/commit protocol.
-- A `core/edit` crate. Editing lives in `core/session/src/edit/`.
+- Preview leases, the journal and crash recovery, and the editor bridge. (Leases and the journal are specified in [Writes](architecture.md#writes); the editor bridge is not planned yet.)
+- The `EditRequest`/`EditResult` prepare/commit protocol. (Superseded by `check(Tx)` and `commit(Tx)`.)
+- A `core/edit` crate. Editing lives in `core/session/src/edit/`. (Superseded: lenses, planners and the view move to `crates/editor`, and core keeps `save`, `Tx` and `GraphDelta`.)
 - The property tests and the performance table.
 
 **Build a source editor whose second interface is a component graph.** Compile TypeScript into both an authoring graph and the existing execution graph. Give each editable argument a small, checked source lens: a way to read its value and propose a precise text change. Let components declare their musical controls, and retain those controls as addressable values in the runtime.
@@ -31,14 +50,14 @@ This preserves ordinary TypeScript, makes instruments genuinely reusable, and gi
 2. **Identity belongs to an occurrence, not its name.** Binding names label occurrences. Revision-aware syntax matching preserves their identities; explicit keys cover cases where implicit matching cannot.
 3. **A control is a signal; a setting is a JavaScript value.** Cutoff, gain, and mix can change during playback. Voice count and algorithm selection rebuild the component. This distinction is the foundation of a correct fast path.
 4. **Editability is a capability of a particular operation at a particular revision.** A node can have an editable cutoff, a connected resonance input, and a generated body that is inspection-only.
-5. **Verify an edit in an isolated candidate snapshot before publishing it.** Derive the expected change independently from the semantic operation. Never mutate the working files and then try to roll them back.
+5. **Verify an edit in an isolated candidate snapshot before publishing it.** Derive the expected change independently from the semantic operation. Never mutate the working files and then try to roll them back. (**Superseded in part:** core doesn't derive an expected change from the operation. It computes a `GraphDelta` itself and checks it against a closed set of expectations, and planners outside core assert what a gesture means: [WRITE-6 and WRITE-9](architecture.md#expectations-and-the-delta). The rest of the decision stands.)
 6. **Preview is a temporary performance gesture.** It does not become saved song state until the corresponding source edit has passed verification.
 
 The useful SwiftUI lesson is the separation of an ephemeral declaration from persistent identity and state, together with explicit identity for repeated content. Music2 should apply that principle to DSP instances and musical controls. Apple's explanation of structural and explicit identity supports this analogy; the source-editing machinery proposed here is a separate design. [Demystify SwiftUI](https://developer.apple.com/videos/play/wwdc2021/10022/)
 
 ## The code artists write
 
-Keep the current functional syntax. Named bindings make routing readable; nested calls remain fully legitimate.
+Keep the current functional syntax. Named bindings make routing readable; nested calls remain fully legitimate. (Under format v1 the key comes first, so the example below opens with `track("bass", { name: "Bass" }, …)`: [ID-4](architecture.md#keys).)
 
 ```ts
 export default track("Bass", ({ lane, time }) => {
@@ -74,6 +93,8 @@ These are capability-oriented lint rules, not additional conditions for playing 
 Lint messages explain the missing operation: “This spread prevents resetting cutoff; add an explicit cutoff property.” They do not say that an otherwise valid track is invalid. Do not automatically normalize a file when it opens.
 
 ## Components declare their own interface
+
+> **Superseded in shape** by [Component descriptors](architecture.md#component-descriptors): `component({ id, label, inputs, controls, settings, output, positional, editor }, body)`, one const (a cell) per declared control, the descriptor default as what songs see, optional structural controls, a closed set of units, and unit spellings generated from `core.ts`. The reasoning below (normalising controls at entry, optional structural features, display ranges as hints, dictionary components) still holds.
 
 **Not built yet.** Add an optional `component` constructor for package authors. It returns an ordinary callable function. A descriptor defines the call shape, signal kinds, defaults, settings, and outputs once. From that definition the SDK derives TypeScript types, the inspector, and the build boundary.
 
@@ -119,6 +140,8 @@ Dictionary components such as `mixer` additionally declare a repeated channel sc
 Distinguish an always-present control with a default from an **optional structural feature**. The current mixer creates a panner only when `pan` is present; omitting it preserves the input's channel shape, while `pan: 0` creates a stereo panner. Its schema must preserve that distinction. Enabling or removing pan rebuilds the strip; changing an already-present pan value can preview. The same presence rule applies to its optional gain node. Do not normalize every optional property to a signal and thereby change existing songs. Migrating a legacy wrapper requires before/after execution comparisons for both omitted and explicit arguments.
 
 ## Two derived graphs and one source
+
+> **Not built.** Core keeps only the raw site, origin and control tables. An authoring graph and edit capabilities, if built, belong in `crates/editor` ([WRITE-10](architecture.md#expectations-and-the-delta)).
 
 ```mermaid
 flowchart LR
@@ -185,6 +208,8 @@ Byte offsets stay inside the compiler/session boundary. Frontends and agents tar
 
 ## Identity and lifetime
 
+> **Superseded** by [Identity](architecture.md#identity). The contract's derived ids are SiteId, InstancePath (this page's `InstanceId`), ControlId, RuntimeId and CellId; a written value is named by an `Anchor`, not a `SourceValueId`. The reconciliation order below is adopted ([ID-13](architecture.md#derived-identity)), and so is `key()`, with the key rule of [ID-1](architecture.md#keys). The editor index lives in `.music2/`, never beside layout metadata in `layout.json` ([ID-16](architecture.md#derived-identity)). Saved identity is a key written in code: track, lane and plugin keys.
+
 **Not built yet.** Use distinct identities for distinct purposes:
 
 | Identity | Meaning |
@@ -216,6 +241,8 @@ const lead = key("lead", () => bass(notes, { cutoff: hz(800) }));
 State reuse requires both identity and compatibility: kernel implementation/state ABI, channel shape, relevant construction settings, and voice-scope ownership. Preserve unchanged instances in a runtime-owned arena. Prepare a new schedule and new instances off the audio thread, then transfer ownership at a block boundary; do not process a retained instance in both old and new plans. Retire allocations away from the audio callback. An incompatible change resets or crossfades according to a defined policy. Identity alone does not make raw state transferable between Wasmtime stores.
 
 ## Source lenses and minimal edits
+
+> **Current design** for the editor side. Lenses and gesture planners live outside core, in `crates/editor`; what a gesture means is asserted there and in its tests, never by core ([WRITE-9](architecture.md#expectations-and-the-delta)).
 
 A lens is a deliberately small partial operation over syntax: “set this numeric token,” “set this named property,” “replace this input expression,” or “rename this resolved symbol.” It reports preconditions, source ranges, expected semantic effects, and why it cannot apply.
 
@@ -269,6 +296,8 @@ Deleting a node must not quietly delete everything downstream. Return the affect
 
 ## Exact verification
 
+> **Superseded** by [Expectations and the delta](architecture.md#expectations-and-the-delta). Core doesn't derive an expected graph from a semantic operation. It computes a `GraphDelta` itself and checks it against a closed set of expectations: `Identical`, `Values`, `Confined` and `Seen`. Planners in `crates/editor` and their tests assert what a gesture means. Isolated re-expansion of components and the construction-effect contract are not planned. The canonical comparison below (ignore source coordinates, labels and allocation order; include kinds, units, values, connections and lane contracts) still describes how the delta is computed.
+
 Define verification over the entire frozen project snapshot, including package versions and timeline data. “The intended graph change” means a checked structural change under a specified operation, not a claim of general equivalence between arbitrary programs or identical audio samples.
 
 Let `Build(S)` return the authoring graph, typed execution graph, and lane contracts for snapshot `S`. For operation `O`:
@@ -301,6 +330,8 @@ On failure, discard the candidate, revoke its preview, and return the unexpected
 
 ## Instant preview and accepted playback
 
+> **Superseded in part** by [Gesture leases](architecture.md#gesture-leases) and [Cells](architecture.md#cells): `begin` resolves once through the session, updates go straight to the engine's cells, a commit is one coalesced `Values` Tx, and at a `code_rev` change the lease is carried into the new revision, ending only if its value no longer carries or changed underneath. The three states and the "playing revision" below remain.
+
 Keep three explicitly different states:
 
 - **Draft:** the latest source and timeline snapshot, possibly invalid.
@@ -322,6 +353,8 @@ In `poly`, each existing and future voice reads the same outer control cell or a
 Legacy computed arguments may be editable through rebuilds while lacking a live capability. Never promise no-rebuild preview for a JS value that selects a branch, changes loop count, or is transformed by untracked arithmetic.
 
 ## Concurrent editing and undo
+
+> **Superseded** by [Writes](architecture.md#writes): a Tx is based on the content hash of each file it touches, not on semantic read sets; one music2 process at a time holds the project's write lock (forwarding to it is deferred); outside writers are taken in by the watcher, with the remaining race disclosed; a journal makes multi-file commits recoverable, and recovery is a diagnostic that is never run automatically; undo applies a Tx's inverse. While the code is broken, data edits still work against the last accepted lane declarations ([WRITE-14](architecture.md#bases-and-revisions)). The editor bridge is not planned yet.
 
 Use optimistic concurrency on semantic dependencies, not a file-wide lock during a drag. A prepared operation records the input slot/value it read, the binding and scope dependencies, relevant descriptors, lane paths, and source hashes.
 
@@ -348,6 +381,8 @@ Preview updates never enter history. Store the committed transaction, forward an
 The editor bridge associates text changes and app commands with transaction IDs, so the same change is not undone twice; it applies changes into dirty editor buffers with document-version checks. Without that bridge, text-editor undo is simply another external edit and app undo cannot share its stack. Do not claim that independent undo systems can be made globally coherent by observing disk saves. Source undo restores song configuration, not elapsed time or a previous audio performance.
 
 ## The operation protocol
+
+> **Superseded** by the Tx ([WRITE-3 to WRITE-5](architecture.md#the-two-write-primitives)). Clients send a Tx of byte-range and data ops with an expectation; core computes the delta itself and checks it, so verification never runs a check the client supplies. A client only chooses which of the closed expectations to ask for. Semantic operations such as `connect` or `automate` are Tx builders in `crates/editor`, not core requests. Preview messages are the [gesture lease](architecture.md#gesture-leases).
 
 **Not built yet.** Both the canvas and agents use the same structured operations. The session computes patches and expectations; clients cannot supply a permissive expected-delta mask to bypass verification.
 
@@ -424,11 +459,11 @@ Provide `prepare(request)` for a source diff and verified effect, and `commit(pr
 | 7. Loops | Initially show a generated group with inspectable instances. Do not claim a particular output owns array literal `400`. A later keyed-collection lens may edit that element only after proving its source path and exact affected expansion; generated item identity must survive changing its frequency. |
 | 8. Outside rename | Use lexical/structural reconciliation, not spelling. Retain a uniquely matched identity; explicit keys cover ambiguity and major refactors. |
 | 9. Overlapping edits | Revalidate leases and semantic read sets. Rebase independent edits; conflict on a changed target or dependency. |
-| 10. Invalid code | Keep accepted playback and diagnostics. Source-changing canvas edits wait for a valid snapshot; optional audition remains visibly transient. |
-| 11. Lane contracts | Rename source declaration and timeline path in one journaled session transaction. Check normalized-name collisions, case-only renames, every reference, data existence, and timeline validity. |
+| 10. Invalid code | Keep accepted playback and diagnostics. Source-changing canvas edits wait for a valid snapshot; optional audition remains visibly transient. Data edits still work against the last accepted lane declarations, and a project opened with broken code opens silent ([WRITE-14](architecture.md#bases-and-revisions), [WRITE-20](architecture.md#opening-a-project)). |
+| 11. Lane contracts | Rename the key in code and its data path in one journaled Tx. Keys are validated and lowercase-only, never normalised, so there are no normalised-name collisions or case-only renames ([Keys](architecture.md#keys)). Check every reference, data existence, and timeline validity. |
 | 12. Formatting | Adapt insertions to the local file. Preserve untouched bytes and comments. Formatting the whole file is an explicit separate operation, never a knob side effect. |
 
-Lane IDs and track names are data addresses, unlike ordinary binding labels. Renaming a variable called `cutoff` must not rename `timeline/bass.cutoff.json`. A lane rename preserves the complete data file, including clips and metadata, and changes only the addressing contract. A track display-name change currently also affects timeline slugs and therefore needs the same migration treatment. A future stable track/lane data ID can separate these concerns, but requires an explicit format migration.
+Lane keys and track keys are data addresses, unlike ordinary binding labels. Renaming a variable called `cutoff` must not rename `data/bass/cutoff.json`. A lane rename preserves the complete data file, including clips and metadata, and changes only the addressing contract. **Superseded:** this paragraph used to propose a future stable data id behind display names. The contract instead makes the saved address a key written in code, with the display name a label only ([Identity](architecture.md#identity)), and moves to format v1 with a one-off conversion of the fixtures ([FMT-21](architecture.md#conversion)).
 
 “Stop automating” samples an explicit accepted revision and beat in canonical units. This makes the kept value deterministic even if the transport moves while the transaction is being prepared. If the lane has other consumers, detach only the selected one. Existing automation remains data, not a reconstructed curve in code.
 
@@ -442,15 +477,17 @@ Lane IDs and track names are data addresses, unlike ordinary binding labels. Ren
 | `core/ir/src/check.rs` | Retain control addresses through flattening and constant folding; expose a canonical checked representation before pruning loses authoring information | Partly built: a constant with an origin is never folded into a kernel input, so it stays addressable. |
 | `core/runtime/src/lib.rs` | Add prepared control cells and preview messages, voice mappings, and a runtime ownership model for state retention and plan activation | Partly built: `Renderer::set_const` previews a value everywhere it is used, voices included. State retention and plan activation are **Not built yet**. |
 | `core/session/src/lib.rs` | Add snapshots, candidate verification, revision acceptance, journaling, conflict detection, undo, and subscription events around the current compile operation | Partly built: snapshots, candidate verification, revisions, conflict detection and undo (`core/session/src/edit.rs`). The journal and subscription events are **Not built yet**. |
-| New `core/edit` crate | Own syntax lenses, capability derivation, semantic operation planning, byte patches, and graph-delta comparison | Partly built, inside `core/session/src/edit/` rather than as its own crate: the literal lens, byte patches and graph comparison. |
-| `core/song` | Read timeline data from snapshots; implement lane/track path migration and guarded data edits | Partly built: timeline data is read from snapshots, and notes lanes are written by a checked edit. Path migration is **Not built yet**. |
-| `std/src` | Generate direct kernel wrapper descriptors, declare convenience adapters, and progressively register instruments, effects, and dictionary components | Partly built: effects are registered as `[[effect]]` entries in `std/m2pkg.toml`. Generated wrappers are **Not built yet**. |
+| New `core/edit` crate | Own syntax lenses, capability derivation, semantic operation planning, byte patches, and graph-delta comparison | Partly built, inside `core/session/src/edit/` rather than as its own crate: the literal lens, byte patches and graph comparison. **Superseded:** lenses, planners and the view move to `crates/editor`; core keeps `save`, `Tx`, `GraphDelta` and its checkers ([WRITE-10](architecture.md#expectations-and-the-delta)). |
+| `core/song` | Read timeline data from snapshots; implement lane/track path migration and guarded data edits | Partly built: timeline data is read from snapshots, and notes lanes are written by a checked edit. **Superseded:** no path migration in core; format v1 and `DataPath` own every path, and the fixtures are converted once by script ([Project format v1](architecture.md#project-format-v1)). |
+| `std/src` | Generate direct kernel wrapper descriptors, declare convenience adapters, and progressively register instruments, effects, and dictionary components | Partly built: effects are registered as `[[effect]]` entries in `std/m2pkg.toml`. Generated wrappers are **Not built yet**. Step 5 rewrites std on [component descriptors](architecture.md#component-descriptors) and deletes `[[effect]]`. |
 
 When this was written, the core had two consequential gaps. The first is closed. The checker used to fold connected constants into `Input::Const`, so a preview could not work just by updating the original IR constant. Now a constant with an origin is never folded: it stays its own node (`core/ir/src/check.rs`), and `Renderer::set_const` refills it everywhere it is used, voices included, at the next block. A knob drag previews live this way, without a separate `Input::Param` cell.
 
 The second is still open. The core runtime is a renderer with a Wasmtime store, while the session supplies compilation and timeline validation. A running-state arena and atomic plan activation are **Not built yet**: an edit that changes the graph builds a new renderer and replays it up to the playhead. The transactional editor exists for single edits (`core/session/src/edit.rs`); multi-edit transactions are **Not built yet**.
 
 ## Prototype sequence and acceptance tests
+
+> **Superseded for the sequence** by the [order of work](architecture.md#order-of-work) and its [acceptance gates](architecture.md#acceptance-gates). The fixture table below stays as test cases for the `crates/editor` planners, with lane paths in format v1.
 
 Build a narrow vertical slice before extending the language surface. Keep the original `first-song` code as fixtures rather than rewriting it into easier input.
 
@@ -472,7 +509,7 @@ The executable prototype should demonstrate these exact operations:
 | `tracks/bass.ts` | Add a delay after bass | Extract the returned bass call into a fresh binding, insert a delay binding/import, and return it |
 | `tracks/bass.ts` | Delete that delay with bypass | Restore the source connection, remove the delay binding; leave import cleanup to an explicit safe rule |
 | `song.ts` | Add then delete a node | Exercise concise-arrow expansion, nested mixer arguments, and comment preservation |
-| `song.ts` | Automate hats pan | Bind the song callback's lane context, replace `0.3` with a lane call, and create `timeline/song.hats-pan.json` |
+| `song.ts` | Automate hats pan | Bind the song callback's lane context, replace `0.3` with a lane call, and create `data/song/hats-pan.json` |
 | `tracks/bass.ts` | Automate an independent LFO period | Replace its value with a typed lane input only if the wrapper exposes period as a live control |
 
 What was built handles these cases differently:
@@ -492,6 +529,8 @@ Differentially run representative supported programs with and without instrument
 Realtime checks should verify that every intended sink and existing/new voice receives the preview, a failed commit restores the latest accepted value, and no old-value block occurs at successful handoff. Test audio-thread allocation/locking bounds separately from semantic edit correctness.
 
 ## Performance budget
+
+> **Superseded** by [Planes of change](architecture.md#planes-of-change): control changes (previews, transport, overlays) by the next audio block; data changes under 20 ms from commit to audible; code changes audible under 200 ms after the compile; the compile itself under 100 ms at p95 at 50 tracks.
 
 **Not built yet.** The brief reports roughly 70 ms for a full four-track `m2 check`, including process startup and kernel compilation. That is an existing measurement from the brief, not a measurement of the proposed editor. It supports starting with full candidate rebuilds while keeping the process and packages warm.
 

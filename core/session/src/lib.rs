@@ -12,6 +12,7 @@ pub mod lanes;
 pub mod render;
 pub mod timeline;
 pub mod view;
+pub mod warnings;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -25,6 +26,7 @@ pub use edit::{Audition, Committed, Control, EditError, Edited, Inlet, Outlet, R
 pub use m2_song::{Note, NoteClip};
 pub use timeline::{TimelineLane, TimelineTrack, TimelineView};
 pub use view::{GraphView, Knob, ModuleView, ViewNode};
+pub use warnings::{Fix, Seen, SeenLane, Warning};
 
 /// A project that is ready to render.
 pub struct Compiled {
@@ -34,16 +36,23 @@ pub struct Compiled {
     pub sites: Vec<m2_script::sites::Site>,
     /// What each call returned, when it was a signal.
     pub outputs: Vec<m2_script::Output>,
-    /// Problems that don't stop the song from playing, such as unused lane files.
-    pub warnings: Vec<Diagnostic>,
+    /// Problems that don't stop the song from playing, such as lane files no lane reads.
+    pub warnings: Vec<Warning>,
 }
 
 pub fn compile(project: &Project, packages: &mut PackageSet) -> Result<Compiled, Vec<Diagnostic>> {
-    compile_sources(project, packages, HashMap::new())
+    compile_sources(project, packages, HashMap::new(), &Seen::default())
 }
 
-/// [`compile`], with some files' contents supplied instead of read from disk.
-pub fn compile_sources(project: &Project, packages: &mut PackageSet, sources: HashMap<PathBuf, String>) -> Result<Compiled, Vec<Diagnostic>> {
+/// [`compile`], with some files' contents supplied instead of read from disk. `seen` is what
+/// earlier revisions declared, for warnings about data a rename left behind (see
+/// [`warnings::warnings`]).
+pub fn compile_sources(
+    project: &Project,
+    packages: &mut PackageSet,
+    sources: HashMap<PathBuf, String>,
+    seen: &Seen,
+) -> Result<Compiled, Vec<Diagnostic>> {
     let mut opts = m2_script::Options::new(&project.dir, &project.entry());
     opts.packages = packages.packages().map(|p| (p.name.clone(), p.dir.clone())).collect();
     opts.sources = sources;
@@ -63,13 +72,7 @@ pub fn compile_sources(project: &Project, packages: &mut PackageSet, sources: Ha
         return Err(diags);
     }
 
-    let used: Vec<(String, String)> = ir.modules.iter().flat_map(|m| m.lanes.iter().map(|l| (m.name.clone(), l.id.clone()))).collect();
-    let warnings = project
-        .timeline
-        .unused(&used)
-        .into_iter()
-        .map(|f| Diagnostic { message: "no lane uses this file".into(), src: Some(relative(&project.dir, &f)), ..Default::default() })
-        .collect();
+    let warnings = warnings::warnings(project, &ir, seen);
     Ok(Compiled { ir, flat: flat.expect("no diagnostics means the graph checked"), sites, outputs, warnings })
 }
 
@@ -233,7 +236,7 @@ export default song(() => add(a.out, b.out));
         let dir = project(&[("song.ts", SONG), ("timeline/kick.old.json", r#"{"clips": []}"#)]);
         let c = compile_dir(&dir).unwrap_or_else(|e| panic!("{e:?}"));
         assert_eq!(c.warnings.len(), 1);
-        assert_eq!(c.warnings[0].src.as_deref(), Some("timeline/kick.old.json"));
+        assert_eq!((c.warnings[0].code, c.warnings[0].file.as_str()), ("data.unclaimed", "timeline/kick.old.json"));
         std::fs::remove_dir_all(dir).ok();
     }
 }

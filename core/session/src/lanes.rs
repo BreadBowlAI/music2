@@ -61,7 +61,7 @@ impl Session {
 }
 
 /// Where a module's lane is written: `timeline/<slug>.<lane>.json`.
-fn file(module: &str, lane: &str) -> Result<PathBuf, EditError> {
+pub(crate) fn file(module: &str, lane: &str) -> Result<PathBuf, EditError> {
     if lane.is_empty() || lane.contains(['/', '\\']) {
         return Err(EditError::Rejected(format!("the lane `{lane}` can't be a file name")));
     }

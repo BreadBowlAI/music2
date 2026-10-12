@@ -376,7 +376,12 @@ impl Timeline {
     }
 
     fn clips<T: for<'de> Deserialize<'de>>(&self, module: &str, lane: &str) -> Result<Vec<T>> {
-        match self.files.get(&(slug(module), lane.to_string())) {
+        self.clips_at(&slug(module), lane)
+    }
+
+    /// The clips of the file named `<stem>.<lane>.json`.
+    fn clips_at<T: for<'de> Deserialize<'de>>(&self, stem: &str, lane: &str) -> Result<Vec<T>> {
+        match self.files.get(&(stem.to_string(), lane.to_string())) {
             None => Ok(vec![]),
             Some((path, v)) => Ok(serde_json::from_value::<LaneFile<T>>(v.clone()).with_context(|| format!("reading {}", path.display()))?.clips),
         }
@@ -434,9 +439,26 @@ impl Timeline {
         self.files.get(&(slug(module), lane.to_string())).map(|(p, _)| p.as_path())
     }
 
-    /// Lane files that no declared lane uses.
-    pub fn unused(&self, used: &[(String, String)]) -> Vec<PathBuf> {
-        self.files.iter().filter(|(k, _)| !used.iter().any(|(m, l)| slug(m) == k.0 && *l == k.1)).map(|(_, (p, _))| p.clone()).collect()
+    /// Lane files that no declared lane `(module, lane)` uses.
+    pub fn unused(&self, used: &[(String, String)]) -> Vec<Unused<'_>> {
+        let unused = self.files.iter().filter(|(k, _)| !used.iter().any(|(m, l)| slug(m) == k.0 && *l == k.1));
+        unused.map(|((stem, lane), (path, _))| Unused { path, stem, lane, data: self.data(stem, lane) }).collect()
+    }
+
+    /// What the file `<stem>.<lane>.json` holds, judged by the shape of its clips.
+    fn data(&self, stem: &str, lane: &str) -> LaneData {
+        let Some((_, v)) = self.files.get(&(stem.to_string(), lane.to_string())) else { return LaneData::Empty };
+        if v["clips"].as_array().is_some_and(Vec::is_empty) {
+            LaneData::Empty
+        } else if self.clips_at::<NoteClip>(stem, lane).is_ok() {
+            LaneData::Notes
+        } else if self.clips_at::<ControlClip>(stem, lane).is_ok() {
+            LaneData::Control
+        } else if self.clips_at::<AudioClip>(stem, lane).is_ok() {
+            LaneData::Audio
+        } else {
+            LaneData::Unknown
+        }
     }
 
     /// The beat where the last clip ends.
@@ -453,6 +475,31 @@ impl Timeline {
             .map(|c| c.start + c.length)
             .fold(0.0, f64::max)
     }
+}
+
+/// A lane file that no declared lane uses, such as one left behind when its track or lane
+/// was renamed in code.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Unused<'a> {
+    pub path: &'a Path,
+    /// The module and lane its name spells: `kick.hits.json` is `kick` and `hits`, the
+    /// module as lane files spell its name (see [`slug`]).
+    pub stem: &'a str,
+    pub lane: &'a str,
+    pub data: LaneData,
+}
+
+/// What a lane file holds, judged by the shape of its clips: which kind of lane can read it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LaneData {
+    Notes,
+    /// Points: automation.
+    Control,
+    Audio,
+    /// No clips, which any lane reads.
+    Empty,
+    /// Clips no lane can read.
+    Unknown,
 }
 
 /// A control lane's clips. Where clips overlap, the one that starts later wins.
@@ -550,6 +597,32 @@ mod tests {
         assert!(t.audio("Vox", "bad").is_err());
         t.files.insert(("vox".into(), "bad".into()), file(serde_json::json!({"clips": [{"start": 0, "length": 1, "asset": "a.wav", "warp": [[0, 0], [1, 0]]}]})));
         assert!(t.audio("Vox", "bad").is_err());
+    }
+
+    #[test]
+    fn unused_lane_files_say_what_they_hold() {
+        let files = [
+            ("kick.hits.json", r#"{"clips": [{"start": 0, "length": 4, "notes": [{"pitch": "C1", "start": 0, "length": 1}]}]}"#),
+            ("kick.env.json", r#"{"clips": [{"start": 0, "length": 4, "points": [[0, 1]]}]}"#),
+            ("Vox.take.json", r#"{"clips": [{"start": 0, "length": 4, "asset": "vox.wav"}]}"#),
+            ("kick.old.json", r#"{"clips": []}"#),
+            ("kick.odd.json", r#"{"clips": [{"start": 0}]}"#),
+            ("bass.notes.json", r#"{"clips": []}"#),
+        ];
+        let t = Timeline::from_files(files.iter().map(|(n, text)| (PathBuf::from("timeline").join(n), *text))).unwrap();
+        let unused = t.unused(&[("Bass".into(), "notes".into())]);
+        let found: Vec<(&str, &str, LaneData)> = unused.iter().map(|u| (u.stem, u.lane, u.data)).collect();
+        assert_eq!(
+            found,
+            [
+                ("Vox", "take", LaneData::Audio),
+                ("kick", "env", LaneData::Control),
+                ("kick", "hits", LaneData::Notes),
+                ("kick", "odd", LaneData::Unknown),
+                ("kick", "old", LaneData::Empty),
+            ]
+        );
+        assert_eq!(unused[0].path, Path::new("timeline/Vox.take.json"));
     }
 
     #[test]

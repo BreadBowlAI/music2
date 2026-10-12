@@ -55,6 +55,8 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .route("/api/graph/effect/add", post(graph_add_effect))
         .route("/api/graph/effect/remove", post(graph_remove_effect))
         .route("/api/graph/lane", post(graph_lane))
+        .route("/api/graph/relink", post(graph_relink))
+        .route("/api/graph/data/delete", post(graph_delete_data))
         .route("/api/graph/undo", post(graph_undo))
         .route("/api/graph/redo", post(graph_redo))
         .route("/api/graph/disconnect", post(graph_disconnect))
@@ -269,6 +271,39 @@ struct LaneReq {
 async fn graph_lane(State(s): S, Json(r): Json<LaneReq>) -> ApiResult {
     let state = s.clone();
     let result = blocking(move || state.graph.write_notes(r.session, r.revision, &r.module, &r.lane, &r.clips)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct RelinkReq {
+    session: u64,
+    revision: u64,
+    /// The lane file no lane reads, relative to the project (`timeline/kick.hits.json`).
+    from: String,
+    module: String,
+    lane: String,
+}
+
+/// Move lane data no lane reads to the lane it belongs to now: a warning's relink fix.
+async fn graph_relink(State(s): S, Json(r): Json<RelinkReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.relink(r.session, r.revision, &r.from, &r.module, &r.lane)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct DeleteDataReq {
+    session: u64,
+    revision: u64,
+    file: String,
+}
+
+/// Delete lane data no lane reads: a warning's other fix. Undo puts it back.
+async fn graph_delete_data(State(s): S, Json(r): Json<DeleteDataReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.delete_data(r.session, r.revision, &r.file)).await;
     s.graph_changed();
     Ok(Json(result?))
 }

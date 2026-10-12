@@ -22,11 +22,12 @@ use m2_runtime::PackageSet;
 use m2_script::sites::Site;
 use m2_song::{Project, Snapshot};
 
-use crate::{Compiled, compile_sources};
+use crate::{Compiled, Seen, Warning, compile_sources};
 
 mod cable;
 mod effect;
 mod lens;
+mod relink;
 pub use cable::{Inlet, Outlet};
 use lens::LiteralLens;
 
@@ -135,9 +136,9 @@ impl std::fmt::Display for EditError {
     }
 }
 
-/// One undoable change to one file. For a value edit, `before` and `after` are what the
-/// byte range at `start` said on either side; an exact change restores the whole file, so
-/// for it they only describe the change.
+/// One undoable change to one file (a move also knows where the file was). For a value edit,
+/// `before` and `after` are what the byte range at `start` said on either side; an exact
+/// change restores the whole file, so for it they only describe the change.
 ///
 /// A change carries the file as it left it, not a revision number: it stays undoable however
 /// many revisions come after, and other files changing (a lane, a save in another file) never
@@ -154,26 +155,17 @@ struct Change {
 
 /// How reverting a change is verified.
 enum Undo {
-    /// A value edit: reverting sets the value back, carried past later unrelated edits.
-    Value { origin: Origin, value_before: f64, value_after: f64 },
+    /// A value edit: reverting sets the value back, carried past later unrelated edits. The
+    /// value is found by where its bytes are, never by an origin: call numbers run across the
+    /// whole project, so a call added in any file loaded earlier renumbers it.
+    Value { scale: f64, value_before: f64, value_after: f64 },
     /// A whole-file edit: reverting writes `restore` back (None: removes the file the edit
     /// created). It is allowed only while the file is exactly as the change left it, and the
     /// project must compile with it.
     Exact { restore: Option<String> },
-}
-
-impl Change {
-    /// Whether the file is still as this change left it, so it can be reverted: exactly, or
-    /// (for a value) with the value's own bytes untouched.
-    fn revertible(&self, now: Option<&String>) -> bool {
-        match &self.undo {
-            Undo::Value { .. } => {
-                let end = self.start as usize + self.after.len();
-                self.left.as_ref().zip(now).is_some_and(|(was, now)| carry(was, now, self.start as usize, end).is_some())
-            }
-            Undo::Exact { .. } => now == self.left.as_ref(),
-        }
-    }
+    /// The file was renamed from `back`: reverting renames it back, only while it is exactly as
+    /// the change left it and nothing has taken its old name.
+    Move { back: PathBuf },
 }
 
 /// An edit compiled from memory, not yet written or accepted. It is built on the accepted
@@ -258,6 +250,40 @@ pub struct Session {
     history: Vec<Change>,
     /// Undone changes, as their inverses, newest last. Any new edit clears it.
     redo: Vec<Change>,
+    /// What every revision accepted so far declared, so data a rename left behind is named as
+    /// its track was and offered only to lanes that read it.
+    seen: Seen,
+}
+
+/// Whether `a` and `b` name one file, as two spellings do on a disk that ignores capitals.
+fn same_file(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        matches!((std::fs::symlink_metadata(a), std::fs::symlink_metadata(b)), (Ok(a), Ok(b)) if (a.dev(), a.ino()) == (b.dev(), b.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (a, b);
+        false
+    }
+}
+
+/// A file of `files`, other than `except`, that has the name `name` on a disk that ignores
+/// capitals (macOS by default): `name` itself, or `name` in other capitals. Judged by the names
+/// alone, so a project acts the same on every disk it is checked out on.
+fn taken<'a>(files: &'a BTreeMap<PathBuf, String>, name: &Path, except: Option<&Path>) -> Option<&'a Path> {
+    let spelled = name.to_string_lossy();
+    files.keys().map(PathBuf::as_path).find(|p| Some(*p) != except && p.to_string_lossy().eq_ignore_ascii_case(&spelled))
+}
+
+/// Why `name` isn't created: `by`, which has its name, is there already.
+fn there_already(name: &Path, by: &Path) -> String {
+    if by == name {
+        format!("{} is there already, and isn't replaced", name.display())
+    } else {
+        format!("{} is there already, and on a disk that ignores capitals it is {}; it isn't replaced", by.display(), name.display())
+    }
 }
 
 /// Where bytes `start..end` of `old` are in `new`, if no change touched them.
@@ -336,8 +362,32 @@ fn site_by_id<'a>(sites: &'a [Site], id: &str) -> Option<(&'a Site, Vec<String>)
     Some((site, arg.split('.').map(str::to_string).collect()))
 }
 
-fn build(project: &Project, snapshot: &Snapshot, packages: &mut PackageSet) -> Result<Compiled, Vec<Diagnostic>> {
-    compile_sources(project, packages, snapshot.sources().map(|(p, t)| (p, t.clone())).collect())
+fn build(project: &Project, snapshot: &Snapshot, packages: &mut PackageSet, seen: &Seen) -> Result<Compiled, Vec<Diagnostic>> {
+    compile_sources(project, packages, snapshot.sources().map(|(p, t)| (p, t.clone())).collect(), seen)
+}
+
+/// The control constant `origin` with `value` shows in `rev`, if it is a number written in
+/// the project's own code.
+fn control(rev: &Revision, origin: &Origin, value: f64, unit: Option<Unit>) -> Option<Control> {
+    if origin.arg.is_empty() {
+        return None;
+    }
+    let site = rev.compiled.sites.iter().find(|s| s.id == origin.site && s.in_project)?;
+    let text = rev.snapshot.files.get(Path::new(&site.file))?;
+    let lens = LiteralLens::read(site, origin, text, value)?;
+    Some(Control {
+        id: format!("{}#{}/{}", site.file, site.ordinal, origin.arg.join(".")),
+        revision: rev.number,
+        file: site.file.clone(),
+        line: site.line,
+        value,
+        literal: lens.literal.clone(),
+        unit,
+        scale: lens.scale,
+        uses: 1,
+        origin: origin.clone(),
+        lens,
+    })
 }
 
 impl Session {
@@ -346,11 +396,14 @@ impl Session {
         let err = |e: anyhow::Error| vec![Diagnostic::new(format!("{e:#}"))];
         let snapshot = Snapshot::read(dir).map_err(err)?;
         let project = Project::from_snapshot(&snapshot).map_err(err)?;
-        let compiled = build(&project, &snapshot, &mut packages)?;
+        let compiled = build(&project, &snapshot, &mut packages, &Seen::default())?;
+        let mut seen = Seen::default();
+        seen.add(&compiled.ir);
         Ok(Session {
             packages,
             dir: snapshot.dir.clone(),
             draft: snapshot.clone(),
+            seen,
             accepted: Revision { number: 1, snapshot, project, compiled },
             draft_errors: vec![],
             past: VecDeque::new(),
@@ -364,7 +417,14 @@ impl Session {
         &self.accepted
     }
 
+    /// What needs attention in the accepted revision, such as lane data no lane reads, with
+    /// the fixes each offers.
+    pub fn warnings(&self) -> &[Warning] {
+        &self.accepted.compiled.warnings
+    }
+
     fn accept(&mut self, snapshot: Snapshot, project: Project, compiled: Compiled) -> u64 {
+        self.seen.add(&compiled.ir);
         let number = self.accepted.number + 1;
         let old = std::mem::replace(&mut self.accepted, Revision { number, snapshot, project, compiled });
         self.past.push_back(Past { number: old.number, snapshot: old.snapshot, sites: old.compiled.sites });
@@ -395,7 +455,7 @@ impl Session {
         }
         let built = Project::from_snapshot(&snapshot)
             .map_err(|e| vec![Diagnostic::new(format!("{e:#}"))])
-            .and_then(|p| build(&p, &snapshot, &mut self.packages).map(|c| (p, c)));
+            .and_then(|p| build(&p, &snapshot, &mut self.packages, &self.seen).map(|c| (p, c)));
         match built {
             Ok((project, compiled)) => {
                 self.accept(snapshot, project, compiled);
@@ -412,31 +472,34 @@ impl Session {
         let mut found: BTreeMap<String, Control> = BTreeMap::new();
         let mut visit = |n: &Node| {
             let (Op::Const { value, unit }, Some(o)) = (&n.op, &n.origin) else { return };
-            if o.arg.is_empty() {
-                return;
+            if let Some(c) = control(rev, o, *value, *unit) {
+                found.entry(c.id.clone()).and_modify(|k| k.uses += 1).or_insert(c);
             }
-            let Some(site) = rev.compiled.sites.iter().find(|s| s.id == o.site && s.in_project) else { return };
-            let Some(text) = rev.snapshot.files.get(Path::new(&site.file)) else { return };
-            let Some(lens) = LiteralLens::read(site, o, text, *value) else { return };
-            let id = format!("{}#{}/{}", site.file, site.ordinal, o.arg.join("."));
-            found.entry(id.clone()).and_modify(|c| c.uses += 1).or_insert_with(|| Control {
-                id,
-                revision: rev.number,
-                file: site.file.clone(),
-                line: site.line,
-                value: *value,
-                literal: lens.literal.clone(),
-                unit: *unit,
-                scale: lens.scale,
-                uses: 1,
-                origin: o.clone(),
-                lens,
-            });
         };
         for m in &rev.compiled.ir.modules {
             walk(&m.nodes, &mut visit);
         }
         found.into_values().collect()
+    }
+
+    /// The control written at bytes `start..end` of `file` in the accepted revision, if there
+    /// is one: found by the calls around those bytes, whatever they are numbered now.
+    fn control_at(&self, file: &Path, start: u32, end: u32) -> Option<Control> {
+        let rev = &self.accepted;
+        let around = |s: &&Site| s.in_project && Path::new(&s.file) == file && s.start <= start && end <= s.end;
+        let calls: Vec<u32> = rev.compiled.sites.iter().filter(around).map(|s| s.id).collect();
+        let mut found = None;
+        let mut visit = |n: &Node| {
+            if let (None, Op::Const { value, unit }, Some(o)) = (&found, &n.op, &n.origin)
+                && calls.contains(&o.site)
+            {
+                found = control(rev, o, *value, *unit).filter(|c| c.lens.start == start && c.lens.end == end);
+            }
+        };
+        for m in &rev.compiled.ir.modules {
+            walk(&m.nodes, &mut visit);
+        }
+        found
     }
 
     /// The control `id` named at revision `at`, as it is in the accepted revision.
@@ -546,7 +609,8 @@ impl Session {
             return Err(EditError::Rejected("the edit would change more than this value".into()));
         }
         let (before, after) = (c.before.clone(), c.after.clone());
-        let record = value_before.map(|value_before| Undo::Value { origin: origin.clone(), value_before, value_after: value });
+        let scale = origin.scale.unwrap_or(1.0);
+        let record = value_before.map(|value_before| Undo::Value { scale, value_before, value_after: value });
         let number = self.commit(c, record)?;
         Ok(Committed { revision: number, file: name, before, after, origin: origin.clone(), value })
     }
@@ -602,7 +666,7 @@ impl Session {
 
     fn compile_snapshot(&mut self, snapshot: &Snapshot) -> Result<(Project, Compiled), EditError> {
         let project = Project::from_snapshot(snapshot).map_err(|e| EditError::Rejected(format!("{e:#}")))?;
-        let compiled = build(&project, snapshot, &mut self.packages)
+        let compiled = build(&project, snapshot, &mut self.packages, &self.seen)
             .map_err(|d| EditError::Rejected(d.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("; ")))?;
         Ok((project, compiled))
     }
@@ -662,6 +726,14 @@ impl Session {
     fn commit(&mut self, c: Candidate, record: Option<Undo>) -> Result<u64, EditError> {
         let path = self.dir.join(&c.file);
         let io = |e: std::io::Error| EditError::Io(e.to_string());
+        let files = &self.accepted.snapshot.files;
+        // A new file would land on one whose name differs only in capitals, and read as it.
+        if !files.contains_key(&c.file)
+            && c.snapshot.files.contains_key(&c.file)
+            && let Some(by) = taken(files, &c.file, None)
+        {
+            return Err(EditError::Rejected(there_already(&c.file, by)));
+        }
         let disk = match std::fs::read_to_string(&path) {
             Ok(text) => Some(text),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -719,7 +791,30 @@ impl Session {
     }
 
     fn can_step(&self, stack: &[Change]) -> bool {
-        self.draft_errors.is_empty() && stack.last().is_some_and(|c| c.revertible(self.accepted.snapshot.files.get(&c.file)))
+        self.draft_errors.is_empty() && stack.last().is_some_and(|c| self.revertible(c))
+    }
+
+    /// Whether `c` can be reverted now, so undo never offers what would be refused for
+    /// certain: its file is exactly as it left it, or for a value, the value's own bytes are
+    /// untouched and still a control of the same units. A name a revert creates (a move's old
+    /// name, or a removed file's) must be free in any capitals.
+    fn revertible(&self, c: &Change) -> bool {
+        let files = &self.accepted.snapshot.files;
+        match &c.undo {
+            Undo::Value { scale, .. } => self.carried(c).is_some_and(|(_, k)| k.is_some_and(|k| k.scale == *scale)),
+            Undo::Exact { restore } => {
+                files.get(&c.file) == c.left.as_ref() && (c.left.is_some() || restore.is_none() || taken(files, &c.file, None).is_none())
+            }
+            Undo::Move { back } => files.get(&c.file) == c.left.as_ref() && taken(files, back, Some(&c.file)).is_none(),
+        }
+    }
+
+    /// Where a value change's bytes are in the accepted revision, if no change touched them,
+    /// and the control written there, if they still are one.
+    fn carried(&self, c: &Change) -> Option<(u32, Option<Control>)> {
+        let (was, now) = (c.left.as_ref()?, self.accepted.snapshot.files.get(&c.file)?);
+        let start = carry(was, now, c.start as usize, c.start as usize + c.after.len())? as u32;
+        Some((start, self.control_at(&c.file, start, start + c.after.len() as u32)))
     }
 
     /// Revert the newest change on one stack and record its inverse on the other.
@@ -749,23 +844,22 @@ impl Session {
         let file = c.file.display().to_string();
         let now = self.accepted.snapshot.files.get(&c.file).cloned();
         match &c.undo {
-            Undo::Value { origin, value_before, value_after } => {
-                let end = c.start as usize + c.after.len();
-                let start = c
-                    .left
-                    .as_ref()
-                    .zip(now.as_ref())
-                    .and_then(|(was, now)| carry(was, now, c.start as usize, end))
-                    .ok_or_else(|| EditError::Rejected("that value has been edited since; undo would overwrite it".into()))?;
-                let end = start + c.after.len();
-                let done = self.apply(&c.file, start as u32, end as u32, &c.before, origin, *value_before, None)?;
+            Undo::Value { scale, value_before, value_after } => {
+                let (start, control) =
+                    self.carried(c).ok_or_else(|| EditError::Rejected("that value has been edited since; undo would overwrite it".into()))?;
+                // The control written there now, with its current origin and argument path.
+                let control = control.filter(|k| k.scale == *scale).ok_or_else(|| {
+                    EditError::Rejected("that number no longer sets this value in the graph; change it in the code".into())
+                })?;
+                let end = start + c.after.len() as u32;
+                let done = self.apply(&c.file, start, end, &c.before, &control.origin, *value_before, None)?;
                 let inverse = Change {
                     file: c.file.clone(),
                     left: self.accepted.snapshot.files.get(&c.file).cloned(),
-                    start: start as u32,
+                    start,
                     before: c.after.clone(),
                     after: c.before.clone(),
-                    undo: Undo::Value { origin: origin.clone(), value_before: *value_after, value_after: *value_before },
+                    undo: Undo::Value { scale: *scale, value_before: *value_after, value_after: *value_before },
                 };
                 Ok((Edited { revision: done.revision, file, before: done.before, after: done.after }, inverse))
             }
@@ -787,7 +881,71 @@ impl Session {
                 };
                 Ok((Edited { revision, file, before: c.after.clone(), after: c.before.clone() }, inverse))
             }
+            Undo::Move { back } => {
+                if now != c.left || taken(&self.accepted.snapshot.files, back, Some(&c.file)).is_some() {
+                    let back = back.display();
+                    return Err(EditError::Rejected(format!("{file} changed since this edit, or {back} is taken; move it by hand")));
+                }
+                let revision = self.move_file(&c.file, back, |_, _| Ok(()))?;
+                let inverse = Change {
+                    file: back.clone(),
+                    left: now,
+                    start: 0,
+                    before: c.after.clone(),
+                    after: c.before.clone(),
+                    undo: Undo::Move { back: c.file.clone() },
+                };
+                Ok((Edited { revision, file, before: c.after.clone(), after: c.before.clone() }, inverse))
+            }
         }
+    }
+
+    /// Rename the data file `from` to `to`, if `check` accepts the candidate in which it is
+    /// renamed (given its project and build); the graph must stay as it is, since only data
+    /// moves. Returns the new revision. Not recorded for undo.
+    fn move_file(
+        &mut self,
+        from: &Path,
+        to: &Path,
+        check: impl FnOnce(&Project, &Compiled) -> Result<(), EditError>,
+    ) -> Result<u64, EditError> {
+        let text = self.accepted.snapshot.files.get(from).cloned().ok_or_else(|| EditError::NotFound(from.display().to_string()))?;
+        // `from` may be `to` in other capitals: the move is then a rename of the capitals.
+        if let Some(by) = taken(&self.accepted.snapshot.files, to, Some(from)) {
+            return Err(EditError::Rejected(there_already(to, by)));
+        }
+        let mut snapshot = self.accepted.snapshot.clone();
+        snapshot.files.remove(from);
+        snapshot.files.insert(to.to_path_buf(), text.clone());
+        let (project, compiled) = self.compile_snapshot(&snapshot)?;
+        if compiled.ir != self.accepted.compiled.ir {
+            return Err(EditError::Rejected(format!("moving {} would change the graph, not only where data is", from.display())));
+        }
+        check(&project, &compiled)?;
+
+        // The disk must still be as accepted: the file there as it was, its new name free.
+        let (path, dest) = (self.dir.join(from), self.dir.join(to));
+        let io = |e: std::io::Error| EditError::Io(e.to_string());
+        match std::fs::read_to_string(&path) {
+            Ok(disk) if disk == text => {}
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(io(e)),
+            _ => return Err(EditError::WriteConflict(from.display().to_string())),
+        }
+        match std::fs::symlink_metadata(&dest) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(io(e)),
+            // A disk that ignores capitals finds `kick.hits.json` as `Kick.hits.json` itself: renaming it is the fix.
+            Ok(_) if same_file(&path, &dest) => {}
+            Ok(_) => return Err(EditError::WriteConflict(to.display().to_string())),
+        }
+        if let Some(dir) = dest.parent() {
+            std::fs::create_dir_all(dir).map_err(io)?;
+        }
+        // One rename, so the data is never in two places or in none. A writer that takes the
+        // name between the check and here is replaced; the project lock will close that gap.
+        std::fs::rename(&path, &dest).map_err(io)?;
+        self.draft = snapshot.clone();
+        Ok(self.accept(snapshot, project, compiled))
     }
 }
 

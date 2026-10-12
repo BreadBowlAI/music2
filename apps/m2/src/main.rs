@@ -7,7 +7,7 @@ use std::time::Instant;
 use anyhow::{Context, Result, anyhow, bail};
 use m2_ir::{Diagnostic, FOp, Flat, Ir};
 use m2_runtime::{PackageSet, Renderer};
-use m2_session::render;
+use m2_session::{Fix, Session, Warning, render};
 use m2_song::Project;
 
 const USAGE: &str = "m2: build, check and render music2 projects
@@ -38,9 +38,16 @@ USAGE:
   m2 add-effect <project> <call> <module>.<effect>
                                          wrap a call's audio in an effect (e.g. std/fx.delay), verified
   m2 remove-effect <project> <call>      take an effect out, leaving what it was applied to, verified
+  m2 relink <project> <from-file> <track> <lane>
+                                         move lane data no lane reads (left behind when a track or lane was
+                                         renamed in code) to the lane it belongs to now, verified
+  m2 delete-data <project> <file>        delete lane data no lane reads
   m2 plugins [clap:<id>]                 list installed CLAP plugins, or one plugin's ports
   m2 plugin-state <project> <name> clap:<id> [--force]
                                          save a plugin's default state to assets/plugin-state/<name>.bin
+
+Every command that reads a project prints what needs attention in it, such as lane data no lane
+reads, with the commands that fix it.
 
 std, the templates and the examples are found at $M2_STD, $M2_TEMPLATES and $M2_EXAMPLES, inside
 music2.app when m2 runs from there, or else in this source tree.
@@ -71,10 +78,59 @@ fn packages() -> Result<PackageSet> {
 fn compile(dir: &Path, packages: &mut PackageSet) -> Result<(Project, Ir, Flat)> {
     let project = Project::open(dir)?;
     let c = m2_session::compile(&project, packages).map_err(report)?;
-    for w in &c.warnings {
-        eprintln!("warning: {w}");
-    }
+    attention(dir, &c.warnings);
     Ok((project, c.ir, c.flat))
+}
+
+/// Open an editing session on a project, printing diagnostics on failure and warnings on success.
+fn session(dir: &Path) -> Result<Session> {
+    let s = Session::open(dir, packages()?).map_err(report)?;
+    attention(dir, s.warnings());
+    Ok(s)
+}
+
+/// Print what needs attention in the project at `dir` (as it was named), and the commands that fix it.
+fn attention(dir: &Path, warnings: &[Warning]) {
+    let dir = quote(&dir.display().to_string());
+    for w in warnings {
+        eprintln!("warning: {}: {w}", w.file);
+        for fix in &w.fixes {
+            match fix {
+                Fix::Relink { from, module, lane, .. } => {
+                    eprintln!("  move it:   m2 relink {dir} {} {} {}", quote(from), quote(module), quote(lane))
+                }
+                Fix::DeleteData { file } => eprintln!("  delete it: m2 delete-data {dir} {}", quote(file)),
+            }
+        }
+    }
+}
+
+/// Print a project's warnings if it compiles, for commands that don't need it to.
+fn attention_if_it_compiles(dir: &Path) {
+    let compiled =
+        packages().and_then(|mut pk| m2_session::compile(&Project::open(dir)?, &mut pk).map_err(|d| anyhow!("{} problems", d.len())));
+    if let Ok(c) = compiled {
+        attention(dir, &c.warnings);
+    }
+}
+
+/// `s` as one word in a shell.
+fn quote(s: &str) -> String {
+    let plain = !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_./+@:,=%".contains(c));
+    if plain { s.to_string() } else { format!("'{}'", s.replace('\'', r"'\''")) }
+}
+
+/// A file of the project at `dir`, as the project spells it: given that way, or by a path
+/// from here that leads into the project.
+fn in_project(dir: &Path, file: &str) -> PathBuf {
+    let path = Path::new(file);
+    if !(path.is_relative() && dir.join(path).exists())
+        && let (Ok(dir), Ok(found)) = (dir.canonicalize(), path.canonicalize())
+        && let Ok(rel) = found.strip_prefix(&dir)
+    {
+        return rel.to_path_buf();
+    }
+    path.to_path_buf()
 }
 
 fn report(diags: Vec<Diagnostic>) -> anyhow::Error {
@@ -106,6 +162,7 @@ fn run() -> Result<()> {
             let made = project::create_at(Path::new(&dir), &from)?;
             let id = from.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
             println!("made {} from the {id} {what}", made.display());
+            attention_if_it_compiles(&made);
         }
         Some("check" | "build") => {
             let mut pk = packages()?;
@@ -219,7 +276,7 @@ fn run() -> Result<()> {
             }
         }
         Some("graph") => {
-            let s = m2_session::Session::open(Path::new(&arg(1)?), packages()?).map_err(report)?;
+            let s = session(Path::new(&arg(1)?))?;
             let v = s.view();
             if args.iter().any(|a| a == "--json") {
                 println!("{}", serde_json::to_string_pretty(&v)?);
@@ -243,7 +300,7 @@ fn run() -> Result<()> {
             }
         }
         Some("controls") => {
-            let s = m2_session::Session::open(Path::new(&arg(1)?), packages()?).map_err(report)?;
+            let s = session(Path::new(&arg(1)?))?;
             println!("revision {}", s.accepted().number);
             for c in s.controls() {
                 let unit = c.unit.map_or("number".to_string(), |u| u.name().to_string());
@@ -252,7 +309,7 @@ fn run() -> Result<()> {
             }
         }
         Some("set") => {
-            let mut s = m2_session::Session::open(Path::new(&arg(1)?), packages()?).map_err(report)?;
+            let mut s = session(Path::new(&arg(1)?))?;
             let id = arg(2)?;
             let value: f64 = arg(3)?.parse().context("value")?;
             let expect: Option<f64> = flag(&args, "--expect").map(|v| v.parse()).transpose().context("--expect")?;
@@ -262,7 +319,7 @@ fn run() -> Result<()> {
             println!("{}: `{}` → `{}` (revision {}, verified in {:.0} ms)", c.file, c.before, c.after, c.revision, t.elapsed().as_secs_f64() * 1000.0);
         }
         Some("cables") => {
-            let s = m2_session::Session::open(Path::new(&arg(1)?), packages()?).map_err(report)?;
+            let s = session(Path::new(&arg(1)?))?;
             println!("revision {}", s.accepted().number);
             for o in s.outlets() {
                 println!("signal {:30} {:16} {}  {}:{}", o.id, o.name, o.module, o.file, o.line);
@@ -272,7 +329,7 @@ fn run() -> Result<()> {
             }
         }
         Some("effects") => {
-            let s = m2_session::Session::open(Path::new(&arg(1)?), packages()?).map_err(report)?;
+            let s = session(Path::new(&arg(1)?))?;
             println!("revision {}", s.accepted().number);
             for e in s.effects() {
                 println!("effect {:24} {}", format!("{}.{}", e.module, e.name), e.description);
@@ -285,7 +342,7 @@ fn run() -> Result<()> {
             }
         }
         Some(command @ ("add-effect" | "remove-effect")) => {
-            let mut s = m2_session::Session::open(Path::new(&arg(1)?), packages()?).map_err(report)?;
+            let mut s = session(Path::new(&arg(1)?))?;
             let t = Instant::now();
             let at = s.accepted().number;
             let e = match command {
@@ -300,7 +357,7 @@ fn run() -> Result<()> {
             println!("{}: `{}` → `{}` (revision {}, verified in {:.0} ms)", e.file, e.before, e.after, e.revision, t.elapsed().as_secs_f64() * 1000.0);
         }
         Some(command @ ("connect" | "disconnect")) => {
-            let mut s = m2_session::Session::open(Path::new(&arg(1)?), packages()?).map_err(report)?;
+            let mut s = session(Path::new(&arg(1)?))?;
             let t = Instant::now();
             let at = s.accepted().number;
             let e = match command {
@@ -309,6 +366,24 @@ fn run() -> Result<()> {
             }
             .map_err(|e| anyhow!("{e}"))?;
             println!("{}: `{}` → `{}` (revision {}, verified in {:.0} ms)", e.file, e.before, e.after, e.revision, t.elapsed().as_secs_f64() * 1000.0);
+        }
+        Some(command @ ("relink" | "delete-data")) => {
+            // What needs attention is printed after: the fix may have settled it.
+            let dir = PathBuf::from(arg(1)?);
+            let mut s = Session::open(&dir, packages()?).map_err(report)?;
+            let t = Instant::now();
+            let (at, file) = (s.accepted().number, in_project(&dir, &arg(2)?));
+            let e = match command {
+                "relink" => s.relink(at, &file, &arg(3)?, &arg(4)?),
+                _ => s.delete_data(at, &file),
+            };
+            let e = e.map_err(|e| {
+                attention(&dir, s.warnings());
+                anyhow!("{e}")
+            })?;
+            let ms = t.elapsed().as_secs_f64() * 1000.0;
+            println!("{}: `{}` → `{}` (revision {}, verified in {ms:.0} ms)", e.file, e.before, e.after, e.revision);
+            attention(&dir, s.warnings());
         }
         Some("plugins") => match args.get(1) {
             None => {
@@ -355,6 +430,7 @@ fn run() -> Result<()> {
             std::fs::create_dir_all(path.parent().expect("has a parent"))?;
             std::fs::write(&path, &bytes)?;
             println!("saved {} bytes of {} state to {}", bytes.len(), inst.info.found.name, path.display());
+            attention_if_it_compiles(&project.dir);
         }
         _ => print!("{USAGE}"),
     }

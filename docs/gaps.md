@@ -23,6 +23,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 - Connect cables inside one file, and add or remove 17 effects from a searchable browser.
 - Edit the code in the app, with type checks. When the code breaks, the last working version keeps playing.
 - Undo and redo every edit made in the app.
+- See what needs attention. When a track or a lane is renamed in code, its notes or automation stop playing; a **Needs attention** strip above the timeline says so in plain words, and offers to move the data to the lane it belongs to now, or to delete it. Undo takes either back. Every `m2` command that opens the song prints the same, with the commands that fix it (`m2 relink`, `m2 delete-data`).
 - Edit the files in any other editor or from a script. The app picks the change up within about 300 ms.
 - Export the song as a WAV file (the Export button, or File → Export Audio…, ⌘E), then Show in Finder. Files go in `~/Music/music2/Exports` unless you pick another place. It's the same file `m2 render` writes. Quitting during an export asks first.
 - From the command line (`m2`): make a new song, render a WAV, bounce a track to audio, and make the same edits as the app.
@@ -69,7 +70,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
 | 1 | **Add a track without code.** Pick an instrument (bass, keys, drums…) and music2 writes `tracks/<name>.ts`, imports it in `song.ts`, adds a mixer channel and an empty notes lane, as one checked edit you can undo. Also swap a track's instrument later. | Every track is hand-written TypeScript today, and the app's code editor can't even create a new file. This is the biggest wall for a beginner. | Yes | medium |
-| 10 | **Rename, delete, reorder and recolour tracks** from the timeline. | Keeping a song tidy. Today it's code only: rename the `track()` name, delete the file, edit `song.ts`. | Yes | medium |
+| 10 | **Rename, delete, reorder and recolour tracks** from the timeline. | Keeping a song tidy. Today it's code only: rename the `track()` name, delete the file, edit `song.ts`. After a rename in code, **Needs attention** offers to move the track's notes and automation to its new name. | Yes | medium |
 
 ### Sounds
 
@@ -84,7 +85,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 4 | **A mixer panel**: a volume fader, pan, mute and solo for each track, plus master volume. The faders can sit on the existing `mixer({ db, pan })` knobs. Mute and solo need support in std and a way to write them. | Balancing the parts is the heart of mixing. Today levels are knobs on the Song module's graph, and there's no mute or solo at all. | Yes | medium |
+| 4 | **A mixer panel**: a volume fader, pan, mute and solo for each track, plus master volume. The faders can sit on the existing `mixer({ db, pan })` knobs. Mute and solo will be engine monitoring overlays that work on any track and never change the export, and "mute in song" a track option written in code, `track("kick", { muted: true }, fn)` ([Monitoring overlays](architecture.md#monitoring-overlays-and-mute-in-song)). | Balancing the parts is the heart of mixing. Today levels are knobs on the Song module's graph, and there's no mute or solo at all. | Yes | medium |
 | 20 | **Level meters**: a master meter with a clipping warning and the loudness for export, and a meter on each track again. | Without meters you can't see whether the mix is too loud or clipping. The master peak is a small change in `core/play`; meters per track need render taps (`std/meters`). | Partly (a meter on each track) | medium |
 | 27 | **Sends and buses** in the UI: a shared reverb bus, group buses, and sending a track to a bus. | It's standard mixing practice, such as one reverb shared by every track. Each change is a structural code edit in `song.ts`. | Yes | large |
 
@@ -98,8 +99,8 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 5 | **Fast seeking and fast edits** in a full-length song. Save the engine's state every few seconds (render checkpoints), so a seek doesn't replay the song from the start. | Today a seek replays the song from 0, and every notes, cable, effect or code edit rebuilds the player at the playhead the same way. The example renders about 30 times faster than real time, so late in a busy 3-minute song each seek or edit could stall for several seconds. | Yes | large |
-| 7 | **Loop** the whole song, then a loop range dragged on the ruler (⌘L). | Producers loop 4 to 8 bars while building a part. The player (`core/play`) can only swap, play, stop and set a value. A gapless loop needs a second player ready at the loop start, because seeking replays from 0; it gets easier after #5. | Partly (the whole song) | medium |
+| 5 | **Fast seeking and fast edits** in a full-length song. A persistent live engine where a seek is a transport event, never a replay, and a notes edit swaps only that lane's data (step 3 of the [order of work](architecture.md#order-of-work); [RENDER-8](architecture.md#live-engine-and-its-two-clocks), [RENDER-9](architecture.md#seek-and-loop)). | Today a seek replays the song from 0, and every notes, cable, effect or code edit rebuilds the player at the playhead the same way. The example renders about 30 times faster than real time, so late in a busy 3-minute song each seek or edit could stall for several seconds. | Yes | large |
+| 7 | **Loop** the whole song, then a loop range dragged on the ruler (⌘L). | Producers loop 4 to 8 bars while building a part. The player (`core/play`) can only swap, play, stop and set a value. With the persistent engine of #5 a loop wrap is a transport event, so tails ring through the wrap ([RENDER-9](architecture.md#seek-and-loop)). | Partly (the whole song) | medium |
 | 19 | **A metronome**: a click with an on/off button in the top bar. The player makes it from the tempo; it isn't part of the song. A count-in can come with recording. | It helps you keep time and check a beat. | No | small |
 
 ### Timeline and clips
@@ -157,7 +158,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
 | 13 | **Open a project without an audio device**: fall back to the silent player and say so. | Opening a project fails with "no audio output device", so an unplugged audio interface locks you out of your song. | Yes | small |
-| 31 | **A Settings window**: choose the audio output, sample rate and buffer size, show the current device, and set where new projects go. | People with an audio interface or headphones need to pick the output. Today the player always uses the system default. | Partly (it showed the device and the folders, with nothing to choose) | medium |
+| 31 | **A Settings window**: choose the audio output and buffer size, show the current device and its rate, and set where new projects go. The engine runs at each project's `sample_rate`, resampling at the device if the device runs at another rate ([RENDER-31](architecture.md#sample-rate)), so the sample rate is a project setting, not an app one. | People with an audio interface or headphones need to pick the output. Today the player always uses the system default. | Partly (it showed the device and the folders, with nothing to choose) | medium |
 
 ### Help
 
@@ -191,7 +192,7 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 ## Loose ends
 
 - **Undo messages are technical** (#29).
-- **A missing plugin reads technically** when a song folder is opened: ``no CLAP plugin `org.surge-synth-team.surge-xt` is installed (looked in [...])``, then the compiler's lines. Only Open an Example names missing plugins plainly, from the example's `example.toml` (#11).
+- **A missing plugin silences the whole song** and reads technically when a song folder is opened: ``no CLAP plugin `org.surge-synth-team.surge-xt` is installed (looked in [...])``, then the compiler's lines. Only Open an Example names missing plugins plainly, from the example's `example.toml` (#11). Under format v1 it becomes `plugin.missing`: only that plugin's node is silent, and the rest of the song plays ([FMT-18a](architecture.md#plugin-state-and-parameters)).
 - **An error in the browser console with no project open.** `GET /api/graph` answers 400 when nothing is open, which is how the window knows to show the start screen. The browser logs that request as an error even though nothing is wrong. Answering "no project" without an error status would be quieter.
 - **The puppeteer script** that [song-as-program.md](song-as-program.md) mentions for the headless UI test isn't in the repo, and puppeteer isn't in `web/package.json`.
 

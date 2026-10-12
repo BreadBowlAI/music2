@@ -278,3 +278,32 @@ fn the_view_shows_the_calls_written_in_the_project() {
     assert!(edge(song, "Kick.env", "duck") && edge(song, "duck", "mixer") && edge(song, "mixer", "master"));
     std::fs::remove_dir_all(dir).ok();
 }
+
+/// S1: a knob set in tracks/bass.ts, then a call that makes no sound inserted in song.ts from
+/// outside the app. song.ts is loaded first, so every call after it is numbered one higher.
+#[test]
+fn undo_finds_its_knob_after_a_call_is_inserted_in_a_file_loaded_before_it() {
+    let dir = first_song();
+    let (song, bass) = (dir.join("song.ts"), dir.join("tracks/bass.ts"));
+    let original = std::fs::read_to_string(&bass).unwrap();
+    let mut s = Session::open(&dir, std_packages()).unwrap();
+    let hi = s.controls().into_iter().find(|c| c.file == "tracks/bass.ts" && c.literal == "2.5").unwrap();
+    s.set(hi.revision, &hi.id, 900.0, Some(2500.0)).unwrap();
+    let set = s.controls().into_iter().find(|c| c.file == "tracks/bass.ts" && c.literal == "0.9").unwrap();
+
+    let text = std::fs::read_to_string(&song).unwrap();
+    std::fs::write(&song, text.replacen("export default", "Math.max(1, 2);\n\nexport default", 1)).unwrap();
+    assert!(s.refresh() && s.draft_errors.is_empty() && s.accepted().number == 3);
+    let moved = s.controls().into_iter().find(|c| c.file == "tracks/bass.ts" && c.literal == "0.9").unwrap();
+    assert_ne!(moved.origin, set.origin, "the knob's call is numbered one higher");
+
+    assert!(s.can_undo());
+    let undone = s.undo().unwrap();
+    assert_eq!((undone.file.as_str(), undone.before.as_str(), undone.after.as_str()), ("tracks/bass.ts", "0.9", "2.5"));
+    assert_eq!(std::fs::read_to_string(&bass).unwrap(), original);
+    assert!(std::fs::read_to_string(&song).unwrap().contains("Math.max(1, 2);"), "the outside edit stays");
+    assert!(s.can_redo());
+    s.redo().unwrap();
+    assert_eq!(std::fs::read_to_string(&bass).unwrap(), original.replacen("khz(2.5)", "khz(0.9)", 1));
+    std::fs::remove_dir_all(dir).ok();
+}
