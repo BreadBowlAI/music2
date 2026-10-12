@@ -1,0 +1,4 @@
+# How the New Song dialog lists this template. Not copied into the song.
+name = "Empty"
+description = "A blank song with no tracks yet: build it up in code"
+order = 2

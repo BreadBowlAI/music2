@@ -30,10 +30,17 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../../web/dist/": "web/"
+      "../../web/dist/": "web/",
+      "../../std/m2pkg.toml": "std/m2pkg.toml",
+      "../../std/kernels/*.wasm": "std/kernels/",
+      "../../std/src/": "std/src/",
+      "../../templates/": "templates/",
+      "../../examples/": "examples/"
     },
     "macOS": {
-      "minimumSystemVersion": "11.0"
+      "minimumSystemVersion": "11.0",
+      "signingIdentity": "-",
+      "hardenedRuntime": false
     }
   }
 }

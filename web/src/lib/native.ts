@@ -18,9 +18,13 @@ export const isMac = native ? window.__M2__!.platform === "macos" : /Mac/.test(n
 /** A shortcut as this platform writes it: ⌘D on a Mac, Ctrl+D elsewhere. */
 export const kbd = (key: string, shift = false) => (isMac ? `${shift ? "⇧" : ""}⌘${key}` : `Ctrl+${shift ? "Shift+" : ""}${key}`);
 
-/** Ask the shell to do something with dialogs / the file system (see actions.rs). */
-export function nativeAction(id: string) {
-  return invoke("action", { id });
+/**
+ * Ask the shell to do something with dialogs / the file system (see actions.rs). An action
+ * that asks the user something resolves with the answer (`export_path`: the file picked, or
+ * null if they cancelled); the others resolve with null at once.
+ */
+export function nativeAction(id: string, arg?: string) {
+  return invoke<string | null>("action", { id, arg: arg ?? null });
 }
 
 export function onMenu(handler: (id: string) => void) {

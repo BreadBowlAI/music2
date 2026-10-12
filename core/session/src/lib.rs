@@ -9,6 +9,7 @@
 
 pub mod edit;
 pub mod lanes;
+pub mod render;
 pub mod timeline;
 pub mod view;
 

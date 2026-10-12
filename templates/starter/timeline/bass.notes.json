@@ -1,0 +1,256 @@
+{
+ "clips": [
+  {
+   "start": 0,
+   "length": 16,
+   "notes": [
+    {
+     "pitch": "A2",
+     "start": 0,
+     "length": 0.75,
+     "velocity": 0.9
+    },
+    {
+     "pitch": "A2",
+     "start": 1.5,
+     "length": 0.5,
+     "velocity": 0.75
+    },
+    {
+     "pitch": "A2",
+     "start": 2,
+     "length": 0.5,
+     "velocity": 0.85
+    },
+    {
+     "pitch": "A3",
+     "start": 2.75,
+     "length": 0.25,
+     "velocity": 0.7
+    },
+    {
+     "pitch": "A2",
+     "start": 3.5,
+     "length": 0.5,
+     "velocity": 0.75
+    },
+    {
+     "pitch": "F2",
+     "start": 4,
+     "length": 0.75,
+     "velocity": 0.9
+    },
+    {
+     "pitch": "F2",
+     "start": 5.5,
+     "length": 0.5,
+     "velocity": 0.75
+    },
+    {
+     "pitch": "F2",
+     "start": 6,
+     "length": 0.5,
+     "velocity": 0.85
+    },
+    {
+     "pitch": "F3",
+     "start": 6.75,
+     "length": 0.25,
+     "velocity": 0.7
+    },
+    {
+     "pitch": "F2",
+     "start": 7.5,
+     "length": 0.5,
+     "velocity": 0.75
+    },
+    {
+     "pitch": "C3",
+     "start": 8,
+     "length": 0.75,
+     "velocity": 0.9
+    },
+    {
+     "pitch": "C3",
+     "start": 9.5,
+     "length": 0.5,
+     "velocity": 0.75
+    },
+    {
+     "pitch": "C3",
+     "start": 10,
+     "length": 0.5,
+     "velocity": 0.85
+    },
+    {
+     "pitch": "C4",
+     "start": 10.75,
+     "length": 0.25,
+     "velocity": 0.7
+    },
+    {
+     "pitch": "C3",
+     "start": 11.5,
+     "length": 0.5,
+     "velocity": 0.75
+    },
+    {
+     "pitch": "G2",
+     "start": 12,
+     "length": 0.75,
+     "velocity": 0.9
+    },
+    {
+     "pitch": "G2",
+     "start": 13.5,
+     "length": 0.5,
+     "velocity": 0.75
+    },
+    {
+     "pitch": "G2",
+     "start": 14,
+     "length": 0.5,
+     "velocity": 0.85
+    },
+    {
+     "pitch": "G3",
+     "start": 14.75,
+     "length": 0.25,
+     "velocity": 0.7
+    },
+    {
+     "pitch": "G2",
+     "start": 15.5,
+     "length": 0.5,
+     "velocity": 0.75
+    }
+   ]
+  },
+  {
+   "start": 16,
+   "length": 16,
+   "notes": [
+    {
+     "pitch": "A2",
+     "start": 0,
+     "length": 0.75,
+     "velocity": 0.9
+    },
+    {
+     "pitch": "A2",
+     "start": 1.5,
+     "length": 0.5,
+     "velocity": 0.75
+    },
+    {
+     "pitch": "A2",
+     "start": 2,
+     "length": 0.5,
+     "velocity": 0.85
+    },
+    {
+     "pitch": "A3",
+     "start": 2.75,
+     "length": 0.25,
+     "velocity": 0.7
+    },
+    {
+     "pitch": "A2",
+     "start": 3.5,
+     "length": 0.5,
+     "velocity": 0.75
+    },
+    {
+     "pitch": "F2",
+     "start": 4,
+     "length": 0.75,
+     "velocity": 0.9
+    },
+    {
+     "pitch": "F2",
+     "start": 5.5,
+     "length": 0.5,
+     "velocity": 0.75
+    },
+    {
+     "pitch": "F2",
+     "start": 6,
+     "length": 0.5,
+     "velocity": 0.85
+    },
+    {
+     "pitch": "F3",
+     "start": 6.75,
+     "length": 0.25,
+     "velocity": 0.7
+    },
+    {
+     "pitch": "F2",
+     "start": 7.5,
+     "length": 0.5,
+     "velocity": 0.75
+    },
+    {
+     "pitch": "C3",
+     "start": 8,
+     "length": 0.75,
+     "velocity": 0.9
+    },
+    {
+     "pitch": "C3",
+     "start": 9.5,
+     "length": 0.5,
+     "velocity": 0.75
+    },
+    {
+     "pitch": "C3",
+     "start": 10,
+     "length": 0.5,
+     "velocity": 0.85
+    },
+    {
+     "pitch": "C4",
+     "start": 10.75,
+     "length": 0.25,
+     "velocity": 0.7
+    },
+    {
+     "pitch": "C3",
+     "start": 11.5,
+     "length": 0.5,
+     "velocity": 0.75
+    },
+    {
+     "pitch": "G2",
+     "start": 12,
+     "length": 0.75,
+     "velocity": 0.9
+    },
+    {
+     "pitch": "G2",
+     "start": 13.5,
+     "length": 0.5,
+     "velocity": 0.75
+    },
+    {
+     "pitch": "G2",
+     "start": 14,
+     "length": 0.5,
+     "velocity": 0.85
+    },
+    {
+     "pitch": "G3",
+     "start": 14.75,
+     "length": 0.25,
+     "velocity": 0.7
+    },
+    {
+     "pitch": "G2",
+     "start": 15.5,
+     "length": 0.5,
+     "velocity": 0.75
+    }
+   ]
+  }
+ ]
+}

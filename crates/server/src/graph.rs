@@ -16,6 +16,7 @@ use anyhow::{Context, Result, anyhow};
 use m2_ir::Origin;
 use m2_play::Player;
 use m2_runtime::{PackageSet, Renderer};
+use m2_session::render::{self, Length, Render};
 use m2_session::{EditError, Edited, NoteClip, Session};
 use m2_song::TempoMap;
 use parking_lot::Mutex;
@@ -70,14 +71,9 @@ pub struct Graph {
     unsaved: Mutex<(u64, Vec<String>)>,
 }
 
-/// The std package: `$M2_STD`, or the one in this source tree.
-fn std_dir() -> PathBuf {
-    std::env::var_os("M2_STD").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../std")))
-}
-
 fn packages() -> Result<PackageSet> {
     let mut p = PackageSet::default();
-    p.load(&std_dir()).context("loading the std package")?;
+    p.load(&crate::resources::std_dir()).context("loading the std package")?;
     Ok(p)
 }
 
@@ -167,6 +163,12 @@ impl Open {
 }
 
 impl Graph {
+    /// One whose player plays into nothing, for tests.
+    #[cfg(test)]
+    pub(crate) fn silent() -> Graph {
+        Graph { player: Mutex::new(Some(Player::silent().expect("a silent player"))), ..Graph::default() }
+    }
+
     fn player(&self) -> Result<Player> {
         let mut p = self.player.lock();
         if p.is_none() {
@@ -188,9 +190,10 @@ impl Graph {
         let mut o = Open { token, session, playing: 0, previews: vec![], tempo: self.tempo.clone() };
         player.stop();
         o.play(&player, new_renderer);
+        // Read while still holding the project: another open meanwhile can't answer for this one.
+        let state = self.snapshot(&o);
         *open = Some(o);
-        drop(open);
-        self.state().context("no project")
+        Ok(state)
     }
 
     pub fn close(&self) {
@@ -205,10 +208,13 @@ impl Graph {
     /// The view, the timeline, the project's name and folder, and the transport.
     pub fn state(&self) -> Option<Value> {
         let open = self.open.lock();
-        let o = open.as_ref()?;
+        Some(self.snapshot(open.as_ref()?))
+    }
+
+    fn snapshot(&self, o: &Open) -> Value {
         let rev = o.session.accepted();
         let status = self.status();
-        Some(json!({
+        json!({
             "session": o.token,
             "name": rev.project.manifest.project.name,
             "dir": rev.project.dir,
@@ -221,7 +227,7 @@ impl Graph {
             "playing": status.playing,
             "seconds": status.seconds,
             "beat": status.beat,
-        }))
+        })
     }
 
     /// The open project's name, from its manifest (None with no project open).
@@ -232,6 +238,17 @@ impl Graph {
     /// The open project's folder.
     pub fn dir(&self) -> Option<PathBuf> {
         Some(self.open.lock().as_ref()?.session.accepted().project.dir.clone())
+    }
+
+    /// An offline render of the accepted revision, which is what plays, with the song's name
+    /// and folder (Export Audio). Only building it holds the project: the caller renders it on
+    /// a thread of its own.
+    pub fn render(&self, length: Length) -> Result<(String, PathBuf, Render)> {
+        let open = self.open.lock();
+        let o = open.as_ref().context("no project is open")?;
+        let rev = o.session.accepted();
+        let r = Render::new(&rev.compiled.flat, &rev.project, &o.session.packages, render::SAMPLE_RATE, 0.0, length)?;
+        Ok((rev.project.manifest.project.name.clone(), rev.project.dir.clone(), r))
     }
 
     /// Where playback is. It doesn't wait for the project, which seeks and edits hold

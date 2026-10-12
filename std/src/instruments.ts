@@ -17,7 +17,8 @@ export const bass = component({ controls: ["1.cutoff", "1.drive"] }, function ba
       const body = add(osc.saw(n.pitch), scale(osc.square(add(n.pitch, -12)), 0.5));
       const env = adsr(n.gate, { attack: ms(3), decay: secs(0.3), sustain: 0.6, release: ms(80) });
       const fenv = adsr(n.gate, { attack: ms(2), decay: secs(0.18), sustain: 0.2, release: ms(80) });
-      const f = svf.lowpass(body, xrange(fenv, cutoff, scale(cutoff, 4)), 1.1);
+      // The cutoff, opened up to 4× on each note. Used once, so its knob isn't "shared".
+      const f = svf.lowpass(body, scale(cutoff, xrange(fenv, 1, 4)), 1.1);
       return vca(f, scale(env, n.velocity));
     },
     { voices: o.voices ?? 4 },

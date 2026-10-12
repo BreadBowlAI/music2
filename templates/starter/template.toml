@@ -1,0 +1,4 @@
+# How the New Song dialog lists this template. Not copied into the song.
+name = "Starter beat"
+description = "Drums, bass, chords and a catchy hook, ready to play and change"
+order = 1

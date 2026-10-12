@@ -4,7 +4,7 @@ music2 is a music studio for the Mac: a DAW (digital audio workstation), the kin
 
 The app shows that folder as a timeline, a graph of knobs and cables, a piano roll (a grid for drawing notes) and a code editor. Every change you make there is written into the files right away.
 
-There's no AI inside the app. Scripts and AI agents (such as a Claude Code session) use the same files, and a local API (a way for programs on your Mac to talk to the app). music2 is part of **suite2**, alongside film2 and dj2. Status: early. A lot is missing: there's no New Project, no export in the app, and tracks are added in code. See [What music2 can't do yet](docs/gaps.md).
+There's no AI inside the app. Scripts and AI agents (such as a Claude Code session) use the same files, and a local API (a way for programs on your Mac to talk to the app). music2 is part of **suite2**, alongside film2 and dj2. Status: early. A lot is missing: tracks are added in code, there are only a few instruments, and there's no mixer panel yet. See [What music2 can't do yet](docs/gaps.md).
 
 ## Run the app
 
@@ -12,12 +12,17 @@ You need a Mac, [Rust](https://rustup.rs) and [Node.js](https://nodejs.org).
 
 ```bash
 (cd web && npm install && npm run build)                        # the window's UI: once, and after UI changes
-cargo run --release -p music2-desktop -- examples/first-song    # the app, opened on an example song
+cargo run --release -p music2-desktop                           # the app, on its start screen
+cargo run --release -p music2-desktop -- ~/Music/music2/Demo    # or opened on a song folder
 ```
 
-Everything you change is written into the folder you opened. To keep an example as it is, open a copy of it (see [Your first song](#your-first-song)).
+The start screen has three ways in:
 
-Without a folder, the app opens on a start screen. Click **Open Project Folder…** there, or use File → Open Project Folder… (⌘O) at any time. A song folder is any folder with a `song.ts` file in it.
+- **New Song…** makes a new song from a template and opens it (see [Your first song](#your-first-song)).
+- **Open Project Folder…** opens a song you already have. A song folder is any folder with a `song.ts` file in it. File → Open Project Folder… (⌘O) does the same at any time.
+- **Open an Example** opens a copy of one of the examples in your songs folder, so the example itself stays as it is.
+
+Everything you change is written into the song's folder right away.
 
 To work on the UI with hot reload:
 
@@ -29,21 +34,18 @@ MUSIC2_DEV_URL=http://localhost:5173 cargo run -p music2-desktop      # the app,
 To build `music2.app`:
 
 ```bash
-(cd apps/music2-desktop && ../../web/node_modules/.bin/tauri build)   # → target/release/bundle/macos/music2.app
+(cd apps/music2-desktop && ../../web/node_modules/.bin/tauri build --bundles app)   # → target/release/bundle/macos/music2.app
 ```
 
-The built app looks for its standard sounds (`std/`) in the source folder it was built from. So it works only on the machine that built it, or when started with `M2_STD` set to a copy of `std/`. Fixing this is [gap #3](docs/gaps.md#packaging-and-packages).
+The app carries everything it needs in `music2.app/Contents/Resources`: the UI (`web/`), the standard sounds (`std/`: `m2pkg.toml`, `kernels/std.wasm` and `src/`), the song templates (`templates/`) and the examples (`examples/`). So it runs from anywhere, without this source folder. `M2_STD`, `M2_TEMPLATES` and `M2_EXAMPLES` point it at other copies; when it runs outside a bundle (`cargo run`), it uses the ones in this source folder.
+
+The build signs the app ad hoc (with no developer certificate) and isn't notarized by Apple. On the Mac that built it, it just opens. A copy downloaded, AirDropped or sent in Messages to another Mac is held back the first time: macOS says it can't check the app. Open **System Settings → Privacy & Security** there and click **Open Anyway** (once). It runs on Apple silicon Macs only. The hardened runtime is off (`tauri.conf.json`): under it, macOS kills the app as soon as it compiles std's kernels. Notarizing will need it on, with entitlements that allow that (and loading other developers' plugins).
 
 ## Your first song
 
-There's no New Project yet, so start from a copy of an example:
+On the start screen, click **New Song…** (or use File → New Song…, ⌘N, at any time). Give the song a name, keep **Starter beat** selected, and press **Create** (or Enter). The song is made in `~/Music/music2/<its name>` and opens.
 
-```bash
-cp -R examples/first-song ~/Music/my-song
-cargo run --release -p music2-desktop -- ~/Music/my-song
-```
-
-Press **Space** to play. It's a short dance tune, about 15 seconds long: kick drum, hi-hats, bass and keys.
+Press **Space** to play. It's an 8-bar pop beat at 116 BPM: kick, clap, hi-hats, bass, chords and a hook that comes in halfway.
 
 Things to try:
 
@@ -52,12 +54,13 @@ Things to try:
 3. **Draw notes.** Double-click the new clip. It opens below in the Notes view (a piano roll). Click the grid to add a note, drag a note to move it, and drag its right edge to make it longer.
 4. **Add an effect.** Go back to the Graph view, click **+** on a box that makes sound, and pick an effect such as reverb.
 5. **Undo.** Press ⌘Z to take these back, one at a time.
+6. **Export it.** Click **Export** in the top bar (or File → Export Audio…, ⌘E). The song is written to a WAV file you can play anywhere or share; click **Show in Finder** when it's done.
 
 ## The window
 
 ### The top bar
 
-From left to right: play/stop, back to the start, where the song is (bar.beat, then minutes and seconds), the song's name and revision (every accepted change is a new revision), undo, redo, and close (✕), which goes back to the start screen.
+From left to right: play/stop, back to the start, where the song is (bar.beat, then minutes and seconds), the song's name and revision (every accepted change is a new revision), **Export** (it shows how far along an export is), undo, redo, and close (✕), which goes back to the start screen.
 
 ### The timeline
 
@@ -84,6 +87,21 @@ There's a tab for each module (one file's sound): one for each track file, and o
   - Set the clip's length in bars at the top.
   - ⌘A selects all notes, ⌘D duplicates the selection, the arrow keys move it (with ⇧, by an octave or a bar), and Delete removes it.
 
+## New songs, the songs folder and export
+
+- **New Song…** (the start screen, or File → New Song…, ⌘N, even while a song is open) asks for a name and how the song starts:
+  - **Starter beat**: six tracks (kick, clap, hats, bass, chords and a hook), 8 bars at 116 BPM, ready to play and change.
+  - **Empty**: no tracks yet, so it plays silence. `song.ts` has a drum track ready, switched off: delete the `//` in front of its two lines and save, and a Drums lane appears.
+- New songs go in the **songs folder**, `~/Music/music2`, each in a folder named after the song. If the name is taken, the new one gets a number ("My song 2"): nothing is ever replaced. `Exports` there is taken by exports, so a song called "Exports" becomes "Exports 2". In the app, **Choose Folder…** in the New Song dialog saves it somewhere else.
+- **Open an Example** on the start screen copies an example into the songs folder and opens the copy. An example that needs plugins you don't have (With plugins) says which, and nothing is copied.
+- **Export** (the button in the top bar, or File → Export Audio…, ⌘E) writes the song to a WAV file: 48 kHz, 24-bit, stereo. It starts at bar 1 and goes to the end of the last clip, then on until the sound has died away (silent for half a second, at most 10 seconds more). A song longer than 3 hours (most likely a clip far past the rest) isn't exported: the message says in which bar the last clip ends.
+  - The app asks where to save it, starting at `~/Music/music2/Exports/<song>.wav`. Opened in a browser, it saves there straight away, adding " 2", " 3"… rather than replacing a file, even one that appeared while it was exporting.
+  - The button shows how far along it is, and you can keep playing and editing meanwhile. It exports the song as it was when you clicked. If you close the song or open another, the export carries on, and a message in the corner shows how far along it is.
+  - Quitting while a song is being exported asks first: quitting stops the export, and no file is saved.
+  - The file is written under a hidden name and renamed when it's complete. A hidden file left by an export that was cut off (the app was killed) is removed by the next export into that folder.
+  - When it's done, a message gives the file's name and length, with **Show in Finder** (in a browser, it says which folder).
+  - `m2 render` writes the same file.
+
 ## Saving and undo
 
 - There's no Save for the song: every change is written to the files at once. ⌘S only saves the code editor's text.
@@ -97,8 +115,10 @@ There's a tab for each module (one file's sound): one for each track file, and o
 | Space | Play or stop |
 | Enter or Home | Back to the start |
 | ⌘Z / ⇧⌘Z | Undo / redo |
-| ⌘S | Save the code editor's files |
+| ⌘N | New song |
 | ⌘O | Open a song folder |
+| ⌘S | Save the code editor's files |
+| ⌘E | Export the song as a WAV file |
 | ⌘D | Duplicate the selected notes |
 | ⌘A | Select all notes in the open clip |
 | Arrow keys | Move the selected notes (⇧: by an octave or a bar) |
@@ -124,6 +144,8 @@ New to music itself? [Music basics](docs/music-basics.md) explains notes, beats,
 - **std:** the standard package of instruments, effects and building blocks that comes with music2.
 - **Kernel:** a small compiled sound-processing program (WebAssembly), such as an oscillator or a filter. Instruments and effects are built from kernels.
 - **Render:** making the audio for the song, either to hear it or to write a WAV file.
+- **Export:** rendering the whole song to a WAV file you can play anywhere or share.
+- **Template:** what a new song starts from, such as the Starter beat.
 - **Bounce:** rendering one track to an audio file in the song's `assets/`, often to chop it up again.
 
 ## How a song is written
@@ -308,12 +330,13 @@ const synth = plugin("clap:org.surge-synth-team.surge-xt", { notes: lane.notes("
 
 ## The command line (`m2`)
 
-`m2` works on song folders without the app. Build it once with `cargo build --release -p m2`. The program is `target/release/m2`; the examples below call it `m2`. It finds std at `$M2_STD`, or in this source tree.
+`m2` works on song folders without the app. Build it once with `cargo build --release -p m2`. The program is `target/release/m2`; the examples below call it `m2`. It finds std, the templates and the examples the way the app does: at `$M2_STD`, `$M2_TEMPLATES` and `$M2_EXAMPLES`, else in this source tree.
 
 | Command | What it does |
 |---|---|
+| `m2 new <folder>` | Makes a new song in exactly that folder (it refuses one that exists) from a template: `--template starter` (the default) or `--template empty`. `--example first-song` copies an example instead. |
 | `m2 check <song> [--json]` | Runs the code and checks the graph and the timeline. `--json` prints the compiled graph. `m2 build` is the same. |
-| `m2 render <song> <out.wav>` | Renders the song to a WAV. `--sr 48000` sets the sample rate, `--from S` starts S seconds in, `--seconds N` sets the length. |
+| `m2 render <song> <out.wav>` | Renders the song to a 24-bit WAV, the same file the app's Export Audio writes: to the end of the last clip, then on until the sound has been silent for half a second (10 s past the end at most). `--sr 48000` sets the sample rate, `--from S` starts S seconds in, `--seconds N` renders exactly N seconds. 3 hours at most. |
 | `m2 kernels [--json]` | Every kernel and its typed ports. |
 | `m2 bounce <song> <name>` | Renders a track (`--track Keys`) or the whole song to `assets/<name>.wav`. `--place Track.lane@beat` also puts it on an audio lane, and `--force` replaces a file that's there. |
 | `m2 graph <song> [--json]` | The graph the app shows, as text. |
@@ -331,14 +354,14 @@ const synth = plugin("clap:org.surge-synth-team.surge-xt", { notes: lane.notes("
 Commands that change a song write into its folder, so try them on a copy, not on the examples:
 
 ```bash
-cp -R examples/first-song /tmp/m2-scratch
+m2 new /tmp/m2-scratch --example first-song                    # a copy of the example
 m2 check /tmp/m2-scratch
 m2 render /tmp/m2-scratch out.wav
 m2 controls /tmp/m2-scratch                                     # ids look like song.ts#2/0.hats.pan
 m2 set /tmp/m2-scratch 'song.ts#2/0.hats.pan' 0.45
 m2 add-effect /tmp/m2-scratch 'tracks/hats.ts#1' std/fx.delay
 
-cp -R examples/resample /tmp/m2-resample
+m2 new /tmp/m2-resample --example resample
 m2 bounce /tmp/m2-resample keys-bounce --track Keys --force     # render the Keys track to assets/keys-bounce.wav
 ```
 
@@ -378,8 +401,11 @@ Edits name the open project's `session` and the `revision` they were planned aga
 | `PUT /api/graph/file` `{session?, path, base, text}` | Save one file, only if it still says `base` |
 | `GET /api/graph/types` | The SDK and package sources, for type checks |
 | `POST /api/graph/unsaved` `{session, files}` | Tell the app which files have unsaved edits in an editor |
+| `POST /api/graph/export` `{path?}` | Export Audio: render the song to a WAV file on a thread of its own, to `path` or to a new file in `~/Music/music2/Exports`. Answers `{path}` at once; one export at a time |
+| `GET /api/project/templates` | What a new song can start from: `{templates, examples}` (each `{id, name, description}`), the songs folder (`songs`) and `home` |
+| `POST /api/project/new` `{name, template?, example?, dir?}` | Make a song from a template (`starter` if neither is given) or a copy of an example, in a new folder named after it in `dir` (a full path; default `~/Music/music2`), and open it. A taken name gets " 2", " 3"…, and so does `Exports` in the songs folder. An example whose `example.toml` lists `[plugins]` that aren't installed is refused, naming them. Answers like `GET /api/graph`, for the song it made |
 
-`/api/ws` is a WebSocket with two events: `{"t":"toast","text":…}` for messages, and `{"t":"graph"}` when the song changed and should be fetched again. Toasts sent while nothing was connected, such as why the folder given at launch didn't open, go to the next client that connects.
+`/api/ws` is a WebSocket with three events: `{"t":"toast","text":…}` for messages, `{"t":"graph"}` when the song changed and should be fetched again, and `{"t":"export",…}` while a song is exported, each with the `song`'s name and its folder (`dir`): `progress` (0 to 1, at most ten a second), then `done` with `path`, `seconds` and `peak_db`, or `error`. Toasts sent while nothing was connected, such as why the folder given at launch didn't open, go to the next client that connects.
 
 Or just edit the files: the app picks up the change within about 300 ms.
 
@@ -399,15 +425,16 @@ Or just edit the files: the app picks up the change within about 300 ms.
 | `core/song` | The song folder: manifest, timeline files, tempo |
 | `core/runtime` | Loads packages, runs kernels (wasmtime), `poly`, `feedback`, audio clips; the renderer |
 | `core/script` | Runs the TypeScript (oxc + QuickJS) and the `@m2/core` SDK |
-| `core/session` | Compiling, revisions, knobs, cables, effects, notes edits, undo |
+| `core/session` | Compiling, revisions, knobs, cables, effects, notes edits, undo, and the offline render that Export Audio and `m2 render` share |
 | `core/plugins` | CLAP plugin hosting |
 | `core/play` | Plays a renderer on the audio device |
 | `std/`, `std/kernels-src` | The standard package, and its kernels' Rust source |
 | `apps/m2` | The command line |
 | `apps/music2-desktop` | The Mac app (Tauri): window, menus, dialogs |
-| `crates/server` | The app's local server: `graph.rs` (the open song), `files.rs` (the code editor's files), `routes.rs` (the API) |
-| `web/` | The UI: `StartScreen`, `GraphCanvas` (top bar and panel), `SongTimeline`, `NodeGraph`, `NoteView`, `CodeView`, `EffectBrowser` |
-| `examples/` | `first-song`, `with-plugins` and `resample` |
+| `crates/server` | The app's local server: `graph.rs` (the open song), `files.rs` (the code editor's files), `project.rs` (new songs and the songs folder), `export.rs` (Export Audio), `resources.rs` (finding std, the templates and the examples), `routes.rs` (the API) |
+| `web/` | The UI: `StartScreen`, `NewSongDialog`, `GraphCanvas` (top bar and panel), `SongTimeline`, `NodeGraph`, `NoteView`, `CodeView`, `EffectBrowser` |
+| `templates/` | What new songs start from: `starter` and `empty`, each a whole song plus a `template.toml` (its name and description) |
+| `examples/` | `first-song`, `with-plugins` and `resample`, each with an `example.toml` for the start screen (and the plugins it needs) |
 | `docs/` | Design docs and the gap list |
 
 ## Design docs

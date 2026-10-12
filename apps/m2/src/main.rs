@@ -7,14 +7,20 @@ use std::time::Instant;
 use anyhow::{Context, Result, anyhow, bail};
 use m2_ir::{Diagnostic, FOp, Flat, Ir};
 use m2_runtime::{PackageSet, Renderer};
+use m2_session::render;
 use m2_song::Project;
 
 const USAGE: &str = "m2: build, check and render music2 projects
 
 USAGE:
+  m2 new <folder> [--template ID | --example ID]
+                                         make a new song in <folder> from a template (starter, empty;
+                                         starter if none is given) or a copy of an example
   m2 check <project> [--json]            run the TypeScript, check the graph and timeline, print a summary (or the IR)
   m2 render <project> <out.wav> [--sr 48000] [--from S] [--seconds N]
-                                         render to WAV; --from starts S seconds in
+                                         render to a 24-bit WAV, as the app's Export Audio does: to the
+                                         last clip's end and on until it falls silent (10 s more at most);
+                                         --from starts S seconds in, --seconds renders exactly N seconds
   m2 kernels [--json]                    list every kernel and its typed ports
   m2 bounce <project> <asset-name> [--track NAME] [--export out] [--from S] [--seconds N]
             [--place Track.lane@beat] [--force]
@@ -36,7 +42,8 @@ USAGE:
   m2 plugin-state <project> <name> clap:<id> [--force]
                                          save a plugin's default state to assets/plugin-state/<name>.bin
 
-The std package is found at $M2_STD, or next to this source tree.
+std, the templates and the examples are found at $M2_STD, $M2_TEMPLATES and $M2_EXAMPLES, inside
+music2.app when m2 runs from there, or else in this source tree.
 ";
 
 fn main() -> ExitCode {
@@ -53,13 +60,10 @@ fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
 }
 
-fn std_dir() -> PathBuf {
-    std::env::var_os("M2_STD").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std"))
-}
-
 fn packages() -> Result<PackageSet> {
     let mut p = PackageSet::default();
-    p.load(&std_dir()).context("loading the std package")?;
+    // Found the way the app finds it, so both load the same std.
+    p.load(&m2_server::resources::std_dir()).context("loading the std package")?;
     Ok(p)
 }
 
@@ -84,6 +88,25 @@ fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let arg = |i: usize| args.get(i).cloned().ok_or_else(|| anyhow!("missing argument\n\n{USAGE}"));
     match args.first().map(String::as_str) {
+        Some("new") => {
+            use m2_server::project::{self, Source};
+            let dir = arg(1)?;
+            if dir.starts_with('-') {
+                bail!("name the new song's folder first: m2 new <folder> [--template ID | --example ID]");
+            }
+            let (source, what, ids) = match flag(&args, "--example") {
+                Some(id) => (Source::Example(id), "example", project::examples()),
+                None => {
+                    let id = flag(&args, "--template").unwrap_or_else(|| project::DEFAULT_TEMPLATE.into());
+                    (Source::Template(id), "template", project::templates())
+                }
+            };
+            let from =
+                source.dir().map_err(|e| anyhow!("{e} (try {})", ids.iter().map(|s| s.id.as_str()).collect::<Vec<_>>().join(", ")))?;
+            let made = project::create_at(Path::new(&dir), &from)?;
+            let id = from.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+            println!("made {} from the {id} {what}", made.display());
+        }
         Some("check" | "build") => {
             let mut pk = packages()?;
             let (project, ir, flat) = compile(Path::new(&arg(1)?), &mut pk)?;
@@ -97,28 +120,25 @@ fn run() -> Result<()> {
             let mut pk = packages()?;
             let (project, _, flat) = compile(Path::new(&arg(1)?), &mut pk)?;
             let out = PathBuf::from(arg(2)?);
-            let sr: u32 = flag(&args, "--sr").map(|v| v.parse()).transpose().context("--sr")?.unwrap_or(48_000);
-            let tempo = project.timeline.tempo()?;
+            let sr: u32 = flag(&args, "--sr").map(|v| v.parse()).transpose().context("--sr")?.unwrap_or(render::SAMPLE_RATE);
             let from: f64 = flag(&args, "--from").map(|v| v.parse()).transpose().context("--from")?.unwrap_or(0.0);
-            let seconds = match flag(&args, "--seconds") {
-                Some(s) => s.parse().context("--seconds")?,
-                None => tempo.seconds_at(project.timeline.end()) + 2.0 - from,
+            let length = match flag(&args, "--seconds") {
+                Some(s) => render::Length::Seconds(s.parse().context("--seconds")?),
+                None => render::Length::Song,
             };
-            if seconds <= 0.0 || from < 0.0 {
-                bail!("nothing to render (check --from and --seconds; the timeline may be empty)");
-            }
             let t = Instant::now();
-            let mut r = Renderer::for_project(&flat, &project, &pk, sr)?;
-            r.seek((from * sr as f64).round() as u64)?;
-            let frames = r.render(seconds)?;
-            write_wav(&out, &frames, sr)?;
-            let peak = frames.iter().fold(0.0f32, |m, f| m.max(f[0].abs()).max(f[1].abs()));
+            // The same render as the app's Export Audio, so both write the same file.
+            let r = render::Render::new(&flat, &project, &pk, sr, from, length)?.write(&out, |_| {})?;
             let took = t.elapsed().as_secs_f64();
+            if r.non_finite > 0 {
+                eprintln!("warning: {} samples were not numbers (NaN or infinite) and were silenced, as the app plays them", r.non_finite);
+            }
             println!(
-                "rendered {seconds:.1}s to {} in {took:.2}s ({:.0}× real time), peak {:.1} dBFS",
+                "rendered {:.1}s to {} in {took:.2}s ({:.0}× real time), peak {:.1} dBFS",
+                r.seconds(),
                 out.display(),
-                seconds / took,
-                20.0 * peak.max(1e-9).log10()
+                r.seconds() / took,
+                r.peak_db
             );
         }
         Some("kernels") => {
@@ -362,16 +382,4 @@ fn summary(project: &Project, ir: &Ir, flat: &Flat) {
         }
     }
     println!("  output {}; {} nodes to run, {kernels} kernel instances, {voices} voices", flat.out_kind, flat.order.len());
-}
-
-fn write_wav(path: &Path, frames: &[[f32; 2]], sr: u32) -> Result<()> {
-    let spec = hound::WavSpec { channels: 2, sample_rate: sr, bits_per_sample: 24, sample_format: hound::SampleFormat::Int };
-    let mut w = hound::WavWriter::create(path, spec).with_context(|| format!("creating {}", path.display()))?;
-    for f in frames {
-        for s in f {
-            w.write_sample((s.clamp(-1.0, 1.0) * 8_388_607.0) as i32)?;
-        }
-    }
-    w.finalize()?;
-    Ok(())
 }

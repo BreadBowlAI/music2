@@ -64,6 +64,9 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .route("/api/graph/file", put(graph_put_file))
         .route("/api/graph/types", get(graph_types))
         .route("/api/graph/unsaved", post(graph_unsaved))
+        .route("/api/graph/export", post(graph_export))
+        .route("/api/project/templates", get(project_templates))
+        .route("/api/project/new", post(project_new))
         // An unknown API path is a clear error, not the UI's index.html.
         .route("/api/{*rest}", any(no_such_api))
         .fallback_service(spa)
@@ -119,6 +122,21 @@ async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket) {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------- new songs
+
+/// The templates and examples a new song can start from, and the songs folder.
+async fn project_templates() -> ApiResult {
+    Ok(Json(blocking(|| Ok(crate::project::catalog())).await?))
+}
+
+/// Make a new song from a template or an example, and open it.
+async fn project_new(State(s): S, Json(r): Json<crate::project::NewSong>) -> ApiResult {
+    let state = s.clone();
+    let v = blocking(move || crate::project::new_song(&state.graph, &r)).await?;
+    s.graph_changed();
+    Ok(Json(v))
 }
 
 // ---------------------------------------------------------------- the open project
@@ -309,6 +327,20 @@ async fn graph_seek(State(s): S, Json(r): Json<SeekReq>) -> ApiResult {
     let state = s.clone();
     blocking(move || state.graph.seek(r.beat)).await?;
     Ok(Json(json!({})))
+}
+
+#[derive(Deserialize)]
+struct ExportReq {
+    /// The file the user picked; else a new one in the songs folder's Exports.
+    #[serde(default)]
+    path: Option<PathBuf>,
+}
+
+/// Start Export Audio. It answers at once with where the file goes; `export` events follow.
+async fn graph_export(State(s): S, Json(r): Json<ExportReq>) -> ApiResult {
+    let state = s.clone();
+    let path = blocking(move || crate::export::start(&state, r.path)).await?;
+    Ok(Json(json!({"path": path})))
 }
 
 // ---------------------------------------------------------------- the code editor

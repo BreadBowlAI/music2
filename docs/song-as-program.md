@@ -268,7 +268,7 @@ Producers rely on plugins that will never be rewritten as WebAssembly, so hostin
 
 ### 6. Package resolution
 
-**Not built yet.** Today only `std` is loaded, from `$M2_STD` or a fixed path in the source tree.
+**Not built yet.** Today only `std` is loaded: from `$M2_STD`, from `music2.app`'s `Contents/Resources/std` (the app bundles it, with the templates and the examples), or from the source tree (`crates/server/src/resources.rs`).
 
 - Resolves `music2.toml` dependencies, fetches packages (git sources such as `github:owner/repo@tag`, or bundled ones), verifies their hashes, and writes `music2.lock`.
 - Checks that kernel manifests are compatible with the ABI version.
@@ -594,9 +594,11 @@ In the desktop app, *File → Open Project Folder…* (⌘O), or `music2-desktop
 - **Undo and redo** cover every edit made through the session (knobs, cables, effects, notes, code saves). The history is in memory.
 - **Server** (`crates/server/src/routes.rs`):
   - `GET /api/graph`, `/api/graph/status`, `/api/graph/files` and `/api/graph/types`.
-  - `POST` under `/api/graph/`: `open`, `close`, `preview`, `preview/cancel`, `set`, `connect`, `disconnect`, `effect/add`, `effect/remove`, `lane`, `undo`, `redo`, `transport`, `seek` and `unsaved`.
+  - `POST` under `/api/graph/`: `open`, `close`, `preview`, `preview/cancel`, `set`, `connect`, `disconnect`, `effect/add`, `effect/remove`, `lane`, `undo`, `redo`, `transport`, `seek`, `unsaved` and `export`.
   - `PUT /api/graph/file`.
-  - Clients refresh on the `{"t":"graph"}` event from the `/api/ws` WebSocket, which also carries `{"t":"toast"}` messages.
+  - New songs: `GET /api/project/templates` lists the templates (`templates/`) and the examples; `POST /api/project/new` copies one into a new folder in `~/Music/music2` (or a folder given) and opens it (`crates/server/src/project.rs`).
+  - Export Audio (`crates/server/src/export.rs`) renders the accepted revision on a thread of its own with `m2_session::render`, the same render `m2 render` uses.
+  - Clients refresh on the `{"t":"graph"}` event from the `/api/ws` WebSocket, which also carries `{"t":"toast"}` messages and `{"t":"export"}` progress.
 - **A headless UI test** (`crates/server/examples/headless.rs` plus a puppeteer script) caught a real bug: releasing a knob committed a stale mid-drag value (0.65) while you heard the final one (0.7). It now commits exactly the value shown at release, and a fast-drag check guards it. The puppeteer script isn't in the repo (puppeteer isn't in `web/package.json`); the headless server is.
 
 **Next:** cables across files (exports and imports), adding and deleting nodes, automating a knob, and saved node positions.
@@ -690,9 +692,10 @@ Agents use the files, `~/.music2/session.json` and the `/api/graph` routes; MCP 
 | CLAP plugin hosting | `core/plugins` (`m2-plugins`) |
 | Playback on the audio device | `core/play` (`m2-play`) |
 | The `std` package: manifest, 29 kernels, 17 effects, TypeScript modules | `std/` (kernels built with `std/build.sh`) |
-| CLI: 15 commands (`check`, `render`, `kernels`, `bounce`, `graph`, `controls`, `set`, `cables`, `connect`, `disconnect`, `effects`, `add-effect`, `remove-effect`, `plugins`, `plugin-state`) | `apps/m2` |
-| The app's server: the open project and playback (`graph.rs`), the code editor's files (`files.rs`), the `/api/graph` routes | `crates/server` (`m2-server`) |
-| The desktop app and its UI: start screen, timeline, graph, piano roll, code editor, effect browser | `apps/music2-desktop`, `web/` |
+| CLI: 16 commands (`new`, `check`, `render`, `kernels`, `bounce`, `graph`, `controls`, `set`, `cables`, `connect`, `disconnect`, `effects`, `add-effect`, `remove-effect`, `plugins`, `plugin-state`) | `apps/m2` |
+| The app's server: the open project and playback (`graph.rs`), the code editor's files (`files.rs`), new songs (`project.rs`), Export Audio (`export.rs`), the bundled resources (`resources.rs`), the `/api/graph` and `/api/project` routes | `crates/server` (`m2-server`) |
+| The desktop app and its UI: start screen, New Song dialog, timeline, graph, piano roll, code editor, effect browser, Export | `apps/music2-desktop`, `web/` |
+| Song templates (Starter beat, Empty) | `templates/` |
 | Example songs | `examples/first-song`, `examples/with-plugins`, `examples/resample` |
 
 **Measured:**

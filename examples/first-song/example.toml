@@ -1,0 +1,4 @@
+# How the start screen lists this example. Not copied into the song.
+name = "First song"
+description = "A short dance tune: kick, hats, bass and keys"
+order = 1

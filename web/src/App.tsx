@@ -4,6 +4,8 @@ import { useStore } from "./lib/store";
 import Toasts from "./components/Toasts";
 import GraphCanvas, { graphUndo } from "./components/GraphCanvas";
 import StartScreen from "./components/StartScreen";
+import NewSongDialog, { openNewSong } from "./components/NewSongDialog";
+import { exportSong, onExportEvent } from "./lib/exporting";
 import { editorHooks, graphApi } from "./lib/graph";
 import { isMac, native, nativeAction, onMenu } from "./lib/native";
 
@@ -31,6 +33,7 @@ export default function App() {
       (msg) => {
         if (msg.t === "toast") toast(msg.text);
         else if (msg.t === "graph") void refreshGraph();
+        else if (msg.t === "export") void onExportEvent(msg);
       },
       (c) => {
         set({ connected: c });
@@ -48,6 +51,10 @@ export default function App() {
         e.preventDefault();
         return appCommand("save");
       }
+      if (cmd && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        return appCommand("new_song");
+      }
       // A key a field or a panel already took (Enter that adds an effect) isn't a shortcut
       // too, even if that field is gone or blurred by now.
       if (editing() || field(e.target) || e.defaultPrevented) return;
@@ -60,6 +67,9 @@ export default function App() {
       } else if (cmd && e.key.toLowerCase() === "d") {
         e.preventDefault();
         appCommand("duplicate");
+      } else if (cmd && e.key.toLowerCase() === "e") {
+        e.preventDefault();
+        appCommand("export");
       } else if (e.key === "Enter" || e.key === "Home") {
         appCommand("home");
       }
@@ -95,6 +105,7 @@ export default function App() {
   return (
     <div className="h-full">
       {graph ? <GraphCanvas key={graph.session} graph={graph} /> : <StartScreen />}
+      <NewSongDialog />
       <Toasts />
       {/* Below the 64px top bar, so it doesn't cover the project's name. */}
       {!connected && (
@@ -119,6 +130,8 @@ export function appCommand(id: string) {
   const st = useStore.getState();
   // The desktop app asks for this before it closes or replaces a project with unsaved code.
   if (id === "save_all") return void editorHooks.saveAll?.();
+  // With a song open or not: making one opens it in place of the open one.
+  if (id === "new_song") return openNewSong();
   const graph = st.graph;
   if (!graph) return;
   switch (id) {
@@ -139,5 +152,7 @@ export function appCommand(id: string) {
       return void graphApi.transport("toggle");
     case "home":
       return void graphApi.seek(0);
+    case "export":
+      return void exportSong();
   }
 }

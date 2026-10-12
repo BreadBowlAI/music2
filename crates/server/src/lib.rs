@@ -3,8 +3,11 @@
 //!
 //! `music2-desktop` hosts it in-process. Local scripts use the same API with the session token.
 
+pub mod export;
 mod files;
 pub mod graph;
+pub mod project;
+pub mod resources;
 mod routes;
 
 use std::net::SocketAddr;
@@ -30,14 +33,24 @@ pub struct AppState {
     pub token: String,
     /// The open song project, if any.
     pub graph: graph::Graph,
+    /// Export Audio, which renders the song on a thread of its own.
+    pub exports: export::Exports,
     /// Toasts sent while no window was connected, such as why the folder given at launch
     /// didn't open. The next client to connect gets them.
     unheard: Mutex<Vec<String>>,
 }
 
 impl AppState {
+    fn new(token: String, graph: graph::Graph) -> AppState {
+        AppState { events: broadcast::channel(256).0, token, graph, exports: Default::default(), unheard: Mutex::default() }
+    }
+
     pub fn toast(&self, msg: impl Into<String>) {
-        let ev = json!({"t": "toast", "text": msg.into()}).to_string();
+        self.announce(json!({"t": "toast", "text": msg.into()}).to_string());
+    }
+
+    /// Send an event every client should hear, even one that connects later.
+    fn announce(&self, ev: String) {
         // Held across the send so a client subscribing right now can't miss it.
         let mut unheard = self.unheard.lock();
         if self.events.send(ev.clone()).is_err() {
@@ -77,8 +90,7 @@ pub struct Running {
 /// Start the HTTP server on a background thread and return at once. No project is open
 /// yet, and nothing opens the audio device until one is.
 pub fn start(opts: ServeOptions) -> Result<Running> {
-    let (events, _) = broadcast::channel(256);
-    let state = Arc::new(AppState { events, token: opts.token, graph: graph::Graph::default(), unheard: Mutex::default() });
+    let state = Arc::new(AppState::new(opts.token, graph::Graph::default()));
     spawn_graph_watch(state.clone());
 
     let listener = std::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], opts.port)))?;
@@ -117,7 +129,7 @@ mod tests {
     use super::*;
 
     fn state() -> AppState {
-        AppState { events: broadcast::channel(16).0, token: String::new(), graph: graph::Graph::default(), unheard: Mutex::default() }
+        AppState::new(String::new(), graph::Graph::default())
     }
 
     /// The desktop app reports a bad project folder before its window connects.

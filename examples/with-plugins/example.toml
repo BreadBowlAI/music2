@@ -1,0 +1,9 @@
+# How the start screen lists this example. Not copied into the song.
+name = "With plugins"
+description = "Sounds from the Surge XT and Airwindows plugins (needs both installed)"
+order = 3
+
+# The plugins it plays, so a missing one is named before the copy is made.
+[plugins]
+"org.surge-synth-team.surge-xt" = "Surge XT"
+"com.airwindows.consolidated" = "Airwindows Consolidated"

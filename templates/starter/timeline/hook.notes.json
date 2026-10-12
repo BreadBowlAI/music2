@@ -1,0 +1,142 @@
+{
+ "clips": [
+  {
+   "start": 16,
+   "length": 16,
+   "notes": [
+    {
+     "pitch": "E5",
+     "start": 0,
+     "length": 0.5,
+     "velocity": 0.85
+    },
+    {
+     "pitch": "D5",
+     "start": 0.75,
+     "length": 0.25,
+     "velocity": 0.7
+    },
+    {
+     "pitch": "C5",
+     "start": 1,
+     "length": 0.5,
+     "velocity": 0.85
+    },
+    {
+     "pitch": "A4",
+     "start": 1.5,
+     "length": 0.5,
+     "velocity": 0.7
+    },
+    {
+     "pitch": "C5",
+     "start": 2.5,
+     "length": 0.5,
+     "velocity": 0.7
+    },
+    {
+     "pitch": "D5",
+     "start": 3,
+     "length": 0.5,
+     "velocity": 0.85
+    },
+    {
+     "pitch": "C5",
+     "start": 4,
+     "length": 0.5,
+     "velocity": 0.85
+    },
+    {
+     "pitch": "A4",
+     "start": 4.75,
+     "length": 0.25,
+     "velocity": 0.7
+    },
+    {
+     "pitch": "A4",
+     "start": 5,
+     "length": 0.75,
+     "velocity": 0.85
+    },
+    {
+     "pitch": "G4",
+     "start": 6.5,
+     "length": 0.5,
+     "velocity": 0.7
+    },
+    {
+     "pitch": "A4",
+     "start": 7,
+     "length": 0.5,
+     "velocity": 0.85
+    },
+    {
+     "pitch": "E5",
+     "start": 8,
+     "length": 0.5,
+     "velocity": 0.85
+    },
+    {
+     "pitch": "D5",
+     "start": 8.75,
+     "length": 0.25,
+     "velocity": 0.7
+    },
+    {
+     "pitch": "C5",
+     "start": 9,
+     "length": 0.5,
+     "velocity": 0.85
+    },
+    {
+     "pitch": "G4",
+     "start": 9.5,
+     "length": 0.5,
+     "velocity": 0.7
+    },
+    {
+     "pitch": "C5",
+     "start": 10.5,
+     "length": 0.5,
+     "velocity": 0.7
+    },
+    {
+     "pitch": "E5",
+     "start": 11,
+     "length": 0.5,
+     "velocity": 0.85
+    },
+    {
+     "pitch": "D5",
+     "start": 12,
+     "length": 0.75,
+     "velocity": 0.85
+    },
+    {
+     "pitch": "B4",
+     "start": 13,
+     "length": 0.5,
+     "velocity": 0.85
+    },
+    {
+     "pitch": "D5",
+     "start": 13.5,
+     "length": 0.5,
+     "velocity": 0.7
+    },
+    {
+     "pitch": "G5",
+     "start": 14.5,
+     "length": 0.5,
+     "velocity": 0.7
+    },
+    {
+     "pitch": "D5",
+     "start": 15,
+     "length": 0.75,
+     "velocity": 0.85
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,4 @@
+# How the start screen lists this example. Not copied into the song.
+name = "Resample"
+description = "Keys turned into audio, then chopped, reversed and stretched"
+order = 2

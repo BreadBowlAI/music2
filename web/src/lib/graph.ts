@@ -128,7 +128,12 @@ export interface Problem { file: string | null; line: number | null; col: number
 const auth: Record<string, string> = token ? { "x-m2-token": token } : {};
 
 async function call<T = any>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`/api/graph${path}`, {
+  return request<T>(`/api/graph${path}`, body);
+}
+
+/** GET, or POST `body` as JSON; an error answer throws with the server's reason. */
+async function request<T>(url: string, body?: unknown): Promise<T> {
+  const res = await fetch(url, {
     method: body === undefined ? "GET" : "POST",
     headers: { "content-type": "application/json", ...auth },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -182,7 +187,28 @@ export const graphApi = {
   transport: (action: "play" | "stop" | "toggle" | "restart") => call("/transport", { action }),
   /** Tell the app which files the code editor has unsaved edits in, so it asks before closing the project. */
   unsaved: (session: number, files: string[]) => call("/unsaved", { session, files }),
+  /** Start rendering the song to a WAV file: `path`, or a new file in the songs folder's Exports. Progress comes as `export` events. */
+  export: (path?: string) => call<{ path: string }>("/export", path ? { path } : {}),
 };
+
+// ---------------------------------------------------------------- new songs
+
+/** A template or an example a new song can start from. */
+export interface Starter { id: string; name: string; description: string }
+
+/** What a new song can start from; `songs` is the folder new songs go in unless another is picked. */
+export interface Catalog { templates: Starter[]; examples: Starter[]; songs: string | null; home: string | null }
+
+export const projectApi = {
+  catalog: () => request<Catalog>("/api/project/templates"),
+  /** Make a song from a template (or a copy of an example) in `dir` (default the songs folder), and open it. */
+  create: (song: { name: string; template?: string; example?: string; dir?: string }) => request<GraphState>("/api/project/new", song),
+};
+
+/** `/Users/me/Music/music2` → `~/Music/music2`. */
+export function tilde(path: string, home: string | null) {
+  return home && (path === home || path.startsWith(`${home}/`)) ? `~${path.slice(home.length)}` : path;
+}
 
 // ---------------------------------------------------------------- lane writes
 

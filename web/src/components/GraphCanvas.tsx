@@ -1,8 +1,9 @@
 import clsx from "clsx";
-import { CodeXml, Pause, Piano, Play, Redo2, SkipBack, TriangleAlert, Undo2, Workflow, X } from "lucide-react";
+import { CodeXml, Download, Pause, Piano, Play, Redo2, SkipBack, TriangleAlert, Undo2, Workflow, X } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { editorHooks, findNoteClip, graphApi, type ClipRef, type GraphState, type GraphStatus, type ModuleView, type Problem } from "../lib/graph";
-import { isMac } from "../lib/native";
+import { exportSong, useExport } from "../lib/exporting";
+import { isMac, kbd } from "../lib/native";
 import { useStore } from "../lib/store";
 import CodeView from "./CodeView";
 import { NodeGraph } from "./NodeGraph";
@@ -290,11 +291,16 @@ function GraphBar({ graph, status, onSeek }: { graph: GraphState; status: GraphS
         <span className="text-xs text-ink-400 w-12" title="Time">{time}</span>
       </div>
       <div data-tauri-drag-region className="flex-1 self-stretch" />
-      {/* Centred in the window, whatever the transport and buttons beside it take. */}
-      <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 flex items-center gap-2 pointer-events-none">
-        <span className="text-[15px] font-semibold text-ink-100 pointer-events-auto" title={graph.dir}>{graph.name}</span>
-        <span className="text-xs text-ink-400 font-mono pointer-events-auto" title="Every accepted change to the code is a new revision">rev {graph.view.revision}</span>
+      {/* Centred in the window, whatever the transport and buttons beside it take. It keeps clear of
+          them (360px a side holds the widest, with an export running): a long name is cut short. */}
+      <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 max-w-[calc(100%-720px)] flex items-center gap-2 whitespace-nowrap pointer-events-none">
+        <span data-testid="bar-song-name" className="min-w-0 truncate text-[15px] font-semibold text-ink-100 pointer-events-auto" title={`${graph.name}\n${graph.dir}`}>
+          {graph.name}
+        </span>
+        <span className="shrink-0 text-xs text-ink-400 font-mono pointer-events-auto" title="Every accepted change to the code is a new revision">rev {graph.view.revision}</span>
       </div>
+      <ExportButton dir={graph.dir} />
+      <div className="w-px h-5 bg-black/[0.08] mx-0.5" />
       <Button
         onClick={() => void graphUndo(graph.session, "undo")}
         disabled={!graph.can_undo}
@@ -317,6 +323,52 @@ function GraphBar({ graph, status, onSeek }: { graph: GraphState; status: GraphS
         <X className="size-4" />
       </Button>
     </header>
+  );
+}
+
+/** Export Audio: the song to a WAV file. While it renders, a ring fills with its progress. Another
+ * song's export (one opened before this) shows in a toast instead: see Toasts. */
+function ExportButton({ dir }: { dir: string }) {
+  const progress = useExport((s) => (s.dir === dir ? s.progress : null));
+  if (progress === null) {
+    return (
+      <Button data-testid="export" onClick={() => void exportSong()} title={`Export the song as a WAV audio file (${kbd("E")})`}>
+        <Download className="size-4" />
+        Export
+      </Button>
+    );
+  }
+  const percent = Math.round(progress * 100);
+  // r = 6 in a 16-unit box: the ring's length, for the dash that fills it.
+  const length = 2 * Math.PI * 6;
+  return (
+    <Button data-testid="export" aria-busy title="Exporting the song…" className="!text-ink-100 !bg-ink-850 ring-1 ring-black/[0.06] cursor-default tabular-nums">
+      <svg
+        data-testid="export-progress"
+        role="progressbar"
+        aria-label="Export progress"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent}
+        viewBox="0 0 16 16"
+        className="size-4 -rotate-90"
+      >
+        <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeOpacity={0.15} strokeWidth="2.25" />
+        <circle
+          cx="8"
+          cy="8"
+          r="6"
+          fill="none"
+          stroke="var(--color-pop-500)"
+          strokeWidth="2.25"
+          strokeLinecap="round"
+          strokeDasharray={length}
+          strokeDashoffset={length * (1 - Math.max(progress, 0.02))}
+          className="transition-[stroke-dashoffset] duration-150"
+        />
+      </svg>
+      Exporting <span className="w-8 text-left text-ink-400">{percent}%</span>
+    </Button>
   );
 }
 

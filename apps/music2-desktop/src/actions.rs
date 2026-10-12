@@ -1,8 +1,9 @@
 //! Native actions: the Open Project Folder dialog, Show in Finder, the UI's "ready"
-//! handshake, and the prompt about unsaved code. They block on dialogs, so each runs on its
+//! handshake, and the prompts about unsaved code and a running export. They block on dialogs, so each runs on its
 //! own thread; the UI updates itself through the server's WebSocket like after any other edit.
+//! A few answer the UI instead: the Export Audio save dialog returns the file picked.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -15,10 +16,81 @@ use crate::Native;
 static BUSY: AtomicBool = AtomicBool::new(false);
 
 /// Called from the UI: "ready" once it has loaded, and "open_project" from the start
-/// screen's button (the same as the menu item).
+/// screen's button (the same as the menu item). Those that answer wait for it: "export_path"
+/// returns the file picked in the Export Audio save dialog (None if cancelled), and
+/// "reveal_file" shows `arg`, an exported file, in Finder. "song_folder" returns the folder
+/// picked for a new song (the New Song dialog's Choose Folder…), starting at `arg`.
 #[tauri::command]
-pub fn action(app: AppHandle, id: String) {
-    run(&app, &id);
+pub async fn action(app: AppHandle, id: String, arg: Option<String>) -> Result<Option<String>, String> {
+    let answer = match id.as_str() {
+        "export_path" => tauri::async_runtime::spawn_blocking(move || {
+            // One dialog at a time: while another is open, it's as if this one was cancelled.
+            if BUSY.swap(true, Ordering::SeqCst) {
+                return Ok(None);
+            }
+            let picked = export_path(&app);
+            BUSY.store(false, Ordering::SeqCst);
+            picked
+        }),
+        "reveal_file" => tauri::async_runtime::spawn_blocking(move || reveal_file(Path::new(&arg.unwrap_or_default())).map(|()| None)),
+        "song_folder" => tauri::async_runtime::spawn_blocking(move || {
+            if BUSY.swap(true, Ordering::SeqCst) {
+                return Ok(None);
+            }
+            let picked = song_folder(&app, arg);
+            BUSY.store(false, Ordering::SeqCst);
+            picked
+        }),
+        _ => {
+            run(&app, &id);
+            return Ok(None);
+        }
+    };
+    answer.await.map_err(|e| e.to_string())?.map_err(|e| format!("{e:#}"))
+}
+
+/// The Export Audio save dialog, starting at the song's new file in the songs folder's Exports.
+fn export_path(app: &AppHandle) -> anyhow::Result<Option<String>> {
+    let server = app.state::<Native>().server.clone();
+    let suggested = m2_server::export::default_path(&server)?;
+    let mut dialog = app.dialog().file().set_title("Export Audio").add_filter("WAV audio", &["wav"]).set_can_create_directories(true);
+    if let (Some(dir), Some(name)) = (suggested.parent(), suggested.file_name()) {
+        dialog = dialog.set_directory(dir).set_file_name(name.to_string_lossy());
+    }
+    if let Some(w) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&w);
+    }
+    Ok(dialog.blocking_save_file().and_then(|p| p.into_path().ok()).map(|p| p.display().to_string()))
+}
+
+/// Where to make a new song: a folder picked starting at `start` (the one chosen before) or
+/// the songs folder, which is made if it isn't there yet.
+fn song_folder(app: &AppHandle, start: Option<String>) -> anyhow::Result<Option<String>> {
+    let dir = match start.map(PathBuf::from).filter(|d| d.is_dir()) {
+        Some(d) => d,
+        None => {
+            let songs = m2_server::project::songs_dir()?;
+            std::fs::create_dir_all(&songs)?;
+            songs
+        }
+    };
+    let mut dialog = app.dialog().file().set_title("Choose Where to Save the Song").set_directory(dir).set_can_create_directories(true);
+    if let Some(w) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&w);
+    }
+    Ok(dialog.blocking_pick_folder().and_then(|p| p.into_path().ok()).map(|p| p.display().to_string()))
+}
+
+/// Show a file in Finder, selected (elsewhere, open its folder).
+fn reveal_file(path: &Path) -> anyhow::Result<()> {
+    if !path.is_file() {
+        anyhow::bail!("{} isn't there any more", path.display());
+    }
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("/usr/bin/open").arg("-R").arg(path).status()?;
+    #[cfg(not(target_os = "macos"))]
+    open::that(path.parent().unwrap_or(path))?;
+    Ok(())
 }
 
 pub fn run(app: &AppHandle, id: &str) {
@@ -39,7 +111,12 @@ fn perform(app: &AppHandle, id: &str) -> anyhow::Result<()> {
     match id {
         "open_project" => {
             // A song project: a folder with song.ts.
-            let picked = app.dialog().file().set_title("Open Project Folder").blocking_pick_folder();
+            let mut dialog = app.dialog().file().set_title("Open Project Folder");
+            // Where new songs go, once there is one.
+            if let Some(songs) = m2_server::project::songs_dir().ok().filter(|d| d.is_dir()) {
+                dialog = dialog.set_directory(songs);
+            }
+            let picked = dialog.blocking_pick_folder();
             if let Some(dir) = picked.and_then(|p| p.into_path().ok())
                 && keep_code(app)?
             {
@@ -54,13 +131,37 @@ fn perform(app: &AppHandle, id: &str) -> anyhow::Result<()> {
         }
         "ready" => println!("music2: UI connected to the native shell"),
         "quit" => {
-            if keep_code(app)? {
+            if keep_export(app)? && keep_code(app)? {
+                // A stopped export removes its unfinished file; give it a moment to.
+                server.exports.stop(Duration::from_secs(5));
                 app.exit(0);
             }
         }
         other => anyhow::bail!("unknown action {other}"),
     }
     Ok(())
+}
+
+/// Before quitting while a song is being exported: the export would stop, and no file be
+/// saved. False = the user would rather let it finish.
+fn keep_export(app: &AppHandle) -> anyhow::Result<bool> {
+    let server = app.state::<Native>().server.clone();
+    let Some(song) = server.exports.song() else { return Ok(true) };
+    const QUIT: &str = "Quit Anyway";
+    let mut dialog = app
+        .dialog()
+        .message(format!("“{song}” is still being exported. If you quit now, the export stops and no audio file is saved."))
+        .title("Quit while exporting?")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(QUIT.into(), "Keep Exporting".into()));
+    if let Some(w) = app.get_webview_window("main") {
+        dialog = dialog.parent(&w);
+    }
+    Ok(match dialog.blocking_show_with_result() {
+        MessageDialogResult::Ok => true,
+        MessageDialogResult::Custom(s) => s == QUIT,
+        _ => false,
+    })
 }
 
 /// Before replacing or closing the open project: offer to save the code editor's files

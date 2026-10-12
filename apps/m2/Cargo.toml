@@ -11,6 +11,11 @@ m2-song.workspace = true
 m2-runtime.workspace = true
 m2-session.workspace = true
 m2-plugins.workspace = true
+# `m2 new` from the app's templates and examples, std found as the app finds it, and the
+# server's export in the render test.
+m2-server.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
 hound.workspace = true

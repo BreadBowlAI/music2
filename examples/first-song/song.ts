@@ -12,10 +12,10 @@ export default song(() =>
   master(
     mixer({
       kick: kick.out,
-      hats: { in: hats.out, db: db(-34.7), pan: -0.0577 },
+      hats: { in: hats.out, db: db(-6), pan: 0.3 },
       // Sidechain: the bass ducks whenever the kick hits.
-      bass: duck(bass.out, kick.env, { depth: db(-42.9) }),
-      keys: { in: keys.out, db: db(-11.5), pan: -0.542 },
+      bass: duck(bass.out, kick.env, { depth: db(-9) }),
+      keys: { in: keys.out, db: db(-5), pan: -0.25 },
     }),
   ),
 );

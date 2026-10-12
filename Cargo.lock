@@ -2371,6 +2371,7 @@ dependencies = [
  "m2-ir",
  "m2-plugins",
  "m2-runtime",
+ "m2-server",
  "m2-session",
  "m2-song",
  "serde_json",
@@ -2445,8 +2446,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "hound",
  "m2-ir",
  "m2-play",
+ "m2-plugins",
  "m2-runtime",
  "m2-script",
  "m2-session",
@@ -2455,6 +2458,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "toml 1.1.8+spec-1.1.0",
  "tower-http 0.7.1",
 ]
 
@@ -2463,6 +2467,7 @@ name = "m2-session"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "hound",
  "m2-ir",
  "m2-runtime",
  "m2-script",

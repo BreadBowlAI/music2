@@ -37,9 +37,14 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .build()?;
 
     let file = SubmenuBuilder::new(app, "File")
+        // The UI shows the New Song dialog, even with a song open.
+        .item(&item("new_song", "New Song…", Some("CmdOrCtrl+N"))?)
         .item(&item("open_project", "Open Project Folder…", Some("CmdOrCtrl+O"))?)
         .separator()
         .item(&item("save", "Save", Some("CmdOrCtrl+S"))?)
+        .separator()
+        // The UI asks for the file (actions.rs `export_path`), then shows the progress.
+        .item(&item("export", "Export Audio…", Some("CmdOrCtrl+E"))?)
         .separator()
         .item(&item("reveal", "Show in Finder", None)?)
         .separator()
