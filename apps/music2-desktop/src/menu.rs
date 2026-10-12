@@ -1,15 +1,15 @@
-//! The menu bar. File actions run here in Rust (dialogs + engine); everything that is
-//! about the UI (undo in a text field vs. the song, panels, transport) is forwarded to
-//! the web view as a `menu` event with the item's id.
+//! The menu bar. Opening a project folder, Show in Finder and Quit run here in Rust (dialogs);
+//! everything about the UI (save in the code editor, undo in a text field vs. the project,
+//! transport) is forwarded to the web view as a `menu` event with the item's id.
 
 use tauri::menu::{AboutMetadata, Menu, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Wry};
 
 use crate::actions;
 
-/// Item ids handled natively (see `actions::run`); every other id goes to the UI. Save goes
-/// there too: an open code editor saves its file, and otherwise the UI asks for the native save.
-const NATIVE: &[&str] = &["new", "open", "open_project", "save_as", "import", "export", "reveal", "quit"];
+/// Item ids handled natively (see `actions::run`); every other id goes to the UI, Save
+/// included: the code editor saves its files.
+const NATIVE: &[&str] = &["open_project", "reveal", "quit"];
 
 pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let item = |id: &str, text: &str, accel: Option<&str>| {
@@ -21,9 +21,11 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     };
 
     let app_menu = SubmenuBuilder::new(app, "music2")
-        .item(&PredefinedMenuItem::about(app, Some("About music2"), Some(AboutMetadata { name: Some("music2".into()), ..Default::default() }))?)
-        .separator()
-        .item(&item("settings", "Settings…", Some("CmdOrCtrl+,"))?)
+        .item(&PredefinedMenuItem::about(
+            app,
+            Some("About music2"),
+            Some(AboutMetadata { name: Some("music2".into()), ..Default::default() }),
+        )?)
         .separator()
         .services()
         .separator()
@@ -35,16 +37,9 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .build()?;
 
     let file = SubmenuBuilder::new(app, "File")
-        .item(&item("new", "New Song", Some("CmdOrCtrl+N"))?)
-        .item(&item("open", "Open…", Some("CmdOrCtrl+O"))?)
-        .item(&item("open_project", "Open Project Folder…", Some("CmdOrCtrl+Alt+O"))?)
-        .item(&item("library", "Song Library…", Some("CmdOrCtrl+Shift+O"))?)
+        .item(&item("open_project", "Open Project Folder…", Some("CmdOrCtrl+O"))?)
         .separator()
         .item(&item("save", "Save", Some("CmdOrCtrl+S"))?)
-        .item(&item("save_as", "Save As…", Some("CmdOrCtrl+Shift+S"))?)
-        .separator()
-        .item(&item("import", "Import Audio…", Some("CmdOrCtrl+I"))?)
-        .item(&item("export", "Export as WAV…", Some("CmdOrCtrl+E"))?)
         .separator()
         .item(&item("reveal", "Show in Finder", None)?)
         .separator()
@@ -61,24 +56,15 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .paste()
         .select_all()
         .separator()
-        .item(&item("duplicate", "Duplicate Clip", Some("CmdOrCtrl+D"))?)
+        .item(&item("duplicate", "Duplicate", Some("CmdOrCtrl+D"))?)
         .build()?;
 
-    let view = SubmenuBuilder::new(app, "View")
-        .item(&item("panel:track", "Track Inspector", Some("CmdOrCtrl+1"))?)
-        .item(&item("panel:sounds", "Sounds", Some("CmdOrCtrl+2"))?)
-        .separator()
-        .item(&item("zoom_in", "Zoom In", Some("CmdOrCtrl+="))?)
-        .item(&item("zoom_out", "Zoom Out", Some("CmdOrCtrl+-"))?)
-        .separator()
-        .fullscreen()
-        .build()?;
+    let view = SubmenuBuilder::new(app, "View").fullscreen().build()?;
 
     // No Space accelerator: the menu would steal it from text fields. The UI handles Space.
     let transport = SubmenuBuilder::new(app, "Transport")
         .item(&item("play", "Play / Pause", None)?)
         .item(&item("home", "Go to Start", None)?)
-        .item(&item("loop", "Loop", Some("CmdOrCtrl+L"))?)
         .build()?;
 
     let window = SubmenuBuilder::new(app, "Window").minimize().maximize().separator().close_window().build()?;
@@ -88,7 +74,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 
 pub fn handle(app: &AppHandle, id: &str) {
     if NATIVE.contains(&id) {
-        actions::run(app, id, None);
+        actions::run(app, id);
     } else {
         let _ = app.emit("menu", id);
     }

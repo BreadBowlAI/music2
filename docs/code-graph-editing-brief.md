@@ -1,5 +1,7 @@
 # Brief: two-way editing between code and graph
 
+> Historical: the request as sent on 2026-10-11. Its "today" sections describe the code at that date; see [code-graph-editing-design.md](code-graph-editing-design.md) and [song-as-program.md](song-as-program.md) for what exists now.
+
 *For a specialist asked to design the implementation. Written 2026-10-11.*
 
 ## The ask

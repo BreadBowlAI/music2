@@ -1,4 +1,4 @@
-//! The new core in the app: a song-as-program project, shown as a graph.
+//! The open song project in the app, shown as a graph.
 //!
 //! One editing session ([`m2_session::Session`]) and one player ([`m2_play::Player`]).
 //! Knob drags preview straight into the playing renderer; releasing commits the value
@@ -176,8 +176,11 @@ impl Graph {
     }
 
     pub fn open(&self, dir: &Path) -> Result<Value> {
-        let session =
-            Session::open(dir, packages()?).map_err(|d| anyhow!(d.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("\n")))?;
+        let session = Session::open(dir, packages()?).map_err(|d| {
+            // Files in the project by their names in it (`song.ts:22:5`), so the reason fits a toast.
+            let root = format!("{}/", dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf()).display());
+            anyhow!(d.iter().map(|d| d.to_string().replace(&root, "")).collect::<Vec<_>>().join("\n"))
+        })?;
         let mut open = self.open.lock();
         let player = self.player()?;
         let new_renderer = renderer(&session, player.sample_rate, 0)?;
@@ -219,6 +222,16 @@ impl Graph {
             "seconds": status.seconds,
             "beat": status.beat,
         }))
+    }
+
+    /// The open project's name, from its manifest (None with no project open).
+    pub fn name(&self) -> Option<String> {
+        Some(self.open.lock().as_ref()?.session.accepted().project.manifest.project.name.clone())
+    }
+
+    /// The open project's folder.
+    pub fn dir(&self) -> Option<PathBuf> {
+        Some(self.open.lock().as_ref()?.session.accepted().project.dir.clone())
     }
 
     /// Where playback is. It doesn't wait for the project, which seeks and edits hold
@@ -491,6 +504,16 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn a_project_that_does_not_compile_says_where_without_its_folder() {
+        let fixture = Fixture::new();
+        fixture.write("export default song(() => osc.sine(hz(800)) oops);\n");
+        let graph = Graph { player: Mutex::new(Some(Player::silent().unwrap())), ..Graph::default() };
+        let e = format!("{:#}", graph.open(&fixture.0).unwrap_err());
+        assert!(e.contains("song.ts:3:"), "{e}");
+        assert!(!e.contains(&*fixture.0.canonicalize().unwrap().to_string_lossy()), "{e}");
     }
 
     fn control(graph: &Graph) -> (u64, u64, String) {

@@ -1,4 +1,4 @@
-// The graph view of a song-as-program project (the new core): types, API, layout.
+// The graph view of the open song project: types, API, layout.
 
 import { token } from "./native";
 
@@ -140,8 +140,8 @@ async function call<T = any>(path: string, body?: unknown): Promise<T> {
 
 /**
  * Hooks an open editor registers for app commands. `save` returns true if it handled
- * ⌘S; App's "save" command tries it before the old engine's save. `saveAll` saves every
- * edited file (the desktop app asks for it before it closes or replaces the project).
+ * ⌘S; App's save command tries it first. `saveAll` saves every edited file (the desktop
+ * app asks for it before it closes or replaces the project).
  * `duplicate` is the piano roll's ⌘D (in the desktop app the menu bar takes ⌘D before the
  * page sees it). `undo` is the code editor's, while it has the keyboard: the menu's Undo and
  * Redo reach its own history rather than the page's. `unsaved` counts the editor's files with

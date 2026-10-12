@@ -1,40 +1,34 @@
-//! L6 — music2 as a native app.
+//! music2 as a native app.
 //!
-//! The same engine and React UI as `music2`, but in a native window instead of a browser
-//! tab: the engine's HTTP server runs in-process on a private port with a per-launch
-//! token, the window loads the UI from it, and this shell adds what a browser can't —
-//! the menu bar, file dialogs, Finder integration, "unsaved changes" prompts, and native
-//! right-click menus (the UI builds those through Tauri's menu API).
+//! The React UI in a native window: the app's server runs in-process on a private port with
+//! a per-launch token, and the window loads the UI from it. This shell adds what a browser
+//! can't: the menu bar, file dialogs and the prompt about unsaved code.
 //!
-//!   music2-desktop [song.m2song | project-folder/]
-//!   MUSIC2_DEV_URL=http://localhost:5173 music2-desktop   # load the UI from Vite (engine on :4100)
+//!   music2-desktop [project-folder/]
+//!   MUSIC2_DEV_URL=http://localhost:5173 music2-desktop   # load the UI from Vite (server on :4100)
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod actions;
 mod menu;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use m2_server::{AppState, ServeOptions};
-use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 pub struct Native {
-    pub engine: Arc<AppState>,
+    pub server: Arc<AppState>,
 }
 
 fn main() {
-    let song = std::env::args().skip(1).find(|a| a.ends_with(".m2song")).map(PathBuf::from);
-    // A folder with a song.ts is a song-as-program project, shown as a graph. Anything
-    // else that isn't a song is reported rather than ignored.
+    // A folder with a song.ts is a song project. Anything else is reported rather than ignored.
     let project = std::env::args().skip(1).map(PathBuf::from).find(|p| p.join("song.ts").is_file());
-    let unknown: Vec<String> = std::env::args()
-        .skip(1)
-        .filter(|a| !a.starts_with('-') && !a.ends_with(".m2song") && !PathBuf::from(a).join("song.ts").is_file())
-        .collect();
-    let app = tauri::Builder::default()
+    let unknown: Vec<String> =
+        std::env::args().skip(1).filter(|a| !a.starts_with('-') && !PathBuf::from(a).join("song.ts").is_file()).collect();
+    tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![actions::action])
         .setup(move |app| {
@@ -43,28 +37,29 @@ fn main() {
                 // Vite proxies to a fixed port in dev; otherwise any free one.
                 port: if dev_url.is_some() { 4100 } else { 0 },
                 web_dir: web_dir(app.handle()),
-                song: song.clone(),
                 token: token(),
             })?;
-            let engine = running.state.clone();
-            publish_session(&running.url, &engine.token);
+            let server = running.state.clone();
+            publish_session(&running.url, &server.token);
+            // No window is connected yet: the server keeps these toasts for the first one.
+            // They name the folder, not its whole path, so the reason fits.
             if let Some(dir) = &project
-                && let Err(e) = actions::open_project(&engine, dir)
+                && let Err(e) = actions::open_project(&server, dir)
             {
                 eprintln!("music2: couldn't open {}: {e:#}", dir.display());
-                engine.toast(format!("Couldn't open {}: {e:#}", dir.display()));
+                server.toast(format!("Couldn't open {}: {e:#}", name(dir)));
             }
             for a in &unknown {
-                eprintln!("music2: `{a}` is not a song or a project folder (a folder with song.ts)");
-                engine.toast(format!("`{a}` is not a song or a project folder (a folder with song.ts)"));
+                eprintln!("music2: `{a}` is not a project folder (a folder with song.ts)");
+                server.toast(format!("“{}” is not a song folder (a folder with song.ts in it)", name(Path::new(a))));
             }
-            app.manage(Native { engine: engine.clone() });
+            app.manage(Native { server: server.clone() });
             app.set_menu(menu::build(app.handle())?)?;
 
             let url = dev_url.unwrap_or(running.url);
             let init = format!(
                 "window.__M2__ = {};",
-                serde_json::json!({"native": true, "token": engine.token, "platform": std::env::consts::OS})
+                serde_json::json!({"native": true, "token": server.token, "platform": std::env::consts::OS})
             );
             let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url.parse()?))
                 .title("music2")
@@ -79,32 +74,24 @@ fn main() {
                 // Vertically centred in the UI's 64px top bar.
                 .traffic_light_position(tauri::LogicalPosition::new(20.0, 25.0));
             let window = builder.build()?;
-            keep_title_in_sync(window, engine);
+            keep_title_in_sync(window, server);
             Ok(())
         })
         .on_menu_event(|app, event| menu::handle(app, event.id().as_ref()))
         .on_window_event(|window, event| {
-            // Closing the window quits; ask about unsaved changes first.
+            // Closing the window quits; ask about unsaved code first.
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                actions::run(window.app_handle(), "quit", None);
+                actions::run(window.app_handle(), "quit");
             }
         })
-        .build(tauri::generate_context!())
+        .run(tauri::generate_context!())
         .expect("failed to start music2");
+}
 
-    app.run(|app, event| {
-        // Double-clicked a .m2song in Finder (or dropped it on the Dock icon).
-        #[cfg(target_os = "macos")]
-        if let RunEvent::Opened { urls } = &event {
-            for url in urls {
-                if let Ok(path) = url.to_file_path() {
-                    actions::run(app, "open_path", Some(serde_json::json!({"path": path})));
-                }
-            }
-        }
-        let _ = (app, event);
-    });
+/// A path's last part (`my-song` for `~/Music/my-song`), or the whole path when it has none.
+fn name(path: &Path) -> String {
+    path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned())
 }
 
 /// The built React UI: bundled next to the app, or `web/dist` in a dev checkout.
@@ -121,11 +108,11 @@ fn web_dir(app: &tauri::AppHandle) -> PathBuf {
     PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/dist"))
 }
 
-/// Where local tools (Claude Code, scripts) find the running app: its engine URL and
+/// Where local tools (Claude Code, scripts) find the running app: its server URL and
 /// token, in `~/.music2/session.json`, readable only by this user. Web pages can't read
 /// it, which is what the token protects against.
 fn publish_session(url: &str, token: &str) {
-    let path = m2_engine::music2_home().join("session.json");
+    let path = dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".music2").join("session.json");
     let body = serde_json::json!({"url": url, "token": token, "pid": std::process::id()});
     let write = || -> std::io::Result<()> {
         std::fs::create_dir_all(path.parent().unwrap_or(&path))?;
@@ -146,15 +133,14 @@ fn token() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Window title follows the song: "Song Name — Edited", like any document app.
-fn keep_title_in_sync(window: tauri::WebviewWindow, engine: Arc<AppState>) {
+/// Window title follows the open project.
+fn keep_title_in_sync(window: tauri::WebviewWindow, server: Arc<AppState>) {
     std::thread::spawn(move || {
         let mut last = String::new();
         loop {
-            let title = {
-                let s = engine.session.lock();
-                format!("{}{}", s.song().title, if s.is_dirty() { " — Edited" } else { "" })
-            };
+            // No "— Edited": edits are written to the project's files at once (the code editor
+            // asks before unsaved code is lost).
+            let title = server.graph.name().unwrap_or_else(|| "music2".into());
             if title != last {
                 if window.set_title(&title).is_err() {
                     return; // window gone

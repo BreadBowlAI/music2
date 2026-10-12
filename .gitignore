@@ -1,6 +1,5 @@
 target/
 .DS_Store
-*.m2song.bak
 node_modules/
 dist/
 *.log

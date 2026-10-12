@@ -1,0 +1,219 @@
+# What music2 can't do yet
+
+music2 is now only the song-as-program app: a song is a folder of code and timeline files, and the app is a view of that folder. The old engine, with its own song files, screens and command API, was removed in October 2026. Git commit `650f842` still has it. Songs saved by the old version (`.m2song` files) can't be opened by this one yet (#16).
+
+This page lists what's missing for making a whole pop song in the app, most important first. It starts with what already works, so it reads as a roadmap.
+
+Each gap has a rough size:
+- **small**: one focused change.
+- **medium**: several pieces across the UI (the window), the server (the part of the app the window talks to) and the core (the part that compiles and plays the song).
+- **large**: new engine work.
+
+The numbers (#1, #2, …) are the order of importance. They stay the same in every table on this page.
+
+The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with what the old app had.
+
+## What works today
+
+- Open a song folder (File → Open Project Folder…, ⌘O) and play it.
+- See every track on a timeline: notes, automation, masks and audio clips, with the tempo shown above the tracks.
+- Add, move and delete notes clips. Draw, move, resize and nudge notes, and set how hard each one is played.
+- Drag a number written directly at an input (`0.3`, `hz(800)`, `{ pan: 0.3 }`) as a knob: you hear the change, and letting go writes it into the code. A number held in a variable, or worked out from other numbers, shows **edit in code** instead (#39).
+- Connect cables inside one file, and add or remove 17 effects from a searchable browser.
+- Edit the code in the app, with type checks. When the code breaks, the last working version keeps playing.
+- Undo and redo every edit made in the app.
+- Edit the files in any other editor or from a script. The app picks the change up within about 300 ms.
+- From the command line (`m2`): render a WAV, bounce a track to audio, and make the same edits as the app.
+- Play CLAP plugins such as Surge XT, with automation and saved settings. A plugin is added by writing it into a track's code (#36).
+- Play audio clips with offset, gain, fades, reverse, pitch and warp (written by hand in JSON).
+
+## The top ten
+
+1. **New Project**: start a song from a template inside the app. (small)
+2. **Export a WAV** from the app. (small)
+3. **Put std inside music2.app**, so the app works on any Mac. (small)
+4. **Add a track without writing code.** (medium)
+5. **More instruments**: lead, keys, strings and a richer pad. (medium)
+6. **A drum kit** with snare and clap. (medium)
+7. **A mixer panel**: volume, pan, mute and solo for each track. (medium)
+8. **Fast seeking and fast edits** in a full-length song. (large)
+9. **Tempo, time signature and key** in the top bar. (small)
+10. **Loop** the song or a range of bars. (medium)
+
+## Everything, by area
+
+### Projects and files
+
+| # | What's missing | Why it matters | Did the old app have it? | Size |
+|---|---|---|---|---|
+| 1 | **New Project**: make a song folder from a starter template (a few tracks with sounds, ready to play). From the start screen, from File → New Project (⌘N) and with `m2 new`, plus an "Open an example" button. | Today the only way to start is to copy an example folder by hand in Finder or the terminal. A beginner can't start from zero inside the app. | Yes | small |
+| 15 | **Recent projects** on the start screen and in File → Open Recent, and reopen the last project at launch. A list in `~/.music2/recent.json` is updated whenever a project opens. | Without it, every launch starts with a folder dialog. | Yes (the Song Library) | small |
+| 16 | **Open songs made with the old version**: turn an old `.m2song` file into a song folder (its tracks, notes, tempo and levels), from File → Import Old Song… and from the command line. Until then, the old version in git (commit `650f842`) can still open them. | Nothing in music2 can open a `.m2song` now, so a first song made in the old app is stuck there. Old songs use sounds std doesn't have yet (such as the old drum kit), so a full conversion needs #5 and #6. | Yes (it opened them) | medium |
+| 32 | **Save As or Duplicate Project, Rename Project**, and opening a project by dropping its folder on the window or the Dock. | These let you keep versions of a song. (File → Show in Finder already opens the project folder.) | Yes | small |
+
+### Packaging and packages
+
+| # | What's missing | Why it matters | Did the old app have it? | Size |
+|---|---|---|---|---|
+| 3 | **Bundle std** (`m2pkg.toml`, `kernels/*.wasm`, `src/*.ts`), the examples and the templates inside `music2.app`, and give the bundled std's path to the server. Today `crates/server/src/graph.rs` uses `$M2_STD` or a path fixed when the app was built. | A `music2.app` copied to another Mac can't open any project: it looks for std in the source folder it was built from. On the Mac that built it, it works only while that folder is still there. A beginner won't build the app from source. | Yes | small |
+| 43 | **Shared sound packages**: list the packages a song uses in `music2.toml`, fetch them (for example `github:owner/repo@tag`), pin them in `music2.lock`, and browse and add them from the app. | Today only std can be loaded, so sounds other people make can't be used, except as CLAP plugins. | Partly (single sounds from GitHub, with `music2-cli plugin add`) | large |
+
+### Export
+
+| # | What's missing | Why it matters | Did the old app have it? | Size |
+|---|---|---|---|---|
+| 2 | **Export the song as a WAV** from the app: File → Export (⌘E), a progress message, then Show in Finder. A server route runs the same offline render as `m2 render`. | Finishing a song means getting an audio file out. Today only the command line can do it. | Yes | small |
+| 40 | **MIDI files**: import a `.mid` into a notes lane, and export notes as `.mid`. Also export stems (one file per track) and MP3 or AAC from the app. Stems exist only as `m2 bounce`, one track at a time. | Sharing ideas with other apps and people. | No | medium |
+
+### Tracks and instruments
+
+| # | What's missing | Why it matters | Did the old app have it? | Size |
+|---|---|---|---|---|
+| 4 | **Add a track without code.** Pick an instrument (bass, keys, drums…) and music2 writes `tracks/<name>.ts`, imports it in `song.ts`, adds a mixer channel and an empty notes lane, as one checked edit you can undo. Also swap a track's instrument later. | Every track is hand-written TypeScript today, and the app's code editor can't even create a new file. This is the biggest wall for a beginner. | Yes | medium |
+| 13 | **Rename, delete, reorder and recolour tracks** from the timeline. | Keeping a song tidy. Today it's code only: rename the `track()` name, delete the file, edit `song.ts`. | Yes | medium |
+
+### Sounds
+
+| # | What's missing | Why it matters | Did the old app have it? | Size |
+|---|---|---|---|---|
+| 5 | **More instruments in std**: a lead (detuned saws), keys (electric piano), strings and a richer pad, each with a few named knobs. To sound good they need unison/detune and FM oscillators in `std/dsp`; `osc` is a plain sine, saw, square or triangle today. | Pop needs leads, keys and strings. std has only bass, kick, hat, pluck and pad. | Yes | medium |
+| 6 | **A drum kit**: one `drums()` instrument with kick, snare, clap, closed and open hats, toms, crash and shaker on different notes, with drum names instead of note names in the piano roll. | std has only kick and hat, one sound per track. There's no snare or clap, which almost every pop beat uses. | Yes | medium |
+| 26 | **A sampler**: play a recording or a one-shot as an instrument, with a root note, plus drum samples. Kernels can't read assets yet, so the core needs work first. | Sampled drums and vocal chops are pop staples. | Yes | large |
+| 30 | **Presets**: save and load an instrument's or an effect's settings by name, a preset browser, and presets for CLAP plugins. | Beginners start from presets, not from blank knobs. | No | medium |
+
+### Mixing
+
+| # | What's missing | Why it matters | Did the old app have it? | Size |
+|---|---|---|---|---|
+| 7 | **A mixer panel**: a volume fader, pan, mute and solo for each track, plus master volume. The faders can sit on the existing `mixer({ db, pan })` knobs. Mute and solo need support in std and a way to write them. | Balancing the parts is the heart of mixing. Today levels are knobs on the Song module's graph, and there's no mute or solo at all. | Yes | medium |
+| 24 | **Level meters**: a master meter with a clipping warning and the loudness for export, and a meter on each track again. | Without meters you can't see whether the mix is too loud or clipping. The master peak is a small change in `core/play`; meters per track need render taps (`std/meters`). | Partly (a meter on each track) | medium |
+| 31 | **Sends and buses** in the UI: a shared reverb bus, group buses, and sending a track to a bus. | It's standard mixing practice, such as one reverb shared by every track. Each change is a structural code edit in `song.ts`. | Yes | large |
+
+### Song settings
+
+| # | What's missing | Why it matters | Did the old app have it? | Size |
+|---|---|---|---|---|
+| 9 | **Change the tempo (BPM), time signature, key and scale, and the song's title** in the top bar. The session needs a write for `timeline/song.json` (like its notes write), and the top bar needs the fields. Tempo changes during the song can come later. | Setting the tempo is step one of every song. Today it means editing `song.json` by hand, and the code editor only opens `.ts` files. | Yes | small |
+
+### Playback
+
+| # | What's missing | Why it matters | Did the old app have it? | Size |
+|---|---|---|---|---|
+| 8 | **Fast seeking and fast edits** in a full-length song. Save the engine's state every few seconds (render checkpoints), so a seek doesn't replay the song from the start. | Today a seek replays the song from 0, and every notes, cable, effect or code edit rebuilds the player at the playhead the same way. The example renders about 30 times faster than real time, so late in a busy 3-minute song each seek or edit could stall for several seconds. | Yes | large |
+| 10 | **Loop** the whole song, then a loop range dragged on the ruler (⌘L). | Producers loop 4 to 8 bars while building a part. The player (`core/play`) can only swap, play, stop and set a value. A gapless loop needs a second player ready at the loop start, because seeking replays from 0; it gets easier after #8. | Partly (the whole song) | medium |
+| 23 | **A metronome**: a click with an on/off button in the top bar. The player makes it from the tempo; it isn't part of the song. A count-in can come with recording. | It helps you keep time and check a beat. | No | small |
+
+### Timeline and clips
+
+| # | What's missing | Why it matters | Did the old app have it? | Size |
+|---|---|---|---|---|
+| 12 | **Clip editing on the timeline**: duplicate (⌘D) and copy/paste; drag the right edge to resize; split at the playhead; move a clip to another track; repeat a clip N times; add clips on automation and audio lanes. | Pop songs are built by copying parts. Today notes clips only move along their own lane, and ⌘D only works on notes inside the piano roll. | Yes, except split | medium |
+| 21 | **Timeline zoom** (⌘= and ⌘−, pinch), and **right-click menus** on clips, lanes, tracks and notes. The old UI's native menu code can come back from git history. | At a fixed 24 pixels per beat, a 3-minute song takes a lot of scrolling. Right-click menus are how beginners find options. | Yes | small |
+| 27 | **Sections**: name the parts (intro, verse, chorus), show markers on the ruler, copy or move a whole section across all tracks, and insert or delete bars. | Pop songs are arranged in sections, and copying a chorus is one gesture in other DAWs. Sections are designed but not built, and inserting bars touches every lane and the tempo. | No | large |
+
+### Notes
+
+| # | What's missing | Why it matters | Did the old app have it? | Size |
+|---|---|---|---|---|
+| 11 | **Hear notes** when you click, draw or move them in the piano roll (audition), and an all-notes-off button (panic). | You can't write a melody without hearing it. The new player has no way to play live notes; MIDI input will need the same path. | Yes | medium |
+| 19 | **Note tools**: triplet snap (1/8T and 1/16T, three notes in the space of two), quantize, transpose a clip, humanize, swing, legato, and copy/paste notes between clips. | These clean up a drawn or played part, and triplets are common in pop hats and rolls. The piano roll snaps only to 1/4, 1/8, 1/16 and 1/32, and has only nudging with the arrow keys and ⌘D. | Partly (triplet snap, quantize, humanize, and octave up and down) | small |
+| 20 | **Scale help**: choose a key and scale, highlight or lock the notes in the key, chord stamps and an arpeggiator. `std/theory` and `std/gen` are designed but not built. | Beginners write better melodies and chords with a scale guide. | Partly (a key and scale, and showing only in-key notes) | medium |
+
+### Automation
+
+| # | What's missing | Why it matters | Did the old app have it? | Size |
+|---|---|---|---|---|
+| 18 | **Draw automation**: click and drag points on automation lanes in the timeline. The session's lane writer (`core/session/src/lanes.rs`) takes only notes lanes today, so it needs a write for automation lanes. Then "Automate this knob", which makes the lane and the cable. | Filter sweeps, fades and build-ups are everywhere in pop. Today automation lanes can only be looked at in the app, and are edited by hand in JSON. | Yes | medium |
+
+### Audio
+
+| # | What's missing | Why it matters | Did the old app have it? | Size |
+|---|---|---|---|---|
+| 22 | **Audio in the app**: import a WAV from a menu, or drag it onto a bar; add an audio track; show waveforms; move, trim, fade and set the gain of audio clips. The engine already plays offset, gain, fades, reverse, pitch and warp. | Vocals, loops and samples. Today this means copying files into `assets/` and writing clip JSON by hand. | Yes | large |
+
+### Recording and MIDI
+
+| # | What's missing | Why it matters | Did the old app have it? | Size |
+|---|---|---|---|---|
+| 28 | **Play instruments live** from a MIDI keyboard or the computer keyboard, and record what you play into a notes clip, with a count-in and quantize. | Most people write melodies by playing them. It needs MIDI input and low-latency live notes in the player. | No | large |
+| 29 | **Record audio** (vocals, guitar) from an input into an audio clip, and hear yourself while recording. | Vocals are central to pop. It needs an input stream, a low-latency path for hearing yourself, and the audio clip work (#22). | No | large |
+
+### Effects and plugins
+
+| # | What's missing | Why it matters | Did the old app have it? | Size |
+|---|---|---|---|---|
+| 25 | **Effect comforts**: bypass, reordering, a picker for duck's sidechain source (today written in code or connected by a cable), effect presets, and the old Pump (ducking in time with the beat, with no sidechain). | Switching an effect on and off is how beginners learn what it does. | Yes | medium |
+| 36 | **Add an installed plugin from the app**: list installed CLAP plugins (such as Surge XT) in the effect browser and when adding a track, and put one on a track as an instrument or an effect. | Today a plugin goes on a track only by writing `plugin("clap:…")` into its code, after finding the plugin's id with `m2 plugins`. | No | medium |
+| 37 | **Plugin windows** for CLAP plugins, **VST3 and AU** support, and **latency compensation** (plugins that report latency are refused today). | Many popular synths and mastering plugins report latency, or come only as AU or VST3 on the Mac. | No | large |
+
+### Safety and undo
+
+| # | What's missing | Why it matters | Did the old app have it? | Size |
+|---|---|---|---|---|
+| 33 | **Undo that survives closing the app**, and readable undo messages, such as "Undid: Hats pan" instead of "Undid: song.ts 0.5 → 0.2". | Closing the app loses all undo, and today's undo messages are technical. | Partly (readable messages; its undo was lost on closing too) | medium |
+| 34 | **Crash safety**: keep unsaved code-editor text through a crash, run CLAP plugins in a separate process so a crashing plugin can't take the app down, and simple project snapshots or backups. | Edits are on disk at once, which is good. But a plugin crash closes the whole app, and unsaved code is lost. | No | large |
+
+### Settings
+
+| # | What's missing | Why it matters | Did the old app have it? | Size |
+|---|---|---|---|---|
+| 17 | **Open a project without an audio device**: fall back to the silent player and say so. | Opening a project fails with "no audio output device", so an unplugged audio interface locks you out of your song. | Yes | small |
+| 35 | **A Settings window**: choose the audio output, sample rate and buffer size, show the current device, and set where new projects go. | People with an audio interface or headphones need to pick the output. Today the player always uses the system default. | Partly (it showed the device and the folders, with nothing to choose) | medium |
+
+### Help
+
+| # | What's missing | Why it matters | Did the old app have it? | Size |
+|---|---|---|---|---|
+| 14 | **Plain-language help**: a "make your first song" guide in the app, tooltips on every control, and friendlier error messages. Today a unit mistake reads like ``input `cutoff` expects control<hz>, got control<db>``, and it points at `std/src/filter.ts` rather than at your own line. | Many people who open music2 are new to making music. [Music basics](music-basics.md) and the README's first sections are a start; the rest of the docs are technical. | Yes | medium |
+
+### Code editor
+
+| # | What's missing | Why it matters | Did the old app have it? | Size |
+|---|---|---|---|---|
+| 38 | **Create, rename and delete files** in the code editor (today it only opens existing `.ts` files), and edit the timeline JSON and `music2.toml` there. | Adding a track by hand still needs another editor. | No | small |
+
+### Knobs
+
+| # | What's missing | Why it matters | Did the old app have it? | Size |
+|---|---|---|---|---|
+| 39 | **Knobs for more numbers**: a number held in a variable (`const cutoff = 800`) or worked out from others (`2 * 440`) shows **edit in code** today, and settings such as an instrument's number of `voices` aren't shown at all. Follow a variable back to the number written in it, and show settings as fields. | A beginner who gives a number a name, as many tutorials teach, loses its knob. | No | medium |
+
+### Scripts, agents and CLI
+
+| # | What's missing | Why it matters | Did the old app have it? | Size |
+|---|---|---|---|---|
+| 41 | **CLI basics**: `m2 new`, `m2 import <wav>`, `m2 tempo` and `m2 add-track`. | Scripts and agents need the same basics as the app. Each is small once the matching session edit exists. | Yes (in `music2-cli`) | small |
+| 42 | **A self-describing API**: every `/api/graph` operation listed with a JSON Schema, a short summary of the song, several edits as one undo step, render and export over HTTP, and MCP. | The old command API let Claude Code drive the app. The new routes work, but an agent has to read the source code to learn them. | Yes | medium |
+
+## Never in either version
+
+Every row marked **No** above was missing from the old app too. Of the rows marked **Partly** or **Yes, except**, the old app also lacked: a loop range (#10), splitting clips (#12), swing, legato and copying notes between clips (#19), chord stamps and an arpeggiator (#20), a master meter and loudness (#24), undo that survives closing (#33) and choosing the audio device (#35).
+
+## Loose ends
+
+- **The example drifted.** `examples/first-song` was committed with numbers left over from testing knobs: the hats' and keys' levels and pans, the duck depth, the bass wobble range and the kick's release. The original values are in `core/session/tests/fixtures/first-song`. Restoring the example, or leaving it, is the user's call; the docs don't depend on the numbers.
+- **Undo messages are technical** (#33).
+- **An error in the browser console with no project open.** `GET /api/graph` answers 400 when nothing is open, which is how the window knows to show the start screen. The browser logs that request as an error even though nothing is wrong. Answering "no project" without an error status would be quieter.
+- **The puppeteer script** that [song-as-program.md](song-as-program.md) mentions for the headless UI test isn't in the repo, and puppeteer isn't in `web/package.json`.
+
+## Removed with the old version
+
+| What was removed | Where it comes back |
+|---|---|
+| New Song, Open and Save of `.m2song` files | A song is now a folder, and every change is written at once. New Project is #1, recent projects #15, Save As #32. Opening an old `.m2song` is #16. |
+| The Song Library | Recent projects (#15) |
+| Import Audio | Audio in the app (#22) |
+| Export as WAV | Export (#2) |
+| Settings | A Settings window (#35) |
+| The Track inspector (volume, pan, output, sends, effects, sidechain) | The mixer panel (#7), sends and buses (#31), effect comforts (#25) |
+| A level meter on each track | Level meters (#24) |
+| The Sounds panel | Audio in the app (#22), the sampler (#26) |
+| Drawing automation | Draw automation (#18) |
+| Loop | Loop (#10) |
+| Hearing notes as you draw them | Audition (#11) |
+| Triplet snap (1/8T, 1/16T), quantize, humanize, and octave up and down in the piano roll | Note tools (#19) |
+| The key and scale picker, and showing only in-key notes | Scale help (#20) |
+| The command API: `/api/commands`, `/api/describe`, `/api/exec`, `/api/steps` | A self-describing API (#42) |
+| `music2-cli` | `m2` replaces it; the missing commands are #41 |
+| Installing sounds from GitHub (`music2-cli plugin add github:…`) and the Plugins folder | Shared sound packages (#43) |
+| m2plug plugins (the JSON sound files that were in `plugins/`) | std replaces most of them: Shimmer is now `chorus`, Space is `reverb`, Echo is `delay`, Tone is `eq3` and Glue is `compress`. Still missing: lead, keys and strings (#5), the drum kit (#6), Pump (#25) and the sampler (#26). |

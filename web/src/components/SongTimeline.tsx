@@ -2,7 +2,6 @@ import clsx from "clsx";
 import { AudioWaveform } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { findNoteClip, laneWriting, writeLane, type ClipRef, type ControlClip, type NoteClip, type TimelineLane, type TimelineTrack, type TimelineView } from "../lib/graph";
-import { rgb } from "../lib/music";
 import { useStore } from "../lib/store";
 
 const HEADER_W = 236;
@@ -14,6 +13,10 @@ const LANE_H: Record<TimelineLane["kind"], number> = { notes: 64, control: 48, a
 const CLIP_INSET = 4;
 const BODY_TOP = 7;
 const BODY_BOTTOM = 3;
+
+/** Track color, muted toward gray to fit the light theme. */
+const mute = (v: number) => Math.round(v * 0.5 + 155 * 0.5);
+const rgb = (c: [number, number, number], a = 1) => `rgba(${mute(c[0])},${mute(c[1])},${mute(c[2])},${a})`;
 
 type Rgb = [number, number, number];
 const COLORS: Rgb[] = [[255, 94, 135], [255, 159, 67], [255, 214, 92], [94, 214, 140], [72, 196, 230], [124, 131, 253], [196, 113, 237]];

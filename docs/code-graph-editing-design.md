@@ -4,6 +4,23 @@ Design proposal, 11 October 2026. Responds to [the editing brief](code-graph-edi
 
 **Current implementation:** the canvas supports a restricted literal-editing subset with a `LiteralLens` that reads a numeric source range and proposes a replacement. Identity resolution and independent candidate verification remain in `Session`. Direct literals, negative literals without intervening comments, unit constructors and unambiguous object properties are editable; computed/indirect expressions and ambiguous objects are read-only. Shared recorded unit values have a named source node and visible consumer connections. Preview requests identify the open project session, revision and control; they use the same numeric normalization as save. Invalid drafts disable edits. Unit values are opaque to JavaScript (no `.value`, no arithmetic), so every use of a written value is visible to the graph. Previews and commits carry a drag across saves that don't touch its value. Cables (`edit/cable.rs`) connect and disconnect within one file: an outlet is a `const` bound to a call that returned one top-level signal (the SDK records each call's output); connecting writes its name in place of a control's written value, and disconnecting writes the default the receiving ports declare, refusing when they declare none. Both are verified by comparing graphs up to node numbering: connecting must equal the old graph with that value's constants rewired to the outlet, and disconnecting must give a graph that rewires back to the old one. Effects (`edit/effect.rs`): packages declare insertable effects in their manifest (`[[effect]]`); adding one wraps a call's audio where it is written (`pluck(…)` → `delay(pluck(…))`, importing the name if needed), and removing unwraps it. Both are verified by taking the effect call's own nodes out and reading its input in place of its output, which must give exactly the graph without it. Undo and redo cover every edit made through the session; a structural edit is reverted only while the code is exactly as that edit left it. Cross-file cables (exports/imports), adding and deleting arbitrary nodes, generalized alias tracing, multi-client preview leases and the performance measurements below remain future work.
 
+**Built:**
+- `LiteralLens` edits of written literals (`core/session/src/edit/lens.rs`), and sites (`core/script/src/sites.rs`).
+- Cables within one file (`edit/cable.rs`).
+- Adding and removing effects (`edit/effect.rs`).
+- Undo and redo through the session.
+
+**Not built yet:**
+- The descriptor-style `component()` below. What was built is `component({ controls: [...] }, fn)`, which only names the control paths.
+- `key()`.
+- The split into `EditCapability` and `BuildArtifacts`.
+- Inserting omitted arguments, and reset to default. (Double-clicking a knob sets the middle of its range.)
+- Rename, automate, extract, and connecting across tracks.
+- Preview leases, the journal and crash recovery, and the editor bridge.
+- The `EditRequest`/`EditResult` prepare/commit protocol.
+- A `core/edit` crate. Editing lives in `core/session/src/edit/`.
+- The property tests and the performance table.
+
 **Build a source editor whose second interface is a component graph.** Compile TypeScript into both an authoring graph and the existing execution graph. Give each editable argument a small, checked source lens: a way to read its value and propose a precise text change. Let components declare their musical controls, and retain those controls as addressable values in the runtime.
 
 This preserves ordinary TypeScript, makes instruments genuinely reusable, and gives the artist direct control without asking the editor to invert arbitrary JavaScript.
@@ -58,7 +75,7 @@ Lint messages explain the missing operation: “This spread prevents resetting c
 
 ## Components declare their own interface
 
-Add an optional `component` constructor for package authors. It returns an ordinary callable function. A descriptor defines the call shape, signal kinds, defaults, settings, and outputs once. From that definition the SDK derives TypeScript types, the inspector, and the build boundary.
+**Not built yet.** Add an optional `component` constructor for package authors. It returns an ordinary callable function. A descriptor defines the call shape, signal kinds, defaults, settings, and outputs once. From that definition the SDK derives TypeScript types, the inspector, and the build boundary.
 
 For example, this proposed descriptor uses one primary positional input and an options object:
 
@@ -168,7 +185,7 @@ Byte offsets stay inside the compiler/session boundary. Frontends and agents tar
 
 ## Identity and lifetime
 
-Use distinct identities for distinct purposes:
+**Not built yet.** Use distinct identities for distinct purposes:
 
 | Identity | Meaning |
 | --- | --- |
@@ -220,7 +237,7 @@ Recognize unit constructors by resolved symbol, not spelling. Preserve surroundi
 
 ### Arguments and options
 
-An omitted argument has an insertion lens. It is still a real semantic slot, with a default owned by the descriptor. Setting it materializes source only when the gesture commits. A positional argument beyond omitted earlier positions may require explicit `undefined` placeholders; preserve the signature's semantics.
+**Not built yet.** An omitted argument has an insertion lens. It is still a real semantic slot, with a default owned by the descriptor. Setting it materializes source only when the gesture commits. A positional argument beyond omitted earlier positions may require explicit `undefined` placeholders; preserve the signature's semantics.
 
 Reset means “inherit the declared default.” Remove an explicit property where safe; do not merely write today's default value, since that changes what a later package update means. An explicit pinned default remains distinguishable from inheritance even if the current audio graph is equivalent. For an optional structural feature, reset restores absence and follows the rebuild path; it is not a scalar preview to zero.
 
@@ -229,6 +246,8 @@ For `{ ...o, cutoff: hz(800) }`, the trailing explicit property wins. For `{ cut
 Fallbacks such as `o.cutoff ?? hz(600)` in legacy builders are construction logic. Edit the caller's argument when a descriptor supplies that contract. Otherwise expose only the literal fallback at its definition, with its shared scope visible. Do not pretend the fallback belongs to every caller individually.
 
 ### Structural gestures
+
+**Not built yet**, except connect and disconnect (within one file) and adding and removing effects, which work as described in the "Current implementation" paragraph at the top.
 
 | Gesture | Source operation and restrictions |
 | --- | --- |
@@ -330,7 +349,7 @@ The editor bridge associates text changes and app commands with transaction IDs,
 
 ## The operation protocol
 
-Both the canvas and agents use the same structured operations. The session computes patches and expectations; clients cannot supply a permissive expected-delta mask to bypass verification.
+**Not built yet.** Both the canvas and agents use the same structured operations. The session computes patches and expectations; clients cannot supply a permissive expected-delta mask to bypass verification.
 
 ```ts
 type EditRequest = {
@@ -415,21 +434,21 @@ Lane IDs and track names are data addresses, unlike ordinary binding labels. Ren
 
 ## Changes to the existing implementation
 
-| Area | Required change |
-| --- | --- |
-| `core/script/src/lib.rs` | Retain original source/token/semantic indexes before stripping; instrument supported calls; load through an immutable source provider instead of reading candidate code from live disk |
-| `core/script/sdk/core.ts` | Add component descriptors and invocation frames; normalize control inputs; record origin roles and instance paths; preserve scopes and argument ownership |
-| `core/ir/src/lib.rs` | Version provenance references and stable semantic IDs; keep component descriptions separate from executable ops |
-| `core/ir/src/check.rs` | Retain control addresses through flattening and constant folding; expose a canonical checked representation before pruning loses authoring information |
-| `core/runtime/src/lib.rs` | Add prepared control cells and preview messages, voice mappings, and a runtime ownership model for state retention and plan activation |
-| `core/session/src/lib.rs` | Add snapshots, candidate verification, revision acceptance, journaling, conflict detection, undo, and subscription events around the current compile operation |
-| New `core/edit` crate | Own syntax lenses, capability derivation, semantic operation planning, byte patches, and graph-delta comparison |
-| `core/song` | Read timeline data from snapshots; implement lane/track path migration and guarded data edits |
-| `std/src` | Generate direct kernel wrapper descriptors, declare convenience adapters, and progressively register instruments, effects, and dictionary components |
+| Area | Required change | Status (October 2026) |
+| --- | --- | --- |
+| `core/script/src/lib.rs` | Retain original source/token/semantic indexes before stripping; instrument supported calls; load through an immutable source provider instead of reading candidate code from live disk | Partly built: calls are instrumented (`sites.rs`, with byte ranges and argument structure), and a candidate compiles from an in-memory snapshot. |
+| `core/script/sdk/core.ts` | Add component descriptors and invocation frames; normalize control inputs; record origin roles and instance paths; preserve scopes and argument ownership | Partly built: `component({ controls })` names control paths, and each node records the call it was made inside. Descriptors are **Not built yet**. |
+| `core/ir/src/lib.rs` | Version provenance references and stable semantic IDs; keep component descriptions separate from executable ops | Partly built: every node has an `origin` (site and argument path). Stable IDs are **Not built yet** (ids are counters). |
+| `core/ir/src/check.rs` | Retain control addresses through flattening and constant folding; expose a canonical checked representation before pruning loses authoring information | Partly built: a constant with an origin is never folded into a kernel input, so it stays addressable. |
+| `core/runtime/src/lib.rs` | Add prepared control cells and preview messages, voice mappings, and a runtime ownership model for state retention and plan activation | Partly built: `Renderer::set_const` previews a value everywhere it is used, voices included. State retention and plan activation are **Not built yet**. |
+| `core/session/src/lib.rs` | Add snapshots, candidate verification, revision acceptance, journaling, conflict detection, undo, and subscription events around the current compile operation | Partly built: snapshots, candidate verification, revisions, conflict detection and undo (`core/session/src/edit.rs`). The journal and subscription events are **Not built yet**. |
+| New `core/edit` crate | Own syntax lenses, capability derivation, semantic operation planning, byte patches, and graph-delta comparison | Partly built, inside `core/session/src/edit/` rather than as its own crate: the literal lens, byte patches and graph comparison. |
+| `core/song` | Read timeline data from snapshots; implement lane/track path migration and guarded data edits | Partly built: timeline data is read from snapshots, and notes lanes are written by a checked edit. Path migration is **Not built yet**. |
+| `std/src` | Generate direct kernel wrapper descriptors, declare convenience adapters, and progressively register instruments, effects, and dictionary components | Partly built: effects are registered as `[[effect]]` entries in `std/m2pkg.toml`. Generated wrappers are **Not built yet**. |
 
-There are two consequential gaps in the current core. First, the checker folds connected constants into `Input::Const`, and runtime initialization fills their buffers once. A preview cannot work just by updating the original IR constant. Introduce a checked `Input::Param(ControlId)` or equivalent indirection, retain addressable constants through optimization, and make every relevant sink and voice read the prepared cell. The external IR can still represent these sources as ordinary constants with origin metadata; parameter addressing is a planner/runtime concern.
+When this was written, the core had two consequential gaps. The first is closed. The checker used to fold connected constants into `Input::Const`, so a preview could not work just by updating the original IR constant. Now a constant with an origin is never folded: it stays its own node (`core/ir/src/check.rs`), and `Renderer::set_const` refills it everywhere it is used, voices included, at the next block. A knob drag previews live this way, without a separate `Input::Param` cell.
 
-Second, the current new-core runtime is a renderer with a Wasmtime store, while the session currently supplies compilation and timeline validation. A running-state arena, atomic plan activation, and transactional editor are new implementation work. Do not infer that the older desktop engine already supplies them for this core.
+The second is still open. The core runtime is a renderer with a Wasmtime store, while the session supplies compilation and timeline validation. A running-state arena and atomic plan activation are **Not built yet**: an edit that changes the graph builds a new renderer and replays it up to the playhead. The transactional editor exists for single edits (`core/session/src/edit.rs`); multi-edit transactions are **Not built yet**.
 
 ## Prototype sequence and acceptance tests
 
@@ -456,6 +475,12 @@ The executable prototype should demonstrate these exact operations:
 | `song.ts` | Automate hats pan | Bind the song callback's lane context, replace `0.3` with a lane call, and create `timeline/song.hats-pan.json` |
 | `tracks/bass.ts` | Automate an independent LFO period | Replace its value with a typed lane input only if the wrapper exposes period as a live control |
 
+What was built handles these cases differently:
+- **Connecting** replaces a written literal with the outlet's name; it doesn't replace an expression such as `blend(...)`.
+- **Disconnecting** writes the default the input declares in place of the name, rather than removing the property.
+- **Adding a delay** wraps the call where it is written (`bass(…)` → `delay(bass(…), {…})`) instead of extracting bindings.
+- Deleting with bypass, adding and deleting other nodes, and automating are not built yet.
+
 Adding an effect to an expression-bodied arrow necessarily changes syntax around that body. Preserve existing expression bytes and comments where possible and declare the added braces/return as part of the patch. Minimal means the smallest correct edit for that operation, not that every gesture changes a single range.
 
 Use property-based generators over the supported grammar. For every emitted capability and permitted operation, assert: the patched source parses; compilation and timeline validation pass; the independent semantic result matches the full normalized graph; bytes outside patch ranges are identical; comments survive; identity correspondence is injective; a no-op has no diff; a guarded inverse restores the original source/data when no intervening edit exists. Test operation sequences, not just isolated edits.
@@ -468,7 +493,7 @@ Realtime checks should verify that every intended sink and existing/new voice re
 
 ## Performance budget
 
-The brief reports roughly 70 ms for a full four-track `m2 check`, including process startup and kernel compilation. That is an existing measurement from the brief, not a measurement of the proposed editor. It supports starting with full candidate rebuilds while keeping the process and packages warm.
+**Not built yet.** The brief reports roughly 70 ms for a full four-track `m2 check`, including process startup and kernel compilation. That is an existing measurement from the brief, not a measurement of the proposed editor. It supports starting with full candidate rebuilds while keeping the process and packages warm.
 
 | Path | Design target | What to measure |
 | --- | --- | --- |

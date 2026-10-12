@@ -1,138 +1,419 @@
 # music2
 
-A full music studio (a DAW, like Ableton Live or Logic Pro) with a Rust audio engine and a React UI in a native Mac app. It's part of **suite2**, alongside film2 and dj2.
+music2 is a music studio for the Mac: a DAW (digital audio workstation), the kind of app people make songs in, like GarageBand or Logic Pro. In music2 a song is a folder. Code in it says how the song sounds: the instruments, the effects and the mix. Timeline files say what plays: the notes, the automation (knob moves over time) and the audio.
 
-There's no AI inside the app, and no beginner mode: every tool is visible. Every edit is a named command with a JSON Schema, so a Claude Code session on your machine, or any script, can drive the open app (see [Scripting](#scripting)).
+The app shows that folder as a timeline, a graph of knobs and cables, a piano roll (a grid for drawing notes) and a code editor. Every change you make there is written into the files right away.
 
-See [`docs/music2-design.md`](docs/music2-design.md) for the product and architecture, and [`docs/filmcraft-architecture.md`](docs/filmcraft-architecture.md) for the research it borrows from.
+There's no AI inside the app. Scripts and AI agents (such as a Claude Code session) use the same files, and a local API (a way for programs on your Mac to talk to the app). music2 is part of **suite2**, alongside film2 and dj2. Status: early. A lot is missing: there's no New Project, no export in the app, and tracks are added in code. See [What music2 can't do yet](docs/gaps.md).
 
-**Next direction: songs as programs.** A new, minimal core is being built alongside the app: songs are TypeScript graphs, and every instrument and effect is a package. See [`docs/song-as-program.md`](docs/song-as-program.md) and [Song as a program (new core)](#song-as-a-program-new-core).
+## Run the app
 
-## Run it
-
-music2 is a native Mac app (Tauri): the React UI in a system web view, around the Rust engine, which makes the sound.
+You need a Mac, [Rust](https://rustup.rs) and [Node.js](https://nodejs.org).
 
 ```bash
-(cd web && npm install && npm run build)                 # once, and after UI changes
-cargo run --release -p music2-desktop                    # run the app
-(cd apps/music2-desktop && ../../web/node_modules/.bin/tauri build)   # → target/release/bundle/macos/music2.app
+(cd web && npm install && npm run build)                        # the window's UI: once, and after UI changes
+cargo run --release -p music2-desktop -- examples/first-song    # the app, opened on an example song
 ```
 
-Drag `music2.app` into Applications. After that, double-clicking a `.m2song` file opens it in music2.
+Everything you change is written into the folder you opened. To keep an example as it is, open a copy of it (see [Your first song](#your-first-song)).
 
-- **Menu bar:** File (New, Open…, Save, Save As…, Import Audio…, Export as WAV…, Show in Finder), Edit, View, Transport.
-- **File handling:** real file dialogs, and an "unsaved changes" prompt before quitting or opening another song.
-- **Right-click menus** on clips, tracks, empty lanes and piano-roll notes.
-- **Drag and drop from Finder:** drop a WAV onto a bar to place it there, or drop a song to open it.
-
-Songs save to `~/Music/music2/` by default.
+Without a folder, the app opens on a start screen. Click **Open Project Folder…** there, or use File → Open Project Folder… (⌘O) at any time. A song folder is any folder with a `song.ts` file in it.
 
 To work on the UI with hot reload:
 
 ```bash
-cd web && npm run dev                                                 # UI on :5173 (proxies /api to :4100)
-MUSIC2_DEV_URL=http://localhost:5173 cargo run -p music2-desktop      # the app, engine on :4100, UI from Vite
+cd web && npm run dev                                                 # the UI on :5173 (it passes /api on to :4100)
+MUSIC2_DEV_URL=http://localhost:5173 cargo run -p music2-desktop      # the app, its server on :4100, the UI from Vite
 ```
 
-## Using it
+To build `music2.app`:
 
-- **Timeline:** tracks on the left, clips on the lanes. Double-click a lane to add a clip, drag clips to move them, and drag a clip's right edge to resize it.
-- **Piano roll:** click a MIDI clip to edit its notes. It shows all notes; "In-key only" hides the ones outside the song's key.
-- **Track inspector** (right panel, ⌘1): volume, pan, output routing to a bus, sends, the instrument and its knobs, effects, sidechain sources, and the master chain.
-- **Sounds** (⌘2): the recordings in the song. Place one on the timeline or turn it into a Sampler instrument.
-- **Automation:** the pulse icon on a track opens a lane for volume, pan or any knob. Click to draw, drag to move, right-click to delete.
+```bash
+(cd apps/music2-desktop && ../../web/node_modules/.bin/tauri build)   # → target/release/bundle/macos/music2.app
+```
 
-Shortcuts:
+The built app looks for its standard sounds (`std/`) in the source folder it was built from. So it works only on the machine that built it, or when started with `M2_STD` set to a copy of `std/`. Fixing this is [gap #3](docs/gaps.md#packaging-and-packages).
 
-- **Space** plays or stops.
-- **⌘Z** / **⇧⌘Z** undo and redo.
-- **⌘S** saves.
-- **⌘D** duplicates the selected clip.
-- **Delete** removes the selected note or clip.
-- **Right-click** almost anything for its options.
-- **Enter** jumps back to the start.
+## Your first song
 
-## Scripting
+There's no New Project yet, so start from a copy of an example:
 
-When the desktop app is running, it writes `~/.music2/session.json` (readable only by you) with its engine URL and a per-launch token. Anything you run locally, such as a Claude Code session, can use them to read and edit the open song. Changes show up live and can be undone like any other edit.
+```bash
+cp -R examples/first-song ~/Music/my-song
+cargo run --release -p music2-desktop -- ~/Music/my-song
+```
+
+Press **Space** to play. It's a short dance tune, about 15 seconds long: kick drum, hi-hats, bass and keys.
+
+Things to try:
+
+1. **Turn a knob.** Below the timeline, click the **Song** tab. It shows the mix as boxes with knobs. Drag a knob while the song plays and you hear it change. Let go, and the new number is written into `song.ts`.
+2. **Add a clip.** In the timeline, double-click the Bass **notes** lane past the end of the song. A one-bar clip appears.
+3. **Draw notes.** Double-click the new clip. It opens below in the Notes view (a piano roll). Click the grid to add a note, drag a note to move it, and drag its right edge to make it longer.
+4. **Add an effect.** Go back to the Graph view, click **+** on a box that makes sound, and pick an effect such as reverb.
+5. **Undo.** Press ⌘Z to take these back, one at a time.
+
+## The window
+
+### The top bar
+
+From left to right: play/stop, back to the start, where the song is (bar.beat, then minutes and seconds), the song's name and revision (every accepted change is a new revision), undo, redo, and close (✕), which goes back to the start screen.
+
+### The timeline
+
+- Each track has a row for each of its lanes: its notes, its automation and its audio (see [Words you'll see](#words-youll-see)). The ruler on top counts bars, and the song's tempo is shown at the top left.
+- Click the ruler to move the playhead there.
+- Double-click an empty spot in a notes lane to add a one-bar clip. Drag a clip to move it along its lane. Click a clip and press Delete to remove it.
+- Double-click a notes clip to edit its notes.
+- Automation and audio clips are shown, but they can't be edited in the app yet. Tempo changes appear on the ruler.
+
+### The panel below the timeline
+
+There's a tab for each module (one file's sound): one for each track file, and one for the Song (the mix). Drag the bar between the timeline and the panel to resize it. Each module has three views:
+
+- **Graph:** the module as boxes and knobs.
+  - Drag a knob to hear it; let go to write the number into the code. Double-click a knob to set it to the middle of its range.
+  - A row that says **edit in code** is a value the app can't turn into a knob (see [Editing from the app](#editing-from-the-app)).
+  - Cables: drag from a named output (the dot at the right edge of a box whose result has a `const` name in the code) onto a knob. The ✕ on a connected input disconnects it.
+  - **+** on a box that makes sound opens the effect browser: 17 effects in seven groups (Filter, EQ, Dynamics, Distortion, Delay & Reverb, Modulation, Utility). Type to search, then press Enter or click. The bin icon on an effect removes it.
+  - Zoom with ⌘ and scroll, or pinch. The buttons at the bottom right zoom and fit the graph to the panel.
+- **Code:** the module's TypeScript, with type checks. The list on the left shows the song's files. ⌘-click a name to jump to where it's defined, even inside std (std's files open read-only). ⌘S (or the Save button) saves. When the code has an error, the last working version keeps playing, and a yellow banner offers **Show in code**.
+- **Notes:** the open clip in a piano roll.
+  - Pick a snap grid (1/4 to 1/32, or off). Click to draw a note, drag to move, drag the right edge to resize.
+  - The strip at the bottom sets velocity (how hard each note is played).
+  - Set the clip's length in bars at the top.
+  - ⌘A selects all notes, ⌘D duplicates the selection, the arrow keys move it (with ⇧, by an octave or a bar), and Delete removes it.
+
+## Saving and undo
+
+- There's no Save for the song: every change is written to the files at once. ⌘S only saves the code editor's text.
+- Undo (⌘Z) and redo (⇧⌘Z) cover knobs, cables, effects, notes and code saves. The history ends when you close the app.
+- Changes made in another editor, or by a script, show up within a moment.
+
+## Shortcuts
+
+| Key | What it does |
+|---|---|
+| Space | Play or stop |
+| Enter or Home | Back to the start |
+| ⌘Z / ⇧⌘Z | Undo / redo |
+| ⌘S | Save the code editor's files |
+| ⌘O | Open a song folder |
+| ⌘D | Duplicate the selected notes |
+| ⌘A | Select all notes in the open clip |
+| Arrow keys | Move the selected notes (⇧: by an octave or a bar) |
+| Delete | Remove the selected clip or notes |
+| Escape | Deselect |
+
+## Words you'll see
+
+New to music itself? [Music basics](docs/music-basics.md) explains notes, beats, scales, synths, effects and mixing in plain words.
+
+- **Track:** one part of the song, such as the bass or the drums. In music2 each track is a file in `tracks/`.
+- **Lane:** a row of a track on the timeline. There are four kinds:
+  - **notes**: notes for an instrument to play.
+  - **automation** (a control lane): a value that changes over time, like a filter opening up.
+  - **mask**: a 0-to-1 switch over time, which turns something on in some bars and off in others.
+  - **audio**: recordings.
+- **Clip:** a block on a lane, with a start and a length. A notes clip holds notes, an automation clip holds points, and an audio clip plays part of a recording.
+- **Instrument:** something that turns notes into sound, such as `bass` or `kick`.
+- **Effect:** something that changes a sound, such as reverb or delay.
+- **Knob:** a number from the code that you can drag in the app.
+- **Cable:** a connection that lets one signal control another, such as a slow wobble moving a filter.
+- **Module:** one file's sound graph. Each track is a module, and so is the Song (the mix in `song.ts`).
+- **std:** the standard package of instruments, effects and building blocks that comes with music2.
+- **Kernel:** a small compiled sound-processing program (WebAssembly), such as an oscillator or a filter. Instruments and effects are built from kernels.
+- **Render:** making the audio for the song, either to hear it or to write a WAV file.
+- **Bounce:** rendering one track to an audio file in the song's `assets/`, often to chop it up again.
+
+## How a song is written
+
+The rest of this page is for writing songs as code, and for working on music2 itself.
+
+### The folder
+
+```
+my-song/
+  music2.toml          # the song's name
+  song.ts              # the mix: which tracks play, how loud, and the master
+  tracks/
+    bass.ts            # one file per track: its lanes, instrument and effects
+  timeline/
+    song.json          # tempo and beats per bar
+    bass.notes.json    # one file per lane: <track>.<lane>.json
+    bass.cutoff.json
+  assets/              # audio files (WAV) and saved plugin settings
+```
+
+`song.json` holds `tempo` (a list of `{ "beat", "bpm" }` changes) and `beats_per_bar`.
+
+In a lane file's name, `<track>` is the track's name in lower case, with spaces and punctuation turned into `-`: a track called `Lead Vox` has `lead-vox.notes.json`.
+
+### A track
+
+This is a whole track, the shape of `tracks/hats.ts`:
+
+```ts
+import { track } from "@m2/core";
+import { hat } from "std/instruments";
+
+export default track("Hats", ({ lane }) => hat(lane.notes("hits")));
+```
+
+- `track("Hats", …)` makes a track called Hats.
+- `lane.notes("hits")` is a notes lane called hits. Its clips are in `timeline/hats.hits.json`.
+- `hat(…)` is the hi-hat instrument from std. It plays those notes.
+
+### The mix
+
+`song.ts` says what you hear. Here the bass ducks (dips in volume) each time the kick hits, which is called a sidechain. The numbers are only examples.
+
+```ts
+import { db, song } from "@m2/core";
+import { duck } from "std/fx";
+import { master, mixer } from "std/mix";
+import bass from "./tracks/bass";
+import hats from "./tracks/hats";
+import kick from "./tracks/kick";
+
+export default song(() =>
+  master(
+    mixer({
+      kick: kick.out,
+      hats: { in: hats.out, db: db(-8), pan: 0.2 }, // quieter, a little to the right
+      bass: duck(bass.out, kick.env, { depth: db(-10) }),
+    }),
+  ),
+);
+```
+
+`kick.env` is how loud the kick is right now. The kick track exports it next to its sound; see `examples/first-song/tracks/kick.ts`.
+
+### Notes
+
+```json
+{
+  "clips": [
+    {
+      "start": 0,
+      "length": 4,
+      "notes": [
+        { "pitch": "F#2", "start": 0.5, "length": 0.25, "velocity": 0.9 },
+        { "pitch": 42, "start": 1.5, "length": 0.25 }
+      ]
+    }
+  ]
+}
+```
+
+- `pitch` is a note name (`"F#2"`, `"Bb3"`) or a number (60 is middle C, so `42` is F#2).
+- A clip's `start` and `length` are in beats from the start of the song. A note's `start` and `length` are in beats from the start of its clip.
+- `velocity` goes from 0 to 1. Without it, a note gets 0.8.
+
+Automation and mask clips hold `points` instead of notes: `[beat, value]` pairs, with straight lines in between. Audio clips name a file in `assets/` and can have `offset`, `gain_db`, `fade_in`, `fade_out`, `reverse`, `pitch` and `warp`; see `examples/resample/timeline/chops.clips.json`.
+
+### Units
+
+A number in the code can carry a unit, written as a function. Plugging a value with the wrong unit into an input is an error. A plain number fits any unit.
+
+| Write | Means |
+|---|---|
+| `hz(440)`, `khz(2.5)` | a frequency |
+| `db(-6)` | a level in decibels |
+| `linear(0.5)` | a gain as a plain multiplier |
+| `semis(12)` | semitones (12 is an octave) |
+| `secs(0.3)`, `ms(30)` | a time |
+| `beats(0.5)` | a length in beats |
+| `frac(0.5)` | a fraction from 0 to 1 |
+| `bipolar(-0.3)` | a value from -1 to 1, like pan |
+| `scalar(2)` | a number with no unit |
+
+### The SDK (`@m2/core`)
+
+| Name | What it is |
+|---|---|
+| `track(name, fn)` | a track: `fn` gets `{ lane, time }` and returns its sound, or an object of named outputs such as `{ out, env }` |
+| `song(fn)` | the root module in `song.ts`: whatever it returns is what you hear |
+| `lane.notes(id)`, `lane.control(id, unit, fallback)`, `lane.mask(id)`, `lane.audio(id)` | the timeline lanes |
+| `time.beats`, `time.seconds` | the song's position |
+| `poly(notes, voice, { voices })` | plays a voice for each note at once |
+| `feedback(kind)` | a loop with a short delay; give its input later with `.set()` |
+| `kernel(id, inputs)` | one kernel, such as `kernel("std:svf", { … })` |
+| `plugin("clap:<id>", inputs)` | a CLAP plugin (see [CLAP plugins](#clap-plugins)) |
+| `component({ controls }, fn)` | marks which arguments of a function are knobs |
+
+### When something's wrong
+
+`m2 check` reports a problem as the file, line and column, then what's wrong. A problem in the sound graph also names the module and the node in square brackets.
+
+```
+song.ts:14:30: snare is not defined
+std/src/filter.ts:10:108: [Hats/n22] input `cutoff` expects control<hz>, got control<db>
+```
+
+The second one came from `lowpass(hat(…), db(-6))` in `tracks/hats.ts`: a filter's cutoff wants a frequency, not a level. When the wrong value goes into a std function, the line shown is inside std, so look for the call in your own file.
+
+The app shows the same problems in a yellow banner and in the code editor's list, with the file, the line and what's wrong, but without the part in square brackets.
+
+### Editing from the app
+
+The code stays the source of truth; the app edits it for you, one small checked change at a time.
+
+- A knob appears for a number written directly at an input: `0.3`, `hz(800)`, `db(-6)`, or a plain property like `{ pan: 0.3 }`.
+- Computed values (`2 * 440`, a variable holding a plain number) and objects with spreads, getters or computed keys still work, but show **edit in code** instead of a knob.
+- A shared value such as `const cutoff = hz(800)` shows as one box wired to every place it's used. Turning it changes all of them.
+- Parentheses and comments around a number are kept.
+- Before writing anything, the app compiles the new code and checks that only the intended thing changed.
+- While the code doesn't compile, the last working version keeps playing and the knobs are locked.
+- Cables inside one file, and adding or removing effects, also work. Cables between tracks, and adding or deleting other boxes, don't yet.
+
+## Sounds and effects (std)
+
+std is an ordinary package in `std/`: TypeScript in `std/src`, kernels in `std/kernels/std.wasm`, built from Rust in `std/kernels-src`.
+
+**Instruments** (`std/instruments`): `bass`, `kick`, `hat`, `pluck` and `pad`. Each takes a notes lane and returns sound.
+
+**Effects**, as the effect browser groups them:
+
+| Group | Effects |
+|---|---|
+| Filter | `lowpass`, `highpass`, `bandpass`, `notch` |
+| EQ | `eq3` |
+| Dynamics | `compress`, `limit` |
+| Distortion | `drive`, `bitcrush` |
+| Delay & Reverb | `delay`, `reverb` |
+| Modulation | `chorus`, `phaser`, `tremolo` |
+| Utility | `gain`, `pan`, `widen` |
+
+**`duck`** (`std/fx`) is the sidechain: `duck(bass.out, kick.env)` turns the bass down while the kick plays. It needs a second signal, so it's written in code rather than added from the browser.
+
+**`mixer` and `master`** (`std/mix`): `mixer` adds tracks together, each with an optional `db` and `pan`. `master` is a limiter at the end, so the song never clips.
+
+**Building blocks:** `std/dsp` (oscillators, noise, envelopes, filters, gain, pan), `std/math` (add, scale, blend, sum, pitch to frequency, ranges), `std/control` (`lfo`, `when`, `choose`) and `std/filter`.
+
+`m2 kernels` lists every kernel with its typed inputs and outputs, and `m2 effects <song>` lists the effects and where they can go.
+
+## CLAP plugins
+
+music2 can play installed CLAP plugins, such as [Surge XT](https://surge-synthesizer.github.io) and [Airwindows Consolidated](https://www.airwindows.com), as boxes in the graph:
+
+```ts
+const synth = plugin("clap:org.surge-synth-team.surge-xt", { notes: lane.notes("notes"), state: "lead" });
+```
+
+- `m2 plugins` lists installed plugins; `m2 plugins clap:<id>` shows one plugin's inputs and knobs.
+- `m2 plugin-state <song> <name> clap:<id>` saves the plugin's default settings (not the values your code gives it) to `assets/plugin-state/<name>.bin`, which `state: "<name>"` loads.
+- Plugins can't go inside `poly` (an instrument plugin plays all the notes itself), and there are no plugin windows yet.
+- See [`examples/with-plugins`](examples/with-plugins), which needs both plugins installed.
+
+## The command line (`m2`)
+
+`m2` works on song folders without the app. Build it once with `cargo build --release -p m2`. The program is `target/release/m2`; the examples below call it `m2`. It finds std at `$M2_STD`, or in this source tree.
+
+| Command | What it does |
+|---|---|
+| `m2 check <song> [--json]` | Runs the code and checks the graph and the timeline. `--json` prints the compiled graph. `m2 build` is the same. |
+| `m2 render <song> <out.wav>` | Renders the song to a WAV. `--sr 48000` sets the sample rate, `--from S` starts S seconds in, `--seconds N` sets the length. |
+| `m2 kernels [--json]` | Every kernel and its typed ports. |
+| `m2 bounce <song> <name>` | Renders a track (`--track Keys`) or the whole song to `assets/<name>.wav`. `--place Track.lane@beat` also puts it on an audio lane, and `--force` replaces a file that's there. |
+| `m2 graph <song> [--json]` | The graph the app shows, as text. |
+| `m2 controls <song>` | Every number the app can turn into a knob, with its id. |
+| `m2 set <song> <id> <value>` | Changes one, checked by the compiler. `--expect V` refuses unless it's V now. |
+| `m2 cables <song>` | The named signals a cable can start from, and the inputs that cables reach. |
+| `m2 connect <song> <signal> <control>` | Writes a signal's name in place of a number. |
+| `m2 disconnect <song> <input>` | Writes the input's default back in place of the name. |
+| `m2 effects <song>` | The effects packages offer, and the calls they can go after. |
+| `m2 add-effect <song> <call> <module>.<effect>` | Wraps a call's sound in an effect, such as `std/fx.delay`. |
+| `m2 remove-effect <song> <call>` | Takes an effect out, keeping what it was applied to. |
+| `m2 plugins [clap:<id>]` | Installed CLAP plugins, or one plugin's ports. |
+| `m2 plugin-state <song> <name> clap:<id>` | Saves a plugin's default settings as an asset. |
+
+Commands that change a song write into its folder, so try them on a copy, not on the examples:
+
+```bash
+cp -R examples/first-song /tmp/m2-scratch
+m2 check /tmp/m2-scratch
+m2 render /tmp/m2-scratch out.wav
+m2 controls /tmp/m2-scratch                                     # ids look like song.ts#2/0.hats.pan
+m2 set /tmp/m2-scratch 'song.ts#2/0.hats.pan' 0.45
+m2 add-effect /tmp/m2-scratch 'tracks/hats.ts#1' std/fx.delay
+
+cp -R examples/resample /tmp/m2-resample
+m2 bounce /tmp/m2-resample keys-bounce --track Keys --force     # render the Keys track to assets/keys-bounce.wav
+```
+
+An id names a file, a call in it and an argument. `song.ts#2/0.hats.pan` means: in `song.ts`, call number 2 (here the mixer), its first argument (`0`), and `hats.pan` inside that.
+
+## Scripts and agents
+
+While the app runs, it writes `~/.music2/session.json` (only you can read it). It holds the app's local URL and a token that changes at every launch. Every `/api` call needs that token in an `x-m2-token` header (or `?token=`).
 
 ```bash
 S=~/.music2/session.json; URL=$(jq -r .url $S); H="x-m2-token: $(jq -r .token $S)"
-curl -s -H "$H" $URL/api/commands                  # every command + JSON Schema
-curl -s -H "$H" $URL/api/describe                  # compact song summary (?clip=ID for notes)
-curl -s -H "$H" -H 'content-type: application/json' $URL/api/exec \
-  -d '{"cmd":"track.add","params":{"name":"Claps","instrument":"m2/drums"}}'
-curl -s -H "$H" -H 'content-type: application/json' $URL/api/steps \
-  -d '{"label":"Add claps","steps":[["track.add",{"name":"Claps","instrument":"m2/drums"}],
-       ["clip.add",{"track":"$new","start_bar":1,"length_bars":1,"notes":[{"pitch":39,"start":1,"length":0.5}]}]]}'
+curl -s -H "$H" $URL/api/graph | jq '{name, session, revision: .view.revision}'
+body=$(curl -s -H "$H" $URL/api/graph | jq '{session, revision: .view.revision, id: "song.ts#2/0.hats.pan", gesture: "script", value: 0.45}')
+curl -s -H "$H" -H 'content-type: application/json' $URL/api/graph/set -d "$body"
 ```
 
-`/api/steps` runs a whole recipe as one undo step, and `/api/import-path` imports a WAV by path. The design doc (Part 4) lists the other endpoints.
+Edits name the open project's `session` and the `revision` they were planned against, so a stale edit is refused rather than landing on the wrong thing.
 
-With the app closed, the CLI runs the same commands on a song file:
-
-```bash
-music2-cli new song.m2song
-music2-cli commands [--json]
-music2-cli exec song.m2song track.add '{"name":"Claps","instrument":"m2/drums"}'
-music2-cli exec song.m2song clip.add '{"track":"Claps","start_bar":1,"length_bars":1,"notes":[{"pitch":39,"start":1,"length":0.5},{"pitch":39,"start":3,"length":0.5}]}'
-music2-cli import song.m2song vocal.wav --at 5
-music2-cli describe song.m2song
-music2-cli render song.m2song out.wav
-```
-
-## Plugins (`m2plug`)
-
-A plugin is a single JSON file: a graph of built-in DSP nodes plus a few 0–1 macro knobs. It can't run code. See the examples in [`plugins/`](plugins/) and the spec in the design doc (Part 5).
-
-```bash
-music2-cli plugin check my-pad.m2plug.json      # validate before publishing
-music2-cli plugin add github:you/m2-glitter-pad  # installs m2plug.json from the repo
-```
-
-## Song as a program (new core)
-
-The new core is in `core/`, the standard library in `std/`, and the CLI in `apps/m2`. A project is a folder of TypeScript modules plus timeline JSON and assets. In the desktop app, **File → Open Project Folder…** (⌥⌘O), or `cargo run -p music2-desktop -- examples/first-song`, shows a project as a graph: drag a knob to hear it, release to write the number into the code. Examples:
-- [`examples/first-song`](examples/first-song): std instruments, automation, a sidechain, a mask.
-- [`examples/with-plugins`](examples/with-plugins): Surge XT and Airwindows Consolidated (CLAP) as graph nodes, with automation and saved state. Needs both plugins installed.
-- [`examples/resample`](examples/resample): bounce a track to audio, then chop, reverse, pitch and stretch it on an audio lane.
-
-TypeScript stays the source of truth. Canvas editing supports directly written numbers at recorded control inputs, including unit constructors such as `hz(800)` and plain object properties. Parentheses and surrounding comments survive edits. At these inputs, computed or indirect values, and objects containing spreads, duplicate keys, computed keys, getters or methods, remain valid code but show **edit in code** instead of a knob. A shared value such as `const cutoff = hz(800)` appears as one value node connected to its consumers; changing it changes every recorded use. A bare numeric alias such as `const cutoff = 800` is not traced back to its declaration. Raw kernel numbers without recorded source ownership do not expose controls or expression rows.
-
-Preview and save resolve the same control in the current project session and source revision. Saves still compile a candidate and independently check the expected graph change before writing. Invalid source keeps the last accepted graph and audio, with knobs disabled until the source compiles. This first editable subset supports value changes; adding nodes, deleting nodes and rewiring connections remain future work.
-
-```bash
-cargo run --release -p m2 -- build examples/first-song            # run the TypeScript, check the graph
-cargo run --release -p m2 -- render examples/first-song out.wav   # render to WAV
-cargo run --release -p m2 -- kernels                              # every kernel and its typed ports
-cargo run --release -p m2 -- plugins                              # installed CLAP plugins (and `plugins clap:<id>` for ports)
-cargo run --release -p m2 -- graph examples/first-song            # the graph the canvas shows, as text
-cargo run --release -p m2 -- controls examples/first-song         # every number the graph editor can change
-cargo run --release -p m2 -- set examples/first-song 'song.ts#2/0.hats.pan' 0.45 --expect 0.3   # verified one-token edit
-cargo run --release -p m2 -- bounce examples/resample keys-bounce --track Keys --force   # render a track to an asset
-std/build.sh                                                      # rebuild std's WebAssembly kernels
-cargo run --release -p m2-runtime --example bench                 # WebAssembly vs native speed
-```
-
-Errors point at the TypeScript line that caused them. Feeding a dB value into an oscillator's frequency gives:
-
-```
-tracks/bass.ts:12:24: [Bass/n10] input `freq` expects control<hz>, got control<db>
-```
-
-## Layout
-
-| Layer | Crates |
+| Route | What it does |
 |---|---|
-| L6 apps | `apps/music2-desktop` (the app), `apps/music2-cli` |
-| L5 frontends | `crates/server` (HTTP + WebSocket for the web UI in `web/`), `crates/audio-io` (cpal) |
-| L4 engine | `crates/engine`: session, commands, snapshot undo, plugin install |
-| L3 processing | `crates/render` |
-| L2 plugin standard | `crates/graph` |
-| L1 models | `crates/project`, `crates/dsp` |
-| L0 foundations | `crates/time`, `crates/theory` |
-| New core | `core/ir`, `core/song`, `core/runtime`, `core/script`, `core/session`, `core/plugins`, `core/kernel`; CLI `apps/m2`; package `std/` |
+| `GET /api/graph` | The open song: name, folder, `session`, the graph view (with `revision` and every knob's id), the timeline, the effects, problems, and where playback is |
+| `POST /api/graph/open` `{path}` | Open a song folder |
+| `POST /api/graph/close` | Close it |
+| `GET /api/graph/status` | Playing or not, seconds and beat |
+| `POST /api/graph/preview` `{session, revision, id, gesture, value}` | Change a knob in the sound only, while dragging |
+| `POST /api/graph/preview/cancel` `{session, id, gesture}` | Drop a preview |
+| `POST /api/graph/set` `{session, revision, id, gesture, value, expect?}` | Write a knob's value into the code |
+| `POST /api/graph/connect` `{session, revision, from, to}` | Connect a cable |
+| `POST /api/graph/disconnect` `{session, revision, id}` | Disconnect one |
+| `POST /api/graph/effect/add` `{session, revision, call, module, name}` | Add an effect |
+| `POST /api/graph/effect/remove` `{session, revision, call}` | Remove one |
+| `POST /api/graph/lane` `{session, revision, module, lane, clips}` | Replace a notes lane's clips |
+| `POST /api/graph/undo`, `/api/graph/redo` `{session}` | Undo or redo |
+| `POST /api/graph/transport` `{action}` | `play`, `stop`, `toggle` or `restart` |
+| `POST /api/graph/seek` `{beat}` | Move the playhead |
+| `GET /api/graph/files` | The song's TypeScript files |
+| `PUT /api/graph/file` `{session?, path, base, text}` | Save one file, only if it still says `base` |
+| `GET /api/graph/types` | The SDK and package sources, for type checks |
+| `POST /api/graph/unsaved` `{session, files}` | Tell the app which files have unsaved edits in an editor |
 
-`cargo test --workspace` runs the test suite. For UI tests of the graph canvas without a window or sound: `M2_AUDIO=none cargo run -p m2-server --example headless -- <project> <session.json> <token>`, then point a headless browser at the URL in the session file.
+`/api/ws` is a WebSocket with two events: `{"t":"toast","text":…}` for messages, and `{"t":"graph"}` when the song changed and should be fetched again. Toasts sent while nothing was connected, such as why the folder given at launch didn't open, go to the next client that connects.
 
- For automated UI tests, the UI also opens in headless Chrome at the app's engine URL, given `window.__M2__ = {native: false, token}`; URL params like `?select=Hook&tab=sounds` set up a state.
+Or just edit the files: the app picks up the change within about 300 ms.
+
+## Building and testing
+
+- `cargo test --workspace` runs the tests.
+- To test the UI with no window and no sound: `M2_AUDIO=none cargo run -p m2-server --example headless -- <song-folder | -> <session.json> <token>`, then point a headless browser at the URL in the session file. `-` opens no song, for the start screen. Outside the app, the UI reads its token from `window.__M2__ = {native: false, token}`.
+- `std/build.sh` rebuilds std's kernels (it needs the `wasm32-unknown-unknown` Rust target). The built `std/kernels/std.wasm` is checked in.
+- `cargo run --release -p m2-runtime --example bench` compares WebAssembly and native speed.
+
+## Repository layout
+
+| Folder | What's in it |
+|---|---|
+| `core/ir` | The graph's compiled form, signal kinds and units, and the checker |
+| `core/kernel` | The kit for writing kernels in Rust |
+| `core/song` | The song folder: manifest, timeline files, tempo |
+| `core/runtime` | Loads packages, runs kernels (wasmtime), `poly`, `feedback`, audio clips; the renderer |
+| `core/script` | Runs the TypeScript (oxc + QuickJS) and the `@m2/core` SDK |
+| `core/session` | Compiling, revisions, knobs, cables, effects, notes edits, undo |
+| `core/plugins` | CLAP plugin hosting |
+| `core/play` | Plays a renderer on the audio device |
+| `std/`, `std/kernels-src` | The standard package, and its kernels' Rust source |
+| `apps/m2` | The command line |
+| `apps/music2-desktop` | The Mac app (Tauri): window, menus, dialogs |
+| `crates/server` | The app's local server: `graph.rs` (the open song), `files.rs` (the code editor's files), `routes.rs` (the API) |
+| `web/` | The UI: `StartScreen`, `GraphCanvas` (top bar and panel), `SongTimeline`, `NodeGraph`, `NoteView`, `CodeView`, `EffectBrowser` |
+| `examples/` | `first-song`, `with-plugins` and `resample` |
+| `docs/` | Design docs and the gap list |
+
+## Design docs
+
+- [Song as a program](docs/song-as-program.md): the design of music2, and what's built so far.
+- [Code and graph editing design](docs/code-graph-editing-design.md): how the app edits code.
+- [Code and graph editing brief](docs/code-graph-editing-brief.md): the request that design answered (historical).
+- [What music2 can't do yet](docs/gaps.md): the gap list, most important first.
+- [Music basics](docs/music-basics.md): music for beginners.

@@ -2,11 +2,12 @@ import clsx from "clsx";
 import { Lock, Magnet, Minus, Plus, X, ZoomIn, ZoomOut } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { editorHooks, findNoteClip, graphApi, laneWriting, writeLane, type GraphState, type Note, type NoteClip } from "../lib/graph";
-import { NOTE_NAMES } from "../lib/music";
 import { kbd, native } from "../lib/native";
 import { useStore } from "../lib/store";
 import { trackColor, trackHue } from "./SongTimeline";
 import { Button } from "./ui";
+
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
 const KEYS_W = 64;
 const RULER_H = 26;

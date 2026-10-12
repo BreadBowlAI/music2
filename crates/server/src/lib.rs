@@ -1,186 +1,62 @@
-//! L5 — the UI adapter. Serves the React UI to the desktop app's web view and exposes
-//! the engine over HTTP (commands, files, transport) and a WebSocket (meters, playhead,
-//! song updates). Audio stays native: the UI is a remote control for the Rust engine.
+//! The app's local server. It serves the React UI to the desktop app's web view, and the
+//! open song project over HTTP (`/api/graph…`) and a WebSocket of events.
 //!
-//! `music2-desktop` hosts it in-process, and also calls the file operations on
-//! [`AppState`] directly. Local scripts reach the same API with the session token.
+//! `music2-desktop` hosts it in-process. Local scripts use the same API with the session token.
 
 mod files;
 pub mod graph;
-mod patch;
 mod routes;
 
-use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::Result;
-use m2_audio_io::{AudioHandle, Msg};
-use m2_engine::Session;
-use m2_project::Song;
 use parking_lot::Mutex;
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio::sync::broadcast;
 
+/// Startup can't produce more than a few; the newest are kept.
+const MAX_UNHEARD: usize = 8;
+
 pub struct AppState {
-    pub session: Arc<Mutex<Session>>,
-    pub audio: Option<AudioHandle>,
-    pub audio_error: Option<String>,
-    pub looping: AtomicBool,
-    /// Bumped on changes that aren't song revisions (e.g. the loop switch).
-    pub ui_rev: AtomicU64,
-    /// One-shot events for every connected client (toasts).
+    /// One-shot events for every connected client: toasts, and `graph` when the open
+    /// project changed.
     pub events: broadcast::Sender<String>,
     /// Every `/api` request must carry it (`x-m2-token` header or `?token=`).
     /// The desktop app sets a fresh one per launch so other local software and web pages
-    /// can't drive the engine.
+    /// can't drive the app.
     pub token: String,
-    /// A song-as-program project (the new core), shown as a graph.
+    /// The open song project, if any.
     pub graph: graph::Graph,
+    /// Toasts sent while no window was connected, such as why the folder given at launch
+    /// didn't open. The next client to connect gets them.
+    unheard: Mutex<Vec<String>>,
 }
 
 impl AppState {
-    pub fn send(&self, msg: Msg) {
-        if let Some(a) = &self.audio {
-            a.send(msg);
-        }
-    }
-
     pub fn toast(&self, msg: impl Into<String>) {
-        let _ = self.events.send(json!({"t": "toast", "text": msg.into()}).to_string());
-    }
-
-    pub fn bump(&self) {
-        self.ui_rev.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn sync_loop(&self) {
-        let end = self.session.lock().song().end_tick();
-        self.send(Msg::Loop(self.looping.load(Ordering::Relaxed).then_some((0, end))));
-    }
-
-    pub fn is_dirty(&self) -> bool {
-        self.session.lock().is_dirty()
-    }
-
-    /// Bar (1-based, fractional) under the playhead.
-    pub fn playhead_bar(&self) -> f64 {
-        let tick = self.audio.as_ref().map(|a| a.playhead()).unwrap_or(0).max(0);
-        tick as f64 / self.session.lock().song().time_sig.ticks_per_bar() as f64 + 1.0
-    }
-
-    // ------------------------------------------------------------ files
-
-    pub fn new_song(&self) -> Result<()> {
-        self.send(Msg::Stop);
-        self.send(Msg::Seek(0));
-        self.session.lock().new_song(Song::default());
-        self.sync_loop();
-        Ok(())
-    }
-
-    pub fn open_song(&self, path: &Path) -> Result<()> {
-        self.send(Msg::Stop);
-        self.session.lock().open(path)?;
-        self.send(Msg::Seek(0));
-        self.sync_loop();
-        Ok(())
-    }
-
-    /// Save to `path`, or to the song's own file, or (first save / `copy_title`) to a
-    /// fresh file in the library. Saving to a new path names the song after the file.
-    pub fn save(&self, path: Option<&Path>, copy_title: Option<&str>) -> Result<PathBuf> {
-        let mut sess = self.session.lock();
-        if let Some(t) = copy_title {
-            sess.execute("song.set", json!({"title": t}))?;
-        }
-        let path = match (path, sess.path(), copy_title) {
-            (Some(p), _, _) => {
-                let stem = p.file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_default();
-                if !stem.is_empty() && stem != sess.song().title {
-                    sess.execute("song.set", json!({"title": stem}))?;
-                }
-                p.to_path_buf()
-            }
-            (None, Some(p), None) => p.to_path_buf(),
-            _ => {
-                let dir = library_dir();
-                std::fs::create_dir_all(&dir)?;
-                let base = slug(&sess.song().title);
-                let mut p = dir.join(format!("{base}.m2song"));
-                let mut n = 2;
-                while p.exists() {
-                    p = dir.join(format!("{base} {n}.m2song"));
-                    n += 1;
-                }
-                p
-            }
-        };
-        sess.save(&path)?;
-        Ok(path)
-    }
-
-    /// Render the song to a WAV (blocking; seconds of work for a long song).
-    pub fn export_wav(&self, path: Option<PathBuf>) -> Result<PathBuf> {
-        let (song, reg, bank) = {
-            let sess = self.session.lock();
-            (sess.song().clone(), sess.registry.clone(), sess.bank().clone())
-        };
-        let path = match path {
-            Some(p) => p,
-            None => {
-                let dir = library_dir().join("exports");
-                std::fs::create_dir_all(&dir)?;
-                dir.join(format!("{}.wav", slug(&song.title)))
-            }
-        };
-        let frames = m2_render::render_song(song, &reg, &bank, 48_000, 2.0);
-        m2_render::write_wav(&path, &frames, 48_000)?;
-        Ok(path)
-    }
-
-    /// Add a sound file as an audio clip at `bar` (or as a sampler instrument).
-    pub fn import_audio(&self, name: &str, bytes: &[u8], as_instrument: bool, bar: f64) -> Result<Value> {
-        let mut sess = self.session.lock();
-        let stem = Path::new(name).file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| "Sound".into());
-        let asset = sess.import_wav_bytes(&stem, bytes, None)?;
-        if as_instrument {
-            sess.execute("sampler.load", json!({"asset": asset}))
-        } else {
-            sess.execute("audio.place", json!({"asset": asset, "start_bar": bar.max(1.0)}))
+        let ev = json!({"t": "toast", "text": msg.into()}).to_string();
+        // Held across the send so a client subscribing right now can't miss it.
+        let mut unheard = self.unheard.lock();
+        if self.events.send(ev.clone()).is_err() {
+            unheard.push(ev);
+            let extra = unheard.len().saturating_sub(MAX_UNHEARD);
+            unheard.drain(..extra);
         }
     }
 
-    pub fn import_audio_file(&self, path: &Path, as_instrument: bool, bar: f64) -> Result<Value> {
-        let bytes = std::fs::read(path)?;
-        self.import_audio(&path.display().to_string(), &bytes, as_instrument, bar)
+    /// Listen for events, starting with the toasts no client has heard yet.
+    fn subscribe(&self) -> (Vec<String>, broadcast::Receiver<String>) {
+        let mut unheard = self.unheard.lock();
+        (std::mem::take(&mut *unheard), self.events.subscribe())
     }
-}
 
-/// Show a file in Finder / Explorer (selected), or open a folder.
-pub fn reveal(path: &Path) -> Result<()> {
-    #[cfg(target_os = "macos")]
-    if path.is_file() {
-        std::process::Command::new("open").arg("-R").arg(path).spawn()?;
-        return Ok(());
+    /// Tell every client to fetch the project again: it was opened, closed or edited.
+    pub fn graph_changed(&self) {
+        let _ = self.events.send(json!({"t": "graph"}).to_string());
     }
-    let target = if path.is_file() { path.parent().map(Path::to_path_buf).unwrap_or(path.to_path_buf()) } else { path.to_path_buf() };
-    open::that(target)?;
-    Ok(())
-}
-
-fn slug(s: &str) -> String {
-    let out: String = s.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
-    let out = out.trim().to_string();
-    if out.is_empty() { "Untitled".into() } else { out }
-}
-
-/// Where songs live by default.
-pub fn library_dir() -> PathBuf {
-    dirs::audio_dir().unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join("Music")).join("music2")
 }
 
 pub struct ServeOptions {
@@ -188,43 +64,21 @@ pub struct ServeOptions {
     pub port: u16,
     /// Built frontend (`web/dist`). Missing → API only (use the Vite dev server).
     pub web_dir: PathBuf,
-    pub song: Option<PathBuf>,
     /// Require this token on every API call (see [`AppState::token`]).
     pub token: String,
 }
 
-/// A running engine + HTTP server.
+/// A running server.
 pub struct Running {
     pub url: String,
     pub state: Arc<AppState>,
 }
 
-/// Start the engine, audio and HTTP server on background threads and return at once.
+/// Start the HTTP server on a background thread and return at once. No project is open
+/// yet, and nothing opens the audio device until one is.
 pub fn start(opts: ServeOptions) -> Result<Running> {
-    let (reg, plugin_errors) = Session::default_registry();
-    let mut session = Session::new(Arc::new(reg));
-    if let Some(p) = &opts.song {
-        session.open(p)?;
-    }
-    let (audio, audio_error) = match AudioHandle::spawn() {
-        Ok(a) => (Some(a), None),
-        Err(e) => (None, Some(format!("No audio output: {e:#}"))),
-    };
     let (events, _) = broadcast::channel(256);
-    let state = Arc::new(AppState {
-        session: Arc::new(Mutex::new(session)),
-        audio,
-        audio_error,
-        looping: AtomicBool::new(true),
-        ui_rev: AtomicU64::new(1),
-        events,
-        token: opts.token,
-        graph: graph::Graph::default(),
-    });
-    for e in plugin_errors {
-        state.toast(e);
-    }
-    spawn_audio_sync(state.clone());
+    let state = Arc::new(AppState { events, token: opts.token, graph: graph::Graph::default(), unheard: Mutex::default() });
     spawn_graph_watch(state.clone());
 
     let listener = std::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], opts.port)))?;
@@ -243,7 +97,7 @@ pub fn start(opts: ServeOptions) -> Result<Running> {
     Ok(Running { url, state })
 }
 
-/// Pick up edits to the open graph project made outside the app, and tell clients.
+/// Pick up edits to the open project made outside the app, and tell clients.
 fn spawn_graph_watch(state: Arc<AppState>) {
     std::thread::Builder::new()
         .name("music2-graph".into())
@@ -251,46 +105,46 @@ fn spawn_graph_watch(state: Arc<AppState>) {
             loop {
                 std::thread::sleep(Duration::from_millis(300));
                 if state.graph.poll() {
-                    let _ = state.events.send(json!({"t": "graph"}).to_string());
+                    state.graph_changed();
                 }
             }
         })
         .expect("spawn graph watcher");
 }
 
-/// Keep the audio thread's renderer in step with the session, and
-/// forward engine notices and renderer warnings as toasts.
-fn spawn_audio_sync(state: Arc<AppState>) {
-    std::thread::Builder::new()
-        .name("music2-sync".into())
-        .spawn(move || {
-            let mut synced = 0u64;
-            let mut warned: HashSet<String> = HashSet::new();
-            loop {
-                std::thread::sleep(Duration::from_millis(8));
-                let notices = state.session.lock().take_notices();
-                for n in notices {
-                    state.toast(n);
-                }
-                let Some(audio) = &state.audio else { continue };
-                let s = state.session.lock();
-                if s.revision() == synced {
-                    continue;
-                }
-                synced = s.revision();
-                let song = s.song().clone();
-                let renderer = m2_render::Renderer::new(song.clone(), &s.registry, s.bank(), audio.sample_rate as f32);
-                drop(s);
-                for w in &renderer.warnings {
-                    if warned.insert(w.clone()) {
-                        state.toast(w.clone());
-                    }
-                }
-                audio.send(Msg::Renderer(Box::new(renderer)));
-                if state.looping.load(Ordering::Relaxed) {
-                    audio.send(Msg::Loop(Some((0, song.end_tick()))));
-                }
-            }
-        })
-        .expect("spawn sync thread");
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn state() -> AppState {
+        AppState { events: broadcast::channel(16).0, token: String::new(), graph: graph::Graph::default(), unheard: Mutex::default() }
+    }
+
+    /// The desktop app reports a bad project folder before its window connects.
+    #[test]
+    fn a_toast_no_client_heard_goes_to_the_next_one() {
+        let s = state();
+        s.toast("Couldn't open my-song");
+        let (unheard, mut events) = s.subscribe();
+        assert_eq!(unheard.len(), 1);
+        assert!(unheard[0].contains("Couldn't open my-song"));
+        // Heard once is enough: the next client doesn't get it again.
+        assert!(s.subscribe().0.is_empty());
+        // While a client listens, toasts go out live and aren't kept.
+        s.toast("live");
+        assert!(events.try_recv().unwrap().contains("live"));
+        drop(events);
+        assert!(s.subscribe().0.is_empty());
+    }
+
+    #[test]
+    fn only_the_newest_unheard_toasts_are_kept() {
+        let s = state();
+        for i in 0..20 {
+            s.toast(format!("toast {i}"));
+        }
+        let (unheard, _) = s.subscribe();
+        assert_eq!(unheard.len(), MAX_UNHEARD);
+        assert!(unheard.last().unwrap().contains("toast 19"));
+    }
 }
