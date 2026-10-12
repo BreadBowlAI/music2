@@ -1,7 +1,24 @@
 import clsx from "clsx";
 import { CodeXml, Download, Pause, Piano, Play, Redo2, SkipBack, TriangleAlert, Undo2, Workflow, X } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { editorHooks, findNoteClip, graphApi, type ClipRef, type GraphState, type GraphStatus, type ModuleView, type Problem } from "../lib/graph";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  attention,
+  barAt,
+  editorHooks,
+  findLane,
+  findNoteClip,
+  graphApi,
+  keyNote,
+  labelOf,
+  moduleName,
+  position,
+  type ClipRef,
+  type Diagnostic,
+  type GraphState,
+  type GraphStatus,
+  type ModuleView,
+  type Problem,
+} from "../lib/graph";
 import { exportSong, useExport } from "../lib/exporting";
 import { isMac, kbd } from "../lib/native";
 import { useStore } from "../lib/store";
@@ -41,19 +58,20 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
     [poll, toast],
   );
 
-  // One selection for the timeline and the panel. A module renamed in its code stays selected
-  // (the module now built from its file); if an edit removes it, the default shows.
+  // One selection for the timeline and the panel, by module key. A label changed in the code
+  // changes nothing here; a key changed in the code keeps its module selected (the module now
+  // built from its file); if an edit removes it, the default shows.
   const [picked, setPicked] = useState<string | null>(null);
-  const shown = useRef<{ name: string; file: string | null; names: string[] } | null>(null);
-  if (picked && !graph.view.modules.some((m) => m.name === picked) && shown.current?.name === picked && shown.current.file) {
+  const shown = useRef<{ key: string; file: string | null; keys: string[] } | null>(null);
+  if (picked && !graph.view.modules.some((m) => m.key === picked) && shown.current?.key === picked && shown.current.file) {
     const was = shown.current;
-    const renamed = graph.view.modules.find((m) => !was.names.includes(m.name) && fileOf(m) === was.file);
-    if (renamed) setPicked(renamed.name);
+    const renamed = graph.view.modules.find((m) => !was.keys.includes(m.key) && fileOf(m) === was.file);
+    if (renamed) setPicked(renamed.key);
   }
-  const tabs = [...graph.view.modules.filter((m) => m.name === "song"), ...graph.view.modules.filter((m) => m.name !== "song")];
-  const module = graph.view.modules.find((m) => m.name === picked) ?? graph.view.modules.find((m) => m.track) ?? tabs[0];
+  const tabs = [...graph.view.modules.filter((m) => m.key === "song"), ...graph.view.modules.filter((m) => m.key !== "song")];
+  const module = graph.view.modules.find((m) => m.key === picked) ?? graph.view.modules.find((m) => m.track) ?? tabs[0];
   useEffect(() => {
-    if (module) shown.current = { name: module.name, file: fileOf(module), names: graph.view.modules.map((m) => m.name) };
+    if (module) shown.current = { key: module.key, file: fileOf(module), keys: graph.view.modules.map((m) => m.key) };
   });
 
   // The panel's view, and the notes clip open in it. A clip is the selected module's: selecting
@@ -61,7 +79,7 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
   // The code view stays and follows the selection.
   const [view, setView] = useState<PanelView>("graph");
   const [clip, setClip] = useState<ClipRef | null>(null);
-  if (clip && !(clip.module === module?.name && findNoteClip(timeline, clip))) {
+  if (clip && !(clip.module === module?.key && findNoteClip(timeline, clip))) {
     setClip(null);
     if (view === "notes") setView("graph");
   }
@@ -74,6 +92,13 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
     setClip(null);
     setView((v) => (v === "notes" ? "graph" : v));
   }, []);
+
+  // What needs attention in each track, marked on its row.
+  const issues = useMemo(() => {
+    const by = new Map<string, Diagnostic[]>();
+    for (const d of attention(graph)) if (d.module) by.set(d.module, [...(by.get(d.module) ?? []), d]);
+    return by;
+  }, [graph]);
 
   const panel = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(() => {
@@ -113,7 +138,7 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
           graph={graph}
           onShow={(p) => {
             // The module whose code has the problem: the one it names, else the one built from its file.
-            const owner = p.module ?? graph.view.modules.find((m) => m.nodes.some((n) => n.file === p.file))?.name;
+            const owner = p.module ?? graph.view.modules.find((m) => m.nodes.some((n) => n.file === p.file))?.key;
             if (owner) setPicked(owner);
             setView("code");
           }}
@@ -125,11 +150,11 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
         revision={graph.view.revision}
         beat={status.beat}
         playing={status.playing}
-        selected={module?.name}
+        selected={module?.key}
         open={clip}
+        issues={issues}
         onSelect={setPicked}
         onOpenClip={openClip}
-        onCloseClip={closeClip}
         onSeek={seek}
       />
       <div
@@ -147,35 +172,36 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
         <div className="h-11 shrink-0 flex items-center gap-3 px-3 bg-ink-900 border-b border-black/[0.06]">
           <div role="tablist" aria-label="Modules" className="flex-1 min-w-0 flex items-center gap-1 overflow-x-auto">
             {tabs.map((m) => {
-              const color = trackColor(timeline, m.name);
+              const color = trackColor(timeline, m.key);
               return (
                 <button
-                  key={m.name}
+                  key={m.key}
                   role="tab"
                   aria-selected={m === module}
-                  data-module-tab={m.name}
-                  onClick={() => setPicked(m.name)}
+                  data-module-tab={m.key}
+                  title={keyNote(moduleName(m), m.key) ? `${moduleName(m)} (${m.key})` : undefined}
+                  onClick={() => setPicked(m.key)}
                   className={clsx(
                     "h-7 px-3 shrink-0 rounded-lg text-[13px] font-medium inline-flex items-center gap-2 cursor-pointer transition-colors",
                     m === module ? "bg-ink-700 text-ink-100" : "text-ink-400 hover:text-ink-100 hover:bg-ink-850",
                   )}
                 >
                   {color && <span className="size-2 rounded-full" style={{ background: color }} />}
-                  {m.name === "song" ? "Song" : m.name}
+                  {moduleName(m)}
                 </button>
               );
             })}
           </div>
           <div role="tablist" aria-label="Views" className="shrink-0 flex items-center gap-0.5 p-0.5 rounded-[10px] bg-ink-950 ring-1 ring-black/[0.04]">
             {VIEWS.map(({ id, label, Icon }) => {
-              const name = module?.name === "song" ? "the song" : module?.name;
+              const name = module?.key === "song" ? "the song" : module && moduleName(module);
               const title =
                 id === "graph"
                   ? `Play with ${name} as a graph of knobs and cables`
                   : id === "code"
                     ? `Edit ${name}'s code`
                     : clip
-                      ? `Edit the notes of ${clip.module}'s ${clip.lane} clip ${clip.index + 1}`
+                      ? `Edit the notes of ${clipName(graph, clip)}`
                       : "Double-click a notes clip in the timeline to edit its notes";
               return (
                 <button
@@ -198,10 +224,19 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
             })}
           </div>
         </div>
-        <PanelBody graph={graph} module={module?.name} view={view} clip={clip} onCloseClip={closeClip} />
+        <PanelBody graph={graph} module={module?.key} view={view} clip={clip} onCloseClip={closeClip} />
       </div>
     </div>
   );
+}
+
+/** A notes clip as the app names it: `Bass's Notes clip at bar 3`. */
+function clipName(graph: GraphState, clip: ClipRef) {
+  const track = graph.view.modules.find((m) => m.key === clip.module);
+  const lane = findLane(graph.timeline, clip.module, clip.lane);
+  const at = findNoteClip(graph.timeline, clip);
+  const bar = at ? ` at bar ${barAt(graph.timeline.meter, at.start).bar + 1}` : "";
+  return `${track ? moduleName(track) : clip.module}'s ${lane ? labelOf(lane) : clip.lane} clip${bar}`;
 }
 
 /** The project file a module is written in: where most of its nodes are. */
@@ -216,7 +251,7 @@ function CompileBanner({ graph, onShow }: { graph: GraphState; onShow: (p: Probl
   // The diagnostics name files relative to the project; the raw errors are the fallback.
   const problems: Problem[] = graph.diagnostics.length
     ? graph.diagnostics
-    : graph.view.draft_errors.map((message) => ({ file: null, line: null, col: null, message }));
+    : graph.view.draft_errors.map((message): Problem => ({ file: null, line: null, col: null, message, code: "code.build", severity: "error" }));
   return (
     <div className="shrink-0 px-5 py-2 bg-amber-500/10 border-b border-amber-600/20 text-[13px] text-amber-950 flex items-start gap-3" data-testid="compile-banner">
       <TriangleAlert className="size-4 mt-0.5 shrink-0 text-amber-600" />
@@ -234,6 +269,7 @@ function CompileBanner({ graph, onShow }: { graph: GraphState; onShow: (p: Probl
               </span>
             )}
             <span className="min-w-0 truncate font-mono text-amber-950/90" title={p.message}>{p.message}</span>
+            {p.code !== "code.build" && <span className="shrink-0 font-mono text-amber-800/60">{p.code}</span>}
           </div>
         ))}
         {problems.length > 2 && <div className="text-xs text-amber-900/70">and {problems.length - 2} more</div>}
@@ -266,10 +302,9 @@ function GraphBar({ graph, status, onSeek }: { graph: GraphState; status: GraphS
     toast(`${n === 1 ? "A file has" : `${n} files have`} unsaved edits in the code editor.`, { label: "Close anyway", run: () => void graphApi.close() });
   };
   const time = `${Math.floor(status.seconds / 60)}:${(status.seconds % 60).toFixed(1).padStart(4, "0")}`;
-  const bpb = graph.timeline.beats_per_bar;
   // Playback sits on whole frames, so a seek to a beat can land a hair before it.
   const beat = Math.round(status.beat * 1000) / 1000;
-  const position = `${Math.floor(beat / bpb) + 1}.${Math.floor(beat % bpb) + 1}`;
+  const at = position(graph.timeline.meter, beat);
   return (
     <header data-tauri-drag-region className={clsx("relative h-16 shrink-0 flex items-center gap-3 px-4 border-b border-black/[0.06] bg-ink-900", isMac && "pl-[88px]")}>
       <div data-tauri-drag-region className="size-8 rounded-xl pop-gradient grid place-items-center shadow-lg shadow-pop-500/15">
@@ -289,14 +324,14 @@ function GraphBar({ graph, status, onSeek }: { graph: GraphState; status: GraphS
         <SkipBack className="size-4" />
       </Button>
       <div className="flex items-baseline gap-2.5 font-mono tabular-nums">
-        <span className="text-[15px] text-ink-100 min-w-12" title="Bar and beat">{position}</span>
+        <span className="text-[15px] text-ink-100 min-w-12" title="Bar and beat">{at}</span>
         <span className="text-xs text-ink-400 w-12" title="Time">{time}</span>
       </div>
       <div data-tauri-drag-region className="flex-1 self-stretch" />
       {/* Centred in the window, whatever the transport and buttons beside it take. It keeps clear of
           them (360px a side holds the widest, with an export running): a long name is cut short. */}
       <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 max-w-[calc(100%-720px)] flex items-center gap-2 whitespace-nowrap pointer-events-none">
-        <span data-testid="bar-song-name" className="min-w-0 truncate text-[15px] font-semibold text-ink-100 pointer-events-auto" title={`${graph.name}\n${graph.dir}`}>
+        <span data-testid="bar-song-name" className="min-w-0 truncate text-[15px] font-semibold text-ink-100 pointer-events-auto" title={`${graph.name}\n${graph.dir}${graph.sample_rate ? `\n${graph.sample_rate / 1000} kHz` : ""}`}>
           {graph.name}
         </span>
         <span className="shrink-0 text-xs text-ink-400 font-mono pointer-events-auto" title="Every accepted change to the code is a new revision">rev {graph.view.revision}</span>
@@ -401,14 +436,7 @@ const PanelBody = memo(function PanelBody({
         </div>
       )}
       {view === "notes" && clip && (
-        <NoteView
-          key={`${clip.module}:${clip.lane}:${clip.index}`}
-          graph={graph}
-          module={clip.module}
-          lane={clip.lane}
-          index={clip.index}
-          onClose={onCloseClip}
-        />
+        <NoteView key={`${clip.module}:${clip.lane}:${clip.id}`} graph={graph} clip={clip} onClose={onCloseClip} />
       )}
     </>
   );

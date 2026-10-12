@@ -6,7 +6,7 @@ Design proposal, 11 October 2026. Responds to [the editing brief](code-graph-edi
 
 | Section | Status | In the contract |
 |---|---|---|
-| [The essential decisions](#the-essential-decisions), [The code artists write](#the-code-artists-write) | Adopted, except decision 5's second sentence and the example's track signature | [WRITE-6, WRITE-9](architecture.md#expectations-and-the-delta), [ID-4](architecture.md#keys) |
+| [The essential decisions](#the-essential-decisions), [The code artists write](#the-code-artists-write) | Adopted, except decision 5's second sentence; the example uses the key-first track signature | [WRITE-6, WRITE-9](architecture.md#expectations-and-the-delta), [ID-4](architecture.md#keys) |
 | [Components declare their own interface](#components-declare-their-own-interface) | Superseded in shape; reasoning kept | [Component descriptors](architecture.md#component-descriptors) |
 | [Two derived graphs and one source](#two-derived-graphs-and-one-source) | Not built; editor side | [WRITE-10](architecture.md#expectations-and-the-delta) |
 | [Identity and lifetime](#identity-and-lifetime) | Superseded | [Identity](architecture.md#identity) |
@@ -57,10 +57,10 @@ The useful SwiftUI lesson is the separation of an ephemeral declaration from per
 
 ## The code artists write
 
-Keep the current functional syntax. Named bindings make routing readable; nested calls remain fully legitimate. (Under format v1 the key comes first, so the example below opens with `track("bass", { name: "Bass" }, …)`: [ID-4](architecture.md#keys).)
+Keep the current functional syntax. Named bindings make routing readable; nested calls remain fully legitimate. (The key comes first and the display name is a label, as everywhere since step 4: [ID-4](architecture.md#keys).)
 
 ```ts
-export default track("Bass", ({ lane, time }) => {
+export default track("bass", { name: "Bass" }, ({ lane, time }) => {
   const cutoff = lane.control("cutoff", "hz", hz(500));
   const drop = lane.mask("drop");
   const wobble = xrange(lfo(time.beats, { period: 0.5 }), hz(200), khz(2.5));
@@ -522,7 +522,7 @@ Adding an effect to an expression-bodied arrow necessarily changes syntax around
 
 Use property-based generators over the supported grammar. For every emitted capability and permitted operation, assert: the patched source parses; compilation and timeline validation pass; the independent semantic result matches the full normalized graph; bytes outside patch ranges are identical; comments survive; identity correspondence is injective; a no-op has no diff; a guarded inverse restores the original source/data when no intervening edit exists. Test operation sequences, not just isolated edits.
 
-Adversarial cases include duplicate identical calls; copy/paste and reorder; shadowed unit helpers; aliases with several uses; negative/exponential literals; Unicode before spans; CRLF; comments inside unit calls and property lists; trailing commas; ASI boundaries; spreads with getters; duplicate/computed keys; shorthand properties; captured outer signals; illegal voice escapes; feedback setters; cross-track cycles; package changes; lane slug collisions; invalid intermediate files; disjoint and overlapping saves; dropped/reordered preview messages; stale plans; retries after uncertain commits; and crashes at every journal/materialization step.
+Adversarial cases include duplicate identical calls; copy/paste and reorder; shadowed unit helpers; aliases with several uses; negative/exponential literals; Unicode before spans; CRLF; comments inside unit calls and property lists; trailing commas; ASI boundaries; spreads with getters; duplicate/computed keys; shorthand properties; captured outer signals; illegal voice escapes; feedback setters; cross-track cycles; package changes; lane key collisions; invalid intermediate files; disjoint and overlapping saves; dropped/reordered preview messages; stale plans; retries after uncertain commits; and crashes at every journal/materialization step.
 
 Differentially run representative supported programs with and without instrumentation and compare execution meaning. This detects the particularly dangerous class of bugs where provenance recording itself changes evaluation order or receiver behavior.
 

@@ -297,7 +297,7 @@ pub fn create_at(dir: &Path, from: &Path) -> Result<PathBuf> {
 /// Copy `from` into the new, empty `dir` and name the song. On failure `dir` is removed
 /// again: it only holds what was copied.
 fn fill(dir: &Path, name: &str, from: &Path) -> Result<()> {
-    let result = copy_tree(from, dir, true).and_then(|()| set_name(dir, name));
+    let result = copy_tree(from, dir, true).and_then(|()| set_name(dir, name)).and_then(|()| ignore_local(dir));
     if result.is_err() {
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -344,18 +344,45 @@ fn writable(_: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Write the song's name into `music2.toml`, keeping what else it says.
+/// `.music2/` is this machine's, never the song's: a new project keeps it out of git (FMT-20).
+fn ignore_local(dir: &Path) -> Result<()> {
+    std::fs::write(dir.join(".gitignore"), format!("{}/\n", m2_song::path::LOCAL)).context("writing .gitignore")
+}
+
+/// Write the song's name into the copy's `music2.toml`, a format 1 manifest: only the `name`
+/// line of `[project]` changes, so the rest (`format`, `sample_rate`, `[dependencies]`, comments)
+/// stays as the template wrote it.
 fn set_name(dir: &Path, name: &str) -> Result<()> {
-    let path = dir.join("music2.toml");
-    let mut doc: toml::Table = match std::fs::read_to_string(&path) {
-        Ok(text) => toml::from_str(&text).context("reading music2.toml")?,
-        Err(e) if e.kind() == ErrorKind::NotFound => toml::Table::new(),
-        Err(e) => return Err(e).context("reading music2.toml"),
-    };
-    let project = doc.entry("project").or_insert_with(|| toml::Value::Table(toml::Table::new()));
-    let table = project.as_table_mut().ok_or_else(|| anyhow!("music2.toml: [project] isn't a table"))?;
-    table.insert("name".into(), toml::Value::String(name.into()));
-    std::fs::write(&path, toml::to_string(&doc)?).context("writing music2.toml")
+    let path = dir.join(m2_song::path::MANIFEST);
+    let text = std::fs::read_to_string(&path).context("reading music2.toml")?;
+    let line = format!("name = {}\n", toml::Value::String(name.into()));
+    let (mut out, mut table, mut done) = (String::new(), None::<String>, false);
+    for l in text.split_inclusive('\n') {
+        let t = l.split('#').next().unwrap_or("").trim();
+        if t.starts_with('[') {
+            // Leaving [project] without a name: it gets one at its end.
+            if table.as_deref() == Some("[project]") && !done {
+                out += &line;
+                done = true;
+            }
+            table = Some(t.to_string());
+        } else if table.as_deref() == Some("[project]") && !done && t.split('=').next().map(str::trim) == Some("name") {
+            out += &line;
+            done = true;
+            continue;
+        }
+        out += l;
+    }
+    if table.as_deref() == Some("[project]") && !done {
+        out += if out.ends_with('\n') || out.is_empty() { "" } else { "\n" };
+        out += &line;
+        done = true;
+    }
+    if !done {
+        // Not a format 1 manifest; opening it says so.
+        out += &format!("{}[project]\n{line}", if out.is_empty() || out.ends_with('\n') { "" } else { "\n" });
+    }
+    std::fs::write(&path, out).context("writing music2.toml")
 }
 
 #[cfg(test)]
@@ -511,12 +538,36 @@ mod tests {
         assert_eq!(dir, t.0.join("Night-drive"));
         assert_eq!(manifest_name(&dir), "Night/drive");
         assert!(dir.join("song.ts").is_file());
-        assert!(dir.join("tracks").is_dir() && dir.join("timeline/song.json").is_file());
+        assert!(dir.join("tracks").is_dir() && dir.join("data/arrangement.json").is_file());
+        // `.music2/` is kept out of git (FMT-20).
+        assert_eq!(std::fs::read_to_string(dir.join(".gitignore")).unwrap(), ".music2/\n");
         // The template's own description isn't part of the song.
         assert!(!dir.join(TEMPLATE_TOML).exists());
         let project = m2_song::Project::open(&dir).unwrap();
         assert_eq!(project.manifest.project.name, "Night/drive");
         assert_eq!(project.manifest.project.entry, "song.ts");
+    }
+
+    // FMT-4: a new song's manifest is the template's, format 1, with only its name changed.
+    #[test]
+    fn naming_a_song_changes_only_the_name_line_of_its_manifest() {
+        let t = Temp::new();
+        let manifest = "# The starter.\n[project]\nname = \"Starter beat\"   # its label\nformat = 1\nsample_rate = 44100\n\n\
+                        [dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n";
+        std::fs::write(t.0.join("music2.toml"), manifest).unwrap();
+        let name = "Night \"drive\" \\ ☕";
+        set_name(&t.0, name).unwrap();
+        let written = std::fs::read_to_string(t.0.join("music2.toml")).unwrap();
+        assert_eq!(
+            written,
+            manifest.replace("name = \"Starter beat\"   # its label", &format!("name = {}", toml::Value::String(name.into())))
+        );
+        let m = m2_song::Manifest::read(&written).unwrap();
+        assert_eq!((m.project.name.as_str(), m.project.sample_rate), (name, 44_100));
+        // A [project] without a name gets one at its end.
+        std::fs::write(t.0.join("music2.toml"), "[project]\nformat = 1\n[dependencies]\n").unwrap();
+        set_name(&t.0, "x").unwrap();
+        assert_eq!(std::fs::read_to_string(t.0.join("music2.toml")).unwrap(), "[project]\nformat = 1\nname = \"x\"\n[dependencies]\n");
     }
 
     #[test]
@@ -617,7 +668,7 @@ mod tests {
         // An example copy is named after the example unless a name is given.
         let ex = new_song(&graph, &NewSong { example: Some("first-song".into()), dir: Some(t.0.clone()), ..NewSong::default() }).unwrap();
         assert_eq!(ex["name"], "First song");
-        assert!(t.0.join("First song/timeline/kick.hits.json").is_file());
+        assert!(t.0.join("First song/data/kick/hits.json").is_file());
     }
 
     #[test]
@@ -638,6 +689,11 @@ mod tests {
         let templates = Temp::new();
         let broken = templates.0.join("broken");
         std::fs::create_dir_all(&broken).unwrap();
+        std::fs::write(
+            broken.join("music2.toml"),
+            "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n",
+        )
+        .unwrap();
         std::fs::write(broken.join("song.ts"), "export default song(() => oops);\n").unwrap();
         let e = format!("{:#}", open_new(&graph, &t.0, "Broken", &broken).unwrap_err());
         assert!(e.starts_with("song.ts:1:"), "{e}");
@@ -661,7 +717,7 @@ mod tests {
             let dir = create(&t.0, &s.name, &template(&s.id)).unwrap();
             let project = m2_song::Project::open(&dir).unwrap();
             let c = m2_session::compile(&project, &mut packages).unwrap_or_else(|d| panic!("{}: {d:?}", s.id));
-            let mut r = m2_runtime::Renderer::for_project(&c.flat, &project, &packages, 48_000).unwrap();
+            let mut r = m2_runtime::Renderer::new(&c.flat, &c.data, &packages, project.sample_rate()).unwrap();
             let frames = r.render(4.0).unwrap();
             let peak = frames.iter().fold(0.0f32, |m, f| m.max(f[0].abs()).max(f[1].abs()));
             if s.id == "empty" {

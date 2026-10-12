@@ -97,6 +97,7 @@ pub struct Running {
 /// Start the HTTP server on a background thread and return at once. No project is open
 /// yet, and nothing opens the audio device until one is.
 pub fn start(opts: ServeOptions) -> Result<Running> {
+    resources::keep_hashes();
     let state = Arc::new(AppState::new(opts.token, graph::Graph::default()));
     spawn_graph_watch(state.clone());
 
@@ -158,13 +159,15 @@ mod tests {
 
     /// Every change is announced with what needs attention in the revision it leaves.
     #[test]
-    fn a_graph_event_carries_the_revision_and_its_warnings() {
+    fn a_graph_event_carries_the_revision_and_its_problems() {
         let dir = std::env::temp_dir().join(format!("m2-server-news-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("timeline")).unwrap();
+        std::fs::create_dir_all(dir.join("data/kick")).unwrap();
         let song = "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
-                    const k = track('Kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n";
+                    const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n";
+        let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n";
+        std::fs::write(dir.join("music2.toml"), manifest).unwrap();
         std::fs::write(dir.join("song.ts"), song).unwrap();
-        std::fs::write(dir.join("timeline/kick.old.json"), r#"{"clips": []}"#).unwrap();
+        std::fs::write(dir.join("data/kick/old.json"), r#"{"clips": []}"#).unwrap();
         let s = AppState::new(String::new(), graph::Graph::silent());
         let (_, mut events) = s.subscribe();
         s.graph_changed();
@@ -173,8 +176,12 @@ mod tests {
         s.graph_changed();
         let event: serde_json::Value = serde_json::from_str(&events.try_recv().unwrap()).unwrap();
         assert_eq!((&event["t"], &event["revision"], &event["diagnostics"]), (&json!("graph"), &json!(1), &json!([])));
-        let warning = &event["warnings"][0];
-        assert_eq!((&warning["code"], &warning["file"]), (&json!("data.unclaimed"), &json!("timeline/kick.old.json")));
+        // DIAG-4: the revision's problems, each with its severity, code and file.
+        let problem = &event["problems"][0];
+        assert_eq!(
+            (&problem["severity"], &problem["code"], &problem["src"]),
+            (&json!("warning"), &json!("data.unclaimed"), &json!("data/kick/old.json"))
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 

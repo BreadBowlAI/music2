@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use m2_ir::{Ir, check};
-use m2_song::Timeline;
+use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
 
 use super::*;
@@ -15,23 +15,47 @@ fn std_packages() -> PackageSet {
 }
 
 fn song(nodes: Value, out: &str, lanes: Value) -> Ir {
-    serde_json::from_value(json!({"ir": 0, "root": {"module": "song", "export": "out"},
-        "modules": [{"name": "song", "lanes": lanes, "nodes": nodes, "exports": {"out": out}}]}))
+    serde_json::from_value(json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"},
+        "modules": [{"key": "song", "lanes": lanes, "nodes": nodes, "exports": {"out": out}}]}))
     .unwrap()
 }
 
-/// A timeline folder with the given files, in a fresh temp dir.
-fn timeline(files: &[(&str, Value)]) -> (Timeline, PathBuf) {
-    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let dir = std::env::temp_dir().join(format!("m2-runtime-test-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
-    std::fs::create_dir_all(&dir).unwrap();
-    for (name, v) in files {
-        std::fs::write(dir.join(name), v.to_string()).unwrap();
-    }
-    (Timeline::load(&dir).unwrap(), dir)
+const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\n";
+
+/// A project folder with the given data files, in a fresh temp dir, and the data `ir` reads
+/// from it.
+fn timeline_for(ir: &Ir, files: &[(&str, Value)]) -> (DataSet, PathBuf) {
+    let dir = project(files);
+    (data(ir, &dir), dir)
 }
 
-fn render(ir: &Ir, tl: &Timeline, seconds: f64) -> Vec<[f32; 2]> {
+/// A project folder with the given data files, in a fresh temp dir.
+fn project(files: &[(&str, Value)]) -> PathBuf {
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "m2-runtime-test-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("music2.toml"), MANIFEST).unwrap();
+    std::fs::write(dir.join("song.ts"), "").unwrap();
+    for (name, v) in files {
+        let p = dir.join(name);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, v.to_string()).unwrap();
+    }
+    dir
+}
+
+/// The data `ir` reads from the project at `dir`.
+fn data(ir: &Ir, dir: &Path) -> DataSet {
+    let (data, diags) = Project::open(dir).unwrap_or_else(|e| panic!("{e:?}")).data(&decls(ir), None);
+    assert!(diags.iter().all(|d| !d.code.starts_with("lane.")), "{diags:?}");
+    data
+}
+
+fn render(ir: &Ir, tl: &DataSet, seconds: f64) -> Vec<[f32; 2]> {
     let pk = std_packages();
     let flat = check(ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
     Renderer::new(&flat, tl, &pk, SR).unwrap().render(seconds).unwrap()
@@ -51,7 +75,7 @@ fn sine_has_the_right_pitch() {
         "o",
         json!([]),
     );
-    let out = render(&ir, &Timeline::default(), 1.0);
+    let out = render(&ir, &DataSet::empty(), 1.0);
     assert_eq!(out.len(), SR as usize);
     let crossings = out.windows(2).filter(|w| w[0][0] < 0.0 && w[1][0] >= 0.0).count();
     assert!((439..=441).contains(&crossings), "{crossings} upward zero crossings");
@@ -62,7 +86,7 @@ fn sine_has_the_right_pitch() {
 
 #[test]
 fn poly_plays_notes_from_the_timeline_and_is_deterministic() {
-    let lanes = json!([{"id": "notes", "kind": "events<note>"}, {"id": "cutoff", "kind": "control<hz>", "default": 2000}]);
+    let lanes = json!([{"key": "notes", "kind": "events<note>"}, {"key": "cutoff", "kind": "control<hz>", "default": 2000}]);
     let ir = song(
         json!([
             {"id": "n", "op": "lane", "lane": "notes"},
@@ -81,11 +105,17 @@ fn poly_plays_notes_from_the_timeline_and_is_deterministic() {
         lanes,
     );
     // 120 bpm: one beat is half a second. A C major chord on beat 0 for one beat, then silence.
-    let (tl, dir) = timeline(&[
-        ("song.json", json!({"tempo": [{"beat": 0, "bpm": 120}]})),
-        ("song.notes.json", json!({"clips": [{"start": 0, "length": 4, "notes": [
-            {"pitch": "C4", "start": 0, "length": 1}, {"pitch": "E4", "start": 0, "length": 1}, {"pitch": "G4", "start": 0, "length": 1}]}]})),
-    ]);
+    let (tl, dir) = timeline_for(
+        &ir,
+        &[
+            ("data/arrangement.json", json!({"tempo": [{"beat": 0, "bpm": 120}]})),
+            (
+                "data/song/notes.json",
+                json!({"clips": [{"start": 0, "length": 4, "notes": [
+            {"pitch": "C4", "start": 0, "length": 1}, {"pitch": "E4", "start": 0, "length": 1}, {"pitch": "G4", "start": 0, "length": 1}]}]}),
+            ),
+        ],
+    );
     let a = render(&ir, &tl, 2.0);
     let b = render(&ir, &tl, 2.0);
     assert!(a == b, "two renders differ");
@@ -108,10 +138,16 @@ fn voice_stealing_keeps_playing() {
                 {"id": "amp", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "g"}}]}},
         ]),
         "v",
-        json!([{"id": "notes", "kind": "events<note>"}]),
+        json!([{"key": "notes", "kind": "events<note>"}]),
     );
-    let (tl, dir) = timeline(&[("song.notes.json", json!({"clips": [{"start": 0, "length": 8, "notes": [
-        {"pitch": 60, "start": 0, "length": 4}, {"pitch": 72, "start": 1, "length": 1}]}]}))]);
+    let (tl, dir) = timeline_for(
+        &ir,
+        &[(
+            "data/song/notes.json",
+            json!({"clips": [{"start": 0, "length": 8, "notes": [
+        {"pitch": 60, "start": 0, "length": 4}, {"pitch": 72, "start": 1, "length": 1}]}]}),
+        )],
+    );
     // Default tempo 120: the second note (beat 1..2) steals the only voice.
     let out = render(&ir, &tl, 1.0);
     let window = &out[SR as usize / 2 + 1000..SR as usize - 1000];
@@ -130,9 +166,12 @@ fn control_lanes_follow_automation() {
             {"id": "a", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "l"}},
         ]),
         "a",
-        json!([{"id": "level", "kind": "control<gain>", "default": 0}]),
+        json!([{"key": "level", "kind": "control<gain>", "default": 0}]),
     );
-    let (tl, dir) = timeline(&[("song.level.json", json!({"clips": [{"start": 0, "length": 2, "points": [[0, 0], [2, 1]]}]}))]);
+    let (tl, dir) = timeline_for(
+        &ir,
+        &[("data/song/level.json", json!({"unit": "gain", "clips": [{"start": 0, "length": 2, "points": [[0, 0], [2, 1]]}]}))],
+    );
     let out = render(&ir, &tl, 1.5);
     let q = SR as usize / 4;
     assert!(peak(&out[..q]) < 0.3);
@@ -155,7 +194,7 @@ fn feedback_delays_one_block() {
         "sum",
         json!([]),
     );
-    let out = render(&ir, &Timeline::default(), 0.5);
+    let out = render(&ir, &DataSet::empty(), 0.5);
     assert!(peak(&out) < 2.5 && peak(&out) > 1.0);
 }
 
@@ -179,8 +218,9 @@ fn std_manifest_matches_its_kernels() {
             outputs: sig.outputs.iter().map(|_| Kind::Audio(1)).collect(),
         };
         let tempo = TempoMap::constant(120.0);
-        let tl = Timeline::default();
-        let mut b = Builder { store: &mut store, packages: &pk, timeline: &tl, tempo: &tempo, sample_rate: 48_000.0, assets: None, audio: Default::default() };
+        let tl = DataSet::empty();
+        let mut b =
+            Builder { store: &mut store, packages: &pk, data: &tl, tempo: &tempo, sample_rate: 48_000.0, audio: Default::default() };
         b.kernel(&node, &id, 1, &inputs).unwrap_or_else(|e| panic!("{e:#}"));
     }
 }
@@ -203,8 +243,8 @@ fn output_does_not_depend_on_the_callers_buffer_size() {
     let pk = std_packages();
     let flat = check(&ir, &pk).unwrap();
     let mut one = vec![[0.0; 2]; 512];
-    Renderer::new(&flat, &Timeline::default(), &pk, SR).unwrap().process(&mut one).unwrap();
-    let mut r = Renderer::new(&flat, &Timeline::default(), &pk, SR).unwrap();
+    Renderer::new(&flat, &DataSet::empty(), &pk, SR).unwrap().process(&mut one).unwrap();
+    let mut r = Renderer::new(&flat, &DataSet::empty(), &pk, SR).unwrap();
     let mut pieces = vec![[0.0; 2]; 512];
     for chunk in pieces.chunks_mut(64) {
         r.process(chunk).unwrap();
@@ -226,11 +266,17 @@ fn a_stolen_voice_plays_until_the_new_note_starts() {
                 {"id": "amp", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "g"}}]}},
         ]),
         "v",
-        json!([{"id": "notes", "kind": "events<note>"}]),
+        json!([{"key": "notes", "kind": "events<note>"}]),
     );
     // 120 bpm at 48 kHz: 96 samples is 0.004 beats.
-    let (tl, dir) = timeline(&[("song.notes.json", json!({"clips": [{"start": 0, "length": 1, "notes": [
-        {"pitch": 69, "start": 0, "length": 1}, {"pitch": 81, "start": 0.004, "length": 0.5}]}]}))]);
+    let (tl, dir) = timeline_for(
+        &ir,
+        &[(
+            "data/song/notes.json",
+            json!({"clips": [{"start": 0, "length": 1, "notes": [
+        {"pitch": 69, "start": 0, "length": 1}, {"pitch": 81, "start": 0.004, "length": 0.5}]}]}),
+        )],
+    );
     let out = render(&ir, &tl, 0.01);
     assert!(peak(&out[1..96]) > 0.0, "the first note is silent before the second one starts");
     std::fs::remove_dir_all(dir).ok();
@@ -238,7 +284,7 @@ fn a_stolen_voice_plays_until_the_new_note_starts() {
 
 /// A voice with a delay and a feedback loop inside, notes at odd sample positions,
 /// and a stolen voice: everything that depends on how a block is split.
-fn tricky() -> (Ir, Timeline, PathBuf) {
+fn tricky() -> (Ir, DataSet, PathBuf) {
     let ir = song(
         json!([
             {"id": "n", "op": "lane", "lane": "notes"},
@@ -256,11 +302,17 @@ fn tricky() -> (Ir, Timeline, PathBuf) {
             {"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "v"}},
         ]),
         "d",
-        json!([{"id": "notes", "kind": "events<note>"}]),
+        json!([{"key": "notes", "kind": "events<note>"}]),
     );
-    let (tl, dir) = timeline(&[("song.notes.json", json!({"clips": [{"start": 0, "length": 4, "notes": [
+    let (tl, dir) = timeline_for(
+        &ir,
+        &[(
+            "data/song/notes.json",
+            json!({"clips": [{"start": 0, "length": 4, "notes": [
         {"pitch": 57, "start": 0.0013, "length": 0.3}, {"pitch": 64, "start": 0.0071, "length": 0.2},
-        {"pitch": 69, "start": 0.0109, "length": 0.5}, {"pitch": 60, "start": 0.61, "length": 0.05}]}]}))]);
+        {"pitch": 69, "start": 0.0109, "length": 0.5}, {"pitch": 60, "start": 0.61, "length": 0.05}]}]}),
+        )],
+    );
     (ir, tl, dir)
 }
 
@@ -318,10 +370,13 @@ fn echoes_inside_a_voice_outlive_its_note() {
                 {"id": "m", "op": "const", "value": 0.5}]}},
         ]),
         "v",
-        json!([{"id": "notes", "kind": "events<note>"}]),
+        json!([{"key": "notes", "kind": "events<note>"}]),
     );
     // A 50 ms note at 120 bpm (0.1 beats); the echo comes 250 ms after it starts.
-    let (tl, dir) = timeline(&[("song.notes.json", json!({"clips": [{"start": 0, "length": 4, "notes": [{"pitch": 69, "start": 0, "length": 0.1}]}]}))]);
+    let (tl, dir) = timeline_for(
+        &ir,
+        &[("data/song/notes.json", json!({"clips": [{"start": 0, "length": 4, "notes": [{"pitch": 69, "start": 0, "length": 0.1}]}]}))],
+    );
     let out = render(&ir, &tl, 1.0);
     let at = |s: f64| (s * SR as f64) as usize;
     assert!(peak(&out[at(0.1)..at(0.24)]) < 1e-3, "silent between the note and its echo");
@@ -343,14 +398,15 @@ fn strict_mode_names_the_kernel_that_broke() {
     );
     let pk = std_packages();
     let flat = check(&ir, &pk).unwrap();
-    let e = Renderer::new(&flat, &Timeline::default(), &pk, SR).unwrap().render(0.01).unwrap_err();
+    let e = Renderer::new(&flat, &DataSet::empty(), &pk, SR).unwrap().render(0.01).unwrap_err();
     assert!(e.to_string().contains("song/hz produced inf"), "{e}");
 }
 
 /// A package folder holding one hand-written kernel module.
 fn package(wat: &str) -> PathBuf {
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let dir = std::env::temp_dir().join(format!("m2-pkg-test-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
+    let dir =
+        std::env::temp_dir().join(format!("m2-pkg-test-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("k.wasm"), wat).unwrap();
     std::fs::write(
@@ -379,7 +435,9 @@ fn packages_must_be_sandboxed_and_speak_our_abi() {
     let e = PackageSet::default().load(&wrong_abi).map(|_| ()).unwrap_err();
     assert!(format!("{e:#}").contains("ABI v7"), "{e:#}");
 
-    let imports = package(&format!("(module (import \"env\" \"now\" (func)) (func (export \"m2_abi\") (result i32) (i32.const 0)) {KERNEL_EXPORTS})"));
+    let imports = package(&format!(
+        "(module (import \"env\" \"now\" (func)) (func (export \"m2_abi\") (result i32) (i32.const 0)) {KERNEL_EXPORTS})"
+    ));
     let e = PackageSet::default().load(&imports).map(|_| ()).unwrap_err();
     assert!(format!("{e:#}").contains("can't import anything"), "{e:#}");
 
@@ -409,9 +467,12 @@ fn voices_end_when_their_envelope_closes_but_not_while_echoes_remain() {
                 {"id": "amp", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "f.lp", "by": "e"}}]}},
         ]),
         "v",
-        json!([{"id": "notes", "kind": "events<note>"}]),
+        json!([{"key": "notes", "kind": "events<note>"}]),
     );
-    let (tl, dir) = timeline(&[("song.notes.json", json!({"clips": [{"start": 0, "length": 4, "notes": [{"pitch": 60, "start": 0, "length": 0.2}]}]}))]);
+    let (tl, dir) = timeline_for(
+        &synth,
+        &[("data/song/notes.json", json!({"clips": [{"start": 0, "length": 4, "notes": [{"pitch": 60, "start": 0, "length": 0.2}]}]}))],
+    );
     let pk = std_packages();
     let mut r = Renderer::new(&check(&synth, &pk).unwrap(), &tl, &pk, SR).unwrap();
     r.render(0.05).unwrap();
@@ -434,9 +495,12 @@ fn voices_end_when_their_envelope_closes_but_not_while_echoes_remain() {
                 {"id": "t", "op": "const", "value": 0.5, "unit": "seconds"}]}},
         ]),
         "v",
-        json!([{"id": "notes", "kind": "events<note>"}]),
+        json!([{"key": "notes", "kind": "events<note>"}]),
     );
-    let (tl, dir) = timeline(&[("song.notes.json", json!({"clips": [{"start": 0, "length": 4, "notes": [{"pitch": 60, "start": 0, "length": 0.1}]}]}))]);
+    let (tl, dir) = timeline_for(
+        &echo,
+        &[("data/song/notes.json", json!({"clips": [{"start": 0, "length": 4, "notes": [{"pitch": 60, "start": 0, "length": 0.1}]}]}))],
+    );
     let mut r = Renderer::new(&check(&echo, &pk).unwrap(), &tl, &pk, SR).unwrap();
     r.render(0.3).unwrap();
     assert_eq!(r.active_voices(), 1, "silent between echoes, but echoes are coming");
@@ -448,20 +512,25 @@ fn voices_end_when_their_envelope_closes_but_not_while_echoes_remain() {
 // ---------------------------------------------------------------- audio lanes
 
 /// A song that plays one stereo audio lane, with the given assets and clips.
-fn audio_song(assets: &[(&str, Vec<Vec<f32>>, u32)], clips: Value) -> (Ir, Timeline, PathBuf) {
-    let ir = song(json!([{"id": "a", "op": "lane", "lane": "clips"}]), "a", json!([{"id": "clips", "kind": "audio<2>"}]));
-    let (tl, dir) = timeline(&[("song.json", json!({"tempo": [{"beat": 0, "bpm": 120}]})), ("song.clips.json", json!({"clips": clips}))]);
+fn audio_song(assets: &[(&str, Vec<Vec<f32>>, u32)], clips: Value) -> (Ir, DataSet, PathBuf) {
+    let ir = song(json!([{"id": "a", "op": "lane", "lane": "clips"}]), "a", json!([{"key": "clips", "kind": "audio<2>"}]));
+    let dir = project(&[
+        ("data/arrangement.json", json!({"tempo": [{"beat": 0, "bpm": 120}]})),
+        ("data/song/clips.json", json!({"clips": clips})),
+    ]);
     std::fs::create_dir_all(dir.join("assets")).unwrap();
-    for (name, data, sr) in assets {
-        audio::write_wav(&dir.join("assets").join(name), data, *sr).unwrap();
+    for (name, samples, sr) in assets {
+        audio::write_wav(&dir.join("assets").join(name), samples, *sr).unwrap();
     }
+    // Read the data again, now that the assets are there.
+    let tl = data(&ir, &dir);
     (ir, tl, dir)
 }
 
-fn render_audio(ir: &Ir, tl: &Timeline, dir: &Path, seconds: f64) -> Vec<[f32; 2]> {
+fn render_audio(ir: &Ir, tl: &DataSet, seconds: f64) -> Vec<[f32; 2]> {
     let pk = std_packages();
     let flat = check(ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
-    Renderer::build(&flat, tl, &pk, SR, Some(&dir.join("assets"))).unwrap().render(seconds).unwrap()
+    Renderer::new(&flat, tl, &pk, SR).unwrap().render(seconds).unwrap()
 }
 
 fn sine(hz: f64, seconds: f64, sr: u32) -> Vec<f32> {
@@ -477,8 +546,9 @@ fn freq(x: &[[f32; 2]]) -> f64 {
 #[test]
 fn clips_land_on_their_sample_with_gain_and_fades() {
     let dc = vec![vec![0.5f32; 48_000]];
-    let (ir, tl, dir) = audio_song(&[("dc.wav", dc, SR)], json!([{"start": 1, "length": 1, "asset": "dc.wav", "gain_db": -6, "fade_out": 0.1}]));
-    let out = render_audio(&ir, &tl, &dir, 1.5);
+    let (ir, tl, dir) =
+        audio_song(&[("dc.wav", dc, SR)], json!([{"start": 1, "length": 1, "asset": "dc.wav", "gain_db": -6, "fade_out": 0.1}]));
+    let out = render_audio(&ir, &tl, 1.5);
     // 120 bpm: beat 1 is sample 24 000; the clip lasts one beat (24 000 samples).
     assert_eq!(out[23_999], [0.0, 0.0]);
     let g = 0.5 * 10f32.powf(-6.0 / 20.0);
@@ -499,7 +569,7 @@ fn pitch_without_warp_is_varispeed_and_with_warp_keeps_timing() {
             {"start": 8, "length": 2, "asset": "a440.wav", "warp": [[0, 0], [2, 2]], "pitch": 12}
         ]),
     );
-    let out = render_audio(&ir, &tl, &dir, 5.0);
+    let out = render_audio(&ir, &tl, 5.0);
     let s = |a: f64, b: f64| &out[(a * SR as f64) as usize..(b * SR as f64) as usize];
     // Varispeed: an octave up is twice the frequency.
     assert!((freq(s(0.1, 0.9)) - 880.0).abs() < 5.0, "{}", freq(s(0.1, 0.9)));
@@ -521,7 +591,7 @@ fn reverse_and_other_sample_rates() {
             {"start": 2, "length": 2, "asset": "a441.wav"}
         ]),
     );
-    let out = render_audio(&ir, &tl, &dir, 2.0);
+    let out = render_audio(&ir, &tl, 2.0);
     assert!(out[100][0] > 0.99 && out[23_900][0] < 0.01, "plays backwards");
     assert!((freq(&out[48_000 + 4_800..96_000 - 4_800]) - 441.0).abs() < 3.0, "a 44.1 kHz asset keeps its pitch at 48 kHz");
     std::fs::remove_dir_all(dir).ok();
@@ -539,10 +609,10 @@ fn a_bounce_placed_as_a_clip_reproduces_the_original() {
         "x.lp",
         json!([]),
     );
-    let original = render(&synth, &Timeline::default(), 1.0);
+    let original = render(&synth, &DataSet::empty(), 1.0);
     let channels = vec![original.iter().map(|f| f[0]).collect::<Vec<f32>>(), original.iter().map(|f| f[1]).collect()];
     let (ir, tl, dir) = audio_song(&[("bounce.wav", channels, SR)], json!([{"start": 0, "length": 2, "asset": "bounce.wav"}]));
-    let played = render_audio(&ir, &tl, &dir, 1.0);
+    let played = render_audio(&ir, &tl, 1.0);
     assert!(played == original, "the bounce plays back bit for bit");
     std::fs::remove_dir_all(dir).ok();
 }
@@ -555,7 +625,7 @@ fn audio_lanes_seek_exactly() {
     );
     let pk = std_packages();
     let flat = check(&ir, &pk).unwrap();
-    let mut r = Renderer::build(&flat, &tl, &pk, SR, Some(&dir.join("assets"))).unwrap();
+    let mut r = Renderer::new(&flat, &tl, &pk, SR).unwrap();
     let full = r.render(2.0).unwrap();
     r.seek(30_011).unwrap();
     let part = r.render(0.5).unwrap();
@@ -574,7 +644,7 @@ fn stretch_quality_report() {
             {"start": 8, "length": 2, "asset": "a440.wav", "warp": [[0, 0], [2, 2]], "pitch": 12}
         ]),
     );
-    let out = render_audio(&ir, &tl, &dir, 5.0);
+    let out = render_audio(&ir, &tl, 5.0);
     for (name, a) in [("2x faster", 0.1), ("2x slower", 2.1), ("faster + octave", 4.1)] {
         let s = &out[(a * SR as f64) as usize..((a + 0.8) * SR as f64) as usize];
         // Level per 10 ms window: a clean stretch of a sine keeps a constant level.
@@ -583,4 +653,111 @@ fn stretch_quality_report() {
         println!("{name}: {:.1} Hz, level {lo:.3}..{hi:.3} ({:.1} dB ripple)", freq(s), 20.0 * (hi / lo).log10());
     }
     std::fs::remove_dir_all(dir).ok();
+}
+
+// FMT-15: a clip whose asset is missing is silent; the lane's other clips still play.
+#[test]
+fn a_missing_asset_silences_only_its_clip() {
+    let dc = vec![vec![0.5f32; 48_000]];
+    let (ir, tl, dir) = audio_song(
+        &[("dc.wav", dc, SR)],
+        json!([{"id": "a", "start": 0, "length": 1, "asset": "gone.wav"}, {"id": "b", "start": 1, "length": 1, "asset": "dc.wav"}]),
+    );
+    let out = render_audio(&ir, &tl, 1.0);
+    assert_eq!(out[1_000], [0.0, 0.0], "the missing asset's clip is silent");
+    assert_eq!(out[30_000], [0.5, 0.5], "the other clip plays");
+    std::fs::remove_dir_all(dir).ok();
+}
+
+// FMT-8a: overlapping clips sum in canonical order, so permuting the file's clips renders the
+// same bits.
+#[test]
+fn permuting_audio_clips_renders_the_same_bits() {
+    let a = vec![sine(440.0, 1.0, SR)];
+    let b = vec![sine(523.0, 1.0, SR)];
+    let clips = [
+        json!({"id": "x", "start": 0, "length": 1.5, "asset": "a.wav", "gain_db": -1.3}),
+        json!({"id": "y", "start": 0, "length": 1.5, "asset": "b.wav", "gain_db": -2.1}),
+        json!({"id": "z", "start": 0.25, "length": 1, "asset": "a.wav", "pitch": 7}),
+    ];
+    let render = |order: [usize; 3]| {
+        let (ir, tl, dir) = audio_song(&[("a.wav", a.clone(), SR), ("b.wav", b.clone(), SR)], json!(order.map(|i| clips[i].clone())));
+        let out = render_audio(&ir, &tl, 1.0);
+        std::fs::remove_dir_all(dir).ok();
+        out
+    };
+    let first = render([0, 1, 2]);
+    for order in [[2, 1, 0], [1, 0, 2], [2, 0, 1]] {
+        assert!(render(order) == first, "{order:?}");
+    }
+}
+
+// ID-8, FMT-17: the declarations data is read against, from the IR.
+#[test]
+fn declarations_from_the_ir() {
+    let ir: Ir = serde_json::from_value(json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"}, "modules": [
+        {"key": "song", "lanes": [{"key": "pan", "kind": "control<bipolar>", "default": 0}], "nodes": [], "exports": {}},
+        {"key": "vox", "track": true, "lanes": [{"key": "takes", "kind": "audio<2>"}, {"key": "notes", "kind": "events<note>"}], "exports": {},
+         "nodes": [{"id": "p", "op": "plugin", "plugin": "clap:x", "key": "tune", "frames": ["chain-l"]},
+                   {"id": "q", "op": "plugin", "plugin": "clap:y"}]}]}))
+    .unwrap();
+    let d = decls(&ir);
+    let lanes: Vec<(String, m2_song::LaneKind)> = d.lanes.iter().map(|(a, k)| (a.to_string(), k.clone())).collect();
+    assert_eq!(
+        lanes,
+        [
+            ("song/pan".to_string(), m2_song::LaneKind::Control { unit: Some("bipolar".into()) }),
+            ("vox/takes".to_string(), m2_song::LaneKind::Audio),
+            ("vox/notes".to_string(), m2_song::LaneKind::Notes),
+        ]
+    );
+    let states: Vec<(String, Vec<String>, String)> =
+        d.states.iter().map(|s| (s.module.to_string(), s.path.iter().map(|k| k.to_string()).collect(), s.plugin.clone())).collect();
+    assert_eq!(states, [("vox".to_string(), vec!["chain-l".to_string(), "tune".to_string()], "clap:x".to_string())]);
+}
+
+// FMT-14: a new asset is created, never written over one that exists.
+#[test]
+fn a_new_asset_never_replaces_one() {
+    let dir = project(&[]);
+    let path = dir.join("take.wav");
+    std::fs::write(&path, b"mine").unwrap();
+    assert!(audio::write_new_wav(&path, &[vec![0.0; 4]], SR).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), b"mine");
+    let new = dir.join("take 2.wav");
+    audio::write_new_wav(&new, &[vec![0.5; 4]], SR).unwrap();
+    assert_eq!(audio::load_wav(&new).unwrap().channels, vec![vec![0.5; 4]]);
+    std::fs::remove_dir_all(dir).ok();
+}
+
+// FMT-18a: a plugin that isn't installed silences only its own node: an effect passes its
+// input through, an instrument plays silence, and everything else renders the same bits.
+#[test]
+fn a_missing_plugin_silences_only_its_node() {
+    let sine = json!({"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {}});
+    let alone = song(json!([sine.clone()]), "o", json!([]));
+    let with = |plugin: Value| {
+        let add = json!({"id": "s", "op": "kernel", "kernel": "std:add", "inputs": {"a": "o", "b": "p"}});
+        song(json!([sine.clone(), plugin, add]), "s", json!([]))
+    };
+    let effect = song(
+        json!([sine.clone(), {"id": "m", "op": "const", "value": 0.5},
+            {"id": "p", "op": "plugin", "plugin": "clap:org.example.gone-fx", "inputs": {"in": "o", "mix_3": "m"}},
+            {"id": "s", "op": "kernel", "kernel": "std:add", "inputs": {"a": "o", "b": "p"}}]),
+        "s",
+        json!([]),
+    );
+    let instrument = with(json!({"id": "p", "op": "plugin", "plugin": "clap:org.example.gone-synth", "inputs": {}}));
+    let mut pk = std_packages();
+    let render = |ir: &Ir, pk: &mut PackageSet| {
+        let mut ir = ir.clone();
+        let diags = pk.bind_plugins(&mut ir);
+        assert!(diags.iter().all(|d| d.code == "plugin.missing"), "{diags:?}");
+        let flat = check(&ir, &*pk).unwrap_or_else(|e| panic!("{e:?}"));
+        Renderer::new(&flat, &DataSet::empty(), pk, SR).unwrap().render(0.25).unwrap()
+    };
+    let base = render(&alone, &mut pk);
+    let doubled: Vec<[f32; 2]> = base.iter().map(|f| [f[0] + f[0], f[1] + f[1]]).collect();
+    assert_eq!(render(&effect, &mut pk), doubled, "the effect passes the sine through");
+    assert_eq!(render(&instrument, &mut pk), base, "the instrument adds silence");
 }

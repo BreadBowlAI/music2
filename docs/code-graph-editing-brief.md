@@ -1,6 +1,6 @@
 # Brief: two-way editing between code and graph
 
-> Historical: the request as sent on 2026-10-11. Its "today" sections describe the code at that date; see [code-graph-editing-design.md](code-graph-editing-design.md) and [song-as-program.md](song-as-program.md) for what exists now.
+> Historical: the request as sent on 2026-10-11. Its "today" sections describe the code at that date; see [code-graph-editing-design.md](code-graph-editing-design.md) and [song-as-program.md](song-as-program.md) for what exists now. Its code and paths are in the format of that date, since replaced: tracks now take a key first (`track("bass", { name: "Bass" }, fn)`), and lane data lives in `data/<track>/<lane>.json` ([Project format v1](architecture.md#project-format-v1)).
 
 *For a specialist asked to design the implementation. Written 2026-10-11.*
 

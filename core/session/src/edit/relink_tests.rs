@@ -1,11 +1,13 @@
-//! Data a rename left behind: the warning, moving it where it belongs, deleting it, and undo.
+//! Data a rename left behind: the problem, moving it where it belongs, deleting it, the data
+//! fixes, and undo.
 
 use std::path::{Path, PathBuf};
 
 use m2_runtime::PackageSet;
+use m2_song::Diagnostic;
 
 use super::*;
-use crate::{Fix, TimelineLane};
+use crate::TimelineLane;
 
 struct Fixture(PathBuf);
 
@@ -31,7 +33,9 @@ impl Fixture {
     }
 
     fn write(&self, name: &str, text: &str) {
-        std::fs::write(self.0.join(name), text).unwrap();
+        let p = self.0.join(name);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
     }
 
     fn open(&self) -> Session {
@@ -40,10 +44,11 @@ impl Fixture {
         Session::open(&self.0, packages).unwrap_or_else(|d| panic!("{d:?}"))
     }
 
-    /// Rename the Kick track in its code, from outside the session, and pick it up.
+    /// Change the kick track's key in its code, from outside the session, and pick it up. Its
+    /// label stays "Kick" (ID-17).
     fn rename_kick(&self, s: &mut Session, to: &str) {
         let kick = self.read("tracks/kick.ts").unwrap();
-        self.write("tracks/kick.ts", &kick.replacen("track(\"Kick\"", &format!("track(\"{to}\""), 1));
+        self.write("tracks/kick.ts", &kick.replacen("track(\"kick\"", &format!("track(\"{to}\""), 1));
         assert!(s.refresh() && s.draft_errors.is_empty(), "{:?}", s.draft_errors);
     }
 }
@@ -57,90 +62,102 @@ impl Drop for Fixture {
 /// How many notes `module`'s lane `lane` plays.
 fn notes(s: &Session, module: &str, lane: &str) -> usize {
     let t = s.timeline();
-    let found = t
-        .tracks
-        .iter()
-        .find(|t| t.module == module)
-        .and_then(|t| t.lanes.iter().find(|l| matches!(l, TimelineLane::Notes { id, .. } if id == lane)));
+    let found = t.tracks.iter().find(|t| t.module == module).and_then(|t| t.lanes.iter().find(|l| l.key() == lane));
     match found {
         Some(TimelineLane::Notes { clips, .. }) => clips.iter().map(|c| c.notes.len()).sum(),
         _ => panic!("no notes lane {module} › {lane}"),
     }
 }
 
-const OLD: &str = "timeline/kick.hits.json";
-const NEW: &str = "timeline/kicks.hits.json";
+/// The accepted revision's `data.unclaimed` problems.
+fn unclaimed(s: &Session) -> Vec<&Diagnostic> {
+    s.problems().iter().filter(|d| d.code == "data.unclaimed").collect()
+}
 
+/// The problem about `src`.
+fn about<'a>(s: &'a Session, src: &str) -> &'a Diagnostic {
+    s.problems().iter().find(|d| d.src.as_deref() == Some(src)).unwrap_or_else(|| panic!("nothing about {src}: {:?}", s.problems()))
+}
+
+/// Apply fix `n` of the problem about `src`, sent back as a client sends it: its code and edit.
+fn fix(s: &mut Session, src: &str, n: usize) -> Result<Edited, EditError> {
+    let f = about(s, src).fixes[n].clone();
+    let at = s.accepted().number;
+    s.fix(at, f.code, &serde_json::to_value(&f.edit).unwrap())
+}
+
+const OLD: &str = "data/kick/hits.json";
+const NEW: &str = "data/kicks/hits.json";
+
+// The step 4 gate, DIAG-6, ID-17: renaming a track key by hand raises `data.unclaimed` on its
+// folder, and its Relink restores the sound; undo moves it back.
 #[test]
-fn a_renamed_tracks_notes_are_moved_where_they_belong_and_undo_moves_them_back() {
+fn a_renamed_tracks_folder_is_moved_where_it_belongs_and_undo_moves_it_back() {
     let fixture = Fixture::first_song();
     let mut s = fixture.open();
-    assert!(s.warnings().is_empty());
+    assert!(s.problems().is_empty(), "{:?}", s.problems());
     let bytes = fixture.read(OLD).unwrap();
-    let playing = notes(&s, "Kick", "hits");
+    let playing = notes(&s, "kick", "hits");
     assert!(playing > 0);
 
-    fixture.rename_kick(&mut s, "Kicks");
-    assert_eq!(notes(&s, "Kicks", "hits"), 0, "the renamed track plays nothing");
-    let w = s.warnings();
+    fixture.rename_kick(&mut s, "kicks");
+    assert_eq!(notes(&s, "kicks", "hits"), 0, "the renamed track plays nothing");
+    let w = unclaimed(&s);
     assert_eq!(w.len(), 1);
-    assert_eq!(w[0].file, OLD);
+    assert_eq!((w[0].src.as_deref(), w[0].module.as_deref()), (Some("data/kick"), Some("kick")));
     assert_eq!(
-        w[0].to_string(),
-        "Notes on Kick › hits aren't playing. There's no track called Kick any more. Did you rename it? Move them to Kicks › hits to \
-         hear them again, or delete them."
+        w[0].message,
+        "Data filed under Kick (kick) isn't playing. There's no track called Kick (kick) any more, so nothing plays what data/kick \
+         holds: notes in hits. Did you rename it? Move its data to Kick (kicks) to hear it again, or delete it."
     );
-    assert_eq!(w[0].fixes[0], Fix::Relink { from: OLD.into(), to: NEW.into(), module: "Kicks".into(), lane: "hits".into(), likely: true });
+    let first = &w[0].fixes[0];
+    assert_eq!((first.code, first.title.as_str(), first.likely), ("relink", "Move it to Kick (kicks)", true));
 
     let at = s.accepted().number;
-    let moved = s.relink(at, Path::new(OLD), "Kicks", "hits").unwrap();
+    let moved = fix(&mut s, "data/kick", 0).unwrap();
     assert_eq!(
         (moved.revision, moved.file.as_str(), moved.before.as_str(), moved.after.as_str()),
-        (at + 1, OLD, "unused notes", "Kicks › hits")
+        (at + 1, "data/kick", "unused data", "Kick (kicks)")
     );
     assert_eq!((fixture.read(OLD), fixture.read(NEW)), (None, Some(bytes.clone())), "renamed, byte for byte");
-    assert_eq!(notes(&s, "Kicks", "hits"), playing, "the track plays its notes again");
-    assert!(s.warnings().is_empty() && !s.refresh(), "the session took in the move itself");
+    assert!(!fixture.0.join("data/kick").exists(), "the folder itself moved");
+    assert_eq!(notes(&s, "kicks", "hits"), playing, "the track plays its notes again");
+    assert!(s.problems().is_empty() && !s.refresh(), "the session took in the move itself");
 
     assert!(s.can_undo());
     let undone = s.undo().unwrap();
-    assert_eq!((undone.file.as_str(), undone.before.as_str(), undone.after.as_str()), (NEW, "Kicks › hits", "unused notes"));
+    assert_eq!((undone.file.as_str(), undone.before.as_str(), undone.after.as_str()), ("data/kicks", "Kick (kicks)", "unused data"));
     assert_eq!((fixture.read(OLD), fixture.read(NEW)), (Some(bytes.clone()), None));
-    assert_eq!(s.warnings().len(), 1);
-    assert_eq!(notes(&s, "Kicks", "hits"), 0);
+    assert_eq!(unclaimed(&s).len(), 1);
+    assert_eq!(notes(&s, "kicks", "hits"), 0);
     s.redo().unwrap();
     assert_eq!((fixture.read(OLD), fixture.read(NEW)), (None, Some(bytes)));
-    assert_eq!(notes(&s, "Kicks", "hits"), playing);
+    assert_eq!(notes(&s, "kicks", "hits"), playing);
 }
 
-/// On a disk that ignores capitals (macOS by default), `kick.hits.json` already "exists" while
-/// the file is named `Kick.hits.json`: the move is a rename of the capitals, not a conflict.
+// DIAG-6: the same for a lane key renamed by hand, on its own lane file: the message and the
+// fix. The step 4 gate itself, that the Relink restores the sound bit for bit, is
+// `gate_tests::relinking_a_renamed_lanes_file_restores_its_sound`.
 #[test]
-fn a_file_named_with_other_capitals_moves_to_its_own_lane_and_back() {
+fn a_renamed_lanes_file_is_moved_where_it_belongs() {
     let fixture = Fixture::first_song();
-    let bytes = fixture.read(OLD).unwrap();
-    let upper = "timeline/Kick.hits.json";
-    std::fs::rename(fixture.0.join(OLD), fixture.0.join("timeline/moving.json")).unwrap();
-    std::fs::rename(fixture.0.join("timeline/moving.json"), fixture.0.join(upper)).unwrap();
-    let names = || -> Vec<String> {
-        let mut v: Vec<String> =
-            std::fs::read_dir(fixture.0.join("timeline")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
-        v.retain(|n| n.eq_ignore_ascii_case("kick.hits.json"));
-        v
-    };
     let mut s = fixture.open();
-    assert_eq!(notes(&s, "Kick", "hits"), 0);
-    assert!(matches!(&s.warnings()[0].fixes[0], Fix::Relink { to, likely: true, .. } if to == OLD), "{:?}", s.warnings());
-
-    s.relink(s.accepted().number, Path::new(upper), "Kick", "hits").unwrap();
-    assert_eq!((names(), fixture.read(OLD)), (vec!["kick.hits.json".to_string()], Some(bytes.clone())));
-    assert!(notes(&s, "Kick", "hits") > 0 && s.warnings().is_empty() && !s.refresh());
-    assert!(s.can_undo());
-    s.undo().unwrap();
-    assert_eq!(names(), ["Kick.hits.json"]);
-    assert_eq!((notes(&s, "Kick", "hits"), s.warnings().len()), (0, 1));
-    s.redo().unwrap();
-    assert_eq!((names(), fixture.read(OLD)), (vec!["kick.hits.json".to_string()], Some(bytes)));
+    let playing = notes(&s, "kick", "hits");
+    let kick = fixture.read("tracks/kick.ts").unwrap();
+    fixture.write("tracks/kick.ts", &kick.replacen("lane.notes(\"hits\")", "lane.notes(\"beats\")", 1));
+    assert!(s.refresh() && s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    assert_eq!(notes(&s, "kick", "beats"), 0);
+    let w = about(&s, OLD);
+    assert_eq!(
+        w.message,
+        "Notes on Kick (kick) › hits aren't playing. Kick (kick) has no lane called hits any more. Did you rename it? Move them to \
+         Kick (kick) › beats to hear them again, or delete them."
+    );
+    assert_eq!((w.fixes[0].code, w.fixes[0].likely), ("relink", true));
+    let moved = fix(&mut s, OLD, 0).unwrap();
+    assert_eq!((moved.before.as_str(), moved.after.as_str()), ("unused notes", "kick › beats"));
+    assert_eq!(notes(&s, "kick", "beats"), playing);
+    assert!(s.problems().is_empty());
 }
 
 /// A track that was there beside Kick isn't Kick renamed: with Clap's hits lane as free as
@@ -150,88 +167,29 @@ fn a_track_that_was_there_beside_is_not_the_renamed_one() {
     let fixture = Fixture::first_song();
     let mut s = fixture.open();
     let clap = "import { track } from \"@m2/core\";\nimport { kick } from \"std/instruments\";\n\n\
-                export default track(\"Clap\", ({ lane }) => kick(lane.notes(\"hits\")));\n";
+                export default track(\"clap\", ({ lane }) => kick(lane.notes(\"hits\")));\n";
     fixture.write("tracks/clap.ts", clap);
     let song = fixture.read("song.ts").unwrap();
     let song =
         song.replacen("import kick from \"./tracks/kick\";", "import kick from \"./tracks/kick\";\nimport clap from \"./tracks/clap\";", 1);
     fixture.write("song.ts", &song.replacen("      kick: kick.out,", "      kick: kick.out,\n      clap: clap.out,", 1));
-    assert!(s.refresh() && s.draft_errors.is_empty() && s.warnings().is_empty(), "{:?}", s.draft_errors);
-    fixture.rename_kick(&mut s, "Kicks");
+    assert!(s.refresh() && s.draft_errors.is_empty() && s.problems().is_empty(), "{:?} {:?}", s.draft_errors, s.problems());
+    fixture.rename_kick(&mut s, "kicks");
     let offered = |s: &Session| -> Vec<(String, bool)> {
-        let w = s.warnings().iter().find(|w| w.file == OLD).unwrap();
-        w.fixes
-            .iter()
-            .filter_map(|f| if let Fix::Relink { module, likely, .. } = f { Some((module.clone(), *likely)) } else { None })
-            .collect()
+        about(s, OLD).fixes.iter().filter(|f| f.code == "relink").map(|f| (f.title.clone(), f.likely)).collect()
     };
-    assert_eq!(offered(&s), [("Kicks".to_string(), true), ("Clap".to_string(), false)]);
+    assert_eq!(offered(&s), [("Move to Kick (kicks) › hits".to_string(), true), ("Move to clap › hits".to_string(), false)]);
     let mut both = offered(&fixture.open());
     both.sort();
-    assert_eq!(both, [("Clap".to_string(), false), ("Kicks".to_string(), false)]);
-}
-
-/// On a disk that ignores capitals, `Kick.hits.json` takes the name `kick.hits.json`: undo
-/// doesn't offer to put the data back there, on any disk, and says why when asked.
-#[test]
-fn a_name_another_file_has_in_other_capitals_is_not_free_for_undo() {
-    let upper = "timeline/Kick.hits.json";
-    for delete in [false, true] {
-        let fixture = Fixture::first_song();
-        let mut s = fixture.open();
-        let bytes = fixture.read(OLD).unwrap();
-        fixture.rename_kick(&mut s, "Kicks");
-        let at = s.accepted().number;
-        if delete { s.delete_data(at, Path::new(OLD)).map(drop) } else { s.relink(at, Path::new(OLD), "Kicks", "hits").map(drop) }.unwrap();
-        fixture.write(upper, r#"{"clips": []}"#);
-        assert!(s.refresh() && s.draft_errors.is_empty());
-        assert!(!s.can_undo(), "delete: {delete}");
-        let refused = s.undo();
-        let why = if delete {
-            format!("{upper} is there already, and on a disk that ignores capitals it is {OLD}; it isn't replaced")
-        } else {
-            format!("{NEW} changed since this edit, or {OLD} is taken; move it by hand")
-        };
-        assert_eq!(refused, Err(EditError::Rejected(why)), "delete: {delete}");
-        assert_eq!(fixture.read(upper).as_deref(), Some(r#"{"clips": []}"#));
-        // Gone again, it can be undone.
-        std::fs::remove_file(fixture.0.join(upper)).unwrap();
-        assert!(s.refresh() && s.can_undo(), "delete: {delete}");
-        s.undo().unwrap();
-        assert_eq!((fixture.read(OLD), fixture.read(NEW)), (Some(bytes), None));
-    }
-}
-
-/// On a disk that ignores capitals, `Kicks.hits.json` is `kicks.hits.json`: other data isn't
-/// moved onto it, and no new file is written over it.
-#[test]
-fn a_name_another_file_has_in_other_capitals_is_not_free_to_move_or_write_to() {
-    let fixture = Fixture::first_song();
-    let mut s = fixture.open();
-    let bytes = fixture.read(OLD).unwrap();
-    let upper = "timeline/Kicks.hits.json";
-    fixture.write(upper, &bytes);
-    fixture.rename_kick(&mut s, "Kicks");
-    let w = s.warnings();
-    let kick = w.iter().find(|w| w.file == OLD).unwrap();
-    assert_eq!(kick.fixes, [Fix::DeleteData { file: OLD.into() }], "Kicks › hits would read {upper}, not this");
-    let taken = format!("{upper} is there already, and on a disk that ignores capitals it is {NEW}; it isn't replaced");
-    assert_eq!(s.relink(s.accepted().number, Path::new(OLD), "Kicks", "hits"), Err(EditError::Rejected(taken.clone())));
-    let clip = m2_song::NoteClip { start: 0.0, length: 4.0, notes: vec![] };
-    assert_eq!(s.write_notes(s.accepted().number, "Kicks", "hits", &[clip]), Err(EditError::Rejected(taken)));
-    assert_eq!((fixture.read(OLD), fixture.read(upper)), (Some(bytes.clone()), Some(bytes)));
-    assert!(!s.can_undo(), "nothing was done");
-    // The file in other capitals moves to its own lane.
-    s.relink(s.accepted().number, Path::new(upper), "Kicks", "hits").unwrap();
-    assert!(fixture.read(NEW).is_some() && notes(&s, "Kicks", "hits") > 0);
+    assert_eq!(both, [("Move to Kick (kicks) › hits".to_string(), false), ("Move to clap › hits".to_string(), false)]);
 }
 
 #[test]
 fn undo_moves_data_back_only_while_it_is_unchanged_and_its_old_name_is_free() {
     let fixture = Fixture::first_song();
     let mut s = fixture.open();
-    fixture.rename_kick(&mut s, "Kicks");
-    s.relink(s.accepted().number, Path::new(OLD), "Kicks", "hits").unwrap();
+    fixture.rename_kick(&mut s, "kicks");
+    s.relink(s.accepted().number, Path::new(OLD), Path::new(NEW)).unwrap();
     let moved = fixture.read(NEW).unwrap();
 
     // Something takes the old name: the move isn't undone over it, nor offered.
@@ -257,72 +215,79 @@ fn only_data_no_lane_reads_is_moved_and_only_to_a_lane_that_reads_it_and_has_non
     let fixture = Fixture::first_song();
     let mut s = fixture.open();
     let at = s.accepted().number;
-    // Claimed data stays where it is, and what isn't lane data is never moved this way.
+    // Claimed data stays where it is, and what isn't data is never moved this way.
     let refused = |r: Result<Edited, EditError>, why: &str| {
-        r == Err(EditError::Rejected(format!("only lane data no lane reads is moved or deleted this way, and {why}")))
+        r == Err(EditError::Rejected(format!("only data no lane or plugin reads is moved or deleted this way, and {why}")))
     };
-    let notes = "Bass › notes reads timeline/bass.notes.json";
-    assert!(refused(s.relink(at, Path::new("timeline/bass.notes.json"), "Kick", "hits"), notes));
-    assert!(refused(s.delete_data(at, Path::new("timeline/bass.notes.json")), notes));
-    for file in ["song.ts", "tracks/kick.ts", "music2.toml", "timeline/song.json"] {
+    let to = Path::new("data/kick/other.json");
+    let notes = "bass › notes reads data/bass/notes.json";
+    assert!(refused(s.relink(at, Path::new("data/bass/notes.json"), to), notes));
+    assert!(refused(s.delete_data(at, Path::new("data/bass/notes.json")), notes));
+    assert!(refused(s.delete_data(at, Path::new("data/bass")), "Bass (bass) reads data/bass"));
+    for file in ["song.ts", "tracks/kick.ts", "music2.toml", "data/arrangement.json"] {
         assert!(refused(s.delete_data(at, Path::new(file)), &format!("{file} isn't lane data")), "{file}");
-        assert!(refused(s.relink(at, Path::new(file), "Kick", "hits"), &format!("{file} isn't lane data")), "{file}");
+        assert!(refused(s.relink(at, Path::new(file), to), &format!("{file} isn't lane data")), "{file}");
     }
     let missing = |r: Result<Edited, EditError>| matches!(r, Err(EditError::Rejected(why)) if why.starts_with("the project has no"));
-    assert!(missing(s.relink(at, Path::new("timeline/nothing.here.json"), "Kick", "hits")));
-    assert!(missing(s.delete_data(at, Path::new("timeline/../timeline/kick.hits.json"))));
+    assert!(missing(s.relink(at, Path::new("data/nothing/here.json"), to)));
+    assert!(missing(s.delete_data(at, Path::new("data/../data/kick/hits.json"))));
     assert!(missing(s.delete_data(at, &fixture.0.canonicalize().unwrap().join(OLD))));
 
-    fixture.rename_kick(&mut s, "Kicks");
+    fixture.rename_kick(&mut s, "kicks");
     let at = s.accepted().number;
     let old = Path::new(OLD);
     // A lane with data of its own isn't overwritten; one of another kind can't read notes.
-    assert!(matches!(s.relink(at, old, "Hats", "hits"), Err(EditError::Rejected(why)) if why.contains("data of its own")));
-    assert!(matches!(s.relink(at, old, "Bass", "cutoff"), Err(EditError::Rejected(why)) if why.contains("can't read notes")));
-    let nowhere = |r: Result<Edited, EditError>, to: &str| {
-        matches!(r, Err(EditError::Rejected(why)) if why == format!("there is no {to} to move it to"))
-    };
-    assert!(nowhere(s.relink(at, old, "Kicks", "nope"), "lane nope on Kicks"));
-    assert!(nowhere(s.relink(at, old, "Nobody", "hits"), "track Nobody"));
+    let rejected = |r: Result<Edited, EditError>, part: &str| matches!(r, Err(EditError::Rejected(why)) if why.contains(part));
+    assert!(rejected(s.relink(at, old, Path::new("data/hats/hits.json")), "data of its own"));
+    assert!(rejected(s.relink(at, old, Path::new("data/bass/cutoff.json")), "can't read notes"));
+    assert!(rejected(s.relink(at, old, Path::new("data/kicks")), "another kind of data"));
+    let nowhere = |r: Result<Edited, EditError>, to: &str| r == Err(EditError::Rejected(format!("there is no {to} to move it to")));
+    assert!(nowhere(s.relink(at, old, Path::new("data/kicks/nope.json")), "lane nope on kicks"));
+    assert!(nowhere(s.relink(at, old, Path::new("data/nobody/hits.json")), "track nobody"));
+    // A folder goes only to a module with no data of its own.
+    assert!(rejected(s.relink(at, Path::new("data/kick"), Path::new("data/hats")), "data of its own"));
     // Planned before the data changed: refused.
     let changed = fixture.read(OLD).unwrap().replacen("\"C1\"", "\"D1\"", 1);
     fixture.write(OLD, &changed);
-    assert!(matches!(s.relink(at, old, "Kicks", "hits"), Err(EditError::Rejected(why)) if why.contains("changed since")));
-    assert!(matches!(s.delete_data(at, old), Err(EditError::Rejected(why)) if why.contains("changed since")));
+    assert!(rejected(s.relink(at, old, Path::new(NEW)), "changed since"));
+    assert!(rejected(s.delete_data(at, old), "changed since"));
+    assert!(rejected(s.relink(at, Path::new("data/kick"), Path::new("data/kicks")), "changed since"));
     assert_eq!((fixture.read(OLD), fixture.read(NEW)), (Some(changed), None));
     assert!(!s.can_undo(), "nothing was done");
 }
 
-/// Automation goes only to a lane whose unit can hold it: hertz never into a 0..1 mask. A
-/// session knows the unit each lane had; a project just opened knows only the values.
+/// Automation goes only to a lane whose unit can hold it: hertz never into a 0..1 mask. Lane
+/// files record their unit (FMT-10), so even a project just opened knows it.
 #[test]
 fn automation_is_moved_only_to_a_lane_of_its_unit() {
     let fixture = Fixture::first_song();
     let mut s = fixture.open();
     let bass = fixture.read("tracks/bass.ts").unwrap();
-    fixture.write("tracks/bass.ts", &bass.replacen("track(\"Bass\"", "track(\"Sub Bass\"", 1));
+    fixture.write("tracks/bass.ts", &bass.replacen("track(\"bass\"", "track(\"sub-bass\"", 1));
     assert!(s.refresh() && s.draft_errors.is_empty(), "{:?}", s.draft_errors);
-    let offered = |s: &Session, file: &str| -> Vec<(String, bool)> {
-        let w = s.warnings().iter().find(|w| w.file == file).unwrap();
-        w.fixes.iter().filter_map(|f| if let Fix::Relink { lane, likely, .. } = f { Some((lane.clone(), *likely)) } else { None }).collect()
+    // The folder whole, then each file to the one lane of its own kind and unit.
+    let offered = |s: &Session| -> Vec<(String, bool)> {
+        about(s, "data/bass").fixes.iter().filter(|f| f.code == "relink").map(|f| (f.title.clone(), f.likely)).collect()
     };
-    let (cutoff, drop) = ("timeline/bass.cutoff.json", "timeline/bass.drop.json");
-    let one = |lane: &str| vec![(lane.to_string(), true)];
-    assert_eq!((offered(&s, cutoff), offered(&s, drop)), (one("cutoff"), one("drop")), "each to its own unit's lane only");
+    let lanes = [
+        "Move it to Bass (sub-bass)",
+        "Move to Bass (sub-bass) › cutoff",
+        "Move to Bass (sub-bass) › drop",
+        "Move to Bass (sub-bass) › notes",
+    ];
+    let expect: Vec<(String, bool)> = lanes.iter().enumerate().map(|(i, t)| (t.to_string(), i == 0)).collect();
+    assert_eq!(offered(&s), expect);
     let at = s.accepted().number;
-    let hz = "Sub Bass › drop is a control<unit01> lane, which can't read automation in hz";
-    assert_eq!(s.relink(at, Path::new(cutoff), "Sub Bass", "drop"), Err(EditError::Rejected(hz.into())));
-    let unit01 = "Sub Bass › cutoff is a control<hz> lane, which can't read automation in unit01";
-    assert_eq!(s.relink(at, Path::new(drop), "Sub Bass", "cutoff"), Err(EditError::Rejected(unit01.into())));
+    let (cutoff, drop) = (Path::new("data/bass/cutoff.json"), Path::new("data/bass/drop.json"));
+    let hz = "sub-bass › drop is a control<unit01> lane, which can't read automation in hz";
+    assert_eq!(s.relink(at, cutoff, Path::new("data/sub-bass/drop.json")), Err(EditError::Rejected(hz.into())));
+    let unit01 = "sub-bass › cutoff is a control<hz> lane, which can't read automation in unit01";
+    assert_eq!(s.relink(at, drop, Path::new("data/sub-bass/cutoff.json")), Err(EditError::Rejected(unit01.into())));
 
-    // Just opened: 0..1 values could be hertz, so the mask's data may go to cutoff, but only
-    // when the person picks it; values up to 2200 can't be 0..1.
-    let mut s = fixture.open();
-    assert_eq!(offered(&s, cutoff), one("cutoff"));
-    assert_eq!(offered(&s, drop), [("drop".to_string(), true), ("cutoff".to_string(), false)]);
-    let reaches = "Sub Bass › drop is a control<unit01> lane, which can't read automation that reaches 2200";
-    assert_eq!(s.relink(s.accepted().number, Path::new(cutoff), "Sub Bass", "drop"), Err(EditError::Rejected(reaches.into())));
-    assert!(fixture.read("timeline/sub-bass.drop.json").is_none() && fixture.read(cutoff).is_some(), "nothing moved");
+    // Just opened, the same: the files say their units.
+    let s = fixture.open();
+    assert_eq!(offered(&s), expect);
+    assert!(fixture.read("data/sub-bass/drop.json").is_none() && fixture.read("data/bass/cutoff.json").is_some(), "nothing moved");
 }
 
 #[test]
@@ -330,16 +295,16 @@ fn deleted_data_comes_back_byte_for_byte_with_undo() {
     let fixture = Fixture::first_song();
     let mut s = fixture.open();
     let bytes = fixture.read(OLD).unwrap();
-    fixture.rename_kick(&mut s, "Kicks");
+    fixture.rename_kick(&mut s, "kicks");
     let deleted = s.delete_data(s.accepted().number, Path::new(OLD)).unwrap();
     assert_eq!((deleted.file.as_str(), deleted.before.as_str(), deleted.after.as_str()), (OLD, "unused notes", "deleted"));
     assert_eq!(fixture.read(OLD), None);
-    assert!(s.warnings().is_empty());
+    assert!(s.problems().is_empty());
 
     let undone = s.undo().unwrap();
     assert_eq!((undone.before.as_str(), undone.after.as_str()), ("deleted", "unused notes"));
     assert_eq!(fixture.read(OLD), Some(bytes.clone()));
-    assert_eq!(s.warnings().len(), 1);
+    assert_eq!(unclaimed(&s).len(), 1);
 
     // Deleted again, then something else takes the name: undo leaves it be.
     s.redo().unwrap();
@@ -347,6 +312,42 @@ fn deleted_data_comes_back_byte_for_byte_with_undo() {
     assert!(s.refresh());
     assert!(!s.can_undo() && s.undo().is_err());
     assert_eq!(fixture.read(OLD).unwrap(), r#"{"clips": []}"#);
+
+    // A whole folder, deleted and brought back.
+    let mut s = fixture.open();
+    let last = about(&s, "data/kick").fixes.len() - 1;
+    let deleted = fix(&mut s, "data/kick", last).unwrap();
+    assert_eq!((deleted.file.as_str(), deleted.after.as_str()), ("data/kick", "deleted"));
+    assert!(!fixture.0.join("data/kick").exists() && s.problems().is_empty());
+    s.undo().unwrap();
+    assert_eq!(fixture.read(OLD).unwrap(), r#"{"clips": []}"#);
+}
+
+// DIAG-1, FMT-12: a data problem's fix is applied when asked, as a checked edit with one undo
+// step; a fix no problem offers any more (its base changed) is refused.
+#[test]
+fn a_data_problems_fix_is_applied_when_asked_and_undone() {
+    let fixture = Fixture::first_song();
+    let mut s = fixture.open();
+    let original = fixture.read(OLD).unwrap();
+    let anonymous = original.replacen("\"id\": \"my53vvkc\", ", "", 1);
+    assert_ne!(anonymous, original);
+    fixture.write(OLD, &anonymous);
+    assert!(s.refresh());
+    let d = about(&s, OLD);
+    assert_eq!((d.code, d.fixes[0].code), ("clip.anonymous", "assign-clip-ids"));
+    let stale = (d.fixes[0].code, serde_json::to_value(&d.fixes[0].edit).unwrap());
+    let done = fix(&mut s, OLD, 0).unwrap();
+    assert_eq!((done.before.as_str(), done.after.as_str()), ("kick › hits", "give every clip an id"));
+    assert!(s.problems().is_empty(), "{:?}", s.problems());
+    let fixed = fixture.read(OLD).unwrap();
+    assert!(fixed.contains("\"id\": \""), "{fixed}");
+    assert_eq!(
+        s.fix(s.accepted().number, stale.0, &stale.1),
+        Err(EditError::Rejected("that fix isn't offered any more: the project changed since; look at it again".into()))
+    );
+    s.undo().unwrap();
+    assert_eq!(fixture.read(OLD).unwrap(), anonymous);
 }
 
 #[test]
@@ -366,4 +367,84 @@ fn a_value_whose_units_changed_around_it_is_not_offered_for_undo() {
     assert!(s.refresh() && s.can_undo());
     s.undo().unwrap();
     assert!(fixture.read("tracks/bass.ts").unwrap().contains("khz(2.5)"));
+}
+
+// FMT-17, DIAG-6: a plugin state no stateful plugin reads moves with its sidecar to the plugin
+// it belongs to now, or is deleted; undo brings the blob back byte for byte.
+#[test]
+fn plugin_state_is_moved_or_deleted_with_its_sidecar_and_undone() {
+    let fixture = Fixture(std::env::temp_dir().join(format!("m2-relink-state-{}", std::process::id())));
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\n";
+    // Not installed, so it plays nothing, but its state is still filed under its keys (FMT-18a).
+    let song = "import { plugin, song, track } from \"@m2/core\";\n\
+                const l = track(\"lead\", ({ lane }) =>\n\
+                  plugin(\"clap:org.example.synth\", { key: \"pad\", notes: lane.notes(\"notes\") }));\n\
+                export default song(() => l.out);\n";
+    let blob: Vec<u8> = (0..=255u8).cycle().take(4000).collect();
+    let side = "{\"plugin\": \"clap:org.example.synth\", \"plugin_version\": \"1.0.0\"}\n";
+    fixture.write("music2.toml", manifest);
+    fixture.write("song.ts", song);
+    std::fs::create_dir_all(fixture.0.join("data/lead")).unwrap();
+    std::fs::write(fixture.0.join("data/lead/lead.state"), &blob).unwrap();
+    fixture.write("data/lead/lead.state.json", side);
+    let mut s = fixture.open();
+    let d = about(&s, "data/lead/lead.state");
+    assert_eq!((d.code, d.fixes[0].code, d.fixes[0].likely), ("data.unclaimed", "relink", true));
+    let moved = fix(&mut s, "data/lead/lead.state", 0).unwrap();
+    assert_eq!((moved.before.as_str(), moved.after.as_str()), ("unused plugin state", "lead › pad"));
+    assert_eq!(std::fs::read(fixture.0.join("data/lead/pad.state")).unwrap(), blob);
+    assert_eq!(fixture.read("data/lead/pad.state.json").unwrap(), side);
+    assert!(fixture.read("data/lead/lead.state.json").is_none() && unclaimed(&s).is_empty());
+    s.undo().unwrap();
+    assert_eq!(std::fs::read(fixture.0.join("data/lead/lead.state")).unwrap(), blob);
+
+    let last = about(&s, "data/lead/lead.state").fixes.len() - 1;
+    let deleted = fix(&mut s, "data/lead/lead.state", last).unwrap();
+    assert_eq!(deleted.after, "deleted");
+    assert!(!fixture.0.join("data/lead").exists());
+    s.undo().unwrap();
+    assert_eq!(std::fs::read(fixture.0.join("data/lead/lead.state")).unwrap(), blob, "the blob comes back byte for byte");
+    assert_eq!(fixture.read("data/lead/lead.state.json").unwrap(), side);
+}
+
+// FMT-7, ID-1, DIAG-6: a Relink onto a key whose folder is there in other capitals (`data/Bass`)
+// is refused, naming that folder, on every disk alike; nothing moves.
+#[test]
+fn a_relink_never_moves_into_a_folder_in_other_capitals() {
+    let fixture = Fixture::first_song();
+    std::fs::rename(fixture.0.join("data/bass"), fixture.0.join("data/Bass")).unwrap();
+    fixture.write("data/old-bass/notes.json", &fixture.read("data/Bass/notes.json").unwrap());
+    let mut s = fixture.open();
+    let to = Path::new("data/bass");
+    let refused = s.relink(s.accepted().number, Path::new("data/old-bass"), to);
+    assert!(
+        matches!(&refused, Err(EditError::Rejected(why)) if why.contains("data/Bass is there already") && why.contains("it is data/bass")),
+        "{refused:?}"
+    );
+    assert!(fixture.read("data/old-bass/notes.json").is_some() && fixture.read("data/Bass/notes.json").is_some());
+    let refused = s.relink(s.accepted().number, Path::new("data/old-bass/notes.json"), Path::new("data/bass/notes.json"));
+    assert!(matches!(&refused, Err(EditError::Rejected(why)) if why.contains("data/Bass is there already")), "{refused:?}");
+}
+
+// FMT-9: data that can't be read can't be checked, so it is never moved or deleted.
+#[cfg(unix)]
+#[test]
+fn data_that_cant_be_read_is_never_moved() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::first_song();
+    let mut s = fixture.open();
+    fixture.rename_kick(&mut s, "kicks");
+    fixture.write("data/kick/other.json", "{\"clips\": []}\n");
+    std::fs::set_permissions(fixture.0.join("data/kick/other.json"), std::fs::Permissions::from_mode(0o000)).unwrap();
+    assert!(s.refresh());
+    let refused = s.relink(s.accepted().number, Path::new("data/kick"), Path::new("data/kicks"));
+    std::fs::set_permissions(fixture.0.join("data/kick/other.json"), std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(matches!(&refused, Err(EditError::Rejected(why)) if why.contains("data/kick/other.json can't be read")), "{refused:?}");
+    assert!(fixture.read(OLD).is_some() && fixture.read(NEW).is_none());
+    // Nor deleted in part.
+    std::fs::set_permissions(fixture.0.join("data/kick/other.json"), std::fs::Permissions::from_mode(0o000)).unwrap();
+    let refused = s.delete_data(s.accepted().number, Path::new("data/kick"));
+    std::fs::set_permissions(fixture.0.join("data/kick/other.json"), std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(matches!(&refused, Err(EditError::Rejected(why)) if why.contains("can't be read")), "{refused:?}");
+    assert!(fixture.read(OLD).is_some());
 }

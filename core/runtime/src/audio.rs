@@ -12,8 +12,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{Context, Result, bail};
-use m2_song::{AudioClip, TempoMap};
+use anyhow::{Context, Result};
+use m2_song::{AudioClip, DataSet, TempoMap};
 
 /// Decoded audio, planar, at its own sample rate.
 #[derive(Clone, Debug)]
@@ -55,8 +55,22 @@ pub fn load_wav(path: &Path) -> Result<Asset> {
 
 /// Write planar audio as a 32-bit float WAV (lossless for anything the engine makes).
 pub fn write_wav(path: &Path, channels: &[Vec<f32>], sample_rate: u32) -> Result<()> {
-    let spec = hound::WavSpec { channels: channels.len() as u16, sample_rate, bits_per_sample: 32, sample_format: hound::SampleFormat::Float };
-    let mut w = hound::WavWriter::create(path, spec).with_context(|| format!("creating {}", path.display()))?;
+    let file = std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
+    wav_to(file, channels, sample_rate)
+}
+
+/// [`write_wav`] to a file that must not exist yet: assets are never overwritten, so a new one
+/// is created with create-only semantics (FMT-14). A failed write leaves nothing behind.
+pub fn write_new_wav(path: &Path, channels: &[Vec<f32>], sample_rate: u32) -> Result<()> {
+    let file =
+        std::fs::OpenOptions::new().write(true).create_new(true).open(path).with_context(|| format!("creating {}", path.display()))?;
+    wav_to(file, channels, sample_rate).inspect_err(|_| drop(std::fs::remove_file(path)))
+}
+
+fn wav_to(file: std::fs::File, channels: &[Vec<f32>], sample_rate: u32) -> Result<()> {
+    let spec =
+        hound::WavSpec { channels: channels.len() as u16, sample_rate, bits_per_sample: 32, sample_format: hound::SampleFormat::Float };
+    let mut w = hound::WavWriter::new(std::io::BufWriter::new(file), spec)?;
     for i in 0..channels.first().map_or(0, Vec::len) {
         for c in channels {
             w.write_sample(c[i])?;
@@ -66,26 +80,16 @@ pub fn write_wav(path: &Path, channels: &[Vec<f32>], sample_rate: u32) -> Result
     Ok(())
 }
 
-/// Assets loaded once per renderer.
+/// Assets decoded once per renderer, by path. Rendering decodes; compiling never does (FMT-16).
 #[derive(Default)]
 pub struct Assets {
-    dir: Option<PathBuf>,
-    loaded: HashMap<String, Arc<Asset>>,
+    loaded: HashMap<PathBuf, Option<Arc<Asset>>>,
 }
 
 impl Assets {
-    pub fn new(dir: Option<&Path>) -> Assets {
-        Assets { dir: dir.map(Path::to_path_buf), loaded: HashMap::new() }
-    }
-
-    pub fn get(&mut self, name: &str) -> Result<Arc<Asset>> {
-        if let Some(a) = self.loaded.get(name) {
-            return Ok(a.clone());
-        }
-        let dir = self.dir.as_ref().context("audio clips need a project folder")?;
-        let a = Arc::new(load_wav(&dir.join(name))?);
-        self.loaded.insert(name.to_string(), a.clone());
-        Ok(a)
+    /// The decoded file, or `None` when it can't be decoded or holds no audio.
+    pub fn get(&mut self, path: &Path) -> Option<Arc<Asset>> {
+        self.loaded.entry(path.to_path_buf()).or_insert_with(|| load_wav(path).ok().filter(|a| !a.is_empty()).map(Arc::new)).clone()
     }
 }
 
@@ -232,17 +236,24 @@ pub struct AudioLane {
 }
 
 impl AudioLane {
-    pub fn build(clips: &[AudioClip], assets: &mut Assets, tempo: &TempoMap, sample_rate: f64, channels: usize) -> Result<AudioLane> {
+    /// Render `clips`, in the order given (canonical: by start and id, so overlapping clips
+    /// always sum in one order). A clip whose asset may not be played (`asset.missing`) or
+    /// can't be decoded is silent; it never silences the rest (FMT-15).
+    pub fn build(
+        clips: &[AudioClip],
+        data: &DataSet,
+        assets: &mut Assets,
+        tempo: &TempoMap,
+        sample_rate: f64,
+        channels: usize,
+    ) -> AudioLane {
         let mut out = vec![];
         for c in clips {
-            let a = assets.get(&c.asset).with_context(|| format!("clip at beat {}", c.start))?;
-            if a.is_empty() {
-                bail!("{} is empty", c.asset);
-            }
+            let Some(a) = data.asset_path(&c.asset).and_then(|p| assets.get(&p)) else { continue };
             let start = (tempo.seconds_at(c.start) * sample_rate).round() as u64;
             out.push((start, render_clip(c, &a, tempo, sample_rate)));
         }
-        Ok(AudioLane { clips: out, channels })
+        AudioLane { clips: out, channels }
     }
 
     /// Fill frames `off..off + n` of `out` (channel-major, `channels × block`) with the

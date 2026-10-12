@@ -235,8 +235,8 @@ function TemplateCard({ starter, selected, onSelect, onOpen }: { starter: Starte
 /** The timeline's track colours (see SongTimeline). */
 const HUES = ["255 94 135", "255 159 67", "255 214 92", "94 214 140", "72 196 230", "124 131 253"];
 
-/** Clips per row, as [start, length] in eighths of the song, in the timeline's order (Bass, Chords, Clap, Hats, Hook,
- * Kick): every part all along, except the hook, which comes in halfway. */
+/** Clips per row, as [start, length] in eighths of the song, in the timeline's order of the starter's tracks (`bass`,
+ * `chords`, `clap`, `hats`, `hook`, `kick`): every part all along, except the hook, which comes in halfway. */
 const STARTER_ROWS: [number, number][][] = [
   [[0, 4], [4, 4]],
   [[0, 4], [4, 4]],

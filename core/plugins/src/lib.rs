@@ -660,32 +660,38 @@ impl Drop for Instance {
     }
 }
 
-/// Port names for a plugin's parameters: lowercase words joined by `_`, unique.
+/// The address of each of a plugin's parameters in code (FMT-18): `<name>_<id>`, its display
+/// name in lowercase words joined by `_`, then its CLAP parameter id (`dry_wet_12`). The id
+/// makes it unique and is all that binds it; the name part is a label that a plugin update may
+/// change. A parameter without a name is `param_<id>`.
 pub fn param_port_names(params: &[Param]) -> Vec<String> {
-    let mut seen: HashMap<String, usize> = HashMap::new();
-    params
-        .iter()
-        .map(|p| {
-            let mut s = String::new();
-            for c in p.name.chars() {
-                if c.is_ascii_alphanumeric() {
-                    s.push(c.to_ascii_lowercase());
-                } else if !s.ends_with('_') {
-                    s.push('_');
-                }
-            }
-            let mut s = s.trim_matches('_').to_string();
-            if s.is_empty() || s.starts_with(|c: char| c.is_ascii_digit()) {
-                s = format!("p_{s}");
-            }
-            if matches!(s.as_str(), "in" | "notes" | "out" | "state") {
-                s = format!("{s}_");
-            }
-            let n = seen.entry(s.clone()).or_insert(0);
-            *n += 1;
-            if *n > 1 { format!("{s}_{}", p.id) } else { s }
-        })
-        .collect()
+    params.iter().map(|p| format!("{}_{}", param_label(&p.name), p.id)).collect()
+}
+
+/// The name part of a parameter address: lowercase ASCII letters and digits, every run of
+/// anything else one `_`, trimmed; `param` if nothing is left.
+pub fn param_label(name: &str) -> String {
+    let mut s = String::new();
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            s.push(c.to_ascii_lowercase());
+        } else if !s.ends_with('_') {
+            s.push('_');
+        }
+    }
+    match s.trim_matches('_') {
+        "" => "param".into(),
+        t => t.into(),
+    }
+}
+
+/// A parameter address split into its name part and its CLAP id: `dry_wet_12` → (`dry_wet`, 12).
+/// `None` for a port written without an id (`dry_wet`), or one that isn't a parameter (`in`).
+pub fn param_address(port: &str) -> Option<(&str, u32)> {
+    let (name, id) = port.rsplit_once('_')?;
+    // `u32::from_str` takes a leading `+`; an address is digits only.
+    (!id.is_empty() && id.bytes().all(|b| b.is_ascii_digit())).then_some(())?;
+    Some((name, id.parse().ok()?))
 }
 
 #[cfg(test)]

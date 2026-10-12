@@ -22,8 +22,8 @@ const VOICES: usize = 16;
 fn wasm() -> f64 {
     let mut pk = PackageSet::default();
     pk.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
-    let ir: m2_ir::Ir = serde_json::from_value(json!({"ir": 0, "root": {"module": "song", "export": "out"}, "modules": [{
-        "name": "song", "lanes": [{"id": "notes", "kind": "events<note>"}], "exports": {"out": "v"},
+    let ir: m2_ir::Ir = serde_json::from_value(json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"}, "modules": [{
+        "key": "song", "lanes": [{"key": "notes", "kind": "events<note>"}], "exports": {"out": "v"},
         "nodes": [
             {"id": "n", "op": "lane", "lane": "notes"},
             {"id": "v", "op": "poly", "events": "n", "voices": VOICES, "body": {"out": "amp", "nodes": [
@@ -37,17 +37,15 @@ fn wasm() -> f64 {
                 {"id": "amp", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "f.lp", "by": "e"}}]}}]}]}))
     .unwrap();
     let flat = m2_ir::check(&ir, &pk).unwrap();
-    let dir = std::env::temp_dir().join(format!("m2-bench-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
     let notes: Vec<_> = (0..VOICES).map(|i| json!({"pitch": 36 + i * 3, "start": 0, "length": 1000})).collect();
-    std::fs::write(dir.join("song.notes.json"), json!({"clips": [{"start": 0, "length": 1000, "notes": notes}]}).to_string()).unwrap();
-    let tl = m2_song::Timeline::load(&dir).unwrap();
+    let text = json!({"clips": [{"start": 0, "length": 1000, "notes": notes}]}).to_string();
+    let lane = m2_song::LaneData::read(&text, &m2_song::LaneKind::Notes).unwrap();
+    let tl = m2_song::DataSet::with_lanes(m2_song::Arrangement::default(), [(m2_song::LaneAddr::new("song", "notes").unwrap(), lane)]);
     let mut r = Renderer::new(&flat, &tl, &pk, SR).unwrap();
     let t = Instant::now();
     let out = r.render(SECONDS).unwrap();
     let elapsed = t.elapsed().as_secs_f64();
     std::hint::black_box(out);
-    std::fs::remove_dir_all(dir).ok();
     elapsed
 }
 

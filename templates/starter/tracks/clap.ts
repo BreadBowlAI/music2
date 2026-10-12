@@ -4,7 +4,7 @@ import { reverb } from "std/fx";
 import { scale } from "std/math";
 
 // A clap built from std parts: a burst of noise through a bandpass filter, in a small room.
-export default track("Clap", ({ lane }) => {
+export default track("clap", { name: "Clap" }, ({ lane }) => {
   const clap = poly(
     lane.notes("hits"),
     (n) => {

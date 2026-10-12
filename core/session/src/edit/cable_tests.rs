@@ -13,6 +13,7 @@ impl Fixture {
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!("m2-cable-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("music2.toml"), crate::tests::MANIFEST).unwrap();
         let fixture = Self(dir);
         fixture.write(body);
         fixture
@@ -284,17 +285,17 @@ fn a_cable_undo_refused_after_another_change_waits_until_that_change_is_taken_ba
 #[test]
 fn a_save_in_another_file_never_blocks_undo() {
     let fixture = Fixture::new(&format!("export default song(({{ time }}) => {{\n  {WOBBLE}\n  return osc.sine(hz(800));\n}});"));
-    std::fs::create_dir_all(fixture.0.join("timeline")).unwrap();
+    std::fs::create_dir_all(fixture.0.join("data")).unwrap();
     let mut s = fixture.open();
     let (wobble, freq) = (outlet(&s, "wobble"), control(&s, "800"));
     s.connect(wobble.revision, &wobble.id, &freq.id).unwrap();
     // A file the cable didn't touch changes (as a lane write or a save elsewhere would).
-    std::fs::write(fixture.0.join("timeline/song.json"), r#"{"tempo": [{"beat": 0, "bpm": 90}]}"#).unwrap();
+    std::fs::write(fixture.0.join("data/arrangement.json"), r#"{"tempo": [{"beat": 0, "bpm": 90}]}"#).unwrap();
     s.refresh();
     assert!(s.can_undo());
     s.undo().unwrap();
     assert!(fixture.source().contains("osc.sine(hz(800))"));
-    assert!(std::fs::read_to_string(fixture.0.join("timeline/song.json")).unwrap().contains("90"), "the other file keeps its change");
+    assert!(std::fs::read_to_string(fixture.0.join("data/arrangement.json")).unwrap().contains("90"), "the other file keeps its change");
     s.redo().unwrap();
     assert!(fixture.source().contains("osc.sine(wobble)"));
 }
@@ -306,7 +307,7 @@ fn cables_and_knobs_in_a_track_file_are_found_by_their_ids() {
     std::fs::create_dir_all(fixture.0.join("tracks")).unwrap();
     let track = format!(
         "import {{ hz, khz, track }} from \"@m2/core\";\nimport {{ lfo }} from \"std/control\";\nimport {{ osc, svf }} from \"std/dsp\";\n\
-         import {{ xrange }} from \"std/math\";\n\nexport default track(\"Lead\", ({{ time }}) => {{\n  {WOBBLE}\n  \
+         import {{ xrange }} from \"std/math\";\n\nexport default track(\"lead\", ({{ time }}) => {{\n  {WOBBLE}\n  \
          return svf.lowpass(osc.saw(hz(55)), wobble);\n}});\n"
     );
     std::fs::write(fixture.0.join("tracks/lead.ts"), &track).unwrap();

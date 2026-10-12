@@ -19,13 +19,15 @@
 //!   silenced in live mode.
 
 pub mod audio;
+pub mod data;
 pub mod packages;
 
 use anyhow::{Context, Result, bail};
 use m2_ir::{FNode, FOp, Flat, Input, Kind, NoteField, Origin, PortRef, TimeOf};
-use m2_song::{AbsNote, ControlLane, Project, TempoMap, Timeline};
+use m2_song::{AbsNote, ControlLane, DataSet, TempoMap};
 use wasmtime::{Instance, Memory, Store, StoreLimits, StoreLimitsBuilder, TypedFunc};
 
+pub use data::{decls, lane_kind};
 pub use packages::{Effect, Package, PackageSet};
 
 pub const BLOCK: usize = 128;
@@ -180,7 +182,9 @@ impl PluginNode {
             }
         }
         let ins: Vec<&[f32]> = match &self.audio_in {
-            Some(Input::Port { src, src_channels, .. }) => (0..*src_channels as usize).map(|c| &bufs[src.node][src.port][c * BLOCK..(c + 1) * BLOCK]).collect(),
+            Some(Input::Port { src, src_channels, .. }) => {
+                (0..*src_channels as usize).map(|c| &bufs[src.node][src.port][c * BLOCK..(c + 1) * BLOCK]).collect()
+            }
             _ => vec![],
         };
         let mut outs: Vec<&mut [f32]> = out.chunks_mut(BLOCK).collect();
@@ -206,16 +210,24 @@ impl PluginNode {
 }
 
 enum Exec {
-    Control { lane: ControlLane, default: f32 },
+    Control {
+        lane: ControlLane,
+        default: f32,
+    },
     Audio(audio::AudioLane),
     Notes,
     Time(TimeOf),
     Const(f32),
     Kernel(Box<KernelNode>),
     Plugin(Box<PluginNode>),
+    /// A plugin that isn't installed (FMT-18a): its audio input passed through, or silence.
+    Missing(Option<Input>),
     Poly(Box<PolyNode>),
     /// A delay of exactly `BLOCK` samples; `ring` is indexed by absolute sample mod `BLOCK`.
-    Feedback { input: PortRef, ring: Buf },
+    Feedback {
+        input: PortRef,
+        ring: Buf,
+    },
     NoteField(NoteField),
     Capture(PortRef),
 }
@@ -233,11 +245,10 @@ struct Graph {
 struct Builder<'a> {
     store: &'a mut Store<StoreLimits>,
     packages: &'a PackageSet,
-    timeline: &'a Timeline,
+    /// The revision's data: lanes, the tempo, and where assets and verified state blobs are.
+    data: &'a DataSet,
     tempo: &'a TempoMap,
     sample_rate: f64,
-    /// The project's `assets/` folder, where plugin state lives.
-    assets: Option<&'a std::path::Path>,
     /// Audio files used by clips, loaded once.
     audio: audio::Assets,
 }
@@ -248,30 +259,38 @@ impl Builder<'_> {
         let mut bufs: Vec<Vec<Buf>> = Vec::with_capacity(nodes.len());
         let used: std::collections::HashSet<usize> = order.iter().copied().collect();
         for (i, n) in nodes.iter().enumerate() {
-            bufs.push(n.outputs.iter().map(|k| vec![0.0; if matches!(k, Kind::Events(_)) { 0 } else { k.channels() as usize * BLOCK }]).collect());
+            bufs.push(
+                n.outputs.iter().map(|k| vec![0.0; if matches!(k, Kind::Events(_)) { 0 } else { k.channels() as usize * BLOCK }]).collect(),
+            );
             if !used.contains(&i) {
                 exec.push(Exec::Const(0.0));
                 continue;
             }
             let e = match &n.op {
                 FOp::Lane { module, lane, kind: Kind::Control(_), default } => {
-                    Exec::Control { lane: self.timeline.control(module, lane)?, default: *default as f32 }
+                    Exec::Control { lane: self.data.control(module, lane), default: *default as f32 }
                 }
                 FOp::Lane { kind: Kind::Events(_), .. } => Exec::Notes,
                 FOp::Lane { module, lane, kind: Kind::Audio(ch), .. } => {
-                    let clips = self.timeline.audio(module, lane)?;
-                    Exec::Audio(audio::AudioLane::build(&clips, &mut self.audio, self.tempo, self.sample_rate, *ch as usize).with_context(|| format!("{}: lane `{lane}`", n.name))?)
+                    let clips = self.data.audio(module, lane);
+                    Exec::Audio(audio::AudioLane::build(clips, self.data, &mut self.audio, self.tempo, self.sample_rate, *ch as usize))
                 }
                 FOp::Time(t) => Exec::Time(*t),
                 FOp::Const(v) => Exec::Const(*v as f32),
                 FOp::Kernel { kernel, channels, inputs } => Exec::Kernel(Box::new(self.kernel(n, kernel, *channels, inputs)?)),
-                FOp::Plugin { plugin, inputs, state, .. } => Exec::Plugin(Box::new(self.plugin(nodes, n, plugin, inputs, state.as_deref())?)),
+                FOp::Plugin { plugin, inputs, .. } if self.packages.plugin_missing(plugin) => {
+                    // Typed with `in` first (see `PackageSet::bind_plugins`).
+                    Exec::Missing(inputs.first().filter(|i| matches!(i, Input::Port { .. })).cloned())
+                }
+                FOp::Plugin { plugin, inputs, state, .. } => {
+                    Exec::Plugin(Box::new(self.plugin(nodes, n, plugin, inputs, state.as_deref())?))
+                }
                 FOp::Poly { lane, voices, voice, .. } => {
                     if in_voice {
                         bail!("{}: poly inside poly", n.name);
                     }
                     let FOp::Lane { module, lane: lane_id, .. } = &nodes[*lane].op else { bail!("{}: poly needs a notes lane", n.name) };
-                    let notes = self.timeline.notes(module, lane_id)?.iter().map(|a| self.sample_note(a)).filter(|n| n.end > n.start).collect();
+                    let notes = self.data.notes(module, lane_id).iter().map(|a| self.sample_note(a)).filter(|n| n.end > n.start).collect();
                     let mut slots = Vec::with_capacity(*voices as usize);
                     for _ in 0..*voices {
                         let graph = self.graph(&voice.nodes, &voice.order, true).with_context(|| format!("{}: voice", n.name))?;
@@ -301,24 +320,35 @@ impl Builder<'_> {
         SampleNote { start: at(n.start), end: at(n.end), pitch: n.pitch as f32, velocity: n.velocity as f32 }
     }
 
-    fn plugin(&mut self, nodes: &[FNode], n: &FNode, id: &str, inputs: &[Input], state: Option<&str>) -> Result<PluginNode> {
+    fn plugin(&mut self, nodes: &[FNode], n: &FNode, id: &str, inputs: &[Input], state: Option<&[String]>) -> Result<PluginNode> {
         let info = self.packages.plugin_info(id).with_context(|| format!("{}: plugin `{id}` was not described", n.name))?;
         let mut inst = m2_plugins::Instance::new(&info.found, self.sample_rate, BLOCK as u32).with_context(|| n.name.clone())?;
-        if let Some(name) = state {
-            let path = plugin_state_path(self.assets.with_context(|| format!("{}: plugin state needs a project folder", n.name))?, name);
+        // Only a blob whose sidecar names this plugin is loaded (FMT-17); without one the
+        // plugin plays its defaults, and the data's diagnostics say why.
+        let keys: Vec<&str> = state.unwrap_or_default().iter().map(String::as_str).collect();
+        if let Some(path) = state.and_then(|_| self.data.state(&n.module, &keys)) {
             let bytes = std::fs::read(&path).with_context(|| format!("{}: reading plugin state {}", n.name, path.display()))?;
             inst.load_state(&bytes).with_context(|| format!("{}: loading {}", n.name, path.display()))?;
         }
-        let mut it = inputs.iter();
-        let audio_in = if info.audio_in.is_some() { it.next().cloned() } else { None };
-        let mut notes = vec![];
-        if info.note_in
-            && let Some(Input::Port { src, .. }) = it.next()
-            && let FOp::Lane { module, lane, .. } = &nodes[src.node].op
-        {
-            notes = self.timeline.notes(module, lane)?.iter().map(|a| self.sample_note(a)).filter(|n| n.end > n.start).collect();
+        // Inputs come in the order of the plugin's ports; a parameter is bound by the id in its
+        // address, never by its place in the list (FMT-18).
+        let sig = m2_ir::Kernels::plugin(self.packages, id).with_context(|| format!("{}: plugin `{id}` was not described", n.name))?;
+        let (mut audio_in, mut notes, mut params) = (None, vec![], vec![]);
+        for (port, input) in sig.inputs.iter().zip(inputs) {
+            match (port.name.as_str(), input) {
+                ("in", _) => audio_in = Some(input.clone()),
+                ("notes", Input::Port { src, .. }) => {
+                    if let FOp::Lane { module, lane, .. } = &nodes[src.node].op {
+                        notes = self.data.notes(module, lane).iter().map(|a| self.sample_note(a)).filter(|n| n.end > n.start).collect();
+                    }
+                }
+                (_, Input::Unset) => {}
+                (name, _) => {
+                    let (_, pid) = packages::address(name).with_context(|| format!("{}: `{name}` isn't a parameter address", n.name))?;
+                    params.push((pid, input.clone(), None));
+                }
+            }
         }
-        let params = info.params.iter().zip(it).filter(|(_, i)| !matches!(i, Input::Unset)).map(|(p, i)| (p.id, i.clone(), None)).collect();
         Ok(PluginNode { name: n.name.clone(), inst, audio_in, notes, next: 0, playing: vec![], note_ids: 0, params })
     }
 
@@ -387,18 +417,20 @@ impl<T> WasmContext<T> for wasmtime::Result<T> {
     }
 }
 
-/// Where a named plugin state is stored in a project's `assets/` folder.
-pub fn plugin_state_path(assets: &std::path::Path, name: &str) -> std::path::PathBuf {
-    assets.join("plugin-state").join(format!("{name}.bin"))
-}
-
 fn floats(data: &mut [u8], ptr: usize, len: usize) -> &mut [f32] {
     bytemuck::cast_slice_mut(&mut data[ptr..ptr + len * 4])
 }
 
 impl Graph {
     /// Process frames `seg` of block `b`. Buffers are indexed by position in the block.
-    fn process(&mut self, store: &mut Store<StoreLimits>, b: &Block, seg: Seg, outer: Option<&[Vec<Buf>]>, note: Option<SampleNote>) -> Result<()> {
+    fn process(
+        &mut self,
+        store: &mut Store<StoreLimits>,
+        b: &Block,
+        seg: Seg,
+        outer: Option<&[Vec<Buf>]>,
+        note: Option<SampleNote>,
+    ) -> Result<()> {
         let n = seg.n;
         for oi in 0..self.order.len() {
             let i = self.order[oi];
@@ -447,6 +479,17 @@ impl Graph {
                 }
                 Exec::Poly(p) => p.process(store, b, bufs, &mut out[0])?,
                 Exec::Plugin(p) => p.process(b, bufs, &mut out[0])?,
+                Exec::Missing(input) => {
+                    for c in 0..out[0].len() / BLOCK {
+                        match input {
+                            Some(Input::Port { src, src_channels, .. }) => {
+                                let sc = if c < *src_channels as usize { c } else { 0 };
+                                out[0][seg.range(c)].copy_from_slice(&bufs[src.node][src.port][seg.range(sc)]);
+                            }
+                            _ => out[0][seg.range(c)].fill(0.0),
+                        }
+                    }
+                }
                 Exec::Feedback { ring, .. } => {
                     for c in 0..out[0].len() / BLOCK {
                         for f in 0..n {
@@ -660,22 +703,17 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    /// A renderer for a project: like [`Self::new`], with access to the project's
-    /// assets (plugin state).
-    pub fn for_project(flat: &Flat, project: &Project, packages: &PackageSet, sample_rate: u32) -> Result<Renderer> {
-        Renderer::build(flat, &project.timeline, packages, sample_rate, Some(&project.dir.join("assets")))
-    }
-
-    pub fn new(flat: &Flat, timeline: &Timeline, packages: &PackageSet, sample_rate: u32) -> Result<Renderer> {
-        Renderer::build(flat, timeline, packages, sample_rate, None)
-    }
-
-    fn build(flat: &Flat, timeline: &Timeline, packages: &PackageSet, sample_rate: u32, assets: Option<&std::path::Path>) -> Result<Renderer> {
-        let limits = StoreLimitsBuilder::new().memory_size(KERNEL_MEMORY).instances(1_000_000).memories(1_000_000).tables(1_000_000).build();
+    /// A renderer for a checked graph and the data it plays: a revision's [`DataSet`], which
+    /// also says where its assets and verified plugin states are ([`DataSet::empty`] for none).
+    pub fn new(flat: &Flat, data: &DataSet, packages: &PackageSet, sample_rate: u32) -> Result<Renderer> {
+        let limits =
+            StoreLimitsBuilder::new().memory_size(KERNEL_MEMORY).instances(1_000_000).memories(1_000_000).tables(1_000_000).build();
         let mut store = Store::new(&packages.engine, limits);
         store.limiter(|l| l);
-        let tempo = timeline.tempo()?;
-        let graph = Builder { store: &mut store, packages, timeline, tempo: &tempo, sample_rate: sample_rate as f64, assets, audio: audio::Assets::new(assets) }.graph(&flat.nodes, &flat.order, false)?;
+        let tempo = data.tempo().clone();
+        let graph =
+            Builder { store: &mut store, packages, data, tempo: &tempo, sample_rate: sample_rate as f64, audio: audio::Assets::default() }
+                .graph(&flat.nodes, &flat.order, false)?;
         Ok(Renderer {
             store,
             graph,
@@ -770,6 +808,11 @@ impl Renderer {
     /// Frames handed out so far (the playback position).
     pub fn position(&self) -> u64 {
         self.delivered
+    }
+
+    /// The rate it renders at: the project's (RENDER-31).
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate as u32
     }
 
     /// Change a written constant while playing: the value takes effect at the next

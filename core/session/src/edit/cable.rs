@@ -110,7 +110,7 @@ fn consts_at(compiled: &Compiled, file: &str, start: u32, end: u32) -> Vec<(Stri
                 && start <= *at
                 && *at < end
             {
-                found.push((m.name.clone(), n.id.clone(), *value));
+                found.push((m.key.clone(), n.id.clone(), *value));
             }
         });
     }
@@ -134,7 +134,7 @@ fn rewire(ir: &Ir, module: &str, removed: &[(String, String, f64)], to: &str) ->
 /// holds reading `to` instead. None if anything else still read a removed node.
 pub(super) fn excise(ir: &Ir, module: &str, ids: &BTreeSet<&str>, output: &dyn Fn(&str) -> bool, to: &str) -> Option<Ir> {
     let mut ir = ir.clone();
-    let m = ir.modules.iter_mut().find(|m| m.name == module)?;
+    let m = ir.modules.iter_mut().find(|m| m.key == module)?;
     let dangling = std::cell::Cell::new(false);
     let swap = |r: &mut String| {
         if output(r) {

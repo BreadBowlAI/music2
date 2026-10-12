@@ -13,6 +13,4 @@ m2-song.workspace = true
 m2-runtime.workspace = true
 m2-script.workspace = true
 hound.workspace = true
-
-[dev-dependencies]
 serde_json.workspace = true

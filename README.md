@@ -1,6 +1,6 @@
 # music2
 
-music2 is a music studio for the Mac: a DAW (digital audio workstation), the kind of app people make songs in, like GarageBand or Logic Pro. In music2 a song is a folder. Code in it says how the song sounds: the instruments, the effects and the mix. Timeline files say what plays: the notes, the automation (knob moves over time) and the audio.
+music2 is a music studio for the Mac: a DAW (digital audio workstation), the kind of app people make songs in, like GarageBand or Logic Pro. In music2 a song is a folder. Code in it says how the song sounds: the instruments, the effects and the mix. Data files say what plays: the notes, the automation (knob moves over time) and the audio.
 
 The app shows that folder as a timeline, a graph of knobs and cables, a piano roll (a grid for drawing notes) and a code editor. Every change you make there is written into the files right away.
 
@@ -19,7 +19,7 @@ cargo run --release -p music2-desktop -- ~/Music/music2/Demo    # or opened on a
 The start screen has three ways in:
 
 - **New Song…** makes a new song from a template and opens it (see [Your first song](#your-first-song)).
-- **Open Project Folder…** opens a song you already have. A song folder is any folder with a `song.ts` file in it. File → Open Project Folder… (⌘O) does the same at any time.
+- **Open Project Folder…** opens a song you already have. A song folder is any folder with a `music2.toml` file in it (see [The folder](#the-folder)). File → Open Project Folder… (⌘O) does the same at any time.
 - **Open an Example** opens a copy of one of the examples in your songs folder, so the example itself stays as it is.
 
 Everything you change is written into the song's folder right away.
@@ -64,11 +64,11 @@ From left to right: play/stop, back to the start, where the song is (bar.beat, t
 
 ### The timeline
 
-- Each track has a row for each of its lanes: its notes, its automation and its audio (see [Words you'll see](#words-youll-see)). The ruler on top counts bars, and the song's tempo is shown at the top left.
+- Each track has a row for each of its lanes: its notes, its automation and its audio (see [Words you'll see](#words-youll-see)). The ruler on top counts bars, following the song's time signatures, and the song's tempo is shown at the top left.
 - Click the ruler to move the playhead there.
 - Double-click an empty spot in a notes lane to add a one-bar clip. Drag a clip to move it along its lane. Click a clip and press Delete to remove it.
 - Double-click a notes clip to edit its notes.
-- Automation and audio clips are shown, but they can't be edited in the app yet. Tempo changes appear on the ruler.
+- Automation and audio clips are shown, but they can't be edited in the app yet. Tempo and time-signature changes appear on the ruler.
 
 ### The panel below the timeline
 
@@ -94,7 +94,7 @@ There's a tab for each module (one file's sound): one for each track file, and o
   - **Empty**: no tracks yet, so it plays silence. `song.ts` has a drum track ready, switched off: delete the `//` in front of its two lines and save, and a Drums lane appears.
 - New songs go in the **songs folder**, `~/Music/music2`, each in a folder named after the song. If the name is taken, the new one gets a number ("My song 2"): nothing is ever replaced. `Exports` there is taken by exports, so a song called "Exports" becomes "Exports 2". In the app, **Choose Folder…** in the New Song dialog saves it somewhere else.
 - **Open an Example** on the start screen copies an example into the songs folder and opens the copy. An example that needs plugins you don't have (With plugins) says which, and nothing is copied.
-- **Export** (the button in the top bar, or File → Export Audio…, ⌘E) writes the song to a WAV file: 48 kHz, 24-bit, stereo. It starts at bar 1 and goes to the end of the last clip, then on until the sound has died away (silent for half a second, at most 10 seconds more). A song longer than 3 hours (most likely a clip far past the rest) isn't exported: the message says in which bar the last clip ends.
+- **Export** (the button in the top bar, or File → Export Audio…, ⌘E) writes the song to a WAV file: 24-bit, stereo, at the song's sample rate (48 kHz unless its `music2.toml` says otherwise). It starts at bar 1 and goes to the end of the last clip, then on until the sound has died away (silent for half a second, at most 10 seconds more). A song longer than 3 hours (most likely a clip far past the rest) isn't exported: the message says in which bar the last clip ends.
   - The app asks where to save it, starting at `~/Music/music2/Exports/<song>.wav`. Opened in a browser, it saves there straight away, adding " 2", " 3"… rather than replacing a file, even one that appeared while it was exporting.
   - The button shows how far along it is, and you can keep playing and editing meanwhile. It exports the song as it was when you clicked. If you close the song or open another, the export carries on, and a message in the corner shows how far along it is.
   - Quitting while a song is being exported asks first: quitting stops the export, and no file is saved.
@@ -107,6 +107,7 @@ There's a tab for each module (one file's sound): one for each track file, and o
 - There's no Save for the song: every change is written to the files at once. ⌘S only saves the code editor's text.
 - Undo (⌘Z) and redo (⇧⌘Z) cover knobs, cables, effects, notes and code saves. The history ends when you close the app.
 - Changes made in another editor, or by a script, show up within a moment.
+- Problems that don't stop the song, such as data no lane reads after a key was renamed in code, a data file that doesn't read, or a missing sample or plugin, are listed in a **Needs attention** strip above the timeline, each with its fixes. A fix runs only when you click it, and Undo takes it back.
 
 ## Shortcuts
 
@@ -130,6 +131,7 @@ There's a tab for each module (one file's sound): one for each track file, and o
 New to music itself? [Music basics](docs/music-basics.md) explains notes, beats, scales, synths, effects and mixing in plain words.
 
 - **Track:** one part of the song, such as the bass or the drums. In music2 each track is a file in `tracks/`.
+- **Key:** the short name a track, a lane or a plugin's saved settings are filed under, written in the code: lowercase letters, digits and hyphens, such as `lead-vox`. A track also has a **label**, the name the app shows (`Lead Vox`), which can change freely.
 - **Lane:** a row of a track on the timeline. There are four kinds:
   - **notes**: notes for an instrument to play.
   - **automation** (a control lane): a value that changes over time, like a filter opening up.
@@ -156,20 +158,35 @@ The rest of this page is for writing songs as code, and for working on music2 it
 
 ```
 my-song/
-  music2.toml          # the song's name
+  music2.toml          # the song's name, its format and sample rate, and the SDK and packages it uses
   song.ts              # the mix: which tracks play, how loud, and the master
   tracks/
     bass.ts            # one file per track: its lanes, instrument and effects
-  timeline/
-    song.json          # tempo and beats per bar
-    bass.notes.json    # one file per lane: <track>.<lane>.json
-    bass.cutoff.json
-  assets/              # audio files (WAV) and saved plugin settings
+  data/
+    arrangement.json   # tempo and time signature
+    bass/              # one folder per track, named by its key
+      notes.json       # one file per lane: data/<track key>/<lane key>.json
+      cutoff.json      # (a key that is a Windows device name, such as aux, is written aux-)
+  assets/              # audio files (WAV), never overwritten
+  .music2/             # this machine's: not part of the song, and not in git
 ```
 
-`song.json` holds `tempo` (a list of `{ "beat", "bpm" }` changes) and `beats_per_bar`.
+`music2.toml` looks like this:
 
-In a lane file's name, `<track>` is the track's name in lower case, with spaces and punctuation turned into `-`: a track called `Lead Vox` has `lead-vox.notes.json`.
+```toml
+[project]
+name = "My song"
+format = 1
+sample_rate = 48000
+
+[dependencies]
+"@m2/core" = "1"
+std = "0.1"
+```
+
+`arrangement.json` holds `tempo` (a list of `{ "beat", "bpm" }` changes, the first at beat 0) and `meter` (a list of `{ "beat", "beats", "unit" }` time signatures; empty is 4/4). A beat is a quarter note.
+
+Tracks, lanes and plugins are filed under their keys: short names in lowercase letters, digits and hyphens, such as `lead-vox`. A key is written in the code, so renaming a track's label never moves its data.
 
 ### A track
 
@@ -179,11 +196,11 @@ This is a whole track, the shape of `tracks/hats.ts`:
 import { track } from "@m2/core";
 import { hat } from "std/instruments";
 
-export default track("Hats", ({ lane }) => hat(lane.notes("hits")));
+export default track("hats", { name: "Hats" }, ({ lane }) => hat(lane.notes("hits")));
 ```
 
-- `track("Hats", …)` makes a track called Hats.
-- `lane.notes("hits")` is a notes lane called hits. Its clips are in `timeline/hats.hits.json`.
+- `track("hats", { name: "Hats" }, …)` makes a track with the key `hats`, shown as Hats. Without the options, `track("hats", fn)`, it is shown by its key. Its data is filed under the key, so changing the name moves nothing; changing the key leaves its data behind until you move it (the app offers to).
+- `lane.notes("hits")` is a notes lane with the key hits. Its clips are in `data/hats/hits.json`. `lane.notes("hits", { name: "Hits" })` gives it a label too.
 - `hat(…)` is the hi-hat instrument from std. It plays those notes.
 
 ### The mix
@@ -214,25 +231,21 @@ export default song(() =>
 ### Notes
 
 ```json
-{
-  "clips": [
-    {
-      "start": 0,
-      "length": 4,
-      "notes": [
-        { "pitch": "F#2", "start": 0.5, "length": 0.25, "velocity": 0.9 },
-        { "pitch": 42, "start": 1.5, "length": 0.25 }
-      ]
-    }
-  ]
-}
+{"clips": [
+  {"id": "k3f9q2zt", "start": 0, "length": 4, "notes": [
+    {"pitch": "F#2", "start": 0.5, "length": 0.25, "velocity": 0.9},
+    {"pitch": 42, "start": 1.5, "length": 0.25}
+  ]}
+]}
 ```
 
 - `pitch` is a note name (`"F#2"`, `"Bb3"`) or a number (60 is middle C, so `42` is F#2).
 - A clip's `start` and `length` are in beats from the start of the song. A note's `start` and `length` are in beats from the start of its clip.
 - `velocity` goes from 0 to 1. Without it, a note gets 0.8.
+- `id` names the clip. music2 gives every clip it writes one; a clip without one still plays.
+- music2 writes these files in one form, one clip and one note per line, so they diff well. The order of clips and notes in a file never changes what plays.
 
-Automation and mask clips hold `points` instead of notes: `[beat, value]` pairs, with straight lines in between. Audio clips name a file in `assets/` and can have `offset`, `gain_db`, `fade_in`, `fade_out`, `reverse`, `pitch` and `warp`; see `examples/resample/timeline/chops.clips.json`.
+Automation and mask clips hold `points` instead of notes: `[beat, value]` pairs, with straight lines in between, and their file records the lane's unit (`{"unit": "hz", "clips": [...]}`). Audio clips name a file in `assets/`, pin it with `hash` (the first 16 hex digits of its SHA-256), and can have `offset`, `gain_db`, `fade_in`, `fade_out`, `reverse`, `pitch` and `warp`; see `examples/resample/data/chops/clips.json`.
 
 ### Units
 
@@ -254,28 +267,31 @@ A number in the code can carry a unit, written as a function. Plugging a value w
 
 | Name | What it is |
 |---|---|
-| `track(name, fn)` | a track: `fn` gets `{ lane, time }` and returns its sound, or an object of named outputs such as `{ out, env }` |
-| `song(fn)` | the root module in `song.ts`: whatever it returns is what you hear |
-| `lane.notes(id)`, `lane.control(id, unit, fallback)`, `lane.mask(id)`, `lane.audio(id)` | the timeline lanes |
+| `track(key, { name }?, fn)` | a track: `fn` gets `{ key, lane, time }` and returns its sound, or an object of named outputs such as `{ out, env }`. `name` is its label; code never sees it |
+| `song(fn)` | the root module in `song.ts`, with the key `song`: whatever it returns is what you hear |
+| `lane.notes(key)`, `lane.control(key, unit, fallback)`, `lane.mask(key)`, `lane.audio(key)` | the timeline lanes, each with an optional last argument `{ name, shared }` |
+| `key(k, fn)` | runs `fn` in a frame named `k`, which files the saved settings of the plugins built inside it under `k` |
 | `time.beats`, `time.seconds` | the song's position |
 | `poly(notes, voice, { voices })` | plays a voice for each note at once |
 | `feedback(kind)` | a loop with a short delay; give its input later with `.set()` |
 | `kernel(id, inputs)` | one kernel, such as `kernel("std:svf", { … })` |
-| `plugin("clap:<id>", inputs)` | a CLAP plugin (see [CLAP plugins](#clap-plugins)) |
+| `plugin("clap:<id>", inputs)` | a CLAP plugin; `key` in its inputs names its saved settings (see [CLAP plugins](#clap-plugins)) |
 | `component({ controls }, fn)` | marks which arguments of a function are knobs |
 
 ### When something's wrong
 
-`m2 check` reports a problem as the file, line and column, then what's wrong. A problem in the sound graph also names the module and the node in square brackets.
+`m2 check` reports a problem as the file, line and column, then what's wrong. A problem in the sound graph also names the module's key and the node in square brackets.
 
 ```
 song.ts:14:30: snare is not defined
-std/src/filter.ts:10:108: [Hats/n22] input `cutoff` expects control<hz>, got control<db>
+std/src/filter.ts:10:108: [hats/n22] input `cutoff` expects control<hz>, got control<db>
 ```
 
 The second one came from `lowpass(hat(…), db(-6))` in `tracks/hats.ts`: a filter's cutoff wants a frequency, not a level. When the wrong value goes into a std function, the line shown is inside std, so look for the call in your own file.
 
 The app shows the same problems in a yellow banner and in the code editor's list, with the file, the line and what's wrong, but without the part in square brackets.
+
+Problems that don't stop the song (data no lane reads, a lane file that doesn't read, a missing asset or plugin) are printed by every `m2` command that opens the song, each with its code in square brackets, such as `[data.unclaimed]`, and the commands that fix it.
 
 ### Editing from the app
 
@@ -320,11 +336,13 @@ std is an ordinary package in `std/`: TypeScript in `std/src`, kernels in `std/k
 music2 can play installed CLAP plugins, such as [Surge XT](https://surge-synthesizer.github.io) and [Airwindows Consolidated](https://www.airwindows.com), as boxes in the graph:
 
 ```ts
-const synth = plugin("clap:org.surge-synth-team.surge-xt", { notes: lane.notes("notes"), state: "lead" });
+const synth = plugin("clap:org.surge-synth-team.surge-xt", { notes: lane.notes("notes"), key: "lead", a_filter_1_cutoff_4092842705: 0.6 });
 ```
 
 - `m2 plugins` lists installed plugins; `m2 plugins clap:<id>` shows one plugin's inputs and knobs.
-- `m2 plugin-state <song> <name> clap:<id>` saves the plugin's default settings (not the values your code gives it) to `assets/plugin-state/<name>.bin`, which `state: "<name>"` loads.
+- A parameter is written as its name, then its CLAP id: `a_filter_1_cutoff_4092842705`. Only the id says which parameter it is, so a plugin update that renames its parameters changes nothing (music2 notes the new name). Written without its id (`a_filter_1_cutoff`), it is an error that names the full address.
+- A song whose plugin isn't installed still plays: that plugin's node is silent (an instrument) or passes its audio through (an effect), and the song says which plugin is missing.
+- `m2 plugin-state <song> <track>/<key> clap:<id>` saves the plugin's default settings (not the values your code gives it) to `data/<track>/<key>.state`, which the plugin keyed `<key>` on that track loads. Beside it, `<key>.state.json` says which plugin wrote it; a state without it, or written by another plugin, isn't loaded.
 - Plugins can't go inside `poly` (an instrument plugin plays all the notes itself), and there are no plugin windows yet.
 - See [`examples/with-plugins`](examples/with-plugins), which needs both plugins installed.
 
@@ -336,9 +354,9 @@ const synth = plugin("clap:org.surge-synth-team.surge-xt", { notes: lane.notes("
 |---|---|
 | `m2 new <folder>` | Makes a new song in exactly that folder (it refuses one that exists) from a template: `--template starter` (the default) or `--template empty`. `--example first-song` copies an example instead. |
 | `m2 check <song> [--json]` | Runs the code and checks the graph and the timeline. `--json` prints the compiled graph. `m2 build` is the same. |
-| `m2 render <song> <out.wav>` | Renders the song to a 24-bit WAV, the same file the app's Export Audio writes: to the end of the last clip, then on until the sound has been silent for half a second (10 s past the end at most). `--sr 48000` sets the sample rate, `--from S` starts S seconds in, `--seconds N` renders exactly N seconds. 3 hours at most. |
+| `m2 render <song> <out.wav>` | Renders the song to a 24-bit WAV, the same file the app's Export Audio writes: to the end of the last clip, then on until the sound has been silent for half a second (10 s past the end at most). It renders at the song's `sample_rate`, from `music2.toml`. `--from S` starts S seconds in, `--seconds N` renders exactly N seconds. 3 hours at most. |
 | `m2 kernels [--json]` | Every kernel and its typed ports. |
-| `m2 bounce <song> <name>` | Renders a track (`--track Keys`) or the whole song to `assets/<name>.wav`. `--place Track.lane@beat` also puts it on an audio lane, and `--force` replaces a file that's there. |
+| `m2 bounce <song> <name>` | Renders a track, named by its key (`--track keys`), or the whole song to a new `assets/<name>.wav`; it never replaces one that's there. `--place keys.lane@beat` also puts it on an audio lane. |
 | `m2 graph <song> [--json]` | The graph the app shows, as text. |
 | `m2 controls <song>` | Every number the app can turn into a knob, with its id. |
 | `m2 set <song> <id> <value>` | Changes one, checked by the compiler. `--expect V` refuses unless it's V now. |
@@ -349,7 +367,10 @@ const synth = plugin("clap:org.surge-synth-team.surge-xt", { notes: lane.notes("
 | `m2 add-effect <song> <call> <module>.<effect>` | Wraps a call's sound in an effect, such as `std/fx.delay`. |
 | `m2 remove-effect <song> <call>` | Takes an effect out, keeping what it was applied to. |
 | `m2 plugins [clap:<id>]` | Installed CLAP plugins, or one plugin's ports. |
-| `m2 plugin-state <song> <name> clap:<id>` | Saves a plugin's default settings as an asset. |
+| `m2 plugin-state <song> <track>/<key> clap:<id>` | Saves a plugin's default settings as its saved state. |
+| `m2 relink <song> <from> <to>` | Moves data no lane or plugin reads to where it's read now, after a key was renamed in code: a track's folder (`data/kick data/kicks`), a lane file (`data/kick/hits.json data/kick/beats.json`) or a plugin's state. |
+| `m2 delete-data <song> <path>` | Deletes data no lane or plugin reads. |
+| `m2 fix <song> <path> <fix>` | Applies a fix a problem offers, such as `assign-clip-ids` or `repin-asset`. Every command prints the problems it finds with the commands that fix them. |
 
 Commands that change a song write into its folder, so try them on a copy, not on the examples:
 
@@ -362,7 +383,7 @@ m2 set /tmp/m2-scratch 'song.ts#2/0.hats.pan' 0.45
 m2 add-effect /tmp/m2-scratch 'tracks/hats.ts#1' std/fx.delay
 
 m2 new /tmp/m2-resample --example resample
-m2 bounce /tmp/m2-resample keys-bounce --track Keys --force     # render the Keys track to assets/keys-bounce.wav
+m2 bounce /tmp/m2-resample keys-again --track keys              # render the keys track to assets/keys-again.wav
 ```
 
 An id names a file, a call in it and an argument. `song.ts#2/0.hats.pan` means: in `song.ts`, call number 2 (here the mixer), its first argument (`0`), and `hats.pan` inside that.
@@ -393,7 +414,10 @@ Edits name the open project's `session` and the `revision` they were planned aga
 | `POST /api/graph/disconnect` `{session, revision, id}` | Disconnect one |
 | `POST /api/graph/effect/add` `{session, revision, call, module, name}` | Add an effect |
 | `POST /api/graph/effect/remove` `{session, revision, call}` | Remove one |
-| `POST /api/graph/lane` `{session, revision, module, lane, clips}` | Replace a notes lane's clips |
+| `POST /api/graph/lane` `{session, revision, module, lane, clips}` | Replace a notes lane's clips (`module` and `lane` are keys; each clip keeps its `id`) |
+| `POST /api/graph/fix` `{session, revision, fix}` | Apply one of the fixes a problem in `problems` offers, as it was offered |
+| `POST /api/graph/relink` `{session, revision, from, to}` | Move data no lane or plugin reads (`data/kick` to `data/kicks`, or a lane file) |
+| `POST /api/graph/data/delete` `{session, revision, file}` | Delete data no lane or plugin reads |
 | `POST /api/graph/undo`, `/api/graph/redo` `{session}` | Undo or redo |
 | `POST /api/graph/transport` `{action}` | `play`, `stop`, `toggle` or `restart` |
 | `POST /api/graph/seek` `{beat}` | Move the playhead |
@@ -422,7 +446,7 @@ Or just edit the files: the app picks up the change within about 300 ms.
 |---|---|
 | `core/ir` | The graph's compiled form, signal kinds and units, and the checker |
 | `core/kernel` | The kit for writing kernels in Rust |
-| `core/song` | The song folder: manifest, timeline files, tempo |
+| `core/song` | The song folder (format 1): the manifest, `DataPath` (every project path), keys, lane and arrangement files in their canonical form, asset hashes, and the problems data can have |
 | `core/runtime` | Loads packages, runs kernels (wasmtime), `poly`, `feedback`, audio clips; the renderer |
 | `core/script` | Runs the TypeScript (oxc + QuickJS) and the `@m2/core` SDK |
 | `core/session` | Compiling, revisions, knobs, cables, effects, notes edits, undo, and the offline render that Export Audio and `m2 render` share |

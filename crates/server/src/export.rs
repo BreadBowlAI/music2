@@ -5,7 +5,8 @@
 //! the rendering, as it does for `m2 render`: both write the same file. One export runs at
 //! a time. Clients hear how it goes as `export` events, each naming the `song` and its
 //! project folder (`dir`): `progress` (0..1, at most ten a second), then `done` with the
-//! file's `path`, `seconds` and `peak_db`, or an `error`.
+//! file's `path`, `seconds`, `peak_db` and the `problems` it carries (a plugin that isn't
+//! installed, FMT-18a), or an `error`.
 
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
@@ -97,7 +98,7 @@ pub fn start(state: &Arc<AppState>, path: Option<PathBuf>) -> Result<PathBuf> {
     }
     state.exports.stop.store(false, Ordering::SeqCst);
     let begun = (|| {
-        let (song, dir, render) = state.graph.render(Length::Song)?;
+        let (song, dir, render, carried) = state.graph.render(Length::Song)?;
         let render = render.stop_when(state.exports.stop.clone());
         let (path, fresh) = match path {
             Some(p) => (picked(p)?, None),
@@ -129,7 +130,10 @@ pub fn start(state: &Arc<AppState>, path: Option<PathBuf>) -> Result<PathBuf> {
             // Free before saying so: a client may export again as soon as it hears.
             state.exports.running.store(false, Ordering::SeqCst);
             let event = match written {
-                Ok((path, r)) => json!({"done": true, "path": path, "seconds": r.seconds(), "peak_db": r.peak_db}),
+                // What the export carries: a plugin that isn't installed is silent in it (FMT-18a).
+                Ok((path, r)) => {
+                    json!({"done": true, "path": path, "seconds": r.seconds(), "peak_db": r.peak_db, "problems": carried})
+                }
                 Err(e) => json!({"error": format!("{e:#}"), "path": thread_path}),
             };
             state.announce(with(&about, event).to_string());
@@ -211,17 +215,21 @@ mod tests {
 
     /// A minute of a held chord: an export long enough to be still rendering when asked.
     const CHORD: &str = "import { song, track } from '@m2/core';\nimport { pad } from 'std/instruments';\n\
-                         const p = track('Pad', ({ lane }) => pad(lane.notes('chords')));\nexport default song(() => p.out);\n";
+                         const p = track('pad', ({ lane }) => pad(lane.notes('chords')));\nexport default song(() => p.out);\n";
 
     /// The app's state with a project of `song.ts` (and the chord's clip) open.
     fn open(project: &Temp, song: &str) -> Arc<AppState> {
+        project.write(
+            "music2.toml",
+            "[project]\nname = \"untitled\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n",
+        );
         project.write("song.ts", song);
         let notes: Vec<String> = [45, 52, 57, 60, 64].iter().map(|p| format!(r#"{{"pitch": {p}, "start": 0, "length": 120}}"#)).collect();
         project.write(
-            "timeline/pad.chords.json",
-            &format!(r#"{{"clips": [{{"start": 0, "length": 120, "notes": [{}]}}]}}"#, notes.join(", ")),
+            "data/pad/chords.json",
+            &format!(r#"{{"clips": [{{"id": "a", "start": 0, "length": 120, "notes": [{}]}}]}}"#, notes.join(", ")),
         );
-        project.write("timeline/song.json", r#"{"tempo": [{"beat": 0, "bpm": 120}]}"#);
+        project.write("data/arrangement.json", r#"{"tempo": [{"beat": 0, "bpm": 120}]}"#);
         let state = Arc::new(AppState::new(String::new(), Graph::silent()));
         state.graph.open(&project.0).unwrap();
         state

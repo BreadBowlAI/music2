@@ -94,11 +94,19 @@ fn airwindows_processes_audio() {
     fx.reset().unwrap();
 }
 
+// FMT-18: every parameter is addressed `<name>_<id>`, so two with one name never collide
+// and the reserved ports (`in`, `notes`, `out`, `key`) are never taken.
 #[test]
-fn param_names_become_unique_ports() {
+fn param_addresses_are_a_name_then_the_id() {
     let p = |id, name: &str| Param { id, name: name.into(), module: String::new(), min: 0.0, max: 1.0, default: 0.0, stepped: false };
-    let names = param_port_names(&[p(1, "Dry/Wet"), p(2, "-"), p(3, "-"), p(4, "Filter 1 Cutoff"), p(5, "in"), p(6, "2nd")]);
-    assert_eq!(names, ["dry_wet", "p_", "p__3", "filter_1_cutoff", "in_", "p_2nd"]);
+    let names =
+        param_port_names(&[p(1, "Dry/Wet"), p(2, "-"), p(3, "-"), p(4, "Filter 1 Cutoff"), p(5, "in"), p(6, "2nd"), p(7, "Key")]);
+    assert_eq!(names, ["dry_wet_1", "param_2", "param_3", "filter_1_cutoff_4", "in_5", "2nd_6", "key_7"]);
+    assert_eq!(param_address("dry_wet_12"), Some(("dry_wet", 12)));
+    assert_eq!(param_address("osc_2_4294967295"), Some(("osc_2", u32::MAX)));
+    for unaddressed in ["dry_wet", "in", "notes", "mix_", "mix_+1", "mix_99999999999"] {
+        assert_eq!(param_address(unaddressed), None, "{unaddressed}");
+    }
 }
 
 #[test]

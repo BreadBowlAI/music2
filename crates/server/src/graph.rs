@@ -9,7 +9,11 @@
 //! changes.
 //!
 //! Every change is announced with what needs attention in the revision it leaves (see
-//! [`Graph::news`]): lane data no lane reads, and why the draft doesn't compile.
+//! [`Graph::news`]): its problems with their fixes (DIAG-1, DIAG-4), and why the draft doesn't
+//! compile.
+//!
+//! The player runs the engine at the project's `sample_rate` (RENDER-31), so every frame here
+//! counts at that rate.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -19,7 +23,7 @@ use anyhow::{Context, Result, anyhow};
 use m2_ir::Origin;
 use m2_play::Player;
 use m2_runtime::{PackageSet, Renderer};
-use m2_session::render::{self, Length, Render};
+use m2_session::render::{Length, Render};
 use m2_session::{EditError, Edited, NoteClip, Session};
 use m2_song::TempoMap;
 use parking_lot::Mutex;
@@ -83,14 +87,21 @@ fn packages() -> Result<PackageSet> {
     Ok(p)
 }
 
-/// A renderer for the accepted revision, positioned at `frame`. It replays in live mode,
-/// as the player plays: a NaN on the way is silenced, not an error.
-fn renderer(session: &Session, sample_rate: u32, frame: u64) -> Result<Renderer> {
+/// A renderer for the accepted revision at the project's rate (RENDER-31), positioned at
+/// `seconds`. It replays in live mode, as the player plays: a NaN on the way is silenced, not
+/// an error.
+fn renderer(session: &Session, seconds: f64) -> Result<Renderer> {
     let rev = session.accepted();
-    let mut r = Renderer::for_project(&rev.compiled.flat, &rev.project, &session.packages, sample_rate)?;
+    let rate = rev.project.sample_rate();
+    let mut r = Renderer::new(&rev.compiled.flat, &rev.compiled.data, &session.packages, rate)?;
     r.set_strict(false);
-    r.seek(frame)?;
+    r.seek((seconds * rate as f64).round() as u64)?;
     Ok(r)
+}
+
+/// Where `player` is, in seconds.
+fn seconds(player: &Player) -> f64 {
+    player.position() as f64 / player.rate() as f64
 }
 
 impl Open {
@@ -148,7 +159,8 @@ impl Open {
         if self.session.accepted().number == self.playing {
             return Ok(false);
         }
-        let r = renderer(&self.session, player.sample_rate, player.position())?;
+        // In seconds: a manifest edit may have changed the rate.
+        let r = renderer(&self.session, seconds(player))?;
         self.play(player, r);
         Ok(true)
     }
@@ -191,7 +203,7 @@ impl Graph {
         })?;
         let mut open = self.open.lock();
         let player = self.player()?;
-        let new_renderer = renderer(&session, player.sample_rate, 0)?;
+        let new_renderer = renderer(&session, 0.0)?;
         let token = self.next_session.fetch_add(1, Ordering::Relaxed) + 1;
         let mut o = Open { token, session, playing: 0, previews: vec![], tempo: self.tempo.clone() };
         player.stop();
@@ -214,8 +226,8 @@ impl Graph {
     }
 
     /// What every change to the open project is announced with: its session, the accepted
-    /// revision, the warnings that revision has (with their fixes) and the draft's problems.
-    /// Empty with no project open.
+    /// revision, the problems that revision has with their fixes (DIAG-4), and why the draft
+    /// doesn't compile. Empty with no project open.
     pub fn news(&self) -> Value {
         self.news.lock().clone()
     }
@@ -227,7 +239,8 @@ impl Graph {
             Some(o) => json!({
                 "session": o.token,
                 "revision": o.session.accepted().number,
-                "warnings": o.session.warnings(),
+                // What needs attention though the song plays, with the fixes (DIAG-1, DIAG-4).
+                "problems": o.session.problems(),
                 "diagnostics": files::diagnostics(&o.session),
             }),
             None => json!({}),
@@ -253,7 +266,8 @@ impl Graph {
             "can_redo": o.session.can_redo(),
             "effects": o.session.effects(),
             "diagnostics": files::diagnostics(&o.session),
-            "warnings": o.session.warnings(),
+            "problems": rev.compiled.problems,
+            "sample_rate": rev.project.sample_rate(),
             "playing": status.playing,
             "seconds": status.seconds,
             "beat": status.beat,
@@ -271,14 +285,17 @@ impl Graph {
     }
 
     /// An offline render of the accepted revision, which is what plays, with the song's name
-    /// and folder (Export Audio). Only building it holds the project: the caller renders it on
-    /// a thread of its own.
-    pub fn render(&self, length: Length) -> Result<(String, PathBuf, Render)> {
+    /// and folder, and what the export must carry: a plugin that isn't installed plays silence or
+    /// passes its input through (FMT-18a). Only building it holds the project: the caller renders
+    /// it on a thread of its own.
+    pub fn render(&self, length: Length) -> Result<(String, PathBuf, Render, Vec<m2_song::Diagnostic>)> {
         let open = self.open.lock();
         let o = open.as_ref().context("no project is open")?;
         let rev = o.session.accepted();
-        let r = Render::new(&rev.compiled.flat, &rev.project, &o.session.packages, render::SAMPLE_RATE, 0.0, length)?;
-        Ok((rev.project.manifest.project.name.clone(), rev.project.dir.clone(), r))
+        // Offline renders run at the project's rate (RENDER-31a).
+        let r = Render::new(&rev.compiled.flat, &rev.compiled.data, &o.session.packages, rev.project.sample_rate(), 0.0, length)?;
+        let carried = rev.compiled.problems.iter().filter(|d| d.code == "plugin.missing").cloned().collect();
+        Ok((rev.project.manifest.project.name.clone(), rev.project.dir.clone(), r, carried))
     }
 
     /// Where playback is. It doesn't wait for the project, which seeks and edits hold
@@ -286,7 +303,7 @@ impl Graph {
     pub fn status(&self) -> Status {
         let Some(p) = self.player.lock().clone() else { return Status::default() };
         let tempo = self.tempo.lock();
-        let seconds = p.position() as f64 / p.sample_rate as f64;
+        let seconds = seconds(&p);
         Status { playing: p.is_playing(), seconds, beat: tempo.as_ref().map_or(0.0, |t| t.beat_at(seconds)) }
     }
 
@@ -301,13 +318,12 @@ impl Graph {
         let player = self.player()?;
         let rev = o.session.accepted();
         let tempo = rev.tempo();
-        let now = tempo.beat_at(player.position() as f64 / player.sample_rate as f64);
-        let limit = rev.project.timeline.end().max(now) + SEEK_ROOM;
+        let now = tempo.beat_at(seconds(&player));
+        let limit = rev.compiled.data.end().max(now) + SEEK_ROOM;
         if beat > limit {
             return Err(anyhow!("can't seek to beat {beat}: seeking replays the song from its start, up to beat {limit:.0} at most"));
         }
-        let frame = (tempo.seconds_at(beat.max(0.0)) * player.sample_rate as f64).round() as u64;
-        let r = renderer(&o.session, player.sample_rate, frame)?;
+        let r = renderer(&o.session, tempo.seconds_at(beat.max(0.0)))?;
         o.play(&player, r);
         Ok(())
     }
@@ -417,14 +433,21 @@ impl Graph {
         self.restructure(token, |session| session.write_notes(revision, module, lane, clips))
     }
 
-    /// Move lane data no lane reads to `module`'s lane `lane` (see [`Session::relink`]).
-    pub fn relink(&self, token: u64, revision: u64, from: &str, module: &str, lane: &str) -> Result<Value> {
-        self.restructure(token, |session| session.relink(revision, Path::new(from), module, lane))
+    /// Move data no lane or plugin reads from `from` to `to`, project paths: a lane file, a
+    /// track's folder or a plugin state (see [`Session::relink`]).
+    pub fn relink(&self, token: u64, revision: u64, from: &str, to: &str) -> Result<Value> {
+        self.restructure(token, |session| session.relink(revision, Path::new(from), Path::new(to)))
     }
 
-    /// Delete lane data no lane reads (see [`Session::delete_data`]); undo puts it back.
+    /// Delete data no lane or plugin reads (see [`Session::delete_data`]); undo puts it back.
     pub fn delete_data(&self, token: u64, revision: u64, file: &str) -> Result<Value> {
         self.restructure(token, |session| session.delete_data(revision, Path::new(file)))
+    }
+
+    /// Apply a fix a problem offers, named by its code and edit as the problem carried them
+    /// (see [`Session::fix`]). Undo takes it back.
+    pub fn fix(&self, token: u64, revision: u64, code: &str, edit: &Value) -> Result<Value> {
+        self.restructure(token, |session| session.fix(revision, code, edit))
     }
 
     /// Undo the last edit made through this session (knob or cable).
@@ -537,6 +560,9 @@ impl Graph {
 mod tests {
     use super::*;
 
+    const MANIFEST: &str =
+        "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n";
+
     struct Fixture(PathBuf);
 
     impl Fixture {
@@ -544,6 +570,7 @@ mod tests {
             static NEXT: AtomicU64 = AtomicU64::new(0);
             let dir = std::env::temp_dir().join(format!("m2-graph-server-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
             std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("music2.toml"), MANIFEST).unwrap();
             let fixture = Self(dir);
             fixture.write("export default song(() => osc.sine(hz(800)));\n");
             fixture
@@ -796,7 +823,7 @@ mod tests {
         let fixture = Fixture::new();
         fixture.write(
             "import { track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
-             const k = track('Kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n",
+             const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n",
         );
         let graph = fixture.open();
         let state = graph.state().unwrap();
@@ -804,16 +831,16 @@ mod tests {
         let synced = |graph: &Graph| graph.open.lock().as_ref().map(|o| o.playing == o.session.accepted().number).unwrap();
         let clips: Vec<NoteClip> =
             serde_json::from_value(json!([{"start": 0, "length": 4, "notes": [{"pitch": "C1", "start": 0, "length": 0.25}]}])).unwrap();
-        let written = graph.write_notes(token, revision, "Kick", "hits", &clips).unwrap();
-        assert_eq!((written["file"].as_str(), written["after"].as_str()), (Some("timeline/kick.hits.json"), Some("clip at bar 1 (1 bar)")));
+        let written = graph.write_notes(token, revision, "kick", "hits", &clips).unwrap();
+        assert_eq!((written["file"].as_str(), written["after"].as_str()), (Some("data/kick/hits.json"), Some("clip at bar 1 (1 bar)")));
         let state = graph.state().unwrap();
         assert_eq!(state["timeline"]["tracks"][0]["lanes"][0]["clips"][0]["notes"][0]["pitch"], 24.0);
         assert!(synced(&graph), "the player plays the new notes");
 
-        assert!(graph.write_notes(token, revision + 1, "Kick", "nope", &clips).is_err());
-        assert!(graph.write_notes(token + 1, revision + 1, "Kick", "hits", &[]).is_err(), "another session's request is refused");
+        assert!(graph.write_notes(token, revision + 1, "kick", "nope", &clips).is_err());
+        assert!(graph.write_notes(token + 1, revision + 1, "kick", "hits", &[]).is_err(), "another session's request is refused");
         graph.undo(token).unwrap();
-        assert!(!fixture.0.join("timeline/kick.hits.json").exists(), "undo removes the file the write created");
+        assert!(!fixture.0.join("data/kick/hits.json").exists(), "undo removes the file the write created");
         assert!(synced(&graph));
     }
 
@@ -821,51 +848,59 @@ mod tests {
     fn renamed_kick(fixture: &Fixture) {
         fixture.write(
             "import { track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
-             const k = track('Kicks', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n",
+             const k = track('kicks', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n",
         );
-        std::fs::create_dir_all(fixture.0.join("timeline")).unwrap();
-        let notes = r#"{"clips": [{"start": 0, "length": 4, "notes": [{"pitch": "C1", "start": 0, "length": 1}]}]}"#;
-        std::fs::write(fixture.0.join("timeline/kick.hits.json"), notes).unwrap();
+        std::fs::create_dir_all(fixture.0.join("data/kick")).unwrap();
+        let notes = r#"{"clips": [{"id": "a", "start": 0, "length": 4, "notes": [{"pitch": "C1", "start": 0, "length": 1}]}]}"#;
+        std::fs::write(fixture.0.join("data/kick/hits.json"), notes).unwrap();
     }
 
+    // DIAG-1, DIAG-4, DIAG-6: data a rename left behind is a problem in the state and every
+    // graph event, with its fixes; applying one plays the data, and undo takes it back.
     #[test]
-    fn data_a_rename_left_behind_is_a_warning_whose_fixes_play_and_undo() {
+    fn data_a_rename_left_behind_is_a_problem_whose_fixes_play_and_undo() {
         let fixture = Fixture::new();
         renamed_kick(&fixture);
         let graph = fixture.open();
         let state = graph.state().unwrap();
         let (token, revision) = (state["session"].as_u64().unwrap(), state["view"]["revision"].as_u64().unwrap());
-        let warning = &state["warnings"][0];
-        assert_eq!((&warning["code"], &warning["file"]), (&json!("data.unclaimed"), &json!("timeline/kick.hits.json")));
-        assert_eq!(warning["title"], "Notes on kick › hits aren't playing", "{warning}");
-        assert!(warning["message"].as_str().unwrap().starts_with("There's no track called kick any more."), "{warning}");
-        let (from, to) = ("timeline/kick.hits.json", "timeline/kicks.hits.json");
-        let relink = json!({"fix": "relink", "from": from, "to": to, "module": "Kicks", "lane": "hits", "likely": true});
-        assert_eq!(warning["fixes"], json!([relink, {"fix": "delete_data", "file": "timeline/kick.hits.json"}]));
+        let problem = &state["problems"][0];
+        assert_eq!(
+            (&problem["severity"], &problem["code"], &problem["src"], &problem["module"]),
+            (&json!("warning"), &json!("data.unclaimed"), &json!("data/kick"), &json!("kick"))
+        );
+        assert!(problem["message"].as_str().unwrap().starts_with("Data filed under kick isn't playing."), "{problem}");
+        let relink = problem["fixes"][0].clone();
+        assert_eq!((&relink["code"], &relink["likely"]), (&json!("relink"), &json!(true)));
+        assert_eq!(relink["edit"]["ops"], json!([{"op": "rename", "from": "data/kick", "to": "data/kicks"}]));
         let news = graph.news();
-        assert_eq!((&news["session"], &news["revision"], &news["warnings"]), (&json!(token), &json!(revision), &state["warnings"]));
+        assert_eq!((&news["session"], &news["revision"], &news["problems"]), (&json!(token), &json!(revision), &state["problems"]));
 
         let synced = |graph: &Graph| graph.open.lock().as_ref().map(|o| o.playing == o.session.accepted().number).unwrap();
         let clips = |graph: &Graph| graph.state().unwrap()["timeline"]["tracks"][0]["lanes"][0]["clips"].as_array().unwrap().len();
-        let elsewhere = graph.relink(token + 1, revision, "timeline/kick.hits.json", "Kicks", "hits");
-        assert!(elsewhere.is_err(), "another session's request is refused");
-        let moved = graph.relink(token, revision, "timeline/kick.hits.json", "Kicks", "hits").unwrap();
-        assert_eq!((&moved["before"], &moved["after"]), (&json!("unused notes"), &json!("Kicks › hits")));
-        assert!(fixture.0.join("timeline/kicks.hits.json").exists() && !fixture.0.join("timeline/kick.hits.json").exists());
-        assert_eq!((graph.state().unwrap()["warnings"].clone(), clips(&graph)), (json!([]), 1), "the track plays its notes");
-        assert_eq!(graph.news()["warnings"], json!([]));
+        assert!(graph.fix(token + 1, revision, "relink", &relink["edit"]).is_err(), "another session's request is refused");
+        let moved = graph.fix(token, revision, "relink", &relink["edit"]).unwrap();
+        assert_eq!((&moved["before"], &moved["after"]), (&json!("unused data"), &json!("kicks")));
+        assert!(fixture.0.join("data/kicks/hits.json").exists() && !fixture.0.join("data/kick").exists());
+        assert_eq!((graph.state().unwrap()["problems"].clone(), clips(&graph)), (json!([]), 1), "the track plays its notes");
+        assert_eq!(graph.news()["problems"], json!([]));
         assert!(synced(&graph));
+        assert!(graph.fix(token, revision, "relink", &relink["edit"]).is_err(), "offered no more");
 
         graph.undo(token).unwrap();
-        assert!(fixture.0.join("timeline/kick.hits.json").exists() && synced(&graph));
-        assert_eq!((graph.news()["warnings"][0]["file"].clone(), clips(&graph)), (json!("timeline/kick.hits.json"), 0));
+        assert!(fixture.0.join("data/kick/hits.json").exists() && synced(&graph));
+        assert_eq!((graph.news()["problems"][0]["src"].clone(), clips(&graph)), (json!("data/kick"), 0));
         let revision = graph.state().unwrap()["view"]["revision"].as_u64().unwrap();
-        let deleted = graph.delete_data(token, revision, "timeline/kick.hits.json").unwrap();
+        let deleted = graph.delete_data(token, revision, "data/kick").unwrap();
         assert_eq!(deleted["after"], "deleted");
-        assert!(!fixture.0.join("timeline/kick.hits.json").exists() && graph.news()["warnings"] == json!([]));
+        assert!(!fixture.0.join("data/kick/hits.json").exists() && graph.news()["problems"] == json!([]));
         graph.undo(token).unwrap();
-        assert!(fixture.0.join("timeline/kick.hits.json").exists() && synced(&graph));
+        assert!(fixture.0.join("data/kick/hits.json").exists() && synced(&graph));
         assert!(graph.delete_data(token, revision, "song.ts").is_err(), "only data no lane reads");
+        // A lane file on its own goes to a lane, by its path.
+        let revision = graph.state().unwrap()["view"]["revision"].as_u64().unwrap();
+        graph.relink(token, revision, "data/kick/hits.json", "data/kicks/hits.json").unwrap();
+        assert_eq!(clips(&graph), 1);
         graph.close();
         assert_eq!(graph.news(), json!({}));
     }
@@ -972,8 +1007,8 @@ mod tests {
     #[test]
     fn seeking_keeps_playing_or_stopped_and_status_counts_beats_in_the_tempo() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.0.join("timeline")).unwrap();
-        std::fs::write(fixture.0.join("timeline/song.json"), r#"{"tempo": [{"beat": 0, "bpm": 120}, {"beat": 4, "bpm": 60}]}"#).unwrap();
+        std::fs::create_dir_all(fixture.0.join("data")).unwrap();
+        std::fs::write(fixture.0.join("data/arrangement.json"), r#"{"tempo": [{"beat": 0, "bpm": 120}, {"beat": 4, "bpm": 60}]}"#).unwrap();
         let graph = fixture.open();
         let state = graph.state().unwrap();
         assert_eq!(state["timeline"]["tempo"], json!([{"beat": 0.0, "bpm": 120.0}, {"beat": 4.0, "bpm": 60.0}]));
@@ -1012,12 +1047,36 @@ mod tests {
         assert_eq!(graph.status().beat, 0.0);
     }
 
+    // RENDER-31: the live engine runs at the project's sample_rate, whatever the device's (the
+    // silent player's is 48 kHz): positions count at the project's rate, and the transport too.
+    #[test]
+    fn the_engine_runs_at_the_projects_rate() {
+        let fixture = Fixture::new();
+        std::fs::write(fixture.0.join("music2.toml"), MANIFEST.replace("48000", "44100")).unwrap();
+        let graph = fixture.open();
+        assert_eq!(graph.state().unwrap()["sample_rate"], 44_100);
+        graph.seek(2.0).unwrap();
+        let player = graph.player().unwrap();
+        assert_eq!((player.device_rate, player.rate(), player.position()), (48_000, 44_100, 44_100));
+        assert_eq!(graph.status(), Status { playing: false, seconds: 1.0, beat: 2.0 }, "at 120 bpm, 2 beats are 1 second");
+        // A manifest edit to the rate plays on from the same time, at the new rate.
+        std::fs::write(fixture.0.join("music2.toml"), MANIFEST.replace("48000", "96000")).unwrap();
+        assert!(graph.poll());
+        let player = graph.player().unwrap();
+        assert_eq!((player.rate(), player.position()), (96_000, 96_000));
+        assert_eq!(graph.status().beat, 2.0);
+    }
+
     #[test]
     fn seeking_replays_past_a_nan_the_way_playback_does() {
         let fixture = Fixture::new();
-        std::fs::create_dir_all(fixture.0.join("timeline")).unwrap();
+        std::fs::create_dir_all(fixture.0.join("data/song")).unwrap();
         // 1e39 overflows to infinity: a kernel produces non-finite samples from beat 8.
-        std::fs::write(fixture.0.join("timeline/song.g.json"), r#"{"clips": [{"start": 8, "length": 8, "points": [[0, 1e39]]}]}"#).unwrap();
+        std::fs::write(
+            fixture.0.join("data/song/g.json"),
+            r#"{"unit": "gain", "clips": [{"id": "a", "start": 8, "length": 8, "points": [[0, 1e39]]}]}"#,
+        )
+        .unwrap();
         fixture.write("import { vca } from 'std/dsp';\nexport default song(({ lane }) => vca(osc.sine(hz(440)), lane.control(\"g\", \"gain\", 1)));\n");
         let graph = fixture.open();
         graph.seek(12.0).unwrap();

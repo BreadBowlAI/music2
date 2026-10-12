@@ -8,13 +8,13 @@
 //! draft's problems come back as [`diagnostics`].
 
 use std::fmt;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
-use m2_ir::Diagnostic;
+use m2_ir::{Diagnostic, Severity};
 use m2_runtime::PackageSet;
 use m2_session::Session;
-use m2_song::Snapshot;
+use m2_song::{DataPath, Snapshot};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -35,8 +35,11 @@ impl fmt::Display for Conflict {
 impl std::error::Error for Conflict {}
 
 /// One reason the draft doesn't compile, placed in a file when it can be told where.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Problem {
+    /// Its stable code from the contract's table (DIAG-2), such as `code.build`.
+    pub code: &'static str,
+    pub severity: Severity,
     /// Relative to the project (`tracks/bass.ts`), or to a package's parent (`std/src/dsp.ts`).
     pub file: Option<String>,
     /// 1-based, like the compiler's messages.
@@ -45,26 +48,24 @@ pub struct Problem {
     /// compiler counts characters.
     pub col: Option<u32>,
     pub message: String,
-    /// The module whose graph the problem is in, if it is about one.
+    /// The key of the module whose graph the problem is in, if it is about one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub module: Option<String>,
 }
 
-/// The file a request names: a `.ts` path relative to the project, which the project reads
-/// (not hidden, nor under `node_modules` or `assets`) and which stays inside it once links
-/// are followed. Returns where to write.
+impl Default for Problem {
+    fn default() -> Problem {
+        Problem { code: "code.build", severity: Severity::Error, file: None, line: None, col: None, message: String::new(), module: None }
+    }
+}
+
+/// The file a request names: a path relative to the project that `DataPath` classes as Code
+/// (FMT-5), and which stays inside the project once links are followed. Returns where to write.
 pub fn resolve(dir: &Path, path: &str) -> Result<PathBuf> {
     let rel = Path::new(path);
     let bad = || anyhow!("`{path}` is not one of the project's TypeScript files");
-    if path.contains('\\') || rel.extension().is_none_or(|x| x != "ts") {
+    if path.contains('\\') || !matches!(DataPath::parse(rel), DataPath::Code(_)) {
         return Err(bad());
-    }
-    for c in rel.components() {
-        let Component::Normal(name) = c else { return Err(bad()) };
-        let name = name.to_string_lossy();
-        if name.starts_with('.') || name == "node_modules" || name == "assets" {
-            return Err(bad());
-        }
     }
     let dir = dir.canonicalize().with_context(|| format!("opening {}", dir.display()))?;
     let file = dir.join(rel).canonicalize().map_err(|_| anyhow!("there is no {path} in the project"))?;
@@ -96,7 +97,7 @@ pub fn write(dir: &Path, path: &str, base: &str, text: &str) -> Result<()> {
 pub fn list(session: &Session) -> Result<Value> {
     let rev = session.accepted();
     let disk = Snapshot::read(&rev.project.dir)?;
-    let ts = |p: &&PathBuf| p.extension().is_some_and(|x| x == "ts");
+    let ts = |p: &&PathBuf| matches!(DataPath::parse(p), DataPath::Code(_));
     let mut files = vec![];
     for (path, text) in rev.snapshot.files.iter().filter(|(p, _)| ts(p)) {
         let mut f = json!({"path": slashes(path), "text": text});
@@ -116,7 +117,8 @@ pub fn list(session: &Session) -> Result<Value> {
         .iter()
         .map(|m| {
             let file = m.src.as_deref().and_then(located).map(|(f, ..)| f).filter(|f| rev.snapshot.files.contains_key(Path::new(f)));
-            json!({"name": m.name, "file": file})
+            // Addressed by key, shown by label (ID-10, ID-11).
+            json!({"key": m.key, "label": m.label(), "file": file})
         })
         .collect();
     Ok(json!({"revision": rev.number, "files": files, "modules": modules}))
@@ -153,7 +155,9 @@ pub fn diagnostics(session: &Session) -> Vec<Problem> {
     let dir = &session.accepted().project.dir;
     let mut roots = vec![(format!("{}/", dir.display()), String::new())];
     for p in session.packages.packages() {
+        // The build names package files by the folder as given; the runtime may by the real one.
         let at = p.dir.canonicalize().unwrap_or_else(|_| p.dir.clone());
+        roots.push((format!("{}/", p.dir.display()), format!("{}/", p.name)));
         roots.push((format!("{}/", at.display()), format!("{}/", p.name)));
     }
     let relative = |s: &str| roots.iter().fold(s.to_string(), |s, (from, to)| s.replace(from.as_str(), to));
@@ -184,7 +188,7 @@ fn utf16_col(text: &str, line: u32, col: u32) -> u32 {
 
 fn problem(d: &Diagnostic, relative: &impl Fn(&str) -> String, dir: &Path) -> Problem {
     let message = relative(&d.message);
-    let mut p = Problem { module: d.module.clone(), ..Default::default() };
+    let mut p = Problem { code: d.code, severity: d.severity, module: d.module.clone(), ..Default::default() };
     // A parse error names its place in the message: `Error loading module '…': tracks/bass.ts:3:1: Expected …`.
     if let Some((at, rest)) = find_location(&message) {
         let (file, line, col) = at;
@@ -192,8 +196,15 @@ fn problem(d: &Diagnostic, relative: &impl Fn(&str) -> String, dir: &Path) -> Pr
         return p;
     }
     p.message = message;
-    if let Some((file, line, col)) = d.src.as_deref().map(relative).and_then(|s| located(&s)) {
+    let src = d.src.as_deref().map(relative);
+    if let Some((file, line, col)) = src.as_deref().and_then(located) {
         (p.file, p.line, p.col) = (Some(file), Some(line), Some(col));
+    } else if let Some(file) = src.filter(|f| f.ends_with(".ts")) {
+        // About a whole file, such as an import that resolves to nothing (`std/nope`: …): at the
+        // import, when the message names one.
+        let spec = p.message.strip_prefix('`').and_then(|m| m.split_once('`')).map(|(spec, _)| spec.to_string());
+        let at = spec.and_then(|spec| std::fs::read_to_string(dir.join(&file)).ok().and_then(|text| find_import(&text, &spec)));
+        (p.file, p.line, p.col) = (Some(file), at.map(|a| a.0), at.map(|a| a.1));
     } else if let Some((spec, from)) = unresolved(&p.message) {
         // An import that resolves to nothing: point at it in the importing file.
         let at = std::fs::read_to_string(dir.join(&from)).ok().and_then(|text| find_import(&text, &spec));
@@ -260,6 +271,10 @@ mod tests {
             let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let dir = std::env::temp_dir().join(format!("m2-files-{}-{n}", std::process::id()));
             let p = Project(dir);
+            p.write(
+                "music2.toml",
+                "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n",
+            );
             for (name, text) in files {
                 p.write(name, text);
             }
@@ -291,7 +306,7 @@ mod tests {
 
     const SONG: &str = "import { song } from '@m2/core';\nimport lead from './tracks/lead';\nexport default song(() => lead.out);\n";
     const LEAD: &str =
-        "import { hz, track } from '@m2/core';\nimport { osc } from 'std/dsp';\nexport default track('Lead', () => osc.sine(hz(300)));\n";
+        "import { hz, track } from '@m2/core';\nimport { osc } from 'std/dsp';\nexport default track('lead', () => osc.sine(hz(300)));\n";
 
     fn lead() -> Project {
         Project::new(&[("song.ts", SONG), ("tracks/lead.ts", LEAD)])
@@ -391,9 +406,10 @@ mod tests {
         assert_eq!(paths, ["song.ts", "tracks/lead.ts", "tracks/notes.ts"]);
         assert_eq!(listed["files"][1]["text"], LEAD);
         assert!(listed["files"][1].get("draft").is_none());
-        let lead = listed["modules"].as_array().unwrap().iter().find(|m| m["name"] == "Lead").unwrap();
-        assert_eq!(lead["file"], "tracks/lead.ts");
-        assert_eq!(listed["modules"].as_array().unwrap().iter().find(|m| m["name"] == "song").unwrap()["file"], "song.ts");
+        // ID-11: modules by key, with their label.
+        let lead = listed["modules"].as_array().unwrap().iter().find(|m| m["key"] == "lead").unwrap();
+        assert_eq!((&lead["file"], &lead["label"]), (&json!("tracks/lead.ts"), &json!("lead")));
+        assert_eq!(listed["modules"].as_array().unwrap().iter().find(|m| m["key"] == "song").unwrap()["file"], "song.ts");
 
         // Saved but broken: the accepted text stays, and the draft is what's on disk.
         p.write("tracks/lead.ts", "export default (");
@@ -431,34 +447,36 @@ mod tests {
     fn diagnostics_say_where_in_the_project_each_problem_is() {
         let p = lead();
         // A syntax error, from the parser's message.
-        let syntax = problems(&p, "import { hz, track } from '@m2/core';\nexport default track('Lead', () => hz(300)\n");
+        let syntax = problems(&p, "import { hz, track } from '@m2/core';\nexport default track('lead', () => hz(300)\n");
         assert_eq!(syntax.len(), 1);
         assert_eq!((syntax[0].file.as_deref(), syntax[0].line, syntax[0].col), (Some("tracks/lead.ts"), Some(3), Some(1)));
         assert!(syntax[0].message.starts_with("Expected `)`"), "{}", syntax[0].message);
 
         // An error thrown while the song is built, from its source.
-        let thrown = problems(&p, "import { hz, track } from '@m2/core';\nexport default track('Lead', () => osc.sine(hz(300)));\n");
+        let thrown = problems(&p, "import { hz, track } from '@m2/core';\nexport default track('lead', () => osc.sine(hz(300)));\n");
         assert_eq!((thrown[0].file.as_deref(), thrown[0].line, thrown[0].col), (Some("tracks/lead.ts"), Some(2), Some(36)));
         assert_eq!(thrown[0].message, "osc is not defined");
 
         // An import of nothing, at the import.
         let import = problems(&p, &LEAD.replace("std/dsp", "std/nope"));
         assert_eq!((import[0].file.as_deref(), import[0].line, import[0].col), (Some("tracks/lead.ts"), Some(2), Some(22)));
+        // DIAG-1: with its code and severity.
+        assert_eq!((import[0].code, import[0].severity), ("code.build", m2_ir::Severity::Error));
         assert!(!import[0].message.contains(&p.0.display().to_string()), "paths are relative: {}", import[0].message);
 
         // A graph that doesn't check: its module, and the package line that made the node.
         let graph = problems(
             &p,
-            "import { hz, track } from '@m2/core';\nimport { osc, vca } from 'std/dsp';\nexport default track('Lead', () => vca(osc.sine(hz(300)), osc.sine(hz(3))));\n",
+            "import { hz, track } from '@m2/core';\nimport { osc, vca } from 'std/dsp';\nexport default track('lead', () => vca(osc.sine(hz(300)), osc.sine(hz(3))));\n",
         );
-        assert_eq!(graph[0].module.as_deref(), Some("Lead"));
+        assert_eq!(graph[0].module.as_deref(), Some("lead"));
         assert!(graph[0].file.as_deref().is_some_and(|f| f.starts_with("std/src/")), "{:?}", graph[0]);
         assert!(graph[0].message.contains("expects control<gain>"), "{}", graph[0].message);
 
         // Columns count as an editor does: each emoji before the error is two.
         let emoji =
-            problems(&p, "import { hz, track } from '@m2/core';\nconst s = \"🎸🎸\"; export default track('Lead', () => hz(300);\n");
-        let line = "const s = \"🎸🎸\"; export default track('Lead', () => hz(300);";
+            problems(&p, "import { hz, track } from '@m2/core';\nconst s = \"🎸🎸\"; export default track('lead', () => hz(300);\n");
+        let line = "const s = \"🎸🎸\"; export default track('lead', () => hz(300);";
         let col = emoji[0].col.unwrap() as usize;
         let units: Vec<u16> = line.encode_utf16().collect();
         assert_eq!(emoji[0].line, Some(2));

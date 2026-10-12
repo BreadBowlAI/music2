@@ -1,0 +1,19 @@
+{"clips": [
+  {"id": "6ryexzev", "start": 0, "length": 8, "notes": [
+    {"pitch": "A3", "start": 0, "length": 0.6, "velocity": 0.8},
+    {"pitch": "C4", "start": 0, "length": 0.6, "velocity": 0.8},
+    {"pitch": "E4", "start": 0, "length": 0.6, "velocity": 0.8},
+    {"pitch": "A3", "start": 1.5, "length": 0.6, "velocity": 0.8},
+    {"pitch": "C4", "start": 1.5, "length": 0.6, "velocity": 0.8},
+    {"pitch": "E4", "start": 1.5, "length": 0.6, "velocity": 0.8},
+    {"pitch": "F3", "start": 3, "length": 0.6, "velocity": 0.8},
+    {"pitch": "A3", "start": 3, "length": 0.6, "velocity": 0.8},
+    {"pitch": "C4", "start": 3, "length": 0.6, "velocity": 0.8},
+    {"pitch": "F3", "start": 4.5, "length": 0.6, "velocity": 0.8},
+    {"pitch": "A3", "start": 4.5, "length": 0.6, "velocity": 0.8},
+    {"pitch": "C4", "start": 4.5, "length": 0.6, "velocity": 0.8},
+    {"pitch": "G3", "start": 6, "length": 0.6, "velocity": 0.8},
+    {"pitch": "B3", "start": 6, "length": 0.6, "velocity": 0.8},
+    {"pitch": "D4", "start": 6, "length": 0.6, "velocity": 0.8}
+  ]}
+]}

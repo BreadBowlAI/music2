@@ -7,6 +7,21 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+/// Where music2 keeps what it can always rebuild, outside every project: the hash cache of
+/// assets and plugin states (FMT-16), later decoded and warped renders (RENDER-30).
+/// `~/Library/Caches/music2`.
+pub fn cache_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").filter(|h| !h.is_empty())?;
+    Some(PathBuf::from(home).join("Library").join("Caches").join("music2"))
+}
+
+/// Keep the hash cache on disk, so a project's assets are hashed once, not at every open.
+pub fn keep_hashes() {
+    if let Some(dir) = cache_dir() {
+        m2_song::HashCache::global().persist_in(&dir);
+    }
+}
+
 /// The std package: `m2pkg.toml`, `kernels/*.wasm` and `src/*.ts`.
 pub fn std_dir() -> PathBuf {
     resolve("M2_STD", "std")

@@ -57,6 +57,7 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .route("/api/graph/lane", post(graph_lane))
         .route("/api/graph/relink", post(graph_relink))
         .route("/api/graph/data/delete", post(graph_delete_data))
+        .route("/api/graph/fix", post(graph_fix))
         .route("/api/graph/undo", post(graph_undo))
         .route("/api/graph/redo", post(graph_redo))
         .route("/api/graph/disconnect", post(graph_disconnect))
@@ -279,16 +280,54 @@ async fn graph_lane(State(s): S, Json(r): Json<LaneReq>) -> ApiResult {
 struct RelinkReq {
     session: u64,
     revision: u64,
-    /// The lane file no lane reads, relative to the project (`timeline/kick.hits.json`).
+    /// The data no lane or plugin reads, relative to the project: a lane file
+    /// (`data/kick/hits.json`), a track's folder (`data/kick`) or a plugin state.
     from: String,
-    module: String,
-    lane: String,
+    /// Where it goes, as a project path (`data/kicks/hits.json`, `data/kicks`)…
+    #[serde(default)]
+    to: Option<String>,
+    /// …or, for a lane file, the lane by its track's key and its own.
+    #[serde(default)]
+    module: Option<String>,
+    #[serde(default)]
+    lane: Option<String>,
 }
 
-/// Move lane data no lane reads to the lane it belongs to now: a warning's relink fix.
+/// Move data no lane or plugin reads to where it is read now: a problem's relink fix.
 async fn graph_relink(State(s): S, Json(r): Json<RelinkReq>) -> ApiResult {
+    let to = match (r.to, r.module, r.lane) {
+        (Some(to), ..) => to,
+        (None, Some(module), Some(lane)) => {
+            let addr = m2_song::LaneAddr::new(&module, &lane).map_err(err)?;
+            m2_song::DataPath::lane(&addr).to_string()
+        }
+        _ => return Err(err("say where it goes: `to`, or a lane's `module` and `lane`")),
+    };
     let state = s.clone();
-    let result = blocking(move || state.graph.relink(r.session, r.revision, &r.from, &r.module, &r.lane)).await;
+    let result = blocking(move || state.graph.relink(r.session, r.revision, &r.from, &to)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct FixReq {
+    session: u64,
+    revision: u64,
+    /// The fix as a problem carried it: its `code` and `edit` are what name it.
+    fix: FixRef,
+}
+
+#[derive(Deserialize)]
+struct FixRef {
+    code: String,
+    edit: Value,
+}
+
+/// Apply one of the fixes a problem of the accepted revision offers (DIAG-1). One no problem
+/// offers any more is refused. Undo takes it back.
+async fn graph_fix(State(s): S, Json(r): Json<FixReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.fix(r.session, r.revision, &r.fix.code, &r.fix.edit)).await;
     s.graph_changed();
     Ok(Json(result?))
 }
@@ -300,7 +339,7 @@ struct DeleteDataReq {
     file: String,
 }
 
-/// Delete lane data no lane reads: a warning's other fix. Undo puts it back.
+/// Delete data no lane or plugin reads: a problem's other fix. Undo puts it back.
 async fn graph_delete_data(State(s): S, Json(r): Json<DeleteDataReq>) -> ApiResult {
     let state = s.clone();
     let result = blocking(move || state.graph.delete_data(r.session, r.revision, &r.file)).await;

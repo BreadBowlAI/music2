@@ -57,21 +57,52 @@ export interface PortEdge { from: string; from_port: string; to: string; to_port
 /** `args` are written after the audio when it is added: `lowpass(x, 1000)`. */
 export interface Effect { module: string; name: string; description: string; category: string; args: string | null }
 
-export interface ModuleView { name: string; track: boolean; nodes: ViewNode[]; edges: [string, string][]; port_edges: PortEdge[] }
+/**
+ * A module: the song (`song`) or a track. `key` is what the code calls it (`track("lead-vox", …)`):
+ * the one address of the module, for selection, its tabs, its lanes and its data (ID-11). `label`
+ * is what to call it (`{ name: "Lead Vox" }`, else the key): shown, never an address (ID-10).
+ */
+export interface ModuleView { key: string; label: string; track: boolean; nodes: ViewNode[]; edges: [string, string][]; port_edges: PortEdge[] }
 
 export interface GraphView { revision: number; modules: ModuleView[]; draft_errors: string[] }
 
-/** Note starts and control point beats are relative to their clip's start. */
-export interface NoteClip { start: number; length: number; notes: Note[] }
+/** What to show for a lane or a module: its label, which defaults to its key. */
+export const labelOf = (x: { key: string; label?: string | null }) => x.label || x.key;
+/** What to show for a module: its label, and "Song" for the root module unless it has one. */
+export const moduleName = (m: { key: string; label?: string | null }) => (m.key === "song" && (!m.label || m.label === "song") ? "Song" : labelOf(m));
+/** The key, to show beside a name that doesn't already say it (`Lead Vox` · `lead-vox`, not `Bass` · `bass`); "" otherwise. */
+export const keyNote = (name: string, key: string) => (name.toLowerCase() === key || key === "song" ? "" : key);
+
+/**
+ * A clip's id: unique in its lane, the clip's address with the lane's (FMT-11, FMT-12). A clip
+ * without one, or whose id breaks the rule or is another clip's too, is anonymous: see `ClipRef`.
+ * Note starts and control point beats are relative to their clip's start.
+ */
+export interface NoteClip { id?: string; start: number; length: number; notes: Note[] }
 /** `pitch` in semitones (60 is middle C); `velocity` 0..1. */
 export interface Note { pitch: number; start: number; length: number; velocity: number }
-export interface ControlClip { start: number; length: number; points: [number, number][] }
-export interface AudioClip { start: number; length: number; asset: string }
+export interface ControlClip { id?: string; start: number; length: number; points: [number, number][] }
+/** `asset` is a path under `assets/`; `hash` pins its bytes (FMT-15). */
+export interface AudioClip {
+  id?: string;
+  start: number;
+  length: number;
+  asset: string;
+  hash?: string;
+  offset?: number;
+  gain_db?: number;
+  fade_in?: number;
+  fade_out?: number;
+  reverse?: boolean;
+  pitch?: number;
+}
 
+/** A declared lane: `key` addresses it within its module (ID-4, ID-6), `label` is its `name`, or the key. */
 export type TimelineLane =
-  | { id: string; kind: "notes"; clips: NoteClip[] }
+  | { key: string; label: string; kind: "notes"; clips: NoteClip[] }
   | {
-      id: string;
+      key: string;
+      label: string;
       kind: "control";
       unit?: string | null;
       default?: number | null;
@@ -80,27 +111,158 @@ export type TimelineLane =
       max: number;
       clips: ControlClip[];
     }
-  | { id: string; kind: "audio"; channels: number; clips: AudioClip[] };
+  | { key: string; label: string; kind: "audio"; channels: number; clips: AudioClip[] };
 
-/** A clip in the timeline: its module's name, its lane's id, its place among the lane's clips. */
-export interface ClipRef { module: string; lane: string; index: number }
+/** A module that is a track or declares lanes, by its key (as `ModuleView.key`), with its label. */
+export interface TimelineTrack { module: string; label: string; track: boolean; lanes: TimelineLane[] }
 
-/** The notes clip a reference points at, if the timeline (still) has it. */
-export function findNoteClip(timeline: TimelineView, ref: ClipRef): NoteClip | undefined {
-  const lane = timeline.tracks.find((t) => t.module === ref.module)?.lanes.find((l) => l.id === ref.lane);
-  return lane?.kind === "notes" ? lane.clips[ref.index] : undefined;
-}
-
-/** A module that is a track or declares lanes; `module` is its ModuleView name. */
-export interface TimelineTrack { module: string; track: boolean; lanes: TimelineLane[] }
+/** A time signature from `beat` on: `beats` in a bar of `unit` notes (FMT-13). A beat is a quarter note. */
+export interface Meter { beat: number; beats: number; unit: number }
 
 /** What the accepted revision plays, in beats. */
 export interface TimelineView {
-  beats_per_bar: number;
   tempo: { beat: number; bpm: number }[];
+  /** The time signatures; empty is 4/4 throughout. Bars are counted from them (`barAt`, `bars`). */
+  meter: Meter[];
   /** Where the last clip ends, at least one bar. */
   end: number;
   tracks: TimelineTrack[];
+}
+
+// ---------------------------------------------------------------- clips by id
+
+/** The ids readers accept (FMT-11). */
+const CLIP_ID = /^[0-9a-z]{1,16}$/;
+/** The lowercase Crockford base32 alphabet new ids are drawn from (no i, l, o or u). */
+const CROCKFORD = "0123456789abcdefghjkmnpqrstvwxyz";
+
+/** A new clip id: 8 random Crockford characters, as a builder outside a sandbox may draw it (FMT-11). */
+export function newClipId(taken: Iterable<string | undefined> = []) {
+  const used = new Set(taken);
+  for (;;) {
+    const id = Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => CROCKFORD[b & 31]).join("");
+    if (!used.has(id)) return id;
+  }
+}
+
+type Clip = { id?: string; start: number; length: number };
+
+/** Whether clip `i` can be named by its id: a valid id no other clip in its lane has (FMT-12). */
+export function hasOwnId(clips: readonly Clip[], i: number) {
+  const id = clips[i]?.id;
+  return !!id && CLIP_ID.test(id) && clips.every((c, j) => j === i || c.id !== id);
+}
+
+/**
+ * A clip in the timeline: its lane's address (module key, lane key) and its id (FMT-12), never
+ * its place in the lane. A clip without an id of its own can only be found in the revision it
+ * was read from: `at` finds it there by where it is, and `id` is the id the next write gives it.
+ */
+export interface ClipRef { module: string; lane: string; id: string; at?: { start: number; length: number } }
+
+/** The id each anonymous clip is to get, by lane and place, so every reference to it names it alike. */
+const pending = new Map<string, string>();
+
+/** The reference to clip `i` of `module`'s lane `lane` (keys). */
+export function clipRef(module: string, lane: string, clips: readonly Clip[], i: number): ClipRef {
+  const c = clips[i];
+  if (hasOwnId(clips, i)) return { module, lane, id: c.id! };
+  const place = `${module}/${lane}@${c.start}+${c.length}`;
+  let id = pending.get(place);
+  if (!id || clips.some((x) => x.id === id)) pending.set(place, (id = newClipId(clips.map((x) => x.id))));
+  return { module, lane, id, at: { start: c.start, length: c.length } };
+}
+
+/** Where `ref`'s clip is in `clips`: by its id, else (an anonymous clip) by where it was; -1 if it is gone. */
+export function clipIndex(clips: readonly Clip[], ref: ClipRef) {
+  const own = clips.findIndex((c, i) => c.id === ref.id && hasOwnId(clips, i));
+  if (own >= 0 || !ref.at) return own;
+  const { start, length } = ref.at;
+  return clips.findIndex((c, i) => c.start === start && c.length === length && !hasOwnId(clips, i));
+}
+
+/** Whether two references name the same clip. */
+export const sameClip = (a: ClipRef | null | undefined, b: ClipRef | null | undefined) =>
+  a === b || (!!a && !!b && a.module === b.module && a.lane === b.lane && a.id === b.id);
+
+/** A lane of the timeline, by module and lane key. */
+export function findLane(timeline: TimelineView, module: string, lane: string): TimelineLane | undefined {
+  return timeline.tracks.find((t) => t.module === module)?.lanes.find((l) => l.key === lane);
+}
+
+/** The notes clip a reference points at, if the timeline (still) has it. */
+export function findNoteClip(timeline: TimelineView, ref: ClipRef): NoteClip | undefined {
+  const lane = findLane(timeline, ref.module, ref.lane);
+  return lane?.kind === "notes" ? lane.clips[clipIndex(lane.clips, ref)] : undefined;
+}
+
+// ---------------------------------------------------------------- bars
+
+const FOUR_FOUR: Meter = { beat: 0, beats: 4, unit: 4 };
+/** Quarter notes in a bar of `m`. */
+const barLength = (m: Meter) => (m.beats * 4) / m.unit;
+const meters = (meter: readonly Meter[]) => (meter.length ? meter : [FOUR_FOUR]);
+
+/**
+ * The bar `beat` falls in, counted as the arrangement counts them (FMT-13): its number from 0,
+ * the beat it starts at and its length in quarter notes.
+ */
+export function barAt(meter: readonly Meter[], beat: number): { bar: number; start: number; length: number } {
+  const ms = meters(meter);
+  let bar = 0;
+  for (let i = 0; ; i++) {
+    const m = ms[i], length = barLength(m), next = ms[i + 1]?.beat ?? Infinity;
+    if (beat < next) {
+      // Float noise just under a bar line is still on it.
+      const k = Math.max(0, Math.floor((beat - m.beat) / length + 1e-9));
+      return { bar: bar + k, start: m.beat + k * length, length };
+    }
+    // Each change falls on a bar line of the meter before it.
+    bar += Math.round((next - m.beat) / length);
+  }
+}
+
+/** Every bar that starts before `end`, in order. */
+export function bars(meter: readonly Meter[], end: number) {
+  const out: { bar: number; start: number; length: number }[] = [];
+  for (let b = barAt(meter, 0); b.start < end; b = barAt(meter, b.start + b.length)) out.push(b);
+  return out;
+}
+
+/** The stretches of one bar length between `from` and `to`, for drawing a grid: each starts on a bar line or at `from`. */
+export function meterSpans(meter: readonly Meter[], from: number, to: number) {
+  const ms = meters(meter);
+  return ms
+    .map((m, i) => ({ start: Math.max(m.beat, from), end: Math.min(ms[i + 1]?.beat ?? Infinity, to), origin: m.beat, bar: barLength(m) }))
+    .filter((s) => s.end > s.start);
+}
+
+/** How many bars `beats` beats from `from` span, each bar as long as the meter has it there; part of one counts in part. */
+export function beatsToBars(meter: readonly Meter[], from: number, beats: number) {
+  let [at, left, count] = [from, beats, 0];
+  while (left > 1e-9) {
+    const b = barAt(meter, at);
+    const take = Math.min(b.start + b.length - at, left);
+    [at, left, count] = [at + take, left - take, count + take / b.length];
+  }
+  return count;
+}
+
+/** How many beats `n` bars from `from` last, each bar as long as the meter has it there. */
+export function barsToBeats(meter: readonly Meter[], from: number, n: number) {
+  let [at, left] = [from, n];
+  while (left > 1e-9) {
+    const b = barAt(meter, at);
+    const take = Math.min((b.start + b.length - at) / b.length, left);
+    [at, left] = [at + take * b.length, left - take];
+  }
+  return at - from;
+}
+
+/** `3.2`: the bar and the beat in it, counted from 1, as the transport shows a position. */
+export function position(meter: readonly Meter[], beat: number) {
+  const b = barAt(meter, beat);
+  return `${b.bar + 1}.${Math.floor(beat - b.start + 1e-9) + 1}`;
 }
 
 /** Where playback is; `beat` counts with the accepted revision's tempo map. */
@@ -118,29 +280,70 @@ export interface GraphState extends GraphStatus {
   can_redo: boolean;
   /** Effects the packages offer to put after audio. */
   effects: Effect[];
-  /** Why the files on disk don't compile, if they don't: the draft's problems. */
+  /** Why the files on disk don't compile, if they don't: the draft's problems, placed in their files. */
   diagnostics: Problem[];
-  /** What needs attention in the revision shown, though it plays: lane data no lane reads. */
-  warnings: Warning[];
+  /**
+   * What needs attention in the revision playing, none of which stops it (DIAG-4), with the
+   * fixes: data no lane reads (`data.unclaimed`), a lane file that doesn't read (FMT-9), clip ids,
+   * asset pins, plugin states, unknown files under `data/`.
+   */
+  problems: Diagnostic[];
+  /** The rate the song runs and exports at (`[project] sample_rate`). */
+  sample_rate: number;
+}
+
+export type Severity = "error" | "warning" | "notice";
+
+/**
+ * A problem, as every part of music2 reports it (DIAG-1): how bad it is, a stable `code` from the
+ * contract's table (`lane.invalid`), what is wrong and what to do in plain words, the file it is
+ * about (`src`, project-relative; `file:line:col` for code), the key of its module, and its fixes,
+ * the likeliest first.
+ */
+export interface Diagnostic {
+  severity: Severity;
+  code: string;
+  message: string;
+  src?: string | null;
+  module?: string | null;
+  fixes?: Fix[];
 }
 
 /**
- * Something that needs attention but doesn't stop the song playing: what is wrong in a few words
- * (`title`), then why and what to do (`message`); `file` is project-relative.
+ * A way to fix a problem, applied only when a person asks (DIAG-5), as one undoable edit. `code` is
+ * from the contract's closed vocabulary (`relink`, `delete-data`, `repin-asset`, …); `title` says
+ * what it does ("Move to Kicks › hits"); `likely` marks the one fix the problem plainly calls for,
+ * offered in one click. `edit` is what it changes: whole files, each with the SHA-256 it expects
+ * (null: a file that must not exist yet). The app applies a fix by sending it back as it came
+ * (`graphApi.fix`); the session applies it as a named edit until fixes are Tx (step 6).
  */
-export interface Warning { code: string; title: string; message: string; file: string; fixes: Fix[] }
+export interface Fix {
+  code: string;
+  title: string;
+  likely: boolean;
+  edit: { base: Record<string, string | null>; ops: FixOp[] };
+}
+export type FixOp = { op: "write"; file: string; text: string } | { op: "remove"; file: string } | { op: "rename"; from: string; to: string };
 
 /**
- * A way to fix a warning, applied only when asked: move lane data no lane reads to the lane it
- * belongs to now (`module` › `lane`, written to `to`), or delete it. Undo takes either back.
- * `likely` marks the one lane the data plainly belongs to, offered in one click.
+ * One reason the draft doesn't compile (a `code.build`, `key.duplicate`, … Error): `file` is
+ * project-relative (or a package's, `std/src/dsp.ts`), line and col 1-based; `module` is a key.
  */
-export type Fix =
-  | { fix: "relink"; from: string; to: string; module: string; lane: string; likely: boolean }
-  | { fix: "delete_data"; file: string };
+export interface Problem {
+  file: string | null;
+  line: number | null;
+  col: number | null;
+  message: string;
+  module?: string;
+  code: string;
+  severity: Severity;
+}
 
-/** One reason the draft doesn't compile; `file` is project-relative (or a package's, `std/src/dsp.ts`), line and col 1-based. */
-export interface Problem { file: string | null; line: number | null; col: number | null; message: string; module?: string }
+/** Everything that needs attention in the revision playing, errors first (DIAG-4). */
+export function attention(graph: GraphState): Diagnostic[] {
+  const rank: Record<Severity, number> = { error: 0, warning: 1, notice: 2 };
+  return [...(graph.problems ?? [])].sort((a, b) => rank[a.severity] - rank[b.severity]);
+}
 
 const auth: Record<string, string> = token ? { "x-m2-token": token } : {};
 
@@ -196,15 +399,12 @@ export const graphApi = {
     call<{ file: string; before: string; after: string; revision: number }>("/effect/add", { session, revision, call: node, module: effect.module, name: effect.name }),
   removeEffect: (session: number, revision: number, node: string) =>
     call<{ file: string; before: string; after: string; revision: number }>("/effect/remove", { session, revision, call: node }),
-  /** Rewrite a notes lane with every clip it is to have. Prefer `writeLane`, which queues. */
+  /** Rewrite a notes lane (module and lane keys) with every clip it is to have. Prefer `writeLane`, which queues and gives clips ids. */
   lane: (session: number, revision: number, module: string, lane: string, clips: NoteClip[]) =>
     call<{ file: string; before: string; after: string; revision: number }>("/lane", { session, revision, module, lane, clips }),
-  /** A warning's fix: move lane data no lane reads to `module`'s lane `lane`. */
-  relink: (session: number, revision: number, from: string, module: string, lane: string) =>
-    call<{ file: string; before: string; after: string; revision: number }>("/relink", { session, revision, from, module, lane }),
-  /** A warning's other fix: delete lane data no lane reads. */
-  deleteData: (session: number, revision: number, file: string) =>
-    call<{ file: string; before: string; after: string; revision: number }>("/data/delete", { session, revision, file }),
+  /** Apply a problem's fix, offered at `revision`, exactly as it came: one undoable edit. */
+  fix: (session: number, revision: number, fix: Fix) =>
+    call<{ file: string; before: string; after: string; revision: number }>("/fix", { session, revision, fix }),
   undo: (session: number) => call<{ file: string; before: string; after: string; revision: number }>("/undo", { session }),
   redo: (session: number) => call<{ file: string; before: string; after: string; revision: number }>("/redo", { session }),
   transport: (action: "play" | "stop" | "toggle" | "restart") => call("/transport", { action }),
@@ -239,18 +439,28 @@ export function tilde(path: string, home: string | null) {
 let lanes = { session: 0, revision: 0, pending: 0, queue: Promise.resolve() as Promise<unknown> };
 
 /**
- * Rewrite `module`'s notes lane `lane` with every clip it is to have: one write, one undo step.
- * `base` is the revision those clips were read from (a graph's, or the one an earlier write
- * made): the server refuses the write if the lane changed since, so it never overwrites a
- * change the clips don't include.
+ * Rewrite `module`'s notes lane `lane` (keys) with every clip it is to have: one write, one undo
+ * step. `base` is the revision those clips were read from (a graph's, or the one an earlier write
+ * made): the server refuses the write if the lane changed since, so it never overwrites a change
+ * the clips don't include.
+ *
+ * The app builds the write, so it chooses the ids (FMT-11): a clip keeps the id it has, and one
+ * without a valid id gets a new one here, so what comes back is exactly what was sent (`clips`).
  */
 export function writeLane(graph: GraphState, module: string, lane: string, clips: NoteClip[], base: number) {
   if (lanes.session !== graph.session) lanes = { session: graph.session, revision: 0, pending: 0, queue: Promise.resolve() };
+  const taken = clips.map((c) => c.id);
+  const sent = clips.map((c) => {
+    if (c.id && CLIP_ID.test(c.id)) return c;
+    const id = newClipId(taken);
+    taken.push(id);
+    return { ...c, id };
+  });
   const q = lanes;
   q.pending++;
   const write = q.queue
-    .then(() => graphApi.lane(graph.session, base, module, lane, clips))
-    .then((r) => ((q.revision = Math.max(q.revision, r.revision)), r))
+    .then(() => graphApi.lane(graph.session, base, module, lane, sent))
+    .then((r) => ((q.revision = Math.max(q.revision, r.revision)), { ...r, clips: sent }))
     .finally(() => q.pending--);
   q.queue = write.catch(() => {});
   return write;

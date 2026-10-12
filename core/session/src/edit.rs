@@ -22,9 +22,10 @@ use m2_runtime::PackageSet;
 use m2_script::sites::Site;
 use m2_song::{Project, Snapshot};
 
-use crate::{Compiled, Seen, Warning, compile_sources};
+use crate::{Compiled, Seen, compile_sources};
 
 mod cable;
+mod data;
 mod effect;
 mod lens;
 mod relink;
@@ -163,9 +164,10 @@ enum Undo {
     /// created). It is allowed only while the file is exactly as the change left it, and the
     /// project must compile with it.
     Exact { restore: Option<String> },
-    /// The file was renamed from `back`: reverting renames it back, only while it is exactly as
-    /// the change left it and nothing has taken its old name.
-    Move { back: PathBuf },
+    /// Data files or folders moved, removed or created as they were (see `data`): reverting
+    /// makes `steps`, only while every path the edit touched holds what it `left` there and the
+    /// names `steps` make are free. `back` is where the change's file is once reverted.
+    Data { steps: Vec<data::Step>, left: data::Left, back: PathBuf },
 }
 
 /// An edit compiled from memory, not yet written or accepted. It is built on the accepted
@@ -255,32 +257,18 @@ pub struct Session {
     seen: Seen,
 }
 
-/// Whether `a` and `b` name one file, as two spellings do on a disk that ignores capitals.
-fn same_file(a: &Path, b: &Path) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        matches!((std::fs::symlink_metadata(a), std::fs::symlink_metadata(b)), (Ok(a), Ok(b)) if (a.dev(), a.ino()) == (b.dev(), b.ino()))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (a, b);
-        false
-    }
-}
-
-/// A file of `files`, other than `except`, that has the name `name` on a disk that ignores
-/// capitals (macOS by default): `name` itself, or `name` in other capitals. Judged by the names
-/// alone, so a project acts the same on every disk it is checked out on.
-fn taken<'a>(files: &'a BTreeMap<PathBuf, String>, name: &Path, except: Option<&Path>) -> Option<&'a Path> {
-    let spelled = name.to_string_lossy();
-    files.keys().map(PathBuf::as_path).find(|p| Some(*p) != except && p.to_string_lossy().eq_ignore_ascii_case(&spelled))
-}
-
-/// Why `name` isn't created: `by`, which has its name, is there already.
+/// Why `name` isn't created: `by`, which has its name on a disk that ignores capitals (see
+/// [`data::taken`]), is there already.
 fn there_already(name: &Path, by: &Path) -> String {
-    if by == name {
-        format!("{} is there already, and isn't replaced", name.display())
+    if by == name || by.starts_with(name) {
+        format!("{} is there already, and isn't replaced", by.display())
+    } else if name.starts_with(by) || by.components().count() < name.components().count() {
+        format!(
+            "{} is there already, and on a disk that ignores capitals {} would be written into it, where music2 doesn't read it. \
+             Rename it as its key is spelled, or remove it",
+            by.display(),
+            name.display()
+        )
     } else {
         format!("{} is there already, and on a disk that ignores capitals it is {}; it isn't replaced", by.display(), name.display())
     }
@@ -362,8 +350,25 @@ fn site_by_id<'a>(sites: &'a [Site], id: &str) -> Option<(&'a Site, Vec<String>)
     Some((site, arg.split('.').map(str::to_string).collect()))
 }
 
-fn build(project: &Project, snapshot: &Snapshot, packages: &mut PackageSet, seen: &Seen) -> Result<Compiled, Vec<Diagnostic>> {
-    compile_sources(project, packages, snapshot.sources().map(|(p, t)| (p, t.clone())).collect(), seen)
+/// Build a project read from a snapshot, given the data last accepted, which a lane whose file
+/// fails keeps playing (FMT-9).
+fn build(
+    project: &Project,
+    packages: &mut PackageSet,
+    seen: &Seen,
+    previous: Option<&m2_song::DataSet>,
+) -> Result<Compiled, Vec<Diagnostic>> {
+    compile_sources(project, packages, seen, previous)
+}
+
+/// A project that can't be read from its snapshot: the manifest's or the arrangement's errors.
+fn unread(d: Vec<m2_song::Diagnostic>) -> Vec<Diagnostic> {
+    d.into_iter().map(crate::diagnostic).collect()
+}
+
+/// The folder couldn't be read at all.
+fn unreadable(e: anyhow::Error) -> Vec<Diagnostic> {
+    vec![Diagnostic::error("manifest.invalid", format!("{e:#}"))]
 }
 
 /// The control constant `origin` with `value` shows in `rev`, if it is a number written in
@@ -393,10 +398,9 @@ fn control(rev: &Revision, origin: &Origin, value: f64, unit: Option<Unit>) -> O
 impl Session {
     pub fn open(dir: &Path, packages: PackageSet) -> Result<Session, Vec<Diagnostic>> {
         let mut packages = packages;
-        let err = |e: anyhow::Error| vec![Diagnostic::new(format!("{e:#}"))];
-        let snapshot = Snapshot::read(dir).map_err(err)?;
-        let project = Project::from_snapshot(&snapshot).map_err(err)?;
-        let compiled = build(&project, &snapshot, &mut packages, &Seen::default())?;
+        let snapshot = Snapshot::read(dir).map_err(unreadable)?;
+        let project = Project::from_snapshot(&snapshot).map_err(unread)?;
+        let compiled = build(&project, &mut packages, &Seen::default(), None)?;
         let mut seen = Seen::default();
         seen.add(&compiled.ir);
         Ok(Session {
@@ -417,10 +421,10 @@ impl Session {
         &self.accepted
     }
 
-    /// What needs attention in the accepted revision, such as lane data no lane reads, with
-    /// the fixes each offers.
-    pub fn warnings(&self) -> &[Warning] {
-        &self.accepted.compiled.warnings
+    /// What needs attention in the accepted revision though it plays, such as data no lane
+    /// reads, with the fixes each offers (DIAG-1, DIAG-4).
+    pub fn problems(&self) -> &[m2_song::Diagnostic] {
+        &self.accepted.compiled.problems
     }
 
     fn accept(&mut self, snapshot: Snapshot, project: Project, compiled: Compiled) -> u64 {
@@ -441,7 +445,7 @@ impl Session {
         let snapshot = match Snapshot::read(&self.dir) {
             Ok(s) => s,
             Err(e) => {
-                self.draft_errors = vec![Diagnostic::new(format!("{e:#}"))];
+                self.draft_errors = unreadable(e);
                 return true;
             }
         };
@@ -453,9 +457,10 @@ impl Session {
             self.draft_errors.clear();
             return true;
         }
+        let previous = Some(&self.accepted.compiled.data);
         let built = Project::from_snapshot(&snapshot)
-            .map_err(|e| vec![Diagnostic::new(format!("{e:#}"))])
-            .and_then(|p| build(&p, &snapshot, &mut self.packages, &self.seen).map(|c| (p, c)));
+            .map_err(unread)
+            .and_then(|p| build(&p, &mut self.packages, &self.seen, previous).map(|c| (p, c)));
         match built {
             Ok((project, compiled)) => {
                 self.accept(snapshot, project, compiled);
@@ -665,9 +670,9 @@ impl Session {
     }
 
     fn compile_snapshot(&mut self, snapshot: &Snapshot) -> Result<(Project, Compiled), EditError> {
-        let project = Project::from_snapshot(snapshot).map_err(|e| EditError::Rejected(format!("{e:#}")))?;
-        let compiled = build(&project, snapshot, &mut self.packages, &self.seen)
-            .map_err(|d| EditError::Rejected(d.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("; ")))?;
+        let rejected = |d: Vec<Diagnostic>| EditError::Rejected(d.iter().map(|d| d.to_string()).collect::<Vec<_>>().join("; "));
+        let project = Project::from_snapshot(snapshot).map_err(|d| rejected(unread(d)))?;
+        let compiled = build(&project, &mut self.packages, &self.seen, Some(&self.accepted.compiled.data)).map_err(rejected)?;
         Ok((project, compiled))
     }
 
@@ -726,13 +731,13 @@ impl Session {
     fn commit(&mut self, c: Candidate, record: Option<Undo>) -> Result<u64, EditError> {
         let path = self.dir.join(&c.file);
         let io = |e: std::io::Error| EditError::Io(e.to_string());
-        let files = &self.accepted.snapshot.files;
-        // A new file would land on one whose name differs only in capitals, and read as it.
-        if !files.contains_key(&c.file)
+        // A new file would land on one whose name differs only in capitals, or in a folder that
+        // does, and read as it or not at all.
+        if !self.accepted.snapshot.files.contains_key(&c.file)
             && c.snapshot.files.contains_key(&c.file)
-            && let Some(by) = taken(files, &c.file, None)
+            && let Some(by) = data::taken(&self.accepted.snapshot, &c.file)
         {
-            return Err(EditError::Rejected(there_already(&c.file, by)));
+            return Err(EditError::Rejected(there_already(&c.file, &by)));
         }
         let disk = match std::fs::read_to_string(&path) {
             Ok(text) => Some(text),
@@ -803,9 +808,10 @@ impl Session {
         match &c.undo {
             Undo::Value { scale, .. } => self.carried(c).is_some_and(|(_, k)| k.is_some_and(|k| k.scale == *scale)),
             Undo::Exact { restore } => {
-                files.get(&c.file) == c.left.as_ref() && (c.left.is_some() || restore.is_none() || taken(files, &c.file, None).is_none())
+                let free = || data::taken(&self.accepted.snapshot, &c.file).is_none();
+                files.get(&c.file) == c.left.as_ref() && (c.left.is_some() || restore.is_none() || free())
             }
-            Undo::Move { back } => files.get(&c.file) == c.left.as_ref() && taken(files, back, Some(&c.file)).is_none(),
+            Undo::Data { steps, left, .. } => self.unchanged(steps, left).is_ok(),
         }
     }
 
@@ -881,71 +887,14 @@ impl Session {
                 };
                 Ok((Edited { revision, file, before: c.after.clone(), after: c.before.clone() }, inverse))
             }
-            Undo::Move { back } => {
-                if now != c.left || taken(&self.accepted.snapshot.files, back, Some(&c.file)).is_some() {
-                    let back = back.display();
-                    return Err(EditError::Rejected(format!("{file} changed since this edit, or {back} is taken; move it by hand")));
-                }
-                let revision = self.move_file(&c.file, back, |_, _| Ok(()))?;
-                let inverse = Change {
-                    file: back.clone(),
-                    left: now,
-                    start: 0,
-                    before: c.after.clone(),
-                    after: c.before.clone(),
-                    undo: Undo::Move { back: c.file.clone() },
-                };
+            Undo::Data { steps, left, back } => {
+                self.unchanged(steps, left)?;
+                let (revision, steps, left) = self.make(steps, |_, _| Ok(()))?;
+                let undo = Undo::Data { steps, left, back: c.file.clone() };
+                let inverse = Change { file: back.clone(), left: None, start: 0, before: c.after.clone(), after: c.before.clone(), undo };
                 Ok((Edited { revision, file, before: c.after.clone(), after: c.before.clone() }, inverse))
             }
         }
-    }
-
-    /// Rename the data file `from` to `to`, if `check` accepts the candidate in which it is
-    /// renamed (given its project and build); the graph must stay as it is, since only data
-    /// moves. Returns the new revision. Not recorded for undo.
-    fn move_file(
-        &mut self,
-        from: &Path,
-        to: &Path,
-        check: impl FnOnce(&Project, &Compiled) -> Result<(), EditError>,
-    ) -> Result<u64, EditError> {
-        let text = self.accepted.snapshot.files.get(from).cloned().ok_or_else(|| EditError::NotFound(from.display().to_string()))?;
-        // `from` may be `to` in other capitals: the move is then a rename of the capitals.
-        if let Some(by) = taken(&self.accepted.snapshot.files, to, Some(from)) {
-            return Err(EditError::Rejected(there_already(to, by)));
-        }
-        let mut snapshot = self.accepted.snapshot.clone();
-        snapshot.files.remove(from);
-        snapshot.files.insert(to.to_path_buf(), text.clone());
-        let (project, compiled) = self.compile_snapshot(&snapshot)?;
-        if compiled.ir != self.accepted.compiled.ir {
-            return Err(EditError::Rejected(format!("moving {} would change the graph, not only where data is", from.display())));
-        }
-        check(&project, &compiled)?;
-
-        // The disk must still be as accepted: the file there as it was, its new name free.
-        let (path, dest) = (self.dir.join(from), self.dir.join(to));
-        let io = |e: std::io::Error| EditError::Io(e.to_string());
-        match std::fs::read_to_string(&path) {
-            Ok(disk) if disk == text => {}
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(io(e)),
-            _ => return Err(EditError::WriteConflict(from.display().to_string())),
-        }
-        match std::fs::symlink_metadata(&dest) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(io(e)),
-            // A disk that ignores capitals finds `kick.hits.json` as `Kick.hits.json` itself: renaming it is the fix.
-            Ok(_) if same_file(&path, &dest) => {}
-            Ok(_) => return Err(EditError::WriteConflict(to.display().to_string())),
-        }
-        if let Some(dir) = dest.parent() {
-            std::fs::create_dir_all(dir).map_err(io)?;
-        }
-        // One rename, so the data is never in two places or in none. A writer that takes the
-        // name between the check and here is replaced; the project lock will close that gap.
-        std::fs::rename(&path, &dest).map_err(io)?;
-        self.draft = snapshot.clone();
-        Ok(self.accept(snapshot, project, compiled))
     }
 }
 

@@ -1,7 +1,27 @@
 import clsx from "clsx";
 import { Lock, Magnet, Minus, Plus, X, ZoomIn, ZoomOut } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { editorHooks, findNoteClip, graphApi, laneWriting, writeLane, type GraphState, type Note, type NoteClip } from "../lib/graph";
+import {
+  barAt,
+  bars as barList,
+  barsToBeats,
+  beatsToBars,
+  clipIndex,
+  editorHooks,
+  findLane,
+  findNoteClip,
+  graphApi,
+  labelOf,
+  moduleName,
+  laneWriting,
+  meterSpans,
+  writeLane,
+  type ClipRef,
+  type GraphState,
+  type Meter,
+  type Note,
+  type NoteClip,
+} from "../lib/graph";
 import { kbd, native } from "../lib/native";
 import { useStore } from "../lib/store";
 import { trackColor, trackHue } from "./SongTimeline";
@@ -49,7 +69,6 @@ const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x
 /** Beats and lengths as written: to a millionth of a beat, never -0. */
 const clean = (x: number) => Math.round(x * 1e6) / 1e6 + 0;
 const pitchName = (p: number) => `${NOTE_NAMES[((p % 12) + 12) % 12]}${Math.floor(p / 12) - 1}`;
-const bars = (beats: number, bpb: number) => Number((beats / bpb).toFixed(3));
 
 /** A length in beats as a note value: 1 → 1/4, 0.75 → 3/16. */
 function noteValue(beats: number) {
@@ -85,24 +104,18 @@ function fill(hue: string, velocity: number) {
   return v < 0.5 ? `color-mix(in oklab, ${hue}, #fff ${Math.round((0.5 - v) * 110)}%)` : `color-mix(in oklab, ${hue}, #1f2126 ${Math.round((v - 0.5) * 70)}%)`;
 }
 
-/** The piano roll for one notes clip: clip `index` of `module`'s lane `lane`. Every gesture is one lane write, one undo step. */
-export default function NoteView({
-  graph,
-  module,
-  lane,
-  index,
-  onClose,
-}: {
-  graph: GraphState;
-  module: string;
-  lane: string;
-  index: number;
-  onClose: () => void;
-}) {
+/**
+ * The piano roll for one notes clip, named by its lane's address and its id (FMT-12): the clip
+ * stays open while the lane is edited around it, and closes when it is gone. Every gesture is one
+ * lane write, one undo step.
+ */
+export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphState; clip: ClipRef; onClose: () => void }) {
   const toast = useStore((s) => s.toast);
   const { timeline } = graph;
-  const bpb = timeline.beats_per_bar;
-  const server = findNoteClip(timeline, { module, lane, index });
+  const { module, lane } = ref;
+  const server = findNoteClip(timeline, ref);
+  // A bar as long as the time signature where the clip starts says (FMT-13).
+  const bpb = barAt(timeline.meter, server?.start ?? 0).length;
   const color = trackColor(timeline, module) ?? "rgba(143,101,116,1)";
   const hue = trackHue(timeline, module) ?? "rgb(143,101,116)";
 
@@ -207,7 +220,7 @@ export default function NoteView({
     if (sending.current.busy) return "pending";
     if (written.current) return written.current;
     const g = latest.current;
-    const l = g.timeline.tracks.find((t) => t.module === module)?.lanes.find((x) => x.id === lane);
+    const l = findLane(g.timeline, module, lane);
     return { revision: g.view.revision, clips: l?.kind === "notes" ? l.clips : [] };
   };
 
@@ -230,11 +243,13 @@ export default function NoteView({
       return;
     }
     const b = from === "pending" ? written.current : from;
-    if (!b?.clips[index]) return drop();
+    const at = b ? clipIndex(b.clips, ref) : -1;
+    if (!b || at < 0) return drop();
     s.busy = true;
-    const clips = b.clips.map((c, i) => (i === index ? { start: c.start, length: shape.length, notes: shape.notes } : c));
+    // The clip keeps its id; an anonymous one gets the one its reference names.
+    const clips = b.clips.map((c, i) => (i === at ? { id: ref.id, start: c.start, length: shape.length, notes: shape.notes } : c));
     writeLane(latest.current, module, lane, clips, b.revision)
-      .then((r) => void (written.current = { revision: r.revision, clips }))
+      .then((r) => void (written.current = { revision: r.revision, clips: r.clips }))
       .catch((error) => {
         toast(error instanceof Error ? error.message : String(error));
         s.next = null;
@@ -487,9 +502,12 @@ export default function NoteView({
   const width = Math.max(visible, Math.ceil((end + bpb) / bpb) * bpb * ppb);
   const height = (TOP + 1) * ROW_H;
   const shown = new Set(picked);
-  const title = module === "song" ? "Song" : module;
-  const firstBar = Math.floor(start / bpb) + 1;
-  const lastBar = Math.ceil((start + clip.length) / bpb);
+  const track = graph.view.modules.find((m) => m.key === module);
+  const declared = findLane(timeline, module, lane);
+  const title = track ? moduleName(track) : module;
+  const laneName = declared ? labelOf(declared) : lane;
+  const firstBar = barAt(timeline.meter, start).bar + 1;
+  const lastBar = barAt(timeline.meter, start + clip.length - 1e-6).bar + 1;
 
   return (
     <div
@@ -498,20 +516,25 @@ export default function NoteView({
       tabIndex={0}
       onKeyDown={onKeyDown}
       className="flex-1 min-h-0 flex flex-col bg-ink-950 outline-none"
-      aria-label={`Notes of ${title}'s ${lane} clip ${index + 1}`}
+      aria-label={`Notes of ${title}'s ${laneName} clip at bar ${firstBar}`}
     >
       <header className="h-11 shrink-0 flex items-center gap-3 px-3 bg-ink-850 border-b border-black/[0.06] overflow-x-auto overflow-y-hidden">
         <div className="shrink-0 flex items-center gap-2 min-w-0">
           <span className="size-3 rounded-[4px] shadow-sm ring-1 ring-black/10" style={{ background: color }} />
           <span className="text-[13px] font-semibold text-ink-100">{title}</span>
           <span className="text-ink-500">/</span>
-          <span className="font-mono text-[12px] text-ink-200">{lane}</span>
-          <span className="text-[12px] text-ink-400">
-            · clip {index + 1} · {lastBar > firstBar ? `bars ${firstBar}–${lastBar}` : `bar ${firstBar}`}
+          <span className={clsx("text-ink-200", laneName === lane ? "font-mono text-[12px]" : "text-[13px] font-medium")} title={laneName === lane ? lane : `${laneName} (${lane})`}>
+            {laneName}
           </span>
+          <span className="text-[12px] text-ink-400">· {lastBar > firstBar ? `bars ${firstBar}–${lastBar}` : `bar ${firstBar}`}</span>
         </div>
         <Divider />
-        <LengthField beats={clip.length} bpb={bpb} disabled={locked} onChange={setLength} />
+        <LengthField
+          bars={Number(beatsToBars(timeline.meter, start, clip.length).toFixed(3))}
+          toBeats={(n) => clean(barsToBeats(timeline.meter, start, n))}
+          disabled={locked}
+          onChange={setLength}
+        />
         <Divider />
         <div className="shrink-0 flex items-center gap-1.5" title="Notes you add or drag land on this grid">
           <Magnet className="size-3.5 text-ink-400" />
@@ -573,7 +596,7 @@ export default function NoteView({
           <div className="relative" style={{ width: KEYS_W + width, height: RULER_H + height }}>
             <div className="sticky top-0 z-30 flex" style={{ height: RULER_H }}>
               <div className="sticky left-0 z-40 shrink-0 bg-ink-900 border-r border-b border-black/[0.06]" style={{ width: KEYS_W }} />
-              <Ruler width={width} ppb={ppb} bpb={bpb} start={start} length={clip.length} color={color} />
+              <Ruler width={width} ppb={ppb} meter={timeline.meter} start={start} length={clip.length} color={color} />
             </div>
             <div className="flex">
               <Keys selected={new Set(picked.map((i) => clip.notes[i].pitch))} />
@@ -593,7 +616,7 @@ export default function NoteView({
                 onPointerCancel={onGridCancel}
                 onLostPointerCapture={onGridCancel}
               >
-                <Lanes width={width} ppb={ppb} bpb={bpb} start={start} step={snap} />
+                <Lanes width={width} ppb={ppb} meter={timeline.meter} start={start} step={snap} />
                 <div
                   className="absolute top-0 bottom-0 right-0 pointer-events-none border-l-2"
                   style={{
@@ -710,20 +733,32 @@ export default function NoteView({
 
 const Divider = () => <div className="w-px h-5 shrink-0 bg-black/[0.08]" />;
 
-/** The clip's length in bars, typed or stepped a bar at a time. */
-function LengthField({ beats, bpb, disabled, onChange }: { beats: number; bpb: number; disabled: boolean; onChange: (beats: number) => void }) {
+/**
+ * The clip's length in bars, typed or stepped a bar at a time. `bars` is how many it spans and
+ * `toBeats` turns a count of bars into beats, both as the song's time signatures count them.
+ */
+function LengthField({
+  bars: value,
+  toBeats,
+  disabled,
+  onChange,
+}: {
+  bars: number;
+  toBeats: (bars: number) => number;
+  disabled: boolean;
+  onChange: (beats: number) => void;
+}) {
   const [text, setText] = useState<string | null>(null);
-  const value = bars(beats, bpb);
   const done = () => {
     const n = Number(text);
     setText(null);
-    if (text !== null && n > 0 && Number.isFinite(n)) onChange(n * bpb);
+    if (text !== null && n > 0 && Number.isFinite(n)) onChange(toBeats(n));
   };
   return (
     <div className="shrink-0 flex items-center gap-1.5" title="How long the clip is. Notes past its end don't play.">
       <span className="text-[11px] text-ink-400">Length</span>
       <div className="flex items-center rounded-lg bg-ink-950 ring-1 ring-black/[0.04]">
-        <button aria-label="One bar shorter" disabled={disabled || value <= 1} onClick={() => onChange((Math.ceil(value - 1 - 1e-9) || 1) * bpb)} className="h-6 w-6 grid place-items-center text-ink-400 enabled:hover:text-ink-100 disabled:opacity-40 cursor-pointer">
+        <button aria-label="One bar shorter" disabled={disabled || value <= 1} onClick={() => onChange(toBeats(Math.ceil(value - 1 - 1e-9) || 1))} className="h-6 w-6 grid place-items-center text-ink-400 enabled:hover:text-ink-100 disabled:opacity-40 cursor-pointer">
           <Minus className="size-3" />
         </button>
         <input
@@ -743,7 +778,7 @@ function LengthField({ beats, bpb, disabled, onChange }: { beats: number; bpb: n
           }}
           className="w-9 h-6 bg-transparent text-center text-[12px] font-medium tabular-nums text-ink-100 outline-none"
         />
-        <button aria-label="One bar longer" disabled={disabled} onClick={() => onChange((Math.floor(value + 1 + 1e-9)) * bpb)} className="h-6 w-6 grid place-items-center text-ink-400 enabled:hover:text-ink-100 disabled:opacity-40 cursor-pointer">
+        <button aria-label="One bar longer" disabled={disabled} onClick={() => onChange(toBeats(Math.floor(value + 1 + 1e-9)))} className="h-6 w-6 grid place-items-center text-ink-400 enabled:hover:text-ink-100 disabled:opacity-40 cursor-pointer">
           <Plus className="size-3" />
         </button>
       </div>
@@ -784,8 +819,8 @@ const Keys = memo(
   (a, b) => a.selected.size === b.selected.size && [...a.selected].every((p) => b.selected.has(p)),
 );
 
-/** Row shading (black keys darker, a line under each C) and the bar, beat and snap lines. */
-const Lanes = memo(function Lanes({ width, ppb, bpb, start, step }: { width: number; ppb: number; bpb: number; start: number; step: number }) {
+/** Row shading (black keys darker, a line under each C) and the bar, beat and snap lines, bars as the song's time signatures count them. */
+const Lanes = memo(function Lanes({ width, ppb, meter, start, step }: { width: number; ppb: number; meter: Meter[]; start: number; step: number }) {
   // From the top: pitch 127 (G9) down, twelve rows a period.
   const stops = Array.from({ length: 12 }, (_, k) => {
     const pc = (TOP - k) % 12;
@@ -797,34 +832,39 @@ const Lanes = memo(function Lanes({ width, ppb, bpb, start, step }: { width: num
     const c = pc === 0 ? "rgba(0,0,0,0.11)" : "rgba(0,0,0,0.035)";
     return `transparent ${k * ROW_H}px ${(k + 1) * ROW_H - 1}px, ${c} ${(k + 1) * ROW_H - 1}px ${(k + 1) * ROW_H}px`;
   }).join(", ");
-  const offset = (period: number) => ((((-start % period) + period) % period) * ppb).toFixed(2);
+  /** Where the first of the lines every `period` beats from `origin` falls, in pixels from `from`. */
+  const offset = (origin: number, from: number, period: number) => ((((origin - from) % period) + period) % period * ppb).toFixed(2);
   const v = (c: string) => `linear-gradient(to right, ${c} 1px, transparent 1px)`;
-  const layers = [
-    { image: v("rgba(0,0,0,0.17)"), size: bpb * ppb, x: offset(bpb) },
-    { image: v("rgba(0,0,0,0.08)"), size: ppb, x: offset(1) },
-    ...(step && step < 1 && step * ppb >= 6 ? [{ image: v("rgba(0,0,0,0.035)"), size: step * ppb, x: offset(step) }] : []),
-  ];
   return (
     <>
       <div className="absolute inset-0 pointer-events-none" style={{ backgroundImage: `linear-gradient(to bottom, ${lines}), linear-gradient(to bottom, ${stops})`, backgroundSize: `100% ${12 * ROW_H}px`, backgroundPosition: "0 0" }} />
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          width,
-          backgroundImage: layers.map((l) => l.image).join(", "),
-          backgroundSize: layers.map((l) => `${l.size}px 100%`).join(", "),
-          backgroundPosition: layers.map((l) => `${l.x}px 0`).join(", "),
-        }}
-      />
+      {meterSpans(meter, start, start + width / ppb).map((s) => {
+        const layers = [
+          { image: v("rgba(0,0,0,0.17)"), size: s.bar * ppb, x: offset(s.origin, s.start, s.bar) },
+          { image: v("rgba(0,0,0,0.08)"), size: ppb, x: offset(0, s.start, 1) },
+          ...(step && step < 1 && step * ppb >= 6 ? [{ image: v("rgba(0,0,0,0.035)"), size: step * ppb, x: offset(0, s.start, step) }] : []),
+        ];
+        return (
+          <div
+            key={s.start}
+            className="absolute inset-y-0 pointer-events-none"
+            style={{
+              left: (s.start - start) * ppb,
+              width: (s.end - s.start) * ppb,
+              backgroundImage: layers.map((l) => l.image).join(", "),
+              backgroundSize: layers.map((l) => `${l.size}px 100%`).join(", "),
+              backgroundPosition: layers.map((l) => `${l.x}px 0`).join(", "),
+            }}
+          />
+        );
+      })}
     </>
   );
 });
 
 /** Bar numbers of the song, the clip's extent in its track's colour, and a click to play from there. */
-const Ruler = memo(function Ruler({ width, ppb, bpb, start, length, color }: { width: number; ppb: number; bpb: number; start: number; length: number; color: string }) {
-  const first = Math.ceil(start / bpb - 1e-9);
-  const count = Math.ceil((start + width / ppb) / bpb) - first;
-  const every = bpb * ppb >= 36 ? 1 : bpb * ppb >= 18 ? 2 : 4;
+const Ruler = memo(function Ruler({ width, ppb, meter, start, length, color }: { width: number; ppb: number; meter: Meter[]; start: number; length: number; color: string }) {
+  const shown = barList(meter, start + width / ppb).filter((b) => b.start >= start - 1e-9);
   return (
     <div
       data-testid="roll-ruler"
@@ -838,13 +878,14 @@ const Ruler = memo(function Ruler({ width, ppb, bpb, start, length, color }: { w
       }}
     >
       <div className="absolute bottom-0 left-0 h-[3px] rounded-r-sm" style={{ width: length * ppb, background: color }} />
-      {Array.from({ length: Math.max(0, count) }, (_, k) => {
-        const bar = first + k;
-        const x = (bar * bpb - start) * ppb;
+      {shown.map((b) => {
+        // Narrow bars are numbered every second or fourth.
+        const w = b.length * ppb;
+        const every = w >= 36 ? 1 : w >= 18 ? 2 : 4;
         return (
-          <div key={bar} className="absolute top-0 bottom-0 pointer-events-none" style={{ left: x }}>
+          <div key={b.bar} className="absolute top-0 bottom-0 pointer-events-none" style={{ left: (b.start - start) * ppb }}>
             <div className="absolute bottom-0 h-2 w-px bg-black/20" />
-            {bar % every === 0 && <span className="absolute top-1.5 left-1.5 text-[11px] font-medium text-ink-400 tabular-nums">{bar + 1}</span>}
+            {b.bar % every === 0 && <span className="absolute top-1.5 left-1.5 text-[11px] font-medium text-ink-400 tabular-nums">{b.bar + 1}</span>}
           </div>
         );
       })}

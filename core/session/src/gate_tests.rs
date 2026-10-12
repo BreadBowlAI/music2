@@ -1,0 +1,386 @@
+//! The step 4 gates, as a running session sees them: keys and labels, data that doesn't read,
+//! the manifest's format, imports, presentation files and assets.
+
+use std::path::{Path, PathBuf};
+
+use m2_ir::{FNode, FOp, Flat};
+use m2_runtime::{PackageSet, Renderer};
+use m2_song::{Project, Snapshot};
+
+use crate::{Session, TimelineLane, compile_sources};
+
+fn std_packages() -> PackageSet {
+    let mut p = PackageSet::default();
+    p.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
+    p
+}
+
+struct Fixture(PathBuf);
+
+impl Fixture {
+    fn new() -> Fixture {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Fixture(std::env::temp_dir().join(format!("m2-gate-test-{}-{n}", std::process::id())))
+    }
+
+    /// A copy of the stable first-song fixture.
+    fn first_song() -> Fixture {
+        fn copy(from: &Path, to: &Path) {
+            std::fs::create_dir_all(to).unwrap();
+            for e in std::fs::read_dir(from).unwrap().flatten() {
+                let (f, t) = (e.path(), to.join(e.file_name()));
+                if f.is_dir() { copy(&f, &t) } else { std::fs::copy(&f, &t).map(drop).unwrap() }
+            }
+        }
+        let f = Fixture::new();
+        copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/first-song"), &f.0);
+        f
+    }
+
+    fn read(&self, name: &str) -> String {
+        std::fs::read_to_string(self.0.join(name)).unwrap()
+    }
+
+    fn write(&self, name: &str, text: impl AsRef<[u8]>) {
+        let p = self.0.join(name);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    }
+
+    fn open(&self) -> Session {
+        Session::open(&self.0, std_packages()).unwrap_or_else(|d| panic!("{d:?}"))
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Two seconds of the accepted revision, offline.
+fn render(s: &Session) -> Vec<[f32; 2]> {
+    let rev = s.accepted();
+    Renderer::new(&rev.compiled.flat, &rev.compiled.data, &s.packages, rev.project.sample_rate()).unwrap().render(2.0).unwrap()
+}
+
+/// `flat` without source positions, which a longer label on a line shifts.
+fn placeless(flat: &Flat) -> Flat {
+    fn strip(nodes: &mut [FNode]) {
+        for n in nodes {
+            n.src = None;
+            if let FOp::Poly { voice, .. } = &mut n.op {
+                strip(&mut voice.nodes);
+            }
+        }
+    }
+    let mut flat = flat.clone();
+    strip(&mut flat.nodes);
+    flat
+}
+
+/// Every data file of the project, by path.
+fn data(f: &Fixture) -> Vec<(PathBuf, String)> {
+    let snap = Snapshot::read(&f.0).unwrap();
+    snap.files.into_iter().filter(|(p, _)| p.starts_with("data")).collect()
+}
+
+// ID-10, ID-17: a label rename changes nothing but the label: no data file, no graph, no audio.
+// The label reaches only what shows it.
+#[test]
+fn changing_a_tracks_label_changes_nothing_but_the_label() {
+    let f = Fixture::first_song();
+    let mut s = f.open();
+    let (sound, graph, files) = (render(&s), placeless(&s.accepted().compiled.flat), data(&f));
+    let kick = f.read("tracks/kick.ts");
+    f.write("tracks/kick.ts", kick.replacen("{ name: \"Kick\" }", "{ name: \"Big Kick\" }", 1));
+    assert!(s.refresh() && s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    assert_eq!(placeless(&s.accepted().compiled.flat), graph, "labels are ignored by the graph");
+    assert!(render(&s) == sound, "it sounds the same");
+    assert_eq!(data(&f), files);
+    assert!(s.problems().is_empty(), "{:?}", s.problems());
+    let track = s.timeline().tracks.into_iter().find(|t| t.module == "kick").unwrap();
+    assert_eq!(track.label, "Big Kick");
+    let module = s.view().modules.into_iter().find(|m| m.key == "kick").unwrap();
+    assert_eq!(module.label, "Big Kick");
+}
+
+// The step 4 gate, ID-17, DIAG-6: a track key renamed by hand silences the track until its
+// folder's Relink, which restores exactly the sound it had.
+#[test]
+fn relinking_a_renamed_tracks_folder_restores_its_sound() {
+    let f = Fixture::first_song();
+    let mut s = f.open();
+    let sound = render(&s);
+    f.write("tracks/kick.ts", f.read("tracks/kick.ts").replacen("track(\"kick\"", "track(\"kicks\"", 1));
+    assert!(s.refresh() && s.draft_errors.is_empty());
+    assert!(render(&s) != sound, "the kick is silent");
+    let fix = s.problems()[0].fixes[0].clone();
+    assert_eq!((s.problems()[0].src.as_deref(), fix.code), (Some("data/kick"), "relink"));
+    s.fix(s.accepted().number, fix.code, &serde_json::to_value(&fix.edit).unwrap()).unwrap();
+    assert!(render(&s) == sound, "the same bits as before the rename");
+}
+
+// The step 4 gate, ID-17, DIAG-6, for a lane key: renamed by hand, it leaves the lane's file
+// unclaimed and the lane silent, until the file's Relink, which moves it byte for byte and
+// restores exactly the sound it had.
+#[test]
+fn relinking_a_renamed_lanes_file_restores_its_sound() {
+    let f = Fixture::first_song();
+    let mut s = f.open();
+    let (sound, hits) = (render(&s), f.read("data/kick/hits.json"));
+    f.write("tracks/kick.ts", f.read("tracks/kick.ts").replacen("lane.notes(\"hits\")", "lane.notes(\"beats\")", 1));
+    assert!(s.refresh() && s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    assert!(render(&s) != sound, "the kick is silent");
+    let p = &s.problems()[0];
+    assert_eq!((p.code, p.src.as_deref()), ("data.unclaimed", Some("data/kick/hits.json")));
+    let fix = p.fixes[0].clone();
+    assert!(fix.code == "relink" && fix.likely, "{fix:?}");
+    s.fix(s.accepted().number, fix.code, &serde_json::to_value(&fix.edit).unwrap()).unwrap();
+    assert!(render(&s) == sound, "the same bits as before the rename");
+    assert_eq!(f.read("data/kick/beats.json"), hits, "moved as it was");
+    assert!(!f.0.join("data/kick/hits.json").exists() && s.problems().is_empty(), "{:?}", s.problems());
+}
+
+// FMT-9: a data file that can't be read (mode 000, or a dangling link) never stops anything
+// else. In a running session code and data changes are still taken in and edits still made;
+// the lane that reads it plays the data it had, and on open, nothing.
+#[cfg(unix)]
+#[test]
+fn a_data_file_that_cant_be_read_stops_nothing_else() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::first_song();
+    let mode = |p: &str, m: u32| std::fs::set_permissions(f.0.join(p), std::fs::Permissions::from_mode(m)).unwrap();
+    let mut s = f.open();
+    let sound = render(&s);
+    f.write("data/kick/other.json", "{\"clips\": []}\n");
+    mode("data/kick/other.json", 0o000);
+    std::fs::rename(f.0.join("data/kick/hits.json"), f.0.join("hits.json")).unwrap();
+    std::os::unix::fs::symlink(f.0.join("nowhere.json"), f.0.join("data/kick/hits.json")).unwrap();
+    assert!(s.refresh() && s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    let found: Vec<_> = s.problems().iter().map(|d| (d.code, d.src.as_deref().unwrap())).collect();
+    assert_eq!(found, [("lane.invalid", "data/kick/hits.json"), ("lane.invalid", "data/kick/other.json")]);
+    assert!(render(&s) == sound, "the kick plays the notes it had");
+    // A code change is taken in, and an edit made, while the files still can't be read.
+    let song = f.read("song.ts");
+    f.write("song.ts", format!("// Edited elsewhere.\n{song}"));
+    assert!(s.refresh() && s.draft_errors.is_empty() && s.accepted().number == 3, "{:?}", s.draft_errors);
+    let id = s.controls().into_iter().find(|c| c.file == "tracks/bass.ts").unwrap();
+    s.set(s.accepted().number, &id.id, id.value * 2.0, None).unwrap();
+    // On open, only that lane is silent.
+    let opened = f.open();
+    assert!(opened.problems()[0].message.contains("plays nothing"), "{}", opened.problems()[0].message);
+    mode("data/kick/other.json", 0o644);
+}
+
+// FMT-8, FMT-9: a lane file with an unknown field plays its last accepted data in a running
+// session, and silences only that lane on open, with an Error naming the file and the field.
+#[test]
+fn a_lane_file_with_an_unknown_field_keeps_its_data_or_silences_only_its_lane() {
+    let f = Fixture::first_song();
+    let mut s = f.open();
+    let sound = render(&s);
+    let notes = f.read("data/bass/notes.json");
+    f.write("data/bass/notes.json", notes.replacen("{\"clips\"", "{\"colour\": \"red\", \"clips\"", 1));
+    assert!(s.refresh() && s.draft_errors.is_empty(), "a lane never blocks: {:?}", s.draft_errors);
+    let p = &s.problems()[0];
+    assert_eq!((p.severity, p.code, p.src.as_deref()), (m2_song::Severity::Error, "lane.invalid", Some("data/bass/notes.json")));
+    assert!(p.message.contains("unknown field `colour`") && p.message.contains("plays the data it had"), "{}", p.message);
+    assert!(render(&s) == sound, "the bass plays the notes it had");
+
+    let s = f.open();
+    assert!(s.problems()[0].message.contains("plays nothing"), "{}", s.problems()[0].message);
+    let clips = |module: &str, lane: &str| match s
+        .timeline()
+        .tracks
+        .iter()
+        .find(|t| t.module == module)
+        .unwrap()
+        .lanes
+        .iter()
+        .find(|l| l.key() == lane)
+    {
+        Some(TimelineLane::Notes { clips, .. }) => clips.len(),
+        _ => panic!("no notes lane {module} › {lane}"),
+    };
+    assert_eq!((clips("bass", "notes"), clips("kick", "hits") > 0, clips("keys", "chords") > 0), (0, true, true));
+}
+
+// FMT-3: `format` is read first and leniently: a newer format with an unknown key is
+// `format.newer`, never `manifest.invalid`, and the project doesn't open.
+#[test]
+fn a_newer_format_does_not_open_whatever_else_the_manifest_says() {
+    let f = Fixture::first_song();
+    let manifest = f.read("music2.toml").replace("format = 1", "format = 2\ncolour = \"red\"");
+    f.write("music2.toml", manifest);
+    let e = Session::open(&f.0, std_packages()).err().unwrap();
+    assert_eq!(e.iter().map(|d| d.code).collect::<Vec<_>>(), ["format.newer"]);
+    assert!(e[0].message.contains("newer music2"), "{}", e[0].message);
+}
+
+// FMT-6, FMT-6a, PLANE-3: the build imports only the snapshot's code, byte for byte: an import
+// of a `.js` file or one spelled with other capitals fails on every disk, and changing a `.js`
+// file never makes a revision.
+#[test]
+fn imports_resolve_only_to_the_snapshots_code() {
+    let f = Fixture::first_song();
+    let mut s = f.open();
+    let song = f.read("song.ts");
+    f.write("lib/helper.js", "export const x = 1;\n");
+    assert!(!s.refresh(), "a .js file is no part of a revision");
+    f.write("lib/helper.js", "export const x = 2;\n");
+    assert!(!s.refresh());
+    for import in ["import { x } from \"./lib/helper.js\";\n", "import { x } from \"./lib/helper\";\n"] {
+        f.write("song.ts", format!("{import}const y = x;\n{song}"));
+        assert!(s.refresh());
+        assert_eq!(s.draft_errors.iter().map(|d| d.code).collect::<Vec<_>>(), ["import.outside-code"], "{import}");
+    }
+    f.write("song.ts", song.replacen("./tracks/kick", "./Tracks/kick", 1));
+    assert!(s.refresh());
+    assert_eq!(s.draft_errors.iter().map(|d| d.code).collect::<Vec<_>>(), ["import.outside-code"]);
+}
+
+// PLANE-3, FMT-19, FMT-20: presentation and local files never make a revision.
+#[test]
+fn editing_layout_json_creates_no_revision() {
+    let f = Fixture::first_song();
+    let mut s = f.open();
+    for (file, text) in [
+        ("layout.json", "{\"tracks\": {\"kick\": {\"colour\": \"#e4572e\"}}}"),
+        ("layout.json", "{\"tracks\": {}}"),
+        (".music2/overlays.json", "{}"),
+        ("README.md", "notes"),
+    ] {
+        f.write(file, text);
+        assert!(!s.refresh(), "{file}");
+        assert_eq!(s.accepted().number, 1, "{file}");
+    }
+}
+
+/// Every file under `dir`, recursively.
+fn files_under(dir: &Path) -> Vec<PathBuf> {
+    let mut out = vec![];
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        if e.file_type().is_ok_and(|t| t.is_dir()) { out.extend(files_under(&e.path())) } else { out.push(e.path()) }
+    }
+    out
+}
+
+/// A pure fixture's whole song and a second past it, as `s` plays it.
+fn render_song(s: &Session) -> Vec<[f32; 2]> {
+    let rev = s.accepted();
+    let data = &rev.compiled.data;
+    let seconds = data.tempo().seconds_at(data.end()) + 1.0;
+    Renderer::new(&rev.compiled.flat, data, &s.packages, rev.project.sample_rate()).unwrap().render(seconds).unwrap()
+}
+
+/// The fixtures made only of kernels, which render the same bits every time (RENDER-2). The
+/// fifth, with-plugins, hosts plugins, which need not.
+const PURE: [&str; 4] = ["examples/first-song", "examples/resample", "templates/starter", "templates/empty"];
+
+/// A copy of the repo's fixture `rel`, such as `examples/first-song`.
+fn fixture(rel: &str) -> Fixture {
+    let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(rel);
+    let f = Fixture::new();
+    for file in files_under(&from) {
+        let to = f.0.join(file.strip_prefix(&from).unwrap());
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        std::fs::copy(&file, to).unwrap();
+    }
+    f
+}
+
+/// The SHA-256 of a render's samples, as little-endian `f32` bits.
+fn bits(frames: &[[f32; 2]]) -> String {
+    let bytes: Vec<u8> = frames.iter().flatten().flat_map(|x| x.to_le_bytes()).collect();
+    m2_song::Sha::of(&bytes).hex()
+}
+
+// The step 4 gate, FMT-8a: permuting any array in a fixture renders the same bits, since readers
+// put clips, notes and points in one order before use. Points are reversed only because no
+// fixture has two at one beat: those are a step, whose order is the one thing a file keeps.
+#[test]
+fn permuting_any_array_in_a_fixture_renders_the_same_bits() {
+    // Reverses the lists of things, never a point's `[beat, value]` pair.
+    fn permute(v: &mut serde_json::Value) {
+        const LISTS: [&str; 6] = ["clips", "notes", "points", "warp", "tempo", "meter"];
+        match v {
+            serde_json::Value::Object(o) => {
+                for (k, v) in o.iter_mut() {
+                    if let serde_json::Value::Array(a) = v
+                        && LISTS.contains(&k.as_str())
+                    {
+                        a.reverse();
+                    }
+                    permute(v);
+                }
+            }
+            serde_json::Value::Array(a) => a.iter_mut().for_each(permute),
+            _ => {}
+        }
+    }
+    for name in PURE {
+        let f = fixture(name);
+        let sound = render_song(&f.open());
+        let mut changed = 0;
+        for file in files_under(&f.0.join("data")).into_iter().filter(|p| p.extension().is_some_and(|e| e == "json")) {
+            let text = std::fs::read_to_string(&file).unwrap();
+            let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+            permute(&mut v);
+            let permuted = serde_json::to_string_pretty(&v).unwrap();
+            changed += usize::from(v != serde_json::from_str::<serde_json::Value>(&text).unwrap());
+            std::fs::write(&file, permuted).unwrap();
+        }
+        let s = f.open();
+        assert!(s.problems().is_empty(), "{name}: {:?}", s.problems());
+        assert!(name == "templates/empty" || changed > 0, "{name}: nothing was permuted");
+        assert!(render_song(&s) == sound, "{name}: permuting its arrays changed the sound");
+    }
+}
+
+// FMT-3, RENDER-2: a std release that changes the bits of an existing render must bump std's
+// version, so an old project gets `pkg.unsatisfied` rather than another sound. `renders.json`
+// records each pure fixture's render under the std version that made it. After a version bump,
+// record the new renders: the failure prints them.
+#[test]
+fn fixture_renders_change_only_with_stds_version() {
+    let recorded: serde_json::Value = serde_json::from_str(include_str!("../tests/renders.json")).unwrap();
+    let version = std_packages().get("std").unwrap().version.clone();
+    let renders: serde_json::Map<String, serde_json::Value> =
+        PURE.iter().map(|n| (n.to_string(), bits(&render_song(&fixture(n).open())).into())).collect();
+    let now = serde_json::json!({"std": version, "renders": renders});
+    let record = format!("core/session/tests/renders.json:\n{}", serde_json::to_string_pretty(&now).unwrap());
+    assert!(
+        recorded["std"] == now["std"],
+        "the renders were recorded for std {}, and std is {version}: record them in {record}",
+        recorded["std"]
+    );
+    assert!(
+        recorded == now,
+        "a pure fixture renders other bits while std is still {version}. A std change must bump std's version (FMT-3), \
+         and nothing else may change an existing render (RENDER-2). Once it is meant, record the renders in {record}"
+    );
+}
+
+// FMT-6, FMT-16: compile never opens an asset (it reads the hashes the snapshot recorded), so
+// its time doesn't depend on how big the assets are.
+#[test]
+fn compile_never_opens_an_asset() {
+    let f = Fixture::new();
+    f.write("music2.toml", "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\n");
+    f.write(
+        "song.ts",
+        "import { song, track } from \"@m2/core\";\n\
+         const v = track(\"vox\", ({ lane }) => lane.audio(\"takes\"));\n\
+         export default song(() => v.out);\n",
+    );
+    f.write("data/vox/takes.json", r#"{"clips": [{"id": "a", "start": 0, "length": 4, "asset": "take.wav"}]}"#);
+    f.write("assets/take.wav", vec![0u8; 8 << 20]);
+    let snap = Snapshot::read(&f.0).unwrap();
+    // Gone from the disk: a compile that opened it would find it missing.
+    std::fs::remove_file(f.0.join("assets/take.wav")).unwrap();
+    let project = Project::from_snapshot(&snap).unwrap();
+    let c = compile_sources(&project, &mut std_packages(), &Default::default(), None).unwrap_or_else(|d| panic!("{d:?}"));
+    assert_eq!(c.problems.iter().map(|d| d.code).collect::<Vec<_>>(), ["asset.unpinned"]);
+}

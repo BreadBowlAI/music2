@@ -12,6 +12,7 @@ impl Fixture {
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!("m2-effect-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("music2.toml"), crate::tests::MANIFEST).unwrap();
         std::fs::write(dir.join("song.ts"), source).unwrap();
         Self(dir)
     }

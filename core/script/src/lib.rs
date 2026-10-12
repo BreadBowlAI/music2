@@ -1,12 +1,14 @@
 //! The TypeScript sandbox: runs a song's modules and returns its graph IR.
 //!
 //! TypeScript is stripped with oxc and run in QuickJS. The sandbox has no file
-//! system, network, clock or randomness: imports are limited to the project's own
-//! files, `@m2/core` and installed packages, and running a module can only
-//! describe a graph. Source locations in the IR point at the original `.ts` lines.
+//! system, network, clock or randomness. Project code comes only from the snapshot the
+//! host passes in, and imports resolve against it byte for byte (FMT-6a); packages are
+//! read from their folders, and project code may import only those its manifest lists
+//! (FMT-3). Running a module can only describe a graph. Source locations in the IR
+//! point at the original `.ts` lines.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -22,12 +24,35 @@ use oxc::semantic::SemanticBuilder;
 use oxc::span::SourceType;
 use oxc::transformer::{TransformOptions, Transformer};
 use rquickjs::loader::{ImportAttributes, Loader, Resolver};
-use rquickjs::{CatchResultExt, CaughtError, Context, Ctx, Module, Runtime};
+use rquickjs::{CatchResultExt, CaughtError, Context, Ctx, Function, Module, Runtime};
+use sha2::{Digest, Sha256};
 
 /// The `@m2/core` SDK, shipped inside the core.
 pub const SDK: &str = include_str!("../sdk/core.ts");
 
+/// The version of `@m2/core` that [`SDK`] is. A project's `[dependencies] "@m2/core"`
+/// requirement is checked against it (FMT-2, FMT-3).
+pub const SDK_VERSION: &str = "1.0.0";
+
 const CORE: &str = "@m2/core";
+
+/// Project modules are named by their snapshot path behind this prefix, so a project file
+/// is never confused with a package file (an absolute path) or the SDK.
+const PROJECT: &str = "./";
+
+/// The codes a build raises (DIAG-2). An error from the SDK naming any other is `code.build`.
+const CODES: &[&str] = &[
+    "code.build",
+    "import.outside-code",
+    "key.invalid",
+    "key.duplicate",
+    "lane.conflict",
+    "lane.shared",
+    "pkg.undeclared",
+    "pkg.unsatisfied",
+];
+
+const OUTSIDE: &str = "is outside the project: code imports only the project's own .ts files and its packages";
 
 /// Runs before anything else: remove what would make a build non-deterministic.
 const PRELUDE: &str = r#"
@@ -38,18 +63,20 @@ Math.random = () => { throw new Error("Math.random isn't available: songs must r
 "#;
 
 pub struct Options {
-    /// The project folder; its files may import each other.
-    pub project: PathBuf,
-    /// The root module, usually `song.ts` in the project.
-    pub entry: PathBuf,
+    /// The project's code: every Code file of the snapshot, by its path in the project,
+    /// `/`-separated (`song.ts`, `tracks/bass.ts`). Nothing of the project is read from
+    /// disk, so a build is a function of its snapshot (FMT-6a).
+    pub code: BTreeMap<String, String>,
+    /// The root module: a path in `code`, usually `song.ts`.
+    pub entry: String,
     /// Installed packages by name, e.g. `std` → its folder. `import "std/dsp"`
     /// loads `<folder>/src/dsp.ts`.
     pub packages: Vec<(String, PathBuf)>,
+    /// The packages the manifest's `[dependencies]` lists besides `@m2/core`: the only ones
+    /// project code may import (FMT-3).
+    pub dependencies: Vec<String>,
     pub memory_limit: usize,
     pub time_limit: Duration,
-    /// File contents to use instead of what is on disk, by canonical path. Lets the
-    /// session build a candidate edit without writing it.
-    pub sources: HashMap<PathBuf, String>,
 }
 
 /// What a build produces.
@@ -59,12 +86,24 @@ pub struct Build {
     pub sites: Vec<sites::Site>,
     /// What each call that ran returned, when it was a signal.
     pub outputs: Vec<Output>,
+    /// Every package file the build read, so a revision records what ran (FMT-6a, RENDER-2).
+    pub package_files: Vec<PackageFile>,
+}
+
+/// A package file a build read.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PackageFile {
+    /// As shown to people: `std/src/dsp.ts`.
+    pub path: String,
+    /// The SHA-256 of its bytes, in lowercase hex.
+    pub sha256: String,
 }
 
 /// A signal returned by a call: what `const wobble = lfo(...)` holds.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Output {
     pub site: u32,
+    /// The module's key.
     pub module: String,
     /// The port reference in that module's nodes.
     #[serde(rename = "ref")]
@@ -74,14 +113,14 @@ pub struct Output {
 }
 
 impl Options {
-    pub fn new(project: &Path, entry: &Path) -> Options {
+    pub fn new(code: BTreeMap<String, String>, entry: &str) -> Options {
         Options {
-            project: project.to_path_buf(),
-            entry: entry.to_path_buf(),
+            code,
+            entry: entry.to_string(),
             packages: vec![],
+            dependencies: vec![],
             memory_limit: 256 << 20,
             time_limit: Duration::from_secs(10),
-            sources: HashMap::new(),
         }
     }
 }
@@ -109,11 +148,14 @@ struct LoadedFile {
 
 #[derive(Default)]
 struct State {
-    project: PathBuf,
+    code: BTreeMap<String, String>,
     packages: Vec<(String, PathBuf)>,
-    sources: HashMap<PathBuf, String>,
+    dependencies: Vec<String>,
     files: HashMap<String, LoadedFile>,
     sites: Vec<sites::Site>,
+    package_files: Vec<PackageFile>,
+    /// Why an import failed, with its code: the engine passes on only the text.
+    failed: Option<Diagnostic>,
 }
 
 impl State {
@@ -150,10 +192,10 @@ impl State {
     }
 
     fn display(&self, file: &str) -> String {
-        let p = Path::new(file);
-        if let Ok(rel) = p.strip_prefix(&self.project) {
-            return rel.display().to_string();
+        if let Some(rel) = file.strip_prefix(PROJECT) {
+            return rel.to_string();
         }
+        let p = Path::new(file);
         for (name, dir) in &self.packages {
             if let Ok(rel) = p.strip_prefix(dir) {
                 return format!("{name}/{}", rel.display());
@@ -161,6 +203,110 @@ impl State {
         }
         file.to_string()
     }
+
+    /// The module that `name`, imported from the module `base`, names.
+    fn resolve(&self, base: &str, name: &str) -> Result<String, Box<Diagnostic>> {
+        if name == CORE {
+            return Ok(CORE.into());
+        }
+        let in_project = base == "<main>" || base.starts_with(PROJECT);
+        let from = in_project.then(|| self.display(base)).filter(|_| base != "<main>");
+        let fail = |code: &'static str, message: String| Box::new(Diagnostic::error(code, message).at(from.clone()));
+        let relative = name.starts_with("./") || name.starts_with("../");
+        if Path::new(name).is_absolute() || name.starts_with('/') {
+            return Err(fail("import.outside-code", format!("`{name}` {OUTSIDE}")));
+        }
+        if in_project && relative {
+            let dir = base.strip_prefix(PROJECT).and_then(|b| b.rsplit_once('/')).map_or("", |(d, _)| d);
+            return self.project_file(dir, name).map(|p| format!("{PROJECT}{p}")).map_err(|m| fail("import.outside-code", m));
+        }
+        let found = if relative {
+            let dir = Path::new(base).parent().map(Path::to_path_buf).unwrap_or_default();
+            self.package_file(&normalize(&dir.join(name)))
+        } else {
+            let (pkg, sub) = name.split_once('/').unwrap_or((name, "index"));
+            if in_project && !self.dependencies.iter().any(|d| d == pkg) {
+                let e = format!("`{name}` is from the package `{pkg}`, which music2.toml doesn't list: add it under [dependencies]");
+                return Err(fail("pkg.undeclared", e));
+            }
+            match self.packages.iter().find(|(n, _)| n == pkg) {
+                Some((_, dir)) => self.package_file(&normalize(&dir.join("src").join(sub))),
+                None => {
+                    let have: Vec<&str> = self.packages.iter().map(|(n, _)| n.as_str()).collect();
+                    let code = if in_project { "pkg.unsatisfied" } else { "code.build" };
+                    return Err(fail(code, format!("no package `{pkg}` is installed (installed: {})", have.join(", "))));
+                }
+            }
+        };
+        // A path out of the package, or a spelling in other capitals, is no file the build may
+        // read (FMT-6a); a file the package doesn't have is a build error like any other.
+        found.map_err(|(code, m)| fail(code, format!("`{name}`: {m}")))
+    }
+
+    /// The snapshot's code file that `spec`, imported from the folder `dir`, names: the
+    /// path, then with `.ts`, then `/index.ts`, byte for byte, with no case folding (FMT-6a).
+    fn project_file(&self, dir: &str, spec: &str) -> Result<String, String> {
+        let mut parts: Vec<&str> = dir.split('/').filter(|p| !p.is_empty()).collect();
+        for seg in spec.split('/') {
+            match seg {
+                "" | "." => {}
+                ".." if parts.pop().is_none() => return Err(format!("`{spec}` {OUTSIDE}")),
+                ".." => {}
+                s => parts.push(s),
+            }
+        }
+        let path = parts.join("/");
+        let tried = match path.as_str() {
+            "" => vec!["index.ts".to_string()],
+            _ => vec![path.clone(), format!("{path}.ts"), format!("{path}/index.ts")],
+        };
+        if let Some(p) = tried.iter().find(|p| self.code.contains_key(p.as_str())) {
+            return Ok(p.clone());
+        }
+        let folded: Vec<String> = tried.iter().map(|p| p.to_lowercase()).collect();
+        if let Some(k) = self.code.keys().find(|k| folded.contains(&k.to_lowercase())) {
+            return Err(format!("`{spec}` must be spelled as the file is named, `{k}`, with the same capitals"));
+        }
+        if path.ends_with(".js") || path.ends_with(".mjs") || path.ends_with(".cjs") {
+            return Err(format!("`{spec}` names `{path}`, which isn't TypeScript: code imports only the project's .ts files"));
+        }
+        Err(format!("`{spec}` names no code file of the project (looked for {})", tried.join(", ")))
+    }
+
+    /// A file inside an installed package: the path, then with `.ts`, then `/index.ts`,
+    /// spelled exactly as in its folder's listing, so every disk finds the same files. An error
+    /// comes with its code.
+    fn package_file(&self, p: &Path) -> Result<String, (&'static str, String)> {
+        let Some((_, dir)) = self.packages.iter().find(|(_, d)| p.starts_with(d)) else {
+            return Err(("import.outside-code", "songs can only import files from their own project or from installed packages".into()));
+        };
+        let tried = [p.to_path_buf(), PathBuf::from(format!("{}.ts", p.display())), p.join("index.ts")];
+        let listed: Vec<(&PathBuf, PathBuf)> = tried.iter().filter_map(|c| Some((c, listed(dir, c)?))).collect();
+        if let Some((c, _)) = listed.iter().find(|(c, real)| *c == real) {
+            return Ok(c.to_string_lossy().into_owned());
+        }
+        match listed.first() {
+            Some((_, real)) => Err((
+                "import.outside-code",
+                format!("must be spelled as the file is named, `{}`, with the same capitals", self.display(&real.to_string_lossy())),
+            )),
+            None => Err(("code.build", "file not found".into())),
+        }
+    }
+}
+
+/// The file at `path` below `root` as its folders' listings spell it, matching each part
+/// exactly or else ignoring case; `None` when there is no such file.
+fn listed(root: &Path, path: &Path) -> Option<PathBuf> {
+    let rel = path.strip_prefix(root).ok()?;
+    let mut at = root.to_path_buf();
+    for c in rel.components() {
+        let names: Vec<std::ffi::OsString> = std::fs::read_dir(&at).ok()?.flatten().map(|e| e.file_name()).collect();
+        let want = c.as_os_str();
+        let name = names.iter().find(|n| *n == want).or_else(|| names.iter().find(|n| n.eq_ignore_ascii_case(want)))?;
+        at.push(name);
+    }
+    at.is_file().then_some(at)
 }
 
 /// Strip TypeScript, keeping a map back to the source lines.
@@ -221,37 +367,12 @@ struct Resolve(Rc<RefCell<State>>);
 
 impl Resolver for Resolve {
     fn resolve<'js>(&mut self, _ctx: &Ctx<'js>, base: &str, name: &str, _: Option<ImportAttributes<'js>>) -> rquickjs::Result<String> {
-        let st = self.0.borrow();
-        let fail = |msg: String| rquickjs::Error::new_resolving_message(base, name, msg);
-        if name == CORE {
-            return Ok(CORE.into());
-        }
-        let file = |p: PathBuf| -> Option<PathBuf> {
-            let p = normalize(&p);
-            [p.clone(), p.with_extension("ts"), PathBuf::from(format!("{}.ts", p.display())), p.join("index.ts")].into_iter().find(|c| c.is_file())
-        };
-        let found = if name.starts_with("./") || name.starts_with("../") {
-            let dir = if base == "<main>" { st.project.clone() } else { Path::new(base).parent().map(Path::to_path_buf).unwrap_or_default() };
-            file(dir.join(name))
-        } else if Path::new(name).is_absolute() {
-            file(PathBuf::from(name))
-        } else {
-            let (pkg, sub) = name.split_once('/').unwrap_or((name, "index"));
-            match st.packages.iter().find(|(n, _)| n == pkg) {
-                Some((_, dir)) => file(dir.join("src").join(sub)),
-                None => {
-                    let have: Vec<&str> = st.packages.iter().map(|(n, _)| n.as_str()).collect();
-                    return Err(fail(format!("no package `{pkg}` is installed (installed: {})", have.join(", "))));
-                }
-            }
-        };
-        let Some(path) = found else { return Err(fail("file not found".into())) };
-        let path = path.canonicalize().map_err(|e| fail(e.to_string()))?;
-        let inside = path.starts_with(&st.project) || st.packages.iter().any(|(_, d)| path.starts_with(d));
-        if !inside {
-            return Err(fail("songs can only import files from their own project or from installed packages".into()));
-        }
-        Ok(path.to_string_lossy().into_owned())
+        let mut st = self.0.borrow_mut();
+        st.resolve(base, name).map_err(|d| {
+            let e = rquickjs::Error::new_resolving_message(base, name, d.message.clone());
+            st.failed.get_or_insert(*d);
+            e
+        })
     }
 }
 
@@ -264,13 +385,25 @@ impl Loader for Load {
         let (original, instrumented) = if name == CORE {
             (SDK.to_string(), None)
         } else {
-            let source = match st.sources.get(Path::new(name)) {
-                Some(s) => s.clone(),
-                None => std::fs::read_to_string(name).map_err(|e| fail(e.to_string()))?,
+            let source = match name.strip_prefix(PROJECT) {
+                Some(rel) => st.code.get(rel).cloned().ok_or_else(|| fail("not a code file of the project".into()))?,
+                None => {
+                    let bytes = std::fs::read(name).map_err(|e| fail(e.to_string()))?;
+                    let sha256 = format!("{:x}", Sha256::digest(&bytes));
+                    let path = st.display(name);
+                    st.package_files.push(PackageFile { path, sha256 });
+                    String::from_utf8(bytes).map_err(|e| fail(e.to_string()))?
+                }
             };
             let first = st.sites.last().map_or(0, |s| s.id + 1);
-            let mut inst = sites::instrument(&st.display(name), &source, first).map_err(fail)?;
-            let in_project = Path::new(name).starts_with(&st.project);
+            let inst = sites::instrument(&st.display(name), &source, first);
+            let mut inst = inst.map_err(|e| {
+                // `file:line:col: message`: report it at that place.
+                let (at, message) = e.split_once(": ").map_or((None, e.as_str()), |(a, m)| (Some(a.to_string()), m));
+                st.failed.get_or_insert(Diagnostic::error("code.build", message).at(at));
+                fail(e.clone())
+            })?;
+            let in_project = name.starts_with(PROJECT);
             for s in &mut inst.sites {
                 s.in_project = in_project;
             }
@@ -292,16 +425,16 @@ pub fn build(opts: &Options) -> Result<Ir, Vec<Diagnostic>> {
 
 /// Like [`build`], also returning the call sites the IR's origins refer to.
 pub fn build_full(opts: &Options) -> Result<Build, Vec<Diagnostic>> {
-    let err = |m: String| vec![Diagnostic::new(m)];
-    let project = opts.project.canonicalize().map_err(|e| err(format!("{}: {e}", opts.project.display())))?;
-    let entry = opts.entry.canonicalize().map_err(|e| err(format!("{}: {e}", opts.entry.display())))?;
+    let err = |m: String| vec![Diagnostic::error("code.build", m)];
+    if !opts.code.contains_key(&opts.entry) {
+        return Err(err(format!("the entry `{}` is not a code file of the project", opts.entry)));
+    }
     let packages: Vec<(String, PathBuf)> = opts.packages.iter().filter_map(|(n, d)| Some((n.clone(), d.canonicalize().ok()?))).collect();
     let state = Rc::new(RefCell::new(State {
-        project: project.clone(),
+        code: opts.code.clone(),
         packages: packages.clone(),
-        sources: opts.sources.clone(),
-        files: HashMap::new(),
-        sites: vec![],
+        dependencies: opts.dependencies.clone(),
+        ..Default::default()
     }));
 
     let rt = Runtime::new().map_err(|e| err(e.to_string()))?;
@@ -312,22 +445,28 @@ pub fn build_full(opts: &Options) -> Result<Build, Vec<Diagnostic>> {
     rt.set_loader(Resolve(state.clone()), Load(state.clone()));
     let ctx = Context::full(&rt).map_err(|e| err(e.to_string()))?;
 
-    let result: Result<(String, String), Diagnostic> = ctx.with(|ctx| {
+    let result: Result<(String, String), Vec<Diagnostic>> = ctx.with(|ctx| {
         let run = || -> rquickjs::Result<(String, String)> {
             ctx.eval::<(), _>(PRELUDE)?;
             let g = ctx.globals();
-            g.set("__m2_project", format!("{}/", project.display()))?;
+            g.set("__m2_project", PROJECT)?;
             g.set("__m2_packages", packages.iter().map(|(_, d)| format!("{}/", d.display())).collect::<Vec<_>>())?;
-            let main = format!(
-                "import {{ __build }} from \"{CORE}\";\nimport song from {};\nglobalThis.__m2_out = __build(song);\n",
-                serde_json::to_string(&entry.to_string_lossy()).expect("string")
-            );
+            // What the SDK asks the host while it runs: where a call or a stack frame is in
+            // the TypeScript, and whether a key is valid (one rule, in m2_ir::key).
+            let st = state.clone();
+            let place = move |at: String| st.try_borrow().map_or_else(|_| at.clone(), |st| st.remap(&at));
+            g.set("__m2_where", Function::new(ctx.clone(), place)?)?;
+            let st = state.clone();
+            g.set("__m2_site_src", Function::new(ctx.clone(), move |site: u32| st.try_borrow().ok().and_then(|st| st.site_src(site)))?)?;
+            g.set("__m2_key", Function::new(ctx.clone(), |what: String, k: String| m2_ir::key::invalid(&what, &k))?)?;
+            let entry = serde_json::to_string(&format!("{PROJECT}{}", opts.entry)).expect("string");
+            let main = format!("import {{ __build }} from \"{CORE}\";\nimport song from {entry};\nglobalThis.__m2_out = __build(song);\n");
             Module::evaluate(ctx.clone(), "<main>", main)?.finish::<()>()?;
             Ok((g.get("__m2_out")?, g.get("__m2_outputs")?))
         };
-        run().catch(&ctx).map_err(|e| caught(&state.borrow(), e, Instant::now() > deadline))
+        run().catch(&ctx).map_err(|e| vec![caught(&mut state.borrow_mut(), e, Instant::now() > deadline)])
     });
-    let (json, outputs) = result.map_err(|d| vec![d])?;
+    let (json, outputs) = result?;
     let outputs: Vec<Output> = serde_json::from_str(&outputs).map_err(|e| err(format!("the SDK produced invalid outputs: {e}")))?;
     let mut ir: Ir = serde_json::from_str(&json).map_err(|e| err(format!("the SDK produced invalid IR: {e}")))?;
     let st = state.borrow();
@@ -335,7 +474,7 @@ pub fn build_full(opts: &Options) -> Result<Build, Vec<Diagnostic>> {
         m.src = m.src.as_deref().map(|s| st.remap(s));
         remap_nodes(&st, &mut m.nodes);
     }
-    Ok(Build { ir, sites: st.sites.clone(), outputs })
+    Ok(Build { ir, sites: st.sites.clone(), outputs, package_files: st.package_files.clone() })
 }
 
 fn remap_nodes(st: &State, nodes: &mut [m2_ir::Node]) {
@@ -348,21 +487,37 @@ fn remap_nodes(st: &State, nodes: &mut [m2_ir::Node]) {
     }
 }
 
-/// Turn a JavaScript error into a diagnostic pointing at the user's code.
-fn caught(st: &State, e: CaughtError, timed_out: bool) -> Diagnostic {
+/// Turn a JavaScript error into a diagnostic pointing at the user's code. An error the
+/// SDK threw with a known `code` keeps it, and the key of the module it was building.
+fn caught(st: &mut State, e: CaughtError, timed_out: bool) -> Diagnostic {
     if timed_out {
-        return Diagnostic::new("the song took too long to build (is there an endless loop?)");
+        return Diagnostic::error("code.build", "the song took too long to build (is there an endless loop?)");
+    }
+    // An import or a load that failed is the error, unless the failure was caught (a
+    // dynamic import) and this is another one.
+    let text = match &e {
+        CaughtError::Exception(ex) => ex.message().unwrap_or_default(),
+        CaughtError::Error(e) => e.to_string(),
+        CaughtError::Value(_) => String::new(),
+    };
+    if let Some(d) = st.failed.take().filter(|d| text.contains(&d.message)) {
+        return d;
     }
     match e {
         CaughtError::Exception(ex) => {
             let message = ex.message().unwrap_or_else(|| "error".into());
+            let field = |k: &str| ex.as_object().get::<_, Option<String>>(k).ok().flatten();
+            let code = field("code").and_then(|c| CODES.iter().copied().find(|k| *k == c)).unwrap_or("code.build");
             let stack = ex.stack().unwrap_or_default();
-            let frame = stack.lines().filter_map(frame_at).find(|at| at.starts_with(&st.project.to_string_lossy().to_string()));
-            let src = frame.or_else(|| stack.lines().filter_map(frame_at).find(|at| !at.starts_with(CORE))).map(|at| st.remap(&at));
-            Diagnostic { message, src, ..Default::default() }
+            let frame = stack.lines().filter_map(frame_at).find(|at| at.starts_with(PROJECT));
+            let other = || stack.lines().filter_map(frame_at).find(|at| !at.starts_with(CORE) && !at.starts_with("<main>"));
+            let src = frame.or_else(other).map(|at| st.remap(&at));
+            let mut d = Diagnostic::error(code, message).at(src);
+            d.module = field("module");
+            d
         }
-        CaughtError::Value(v) => Diagnostic::new(format!("the song threw {v:?}")),
-        CaughtError::Error(e) => Diagnostic::new(e.to_string()),
+        CaughtError::Value(v) => Diagnostic::error("code.build", format!("the song threw {v:?}")),
+        CaughtError::Error(e) => Diagnostic::error("code.build", e.to_string()),
     }
 }
 

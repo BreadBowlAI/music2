@@ -1,6 +1,6 @@
 # What music2 can't do yet
 
-music2 is now only the song-as-program app: a song is a folder of code and timeline files, and the app is a view of that folder. The old engine, with its own song files, screens and command API, was removed in October 2026. Git commit `650f842` still has it. Songs saved by the old version (`.m2song` files) can't be opened by this one.
+music2 is now only the song-as-program app: a song is a folder of code and data files, and the app is a view of that folder. The old engine, with its own song files, screens and command API, was removed in October 2026. Git commit `650f842` still has it. Songs saved by the old version (`.m2song` files) can't be opened by this one. Nor can song folders in the first folder format (`timeline/`, tracks named by their display name): the format changed once, in October 2026, to `data/` and keys ([Project format v1](architecture.md#project-format-v1)), and the examples and templates were converted by a script.
 
 This page lists what's missing for making a whole pop song in the app, most important first. It starts with what already works, so it reads as a roadmap.
 
@@ -17,18 +17,19 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 - Start a new song from a template, **Starter beat** (six tracks, ready to play) or **Empty**, with **New Song…** on the start screen or File → New Song… (⌘N). Songs go in `~/Music/music2`. **Open an Example** opens a copy of an example there.
 - Open a song folder (File → Open Project Folder…, ⌘O) and play it.
-- See every track on a timeline: notes, automation, masks and audio clips, with the tempo shown above the tracks.
-- Add, move and delete notes clips. Draw, move, resize and nudge notes, and set how hard each one is played.
+- See every track on a timeline: notes, automation, masks and audio clips, with the tempo shown above the tracks and bars counted by the song's time signatures (written in `data/arrangement.json`).
+- Add, move and delete notes clips. Draw, move, resize and nudge notes, and set how hard each one is played. Every clip has an id, so an edit always lands on the clip it was made on.
 - Drag a number written directly at an input (`0.3`, `hz(800)`, `{ pan: 0.3 }`) as a knob: you hear the change, and letting go writes it into the code. A number held in a variable, or worked out from other numbers, shows **edit in code** instead (#35).
 - Connect cables inside one file, and add or remove 17 effects from a searchable browser.
 - Edit the code in the app, with type checks. When the code breaks, the last working version keeps playing.
 - Undo and redo every edit made in the app.
-- See what needs attention. When a track or a lane is renamed in code, its notes or automation stop playing; a **Needs attention** strip above the timeline says so in plain words, and offers to move the data to the lane it belongs to now, or to delete it. Undo takes either back. Every `m2` command that opens the song prints the same, with the commands that fix it (`m2 relink`, `m2 delete-data`).
+- Rename a track's label (`track("kick", { name: "Big Kick" }, …)`) without moving or silencing anything: data is filed under the track's key.
+- See what needs attention. When a track's or a lane's key is renamed in code, its notes or automation stop playing; a **Needs attention** strip above the timeline says so in plain words, and offers to move the data where it belongs now (a renamed track's whole folder in one click), or to delete it. Undo takes either back. The strip also lists a data file that doesn't read (its lane keeps playing what it had), clips without ids, and a missing sample or plugin, each with its code and fixes. Every `m2` command that opens the song prints the same, with the commands that fix it (`m2 relink`, `m2 delete-data`, `m2 fix`).
 - Edit the files in any other editor or from a script. The app picks the change up within about 300 ms.
 - Export the song as a WAV file (the Export button, or File → Export Audio…, ⌘E), then Show in Finder. Files go in `~/Music/music2/Exports` unless you pick another place. It's the same file `m2 render` writes. Quitting during an export asks first.
 - From the command line (`m2`): make a new song, render a WAV, bounce a track to audio, and make the same edits as the app.
 - Build `music2.app` and move it anywhere: std, the templates and the examples are inside it, so it no longer needs the source folder it was built from. It's signed ad hoc but not notarized, so on another Mac it opens only after **Open Anyway** in System Settings → Privacy & Security (and only on Apple silicon).
-- Play CLAP plugins such as Surge XT, with automation and saved settings. A plugin is added by writing it into a track's code (#32).
+- Play CLAP plugins such as Surge XT, with automation and saved settings. A plugin is added by writing it into a track's code (#32). A song whose plugin isn't installed still plays: only that plugin's node is silent, or passes its audio through.
 - Play audio clips with offset, gain, fades, reverse, pitch and warp (written by hand in JSON).
 
 ## The top ten
@@ -70,7 +71,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
 | 1 | **Add a track without code.** Pick an instrument (bass, keys, drums…) and music2 writes `tracks/<name>.ts`, imports it in `song.ts`, adds a mixer channel and an empty notes lane, as one checked edit you can undo. Also swap a track's instrument later. | Every track is hand-written TypeScript today, and the app's code editor can't even create a new file. This is the biggest wall for a beginner. | Yes | medium |
-| 10 | **Rename, delete, reorder and recolour tracks** from the timeline. | Keeping a song tidy. Today it's code only: rename the `track()` name, delete the file, edit `song.ts`. After a rename in code, **Needs attention** offers to move the track's notes and automation to its new name. | Yes | medium |
+| 10 | **Rename, delete, reorder and recolour tracks** from the timeline. | Keeping a song tidy. Today it's code only: change the label (`{ name: "…" }`) or the key in `track()`, delete the file, edit `song.ts`. A label change moves nothing. After a key change in code, **Needs attention** offers to move the track's data folder to its new key. | Yes | medium |
 
 ### Sounds
 
@@ -93,7 +94,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 6 | **Change the tempo (BPM), time signature, key and scale, and the song's title** in the top bar. The session needs a write for `timeline/song.json` (like its notes write), and the top bar needs the fields. Tempo changes during the song can come later. | Setting the tempo is step one of every song. Today it means editing `song.json` by hand, and the code editor only opens `.ts` files. | Yes | small |
+| 6 | **Change the tempo (BPM), time signature, key and scale, and the song's title** in the top bar. The session needs a write for `data/arrangement.json` (like its notes write), and the top bar needs the fields. The timeline already counts bars by the time signatures written there. | Setting the tempo is step one of every song. Today it means editing `data/arrangement.json` by hand, and the code editor only opens `.ts` files. | Yes | small |
 
 ### Playback
 
@@ -158,7 +159,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
 | 13 | **Open a project without an audio device**: fall back to the silent player and say so. | Opening a project fails with "no audio output device", so an unplugged audio interface locks you out of your song. | Yes | small |
-| 31 | **A Settings window**: choose the audio output and buffer size, show the current device and its rate, and set where new projects go. The engine runs at each project's `sample_rate`, resampling at the device if the device runs at another rate ([RENDER-31](architecture.md#sample-rate)), so the sample rate is a project setting, not an app one. | People with an audio interface or headphones need to pick the output. Today the player always uses the system default. | Partly (it showed the device and the folders, with nothing to choose) | medium |
+| 31 | **A Settings window**: choose the audio output and buffer size, show the current device and its rate, and set where new projects go. The engine already runs at each project's `sample_rate` (in `music2.toml`), converting at the device when the device runs at another rate ([RENDER-31](architecture.md#sample-rate)), so the sample rate is a project setting, not an app one. | People with an audio interface or headphones need to pick the output. Today the player always uses the system default. | Partly (it showed the device and the folders, with nothing to choose) | medium |
 
 ### Help
 
@@ -170,7 +171,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 34 | **Create, rename and delete files** in the code editor (today it only opens existing `.ts` files), and edit the timeline JSON and `music2.toml` there. | A track can be written in `song.ts` (the Empty template shows how), but giving it a file of its own, as the Starter beat's tracks have, still needs another editor. | No | small |
+| 34 | **Create, rename and delete files** in the code editor (today it only opens existing `.ts` files), and edit the data JSON and `music2.toml` there. | A track can be written in `song.ts` (the Empty template shows how), but giving it a file of its own, as the Starter beat's tracks have, still needs another editor. | No | small |
 
 ### Knobs
 
@@ -192,7 +193,7 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 ## Loose ends
 
 - **Undo messages are technical** (#29).
-- **A missing plugin silences the whole song** and reads technically when a song folder is opened: ``no CLAP plugin `org.surge-synth-team.surge-xt` is installed (looked in [...])``, then the compiler's lines. Only Open an Example names missing plugins plainly, from the example's `example.toml` (#11). Under format v1 it becomes `plugin.missing`: only that plugin's node is silent, and the rest of the song plays ([FMT-18a](architecture.md#plugin-state-and-parameters)).
+- **A missing plugin reads technically**: ``no CLAP plugin `org.surge-synth-team.surge-xt` is installed (looked in [...])``. It no longer silences the song: only that plugin's node is silent, or passes its audio through ([FMT-18a](architecture.md#plugin-state-and-parameters)). Open an Example still names missing plugins plainly, from the example's `example.toml`, and refuses to copy the example (#11).
 - **An error in the browser console with no project open.** `GET /api/graph` answers 400 when nothing is open, which is how the window knows to show the start screen. The browser logs that request as an error even though nothing is wrong. Answering "no project" without an error status would be quieter.
 - **The puppeteer script** that [song-as-program.md](song-as-program.md) mentions for the headless UI test isn't in the repo, and puppeteer isn't in `web/package.json`.
 

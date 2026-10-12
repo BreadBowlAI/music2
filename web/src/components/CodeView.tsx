@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import type * as Monaco from "monaco-editor/esm/vs/editor/editor.api";
 import { codeApi, fileOrder, moduleFile } from "../lib/code";
 import { Workspace, type Doc } from "../lib/codeWorkspace";
-import { editorHooks, graphApi, type GraphState, type Problem } from "../lib/graph";
+import { editorHooks, graphApi, moduleName, type GraphState, type Problem } from "../lib/graph";
 import { kbd } from "../lib/native";
 import { useStore } from "../lib/store";
 import { trackColor } from "./SongTimeline";
@@ -20,7 +20,8 @@ const isLib = (path: string) => path.startsWith("node_modules/");
 const libName = (path: string) => path.replace(/^node_modules\//, "");
 
 /**
- * The code editor for the project's TypeScript, opening on the selected module's source.
+ * The code editor for the project's TypeScript, opening on the source of the selected module
+ * (`module`, a key).
  * Once opened it stays mounted while other views show, so its unsaved text and its ⌘S hook
  * (`editorHooks.save`) outlive a look at the graph.
  */
@@ -166,7 +167,7 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
   // or renamed (a save, an edit elsewhere) waits for the listing that has it.
   const followed = useRef<string | null>(null);
   useEffect(() => {
-    if (!ws || followed.current === module || !ws.modules.some((m) => m.name === module)) return;
+    if (!ws || followed.current === module || !ws.modules.some((m) => m.key === module)) return;
     const path = moduleFile([...ws.docs.keys()], ws.modules, module);
     if (path && open(path)) followed.current = module;
   }, [ws, module, open, version]);
@@ -291,9 +292,10 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
   // Files changed on disk under unsaved edits wait for a choice in their banner before they save.
   const dirtyCount = ws ? [...ws.docs.values()].filter((d) => ws.dirty(d) && d.theirs === undefined).length : 0;
   const saving = ws ? [...ws.docs.values()].some((d) => d.saving !== undefined) : false;
-  const moduleOf = (path: string) => ws?.modules.find((m) => m.file === path)?.name;
+  const moduleOf = (path: string) => ws?.modules.find((m) => m.file === path)?.key;
   const shownModule = active ? (isLib(active) ? undefined : moduleOf(active)) : module;
   const shownColor = shownModule ? trackColor(graph.timeline, shownModule) : null;
+  const name = (key: string) => moduleName(graph.view.modules.find((m) => m.key === key) ?? { key });
   const problems = graph.diagnostics ?? [];
 
   return (
@@ -343,7 +345,7 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
               {shownModule && (
                 <span className="inline-flex items-center gap-1.5 h-5 px-2 rounded-full bg-ink-800 ring-1 ring-black/[0.05] text-[11px] font-medium text-ink-300 shrink-0">
                   {shownColor && <span className="size-1.5 rounded-full" style={{ background: shownColor }} />}
-                  {shownModule === "song" ? "Song" : shownModule}
+                  {name(shownModule)}
                 </span>
               )}
               {doc && ws?.dirty(doc) && <span className="text-[11px] text-ink-400 shrink-0">Edited</span>}
@@ -377,7 +379,7 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
               {failed ? `The editor couldn't load: ${failed}` : (
                 <span className="inline-flex items-center gap-2">
                   <LoaderCircle className="size-4 animate-spin" />
-                  Opening {module === "song" ? "the song's" : `${module}'s`} code…
+                  Opening {module === "song" ? "the song's" : `${name(module)}'s`} code…
                 </span>
               )}
             </div>
@@ -385,6 +387,7 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
         </div>
         <Problems
           problems={problems}
+          name={name}
           types={typeProblems}
           revision={graph.view.revision}
           canOpen={(p) => !!ws?.docs.has(p)}
@@ -483,12 +486,15 @@ function Changed({ doc, onTheirs, onMine }: { doc: Doc; onTheirs: () => void; on
 /** Whether the code compiles, and if not, where it doesn't. Type problems come second: the code still runs. */
 function Problems({
   problems,
+  name,
   types,
   revision,
   canOpen,
   onReveal,
 }: {
   problems: Problem[];
+  /** What to call a module, by its key. */
+  name: (key: string) => string;
   types: TypeProblem[];
   revision: number;
   canOpen: (path: string) => boolean;
@@ -513,8 +519,11 @@ function Problems({
               className="w-full px-3 pl-8 min-h-6 py-0.5 flex items-baseline gap-2.5 text-left text-[12px] enabled:hover:bg-red-500/[0.06] enabled:cursor-pointer"
             >
               {at && <span className="font-mono text-red-900/70 shrink-0">{at}</span>}
-              {p.module && !local && <span className="text-red-900/70 shrink-0">in {p.module}</span>}
+              {p.module && !local && <span className="text-red-900/70 shrink-0">in {name(p.module)}</span>}
               <span className="text-red-950 break-words min-w-0">{p.message}</span>
+              {p.code !== "code.build" && (
+                <span className="ml-auto pl-2 shrink-0 font-mono text-[10.5px] text-red-900/50" title="The problem's code">{p.code}</span>
+              )}
             </button>
           );
         })}

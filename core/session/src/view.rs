@@ -34,7 +34,10 @@ pub struct GraphView {
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct ModuleView {
-    pub name: String,
+    /// The module's key: what edits, selection and the timeline name it by (ID-11).
+    pub key: String,
+    /// What to show for it, never an address (ID-10).
+    pub label: String,
     pub track: bool,
     pub nodes: Vec<ViewNode>,
     /// `(from, to)` node ids.
@@ -291,7 +294,7 @@ impl Session {
         // Imports can't go round in a circle in a checked graph; the bound is a guard.
         for _ in 0..32 {
             let (id, port) = split_ref(r);
-            let m = compiled.ir.modules.iter().find(|m| m.name == module)?;
+            let m = compiled.ir.modules.iter().find(|m| m.key == module)?;
             let mut found = None;
             walk_nodes(&m.nodes, &mut |n| {
                 if n.id == id {
@@ -301,7 +304,7 @@ impl Session {
             let node = found?;
             let index = match &node.op {
                 Op::Import { module: target, export } => {
-                    r = compiled.ir.modules.iter().find(|m| &m.name == target)?.exports.get(export)?;
+                    r = compiled.ir.modules.iter().find(|m| &m.key == target)?.exports.get(export)?;
                     module = target;
                     continue;
                 }
@@ -519,7 +522,7 @@ impl Session {
             let mut connected: BTreeMap<Group, Vec<InletView>> = BTreeMap::new();
             let mut cabled: HashMap<String, (&Inlet, &Outlet)> = HashMap::new();
             for inlet in &inlets {
-                let Some(outlet) = outlets.iter().find(|o| o.id == inlet.from && o.module == m.name) else { continue };
+                let Some(outlet) = outlets.iter().find(|o| o.id == inlet.from && o.module == m.key) else { continue };
                 cabled.insert(inlet.id.clone(), (inlet, outlet));
                 let home = innermost(&groups, &sites, inlet).unwrap_or(Group::Site(inlet.site));
                 // Name it after its property, or else the one port it feeds in that call.
@@ -576,7 +579,10 @@ impl Session {
                             "call"
                         };
                         let label = match n.map(|n| &n.op) {
-                            Some(Op::Lane { lane }) if kind == "lane" => lane.clone(),
+                            // A lane shows its label; it is addressed by its key (ID-10).
+                            Some(Op::Lane { lane }) if kind == "lane" => {
+                                m.lanes.iter().find(|l| &l.key == lane).map_or(lane.as_str(), |l| l.label()).to_string()
+                            }
                             _ if kind == "value" => site.binding.clone().unwrap_or_else(|| site.callee.clone()),
                             _ => site.callee.clone(),
                         };
@@ -584,7 +590,9 @@ impl Session {
                     }
                     Group::Time(of) => (format!("time:{of}"), format!("time.{of}"), "time", None, None),
                     Group::Import(module, export) => {
-                        (format!("import:{module}.{export}"), format!("{module}.{export}"), "import", None, None)
+                        // Named by the imported module's label, addressed by its key.
+                        let label = rev.compiled.ir.modules.iter().find(|x| &x.key == module).map_or(module.as_str(), |x| x.label());
+                        (format!("import:{module}.{export}"), format!("{label}.{export}"), "import", None, None)
                     }
                     Group::Voice(s) => {
                         let site = sites[s];
@@ -594,7 +602,7 @@ impl Session {
                 };
                 ids.insert(g.clone(), id.clone());
                 let outlet = match g {
-                    Group::Site(s) => outlets.iter().find(|o| o.site == *s && o.module == m.name).map(|o| o.name.clone()),
+                    Group::Site(s) => outlets.iter().find(|o| o.site == *s && o.module == m.key).map(|o| o.name.clone()),
                     _ => None,
                 };
                 let (audio, effect) = match g {
@@ -701,7 +709,7 @@ impl Session {
             // Ports. A node's inputs are its knobs, cables and read-only values, and each
             // other signal that enters it (one input however many of its kernels read it).
             // Its outputs are its own result, then anything else read from it.
-            let kind = |r: &str| self.kind_of(&m.name, r).map_or("control", kind_name);
+            let kind = |r: &str| self.kind_of(&m.key, r).map_or("control", kind_name);
             // A port is a signal, or a written value however many constants it made.
             let canon = |r: &str| match source(r) {
                 Some(Node { op: Op::Const { .. }, origin: Some(o), .. }) => format!("value:{}/{}", o.site, o.arg.join(".")),
@@ -744,10 +752,10 @@ impl Session {
                 }
                 if let Group::Site(s) = g
                     && let Some((module, r)) = self.call_output(*s)
-                    && module == m.name
+                    && module == m.key
                 {
                     // Named by its `const`, or else what it is: `svf.lowpass` gives audio, not `lp`.
-                    let outlet = outlets.iter().find(|o| o.site == *s && o.module == m.name);
+                    let outlet = outlets.iter().find(|o| o.site == *s && o.module == m.key);
                     let label = outlet.map_or_else(|| kind(r).to_string(), |o| o.name.clone());
                     let port = OutputPort { id: canon(r), label, kind: kind(r), outlet: outlet.is_some() };
                     outputs.entry(id.clone()).or_default().push(port);
@@ -859,7 +867,7 @@ impl Session {
                     }
                 }
             }
-            modules.push(ModuleView { name: m.name.clone(), track: m.track, nodes, edges, port_edges });
+            modules.push(ModuleView { key: m.key.clone(), label: m.label().to_string(), track: m.track, nodes, edges, port_edges });
         }
         GraphView { revision: rev.number, modules, draft_errors: self.draft_errors.iter().map(|d| d.to_string()).collect() }
     }

@@ -3,11 +3,13 @@
 //! The checker trusts nothing about where the IR came from. It resolves imports,
 //! sorts the whole song into a processing order (a loop without `feedback` is an
 //! error that names the loop), infers every node's output kinds, and checks every
-//! connection's kind and unit.
+//! connection's kind and unit. It also checks the keys the IR files data under (ID-1,
+//! ID-3, ID-5, ID-8): everything is addressed by module key, never by label (ID-11).
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
+use crate::key::{self, ROOT};
 use crate::kind::{EventType, Kind, PortKind, Unit};
 use crate::sig::{KernelSig, Kernels};
 use crate::{Body, Diagnostic, Ir, Module, Node, Op, Origin, TimeOf, split_ref};
@@ -59,13 +61,15 @@ pub enum Input {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum FOp {
+    /// A lane, addressed by module key and lane key (ID-6).
     Lane { module: String, lane: String, kind: Kind, default: f64 },
     Time(TimeOf),
     Const(f64),
     /// `inputs` are in the kernel's declared order; `channels` is passed to `init`.
     Kernel { kernel: String, channels: u8, inputs: Vec<Input> },
     /// A hosted plugin; `inputs` are in its signature's order (`in`, `notes`, parameters).
-    Plugin { plugin: String, inputs: Vec<Input>, channels: u8, state: Option<String> },
+    /// `state` is where its state is filed below its module, as keys ([`Op::state_path`]).
+    Plugin { plugin: String, inputs: Vec<Input>, channels: u8, state: Option<Vec<String>> },
     /// `lane` is the notes lane node feeding the voices.
     Poly { lane: usize, voices: u32, voice: Box<Voice>, channels: u8 },
     Feedback { input: PortRef, channels: u8 },
@@ -101,8 +105,9 @@ impl FOp {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FNode {
-    /// `Module/node`.
+    /// `<module key>/<node id>`.
     pub name: String,
+    /// The module's key.
     pub module: String,
     pub src: Option<String>,
     /// Where it was written. Constants with an origin stay addressable (never folded
@@ -157,15 +162,15 @@ struct Song;
 
 impl<'a> Scope<'a> for Song {
     fn resolve(&mut self, ck: &Checker<'a>, m: &'a Module, r: &str) -> Result<PortRef, String> {
-        ck.resolve(&m.name, r, 0)
+        ck.resolve(&m.key, r, 0)
     }
 
     fn lane(&self, m: &'a Module, lane: &str) -> Result<(FOp, Kind), String> {
-        let d = m.lanes.iter().find(|l| l.id == lane).ok_or_else(|| {
-            let have: Vec<&str> = m.lanes.iter().map(|l| l.id.as_str()).collect();
+        let d = m.lanes.iter().find(|l| l.key == lane).ok_or_else(|| {
+            let have: Vec<&str> = m.lanes.iter().map(|l| l.key.as_str()).collect();
             format!("no lane `{lane}` declared (lanes: {})", if have.is_empty() { "none".into() } else { have.join(", ") })
         })?;
-        let op = FOp::Lane { module: m.name.clone(), lane: lane.to_string(), kind: d.kind, default: d.default.unwrap_or(0.0) };
+        let op = FOp::Lane { module: m.key.clone(), lane: lane.to_string(), kind: d.kind, default: d.default.unwrap_or(0.0) };
         Ok((op, d.kind))
     }
 
@@ -190,7 +195,7 @@ impl<'a> Scope<'a> for VoiceScope<'a, '_> {
         if let Some(&(i, node)) = self.local.get(id) {
             return Ok(PortRef { node: i, port: ck.port_index(node, port)? });
         }
-        let outer = ck.resolve(&m.name, r, 0)?;
+        let outer = ck.resolve(&m.key, r, 0)?;
         let ci = self.captures.iter().position(|c| *c == outer).unwrap_or_else(|| {
             self.captures.push(outer);
             self.captures.len() - 1
@@ -242,42 +247,135 @@ struct Checker<'a> {
     diags: Vec<Diagnostic>,
 }
 
+/// A `code.check` error at a node, or at the module.
 fn diag(m: &Module, n: Option<&Node>, message: impl Into<String>) -> Diagnostic {
-    Diagnostic {
-        message: message.into(),
-        module: Some(m.name.clone()),
-        node: n.map(|n| n.id.clone()),
-        src: n.and_then(|n| n.src.clone()).or_else(|| m.src.clone()),
-    }
+    coded("code.check", m, n, message)
+}
+
+fn coded(code: &'static str, m: &Module, n: Option<&Node>, message: impl Into<String>) -> Diagnostic {
+    let mut d = Diagnostic::error(code, message).module(m.key.clone()).at(n.and_then(|n| n.src.clone()).or_else(|| m.src.clone()));
+    d.node = n.map(|n| n.id.clone());
+    d
 }
 
 impl<'a> Checker<'a> {
     fn new(ir: &'a Ir, kernels: &'a dyn Kernels) -> Checker<'a> {
         let mut ck = Checker { kernels, modules: HashMap::new(), nodes: HashMap::new(), slot_of: HashMap::new(), diags: vec![] };
         if ir.ir != crate::IR_VERSION {
-            ck.diags.push(Diagnostic::new(format!("IR version {} is not supported (expected {})", ir.ir, crate::IR_VERSION)));
+            let e = format!("IR version {} is not supported (expected {})", ir.ir, crate::IR_VERSION);
+            ck.diags.push(Diagnostic::error("code.check", e));
+        }
+        if ir.root.module != ROOT {
+            ck.diags.push(Diagnostic::error("key.invalid", format!("the root module's key must be `{ROOT}`, not `{}`", ir.root.module)));
         }
         for m in &ir.modules {
-            if ck.modules.insert(&m.name, m).is_some() {
-                ck.diags.push(diag(m, None, format!("two modules are named `{}`", m.name)));
-            }
-            let map = ck.nodes.entry(&m.name).or_default();
+            ck.keys(m);
+            let map = ck.nodes.entry(&m.key).or_default();
             for n in &m.nodes {
                 if map.insert(&n.id, n).is_some() {
                     ck.diags.push(diag(m, Some(n), format!("node id `{}` is used twice", n.id)));
                 }
             }
-            let mut lanes = HashSet::new();
             for l in &m.lanes {
-                if !lanes.insert(&l.id) {
-                    ck.diags.push(diag(m, None, format!("lane `{}` is declared twice", l.id)));
-                }
                 if l.default.is_some() && !matches!(l.kind, Kind::Control(_)) {
-                    ck.diags.push(diag(m, None, format!("lane `{}`: only control lanes have defaults", l.id)));
+                    ck.diags.push(diag(m, None, format!("lane `{}`: only control lanes have defaults", l.key)));
                 }
             }
         }
+        ck.state_paths(ir);
         ck
+    }
+
+    /// Module, lane, plugin and frame keys follow the key rule and are unique where they
+    /// must be (ID-1, ID-3, ID-5, ID-6). The SDK reports these first, with both sites; this
+    /// holds for an IR from anywhere.
+    fn keys(&mut self, m: &'a Module) {
+        if let Some(e) = key::invalid("the module key", &m.key) {
+            self.diags.push(coded("key.invalid", m, None, e));
+        } else if m.key == ROOT && m.track {
+            self.diags.push(coded("key.invalid", m, None, format!("`{ROOT}` is reserved for the root module; give the track another key")));
+        }
+        if self.modules.insert(&m.key, m).is_some() {
+            self.diags.push(coded("key.duplicate", m, None, format!("two modules have the key `{}`", m.key)));
+        }
+        let mut lanes = HashSet::new();
+        for l in &m.lanes {
+            if let Some(e) = key::invalid("the lane key", &l.key) {
+                self.diags.push(coded("key.invalid", m, None, e));
+            }
+            if !lanes.insert(&l.key) {
+                self.diags.push(coded("lane.conflict", m, None, format!("lane `{}` is declared twice", l.key)));
+            }
+        }
+        let mut plugins: HashMap<(&[String], &str), &Node> = HashMap::new();
+        for n in &m.nodes {
+            let Op::Plugin { key: k, frames, .. } = &n.op else { continue };
+            for f in frames {
+                if let Some(e) = key::invalid("the key() frame key", f) {
+                    self.diags.push(coded("key.invalid", m, Some(n), e));
+                }
+            }
+            let Some(k) = k else { continue };
+            if let Some(e) = key::invalid("the plugin key", k) {
+                self.diags.push(coded("key.invalid", m, Some(n), e));
+            } else if let Some(first) = plugins.insert((frames.as_slice(), k.as_str()), n) {
+                let at = first.src.as_deref().map_or(String::new(), |s| format!(" (first at {s})"));
+                let e = format!("the plugin key `{k}` is used twice in one frame{at}; rename one");
+                self.diags.push(coded("key.duplicate", m, Some(n), e));
+            }
+        }
+    }
+
+    /// Two plugins must never share a state file (ID-8). A plugin with no key takes its
+    /// innermost `key()` frame's key as its file name, which only the one stateful plugin of a
+    /// frame may: one beside another stateful plugin in its frame needs a key. And one beside a
+    /// plugin keyed like the frame, in the frame around it, collides. Every plugin with a state
+    /// path counts as stateful, since the build never reads data.
+    fn state_paths(&mut self, ir: &'a Ir) {
+        for m in &ir.modules {
+            let mut held: HashMap<&[String], Vec<&Node>> = HashMap::new();
+            for n in &m.nodes {
+                if let (Some(_), Op::Plugin { frames, .. }) = (n.op.state_path(), &n.op) {
+                    held.entry(frames.as_slice()).or_default().push(n);
+                }
+            }
+            let mut told = HashSet::new();
+            let mut seen: HashMap<Vec<String>, &Node> = HashMap::new();
+            for n in &m.nodes {
+                let (Some(path), Op::Plugin { key: own, frames, .. }) = (n.op.state_path(), &n.op) else { continue };
+                if own.is_none()
+                    && let Some(other) = held[frames.as_slice()].iter().find(|o| !std::ptr::eq(**o, n))
+                {
+                    // Once per frame: every unkeyed plugin in it needs the same fix.
+                    if told.insert(frames.as_slice()) {
+                        let at = other.src.as_deref().map_or(String::new(), |s| format!(" (the other is at {s})"));
+                        let frame = frames.last().expect("a plugin with no key has a state path only in a frame");
+                        let e = format!(
+                            "a plugin with no key keeps its state under its key() frame's key, `{frame}`, but that frame holds \
+                             another plugin with saved state{at}; give it a key, plugin(id, {{ key: \"…\" }}), or wrap one in key()"
+                        );
+                        self.diags.push(coded("plugin.state-collision", m, Some(n), e));
+                    }
+                    continue;
+                }
+                let Some(first) = seen.get(&path) else {
+                    seen.insert(path, n);
+                    continue;
+                };
+                // Two plugins with one key in one frame are already `key.duplicate`.
+                let same_key = matches!(&first.op, Op::Plugin { key: Some(k), frames: f, .. } if Some(k) == own.as_ref() && f == frames);
+                if same_key {
+                    continue;
+                }
+                let at = first.src.as_deref().map_or(String::new(), |s| format!(" (the other is at {s})"));
+                self.diags.push(coded(
+                    "plugin.state-collision",
+                    m,
+                    Some(n),
+                    format!("two plugins in `{}` would keep their state in one place, `{}`{at}; wrap one in key()", m.key, path.join("/")),
+                ));
+            }
+        }
     }
 
     fn run(&mut self, ir: &'a Ir) -> Option<Flat> {
@@ -285,7 +383,7 @@ impl<'a> Checker<'a> {
         for m in &ir.modules {
             for n in &m.nodes {
                 if !matches!(n.op, Op::Import { .. }) {
-                    self.slot_of.insert((&m.name, &n.id), items.len());
+                    self.slot_of.insert((&m.key, &n.id), items.len());
                     items.push((m, n));
                 }
             }
@@ -294,20 +392,20 @@ impl<'a> Checker<'a> {
 
         for m in &ir.modules {
             for (name, r) in &m.exports {
-                if let Err(e) = self.resolve(&m.name, r, 0) {
+                if let Err(e) = self.resolve(&m.key, r, 0) {
                     self.diags.push(diag(m, None, format!("export `{name}`: {e}")));
                 }
             }
         }
         let Some(root) = self.modules.get(ir.root.module.as_str()).copied() else {
-            self.diags.push(Diagnostic::new(format!("the root module `{}` does not exist", ir.root.module)));
+            self.diags.push(Diagnostic::error("code.check", format!("the root module `{}` does not exist", ir.root.module)));
             return None;
         };
         let Some(r) = root.exports.get(&ir.root.export) else {
             self.diags.push(diag(root, None, format!("the root export `{}` does not exist", ir.root.export)));
             return None;
         };
-        let out = self.resolve(&root.name, r, 0).ok()?;
+        let out = self.resolve(&root.key, r, 0).ok()?;
         let out_kind = *nodes[out.node].outputs.get(out.port)?;
         if !matches!(out_kind, Kind::Audio(_)) {
             self.diags.push(diag(root, None, format!("the song's output must be audio, not {out_kind}")));
@@ -329,7 +427,7 @@ impl<'a> Checker<'a> {
         Some(Flat { nodes, order, out, out_kind })
     }
 
-    /// Resolve a ref in module `module` to a top-level node, following imports.
+    /// Resolve a ref in the module keyed `module` to a top-level node, following imports.
     fn resolve(&self, module: &str, r: &str, depth: usize) -> Result<PortRef, String> {
         let (id, port) = split_ref(r);
         let node = self.nodes.get(module).and_then(|m| m.get(id)).ok_or_else(|| format!("no node `{id}` in module `{module}`"))?;
@@ -458,7 +556,7 @@ impl<'a> Checker<'a> {
                         Op::Plugin { plugin, .. } => format!(" ({plugin})"),
                         op => format!(" ({})", op.name()),
                     };
-                    format!("{}/{}{}", m.name, node.id, what)
+                    format!("{}/{}{}", m.key, node.id, what)
                 };
                 let path: Vec<String> = cycle.iter().map(|&i| describe(i)).collect();
                 let (m, node) = items[cycle[0]];
@@ -530,7 +628,12 @@ impl<'a> Checker<'a> {
                                 }
                             }
                             let op = match &node.op {
-                                Op::Plugin { state, .. } => FOp::Plugin { plugin: kernel.clone(), inputs, channels: outs.first().map_or(2, |k| k.channels()), state: state.clone() },
+                                Op::Plugin { .. } => FOp::Plugin {
+                                    plugin: kernel.clone(),
+                                    inputs,
+                                    channels: outs.first().map_or(2, |k| k.channels()),
+                                    state: node.op.state_path(),
+                                },
                                 _ => FOp::Kernel { kernel: kernel.clone(), channels, inputs },
                             };
                             (op, outs)
@@ -591,8 +694,8 @@ impl<'a> Checker<'a> {
             .zip(ops)
             .zip(&kinds)
             .map(|((&(m, node), op), k)| FNode {
-                name: format!("{}/{}", m.name, node.id),
-                module: m.name.clone(),
+                name: format!("{}/{}", m.key, node.id),
+                module: m.key.clone(),
                 src: node.src.clone(),
                 origin: node.origin.clone(),
                 op: op.unwrap_or(FOp::Const(0.0)),
@@ -601,7 +704,7 @@ impl<'a> Checker<'a> {
             .collect();
         let mut order = order;
         for (j, (op, k)) in extras.into_iter().enumerate() {
-            let module = items.first().map(|(m, _)| m.name.clone()).unwrap_or_default();
+            let module = items.first().map(|(m, _)| m.key.clone()).unwrap_or_default();
             nodes.push(FNode { name: format!("{module}/capture{j}"), module, src: None, origin: None, op, outputs: vec![k] });
             order.insert(j, n + j);
         }
@@ -835,8 +938,8 @@ mod tests {
     }
 
     fn song(nodes: serde_json::Value, out: &str) -> Ir {
-        ir(json!({"ir": 0, "root": {"module": "song", "export": "out"},
-            "modules": [{"name": "song", "nodes": nodes, "exports": {"out": out}}]}))
+        ir(json!({"ir": 1, "root": {"module": "song", "export": "out"},
+            "modules": [{"key": "song", "nodes": nodes, "exports": {"out": out}}]}))
     }
 
     #[test]
@@ -935,37 +1038,197 @@ mod tests {
         assert_eq!(f.order.len(), 4);
     }
 
+    // ID-11: imports, flat node names and lane addresses use the module key, never the label.
     #[test]
     fn imports_cross_modules_and_cycles_across_tracks_are_caught() {
-        let ok = ir(json!({"ir": 0, "root": {"module": "song", "export": "out"}, "modules": [
-            {"name": "Kick", "nodes": [
+        let ok = ir(json!({"ir": 1, "root": {"module": "song", "export": "out"}, "modules": [
+            {"key": "kick", "label": "Big Kick", "track": true,
+             "lanes": [{"key": "hits", "kind": "events<note>", "label": "Hits"}], "nodes": [
                 {"id": "o", "op": "kernel", "kernel": "t:saw"},
                 {"id": "e", "op": "kernel", "kernel": "t:follow", "inputs": {"in": "o"}}],
              "exports": {"out": "o", "env": "e"}},
-            {"name": "song", "nodes": [
-                {"id": "k", "op": "import", "module": "Kick", "export": "out"},
-                {"id": "ke", "op": "import", "module": "Kick", "export": "env"},
+            {"key": "song", "nodes": [
+                {"id": "k", "op": "import", "module": "kick", "export": "out"},
+                {"id": "ke", "op": "import", "module": "kick", "export": "env"},
                 {"id": "v", "op": "kernel", "kernel": "t:vca", "inputs": {"in": "k", "g": "ke"}}],
              "exports": {"out": "v"}}]}));
         let f = check(&ok, &kernels()).unwrap();
         assert_eq!(f.out_kind, Kind::Audio(1));
+        let names: Vec<&str> = f.nodes.iter().map(|n| n.name.as_str()).collect();
+        assert!(f.nodes.iter().any(|n| n.name == "kick/o" && n.module == "kick"), "{names:?}");
+        assert_eq!(ok.modules[0].label(), "Big Kick");
+        assert_eq!(ok.modules[1].label(), "song", "a label defaults to the key");
 
-        let bad = ir(json!({"ir": 0, "root": {"module": "A", "export": "out"}, "modules": [
-            {"name": "A", "nodes": [
-                {"id": "b", "op": "import", "module": "B", "export": "out"},
+        // An import names a module by key; a label is not an address.
+        let mut by_label = ok.clone();
+        if let Op::Import { module, .. } = &mut by_label.modules[1].nodes[0].op {
+            *module = "Big Kick".into();
+        }
+        let e = check(&by_label, &kernels()).unwrap_err();
+        assert!(e.iter().any(|d| d.message.contains("no module `Big Kick`")), "{e:?}");
+
+        let bad = ir(json!({"ir": 1, "root": {"module": "song", "export": "out"}, "modules": [
+            {"key": "song", "nodes": [
+                {"id": "b", "op": "import", "module": "b", "export": "out"},
                 {"id": "x", "op": "kernel", "kernel": "t:vca", "inputs": {"in": "b"}}],
              "exports": {"out": "x"}},
-            {"name": "B", "nodes": [
-                {"id": "a", "op": "import", "module": "A", "export": "out"},
+            {"key": "b", "nodes": [
+                {"id": "a", "op": "import", "module": "song", "export": "out"},
                 {"id": "y", "op": "kernel", "kernel": "t:vca", "inputs": {"in": "a"}}],
              "exports": {"out": "y"}}]}));
         let e = check(&bad, &kernels()).unwrap_err();
-        assert!(e[0].message.contains("A/x (t:vca) → B/y (t:vca) → A/x"), "{}", e[0]);
+        assert!(e[0].message.contains("song/x (t:vca) → b/y (t:vca) → song/x"), "{}", e[0]);
 
-        let missing = ir(json!({"ir": 0, "root": {"module": "song", "export": "out"}, "modules": [
-            {"name": "song", "nodes": [{"id": "k", "op": "import", "module": "Kick", "export": "out"}], "exports": {"out": "k"}}]}));
+        let missing = ir(json!({"ir": 1, "root": {"module": "song", "export": "out"}, "modules": [
+            {"key": "song", "nodes": [{"id": "k", "op": "import", "module": "kick", "export": "out"}], "exports": {"out": "k"}}]}));
         let e = check(&missing, &kernels()).unwrap_err();
-        assert!(e.iter().any(|d| d.message.contains("no module `Kick`")), "{e:?}");
+        assert!(e.iter().any(|d| d.message.contains("no module `kick`")), "{e:?}");
+    }
+
+    // ID-10: labels are display text, so changing one changes nothing the engine sees.
+    #[test]
+    fn labels_never_reach_the_flat_graph() {
+        let song = |label: &str| {
+            ir(json!({"ir": 1, "root": {"module": "song", "export": "out"}, "modules": [
+                {"key": "lead-vox", "label": label, "track": true,
+                 "lanes": [{"key": "cutoff", "kind": "control<hz>", "default": 800, "label": format!("{label} cutoff")}],
+                 "nodes": [
+                    {"id": "c", "op": "lane", "lane": "cutoff"},
+                    {"id": "o", "op": "kernel", "kernel": "t:saw", "inputs": {"freq": "c"}}],
+                 "exports": {"out": "o"}},
+                {"key": "song", "nodes": [{"id": "v", "op": "import", "module": "lead-vox", "export": "out"}], "exports": {"out": "v"}}]}))
+        };
+        let a = check(&song("Lead Vox"), &kernels()).unwrap();
+        let b = check(&song("Main Vocal"), &kernels()).unwrap();
+        assert_eq!(a, b);
+        assert!(a.nodes.iter().any(|n| matches!(&n.op, FOp::Lane { module, lane, .. } if module == "lead-vox" && lane == "cutoff")));
+    }
+
+    // ID-1, ID-3, ID-5, ID-6: keys in an IR from anywhere are checked, with stable codes.
+    #[test]
+    fn keys_are_checked() {
+        let codes = |v: serde_json::Value| -> Vec<String> {
+            check(&ir(v), &kernels()).err().unwrap_or_default().into_iter().map(|d| d.code.to_string()).collect()
+        };
+        let one = |m: serde_json::Value| {
+            json!({"ir": 1, "root": {"module": "song", "export": "out"}, "modules": [
+                m, {"key": "song", "nodes": [{"id": "o", "op": "kernel", "kernel": "t:saw"}], "exports": {"out": "o"}}]})
+        };
+        let track = |key: &str, lanes: serde_json::Value| json!({"key": key, "track": true, "lanes": lanes, "nodes": [], "exports": {}});
+        assert_eq!(codes(one(track("808", json!([])))), Vec::<String>::new());
+        assert_eq!(codes(one(track("Lead Vox", json!([])))), ["key.invalid"]);
+        assert_eq!(codes(one(track("song", json!([])))), ["key.invalid", "key.duplicate"]);
+        assert_eq!(codes(one(track("kick", json!([{"key": "Hits", "kind": "events<note>"}])))), ["key.invalid"]);
+        let twice = json!([{"key": "hits", "kind": "events<note>"}, {"key": "hits", "kind": "control<hz>"}]);
+        assert_eq!(codes(one(track("kick", twice))), ["lane.conflict"]);
+        let e = check(&ir(one(track("Lead Vox", json!([])))), &kernels()).unwrap_err();
+        assert!(e[0].message.contains("Write \"lead-vox\""), "{}", e[0]);
+
+        let two = json!({"ir": 1, "root": {"module": "song", "export": "out"}, "modules": [
+            track("kick", json!([])), track("kick", json!([])),
+            {"key": "song", "nodes": [{"id": "o", "op": "kernel", "kernel": "t:saw"}], "exports": {"out": "o"}}]});
+        assert_eq!(codes(two), ["key.duplicate"]);
+
+        // The root is `song`.
+        let root = json!({"ir": 1, "root": {"module": "main", "export": "out"}, "modules": [
+            {"key": "main", "nodes": [{"id": "o", "op": "kernel", "kernel": "t:saw"}], "exports": {"out": "o"}}]});
+        assert_eq!(codes(root), ["key.invalid"]);
+    }
+
+    /// Kernels plus one instrument plugin and one effect plugin.
+    struct WithPlugins(HashMap<String, KernelSig>, HashMap<String, KernelSig>);
+
+    impl Kernels for WithPlugins {
+        fn kernel(&self, id: &str) -> Option<&KernelSig> {
+            self.0.get(id)
+        }
+        fn plugin(&self, id: &str) -> Option<&KernelSig> {
+            self.1.get(id)
+        }
+    }
+
+    fn with_plugins() -> WithPlugins {
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let mut p = HashMap::new();
+        let fx = KernelSig::parse("clap:fx", "", &s(&["in: audio<2>", "mix: control<scalar>"]), &s(&["out: audio<2>"]), 0).unwrap();
+        p.insert("clap:fx".to_string(), fx);
+        WithPlugins(kernels(), p)
+    }
+
+    fn plugins(nodes: serde_json::Value, out: &str) -> Ir {
+        ir(json!({"ir": 1, "root": {"module": "song", "export": "out"}, "modules": [
+            {"key": "vox", "track": true, "nodes": nodes, "exports": {"out": out}},
+            {"key": "song", "nodes": [{"id": "v", "op": "import", "module": "vox", "export": "out"}], "exports": {"out": "v"}}]}))
+    }
+
+    // ID-8: a plugin's state path is its frames, then its key; without a key, the innermost frame's key.
+    #[test]
+    fn plugin_state_paths_compose_frames_and_keys() {
+        let f = check(
+            &plugins(
+                json!([
+                    {"id": "o", "op": "kernel", "kernel": "t:saw"},
+                    {"id": "a", "op": "plugin", "plugin": "clap:fx", "inputs": {"in": "o"}, "key": "tune", "frames": ["chain-l"]},
+                    {"id": "b", "op": "plugin", "plugin": "clap:fx", "inputs": {"in": "a"}, "frames": ["chain-r"]},
+                    {"id": "c", "op": "plugin", "plugin": "clap:fx", "inputs": {"in": "b"}, "key": "tune"},
+                    {"id": "d", "op": "plugin", "plugin": "clap:fx", "inputs": {"in": "c"}},
+                ]),
+                "d",
+            ),
+            &with_plugins(),
+        )
+        .unwrap();
+        let state = |name: &str| match &f.nodes.iter().find(|n| n.name == name).unwrap().op {
+            FOp::Plugin { state, .. } => state.clone(),
+            op => panic!("{op:?}"),
+        };
+        let path = |v: &[&str]| Some(v.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert_eq!(state("vox/a"), path(&["chain-l", "tune"]));
+        assert_eq!(state("vox/b"), path(&["chain-r"]));
+        assert_eq!(state("vox/c"), path(&["tune"]));
+        assert_eq!(state("vox/d"), None, "no key and no frame: no saved state, only a RuntimeId");
+    }
+
+    // ID-5, ID-8: a plugin key is unique in its frame, and no two plugins share a state path.
+    #[test]
+    fn plugin_keys_and_state_collisions() {
+        let codes = |nodes: serde_json::Value| -> Vec<(String, String)> {
+            let e = check(&plugins(nodes, "o"), &with_plugins()).err().unwrap_or_default();
+            e.into_iter().map(|d| (d.code.to_string(), d.message)).collect()
+        };
+        let p = |id: &str, extra: serde_json::Value| {
+            let mut v = json!({"id": id, "op": "plugin", "plugin": "clap:fx", "inputs": {}});
+            v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            v
+        };
+        let o = json!({"id": "o", "op": "kernel", "kernel": "t:saw"});
+        // The same key in two frames is fine.
+        assert_eq!(codes(json!([o, p("a", json!({"key": "tune", "frames": ["l"]})), p("b", json!({"key": "tune", "frames": ["r"]}))])), []);
+        let dup = codes(json!([o, p("a", json!({"key": "tune"})), p("b", json!({"key": "tune"}))]));
+        assert_eq!(dup.iter().map(|(c, _)| c.as_str()).collect::<Vec<_>>(), ["key.duplicate"]);
+        // Two plugins with no key in one frame both take the frame's key.
+        let shared = codes(json!([o, p("a", json!({"frames": ["chain"]})), p("b", json!({"frames": ["chain"]}))]));
+        assert_eq!(shared.iter().map(|(c, _)| c.as_str()).collect::<Vec<_>>(), ["plugin.state-collision"]);
+        assert!(shared[0].1.contains("wrap one in key()"), "{}", shared[0].1);
+        // A plugin keyed like a frame beside it collides with the frame's unkeyed plugin.
+        let beside = codes(json!([o, p("a", json!({"key": "chain"})), p("b", json!({"frames": ["chain"]}))]));
+        assert_eq!(beside.iter().map(|(c, _)| c.as_str()).collect::<Vec<_>>(), ["plugin.state-collision"]);
+        // ID-8: a plugin takes its frame's key only while that frame holds no other stateful
+        // plugin, keyed or not, though their files would differ (chain.state, chain/tune.state).
+        let held = codes(json!([o, p("a", json!({"key": "tune", "frames": ["chain"]})), p("b", json!({"frames": ["chain"]}))]));
+        assert_eq!(held.iter().map(|(c, _)| c.as_str()).collect::<Vec<_>>(), ["plugin.state-collision"]);
+        assert!(held[0].1.contains("`chain`") && held[0].1.contains("give it a key"), "{}", held[0].1);
+        // A stateful plugin in a frame inside it is that inner frame's.
+        assert_eq!(
+            codes(json!([o, p("a", json!({"key": "tune", "frames": ["chain", "inner"]})), p("b", json!({"frames": ["chain"]}))])),
+            []
+        );
+        assert_eq!(
+            codes(json!([o, p("a", json!({"key": "tune", "frames": ["chain"]})), p("b", json!({"key": "pitch", "frames": ["chain"]}))])),
+            []
+        );
+        let bad = codes(json!([o, p("a", json!({"key": "Tune", "frames": ["Chain L"]}))]));
+        assert_eq!(bad.iter().map(|(c, _)| c.as_str()).collect::<Vec<_>>(), ["key.invalid", "key.invalid"]);
     }
 
     #[test]
@@ -974,16 +1237,16 @@ mod tests {
         let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
         k.insert("t:look".into(), KernelSig::parse("t:look", "", &s(&["in: audio<1>"]), &s(&["out: audio<1>"]), 64).unwrap());
         let ir = |nodes: serde_json::Value, lanes: serde_json::Value| {
-            serde_json::from_value::<Ir>(json!({"ir": 0, "root": {"module": "song", "export": "out"},
-                "modules": [{"name": "song", "lanes": lanes, "nodes": nodes, "exports": {"out": "x"}}]}))
+            serde_json::from_value::<Ir>(json!({"ir": 1, "root": {"module": "song", "export": "out"},
+                "modules": [{"key": "song", "lanes": lanes, "nodes": nodes, "exports": {"out": "x"}}]}))
             .unwrap()
         };
         let e = check(&ir(json!([{"id": "o", "op": "kernel", "kernel": "t:saw"}, {"id": "x", "op": "kernel", "kernel": "t:look", "inputs": {"in": "o"}}]), json!([])), &k).unwrap_err();
         assert!(e[0].message.contains("latency compensation"), "{}", e[0]);
         // Audio lanes are supported: a lane can be the song's output.
-        assert!(check(&ir(json!([{"id": "x", "op": "lane", "lane": "vox"}]), json!([{"id": "vox", "kind": "audio<2>"}])), &k).is_ok());
+        assert!(check(&ir(json!([{"id": "x", "op": "lane", "lane": "vox"}]), json!([{"key": "vox", "kind": "audio<2>"}])), &k).is_ok());
         let e = check(
-            &ir(json!([{"id": "n", "op": "lane", "lane": "n"}, {"id": "x", "op": "kernel", "kernel": "t:add", "inputs": {"a": "n", "b": "n"}}]), json!([{"id": "n", "kind": "events<note>"}])),
+            &ir(json!([{"id": "n", "op": "lane", "lane": "n"}, {"id": "x", "op": "kernel", "kernel": "t:add", "inputs": {"a": "n", "b": "n"}}]), json!([{"key": "n", "kind": "events<note>"}])),
             &k,
         )
         .unwrap_err();
@@ -992,9 +1255,9 @@ mod tests {
 
     #[test]
     fn poly_voices_read_note_fields_and_outer_signals() {
-        let p = ir(json!({"ir": 0, "root": {"module": "song", "export": "out"}, "modules": [
-            {"name": "song",
-             "lanes": [{"id": "notes", "kind": "events<note>"}, {"id": "cutoff", "kind": "control<hz>", "default": 800}],
+        let p = ir(json!({"ir": 1, "root": {"module": "song", "export": "out"}, "modules": [
+            {"key": "song",
+             "lanes": [{"key": "notes", "kind": "events<note>"}, {"key": "cutoff", "kind": "control<hz>", "default": 800}],
              "nodes": [
                 {"id": "n", "op": "lane", "lane": "notes"},
                 {"id": "c", "op": "lane", "lane": "cutoff"},

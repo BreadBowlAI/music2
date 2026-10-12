@@ -36,6 +36,8 @@ wasmtime = { version = "49", default-features = false, features = ["anyhow", "cr
 rquickjs = { version = "0.14", features = ["loader"] }
 oxc = { version = "0.153", features = ["transformer", "codegen", "semantic", "ast_visit"] }
 bytemuck = "1"
+sha2 = "0.10"
+icu_normalizer = "2"
 
 [profile.dev]
 opt-level = 1

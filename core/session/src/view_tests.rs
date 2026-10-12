@@ -37,6 +37,7 @@ impl Fixture {
     fn song(source: &str) -> Self {
         let dir = Self::dir();
         std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("music2.toml"), crate::tests::MANIFEST).unwrap();
         std::fs::write(dir.join("song.ts"), source).unwrap();
         Self(dir)
     }
@@ -55,11 +56,11 @@ impl Drop for Fixture {
 }
 
 fn module<'a>(v: &'a GraphView, name: &str) -> &'a ModuleView {
-    v.modules.iter().find(|m| m.name == name).unwrap()
+    v.modules.iter().find(|m| m.key == name).unwrap()
 }
 
 fn node<'a>(m: &'a ModuleView, label: &str) -> &'a ViewNode {
-    m.nodes.iter().find(|n| n.label == label).unwrap_or_else(|| panic!("no {label} in {}", m.name))
+    m.nodes.iter().find(|n| n.label == label).unwrap_or_else(|| panic!("no {label} in {}", m.key))
 }
 
 /// `label:kind` of each input, in order.
@@ -94,14 +95,14 @@ fn consistent(m: &ModuleView) {
     pairs.dedup();
     let mut edges = m.edges.clone();
     edges.sort();
-    assert_eq!(pairs, edges, "{}", m.name);
+    assert_eq!(pairs, edges, "{}", m.key);
 }
 
 #[test]
 fn the_bass_tracks_ports_are_named_where_they_are_written_and_typed() {
     let fixture = Fixture::first_song();
     let v = fixture.open().view();
-    let bass = module(&v, "Bass");
+    let bass = module(&v, "bass");
     consistent(bass);
     assert_eq!(bass.port_edges.len(), 8);
 
@@ -142,13 +143,14 @@ fn the_mixers_inputs_follow_the_code_and_imports_land_where_they_are_written() {
     let labels: Vec<&str> = mixer.inputs.iter().map(|p| p.label.as_str()).collect();
     assert_eq!(labels, ["kick", "hats.in", "hats.db", "hats.pan", "bass", "keys.in", "keys.db", "keys.pan"]);
     assert!(mixer.inputs.iter().filter(|p| p.label.ends_with("db") || p.label.ends_with("pan")).all(|p| p.knob.is_some()));
+    // Imports are shown by their track's label (ID-10).
     assert_eq!(wire(song, "Hats.out", "mixer"), ("audio".into(), "hats.in".into(), "audio"));
     assert_eq!(wire(song, "duck", "mixer"), ("audio".into(), "bass".into(), "audio"));
     assert_eq!(wire(song, "Kick.env", "duck"), ("control".into(), "side".into(), "control"));
     assert_eq!(inputs(node(song, "duck")), ["in:audio", "side:control", "depth:control"]);
 
     // Another track's export is typed as that track's graph types it.
-    let kick = module(&v, "Kick");
+    let kick = module(&v, "kick");
     consistent(kick);
     let follow = node(kick, "follow");
     assert_eq!(inputs(follow), ["in:audio", "release:control"]);

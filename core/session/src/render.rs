@@ -17,10 +17,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::{Context, Result, bail};
 use m2_ir::Flat;
 use m2_runtime::{PackageSet, Renderer};
-use m2_song::Project;
+use m2_song::DataSet;
 
-/// What exports are rendered at.
-pub const SAMPLE_RATE: u32 = 48_000;
 /// The longest render. A WAV file's sizes are 32-bit, so it can't hold much over 4 hours of
 /// 24-bit stereo at 48 kHz; and a song this long is most likely a clip put far past the rest.
 pub const MAX_SECONDS: f64 = 3.0 * 3600.0;
@@ -75,8 +73,9 @@ impl Rendered {
 }
 
 impl Render {
-    /// Render a compiled project from `from` seconds in (replaying up to there first).
-    pub fn new(flat: &Flat, project: &Project, packages: &PackageSet, sample_rate: u32, from: f64, length: Length) -> Result<Render> {
+    /// Render a compiled revision (its graph and the data it plays) from `from` seconds in
+    /// (replaying up to there first).
+    pub fn new(flat: &Flat, data: &DataSet, packages: &PackageSet, sample_rate: u32, from: f64, length: Length) -> Result<Render> {
         if !(from >= 0.0 && from.is_finite()) {
             bail!("can't start rendering at {from} seconds");
         }
@@ -85,14 +84,18 @@ impl Render {
         {
             bail!("can't render {s} seconds");
         }
-        let tempo = project.timeline.tempo()?;
-        let last = project.timeline.end();
+        let tempo = data.tempo();
+        let last = data.end();
         let end = (tempo.seconds_at(last) * sample_rate as f64).round() as u64;
         let first = (from * sample_rate as f64).round() as u64;
         match length {
             Length::Seconds(s) if s > MAX_SECONDS => bail!("can't render {s} seconds: {} is the most music2 renders", hours(MAX_SECONDS)),
             Length::Song if end.saturating_sub(first) as f64 / sample_rate as f64 + TAIL_MAX > MAX_SECONDS => {
-                let bar = (last / project.timeline.beats_per_bar() as f64).ceil();
+                // The bar the last clip ends in: one ending on a bar line ends the bar before it.
+                let bar = match data.arrangement.bar_at(last) {
+                    (b, at) if at == 0.0 && b > 0 => b,
+                    (b, _) => b + 1,
+                };
                 bail!(
                     "its last clip ends in bar {bar}, {} in, past the {} music2 can export. Is a clip far past the rest?",
                     hours(end as f64 / sample_rate as f64),
@@ -101,7 +104,7 @@ impl Render {
             }
             _ => {}
         }
-        let mut renderer = Renderer::for_project(flat, project, packages, sample_rate)?;
+        let mut renderer = Renderer::new(flat, data, packages, sample_rate)?;
         renderer.set_strict(false);
         renderer.seek(first)?;
         Ok(Render { renderer, sample_rate, end, length, stop: Arc::default() })
@@ -308,7 +311,12 @@ fn hours(seconds: f64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use m2_song::Project;
+
     use super::*;
+
+    /// The rate these tests render at; a project renders at its own (RENDER-31a).
+    const SAMPLE_RATE: u32 = 48_000;
 
     fn std_packages() -> PackageSet {
         let mut p = PackageSet::default();
@@ -323,7 +331,7 @@ mod tests {
             static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
             let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let dir = std::env::temp_dir().join(format!("m2-render-test-{}-{n}", std::process::id()));
-            for (name, text) in files {
+            for (name, text) in [("music2.toml", crate::tests::MANIFEST)].iter().chain(files) {
                 let p = dir.join(name);
                 std::fs::create_dir_all(p.parent().unwrap()).unwrap();
                 std::fs::write(p, text).unwrap();
@@ -337,7 +345,7 @@ mod tests {
             let mut packages = std_packages();
             let compiled = crate::compile(&project, &mut packages).unwrap_or_else(|e| panic!("{e:?}"));
             let out = self.0.join("out.wav");
-            let r = Render::new(&compiled.flat, &project, &packages, SAMPLE_RATE, 0.0, length).unwrap().write(&out, |_| {}).unwrap();
+            let r = Render::new(&compiled.flat, &compiled.data, &packages, SAMPLE_RATE, 0.0, length).unwrap().write(&out, |_| {}).unwrap();
             let mut wav = hound::WavReader::open(&out).unwrap();
             assert_eq!((wav.spec().channels, wav.spec().sample_rate, wav.spec().bits_per_sample), (2, SAMPLE_RATE, 24));
             assert_eq!(wav.duration() as u64, r.frames);
@@ -354,15 +362,15 @@ mod tests {
 
     const SR: usize = SAMPLE_RATE as usize;
     /// 120 bpm, so a beat is half a second.
-    const TEMPO: (&str, &str) = ("timeline/song.json", r#"{"tempo": [{"beat": 0, "bpm": 120}]}"#);
+    const TEMPO: (&str, &str) = ("data/arrangement.json", r#"{"tempo": [{"beat": 0, "bpm": 120}]}"#);
 
     fn pad_song(clips: &str) -> Dir {
         Dir::new(&[
             (
                 "song.ts",
-                "import { song, track } from '@m2/core';\nimport { pad } from 'std/instruments';\nconst p = track('Pad', ({ lane }) => pad(lane.notes('chords')));\nexport default song(() => p.out);\n",
+                "import { song, track } from '@m2/core';\nimport { pad } from 'std/instruments';\nconst p = track('pad', ({ lane }) => pad(lane.notes('chords')));\nexport default song(() => p.out);\n",
             ),
-            ("timeline/pad.chords.json", clips),
+            ("data/pad/chords.json", clips),
             TEMPO,
         ])
     }
@@ -389,7 +397,7 @@ mod tests {
                 "song.ts",
                 "import { hz, song } from '@m2/core';\nimport { osc } from 'std/dsp';\nexport default song(() => osc.sine(hz(440)));\n",
             ),
-            ("timeline/song.json", r#"{"tempo": [{"beat": 0, "bpm": 120}]}"#),
+            TEMPO,
         ]);
         // No clips: the song ends where it starts, and only the tail is rendered.
         let (r, _) = dir.render(Length::Song);
@@ -420,9 +428,9 @@ mod tests {
         assert_eq!(r.frames as usize, SR + SR / 4);
         let project = Project::open(&dir.0).unwrap();
         let mut packages = std_packages();
-        let flat = crate::compile(&project, &mut packages).unwrap().flat;
+        let compiled = crate::compile(&project, &mut packages).unwrap();
         for (from, length) in [(0.0, Length::Seconds(0.0)), (0.0, Length::Seconds(f64::NAN)), (-1.0, Length::Song)] {
-            assert!(Render::new(&flat, &project, &packages, SAMPLE_RATE, from, length).is_err(), "{from} {length:?}");
+            assert!(Render::new(&compiled.flat, &compiled.data, &packages, SAMPLE_RATE, from, length).is_err(), "{from} {length:?}");
         }
     }
 
@@ -432,11 +440,11 @@ mod tests {
         let project = Project::open(&dir.0).unwrap();
         let mut packages = std_packages();
         let compiled = crate::compile(&project, &mut packages).unwrap();
-        let render = Render::new(&compiled.flat, &project, &packages, SAMPLE_RATE, 0.0, Length::Song).unwrap();
+        let render = Render::new(&compiled.flat, &compiled.data, &packages, SAMPLE_RATE, 0.0, Length::Song).unwrap();
         let out = dir.0.join("no-such-folder/out.wav");
         assert!(render.write(&out, |_| {}).is_err());
         assert!(!out.exists());
-        let render = Render::new(&compiled.flat, &project, &packages, SAMPLE_RATE, 0.0, Length::Song).unwrap();
+        let render = Render::new(&compiled.flat, &compiled.data, &packages, SAMPLE_RATE, 0.0, Length::Song).unwrap();
         let out = dir.0.join("out.wav");
         let mut reports = vec![];
         render.write(&out, |p| reports.push(p)).unwrap();
@@ -454,7 +462,7 @@ mod tests {
         let project = Project::open(&dir.0).unwrap();
         let mut packages = std_packages();
         let compiled = crate::compile(&project, &mut packages).unwrap();
-        Render::new(&compiled.flat, &project, &packages, SAMPLE_RATE, 0.0, length)
+        Render::new(&compiled.flat, &compiled.data, &packages, SAMPLE_RATE, 0.0, length)
     }
 
     fn parts(dir: &Path) -> Vec<String> {

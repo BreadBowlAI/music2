@@ -3,7 +3,7 @@ import { blend, lfo } from "std/control";
 import { bass } from "std/instruments";
 import { xrange } from "std/math";
 
-export default track("Bass", ({ lane, time }) => {
+export default track("bass", { name: "Bass" }, ({ lane, time }) => {
   const cutoff = lane.control("cutoff", "hz", hz(500)); // automation, drawn on the timeline
   const drop = lane.mask("drop"); // 1 where the wobble should take over
 

@@ -1,0 +1,16 @@
+{"clips": [
+  {"id": "a3s9vpxb", "start": 0, "length": 2, "asset": "keys-bounce.wav", "hash": "d0cc6247d0cce0ab", "offset": 0, "gain_db": 0, "fade_in": 0, "fade_out": 0, "reverse": false, "pitch": 0, "warp": []},
+  {"id": "j6xncyg7", "start": 2, "length": 2, "asset": "keys-bounce.wav", "hash": "d0cc6247d0cce0ab", "offset": 0, "gain_db": 0, "fade_in": 0.02, "fade_out": 0, "reverse": true, "pitch": 0, "warp": []},
+  {"id": "nwskkw0g", "start": 4, "length": 1, "asset": "keys-bounce.wav", "hash": "d0cc6247d0cce0ab", "offset": 0, "gain_db": 0, "fade_in": 0, "fade_out": 0, "reverse": false, "pitch": 12, "warp": []},
+  {"id": "x5175mvv", "start": 5, "length": 1, "asset": "keys-bounce.wav", "hash": "d0cc6247d0cce0ab", "offset": 1.5, "gain_db": 0, "fade_in": 0, "fade_out": 0, "reverse": false, "pitch": -5, "warp": []},
+  {"id": "bttgmw60", "start": 6, "length": 4, "asset": "keys-bounce.wav", "hash": "d0cc6247d0cce0ab", "offset": 0, "gain_db": 0, "fade_in": 0, "fade_out": 0.1, "reverse": false, "pitch": 0, "warp": [[0, 0], [1, 4]]},
+  {"id": "84f0shn6", "start": 10, "length": 0.25, "asset": "keys-bounce.wav", "hash": "d0cc6247d0cce0ab", "offset": 0.75, "gain_db": 0, "fade_in": 0, "fade_out": 0.01, "reverse": false, "pitch": 0, "warp": []},
+  {"id": "3me8745j", "start": 10.25, "length": 0.25, "asset": "keys-bounce.wav", "hash": "d0cc6247d0cce0ab", "offset": 0.75, "gain_db": 0, "fade_in": 0, "fade_out": 0.01, "reverse": false, "pitch": 0, "warp": []},
+  {"id": "s0fe2m4e", "start": 10.5, "length": 0.25, "asset": "keys-bounce.wav", "hash": "d0cc6247d0cce0ab", "offset": 0.75, "gain_db": 0, "fade_in": 0, "fade_out": 0.01, "reverse": false, "pitch": 0, "warp": []},
+  {"id": "zzf4bbaw", "start": 10.75, "length": 0.25, "asset": "keys-bounce.wav", "hash": "d0cc6247d0cce0ab", "offset": 0.75, "gain_db": 0, "fade_in": 0, "fade_out": 0.01, "reverse": false, "pitch": 0, "warp": []},
+  {"id": "51t5r2yk", "start": 11, "length": 0.25, "asset": "keys-bounce.wav", "hash": "d0cc6247d0cce0ab", "offset": 0.75, "gain_db": 0, "fade_in": 0, "fade_out": 0.01, "reverse": false, "pitch": 0, "warp": []},
+  {"id": "rdtkb5yw", "start": 11.25, "length": 0.25, "asset": "keys-bounce.wav", "hash": "d0cc6247d0cce0ab", "offset": 0.75, "gain_db": 0, "fade_in": 0, "fade_out": 0.01, "reverse": false, "pitch": 0, "warp": []},
+  {"id": "w6xxnn1c", "start": 11.5, "length": 0.25, "asset": "keys-bounce.wav", "hash": "d0cc6247d0cce0ab", "offset": 0.75, "gain_db": 0, "fade_in": 0, "fade_out": 0.01, "reverse": false, "pitch": 0, "warp": []},
+  {"id": "9j490tbs", "start": 11.75, "length": 0.25, "asset": "keys-bounce.wav", "hash": "d0cc6247d0cce0ab", "offset": 0.75, "gain_db": 0, "fade_in": 0, "fade_out": 0.01, "reverse": false, "pitch": 0, "warp": []},
+  {"id": "cdayrg4g", "start": 12, "length": 4, "asset": "keys-bounce.wav", "hash": "d0cc6247d0cce0ab", "offset": 0, "gain_db": 0, "fade_in": 0, "fade_out": 0.3, "reverse": false, "pitch": 7, "warp": [[0, 0], [2, 4]]}
+]}

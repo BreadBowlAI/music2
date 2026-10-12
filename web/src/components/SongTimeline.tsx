@@ -1,7 +1,30 @@
 import clsx from "clsx";
-import { AudioWaveform } from "lucide-react";
+import { AudioWaveform, CircleAlert, Info, TriangleAlert } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { findNoteClip, laneWriting, writeLane, type ClipRef, type ControlClip, type NoteClip, type TimelineLane, type TimelineTrack, type TimelineView } from "../lib/graph";
+import {
+  barAt,
+  bars,
+  clipIndex,
+  clipRef,
+  findLane,
+  findNoteClip,
+  hasOwnId,
+  keyNote,
+  labelOf,
+  moduleName,
+  laneWriting,
+  meterSpans,
+  newClipId,
+  writeLane,
+  type ClipRef,
+  type ControlClip,
+  type Diagnostic,
+  type Meter,
+  type NoteClip,
+  type TimelineLane,
+  type TimelineTrack,
+  type TimelineView,
+} from "../lib/graph";
 import { useStore } from "../lib/store";
 
 const HEADER_W = 236;
@@ -22,7 +45,7 @@ type Rgb = [number, number, number];
 const COLORS: Rgb[] = [[255, 94, 135], [255, 159, 67], [255, 214, 92], [94, 214, 140], [72, 196, 230], [124, 131, 253], [196, 113, 237]];
 const dark = (c: Rgb) => rgb([c[0] * 0.55, c[1] * 0.55, c[2] * 0.55]);
 
-/** A module's color, by its place in the timeline (null if it has no row there). */
+/** A module's color, by its key's place in the timeline (null if it has no row there). */
 export function trackColor(timeline: TimelineView, module: string) {
   const i = timeline.tracks.findIndex((t) => t.module === module);
   return i < 0 ? null : rgb(COLORS[i % COLORS.length]);
@@ -38,38 +61,13 @@ const UNITS: Record<string, string> = { hz: "Hz", db: "dB", unit01: "0…1", bip
 const beats = (n: number) => Number(n.toFixed(3));
 const span = (c: { start: number; length: number }) => `beats ${beats(c.start)}–${beats(c.start + c.length)}`;
 
-/** A clip by where it is, which a lane write keeps while its index may change. */
-interface Span { start: number; length: number }
-
-/**
- * What a lane write from the timeline leaves picked and open, once the graph shows it (its
- * revision, unknown while it is on its way). `open` is where the open clip ends up: null if
- * the write removes it, undefined if it isn't in this lane.
- */
-interface Follow { module: string; lane: string; revision: number; picked: Span | null; open?: Span | null; opens: boolean }
-
-/**
- * Where notes clip `was` (at `index` of `before`) is in `after`, the same lane changed: at its
- * span (moved in the lane's order), at its index with its start (made longer or shorter), or a
- * clip new to the lane with its length and notes (moved by an undo or elsewhere). Null if it is gone.
- */
-function follows(was: NoteClip, index: number, before: NoteClip[], after: NoteClip[]): number | null {
-  const at = (c: NoteClip | undefined) => !!c && c.start === was.start && c.length === was.length;
-  if (at(after[index])) return index;
-  const same = after.findIndex(at);
-  if (same >= 0) return same;
-  if (after[index]?.start === was.start) return index;
-  const notes = JSON.stringify(was.notes);
-  const moved = after.findIndex(
-    (c) => !before.some((b) => b.start === c.start && b.length === c.length) && c.length === was.length && JSON.stringify(c.notes) === notes,
-  );
-  return moved >= 0 ? moved : null;
-}
+/** A clip the timeline made, to pick (and open) once the graph shows the write that made it. */
+interface Made { revision: number; clip: ClipRef }
 
 /** Editing notes clips in place: pick one (and drag it along the beats), or make one. Stable across renders. */
 interface ClipEdits {
   down: (clip: ClipRef, e: React.PointerEvent<HTMLElement>) => void;
-  /** A double-click on empty space in a notes lane, at `beat`. */
+  /** A double-click on empty space in a notes lane (module and lane keys), at `beat`. */
   create: (module: string, lane: string, beat: number) => void;
   unpick: () => void;
   /** Delete the picked clip. */
@@ -84,7 +82,27 @@ function audible(clip: NoteClip) {
   });
 }
 
-/** The song as the accepted revision plays it: a row per lane, grouped by track, under a ruler that seeks. */
+/** The tempo and time signature changes after the start, by beat. */
+function changes(timeline: TimelineView) {
+  const at = new Map<number, { beat: number; bpm?: number; meter?: string }>();
+  const get = (beat: number) => at.get(beat) ?? at.set(beat, { beat }).get(beat)!;
+  for (const t of timeline.tempo.slice(1)) get(t.beat).bpm = beats(t.bpm);
+  for (const m of timeline.meter.slice(1)) get(m.beat).meter = `${m.beats}/${m.unit}`;
+  return [...at.values()].sort((a, b) => a.beat - b.beat);
+}
+
+/** Where the timeline ends: a bar after the bar the last clip, or the playhead, is in. */
+function room(meter: Meter[], end: number, beat: number) {
+  // A clip ending on a bar line is in the bar before it.
+  const last = barAt(meter, Math.max(end, beat, 1e-6) - 1e-6);
+  const next = last.start + last.length;
+  return next + barAt(meter, next).length;
+}
+
+/**
+ * The song as the accepted revision plays it: a row per lane, grouped by track, under a ruler that
+ * seeks. Tracks, lanes and clips are named by their keys and ids, never by their place (ID-11, FMT-12).
+ */
 export default function SongTimeline({
   timeline,
   revision,
@@ -92,9 +110,9 @@ export default function SongTimeline({
   playing,
   selected,
   open,
+  issues,
   onSelect,
   onOpenClip,
-  onCloseClip,
   onSeek,
 }: {
   timeline: TimelineView;
@@ -102,15 +120,15 @@ export default function SongTimeline({
   revision: number;
   beat: number;
   playing: boolean;
-  /** The selected module's name. */
+  /** The selected module's key. */
   selected: string | undefined;
   /** The notes clip open for editing, outlined. */
   open: ClipRef | null;
+  /** What needs attention, by module key: marked on the track. */
+  issues: ReadonlyMap<string, Diagnostic[]>;
   onSelect: (module: string) => void;
   /** Double-clicking a notes clip opens it. */
   onOpenClip: (clip: ClipRef) => void;
-  /** The open clip is gone (deleted here, undone, edited elsewhere). */
-  onCloseClip: () => void;
   onSeek: (beat: number) => void;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
@@ -124,8 +142,7 @@ export default function SongTimeline({
   // A bar of room after the last clip and after the playhead, which plays on past the
   // song's end; never narrower than the window. Grown a bar at a time, the rows redraw
   // once a bar rather than on every poll.
-  const bpb = timeline.beats_per_bar;
-  const width = Math.max((Math.max(timeline.end, Math.ceil(beat / bpb) * bpb) + bpb) * PPB, visible);
+  const width = Math.max(room(timeline.meter, timeline.end, beat) * PPB, visible);
   const x = beat * PPB;
 
   // Follow the playhead while playing.
@@ -135,108 +152,49 @@ export default function SongTimeline({
     if (x < el.scrollLeft || x > el.scrollLeft + el.clientWidth - HEADER_W - 40) el.scrollLeft = Math.max(0, x - 80);
   }, [x, playing]);
 
-  // The picked notes clip (Delete removes it), and one being dragged to a new start.
+  // The picked notes clip (Delete removes it), and one being dragged to a new start. Both are
+  // named by id, so an edit that reorders the lane (a move, an undo, an edit elsewhere) keeps
+  // them; one that is gone is unpicked here, and closed by the canvas if it was open.
   const [picked, setPicked] = useState<ClipRef | null>(null);
   const [moving, setMoving] = useState<{ clip: ClipRef; start: number } | null>(null);
   if (picked && !findNoteClip(timeline, picked)) setPicked(null);
-  const latest = useRef({ timeline, revision, open, onOpenClip, onCloseClip, picked });
-  latest.current = { timeline, revision, open, onOpenClip, onCloseClip, picked };
-  const follow = useRef<Follow | null>(null);
+  const latest = useRef({ timeline, revision, open, onOpenClip, picked });
+  latest.current = { timeline, revision, open, onOpenClip, picked };
+  const made = useRef<Made | null>(null);
 
-  /** Once the graph shows a write made here, pick and open the clips it was about, wherever they now sort. */
+  /** Once the graph shows the write that made a clip, pick it and open it. */
   const settle = () => {
-    const f = follow.current;
+    const m = made.current;
     const graph = useStore.getState().graph;
-    if (!f || !graph || graph.view.revision < f.revision) return;
-    follow.current = null;
-    const lane = graph.timeline.tracks.find((t) => t.module === f.module)?.lanes.find((l) => l.id === f.lane);
-    if (lane?.kind !== "notes") return;
-    const find = (s: Span | null | undefined) => (s ? lane.clips.findIndex((c) => c.start === s.start && c.length === s.length) : -1);
-    const p = find(f.picked), o = find(f.open);
-    setPicked(p < 0 ? null : { module: f.module, lane: f.lane, index: p });
-    const now = latest.current.open;
-    const here = !!now && now.module === f.module && now.lane === f.lane;
-    if (o >= 0 && (f.opens || !now || (here && now.index !== o))) {
-      latest.current.onOpenClip({ module: f.module, lane: f.lane, index: o });
-    } else if (f.open === null && here) {
-      latest.current.onCloseClip();
-    }
+    if (!m || !graph || graph.view.revision < m.revision) return;
+    made.current = null;
+    if (!findNoteClip(graph.timeline, m.clip)) return;
+    setPicked(m.clip);
+    latest.current.onOpenClip(m.clip);
   };
-
-  // Clips are named by their index, which an edit that reorders a lane changes (an undo, an
-  // edit elsewhere). So when the timeline changes, the open and the picked clip follow their
-  // clip (see `follows`), and close or unpick if it is gone; a clip closed only because its
-  // index ran out opens again. A lane the timeline is writing follows that write instead
-  // (`settle`). Compared with the previous render's values, kept after each render.
-  const prev = useRef({ timeline, open, picked });
-  useEffect(() => {
-    const was = prev.current;
-    if (was.timeline !== timeline) {
-      const same = (a: ClipRef | null, b: ClipRef | null) => a === b || (!!a && !!b && a.module === b.module && a.lane === b.lane && a.index === b.index);
-      const writing = (ref: ClipRef) => follow.current?.module === ref.module && follow.current.lane === ref.lane;
-      const notes = (t: TimelineView, ref: ClipRef) => {
-        const lane = t.tracks.find((x) => x.module === ref.module)?.lanes.find((l) => l.id === ref.lane);
-        return lane?.kind === "notes" ? lane.clips : null;
-      };
-      /** The clip's new place: undefined if it stays where it is, null if it is gone. */
-      const moved = (ref: ClipRef | null): ClipRef | null | undefined => {
-        const before = ref && findNoteClip(was.timeline, ref);
-        if (!ref || !before || writing(ref)) return undefined;
-        const after = notes(timeline, ref);
-        const index = after ? follows(before, ref.index, notes(was.timeline, ref) ?? [], after) : null;
-        return index === ref.index ? undefined : index === null ? null : { ...ref, index };
-      };
-      if (!open || same(open, was.open)) {
-        const o = moved(was.open);
-        if (o) onOpenClip(o);
-        else if (o === null && open) onCloseClip();
-      }
-      if (!picked || same(picked, was.picked)) {
-        const p = moved(was.picked);
-        if (p !== undefined) setPicked(p);
-      }
-    }
-    settle();
-  }, [timeline]);
-  useEffect(() => {
-    prev.current = { timeline, open, picked };
-  });
+  useEffect(settle, [timeline]);
 
   const edits = useMemo<ClipEdits>(() => {
-    const laneOf = (module: string, id: string) => {
-      const l = latest.current.timeline.tracks.find((t) => t.module === module)?.lanes.find((x) => x.id === id);
+    const laneOf = (module: string, lane: string) => {
+      const l = findLane(latest.current.timeline, module, lane);
       return l?.kind === "notes" ? l : null;
     };
-    /** One lane write: every clip the lane is to have, and the spans to pick and open afterwards. */
-    const write = (module: string, lane: string, clips: NoteClip[], after: Omit<Follow, "module" | "lane" | "revision">) => {
+    /** One lane write: every clip the lane is to have. */
+    const write = (module: string, lane: string, clips: NoteClip[]) => {
       const graph = useStore.getState().graph;
       // Clips are rewritten from the timeline shown, so wait until it shows the last write.
-      if (!graph || laneWriting(graph)) return;
-      const f: Follow = { module, lane, revision: Infinity, ...after };
-      follow.current = f;
-      writeLane(graph, module, lane, clips, latest.current.revision).then(
-        (r) => {
-          f.revision = r.revision;
-          settle();
-        },
-        (error) => {
-          if (follow.current === f) follow.current = null;
-          useStore.getState().toast(error instanceof Error ? error.message : String(error));
-        },
-      );
+      if (!graph || laneWriting(graph)) return null;
+      const w = writeLane(graph, module, lane, clips, latest.current.revision);
+      w.catch((error) => useStore.getState().toast(error instanceof Error ? error.message : String(error)));
+      return w;
     };
-    /** Where the open clip will be after an edit of its lane (null: gone); undefined if it isn't in this lane. */
-    const openAfter = (module: string, lane: string, change: (i: number, c: NoteClip) => Span | null) => {
-      const o = latest.current.open, l = laneOf(module, lane);
-      return o && o.module === module && o.lane === lane && l?.clips[o.index] ? change(o.index, l.clips[o.index]) : undefined;
-    };
-    const span = (c: Span): Span => ({ start: c.start, length: c.length });
     return {
       down(clip, e) {
         if (e.button !== 0) return;
         setPicked(clip);
         scroller.current?.focus({ preventScroll: true });
-        const c = laneOf(clip.module, clip.lane)?.clips[clip.index];
+        const lane = laneOf(clip.module, clip.lane);
+        const c = lane?.clips[clipIndex(lane.clips, clip)];
         if (!c) return;
         const el = e.currentTarget, pointer = e.pointerId, x0 = e.clientX;
         el.setPointerCapture(pointer);
@@ -252,32 +210,42 @@ export default function SongTimeline({
           for (const [type, f] of listeners) el.removeEventListener(type, f as EventListener);
           setMoving(null);
           const lane = laneOf(clip.module, clip.lane);
-          if (ev.type !== "pointerup" || to === null || to === c.start || !lane) return;
-          const moved = { start: to, length: c.length };
-          const clips = lane.clips.map((x, i) => (i === clip.index ? { ...x, start: to! } : x));
-          write(clip.module, clip.lane, clips, { picked: moved, open: openAfter(clip.module, clip.lane, (i, x) => (i === clip.index ? moved : span(x))), opens: false });
+          const i = lane ? clipIndex(lane.clips, clip) : -1;
+          if (ev.type !== "pointerup" || to === null || to === c.start || !lane || i < 0) return;
+          // Moved, the clip keeps its id; an anonymous one gets the id its reference names.
+          write(clip.module, clip.lane, lane.clips.map((x, k) => (k === i ? { ...x, id: clip.id, start: to! } : x)));
         };
         const listeners = [["pointermove", move], ["pointerup", end], ["pointercancel", end], ["lostpointercapture", end]] as const;
         for (const [type, f] of listeners) el.addEventListener(type, f as EventListener);
       },
-      create(module, id, beat) {
-        const lane = laneOf(module, id);
+      create(module, key, beat) {
+        const lane = laneOf(module, key);
         if (!lane) return;
         // The bar clicked, after any clip before it and up to the next; one bar at most.
-        const bpb = latest.current.timeline.beats_per_bar;
+        const bar = barAt(latest.current.timeline.meter, beat);
         const before = Math.max(0, ...lane.clips.filter((c) => c.start + c.length <= beat).map((c) => c.start + c.length));
         const next = Math.min(Infinity, ...lane.clips.filter((c) => c.start >= beat).map((c) => c.start));
-        const start = Math.max(Math.floor(beat / bpb) * bpb, before);
-        const made = { start, length: Math.min(bpb, next - start) };
-        if (!(made.length > 0) || lane.clips.some((c) => c.start < start + made.length && c.start + c.length > start)) return;
-        write(module, id, [...lane.clips, { ...made, notes: [] }], { picked: made, open: made, opens: true });
+        const start = Math.max(bar.start, before);
+        const length = Math.min(bar.length, next - start);
+        if (!(length > 0) || lane.clips.some((c) => c.start < start + length && c.start + c.length > start)) return;
+        // A new clip always gets a new id (FMT-12).
+        const id = newClipId(lane.clips.map((c) => c.id));
+        const m: Made = { revision: Infinity, clip: { module, lane: key, id } };
+        made.current = m;
+        write(module, key, [...lane.clips, { id, start, length, notes: [] }])?.then(
+          (r) => {
+            m.revision = r.revision;
+            settle();
+          },
+          () => made.current === m && (made.current = null),
+        );
       },
       unpick: () => setPicked(null),
       remove() {
         const p = latest.current.picked, lane = p && laneOf(p.module, p.lane);
-        if (!p || !lane) return;
-        const clips = lane.clips.filter((_, i) => i !== p.index);
-        write(p.module, p.lane, clips, { picked: null, open: openAfter(p.module, p.lane, (i, x) => (i === p.index ? null : span(x))), opens: false });
+        const i = lane ? clipIndex(lane.clips, p!) : -1;
+        if (!p || !lane || i < 0) return;
+        if (write(p.module, p.lane, lane.clips.filter((_, k) => k !== i))) setPicked(null);
       },
     };
     // `latest` carries everything that changes; the edits themselves never do.
@@ -292,6 +260,8 @@ export default function SongTimeline({
     e.stopPropagation();
   };
 
+  // The time signature at the start (an empty list is 4/4).
+  const sig = timeline.meter[0] ?? { beats: 4, unit: 4 };
   // Polls arrive every 200ms; easing between them keeps the playhead moving smoothly.
   const glide = { transform: `translateX(${x}px)` };
   return (
@@ -303,24 +273,18 @@ export default function SongTimeline({
             style={{ width: HEADER_W }}
           >
             TRACKS
-            {timeline.tempo[0] && <span className="font-mono font-medium tracking-normal tabular-nums">{beats(timeline.tempo[0].bpm)} BPM</span>}
+            <span className="font-mono font-medium tracking-normal tabular-nums">
+              <span title="Time signature">{`${sig.beats}/${sig.unit}`}</span>
+              {" · "}
+              {timeline.tempo[0] && `${beats(timeline.tempo[0].bpm)} BPM`}
+            </span>
           </div>
           <Ruler timeline={timeline} width={width} onSeek={onSeek} />
           <div className="absolute bottom-0 z-[35] pointer-events-none transition-transform duration-200 ease-linear" style={{ left: HEADER_W, ...glide }}>
             <div className="w-0 h-0 -translate-x-1/2 border-x-[6px] border-x-transparent border-t-[8px] border-t-sun" />
           </div>
         </div>
-        <Tracks
-          timeline={timeline}
-          width={width}
-          selected={selected}
-          open={open}
-          picked={picked}
-          moving={moving}
-          edits={edits}
-          onSelect={onSelect}
-          onOpenClip={onOpenClip}
-        />
+        <Tracks timeline={timeline} width={width} selected={selected} open={open} picked={picked} moving={moving} issues={issues} edits={edits} onSelect={onSelect} onOpenClip={onOpenClip} />
         <div
           data-testid="playhead"
           data-beat={beat}
@@ -332,19 +296,29 @@ export default function SongTimeline({
   );
 }
 
+/** Bar and beat lines from beat 0 to `width`: one stretch per time signature, each with its own bar length. */
+const Grid = memo(function Grid({ meter, width, bar, beat }: { meter: Meter[]; width: number; bar: string; beat: string }) {
+  return meterSpans(meter, 0, width / PPB).map((s) => (
+    <div
+      key={s.start}
+      aria-hidden
+      className="absolute inset-y-0 pointer-events-none"
+      style={{
+        left: s.start * PPB,
+        width: (s.end - s.start) * PPB,
+        backgroundImage: `linear-gradient(to right, ${bar} 1px, transparent 1px), linear-gradient(to right, ${beat} 1px, transparent 1px)`,
+        backgroundSize: `${s.bar * PPB}px 100%, ${PPB}px 100%`,
+      }}
+    />
+  ));
+});
+
 const Ruler = memo(function Ruler({ timeline, width, onSeek }: { timeline: TimelineView; width: number; onSeek: (beat: number) => void }) {
-  const bar = timeline.beats_per_bar * PPB;
   return (
     <div
       data-testid="ruler"
       className="relative overflow-hidden bg-ink-900/95 backdrop-blur border-b border-black/[0.06] cursor-pointer"
-      style={{
-        width,
-        backgroundImage: "linear-gradient(to right, rgba(0,0,0,0.1) 1px, transparent 1px), linear-gradient(to right, rgba(0,0,0,0.12) 1px, transparent 1px)",
-        backgroundSize: `${bar}px 100%, ${PPB}px 5px`,
-        backgroundPosition: "0 0, 0 100%",
-        backgroundRepeat: "repeat-x",
-      }}
+      style={{ width }}
       title="Click to move the playhead"
       onPointerDown={(e) => {
         if (e.button !== 0) return;
@@ -352,21 +326,40 @@ const Ruler = memo(function Ruler({ timeline, width, onSeek }: { timeline: Timel
         onSeek(Math.max(0, Math.round((e.clientX - left) / PPB)));
       }}
     >
-      {Array.from({ length: Math.ceil(width / bar) }, (_, i) =>
-        bar > 36 || i % (bar > 18 ? 2 : 4) === 0 ? (
-          <span key={i} className="absolute top-2 text-[11px] font-medium text-ink-400 tabular-nums pointer-events-none" style={{ left: i * bar + 6 }}>
-            {i + 1}
+      {/* Bar lines down the ruler, and a tick at each beat along its foot. */}
+      {meterSpans(timeline.meter, 0, width / PPB).map((s) => (
+        <div
+          key={s.start}
+          aria-hidden
+          className="absolute inset-y-0 pointer-events-none"
+          style={{
+            left: s.start * PPB,
+            width: (s.end - s.start) * PPB,
+            backgroundImage: "linear-gradient(to right, rgba(0,0,0,0.1) 1px, transparent 1px), linear-gradient(to right, rgba(0,0,0,0.12) 1px, transparent 1px)",
+            backgroundSize: `${s.bar * PPB}px 100%, ${PPB}px 5px`,
+            backgroundPosition: "0 0, 0 100%",
+            backgroundRepeat: "repeat-x",
+          }}
+        />
+      ))}
+      {bars(timeline.meter, width / PPB).map((b) => {
+        // Narrow bars are numbered every second or fourth.
+        const w = b.length * PPB;
+        return w > 36 || b.bar % (w > 18 ? 2 : 4) === 0 ? (
+          <span key={b.bar} className="absolute top-2 text-[11px] font-medium text-ink-400 tabular-nums pointer-events-none" style={{ left: b.start * PPB + 6 }}>
+            {b.bar + 1}
           </span>
-        ) : null,
-      )}
-      {timeline.tempo.slice(1).map((t, i) => (
+        ) : null;
+      })}
+      {/* Where the tempo or the time signature changes: both at one beat share a mark. */}
+      {changes(timeline).map((c) => (
         <span
-          key={i}
-          className="absolute bottom-1 text-[9px] font-mono text-ink-500 pointer-events-none"
-          style={{ left: t.beat * PPB + 3 }}
-          title={`${beats(t.bpm)} BPM from beat ${beats(t.beat)}`}
+          key={c.beat}
+          className="absolute bottom-1 text-[9px] font-mono text-ink-500 pointer-events-none whitespace-nowrap"
+          style={{ left: c.beat * PPB + 3 }}
+          title={[c.meter && `${c.meter} from bar ${barAt(timeline.meter, c.beat).bar + 1}`, c.bpm && `${c.bpm} BPM from beat ${beats(c.beat)}`].filter(Boolean).join("\n")}
         >
-          ♩{beats(t.bpm)}
+          {[c.meter, c.bpm && `♩${c.bpm}`].filter(Boolean).join(" ")}
         </span>
       ))}
     </div>
@@ -381,6 +374,7 @@ const Tracks = memo(function Tracks({
   open,
   picked,
   moving,
+  issues,
   edits,
   onSelect,
   onOpenClip,
@@ -391,18 +385,12 @@ const Tracks = memo(function Tracks({
   open: ClipRef | null;
   picked: ClipRef | null;
   moving: { clip: ClipRef; start: number } | null;
+  issues: ReadonlyMap<string, Diagnostic[]>;
   edits: ClipEdits;
   onSelect: (module: string) => void;
   onOpenClip: (clip: ClipRef) => void;
 }) {
-  const bpb = timeline.beats_per_bar;
-  const grid = useMemo(
-    () => ({
-      backgroundImage: "linear-gradient(to right, rgba(0,0,0,0.056) 1px, transparent 1px), linear-gradient(to right, rgba(0,0,0,0.025) 1px, transparent 1px)",
-      backgroundSize: `${bpb * PPB}px 100%, ${PPB}px 100%`,
-    }),
-    [bpb],
-  );
+  const grid = <Grid meter={timeline.meter} width={width} bar="rgba(0,0,0,0.056)" beat="rgba(0,0,0,0.025)" />;
   return (
     <>
       {timeline.tracks.map((t, i) => (
@@ -414,6 +402,7 @@ const Tracks = memo(function Tracks({
           open={open?.module === t.module ? open : null}
           picked={picked?.module === t.module ? picked : null}
           moving={moving?.clip.module === t.module ? moving : null}
+          issues={issues.get(t.module)}
           edits={edits}
           width={width}
           grid={grid}
@@ -423,7 +412,8 @@ const Tracks = memo(function Tracks({
       ))}
       <div className="flex-1 flex min-h-6">
         <div className="sticky left-0 z-20 shrink-0 bg-ink-900 border-r border-black/[0.06]" style={{ width: HEADER_W }} />
-        <div className="relative" style={{ width, ...grid }}>
+        <div className="relative" style={{ width }}>
+          {grid}
           {timeline.tracks.length === 0 && (
             <div className="absolute left-12 top-8 max-w-md space-y-1 text-ink-400">
               <div className="text-base font-semibold text-ink-200">No tracks yet</div>
@@ -443,6 +433,7 @@ const TrackRows = memo(function TrackRows({
   open,
   picked,
   moving,
+  issues,
   edits,
   width,
   grid,
@@ -456,19 +447,24 @@ const TrackRows = memo(function TrackRows({
   open: ClipRef | null;
   picked: ClipRef | null;
   moving: { clip: ClipRef; start: number } | null;
+  /** What needs attention in this track. */
+  issues: Diagnostic[] | undefined;
   edits: ClipEdits;
   width: number;
-  grid: React.CSSProperties;
+  grid: ReactNode;
   onSelect: (module: string) => void;
   onOpenClip: (clip: ClipRef) => void;
 }) {
   const color = COLORS[index % COLORS.length];
+  const name = moduleName({ key: track.module, label: track.label });
   // A track without lanes still gets a row, for its name.
   const rows = track.lanes.length ? track.lanes : [null];
+  /** Where a reference's clip is in `lane`, if it is one of its clips. */
+  const at = (ref: ClipRef | null, lane: TimelineLane) => (ref?.lane === lane.key ? clipIndex(lane.clips, ref) : -1);
   return (
     <div data-track={track.module} data-selected={selected || undefined} className="group border-b border-black/[0.07]" onPointerDown={() => onSelect(track.module)}>
       {rows.map((lane, i) => (
-        <div key={lane?.id ?? ""} data-lane={lane ? `${track.module}.${lane.id}` : undefined} className="flex" style={{ height: lane ? LANE_H[lane.kind] : 44 }}>
+        <div key={lane?.key ?? ""} data-lane={lane ? `${track.module}.${lane.key}` : undefined} className="flex" style={{ height: lane ? LANE_H[lane.kind] : 44 }}>
           <div
             className={clsx(
               "sticky left-0 z-20 shrink-0 flex items-center gap-2 pl-4 pr-3 border-r border-black/[0.06] transition-colors",
@@ -480,8 +476,17 @@ const TrackRows = memo(function TrackRows({
             <div className="flex-1 min-w-0">
               {i === 0 && (
                 <>
-                  <div className="text-sm font-semibold text-ink-100 truncate">{track.module === "song" ? "Song" : track.module}</div>
-                  <div className="text-xs text-ink-400">{track.track ? "track" : "mix"}</div>
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span data-testid="track-label" className="text-sm font-semibold text-ink-100 truncate" title={name === track.module ? name : `${name} (${track.module})`}>
+                      {name}
+                    </span>
+                    {issues && <Issues issues={issues} />}
+                  </div>
+                  <div className="text-xs text-ink-400 truncate">
+                    {track.track ? "track" : "mix"}
+                    {/* The key the code and the data files use, when the label doesn't say it. */}
+                    {keyNote(name, track.module) && <span className="font-mono text-[11px] text-ink-500"> · {track.module}</span>}
+                  </div>
                 </>
               )}
             </div>
@@ -489,23 +494,24 @@ const TrackRows = memo(function TrackRows({
           </div>
           <div
             className={clsx("relative overflow-hidden", i > 0 && "border-t border-black/[0.04]", selected ? "bg-ink-800/80" : index % 2 ? "bg-ink-900/40" : "bg-ink-900/70")}
-            style={{ width, ...grid }}
+            style={{ width }}
             title={lane?.kind === "notes" ? "Double-click to add a one-bar clip" : undefined}
             onPointerDown={(e) => !(e.target as HTMLElement).closest("[data-clip]") && edits.unpick()}
             onDoubleClick={(e) => {
               if (lane?.kind !== "notes" || (e.target as HTMLElement).closest("[data-clip]")) return;
-              edits.create(track.module, lane.id, (e.clientX - e.currentTarget.getBoundingClientRect().left) / PPB);
+              edits.create(track.module, lane.key, (e.clientX - e.currentTarget.getBoundingClientRect().left) / PPB);
             }}
           >
+            {grid}
             {lane && (
               <LaneClips
                 lane={lane}
                 color={color}
-                open={open?.lane === lane.id ? open.index : null}
-                picked={picked?.lane === lane.id ? picked.index : null}
-                moving={moving?.clip.lane === lane.id ? moving : null}
-                onOpen={(i) => onOpenClip({ module: track.module, lane: lane.id, index: i })}
-                onDown={(i, e) => edits.down({ module: track.module, lane: lane.id, index: i }, e)}
+                open={at(open, lane)}
+                picked={at(picked, lane)}
+                moving={moving && at(moving.clip, lane) >= 0 ? { index: at(moving.clip, lane), start: moving.start } : null}
+                onOpen={(k) => onOpenClip(clipRef(track.module, lane.key, lane.clips, k))}
+                onDown={(k, e) => edits.down(clipRef(track.module, lane.key, lane.clips, k), e)}
               />
             )}
           </div>
@@ -515,6 +521,23 @@ const TrackRows = memo(function TrackRows({
   );
 });
 
+/** A mark on a track that something in it needs attention: the worst of it, and every message on hover. */
+function Issues({ issues }: { issues: Diagnostic[] }) {
+  const error = issues.some((d) => d.severity === "error");
+  const warning = !error && issues.some((d) => d.severity === "warning");
+  const Icon = error ? CircleAlert : warning ? TriangleAlert : Info;
+  return (
+    <span
+      data-testid="track-issues"
+      data-severity={error ? "error" : warning ? "warning" : "notice"}
+      className={clsx("shrink-0 inline-flex", error ? "text-red-600" : warning ? "text-amber-600" : "text-ink-400")}
+      title={issues.map((d) => d.message).join("\n\n")}
+    >
+      <Icon className="size-3.5" />
+    </span>
+  );
+}
+
 function LaneLabel({ lane }: { lane: TimelineLane }) {
   const detail =
     lane.kind === "notes"
@@ -522,10 +545,13 @@ function LaneLabel({ lane }: { lane: TimelineLane }) {
       : lane.kind === "control"
         ? lane.unit ? UNITS[lane.unit] ?? lane.unit : "control"
         : lane.channels === 1 ? "mono audio" : "stereo audio";
-  const title = lane.kind === "control" && lane.default != null ? `${lane.id}: ${beats(lane.default)} outside clips` : lane.id;
+  const name = labelOf(lane);
+  const named = name === lane.key ? lane.key : `${name} (${lane.key})`;
+  const title = lane.kind === "control" && lane.default != null ? `${named}: ${beats(lane.default)} outside clips` : named;
   return (
     <div className="shrink-0 max-w-[104px] text-right leading-tight" title={title}>
-      <div className="font-mono text-[11px] text-ink-200 truncate">{lane.id}</div>
+      {/* A key reads as code; a label the code gave reads as a name. */}
+      <div className={clsx("text-ink-200 truncate", name === lane.key ? "font-mono text-[11px]" : "text-[12px] font-medium")}>{name}</div>
       <div className="text-[10px] text-ink-400 truncate">{detail}</div>
     </div>
   );
@@ -542,22 +568,26 @@ function LaneClips({
 }: {
   lane: TimelineLane;
   color: Rgb;
-  open: number | null;
-  /** Notes clips only: the picked one, and one being dragged to a new start. */
-  picked: number | null;
-  moving: { clip: ClipRef; start: number } | null;
+  /** Where the open clip is in the lane's clips, or -1; likewise the picked one (notes clips only). */
+  open: number;
+  picked: number;
+  /** A notes clip being dragged to a new start. */
+  moving: { index: number; start: number } | null;
   onOpen: (index: number) => void;
   onDown: (index: number, e: React.PointerEvent<HTMLElement>) => void;
 }) {
+  // A clip is named by its id; one without its own (FMT-12) only by where it is.
+  const id = (i: number) => (hasOwnId(lane.clips, i) ? lane.clips[i].id! : "");
+  const key = (i: number) => id(i) || `#${i}`;
   switch (lane.kind) {
     case "notes":
       return lane.clips.map((c, i) => {
         const notes = audible(c);
-        const dragged = moving?.clip.index === i;
+        const dragged = moving?.index === i;
         return (
           <Clip
-            key={i}
-            index={i}
+            key={key(i)}
+            id={id(i)}
             clip={dragged ? { start: moving.start, length: c.length } : c}
             color={color}
             title={`${notes.length} notes, ${span(c)}\nDouble-click to edit the notes · drag to move · Delete removes`}
@@ -586,7 +616,7 @@ function LaneClips({
             />
           )}
           {lane.clips.map((c, i) => (
-            <Clip key={i} index={i} clip={c} color={color} title={span(c)}>
+            <Clip key={key(i)} id={id(i)} clip={c} color={color} title={span(c)}>
               <Curve clip={c} level={level} color={color} />
             </Clip>
           ))}
@@ -595,7 +625,7 @@ function LaneClips({
     }
     case "audio":
       return lane.clips.map((c, i) => (
-        <Clip key={i} index={i} clip={c} color={color} title={`${c.asset}, ${span(c)}`}>
+        <Clip key={key(i)} id={id(i)} clip={c} color={color} title={`${c.asset}, ${span(c)}`}>
           <div className="absolute inset-x-0 bottom-0 flex items-center gap-1.5 px-2 text-[11px] font-medium text-black/70" style={{ top: BODY_TOP }}>
             <AudioWaveform className="size-3.5 shrink-0" style={{ color: dark(color) }} />
             <span className="truncate">{c.asset}</span>
@@ -606,7 +636,7 @@ function LaneClips({
 }
 
 function Clip({
-  index,
+  id,
   clip,
   color,
   title,
@@ -617,7 +647,8 @@ function Clip({
   onPointerDown,
   children,
 }: {
-  index: number;
+  /** Its id, or "" for a clip without one of its own. */
+  id: string;
   clip: { start: number; length: number };
   color: Rgb;
   title: string;
@@ -632,7 +663,8 @@ function Clip({
 }) {
   return (
     <div
-      data-clip={index}
+      data-clip={id}
+      data-start={clip.start}
       data-open={open || undefined}
       data-picked={picked || undefined}
       title={title}

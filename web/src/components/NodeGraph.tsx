@@ -24,6 +24,8 @@ import {
   display,
   fromUnit,
   graphApi,
+  keyNote,
+  moduleName,
   toUnit,
   type Effect,
   type GraphState,
@@ -40,7 +42,7 @@ import EffectBrowser from "./EffectBrowser";
 
 /** One module's code as a graph to play and tweak: knobs over its values, cables between its signals, effects after its audio. */
 export function NodeGraph({ graph, module }: { graph: GraphState; module: string }) {
-  const shown = graph.view.modules.find((m) => m.name === module);
+  const shown = graph.view.modules.find((m) => m.key === module);
   const laid = useMemo(() => shown && layout(shown), [shown]);
 
   // The zoom: fitted to the panel until the user picks one, per module.
@@ -104,7 +106,7 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
       <div ref={scroller} className="flex-1 min-h-0 overflow-auto p-4 flex flex-col" data-testid="graph">
         {shown && laid && (
           <ModuleSection
-            key={`${graph.session}:${shown.name}`}
+            key={`${graph.session}:${shown.key}`}
             module={shown}
             laid={laid}
             zoom={zoom}
@@ -471,10 +473,14 @@ const ModuleSection = memo(function ModuleSection({
   );
 
   return (
-    <section className="grow shrink-0 w-max min-w-full flex flex-col rounded-2xl bg-ink-900 ring-1 ring-black/[0.05] p-5 pt-4" data-module={module.name}>
+    <section className="grow shrink-0 w-max min-w-full flex flex-col rounded-2xl bg-ink-900 ring-1 ring-black/[0.05] p-5 pt-4" data-module={module.key}>
       <div className="flex items-center gap-2 mb-5">
-        <h2 className="text-sm font-semibold text-ink-100">{module.name === "song" ? "Song" : module.name}</h2>
-        <span className="text-xs text-ink-400">{module.track ? "track" : "mix"}</span>
+        <h2 className="text-sm font-semibold text-ink-100">{moduleName(module)}</h2>
+        <span className="text-xs text-ink-400">
+          {module.track ? "track" : "mix"}
+          {/* The key the code calls it by, when the label doesn't say it. */}
+          {keyNote(moduleName(module), module.key) && <span className="font-mono text-[11px] text-ink-500"> · {module.key}</span>}
+        </span>
         <div className="ml-4 pl-4 border-l border-black/[0.08] flex items-center gap-4 text-[11px] text-ink-400" data-legend>
           {kinds.map((k) => (
             <span key={k} className="inline-flex items-center gap-1.5" data-legend-kind={k}>

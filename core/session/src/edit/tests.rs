@@ -33,7 +33,7 @@ fn control(s: &Session, file: &str, arg: &str) -> Control {
 
 fn render(s: &mut Session, preview: Option<(&Origin, f64)>) -> Vec<[f32; 2]> {
     let rev = s.accepted();
-    let mut r = Renderer::for_project(&rev.compiled.flat, &rev.project, &s.packages, 48_000).unwrap();
+    let mut r = Renderer::new(&rev.compiled.flat, &rev.compiled.data, &s.packages, 48_000).unwrap();
     if let Some((o, v)) = preview {
         assert!(r.set_const(o, v) > 0, "the preview reached the graph");
     }
@@ -157,7 +157,7 @@ fn verification_rejects_an_edit_that_changes_something_else() {
 fn project(files: &[(&str, &str)]) -> PathBuf {
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!("m2-edit-proj-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
-    for (name, text) in files {
+    for (name, text) in [("music2.toml", crate::tests::MANIFEST)].iter().chain(files) {
         let p = dir.join(name);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, text).unwrap();
@@ -203,15 +203,20 @@ fn a_stale_id_whose_call_changed_is_refused() {
 }
 
 #[test]
-fn a_draft_with_bad_timeline_data_doesnt_replace_the_accepted_timeline() {
+// FMT-9: a lane file that fails in a running session is an Error naming the file, and the lane
+// keeps playing the data last accepted for it; nothing else stops.
+fn a_bad_lane_file_keeps_playing_its_last_accepted_data() {
     let dir = first_song();
     let mut s = Session::open(&dir, std_packages()).unwrap();
-    let notes = dir.join("timeline/bass.notes.json");
+    let before = render(&mut s, None);
+    let notes = dir.join("data/bass/notes.json");
     let text = std::fs::read_to_string(&notes).unwrap();
-    std::fs::write(&notes, text.replacen("\"A1\"", "\"H9\"", 1).replacen("\"length\": 32", "\"length\": 40", 1)).unwrap();
+    std::fs::write(&notes, text.replacen("\"A1\"", "\"H9\"", 1)).unwrap();
     assert!(s.refresh());
-    assert!(!s.draft_errors.is_empty(), "H9 is not a pitch");
-    assert!(render(&mut s, None).iter().any(|f| f[0] != 0.0), "the accepted revision, with its own timeline, still renders");
+    assert!(s.draft_errors.is_empty(), "a lane never blocks: {:?}", s.draft_errors);
+    let problems = &s.accepted().compiled.problems;
+    assert_eq!(problems.iter().map(|d| (d.code, d.src.as_deref())).collect::<Vec<_>>(), [("lane.invalid", Some("data/bass/notes.json"))]);
+    assert!(render(&mut s, None) == before, "the bass plays the notes it had");
     std::fs::remove_dir_all(dir).ok();
 }
 
@@ -219,11 +224,11 @@ fn a_draft_with_bad_timeline_data_doesnt_replace_the_accepted_timeline() {
 fn timeline_changes_are_picked_up_even_when_the_length_stays() {
     let dir = first_song();
     let mut s = Session::open(&dir, std_packages()).unwrap();
-    let song = dir.join("timeline/song.json");
+    let song = dir.join("data/arrangement.json");
     std::fs::write(&song, std::fs::read_to_string(&song).unwrap().replace("124", "62")).unwrap();
     assert!(s.refresh());
     assert_eq!(s.accepted().number, 2);
-    assert_eq!(s.accepted().project.timeline.tempo().unwrap().bpm_at(0.0), 62.0);
+    assert_eq!(s.accepted().tempo().bpm_at(0.0), 62.0);
     std::fs::remove_dir_all(dir).ok();
 }
 
@@ -246,11 +251,11 @@ fn the_view_shows_the_calls_written_in_the_project() {
     let dir = first_song();
     let s = Session::open(&dir, std_packages()).unwrap();
     let v = s.view();
-    let module = |name: &str| v.modules.iter().find(|m| m.name == name).unwrap();
-    let node = |m: &crate::ModuleView, label: &str| m.nodes.iter().find(|n| n.label == label).cloned().unwrap_or_else(|| panic!("no {label} in {}: {:?}", m.name, m.nodes.iter().map(|n| &n.label).collect::<Vec<_>>()));
+    let module = |name: &str| v.modules.iter().find(|m| m.key == name).unwrap();
+    let node = |m: &crate::ModuleView, label: &str| m.nodes.iter().find(|n| n.label == label).cloned().unwrap_or_else(|| panic!("no {label} in {}: {:?}", m.key, m.nodes.iter().map(|n| &n.label).collect::<Vec<_>>()));
 
     // The bass track is a handful of calls, not the kernels they expand into.
-    let bass = module("Bass");
+    let bass = module("bass");
     let labels: Vec<&str> = bass.nodes.iter().map(|n| n.label.as_str()).collect();
     for want in ["cutoff", "drop", "notes", "time.beats", "lfo", "xrange", "blend", "bass", "out"] {
         assert!(labels.contains(&want), "{want} missing from {labels:?}");
@@ -275,6 +280,7 @@ fn the_view_shows_the_calls_written_in_the_project() {
     assert_eq!((pan.value, pan.min, pan.max), (0.3, -1.0, 1.0), "pan feeds a bipolar port");
     assert_eq!(knob(&mixer, "hats.db").value, -6.0);
     assert_eq!(knob(&node(song, "duck"), "depth").value, -9.0);
+    // An import is shown by the imported track's label, and addressed by its key (ID-10).
     assert!(edge(song, "Kick.env", "duck") && edge(song, "duck", "mixer") && edge(song, "mixer", "master"));
     std::fs::remove_dir_all(dir).ok();
 }

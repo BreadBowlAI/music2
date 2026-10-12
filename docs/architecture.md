@@ -74,7 +74,7 @@ These answer the plan's open questions (2026-10-12).
 
 **PLANE-3.** Changes to Presentation or Ignored files MUST NOT create a revision.
 - *Why:* moving a node on the canvas must not recompile or rebuild anything.
-- *Today:* `Snapshot::read` takes every `.ts`, `.json` and `.toml` outside dot folders, `node_modules` and `assets` (`core/song/src/lib.rs:67-88`), so a `layout.json` would trigger a compile.
+- *Today:* matches since step 4: a snapshot holds only what `DataPath` classes as Manifest, Code, Arrangement and Lane, and state sidecars, so `layout.json`, `.music2/` and other files make no revision (`core/song/src/lib.rs`; tested in `core/session/src/gate_tests.rs`).
 
 **PLANE-4.** The compile itself SHOULD stay under 100 ms at p95 at 50 tracks.
 - *Why:* the code-plane budget starts after the compile, so a slow compile is felt directly.
@@ -94,7 +94,7 @@ These answer the plan's open questions (2026-10-12).
 
 **RENDER-2.** Given the same project files, asset bytes, package contents, sample rate and runtime, a pure offline render MUST give the same bits. Package contents are the content hashes of every package file the build and the runtime read; each render's and bounce's provenance records them, and the package versions. The output MUST NOT depend on thread count or scheduling: every sum (buses, `poly` voices, overlay mixes) runs in plan order in the consuming partition.
 - *Why:* determinism is what makes caching, tests and reproducible bounces possible. A version requirement such as `std = "0.1"` admits many builds, so only hashes identify what ran. A sum in completion order would make renders differ from run to run.
-- *Today:* matches for pure songs, on one thread. Bounces record whether they are reproducible (`apps/m2/src/main.rs:177`, 197-201), but not which packages ran.
+- *Today:* matches for pure songs, on one thread. Since step 4 each revision records the hash of every package file its build read, and a bounce's provenance records each package's version and the hash of every package file the build and the runtime read (`apps/m2/src/main.rs`). `m2 render` and Export Audio write no provenance yet.
 
 **RENDER-3.** Export and bounce MUST use the offline renderer, never the live engine or a range render. Only agent listening ([RENDER-4](#range-render)) may use a range render. Renders read committed files only: no previews, no overlays.
 - *Why:* what is exported must not depend on what someone was listening to, and a bounce must be exact to reproduce.
@@ -296,11 +296,11 @@ The default MUST reproduce today's output bit for bit. A voice's RuntimeId is it
 
 **RENDER-31.** The live engine MUST run at the `sample_rate` in [the manifest](#manifest-and-versions). It opens the device at that rate, or resamples at the device boundary. It is built in step 4, with `sample_rate`.
 - *Why:* live and export must run the same DSP at the same rate.
-- *Today:* live runs at the device's default rate (`core/play/src/lib.rs:127`, 140; `crates/server/src/graph.rs:84`). The app's Export Audio is fixed at 48 kHz (`core/session/src/render.rs:23`; `crates/server/src/graph.rs:250`); `m2 render` and `m2 bounce` default to it, with `--sr` to override (`apps/m2/src/main.rs:123`, 178).
+- *Today:* matches since step 4: the player runs the engine at `sample_rate` and converts to the device's rate at the boundary when they differ (`core/play/src/resample.rs`), and Export Audio, `m2 render` and `m2 bounce` render at `sample_rate`.
 
 **RENDER-31a.** Offline renders MUST run at `sample_rate`. An export at another rate goes through one fixed, deterministic sample-rate converter after the render. 16-bit output uses TPDF dither from a fixed seed; 24-bit output rounds; 32-bit float is written as rendered. RENDER-2's bits are the render at `sample_rate`, before conversion and dither, and the export's provenance records the rate, the converter and the dither.
 - *Why:* re-running the DSP and plugins at another rate would sound different, and unseeded dither would make exports differ from run to run.
-- *Today:* exports are 24-bit, rounded, with no dither (`core/session/src/render.rs:169`, 249); bounces are 32-bit float.
+- *Today:* offline renders run at `sample_rate` (step 4); `m2 render` and `m2 bounce` refuse `--sr` rather than run the DSP at another rate. Exporting at another rate (the converter) isn't built. Exports are 24-bit, rounded, with no dither and no provenance (`core/session/src/render.rs`); bounces are 32-bit float.
 
 ### Engine shape (step 7)
 
@@ -322,7 +322,7 @@ enum Msg { Activate(Plan, Slots), SwapLane(LaneAddr, Arc<LaneData>), SetArrangem
 
 **RENDER-33.** Live playback from transport 0, on a freshly reset engine, with no edits, no jumps and no overlays, driven with arbitrary device buffer sizes, MUST produce the same `f32` bits as the offline render at the project sample rate (48 kHz until step 4 adds `sample_rate`), before any device resampling, once the live output is shifted by `L` ([RENDER-19](#latency)). CI runs this on every pure fixture from step 3 on.
 - *Why:* it is the one guarantee that live and export run the same engine.
-- *Today:* it holds, because the player renders through `Renderer::process` (`core/play/src/lib.rs:74-102`), but nothing tests it.
+- *Today:* it holds, because the player renders through `Renderer::process`, and a test checks it on a small song for several device buffer sizes (`core/play/src/lib.rs`), not yet on every pure fixture.
 
 ## Identity
 
@@ -336,12 +336,12 @@ enum Msg { Activate(Plan, Slots), SwapLane(LaneAddr, Arc<LaneData>), SetArrangem
 
 **ID-1.** Every key MUST match `^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$`: 1 to 32 characters, lowercase letters, digits and inner hyphens. A leading digit is allowed (`808`).
 - *Why:* keys are readable in file names, and lowercase-only keys can't suffer a case-only rename on a case-insensitive disk.
-- *Today:* track names are free text, turned into file names by `slug()` (`core/script/sdk/core.ts:462-466`; `core/song/src/lib.rs:120-131`). The lane writer only rejects an empty id or one with `/` or `\` (`core/session/src/lanes.rs:64-67`).
+- *Today:* matches since step 4: one key rule, in `m2_ir::key` for the build and the checker and in `m2_song::Key` for paths and data.
 
 **ID-2.** Keys MUST be validated, never normalised. An invalid key is the compile error `key.invalid`, which suggests a valid spelling.
 - A writer (the app's add track, an agent) MAY propose a key from a label once, when it creates the thing: fold to ASCII, lowercase, turn every run of other characters into one `-`, trim to 32 characters and the key rule, and fall back to `track-2`, `track-3`… when the result is empty or taken. It shows the key, writes it into the code, and never derives it again. One shared helper in `crates/editor` does this.
 - *Why:* normalising is what lets two names share files. A key proposed once and then written down is just a default the person can see and change.
-- *Today:* `slug()` normalises (`core/song/src/lib.rs:120-131`), and collisions are rejected after the fact (`core/session/src/lib.rs:76-91`).
+- *Today:* matches since step 4: keys are checked, never normalised, and `key.invalid` suggests a spelling (`m2_ir::key::suggest`). No writer proposes keys yet, so the helper in `crates/editor` isn't built.
 
 **ID-3.** `song` is reserved for the root module.
 - *Today:* matches (`core/script/sdk/core.ts:464`).
@@ -358,29 +358,29 @@ key("chain-l", () => vocalChain(x))                          // a frame: compose
 
 **ID-5.** A key used twice where it must be unique MUST be the compile error `key.duplicate`: a track key anywhere in the project, a `key()` frame key within its parent frame, a plugin key within its frame. The message names both evaluations: the call site, plus the stack of the second, since a `track()` in a helper or a loop has one site that runs twice.
 - *Why:* the error must say exactly what to rename.
-- *Today:* the second `track()` throws "two tracks are named", with one location (`core/script/sdk/core.ts:465`).
+- *Today:* matches since step 4: `key.duplicate` names the call site and the stack of both evaluations (`core/script/sdk/core.ts`).
 
 **ID-6.** A lane declared again with the same kind and settings is the same lane. A redeclaration with another kind or other settings is the compile error `lane.conflict`. A lane key declared from two different `key()` frame chains is the compile error `lane.shared`, unless the declarations say `shared: true`. Lanes are addressed by module key and lane key only, never by frame.
 - *Why:* helpers may read the same lane twice, but `key("chain-l", …)` and `key("chain-r", …)` must not share one automation lane by accident, the way [ID-8](#keys) forbids for state. Keeping lanes out of frames keeps them flat on the timeline and lets code be wrapped in `key()` without moving data.
-- *Today:* a redeclaration with the same kind is the same lane (`core/script/sdk/core.ts:397-406`); there are no frames.
+- *Today:* matches since step 4 (`declareLane` in `core/script/sdk/core.ts`).
 
 **ID-7.** `key(k, fn)` opens a frame. Keys MUST be unique within their parent frame ([ID-5](#keys)). A frame composes plugin state paths now and pins SiteIds from step 7. It is also reserved as a later place for monitoring overlays inside a module ([MON-1](#monitoring-overlays-and-mute-in-song)).
-- *Today:* there is no `key()`.
+- *Today:* matches for state paths since step 4: `key()` frames compose plugin state paths. SiteIds come in step 7.
 
-**ID-8.** A plugin needs a key only once it has saved state, and then it MUST have one. Until then it has an in-memory RuntimeId. The state path is the module key, then the `key()` frames, then the plugin key: `data/vox/chain-l/tune.state`. Two stateful instances that resolve to one path are the error `plugin.state-collision`, whose message says "wrap one in `key()`". `key` is a reserved plugin port name.
+**ID-8.** A plugin needs a key only once it has saved state, and then it MUST have one. Until then it has an in-memory RuntimeId. The state path is the module key, then the `key()` frames, then the plugin key: `data/vox/chain-l/tune.state`. Two stateful instances that resolve to one path are the error `plugin.state-collision`, whose message says "wrap one in `key()`". The same error applies when a plugin without its own key takes its frame's key while that frame directly holds another stateful plugin (plugins in frames nested inside it don't count). `key` is a reserved plugin port name.
 - The app's first state save is a Tx built in `crates/editor`. It inserts `key: "<k>"` at the plugin call when that call is in a project file and runs once in its frame. Otherwise it goes outward along the instance's frame chain to the first call that is in a project file and runs once in its frame, and wraps that call in `key("<k>", …)`; the plugin then takes the innermost frame's key as its state file name, which is allowed only while that frame holds exactly one stateful plugin. If no call on the chain is in a project file (a plugin built inside a package), the save is refused before anything is written, with a message saying where to add `key()`.
 - *Why:* most plugins never need saved state, and two plugins must never share it by accident. A key inserted at a call shared by two instances would collide at once.
-- *Today:* `state: "<name>"` names a file in `assets/plugin-state/` that any plugin naming it shares (`core/script/sdk/core.ts:257-275`; `core/runtime/src/lib.rs:390-393`). The reserved port names are `in`, `notes`, `out` and `state` (`core/plugins/src/lib.rs:681-683`).
+- *Today:* matches since step 4, except that every plugin with a state path counts as stateful, since the build never reads data: a plugin's `key`, or else its innermost `key()` frame's, files its state at `data/<module>/<frames>/<key>.state` (`Op::state_path` in `core/ir`), and two that resolve to one path are `plugin.state-collision`. `key` is consumed by the SDK and is never a port. The app's first state save, a Tx, comes in step 6.
 
 **ID-9.** Windows device names (`aux`, `con`, `nul`, `prn`, `com1`–`com9`, `lpt1`–`lpt9`) are legal keys. `DataPath` MUST add a trailing `-` to every path segment made from such a key (`data/aux-/`, `data/kick/con-.json`). Nothing else may map keys to paths.
 - *Why:* producer names stay legal, Windows stays possible, and the mapping is reversible because no key ends in `-`.
-- *Today:* not handled.
+- *Today:* matches since step 4 (`DataPath` in `core/song/src/path.rs`).
 
 ### Labels
 
 **ID-10.** A label MUST be display text only: never an address, a file name or an import target. It defaults to the key. Changing a label is an `Identical` Tx: labels are ignored when graphs are compared. Code MUST NOT be able to observe a label: the track function's context exposes `key`, never the label, and no handle returns it. The label lives only in the IR (`Module.label`, a lane's `name`).
 - *Why:* renaming a track must never silence it or hand its data to another track, and a song that branched on its label would change its sound when renamed.
-- *Today:* the track function receives `name` (`core/script/sdk/core.ts:383`). The track name is the label and every address at once: the IR module name (`core/ir/src/lib.rs:47-59`), the import target (`core/script/sdk/core.ts:475`), flat node names (`core/ir/src/check.rs:594`), the lane file stem (`core/song/src/lib.rs:378-383`), `m2 bounce --track` and its provenance (`apps/m2/src/main.rs:172-175`, 197-201), `TimelineTrack.module` (`core/session/src/timeline.rs:23-26`) and the web's guess at a module's file (`web/src/lib/code.ts:61-73`). Renaming a track silences it, and a swap of names swaps data.
+- *Today:* matches since step 4: the context exposes `key`, labels live only in the IR, and no handle returns one (tested in `core/script/src/tests.rs`). A label change changes no data file, graph or sound (`core/session/src/gate_tests.rs`). It is a code save until Tx lands in step 6.
 
 **ID-11.** The IR module is `Module { key, label, muted }` (`muted` is "mute in song", [MON-5](#monitoring-overlays-and-mute-in-song)). The key is used by the import op, flat node names, lane addresses, `m2 bounce --track` and `--place`, bounce provenance, `TimelineTrack.module` and UI selection. `slug()` is deleted.
 
@@ -414,7 +414,7 @@ An ambiguous match gets a fresh id, and its state resets.
 
 **ID-16.** A project file MUST NOT contain a derived id. The saved roots are module keys, lane keys, plugin keys and `key()` frames. An optional editor index may live in `.music2/`; it is rebuildable at any time and used only for layout continuity. Seeds and musical defaults MUST NOT be derived from derived ids. Every id-bearing field in the format v1 schemas is a key, a clip id or a CLAP parameter id, and strict parsing ([FMT-8](#strictness)) admits no other field.
 - *Why:* derived ids change with every refactor; saved ones must not. A schema that has no field for a derived id is checkable; "no file contains one" by looking at the files is not.
-- *Today:* matches: nothing derived is saved.
+- *Today:* matches: nothing derived is saved, and a test refuses a derived id in every schema (`core/song/src/data/tests.rs`).
 
 ### Renames
 
@@ -422,7 +422,7 @@ An ambiguous match gets a fresh id, and its state resets.
 - **A label rename** in the UI is an `Identical` Tx.
 - **A key rename** in the app is one Tx that edits the code and renames `data/<key>/`. It may also write `layout.json` ([WRITE-3](#the-two-write-primitives)).
 - **A key rename by hand** leaves the data unclaimed: `data.unclaimed`, with a Relink fix ([DIAG-6](#fixes)): for a track key, of the whole `data/<key>/` folder; for a lane key, of one lane file.
-- *Today:* a rename by hand or in code leaves `timeline/<slug>.*.json` behind. Since step 1 each such file is the Warning `data.unclaimed`, with Relink and Delete fixes, in the app and in every CLI command that opens the project ([DIAG-4](#delivery), [DIAG-6](#fixes)).
+- *Today:* matches for renames by hand since step 4: a track key renamed in code leaves its folder `data.unclaimed`, offered whole, and a lane key its lane file, in the app and in every CLI command that opens the project ([DIAG-4](#delivery), [DIAG-6](#fixes)). The app's key rename and Restore aren't built.
 
 **ID-18.** Mixer channel keys are dictionary slots where the user's key is identity on purpose. The app writes the track key as the channel key of a new channel, but finds a track's channel by following the graph edge from the track's export into the mixer, never by comparing keys. A key rename Tx renames a channel key only when it equals the old track key, and says so in its label.
 - *Why:* a channel whose key differs from its track's (written by hand, or after a rename) must still be found.
@@ -447,7 +447,7 @@ layout.json                  shared presentation, keyed by track key; never part
 
 **FMT-1.** Projects MUST use this layout. This app has no reader for format 0, today's layout: the 5 fixtures are converted once by script ([FMT-21](#conversion)). Formats after 1 follow [FMT-3a](#manifest-and-versions).
 - *Why:* every project's bytes on disk are cheapest to fix before projects exist in the wild.
-- *Today:* lanes are `timeline/<slug>.<lane>.json`, tempo is `timeline/song.json`, and plugin state is `assets/plugin-state/<name>.bin` (`core/song/src/lib.rs:1-10`; `core/runtime/src/lib.rs:390-393`).
+- *Today:* matches since step 4: the 5 fixtures are converted, and a project without `format` is `format.missing`.
 
 ### Manifest and versions
 
@@ -465,19 +465,19 @@ std = "0.1"             # every package the code imports from must be listed
 
 **FMT-2.** `format` versions only the file layout. `[dependencies] "@m2/core"` versions only the code API. A data addition bumps only `format`; an SDK break bumps only `@m2/core`. Each reader checks only its own field. A requirement follows Cargo's caret rule: `"0.1"` means at least 0.1.0 and below 0.2.0, and `"1"` means at least 1.0.0 and below 2.0.0. A package declares its own version in `m2pkg.toml`.
 - *Why:* the two change for different reasons and at different times, and a requirement needs one meaning.
-- *Today:* neither exists. The manifest has only `name` and `entry` (`core/song/src/lib.rs:21-48`).
+- *Today:* matches since step 4 (`core/song/src/manifest.rs`).
 
 **FMT-3.** Opening MUST read `[project] format` first, on its own and leniently, before anything else in the manifest. A missing `format` is `format.missing` (a format-0 project: convert it with the script), an older one `format.older`, a newer one `format.newer`. In each case the project does not open, and the message says what to do. Then the build checks every `[dependencies]` entry: an unsatisfied `@m2/core` is `sdk.unsatisfied`, any other unsatisfied package `pkg.unsatisfied`, each naming the required and the installed version. An import from a package not listed is the compile error `pkg.undeclared`.
 - The app bundles one std. A std release that changes the bits of any existing render MUST bump its version (the minor version while it is 0.x), and CI checks this against the fixtures' recorded renders. So an old project gets `pkg.unsatisfied`, never a silent change in its sound, and that release is the trigger for the lockfile and for shipping several std versions ([Deferred](#deferred-with-triggers)).
 - *Why:* an old app must never rewrite a newer project, a strict parse must not hide a newer format behind `manifest.invalid`, and code must never run against an SDK or a std it wasn't written for.
-- *Today:* the manifest has no `format`, and any installed package can be imported (`core/script/src/lib.rs:239-246`).
+- *Today:* matches since step 4: `format` is read first, `sdk.unsatisfied` and `pkg.unsatisfied` are checked at compile, and `pkg.undeclared` by the build. A test records each pure fixture's render under std's version and fails when one changes while the version stays (`core/session/tests/renders.json`).
 
 **FMT-3a.** After format 1, a format or SDK break MUST ship with a migrator outside core (`m2 migrate`). Migrating is explicit, journaled like a Tx, and never applied on open. The app keeps the previous `@m2/core` major for at least one release after a break.
 - *Why:* "no backwards compatibility" holds only while the fixtures are the only projects. Once people have songs, a break must not orphan them.
 
 **FMT-4.** After `format`, the manifest MUST be read strictly: unknown keys are the error `manifest.invalid`. It blocks acceptance (the last accepted revision keeps playing, or on open nothing plays), but never `save()`, so the manifest can be fixed.
 - *Why:* the lenient reader drops unknown fields when a file is rewritten.
-- *Today:* lenient, with defaults for everything (`core/song/src/lib.rs:21-48`, 103-106).
+- *Today:* matches since step 4 (`core/song/src/manifest.rs`).
 
 ### Paths
 
@@ -504,37 +504,39 @@ impl DataPath { fn path(&self) -> PathBuf; fn parse(p: &Path) -> DataPath; fn cl
 
 **FMT-5.** `core/song` MUST be the only place a project path is spelled or classified, through `DataPath`. The canonical lane writer moves there, beside the reader.
 - *Why:* every copy of a path rule drifts.
-- *Today:* the lane path rule is spelled in four places: `core/song/src/lib.rs:361-365` and 378-383, `core/session/src/lanes.rs:63-68`, `core/session/src/lib.rs:76-91` and `apps/m2/src/main.rs:209`.
+- *Today:* matches since step 4: paths are spelled only by `DataPath` (`core/song/src/path.rs`), and lane files are written by `m2_song::canonical`.
 
 **FMT-6.** A snapshot MUST read only Manifest, Code, Arrangement and Lane files and `.state.json` sidecars. Assets and state blobs are not part of a snapshot; revisions record their hashes.
 - *Why:* only those files define the song, and binary files are too big to snapshot.
-- *Today:* every `.ts`, `.json` and `.toml` is read (`core/song/src/lib.rs:67-88`), and assets are outside revisions altogether (56-59).
+- *Today:* matches since step 4: revisions record the hashes of the assets their lanes name and of state blobs (`core/song/src/lib.rs`).
 
-**FMT-6a.** The build MUST read project code only from the snapshot. A project import resolves only against the snapshot's Code paths, byte for byte (the path, then with `.ts`, then `/index.ts`), with no filesystem probe and no case folding. Any other import (a `.js` file, anything under `data/`, `assets/` or `.music2/`, a path outside the project, or a spelling that differs in case) is the compile error `import.outside-code`, naming the file. Package files are read from disk, and each revision records the content hash of every package file its build read ([RENDER-2](#offline)).
+**FMT-6a.** The build MUST read project code only from the snapshot. A project import resolves only against the snapshot's Code paths, byte for byte (the path, then with `.ts`, then `/index.ts`), with no filesystem probe and no case folding. Any other import (a `.js` file, anything under `data/`, `assets/` or `.music2/`, a path outside the project, or a spelling that differs in case) is the compile error `import.outside-code`, naming the file. Package files are read from disk, and each revision records the content hash of every package file its build read ([RENDER-2](#offline)). A package import that leaves its package, or differs in case from the file on disk, is also `import.outside-code`; a package file that simply doesn't exist is `code.build`.
 - *Why:* a revision must be a function of its snapshot. A file read from disk would change what compiles without making a revision, and a case-insensitive disk would compile `./Tracks/bass` on a Mac and fail it on Linux CI.
-- *Today:* the resolver probes the disk (`core/script/src/lib.rs:229-231`), the loader reads any file missing from the snapshot from disk (267-269), and any file inside the project folder is accepted (249-253).
+- *Today:* matches since step 4: project code comes only from the snapshot, and every revision records the package files its build read (`core/script/src/lib.rs`).
 
 **FMT-7.** A file under `data/` that `DataPath` can't parse raises the Notice `file.unknown`. Other unknown files are ignored silently.
 - *Why:* a typo in a data path should be visible; a README should not.
-- *Today:* a timeline file without a dot fails the whole project (`core/song/src/lib.rs:361-363`).
+- *Today:* matches since step 4, except that the notice reaches a running session only with its next revision, since the unknown file alone makes none ([PLANE-3](#planes-of-change)).
 
 ### Strictness
 
 **FMT-8.** The manifest, lane files, clips, notes, the arrangement and state sidecars MUST reject unknown fields.
 - *Why:* a lenient reader silently drops what it doesn't know when the file is rewritten.
-- *Today:* nothing in the repo uses `deny_unknown_fields`.
+- *Today:* matches since step 4 (`core/song`).
 
 **FMT-8a.** Data files MUST have one canonical form, written by the canonical writer in `core/song`: a fixed key order per schema; numbers in their shortest round-trip form, never `-0`; one clip per line and one note per line; clips sorted by `(start, id)` and notes by `(start, pitch)`. Readers put clips and notes in the same order before use, so the order of an array never changes the sound; overlapping control clips with the same start are decided by id, never by file order. Reading and then writing a canonical file gives the same bytes.
 - *Why:* files must diff cleanly, two writers must agree byte for byte, and a sort, a merge or a hand reorder must never change the sound with no value changed.
-- *Today:* the lane writer sorts clips by start alone, so clips with equal starts keep file order (`core/session/src/lanes.rs:89`), and of two tempo entries at one beat the later in the file wins (`core/song/src/lib.rs:167-170`).
+- *Today:* matches since step 4 (`core/song/src/lane.rs`); a test checks that every fixture's data files are canonical (`core/song/tests/fixtures.rs`).
 
 **FMT-9.** Only manifest, code and arrangement errors block acceptance. The arrangement is a deliberate addition to the plan's "only code and manifest", because every clip's timing depends on it. A lane file that fails to parse, or doesn't match its declaration, MUST NOT stop anything else, and raises an Error (`lane.invalid` or `lane.unit-mismatch`) that names the file, the field and the fix:
 - when the session has accepted data for that lane, the last accepted data keeps playing, and the message says so;
 - when it has none (on open, or for a new lane), the lane plays empty.
 
+A file or folder that can't be read at all (permissions, an I/O error) is reported with the code of its class, and the message carries the system's error: `lane.invalid` for a lane file or a folder under `data/` (including one no lane reads), `state.unverified` for a state blob, its sidecar or a folder holding them, `arrangement.invalid` when `data/` itself can't be listed, `code.build` for a code file or a folder that may hold code, and `manifest.invalid` when the project folder can't be read. No separate code is needed: the fix is the same as for a file that doesn't parse.
+
 Export renders the accepted revision, as it does for code.
 - *Why:* one bad hand edit must not silence the whole song, and a lane file caught half-written must not drop out of a running session.
-- *Today:* any bad lane fails the whole compile (`core/session/src/lib.rs:61-64`, 119-150), and the last accepted revision keeps playing.
+- *Today:* matches since step 4 (`Project::data` in `core/song/src/data.rs`, given the last accepted data by the session).
 
 **FMT-10.** Lane files carry no `kind`. Notes and audio clips fail as the wrong shape, and a file with no clips fits any kind. Control lanes record their `unit`; a unit that differs from the declaration raises `lane.unit-mismatch` with Retag and Convert fixes.
 - *Why:* the kind is in the code; writing it twice invites disagreement.
@@ -559,11 +561,11 @@ Notes, control (masks are control lanes in `unit01`) and audio lanes, in that or
 
 **FMT-11.** A clip id is chosen by whoever builds the op that writes the clip, and travels in the Tx; core never mints one during `check` or `commit`. Ids are 8 characters from the lowercase Crockford base32 alphabet (`0-9a-z` without `i`, `l`, `o`, `u`). A builder outside a sandbox MAY draw them at random. A sandboxed package tool, the CLI and a fix derive them: the first 8 Crockford characters of SHA-256(`tx.id` ‖ lane address ‖ n), so `tx.id` is the only random input. Readers MUST accept any id matching `^[0-9a-z]{1,16}$`.
 - *Why:* random ids survive merges, other processes and git. A sandbox has no randomness, `check` and `commit` must write the same bytes, and a scripted run given its `tx.id` must be reproducible.
-- *Today:* clips have no ids (`core/song/src/lib.rs:217-222`, 278-284, 287-317), and the UI names clips by array index (`web/src/components/SongTimeline.tsx:166-175`).
+- *Today:* matches since step 4. The app draws ids at random; the CLI and fixes derive them from SHA-256 of the Tx id, a NUL, the lane address `module/lane`, a NUL and `n` in decimal (`ClipId::derive` in `core/song/src/key.rs`).
 
 **FMT-12.** A clip id is unique within its lane, and a clip's address is `(LaneAddr, ClipId)`. Moving a clip to another lane keeps its id. Copying or duplicating a clip always mints a new id, and a writer that finds its id taken in the target lane mints another.
 - A clip without an id is anonymous: it can be addressed only within one revision, and raises the Notice `clip.anonymous` with an AssignClipIds fix.
-- An id that breaks the rule is read as anonymous and kept as written, and raises the Notice `clip.invalid-id` with the same fix.
+- An id that breaks the rule, including one that isn't a string, is read as anonymous and kept as written, and raises the Notice `clip.invalid-id` with the same fix. "Kept as written" keeps the JSON value; the canonical writer may re-space it (`{"a": 1}` becomes `{"a":1}`).
 - A duplicate id raises the Warning `clip.duplicate-id` with a RenumberClips fix, never a parse failure.
 - Ids are never assigned on read. Note ids come later.
 - *Why:* one hand edit must never make a lane unreadable.
@@ -575,52 +577,52 @@ Notes, control (masks are control lanes in `unit01`) and audio lanes, in that or
 - Meter: an empty list means 4/4 from beat 0; otherwise the first entry is at beat 0. `beats` is 1 to 64, and `unit` is 1, 2, 4, 8, 16 or 32. A bar lasts `beats × 4 / unit` quarter notes. Each change falls on a bar line of the meter before it, and beats strictly increase.
 - Anything else raises `arrangement.invalid`, naming the entry, and blocks acceptance.
 - *Why:* time signatures are needed for bars, plugins and the tempo bar, and every reader must count bars the same way. Two entries at one beat would be decided by file order.
-- *Today:* `timeline/song.json` holds `tempo` and `beats_per_bar`, and of two tempo entries at one beat the later wins (`core/song/src/lib.rs:149-174`, 205-215). An error blocks the compile (`core/session/src/lib.rs:123-125`).
+- *Today:* matches since step 4 (`core/song/src/arrangement.rs`).
 
 ### Assets and hashes
 
 **FMT-14.** An asset MUST never be overwritten: a new version gets a new name, and assets are created with create-only semantics (`O_EXCL`). An asset name is a relative path under `assets/`, with `/` between folders. It is NFC, and has no empty, `.` or `..` segment, no segment that starts with `.`, and no `\` or control character. An import whose name is taken gets a numeric suffix (`kick 2.wav`). An asset is always inside the project: importing copies the file. `m2 bounce --force` is removed.
 - *Why:* an overwritten asset can't be undone and silently changes every clip that uses it. Sample-heavy projects need folders, and a reference outside the project breaks when the project moves.
-- *Today:* `m2 bounce --force` overwrites (`apps/m2/src/main.rs:187-189`), and asset names are free strings (`core/song/src/lib.rs:292-293`).
+- *Today:* matches for what writes assets today: `m2 bounce` creates its asset create-only and `--force` is gone, and names are checked as `AssetName`s (`core/song/src/path.rs`). Importing isn't built.
 
 **FMT-15.** A clip's asset reference carries a `hash` pin: the first 16 hex digits of the SHA-256 of the file's bytes. The app always writes it.
 - A reference without a pin is read, and raises the Notice `asset.unpinned` with a RepinAsset fix.
 - A pin that differs from the file raises the Warning `asset.changed` with a RepinAsset fix, and the clip plays the file as it is.
-- A reference MUST equal an entry of `assets/` byte for byte, found by listing the folder, never by `open()`. A name that differs only in case or Unicode normalisation is `asset.missing`, with a fix that rewrites the reference to the exact name.
+- A reference MUST equal an entry of `assets/` byte for byte, found by listing the folder, never by `open()`. A name that differs only in case is `asset.missing`, with a fix that rewrites the reference to the exact name. A file whose name on disk isn't NFC can't be referenced at all ([FMT-14](#assets)), so a name that differs only in Unicode normalisation is `asset.missing` whose message says to rename the file to its NFC form; a fix that renames the file waits for step 6, when a Tx can rename a path into `assets/`.
 - A missing or unreadable asset raises the Error `asset.missing`, and that clip is silent.
 - *Why:* an asset changed behind the project's back must be visible, and a case-insensitive disk must not make a clip play on a Mac and go silent elsewhere.
-- *Today:* assets are referenced by name only, opened by path (`core/song/src/lib.rs:292-293`), and a missing one fails the compile (`core/session/src/lib.rs:131-135`).
+- *Today:* matches since step 4 (`core/song/src/data.rs`).
 
 **FMT-16.** A hash cache keyed by `(path, size, mtime, ctime, inode)`, in `~/Library/Caches/music2/`, refreshed by the watcher, covers assets and state blobs. An entry whose mtime lies within the volume's timestamp resolution of the moment it was cached is unverified, and is hashed again on next use (git's racy-timestamp rule). Compile MUST NOT decode audio.
 - *Why:* every compile decoding every WAV makes data edits slow. On exFAT, with 2-second timestamps, a same-length file rewritten in place would otherwise keep its old hash.
-- *Today:* every compile decodes every clip's WAV (`core/session/src/lib.rs:131-135`).
+- *Today:* matches since step 4, with the racy window at 2 s on every volume, since a volume's resolution can't be read portably. The CLI and the app keep the cache in `~/Library/Caches/music2/hashes.json` (`core/song/src/hash.rs`).
 
 ### Plugin state and parameters
 
 **FMT-17.** A plugin's state is the CLAP blob in `data/<module>/<frames>/<plugin-key>.state`, with a required sidecar `<plugin-key>.state.json` that holds exactly `{plugin, plugin_version}`: no parameter values and no hash. A missing state file means the plugin's defaults. A blob whose sidecar names another plugin than the code does raises the Error `state.plugin-mismatch`; a blob without a sidecar raises the Error `state.unverified`. Either way the blob isn't loaded, the plugin plays its defaults, and the fixes are Relink (when another key now has that plugin) and DeleteData. A state write always writes both files in one Tx.
 - *Why:* state belongs to its module's data, and parameter values belong to code or the blob, never both ([HOME-4](#homes-of-values)). One plugin's state loaded into another crashes many plugins, and a hash beside the blob is a second truth that a merge can split from it.
-- *Today:* `assets/plugin-state/<name>.bin`, outside revisions, with no record of its plugin, and a missing one fails the compile (`core/runtime/src/lib.rs:390-393`; `core/session/src/lib.rs:93-117`).
+- *Today:* matches since step 4, except that `m2 plugin-state` writes the blob and its sidecar directly, not as one Tx (step 6).
 
 **FMT-18.** A plugin parameter is addressed in code as `<name>_<id>`: its display name, lowercased, with other characters turned to `_`, then its CLAP parameter id (`mix_12`). The build binds by the id alone, and the name part is a label: when it differs from the plugin's current display name, that is the Notice `plugin.param-renamed`, never a rebind. A name without an id (`mix`) is the compile error `plugin.param-unaddressed`, which suggests the full address. Editors and Tx builders always write the full form. The IR stores CLAP parameter ids, and the runtime binds by id.
 - *Why:* a display name is not identity (P1). A plugin update that renames parameters, swaps two names or adds one with a clashing name must not rewire anything, and code that compiled must keep compiling.
-- *Today:* ports are display names, re-derived on every build, and only the second and later duplicates get their id as a suffix (`core/plugins/src/lib.rs:664-687`). Parameters are bound by their position in the plugin's list (`core/runtime/src/lib.rs:321`).
+- *Today:* matches since step 4. The IR keeps each address as written; `PackageSet::bind_plugins` binds it by its id before the check, so the runtime binds by id (`core/runtime/src/packages.rs`).
 
 **FMT-18a.** A plugin that isn't installed MUST NOT stop the song. It raises the Error `plugin.missing`, which doesn't block acceptance. Its node is typed from the code as written: stereo audio in and out, and each `<name>_<id>` port a plain control. An instrument (no `in`) outputs silence; an effect passes its `in` through to its `out`. Its code and its state blob are never rewritten. An export made while a plugin is missing carries `plugin.missing`.
 - *Why:* a project opened on a collaborator's Mac, in CI or in an agent's sandbox without one plugin must play everything else, as in every DAW.
-- *Today:* a missing plugin fails the compile (`core/plugins/src/lib.rs:203-206`; `core/ir/src/check.rs:491-494`), so the whole song is silent.
+- *Today:* matches since step 4 (`core/runtime/src/packages.rs`; the node in `core/runtime/src/lib.rs`).
 
 ### Presentation and local files
 
 **FMT-19.** `layout.json` holds shared presentation keyed by track key: track order and colour, later canvas positions. It is never part of a revision and never read by the build. Unknown keys in it are ignored.
 - *Why:* presentation must never trigger a compile or change the sound.
-- *Today:* there is no `layout.json`.
+- *Today:* `layout.json` is classed Presentation and never makes a revision (step 4); nothing reads or writes it yet.
 
 **FMT-20.** `.music2/` is local to one machine. New projects MUST get a `.gitignore` line for it. Caches live outside the project ([RENDER-30](#audio-lanes), [FMT-16](#assets-and-hashes)). A project in a synced folder (iCloud Drive, Dropbox) works with these rules:
 - The app marks `.music2/` for the sync services that honour a marker (Dropbox's ignore attribute), and raises the Notice `project.synced` when the project is under a known synced folder.
 - The lock file and every journal record the host name. A journal from another host is reported as `tx.foreign`, with no fix ([WRITE-16](#commit-journal-and-recovery)).
 - Another machine editing the project is an outside writer ([WRITE-19](#outside-writers)).
 - *Why:* overlays, locks, journals and caches are not the song, and a lock or a journal synced from another machine means nothing on this one.
-- *Today:* there is no project `.music2/`; snapshots skip dot folders (`core/song/src/lib.rs:76`). `~/.music2/session.json` is per user, not per project (`apps/music2-desktop/src/main.rs:112-115`).
+- *Today:* new projects, from the app and `m2 new`, get a `.gitignore` with `.music2/`, and `.music2/` is Local to `DataPath` (step 4). The sync marker, `project.synced` and host names are not built. `~/.music2/session.json` is per user, not per project (`apps/music2-desktop/src/main.rs:112-115`).
 
 ### Conversion
 
@@ -854,7 +856,7 @@ The message is plain words, and names the file, the field and the fix where they
 - `likely` marks the one fix the problem plainly calls for, which the app offers in one click. Others are a choice.
 - Fix codes are a closed vocabulary, the kebab-case of the names this page uses: `relink`, `restore`, `delete-data`, `repin-asset`, `fix-asset-name`, `retag`, `convert`, `assign-clip-ids`, `renumber-clips`, `finish-tx`, `discard-tx`. A new fix adds a code here, never a type to core.
 - *Why:* agents and the app need to act on a problem, not parse prose. A fix that is a Tx is checked, journaled and undone like any edit, and a new data feature never grows core's types.
-- *Today:* `Diagnostic { message, module, node, src }`, with no severity, code or fix (`core/ir/src/lib.rs:166-182`). Step 1 added an interim shape for what doesn't stop the song, `Warning { code, title, message, file, fixes }` with `Fix = Relink { from, to, module, lane, likely } | DeleteData { file }` (`core/session/src/warnings.rs`). Step 4 replaces it with `Diagnostic` (the title folded into the message, `file` as `src`, a severity added), with fixes still applied by named session edits. Step 6 makes each fix a Tx.
+- *Today:* since step 4 every problem has a severity and a code. Problems that don't stop the song are `m2_song::Diagnostic { severity, code, message, src, module, fixes }` (`core/song/src/diag.rs`), with `src` a project path or `file:line:col`. A fix is `{ code, title, likely, edit }`, where `edit` holds whole-file writes, removes and renames, each with the hash its file must have, applied by named session edits (`Session::fix`). Build and check errors are `m2_ir::Diagnostic`, with a severity and a code but no fixes. Step 6 makes each fix a Tx.
 
 ### Codes
 
@@ -912,7 +914,7 @@ The message is plain words, and names the file, the field and the fix where they
 
 **DIAG-4.** Diagnostics MUST be sent with every revision over the WebSocket, returned to agents by project reads, and printed by every CLI command that opens a project.
 - *Why:* a problem nobody sees is the silent data loss this contract exists to end.
-- *Today:* step 1 did this for the warnings that exist so far. The session's warnings are in the project state the app fetches, and in every `{"t":"graph"}` event over the WebSocket, together with the accepted revision and the draft's errors (`Graph::news` in `crates/server/src/graph.rs`; `graph_changed` in `crates/server/src/lib.rs`). The app shows them in a "Needs attention" strip above the timeline (`web/src/components/Attention.tsx`). Every CLI command that opens a project prints them, each with the commands that apply its fixes; `m2 new` and `m2 plugin-state` print them when the project compiles (`apps/m2/src/main.rs`). The draft's errors are still a separate list, `diagnostics`, and there is no MCP yet.
+- *Today:* matches for what exists. The session's problems are in the project state the app fetches, and in every `{"t":"graph"}` event over the WebSocket, together with the accepted revision and the draft's errors (`Graph::news` in `crates/server/src/graph.rs`; `graph_changed` in `crates/server/src/lib.rs`). The app shows them in a "Needs attention" strip above the timeline (`web/src/components/Attention.tsx`). Every CLI command that opens a project prints them, each with the commands that apply its fixes (`m2 relink`, `m2 delete-data`, `m2 fix`). The draft's errors are still a separate list, `diagnostics`, and there is no MCP yet.
 
 ### Fixes
 
@@ -926,7 +928,7 @@ The message is plain words, and names the file, the field and the fix where they
 
 The app shows these in its "Needs attention" strip, with Relink, Restore (rename the key back, a Tx built by `crates/editor`) and Delete.
 - *Why:* a rename by hand must be one click from sounding again, and the offer must be the same in the app, the CLI and an agent's read.
-- *Today:* step 1 builds this for format 0 (`core/session/src/warnings.rs`). There each lane is its own file, `timeline/<slug>.<lane>.json`, so a renamed track leaves one file per lane, and each is offered to the same lane on the renamed track. The fixes are session edits: each is checked on a candidate (the graph must not change, and the target lane must read the file), made by one rename or one delete, recorded as one undo step, and refused while the draft doesn't compile. They are `Session::relink` and `Session::delete_data` (`core/session/src/edit/relink.rs`), `m2 relink` and `m2 delete-data`, and `POST /api/graph/relink` and `/api/graph/data/delete`, behind the strip's Move and Delete buttons. Restore isn't built.
+- *Today:* matches since step 4, except Restore (`core/session/src/unclaimed.rs`). A renamed track's folder is offered whole, then lane by lane; plugin state no plugin reads is offered to a plugin of its kind. The fixes are session edits: each is checked on a candidate, recorded as one undo step, and refused while the draft doesn't compile or once the revision no longer offers it. They are `Session::relink`, `Session::delete_data` and `Session::fix`, `m2 relink`, `m2 delete-data` and `m2 fix`, and `POST /api/graph/relink`, `/api/graph/data/delete` and `/api/graph/fix`, behind the strip's buttons. Restore needs `crates/editor`.
 
 ## Component descriptors
 
@@ -1166,7 +1168,7 @@ Steps 3 and 4 may run in parallel; everything else is in order.
 3. **Live step A** (2–3 weeks). Land 3a before 3b, and keep the offline path untouched.
    - **3a, runtime:** the engine and transport clocks, with the engine running while stopped; an integer transport and loop ends computed from beats; lane schedulers that fill event buffers and own their sounding notes; a jump that never resets kernels; a new renderer activated at the audio thread's own position, with a 5 ms crossfade; `SwapLane` for notes and control lanes when the old and new `Flat` graphs are equal; the range render for agents.
    - **3b, around the runtime:** gesture leases that survive saves which don't touch them; the session as an actor; `PluginHost` with its whole trait and the in-process executor on the real main thread; plugin instances carried across rebuilds.
-4. **Format v1 and SDK keys, in one change** (1–2 weeks).
+4. **Format v1 and SDK keys, in one change** (1–2 weeks). **Built.**
    - Track, lane and plugin keys, and `key()` frames; `Module { key, label }`; a context that exposes the key, never the label.
    - `data/<module>/` with clip ids and lane units; the manifest with `format` read first, `sample_rate`, and caret requirements for every dependency; the live engine at `sample_rate`.
    - `DataPath` and its classes; snapshots that read the explicit set, and a build that imports only from them; the canonical form of data files, written in `core/song`; the arrangement and meter rules.

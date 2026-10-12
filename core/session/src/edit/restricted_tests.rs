@@ -16,6 +16,7 @@ impl ProjectFixture {
             NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
         ));
         std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("music2.toml"), crate::tests::MANIFEST).unwrap();
         std::fs::write(dir.join("song.ts"), source).unwrap();
         Self(dir)
     }
@@ -106,7 +107,7 @@ fn a_shared_value_has_one_knob_and_visible_connections_to_both_consumers() {
     assert_eq!(controls[0].uses, 2);
 
     let view = session.view();
-    let module = view.modules.iter().find(|m| m.name == "song").unwrap();
+    let module = view.modules.iter().find(|m| m.key == "song").unwrap();
     let shared: Vec<_> = module.nodes.iter().filter(|n| n.kind == "value" && n.label == "cutoff").collect();
     assert_eq!(shared.len(), 1, "the shared declaration is shown once: {:?}", module.nodes);
     let shared = shared[0];

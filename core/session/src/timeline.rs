@@ -5,15 +5,16 @@
 //! clips shown are the ones that play.
 
 use m2_ir::{Kind, LaneDecl, Unit};
-use m2_song::{AudioClip, ControlClip, NoteClip, TempoMap, TempoSegment, Timeline};
+use m2_song::{AudioClip, ControlClip, DataSet, LaneData, Meter, NoteClip, Tempo, TempoMap};
 use serde::Serialize;
 
 use crate::edit::{Revision, Session};
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct TimelineView {
-    pub beats_per_bar: u32,
-    pub tempo: Vec<TempoSegment>,
+    pub tempo: Vec<Tempo>,
+    /// The time signatures (FMT-13); empty is 4/4 throughout.
+    pub meter: Vec<Meter>,
     /// Where the last clip ends, in beats; at least one bar.
     pub end: f64,
     /// Modules with rows: tracks, and any other module that declares a lane.
@@ -22,23 +23,28 @@ pub struct TimelineView {
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct TimelineTrack {
-    /// The module's name, as in the graph view.
+    /// The module's key, as in the graph view: what edits and selection name it by (ID-11).
     pub module: String,
+    /// What to show for it, never an address (ID-10).
+    pub label: String,
     pub track: bool,
     /// In the order they are declared.
     pub lanes: Vec<TimelineLane>,
 }
 
-/// A lane and its clips, sorted by start.
+/// A lane and its clips, in canonical order. `key` addresses it within its module (ID-6),
+/// `label` is what to show; each clip carries its id when it has one (FMT-12).
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum TimelineLane {
     Notes {
-        id: String,
+        key: String,
+        label: String,
         clips: Vec<NoteClip>,
     },
     Control {
-        id: String,
+        key: String,
+        label: String,
         unit: Option<&'static str>,
         default: Option<f64>,
         /// A range to draw the values in.
@@ -47,16 +53,26 @@ pub enum TimelineLane {
         clips: Vec<ControlClip>,
     },
     Audio {
-        id: String,
+        key: String,
+        label: String,
         channels: u8,
         clips: Vec<AudioClip>,
     },
 }
 
+impl TimelineLane {
+    /// The lane's key.
+    pub fn key(&self) -> &str {
+        match self {
+            TimelineLane::Notes { key, .. } | TimelineLane::Control { key, .. } | TimelineLane::Audio { key, .. } => key,
+        }
+    }
+}
+
 impl Revision {
-    /// The tempo map, which compiling checked.
+    /// The tempo map, which reading the project checked.
     pub fn tempo(&self) -> TempoMap {
-        self.project.timeline.tempo().expect("a compiled project's tempo map is valid")
+        self.compiled.data.tempo().clone()
     }
 }
 
@@ -80,41 +96,41 @@ impl Session {
     /// The timeline of the accepted revision.
     pub fn timeline(&self) -> TimelineView {
         let rev = self.accepted();
-        let tl = &rev.project.timeline;
+        let data = &rev.compiled.data;
         let tracks = rev.compiled.ir.modules.iter().filter(|m| m.track || !m.lanes.is_empty());
         let tracks = tracks
             .map(|m| TimelineTrack {
-                module: m.name.clone(),
+                module: m.key.clone(),
+                label: m.label().to_string(),
                 track: m.track,
-                lanes: m.lanes.iter().map(|l| lane(tl, &m.name, l)).collect(),
+                lanes: m.lanes.iter().map(|l| lane(data, &m.key, l)).collect(),
             })
             .collect();
-        let bar = tl.beats_per_bar();
-        TimelineView { beats_per_bar: bar, tempo: rev.tempo().segments(), end: tl.end().max(bar as f64), tracks }
+        let a = &rev.project.arrangement;
+        let bar = a.meter_at(0.0).bar();
+        TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), end: data.end().max(bar), tracks }
     }
 }
 
-/// A declared lane and its clips. Its data parsed when the revision compiled; data that
-/// somehow doesn't shows no clips rather than failing the view.
-fn lane(tl: &Timeline, module: &str, decl: &LaneDecl) -> TimelineLane {
-    let id = decl.id.clone();
+/// A declared lane and the clips it plays, in canonical order (by start, then id), which is
+/// also the order they win in where they overlap, so the last is drawn on top. A lane whose
+/// file failed shows what it plays: its last accepted data, or nothing (FMT-9).
+fn lane(data: &DataSet, module: &str, decl: &LaneDecl) -> TimelineLane {
+    let (key, label) = (decl.key.clone(), decl.label().to_string());
+    let lane = data.lane(module, &key).map(|d| &**d);
     match decl.kind {
         Kind::Events(_) => {
-            let mut clips = tl.note_clips(module, &id).unwrap_or_default();
-            clips.sort_by(|a, b| a.start.total_cmp(&b.start));
-            TimelineLane::Notes { id, clips }
+            let clips = if let Some(LaneData::Notes(c)) = lane { c.clone() } else { vec![] };
+            TimelineLane::Notes { key, label, clips }
         }
         Kind::Control(unit) => {
-            let mut clips = tl.control(module, &id).map(|c| c.clips().to_vec()).unwrap_or_default();
-            // Where clips overlap the later one wins, so it is drawn last.
-            clips.sort_by(|a, b| a.start.total_cmp(&b.start));
+            let clips = if let Some(LaneData::Control { clips, .. }) = lane { clips.clone() } else { vec![] };
             let (min, max) = range(unit, decl.default, &clips);
-            TimelineLane::Control { id, unit: unit.map(Unit::name), default: decl.default, min, max, clips }
+            TimelineLane::Control { key, label, unit: unit.map(Unit::name), default: decl.default, min, max, clips }
         }
         Kind::Audio(channels) => {
-            let mut clips = tl.audio(module, &id).unwrap_or_default();
-            clips.sort_by(|a, b| a.start.total_cmp(&b.start));
-            TimelineLane::Audio { id, channels, clips }
+            let clips = data.audio(module, &key).to_vec();
+            TimelineLane::Audio { key, label, channels, clips }
         }
     }
 }
@@ -131,13 +147,13 @@ mod tests {
     const SONG: &str = r#"import { hz, song, track } from "@m2/core";
 import { bass } from "std/instruments";
 import { mixer } from "std/mix";
-const b = track("Bass", ({ lane }) => {
-  const notes = lane.notes("notes");
+const b = track("bass", { name: "Bass" }, ({ lane }) => {
+  const notes = lane.notes("notes", { name: "Notes" });
   const cutoff = lane.control("cutoff", "hz", hz(500));
   lane.mask("drop"); // declared, with no file yet
   return bass(notes, { cutoff });
 });
-const v = track("Vox", ({ lane }) => lane.audio("vox"));
+const v = track("vox", ({ lane }) => lane.audio("vox"));
 export default song(() => mixer({ bass: b.out, vox: v.out }));
 "#;
 
@@ -149,17 +165,21 @@ export default song(() => mixer({ bass: b.out, vox: v.out }));
             N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
         ));
         let files = [
+            ("music2.toml", crate::tests::MANIFEST),
             ("song.ts", SONG),
-            ("timeline/song.json", r#"{"tempo": [{"beat": 0, "bpm": 90}], "beats_per_bar": 3}"#),
+            ("data/arrangement.json", r#"{"tempo": [{"beat": 0, "bpm": 90}], "meter": [{"beat": 0, "beats": 3, "unit": 4}]}"#),
             (
-                "timeline/bass.notes.json",
-                r#"{"clips": [{"start": 8, "length": 4, "notes": [{"pitch": "A1", "start": 0.5, "length": 1}]},
-                              {"start": 0, "length": 4, "notes": [{"pitch": 45, "start": 0, "length": 0.5, "velocity": 0.5}]}]}"#,
+                "data/bass/notes.json",
+                r#"{"clips": [{"id": "b", "start": 8, "length": 4, "notes": [{"pitch": "A1", "start": 0.5, "length": 1}]},
+                              {"id": "a", "start": 0, "length": 4, "notes": [{"pitch": 45, "start": 0, "length": 0.5, "velocity": 0.5}]}]}"#,
             ),
-            ("timeline/bass.cutoff.json", r#"{"clips": [{"start": 0, "length": 8, "points": [[8, 2200], [0, 300]]}]}"#),
             (
-                "timeline/vox.vox.json",
-                r#"{"clips": [{"start": 2, "length": 1, "asset": "vox.wav"}, {"start": 0, "length": 1, "asset": "vox.wav", "gain_db": -6}]}"#,
+                "data/bass/cutoff.json",
+                r#"{"unit": "hz", "clips": [{"id": "c", "start": 0, "length": 8, "points": [[8, 2200], [0, 300]]}]}"#,
+            ),
+            (
+                "data/vox/vox.json",
+                r#"{"clips": [{"id": "e", "start": 2, "length": 1, "asset": "vox.wav"}, {"id": "d", "start": 0, "length": 1, "asset": "vox.wav", "gain_db": -6}]}"#,
             ),
         ];
         for (name, text) in files {
@@ -183,35 +203,44 @@ export default song(() => mixer({ bass: b.out, vox: v.out }));
         let dir = project();
         let mut s = open(&dir);
         let v = serde_json::to_value(s.timeline()).unwrap();
-        assert_eq!((&v["beats_per_bar"], &v["tempo"], &v["end"]), (&json!(3), &json!([{"beat": 0.0, "bpm": 90.0}]), &json!(12.0)));
+        assert_eq!((&v["tempo"], &v["end"]), (&json!([{"beat": 0.0, "bpm": 90.0}]), &json!(12.0)));
+        // FMT-13: bars are counted from the meter alone; there is no second spelling of it.
+        assert!(v.get("beats_per_bar").is_none());
+        assert_eq!(v["meter"], json!([{"beat": 0.0, "beats": 3, "unit": 4}]));
         // The song module has no lanes and isn't a track.
-        let modules: Vec<_> =
-            v["tracks"].as_array().unwrap().iter().map(|t| (t["module"].as_str().unwrap(), t["track"].as_bool().unwrap())).collect();
-        assert_eq!(modules, [("Bass", true), ("Vox", true)]);
+        // ID-10, ID-11: tracks and lanes are addressed by key and shown by label.
+        let modules: Vec<_> = v["tracks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| (t["module"].as_str().unwrap(), t["label"].as_str().unwrap(), t["track"].as_bool().unwrap()))
+            .collect();
+        assert_eq!(modules, [("bass", "Bass", true), ("vox", "vox", true)]);
         assert_eq!(
             v["tracks"][0]["lanes"],
             json!([
-                {"kind": "notes", "id": "notes", "clips": [
-                    {"start": 0.0, "length": 4.0, "notes": [{"pitch": 45.0, "start": 0.0, "length": 0.5, "velocity": 0.5}]},
-                    {"start": 8.0, "length": 4.0, "notes": [{"pitch": 33.0, "start": 0.5, "length": 1.0, "velocity": 0.8}]},
+                {"kind": "notes", "key": "notes", "label": "Notes", "clips": [
+                    {"id": "a", "start": 0.0, "length": 4.0, "notes": [{"pitch": 45.0, "start": 0.0, "length": 0.5, "velocity": 0.5}]},
+                    {"id": "b", "start": 8.0, "length": 4.0, "notes": [{"pitch": 33.0, "start": 0.5, "length": 1.0, "velocity": 0.8}]},
                 ]},
-                {"kind": "control", "id": "cutoff", "unit": "hz", "default": 500.0, "min": 300.0, "max": 2200.0, "clips": [
-                    {"start": 0.0, "length": 8.0, "points": [[0.0, 300.0], [8.0, 2200.0]]},
+                {"kind": "control", "key": "cutoff", "label": "cutoff", "unit": "hz", "default": 500.0, "min": 300.0, "max": 2200.0,
+                 "clips": [
+                    {"id": "c", "start": 0.0, "length": 8.0, "points": [[0.0, 300.0], [8.0, 2200.0]]},
                 ]},
-                {"kind": "control", "id": "drop", "unit": "unit01", "default": 0.0, "min": 0.0, "max": 1.0, "clips": []},
+                {"kind": "control", "key": "drop", "label": "drop", "unit": "unit01", "default": 0.0, "min": 0.0, "max": 1.0, "clips": []},
             ])
         );
         assert_eq!(
             v["tracks"][1]["lanes"],
-            json!([{"kind": "audio", "id": "vox", "channels": 2, "clips": [
-                {"start": 0.0, "length": 1.0, "asset": "vox.wav", "offset": 0.0, "gain_db": -6.0, "fade_in": 0.0, "fade_out": 0.0, "reverse": false, "pitch": 0.0},
-                {"start": 2.0, "length": 1.0, "asset": "vox.wav", "offset": 0.0, "gain_db": 0.0, "fade_in": 0.0, "fade_out": 0.0, "reverse": false, "pitch": 0.0},
+            json!([{"kind": "audio", "key": "vox", "label": "vox", "channels": 2, "clips": [
+                {"id": "d", "start": 0.0, "length": 1.0, "asset": "vox.wav", "offset": 0.0, "gain_db": -6.0, "fade_in": 0.0, "fade_out": 0.0, "reverse": false, "pitch": 0.0, "warp": []},
+                {"id": "e", "start": 2.0, "length": 1.0, "asset": "vox.wav", "offset": 0.0, "gain_db": 0.0, "fade_in": 0.0, "fade_out": 0.0, "reverse": false, "pitch": 0.0, "warp": []},
             ]}])
         );
 
         // With no clips at all, the song is still a bar long.
-        for f in ["bass.notes", "bass.cutoff", "vox.vox"] {
-            std::fs::remove_file(dir.join(format!("timeline/{f}.json"))).unwrap();
+        for f in ["bass/notes", "bass/cutoff", "vox/vox"] {
+            std::fs::remove_file(dir.join(format!("data/{f}.json"))).unwrap();
         }
         assert!(s.refresh() && s.draft_errors.is_empty());
         let t = s.timeline();
@@ -226,7 +255,7 @@ export default song(() => mixer({ bass: b.out, vox: v.out }));
 
     #[test]
     fn control_ranges_hold_every_value() {
-        let clip = |points: Vec<(f64, f64)>| ControlClip { start: 0.0, length: 4.0, points };
+        let clip = |points: Vec<(f64, f64)>| ControlClip { id: None, other_id: None, start: 0.0, length: 4.0, points };
         assert_eq!(range(Some(Unit::Unit01), Some(0.0), &[]), (0.0, 1.0));
         assert_eq!(range(Some(Unit::Bipolar), Some(0.0), &[clip(vec![(0.0, 1.5)])]), (-1.0, 1.5));
         assert_eq!(range(Some(Unit::Db), Some(-6.0), &[clip(vec![(0.0, -24.0), (1.0, 0.0)])]), (-24.0, 0.0));

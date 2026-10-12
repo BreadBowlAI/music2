@@ -32,7 +32,7 @@ This is the most important difference in music software.
 - A **bar** (or measure) is a group of beats. Almost all pop uses **4/4 time**: 4 beats per bar. Song parts are counted in bars ("an 8-bar chorus").
 - The **grid** splits beats into smaller steps for placing notes. **1/16** means four steps per beat; that's where hi-hats and fast patterns live. **Quantize** snaps notes onto the grid, and **humanize** nudges them a little so they sound less robotic.
 
-**In music2:** the tempo and the beats per bar are in `timeline/song.json`. The tempo shows at the top left of the timeline, but changing it means editing that file for now ([gap #6](gaps.md#song-settings)). The Notes view snaps to 1/4, 1/8, 1/16 or 1/32, but not yet to triplets (three notes in the space of two). Quantize and humanize aren't in the app yet ([gap #15](gaps.md#notes)).
+**In music2:** the tempo and the time signature are in `data/arrangement.json`. The tempo shows at the top left of the timeline, and the ruler counts bars by the time signature, but changing either means editing that file for now ([gap #6](gaps.md#song-settings)). The Notes view snaps to 1/4, 1/8, 1/16 or 1/32, but not yet to triplets (three notes in the space of two). Quantize and humanize aren't in the app yet ([gap #15](gaps.md#notes)).
 
 ## Key, scale and chords
 
@@ -105,7 +105,7 @@ A **sampler** is the other kind of instrument: instead of building sound, it pla
 - Buses and sends aren't in the app yet ([gap #27](gaps.md#mixing)).
 - A sidechain is written in code: `duck(bass.out, kick.env)` in `song.ts`, where `kick.env` is how loud the kick is right now. [`examples/first-song`](../examples/first-song) does this.
 - For a ghost kick, use `kick.env` in `duck` but leave the kick out of the `mixer`.
-- Automation lanes (`lane.control`) play and show on the timeline, but drawing them in the app isn't there yet ([gap #14](gaps.md#automation)). Today you edit `timeline/<track>.<lane>.json`.
+- Automation lanes (`lane.control`) play and show on the timeline, but drawing them in the app isn't there yet ([gap #14](gaps.md#automation)). Today you edit `data/<track>/<lane>.json`, named by the track's and the lane's keys (a key that is a Windows device name, such as `aux`, is written `aux-`).
 
 ## Production terms
 

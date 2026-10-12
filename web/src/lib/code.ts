@@ -14,8 +14,8 @@ export interface ProjectFile { path: string; text: string; draft?: string | null
 export interface ProjectFiles {
   revision: number;
   files: ProjectFile[];
-  /** The file each module is defined in, when the compiler says. */
-  modules: { name: string; file: string | null }[];
+  /** The file each module (by key) is defined in, when the compiler says. */
+  modules: { key: string; label?: string; file: string | null }[];
 }
 
 /** What the file says on disk, which a save must be based on; null if it is gone. */
@@ -57,20 +57,12 @@ export function fileOrder(a: string, b: string) {
   return rank(a) - rank(b) || a.localeCompare(b);
 }
 
-/** The module's name as its file is named: `Lead Vox` → `lead-vox`. */
-const slug = (name: string) =>
-  name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-
-/** The file a module is written in: where the compiler says, or `tracks/<slug>.ts`, or `song.ts` for the song. */
+/**
+ * The file the module with key `module` is written in: where the compiler says, else the first
+ * file (`song.ts`). Never guessed from the key or the label, neither of which names a file (ID-10).
+ */
 export function moduleFile(paths: string[], modules: ProjectFiles["modules"], module: string): string | undefined {
-  const has = (p: string | null | undefined): p is string => !!p && paths.includes(p);
-  const said = modules.find((m) => m.name === module)?.file;
-  if (has(said)) return said;
-  if (module === "song" && has("song.ts")) return "song.ts";
-  const track = `tracks/${slug(module)}.ts`;
-  if (has(track)) return track;
+  const said = modules.find((m) => m.key === module)?.file;
+  if (said && paths.includes(said)) return said;
   return [...paths].sort(fileOrder)[0];
 }

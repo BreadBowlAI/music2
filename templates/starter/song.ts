@@ -1,5 +1,5 @@
 // The root module: whatever this returns is what you hear.
-// Each track is a file in tracks/; its notes are in timeline/. Here they're mixed.
+// Each track is a file in tracks/; its notes are in data/. Here they're mixed.
 
 import { db, song } from "@m2/core";
 import { compress, duck } from "std/fx";

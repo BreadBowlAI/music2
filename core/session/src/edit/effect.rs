@@ -25,7 +25,7 @@ use super::*;
 fn made_by(compiled: &Compiled, site: u32) -> Option<(String, BTreeSet<String>)> {
     let output = compiled.outputs.iter().find(|o| o.site == site)?;
     let mut ids = BTreeSet::new();
-    let m = compiled.ir.modules.iter().find(|m| m.name == output.module)?;
+    let m = compiled.ir.modules.iter().find(|m| m.key == output.module)?;
     walk(&m.nodes, &mut |n| {
         if n.within.contains(&site) || n.origin.as_ref().is_some_and(|o| o.site == site) {
             ids.insert(n.id.clone());
@@ -47,7 +47,7 @@ fn wraps(with: &Compiled, without: &Ir, site: u32) -> bool {
     // What the effect reads from outside itself: one of these is its input. Its nodes may be
     // in a voice (an effect inside `poly`), so every node list is searched, voices included.
     let inputs = std::cell::RefCell::new(BTreeSet::new());
-    let m = with.ir.modules.iter().find(|m| m.name == module).expect("the output's module");
+    let m = with.ir.modules.iter().find(|m| m.key == module).expect("the output's module");
     walk(&m.nodes, &mut |n| {
         if !ids.contains(n.id.as_str()) {
             return;

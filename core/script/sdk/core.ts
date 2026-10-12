@@ -134,17 +134,16 @@ type IrNode = { id: string; op: string; src?: string; origin?: Origin; within?: 
 
 /** Component calls being built right now, outermost first. */
 const frames: number[] = [];
-type LaneDecl = { id: string; kind: string; default?: number };
 
 class ModuleBuild {
   counter = 0;
-  lanes: LaneDecl[] = [];
   root: Scope;
   exports: Record<string, string> = {};
   imports = new Map<string, Signal>();
   time = new Map<string, Signal>();
   constructor(
-    readonly name: string,
+    /** `song`, or the track's key. Code may see it; labels it never sees (ID-10). */
+    readonly key: string,
     readonly track: boolean,
     readonly src: string | undefined,
   ) {
@@ -206,7 +205,7 @@ let outputs: Output[] = [];
 
 function produced<T>(site: number | undefined, value: T): T {
   if (site !== undefined && value instanceof Signal) {
-    outputs.push({ site, module: value.scope.module.name, ref: value.ref, top: value.scope.parent === null });
+    outputs.push({ site, module: value.scope.module.key, ref: value.ref, top: value.scope.parent === null });
   }
   return value;
 }
@@ -221,7 +220,7 @@ function ref(v: Value, what: string): string {
   const scope = need(what);
   if (v instanceof Signal) {
     if (v.scope.module !== scope.module) {
-      throw new Error(`${what}: this signal belongs to "${v.scope.module.name}". Export it from that track and read it as <track>.<export>`);
+      throw new Error(`${what}: this signal belongs to "${v.scope.module.key}". Export it from that track and read it as <track>.<export>`);
     }
     if (!visible(v, scope)) throw new Error(`${what}: this signal only exists inside a poly voice`);
     return v.ref;
@@ -250,27 +249,41 @@ export function kernel<K = unknown>(id: string, inputs: Record<string, Value | u
 }
 
 /**
- * A hosted plugin (CLAP), e.g. `plugin("clap:org.surge-synth-team.surge-xt", { notes, state: "lead" })`.
+ * A hosted plugin (CLAP), e.g. `plugin("clap:org.surge-synth-team.surge-xt", { key: "lead", notes })`.
  * Inputs are `in` (audio), `notes` (a notes lane) and any parameter by its port name
- * (`m2 plugins <id>` lists them). `state` names a saved state in `assets/plugin-state/`.
+ * (`m2 plugins <id>` lists them). `key` names the plugin's saved state: it is filed under
+ * the track, the `key()` frames around the call, then this key (ID-8). A plugin without
+ * a key inside a `key()` frame takes the frame's key; one with neither has no saved state.
  */
-export function plugin(id: string, inputs: { state?: string; [port: string]: Value | string | undefined } = {}): KernelNode<AudioKind> {
+export function plugin(id: string, inputs: { key?: string; [port: string]: Value | string | undefined } = {}): KernelNode<AudioKind> {
   const site = takeSite();
   const scope = need(`plugin("${id}")`);
+  const m = scope.module;
   const ins: Record<string, string> = {};
-  let state: string | undefined;
+  let key: string | undefined;
   for (const [k, v] of Object.entries(inputs)) {
     if (v === undefined) continue;
-    if (k === "state") {
-      if (typeof v !== "string") throw new Error(`plugin("${id}"): state must be the name of a saved state`);
-      state = v;
-    } else {
+    if (k === "key") key = checkKey("the plugin key", v, m.key);
+    else if (k === "state") throw new Error(`plugin("${id}"): \`state\` was replaced by \`key: "<key>"\`, which files the plugin's state in its track's data`);
+    else {
       if (typeof v === "string") throw new Error(`plugin("${id}") input "${k}": expected a signal or a number, got a string`);
       ins[k] = ref(v, `${id} input "${k}"`);
     }
   }
   const op: Record<string, unknown> = { op: "plugin", plugin: id, inputs: ins };
-  if (state !== undefined) op.state = state;
+  const chain = keyFrames(m);
+  if (key !== undefined) {
+    const frame = chain[chain.length - 1];
+    const here = place(site);
+    const first = frame.plugins.get(key);
+    if (first) {
+      const where = chain.length > 1 ? `the frame ${chainName(chain)} of "${m.key}"` : `"${m.key}"`;
+      throw new BuildError("key.duplicate", `two plugins have the key "${key}" in ${where}: at ${describe(first)}, and at ${describe(here)}. Rename one, or wrap one in key()`, m.key);
+    }
+    frame.plugins.set(key, here);
+    op.key = key;
+  }
+  if (chain.length > 1) op.frames = chain.slice(1).map((f) => f.key);
   return produced(site, new KernelNode<AudioKind>(push(scope, op, at(site)), scope));
 }
 
@@ -325,8 +338,113 @@ export function feedback<K = unknown>(kind: "audio<1>" | "audio<2>" | `control<$
   const site = takeSite();
   const scope = need("feedback");
   const id = push(scope, { op: "feedback", kind, input: null }, at(site));
-  feedbacks.push({ node: () => scope.nodes.find((n) => n.id === id), module: scope.module.name });
+  feedbacks.push({ node: () => scope.nodes.find((n) => n.id === id), module: scope.module.key });
   return produced(site, new Feedback<K>(id, scope));
+}
+
+// ---------------------------------------------------------------- keys
+
+/**
+ * A build error with a stable code from the contract (DIAG-2), such as `key.duplicate`.
+ * The first one fails the build even if song code catches it.
+ */
+class BuildError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    /** The key of the module it is about. */
+    readonly module?: string,
+  ) {
+    super(message);
+    firstError ??= this;
+  }
+}
+
+let firstError: BuildError | undefined;
+
+const host = globalThis as any;
+
+/** A key, checked against the key rule (ID-1) and never normalised: `key.invalid` suggests a spelling (ID-2). */
+function checkKey(what: string, k: unknown, module?: string): string {
+  if (typeof k !== "string") throw new BuildError("key.invalid", `${what} must be a string such as "lead-vox", not ${k === null ? "null" : typeof k}`, module);
+  const invalid: string | undefined = host.__m2_key(what, k);
+  if (invalid) throw new BuildError("key.invalid", invalid, module);
+  return k;
+}
+
+/** An evaluation of a call: its site, and the stack it ran in. Described only for an error. */
+type Place = { site?: number; stack: string };
+
+function place(site: number | undefined): Place {
+  return { site, stack: new Error().stack ?? "" };
+}
+
+/**
+ * Where an evaluation was, in the TypeScript: the call, then what called it. A call in a
+ * helper or a loop has one site that runs more than once; the callers tell them apart (ID-5).
+ */
+function describe(p: Place): string {
+  const at: string[] = [];
+  for (const line of p.stack.split("\n")) {
+    const m = /([^\s()]+):(\d+):(\d+)\)?\s*$/.exec(line) ?? /([^\s()]+):(\d+)\)?\s*$/.exec(line);
+    if (!m || m[1] === "@m2/core" || m[1] === "<main>") continue;
+    at.push(host.__m2_where(`${m[1]}:${m[2]}:${m[3] ?? 1}`));
+  }
+  const call: string | undefined = p.site === undefined ? undefined : host.__m2_site_src(p.site);
+  const [first, ...callers] = at;
+  const here = call ?? first ?? "an unknown place";
+  return callers.length ? `${here} (called from ${callers.join(", ")})` : here;
+}
+
+/** A `key()` frame, or a module's top level: the keys used directly inside it, and where first. */
+type KeyFrame = { key: string; frames: Map<string, Place>; plugins: Map<string, Place> };
+
+/** A lane as declared so far. Kept here, out of reach of song code, since it holds a label. */
+type LaneRecord = { kind: string; default?: number; label?: string; chains: Map<string, Place>; shared: boolean; first: Place };
+
+/** What a module build keeps that song code must not reach: lanes (with labels) and open frames. */
+const moduleInfo = new WeakMap<ModuleBuild, { lanes: Map<string, LaneRecord>; frames: KeyFrame[] }>();
+
+function infoOf(m: ModuleBuild) {
+  let i = moduleInfo.get(m);
+  if (!i) moduleInfo.set(m, (i = { lanes: new Map(), frames: [{ key: "", frames: new Map(), plugins: new Map() }] }));
+  return i;
+}
+
+/** The open frames of a module: its top level, then each `key()` frame, outermost first. */
+function keyFrames(m: ModuleBuild): KeyFrame[] {
+  return infoOf(m).frames;
+}
+
+function chainName(chain: KeyFrame[]): string {
+  return chain.length > 1 ? chain.slice(1).map((f) => `key("${f.key}")`).join(" › ") : "the top level";
+}
+
+/**
+ * A keyed frame (ID-7): `key("chain-l", () => vocalChain(x))` runs `fn` and returns what
+ * it returns. A key is unique within its parent frame (ID-5). Plugins built inside file
+ * their state under the frame's key (ID-8); lanes don't move, since they are filed by
+ * track and lane key only (ID-6).
+ */
+export function key<T>(k: string, fn: () => T): T {
+  const site = takeSite();
+  const m = need("key()").module;
+  checkKey("the key() frame key", k, m.key);
+  if (typeof fn !== "function") throw new Error(`key("${k}", fn): fn must be a function that builds what the key names`);
+  const chain = keyFrames(m);
+  const parent = chain[chain.length - 1];
+  const here = place(site);
+  const first = parent.frames.get(k);
+  if (first) {
+    throw new BuildError("key.duplicate", `key("${k}") is used twice in ${chainName(chain)} of "${m.key}": at ${describe(first)}, and at ${describe(here)}. Rename one`, m.key);
+  }
+  parent.frames.set(k, here);
+  chain.push({ key: k, frames: new Map(), plugins: new Map() });
+  try {
+    return produced(site, fn());
+  } finally {
+    chain.pop();
+  }
 }
 
 // ---------------------------------------------------------------- components
@@ -378,31 +496,87 @@ function controlAt(v: unknown, rest: string[], path: string[], site: number, sco
 
 // ---------------------------------------------------------------- modules
 
+/** A lane's options. */
+export type LaneOptions = {
+  /** Display text, such as "Hook". The key is the lane's identity; this is never an address. */
+  name?: string;
+  /** Allow declaring the lane from several `key()` frames, which then all read it (ID-6). */
+  shared?: boolean;
+};
+
 /** What a track or song function receives. */
 export type Ctx = {
-  name: string;
+  /** The module's key: `song`, or the track's key. Code never sees a label (ID-10). */
+  key: string;
   lane: {
     /** Notes from the timeline. */
-    notes(id: string): Events;
+    notes(key: string, opts?: LaneOptions): Events;
     /** An automation lane; `fallback` applies where no clip is. */
-    control<U extends Unit>(id: string, unit: U, fallback?: number | Quantity<U>): Control<U>;
+    control<U extends Unit>(key: string, unit: U, fallback?: number | Quantity<U>, opts?: LaneOptions): Control<U>;
     /** A 0..1 lane that is 0 where no clip is. Use it to switch behaviour on and off over time. */
-    mask(id: string): Mask;
+    mask(key: string, opts?: LaneOptions): Mask;
     /** Audio clips from the timeline (stereo unless `channels` is 1). */
-    audio(id: string, channels?: 1 | 2): Audio;
+    audio(key: string, channels?: 1 | 2, opts?: LaneOptions): Audio;
   };
   time: { readonly beats: Control<"beats">; readonly seconds: Control<"seconds"> };
 };
 
-function declareLane(m: ModuleBuild, id: string, kind: string, fallback?: number) {
-  const have = m.lanes.find((l) => l.id === id);
-  if (have) {
-    if (have.kind !== kind || have.default !== fallback) throw new Error(`lane "${id}" is declared twice with different settings`);
+/** Options in `what`, checked against their allowed types, so a misspelt one isn't ignored. */
+function options(what: string, o: unknown, allowed: Record<string, "string" | "boolean">): Record<string, unknown> {
+  if (o === undefined) return {};
+  if (o === null || typeof o !== "object" || Array.isArray(o)) throw new Error(`${what}: options must be an object such as { name: "Lead Vox" }`);
+  for (const [k, v] of Object.entries(o)) {
+    const want = allowed[k];
+    if (!want) throw new Error(`${what}: unknown option "${k}" (options: ${Object.keys(allowed).join(", ")})`);
+    if (v !== undefined && typeof v !== want) throw new Error(`${what}: option "${k}" must be a ${want}`);
+    if (k === "name" && v === "") throw new Error(`${what}: a name can't be empty; leave it out to show the key`);
+  }
+  return o as Record<string, unknown>;
+}
+
+function laneKind(kind: string, fallback: number | undefined): string {
+  return fallback === undefined ? kind : `${kind} with fallback ${fallback}`;
+}
+
+/**
+ * Declare a lane of `m`. Declared again with the same kind and settings, it is the same
+ * lane; with others it is `lane.conflict`. Declared from two `key()` frame chains it is
+ * `lane.shared`, unless every declaration says `shared: true` (ID-6).
+ */
+function declareLane(m: ModuleBuild, k: string, kind: string, fallback: number | undefined, opts: unknown, site: number | undefined) {
+  checkKey("the lane key", k, m.key);
+  const o = options(`lane "${k}"`, opts, { name: "string", shared: "boolean" }) as LaneOptions;
+  const lanes = infoOf(m).lanes;
+  const chain = keyFrames(m);
+  const where = chain.slice(1).map((f) => f.key).join("/");
+  const here = place(site);
+  const have = lanes.get(k);
+  if (!have) {
+    lanes.set(k, { kind, default: fallback, label: o.name, chains: new Map([[where, here]]), shared: o.shared === true, first: here });
     return;
   }
-  const d: LaneDecl = { id, kind };
-  if (fallback !== undefined) d.default = fallback;
-  m.lanes.push(d);
+  if (have.kind !== kind || have.default !== fallback || (o.name !== undefined && have.label !== undefined && o.name !== have.label)) {
+    const was = laneKind(have.kind, have.default) + (have.label !== undefined ? ` named "${have.label}"` : "");
+    const now = laneKind(kind, fallback) + (o.name !== undefined ? ` named "${o.name}"` : "");
+    throw new BuildError(
+      "lane.conflict",
+      `lane "${k}" of "${m.key}" is declared as ${was} at ${describe(have.first)}, and again as ${now} at ${describe(here)}. A lane has one kind and one set of settings; give the other its own key`,
+      m.key,
+    );
+  }
+  have.label ??= o.name;
+  have.shared &&= o.shared === true;
+  const other = [...have.chains].find(([c]) => c !== where);
+  if (!have.chains.has(where)) have.chains.set(where, here);
+  if (other && !have.shared) {
+    const name = (c: string) => (c === "" ? "the top level" : c.split("/").map((f) => `key("${f}")`).join(" › "));
+    throw new BuildError(
+      "lane.shared",
+      `lane "${k}" of "${m.key}" is declared in ${name(other[0])} at ${describe(other[1])}, and in ${name(where)} at ${describe(here)}. ` +
+        `Lanes are filed by track and lane key only, so both would read one lane: give each its own key, or say shared: true in every declaration`,
+      m.key,
+    );
+  }
 }
 
 function ctxFor(m: ModuleBuild): Ctx {
@@ -413,28 +587,28 @@ function ctxFor(m: ModuleBuild): Ctx {
     return s as any;
   };
   return {
-    name: m.name,
+    key: m.key,
     lane: {
-      notes(id) {
+      notes(key, opts) {
         const site = takeSite();
-        declareLane(m, id, "events<note>");
-        return produced(site, laneNode(id, undefined, site));
+        declareLane(m, key, "events<note>", undefined, opts, site);
+        return produced(site, laneNode(key, undefined, site));
       },
-      control(id, unit, fallback) {
+      control(key, unit, fallback, opts) {
         const site = takeSite();
         const v = fallback instanceof Quantity ? amounts.get(fallback)! : fallback;
-        declareLane(m, id, `control<${unit}>`, v ?? 0);
-        return produced(site, laneNode(id, unit, site));
+        declareLane(m, key, `control<${unit}>`, v ?? 0, opts, site);
+        return produced(site, laneNode(key, unit, site));
       },
-      mask(id) {
+      mask(key, opts) {
         const site = takeSite();
-        declareLane(m, id, "control<unit01>", 0);
-        return produced(site, laneNode(id, "unit01", site));
+        declareLane(m, key, "control<unit01>", 0, opts, site);
+        return produced(site, laneNode(key, "unit01", site));
       },
-      audio(id, channels = 2) {
+      audio(key, channels = 2, opts) {
         const site = takeSite();
-        declareLane(m, id, `audio<${channels}>`);
-        return produced(site, laneNode(id, undefined, site));
+        declareLane(m, key, `audio<${channels}>`, undefined, opts, site);
+        return produced(site, laneNode(key, undefined, site));
       },
     },
     time: {
@@ -452,27 +626,47 @@ type Exports = Signal | Record<string, Signal>;
 type TrackFn<E extends Exports> = (ctx: Ctx) => E;
 type Handle<E extends Exports> = E extends Signal ? { out: E } : { [K in keyof E]: E[K] };
 
-const tracks = new Map<string, { fn: TrackFn<any>; src?: string }>();
+/** A track's options. */
+export type TrackOptions = {
+  /** Display text, such as "Lead Vox": what the app shows. Never an address, and code can't read it (ID-10). */
+  name?: string;
+};
+
+/** Registered tracks by key. Private: it holds labels, which song code must never see. */
+const tracks = new Map<string, { fn: TrackFn<any>; label?: string; src?: string; at: Place }>();
 const TRACK = Symbol("m2.track");
 
 /**
- * A track: a module with lanes on the timeline. Return a signal (its `out`) or an
- * object of named exports. Other modules read exports as `track.exportName`.
+ * A track: a module with lanes on the timeline, named by its key (ID-4):
+ * `track("lead-vox", { name: "Lead Vox" }, fn)`, or `track("kick", fn)` to show the key.
+ * The key files the track's data and must be unique in the project (ID-5). Return a
+ * signal (its `out`) or an object of named exports. Other modules read exports as
+ * `track.exportName`.
  */
-export function track<E extends Exports>(name: string, fn: TrackFn<E>): Handle<E> {
-  if (typeof name !== "string" || !name) throw new Error("a track needs a name");
-  if (name === "song") throw new Error(`"song" is reserved for the root module`);
-  if (tracks.has(name)) throw new Error(`two tracks are named "${name}"`);
-  tracks.set(name, { fn, src: callsite() });
+export function track<E extends Exports>(key: string, fn: TrackFn<E>): Handle<E>;
+export function track<E extends Exports>(key: string, opts: TrackOptions, fn: TrackFn<E>): Handle<E>;
+export function track<E extends Exports>(key: string, a: TrackOptions | TrackFn<E>, b?: TrackFn<E>): Handle<E> {
+  const site = takeSite();
+  checkKey("the track key", key);
+  if (key === "song") throw new BuildError("key.invalid", `"song" is reserved for the root module; give the track another key`);
+  const [opts, fn]: [unknown, unknown] = typeof a === "function" ? [undefined, a] : [a, b];
+  if (typeof fn !== "function") throw new Error(`track("${key}"): write track("${key}", fn), or track("${key}", { name: "…" }, fn)`);
+  const o = options(`track("${key}")`, opts, { name: "string" }) as TrackOptions;
+  const here = place(site);
+  const first = tracks.get(key);
+  if (first) {
+    throw new BuildError("key.duplicate", `two tracks have the key "${key}": one at ${describe(first.at)}, another at ${describe(here)}. Track keys are unique in the project; rename one`, key);
+  }
+  tracks.set(key, { fn: fn as TrackFn<E>, label: o.name, src: callsite(), at: here });
   return new Proxy({} as Handle<E>, {
     get(_, prop) {
-      if (prop === TRACK) return name;
+      if (prop === TRACK) return key;
       if (typeof prop !== "string" || prop === "then" || prop === "toJSON") return undefined;
-      const scope = need(`${name}.${prop}`);
+      const scope = need(`${key}.${prop}`);
       const m = scope.module;
-      const key = `${name}.${prop}`;
-      let s = m.imports.get(key);
-      if (!s) m.imports.set(key, (s = new Signal(push(m.root, { op: "import", module: name, export: prop }), m.root)));
+      const id = `${key}.${prop}`;
+      let s = m.imports.get(id);
+      if (!s) m.imports.set(id, (s = new Signal(push(m.root, { op: "import", module: key, export: prop }), m.root)));
       return s;
     },
   });
@@ -485,17 +679,17 @@ export function song(fn: (ctx: Ctx) => Audio): { [TRACK]: "song"; fn: (ctx: Ctx)
 
 function exportsOf(m: ModuleBuild, value: unknown) {
   const one = (k: string, v: unknown) => {
-    if (!(v instanceof Signal)) throw new Error(`${m.name}: export "${k}" must be a signal`);
-    if (v.scope !== m.root) throw new Error(`${m.name}: export "${k}" must not come from inside a poly voice`);
+    if (!(v instanceof Signal)) throw new Error(`${m.key}: export "${k}" must be a signal`);
+    if (v.scope !== m.root) throw new Error(`${m.key}: export "${k}" must not come from inside a poly voice`);
     m.exports[k] = v.ref;
   };
   if (value instanceof Signal) one("out", value);
   else if (value && typeof value === "object") for (const [k, v] of Object.entries(value)) one(k, v);
-  else throw new Error(`${m.name} must return a signal or an object of signals`);
+  else throw new Error(`${m.key} must return a signal or an object of signals`);
 }
 
-function run(name: string, isTrack: boolean, fn: (ctx: Ctx) => unknown, src?: string): ModuleBuild {
-  const m = new ModuleBuild(name, isTrack, src);
+function run(key: string, isTrack: boolean, fn: (ctx: Ctx) => unknown, src?: string): ModuleBuild {
+  const m = new ModuleBuild(key, isTrack, src);
   const prev = current;
   current = m.root;
   try {
@@ -506,21 +700,32 @@ function run(name: string, isTrack: boolean, fn: (ctx: Ctx) => unknown, src?: st
   return m;
 }
 
-/** @internal Called by the host with the song module's default export. */
+let built = false;
+
+/** @internal Called by the host with the song module's default export, once. */
 export function __build(root: unknown): string {
+  // Its result holds every label; song code calling it would see them (ID-10).
+  if (built) throw new Error("__build is the host's: song code must not call it");
+  built = true;
+  if (firstError) throw firstError;
   const r = root as any;
   if (!r || r[TRACK] !== "song") throw new Error("song.ts must `export default song(...)`");
   outputs = [];
-  const built = [run("song", false, r.fn, r.src)];
-  for (const [name, t] of tracks) built.push(run(name, true, t.fn, t.src));
+  const modules = [run("song", false, r.fn, r.src)];
+  for (const [key, t] of tracks) modules.push(run(key, true, t.fn, t.src));
+  if (firstError) throw firstError;
   for (const f of feedbacks) {
     const n = f.node();
     if (n && n.input === null) throw new Error(`${f.module}: a feedback() was never given its input with .set()`);
   }
   (globalThis as any).__m2_outputs = JSON.stringify(outputs);
   return JSON.stringify({
-    ir: 0,
+    ir: 1,
     root: { module: "song", export: "out" },
-    modules: built.map((m) => ({ name: m.name, track: m.track, lanes: m.lanes, nodes: m.root.nodes, exports: m.exports, src: m.src })),
+    modules: modules.map((m) => {
+      const label = tracks.get(m.key)?.label;
+      const lanes = [...infoOf(m).lanes].map(([key, l]) => ({ key, kind: l.kind, default: l.default, label: l.label }));
+      return { key: m.key, label: m.track ? label : undefined, track: m.track, lanes, nodes: m.root.nodes, exports: m.exports, src: m.src };
+    }),
   });
 }

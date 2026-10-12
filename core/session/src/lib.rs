@@ -1,8 +1,10 @@
 //! Turns a project folder into something playable.
 //!
 //! [`compile`] is the one operation every host uses before playing or rendering: if it
-//! succeeds, the song renders. It runs the TypeScript, checks the graph, and validates
-//! every lane's timeline data against the lane's declared kind.
+//! succeeds, the song renders. It checks the manifest's dependencies, runs the TypeScript,
+//! binds the hosted plugins, checks the graph, and reads every declared lane's data against its
+//! declaration. What doesn't stop the song comes back as `problems` (DIAG-1): data that doesn't
+//! read (the lane plays what it can), data no lane reads, a plugin that isn't installed.
 //!
 //! [`Session`] (in `edit`) is the editing session built on it: a source snapshot,
 //! revisions, verified value edits and undo.
@@ -11,22 +13,19 @@ pub mod edit;
 pub mod lanes;
 pub mod render;
 pub mod timeline;
+pub mod unclaimed;
 pub mod view;
-pub mod warnings;
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-
-use m2_ir::{Diagnostic, Flat, Ir, Kind};
+use m2_ir::{Diagnostic, Flat, Ir, Severity};
 use m2_runtime::PackageSet;
-use m2_song::{Project, slug};
+use m2_song::{DataSet, Project, Version};
 
 pub use edit::{Audition, Committed, Control, EditError, Edited, Inlet, Outlet, Revision, Session};
 /// What [`Session::write_notes`] writes.
 pub use m2_song::{Note, NoteClip};
 pub use timeline::{TimelineLane, TimelineTrack, TimelineView};
+pub use unclaimed::{Seen, SeenLane};
 pub use view::{GraphView, Knob, ModuleView, ViewNode};
-pub use warnings::{Fix, Seen, SeenLane, Warning};
 
 /// A project that is ready to render.
 pub struct Compiled {
@@ -36,129 +35,96 @@ pub struct Compiled {
     pub sites: Vec<m2_script::sites::Site>,
     /// What each call returned, when it was a signal.
     pub outputs: Vec<m2_script::Output>,
-    /// Problems that don't stop the song from playing, such as lane files no lane reads.
-    pub warnings: Vec<Warning>,
+    /// Every package file the build read (FMT-6a, RENDER-2).
+    pub package_files: Vec<m2_script::PackageFile>,
+    /// What the graph plays: each declared lane and plugin state, read against its declaration.
+    pub data: DataSet,
+    /// Everything that needs attention but doesn't stop the song (DIAG-1, FMT-9, FMT-18a), with
+    /// the fixes each offers: a lane that doesn't read, clip ids, asset pins, plugin states,
+    /// unknown files under `data/`, data no lane or plugin reads, a plugin that isn't
+    /// installed, a parameter the plugin renamed. Errors first, then Warnings, then Notices.
+    pub problems: Vec<m2_song::Diagnostic>,
 }
 
 pub fn compile(project: &Project, packages: &mut PackageSet) -> Result<Compiled, Vec<Diagnostic>> {
-    compile_sources(project, packages, HashMap::new(), &Seen::default())
+    compile_sources(project, packages, &Seen::default(), None)
 }
 
-/// [`compile`], with some files' contents supplied instead of read from disk. `seen` is what
-/// earlier revisions declared, for warnings about data a rename left behind (see
-/// [`warnings::warnings`]).
+/// [`compile`], given what earlier revisions declared (`seen`, for messages about data a rename
+/// left behind, see [`unclaimed::unclaimed`]) and the data last accepted (`previous`), which a
+/// lane whose file fails keeps playing (FMT-9). The build reads the project's code from its
+/// snapshot only; the data never stops it.
 pub fn compile_sources(
     project: &Project,
     packages: &mut PackageSet,
-    sources: HashMap<PathBuf, String>,
     seen: &Seen,
+    previous: Option<&DataSet>,
 ) -> Result<Compiled, Vec<Diagnostic>> {
-    let mut opts = m2_script::Options::new(&project.dir, &project.entry());
+    let unmet = dependencies(project, packages);
+    if !unmet.is_empty() {
+        return Err(unmet);
+    }
+    let mut opts = m2_script::Options::new(project.code.clone(), &project.manifest.project.entry);
     opts.packages = packages.packages().map(|p| (p.name.clone(), p.dir.clone())).collect();
-    opts.sources = sources;
-    let m2_script::Build { ir, sites, outputs } = m2_script::build_full(&opts)?;
+    opts.dependencies = project.manifest.dependencies.keys().filter(|d| *d != m2_song::SDK).cloned().collect();
+    let m2_script::Build { mut ir, sites, outputs, package_files } = m2_script::build_full(&opts)?;
 
-    let mut diags = names(&ir);
-    diags.extend(plugins(project, &ir, packages));
-    let flat = match m2_ir::check(&ir, packages) {
-        Ok(f) => Some(f),
-        Err(d) => {
-            diags.extend(d);
-            None
-        }
+    // A missing plugin and a renamed parameter never stop the song (FMT-18, FMT-18a).
+    let (blocking, kept): (Vec<_>, Vec<_>) =
+        packages.bind_plugins(&mut ir).into_iter().partition(|d| d.severity == Severity::Error && d.code != "plugin.missing");
+    if !blocking.is_empty() {
+        return Err(blocking);
+    }
+    let flat = m2_ir::check(&ir, packages)?;
+    let decls = m2_runtime::decls(&ir);
+    let (data, mut problems) = project.data(&decls, previous);
+    problems.extend(kept.into_iter().map(problem));
+    problems.extend(unclaimed::unclaimed(project, &ir, &decls, seen));
+    problems.sort_by_key(|d| d.severity);
+    Ok(Compiled { ir, flat, sites, outputs, package_files, data, problems })
+}
+
+/// Every `[dependencies]` entry against what is installed (FMT-3): the SDK this build runs, and
+/// each package's own version.
+fn dependencies(project: &Project, packages: &PackageSet) -> Vec<Diagnostic> {
+    let installed = |name: &str| match name {
+        m2_song::SDK => Version::parse(m2_script::SDK_VERSION),
+        _ => packages.packages().find(|p| p.name == name).and_then(|p| Version::parse(&p.version)),
     };
-    diags.extend(timeline(project, &ir));
-    if !diags.is_empty() {
-        return Err(diags);
-    }
-
-    let warnings = warnings::warnings(project, &ir, seen);
-    Ok(Compiled { ir, flat: flat.expect("no diagnostics means the graph checked"), sites, outputs, warnings })
+    project.manifest.check_dependencies(installed).into_iter().map(diagnostic).collect()
 }
 
-/// Module names become file names (`Lead Vox` → `timeline/lead-vox.*.json`), so two
-/// names that normalise the same would share files.
-fn names(ir: &Ir) -> Vec<Diagnostic> {
-    let mut diags = vec![];
-    let mut seen: HashMap<String, &str> = HashMap::new();
-    for m in &ir.modules {
-        let s = slug(&m.name);
-        let d = |message: String| Diagnostic { message, module: Some(m.name.clone()), src: m.src.clone(), ..Default::default() };
-        if s.is_empty() {
-            diags.push(d(format!("the name `{}` needs at least one letter or digit", m.name)));
-        } else if let Some(other) = seen.insert(s.clone(), &m.name) {
-            diags.push(d(format!("`{}` and `{other}` would share the timeline files `timeline/{s}.*.json`; rename one", m.name)));
-        }
-    }
-    diags
+/// A project diagnostic from `core/song` as the build's diagnostics are shaped (no fixes).
+pub fn diagnostic(d: m2_song::Diagnostic) -> Diagnostic {
+    let mut out = Diagnostic::error(d.code, d.message).at(d.src);
+    out.module = d.module;
+    out.severity = match d.severity {
+        m2_song::Severity::Error => Severity::Error,
+        m2_song::Severity::Warning => Severity::Warning,
+        m2_song::Severity::Notice => Severity::Notice,
+    };
+    out
 }
 
-/// Describe the hosted plugins the song uses, and check their saved states exist.
-fn plugins(project: &Project, ir: &Ir, packages: &mut PackageSet) -> Vec<Diagnostic> {
-    let mut diags = vec![];
-    let mut ids = vec![];
-    for m in &ir.modules {
-        for n in &m.nodes {
-            if let m2_ir::Op::Plugin { plugin, state, .. } = &n.op {
-                ids.push(plugin.as_str());
-                if let Some(s) = state {
-                    let path = m2_runtime::plugin_state_path(&project.dir.join("assets"), s);
-                    if !path.exists() {
-                        diags.push(Diagnostic {
-                            message: format!("no saved plugin state `{s}` ({}); create it with `m2 plugin-state`", relative(&project.dir, &path)),
-                            module: Some(m.name.clone()),
-                            node: Some(n.id.clone()),
-                            src: n.src.clone(),
-                        });
-                    }
-                }
-            }
-        }
-    }
-    diags.extend(packages.describe_plugins(ids).into_iter().map(Diagnostic::new));
-    diags
-}
-
-/// Every lane's data must parse as the lane's kind.
-fn timeline(project: &Project, ir: &Ir) -> Vec<Diagnostic> {
-    let tl = &project.timeline;
-    let mut diags = vec![];
-    if let Err(e) = tl.tempo() {
-        diags.push(Diagnostic { message: e.to_string(), src: Some("timeline/song.json".into()), ..Default::default() });
-    }
-    for m in &ir.modules {
-        for lane in &m.lanes {
-            let result = match lane.kind {
-                Kind::Events(_) => tl.notes(&m.name, &lane.id).map(drop),
-                Kind::Control(_) => tl.control(&m.name, &lane.id).map(drop),
-                Kind::Audio(_) => tl.audio(&m.name, &lane.id).and_then(|clips| {
-                    for c in clips {
-                        let path = project.dir.join("assets").join(&c.asset);
-                        m2_runtime::audio::load_wav(&path).map_err(|e| anyhow::anyhow!("clip at beat {}: {e:#}", c.start))?;
-                    }
-                    Ok(())
-                }),
-            };
-            if let Err(e) = result {
-                diags.push(Diagnostic {
-                    message: format!("lane `{}` ({}): {}", lane.id, lane.kind, e.root_cause()),
-                    module: Some(m.name.clone()),
-                    src: tl.lane_file(&m.name, &lane.id).map(|f| relative(&project.dir, f)),
-                    ..Default::default()
-                });
-            }
-        }
-    }
-    diags
-}
-
-fn relative(dir: &Path, file: &Path) -> String {
-    file.strip_prefix(dir).unwrap_or(file).display().to_string()
+/// A build diagnostic that doesn't stop the song, as the revision's problems are shaped. Its
+/// `src` stays `file:line:col` when it has one.
+pub fn problem(d: Diagnostic) -> m2_song::Diagnostic {
+    let severity = match d.severity {
+        Severity::Error => m2_song::Severity::Error,
+        Severity::Warning => m2_song::Severity::Warning,
+        Severity::Notice => m2_song::Severity::Notice,
+    };
+    let mut out = m2_song::Diagnostic::new(severity, d.code, d.message);
+    (out.src, out.module) = (d.src, d.module);
+    out
 }
 
 #[cfg(test)]
+mod gate_tests;
+
+#[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use super::*;
 
@@ -168,10 +134,13 @@ mod tests {
         p
     }
 
+    pub(crate) const MANIFEST: &str =
+        "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n";
+
     fn project(files: &[(&str, &str)]) -> PathBuf {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!("m2-session-test-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
-        for (name, text) in files {
+        for (name, text) in [("music2.toml", MANIFEST)].iter().chain(files) {
             let p = dir.join(name);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(p, text).unwrap();
@@ -182,7 +151,7 @@ mod tests {
     const SONG: &str = r#"import { song } from "@m2/core";
 import { kick } from "std/instruments";
 import { track } from "@m2/core";
-const k = track("Kick", ({ lane }) => kick(lane.notes("hits")));
+const k = track("kick", ({ lane }) => kick(lane.notes("hits")));
 export default song(() => k.out);
 "#;
 
@@ -194,49 +163,83 @@ export default song(() => k.out);
     fn the_example_compiles() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song");
         let c = compile_dir(&dir).unwrap_or_else(|e| panic!("{e:?}"));
-        assert!(c.warnings.is_empty(), "{:?}", c.warnings);
+        assert!(c.problems.is_empty(), "{:?}", c.problems);
     }
 
+    // FMT-9: a lane file that fails never stops the compile; it is a problem naming the file and
+    // the field, and that lane plays nothing.
     #[test]
-    fn bad_timeline_data_fails_compile_not_render() {
-        let dir = project(&[("song.ts", SONG), ("timeline/kick.hits.json", r#"{"clips": [{"start": 0, "length": 4, "notes": [{"pitch": "H9", "start": 0, "length": 1}]}]}"#)]);
-        let e = compile_dir(&dir).err().unwrap();
-        assert!(e[0].message.contains("lane `hits`") && e[0].message.contains("bad pitch `H9`"), "{}", e[0]);
-        assert_eq!(e[0].src.as_deref(), Some("timeline/kick.hits.json"));
+    fn bad_lane_data_is_a_problem_not_a_failure() {
+        let hits = r#"{"clips": [{"id": "a", "start": 0, "length": 4, "notes": [{"pitch": "H9", "start": 0, "length": 1}]}]}"#;
+        let dir = project(&[("song.ts", SONG), ("data/kick/hits.json", hits)]);
+        let c = compile_dir(&dir).unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(c.problems.iter().map(|d| d.code).collect::<Vec<_>>(), ["lane.invalid"]);
+        assert!(c.problems[0].message.contains("bad pitch `H9`"), "{}", c.problems[0]);
+        assert_eq!(c.problems[0].src.as_deref(), Some("data/kick/hits.json"));
+        assert!(c.data.notes("kick", "hits").is_empty());
         std::fs::remove_dir_all(dir).ok();
 
-        // Control data in a notes lane is the wrong shape.
-        let dir = project(&[("song.ts", SONG), ("timeline/kick.hits.json", r#"{"clips": [{"start": 0, "length": 4, "points": [[0, 1]]}]}"#)]);
-        assert!(compile_dir(&dir).is_err());
-        std::fs::remove_dir_all(dir).ok();
-
-        let dir = project(&[("song.ts", SONG), ("timeline/song.json", r#"{"tempo": [{"beat": 0, "bpm": 5}]}"#)]);
-        let e = compile_dir(&dir).err().unwrap();
-        assert!(e[0].message.contains("out of range"), "{}", e[0]);
+        // FMT-9: the arrangement does block.
+        let dir = project(&[("song.ts", SONG), ("data/arrangement.json", r#"{"tempo": [{"beat": 0, "bpm": 5}]}"#)]);
+        let e = Project::open(&dir).unwrap_err();
+        assert_eq!(e[0].code, "arrangement.invalid");
         std::fs::remove_dir_all(dir).ok();
     }
 
+    // FMT-16: compile never decodes audio: an asset that isn't audio at all compiles.
     #[test]
-    fn names_that_share_files_are_rejected() {
+    fn compile_never_decodes_assets() {
         let src = r#"import { song, track } from "@m2/core";
-import { kick } from "std/instruments";
-import { add } from "std/math";
-const a = track("Bass", ({ lane }) => kick(lane.notes("n")));
-const b = track("bass", ({ lane }) => kick(lane.notes("n")));
-export default song(() => add(a.out, b.out));
+const v = track("vox", ({ lane }) => lane.audio("takes"));
+export default song(() => v.out);
 "#;
-        let dir = project(&[("song.ts", src)]);
-        let e = compile_dir(&dir).err().unwrap();
-        assert!(e.iter().any(|d| d.message.contains("would share the timeline files `timeline/bass.*.json`")), "{e:?}");
+        let takes = r#"{"clips": [{"id": "a", "start": 0, "length": 4, "asset": "take.wav"}]}"#;
+        let dir = project(&[("song.ts", src), ("data/vox/takes.json", takes), ("assets/take.wav", "not a wav file")]);
+        let c = compile_dir(&dir).unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(c.problems.iter().map(|d| d.code).collect::<Vec<_>>(), ["asset.unpinned"]);
         std::fs::remove_dir_all(dir).ok();
     }
 
+    // FMT-3: an unmet dependency is refused before any code runs.
+    #[test]
+    fn unmet_dependencies_block() {
+        let dir = project(&[("song.ts", SONG)]);
+        std::fs::write(dir.join("music2.toml"), MANIFEST.replace("std = \"0.1\"", "std = \"9\"")).unwrap();
+        let e = compile_dir(&dir).err().unwrap();
+        assert_eq!(e.iter().map(|d| d.code).collect::<Vec<_>>(), ["pkg.unsatisfied"]);
+        std::fs::write(dir.join("music2.toml"), MANIFEST.replace("\"@m2/core\" = \"1\"", "\"@m2/core\" = \"2\"")).unwrap();
+        let e = compile_dir(&dir).err().unwrap();
+        assert_eq!(e.iter().map(|d| d.code).collect::<Vec<_>>(), ["sdk.unsatisfied"]);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // DIAG-1: data no lane reads is a Warning among the revision's problems.
     #[test]
     fn unused_lane_files_are_warnings() {
-        let dir = project(&[("song.ts", SONG), ("timeline/kick.old.json", r#"{"clips": []}"#)]);
+        let dir = project(&[("song.ts", SONG), ("data/kick/old.json", r#"{"clips": []}"#)]);
         let c = compile_dir(&dir).unwrap_or_else(|e| panic!("{e:?}"));
-        assert_eq!(c.warnings.len(), 1);
-        assert_eq!((c.warnings[0].code, c.warnings[0].file.as_str()), ("data.unclaimed", "timeline/kick.old.json"));
+        let found: Vec<_> = c.problems.iter().map(|d| (d.severity, d.code, d.src.as_deref())).collect();
+        assert_eq!(found, [(m2_song::Severity::Warning, "data.unclaimed", Some("data/kick/old.json"))]);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // FMT-18a: a plugin that isn't installed doesn't stop the song; it is an Error among the
+    // revision's problems, and its node plays silence.
+    #[test]
+    fn a_missing_plugin_is_a_problem_not_a_failure() {
+        let src = r#"import { plugin, song, track } from "@m2/core";
+import { kick } from "std/instruments";
+import { sum } from "std/math";
+const k = track("kick", ({ lane }) => kick(lane.notes("hits")));
+const s = track("synth", { name: "Synth" }, ({ lane }) =>
+  plugin("clap:org.example.not-installed", { notes: lane.notes("notes"), cutoff_7: 0.5 }));
+export default song(() => sum(k.out, s.out));
+"#;
+        let dir = project(&[("song.ts", src)]);
+        let c = compile_dir(&dir).unwrap_or_else(|e| panic!("{e:?}"));
+        let found: Vec<_> = c.problems.iter().map(|d| (d.severity, d.code, d.module.as_deref())).collect();
+        assert_eq!(found, [(m2_song::Severity::Error, "plugin.missing", Some("synth"))]);
+        assert!(c.problems[0].src.as_deref().is_some_and(|s| s.starts_with("song.ts:6:")), "{:?}", c.problems[0]);
         std::fs::remove_dir_all(dir).ok();
     }
 }
