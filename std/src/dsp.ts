@@ -18,7 +18,7 @@ export const osc = {
 };
 
 /** White noise. The same seed always gives the same noise. */
-export const noise = (seed?: Value): Audio => kernel("std:noise", { seed });
+export const noise = component({ controls: [] }, (seed?: Value): Audio => kernel("std:noise", { seed }));
 
 export type AdsrOptions = { attack?: Value; decay?: Value; sustain?: Value; release?: Value };
 
@@ -47,5 +47,5 @@ export const vca = component({ controls: ["1"] }, (x: Audio, gain: Value): Audio
 /** Gain in dB. */
 export const gain = component({ controls: ["1"] }, (x: Audio, db: Value): Audio => kernel("std:gain", { in: x, db }));
 
-/** Mono to stereo, -1 (left) to 1 (right). */
+/** Place it from -1 (left) to 1 (right): a mono sound is panned into stereo, a stereo one balanced. */
 export const pan = component({ controls: ["1"] }, (x: Audio, position: Value): Audio => kernel("std:pan", { in: x, pan: position }));

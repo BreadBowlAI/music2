@@ -2,12 +2,15 @@
 //!
 //! Adding wraps the call where it is written: `pluck(notes)` becomes
 //! `delay(pluck(notes))`, importing `delay` if the file doesn't. That works wherever the
-//! call is (an argument, a return, an arrow's body) and needs no new names. Removing
-//! is the inverse, `delay(x, …)` back to `x`: the effect's own options go with it.
+//! call is (an argument, a return, an arrow's body) and needs no new names. An effect
+//! that declares `args` gets them written after the audio, `lowpass(pluck(notes), 1000)`,
+//! so its settings are knobs from the start. Removing is the inverse, `delay(x, …)`
+//! back to `x`: the effect's own options go with it.
 //!
 //! Both are verified the same way, against the graph. Take the effect call's own nodes
-//! out of the graph that has it, and make whatever read its output read its input
-//! instead: that must be exactly the graph without it.
+//! (the numbers written in its arguments included) out of the graph that has it, and
+//! make whatever read its output read its input instead: that must be exactly the
+//! graph without it.
 
 use std::collections::BTreeSet;
 
@@ -41,18 +44,26 @@ fn wraps(with: &Compiled, without: &Ir, site: u32) -> bool {
     if !ids.contains(split_ref(&output.port).0) {
         return false;
     }
-    // What the effect reads from outside itself: one of these is its input.
-    let mut inputs = BTreeSet::new();
+    // What the effect reads from outside itself: one of these is its input. Its nodes may be
+    // in a voice (an effect inside `poly`), so every node list is searched, voices included.
+    let inputs = std::cell::RefCell::new(BTreeSet::new());
     let m = with.ir.modules.iter().find(|m| m.name == module).expect("the output's module");
-    let mut nodes = m.nodes.clone();
-    let mut exports = BTreeMap::new();
-    let inside = |ns: &mut Vec<Node>| ns.retain(|n| ids.contains(n.id.as_str()));
-    let collect = std::cell::RefCell::new(&mut inputs);
-    refs(&mut nodes, &mut exports, &inside, &|r: &mut String| {
-        if !ids.contains(split_ref(r).0) {
-            collect.borrow_mut().insert(r.clone());
+    walk(&m.nodes, &mut |n| {
+        if !ids.contains(n.id.as_str()) {
+            return;
         }
+        // The node's own references: a voice's nodes are walked in their turn.
+        let mut node = vec![n.clone()];
+        if let Op::Poly { body, .. } = &mut node[0].op {
+            body.nodes.clear();
+        }
+        refs(&mut node, &mut BTreeMap::new(), &|_| {}, &|r: &mut String| {
+            if !ids.contains(split_ref(r).0) {
+                inputs.borrow_mut().insert(r.clone());
+            }
+        });
     });
+    let inputs = inputs.into_inner();
     let without = canonical(without);
     inputs.iter().any(|input| {
         excise(&with.ir, &module, &ids, &|r| r == output.port, input).is_some_and(|ir| canonical(&ir) == without)
@@ -91,7 +102,10 @@ impl Session {
         let file = Path::new(&site.file);
         let text = self.accepted.snapshot.files.get(file).ok_or_else(|| EditError::NotFound(site.file.clone()))?.clone();
         let written = &text[site.start as usize..site.end as usize];
-        let wrapped = format!("{}({written})", effect.name);
+        let wrapped = match &effect.args {
+            Some(args) => format!("{}({written}, {args})", effect.name),
+            None => format!("{}({written})", effect.name),
+        };
         let mut edits = vec![(site.start, site.end, wrapped.clone())];
         let import = import_insertion(&text, &effect.module, &effect.name);
         if let Some((at, line)) = &import {
@@ -128,8 +142,8 @@ impl Session {
     /// Write a structural edit, describing it as `before` → `after`.
     fn write_shown(&mut self, candidate: Candidate, before: &str, after: &str) -> Result<Edited, EditError> {
         let file = candidate.file.display().to_string();
-        let base = self.accepted.number;
-        let revision = self.commit(candidate, Some(Undo::Exact { base }))?;
+        let undo = self.exact(&candidate.file);
+        let revision = self.commit(candidate, Some(undo))?;
         Ok(Edited { revision, file, before: before.to_string(), after: after.to_string() })
     }
 }

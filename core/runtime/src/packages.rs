@@ -29,6 +29,21 @@ pub struct Effect {
     pub name: String,
     #[serde(default)]
     pub description: String,
+    /// Where the editor lists it: one of [`EFFECT_CATEGORIES`].
+    #[serde(default = "other")]
+    pub category: String,
+    /// TypeScript written after the input when the effect is added: `"1000"` gives
+    /// `lowpass(x, 1000)`. Each number in it should be a declared control of the effect,
+    /// so it shows up as a knob.
+    #[serde(default)]
+    pub args: Option<String>,
+}
+
+/// The categories effects are listed under, in the editor's order.
+pub const EFFECT_CATEGORIES: [&str; 8] = ["Filter", "EQ", "Dynamics", "Distortion", "Delay & Reverb", "Modulation", "Utility", "Other"];
+
+fn other() -> String {
+    "Other".into()
 }
 
 #[derive(Deserialize)]
@@ -127,6 +142,9 @@ impl PackageSet {
             if !e.module.strip_prefix(&name).is_some_and(|sub| sub.starts_with('/')) {
                 bail!("package `{name}`: effect `{}` must come from one of its own modules, not `{}`", e.name, e.module);
             }
+            if !EFFECT_CATEGORIES.contains(&e.category.as_str()) {
+                bail!("package `{name}`: effect `{}` has category `{}`; use one of {}", e.name, e.category, EFFECT_CATEGORIES.join(", "));
+            }
         }
         let pkg = Package {
             name: name.clone(),
@@ -204,21 +222,23 @@ fn describe_plugin(id: &str) -> Result<(KernelSig, m2_plugins::Info)> {
     let info = m2_plugins::Instance::new(&found, 48_000.0, 128)?.info.clone();
     let mut inputs = vec![];
     if let Some(c) = info.audio_in {
-        inputs.push(m2_ir::PortSig { name: "in".into(), kind: m2_ir::PortKind::Audio(Some(c.clamp(1, 2) as u8)), default: None });
+        let kind = m2_ir::PortKind::Audio(Some(c.clamp(1, 2) as u8));
+        inputs.push(m2_ir::PortSig { name: "in".into(), kind, default: None, range: None });
     }
     if info.note_in {
-        inputs.push(m2_ir::PortSig { name: "notes".into(), kind: m2_ir::PortKind::Events(m2_ir::EventType::Note), default: None });
+        let kind = m2_ir::PortKind::Events(m2_ir::EventType::Note);
+        inputs.push(m2_ir::PortSig { name: "notes".into(), kind, default: None, range: None });
     }
     for name in m2_plugins::param_port_names(&info.params) {
         // No default: an unconnected parameter keeps the plugin's own value.
-        inputs.push(m2_ir::PortSig { name, kind: m2_ir::PortKind::Control(Some(m2_ir::Unit::Scalar)), default: None });
+        inputs.push(m2_ir::PortSig { name, kind: m2_ir::PortKind::Control(Some(m2_ir::Unit::Scalar)), default: None, range: None });
     }
     let out = info.audio_out.context("plugins without an audio output aren't supported")?.clamp(1, 2) as u8;
     let sig = KernelSig {
         id: id.to_string(),
         description: format!("{} by {}", info.found.name, info.found.vendor),
         inputs,
-        outputs: vec![m2_ir::PortSig { name: "out".into(), kind: m2_ir::PortKind::Audio(Some(out)), default: None }],
+        outputs: vec![m2_ir::PortSig { name: "out".into(), kind: m2_ir::PortKind::Audio(Some(out)), default: None, range: None }],
         latency: info.latency,
     };
     Ok((sig, info))
@@ -268,4 +288,34 @@ fn verify_module(engine: &Engine, module: &Module, kernels: &[KernelDecl]) -> Re
         func(&format!("{n}_active"), &[], &[ValType::I32])?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn manifest(effect: &str) -> Result<PackageSet> {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("m2-packages-test-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let manifest = format!("[package]\nname = \"p\"\nversion = \"0.1.0\"\n\n[[effect]]\nmodule = \"p/fx\"\n{effect}");
+        std::fs::write(dir.join("m2pkg.toml"), manifest).unwrap();
+        let mut set = PackageSet::default();
+        let loaded = set.load(&dir).map(drop);
+        std::fs::remove_dir_all(&dir).ok();
+        loaded.map(|()| set)
+    }
+
+    #[test]
+    fn effects_have_a_known_category_and_optional_args() {
+        let set = manifest("name = \"wobble\"\n").unwrap();
+        let e = set.effects().next().unwrap();
+        assert_eq!((e.category.as_str(), e.args.as_deref()), ("Other", None));
+        let set = manifest("name = \"wobble\"\ncategory = \"Modulation\"\nargs = \"{ rate: 2 }\"\n").unwrap();
+        let e = set.effects().next().unwrap();
+        assert_eq!((e.category.as_str(), e.args.as_deref()), ("Modulation", Some("{ rate: 2 }")));
+        let err = manifest("name = \"wobble\"\ncategory = \"Wobbles\"\n").err().unwrap();
+        assert!(format!("{err:#}").contains("has category `Wobbles`; use one of Filter, EQ"), "{err:#}");
+    }
 }

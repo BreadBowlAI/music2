@@ -7,7 +7,7 @@ import { sum } from "./math";
 
 export type Channel = Audio | { in: Audio; db?: Value; pan?: Value };
 
-/** Sum channels, each with optional gain (dB) and pan (mono channels only). */
+/** Sum channels, each with optional gain (dB) and pan (a stereo channel is balanced). */
 export const mixer = component({ controls: ["0.*.db", "0.*.pan"] }, function mixer(channels: Record<string, Channel>): Audio {
   const strips = Object.entries(channels).map(([, c]) => {
     if (!("in" in c)) return c;

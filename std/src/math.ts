@@ -15,16 +15,17 @@ export const scale = component({ controls: ["1"] }, <S extends Signal>(x: S | Va
 export const blend = component({ controls: ["0", "1", "2"] }, <S extends Signal>(a: S | Value, b: S | Value, m: Value): S =>
   withUnit(kernel("std:blend", { a, b, m }), unitOf(a) ?? unitOf(b)) as any);
 
+// Helpers that build nodes are components too, even without controls: the editor shows
+// a call of one as a node, with the signals it reads as its inputs.
+
 /** Sum any number of signals of the same kind. */
-export function sum<S extends Signal>(...xs: S[]): S {
+export const sum = component({ controls: [] }, <S extends Signal>(...xs: S[]): S => {
   if (xs.length === 0) throw new Error("sum() needs at least one signal");
   return xs.slice(1).reduce((acc, x) => add(acc, x), xs[0]);
-}
+});
 
 /** Pitch in semitones (60 = middle C) to frequency. A node, so a written pitch stays editable. */
-export function mtof(pitch: Value): Control<"hz"> {
-  return withUnit(kernel("std:mtof", { pitch }), "hz") as any;
-}
+export const mtof = component({ controls: ["0"] }, (pitch: Value): Control<"hz"> => withUnit(kernel("std:mtof", { pitch }), "hz") as any);
 
 /** Map a 0..1 control onto lo..hi. */
 export const range = component({ controls: ["1", "2"] }, (x: Value, lo: Value, hi: Value): Control => withUnit(kernel("std:range", { x, lo, hi }), unitOf(lo) ?? unitOf(hi)) as any);

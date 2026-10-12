@@ -12,7 +12,7 @@ import Settings from "./components/Settings";
 import Library from "./components/Library";
 import Toasts from "./components/Toasts";
 import GraphCanvas, { graphUndo } from "./components/GraphCanvas";
-import { graphApi } from "./lib/graph";
+import { editorHooks, graphApi } from "./lib/graph";
 import { isMac, native, nativeAction, onFileDrop, onMenu } from "./lib/native";
 
 let first = true;
@@ -71,7 +71,9 @@ export default function App() {
         e.preventDefault();
         return appCommand("save");
       }
-      if (editing() || st.modal) return;
+      // A key a field or a panel already took (Enter that adds an effect or sets a clip's
+      // length) isn't a shortcut too, even if that field is gone or blurred by now.
+      if (editing() || field(e.target) || e.defaultPrevented || st.modal) return;
       if (e.code === "Space") {
         e.preventDefault();
         appCommand("play");
@@ -165,29 +167,39 @@ export default function App() {
 }
 
 function editing() {
-  const a = document.activeElement;
+  return field(document.activeElement);
+}
+
+function field(a: EventTarget | null) {
   return a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || (a instanceof HTMLElement && a.isContentEditable);
 }
 
 /** Every app-level command, from the keyboard, the menu bar (desktop) or buttons. */
 export async function appCommand(id: string) {
   const st = useStore.getState();
+  if (id === "save") {
+    // An open code editor saves its file; otherwise it's the old engine's save.
+    if (st.graph && editorHooks.save?.()) return;
+    return void nativeAction("save");
+  }
+  // The desktop app asks for this before it closes or replaces a project with unsaved code.
+  if (id === "save_all") return void editorHooks.saveAll?.();
   const server = st.server;
   if (!server) return;
   switch (id) {
     case "undo":
     case "redo": {
-      // In a text field, undo the typing, like any native app.
+      // In the code editor, its own history; in a text field, undo the typing, like any native app.
+      if (st.graph && editorHooks.undo?.(id === "redo")) return;
       if (editing()) return void document.execCommand(id);
       if (st.graph) return void graphUndo(st.graph.session, id);
       const r = await (id === "redo" ? api.redo() : api.undo()).catch(() => null);
       if (r?.label) st.toast(`${id === "redo" ? "Redid" : "Undid"} ${r.label}`);
       return;
     }
-    case "save": {
-      return void nativeAction("save");
-    }
     case "duplicate": {
+      // The piano roll duplicates its selected notes (the desktop menu bar takes ⌘D first).
+      if (st.graph && editorHooks.duplicate?.()) return;
       if (st.selectedClip == null) return;
       const r = await st.run("clip.duplicate", { clip: st.selectedClip });
       if (r) st.set({ selectedClip: r.clip_ids[0] });

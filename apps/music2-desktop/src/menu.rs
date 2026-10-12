@@ -7,8 +7,9 @@ use tauri::{AppHandle, Emitter, Wry};
 
 use crate::actions;
 
-/// Item ids handled natively (see `actions::run`); every other id goes to the UI.
-const NATIVE: &[&str] = &["new", "open", "open_project", "save", "save_as", "import", "export", "reveal", "quit"];
+/// Item ids handled natively (see `actions::run`); every other id goes to the UI. Save goes
+/// there too: an open code editor saves its file, and otherwise the UI asks for the native save.
+const NATIVE: &[&str] = &["new", "open", "open_project", "save_as", "import", "export", "reveal", "quit"];
 
 pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let item = |id: &str, text: &str, accel: Option<&str>| {

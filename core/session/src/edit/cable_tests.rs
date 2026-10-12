@@ -260,16 +260,67 @@ fn undo_and_redo_walk_values_and_cables_back_and_forth() {
 }
 
 #[test]
-fn a_cable_undo_refused_after_another_change_stays_available() {
+fn a_cable_undo_refused_after_another_change_waits_until_that_change_is_taken_back() {
     let fixture = Fixture::new(&format!("export default song(({{ time }}) => {{\n  {WOBBLE}\n  return osc.sine(hz(800));\n}});"));
     let mut s = fixture.open();
     let (wobble, freq) = (outlet(&s, "wobble"), control(&s, "800"));
     s.connect(wobble.revision, &wobble.id, &freq.id).unwrap();
-    // Someone saves an unrelated change: restoring the old bytes would no longer
-    // give back the exact revision, so undo refuses and keeps the change.
-    let saved = fixture.source().replacen("import", "// Saved elsewhere.\nimport", 1);
+    let wired = fixture.source();
+    // Someone saves another change to the file: restoring the old bytes would overwrite
+    // it, so undo refuses, says it can't, and keeps the change.
+    let saved = wired.replacen("import", "// Saved elsewhere.\nimport", 1);
     std::fs::write(fixture.0.join("song.ts"), &saved).unwrap();
     assert!(matches!(s.undo(), Err(EditError::Rejected(_))));
-    assert!(s.can_undo());
+    assert!(!s.can_undo(), "undo isn't offered while it would be refused");
     assert_eq!(fixture.source(), saved);
+    // Taken back, the file is as the cable left it: undo is offered and works again.
+    std::fs::write(fixture.0.join("song.ts"), &wired).unwrap();
+    s.refresh();
+    assert!(s.can_undo());
+    s.undo().unwrap();
+    assert!(fixture.source().contains("osc.sine(hz(800))"));
+}
+
+#[test]
+fn a_save_in_another_file_never_blocks_undo() {
+    let fixture = Fixture::new(&format!("export default song(({{ time }}) => {{\n  {WOBBLE}\n  return osc.sine(hz(800));\n}});"));
+    std::fs::create_dir_all(fixture.0.join("timeline")).unwrap();
+    let mut s = fixture.open();
+    let (wobble, freq) = (outlet(&s, "wobble"), control(&s, "800"));
+    s.connect(wobble.revision, &wobble.id, &freq.id).unwrap();
+    // A file the cable didn't touch changes (as a lane write or a save elsewhere would).
+    std::fs::write(fixture.0.join("timeline/song.json"), r#"{"tempo": [{"beat": 0, "bpm": 90}]}"#).unwrap();
+    s.refresh();
+    assert!(s.can_undo());
+    s.undo().unwrap();
+    assert!(fixture.source().contains("osc.sine(hz(800))"));
+    assert!(std::fs::read_to_string(fixture.0.join("timeline/song.json")).unwrap().contains("90"), "the other file keeps its change");
+    s.redo().unwrap();
+    assert!(fixture.source().contains("osc.sine(wobble)"));
+}
+
+#[test]
+fn cables_and_knobs_in_a_track_file_are_found_by_their_ids() {
+    // Ids name the file, `tracks/lead.ts#3/1`: the `/` in its path is not the argument's.
+    let fixture = Fixture::new("import lead from \"./tracks/lead\";\nexport default song(() => lead.out);");
+    std::fs::create_dir_all(fixture.0.join("tracks")).unwrap();
+    let track = format!(
+        "import {{ hz, khz, track }} from \"@m2/core\";\nimport {{ lfo }} from \"std/control\";\nimport {{ osc, svf }} from \"std/dsp\";\n\
+         import {{ xrange }} from \"std/math\";\n\nexport default track(\"Lead\", ({{ time }}) => {{\n  {WOBBLE}\n  \
+         return svf.lowpass(osc.saw(hz(55)), wobble);\n}});\n"
+    );
+    std::fs::write(fixture.0.join("tracks/lead.ts"), &track).unwrap();
+    let mut s = fixture.open();
+    let inlet = s.inlets().into_iter().find(|i| i.name == "wobble").expect("the cutoff is connected");
+    assert!(inlet.id.starts_with("tracks/lead.ts#"), "{}", inlet.id);
+    s.disconnect(inlet.revision, &inlet.id).unwrap();
+    let read = || std::fs::read_to_string(fixture.0.join("tracks/lead.ts")).unwrap();
+    assert_eq!(read(), track.replace("osc.saw(hz(55)), wobble)", "osc.saw(hz(55)), hz(1000))"));
+
+    // A knob read before an unrelated save still finds its value after it.
+    let freq = control(&s, "55");
+    let saved = read().replacen("import", "// Saved elsewhere.\nimport", 1);
+    std::fs::write(fixture.0.join("tracks/lead.ts"), &saved).unwrap();
+    s.set(freq.revision, &freq.id, 110.0, Some(55.0)).unwrap();
+    assert_eq!(read(), saved.replace("hz(55)", "hz(110)"));
 }

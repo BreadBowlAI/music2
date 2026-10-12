@@ -16,11 +16,13 @@ use anyhow::{Context, Result, anyhow};
 use m2_ir::Origin;
 use m2_play::Player;
 use m2_runtime::{PackageSet, Renderer};
-use m2_session::{EditError, Edited, Session};
+use m2_session::{EditError, Edited, NoteClip, Session};
 use m2_song::TempoMap;
 use parking_lot::Mutex;
 use serde::Serialize;
 use serde_json::{Value, json};
+
+use crate::files;
 
 /// How far past the song's last clip, or past where playback is, a seek may go: it
 /// replays the song from the start while holding the project.
@@ -63,6 +65,9 @@ pub struct Graph {
     /// so status (the playhead) never waits for them. None with no project open.
     tempo: Arc<Mutex<Option<TempoMap>>>,
     next_session: AtomicU64,
+    /// The code editor's files with edits not yet saved, as it last said, and the project
+    /// (its token) it said so for: the app asks before closing or replacing that project.
+    unsaved: Mutex<(u64, Vec<String>)>,
 }
 
 /// The std package: `$M2_STD`, or the one in this source tree.
@@ -209,6 +214,7 @@ impl Graph {
             "can_undo": o.session.can_undo(),
             "can_redo": o.session.can_redo(),
             "effects": o.session.effects(),
+            "diagnostics": files::diagnostics(&o.session),
             "playing": status.playing,
             "seconds": status.seconds,
             "beat": status.beat,
@@ -343,6 +349,12 @@ impl Graph {
         self.restructure(token, |session| session.remove_effect(revision, call))
     }
 
+    /// Rewrite a notes lane's clips (the piano roll, or clips made, moved or deleted in the
+    /// timeline). The notes the renderer plays change, so it is rebuilt like a graph edit.
+    pub fn write_notes(&self, token: u64, revision: u64, module: &str, lane: &str, clips: &[NoteClip]) -> Result<Value> {
+        self.restructure(token, |session| session.write_notes(revision, module, lane, clips))
+    }
+
     /// Undo the last edit made through this session (knob or cable).
     pub fn undo(&self, token: u64) -> Result<Value> {
         self.restructure(token, Session::undo)
@@ -396,6 +408,51 @@ impl Graph {
             }
         }
         changed || synced
+    }
+
+    /// The project's TypeScript files, for the code editor (see [`files::list`]).
+    pub fn files(&self) -> Result<Value> {
+        let open = self.open.lock();
+        files::list(&open.as_ref().context("no project is open")?.session)
+    }
+
+    /// The SDK and package sources the code editor checks imports against.
+    pub fn types(&self) -> Result<Value> {
+        let open = self.open.lock();
+        Ok(files::types(&open.as_ref().context("no project is open")?.session.packages))
+    }
+
+    /// Save a file from the code editor if it still says `base` (else a [`files::Conflict`]),
+    /// and adopt it at once, so the state returned shows it. Code that doesn't compile is
+    /// saved too: the last revision that did plays on, and the diagnostics say why. A save
+    /// that compiles is an edit made here, which undo takes back like any other.
+    pub fn write_file(&self, token: Option<u64>, path: &str, base: &str, text: &str) -> Result<Value> {
+        {
+            let mut open = self.open.lock();
+            let o = open.as_mut().context("no project is open")?;
+            if let Some(token) = token {
+                o.check_token(token)?;
+            }
+            let before = o.session.accepted().snapshot.files.get(Path::new(path)).cloned();
+            files::write(&o.session.accepted().project.dir, path, base, text)?;
+            o.session.saved(Path::new(path), before);
+        }
+        self.poll();
+        self.state().context("no project is open")
+    }
+
+    /// The code editor of project `token` says which of its files have unsaved edits.
+    pub fn set_unsaved(&self, token: u64, files: Vec<String>) -> Result<()> {
+        self.open.lock().as_ref().context("no project is open")?.check_token(token)?;
+        *self.unsaved.lock() = (token, files);
+        Ok(())
+    }
+
+    /// The open project's files with edits in the code editor not yet saved, as it last said.
+    pub fn unsaved(&self) -> Vec<String> {
+        let Some(token) = self.open.lock().as_ref().map(|o| o.token) else { return vec![] };
+        let unsaved = self.unsaved.lock();
+        if unsaved.0 == token { unsaved.1.clone() } else { vec![] }
     }
 }
 
@@ -634,7 +691,7 @@ mod tests {
         let node = state["view"]["modules"][0]["nodes"].as_array().unwrap().iter().find(|n| n["audio"] == true).unwrap().clone();
         let call = node["id"].as_str().unwrap();
         let added = graph.add_effect(token, revision, call, "std/fx", "delay").unwrap();
-        assert_eq!(added["after"], "delay(osc.sine(hz(800)))");
+        assert_eq!(added["after"], "delay(osc.sine(hz(800)), { time: 0.25, feedback: 0.3, mix: 0.3 })");
         let state = graph.state().unwrap();
         let delay = state["view"]["modules"][0]["nodes"].as_array().unwrap().iter().find(|n| n["effect"] == "delay").unwrap().clone();
         {
@@ -645,6 +702,68 @@ mod tests {
         let revision = state["view"]["revision"].as_u64().unwrap();
         graph.remove_effect(token, revision, delay["id"].as_str().unwrap()).unwrap();
         assert!(std::fs::read_to_string(fixture.0.join("song.ts")).unwrap().contains("song(() => osc.sine(hz(800)))"));
+    }
+
+    #[test]
+    fn a_lane_write_plays_the_new_notes_and_undo_takes_them_back() {
+        let fixture = Fixture::new();
+        fixture.write(
+            "import { track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+             const k = track('Kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n",
+        );
+        let graph = fixture.open();
+        let state = graph.state().unwrap();
+        let (token, revision) = (state["session"].as_u64().unwrap(), state["view"]["revision"].as_u64().unwrap());
+        let synced = |graph: &Graph| graph.open.lock().as_ref().map(|o| o.playing == o.session.accepted().number).unwrap();
+        let clips: Vec<NoteClip> =
+            serde_json::from_value(json!([{"start": 0, "length": 4, "notes": [{"pitch": "C1", "start": 0, "length": 0.25}]}])).unwrap();
+        let written = graph.write_notes(token, revision, "Kick", "hits", &clips).unwrap();
+        assert_eq!((written["file"].as_str(), written["after"].as_str()), (Some("timeline/kick.hits.json"), Some("clip at bar 1 (1 bar)")));
+        let state = graph.state().unwrap();
+        assert_eq!(state["timeline"]["tracks"][0]["lanes"][0]["clips"][0]["notes"][0]["pitch"], 24.0);
+        assert!(synced(&graph), "the player plays the new notes");
+
+        assert!(graph.write_notes(token, revision + 1, "Kick", "nope", &clips).is_err());
+        assert!(graph.write_notes(token + 1, revision + 1, "Kick", "hits", &[]).is_err(), "another session's request is refused");
+        graph.undo(token).unwrap();
+        assert!(!fixture.0.join("timeline/kick.hits.json").exists(), "undo removes the file the write created");
+        assert!(synced(&graph));
+    }
+
+    #[test]
+    fn a_saved_file_is_undone_like_an_edit_made_here() {
+        let fixture = Fixture::new();
+        let graph = fixture.open();
+        let (token, revision, id) = control(&graph);
+        graph.set(token, revision, &id, "drag", 900.0, Some(800.0)).unwrap();
+        let base = std::fs::read_to_string(fixture.0.join("song.ts")).unwrap();
+        let saved = base.replace("// ", "").replacen('\n', "\n// a comment\n", 1);
+        let state = graph.write_file(Some(token), "song.ts", &base, &saved).unwrap();
+        assert_eq!(state["can_undo"], true);
+        let undone = graph.undo(token).unwrap();
+        assert_eq!((undone["before"].as_str(), undone["after"].as_str()), (Some("// a comment"), Some("nothing")));
+        assert_eq!(std::fs::read_to_string(fixture.0.join("song.ts")).unwrap(), base);
+        // Then the knob, underneath it.
+        let undone = graph.undo(token).unwrap();
+        assert_eq!((undone["before"].as_str(), undone["after"].as_str()), (Some("900"), Some("800")));
+        let state = graph.state().unwrap();
+        assert_eq!((&state["can_undo"], &state["can_redo"]), (&json!(false), &json!(true)));
+    }
+
+    #[test]
+    fn the_code_editors_unsaved_files_belong_to_the_project_it_said_them_for() {
+        let fixture = Fixture::new();
+        let graph = fixture.open();
+        let (token, ..) = control(&graph);
+        assert!(graph.unsaved().is_empty());
+        graph.set_unsaved(token, vec!["song.ts".into()]).unwrap();
+        assert_eq!(graph.unsaved(), ["song.ts"]);
+        assert!(graph.set_unsaved(token + 1, vec![]).is_err(), "another project's editor is refused");
+        // Opened again, it is a new project: its editor starts with nothing unsaved.
+        graph.open(&fixture.0).unwrap();
+        assert!(graph.unsaved().is_empty());
+        graph.close();
+        assert!(graph.unsaved().is_empty());
     }
 
     #[test]
@@ -817,5 +936,36 @@ mod tests {
         assert!(o.previews.is_empty());
         assert_eq!(o.playing, revision);
         assert_eq!(o.session.controls()[0].value, 800.0);
+    }
+
+    #[test]
+    fn a_saved_file_plays_at_once_and_a_save_over_a_change_is_refused() {
+        let fixture = Fixture::new();
+        let graph = fixture.open();
+        let (token, revision, _) = control(&graph);
+        let playing = |graph: &Graph| graph.open.lock().as_ref().map(|o| (o.playing, o.session.accepted().number)).unwrap();
+        let base = std::fs::read_to_string(fixture.0.join("song.ts")).unwrap();
+        let saved = base.replace("800", "900");
+        let state = graph.write_file(Some(token), "song.ts", &base, &saved).unwrap();
+        assert_eq!((&state["view"]["revision"], &state["diagnostics"]), (&json!(revision + 1), &json!([])));
+        assert_eq!(playing(&graph), (revision + 1, revision + 1), "adopted and playing without waiting for the watcher");
+        assert!(!graph.poll());
+
+        // Saved from the old text: refused with what the file says now, and nothing written.
+        let e = graph.write_file(Some(token), "song.ts", &base, "export default 1;\n").unwrap_err();
+        assert_eq!(e.downcast_ref::<files::Conflict>().unwrap().current, saved);
+        assert_eq!(std::fs::read_to_string(fixture.0.join("song.ts")).unwrap(), saved);
+
+        // Code that doesn't compile is saved; the last revision that did plays on.
+        let state = graph.write_file(Some(token), "song.ts", &saved, "export default song(() => (\n").unwrap();
+        assert_eq!(state["view"]["revision"], revision + 1);
+        assert_eq!((&state["diagnostics"][0]["file"], &state["diagnostics"][0]["line"]), (&json!("song.ts"), &json!(2)));
+        assert_eq!(playing(&graph), (revision + 1, revision + 1));
+        assert!(std::fs::read_to_string(fixture.0.join("song.ts")).unwrap().ends_with("song(() => (\n"));
+
+        assert!(graph.write_file(Some(token + 1), "song.ts", "", "").is_err(), "another session's editor is refused");
+        assert!(graph.write_file(Some(token), "../song.ts", "", "").is_err());
+        graph.close();
+        assert!(graph.files().is_err() && graph.write_file(None, "song.ts", "", "").is_err());
     }
 }

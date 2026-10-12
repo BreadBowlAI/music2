@@ -12,6 +12,7 @@
     "@tauri-apps/api": "2.12.3",
     "clsx": "2.1.1",
     "lucide-react": "1.55.0",
+    "monaco-editor": "0.52.2",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "zustand": "5.0.15"

@@ -8,11 +8,36 @@ pub struct PortSig {
     pub kind: PortKind,
     /// Used when the input is not connected. Controls only.
     pub default: Option<f64>,
+    /// The values the kernel makes use of, `lo..hi`, when it says (it clamps the rest).
+    /// Controls only; an editor's knob spans this.
+    pub range: Option<(f64, f64)>,
 }
 
 impl PortSig {
-    /// Parse `"name: kind [= default]"`.
+    /// Parse `"name: kind [= default] [in lo..hi]"`.
     pub fn parse(spec: &str) -> Result<PortSig, String> {
+        let (spec_, range) = match spec.rsplit_once(" in ") {
+            Some((rest, r)) => {
+                let bad = || format!("port `{spec}`: a range is written `in lo..hi`");
+                let (lo, hi) = r.trim().split_once("..").ok_or_else(bad)?;
+                let (lo, hi) = (lo.trim().parse::<f64>().map_err(|_| bad())?, hi.trim().parse::<f64>().map_err(|_| bad())?);
+                if !(lo.is_finite() && hi.is_finite() && lo < hi) {
+                    return Err(format!("port `{spec}`: the range must go up"));
+                }
+                (rest, Some((lo, hi)))
+            }
+            None => (spec, None),
+        };
+        let mut port = PortSig::parse_plain(spec_).map_err(|e| e.replace(spec_, spec))?;
+        if range.is_some() && !matches!(port.kind, PortKind::Control(_)) {
+            return Err(format!("port `{spec}`: only controls can have a range"));
+        }
+        port.range = range;
+        Ok(port)
+    }
+
+    /// `"name: kind [= default]"`.
+    fn parse_plain(spec: &str) -> Result<PortSig, String> {
         let (name, rest) = spec.split_once(':').ok_or_else(|| format!("port `{spec}`: expected `name: kind`"))?;
         let (kind, default) = match rest.split_once('=') {
             Some((k, d)) => (k, Some(d.trim().parse::<f64>().map_err(|_| format!("port `{spec}`: default must be a number"))?)),
@@ -26,7 +51,7 @@ impl PortSig {
         if default.is_some() && !matches!(kind, PortKind::Control(_) | PortKind::Any) {
             return Err(format!("port `{spec}`: only controls can have defaults"));
         }
-        Ok(PortSig { name: name.to_string(), kind, default })
+        Ok(PortSig { name: name.to_string(), kind, default, range: None })
     }
 }
 
@@ -113,6 +138,17 @@ mod tests {
         assert_eq!(p.default, Some(1000.0));
         assert!(PortSig::parse("in: audio<1> = 3").is_err());
         assert!(PortSig::parse("no kind").is_err());
+        assert_eq!(p.range, None);
+    }
+
+    #[test]
+    fn parse_ranges() {
+        let p = PortSig::parse("attack: control<seconds> = 0.01 in 0.0001..1").unwrap();
+        assert_eq!((p.default, p.range), (Some(0.01), Some((0.0001, 1.0))));
+        assert_eq!(PortSig::parse("t: control<db> in -80..12").unwrap().range, Some((-80.0, 12.0)));
+        for bad in ["in: audio<1> in 0..1", "x: control = 1 in 2..1", "x: control = 1 in 0-1", "x: control in a..b"] {
+            assert!(PortSig::parse(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

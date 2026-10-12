@@ -5,6 +5,7 @@
 //! `music2-desktop` hosts it in-process, and also calls the file operations on
 //! [`AppState`] directly. Local scripts reach the same API with the session token.
 
+mod files;
 pub mod graph;
 mod patch;
 mod routes;

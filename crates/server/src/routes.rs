@@ -9,7 +9,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as UrlPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use m2_audio_io::Msg;
 use m2_engine::{COMMANDS, Step};
@@ -80,11 +80,16 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .route("/api/graph/connect", post(graph_connect))
         .route("/api/graph/effect/add", post(graph_add_effect))
         .route("/api/graph/effect/remove", post(graph_remove_effect))
+        .route("/api/graph/lane", post(graph_lane))
         .route("/api/graph/undo", post(graph_undo))
         .route("/api/graph/redo", post(graph_redo))
         .route("/api/graph/disconnect", post(graph_disconnect))
         .route("/api/graph/transport", post(graph_transport))
         .route("/api/graph/seek", post(graph_seek))
+        .route("/api/graph/files", get(graph_files))
+        .route("/api/graph/file", put(graph_put_file))
+        .route("/api/graph/types", get(graph_types))
+        .route("/api/graph/unsaved", post(graph_unsaved))
         .fallback_service(spa)
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth))
         .with_state(state)
@@ -595,6 +600,24 @@ async fn graph_remove_effect(State(s): S, Json(r): Json<EffectReq>) -> ApiResult
 }
 
 #[derive(Deserialize)]
+struct LaneReq {
+    session: u64,
+    revision: u64,
+    module: String,
+    lane: String,
+    /// Every clip the lane is to have: pitches as numbers or names, notes relative to their clip.
+    clips: Vec<m2_session::NoteClip>,
+}
+
+/// Rewrite a notes lane's clips (the piano roll; clips made, moved or deleted in the timeline).
+async fn graph_lane(State(s): S, Json(r): Json<LaneReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.write_notes(r.session, r.revision, &r.module, &r.lane, &r.clips)).await;
+    let _ = s.events.send(json!({"t": "graph"}).to_string());
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
 struct SessionReq {
     session: u64,
 }
@@ -648,4 +671,58 @@ async fn graph_seek(State(s): S, Json(r): Json<SeekReq>) -> ApiResult {
     let state = s.clone();
     blocking(move || state.graph.seek(r.beat)).await?;
     Ok(Json(json!({})))
+}
+
+// ---------------------------------------------------------------- the code editor
+
+async fn graph_files(State(s): S) -> ApiResult {
+    let state = s.clone();
+    Ok(Json(blocking(move || state.graph.files()).await?))
+}
+
+async fn graph_types(State(s): S) -> ApiResult {
+    let state = s.clone();
+    Ok(Json(blocking(move || state.graph.types()).await?))
+}
+
+#[derive(Deserialize)]
+struct FileReq {
+    /// The open project the editor read the file from, if it says.
+    #[serde(default)]
+    session: Option<u64>,
+    path: String,
+    /// What the file said when the editor read it.
+    base: String,
+    text: String,
+}
+
+#[derive(Deserialize)]
+struct UnsavedReq {
+    session: u64,
+    files: Vec<String>,
+}
+
+/// The code editor says which files have edits not yet saved, so the app asks before
+/// closing or replacing the project.
+async fn graph_unsaved(State(s): S, Json(r): Json<UnsavedReq>) -> ApiResult {
+    s.graph.set_unsaved(r.session, r.files)?;
+    Ok(Json(json!({})))
+}
+
+/// Save a file from the code editor. One changed since the editor read it is refused with
+/// 409 and what it says now, so the editor can offer to load that or keep its own.
+async fn graph_put_file(State(s): S, Json(r): Json<FileReq>) -> Response {
+    let state = s.clone();
+    let result = tokio::task::spawn_blocking(move || state.graph.write_file(r.session, &r.path, &r.base, &r.text)).await;
+    match result {
+        Ok(Ok(v)) => {
+            let _ = s.events.send(json!({"t": "graph"}).to_string());
+            Json(v).into_response()
+        }
+        Ok(Err(e)) => match e.downcast_ref::<crate::files::Conflict>() {
+            Some(c) => (StatusCode::CONFLICT, Json(json!({"error": c.to_string(), "current": c.current}))).into_response(),
+            None => ApiError::from(e).into_response(),
+        },
+        Err(e) => err(e.to_string()).into_response(),
+    }
 }

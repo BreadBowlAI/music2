@@ -8,6 +8,7 @@
 //! revisions, verified value edits and undo.
 
 pub mod edit;
+pub mod lanes;
 pub mod timeline;
 pub mod view;
 
@@ -19,6 +20,8 @@ use m2_runtime::PackageSet;
 use m2_song::{Project, slug};
 
 pub use edit::{Audition, Committed, Control, EditError, Edited, Inlet, Outlet, Revision, Session};
+/// What [`Session::write_notes`] writes.
+pub use m2_song::{Note, NoteClip};
 pub use timeline::{TimelineLane, TimelineTrack, TimelineView};
 pub use view::{GraphView, Knob, ModuleView, ViewNode};
 

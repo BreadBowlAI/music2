@@ -377,7 +377,8 @@ impl Session {
     /// Disconnect inlet `id`: write the default its ports declare in place of the name.
     pub fn disconnect(&mut self, at: u64, id: &str) -> Result<Edited, EditError> {
         self.ready()?;
-        let (call, path) = id.split_once('/').ok_or_else(|| EditError::NotFound(id.to_string()))?;
+        // `tracks/bass.ts#8/1`: the file may hold `/`, the argument path never does.
+        let (call, path) = id.rsplit_once('/').ok_or_else(|| EditError::NotFound(id.to_string()))?;
         let site = self.current_site(at, call)?.id;
         let inlet = self.inlets().into_iter().find(|i| i.site == site && i.path.join(".") == path);
         let inlet = inlet.ok_or_else(|| EditError::Rejected(format!("`{id}` is not an input connected by a cable")))?;
@@ -413,8 +414,8 @@ impl Session {
     fn write(&mut self, candidate: Candidate) -> Result<Edited, EditError> {
         let file = candidate.file.display().to_string();
         let (before, after) = (candidate.before.clone(), candidate.after.clone());
-        let base = self.accepted.number;
-        let revision = self.commit(candidate, Some(Undo::Exact { base }))?;
+        let undo = self.exact(&candidate.file);
+        let revision = self.commit(candidate, Some(undo))?;
         Ok(Edited { revision, file, before, after })
     }
 }

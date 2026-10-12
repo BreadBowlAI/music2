@@ -57,3 +57,13 @@ input, textarea { @apply select-text; }
 
 /* Desktop app: native controls use the arrow cursor, not the web's pointing hand. */
 html.native .cursor-pointer { cursor: default; }
+
+/* The code editor's popups: rounded and lifted like the app's own menus. */
+.monaco-editor .suggest-widget,
+.monaco-editor .suggest-details,
+.monaco-editor .monaco-hover,
+.monaco-editor .parameter-hints-widget {
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 12px 32px -14px rgb(0 0 0 / 0.28);
+}

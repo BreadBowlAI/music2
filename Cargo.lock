@@ -2566,6 +2566,7 @@ dependencies = [
  "m2-project",
  "m2-render",
  "m2-runtime",
+ "m2-script",
  "m2-session",
  "m2-song",
  "m2-theory",

@@ -15,21 +15,73 @@ wasm = "kernels/std.wasm"
 
 # ---------------------------------------------------------------- effects
 # Offered by the editor after any audio: each takes the audio first and returns audio.
+# `category` is where the editor lists it (Filter, EQ, Dynamics, Distortion,
+# Delay & Reverb, Modulation, Utility; Other by default). `args` is written after the
+# audio when the effect is added (`args = "1000"` gives `lowpass(x, 1000)`): every
+# number in it is a declared control of the effect, so it shows up as a knob.
 
 [[effect]]
-module = "std/fx"
-name = "delay"
-description = "Echoes"
+module = "std/filter"
+name = "lowpass"
+category = "Filter"
+description = "Darker: removes the highs above the cutoff"
+args = "1000"
 
 [[effect]]
-module = "std/fx"
-name = "drive"
-description = "Warm saturation"
+module = "std/filter"
+name = "highpass"
+category = "Filter"
+description = "Thinner: removes the lows below the cutoff"
+args = "200"
+
+[[effect]]
+module = "std/filter"
+name = "bandpass"
+category = "Filter"
+description = "Keeps only a band around the cutoff, like a telephone"
+args = "1000"
+
+[[effect]]
+module = "std/filter"
+name = "notch"
+category = "Filter"
+description = "Cuts a narrow band out around the cutoff"
+args = "1000"
 
 [[effect]]
 module = "std/fx"
 name = "limit"
-description = "Stop peaks from clipping"
+category = "Dynamics"
+description = "Stops peaks from clipping"
+args = "-1"
+
+[[effect]]
+module = "std/fx"
+name = "drive"
+category = "Distortion"
+description = "Warm saturation, from gentle grit to crunch"
+args = "6"
+
+[[effect]]
+module = "std/fx"
+name = "delay"
+category = "Delay & Reverb"
+description = "Echoes that repeat and fade away"
+args = "{ time: 0.25, feedback: 0.3, mix: 0.3 }"
+
+[[effect]]
+module = "std/dsp"
+name = "gain"
+category = "Utility"
+description = "Volume: louder or quieter, in dB"
+args = "0"
+
+[[effect]]
+module = "std/dsp"
+name = "pan"
+category = "Utility"
+description = "Places a mono sound left or right"
+args = "0"
 
 # ---------------------------------------------------------------- oscillators
 
@@ -142,8 +194,8 @@ outputs = ["out: audio<*>"]
 
 [[kernel]]
 name = "pan"
-description = "Equal-power pan, mono to stereo"
-inputs = ["in: audio<1>", "pan: control<bipolar> = 0"]
+description = "Equal-power pan of a mono signal into stereo; a stereo signal is balanced"
+inputs = ["in: audio<*>", "pan: control<bipolar> = 0"]
 outputs = ["out: audio<2>"]
 
 # ---------------------------------------------------------------- filters
@@ -186,3 +238,148 @@ name = "limit"
 description = "Peak limiter with a hard ceiling"
 inputs = ["in: audio<*>", "ceiling: control<db> = -1"]
 outputs = ["out: audio<*>"]
+
+# ---------------------------------------------------------------- more effects
+# Reverb, modulation, compression, EQ, lo-fi and width (std/fx), and their kernels.
+# Each kernel is safe with any input or setting: no NaN, no runaway feedback, and
+# tails that end in exact silence.
+
+[[effect]]
+module = "std/fx"
+name = "reverb"
+category = "Delay & Reverb"
+description = "Space: the sound of a room or a hall around it"
+args = "{ size: 0.6, damping: 0.5, mix: 0.25 }"
+
+[[effect]]
+module = "std/fx"
+name = "chorus"
+category = "Modulation"
+description = "Thicker and wider, with a gentle shimmer"
+args = "{ rate: 0.8, depth: 0.5, mix: 0.5 }"
+
+[[effect]]
+module = "std/fx"
+name = "phaser"
+category = "Modulation"
+description = "A swirling, sweeping whoosh"
+args = "{ rate: 0.4, depth: 0.7, feedback: 0.5, mix: 0.5 }"
+
+[[effect]]
+module = "std/fx"
+name = "tremolo"
+category = "Modulation"
+description = "Pulses the volume up and down"
+args = "{ rate: 5, depth: 0.5 }"
+
+[[effect]]
+module = "std/fx"
+name = "compress"
+category = "Dynamics"
+description = "Evens out loud and quiet moments so the sound sits steady"
+args = "{ threshold: -18, ratio: 3, attack: 0.01, release: 0.15, makeup: 4 }"
+
+[[effect]]
+module = "std/fx"
+name = "eq3"
+category = "EQ"
+description = "Bass, middle and treble, each up or down in dB"
+args = "{ low: 0, mid: 0, high: 0 }"
+
+[[effect]]
+module = "std/fx"
+name = "bitcrush"
+category = "Distortion"
+description = "Lo-fi digital crunch, like an old sampler"
+args = "{ bits: 8, rate: 12000, mix: 1 }"
+
+[[effect]]
+module = "std/fx"
+name = "widen"
+category = "Utility"
+description = "Makes the stereo image wider, or narrower toward mono"
+args = "{ width: 1.5 }"
+
+[[kernel]]
+name = "reverb"
+description = "Freeverb-style reverb, stereo for a stereo input; mix is an equal-power crossfade"
+inputs = [
+  "in: audio<*>",
+  "size: control<unit01> = 0.6",
+  "damping: control<unit01> = 0.5",
+  "mix: control<unit01> = 0.25",
+]
+outputs = ["out: audio<*>"]
+
+[[kernel]]
+name = "chorus"
+description = "Chorus: two sweeping delay taps per side; stereo sides sweep a quarter cycle apart"
+inputs = [
+  "in: audio<*>",
+  "rate: control<hz> = 0.8 in 0.05..20",
+  "depth: control<unit01> = 0.5",
+  "mix: control<unit01> = 0.5",
+]
+outputs = ["out: audio<*>"]
+
+[[kernel]]
+name = "phaser"
+description = "Six-stage phaser with feedback; stereo sides sweep a quarter cycle apart"
+inputs = [
+  "in: audio<*>",
+  "rate: control<hz> = 0.4 in 0.05..20",
+  "depth: control<unit01> = 0.7",
+  "feedback: control<unit01> = 0.5",
+  "mix: control<unit01> = 0.5",
+]
+outputs = ["out: audio<*>"]
+
+[[kernel]]
+name = "tremolo"
+description = "Sine tremolo: dips the level by depth (1 = to silence), rate times a second"
+inputs = ["in: audio<*>", "rate: control<hz> = 5 in 0.05..20", "depth: control<unit01> = 0.5"]
+outputs = ["out: audio<*>"]
+
+[[kernel]]
+name = "compress"
+description = "Stereo-linked soft-knee compressor; ratio 1 is off"
+inputs = [
+  "in: audio<*>",
+  "threshold: control<db> = -18",
+  "ratio: control<scalar> = 3 in 1..20",
+  "attack: control<seconds> = 0.01 in 0.0001..1",
+  "release: control<seconds> = 0.15 in 0.001..5",
+  "makeup: control<db> = 0",
+]
+outputs = ["out: audio<*>"]
+
+[[kernel]]
+name = "eq3"
+description = "Three-band EQ: low shelf, mid bell, high shelf, each from -60 dB (a kill) to +24 dB; flat at 0 dB"
+inputs = [
+  "in: audio<*>",
+  "low: control<db> = 0",
+  "mid: control<db> = 0",
+  "high: control<db> = 0",
+  "low_freq: control<hz> = 200",
+  "mid_freq: control<hz> = 1000",
+  "high_freq: control<hz> = 4000",
+]
+outputs = ["out: audio<*>"]
+
+[[kernel]]
+name = "bitcrush"
+description = "Bitcrusher: rounds to `bits` and holds samples at `rate` Hz"
+inputs = [
+  "in: audio<*>",
+  "bits: control<scalar> = 8 in 1..16",
+  "rate: control<hz> = 12000",
+  "mix: control<unit01> = 1",
+]
+outputs = ["out: audio<*>"]
+
+[[kernel]]
+name = "widen"
+description = "Mid/side width: 0 mono, 1 unchanged, 2 twice as wide; widens mono input too, and stays mono-compatible"
+inputs = ["in: audio<2>", "width: control<scalar> = 1.5 in 0..2"]
+outputs = ["out: audio<2>"]

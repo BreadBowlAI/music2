@@ -6,6 +6,9 @@ import tailwindcss from "@tailwindcss/vite";
 //   MUSIC2_DEV_URL=http://localhost:5173 cargo run -p music2-desktop
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // The code editor (Monaco, and its TypeScript worker) is several MB. It is its own chunk,
+  // loaded the first time the code view opens; its workers come in with `?worker` imports.
+  build: { chunkSizeWarningLimit: 8000 },
   server: {
     port: 5173,
     proxy: {

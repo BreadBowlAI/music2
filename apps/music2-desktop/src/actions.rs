@@ -3,10 +3,11 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use m2_server::library_dir;
 use serde_json::Value;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult};
 
 use crate::Native;
@@ -60,7 +61,9 @@ fn perform(app: &AppHandle, id: &str, args: Value) -> anyhow::Result<()> {
         "open_project" => {
             // A song-as-program project: a folder with song.ts. Shown as a graph.
             let picked = app.dialog().file().set_title("Open Project Folder").blocking_pick_folder();
-            if let Some(dir) = picked.and_then(|p| p.into_path().ok()) {
+            if let Some(dir) = picked.and_then(|p| p.into_path().ok())
+                && keep_code(app)?
+            {
                 open_project(&engine, &dir)?;
             }
         }
@@ -130,7 +133,7 @@ fn perform(app: &AppHandle, id: &str, args: Value) -> anyhow::Result<()> {
         }
         "ready" => println!("music2: UI connected to the native shell"),
         "quit" => {
-            if keep_going(app)? {
+            if keep_going(app)? && keep_code(app)? {
                 app.exit(0);
             }
         }
@@ -194,6 +197,48 @@ fn keep_going(app: &AppHandle) -> anyhow::Result<bool> {
         MessageDialogResult::Custom(s) if s == "Don't Save" => Ok(true),
         _ => Ok(false),
     }
+}
+
+/// Before replacing or closing the open project: offer to save the code editor's files
+/// with unsaved edits. False = the user cancelled.
+fn keep_code(app: &AppHandle) -> anyhow::Result<bool> {
+    let engine = app.state::<Native>().engine.clone();
+    let files = engine.graph.unsaved();
+    let Some(first) = files.first() else { return Ok(true) };
+    let what = match files.len() {
+        1 => format!("{first} has edits"),
+        n => format!("{first} and {} more have edits", n - 1),
+    };
+    let mut dialog = app
+        .dialog()
+        .message(format!("{what} in the code editor that you haven't saved. They'll be lost if you don't save them."))
+        .title("Do you want to save your code?")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::YesNoCancelCustom("Save".into(), "Don't Save".into(), "Cancel".into()));
+    if let Some(w) = app.get_webview_window("main") {
+        dialog = dialog.parent(&w);
+    }
+    match dialog.blocking_show_with_result() {
+        MessageDialogResult::Yes => save_code(app),
+        MessageDialogResult::Custom(s) if s == "Save" => save_code(app),
+        MessageDialogResult::No => Ok(true),
+        MessageDialogResult::Custom(s) if s == "Don't Save" => Ok(true),
+        _ => Ok(false),
+    }
+}
+
+/// Have the code editor save every file, and wait until it says none is left unsaved.
+fn save_code(app: &AppHandle) -> anyhow::Result<bool> {
+    let engine = app.state::<Native>().engine.clone();
+    app.emit("menu", "save_all")?;
+    let start = Instant::now();
+    while !engine.graph.unsaved().is_empty() {
+        if start.elapsed() > Duration::from_secs(5) {
+            anyhow::bail!("The code editor couldn't save every file (see its banner), so nothing was closed.");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Ok(true)
 }
 
 fn error(app: &AppHandle, msg: &str) {

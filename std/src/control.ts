@@ -18,7 +18,7 @@ export const lfo = component(
 );
 
 /** `x` where `mask` is 1, silence (or zero) where it is 0. */
-export const when = <S extends Signal>(mask: Value, x: S): S => scale(x, mask);
+export const when = component({ controls: ["0"] }, <S extends Signal>(mask: Value, x: S): S => scale(x, mask));
 
 /** `a` normally, `b` where `mask` is 1. Same as `blend(a, b, mask)`. */
-export const choose = <S extends Signal>(mask: Value, a: S, b: S): S => blend(a, b, mask);
+export const choose = component({ controls: ["0"] }, <S extends Signal>(mask: Value, a: S, b: S): S => blend(a, b, mask));

@@ -396,7 +396,9 @@ impl Kernel for Gain {
 
 export!(gain, Gain);
 
-/// Equal-power pan, mono in, stereo out. Inputs: in, pan (-1..1).
+/// Pan, stereo out. Inputs: in, pan (-1..1). A mono input is panned with equal power; a
+/// stereo one (a reverb, a widened sound) is balanced: the far side fades out with equal
+/// power, the near side stays as it is, so the centre leaves it unchanged.
 pub struct Pan;
 
 impl Kernel for Pan {
@@ -408,11 +410,20 @@ impl Kernel for Pan {
     }
 
     fn process(&mut self, io: &mut Io) {
-        let ([x, pan], [l, r]) = io.ports([(0, 0), (1, 0)], [(0, 0), (0, 1)]);
-        for i in 0..x.len() {
-            let a = (pan[i].clamp(-1.0, 1.0) + 1.0) * 0.25 * PI;
-            l[i] = x[i] * a.cos() * SQRT_2;
-            r[i] = x[i] * a.sin() * SQRT_2;
+        if io.channels == 1 {
+            let ([x, pan], [l, r]) = io.ports([(0, 0), (1, 0)], [(0, 0), (0, 1)]);
+            for i in 0..x.len() {
+                let a = (pan[i].clamp(-1.0, 1.0) + 1.0) * 0.25 * PI;
+                l[i] = x[i] * a.cos() * SQRT_2;
+                r[i] = x[i] * a.sin() * SQRT_2;
+            }
+            return;
+        }
+        let ([xl, xr, pan], [l, r]) = io.ports([(0, 0), (0, 1), (1, 0)], [(0, 0), (0, 1)]);
+        for i in 0..l.len() {
+            let p = pan[i].clamp(-1.0, 1.0);
+            l[i] = xl[i] * if p > 0.0 { (p * 0.5 * PI).cos() } else { 1.0 };
+            r[i] = xr[i] * if p < 0.0 { (p * 0.5 * PI).cos() } else { 1.0 };
         }
     }
 }
@@ -602,3 +613,9 @@ impl Kernel for Limit {
 }
 
 export!(limit, Limit);
+
+// ---------------------------------------------------------------- effects
+
+mod fx;
+
+pub use fx::{Bitcrush, Chorus, Compress, Eq3, Phaser, Reverb, Tremolo, Widen};
