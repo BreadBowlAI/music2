@@ -122,9 +122,10 @@ fn the_bass_tracks_ports_are_named_where_they_are_written_and_typed() {
     assert_eq!(wire(bass, "xrange", "blend"), ("wobble".into(), "b".into(), "control"));
     assert_eq!(wire(bass, "drop", "blend"), ("drop".into(), "m".into(), "control"));
 
-    // The cutoff is read by two kernels inside the instrument, but it is one input.
+    // The cutoff is read by two kernels inside the instrument, but it is one input. The drive it
+    // leaves out is an input too, a knob at its default, after what the call writes (PKG-3).
     let instrument = node(bass, "bass");
-    assert_eq!(inputs(instrument), ["notes:notes", "cutoff:control"]);
+    assert_eq!(inputs(instrument), ["notes:notes", "cutoff:control", "drive:control"]);
     assert_eq!(outputs(instrument), ["audio:audio"]);
     assert_eq!(wire(bass, "notes", "bass"), ("notes".into(), "notes".into(), "notes"));
     assert_eq!(wire(bass, "blend", "bass"), ("control".into(), "cutoff".into(), "control"));
@@ -153,7 +154,8 @@ fn the_mixers_inputs_follow_the_code_and_imports_land_where_they_are_written() {
     let kick = module(&v, "kick");
     consistent(kick);
     let follow = node(kick, "follow");
-    assert_eq!(inputs(follow), ["in:audio", "release:control"]);
+    // The attack it leaves out comes after what it writes (PKG-3).
+    assert_eq!(inputs(follow), ["in:audio", "release:control", "attack:control"]);
     assert!(follow.inputs[0].inlet.is_some(), "`out` is a cable from the kick");
     assert_eq!(wire(kick, "kick", "follow"), ("out".into(), "in".into(), "audio"));
 }
@@ -180,7 +182,7 @@ export default song(({ time }) => {
     assert!(xrange.outputs[0].outlet);
     assert!(m.port_edges.iter().all(|e| e.from != xrange.id), "nothing reads it yet");
     let filter = node(m, "svf.lowpass");
-    assert_eq!(inputs(filter), ["in:audio", "cutoff:control"]);
+    assert_eq!(inputs(filter), ["in:audio", "cutoff:control", "q:control"], "the resonance it leaves out is a knob too (PKG-3)");
     assert_eq!(outputs(filter), ["audio:audio"], "its own result is named by what it is, not by the port `lp`");
 
     let fixture = Fixture::song(
@@ -205,24 +207,11 @@ export default song(() => {
     assert_eq!(wire(m, "cutoff", "osc.saw"), ("control".into(), "freq".into(), "control"));
 }
 
+// PKG-8: a knob spans the range its control declares, in the declaration's spelling turned to
+// base units; the value written never moves it (a cutoff turned down to 20 Hz still turns back
+// up), and nothing is guessed from a unit (P10).
 #[test]
-fn a_knob_spans_what_its_port_declares_and_keeps_it_at_either_end() {
-    // A chorus's 0.8 Hz sweep is a rate, as its port says: a slow drift to 20 a second.
-    let rate = Some((0.05, 20.0));
-    assert_eq!(range(Some(Unit::Hz), 0.8, rate), (0.05, 20.0, true));
-    assert_eq!(range(Some(Unit::Hz), 20.0, rate), (0.05, 20.0, true));
-    // A cutoff turned all the way down to 20 Hz is still a cutoff: it turns back up.
-    assert_eq!(range(Some(Unit::Hz), 1000.0, None), (20.0, 20_000.0, true));
-    assert_eq!(range(Some(Unit::Hz), 20.0, None), (20.0, 20_000.0, true));
-    assert_eq!(range(Some(Unit::Hz), 5.0, None), (5.0, 20_000.0, true), "widened to the value written");
-    assert_eq!(range(Some(Unit::Hz), 0.0, None), (0.0, 20_000.0, false));
-    // A compressor's attack, as far as the kernel takes it.
-    assert_eq!(range(Some(Unit::Seconds), 0.01, Some((0.0001, 1.0))), (0.0001, 1.0, true));
-    assert_eq!(range(Some(Unit::Scalar), 1.5, Some((0.0, 2.0))), (0.0, 2.0, false));
-}
-
-#[test]
-fn the_new_effects_knobs_span_what_their_kernels_use() {
+fn the_new_effects_knobs_span_what_their_controls_declare() {
     let fixture = Fixture::song(
         "import { song } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { lowpass } from \"std/filter\";\n\
          import { bitcrush, chorus, compress, widen } from \"std/fx\";\n\
@@ -232,15 +221,17 @@ fn the_new_effects_knobs_span_what_their_kernels_use() {
     let s = fixture.open();
     let v = s.view();
     let knobs: Vec<&Knob> = v.modules.iter().flat_map(|m| m.nodes.iter().flat_map(|n| &n.knobs)).collect();
-    let knob =
-        |label: &str| knobs.iter().find(|k| k.label == label).map(|k| (k.min, k.max, k.log)).unwrap_or_else(|| panic!("no {label} knob"));
-    assert_eq!(knob("cutoff"), (20.0, 20_000.0, true), "a cutoff at 20 Hz turns back up");
-    assert_eq!(knob("rate"), (0.05, 20.0, true));
-    assert_eq!(knob("ratio"), (1.0, 20.0, false));
-    assert_eq!(knob("attack"), (0.0001, 1.0, true));
-    assert_eq!(knob("release"), (0.001, 5.0, true));
-    assert_eq!(knob("bits"), (1.0, 16.0, false));
-    assert_eq!(knob("width"), (0.0, 2.0, false));
+    let knob = |label: &str| {
+        knobs.iter().find(|k| k.label == label && k.written).map(|k| (k.range, k.log)).unwrap_or_else(|| panic!("no {label} knob"))
+    };
+    assert_eq!(knob("cutoff"), (Some([20.0, 20_000.0]), true), "a cutoff at 20 Hz turns back up");
+    // A chorus's 0.8 Hz sweep is a rate, as its control declares: a slow drift to 20 a second.
+    assert_eq!(knob("rate"), (Some([0.05, 20.0]), true));
+    assert_eq!(knob("ratio"), (Some([1.0, 20.0]), true));
+    assert_eq!(knob("attack"), (Some([0.0001, 1.0]), true));
+    assert_eq!(knob("release"), (Some([0.001, 5.0]), true));
+    assert_eq!(knob("bits"), (Some([1.0, 16.0]), false));
+    assert_eq!(knob("width"), (Some([0.0, 2.0]), false));
 }
 
 #[test]

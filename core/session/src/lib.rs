@@ -18,16 +18,40 @@ pub mod timeline;
 pub mod unclaimed;
 pub mod view;
 
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
 use m2_ir::{Diagnostic, Flat, Ir, Severity};
 use m2_runtime::PackageSet;
+use m2_script::{Descriptor, UnitCtor};
 use m2_song::{DataSet, Project, Version};
+use serde::Serialize;
 
-pub use edit::{Audition, Committed, Control, EditError, Edited, Inlet, Outlet, Revision, Session};
+pub use edit::{Audition, Committed, Control, Declared, EditError, Edited, Inlet, Outlet, Revision, Session};
+pub use edit::effect::EffectInfo;
 /// What [`Session::write_notes`] writes.
 pub use m2_song::{Note, NoteClip};
 pub use timeline::{TimelineLane, TimelineTrack, TimelineView};
 pub use unclaimed::{Seen, SeenLane};
-pub use view::{GraphView, Knob, ModuleView, ViewNode};
+pub use view::{GraphView, Knob, ModuleView, ReadOnly, ViewNode};
+
+/// Where a value lives (HOME-1): what editing it writes, and what the UI says it is. Every
+/// value [`Session::controls`], the view and gesture leases return names its home.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Home {
+    /// A number written in the code, or a declared control's default that the code leaves out:
+    /// editing it writes the code.
+    Code,
+    /// A lane's data, which changes over time.
+    Lane,
+    /// A plugin's state blob.
+    State,
+    /// `layout.json`: shared presentation.
+    Layout,
+    /// `.music2/`: this machine's monitoring and view state.
+    Local,
+}
 
 /// A project that is ready to render.
 pub struct Compiled {
@@ -39,6 +63,12 @@ pub struct Compiled {
     pub outputs: Vec<m2_script::Output>,
     /// Every package file the build read (FMT-6a, RENDER-2).
     pub package_files: Vec<m2_script::PackageFile>,
+    /// The descriptor of every component the build's modules declare, by ComponentId: what a
+    /// frame's `component` names (PKG-9, PKG-11).
+    pub components: BTreeMap<String, Arc<Descriptor>>,
+    /// The unit constructors of `@m2/core`, as the build generated them from its table (PKG-11):
+    /// the one table gestures write units with.
+    pub units: Arc<[UnitCtor]>,
     /// What the graph plays: each declared lane and plugin state, read against its declaration.
     pub data: DataSet,
     /// Everything that needs attention but doesn't stop the song (DIAG-1, FMT-9, FMT-18a), with
@@ -69,7 +99,8 @@ pub fn compile_sources(
     let mut opts = m2_script::Options::new(project.code.clone(), &project.manifest.project.entry);
     opts.packages = packages.packages().map(|p| (p.name.clone(), p.dir.clone())).collect();
     opts.dependencies = project.manifest.dependencies.keys().filter(|d| *d != m2_song::SDK).cloned().collect();
-    let m2_script::Build { mut ir, sites, outputs, package_files } = m2_script::build_full(&opts)?;
+    let m2_script::Build { mut ir, sites, outputs, package_files, components, units } = m2_script::build_full(&opts)?;
+    let components = components.into_iter().map(|d| (d.id.clone(), Arc::new(d))).collect();
 
     // A missing plugin and a renamed parameter never stop the song (FMT-18, FMT-18a).
     let (blocking, kept): (Vec<_>, Vec<_>) =
@@ -83,7 +114,16 @@ pub fn compile_sources(
     problems.extend(kept.into_iter().map(problem));
     problems.extend(unclaimed::unclaimed(project, &ir, &decls, seen));
     problems.sort_by_key(|d| d.severity);
-    Ok(Compiled { ir, flat, sites, outputs, package_files, data, problems })
+    Ok(Compiled { ir, flat, sites, outputs, package_files, components, units: units.into(), data, problems })
+}
+
+/// Every component `packages` declare, and where each is exported (PKG-11): one sandboxed run
+/// per package module, cached for the process. It never fails (WRITE-20): a module that doesn't
+/// load, an invalid descriptor or one id twice is `pkg.invalid` in its `problems`, and only those
+/// components are left out.
+pub fn catalog(packages: &PackageSet) -> m2_script::Catalog {
+    let installed: Vec<(String, std::path::PathBuf)> = packages.packages().map(|p| (p.name.clone(), p.dir.clone())).collect();
+    m2_script::describe(&installed)
 }
 
 /// Every `[dependencies]` entry against what is installed (FMT-3): the SDK this build runs, and
@@ -123,6 +163,9 @@ pub fn problem(d: Diagnostic) -> m2_song::Diagnostic {
 
 #[cfg(test)]
 mod gate_tests;
+
+#[cfg(test)]
+mod gate5_tests;
 
 #[cfg(test)]
 mod tests {

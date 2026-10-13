@@ -53,7 +53,7 @@ fn adding_wraps_the_call_and_imports_the_effect_and_removing_restores_it_exactly
     let mut s = fixture.open();
     let graph = canonical(&s.accepted().compiled.ir);
 
-    let added = s.add_effect(rev(&s), &call(&s, "osc.saw"), "std/fx", "delay").unwrap();
+    let added = s.add_effect(rev(&s), &call(&s, "osc.saw"), "std:delay").unwrap();
     let delayed = "delay(osc.saw(hz(110)), { time: 0.25, feedback: 0.3, mix: 0.3 })";
     assert_eq!((added.before.as_str(), added.after.as_str()), ("osc.saw(hz(110))", delayed));
     assert_eq!(
@@ -92,7 +92,7 @@ fn an_existing_import_is_joined_and_effects_go_inside_arguments() {
     );
     let fixture = Fixture::new(&original);
     let mut s = fixture.open();
-    s.add_effect(rev(&s), &call(&s, "osc.sine"), "std/fx", "limit").unwrap();
+    s.add_effect(rev(&s), &call(&s, "osc.sine"), "std:limit").unwrap();
     assert_eq!(
         fixture.source(),
         original.replace("{ drive }", "{ drive, limit }").replace("osc.sine(hz(220))", "limit(osc.sine(hz(220)), -1)")
@@ -156,20 +156,30 @@ fn adding_is_refused_where_it_would_not_compile() {
     let fixture = Fixture::new(&original);
     let mut s = fixture.open();
     let hz = call(&s, "hz");
-    assert!(s.add_effect(rev(&s), &hz, "std/fx", "delay").is_err());
-    assert!(matches!(s.add_effect(rev(&s), &call(&s, "osc.sine"), "std/fx", "wobble"), Err(EditError::NotFound(_))));
+    assert!(s.add_effect(rev(&s), &hz, "std:delay").is_err());
+    assert!(matches!(s.add_effect(rev(&s), &call(&s, "osc.sine"), "std:wobble"), Err(EditError::NotFound(_))));
     assert_eq!(fixture.source(), original);
 }
 
+// PKG-2, PKG-7, PKG-11: effects are the catalogued components with an editor category, a free
+// string; each names its ComponentId and where it is imported from.
 #[test]
-fn effects_are_listed_with_their_category_and_args() {
+fn effects_are_listed_with_their_component_and_category() {
     let fixture = Fixture::new(&format!("{HEAD}export default song(() => osc.saw(hz(110)));\n"));
-    let effects = fixture.open().effects();
+    let s = fixture.open();
+    let effects = s.effects();
     let lowpass = effects.iter().find(|e| e.name == "lowpass").unwrap();
-    assert_eq!((lowpass.module.as_str(), lowpass.category.as_str(), lowpass.args.as_deref()), ("std/filter", "Filter", Some("1000")));
-    let delay = effects.iter().find(|e| e.name == "delay").unwrap();
-    assert_eq!(delay.category, "Delay & Reverb");
-    assert!(effects.iter().all(|e| m2_runtime::packages::EFFECT_CATEGORIES.contains(&e.category.as_str())));
+    let found = (lowpass.component.as_str(), lowpass.module.as_str(), lowpass.category.as_str());
+    assert_eq!(found, ("std:lowpass", "std/filter", "Filter"));
+    assert_eq!(lowpass.label, s.catalog().components["std:lowpass"].label, "named by its descriptor's label");
+    let delay = effects.iter().find(|e| e.component == "std:delay").unwrap();
+    assert_eq!((delay.name.as_str(), delay.module.as_str(), delay.category.as_str()), ("delay", "std/fx", "Delay & Reverb"));
+    // Every effect inserts only its own controls, and is nothing but its descriptor says.
+    for e in &effects {
+        let d = &s.catalog().components[&e.component];
+        assert!(d.is_effect() && !e.category.is_empty() && e.label == d.label, "{}", e.component);
+        assert!(d.editor.insert.iter().all(|i| d.control(&i.slot).is_some()), "{}", e.component);
+    }
 }
 
 #[test]
@@ -179,15 +189,19 @@ fn an_effects_args_are_written_after_the_audio_as_knobs_and_removing_restores_th
     let mut s = fixture.open();
     let graph = canonical(&s.accepted().compiled.ir);
 
-    let added = s.add_effect(rev(&s), &call(&s, "osc.saw"), "std/filter", "lowpass").unwrap();
+    let added = s.add_effect(rev(&s), &call(&s, "osc.saw"), "std:lowpass").unwrap();
     assert_eq!(added.after, "lowpass(osc.saw(hz(110)), 1000)");
     assert!(fixture.source().contains("import { lowpass } from \"std/filter\";\n"));
     // The cutoff is a knob on the filter, typed by the port it feeds.
     let view = s.view();
     let filter = view.modules[0].nodes.iter().find(|n| n.label == "lowpass").unwrap();
-    assert_eq!(filter.effect.as_deref(), Some("lowpass"));
+    let label = s.catalog().components["std:lowpass"].label.clone();
+    assert_eq!((filter.effect.as_deref(), filter.component.as_deref()), (Some(label.as_str()), Some("std:lowpass")));
     let cutoff = filter.knobs.iter().find(|k| k.label == "cutoff").unwrap_or_else(|| panic!("{:?}", filter.knobs));
-    assert_eq!((cutoff.value, cutoff.unit, cutoff.log), (1000.0, Some("hz"), true));
+    assert_eq!((cutoff.value, cutoff.unit, cutoff.log, cutoff.written), (1000.0, Some("hz"), true, true));
+    // The resonance it leaves out is a knob too, at its default (PKG-3).
+    let q = filter.knobs.iter().find(|k| k.label == "q").unwrap_or_else(|| panic!("{:?}", filter.knobs));
+    assert_eq!((q.value, q.written, q.default), (0.707, false, Some(0.707)));
 
     s.remove_effect(rev(&s), &call(&s, "lowpass")).unwrap();
     assert!(fixture.source().contains("song(() => osc.saw(hz(110)))"));
@@ -197,19 +211,23 @@ fn an_effects_args_are_written_after_the_audio_as_knobs_and_removing_restores_th
     assert_eq!(fixture.source(), original);
 }
 
+// PKG-3: every effect goes after a sound, and every control it declares is a knob on it from the
+// start: the ones its insert writes, written, and the others at their defaults.
 #[test]
-fn every_effect_goes_after_a_sound_and_every_number_in_its_args_is_a_knob() {
+fn every_effect_goes_after_a_sound_and_every_control_it_declares_is_a_knob() {
     for effect in Fixture::new(&format!("{HEAD}export default song(() => osc.saw(hz(110)));\n")).open().effects() {
         let fixture = Fixture::new(&format!("{HEAD}export default song(() => osc.saw(hz(110)));\n"));
         let mut s = fixture.open();
-        let added = s
-            .add_effect(rev(&s), &call(&s, "osc.saw"), &effect.module, &effect.name)
-            .unwrap_or_else(|e| panic!("{}.{}: {e}", effect.module, effect.name));
-        let args = effect.args.as_deref().unwrap_or("");
-        let numbers = args.split(|c: char| !(c.is_ascii_digit() || c == '.')).filter(|w| !w.is_empty()).count();
+        let added = s.add_effect(rev(&s), &call(&s, "osc.saw"), &effect.component).unwrap_or_else(|e| panic!("{}: {e}", effect.component));
+        let d = s.catalog().components[&effect.component].clone();
         let nodes = &s.view().modules[0].nodes;
-        let knobs: usize = nodes.iter().filter(|n| n.effect.as_deref() == Some(&effect.name)).map(|n| n.knobs.len()).sum();
-        assert_eq!(knobs, numbers, "{}: every number in `{args}` is a knob ({})", effect.name, added.after);
+        let node = nodes.iter().find(|n| n.component.as_deref() == Some(&effect.component)).unwrap_or_else(|| panic!("{}", effect.component));
+        let mut knobs: Vec<(&str, bool)> = node.knobs.iter().map(|k| (k.slot.as_deref().unwrap(), k.written)).collect();
+        knobs.sort();
+        let mut declared: Vec<(&str, bool)> =
+            d.controls.iter().filter(|c| !c.optional).map(|c| (c.name.as_str(), d.editor.insert.iter().any(|i| i.slot == c.name))).collect();
+        declared.sort();
+        assert_eq!(knobs, declared, "{}: {}", effect.component, added.after);
     }
 }
 
@@ -223,8 +241,7 @@ fn every_effect_goes_on_a_channel_the_mixer_pans() {
     for effect in Fixture::new(&source).open().effects() {
         let fixture = Fixture::new(&source);
         let mut s = fixture.open();
-        s.add_effect(rev(&s), &call(&s, "osc.saw"), &effect.module, &effect.name)
-            .unwrap_or_else(|e| panic!("{}.{} before a pan: {e}", effect.module, effect.name));
+        s.add_effect(rev(&s), &call(&s, "osc.saw"), &effect.component).unwrap_or_else(|e| panic!("{} before a pan: {e}", effect.component));
     }
 }
 
@@ -236,12 +253,130 @@ fn an_effect_goes_into_a_voice_and_comes_out_again() {
     let mut s = fixture.open();
     let graph = canonical(&s.accepted().compiled.ir);
     // The + on a node inside the voice: the effect goes on every voice.
-    let added = s.add_effect(rev(&s), &call(&s, "osc.saw"), "std/fx", "chorus").unwrap();
+    let added = s.add_effect(rev(&s), &call(&s, "osc.saw"), "std:chorus").unwrap();
     assert_eq!(added.after, "chorus(osc.saw(n.pitch), { rate: 0.8, depth: 0.5, mix: 0.5 })");
     assert!(fixture.source().contains("vca(svf.lowpass(chorus(osc.saw(n.pitch), { rate: 0.8, depth: 0.5, mix: 0.5 }), 800)"));
     let view = s.view();
-    let chorus = view.modules[0].nodes.iter().find(|n| n.effect.as_deref() == Some("chorus")).expect("the effect can be removed");
+    let chorus = view.modules[0].nodes.iter().find(|n| n.component.as_deref() == Some("std:chorus") && n.effect.is_some());
+    let chorus = chorus.expect("the effect can be removed");
     s.remove_effect(rev(&s), &chorus.id.clone()).unwrap();
     assert!(fixture.source().contains("vca(svf.lowpass(osc.saw(n.pitch), 800)"));
     assert_eq!(canonical(&s.accepted().compiled.ir), graph);
+}
+
+// PKG-9 (step 5 gate): `import { delay as echo }` is `delay`. The call is recognised by the
+// ComponentId its frame records, never by the name it is called by: it is the Delay effect, its
+// knobs are delay's three controls with their declared ranges, and it can be taken out.
+#[test]
+fn an_import_alias_is_the_component() {
+    let original = format!("{HEAD}import {{ delay as echo }} from \"std/fx\";\nexport default song(() => echo(osc.saw(hz(110))));\n");
+    let fixture = Fixture::new(&original);
+    let mut s = fixture.open();
+    let frames: Vec<Option<&str>> = s.accepted().compiled.ir.modules[0].frames.iter().map(|f| f.component.as_deref()).collect();
+    assert!(frames.contains(&Some("std:delay")), "{frames:?}");
+    let view = s.view();
+    let echo = view.modules[0].nodes.iter().find(|n| n.label == "echo").expect("the echo call");
+    let label = s.catalog().components["std:delay"].label.clone();
+    assert_eq!((echo.effect.as_deref(), echo.component.as_deref()), (Some(label.as_str()), Some("std:delay")));
+    let knobs: Vec<(&str, bool, Option<[f64; 2]>, bool)> =
+        echo.knobs.iter().map(|k| (k.slot.as_deref().unwrap(), k.written, k.range, k.log)).collect();
+    assert_eq!(
+        knobs,
+        [("time", false, Some([0.001, 2.0]), true), ("feedback", false, Some([0.0, 0.95]), false), ("mix", false, Some([0.0, 1.0]), false)]
+    );
+    s.remove_effect(rev(&s), &echo.id).unwrap();
+    assert!(fixture.source().contains("song(() => osc.saw(hz(110)))"));
+}
+
+/// A copy of std in a temporary folder, with `edit` applied to its sources.
+struct StdCopy(PathBuf);
+
+impl StdCopy {
+    fn new(edit: impl FnOnce(&Path)) -> Self {
+        fn copy(from: &Path, to: &Path) {
+            std::fs::create_dir_all(to).unwrap();
+            for e in std::fs::read_dir(from).unwrap().flatten() {
+                let (f, t) = (e.path(), to.join(e.file_name()));
+                if f.is_dir() {
+                    // The kernels-src crate is large and isn't read.
+                    if e.file_name() != "kernels-src" && e.file_name() != "target" {
+                        copy(&f, &t);
+                    }
+                } else {
+                    std::fs::copy(&f, &t).unwrap();
+                }
+            }
+        }
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("m2-effect-std-{}-{n}", std::process::id()));
+        copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std"), &dir);
+        edit(&dir);
+        Self(dir)
+    }
+
+    fn packages(&self) -> PackageSet {
+        let mut packages = PackageSet::default();
+        packages.load(&self.0).unwrap();
+        packages
+    }
+}
+
+impl Drop for StdCopy {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+// PKG-9: moving `delay` from std/fx.ts to its own file changes nothing: its ComponentId names the
+// package and the descriptor's id, never the file, so the IR and the view are the same.
+#[test]
+fn moving_a_component_keeps_its_id() {
+    let source = format!("{HEAD}import {{ delay }} from \"std/fx\";\nexport default song(() => delay(osc.saw(hz(110)), {{ time: 0.5 }}));\n");
+    let fixture = Fixture::new(&source);
+    let moved = StdCopy::new(|dir| {
+        let fx = std::fs::read_to_string(dir.join("src/fx.ts")).unwrap();
+        let start = fx.find("/** Feedback delay.").expect("delay's doc comment");
+        let end = start + fx[start..].find("\n);\n").expect("delay's end") + 4;
+        let imports = "import { component, control, kernel, port, signature, type Audio, type Params, type Value } from \"@m2/core\";\n";
+        std::fs::write(dir.join("src/delay.ts"), format!("{imports}{}", &fx[start..end])).unwrap();
+        std::fs::write(dir.join("src/fx.ts"), format!("{}export {{ delay }} from \"./delay\";\n{}", &fx[..start], &fx[end..])).unwrap();
+    });
+    let here = fixture.open();
+    let there = Session::open(&fixture.0, moved.packages()).unwrap();
+    assert!(there.problems().is_empty(), "{:?}", there.problems());
+    let components = |s: &Session| -> Vec<Option<String>> { s.accepted().compiled.ir.modules[0].frames.iter().map(|f| f.component.clone()).collect() };
+    assert_eq!(components(&there), components(&here));
+    assert!(components(&there).contains(&Some("std:delay".into())));
+    assert_eq!(there.accepted().compiled.components["std:delay"].module, "std/delay");
+    assert_eq!(there.view(), here.view());
+    // The catalog still offers it, from the module that defines it now.
+    let delay = there.effects().into_iter().find(|e| e.component == "std:delay").unwrap();
+    assert_eq!((delay.module.as_str(), delay.name.as_str()), ("std/delay", "delay"));
+}
+
+// ID-15, D17: a component that native code calls (`Array.from` passing it as the mapping) takes no
+// site, so no frame: no `.map(...)` or `Array.from(...)` call is an effect or has knobs. One
+// called from an arrow is that arrow's call.
+#[test]
+fn a_native_caller_takes_no_site() {
+    let fixture = Fixture::new(&format!(
+        "{HEAD}import {{ lowpass }} from \"std/filter\";\nimport {{ sum }} from \"std/math\";\n\
+         export default song(() => sum(...[osc.saw(hz(110))].map((y) => lowpass(y)), ...Array.from({{ length: 1 }}, osc.square)));\n"
+    ));
+    let s = fixture.open();
+    let view = s.view();
+    let nodes = &view.modules[0].nodes;
+    for callee in ["map", "Array.from"] {
+        assert!(nodes.iter().filter(|n| n.label.ends_with(callee)).all(|n| n.knobs.is_empty() && n.effect.is_none()), "{callee}: {nodes:#?}");
+    }
+    let lowpass = nodes.iter().find(|n| n.label == "lowpass").expect("the arrow's call");
+    assert!(lowpass.effect.is_some() && lowpass.component.as_deref() == Some("std:lowpass"));
+    let sites = &s.accepted().compiled.sites;
+    let frames: Vec<&str> = s.accepted().compiled.ir.modules[0]
+        .frames
+        .iter()
+        .map(|f| sites.iter().find(|x| x.id == f.site).unwrap().callee.as_str())
+        .collect();
+    assert!(!frames.iter().any(|c| c.ends_with("map") || *c == "Array.from"), "{frames:?}");
 }

@@ -21,6 +21,15 @@
 //! `c` starts at `c × max_block`. Control ports use channel 0 only. `channels` is the
 //! channel count the host resolved for the kernel's `audio<*>` ports (1 or 2).
 //!
+//! Input memory is the host's (ABI-1). `k_process` reads its inputs and never writes them, and
+//! `k_reset` never changes them: the host may write an input once and leave it there for as long
+//! as its value holds (a knob's cell), so a kernel that wrote it would corrupt the value. Every
+//! port has its own buffer, never overlapping another's: a kernel that returns overlapping ports
+//! (to process in place, say) is refused when it is instantiated. Debug builds of the host check
+//! that input memory is unchanged by every `k_process` and `k_reset` call. [`Io`] gives inputs
+//! as shared slices and [`Host`] keeps one buffer per port, so a kernel written with this kit
+//! keeps the rule by construction.
+//!
 //! ```ignore
 //! struct Gain { sr: f32 }
 //! impl m2_kernel::Kernel for Gain {
@@ -146,6 +155,7 @@ impl<K: Kernel> Host<K> {
 
     pub fn reset(&mut self) {
         self.kernel = K::new(self.sample_rate, self.channels);
+        // Outputs only: input memory is the host's (ABI-1).
         for p in &mut self.ports[K::INPUTS..] {
             p.fill(0.0);
         }

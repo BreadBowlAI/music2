@@ -4,7 +4,9 @@
 //! sorts the whole song into a processing order (a loop without `feedback` is an
 //! error that names the loop), infers every node's output kinds, and checks every
 //! connection's kind and unit. It also checks the keys the IR files data under (ID-1,
-//! ID-3, ID-5, ID-8): everything is addressed by module key, never by label (ID-11).
+//! ID-3, ID-5, ID-8): everything is addressed by module key, never by label (ID-11), and that
+//! frames, the controls in origins and sidechain records point where they must (ID-15, PKG-3,
+//! PKG-13).
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
@@ -123,6 +125,8 @@ pub struct Voice {
     pub nodes: Vec<FNode>,
     pub order: Vec<usize>,
     pub out: PortRef,
+    /// The outputs that feed a sidechain input inside the voice ([`Flat::sidechain`]).
+    pub sidechain: Vec<PortRef>,
 }
 
 /// A whole song after checking: one graph, typed and ordered.
@@ -133,6 +137,11 @@ pub struct Flat {
     pub order: Vec<usize>,
     pub out: PortRef,
     pub out_kind: Kind,
+    /// The outputs that feed a component's sidechain input (PKG-13), as the frames recorded
+    /// them, in module and frame order: where monitoring mute and solo must not reach (MON-2).
+    /// A signal made inside a voice is in that voice's list. Empty when no sidechain input is
+    /// used, and the same for the same code.
+    pub sidechain: Vec<PortRef>,
 }
 
 /// Check `ir` against the kernels available.
@@ -281,9 +290,83 @@ impl<'a> Checker<'a> {
                     ck.diags.push(diag(m, None, format!("lane `{}`: only control lanes have defaults", l.key)));
                 }
             }
+            ck.frames(m);
         }
         ck.state_paths(ir);
         ck
+    }
+
+    /// Frames, the frames nodes and declared controls name, and sidechain records point where
+    /// they must (ID-15, PKG-3, PKG-13). Frame keys follow the key rule (ID-1).
+    fn frames(&mut self, m: &'a Module) {
+        let n = m.frames.len();
+        let mut ids = HashSet::new();
+        walk(&m.nodes, &mut |node| {
+            ids.insert(node.id.as_str());
+        });
+        for (i, f) in m.frames.iter().enumerate() {
+            if f.parent.is_some_and(|p| p as usize >= i) {
+                self.diags.push(diag(m, None, format!("frame {i} (site {}) names a parent that isn't an earlier frame", f.site)));
+            }
+            if let Some(k) = &f.key
+                && let Some(e) = key::invalid("the key() frame key", k)
+            {
+                self.diags.push(coded("key.invalid", m, None, e));
+            }
+            for s in &f.sidechain {
+                if !ids.contains(split_ref(&s.source).0) {
+                    let e = format!("frame {i} (site {}): sidechain input `{}` reads `{}`, which isn't a node of the module", f.site, s.input, s.source);
+                    self.diags.push(diag(m, None, e));
+                }
+            }
+        }
+        let mut errs = vec![];
+        walk(&m.nodes, &mut |node| {
+            if let Some(f) = node.frame
+                && f as usize >= n
+            {
+                errs.push(diag(m, Some(node), format!("node `{}` names frame {f}, but the module has {n}", node.id)));
+            }
+            let Some(c) = node.origin.as_ref().and_then(|o| o.control.as_ref()) else { return };
+            match m.frames.get(c.frame as usize) {
+                None => errs.push(diag(m, Some(node), format!("control `{}` names frame {}, but the module has {n}", c.slot, c.frame))),
+                Some(f) if f.component.is_none() => {
+                    errs.push(diag(m, Some(node), format!("control `{}` names frame {}, which isn't a component's", c.slot, c.frame)))
+                }
+                Some(_) => {}
+            }
+        });
+        self.diags.extend(errs);
+    }
+
+    /// Where each sidechain record's signal is: in the song graph, or in the voice of the poly
+    /// whose body made it (node ids are unique within a module, voices included).
+    fn sidechains(&mut self, ir: &'a Ir, nodes: &mut [FNode]) -> Vec<PortRef> {
+        let mut top = vec![];
+        for m in &ir.modules {
+            for s in m.frames.iter().flat_map(|f| &f.sidechain) {
+                let (id, port) = split_ref(&s.source);
+                let in_body = m.nodes.iter().find_map(|n| match &n.op {
+                    Op::Poly { body, .. } => body.nodes.iter().position(|b| b.id == id).map(|i| (n, &body.nodes[i], i)),
+                    _ => None,
+                });
+                let found = match in_body {
+                    // A ref to no node is reported by `frames`.
+                    None if !self.nodes.get(m.key.as_str()).is_some_and(|ns| ns.contains_key(id)) => continue,
+                    Some((poly, node, i)) => self.port_index(node, port).map(|port| {
+                        let at = self.slot_of[&(m.key.as_str(), poly.id.as_str())];
+                        if let FOp::Poly { voice, .. } = &mut nodes[at].op {
+                            voice.sidechain.push(PortRef { node: i, port });
+                        }
+                    }),
+                    None => self.resolve(&m.key, &s.source, 0).map(|p| top.push(p)),
+                };
+                if let Err(e) = found {
+                    self.diags.push(diag(m, None, format!("sidechain input `{}`: {e}", s.input)));
+                }
+            }
+        }
+        top
     }
 
     /// Module, lane, plugin and frame keys follow the key rule and are unique where they
@@ -424,7 +507,9 @@ impl<'a> Checker<'a> {
             }
         }
         order.retain(|&i| reach[i]);
-        Some(Flat { nodes, order, out, out_kind })
+        let mut nodes = nodes;
+        let sidechain = self.sidechains(ir, &mut nodes);
+        Some(Flat { nodes, order, out, out_kind, sidechain })
     }
 
     /// Resolve a ref in the module keyed `module` to a top-level node, following imports.
@@ -724,7 +809,17 @@ impl<'a> Checker<'a> {
             }
         };
         let kind = kinds.get(out.node).and_then(|k| k.as_ref()).and_then(|k| k.get(out.port)).copied()?;
-        Some((Voice { nodes, order, out }, kind))
+        Some((Voice { nodes, order, out, sidechain: vec![] }, kind))
+    }
+}
+
+/// Every node of `ns`, voices' included, outermost first.
+fn walk<'n>(ns: &'n [Node], f: &mut impl FnMut(&'n Node)) {
+    for n in ns {
+        f(n);
+        if let Op::Poly { body, .. } = &n.op {
+            walk(&body.nodes, f);
+        }
     }
 }
 
@@ -938,7 +1033,7 @@ mod tests {
     }
 
     fn song(nodes: serde_json::Value, out: &str) -> Ir {
-        ir(json!({"ir": 1, "root": {"module": "song", "export": "out"},
+        ir(json!({"ir": crate::IR_VERSION, "root": {"module": "song", "export": "out"},
             "modules": [{"key": "song", "nodes": nodes, "exports": {"out": out}}]}))
     }
 
@@ -1041,7 +1136,7 @@ mod tests {
     // ID-11: imports, flat node names and lane addresses use the module key, never the label.
     #[test]
     fn imports_cross_modules_and_cycles_across_tracks_are_caught() {
-        let ok = ir(json!({"ir": 1, "root": {"module": "song", "export": "out"}, "modules": [
+        let ok = ir(json!({"ir": crate::IR_VERSION, "root": {"module": "song", "export": "out"}, "modules": [
             {"key": "kick", "label": "Big Kick", "track": true,
              "lanes": [{"key": "hits", "kind": "events<note>", "label": "Hits"}], "nodes": [
                 {"id": "o", "op": "kernel", "kernel": "t:saw"},
@@ -1067,7 +1162,7 @@ mod tests {
         let e = check(&by_label, &kernels()).unwrap_err();
         assert!(e.iter().any(|d| d.message.contains("no module `Big Kick`")), "{e:?}");
 
-        let bad = ir(json!({"ir": 1, "root": {"module": "song", "export": "out"}, "modules": [
+        let bad = ir(json!({"ir": crate::IR_VERSION, "root": {"module": "song", "export": "out"}, "modules": [
             {"key": "song", "nodes": [
                 {"id": "b", "op": "import", "module": "b", "export": "out"},
                 {"id": "x", "op": "kernel", "kernel": "t:vca", "inputs": {"in": "b"}}],
@@ -1079,7 +1174,7 @@ mod tests {
         let e = check(&bad, &kernels()).unwrap_err();
         assert!(e[0].message.contains("song/x (t:vca) → b/y (t:vca) → song/x"), "{}", e[0]);
 
-        let missing = ir(json!({"ir": 1, "root": {"module": "song", "export": "out"}, "modules": [
+        let missing = ir(json!({"ir": crate::IR_VERSION, "root": {"module": "song", "export": "out"}, "modules": [
             {"key": "song", "nodes": [{"id": "k", "op": "import", "module": "kick", "export": "out"}], "exports": {"out": "k"}}]}));
         let e = check(&missing, &kernels()).unwrap_err();
         assert!(e.iter().any(|d| d.message.contains("no module `kick`")), "{e:?}");
@@ -1089,7 +1184,7 @@ mod tests {
     #[test]
     fn labels_never_reach_the_flat_graph() {
         let song = |label: &str| {
-            ir(json!({"ir": 1, "root": {"module": "song", "export": "out"}, "modules": [
+            ir(json!({"ir": crate::IR_VERSION, "root": {"module": "song", "export": "out"}, "modules": [
                 {"key": "lead-vox", "label": label, "track": true,
                  "lanes": [{"key": "cutoff", "kind": "control<hz>", "default": 800, "label": format!("{label} cutoff")}],
                  "nodes": [
@@ -1111,7 +1206,7 @@ mod tests {
             check(&ir(v), &kernels()).err().unwrap_or_default().into_iter().map(|d| d.code.to_string()).collect()
         };
         let one = |m: serde_json::Value| {
-            json!({"ir": 1, "root": {"module": "song", "export": "out"}, "modules": [
+            json!({"ir": crate::IR_VERSION, "root": {"module": "song", "export": "out"}, "modules": [
                 m, {"key": "song", "nodes": [{"id": "o", "op": "kernel", "kernel": "t:saw"}], "exports": {"out": "o"}}]})
         };
         let track = |key: &str, lanes: serde_json::Value| json!({"key": key, "track": true, "lanes": lanes, "nodes": [], "exports": {}});
@@ -1124,13 +1219,13 @@ mod tests {
         let e = check(&ir(one(track("Lead Vox", json!([])))), &kernels()).unwrap_err();
         assert!(e[0].message.contains("Write \"lead-vox\""), "{}", e[0]);
 
-        let two = json!({"ir": 1, "root": {"module": "song", "export": "out"}, "modules": [
+        let two = json!({"ir": crate::IR_VERSION, "root": {"module": "song", "export": "out"}, "modules": [
             track("kick", json!([])), track("kick", json!([])),
             {"key": "song", "nodes": [{"id": "o", "op": "kernel", "kernel": "t:saw"}], "exports": {"out": "o"}}]});
         assert_eq!(codes(two), ["key.duplicate"]);
 
         // The root is `song`.
-        let root = json!({"ir": 1, "root": {"module": "main", "export": "out"}, "modules": [
+        let root = json!({"ir": crate::IR_VERSION, "root": {"module": "main", "export": "out"}, "modules": [
             {"key": "main", "nodes": [{"id": "o", "op": "kernel", "kernel": "t:saw"}], "exports": {"out": "o"}}]});
         assert_eq!(codes(root), ["key.invalid"]);
     }
@@ -1156,7 +1251,7 @@ mod tests {
     }
 
     fn plugins(nodes: serde_json::Value, out: &str) -> Ir {
-        ir(json!({"ir": 1, "root": {"module": "song", "export": "out"}, "modules": [
+        ir(json!({"ir": crate::IR_VERSION, "root": {"module": "song", "export": "out"}, "modules": [
             {"key": "vox", "track": true, "nodes": nodes, "exports": {"out": out}},
             {"key": "song", "nodes": [{"id": "v", "op": "import", "module": "vox", "export": "out"}], "exports": {"out": "v"}}]}))
     }
@@ -1237,7 +1332,7 @@ mod tests {
         let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
         k.insert("t:look".into(), KernelSig::parse("t:look", "", &s(&["in: audio<1>"]), &s(&["out: audio<1>"]), 64).unwrap());
         let ir = |nodes: serde_json::Value, lanes: serde_json::Value| {
-            serde_json::from_value::<Ir>(json!({"ir": 1, "root": {"module": "song", "export": "out"},
+            serde_json::from_value::<Ir>(json!({"ir": crate::IR_VERSION, "root": {"module": "song", "export": "out"},
                 "modules": [{"key": "song", "lanes": lanes, "nodes": nodes, "exports": {"out": "x"}}]}))
             .unwrap()
         };
@@ -1255,7 +1350,7 @@ mod tests {
 
     #[test]
     fn poly_voices_read_note_fields_and_outer_signals() {
-        let p = ir(json!({"ir": 1, "root": {"module": "song", "export": "out"}, "modules": [
+        let p = ir(json!({"ir": crate::IR_VERSION, "root": {"module": "song", "export": "out"}, "modules": [
             {"key": "song",
              "lanes": [{"key": "notes", "kind": "events<note>"}, {"key": "cutoff", "kind": "control<hz>", "default": 800}],
              "nodes": [
@@ -1282,5 +1377,138 @@ mod tests {
         }
         let e = check(&bad, &kernels()).unwrap_err();
         assert!(e[0].message.contains("note fields"), "{}", e[0]);
+    }
+    /// A song with frames: `o` made in a component frame 0 inside the `key()` frame 1's parent.
+    fn framed(frames: serde_json::Value, nodes: serde_json::Value) -> Ir {
+        ir(json!({"ir": crate::IR_VERSION, "root": {"module": "song", "export": "out"},
+            "modules": [{"key": "song", "frames": frames, "nodes": nodes, "exports": {"out": "f.lp"}}]}))
+    }
+
+    // ID-15, PKG-3: frames are metadata. With or without them, and with or without a declared
+    // control in an origin, the flat graph is the same apart from the origins.
+    #[test]
+    fn frames_change_nothing_the_engine_runs() {
+        let plain = framed(
+            json!([]),
+            json!([
+                {"id": "o", "op": "kernel", "kernel": "t:saw"},
+                {"id": "c", "op": "const", "value": 800, "unit": "hz", "origin": {"site": 4, "arg": ["1"]}},
+                {"id": "f", "op": "kernel", "kernel": "t:svf", "inputs": {"in": "o", "cutoff": "c"}},
+            ]),
+        );
+        let with = framed(
+            json!([{"site": 3, "key": "chain"}, {"site": 4, "component": "std:lowpass", "parent": 0}]),
+            json!([
+                {"id": "o", "op": "kernel", "kernel": "t:saw", "frame": 0},
+                {"id": "c", "op": "const", "value": 800, "unit": "hz", "frame": 1,
+                 "origin": {"site": 4, "arg": ["1"], "control": {"frame": 1, "slot": "cutoff", "smooth": true}}},
+                {"id": "f", "op": "kernel", "kernel": "t:svf", "inputs": {"in": "o", "cutoff": "c"}, "frame": 1},
+            ]),
+        );
+        let (a, mut b) = (check(&plain, &kernels()).unwrap(), check(&with, &kernels()).unwrap());
+        assert!(b.nodes.iter().any(|n| n.origin.as_ref().and_then(|o| o.slot()) == Some("cutoff")));
+        b.nodes.iter_mut().for_each(|n| {
+            if let Some(o) = &mut n.origin {
+                o.control = None;
+            }
+        });
+        assert_eq!(a, b);
+        assert!(a.sidechain.is_empty());
+        // The constant with an origin stays a node, as every editable constant does.
+        assert!(b.nodes.iter().any(|n| matches!(n.op, FOp::Const(800.0))));
+    }
+
+    // ID-15, ID-1, PKG-3, PKG-13: frames, the frames nodes and controls name, and sidechain
+    // records are checked in an IR from anywhere.
+    #[test]
+    fn frames_controls_and_sidechains_are_checked() {
+        let codes = |frames: serde_json::Value, extra: serde_json::Value| -> Vec<(String, String)> {
+            let mut nodes = vec![json!({"id": "o", "op": "kernel", "kernel": "t:saw"})];
+            nodes.extend(extra.as_array().unwrap().iter().cloned());
+            nodes.push(json!({"id": "f", "op": "kernel", "kernel": "t:svf", "inputs": {"in": "o"}}));
+            let e = check(&framed(frames, json!(nodes)), &kernels()).err().unwrap_or_default();
+            e.into_iter().map(|d| (d.code.to_string(), d.message)).collect()
+        };
+        let lp = json!({"site": 4, "component": "std:lowpass"});
+        let control = |frame: u32| json!({"id": "c", "op": "const", "value": 1, "origin": {"site": 4, "control": {"frame": frame, "slot": "q", "inherited": true}}});
+        assert_eq!(codes(json!([lp]), json!([control(0)])), []);
+        let one = |v: Vec<(String, String)>| {
+            assert_eq!(v.len(), 1, "{v:?}");
+            v.into_iter().next().unwrap()
+        };
+        let (code, m) = one(codes(json!([lp]), json!([control(1)])));
+        assert!(code == "code.check" && m.contains("names frame 1, but the module has 1"), "{m}");
+        let (_, m) = one(codes(json!([{"site": 3, "key": "chain"}]), json!([control(0)])));
+        assert!(m.contains("isn't a component's"), "{m}");
+        let (_, m) = one(codes(json!([lp]), json!([{"id": "x", "op": "const", "value": 1, "frame": 2}])));
+        assert!(m.contains("names frame 2"), "{m}");
+        let (_, m) = one(codes(json!([{"site": 1, "parent": 0}]), json!([])));
+        assert!(m.contains("isn't an earlier frame"), "{m}");
+        let (code, _) = one(codes(json!([{"site": 1, "key": "Chain L"}]), json!([])));
+        assert_eq!(code, "key.invalid");
+        let (_, m) = one(codes(json!([{"site": 4, "component": "std:follow", "sidechain": [{"input": "in", "ref": "nope"}]}]), json!([])));
+        assert!(m.contains("sidechain input `in` reads `nope`"), "{m}");
+        let (_, m) = one(codes(json!([{"site": 4, "component": "std:follow", "sidechain": [{"input": "in", "ref": "o.nope"}]}]), json!([])));
+        assert!(m.contains("sidechain input `in`") && m.contains("no output `nope`"), "{m}");
+    }
+
+    // PKG-13: what a sidechain input received is carried into the graph it is in: the song's,
+    // through imports, or a voice's.
+    #[test]
+    fn sidechain_records_reach_the_flat_graph() {
+        let p = ir(json!({"ir": crate::IR_VERSION, "root": {"module": "song", "export": "out"}, "modules": [
+            {"key": "kick", "track": true, "nodes": [{"id": "o", "op": "kernel", "kernel": "t:saw"}], "exports": {"out": "o"}},
+            {"key": "song",
+             "lanes": [{"key": "notes", "kind": "events<note>"}],
+             "frames": [
+                {"site": 1, "component": "std:follow", "sidechain": [{"input": "in", "ref": "k"}]},
+                {"site": 2, "component": "std:follow", "sidechain": [{"input": "in", "ref": "f.hp"}]}],
+             "nodes": [
+                {"id": "k", "op": "import", "module": "kick", "export": "out"},
+                {"id": "n", "op": "lane", "lane": "notes"},
+                {"id": "v", "op": "poly", "events": "n", "voices": 4, "body": {"out": "f.lp", "nodes": [
+                    {"id": "o2", "op": "kernel", "kernel": "t:saw"},
+                    {"id": "f", "op": "kernel", "kernel": "t:svf", "inputs": {"in": "o2"}}]}},
+                {"id": "x", "op": "kernel", "kernel": "t:follow", "inputs": {"in": "k"}, "frame": 0},
+                {"id": "out", "op": "kernel", "kernel": "t:vca", "inputs": {"in": "v", "g": "x"}}],
+             "exports": {"out": "out"}}]}));
+        let f = check(&p, &kernels()).unwrap();
+        let kick = f.nodes.iter().position(|n| n.name == "kick/o").unwrap();
+        assert_eq!(f.sidechain, [PortRef { node: kick, port: 0 }], "an import resolves to the export it reads");
+        let FOp::Poly { voice, .. } = &f.nodes.iter().find(|n| n.name == "song/v").unwrap().op else { panic!() };
+        assert_eq!(voice.sidechain, [PortRef { node: 1, port: 1 }], "`f.hp` in the voice graph");
+        assert_eq!(check(&p, &kernels()).unwrap(), f, "the same for the same code");
+    }
+
+    // ID-15: a frame's chain is its parents, outermost first, and a ControlId is the module key,
+    // that chain and the slot.
+    #[test]
+    fn frame_chains_and_control_ids() {
+        let m: Module = serde_json::from_value(json!({"key": "bass", "nodes": [], "exports": {}, "frames": [
+            {"site": 3, "key": "chain-l"}, {"site": 7, "component": "std:bass", "parent": 0},
+            {"site": 9, "component": "std:lowpass", "occurrence": 1, "parent": 1}, {"site": 2}]}))
+        .unwrap();
+        let sites: Vec<u32> = m.chain(Some(2)).iter().map(|f| f.site).collect();
+        assert_eq!(sites, [3, 7, 9]);
+        assert!(m.chain(None).is_empty() && m.chain(Some(9)).is_empty());
+        assert_eq!(crate::control_id(&m, 2, "q"), "bass/3:0:chain-l/7:0/9:1/@q");
+        assert_eq!(crate::control_id(&m, 3, "channels.hats.db"), "bass/2:0/@channels.hats.db");
+    }
+
+    // PKG-3, WRITE-6: one written literal is one value whatever slots it reaches; an inherited
+    // control is one value per call and slot.
+    #[test]
+    fn same_value_for_written_and_inherited_controls() {
+        let o = |v: serde_json::Value| -> Origin { serde_json::from_value(v).unwrap() };
+        let written = o(json!({"site": 3, "arg": ["0"], "control": {"frame": 1, "slot": "feedback"}}));
+        assert!(written.same_value(&o(json!({"site": 3, "arg": ["0"], "control": {"frame": 1, "slot": "mix"}}))));
+        assert!(written.same_value(&o(json!({"site": 3, "arg": ["0"]}))), "a literal is the same value with or without a slot");
+        let q = o(json!({"site": 9, "control": {"frame": 2, "slot": "q", "inherited": true}}));
+        assert!(q.inherited() && q.slot() == Some("q"));
+        assert!(q.same_value(&o(json!({"site": 9, "control": {"frame": 5, "slot": "q", "inherited": true}}))), "another evaluation of the call");
+        assert!(!q.same_value(&o(json!({"site": 9, "control": {"frame": 2, "slot": "cutoff", "inherited": true}}))));
+        assert!(!written.inherited());
+        // Inherited and smooth are written only when set.
+        assert_eq!(serde_json::to_value(&written).unwrap(), json!({"site": 3, "arg": ["0"], "control": {"frame": 1, "slot": "feedback"}}));
     }
 }

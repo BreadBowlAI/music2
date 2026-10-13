@@ -9,16 +9,16 @@ use m2_song::{Project, Snapshot};
 
 use crate::{Session, TimelineLane, compile_sources};
 
-fn std_packages() -> PackageSet {
+pub(crate) fn std_packages() -> PackageSet {
     let mut p = PackageSet::default();
     p.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
     p
 }
 
-struct Fixture(PathBuf);
+pub(crate) struct Fixture(pub(crate) PathBuf);
 
 impl Fixture {
-    fn new() -> Fixture {
+    pub(crate) fn new() -> Fixture {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Fixture(std::env::temp_dir().join(format!("m2-gate-test-{}-{n}", std::process::id())))
@@ -38,17 +38,17 @@ impl Fixture {
         f
     }
 
-    fn read(&self, name: &str) -> String {
+    pub(crate) fn read(&self, name: &str) -> String {
         std::fs::read_to_string(self.0.join(name)).unwrap()
     }
 
-    fn write(&self, name: &str, text: impl AsRef<[u8]>) {
+    pub(crate) fn write(&self, name: &str, text: impl AsRef<[u8]>) {
         let p = self.0.join(name);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, text).unwrap();
     }
 
-    fn open(&self) -> Session {
+    pub(crate) fn open(&self) -> Session {
         Session::open(&self.0, std_packages()).unwrap_or_else(|d| panic!("{d:?}"))
     }
 }
@@ -259,7 +259,7 @@ fn editing_layout_json_creates_no_revision() {
 }
 
 /// Every file under `dir`, recursively.
-fn files_under(dir: &Path) -> Vec<PathBuf> {
+pub(crate) fn files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = vec![];
     for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         if e.file_type().is_ok_and(|t| t.is_dir()) { out.extend(files_under(&e.path())) } else { out.push(e.path()) }
@@ -280,7 +280,7 @@ fn render_song(s: &Session) -> Vec<[f32; 2]> {
 const PURE: [&str; 4] = ["examples/first-song", "examples/resample", "templates/starter", "templates/empty"];
 
 /// A copy of the repo's fixture `rel`, such as `examples/first-song`.
-fn fixture(rel: &str) -> Fixture {
+pub(crate) fn fixture(rel: &str) -> Fixture {
     let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(rel);
     let f = Fixture::new();
     for file in files_under(&from) {

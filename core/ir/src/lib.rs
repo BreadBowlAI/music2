@@ -10,6 +10,11 @@
 //!
 //! Modules, lanes and plugin states are addressed by keys ([`key`]); labels are display
 //! text that no address uses (ID-10, ID-11).
+//!
+//! Each module also lists its frames: every component call and `key()` frame evaluated while
+//! it was built, with the ComponentId the call is an instance of (ID-15, PKG-9). A node names
+//! the innermost frame it was made in, and a declared control's constant names its instance
+//! and slot in its origin (PKG-3).
 
 pub mod check;
 pub mod key;
@@ -23,16 +28,10 @@ use serde::{Deserialize, Serialize};
 
 pub use check::{Flat, FNode, FOp, Input, NoteField, PortRef, Voice, check};
 pub use kind::{EventType, Kind, PortKind, Unit};
-
-impl Origin {
-    /// Whether two origins name the same written value (site and argument).
-    pub fn same_value(&self, other: &Origin) -> bool {
-        self.site == other.site && self.arg == other.arg
-    }
-}
 pub use sig::{KernelSig, Kernels, PortSig};
 
-pub const IR_VERSION: u32 = 1;
+/// 2: frames (`Module.frames`, `Node.frame`) and declared controls in origins (step 5).
+pub const IR_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Ir {
@@ -66,6 +65,10 @@ pub struct Module {
     pub exports: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub src: Option<String>,
+    /// Every component call and `key()` frame evaluated while the module was built, in the
+    /// order they opened (ID-15). Nodes and origins name them by index.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub frames: Vec<Frame>,
 }
 
 impl Module {
@@ -73,6 +76,79 @@ impl Module {
     pub fn label(&self) -> &str {
         self.label.as_deref().unwrap_or(&self.key)
     }
+
+    /// The frames around `frame`, outermost first, ending with it: empty for `None` or an
+    /// index the module doesn't have.
+    pub fn chain(&self, frame: Option<u32>) -> Vec<&Frame> {
+        let mut chain = vec![];
+        let mut at = frame;
+        while let Some(f) = at.and_then(|i| self.frames.get(i as usize)) {
+            chain.push(f);
+            // A parent is always an earlier frame (the checker holds IRs to it), so this ends.
+            at = f.parent.filter(|p| Some(*p) < at);
+        }
+        chain.reverse();
+        chain
+    }
+}
+
+/// One evaluation of a component call or of a `key()` frame while its module was built (ID-15).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Frame {
+    /// The call.
+    pub site: u32,
+    /// The ComponentId: the package and the descriptor's `id` (`std:delay`), or a project
+    /// component's bare id (PKG-9). Absent for a `key()` frame and for a component declared
+    /// the old way, `component({ controls })`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component: Option<String>,
+    /// Which evaluation of `site` within its parent frame this is: 0, 1, … (ID-14).
+    #[serde(default)]
+    pub occurrence: u32,
+    /// A `key()` frame's key (ID-7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// The frame it was opened in: always an earlier index.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<u32>,
+    /// Which argument of a component call held its options (an index), when one did: an
+    /// object, or `undefined` where the options go. Only the call can tell `lowpass(x, opts)`'s
+    /// options from a cutoff; an editor writes a control the call leaves out there (PKG-3).
+    /// Where the source spells it, not what the graph is: comparing two builds ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<u32>,
+    /// What each sidechain input of the call received (PKG-13): where monitoring mute and
+    /// solo must not reach (MON-2).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sidechain: Vec<Sidechain>,
+}
+
+/// A sidechain input of a component call, and the signal it received.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Sidechain {
+    /// The input's name in the descriptor, or a dictionary entry's input's path
+    /// (`others.hats.side`).
+    pub input: String,
+    /// A port reference in the frame's module (`"n12.lp"`).
+    #[serde(rename = "ref")]
+    pub source: String,
+}
+
+/// A ControlId (ID-15): the module key, the frame chain of the instance (`site:occurrence`,
+/// and `:key` for a `key()` frame), then the slot the callee declares. It holds only within
+/// the build it came from, since sites are numbered per build (ID-12), and is never saved
+/// (ID-16).
+pub fn control_id(module: &Module, frame: u32, slot: &str) -> String {
+    let mut id = module.key.clone();
+    for f in module.chain(Some(frame)) {
+        id.push('/');
+        id.push_str(&format!("{}:{}", f.site, f.occurrence));
+        if let Some(k) = &f.key {
+            id.push(':');
+            id.push_str(k);
+        }
+    }
+    format!("{id}/@{slot}")
 }
 
 /// A lane, addressed by its module's key and its own (ID-6).
@@ -106,15 +182,16 @@ pub struct Node {
     /// Which call made this node, and for constants which argument holds the value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<Origin>,
-    /// The component calls (sites) this node was made inside, outermost first: the
-    /// `bass(...)` call for every node the bass instrument builds.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub within: Vec<u32>,
+    /// The innermost frame it was made in, an index into its module's `frames` (ID-15): the
+    /// component calls it was made inside are the component frames of [`Module::chain`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<u32>,
 }
 
 /// Where a node came from in the source: a call site (see `m2_script::sites`) and,
-/// for a constant, the path to its argument (`["1"]`, `["0", "hats", "pan"]`).
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+/// for a constant, the path to its argument (`["1"]`, `["0", "hats", "pan"]`). A declared
+/// control left out (inherited) has its instance's call as its site and no path (PKG-3).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Origin {
     pub site: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -122,6 +199,43 @@ pub struct Origin {
     /// The constant is the source number times this (`khz(2.5)` has scale 1000).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<f64>,
+    /// The declared control this constant is, when a component descriptor declared it (PKG-3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control: Option<Slot>,
+}
+
+/// A declared control of one component instance (PKG-3, ID-15).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Slot {
+    /// The instance: an index into its module's `frames`.
+    pub frame: u32,
+    /// The control's name; a dictionary slot's is `<slot>.<key>.<control>` (`channels.hats.db`).
+    pub slot: String,
+    /// Left out, so the descriptor's default ("inherited", not "written"). `Identical` and
+    /// `Values` will ignore it (WRITE-6).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub inherited: bool,
+    /// Its cell ramps over one block on every change (PKG-14, RENDER-22a).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub smooth: bool,
+}
+
+impl Origin {
+    /// Whether two origins are the same value in the code: one written literal (whatever slots
+    /// it reaches), or one inherited slot of one call (every evaluation of it).
+    pub fn same_value(&self, other: &Origin) -> bool {
+        self.site == other.site && self.arg == other.arg && (!self.arg.is_empty() || self.slot() == other.slot())
+    }
+
+    /// The declared control's name, when the constant is one.
+    pub fn slot(&self) -> Option<&str> {
+        self.control.as_ref().map(|c| c.slot.as_str())
+    }
+
+    /// Whether the constant is a declared control left out: the descriptor's default.
+    pub fn inherited(&self) -> bool {
+        self.control.as_ref().is_some_and(|c| c.inherited)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

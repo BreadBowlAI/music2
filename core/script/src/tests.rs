@@ -605,3 +605,803 @@ export default song(() => 0 as any);
     )]);
     assert_eq!(e.code, "code.build");
 }
+
+// ---------------------------------------------------------------- component descriptors
+
+/// Components declared with descriptors, as std will be.
+const LIB: &str = r#"import { component, control, port, setting, each, signature, kernel, type Audio, type Value, type Signal, type Params } from "@m2/core";
+
+export const lowpass = component(
+  {
+    id: "lowpass", label: "Lowpass",
+    signature: signature<(x: Audio, cutoff?: Value, q?: Value) => Audio>(),
+    inputs: { in: port.audio() },
+    controls: { cutoff: control.hz(1000).range(20, 20000).log().smooth(), q: control.scalar(0.707).range(0.3, 20).log().smooth() },
+    output: port.audio(),
+    positional: ["cutoff", "q"],
+    editor: { category: "Filter", description: "Darker", insert: { cutoff: 1000 } },
+  },
+  (x: Audio, { cutoff, q }: Params) => kernel("std:svf", { in: x, cutoff, q }).port("lp"),
+);
+
+export const delay = component(
+  {
+    id: "delay",
+    inputs: { in: port.audio() },
+    controls: { time: control.ms(250).range(1, 2000).log().smooth(), feedback: control.frac(0.3), mix: control.frac(0.3) },
+    output: port.audio(),
+    editor: { category: "Delay & Reverb", insert: { time: 250, mix: 0.3 } },
+  },
+  (x: Audio, { time, feedback, mix }: Params) => kernel("std:delay", { in: x, time, feedback, mix }),
+);
+
+export const follow = component(
+  { id: "follow", inputs: { in: port.audio({ sidechain: true }) }, controls: { release: control.secs(0.12) }, output: port.control("unit01") },
+  (x: Audio, { release }: Params) => kernel("std:follow", { in: x, release }),
+);
+
+export const mix = component(
+  {
+    id: "mix",
+    controls: { channels: each({ in: port.audio(), db: control.db(0).optional(), pan: control.bipolar(0).optional().smooth() }) },
+    output: port.audio(),
+    positional: ["channels"],
+  },
+  ({ channels }: Params) => {
+    const strips = Object.entries(channels).map(([, c]: [string, any]) => {
+      let x = c.in;
+      if (c.pan !== undefined) x = kernel("std:pan", { in: x, pan: c.pan });
+      if (c.db !== undefined) x = kernel("std:gain", { in: x, db: c.db });
+      return x;
+    });
+    return strips.slice(1).reduce((a, b) => kernel("std:add", { a, b }), strips[0]);
+  },
+);
+
+export const noise = component(
+  { id: "noise", settings: { seed: setting.int(1) }, positional: ["seed"], output: port.audio() },
+  ({ seed }: Params) => kernel("std:noise", { seed }),
+);
+
+export const sum = component(
+  { id: "sum", signature: signature<(...xs: Signal[]) => Signal>(), inputs: { xs: port.any().many() } },
+  (xs: Signal[]) => xs.slice(1).reduce((a, b) => kernel("std:add", { a, b }), xs[0]),
+);
+
+export const when = component(
+  { id: "when", inputs: { x: port.any() }, controls: { mask: control.frac() }, positional: ["mask", "x"] },
+  (x: Signal, { mask }: Params) => kernel("std:scale", { in: x, by: mask }),
+);
+
+export const gain = component(
+  { id: "gain", inputs: { in: port.audio() }, controls: { db: control.db(0).range(-60, 12).strict() }, output: port.audio(), positional: ["db"] },
+  (x: Audio, { db }: Params) => kernel("std:gain", { in: x, db }),
+);
+
+export const square = component(
+  { id: "square", controls: { freq: control.hz(440), width: control.frac(0.5) }, positional: ["freq", "width"], output: port.audio() },
+  ({ freq, width }: Params) => kernel("std:square", { freq, width }),
+);
+"#;
+
+/// The song `described` builds: `body` is its function's body, with every component of
+/// `lib/fx.ts` and `@m2/core`'s helpers imported, and a track `kick` to pass where a signal goes.
+fn song_src(body: &str) -> String {
+    format!(
+        r#"import {{ song, track, kernel, key, hz, ms, db, secs, frac }} from "@m2/core";
+import {{ lowpass, delay, follow, mix, noise, sum, when, gain, square }} from "./lib/fx";
+const kick = track("kick", () => kernel("std:sine"));
+export default song(() => {{
+{body}
+}});
+"#
+    )
+}
+
+fn described(body: &str) -> Result<Build, Vec<Diagnostic>> {
+    build_full(&options(&[("lib/fx.ts", LIB), ("song.ts", &song_src(body))]))
+}
+
+fn described_ok(body: &str) -> Build {
+    described(body).unwrap_or_else(|e| panic!("{e:?}"))
+}
+
+/// The message of the one error `body` fails with.
+fn described_err(body: &str) -> String {
+    let e = described(body).err().unwrap_or_else(|| panic!("{body}: expected an error"));
+    assert_eq!(e.len(), 1, "{e:?}");
+    assert_eq!(e[0].code, "code.build", "{}", e[0]);
+    e[0].message.clone()
+}
+
+/// Every node of the song module, voices included.
+fn song_nodes(b: &Build) -> Vec<&m2_ir::Node> {
+    fn walk<'a>(ns: &'a [m2_ir::Node], out: &mut Vec<&'a m2_ir::Node>) {
+        for n in ns {
+            out.push(n);
+            if let Op::Poly { body, .. } = &n.op {
+                walk(&body.nodes, out);
+            }
+        }
+    }
+    let mut out = vec![];
+    walk(&b.ir.modules.iter().find(|m| m.key == "song").expect("the song module").nodes, &mut out);
+    out
+}
+
+/// The constants of declared controls: `(frame, slot, value, unit, origin)`.
+type ControlConst = (u32, String, f64, Option<m2_ir::Unit>, m2_ir::Origin);
+
+fn controls_of(b: &Build) -> Vec<ControlConst> {
+    song_nodes(b)
+        .into_iter()
+        .filter_map(|n| match (&n.op, &n.origin) {
+            (Op::Const { value, unit }, Some(o)) => o.control.as_ref().map(|c| (c.frame, c.slot.clone(), *value, *unit, o.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The one site of `file` whose source text is `text`.
+fn site_of<'a>(b: &'a Build, file: &str, src: &str, text: &str) -> &'a sites::Site {
+    let found: Vec<&sites::Site> = b.sites.iter().filter(|s| s.file == file && &src[s.start as usize..s.end as usize] == text).collect();
+    assert_eq!(found.len(), 1, "{text}: {found:?}");
+    found[0]
+}
+
+/// The frames of the song module that are instances of `component`.
+fn frames_of<'a>(b: &'a Build, component: &str) -> Vec<(usize, &'a m2_ir::Frame)> {
+    b.ir.modules[0].frames.iter().enumerate().filter(|(_, f)| f.component.as_deref() == Some(component)).collect()
+}
+
+// PKG-3, PKG-4: every declared control that isn't optional and isn't connected is exactly one
+// constant made in its instance's frame, written or inherited; the body always gets a signal.
+#[test]
+fn a_declared_control_is_one_const_per_slot() {
+    let body = r#"const x = kernel("std:saw", { freq: 110 });
+const a = lowpass(x);
+const b = lowpass(a, 800, { q: 0.9 });
+const c = lowpass(b, hz(500));
+return lowpass(c, x);"#;
+    let b = described_ok(body);
+    let m = &b.ir.modules[0];
+    assert_eq!(frames_of(&b, "lowpass").len(), 4, "{:?}", m.frames);
+    let ctl = controls_of(&b);
+    let at = |frame: u32| -> Vec<(&str, f64, bool, Vec<&str>)> {
+        ctl.iter().filter(|c| c.0 == frame).map(|(_, s, v, _, o)| (s.as_str(), *v, o.inherited(), o.arg.iter().map(String::as_str).collect())).collect()
+    };
+    // Left out: the descriptor's defaults, inherited, at the call with no argument path.
+    assert_eq!(at(0), [("cutoff", 1000.0, true, vec![]), ("q", 0.707, true, vec![])]);
+    // Written: where the number is, positionally or in the options object.
+    assert_eq!(at(1), [("cutoff", 800.0, false, vec!["1"]), ("q", 0.9, false, vec!["2", "q"])]);
+    // A quantity's origin is its own call, as for any quantity.
+    assert_eq!(at(2), [("cutoff", 500.0, false, vec!["0"]), ("q", 0.707, true, vec![])]);
+    let hz = site_of(&b, "song.ts", &song_src(body), "hz(500)");
+    // Connected: no constant; the signal goes straight in.
+    assert_eq!(at(3), [("q", 0.707, true, vec![])]);
+    let nodes = song_nodes(&b);
+    for (frame, slot, _, unit, o) in &ctl {
+        // Made in its instance's frame, in its declared unit, smooth as declared.
+        let node = nodes.iter().find(|n| n.origin.as_ref() == Some(o)).unwrap();
+        assert_eq!(node.frame, Some(*frame), "{slot}");
+        assert_eq!(*unit, Some(if slot == "cutoff" { m2_ir::Unit::Hz } else { m2_ir::Unit::Scalar }));
+        assert!(o.control.as_ref().unwrap().smooth);
+        assert_eq!(o.site, if o.arg == ["0"] { hz.id } else { m.frames[*frame as usize].site }, "{slot}");
+    }
+    let mut seen = std::collections::HashSet::new();
+    assert!(ctl.iter().all(|c| seen.insert((c.0, c.1.clone()))), "one constant per (frame, slot)");
+    // The kernel reads them: the body got a signal for every control.
+    let svfs: Vec<&BTreeMap<String, String>> = nodes
+        .iter()
+        .filter_map(|n| match &n.op {
+            Op::Kernel { kernel, inputs } if kernel == "std:svf" => Some(inputs),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(svfs.len(), 4);
+    assert!(svfs.iter().all(|i| i.contains_key("cutoff") && i.contains_key("q")));
+}
+
+// PKG-1: positional sugar keeps song syntax (`lowpass(x, 1000)`); `undefined` is "not given";
+// one options object names any control or setting; defaults are spelled as declared (PKG-4).
+#[test]
+fn positional_sugar_options_and_settings() {
+    let b = described_ok(
+        r#"const x = kernel("std:saw", { freq: 110 });
+const a = lowpass(x, undefined, 0.8);
+const d = delay(a, { feedback: 0.5 });
+const w = when(0.5, d);
+const n = noise(7);
+return sum(w, n, noise());"#,
+    );
+    let ctl = controls_of(&b);
+    let slot = |s: &str| ctl.iter().filter(|c| c.1 == s).map(|c| (c.2, c.4.inherited(), c.4.arg.clone())).collect::<Vec<_>>();
+    assert_eq!(slot("cutoff"), [(1000.0, true, vec![])]);
+    assert_eq!(slot("q"), [(0.8, false, vec!["2".to_string()])]);
+    assert_eq!(slot("feedback"), [(0.5, false, vec!["1".to_string(), "feedback".to_string()])]);
+    assert_eq!(slot("mask"), [(0.5, false, vec!["0".to_string()])]);
+    // A default in another spelling is that spelling's constructor's value, bit for bit: ms(250).
+    let time = ctl.iter().find(|c| c.1 == "time").unwrap();
+    assert_eq!((time.2.to_bits(), time.3, time.4.inherited()), ((250.0f64 * 0.001).to_bits(), Some(m2_ir::Unit::Seconds), true));
+    // D3: a setting is a plain value, never a constant of a control: noise's seed goes into the
+    // kernel as written, or as its default.
+    let nodes = song_nodes(&b);
+    let seeds: Vec<f64> = nodes
+        .iter()
+        .filter_map(|n| match &n.op {
+            Op::Kernel { kernel, inputs } if kernel == "std:noise" => {
+                let seed = nodes.iter().find(|c| c.id == inputs["seed"]).unwrap();
+                assert!(seed.origin.is_none(), "a setting is no knob");
+                match seed.op {
+                    Op::Const { value, .. } => Some(value),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(seeds, [7.0, 1.0]);
+    assert!(!ctl.iter().any(|c| c.1 == "seed"));
+    // A `many` input takes every signal; the spread and zero-argument calls keep their sites.
+    assert_eq!(frames_of(&b, "sum").len(), 1);
+    assert_eq!(frames_of(&b, "noise").len(), 2);
+}
+
+// PKG-5, PKG-6, D2: a dictionary slot keeps the caller's keys, in order; an entry may be a bare
+// signal; an optional control left out makes no node.
+#[test]
+fn dictionary_slots_and_optional_controls() {
+    let body = r#"const x = kernel("std:saw", { freq: 110 });
+const y = kernel("std:sine");
+return mix({ kick: x, hats: { in: y, db: db(-6), pan: 0.3 }, keys: { in: y, pan: -0.25 } });"#;
+    let b = described_ok(body);
+    let ctl = controls_of(&b);
+    let slots: Vec<(&str, f64, Vec<&str>, bool)> = ctl.iter().map(|c| (c.1.as_str(), c.2, c.4.arg.iter().map(String::as_str).collect(), c.4.control.as_ref().unwrap().smooth)).collect();
+    assert_eq!(slots, [
+        ("channels.hats.db", -6.0, vec!["0"], false),
+        ("channels.hats.pan", 0.3, vec!["0", "hats", "pan"], true),
+        ("channels.keys.pan", -0.25, vec!["0", "keys", "pan"], true),
+    ]);
+    let db = site_of(&b, "song.ts", &song_src(body), "db(-6)");
+    assert_eq!(ctl[0].4.site, db.id);
+    // The body sums the strips in the caller's order: kick, hats, keys.
+    let nodes = song_nodes(&b);
+    let kinds: Vec<&str> = nodes.iter().filter_map(|n| match &n.op {
+        Op::Kernel { kernel, .. } => Some(kernel.as_str()),
+        _ => None,
+    }).collect();
+    assert_eq!(kinds, ["std:saw", "std:sine", "std:pan", "std:gain", "std:pan", "std:add", "std:add"]);
+    for (body, want) in [
+        ("return mix({ Hats: kernel(\"std:sine\") });", "the channels key \"Hats\" is not a valid key"),
+        ("return mix({ hats: { in: kernel(\"std:sine\"), gain: 1 } });", "channels.hats has no \"gain\""),
+        ("return mix({ hats: { db: 1 } });", "channels.hats: the input in is missing"),
+        ("return mix(kernel(\"std:sine\"));", "channels must be an object of entries"),
+        ("return mix();", "channels is missing"),
+    ] {
+        let e = described_err(body);
+        assert!(e.contains(want), "{body}: {e}");
+    }
+}
+
+// D1, D16: a call that doesn't fit the descriptor is a build error that says what to write.
+#[test]
+fn calls_that_dont_fit_are_errors() {
+    for (body, want) in [
+        ("return delay(kernel(\"std:sine\"), { tme: 1 });", "delay(): no option \"tme\" (options: time, feedback, mix)"),
+        ("return delay(kernel(\"std:sine\"), { in: 1 });", "\"in\" is an input, given as an argument"),
+        ("return lowpass(kernel(\"std:sine\"), 800, { cutoff: 900 });", "\"cutoff\" is given twice"),
+        ("return lowpass(kernel(\"std:sine\"), { q: 1 }, 800);", "the options object must come last"),
+        ("return lowpass(kernel(\"std:sine\"), 1, 2, 3);", "takes at most 3 arguments"),
+        ("return delay();", "the input in is missing"),
+        ("return delay({ time: 1 });", "the input in is missing"),
+        ("return when(kernel(\"std:sine\"));", "the input x is missing"),
+        ("return lowpass(kernel(\"std:sine\"), \"800\");", "cutoff: expected a number, a quantity like hz(440) or a signal, not \"800\""),
+        ("return lowpass(kernel(\"std:sine\"), Infinity);", "cutoff: Infinity is not a finite number"),
+        ("return noise(\"seven\");", "seed must be a whole number, not \"seven\""),
+        ("return noise(1.5);", "seed must be a whole number, not 1.5"),
+        ("return delay(\"x\");", "the input in must be a signal, not \"x\""),
+        // A track's handle is never a signal: the message names the export to use.
+        ("return delay(kick);", "in: `kick` is a track; use `kick.out`"),
+        ("return mix({ kick });", "channels.kick: `kick` is a track; use `kick.out`"),
+        ("return lowpass(kernel(\"std:sine\"), { q: kick });", "q: `kick` is a track"),
+        // Point-free Array.map passes the index and the array too.
+        ("return sum(...[kernel(\"std:sine\")].map(delay));", "Write xs.map((x) => delay(x))"),
+        ("return lowpass(kernel(\"std:sine\"), [1]);", "not an object"),
+        // PKG-8: a strict range is a validation constraint; a value outside it is never clamped.
+        ("return gain(kernel(\"std:sine\"), 20);", "db 20 is outside its range -60..12"),
+        ("return gain(kernel(\"std:sine\"), db(-70));", "db -70 is outside its range"),
+    ] {
+        let e = described_err(body);
+        assert!(e.contains(want), "{body}: {e}");
+    }
+    // Checking a track handle reads no export of it: no `kick.in` import is made.
+    let b = described_ok(
+        r#"let said = "";
+try { delay(kick); } catch (e) { said = String(e); }
+try { mix({ kick }); } catch (e) { said += String(e); }
+if (!said.includes("kick.out")) throw new Error(said);
+return kernel("std:sine");"#,
+    );
+    assert!(!song_nodes(&b).iter().any(|n| matches!(&n.op, Op::Import { .. })), "no import of the track was made");
+}
+
+// ID-15, PKG-9: a frame records its call's ComponentId, which is the descriptor's id, never the
+// name it is imported or called by; frames nest, `key()` frames carry their key, and a call that
+// runs twice in one parent counts its occurrences.
+#[test]
+fn frames_record_component_ids_occurrences_and_keys() {
+    let song = r#"import { song, kernel, key } from "@m2/core";
+import { lowpass as echo } from "./lib/fx";
+import * as fx from "./lib/fx";
+const twice = (x: any) => [0, 1].reduce((y: any) => fx.lowpass(y), x);
+export default song(() => key("chain", () => echo(twice(kernel("std:saw")), 900)));
+"#;
+    let b = build_full(&options(&[("lib/fx.ts", LIB), ("song.ts", song)])).unwrap_or_else(|e| panic!("{e:?}"));
+    let m = &b.ir.modules[0];
+    let shown: Vec<_> = m
+        .frames
+        .iter()
+        .map(|f| {
+            let s = b.sites.iter().find(|s| s.id == f.site).unwrap();
+            (f.component.as_deref(), f.key.as_deref(), f.occurrence, f.parent, s.callee.as_str())
+        })
+        .collect();
+    assert_eq!(shown, [
+        (None, Some("chain"), 0, None, "key"),
+        (Some("lowpass"), None, 0, Some(0), "fx.lowpass"),
+        (Some("lowpass"), None, 1, Some(0), "fx.lowpass"),
+        (Some("lowpass"), None, 0, Some(0), "echo"),
+    ]);
+    // The svf each call made is in its frame, inside the key() frame.
+    let svf_frames: Vec<Option<u32>> = m.nodes.iter().filter(|n| matches!(&n.op, Op::Kernel { kernel, .. } if kernel == "std:svf")).map(|n| n.frame).collect();
+    assert_eq!(svf_frames, [Some(1), Some(2), Some(3)]);
+    assert_eq!(m.chain(Some(3)).iter().map(|f| f.site).collect::<Vec<_>>(), [m.frames[0].site, m.frames[3].site]);
+    assert_eq!(m2_ir::control_id(m, 3, "cutoff"), format!("song/{}:0:chain/{}:0/@cutoff", m.frames[0].site, m.frames[3].site));
+    // The component calls a node was made inside are the component frames of its chain.
+    let svf = m.nodes.iter().find(|n| n.frame == Some(3) && matches!(n.op, Op::Kernel { .. })).unwrap();
+    let calls: Vec<u32> = m.chain(svf.frame).iter().filter(|f| f.component.is_some()).map(|f| f.site).collect();
+    assert_eq!(calls, [m.frames[3].site]);
+}
+
+// ID-15, D17: a call site belongs only to the call it was set for. A component handed to native
+// code (Array.map, Array.from) takes no site, so it makes no frame and no knob; the calls an
+// arrow makes take theirs.
+#[test]
+fn a_native_caller_takes_no_site() {
+    let body = r#"const x = kernel("std:saw", { freq: 110 });
+const ys = [x].map((y) => lowpass(y));
+const z = Array.from({ length: 1 }, square);
+const f = [110].map(hz);
+return sum(kernel("std:sine", { freq: f[0] }), ...ys, ...z);"#;
+    let b = described_ok(body);
+    let src = song_src(body);
+    let lp = frames_of(&b, "lowpass");
+    assert_eq!(lp.len(), 1);
+    assert_eq!(lp[0].1.site, site_of(&b, "song.ts", &src, "lowpass(y)").id, "the arrow's call, not map's");
+    assert!(frames_of(&b, "square").is_empty(), "Array.from's call is not square's");
+    // A call ending in a spread, and one with no arguments, keep their sites.
+    let sum = site_of(&b, "song.ts", &src, "sum(kernel(\"std:sine\", { freq: f[0] }), ...ys, ...z)");
+    assert_eq!(frames_of(&b, "sum").iter().map(|(_, f)| f.site).collect::<Vec<_>>(), [sum.id]);
+    let map = site_of(&b, "song.ts", &src, "[x].map((y) => lowpass(y))");
+    assert!(b.ir.modules[0].frames.iter().all(|f| f.site != map.id));
+    // Its controls are constants with no origin, as any number a native call passes.
+    let nodes = song_nodes(&b);
+    let consts = |v: f64| nodes.iter().filter(|n| matches!(n.op, Op::Const { value, .. } if value == v)).map(|n| n.origin.is_some()).collect::<Vec<_>>();
+    assert_eq!(consts(440.0), [false], "square's freq, inherited, with no instance to name");
+    assert_eq!(consts(110.0).iter().filter(|o| **o).count(), 0, "hz(110) made by map has no site");
+    // The old form takes no site from native code either (std no longer uses it, so a project declares one).
+    let lib = r#"import { component, kernel, type Value } from "@m2/core";
+export const sine = component({ controls: ["0"] }, (f: Value) => kernel("std:sine", { freq: f }));
+"#;
+    let legacy = r#"import { song } from "@m2/core";
+import { sine } from "./lib/sine";
+export default song(() => [440].map(sine)[0]);
+"#;
+    let b = build_full(&options(&[("lib/sine.ts", lib), ("song.ts", legacy)])).unwrap_or_else(|e| panic!("{e:?}"));
+    assert!(b.ir.modules[0].frames.is_empty(), "{:?}", b.ir.modules[0].frames);
+    assert!(b.ir.modules[0].nodes.iter().all(|n| n.frame.is_none() && n.origin.as_ref().is_none_or(|o| o.arg.is_empty())));
+}
+
+// PKG-13: what a sidechain input received is recorded on its frame, whatever was called first.
+#[test]
+fn sidechain_inputs_are_recorded() {
+    let b = described_ok(
+        r#"const k = kernel("std:saw", { freq: 50 });
+const key = lowpass(k, 200);
+const env = follow(key);
+return when(env, kernel("std:sine"));"#,
+    );
+    let m = &b.ir.modules[0];
+    let lp_out = b.outputs.iter().find(|o| o.site == frames_of(&b, "lowpass")[0].1.site).unwrap();
+    let (_, f) = frames_of(&b, "follow")[0];
+    assert_eq!(f.sidechain, [m2_ir::Sidechain { input: "in".into(), source: lp_out.port.clone() }]);
+    assert!(m.frames.iter().filter(|f| f.component.as_deref() != Some("follow")).all(|f| f.sidechain.is_empty()));
+}
+
+// PKG-13, PKG-6: a dictionary entry's sidechain input is recorded too, named by its path as the
+// entry's controls are, whether the entry is an object or a bare signal.
+#[test]
+fn an_entry_sidechain_input_is_recorded() {
+    let song = r#"import { component, control, each, kernel, port, song, type Audio, type Params } from "@m2/core";
+const duckBy = component(
+  {
+    id: "duck-by",
+    inputs: { in: port.audio(), key: port.audio({ sidechain: true }) },
+    controls: { others: each({ side: port.audio({ sidechain: true }), depth: control.db(-8) }) },
+    output: port.audio(),
+  },
+  (x: Audio, key: Audio, { others }: Params) =>
+    Object.values(others).reduce(
+      (y: any, o: any) => kernel("std:duck", { in: y, side: o.side, depth: o.depth }),
+      kernel("std:duck", { in: x, side: key }),
+    ),
+);
+export default song(() => {
+  const k = kernel("std:sine", { freq: 50 });
+  const h = kernel("std:square", { freq: 3000 });
+  const s = kernel("std:tri", { freq: 2000 });
+  return duckBy(kernel("std:saw", { freq: 110 }), k, { others: { hats: { side: h }, snare: s } });
+});
+"#;
+    let b = build_full(&options(&[("song.ts", song)])).unwrap_or_else(|e| panic!("{e:?}"));
+    let m = &b.ir.modules[0];
+    let made = |k: &str| m.nodes.iter().find(|n| matches!(&n.op, Op::Kernel { kernel, .. } if kernel == k)).unwrap().id.clone();
+    let (_, f) = frames_of(&b, "duck-by")[0];
+    let got: Vec<(&str, &str)> = f.sidechain.iter().map(|s| (s.input.as_str(), s.source.as_str())).collect();
+    let (k, h, s) = (made("std:sine"), made("std:square"), made("std:tri"));
+    assert_eq!(got, [("key", k.as_str()), ("others.hats.side", h.as_str()), ("others.snare.side", s.as_str())]);
+}
+
+// PKG-1, design 1.2 and 1.3: the call type's options are `options?`, so a helper may forward
+// options it wasn't given. `undefined` where the options go is no options, after the last
+// positional argument or in its place; anywhere else it is still too many arguments. The frame
+// records which argument held the options (PKG-3: only the call can tell options from a value).
+#[test]
+fn options_left_out_may_be_forwarded() {
+    let body = r#"const x = kernel("std:saw", { freq: 110 });
+const space = (y: any, echo?: { time?: number; mix?: number }) => delay(y, echo);
+const tone = (y: any, o?: { q?: number }) => lowpass(y, 800, 0.7, o);
+const a = space(x);
+const b = tone(a);
+const c = lowpass(b, space(b, { mix: 0.5 }));
+const d = lowpass(c, undefined);
+const e = mix({ d: lowpass(d, { q: 2 }) }, undefined);
+return lowpass(e, 900);"#;
+    let b = described_ok(body);
+    let src = song_src(body);
+    let options = |call: &str| {
+        let site = site_of(&b, "song.ts", &src, call).id;
+        b.ir.modules[0].frames.iter().filter(|f| f.site == site).map(|f| f.options).collect::<Vec<_>>()
+    };
+    assert_eq!(options("delay(y, echo)"), [Some(1), Some(1)], "an options argument, given or not");
+    assert_eq!(options("lowpass(y, 800, 0.7, o)"), [Some(3)]);
+    assert_eq!(options("lowpass(b, space(b, { mix: 0.5 }))"), [None], "a signal at the cutoff's place");
+    assert_eq!(options("lowpass(c, undefined)"), [None], "`undefined` at the cutoff's place is no cutoff");
+    assert_eq!(options("lowpass(d, { q: 2 })"), [Some(1)]);
+    assert_eq!(options("mix({ d: lowpass(d, { q: 2 }) }, undefined)"), [Some(1)]);
+    assert_eq!(options("lowpass(e, 900)"), [None]);
+    let mix = controls_of(&b).into_iter().filter(|c| c.1 == "mix").map(|c| (c.2, c.4.inherited())).collect::<Vec<_>>();
+    assert_eq!(mix, [(0.3, true), (0.5, false)]);
+    for (body, want) in [
+        ("return delay(kernel(\"std:sine\"), undefined, undefined);", "delay(): takes at most 1 argument"),
+        ("return lowpass(kernel(\"std:sine\"), 1, 2, undefined, {});", "lowpass(): takes at most 3 arguments"),
+        // Nothing to take options, so nothing to leave out.
+        ("return sum(kernel(\"std:sine\"), undefined);", "the input xs must be a signal, not undefined"),
+    ] {
+        let e = described_err(body);
+        assert!(e.contains(want), "{body}: {e}");
+    }
+}
+
+// PKG-8: a strict range holds for the unit it is declared in. A value in a unit the control
+// accepts is held to that unit's range, never compared with the control's own.
+#[test]
+fn a_strict_range_holds_for_the_values_unit() {
+    let song = |call: &str| {
+        format!(
+            r#"import {{ component, control, hz, kernel, khz, port, semis, song, type Params }} from "@m2/core";
+const tone = component(
+  {{
+    id: "tone",
+    controls: {{ freq: control.hz(440).range(20, 20000).strict().accepts("semitones", 0, 127) }},
+    output: port.audio(),
+    positional: ["freq"],
+  }},
+  ({{ freq }}: Params) => kernel("std:sine", {{ freq: freq.unit === "semitones" ? kernel("std:mtof", {{ pitch: freq }}) : freq }}),
+);
+export default song(() => {call});
+"#
+        )
+    };
+    for call in ["tone(semis(10))", "tone(semis(127))", "tone(hz(20))", "tone(440)", "tone()"] {
+        build_full(&options(&[("song.ts", &song(call))])).unwrap_or_else(|e| panic!("{call}: {e:?}"));
+    }
+    for (call, want) in [
+        ("tone(semis(200))", "tone(): freq 200 semitones is outside its range 0..127 semitones"),
+        ("tone(10)", "tone(): freq 10 is outside its range 20..20000"),
+        ("tone(khz(30))", "tone(): freq 30000 is outside its range 20..20000"),
+    ] {
+        let e = build_full(&options(&[("song.ts", &song(call))])).err().unwrap_or_else(|| panic!("{call}: expected an error"));
+        assert!(e[0].message.contains(want), "{call}: {}", e[0].message);
+    }
+}
+
+// PKG-10, PKG-11: the build emits the unit table generated from `@m2/core`, with exactly one
+// canonical spelling per unit, and the descriptor of every component its modules declare,
+// numbers in base units with their spelling.
+#[test]
+fn descriptors_and_the_unit_table_are_emitted() {
+    let b = described_ok("return delay(kernel(\"std:saw\"));");
+    let units: Vec<(&str, &str, f64, bool)> = b.units.iter().map(|u| (u.name.as_str(), u.unit.name(), u.scale, u.canonical)).collect();
+    assert_eq!(units, [
+        ("hz", "hz", 1.0, true),
+        ("khz", "hz", 1000.0, false),
+        ("db", "db", 1.0, true),
+        ("linear", "gain", 1.0, true),
+        ("semis", "semitones", 1.0, true),
+        ("secs", "seconds", 1.0, true),
+        ("ms", "seconds", 0.001, false),
+        ("beats", "beats", 1.0, true),
+        ("frac", "unit01", 1.0, true),
+        ("bipolar", "bipolar", 1.0, true),
+        ("scalar", "scalar", 1.0, true),
+    ]);
+    for u in m2_ir::Unit::ALL {
+        let canonical: Vec<&UnitCtor> = b.units.iter().filter(|c| c.unit == u && c.canonical).collect();
+        assert_eq!(canonical.len(), 1, "{u:?}");
+        assert_eq!(canonical[0].scale, 1.0, "a canonical spelling writes base units");
+    }
+    // Every spelling is an `@m2/core` export of that name: the table is the constructors' own.
+    for u in &b.units {
+        assert!(SDK.contains(&format!("export const {} = unitFn(\"{}\");", u.name, u.name)), "{}", u.name);
+    }
+
+    let ids: Vec<&str> = b.components.iter().map(|d| d.id.as_str()).collect();
+    assert_eq!(ids, ["lowpass", "delay", "follow", "mix", "noise", "sum", "when", "gain", "square"]);
+    let d = |id: &str| b.components.iter().find(|d| d.id == id).unwrap();
+    let delay = d("delay");
+    assert_eq!((delay.module.as_str(), delay.file.as_str(), delay.label.as_str()), ("lib/fx.ts", "lib/fx.ts", "delay"));
+    assert_eq!(delay.at, format!("lib/fx.ts:{}:22", LIB.lines().position(|l| l.starts_with("export const delay")).unwrap() + 1));
+    let time = delay.control("time").unwrap();
+    assert_eq!(time.unit, Some(m2_ir::Unit::Seconds));
+    let spelled = component::Spelled { value: 250.0 * 0.001, spelled: Some("ms".into()), written: 250.0 };
+    assert_eq!(time.default.as_ref(), Some(&spelled));
+    assert_eq!((time.range, time.log, time.smooth, time.strict), (Some((0.001, 2.0)), true, true, false));
+    assert_eq!(delay.editor.category.as_deref(), Some("Delay & Reverb"));
+    let insert: Vec<(&str, &component::Spelled)> = delay.editor.insert.iter().map(|i| (i.slot.as_str(), &i.value)).collect();
+    let mix = component::Spelled { value: 0.3, spelled: Some("frac".into()), written: 0.3 };
+    assert_eq!(insert, [("time", &spelled), ("mix", &mix)]);
+    assert!(delay.is_effect() && !d("mix").is_effect());
+
+    let lowpass = d("lowpass");
+    assert_eq!(lowpass.positional, ["cutoff", "q"]);
+    assert_eq!(lowpass.inputs[0].kind, component::PortKind::Audio);
+    // A value in the declared unit shows the declared range; in another unit, none of it (D4).
+    assert_eq!(lowpass.range_for("cutoff", Some(m2_ir::Unit::Hz)), Some(((20.0, 20000.0), true)));
+    assert_eq!(lowpass.range_for("cutoff", Some(m2_ir::Unit::Semitones)), None);
+    assert!(d("follow").inputs[0].sidechain);
+    assert!(d("sum").inputs[0].many);
+    assert_eq!(d("when").controls[0].default, None, "a required control has no default");
+    assert_eq!(d("noise").settings[0].default, Some(serde_json::json!(1)));
+    // A dictionary slot's controls are found by `<slot>.<key>.<control>`.
+    let pan = d("mix").control("channels.hats.pan").unwrap();
+    assert!(pan.optional && pan.smooth && pan.unit == Some(m2_ir::Unit::Bipolar));
+    assert_eq!(d("mix").range_for("channels.hats.db", Some(m2_ir::Unit::Db)), None, "declared without a range");
+}
+
+// PKG-9, PKG-8, D16: a descriptor is checked where it is declared, and an error there is a build
+// error at its `component()` call.
+#[test]
+fn descriptors_are_checked_where_declared() {
+    let declare = |decl: &str| -> Diagnostic {
+        let lib = format!(
+            "import {{ component, control, port, setting, each, kernel }} from \"@m2/core\";\nexport const c = component({decl}, (x: any) => x);\n"
+        );
+        // The import is used, or TypeScript would drop it.
+        let song = "import { song, kernel } from \"@m2/core\";\nimport { c } from \"./lib/c\";\nexport default song(() => (c, kernel(\"std:sine\")));\n";
+        let mut e = build(&options(&[("lib/c.ts", &lib), ("song.ts", song)])).expect_err(decl);
+        assert_eq!(e.len(), 1, "{e:?}");
+        e.remove(0)
+    };
+    let a = "inputs: { in: port.audio() }, output: port.audio()";
+    for (decl, want) in [
+        (format!("{{ id: \"Low Pass\", {a} }}"), "the component id \"Low Pass\" is not a valid key"),
+        (format!("{{ id: \"lp\", ctrls: {{}}, {a} }}"), "no field \"ctrls\""),
+        (format!("{{ id: \"lp\", {a}, controls: {{ cutoff: control.hz(1000).range(0, 100).log() }} }}"), ".log() needs a range above 0"),
+        (format!("{{ id: \"lp\", {a}, controls: {{ cutoff: control.hz(1000).log() }} }}"), ".log() needs a range"),
+        (format!("{{ id: \"lp\", {a}, controls: {{ cutoff: control.hz(1000).range(20, 500).strict() }} }}"), "outside its strict range"),
+        (format!("{{ id: \"lp\", {a}, controls: {{ cutoff: control.hz(NaN) }} }}"), "must be a finite number"),
+        (format!("{{ id: \"lp\", {a}, controls: {{ cutoff: control.hz(1).accepts(\"hz\", 0, 1) }} }}"), "accepts its own unit"),
+        (format!("{{ id: \"lp\", {a}, controls: {{ cutoff: 1000 }} }}"), "must be declared with control."),
+        (format!("{{ id: \"lp\", {a}, controls: {{ in: control.hz(1) }} }}"), "\"in\" is declared twice"),
+        (format!("{{ id: \"lp\", {a}, positional: [\"cutoff\"] }}"), "positional names \"cutoff\", which isn't"),
+        ("{ id: \"lp\", inputs: { a: port.audio(), b: port.audio() }, positional: [\"b\"] }".into(), "positional names some inputs but not \"a\""),
+        (format!("{{ id: \"lp\", {a}, controls: {{ cutoff: control.hz(1), q: control.scalar() }}, positional: [\"cutoff\", \"q\"] }}"), "comes before one that may not"),
+        ("{ id: \"lp\", inputs: { xs: port.any().many(), y: port.any() } }".into(), "\"xs\" takes many signals, so it must come last"),
+        (format!("{{ id: \"lp\", {a}, settings: {{ voices: setting.int(1.5) }} }}"), "must be a whole number"),
+        (format!("{{ id: \"lp\", {a}, editor: {{ category: \"Filter\", insert: {{ cutoff: 1 }} }} }}"), "editor.insert names \"cutoff\", which isn't a control"),
+        ("{ id: \"lp\", inputs: { notes: port.notes() }, output: port.audio(), editor: { category: \"Filter\" } }".into(), "takes audio as its first argument"),
+        (format!("{{ id: \"lp\", {a}, controls: {{ c: control.hz() }}, editor: {{ category: \"Filter\" }} }}"), "leaves out \"c\""),
+    ] {
+        let e = declare(&decl);
+        assert_eq!(e.code, "code.build", "{decl}: {e}");
+        assert!(e.message.contains(want), "{decl}: {e}");
+        assert!(e.src.as_deref().unwrap_or("").starts_with("lib/c.ts:2:"), "{decl}: {:?}", e.src);
+    }
+}
+
+// PKG-9, D15: one definition site with one descriptor is one component, however often it runs
+// (a factory); the same id from two sites, or one site declaring two descriptors, is an error.
+#[test]
+fn a_factory_component_registers_once() {
+    let lib = r#"import { component, control, port, kernel, type Params } from "@m2/core";
+export function makeGain(n: number) {
+  return component({ id: "gain", inputs: { in: port.audio() }, controls: { db: control.db(n) }, output: port.audio() },
+    (x: any, { db }: Params) => kernel("std:gain", { in: x, db }));
+}
+"#;
+    let build_with = |song_body: &str| {
+        let song = format!("import {{ song, kernel }} from \"@m2/core\";\nimport {{ makeGain }} from \"./lib/g\";\n{song_body}\n");
+        build_full(&options(&[("lib/g.ts", lib), ("song.ts", &song)]))
+    };
+    let b = build_with("const a = makeGain(0);\nconst b = makeGain(0);\nexport default song(() => b(a(kernel(\"std:sine\"))));").unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(b.components.len(), 1);
+    assert_eq!(b.ir.modules[0].frames.iter().filter(|f| f.component.as_deref() == Some("gain")).count(), 2);
+    let e = build_with("const a = makeGain(0);\nconst b = makeGain(-6);\nexport default song(() => b(a(kernel(\"std:sine\"))));").err().expect("two descriptors from one site");
+    assert!(e[0].message.contains("declared again here with another descriptor"), "{}", e[0]);
+    let two = r#"import { component, port } from "@m2/core";
+export const a = component({ id: "dup", inputs: { in: port.audio() } }, (x: any) => x);
+export const b = component({ id: "dup", inputs: { in: port.audio() } }, (x: any) => x);
+"#;
+    let song = "import { song, kernel } from \"@m2/core\";\nimport { a } from \"./lib/two\";\nexport default song(() => a(kernel(\"std:sine\")));\n";
+    let e = build(&options(&[("lib/two.ts", two), ("song.ts", song)])).unwrap_err();
+    assert!(e[0].message.contains("another component has the id \"dup\"") && e[0].message.contains("lib/two.ts:2:"), "{}", e[0]);
+}
+
+// PKG-1: the old form keeps working: its numbers are knobs at their paths, and its call is a
+// frame with no ComponentId, opened after its constants, which stay the caller's.
+#[test]
+fn the_old_component_form_still_works() {
+    let lib = r#"import { component, kernel, type Value } from "@m2/core";
+export const lp = component({ controls: ["1"] }, (x: any, cutoff: Value) => kernel("std:svf", { in: x, cutoff }));
+"#;
+    let song = "import { song, kernel } from \"@m2/core\";\nimport { lp } from \"./lib/lp\";\nexport default song(() => lp(kernel(\"std:sine\"), 800));\n";
+    let b = build_full(&options(&[("lib/lp.ts", lib), ("song.ts", song)])).unwrap_or_else(|e| panic!("{e:?}"));
+    let m = &b.ir.modules[0];
+    assert_eq!(m.frames.len(), 1);
+    assert_eq!((m.frames[0].component.as_ref(), m.frames[0].key.as_ref()), (None, None));
+    let c = m.nodes.iter().find(|n| matches!(n.op, Op::Const { value, .. } if value == 800.0)).unwrap();
+    assert_eq!(c.frame, None);
+    assert_eq!(c.origin.as_ref().map(|o| (o.arg.clone(), o.control.is_none())), Some((vec!["1".to_string()], true)));
+    let svf = m.nodes.iter().find(|n| matches!(n.op, Op::Kernel { .. }) && n.frame == Some(0)).unwrap();
+    assert_eq!(m.chain(svf.frame).iter().map(|f| f.site).collect::<Vec<_>>(), [m.frames[0].site]);
+    assert!(b.components.is_empty(), "the old form declares no descriptor");
+}
+
+/// A package folder for one test, `<temp>/<name>/src/<file>` for each file; removed when dropped.
+struct TempPackage(PathBuf);
+
+impl TempPackage {
+    fn new(name: &str, files: &[(&str, &str)]) -> TempPackage {
+        let dir = std::env::temp_dir().join(format!("m2-script-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (f, text) in files {
+            let path = dir.join("src").join(f);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        TempPackage(dir)
+    }
+}
+
+impl Drop for TempPackage {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Build `song` with the package `pkg` installed and listed.
+fn with_package(pkg: &TempPackage, song: &str) -> Result<Build, Vec<Diagnostic>> {
+    let mut o = Options::new(code(&[("song.ts", song)]), "song.ts");
+    o.packages.push(("pkg".into(), pkg.0.clone()));
+    o.dependencies.push("pkg".into());
+    o.time_limit = Duration::from_secs(2);
+    build_full(&o)
+}
+
+const FX: &str = r#"import { component, control, port, kernel, type Audio, type Params } from "@m2/core";
+export const lowpass = component(
+  { id: "lowpass", inputs: { in: port.audio() }, controls: { cutoff: control.hz(1000) }, output: port.audio(), positional: ["cutoff"],
+    editor: { category: "Filter", insert: { cutoff: 1000 } } },
+  (x: Audio, { cutoff }: Params) => kernel("std:svf", { in: x, cutoff }).port("lp"),
+);
+export const osc = {
+  saw: component({ id: "saw", controls: { freq: control.hz(440) }, positional: ["freq"], output: port.audio() }, ({ freq }: Params) => kernel("std:saw", { freq })),
+  sine: component({ id: "sine", controls: { freq: control.hz(440) }, positional: ["freq"], output: port.audio() }, ({ freq }: Params) => kernel("std:sine", { freq })),
+};
+"#;
+
+// PKG-2, PKG-9, WRITE-20: describing the packages lists every component once, by ComponentId,
+// with where each is exported (its defining module first). A module that throws, or one id at
+// two places, is `pkg.invalid` naming the files; those components are left out, and the rest is
+// listed. Describing never fails.
+#[test]
+fn describe_lists_components_and_problems() {
+    let delay = |id: &str| {
+        format!(
+            "import {{ component, port }} from \"@m2/core\";\nexport const d = component({{ id: \"{id}\", inputs: {{ in: port.audio() }}, output: port.audio() }}, (x: any) => x);\n"
+        )
+    };
+    let (a, b) = (delay("delay"), delay("delay"));
+    let pkg = TempPackage::new("describe", &[
+        ("fx.ts", FX),
+        ("uses.ts", "export { lowpass as lp } from \"./fx\";\nexport * from \"./fx\";\n"),
+        ("a.ts", &a),
+        ("b.ts", &b),
+        ("broken.ts", "throw new Error(\"boom\");\n"),
+        ("broken-user.ts", "import \"./broken\";\nexport const x = 1;\n"),
+    ]);
+    let catalog = describe(&[("pkg".into(), pkg.0.clone())]);
+    assert_eq!(catalog.components.keys().collect::<Vec<_>>(), ["pkg:lowpass", "pkg:saw", "pkg:sine"]);
+    let lp = &catalog.components["pkg:lowpass"];
+    assert_eq!((lp.module.as_str(), lp.file.as_str(), lp.is_effect()), ("pkg/fx", "pkg/src/fx.ts", true));
+    let exports = |id: &str| catalog.exports[id].iter().map(|e| format!("{}.{}", e.module, e.name)).collect::<Vec<_>>();
+    assert_eq!(exports("pkg:lowpass"), ["pkg/fx.lowpass", "pkg/uses.lowpass", "pkg/uses.lp"]);
+    assert_eq!(exports("pkg:saw"), ["pkg/fx.osc.saw", "pkg/uses.osc.saw"]);
+    assert_eq!(catalog.effects().map(|d| d.id.as_str()).collect::<Vec<_>>(), ["pkg:lowpass"]);
+    let problems: Vec<(&str, &str, Option<&str>)> = catalog.problems.iter().map(|d| (d.code, d.message.as_str(), d.src.as_deref())).collect();
+    assert_eq!(problems.len(), 3, "{problems:?}");
+    assert!(problems.iter().all(|p| p.0 == "pkg.invalid"));
+    let says = |want: &[&str]| problems.iter().any(|(_, m, _)| want.iter().all(|w| m.contains(w)));
+    assert!(says(&["`pkg/broken`", "boom"]), "{problems:?}");
+    assert!(says(&["`pkg/broken-user`"]), "a module that imports a broken one is broken too: {problems:?}");
+    assert!(says(&["two components have the id `pkg:delay`", "pkg/src/a.ts:2:", "pkg/src/b.ts:2:"]), "{problems:?}");
+    // A song that doesn't import the broken modules builds, and its frames name ComponentIds.
+    let song = "import { song } from \"@m2/core\";\nimport { lp, osc } from \"pkg/uses\";\nexport default song(() => lp(osc.saw(110)));\n";
+    let b = with_package(&pkg, song).unwrap_or_else(|e| panic!("{e:?}"));
+    let ids: Vec<&str> = b.ir.modules[0].frames.iter().filter_map(|f| f.component.as_deref()).collect();
+    assert_eq!(ids, ["pkg:saw", "pkg:lowpass"]);
+    // A changed file is described again; an unchanged one comes from the cache.
+    std::fs::write(pkg.0.join("src/broken.ts"), "export const fine = 1;\n").unwrap();
+    let again = describe(&[("pkg".into(), pkg.0.clone())]);
+    assert_eq!(again.problems.len(), 1, "{:?}", again.problems);
+    assert_eq!(again.components.keys().collect::<Vec<_>>(), ["pkg:lowpass", "pkg:saw", "pkg:sine"]);
+}
+
+// PKG-9: a ComponentId names the package and the descriptor's id, never the module file, so
+// moving a component to another file, or importing it under another name, changes nothing.
+#[test]
+fn moving_a_component_keeps_its_id() {
+    let song = "import { song } from \"@m2/core\";\nimport { lowpass as echo, osc } from \"pkg/fx\";\nexport default song(() => echo(osc.saw(110), 800));\n";
+    let here = TempPackage::new("here", &[("fx.ts", FX)]);
+    // The same lowpass, defined in lowpass.ts and exported from fx.ts.
+    let (import, rest) = FX.split_once('\n').unwrap();
+    let (lowpass, osc) = rest.split_at(rest.find("export const osc").unwrap());
+    let lowpass_ts = format!("{import}\n{lowpass}");
+    let moved_fx = format!("{import}\nexport {{ lowpass }} from \"./lowpass\";\n{osc}");
+    let moved = TempPackage::new("moved", &[("fx.ts", &moved_fx), ("lowpass.ts", &lowpass_ts)]);
+    let frames = |p: &TempPackage| {
+        let b = with_package(p, song).unwrap_or_else(|e| panic!("{e:?}"));
+        b.ir.modules[0].frames.iter().map(|f| f.component.clone()).collect::<Vec<_>>()
+    };
+    assert_eq!(frames(&here), frames(&moved));
+    assert_eq!(frames(&here), [Some("pkg:saw".to_string()), Some("pkg:lowpass".to_string())]);
+    let (a, b) = (describe(&[("pkg".into(), here.0.clone())]), describe(&[("pkg".into(), moved.0.clone())]));
+    assert_eq!(a.components.keys().collect::<Vec<_>>(), b.components.keys().collect::<Vec<_>>());
+    assert_eq!(b.components["pkg:lowpass"].module, "pkg/lowpass");
+    assert_eq!(b.exports["pkg:lowpass"].iter().map(|e| e.module.as_str()).collect::<Vec<_>>(), ["pkg/lowpass", "pkg/fx"]);
+}
+
+// PKG-9: a component's package and module come from the file that declares it, as the host
+// names them: a package file is `<package>/<module>` (an `index.ts` is its folder's), a
+// project file is its path and belongs to no package.
+#[test]
+fn the_host_names_a_files_package_and_module() {
+    let dir = std_dir().canonicalize().unwrap();
+    let st = State { packages: vec![("std".into(), dir.clone())], ..Default::default() };
+    let home = |f: &Path| st.home(&f.to_string_lossy());
+    assert_eq!(home(&dir.join("src/fx.ts")), serde_json::json!({"package": "std", "module": "std/fx", "file": "std/src/fx.ts"}));
+    assert_eq!(home(&dir.join("src/index.ts"))["module"], "std");
+    assert_eq!(home(&dir.join("src/gen/index.ts"))["module"], "std/gen");
+    assert_eq!(st.home("./lib/fx.ts"), serde_json::json!({"package": null, "module": "lib/fx.ts", "file": "lib/fx.ts"}));
+}

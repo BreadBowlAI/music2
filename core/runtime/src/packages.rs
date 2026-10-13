@@ -17,35 +17,10 @@ struct Manifest {
     package: Info,
     #[serde(default)]
     kernel: Vec<KernelDecl>,
+    /// Kept only to refuse it: effects are declared in TypeScript now (PKG-2), and without the
+    /// field an old manifest's `[[effect]]` would be skipped silently.
     #[serde(default)]
-    effect: Vec<Effect>,
-}
-
-/// An effect a package offers to put after any audio: a function exported by one of its
-/// modules that takes the audio as its first argument and returns audio.
-#[derive(Clone, Debug, Deserialize, serde::Serialize, PartialEq)]
-pub struct Effect {
-    /// The module to import it from, e.g. `std/fx`.
-    pub module: String,
-    /// The exported function, e.g. `delay`.
-    pub name: String,
-    #[serde(default)]
-    pub description: String,
-    /// Where the editor lists it: one of [`EFFECT_CATEGORIES`].
-    #[serde(default = "other")]
-    pub category: String,
-    /// TypeScript written after the input when the effect is added: `"1000"` gives
-    /// `lowpass(x, 1000)`. Each number in it should be a declared control of the effect,
-    /// so it shows up as a knob.
-    #[serde(default)]
-    pub args: Option<String>,
-}
-
-/// The categories effects are listed under, in the editor's order.
-pub const EFFECT_CATEGORIES: [&str; 8] = ["Filter", "EQ", "Dynamics", "Distortion", "Delay & Reverb", "Modulation", "Utility", "Other"];
-
-fn other() -> String {
-    "Other".into()
+    effect: Vec<toml::Value>,
 }
 
 #[derive(Deserialize)]
@@ -75,7 +50,6 @@ pub struct Package {
     pub version: String,
     pub description: String,
     pub dir: PathBuf,
-    pub effects: Vec<Effect>,
     /// The files the runtime read to load it (`std/m2pkg.toml`, `std/kernels/std.wasm`), by the
     /// SHA-256 of their bytes: with the TypeScript the build read, what a render's provenance
     /// names as the package contents that ran (RENDER-2).
@@ -150,6 +124,12 @@ impl PackageSet {
         if self.packages.contains_key(&name) {
             bail!("package `{name}` is loaded twice");
         }
+        if !m.effect.is_empty() {
+            bail!(
+                "package `{name}`: `[[effect]]` is gone from m2pkg.toml (PKG-2). Effects are declared in TypeScript, \
+                 `component({{ …, editor: {{ category: \"Filter\", insert: {{ … }} }} }}, …)`"
+            );
+        }
         let mut files = BTreeMap::from([(format!("{name}/m2pkg.toml"), m2_song::Sha::of(text.as_bytes()).hex())]);
         let module = match &m.package.wasm {
             Some(w) => {
@@ -168,20 +148,11 @@ impl PackageSet {
             let sig = KernelSig::parse(&id, &k.description, &k.inputs, &k.outputs, k.latency).map_err(anyhow::Error::msg)?;
             self.kernels.insert(id, (sig, name.clone()));
         }
-        for e in &m.effect {
-            if !e.module.strip_prefix(&name).is_some_and(|sub| sub.starts_with('/')) {
-                bail!("package `{name}`: effect `{}` must come from one of its own modules, not `{}`", e.name, e.module);
-            }
-            if !EFFECT_CATEGORIES.contains(&e.category.as_str()) {
-                bail!("package `{name}`: effect `{}` has category `{}`; use one of {}", e.name, e.category, EFFECT_CATEGORIES.join(", "));
-            }
-        }
         let pkg = Package {
             name: name.clone(),
             version: m.package.version,
             description: m.package.description,
             dir: dir.to_path_buf(),
-            effects: m.effect,
             files,
             module,
         };
@@ -194,11 +165,6 @@ impl PackageSet {
 
     pub fn packages(&self) -> impl Iterator<Item = &Package> {
         self.packages.values()
-    }
-
-    /// Every effect the loaded packages offer.
-    pub fn effects(&self) -> impl Iterator<Item = &Effect> {
-        self.packages.values().flat_map(|p| &p.effects)
     }
 
     pub fn kernel_sigs(&self) -> impl Iterator<Item = &KernelSig> {
@@ -656,15 +622,11 @@ mod tests {
         assert_eq!(codes, ["plugin.missing", "plugin.param-unaddressed"]);
     }
 
+    // PKG-2: `m2pkg.toml` describes no TypeScript. A manifest that still has `[[effect]]` fails
+    // to load, saying where effects are declared now, rather than losing them silently.
     #[test]
-    fn effects_have_a_known_category_and_optional_args() {
-        let set = manifest("name = \"wobble\"\n").unwrap();
-        let e = set.effects().next().unwrap();
-        assert_eq!((e.category.as_str(), e.args.as_deref()), ("Other", None));
-        let set = manifest("name = \"wobble\"\ncategory = \"Modulation\"\nargs = \"{ rate: 2 }\"\n").unwrap();
-        let e = set.effects().next().unwrap();
-        assert_eq!((e.category.as_str(), e.args.as_deref()), ("Modulation", Some("{ rate: 2 }")));
-        let err = manifest("name = \"wobble\"\ncategory = \"Wobbles\"\n").err().unwrap();
-        assert!(format!("{err:#}").contains("has category `Wobbles`; use one of Filter, EQ"), "{err:#}");
+    fn an_effect_entry_fails_to_load() {
+        let err = manifest("name = \"wobble\"\ncategory = \"Modulation\"\n").err().unwrap();
+        assert!(format!("{err:#}").contains("`[[effect]]` is gone from m2pkg.toml (PKG-2)"), "{err:#}");
     }
 }

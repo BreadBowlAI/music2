@@ -14,7 +14,9 @@
 use std::collections::{BTreeSet, HashMap};
 
 use m2_ir::{Kernels, PortKind, split_ref};
-use m2_script::sites::{Arg, imported_names};
+use m2_script::UnitCtor;
+use m2_script::component::Spelled;
+use m2_script::sites::{Arg, import_insertion, imported_names};
 
 use super::*;
 
@@ -117,6 +119,22 @@ fn consts_at(compiled: &Compiled, file: &str, start: u32, end: u32) -> Vec<(Stri
     found
 }
 
+/// The constants of the value at `origin` (every evaluation of an inherited control's call), as
+/// (module, node, value).
+fn consts_of(compiled: &Compiled, origin: &Origin) -> Vec<(String, String, f64)> {
+    let mut found = vec![];
+    for m in &compiled.ir.modules {
+        walk(&m.nodes, &mut |n| {
+            if let (Op::Const { value, .. }, Some(o)) = (&n.op, &n.origin)
+                && o.same_value(origin)
+            {
+                found.push((m.key.clone(), n.id.clone(), *value));
+            }
+        });
+    }
+    found
+}
+
 /// `ir` with the nodes `removed` (all in `module`) taken out, and everything that read
 /// them reading `to` instead.
 fn rewire(ir: &Ir, module: &str, removed: &[(String, String, f64)], to: &str) -> Result<Ir, EditError> {
@@ -174,11 +192,13 @@ pub(super) fn refs(
     exports.values_mut().for_each(swap);
 }
 
-/// `ir` for comparison: nodes numbered by position, without source positions.
+/// `ir` for comparison: nodes numbered by position, without source positions or frames.
 pub(super) fn canonical(ir: &Ir) -> Ir {
     let mut ir = ir.clone();
     for m in &mut ir.modules {
         m.src = None;
+        // Frames are numbered as calls ran, so adding a call renumbers the ones after it.
+        m.frames.clear();
         let mut order = vec![];
         walk(&m.nodes, &mut |n| order.push(n.id.clone()));
         let names: HashMap<String, String> = order.into_iter().enumerate().map(|(i, id)| (id, format!("c{i}"))).collect();
@@ -193,7 +213,7 @@ pub(super) fn canonical(ir: &Ir) -> Ir {
                 n.id = names[&n.id].clone();
                 n.src = None;
                 n.origin = None;
-                n.within.clear();
+                n.frame = None;
             }
         };
         refs(&mut m.nodes, &mut m.exports, &strip, &rename);
@@ -234,24 +254,56 @@ fn declared_default(ir: &Ir, consts: &[(String, String, f64)], packages: &Packag
     (!other && found.iter().all(|f| *f == (default, unit))).then_some((default?, unit))
 }
 
-/// How a default is written: with the unit's constructor if the file imports it.
-fn written(value: f64, unit: Option<Unit>, imported: &[String]) -> String {
+/// How a default in base units is written when no descriptor spells it (a raw kernel port's):
+/// with the unit's canonical constructor (the build's table, PKG-11) if the file imports it, else
+/// as a plain number.
+fn written(value: f64, unit: Option<Unit>, imported: &[String], units: &[UnitCtor]) -> String {
     let number = if value == 0.0 { "0".to_string() } else { value.to_string() };
-    let constructor = unit.map(|u| match u {
-        Unit::Hz => "hz",
-        Unit::Db => "db",
-        Unit::Gain => "linear",
-        Unit::Semitones => "semis",
-        Unit::Seconds => "secs",
-        Unit::Beats => "beats",
-        Unit::Unit01 => "frac",
-        Unit::Bipolar => "bipolar",
-        Unit::Scalar => "scalar",
-    });
-    match constructor {
-        Some(c) if imported.iter().any(|n| n == c) => format!("{c}({number})"),
+    match unit.and_then(|u| units.iter().find(|c| c.unit == u && c.canonical)) {
+        Some(c) if imported.contains(&c.name) => format!("{}({number})", c.name),
         _ => number,
     }
+}
+
+/// How a descriptor's default is written (6.5, D14): in its spelling `S` as `S(written)` when the
+/// file imports `S`; as the plain number when `S` has scale 1 (it equals the base value); else as
+/// `S(written)` with `S` imported, so no float noise such as `0.045000000000000005` is ever
+/// written. Returns the text and the constructor to import.
+fn spelled(d: &Spelled, imported: &[String], units: &[UnitCtor]) -> (String, Option<String>) {
+    let number = |x: f64| if x == 0.0 { "0".to_string() } else { x.to_string() };
+    match d.spelled.as_deref().and_then(|s| units.iter().find(|c| c.name == s)) {
+        Some(c) if imported.contains(&c.name) => (format!("{}({})", c.name, number(d.written)), None),
+        Some(c) if c.scale == 1.0 => (number(d.written), None),
+        Some(c) => (format!("{}({})", c.name, number(d.written)), Some(c.name.clone())),
+        None => (number(d.value), None),
+    }
+}
+
+/// The default of the declared controls the constants `consts` of `compiled` are (PKG-4), when
+/// every one is a declared control and all declare one default.
+fn descriptor_default(compiled: &Compiled, consts: &[(String, String, f64)]) -> Option<Spelled> {
+    let mut found: Option<Spelled> = None;
+    for m in &compiled.ir.modules {
+        let mut bad = false;
+        walk(&m.nodes, &mut |n| {
+            if !consts.iter().any(|(module, id, _)| *module == m.key && *id == n.id) {
+                return;
+            }
+            let d = n.origin.as_ref().and_then(|o| {
+                let slot = o.control.as_ref()?;
+                super::component_of(compiled, m, slot.frame)?.control(&slot.slot)?.default.clone()
+            });
+            match (d, &found) {
+                (Some(d), None) => found = Some(d),
+                (Some(d), Some(f)) if d == *f => {}
+                _ => bad = true,
+            }
+        });
+        if bad {
+            return None;
+        }
+    }
+    found
 }
 
 impl Session {
@@ -349,32 +401,45 @@ impl Session {
         Ok(())
     }
 
-    /// Connect outlet `from` to control `to`: write the outlet's name where the
-    /// control's value is written. Ids are from revision `at`.
+    /// Connect outlet `from` to control `to`: write the outlet's name where the control's value
+    /// is written, or, for a control its call leaves out, into the call as its first edit would
+    /// write a value (D5). Ids are from revision `at`.
     pub fn connect(&mut self, at: u64, from: &str, to: &str) -> Result<Edited, EditError> {
         self.ready()?;
         let outlet = self.outlet(at, from)?;
         let control = self.resolve(at, to)?;
         let compiled = &self.accepted.compiled;
-        let site = compiled.sites.iter().find(|s| s.id == control.origin.site).ok_or_else(|| EditError::NotFound(to.to_string()))?;
-        // The whole written value: the `hz(500)` call for a unit value, else the number.
-        let (start, end) = if control.unit.is_some() { (site.start, site.end) } else { (control.lens.start, control.lens.end) };
+        // The whole written value (the `hz(500)` call for a quantity, else the number) and its
+        // constants; or where the name is inserted, and the constants of every evaluation.
+        let (start, end, text, consts, inserted) = match control.planned(&outlet.name) {
+            Some((start, end, text)) => (start, end, text, consts_of(compiled, &control.origin), true),
+            None => {
+                let (start, end) = control.expression().ok_or_else(|| EditError::NotFound(to.to_string()))?;
+                (start, end, outlet.name.clone(), consts_at(compiled, &control.file, start, end), false)
+            }
+        };
         if control.file != outlet.file {
             return Err(EditError::Rejected(format!("`{}` is in another file", outlet.name)));
         }
         if start < outlet.end {
             return Err(EditError::Rejected(format!("`{}` is declared after this value; move it above to connect it", outlet.name)));
         }
-        let consts = consts_at(compiled, &control.file, start, end);
         let expected = rewire(&compiled.ir, &outlet.module, &consts, &outlet.port)?;
-        let candidate = self.candidate(Path::new(&control.file), start, end, &outlet.name)?;
+        let mut candidate = self.candidate(Path::new(&control.file), start, end, &text)?;
         if canonical(&candidate.compiled.ir) != canonical(&expected) {
             return Err(EditError::Rejected(format!("connecting `{}` here would change more than this input", outlet.name)));
+        }
+        // Written into the call, the name is shown with its call, as a value written there is:
+        // the bytes alone (`, phase: drop`) say nothing (its undo restores the file, not these).
+        if inserted {
+            (candidate.before, candidate.after) = self.shown(control.origin.site, start, end, &text);
         }
         self.write(candidate)
     }
 
-    /// Disconnect inlet `id`: write the default its ports declare in place of the name.
+    /// Disconnect inlet `id`: write the default in place of the name, as the receiving control's
+    /// descriptor spells it (PKG-4), or else as the ports it feeds declare it; never a remembered
+    /// or guessed value.
     pub fn disconnect(&mut self, at: u64, id: &str) -> Result<Edited, EditError> {
         self.ready()?;
         // `tracks/bass.ts#8/1`: the file may hold `/`, the argument path never does.
@@ -386,23 +451,39 @@ impl Session {
         let file = Path::new(&inlet.file);
         let refuse = || EditError::Rejected(format!("this input declares no default to go back to; replace `{}` in the code", inlet.name));
 
-        // Which ports the input feeds decides the default: try a plain number first.
+        // Which controls or ports the input feeds decides the default: try a plain number first.
         let probe = self.candidate(file, inlet.start, inlet.end, "0")?;
         let consts = consts_at(&probe.compiled, &inlet.file, inlet.start, inlet.start + 1);
         if consts.is_empty() {
             return Err(refuse());
         }
-        let (default, unit) = declared_default(&probe.compiled.ir, &consts, &self.packages).ok_or_else(refuse)?;
-        let text = written(default, unit, &imported_names(&probe.old, "@m2/core"));
-
-        let candidate = self.candidate(file, inlet.start, inlet.end, &text)?;
-        let consts = consts_at(&candidate.compiled, &inlet.file, inlet.start, inlet.start + text.len() as u32);
-        if consts.iter().any(|(.., v)| *v != default) {
+        let imported = imported_names(&probe.old, "@m2/core");
+        let units = probe.compiled.units.clone();
+        let (default, text, import) = match descriptor_default(&probe.compiled, &consts) {
+            Some(d) => {
+                let (text, import) = spelled(&d, &imported, &units);
+                (d.value, text, import)
+            }
+            None => {
+                let (default, unit) = declared_default(&probe.compiled.ir, &consts, &self.packages).ok_or_else(refuse)?;
+                (default, written(default, unit, &imported, &units), None)
+            }
+        };
+        let mut edits = vec![(inlet.start, inlet.end, text.clone())];
+        let import = import.and_then(|name| import_insertion(&probe.old, "@m2/core", &name));
+        // Where a position of the file is once the import is in.
+        let added = import.as_ref().map(|(at, line)| (*at, line.len() as u32));
+        let moved = |pos: u32| pos + added.filter(|(at, _)| *at <= pos).map_or(0, |(_, len)| len);
+        edits.extend(import.map(|(at, line)| (at, at, line)));
+        let candidate = self.candidate_edits(file, &edits)?;
+        let at = moved(inlet.start);
+        let consts = consts_at(&candidate.compiled, &inlet.file, at, at + text.len() as u32);
+        if consts.is_empty() || consts.iter().any(|(.., v)| *v != default) {
             return Err(refuse());
         }
-        // The outlet is before the edit, so it is at the same place in the candidate.
+        // The outlet is before the edit, so it is at the same place in the candidate, past any import.
         let changed = || EditError::Rejected(format!("disconnecting `{}` would change more than this input", inlet.name));
-        let site = candidate.compiled.sites.iter().find(|s| s.file == inlet.file && s.start == outlet.start).ok_or_else(changed)?;
+        let site = candidate.compiled.sites.iter().find(|s| s.file == inlet.file && s.start == moved(outlet.start)).ok_or_else(changed)?;
         let port = candidate.compiled.outputs.iter().find(|o| o.site == site.id && o.top).ok_or_else(changed)?.port.clone();
         let back = rewire(&candidate.compiled.ir, &outlet.module, &consts, &port)?;
         if canonical(&back) != canonical(&self.accepted.compiled.ir) {

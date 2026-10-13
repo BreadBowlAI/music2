@@ -35,7 +35,10 @@ fn render(s: &mut Session, preview: Option<(&Origin, f64)>) -> Vec<[f32; 2]> {
     let rev = s.accepted();
     let mut r = Renderer::new(&rev.compiled.flat, &rev.compiled.data, &s.packages, 48_000).unwrap();
     if let Some((o, v)) = preview {
-        assert!(r.set_const(o, v) > 0, "the preview reached the graph");
+        // As a lease's value reaches a renderer before it is sent: its cells, by CellId (RENDER-23).
+        let cells = r.cell_map().cells(o).to_vec();
+        assert!(!cells.is_empty(), "the preview reached the graph");
+        r.set_cells(&cells, v);
     }
     r.render(1.0).unwrap()
 }
@@ -146,7 +149,8 @@ fn verification_rejects_an_edit_that_changes_something_else() {
     let mut s = Session::open(&dir, std_packages()).unwrap();
     let pan = control(&s, "song.ts", "0.hats.pan");
     let gain = s.controls().into_iter().find(|c| c.file == "song.ts" && c.literal == "-6").unwrap();
-    let r = s.apply(Path::new("song.ts"), pan.lens.start, pan.lens.end, "0.9", &gain.origin, gain.value + 1.0, Some(gain.value));
+    let lens = pan.lens().unwrap();
+    let r = s.apply(Path::new("song.ts"), lens.start, lens.end, "0.9", &gain.origin, gain.value + 1.0, Some(gain.value));
     assert!(matches!(&r, Err(EditError::Rejected(why)) if why.contains("more than this value")), "{r:?}");
     assert_eq!(std::fs::read_to_string(&song).unwrap(), original);
     assert_eq!(s.accepted().number, 1);
@@ -264,7 +268,9 @@ fn the_view_shows_the_calls_written_in_the_project() {
     let knob = |n: &crate::ViewNode, l: &str| n.knobs.iter().find(|k| k.label == l).cloned().unwrap_or_else(|| panic!("no knob {l} on {}", n.label));
     assert_eq!(knob(&node(bass, "lfo"), "period").value, 0.5);
     let hi = knob(&node(bass, "xrange"), "hi");
-    assert_eq!((hi.value, hi.literal.as_str(), hi.unit, hi.log), (2500.0, "2.5", Some("hz"), true));
+    // `xrange`'s ends take any unit, so no range is declared for them (D4): the UI picks a span
+    // for a frequency, and core guesses none (P10).
+    assert_eq!((hi.value, hi.literal.as_str(), hi.unit, hi.range, hi.log), (2500.0, "2.5", Some("hz"), None, false));
     let edge = |m: &crate::ModuleView, a: &str, b: &str| {
         let id = |l: &str| node(m, l).id;
         m.edges.contains(&(id(a), id(b)))
@@ -277,7 +283,7 @@ fn the_view_shows_the_calls_written_in_the_project() {
     let song = module("song");
     let mixer = node(song, "mixer");
     let pan = knob(&mixer, "hats.pan");
-    assert_eq!((pan.value, pan.min, pan.max), (0.3, -1.0, 1.0), "pan feeds a bipolar port");
+    assert_eq!((pan.value, pan.range, pan.slot.as_deref()), (0.3, Some([-1.0, 1.0]), Some("channels.hats.pan")), "the mixer declares pan");
     assert_eq!(knob(&mixer, "hats.db").value, -6.0);
     assert_eq!(knob(&node(song, "duck"), "depth").value, -9.0);
     // An import is shown by the imported track's label, and addressed by its key (ID-10).

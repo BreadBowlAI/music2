@@ -13,7 +13,10 @@ use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+pub mod component;
 pub mod sites;
+
+pub use component::{Catalog, Descriptor, UnitCtor};
 
 use m2_ir::{Body, Diagnostic, Ir};
 use oxc::allocator::Allocator;
@@ -32,7 +35,7 @@ pub const SDK: &str = include_str!("../sdk/core.ts");
 
 /// The version of `@m2/core` that [`SDK`] is. A project's `[dependencies] "@m2/core"`
 /// requirement is checked against it (FMT-2, FMT-3).
-pub const SDK_VERSION: &str = "1.0.0";
+pub const SDK_VERSION: &str = "1.1.0";
 
 const CORE: &str = "@m2/core";
 
@@ -54,10 +57,19 @@ const CODES: &[&str] = &[
 
 const OUTSIDE: &str = "is outside the project: code imports only the project's own .ts files and its packages";
 
-/// Runs before anything else: remove what would make a build non-deterministic.
+/// Runs before anything else: remove what would make a build non-deterministic. `__m2s`
+/// records the site of the call about to run and what its arguments end with (see `sites`):
+/// `ends` is 0 for its last argument, 1 for none and 2 for a trailing spread's elements, kept
+/// as an array so the SDK can compare them without iterating the spread twice.
 const PRELUDE: &str = r#"
 globalThis.__m2_site = -1;
-globalThis.__m2s = function (site, value) { globalThis.__m2_site = site; return value; };
+globalThis.__m2s = function (site, value, ends) {
+  if (ends === 2 && !Array.isArray(value)) value = [...value];
+  globalThis.__m2_site = site;
+  globalThis.__m2_ends = ends === undefined ? 0 : ends;
+  globalThis.__m2_last = value;
+  return value;
+};
 delete globalThis.Date;
 Math.random = () => { throw new Error("Math.random isn't available: songs must render the same every time. Use a seeded generator."); };
 "#;
@@ -88,6 +100,12 @@ pub struct Build {
     pub outputs: Vec<Output>,
     /// Every package file the build read, so a revision records what ran (FMT-6a, RENDER-2).
     pub package_files: Vec<PackageFile>,
+    /// The descriptor of every component the modules this build loaded declare, which covers
+    /// every ComponentId a frame names (PKG-9, PKG-11).
+    pub components: Vec<Descriptor>,
+    /// The unit constructors of `@m2/core`, generated from its table: the one copy editors
+    /// and gestures use (PKG-11).
+    pub units: Vec<UnitCtor>,
 }
 
 /// A package file a build read.
@@ -126,7 +144,7 @@ impl Options {
 }
 
 /// Maps positions in generated JavaScript back to the TypeScript source.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct LineMap {
     /// `(js_line, js_col, ts_line, ts_col)`, all 0-based, sorted.
     tokens: Vec<(u32, u32, u32, u32)>,
@@ -154,6 +172,8 @@ struct State {
     files: HashMap<String, LoadedFile>,
     sites: Vec<sites::Site>,
     package_files: Vec<PackageFile>,
+    /// Every package file read, by the path it was read from, with the SHA-256 of its bytes.
+    read: Vec<(PathBuf, String)>,
     /// Why an import failed, with its code: the engine passes on only the text.
     failed: Option<Diagnostic>,
 }
@@ -189,6 +209,27 @@ impl State {
         let f = self.files.values().find(|f| f.instrumented.as_ref().is_some_and(|i| i.sites.iter().any(|x| x.id == site)))?;
         let (l, c) = line_col(&f.original, s.start as usize);
         Some(format!("{}:{l}:{c}", s.file))
+    }
+
+    /// The package a module file belongs to, as `@m2/core`'s `component()` asks for it
+    /// (`__m2_home`): `{"package": "std", "module": "std/fx", "file": "std/src/fx.ts"}`, or
+    /// `{"package": null, "module": "lib/fx.ts", "file": "lib/fx.ts"}` for a project file.
+    fn home(&self, file: &str) -> serde_json::Value {
+        let display = self.display(file);
+        if file.starts_with(PROJECT) || file == "<main>" {
+            return serde_json::json!({"package": null, "module": display, "file": display});
+        }
+        let p = Path::new(file);
+        for (name, dir) in &self.packages {
+            if let Ok(rel) = p.strip_prefix(dir.join("src")) {
+                let sub = rel.to_string_lossy().replace('\\', "/");
+                let sub = sub.strip_suffix(".ts").unwrap_or(&sub);
+                let sub = sub.strip_suffix("/index").or_else(|| (sub == "index").then_some("")).unwrap_or(sub);
+                let module = if sub.is_empty() { name.clone() } else { format!("{name}/{sub}") };
+                return serde_json::json!({"package": name, "module": module, "file": display});
+            }
+        }
+        serde_json::json!({"package": null, "module": display, "file": display})
     }
 
     fn display(&self, file: &str) -> String {
@@ -309,6 +350,12 @@ fn listed(root: &Path, path: &Path) -> Option<PathBuf> {
     at.is_file().then_some(at)
 }
 
+/// The SDK stripped of its TypeScript, once per process: every build and describe run loads it.
+fn sdk_js() -> (String, LineMap) {
+    static JS: std::sync::OnceLock<(String, LineMap)> = std::sync::OnceLock::new();
+    JS.get_or_init(|| strip(CORE, SDK).expect("the SDK is valid TypeScript")).clone()
+}
+
 /// Strip TypeScript, keeping a map back to the source lines.
 fn strip(path: &str, source: &str) -> Result<(String, LineMap), String> {
     let allocator = Allocator::default();
@@ -391,6 +438,7 @@ impl Loader for Load {
                     let bytes = std::fs::read(name).map_err(|e| fail(e.to_string()))?;
                     let sha256 = format!("{:x}", Sha256::digest(&bytes));
                     let path = st.display(name);
+                    st.read.push((PathBuf::from(name), sha256.clone()));
                     st.package_files.push(PackageFile { path, sha256 });
                     String::from_utf8(bytes).map_err(|e| fail(e.to_string()))?
                 }
@@ -411,7 +459,7 @@ impl Loader for Load {
             (source, Some(inst))
         };
         let code = instrumented.as_ref().map_or(original.as_str(), |i| i.code.as_str());
-        let (js, map) = strip(name, code).map_err(fail)?;
+        let (js, map) = if name == CORE { sdk_js() } else { strip(name, code).map_err(fail)? };
         st.files.insert(name.to_string(), LoadedFile { original, instrumented, map });
         drop(st);
         Module::declare(ctx.clone(), name, js)
@@ -437,44 +485,204 @@ pub fn build_full(opts: &Options) -> Result<Build, Vec<Diagnostic>> {
         ..Default::default()
     }));
 
-    let rt = Runtime::new().map_err(|e| err(e.to_string()))?;
-    rt.set_memory_limit(opts.memory_limit);
-    rt.set_max_stack_size(1 << 20);
-    let deadline = Instant::now() + opts.time_limit;
-    rt.set_interrupt_handler(Some(Box::new(move || Instant::now() > deadline)));
-    rt.set_loader(Resolve(state.clone()), Load(state.clone()));
-    let ctx = Context::full(&rt).map_err(|e| err(e.to_string()))?;
+    let (_rt, ctx, deadline) = sandbox(&state, opts.memory_limit, opts.time_limit).map_err(|e| err(e.to_string()))?;
 
-    let result: Result<(String, String), Vec<Diagnostic>> = ctx.with(|ctx| {
-        let run = || -> rquickjs::Result<(String, String)> {
-            ctx.eval::<(), _>(PRELUDE)?;
+    let result: Result<[String; 4], Vec<Diagnostic>> = ctx.with(|ctx| {
+        let run = || -> rquickjs::Result<[String; 4]> {
+            host(&ctx, &state, &packages)?;
             let g = ctx.globals();
-            g.set("__m2_project", PROJECT)?;
-            g.set("__m2_packages", packages.iter().map(|(_, d)| format!("{}/", d.display())).collect::<Vec<_>>())?;
-            // What the SDK asks the host while it runs: where a call or a stack frame is in
-            // the TypeScript, and whether a key is valid (one rule, in m2_ir::key).
-            let st = state.clone();
-            let place = move |at: String| st.try_borrow().map_or_else(|_| at.clone(), |st| st.remap(&at));
-            g.set("__m2_where", Function::new(ctx.clone(), place)?)?;
-            let st = state.clone();
-            g.set("__m2_site_src", Function::new(ctx.clone(), move |site: u32| st.try_borrow().ok().and_then(|st| st.site_src(site)))?)?;
-            g.set("__m2_key", Function::new(ctx.clone(), |what: String, k: String| m2_ir::key::invalid(&what, &k))?)?;
             let entry = serde_json::to_string(&format!("{PROJECT}{}", opts.entry)).expect("string");
             let main = format!("import {{ __build }} from \"{CORE}\";\nimport song from {entry};\nglobalThis.__m2_out = __build(song);\n");
             Module::evaluate(ctx.clone(), "<main>", main)?.finish::<()>()?;
-            Ok((g.get("__m2_out")?, g.get("__m2_outputs")?))
+            Ok([g.get("__m2_out")?, g.get("__m2_outputs")?, g.get("__m2_components")?, g.get("__m2_units")?])
         };
         run().catch(&ctx).map_err(|e| vec![caught(&mut state.borrow_mut(), e, Instant::now() > deadline)])
     });
-    let (json, outputs) = result?;
+    let [json, outputs, components, units] = result?;
     let outputs: Vec<Output> = serde_json::from_str(&outputs).map_err(|e| err(format!("the SDK produced invalid outputs: {e}")))?;
+    let components: Vec<Descriptor> = serde_json::from_str(&components).map_err(|e| err(format!("the SDK produced invalid descriptors: {e}")))?;
+    let units: Vec<UnitCtor> = serde_json::from_str(&units).map_err(|e| err(format!("the SDK produced an invalid unit table: {e}")))?;
     let mut ir: Ir = serde_json::from_str(&json).map_err(|e| err(format!("the SDK produced invalid IR: {e}")))?;
     let st = state.borrow();
     for m in &mut ir.modules {
         m.src = m.src.as_deref().map(|s| st.remap(s));
         remap_nodes(&st, &mut m.nodes);
     }
-    Ok(Build { ir, sites: st.sites.clone(), outputs, package_files: st.package_files.clone() })
+    Ok(Build { ir, sites: st.sites.clone(), outputs, package_files: st.package_files.clone(), components, units })
+}
+
+/// A sandbox for one run: QuickJS with the prelude, the loader over `state` and the limits.
+fn sandbox(state: &Rc<RefCell<State>>, memory_limit: usize, time_limit: Duration) -> rquickjs::Result<(Runtime, Context, Instant)> {
+    let rt = Runtime::new()?;
+    rt.set_memory_limit(memory_limit);
+    rt.set_max_stack_size(1 << 20);
+    let deadline = Instant::now() + time_limit;
+    rt.set_interrupt_handler(Some(Box::new(move || Instant::now() > deadline)));
+    rt.set_loader(Resolve(state.clone()), Load(state.clone()));
+    let ctx = Context::full(&rt)?;
+    Ok((rt, ctx, deadline))
+}
+
+/// Run the prelude, then give the SDK what it asks the host while it runs: where a call or a
+/// stack frame is in the TypeScript, whether a key is valid (one rule, in m2_ir::key), and the
+/// package a module file belongs to.
+fn host<'js>(ctx: &Ctx<'js>, state: &Rc<RefCell<State>>, packages: &[(String, PathBuf)]) -> rquickjs::Result<()> {
+    ctx.eval::<(), _>(PRELUDE)?;
+    let g = ctx.globals();
+    g.set("__m2_project", PROJECT)?;
+    g.set("__m2_packages", packages.iter().map(|(_, d)| format!("{}/", d.display())).collect::<Vec<_>>())?;
+    let st = state.clone();
+    let place = move |at: String| st.try_borrow().map_or_else(|_| at.clone(), |st| st.remap(&at));
+    g.set("__m2_where", Function::new(ctx.clone(), place)?)?;
+    let st = state.clone();
+    g.set("__m2_site_src", Function::new(ctx.clone(), move |site: u32| st.try_borrow().ok().and_then(|st| st.site_src(site)))?)?;
+    g.set("__m2_key", Function::new(ctx.clone(), |what: String, k: String| m2_ir::key::invalid(&what, &k))?)?;
+    let st = state.clone();
+    let home = move |file: String| st.try_borrow().map_or_else(|_| "null".to_string(), |st| st.home(&file).to_string());
+    g.set("__m2_home", Function::new(ctx.clone(), home)?)?;
+    Ok(())
+}
+
+/// Every component the packages declare, and where each is exported, for the effect browser and
+/// the effect planner (PKG-2, PKG-9). Each module under a package's `src/`, in bytewise order of
+/// its path, is described in its own sandboxed run, so a module that throws affects only itself
+/// and the modules that import it. It never fails: a module that doesn't load, an invalid
+/// descriptor or one id declared at two places is `pkg.invalid`, and those components are left
+/// out, so a broken package never stops a project from opening (WRITE-20). Runs are cached for
+/// the process, by the content of every file each read.
+pub fn describe(packages: &[(String, PathBuf)]) -> Catalog {
+    let packages: Vec<(String, PathBuf)> = packages.iter().filter_map(|(n, d)| Some((n.clone(), d.canonicalize().ok()?))).collect();
+    let mut runs = vec![];
+    for (name, dir) in &packages {
+        let src = dir.join("src");
+        let mut files = vec![];
+        let mut stack = vec![src.clone()];
+        while let Some(d) = stack.pop() {
+            for path in std::fs::read_dir(&d).into_iter().flatten().flatten().map(|e| e.path()) {
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|x| x == "ts") {
+                    files.push(path);
+                }
+            }
+        }
+        let mut subs: Vec<String> = files.iter().filter_map(|f| Some(f.strip_prefix(&src).ok()?.to_string_lossy().replace('\\', "/"))).collect();
+        subs.sort();
+        for sub in subs {
+            let spec = format!("{name}/{}", sub.strip_suffix(".ts").unwrap_or(&sub));
+            let file = format!("{name}/src/{sub}");
+            runs.push((file, described(&packages, &spec)));
+        }
+    }
+    merge(runs)
+}
+
+/// What one describe run found: the components it registered and where its module exports them.
+#[derive(Clone, Deserialize)]
+struct Described {
+    components: Vec<Descriptor>,
+    exports: Vec<DescribedExport>,
+}
+
+#[derive(Clone, Deserialize)]
+struct DescribedExport {
+    component: String,
+    module: String,
+    name: String,
+}
+
+type DescribeCache = HashMap<(Vec<(String, PathBuf)>, String), (Vec<(PathBuf, String)>, Result<Described, Diagnostic>)>;
+
+/// Describe the package module `spec` (`std/fx`), or take a cached run whose files are unchanged.
+fn described(packages: &[(String, PathBuf)], spec: &str) -> Result<Described, Diagnostic> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<DescribeCache>> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let key = (packages.to_vec(), spec.to_string());
+    let same = |read: &[(PathBuf, String)]| read.iter().all(|(p, sha)| std::fs::read(p).is_ok_and(|b| format!("{:x}", Sha256::digest(&b)) == *sha));
+    if let Some((read, result)) = cache.lock().expect("the describe cache").get(&key)
+        && same(read)
+    {
+        return result.clone();
+    }
+    let (read, result) = describe_run(packages, spec);
+    cache.lock().expect("the describe cache").insert(key, (read, result.clone()));
+    result
+}
+
+/// One sandboxed run that imports `spec` and asks `@m2/core` what it registered.
+fn describe_run(packages: &[(String, PathBuf)], spec: &str) -> (Vec<(PathBuf, String)>, Result<Described, Diagnostic>) {
+    let state = Rc::new(RefCell::new(State {
+        packages: packages.to_vec(),
+        dependencies: packages.iter().map(|(n, _)| n.clone()).collect(),
+        ..Default::default()
+    }));
+    let invalid = |m: String| Diagnostic::error("pkg.invalid", m);
+    let (_rt, ctx, deadline) = match sandbox(&state, 256 << 20, Duration::from_secs(10)) {
+        Ok(s) => s,
+        Err(e) => return (vec![], Err(invalid(e.to_string()))),
+    };
+    let result: Result<String, Diagnostic> = ctx.with(|ctx| {
+        let run = || -> rquickjs::Result<String> {
+            host(&ctx, &state, packages)?;
+            let spec_js = serde_json::to_string(spec).expect("a string");
+            let main = format!("import * as ns from {spec_js};\nimport {{ __describe }} from \"{CORE}\";\nglobalThis.__m2_out = __describe({spec_js}, ns);\n");
+            Module::evaluate(ctx.clone(), "<main>", main)?.finish::<()>()?;
+            ctx.globals().get("__m2_out")
+        };
+        run().catch(&ctx).map_err(|e| caught(&mut state.borrow_mut(), e, Instant::now() > deadline))
+    });
+    let read = state.borrow().read.clone();
+    let result = match result {
+        Ok(json) => serde_json::from_str::<Described>(&json).map_err(|e| invalid(format!("`{spec}`: the SDK described it wrongly: {e}"))),
+        Err(d) => {
+            let mut e = invalid(format!("the package module `{spec}` doesn't load, so its components are left out: {}", d.message));
+            e.src = d.src;
+            Err(e)
+        }
+    };
+    (read, result)
+}
+
+/// One catalog from the runs: a component found by several (a module and those importing it)
+/// is one, by id and definition site; one id at two sites is `pkg.invalid` and left out.
+fn merge(runs: Vec<(String, Result<Described, Diagnostic>)>) -> Catalog {
+    let mut catalog = Catalog::default();
+    let mut found: BTreeMap<String, Vec<Descriptor>> = BTreeMap::new();
+    let mut exports: BTreeMap<String, Vec<component::Export>> = BTreeMap::new();
+    for (file, run) in runs {
+        match run {
+            Ok(d) => {
+                for c in d.components {
+                    let at = found.entry(c.id.clone()).or_default();
+                    if !at.iter().any(|x| x.at == c.at) {
+                        at.push(c);
+                    }
+                }
+                for e in d.exports {
+                    exports.entry(e.component).or_default().push(component::Export { module: e.module, name: e.name });
+                }
+            }
+            Err(mut d) => {
+                d.src = d.src.or(Some(file));
+                catalog.problems.push(d);
+            }
+        }
+    }
+    for (id, mut at) in found {
+        if at.len() > 1 {
+            let places: Vec<&str> = at.iter().map(|d| d.at.as_str()).collect();
+            let message = format!("two components have the id `{id}`: at {}. Ids are unique in their package (PKG-9), so both are left out", places.join(" and "));
+            catalog.problems.push(Diagnostic::error("pkg.invalid", message).at(Some(places[0].to_string())));
+            continue;
+        }
+        let d = at.remove(0);
+        let mut e = exports.remove(&id).unwrap_or_default();
+        e.sort_by(|a, b| (a.module != d.module, a).cmp(&(b.module != d.module, b)));
+        e.dedup();
+        catalog.exports.insert(id.clone(), e);
+        catalog.components.insert(id, std::sync::Arc::new(d));
+    }
+    catalog
 }
 
 fn remap_nodes(st: &State, nodes: &mut [m2_ir::Node]) {

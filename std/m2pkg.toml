@@ -1,10 +1,18 @@
 # The music2 standard library. An ordinary package: nothing here is special to the core.
 #
-# Port syntax: "name: kind [= default]".
+# This file describes the kernels only: their ports and the wasm file (PKG-2). The
+# components songs call (oscillators, filters, effects, instruments, the mixer) are
+# declared in TypeScript in src/, each with a descriptor that gives its controls, their
+# defaults and ranges, and how the editor offers it.
+#
+# Port syntax: "name: kind [= default] [in lo..hi]".
 #   kinds: audio<1|2|*>, control<unit|*>, events<note>, and * (any kind).
 #   Ports using `*` share one type variable per kernel, so `add(a: *, b: *) -> out: *`
 #   adds two audio signals or two controls of the same unit.
 #   units: hz db gain semitones seconds beats unit01 bipolar scalar
+# A default applies only when a kernel is called directly with that input unset
+# (`kernel("std:svf", { in: x })`): a component's descriptor gives what songs see (PKG-4).
+# `in lo..hi` is the knob range of a number written straight into a kernel input.
 
 [package]
 name = "std"
@@ -12,76 +20,6 @@ version = "0.1.0"
 license = "MIT"
 description = "Oscillators, envelopes, filters, mixing, dynamics, and the instruments built from them"
 wasm = "kernels/std.wasm"
-
-# ---------------------------------------------------------------- effects
-# Offered by the editor after any audio: each takes the audio first and returns audio.
-# `category` is where the editor lists it (Filter, EQ, Dynamics, Distortion,
-# Delay & Reverb, Modulation, Utility; Other by default). `args` is written after the
-# audio when the effect is added (`args = "1000"` gives `lowpass(x, 1000)`): every
-# number in it is a declared control of the effect, so it shows up as a knob.
-
-[[effect]]
-module = "std/filter"
-name = "lowpass"
-category = "Filter"
-description = "Darker: removes the highs above the cutoff"
-args = "1000"
-
-[[effect]]
-module = "std/filter"
-name = "highpass"
-category = "Filter"
-description = "Thinner: removes the lows below the cutoff"
-args = "200"
-
-[[effect]]
-module = "std/filter"
-name = "bandpass"
-category = "Filter"
-description = "Keeps only a band around the cutoff, like a telephone"
-args = "1000"
-
-[[effect]]
-module = "std/filter"
-name = "notch"
-category = "Filter"
-description = "Cuts a narrow band out around the cutoff"
-args = "1000"
-
-[[effect]]
-module = "std/fx"
-name = "limit"
-category = "Dynamics"
-description = "Stops peaks from clipping"
-args = "-1"
-
-[[effect]]
-module = "std/fx"
-name = "drive"
-category = "Distortion"
-description = "Warm saturation, from gentle grit to crunch"
-args = "6"
-
-[[effect]]
-module = "std/fx"
-name = "delay"
-category = "Delay & Reverb"
-description = "Echoes that repeat and fade away"
-args = "{ time: 0.25, feedback: 0.3, mix: 0.3 }"
-
-[[effect]]
-module = "std/dsp"
-name = "gain"
-category = "Utility"
-description = "Volume: louder or quieter, in dB"
-args = "0"
-
-[[effect]]
-module = "std/dsp"
-name = "pan"
-category = "Utility"
-description = "Places a mono sound left or right"
-args = "0"
 
 # ---------------------------------------------------------------- oscillators
 
@@ -240,65 +178,9 @@ inputs = ["in: audio<*>", "ceiling: control<db> = -1"]
 outputs = ["out: audio<*>"]
 
 # ---------------------------------------------------------------- more effects
-# Reverb, modulation, compression, EQ, lo-fi and width (std/fx), and their kernels.
+# The kernels of std/fx's reverb, modulation, compression, EQ, lo-fi and width.
 # Each kernel is safe with any input or setting: no NaN, no runaway feedback, and
 # tails that end in exact silence.
-
-[[effect]]
-module = "std/fx"
-name = "reverb"
-category = "Delay & Reverb"
-description = "Space: the sound of a room or a hall around it"
-args = "{ size: 0.6, damping: 0.5, mix: 0.25 }"
-
-[[effect]]
-module = "std/fx"
-name = "chorus"
-category = "Modulation"
-description = "Thicker and wider, with a gentle shimmer"
-args = "{ rate: 0.8, depth: 0.5, mix: 0.5 }"
-
-[[effect]]
-module = "std/fx"
-name = "phaser"
-category = "Modulation"
-description = "A swirling, sweeping whoosh"
-args = "{ rate: 0.4, depth: 0.7, feedback: 0.5, mix: 0.5 }"
-
-[[effect]]
-module = "std/fx"
-name = "tremolo"
-category = "Modulation"
-description = "Pulses the volume up and down"
-args = "{ rate: 5, depth: 0.5 }"
-
-[[effect]]
-module = "std/fx"
-name = "compress"
-category = "Dynamics"
-description = "Evens out loud and quiet moments so the sound sits steady"
-args = "{ threshold: -18, ratio: 3, attack: 0.01, release: 0.15, makeup: 4 }"
-
-[[effect]]
-module = "std/fx"
-name = "eq3"
-category = "EQ"
-description = "Bass, middle and treble, each up or down in dB"
-args = "{ low: 0, mid: 0, high: 0 }"
-
-[[effect]]
-module = "std/fx"
-name = "bitcrush"
-category = "Distortion"
-description = "Lo-fi digital crunch, like an old sampler"
-args = "{ bits: 8, rate: 12000, mix: 1 }"
-
-[[effect]]
-module = "std/fx"
-name = "widen"
-category = "Utility"
-description = "Makes the stereo image wider, or narrower toward mono"
-args = "{ width: 1.5 }"
 
 [[kernel]]
 name = "reverb"

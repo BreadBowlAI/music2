@@ -11,12 +11,18 @@
 //! - `f(a, b)` → `f(a, __m2s(ID, b))`: the last argument is evaluated, then the site
 //!   is recorded, then `f` is called. Inside an optional chain the arguments, and so
 //!   the recording, are skipped exactly when the call is.
-//! - `obj.m()` → `__m2s(ID, obj).m()`, only when no part of the callee is optional.
-//! - `f()` → `(__m2s(ID), f)()`, only for a plain identifier.
+//! - `f(...xs)` → `f(...__m2s(ID, xs, 2))`: a trailing spread.
+//! - `obj.m()` → `__m2s(ID, obj, 1).m()`, only when no part of the callee is optional.
+//! - `f()` → `(__m2s(ID, 0, 1), f)()`, only for a plain identifier.
 //!
 //! Other zero-argument calls (`(obj.m)()`, `obj.m!()`, `super.m()`, `a?.b.m()`, …)
 //! are left alone: they get no site, and so no editable values, but keep their
 //! meaning exactly.
+//!
+//! The recording also says what the call's arguments end with: its last argument, the
+//! spread's elements (`2`) or none (`1`). The SDK takes a site only when the arguments it
+//! received match, so a function called by native code (`xs.map(lowpass)`, which passes an
+//! index and the array) never takes the site of the call that handed it over (ID-15).
 
 use std::collections::HashMap;
 
@@ -187,6 +193,18 @@ fn plain_object(e: &Expression) -> bool {
     }
 }
 
+/// How an instrumented call's arguments end, which the recording passes on to the SDK.
+enum Ends {
+    /// With the wrapped expression, its last argument.
+    Last,
+    /// With the elements of the wrapped trailing spread.
+    Spread,
+    /// With no arguments; the wrapped expression is the method's receiver.
+    Receiver,
+    /// With no arguments; the call's callee is a plain name.
+    Callee,
+}
+
 struct Collect<'s> {
     source: &'s str,
     file: String,
@@ -218,20 +236,27 @@ impl<'a> Visit<'a> for Collect<'_> {
 
     fn visit_call_expression(&mut self, it: &CallExpression<'a>) {
         let id = self.next_id;
+        // What the recording wraps, and how the call's arguments end (see the module docs).
         let target = match it.arguments.last() {
-            Some(Argument::SpreadElement(s)) => Some((s.argument.span(), false)),
-            Some(a) => Some((a.to_expression().span(), false)),
+            Some(Argument::SpreadElement(s)) => Some((s.argument.span(), Ends::Spread)),
+            Some(a) => Some((a.to_expression().span(), Ends::Last)),
             None if it.optional => None,
             None => match &it.callee {
-                Expression::Identifier(i) => Some((i.span, true)),
-                Expression::StaticMemberExpression(m) if !m.optional && plain_object(&m.object) => Some((m.object.span(), false)),
-                Expression::ComputedMemberExpression(m) if !m.optional && plain_object(&m.object) => Some((m.object.span(), false)),
+                Expression::Identifier(i) => Some((i.span, Ends::Callee)),
+                Expression::StaticMemberExpression(m) if !m.optional && plain_object(&m.object) => Some((m.object.span(), Ends::Receiver)),
+                Expression::ComputedMemberExpression(m) if !m.optional && plain_object(&m.object) => Some((m.object.span(), Ends::Receiver)),
                 _ => None,
             },
         };
-        if let Some((span, sequence)) = target {
+        if let Some((span, ends)) = target {
             self.next_id += 1;
-            let (open, close) = if sequence { (format!("(__m2s({id}), "), ")".to_string()) } else { (format!("__m2s({id}, "), ")".to_string()) };
+            let (open, close) = match ends {
+                Ends::Last => (format!("__m2s({id}, "), ")"),
+                Ends::Spread => (format!("__m2s({id}, "), ", 2)"),
+                Ends::Receiver => (format!("__m2s({id}, "), ", 1)"),
+                Ends::Callee => (format!("(__m2s({id}, 0, 1), "), ")"),
+            };
+            let close = close.to_string();
             let len = (span.end - span.start) as i64;
             // At one offset: closes before opens; inner closes first; outer opens first.
             self.inserts.push((span.start, (1, -len), open));
@@ -360,7 +385,7 @@ mod tests {
         assert_eq!(
             i.code,
             "const b = vca(svf.lowpass(osc.saw(__m2s(2, hz(__m2s(3, 110)))), __m2s(1, hz(__m2s(4, 800)))), __m2s(0, 0.5));\n\
-             (__m2s(5), f)();\n__m2s(6, obj).m();\nobj.m(...__m2s(7, xs));\n"
+             (__m2s(5, 0, 1), f)();\n__m2s(6, obj, 1).m();\nobj.m(...__m2s(7, xs, 2));\n"
         );
         // Sites in source order with their argument shapes.
         let s = &i.sites;

@@ -358,15 +358,14 @@ struct EffectReq {
     session: u64,
     revision: u64,
     call: String,
+    /// The effect's ComponentId (`std:delay`), as the graph state's `effects` list it.
     #[serde(default)]
-    module: String,
-    #[serde(default)]
-    name: String,
+    component: String,
 }
 
 async fn graph_add_effect(State(s): S, Json(r): Json<EffectReq>) -> ApiResult {
     let state = s.clone();
-    let result = blocking(move || state.graph.add_effect(r.session, r.revision, &r.call, &r.module, &r.name)).await;
+    let result = blocking(move || state.graph.add_effect(r.session, r.revision, &r.call, &r.component)).await;
     s.graph_changed();
     Ok(Json(result?))
 }

@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use super::*;
 
+mod cell;
 mod live;
 
 const SR: u32 = 48_000;

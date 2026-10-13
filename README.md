@@ -77,10 +77,11 @@ Stop ends the notes, and echoes and reverb ring out as they would on a real inst
 There's a tab for each module (one file's sound): one for each track file, and one for the Song (the mix). Drag the bar between the timeline and the panel to resize it. Each module has three views:
 
 - **Graph:** the module as boxes and knobs.
-  - Drag a knob to hear it; let go to write the number into the code. Double-click a knob to set it to the middle of its range.
+  - Drag a knob to hear it; let go to write the number into the code. Double-click a knob to put it back at its default (the middle of its range when its control declares no default).
+  - A knob whose number is in *italics* is a control the code leaves out, such as a bass's `drive` when the code says only `bass(notes)`: it plays the instrument's or effect's default. Turning it writes the number into the call (`bass(notes, { drive: 9 })`), and undo takes it out again.
   - A row that says **edit in code** is a value the app can't turn into a knob (see [Editing from the app](#editing-from-the-app)).
   - Cables: drag from a named output (the dot at the right edge of a box whose result has a `const` name in the code) onto a knob. The ✕ on a connected input disconnects it.
-  - **+** on a box that makes sound opens the effect browser: 17 effects in seven groups (Filter, EQ, Dynamics, Distortion, Delay & Reverb, Modulation, Utility). Type to search, then press Enter or click. The bin icon on an effect removes it.
+  - **+** on a box that makes sound opens the effect browser: 17 effects in seven groups (Filter, EQ, Dynamics, Distortion, Delay & Reverb, Modulation, Utility), as the effects themselves declare them. Type to search, then press Enter or click. The bin icon on an effect removes it.
   - Zoom with ⌘ and scroll, or pinch. The buttons at the bottom right zoom and fit the graph to the panel.
 - **Code:** the module's TypeScript, with type checks. The list on the left shows the song's files. ⌘-click a name to jump to where it's defined, even inside std (std's files open read-only). ⌘S (or the Save button) saves. When the code has an error, the last working version keeps playing, and a yellow banner offers **Show in code**.
 - **Notes:** the open clip in a piano roll.
@@ -279,7 +280,40 @@ A number in the code can carry a unit, written as a function. Plugging a value w
 | `feedback(kind)` | a loop with a short delay; give its input later with `.set()` |
 | `kernel(id, inputs)` | one kernel, such as `kernel("std:svf", { … })` |
 | `plugin("clap:<id>", inputs)` | a CLAP plugin; `key` in its inputs names its saved settings (see [CLAP plugins](#clap-plugins)) |
-| `component({ controls }, fn)` | marks which arguments of a function are knobs |
+| `component({ id, inputs, controls, settings, output, positional, editor }, body)` | declares a component: the signals it reads, its controls (knobs, each with a unit, a default and a range), its settings, and how the editor offers it. Every std function is one (see `std/src`); the older `component({ controls }, fn)`, which only marks which arguments are knobs, still works |
+
+### Your own components
+
+A function of your own becomes a box with knobs when it's declared as a component, as every std function is:
+
+```ts
+// lib/crunch.ts
+import { component, control, kernel, port, signature, type Audio, type Params, type Value } from "@m2/core";
+
+/** Drive, then a lowpass that tames the fizz. */
+export const crunch = component(
+  {
+    id: "crunch",
+    label: "Crunch",
+    signature: signature<(x: Audio, amount?: Value) => Audio>(),
+    inputs: { in: port.audio() },
+    controls: {
+      amount: control.db(12).range(0, 36).smooth(),
+      tone: control.hz(3000).range(200, 20000).log().smooth(),
+    },
+    output: port.audio(),
+    positional: ["amount"],
+  },
+  (x: Audio, { amount, tone }: Params) => kernel("std:svf", { in: kernel("std:drive", { in: x, amount }), cutoff: tone }).port("lp"),
+);
+```
+
+- `id` is what the app knows the component by, whatever name a file imports it as. In a package it is `<package>:<id>` (`std:delay`).
+- `inputs` are the signals it reads. `port.audio({ sidechain: true })` marks one that only listens, like a compressor's key input.
+- Each control has a unit and a default (`control.db(12)` is 12 dB), written in that unit, like every number in the descriptor. `.range(lo, hi)` is the knob's range (a hint: a number outside it is never changed), `.log()` turns it on a log scale, `.smooth()` glides a change over one block (for a control the sound reads every sample, so a jump would click), and `.optional()` means a call that leaves it out gets no node at all. The body always gets a signal for a control, whether the call wrote a number, connected a signal or left it out.
+- `settings` are values that shape the graph, such as `setting.int(4)` voices: never knobs.
+- `positional` lets calls write those controls as arguments, in order: `crunch(x, 18)`. Any control can also go in an options object after them: `crunch(x, { tone: 1500 })`. A misspelt option is an error that lists the right ones.
+- `editor: { category, description, insert }` puts a package's component in the effect browser, under its category, and `insert` is what adding it writes (`{ amount: 6 }`).
 
 ### When something's wrong
 
@@ -287,7 +321,7 @@ A number in the code can carry a unit, written as a function. Plugging a value w
 
 ```
 song.ts:14:30: snare is not defined
-std/src/filter.ts:10:108: [hats/n22] input `cutoff` expects control<hz>, got control<db>
+std/src/filter.ts:26:40: [hats/n23] input `cutoff` expects control<hz>, got control<db>
 ```
 
 The second one came from `lowpass(hat(…), db(-6))` in `tracks/hats.ts`: a filter's cutoff wants a frequency, not a level. When the wrong value goes into a std function, the line shown is inside std, so look for the call in your own file.
@@ -301,6 +335,7 @@ Problems that don't stop the song (data no lane reads, a lane file that doesn't 
 The code stays the source of truth; the app edits it for you, one small checked change at a time.
 
 - A knob appears for a number written directly at an input: `0.3`, `hz(800)`, `db(-6)`, or a plain property like `{ pan: 0.3 }`.
+- A knob also appears for every control a call leaves out, at the default its component declares (shown in italics). Its first turn writes the number into the call: as the next argument when that is where it goes (`lowpass(x, 1000)` becomes `lowpass(x, 1000, 0.8)`), else in the call's options (`{ release: ms(150), attack: 0.01 }`), else in new ones. A knob's range is the one its component declares.
 - Computed values (`2 * 440`, a variable holding a plain number) and objects with spreads, getters or computed keys still work, but show **edit in code** instead of a knob.
 - A shared value such as `const cutoff = hz(800)` shows as one box wired to every place it's used. Turning it changes all of them.
 - Parentheses and comments around a number are kept.
@@ -332,7 +367,7 @@ std is an ordinary package in `std/`: TypeScript in `std/src`, kernels in `std/k
 
 **Building blocks:** `std/dsp` (oscillators, noise, envelopes, filters, gain, pan), `std/math` (add, scale, blend, sum, pitch to frequency, ranges), `std/control` (`lfo`, `when`, `choose`) and `std/filter`.
 
-`m2 kernels` lists every kernel with its typed inputs and outputs, and `m2 effects <song>` lists the effects and where they can go.
+`m2 kernels` lists every kernel with its typed inputs and outputs, and `m2 effects <song>` lists the effects (by their ids, such as `std:delay`) and where they can go.
 
 ## CLAP plugins
 
@@ -361,13 +396,13 @@ const synth = plugin("clap:org.surge-synth-team.surge-xt", { notes: lane.notes("
 | `m2 kernels [--json]` | Every kernel and its typed ports. |
 | `m2 bounce <song> <name>` | Renders a track, named by its key (`--track keys`), or the whole song to a new `assets/<name>.wav`; it never replaces one that's there. `--place keys.lane@beat` also puts it on an audio lane. |
 | `m2 graph <song> [--json]` | The graph the app shows, as text. |
-| `m2 controls <song>` | Every number the app can turn into a knob, with its id. |
+| `m2 controls <song>` | Every number the app can turn into a knob, with its id, including the controls a call leaves out (`tracks/hats.ts#1/@decay`, marked inherited). |
 | `m2 set <song> <id> <value>` | Changes one, checked by the compiler. `--expect V` refuses unless it's V now. |
 | `m2 cables <song>` | The named signals a cable can start from, and the inputs that cables reach. |
 | `m2 connect <song> <signal> <control>` | Writes a signal's name in place of a number. |
 | `m2 disconnect <song> <input>` | Writes the input's default back in place of the name. |
-| `m2 effects <song>` | The effects packages offer, and the calls they can go after. |
-| `m2 add-effect <song> <call> <module>.<effect>` | Wraps a call's sound in an effect, such as `std/fx.delay`. |
+| `m2 effects <song>` | The effects packages offer, by id (`std:delay`), and the calls they can go after. |
+| `m2 add-effect <song> <call> <effect>` | Wraps a call's sound in an effect, named by its id (`std:delay`) or where it's exported (`std/fx.delay`). |
 | `m2 remove-effect <song> <call>` | Takes an effect out, keeping what it was applied to. |
 | `m2 plugins [clap:<id>]` | Installed CLAP plugins, or one plugin's ports. |
 | `m2 plugin-state <song> <track>/<key> clap:<id>` | Saves a plugin's default settings as its saved state. |
@@ -383,13 +418,14 @@ m2 check /tmp/m2-scratch
 m2 render /tmp/m2-scratch out.wav
 m2 controls /tmp/m2-scratch                                     # ids look like song.ts#2/0.hats.pan
 m2 set /tmp/m2-scratch 'song.ts#2/0.hats.pan' 0.45
-m2 add-effect /tmp/m2-scratch 'tracks/hats.ts#1' std/fx.delay
+m2 set /tmp/m2-scratch 'tracks/hats.ts#1/@decay' 0.08            # a control the call leaves out: writes { decay: 0.08 }
+m2 add-effect /tmp/m2-scratch 'tracks/hats.ts#1' std:delay
 
 m2 new /tmp/m2-resample --example resample
 m2 bounce /tmp/m2-resample keys-again --track keys              # render the keys track to assets/keys-again.wav
 ```
 
-An id names a file, a call in it and an argument. `song.ts#2/0.hats.pan` means: in `song.ts`, call number 2 (here the mixer), its first argument (`0`), and `hats.pan` inside that.
+An id names a file, a call in it and an argument. `song.ts#2/0.hats.pan` means: in `song.ts`, call number 2 (here the mixer), its first argument (`0`), and `hats.pan` inside that. A control the call leaves out is named by its call and `@` with the control's name: `tracks/hats.ts#1/@decay`.
 
 ## Scripts and agents
 
@@ -415,7 +451,7 @@ Edits name the open project's `session` and the `revision` they were planned aga
 | `POST /api/graph/set` `{session, revision, id, gesture, value, expect?}` | Write a knob's value into the code |
 | `POST /api/graph/connect` `{session, revision, from, to}` | Connect a cable |
 | `POST /api/graph/disconnect` `{session, revision, id}` | Disconnect one |
-| `POST /api/graph/effect/add` `{session, revision, call, module, name}` | Add an effect |
+| `POST /api/graph/effect/add` `{session, revision, call, component}` | Add an effect, by its id (`std:delay`) as `effects` lists it |
 | `POST /api/graph/effect/remove` `{session, revision, call}` | Remove one |
 | `POST /api/graph/lane` `{session, revision, module, lane, clips}` | Replace a notes lane's clips (`module` and `lane` are keys; each clip keeps its `id`) |
 | `POST /api/graph/fix` `{session, revision, fix}` | Apply one of the fixes a problem in `problems` offers, as it was offered |

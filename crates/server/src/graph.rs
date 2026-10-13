@@ -162,7 +162,8 @@ struct ControlPlane {
 
 /// How a control named at a revision is found without the session.
 enum Resolved {
-    Control(Control),
+    // Boxed: a control (with its origin) is far larger than the other answers.
+    Control(Box<Control>),
     Missing,
     /// Too old for the control plane: the session carries it.
     Slow,
@@ -184,7 +185,7 @@ impl Published {
             }
         };
         match engine.controls.get(id) {
-            Some(c) => Resolved::Control(c.clone()),
+            Some(c) => Resolved::Control(Box::new(c.clone())),
             None => Resolved::Missing,
         }
     }
@@ -262,9 +263,8 @@ fn check_loop(t: &Timing, start: f64, end: f64) -> Result<()> {
 fn put_back(l: &Lease, device: Option<&Device>) {
     if let (Some(t), Some(d)) = (&l.engine, device)
         && t.epoch == d.epoch
-        && let Err(e) = d.player.commit_const(t.origin.clone(), l.accepted)
     {
-        eprintln!("music2: couldn't put {} back: {e:#}", l.control.id);
+        d.player.set_cells(&t.cells, l.accepted);
     }
 }
 
@@ -394,7 +394,8 @@ impl Inner {
             id: control.id.clone(),
             value: control.value,
             uses: control.uses,
-            home: "code",
+            cells: target.as_ref().map_or(0, |t| t.cells.cells.len()),
+            home: control.home,
             heard: target.is_some(),
         };
         let ttl = owner.ttl.unwrap_or(TTL).min(lease::MAX_TTL);
@@ -625,7 +626,7 @@ impl Graph {
                 bail!("the open project changed; refresh the graph before editing");
             }
             match p.find(revision, id) {
-                Resolved::Control(c) => return self.inner.register(&mut cp, device.as_ref(), c, owner, (revision, id)),
+                Resolved::Control(c) => return self.inner.register(&mut cp, device.as_ref(), *c, owner, (revision, id)),
                 Resolved::Missing => bail!("no control `{id}` in that revision"),
                 Resolved::Slow => {}
             }
@@ -641,11 +642,12 @@ impl Graph {
         self.call(move |a| a.begin(token, revision, &id, owner))
     }
 
-    /// Play `value` for lease `lease`, straight into the engine: never through the session, so
-    /// never behind a compile (WRITE-22, RENDER-29). With `seq`, an update older than one taken
-    /// is dropped (Ok(None)); without, it follows the last. Returns the engine message's sequence
-    /// number ([`Graph::applied`]), or None when nothing plays the control yet: the value is
-    /// then written into the renderer that next plays.
+    /// Play `value` for lease `lease`, straight into the engine: a write to its cells' slots
+    /// (`SetCell`, RENDER-22), never through the session or the queue, so never behind a compile
+    /// or a full queue (WRITE-22, RENDER-28, RENDER-29). With `seq`, an update older than one
+    /// taken is dropped (Ok(None)); without, it follows the last. Returns the cell write's
+    /// sequence number ([`Graph::applied`] says when a block heard it), or None when nothing plays
+    /// the control yet: the value is then written into the renderer that next plays.
     pub fn update(&self, lease: u64, seq: Option<u64>, value: f64) -> Result<Option<u64>> {
         let device = self.inner.current_device();
         let mut cp = self.inner.control.lock();
@@ -671,7 +673,7 @@ impl Graph {
         };
         (l.seq, l.playing, l.touched) = (seq, v, Instant::now());
         Ok(match (&l.engine, &device) {
-            (Some(t), Some(d)) if t.epoch == d.epoch => d.player.set_const(t.origin.clone(), v),
+            (Some(t), Some(d)) if t.epoch == d.epoch => Some(d.player.set_cells(&t.cells, v)),
             _ => None,
         })
     }
@@ -706,7 +708,7 @@ impl Graph {
                     if let (Some(t), Some(d)) = (&l.engine, &device)
                         && t.epoch == d.epoch
                     {
-                        d.player.commit_const(t.origin.clone(), played)?;
+                        d.player.set_cells(&t.cells, played);
                     }
                     return Ok(Committed::Pending { errors });
                 }
@@ -839,7 +841,7 @@ impl Graph {
             }
             let found = p.find(revision, id);
             let control = match &found {
-                Resolved::Control(c) => Some(c),
+                Resolved::Control(c) => Some(&**c),
                 _ => None,
             };
             if let Some(i) = cp.leases.of_gesture(token, gesture, (revision, id), control) {
@@ -916,10 +918,11 @@ impl Graph {
         self.edit(token, move |s| s.disconnect(revision, &id))
     }
 
-    /// Put one of the packages' effects after a call's audio, in code.
-    pub fn add_effect(&self, token: u64, revision: u64, call: &str, module: &str, name: &str) -> Result<Value> {
-        let (call, module, name) = (call.to_string(), module.to_string(), name.to_string());
-        self.edit(token, move |s| s.add_effect(revision, &call, &module, &name))
+    /// Put one of the packages' effects, named by its ComponentId (`std:delay`), after a call's
+    /// audio, in code.
+    pub fn add_effect(&self, token: u64, revision: u64, call: &str, component: &str) -> Result<Value> {
+        let (call, component) = (call.to_string(), component.to_string());
+        self.edit(token, move |s| s.add_effect(revision, &call, &component))
     }
 
     /// Take an effect out, leaving what it was applied to.

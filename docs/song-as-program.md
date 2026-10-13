@@ -516,24 +516,37 @@ export default song(() =>
 );
 ```
 
-`bass()` from `std/instruments` is an ordinary function that builds a `poly` voice out of `std/dsp` parts. It is wrapped in `component()`, which tells the editor that `cutoff` and `drive` are knobs, so a `bass(...)` call shows as one box. (Step 5 replaces this form with [component descriptors](architecture.md#component-descriptors), which declare each control's default instead of the `??` fallbacks below.)
+`bass()` from `std/instruments` is a component: a function that builds a `poly` voice out of `std/dsp` parts, declared with a [descriptor](architecture.md#component-descriptors). The descriptor says what a call takes and what the editor shows: `cutoff` and `drive` are knobs, each with a unit, a default and a range, so a `bass(...)` call shows as one box with both knobs, written or left at their defaults. `voices` is a setting: it shapes the graph, so it is no knob.
 
 ```ts
-export const bass = component({ controls: ["1.cutoff", "1.drive"] }, function bass(notes: Events, o: { cutoff?: Value; drive?: Value; voices?: number } = {}): Audio {
-  const cutoff = o.cutoff ?? hz(600);
-  const v = poly(
-    notes,
-    (n) => {
-      const body = add(osc.saw(n.pitch), scale(osc.square(add(n.pitch, -12)), 0.5));
-      const env = adsr(n.gate, { attack: ms(3), decay: secs(0.3), sustain: 0.6, release: ms(80) });
-      const fenv = adsr(n.gate, { attack: ms(2), decay: secs(0.18), sustain: 0.2, release: ms(80) });
-      const f = svf.lowpass(body, xrange(fenv, cutoff, scale(cutoff, 4)), 1.1);
-      return vca(f, scale(env, n.velocity));
+export const bass = component(
+  {
+    id: "bass",
+    label: "Bass",
+    signature: signature<(notes: Events) => Audio>(),
+    inputs: { notes: port.notes() },
+    controls: {
+      cutoff: control.hz(600).range(20, 20000).log().smooth(),
+      drive: control.db(4).range(0, 36).smooth(),
     },
-    { voices: o.voices ?? 4 },
-  );
-  return drive(v, o.drive ?? 4);
-});
+    settings: { voices: setting.int(4) },
+    output: port.audio(),
+  },
+  function bass(notes: Events, p: Params): Audio {
+    const v = poly(
+      notes,
+      (n) => {
+        const body = add(osc.saw(n.pitch), scale(osc.square(add(n.pitch, -12)), 0.5));
+        const env = adsr(n.gate, { attack: ms(3), decay: secs(0.3), sustain: 0.6, release: ms(80) });
+        const fenv = adsr(n.gate, { attack: ms(2), decay: secs(0.18), sustain: 0.2, release: ms(80) });
+        const f = svf.lowpass(body, scale(p.cutoff, xrange(fenv, 1, 4)), 1.1);
+        return vca(f, scale(env, n.velocity));
+      },
+      { voices: p.voices },
+    );
+    return drive(v, p.drive);
+  },
+);
 ```
 
 There is no tempo and there are no sections in this code. Both are timeline data: the tempo (with the time signatures) is in `data/arrangement.json`, and sections are **Not built yet**.
@@ -568,7 +581,7 @@ Simplified for now:
   - `set(id, value, expect)` writes the shortest decimal that reads back exactly, keeping unit spelling (`khz(2.5)` set to 900 Hz becomes `khz(0.9)`). It verifies, writes, and bumps the revision.
   - `undo()` is guarded.
   - `refresh()` keeps the accepted revision playing while a draft doesn't compile.
-- **Live preview:** `Renderer::set_const(origin, value)` changes a constant everywhere it is used, voices included, at the next block. A test checks that the preview renders bit-identically to the committed edit.
+- **Live preview:** `Renderer::set_const(origin, value)` changed a constant everywhere it is used, voices included, at the next block. A test checks that the preview renders bit-identically to the committed edit. (Since step 5 every such constant is a cell, written through its renderer's slots: [RENDER-22](architecture.md#cells).)
 - **CLI:** `m2 controls <project>` and `m2 set <project> <id> <value> [--expect V]`. A verified edit of the example takes about 5 ms after opening.
 
 **Correctness rules** (after review, each with a regression test). The first two are superseded in part, as noted:
@@ -579,20 +592,20 @@ Simplified for now:
 
 #### The canvas today
 
-This describes the app as it is (commit `92a19a3`, plus steps 1 and 4 of the [order of work](architecture.md#order-of-work)), not the contract.
+This describes the app as it is (commit `92a19a3`, plus steps 1, 4 and 5 of the [order of work](architecture.md#order-of-work)), not the contract.
 
 In the desktop app, *File → Open Project Folder…* (⌘O), or `music2-desktop <project-folder>`, opens a project. The window shows the timeline above a panel with a tab for each module, and three views of it: Graph, Code and Notes. The README describes how to use them.
 
-- **The view** (`core/session/src/view.rs`) shows the calls written in the project, not the kernels they expand into. `component()` records which call each node was made inside, so everything `bass(...)` builds is one node.
+- **The view** (`core/session/src/view.rs`) shows the calls written in the project, not the kernels they expand into. Each component call is a frame in the IR, with its ComponentId (`std:bass`), and every node names the frame it was made in, so everything `bass(...)` builds is one node.
   - Knobs sit on the innermost call that contains where their number is written.
-  - Knobs are named by property path (`hats.pan`, `hats.db`) or by the port they feed (`hi`, `period`), with a range from their unit (log for Hz, seconds and beats).
+  - Knobs are named by property path (`hats.pan`, `hats.db`) or by the control they are (`hi`, `period`), with the range and log scale the component's descriptor declares for the value's unit. A control the call leaves out is a knob too, at its declared default; its first turn writes the number into the call.
   - `m2 graph <project>` prints the same view.
-- **Knobs and playback** (`core/play`, `m2-play`, the core's one touch point with the audio device). A knob drag previews live (`set_const`, sent at most every 30 ms). Releasing commits through the session.
+- **Knobs and playback** (`core/play`, `m2-play`, the core's one touch point with the audio device). A knob drag previews live (a cell write, sent at most every 30 ms). Releasing commits through the session.
   - The running renderer isn't rebuilt for a value commit, because the committed graph equals the playing one with that value.
   - Edits made elsewhere are picked up every 300 ms and rebuild the renderer at the current position.
   - `M2_AUDIO=none` runs it silently on a clock, for tests.
 - **Cables** (`core/session/src/edit/cable.rs`), within one file. An outlet is a `const` bound to a call that returned one signal. Connecting writes its name in place of a control's written value; disconnecting writes the default the input declares, and is refused when it declares none.
-- **Effects** (`core/session/src/edit/effect.rs`). The effect browser lists the `[[effect]]` entries of the loaded packages: 17 in std, in seven categories. Adding one wraps a call's audio where it is written (`pluck(…)` → `reverb(pluck(…), {…})`); removing one unwraps it.
+- **Effects** (`core/session/src/edit/effect.rs`). The effect browser lists the components whose descriptors give an editor category: 17 in std, in seven categories. Adding one wraps a call's audio where it is written (`pluck(…)` → `reverb(pluck(…), {…})`), with what its descriptor's `insert` says; removing one unwraps it. A call is an effect by its ComponentId, whatever name the code imports it as.
 - **The timeline** (`web/src/components/SongTimeline.tsx`) shows every lane of every track. Notes clips can be added, moved and deleted there; automation, mask and audio clips are shown only.
 - **Notes editing** (`NoteView.tsx`, `core/session/src/lanes.rs`): the piano roll rewrites one notes lane's clips at a time, checked like any other edit.
 - **The code editor** (`CodeView.tsx`, `crates/server/src/files.rs`): Monaco, type-checked against the SDK and the package sources. A save is written only if the file still says what the editor read. Code that doesn't compile is saved too, and the last revision that did keeps playing.

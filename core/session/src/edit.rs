@@ -6,8 +6,9 @@
 //! timeline always belong together. Files on disk are the draft; [`Session::refresh`]
 //! accepts them only if they compile, and otherwise keeps the accepted revision.
 //!
-//! Edits are structured operations, never text. This slice supports one: set a
-//! written number. An edit names the revision it was planned against. If the files
+//! Edits are structured operations, never text. A value edit sets a written number, or writes
+//! a declared control that a call leaves out into the call (its first edit, the step 5 design's
+//! D5). An edit names the revision it was planned against. If the files
 //! changed since, its target is carried forward only when no change touched it (its
 //! call lies entirely outside the changed bytes and reads the same); otherwise it is
 //! refused as stale. The edit is compiled as a candidate from memory and accepted only
@@ -16,21 +17,23 @@
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use m2_ir::{Diagnostic, Ir, Node, Op, Origin, Unit};
+use m2_ir::{Diagnostic, Ir, Module, Node, Op, Origin, Unit};
 use m2_runtime::PackageSet;
-use m2_script::sites::Site;
+use m2_script::sites::{Arg, Site};
+use m2_script::{Catalog, Descriptor};
 use m2_song::{Project, Snapshot};
 
-use crate::{Compiled, Seen, compile_sources};
+use crate::{Compiled, Home, Seen, compile_sources};
 
 mod cable;
 mod data;
-mod effect;
+pub(crate) mod effect;
 mod lens;
 mod relink;
 pub use cable::{Inlet, Outlet};
-use lens::LiteralLens;
+use lens::{Insertion, LiteralLens};
 
 /// One accepted state of the project.
 pub struct Revision {
@@ -40,11 +43,14 @@ pub struct Revision {
     pub compiled: Compiled,
 }
 
-/// A number written in the project's code that the graph can show as a knob.
+/// A value of the project's code that the graph can show as a knob: a number written in the
+/// project's own files, or a declared control one of its calls leaves out, which plays the
+/// descriptor's default (inherited, PKG-3) and whose first edit writes it into the call.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Control {
-    /// `file#call/arg`: the file, the call's position among the file's calls, and the
-    /// argument path. Meaningful together with `revision`.
+    /// `file#call/arg` for a written number: the file, the call's position among the file's
+    /// calls, and the argument path; `file#call/@slot` for a control the call leaves out.
+    /// Meaningful together with `revision`.
     pub id: String,
     /// The accepted revision this control was read from.
     pub revision: u64,
@@ -52,7 +58,7 @@ pub struct Control {
     pub line: u32,
     /// The current value, in the constant's units (written number × scale).
     pub value: f64,
-    /// The text written in the code, e.g. `0.3`, or `2.5` in `khz(2.5)`.
+    /// The text written in the code, e.g. `0.3`, or `2.5` in `khz(2.5)`; empty when inherited.
     pub literal: String,
     pub unit: Option<Unit>,
     /// The constant is the written number times this.
@@ -60,15 +66,104 @@ pub struct Control {
     /// How many graph nodes use it (a helper called twice gives two).
     pub uses: usize,
     pub origin: Origin,
-    lens: LiteralLens,
+    /// Written in the code, or left out of its call (the declared default).
+    pub written: bool,
+    /// Where the value lives (HOME-1): the code, for every control until lanes, latches and
+    /// plugin state have knobs.
+    pub home: Home,
+    /// Every declared control this value feeds, each `(component, slot)` once: several when one
+    /// literal reaches several slots (`const g = frac(0.3)` given to `feedback` and `mix`).
+    pub declared: Vec<Declared>,
+    edit: Edit,
+}
+
+/// A declared control (PKG-3) a value feeds, as its component's descriptor declares it, for a
+/// value in the constant's unit.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Declared {
+    /// The ComponentId (`std:delay`).
+    pub component: String,
+    /// The slot (`time`, `channels.hats.db`).
+    pub slot: String,
+    /// What a knob is called: the control's label, else its name (`hats.db` in a dictionary).
+    pub label: String,
+    /// The range a knob shows (a hint, PKG-8) and whether it moves logarithmically: the
+    /// declared ones when the value has the declared unit, an `accepts` entry's for its unit,
+    /// else none.
+    pub range: Option<(f64, f64)>,
+    pub log: bool,
+    /// The descriptor's default, when the value has the declared unit.
+    pub default: Option<f64>,
+}
+
+/// How a control is written.
+#[derive(Clone, Debug, PartialEq)]
+enum Edit {
+    /// Its number is rewritten in place. `expression` is the whole value written at the slot: the
+    /// number, or a quantity's call (`hz(500)`), which a cable replaces.
+    Literal { lens: LiteralLens, expression: (u32, u32) },
+    /// It is written into its call (the first edit of an inherited control).
+    Insert(Insertion),
 }
 
 impl Control {
     /// The value `value` plays as, exactly as a commit would write it (the literal's spelling,
     /// rounded through its units): what a gesture's update sends the engine (WRITE-22). Pure.
     pub fn audition(&self, value: f64) -> Result<f64, EditError> {
-        Ok(self.lens.propose(value)?.value)
+        Ok(match &self.edit {
+            Edit::Literal { lens, .. } => lens.propose(value)?.value,
+            Edit::Insert(_) => lens::propose(value, 1.0)?.value,
+        })
     }
+
+    /// For a control its call leaves out: the bytes writing `number` (a value, or a signal's name)
+    /// into the call replaces, and the text, as `set` and `connect` write it before verifying.
+    pub(crate) fn planned(&self, number: &str) -> Option<(u32, u32, String)> {
+        match &self.edit {
+            Edit::Insert(i) => Some((i.start, i.end, i.text(number))),
+            Edit::Literal { .. } => None,
+        }
+    }
+
+    /// The whole value written at the slot (the number, or a quantity's call), for a written one.
+    fn expression(&self) -> Option<(u32, u32)> {
+        match &self.edit {
+            Edit::Literal { expression, .. } => Some(*expression),
+            Edit::Insert(_) => None,
+        }
+    }
+
+    /// The literal's bytes, for a written number.
+    fn lens(&self) -> Option<&LiteralLens> {
+        match &self.edit {
+            Edit::Literal { lens, .. } => Some(lens),
+            Edit::Insert(_) => None,
+        }
+    }
+}
+
+/// The descriptor of the component whose instance frame `frame` of `m` is, if it was declared
+/// with one.
+pub(crate) fn component_of<'a>(compiled: &'a Compiled, m: &Module, frame: u32) -> Option<&'a Arc<Descriptor>> {
+    compiled.components.get(m.frames.get(frame as usize)?.component.as_deref()?)
+}
+
+/// The declared control a constant of `m` with `origin` is, for a value in `unit` (PKG-3).
+pub(crate) fn declared(compiled: &Compiled, m: &Module, origin: &Origin, unit: Option<Unit>) -> Option<Declared> {
+    let slot = origin.control.as_ref()?;
+    let desc = component_of(compiled, m, slot.frame)?;
+    let c = desc.control(&slot.slot)?;
+    // A dictionary entry's control is named by its key: `hats.db`.
+    let name = slot.slot.split_once('.').map_or(slot.slot.as_str(), |(_, rest)| rest);
+    let range = desc.range_for(&slot.slot, unit);
+    Some(Declared {
+        component: desc.id.clone(),
+        slot: slot.slot.clone(),
+        label: c.label.clone().unwrap_or_else(|| name.to_string()),
+        range: range.map(|r| r.0),
+        log: range.is_some_and(|r| r.1),
+        default: c.default.as_ref().filter(|_| unit == c.unit).map(|d| d.value),
+    })
 }
 
 /// Where a previewed value lands in the accepted revision.
@@ -172,6 +267,12 @@ enum Undo {
     /// created). It is allowed only while the file is exactly as the change left it, and the
     /// project must compile with it.
     Exact { restore: Option<String> },
+    /// A declared control written into its call (its first edit, D5), or, as the inverse, taken
+    /// out again. Found like a value, by where its bytes are carried to (WRITE-21), never by an
+    /// origin. `inserted`: the change wrote the argument (reverting takes it out, and `slot`
+    /// inherits `default` again); else it took it out (reverting writes it back, at `path`,
+    /// reading `value`).
+    Inserted { slot: String, default: f64, value: f64, path: Vec<String>, inserted: bool },
     /// Data files or folders moved, removed or created as they were (see `data`): reverting
     /// makes `steps`, only while every path the edit touched holds what it `left` there and the
     /// names `steps` make are free. `back` is where the change's file is once reverted.
@@ -263,6 +364,11 @@ pub struct Session {
     /// What every revision accepted so far declared, so data a rename left behind is named as
     /// its track was and offered only to lanes that read it.
     seen: Seen,
+    /// Every component the packages declare, described once at open (PKG-11): what the effect
+    /// browser offers and the effect planner adds. Packages don't change while a project is open.
+    catalog: Arc<Catalog>,
+    /// The packages' problems (`pkg.invalid`), then the accepted revision's.
+    problems: Vec<m2_song::Diagnostic>,
 }
 
 /// Why `name` isn't created: `by`, which has its name on a disk that ignores capitals (see
@@ -400,7 +506,9 @@ fn kept_lines<T: PartialEq>(a: &[T], b: &[T]) -> Option<Vec<Option<usize>>> {
     Some(kept)
 }
 
-/// The IR with source positions removed, for comparing two builds.
+/// The IR with source positions removed, for comparing two builds. Which argument held a call's
+/// options is where the source spells them too: writing a control into a new options object
+/// moves it, and nothing that plays.
 fn without_src(ir: &Ir) -> Ir {
     fn nodes(ns: &mut [Node]) {
         for n in ns {
@@ -413,6 +521,7 @@ fn without_src(ir: &Ir) -> Ir {
     let mut ir = ir.clone();
     for m in &mut ir.modules {
         m.src = None;
+        m.frames.iter_mut().for_each(|f| f.options = None);
         nodes(&mut m.nodes);
     }
     ir
@@ -420,24 +529,55 @@ fn without_src(ir: &Ir) -> Ir {
 
 /// `ir` with every constant written at `origin` set to `value`, and how many there were.
 fn with_value(ir: &Ir, origin: &Origin, value: f64) -> (Ir, usize) {
-    fn nodes(ns: &mut [Node], origin: &Origin, value: f64) -> usize {
+    with_consts(ir, origin, |v, _| *v = value)
+}
+
+/// `ir` with every constant of the value at `origin` changed by `f`, and how many there were.
+fn with_consts(ir: &Ir, origin: &Origin, f: impl Fn(&mut f64, &mut Origin)) -> (Ir, usize) {
+    fn nodes(ns: &mut [Node], origin: &Origin, f: &dyn Fn(&mut f64, &mut Origin)) -> usize {
         let mut n = 0;
         for node in ns {
-            if let (Op::Const { value: v, .. }, Some(o)) = (&mut node.op, &node.origin)
+            if let (Op::Const { value: v, .. }, Some(o)) = (&mut node.op, &mut node.origin)
                 && o.same_value(origin)
             {
-                *v = value;
+                f(v, o);
                 n += 1;
             }
             if let Op::Poly { body, .. } = &mut node.op {
-                n += nodes(&mut body.nodes, origin, value);
+                n += nodes(&mut body.nodes, origin, f);
             }
         }
         n
     }
     let mut ir = ir.clone();
-    let n = ir.modules.iter_mut().map(|m| nodes(&mut m.nodes, origin, value)).sum();
+    let n = ir.modules.iter_mut().map(|m| nodes(&mut m.nodes, origin, &f)).sum();
     (ir, n)
+}
+
+/// `ir` with the inherited control at `origin` written into its call at `path` as `value`:
+/// what writing it must give (D5). Only the value, the path and "written" change.
+fn with_written(ir: &Ir, origin: &Origin, value: f64, path: &[String]) -> (Ir, usize) {
+    with_consts(ir, origin, |v, o| {
+        *v = value;
+        o.arg = path.to_vec();
+        o.scale = None;
+        if let Some(c) = &mut o.control {
+            c.inherited = false;
+        }
+    })
+}
+
+/// `ir` with the control written at `origin` taken out of its call, so it plays `default`:
+/// what taking an inserted argument out must give, the inverse of [`with_written`].
+fn with_inherited(ir: &Ir, origin: &Origin, default: f64) -> (Ir, usize) {
+    with_consts(ir, origin, |v, o| {
+        *v = default;
+        o.arg.clear();
+        o.scale = None;
+        if let Some(c) = &mut o.control {
+            c.inherited = true;
+        }
+    })
 }
 
 fn walk(ns: &[Node], f: &mut impl FnMut(&Node)) {
@@ -456,6 +596,95 @@ fn site_by_id<'a>(sites: &'a [Site], id: &str) -> Option<(&'a Site, Vec<String>)
     let ordinal: u32 = ordinal.parse().ok()?;
     let site = sites.iter().find(|s| s.file == file && s.ordinal == ordinal)?;
     Some((site, arg.split('.').map(str::to_string).collect()))
+}
+
+/// Call `call` of `old` before and after bytes `start..end` inside it become `text`, as a message
+/// shows them: whole when both fit on a line; otherwise with each long argument the edit doesn't
+/// touch (and each long property of an options object it edits) cut to `…` and white space
+/// folded, so the change stays in view (`master(…)` → `master(…, { ceiling: 0 })`).
+fn shown_call(call: &Site, old: &str, start: u32, end: u32, text: &str) -> (String, String) {
+    const LINE: usize = 60;
+    const SHORT: usize = 24;
+    let (a, d) = (call.start as usize, call.end as usize);
+    let before = &old[a..d];
+    let after = format!("{}{text}{}", &old[a..start as usize], &old[end as usize..d]);
+    let fits = |t: &str| !t.contains('\n') && t.chars().count() <= LINE;
+    if fits(before) && fits(&after) {
+        return (before.to_string(), after);
+    }
+    // Touched: the replaced bytes overlap it, or an insertion goes inside it.
+    let untouched = |(s, e): (u32, u32)| if start < end { e <= start || end <= s } else { e <= start || start <= s };
+    let long = |(s, e): (u32, u32)| !fits(&old[s as usize..e as usize]) || old[s as usize..e as usize].chars().count() > SHORT;
+    let mut cut: Vec<(u32, u32)> = vec![];
+    for arg in &call.args {
+        let span = arg.span();
+        if untouched(span) {
+            cut.extend(Some(span).filter(|&x| long(x)));
+        } else if let Arg::Object { props, .. } = arg {
+            cut.extend(props.iter().map(|(_, v)| v.span()).filter(|&x| untouched(x) && long(x)));
+        }
+    }
+    // The same cuts in both: those after the edit move by what it adds.
+    let grown = text.len() as i64 - i64::from(end - start);
+    let render = |t: &str, shift: bool| {
+        let mut out = String::new();
+        let mut at = 0;
+        for &(s, e) in &cut {
+            let moved = |x: u32| (i64::from(x) - a as i64 + if shift && s >= end { grown } else { 0 }) as usize;
+            out += &t[at..moved(s)];
+            out += "…";
+            at = moved(e);
+        }
+        out += &t[at..];
+        fold(&out)
+    };
+    (render(before, false), render(&after, true))
+}
+
+/// `code` on one line: without line comments (which would run on to the end), each run of white
+/// space one space, none just inside brackets, and no comma before a closing one.
+fn fold(code: &str) -> String {
+    let mut bare = String::new();
+    let mut quote = None;
+    let mut chars = code.chars().peekable();
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) => {
+                bare.push(c);
+                if c == '\\' {
+                    bare.extend(chars.next());
+                } else if c == q {
+                    quote = None;
+                }
+            }
+            None if c == '/' && chars.peek() == Some(&'/') => while chars.next_if(|&n| n != '\n').is_some() {},
+            None if c == '/' && chars.peek() == Some(&'*') => {
+                // A block comment stays, `//` inside it included.
+                bare.push(c);
+                bare.extend(chars.next());
+                let mut star = false;
+                for n in chars.by_ref() {
+                    bare.push(n);
+                    if star && n == '/' {
+                        break;
+                    }
+                    star = n == '*';
+                }
+            }
+            None => {
+                if matches!(c, '"' | '\'' | '`') {
+                    quote = Some(c);
+                }
+                bare.push(c);
+            }
+        }
+    }
+    let words: Vec<&str> = bare.split_whitespace().collect();
+    let mut out = words.join(" ");
+    for (from, to) in [("( ", "("), ("[ ", "["), (" )", ")"), (" ]", "]"), (",)", ")"), (",]", "]")] {
+        out = out.replace(from, to);
+    }
+    out
 }
 
 /// Build a project read from a snapshot, given the data last accepted, which a lane whose file
@@ -479,28 +708,68 @@ fn unreadable(e: anyhow::Error) -> Vec<Diagnostic> {
     vec![Diagnostic::error("manifest.invalid", format!("{e:#}"))]
 }
 
-/// The control constant `origin` with `value` shows in `rev`, if it is a number written in
-/// the project's own code.
-fn control(rev: &Revision, origin: &Origin, value: f64, unit: Option<Unit>) -> Option<Control> {
-    if origin.arg.is_empty() {
-        return None;
-    }
-    let site = rev.compiled.sites.iter().find(|s| s.id == origin.site && s.in_project)?;
+/// The control a constant of module `m` with `origin` and `value` shows in `rev`: a number written
+/// in the project's own code, or a declared control a call in it leaves out, when the call can
+/// take it (see [`Insertion::plan`]). `sites` is `rev`'s by id.
+fn control(rev: &Revision, sites: &HashMap<u32, &Site>, m: &Module, origin: &Origin, value: f64, unit: Option<Unit>) -> Option<Control> {
+    let site = sites.get(&origin.site).filter(|s| s.in_project)?;
     let text = rev.snapshot.files.get(Path::new(&site.file))?;
-    let lens = LiteralLens::read(site, origin, text, value)?;
+    let (id, literal, scale, edit) = if origin.arg.is_empty() {
+        let slot = origin.control.as_ref().filter(|c| c.inherited)?;
+        let desc = component_of(&rev.compiled, m, slot.frame)?;
+        let insertion = Insertion::plan(site, desc, &slot.slot, text, options_of(m, site.id).ok()?).ok()?;
+        (format!("{}#{}/@{}", site.file, site.ordinal, slot.slot), String::new(), 1.0, Edit::Insert(insertion))
+    } else {
+        let lens = LiteralLens::read(site, origin, text, value)?;
+        // A quantity (`hz(500)`) is its own call; a plain number is written in its instance's
+        // call, or, for an old-form component, is a constant with no unit.
+        let quantity = match &origin.control {
+            Some(slot) => m.frames.get(slot.frame as usize).is_some_and(|f| f.site != origin.site),
+            None => unit.is_some(),
+        };
+        let expression = if quantity { (site.start, site.end) } else { (lens.start, lens.end) };
+        let id = format!("{}#{}/{}", site.file, site.ordinal, origin.arg.join("."));
+        (id, lens.literal.clone(), lens.scale, Edit::Literal { lens, expression })
+    };
     Some(Control {
-        id: format!("{}#{}/{}", site.file, site.ordinal, origin.arg.join(".")),
+        id,
         revision: rev.number,
         file: site.file.clone(),
         line: site.line,
         value,
-        literal: lens.literal.clone(),
+        literal,
         unit,
-        scale: lens.scale,
+        scale,
         uses: 1,
         origin: origin.clone(),
-        lens,
+        written: !origin.arg.is_empty(),
+        home: Home::Code,
+        declared: declared(&rev.compiled, m, origin, unit).into_iter().collect(),
+        edit,
     })
+}
+
+/// Why a declared control that a call leaves out can't be written into it, or None when it can
+/// or isn't one: for the view, which shows such a value as read-only.
+pub(crate) fn not_insertable(rev: &Revision, site: &Site, m: &Module, origin: &Origin) -> Option<&'static str> {
+    let slot = origin.control.as_ref().filter(|c| c.inherited && origin.arg.is_empty())?;
+    let desc = component_of(&rev.compiled, m, slot.frame)?;
+    let text = rev.snapshot.files.get(Path::new(&site.file))?;
+    match options_of(m, site.id) {
+        Ok(options) => Insertion::plan(site, desc, &slot.slot, text, options).err(),
+        Err(why) => Some(why),
+    }
+}
+
+/// Which argument of call `site` held its options when `m` was built (`Frame.options`), if one
+/// did; why not known, when its evaluations disagree.
+fn options_of(m: &Module, site: u32) -> Result<Option<usize>, &'static str> {
+    let mut read = m.frames.iter().filter(|f| f.site == site && f.component.is_some()).map(|f| f.options);
+    let first = read.next().flatten();
+    match read.all(|o| o == first) {
+        true => Ok(first.map(|i| i as usize)),
+        false => Err("its evaluations read its arguments differently, so where it would go isn't known"),
+    }
 }
 
 impl Session {
@@ -511,7 +780,10 @@ impl Session {
         let compiled = build(&project, &mut packages, &Seen::default(), None)?;
         let mut seen = Seen::default();
         seen.add(&compiled.ir);
-        Ok(Session {
+        // Never fails (WRITE-20): a package module that doesn't load is `pkg.invalid`, and only
+        // its components are missing from the catalog.
+        let catalog = Arc::new(crate::catalog(&packages));
+        let mut s = Session {
             packages,
             dir: snapshot.dir.clone(),
             draft: snapshot.clone(),
@@ -521,7 +793,11 @@ impl Session {
             past: VecDeque::new(),
             history: vec![],
             redo: vec![],
-        })
+            catalog,
+            problems: vec![],
+        };
+        s.problems = s.gather_problems();
+        Ok(s)
     }
 
     /// The last revision that compiled. Everything shown or played comes from it.
@@ -529,10 +805,21 @@ impl Session {
         &self.accepted
     }
 
-    /// What needs attention in the accepted revision though it plays, such as data no lane
-    /// reads, with the fixes each offers (DIAG-1, DIAG-4).
+    /// What needs attention though the song plays, with the fixes each offers (DIAG-1, DIAG-4):
+    /// a package module that doesn't load (`pkg.invalid`, the session's), then the accepted
+    /// revision's problems, such as data no lane reads.
     pub fn problems(&self) -> &[m2_song::Diagnostic] {
-        &self.accepted.compiled.problems
+        &self.problems
+    }
+
+    fn gather_problems(&self) -> Vec<m2_song::Diagnostic> {
+        let packages = self.catalog.problems.iter().cloned().map(crate::problem);
+        packages.chain(self.accepted.compiled.problems.iter().cloned()).collect()
+    }
+
+    /// Every component the packages declare, and where each is exported (PKG-11).
+    pub fn catalog(&self) -> &Catalog {
+        &self.catalog
     }
 
     fn accept(&mut self, snapshot: Snapshot, project: Project, compiled: Compiled) -> u64 {
@@ -543,6 +830,7 @@ impl Session {
         if self.past.len() > PAST {
             self.past.pop_front();
         }
+        self.problems = self.gather_problems();
         number
     }
 
@@ -579,40 +867,87 @@ impl Session {
         true
     }
 
-    /// Every number written in the project's own files that feeds the graph.
+    /// Every value of the project's own code that feeds the graph: each number written in its
+    /// files, and each declared control its calls leave out that can be written into them.
+    /// Values are keyed as their ids are: a written number by where it is written (so one
+    /// literal reaching two slots is one control, with both in `declared`), an inherited control
+    /// by its call and slot (every evaluation of that call).
     pub fn controls(&self) -> Vec<Control> {
         let rev = &self.accepted;
+        let sites: HashMap<u32, &Site> = rev.compiled.sites.iter().map(|s| (s.id, s)).collect();
         let mut found: BTreeMap<String, Control> = BTreeMap::new();
-        let mut visit = |n: &Node| {
-            let (Op::Const { value, unit }, Some(o)) = (&n.op, &n.origin) else { return };
-            if let Some(c) = control(rev, o, *value, *unit) {
-                found.entry(c.id.clone()).and_modify(|k| k.uses += 1).or_insert(c);
-            }
-        };
         for m in &rev.compiled.ir.modules {
-            walk(&m.nodes, &mut visit);
+            walk(&m.nodes, &mut |n: &Node| {
+                let (Op::Const { value, unit }, Some(o)) = (&n.op, &n.origin) else { return };
+                let Some(c) = control(rev, &sites, m, o, *value, *unit) else { return };
+                match found.get_mut(&c.id) {
+                    Some(k) => {
+                        k.uses += 1;
+                        for d in c.declared {
+                            if !k.declared.iter().any(|x| x.component == d.component && x.slot == d.slot) {
+                                k.declared.push(d);
+                            }
+                        }
+                    }
+                    None => {
+                        found.insert(c.id.clone(), c);
+                    }
+                }
+            });
         }
         found.into_values().collect()
+    }
+
+    /// The controls of the accepted revision whose constants have an origin among `calls`
+    /// (sites), each once, by the first constant found.
+    fn controls_at(&self, calls: &[u32]) -> Vec<Control> {
+        let rev = &self.accepted;
+        let sites: HashMap<u32, &Site> = rev.compiled.sites.iter().filter(|s| calls.contains(&s.id)).map(|s| (s.id, s)).collect();
+        let mut found: Vec<Control> = vec![];
+        for m in &rev.compiled.ir.modules {
+            walk(&m.nodes, &mut |n: &Node| {
+                if let (Op::Const { value, unit }, Some(o)) = (&n.op, &n.origin)
+                    && sites.contains_key(&o.site)
+                    && let Some(c) = control(rev, &sites, m, o, *value, *unit)
+                    && !found.iter().any(|f| f.id == c.id)
+                {
+                    found.push(c);
+                }
+            });
+        }
+        found
+    }
+
+    /// The project calls of `file` in the accepted revision whose source holds bytes `start..end`.
+    fn calls_around(&self, file: &Path, start: u32, end: u32) -> Vec<u32> {
+        let around = |s: &&Site| s.in_project && Path::new(&s.file) == file && s.start <= start && end <= s.end;
+        self.accepted.compiled.sites.iter().filter(around).map(|s| s.id).collect()
     }
 
     /// The control written at bytes `start..end` of `file` in the accepted revision, if there
     /// is one: found by the calls around those bytes, whatever they are numbered now.
     fn control_at(&self, file: &Path, start: u32, end: u32) -> Option<Control> {
-        let rev = &self.accepted;
-        let around = |s: &&Site| s.in_project && Path::new(&s.file) == file && s.start <= start && end <= s.end;
-        let calls: Vec<u32> = rev.compiled.sites.iter().filter(around).map(|s| s.id).collect();
-        let mut found = None;
-        let mut visit = |n: &Node| {
-            if let (None, Op::Const { value, unit }, Some(o)) = (&found, &n.op, &n.origin)
-                && calls.contains(&o.site)
-            {
-                found = control(rev, o, *value, *unit).filter(|c| c.lens.start == start && c.lens.end == end);
-            }
-        };
-        for m in &rev.compiled.ir.modules {
-            walk(&m.nodes, &mut visit);
-        }
-        found
+        let calls = self.calls_around(file, start, end);
+        self.controls_at(&calls).into_iter().find(|c| c.lens().is_some_and(|l| l.start == start && l.end == end))
+    }
+
+    /// The control of slot `slot` written inside bytes `start..end` of `file`: an argument an
+    /// insertion wrote, found by where its bytes are now.
+    fn written_in(&self, file: &Path, start: u32, end: u32, slot: &str) -> Option<Control> {
+        let calls = self.calls_around(file, start, end);
+        self.controls_at(&calls)
+            .into_iter()
+            .find(|c| c.origin.slot() == Some(slot) && c.lens().is_some_and(|l| start <= l.start && l.end <= end))
+    }
+
+    /// The control of slot `slot` that the innermost call around byte `at` of `file` leaves out:
+    /// where an insertion that was taken out is written again.
+    fn inherited_at(&self, file: &Path, at: u32, slot: &str) -> Option<Control> {
+        let mut calls = self.calls_around(file, at, at);
+        let sites = &self.accepted.compiled.sites;
+        calls.sort_by_key(|id| sites.iter().find(|s| s.id == *id).map_or(u32::MAX, |s| s.end - s.start));
+        let found = self.controls_at(&calls);
+        calls.iter().find_map(|id| found.iter().find(|c| !c.written && c.origin.site == *id && c.origin.slot() == Some(slot)).cloned())
     }
 
     /// [`Session::controls`] by id.
@@ -670,7 +1005,11 @@ impl Session {
         {
             return Err(EditError::Conflict { current: c.value });
         }
-        let edit = c.lens.propose(value)?;
+        let lens = match &c.edit {
+            Edit::Literal { lens, .. } => lens.clone(),
+            Edit::Insert(insertion) => return self.insert(&c, &insertion.clone(), value),
+        };
+        let edit = lens.propose(value)?;
         if edit.value == c.value {
             // Closing a preview at its starting value is a real gesture, but not
             // a source edit. Preserve spellings such as `0x320`, `8e2` and `-0`.
@@ -683,7 +1022,58 @@ impl Session {
                 value: c.value,
             });
         }
-        self.apply(Path::new(&c.file), c.lens.start, c.lens.end, &edit.text, &c.origin, edit.value, Some(c.value))
+        self.apply(Path::new(&c.file), lens.start, lens.end, &edit.text, &c.origin, edit.value, Some(c.value))
+    }
+
+    /// How writing `text` over bytes `start..end` inside call `site` of the accepted revision is
+    /// shown: the call before and after, as an effect edit is (see [`shown_call`]).
+    fn shown(&self, site: u32, start: u32, end: u32, text: &str) -> (String, String) {
+        let rev = &self.accepted;
+        let call = rev.compiled.sites.iter().find(|s| s.id == site).filter(|s| s.start <= start && end <= s.end);
+        let source = call.and_then(|s| rev.snapshot.files.get(Path::new(&s.file)));
+        match (call, source) {
+            (Some(s), Some(old)) => shown_call(s, old, start, end, text),
+            _ => (String::new(), text.to_string()),
+        }
+    }
+
+    /// Write inherited control `c` into its call as `value` (its first edit, D5): a plain number
+    /// in base units where `insertion` says. The candidate must be the accepted graph with every
+    /// constant of the control set to the value and written at the insertion's path, and
+    /// nothing else changed. Releasing at the default writes nothing. Recorded for undo, which
+    /// takes the argument out again wherever later edits carry it (WRITE-21).
+    fn insert(&mut self, c: &Control, insertion: &Insertion, value: f64) -> Result<Committed, EditError> {
+        let edit = lens::propose(value, 1.0)?;
+        if edit.value == c.value {
+            return Ok(Committed {
+                revision: self.accepted.number,
+                file: c.file.clone(),
+                before: String::new(),
+                after: String::new(),
+                origin: c.origin.clone(),
+                value: c.value,
+            });
+        }
+        let text = insertion.text(&edit.text);
+        let file = Path::new(&c.file);
+        let candidate = self.candidate(file, insertion.start, insertion.end, &text)?;
+        let (expected, changed) = with_written(&self.accepted.compiled.ir, &c.origin, edit.value, &insertion.path);
+        if changed == 0 {
+            return Err(EditError::Rejected("the control is no longer in the graph".into()));
+        }
+        if without_src(&candidate.compiled.ir) != without_src(&expected) {
+            return Err(EditError::Rejected("writing this value into the call would change more than this value".into()));
+        }
+        let (before, after) = self.shown(c.origin.site, insertion.start, insertion.end, &text);
+        let slot = c.origin.slot().unwrap_or_default().to_string();
+        let undo = Undo::Inserted { slot, default: c.value, value: edit.value, path: insertion.path.clone(), inserted: true };
+        let revision = self.commit(candidate, Some(undo))?;
+        let mut origin = c.origin.clone();
+        origin.arg.clone_from(&insertion.path);
+        if let Some(s) = &mut origin.control {
+            s.inherited = false;
+        }
+        Ok(Committed { revision, file: c.file.clone(), before, after, origin, value: edit.value })
     }
 
     /// Resolve a live edit using exactly the same literal lens as a saved edit.
@@ -698,8 +1088,8 @@ impl Session {
             return Err(EditError::DraftInvalid(self.draft_errors.clone()));
         }
         let c = self.resolve(at, id)?;
-        let edit = c.lens.propose(value)?;
-        Ok(Audition { id: c.id, origin: c.origin, value: edit.value, current: c.value })
+        let value = c.audition(value)?;
+        Ok(Audition { id: c.id, origin: c.origin, value, current: c.value })
     }
 
     /// Replace bytes `start..end` of one file with `text`, which must set the constant
@@ -931,6 +1321,7 @@ impl Session {
         let files = &self.accepted.snapshot.files;
         match &c.undo {
             Undo::Value { scale, .. } => self.carried(c).is_some_and(|(_, k)| k.is_some_and(|k| k.scale == *scale)),
+            Undo::Inserted { .. } => self.carried_insertion(c).is_some(),
             Undo::Exact { restore } => {
                 let free = || data::taken(&self.accepted.snapshot, &c.file).is_none();
                 files.get(&c.file) == c.left.as_ref() && (c.left.is_some() || restore.is_none() || free())
@@ -945,6 +1336,20 @@ impl Session {
         let (was, now) = (c.left.as_ref()?, self.accepted.snapshot.files.get(&c.file)?);
         let start = carry(was, now, c.start as usize, c.start as usize + c.after.len())? as u32;
         Some((start, self.control_at(&c.file, start, start + c.after.len() as u32)))
+    }
+
+    /// Where an insertion's bytes (or, for one taken out, the place it was) are in the accepted
+    /// revision, if no change touched them, and the control reverting it acts on: the argument
+    /// written there, or the control the call there leaves out.
+    fn carried_insertion(&self, c: &Change) -> Option<(u32, Control)> {
+        let Undo::Inserted { slot, inserted, .. } = &c.undo else { return None };
+        let (was, now) = (c.left.as_ref()?, self.accepted.snapshot.files.get(&c.file)?);
+        let start = carry(was, now, c.start as usize, c.start as usize + c.after.len())? as u32;
+        let control = match inserted {
+            true => self.written_in(&c.file, start, start + c.after.len() as u32, slot)?,
+            false => self.inherited_at(&c.file, start, slot)?,
+        };
+        Some((start, control))
     }
 
     /// Revert the newest change on one stack and record its inverse on the other.
@@ -993,6 +1398,32 @@ impl Session {
                 };
                 Ok((Edited { revision: done.revision, file, before: done.before, after: done.after }, inverse))
             }
+            Undo::Inserted { slot, default, value, path, inserted } => {
+                let (start, control) = self.carried_insertion(c).ok_or_else(|| {
+                    EditError::Rejected("that argument has been edited since; undo would overwrite it, so change it in the code".into())
+                })?;
+                let end = start + c.after.len() as u32;
+                let candidate = self.candidate(&c.file, start, end, &c.before)?;
+                // Taken out, the control plays its default again; written back, the value.
+                let (expected, changed) = match inserted {
+                    true => with_inherited(&self.accepted.compiled.ir, &control.origin, *default),
+                    false => with_written(&self.accepted.compiled.ir, &control.origin, *value, path),
+                };
+                if changed == 0 || without_src(&candidate.compiled.ir) != without_src(&expected) {
+                    return Err(EditError::Rejected("that argument no longer sets this control alone; change it in the code".into()));
+                }
+                let (shown_before, shown_after) = self.shown(control.origin.site, start, end, &c.before);
+                let revision = self.commit(candidate, None)?;
+                let inverse = Change {
+                    file: c.file.clone(),
+                    left: self.accepted.snapshot.files.get(&c.file).cloned(),
+                    start,
+                    before: c.after.clone(),
+                    after: c.before.clone(),
+                    undo: Undo::Inserted { slot: slot.clone(), default: *default, value: *value, path: path.clone(), inserted: !inserted },
+                };
+                Ok((Edited { revision, file, before: shown_before, after: shown_after }, inverse))
+            }
             Undo::Exact { restore } => {
                 // The file must be exactly as the change left it; what it said before (or
                 // its absence) goes back, and the project must compile with it.
@@ -1027,3 +1458,6 @@ mod tests;
 
 #[cfg(test)]
 mod restricted_tests;
+
+#[cfg(test)]
+mod insert_tests;

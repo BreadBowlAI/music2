@@ -1,16 +1,45 @@
+use m2_ir::Origin;
+use m2_runtime::BLOCK;
+
 use super::*;
 
-/// A renderer of a 1 kHz sine at `rate`.
-pub(crate) fn sine(rate: u32) -> Renderer {
+fn build(nodes: serde_json::Value, out: &str, rate: u32) -> Renderer {
     let ir: m2_ir::Ir = serde_json::from_value(serde_json::json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"},
-        "modules": [{"key": "song", "nodes": [
-            {"id": "f", "op": "const", "value": 1000, "unit": "hz"},
-            {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "f"}}], "exports": {"out": "o"}}]}))
+        "modules": [{"key": "song", "nodes": nodes, "exports": {"out": out},
+            "frames": [{"site": 1, "component": "test:level"}]}]}))
     .unwrap();
     let mut packages = m2_runtime::PackageSet::default();
     packages.load(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
     let flat = m2_ir::check(&ir, &packages).unwrap();
     Renderer::new(&flat, &m2_song::DataSet::empty(), &packages, rate).unwrap()
+}
+
+/// A renderer of a 1 kHz sine at `rate`.
+pub(crate) fn sine(rate: u32) -> Renderer {
+    let nodes = serde_json::json!([
+        {"id": "f", "op": "const", "value": 1000, "unit": "hz"},
+        {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "f"}}]);
+    build(nodes, "o", rate)
+}
+
+/// The value written at site 2: a level declared smooth.
+fn level() -> Origin {
+    Origin { site: 2, arg: vec!["0".into()], ..Origin::default() }
+}
+
+/// Where a gesture on `level()` writes in `r`: the cells of that value, through `r`'s slots (RENDER-23).
+fn level_of(r: &Renderer) -> CellTarget {
+    CellTarget { slots: r.cell_slots(), cells: r.cell_map().cells(&level()).into() }
+}
+
+/// A 1 kHz sine at 48 kHz times `level()`, 0.5 as built.
+fn leveled() -> Renderer {
+    let nodes = serde_json::json!([
+        {"id": "f", "op": "const", "value": 1000, "unit": "hz"},
+        {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "f"}},
+        {"id": "g", "op": "const", "value": 0.5, "origin": {"site": 2, "arg": ["0"], "control": {"frame": 0, "slot": "level", "smooth": true}}},
+        {"id": "out", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "g"}}]);
+    build(nodes, "out", 48_000)
 }
 
 /// Play `frames` through the callback in device buffers of uneven sizes, stereo.
@@ -34,30 +63,62 @@ fn freq(x: &[[f32; 2]], rate: u32) -> f64 {
     ups as f64 * rate as f64 / x.len() as f64
 }
 
+// RENDER-28: a cell value never uses the queue, so a full queue neither drops nor delays it: it
+// is in the renderer's slot at once, and the renderer plays it from its next block.
 #[test]
-fn committed_values_wait_for_room_instead_of_being_dropped() {
+fn a_cell_write_never_waits_for_the_queue() {
     let (tx, rx) = bounded(1);
-    let player = Player { tx, shared: Arc::default(), next_seq: Arc::default(), device_rate: 48_000, device: "test".into() };
+    let player =
+        Player { tx, shared: Arc::default(), next_seq: Arc::default(), cells: Arc::default(), device_rate: 48_000, device: "test".into() };
+    let mut r = leveled();
+    let target = level_of(&r);
+    assert_eq!(target.cells.len(), 1);
+    player.cells.sending(&mut r);
     player.play();
-    let origin = Origin { site: 3, arg: vec!["0".into()], scale: None };
-    let sent = origin.clone();
-    let (started_tx, started) = bounded(1);
-    let (done_tx, done) = bounded(1);
-    let commit = std::thread::spawn(move || {
-        started_tx.send(()).unwrap();
-        let result = player.commit_const(sent, 950.0);
-        done_tx.send(()).unwrap();
-        result
-    });
-    started.recv().unwrap();
-    assert!(done.recv_timeout(Duration::from_millis(20)).is_err(), "a full queue must wait instead of dropping the commit");
-    assert!(matches!(rx.recv().unwrap(), Msg::Engine(Envelope { msg: EngineMsg::Transport(Cmd::Play), .. })));
-    let Msg::Engine(Envelope { msg: EngineMsg::SetConst(actual, value), .. }) = rx.recv_timeout(Duration::from_secs(1)).unwrap() else {
-        panic!("expected the committed value")
-    };
-    assert_eq!(*actual, origin);
-    assert_eq!(value, 950.0);
-    commit.join().unwrap().unwrap();
+    let t = Instant::now();
+    let seq = player.set_cells(&target, 0.25);
+    assert!(t.elapsed() < Duration::from_millis(5), "never waits");
+    assert!(seq > CELL_SEQ, "a cell write's seq");
+    assert_eq!(rx.len(), 1, "only the play is queued");
+    r.render_block(0, false).unwrap();
+    r.render_block(BLOCK as u64, false).unwrap();
+    assert_eq!(r.cell_value(target.cells[0]), Some(0.25));
+    assert_eq!(r.take_heard(), Some((0, seq)));
+    let next = player.set_cells(&target, 0.75);
+    assert!(next > seq && rx.len() == 1);
+    r.render_block(2 * BLOCK as u64, false).unwrap();
+    assert_eq!((r.cell_value(target.cells[0]), r.take_heard()), (Some(0.75), Some((seq, next))));
+}
+
+// RENDER-22, RENDER-22a, RENDER-33: a cell write while playing is heard at the next block line,
+// ramped, and live playback stays the offline render with the same write at the same block, for
+// any device buffer sizes; the player reports when the engine heard it.
+#[test]
+fn a_cell_write_plays_live_as_offline() {
+    let (player, mut d) = Player::driven(48_000);
+    let r = leveled();
+    let (generation, target) = (r.generation(), level_of(&r));
+    let cell = target.cells[0];
+    player.open(r).unwrap();
+    player.play();
+    let mut live = hear(&mut d, 10 * BLOCK);
+    let seq = player.set_cells(&target, 0.9);
+    live.extend(hear(&mut d, 10 * BLOCK));
+    let mut offline = leveled();
+    let mut expected = vec![[0.0; 2]; 20 * BLOCK];
+    offline.process(&mut expected[..10 * BLOCK]).unwrap();
+    offline.cell_slots().set(&[cell], 0.9, 1);
+    offline.process(&mut expected[10 * BLOCK..]).unwrap();
+    assert!(live == expected, "differs from frame {:?}", live.iter().zip(&expected).position(|(a, b)| a != b));
+    assert!(peak(&live[10 * BLOCK..11 * BLOCK]) < peak(&live[12 * BLOCK..]), "it ramped up");
+    let heard = player.applied(seq).expect("heard");
+    assert_eq!((heard.seq, heard.clock), (seq, 10 * BLOCK as u64));
+    let e = d.engine().unwrap();
+    assert_eq!((e.activations(), e.current().unwrap().generation()), (0, generation), "nothing rebuilt");
+}
+
+fn peak(x: &[[f32; 2]]) -> f32 {
+    x.iter().fold(0.0, |m, f| m.max(f[0].abs()))
 }
 
 // RENDER-28: a sender never waits forever. With the audio thread gone quiet, it gives up after
@@ -65,7 +126,8 @@ fn committed_values_wait_for_room_instead_of_being_dropped() {
 #[test]
 fn a_full_queue_stalls_instead_of_hanging() {
     let (tx, _rx) = bounded(1);
-    let player = Player { tx, shared: Arc::default(), next_seq: Arc::default(), device_rate: 48_000, device: "test".into() };
+    let player =
+        Player { tx, shared: Arc::default(), next_seq: Arc::default(), cells: Arc::default(), device_rate: 48_000, device: "test".into() };
     player.play();
     let t = Instant::now();
     let e = player.seek(4.0).unwrap_err();

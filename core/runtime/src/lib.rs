@@ -29,8 +29,14 @@
 //! - The audio thread's paths never allocate or lock (RENDER-28): buffers are sized when a
 //!   renderer is built, and every kernel is reset once while it is built, so a later reset
 //!   never grows its memory.
+//! - Every constant with an origin is a cell ([`cells`]): written into kernel input memory once,
+//!   and again only when a value arrives through its slot, at a block line (RENDER-22).
+//! - Kernel input memory is the host's: a kernel never writes it, and a reset never changes it.
+//!   Every port has its own memory, checked when an instance is built; debug builds also check
+//!   that input memory is unchanged by every call into a kernel (ABI-1, RENDER-24).
 
 pub mod audio;
+pub mod cells;
 pub mod data;
 pub mod engine;
 pub mod event;
@@ -45,23 +51,32 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result, bail};
-use m2_ir::{FNode, FOp, Flat, Input, Kind, NoteField, Origin, PortRef, TimeOf};
+use m2_ir::{FNode, FOp, Flat, Input, Kind, NoteField, PortRef, TimeOf};
 use m2_song::{Arrangement, ControlLane, DataSet, LaneData, TempoMap};
 use wasmtime::{Instance, Memory, Store, StoreLimits, StoreLimitsBuilder, TypedFunc};
 
+pub use cells::{CellAt, CellId, CellInfo, CellMap, CellSlots, CellTarget};
 pub use data::{decls, lane_kind};
-pub use engine::{Applied, CallbackStamp, Engine, Envelope, Msg, Retired};
+pub use engine::{Applied, CallbackStamp, Engine, Envelope, Heard, Msg, Retired};
 pub use event::{Event, Events};
-pub use packages::{Effect, Package, PackageSet};
+pub use packages::{Package, PackageSet};
 pub use plugins::{Carry, CarryKey, Fresh, InstanceSource, PluginInstance};
 pub use sched::{Caps, LaneSwap, NotesData};
 pub use trace::{TraceEntry, TraceKind};
 pub use transport::{Cmd, Jump, Loop, MAX_RUNS, Run, Runs, Transport};
 
+use crate::cells::{Cells, Write};
 use crate::sched::NoteScheduler;
 use crate::trace::Trace;
 
 pub const BLOCK: usize = 128;
+
+/// Bytes of one kernel port buffer: `PORT_CHANNELS` (2) channels of [`BLOCK`] floats.
+const PORT_BYTES: usize = 2 * BLOCK * 4;
+
+/// A node's version when its output must be copied into the kernels it feeds at every call: it
+/// isn't a constant, or it is a cell that ramps this block.
+const COPY: u64 = u64::MAX;
 
 /// Memory one kernel instance may use.
 const KERNEL_MEMORY: usize = 32 << 20;
@@ -131,7 +146,66 @@ struct KernelNode {
     in_ptrs: Vec<usize>,
     out_ptrs: Vec<usize>,
     inputs: Vec<Input>,
+    /// For each input, the version of its source constant last written into its memory
+    /// ([`COPY`] when it was copied for one segment): a steady constant is written once
+    /// (RENDER-22).
+    seen: Vec<u64>,
     out_channels: Vec<u8>,
+    /// Debug builds: input memory before a call into the kernel, to compare after (ABI-1), and
+    /// the kernel id and its inputs' names, for the message.
+    #[cfg(debug_assertions)]
+    before: Vec<u8>,
+    #[cfg(debug_assertions)]
+    kernel: String,
+    #[cfg(debug_assertions)]
+    in_names: Vec<String>,
+}
+
+impl KernelNode {
+    /// `k_process` for `frames` frames. Debug builds check it left its inputs alone (ABI-1).
+    fn process(&mut self, store: &mut Store<StoreLimits>, frames: usize) -> Result<()> {
+        #[cfg(debug_assertions)]
+        self.keep_inputs(store);
+        self.process.call(&mut *store, frames as u32).wctx(|| format!("{} crashed", self.name))?;
+        #[cfg(debug_assertions)]
+        self.check_inputs(store, false)?;
+        Ok(())
+    }
+
+    /// `k_reset`. Debug builds check it left its inputs alone (ABI-1).
+    fn reset(&mut self, store: &mut Store<StoreLimits>) -> Result<()> {
+        #[cfg(debug_assertions)]
+        self.keep_inputs(store);
+        self.reset.call(&mut *store, ())?;
+        #[cfg(debug_assertions)]
+        self.check_inputs(store, true)?;
+        Ok(())
+    }
+
+    #[cfg(debug_assertions)]
+    fn keep_inputs(&mut self, store: &Store<StoreLimits>) {
+        let data = self.memory.data(store);
+        for (k, &ptr) in self.in_ptrs.iter().enumerate() {
+            self.before[k * PORT_BYTES..(k + 1) * PORT_BYTES].copy_from_slice(&data[ptr..ptr + PORT_BYTES]);
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    fn check_inputs(&self, store: &Store<StoreLimits>, reset: bool) -> Result<()> {
+        let data = self.memory.data(store);
+        for (k, &ptr) in self.in_ptrs.iter().enumerate() {
+            if data[ptr..ptr + PORT_BYTES] != self.before[k * PORT_BYTES..(k + 1) * PORT_BYTES] {
+                let (kernel, port) = (&self.kernel, &self.in_names[k]);
+                let what = if reset {
+                    format!("`{kernel}`'s reset changed its input `{port}`")
+                } else {
+                    format!("`{kernel}` wrote its input `{port}`")
+                };
+                bail!("{}: {what} (ABI-1: kernel input memory is read-only)", self.name);
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The note a voice plays. `off` is the engine sample of its Off, `u64::MAX` until the Off
@@ -478,11 +552,14 @@ enum Exec {
 
 struct Graph {
     exec: Vec<Exec>,
-    /// Where each constant was written, for live value changes.
-    origins: Vec<Option<Origin>>,
     order: Vec<usize>,
     /// `bufs[node][port]`.
     bufs: Vec<Vec<Buf>>,
+    /// Each node's version: a constant's changes when its value does, and every other node's is
+    /// [`COPY`]. The kernels a constant feeds rewrite their input only when it changes (RENDER-22).
+    versions: Vec<u64>,
+    /// The last version given out.
+    version: u64,
     /// Whole-graph resets since it was built (a voice's graph counts its own).
     resets: u64,
 }
@@ -566,7 +643,7 @@ impl Builder<'_> {
             };
             exec.push(e);
         }
-        // Constants never change: fill them once.
+        // Constants change only through their cells: fill them once.
         for (i, e) in exec.iter().enumerate() {
             if let Exec::Const(v) = e {
                 for b in &mut bufs[i] {
@@ -574,7 +651,8 @@ impl Builder<'_> {
                 }
             }
         }
-        Ok(Graph { exec, origins: nodes.iter().map(|n| n.origin.clone()).collect(), order: order.to_vec(), bufs, resets: 0 })
+        let versions = exec.iter().map(|e| if matches!(e, Exec::Const(_)) { 0 } else { COPY }).collect();
+        Ok(Graph { exec, order: order.to_vec(), bufs, versions, version: 0, resets: 0 })
     }
 
     /// A plugin node: its instance carried from the source when one matches (top level only), or
@@ -700,10 +778,25 @@ impl Builder<'_> {
         let mut ptrs = vec![];
         for i in 0..(n_in + n_out) as u32 {
             let p = port.call(&mut *store, i)? as usize;
-            if p == 0 || !p.is_multiple_of(4) || p + 2 * BLOCK * 4 > memory.data_size(&*store) {
+            if p == 0 || !p.is_multiple_of(4) || p + PORT_BYTES > memory.data_size(&*store) {
                 bail!("{}: `{id}` returned a bad buffer for port {i}", n.name);
             }
             ptrs.push(p);
+        }
+        // ABI-1, in every build: a port that shared memory with another would let one write the
+        // other, so an input written once could change behind the host's back.
+        let sig = m2_ir::Kernels::kernel(self.packages, id).with_context(|| format!("{}: kernel `{id}` has no signature", n.name))?;
+        let names: Vec<&str> = sig.inputs.iter().chain(&sig.outputs).map(|p| p.name.as_str()).collect();
+        let mut by_start: Vec<(usize, usize)> = ptrs.iter().enumerate().map(|(i, &p)| (p, i)).collect();
+        by_start.sort_unstable();
+        if let Some(w) = by_start.windows(2).find(|w| w[0].0 + PORT_BYTES > w[1].0) {
+            let name = |i: usize| names.get(i).copied().unwrap_or("?");
+            bail!(
+                "{}: `{id}` returned overlapping buffers for ports `{}` and `{}` (ABI-1: each port has its own memory)",
+                n.name,
+                name(w[0].1),
+                name(w[1].1)
+            );
         }
         let out_ptrs = ptrs.split_off(n_in);
         // Unconnected and constant inputs are written once; kernels never write inputs.
@@ -722,7 +815,14 @@ impl Builder<'_> {
             in_ptrs: ptrs,
             out_ptrs,
             inputs: inputs.to_vec(),
+            seen: vec![COPY; n_in],
             out_channels: n.outputs.iter().map(|k| k.channels()).collect(),
+            #[cfg(debug_assertions)]
+            before: vec![0; n_in * PORT_BYTES],
+            #[cfg(debug_assertions)]
+            kernel: id.to_string(),
+            #[cfg(debug_assertions)]
+            in_names: (0..n_in).map(|i| names.get(i).copied().unwrap_or("?").to_string()).collect(),
         })
     }
 }
@@ -757,7 +857,7 @@ impl Graph {
         for oi in 0..self.order.len() {
             let i = self.order[oi];
             let mut out = std::mem::take(&mut self.bufs[i]);
-            let bufs = &self.bufs;
+            let (bufs, versions) = (&self.bufs, &self.versions);
             match &mut self.exec[i] {
                 Exec::Control { slot, default } => {
                     let LaneSlot::Control(lane) = &lanes[*slot] else { unreachable!("a control lane's slot holds control data") };
@@ -780,16 +880,25 @@ impl Graph {
                 Exec::Time(TimeOf::Seconds) => out[0][seg.range(0)].copy_from_slice(&b.seconds[seg.off..seg.off + n]),
                 Exec::Kernel(k) => {
                     let data = k.memory.data_mut(&mut *store);
-                    for (inp, &ptr) in k.inputs.iter().zip(&k.in_ptrs) {
+                    for ((inp, &ptr), seen) in k.inputs.iter().zip(&k.in_ptrs).zip(&mut k.seen) {
                         if let Input::Port { src, src_channels, channels } = inp {
                             let s = &bufs[src.node][src.port];
+                            // A steady constant is written over the whole block, once per value, so
+                            // every later segment finds it in place; anything else is copied for
+                            // this segment.
+                            let version = versions[src.node];
+                            if version != COPY && *seen == version {
+                                continue;
+                            }
+                            let (off, len) = if version == COPY { (seg.off, n) } else { (0, BLOCK) };
                             for c in 0..*channels as usize {
                                 let sc = if c < *src_channels as usize { c } else { 0 };
-                                floats(data, ptr + c * BLOCK * 4, n).copy_from_slice(&s[seg.range(sc)]);
+                                floats(data, ptr + c * BLOCK * 4, len).copy_from_slice(&s[sc * BLOCK + off..sc * BLOCK + off + len]);
                             }
+                            *seen = version;
                         }
                     }
-                    k.process.call(&mut *store, n as u32).wctx(|| format!("{} crashed", k.name))?;
+                    k.process(store, n)?;
                     let data = k.memory.data_mut(&mut *store);
                     for (o, (&ptr, &ch)) in out.iter_mut().zip(k.out_ptrs.iter().zip(&k.out_channels)) {
                         for c in 0..ch as usize {
@@ -871,7 +980,7 @@ impl Graph {
         self.resets += 1;
         for e in &mut self.exec {
             match e {
-                Exec::Kernel(k) => k.reset.call(&mut *store, ())?,
+                Exec::Kernel(k) => k.reset(store)?,
                 Exec::Plugin(p) => p.reset()?,
                 Exec::Feedback { ring, .. } => ring.fill(0.0),
                 Exec::Audio(a) => a.reset(),
@@ -897,7 +1006,7 @@ impl Graph {
     fn prewarm(&mut self, store: &mut Store<StoreLimits>) -> Result<()> {
         for e in &mut self.exec {
             match e {
-                Exec::Kernel(k) => k.reset.call(&mut *store, ())?,
+                Exec::Kernel(k) => k.reset(store)?,
                 Exec::Poly(p) => {
                     for v in &mut p.voices {
                         v.graph.prewarm(store)?;
@@ -921,28 +1030,28 @@ impl Graph {
             .sum()
     }
 
-    /// Change every constant written at `origin`, including inside voices. Returns how
-    /// many were changed.
-    fn set_const(&mut self, origin: &Origin, value: f32) -> usize {
-        let mut n = 0;
-        for (i, e) in self.exec.iter_mut().enumerate() {
-            match e {
-                Exec::Const(v) if self.origins[i].as_ref().is_some_and(|o| o.same_value(origin)) => {
-                    *v = value;
-                    for b in &mut self.bufs[i] {
-                        b.fill(value);
-                    }
-                    n += 1;
-                }
-                Exec::Poly(p) => {
-                    for voice in &mut p.voices {
-                        n += voice.graph.set_const(origin, value);
-                    }
-                }
-                _ => {}
+    /// Write a cell's new value into constant `node`'s buffer. A step gives it a new version, so
+    /// the kernels it feeds rewrite their input once; a ramp is copied at every call until the
+    /// step that ends it (RENDER-22a). Never allocates.
+    fn write_const(&mut self, node: usize, w: Write) {
+        let Exec::Const(v) = &mut self.exec[node] else {
+            debug_assert!(false, "cell {node} isn't a constant");
+            return;
+        };
+        let (Write::Step(to) | Write::Ramp(_, to)) = w;
+        *v = to;
+        for b in &mut self.bufs[node] {
+            for ch in b.chunks_mut(BLOCK) {
+                w.fill(ch);
             }
         }
-        n
+        self.versions[node] = match w {
+            Write::Step(_) => {
+                self.version += 1;
+                self.version
+            }
+            Write::Ramp(..) => COPY,
+        };
     }
 
     /// Whether any kernel still holds sound that will come out later.
@@ -1128,6 +1237,8 @@ static GENERATION: AtomicU64 = AtomicU64::new(1);
 pub struct Renderer {
     store: Store<StoreLimits>,
     graph: Graph,
+    /// Its editable constants and their slots (RENDER-22).
+    cells: Cells,
     lanes: Vec<LaneSlot>,
     slots: Vec<LaneRef>,
     out: PortRef,
@@ -1213,6 +1324,7 @@ impl Renderer {
         Ok(Renderer {
             store,
             graph,
+            cells: Cells::new(&cells::cells(flat)),
             lanes,
             slots,
             out: flat.out,
@@ -1306,6 +1418,9 @@ impl Renderer {
     pub fn render_block_lent(&mut self, clock: u64, release_all: bool, current: Option<&Renderer>) -> Result<&[[f32; 2]; BLOCK]> {
         self.runs = self.transport.advance();
         self.clock = clock + BLOCK as u64;
+        // Cell values written since the last block line (RENDER-22, RENDER-28); offline renders
+        // never get any.
+        self.cells.apply(&mut self.graph);
         if self.broken {
             self.frames = [[0.0; 2]; BLOCK];
             return Ok(&self.frames);
@@ -1491,11 +1606,39 @@ impl Renderer {
         swapped
     }
 
-    /// Change a written constant while playing: the value takes effect at the next
-    /// block, with no rebuild. `value` is in the constant's own units (the source
-    /// number times its scale). Returns how many nodes it reached (0: not found).
-    pub fn set_const(&mut self, origin: &Origin, value: f64) -> usize {
-        self.graph.set_const(origin, value as f32)
+    /// Its cells' slots: where values for its cells go while it plays, from any thread
+    /// (RENDER-28). They live as long as the renderer, and longer while anyone holds them.
+    pub fn cell_slots(&self) -> Arc<CellSlots> {
+        self.cells.slots().clone()
+    }
+
+    /// Which of its cells hold each value written in the code.
+    pub fn cell_map(&self) -> Arc<CellMap> {
+        self.cells.map().clone()
+    }
+
+    /// What cell `id` holds now.
+    pub fn cell_value(&self, id: CellId) -> Option<f32> {
+        self.cells.value(id)
+    }
+
+    /// Set `cells` to `value` at once, a step, off the audio thread: a renderer not yet sent, so
+    /// that it plays a gesture's value from its first block. `value` is in the constant's own units
+    /// (the source number times its scale).
+    pub fn set_cells(&mut self, cells: &[CellId], value: f64) {
+        self.cells.set_now(&mut self.graph, cells, value as f32);
+    }
+
+    /// Every cell write up to `seq` is in this renderer already (it was built with the values, or
+    /// they were set before it was sent): what it reports as heard starts there.
+    pub fn hear_from(&mut self, seq: u64) {
+        self.cells.hear_from(seq);
+    }
+
+    /// `(from, to)` when its blocks since the last call applied every cell write up to `to`: the
+    /// engine's stamps of when writes were heard. Never allocates.
+    pub fn take_heard(&mut self) -> Option<(u64, u64)> {
+        self.cells.take_heard()
     }
 
     /// Voices currently sounding, across every `poly`.
@@ -1564,13 +1707,15 @@ impl Renderer {
         })
     }
 
-    /// While the engine idles: whether a plugin that slept asked to be processed (CLAP's
-    /// `request_process`), which wakes it within one block. Atomic swaps only.
+    /// While the engine idles: whether a cell was written, or a plugin that slept asked to be
+    /// processed (CLAP's `request_process`), either of which wakes it within one block, as a
+    /// message does. Atomic loads and swaps only.
     pub fn woken(&self) -> bool {
-        self.graph.exec.iter().any(|e| match e {
-            Exec::Plugin(p) if p.status == m2_plugins::Status::Sleep => p.inst.host().take_process_request(p.inst.handle()),
-            _ => false,
-        })
+        self.cells.slots().pending()
+            || self.graph.exec.iter().any(|e| match e {
+                Exec::Plugin(p) if p.status == m2_plugins::Status::Sleep => p.inst.host().take_process_request(p.inst.handle()),
+                _ => false,
+            })
     }
 
     pub fn hosts_plugins(&self) -> bool {

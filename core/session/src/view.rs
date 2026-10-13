@@ -3,10 +3,13 @@
 //!
 //! Every node in the IR is assigned to the call it came from in the project's own
 //! code: the outermost component call it was made inside (`bass(...)` for everything
-//! the bass instrument builds), or else its own call (`kernel(...)`, `lane.notes(...)`).
-//! Constants become knobs on the innermost call that contains where they were written.
-//! Edges are the connections between those calls. The view is derived from the
-//! accepted revision every time; nothing about it is saved.
+//! the bass instrument builds, by its frames, ID-15), or else its own call (`kernel(...)`,
+//! `lane.notes(...)`). Constants become knobs on the innermost call that contains where they
+//! were written; a declared control a call leaves out is a knob on that call too, showing its
+//! default until its first edit writes it in (PKG-3). A knob's range is the one its
+//! component's descriptor declares (PKG-8): core guesses none from units (P10). Edges are the
+//! connections between those calls. The view is derived from the accepted revision every time;
+//! nothing about it is saved.
 //!
 //! Each node also has ports: an input for every knob, cable and signal that enters
 //! the call, named where it is written (`cutoff`, `hats.in`) or else by the kernel port
@@ -16,11 +19,13 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
-use m2_ir::{FNode, FOp, Kernels, Kind, Node, Op, PortKind, Unit, split_ref};
+use m2_ir::{FNode, FOp, Kernels, Kind, Node, Op, Origin, PortKind, Unit, split_ref};
 use m2_script::sites::{Arg, Site};
 use serde::Serialize;
 
-use crate::edit::{Control, Inlet, Outlet, Session};
+use crate::edit::effect::calls_of;
+use crate::{Declared, Home};
+use crate::edit::{Control, Inlet, Outlet, Session, declared, not_insertable};
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct GraphView {
@@ -117,7 +122,10 @@ pub struct ViewNode {
     pub inlets: Vec<InletView>,
     /// Whether its result is audio, which an effect can go after.
     pub audio: bool,
-    /// The effect this node is, if it can be removed.
+    /// The ComponentId of the component the call is an instance of (`std:delay`), whatever the
+    /// name it is called by (PKG-9).
+    pub component: Option<String>,
+    /// The effect this node is, by its descriptor's label (`Delay`), if it can be removed.
     pub effect: Option<String>,
     /// Its inputs in the order they are written: knobs, cables and signals.
     pub inputs: Vec<InputPort>,
@@ -136,6 +144,7 @@ pub struct InletView {
     pub from: String,
 }
 
+/// A value written in the code that has no supported source edit.
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct ReadOnly {
     pub label: String,
@@ -143,6 +152,8 @@ pub struct ReadOnly {
     pub reason: String,
     pub file: Option<String>,
     pub line: Option<u32>,
+    /// Where the value lives (HOME-1).
+    pub home: Home,
 }
 
 /// A control as the canvas shows it.
@@ -151,49 +162,47 @@ pub struct Knob {
     pub id: String,
     pub label: String,
     pub value: f64,
+    /// The number written in the code; empty while the control is inherited.
     pub literal: String,
+    /// The constant's unit: a quantity's own (`semis(60)` is semitones wherever it goes), else
+    /// the declared one.
     pub unit: Option<&'static str>,
-    pub min: f64,
-    pub max: f64,
-    /// Drag on a logarithmic scale (frequencies, times).
+    /// The range its descriptor declares for that unit, in it (a hint, never a clamp, PKG-8); a
+    /// raw `kernel()` input's port range. None when nothing declares one for this unit, or the
+    /// controls it feeds disagree: the UI picks its own span.
+    pub range: Option<[f64; 2]>,
+    /// Drag on a logarithmic scale.
     pub log: bool,
-    pub origin: m2_ir::Origin,
+    /// Written in the code; false while it plays its declared default (inherited), until its
+    /// first edit writes it into the call.
+    pub written: bool,
+    /// The declared default, when the controls it feeds declare one in its unit.
+    pub default: Option<f64>,
+    /// The declared control it is (`cutoff`, `channels.hats.db`) and its component
+    /// (`std:lowpass`), when it feeds exactly one.
+    pub slot: Option<String>,
+    pub component: Option<String>,
+    pub origin: Origin,
     pub file: String,
     pub line: u32,
     pub uses: usize,
+    /// Where the value lives (HOME-1).
+    pub home: Home,
 }
 
-/// A knob's range: the one its port declares (`rate: control<hz> = 5 in 0.05..20` is a rate,
-/// not a pitch), else a sensible one for its unit; widened to include the current value. It
-/// never otherwise depends on the value, so a knob turned to an end of its range keeps that
-/// range and turns back.
-fn range(unit: Option<Unit>, v: f64, declared: Option<(f64, f64)>) -> (f64, f64, bool) {
-    let (lo, hi, log) = match (declared, unit) {
-        (Some((lo, hi)), u) => (lo, hi, matches!(u, Some(Unit::Hz | Unit::Seconds | Unit::Beats))),
-        (None, u) => unit_range(u, v),
-    };
-    let lo = lo.min(v);
-    (lo, hi.max(v), log && lo > 0.0)
+/// What every declared control a value feeds says of `f`, when they all agree.
+fn agreed<T: PartialEq>(declared: &[Declared], f: impl Fn(&Declared) -> T) -> Option<T> {
+    let first = f(declared.first()?);
+    declared.iter().skip(1).all(|d| f(d) == first).then_some(first)
 }
 
-/// A sensible range for a unit; a plain number's spans its value.
-fn unit_range(unit: Option<Unit>, v: f64) -> (f64, f64, bool) {
-    match unit {
-        Some(Unit::Hz) => (20.0, 20_000.0, true),
-        Some(Unit::Db) => (-60.0, 12.0, false),
-        Some(Unit::Seconds) => (0.001, 10.0, true),
-        Some(Unit::Beats) => (1.0 / 16.0, 16.0, true),
-        Some(Unit::Unit01) => (0.0, 1.0, false),
-        Some(Unit::Gain) => (0.0, 2.0, false),
-        Some(Unit::Bipolar) => (-1.0, 1.0, false),
-        Some(Unit::Semitones) => (v - 24.0, v + 24.0, false),
-        Some(Unit::Scalar) | None => {
-            if v.abs() <= 1.0 {
-                (if v < 0.0 { -1.0 } else { 0.0 }, 1.0, false)
-            } else {
-                (v.min(0.0) * 2.0, v.max(0.0) * 2.0, false)
-            }
-        }
+/// How a value is keyed, as its control's id is: a written number by its site and argument
+/// path, an inherited control by its call and `@slot`. None for a constant that is neither.
+fn value_key(o: &Origin) -> Option<(u32, Vec<String>)> {
+    match o.slot() {
+        _ if !o.arg.is_empty() => Some((o.site, o.arg.clone())),
+        Some(slot) if o.inherited() => Some((o.site, vec![format!("@{slot}")])),
+        _ => None,
     }
 }
 
@@ -363,7 +372,7 @@ impl Session {
         let sites: HashMap<u32, &Site> = rev.compiled.sites.iter().map(|s| (s.id, s)).collect();
         let in_project = |id: u32| sites.get(&id).is_some_and(|s| s.in_project);
         let controls: HashMap<(u32, Vec<String>), Control> =
-            self.controls().into_iter().map(|c| ((c.origin.site, c.origin.arg.clone()), c)).collect();
+            self.controls().into_iter().filter_map(|c| Some((value_key(&c.origin)?, c))).collect();
         let outlets = self.outlets();
         let inlets = self.inlets();
 
@@ -385,7 +394,7 @@ impl Session {
                 if matches!(n.op, Op::Const { .. }) {
                     return None;
                 }
-                if let Some(&f) = n.within.iter().find(|&&f| in_project(f)) {
+                if let Some(f) = calls_of(m, n).find(|&f| in_project(f)) {
                     return Some(Group::Site(f));
                 }
                 match &n.op {
@@ -395,8 +404,8 @@ impl Session {
                     // of it; else a node of its own beside the `poly` call.
                     Op::Lane { .. } if n.origin.is_none() && voice_of.contains_key(n.id.as_str()) => {
                         let p = voice_of[n.id.as_str()];
-                        match p.within.iter().find(|&&f| in_project(f)) {
-                            Some(&f) => Some(Group::Site(f)),
+                        match calls_of(m, p).find(|&f| in_project(f)) {
+                            Some(f) => Some(Group::Site(f)),
                             None => p.origin.as_ref().filter(|o| in_project(o.site)).map(|o| Group::Voice(o.site)),
                         }
                     }
@@ -420,12 +429,13 @@ impl Session {
             };
             let mut seen = HashSet::new();
             for n in &all {
-                let (Op::Const { .. }, Some(o)) = (&n.op, &n.origin) else { continue };
-                let key = (o.site, o.arg.clone());
-                let Some(at) = sites.get(&o.site).filter(|s| s.in_project && !o.arg.is_empty()) else { continue };
+                let (Op::Const { value, .. }, Some(o)) = (&n.op, &n.origin) else { continue };
+                let Some(key) = value_key(o) else { continue };
+                let Some(at) = sites.get(&o.site).filter(|s| s.in_project) else { continue };
                 if !seen.insert(key.clone()) {
                     continue;
                 }
+                let inherited = o.arg.is_empty();
                 let control = controls.get(&key);
                 let home = if control.is_some_and(|c| c.uses > 1) {
                     Group::Site(o.site)
@@ -461,37 +471,49 @@ impl Session {
                     _ => None,
                 };
                 let path = written_at.as_ref().unwrap_or(&o.arg);
-                let label = if path.len() > 1 {
+                // A declared control is named by its declaration: `cutoff`, or `hats.db` in a dictionary.
+                let declared = declared(&rev.compiled, m, o, None);
+                let label = if let Some(d) = declared.as_ref().filter(|_| inherited) {
+                    d.label.clone()
+                } else if path.len() > 1 {
                     path[1..].join(".")
                 } else {
                     consumer.as_ref().map(|(_, p)| p.clone()).unwrap_or_else(|| at.callee.clone())
                 };
                 let Some(c) = control else {
-                    // For an ambiguous object, the whole argument is the smallest
-                    // expression we can honestly identify. Never guess a property.
-                    let exact = at.arg(&o.arg);
-                    let arg = exact.or_else(|| o.arg.first()?.parse::<usize>().ok().and_then(|i| at.args.get(i)));
-                    let Some(arg) = arg else { continue };
-                    let (start, end) = arg.span();
-                    let expression = rev
-                        .snapshot
-                        .files
-                        .get(Path::new(&at.file))
-                        .and_then(|text| text.get(start as usize..end as usize))
-                        .unwrap_or("")
-                        .to_string();
-                    let reason = if exact.is_none() {
-                        "This property has no unambiguous literal in the source object."
+                    let (expression, reason, start) = if inherited {
+                        // A control the call leaves out that can't be written into it.
+                        let why = not_insertable(rev, at, m, o).unwrap_or("it can't be written into the call");
+                        (value.to_string(), format!("Plays its default: {why}. Write it in the code to change it."), at.end)
                     } else {
-                        "Only a directly written number can be edited here."
+                        // For an ambiguous object, the whole argument is the smallest
+                        // expression we can honestly identify. Never guess a property.
+                        let exact = at.arg(&o.arg);
+                        let arg = exact.or_else(|| o.arg.first()?.parse::<usize>().ok().and_then(|i| at.args.get(i)));
+                        let Some(arg) = arg else { continue };
+                        let (start, end) = arg.span();
+                        let expression = rev
+                            .snapshot
+                            .files
+                            .get(Path::new(&at.file))
+                            .and_then(|text| text.get(start as usize..end as usize))
+                            .unwrap_or("")
+                            .to_string();
+                        let reason = if exact.is_none() {
+                            "This property has no unambiguous literal in the source object."
+                        } else {
+                            "Only a directly written number can be edited here."
+                        };
+                        (expression, reason.to_string(), start)
                     };
                     readonly_at.entry(home.clone()).or_default().push((at.file.clone(), start));
                     readonly.entry(home).or_default().push(ReadOnly {
                         label,
                         expression,
-                        reason: reason.into(),
+                        reason,
                         file: Some(at.file.clone()),
                         line: Some(at.line),
+                        home: Home::Code,
                     });
                     continue;
                 };
@@ -501,21 +523,39 @@ impl Session {
                     _ => None,
                 });
                 let unit = c.unit.or(port_unit);
-                let (min, max, log) = range(unit, c.value, port.and_then(|p| p.range));
-                knob_at.insert(c.id.clone(), (at.file.clone(), at.arg(&o.arg).map_or(at.start, |a| a.span().0)));
+                // The declared range and default when every control it feeds agrees (D4); a
+                // raw kernel input's port range (never a log scale: nothing declares one).
+                let (range, log) = match agreed(&c.declared, |d| (d.range, d.log)) {
+                    _ if c.declared.is_empty() => (port.and_then(|p| p.range), false),
+                    Some((Some(range), log)) => (Some(range), log),
+                    _ => (None, false),
+                };
+                let default = agreed(&c.declared, |d| d.default).flatten();
+                let single = c.declared.first().filter(|_| c.declared.len() == 1);
+                let label = match single {
+                    Some(d) => d.label.clone(),
+                    None => label,
+                };
+                // Written values in the order the call writes them; the ones it leaves out after.
+                let place = if inherited { at.end } else { at.arg(&o.arg).map_or(at.start, |a| a.span().0) };
+                knob_at.insert(c.id.clone(), (at.file.clone(), place));
                 knobs.entry(home).or_default().push(Knob {
                     id: c.id.clone(),
                     label,
                     value: c.value,
                     literal: c.literal.clone(),
                     unit: unit.map(Unit::name),
-                    min,
-                    max,
+                    range: range.map(|(lo, hi)| [lo, hi]),
                     log,
+                    written: c.written,
+                    default,
+                    slot: single.map(|d| d.slot.clone()),
+                    component: single.map(|d| d.component.clone()),
                     origin: c.origin.clone(),
                     file: c.file.clone(),
                     line: c.line,
                     uses: c.uses,
+                    home: c.home,
                 });
             }
             // Cables end on the innermost call containing the name, like knobs.
@@ -554,7 +594,7 @@ impl Session {
 
             let group_of = |n: &Node| -> Option<Group> {
                 if matches!(n.op, Op::Const { .. }) {
-                    return n.origin.as_ref().and_then(|o| homes.get(&(o.site, o.arg.clone())).cloned());
+                    return n.origin.as_ref().and_then(value_key).and_then(|k| homes.get(&k).cloned());
                 }
                 call_group(n)
             };
@@ -572,7 +612,7 @@ impl Session {
                         let kind = if !groups.contains(g) {
                             "value"
                         } else if matches!(n.map(|n| &n.op), Some(Op::Lane { .. }))
-                            && n.is_some_and(|n| n.within.is_empty() && n.origin.is_some())
+                            && n.is_some_and(|n| calls_of(m, n).next().is_none() && n.origin.is_some())
                         {
                             "lane"
                         } else {
@@ -606,8 +646,13 @@ impl Session {
                     _ => None,
                 };
                 let (audio, effect) = match g {
-                    Group::Site(s) if kind == "call" => (self.audio_out(*s), self.effect_at(sites[s]).map(|e| e.name)),
+                    Group::Site(s) if kind == "call" => (self.audio_out(*s), self.effect_at(sites[s]).map(|e| e.label.clone())),
                     _ => (false, None),
+                };
+                // The ComponentId its frames record, whatever it is called by.
+                let component = match g {
+                    Group::Site(s) => m.frames.iter().find(|f| f.site == *s && f.component.is_some()).and_then(|f| f.component.clone()),
+                    _ => None,
                 };
                 nodes.push(ViewNode {
                     id: id.clone(),
@@ -620,6 +665,7 @@ impl Session {
                     outlet,
                     inlets: connected.get(g).cloned().unwrap_or_default(),
                     audio,
+                    component,
                     effect,
                     inputs: vec![],
                     outputs: vec![],
@@ -694,6 +740,7 @@ impl Session {
                     outlet: None,
                     inlets: vec![],
                     audio: false,
+                    component: None,
                     effect: None,
                     inputs: vec![],
                     outputs: vec![],
@@ -711,9 +758,9 @@ impl Session {
             // Its outputs are its own result, then anything else read from it.
             let kind = |r: &str| self.kind_of(&m.key, r).map_or("control", kind_name);
             // A port is a signal, or a written value however many constants it made.
-            let canon = |r: &str| match source(r) {
-                Some(Node { op: Op::Const { .. }, origin: Some(o), .. }) => format!("value:{}/{}", o.site, o.arg.join(".")),
-                _ => {
+            let canon = |r: &str| match source(r).filter(|n| matches!(n.op, Op::Const { .. })).and_then(|n| value_key(n.origin.as_ref()?)) {
+                Some((site, path)) => format!("value:{site}/{}", path.join(".")),
+                None => {
                     let (id, port) = split_ref(r);
                     format!("{id}.{port}")
                 }

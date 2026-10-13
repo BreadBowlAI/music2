@@ -13,10 +13,11 @@
 //! anything that owns memory here (RENDER-28): what can't be retired yet waits in a fixed stash.
 //!
 //! Order: transport commands and panic apply as soon as they are read. Structural messages
-//! (activate, swap, set const) apply in strict order: one that can't apply yet waits at the
-//! head, and the one after it waits in the inbox; only consecutive activations coalesce.
-
-use m2_ir::Origin;
+//! (activate, swap) apply in strict order: one that can't apply yet waits at the head, and the
+//! one after it waits in the inbox; only consecutive activations coalesce.
+//!
+//! Cell values are never messages (RENDER-28): each renderer reads its own cells' slots as it
+//! renders a block, after the block line's messages, and the engine stamps when it heard them.
 
 use crate::{BLOCK, Cmd, LaneSwap, Pending, Renderer};
 
@@ -38,7 +39,6 @@ pub enum Msg {
         data: LaneSwap,
     },
     Transport(Cmd),
-    SetConst(Box<Origin>, f64),
     /// Every note off and every instance reset (RENDER-10).
     Panic,
 }
@@ -53,7 +53,6 @@ impl Msg {
 pub enum Retired {
     Renderer(Box<Renderer>),
     Lane(LaneSwap),
-    Origin(Box<Origin>),
 }
 
 /// When a message took effect: the engine clock of the block it applied at, the callback that
@@ -61,6 +60,17 @@ pub enum Retired {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Applied {
     pub seq: u64,
+    pub clock: u64,
+    pub callback_ns: u64,
+    pub frame: u32,
+}
+
+/// When cell writes were heard: a renderer's block applied every cell write after seq `from` up
+/// to seq `to`. The block is placed as an [`Applied`] stamp places it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Heard {
+    pub from: u64,
+    pub to: u64,
     pub clock: u64,
     pub callback_ns: u64,
     pub frame: u32,
@@ -119,6 +129,8 @@ pub struct Engine {
     silent_blocks: u32,
     applied: [Applied; APPLIED],
     applied_n: u64,
+    heard: [Heard; APPLIED],
+    heard_n: u64,
     /// Kernel resets of the renderers that have left.
     resets_gone: u64,
     activations: u64,
@@ -145,6 +157,8 @@ impl Engine {
             silent_blocks: 0,
             applied: [Applied::default(); APPLIED],
             applied_n: 0,
+            heard: [Heard::default(); APPLIED],
+            heard_n: 0,
             resets_gone: 0,
             activations: 0,
             seeks: 0,
@@ -217,6 +231,11 @@ impl Engine {
     /// The last [`APPLIED`] stamps, and how many messages were applied in all.
     pub fn applied(&self) -> (&[Applied; APPLIED], u64) {
         (&self.applied, self.applied_n)
+    }
+
+    /// The last [`APPLIED`] stamps of cell writes heard, and how many there were in all.
+    pub fn heard(&self) -> (&[Heard; APPLIED], u64) {
+        (&self.heard, self.heard_n)
     }
 
     /// Where the transport is after the last frame handed out, and what plays.
@@ -363,12 +382,6 @@ impl Engine {
                 };
                 self.retire_now(Retired::Lane(back), retire);
             }
-            Msg::SetConst(origin, value) => {
-                if let Some(r) = &mut self.current {
-                    r.set_const(&origin, value);
-                }
-                self.retire_now(Retired::Origin(origin), retire);
-            }
             Msg::Transport(_) | Msg::Panic => unreachable!("applied at once"),
         }
         Ok(())
@@ -440,10 +453,16 @@ impl Engine {
                 Some(_) => self.blocked = Some(env),
             }
         }
-        self.render();
+        self.render(stamp, frame);
     }
 
-    fn render(&mut self) {
+    /// Stamp cell writes a renderer's last block heard.
+    fn stamp_heard(&mut self, (from, to): (u64, u64), clock: u64, stamp: CallbackStamp, frame: u32) {
+        self.heard[(self.heard_n % APPLIED as u64) as usize] = Heard { from, to, clock, callback_ns: stamp.ns, frame };
+        self.heard_n += 1;
+    }
+
+    fn render(&mut self, stamp: CallbackStamp, frame: u32) {
         let clock = self.clock;
         self.clock += BLOCK as u64;
         let Some(cur) = self.current.as_deref_mut() else {
@@ -472,6 +491,7 @@ impl Engine {
             }
         };
         let runs = *cur.last_runs();
+        let mut heard = [cur.take_heard(), None];
         if let Some(f) = &mut self.fading
             && !f.finished
         {
@@ -492,7 +512,12 @@ impl Engine {
                 }
             }
             f.done = (f.done + BLOCK as u32).min(self.fade_len);
+            heard[1] = f.old.take_heard();
         }
+        for h in heard.into_iter().flatten() {
+            self.stamp_heard(h, clock, stamp, frame);
+        }
+        let Some(cur) = self.current.as_deref_mut() else { unreachable!("rendered above") };
         self.out.load(&frames, &runs, cur.transport().pos());
         // RENDER-6a: idle only stopped, after 8 silent blocks, when nothing can sound later.
         let silent = frames.iter().all(|f| f[0].abs() < SILENT && f[1].abs() < SILENT);

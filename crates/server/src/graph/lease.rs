@@ -3,9 +3,9 @@
 //! A lease is `begin`, `update`s, then `commit` or `cancel`. It keeps two things apart:
 //! - **the session's side**, `control`: the control in the accepted revision, which a commit
 //!   writes and whose literal spells the values; carried to every new code revision (WRITE-12);
-//! - **the engine's side**, `engine`: the renderer and the constant in it that updates go to.
-//!   It moves only once a renderer holding the lease's value was sent, so after a renderer that
-//!   failed to build, updates go on to the one that plays.
+//! - **the engine's side**, `engine`: the renderer and the cells in it that updates go to
+//!   (RENDER-22, RENDER-23). It moves only once a renderer holding the lease's value was sent, so
+//!   after a renderer that failed to build, updates go on to the one that plays.
 //!
 //! A lease survives revisions that don't touch its call (an outside save to another file, a
 //! lane write, an edit elsewhere), refused edits and drafts that don't compile. It ends when the
@@ -17,7 +17,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use m2_ir::Origin;
-use m2_session::Control;
+use m2_runtime::{CellMap, CellSlots, CellTarget};
+use m2_session::{Control, Home};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -36,12 +37,27 @@ const ENDED: usize = 64;
 /// The names and ids a lease keeps (see [`Lease::names`] and [`Lease::ids`]).
 const NAMES: usize = 8;
 
-/// Where a lease's updates go: a constant in one renderer of one player.
-#[derive(Clone, Debug, PartialEq)]
+/// Where a lease's updates go: the cells of its value in one renderer of one player, written
+/// through that renderer's slots (RENDER-23), so they can never reach another's.
+#[derive(Clone)]
 pub struct Target {
     pub epoch: u64,
     pub generation: u64,
-    pub origin: Origin,
+    pub cells: CellTarget,
+}
+
+impl PartialEq for Target {
+    fn eq(&self, o: &Target) -> bool {
+        (self.epoch, self.generation) == (o.epoch, o.generation)
+            && Arc::ptr_eq(&self.cells.slots, &o.cells.slots)
+            && self.cells.cells == o.cells.cells
+    }
+}
+
+impl std::fmt::Debug for Target {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("Target").field("epoch", &self.epoch).field("generation", &self.generation).field("cells", &self.cells.cells).finish()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -160,6 +176,7 @@ impl Lease {
             client: self.owner.client.clone(),
             gesture: self.owner.gesture.clone(),
             state,
+            home: self.control.home,
             value: self.playing,
             accepted: self.accepted,
             revision: self.revision,
@@ -182,6 +199,8 @@ pub struct LeaseInfo {
     pub gesture: Option<String>,
     /// `live`, `committing` or `pending`.
     pub state: &'static str,
+    /// Where the value lives (HOME-1).
+    pub home: Home,
     /// What plays, and the code's value.
     pub value: f64,
     pub accepted: f64,
@@ -201,11 +220,14 @@ pub struct Begun {
     pub id: String,
     /// The code's value.
     pub value: f64,
-    /// How many constants the value drives: what step 3b has for a lease's cells.
+    /// How many constants the code makes for the value (a helper called twice gives two).
     pub uses: usize,
-    /// Where the value lives (HOME-1): only literals written in code can be leased until
-    /// override latches come (MON-6).
-    pub home: &'static str,
+    /// How many cells of what plays its updates reach (RENDER-22): one per constant, a voice's
+    /// counted once for all its voices.
+    pub cells: usize,
+    /// Where the value lives (HOME-1): the code, for a number written there or a declared control
+    /// a call leaves out, until override latches come (MON-6).
+    pub home: Home,
     /// Whether anything plays it yet. Updates are recorded either way, and written into the
     /// renderer that next plays.
     pub heard: bool,
@@ -338,10 +360,13 @@ pub struct Aliases {
 }
 
 /// What plays, as the control plane needs it to aim updates.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PlaysView {
     pub epoch: u64,
     pub generation: u64,
+    /// Its renderer's cell slots, and which of its cells hold each value of the code it plays.
+    pub slots: Arc<CellSlots>,
+    pub cells: Arc<CellMap>,
     /// Set only while what plays is built from older code than the accepted revision's (its
     /// build failed): the accepted control id → its constant's origin in what plays.
     pub origins: Option<Arc<HashMap<String, Origin>>>,
@@ -353,12 +378,18 @@ impl PlaysView {
         self.target_of(&control.id, &control.origin)
     }
 
-    /// Where a value of the accepted control `id`, at `origin`, goes in what plays.
+    /// Where a value of the accepted control `id`, at `origin`, goes in what plays: its cells
+    /// there. None when nothing there plays it.
     pub fn target_of(&self, id: &str, origin: &Origin) -> Option<Target> {
         let origin = match &self.origins {
-            None => origin.clone(),
-            Some(map) => map.get(id)?.clone(),
+            None => origin,
+            Some(map) => map.get(id)?,
         };
-        Some(Target { epoch: self.epoch, generation: self.generation, origin })
+        let cells = self.cells.cells(origin);
+        if cells.is_empty() {
+            return None;
+        }
+        let cells = CellTarget { slots: self.slots.clone(), cells: cells.into() };
+        Some(Target { epoch: self.epoch, generation: self.generation, cells })
     }
 }

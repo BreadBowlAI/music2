@@ -264,13 +264,18 @@ fn effects_are_listed_added_and_removed_and_the_player_follows() {
     let graph = fixture.open();
     let state = graph.state().unwrap();
     let (token, revision) = (state["session"].as_u64().unwrap(), state["view"]["revision"].as_u64().unwrap());
-    assert!(state["effects"].as_array().unwrap().iter().any(|e| e["name"] == "delay" && e["module"] == "std/fx"));
+    // PKG-2, PKG-11: listed from the descriptors, each by its ComponentId and where it is imported from.
+    let delay = state["effects"].as_array().unwrap().iter().find(|e| e["component"] == "std:delay").cloned().unwrap();
+    assert_eq!((&delay["name"], &delay["module"]), (&json!("delay"), &json!("std/fx")));
+    assert!(delay["label"].as_str().is_some_and(|l| !l.is_empty()));
     let node = state["view"]["modules"][0]["nodes"].as_array().unwrap().iter().find(|n| n["audio"] == true).unwrap().clone();
     let call = node["id"].as_str().unwrap();
-    let added = graph.add_effect(token, revision, call, "std/fx", "delay").unwrap();
+    let added = graph.add_effect(token, revision, call, "std:delay").unwrap();
     assert_eq!(added["after"], "delay(osc.sine(hz(800)), { time: 0.25, feedback: 0.3, mix: 0.3 })");
     let state = graph.state().unwrap();
-    let delay = state["view"]["modules"][0]["nodes"].as_array().unwrap().iter().find(|n| n["effect"] == "delay").unwrap().clone();
+    // The node is the effect by its component, named by its label.
+    let delay = state["view"]["modules"][0]["nodes"].as_array().unwrap().iter().find(|n| n["component"] == "std:delay").unwrap().clone();
+    assert_eq!(delay["effect"], state["effects"].as_array().unwrap().iter().find(|e| e["component"] == "std:delay").unwrap()["label"]);
     assert!(synced(&graph));
     let revision = state["view"]["revision"].as_u64().unwrap();
     graph.remove_effect(token, revision, delay["id"].as_str().unwrap()).unwrap();
@@ -759,7 +764,7 @@ fn a_structural_edit_takes_over_where_playback_is() {
     let nodes = state["view"]["modules"].as_array().unwrap().iter().flat_map(|m| m["nodes"].as_array().unwrap().clone());
     let call = nodes.into_iter().find(|n| n["kind"] == "call" && n["audio"] == true && n["label"].as_str().unwrap().contains("kick"));
     let before = graph.status().beat;
-    graph.add_effect(token, revision, call.unwrap()["id"].as_str().unwrap(), "std/fx", "delay").unwrap();
+    graph.add_effect(token, revision, call.unwrap()["id"].as_str().unwrap(), "std:delay").unwrap();
     let after = graph.status();
     assert!(after.playing && after.beat >= before, "no jump back: beat {before} then {}", after.beat);
     assert_ne!(generation(&graph), first, "a new renderer plays");
@@ -902,8 +907,8 @@ fn a_lease_begins_updates_in_order_and_commits_or_cancels() {
     let (token, revision, id) = control(&graph);
     let begun = graph.begin(token, revision, &id, Owner::default()).unwrap();
     assert_eq!(
-        (begun.revision, begun.id.as_str(), begun.value, begun.uses, begun.home, begun.heard),
-        (revision, id.as_str(), 800.0, 1, "code", true)
+        (begun.revision, begun.id.as_str(), begun.value, begun.uses, begun.cells, begun.home, begun.heard),
+        (revision, id.as_str(), 800.0, 1, 1, m2_session::Home::Code, true)
     );
     assert!(graph.update(begun.lease, Some(2), 900.0).unwrap().is_some());
     assert_eq!(graph.update(begun.lease, Some(1), 850.0).unwrap(), None, "older than one taken: dropped");
@@ -1029,16 +1034,21 @@ const B_SILENT: &str = "import { hz, track } from '@m2/core';\nimport { osc, vca
 
 impl Dc {
     fn new() -> Dc {
+        let mut dc = Dc::with(A_DC);
+        assert_eq!(dc.blocks(4), vec![0.5; 4], "the song plays its constant");
+        dc
+    }
+
+    /// The same, with `a` as `tracks/a.ts`.
+    fn with(a: &str) -> Dc {
         let fixture = Fixture::new();
         fixture.put("song.ts", SONG_DC);
-        fixture.put("tracks/a.ts", A_DC);
+        fixture.put("tracks/a.ts", a);
         fixture.put("tracks/b.ts", B_SILENT);
         let (p, driver) = Player::driven(48_000);
         let graph = Graph::with_player(p);
         graph.open(&fixture.0).unwrap();
-        let mut dc = Dc { fixture, graph, driver };
-        assert_eq!(dc.blocks(4), vec![0.5; 4], "the song plays its constant");
-        dc
+        Dc { fixture, graph, driver }
     }
 
     /// Fill `n` blocks of 128 frames: the first frame of each, which is every frame of it while
@@ -1663,4 +1673,66 @@ fn the_state_names_each_drag_as_its_view_does() {
     graph.preview(token, r0, &saw, "g", 320.0).unwrap();
     graph.set(token, r0, &saw, "g", 330.0, Some(300.0)).unwrap();
     assert!(fixture.read("song.ts").contains("osc.tri(hz(1)), osc.sine(hz(800)), osc.saw(hz(330))"));
+}
+
+// WRITE-22, RENDER-22, PKG-3, D5: a knob a call leaves out (an inherited control, at its default)
+// is dragged like any other: its updates are cell writes, heard with no new renderer and no
+// message; its commit writes it into the call, and what plays takes that value edit as it is, by
+// the same cells (the constant only moved from inherited to written).
+#[test]
+fn an_inherited_knob_is_dragged_and_its_commit_writes_it_in_with_no_new_renderer() {
+    let a = "import { hz, track } from '@m2/core';\nimport { osc, vca } from 'std/dsp';\n\
+             export const a = track('a', () => {\n  return vca(osc.square(hz(0)));\n});\n";
+    let mut dc = Dc::with(a);
+    assert_eq!(dc.blocks(4), vec![1.0; 4], "vca's gain plays its default, 1");
+    let first = dc.generation();
+    let (token, revision, id) = dc.graph.inspect(|a| {
+        let o = a.open.as_ref().unwrap();
+        let c = o.session.controls().into_iter().find(|c| !c.written && c.origin.slot() == Some("gain")).unwrap();
+        (o.token, o.session.accepted().number, c.id)
+    });
+    assert!(id.ends_with("/@gain"), "{id}");
+    let begun = dc.graph.begin(token, revision, &id, Owner::default()).unwrap();
+    assert_eq!((begun.value, begun.cells, begun.home, begun.heard), (1.0, 1, m2_session::Home::Code, true));
+    let p = player(&dc.graph);
+    let seq = dc.graph.update(begun.lease, None, 0.4).unwrap().expect("a cell write");
+    // A smooth control (PKG-14): one block ramps, then it holds.
+    assert!(dc.blocks(3).iter().skip(1).all(|x| near(*x, 0.4)));
+    assert!(dc.graph.applied(seq).is_some(), "a block heard it");
+    assert_eq!(p.status().generation, first, "no new renderer for an update");
+    match dc.graph.commit(begun.lease, 0.6, Some(1.0)).unwrap() {
+        Committed::Written(v) => {
+            let shown = (&v["file"], &v["before"], &v["after"]);
+            assert_eq!(shown, (&json!("tracks/a.ts"), &json!("vca(osc.square(hz(0)))"), &json!("vca(osc.square(hz(0)), 0.6)")));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(dc.fixture.read("tracks/a.ts").contains("vca(osc.square(hz(0)), 0.6)"));
+    assert!(dc.blocks(3).iter().skip(1).all(|x| near(*x, 0.6)));
+    assert_eq!(dc.generation(), first, "what plays took the first edit as a value edit");
+    assert!(synced(&dc.graph));
+    // The written knob is the same cell: a new drag of it plays at once.
+    let (token, revision, id) = knob(&dc.graph, 0.6);
+    let again = dc.graph.begin(token, revision, &id, Owner::default()).unwrap();
+    dc.graph.update(again.lease, None, 0.2).unwrap();
+    assert!(dc.blocks(3).iter().skip(1).all(|x| near(*x, 0.2)));
+    dc.graph.cancel(again.lease).unwrap();
+}
+
+// RENDER-22, D10: one literal that reaches two slots is one control, and a lease on it writes
+// every cell it reaches: both vcas here.
+#[test]
+fn a_lease_on_a_shared_literal_moves_every_cell() {
+    let a = "import { hz, linear, track } from '@m2/core';\nimport { osc, vca } from 'std/dsp';\nimport { add } from 'std/math';\n\
+             export const a = track('a', () => {\n  const g = linear(0.25);\n  return add(vca(osc.square(hz(0)), g), vca(osc.square(hz(0)), g));\n});\n";
+    let mut dc = Dc::with(a);
+    assert!(dc.blocks(2).iter().all(|x| near(*x, 0.5)));
+    let (token, revision, id) = knob(&dc.graph, 0.25);
+    let begun = dc.graph.begin(token, revision, &id, Owner::default()).unwrap();
+    assert_eq!((begun.uses, begun.cells), (2, 2));
+    dc.graph.update(begun.lease, None, 0.3).unwrap();
+    assert!(dc.blocks(3).iter().skip(1).all(|x| near(*x, 0.6)), "both cells");
+    assert_eq!(dc.graph.leases()[0].home, m2_session::Home::Code, "HOME-1");
+    dc.graph.cancel(begun.lease).unwrap();
+    assert!(dc.blocks(3).iter().skip(1).all(|x| near(*x, 0.5)), "put back in both");
 }

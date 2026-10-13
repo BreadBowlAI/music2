@@ -284,7 +284,7 @@ pub fn add_effect(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     let sampler = Sampler::start(&graph);
     for call in &calls {
         let (token, revision) = session_and_revision(&graph)?;
-        graph.add_effect(token, revision, call, "std/fx", "delay")?;
+        graph.add_effect(token, revision, call, "std:delay")?;
         timed.add(&graph, song.rate)?;
         std::thread::sleep(Duration::from_secs_f64(rng.range(0.3, 1.0)));
     }
@@ -330,7 +330,7 @@ fn add_effect_with_plugins(out: &mut Outcome, lab: &Lab, o: &Opts, dir: &Path, g
     let sampler = Sampler::start(graph);
     for call in &calls {
         let (token, revision) = session_and_revision(graph)?;
-        graph.add_effect(token, revision, call, "std/fx", "delay")?;
+        graph.add_effect(token, revision, call, "std:delay")?;
         timed.add(graph, rate)?;
         std::thread::sleep(Duration::from_secs_f64(rng.range(0.3, 1.0)));
     }

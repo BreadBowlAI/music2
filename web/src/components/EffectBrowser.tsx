@@ -3,7 +3,11 @@ import { AudioWaveform, CornerDownLeft, Flame, Gauge, Orbit, Search, SlidersHori
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Effect } from "../lib/graph";
 
-/** The categories in the order the browser lists them, with an icon and a colour each. */
+/**
+ * The categories the browser knows, in the order it lists them, with an icon and a colour each. A
+ * category is a free string a package's descriptor gives (PKG-7): any other is a group of its own
+ * after these, with a plain icon.
+ */
 const CATEGORIES: { name: string; Icon: typeof Waves; color: string }[] = [
   { name: "Filter", Icon: AudioWaveform, color: "#4a8cc4" },
   { name: "EQ", Icon: SlidersVertical, color: "#3e9b9b" },
@@ -12,15 +16,14 @@ const CATEGORIES: { name: string; Icon: typeof Waves; color: string }[] = [
   { name: "Delay & Reverb", Icon: Waves, color: "#8a6fc4" },
   { name: "Modulation", Icon: Orbit, color: "#c45c9a" },
   { name: "Utility", Icon: SlidersHorizontal, color: "#7b7f87" },
-  { name: "Other", Icon: Sparkles, color: "#7b7f87" },
 ];
-const category = (name: string) => CATEGORIES.find((c) => c.name === name) ?? CATEGORIES[CATEGORIES.length - 1];
+const category = (name: string) => CATEGORIES.find((c) => c.name === name) ?? { name, Icon: Sparkles, color: "#7b7f87" };
 
 interface Match { effect: Effect; score: number; hits: number[] }
 
 /**
  * How well `query` finds `effect`, or null. Every word must match: in the name as letters in
- * order (best as a prefix, then as a run), or as the start of a word of its category or description.
+ * order (best as a prefix, then as a run), or as the start of a word of its label, category or description.
  */
 function match(effect: Effect, query: string): Match | null {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -43,6 +46,8 @@ function match(effect: Effect, query: string): Match | null {
         found.forEach((i) => hits.add(i));
       }
     }
+    // Its label is what it is called ("Limiter" for `limit`).
+    if (starts(effect.label, w)) best = Math.max(best, 60);
     if (starts(effect.category, w)) best = Math.max(best, 50);
     if (starts(effect.description, w)) best = Math.max(best, 30);
     if (!best) return null;
@@ -56,10 +61,9 @@ function search(effects: Effect[], query: string) {
   const found = effects.map((e) => match(e, query)).filter((m): m is Match => m !== null);
   const groups = new Map<string, Match[]>();
   for (const c of CATEGORIES) groups.set(c.name, []);
-  for (const m of found) {
-    const name = category(m.effect.category).name;
-    groups.get(name)!.push(m);
-  }
+  // Categories the browser doesn't know follow, alphabetically.
+  for (const c of [...new Set(found.map((m) => m.effect.category))].sort()) if (!groups.has(c)) groups.set(c, []);
+  for (const m of found) groups.get(m.effect.category)!.push(m);
   const listed = [...groups.entries()].filter(([, items]) => items.length).map(([name, items]) => ({ name, items: [...items].sort((a, b) => b.score - a.score) }));
   if (query.trim()) listed.sort((a, b) => b.items[0].score - a.items[0].score);
   return listed;
@@ -148,7 +152,7 @@ export default function EffectBrowser({
           role="combobox"
           aria-expanded
           aria-controls="effect-list"
-          aria-activedescendant={current ? `effect-${current.effect.module}-${current.effect.name}` : undefined}
+          aria-activedescendant={current ? `effect-${current.effect.component}` : undefined}
           className="flex-1 min-w-0 bg-transparent outline-none text-[14px] text-ink-100 placeholder:text-ink-400"
           onChange={(e) => {
             setQuery(e.target.value);
@@ -190,11 +194,12 @@ export default function EffectBrowser({
                 const on = m === current;
                 return (
                   <div
-                    key={`${m.effect.module}.${m.effect.name}`}
-                    id={`effect-${m.effect.module}-${m.effect.name}`}
+                    key={m.effect.component}
+                    id={`effect-${m.effect.component}`}
                     role="option"
                     aria-selected={on}
                     data-effect={m.effect.name}
+                    data-component={m.effect.component}
                     data-active={on || undefined}
                     className={clsx("mx-1.5 px-2.5 py-2 rounded-xl flex items-center gap-3 cursor-pointer transition-colors", on ? "bg-ink-700/70" : "hover:bg-ink-700/40")}
                     onPointerMove={() => i !== active && setActive(i)}
@@ -209,7 +214,7 @@ export default function EffectBrowser({
                           <span key={k} className={m.hits.includes(k) ? "text-pop-500 font-semibold" : undefined}>{ch}</span>
                         ))}
                       </span>
-                      <span className="block text-xs text-ink-400 truncate leading-4">{m.effect.description}</span>
+                      <span className="block text-xs text-ink-400 truncate leading-4" title={m.effect.label}>{m.effect.description}</span>
                     </span>
                     {on && <CornerDownLeft className="size-3.5 shrink-0 text-ink-400" />}
                   </div>
@@ -221,7 +226,7 @@ export default function EffectBrowser({
       </div>
       <div className="h-9 shrink-0 flex items-center gap-3 px-4 border-t border-black/[0.06] bg-ink-800 text-[11px] text-ink-400">
         <span className="flex-1 min-w-0 truncate font-mono" title="What adding it writes in your code">
-          {current ? `${current.effect.name}(${after}(…)${current.effect.args ? `, ${current.effect.args}` : ""})` : ""}
+          {current ? `${current.effect.name}(${after}(…)${current.effect.insert})` : ""}
         </span>
         <span className="shrink-0">↑↓ to move · ↵ to add</span>
       </div>

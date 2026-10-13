@@ -12,10 +12,12 @@
 //! RENDER-28: the callback never allocates, locks or waits. No thread ever blocks on these
 //! channels (crossbeam's channels lock only to wake a blocked thread): senders `try_send`
 //! and retry for a bounded time, and retired objects are polled for. A panic in the engine is
-//! caught at the callback, so it never unwinds into the device's frame.
+//! caught at the callback, so it never unwinds into the device's frame. Cell values never use
+//! the queue: they are written into the slots of the renderer they are for ([`Player::set_cells`]).
 //!
 //! Live mode: a NaN from a broken kernel is silenced, not an error.
 
+mod cells;
 mod resample;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -26,11 +28,12 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, anyhow};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
-use m2_ir::Origin;
 use m2_runtime::engine::{APPLIED, Msg as EngineMsg};
-pub use m2_runtime::engine::{Applied, CallbackStamp, Engine, Envelope, Retired};
-use m2_runtime::{Cmd, LaneSwap, Renderer, Transport};
+pub use m2_runtime::engine::{Applied, CallbackStamp, Engine, Envelope, Heard, Retired};
+use m2_runtime::{CellTarget, Cmd, LaneSwap, Renderer, Transport};
 pub use resample::Resampler;
+
+use crate::cells::{CELL_SEQ, Writer};
 
 /// How long a sender waits for room before it reports the player stalled.
 const STALL: Duration = Duration::from_millis(500);
@@ -132,6 +135,16 @@ struct AppliedSlot {
     frame: AtomicU64,
 }
 
+/// One [`Heard`] stamp, as atomics, and its place among them all.
+#[derive(Default)]
+struct HeardSlot {
+    n: AtomicU64,
+    to: AtomicU64,
+    clock: AtomicU64,
+    callback_ns: AtomicU64,
+    frame: AtomicU64,
+}
+
 /// What the audio thread publishes. The position block is a seqlock: the audio thread is its
 /// only writer, and readers retry until they see one whole write.
 #[derive(Default)]
@@ -144,6 +157,8 @@ struct Shared {
     generation: AtomicU64,
     applied: [AppliedSlot; APPLIED],
     applied_n: AtomicU64,
+    heard: [HeardSlot; APPLIED],
+    heard_n: AtomicU64,
     // Written outside the seqlock.
     clock: AtomicU64,
     last_callback_ns: AtomicU64,
@@ -203,7 +218,9 @@ struct Callback {
     a: Vec<[f32; 2]>,
     b: Vec<[f32; 2]>,
     device_rate: u32,
+    /// The engine's applied stamps and heard stamps published so far.
     published: u64,
+    published_heard: u64,
     seeks: u64,
     loads: u64,
 }
@@ -222,6 +239,7 @@ impl Callback {
             b: vec![[0.0; 2]; SCRATCH],
             device_rate,
             published: 0,
+            published_heard: 0,
             seeks: 0,
             loads: 0,
         }
@@ -298,7 +316,7 @@ impl Callback {
                         n.enter_from(o.transport(), o.tempo(), o.sample_rate() as f64);
                     }
                     self.loads += 1;
-                    self.published = 0;
+                    (self.published, self.published_heard) = (0, 0);
                     self.live = Some(live);
                     if let Some(old) = old {
                         self.fade_out(old);
@@ -314,7 +332,6 @@ impl Callback {
                     match env.msg {
                         EngineMsg::Activate { renderer } => self.retire(Gone::Engine(Retired::Renderer(renderer))),
                         EngineMsg::SwapLane { data, .. } => self.retire(Gone::Engine(Retired::Lane(data))),
-                        EngineMsg::SetConst(origin, _) => self.retire(Gone::Engine(Retired::Origin(origin))),
                         EngineMsg::Transport(Cmd::Seek(_)) => self.seeks += 1,
                         EngineMsg::Transport(_) | EngineMsg::Panic => {}
                     }
@@ -416,6 +433,20 @@ impl Callback {
                 s.applied_n.fetch_add(1, Ordering::Relaxed);
             }
             self.published = n;
+            let (stamps, n) = l.engine.heard();
+            let from = self.published_heard.min(n).max(n.saturating_sub(APPLIED as u64));
+            for k in from..n {
+                let h = stamps[(k % APPLIED as u64) as usize];
+                let at = s.heard_n.load(Ordering::Relaxed);
+                let slot = &s.heard[(at % APPLIED as u64) as usize];
+                slot.n.store(at + 1, Ordering::Relaxed);
+                slot.to.store(h.to, Ordering::Relaxed);
+                slot.clock.store(h.clock, Ordering::Relaxed);
+                slot.callback_ns.store(h.callback_ns, Ordering::Relaxed);
+                slot.frame.store(h.frame as u64, Ordering::Relaxed);
+                s.heard_n.store(at + 1, Ordering::Relaxed);
+            }
+            self.published_heard = n;
         }
         s.seq.store(seq + 2, Ordering::Release);
         if let Some(l) = &self.live {
@@ -436,6 +467,7 @@ pub struct Player {
     tx: Sender<Msg>,
     shared: Arc<Shared>,
     next_seq: Arc<AtomicU64>,
+    cells: Arc<Writer>,
     /// The device's own rate. The engine runs at the project's.
     pub device_rate: u32,
     pub device: String,
@@ -495,7 +527,7 @@ impl Player {
         let (retired_tx, retired) = bounded::<Gone>(RETIRED);
         let shared = Arc::new(Shared::default());
         let cb = Callback::new(rx, retired_tx, shared.clone(), device_rate);
-        let player = Player { tx, shared, next_seq: Arc::default(), device_rate, device: device.into() };
+        let player = Player { tx, shared, next_seq: Arc::default(), cells: Arc::default(), device_rate, device: device.into() };
         (player, cb, retired)
     }
 
@@ -605,7 +637,8 @@ impl Player {
         Ok(seq)
     }
 
-    fn replace_with(&self, renderer: Renderer, keep: Keep) -> Result<()> {
+    fn replace_with(&self, mut renderer: Renderer, keep: Keep) -> Result<()> {
+        self.cells.sending(&mut renderer);
         self.shared.rate.store(renderer.sample_rate(), Ordering::Relaxed);
         self.shared.loads_sent.fetch_add(1, Ordering::Release);
         let sent = self.send(Msg::Replace { live: Box::new(Live::new(renderer, self.device_rate)), keep });
@@ -652,6 +685,7 @@ impl Player {
     /// jump back (RENDER-25a). Returns its generation and the message's sequence number.
     pub fn activate(&self, mut renderer: Renderer) -> Result<(u64, u64)> {
         renderer.set_strict(false);
+        self.cells.sending(&mut renderer);
         let generation = renderer.generation();
         Ok((generation, self.envelope(EngineMsg::Activate { renderer: Box::new(renderer) })?))
     }
@@ -703,18 +737,12 @@ impl Player {
         let _ = self.transport(Cmd::Stop);
     }
 
-    /// Change a written value in the playing renderer, from the next block. A preview: dropped
-    /// when the queue is full, as a newer one follows. Returns the message's sequence number when
-    /// it was queued, for [`Player::applied`].
-    pub fn set_const(&self, origin: Origin, value: f64) -> Option<u64> {
-        let seq = self.next_seq.fetch_add(1, Ordering::Relaxed) + 1;
-        self.tx.try_send(Msg::Engine(Envelope { seq, msg: EngineMsg::SetConst(Box::new(origin), value) })).ok().map(|_| seq)
-    }
-
-    /// Deliver an accepted value or rollback even when previews filled the queue: waits for
-    /// room, for [`STALL`] at most. Call from the host's worker thread.
-    pub fn commit_const(&self, origin: Origin, value: f64) -> Result<()> {
-        self.envelope(EngineMsg::SetConst(Box::new(origin), value)).map(|_| ())
+    /// Write `value` into `target`'s cells (a `SetCell`, RENDER-22): heard at the renderer's next
+    /// block line, with no rebuild, never through the queue, so never dropped or kept waiting
+    /// (RENDER-28). The latest write to a cell wins. `value` is in the constant's own units.
+    /// Returns the write's seq, for [`Player::applied`].
+    pub fn set_cells(&self, target: &CellTarget, value: f64) -> u64 {
+        self.cells.set(target, value as f32)
     }
 
     /// The rate positions count in: the engine's, which is the project's (RENDER-31). The
@@ -792,8 +820,11 @@ impl Player {
         self.shared.clock.load(Ordering::Relaxed)
     }
 
-    /// When message `seq` took effect, while it is among the last few applied.
+    /// When message or cell write `seq` took effect, while it is among the last few applied.
     pub fn applied(&self, seq: u64) -> Option<Applied> {
+        if seq > CELL_SEQ {
+            return self.heard(seq);
+        }
         let s = &self.shared;
         loop {
             let a = s.seq.load(Ordering::Acquire);
@@ -807,6 +838,34 @@ impl Player {
                 callback_ns: x.callback_ns.load(Ordering::Relaxed),
                 frame: x.frame.load(Ordering::Relaxed) as u32,
             });
+            fence(Ordering::Acquire);
+            if s.seq.load(Ordering::Relaxed) == a {
+                return found;
+            }
+        }
+    }
+
+    /// When cell write `seq` was heard: the first block, among the last few stamped, that applied
+    /// it or a later write. It may be a block late, never early (see `m2_runtime::CellSlots`).
+    pub fn heard(&self, seq: u64) -> Option<Applied> {
+        let s = &self.shared;
+        loop {
+            let a = s.seq.load(Ordering::Acquire);
+            if a & 1 == 1 {
+                std::hint::spin_loop();
+                continue;
+            }
+            let found = s
+                .heard
+                .iter()
+                .filter(|x| x.n.load(Ordering::Relaxed) > 0 && x.to.load(Ordering::Relaxed) >= seq)
+                .min_by_key(|x| x.n.load(Ordering::Relaxed))
+                .map(|x| Applied {
+                    seq,
+                    clock: x.clock.load(Ordering::Relaxed),
+                    callback_ns: x.callback_ns.load(Ordering::Relaxed),
+                    frame: x.frame.load(Ordering::Relaxed) as u32,
+                });
             fence(Ordering::Acquire);
             if s.seq.load(Ordering::Relaxed) == a {
                 return found;

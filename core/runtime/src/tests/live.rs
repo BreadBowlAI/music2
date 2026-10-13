@@ -14,11 +14,11 @@ fn notes(v: Value) -> LaneData {
     LaneData::read(&v.to_string(), &LaneKind::Notes).unwrap()
 }
 
-fn with_notes(v: Value, arr: Arrangement) -> DataSet {
+pub(super) fn with_notes(v: Value, arr: Arrangement) -> DataSet {
     DataSet::with_lanes(arr, [(addr("notes"), notes(v))])
 }
 
-fn at_bpm(bpm: f64) -> Arrangement {
+pub(super) fn at_bpm(bpm: f64) -> Arrangement {
     serde_json::from_value(json!({"tempo": [{"beat": 0, "bpm": bpm}]})).unwrap()
 }
 
@@ -50,7 +50,7 @@ fn synth(release: f64, after: Value, out: &str) -> Ir {
 }
 
 /// A renderer as the live engine gets it: not strict, stopped at 0.
-fn live(ir: &Ir, data: &DataSet) -> Renderer {
+pub(super) fn live(ir: &Ir, data: &DataSet) -> Renderer {
     let pk = std_packages();
     let flat = check(ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Renderer::new(&flat, data, &pk, SR).unwrap();
@@ -60,9 +60,9 @@ fn live(ir: &Ir, data: &DataSet) -> Renderer {
 }
 
 /// An engine driven by hand: messages in, what it retires out.
-struct Rig {
-    e: Engine,
-    inbox: VecDeque<Envelope>,
+pub(super) struct Rig {
+    pub(super) e: Engine,
+    pub(super) inbox: VecDeque<Envelope>,
     retired: Vec<Retired>,
     /// Refuse to take retired objects, as a full channel does.
     refuse: bool,
@@ -70,7 +70,7 @@ struct Rig {
 }
 
 impl Rig {
-    fn new(r: Renderer) -> Rig {
+    pub(super) fn new(r: Renderer) -> Rig {
         Rig { e: Engine::with(Box::new(r)), inbox: VecDeque::new(), retired: vec![], refuse: false, seq: 0 }
     }
 
@@ -80,11 +80,11 @@ impl Rig {
         self.seq
     }
 
-    fn cmd(&mut self, c: Cmd) -> u64 {
+    pub(super) fn cmd(&mut self, c: Cmd) -> u64 {
         self.send(Msg::Transport(c))
     }
 
-    fn run(&mut self, frames: usize) -> Vec<[f32; 2]> {
+    pub(super) fn run(&mut self, frames: usize) -> Vec<[f32; 2]> {
         let mut out = vec![[0.0; 2]; frames];
         let Rig { e, inbox, retired, refuse, .. } = self;
         let mut retire = |r: Retired| {
@@ -365,9 +365,10 @@ fn range_renders_start_fresh_and_dont_chase() {
     assert!(peak(&replay.render(0.5).unwrap()) > 0.9, "the exact render has it");
 }
 
-/// Delays and reverbs inside voices that are stolen again and again.
+/// Delays and reverbs inside voices that are stolen again and again, with a cell in the voices
+/// (the reverb's mix) and a smooth one at the top (the level).
 fn retriggered() -> (Ir, DataSet) {
-    let ir = song(
+    let ir = cell::framed(song(
         json!([
             {"id": "n", "op": "lane", "lane": "notes"},
             {"id": "v", "op": "poly", "events": "n", "voices": 1, "body": {"out": "r", "nodes": [
@@ -376,10 +377,13 @@ fn retriggered() -> (Ir, DataSet) {
                 {"id": "o", "op": "kernel", "kernel": "std:saw", "inputs": {"freq": "hz"}},
                 {"id": "a", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "g"}},
                 {"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "a"}},
-                {"id": "r", "op": "kernel", "kernel": "std:reverb", "inputs": {"in": "d"}}]}}]),
-        "v",
+                {"id": "wet", "op": "const", "value": 0.25, "origin": {"site": 2, "arg": ["0"]}},
+                {"id": "r", "op": "kernel", "kernel": "std:reverb", "inputs": {"in": "d", "mix": "wet"}}]}},
+            cell::smooth_const("lvl", 0.8, 3),
+            {"id": "out", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "v", "by": "lvl"}}]),
+        "out",
         json!([{"key": "notes", "kind": "events<note>"}]),
-    );
+    ));
     let ns: Vec<Value> = (0..8).map(|k| json!({"pitch": 48 + k, "start": k as f64 * 0.25, "length": 0.2})).collect();
     (ir, with_notes(json!({"clips": [{"start": 0, "length": 4, "notes": ns}]}), at_bpm(120.0)))
 }
@@ -419,8 +423,9 @@ fn prewarming_keeps_kernel_memory_flat() {
     assert!(g.kernel_memory(&store) > fresh);
 }
 
-// RENDER-28: once a thread has rendered a block, rendering and the engine's messages allocate
-// nothing. (core/play's trap checks the audio callback from its very first fill.)
+// RENDER-28: once a thread has rendered a block, rendering, the engine's messages and cell
+// writes (a step in a voice, a ramp at the top) allocate nothing. (core/play's trap checks the
+// audio callback from its very first fill.)
 #[test]
 fn rendering_live_allocates_nothing() {
     let (ir, data) = retriggered();
@@ -435,7 +440,6 @@ fn rendering_live_allocates_nothing() {
         Msg::Transport(Cmd::Seek(0.5)),
         Msg::Transport(Cmd::Loop(Some((0.0, 1.0)))),
         Msg::SwapLane { generation, slot: 0, data: lane },
-        Msg::SetConst(Box::new(Origin { site: 9, arg: vec![], scale: None }), 1.0),
         Msg::Activate { renderer: Box::new(next) },
         Msg::Transport(Cmd::Stop),
         Msg::Panic,
@@ -446,9 +450,13 @@ fn rendering_live_allocates_nothing() {
     }
     let mut out = vec![[0.0; 2]; 300];
     let mut kept: Vec<Retired> = Vec::with_capacity(64);
+    let (slots, map) = (rig.e.current().unwrap().cell_slots(), rig.e.current().unwrap().cell_map());
+    let ids: Vec<CellId> = map.cells(&cell::origin(2)).iter().chain(map.cells(&cell::origin(3))).copied().collect();
+    assert_eq!(ids.len(), 2, "a cell in the voices and one at the top");
     let Rig { e, inbox, .. } = &mut rig;
     let ((), allocs) = during(|| {
-        for _ in 0..200 {
+        for k in 0..200 {
+            slots.set(&ids, 0.1 + (k % 7) as f32 * 0.1, k + 1);
             let mut retire = |r: Retired| {
                 if kept.len() == kept.capacity() {
                     return Err(r);
@@ -460,7 +468,8 @@ fn rendering_live_allocates_nothing() {
         }
     });
     assert_eq!(allocs, 0);
-    assert!(inbox.is_empty() && kept.len() >= 3, "{} retired", kept.len());
+    // The swap's old data and the replaced renderer; cell writes retire nothing.
+    assert!(inbox.is_empty() && kept.len() == 2, "{} retired", kept.len());
     // The panic came during the activation's fade: it reset both renderers.
     assert_eq!((e.resets(), e.activations()), (2, 1));
     drop(flat);
@@ -625,15 +634,16 @@ fn a_full_retire_channel_holds_messages_never_drops_them() {
     let data = with_notes(json!({"clips": []}), at_bpm(120.0));
     let mut rig = Rig::new(live(&ir, &data));
     rig.refuse = true;
-    let origin = |k| Msg::SetConst(Box::new(Origin { site: k, arg: vec![], scale: None }), 1.0);
+    // Swaps for a renderer that never came: each is retired unapplied.
+    let stale = || Msg::SwapLane { generation: 0, slot: 0, data: LaneSwap::Notes(Arc::new(NotesData::empty())) };
     // Sixteen fill the stash.
-    for k in 0..16 {
-        rig.send(origin(k));
+    for _ in 0..16 {
+        rig.send(stale());
     }
     rig.cmd(Cmd::Play);
-    rig.send(origin(16));
+    rig.send(stale());
     rig.cmd(Cmd::Seek(2.0));
-    rig.send(origin(17));
+    rig.send(stale());
     rig.cmd(Cmd::Stop);
     rig.run(BLOCK * 4);
     let s = rig.e.status();
@@ -642,7 +652,7 @@ fn a_full_retire_channel_holds_messages_never_drops_them() {
     rig.refuse = false;
     rig.run(BLOCK * 2);
     assert!(rig.inbox.is_empty() && !rig.e.status().playing);
-    assert_eq!(rig.retired.iter().filter(|r| matches!(r, Retired::Origin(_))).count(), 18, "every one retired, none dropped");
+    assert_eq!(rig.retired.iter().filter(|r| matches!(r, Retired::Lane(_))).count(), 18, "every one retired, none dropped");
 }
 
 // RENDER-6a: stopped and silent for 8 blocks, an engine with nothing that can sound idles, and

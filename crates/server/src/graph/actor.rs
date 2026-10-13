@@ -17,7 +17,7 @@ use std::time::Instant;
 use anyhow::{Context, Result, anyhow, bail};
 use m2_ir::{Flat, Kind, Origin};
 use m2_plugins::{HostEvent, HostEvents};
-use m2_runtime::{Caps, Carry, Fresh, InstanceSource, LaneRef, LaneSwap, PackageSet, Renderer, audio, notes_data};
+use m2_runtime::{Caps, Carry, CellMap, CellSlots, Fresh, InstanceSource, LaneRef, LaneSwap, PackageSet, Renderer, audio, notes_data};
 use m2_session::render::{Length, Render};
 use m2_session::{Control, EditError, Edited, Session, plane};
 use m2_song::{DataSet, Snapshot};
@@ -127,6 +127,19 @@ pub(crate) struct Plays {
     revision: u64,
     code_rev: u64,
     controls: Arc<HashMap<String, Control>>,
+    /// Its cells' slots, and which cells hold each value of the revision it plays: what gesture
+    /// updates and committed values are written to (RENDER-22, RENDER-23).
+    cell_slots: Arc<CellSlots>,
+    cells: Arc<CellMap>,
+}
+
+/// Whether two checked graphs number their cells alike (the same constants at the same places),
+/// so the cells of a renderer built from one hold the other's values by the same CellIds: what
+/// lets a value edit, or an inherited control's first edit (which only moves its origin), be
+/// taken by what plays without a new renderer.
+fn same_layout(a: &Flat, b: &Flat) -> bool {
+    let (x, y) = (m2_runtime::cells::cells(a), m2_runtime::cells::cells(b));
+    x.len() == y.len() && x.iter().zip(&y).all(|(p, q)| p.at == q.at)
 }
 
 /// How the accepted revision reaches the engine.
@@ -228,20 +241,30 @@ impl Open {
             revision: rev.number,
             code_rev: self.code_rev,
             controls: self.controls.clone(),
+            cell_slots: r.cell_slots(),
+            cells: r.cell_map(),
         }
     }
 
     /// The renderer plays the accepted revision now (a value commit set what differed, or its
     /// lanes were swapped): a lane edit after this still finds the graphs equal, and swaps.
-    fn adopt(&mut self) {
+    /// Refused (false) when the accepted graph numbers its cells otherwise, so what plays can't
+    /// reach its values: a new renderer must play it.
+    fn adopt(&mut self) -> bool {
         let rev = self.session.accepted();
-        if let Some(p) = &mut self.plays {
-            (p.flat, p.snapshot, p.data, p.revision) =
-                (rev.compiled.flat.clone(), rev.snapshot.clone(), rev.compiled.data.clone(), rev.number);
-            // Settled already when a swap adopts; a value commit adopts first, and the settle
-            // after it brings these up to the new code.
-            (p.code_rev, p.controls) = (self.code_rev, self.controls.clone());
+        let Some(p) = &mut self.plays else { return true };
+        if p.flat != rev.compiled.flat {
+            if !same_layout(&p.flat, &rev.compiled.flat) {
+                return false;
+            }
+            // The same cells, now named by the accepted revision's origins.
+            p.cells = Arc::new(CellMap::of(&m2_runtime::cells::cells(&rev.compiled.flat)));
         }
+        (p.flat, p.snapshot, p.data, p.revision) = (rev.compiled.flat.clone(), rev.snapshot.clone(), rev.compiled.data.clone(), rev.number);
+        // Settled already when a swap adopts; a value commit adopts first, and the settle
+        // after it brings these up to the new code.
+        (p.code_rev, p.controls) = (self.code_rev, self.controls.clone());
+        true
     }
 
     /// Load `r` into `device`'s player as a fresh engine, stopped at `beat` and looping over
@@ -372,7 +395,7 @@ impl Open {
                 "can_redo": s.can_redo(),
                 "effects": s.effects(),
                 "diagnostics": diagnostics,
-                "problems": rev.compiled.problems,
+                "problems": s.problems(),
                 "sample_rate": rev.project.sample_rate(),
             }),
             // What needs attention though the song plays, with the fixes (DIAG-1, DIAG-4).
@@ -395,9 +418,8 @@ impl Open {
     /// this guess.
     fn single(&mut self, c: &m2_session::Committed, before: u64, device: Option<&Device>) {
         let single = c.before != c.after && c.revision == before + 1;
-        if (single || c.revision == before) && self.playing == before && device.is_some_and(|d| self.loaded(d)) {
+        if (single || c.revision == before) && self.playing == before && device.is_some_and(|d| self.loaded(d)) && self.adopt() {
             self.playing = c.revision;
-            self.adopt();
         }
     }
 }
@@ -472,11 +494,13 @@ impl Actor {
                 (l.id, kept)
             })
             .collect();
-        // A new renderer plays each kept lease's value from its first block: no message needed.
+        // A new renderer plays each kept lease's value from its first block: written into its
+        // cells before it is sent, so no update is lost to the activation.
         if let Some(r) = way.renderer() {
+            let map = r.cell_map();
             for (id, kept) in &decisions {
                 if let (Ok(c), Some(l)) = (kept, cp.leases.live.iter().find(|l| l.id == *id)) {
-                    r.set_const(&c.origin, l.playing);
+                    r.set_cells(map.cells(&c.origin), l.playing);
                 }
             }
         }
@@ -488,6 +512,7 @@ impl Actor {
                     for (slot, data) in swaps {
                         o.sent = Some(player.swap_lane(generation, slot, data)?);
                     }
+                    // The graphs are equal, so the cells are too.
                     o.adopt();
                     Ok(Sent::Swapped)
                 }
@@ -529,6 +554,8 @@ impl Actor {
         let plays = o.plays.as_ref().map(|p| PlaysView {
             epoch: p.epoch,
             generation: p.generation,
+            slots: p.cell_slots.clone(),
+            cells: p.cells.clone(),
             origins: if o.playing == number {
                 None
             } else if failed {
@@ -549,9 +576,8 @@ impl Actor {
                     if !renderer
                         && target != l.engine
                         && let (Some(t), Some(d)) = (&target, dev)
-                        && let Err(e) = d.player.commit_const(t.origin.clone(), l.playing)
                     {
-                        eprintln!("music2: couldn't play {}: {e:#}", c.id);
+                        d.player.set_cells(&t.cells, l.playing);
                     }
                     l.moved(number, &c.id);
                     (l.engine, l.control, l.revision, l.code_rev) = (target, c, number, o.code_rev);
@@ -576,10 +602,8 @@ impl Actor {
                     Some(l) => l.engine.clone(),
                     None => plays.as_ref().and_then(|p| p.target_of(&inst.id, &inst.origin)),
                 };
-                if let (Some(t), Some(d)) = (target, dev)
-                    && let Err(e) = d.player.commit_const(t.origin, inst.value)
-                {
-                    eprintln!("music2: couldn't play the committed value: {e:#}");
+                if let (Some(t), Some(d)) = (target, dev) {
+                    d.player.set_cells(&t.cells, inst.value);
                 }
             }
         }
@@ -647,7 +671,8 @@ impl Actor {
                 p.engine = Arc::new(EngineView { plays: None, controls: p.engine.controls.clone(), ..*p.engine });
             }
         }
-        let view = PlaysView { epoch: device.epoch, generation: plays.generation, origins: None };
+        let view =
+            PlaysView { epoch: device.epoch, generation: plays.generation, slots: plays.cell_slots.clone(), cells: plays.cells.clone(), origins: None };
         o.load(&device, r, plays, 0.0, None)?;
         let rev = o.session.accepted();
         *self.inner.timing.lock() = Some(Timing { tempo: rev.tempo(), rate: rev.project.sample_rate(), range: None, on: false });
@@ -775,9 +800,8 @@ impl Actor {
                         l.state = State::Pending { value, expect, since: Instant::now(), errors: errors.clone() };
                         if let (Some(t), Some(d)) = (&l.engine, &device)
                             && t.epoch == d.epoch
-                            && let Err(e) = d.player.commit_const(t.origin.clone(), l.playing)
                         {
-                            eprintln!("music2: couldn't play the pending value: {e:#}");
+                            d.player.set_cells(&t.cells, l.playing);
                         }
                     }
                 }

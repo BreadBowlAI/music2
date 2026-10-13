@@ -35,7 +35,8 @@ USAGE:
                                          assets/<asset-name>.wav (never over one that exists), optionally
                                          placing it as a clip on an audio lane (both by key)
   m2 graph <project> [--json]            the graph the canvas shows: calls, their knobs, connections
-  m2 controls <project>                  every number written in the project that the graph can edit
+  m2 controls <project>                  every number written in the project that the graph can edit, and
+                                         every declared control a call leaves out (inherited: its default)
   m2 set <project> <control> <value> [--expect V]
                                          change one, verified by the compiler (values in the control's units)
   m2 cables <project>                    named signals a cable can start from, and the inputs cables reach
@@ -43,8 +44,9 @@ USAGE:
                                          write a signal's name in place of a control's value, verified
   m2 disconnect <project> <input>        write the input's declared default in place of the name, verified
   m2 effects <project>                   the effects packages offer, and the calls they can go after
-  m2 add-effect <project> <call> <module>.<effect>
-                                         wrap a call's audio in an effect (e.g. std/fx.delay), verified
+  m2 add-effect <project> <call> <effect>
+                                         wrap a call's audio in an effect, named by its component id
+                                         (std:delay) or its export (std/fx.delay), verified
   m2 remove-effect <project> <call>      take an effect out, leaving what it was applied to, verified
   m2 relink <project> <from> <to>        move data no lane or plugin reads (left behind when a key was renamed
                                          in code) to where it is read now, verified: a lane file
@@ -129,8 +131,14 @@ fn open(dir: &Path) -> Result<Project> {
 fn compile(dir: &Path, packages: &mut PackageSet) -> Result<(Project, Compiled)> {
     let project = open(dir)?;
     let c = m2_session::compile(&project, packages).map_err(report)?;
-    attention(dir, &c.problems);
+    attention(dir, &[package_problems(packages), c.problems.clone()].concat());
     Ok((project, c))
+}
+
+/// The packages' own problems (`pkg.invalid`: a module that doesn't load, an invalid descriptor,
+/// one component id twice), which a session holds and a plain compile doesn't (DIAG-4).
+fn package_problems(packages: &PackageSet) -> Vec<m2_song::Diagnostic> {
+    m2_session::catalog(packages).problems.into_iter().map(m2_session::problem).collect()
 }
 
 /// Open an editing session on a project, printing diagnostics on failure and what needs
@@ -166,9 +174,12 @@ fn attention(dir: &Path, problems: &[m2_song::Diagnostic]) {
 /// Print what needs attention in a project if it compiles, for commands that don't need it to.
 fn attention_if_it_compiles(dir: &Path) {
     let project = Project::open(dir).map_err(|d| anyhow!("{} problems", d.len()));
-    let compiled = packages().and_then(|mut pk| m2_session::compile(&project?, &mut pk).map_err(|d| anyhow!("{} problems", d.len())));
-    if let Ok(c) = compiled {
-        attention(dir, &c.problems);
+    let compiled = packages().and_then(|mut pk| {
+        let c = m2_session::compile(&project?, &mut pk).map_err(|d| anyhow!("{} problems", d.len()))?;
+        Ok((package_problems(&pk), c))
+    });
+    if let Ok((packages, c)) = compiled {
+        attention(dir, &[packages, c.problems].concat());
     }
 }
 
@@ -336,7 +347,7 @@ fn run() -> Result<()> {
                 // A reference is `node.port`, so the node's id has no dot.
                 let id = "m2-bounce".to_string();
                 let op = m2_ir::Op::Import { module: track, export };
-                root.nodes.push(m2_ir::Node { id: id.clone(), op, src: None, origin: None, within: vec![] });
+                root.nodes.push(m2_ir::Node { id: id.clone(), op, src: None, origin: None, frame: None });
                 root.exports.insert(id.clone(), id.clone());
                 ir.root.export = id;
             }
@@ -422,7 +433,10 @@ fn run() -> Result<()> {
                     println!("  {:22} {:7}{at}{}", n.label, n.kind, if to.is_empty() { String::new() } else { format!("  → {}", to.join(", ")) });
                     for k in &n.knobs {
                         let shared = if k.uses > 1 { format!("  shared ×{}", k.uses) } else { String::new() };
-                        println!("      {:14} {:>9} {:9} [{} … {}]{}  `{}`{shared}", k.label, k.value, k.unit.unwrap_or("number"), k.min, k.max, if k.log { " log" } else { "" }, k.literal);
+                        // A range only where one is declared (PKG-8); the code's text, or the default it plays.
+                        let range = k.range.map_or("—".to_string(), |[lo, hi]| format!("[{lo} … {hi}]{}", if k.log { " log" } else { "" }));
+                        let written = if k.written { format!("`{}`", k.literal) } else { "(default)".to_string() };
+                        println!("      {:14} {:>9} {:9} {range}  {written}{shared}", k.label, k.value, k.unit.unwrap_or("number"));
                     }
                     for r in &n.readonly {
                         println!("      {:14} `{}`  (edit in code: {})", r.label, r.expression, r.reason);
@@ -436,7 +450,9 @@ fn run() -> Result<()> {
             for c in s.controls() {
                 let unit = c.unit.map_or("number".to_string(), |u| u.name().to_string());
                 let uses = if c.uses > 1 { format!("  ({} uses)", c.uses) } else { String::new() };
-                println!("{:34} {:>10} {:10} {}:{} `{}`{uses}", c.id, c.value, unit, c.file, c.line, c.literal);
+                // A control the call leaves out plays its declared default; setting it writes it in.
+                let written = if c.written { format!("`{}`", c.literal) } else { "inherited (the default)".to_string() };
+                println!("{:34} {:>10} {:10} {}:{} {written}{uses}", c.id, c.value, unit, c.file, c.line);
             }
         }
         Some("set") => {
@@ -463,7 +479,7 @@ fn run() -> Result<()> {
             let s = session(Path::new(&arg(1)?))?;
             println!("revision {}", s.accepted().number);
             for e in s.effects() {
-                println!("effect {:24} {}", format!("{}.{}", e.module, e.name), e.description);
+                println!("effect {:18} {:14} {:16} {}", e.component, e.label, e.category, e.description);
             }
             for m in s.view().modules {
                 for n in m.nodes.iter().filter(|n| n.audio || n.effect.is_some()) {
@@ -478,9 +494,14 @@ fn run() -> Result<()> {
             let at = s.accepted().number;
             let e = match command {
                 "add-effect" => {
+                    // By its ComponentId (`std:delay`), or by where it is exported (`std/fx.delay`).
                     let effect = arg(3)?;
-                    let (module, name) = effect.rsplit_once('.').context("name the effect as <module>.<name>, e.g. std/fx.delay")?;
-                    s.add_effect(at, &arg(2)?, module, name)
+                    let by_export = || {
+                        let (module, name) = effect.rsplit_once('.')?;
+                        s.effects().into_iter().find(|e| e.module == module && e.name == name).map(|e| e.component)
+                    };
+                    let component = if effect.contains(':') { effect.clone() } else { by_export().context("name the effect by its id (std:delay) or its export (std/fx.delay); `m2 effects` lists them")? };
+                    s.add_effect(at, &arg(2)?, &component)
                 }
                 _ => s.remove_effect(at, &arg(2)?),
             }

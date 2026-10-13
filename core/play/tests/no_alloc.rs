@@ -1,8 +1,9 @@
 //! RENDER-28: the audio callback never allocates, from its very first fill on a fresh thread,
 //! through everything step 3a does live: play, seek, a loop and its wraps, voices stolen, a lane
-//! swap, an activation across a tempo change (a crossfade with a retime), a value set, stop,
-//! idle, play, panic, and a full retire channel. Kernel memory never grows either: a reset on
-//! the audio thread would grow a delay's (§1.5 of the step 3a design).
+//! swap, an activation across a tempo change (a crossfade with a retime), stop, idle, play, panic,
+//! and a full retire channel; and, from step 5, cell writes from another thread all along (a step,
+//! a ramp and a cell in voices), with no rebuild. Kernel memory never grows either: a reset on the
+//! audio thread would grow a delay's (§1.5 of the step 3a design).
 //!
 //! Everything is built and sent on the test's thread; only the callback runs under the trap.
 
@@ -10,13 +11,13 @@ mod common;
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
-use std::sync::Arc;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, mpsc};
 
 use common::*;
 use m2_ir::Origin;
 use m2_play::{Gone, Player};
-use m2_runtime::{LaneSwap, NotesData, Renderer, Retired};
+use m2_runtime::{CellTarget, LaneSwap, NotesData, Renderer, Retired};
 use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
 
@@ -60,9 +61,23 @@ unsafe impl GlobalAlloc for Trap {
 #[global_allocator]
 static TRAP: Trap = Trap;
 
+/// Where the song's cells are written: the feedback gain (a step), the reverb's mix in the voices
+/// (a step in every voice), and the level at the end (declared smooth, so a ramp).
+fn cells() -> [Origin; 3] {
+    [11, 12, 13].map(|site| Origin { site, arg: vec!["0".into()], ..Origin::default() })
+}
+
+/// Where gestures on [`cells`] write in `r`: each value's cells, through `r`'s slots (RENDER-23).
+fn targets(r: &Renderer) -> Vec<CellTarget> {
+    let map = r.cell_map();
+    let t: Vec<CellTarget> = cells().iter().map(|o| CellTarget { slots: r.cell_slots(), cells: map.cells(o).into() }).collect();
+    assert!(t.iter().all(|t| t.cells.len() == 1), "each value is one cell");
+    t
+}
+
 /// The song: voices that hold a delay and a reverb and are stolen, notes with equal keys, a
-/// control lane, time, a feedback loop and a delay at the top, and an audio lane. `fx` adds a
-/// reverb at the end.
+/// control lane, time, a feedback loop and a delay at the top, an audio lane, and the cells of
+/// [`cells`]. `fx` adds a reverb at the end.
 fn nodes(fx: bool) -> (Value, &'static str) {
     let mut n = vec![
         json!({"id": "n", "op": "lane", "lane": "notes"}),
@@ -73,7 +88,8 @@ fn nodes(fx: bool) -> (Value, &'static str) {
             {"id": "e", "op": "kernel", "kernel": "std:adsr", "inputs": {"gate": "g"}},
             {"id": "a", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "e"}},
             {"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "a"}},
-            {"id": "r", "op": "kernel", "kernel": "std:reverb", "inputs": {"in": "d"}}]}}),
+            {"id": "wet", "op": "const", "value": 0.25, "origin": {"site": 12, "arg": ["0"]}},
+            {"id": "r", "op": "kernel", "kernel": "std:reverb", "inputs": {"in": "d", "mix": "wet"}}]}}),
         json!({"id": "c", "op": "lane", "lane": "level"}),
         json!({"id": "t", "op": "time", "of": "beats"}),
         json!({"id": "l", "op": "kernel", "kernel": "std:lfo", "inputs": {"beats": "t"}}),
@@ -83,14 +99,20 @@ fn nodes(fx: bool) -> (Value, &'static str) {
         json!({"id": "x", "op": "kernel", "kernel": "std:add", "inputs": {"a": "vl", "b": "a"}}),
         json!({"id": "fb", "op": "feedback", "kind": "audio<1>", "input": "sum"}),
         json!({"id": "k", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "fb", "by": "h"}}),
-        json!({"id": "h", "op": "const", "value": 0.3}),
+        json!({"id": "h", "op": "const", "value": 0.3, "origin": {"site": 11, "arg": ["0"]}}),
         json!({"id": "sum", "op": "kernel", "kernel": "std:add", "inputs": {"a": "x", "b": "k"}}),
         json!({"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "sum"}}),
     ];
-    if fx {
+    let last = if fx {
         n.push(json!({"id": "fx", "op": "kernel", "kernel": "std:reverb", "inputs": {"in": "d"}}));
-    }
-    (Value::Array(n), if fx { "fx" } else { "d" })
+        "fx"
+    } else {
+        "d"
+    };
+    n.push(json!({"id": "lvl", "op": "const", "value": 0.9,
+        "origin": {"site": 13, "arg": ["0"], "control": {"frame": 0, "slot": "level", "smooth": true}}}));
+    n.push(json!({"id": "out", "op": "kernel", "kernel": "std:scale", "inputs": {"in": last, "by": "lvl"}}));
+    (Value::Array(n), "out")
 }
 
 /// The song's project at `bpm`, in a temp folder, compiled from `nodes` without TypeScript.
@@ -121,7 +143,7 @@ fn build(fx: bool, bpm: f64) -> Song {
     m2_runtime::audio::write_wav(&dir.join("assets/s.wav"), &[wave], SR).unwrap();
     let (n, out) = nodes(fx);
     let ir: m2_ir::Ir = serde_json::from_value(json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"},
-        "modules": [{"key": "song", "nodes": n, "exports": {"out": out}, "lanes": [
+        "modules": [{"key": "song", "nodes": n, "exports": {"out": out}, "frames": [{"site": 1, "component": "test:level"}], "lanes": [
             {"key": "notes", "kind": "events<note>"}, {"key": "level", "kind": "control<gain>", "default": 0},
             {"key": "clips", "kind": "audio<1>"}]}]}))
     .unwrap();
@@ -154,6 +176,8 @@ fn trap_run(device_rate: u32) {
     let (gen_a, mem_a) = (ra.generation(), ra.kernel_memory_bytes());
     let rb = b.renderer();
     let (gen_b, mem_b) = (rb.generation(), rb.kernel_memory_bytes());
+    // Where gestures write in each, taken before they are sent.
+    let both = Arc::new([targets(&ra), targets(&rb)]);
     // A swap of A's notes: the same notes and one more.
     let more = NotesData::build(
         &match &**a.data.lane("song", "notes").unwrap() {
@@ -206,6 +230,27 @@ fn trap_run(device_rate: u32) {
         r
     };
     let s = |x: f64| (x * device_rate as f64) as usize;
+    // Cell writes from another thread all along, into whichever renderer plays, until the stop:
+    // the feedback gain, the reverb's mix in every voice and the smooth level, as gestures do.
+    let target = Arc::new(AtomicUsize::new(0));
+    let writing = Arc::new(AtomicBool::new(true));
+    let writer = {
+        let (player, both, target, writing) = (player.clone(), both.clone(), target.clone(), writing.clone());
+        std::thread::spawn(move || {
+            let mut k = 0;
+            while writing.load(Ordering::Relaxed) {
+                for t in &both[target.load(Ordering::Relaxed)] {
+                    player.set_cells(t, 0.2 + (k % 5) as f64 * 0.1);
+                }
+                k += 1;
+                std::thread::yield_now();
+            }
+            for t in &both[target.load(Ordering::Relaxed)] {
+                player.set_cells(t, 0.42);
+            }
+            k
+        })
+    };
     player.play();
     step(s(0.5), true);
     player.seek(2.0).unwrap();
@@ -215,9 +260,12 @@ fn trap_run(device_rate: u32) {
     player.set_loop(None).unwrap();
     player.swap_lane(gen_a, 0, LaneSwap::Notes(Arc::new(more))).unwrap();
     step(s(0.3), true);
-    player.commit_const(Origin { site: 1, arg: vec!["0".into()], scale: None }, 0.5).unwrap();
     player.activate(rb).unwrap();
+    target.store(1, Ordering::Relaxed);
     step(s(0.5), true);
+    writing.store(false, Ordering::Relaxed);
+    assert!(writer.join().unwrap() > 10, "it wrote while the callback ran");
+    step(s(0.1), true);
     player.stop();
     let mut idle = false;
     for _ in 0..40 {
@@ -232,8 +280,9 @@ fn trap_run(device_rate: u32) {
     player.panic().unwrap();
     step(s(0.3), true);
     // The retired channel fills (64), then the engine's stash (16); the rest wait their turn.
-    for k in 0..120 {
-        player.commit_const(Origin { site: 1000 + k, arg: vec![], scale: None }, 0.5).unwrap();
+    // Swaps for the renderer that left are each retired unapplied.
+    for _ in 0..120 {
+        player.swap_lane(gen_a, 0, LaneSwap::Notes(Arc::new(NotesData::empty()))).unwrap();
     }
     step(s(0.2), false);
     let pos = step(s(0.2), false).pos;
@@ -242,8 +291,8 @@ fn trap_run(device_rate: u32) {
     assert!(last.pos > pos, "it played on throughout");
     steps.send(Step::Done).unwrap();
     let (mut d, kept) = audio.join().unwrap();
-    let origins = kept.iter().filter(|g| matches!(g, Gone::Engine(Retired::Origin(_)))).count();
-    assert_eq!(origins, 121, "every value was applied and retired, none dropped");
+    let lanes = kept.iter().filter(|g| matches!(g, Gone::Engine(Retired::Lane(_)))).count();
+    assert_eq!(lanes, 121, "every swap was taken and retired, none dropped");
     let old: Vec<&Renderer> =
         kept.iter().filter_map(|g| if let Gone::Engine(Retired::Renderer(r)) = g { Some(&**r) } else { None }).collect();
     assert_eq!(old.iter().map(|r| r.generation()).collect::<Vec<_>>(), [gen_a]);
@@ -251,8 +300,12 @@ fn trap_run(device_rate: u32) {
     let e = d.engine().unwrap();
     assert_eq!((e.resets(), e.activations(), e.refused_swaps()), (1, 1, 0));
     let cur = e.current().unwrap();
-    assert_eq!(cur.generation(), gen_b);
+    assert_eq!(cur.generation(), gen_b, "cell writes rebuilt nothing");
     assert_eq!(cur.kernel_memory_bytes(), mem_b, "nor after the panic reset every kernel");
+    let map = cur.cell_map();
+    for o in cells() {
+        assert_eq!(map.cells(&o).iter().map(|c| cur.cell_value(*c)).collect::<Vec<_>>(), [Some(0.42)], "the last write plays");
+    }
     assert!(!player.crashed());
 }
 
@@ -267,7 +320,8 @@ fn the_audio_thread_never_allocates_through_the_resampler() {
     trap_run(44_100);
 }
 
-/// A probe instrument on 64 notes into a probe effect (step 3b, §6.5), `gain` on the instrument.
+/// A probe instrument on 64 notes into a probe effect (step 3b, §6.5), `gain` on the instrument,
+/// a cell (written at [`cells`]'s first site).
 fn probes(gain: f64) -> Song {
     let dir = temp("trap-plugins");
     let ns: Vec<Value> = (0..64).map(|k| json!({"pitch": 48 + (k % 7) * 3, "start": k as f64 * 0.25, "length": 1.5})).collect();
@@ -282,7 +336,7 @@ fn probes(gain: f64) -> Song {
     }
     let mut ir: m2_ir::Ir = serde_json::from_value(json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"},
         "modules": [{"key": "song", "exports": {"out": "fx"}, "lanes": [{"key": "notes", "kind": "events<note>"}], "nodes": [
-            {"id": "n", "op": "lane", "lane": "notes"}, {"id": "g", "op": "const", "value": gain},
+            {"id": "n", "op": "lane", "lane": "notes"}, {"id": "g", "op": "const", "value": gain, "origin": {"site": 11, "arg": ["0"]}},
             {"id": "p", "op": "plugin", "plugin": "clap:m2.probe", "inputs": {"notes": "n", "gain_1": "g"}},
             {"id": "fx", "op": "plugin", "plugin": "clap:m2.probe", "inputs": {"in": "p"}}]}]}))
     .unwrap();
@@ -296,10 +350,10 @@ fn probes(gain: f64) -> Song {
 
 // RENDER-28, step 3b (§6.5): the callback never allocates with plugins either: two probe instances
 // played, then an activation that carries both while notes sound into one (adoption, release and
-// lending through the crossfade), a value set, a panic, stop, the plugins asleep and the engine
-// idle, then woken by a plugin's request from a thread of its own. The probe asks for its main-
-// thread callback from `process` every 10 calls. Only the host glue is trapped here: a real
-// plugin's own allocations are its own (step 3a §13).
+// lending through the crossfade), a cell write into a parameter, a panic, stop, the plugins
+// asleep and the engine idle, then woken by a plugin's request from a thread of its own. The probe
+// asks for its main-thread callback from `process` every 10 calls. Only the host glue is trapped
+// here: a real plugin's own allocations are its own (step 3a §13).
 #[test]
 fn the_audio_thread_never_allocates_with_plugins() {
     let (a, b) = (probes(1.0), probes(0.5));
@@ -313,6 +367,8 @@ fn the_audio_thread_never_allocates_with_plugins() {
     let handles = ra.plugin_handles();
     let mut carry = m2_runtime::Carry::of(&ra, 1);
     let rb = build(&b, carry.source(1));
+    let gain = CellTarget { slots: rb.cell_slots(), cells: rb.cell_map().cells(&cells()[0]).into() };
+    assert_eq!(gain.cells.len(), 1, "the gain parameter's value is a cell");
     assert_eq!(rb.plugin_handles(), handles, "both carried");
     let stats: Vec<_> = handles.iter().map(|h| m2_plugins::probe::stats(*h).unwrap()).collect();
     let (player, d) = Player::driven(SR);
@@ -353,7 +409,7 @@ fn the_audio_thread_never_allocates_with_plugins() {
     assert!(stats[0].sounding.load(std::sync::atomic::Ordering::Relaxed) > 0, "notes sound into the instrument");
     player.activate(rb).unwrap();
     step(SR as usize / 2);
-    player.commit_const(Origin { site: 1, arg: vec![], scale: None }, 0.5).unwrap();
+    player.set_cells(&gain, 0.5);
     player.panic().unwrap();
     step(SR as usize / 4);
     player.stop();

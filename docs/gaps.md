@@ -20,7 +20,9 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 - See every track on a timeline: notes, automation, masks and audio clips, with the tempo shown above the tracks and bars counted by the song's time signatures (written in `data/arrangement.json`).
 - Add, move and delete notes clips. Draw, move, resize and nudge notes, and set how hard each one is played. Every clip has an id, so an edit always lands on the clip it was made on.
 - Drag a number written directly at an input (`0.3`, `hz(800)`, `{ pan: 0.3 }`) as a knob: you hear the change at once, even while the song compiles, and letting go writes it into the code. Saves to other files during the drag (another editor, an agent) don't interrupt it, and nor do saves to its own file that leave its line alone. A number held in a variable, or worked out from other numbers, shows **edit in code** instead (#35).
-- Connect cables inside one file, and add or remove 17 effects from a searchable browser.
+- Every control of an instrument or effect that isn't connected to a signal is a knob, even one the code leaves out: `bass(notes)` shows its `drive` at the default, in italics, and turning it writes `{ drive: … }` into the call. Each knob turns through the range the instrument or effect declares, and a double-click puts it back at its default.
+- Connect cables inside one file, and add or remove 17 effects from a searchable browser. An effect is known by what it is, not by its name in the code: `import { delay as echo }` is still the Delay.
+- Write your own instruments and effects in TypeScript, with knobs, defaults and ranges, the way std's are written ([Your own components](../README.md#your-own-components)).
 - Edit the code in the app, with type checks. When the code breaks, the last working version keeps playing.
 - Undo and redo every edit made in the app.
 - Rename a track's label (`track("kick", { name: "Big Kick" }, …)`) without moving or silencing anything: data is filed under the track's key.
@@ -58,7 +60,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 39 | **Shared sound packages**: list the packages a song uses in `music2.toml`, fetch them (for example `github:owner/repo@tag`), pin them in `music2.lock`, and browse and add them from the app. | Today only std can be loaded, so sounds other people make can't be used, except as CLAP plugins. | Partly (single sounds from GitHub, with `music2-cli plugin add`) | large |
+| 39 | **Shared sound packages**: list the packages a song uses in `music2.toml`, fetch them (for example `github:owner/repo@tag`), pin them in `music2.lock`, and browse and add them from the app. | Today only std can be loaded, so sounds other people make can't be used, except as CLAP plugins. A package already declares its instruments and effects in TypeScript, with their knobs and effect-browser categories, so what's missing is fetching and loading it. | Partly (single sounds from GitHub, with `music2-cli plugin add`) | large |
 
 ### Export
 

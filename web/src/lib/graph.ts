@@ -2,21 +2,35 @@
 
 import { token } from "./native";
 
-export interface Origin { site: number; arg?: string[]; scale?: number }
+/** A declared control a constant is (PKG-3): its instance's frame, its slot, and whether the call leaves it out. */
+export interface Slot { frame: number; slot: string; inherited?: boolean; smooth?: boolean }
+
+export interface Origin { site: number; arg?: string[]; scale?: number; control?: Slot }
+
+/** Where a value lives (HOME-1): the code, a lane, a plugin's state, `layout.json`, or this machine's `.music2/`. */
+export type Home = "code" | "lane" | "state" | "layout" | "local";
 
 export interface Knob {
   id: string;
   label: string;
   value: number;
+  /** The number written in the code; empty while the control plays its default. */
   literal: string;
   unit: string | null;
-  min: number;
-  max: number;
+  /** The range its control declares, for its unit: a hint, never a clamp (PKG-8). Null when none is declared, so the page picks a span. */
+  range: [number, number] | null;
   log: boolean;
+  /** Written in the code; false while the call leaves it out and it plays its declared default (its first edit writes it in). */
+  written: boolean;
+  default: number | null;
+  /** The declared control (`cutoff`, `channels.hats.db`) and its component (`std:lowpass`), when it is exactly one. */
+  slot: string | null;
+  component: string | null;
   origin: Origin;
   uses: number;
   file: string;
   line: number;
+  home: Home;
 }
 
 export interface ViewNode {
@@ -27,14 +41,16 @@ export interface ViewNode {
   file: string | null;
   line: number | null;
   knobs: Knob[];
-  readonly: { label: string; expression: string; reason: string; file: string | null; line: number | null }[];
+  readonly: { label: string; expression: string; reason: string; file: string | null; line: number | null; home: Home }[];
   /** The `const` this node's signal is bound to, if a cable can start here. */
   outlet: string | null;
   /** Inputs connected by a cable: `label ← name`. */
   inlets: { id: string; label: string; name: string; from: string }[];
   /** Whether its result is audio, which an effect can go after. */
   audio: boolean;
-  /** The effect this node is, if it can be removed. */
+  /** The component it is a call of (`std:delay`), whatever name the code calls it by (PKG-9). */
+  component: string | null;
+  /** The effect this node is, by its label (`Delay`), if it can be removed. */
   effect: string | null;
   /** Where signals and values come in, in the order the code writes them. */
   inputs: InputPort[];
@@ -54,8 +70,12 @@ export interface OutputPort { id: string; label: string; kind: PortKind; outlet:
 /** A connection from an output of `from` to an input of `to` (node and port ids); `late`: a `feedback()` reads it a block late, closing a loop. */
 export interface PortEdge { from: string; from_port: string; to: string; to_port: string; kind: PortKind; late?: boolean }
 
-/** `args` are written after the audio when it is added: `lowpass(x, 1000)`. */
-export interface Effect { module: string; name: string; description: string; category: string; args: string | null }
+/**
+ * An effect the packages offer: a component (`std:delay`) imported as `name` from `module`. `insert` is
+ * what adding it writes after the audio (`, 1000` gives `lowpass(x, 1000)`). `category` is a free string
+ * the browser groups by (PKG-7).
+ */
+export interface Effect { component: string; label: string; name: string; module: string; description: string; category: string; insert: string }
 
 /**
  * A module: the song (`song`) or a track. `key` is what the code calls it (`track("lead-vox", …)`):
@@ -438,7 +458,7 @@ export const graphApi = {
   disconnect: (session: number, revision: number, id: string) =>
     call<{ file: string; before: string; after: string; revision: number }>("/disconnect", { session, revision, id }),
   addEffect: (session: number, revision: number, node: string, effect: Effect) =>
-    call<{ file: string; before: string; after: string; revision: number }>("/effect/add", { session, revision, call: node, module: effect.module, name: effect.name }),
+    call<{ file: string; before: string; after: string; revision: number }>("/effect/add", { session, revision, call: node, component: effect.component }),
   removeEffect: (session: number, revision: number, node: string) =>
     call<{ file: string; before: string; after: string; revision: number }>("/effect/remove", { session, revision, call: node }),
   /** Rewrite a notes lane (module and lane keys) with every clip it is to have. Prefer `writeLane`, which queues and gives clips ids. */
@@ -515,15 +535,55 @@ export const laneWriting = (graph: GraphState) => lanes.session === graph.sessio
 
 // ---------------------------------------------------------------- knob values
 
+/**
+ * A span for a knob whose control declares no range in its unit: by the unit, else around its value.
+ * The page's own choice (core guesses no ranges, P10), so a value in an unexpected unit still turns.
+ */
+function unitSpan(unit: string | null, v: number): [number, number, boolean] {
+  switch (unit) {
+    case "hz":
+      return [20, 20000, true];
+    case "db":
+      return [-60, 12, false];
+    case "seconds":
+      return [0.001, 10, true];
+    case "beats":
+      return [1 / 16, 16, true];
+    case "unit01":
+      return [0, 1, false];
+    case "gain":
+      return [0, 2, false];
+    case "bipolar":
+      return [-1, 1, false];
+    case "semitones":
+      return [v - 24, v + 24, false];
+    default:
+      return Math.abs(v) <= 1 ? [v < 0 ? -1 : 0, 1, false] : [Math.min(v, 0) * 2, Math.max(v, 0) * 2, false];
+  }
+}
+
+/**
+ * The span a knob turns through: its declared range (or the page's own for its unit), widened to show
+ * its value if that lies outside, never clamping it (PKG-8). It depends on the knob's value in the
+ * code, not on one being dragged, so a knob turned to an end of it turns back.
+ */
+export function span(k: Knob): { lo: number; hi: number; log: boolean } {
+  const [lo, hi, log] = k.range ? [k.range[0], k.range[1], k.log] : unitSpan(k.unit, k.value);
+  const low = Math.min(lo, k.value);
+  return { lo: low, hi: Math.max(hi, k.value), log: log && low > 0 };
+}
+
 /** Knob position 0..1 ↔ value, linear or logarithmic. */
 export function toUnit(k: Knob, v: number) {
-  if (k.max <= k.min) return 0.5;
-  if (k.log && k.min > 0) return Math.log(v / k.min) / Math.log(k.max / k.min);
-  return (v - k.min) / (k.max - k.min);
+  const { lo, hi, log } = span(k);
+  if (hi <= lo) return 0.5;
+  if (log) return Math.log(v / lo) / Math.log(hi / lo);
+  return (v - lo) / (hi - lo);
 }
 
 export function fromUnit(k: Knob, u: number) {
-  const value = k.log && k.min > 0 ? k.min * Math.pow(k.max / k.min, u) : k.min + (k.max - k.min) * u;
+  const { lo, hi, log } = span(k);
+  const value = log ? lo * Math.pow(hi / lo, u) : lo + (hi - lo) * u;
   // Three significant figures: what gets written into the code.
   return Number(value.toPrecision(3));
 }

@@ -1130,9 +1130,9 @@ function KnobControl({
   // A drag already in progress goes on when the code breaks under it; only new ones wait.
   const disabled = (!editable && !dragging.current) || saving;
   const shared = knob.uses > 1 ? `Shared value: changes all ${knob.uses} uses. ` : "";
-  const title = !editable
-    ? "Fix the code errors before editing this control."
-    : `${shared}${knob.file}:${knob.line}  (written as ${knob.literal})`;
+  // A control the call leaves out plays its default until its first edit writes it into the call (PKG-3).
+  const written = knob.written ? `written as ${knob.literal}` : "the default: not written in the code yet, turning it writes it in";
+  const title = !editable ? "Fix the code errors before editing this control." : `${shared}${knob.file}:${knob.line}  (${written})`;
 
   return (
     <div
@@ -1140,6 +1140,7 @@ function KnobControl({
       data-knob-id={editable ? knob.id : undefined}
       data-value={value}
       data-shared={knob.uses > 1 || undefined}
+      data-default={!knob.written || undefined}
       aria-disabled={disabled}
       title={title}
       className={clsx(
@@ -1157,11 +1158,12 @@ function KnobControl({
         <div className="text-xs text-ink-300 truncate">{label}</div>
         {knob.uses > 1 && <div className="text-[9px] text-pop-500">shared ×{knob.uses}</div>}
       </div>
-      <span className="shrink-0 text-[11px] text-ink-400 tabular-nums">{display(descriptor, value)}</span>
+      <span className={clsx("shrink-0 text-[11px] tabular-nums", knob.written ? "text-ink-400" : "text-ink-500 italic")}>{display(descriptor, value)}</span>
       <div inert={disabled} className={clsx("shrink-0", disabled && "opacity-45 pointer-events-none")}>
         <MiniKnob
           value={Math.min(1, Math.max(0, toUnit(descriptor, value)))}
           label={label}
+          reset={descriptor.default != null ? Math.min(1, Math.max(0, toUnit(descriptor, descriptor.default))) : undefined}
           onStart={() => {
             if (!editable || committing.current) return;
             dragging.current = begin();
@@ -1221,15 +1223,25 @@ function KnobControl({
   );
 }
 
-/** A small rotary knob, 0..1: drag up and down (160px is the whole range), double-click for the middle. */
+/** A small rotary knob, 0..1: drag up and down (160px is the whole range), double-click to reset (its default, else the middle). */
 function MiniKnob({
   value,
   label,
+  reset = 0.5,
   onChange,
   onStart,
   onEnd,
   onCancel,
-}: { value: number; label: string; onChange: (v: number) => void; onStart: () => void; onEnd: () => void; onCancel: () => void }) {
+}: {
+  value: number;
+  label: string;
+  /** Where a double-click puts it: its declared default, else the middle. */
+  reset?: number;
+  onChange: (v: number) => void;
+  onStart: () => void;
+  onEnd: () => void;
+  onCancel: () => void;
+}) {
   const drag = useRef<{ pointer: number; y: number; v: number } | null>(null);
   const finish = (pointer: number, cancelled: boolean) => {
     if (drag.current?.pointer !== pointer) return;
@@ -1270,7 +1282,7 @@ function MiniKnob({
       onPointerUp={(e) => finish(e.pointerId, false)}
       onPointerCancel={(e) => finish(e.pointerId, true)}
       onLostPointerCapture={(e) => finish(e.pointerId, true)}
-      onDoubleClick={() => onChange(0.5)}
+      onDoubleClick={() => onChange(reset)}
     >
       <path d={arc(a0, a1)} stroke="var(--color-ink-600)" strokeWidth="3" fill="none" strokeLinecap="round" />
       {value > 0.005 && <path d={arc(a0, angle)} stroke={KIND_COLOR.control} strokeWidth="3" fill="none" strokeLinecap="round" />}

@@ -1,0 +1,17 @@
+{
+  // Every call the editor's planners write (forms.ts, recorded by `planned_call_forms_are_current`
+  // in core/session/src/gate5_tests.rs), checked as the app's code editor checks songs: strict,
+  // against the SDK and std sources. web's `npm run typecheck` (and so `npm run build`) runs it:
+  // `web/node_modules/.bin/tsc -p core/session/tests/forms`.
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["es2022"],
+    "strict": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "paths": { "@m2/core": ["../../../script/sdk/core.ts"], "std/*": ["../../../../std/src/*"] }
+  },
+  "files": ["../fixtures/every-component/song.ts", "forms.ts"]
+}
