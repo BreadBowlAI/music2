@@ -265,8 +265,11 @@ export function position(meter: readonly Meter[], beat: number) {
   return `${b.bar + 1}.${Math.floor(beat - b.start + 1e-9) + 1}`;
 }
 
-/** Where playback is; `beat` counts with the accepted revision's tempo map. */
-export interface GraphStatus { playing: boolean; seconds: number; beat: number }
+/** A loop between two beats; its range is kept while it is off. */
+export interface Loop { start: number; end: number; on: boolean }
+
+/** Where playback is; `beat` counts with the accepted revision's tempo map. `loop` is null until one is set. */
+export interface GraphStatus { playing: boolean; seconds: number; beat: number; loop: Loop | null }
 
 /** The open project, and where playback was when it was read. */
 export interface GraphState extends GraphStatus {
@@ -408,6 +411,8 @@ export const graphApi = {
   undo: (session: number) => call<{ file: string; before: string; after: string; revision: number }>("/undo", { session }),
   redo: (session: number) => call<{ file: string; before: string; after: string; revision: number }>("/redo", { session }),
   transport: (action: "play" | "stop" | "toggle" | "restart") => call("/transport", { action }),
+  /** Set the loop's range (beats; it turns looping on unless `on` says), or turn looping on or off over the range set. Answers with the transport. */
+  loop: (req: { start?: number; end?: number; on?: boolean }) => call<GraphStatus>("/loop", req),
   /** Tell the app which files the code editor has unsaved edits in, so it asks before closing the project. */
   unsaved: (session: number, files: string[]) => call("/unsaved", { session, files }),
   /** Start rendering the song to a WAV file: `path`, or a new file in the songs folder's Exports. Progress comes as `export` events. */

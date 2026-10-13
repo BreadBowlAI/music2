@@ -60,12 +60,14 @@ Things to try:
 
 ### The top bar
 
-From left to right: play/stop, back to the start, where the song is (bar.beat, then minutes and seconds), the song's name and revision (every accepted change is a new revision), **Export** (it shows how far along an export is), undo, redo, and close (✕), which goes back to the start screen.
+From left to right: play/stop, back to the start, loop, where the song is (bar.beat, then minutes and seconds), the song's name and revision (every accepted change is a new revision), **Export** (it shows how far along an export is), undo, redo, and close (✕), which goes back to the start screen.
+
+Stop ends the notes, and echoes and reverb ring out as they would on a real instrument. Moving the playhead, looping, editing notes and adding an effect all happen while the song plays, without it starting over or jumping back. Notes already sounding where the playhead lands aren't picked up: playback starts with the next note.
 
 ### The timeline
 
 - Each track has a row for each of its lanes: its notes, its automation and its audio (see [Words you'll see](#words-youll-see)). The ruler on top counts bars, following the song's time signatures, and the song's tempo is shown at the top left.
-- Click the ruler to move the playhead there.
+- Click the ruler to move the playhead there. Drag across the ruler to loop those beats: playback goes round them until you turn the loop off with the loop button (it keeps the range for next time). With no loop set, the loop button loops the 4 bars from the playhead.
 - Double-click an empty spot in a notes lane to add a one-bar clip. Drag a clip to move it along its lane. Click a clip and press Delete to remove it.
 - Double-click a notes clip to edit its notes.
 - Automation and audio clips are shown, but they can't be edited in the app yet. Tempo and time-signature changes appear on the ruler.
@@ -85,6 +87,7 @@ There's a tab for each module (one file's sound): one for each track file, and o
   - Pick a snap grid (1/4 to 1/32, or off). Click to draw a note, drag to move, drag the right edge to resize.
   - The strip at the bottom sets velocity (how hard each note is played).
   - Set the clip's length in bars at the top.
+  - While the clip's data file doesn't read (see **Needs attention**), the piano roll is read only, with a note at the top saying which file: it shows the notes the lane played before, and editing them would overwrite the file. Fix the file and it can be edited again.
   - ⌘A selects all notes, ⌘D duplicates the selection, the arrow keys move it (with ⇧, by an octave or a bar), and Delete removes it.
 
 ## New songs, the songs folder and export
@@ -354,7 +357,7 @@ const synth = plugin("clap:org.surge-synth-team.surge-xt", { notes: lane.notes("
 |---|---|
 | `m2 new <folder>` | Makes a new song in exactly that folder (it refuses one that exists) from a template: `--template starter` (the default) or `--template empty`. `--example first-song` copies an example instead. |
 | `m2 check <song> [--json]` | Runs the code and checks the graph and the timeline. `--json` prints the compiled graph. `m2 build` is the same. |
-| `m2 render <song> <out.wav>` | Renders the song to a 24-bit WAV, the same file the app's Export Audio writes: to the end of the last clip, then on until the sound has been silent for half a second (10 s past the end at most). It renders at the song's `sample_rate`, from `music2.toml`. `--from S` starts S seconds in, `--seconds N` renders exactly N seconds. 3 hours at most. |
+| `m2 render <song> <out.wav>` | Renders the song to a 24-bit WAV, the same file the app's Export Audio writes: to the end of the last clip, then on until the sound has been silent for half a second (10 s past the end at most). It renders at the song's `sample_rate`, from `music2.toml`. `--from S` starts S seconds in (or `--from-bar N` at bar N, counted from 1), replaying the song up to there; `--seconds N` renders exactly N seconds. 3 hours at most. `--preroll P` starts only P seconds before instead of replaying: much faster late in a long song, for listening, but approximate, as it says (notes held from before then, and earlier tails, are missing), and never written into `assets/`. |
 | `m2 kernels [--json]` | Every kernel and its typed ports. |
 | `m2 bounce <song> <name>` | Renders a track, named by its key (`--track keys`), or the whole song to a new `assets/<name>.wav`; it never replaces one that's there. `--place keys.lane@beat` also puts it on an audio lane. |
 | `m2 graph <song> [--json]` | The graph the app shows, as text. |
@@ -406,7 +409,7 @@ Edits name the open project's `session` and the `revision` they were planned aga
 | `GET /api/graph` | The open song: name, folder, `session`, the graph view (with `revision` and every knob's id), the timeline, the effects, problems, and where playback is |
 | `POST /api/graph/open` `{path}` | Open a song folder |
 | `POST /api/graph/close` | Close it |
-| `GET /api/graph/status` | Playing or not, seconds and beat |
+| `GET /api/graph/status` | Playing or not, seconds and beat, and the loop (`{start, end, on}` in beats, or null) |
 | `POST /api/graph/preview` `{session, revision, id, gesture, value}` | Change a knob in the sound only, while dragging |
 | `POST /api/graph/preview/cancel` `{session, id, gesture}` | Drop a preview |
 | `POST /api/graph/set` `{session, revision, id, gesture, value, expect?}` | Write a knob's value into the code |
@@ -420,7 +423,8 @@ Edits name the open project's `session` and the `revision` they were planned aga
 | `POST /api/graph/data/delete` `{session, revision, file}` | Delete data no lane or plugin reads |
 | `POST /api/graph/undo`, `/api/graph/redo` `{session}` | Undo or redo |
 | `POST /api/graph/transport` `{action}` | `play`, `stop`, `toggle` or `restart` |
-| `POST /api/graph/seek` `{beat}` | Move the playhead |
+| `POST /api/graph/seek` `{beat}` | Move the playhead: a jump at the next block, playing or not; nothing is rebuilt |
+| `POST /api/graph/loop` `{start?, end?, on?}` | Set the loop's range in beats (it turns the loop on unless `on` says otherwise), or turn it on or off over the range set. Answers like `/status` |
 | `GET /api/graph/files` | The song's TypeScript files |
 | `PUT /api/graph/file` `{session?, path, base, text}` | Save one file, only if it still says `base` |
 | `GET /api/graph/types` | The SDK and package sources, for type checks |

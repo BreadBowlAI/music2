@@ -18,11 +18,16 @@ USAGE:
                                          make a new song in <folder> from a template (starter, empty;
                                          starter if none is given) or a copy of an example
   m2 check <project> [--json]            run the TypeScript, check the graph and the data, print a summary (or the IR)
-  m2 render <project> <out.wav> [--from S] [--seconds N]
+  m2 render <project> <out.wav> [--from S | --from-bar N] [--seconds N] [--preroll P]
                                          render to a 24-bit WAV, as the app's Export Audio does: to the
                                          last clip's end and on until it falls silent (10 s more at most),
-                                         at the project's sample_rate; --from starts S seconds in,
-                                         --seconds renders exactly N seconds
+                                         at the project's sample_rate; --from starts S seconds in, or
+                                         --from-bar at bar N (counted from 1), replaying the song up to
+                                         there; --seconds renders exactly N seconds. --preroll starts only
+                                         P seconds earlier instead of replaying: fast for listening late in
+                                         a long song, but approximate (notes held from before then, and
+                                         the tails of what played earlier, are missing), so it is never
+                                         written into assets/
   m2 kernels [--json]                    list every kernel and its typed ports
   m2 bounce <project> <asset-name> [--track KEY] [--export out] [--from S] [--seconds N]
             [--place track.lane@beat]
@@ -82,6 +87,26 @@ fn render_rate(args: &[String], project: &Project) -> Result<u32> {
         bail!("--sr is gone: a song renders at its own sample_rate ({} Hz, in music2.toml)", project.sample_rate());
     }
     Ok(project.sample_rate())
+}
+
+/// The beat bar `n` starts at (the first is 0), counted by the arrangement's time signatures.
+fn bar_start(a: &m2_song::Arrangement, n: u64) -> f64 {
+    let meters = if a.meter.is_empty() { vec![m2_song::Meter::COMMON] } else { a.meter.clone() };
+    let mut before = 0;
+    for (i, m) in meters.iter().enumerate() {
+        let k = n - before;
+        match meters.get(i + 1).map(|next| ((next.beat - m.beat) / m.bar()).round() as u64) {
+            Some(bars) if k >= bars => before += bars,
+            _ => return m.beat + k as f64 * m.bar(),
+        }
+    }
+    unreachable!("the last time signature runs forever")
+}
+
+/// `2`, `2.5`: a number as short as it reads.
+fn number(x: f64) -> String {
+    let s = format!("{x:.3}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 fn packages() -> Result<PackageSet> {
@@ -211,17 +236,34 @@ fn run() -> Result<()> {
         }
         Some("render") => {
             let mut pk = packages()?;
-            let (project, c) = compile(Path::new(&arg(1)?), &mut pk)?;
+            let dir = PathBuf::from(arg(1)?);
+            let (project, c) = compile(&dir, &mut pk)?;
             let out = PathBuf::from(arg(2)?);
             let sr = render_rate(&args, &project)?;
-            let from: f64 = flag(&args, "--from").map(|v| v.parse()).transpose().context("--from")?.unwrap_or(0.0);
+            let from = match (flag(&args, "--from"), flag(&args, "--from-bar")) {
+                (Some(_), Some(_)) => bail!("say where to start once: --from (seconds) or --from-bar (a bar, from 1)"),
+                (None, Some(bar)) => {
+                    let bar: u64 = bar.parse().ok().filter(|&b| b >= 1).with_context(|| format!("--from-bar {bar}: bars count from 1"))?;
+                    c.data.tempo().seconds_at(bar_start(&project.arrangement, bar - 1))
+                }
+                (from, None) => from.map(|v| v.parse()).transpose().context("--from")?.unwrap_or(0.0),
+            };
             let length = match flag(&args, "--seconds") {
                 Some(s) => render::Length::Seconds(s.parse().context("--seconds")?),
                 None => render::Length::Song,
             };
+            let preroll: Option<f64> = flag(&args, "--preroll").map(|v| v.parse()).transpose().context("--preroll")?;
             let t = Instant::now();
-            // The same render as the app's Export Audio, so both write the same file.
-            let r = render::Render::new(&c.flat, &c.data, &pk, sr, from, length)?.write(&out, |_| {})?;
+            let r = match preroll {
+                // The range render agents listen with (RENDER-4).
+                Some(p) => render::Render::range(&c.flat, &c.data, &pk, sr, from, p, length)?,
+                // The same render as the app's Export Audio, so both write the same file.
+                None => render::Render::new(&c.flat, &c.data, &pk, sr, from, length)?,
+            };
+            if !r.exact() {
+                render::refuse_in_assets(&dir, &out)?;
+            }
+            let r = r.write(&out, |_| {})?;
             let took = t.elapsed().as_secs_f64();
             if r.non_finite > 0 {
                 eprintln!("warning: {} samples were not numbers (NaN or infinite) and were silenced, as the app plays them", r.non_finite);
@@ -233,6 +275,17 @@ fn run() -> Result<()> {
                 r.seconds() / took,
                 r.peak_db
             );
+            // RENDER-5: say when it isn't what the export holds, and when it won't be the same again.
+            if !r.exact {
+                println!(
+                    "approximate: it started {} s in with nothing playing, so notes held from before then and the tails of what played \
+                     earlier are missing; render without --preroll for the exact render",
+                    number((from - preroll.unwrap_or(0.0)).max(0.0))
+                );
+            }
+            if !r.reproducible {
+                println!("not reproducible: it hosts plugins, which may render other bits next time");
+            }
         }
         Some("kernels") => {
             let pk = packages()?;

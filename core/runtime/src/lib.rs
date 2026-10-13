@@ -2,33 +2,62 @@
 //!
 //! # Render specification
 //!
-//! - Audio is processed on a fixed grid of [`BLOCK`]-sample blocks starting at sample 0.
-//!   How many frames a caller asks for at a time never changes the result.
+//! - Audio is processed on a fixed grid of [`BLOCK`]-sample blocks of the engine clock,
+//!   starting at sample 0. How many frames a caller asks for at a time never changes the
+//!   result.
+//! - There are two clocks (RENDER-6). The engine clock only moves forward: it drives the
+//!   block grid, feedback, voice gates and plugins' `steady_time`. The transport is the song
+//!   position ([`Transport`]): it drives lanes, notes, `time` and what plugins are told, and
+//!   it can stop, jump and loop. Offline they are equal: playing from 0, never looping.
 //! - Controls, gates and time are computed per sample.
 //! - `feedback` is a delay of exactly [`BLOCK`] samples.
+//! - A notes lane is a scheduler that fills a per-block event buffer from the transport
+//!   (RENDER-12), and owns the notes it turned on (RENDER-26a). `poly` and plugins read the
+//!   buffer; a voice's gate opens at its note's On and closes at its Off (RENDER-13).
 //! - A `poly` voice changes note at the exact sample the note starts: the voice graph
 //!   is processed up to that sample with the old note, reset, then continues with the
 //!   new one. Where a voice graph is split is decided by note data alone.
-//! - A voice ends once its note is over, its output is quiet (-80 dB) for a block and
+//! - A voice ends once its note is off, its output is quiet (-80 dB) for a block and
 //!   no kernel in it reports `active` (an envelope still releasing, echoes in a delay).
-//! - Every kernel instance starts from `init` and is reset when its voice is reused.
-//!   Rendering from sample `s` is defined as rendering from 0 and dropping what comes
-//!   before `s`; [`Renderer::seek`] does exactly that.
+//! - Every kernel instance starts from `init` and is reset when its voice is reused, on panic,
+//!   and before an offline replay. A jump (seek, wrap, stop) resets nothing (RENDER-10).
+//!   Rendering from sample `s` offline is defined as rendering from 0 and dropping what comes
+//!   before `s`; [`Renderer::seek`] does exactly that (RENDER-1).
 //! - Given the same project, packages, sample rate and this runtime, output is bit-
 //!   identical. A NaN or infinity is an error in strict mode (the default) and is
 //!   silenced in live mode.
+//! - The audio thread's paths never allocate or lock (RENDER-28): buffers are sized when a
+//!   renderer is built, and every kernel is reset once while it is built, so a later reset
+//!   never grows its memory.
 
 pub mod audio;
 pub mod data;
+pub mod engine;
+pub mod event;
 pub mod packages;
+pub mod sched;
+pub mod trace;
+pub mod transport;
+
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result, bail};
 use m2_ir::{FNode, FOp, Flat, Input, Kind, NoteField, Origin, PortRef, TimeOf};
-use m2_song::{AbsNote, ControlLane, DataSet, TempoMap};
+use m2_song::{Arrangement, ControlLane, DataSet, LaneData, TempoMap};
 use wasmtime::{Instance, Memory, Store, StoreLimits, StoreLimitsBuilder, TypedFunc};
 
 pub use data::{decls, lane_kind};
+pub use engine::{Applied, CallbackStamp, Engine, Envelope, Msg, Retired};
+pub use event::{Event, Events};
 pub use packages::{Effect, Package, PackageSet};
+pub use sched::{Caps, LaneSwap, NotesData};
+pub use trace::{TraceEntry, TraceKind};
+pub use transport::{Cmd, Jump, Loop, MAX_RUNS, Run, Runs, Transport};
+
+use crate::sched::NoteScheduler;
+use crate::trace::Trace;
 
 pub const BLOCK: usize = 128;
 
@@ -38,18 +67,37 @@ const KERNEL_MEMORY: usize = 32 << 20;
 /// Output below this is "quiet" when deciding whether a voice has finished (-80 dB).
 const QUIET: f32 = 1e-4;
 
+/// What a run's plugins are told of the arrangement (HOST-6).
+#[derive(Clone, Copy, Default)]
+struct RunInfo {
+    bpm: f64,
+    tsig: (u16, u16),
+    bar_start: f64,
+    bar: i32,
+}
+
 /// Per-block timing shared by every node. Blocks are always [`BLOCK`] samples.
 struct Block {
-    /// Absolute sample of the block's first frame.
-    start: u64,
+    /// Engine clock of the block's first frame.
+    engine: u64,
+    /// The transport over the block's frames.
+    runs: Runs,
+    info: [RunInfo; MAX_RUNS],
+    /// The loop, in beats and seconds, for plugins.
+    looping: Option<((f64, f64), (f64, f64))>,
     beats: [f32; BLOCK],
     seconds: [f32; BLOCK],
     /// Beat of each frame, in full precision, for lane lookups.
     beats64: [f64; BLOCK],
     sample_rate: f64,
-    /// Tempo at the block's start, for plugins that sync to the host.
-    bpm: f64,
     strict: bool,
+}
+
+impl Block {
+    /// Song time of the block's frame `f`, for messages.
+    fn time(&self, f: usize) -> f64 {
+        self.runs.frame(f as u32) as f64 / self.sample_rate
+    }
 }
 
 /// The part of a block a graph is processing: frames `off..off + n`.
@@ -84,30 +132,46 @@ struct KernelNode {
     out_channels: Vec<u8>,
 }
 
-/// A note in samples.
+/// The note a voice plays. `off` is the engine sample of its Off, `u64::MAX` until the Off
+/// arrives: the gate is open before it (RENDER-13).
 #[derive(Clone, Copy, Debug)]
-struct SampleNote {
-    start: u64,
-    end: u64,
+struct VoiceNote {
+    id: u32,
     pitch: f32,
     velocity: f32,
+    off: u64,
 }
 
 struct VoiceSlot {
     graph: Graph,
-    note: Option<SampleNote>,
+    note: Option<VoiceNote>,
     /// When the voice last started a note, for stealing the oldest.
     born: u64,
     /// Whether the graph has run since its last reset.
     dirty: bool,
+    /// The voice's peak over its last block, for a note whose Off lands on the next block
+    /// line: it is freed there, exactly where it would have been at the end of the block.
+    last_peak: f32,
+    /// Given a note this block.
+    taken: bool,
+}
+
+/// A note given to a voice this block, at `frame`.
+#[derive(Clone, Copy)]
+struct Planned {
+    voice: u16,
+    frame: u16,
+    note: VoiceNote,
 }
 
 struct PolyNode {
-    notes: Vec<SampleNote>,
-    next: usize,
+    /// The notes lane it plays.
+    slot: usize,
     voices: Vec<VoiceSlot>,
     out: PortRef,
     born: u64,
+    /// This block's Ons, by voice: room for two runs of the lane's Ons.
+    plan: Vec<Planned>,
 }
 
 /// A hosted plugin and what feeds it.
@@ -115,93 +179,160 @@ struct PluginNode {
     name: String,
     inst: m2_plugins::Instance,
     audio_in: Option<Input>,
-    notes: Vec<SampleNote>,
-    next: usize,
-    /// Sounding notes: (note id, key, end sample).
-    playing: Vec<(i32, i16, u64)>,
-    note_ids: i32,
+    /// The notes lane it plays, if any.
+    notes: Option<usize>,
+    /// The key of each note sounding into it, by note id.
+    keys: Vec<(u32, i16)>,
+    /// The notes it was given before a reset (a panic), ended at its next call: a plugin may keep
+    /// its voices through a reset, and nothing else would end them (RENDER-10, RENDER-26a). As
+    /// big as `keys`.
+    ended: Vec<(u32, i16)>,
     /// (parameter id, input, value last sent).
     params: Vec<(u32, Input, Option<f32>)>,
+    /// One call's events, sized when built (RENDER-28).
+    events: Vec<m2_plugins::Event>,
 }
 
 /// How often automation is sampled for plugins, in samples.
 const PARAM_STEP: usize = 16;
 
-impl PluginNode {
-    fn process(&mut self, b: &Block, bufs: &[Vec<Buf>], out: &mut Buf) -> Result<()> {
-        use m2_plugins::Event;
-        let (start, end) = (b.start, b.start + BLOCK as u64);
-        let mut events = vec![];
-        // Note-offs first so a key can be struck again at the same sample.
-        self.playing.retain(|&(id, key, stop)| {
-            if stop < end {
-                events.push(Event::NoteOff { time: stop.saturating_sub(start) as u32, id, key });
-                false
-            } else {
-                true
-            }
-        });
-        while self.next < self.notes.len() && self.notes[self.next].start < start {
-            self.next += 1;
-        }
-        while self.next < self.notes.len() && self.notes[self.next].start < end {
-            let n = self.notes[self.next];
-            self.next += 1;
-            self.note_ids += 1;
-            let key = n.pitch.round().clamp(0.0, 127.0) as i16;
-            let time = (n.start - start) as u32;
-            events.push(Event::NoteOn { time, id: self.note_ids, key, velocity: n.velocity as f64 });
-            let tune = n.pitch as f64 - key as f64;
+/// One call's events for a plugin, for the block's frames `lo..hi`: first a choke and a NoteOff
+/// at its first frame for each of `ended`, then the lane's note events (already in order) from
+/// `*next` on, merged with `params` sampled every [`PARAM_STEP`] frames. At one frame parameters
+/// come after notes, the order a stable sort by time gave before. An On becomes a NoteOn (and a
+/// Tuning between keys), an Off a NoteOff for the key `keys` holds for it. Never allocates while
+/// `out` and `keys` have room (RENDER-28).
+#[allow(clippy::too_many_arguments)]
+fn plugin_events(
+    ended: &[(u32, i16)],
+    notes: &[Event],
+    next: &mut usize,
+    params: &mut [(u32, Input, Option<f32>)],
+    bufs: &[Vec<Buf>],
+    (lo, hi): (usize, usize),
+    keys: &mut Vec<(u32, i16)>,
+    out: &mut Vec<m2_plugins::Event>,
+) {
+    use m2_plugins::Event as P;
+    out.clear();
+    // A choke ends a note at once where the plugin knows how; the NoteOff releases it where not.
+    for &(id, key) in ended {
+        out.push(P::NoteChoke { time: 0, id: id as i32, key });
+        out.push(P::NoteOff { time: 0, id: id as i32, key });
+    }
+    let mut note = |e: Event, out: &mut Vec<P>| match e {
+        Event::On { frame, id, pitch, velocity, .. } => {
+            let key = pitch.round().clamp(0.0, 127.0) as i16;
+            let time = frame - lo as u32;
+            out.push(P::NoteOn { time, id: id as i32, key, velocity: velocity as f64 });
+            let tune = pitch as f64 - key as f64;
             if tune.abs() > 1e-6 {
-                events.push(Event::Tuning { time, id: self.note_ids, key, semitones: tune });
+                out.push(P::Tuning { time, id: id as i32, key, semitones: tune });
             }
-            if n.end < end {
-                events.push(Event::NoteOff { time: (n.end - start) as u32, id: self.note_ids, key });
+            if keys.len() < keys.capacity() {
+                keys.push((id, key));
             } else {
-                self.playing.push((self.note_ids, key, n.end));
+                debug_assert!(false, "more notes sound into a plugin than its lane holds");
             }
         }
-        for (id, input, last) in &mut self.params {
+        Event::Off { frame, id, .. } => {
+            if let Some(i) = keys.iter().position(|k| k.0 == id) {
+                let (_, key) = keys.swap_remove(i);
+                out.push(P::NoteOff { time: frame - lo as u32, id: id as i32, key });
+            }
+        }
+        _ => {}
+    };
+    let mut f = lo;
+    loop {
+        while *next < notes.len() && (notes[*next].frame() as usize) < hi && notes[*next].frame() as usize <= f {
+            note(notes[*next], out);
+            *next += 1;
+        }
+        if f >= hi {
+            break;
+        }
+        for (id, input, last) in params.iter_mut() {
             match input {
                 Input::Const(v) => {
                     if last.is_none() {
-                        events.push(Event::Param { time: 0, id: *id, value: *v });
+                        out.push(P::Param { time: (f - lo) as u32, id: *id, value: *v });
                         *last = Some(*v as f32);
                     }
                 }
                 Input::Unset => {}
                 Input::Port { src, .. } => {
-                    let s = &bufs[src.node][src.port];
-                    for f in (0..BLOCK).step_by(PARAM_STEP) {
-                        if *last != Some(s[f]) {
-                            events.push(Event::Param { time: f as u32, id: *id, value: s[f] as f64 });
-                            *last = Some(s[f]);
-                        }
+                    let s = bufs[src.node][src.port][f];
+                    if *last != Some(s) {
+                        out.push(P::Param { time: (f - lo) as u32, id: *id, value: s as f64 });
+                        *last = Some(s);
                     }
                 }
             }
         }
-        let ins: Vec<&[f32]> = match &self.audio_in {
-            Some(Input::Port { src, src_channels, .. }) => {
-                (0..*src_channels as usize).map(|c| &bufs[src.node][src.port][c * BLOCK..(c + 1) * BLOCK]).collect()
+        f += PARAM_STEP;
+    }
+}
+
+impl PluginNode {
+    fn process(&mut self, b: &Block, bufs: &[Vec<Buf>], out: &mut Buf, lanes: &[LaneSlot]) -> Result<()> {
+        let notes = self.notes.map_or(&[][..], |s| lanes[s].events());
+        let mut next = 0;
+        let channels = out.len() / BLOCK;
+        let cap = self.events.capacity();
+        // One call per run: a call never spans a jump, and each gets its own transport (RENDER-9).
+        for (ri, run) in b.runs.as_slice().iter().enumerate() {
+            let (lo, hi) = (run.off as usize, (run.off + run.n) as usize);
+            let ended = if ri == 0 { &self.ended[..] } else { &[] };
+            plugin_events(ended, notes, &mut next, &mut self.params, bufs, (lo, hi), &mut self.keys, &mut self.events);
+            debug_assert_eq!(self.events.capacity(), cap, "a plugin's events outgrew their room");
+            let empty: &[f32] = &[];
+            let mut ins = [empty; 2];
+            let mut n_in = 0;
+            if let Some(Input::Port { src, src_channels, .. }) = &self.audio_in {
+                n_in = (*src_channels as usize).min(2);
+                for (c, x) in ins.iter_mut().enumerate().take(n_in) {
+                    *x = &bufs[src.node][src.port][c * BLOCK + lo..c * BLOCK + hi];
+                }
             }
-            _ => vec![],
-        };
-        let mut outs: Vec<&mut [f32]> = out.chunks_mut(BLOCK).collect();
-        let transport = m2_plugins::Transport { beats: b.beats64[0], seconds: b.seconds[0] as f64, bpm: b.bpm };
-        self.inst.process(BLOCK as u32, &ins, &mut outs, &events, transport).with_context(|| self.name.clone())?;
+            let split = BLOCK.min(out.len());
+            let (left, right) = out.split_at_mut(split);
+            let mut outs: [&mut [f32]; 2] = [&mut left[lo..hi], if channels > 1 { &mut right[lo..hi] } else { &mut [] }];
+            let info = b.info[ri];
+            let transport = m2_plugins::Transport {
+                beats: b.beats64[lo],
+                seconds: b.seconds[lo] as f64,
+                bpm: info.bpm,
+                playing: run.moving,
+                looping: b.looping,
+                tsig: info.tsig,
+                bar_start: info.bar_start,
+                bar: info.bar,
+                steady: (b.engine + lo as u64) as i64,
+            };
+            self.inst
+                .process(run.n, &ins[..n_in], &mut outs[..channels.min(2)], &self.events, transport)
+                .with_context(|| self.name.clone())?;
+            if ri == 0 {
+                self.ended.clear();
+            }
+        }
         if b.strict
             && let Some(at) = out.iter().position(|x| !x.is_finite())
         {
-            bail!("{} produced {} at {:.3}s", self.name, out[at], (b.start + (at % BLOCK) as u64) as f64 / b.sample_rate);
+            bail!("{} produced {} at {:.3}s", self.name, out[at], b.time(at % BLOCK));
         }
         Ok(())
     }
 
     fn reset(&mut self) -> Result<()> {
         self.inst.reset()?;
-        self.next = 0;
-        self.playing.clear();
+        // Within its room (`ended` is as big as `keys`): never allocates on the audio thread.
+        for k in self.keys.drain(..) {
+            if self.ended.len() < self.ended.capacity() {
+                self.ended.push(k);
+            }
+        }
         for p in &mut self.params {
             p.2 = None;
         }
@@ -209,12 +340,63 @@ impl PluginNode {
     }
 }
 
+/// A lane the renderer plays: what its nodes read, by slot.
+enum LaneSlot {
+    Notes(NoteScheduler),
+    Control(Arc<ControlLane>),
+    Audio(audio::AudioLane),
+}
+
+impl LaneSlot {
+    /// This block's note events (none for other lanes).
+    fn events(&self) -> &[Event] {
+        match self {
+            LaneSlot::Notes(s) => s.events().as_slice(),
+            _ => &[],
+        }
+    }
+}
+
+/// A lane a renderer plays, by module key and lane key. A renderer's lanes are numbered in the
+/// order [`lane_slots`] gives; `SwapLane` addresses them by that number, so no name reaches the
+/// audio thread.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LaneRef {
+    pub module: String,
+    pub lane: String,
+    pub kind: Kind,
+}
+
+/// The distinct lanes the nodes in `flat`'s processing order read, in node order.
+pub fn lane_slots(flat: &Flat) -> Vec<LaneRef> {
+    let used: HashSet<usize> = flat.order.iter().copied().collect();
+    let mut out: Vec<LaneRef> = vec![];
+    for (i, n) in flat.nodes.iter().enumerate() {
+        if let FOp::Lane { module, lane, kind, .. } = &n.op
+            && used.contains(&i)
+            && !out.iter().any(|r| r.module == *module && r.lane == *lane)
+        {
+            out.push(LaneRef { module: module.clone(), lane: lane.clone(), kind: *kind });
+        }
+    }
+    out
+}
+
+/// A notes lane's data at `sample_rate` in `tempo`; none when it has no data.
+pub fn notes_data(data: &DataSet, module: &str, lane: &str, sample_rate: f64) -> NotesData {
+    match data.lane(module, lane).map(|d| &**d) {
+        Some(LaneData::Notes(clips)) => NotesData::build(clips, data.tempo(), sample_rate),
+        _ => NotesData::empty(),
+    }
+}
+
 enum Exec {
     Control {
-        lane: ControlLane,
+        slot: usize,
         default: f32,
     },
-    Audio(audio::AudioLane),
+    Audio(Box<audio::AudioNode>),
+    /// A notes lane: its scheduler runs before the graph, once per block.
     Notes,
     Time(TimeOf),
     Const(f32),
@@ -223,7 +405,7 @@ enum Exec {
     /// A plugin that isn't installed (FMT-18a): its audio input passed through, or silence.
     Missing(Option<Input>),
     Poly(Box<PolyNode>),
-    /// A delay of exactly `BLOCK` samples; `ring` is indexed by absolute sample mod `BLOCK`.
+    /// A delay of exactly `BLOCK` samples; `ring` is indexed by engine sample mod `BLOCK`.
     Feedback {
         input: PortRef,
         ring: Buf,
@@ -239,6 +421,8 @@ struct Graph {
     order: Vec<usize>,
     /// `bufs[node][port]`.
     bufs: Vec<Vec<Buf>>,
+    /// Whole-graph resets since it was built (a voice's graph counts its own).
+    resets: u64,
 }
 
 /// Builds instances for a graph.
@@ -247,17 +431,27 @@ struct Builder<'a> {
     packages: &'a PackageSet,
     /// The revision's data: lanes, the tempo, and where assets and verified state blobs are.
     data: &'a DataSet,
-    tempo: &'a TempoMap,
     sample_rate: f64,
-    /// Audio files used by clips, loaded once.
-    audio: audio::Assets,
+    slots: &'a [LaneRef],
+    lanes: &'a [LaneSlot],
 }
 
 impl Builder<'_> {
+    fn slot(&self, module: &str, lane: &str) -> Result<usize> {
+        self.slots.iter().position(|r| r.module == module && r.lane == lane).with_context(|| format!("lane {module}/{lane} has no slot"))
+    }
+
+    fn caps(&self, slot: usize) -> Caps {
+        match &self.lanes[slot] {
+            LaneSlot::Notes(s) => s.caps(),
+            _ => Caps::default(),
+        }
+    }
+
     fn graph(&mut self, nodes: &[FNode], order: &[usize], in_voice: bool) -> Result<Graph> {
         let mut exec = Vec::with_capacity(nodes.len());
         let mut bufs: Vec<Vec<Buf>> = Vec::with_capacity(nodes.len());
-        let used: std::collections::HashSet<usize> = order.iter().copied().collect();
+        let used: HashSet<usize> = order.iter().copied().collect();
         for (i, n) in nodes.iter().enumerate() {
             bufs.push(
                 n.outputs.iter().map(|k| vec![0.0; if matches!(k, Kind::Events(_)) { 0 } else { k.channels() as usize * BLOCK }]).collect(),
@@ -268,12 +462,11 @@ impl Builder<'_> {
             }
             let e = match &n.op {
                 FOp::Lane { module, lane, kind: Kind::Control(_), default } => {
-                    Exec::Control { lane: self.data.control(module, lane), default: *default as f32 }
+                    Exec::Control { slot: self.slot(module, lane)?, default: *default as f32 }
                 }
                 FOp::Lane { kind: Kind::Events(_), .. } => Exec::Notes,
-                FOp::Lane { module, lane, kind: Kind::Audio(ch), .. } => {
-                    let clips = self.data.audio(module, lane);
-                    Exec::Audio(audio::AudioLane::build(clips, self.data, &mut self.audio, self.tempo, self.sample_rate, *ch as usize))
+                FOp::Lane { module, lane, kind: Kind::Audio(_), .. } => {
+                    Exec::Audio(Box::new(audio::AudioNode::new(self.slot(module, lane)?, self.sample_rate)))
                 }
                 FOp::Time(t) => Exec::Time(*t),
                 FOp::Const(v) => Exec::Const(*v as f32),
@@ -290,13 +483,14 @@ impl Builder<'_> {
                         bail!("{}: poly inside poly", n.name);
                     }
                     let FOp::Lane { module, lane: lane_id, .. } = &nodes[*lane].op else { bail!("{}: poly needs a notes lane", n.name) };
-                    let notes = self.data.notes(module, lane_id).iter().map(|a| self.sample_note(a)).filter(|n| n.end > n.start).collect();
+                    let slot = self.slot(module, lane_id)?;
                     let mut slots = Vec::with_capacity(*voices as usize);
                     for _ in 0..*voices {
                         let graph = self.graph(&voice.nodes, &voice.order, true).with_context(|| format!("{}: voice", n.name))?;
-                        slots.push(VoiceSlot { graph, note: None, born: 0, dirty: false });
+                        slots.push(VoiceSlot { graph, note: None, born: 0, dirty: false, last_peak: 0.0, taken: false });
                     }
-                    Exec::Poly(Box::new(PolyNode { notes, next: 0, voices: slots, out: voice.out, born: 0 }))
+                    let plan = Vec::with_capacity(2 * self.caps(slot).ons);
+                    Exec::Poly(Box::new(PolyNode { slot, voices: slots, out: voice.out, born: 0, plan }))
                 }
                 FOp::Feedback { input, channels } => Exec::Feedback { input: *input, ring: vec![0.0; *channels as usize * BLOCK] },
                 FOp::NoteField(f) => Exec::NoteField(*f),
@@ -312,12 +506,7 @@ impl Builder<'_> {
                 }
             }
         }
-        Ok(Graph { exec, origins: nodes.iter().map(|n| n.origin.clone()).collect(), order: order.to_vec(), bufs })
-    }
-
-    fn sample_note(&self, n: &AbsNote) -> SampleNote {
-        let at = |beat: f64| (self.tempo.seconds_at(beat) * self.sample_rate).round().max(0.0) as u64;
-        SampleNote { start: at(n.start), end: at(n.end), pitch: n.pitch as f32, velocity: n.velocity as f32 }
+        Ok(Graph { exec, origins: nodes.iter().map(|n| n.origin.clone()).collect(), order: order.to_vec(), bufs, resets: 0 })
     }
 
     fn plugin(&mut self, nodes: &[FNode], n: &FNode, id: &str, inputs: &[Input], state: Option<&[String]>) -> Result<PluginNode> {
@@ -333,13 +522,13 @@ impl Builder<'_> {
         // Inputs come in the order of the plugin's ports; a parameter is bound by the id in its
         // address, never by its place in the list (FMT-18).
         let sig = m2_ir::Kernels::plugin(self.packages, id).with_context(|| format!("{}: plugin `{id}` was not described", n.name))?;
-        let (mut audio_in, mut notes, mut params) = (None, vec![], vec![]);
+        let (mut audio_in, mut notes, mut params) = (None, None, vec![]);
         for (port, input) in sig.inputs.iter().zip(inputs) {
             match (port.name.as_str(), input) {
                 ("in", _) => audio_in = Some(input.clone()),
                 ("notes", Input::Port { src, .. }) => {
                     if let FOp::Lane { module, lane, .. } = &nodes[src.node].op {
-                        notes = self.data.notes(module, lane).iter().map(|a| self.sample_note(a)).filter(|n| n.end > n.start).collect();
+                        notes = Some(self.slot(module, lane)?);
                     }
                 }
                 (_, Input::Unset) => {}
@@ -349,7 +538,22 @@ impl Builder<'_> {
                 }
             }
         }
-        Ok(PluginNode { name: n.name.clone(), inst, audio_in, notes, next: 0, playing: vec![], note_ids: 0, params })
+        // Room for one run's notes, a Tuning for each On, every parameter sampled, and a choke and
+        // a NoteOff for every note it held when it was reset.
+        let caps = notes.map_or(Caps::default(), |s| self.caps(s));
+        let held = caps.sounding + 2 * caps.ons + 8;
+        let events = caps.events() + caps.ons + (BLOCK / PARAM_STEP) * params.len() + 8 + 2 * held;
+        inst.reserve_events(events);
+        Ok(PluginNode {
+            name: n.name.clone(),
+            inst,
+            audio_in,
+            notes,
+            keys: Vec::with_capacity(held),
+            ended: Vec::with_capacity(held),
+            params,
+            events: Vec::with_capacity(events),
+        })
     }
 
     fn kernel(&mut self, n: &FNode, id: &str, channels: u8, inputs: &[Input]) -> Result<KernelNode> {
@@ -429,7 +633,8 @@ impl Graph {
         b: &Block,
         seg: Seg,
         outer: Option<&[Vec<Buf>]>,
-        note: Option<SampleNote>,
+        note: Option<VoiceNote>,
+        lanes: &[LaneSlot],
     ) -> Result<()> {
         let n = seg.n;
         for oi in 0..self.order.len() {
@@ -437,7 +642,8 @@ impl Graph {
             let mut out = std::mem::take(&mut self.bufs[i]);
             let bufs = &self.bufs;
             match &mut self.exec[i] {
-                Exec::Control { lane, default } => {
+                Exec::Control { slot, default } => {
+                    let LaneSlot::Control(lane) = &lanes[*slot] else { unreachable!("a control lane's slot holds control data") };
                     let o = &mut out[0][seg.range(0)];
                     if lane.is_empty() {
                         o.fill(*default);
@@ -447,7 +653,11 @@ impl Graph {
                         }
                     }
                 }
-                Exec::Audio(lane) => lane.fill(&mut out[0], BLOCK, seg.off, b.start + seg.off as u64, seg.n),
+                Exec::Audio(a) => {
+                    debug_assert_eq!((seg.off, seg.n), (0, BLOCK), "audio lanes only play at the top level");
+                    let LaneSlot::Audio(lane) = &lanes[a.slot] else { unreachable!("an audio lane's slot holds audio") };
+                    a.process(lane, &b.runs, &mut out[0]);
+                }
                 Exec::Notes | Exec::Const(_) => {}
                 Exec::Time(TimeOf::Beats) => out[0][seg.range(0)].copy_from_slice(&b.beats[seg.off..seg.off + n]),
                 Exec::Time(TimeOf::Seconds) => out[0][seg.range(0)].copy_from_slice(&b.seconds[seg.off..seg.off + n]),
@@ -471,14 +681,13 @@ impl Graph {
                             if b.strict
                                 && let Some(at) = dst.iter().position(|x| !x.is_finite())
                             {
-                                let t = (b.start + (seg.off + at) as u64) as f64 / b.sample_rate;
-                                bail!("{} produced {} at {t:.3}s", k.name, dst[at]);
+                                bail!("{} produced {} at {:.3}s", k.name, dst[at], b.time(seg.off + at));
                             }
                         }
                     }
                 }
-                Exec::Poly(p) => p.process(store, b, bufs, &mut out[0])?,
-                Exec::Plugin(p) => p.process(b, bufs, &mut out[0])?,
+                Exec::Poly(p) => p.process(store, b, bufs, &mut out[0], lanes)?,
+                Exec::Plugin(p) => p.process(b, bufs, &mut out[0], lanes)?,
                 Exec::Missing(input) => {
                     for c in 0..out[0].len() / BLOCK {
                         match input {
@@ -493,7 +702,7 @@ impl Graph {
                 Exec::Feedback { ring, .. } => {
                     for c in 0..out[0].len() / BLOCK {
                         for f in 0..n {
-                            let at = (b.start as usize + seg.off + f) % BLOCK;
+                            let at = (b.engine as usize + seg.off + f) % BLOCK;
                             out[0][c * BLOCK + seg.off + f] = ring[c * BLOCK + at];
                         }
                     }
@@ -506,9 +715,9 @@ impl Graph {
                         NoteField::Velocity => o.fill(note.velocity),
                         NoteField::Pressure | NoteField::Timbre => o.fill(0.0),
                         NoteField::Gate => {
+                            // Open from the note's On until its Off, on the engine clock (RENDER-13).
                             for (k, x) in o.iter_mut().enumerate() {
-                                let t = b.start + (seg.off + k) as u64;
-                                *x = (t >= note.start && t < note.end) as u8 as f32;
+                                *x = ((b.engine + (seg.off + k) as u64) < note.off) as u8 as f32;
                             }
                         }
                     }
@@ -530,7 +739,7 @@ impl Graph {
                 for c in 0..ring.len() / BLOCK {
                     let sc = if c < src_ch { c } else { 0 };
                     for f in 0..n {
-                        let at = (b.start as usize + seg.off + f) % BLOCK;
+                        let at = (b.engine as usize + seg.off + f) % BLOCK;
                         ring[c * BLOCK + at] = src[sc * BLOCK + seg.off + f];
                     }
                 }
@@ -541,19 +750,22 @@ impl Graph {
 
     /// Back to the state right after building.
     fn reset(&mut self, store: &mut Store<StoreLimits>) -> Result<()> {
+        // Counted here, so no path resets the graph unseen (RENDER-10).
+        self.resets += 1;
         for e in &mut self.exec {
             match e {
                 Exec::Kernel(k) => k.reset.call(&mut *store, ())?,
                 Exec::Plugin(p) => p.reset()?,
                 Exec::Feedback { ring, .. } => ring.fill(0.0),
+                Exec::Audio(a) => a.reset(),
                 Exec::Poly(p) => {
-                    p.next = 0;
                     p.born = 0;
+                    p.plan.clear();
                     for v in &mut p.voices {
                         if v.dirty {
                             v.graph.reset(store)?;
                         }
-                        *v = VoiceSlot { graph: std::mem::replace(&mut v.graph, Graph::empty()), note: None, born: 0, dirty: false };
+                        (v.note, v.born, v.dirty, v.last_peak, v.taken) = (None, 0, false, 0.0, false);
                     }
                 }
                 _ => {}
@@ -562,8 +774,34 @@ impl Graph {
         Ok(())
     }
 
-    fn empty() -> Graph {
-        Graph { exec: vec![], origins: vec![], order: vec![], bufs: vec![] }
+    /// Reset every kernel once, in voices too: a kernel's first reset may grow its memory
+    /// (it builds the new state before dropping the old), so it happens here, off the audio
+    /// thread, and never again later. A reset is the same as init, so nothing sounds different.
+    fn prewarm(&mut self, store: &mut Store<StoreLimits>) -> Result<()> {
+        for e in &mut self.exec {
+            match e {
+                Exec::Kernel(k) => k.reset.call(&mut *store, ())?,
+                Exec::Poly(p) => {
+                    for v in &mut p.voices {
+                        v.graph.prewarm(store)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// The memory every kernel instance holds, in bytes.
+    fn kernel_memory(&self, store: &Store<StoreLimits>) -> usize {
+        self.exec
+            .iter()
+            .map(|e| match e {
+                Exec::Kernel(k) => k.memory.data_size(store),
+                Exec::Poly(p) => p.voices.iter().map(|v| v.graph.kernel_memory(store)).sum(),
+                _ => 0,
+            })
+            .sum()
     }
 
     /// Change every constant written at `origin`, including inside voices. Returns how
@@ -604,128 +842,266 @@ impl Graph {
 }
 
 impl PolyNode {
-    fn process(&mut self, store: &mut Store<StoreLimits>, b: &Block, outer: &[Vec<Buf>], out: &mut Buf) -> Result<()> {
-        let end = b.start + BLOCK as u64;
-        // Notes that started before this block were never heard (seeking skips them).
-        while self.next < self.notes.len() && self.notes[self.next].start < b.start {
-            self.next += 1;
+    /// One block. The lane's events say which notes start and end; voices are given notes in
+    /// event order, and a voice's graph is split where its note changes. Never allocates.
+    fn process(&mut self, store: &mut Store<StoreLimits>, b: &Block, outer: &[Vec<Buf>], out: &mut Buf, lanes: &[LaneSlot]) -> Result<()> {
+        let (start, end) = (b.engine, b.engine + BLOCK as u64);
+        let events = lanes[self.slot].events();
+        let PolyNode { voices, out: voice_out, born, plan, .. } = self;
+        // Offs for notes already in voices. A stolen note's Off finds nothing.
+        for e in events {
+            if let Event::Off { frame, id, .. } = *e
+                && let Some(n) = voices.iter_mut().find_map(|v| v.note.as_mut().filter(|n| n.id == id))
+            {
+                n.off = start + frame as u64;
+            }
         }
-        // Assign this block's notes to voices, in time order.
-        let mut plan: Vec<Vec<(usize, SampleNote)>> = vec![vec![]; self.voices.len()];
-        let mut busy: Vec<bool> = self.voices.iter().map(|v| v.note.is_some()).collect();
-        while self.next < self.notes.len() && self.notes[self.next].start < end {
-            let note = self.notes[self.next];
-            self.next += 1;
-            let slot = match busy.iter().position(|b| !b) {
-                Some(i) => i,
-                None => (0..self.voices.len()).min_by_key(|&i| self.voices[i].born).expect("at least one voice"),
-            };
-            self.born += 1;
-            self.voices[slot].born = self.born;
-            busy[slot] = true;
-            plan[slot].push(((note.start - b.start) as usize, note));
+        // A note whose Off landed on this block line ends where the last block would have ended
+        // it: same peak, same `active`, as nothing ran in between.
+        for v in voices.iter_mut() {
+            if let Some(n) = v.note
+                && n.off == start
+                && v.last_peak < QUIET
+                && !v.graph.active(store)?
+            {
+                v.note = None;
+            }
+        }
+        // Give this block's notes voices, in event order: the first free voice, else the oldest.
+        plan.clear();
+        for e in events {
+            if let Event::On { frame, id, pitch, velocity, .. } = *e {
+                let slot = match voices.iter().position(|v| v.note.is_none() && !v.taken) {
+                    Some(i) => i,
+                    None => (0..voices.len()).min_by_key(|&i| voices[i].born).expect("at least one voice"),
+                };
+                if plan.len() == plan.capacity() {
+                    debug_assert!(false, "more notes start than the lane holds");
+                    continue;
+                }
+                *born += 1;
+                voices[slot].born = *born;
+                voices[slot].taken = true;
+                plan.push(Planned { voice: slot as u16, frame: frame as u16, note: VoiceNote { id, pitch, velocity, off: u64::MAX } });
+            }
+        }
+        // Offs for notes that started this block.
+        for e in events {
+            if let Event::Off { frame, id, .. } = *e
+                && let Some(p) = plan.iter_mut().find(|p| p.note.id == id)
+            {
+                p.note.off = start + frame as u64;
+            }
         }
 
         out.fill(0.0);
         let out_ch = out.len() / BLOCK;
-        for (v, plan) in self.voices.iter_mut().zip(plan) {
-            if v.note.is_none() && plan.is_empty() {
+        for (vi, v) in voices.iter_mut().enumerate() {
+            let taken = std::mem::take(&mut v.taken);
+            if v.note.is_none() && !taken {
                 continue;
             }
             // Split the block wherever this voice starts a new note.
             let mut at = 0;
-            let mut segs: Vec<(Seg, SampleNote, bool)> = vec![];
             let mut current = v.note;
-            for (off, note) in plan {
+            let mut peak = 0.0f32;
+            let mut segment =
+                |v: &mut VoiceSlot, store: &mut Store<StoreLimits>, seg: Seg, note: VoiceNote, peak: &mut f32| -> Result<()> {
+                    v.graph.process(store, b, seg, Some(outer), Some(note), &[])?;
+                    let vo = &v.graph.bufs[voice_out.node][voice_out.port];
+                    let v_ch = vo.len() / BLOCK;
+                    for c in 0..out_ch {
+                        let sc = if c < v_ch { c } else { 0 };
+                        for (o, x) in out[seg.range(c)].iter_mut().zip(&vo[seg.range(sc)]) {
+                            *o += x;
+                            *peak = peak.max(x.abs());
+                        }
+                    }
+                    Ok(())
+                };
+            for p in plan.iter().filter(|p| p.voice as usize == vi) {
+                let off = p.frame as usize;
                 if let Some(c) = current
                     && off > at
                 {
-                    segs.push((Seg { off: at, n: off - at }, c, false));
+                    segment(v, store, Seg { off: at, n: off - at }, c, &mut peak)?;
                 }
-                segs.push((Seg { off, n: 0 }, note, true));
-                current = Some(note);
+                if v.dirty {
+                    v.graph.reset(store)?;
+                }
+                v.dirty = true;
+                v.note = Some(p.note);
+                peak = 0.0;
+                current = Some(p.note);
                 at = off;
             }
             if let Some(c) = current {
-                segs.push((Seg { off: at, n: BLOCK - at }, c, false));
+                segment(v, store, Seg { off: at, n: BLOCK - at }, c, &mut peak)?;
             }
-            let mut peak = 0.0f32;
-            for (seg, note, starts) in segs {
-                if starts {
-                    if v.dirty {
-                        v.graph.reset(store)?;
+            if let Some(n) = v.note {
+                if n.off < end {
+                    if peak < QUIET && !v.graph.active(store)? {
+                        v.note = None;
                     }
-                    v.dirty = true;
-                    v.note = Some(note);
-                    peak = 0.0;
-                    continue;
+                } else {
+                    v.last_peak = peak;
                 }
-                if seg.n == 0 {
-                    continue;
-                }
-                v.graph.process(store, b, seg, Some(outer), Some(note))?;
-                let vo = &v.graph.bufs[self.out.node][self.out.port];
-                let v_ch = vo.len() / BLOCK;
-                for c in 0..out_ch {
-                    let sc = if c < v_ch { c } else { 0 };
-                    for (o, x) in out[seg.range(c)].iter_mut().zip(&vo[seg.range(sc)]) {
-                        *o += x;
-                        peak = peak.max(x.abs());
-                    }
-                }
-            }
-            if let Some(note) = v.note
-                && note.end <= end
-                && peak < QUIET
-                && !v.graph.active(store)?
-            {
-                v.note = None;
             }
         }
         Ok(())
     }
 }
 
+/// Frames rendered but not yet handed out, with the transport position after each: at most
+/// one block, so it never grows (RENDER-28).
+pub(crate) struct Pending {
+    frames: [[f32; 2]; BLOCK],
+    next: [u64; BLOCK],
+    read: usize,
+    len: usize,
+}
+
+impl Pending {
+    pub(crate) const EMPTY: Pending = Pending { frames: [[0.0; 2]; BLOCK], next: [0; BLOCK], read: 0, len: 0 };
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.read == self.len
+    }
+
+    /// Take a block's frames; `runs` gives each its transport position, and `after` is where the
+    /// transport is after the block. The position after a run's last frame is where the next frame
+    /// plays: a loop's start after its end, never the end itself.
+    pub(crate) fn load(&mut self, frames: &[[f32; 2]; BLOCK], runs: &Runs, after: u64) {
+        self.frames = *frames;
+        let runs = runs.as_slice();
+        for (i, r) in runs.iter().enumerate() {
+            for f in r.off..r.off + r.n {
+                self.next[f as usize] = r.frame(f) + r.moving as u64;
+            }
+            if r.moving {
+                self.next[(r.off + r.n - 1) as usize] = runs.get(i + 1).map_or(after, |n| n.at);
+            }
+        }
+        (self.read, self.len) = (0, BLOCK);
+    }
+
+    /// Silence at a held position (no renderer, or idle).
+    pub(crate) fn silence(&mut self, pos: u64) {
+        self.frames = [[0.0; 2]; BLOCK];
+        self.next = [pos; BLOCK];
+        (self.read, self.len) = (0, BLOCK);
+    }
+
+    /// The next frame, and the transport position after it.
+    pub(crate) fn pop(&mut self) -> ([f32; 2], u64) {
+        let i = self.read;
+        self.read += 1;
+        (self.frames[i], self.next[i])
+    }
+
+    pub(crate) fn clear(&mut self) {
+        (self.read, self.len) = (0, 0);
+    }
+}
+
+/// Unique per renderer: what `SwapLane` checks it reaches the renderer it was made for.
+static GENERATION: AtomicU64 = AtomicU64::new(1);
+
 /// Renders a checked song.
 pub struct Renderer {
     store: Store<StoreLimits>,
     graph: Graph,
+    lanes: Vec<LaneSlot>,
+    slots: Vec<LaneRef>,
     out: PortRef,
     tempo: TempoMap,
+    arrangement: Arc<Arrangement>,
     sample_rate: f64,
-    /// Start of the next block to process.
-    next_block: u64,
-    /// Frames already rendered but not yet handed out.
-    pending: std::collections::VecDeque<[f32; 2]>,
+    transport: Transport,
+    /// The engine clock of the next block.
+    clock: u64,
+    /// The last block, and its transport.
+    frames: [[f32; 2]; BLOCK],
+    runs: Runs,
+    pending: Pending,
     delivered: u64,
     strict: bool,
     non_finite: u64,
+    generation: u64,
+    plugins: bool,
+    /// A kernel crashed live: it renders silence from then on.
+    broken: bool,
+    trace: Option<Trace>,
+    dropped: u32,
 }
 
 impl Renderer {
     /// A renderer for a checked graph and the data it plays: a revision's [`DataSet`], which
     /// also says where its assets and verified plugin states are ([`DataSet::empty`] for none).
+    /// It plays from sample 0, offline.
     pub fn new(flat: &Flat, data: &DataSet, packages: &PackageSet, sample_rate: u32) -> Result<Renderer> {
+        Renderer::build_with(flat, data, packages, sample_rate, &mut audio::Cache::default())
+    }
+
+    /// [`Renderer::new`], sharing decoded assets and clip renders with earlier builds through
+    /// `cache` (a live session's).
+    pub fn build_with(flat: &Flat, data: &DataSet, packages: &PackageSet, sample_rate: u32, cache: &mut audio::Cache) -> Result<Renderer> {
         let limits =
             StoreLimitsBuilder::new().memory_size(KERNEL_MEMORY).instances(1_000_000).memories(1_000_000).tables(1_000_000).build();
         let mut store = Store::new(&packages.engine, limits);
         store.limiter(|l| l);
         let tempo = data.tempo().clone();
-        let graph =
-            Builder { store: &mut store, packages, data, tempo: &tempo, sample_rate: sample_rate as f64, audio: audio::Assets::default() }
-                .graph(&flat.nodes, &flat.order, false)?;
+        let rate = sample_rate as f64;
+        let slots = lane_slots(flat);
+        let mut lanes = Vec::with_capacity(slots.len());
+        for s in &slots {
+            lanes.push(match s.kind {
+                Kind::Events(_) => LaneSlot::Notes(NoteScheduler::new(Arc::new(notes_data(data, &s.module, &s.lane, rate)))),
+                Kind::Control(_) => LaneSlot::Control(Arc::new(data.control(&s.module, &s.lane))),
+                Kind::Audio(ch) => {
+                    LaneSlot::Audio(audio::AudioLane::build(data.audio(&s.module, &s.lane), data, cache, &tempo, rate, ch as usize))
+                }
+            });
+        }
+        let mut graph = Builder { store: &mut store, packages, data, sample_rate: rate, slots: &slots, lanes: &lanes }.graph(
+            &flat.nodes,
+            &flat.order,
+            false,
+        )?;
+        graph.prewarm(&mut store)?;
+        let plugins = graph.exec.iter().any(|e| matches!(e, Exec::Plugin(_)));
         Ok(Renderer {
             store,
             graph,
+            lanes,
+            slots,
             out: flat.out,
             tempo,
-            sample_rate: sample_rate as f64,
-            next_block: 0,
-            pending: Default::default(),
+            arrangement: data.arrangement.clone(),
+            sample_rate: rate,
+            transport: Transport::new(0, true),
+            clock: 0,
+            frames: [[0.0; 2]; BLOCK],
+            runs: Runs::one(Run { off: 0, n: BLOCK as u32, at: 0, moving: true, jump: Jump::None }),
+            pending: Pending::EMPTY,
             delivered: 0,
             strict: true,
             non_finite: 0,
+            generation: GENERATION.fetch_add(1, Ordering::Relaxed),
+            plugins,
+            broken: false,
+            trace: None,
+            dropped: 0,
         })
+    }
+
+    /// A range render (RENDER-4): fresh from init at engine time 0, with the transport starting
+    /// at `t0` and jump semantics, so nothing sounding at `t0` is chased. From 0 it is exactly
+    /// [`Renderer::new`].
+    pub fn starting_at(flat: &Flat, data: &DataSet, packages: &PackageSet, sample_rate: u32, t0: u64) -> Result<Renderer> {
+        let mut r = Renderer::new(flat, data, packages, sample_rate)?;
+        r.transport = Transport::starting(t0);
+        Ok(r)
     }
 
     /// Strict (the default): a NaN or infinity from any kernel is an error naming it.
@@ -734,24 +1110,73 @@ impl Renderer {
         self.strict = strict;
     }
 
-    fn block(&mut self) -> Result<()> {
+    fn block(&mut self, clock: u64) -> Block {
+        let runs = self.runs;
         let mut b = Block {
-            start: self.next_block,
+            engine: clock,
+            runs,
+            info: [RunInfo::default(); MAX_RUNS],
+            looping: None,
             beats: [0.0; BLOCK],
             seconds: [0.0; BLOCK],
             beats64: [0.0; BLOCK],
             sample_rate: self.sample_rate,
-            bpm: self.tempo.bpm_at(self.tempo.beat_at(self.next_block as f64 / self.sample_rate)),
             strict: self.strict,
         };
-        for f in 0..BLOCK {
-            let s = (b.start + f as u64) as f64 / self.sample_rate;
-            let beat = self.tempo.beat_at(s);
-            b.seconds[f] = s as f32;
-            b.beats[f] = beat as f32;
-            b.beats64[f] = beat;
+        for r in runs.as_slice() {
+            for f in r.off..r.off + r.n {
+                let s = r.frame(f) as f64 / self.sample_rate;
+                let beat = self.tempo.beat_at(s);
+                b.seconds[f as usize] = s as f32;
+                b.beats[f as usize] = beat as f32;
+                b.beats64[f as usize] = beat;
+            }
         }
-        self.graph.process(&mut self.store, &b, Seg::WHOLE, None, None)?;
+        if self.plugins {
+            for (i, r) in runs.as_slice().iter().enumerate() {
+                let beat = b.beats64[r.off as usize];
+                let meter = self.arrangement.meter_at(beat);
+                let (bar, into) = self.arrangement.bar_at(beat);
+                b.info[i] = RunInfo {
+                    bpm: self.tempo.bpm_at(beat),
+                    tsig: (meter.beats as u16, meter.unit as u16),
+                    bar_start: beat - into,
+                    bar: bar as i32,
+                };
+            }
+            b.looping = self.transport.looping().map(|l| {
+                let s = |beat: f64| self.tempo.seconds_at(beat);
+                ((l.start_beat, l.end_beat), (s(l.start_beat), s(l.end_beat)))
+            });
+        }
+        b
+    }
+
+    /// Render the next block at engine clock `clock`, advancing the transport. The live
+    /// engine's step, and the offline one's. `release_all`: this renderer is being replaced,
+    /// so every note sounding into it ends now (RENDER-26a). Never allocates while it
+    /// succeeds (RENDER-28).
+    pub fn render_block(&mut self, clock: u64, release_all: bool) -> Result<&[[f32; 2]; BLOCK]> {
+        self.runs = self.transport.advance();
+        self.clock = clock + BLOCK as u64;
+        if self.broken {
+            self.frames = [[0.0; 2]; BLOCK];
+            return Ok(&self.frames);
+        }
+        let runs = self.runs;
+        for l in &mut self.lanes {
+            if let LaneSlot::Notes(s) = l {
+                s.run(&runs, release_all);
+            }
+        }
+        if self.trace.is_some() {
+            self.record(clock);
+        }
+        let b = self.block(clock);
+        if let Err(e) = self.graph.process(&mut self.store, &b, Seg::WHOLE, None, None, &self.lanes) {
+            self.broken = !self.strict;
+            return Err(e);
+        }
         let o = &self.graph.bufs[self.out.node][self.out.port];
         let stereo = o.len() >= 2 * BLOCK;
         for f in 0..BLOCK {
@@ -759,25 +1184,52 @@ impl Renderer {
             for x in &mut frame {
                 if !x.is_finite() {
                     if self.strict {
-                        bail!("the song's output became {x} at {:.3}s", (b.start + f as u64) as f64 / self.sample_rate);
+                        bail!("the song's output became {x} at {:.3}s", b.time(f));
                     }
                     *x = 0.0;
                     self.non_finite += 1;
                 }
             }
-            self.pending.push_back(frame);
+            self.frames[f] = frame;
         }
-        self.next_block += BLOCK as u64;
-        Ok(())
+        Ok(&self.frames)
+    }
+
+    /// Put this block's jumps and notes in the trace.
+    fn record(&mut self, clock: u64) {
+        let Some(t) = &mut self.trace else { return };
+        let runs = self.runs;
+        for r in runs.as_slice().iter().filter(|r| r.jump != Jump::None) {
+            t.push(TraceEntry { engine: clock + r.off as u64, transport: r.at, slot: u32::MAX, id: 0, kind: TraceKind::Jump(r.jump) });
+        }
+        let mut dropped = 0;
+        for (slot, l) in self.lanes.iter().enumerate() {
+            let LaneSlot::Notes(s) = l else { continue };
+            dropped += s.events().dropped_ons();
+            for e in s.events().as_slice() {
+                let (id, kind) = match *e {
+                    Event::On { id, pitch, .. } => (id, TraceKind::On { pitch }),
+                    Event::Off { id, .. } => (id, TraceKind::Off),
+                    _ => continue,
+                };
+                let f = e.frame();
+                t.push(TraceEntry { engine: clock + f as u64, transport: runs.frame(f), slot: slot as u32, id, kind });
+            }
+        }
+        if dropped != self.dropped {
+            self.dropped = dropped;
+            t.push(TraceEntry { engine: clock, transport: runs.first().at, slot: u32::MAX, id: 0, kind: TraceKind::Dropped(dropped) });
+        }
     }
 
     /// Render the next `out.len()` frames, stereo.
     pub fn process(&mut self, out: &mut [[f32; 2]]) -> Result<()> {
         for frame in out.iter_mut() {
             if self.pending.is_empty() {
-                self.block()?;
+                self.render_block(self.clock, false)?;
+                self.pending.load(&self.frames, &self.runs, self.transport.pos());
             }
-            *frame = self.pending.pop_front().expect("a block was just rendered");
+            *frame = self.pending.pop().0;
         }
         self.delivered += out.len() as u64;
         Ok(())
@@ -790,11 +1242,23 @@ impl Renderer {
         Ok(out)
     }
 
-    /// Continue from sample `to`, exactly as if everything before it had been rendered.
-    /// Implemented by resetting and replaying from 0.
-    pub fn seek(&mut self, to: u64) -> Result<()> {
+    /// Back to the state right after building, transport aside.
+    fn reset(&mut self) -> Result<()> {
         self.graph.reset(&mut self.store)?;
-        self.next_block = 0;
+        for l in &mut self.lanes {
+            if let LaneSlot::Notes(s) = l {
+                s.reset();
+            }
+        }
+        Ok(())
+    }
+
+    /// Continue from sample `to`, exactly as if everything before it had been rendered.
+    /// Implemented by resetting and replaying from 0 (RENDER-1): offline only.
+    pub fn seek(&mut self, to: u64) -> Result<()> {
+        self.reset()?;
+        self.transport = Transport::new(0, true);
+        self.clock = 0;
         self.pending.clear();
         self.delivered = 0;
         let mut scratch = vec![[0.0; 2]; 4096];
@@ -805,7 +1269,7 @@ impl Renderer {
         Ok(())
     }
 
-    /// Frames handed out so far (the playback position).
+    /// Frames handed out so far by [`Self::process`] (the offline playback position).
     pub fn position(&self) -> u64 {
         self.delivered
     }
@@ -813,6 +1277,68 @@ impl Renderer {
     /// The rate it renders at: the project's (RENDER-31).
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate as u32
+    }
+
+    /// The engine clock of the next block.
+    pub fn clock(&self) -> u64 {
+        self.clock
+    }
+
+    pub fn transport(&self) -> &Transport {
+        &self.transport
+    }
+
+    pub fn set_transport(&mut self, t: Transport) {
+        self.transport = t;
+    }
+
+    /// Apply a transport command at the next block line (RENDER-9). Never allocates.
+    pub fn transport_cmd(&mut self, cmd: Cmd) {
+        self.transport.apply(cmd, &self.tempo, self.sample_rate);
+    }
+
+    pub fn tempo(&self) -> &TempoMap {
+        &self.tempo
+    }
+
+    /// Take over from a renderer whose transport is `from`, in its tempo map and rate: the same
+    /// beat, play state and loop (RENDER-25a, no jump back), and a first block that seeks
+    /// without chasing.
+    pub fn enter_from(&mut self, from: &Transport, tempo: &TempoMap, rate: f64) {
+        let mut t = *from;
+        t.retime(tempo, rate, &self.tempo, self.sample_rate);
+        t.enter();
+        self.transport = t;
+    }
+
+    /// The lanes it plays, by slot.
+    pub fn lane_slots(&self) -> &[LaneRef] {
+        &self.slots
+    }
+
+    /// The room a notes lane's scheduler has, by slot.
+    pub fn caps(&self, slot: usize) -> Option<Caps> {
+        match self.lanes.get(slot)? {
+            LaneSlot::Notes(s) => Some(s.caps()),
+            _ => None,
+        }
+    }
+
+    /// Replace one lane's data at the next block line, touching no kernel (RENDER-26). Returns
+    /// the data replaced, to retire, or `data` itself when it doesn't fit the slot (another
+    /// kind, or more notes than its scheduler holds). Never allocates.
+    pub fn swap_lane(&mut self, slot: usize, data: LaneSwap) -> Result<LaneSwap, LaneSwap> {
+        let swapped = match (self.lanes.get_mut(slot), data) {
+            (Some(LaneSlot::Notes(s)), LaneSwap::Notes(d)) => s.swap(d).map(LaneSwap::Notes).map_err(LaneSwap::Notes),
+            (Some(LaneSlot::Control(c)), LaneSwap::Control(d)) => Ok(LaneSwap::Control(std::mem::replace(c, d))),
+            (_, d) => Err(d),
+        };
+        if swapped.is_ok()
+            && let Some(t) = &mut self.trace
+        {
+            t.push(TraceEntry { engine: self.clock, transport: self.transport.pos(), slot: slot as u32, id: 0, kind: TraceKind::Swap });
+        }
+        swapped
     }
 
     /// Change a written constant while playing: the value takes effect at the next
@@ -827,9 +1353,108 @@ impl Renderer {
         self.graph.exec.iter().map(|e| if let Exec::Poly(p) = e { p.voices.iter().filter(|v| v.note.is_some()).count() } else { 0 }).sum()
     }
 
+    /// Notes still held: voices whose gate is open, and notes sounding into plugins. After a
+    /// stop or a release this is 0, or a note is stuck (RENDER-26a).
+    pub fn held_notes(&self) -> usize {
+        let clock = self.clock;
+        self.graph
+            .exec
+            .iter()
+            .map(|e| match e {
+                Exec::Poly(p) => p.voices.iter().filter(|v| v.note.is_some_and(|n| n.off >= clock)).count(),
+                Exec::Plugin(p) => p.keys.len(),
+                _ => 0,
+            })
+            .sum()
+    }
+
+    /// Notes the schedulers hold: turned on and not yet off.
+    pub fn sounding_notes(&self) -> usize {
+        self.lanes.iter().map(|l| if let LaneSlot::Notes(s) = l { s.held() } else { 0 }).sum()
+    }
+
+    /// Whether every voice with an open gate plays a note its scheduler holds: a gated voice
+    /// nobody will turn off is a stuck note.
+    pub fn gates_are_owned(&self) -> bool {
+        let clock = self.clock;
+        self.graph.exec.iter().all(|e| match e {
+            Exec::Poly(p) => p.voices.iter().filter_map(|v| v.note.filter(|n| n.off >= clock)).all(|n| match &self.lanes[p.slot] {
+                LaneSlot::Notes(s) => s.is_sounding(n.id),
+                _ => false,
+            }),
+            _ => true,
+        })
+    }
+
+    /// Panic (RENDER-10): every note off, every instance reset. The next block seeks without
+    /// chasing.
+    pub fn panic(&mut self) -> Result<()> {
+        self.reset()?;
+        self.transport.enter();
+        Ok(())
+    }
+
+    /// Whether the engine may stop processing this renderer while stopped (RENDER-6a): no voice
+    /// sounds, no kernel at the top reports `active`, and it hosts no plugin (a plugin's tail
+    /// can't be seen until plugins report sleep, step 3b).
+    pub fn can_idle(&mut self) -> bool {
+        self.active_voices() == 0 && !self.plugins && !self.graph.active(&mut self.store).unwrap_or(true)
+    }
+
+    pub fn hosts_plugins(&self) -> bool {
+        self.plugins
+    }
+
+    /// The memory every kernel instance holds: unchanged by playing, or a reset grew it on the
+    /// audio thread. Off the audio thread only.
+    pub fn kernel_memory_bytes(&self) -> usize {
+        self.graph.kernel_memory(&self.store)
+    }
+
+    /// Unique to this renderer.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Keep the last `cap` scheduler events, jumps and swaps.
+    pub fn trace(&mut self, cap: usize) {
+        self.trace = Some(Trace::new(cap));
+    }
+
+    /// The trace, oldest first (empty unless [`Self::trace`] was called).
+    pub fn trace_entries(&self) -> Vec<TraceEntry> {
+        self.trace.as_ref().map_or(vec![], Trace::entries)
+    }
+
+    /// Ons dropped by full event buffers (never offline, nor live in step 3a).
+    pub fn dropped_ons(&self) -> u32 {
+        self.lanes.iter().map(|l| if let LaneSlot::Notes(s) = l { s.events().dropped_ons() } else { 0 }).sum()
+    }
+
+    /// Audio lane fades let go before they ended for want of room: never at a project rate.
+    pub fn dropped_taps(&self) -> u32 {
+        self.graph.exec.iter().map(|e| if let Exec::Audio(a) = e { a.dropped_taps() } else { 0 }).sum()
+    }
+
+    /// Times every kernel was reset since it was built: a panic, and offline each [`Self::seek`].
+    /// A jump, a swap or an activation never moves it (RENDER-10).
+    pub fn resets(&self) -> u64 {
+        self.graph.resets
+    }
+
     /// Samples silenced in live mode because they were NaN or infinite.
     pub fn non_finite(&self) -> u64 {
         self.non_finite
+    }
+
+    /// The last block's runs.
+    pub fn last_runs(&self) -> &Runs {
+        &self.runs
+    }
+
+    /// Whether a kernel crashed live, so it renders silence.
+    pub fn broken(&self) -> bool {
+        self.broken
     }
 }
 

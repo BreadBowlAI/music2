@@ -21,7 +21,9 @@ m2-play = { path = "core/play" }
 
 anyhow = "1"
 serde = { version = "1", features = ["derive", "rc"] }
-serde_json = "1"
+# Exact float parsing: data files write numbers in their shortest round-trip form, and the
+# default parser misreads about one in nine of those with all their digits (FMT-8a).
+serde_json = { version = "1", features = ["float_roundtrip"] }
 parking_lot = "0.12"
 crossbeam-channel = "0.5"
 hound = "3.5"
@@ -43,4 +45,19 @@ icu_normalizer = "2"
 opt-level = 1
 
 [profile.dev.package."*"]
+opt-level = 3
+
+# The crates the audio thread runs, at full speed in the build `cargo run -p music2-desktop` makes,
+# so the live engine keeps up there too (step 3a). Overflow checks stay on; Rust never reassociates
+# or contracts floating point, so renders keep their bits at any opt-level.
+[profile.dev.package.m2-runtime]
+opt-level = 3
+
+[profile.dev.package.m2-play]
+opt-level = 3
+
+[profile.dev.package.m2-plugins]
+opt-level = 3
+
+[profile.dev.package.m2-song]
 opt-level = 3

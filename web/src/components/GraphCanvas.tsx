@@ -1,9 +1,10 @@
 import clsx from "clsx";
-import { CodeXml, Download, Pause, Piano, Play, Redo2, SkipBack, TriangleAlert, Undo2, Workflow, X } from "lucide-react";
+import { CodeXml, Download, Pause, Piano, Play, Redo2, Repeat, SkipBack, TriangleAlert, Undo2, Workflow, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   attention,
   barAt,
+  barsToBeats,
   editorHooks,
   findLane,
   findNoteClip,
@@ -16,6 +17,8 @@ import {
   type Diagnostic,
   type GraphState,
   type GraphStatus,
+  type Loop,
+  type Meter,
   type ModuleView,
   type Problem,
 } from "../lib/graph";
@@ -46,7 +49,7 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
   const { timeline } = graph;
   const toast = useStore((s) => s.toast);
 
-  const [status, setStatus] = useState<GraphStatus>({ playing: graph.playing, seconds: graph.seconds, beat: graph.beat });
+  const [status, setStatus] = useState<GraphStatus>({ playing: graph.playing, seconds: graph.seconds, beat: graph.beat, loop: graph.loop });
   const poll = useCallback(() => graphApi.status().then(setStatus).catch(() => {}), []);
   useEffect(() => {
     void poll();
@@ -57,6 +60,13 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
     (beat: number) => void graphApi.seek(beat).then(poll, (error) => toast(error instanceof Error ? error.message : String(error))),
     [poll, toast],
   );
+  // The loop: a range dragged on the ruler (which turns it on), or the toggle in the bar.
+  const setLoop = useCallback(
+    (req: { start?: number; end?: number; on?: boolean }) =>
+      void graphApi.loop(req).then(setStatus, (error) => toast(error instanceof Error ? error.message : String(error))),
+    [toast],
+  );
+  const loopRange = useCallback((start: number, end: number) => setLoop({ start, end }), [setLoop]);
 
   // One selection for the timeline and the panel, by module key. A label changed in the code
   // changes nothing here; a key changed in the code keeps its module selected (the module now
@@ -132,7 +142,7 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
 
   return (
     <div className="h-full flex flex-col">
-      <GraphBar graph={graph} status={status} onSeek={seek} />
+      <GraphBar graph={graph} status={status} onSeek={seek} onLoop={setLoop} />
       {graph.view.draft_errors.length > 0 && (
         <CompileBanner
           graph={graph}
@@ -150,6 +160,10 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
         revision={graph.view.revision}
         beat={status.beat}
         playing={status.playing}
+        loopStart={status.loop?.start ?? null}
+        loopEnd={status.loop?.end ?? null}
+        looping={!!status.loop?.on}
+        onLoop={loopRange}
         selected={module?.key}
         open={clip}
         issues={issues}
@@ -293,7 +307,52 @@ export async function graphUndo(session: number, id: "undo" | "redo") {
     .catch((error) => toast(error instanceof Error ? error.message : String(error)));
 }
 
-function GraphBar({ graph, status, onSeek }: { graph: GraphState; status: GraphStatus; onSeek: (beat: number) => void }) {
+/** `bars 5–8`, or the beats when the loop isn't on bar lines. */
+function loopName(meter: Meter[], l: Loop) {
+  const a = barAt(meter, l.start), b = barAt(meter, l.end);
+  if (a.start !== l.start || b.start !== l.end) return `beats ${Number(l.start.toFixed(3))}–${Number(l.end.toFixed(3))}`;
+  // It ends where bar `b` starts: its last bar is the one before.
+  return b.bar - 1 === a.bar ? `bar ${a.bar + 1}` : `bars ${a.bar + 1}–${b.bar}`;
+}
+
+/** The loop toggle: loops the range set, or with none set, the 4 bars from the bar the playhead is in. */
+function LoopButton({ meter, status, onLoop }: { meter: Meter[]; status: GraphStatus; onLoop: (req: { start?: number; end?: number; on?: boolean }) => void }) {
+  const l = status.loop;
+  const toggle = () => {
+    if (l) return onLoop({ on: !l.on });
+    const bar = barAt(meter, status.beat);
+    onLoop({ start: bar.start, end: bar.start + barsToBeats(meter, bar.start, 4) });
+  };
+  const title = l
+    ? l.on
+      ? `Looping ${loopName(meter, l)}: click to play straight on`
+      : `Loop ${loopName(meter, l)} (drag across the ruler to loop somewhere else)`
+    : "Loop 4 bars from the playhead (or drag across the ruler to choose where)";
+  return (
+    <Button
+      data-testid="loop-toggle"
+      aria-label="Loop"
+      aria-pressed={!!l?.on}
+      onClick={toggle}
+      title={title}
+      className={clsx("!px-2.5", l?.on && "!bg-sun/25 !text-ink-100 ring-1 ring-sun/60")}
+    >
+      <Repeat className="size-4" />
+    </Button>
+  );
+}
+
+function GraphBar({
+  graph,
+  status,
+  onSeek,
+  onLoop,
+}: {
+  graph: GraphState;
+  status: GraphStatus;
+  onSeek: (beat: number) => void;
+  onLoop: (req: { start?: number; end?: number; on?: boolean }) => void;
+}) {
   const toast = useStore((s) => s.toast);
   // Unsaved code would be lost: say so, and close only when asked again.
   const close = () => {
@@ -323,14 +382,16 @@ function GraphBar({ graph, status, onSeek }: { graph: GraphState; status: GraphS
       <Button onClick={() => onSeek(0)} title="Back to start" className="!px-2.5">
         <SkipBack className="size-4" />
       </Button>
+      <LoopButton meter={graph.timeline.meter} status={status} onLoop={onLoop} />
       <div className="flex items-baseline gap-2.5 font-mono tabular-nums">
         <span className="text-[15px] text-ink-100 min-w-12" title="Bar and beat">{at}</span>
         <span className="text-xs text-ink-400 w-12" title="Time">{time}</span>
       </div>
       <div data-tauri-drag-region className="flex-1 self-stretch" />
       {/* Centred in the window, whatever the transport and buttons beside it take. It keeps clear of
-          them (360px a side holds the widest, with an export running): a long name is cut short. */}
-      <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 max-w-[calc(100%-720px)] flex items-center gap-2 whitespace-nowrap pointer-events-none">
+          them (400px a side holds the widest, the loop button and an export running included): a
+          long name is cut short. */}
+      <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 max-w-[calc(100%-800px)] flex items-center gap-2 whitespace-nowrap pointer-events-none">
         <span data-testid="bar-song-name" className="min-w-0 truncate text-[15px] font-semibold text-ink-100 pointer-events-auto" title={`${graph.name}\n${graph.dir}${graph.sample_rate ? `\n${graph.sample_rate / 1000} kHz` : ""}`}>
           {graph.name}
         </span>

@@ -1,114 +1,270 @@
 //! The audio device: the one place the core touches hardware.
 //!
-//! The audio callback owns a [`Renderer`]. Everything else talks to it through a
-//! bounded channel (swap in a new renderer, play, stop, change a written value) and
-//! reads its position and state from atomics. Renderers being replaced go back over a
-//! second channel and are dropped off the audio thread.
+//! The audio callback owns a [`Live`]: the persistent [`Engine`] (RENDER-6) and the converter
+//! to the device's rate. Everything else talks to it through a bounded channel and reads where
+//! it is from atomics. Whatever the callback replaces leaves over a second channel and is
+//! dropped on another thread.
 //!
 //! The engine runs at the project's `sample_rate`, whatever the device's rate is (RENDER-31):
 //! the device is opened at its own rate, and when the two differ the engine's output is
 //! converted at the device boundary ([`Resampler`]). Positions are always engine frames.
 //!
+//! RENDER-28: the callback never allocates, locks or waits. No thread ever blocks on these
+//! channels (crossbeam's channels lock only to wake a blocked thread): senders `try_send`
+//! and retry for a bounded time, and retired objects are polled for. A panic in the engine is
+//! caught at the callback, so it never unwinds into the device's frame.
+//!
 //! Live mode: a NaN from a broken kernel is silenced, not an error.
 
 mod resample;
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering, fence};
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use crossbeam_channel::{Receiver, Sender, bounded};
+use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use m2_ir::Origin;
-use m2_runtime::Renderer;
+use m2_runtime::engine::{APPLIED, Msg as EngineMsg};
+pub use m2_runtime::engine::{Applied, CallbackStamp, Engine, Envelope, Retired};
+use m2_runtime::{Cmd, LaneSwap, Renderer, Transport};
 pub use resample::Resampler;
 
-/// What the audio thread plays: a renderer at the engine's rate, and the converter to the
+/// How long a sender waits for room before it reports the player stalled.
+const STALL: Duration = Duration::from_millis(500);
+/// A device that hasn't called back for this long has stopped.
+const SILENT_DEVICE: Duration = Duration::from_secs(1);
+/// Messages the queue holds, and retired objects.
+const QUEUE: usize = 1024;
+const RETIRED: usize = 64;
+/// Frames the callback renders at a time: device buffers are cut into pieces this big.
+const SCRATCH: usize = 8192;
+/// Objects the callback keeps while the retired channel is full.
+const GONE: usize = 8;
+
+/// The process's clock for callback stamps, in nanoseconds.
+fn now_ns() -> u64 {
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    EPOCH.get_or_init(Instant::now).elapsed().as_nanos() as u64
+}
+
+/// What the audio thread plays: the engine at the project's rate, and the converter to the
 /// device's rate when they differ. Both are made off the audio thread.
-struct Playing {
-    renderer: Renderer,
+pub struct Live {
+    engine: Engine,
     resampler: Option<Resampler>,
 }
 
-enum Msg {
-    Swap(Box<Playing>),
-    Play,
-    Stop,
-    SetConst(Origin, f64),
+impl Live {
+    fn new(renderer: Renderer, device_rate: u32) -> Live {
+        let rate = renderer.sample_rate();
+        Live { engine: Engine::with(Box::new(renderer)), resampler: (rate != device_rate).then(|| Resampler::new(rate, device_rate)) }
+    }
+
+    pub fn engine(&self) -> &Engine {
+        &self.engine
+    }
+
+    /// Fill `out` at the device's rate.
+    fn fill(
+        &mut self,
+        out: &mut [[f32; 2]],
+        inbox: &mut dyn FnMut() -> Option<Envelope>,
+        retire: &mut dyn FnMut(Retired) -> Result<(), Retired>,
+        stamp: CallbackStamp,
+    ) {
+        let Live { engine, resampler } = self;
+        match resampler {
+            Some(rs) => {
+                let _ = rs.fill(out, &mut |buf| {
+                    engine.process(buf, inbox, retire, stamp);
+                    Ok(())
+                });
+            }
+            None => engine.process(out, inbox, retire, stamp),
+        }
+    }
 }
 
+/// What a new [`Live`] takes from the one it replaces.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Keep {
+    /// Nothing: a project just opened plays from its renderer's transport.
+    Nothing,
+    /// The beat, the play state and the loop (a rate change).
+    Position,
+}
+
+enum Msg {
+    Engine(Envelope),
+    Replace { live: Box<Live>, keep: Keep },
+    Unload,
+}
+
+/// What leaves the audio thread, to be dropped elsewhere.
+pub enum Gone {
+    Engine(Retired),
+    Live(Box<Live>),
+}
+
+/// An error a sender returns when the audio thread hasn't taken a message for [`STALL`]: the
+/// device stopped calling back. The message was not sent.
+#[derive(Debug)]
+pub struct Stalled;
+
+impl std::fmt::Display for Stalled {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("the audio device stopped responding")
+    }
+}
+
+impl std::error::Error for Stalled {}
+
+/// One [`Applied`] stamp, as atomics.
+#[derive(Default)]
+struct AppliedSlot {
+    seq: AtomicU64,
+    clock: AtomicU64,
+    callback_ns: AtomicU64,
+    frame: AtomicU64,
+}
+
+/// What the audio thread publishes. The position block is a seqlock: the audio thread is its
+/// only writer, and readers retry until they see one whole write.
 #[derive(Default)]
 struct Shared {
-    /// Frames rendered by the current renderer (its playback position).
-    position: AtomicU64,
-    /// Renderers `load` sent that the audio thread hasn't taken yet, and where the last
-    /// one starts. Until it is taken, that is the position: a block of the renderer it
-    /// replaces may still finish and store its own.
-    loading: AtomicU64,
-    loaded: AtomicU64,
+    seq: AtomicU64,
+    pos: AtomicU64,
+    beats: AtomicU64,
+    seconds: AtomicU64,
     playing: AtomicBool,
-    /// The engine rate of the renderer last loaded: what positions count in.
+    generation: AtomicU64,
+    applied: [AppliedSlot; APPLIED],
+    applied_n: AtomicU64,
+    // Written outside the seqlock.
+    clock: AtomicU64,
+    last_callback_ns: AtomicU64,
+    /// The engine rate of the project last sent: what positions count in.
     rate: AtomicU32,
+    crashed: AtomicBool,
+    loop_refused: AtomicBool,
+    dropped_ons: AtomicU64,
+    device_error: AtomicBool,
+    stalled: AtomicBool,
+    /// A device (or the silent clock) calls back: a quiet one has stopped.
+    device: AtomicBool,
+    /// Seeks and loads sent, and taken by the audio thread, and the last target: until the
+    /// audio thread takes them, they are where playback is.
+    seeks_sent: AtomicU64,
+    seeks_applied: AtomicU64,
+    seek_target: AtomicU64,
+    loads_sent: AtomicU64,
+    loads_applied: AtomicU64,
+    load_pos: AtomicU64,
+    /// Where a load not yet taken starts: its beat (f64 bits), and whether it plays.
+    load_beat: AtomicU64,
+    load_playing: AtomicBool,
+}
+
+/// Where playback is, as the audio thread last published it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Status {
+    /// Transport frame, at the engine's rate.
+    pub pos: u64,
+    pub beats: f64,
+    pub seconds: f64,
+    pub playing: bool,
+    /// The renderer playing.
+    pub generation: u64,
+    /// A seek the audio thread hasn't taken yet: its target beat, which is where playback is.
+    pub pending: Option<f64>,
+}
+
+struct LiveFade {
+    old: Box<Live>,
+    done: u32,
+    len: u32,
 }
 
 struct Callback {
-    renderer: Option<Box<Playing>>,
-    playing: bool,
-    scratch: Vec<[f32; 2]>,
+    live: Option<Box<Live>>,
+    /// The live replaced or unloaded, fading out over 5 ms of the device.
+    fade: Option<LiveFade>,
+    /// A replace or unload the inbox met: taken at the start of the next callback, so the
+    /// messages after it wait for it.
+    held: Option<Msg>,
+    gone: [Option<Gone>; GONE],
     rx: Receiver<Msg>,
-    retired: Sender<Box<Playing>>,
+    retired: Sender<Gone>,
     shared: Arc<Shared>,
+    a: Vec<[f32; 2]>,
+    b: Vec<[f32; 2]>,
+    device_rate: u32,
+    published: u64,
+    seeks: u64,
+    loads: u64,
 }
 
 impl Callback {
-    fn fill(&mut self, data: &mut [f32], channels: usize) {
-        self.receive();
-        self.render(data, channels);
+    fn new(rx: Receiver<Msg>, retired: Sender<Gone>, shared: Arc<Shared>, device_rate: u32) -> Callback {
+        Callback {
+            live: None,
+            fade: None,
+            held: None,
+            gone: Default::default(),
+            rx,
+            retired,
+            shared,
+            a: vec![[0.0; 2]; SCRATCH],
+            b: vec![[0.0; 2]; SCRATCH],
+            device_rate,
+            published: 0,
+            seeks: 0,
+            loads: 0,
+        }
     }
 
-    fn receive(&mut self) {
-        while let Ok(msg) = self.rx.try_recv() {
-            match msg {
-                Msg::Swap(r) => {
-                    self.shared.position.store(r.renderer.position(), Ordering::Relaxed);
-                    self.shared.loading.fetch_sub(1, Ordering::Release);
-                    if let Some(old) = self.renderer.replace(r) {
-                        let _ = self.retired.try_send(old);
-                    }
-                }
-                Msg::Play => self.playing = true,
-                Msg::Stop => self.playing = false,
-                Msg::SetConst(origin, v) => {
-                    if let Some(r) = &mut self.renderer {
-                        r.renderer.set_const(&origin, v);
-                    }
-                }
+    /// Send `g` to be dropped elsewhere, or keep it until there is room. Never drops it here.
+    fn retire(&mut self, g: Gone) {
+        let g = match self.retired.try_send(g) {
+            Ok(()) => return,
+            Err(e) => e.into_inner(),
+        };
+        match self.gone.iter_mut().find(|s| s.is_none()) {
+            Some(slot) => *slot = Some(g),
+            None => {
+                // More than GONE replacements while the dropper is stuck: leak rather than free.
+                debug_assert!(false, "nowhere to keep a retired object");
+                std::mem::forget(g);
             }
         }
     }
 
-    fn render(&mut self, data: &mut [f32], channels: usize) {
-        let frames = data.len() / channels.max(1);
-        let (Some(r), true) = (&mut self.renderer, self.playing) else {
-            data.fill(0.0);
-            self.shared.playing.store(false, Ordering::Relaxed);
-            return;
-        };
-        let Playing { renderer: r, resampler } = &mut **r;
-        let mut done = 0;
-        while done < frames {
-            let n = (frames - done).min(self.scratch.len());
-            let rendered = match resampler {
-                Some(rs) => rs.fill(&mut self.scratch[..n], &mut |buf| r.process(buf)),
-                None => r.process(&mut self.scratch[..n]),
-            };
-            if rendered.is_err() {
-                // A kernel crashed: stop rather than make noise.
-                self.playing = false;
-                data[done * channels..].fill(0.0);
+    /// The audio callback: fill `data`, interleaved with `channels` channels.
+    fn fill(&mut self, data: &mut [f32], channels: usize) {
+        let ns = now_ns();
+        self.shared.last_callback_ns.store(ns, Ordering::Relaxed);
+        for i in 0..GONE {
+            if let Some(g) = self.gone[i].take()
+                && let Err(e) = self.retired.try_send(g)
+            {
+                self.gone[i] = Some(e.into_inner());
                 break;
             }
-            for (i, f) in self.scratch[..n].iter().enumerate() {
+        }
+        self.take_held();
+        let channels = channels.max(1);
+        let frames = data.len() / channels;
+        let mut done = 0;
+        while done < frames {
+            let n = (frames - done).min(SCRATCH);
+            if catch_unwind(AssertUnwindSafe(|| self.render(n, CallbackStamp { ns }))).is_err() {
+                self.crash();
+                self.a[..n].fill([0.0; 2]);
+            }
+            for (i, f) in self.a[..n].iter().enumerate() {
                 let o = (done + i) * channels;
                 data[o] = f[0];
                 if channels > 1 {
@@ -118,8 +274,157 @@ impl Callback {
             }
             done += n;
         }
-        self.shared.position.store(r.position(), Ordering::Relaxed);
-        self.shared.playing.store(self.playing, Ordering::Relaxed);
+        self.publish();
+    }
+
+    /// Apply a held replace or unload; with nothing playing, take messages until one arrives.
+    fn take_held(&mut self) {
+        loop {
+            let msg = match self.held.take() {
+                Some(m) => m,
+                None if self.live.is_none() => match self.rx.try_recv() {
+                    Ok(m) => m,
+                    Err(_) => return,
+                },
+                None => return,
+            };
+            match msg {
+                Msg::Replace { mut live, keep } => {
+                    let old = self.live.take();
+                    if keep == Keep::Position
+                        && let (Some(n), Some(o)) = (live.engine.current_mut(), old.as_ref().and_then(|o| o.engine.current()))
+                    {
+                        n.enter_from(o.transport(), o.tempo(), o.sample_rate() as f64);
+                    }
+                    self.loads += 1;
+                    self.published = 0;
+                    self.live = Some(live);
+                    if let Some(old) = old {
+                        self.fade_out(old);
+                    }
+                }
+                Msg::Unload => {
+                    if let Some(old) = self.live.take() {
+                        self.fade_out(old);
+                    }
+                }
+                Msg::Engine(env) => {
+                    // Nothing plays: what the message carries is retired unapplied.
+                    match env.msg {
+                        EngineMsg::Activate { renderer } => self.retire(Gone::Engine(Retired::Renderer(renderer))),
+                        EngineMsg::SwapLane { data, .. } => self.retire(Gone::Engine(Retired::Lane(data))),
+                        EngineMsg::SetConst(origin, _) => self.retire(Gone::Engine(Retired::Origin(origin))),
+                        EngineMsg::Transport(Cmd::Seek(_)) => self.seeks += 1,
+                        EngineMsg::Transport(_) | EngineMsg::Panic => {}
+                    }
+                }
+            }
+        }
+    }
+
+    /// Fade `old` out over 5 ms of the device; one still fading from before is cut.
+    fn fade_out(&mut self, old: Box<Live>) {
+        if let Some(f) = self.fade.take() {
+            self.retire(Gone::Live(f.old));
+        }
+        let len = (0.005 * self.device_rate as f64).round().max(1.0) as u32;
+        self.fade = Some(LiveFade { old, done: 0, len });
+    }
+
+    fn render(&mut self, n: usize, stamp: CallbackStamp) {
+        let Callback { live, fade, held, rx, retired, a, b, seeks, .. } = self;
+        let mut retire = |r: Retired| match retired.try_send(Gone::Engine(r)) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(Gone::Engine(r)) | TrySendError::Disconnected(Gone::Engine(r))) => Err(r),
+            Err(_) => unreachable!("only engine objects are sent here"),
+        };
+        match live {
+            Some(l) => {
+                let mut inbox = || {
+                    if held.is_some() {
+                        return None;
+                    }
+                    match rx.try_recv() {
+                        Ok(Msg::Engine(env)) => {
+                            // Transport commands apply as soon as the engine reads them.
+                            if matches!(env.msg, EngineMsg::Transport(Cmd::Seek(_))) {
+                                *seeks += 1;
+                            }
+                            Some(env)
+                        }
+                        Ok(other) => {
+                            *held = Some(other);
+                            None
+                        }
+                        Err(_) => None,
+                    }
+                };
+                l.fill(&mut a[..n], &mut inbox, &mut retire, stamp);
+            }
+            None => a[..n].fill([0.0; 2]),
+        }
+        if let Some(f) = fade {
+            f.old.fill(&mut b[..n], &mut || None, &mut retire, stamp);
+            for (k, (x, o)) in a[..n].iter_mut().zip(&b[..n]).enumerate() {
+                let i = f.done + k as u32;
+                let g = if i < f.len { (i + 1) as f32 / f.len as f32 } else { 1.0 };
+                *x = [o[0] * (1.0 - g) + x[0] * g, o[1] * (1.0 - g) + x[1] * g];
+            }
+            f.done = f.done.saturating_add(n as u32);
+        }
+        if self.fade.as_ref().is_some_and(|f| f.done >= f.len) {
+            let f = self.fade.take().expect("a fade");
+            self.retire(Gone::Live(f.old));
+        }
+    }
+
+    /// A panic in the engine: what played is retired, never dropped here, and the callback
+    /// plays silence until a project is opened again.
+    fn crash(&mut self) {
+        self.shared.crashed.store(true, Ordering::Relaxed);
+        if let Some(l) = self.live.take() {
+            self.retire(Gone::Live(l));
+        }
+        if let Some(f) = self.fade.take() {
+            self.retire(Gone::Live(f.old));
+        }
+    }
+
+    fn publish(&mut self) {
+        let s = &self.shared;
+        let st = self.live.as_ref().map(|l| l.engine.status()).unwrap_or_default();
+        let seq = s.seq.load(Ordering::Relaxed);
+        s.seq.store(seq + 1, Ordering::Relaxed);
+        fence(Ordering::Release);
+        s.pos.store(st.pos, Ordering::Relaxed);
+        s.beats.store(st.beats.to_bits(), Ordering::Relaxed);
+        s.seconds.store(st.seconds.to_bits(), Ordering::Relaxed);
+        s.playing.store(st.playing, Ordering::Relaxed);
+        s.generation.store(st.generation, Ordering::Relaxed);
+        if let Some(l) = &self.live {
+            let (stamps, n) = l.engine.applied();
+            // Stamps of an engine replaced since are gone; the new engine counts from 0.
+            let from = self.published.min(n).max(n.saturating_sub(APPLIED as u64));
+            for k in from..n {
+                let a = stamps[(k % APPLIED as u64) as usize];
+                let slot = &s.applied[(s.applied_n.load(Ordering::Relaxed) % APPLIED as u64) as usize];
+                slot.seq.store(a.seq, Ordering::Relaxed);
+                slot.clock.store(a.clock, Ordering::Relaxed);
+                slot.callback_ns.store(a.callback_ns, Ordering::Relaxed);
+                slot.frame.store(a.frame as u64, Ordering::Relaxed);
+                s.applied_n.fetch_add(1, Ordering::Relaxed);
+            }
+            self.published = n;
+        }
+        s.seq.store(seq + 2, Ordering::Release);
+        if let Some(l) = &self.live {
+            s.clock.store(l.engine.clock(), Ordering::Relaxed);
+        }
+        s.loop_refused.store(st.loop_refused, Ordering::Relaxed);
+        s.dropped_ons.store(st.dropped_ons as u64, Ordering::Relaxed);
+        // After the position: a reader that sees a seek or a load taken sees where it went.
+        s.seeks_applied.store(self.seeks, Ordering::Release);
+        s.loads_applied.store(self.loads, Ordering::Release);
     }
 }
 
@@ -129,12 +434,70 @@ impl Callback {
 pub struct Player {
     tx: Sender<Msg>,
     shared: Arc<Shared>,
+    next_seq: Arc<AtomicU64>,
     /// The device's own rate. The engine runs at the project's.
     pub device_rate: u32,
     pub device: String,
 }
 
+/// Plays the audio thread's part for tests and tools: [`Driver::fill`] is the device callback.
+pub struct Driver {
+    cb: Callback,
+    retired: Receiver<Gone>,
+}
+
+impl Driver {
+    /// One device callback, interleaved `channels`.
+    pub fn fill(&mut self, data: &mut [f32], channels: usize) {
+        self.cb.fill(data, channels);
+    }
+
+    /// What the callback retired so far: drop it off the audio thread.
+    pub fn drain_retired(&self) -> Vec<Gone> {
+        self.retired.try_iter().collect()
+    }
+
+    /// The engine playing, if a project is open.
+    pub fn engine(&mut self) -> Option<&mut Engine> {
+        self.cb.live.as_mut().map(|l| &mut l.engine)
+    }
+
+    /// Whether a replaced engine is still fading out.
+    pub fn fading(&self) -> bool {
+        self.cb.fade.is_some()
+    }
+}
+
+/// Drop what the audio thread retires, polling: no thread ever blocks on the channel.
+fn drop_retired(retired: Receiver<Gone>) {
+    std::thread::Builder::new()
+        .name("m2-play-drop".into())
+        .spawn(move || {
+            loop {
+                loop {
+                    match retired.try_recv() {
+                        Ok(g) => drop(g),
+                        Err(crossbeam_channel::TryRecvError::Empty) => break,
+                        Err(crossbeam_channel::TryRecvError::Disconnected) => return,
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        })
+        .expect("a thread for dropping");
+}
+
 impl Player {
+    fn parts(device_rate: u32, device: &str) -> (Player, Callback, Receiver<Gone>) {
+        now_ns();
+        let (tx, rx) = bounded::<Msg>(QUEUE);
+        let (retired_tx, retired) = bounded::<Gone>(RETIRED);
+        let shared = Arc::new(Shared::default());
+        let cb = Callback::new(rx, retired_tx, shared.clone(), device_rate);
+        let player = Player { tx, shared, next_seq: Arc::default(), device_rate, device: device.into() };
+        (player, cb, retired)
+    }
+
     /// Open the default output device. With `M2_AUDIO=none`, run silently on a clock
     /// instead (for automated tests).
     pub fn start() -> Result<Player> {
@@ -143,38 +506,34 @@ impl Player {
         }
         let (ready_tx, ready) = bounded::<Result<Player>>(1);
         std::thread::Builder::new().name("m2-play".into()).spawn(move || {
-            let open = || -> Result<(cpal::Stream, Player, Receiver<Box<Playing>>)> {
+            let open = || -> Result<(cpal::Stream, Player, Receiver<Gone>)> {
                 let device = cpal::default_host().default_output_device().ok_or_else(|| anyhow!("no audio output device"))?;
                 let name = device.description().map(|d| d.name().to_string()).unwrap_or_else(|_| "output".into());
                 let config = device.default_output_config()?.config();
                 let channels = config.channels as usize;
-                let (tx, rx) = bounded::<Msg>(1024);
-                let (retired_tx, retired) = bounded::<Box<Playing>>(8);
-                let shared = Arc::new(Shared::default());
-                let mut cb = Callback {
-                    renderer: None,
-                    playing: false,
-                    scratch: vec![[0.0; 2]; 8192],
-                    rx,
-                    retired: retired_tx,
-                    shared: shared.clone(),
-                };
-                let sample_rate = config.sample_rate;
+                let (player, mut cb, retired) = Player::parts(config.sample_rate, &name);
+                let shared = player.shared.clone();
                 let stream = device.build_output_stream::<f32, _, _>(
                     config,
                     move |data: &mut [f32], _| cb.fill(data, channels),
-                    |e| eprintln!("music2: audio stream error: {e}"),
+                    move |e| {
+                        shared.device_error.store(true, Ordering::Relaxed);
+                        eprintln!("music2: audio stream error: {e}");
+                    },
                     None,
                 )?;
                 stream.play()?;
-                Ok((stream, Player { tx, shared, device_rate: sample_rate, device: name }, retired))
+                player.shared.device.store(true, Ordering::Relaxed);
+                Ok((stream, player, retired))
             };
             match open() {
-                Ok((_stream, player, retired)) => {
+                Ok((stream, player, retired)) => {
                     let _ = ready_tx.send(Ok(player));
-                    // Keep the stream alive, and drop retired renderers here.
-                    while let Ok(r) = retired.recv() {
-                        drop(r);
+                    // Keep the stream alive, and drop retired objects here.
+                    drop_retired(retired);
+                    loop {
+                        std::thread::park();
+                        let _ = &stream;
                     }
                 }
                 Err(e) => {
@@ -185,37 +544,175 @@ impl Player {
         ready.recv()?
     }
 
-    /// The same player, rendering into nothing in real time: no device, no sound.
+    /// The same player, rendering into nothing in real time: no device, no sound. Device
+    /// buffers are `M2_AUDIO_FRAMES` frames (480 unless set) at 48 kHz.
     pub fn silent() -> Result<Player> {
         const SR: u32 = 48_000;
-        const FRAMES: usize = 480;
-        let (tx, rx) = bounded::<Msg>(1024);
-        let (retired_tx, retired) = bounded::<Box<Playing>>(8);
-        let shared = Arc::new(Shared::default());
-        let mut cb =
-            Callback { renderer: None, playing: false, scratch: vec![[0.0; 2]; FRAMES], rx, retired: retired_tx, shared: shared.clone() };
+        let frames: usize = std::env::var("M2_AUDIO_FRAMES").ok().and_then(|v| v.parse().ok()).filter(|&n| n > 0).unwrap_or(480);
+        let (player, mut cb, retired) = Player::parts(SR, "none");
+        player.shared.device.store(true, Ordering::Relaxed);
         std::thread::Builder::new().name("m2-play-silent".into()).spawn(move || {
-            let mut buf = vec![0.0f32; FRAMES * 2];
+            let mut buf = vec![0.0f32; frames * 2];
+            let period = Duration::from_secs_f64(frames as f64 / SR as f64);
+            let mut next = Instant::now();
             loop {
                 cb.fill(&mut buf, 2);
-                while retired.try_recv().is_ok() {}
-                std::thread::sleep(std::time::Duration::from_secs_f64(FRAMES as f64 / SR as f64));
+                next += period;
+                // A callback that ran late doesn't make the next ones early.
+                next = next.max(Instant::now().checked_sub(period).unwrap_or(next));
+                std::thread::sleep(next.saturating_duration_since(Instant::now()));
             }
         })?;
-        Ok(Player { tx, shared, device_rate: SR, device: "none".into() })
+        drop_retired(retired);
+        Ok(player)
     }
 
-    /// Play `renderer` from its current position (seek it first if needed). That is the
-    /// position from now on, playing or stopped. It renders at its own rate, the project's; the
-    /// device hears it converted to its rate when they differ (RENDER-31).
-    pub fn load(&self, mut renderer: Renderer) {
+    /// A player whose callback the caller runs ([`Driver::fill`]), at `device_rate`.
+    pub fn driven(device_rate: u32) -> (Player, Driver) {
+        let (player, cb, retired) = Player::parts(device_rate, "driven");
+        (player, Driver { cb, retired })
+    }
+
+    /// Send `msg`, waiting for room at most [`STALL`]; then the player is stalled and the
+    /// message is dropped here, never silently (the caller gets [`Stalled`]).
+    fn send(&self, msg: Msg) -> Result<()> {
+        let start = Instant::now();
+        let mut msg = msg;
+        loop {
+            match self.tx.try_send(msg) {
+                Ok(()) => return Ok(()),
+                Err(TrySendError::Full(m)) => {
+                    if start.elapsed() > STALL {
+                        self.shared.stalled.store(true, Ordering::Relaxed);
+                        return Err(Stalled.into());
+                    }
+                    msg = m;
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    // Its callback is gone: as stalled as one that stopped taking messages.
+                    self.shared.stalled.store(true, Ordering::Relaxed);
+                    return Err(anyhow!("the audio player stopped"));
+                }
+            }
+        }
+    }
+
+    fn envelope(&self, msg: EngineMsg) -> Result<u64> {
+        let seq = self.next_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        self.send(Msg::Engine(Envelope { seq, msg }))?;
+        Ok(seq)
+    }
+
+    fn replace_with(&self, renderer: Renderer, keep: Keep) -> Result<()> {
+        self.shared.rate.store(renderer.sample_rate(), Ordering::Relaxed);
+        self.shared.loads_sent.fetch_add(1, Ordering::Release);
+        let sent = self.send(Msg::Replace { live: Box::new(Live::new(renderer, self.device_rate)), keep });
+        if sent.is_err() {
+            // Never taken: the position is the published one again.
+            self.shared.loads_sent.fetch_sub(1, Ordering::Release);
+        }
+        sent
+    }
+
+    /// Play a newly opened project: a fresh engine for `renderer`, stopped at its start. What
+    /// played before fades out.
+    pub fn open(&self, mut renderer: Renderer) -> Result<()> {
         renderer.set_strict(false);
-        let rate = renderer.sample_rate();
-        let resampler = (rate != self.device_rate).then(|| Resampler::new(rate, self.device_rate));
-        self.shared.loaded.store(renderer.position(), Ordering::Relaxed);
-        self.shared.rate.store(rate, Ordering::Relaxed);
-        self.shared.loading.fetch_add(1, Ordering::Release);
-        let _ = self.tx.send(Msg::Swap(Box::new(Playing { renderer, resampler })));
+        renderer.set_transport(Transport::new(0, false));
+        self.loading(0, 0.0, false);
+        self.replace_with(renderer, Keep::Nothing)
+    }
+
+    /// A fresh engine for `renderer` (a rate change), at the same beat, play state and loop.
+    pub fn replace(&self, mut renderer: Renderer) -> Result<()> {
+        renderer.set_strict(false);
+        // The same beat, in the new renderer's frames.
+        let now = self.status();
+        let beat = now.pending.unwrap_or(now.beats);
+        let pos = m2_runtime::transport::frame_of(renderer.tempo(), beat, renderer.sample_rate() as f64);
+        self.loading(pos, beat, now.playing);
+        self.replace_with(renderer, Keep::Position)
+    }
+
+    /// Where a load about to be sent starts, which [`Self::status`] reports until it is taken.
+    fn loading(&self, pos: u64, beat: f64, playing: bool) {
+        self.shared.load_pos.store(pos, Ordering::Relaxed);
+        self.shared.load_beat.store(beat.to_bits(), Ordering::Relaxed);
+        self.shared.load_playing.store(playing, Ordering::Relaxed);
+    }
+
+    /// Nothing plays any more (the project closed): the engine fades out and is dropped.
+    pub fn unload(&self) -> Result<()> {
+        self.send(Msg::Unload)
+    }
+
+    /// Play `renderer`, built without seeking, from where the engine is: crossfaded, with no
+    /// jump back (RENDER-25a). Returns its generation and the message's sequence number.
+    pub fn activate(&self, mut renderer: Renderer) -> Result<(u64, u64)> {
+        renderer.set_strict(false);
+        let generation = renderer.generation();
+        Ok((generation, self.envelope(EngineMsg::Activate { renderer: Box::new(renderer) })?))
+    }
+
+    /// Replace lane `slot`'s data in the renderer `generation` (RENDER-26).
+    pub fn swap_lane(&self, generation: u64, slot: u32, data: LaneSwap) -> Result<u64> {
+        self.envelope(EngineMsg::SwapLane { generation, slot, data })
+    }
+
+    /// A transport command, applied at the next block line (RENDER-9). Never waits for an edit.
+    pub fn transport(&self, cmd: Cmd) -> Result<u64> {
+        let seek = matches!(cmd, Cmd::Seek(_));
+        if let Cmd::Seek(beat) = cmd {
+            self.shared.seek_target.store(beat.max(0.0).to_bits(), Ordering::Relaxed);
+            self.shared.seeks_sent.fetch_add(1, Ordering::Release);
+        }
+        let sent = self.envelope(EngineMsg::Transport(cmd));
+        if seek && sent.is_err() {
+            self.shared.seeks_sent.fetch_sub(1, Ordering::Release);
+        }
+        sent
+    }
+
+    /// Move playback to `beat`, playing or stopped. Notes sounding there aren't chased.
+    pub fn seek(&self, beat: f64) -> Result<u64> {
+        if !beat.is_finite() {
+            return Err(anyhow!("can't seek to beat {beat}"));
+        }
+        self.transport(Cmd::Seek(beat))
+    }
+
+    /// Loop between two beats, or stop looping.
+    pub fn set_loop(&self, beats: Option<(f64, f64)>) -> Result<u64> {
+        self.transport(Cmd::Loop(beats))
+    }
+
+    /// Every note off and every instance reset (RENDER-10).
+    pub fn panic(&self) -> Result<u64> {
+        self.envelope(EngineMsg::Panic)
+    }
+
+    /// Start playing, for tests and tools; [`Player::transport`] says whether it was sent.
+    pub fn play(&self) {
+        let _ = self.transport(Cmd::Play);
+    }
+
+    /// Stop: notes end, tails ring on (RENDER-6a). For tests and tools, as [`Player::play`].
+    pub fn stop(&self) {
+        let _ = self.transport(Cmd::Stop);
+    }
+
+    /// Change a written value in the playing renderer, from the next block. A preview: dropped
+    /// when the queue is full, as a newer one follows.
+    pub fn set_const(&self, origin: Origin, value: f64) {
+        let seq = self.next_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        let _ = self.tx.try_send(Msg::Engine(Envelope { seq, msg: EngineMsg::SetConst(Box::new(origin), value) }));
+    }
+
+    /// Deliver an accepted value or rollback even when previews filled the queue: waits for
+    /// room, for [`STALL`] at most. Call from the host's worker thread.
+    pub fn commit_const(&self, origin: Origin, value: f64) -> Result<()> {
+        self.envelope(EngineMsg::SetConst(Box::new(origin), value)).map(|_| ())
     }
 
     /// The rate positions count in: the engine's, which is the project's (RENDER-31). The
@@ -227,188 +724,124 @@ impl Player {
         }
     }
 
-    pub fn play(&self) {
-        let _ = self.tx.send(Msg::Play);
+    /// The last whole publication of the audio thread.
+    fn published(&self) -> Status {
+        let s = &self.shared;
+        loop {
+            let a = s.seq.load(Ordering::Acquire);
+            if a & 1 == 1 {
+                std::hint::spin_loop();
+                continue;
+            }
+            let st = Status {
+                pos: s.pos.load(Ordering::Relaxed),
+                beats: f64::from_bits(s.beats.load(Ordering::Relaxed)),
+                seconds: f64::from_bits(s.seconds.load(Ordering::Relaxed)),
+                playing: s.playing.load(Ordering::Relaxed),
+                generation: s.generation.load(Ordering::Relaxed),
+                pending: None,
+            };
+            fence(Ordering::Acquire);
+            if s.seq.load(Ordering::Relaxed) == a {
+                return st;
+            }
+        }
     }
 
-    pub fn stop(&self) {
-        let _ = self.tx.send(Msg::Stop);
+    /// Where playback is. Never waits for anything: a project loaded or a seek sent that the
+    /// audio thread hasn't taken yet is reported as where it goes.
+    pub fn status(&self) -> Status {
+        let s = &self.shared;
+        let mut st = self.published();
+        if s.loads_sent.load(Ordering::Acquire) > s.loads_applied.load(Ordering::Acquire) {
+            let (pos, beat) = (s.load_pos.load(Ordering::Relaxed), f64::from_bits(s.load_beat.load(Ordering::Relaxed)));
+            st = Status {
+                pos,
+                beats: beat,
+                seconds: pos as f64 / self.rate() as f64,
+                playing: s.load_playing.load(Ordering::Relaxed),
+                pending: Some(beat),
+                ..st
+            };
+        }
+        if s.seeks_sent.load(Ordering::Acquire) > s.seeks_applied.load(Ordering::Acquire) {
+            st.pending = Some(f64::from_bits(s.seek_target.load(Ordering::Relaxed)));
+        }
+        st
     }
 
-    /// Change a written value in the playing renderer, from the next block.
-    pub fn set_const(&self, origin: Origin, value: f64) {
-        let _ = self.tx.try_send(Msg::SetConst(origin, value));
-    }
-
-    /// Deliver an accepted value or rollback even when previews filled the queue.
-    /// Call from the host's worker thread; this waits for room in the audio queue.
-    pub fn commit_const(&self, origin: Origin, value: f64) -> Result<()> {
-        self.tx.send(Msg::SetConst(origin, value)).map_err(|_| anyhow!("the audio player stopped"))
-    }
-
-    /// Engine frames the playing renderer has rendered.
+    /// Engine frames: where the transport is. A renderer loaded and not yet taken is already
+    /// where it starts.
     pub fn position(&self) -> u64 {
-        if self.shared.loading.load(Ordering::Acquire) > 0 {
-            self.shared.loaded.load(Ordering::Relaxed)
+        let s = &self.shared;
+        if s.loads_sent.load(Ordering::Acquire) > s.loads_applied.load(Ordering::Acquire) {
+            s.load_pos.load(Ordering::Relaxed)
         } else {
-            self.shared.position.load(Ordering::Relaxed)
+            self.published().pos
         }
     }
 
     pub fn is_playing(&self) -> bool {
-        self.shared.playing.load(Ordering::Relaxed)
+        self.published().playing
+    }
+
+    /// The engine clock after the last callback.
+    pub fn clock(&self) -> u64 {
+        self.shared.clock.load(Ordering::Relaxed)
+    }
+
+    /// When message `seq` took effect, while it is among the last few applied.
+    pub fn applied(&self, seq: u64) -> Option<Applied> {
+        let s = &self.shared;
+        loop {
+            let a = s.seq.load(Ordering::Acquire);
+            if a & 1 == 1 {
+                std::hint::spin_loop();
+                continue;
+            }
+            let found = s.applied.iter().find(|x| x.seq.load(Ordering::Relaxed) == seq).map(|x| Applied {
+                seq,
+                clock: x.clock.load(Ordering::Relaxed),
+                callback_ns: x.callback_ns.load(Ordering::Relaxed),
+                frame: x.frame.load(Ordering::Relaxed) as u32,
+            });
+            fence(Ordering::Acquire);
+            if s.seq.load(Ordering::Relaxed) == a {
+                return found;
+            }
+        }
+    }
+
+    /// Nanoseconds of [`Applied::callback_ns`]'s clock, now.
+    pub fn now_ns(&self) -> u64 {
+        now_ns()
+    }
+
+    /// Whether the audio thread stopped taking messages: a sender timed out, the device
+    /// reported an error, or it hasn't called back for a second.
+    pub fn stalled(&self) -> bool {
+        let s = &self.shared;
+        let quiet = s.device.load(Ordering::Relaxed)
+            && now_ns().saturating_sub(s.last_callback_ns.load(Ordering::Relaxed)) > SILENT_DEVICE.as_nanos() as u64
+            && s.last_callback_ns.load(Ordering::Relaxed) > 0;
+        s.stalled.load(Ordering::Relaxed) || s.device_error.load(Ordering::Relaxed) || quiet
+    }
+
+    /// Whether the engine panicked: it plays silence until a project is opened again.
+    pub fn crashed(&self) -> bool {
+        self.shared.crashed.load(Ordering::Relaxed)
+    }
+
+    /// Whether the last loop was refused, or a tempo change made it too short.
+    pub fn loop_refused(&self) -> bool {
+        self.shared.loop_refused.load(Ordering::Relaxed)
+    }
+
+    /// Ons dropped by full event buffers in the renderer playing.
+    pub fn dropped_ons(&self) -> u64 {
+        self.shared.dropped_ons.load(Ordering::Relaxed)
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn committed_values_wait_for_room_instead_of_being_dropped() {
-        let (tx, rx) = bounded(1);
-        tx.send(Msg::Play).unwrap();
-        let player = Player { tx, shared: Arc::new(Shared::default()), device_rate: 48_000, device: "test".into() };
-        let origin = Origin { site: 3, arg: vec!["0".into()], scale: None };
-        let sent = origin.clone();
-        let (started_tx, started) = bounded(1);
-        let (done_tx, done) = bounded(1);
-        let commit = std::thread::spawn(move || {
-            started_tx.send(()).unwrap();
-            let result = player.commit_const(sent, 950.0);
-            done_tx.send(()).unwrap();
-            result
-        });
-        started.recv().unwrap();
-        assert!(done.recv_timeout(std::time::Duration::from_millis(20)).is_err(), "a full queue must wait instead of dropping the commit");
-        assert!(matches!(rx.recv().unwrap(), Msg::Play));
-        let Msg::SetConst(actual, value) = rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap() else {
-            panic!("expected the committed value")
-        };
-        assert_eq!(actual, origin);
-        assert_eq!(value, 950.0);
-        commit.join().unwrap().unwrap();
-    }
-
-    /// A renderer of silence, at `frame`.
-    fn silence(frame: u64) -> Renderer {
-        let ir: m2_ir::Ir =
-            serde_json::from_value(serde_json::json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"},
-            "modules": [{"key": "song", "lanes": [{"key": "a", "kind": "audio<2>"}],
-                "nodes": [{"id": "x", "op": "lane", "lane": "a"}], "exports": {"out": "x"}}]}))
-            .unwrap();
-        let packages = m2_runtime::PackageSet::default();
-        let flat = m2_ir::check(&ir, &packages).unwrap();
-        let mut r = Renderer::new(&flat, &m2_song::DataSet::empty(), &packages, 48_000).unwrap();
-        r.seek(frame).unwrap();
-        r
-    }
-
-    /// A renderer of a 1 kHz sine at `rate`.
-    fn sine(rate: u32) -> Renderer {
-        let ir: m2_ir::Ir =
-            serde_json::from_value(serde_json::json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"},
-            "modules": [{"key": "song", "nodes": [
-                {"id": "f", "op": "const", "value": 1000, "unit": "hz"},
-                {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "f"}}], "exports": {"out": "o"}}]}))
-            .unwrap();
-        let mut packages = m2_runtime::PackageSet::default();
-        packages.load(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
-        let flat = m2_ir::check(&ir, &packages).unwrap();
-        Renderer::new(&flat, &m2_song::DataSet::empty(), &packages, rate).unwrap()
-    }
-
-    /// A callback playing into a device at `device_rate`, and its player.
-    fn device(device_rate: u32) -> (Player, Callback) {
-        let (tx, rx) = bounded(8);
-        let (retired, _old) = bounded(8);
-        let shared = Arc::new(Shared::default());
-        let player = Player { tx, shared: shared.clone(), device_rate, device: "test".into() };
-        (player, Callback { renderer: None, playing: false, scratch: vec![[0.0; 2]; 256], rx, retired, shared })
-    }
-
-    /// Play `seconds` through the callback in device buffers of uneven sizes, stereo.
-    fn hear(cb: &mut Callback, frames: usize) -> Vec<[f32; 2]> {
-        let mut out = vec![];
-        let sizes = [1, 7, 128, 300, 64, 1000];
-        for n in sizes.iter().cycle() {
-            let n = (*n).min(frames - out.len());
-            if n == 0 {
-                break;
-            }
-            let mut data = vec![0.0; n * 2];
-            cb.fill(&mut data, 2);
-            out.extend(data.chunks(2).map(|f| [f[0], f[1]]));
-        }
-        out
-    }
-
-    /// Upward zero crossings per second, near enough the frequency.
-    fn freq(x: &[[f32; 2]], rate: u32) -> f64 {
-        let ups = x.windows(2).filter(|w| w[0][0] < 0.0 && w[1][0] >= 0.0).count();
-        ups as f64 * rate as f64 / x.len() as f64
-    }
-
-    // RENDER-31, RENDER-33: at the device's own rate, live playback is the offline render bit
-    // for bit, whatever the device's buffer sizes.
-    #[test]
-    fn at_the_devices_rate_live_is_the_offline_render() {
-        let (player, mut cb) = device(48_000);
-        player.load(sine(48_000));
-        player.play();
-        let live = hear(&mut cb, 9_600);
-        assert_eq!(live, sine(48_000).render(0.2).unwrap());
-        assert_eq!((player.rate(), player.position()), (48_000, 9_600));
-    }
-
-    // RENDER-31: the engine runs at the project's rate, and the device hears it converted to its
-    // own: a 1 kHz sine is 1 kHz either way, and positions count engine frames.
-    #[test]
-    fn the_engine_runs_at_the_projects_rate_on_any_device() {
-        for (project, dev) in [(44_100, 48_000), (96_000, 48_000), (48_000, 44_100)] {
-            let (player, mut cb) = device(dev);
-            player.load(sine(project));
-            player.play();
-            let heard = hear(&mut cb, dev as usize / 2);
-            assert_eq!(player.rate(), project);
-            let f = freq(&heard[dev as usize / 10..], dev);
-            assert!((f - 1000.0).abs() < 5.0, "{project} on {dev}: {f} Hz");
-            // Half a second of the device is half a second of the engine, give or take the
-            // converter's lookahead (its filter's half, and a chunk pulled at a time).
-            let ahead = project as i64 / 2 - player.position() as i64;
-            assert!((-96..=0).contains(&ahead), "{project} on {dev}: {} frames ahead", -ahead);
-            // As loud as it was: no gain from converting.
-            let peak = |x: &[[f32; 2]]| x.iter().fold(0.0f32, |m, f| m.max(f[0].abs()));
-            let engine = peak(&sine(project).render(0.5).unwrap());
-            assert!((peak(&heard[dev as usize / 10..]) - engine).abs() < 0.02 * engine, "{project} on {dev}");
-        }
-    }
-
-    #[test]
-    fn a_block_of_the_replaced_renderer_does_not_undo_a_load() {
-        let (tx, rx) = bounded(8);
-        let (retired, _old) = bounded(8);
-        let shared = Arc::new(Shared::default());
-        let player = Player { tx, shared: shared.clone(), device_rate: 48_000, device: "test".into() };
-        let mut cb = Callback { renderer: None, playing: false, scratch: vec![[0.0; 2]; 64], rx, retired, shared };
-        let mut data = vec![0.0; 128];
-        player.load(silence(0));
-        player.play();
-        cb.fill(&mut data, 2);
-        assert_eq!(player.position(), 64);
-        // The load lands while the audio thread renders a block of the old renderer.
-        cb.receive();
-        player.load(silence(4800));
-        cb.render(&mut data, 2);
-        assert_eq!(player.position(), 4800);
-        cb.fill(&mut data, 2);
-        assert_eq!(player.position(), 4864);
-        // Stopped, the loaded position holds at once and stays.
-        player.stop();
-        cb.fill(&mut data, 2);
-        player.load(silence(96_000));
-        assert_eq!(player.position(), 96_000);
-        cb.fill(&mut data, 2);
-        assert_eq!(player.position(), 96_000);
-    }
-}
+mod tests;

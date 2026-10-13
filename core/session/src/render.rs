@@ -4,6 +4,10 @@
 //! project rendered to the same length gives the same file, byte for byte. It renders the
 //! way the app's player plays: a NaN or infinity on the way is silenced, not an error.
 //!
+//! [`Render::range`] is the range render agents listen with (RENDER-4): it starts the engine a
+//! preroll before the range, as a live jump does, instead of replaying the song from its start.
+//! It says it is approximate unless the preroll reaches the start (RENDER-5).
+//!
 //! A render is written to a hidden part file beside the one asked for and named when it is
 //! complete. The part is locked while it's written, so one left by a render that never
 //! finished (the program was killed) is found unlocked and removed by the next render there.
@@ -15,7 +19,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result, bail};
-use m2_ir::Flat;
+use m2_ir::{FOp, Flat};
 use m2_runtime::{PackageSet, Renderer};
 use m2_song::DataSet;
 
@@ -48,11 +52,15 @@ pub enum Length {
 pub struct Render {
     renderer: Renderer,
     sample_rate: u32,
+    /// The song's frame where the file starts.
+    first: u64,
     /// The frame where the last clip ends.
     end: u64,
     length: Length,
     /// Set to stop rendering: the write fails and leaves nothing behind.
     stop: Arc<AtomicBool>,
+    exact: bool,
+    reproducible: bool,
 }
 
 /// What a render wrote.
@@ -64,6 +72,12 @@ pub struct Rendered {
     pub peak_db: f64,
     /// Samples silenced because a kernel made a NaN or an infinity.
     pub non_finite: u64,
+    /// Whether it is what an export holds there: rendered from the song's start (RENDER-5). A
+    /// range render whose preroll starts later is approximate in its tails.
+    pub exact: bool,
+    /// Whether the same files render the same bits again: false when the song hosts a plugin
+    /// (RENDER-2).
+    pub reproducible: bool,
 }
 
 impl Rendered {
@@ -72,42 +86,93 @@ impl Rendered {
     }
 }
 
+/// Whether `flat` renders the same bits every time: it plays no hosted plugin (RENDER-2).
+fn pure(flat: &Flat) -> bool {
+    !flat.order.iter().any(|&i| matches!(flat.nodes[i].op, FOp::Plugin { .. }))
+}
+
+/// Where a render from `from` seconds starts and where the song's last clip ends, in frames;
+/// refused when it can't be rendered.
+fn bounds(data: &DataSet, sample_rate: u32, from: f64, length: Length) -> Result<(u64, u64)> {
+    if !(from >= 0.0 && from.is_finite()) {
+        bail!("can't start rendering at {from} seconds");
+    }
+    if let Length::Seconds(s) = length
+        && !(s > 0.0 && s.is_finite())
+    {
+        bail!("can't render {s} seconds");
+    }
+    let tempo = data.tempo();
+    let last = data.end();
+    let end = (tempo.seconds_at(last) * sample_rate as f64).round() as u64;
+    let first = (from * sample_rate as f64).round() as u64;
+    match length {
+        Length::Seconds(s) if s > MAX_SECONDS => bail!("can't render {s} seconds: {} is the most music2 renders", hours(MAX_SECONDS)),
+        Length::Song if end.saturating_sub(first) as f64 / sample_rate as f64 + TAIL_MAX > MAX_SECONDS => {
+            // The bar the last clip ends in: one ending on a bar line ends the bar before it.
+            let bar = match data.arrangement.bar_at(last) {
+                (b, at) if at == 0.0 && b > 0 => b,
+                (b, _) => b + 1,
+            };
+            bail!(
+                "its last clip ends in bar {bar}, {} in, past the {} music2 can export. Is a clip far past the rest?",
+                hours(end as f64 / sample_rate as f64),
+                hours(MAX_SECONDS)
+            );
+        }
+        _ => {}
+    }
+    Ok((first, end))
+}
+
 impl Render {
     /// Render a compiled revision (its graph and the data it plays) from `from` seconds in
-    /// (replaying up to there first).
+    /// (replaying up to there first): exact (RENDER-1).
     pub fn new(flat: &Flat, data: &DataSet, packages: &PackageSet, sample_rate: u32, from: f64, length: Length) -> Result<Render> {
-        if !(from >= 0.0 && from.is_finite()) {
-            bail!("can't start rendering at {from} seconds");
-        }
-        if let Length::Seconds(s) = length
-            && !(s > 0.0 && s.is_finite())
-        {
-            bail!("can't render {s} seconds");
-        }
-        let tempo = data.tempo();
-        let last = data.end();
-        let end = (tempo.seconds_at(last) * sample_rate as f64).round() as u64;
-        let first = (from * sample_rate as f64).round() as u64;
-        match length {
-            Length::Seconds(s) if s > MAX_SECONDS => bail!("can't render {s} seconds: {} is the most music2 renders", hours(MAX_SECONDS)),
-            Length::Song if end.saturating_sub(first) as f64 / sample_rate as f64 + TAIL_MAX > MAX_SECONDS => {
-                // The bar the last clip ends in: one ending on a bar line ends the bar before it.
-                let bar = match data.arrangement.bar_at(last) {
-                    (b, at) if at == 0.0 && b > 0 => b,
-                    (b, _) => b + 1,
-                };
-                bail!(
-                    "its last clip ends in bar {bar}, {} in, past the {} music2 can export. Is a clip far past the rest?",
-                    hours(end as f64 / sample_rate as f64),
-                    hours(MAX_SECONDS)
-                );
-            }
-            _ => {}
-        }
+        let (first, end) = bounds(data, sample_rate, from, length)?;
         let mut renderer = Renderer::new(flat, data, packages, sample_rate)?;
         renderer.set_strict(false);
         renderer.seek(first)?;
-        Ok(Render { renderer, sample_rate, end, length, stop: Arc::default() })
+        Ok(Render { renderer, sample_rate, first, end, length, stop: Arc::default(), exact: true, reproducible: pure(flat) })
+    }
+
+    /// A range render (RENDER-4): from `from` seconds in, after `preroll` seconds rendered and
+    /// dropped. The engine starts from init where the preroll starts, with the transport there,
+    /// as a live jump does: notes sounding there aren't chased, and tails from before it are
+    /// missing, so it is approximate (RENDER-5). A preroll that reaches the song's start makes it
+    /// the exact render. For listening only: an export or a bounce is always exact (RENDER-3).
+    pub fn range(
+        flat: &Flat,
+        data: &DataSet,
+        packages: &PackageSet,
+        sample_rate: u32,
+        from: f64,
+        preroll: f64,
+        length: Length,
+    ) -> Result<Render> {
+        if !(preroll >= 0.0 && preroll.is_finite()) {
+            bail!("can't start {preroll} seconds before the range");
+        }
+        let (first, end) = bounds(data, sample_rate, from, length)?;
+        let t0 = first.saturating_sub((preroll * sample_rate as f64).round() as u64);
+        if t0 == 0 {
+            return Render::new(flat, data, packages, sample_rate, from, length);
+        }
+        let mut renderer = Renderer::starting_at(flat, data, packages, sample_rate, t0)?;
+        renderer.set_strict(false);
+        let mut scratch = vec![[0.0f32; 2]; CHUNK];
+        let mut left = first - t0;
+        while left > 0 {
+            let n = left.min(CHUNK as u64) as usize;
+            renderer.process(&mut scratch[..n])?;
+            left -= n as u64;
+        }
+        Ok(Render { renderer, sample_rate, first, end, length, stop: Arc::default(), exact: false, reproducible: pure(flat) })
+    }
+
+    /// Whether it renders what an export holds from where it starts (see [`Rendered::exact`]).
+    pub fn exact(&self) -> bool {
+        self.exact
     }
 
     /// Stop rendering when `stop` is set (the app is quitting): the write then fails, and
@@ -177,7 +242,7 @@ impl Render {
         let _ = lock.try_lock();
         let mut out = Out { wav: hound::WavWriter::new(BufWriter::new(file), spec)?, frames: 0, peak: 0.0 };
         let mut chunk = vec![[0.0f32; 2]; CHUNK];
-        let start = self.renderer.position();
+        let start = self.first;
         match self.length {
             Length::Seconds(s) => {
                 let total = (s * self.sample_rate as f64).round() as u64;
@@ -212,6 +277,8 @@ impl Render {
             sample_rate: self.sample_rate,
             peak_db: 20.0 * (peak.max(1e-9) as f64).log10(),
             non_finite: self.renderer.non_finite(),
+            exact: self.exact,
+            reproducible: self.reproducible,
         };
         Ok((lock, rendered))
     }
@@ -255,6 +322,58 @@ impl Out {
         self.frames += frames.len() as u64;
         Ok(())
     }
+}
+
+/// Refuse to write a render that isn't exact into the project at `project`'s `assets/`
+/// (RENDER-5): an approximation must never become part of the song. `out` is where it would go,
+/// relative to the working directory or absolute; neither it nor `assets/` need exist yet. Paths
+/// are compared by the folders they name, so another spelling, a `..` or a link to `assets/` is
+/// refused too.
+pub fn refuse_in_assets(project: &Path, out: &Path) -> Result<()> {
+    let out = std::path::absolute(out)?;
+    let root = project.canonicalize().with_context(|| format!("{} can't be read", project.display()))?;
+    // The nearest of `out`'s folders that exists, and the names after it.
+    let mut rest = vec![];
+    let mut at = out.as_path();
+    let base = loop {
+        if let Ok(p) = at.canonicalize() {
+            break p;
+        }
+        match (at.parent(), at.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name);
+                at = parent;
+            }
+            // A `..` after a folder that doesn't exist: nothing can be written there.
+            _ => return Ok(()),
+        }
+    };
+    let assets = file_id(&root.join(m2_song::path::ASSETS));
+    let inside = assets.is_some() && base.ancestors().any(|a| file_id(a) == assets);
+    // `assets/` not made yet, in any case of letters (macOS and Windows don't tell them apart).
+    let made =
+        file_id(&base) == file_id(&root) && rest.last().is_some_and(|c| c.to_string_lossy().eq_ignore_ascii_case(m2_song::path::ASSETS));
+    if inside || made {
+        bail!(
+            "{} is in the project's {}/: a render that isn't exact never goes there (RENDER-5). Render it exactly (without a preroll), or \
+             write it somewhere else",
+            out.display(),
+            m2_song::path::ASSETS
+        );
+    }
+    Ok(())
+}
+
+/// What a path names, whatever it is called: its device and inode.
+#[cfg(unix)]
+fn file_id(p: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(p).ok().map(|m| (m.dev(), m.ino()))
+}
+
+#[cfg(not(unix))]
+fn file_id(p: &Path) -> Option<PathBuf> {
+    p.canonicalize().ok()
 }
 
 /// Where a render is written until it's complete: hidden, beside the file it becomes.
@@ -544,5 +663,72 @@ mod tests {
         assert!(live.exists() && other.exists());
         drop(held);
         assert!(is_part(".a.wav.12.part") && !is_part(".a.wav.part") && !is_part("a.wav.12.part") && !is_part("..12.part"));
+    }
+
+    fn compiled(dir: &Dir) -> (crate::Compiled, PackageSet) {
+        let mut packages = std_packages();
+        let c = crate::compile(&Project::open(&dir.0).unwrap(), &mut packages).unwrap_or_else(|e| panic!("{e:?}"));
+        (c, packages)
+    }
+
+    // RENDER-4, RENDER-5: a range render starts a preroll before the range, as a live jump does.
+    // It gives the same bits every time and says it is approximate; one whose preroll reaches the
+    // start is the exact render, and says so.
+    #[test]
+    fn a_range_render_is_the_same_every_time_and_says_whether_it_is_exact() {
+        // A pad held over 8 s, and a note on every beat.
+        let beats: Vec<String> = (0..16).map(|b| format!(r#"{{"pitch": 64, "start": {b}, "length": 0.5}}"#)).collect();
+        let clips = format!(
+            r#"{{"clips": [{{"start": 0, "length": 16, "notes": [{{"pitch": 57, "start": 0, "length": 16}}, {}]}}]}}"#,
+            beats.join(", ")
+        );
+        let dir = pad_song(&clips);
+        let (c, packages) = compiled(&dir);
+        let second = Length::Seconds(1.0);
+        let write = |r: Render, name: &str| {
+            let out = dir.0.join(name);
+            let rendered = r.write(&out, |_| {}).unwrap();
+            (rendered, std::fs::read(out).unwrap())
+        };
+        let range = |from, preroll| Render::range(&c.flat, &c.data, &packages, SAMPLE_RATE, from, preroll, second).unwrap();
+        let (a, a_bytes) = write(range(4.0, 1.0), "a.wav");
+        let (b, b_bytes) = write(range(4.0, 1.0), "b.wav");
+        assert_eq!((a.exact, a.reproducible, a.frames), (false, true, SR as u64));
+        assert!(a == b && a_bytes == b_bytes, "the same bits every time");
+        let exact = || Render::new(&c.flat, &c.data, &packages, SAMPLE_RATE, 4.0, second).unwrap();
+        let (x, x_bytes) = write(exact(), "x.wav");
+        assert!(x.exact && x_bytes != a_bytes, "the held pad isn't chased, so it differs from the export");
+        // A preroll back to the start is the exact render.
+        let (e, e_bytes) = write(range(4.0, 4.0), "e.wav");
+        assert!(e.exact && e_bytes == x_bytes);
+        assert!(range(4.0, 9.0).exact());
+        for preroll in [-1.0, f64::NAN, f64::INFINITY] {
+            assert!(Render::range(&c.flat, &c.data, &packages, SAMPLE_RATE, 4.0, preroll, second).is_err(), "{preroll}");
+        }
+    }
+
+    // RENDER-5: an approximate render never goes into assets/, however the path spells it.
+    #[test]
+    fn an_approximate_render_never_goes_into_assets() {
+        let dir = pad_song(r#"{"clips": []}"#);
+        let p = &dir.0;
+        let refused = |out: &str| refuse_in_assets(p, &p.join(out)).is_err();
+        // Not made yet: by its name, in any case.
+        for out in ["assets/x.wav", "Assets/x.wav", "data/../assets/x.wav", "data/pad/../../assets/new/x.wav"] {
+            assert!(refused(out), "{out}");
+        }
+        std::fs::create_dir_all(p.join("assets/new")).unwrap();
+        for out in ["assets/x.wav", "ASSETS/x.wav", "data/../assets/x.wav", "assets/new/x.wav", "assets/later/x.wav"] {
+            assert!(refused(out), "{out}");
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(p.join("assets"), p.join("link")).unwrap();
+            assert!(refused("link/x.wav"), "a link to it");
+        }
+        for out in ["assetsx/x.wav", "x.wav", "data/assets/x.wav", "out/assets.wav"] {
+            assert!(!refused(out), "{out}");
+        }
+        assert!(refuse_in_assets(p, &std::env::temp_dir().join("x.wav")).is_ok());
     }
 }

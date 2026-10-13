@@ -108,6 +108,10 @@ export default function SongTimeline({
   revision,
   beat,
   playing,
+  loopStart,
+  loopEnd,
+  looping,
+  onLoop,
   selected,
   open,
   issues,
@@ -120,6 +124,12 @@ export default function SongTimeline({
   revision: number;
   beat: number;
   playing: boolean;
+  /** The loop's range in beats (null: none set), and whether playback loops there. */
+  loopStart: number | null;
+  loopEnd: number | null;
+  looping: boolean;
+  /** A range dragged across the ruler, in whole beats: loop there. */
+  onLoop: (start: number, end: number) => void;
   /** The selected module's key. */
   selected: string | undefined;
   /** The notes clip open for editing, outlined. */
@@ -262,8 +272,12 @@ export default function SongTimeline({
 
   // The time signature at the start (an empty list is 4/4).
   const sig = timeline.meter[0] ?? { beats: 4, unit: 4 };
-  // Polls arrive every 200ms; easing between them keeps the playhead moving smoothly.
-  const glide = { transform: `translateX(${x}px)` };
+  // Polls arrive every 200ms; easing between them keeps the playhead moving smoothly. A jump (a
+  // seek, or a loop going round) moves it at once rather than sliding it back across the song.
+  const last = useRef(beat);
+  const jumped = beat < last.current - 1e-6 || beat > last.current + 4;
+  last.current = beat;
+  const glide = { transform: `translateX(${x}px)`, transitionDuration: jumped ? "0ms" : undefined };
   return (
     <div ref={scroller} data-testid="timeline" tabIndex={-1} onKeyDown={onKeyDown} className="flex-1 min-h-0 overflow-auto relative bg-ink-950 outline-none">
       <div className="relative flex flex-col" style={{ width: HEADER_W + width, minHeight: "100%" }}>
@@ -279,12 +293,20 @@ export default function SongTimeline({
               {timeline.tempo[0] && `${beats(timeline.tempo[0].bpm)} BPM`}
             </span>
           </div>
-          <Ruler timeline={timeline} width={width} onSeek={onSeek} />
+          <Ruler timeline={timeline} width={width} loopStart={loopStart} loopEnd={loopEnd} looping={looping} onSeek={onSeek} onLoop={onLoop} />
           <div className="absolute bottom-0 z-[35] pointer-events-none transition-transform duration-200 ease-linear" style={{ left: HEADER_W, ...glide }}>
             <div className="w-0 h-0 -translate-x-1/2 border-x-[6px] border-x-transparent border-t-[8px] border-t-sun" />
           </div>
         </div>
         <Tracks timeline={timeline} width={width} selected={selected} open={open} picked={picked} moving={moving} issues={issues} edits={edits} onSelect={onSelect} onOpenClip={onOpenClip} />
+        {looping && loopStart !== null && loopEnd !== null && (
+          <div
+            data-testid="loop-shade"
+            aria-hidden
+            className="absolute bottom-0 z-[14] pointer-events-none bg-sun/[0.07] border-x border-sun/50"
+            style={{ top: RULER_H, left: HEADER_W + loopStart * PPB, width: (loopEnd - loopStart) * PPB }}
+          />
+        )}
         <div
           data-testid="playhead"
           data-beat={beat}
@@ -313,19 +335,76 @@ const Grid = memo(function Grid({ meter, width, bar, beat }: { meter: Meter[]; w
   ));
 });
 
-const Ruler = memo(function Ruler({ timeline, width, onSeek }: { timeline: TimelineView; width: number; onSeek: (beat: number) => void }) {
+/**
+ * Bars and beats along the top. A click moves the playhead there; a drag across it sets a loop over
+ * the beats it covered, and turns looping on.
+ */
+const Ruler = memo(function Ruler({
+  timeline,
+  width,
+  loopStart,
+  loopEnd,
+  looping,
+  onSeek,
+  onLoop,
+}: {
+  timeline: TimelineView;
+  width: number;
+  loopStart: number | null;
+  loopEnd: number | null;
+  looping: boolean;
+  onSeek: (beat: number) => void;
+  onLoop: (start: number, end: number) => void;
+}) {
+  // A loop being dragged, shown until it is let go.
+  const [drag, setDrag] = useState<{ start: number; end: number } | null>(null);
+  const shown = drag ?? (loopStart !== null && loopEnd !== null ? { start: loopStart, end: loopEnd } : null);
+  const on = drag ? true : looping;
   return (
     <div
       data-testid="ruler"
-      className="relative overflow-hidden bg-ink-900/95 backdrop-blur border-b border-black/[0.06] cursor-pointer"
+      className="relative overflow-hidden bg-ink-900/95 backdrop-blur border-b border-black/[0.06] cursor-pointer touch-none"
       style={{ width }}
-      title="Click to move the playhead"
+      title="Click to move the playhead · drag across to loop"
       onPointerDown={(e) => {
         if (e.button !== 0) return;
-        const left = e.currentTarget.getBoundingClientRect().left;
-        onSeek(Math.max(0, Math.round((e.clientX - left) / PPB)));
+        const el = e.currentTarget, pointer = e.pointerId, x0 = e.clientX;
+        const left = el.getBoundingClientRect().left;
+        const beatAt = (x: number) => Math.max(0, Math.round((x - left) / PPB));
+        el.setPointerCapture(pointer);
+        let range: { start: number; end: number } | null = null;
+        const move = (ev: PointerEvent) => {
+          if (ev.pointerId !== pointer || (range === null && Math.abs(ev.clientX - x0) < 4)) return;
+          const a = beatAt(x0), b = beatAt(ev.clientX);
+          range = { start: Math.min(a, b), end: Math.max(a, b) };
+          setDrag(range);
+        };
+        const end = (ev: PointerEvent) => {
+          if (ev.pointerId !== pointer) return;
+          for (const [type, f] of listeners) el.removeEventListener(type, f as EventListener);
+          setDrag(null);
+          if (ev.type !== "pointerup") return;
+          if (range === null) onSeek(beatAt(x0));
+          else if (range.end > range.start) onLoop(range.start, range.end);
+        };
+        const listeners = [["pointermove", move], ["pointerup", end], ["pointercancel", end], ["lostpointercapture", end]] as const;
+        for (const [type, f] of listeners) el.addEventListener(type, f as EventListener);
       }}
     >
+      {shown && (
+        <div
+          data-testid="loop-range"
+          data-start={shown.start}
+          data-end={shown.end}
+          data-on={on}
+          aria-hidden
+          className={clsx(
+            "absolute inset-y-0 pointer-events-none",
+            on ? "bg-sun/25 border-x-2 border-sun" : "bg-black/[0.05] border-x border-dashed border-ink-500/50",
+          )}
+          style={{ left: shown.start * PPB, width: (shown.end - shown.start) * PPB }}
+        />
+      )}
       {/* Bar lines down the ruler, and a tick at each beat along its foot. */}
       {meterSpans(timeline.meter, 0, width / PPB).map((s) => (
         <div

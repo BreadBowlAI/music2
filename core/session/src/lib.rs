@@ -11,6 +11,8 @@
 
 pub mod edit;
 pub mod lanes;
+pub mod plane;
+pub mod reference;
 pub mod render;
 pub mod timeline;
 pub mod unclaimed;

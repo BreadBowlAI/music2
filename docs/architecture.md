@@ -1166,7 +1166,7 @@ Steps 3 and 4 may run in parallel; everything else is in order.
    - `revert()` uses the current origin of the control at the carried position, with the regression test ([ID-12](#derived-identity)).
 2. **Write the contract** (this page) and have it reviewed.
 3. **Live step A** (2–3 weeks). Land 3a before 3b, and keep the offline path untouched.
-   - **3a, runtime:** the engine and transport clocks, with the engine running while stopped; an integer transport and loop ends computed from beats; lane schedulers that fill event buffers and own their sounding notes; a jump that never resets kernels; a new renderer activated at the audio thread's own position, with a 5 ms crossfade; `SwapLane` for notes and control lanes when the old and new `Flat` graphs are equal; the range render for agents.
+   - **3a, runtime (built):** the engine and transport clocks, with the engine running while stopped; an integer transport and loop ends computed from beats; lane schedulers that fill event buffers and own their sounding notes; a jump that never resets kernels; a new renderer activated at the audio thread's own position, with a 5 ms crossfade; `SwapLane` for notes and control lanes when the old and new `Flat` graphs are equal; the range render for agents.
    - **3b, around the runtime:** gesture leases that survive saves which don't touch them; the session as an actor; `PluginHost` with its whole trait and the in-process executor on the real main thread; plugin instances carried across rebuilds.
 4. **Format v1 and SDK keys, in one change** (1–2 weeks). **Built.**
    - Track, lane and plugin keys, and `key()` frames; `Module { key, label }`; a context that exposes the key, never the label.

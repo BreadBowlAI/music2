@@ -63,6 +63,7 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .route("/api/graph/disconnect", post(graph_disconnect))
         .route("/api/graph/transport", post(graph_transport))
         .route("/api/graph/seek", post(graph_seek))
+        .route("/api/graph/loop", post(graph_loop))
         .route("/api/graph/files", get(graph_files))
         .route("/api/graph/file", put(graph_put_file))
         .route("/api/graph/types", get(graph_types))
@@ -401,6 +402,30 @@ async fn graph_seek(State(s): S, Json(r): Json<SeekReq>) -> ApiResult {
     let state = s.clone();
     blocking(move || state.graph.seek(r.beat)).await?;
     Ok(Json(json!({})))
+}
+
+#[derive(Deserialize)]
+struct LoopReq {
+    /// The loop's range in beats: both or neither. Setting it turns looping on unless `on` says.
+    #[serde(default)]
+    start: Option<f64>,
+    #[serde(default)]
+    end: Option<f64>,
+    /// Loop or not, over the range set (kept while looping is off).
+    #[serde(default)]
+    on: Option<bool>,
+}
+
+/// Set the loop; answers with the transport as it now is. Like a seek, it doesn't change the view.
+async fn graph_loop(State(s): S, Json(r): Json<LoopReq>) -> ApiResult {
+    let range = match (r.start, r.end) {
+        (Some(start), Some(end)) => Some((start, end)),
+        (None, None) => None,
+        _ => return Err(err("a loop's range needs both `start` and `end`")),
+    };
+    let state = s.clone();
+    let status = blocking(move || state.graph.set_loop(range, r.on)).await?;
+    Ok(Json(json!(status)))
 }
 
 #[derive(Deserialize)]

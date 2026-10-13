@@ -23,7 +23,7 @@ fn render(inst: &mut Instance, seconds: f64, input: Option<&dyn Fn(u64) -> f32>,
     let mut t = 0u64;
     while (t as f64) < seconds * SR {
         let x: Vec<f32> = (0..BLOCK as u64).map(|i| input.map_or(0.0, |f| f(t + i))).collect();
-        inst.process(BLOCK, &[&x, &x], &mut [&mut l, &mut r], &events(t), Transport { beats: 0.0, seconds: t as f64 / SR, bpm: 120.0 }).unwrap();
+        inst.process(BLOCK, &[&x, &x], &mut [&mut l, &mut r], &events(t), Transport { seconds: t as f64 / SR, bpm: 120.0, playing: true, steady: t as i64, ..Default::default() }).unwrap();
         out.extend_from_slice(&l);
         t += BLOCK as u64;
     }

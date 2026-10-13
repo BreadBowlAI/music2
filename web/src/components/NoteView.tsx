@@ -141,7 +141,16 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
   const latest = useRef(graph);
   latest.current = graph;
   // Notes are edited through the code's lanes: while the code doesn't compile they are read only.
-  const locked = graph.view.draft_errors.length > 0;
+  // So are they while the lane's file doesn't read: the roll shows the notes it played before, and
+  // writing them would replace the file's newer text with that old copy (FMT-9).
+  const file = `data/${module}/${lane}.json`;
+  const broken = graph.problems.find((p) => p.src === file && p.code.startsWith("lane."));
+  const why = graph.view.draft_errors.length > 0 ? "code" : broken ? "lane" : null;
+  const locked = why !== null;
+  const lockedTitle =
+    why === "lane"
+      ? `${file} doesn't read, so these are the notes it played before. Fix the file and they can be edited again.\n\n${broken!.message}`
+      : "Notes live in the code's lanes: they can be edited again once the code compiles";
   const seen = useRef(server?.notes.length);
   /** The beat to keep under the pointer while zooming. */
   const anchor = useRef<{ beat: number; x: number } | null>(null);
@@ -563,11 +572,12 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
         {locked && (
           <span
             data-testid="notes-locked"
+            data-why={why}
             className="shrink-0 inline-flex items-center gap-1.5 h-6 px-2 rounded-md bg-amber-500/10 ring-1 ring-amber-600/20 text-[11px] font-medium text-amber-900"
-            title="Notes live in the code's lanes: they can be edited again once the code compiles"
+            title={lockedTitle}
           >
             <Lock className="size-3" />
-            Read only until the code compiles
+            {why === "lane" ? `Read only: ${file} doesn't read` : "Read only until the code compiles"}
           </span>
         )}
         <span className="shrink-0 text-[11px] text-ink-400 tabular-nums">
@@ -607,7 +617,9 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
                 style={{ width, height }}
                 title={
                   locked
-                    ? "Read only until the code compiles"
+                    ? why === "lane"
+                      ? `Read only until ${file} reads again`
+                      : "Read only until the code compiles"
                     : `Click to add a note · drag a note to move it · drag its right edge to resize · drag across empty space to select · ⌫ deletes · ${kbd("D")} duplicates · arrows move`
                 }
                 onPointerDown={onGridDown}

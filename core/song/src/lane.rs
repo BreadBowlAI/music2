@@ -603,16 +603,23 @@ pub struct AbsNote {
 /// A notes lane's notes in song time, cut to their clips, in a total order: by start, pitch,
 /// end and velocity.
 pub fn notes(clips: &[NoteClip]) -> Vec<AbsNote> {
+    notes_keyed(clips).into_iter().map(|(n, _)| n).collect()
+}
+
+/// [`notes`], each with the index in `clips` of the clip it comes from: the live engine names a
+/// sounding note by its clip (RENDER-26a). One function, so the two orders can't drift apart.
+pub fn notes_keyed(clips: &[NoteClip]) -> Vec<(AbsNote, usize)> {
     let mut out = vec![];
-    for c in clips {
+    for (i, c) in clips.iter().enumerate() {
         for n in &c.notes {
             let (s, e) = (n.start.max(0.0), (n.start + n.length).min(c.length));
             if e > s {
-                out.push(AbsNote { start: c.start + s, end: c.start + e, pitch: n.pitch, velocity: n.velocity.clamp(0.0, 1.0) });
+                out.push((AbsNote { start: c.start + s, end: c.start + e, pitch: n.pitch, velocity: n.velocity.clamp(0.0, 1.0) }, i));
             }
         }
     }
-    out.sort_by(|a, b| {
+    // Stable: equal notes keep their clips' order, as before.
+    out.sort_by(|(a, _), (b, _)| {
         a.start.total_cmp(&b.start).then(a.pitch.total_cmp(&b.pitch)).then(a.end.total_cmp(&b.end)).then(a.velocity.total_cmp(&b.velocity))
     });
     out
@@ -837,6 +844,28 @@ mod tests {
         assert_eq!(number(-0.0), "0");
         assert_eq!(number(0.1 + 0.2), "0.30000000000000004");
         assert_eq!(number(1e21), "1000000000000000000000");
+    }
+
+    // FMT-8a: a number written with all its digits reads back as the same number, so writing a
+    // note at any beat (an agent's, or one half a beat ahead of the playhead) reads back as written.
+    #[test]
+    fn numbers_with_all_their_digits_read_back_as_written() {
+        let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+        for i in 0..20_000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            // A beat in 0..512, and the one the default float parser misread.
+            let start = if i == 0 { 10.292177777777795 } else { (x >> 11) as f64 / (1u64 << 53) as f64 * 512.0 };
+            let text = format!(
+                r#"{{"clips": [{{"start": 0, "length": 512, "notes": [{{"pitch": 60, "start": {}, "length": 0.5}}]}}]}}"#,
+                number(start)
+            );
+            let LaneData::Notes(clips) = LaneData::read(&text, &notes_kind()).unwrap() else { unreachable!() };
+            assert_eq!(clips[0].notes[0].start.to_bits(), start.to_bits(), "{start} read back as {}", clips[0].notes[0].start);
+            let out = canonical(&LaneData::Notes(clips));
+            assert_eq!(canonical(&LaneData::read(&out, &notes_kind()).unwrap()), out);
+        }
     }
 
     #[test]

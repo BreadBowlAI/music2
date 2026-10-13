@@ -1,0 +1,25 @@
+[package]
+name = "m2-gates"
+description = "Measures step 3's acceptance gates: seek, loop, edits, stuck notes, crossfades, tails and range renders"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# Both have landed with step 3a, so `cargo test --workspace` runs every gate on the live engine.
+default = ["range"]
+# Step 3a's live engine (`Player::driven`, `activate`, `swap_lane`, `Renderer::starting_at`). The
+# replay rig and the server runs work without it.
+engine = []
+# The session's range render (`Render::range` and what `Rendered` says about itself).
+range = ["engine"]
+
+[dependencies]
+m2-ir.workspace = true
+m2-song.workspace = true
+m2-runtime.workspace = true
+m2-session.workspace = true
+m2-play.workspace = true
+m2-server.workspace = true
+anyhow.workspace = true

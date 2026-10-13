@@ -2381,6 +2381,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "m2-gates"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "m2-ir",
+ "m2-play",
+ "m2-runtime",
+ "m2-server",
+ "m2-session",
+ "m2-song",
+]
+
+[[package]]
 name = "m2-ir"
 version = "0.1.0"
 dependencies = [
@@ -2401,6 +2414,7 @@ dependencies = [
  "crossbeam-channel",
  "m2-ir",
  "m2-runtime",
+ "m2-session",
  "m2-song",
  "serde_json",
 ]

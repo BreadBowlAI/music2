@@ -6,7 +6,59 @@ use serde_json::{Value, json};
 
 use super::*;
 
+mod live;
+
 const SR: u32 = 48_000;
+
+/// Counts heap operations on a thread while it asks to (RENDER-28).
+mod alloc_count {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    pub struct Counter;
+
+    thread_local! {
+        static ON: Cell<bool> = const { Cell::new(false) };
+        static N: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn count() {
+        let _ = ON.try_with(|on| {
+            if on.get() {
+                let _ = N.try_with(|n| n.set(n.get() + 1));
+            }
+        });
+    }
+
+    unsafe impl GlobalAlloc for Counter {
+        unsafe fn alloc(&self, l: Layout) -> *mut u8 {
+            count();
+            unsafe { System.alloc(l) }
+        }
+
+        unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
+            count();
+            unsafe { System.dealloc(p, l) }
+        }
+
+        unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 {
+            count();
+            unsafe { System.realloc(p, l, n) }
+        }
+    }
+
+    /// What `f` returns, and the heap operations it made on this thread.
+    pub fn during<R>(f: impl FnOnce() -> R) -> (R, usize) {
+        N.with(|n| n.set(0));
+        ON.with(|o| o.set(true));
+        let r = f();
+        ON.with(|o| o.set(false));
+        (r, N.with(|n| n.get()))
+    }
+}
+
+#[global_allocator]
+static COUNTER: alloc_count::Counter = alloc_count::Counter;
 
 fn std_packages() -> PackageSet {
     let mut p = PackageSet::default();
@@ -217,10 +269,8 @@ fn std_manifest_matches_its_kernels() {
             op: FOp::Const(0.0),
             outputs: sig.outputs.iter().map(|_| Kind::Audio(1)).collect(),
         };
-        let tempo = TempoMap::constant(120.0);
         let tl = DataSet::empty();
-        let mut b =
-            Builder { store: &mut store, packages: &pk, data: &tl, tempo: &tempo, sample_rate: 48_000.0, audio: Default::default() };
+        let mut b = Builder { store: &mut store, packages: &pk, data: &tl, sample_rate: 48_000.0, slots: &[], lanes: &[] };
         b.kernel(&node, &id, 1, &inputs).unwrap_or_else(|e| panic!("{e:#}"));
     }
 }
@@ -760,4 +810,195 @@ fn a_missing_plugin_silences_only_its_node() {
     let doubled: Vec<[f32; 2]> = base.iter().map(|f| [f[0] + f[0], f[1] + f[1]]).collect();
     assert_eq!(render(&effect, &mut pk), doubled, "the effect passes the sine through");
     assert_eq!(render(&instrument, &mut pk), base, "the instrument adds silence");
+}
+
+// ---------------------------------------------------------------- goldens
+
+// RENDER-1, RENDER-2: the offline bits of songs that stress what the live engine rewrote (step
+// 3a): voices freed exactly on a block line, stealing, notes inside a block, feedback inside
+// voices, control lanes and time across a tempo change, two consumers of one notes lane, and
+// uneven device buffers. The hashes were recorded at 0ff97b4, before the rewrite; the offline
+// path must never change them (SHA-256 of the little-endian f32 bits of the stereo frames).
+mod goldens {
+    use m2_song::{Arrangement, LaneAddr, LaneData, LaneKind};
+
+    use super::*;
+
+    fn lane(text: Value, kind: LaneKind) -> LaneData {
+        LaneData::read(&text.to_string(), &kind).unwrap()
+    }
+
+    pub(super) fn addr(l: &str) -> LaneAddr {
+        LaneAddr::new("song", l).unwrap()
+    }
+
+    pub(super) fn bits(frames: &[[f32; 2]]) -> String {
+        let bytes: Vec<u8> = frames.iter().flatten().flat_map(|x| x.to_le_bytes()).collect();
+        m2_song::Sha::of(&bytes).hex()
+    }
+
+    /// `frames` of `ir` playing `data`, asked for in buffers of `sizes` in turn.
+    pub(super) fn hash(ir: &Ir, data: &DataSet, frames: usize, sizes: &[usize]) -> String {
+        let pk = std_packages();
+        let flat = check(ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
+        let mut r = Renderer::new(&flat, data, &pk, SR).unwrap();
+        let mut out = vec![[0.0f32; 2]; frames];
+        let mut done = 0;
+        for &n in sizes.iter().cycle() {
+            if done == frames {
+                break;
+            }
+            let n = n.min(frames - done);
+            r.process(&mut out[done..done + n]).unwrap();
+            done += n;
+        }
+        bits(&out)
+    }
+
+    const NOTES: &str = r#"[{"key": "notes", "kind": "events<note>"}]"#;
+
+    /// G1: two voices whose notes end exactly on a block line (beat 0.32 is sample 7680, 60
+    /// blocks at 120 bpm), quiet but still gated (sustain 0), then a note on that line.
+    pub(super) fn g1() -> (Ir, DataSet) {
+        let ir = song(
+            json!([
+                {"id": "n", "op": "lane", "lane": "notes"},
+                {"id": "v", "op": "poly", "events": "n", "voices": 2, "body": {"out": "amp", "nodes": [
+                    {"id": "p", "op": "lane", "lane": "pitch"}, {"id": "g", "op": "lane", "lane": "gate"},
+                    {"id": "hz", "op": "kernel", "kernel": "std:mtof", "inputs": {"pitch": "p"}},
+                    {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "hz"}},
+                    {"id": "e", "op": "kernel", "kernel": "std:adsr", "inputs": {"gate": "g", "decay": "d", "sustain": "s", "release": "r"}},
+                    {"id": "d", "op": "const", "value": 0.05, "unit": "seconds"},
+                    {"id": "s", "op": "const", "value": 0},
+                    {"id": "r", "op": "const", "value": 0.03, "unit": "seconds"},
+                    {"id": "amp", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "e"}}]}}]),
+            "v",
+            serde_json::from_str(NOTES).unwrap(),
+        );
+        let notes = lane(
+            json!({"clips": [{"id": "a", "start": 0, "length": 4, "notes": [
+                {"pitch": 45, "start": 0, "length": 0.32}, {"pitch": 57, "start": 0.1, "length": 0.22},
+                {"pitch": 52, "start": 0.32, "length": 0.32}, {"pitch": 60, "start": 1, "length": 0.5}]}]}),
+            LaneKind::Notes,
+        );
+        (ir, DataSet::with_lanes(Arrangement::default(), [(addr("notes"), notes)]))
+    }
+
+    /// G2: a voice with a feedback loop, a delay after the poly, notes at odd samples, a
+    /// stolen voice and a note that starts and ends inside one block.
+    pub(super) fn g2() -> (Ir, DataSet) {
+        let ir = song(
+            json!([
+                {"id": "n", "op": "lane", "lane": "notes"},
+                {"id": "v", "op": "poly", "events": "n", "voices": 2, "body": {"out": "mix", "nodes": [
+                    {"id": "p", "op": "lane", "lane": "pitch"}, {"id": "g", "op": "lane", "lane": "gate"},
+                    {"id": "hz", "op": "kernel", "kernel": "std:mtof", "inputs": {"pitch": "p"}},
+                    {"id": "o", "op": "kernel", "kernel": "std:saw", "inputs": {"freq": "hz"}},
+                    {"id": "e", "op": "kernel", "kernel": "std:adsr", "inputs": {"gate": "g"}},
+                    {"id": "a", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "e"}},
+                    {"id": "fb", "op": "feedback", "kind": "audio<1>", "input": "mix"},
+                    {"id": "q", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "fb", "by": "h"}},
+                    {"id": "h", "op": "const", "value": 0.3},
+                    {"id": "mix", "op": "kernel", "kernel": "std:add", "inputs": {"a": "a", "b": "q"}}]}},
+                {"id": "dl", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "v"}}]),
+            "dl",
+            serde_json::from_str(NOTES).unwrap(),
+        );
+        let notes = lane(
+            json!({"clips": [{"id": "a", "start": 0, "length": 4, "notes": [
+                {"pitch": 57, "start": 0.0013, "length": 0.3}, {"pitch": 64, "start": 0.0071, "length": 0.2},
+                {"pitch": 69, "start": 0.0109, "length": 0.5}, {"pitch": 60, "start": 0.61, "length": 0.05},
+                {"pitch": 62, "start": 0.7, "length": 0.002}]}]}),
+            LaneKind::Notes,
+        );
+        (ir, DataSet::with_lanes(Arrangement::default(), [(addr("notes"), notes)]))
+    }
+
+    /// G3: control lane automation, `time.beats` into an lfo, a top-level feedback loop, and a
+    /// tempo change mid-song.
+    pub(super) fn g3() -> (Ir, DataSet) {
+        let ir = song(
+            json!([
+                {"id": "c", "op": "lane", "lane": "cutoff"},
+                {"id": "t", "op": "time", "of": "beats"},
+                {"id": "l", "op": "kernel", "kernel": "std:lfo", "inputs": {"beats": "t"}},
+                {"id": "x", "op": "kernel", "kernel": "std:saw"},
+                {"id": "f", "op": "kernel", "kernel": "std:svf", "inputs": {"in": "x", "cutoff": "c"}},
+                {"id": "m", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "f.lp", "by": "l"}},
+                {"id": "fb", "op": "feedback", "kind": "audio<1>", "input": "sum"},
+                {"id": "k", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "fb", "by": "h"}},
+                {"id": "h", "op": "const", "value": 0.5},
+                {"id": "sum", "op": "kernel", "kernel": "std:add", "inputs": {"a": "m", "b": "k"}}]),
+            "sum",
+            json!([{"key": "cutoff", "kind": "control<hz>", "default": 2000}]),
+        );
+        let cutoff = lane(
+            json!({"unit": "hz", "clips": [{"id": "a", "start": 0.5, "length": 3, "points": [[0, 300], [1.5, 4000], [3, 800]]}]}),
+            LaneKind::Control { unit: Some("hz".into()) },
+        );
+        let arr: Arrangement =
+            serde_json::from_value(json!({"tempo": [{"beat": 0, "bpm": 127}, {"beat": 2, "bpm": 90}], "meter": []})).unwrap();
+        (ir, DataSet::with_lanes(arr, [(addr("cutoff"), cutoff)]))
+    }
+
+    /// G4: two polys reading one notes lane (one with a single voice, so it steals), velocity,
+    /// and a note cut by its clip.
+    pub(super) fn g4() -> (Ir, DataSet) {
+        let ir = song(
+            json!([
+                {"id": "n", "op": "lane", "lane": "notes"},
+                {"id": "a", "op": "poly", "events": "n", "voices": 1, "body": {"out": "amp", "nodes": [
+                    {"id": "p", "op": "lane", "lane": "pitch"}, {"id": "g", "op": "lane", "lane": "gate"},
+                    {"id": "hz", "op": "kernel", "kernel": "std:mtof", "inputs": {"pitch": "p"}},
+                    {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "hz"}},
+                    {"id": "amp", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "g"}}]}},
+                {"id": "b", "op": "poly", "events": "n", "voices": 3, "body": {"out": "amp", "nodes": [
+                    {"id": "p", "op": "lane", "lane": "pitch"}, {"id": "g", "op": "lane", "lane": "gate"},
+                    {"id": "v", "op": "lane", "lane": "velocity"},
+                    {"id": "hz", "op": "kernel", "kernel": "std:mtof", "inputs": {"pitch": "p"}},
+                    {"id": "o", "op": "kernel", "kernel": "std:saw", "inputs": {"freq": "hz"}},
+                    {"id": "e", "op": "kernel", "kernel": "std:adsr", "inputs": {"gate": "g"}},
+                    {"id": "ev", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "e", "by": "v"}},
+                    {"id": "amp", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "ev"}}]}},
+                {"id": "s", "op": "kernel", "kernel": "std:add", "inputs": {"a": "a", "b": "b"}}]),
+            "s",
+            serde_json::from_str(NOTES).unwrap(),
+        );
+        let notes = lane(
+            json!({"clips": [{"id": "a", "start": 0, "length": 8, "notes": [
+                {"pitch": 60, "start": 0, "length": 1, "velocity": 0.5}, {"pitch": 64, "start": 0.25, "length": 1, "velocity": 0.9},
+                {"pitch": 67, "start": 0.5, "length": 0.75}, {"pitch": 72, "start": 0.5, "length": 0.25},
+                {"pitch": 48, "start": 1.5, "length": 2}]},
+                {"id": "b", "start": 2, "length": 2, "notes": [{"pitch": 55, "start": -0.5, "length": 1}, {"pitch": 59, "start": 1.5, "length": 1}]}]}),
+            LaneKind::Notes,
+        );
+        (ir, DataSet::with_lanes(Arrangement::default(), [(addr("notes"), notes)]))
+    }
+
+    #[test]
+    fn g1_voices_freed_on_a_block_line() {
+        let (ir, data) = g1();
+        assert_eq!(hash(&ir, &data, 48_000, &[48_000]), "484d8c0d4f8896633c23db4b3a0e58be665726cc774389aa357161ee84d15500");
+    }
+
+    #[test]
+    fn g2_feedback_steals_and_short_notes() {
+        let (ir, data) = g2();
+        assert_eq!(
+            hash(&ir, &data, 48_000, &[1, 7, 128, 300, 64, 1000]),
+            "485c1a80c5ee76dcd0ccb8328ed17457f83b5d30b0ebd6625a2688aa2e6859da"
+        );
+    }
+
+    #[test]
+    fn g3_control_lanes_time_and_tempo() {
+        let (ir, data) = g3();
+        assert_eq!(hash(&ir, &data, 96_000, &[300, 1000, 7]), "1bc59f421c75899de576638ba94f0c7bb0bb275916abc9c89dbdc0a5d867a9fb");
+    }
+
+    #[test]
+    fn g4_two_consumers_of_one_lane() {
+        let (ir, data) = g4();
+        assert_eq!(hash(&ir, &data, 120_000, &[512]), "4ff082cdac4ff3cc83151b1ddec22cabf3610ddb2fe877d0ae4303474142ff77");
+    }
 }

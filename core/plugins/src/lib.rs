@@ -303,6 +303,8 @@ fn new_host() -> Box<Host> {
 pub enum Event {
     NoteOn { time: u32, id: i32, key: i16, velocity: f64 },
     NoteOff { time: u32, id: i32, key: i16 },
+    /// End a note at once, with no release (a panic).
+    NoteChoke { time: u32, id: i32, key: i16 },
     /// Tuning in semitones for one note (for pitches between keys).
     Tuning { time: u32, id: i32, key: i16, semitones: f64 },
     Param { time: u32, id: u32, value: f64 },
@@ -311,7 +313,11 @@ pub enum Event {
 impl Event {
     fn time(&self) -> u32 {
         match *self {
-            Event::NoteOn { time, .. } | Event::NoteOff { time, .. } | Event::Tuning { time, .. } | Event::Param { time, .. } => time,
+            Event::NoteOn { time, .. }
+            | Event::NoteOff { time, .. }
+            | Event::NoteChoke { time, .. }
+            | Event::Tuning { time, .. }
+            | Event::Param { time, .. } => time,
         }
     }
 }
@@ -338,6 +344,9 @@ fn raw(e: &Event) -> Raw {
         },
         Event::NoteOff { time, id, key } => Raw {
             note: clap_event_note { header: header(size_of::<clap_event_note>(), time, CLAP_EVENT_NOTE_OFF), note_id: id, port_index: 0, channel: 0, key, velocity: 0.0 },
+        },
+        Event::NoteChoke { time, id, key } => Raw {
+            note: clap_event_note { header: header(size_of::<clap_event_note>(), time, CLAP_EVENT_NOTE_CHOKE), note_id: id, port_index: 0, channel: 0, key, velocity: 0.0 },
         },
         Event::Tuning { time, id, key, semitones } => Raw {
             expr: clap_event_note_expression {
@@ -369,6 +378,9 @@ struct InList {
     events: Vec<Raw>,
 }
 
+/// Events an instance has room for in one call before it is told otherwise.
+const EVENTS: usize = 256;
+
 unsafe extern "C" fn in_size(list: *const clap_input_events) -> u32 {
     unsafe { (*((*list).ctx as *const InList)).events.len() as u32 }
 }
@@ -382,12 +394,24 @@ unsafe extern "C" fn out_push(_: *const clap_output_events, _: *const clap_event
     true
 }
 
-/// Song position for plugins that sync to the host (LFOs, delays).
+/// The transport plugins get from the engine (HOST-6), for each `process` call: the song
+/// position at its first frame, whether the song plays and loops, the meter, and the engine
+/// clock as `steady_time`. A call never spans a jump: the engine splits the block there.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Transport {
     pub beats: f64,
     pub seconds: f64,
     pub bpm: f64,
+    pub playing: bool,
+    /// The loop, when one is on: in beats and in seconds.
+    pub looping: Option<((f64, f64), (f64, f64))>,
+    /// Time signature: beats per bar and the note value of a beat.
+    pub tsig: (u16, u16),
+    /// The beat the current bar started on, and its number (0 is the first).
+    pub bar_start: f64,
+    pub bar: i32,
+    /// Samples since the engine started: never jumps, never resets (RENDER-6).
+    pub steady: i64,
 }
 
 // ---------------------------------------------------------------- instances
@@ -401,7 +425,10 @@ pub struct Instance {
     max_frames: u32,
     ins: Vec<Vec<f32>>,
     outs: Vec<Vec<f32>>,
-    steady: i64,
+    /// Reserved when the instance is made, so `process` never allocates (RENDER-28).
+    in_ptrs: Vec<*mut f32>,
+    out_ptrs: Vec<*mut f32>,
+    list: InList,
 }
 
 // SAFETY: an instance is used from one thread at a time.
@@ -432,7 +459,9 @@ impl Instance {
             max_frames,
             ins: vec![],
             outs: vec![],
-            steady: 0,
+            in_ptrs: vec![],
+            out_ptrs: vec![],
+            list: InList { events: Vec::with_capacity(EVENTS) },
         };
         if !call!(inst.init()) {
             bail!("`{}` failed to initialise", found.id);
@@ -448,7 +477,15 @@ impl Instance {
         let ch = |c: Option<u32>| c.unwrap_or(0) as usize;
         inst.ins = vec![vec![0.0; max_frames as usize]; ch(inst.info.audio_in)];
         inst.outs = vec![vec![0.0; max_frames as usize]; ch(inst.info.audio_out)];
+        inst.in_ptrs = Vec::with_capacity(inst.ins.len());
+        inst.out_ptrs = Vec::with_capacity(inst.outs.len());
         Ok(inst)
+    }
+
+    /// Make room for `n` events in one `process` call, so it never allocates for them.
+    pub fn reserve_events(&mut self, n: usize) {
+        self.list.events.clear();
+        self.list.events.reserve(n);
     }
 
     fn ext<T>(&self, id: &CStr) -> Option<&T> {
@@ -522,11 +559,15 @@ impl Instance {
     }
 
     /// Process `frames` samples. `inputs` has one slice per input channel (missing
-    /// channels read silence); `outputs` receives one slice per output channel.
+    /// channels read silence); `outputs` receives one slice per output channel. `events` must
+    /// be in time order. Allocates nothing while `events` fits what [`Self::reserve_events`]
+    /// made room for (RENDER-28); the host's lock below is the main-thread callback's (HOST-2,
+    /// step 3b).
     pub fn process(&mut self, frames: u32, inputs: &[&[f32]], outputs: &mut [&mut [f32]], events: &[Event], transport: Transport) -> Result<()> {
         if frames > self.max_frames {
             bail!("asked for {frames} frames, activated for {}", self.max_frames);
         }
+        debug_assert!(events.windows(2).all(|w| w[0].time() <= w[1].time()), "events must come in time order");
         let n = frames as usize;
         for (c, buf) in self.ins.iter_mut().enumerate() {
             match inputs.get(c).or(inputs.first()) {
@@ -534,34 +575,48 @@ impl Instance {
                 None => buf[..n].fill(0.0),
             }
         }
-        let mut in_ptrs: Vec<*mut f32> = self.ins.iter_mut().map(|b| b.as_mut_ptr()).collect();
-        let mut out_ptrs: Vec<*mut f32> = self.outs.iter_mut().map(|b| b.as_mut_ptr()).collect();
-        let audio_in = clap_audio_buffer { data32: in_ptrs.as_mut_ptr(), data64: null_mut(), channel_count: in_ptrs.len() as u32, latency: 0, constant_mask: 0 };
-        let mut audio_out = clap_audio_buffer { data32: out_ptrs.as_mut_ptr(), data64: null_mut(), channel_count: out_ptrs.len() as u32, latency: 0, constant_mask: 0 };
+        self.in_ptrs.clear();
+        self.in_ptrs.extend(self.ins.iter_mut().map(|b| b.as_mut_ptr()));
+        self.out_ptrs.clear();
+        self.out_ptrs.extend(self.outs.iter_mut().map(|b| b.as_mut_ptr()));
+        let audio_in =
+            clap_audio_buffer { data32: self.in_ptrs.as_mut_ptr(), data64: null_mut(), channel_count: self.in_ptrs.len() as u32, latency: 0, constant_mask: 0 };
+        let mut audio_out =
+            clap_audio_buffer { data32: self.out_ptrs.as_mut_ptr(), data64: null_mut(), channel_count: self.out_ptrs.len() as u32, latency: 0, constant_mask: 0 };
 
-        let mut sorted: Vec<Event> = events.to_vec();
-        sorted.sort_by_key(|e| e.time());
-        let mut list = InList { events: sorted.iter().map(raw).collect() };
+        self.list.events.clear();
+        self.list.events.extend(events.iter().map(raw));
+        let beat_time = |b: f64| (b * CLAP_BEATTIME_FACTOR as f64) as i64;
+        let sec_time = |s: f64| (s * CLAP_SECTIME_FACTOR as f64) as i64;
+        let mut flags = CLAP_TRANSPORT_HAS_TEMPO | CLAP_TRANSPORT_HAS_BEATS_TIMELINE | CLAP_TRANSPORT_HAS_SECONDS_TIMELINE | CLAP_TRANSPORT_HAS_TIME_SIGNATURE;
+        if transport.playing {
+            flags |= CLAP_TRANSPORT_IS_PLAYING;
+        }
+        if transport.looping.is_some() {
+            flags |= CLAP_TRANSPORT_IS_LOOP_ACTIVE;
+        }
+        let ((loop_start, loop_end), (loop_start_s, loop_end_s)) = transport.looping.unwrap_or_default();
+        let (tsig_num, tsig_denom) = if transport.tsig.0 == 0 { (4, 4) } else { transport.tsig };
         let transport_event = clap_event_transport {
             header: header(std::mem::size_of::<clap_event_transport>(), 0, CLAP_EVENT_TRANSPORT),
-            flags: CLAP_TRANSPORT_HAS_TEMPO | CLAP_TRANSPORT_HAS_BEATS_TIMELINE | CLAP_TRANSPORT_HAS_SECONDS_TIMELINE | CLAP_TRANSPORT_IS_PLAYING,
-            song_pos_beats: (transport.beats * CLAP_BEATTIME_FACTOR as f64) as i64,
-            song_pos_seconds: (transport.seconds * CLAP_SECTIME_FACTOR as f64) as i64,
+            flags,
+            song_pos_beats: beat_time(transport.beats),
+            song_pos_seconds: sec_time(transport.seconds),
             tempo: transport.bpm,
             tempo_inc: 0.0,
-            loop_start_beats: 0,
-            loop_end_beats: 0,
-            loop_start_seconds: 0,
-            loop_end_seconds: 0,
-            bar_start: 0,
-            bar_number: 0,
-            tsig_num: 4,
-            tsig_denom: 4,
+            loop_start_beats: beat_time(loop_start),
+            loop_end_beats: beat_time(loop_end),
+            loop_start_seconds: sec_time(loop_start_s),
+            loop_end_seconds: sec_time(loop_end_s),
+            bar_start: beat_time(transport.bar_start),
+            bar_number: transport.bar,
+            tsig_num,
+            tsig_denom,
         };
-        let in_events = clap_input_events { ctx: &mut list as *mut InList as *mut c_void, size: Some(in_size), get: Some(in_get) };
+        let in_events = clap_input_events { ctx: &mut self.list as *mut InList as *mut c_void, size: Some(in_size), get: Some(in_get) };
         let out_events = clap_output_events { ctx: null_mut(), try_push: Some(out_push) };
         let process = clap_process {
-            steady_time: self.steady,
+            steady_time: transport.steady,
             frames_count: frames,
             transport: &transport_event,
             audio_inputs: if self.ins.is_empty() { null() } else { &audio_in },
@@ -575,7 +630,6 @@ impl Instance {
         if status == CLAP_PROCESS_ERROR {
             bail!("`{}` reported a processing error", self.info.found.id);
         }
-        self.steady += frames as i64;
         for (c, out) in outputs.iter_mut().enumerate() {
             match self.outs.get(c) {
                 Some(src) => out[..n].copy_from_slice(&src[..n]),
@@ -596,7 +650,6 @@ impl Instance {
     /// Back to silence: stop all notes, clear tails.
     pub fn reset(&mut self) -> Result<()> {
         call!(self.reset());
-        self.steady = 0;
         Ok(())
     }
 
