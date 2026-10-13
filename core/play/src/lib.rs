@@ -44,8 +44,9 @@ const SCRATCH: usize = 8192;
 /// Objects the callback keeps while the retired channel is full.
 const GONE: usize = 8;
 
-/// The process's clock for callback stamps, in nanoseconds.
-fn now_ns() -> u64 {
+/// The process's clock for callback stamps, in nanoseconds: one for every player, read without a
+/// lock, so a caller can stamp a request before it waits for anything.
+pub fn now_ns() -> u64 {
     static EPOCH: OnceLock<Instant> = OnceLock::new();
     EPOCH.get_or_init(Instant::now).elapsed().as_nanos() as u64
 }
@@ -703,10 +704,11 @@ impl Player {
     }
 
     /// Change a written value in the playing renderer, from the next block. A preview: dropped
-    /// when the queue is full, as a newer one follows.
-    pub fn set_const(&self, origin: Origin, value: f64) {
+    /// when the queue is full, as a newer one follows. Returns the message's sequence number when
+    /// it was queued, for [`Player::applied`].
+    pub fn set_const(&self, origin: Origin, value: f64) -> Option<u64> {
         let seq = self.next_seq.fetch_add(1, Ordering::Relaxed) + 1;
-        let _ = self.tx.try_send(Msg::Engine(Envelope { seq, msg: EngineMsg::SetConst(Box::new(origin), value) }));
+        self.tx.try_send(Msg::Engine(Envelope { seq, msg: EngineMsg::SetConst(Box::new(origin), value) })).ok().map(|_| seq)
     }
 
     /// Deliver an accepted value or rollback even when previews filled the queue: waits for

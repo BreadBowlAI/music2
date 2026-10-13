@@ -1,9 +1,11 @@
 //! The timed gates as the app meets them: a reference project open in the server's own
 //! [`Graph`], playing in real time on the silent player (`M2_AUDIO=none`), driven through the
-//! calls the UI makes (`seek`, `write_notes`, `add_effect`), timed on the wall clock.
+//! calls the UI makes (`seek`, `write_notes`, `add_effect`, a knob drag's lease), timed on the wall
+//! clock.
 //!
-//! What only the server shows: a seek that waits behind a compile holding the project
-//! (RENDER-29), and a playhead that jumps back after a rebuild (RENDER-8). Each change is timed as
+//! What only the server shows: a seek or a knob drag that waits behind a compile on the session
+//! (RENDER-29, WRITE-22), a drag that an outside save ends, and a playhead that jumps back after a
+//! rebuild (RENDER-8). Each change is timed as
 //! step 3a's design (§15) counts it: to when it is heard, which is the start of the audio callback
 //! that took it ([`Graph::applied`]), plus the frame its block starts at in that callback, plus one
 //! device buffer to the speaker. A seek counts from when it was asked for; an edit from when the
@@ -92,8 +94,8 @@ fn taken_ms(graph: &Graph, t: EditTiming, from_ns: u64, rate: u32) -> Result<f64
     Ok((taken - from_ns as f64) / 1e6)
 }
 
-/// Save a code change to `tracks/t01.ts` the way the code editor does: it compiles while holding
-/// the project.
+/// Save a code change to `tracks/t01.ts` the way the code editor does: it compiles on the session's
+/// actor, which the transport must not wait for.
 fn touch(graph: &Graph, dir: &Path, n: usize) -> Result<()> {
     let path = "tracks/t01.ts";
     let base = std::fs::read_to_string(dir.join(path))?;
@@ -105,8 +107,8 @@ fn touch(graph: &Graph, dir: &Path, n: usize) -> Result<()> {
     Ok(())
 }
 
-/// G1 through the server: seeks from 1:00, a third of them while a code save compiles holding the
-/// project. A seek must not wait for it (RENDER-29), and must be heard within 50 ms of the call.
+/// G1 through the server: seeks from 1:00, a third of them while a code save compiles on the
+/// session. A seek must not wait for it (RENDER-29), and must be heard within 50 ms of the call.
 pub fn seek(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     let dir = lab.reference(&o.reference)?;
     let song = lab.compile(&dir)?;
@@ -128,16 +130,19 @@ pub fn seek(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
             while !started.load(Ordering::Relaxed) {
                 std::hint::spin_loop();
             }
-            // Into the compile, which holds the project.
+            // Into the compile.
             std::thread::sleep(Duration::from_millis(20));
             Some(h)
         } else {
             None
         };
-        let t = Instant::now();
+        // Timed from the call, on the engine's clock read without a lock: a seek that waits for a
+        // lock the session holds over a compile is counted, which the seek's own stamp, taken
+        // inside, wouldn't show (RENDER-29).
+        let (t, from) = (Instant::now(), graph.now_ns());
         graph.seek(target)?;
         let timing = graph.last_edit().context("the seek left no timing")?;
-        let ms = heard_ms(&graph, timing, timing.requested_ns, song.rate)?;
+        let ms = heard_ms(&graph, timing, from, song.rate)?;
         // Once a later callback has published it, the playhead is the target, plus what played since.
         std::thread::sleep(Duration::from_millis(30));
         let at = graph.status().beat;
@@ -154,7 +159,7 @@ pub fn seek(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     }
     let (f, b) = (Summary::of(&free), Summary::of(&busy));
     out.check("audible within 50 ms", f.max <= 50.0, f);
-    out.check("audible within 50 ms while a compile holds the project", b.max <= 50.0 || b.n == 0, b);
+    out.check("audible within 50 ms while the session compiles", b.max <= 50.0 || b.n == 0, b);
     out.check(
         "lands on its target",
         misplaced.is_empty(),
@@ -215,12 +220,13 @@ impl Timed {
         Ok(())
     }
 
-    fn report(&self, out: &mut Outcome, budget: f64) {
+    /// What was timed, each line named after `on` (empty for the reference project).
+    fn report(&self, out: &mut Outcome, on: &str, budget: f64) {
         let heard = Summary::of(&self.heard);
-        out.info("the session's own work, its compile included (not counted)", Summary::of(&self.session));
-        out.info("of what is counted, the server's before it sends", Summary::of(&self.prepare));
-        out.info("then waiting for the next callback to take it (one device buffer at most)", Summary::of(&self.taken));
-        out.check(format!("audible within compile + {budget:.0} ms"), heard.max <= budget, format!("past the session's work: {heard}"));
+        out.info(format!("{on}the session's own work, its compile included (not counted)"), Summary::of(&self.session));
+        out.info(format!("{on}of what is counted, the server's before it sends"), Summary::of(&self.prepare));
+        out.info(format!("{on}then waiting for the next callback to take it (one device buffer at most)"), Summary::of(&self.taken));
+        out.check(format!("{on}audible within compile + {budget:.0} ms"), heard.max <= budget, format!("past the session's work: {heard}"));
     }
 }
 
@@ -250,7 +256,7 @@ pub fn note_edit(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         std::thread::sleep(Duration::from_secs_f64(rng.range(0.3, 1.0)));
     }
     let back = sampler.finish();
-    timed.report(&mut out, 20.0);
+    timed.report(&mut out, "", 20.0);
     out.check("the playhead never jumps back", back <= 1e-9, format!("largest step back {back:.3} beats"));
     out.skip("the new note is heard where it was written", UNHEARD);
     Ok(out)
@@ -283,12 +289,453 @@ pub fn add_effect(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         std::thread::sleep(Duration::from_secs_f64(rng.range(0.3, 1.0)));
     }
     let back = sampler.finish();
-    timed.report(&mut out, 100.0);
+    timed.report(&mut out, "", 100.0);
     out.check(
         "no jump back",
         back <= 1e-9,
         format!("largest step back {back:.3} beats ({:.0} ms)", back * song.data.tempo().seconds_at(1.0) * 1e3),
     );
     out.skip("the added effect is heard (RENDER-25)", UNHEARD);
+    match with_plugins(lab, "with-plugins-add-effect")? {
+        Err(why) => out.skip("with-plugins", why),
+        Ok((dir, graph)) => {
+            let measured = add_effect_with_plugins(&mut out, lab, o, &dir, &graph);
+            // Its plugin instances are destroyed before the program ends, whatever happened.
+            graph.close();
+            measured?;
+        }
+    }
     Ok(out)
+}
+
+/// G5 on `examples/with-plugins`, playing from its start: a delay after the kick, then after the
+/// lead's last plugin (Airwindows). Each activation must carry Surge XT and Airwindows (HOST-5),
+/// so building the new renderer creates no plugin instance and the server's part before it sends
+/// costs no plugin load (RENDER-25); and the playhead never jumps back.
+fn add_effect_with_plugins(out: &mut Outcome, lab: &Lab, o: &Opts, dir: &Path, graph: &Arc<Graph>) -> Result<()> {
+    let rate = graph.state().context("no project is open")?["sample_rate"].as_u64().context("no rate")? as u32;
+    let calls: Vec<String> = {
+        let s = lab.session(dir)?;
+        let sites = &s.accepted().compiled.sites;
+        let kick = sites.iter().filter(|x| x.in_project && x.file == "tracks/kick.ts" && x.callee == "kick");
+        let lead = sites.iter().filter(|x| x.in_project && x.file == "tracks/lead.ts" && x.callee == "plugin").max_by_key(|x| x.ordinal);
+        kick.take(1).chain(lead).map(|x| format!("{}#{}", x.file, x.ordinal)).collect()
+    };
+    if calls.len() != 2 {
+        bail!("no kick or lead plugin in with-plugins: {calls:?}");
+    }
+    let made = created();
+    let mut rng = Rng::new(o.seed);
+    let mut timed = Timed::default();
+    let sampler = Sampler::start(graph);
+    for call in &calls {
+        let (token, revision) = session_and_revision(graph)?;
+        graph.add_effect(token, revision, call, "std/fx", "delay")?;
+        timed.add(graph, rate)?;
+        std::thread::sleep(Duration::from_secs_f64(rng.range(0.3, 1.0)));
+    }
+    let back = sampler.finish();
+    timed.report(out, "with-plugins: ", 100.0);
+    out.check("with-plugins: no jump back", back <= 1e-9, format!("largest step back {back:.3} beats"));
+    out.check(
+        "with-plugins: each activation carried every plugin instance, creating none",
+        created() == made,
+        format!("{} created over {} activations", created() - made, calls.len()),
+    );
+    Ok(())
+}
+
+/// The ids of the knobs written in `file` with `literal`, in the order of their lines (the
+/// reference project's channel levels in song.ts: t01 first). Read by a session of its own: control
+/// ids are `file#ordinal/arg`, the same in the server's for the same code.
+fn file_knobs(lab: &Lab, dir: &Path, file: &str, literal: &str) -> Result<Vec<String>> {
+    let s = lab.session(dir)?;
+    let mut found: Vec<(u32, String)> =
+        s.controls().into_iter().filter(|c| c.file == file && c.literal == literal).map(|c| (c.line, c.id)).collect();
+    found.sort();
+    if found.is_empty() {
+        bail!("no knob written {literal} in {file}");
+    }
+    Ok(found.into_iter().map(|(_, id)| id).collect())
+}
+
+/// When update `seq` was heard, in milliseconds after `from_ns`: the start of the callback that
+/// took it, plus its block's frame, plus one device buffer. Each stamp is read before the next
+/// update is sent (the engine keeps only the last 16), and one that never comes fails the gate.
+fn update_heard_ms(graph: &Graph, seq: u64, from_ns: u64, rate: u32) -> Option<f64> {
+    let t = Instant::now();
+    loop {
+        if let Some(a) = graph.applied(seq) {
+            let taken = a.callback_ns as f64 + a.frame as f64 * 1e9 / rate as f64;
+            return Some((taken - from_ns as f64) / 1e6 + period(rate) * 1e3);
+        }
+        if t.elapsed() > Duration::from_millis(50) {
+            return None;
+        }
+        std::thread::sleep(Duration::from_micros(200));
+    }
+}
+
+/// tracks/t02.ts with a counted busy loop ahead of its track: QuickJS spins about 1e8 empty
+/// iterations a second, and `Date` is gone from the build, so a loop is the only way to make a
+/// build slow.
+fn slow(base: &str, n: u64) -> String {
+    format!("for (let i = 0; i < {n}; i++) {{}}\n{base}")
+}
+
+/// G8 through the server: a knob drag's updates while the session compiles a slow save (WRITE-22,
+/// RENDER-29). The drag is a lease on t01's channel level, updated every 10 ms, each heard and
+/// timed from its call; meanwhile another thread saves tracks/t02.ts with a busy loop that makes
+/// its compile last over a second, then saves it back. Updates during the compile must be heard as
+/// fast as the others. Gestures begun one data revision and one code change behind resolve without
+/// the session; one forced through it waits for the compile (the negative control).
+pub fn previews(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
+    // Four knobs: the drag, two begins behind, and the negative control (`--quick`'s p3 has three).
+    let reference = m2_session::reference::Reference { tracks: o.reference.tracks.max(4), ..o.reference };
+    let dir = lab.reference(&reference)?;
+    let song = lab.compile(&dir)?;
+    let graph = open(&dir, &song)?;
+    let mut out = Outcome::new("G8 previews while compiling", "WRITE-22, RENDER-29", &format!("server on {}", reference.name()));
+    let knobs = file_knobs(lab, &dir, "song.ts", "-12")?;
+    if knobs.len() < 4 {
+        bail!("the reference project needs 4 tracks for G8");
+    }
+    let (token, r0) = session_and_revision(&graph)?;
+    // A code revision (a comment in tracks/t04.ts), then a data revision (t03's lane).
+    let t04 = std::fs::read_to_string(dir.join("tracks/t04.ts"))?;
+    graph.write_file(None, "tracks/t04.ts", &t04, &format!("// a comment\n{t04}"))?;
+    let (_, r1) = session_and_revision(&graph)?;
+    let lane = std::fs::read_to_string(dir.join("data/t03/notes.json"))?;
+    let LaneData::Notes(clips) = LaneData::read(&lane, &LaneKind::Notes).map_err(|e| anyhow!("{e:?}"))? else { bail!("not notes") };
+    graph.write_notes(token, r1, "t03", "notes", &clips[..clips.len() - 1])?;
+    let (_, r2) = session_and_revision(&graph)?;
+    let lease = graph.begin(token, r2, &knobs[0], Default::default())?.lease;
+
+    let base = std::fs::read_to_string(dir.join("tracks/t02.ts"))?;
+    let saver = {
+        let (g, base) = (graph.clone(), base.clone());
+        std::thread::spawn(move || -> Result<Vec<f64>> {
+            std::thread::sleep(Duration::from_millis(500));
+            let mut took = vec![];
+            for (from, to) in [(base.clone(), slow(&base, 150_000_000)), (slow(&base, 150_000_000), base)] {
+                let t = Instant::now();
+                g.write_file(None, "tracks/t02.ts", &from, &to)?;
+                took.push(t.elapsed().as_secs_f64() * 1e3);
+            }
+            Ok(took)
+        })
+    };
+    let (mut during, mut free, mut missing, mut begins) = (vec![], vec![], 0, vec![]);
+    let mut slow_begin = None;
+    let mut db = -12.0;
+    for _ in 0..300 {
+        let tick = Instant::now();
+        db = if db > -6.0 { -12.0 } else { db + 0.1 };
+        let busy = graph.busy().is_some();
+        // From the call: the clock takes no lock, so a wait for one inside `update` is counted.
+        let from = graph.now_ns();
+        match graph.update(lease, None, (db * 10.0f64).round() / 10.0)? {
+            Some(seq) => match update_heard_ms(&graph, seq, from, song.rate) {
+                Some(ms) if busy => during.push(ms),
+                Some(ms) => free.push(ms),
+                None => missing += 1,
+            },
+            None => missing += 1,
+        }
+        if busy && begins.is_empty() {
+            // One data revision behind (the ring), and one code change behind (the aliases).
+            let t = Instant::now();
+            graph.begin(token, r1, &knobs[1], Default::default())?;
+            begins.push(t.elapsed().as_secs_f64() * 1e3);
+            let t = Instant::now();
+            graph.begin(token, r0, &knobs[2], Default::default())?;
+            begins.push(t.elapsed().as_secs_f64() * 1e3);
+            let (g, id) = (graph.clone(), knobs[3].clone());
+            slow_begin = Some(std::thread::spawn(move || {
+                let t = Instant::now();
+                g.begin_via_actor(token, r2, &id, Default::default()).map(|_| t.elapsed().as_secs_f64() * 1e3)
+            }));
+        }
+        if saver.is_finished() && !free.is_empty() && !during.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10).saturating_sub(tick.elapsed()));
+    }
+    let took = saver.join().map_err(|_| anyhow!("the saver panicked"))??;
+    let compiles: Vec<f64> = graph.busy_spans().iter().map(|(a, b)| (b - a) as f64 / 1e6).filter(|ms| *ms > 100.0).collect();
+    out.info("the saves (slow, then back), until they replied", format!("{:.0?} ms; the session's long requests {compiles:.0?} ms", took));
+    let (d, f) = (Summary::of(&during), Summary::of(&free));
+    if compiles.iter().all(|ms| *ms < 1000.0) {
+        out.skip("updates during the compile", format!("void: no compile lasted a second ({compiles:.0?} ms)"));
+    } else {
+        out.check("every update's stamp arrived", missing == 0, format!("{missing} missing"));
+        out.check("during a compile: heard within 50 ms", d.max <= 50.0 && d.n >= 20, d);
+        out.check("during a compile: p95 within 2 ms of the free p95", d.p95 <= f.p95 + 2.0, format!("free: {f}"));
+    }
+    out.check(
+        "begins one data revision and one code change behind return within 20 ms",
+        begins.len() == 2 && begins.iter().all(|ms| *ms < 20.0),
+        format!("{begins:.2?} ms"),
+    );
+    match slow_begin.map(|h| h.join()) {
+        Some(Ok(Ok(ms))) => out.info("negative control: a begin through the session, during the compile", format!("{ms:.0} ms")),
+        _ => out.info("negative control", "didn't run"),
+    }
+    match with_plugins(lab, "with-plugins-previews")? {
+        Err(why) => out.skip("with-plugins", why),
+        Ok((dir, graph)) => {
+            let measured = previews_with_plugins(&mut out, lab, &dir, &graph);
+            // Its plugin instances are destroyed before the program ends, whatever happened.
+            graph.close();
+            measured?;
+        }
+    }
+    Ok(out)
+}
+
+/// `examples/with-plugins` copied into the lab and playing from its start in a fresh [`Graph`], or
+/// why not: its plugins aren't on the CLAP search path (`CLAP_PATH`, never the user's own folder
+/// in CI).
+fn with_plugins(lab: &Lab, name: &str) -> Result<std::result::Result<(std::path::PathBuf, Arc<Graph>), String>> {
+    let dir = lab.copy(&crate::fixture("examples/with-plugins"), name)?;
+    let missing = lab.session(&dir)?.problems().iter().find(|d| d.code == "plugin.missing").map(|d| d.to_string());
+    if let Some(d) = missing {
+        return Ok(Err(format!("{d} (CLAP_PATH says where Surge XT and Airwindows are)")));
+    }
+    let graph = Arc::new(Graph::default());
+    graph.open(&dir)?;
+    graph.transport("play")?;
+    std::thread::sleep(Duration::from_millis(500));
+    Ok(Ok((dir, graph)))
+}
+
+/// Plugin instances this process has created so far (`m2_plugins::InProcess`).
+fn created() -> u64 {
+    m2_plugins::InProcess::counts().0
+}
+
+/// G8 on `examples/with-plugins`: a lease on the lead's channel level in song.ts, updated every
+/// 10 ms, while a save to tracks/kick.ts compiles for over a second and changes the kick's
+/// envelope, then is saved back. Both saves activate a new renderer, which must carry Surge XT and
+/// Airwindows (HOST-5): the drag's updates are heard as fast during the compile, and it aims at the
+/// newest renderer after.
+fn previews_with_plugins(out: &mut Outcome, lab: &Lab, dir: &Path, graph: &Arc<Graph>) -> Result<()> {
+    let rate = graph.state().context("no project is open")?["sample_rate"].as_u64().context("no rate")? as u32;
+    let knob = file_knobs(lab, dir, "song.ts", "-4")?.remove(0);
+    let (token, revision) = session_and_revision(graph)?;
+    let lease = graph.begin(token, revision, &knob, Default::default())?.lease;
+    let generation = graph.leases().first().and_then(|l| l.generation);
+    let made = created();
+    let kick = std::fs::read_to_string(dir.join("tracks/kick.ts"))?;
+    let slow_kick = slow(&kick, 150_000_000).replace("ms(150)", "ms(160)");
+    let saver = {
+        let (g, kick) = (graph.clone(), kick.clone());
+        std::thread::spawn(move || -> Result<Vec<f64>> {
+            std::thread::sleep(Duration::from_millis(500));
+            let mut took = vec![];
+            for (from, to) in [(kick.clone(), slow_kick.clone()), (slow_kick, kick)] {
+                let t = Instant::now();
+                g.write_file(None, "tracks/kick.ts", &from, &to)?;
+                took.push(t.elapsed().as_secs_f64() * 1e3);
+            }
+            Ok(took)
+        })
+    };
+    let (mut during, mut free, mut missing) = (vec![], vec![], 0);
+    let mut db = -4.0;
+    for _ in 0..400 {
+        let tick = Instant::now();
+        db = if db > 2.0 { -4.0 } else { db + 0.1 };
+        let busy = graph.busy().is_some();
+        let from = graph.now_ns();
+        match graph.update(lease, None, (db * 10.0f64).round() / 10.0)? {
+            Some(seq) => match update_heard_ms(graph, seq, from, rate) {
+                Some(ms) if busy => during.push(ms),
+                Some(ms) => free.push(ms),
+                None => missing += 1,
+            },
+            None => missing += 1,
+        }
+        if saver.is_finished() && !free.is_empty() && !during.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10).saturating_sub(tick.elapsed()));
+    }
+    let took = saver.join().map_err(|_| anyhow!("the saver panicked"))??;
+    let compiles: Vec<f64> = graph.busy_spans().iter().map(|(a, b)| (b - a) as f64 / 1e6).filter(|ms| *ms > 100.0).collect();
+    out.info(
+        "with-plugins: the saves (slow, then back), until they replied",
+        format!("{took:.0?} ms; the session's long requests {compiles:.0?} ms"),
+    );
+    let (d, f) = (Summary::of(&during), Summary::of(&free));
+    if compiles.iter().all(|ms| *ms < 1000.0) {
+        out.skip("with-plugins: updates during the compile", format!("void: no compile lasted a second ({compiles:.0?} ms)"));
+    } else {
+        out.check("with-plugins: every update's stamp arrived", missing == 0, format!("{missing} missing"));
+        out.check("with-plugins: during a compile: heard within 50 ms", d.max <= 50.0 && d.n >= 20, d);
+        out.check("with-plugins: during a compile: p95 within 2 ms of the free p95", d.p95 <= f.p95 + 2.0, format!("free: {f}"));
+    }
+    let now = graph.leases().into_iter().find(|l| l.lease == lease).and_then(|l| l.generation);
+    out.check(
+        "with-plugins: both saves activated renderers that carried every plugin instance, and the drag aims at the newest",
+        created() == made && now.is_some() && now != generation,
+        format!("{} instances created; the drag's renderer {generation:?} then {now:?}", created() - made),
+    );
+    Ok(())
+}
+
+/// G9 through the server: a knob drag through an agent's saves (WRITE-22). On p16, a lease on t01's
+/// channel level in song.ts is updated every 10 ms for 10 s, each stamp read as it comes, while an
+/// "agent" saves tracks/t05.ts every 700 ms (a comment, an added `delay`, its removal), and once
+/// inserts a comment at the top of song.ts and a line at its bottom. Every save compiles and
+/// activates a new renderer; the drag must go on through all of them, aimed at each new one, and
+/// its commit must write song.ts alone, leaving every outside edit on disk. The same runs on
+/// `examples/with-plugins` when its plugins are installed: the drag is the lead's channel level in
+/// song.ts and the agent edits tracks/kick.ts, so each save activates a renderer that carries the
+/// plugin instances (HOST-5). (A plugin parameter written in code, Airwindows' dry/wet, isn't a
+/// knob the session offers yet, so it can't be dragged.)
+pub fn drag(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
+    let mut out = Outcome::new("G9 drag through outside saves", "WRITE-22, WRITE-12, HOST-5", &format!("server on {}", o.reference.name()));
+    let dir = lab.reference(&o.reference)?;
+    let song = lab.compile(&dir)?;
+    let graph = open(&dir, &song)?;
+    let knob = file_knobs(lab, &dir, "song.ts", "-12")?.remove(0);
+    let t05 = std::fs::read_to_string(dir.join("tracks/t05.ts"))?;
+    let delayed = t05.replace("=> ", "=> delay(").replacen(");\n", "));\n", 1);
+    let saves = [format!("// the agent was here\n{t05}"), delayed, t05.clone()];
+    drag_through(
+        &mut out,
+        &o.reference.name(),
+        &graph,
+        &dir,
+        (&knob, "song.ts", |v| format!("db({v})")),
+        ("tracks/t05.ts", &saves),
+        -12.0,
+        6.0,
+    )?;
+
+    let (dir, graph) = match with_plugins(lab, "with-plugins-drag")? {
+        Ok(open) => open,
+        Err(why) => {
+            out.skip("with-plugins", why);
+            return Ok(out);
+        }
+    };
+    let knob = file_knobs(lab, &dir, "song.ts", "-4")?.remove(0);
+    let kick = std::fs::read_to_string(dir.join("tracks/kick.ts"))?;
+    let saves = [format!("// the agent was here\n{kick}"), kick.replace("ms(150)", "ms(160)"), kick.clone()];
+    let dragged = drag_through(
+        &mut out,
+        "with-plugins",
+        &graph,
+        &dir,
+        (&knob, "song.ts", |v| format!("db({v})")),
+        ("tracks/kick.ts", &saves),
+        -4.0,
+        3.0,
+    );
+    // Its plugin instances are destroyed before the program ends, whatever happened.
+    graph.close();
+    dragged?;
+    Ok(out)
+}
+
+/// A knob on `song`'s files: its id, its file, and how its value is spelled there.
+type Knob<'a> = (&'a str, &'a str, fn(f64) -> String);
+
+/// G9's drag: lease `knob`, update it every 10 ms for 10 s from `from` over `span`, while an agent
+/// saves `other`'s texts in turn every 700 ms, and once the knob's own file with a line above
+/// everything and one below; then commit it.
+#[allow(clippy::too_many_arguments)]
+fn drag_through(
+    out: &mut Outcome,
+    on: &str,
+    graph: &Arc<Graph>,
+    dir: &Path,
+    (knob, file, spelled): Knob,
+    (other, saves): (&str, &[String]),
+    from: f64,
+    span: f64,
+) -> Result<()> {
+    let (token, revision) = session_and_revision(graph)?;
+    let lease = graph.begin(token, revision, knob, Default::default())?.lease;
+    let stop = Arc::new(AtomicBool::new(false));
+    let agent = {
+        let (g, d, stop, saves, other, own) =
+            (graph.clone(), dir.to_path_buf(), stop.clone(), saves.to_vec(), other.to_string(), file.to_string());
+        std::thread::spawn(move || -> Result<(Vec<f64>, Vec<Option<u64>>)> {
+            let (mut took, mut generations) = (vec![], vec![]);
+            let mut n = 0;
+            while !stop.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(700));
+                // Once, in the dragged knob's own file: lines above and below its call.
+                let (path, text) = if n == 6 {
+                    let s = std::fs::read_to_string(d.join(&own))?;
+                    (own.as_str(), format!("// the agent was here too\n{s}// and here\n"))
+                } else {
+                    (other.as_str(), saves[n % saves.len()].clone())
+                };
+                std::fs::write(d.join(path), text)?;
+                let t = Instant::now();
+                g.poll();
+                took.push(t.elapsed().as_secs_f64() * 1e3);
+                generations.push(g.leases().first().and_then(|l| l.generation));
+                n += 1;
+            }
+            Ok((took, generations))
+        })
+    };
+    let rate = graph.state().context("no project is open")?["sample_rate"].as_u64().context("no rate")? as u32;
+    let (mut sent, mut failed, mut missing) = (0, vec![], 0);
+    let mut value = from;
+    let t = Instant::now();
+    while t.elapsed() < Duration::from_secs(10) {
+        let tick = Instant::now();
+        value = if value >= from + span { from } else { ((value + span / 60.0) * 100.0).round() / 100.0 };
+        let at = graph.now_ns();
+        match graph.update(lease, None, value) {
+            Ok(Some(seq)) => {
+                sent += 1;
+                if update_heard_ms(graph, seq, at, rate).is_none() {
+                    missing += 1;
+                }
+            }
+            Ok(None) => missing += 1,
+            Err(e) => failed.push(format!("{e:#}")),
+        }
+        std::thread::sleep(Duration::from_millis(10).saturating_sub(tick.elapsed()));
+    }
+    stop.store(true, Ordering::Relaxed);
+    let (took, generations) = agent.join().map_err(|_| anyhow!("the agent panicked"))??;
+    out.info(format!("{on}: each save, taken in (compile, phase 1 and phase 2)"), Summary::of(&took));
+    out.check(
+        format!("{on}: no update failed, and every one was heard"),
+        failed.is_empty() && missing == 0,
+        format!(
+            "{sent} heard, {missing} missing; {}",
+            failed.first().map_or("no failure".into(), |f| format!("{} failed: {f}", failed.len()))
+        ),
+    );
+    let new = generations.windows(2).filter(|w| w[0] != w[1] && w[1].is_some()).count() + 1;
+    out.check(
+        format!("{on}: after each save the drag aims at the new renderer"),
+        generations.iter().all(Option::is_some) && new == generations.len(),
+        format!("{} saves, {new} renderers aimed at", generations.len()),
+    );
+    let alive = graph.leases().iter().any(|l| l.lease == lease);
+    out.check(format!("{on}: the drag is alive at the end"), alive, if alive { "yes" } else { "it ended" });
+    let before = std::fs::read_to_string(dir.join(other))?;
+    let committed = graph.commit(lease, value, None)?;
+    let written = match committed {
+        m2_server::graph::Committed::Written(v) => v["file"].as_str().unwrap_or_default().to_string(),
+        m2_server::graph::Committed::Pending { .. } => "pending".into(),
+    };
+    let own = std::fs::read_to_string(dir.join(file))?;
+    let kept = own.contains("// the agent was here too") && std::fs::read_to_string(dir.join(other))? == before;
+    out.check(
+        format!("{on}: the commit writes {file} alone with the last value, and every outside edit stays"),
+        written == file && kept && own.contains(&spelled(value)),
+        format!("wrote {written}; outside edits kept: {kept}"),
+    );
+    Ok(())
 }

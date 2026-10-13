@@ -35,11 +35,12 @@ pub mod data;
 pub mod engine;
 pub mod event;
 pub mod packages;
+pub mod plugins;
 pub mod sched;
 pub mod trace;
 pub mod transport;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -52,6 +53,7 @@ pub use data::{decls, lane_kind};
 pub use engine::{Applied, CallbackStamp, Engine, Envelope, Msg, Retired};
 pub use event::{Event, Events};
 pub use packages::{Effect, Package, PackageSet};
+pub use plugins::{Carry, CarryKey, Fresh, InstanceSource, PluginInstance};
 pub use sched::{Caps, LaneSwap, NotesData};
 pub use trace::{TraceEntry, TraceKind};
 pub use transport::{Cmd, Jump, Loop, MAX_RUNS, Run, Runs, Transport};
@@ -174,10 +176,10 @@ struct PolyNode {
     plan: Vec<Planned>,
 }
 
-/// A hosted plugin and what feeds it.
+/// A hosted plugin and what feeds it. It reaches its instance only through the host (P11).
 struct PluginNode {
     name: String,
-    inst: m2_plugins::Instance,
+    inst: Arc<PluginInstance>,
     audio_in: Option<Input>,
     /// The notes lane it plays, if any.
     notes: Option<usize>,
@@ -187,40 +189,80 @@ struct PluginNode {
     /// its voices through a reset, and nothing else would end them (RENDER-10, RENDER-26a). As
     /// big as `keys`.
     ended: Vec<(u32, i16)>,
+    /// Notes a carried instance held that this node's scheduler didn't adopt: each let go (a
+    /// NoteOff, not a choke) at frame 0 of its first call (§5.3). As big as any node that used the
+    /// instance could hold.
+    release: Vec<(u32, i16)>,
     /// (parameter id, input, value last sent).
     params: Vec<(u32, Input, Option<f32>)>,
-    /// One call's events, sized when built (RENDER-28).
-    events: Vec<m2_plugins::Event>,
+    /// One call's events in and out, sized when built (RENDER-28). What comes out (parameter
+    /// gestures, HOST-4) is kept for one call: nothing consumes it before plugin windows.
+    events: m2_plugins::Events,
+    out: m2_plugins::Events,
+    /// During an activation's crossfade, the node of the new renderer its instance was carried
+    /// into: that node processes the instance, and this one only copies its output.
+    lent: Option<usize>,
+    /// What its last call reported: whether the engine may idle (RENDER-6a).
+    status: m2_plugins::Status,
+    /// NoteOffs sent to it since it was built, and the engine sample of the last (gates).
+    offs: u64,
+    last_off: Option<u64>,
+}
+
+/// A top-level plugin node, as the gates and tests see it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PluginView {
+    pub handle: m2_plugins::Handle,
+    /// The notes sounding into it: `(note id, key)`.
+    pub notes: Vec<(u32, i16)>,
+    /// NoteOffs sent to it since it was built, and the engine sample of the last.
+    pub offs: u64,
+    pub last_off: Option<u64>,
+    /// Lent to the renderer that replaced this one, for the crossfade.
+    pub lent: bool,
+    pub status: m2_plugins::Status,
 }
 
 /// How often automation is sampled for plugins, in samples.
 const PARAM_STEP: usize = 16;
 
+/// Events a plugin may output in one call (HOST-4); more are counted.
+const OUT_EVENTS: usize = 256;
+
 /// One call's events for a plugin, for the block's frames `lo..hi`: first a choke and a NoteOff
-/// at its first frame for each of `ended`, then the lane's note events (already in order) from
-/// `*next` on, merged with `params` sampled every [`PARAM_STEP`] frames. At one frame parameters
-/// come after notes, the order a stable sort by time gave before. An On becomes a NoteOn (and a
-/// Tuning between keys), an Off a NoteOff for the key `keys` holds for it. Never allocates while
-/// `out` and `keys` have room (RENDER-28).
+/// at its first frame for each of `ended`, and a NoteOff for each of `release`, then the lane's
+/// note events (already in order) from `*next` on, merged with `params` sampled every
+/// [`PARAM_STEP`] frames. At one frame parameters come after notes, the order a stable sort by
+/// time gave before. An On becomes a NoteOn (and a Tuning between keys), an Off a NoteOff for the
+/// key `keys` holds for it. Returns how many NoteOffs it sent, and the time of the last. Never
+/// allocates: `out` and `keys` keep their room (RENDER-28).
 #[allow(clippy::too_many_arguments)]
 fn plugin_events(
     ended: &[(u32, i16)],
+    release: &[(u32, i16)],
     notes: &[Event],
     next: &mut usize,
     params: &mut [(u32, Input, Option<f32>)],
     bufs: &[Vec<Buf>],
     (lo, hi): (usize, usize),
     keys: &mut Vec<(u32, i16)>,
-    out: &mut Vec<m2_plugins::Event>,
-) {
+    out: &mut m2_plugins::Events,
+) -> (u32, Option<u32>) {
     use m2_plugins::Event as P;
     out.clear();
+    let (mut offs, mut last) = (0, None);
     // A choke ends a note at once where the plugin knows how; the NoteOff releases it where not.
     for &(id, key) in ended {
         out.push(P::NoteChoke { time: 0, id: id as i32, key });
         out.push(P::NoteOff { time: 0, id: id as i32, key });
+        (offs, last) = (offs + 1, Some(0));
     }
-    let mut note = |e: Event, out: &mut Vec<P>| match e {
+    // Let go, with their release: the edit only stopped them (RENDER-26a).
+    for &(id, key) in release {
+        out.push(P::NoteOff { time: 0, id: id as i32, key });
+        (offs, last) = (offs + 1, Some(0));
+    }
+    let mut note = |e: Event, out: &mut m2_plugins::Events| match e {
         Event::On { frame, id, pitch, velocity, .. } => {
             let key = pitch.round().clamp(0.0, 127.0) as i16;
             let time = frame - lo as u32;
@@ -239,6 +281,7 @@ fn plugin_events(
             if let Some(i) = keys.iter().position(|k| k.0 == id) {
                 let (_, key) = keys.swap_remove(i);
                 out.push(P::NoteOff { time: frame - lo as u32, id: id as i32, key });
+                (offs, last) = (offs + 1, Some(frame - lo as u32));
             }
         }
         _ => {}
@@ -272,20 +315,31 @@ fn plugin_events(
         }
         f += PARAM_STEP;
     }
+    (offs, last)
 }
 
 impl PluginNode {
     fn process(&mut self, b: &Block, bufs: &[Vec<Buf>], out: &mut Buf, lanes: &[LaneSlot]) -> Result<()> {
+        if self.lent.is_some() {
+            // Its output was copied in from the node it was carried into (`plugins::lend`).
+            return Ok(());
+        }
         let notes = self.notes.map_or(&[][..], |s| lanes[s].events());
         let mut next = 0;
         let channels = out.len() / BLOCK;
-        let cap = self.events.capacity();
+        let host = self.inst.host();
+        let h = self.inst.handle();
         // One call per run: a call never spans a jump, and each gets its own transport (RENDER-9).
         for (ri, run) in b.runs.as_slice().iter().enumerate() {
             let (lo, hi) = (run.off as usize, (run.off + run.n) as usize);
-            let ended = if ri == 0 { &self.ended[..] } else { &[] };
-            plugin_events(ended, notes, &mut next, &mut self.params, bufs, (lo, hi), &mut self.keys, &mut self.events);
-            debug_assert_eq!(self.events.capacity(), cap, "a plugin's events outgrew their room");
+            let (ended, release) = if ri == 0 { (&self.ended[..], &self.release[..]) } else { (&[][..], &[][..]) };
+            let (offs, last) =
+                plugin_events(ended, release, notes, &mut next, &mut self.params, bufs, (lo, hi), &mut self.keys, &mut self.events);
+            self.offs += offs as u64;
+            if let Some(t) = last {
+                self.last_off = Some(b.engine + (lo as u32 + t) as u64);
+            }
+            debug_assert_eq!(self.events.dropped(), 0, "a plugin's events outgrew their room");
             let empty: &[f32] = &[];
             let mut ins = [empty; 2];
             let mut n_in = 0;
@@ -297,7 +351,7 @@ impl PluginNode {
             }
             let split = BLOCK.min(out.len());
             let (left, right) = out.split_at_mut(split);
-            let mut outs: [&mut [f32]; 2] = [&mut left[lo..hi], if channels > 1 { &mut right[lo..hi] } else { &mut [] }];
+            let outputs: [&mut [f32]; 2] = [&mut left[lo..hi], if channels > 1 { &mut right[lo..hi] } else { &mut [] }];
             let info = b.info[ri];
             let transport = m2_plugins::Transport {
                 beats: b.beats64[lo],
@@ -310,11 +364,15 @@ impl PluginNode {
                 bar: info.bar,
                 steady: (b.engine + lo as u64) as i64,
             };
-            self.inst
-                .process(run.n, &ins[..n_in], &mut outs[..channels.min(2)], &self.events, transport)
-                .with_context(|| self.name.clone())?;
+            let mut io = m2_plugins::SharedBuffers { inputs: ins, n_in, outputs, n_out: channels.min(2), frames: run.n };
+            self.out.clear();
+            self.status = host.process(h, &mut io, &self.events, &mut self.out, &transport);
+            if self.status == m2_plugins::Status::Error {
+                bail!("{} reported a processing error", self.name);
+            }
             if ri == 0 {
                 self.ended.clear();
+                self.release.clear();
             }
         }
         if b.strict
@@ -326,7 +384,11 @@ impl PluginNode {
     }
 
     fn reset(&mut self) -> Result<()> {
-        self.inst.reset()?;
+        if self.lent.is_some() {
+            // The node it was carried into resets the instance.
+            return Ok(());
+        }
+        self.inst.host().reset(self.inst.handle());
         // Within its room (`ended` is as big as `keys`): never allocates on the audio thread.
         for k in self.keys.drain(..) {
             if self.ended.len() < self.ended.capacity() {
@@ -434,6 +496,12 @@ struct Builder<'a> {
     sample_rate: f64,
     slots: &'a [LaneRef],
     lanes: &'a [LaneSlot],
+    /// Where top-level plugin instances come from before any is created (HOST-5).
+    source: &'a mut dyn InstanceSource,
+    /// Who the instances it creates report to.
+    owner: &'a m2_plugins::Owner,
+    /// Top-level plugin nodes so far, by module, plugin and state path: each one's ordinal.
+    ordinals: HashMap<(String, String, Option<Vec<String>>), u32>,
 }
 
 impl Builder<'_> {
@@ -476,7 +544,7 @@ impl Builder<'_> {
                     Exec::Missing(inputs.first().filter(|i| matches!(i, Input::Port { .. })).cloned())
                 }
                 FOp::Plugin { plugin, inputs, state, .. } => {
-                    Exec::Plugin(Box::new(self.plugin(nodes, n, plugin, inputs, state.as_deref())?))
+                    Exec::Plugin(Box::new(self.plugin(nodes, n, plugin, inputs, state.as_deref(), in_voice)?))
                 }
                 FOp::Poly { lane, voices, voice, .. } => {
                     if in_voice {
@@ -509,16 +577,58 @@ impl Builder<'_> {
         Ok(Graph { exec, origins: nodes.iter().map(|n| n.origin.clone()).collect(), order: order.to_vec(), bufs, resets: 0 })
     }
 
-    fn plugin(&mut self, nodes: &[FNode], n: &FNode, id: &str, inputs: &[Input], state: Option<&[String]>) -> Result<PluginNode> {
+    /// A plugin node: its instance carried from the source when one matches (top level only), or
+    /// created through the host, its verified state loaded, and activated.
+    fn plugin(
+        &mut self,
+        nodes: &[FNode],
+        n: &FNode,
+        id: &str,
+        inputs: &[Input],
+        state: Option<&[String]>,
+        in_voice: bool,
+    ) -> Result<PluginNode> {
         let info = self.packages.plugin_info(id).with_context(|| format!("{}: plugin `{id}` was not described", n.name))?;
-        let mut inst = m2_plugins::Instance::new(&info.found, self.sample_rate, BLOCK as u32).with_context(|| n.name.clone())?;
-        // Only a blob whose sidecar names this plugin is loaded (FMT-17); without one the
-        // plugin plays its defaults, and the data's diagnostics say why.
         let keys: Vec<&str> = state.unwrap_or_default().iter().map(String::as_str).collect();
-        if let Some(path) = state.and_then(|_| self.data.state(&n.module, &keys)) {
-            let bytes = std::fs::read(&path).with_context(|| format!("{}: reading plugin state {}", n.name, path.display()))?;
-            inst.load_state(&bytes).with_context(|| format!("{}: loading {}", n.name, path.display()))?;
-        }
+        let state_path = state.map(<[String]>::to_vec);
+        let ordinal = if in_voice {
+            u32::MAX
+        } else {
+            let o = self.ordinals.entry((n.module.clone(), id.to_string(), state_path.clone())).or_insert(0);
+            *o += 1;
+            *o - 1
+        };
+        let key = CarryKey {
+            module: n.module.clone(),
+            plugin: info.found.id.clone(),
+            version: info.found.version.clone(),
+            state_path,
+            ordinal,
+            state: state.and_then(|_| self.data.state_hash(&n.module, &keys)),
+        };
+        let rate = self.sample_rate as u32;
+        // Plugins inside voices aren't carried: a voice resets its instances on every retrigger.
+        let carried = if in_voice { None } else { self.source.take(&key, rate) };
+        let inst = match carried {
+            Some(inst) => inst,
+            None => {
+                // Only a blob whose sidecar names this plugin is loaded (FMT-17); without one the
+                // plugin plays its defaults, and the data's diagnostics say why.
+                let blob = match state.and_then(|_| self.data.state(&n.module, &keys)) {
+                    Some(path) => {
+                        let bytes = std::fs::read(&path).with_context(|| format!("{}: reading plugin state {}", n.name, path.display()))?;
+                        Some(Arc::new(m2_plugins::Blob::new(bytes)))
+                    }
+                    None => None,
+                };
+                let host = self.packages.host();
+                let (h, _) = host.create(&info.found, blob, self.owner).with_context(|| n.name.clone())?;
+                // Owned from here: dropped on an error, it is destroyed.
+                let inst = Arc::new(PluginInstance::new(host.clone(), h, key, rate));
+                host.activate(h, rate, BLOCK as u32).with_context(|| n.name.clone())?;
+                inst
+            }
+        };
         // Inputs come in the order of the plugin's ports; a parameter is bound by the id in its
         // address, never by its place in the list (FMT-18).
         let sig = m2_ir::Kernels::plugin(self.packages, id).with_context(|| format!("{}: plugin `{id}` was not described", n.name))?;
@@ -538,12 +648,13 @@ impl Builder<'_> {
                 }
             }
         }
-        // Room for one run's notes, a Tuning for each On, every parameter sampled, and a choke and
-        // a NoteOff for every note it held when it was reset.
+        // Room for one run's notes, a Tuning for each On, every parameter sampled, a choke and a
+        // NoteOff for every note it held when it was reset, and a NoteOff for every note a carried
+        // instance held that this node lets go.
         let caps = notes.map_or(Caps::default(), |s| self.caps(s));
         let held = caps.sounding + 2 * caps.ons + 8;
-        let events = caps.events() + caps.ons + (BLOCK / PARAM_STEP) * params.len() + 8 + 2 * held;
-        inst.reserve_events(events);
+        let release = inst.hold(held);
+        let events = caps.events() + caps.ons + (BLOCK / PARAM_STEP) * params.len() + 8 + 2 * held + release;
         Ok(PluginNode {
             name: n.name.clone(),
             inst,
@@ -551,8 +662,14 @@ impl Builder<'_> {
             notes,
             keys: Vec::with_capacity(held),
             ended: Vec::with_capacity(held),
+            release: Vec::with_capacity(release),
             params,
-            events: Vec::with_capacity(events),
+            events: m2_plugins::Events::with_capacity(events),
+            out: m2_plugins::Events::with_capacity(OUT_EVENTS),
+            lent: None,
+            status: m2_plugins::Status::Continue,
+            offs: 0,
+            last_off: None,
         })
     }
 
@@ -1044,8 +1161,24 @@ impl Renderer {
     }
 
     /// [`Renderer::new`], sharing decoded assets and clip renders with earlier builds through
-    /// `cache` (a live session's).
+    /// `cache` (a live session's). Its plugin instances are all new, reporting to no one.
     pub fn build_with(flat: &Flat, data: &DataSet, packages: &PackageSet, sample_rate: u32, cache: &mut audio::Cache) -> Result<Renderer> {
+        Renderer::build_live(flat, data, packages, sample_rate, cache, &m2_plugins::Owner::discard(), &mut Fresh)
+    }
+
+    /// [`Renderer::build_with`] for the live engine: top-level plugin instances come from `source`
+    /// when one matches (HOST-5, a [`Carry`] of the renderer it will replace), and the rest are
+    /// created through the host, reporting to `owner`. Instances are created and activated on the
+    /// plugin main thread, while the old renderer plays (RENDER-25).
+    pub fn build_live(
+        flat: &Flat,
+        data: &DataSet,
+        packages: &PackageSet,
+        sample_rate: u32,
+        cache: &mut audio::Cache,
+        owner: &m2_plugins::Owner,
+        source: &mut dyn InstanceSource,
+    ) -> Result<Renderer> {
         let limits =
             StoreLimitsBuilder::new().memory_size(KERNEL_MEMORY).instances(1_000_000).memories(1_000_000).tables(1_000_000).build();
         let mut store = Store::new(&packages.engine, limits);
@@ -1063,11 +1196,18 @@ impl Renderer {
                 }
             });
         }
-        let mut graph = Builder { store: &mut store, packages, data, sample_rate: rate, slots: &slots, lanes: &lanes }.graph(
-            &flat.nodes,
-            &flat.order,
-            false,
-        )?;
+        let mut graph = Builder {
+            store: &mut store,
+            packages,
+            data,
+            sample_rate: rate,
+            slots: &slots,
+            lanes: &lanes,
+            source,
+            owner,
+            ordinals: HashMap::new(),
+        }
+        .graph(&flat.nodes, &flat.order, false)?;
         graph.prewarm(&mut store)?;
         let plugins = graph.exec.iter().any(|e| matches!(e, Exec::Plugin(_)));
         Ok(Renderer {
@@ -1157,6 +1297,13 @@ impl Renderer {
     /// so every note sounding into it ends now (RENDER-26a). Never allocates while it
     /// succeeds (RENDER-28).
     pub fn render_block(&mut self, clock: u64, release_all: bool) -> Result<&[[f32; 2]; BLOCK]> {
+        self.render_block_lent(clock, release_all, None)
+    }
+
+    /// [`Self::render_block`] for a renderer fading out after an activation that carried some of
+    /// its plugin instances into `current`, which rendered this block first: each lent node takes
+    /// the output its instance made there, so an instance is processed once per block (§5.3).
+    pub fn render_block_lent(&mut self, clock: u64, release_all: bool, current: Option<&Renderer>) -> Result<&[[f32; 2]; BLOCK]> {
         self.runs = self.transport.advance();
         self.clock = clock + BLOCK as u64;
         if self.broken {
@@ -1173,6 +1320,9 @@ impl Renderer {
             self.record(clock);
         }
         let b = self.block(clock);
+        if let Some(c) = current {
+            plugins::lend(&mut self.graph, &c.graph);
+        }
         if let Err(e) = self.graph.process(&mut self.store, &b, Seg::WHOLE, None, None, &self.lanes) {
             self.broken = !self.strict;
             return Err(e);
@@ -1362,7 +1512,8 @@ impl Renderer {
             .iter()
             .map(|e| match e {
                 Exec::Poly(p) => p.voices.iter().filter(|v| v.note.is_some_and(|n| n.off >= clock)).count(),
-                Exec::Plugin(p) => p.keys.len(),
+                // A lent node's notes went with its instance.
+                Exec::Plugin(p) if p.lent.is_none() => p.keys.len() + p.release.len(),
                 _ => 0,
             })
             .sum()
@@ -1395,14 +1546,77 @@ impl Renderer {
     }
 
     /// Whether the engine may stop processing this renderer while stopped (RENDER-6a): no voice
-    /// sounds, no kernel at the top reports `active`, and it hosts no plugin (a plugin's tail
-    /// can't be seen until plugins report sleep, step 3b).
+    /// sounds, no kernel at the top reports `active`, and every plugin at the top said it sleeps,
+    /// or that it may stop once quiet and its output is (a plugin's tail is its own to report).
     pub fn can_idle(&mut self) -> bool {
-        self.active_voices() == 0 && !self.plugins && !self.graph.active(&mut self.store).unwrap_or(true)
+        self.active_voices() == 0 && self.plugins_sleep() && !self.graph.active(&mut self.store).unwrap_or(true)
+    }
+
+    fn plugins_sleep(&self) -> bool {
+        use m2_plugins::Status as S;
+        self.graph.exec.iter().enumerate().all(|(i, e)| match e {
+            Exec::Plugin(p) => match p.status {
+                S::Sleep => true,
+                S::ContinueIfNotQuiet => self.graph.bufs[i].first().is_none_or(|b| b.iter().all(|x| x.abs() < QUIET)),
+                _ => false,
+            },
+            _ => true,
+        })
+    }
+
+    /// While the engine idles: whether a plugin that slept asked to be processed (CLAP's
+    /// `request_process`), which wakes it within one block. Atomic swaps only.
+    pub fn woken(&self) -> bool {
+        self.graph.exec.iter().any(|e| match e {
+            Exec::Plugin(p) if p.status == m2_plugins::Status::Sleep => p.inst.host().take_process_request(p.inst.handle()),
+            _ => false,
+        })
     }
 
     pub fn hosts_plugins(&self) -> bool {
         self.plugins
+    }
+
+    /// Take over the plugin instances this renderer shares with `old`, which it replaces now: the
+    /// notes sounding into them go on, and `old` lends them for the crossfade (`plugins`,
+    /// RENDER-25). The engine calls it at activation. Never allocates.
+    pub fn carry_from(&mut self, old: &mut Renderer) {
+        plugins::carry_from(self, old);
+    }
+
+    /// The instances of its top-level plugin nodes, in node order (gates, tests; off the audio
+    /// thread).
+    pub fn plugin_handles(&self) -> Vec<m2_plugins::Handle> {
+        self.graph.exec.iter().filter_map(|e| if let Exec::Plugin(p) = e { Some(p.inst.handle()) } else { None }).collect()
+    }
+
+    /// Its top-level plugin nodes, in node order: the notes each holds, what it was sent and what
+    /// it said (gates, tests; off the audio thread).
+    pub fn plugins(&self) -> Vec<PluginView> {
+        self.graph
+            .exec
+            .iter()
+            .filter_map(|e| match e {
+                Exec::Plugin(p) => Some(PluginView {
+                    handle: p.inst.handle(),
+                    notes: p.keys.clone(),
+                    offs: p.offs,
+                    last_off: p.last_off,
+                    lent: p.lent.is_some(),
+                    status: p.status,
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Events plugins output in their last calls, and those that didn't fit (HOST-4: collected,
+    /// not yet consumed).
+    pub fn plugin_out_events(&self) -> (usize, u32) {
+        self.graph.exec.iter().fold((0, 0), |(n, d), e| match e {
+            Exec::Plugin(p) => (n + p.out.len(), d + p.out.dropped()),
+            _ => (n, d),
+        })
     }
 
     /// The memory every kernel instance holds: unchanged by playing, or a reset grew it on the

@@ -10,6 +10,7 @@ tauri-build = { version = "2.7.2", features = [] }
 
 [dependencies]
 m2-server.workspace = true
+m2-plugins.workspace = true
 serde_json.workspace = true
 tauri = { version = "2.12.3", features = [] }
 tauri-plugin-dialog = "2.8.2"
@@ -17,3 +18,8 @@ getrandom = "0.3"
 anyhow.workspace = true
 dirs.workspace = true
 open.workspace = true
+
+# HOST-2: this test runs AppKit's event loop on the process's real main thread, which libtest owns.
+[[test]]
+name = "appkit_main_thread"
+harness = false

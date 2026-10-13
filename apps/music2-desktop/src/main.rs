@@ -11,6 +11,7 @@
 
 mod actions;
 mod menu;
+mod plugin_host;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -24,6 +25,13 @@ pub struct Native {
 }
 
 fn main() {
+    // HOST-2: plugins make their main-thread calls on this thread, AppKit's, through the main
+    // dispatch queue; it must be installed before anything touches a plugin. From here on the main
+    // thread must never wait on a thread that may be creating plugins (the server's project work):
+    // that thread waits on the main thread.
+    if let Err(e) = plugin_host::install() {
+        eprintln!("music2: plugins can't be hosted: {e:#}");
+    }
     // A folder with a song.ts is a song project. Anything else is reported rather than ignored.
     let project = std::env::args().skip(1).map(PathBuf::from).find(|p| p.join("song.ts").is_file());
     let unknown: Vec<String> =
@@ -42,12 +50,13 @@ fn main() {
             let server = running.state.clone();
             publish_session(&running.url, &server.token);
             // No window is connected yet: the server keeps these toasts for the first one.
-            // They name the folder, not its whole path, so the reason fits.
-            if let Some(dir) = &project
-                && let Err(e) = actions::open_project(&server, dir)
-            {
-                eprintln!("music2: couldn't open {}: {e:#}", dir.display());
-                server.toast(format!("Couldn't open {}: {e:#}", name(dir)));
+            // They name the folder, not its whole path, so the reason fits. Opened off the main
+            // thread: opening creates the song's plugins, which run on the main thread (HOST-2).
+            if let Some(dir) = project.clone() {
+                plugin_host::open_off_main(server.clone(), dir, |server, dir, e| {
+                    eprintln!("music2: couldn't open {}: {e:#}", dir.display());
+                    server.toast(format!("Couldn't open {}: {e:#}", name(dir)));
+                });
             }
             for a in &unknown {
                 eprintln!("music2: `{a}` is not a project folder (a folder with song.ts)");

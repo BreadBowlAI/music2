@@ -28,6 +28,7 @@ import {
   moduleName,
   toUnit,
   type Effect,
+  type GraphLease,
   type GraphState,
   type InputPort,
   type Knob as KnobInfo,
@@ -114,6 +115,7 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
             revision={graph.view.revision}
             editable={graph.view.draft_errors.length === 0}
             effects={graph.effects}
+            leases={graph.leases}
           />
         )}
       </div>
@@ -388,6 +390,38 @@ function loopBack(x0: number, y0: number, x1: number, y1: number, yb: number) {
 /** A cable being dragged from an output, in the module's coordinates; `to` is the knob it would land on. */
 interface Cable { from: string; name: string; kind: PortKind; x0: number; y0: number; x: number; y: number; to: string | null }
 
+/**
+ * The knob drags this window holds, by gesture: the React keys their knob and its node were
+ * mounted with. Ids number the calls in a file in order, so a save that inserts a call above a
+ * dragged knob in its file renumbers it, and maybe its node. The server carries the drag
+ * (WRITE-22), and the view's `leases` say what the knob is called now: keyed as they were
+ * mounted, the knob and its node stay mounted, where new keys would remount them, and the knob's
+ * unmount would cancel the drag.
+ */
+const held = new Map<string, { knob: string; node: string }>();
+
+/** React keys for a module's nodes and knobs: their ids, but a held drag's knob and node keep their keys (see `held`). */
+function stableKeys(nodes: ViewNode[], leases: GraphLease[] | undefined) {
+  const knobs = new Map<string, string>();
+  const keep = new Map<string, string>();
+  for (const l of leases ?? []) {
+    const h = l.gesture != null ? held.get(l.gesture) : undefined;
+    if (!h) continue;
+    // The node it was dragged on first, should one value have knobs on two.
+    const has = (n: ViewNode) => n.knobs.some((k) => k.id === l.id);
+    const node = nodes.find((n) => n.id === h.node && has(n)) ?? nodes.find(has);
+    if (!node) continue;
+    if (l.id !== h.knob) knobs.set(l.id, h.knob);
+    if (node.id !== h.node) keep.set(node.id, h.node);
+  }
+  // A kept key is taken from whatever has that id now.
+  const keyed = (kept: Map<string, string>) => {
+    const taken = new Set(kept.values());
+    return (id: string) => kept.get(id) ?? (taken.has(id) ? `${id}~` : id);
+  };
+  return { knob: keyed(knobs), node: keyed(keep) };
+}
+
 /** Memoized: the playback status re-renders the canvas five times a second. */
 const ModuleSection = memo(function ModuleSection({
   module,
@@ -397,6 +431,7 @@ const ModuleSection = memo(function ModuleSection({
   revision,
   editable,
   effects,
+  leases,
 }: {
   module: ModuleView;
   laid: ReturnType<typeof layout>;
@@ -406,8 +441,10 @@ const ModuleSection = memo(function ModuleSection({
   revision: number;
   editable: boolean;
   effects: Effect[];
+  leases: GraphLease[] | undefined;
 }) {
   const toast = useStore((s) => s.toast);
+  const keys = useMemo(() => stableKeys(module.nodes, leases), [module, leases]);
   const area = useRef<HTMLDivElement>(null);
   const [cable, setCable] = useState<Cable | null>(null);
   // Ports with an edge, to draw them filled.
@@ -538,7 +575,9 @@ const ModuleSection = memo(function ModuleSection({
             </svg>
             {[...placed.values()].map((p) => (
               <NodeCard
-                key={p.node.id}
+                key={keys.node(p.node.id)}
+                nodeKey={keys.node(p.node.id)}
+                knobKey={keys.knob}
                 node={p.node}
                 session={session}
                 revision={revision}
@@ -621,6 +660,8 @@ function Dot({ id, kind, filled, className }: { id: string; kind: PortKind; fill
 const SUBTITLE: Partial<Record<ViewNode["kind"], string>> = { lane: "lane", time: "time", import: "from track", export: "export", value: "value", voice: "each note played" };
 
 function NodeCard({
+  nodeKey,
+  knobKey,
   node,
   session,
   revision,
@@ -631,6 +672,9 @@ function NodeCard({
   onCable,
   style,
 }: {
+  /** Its React key, and its knobs' (see `held`). */
+  nodeKey: string;
+  knobKey: (id: string) => string;
   node: ViewNode;
   session: number;
   revision: number;
@@ -724,7 +768,17 @@ function NodeCard({
       {!small && (node.outputs.length > 0 || node.inputs.length > 0) && (
         <div className="py-[6px]">
           {node.inputs.map((i) => (
-            <InputRow key={i.id} node={node} input={i} filled={wired.has(`${node.id}<${i.id}`)} session={session} revision={revision} editable={editable} />
+            <InputRow
+              key={i.knob ? `knob:${knobKey(i.knob)}` : i.id}
+              nodeKey={nodeKey}
+              knobKey={knobKey}
+              node={node}
+              input={i}
+              filled={wired.has(`${node.id}<${i.id}`)}
+              session={session}
+              revision={revision}
+              editable={editable}
+            />
           ))}
           {node.outputs.slice(node.inputs.length).map((o) => (
             <div key={o.id} className="h-[28px]" />
@@ -814,6 +868,8 @@ function OutputPortView({
 }
 
 function InputRow({
+  nodeKey,
+  knobKey,
   node,
   input,
   filled,
@@ -821,6 +877,8 @@ function InputRow({
   revision,
   editable,
 }: {
+  nodeKey: string;
+  knobKey: (id: string) => string;
   node: ViewNode;
   input: InputPort;
   filled: boolean;
@@ -830,7 +888,13 @@ function InputRow({
 }) {
   const toast = useStore((s) => s.toast);
   const knob = input.knob ? node.knobs.find((k) => k.id === input.knob) : undefined;
-  if (knob) return <KnobControl key={`${editable}:${knob.id}`} knob={knob} port={input.id} label={input.label} session={session} revision={revision} editable={editable} />;
+  // Keyed by the knob alone: a save that breaks the code mid-drag must not remount it, which
+  // would cancel the drag (WRITE-22: the server keeps it, and a release then is saved once the
+  // code compiles); nor may one that renumbers it (see `held`).
+  if (knob) {
+    const key = knobKey(knob.id);
+    return <KnobControl key={key} mountKey={key} nodeKey={nodeKey} knob={knob} port={input.id} label={input.label} session={session} revision={revision} editable={editable} />;
+  }
 
   const inlet = input.inlet ? node.inlets.find((i) => i.id === input.inlet) : undefined;
   if (inlet) {
@@ -902,22 +966,49 @@ interface Gesture {
 }
 
 /** A knob over an owned source value, as one input row: drag to hear it, release to write it. */
-function KnobControl({ knob, port, label, session, revision, editable }: { knob: KnobInfo; port: string; label: string; session: number; revision: number; editable: boolean }) {
+function KnobControl({
+  mountKey,
+  nodeKey,
+  knob,
+  port,
+  label,
+  session,
+  revision,
+  editable,
+}: {
+  /** The React keys it and its node are mounted with, kept while it is dragged (see `held`). */
+  mountKey: string;
+  nodeKey: string;
+  knob: KnobInfo;
+  port: string;
+  label: string;
+  session: number;
+  revision: number;
+  editable: boolean;
+}) {
   const toast = useStore((s) => s.toast);
   const [value, setValue] = useState(knob.value);
   const [saving, setSaving] = useState(false);
   // Each gesture captures its identity, revision and value mapping. A save elsewhere
   // doesn't end it: the server carries it to the new revision, or refuses it as stale
-  // if the save touched this value. Session changes remount the control. Unmounting
-  // cancels a drag, but a released knob still commits: selecting another module right
-  // after letting go must not lose the value.
+  // if the save touched this value. A save that renumbers the knob doesn't remount it
+  // (see `held`); session changes do. Unmounting cancels a drag, but a released knob still
+  // commits: selecting another module right after letting go must not lose the value.
   const latest = useRef(knob.value);
   const dragging = useRef<Gesture | null>(null);
   const active = useRef<Gesture | null>(null);
   const pending = useRef<{ gesture: Gesture; value: number } | null>(null);
   const timer = useRef<number | null>(null);
+  // While a knob is held still, its drag is kept alive on the server, which ends drags nobody
+  // moves for 10 s (WRITE-22's leases, C6).
+  const keepalive = useRef<number | null>(null);
   const mounted = useRef(true);
   const committing = useRef(false);
+
+  const stopKeepalive = () => {
+    if (keepalive.current != null) clearInterval(keepalive.current);
+    keepalive.current = null;
+  };
 
   useEffect(() => {
     mounted.current = true;
@@ -925,6 +1016,7 @@ function KnobControl({ knob, port, label, session, revision, editable }: { knob:
       mounted.current = false;
       if (timer.current != null) clearTimeout(timer.current);
       timer.current = null;
+      stopKeepalive();
       pending.current = null;
       dragging.current = null;
       if (active.current && !active.current.released) void cancel(active.current);
@@ -966,6 +1058,7 @@ function KnobControl({ knob, port, label, session, revision, editable }: { knob:
     if (gesture.cancelled || gesture.submitted) return Promise.resolve();
     gesture.cancelled = true;
     if (active.current === gesture) active.current = null;
+    held.delete(gesture.token);
     return gesture.previews.then(() => graphApi.cancel(gesture.session, gesture.knob.id, gesture.token)).catch((error) => {
       if (mounted.current) toast(error instanceof Error ? error.message : String(error));
     });
@@ -977,6 +1070,7 @@ function KnobControl({ knob, port, label, session, revision, editable }: { knob:
       previews: Promise.resolve(), previewed: false, released: false, cancelled: false, submitted: false, failed: false,
     };
     active.current = gesture;
+    held.set(gesture.token, { knob: mountKey, node: nodeKey });
     return gesture;
   };
 
@@ -999,6 +1093,7 @@ function KnobControl({ knob, port, label, session, revision, editable }: { knob:
   const commit = async (gesture: Gesture, v: number) => {
     if (!gesture.previewed && v === gesture.start) {
       if (active.current === gesture) active.current = null;
+      held.delete(gesture.token);
       return;
     }
     gesture.released = true;
@@ -1014,7 +1109,9 @@ function KnobControl({ knob, port, label, session, revision, editable }: { knob:
       // final audition message may have been dropped by the audio queue.
       gesture.submitted = true;
       const change = await graphApi.set(gesture.session, gesture.revision, gesture.knob.id, gesture.token, v, gesture.start);
-      if (change.before !== change.after) toast(`${change.file}: ${change.before} → ${change.after}`);
+      // The code doesn't compile right now: the value plays on, and is saved once it does (C5).
+      if (change.pending) toast(`${knob.file}:${knob.line}: saved once the code compiles again`);
+      else if (change.before !== change.after) toast(`${change.file}: ${change.before} → ${change.after}`);
       refresh();
     } catch (error) {
       // Rejections restore audio on the server. An owner-checked cancellation
@@ -1023,13 +1120,15 @@ function KnobControl({ knob, port, label, session, revision, editable }: { knob:
       fail(gesture, error);
     } finally {
       if (active.current === gesture) active.current = null;
+      held.delete(gesture.token);
       committing.current = false;
       if (mounted.current) setSaving(false);
     }
   };
 
   const descriptor = dragging.current?.knob ?? knob;
-  const disabled = !editable || saving;
+  // A drag already in progress goes on when the code breaks under it; only new ones wait.
+  const disabled = (!editable && !dragging.current) || saving;
   const shared = knob.uses > 1 ? `Shared value: changes all ${knob.uses} uses. ` : "";
   const title = !editable
     ? "Fix the code errors before editing this control."
@@ -1067,9 +1166,15 @@ function KnobControl({ knob, port, label, session, revision, editable }: { knob:
             if (!editable || committing.current) return;
             dragging.current = begin();
             latest.current = knob.value;
+            stopKeepalive();
+            keepalive.current = window.setInterval(() => {
+              const gesture = dragging.current;
+              // Only a drag that began on the server, and has nothing on its way already.
+              if (gesture && gesture.previewed && !gesture.failed && !gesture.cancelled && timer.current == null) preview(gesture, latest.current);
+            }, 2000);
           }}
           onChange={(u) => {
-            if (!editable || committing.current) return;
+            if ((!editable && !dragging.current) || committing.current) return;
             const gesture = dragging.current ?? begin();
             if (gesture.failed) return;
             const v = fromUnit(gesture.knob, u);
@@ -1085,6 +1190,7 @@ function KnobControl({ knob, port, label, session, revision, editable }: { knob:
             if (timer.current == null) timer.current = window.setTimeout(flushPreview, 30);
           }}
           onEnd={() => {
+            stopKeepalive();
             const gesture = dragging.current;
             if (!gesture) return;
             dragging.current = null;
@@ -1093,6 +1199,7 @@ function KnobControl({ knob, port, label, session, revision, editable }: { knob:
             void commit(gesture, latest.current);
           }}
           onCancel={() => {
+            stopKeepalive();
             const gesture = dragging.current;
             if (!gesture) return;
             dragging.current = null;

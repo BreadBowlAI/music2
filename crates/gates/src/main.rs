@@ -30,7 +30,12 @@ GATES (default: all):
                   the beat
   tail-stop   G7  after stop, reverb and delay tails decay instead of freezing
   range       G10 range render timing, and whether it says it is exact
-  plugins     G1-G5 and G7 on examples/with-plugins (Surge XT and Airwindows on the CLAP path)
+  plugins     G1-G5 and G7 on examples/with-plugins (Surge XT and Airwindows on the CLAP path),
+                  with the plugin instances carried across rebuilds (step 3b, HOST-5)
+  previews    G8  (--server only) a knob drag's updates are heard as fast while the session
+                  compiles a slow save (WRITE-22, RENDER-29)
+  drag        G9  (--server only) a knob drag goes on through an agent's saves to other files
+                  and to its own, and its commit writes its file alone (WRITE-22)
 
 OPTIONS:
   --rig R          engine: step 3a's live engine (needs --features engine); replay: HEAD's
@@ -38,6 +43,8 @@ OPTIONS:
                    with it, else replay)
   --server         seek, note-edit and add-effect through the app's server in real time, on the
                    silent player, instead of on a rig
+  --no-carry       the engine rig builds every plugin instance anew with each renderer, as step 3a
+                   did: the negative reference for carrying them across rebuilds (HOST-5)
   --quick          CI sizes: a 3-track reference project, 1 minute of loop, 8 seeks
   --reference N    the reference project the timed gates play: 16 (p16, the default) or 50 (p50)
   --stems N        add N one-minute stems on audio lanes (the audio-heavy variant)
@@ -61,21 +68,24 @@ fn main() {
             std::env::set_var("M2_AUDIO_FRAMES", "512");
         }
     }
-    match run() {
-        Ok(true) => {}
-        Ok(false) => std::process::exit(1),
+    // HOST-2: the gates run on a worker while the main thread serves plugins as their main thread,
+    // and destroys what they created before the process exits.
+    let code = m2_plugins::run_main(|| match run() {
+        Ok(true) => 0,
+        Ok(false) => 1,
         Err(e) => {
             eprintln!("m2-gates: {e:#}");
-            std::process::exit(2);
+            2
         }
-    }
+    });
+    std::process::exit(code);
 }
 
 fn run() -> Result<bool> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut o = Opts::recorded();
     let mut kind = if cfg!(feature = "engine") { Kind::Engine } else { Kind::Replay };
-    let (mut via_server, mut keep, mut work, mut seeks) = (false, false, None, None);
+    let (mut via_server, mut keep, mut work, mut seeks, mut carry) = (false, false, None, None, true);
     let mut names = vec![];
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -93,6 +103,7 @@ fn run() -> Result<bool> {
                 }
             }
             "--server" => via_server = true,
+            "--no-carry" => carry = false,
             "--quick" => {
                 let q = Opts::quick();
                 (o.reference, o.loop_minutes, o.seeks, o.activations, o.edits) =
@@ -115,19 +126,26 @@ fn run() -> Result<bool> {
     }
     // HEAD replays the song for every seek: a few make the point.
     o.seeks = seeks.unwrap_or(if kind == Kind::Replay && !via_server { 5.min(o.seeks) } else { o.seeks });
-    if names.is_empty() || names.iter().any(|n| n == "all") {
+    let all = names.is_empty() || names.iter().any(|n| n == "all");
+    if all {
         names = GATES.iter().map(|g| g.0.to_string()).collect();
     }
     if via_server {
-        names.retain(|n| ["seek", "note-edit", "add-effect"].contains(&n.as_str()));
+        // Step 3b's gates exist only through the server.
+        if all {
+            names.extend(["previews".to_string(), "drag".to_string()]);
+        }
+        names.retain(|n| ["seek", "note-edit", "add-effect", "previews", "drag"].contains(&n.as_str()));
     }
     let made = work.is_none();
     let work = work.unwrap_or_else(|| std::env::temp_dir().join(format!("m2-gates-{}", std::process::id())));
     let mut lab = Lab::new(&work)?;
+    lab.carry = carry;
     println!("m2-gates: {}", report::profile());
     println!(
-        "rig: {}; reference {}; work in {}",
+        "rig: {}{}; reference {}; work in {}",
         if via_server { "server, real time" } else { kind.name() },
+        if carry { "" } else { ", plugin instances never carried" },
         o.reference.name(),
         work.display()
     );
@@ -138,6 +156,8 @@ fn run() -> Result<bool> {
             (true, "seek") => server::seek(&mut lab, &o),
             (true, "note-edit") => server::note_edit(&mut lab, &o),
             (true, "add-effect") => server::add_effect(&mut lab, &o),
+            (true, "previews") => server::previews(&mut lab, &o),
+            (true, "drag") => server::drag(&mut lab, &o),
             _ => gates::run(name, &mut lab, kind, &o),
         };
         match outcome {

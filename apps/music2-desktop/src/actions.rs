@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult};
 
-use crate::Native;
+use crate::{Native, plugin_host};
 
 /// One dialog flow at a time (a second ⌘O while the first panel is open is ignored).
 static BUSY: AtomicBool = AtomicBool::new(false);
@@ -120,7 +120,7 @@ fn perform(app: &AppHandle, id: &str) -> anyhow::Result<()> {
             if let Some(dir) = picked.and_then(|p| p.into_path().ok())
                 && keep_code(app)?
             {
-                open_project(&server, &dir)?;
+                plugin_host::open_project(&server, &dir)?;
             }
         }
         "reveal" => {
@@ -134,6 +134,15 @@ fn perform(app: &AppHandle, id: &str) -> anyhow::Result<()> {
             if keep_export(app)? && keep_code(app)? {
                 // A stopped export removes its unfinished file; give it a moment to.
                 server.exports.stop(Duration::from_secs(5));
+                // HOST-2: the project's plugin instances are destroyed on the main thread, which
+                // keeps serving them while this thread waits (2 s at most). Exit handlers would
+                // unload plugin code under any left alive (a hung device thread holds its
+                // renderer), so then the app leaves without running them.
+                let t = plugin_host::close_for_quit(&server);
+                if t.left > 0 {
+                    eprintln!("music2: {} plugin instance(s) still alive at quit; leaving without exit handlers", t.left);
+                    plugin_host::leave_now();
+                }
                 app.exit(0);
             }
         }
@@ -212,11 +221,4 @@ fn error(app: &AppHandle, msg: &str) {
         dialog = dialog.parent(&w);
     }
     dialog.blocking_show();
-}
-
-/// Open a song project folder and tell the UI to show it.
-pub fn open_project(server: &m2_server::AppState, dir: &Path) -> anyhow::Result<()> {
-    server.graph.open(dir)?;
-    server.graph_changed();
-    Ok(())
 }

@@ -122,7 +122,7 @@ Live playback may differ from export after a seek, a loop wrap or an edit (owner
 
 **RENDER-6a.** The engine MUST keep processing while the device is open, playing or not. Stop is a transport event: every sounding note gets an Off, the transport freezes, control lanes hold their value at the stop position, and `time.beats` stops. Kernels and plugins keep running on that input, so tails decay. Audition and live input work while stopped. The engine MAY idle only once every kernel reports `!active` and the output has been silent for 8 blocks; any message wakes it.
 - *Why:* an engine that pauses on stop freezes delay and reverb tails mid-echo and brings them back as a ghost at the next play, from a different position.
-- *Today:* the player outputs zeros and processes nothing while stopped (`core/play/src/lib.rs:74-79`).
+- *Today:* the player outputs zeros and processes nothing while stopped (`core/play/src/lib.rs:74-79`). Since step 3b, a renderer that hosts plugins may idle too, once every top-level plugin's last `process` returned sleep, or "continue if not quiet" with a quiet output (`Renderer::can_idle`); a plugin's `request_process` wakes the idle engine at the next block line (`Renderer::woken`). Surge XT and Airwindows never sleep, so `examples/with-plugins` never idles (measured by the gates' G7).
 
 **RENDER-7.** `time.beats` and `time.seconds` MUST be transport time, never engine time.
 - *Why:* songs describe music in song time.
@@ -246,7 +246,7 @@ The default MUST reproduce today's output bit for bit. A voice's RuntimeId is it
 **RENDER-25.** Plans MUST be prepared off the audio thread and activated at a block boundary. Activation keeps every instance whose RuntimeId and shape match. The shape is the kernel id, the content hash of the kernel's wasm module, the channel counts, the state ABI and the settings; for a hosted plugin, its plugin id and plugin version. The others start from init. Replaced objects are retired off the audio thread.
 - Preparing a plan includes creating, loading and activating every new plugin instance on the plugin main thread. The old plan keeps playing until all of them are ready, and the UI shows "loading <plugin>" meanwhile. The code plane's 200 ms budget doesn't count plugin loads.
 - *Why:* an edit must not cut the tails of what it didn't touch. A rebuilt package that keeps a kernel's id but changes its memory layout must never inherit old memory, and a sample-based instrument can take seconds to load.
-- *Today:* the whole renderer is swapped (`core/play/src/lib.rs:56-62`) and nothing is kept. Retiring is mostly off the audio thread (59-61, 153-156), but when the 8-slot retired queue is full, `try_send` fails and the old renderer, plugins included, is dropped on the audio thread.
+- *Today:* the whole renderer is swapped (`core/play/src/lib.rs:56-62`) and nothing is kept. Retiring is mostly off the audio thread (59-61, 153-156), but when the 8-slot retired queue is full, `try_send` fails and the old renderer, plugins included, is dropped on the audio thread. Since step 3b, hosted plugin instances are kept ([HOST-5](#pluginhost)): a live renderer is built from the instances of the one last sent to the same engine (`Renderer::build_live` with a `Carry`, `core/runtime/src/plugins.rs`), creates and activates only the rest on the plugin main thread while the old one plays, and at activation takes over the shared instances with the notes sounding into them; during the crossfade the old renderer copies their output instead of processing them, so each is processed once per block. Kernels still start from init (step 7).
 
 **RENDER-25a.** An activation that replaces a subgraph MUST crossfade its output over 5 ms: old and new instances run together for one fade window, and the fade is applied at least at every module output whose subgraph changed. An added or removed effect fades between dry and processed the same way. Step 3, which still swaps whole renderers, crossfades the whole output.
 - *Why:* switching from old to new output in one sample clicks on every structural edit made while playing.
@@ -262,7 +262,7 @@ The default MUST reproduce today's output bit for bit. A voice's RuntimeId is it
 - `SetArrangement` recomputes the frame of every pending Off from its beat.
 - A stop, a seek or a loop wrap sends an Off for every sounding note ([RENDER-9](#seek-and-loop), [RENDER-6a](#live-engine-and-its-two-clocks)).
 - *Why:* a scheduler that takes its Offs only from the new data leaves a deleted or shortened note hanging forever.
-- *Today:* notes have no Offs; `poly` gates on the song sample (`core/runtime/src/lib.rs:465-469`).
+- *Today:* notes have no Offs; `poly` gates on the song sample (`core/runtime/src/lib.rs:465-469`). Since step 3b, an activation that carries a plugin instance doesn't replace that consumer, so its notes go on: the new scheduler adopts the old one's sounding notes with their ids (`NoteScheduler::adopt`) and matches them against its data at its first block as a swap does, so only a note the new data dropped, or past the new scheduler's room, gets an Off there; a renderer's first block (`Jump::Enter`) no longer ends notes, which changes nothing without an adoption. Its note ids never repeat into the carried instance, which keeps its next id across a renderer whose node reads no notes. This reading is the step 3b design's clarification C7, awaiting the owner's decision.
 
 **RENDER-26b.** A change to a plugin's state from outside the instance (an undo of a state write, `m2 plugin-state`, a git checkout, an agent writing the blob) MUST reach the running instance as `LoadState`. The host loads the blob on the plugin main thread, skipping it when its hash equals the state the instance last saved ([HOME-6](#homes-of-values)), and measures latency again. If the latency changed, a plan-only activation re-plans the compensating delays, with no compile. A changed asset takes the path of [RENDER-27](#plans-data-and-arrangement-swaps): the affected clip renders are prepared off the audio thread and switched at one block boundary.
 - *Why:* a state or asset change must have a route to the engine that doesn't rebuild the song.
@@ -280,11 +280,11 @@ The default MUST reproduce today's output bit for bit. A voice's RuntimeId is it
 - Structural messages (`Activate`, `SwapLane`, `SetArrangement`, `LoadState`, `Transport`) go over a bounded queue and are never dropped. When it is full, the sender waits, off the audio thread, or coalesces to the newest plan.
 - Debug builds and CI run the audio thread under an allocation and lock trap (in the style of `assert_no_alloc`).
 - *Why:* any of these can glitch the output, and a dropped `Activate` would leave the engine on an old plan for good.
-- *Today:* the queue is bounded and non-blocking (`core/play/src/lib.rs:53-72`); a full queue drops the message (`try_send`). The audio thread allocates every block: plugin event lists and buffer-pointer `Vec`s (`core/runtime/src/lib.rs:132`, 182-186; `core/plugins/src/lib.rs:537-544`), and `poly`'s per-block `plan`, `busy` and `segs` (`core/runtime/src/lib.rs:571-572`, 594).
+- *Today:* the queue is bounded and non-blocking (`core/play/src/lib.rs:53-72`); a full queue drops the message (`try_send`). The audio thread allocates every block: plugin event lists and buffer-pointer `Vec`s (`core/runtime/src/lib.rs:132`, 182-186; `core/plugins/src/lib.rs:537-544`), and `poly`'s per-block `plan`, `busy` and `segs` (`core/runtime/src/lib.rs:571-572`, 594). Since step 3b the host's side of a plugin call allocates and locks nothing either: event lists are sized when a node is built, the host's audio side (`core/plugins/src/audio.rs`) is kept free of locks, allocation and thread-locals by a grep test, and `core/play/tests/no_alloc.rs` runs two probe plugins under the trap through an activation that carries both (a real plugin's own allocations are its own).
 
 **RENDER-29.** Previews and transport MUST NOT take the session lock. See [gesture leases](#gesture-leases).
 - *Why:* a knob preview waited 20 s behind a rebuild (measured).
-- *Today:* preview and seek hold the project mutex (`crates/server/src/graph.rs:269`, 287).
+- *Today:* matches since step 3b. The session runs as an actor (`crates/server/src/graph/actor.rs`), and a knob drag's updates are lease updates that take only the control plane's short lock, which the actor never holds over a compile or a build, and go straight to the engine ([WRITE-22](#gesture-leases)). Seek, the loop and status never touched the session since step 3a. Measured: during a 1.5 s compile, updates are heard as fast as the others (`m2-gates --server previews`, G8), and `crates/server/src/graph/tests.rs` (`previews_never_wait_for_a_compile`) checks that the engine hears them before the compile ends.
 
 ### Audio lanes
 
@@ -752,11 +752,11 @@ Core keeps `save`, `Tx`, `GraphDelta` and its checkers, undo, the journal, the r
 - A directory's hash (for a `Rename` of `data/<module>/`) is the SHA-256 of the `\n`-joined lines `<path>\0<sha256 hex>`, one for each file under it that `DataPath` parses as Lane or PluginState, with paths relative to the folder, `/`-separated and sorted bytewise. Dot files such as `.DS_Store` aren't hashed and move with the folder; any other file makes the `Rename` refuse, naming it.
 - A revision number is only a hint.
 - *Why:* a revision number means nothing outside the session that issued it, the 300 ms poll can miss versions, and the Rust and TypeScript tools must compute the same directory hash.
-- *Today:* an edit names a revision number and carries from up to 64 remembered snapshots (`core/session/src/edit.rs:195-203`, 442-462).
+- *Today:* an edit names a revision number and carries from up to 64 remembered snapshots (`core/session/src/edit.rs:195-203`, 442-462). Since step 3b a range carries when it lies before the first difference or after the last, or on lines a line diff (Myers', over whole lines) keeps in one run, so edits both above and below it no longer touch it; a change on one of its own lines still does (`carry` in `core/session/src/edit.rs`, shared by undo and gesture leases).
 
 **WRITE-13.** A revision is a pair `(code_rev, data_rev)`. A change to Code or Manifest files bumps `code_rev`. A change to only Data or Arrangement files bumps only `data_rev` and stores lane diffs, not full snapshots. Control ids, gestures and carrying are scoped to `code_rev`, and a lease is re-resolved at every new `code_rev` ([WRITE-22](#gesture-leases)).
 - *Why:* a lane edit must not invalidate a knob drag.
-- *Today:* one counter (`core/session/src/edit.rs:33-39`), and every revision keeps a full snapshot (195-203, 367-375).
+- *Today:* one counter (`core/session/src/edit.rs:33-39`), and every revision keeps a full snapshot (195-203, 367-375). Since step 3b the server tells a `code_rev` change by the Code and Manifest files of the two snapshots (`plane::code_changed`), and carries leases only then.
 
 **WRITE-14.** While the draft code is broken but the session has an accepted code revision, a data Tx MUST still work. It writes data files only and is checked against the last accepted lane declarations. Without an accepted code revision, a data Tx is rejected.
 - *Why:* fixing code must not block editing notes.
@@ -833,7 +833,14 @@ Forwarding writes to the holder is [deferred](#deferred-with-triggers).
 
 The session runs as an actor on its own thread, so nothing that waits on a compile blocks the engine, the transport or a lease's updates.
 - *Why:* previews must never wait on a compile, and an agent saving `tracks/drums.ts` must not snap back a knob being dragged in `tracks/bass.ts`.
-- *Today:* every preview update calls `Session::preview` under the project mutex (`crates/server/src/graph.rs:286-313`). A drag already survives saves that don't touch its value.
+- *Today:* matches since step 3b (`crates/server/src/graph.rs`, `graph/lease.rs`, `graph/actor.rs`), with these differences until steps 5 and 6:
+  - `begin` resolves against what the session last published: a revision among the last 64, through its code revision, or an id of one of the two code revisions before the accepted one's, through aliases the session carries once per code change. Only a client further behind waits for the session, and so does one a code revision or two behind while a settle hasn't yet carried the aliases to the code revision it published (they are read only once they carry to the accepted one's). Its cells are the constants at one `Origin` (step 5 brings `CellId`s), and only a literal written in code can be leased (`home: code`).
+  - `update` goes straight to the engine as `SetConst` by origin, through the queue and dropped when it is full (step 5's per-cell slots replace it). It is sent under the control plane's lock, as everything else sent for a lease is, so its order against an activation is the queue's.
+  - `commit` is one verified value edit through the session (`Session::set`, one file, one undo step), not yet a `Values` Tx (step 6). The committed value reaches the engine in the step that ends the lease: in a new renderer built with it, else as a `SetConst`.
+  - At a code change, a lease is carried by its whole call (WRITE-12's carry, by line diff), which is stricter than its literal's range. A lease's value is written into every new renderer before it is sent, so it plays from its first block, crossfade included. When the new renderer fails to build, the lease's control moves to the accepted revision while its updates go on to the renderer that plays, by its own origins.
+  - Pending the owner's decision on the step 3b design's clarifications: `cancel`, idle expiry and "the window closed" act on the control plane at once, never through the session (C2); a commit refused only because the draft doesn't compile is pending, the value plays on and the session writes it once the draft compiles, or cancels it after 30 s (C5); a lease ends when idle for its TTL (10 s, renewed by updates and the web's keepalive every 2 s while a knob is held; `ttl_ms` on `POST /api/graph/lease/begin`, at most 60 s), or when the WebSocket of the window that began it closes (`?client=`); the news and `GET /api/graph/leases` list every live lease, so an agent can cancel one (C6). A pending commit that ends unsaved (its 30 s, the project closing or another opening, an outside save that changes its control, a cancel) is said in a toast.
+  - The knob routes (`/preview`, `/set`, `/preview/cancel`) find a lease by its gesture string and the control the request names, so a string holds a lease per control: a script that sends `"script"` for every knob reaches each one's own. A late request of a lease that ended says why, unless its own `/preview/cancel` ended it. `GET /api/graph` lists the live leases with their controls' ids as its view names them, so the page keeps a dragged knob mounted when a save renumbers it.
+  - Measured: `crates/server/src/graph/tests.rs` (an outside save to another file during a drag never plays the code's value, not for one frame of the crossfade; saves above and below the dragged call keep it; a begin between a settle's phases; one gesture string on two controls; a pending commit that ends unsaved; a broken save then a release; a renderer that fails to build; a cancel during a commit; expiry and a closed window), and `m2-gates --server drag` (G9, p16: a drag through 12 saves, each a new renderer).
 
 **WRITE-22a.** A lane edit made while playing (dragging a note, drawing automation) uses a lane lease: `begin(lane, clip)`; `update` sends a preview `SwapLane` straight to the engine with no file write, under the sounding-note rules of [RENDER-26a](#plans-data-and-arrangement-swaps); `commit` is one `Clips` Tx; `cancel` swaps the accepted data back. A tempo drag is a lease too ([RENDER-27a](#plans-data-and-arrangement-swaps)).
 - *Why:* a dragged note must be heard where it is during the drag, without a journaled commit, a revision and an undo entry for every step.
@@ -1076,21 +1083,55 @@ trait PluginHost {
 }
 ```
 
+As built in step 3b (`core/plugins/src/host.rs`), pending the owner's decision on the step 3b design's clarification C3, the signatures differ from the sketch:
+
+```rust
+trait PluginHost: Send + Sync {
+    // the host's main thread; the caller waits (inline on the main thread itself)
+    fn create(&self, plugin: &Found, state: Option<Arc<Blob>>, owner: &Owner) -> Result<(Handle, Info)>;  // init, state load, ports and params
+    fn activate(&self, h: Handle, sample_rate: u32, max_frames: u32) -> Result<u32>;                  // -> latency, after the state load
+    fn deactivate(&self, h: Handle);
+    fn load_state(&self, h: Handle, blob: Arc<Blob>) -> Result<()>;  // skipped when its hash equals the state the instance last saved
+    fn set_render_mode(&self, h: Handle, mode: RenderMode) -> Result<bool>;
+    fn main_call(&self, h: Handle, call: MainCall) -> Result<Reply>;  // a parameter's value or text, its info, its log
+    fn destroy(&self, h: Handle);                                    // queued: never waits
+    // queued to the host's main thread; the one result comes back on the reply each returns
+    fn latency(&self, h: Handle) -> Pending<Result<u32, String>>;
+    fn save_state(&self, h: Handle) -> Pending<Result<Blob, String>>;
+    // the audio thread (or an offline render's): never allocates, locks or waits
+    fn process(&self, h: Handle, io: &mut SharedBuffers, ev_in: &Events, ev_out: &mut Events, t: &Transport) -> Status;
+    fn reset(&self, h: Handle);
+    fn take_process_request(&self, h: Handle) -> bool;               // CLAP's request_process: wakes an idle engine
+    // any thread
+    fn live(&self) -> u64;
+}
+```
+
+- `create` returns the `Info` the checker types a plugin from, so describing a plugin is `create`, `activate`, `destroy`, with no second path around the host. It takes an `Owner`: where the instance's unsolicited events (`Restart`, `Dirty`, `Latency`) go, and the count of its live instances, so two sessions in one process never see each other's events.
+- `latency` and `save_state` answer as one message on their own reply, which no other waiter can take.
+- `Events` is the host's CLAP-shaped list, sized when built (`m2-plugins` can't depend on the runtime's `Event`); the runtime translates into it without allocating.
+
 **HOST-1.** The engine MUST reach plugins only through `PluginHost`, and call each method only on the thread named beside it. Nothing may assume a plugin shares the app's process or threads.
 - *Why:* plugins will move into a host process, and the threading model must not be built twice. CLAP needs `activate` with the rate and block size to apply a latency change, and calls `latency` and `save_state` on the main thread only.
-- *Today:* the runtime owns `m2_plugins::Instance` directly (`core/runtime/src/lib.rs:111-123`).
+- *Today:* matches since step 3b. The runtime's plugin nodes hold an `Arc<PluginInstance>` (a handle and its host) and call `process` and `reset` through the host; renderers create instances, `PackageSet::describe_plugins` describes them and `m2 plugin-state` saves them through `PackageSet::host()`, which is the process's in-process host unless set (`m2_plugins::host()`). `m2_plugins::Instance` is gone.
 
 **HOST-2.** The in-process implementation (step 3) MUST make every main-thread call on the process's real main thread, and process plugins on the audio thread. In the app that is the AppKit main thread, reached through the main dispatch queue. In the CLI, the headless server and tests, the main thread runs a `CFRunLoop` and serves as the plugin main thread. The host's thread checks answer truthfully, and `on_main_thread` runs on that thread, never inside `process`. The host process ([HOST-3](#pluginhost)) keeps the same rule inside itself.
 - *Why:* plugins kept alive across rebuilds turn today's threading violations into crashes. Many commercial plugins (JUCE-based ones among them) post timers and work to the process's main run loop, so a separate "plugin main thread" would give them two main threads that race. The cost: until the host process ships, a slow plugin load blocks the app's main thread.
-- *Today:* both thread checks answer "yes" (`core/plugins/src/lib.rs:252-254`, 267). `on_main_thread` runs inside `process` (585, 589-594). Plugins are created where a renderer is built (`crates/server/src/graph.rs:82-88`) and dropped on the player's thread (`core/play/src/lib.rs:153-156`).
+- *Today:* matches since step 3b (`core/plugins/src/main_thread.rs`, `inprocess.rs`, `audio.rs`):
+  - every main-thread call (create, init, state, activate, parameters, `on_main_thread`, deactivate, destroy) runs on the plugin main thread; callers on other threads wait for it, and `destroy` is queued. Libraries load on the calling thread, once per bundle, never on the main thread;
+  - the app calls `m2_plugins::use_process_main_thread()` first thing in `main` (`apps/music2-desktop/src/main.rs`): the AppKit main thread, through the main dispatch queue. The app opens its launch project off the main thread, which must never wait on a thread that creates plugins. Its quit closes the project first (`Graph::close`), waiting up to 2 s while the main thread destroys the instances, and leaves without exit handlers when some are still alive (`apps/music2-desktop/src/actions.rs`). Neither has been run inside the app yet;
+  - `m2`, the headless server example and the gates binary run under `m2_plugins::run_main`: the program on a worker with an 8 MiB stack, the main thread in its `CFRunLoop` serving the main queue; on return it serves until every instance is destroyed (2 s at most), then refuses further work. Tests, where libtest owns the main thread, opt in to one dedicated thread instead (`m2_plugins::test_main_thread()`); nothing falls back silently: with none installed, creating a plugin is an error naming what to call. Using a dedicated thread in tests is the step 3b design's clarification C1, awaiting the owner's decision; `core/plugins/tests/main_thread.rs` (no libtest harness) runs the real one, with Surge XT when `CLAP_PATH` has it;
+  - `is_main_thread` asks the executor (`pthread_main_np`, or the dedicated thread's `pthread_self`); `is_audio_thread` holds when the caller holds the instance's audio role, which `process` and `reset` take and the main thread takes only to `stop_processing` before deactivating. No thread-local is touched, so the audio thread never allocates for one;
+  - a plugin's requests (`request_callback`, `request_restart`, `latency.changed`, `mark_dirty`, `params.rescan`) only raise flags; every 5 ms a tick thread has the main thread sweep them, so `on_main_thread` never runs inside `process`, and the rest goes to the instance's owner.
 
 **HOST-3.** The host process, before plugin windows ship, uses shared-memory audio and event rings, message-based main-thread calls and its own AppKit main thread for windows. When it crashes, the affected instances become silence with `plugin.crashed`, and the app keeps running.
 - *Why:* one plugin crash must not take down the session.
 
 **HOST-4.** Plugin output events (parameter gestures) MUST come back through `ev_out`, to an override latch, a literal Tx or automation recording.
-- *Today:* output events are discarded (`core/plugins/src/lib.rs:381-383`).
+- *Today:* collected since step 3b, not yet consumed: each plugin node keeps what its last call output (parameter values, within 256 events; the rest counted), and `Renderer::plugin_out_events` counts them. Latches, the literal Tx and recording come with plugin windows.
 
 **HOST-5.** From step 3, plugin instances are carried across rebuilds, matched by module (its name until step 4, then its key), plugin id, ordinal and state hash. From step 7 they persist in the arena by RuntimeId.
+- *Today:* matches since step 3b (`core/runtime/src/plugins.rs`). The key is the module key, the plugin id and version, the state path's keys, the ordinal among top-level nodes with the same module, plugin and state path (so keyed instances follow their keys), and the hash of the verified state blob as the snapshot read it (`DataSet::state_hash`). A `Carry` of the renderer last sent is tagged with its engine, so a renderer for another engine (a new player, a rate change) creates every instance. Not carried: plugins inside `poly` voices, an instance that asked for a restart, a changed state blob, and offline renders (export, `m2 render`, range renders), which create their own. The last renderer holding an instance drops it off the audio thread, and its destruction is queued to the plugin main thread.
 
 **HOST-6.** Plugins get the transport from the engine: the playing and loop flags, tempo, the meter from the arrangement, a transport event at the frame of every jump, and `steady_time` from the engine clock.
 - *Today:* always "playing", 4/4 and no loop (`core/plugins/src/lib.rs:545-560`).
@@ -1165,9 +1206,9 @@ Steps 3 and 4 may run in parallel; everything else is in order.
    - Lane data no lane reads, left behind when a track or a lane is renamed in code, is the Warning `data.unclaimed`, with Relink and Delete fixes: `m2 relink`, `m2 delete-data`, and the strip's Move and Delete. Each fix is a checked, undoable session edit, applied only when asked ([DIAG-6](#fixes)).
    - `revert()` uses the current origin of the control at the carried position, with the regression test ([ID-12](#derived-identity)).
 2. **Write the contract** (this page) and have it reviewed.
-3. **Live step A** (2–3 weeks). Land 3a before 3b, and keep the offline path untouched.
+3. **Live step A** (2–3 weeks). **Built.** Land 3a before 3b, and keep the offline path untouched.
    - **3a, runtime (built):** the engine and transport clocks, with the engine running while stopped; an integer transport and loop ends computed from beats; lane schedulers that fill event buffers and own their sounding notes; a jump that never resets kernels; a new renderer activated at the audio thread's own position, with a 5 ms crossfade; `SwapLane` for notes and control lanes when the old and new `Flat` graphs are equal; the range render for agents.
-   - **3b, around the runtime:** gesture leases that survive saves which don't touch them; the session as an actor; `PluginHost` with its whole trait and the in-process executor on the real main thread; plugin instances carried across rebuilds.
+   - **3b, around the runtime (built):** gesture leases that survive saves which don't touch them; the session as an actor; `PluginHost` with its whole trait and the in-process executor on the real main thread; plugin instances carried across rebuilds.
 4. **Format v1 and SDK keys, in one change** (1–2 weeks). **Built.**
    - Track, lane and plugin keys, and `key()` frames; `Module { key, label }`; a context that exposes the key, never the label.
    - `data/<module>/` with clip ids and lane units; the manifest with `format` read first, `sample_rate`, and caret requirements for every dependency; the live engine at `sample_rate`.

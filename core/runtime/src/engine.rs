@@ -338,8 +338,11 @@ impl Engine {
                 }
                 match self.current.take() {
                     None => self.current = Some(renderer),
-                    Some(old) => {
+                    Some(mut old) => {
                         renderer.enter_from(old.transport(), old.tempo(), self.rate);
+                        // Plugin instances both share go on in the new one, with their notes; the
+                        // old one lends them for the fade (HOST-5, RENDER-25).
+                        renderer.carry_from(&mut old);
                         self.fading = Some(Fade { old, done: 0, first: true, finished: false });
                         self.current = Some(renderer);
                     }
@@ -448,8 +451,14 @@ impl Engine {
             return;
         };
         if self.idle {
-            self.out.silence(cur.transport().pos());
-            return;
+            // A plugin that slept may ask to run again (CLAP's request_process): it wakes the
+            // engine here, at the block line, as a message does.
+            if cur.woken() {
+                (self.idle, self.silent_blocks) = (false, 0);
+            } else {
+                self.out.silence(cur.transport().pos());
+                return;
+            }
         }
         let mut frames = match cur.render_block(clock, false) {
             Ok(f) => *f,
@@ -466,7 +475,7 @@ impl Engine {
         if let Some(f) = &mut self.fading
             && !f.finished
         {
-            let old = match f.old.render_block(clock, f.first) {
+            let old = match f.old.render_block_lent(clock, f.first, Some(&*cur)) {
                 Ok(o) => *o,
                 Err(e) => {
                     drop(e);

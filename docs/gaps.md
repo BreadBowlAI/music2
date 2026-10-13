@@ -19,7 +19,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 - Open a song folder (File → Open Project Folder…, ⌘O) and play it.
 - See every track on a timeline: notes, automation, masks and audio clips, with the tempo shown above the tracks and bars counted by the song's time signatures (written in `data/arrangement.json`).
 - Add, move and delete notes clips. Draw, move, resize and nudge notes, and set how hard each one is played. Every clip has an id, so an edit always lands on the clip it was made on.
-- Drag a number written directly at an input (`0.3`, `hz(800)`, `{ pan: 0.3 }`) as a knob: you hear the change, and letting go writes it into the code. A number held in a variable, or worked out from other numbers, shows **edit in code** instead (#35).
+- Drag a number written directly at an input (`0.3`, `hz(800)`, `{ pan: 0.3 }`) as a knob: you hear the change at once, even while the song compiles, and letting go writes it into the code. Saves to other files during the drag (another editor, an agent) don't interrupt it, and nor do saves to its own file that leave its line alone. A number held in a variable, or worked out from other numbers, shows **edit in code** instead (#35).
 - Connect cables inside one file, and add or remove 17 effects from a searchable browser.
 - Edit the code in the app, with type checks. When the code breaks, the last working version keeps playing.
 - Undo and redo every edit made in the app.
@@ -193,6 +193,7 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 ## Loose ends
 
 - **Undo messages are technical** (#29).
+- **A knob let go while the code doesn't compile** keeps playing its new value, and is written into the code once the code compiles again; after 30 seconds it is dropped, with a message saying so. Writing it at once, beside the broken file, needs verified multi-file edits (step 6 of the [architecture](architecture.md#order-of-work)).
 - **A missing plugin reads technically**: ``no CLAP plugin `org.surge-synth-team.surge-xt` is installed (looked in [...])``. It no longer silences the song: only that plugin's node is silent, or passes its audio through ([FMT-18a](architecture.md#plugin-state-and-parameters)). Open an Example still names missing plugins plainly, from the example's `example.toml`, and refuses to copy the example (#11).
 - **An error in the browser console with no project open.** `GET /api/graph` answers 400 when nothing is open, which is how the window knows to show the start screen. The browser logs that request as an error even though nothing is wrong. Answering "no project" without an error status would be quieter.
 - **The puppeteer script** that [song-as-program.md](song-as-program.md) mentions for the headless UI test isn't in the repo, and puppeteer isn't in `web/package.json`.

@@ -2,9 +2,11 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use m2_ir::{Diagnostic, Ir, KernelSig, Kernels, Node, Op, PortKind, PortSig, Severity};
+use m2_plugins::PluginHost;
 use serde::Deserialize;
 use wasmtime::{Engine, ExternType, Module, ValType};
 
@@ -95,6 +97,8 @@ pub struct PackageSet {
     packages: BTreeMap<String, Package>,
     kernels: HashMap<String, (KernelSig, String)>,
     plugins: HashMap<String, Hosted>,
+    /// How plugins are reached (P11): the process's in-process host unless set.
+    host: Arc<dyn PluginHost>,
 }
 
 /// A hosted plugin as the last build found it.
@@ -121,11 +125,22 @@ pub fn engine() -> Engine {
 
 impl Default for PackageSet {
     fn default() -> Self {
-        PackageSet { engine: engine(), packages: BTreeMap::new(), kernels: HashMap::new(), plugins: HashMap::new() }
+        PackageSet { engine: engine(), packages: BTreeMap::new(), kernels: HashMap::new(), plugins: HashMap::new(), host: m2_plugins::host() }
     }
 }
 
 impl PackageSet {
+    /// The host its plugins are described and built through.
+    pub fn host(&self) -> Arc<dyn PluginHost> {
+        self.host.clone()
+    }
+
+    /// Describe and build plugins through `host` instead of the process's.
+    pub fn with_host(mut self, host: Arc<dyn PluginHost>) -> PackageSet {
+        self.host = host;
+        self
+    }
+
     /// Load the package in `dir` (which holds `m2pkg.toml`).
     pub fn load(&mut self, dir: &Path) -> Result<&Package> {
         let path = dir.join("m2pkg.toml");
@@ -199,7 +214,7 @@ impl PackageSet {
             if matches!(self.plugins.get(id), Some(Hosted::Installed(..))) {
                 continue;
             }
-            match describe_plugin(id) {
+            match describe_plugin(&*self.host, id) {
                 Ok((sig, info)) => {
                     self.plugins.insert(id.to_string(), Hosted::Installed(sig, info));
                 }
@@ -393,11 +408,16 @@ fn missing_sig(id: &str, written: &BTreeSet<String>) -> KernelSig {
 }
 
 /// A plugin as typed ports: `in: audio<n>`, `notes: events<note>`, one control per
-/// parameter (in the plugin's own units, as `scalar`, optional), and `out: audio<n>`.
-fn describe_plugin(id: &str) -> Result<(KernelSig, m2_plugins::Info)> {
+/// parameter (in the plugin's own units, as `scalar`, optional), and `out: audio<n>`. Read from an
+/// instance created and activated through the host (on the plugin main thread), then destroyed:
+/// activating is what measures its latency (RENDER-21's check).
+fn describe_plugin(host: &dyn PluginHost, id: &str) -> Result<(KernelSig, m2_plugins::Info)> {
     let Some(clap_id) = id.strip_prefix("clap:") else { bail!("plugin ids start with `clap:`, not `{id}`") };
     let found = m2_plugins::find(clap_id)?;
-    let info = m2_plugins::Instance::new(&found, 48_000.0, 128)?.info.clone();
+    let (h, mut info) = host.create(&found, None, &m2_plugins::Owner::discard())?;
+    let latency = host.activate(h, 48_000, 128);
+    host.destroy(h);
+    info.latency = latency?;
     Ok((plugin_sig(id, &info)?, info))
 }
 

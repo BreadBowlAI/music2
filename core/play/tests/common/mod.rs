@@ -18,6 +18,9 @@ pub fn repo() -> PathBuf {
 }
 
 pub fn std_packages() -> PackageSet {
+    // Plugins run their main-thread calls on the tests' dedicated thread (HOST-2, C1).
+    m2_plugins::test_main_thread();
+    m2_plugins::probe::install();
     let mut p = PackageSet::default();
     p.load(&repo().join("std")).expect("std loads");
     p

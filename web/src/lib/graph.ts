@@ -293,6 +293,28 @@ export interface GraphState extends GraphStatus {
   problems: Diagnostic[];
   /** The rate the song runs and exports at (`[project] sample_rate`). */
   sample_rate: number;
+  /**
+   * The knob drags in progress (WRITE-22's gesture leases), each with its control's id as this
+   * view names it: a save that inserts a call above a dragged knob in its file renumbers it.
+   */
+  leases?: GraphLease[];
+}
+
+/** A knob drag in progress, as `GET /api/graph/leases` and the graph's state list it. */
+export interface GraphLease {
+  lease: number;
+  /** The control's id in `revision`. */
+  id: string;
+  file: string;
+  line: number;
+  /** The window that began it, and the gesture the knob routes name it by. */
+  client: string | null;
+  gesture: string | null;
+  state: "live" | "committing" | "pending";
+  /** What plays, and the code's value. */
+  value: number;
+  accepted: number;
+  revision: number;
 }
 
 export type Severity = "error" | "warning" | "notice";
@@ -350,6 +372,12 @@ export function attention(graph: GraphState): Diagnostic[] {
 
 const auth: Record<string, string> = token ? { "x-m2-token": token } : {};
 
+/**
+ * This window, one per page load. Its knob drags carry it, and so does its event socket: when the
+ * window closes or reloads, the server ends the drags it left open (WRITE-22's leases, C6).
+ */
+export const clientId: string = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `c${Date.now()}${Math.random()}`;
+
 async function call<T = any>(path: string, body?: unknown): Promise<T> {
   return request<T>(`/api/graph${path}`, body);
 }
@@ -390,10 +418,21 @@ export const graphApi = {
   status: () => call<GraphStatus>("/status"),
   /** Move playback to a beat, playing or not. */
   seek: (beat: number) => call("/seek", { beat }),
-  preview: (session: number, revision: number, id: string, gesture: string, value: number) => call("/preview", { session, revision, id, gesture, value }),
-  cancel: (session: number, id: string, gesture: string) => call("/preview/cancel", { session, id, gesture }),
+  /** A knob drag's update, straight to the engine; the first one begins the gesture's lease. Also its keepalive while held still. */
+  preview: (session: number, revision: number, id: string, gesture: string, value: number) =>
+    call("/preview", { session, revision, id, gesture, value, client: clientId }),
+  cancel: (session: number, id: string, gesture: string) => call("/preview/cancel", { session, id, gesture, client: clientId }),
+  /** Release: one value edit. While the code doesn't compile it is `pending`, and saved once it does. */
   set: (session: number, revision: number, id: string, gesture: string, value: number, expect: number) =>
-    call<{ file: string; before: string; after: string; revision: number }>("/set", { session, revision, id, gesture, value, expect }),
+    call<{ file: string; before: string; after: string; revision: number; pending?: boolean; errors?: unknown[] }>("/set", {
+      session,
+      revision,
+      id,
+      gesture,
+      value,
+      expect,
+      client: clientId,
+    }),
   connect: (session: number, revision: number, from: string, to: string) =>
     call<{ file: string; before: string; after: string; revision: number }>("/connect", { session, revision, from, to }),
   disconnect: (session: number, revision: number, id: string) =>

@@ -7,6 +7,11 @@
 //! One plugin instance isn't bit-exact with the next, so where the std gates compare bits these
 //! check notes (the engine's trace), the notes each plugin holds, levels, and the engine's counters.
 //! The checks that listen for the lead's tails play a copy whose kick doesn't play.
+//!
+//! Step 3b carries plugin instances across rebuilds (HOST-5): the engine rig builds as the server
+//! does, from the instances of the renderer last sent, and these check that seeks, loops and swaps
+//! keep every instance, that an edit carries the ones its code still names with the notes
+//! sounding into them, and what a carry must not keep. `--no-carry` is the negative reference.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -17,7 +22,7 @@ use m2_song::{LaneAddr, NoteClip, Project};
 
 use crate::gates::{Opts, SeekNotes, difference, offline, playing, unchanged};
 use crate::report::Outcome;
-use crate::rig::{Change, Cmd, Deck, Kind};
+use crate::rig::{Change, Cmd, Deck, Kind, Plugins};
 use crate::signal::{self, Around, Rng, Summary, db, rms, span};
 use crate::{Lab, Song, fixture, load_std, songs};
 
@@ -27,7 +32,7 @@ const BPM: f64 = 120.0;
 const CHORD: (f64, f64) = (0.0, 3.5);
 
 pub fn with_plugins(lab: &mut Lab, kind: Kind, o: &Opts) -> Result<Outcome> {
-    let mut out = Outcome::new("with-plugins", "RENDER-6a, 8, 9, 9a, 10, 11, 25, 26, 26a; HOST-6", kind.name());
+    let mut out = Outcome::new("with-plugins", "RENDER-6a, 8, 9, 9a, 10, 11, 25, 26, 26a; HOST-2, 5, 6", kind.name());
     let dir = lab.copy(&fixture("examples/with-plugins"), "with-plugins")?;
     // Compiled with a set of its own that binds the plugins: the rig builds with that set.
     let mut packages = load_std()?;
@@ -60,7 +65,32 @@ fn checks(lab: &mut Lab, kind: Kind, o: &Opts, song: &Song, out: &mut Outcome) -
     tail_cut(lab, kind, o, &lead, out)?;
     stuck(lab, kind, o, &lead, out)?;
     tail_after_stop(lab, kind, o, &lead, out)?;
-    add_effect(lab, kind, o, song, out)
+    add_effect(lab, kind, o, song, out)?;
+    carried(lab, kind, o, &lead, out)?;
+    removed(lab, kind, o, &lead, out)?;
+    inside(lab, kind, o, &lead, out)?;
+    new_state(lab, kind, o, &lead, out)?;
+    no_leak(lab, kind, o, &lead, out)
+}
+
+/// The rig's plugin instances must be the same ones, and none created (HOST-5, RENDER-10).
+fn same_instances(out: &mut Outcome, what: &str, before: &Option<Plugins>, after: &Option<Plugins>) {
+    match (before, after) {
+        (Some(a), Some(b)) => {
+            let handles = |p: &Plugins| p.nodes.iter().map(|n| n.handle).collect::<Vec<_>>();
+            out.check(
+                what,
+                handles(a) == handles(b) && a.created == b.created,
+                format!(
+                    "{} instances, the same: {}; {} created in between",
+                    a.nodes.len(),
+                    handles(a) == handles(b),
+                    b.created - a.created
+                ),
+            );
+        }
+        _ => out.skip(what, "this rig doesn't say"),
+    }
 }
 
 /// G1: a seek is heard within 50 ms, lands where it was asked and resets nothing; every note from
@@ -68,6 +98,7 @@ fn checks(lab: &mut Lab, kind: Kind, o: &Opts, song: &Song, out: &mut Outcome) -
 fn seek(lab: &mut Lab, kind: Kind, o: &Opts, song: &Song, out: &mut Outcome) -> Result<()> {
     let (mut deck, _) = playing(lab, kind, o, song, 2.0, 1.0)?;
     let before = deck.rig.probe();
+    let plugins_before = deck.rig.plugins();
     let mut rng = Rng::new(o.seed);
     let (mut late, mut misplaced) = (vec![], vec![]);
     let mut notes = SeekNotes::new(song);
@@ -88,6 +119,7 @@ fn seek(lab: &mut Lab, kind: Kind, o: &Opts, song: &Song, out: &mut Outcome) -> 
         notes.add(&deck, song, ons, target, at);
     }
     let s = Summary::of(&late);
+    same_instances(out, "G1: every plugin instance kept through the seeks", &plugins_before, &deck.rig.plugins());
     out.check("G1: a seek is audible within 50 ms", s.max <= 50.0, s);
     out.check("G1: it lands on its target", misplaced.is_empty(), misplaced.first().cloned().unwrap_or_else(|| "every seek".into()));
     let after = deck.rig.probe();
@@ -108,6 +140,7 @@ fn looped(lab: &mut Lab, kind: Kind, o: &Opts, song: &Song, out: &mut Outcome) -
     let played = deck.rig.applied(&play).context("play was never applied")?;
     let len = song.frame(16.0);
     let before = deck.rig.probe();
+    let plugins_before = deck.rig.plugins();
     let until = played + deck.frames(o.loop_minutes * 60.0);
     // What the trace kept so far, the first lap's opening notes among them.
     let mut ons = match deck.rig.ons() {
@@ -122,6 +155,7 @@ fn looped(lab: &mut Lab, kind: Kind, o: &Opts, song: &Song, out: &mut Outcome) -
         ons.extend(deck.rig.ons().unwrap_or_default());
     }
     let after = deck.rig.probe();
+    same_instances(out, "G2: every plugin instance kept through the wraps", &plugins_before, &deck.rig.plugins());
     unchanged(out, "G2: no reset in the loop", before.resets, after.resets);
     unchanged(out, "G2: no new renderer in the loop", before.generation, after.generation);
     if let Some(t) = after.transport {
@@ -214,6 +248,7 @@ fn note_edit(lab: &mut Lab, kind: Kind, o: &Opts, song: &Song, out: &mut Outcome
     let (mut a, _) = playing(lab, kind, o, &song, 1.0, 1.0)?;
     let (mut b, _) = playing(lab, kind, o, &song, 1.0, 1.0)?;
     let before = a.rig.probe();
+    let plugins_before = a.rig.plugins();
     let (e0, t0) = (a.now(), before.transport.context("the rig has no transport position")?);
     let beat = song.beat(t0) + 0.5;
     songs::edit_notes(&dir, "lead", "notes", |c: &mut Vec<NoteClip>| {
@@ -230,6 +265,7 @@ fn note_edit(lab: &mut Lab, kind: Kind, o: &Opts, song: &Song, out: &mut Outcome
     out.check("G3: a note edit is audible within compile + 20 ms", latency <= 20.0, format!("{latency:.1} ms after the compile"));
     out.check("G3: it took SwapLane, not a new renderer", sent.swap, if sent.swap { "swapped" } else { "rebuilt" });
     let after = a.rig.probe();
+    same_instances(out, "G3: every plugin instance kept through the swap", &plugins_before, &a.rig.plugins());
     unchanged(out, "G3: no reset", before.resets, after.resets);
     unchanged(out, "G3: no new renderer", before.generation, after.generation);
     // Up to the note, the edited engine plays what the unedited twin does (no tail cut); from it,
@@ -400,13 +436,18 @@ fn tail_after_stop(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut O
     if let Some(n) = after.held_notes {
         out.check("G7: Surge holds no note after stop", n == 0, format!("{n} held"));
     }
+    // RENDER-6a: an engine may idle only once every plugin says it sleeps. Surge XT and Airwindows
+    // never do (step 3b §1.2), so this one never idles: recorded, not assumed.
+    if let Some(p) = deck.rig.plugins() {
+        let says: Vec<String> = p.nodes.iter().map(|n| format!("{:?}", n.status)).collect();
+        out.info("G7: the engine idled after stop", format!("{} (the plugins last said {})", p.idled, says.join(", ")));
+    }
     Ok(())
 }
 
-/// G5: an effect added while playing is heard within compile + 100 ms, with no jump back. Step 3a
-/// builds every plugin instance again with each new renderer (carrying them across is step 3b's
-/// `PluginHost`), and the contract's code-plane budget leaves plugin loads out: what that took is
-/// printed beside the latency.
+/// G5: an effect added while playing is heard within compile + 100 ms, with no jump back. The
+/// contract's code-plane budget leaves plugin loads out; step 3b carries the instances, so the
+/// activation builds none: what building them takes is printed beside the latency, for the record.
 fn add_effect(lab: &mut Lab, kind: Kind, o: &Opts, song: &Song, out: &mut Outcome) -> Result<()> {
     let dir = lab.copy(&song.dir, "add-effect")?;
     let song = lab.compile(&dir)?;
@@ -490,4 +531,285 @@ fn kick_call(session: &m2_session::Session, dir: &Path) -> Result<String> {
         .find(|s| s.in_project && s.file == "tracks/kick.ts" && s.callee == "kick")
         .with_context(|| format!("no call to kick in {}", dir.join("tracks/kick.ts").display()))?;
     Ok(format!("{}#{}", site.file, site.ordinal))
+}
+
+// ---------------------------------------------------------------- step 3b: instances carried
+
+/// Wait up to a second for the plugin main thread to destroy what was dropped.
+fn settled(f: impl Fn() -> bool) -> bool {
+    let t = Instant::now();
+    while t.elapsed().as_secs_f64() < 1.0 {
+        if f() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    f()
+}
+
+/// The lead playing from 0 on a copy of `lead` (its kick silent), at the engine frame transport 0
+/// played, its plugins, and the copy's folder.
+fn lead_deck(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, name: &str) -> Result<(Deck, u64, Song)> {
+    let dir = lab.copy(&lead.dir, name)?;
+    let song = lab.compile(&dir)?;
+    let (mut deck, play) = playing(lab, kind, o, &song, 0.0, 0.0)?;
+    deck.run(deck.period as u64)?;
+    let played = deck.rig.applied(&play).context("play was never applied")?;
+    Ok((deck, played, song))
+}
+
+/// Surge's node: the one the chord sounds into.
+fn surge(p: &Plugins) -> Option<&m2_runtime::PluginView> {
+    p.nodes.iter().find(|n| !n.notes.is_empty())
+}
+
+/// Step 3b, G5 on the plugins (HOST-5, RENDER-25, C7): an effect added on the kick at beat 1.5, the
+/// lead's first chord held (beats 0 to 3.5), carries both plugin instances. None is created; Surge's
+/// node holds the same notes with the same ids after the activation; no NoteOff reaches it there,
+/// and the chord's Offs arrive at beat 3.5; the lead's level over the 200 ms after the activation is
+/// at least 0.9 times the 200 ms before, relative to the same windows offline; and no step across
+/// the crossfade is larger than twice the chord's own (G6's rule). With `--no-carry` the level check
+/// must fail: a fresh Surge chases nothing, and the old one fades out.
+fn carried(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome) -> Result<()> {
+    let (mut deck, played, song) = lead_deck(lab, kind, o, lead, "carry")?;
+    let Some(_) = deck.rig.plugins() else {
+        out.skip("G5 (3b): plugin instances carried", "this rig doesn't say which instances it plays");
+        return Ok(());
+    };
+    let mut session = lab.session(&song.dir)?;
+    let target = kick_call(&session, &song.dir)?;
+    let t = Instant::now();
+    session.add_effect(session.accepted().number, &target, "std/fx", "delay").map_err(|e| anyhow!("{e}"))?;
+    let edited = crate::accepted(&session, t.elapsed());
+    deck.run_to(played + song.frame(1.5))?;
+    let pre = deck.rig.plugins().expect("checked");
+    let sent = deck.change(&edited, Change::Structure)?;
+    deck.run(deck.period as u64)?;
+    let at = deck.rig.applied(&sent).context("the activation was never applied")?;
+    let first = deck.rig.plugins().expect("checked");
+    out.info("G5 (3b): preparing the activation, plugins carried", format!("{:.1} ms", sent.prepare.as_secs_f64() * 1e3));
+    same_instances(
+        out,
+        "G5 (3b): the edit's renderer carried every plugin instance, creating none",
+        &Some(pre.clone()),
+        &Some(first.clone()),
+    );
+    deck.run_to(played + song.frame(3.75))?;
+    // The lead's level over 200 ms each side of the activation (its chorus and unison move it by
+    // several dB from one 5 ms to the next), against the same windows offline, in one instance.
+    let w = deck.frames(0.2);
+    let ratio = |tape: &[[f32; 2]], at: u64| rms(span(tape, at, at + w)) / rms(span(tape, at - w, at));
+    let natural = ratio(&offline(lab, &song, song.frame(3.5))?, at - played);
+    let r = ratio(&deck.tape, at);
+    out.check(
+        "G5 (3b): the lead plays on at its level through the activation",
+        r >= 0.9 * natural,
+        format!("after/before over 200 ms: {r:.3}; the same song offline, {natural:.3} (at least 0.9 times that)"),
+    );
+    // G6's rule on the plugin path (RENDER-25a): across the activation's 5 ms crossfade, no
+    // sample-to-sample step larger than twice the largest of the held chord just before it.
+    let before = signal::max_step(span(&deck.tape, at - w, at)).0;
+    let across = signal::max_step(span(&deck.tape, at, at + deck.frames(0.02))).0;
+    out.check(
+        "G5 (3b): no step across the activation larger than twice the chord's own before it (G6's rule)",
+        across > 0.0 && across <= 2.0 * before,
+        format!("largest step {across:.4} across, {before:.4} over the 200 ms before (bound {:.4})", 2.0 * before),
+    );
+    let s1 = surge(&pre).and_then(|s0| first.nodes.iter().find(|n| n.handle == s0.handle).map(|s1| (s0, s1)));
+    let Some((s0, s1)) = s1 else {
+        out.check(
+            "G5 (3b): the chord stays held through the activation",
+            false,
+            "Surge's node holds no chord before the edit, or is gone after it",
+        );
+        return Ok(());
+    };
+    out.check(
+        "G5 (3b): the chord stays held through the activation, with the same note ids",
+        s0.notes == s1.notes && s1.offs == 0,
+        format!("{:?} before, {:?} after; {} NoteOffs sent to Surge at the activation", s0.notes, s1.notes, s1.offs),
+    );
+    let end = deck.rig.plugins().expect("checked");
+    let s2 = end.nodes.iter().find(|n| n.handle == s1.handle);
+    let want = played + song.frame(3.5);
+    out.check(
+        "G5 (3b): the chord's NoteOffs arrive at its end (beat 3.5)",
+        s2.is_some_and(|s| s.offs == s0.notes.len() as u64 && s.last_off == Some(want)),
+        format!("{:?} NoteOffs, the last at {:?}; the chord ends at engine frame {want}", s2.map(|s| s.offs), s2.map(|s| s.last_off)),
+    );
+    Ok(())
+}
+
+/// Step 3b (RENDER-26a, C7): one revision changes the lead's code and drops the chord's top note.
+/// The instances are carried; the dropped note's NoteOff reaches Surge at the activation's first
+/// frame, the other two go on to beat 3.5, and the next chord's notes take ids above every one Surge
+/// had (CLAP matches voices by id).
+fn removed(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome) -> Result<()> {
+    let (mut deck, played, song) = lead_deck(lab, kind, o, lead, "removed")?;
+    deck.run_to(played + song.frame(1.5))?;
+    let Some(pre) = deck.rig.plugins() else {
+        out.skip("removed note (3b)", "this rig doesn't say which instances it plays");
+        return Ok(());
+    };
+    let Some(s0) = surge(&pre).cloned() else { bail!("Surge holds no chord at beat 1.5") };
+    let top = *s0.notes.iter().max_by_key(|n| n.1).expect("a chord");
+    let lead_ts = song.dir.join("tracks/lead.ts");
+    let code = std::fs::read_to_string(&lead_ts)?;
+    std::fs::write(&lead_ts, format!("{code}// edited with its notes\n"))?;
+    songs::edit_notes(&song.dir, "lead", "notes", |c| {
+        c[0].notes.retain(|n| !(n.start == CHORD.0 && n.pitch.round() as i16 == top.1));
+    })?;
+    let edited = lab.compile(&song.dir)?;
+    let sent = deck.change(&edited, Change::Structure)?;
+    deck.run(deck.period as u64)?;
+    let at = deck.rig.applied(&sent).context("the activation was never applied")?;
+    let first = deck.rig.plugins().expect("checked");
+    same_instances(out, "removed note (3b): the instances are carried", &Some(pre.clone()), &Some(first.clone()));
+    let s1 = first.nodes.iter().find(|n| n.handle == s0.handle).cloned().unwrap_or_else(|| s0.clone());
+    let kept: Vec<(u32, i16)> = s0.notes.iter().copied().filter(|n| *n != top).collect();
+    out.check(
+        "removed note (3b): its NoteOff reaches Surge at the activation, the others go on",
+        s1.offs == 1 && s1.last_off == Some(at) && s1.notes == kept,
+        format!(
+            "{} NoteOff(s), the last at {:?} (activation at {at}); Surge holds {:?}, expected {kept:?}",
+            s1.offs, s1.last_off, s1.notes
+        ),
+    );
+    deck.run_to(played + song.frame(4.5))?;
+    let next = deck.rig.plugins().expect("checked");
+    let had = s0.notes.iter().map(|n| n.0).max().unwrap_or(0);
+    let ids: Vec<u32> =
+        next.nodes.iter().find(|n| n.handle == s0.handle).map(|n| n.notes.iter().map(|x| x.0).collect()).unwrap_or_default();
+    out.check(
+        "removed note (3b): ids never repeat into the carried instance",
+        !ids.is_empty() && ids.iter().all(|i| *i > had),
+        format!("the next chord's ids {ids:?}, every one Surge had up to {had}"),
+    );
+    Ok(())
+}
+
+/// Step 3b (HOST-5, HOME-4): a code edit inside the lead (Airwindows' dry/wet, 0.35 to 0.9) carries
+/// both instances, and the new value reaches the carried instance at its first call.
+fn inside(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome) -> Result<()> {
+    let (mut deck, played, song) = lead_deck(lab, kind, o, lead, "inside")?;
+    deck.run_to(played + song.frame(1.0))?;
+    let Some(pre) = deck.rig.plugins() else {
+        out.skip("code edit inside the lead (3b)", "this rig doesn't say which instances it plays");
+        return Ok(());
+    };
+    let lead_ts = song.dir.join("tracks/lead.ts");
+    let code = std::fs::read_to_string(&lead_ts)?;
+    if !code.contains("dry_wet_2944917344: 0.35") {
+        bail!("tracks/lead.ts no longer sets dry_wet_2944917344 to 0.35");
+    }
+    std::fs::write(&lead_ts, code.replace("dry_wet_2944917344: 0.35", "dry_wet_2944917344: 0.9"))?;
+    let edited = lab.compile(&song.dir)?;
+    deck.change(&edited, Change::Structure)?;
+    deck.run_secs(0.1)?;
+    let after = deck.rig.plugins().expect("checked");
+    same_instances(out, "code edit inside the lead (3b): both instances carried", &Some(pre.clone()), &Some(after.clone()));
+    let air = after.nodes.iter().find(|n| n.notes.is_empty() && Some(n.handle) != surge(&pre).map(|s| s.handle));
+    let value = air.and_then(|n| match m2_plugins::host().main_call(n.handle, m2_plugins::MainCall::Value(2_944_917_344)) {
+        Ok(m2_plugins::Reply::Value(v)) => v,
+        _ => None,
+    });
+    out.check(
+        "code edit inside the lead (3b): the new value reached the carried instance",
+        value.is_some_and(|v| (v - 0.9).abs() < 1e-6),
+        format!("Airwindows' dry/wet reads {value:?}"),
+    );
+    Ok(())
+}
+
+/// Step 3b (HOST-5): a changed state blob is a new instance: one is created (Surge; Airwindows is
+/// carried), and the old Surge is destroyed only once the renderer that played it is retired, never
+/// during the crossfade.
+fn new_state(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome) -> Result<()> {
+    let (mut deck, played, song) = lead_deck(lab, kind, o, lead, "new-state")?;
+    if deck.rig.plugins().is_none() {
+        out.skip("changed state (3b)", "this rig doesn't say which instances it plays");
+        return Ok(());
+    }
+    // Another patch: a fresh Surge with its volume turned down, saved through the host (a fresh
+    // Surge alone saves the bytes the fixture holds), and destroyed before anything is counted.
+    let host = m2_plugins::host();
+    let found = m2_plugins::find("org.surge-synth-team.surge-xt")?;
+    let gone = m2_plugins::InProcess::counts().1;
+    let (h, info) = host.create(&found, None, &m2_plugins::Owner::discard())?;
+    let volume = info.params.iter().find(|p| !p.stepped && p.name.contains("Volume")).context("Surge XT has a volume parameter")?;
+    let blob = host.activate(h, song.rate, 128).and_then(|_| {
+        let (mut l, mut r, silence) = (vec![0.0f32; 128], vec![0.0f32; 128], vec![0.0f32; 128]);
+        let mut io = m2_plugins::SharedBuffers { inputs: [&silence, &silence], n_in: 2, outputs: [&mut l, &mut r], n_out: 2, frames: 128 };
+        let mut ev = m2_plugins::Events::with_capacity(1);
+        ev.push(m2_plugins::Event::Param { time: 0, id: volume.id, value: volume.min + (volume.max - volume.min) * 0.3 });
+        host.process(h, &mut io, &ev, &mut m2_plugins::Events::with_capacity(16), &m2_plugins::Transport::default());
+        host.save_state(h).recv()?.map_err(|e| anyhow!("{e}"))
+    });
+    host.destroy(h);
+    if !settled(|| m2_plugins::InProcess::counts().1 > gone) {
+        bail!("the patch's Surge was never destroyed");
+    }
+    std::fs::write(song.dir.join("data/lead/lead.state"), blob?.bytes)?;
+    let edited = lab.compile(&song.dir)?;
+    let hash = |s: &Song| s.data.state_hash("lead", &["lead"]).map(|h| h.hex()[..8].to_string());
+    out.info("changed state (3b): the blob's hash", format!("{:?} before, {:?} after", hash(&song), hash(&edited)));
+    deck.run_to(played + song.frame(1.0))?;
+    let pre = deck.rig.plugins().expect("checked");
+    deck.change(&edited, Change::Structure)?;
+    // The activation and the first block of its 5 ms crossfade, with no device buffer after it.
+    deck.run(m2_runtime::BLOCK as u64)?;
+    let during = deck.rig.plugins().expect("checked");
+    deck.run_secs(0.1)?;
+    let retired = settled(|| m2_plugins::InProcess::counts().1 > pre.destroyed);
+    let after = deck.rig.plugins().expect("checked");
+    let surge_new = surge(&pre).is_some_and(|s| after.nodes.iter().all(|n| n.handle != s.handle));
+    let carried = after.nodes.iter().filter(|n| pre.nodes.iter().any(|p| p.handle == n.handle)).count();
+    out.check(
+        "changed state (3b): a new Surge, Airwindows carried",
+        surge_new && carried == 1 && after.created == pre.created + 1,
+        format!("{} created; {carried} of {} carried", after.created - pre.created, after.nodes.len()),
+    );
+    out.check(
+        "changed state (3b): the old Surge is destroyed once its renderer is retired, not before",
+        during.destroyed == pre.destroyed && retired,
+        format!(
+            "{} destroyed by the crossfade's first block, {} once it was retired",
+            during.destroyed - pre.destroyed,
+            m2_plugins::InProcess::counts().1 - pre.destroyed
+        ),
+    );
+    Ok(())
+}
+
+/// Step 3b: 20 activations (the lead's dry/wet edited back and forth) create no instance and leak
+/// none: the rig's live instances are those of the playing renderer, and once the rig is dropped
+/// the plugin main thread destroys every one.
+fn no_leak(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome) -> Result<()> {
+    let (mut deck, _, song) = lead_deck(lab, kind, o, lead, "no-leak")?;
+    let Some(pre) = deck.rig.plugins() else {
+        out.skip("no leak (3b)", "this rig doesn't say which instances it plays");
+        return Ok(());
+    };
+    let lead_ts = song.dir.join("tracks/lead.ts");
+    let code = std::fs::read_to_string(&lead_ts)?;
+    for k in 0..20 {
+        let v = if k % 2 == 0 { "0.4" } else { "0.35" };
+        std::fs::write(&lead_ts, code.replace("dry_wet_2944917344: 0.35", &format!("dry_wet_2944917344: {v}")))?;
+        let edited = lab.compile(&song.dir)?;
+        deck.change(&edited, Change::Structure)?;
+        deck.run_secs(0.05)?;
+    }
+    deck.run_secs(0.1)?;
+    let after = deck.rig.plugins().expect("checked");
+    let owner = after.owner.clone().context("the rig names its owner")?;
+    let live = settled(|| owner.live() == after.nodes.len() as u64);
+    out.check(
+        "no leak (3b): 20 activations create no instance, and only the playing ones live",
+        after.created == pre.created && live,
+        format!("{} created; {} live for {} playing", after.created - pre.created, owner.live(), after.nodes.len()),
+    );
+    drop(deck);
+    let gone = settled(|| owner.live() == 0);
+    out.check("no leak (3b): every instance destroyed once the engine is gone", gone, format!("{} left", owner.live()));
+    Ok(())
 }

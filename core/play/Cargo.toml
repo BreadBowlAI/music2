@@ -14,6 +14,8 @@ crossbeam-channel.workspace = true
 
 [dev-dependencies]
 m2-song.workspace = true
+# The probe plugin and the tests' plugin main thread (HOST-2).
+m2-plugins.workspace = true
 # Compiles the fixtures for the bit-identity test; it doesn't depend on m2-play.
 m2-session.workspace = true
 serde_json.workspace = true

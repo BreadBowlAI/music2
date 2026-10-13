@@ -14,7 +14,7 @@
 //! if the new graph equals the old one with exactly that change; then the file is
 //! written, if the disk still matches. Undo is the same operation, inverted.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 
 use m2_ir::{Diagnostic, Ir, Node, Op, Origin, Unit};
@@ -61,6 +61,14 @@ pub struct Control {
     pub uses: usize,
     pub origin: Origin,
     lens: LiteralLens,
+}
+
+impl Control {
+    /// The value `value` plays as, exactly as a commit would write it (the literal's spelling,
+    /// rounded through its units): what a gesture's update sends the engine (WRITE-22). Pure.
+    pub fn audition(&self, value: f64) -> Result<f64, EditError> {
+        Ok(self.lens.propose(value)?.value)
+    }
 }
 
 /// Where a previewed value lands in the accepted revision.
@@ -274,12 +282,20 @@ fn there_already(name: &Path, by: &Path) -> String {
     }
 }
 
-/// Where bytes `start..end` of `old` are in `new`, if no change touched them.
-/// Conservative: everything between the first and last difference counts as changed.
-fn carry(old: &str, new: &str, start: usize, end: usize) -> Option<usize> {
+/// Where bytes `start..end` of `old` are in `new`, if no change touched them (WRITE-12): they lie
+/// in the text the two share before the first difference or after the last one, or on lines a
+/// line diff keeps (edits above and below them, as when an agent adds an import and a line at
+/// the end). Conservative either way: a change on one of the range's own lines touches it.
+pub(crate) fn carry(old: &str, new: &str, start: usize, end: usize) -> Option<usize> {
     if old == new {
         return Some(start);
     }
+    carry_ends(old, new, start, end).or_else(|| carry_lines(old, new, start, end))
+}
+
+/// [`carry`] by the common prefix and suffix alone: everything between the first and last
+/// difference counts as changed.
+fn carry_ends(old: &str, new: &str, start: usize, end: usize) -> Option<usize> {
     let p = old.bytes().zip(new.bytes()).take_while(|(a, b)| a == b).count();
     let s = old.as_bytes()[p..].iter().rev().zip(new.as_bytes()[p..].iter().rev()).take_while(|(a, b)| a == b).count();
     let to = if end <= p {
@@ -290,6 +306,98 @@ fn carry(old: &str, new: &str, start: usize, end: usize) -> Option<usize> {
         return None;
     };
     (new.get(to..to + (end - start)) == old.get(start..end)).then_some(to)
+}
+
+/// Lines a line diff may find different (about 2 MB of work at worst); a save that changes more
+/// carries nothing by lines.
+const DIFF_LINES: usize = 500;
+
+/// [`carry`] by a line diff: the lines `start..end` spans must all be kept, in one run.
+fn carry_lines(old: &str, new: &str, start: usize, end: usize) -> Option<usize> {
+    if start >= old.len() || end < start || end > old.len() {
+        return None;
+    }
+    // Each line with its newline, and where it starts.
+    fn lines(s: &str) -> Vec<(usize, &str)> {
+        let mut at = 0;
+        s.split_inclusive('\n')
+            .map(|l| {
+                at += l.len();
+                (at - l.len(), l)
+            })
+            .collect()
+    }
+    let (a, b) = (lines(old), lines(new));
+    // The line holding `start`, and the one holding the range's last byte.
+    let line_of = |byte: usize| a.partition_point(|(s, _)| *s <= byte) - 1;
+    let (first, last) = (line_of(start), line_of(end.max(start + 1) - 1));
+    let (at, bt): (Vec<&str>, Vec<&str>) = (a.iter().map(|l| l.1).collect(), b.iter().map(|l| l.1).collect());
+    let kept = kept_lines(&at, &bt)?;
+    let to_first = kept[first]?;
+    if (first..=last).any(|l| kept[l] != Some(to_first + (l - first))) {
+        return None;
+    }
+    let to = b[to_first].0 + (start - a[first].0);
+    (new.get(to..to + (end - start)) == old.get(start..end)).then_some(to)
+}
+
+/// For each line of `a`, the line of `b` a shortest edit script keeps it as, or None when it is
+/// deleted (Myers' greedy algorithm, O((N+M)·D)). None when more than [`DIFF_LINES`] lines differ.
+fn kept_lines<T: PartialEq>(a: &[T], b: &[T]) -> Option<Vec<Option<usize>>> {
+    let mut kept = vec![None; a.len()];
+    // Lines both start and end with are kept as they are; the diff runs between them.
+    let head = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+    let tail = a[head..].iter().rev().zip(b[head..].iter().rev()).take_while(|(x, y)| x == y).count();
+    for (i, k) in kept.iter_mut().enumerate().take(head) {
+        *k = Some(i);
+    }
+    for i in 0..tail {
+        kept[a.len() - 1 - i] = Some(b.len() - 1 - i);
+    }
+    let (xs, ys) = (&a[head..a.len() - tail], &b[head..b.len() - tail]);
+    let (n, m) = (xs.len() as isize, ys.len() as isize);
+    let max = ((n + m) as usize).min(DIFF_LINES) as isize;
+    // v[k + max] is the furthest x reached on diagonal k; trace[d] is v after round d.
+    let at = |k: isize| (k + max) as usize;
+    let mut v = vec![0isize; 2 * max as usize + 2];
+    let mut trace: Vec<Vec<isize>> = vec![];
+    let mut found = None;
+    'rounds: for d in 0..=max {
+        for k in (-d..=d).step_by(2) {
+            let mut x = if k == -d || (k != d && v[at(k - 1)] < v[at(k + 1)]) { v[at(k + 1)] } else { v[at(k - 1)] + 1 };
+            let mut y = x - k;
+            while x < n && y < m && xs[x as usize] == ys[y as usize] {
+                (x, y) = (x + 1, y + 1);
+            }
+            v[at(k)] = x;
+            if x >= n && y >= m {
+                found = Some(d);
+                trace.push(v.clone());
+                break 'rounds;
+            }
+        }
+        trace.push(v.clone());
+    }
+    // Back from the end: each round's edit, then the lines its snake kept.
+    let (mut d, mut x, mut y) = (found?, n, m);
+    while d > 0 {
+        let prev = &trace[d as usize - 1];
+        let k = x - y;
+        let down = k == -d || (k != d && prev[at(k - 1)] < prev[at(k + 1)]);
+        let pk = if down { k + 1 } else { k - 1 };
+        let (px, py) = (prev[at(pk)], prev[at(pk)] - pk);
+        let (sx, sy) = if down { (px, py + 1) } else { (px + 1, py) };
+        while x > sx && y > sy {
+            (x, y) = (x - 1, y - 1);
+            kept[head + x as usize] = Some(head + y as usize);
+        }
+        (x, y, d) = (px, py, d - 1);
+    }
+    while x > 0 && y > 0 {
+        (x, y) = (x - 1, y - 1);
+        kept[head + x as usize] = Some(head + y as usize);
+    }
+    Some(kept)
 }
 
 /// The IR with source positions removed, for comparing two builds.
@@ -507,10 +615,26 @@ impl Session {
         found
     }
 
+    /// [`Session::controls`] by id.
+    pub fn controls_by_id(&self) -> HashMap<String, Control> {
+        self.controls().into_iter().map(|c| (c.id.clone(), c)).collect()
+    }
+
+    /// The control `id` named at revision `at`, as it is in the accepted revision: carried
+    /// forward when the files changed without touching its call (WRITE-12, WRITE-22). `current`
+    /// is the accepted revision's [`Session::controls_by_id`], so many can be carried for one walk
+    /// of the graph. Never builds anything.
+    pub fn carry(&self, at: u64, id: &str, current: &HashMap<String, Control>) -> Result<Control, EditError> {
+        self.resolve_with(at, id, |id| current.get(id).cloned())
+    }
+
     /// The control `id` named at revision `at`, as it is in the accepted revision.
     fn resolve(&self, at: u64, id: &str) -> Result<Control, EditError> {
         let current = self.controls();
-        let find = |id: &str| current.iter().find(|c| c.id == id).cloned();
+        self.resolve_with(at, id, |id| current.iter().find(|c| c.id == id).cloned())
+    }
+
+    fn resolve_with(&self, at: u64, id: &str, find: impl Fn(&str) -> Option<Control>) -> Result<Control, EditError> {
         if at == self.accepted.number {
             return find(id).ok_or_else(|| EditError::NotFound(id.to_string()));
         }

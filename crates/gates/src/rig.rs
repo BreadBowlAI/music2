@@ -53,6 +53,21 @@ pub struct Probe {
     pub held_notes: Option<usize>,
 }
 
+/// The plugin instances an engine plays (step 3b), and the process's counts.
+#[derive(Clone, Debug, Default)]
+pub struct Plugins {
+    /// The playing renderer's top-level plugin nodes: their instances, the notes sounding into
+    /// each, and the NoteOffs each was sent.
+    pub nodes: Vec<m2_runtime::PluginView>,
+    /// Instances created and destroyed in this process so far.
+    pub created: u64,
+    pub destroyed: u64,
+    /// Whether the engine idled at any time since the rig opened its song (RENDER-6a).
+    pub idled: bool,
+    /// Who the rig's instances report to: its count of them outlives the rig.
+    pub owner: Option<m2_plugins::Owner>,
+}
+
 /// A note-on from the engine's trace: where it sounded on both clocks.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NoteOn {
@@ -97,6 +112,11 @@ pub trait Rig {
     fn audio_work(&self) -> Option<(usize, usize)> {
         None
     }
+
+    /// Its plugin instances. None: this engine doesn't say.
+    fn plugins(&mut self) -> Option<Plugins> {
+        None
+    }
 }
 
 /// Which engine a gate measures.
@@ -120,7 +140,7 @@ impl Kind {
         match self {
             Kind::Replay => Ok(Box::new(crate::replay::Replay::new(lab.packages.clone()))),
             #[cfg(feature = "engine")]
-            Kind::Engine => Ok(Box::new(crate::engine::Live::new(lab.packages.clone())?)),
+            Kind::Engine => Ok(Box::new(crate::engine::Live::new(lab.packages.clone(), lab.carry)?)),
             #[cfg(not(feature = "engine"))]
             Kind::Engine => anyhow::bail!("this build has no live engine: build with `--features engine` once step 3a lands"),
         }

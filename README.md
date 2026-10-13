@@ -406,7 +406,7 @@ Edits name the open project's `session` and the `revision` they were planned aga
 
 | Route | What it does |
 |---|---|
-| `GET /api/graph` | The open song: name, folder, `session`, the graph view (with `revision` and every knob's id), the timeline, the effects, problems, and where playback is |
+| `GET /api/graph` | The open song: name, folder, `session`, the graph view (with `revision` and every knob's id), the timeline, the effects, problems, where playback is, and the knob drags in progress (`leases`, each with its knob's id in that view) |
 | `POST /api/graph/open` `{path}` | Open a song folder |
 | `POST /api/graph/close` | Close it |
 | `GET /api/graph/status` | Playing or not, seconds and beat, and the loop (`{start, end, on}` in beats, or null) |

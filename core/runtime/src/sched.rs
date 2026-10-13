@@ -201,6 +201,8 @@ pub struct NoteScheduler {
     swapped: bool,
     /// The renderer is being replaced: everything was turned off, and nothing starts.
     released: bool,
+    /// It took over another scheduler's sounding notes (a carried plugin instance): once only.
+    adopted: bool,
     events: Events,
     caps: Caps,
 }
@@ -216,6 +218,7 @@ impl NoteScheduler {
             next_id: 1,
             swapped: false,
             released: false,
+            adopted: false,
             events: Events::with_capacity(caps.events()),
             caps,
         }
@@ -237,6 +240,43 @@ impl NoteScheduler {
     /// Whether note `id` is sounding.
     pub fn is_sounding(&self, id: u32) -> bool {
         self.sounding.iter().any(|s| s.id == id)
+    }
+
+    /// The id its next note gets.
+    pub fn next_id(&self) -> u32 {
+        self.next_id
+    }
+
+    /// Never give a note an id below `id`: a plugin instance carried from another scheduler had
+    /// notes up to it, and CLAP matches voices by id (§5.3).
+    pub fn raise_next_id(&mut self, id: u32) {
+        self.next_id = self.next_id.max(id);
+    }
+
+    /// Take over the notes `old` turned on and hasn't turned off, keeping their ids, as far as this
+    /// scheduler has room: an activation that carries a plugin instance whose notes go on (C7,
+    /// RENDER-25). At its first block they are matched against this scheduler's data as a swap's
+    /// are (RENDER-26a): one the data dropped, or that ends at or before the transport, gets an
+    /// Off there, and the rest keep sounding until their ends in the new data. Once per scheduler;
+    /// returns how many it took. Never allocates.
+    pub fn adopt(&mut self, old: &NoteScheduler) -> usize {
+        if self.adopted {
+            return 0;
+        }
+        self.adopted = true;
+        self.next_id = self.next_id.max(old.next_id);
+        let mut n = 0;
+        for s in &old.sounding {
+            if self.sounding.len() == self.sounding.capacity() {
+                break;
+            }
+            self.sounding.push(*s);
+            n += 1;
+        }
+        if n > 0 {
+            self.swapped = true;
+        }
+        n
     }
 
     /// Play `data` from the next block on. Returns the data replaced, to retire off the audio
@@ -272,9 +312,13 @@ impl NoteScheduler {
         }
         for (i, run) in runs.as_slice().iter().enumerate() {
             if run.jump != Jump::None {
-                // RENDER-9: a jump ends every sounding note, and the cursor seeks.
-                for s in self.sounding.drain(..) {
-                    self.events.push(Event::Off { frame: run.off, id: s.id, velocity: 0.0 });
+                // RENDER-9: a jump ends every sounding note, and the cursor seeks. A renderer's
+                // first block (Enter) has nothing of its own sounding: only notes it adopted from
+                // the renderer it replaces, which go on (C7).
+                if run.jump != Jump::Enter {
+                    for s in self.sounding.drain(..) {
+                        self.events.push(Event::Off { frame: run.off, id: s.id, velocity: 0.0 });
+                    }
                 }
                 self.cursor = self.data.seek(run.at);
             }
@@ -549,6 +593,50 @@ mod tests {
         assert_eq!(big.needs(), Caps { sounding: 300, ons: 300 });
         assert!(s.swap(big).is_err());
         assert_eq!(Caps::FLOOR.events(), 256 + 4 * 128 + 8);
+    }
+
+    // C7, RENDER-26a: a scheduler adopts the notes another turned on, with their ids. At its first
+    // block (Enter) they go on: one its data dropped ends at frame 0, the rest end where its data
+    // says, and its own notes take ids above every adopted one. Adopting is once, within its room.
+    #[test]
+    fn adopted_notes_go_on_through_enter() {
+        let lane = |top: bool| {
+            let mut ns = vec![json!({"pitch": 60, "start": 0, "length": 1}), json!({"pitch": 67, "start": 2, "length": 1})];
+            if top {
+                ns.push(json!({"pitch": 64, "start": 0, "length": 1}));
+            }
+            data(json!({"clips": [{"id": "c", "start": 0, "length": 8, "notes": ns}]}))
+        };
+        let mut old = NoteScheduler::new(lane(true));
+        let mut t = Transport::new(0, true);
+        drive(&mut old, &mut t, 100); // beat 0.53
+        assert_eq!(old.held(), 2);
+        let mut new = NoteScheduler::new(lane(false));
+        assert_eq!(new.adopt(&old), 2);
+        assert_eq!(new.adopt(&old), 0, "once");
+        assert_eq!(old.held(), 2, "the old scheduler keeps its copy, for its own consumers' release");
+        t.enter();
+        let runs = t.advance();
+        assert_eq!(runs.first().jump, Jump::Enter);
+        new.run(&runs, false);
+        let top = new.events().as_slice().to_vec();
+        assert_eq!(top, [Event::Off { frame: 0, id: 2, velocity: 0.0 }], "the note the data dropped");
+        assert!(new.is_sounding(1) && new.held() == 1);
+        let ev = drive(&mut new, &mut t, 900); // past beat 2
+        assert_eq!(ev.iter().find(|e| matches!(e.1, Event::Off { id: 1, .. })).map(|e| e.0), Some(24_000), "at its own end");
+        assert_eq!(ids(&ev, true), [3], "a new note never takes an adopted id");
+        // Without adopting, Enter is what it always was: nothing sounds, nothing ends.
+        let mut fresh = NoteScheduler::new(lane(false));
+        let mut t = Transport::new(12_800, true);
+        t.enter();
+        fresh.run(&t.advance(), false);
+        assert!(fresh.events().as_slice().is_empty() && fresh.held() == 0);
+        // Past its room: the rest isn't taken (whoever held it lets it go).
+        let many: Vec<Value> = (0..300).map(|k| json!({"pitch": k % 128, "start": 0, "length": 4})).collect();
+        let mut big = NoteScheduler::new(data(json!({"clips": [{"start": 0, "length": 8, "notes": many}]})));
+        drive(&mut big, &mut Transport::new(0, true), 2);
+        assert_eq!(big.held(), 300);
+        assert_eq!(NoteScheduler::new(lane(false)).adopt(&big), Caps::FLOOR.sounding);
     }
 
     // RENDER-9a: a wrap ends the sounding notes at its frame and plays the loop's start again.

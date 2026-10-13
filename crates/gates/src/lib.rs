@@ -88,6 +88,9 @@ pub struct Lab {
     /// Compiling binds plugins, so it needs a set of its own.
     compiler: PackageSet,
     pub packages: Arc<PackageSet>,
+    /// Whether the engine rig carries plugin instances across rebuilds (HOST-5); off, it is the
+    /// negative reference (`--no-carry`).
+    pub carry: bool,
     n: AtomicUsize,
 }
 
@@ -114,7 +117,7 @@ impl Lab {
     /// A lab in `work`, which is created if missing.
     pub fn new(work: &Path) -> Result<Lab> {
         std::fs::create_dir_all(work).with_context(|| format!("creating {}", work.display()))?;
-        Ok(Lab { work: work.to_path_buf(), compiler: load_std()?, packages: Arc::new(load_std()?), n: AtomicUsize::new(0) })
+        Ok(Lab { work: work.to_path_buf(), compiler: load_std()?, packages: Arc::new(load_std()?), carry: true, n: AtomicUsize::new(0) })
     }
 
     /// A new folder in the lab, never used before.

@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post, put};
@@ -51,6 +51,12 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .route("/api/graph/preview", post(graph_preview))
         .route("/api/graph/preview/cancel", post(graph_cancel_preview))
         .route("/api/graph/set", post(graph_set))
+        .route("/api/graph/leases", get(graph_leases))
+        .route("/api/graph/lease/begin", post(lease_begin))
+        .route("/api/graph/lease/update", post(lease_update))
+        .route("/api/graph/lease/keepalive", post(lease_keepalive))
+        .route("/api/graph/lease/commit", post(lease_commit))
+        .route("/api/graph/lease/cancel", post(lease_cancel))
         .route("/api/graph/connect", post(graph_connect))
         .route("/api/graph/effect/add", post(graph_add_effect))
         .route("/api/graph/effect/remove", post(graph_remove_effect))
@@ -97,8 +103,24 @@ async fn no_such_api() -> Response {
 
 // ---------------------------------------------------------------- events
 
-async fn ws(State(s): S, upgrade: WebSocketUpgrade) -> Response {
-    upgrade.on_upgrade(move |socket| ws_loop(s, socket))
+#[derive(Deserialize)]
+struct WsQuery {
+    /// The window's id (one per page load), which its knob drags carry: when this socket closes,
+    /// the window's gestures end (C6).
+    #[serde(default)]
+    client: Option<String>,
+}
+
+async fn ws(State(s): S, Query(q): Query<WsQuery>, upgrade: WebSocketUpgrade) -> Response {
+    upgrade.on_upgrade(move |socket| async move {
+        ws_loop(s.clone(), socket).await;
+        if let Some(client) = q.client {
+            // Off the async threads: putting values back may wait for room in the player's queue.
+            let state = s.clone();
+            let _ = tokio::task::spawn_blocking(move || state.graph.client_gone(&client)).await;
+            s.graph_changed();
+        }
+    })
 }
 
 /// Forward every event (toasts, `graph`) to one client until it goes away.
@@ -164,7 +186,12 @@ async fn graph_open(State(s): S, Json(r): Json<GraphOpenReq>) -> ApiResult {
 }
 
 async fn graph_close(State(s): S) -> ApiResult {
-    s.graph.close();
+    let state = s.clone();
+    blocking(move || {
+        state.graph.close();
+        Ok(())
+    })
+    .await?;
     s.graph_changed();
     Ok(Json(json!({})))
 }
@@ -180,11 +207,16 @@ struct PreviewReq {
     id: String,
     gesture: String,
     value: f64,
+    /// The window it comes from (its WebSocket's `client`): optional, so older pages still work.
+    #[serde(default)]
+    client: Option<String>,
 }
 
+/// A knob drag's update: the gesture's lease, begun at its first preview (WRITE-22). Never waits
+/// for the session.
 async fn graph_preview(State(s): S, Json(r): Json<PreviewReq>) -> ApiResult {
     let state = s.clone();
-    blocking(move || state.graph.preview(r.session, r.revision, &r.id, &r.gesture, r.value)).await?;
+    blocking(move || state.graph.preview_for(r.client.as_deref(), r.session, r.revision, &r.id, &r.gesture, r.value)).await?;
     Ok(Json(json!({})))
 }
 
@@ -212,11 +244,98 @@ struct SetReq {
     expect: Option<f64>,
 }
 
+/// Commit a value: the gesture's lease when it has one, else a plain value edit. While the draft
+/// doesn't compile a gesture's commit is pending: `{"pending": true, "errors": …}` (C5).
 async fn graph_set(State(s): S, Json(r): Json<SetReq>) -> ApiResult {
     let state = s.clone();
     let result = blocking(move || state.graph.set(r.session, r.revision, &r.id, &r.gesture, r.value, r.expect)).await;
     s.graph_changed();
     Ok(Json(result?))
+}
+
+// ---------------------------------------------------------------- gesture leases (WRITE-22)
+
+/// The knob drags in progress, as the news lists them: an agent can cancel one it finds here.
+async fn graph_leases(State(s): S) -> Json<Value> {
+    Json(json!(s.graph.leases()))
+}
+
+#[derive(Deserialize)]
+struct LeaseBeginReq {
+    session: u64,
+    revision: u64,
+    id: String,
+    #[serde(default)]
+    client: Option<String>,
+    #[serde(default)]
+    gesture: Option<String>,
+    /// How long the lease lives without an update or a keepalive (10 s by default, 60 s at most).
+    #[serde(default)]
+    ttl_ms: Option<u64>,
+}
+
+/// Begin a drag on a control, as revision `revision` named it.
+async fn lease_begin(State(s): S, Json(r): Json<LeaseBeginReq>) -> ApiResult {
+    let state = s.clone();
+    let owner = crate::graph::Owner { client: r.client, gesture: r.gesture, ttl: r.ttl_ms.map(std::time::Duration::from_millis) };
+    let begun = blocking(move || state.graph.begin(r.session, r.revision, &r.id, owner)).await?;
+    s.graph_changed();
+    Ok(Json(json!(begun)))
+}
+
+#[derive(Deserialize)]
+struct LeaseUpdateReq {
+    lease: u64,
+    /// Updates older than one taken are dropped; without, it follows the last.
+    #[serde(default)]
+    seq: Option<u64>,
+    value: f64,
+}
+
+/// Play a value for a lease, straight into the engine. Answers with the engine message's
+/// sequence number (null when nothing plays it yet, or the update was older than one taken).
+async fn lease_update(State(s): S, Json(r): Json<LeaseUpdateReq>) -> ApiResult {
+    let state = s.clone();
+    let seq = blocking(move || state.graph.update(r.lease, r.seq, r.value)).await?;
+    Ok(Json(json!({"seq": seq})))
+}
+
+#[derive(Deserialize)]
+struct LeaseReq {
+    lease: u64,
+}
+
+async fn lease_keepalive(State(s): S, Json(r): Json<LeaseReq>) -> ApiResult {
+    s.graph.keepalive(r.lease)?;
+    Ok(Json(json!({})))
+}
+
+#[derive(Deserialize)]
+struct LeaseCommitReq {
+    lease: u64,
+    value: f64,
+    #[serde(default)]
+    expect: Option<f64>,
+}
+
+/// Commit a lease's value to code (one undo step). While the draft doesn't compile it is
+/// pending: `{"pending": true, "errors": …}`, written once the code compiles (C5).
+async fn lease_commit(State(s): S, Json(r): Json<LeaseCommitReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.commit(r.lease, r.value, r.expect)).await;
+    s.graph_changed();
+    Ok(Json(match result? {
+        crate::graph::Committed::Written(v) => v,
+        crate::graph::Committed::Pending { errors } => json!({"pending": true, "errors": errors}),
+    }))
+}
+
+/// End a lease without a commit: the code's value plays again.
+async fn lease_cancel(State(s): S, Json(r): Json<LeaseReq>) -> ApiResult {
+    let state = s.clone();
+    blocking(move || state.graph.cancel(r.lease)).await?;
+    s.graph_changed();
+    Ok(Json(json!({})))
 }
 
 #[derive(Deserialize)]

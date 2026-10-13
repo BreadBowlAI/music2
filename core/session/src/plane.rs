@@ -24,6 +24,18 @@ pub struct Plays<'a> {
     pub rate: u32,
 }
 
+/// Whether the code differs from `a` to `b`: any Code or Manifest file (WRITE-13's `code_rev`
+/// change, until step 6 counts `(code_rev, data_rev)` itself). Control ids and origins come from
+/// the code alone (RENDER-15), so between two snapshots with the same code they are the same, and
+/// a gesture lease goes on untouched (WRITE-22).
+pub fn code_changed(a: &Snapshot, b: &Snapshot) -> bool {
+    let code = |p: &&std::path::PathBuf| matches!(DataPath::parse(p), DataPath::Code(_) | DataPath::Manifest);
+    let differ = |p: &std::path::PathBuf| a.files.get(p) != b.files.get(p) || a.unreadable.get(p) != b.unreadable.get(p);
+    let paths: BTreeSet<&std::path::PathBuf> =
+        a.files.keys().chain(b.files.keys()).chain(a.unreadable.keys()).chain(b.unreadable.keys()).collect();
+    paths.into_iter().filter(code).any(differ)
+}
+
 /// The lanes whose data differs from `old` to `new`, when that is all that differs (RENDER-26):
 /// the same graph and rate, the same binaries, and every file that changed is a lane file or code
 /// that left the graph as it was. `None` when anything else changed, so a new renderer must play
@@ -141,6 +153,29 @@ mod tests {
         assert_eq!(after(&dir, &mut s, |d| d.write("song.ts", &longer)), None);
         assert_eq!(after(&dir, &mut s, |d| d.write("data/arrangement.json", r#"{"tempo": [{"beat": 0, "bpm": 90}]}"#)), None);
         assert_eq!(after(&dir, &mut s, |d| d.write("music2.toml", &MANIFEST.replace("48000", "44100"))), None);
+    }
+
+    // WRITE-13, WRITE-22: only code and the manifest change what a control id names, so only they
+    // carry a gesture lease; lanes, state blobs and layout.json leave it as it is.
+    #[test]
+    fn only_code_and_the_manifest_change_the_code() {
+        let dir = Dir::new();
+        let mut last = Snapshot::read(&dir.0).unwrap();
+        let mut changed = |write: &dyn Fn(&Dir)| {
+            write(&dir);
+            let now = Snapshot::read(&dir.0).unwrap();
+            let c = code_changed(&last, &now);
+            last = now;
+            c
+        };
+        assert!(!changed(&|d| d.write("data/kick/hits.json", &HITS.replace("\"length\": 1}", "\"length\": 2}"))));
+        assert!(!changed(&|d| d.write("data/kick/kick.state", "a blob")));
+        assert!(!changed(&|d| d.write("layout.json", "{}")));
+        assert!(!changed(&|d| d.write("data/arrangement.json", r#"{"tempo": [{"beat": 0, "bpm": 90}]}"#)));
+        assert!(changed(&|d| d.write("song.ts", &format!("{SONG}// a comment\n"))));
+        assert!(changed(&|d| d.write("tracks/new.ts", "export const x = 1;\n")));
+        assert!(changed(&|d| d.write("music2.toml", &MANIFEST.replace("48000", "44100"))));
+        assert!(!changed(&|_| {}));
     }
 
     #[test]

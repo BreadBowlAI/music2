@@ -97,8 +97,14 @@ pub struct Running {
 /// Start the HTTP server on a background thread and return at once. No project is open
 /// yet, and nothing opens the audio device until one is.
 pub fn start(opts: ServeOptions) -> Result<Running> {
+    start_with(opts, graph::Graph::default())
+}
+
+/// [`start`] serving `graph`, such as one whose player plays into a file for a test
+/// ([`graph::Graph::with_player`]).
+pub fn start_with(opts: ServeOptions, graph: graph::Graph) -> Result<Running> {
     resources::keep_hashes();
-    let state = Arc::new(AppState::new(opts.token, graph::Graph::default()));
+    let state = Arc::new(AppState::new(opts.token, graph));
     spawn_graph_watch(state.clone());
 
     let listener = std::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], opts.port)))?;
@@ -117,14 +123,19 @@ pub fn start(opts: ServeOptions) -> Result<Running> {
     Ok(Running { url, state })
 }
 
-/// Pick up edits to the open project made outside the app, and tell clients.
+/// Pick up edits to the open project made outside the app, and tell clients. Each tick first ends
+/// the knob drags nobody moves any more (C6), and says what ended or was saved on its own.
 fn spawn_graph_watch(state: Arc<AppState>) {
     std::thread::Builder::new()
         .name("music2-graph".into())
         .spawn(move || {
             loop {
                 std::thread::sleep(Duration::from_millis(300));
-                if state.graph.poll() {
+                let said = state.graph.expire();
+                for s in &said {
+                    state.toast(s.clone());
+                }
+                if state.graph.poll() || !said.is_empty() {
                     state.graph_changed();
                 }
             }

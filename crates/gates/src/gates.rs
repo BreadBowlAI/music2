@@ -63,7 +63,7 @@ pub const GATES: [(&str, &str); 9] = [
     ("step", "RENDER-25a, 27"),
     ("tail-stop", "RENDER-6a, 10"),
     ("range", "RENDER-4, 5"),
-    ("plugins", "RENDER-6a, 8, 9, 9a, 10, 11, 25, 26, 26a; HOST-6"),
+    ("plugins", "RENDER-6a, 8, 9, 9a, 10, 11, 25, 26, 26a; HOST-2, 5, 6"),
 ];
 
 pub fn run(name: &str, lab: &mut Lab, kind: Kind, o: &Opts) -> Result<Outcome> {

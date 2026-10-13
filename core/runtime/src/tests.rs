@@ -270,7 +270,18 @@ fn std_manifest_matches_its_kernels() {
             outputs: sig.outputs.iter().map(|_| Kind::Audio(1)).collect(),
         };
         let tl = DataSet::empty();
-        let mut b = Builder { store: &mut store, packages: &pk, data: &tl, sample_rate: 48_000.0, slots: &[], lanes: &[] };
+        let (owner, mut fresh) = (m2_plugins::Owner::discard(), crate::Fresh);
+        let mut b = Builder {
+            store: &mut store,
+            packages: &pk,
+            data: &tl,
+            sample_rate: 48_000.0,
+            slots: &[],
+            lanes: &[],
+            source: &mut fresh,
+            owner: &owner,
+            ordinals: Default::default(),
+        };
         b.kernel(&node, &id, 1, &inputs).unwrap_or_else(|e| panic!("{e:#}"));
     }
 }

@@ -9,3 +9,10 @@ license.workspace = true
 anyhow.workspace = true
 clap-sys = "0.5"
 libloading = "0.8"
+crossbeam-channel.workspace = true
+sha2.workspace = true
+
+# HOST-2: this test owns the process's real main thread, so libtest can't run it.
+[[test]]
+name = "main_thread"
+harness = false

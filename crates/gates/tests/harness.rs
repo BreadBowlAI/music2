@@ -124,16 +124,38 @@ fn heads_replay_engine_fails_the_gates_step_3_exists_for() {
     }
 }
 
-// Step 3a's live engine passes every gate at CI sizes.
+// Step 3a's live engine passes every gate at CI sizes. With plugins on `CLAP_PATH`, the with-plugins
+// gate runs too, its main-thread calls on the tests' dedicated thread (HOST-2, C1).
 #[cfg(feature = "engine")]
 #[test]
 fn the_live_engine_passes_every_gate() {
+    m2_plugins::test_main_thread();
     let t = Temp::new("engine");
     let mut lab = Lab::new(&t.0).unwrap();
     let o = Opts { loop_minutes: 1.0, ..Opts::quick() };
     for (name, _) in GATES {
         let outcome = gates::run(name, &mut lab, Kind::Engine, &o).unwrap();
         assert_ne!(outcome.verdict(), Verdict::Fail, "{outcome}");
+    }
+}
+
+// HOST-5's negative reference: an engine that builds every plugin instance anew fails the checks
+// that carrying exists for, or they measure nothing. Skipped without the plugins on `CLAP_PATH`.
+#[cfg(feature = "engine")]
+#[test]
+fn an_engine_that_never_carries_fails_the_carry_checks() {
+    m2_plugins::test_main_thread();
+    let t = Temp::new("no-carry");
+    let mut lab = Lab::new(&t.0).unwrap();
+    lab.carry = false;
+    let o = Opts { loop_minutes: 0.2, seeks: 2, ..Opts::quick() };
+    let outcome = gates::run("plugins", &mut lab, Kind::Engine, &o).unwrap();
+    if outcome.verdict() == Verdict::Skip {
+        eprintln!("skipping: {outcome}");
+        return;
+    }
+    for check in ["carried every plugin instance", "plays on at its level", "ids never repeat", "20 activations create no instance"] {
+        assert!(failed(&outcome, check), "{check}: {outcome}");
     }
 }
 

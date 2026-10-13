@@ -296,10 +296,10 @@ fn plugin_events_merge_as_a_stable_sort_did() {
     let mut params = vec![(11, port, None), (10, Input::Const(0.5), None)];
     let mut keys: Vec<(u32, i16)> = Vec::with_capacity(16);
     keys.extend([(1, 60), (2, 61)]);
-    let mut out = Vec::with_capacity(64);
+    let mut out = m2_plugins::Events::with_capacity(64);
     let mut next = 0;
-    let ((), allocs) = during(|| plugin_events(&[], &notes, &mut next, &mut params, &bufs, (0, BLOCK), &mut keys, &mut out));
-    assert_eq!((allocs, out.capacity(), next), (0, 64, notes.len()));
+    let (_, allocs) = during(|| plugin_events(&[], &[], &notes, &mut next, &mut params, &bufs, (0, BLOCK), &mut keys, &mut out));
+    assert_eq!((allocs, out.capacity(), out.dropped(), next), (0, 64, 0, notes.len()));
     // Before: held notes' offs, then each new note's events, then parameters, stably sorted.
     let mut before = vec![P::NoteOff { time: 0, id: 1, key: 60 }, P::NoteOff { time: 16, id: 2, key: 61 }];
     before.extend([
@@ -319,22 +319,29 @@ fn plugin_events_merge_as_a_stable_sort_did() {
         }
     };
     before.sort_by_key(time);
-    assert_eq!(out, before);
+    assert_eq!(out.iter().collect::<Vec<_>>(), before);
     assert_eq!(keys, [(5, 61), (7, 64)], "held: the notes that started and didn't end");
     // RENDER-10, RENDER-26a: what a plugin held when a panic reset it is choked and let go first,
-    // as a plugin may keep its voices through a reset.
+    // as a plugin may keep its voices through a reset. C7: what a carried instance held that the
+    // new data dropped is let go, with no choke, after them.
     let (mut next, mut none) = (0, Vec::with_capacity(4));
-    let ((), allocs) = during(|| plugin_events(&keys, &[], &mut next, &mut [], &bufs, (0, BLOCK), &mut none, &mut out));
-    assert_eq!(allocs, 0);
+    let release = [(3, 70)];
+    let (sent, allocs) = during(|| plugin_events(&keys, &release, &[], &mut next, &mut [], &bufs, (0, BLOCK), &mut none, &mut out));
+    assert_eq!((allocs, sent), (0, (3, Some(0))));
     assert_eq!(
-        out,
+        out.iter().collect::<Vec<_>>(),
         [
             P::NoteChoke { time: 0, id: 5, key: 61 },
             P::NoteOff { time: 0, id: 5, key: 61 },
             P::NoteChoke { time: 0, id: 7, key: 64 },
-            P::NoteOff { time: 0, id: 7, key: 64 }
+            P::NoteOff { time: 0, id: 7, key: 64 },
+            P::NoteOff { time: 0, id: 3, key: 70 }
         ]
     );
+    // A full list counts what it can't hold, and never grows.
+    let mut small = m2_plugins::Events::with_capacity(2);
+    let (_, allocs) = during(|| plugin_events(&keys, &[], &[], &mut next, &mut [], &bufs, (0, BLOCK), &mut none, &mut small));
+    assert_eq!((allocs, small.len(), small.dropped()), (0, 2, 2));
 }
 
 // RENDER-4, RENDER-5: a range render starts from init, the transport at its start, with jump
@@ -393,8 +400,19 @@ fn prewarming_keeps_kernel_memory_flat() {
     let mut store = Store::new(&pk.engine, StoreLimitsBuilder::new().build());
     let slots = lane_slots(&flat);
     let lanes = vec![LaneSlot::Notes(NoteScheduler::new(Arc::new(NotesData::empty())))];
-    let mut g = Builder { store: &mut store, packages: &pk, data: &data, sample_rate: SR as f64, slots: &slots, lanes: &lanes }
-        .graph(&flat.nodes, &flat.order, false)
+    let (owner, mut fresh) = (m2_plugins::Owner::discard(), crate::Fresh);
+    let mut g = Builder {
+        store: &mut store,
+        packages: &pk,
+        data: &data,
+        sample_rate: SR as f64,
+        slots: &slots,
+        lanes: &lanes,
+        source: &mut fresh,
+        owner: &owner,
+        ordinals: Default::default(),
+    }
+    .graph(&flat.nodes, &flat.order, false)
         .unwrap();
     let fresh = g.kernel_memory(&store);
     g.prewarm(&mut store).unwrap();
@@ -705,3 +723,5 @@ fn activations_while_a_voice_sounds_dont_click() {
         assert_eq!(rig.e.current().unwrap().held_notes(), 0);
     }
 }
+
+mod carry;

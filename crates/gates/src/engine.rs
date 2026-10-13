@@ -1,7 +1,9 @@
-//! Step 3a's live engine as a rig: `m2_play::Player::driven`, filled by the gate in simulated
+//! Step 3's live engine as a rig: `m2_play::Player::driven`, filled by the gate in simulated
 //! time, and fed what the server feeds it (step 3a's design, §9.1): a renderer built without
 //! seeking and activated, or for a data edit that leaves the graph as it was, `SwapLane` for each
-//! notes or control lane whose data changed and fits the running scheduler.
+//! notes or control lane whose data changed and fits the running scheduler. Renderers are built as
+//! the server builds them (step 3b): plugin instances carried from the renderer last sent, unless
+//! the rig was made not to carry (`--no-carry`, the negative reference).
 //!
 //! Every call into the engine is in this file, so following its interface as it changes happens
 //! here; the README lists the calls.
@@ -13,11 +15,12 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow};
 use m2_ir::Kind;
 use m2_play::{Driver, Player};
-use m2_runtime::{Caps, LaneSwap, PackageSet, Renderer, TraceKind, audio, notes_data};
+use m2_plugins::{HostEvent, Owner};
+use m2_runtime::{Carry, Caps, Fresh, LaneSwap, PackageSet, Renderer, TraceKind, audio, notes_data};
 use m2_song::LaneAddr;
 
 use crate::Song;
-use crate::rig::{Change, Cmd, NoteOn, Probe, Rig, Sent};
+use crate::rig::{Change, Cmd, NoteOn, Plugins, Probe, Rig, Sent};
 
 /// Trace entries each renderer keeps: ten minutes of the loop gate's clicks, on and off.
 const TRACE: usize = 1 << 16;
@@ -49,15 +52,27 @@ pub struct Live {
     /// The last note-on read from the trace, by engine frame.
     read_to: Option<u64>,
     buf: Vec<f32>,
+    /// Who its plugin instances report to, and what they reported (a restart).
+    owner: Owner,
+    events: m2_plugins::HostEvents,
+    /// The instances of the renderer last sent, for the next build, and whether to use them.
+    carry: Carry,
+    carrying: bool,
+    carry_epoch: u64,
+    idled: bool,
 }
 
+/// One engine per `open`: what a carry is tagged with, so it never reaches another.
+static EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 impl Live {
-    pub fn new(packages: Arc<PackageSet>) -> Result<Live> {
-        Ok(Live::at(packages, 48_000))
+    pub fn new(packages: Arc<PackageSet>, carrying: bool) -> Result<Live> {
+        Ok(Live::at(packages, 48_000, carrying))
     }
 
-    fn at(packages: Arc<PackageSet>, rate: u32) -> Live {
+    fn at(packages: Arc<PackageSet>, rate: u32, carrying: bool) -> Live {
         let (player, driver) = Player::driven(rate);
+        let (owner, events) = Owner::new();
         Live {
             packages,
             player,
@@ -74,13 +89,26 @@ impl Live {
             delivered: 0,
             read_to: None,
             buf: vec![],
+            owner,
+            events,
+            carry: Carry::none(),
+            carrying,
+            carry_epoch: EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            idled: false,
         }
     }
 
-    /// A renderer for `song` as the server builds one: not sought, sharing the audio cache, and
-    /// keeping a trace for the gates.
-    fn build(&mut self, song: &Song) -> Result<Box<Renderer>> {
-        let mut r = Renderer::build_with(&song.flat, &song.data, &self.packages, song.rate, &mut self.cache)?;
+    fn epoch(&self) -> u64 {
+        self.carry_epoch
+    }
+
+    /// A renderer for `song` as the server builds one: not sought, sharing the audio cache, its
+    /// plugin instances carried from the renderer last sent (unless `fresh`, or the rig doesn't
+    /// carry), and keeping a trace for the gates.
+    fn build(&mut self, song: &Song, fresh: bool) -> Result<Box<Renderer>> {
+        let epoch = self.epoch();
+        let source: &mut dyn m2_runtime::InstanceSource = if fresh || !self.carrying { &mut Fresh } else { self.carry.source(epoch) };
+        let mut r = Renderer::build_live(&song.flat, &song.data, &self.packages, song.rate, &mut self.cache, &self.owner, source)?;
         // The cache keeps what this build used, as the server's does: what the renderer it
         // replaces played alone goes with it.
         self.cache.prune();
@@ -135,7 +163,7 @@ impl Live {
 
 impl Rig for Live {
     fn name(&self) -> String {
-        "engine (step 3a)".into()
+        if self.carrying { "engine (step 3)".into() } else { "engine (step 3, plugin instances never carried)".into() }
     }
 
     fn rate(&self) -> u32 {
@@ -143,10 +171,12 @@ impl Rig for Live {
     }
 
     fn open(&mut self, song: &Song) -> Result<()> {
-        // A fresh engine every time: RENDER-33's, and every gate's, starting point.
-        *self = Live::at(self.packages.clone(), song.rate);
-        let r = self.build(song)?;
+        // A fresh engine every time: RENDER-33's, and every gate's, starting point. Its plugin
+        // instances are new too: a carry never reaches another engine.
+        *self = Live::at(self.packages.clone(), song.rate, self.carrying);
+        let r = self.build(song, true)?;
         self.adopt(&r)?;
+        self.carry = Carry::of(&r, self.epoch());
         self.player.open(*r)?;
         self.song = Some(song.clone());
         Ok(())
@@ -159,8 +189,15 @@ impl Rig for Live {
             *o = *f;
         }
         self.delivered += out.len() as u64;
-        // What the audio thread retired is dropped here, off it.
+        // What the audio thread retired is dropped here, off it: plugin instances no renderer
+        // holds any more are destroyed on the plugin main thread.
         drop(self.driver.drain_retired());
+        self.idled |= self.driver.engine().is_some_and(|e| e.is_idle());
+        for e in self.events.try_iter() {
+            if let HostEvent::Restart(h) = e {
+                self.carry.restart(h);
+            }
+        }
         if self.player.crashed() {
             return Err(anyhow!("the engine panicked on the audio thread"));
         }
@@ -187,7 +224,7 @@ impl Rig for Live {
         };
         let made = match swaps {
             Some(s) => Made::Swaps(s),
-            None => Made::Renderer(self.build(song)?),
+            None => Made::Renderer(self.build(song, false)?),
         };
         let took = t.elapsed();
         self.made = Some((made, took, song.clone()));
@@ -207,6 +244,8 @@ impl Rig for Live {
             }
             Made::Renderer(r) => {
                 self.adopt(&r)?;
+                // The next build carries from what this one holds (HOST-5).
+                self.carry = Carry::of(&r, self.epoch());
                 let (_, seq) = self.player.activate(*r)?;
                 self.stamp(seq, took + t.elapsed(), false)
             }
@@ -231,6 +270,12 @@ impl Rig for Live {
 
     fn audio_work(&self) -> Option<(usize, usize)> {
         Some(self.cache.work())
+    }
+
+    fn plugins(&mut self) -> Option<Plugins> {
+        let (created, destroyed) = m2_plugins::InProcess::counts();
+        let nodes = self.driver.engine()?.current()?.plugins();
+        Some(Plugins { nodes, created, destroyed, idled: self.idled, owner: Some(self.owner.clone()) })
     }
 
     fn ons(&mut self) -> Option<Vec<NoteOn>> {

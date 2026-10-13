@@ -64,8 +64,9 @@ pub struct DataSet {
     pub arrangement: Arc<Arrangement>,
     tempo: Arc<TempoMap>,
     lanes: BTreeMap<LaneAddr, Arc<LaneData>>,
-    /// Verified state blobs: `(module, path)` → the blob, relative to the project.
-    states: BTreeMap<(Key, Vec<Key>), PathBuf>,
+    /// Verified state blobs: `(module, path)` → the blob, relative to the project, and its hash
+    /// as the snapshot read it.
+    states: BTreeMap<(Key, Vec<Key>), (PathBuf, Option<Sha>)>,
     /// Assets clips may play, by exact name.
     assets: BTreeSet<String>,
     /// The project folder, where assets and state blobs are read from. None: no files.
@@ -142,7 +143,15 @@ impl DataSet {
     pub fn state(&self, module: &str, path: &[&str]) -> Option<PathBuf> {
         let module = Key::new(module).ok()?;
         let path = path.iter().map(|k| Key::new(k)).collect::<Result<Vec<_>, _>>().ok()?;
-        Some(self.dir.as_ref()?.join(self.states.get(&(module, path))?))
+        Some(self.dir.as_ref()?.join(&self.states.get(&(module, path))?.0))
+    }
+
+    /// The hash of the verified state blob [`Self::state`] names, as the snapshot read it: what
+    /// carrying a plugin instance across a rebuild compares (HOST-5).
+    pub fn state_hash(&self, module: &str, path: &[&str]) -> Option<Sha> {
+        let module = Key::new(module).ok()?;
+        let path = path.iter().map(|k| Key::new(k)).collect::<Result<Vec<_>, _>>().ok()?;
+        self.states.get(&(module, path))?.1
     }
 
     /// The beat where the song's last clip ends: of any lane file, whether a lane reads it or
@@ -511,7 +520,7 @@ impl Project {
 
     /// Plugin states (FMT-17): a blob is loaded only with a sidecar naming the plugin the code
     /// does; otherwise the plugin plays its defaults, with an Error.
-    fn states(&self, decls: &Decls, diags: &mut Vec<Diagnostic>) -> BTreeMap<(Key, Vec<Key>), PathBuf> {
+    fn states(&self, decls: &Decls, diags: &mut Vec<Diagnostic>) -> BTreeMap<(Key, Vec<Key>), (PathBuf, Option<Sha>)> {
         let mut out = BTreeMap::new();
         let at =
             |module: &Key, path: &[Key], sidecar| DataPath::PluginState { module: module.clone(), path: path.to_vec(), sidecar }.path();
@@ -545,7 +554,11 @@ impl Project {
                 _ => None,
             };
             let Some((code, why)) = problem else {
-                out.insert((s.module.clone(), s.path.clone()), blob);
+                let sha = match stored {
+                    Stored::Hash(sha) => Some(*sha),
+                    _ => None,
+                };
+                out.insert((s.module.clone(), s.path.clone()), (blob, sha));
                 continue;
             };
             let mut d = Diagnostic::error(code, format!("{why}. The state isn't loaded, so the plugin plays its defaults"))

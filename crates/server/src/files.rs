@@ -90,27 +90,21 @@ pub fn write(dir: &Path, path: &str, base: &str, text: &str) -> Result<()> {
     m2_session::edit::write_whole(&file, text).with_context(|| format!("writing {path}"))
 }
 
-/// The accepted revision's TypeScript files with the module each one defines. A file the
-/// disk has differently (saved, but not compiling) also carries that text as `draft`
-/// (null if it is gone), and one only on disk is listed with `accepted: false`, so the
-/// editor shows and saves against what is really there.
-pub fn list(session: &Session) -> Result<Value> {
+/// The accepted revision's TypeScript files and modules, as the session's actor publishes them
+/// once per change, so listing them never waits for the session.
+pub struct Accepted {
+    revision: u64,
+    dir: PathBuf,
+    files: Vec<(PathBuf, String)>,
+    modules: Vec<Value>,
+}
+
+/// What [`list`] needs of the accepted revision.
+pub fn accepted(session: &Session) -> Accepted {
     let rev = session.accepted();
-    let disk = Snapshot::read(&rev.project.dir)?;
     let ts = |p: &&PathBuf| matches!(DataPath::parse(p), DataPath::Code(_));
-    let mut files = vec![];
-    for (path, text) in rev.snapshot.files.iter().filter(|(p, _)| ts(p)) {
-        let mut f = json!({"path": slashes(path), "text": text});
-        match disk.files.get(path) {
-            Some(d) if d == text => {}
-            d => f["draft"] = json!(d),
-        }
-        files.push(f);
-    }
-    for (path, text) in disk.files.iter().filter(|(p, _)| ts(p) && !rev.snapshot.files.contains_key(*p)) {
-        files.push(json!({"path": slashes(path), "text": text, "accepted": false}));
-    }
-    let modules: Vec<Value> = rev
+    let files = rev.snapshot.files.iter().filter(|(p, _)| ts(p)).map(|(p, t)| (p.clone(), t.clone())).collect();
+    let modules = rev
         .compiled
         .ir
         .modules
@@ -121,7 +115,29 @@ pub fn list(session: &Session) -> Result<Value> {
             json!({"key": m.key, "label": m.label(), "file": file})
         })
         .collect();
-    Ok(json!({"revision": rev.number, "files": files, "modules": modules}))
+    Accepted { revision: rev.number, dir: rev.project.dir.clone(), files, modules }
+}
+
+/// The accepted revision's TypeScript files with the module each one defines. A file the
+/// disk has differently (saved, but not compiling) also carries that text as `draft`
+/// (null if it is gone), and one only on disk is listed with `accepted: false`, so the
+/// editor shows and saves against what is really there.
+pub fn list(accepted: &Accepted) -> Result<Value> {
+    let disk = Snapshot::read(&accepted.dir)?;
+    let ts = |p: &&PathBuf| matches!(DataPath::parse(p), DataPath::Code(_));
+    let mut files = vec![];
+    for (path, text) in &accepted.files {
+        let mut f = json!({"path": slashes(path), "text": text});
+        match disk.files.get(path) {
+            Some(d) if d == text => {}
+            d => f["draft"] = json!(d),
+        }
+        files.push(f);
+    }
+    for (path, text) in disk.files.iter().filter(|(p, _)| ts(p) && !accepted.files.iter().any(|(a, _)| a == *p)) {
+        files.push(json!({"path": slashes(path), "text": text, "accepted": false}));
+    }
+    Ok(json!({"revision": accepted.revision, "files": files, "modules": accepted.modules}))
 }
 
 /// The TypeScript the editor checks imports against, by the path each import resolves to
@@ -401,7 +417,7 @@ mod tests {
         let p = lead();
         p.write("tracks/notes.ts", "// unused\n");
         let mut s = p.session();
-        let listed = list(&s).unwrap();
+        let listed = list(&accepted(&s)).unwrap();
         let paths: Vec<&str> = listed["files"].as_array().unwrap().iter().map(|f| f["path"].as_str().unwrap()).collect();
         assert_eq!(paths, ["song.ts", "tracks/lead.ts", "tracks/notes.ts"]);
         assert_eq!(listed["files"][1]["text"], LEAD);
@@ -416,7 +432,7 @@ mod tests {
         p.write("tracks/new.ts", "// new\n");
         std::fs::remove_file(p.0.join("tracks/notes.ts")).unwrap();
         s.refresh();
-        let listed = list(&s).unwrap();
+        let listed = list(&accepted(&s)).unwrap();
         let files = listed["files"].as_array().unwrap();
         assert_eq!((&files[1]["text"], &files[1]["draft"]), (&json!(LEAD), &json!("export default (")));
         assert_eq!(files[2], json!({"path": "tracks/notes.ts", "text": "// unused\n", "draft": null}));

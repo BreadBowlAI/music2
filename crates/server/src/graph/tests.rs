@@ -1,0 +1,1666 @@
+use std::sync::atomic::AtomicU64;
+use std::time::Duration;
+
+use m2_play::Driver;
+
+use super::*;
+
+const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n";
+
+struct Fixture(PathBuf);
+
+impl Fixture {
+    fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!("m2-graph-server-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("music2.toml"), MANIFEST).unwrap();
+        let fixture = Self(dir);
+        fixture.write("export default song(() => osc.sine(hz(800)));\n");
+        fixture
+    }
+
+    fn write(&self, body: &str) {
+        std::fs::write(self.0.join("song.ts"), format!("import {{ hz, song }} from '@m2/core';\nimport {{ osc }} from 'std/dsp';\n{body}"))
+            .unwrap();
+    }
+
+    /// Write `text` to the project's file `path`, as an outside writer does.
+    fn put(&self, path: &str, text: &str) {
+        let p = self.0.join(path);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    }
+
+    fn read(&self, path: &str) -> String {
+        std::fs::read_to_string(self.0.join(path)).unwrap()
+    }
+
+    fn open(&self) -> Graph {
+        let graph = Graph::silent();
+        graph.open(&self.0).unwrap();
+        graph
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn a_project_that_does_not_compile_says_where_without_its_folder() {
+    let fixture = Fixture::new();
+    fixture.write("export default song(() => osc.sine(hz(800)) oops);\n");
+    let graph = Graph::silent();
+    let e = format!("{:#}", graph.open(&fixture.0).unwrap_err());
+    assert!(e.contains("song.ts:3:"), "{e}");
+    assert!(!e.contains(&*fixture.0.canonicalize().unwrap().to_string_lossy()), "{e}");
+}
+
+/// The open project's token, the accepted revision, and the id of the control whose value is
+/// `value`.
+fn knob(graph: &Graph, value: f64) -> (u64, u64, String) {
+    graph.inspect(move |a| {
+        let o = a.open.as_ref().unwrap();
+        let control = o.session.controls().into_iter().find(|c| c.value == value).unwrap();
+        (o.token, o.session.accepted().number, control.id)
+    })
+}
+
+fn control(graph: &Graph) -> (u64, u64, String) {
+    knob(graph, 800.0)
+}
+
+/// What the player plays, and the accepted revision.
+fn playing(graph: &Graph) -> (u64, u64) {
+    graph.inspect(|a| a.open.as_ref().map(|o| (o.playing, o.session.accepted().number)).unwrap())
+}
+
+fn synced(graph: &Graph) -> bool {
+    let (p, a) = playing(graph);
+    p == a
+}
+
+fn player(graph: &Graph) -> Player {
+    graph.inner.current_device().expect("a player").player
+}
+
+// WRITE-22: a commit refused for a conflict, and an update the literal can't spell, end the
+// gesture and put the code's value back.
+#[test]
+fn rejected_edits_and_previews_close_their_preview() {
+    let fixture = Fixture::new();
+    let graph = fixture.open();
+    let (token, revision, id) = control(&graph);
+    graph.preview(token, revision, &id, "drag", 900.0).unwrap();
+    assert_eq!((graph.leases()[0].accepted, graph.leases()[0].value), (800.0, 900.0));
+    assert!(graph.set(token, revision, &id, "drag", 950.0, Some(100.0)).is_err());
+    assert!(graph.leases().is_empty());
+    assert_eq!(control(&graph), (token, revision, id.clone()));
+
+    graph.preview(token, revision, &id, "drag-2", 900.0).unwrap();
+    assert!(graph.preview(token, revision, &id, "drag-2", f64::NAN).is_err());
+    assert!(graph.leases().is_empty());
+}
+
+// WRITE-22: one gesture owns a control; another's preview, commit or cancel can't take it.
+#[test]
+fn cancellation_and_conflicts_respect_gesture_ownership() {
+    let fixture = Fixture::new();
+    let graph = fixture.open();
+    let (token, revision, id) = control(&graph);
+    graph.preview(token, revision, &id, "owner", 900.0).unwrap();
+    graph.cancel_preview(token, &id, "old-gesture").unwrap();
+    let e = graph.preview(token, revision, &id, "other", 1000.0).unwrap_err();
+    assert!(e.to_string().contains("being edited by another gesture (for "), "{e}");
+    assert!(graph.set(token, revision, &id, "other", 1000.0, Some(800.0)).is_err());
+    assert_eq!(graph.leases().len(), 1);
+    assert_eq!(graph.leases()[0].gesture.as_deref(), Some("owner"));
+    graph.cancel_preview(token, &id, "owner").unwrap();
+    assert!(graph.leases().is_empty());
+    assert_eq!(control(&graph), (token, revision, id));
+}
+
+#[test]
+fn old_project_requests_do_not_modify_the_new_project_or_its_preview() {
+    let fixture = Fixture::new();
+    let graph = fixture.open();
+    let (old, revision, id) = control(&graph);
+    graph.open(&fixture.0).unwrap();
+    let (current, _, _) = control(&graph);
+    assert!(current > old);
+    graph.preview(current, revision, &id, "new", 900.0).unwrap();
+    assert!(graph.preview(old, revision, &id, "old", 1000.0).is_err());
+    assert!(graph.set(old, revision, &id, "old", 1000.0, Some(800.0)).is_err());
+    graph.cancel_preview(old, &id, "new").unwrap();
+    assert_eq!(graph.leases().len(), 1);
+    assert_eq!(control(&graph), (current, revision, id));
+}
+
+#[test]
+fn a_commit_carried_past_inserted_code_rebuilds_instead_of_patching_an_old_origin() {
+    let fixture = Fixture::new();
+    let graph = fixture.open();
+    let (token, revision, id) = control(&graph);
+    let old_origin = graph.inspect(|a| a.open.as_ref().unwrap().session.controls()[0].origin.clone());
+    graph.preview(token, revision, &id, "drag", 900.0).unwrap();
+    fixture.write("const first = hz(123);\nconst second = hz(456);\nexport default song(() => osc.sine(hz(800)));\n");
+    // The inserted calls shift the control's position in the graph. The commit is
+    // carried to it, and the player is rebuilt rather than patched at the old one.
+    graph.set(token, revision, &id, "drag", 950.0, Some(800.0)).unwrap();
+    let (playing, accepted) = playing(&graph);
+    assert!(accepted > revision + 1);
+    assert_eq!(playing, accepted);
+    assert!(graph.leases().is_empty());
+    let current = graph.inspect(|a| a.open.as_ref().unwrap().session.controls().into_iter().find(|c| c.value == 950.0).unwrap());
+    assert_ne!(current.origin, old_origin);
+    let source = fixture.read("song.ts");
+    assert!(source.contains("hz(123)") && source.contains("hz(456)") && source.contains("hz(950)"));
+}
+
+// WRITE-22: a save that doesn't touch the dragged call keeps the drag, and the commit writes it.
+#[test]
+fn an_unrelated_save_during_a_drag_keeps_the_drag_and_commits_it() {
+    let fixture = Fixture::new();
+    fixture.write("// notes\nexport default song(() => osc.sine(hz(800)));\n");
+    let graph = fixture.open();
+    let (token, revision, id) = control(&graph);
+    graph.preview(token, revision, &id, "drag", 900.0).unwrap();
+    fixture.write("// notes, edited elsewhere\nexport default song(() => osc.sine(hz(800)));\n");
+    assert!(graph.poll());
+    // The drag goes on, still named by the revision it started in.
+    graph.preview(token, revision, &id, "drag", 920.0).unwrap();
+    assert!(synced(&graph));
+    let leases = graph.leases();
+    assert_eq!((leases.len(), leases[0].accepted, leases[0].value), (1, 800.0, 920.0));
+    // Another gesture can't take the carried control.
+    assert!(graph.preview(token, revision + 1, &id, "other", 1000.0).is_err());
+    let result = graph.set(token, revision, &id, "drag", 950.0, Some(800.0)).unwrap();
+    assert_eq!(result["after"], "950");
+    let source = fixture.read("song.ts");
+    assert!(source.contains("// notes, edited elsewhere") && source.contains("hz(950)"));
+    assert!(graph.leases().is_empty());
+    assert!(synced(&graph));
+}
+
+// WRITE-22: a save that touches the dragged value ends the drag, saying why.
+#[test]
+fn a_save_that_touches_the_dragged_value_ends_the_drag() {
+    let fixture = Fixture::new();
+    let graph = fixture.open();
+    let (token, revision, id) = control(&graph);
+    graph.preview(token, revision, &id, "drag", 900.0).unwrap();
+    fixture.write("export default song(() => osc.sine(hz(801)));\n");
+    assert!(graph.poll());
+    let e = graph.preview(token, revision, &id, "drag", 920.0).unwrap_err();
+    assert!(e.to_string().contains("the code changed"), "{e}");
+    assert!(graph.set(token, revision, &id, "drag", 950.0, Some(800.0)).is_err());
+    assert!(fixture.read("song.ts").contains("hz(801)"));
+    assert!(graph.leases().is_empty());
+}
+
+// WRITE-22: a refused edit changes no revision, so a drag goes on through it.
+#[test]
+fn a_refused_cable_edit_keeps_the_drag() {
+    let fixture = Fixture::new();
+    fixture.write("export default song(() => {\n  const tone = osc.saw(hz(110));\n  return osc.sine(hz(800));\n});\n");
+    let graph = fixture.open();
+    let (token, revision, id) = control(&graph);
+    graph.preview(token, revision, &id, "drag", 900.0).unwrap();
+    // An audio signal can't drive a frequency: refused.
+    let from = "song.ts#0";
+    assert!(graph.connect(token, revision, from, &id).is_err());
+    assert_eq!(graph.leases().len(), 1);
+    assert_eq!(playing(&graph), (revision, revision));
+    graph.preview(token, revision, &id, "drag", 910.0).unwrap();
+    assert!(graph.connect(token + 1, revision, from, &id).is_err(), "another session's request is refused");
+}
+
+#[test]
+fn connecting_and_disconnecting_play_each_new_revision() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "import { lfo } from 'std/control';\nimport { xrange } from 'std/math';\nexport default song(({ time }) => {\n  const sweep = xrange(lfo(time.beats), hz(100), hz(200));\n  return osc.sine(hz(800));\n});\n",
+    );
+    let graph = fixture.open();
+    let (token, revision, id) = control(&graph);
+    let outlet = graph.inspect(|a| a.open.as_ref().unwrap().session.outlets()[0].id.clone());
+    let connected = graph.connect(token, revision, &outlet, &id).unwrap();
+    assert_eq!((connected["before"].as_str(), connected["after"].as_str()), (Some("hz(800)"), Some("sweep")));
+    assert!(synced(&graph));
+    let inlet = graph.inspect(|a| a.open.as_ref().unwrap().session.inlets()[0].id.clone());
+    let revision = connected["revision"].as_u64().unwrap();
+    let disconnected = graph.disconnect(token, revision, &inlet).unwrap();
+    // std:sine declares `freq = 440`.
+    assert_eq!(disconnected["after"], "hz(440)");
+    assert!(synced(&graph));
+    assert!(fixture.read("song.ts").contains("osc.sine(hz(440))"));
+}
+
+#[test]
+fn undo_and_redo_play_each_revision_they_make() {
+    let fixture = Fixture::new();
+    let graph = fixture.open();
+    let (token, revision, id) = control(&graph);
+    assert_eq!(graph.state().unwrap()["can_undo"], false);
+    graph.set(token, revision, &id, "drag", 950.0, Some(800.0)).unwrap();
+    assert_eq!(graph.state().unwrap()["can_undo"], true);
+    let undone = graph.undo(token).unwrap();
+    assert_eq!((undone["before"].as_str(), undone["after"].as_str()), (Some("950"), Some("800")));
+    let state = graph.state().unwrap();
+    assert_eq!((&state["can_undo"], &state["can_redo"]), (&json!(false), &json!(true)));
+    assert!(synced(&graph));
+    assert_eq!(graph.inspect(|a| a.open.as_ref().unwrap().session.controls()[0].value), 800.0);
+    graph.redo(token).unwrap();
+    assert!(fixture.read("song.ts").contains("hz(950)"));
+    assert!(graph.undo(token + 1).is_err(), "another session's request is refused");
+}
+
+#[test]
+fn effects_are_listed_added_and_removed_and_the_player_follows() {
+    let fixture = Fixture::new();
+    let graph = fixture.open();
+    let state = graph.state().unwrap();
+    let (token, revision) = (state["session"].as_u64().unwrap(), state["view"]["revision"].as_u64().unwrap());
+    assert!(state["effects"].as_array().unwrap().iter().any(|e| e["name"] == "delay" && e["module"] == "std/fx"));
+    let node = state["view"]["modules"][0]["nodes"].as_array().unwrap().iter().find(|n| n["audio"] == true).unwrap().clone();
+    let call = node["id"].as_str().unwrap();
+    let added = graph.add_effect(token, revision, call, "std/fx", "delay").unwrap();
+    assert_eq!(added["after"], "delay(osc.sine(hz(800)), { time: 0.25, feedback: 0.3, mix: 0.3 })");
+    let state = graph.state().unwrap();
+    let delay = state["view"]["modules"][0]["nodes"].as_array().unwrap().iter().find(|n| n["effect"] == "delay").unwrap().clone();
+    assert!(synced(&graph));
+    let revision = state["view"]["revision"].as_u64().unwrap();
+    graph.remove_effect(token, revision, delay["id"].as_str().unwrap()).unwrap();
+    assert!(fixture.read("song.ts").contains("song(() => osc.sine(hz(800)))"));
+}
+
+#[test]
+fn a_lane_write_plays_the_new_notes_and_undo_takes_them_back() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "import { track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+         const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n",
+    );
+    let graph = fixture.open();
+    let state = graph.state().unwrap();
+    let (token, revision) = (state["session"].as_u64().unwrap(), state["view"]["revision"].as_u64().unwrap());
+    let clips: Vec<NoteClip> =
+        serde_json::from_value(json!([{"start": 0, "length": 4, "notes": [{"pitch": "C1", "start": 0, "length": 0.25}]}])).unwrap();
+    let written = graph.write_notes(token, revision, "kick", "hits", &clips).unwrap();
+    assert_eq!((written["file"].as_str(), written["after"].as_str()), (Some("data/kick/hits.json"), Some("clip at bar 1 (1 bar)")));
+    let state = graph.state().unwrap();
+    assert_eq!(state["timeline"]["tracks"][0]["lanes"][0]["clips"][0]["notes"][0]["pitch"], 24.0);
+    assert!(synced(&graph), "the player plays the new notes");
+
+    assert!(graph.write_notes(token, revision + 1, "kick", "nope", &clips).is_err());
+    assert!(graph.write_notes(token + 1, revision + 1, "kick", "hits", &[]).is_err(), "another session's request is refused");
+    graph.undo(token).unwrap();
+    assert!(!fixture.0.join("data/kick/hits.json").exists(), "undo removes the file the write created");
+    assert!(synced(&graph));
+}
+
+/// A Kick track renamed Kicks in its code, with its notes left under the old name.
+fn renamed_kick(fixture: &Fixture) {
+    fixture.write(
+        "import { track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+         const k = track('kicks', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n",
+    );
+    std::fs::create_dir_all(fixture.0.join("data/kick")).unwrap();
+    let notes = r#"{"clips": [{"id": "a", "start": 0, "length": 4, "notes": [{"pitch": "C1", "start": 0, "length": 1}]}]}"#;
+    std::fs::write(fixture.0.join("data/kick/hits.json"), notes).unwrap();
+}
+
+// DIAG-1, DIAG-4, DIAG-6: data a rename left behind is a problem in the state and every
+// graph event, with its fixes; applying one plays the data, and undo takes it back.
+#[test]
+fn data_a_rename_left_behind_is_a_problem_whose_fixes_play_and_undo() {
+    let fixture = Fixture::new();
+    renamed_kick(&fixture);
+    let graph = fixture.open();
+    let state = graph.state().unwrap();
+    let (token, revision) = (state["session"].as_u64().unwrap(), state["view"]["revision"].as_u64().unwrap());
+    let problem = &state["problems"][0];
+    assert_eq!(
+        (&problem["severity"], &problem["code"], &problem["src"], &problem["module"]),
+        (&json!("warning"), &json!("data.unclaimed"), &json!("data/kick"), &json!("kick"))
+    );
+    assert!(problem["message"].as_str().unwrap().starts_with("Data filed under kick isn't playing."), "{problem}");
+    let relink = problem["fixes"][0].clone();
+    assert_eq!((&relink["code"], &relink["likely"]), (&json!("relink"), &json!(true)));
+    assert_eq!(relink["edit"]["ops"], json!([{"op": "rename", "from": "data/kick", "to": "data/kicks"}]));
+    let news = graph.news();
+    assert_eq!((&news["session"], &news["revision"], &news["problems"]), (&json!(token), &json!(revision), &state["problems"]));
+
+    let clips = |graph: &Graph| graph.state().unwrap()["timeline"]["tracks"][0]["lanes"][0]["clips"].as_array().unwrap().len();
+    assert!(graph.fix(token + 1, revision, "relink", &relink["edit"]).is_err(), "another session's request is refused");
+    let moved = graph.fix(token, revision, "relink", &relink["edit"]).unwrap();
+    assert_eq!((&moved["before"], &moved["after"]), (&json!("unused data"), &json!("kicks")));
+    assert!(fixture.0.join("data/kicks/hits.json").exists() && !fixture.0.join("data/kick").exists());
+    assert_eq!((graph.state().unwrap()["problems"].clone(), clips(&graph)), (json!([]), 1), "the track plays its notes");
+    assert_eq!(graph.news()["problems"], json!([]));
+    assert!(synced(&graph));
+    assert!(graph.fix(token, revision, "relink", &relink["edit"]).is_err(), "offered no more");
+
+    graph.undo(token).unwrap();
+    assert!(fixture.0.join("data/kick/hits.json").exists() && synced(&graph));
+    assert_eq!((graph.news()["problems"][0]["src"].clone(), clips(&graph)), (json!("data/kick"), 0));
+    let revision = graph.state().unwrap()["view"]["revision"].as_u64().unwrap();
+    let deleted = graph.delete_data(token, revision, "data/kick").unwrap();
+    assert_eq!(deleted["after"], "deleted");
+    assert!(!fixture.0.join("data/kick/hits.json").exists() && graph.news()["problems"] == json!([]));
+    graph.undo(token).unwrap();
+    assert!(fixture.0.join("data/kick/hits.json").exists() && synced(&graph));
+    assert!(graph.delete_data(token, revision, "song.ts").is_err(), "only data no lane reads");
+    // A lane file on its own goes to a lane, by its path.
+    let revision = graph.state().unwrap()["view"]["revision"].as_u64().unwrap();
+    graph.relink(token, revision, "data/kick/hits.json", "data/kicks/hits.json").unwrap();
+    assert_eq!(clips(&graph), 1);
+    graph.close();
+    assert_eq!(graph.news(), json!({}));
+}
+
+#[test]
+fn a_saved_file_is_undone_like_an_edit_made_here() {
+    let fixture = Fixture::new();
+    let graph = fixture.open();
+    let (token, revision, id) = control(&graph);
+    graph.set(token, revision, &id, "drag", 900.0, Some(800.0)).unwrap();
+    let base = fixture.read("song.ts");
+    let saved = base.replace("// ", "").replacen('\n', "\n// a comment\n", 1);
+    let state = graph.write_file(Some(token), "song.ts", &base, &saved).unwrap();
+    assert_eq!(state["can_undo"], true);
+    let undone = graph.undo(token).unwrap();
+    assert_eq!((undone["before"].as_str(), undone["after"].as_str()), (Some("// a comment"), Some("nothing")));
+    assert_eq!(fixture.read("song.ts"), base);
+    // Then the knob, underneath it.
+    let undone = graph.undo(token).unwrap();
+    assert_eq!((undone["before"].as_str(), undone["after"].as_str()), (Some("900"), Some("800")));
+    let state = graph.state().unwrap();
+    assert_eq!((&state["can_undo"], &state["can_redo"]), (&json!(false), &json!(true)));
+}
+
+#[test]
+fn the_code_editors_unsaved_files_belong_to_the_project_it_said_them_for() {
+    let fixture = Fixture::new();
+    let graph = fixture.open();
+    let (token, ..) = control(&graph);
+    assert!(graph.unsaved().is_empty());
+    graph.set_unsaved(token, vec!["song.ts".into()]).unwrap();
+    assert_eq!(graph.unsaved(), ["song.ts"]);
+    assert!(graph.set_unsaved(token + 1, vec![]).is_err(), "another project's editor is refused");
+    // Opened again, it is a new project: its editor starts with nothing unsaved.
+    graph.open(&fixture.0).unwrap();
+    assert!(graph.unsaved().is_empty());
+    graph.close();
+    assert!(graph.unsaved().is_empty());
+}
+
+// WRITE-22: a draft that doesn't compile makes no revision, so the drag goes on through it; a
+// renderer behind the accepted revision is still brought up to it by the next poll.
+#[test]
+fn a_broken_draft_keeps_the_drag_and_poll_syncs_already_refreshed_sources() {
+    let fixture = Fixture::new();
+    let graph = fixture.open();
+    let (token, revision, id) = control(&graph);
+    graph.preview(token, revision, &id, "drag", 900.0).unwrap();
+    fixture.write("(");
+    assert!(graph.poll());
+    assert!(graph.inspect(|a| !a.open.as_ref().unwrap().session.draft_errors.is_empty()));
+    assert_eq!(graph.leases().len(), 1);
+    assert_eq!(playing(&graph), (revision, revision));
+    graph.preview(token, revision, &id, "drag", 910.0).unwrap();
+    fixture.write("export default song(() => osc.sine(hz(900)));\n");
+    graph.inspect(|a| {
+        let o = a.open.as_mut().unwrap();
+        assert!(o.session.refresh());
+        assert!(!o.session.refresh());
+        assert_ne!(o.playing, o.session.accepted().number);
+    });
+    assert!(graph.poll(), "a renderer behind the accepted revision still needs synchronization");
+    assert!(synced(&graph));
+    // The new code rewrote the dragged literal: that ended the drag.
+    assert!(graph.leases().is_empty());
+}
+
+// RENDER-9, RENDER-29: going back to the start is a seek, not a rebuild: a drag goes on.
+#[test]
+fn a_commit_closes_previews_and_a_restart_keeps_them() {
+    let fixture = Fixture::new();
+    let graph = fixture.open();
+    let (token, revision, id) = control(&graph);
+    graph.preview(token, revision, &id, "drag", 900.0).unwrap();
+    let result = graph.set(token, revision, &id, "drag", 950.0, Some(800.0)).unwrap();
+    assert!(graph.leases().is_empty());
+    assert_eq!(playing(&graph).0, result["revision"].as_u64().unwrap());
+    assert_eq!(graph.inspect(|a| a.open.as_ref().unwrap().session.controls()[0].value), 950.0);
+    let revision = result["revision"].as_u64().unwrap();
+    graph.preview(token, revision, &id, "next", 1000.0).unwrap();
+    graph.transport("restart").unwrap();
+    let leases = graph.leases();
+    assert_eq!((leases.len(), leases[0].gesture.as_deref()), (1, Some("next")));
+    assert_eq!(playing(&graph).0, revision);
+    assert_eq!(graph.inspect(|a| a.open.as_ref().unwrap().session.controls()[0].value), 950.0);
+}
+
+/// Wait for the player's thread to catch up.
+fn eventually(what: &str, done: impl Fn() -> bool) {
+    let start = Instant::now();
+    while !done() {
+        assert!(start.elapsed() < Duration::from_secs(5), "timed out waiting until {what}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn seeking_keeps_playing_or_stopped_and_status_counts_beats_in_the_tempo() {
+    let fixture = Fixture::new();
+    std::fs::create_dir_all(fixture.0.join("data")).unwrap();
+    std::fs::write(fixture.0.join("data/arrangement.json"), r#"{"tempo": [{"beat": 0, "bpm": 120}, {"beat": 4, "bpm": 60}]}"#).unwrap();
+    let graph = fixture.open();
+    let state = graph.state().unwrap();
+    assert_eq!(state["timeline"]["tempo"], json!([{"beat": 0.0, "bpm": 120.0}, {"beat": 4.0, "bpm": 60.0}]));
+    assert_eq!((&state["timeline"]["end"], &state["beat"]), (&json!(4.0), &json!(0.0)));
+
+    // Stopped, the position moves at once and stays there.
+    let stopped = |seconds, beat| Status { playing: false, seconds, beat, looping: None };
+    graph.seek(2.0).unwrap();
+    assert_eq!(graph.status(), stopped(1.0, 2.0), "at 120 bpm, 1 second is 2 beats");
+    graph.seek(8.0).unwrap();
+    std::thread::sleep(Duration::from_millis(30));
+    assert_eq!(graph.status(), stopped(6.0, 8.0), "then 4 beats at 60 bpm");
+    graph.seek(-3.0).unwrap();
+    assert_eq!(graph.status().beat, 0.0);
+    assert!(graph.seek(f64::NAN).is_err());
+
+    // Playing, it goes on playing from there.
+    graph.transport("play").unwrap();
+    eventually("it plays", || graph.status().playing);
+    graph.seek(4.0).unwrap();
+    eventually("it plays on from beat 4", || graph.status().beat > 4.0);
+    assert!(graph.status().playing);
+    graph.transport("stop").unwrap();
+    eventually("it stops", || !graph.status().playing);
+    graph.seek(1.0).unwrap();
+    std::thread::sleep(Duration::from_millis(30));
+    assert_eq!(graph.status(), stopped(0.5, 1.0));
+
+    // RENDER-8: a seek replays nothing, so one far past the song lands there at once.
+    let t = Instant::now();
+    graph.seek(4.0 + 2000.0).unwrap();
+    eventually("it lands far past the song", || graph.status() == stopped(2002.0, 2004.0));
+    assert!(t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
+
+    let closed = Graph::silent();
+    assert!(closed.seek(1.0).is_err(), "no project is open");
+    assert_eq!(closed.status().beat, 0.0);
+    graph.close();
+    assert_eq!(graph.status().beat, 0.0);
+}
+
+// RENDER-31: the live engine runs at the project's sample_rate, whatever the device's (the
+// silent player's is 48 kHz): positions count at the project's rate, and the transport too.
+#[test]
+fn the_engine_runs_at_the_projects_rate() {
+    let fixture = Fixture::new();
+    std::fs::write(fixture.0.join("music2.toml"), MANIFEST.replace("48000", "44100")).unwrap();
+    let graph = fixture.open();
+    assert_eq!(graph.state().unwrap()["sample_rate"], 44_100);
+    graph.seek(2.0).unwrap();
+    let p = player(&graph);
+    eventually("the seek lands", || p.status().pending.is_none());
+    assert_eq!((p.device_rate, p.rate(), p.status().pos), (48_000, 44_100, 44_100));
+    let at = Status { playing: false, seconds: 1.0, beat: 2.0, looping: None };
+    assert_eq!(graph.status(), at, "at 120 bpm, 2 beats are 1 second");
+    // A manifest edit to the rate plays on from the same beat, in a fresh engine at the new rate.
+    std::fs::write(fixture.0.join("music2.toml"), MANIFEST.replace("48000", "96000")).unwrap();
+    assert!(graph.poll());
+    assert_eq!(graph.status(), at);
+    let p = player(&graph);
+    eventually("the new engine plays", || p.status().pending.is_none());
+    assert_eq!((p.rate(), p.status().pos), (96_000, 96_000));
+    assert_eq!(graph.status(), at);
+}
+
+// RENDER-9: a seek is a jump, never a replay: past a kernel that makes NaNs, it lands at once.
+#[test]
+fn seeking_past_a_nan_lands_at_once() {
+    let fixture = Fixture::new();
+    std::fs::create_dir_all(fixture.0.join("data/song")).unwrap();
+    // 1e39 overflows to infinity: a kernel produces non-finite samples from beat 8.
+    std::fs::write(
+        fixture.0.join("data/song/g.json"),
+        r#"{"unit": "gain", "clips": [{"id": "a", "start": 8, "length": 8, "points": [[0, 1e39]]}]}"#,
+    )
+    .unwrap();
+    fixture.write(
+        "import { vca } from 'std/dsp';\nexport default song(({ lane }) => vca(osc.sine(hz(440)), lane.control(\"g\", \"gain\", 1)));\n",
+    );
+    let graph = fixture.open();
+    graph.seek(12.0).unwrap();
+    assert_eq!(graph.status().beat, 12.0);
+    graph.transport("play").unwrap();
+    eventually("it plays on from there", || graph.status().beat > 12.0);
+}
+
+// RENDER-29: the status answers while the session is busy, as during a compile.
+#[test]
+fn status_does_not_wait_for_the_session() {
+    let fixture = Fixture::new();
+    let graph = &fixture.open();
+    graph.seek(2.0).unwrap();
+    let held = graph.hold();
+    let (tx, rx) = mpsc::channel();
+    std::thread::scope(|s| {
+        s.spawn(move || tx.send(graph.status()).unwrap());
+        let status = rx.recv_timeout(Duration::from_secs(2)).expect("status answers while the session is busy");
+        assert_eq!(status.beat, 2.0);
+        drop(held);
+    });
+}
+
+// RENDER-9, RENDER-29: a seek moves the transport and nothing else: the drag goes on, and the
+// revision the session took in meanwhile is played by the next poll, not by the seek.
+#[test]
+fn seeking_keeps_previews_and_leaves_playing_new_revisions_to_poll() {
+    let fixture = Fixture::new();
+    let graph = fixture.open();
+    let (token, revision, id) = control(&graph);
+    graph.preview(token, revision, &id, "drag", 900.0).unwrap();
+    fixture.write("export default song(() => osc.sine(hz(700)));\n");
+    graph.inspect(|a| {
+        let o = a.open.as_mut().unwrap();
+        assert!(o.session.refresh());
+        assert_ne!(o.playing, o.session.accepted().number);
+    });
+    graph.seek(4.0).unwrap();
+    assert_eq!((graph.leases().len(), playing(&graph).0), (1, revision));
+    assert!(graph.poll());
+    assert!(graph.leases().is_empty(), "the new code rewrote the dragged value");
+    assert!(synced(&graph));
+    assert_eq!(graph.status().beat, 4.0, "where the seek put it");
+}
+
+#[test]
+fn returning_a_drag_to_its_start_closes_the_preview_without_rewriting_source() {
+    let fixture = Fixture::new();
+    fixture.write("export default song(() => osc.sine(hz(8_00)));\n");
+    let graph = fixture.open();
+    let (token, revision, id) = control(&graph);
+    let source = fixture.read("song.ts");
+    graph.preview(token, revision, &id, "drag", 950.0).unwrap();
+    let result = graph.set(token, revision, &id, "drag", 800.0, Some(800.0)).unwrap();
+    assert_eq!(result["revision"].as_u64().unwrap(), revision);
+    assert_eq!(fixture.read("song.ts"), source);
+    assert!(graph.leases().is_empty());
+    assert_eq!(playing(&graph).0, revision);
+    assert_eq!(graph.inspect(|a| a.open.as_ref().unwrap().session.controls()[0].value), 800.0);
+}
+
+#[test]
+fn a_saved_file_plays_at_once_and_a_save_over_a_change_is_refused() {
+    let fixture = Fixture::new();
+    let graph = fixture.open();
+    let (token, revision, _) = control(&graph);
+    let base = fixture.read("song.ts");
+    let saved = base.replace("800", "900");
+    let state = graph.write_file(Some(token), "song.ts", &base, &saved).unwrap();
+    assert_eq!((&state["view"]["revision"], &state["diagnostics"]), (&json!(revision + 1), &json!([])));
+    assert_eq!(playing(&graph), (revision + 1, revision + 1), "adopted and playing without waiting for the watcher");
+    assert!(!graph.poll());
+
+    // Saved from the old text: refused with what the file says now, and nothing written.
+    let e = graph.write_file(Some(token), "song.ts", &base, "export default 1;\n").unwrap_err();
+    assert_eq!(e.downcast_ref::<files::Conflict>().unwrap().current, saved);
+    assert_eq!(fixture.read("song.ts"), saved);
+
+    // Code that doesn't compile is saved; the last revision that did plays on.
+    let state = graph.write_file(Some(token), "song.ts", &saved, "export default song(() => (\n").unwrap();
+    assert_eq!(state["view"]["revision"], revision + 1);
+    assert_eq!((&state["diagnostics"][0]["file"], &state["diagnostics"][0]["line"]), (&json!("song.ts"), &json!(2)));
+    assert_eq!(playing(&graph), (revision + 1, revision + 1));
+    assert!(fixture.read("song.ts").ends_with("song(() => (\n"));
+
+    assert!(graph.write_file(Some(token + 1), "song.ts", "", "").is_err(), "another session's editor is refused");
+    assert!(graph.write_file(Some(token), "../song.ts", "", "").is_err());
+    graph.close();
+    assert!(graph.files().is_err() && graph.write_file(None, "song.ts", "", "").is_err());
+}
+
+/// A kick track whose decay is a knob at 0.3 s.
+const KICK: &str = "import { secs, track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+                    const k = track('kick', ({ lane }) => kick(lane.notes('hits'), { decay: secs(0.3) }));\n\
+                    export default song(() => k.out);\n";
+
+fn kick_clips(pitches: &[&str]) -> Vec<NoteClip> {
+    let notes: Vec<Value> = pitches.iter().enumerate().map(|(i, p)| json!({"pitch": p, "start": i, "length": 0.25})).collect();
+    serde_json::from_value(json!([{"id": "a", "start": 0, "length": 4, "notes": notes}])).unwrap()
+}
+
+/// The renderer the player plays, once it has taken everything sent.
+fn generation(graph: &Graph) -> u64 {
+    let p = player(graph);
+    eventually("the player takes what was sent", || p.status().pending.is_none());
+    std::thread::sleep(Duration::from_millis(30));
+    p.status().generation
+}
+
+// RENDER-26, PLANE-1, WRITE-22: a lane write is swapped into the playing renderer, whoever wrote
+// it: the same renderer plays on, and a drag goes on. Undo, and a lane write after a knob commit,
+// take the same way.
+#[test]
+fn a_lane_write_while_playing_is_swapped_into_the_playing_renderer() {
+    let fixture = Fixture::new();
+    fixture.write(KICK);
+    let graph = fixture.open();
+    graph.transport("play").unwrap();
+    eventually("it plays", || graph.status().playing);
+    let first = generation(&graph);
+    let (token, revision, id) = knob(&graph, 0.3);
+    graph.preview(token, revision, &id, "drag", 0.5).unwrap();
+    // Written by an agent, mid-drag.
+    let hits = r#"{"clips": [{"id": "a", "start": 0, "length": 4, "notes": [{"pitch": "C1", "start": 0, "length": 1}]}]}"#;
+    fixture.put("data/kick/hits.json", hits);
+    assert!(graph.poll());
+    let (playing_now, after) = playing(&graph);
+    assert!(after > revision && playing_now == after);
+    let leases = graph.leases();
+    assert_eq!((leases.len(), leases[0].revision), (1, after), "the drag goes on, in the new revision");
+    assert_eq!(generation(&graph), first, "no new renderer");
+    assert_eq!(graph.leases()[0].generation, Some(first), "its updates still go to it");
+    assert!(graph.status().playing);
+    graph.write_notes(token, after, "kick", "hits", &kick_clips(&["C1", "D1"])).unwrap();
+    assert_eq!(generation(&graph), first, "the piano roll's write swaps too");
+
+    // A knob commit leaves the renderer playing the committed graph: a lane edit still swaps.
+    let after = playing(&graph).1;
+    graph.preview(token, after, &id, "drag", 0.5).unwrap();
+    graph.set(token, after, &id, "drag", 0.5, Some(0.3)).unwrap();
+    let revision = graph.state().unwrap()["view"]["revision"].as_u64().unwrap();
+    graph.write_notes(token, revision, "kick", "hits", &kick_clips(&["C1"])).unwrap();
+    graph.undo(token).unwrap();
+    assert_eq!(generation(&graph), first, "still no new renderer");
+    assert!(synced(&graph));
+    assert!(fixture.read("song.ts").contains("secs(0.5)"));
+}
+
+// Step 3's gates time an edit or a seek from when it was asked for (or the session finished)
+// to the callback that took it: what the server records says which message carried it, and
+// the engine's stamp says when it applied.
+#[test]
+fn edits_and_seeks_say_when_the_engine_took_them() {
+    let fixture = Fixture::new();
+    fixture.write(KICK);
+    let graph = fixture.open();
+    graph.transport("play").unwrap();
+    let state = graph.state().unwrap();
+    let (token, revision) = (state["session"].as_u64().unwrap(), state["view"]["revision"].as_u64().unwrap());
+    let taken = |t: EditTiming| {
+        let seq = t.seq.expect("a message was sent");
+        eventually("the engine takes it", || graph.applied(seq).is_some());
+        let a = graph.applied(seq).unwrap();
+        assert!(t.requested_ns <= t.compiled_ns && t.compiled_ns <= t.sent_ns && t.sent_ns <= t.published_ns, "{t:?}");
+        // The callback that took it started after it was queued, or was already running.
+        assert!(t.compiled_ns <= a.callback_ns + 20_000_000, "{t:?} then {a:?}");
+        assert!(a.callback_ns <= graph.now_ns());
+    };
+    graph.write_notes(token, revision, "kick", "hits", &kick_clips(&["C1", "D1"])).unwrap();
+    taken(graph.last_edit().unwrap());
+    graph.seek(2.0).unwrap();
+    let seek = graph.last_edit().unwrap();
+    assert_eq!(seek.requested_ns, seek.compiled_ns);
+    taken(seek);
+    // An edit that changes nothing sends nothing.
+    let revision = graph.state().unwrap()["view"]["revision"].as_u64().unwrap();
+    graph.write_notes(token, revision, "kick", "hits", &kick_clips(&["C1", "D1"])).unwrap();
+    assert_eq!(graph.last_edit().unwrap().seq, None);
+}
+
+// RENDER-26, PLANE-1: an automation lane's file, written by hand, is swapped in too.
+#[test]
+fn a_control_lane_written_by_hand_is_swapped_into_the_playing_renderer() {
+    let fixture = Fixture::new();
+    let gain = |v: f64| format!(r#"{{"unit": "gain", "clips": [{{"id": "a", "start": 0, "length": 8, "points": [[0, {v}]]}}]}}"#);
+    fixture.put("data/song/g.json", &gain(0.5));
+    fixture.write(
+        "import { vca } from 'std/dsp';\nexport default song(({ lane }) => vca(osc.sine(hz(440)), lane.control(\"g\", \"gain\", 1)));\n",
+    );
+    let graph = fixture.open();
+    graph.transport("play").unwrap();
+    let first = generation(&graph);
+    fixture.put("data/song/g.json", &gain(0.25));
+    assert!(graph.poll());
+    assert_eq!(generation(&graph), first, "no new renderer");
+    assert!(synced(&graph));
+    assert!(graph.inspect(|a| {
+        let o = a.open.as_ref().unwrap();
+        o.plays.as_ref().unwrap().data.control("song", "g") == o.session.accepted().compiled.data.control("song", "g")
+    }));
+}
+
+// RENDER-8, RENDER-25a: a structural edit is a new renderer that takes over where playback is:
+// it never jumps back, and playing goes on.
+#[test]
+fn a_structural_edit_takes_over_where_playback_is() {
+    let fixture = Fixture::new();
+    fixture.write(KICK);
+    let graph = fixture.open();
+    let state = graph.state().unwrap();
+    let (token, revision) = (state["session"].as_u64().unwrap(), state["view"]["revision"].as_u64().unwrap());
+    graph.write_notes(token, revision, "kick", "hits", &kick_clips(&["C1", "C1", "C1", "C1"])).unwrap();
+    graph.seek(8.0).unwrap();
+    graph.transport("play").unwrap();
+    eventually("it plays from beat 8", || graph.status().playing && graph.status().beat > 8.0);
+    let first = generation(&graph);
+    let state = graph.state().unwrap();
+    let revision = state["view"]["revision"].as_u64().unwrap();
+    let nodes = state["view"]["modules"].as_array().unwrap().iter().flat_map(|m| m["nodes"].as_array().unwrap().clone());
+    let call = nodes.into_iter().find(|n| n["kind"] == "call" && n["audio"] == true && n["label"].as_str().unwrap().contains("kick"));
+    let before = graph.status().beat;
+    graph.add_effect(token, revision, call.unwrap()["id"].as_str().unwrap(), "std/fx", "delay").unwrap();
+    let after = graph.status();
+    assert!(after.playing && after.beat >= before, "no jump back: beat {before} then {}", after.beat);
+    assert_ne!(generation(&graph), first, "a new renderer plays");
+    let mut last = graph.status().beat;
+    for _ in 0..20 {
+        std::thread::sleep(Duration::from_millis(5));
+        let now = graph.status().beat;
+        assert!(now >= last, "the playhead never goes back: {last} then {now}");
+        last = now;
+    }
+}
+
+// RENDER-6a: stop is a transport event: the transport freezes, and the engine runs on so tails
+// decay.
+#[test]
+fn stopping_freezes_the_transport_and_the_engine_runs_on() {
+    let fixture = Fixture::new();
+    let graph = fixture.open();
+    graph.transport("play").unwrap();
+    eventually("it plays", || graph.status().beat > 0.5);
+    graph.transport("toggle").unwrap();
+    eventually("it stops", || !graph.status().playing);
+    let (beat, p) = (graph.status().beat, player(&graph));
+    let clock = p.clock();
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(graph.status().beat, beat, "the transport holds");
+    assert!(p.clock() > clock, "the engine clock goes on");
+    assert!(graph.transport("rewind").is_err());
+}
+
+// RENDER-9a: a loop is beats of the accepted revision, refused when the engine couldn't play it;
+// its range is kept while it is off, and playback wraps inside it. A project opened anew has none.
+#[test]
+fn the_loop_is_checked_kept_while_off_and_played() {
+    let fixture = Fixture::new();
+    let graph = fixture.open();
+    assert_eq!((graph.status().looping, &graph.state().unwrap()["loop"]), (None, &Value::Null));
+    assert!(graph.set_loop(None, Some(true)).is_err(), "no range to loop yet");
+    for (start, end) in [(4.0, 2.0), (-1.0, 2.0), (f64::NAN, 2.0), (0.0, f64::INFINITY), (4.0, 4.005)] {
+        assert!(graph.set_loop(Some((start, end)), None).is_err(), "{start}..{end}");
+    }
+    let on = |start, end, on| Some(Loop { start, end, on });
+    assert_eq!(graph.set_loop(Some((4.0, 6.0)), None).unwrap().looping, on(4.0, 6.0, true));
+    assert_eq!(graph.set_loop(None, Some(false)).unwrap().looping, on(4.0, 6.0, false));
+    assert_eq!(graph.state().unwrap()["loop"], json!({"start": 4.0, "end": 6.0, "on": false}));
+    assert_eq!(graph.set_loop(Some((4.0, 5.0)), Some(false)).unwrap().looping, on(4.0, 5.0, false));
+    assert_eq!(graph.set_loop(None, Some(true)).unwrap().looping, on(4.0, 5.0, true));
+
+    // At 120 bpm the loop is half a second: playing from inside it, it stays inside.
+    graph.seek(4.5).unwrap();
+    graph.transport("play").unwrap();
+    eventually("it plays", || graph.status().playing);
+    let t = Instant::now();
+    let mut wrapped = false;
+    while t.elapsed() < Duration::from_millis(1200) {
+        let beat = graph.status().beat;
+        assert!((4.0..5.0).contains(&beat), "inside the loop: {beat}");
+        wrapped |= beat < 4.4;
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(wrapped, "it went round");
+    graph.open(&fixture.0).unwrap();
+    assert_eq!(graph.status().looping, None);
+}
+
+// RENDER-29: seek, the loop and play never wait for the session, which an edit holds while it
+// compiles.
+#[test]
+fn the_transport_does_not_wait_for_the_session() {
+    let fixture = Fixture::new();
+    let graph = &fixture.open();
+    let held = graph.hold();
+    let (tx, rx) = mpsc::channel();
+    std::thread::scope(|s| {
+        s.spawn(move || {
+            graph.seek(3.0).unwrap();
+            graph.set_loop(Some((2.0, 6.0)), None).unwrap();
+            graph.transport("play").unwrap();
+            tx.send(graph.status()).unwrap();
+        });
+        let status = rx.recv_timeout(Duration::from_secs(2)).expect("the transport answers while the session is busy");
+        assert_eq!(status.looping, Some(Loop { start: 2.0, end: 6.0, on: true }));
+        drop(held);
+    });
+    eventually("it plays from beat 3", || graph.status().playing && graph.status().beat >= 3.0);
+}
+
+// RENDER-29: a seek is timed from its call, so a wait for a lock (here the transport's, which a
+// regression could hold over a compile) counts against it: the gate's G1 would see it.
+#[test]
+fn a_seek_is_timed_from_its_call() {
+    let fixture = Fixture::new();
+    let graph = &fixture.open();
+    let asked = graph.now_ns();
+    let held = graph.inner.timing.lock();
+    std::thread::scope(|s| {
+        let seek = s.spawn(|| graph.seek(1.0));
+        std::thread::sleep(Duration::from_millis(50));
+        drop(held);
+        seek.join().unwrap().unwrap();
+    });
+    let t = graph.last_edit().unwrap();
+    assert!(t.requested_ns < asked + 40_000_000 && t.sent_ns >= asked + 50_000_000, "asked at {asked}: {t:?}");
+}
+
+// A player that stops responding is let go, and the project is loaded into a new one where it
+// was (step 3a design, §9.5).
+#[test]
+fn a_stalled_player_is_replaced_and_the_project_plays_on_where_it_was() {
+    let fixture = Fixture::new();
+    // A device that never calls back.
+    let (p, driver) = Player::driven(48_000);
+    let graph = Graph::with_player(p);
+    graph.open(&fixture.0).unwrap();
+    let t = Instant::now();
+    let e = loop {
+        if let Err(e) = graph.seek(3.0) {
+            break e;
+        }
+        assert!(t.elapsed() < Duration::from_secs(5), "the queue never filled");
+    };
+    assert!(e.to_string().contains("stopped responding"), "{e:#}");
+    assert!(t.elapsed() < Duration::from_secs(5), "a send gives up: {:?}", t.elapsed());
+    assert!(graph.transport("play").is_err(), "the stalled player is let go");
+    assert!(graph.poll(), "a new one plays the project");
+    eventually("where it was", || graph.status() == Status { playing: false, seconds: 1.5, beat: 3.0, looping: None });
+    assert_eq!(player(&graph).device, "none");
+    drop(driver);
+}
+
+// ---------------------------------------------------------------- leases (WRITE-22)
+
+// WRITE-22: the explicit lease API: begin answers with the control, updates follow their order
+// and drop older ones, a commit is one verified edit that ends the lease, a cancel puts the code's
+// value back, and a lease that ended says why.
+#[test]
+fn a_lease_begins_updates_in_order_and_commits_or_cancels() {
+    let fixture = Fixture::new();
+    let graph = fixture.open();
+    let (token, revision, id) = control(&graph);
+    let begun = graph.begin(token, revision, &id, Owner::default()).unwrap();
+    assert_eq!(
+        (begun.revision, begun.id.as_str(), begun.value, begun.uses, begun.home, begun.heard),
+        (revision, id.as_str(), 800.0, 1, "code", true)
+    );
+    assert!(graph.update(begun.lease, Some(2), 900.0).unwrap().is_some());
+    assert_eq!(graph.update(begun.lease, Some(1), 850.0).unwrap(), None, "older than one taken: dropped");
+    assert_eq!(graph.leases()[0].value, 900.0);
+    assert!(graph.begin(token + 1, revision, &id, Owner::default()).is_err(), "another session's request is refused");
+    assert!(graph.begin(token, revision, &id, Owner::default()).is_err(), "one gesture at a time");
+    graph.keepalive(begun.lease).unwrap();
+    match graph.commit(begun.lease, 950.0, Some(800.0)).unwrap() {
+        Committed::Written(v) => assert_eq!((&v["before"], &v["after"]), (&json!("800"), &json!("950"))),
+        other => panic!("{other:?}"),
+    }
+    assert!(graph.leases().is_empty());
+    let e = graph.update(begun.lease, None, 960.0).unwrap_err();
+    assert!(e.to_string().contains("no gesture lease"), "a committed lease is gone: {e}");
+
+    let (_, revision, id) = knob(&graph, 950.0);
+    let again = graph.begin(token, revision, &id, Owner::default()).unwrap();
+    graph.update(again.lease, None, 1000.0).unwrap();
+    graph.cancel(again.lease).unwrap();
+    let e = graph.update(again.lease, None, 1001.0).unwrap_err();
+    assert!(e.to_string().contains("ended: cancelled"), "{e}");
+    assert!(fixture.read("song.ts").contains("hz(950)"));
+    graph.cancel(again.lease).unwrap();
+}
+
+// WRITE-22, C6: a lease idle past its TTL ends, and its value is put back; the news lists live
+// leases. A window that closes ends its live leases, and keeps its pending ones.
+#[test]
+fn abandoned_leases_end_and_a_closed_window_ends_its_own() {
+    let fixture = Fixture::new();
+    fixture.write("import { sum } from 'std/math';\nexport default song(() => sum(osc.sine(hz(800)), osc.saw(hz(300))));\n");
+    let graph = fixture.open();
+    let (token, revision, id) = control(&graph);
+    let owner = |client: &str, ttl_ms| Owner { client: Some(client.into()), gesture: None, ttl: Some(Duration::from_millis(ttl_ms)) };
+    let short = graph.begin(token, revision, &id, owner("c1", 50)).unwrap();
+    graph.update(short.lease, None, 900.0).unwrap();
+    assert_eq!(graph.news()["leases"][0]["lease"], short.lease);
+    assert!(graph.expire().is_empty(), "not yet");
+    std::thread::sleep(Duration::from_millis(120));
+    let said = graph.expire();
+    assert!(said.len() == 1 && said[0].contains("abandoned"), "{said:?}");
+    assert!(graph.leases().is_empty() && graph.news()["leases"] == json!([]));
+
+    let a = graph.begin(token, revision, &id, owner("c1", 10_000)).unwrap();
+    let (_, _, saw) = knob(&graph, 300.0);
+    let b = graph.begin(token, revision, &saw, owner("c2", 10_000)).unwrap();
+    graph.client_gone("c1");
+    assert_eq!(graph.leases().iter().map(|l| l.lease).collect::<Vec<_>>(), [b.lease]);
+    assert!(graph.update(a.lease, None, 900.0).unwrap_err().to_string().contains("window that owned it closed"));
+}
+
+// C5, WRITE-22: a commit refused only because another file doesn't compile waits, pending: the
+// value plays on, a closed window keeps it, and once the draft compiles the actor writes it.
+#[test]
+fn a_commit_while_the_draft_is_broken_is_saved_once_it_compiles() {
+    let fixture = Fixture::new();
+    fixture.write("import './b';\nexport default song(() => osc.sine(hz(800)));\n");
+    fixture.put("b.ts", "export const b = 1;\n");
+    let graph = fixture.open();
+    let (token, revision, id) = control(&graph);
+    let owner = Owner { client: Some("c1".into()), gesture: Some("g".into()), ttl: None };
+    let l = graph.begin(token, revision, &id, owner).unwrap();
+    graph.update(l.lease, None, 900.0).unwrap();
+    fixture.put("b.ts", "export const b = (;\n");
+    assert!(graph.poll());
+    match graph.commit(l.lease, 950.0, Some(800.0)).unwrap() {
+        Committed::Pending { errors } => assert_eq!(errors[0]["file"], "b.ts"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!((graph.leases()[0].state, graph.leases()[0].value), ("pending", 950.0));
+    assert!(graph.update(l.lease, None, 960.0).unwrap_err().to_string().contains("waiting for the code to compile"));
+    graph.client_gone("c1");
+    assert_eq!(graph.leases().len(), 1, "a closed window keeps its pending commit");
+    // A newer release replaces the value to save.
+    assert!(matches!(graph.commit(l.lease, 970.0, Some(800.0)).unwrap(), Committed::Pending { .. }));
+    assert!(fixture.read("song.ts").contains("hz(800)"));
+    fixture.put("b.ts", "export const b = 2;\n");
+    assert!(graph.poll());
+    assert!(graph.leases().is_empty());
+    assert!(fixture.read("song.ts").contains("hz(970)") && fixture.read("b.ts").contains("b = 2"));
+    assert!(graph.expire().iter().any(|s| s.contains("saved once the code compiled")));
+    assert!(graph.inspect(|a| a.open.as_ref().unwrap().session.can_undo()));
+    let undone = graph.undo(token).unwrap();
+    assert_eq!((&undone["before"], &undone["after"]), (&json!("970"), &json!("800")), "the last undo step is the knob");
+}
+
+// C5, C6: a pending commit is cancelled after 30 s; a new gesture from the same window takes a
+// pending control over, and another window's is refused.
+#[test]
+fn a_pending_commit_is_taken_over_by_its_own_window_only() {
+    let fixture = Fixture::new();
+    fixture.write("import './b';\nexport default song(() => osc.sine(hz(800)));\n");
+    fixture.put("b.ts", "export const b = 1;\n");
+    let graph = fixture.open();
+    let (token, revision, id) = control(&graph);
+    let owner = |c: &str| Owner { client: Some(c.into()), gesture: None, ttl: None };
+    let l = graph.begin(token, revision, &id, owner("c1")).unwrap();
+    fixture.put("b.ts", "export const b = (;\n");
+    assert!(graph.poll());
+    assert!(matches!(graph.commit(l.lease, 950.0, None).unwrap(), Committed::Pending { .. }));
+    assert!(graph.begin(token, revision, &id, owner("c2")).is_err(), "another window's is refused");
+    let next = graph.begin(token, revision, &id, owner("c1")).unwrap();
+    assert_eq!(graph.leases().iter().map(|l| (l.lease, l.state, l.value)).collect::<Vec<_>>(), [(next.lease, "live", 950.0)]);
+    assert!(graph.update(l.lease, None, 1.0).unwrap_err().to_string().contains("superseded"));
+    graph.cancel(next.lease).unwrap();
+    assert!(fixture.read("song.ts").contains("hz(800)"));
+}
+
+/// A project whose output is the constant written in `tracks/a.ts` (a square at 0 Hz is 1), plus
+/// `tracks/b.ts`, silent: what is heard is the value a knob drag plays, sample for sample.
+struct Dc {
+    fixture: Fixture,
+    graph: Graph,
+    driver: Driver,
+}
+
+const SONG_DC: &str = "import { song } from '@m2/core';\nimport { sum } from 'std/math';\nimport { a } from './tracks/a';\n\
+                       import { b } from './tracks/b';\nexport default song(() => sum(a.out, b.out));\n";
+const A_DC: &str = "import { hz, track } from '@m2/core';\nimport { osc, vca } from 'std/dsp';\n\
+                    export const a = track('a', () => {\n  return vca(osc.square(hz(0)), 0.5);\n});\n";
+const B_SILENT: &str = "import { hz, track } from '@m2/core';\nimport { osc, vca } from 'std/dsp';\n\
+                        export const b = track('b', () => vca(osc.saw(hz(110)), 0));\n";
+
+impl Dc {
+    fn new() -> Dc {
+        let fixture = Fixture::new();
+        fixture.put("song.ts", SONG_DC);
+        fixture.put("tracks/a.ts", A_DC);
+        fixture.put("tracks/b.ts", B_SILENT);
+        let (p, driver) = Player::driven(48_000);
+        let graph = Graph::with_player(p);
+        graph.open(&fixture.0).unwrap();
+        let mut dc = Dc { fixture, graph, driver };
+        assert_eq!(dc.blocks(4), vec![0.5; 4], "the song plays its constant");
+        dc
+    }
+
+    /// Fill `n` blocks of 128 frames: the first frame of each, which is every frame of it while
+    /// nothing moves; a block whose frames differ is reported by its last.
+    fn blocks(&mut self, n: usize) -> Vec<f32> {
+        (0..n)
+            .map(|_| {
+                let mut buf = [0.0f32; 256];
+                self.driver.fill(&mut buf, 2);
+                drop(self.driver.drain_retired());
+                let left: Vec<f32> = buf.iter().step_by(2).copied().collect();
+                if left.iter().all(|x| *x == left[0]) { left[0] } else { left[127] }
+            })
+            .collect()
+    }
+
+    /// Every frame of `n` blocks.
+    fn frames(&mut self, n: usize) -> Vec<f32> {
+        let mut out = vec![];
+        for _ in 0..n {
+            let mut buf = [0.0f32; 256];
+            self.driver.fill(&mut buf, 2);
+            drop(self.driver.drain_retired());
+            out.extend(buf.iter().step_by(2));
+        }
+        out
+    }
+
+    fn generation(&mut self) -> u64 {
+        self.driver.engine().unwrap().current().unwrap().generation()
+    }
+
+    fn knob(&self) -> (u64, u64, String) {
+        knob(&self.graph, 0.5)
+    }
+}
+
+/// The origin of the accepted control whose value is `value`.
+fn dc_origin(graph: &Graph, value: f64) -> m2_ir::Origin {
+    graph.inspect(move |a| a.open.as_ref().unwrap().session.controls().into_iter().find(|c| c.value == value).unwrap().origin)
+}
+
+/// Whether `x` is `v` as the engine plays it (an f32), within a crossfade's rounding.
+fn near(x: f32, v: f64) -> bool {
+    (x as f64 - v).abs() < 1e-6
+}
+
+// WRITE-22, step 3's gate "an outside save to another file during a drag doesn't interrupt the
+// drag": an agent saves tracks/b.ts while a knob in tracks/a.ts is dragged. The save compiles and
+// a new renderer takes over, crossfaded; the drag's value plays on every frame of it, never the
+// code's, and the next update reaches the new renderer. The commit writes a.ts alone.
+#[test]
+fn an_outside_save_to_another_file_during_a_drag_does_not_interrupt_it() {
+    let mut dc = Dc::new();
+    let (token, revision, id) = dc.knob();
+    let first = dc.generation();
+    let l = dc.graph.begin(token, revision, &id, Owner::default()).unwrap();
+    dc.graph.update(l.lease, None, 0.9).unwrap();
+    assert_eq!(dc.blocks(2), [0.9, 0.9]);
+    // The agent's save: a code change, so a new renderer.
+    dc.fixture.put(
+        "tracks/b.ts",
+        &B_SILENT
+            .replace("vca(osc.saw(hz(110)), 0)", "delay(vca(osc.saw(hz(110)), 0))")
+            .replace("import { osc, vca } from 'std/dsp';", "import { osc, vca } from 'std/dsp';\nimport { delay } from 'std/fx';"),
+    );
+    assert!(dc.graph.poll());
+    let mut heard = dc.frames(1);
+    assert_ne!(dc.generation(), first, "a new renderer plays");
+    assert!(dc.driver.engine().unwrap().fading().is_some(), "crossfading from the old one");
+    // Mid-fade, the drag moves on: it reaches the new renderer.
+    let lease = &dc.graph.leases()[0];
+    assert_eq!((lease.lease, lease.generation), (l.lease, Some(dc.generation())), "the lease aims at the new renderer");
+    assert!(dc.graph.update(l.lease, None, 0.92).unwrap().is_some());
+    heard.extend(dc.frames(6));
+    assert!(dc.driver.engine().unwrap().fading().is_none());
+    // Never the code's 0.5, not for one frame: 0.9 until the update, then on to 0.92.
+    assert!(heard.iter().all(|x| (0.9 - 1e-6..=0.92 + 1e-6).contains(&(*x as f64))), "{heard:?}");
+    assert!(near(*heard.last().unwrap(), 0.92));
+    assert!(near(heard[0], 0.9));
+
+    match dc.graph.commit(l.lease, 0.95, Some(0.5)).unwrap() {
+        Committed::Written(v) => assert_eq!((&v["file"], &v["after"]), (&json!("tracks/a.ts"), &json!("0.95"))),
+        other => panic!("{other:?}"),
+    }
+    assert!(dc.blocks(3).iter().all(|x| near(*x, 0.95)));
+    assert!(dc.fixture.read("tracks/a.ts").contains("0.95") && dc.fixture.read("tracks/b.ts").contains("delay("));
+    let undone = dc.graph.undo(token).unwrap();
+    assert_eq!((&undone["file"], &undone["before"], &undone["after"]), (&json!("tracks/a.ts"), &json!("0.95"), &json!("0.5")));
+}
+
+// WRITE-12, WRITE-22: saves to the dragged knob's own file that don't touch its call keep the drag:
+// a comment above it, or an import at the top and a line at the bottom in one save (a line diff
+// carries the call past both). A save that rewrites its value ends it, and the new code plays.
+#[test]
+fn saves_around_the_dragged_call_keep_it_and_one_that_rewrites_it_ends_it() {
+    let mut dc = Dc::new();
+    let (token, revision, id) = dc.knob();
+    let l = dc.graph.begin(token, revision, &id, Owner::default()).unwrap();
+    dc.graph.update(l.lease, None, 0.9).unwrap();
+    for text in [
+        A_DC.replace("export const a", "// a comment above\nexport const a"),
+        format!("import {{ lfo }} from 'std/control';\n{A_DC}// and one below\n"),
+    ] {
+        dc.fixture.put("tracks/a.ts", &text);
+        assert!(dc.graph.poll());
+        assert!(dc.blocks(8).iter().all(|x| near(*x, 0.9)), "the drag plays on through the save");
+        assert!(dc.graph.update(l.lease, None, 0.9).is_ok());
+        assert_eq!(dc.graph.leases()[0].generation, Some(dc.generation()));
+    }
+    dc.fixture.put("tracks/a.ts", &A_DC.replace("0.5)", "0.6)"));
+    assert!(dc.graph.poll());
+    let heard = dc.blocks(8);
+    assert!(near(*heard.last().unwrap(), 0.6), "the new code plays: {heard:?}");
+    let e = dc.graph.update(l.lease, None, 0.7).unwrap_err();
+    assert!(e.to_string().contains("the code changed under this control"), "{e}");
+}
+
+// C5, WRITE-22: a broken save to another file, then the release: the commit waits, pending, with
+// the released value playing; the fix compiles, and the commit is written. Never the code's value
+// in between.
+#[test]
+fn a_release_during_a_broken_save_plays_on_and_saves_once_fixed() {
+    let mut dc = Dc::new();
+    let (token, revision, id) = dc.knob();
+    let l = dc.graph.begin(token, revision, &id, Owner::default()).unwrap();
+    dc.graph.update(l.lease, None, 0.9).unwrap();
+    dc.fixture.put("tracks/b.ts", "export const b = (;\n");
+    assert!(dc.graph.poll());
+    let mut heard = dc.blocks(2);
+    assert!(matches!(dc.graph.commit(l.lease, 0.95, Some(0.5)).unwrap(), Committed::Pending { .. }));
+    heard.extend(dc.blocks(4));
+    dc.fixture.put("tracks/b.ts", &B_SILENT.replace(", 0))", ", 0.0))"));
+    assert!(dc.graph.poll());
+    heard.extend(dc.blocks(8));
+    assert!(heard[..2].iter().all(|x| near(*x, 0.9)) && heard[2..].iter().all(|x| near(*x, 0.95)), "{heard:?}");
+    assert!(dc.graph.leases().is_empty());
+    assert!(dc.fixture.read("tracks/a.ts").contains("0.95"));
+}
+
+// WRITE-22 (critique 4): a renderer that fails to build leaves the old one playing: the lease's
+// session side moves to the accepted revision, its engine side stays where it is heard, and a
+// gesture begun meanwhile is heard there too. The next build that succeeds takes their values.
+#[test]
+fn a_renderer_that_fails_to_build_leaves_the_drag_where_it_is_heard() {
+    let mut dc = Dc::new();
+    let (token, revision, id) = dc.knob();
+    let first = dc.generation();
+    let l = dc.graph.begin(token, revision, &id, Owner::default()).unwrap();
+    dc.graph.update(l.lease, None, 0.9).unwrap();
+    dc.graph.inspect(|a| a.fail_builds = true);
+    let before = dc_origin(&dc.graph, 0.5);
+    // Inserted above a's call in its own file: the origins in the accepted revision move.
+    let moved = A_DC.replace("  return", "  const extra = osc.tri(hz(5));\n  return");
+    dc.fixture.put("tracks/a.ts", &moved);
+    dc.fixture.put("tracks/b.ts", &format!("// b\n{B_SILENT}"));
+    assert!(dc.graph.poll());
+    assert_eq!(dc.generation(), first, "the old renderer plays on");
+    let (playing_now, accepted) = playing(&dc.graph);
+    assert!(playing_now < accepted, "the accepted revision didn't build");
+    assert_ne!(dc_origin(&dc.graph, 0.5), before, "the accepted revision numbers the knob's call anew");
+    let leases = dc.graph.leases();
+    assert_eq!((leases[0].generation, leases[0].revision), (Some(first), playing(&dc.graph).1));
+    assert!(dc.graph.update(l.lease, None, 0.93).unwrap().is_some());
+    assert!(dc.blocks(2).iter().all(|x| near(*x, 0.93)));
+    // A gesture on b's knob, whose origin moved in the accepted revision, is heard where the old
+    // code has it.
+    let (_, accepted, saw) = knob(&dc.graph, 110.0);
+    let b = dc.graph.begin(token, accepted, &saw, Owner::default()).unwrap();
+    assert!(b.heard);
+    dc.graph.update(b.lease, None, 230.0).unwrap();
+    dc.graph.inspect(|a| a.fail_builds = false);
+    dc.fixture.put("tracks/b.ts", &format!("// b, again\n{B_SILENT}"));
+    assert!(dc.graph.poll());
+    let heard = dc.blocks(8);
+    assert_ne!(dc.generation(), first);
+    assert!(heard.iter().all(|x| near(*x, 0.93)), "the new renderer took the drag's value: {heard:?}");
+    assert_eq!(dc.graph.leases().len(), 2);
+}
+
+// WRITE-22 (critique 13): a cancel while the commit is on the session answers "committing", and
+// the commit decides: the committed value plays, never the code's in between.
+#[test]
+fn a_cancel_during_a_commit_leaves_it_to_the_commit() {
+    let mut dc = Dc::new();
+    let (token, revision, id) = dc.knob();
+    let l = dc.graph.begin(token, revision, &id, Owner::default()).unwrap();
+    dc.graph.update(l.lease, None, 0.9).unwrap();
+    let held = dc.graph.hold();
+    let graph = &dc.graph;
+    let heard = std::thread::scope(|s| {
+        let commit = s.spawn(move || graph.commit(l.lease, 0.95, Some(0.5)));
+        eventually("the commit is on the session", || graph.leases()[0].state == "committing");
+        let e = graph.cancel(l.lease).unwrap_err();
+        assert!(e.to_string().contains("being committed"), "{e}");
+        drop(held);
+        commit.join().unwrap().unwrap()
+    });
+    assert!(matches!(heard, Committed::Written(_)));
+    assert!(dc.blocks(4).iter().all(|x| near(*x, 0.95)));
+    assert!(dc.fixture.read("tracks/a.ts").contains("0.95"));
+}
+
+/// A project with knobs in three track files and a notes lane, for the timing of G8.
+fn three_tracks(fixture: &Fixture) {
+    fixture.put(
+        "song.ts",
+        "import { hz, secs, song, track } from '@m2/core';\nimport { osc, vca } from 'std/dsp';\nimport { sum } from 'std/math';\n\
+         import { kick } from 'std/instruments';\nimport { a } from './tracks/a';\nimport { b } from './tracks/b';\n\
+         import { c } from './tracks/c';\nconst k = track('kick', ({ lane }) => kick(lane.notes('hits'), { decay: secs(0.3) }));\n\
+         export default song(() => vca(sum(a.out, b.out, c.out, k.out), 0.25));\n",
+    );
+    for (key, call) in [("a", "osc.sine(hz(800))"), ("b", "osc.tri(hz(300))"), ("c", "osc.saw(hz(200))")] {
+        fixture.put(
+            &format!("tracks/{key}.ts"),
+            &format!("import {{ hz, track }} from '@m2/core';\nimport {{ osc }} from 'std/dsp';\nexport const {key} = track('{key}', () => {call});\n"),
+        );
+    }
+}
+
+/// tracks/b.ts with a busy loop that holds its build for about a second (QuickJS spins about
+/// 1e8 empty iterations a second).
+fn slow_b(n: u64) -> String {
+    format!(
+        "import {{ hz, track }} from '@m2/core';\nimport {{ osc }} from 'std/dsp';\nfor (let i = 0; i < {n}; i++) {{}}\n\
+         export const b = track('b', () => osc.tri(hz(300)));\n"
+    )
+}
+
+/// How long `f` took, in milliseconds, and what it returned.
+fn timed<T>(f: impl FnOnce() -> T) -> (f64, T) {
+    let t = Instant::now();
+    let r = f();
+    (t.elapsed().as_secs_f64() * 1e3, r)
+}
+
+// WRITE-22, RENDER-29, step 3's gate "previews never wait on a compile": while the session compiles
+// a slow save, a drag's updates return at once and the engine hears them before the compile ends;
+// gestures begun one data revision and one code change behind are resolved without the session.
+// The negative control, a begin forced through the session, waits for the compile.
+#[test]
+fn previews_never_wait_for_a_compile() {
+    let fixture = Fixture::new();
+    three_tracks(&fixture);
+    let graph = Arc::new(fixture.open());
+    graph.transport("play").unwrap();
+    let r0 = playing(&graph).1;
+    let (token, _, master) = knob(&graph, 0.25);
+    // A code revision (a comment in tracks/c.ts), then a data revision (a lane file).
+    fixture.put("tracks/c.ts", &format!("// c\n{}", fixture.read("tracks/c.ts")));
+    assert!(graph.poll());
+    let r1 = playing(&graph).1;
+    let (_, _, saw) = knob(&graph, 200.0);
+    fixture.put(
+        "data/kick/hits.json",
+        r#"{"clips": [{"id": "a", "start": 0, "length": 4, "notes": [{"pitch": "C1", "start": 0, "length": 1}]}]}"#,
+    );
+    assert!(graph.poll());
+    let r2 = playing(&graph).1;
+    assert!(r0 < r1 && r1 < r2);
+    let (_, _, sine) = knob(&graph, 800.0);
+    let lease = graph.begin(token, r2, &sine, Owner::default()).unwrap().lease;
+
+    let compile = |n: u64| {
+        let (g, dir) = (graph.clone(), fixture.0.clone());
+        std::thread::spawn(move || {
+            std::fs::write(dir.join("tracks/b.ts"), slow_b(n)).unwrap();
+            g.poll()
+        })
+    };
+    let saver = compile(100_000_000);
+    eventually("the session compiles", || graph.busy().is_some());
+    let busy_from = graph.busy().unwrap();
+    let (mut sent, mut slowest, mut during) = (vec![], 0.0f64, 0);
+    let mut begins = vec![];
+    let mut value = 800.0;
+    while !saver.is_finished() {
+        let tick = Instant::now();
+        value += 1.0;
+        let (ms, seq) = timed(|| graph.update(lease, None, value).unwrap());
+        slowest = slowest.max(ms);
+        during += usize::from(graph.busy().is_some());
+        let seq = seq.expect("heard");
+        // Each stamp is read before the next update: the engine keeps only the last 16.
+        let t = Instant::now();
+        let stamp = loop {
+            if let Some(a) = graph.applied(seq) {
+                break a;
+            }
+            assert!(t.elapsed() < Duration::from_millis(50), "update {seq}'s stamp never came");
+            std::thread::sleep(Duration::from_micros(200));
+        };
+        sent.push(stamp.callback_ns);
+        if begins.is_empty() && sent.len() == 5 {
+            // One data revision behind (the ring), and one code change behind (the aliases).
+            begins.push(timed(|| graph.begin(token, r1, &saw, Owner::default()).unwrap()).0);
+            begins.push(timed(|| graph.begin(token, r0, &master, Owner::default()).unwrap()).0);
+        }
+        std::thread::sleep(Duration::from_millis(5).saturating_sub(tick.elapsed()));
+    }
+    assert!(saver.join().unwrap(), "the slow save was taken in");
+    let (start, end) = *graph.busy_spans().iter().rev().find(|s| s.0 == busy_from).expect("the compile's span");
+    let compile_ms = (end - start) as f64 / 1e6;
+    if compile_ms < 500.0 {
+        eprintln!("void: the compile took only {compile_ms:.0} ms");
+        return;
+    }
+    assert!(during >= 20, "{during} updates were sent while the session compiled");
+    assert!(slowest < 20.0, "an update took {slowest:.1} ms");
+    assert_eq!(begins.len(), 2, "both begins ran during the compile");
+    assert!(begins.iter().all(|ms| *ms < 20.0), "begins took {begins:?} ms");
+    let heard_before = sent.iter().filter(|ns| **ns < end).count();
+    eprintln!(
+        "G8: compile {compile_ms:.0} ms; {during} updates while compiling, the slowest {slowest:.2} ms; {heard_before} heard before it \
+         ended; begins {begins:.2?} ms"
+    );
+    assert!(heard_before >= 5, "only {heard_before} updates were heard before the compile ended");
+
+    // The negative control: a begin through the session waits for the compile.
+    let (_, r3, tri) = knob(&graph, 300.0);
+    let saver = compile(100_000_001);
+    eventually("the session compiles", || graph.busy().is_some());
+    let asked = graph.now_ns();
+    let (ms, begun) = timed(|| graph.begin_via_actor(token, r3, &tri, Owner::default()));
+    assert!(saver.join().unwrap());
+    let end = graph.busy_spans().iter().rev().find(|s| s.0 <= asked).map(|s| s.1).unwrap();
+    let left = end.saturating_sub(asked) as f64 / 1e6;
+    eprintln!("G8 negative control: a begin through the session took {ms:.0} ms, with {left:.0} ms of the compile left");
+    assert!(ms >= 0.5 * left, "the session's begin took {ms:.1} ms during a compile");
+    // Named at the revision before the save: carried by the session.
+    begun.unwrap();
+    fixture.put("tracks/b.ts", &slow_b(0));
+    assert!(graph.poll());
+}
+
+// ---------------------------------------------------------------- plugins (HOST-5, RENDER-25)
+
+/// A song with the probe plugin (`m2_plugins::probe`) playing a notes lane in track `p`, beside
+/// the constant of `tracks/a.ts`.
+fn with_probe() -> Dc {
+    m2_plugins::probe::install();
+    let fixture = Fixture::new();
+    fixture.put(
+        "song.ts",
+        "import { plugin, song, track } from '@m2/core';\nimport { sum } from 'std/math';\nimport { a } from './tracks/a';\n\
+         const p = track('p', ({ lane }) => plugin('clap:m2.probe', { notes: lane.notes('n'), gain_1: 0.5 }));\n\
+         export default song(() => sum(a.out, p.out));\n",
+    );
+    fixture.put("tracks/a.ts", A_DC);
+    fixture.put(
+        "data/p/n.json",
+        r#"{"clips": [{"id": "a", "start": 0, "length": 64, "notes": [{"pitch": "C4", "start": 0, "length": 60}]}]}"#,
+    );
+    let (p, driver) = Player::driven(48_000);
+    let graph = Graph::with_player(p);
+    graph.open(&fixture.0).unwrap();
+    let mut dc = Dc { fixture, graph, driver };
+    dc.graph.transport("play").unwrap();
+    dc.frames(4);
+    dc
+}
+
+impl Dc {
+    /// The plugin instances the engine plays.
+    fn handles(&mut self) -> Vec<m2_plugins::Handle> {
+        self.driver.engine().unwrap().current().unwrap().plugin_handles()
+    }
+}
+
+// HOST-5, RENDER-25, WRITE-22: an outside save that rebuilds the song carries its plugin instances
+// into the new renderer, and a drag through it goes on; a rate change, a new engine, creates them
+// anew; closing the project destroys every one before it returns.
+#[test]
+fn rebuilds_carry_the_plugin_instances_and_closing_destroys_them() {
+    let mut dc = with_probe();
+    let first = dc.handles();
+    assert_eq!(first.len(), 1);
+    let (token, revision, id) = dc.knob();
+    let l = dc.graph.begin(token, revision, &id, Owner::default()).unwrap();
+    dc.graph.update(l.lease, None, 0.9).unwrap();
+    let generation = dc.generation();
+    dc.fixture.put("tracks/a.ts", &A_DC.replace("  return", "  // a comment\n  return"));
+    assert!(dc.graph.poll());
+    dc.frames(8);
+    assert_ne!(dc.generation(), generation, "a new renderer");
+    assert_eq!(dc.handles(), first, "with the same instance");
+    assert_eq!(dc.graph.leases()[0].generation, Some(dc.generation()));
+    assert_eq!(dc.graph.inspect(|a| a.open.as_ref().unwrap().carry.handles()), first);
+
+    // A new engine at another rate: never carried.
+    dc.fixture.put("music2.toml", &MANIFEST.replace("48000", "44100"));
+    assert!(dc.graph.poll());
+    let fresh = dc.graph.inspect(|a| a.open.as_ref().unwrap().carry.handles());
+    assert!(fresh.len() == 1 && fresh != first, "{fresh:?} after {first:?}");
+
+    // Closing waits for the instances to be destroyed, while the device plays the fade out.
+    let graph = &dc.graph;
+    let teardown = std::thread::scope(|s| {
+        let closing = s.spawn(move || graph.close());
+        while !closing.is_finished() {
+            let mut buf = [0.0f32; 256];
+            dc.driver.fill(&mut buf, 2);
+            drop(dc.driver.drain_retired());
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        closing.join().unwrap()
+    });
+    assert!(teardown.left == 0 && teardown.destroyed >= 1, "{teardown:?}");
+    assert_eq!(dc.graph.inner.owner.live(), 0);
+}
+
+// HOST-5, RENDER-25: a renderer that fails to build (a plugin added after the probe can't load its
+// state) leaves what plays playing, and the build after the fix still carries the probe's instance:
+// the failed build gave back what it took.
+#[test]
+fn a_build_that_failed_doesnt_stop_the_next_one_carrying() {
+    let mut dc = with_probe();
+    let first = dc.handles();
+    let generation = dc.generation();
+    let song = dc.fixture.read("song.ts");
+    // In the probe's track, after it: the failed build has taken the probe already.
+    let probe = "plugin('clap:m2.probe', { notes: lane.notes('n'), gain_1: 0.5 })";
+    let failing = song.replace(probe, &format!("plugin('clap:m2.probe.fails-state', {{ in: {probe}, key: 'bad' }})"));
+    assert_ne!(failing, song);
+    dc.fixture.put("song.ts", &failing);
+    dc.fixture.put("data/p/bad.state.json", r#"{"plugin": "clap:m2.probe.fails-state", "plugin_version": "1.0.0"}"#);
+    dc.fixture.put("data/p/bad.state", "fail: this blob doesn't load");
+    dc.graph.poll();
+    dc.frames(8);
+    let (plays, accepted) = playing(&dc.graph);
+    assert!(plays < accepted, "the new revision's renderer didn't build");
+    assert_eq!((dc.generation(), dc.handles()), (generation, first.clone()), "what played plays on");
+    // Fixed: the next build carries the probe, and creates only the new plugin.
+    dc.fixture.put("data/p/bad.state", "loads");
+    assert!(dc.graph.poll());
+    dc.frames(8);
+    let now = dc.handles();
+    assert_ne!(dc.generation(), generation, "a new renderer");
+    assert!(now.len() == 2 && now.contains(&first[0]), "the probe was carried: {now:?} after {first:?}");
+}
+
+// HOST-5 (critique 17): a player that stopped responding is replaced, and the project loaded into
+// the new one creates every instance anew: two audio threads never share one.
+#[test]
+fn a_new_player_after_a_stall_creates_every_instance_anew() {
+    let dc = with_probe();
+    let first = dc.graph.inspect(|a| a.open.as_ref().unwrap().carry.handles());
+    let t = Instant::now();
+    while dc.graph.seek(1.0).is_ok() {
+        assert!(t.elapsed() < Duration::from_secs(5), "the queue never filled");
+    }
+    assert!(dc.graph.transport("play").is_err(), "the stalled player is let go");
+    dc.fixture.put("tracks/a.ts", &A_DC.replace("  return", "  // a comment\n  return"));
+    assert!(dc.graph.poll());
+    let (epoch, now) = dc.graph.inspect(|a| {
+        let o = a.open.as_ref().unwrap();
+        (o.plays.as_ref().unwrap().epoch, o.carry.handles())
+    });
+    assert_eq!(epoch, 1, "loaded into the new player");
+    assert!(now.len() == 1 && now != first, "{now:?} after {first:?}");
+}
+
+/// A sine and a saw summed, with `above` written before them in the same call: each call it
+/// inserts renumbers theirs.
+fn sine_and_saw(above: &str) -> String {
+    format!("import {{ sum }} from 'std/math';\nexport default song(() => sum({above}osc.sine(hz(800)), osc.saw(hz(300))));\n")
+}
+
+// WRITE-22, WRITE-13: a settle publishes a new code revision's controls with the engine (its first
+// phase), and only then carries the aliases to them (its second). In between, a client two code
+// revisions behind must not resolve through the aliases of the code revision before, which name
+// other calls once a call was inserted above: it waits for the session, which carries its id.
+// After, the aliases take it to its own control, and a commit writes that control's literal.
+#[test]
+fn a_begin_between_a_settles_phases_never_resolves_through_stale_aliases() {
+    let fixture = Fixture::new();
+    fixture.write(&sine_and_saw(""));
+    let graph = fixture.open();
+    let (token, rev_a, saw) = knob(&graph, 300.0);
+    fixture.write(&sine_and_saw("osc.tri(hz(1)), "));
+    assert!(graph.poll());
+    fixture.write(&sine_and_saw("osc.tri(hz(2)), osc.tri(hz(1)), "));
+    let seen = Arc::new(Mutex::new(vec![]));
+    let (s, id) = (seen.clone(), saw.clone());
+    graph.inspect(move |a| {
+        a.between_phases = Some(Box::new(move |inner: &Inner| {
+            let found = match inner.control.lock().open.as_ref().unwrap().find(rev_a, &id) {
+                Resolved::Control(c) => format!("{} = {}", c.id, c.value),
+                Resolved::Missing => "missing".into(),
+                Resolved::Slow => "slow".into(),
+            };
+            s.lock().push(found);
+        }))
+    });
+    assert!(graph.poll());
+    graph.inspect(|a| a.between_phases = None);
+    assert_eq!(*seen.lock(), ["slow"], "between the phases, two code changes behind waits for the session");
+    let b = graph.begin(token, rev_a, &saw, Owner::default()).unwrap();
+    assert_eq!(b.value, 300.0, "after, the aliases take it to the saw");
+    assert!(matches!(graph.commit(b.lease, 310.0, Some(300.0)).unwrap(), Committed::Written(_)));
+    let src = fixture.read("song.ts");
+    assert!(src.contains("osc.sine(hz(800)), osc.saw(hz(310))"), "{src}");
+}
+
+// WRITE-22 (README, "Scripts and agents"): a gesture string has a lease per control, as it had a
+// preview per control before leases. A script that sends one gesture for every knob previews,
+// commits and cancels each knob's own, never another's. A cancel it sends itself is forgotten, so
+// it may set that knob next; a lease that ended otherwise refuses its gesture's late requests on
+// that control, and only there.
+#[test]
+fn one_gesture_string_reaches_each_controls_own_lease() {
+    let fixture = Fixture::new();
+    fixture.write(&sine_and_saw(""));
+    let graph = fixture.open();
+    let (token, r0, sine) = knob(&graph, 800.0);
+    let (_, _, saw) = knob(&graph, 300.0);
+    let playing = || graph.leases().into_iter().map(|l| (l.id, l.value)).collect::<Vec<_>>();
+    graph.preview(token, r0, &sine, "script", 900.0).unwrap();
+    graph.preview(token, r0, &saw, "script", 310.0).unwrap();
+    assert_eq!(playing(), [(sine.clone(), 900.0), (saw.clone(), 310.0)]);
+    let set = graph.set(token, r0, &saw, "script", 320.0, Some(300.0)).unwrap();
+    assert_eq!((&set["before"], &set["after"]), (&json!("300"), &json!("320")));
+    assert!(fixture.read("song.ts").contains("osc.sine(hz(800)), osc.saw(hz(320))"));
+    assert_eq!(playing(), [(sine.clone(), 900.0)], "the sine's drag goes on");
+
+    graph.cancel_preview(token, &saw, "script").unwrap();
+    assert_eq!(playing(), [(sine.clone(), 900.0)], "a cancel naming the saw leaves the sine's");
+    graph.cancel_preview(token, &sine, "script").unwrap();
+    assert!(playing().is_empty());
+    let set = graph.set(token, r0, &sine, "script", 820.0, None).unwrap();
+    assert_eq!((&set["before"], &set["after"]), (&json!("800"), &json!("820")), "its own cancel is forgotten");
+    assert!(fixture.read("song.ts").contains("osc.sine(hz(820)), osc.saw(hz(320))"));
+
+    // An agent cancels a drag through the lease routes: that gesture's late requests on that
+    // control say why, and the same string begins anew on another.
+    let (_, r1, saw) = knob(&graph, 320.0);
+    let (_, _, sine) = knob(&graph, 820.0);
+    graph.preview(token, r1, &saw, "drag", 330.0).unwrap();
+    graph.cancel(graph.leases()[0].lease).unwrap();
+    let e = graph.preview(token, r1, &saw, "drag", 340.0).unwrap_err();
+    assert!(e.to_string().contains("this gesture ended: cancelled"), "{e}");
+    assert!(graph.set(token, r1, &saw, "drag", 340.0, None).is_err());
+    graph.preview(token, r1, &sine, "drag", 830.0).unwrap();
+    assert_eq!(playing(), [(sine, 830.0)]);
+}
+
+// C5, WRITE-22: the page says a release made while the code doesn't compile is saved once it
+// does. When that pending commit ends some other way (the project closes, another opens, an
+// outside save changes its control, an agent cancels it), the user is told the value wasn't saved.
+#[test]
+fn a_pending_commit_that_ends_unsaved_says_so() {
+    let fixture = Fixture::new();
+    fixture.write("import './b';\nexport default song(() => osc.sine(hz(800)));\n");
+    let other = Fixture::new();
+    let pending = |graph: &Graph| {
+        fixture.put("b.ts", "export const b = 1;\n");
+        graph.open(&fixture.0).unwrap();
+        let (token, revision, id) = control(graph);
+        let l = graph.begin(token, revision, &id, Owner { client: Some("c1".into()), gesture: Some("g".into()), ttl: None }).unwrap();
+        graph.update(l.lease, None, 900.0).unwrap();
+        fixture.put("b.ts", "export const b = (;\n");
+        assert!(graph.poll());
+        assert!(matches!(graph.commit(l.lease, 950.0, Some(800.0)).unwrap(), Committed::Pending { .. }));
+        assert!(graph.expire().is_empty());
+        l.lease
+    };
+    let said = |graph: &Graph, why: &str| {
+        let said = graph.expire();
+        assert!(said.len() == 1 && said[0].starts_with("song.ts:4: the value wasn't saved: ") && said[0].ends_with(why), "{said:?}");
+        assert!(graph.leases().is_empty());
+    };
+    let graph = Graph::silent();
+    pending(&graph);
+    graph.close();
+    said(&graph, "the project was closed");
+
+    pending(&graph);
+    graph.open(&other.0).unwrap();
+    said(&graph, "the project was closed");
+
+    pending(&graph);
+    fixture.write("import './b';\nexport default song(() => osc.sine(hz(810)));\n");
+    fixture.put("b.ts", "export const b = 2;\n");
+    assert!(graph.poll());
+    said(&graph, "the code changed under this control");
+    assert!(fixture.read("song.ts").contains("hz(810)"));
+
+    fixture.write("import './b';\nexport default song(() => osc.sine(hz(800)));\n");
+    let lease = pending(&graph);
+    graph.cancel(lease).unwrap();
+    said(&graph, "cancelled");
+}
+
+// WRITE-22, WRITE-12: a save that inserts a call above a dragged knob in its file renumbers it,
+// and the drag goes on. The graph's state lists each gesture as its view names the control, so the
+// page finds its drag's knob under its new id; between a settle's phases, the state still shows
+// the view before, and the id it had there.
+#[test]
+fn the_state_names_each_drag_as_its_view_does() {
+    let fixture = Fixture::new();
+    fixture.write(&sine_and_saw(""));
+    let graph = fixture.open();
+    let (token, r0, saw) = knob(&graph, 300.0);
+    graph.preview(token, r0, &saw, "g", 310.0).unwrap();
+    let listed = |state: &Value| {
+        let l = &state["leases"][0];
+        (state["view"]["revision"].clone(), l["revision"].clone(), l["id"].clone(), l["gesture"].clone())
+    };
+    assert_eq!(listed(&graph.state().unwrap()), (json!(r0), json!(r0), json!(saw), json!("g")));
+    let seen = Arc::new(Mutex::new(vec![]));
+    let s = seen.clone();
+    graph.inspect(move |a| a.between_phases = Some(Box::new(move |inner: &Inner| s.lock().push(inner.state().unwrap()))));
+    fixture.write(&sine_and_saw("osc.tri(hz(1)), "));
+    assert!(graph.poll());
+    graph.inspect(|a| a.between_phases = None);
+    assert_eq!(listed(&seen.lock()[0]), (json!(r0), json!(r0), json!(saw), json!("g")), "between the phases: the view before, its id");
+    let (_, r1, moved) = knob(&graph, 300.0);
+    assert_ne!(moved, saw, "renumbered");
+    assert_eq!(listed(&graph.state().unwrap()), (json!(r1), json!(r1), json!(moved), json!("g")));
+    assert_eq!(graph.leases()[0].state, "live", "the drag goes on");
+    // The page goes on naming it as it began.
+    graph.preview(token, r0, &saw, "g", 320.0).unwrap();
+    graph.set(token, r0, &saw, "g", 330.0, Some(300.0)).unwrap();
+    assert!(fixture.read("song.ts").contains("osc.tri(hz(1)), osc.sine(hz(800)), osc.saw(hz(330))"));
+}

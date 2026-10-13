@@ -267,6 +267,125 @@ fn the_audio_thread_never_allocates_through_the_resampler() {
     trap_run(44_100);
 }
 
+/// A probe instrument on 64 notes into a probe effect (step 3b, §6.5), `gain` on the instrument.
+fn probes(gain: f64) -> Song {
+    let dir = temp("trap-plugins");
+    let ns: Vec<Value> = (0..64).map(|k| json!({"pitch": 48 + (k % 7) * 3, "start": k as f64 * 0.25, "length": 1.5})).collect();
+    for (name, text) in [
+        ("music2.toml", "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\n".to_string()),
+        ("song.ts", String::new()),
+        ("data/song/notes.json", json!({"clips": [{"id": "a", "start": 0, "length": 16, "notes": ns}]}).to_string()),
+    ] {
+        let p = dir.join(name);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    }
+    let mut ir: m2_ir::Ir = serde_json::from_value(json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"},
+        "modules": [{"key": "song", "exports": {"out": "fx"}, "lanes": [{"key": "notes", "kind": "events<note>"}], "nodes": [
+            {"id": "n", "op": "lane", "lane": "notes"}, {"id": "g", "op": "const", "value": gain},
+            {"id": "p", "op": "plugin", "plugin": "clap:m2.probe", "inputs": {"notes": "n", "gain_1": "g"}},
+            {"id": "fx", "op": "plugin", "plugin": "clap:m2.probe", "inputs": {"in": "p"}}]}]}))
+    .unwrap();
+    let mut packages = std_packages();
+    let diags = packages.bind_plugins(&mut ir);
+    assert!(diags.is_empty(), "{diags:?}");
+    let flat = m2_ir::check(&ir, &packages).unwrap_or_else(|e| panic!("{e:?}"));
+    let (data, _) = Project::open(&dir).unwrap().data(&m2_runtime::decls(&ir), None);
+    Song { flat, data, packages, rate: SR, dir }
+}
+
+// RENDER-28, step 3b (§6.5): the callback never allocates with plugins either: two probe instances
+// played, then an activation that carries both while notes sound into one (adoption, release and
+// lending through the crossfade), a value set, a panic, stop, the plugins asleep and the engine
+// idle, then woken by a plugin's request from a thread of its own. The probe asks for its main-
+// thread callback from `process` every 10 calls. Only the host glue is trapped here: a real
+// plugin's own allocations are its own (step 3a §13).
+#[test]
+fn the_audio_thread_never_allocates_with_plugins() {
+    let (a, b) = (probes(1.0), probes(0.5));
+    let owner = m2_plugins::Owner::discard();
+    let build = |s: &Song, source: &mut dyn m2_runtime::InstanceSource| {
+        let mut r = Renderer::build_live(&s.flat, &s.data, &s.packages, SR, &mut m2_runtime::audio::Cache::default(), &owner, source).unwrap();
+        r.set_strict(false);
+        r
+    };
+    let ra = build(&a, &mut m2_runtime::Fresh);
+    let handles = ra.plugin_handles();
+    let mut carry = m2_runtime::Carry::of(&ra, 1);
+    let rb = build(&b, carry.source(1));
+    assert_eq!(rb.plugin_handles(), handles, "both carried");
+    let stats: Vec<_> = handles.iter().map(|h| m2_plugins::probe::stats(*h).unwrap()).collect();
+    let (player, d) = Player::driven(SR);
+    player.open(ra).unwrap();
+    let (steps, rx) = mpsc::channel::<usize>();
+    let (reports, back) = mpsc::channel::<(usize, bool)>();
+    let audio = std::thread::spawn(move || {
+        let mut d = d;
+        let mut kept: Vec<Gone> = vec![];
+        let mut buf = vec![0.0f32; 2 * 4096];
+        while let Ok(frames) = rx.recv() {
+            let mut done = 0;
+            COUNT.with(|n| n.set(0));
+            for n in SIZES.iter().cycle() {
+                let n = (*n).min(frames - done);
+                if n == 0 {
+                    break;
+                }
+                IN_AUDIO.with(|on| on.set(true));
+                d.fill(&mut buf[..2 * n], 2);
+                IN_AUDIO.with(|on| on.set(false));
+                done += n;
+            }
+            let allocs = COUNT.with(|n| n.get());
+            kept.extend(d.drain_retired());
+            reports.send((allocs, d.engine().unwrap().is_idle())).unwrap();
+        }
+        (d, kept)
+    });
+    let step = |frames: usize| -> bool {
+        steps.send(frames).unwrap();
+        let (allocs, idle) = back.recv().unwrap();
+        assert_eq!(allocs, 0, "the audio thread allocated with plugins; M2_TRAP_TRACE=1 shows where");
+        idle
+    };
+    player.play();
+    step(SR as usize / 2);
+    assert!(stats[0].sounding.load(std::sync::atomic::Ordering::Relaxed) > 0, "notes sound into the instrument");
+    player.activate(rb).unwrap();
+    step(SR as usize / 2);
+    player.commit_const(Origin { site: 1, arg: vec![], scale: None }, 0.5).unwrap();
+    player.panic().unwrap();
+    step(SR as usize / 4);
+    player.stop();
+    step(SR as usize / 4);
+    for s in &stats {
+        s.sleep.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    let mut idle = false;
+    for _ in 0..20 {
+        idle = step(SR as usize / 10);
+        if idle {
+            break;
+        }
+    }
+    assert!(idle, "every plugin asleep: the engine idles");
+    let calls = stats[1].process.load(std::sync::atomic::Ordering::Relaxed);
+    stats[1].sleep.store(false, std::sync::atomic::Ordering::Relaxed);
+    let h = handles[1];
+    std::thread::spawn(move || assert!(m2_plugins::probe::request_process(h))).join().unwrap();
+    assert!(!step(SR as usize / 10), "woken");
+    assert!(stats[1].process.load(std::sync::atomic::Ordering::Relaxed) > calls);
+    drop(steps);
+    let (_d, kept) = audio.join().unwrap();
+    for s in &stats {
+        let n = |a: &std::sync::atomic::AtomicU64| a.load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!((n(&s.doubled), n(&s.callbacks_in_process), n(&s.process_says_main), n(&s.process_not_audio)), (0, 0, 0, 0));
+        assert!(n(&s.requested) > 0);
+    }
+    assert_eq!(kept.iter().filter(|g| matches!(g, Gone::Engine(Retired::Renderer(_)))).count(), 1, "the old renderer was retired");
+    assert!(!player.crashed());
+}
+
 // The trap itself: an allocation under it is counted (or the tests above prove nothing).
 #[test]
 fn the_trap_counts() {

@@ -2387,6 +2387,7 @@ dependencies = [
  "anyhow",
  "m2-ir",
  "m2-play",
+ "m2-plugins",
  "m2-runtime",
  "m2-server",
  "m2-session",
@@ -2413,6 +2414,7 @@ dependencies = [
  "cpal",
  "crossbeam-channel",
  "m2-ir",
+ "m2-plugins",
  "m2-runtime",
  "m2-session",
  "m2-song",
@@ -2425,7 +2427,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap-sys",
+ "crossbeam-channel",
  "libloading 0.8.9",
+ "sha2",
 ]
 
 [[package]]
@@ -2635,6 +2639,7 @@ dependencies = [
  "anyhow",
  "dirs",
  "getrandom 0.3.4",
+ "m2-plugins",
  "m2-server",
  "open",
  "serde_json",

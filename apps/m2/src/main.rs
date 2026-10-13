@@ -65,14 +65,18 @@ music2.app when m2 runs from there, or else in this source tree.
 ";
 
 fn main() -> ExitCode {
-    m2_server::resources::keep_hashes();
-    match run() {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("error: {e:#}");
-            ExitCode::FAILURE
+    // HOST-2: the command runs on a worker while the main thread serves plugins as their main
+    // thread, with its run loop; plugins it created are destroyed there before it exits.
+    m2_plugins::run_main(|| {
+        m2_server::resources::keep_hashes();
+        match run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e:#}");
+                ExitCode::FAILURE
+            }
         }
-    }
+    })
 }
 
 fn flag(args: &[String], name: &str) -> Option<String> {
@@ -566,14 +570,19 @@ fn run() -> Result<()> {
             if blob.exists() && !args.iter().any(|a| a == "--force") {
                 bail!("{} exists (pass --force to replace it)", blob.display());
             }
-            let inst = m2_plugins::Instance::new(&m2_plugins::find(clap_id)?, project.sample_rate() as f64, 128)?;
-            let bytes = inst.save_state()?;
+            // Through the host (P11): created and activated on the plugin main thread, saved there,
+            // and destroyed.
+            let host = m2_plugins::host();
+            let (h, info) = host.create(&m2_plugins::find(clap_id)?, None, &m2_plugins::Owner::discard())?;
+            let saved = host.activate(h, project.sample_rate(), 128).and_then(|_| host.save_state(h).recv()?.map_err(|e| anyhow!("{e}")));
+            host.destroy(h);
+            let bytes = saved?.bytes;
             // The blob and the sidecar that says which plugin wrote it, always together (FMT-17).
-            let side = m2_song::Sidecar { plugin: id.clone(), plugin_version: inst.info.found.version.clone() };
+            let side = m2_song::Sidecar { plugin: id.clone(), plugin_version: info.found.version.clone() };
             std::fs::create_dir_all(blob.parent().expect("has a parent"))?;
             std::fs::write(&blob, &bytes)?;
             std::fs::write(&sidecar, side.canonical())?;
-            println!("saved {} bytes of {} state to {}", bytes.len(), inst.info.found.name, blob.display());
+            println!("saved {} bytes of {} state to {}", bytes.len(), info.found.name, blob.display());
             attention_if_it_compiles(&project.dir);
         }
         _ => print!("{USAGE}"),

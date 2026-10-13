@@ -313,3 +313,98 @@ fn undo_finds_its_knob_after_a_call_is_inserted_in_a_file_loaded_before_it() {
     assert_eq!(std::fs::read_to_string(&bass).unwrap(), original.replacen("khz(2.5)", "khz(0.9)", 1));
     std::fs::remove_dir_all(dir).ok();
 }
+
+/// A small deterministic generator for the carry property test.
+struct Xorshift(u64);
+
+impl Xorshift {
+    fn below(&mut self, n: usize) -> usize {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        (self.0 % n.max(1) as u64) as usize
+    }
+}
+
+// WRITE-12: a range carries exactly when no change touched it. Random line edits (insert, delete,
+// replace) around a run of lines: with every line unique, the run is found where it went whenever
+// no edit touched it, and never when one did; and wherever the prefix-and-suffix rule carried a
+// range, the line diff keeps the same answer.
+#[test]
+fn carrying_finds_a_range_wherever_no_edit_touched_it() {
+    let mut rng = Xorshift(0x9e37_79b9_7f4a_7c15);
+    let mut fresh = 0;
+    let mut line = |rng: &mut Xorshift| {
+        fresh += 1;
+        format!("  const v{fresh} = osc.sine(hz({}));\n", rng.below(1000))
+    };
+    for case in 0..400 {
+        let n = 2 + rng.below(30);
+        let old: Vec<String> = (0..n).map(|_| line(&mut rng)).collect();
+        // The range: part of line `r0` to part of line `r1`.
+        let r0 = rng.below(n);
+        let r1 = (r0 + rng.below(3)).min(n - 1);
+        let start_of = |lines: &[String], i: usize| lines[..i].iter().map(String::len).sum::<usize>();
+        let start = start_of(&old, r0) + 2;
+        let end = start_of(&old, r1) + old[r1].len() - 2;
+        // Edits as (line, kind), applied back to front so earlier indexes stay valid.
+        let mut edits: Vec<(usize, usize)> = (0..1 + rng.below(4)).map(|_| (rng.below(n + 1), rng.below(3))).collect();
+        edits.sort();
+        edits.dedup_by_key(|e| e.0);
+        let mut new = old.clone();
+        let mut touched = false;
+        for &(at, kind) in edits.iter().rev() {
+            match kind {
+                // Insert before line `at`: inside the range only between its lines.
+                0 => {
+                    touched |= at > r0 && at <= r1;
+                    new.insert(at, line(&mut rng));
+                }
+                1 if at < n => {
+                    touched |= (r0..=r1).contains(&at);
+                    new.remove(at);
+                }
+                _ if at < n => {
+                    touched |= (r0..=r1).contains(&at);
+                    new[at] = line(&mut rng);
+                }
+                _ => {}
+            }
+        }
+        let (o, w) = (old.concat(), new.concat());
+        let carried = carry(&o, &w, start, end);
+        if touched {
+            assert_eq!(carried, None, "case {case}: an edit touched the range");
+        } else {
+            let moved = new.iter().position(|l| *l == old[r0]).expect("kept");
+            assert_eq!(carried, Some(start_of(&new, moved) + 2), "case {case}: the range is where its lines went");
+        }
+        if let Some(to) = carry_ends(&o, &w, start, end) {
+            assert_eq!(carried, Some(to), "case {case}: the prefix-and-suffix rule's answer stands");
+        }
+    }
+}
+
+// WRITE-12, WRITE-22: an agent's save that adds an import at the top of the file and a line at
+// its end keeps a dragged control: its call is carried, by a line diff, to the same control.
+#[test]
+fn a_control_is_carried_past_edits_above_and_below_its_call() {
+    let dir = project(&[("song.ts", TWO_OSCS)]);
+    let mut s = Session::open(&dir, std_packages()).unwrap();
+    let sine = s.controls().into_iter().find(|c| c.literal == "110").unwrap();
+    let edited = format!("import {{ lfo }} from \"std/control\";\n{TWO_OSCS}// the end\n");
+    std::fs::write(dir.join("song.ts"), &edited).unwrap();
+    assert!(s.refresh() && s.draft_errors.is_empty());
+    let current = s.controls_by_id();
+    let carried = s.carry(sine.revision, &sine.id, &current).unwrap();
+    assert_eq!((carried.literal.as_str(), carried.value, carried.revision), ("110", 110.0, s.accepted().number));
+    // Its own line changed too, past the call, while the lines above and below change back: the
+    // line diff counts the line as touched, and the ends differ around it.
+    std::fs::write(dir.join("song.ts"), TWO_OSCS.replace("const s = osc.sine(hz(110));", "const s = osc.sine(hz(110)); // s")).unwrap();
+    assert!(s.refresh());
+    let at = carried.revision;
+    assert_eq!(s.carry(at, &carried.id, &s.controls_by_id()), Err(EditError::Stale { current: s.accepted().number }));
+    assert_eq!(carried.audition(330.0), Ok(330.0));
+    assert!(carried.audition(f64::NAN).is_err());
+    std::fs::remove_dir_all(dir).ok();
+}

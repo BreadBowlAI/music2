@@ -1,0 +1,348 @@
+//! `PluginHost` (P11, HOST-1): the one way the engine reaches a plugin, and the types its calls
+//! carry. Nothing here assumes the plugin shares this process or its threads: the in-process host
+//! ([`crate::InProcess`]) is one implementation, and the host process (HOST-3) will be another.
+
+use std::ffi::c_void;
+use std::ptr::null_mut;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use anyhow::Result;
+use clap_sys::events::*;
+use crossbeam_channel::{Receiver, Sender, unbounded};
+use sha2::{Digest, Sha256};
+
+use crate::{Event, Found, Info, Transport};
+
+/// How the engine reaches a plugin (P11, HOST-1). Each method runs on the thread its group names;
+/// the host marshals main-thread calls itself, so any thread but the audio thread may call those.
+pub trait PluginHost: Send + Sync {
+    // The host's main thread. The caller waits; on the main thread itself they run inline.
+    /// Create and init `plugin`, loading `state` when given (CLAP: init, then `state.load`), and
+    /// read its ports and parameters. Not active. Its unsolicited events go to `owner`, which also
+    /// counts it.
+    fn create(&self, plugin: &Found, state: Option<Arc<Blob>>, owner: &Owner) -> Result<(Handle, Info)>;
+    /// Activate at `sample_rate` for calls of at most `max_frames`, and measure the latency then
+    /// (RENDER-17: after the state `create` loaded). CLAP reads latency only while activating or
+    /// active.
+    fn activate(&self, h: Handle, sample_rate: u32, max_frames: u32) -> Result<u32>;
+    /// Only while no renderer holds `h`: the main thread then takes the instance's audio role to
+    /// stop processing first, which CLAP's thread model allows.
+    fn deactivate(&self, h: Handle);
+    /// Skipped when the blob's hash equals the state the instance last saved (HOME-6).
+    fn load_state(&self, h: Handle, blob: Arc<Blob>) -> Result<()>;
+    /// Realtime or offline (CLAP's render extension); false when the plugin has no such mode.
+    fn set_render_mode(&self, h: Handle, mode: RenderMode) -> Result<bool>;
+    fn main_call(&self, h: Handle, call: MainCall) -> Result<Reply>;
+    /// Queued: returns at once, so a renderer dropped on any thread never waits. Stops processing
+    /// and deactivates first. Only once no renderer holds `h`.
+    fn destroy(&self, h: Handle);
+    // Queued to the main thread: the result comes back as one message on the reply returned.
+    fn latency(&self, h: Handle) -> Pending<Result<u32, String>>;
+    fn save_state(&self, h: Handle) -> Pending<Result<Blob, String>>;
+    // The audio thread (or an offline render's): never allocates, locks or waits (RENDER-28).
+    fn process(&self, h: Handle, io: &mut SharedBuffers, ev_in: &Events, ev_out: &mut Events, t: &Transport) -> Status;
+    /// Panic, and before an offline render: voices and tails cleared.
+    fn reset(&self, h: Handle);
+    /// Whether the plugin asked to be processed since the last call: wakes an idle engine.
+    fn take_process_request(&self, h: Handle) -> bool;
+    // Any thread.
+    /// Instances created and not yet destroyed, across every owner.
+    fn live(&self) -> u64;
+}
+
+/// An instance, as the host names it. Copied freely; meaningless once destroyed (a stale handle
+/// does nothing).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Handle(pub u64);
+
+/// A plugin's state as bytes, with their SHA-256.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Blob {
+    pub bytes: Vec<u8>,
+    pub sha: [u8; 32],
+}
+
+impl Blob {
+    pub fn new(bytes: Vec<u8>) -> Blob {
+        let sha = Sha256::digest(&bytes).into();
+        Blob { bytes, sha }
+    }
+}
+
+/// A result queued to the main thread: exactly one message arrives (the host never drops the
+/// sender unsent).
+pub type Pending<T> = Receiver<T>;
+
+/// What the plugin asked for on its own, outside any call: sent to its creator's [`Owner`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostEvent {
+    /// `request_restart`: deactivate and activate again. Such an instance isn't carried again.
+    Restart(Handle),
+    /// `state.mark_dirty`: its state changed with no gesture.
+    Dirty(Handle),
+    /// `latency.changed`, measured again.
+    Latency(Handle, u32),
+}
+
+/// Where an [`Owner`]'s events arrive.
+pub type HostEvents = Receiver<HostEvent>;
+
+/// Who created an instance: where its unsolicited events go, and how many of its instances are
+/// alive. Each session, test and rig has its own, so none sees another's events.
+#[derive(Clone, Debug)]
+pub struct Owner {
+    events: Sender<HostEvent>,
+    live: Arc<AtomicU64>,
+    dropped: Arc<AtomicU64>,
+}
+
+impl Owner {
+    /// An owner and the receiver of its events.
+    pub fn new() -> (Owner, HostEvents) {
+        let (events, rx) = unbounded();
+        (Owner { events, live: Arc::default(), dropped: Arc::default() }, rx)
+    }
+
+    /// An owner whose events nobody reads (describing a plugin, an export): they are counted only.
+    pub fn discard() -> Owner {
+        Owner::new().0
+    }
+
+    /// Its instances created and not yet destroyed.
+    pub fn live(&self) -> u64 {
+        self.live.load(Ordering::Acquire)
+    }
+
+    /// Events nobody received.
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn send(&self, e: HostEvent) {
+        if self.events.try_send(e).is_err() {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn created(&self) {
+        self.live.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub(crate) fn destroyed(&self) {
+        self.live.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenderMode {
+    Realtime,
+    Offline,
+}
+
+/// Other main-thread calls. GUI calls come with plugin windows (HOST-7).
+#[derive(Clone, Debug, PartialEq)]
+pub enum MainCall {
+    /// A parameter's current value (`params.get_value`).
+    Value(u32),
+    /// How the plugin displays `value` of a parameter (`params.value_to_text`).
+    Text(u32, f64),
+    /// Its ports and parameters, read again.
+    Info,
+    /// Warnings and errors it logged since the last call.
+    TakeLog,
+}
+
+#[derive(Clone, Debug)]
+pub enum Reply {
+    Value(Option<f64>),
+    Text(Option<String>),
+    Info(Box<Info>),
+    Log(Vec<String>),
+}
+
+/// What a `process` call reported (CLAP's process status). No error value: the audio thread can't
+/// build one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Status {
+    Continue,
+    ContinueIfNotQuiet,
+    Tail,
+    /// Nothing to do until its input changes or it asks to be processed.
+    Sleep,
+    Error,
+}
+
+/// One call's audio: up to two channels in and out, `frames` long. A missing input channel reads
+/// the first; a channel the plugin doesn't output is written with silence.
+pub struct SharedBuffers<'a> {
+    pub inputs: [&'a [f32]; 2],
+    pub n_in: usize,
+    pub outputs: [&'a mut [f32]; 2],
+    pub n_out: usize,
+    pub frames: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) union Raw {
+    pub header: clap_event_header,
+    note: clap_event_note,
+    expr: clap_event_note_expression,
+    param: clap_event_param_value,
+}
+
+fn header(size: usize, time: u32, type_: u16) -> clap_event_header {
+    clap_event_header { size: size as u32, time, space_id: CLAP_CORE_EVENT_SPACE_ID, type_, flags: 0 }
+}
+
+fn raw(e: &Event) -> Raw {
+    use std::mem::size_of;
+    let note = |time, type_, id, key, velocity| Raw {
+        note: clap_event_note { header: header(size_of::<clap_event_note>(), time, type_), note_id: id, port_index: 0, channel: 0, key, velocity },
+    };
+    match *e {
+        Event::NoteOn { time, id, key, velocity } => note(time, CLAP_EVENT_NOTE_ON, id, key, velocity),
+        Event::NoteOff { time, id, key } => note(time, CLAP_EVENT_NOTE_OFF, id, key, 0.0),
+        Event::NoteChoke { time, id, key } => note(time, CLAP_EVENT_NOTE_CHOKE, id, key, 0.0),
+        Event::Tuning { time, id, key, semitones } => Raw {
+            expr: clap_event_note_expression {
+                header: header(size_of::<clap_event_note_expression>(), time, CLAP_EVENT_NOTE_EXPRESSION),
+                expression_id: CLAP_NOTE_EXPRESSION_TUNING,
+                note_id: id,
+                port_index: 0,
+                channel: 0,
+                key,
+                value: semitones,
+            },
+        },
+        Event::Param { time, id, value } => Raw {
+            param: clap_event_param_value {
+                header: header(size_of::<clap_event_param_value>(), time, CLAP_EVENT_PARAM_VALUE),
+                param_id: id,
+                cookie: null_mut(),
+                note_id: -1,
+                port_index: -1,
+                channel: -1,
+                key: -1,
+                value,
+            },
+        },
+    }
+}
+
+/// The event a CLAP header holds, when it is one of ours.
+///
+/// # Safety
+/// `h` points to a whole event of the size its header gives.
+pub(crate) unsafe fn decode(h: *const clap_event_header) -> Option<Event> {
+    let hd = unsafe { &*h };
+    if hd.space_id != CLAP_CORE_EVENT_SPACE_ID {
+        return None;
+    }
+    let time = hd.time;
+    match hd.type_ {
+        CLAP_EVENT_NOTE_ON | CLAP_EVENT_NOTE_OFF | CLAP_EVENT_NOTE_CHOKE => {
+            let n = unsafe { &*(h as *const clap_event_note) };
+            let (id, key) = (n.note_id, n.key);
+            Some(match hd.type_ {
+                CLAP_EVENT_NOTE_ON => Event::NoteOn { time, id, key, velocity: n.velocity },
+                CLAP_EVENT_NOTE_OFF => Event::NoteOff { time, id, key },
+                _ => Event::NoteChoke { time, id, key },
+            })
+        }
+        CLAP_EVENT_NOTE_EXPRESSION => {
+            let x = unsafe { &*(h as *const clap_event_note_expression) };
+            (x.expression_id == CLAP_NOTE_EXPRESSION_TUNING).then_some(Event::Tuning { time, id: x.note_id, key: x.key, semitones: x.value })
+        }
+        CLAP_EVENT_PARAM_VALUE => {
+            let p = unsafe { &*(h as *const clap_event_param_value) };
+            Some(Event::Param { time, id: p.param_id, value: p.value })
+        }
+        _ => None,
+    }
+}
+
+/// One call's events, in CLAP's own layout, so the host hands them to the plugin as they are.
+/// Sized when built: [`Events::push`] never reallocates (RENDER-28); what doesn't fit is counted.
+pub struct Events {
+    raw: Vec<Raw>,
+    dropped: u32,
+}
+
+// SAFETY: the raw events hold no pointer the list owns (a parameter's cookie is always null).
+unsafe impl Send for Events {}
+
+impl Events {
+    pub fn with_capacity(n: usize) -> Events {
+        Events { raw: Vec::with_capacity(n), dropped: 0 }
+    }
+
+    pub fn clear(&mut self) {
+        self.raw.clear();
+    }
+
+    /// Add `e`, or count it when the list is full: false then. Never allocates.
+    pub fn push(&mut self, e: Event) -> bool {
+        if self.raw.len() == self.raw.capacity() {
+            self.dropped = self.dropped.saturating_add(1);
+            return false;
+        }
+        self.raw.push(raw(&e));
+        true
+    }
+
+    /// Add an event a plugin output, when it is one of ours; others are counted.
+    ///
+    /// # Safety
+    /// As [`decode`].
+    pub(crate) unsafe fn push_raw(&mut self, h: *const clap_event_header) -> bool {
+        match unsafe { decode(h) } {
+            Some(e) => self.push(e),
+            None => {
+                self.dropped = self.dropped.saturating_add(1);
+                false
+            }
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.raw.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.raw.is_empty()
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.raw.capacity()
+    }
+
+    /// Events that didn't fit, or that weren't ones the host reads, since it was built.
+    pub fn dropped(&self) -> u32 {
+        self.dropped
+    }
+
+    pub fn get(&self, i: usize) -> Option<Event> {
+        // SAFETY: every entry was written whole by `push`.
+        self.raw.get(i).and_then(|r| unsafe { decode(&r.header) })
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
+        (0..self.len()).filter_map(|i| self.get(i))
+    }
+
+    /// The time of each event, in order: whether they come sorted (CLAP requires it).
+    pub(crate) fn sorted(&self) -> bool {
+        // SAFETY: every entry starts with its header.
+        self.raw.windows(2).all(|w| unsafe { w[0].header.time <= w[1].header.time })
+    }
+
+    pub(crate) fn header(&self, i: usize) -> *const clap_event_header {
+        self.raw.get(i).map_or(std::ptr::null(), |r| r as *const Raw as *const clap_event_header)
+    }
+
+    pub(crate) fn as_ctx(&self) -> *mut c_void {
+        self as *const Events as *mut c_void
+    }
+}
