@@ -8,8 +8,8 @@ export interface Slot { frame: number; slot: string; inherited?: boolean; smooth
 
 export interface Origin { site: number; arg?: string[]; scale?: number; control?: Slot }
 
-/** Where a value lives (HOME-1): the code, a lane, a plugin's state, `layout.json`, or this machine's `.music2/`. */
-export type Home = "code" | "lane" | "state" | "layout" | "local";
+/** Where a value lives (HOME-1): the code, a lane, a plugin's state, `layout.json`, `data/arrangement.json` (the tempo and time signature), or this machine's `.music2/`. */
+export type Home = "code" | "lane" | "state" | "layout" | "arrangement" | "local";
 
 export interface Knob {
   id: string;
@@ -184,6 +184,8 @@ export interface TimelineView {
   tempo: { beat: number; bpm: number }[];
   /** The time signatures; empty is 4/4 throughout. Bars are counted from them (`barAt`, `bars`). */
   meter: Meter[];
+  /** Where the tempo and time signatures live (HOME-1): `data/arrangement.json`. Absent from older servers. */
+  home?: Home;
   /** Where the last clip ends, at least one bar. */
   end: number;
   tracks: TimelineTrack[];
@@ -622,7 +624,22 @@ export const graphApi = {
   /** Try the project's lock again (the read-only banner's Retry). Answers with the state. */
   retryLock: (session: number) => call<GraphState>("/lock/retry", { session }),
   redo: (session: number) => call<Edit>("/redo", { session }),
-  transport: (action: "play" | "stop" | "toggle" | "restart") => call("/transport", { action }),
+  /** Play or stop. A stop with `to` goes back there (where play started) and answers where it stopped (`at`). */
+  transport: (action: "play" | "stop" | "toggle" | "restart", to?: number) => call<{ at: number | null }>("/transport", { action, to }),
+  /**
+   * The song bar's tempo (design-8b §4): the tempo in effect at beat `at` set to `bpm`; with `add`, a
+   * change at `at`; with `remove`, the change at `at` taken out. One undo step, and no toast: what it
+   * did shows where it was done. `loop_off`: the new tempo made the loop too short, so it is off.
+   */
+  tempo: (session: number, change: { at: number; bpm?: number; add?: boolean; remove?: boolean }, step: Step) =>
+    edit(session, step, call<Edit & { loop_off?: boolean }>("/tempo", { session, ...change })),
+  /** The time signature in effect at `at`; with `add`, a change on the bar line at or before it; with `remove`, the change at `at` taken out. */
+  meter: (session: number, change: { at: number; beats?: number; unit?: number; add?: boolean; remove?: boolean }, step: Step) =>
+    edit(session, step, call<Edit>("/meter", { session, ...change })),
+  /** Call the song `name`: its manifest's name. The folder keeps its own. */
+  title: (session: number, name: string, step: Step) => edit(session, step, call<Edit>("/title", { session, name })),
+  /** Stop all sound (⌘.): every note off, every instance reset. Not a write. */
+  panic: () => call("/panic", {}),
   /** Set the loop's range (beats; it turns looping on unless `on` says), or turn looping on or off over the range set. Answers with the transport. */
   loop: (req: { start?: number; end?: number; on?: boolean }) => call<GraphStatus>("/loop", req),
   /** Tell the app which files the code editor has unsaved edits in, so it asks before closing the project. */
@@ -633,8 +650,8 @@ export const graphApi = {
 
 // ---------------------------------------------------------------- new songs
 
-/** A template or an example a new song can start from. */
-export interface Starter { id: string; name: string; description: string }
+/** A template or an example a new song can start from, with its tempo (the New Song dialog's Tempo starts there). */
+export interface Starter { id: string; name: string; description: string; tempo?: number }
 
 /** What a new song can start from; `songs` is the folder new songs go in unless another is picked. */
 export interface Catalog { templates: Starter[]; examples: Starter[]; songs: string | null; home: string | null }
@@ -642,7 +659,7 @@ export interface Catalog { templates: Starter[]; examples: Starter[]; songs: str
 export const projectApi = {
   catalog: () => request<Catalog>("/api/project/templates"),
   /** Make a song from a template (or a copy of an example) in `dir` (default the songs folder), and open it. */
-  create: (song: { name: string; template?: string; example?: string; dir?: string }) => request<GraphState>("/api/project/new", song),
+  create: (song: { name: string; template?: string; example?: string; dir?: string; tempo?: number }) => request<GraphState>("/api/project/new", song),
 };
 
 /** `/Users/me/Music/music2` → `~/Music/music2`. */

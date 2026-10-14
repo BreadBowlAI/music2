@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   attention,
+  barAt,
   editorHooks,
   findNoteClip,
   graphApi,
@@ -12,8 +13,10 @@ import {
   type ModuleView,
   type Problem,
   type TimelineTrack,
+  type TimelineView,
 } from "../lib/graph";
 import { setClock } from "../lib/clock";
+import { continuePlay, playStop, resetTransport, startAt } from "../lib/transport";
 import { stepped } from "../lib/history";
 import { HEADS_W, HEADS_W_SMALL, WIDE } from "../lib/layout";
 import { canvas, useShell } from "../lib/shell";
@@ -58,9 +61,14 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
     const t = setInterval(poll, 200);
     return () => clearInterval(t);
   }, [poll]);
+  const failed = useCallback((error: unknown) => toast(error instanceof Error ? error.message : String(error)), [toast]);
+  // A seek moves where play starts, so a stop comes back there (taste.md §5.1).
   const seek = useCallback(
-    (beat: number) => void graphApi.seek(beat).then(poll, (error) => toast(error instanceof Error ? error.message : String(error))),
-    [poll, toast],
+    (beat: number) => {
+      startAt(beat);
+      void graphApi.seek(beat).then(poll, failed);
+    },
+    [poll, failed],
   );
   // The loop: a range dragged on the ruler (which turns it on), or the toggle in the bar (C).
   const setLoop = useCallback(
@@ -72,9 +80,21 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
   const latest = useRef({ status, graph });
   latest.current = { status, graph };
   useEffect(() => {
+    resetTransport();
     canvas.loop = () => toggleLoop(latest.current.graph.timeline.meter, latest.current.status, setLoop);
-    return () => void delete canvas.loop;
-  }, [setLoop]);
+    canvas.loopSelection = () => loopSelection(latest.current.graph.timeline, latest.current.status.beat, setLoop);
+    canvas.play = () => void playStop().then(poll, failed);
+    canvas.continue = () => void continuePlay().then(poll, failed);
+    canvas.home = () => seek(0);
+    return () => {
+      for (const k of ["loop", "loopSelection", "play", "continue", "home"] as const) delete canvas[k];
+    };
+  }, [setLoop, poll, failed, seek]);
+  // The window is called by the song (the desktop app's own title follows the server).
+  useEffect(() => {
+    document.title = graph.name;
+    return () => void (document.title = "music2");
+  }, [graph.name]);
 
   // A new song: nothing selected, every track folded. One opened with code that doesn't compile has
   // nothing to show yet: it opens in its code (WRITE-20), without changing the window's choice.
@@ -197,6 +217,19 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
       <TracksUi graph={graph} />
     </div>
   );
+}
+
+/**
+ * Loop the selection (⌘L): from the first selected clip's start to the last one's end, else the bar
+ * the playhead is in. It turns looping on.
+ */
+function loopSelection(timeline: TimelineView, beat: number, onLoop: (req: { start: number; end: number }) => void) {
+  const picked = Object.values(useShell.getState().clips).flatMap((c) => findNoteClip(timeline, c) ?? []);
+  if (picked.length) {
+    return onLoop({ start: Math.min(...picked.map((c) => c.start)), end: Math.max(...picked.map((c) => c.start + c.length)) });
+  }
+  const bar = barAt(timeline.meter, beat);
+  onLoop({ start: bar.start, end: bar.start + bar.length });
 }
 
 /** Between the timeline and the dock: 1px drawn, 6px to grab. Drag to size the dock; a double-click hides or shows it (E). */

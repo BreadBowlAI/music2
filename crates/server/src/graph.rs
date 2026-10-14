@@ -41,6 +41,7 @@ mod actor;
 mod fsevents;
 pub mod lease;
 mod preview;
+mod view_file;
 mod watcher;
 
 use std::collections::{HashMap, VecDeque};
@@ -634,7 +635,13 @@ impl Graph {
 
     pub fn open(&self, dir: &Path) -> Result<Value> {
         let dir = dir.to_path_buf();
-        self.call(move |a| a.open(&dir))
+        let opened = self.call(move |a| a.open(&dir))?;
+        // The loop it had when it was last open here (design-8b §2.2), set before anything plays.
+        // One the song's tempo makes too short now is left off.
+        match self.dir().and_then(|d| view_file::looped(&d)) {
+            Some((range, on)) if self.set_loop(Some(range), Some(on)).is_ok() => self.inner.state().context("no project is open"),
+            _ => Ok(opened),
+        }
     }
 
     /// Close the project. Returns once its plugin instances are destroyed, or after 2 s.
@@ -781,6 +788,13 @@ impl Graph {
         player.transport(Cmd::Loop(range.filter(|_| on)))?;
         if let Some(t) = self.inner.timing.lock().as_mut() {
             (t.range, t.on) = (range, on);
+        }
+        // Kept for the next time the song opens, in this machine's `.music2/view.json`: never a Tx
+        // (design-8b §2.2). A read-only window keeps it in memory only.
+        if let (Some((start, end)), Some(dir), None) = (range, self.dir(), self.read_only())
+            && let Err(e) = view_file::write(&dir, "loop", json!({"start": start, "end": end, "on": on}))
+        {
+            eprintln!("music2: couldn't keep the loop in .music2/view.json: {e:#}");
         }
         Ok(self.status())
     }
@@ -1239,6 +1253,54 @@ impl Graph {
             (None, Some((module, colour)), false) => s.recolour(&module, &colour),
             _ => Err(m2_editor::EditError::Rejected("a layout write is an order, a colour or a reset".into())),
         })
+    }
+
+    /// The song bar's tempo (design-8b §4.1): the tempo in effect at beat `at` (the playhead's) set
+    /// to `bpm`; with `add`, a change at `at`; with `remove`, the change at `at` taken out. One undo
+    /// step. When the loop was on and the new tempo makes it too short to play, the engine turns it
+    /// off (RENDER-9a) and the answer says `loop_off`.
+    pub fn tempo(&self, token: u64, at: f64, bpm: Option<f64>, add: bool, remove: bool) -> Result<Value> {
+        let looped = self.inner.timing.lock().as_ref().and_then(|t| t.range.filter(|_| t.on));
+        let mut v = self.edit(token, move |s| match (bpm, add, remove) {
+            (_, _, true) => m2_editor::song::remove_tempo(s, at),
+            (Some(bpm), true, false) => m2_editor::song::tempo_change(s, at, bpm),
+            (Some(bpm), false, false) => m2_editor::song::tempo(s, at, bpm),
+            (None, _, false) => Err(m2_editor::EditError::Rejected("a tempo needs its BPM".into())),
+        })?;
+        if let Some((start, end)) = looped {
+            let mut timing = self.inner.timing.lock();
+            let short = timing.as_ref().is_some_and(|t| check_loop(t, start, end).is_err());
+            if let Some(t) = timing.as_mut().filter(|_| short) {
+                // Off here too, as the engine has it: C turns it on again, if it can play.
+                t.on = false;
+            }
+            v["loop_off"] = json!(short);
+        }
+        Ok(v)
+    }
+
+    /// The song bar's time signature: the one in effect at beat `at` set to `beats`/`unit`; with
+    /// `add`, a change on the bar line at or before `at`; with `remove`, the change at `at` taken out.
+    pub fn meter(&self, token: u64, at: f64, beats: Option<u32>, unit: Option<u32>, add: bool, remove: bool) -> Result<Value> {
+        self.edit(token, move |s| match (beats.zip(unit), add, remove) {
+            (_, _, true) => m2_editor::song::remove_meter(s, at),
+            (Some((beats, unit)), true, false) => m2_editor::song::meter_change(s, at, beats, unit),
+            (Some((beats, unit)), false, false) => m2_editor::song::meter(s, at, beats, unit),
+            (None, _, false) => Err(m2_editor::EditError::Rejected("a time signature needs its beats and unit".into())),
+        })
+    }
+
+    /// Call the song `name`: its manifest's `[project] name`, verified to change nothing that plays.
+    pub fn title(&self, token: u64, name: &str) -> Result<Value> {
+        let name = name.to_string();
+        self.edit(token, move |s| m2_editor::song::title(s, &name))
+    }
+
+    /// Stop all sound (⌘., RENDER-10): every note off and every instance reset, at the next block.
+    /// It never waits for the session, and changes nothing in it.
+    pub fn panic(&self) -> Result<()> {
+        self.inner.device()?.player.panic()?;
+        Ok(())
     }
 
     /// Apply a fix a problem offers, as the problem carried it (`{code, title, likely, tx}`):

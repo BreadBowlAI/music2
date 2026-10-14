@@ -17,7 +17,12 @@ interface TypeProblem { path: string; line: number; col: number; message: string
 
 const isLib = (path: string) => path.startsWith("node_modules/");
 /** The app's menu commands whose chords the editor binds, and its action for each (⌘D: the next match). */
-const MONACO_CHORDS: Record<string, string> = { duplicate: "editor.action.addSelectionToNextFindMatch", delete_track: "deleteAllLeft" };
+const MONACO_CHORDS: Record<string, string> = {
+  duplicate: "editor.action.addSelectionToNextFindMatch",
+  delete_track: "deleteAllLeft",
+  loop_selection: "expandLineSelection",
+  panic: "editor.action.quickFix",
+};
 
 /** What the editor followed while the project had no module (its code never compiled). */
 const NO_MODULES = "\0none";

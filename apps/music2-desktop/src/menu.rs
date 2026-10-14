@@ -31,6 +31,8 @@ pub const ITEMS: &[(&str, &str, &str, Option<&str>)] = &[
     // Split, which comes with clip editing.
     ("File", "export", "Export Audio…", Some("CmdOrCtrl+Shift+E")),
     ("File", "reveal", "Show in Finder", None),
+    // The song's name in the top bar turns into a field (a double-click there does the same).
+    ("File", "rename_song", "Rename Song…", None),
     ("Edit", "undo", "Undo", Some("CmdOrCtrl+Z")),
     ("Edit", "redo", "Redo", Some("CmdOrCtrl+Shift+Z")),
     // One item for whatever is selected (the roll's notes today), or the code editor's own ⌘D.
@@ -49,8 +51,14 @@ pub const ITEMS: &[(&str, &str, &str, Option<&str>)] = &[
     ("View", "browser", "Show Browser", Some("Alt+CmdOrCtrl+B")),
     // No Space accelerator: the menu would steal it from text fields. The UI handles Space, Return and C.
     ("Transport", "play", "Play / Stop", None),
+    // ⇧Space, the page's: from where it stopped, not where play started.
+    ("Transport", "continue", "Continue", None),
     ("Transport", "home", "Go to Start", None),
     ("Transport", "loop", "Loop", None),
+    // The selected clip's span, else the bar at the playhead.
+    ("Transport", "loop_selection", "Loop Selection", Some("CmdOrCtrl+L")),
+    // Panic (RENDER-10): every note off, every instance reset.
+    ("Transport", "panic", "Stop All Sound", Some("CmdOrCtrl+Period")),
     ("Help", "shortcuts", "Keyboard Shortcuts", None),
 ];
 
@@ -93,6 +101,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .item(&item("export")?)
         .separator()
         .item(&item("reveal")?)
+        .item(&item("rename_song")?)
         .build()?;
 
     let edit = SubmenuBuilder::new(app, "Edit")
@@ -123,7 +132,16 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .fullscreen()
         .build()?;
 
-    let transport = SubmenuBuilder::new(app, "Transport").item(&item("play")?).item(&item("home")?).item(&item("loop")?).build()?;
+    let transport = SubmenuBuilder::new(app, "Transport")
+        .item(&item("play")?)
+        .item(&item("continue")?)
+        .item(&item("home")?)
+        .separator()
+        .item(&item("loop")?)
+        .item(&item("loop_selection")?)
+        .separator()
+        .item(&item("panic")?)
+        .build()?;
 
     // ⌘W closes the song (File); closing the window, which quits, is ⇧⌘W.
     let close_window = MenuItemBuilder::with_id("close_window", "Close Window").accelerator(CLOSE_WINDOW).build(app)?;

@@ -16,9 +16,12 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
   {
     name: "Transport",
     keys: [
-      ["Play / stop", "Space"],
+      ["Play / stop, back to where play started", "Space"],
+      ["Continue from where it stopped", "⇧Space"],
       ["Go to start", "Return"],
       ["Loop on / off", "C"],
+      ["Loop the selected clips, or the bar", chord("L")],
+      ["Stop all sound", chord(".")],
     ],
   },
   {

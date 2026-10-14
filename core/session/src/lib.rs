@@ -50,6 +50,9 @@ pub enum Home {
     State,
     /// `layout.json`: shared presentation.
     Layout,
+    /// `data/arrangement.json`: the tempo and the time signature (FMT-13), which the song bar
+    /// edits.
+    Arrangement,
     /// `.music2/`: this machine's monitoring and view state.
     Local,
 }

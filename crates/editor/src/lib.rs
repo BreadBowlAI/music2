@@ -27,6 +27,7 @@ pub mod plan;
 pub mod rename;
 pub mod render;
 pub mod sites;
+pub mod song;
 pub mod timeline;
 pub mod tracks;
 pub mod value;

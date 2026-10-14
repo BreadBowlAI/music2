@@ -1088,7 +1088,8 @@ fn stopping_freezes_the_transport_and_the_engine_runs_on() {
 }
 
 // RENDER-9a: a loop is beats of the accepted revision, refused when the engine couldn't play it;
-// its range is kept while it is off, and playback wraps inside it. A project opened anew has none.
+// its range is kept while it is off, and playback wraps inside it. A project opened for the first
+// time has none; opened again, it has the one it had (design-8b §2.2).
 #[test]
 fn the_loop_is_checked_kept_while_off_and_played() {
     let fixture = Fixture::new();
@@ -1119,7 +1120,101 @@ fn the_loop_is_checked_kept_while_off_and_played() {
     }
     assert!(wrapped, "it went round");
     graph.open(&fixture.0).unwrap();
-    assert_eq!(graph.status().looping, None);
+    assert_eq!(graph.status().looping, on(4.0, 5.0, true));
+}
+
+// design-8b §2.2, §4.3: the loop is kept in `.music2/view.json`, local and never a Tx or an undo
+// step: opened again, by this server or the next, it is where it was, on or off. Entries the file
+// has that this version doesn't know are kept; a read-only window keeps its loop in memory only.
+#[test]
+fn the_loop_range_survives_reopening() {
+    let fixture = Fixture::new();
+    let graph = fixture.open();
+    graph.set_loop(Some((8.0, 16.0)), Some(false)).unwrap();
+    let file = fixture.0.join(".music2/view.json");
+    let read = || serde_json::from_str::<Value>(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    let mut kept = read();
+    assert_eq!(kept["loop"], json!({"start": 8.0, "end": 16.0, "on": false}));
+    assert_eq!(graph.state().unwrap()["can_undo"], json!(false), "not an undo step");
+    kept["zoom"] = json!(24);
+    std::fs::write(&file, kept.to_string()).unwrap();
+    graph.close();
+    drop(graph);
+    let graph = fixture.open();
+    assert_eq!(graph.status().looping, Some(Loop { start: 8.0, end: 16.0, on: false }));
+    assert_eq!(graph.state().unwrap()["loop"], json!({"start": 8.0, "end": 16.0, "on": false}));
+    graph.set_loop(None, Some(true)).unwrap();
+    assert_eq!((&read()["loop"]["on"], &read()["zoom"]), (&json!(true), &json!(24)));
+    // Another window, read-only while this one writes: its loop isn't kept.
+    let other = Graph::silent();
+    assert!(!other.open(&fixture.0).unwrap()["read_only"].is_null());
+    assert_eq!(other.status().looping, Some(Loop { start: 8.0, end: 16.0, on: true }), "it opens with the loop kept");
+    other.set_loop(Some((1.0, 2.0)), None).unwrap();
+    assert_eq!(read()["loop"], json!({"start": 8.0, "end": 16.0, "on": true}));
+}
+
+// RENDER-9a, design-8b §4.1: a tempo change that makes the loop too short to play turns it off,
+// and the answer says so (the toast's "Loop turned off"); its range is kept. One that leaves it
+// long enough doesn't, and with the loop off nothing is said of it.
+#[test]
+fn a_tempo_too_fast_for_the_loop_turns_it_off() {
+    let fixture = Fixture::new();
+    let graph = fixture.open();
+    let token = graph.state().unwrap()["session"].as_u64().unwrap();
+    // 0.012 beats: 6 ms at 120 BPM, just over the shortest loop at 48 kHz (two blocks, 256 frames).
+    graph.set_loop(Some((0.0, 0.012)), None).unwrap();
+    let v = graph.tempo(token, 0.0, Some(121.0), false, false).unwrap();
+    assert_eq!((&v["loop_off"], &v["before"], &v["after"]), (&json!(false), &json!("120 BPM"), &json!("121 BPM")));
+    assert_eq!(graph.status().looping, Some(Loop { start: 0.0, end: 0.012, on: true }));
+    let v = graph.tempo(token, 0.0, Some(240.0), false, false).unwrap();
+    assert_eq!(v["loop_off"], json!(true));
+    assert_eq!(graph.status().looping, Some(Loop { start: 0.0, end: 0.012, on: false }));
+    let v = graph.tempo(token, 0.0, Some(250.0), false, false).unwrap();
+    assert!(v.get("loop_off").is_none(), "{v}");
+    assert!(graph.set_loop(None, Some(true)).is_err(), "too short to turn on again at 250 BPM");
+}
+
+/// A bass holding one note for 16 bars.
+const HELD: &str = "import { song, track } from '@m2/core';\nimport { bass } from 'std/instruments';\n\
+                    const b = track('bass', ({ lane }) => bass(lane.notes('notes')));\nexport default song(() => b.out);\n";
+
+// RENDER-10, design-8b §4.3: Stop all sound ends a note held in the middle of its clip and resets
+// every instance, and nothing plays the note again (the next block seeks without chasing,
+// RENDER-11); the transport plays on. It answers while the session is busy, and changes nothing
+// in it.
+#[test]
+fn panic_ends_every_note_and_never_touches_the_session() {
+    let fixture = Fixture::new();
+    fixture.put("song.ts", HELD);
+    let clips: Vec<NoteClip> =
+        serde_json::from_value(json!([{"id": "a", "start": 0, "length": 64, "notes": [{"pitch": "C2", "start": 0, "length": 64}]}])).unwrap();
+    fixture.put("data/bass/notes.json", &m2_song::canonical(&m2_song::LaneData::Notes(clips)));
+    let (p, mut driver) = Player::driven(48_000);
+    let graph = Graph::with_player(p);
+    graph.open(&fixture.0).unwrap();
+    graph.transport("play").unwrap();
+    // The loudest sample of `n` blocks.
+    let mut loudest = |n: usize| {
+        let mut most = 0f32;
+        for _ in 0..n {
+            let mut buf = [0.0f32; 256];
+            driver.fill(&mut buf, 2);
+            drop(driver.drain_retired());
+            most = buf.iter().fold(most, |m, x| m.max(x.abs()));
+        }
+        most
+    };
+    assert!(loudest(40) > 0.01, "the note sounds");
+    let before = (graph.state().unwrap(), fixture.read("song.ts"), fixture.read("data/bass/notes.json"));
+    let held = graph.hold();
+    graph.panic().unwrap();
+    drop(held);
+    loudest(8);
+    assert!(loudest(40) < 1e-4, "silent: the note ended, and nothing played it again");
+    assert!(graph.status().playing, "the transport plays on");
+    let after = graph.state().unwrap();
+    assert_eq!((&after["view"]["revision"], &after["can_undo"]), (&before.0["view"]["revision"], &json!(false)));
+    assert_eq!((fixture.read("song.ts"), fixture.read("data/bass/notes.json")), (before.1, before.2));
 }
 
 // RENDER-29: seek, the loop and play never wait for the session, which an edit holds while it

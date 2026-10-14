@@ -165,12 +165,15 @@ fn a_shared_literal_is_one_control() {
 }
 
 // HOME-1 (a CI gate from step 5): every value `controls()` and the view return names its home. The
-// view is checked as it is sent, so a value without the field fails.
+// view is checked as it is sent, so a value without the field fails; so is the timeline, whose tempo
+// and time signatures live in `data/arrangement.json` (8b.2).
 #[test]
 fn every_value_names_its_home() {
     for (name, f) in FIXTURES.iter().map(|n| (*n, fixture(n))).chain([("every-component", every_component())]) {
         let s = f.open();
         assert!(s.controls().iter().all(|c| c.home == Home::Code), "{name}");
+        let timeline = serde_json::to_value(s.timeline()).unwrap();
+        assert_eq!((&timeline["home"], timeline["tempo"].as_array().map(Vec::len)), (&serde_json::json!("arrangement"), Some(1)), "{name}");
         let view = serde_json::to_value(s.view()).unwrap();
         let mut values = 0;
         for n in view["modules"].as_array().unwrap().iter().flat_map(|m| m["nodes"].as_array().unwrap()) {

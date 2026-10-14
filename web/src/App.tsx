@@ -38,7 +38,7 @@ function key(e: KeyboardEvent): string | null {
     if (n) return `view_${VIEWS[Number(n[1]) - 1]}`;
     return e.code === "KeyK" ? "shortcuts" : null;
   }
-  if (e.code === "Space" && !e.shiftKey) return "play";
+  if (e.code === "Space") return e.shiftKey ? "continue" : "play";
   // ⇧Return renames the selected track, as in Logic; Return alone goes to the start.
   if (e.key === "Enter" && e.shiftKey) return "rename";
   if (e.key === "Enter" || e.key === "Home") return "home";
@@ -59,6 +59,9 @@ function chord(e: KeyboardEvent): { id: string; always?: boolean } | null {
   if (k === "w" && !e.shiftKey) return { id: "close_song" };
   if (k === "r" && !e.shiftKey) return { id: "rename" };
   if (k === "t" && !e.shiftKey) return { id: "new_track" };
+  if (k === "l" && !e.shiftKey) return { id: "loop_selection" };
+  // Stop all sound works from a text field too; in the code editor, ⌘. is its quick fix.
+  if (e.key === "." && !e.shiftKey) return { id: "panic", always: true };
   if (e.key === "Backspace" && !e.shiftKey) return { id: "delete_track" };
   if (e.code === "KeyB" && e.altKey) return { id: "browser" };
   return null;
@@ -99,7 +102,7 @@ export default function App() {
       if (editing() || field(e.target) || e.defaultPrevented) return;
       const id = key(e);
       if (!id) return;
-      if (id === "play" || id.startsWith("view_") || id === "shortcuts") e.preventDefault();
+      if (id === "play" || id === "continue" || id.startsWith("view_") || id === "shortcuts") e.preventDefault();
       appCommand(id);
     };
     // Right-click: nothing (rather than the browser's Reload/Inspect menu), except in text fields.
@@ -206,11 +209,22 @@ export function appCommand(id: string) {
       return;
     }
     case "play":
-      return void graphApi.transport("toggle");
+      return canvas.play?.();
+    case "continue":
+      return canvas.continue?.();
     case "home":
-      return void graphApi.seek(0);
+      return canvas.home?.();
     case "loop":
       return canvas.loop?.();
+    case "loop_selection":
+      // In the code editor, its own ⌘L (select the line).
+      if (editorHooks.chord?.("loop_selection") || editing()) return;
+      return canvas.loopSelection?.();
+    case "panic":
+      if (editorHooks.chord?.("panic")) return;
+      return void graphApi.panic().catch((error) => st.toast(error instanceof Error ? error.message : String(error)));
+    case "rename_song":
+      return canvas.renameSong?.();
     case "export":
       return void exportSong();
     case "close_song":

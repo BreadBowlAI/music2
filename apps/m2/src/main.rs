@@ -58,6 +58,11 @@ USAGE:
                                          reorder or recolour tracks in layout.json (no revision), or write the
                                          default layout over one that doesn't read; the colours are rose, teal,
                                          amber, indigo, green, plum, olive, blue, coral, cyan, violet and lime
+  m2 tempo <project> <bpm> [--at <bar>]  set the song's tempo (20 to 999 BPM) in data/arrangement.json, or with
+                                         --at a tempo change from bar N (counted from 1), verified
+  m2 meter <project> <n/d> [--at <bar>]  set the song's time signature (7/8: 1 to 64 beats of a 1, 2, 4, 8, 16
+                                         or 32 note), or with --at a change from bar N, verified
+  m2 title <project> <name>              call the song <name>: its name in music2.toml (the folder keeps its own)
   m2 cables <project>                    named signals a cable can start from, and the inputs cables reach
   m2 connect <project> <signal> <control>
                                          write a signal's name in place of a control's value, verified
@@ -636,6 +641,48 @@ change that code first", list.join("
             }
             .map_err(|e| anyhow!("{e}"))?;
             println!("layout.json: {} → {} (no revision: the layout isn't part of the song)", e.before, e.after);
+        }
+        Some(command @ ("tempo" | "meter")) => {
+            let mut s = session(Path::new(&arg(1)?))?;
+            let value = arg(2)?;
+            // From bar N (counted from 1): a change there; else the song's own.
+            let bar = match flag(&args, "--at") {
+                Some(n) => Some(n.parse::<u64>().ok().filter(|n| *n >= 1).ok_or_else(|| anyhow!("--at takes a bar, counted from 1, not `{n}`"))?),
+                None => None,
+            };
+            let at = bar.map(|n| bar_start(&s.accepted().project.arrangement, n - 1));
+            let e = match command {
+                "tempo" => {
+                    let bpm: f64 = value.trim_end_matches("bpm").trim().parse().map_err(|_| anyhow!("a tempo is a number of BPM, such as 128, not `{value}`"))?;
+                    match at {
+                        Some(at) => m2_editor::song::tempo_change(&mut s, at, bpm),
+                        None => m2_editor::song::tempo(&mut s, 0.0, bpm),
+                    }
+                }
+                _ => {
+                    let (beats, unit) = value
+                        .split_once('/')
+                        .and_then(|(b, u)| Some((b.trim().parse::<u32>().ok()?, u.trim().parse::<u32>().ok()?)))
+                        .ok_or_else(|| anyhow!("a time signature is written n/d, such as 7/8, not `{value}`"))?;
+                    match at {
+                        Some(at) => m2_editor::song::meter_change(&mut s, at, beats, unit),
+                        None => m2_editor::song::meter(&mut s, 0.0, beats, unit),
+                    }
+                }
+            }
+            .map_err(|e| anyhow!("{e}"))?;
+            match e.before == e.after {
+                true => println!("{}: already {}; nothing to write", e.file, e.after),
+                false => println!("{}: {} → {} (revision {})", e.file, e.before, e.after, e.revision),
+            }
+        }
+        Some("title") => {
+            let mut s = session(Path::new(&arg(1)?))?;
+            let e = m2_editor::song::title(&mut s, &arg(2)?).map_err(|e| anyhow!("{e}"))?;
+            match e.before == e.after {
+                true => println!("{}: already called {}; nothing to write", e.file, e.after),
+                false => println!("{}: {} → {} (revision {})", e.file, e.before, e.after, e.revision),
+            }
         }
         Some("cables") => {
             let s = reader(Path::new(&arg(1)?))?;
