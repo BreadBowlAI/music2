@@ -1161,7 +1161,7 @@ trait PluginHost: Send + Sync {
 
 **ABI-1.** Kernel input memory is host-owned and read-only to kernels: `k_process` MUST NOT write it, and `k_reset` MUST NOT change it. Debug builds hash input memory after each process call and fail on a change. This holds for ABI v0 now.
 - *Why:* cells are written once ([RENDER-22](#cells)).
-- *Today:* matches since step 5. ABI v0 states it (`core/kernel/src/lib.rs`), and the Rust kit keeps it by construction. A kernel whose port buffers overlap is refused when it is instantiated, in every build, since one port's writes would change another's. Debug builds compare each kernel's input memory before and after every `k_process` and `k_reset` call (a copy and a compare rather than a hash: cheaper, and exact), and a change fails the render naming the kernel and the input (`KernelNode` in `core/runtime/src/lib.rs`); a test plays every std kernel through it (`every_std_kernel_keeps_its_inputs`).
+- *Today:* matches since step 5. ABI v0 states it (`std/kernels-src/kernel/src/lib.rs`), and the Rust kit keeps it by construction. A kernel whose port buffers overlap is refused when it is instantiated, in every build, since one port's writes would change another's. Debug builds compare each kernel's input memory before and after every `k_process` and `k_reset` call (a copy and a compare rather than a hash: cheaper, and exact), and a change fails the render naming the kernel and the input (`KernelNode` in `core/runtime/src/lib.rs`); a test plays every std kernel through it (`every_std_kernel_keeps_its_inputs`).
 
 **ABI-2.** Kernel ABI v1 reserves, without building yet:
 - event-in and event-out ports, carrying buffers of [RENDER-14](#events)'s `Event`, of which `Events<Note>` is a filtered view;
@@ -1199,7 +1199,7 @@ trait PluginHost: Send + Sync {
 
 **PLAT-5.** `std/kernels/std.wasm` MUST rebuild to the same bytes in any folder on any supported OS with the toolchain `rust-toolchain.toml` pins, and hold no machine path. A commit that changes it says that the kernel hashes changed.
 - *Why:* a kernel's hash is part of its identity ([RENDER-25](#plans-data-and-arrangement-swaps)); a rebuild must never change it by accident.
-- *Today:* not yet: the platform step's slice S3 moves `m2-kernel` into the kernels' workspace and rebuilds it once. Until then the committed file holds a Mac path, and `std/build.sh --check`, which rebuilds it in another folder and compares, fails.
+- *Today:* since the platform step: `m2-kernel` is a member of the kernels' workspace, and `std/build.sh --check` rebuilds it in another folder and compares.
 
 **PLAT-6.** `ci/check.sh` is the full check, the same script on Linux and macOS: the build, every Rust test, clippy with warnings denied (on Linux also for the macOS target), the desktop app's tests, the web build, every browser suite, std's tests and rebuild, and the offline renders against `e2e/renders.sha256`; on macOS also the timing gates `ci/gates.txt` names. A check passes only with the test plugins present ("PASS without plugins" is not a pass). Every slice passes it on Linux. The owner runs it on a Mac at the end of each step, and before a branch that changes macOS-only code is merged. Until it passes there, the step's commit message and `HANDOFF.md` say "macOS: unverified since <commit>".
 - *Why:* there are no hosted Mac runners; the owner's Mac is checked by hand, as rarely as is safe.

@@ -13,7 +13,9 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-m2-kernel = { path = "../../core/kernel" }
+# A member of this workspace, so cargo hashes a relative path and std.wasm rebuilds to the same
+# bytes in any folder (PLAT-5).
+m2-kernel = { path = "kernel" }
 
 [profile.release]
 opt-level = 3

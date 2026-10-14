@@ -708,7 +708,7 @@ Agents may keep writing files directly: that is the save path, and every problem
 | Project folder in format v1: `DataPath`, the manifest, keys, lane and arrangement files in canonical form, asset hashes, data diagnostics and their fixes, the tempo map | `core/song` (`m2-song`) |
 | Package loading, kernel host, `poly`, `feedback`, audio clips, renderer | `core/runtime` (`m2-runtime`) |
 | TypeScript sandbox (oxc + QuickJS) and the `@m2/core` SDK | `core/script` (`m2-script`, `sdk/core.ts`) |
-| Kernel authoring kit for Rust | `core/kernel` (`m2-kernel`) |
+| Kernel authoring kit for Rust | `std/kernels-src/kernel` (`m2-kernel`) |
 | Compiling, revisions, the graph view, edits (values, cables, effects, notes lanes, file saves) and undo | `core/session` (`m2-session`) |
 | CLAP plugin hosting | `core/plugins` (`m2-plugins`) |
 | Playback on the audio device | `core/play` (`m2-play`) |

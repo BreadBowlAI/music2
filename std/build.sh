@@ -3,8 +3,7 @@
 #   std/build.sh           rebuild it in place (into CARGO_TARGET_DIR when it is set)
 #   std/build.sh --check   rebuild a copy in a temporary folder and compare it with the committed file
 # The bytes depend only on the sources and the toolchain rust-toolchain.toml pins: m2-kernel is a
-# member of the kernels' workspace (from slice S3 of the platform step), so no absolute path
-# reaches the build. Until then --check fails: its copy of std/ lacks core/kernel.
+# member of the kernels' workspace, so no absolute path reaches the build.
 set -e
 STD=$(cd "$(dirname "$0")" && pwd)
 build() { # <std folder> <target folder>: build, then print the wasm's path

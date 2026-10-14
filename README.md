@@ -516,7 +516,7 @@ Or just edit the files: the app takes the change in once it has settled (no file
 | Folder | What's in it |
 |---|---|
 | `core/ir` | The graph's compiled form, signal kinds and units, and the checker |
-| `core/kernel` | The kit for writing kernels in Rust |
+| `std/kernels-src/kernel` | The kit for writing kernels in Rust (`m2-kernel`), a member of the kernels' own workspace |
 | `core/song` | The song folder (format 1): the manifest, `DataPath` (every project path), keys, lane and arrangement files in their canonical form, asset hashes, and the problems data can have |
 | `core/runtime` | Loads packages, runs kernels (wasmtime), `poly`, `feedback`, audio clips; the renderer |
 | `core/script` | Runs the TypeScript (oxc + QuickJS) and the `@m2/core` SDK |
