@@ -1,0 +1,62 @@
+#!/bin/bash
+# Renders the pure fixtures from one commit into a folder, for byte-identity checks.
+#
+#   e2e/baseline.sh <commit> <out-dir>              build m2 at <commit> (a temporary worktree) and render
+#   e2e/baseline.sh --tree <checkout> <out-dir>     render with the checkout as it is on disk
+#   M2=<m2 binary> e2e/baseline.sh --tree <checkout> <out-dir>    ... with an m2 you already built
+#
+# Cases (the same seven as before): the full renders of examples/first-song, examples/resample,
+# templates/starter and templates/empty, and `--from 4 --seconds 6` of first-song, starter and
+# resample. Each fixture is rendered from a fresh copy, with a scratch HOME, M2_AUDIO=none and the
+# checkout's own std. <out-dir>/SHA256SUMS lists the WAVs; compare two folders with
+#   diff <a>/SHA256SUMS <b>/SHA256SUMS        (or: cd <b> && shasum -a 256 -c <a>/SHA256SUMS)
+# CARGO_TARGET_DIR is honoured (default: <out-dir>/.target, removed afterwards); PROFILE=debug builds
+# a debug m2 (default release). The repo is the one this script lives in unless REPO is set.
+set -euo pipefail
+
+REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
+usage() { sed -n '2,13p' "$0" >&2; exit 2; }
+[[ $# -eq 2 || $# -eq 3 ]] || usage
+if [[ $1 == --tree ]]; then
+  [[ $# -eq 3 ]] || usage
+  SRC=$(cd "$2" && pwd); OUT=$3; WT=
+else
+  [[ $# -eq 2 ]] || usage
+  COMMIT=$(git -C "$REPO" rev-parse --verify "$1^{commit}"); OUT=$2
+fi
+mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
+rm -rf "$OUT/fx" "$OUT/home" "$OUT"/*.wav "$OUT/SHA256SUMS"
+mkdir -p "$OUT/fx" "$OUT/home"
+
+OWN_TARGET=
+cleanup() {
+  if [[ -n ${WT:-} ]]; then git -C "$REPO" worktree remove --force "$WT" >/dev/null 2>&1 || rm -rf "$WT"; fi
+  if [[ -n $OWN_TARGET ]]; then rm -rf "$OWN_TARGET"; fi
+}
+trap cleanup EXIT
+if [[ -z ${SRC:-} ]]; then
+  WT=$(mktemp -d "${TMPDIR:-/tmp}/m2-baseline-XXXXXX")
+  git -C "$REPO" worktree add --detach "$WT" "$COMMIT" >/dev/null
+  SRC=$WT
+fi
+if [[ -z ${M2:-} ]]; then
+  if [[ -z ${CARGO_TARGET_DIR:-} ]]; then OWN_TARGET=$OUT/.target; export CARGO_TARGET_DIR=$OWN_TARGET; fi
+  PROFILE=${PROFILE:-release}
+  if [[ $PROFILE == release ]]; then (cd "$SRC" && cargo build -q --release -p m2); else (cd "$SRC" && cargo build -q -p m2); fi
+  M2=$CARGO_TARGET_DIR/$PROFILE/m2
+fi
+
+for f in examples/first-song examples/resample templates/starter templates/empty; do
+  mkdir -p "$OUT/fx/$(dirname $f)"; cp -R "$SRC/$f" "$OUT/fx/$f"
+done
+r() { HOME=$OUT/home M2_AUDIO=none M2_STD=$SRC/std "$M2" render "$OUT/fx/$1" "$OUT/$2" "${@:3}" >/dev/null; }
+r examples/first-song examples-first-song.wav
+r examples/resample examples-resample.wav
+r templates/starter templates-starter.wav
+r templates/empty templates-empty.wav
+r examples/first-song examples-first-song-from4-for6.wav --from 4 --seconds 6
+r templates/starter templates-starter-from4-for6.wav --from 4 --seconds 6
+r examples/resample examples-resample-from4-for6.wav --from 4 --seconds 6
+rm -rf "$OUT/fx" "$OUT/home"
+(cd "$OUT" && shasum -a 256 *.wav > SHA256SUMS && cat SHA256SUMS)
+echo "rendered from ${COMMIT:-$SRC} into $OUT" >&2
