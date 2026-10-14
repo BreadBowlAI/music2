@@ -43,10 +43,12 @@ impl Resampler {
             let row: Vec<f64> = (0..TAPS)
                 .map(|k| {
                     let x = k as f64 - (HALF - 1) as f64 - frac;
-                    let sinc = if x == 0.0 { 1.0 } else { (std::f64::consts::PI * cutoff * x).sin() / (std::f64::consts::PI * cutoff * x) };
+                    // libm, as on the render path: the same table on every OS (PLAT-4).
+                    let sinc =
+                        if x == 0.0 { 1.0 } else { libm::sin(std::f64::consts::PI * cutoff * x) / (std::f64::consts::PI * cutoff * x) };
                     // Blackman, over the taps' whole span.
                     let w = (x + HALF as f64) / TAPS as f64;
-                    let window = 0.42 - 0.5 * (2.0 * std::f64::consts::PI * w).cos() + 0.08 * (4.0 * std::f64::consts::PI * w).cos();
+                    let window = 0.42 - 0.5 * libm::cos(2.0 * std::f64::consts::PI * w) + 0.08 * libm::cos(4.0 * std::f64::consts::PI * w);
                     sinc * window.max(0.0)
                 })
                 .collect();

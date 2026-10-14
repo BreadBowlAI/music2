@@ -1,0 +1,124 @@
+//! PLAT-4, RENDER-2: host code that makes audio computes every transcendental function with the
+//! `libm` crate, never the OS's math library. glibc and Apple's libm round some results differently
+//! in the last bit, and a release build turns `2f64.powf(x)` into `exp2` where a debug build calls
+//! `pow`. This finds the float methods that reach the OS's library in the code `m2-runtime` and
+//! `m2-play` compile, outside `#[cfg(test)]` items. `sqrt`, `floor` and arithmetic are exact on
+//! every OS and stay. `powi` is banned too: it is not correctly rounded, and a release build may
+//! expand it into other multiplications than a debug build's call.
+
+use std::path::{Path, PathBuf};
+
+const NAMES: [&str; 23] = [
+    "sin", "cos", "tan", "sin_cos", "powf", "exp", "exp2", "exp_m1", "ln", "ln_1p", "log", "log2", "log10", "tanh", "sinh", "cosh", "asin",
+    "acos", "atan", "atan2", "cbrt", "hypot", "powi",
+];
+
+#[test]
+fn host_math_goes_through_libm() {
+    let core = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    // Each with its bracket, so `.expect(` never matches; the `f32::sin(x)` form too.
+    let banned: Vec<String> = NAMES.iter().flat_map(|n| [format!(".{n}("), format!("f32::{n}("), format!("f64::{n}(")]).collect();
+    let mut found = vec![];
+    for src in ["runtime/src", "play/src"] {
+        let mut files = vec![];
+        compiled(&core.join(src).join("lib.rs"), &core.join(src), &mut files);
+        for (file, code) in files {
+            for (i, line) in code.lines().enumerate() {
+                let line = line.trim_start();
+                if line.starts_with("//") {
+                    continue;
+                }
+                for b in &banned {
+                    for _ in line.matches(b.as_str()) {
+                        found.push(format!("{}:{}: {b}", file.strip_prefix(&core).unwrap_or(&file).display(), i + 1));
+                    }
+                }
+            }
+        }
+    }
+    assert!(found.is_empty(), "host math from the OS's library (PLAT-4); call libm's function of the same name: {found:#?}");
+}
+
+/// The files of a module tree from `file`, whose child modules live in `dir`, each with its
+/// `#[cfg(test)]` items blanked; so a `#[cfg(test)] mod tests;` and its files are left out.
+fn compiled(file: &Path, dir: &Path, out: &mut Vec<(PathBuf, String)>) {
+    let code = without_tests(&std::fs::read_to_string(file).unwrap_or_else(|e| panic!("{}: {e}", file.display())));
+    for line in code.lines() {
+        let item = line.trim_start().trim_start_matches("pub(crate) ").trim_start_matches("pub ");
+        if let Some(name) = item.strip_prefix("mod ").and_then(|m| m.strip_suffix(';')) {
+            let flat = dir.join(format!("{name}.rs"));
+            let child = if flat.exists() { flat } else { dir.join(name).join("mod.rs") };
+            compiled(&child, &dir.join(name), out);
+        }
+    }
+    out.push((file.to_path_buf(), code));
+}
+
+/// `text` with every `#[cfg(test)]` item blanked (line breaks kept): the attribute, then up to
+/// the item's first `;` or through its braces.
+fn without_tests(text: &str) -> String {
+    const ATTR: &str = "#[cfg(test)]";
+    let mut out = text.as_bytes().to_vec();
+    let mut from = 0;
+    while let Some(at) = text[from..].find(ATTR).map(|i| i + from) {
+        // An attribute starts its line; elsewhere it is only mentioned.
+        if !text[..at].rsplit('\n').next().unwrap_or("").trim().is_empty() {
+            from = at + ATTR.len();
+            continue;
+        }
+        let end = item_end(text.as_bytes(), at + ATTR.len());
+        out[at..end].iter_mut().filter(|c| **c != b'\n').for_each(|c| *c = b' ');
+        from = end;
+    }
+    String::from_utf8(out).expect("whole characters were blanked")
+}
+
+/// Where the item from `i` ends: after its first `;`, or after the brace that closes its first `{`.
+/// Braces inside comments, strings and character literals don't count.
+fn item_end(b: &[u8], mut i: usize) -> usize {
+    let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut depth = 0;
+    while i < b.len() {
+        match b[i] {
+            b'/' if b.get(i + 1) == Some(&b'/') => i += b[i..].iter().position(|&c| c == b'\n').unwrap_or(b.len() - i),
+            b'/' if b.get(i + 1) == Some(&b'*') => i += b[i..].windows(2).position(|w| w == b"*/").map_or(b.len() - i, |p| p + 1),
+            // A raw string, `r"…"` or `r#"…"#`: no escapes, and it ends at a quote with as many `#`.
+            b'r' if (i == 0 || !ident(b[i - 1]) || b[i - 1] == b'b') && matches!(b.get(i + 1), Some(b'"' | b'#')) => {
+                let hashes = b[i + 1..].iter().take_while(|&&c| c == b'#').count();
+                if b.get(i + 1 + hashes) == Some(&b'"') {
+                    let close: Vec<u8> = std::iter::once(b'"').chain(std::iter::repeat_n(b'#', hashes)).collect();
+                    let body = i + 2 + hashes;
+                    i = b[body..].windows(close.len()).position(|w| w == close.as_slice()).map_or(b.len(), |p| body + p + close.len() - 1);
+                }
+            }
+            b'"' => {
+                i += 1;
+                while i < b.len() && b[i] != b'"' {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+            }
+            // A character literal (`'{'`, `'\''`, `'é'`), never a lifetime (`'a`).
+            b'\'' => {
+                let len = match b.get(i + 1) {
+                    Some(b'\\') => b.get(i + 3..).and_then(|r| r.iter().position(|&c| c == b'\'')).map_or(0, |p| p + 2),
+                    Some(&c) => (c.leading_ones() as usize).max(1),
+                    None => 0,
+                };
+                if b.get(i + 1 + len) == Some(&b'\'') {
+                    i += 1 + len;
+                }
+            }
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return i + 1;
+                }
+            }
+            b';' if depth == 0 => return i + 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    b.len()
+}

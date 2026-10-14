@@ -27,7 +27,8 @@ use oxc::semantic::SemanticBuilder;
 use oxc::span::SourceType;
 use oxc::transformer::{TransformOptions, Transformer};
 use rquickjs::loader::{ImportAttributes, Loader, Resolver};
-use rquickjs::{CatchResultExt, CaughtError, Context, Ctx, Function, Module, Runtime};
+use rquickjs::function::{Opt, Rest};
+use rquickjs::{CatchResultExt, CaughtError, Coerced, Context, Ctx, Function, Module, Object, Runtime};
 use sha2::{Digest, Sha256};
 
 /// The `@m2/core` SDK, shipped inside the core.
@@ -376,7 +377,10 @@ fn strip(path: &str, source: &str) -> Result<(String, LineMap), String> {
     }
     let mut program = ret.program;
     let scoping = SemanticBuilder::new().build(&program).semantic.into_scoping();
-    let options = TransformOptions::default();
+    // `**` becomes `Math.pow`, which computes with libm like the rest of `Math` (PLAT-4); QuickJS's
+    // own `**` calls the OS's C library.
+    let mut options = TransformOptions::default();
+    options.env.es2016.exponentiation_operator = true;
     let tr = Transformer::new(&allocator, Path::new(path), &options).build_with_scoping(scoping, &mut program);
     if let Some(e) = tr.diagnostics.first() {
         return Err(format!("{path}: {}", e.message));
@@ -544,11 +548,12 @@ fn sandbox(state: &Rc<RefCell<State>>, memory_limit: usize, time_limit: Duration
     Ok((rt, ctx, deadline))
 }
 
-/// Run the prelude, then give the SDK what it asks the host while it runs: where a call or a
-/// stack frame is in the TypeScript, whether a key is valid (one rule, in m2_ir::key), and the
-/// package a module file belongs to.
+/// Run the prelude and put `Math` on libm, then give the SDK what it asks the host while it runs:
+/// where a call or a stack frame is in the TypeScript, whether a key is valid (one rule, in
+/// m2_ir::key), and the package a module file belongs to.
 fn host<'js>(ctx: &Ctx<'js>, state: &Rc<RefCell<State>>, packages: &[(String, PathBuf)]) -> rquickjs::Result<()> {
     ctx.eval::<(), _>(PRELUDE)?;
+    math(ctx)?;
     let g = ctx.globals();
     g.set("__m2_project", PROJECT)?;
     g.set("__m2_packages", packages.iter().map(|(n, _)| format!("{n}/")).collect::<Vec<_>>())?;
@@ -562,6 +567,58 @@ fn host<'js>(ctx: &Ctx<'js>, state: &Rc<RefCell<State>>, packages: &[(String, Pa
     let home = move |file: String| st.try_borrow().map_or_else(|_| "null".to_string(), |st| st.home(&file).to_string());
     g.set("__m2_home", Function::new(ctx.clone(), home)?)?;
     Ok(())
+}
+
+/// `Math`'s transcendental functions over the `libm` crate, never the OS's C library, whose last
+/// bit differs between macOS and Linux, so song code builds the same constants on every OS (PLAT-4,
+/// RENDER-2). Each takes its arguments as QuickJS's own: converted to numbers, a missing one NaN,
+/// extras ignored.
+fn math(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
+    let m: Object = ctx.globals().get("Math")?;
+    let num = |x: Opt<Coerced<f64>>| x.0.map_or(f64::NAN, |c| c.0);
+    let one = [
+        ("sin", libm::sin as fn(f64) -> f64),
+        ("cos", libm::cos),
+        ("tan", libm::tan),
+        ("asin", libm::asin),
+        ("acos", libm::acos),
+        ("atan", libm::atan),
+        ("sinh", libm::sinh),
+        ("cosh", libm::cosh),
+        ("tanh", libm::tanh),
+        ("asinh", libm::asinh),
+        ("acosh", libm::acosh),
+        ("atanh", libm::atanh),
+        ("exp", libm::exp),
+        ("expm1", libm::expm1),
+        ("log", libm::log),
+        ("log1p", libm::log1p),
+        ("log2", libm::log2),
+        ("log10", libm::log10),
+        ("cbrt", libm::cbrt),
+    ];
+    for (name, f) in one {
+        set(&m, name, 1, Function::new(ctx.clone(), move |x| f(num(x)))?)?;
+    }
+    // JS's pow is NaN for ±1 to an infinite or NaN power, where C's gives 1 (QuickJS's js_math_pow).
+    let pow = |a: f64, b: f64| if !b.is_finite() && a.abs() == 1.0 { f64::NAN } else { libm::pow(a, b) };
+    let two = [("atan2", libm::atan2 as fn(f64, f64) -> f64), ("pow", pow)];
+    for (name, f) in two {
+        set(&m, name, 2, Function::new(ctx.clone(), move |a, b| f(num(a), num(b)))?)?;
+    }
+    // Folded as QuickJS folds it: |x| for one argument, else hypot(hypot(x0, x1), x2) and on.
+    let hypot = |xs: Rest<Coerced<f64>>| match xs.0.split_first() {
+        None => 0.0,
+        Some((x, [])) => x.0.abs(),
+        Some((x, rest)) => rest.iter().fold(x.0, |r, y| libm::hypot(r, y.0)),
+    };
+    set(&m, "hypot", 2, Function::new(ctx.clone(), hypot)?)
+}
+
+/// Put `f` on `object` as `name`, with the `name` and `length` a built-in function has.
+fn set<'js>(object: &Object<'js>, name: &str, length: usize, f: Function<'js>) -> rquickjs::Result<()> {
+    f.set_length(length)?;
+    object.set(name, f.with_name(name)?)
 }
 
 /// Every component the packages declare, and where each is exported, for the effect browser and

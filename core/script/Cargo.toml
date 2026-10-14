@@ -12,3 +12,4 @@ serde_json.workspace = true
 rquickjs.workspace = true
 oxc.workspace = true
 sha2.workspace = true
+libm.workspace = true

@@ -13,6 +13,9 @@
 //! Time-stretching (WSOLA) lives here for now. The design makes stretching a package
 //! kernel so better algorithms can replace it; that needs an offline-kernel ABI
 //! (whole buffers in, whole buffers out), which is the next step for this code.
+//!
+//! Its math goes through the `libm` crate, never the OS's library, so a clip renders the same bits
+//! on every OS (PLAT-4; `tests/host_math.rs` keeps it so).
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -188,7 +191,7 @@ const SEARCH: isize = 384;
 /// WSOLA time-stretch with an arbitrary monotonic time map: output sample `t` comes
 /// from around source position `map(t)`. Keeps pitch; channels share one alignment.
 fn stretch(src: &[Vec<f32>], out_len: usize, map: impl Fn(f64) -> f64) -> Vec<Vec<f32>> {
-    let window: Vec<f32> = (0..FRAME).map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / FRAME as f32).cos()).collect();
+    let window: Vec<f32> = (0..FRAME).map(|i| 0.5 - 0.5 * libm::cosf(std::f32::consts::TAU * i as f32 / FRAME as f32)).collect();
     let mono: Vec<f32> = (0..src[0].len()).map(|i| src.iter().map(|c| c[i]).sum::<f32>()).collect();
     let mut out = vec![vec![0.0f32; out_len + FRAME]; src.len()];
     let mut prev: Option<isize> = None;
@@ -250,7 +253,9 @@ fn stretch(src: &[Vec<f32>], out_len: usize, map: impl Fn(f64) -> f64) -> Vec<Ve
 pub fn render_clip(clip: &AudioClip, asset: &Asset, tempo: &TempoMap, sample_rate: f64) -> Vec<Vec<f32>> {
     let t0 = tempo.seconds_at(clip.start);
     let out_len = ((tempo.seconds_at(clip.start + clip.length) - t0) * sample_rate).round() as usize;
-    let rate = 2f64.powf(clip.pitch / 12.0);
+    // exp2 by name, so debug and release builds call one function: a release build turns
+    // `2f64.powf(x)` into exp2 where a debug build calls pow, and libm's two differ in the last bit.
+    let rate = libm::exp2(clip.pitch / 12.0);
     let src_rate = asset.sample_rate;
     let offset = clip.offset * src_rate;
 
@@ -280,7 +285,7 @@ pub fn render_clip(clip: &AudioClip, asset: &Asset, tempo: &TempoMap, sample_rat
         let step = rate * src_rate / sample_rate;
         z.iter().map(|ch| (0..out_len).map(|i| read(ch, i as f64 * step)).collect()).collect()
     };
-    let gain = 10f32.powf(clip.gain_db as f32 / 20.0);
+    let gain = libm::powf(10.0, clip.gain_db as f32 / 20.0);
     let fade_in = (clip.fade_in * sample_rate) as usize;
     let fade_out = (clip.fade_out * sample_rate) as usize;
     for ch in &mut out {
@@ -291,10 +296,10 @@ pub fn render_clip(clip: &AudioClip, asset: &Asset, tempo: &TempoMap, sample_rat
         for (i, x) in ch.iter_mut().enumerate() {
             let mut g = gain;
             if i < fade_in {
-                g *= 0.5 - 0.5 * (std::f32::consts::PI * i as f32 / fade_in as f32).cos();
+                g *= 0.5 - 0.5 * libm::cosf(std::f32::consts::PI * i as f32 / fade_in as f32);
             }
             if n - i <= fade_out {
-                g *= 0.5 - 0.5 * (std::f32::consts::PI * (n - i) as f32 / fade_out as f32).cos();
+                g *= 0.5 - 0.5 * libm::cosf(std::f32::consts::PI * (n - i) as f32 / fade_out as f32);
             }
             *x *= g;
         }
@@ -408,11 +413,11 @@ impl AudioNode {
     }
 
     fn gain_in(&self, k: u32) -> f32 {
-        if k >= self.len { 1.0 } else { (std::f32::consts::FRAC_PI_2 * (k + 1) as f32 / self.len as f32).sin() }
+        if k >= self.len { 1.0 } else { libm::sinf(std::f32::consts::FRAC_PI_2 * (k + 1) as f32 / self.len as f32) }
     }
 
     fn gain_out(&self, g0: f32, k: u32) -> f32 {
-        if k >= self.len { 0.0 } else { g0 * (std::f32::consts::FRAC_PI_2 * (k + 1) as f32 / self.len as f32).cos() }
+        if k >= self.len { 0.0 } else { g0 * libm::cosf(std::f32::consts::FRAC_PI_2 * (k + 1) as f32 / self.len as f32) }
     }
 
     /// The current material becomes a tap at the gain it has now.
@@ -421,7 +426,7 @@ impl AudioNode {
             return;
         }
         let g0 = match self.fade_in {
-            Some(k) if k < self.len => (std::f32::consts::FRAC_PI_2 * k as f32 / self.len as f32).sin(),
+            Some(k) if k < self.len => libm::sinf(std::f32::consts::FRAC_PI_2 * k as f32 / self.len as f32),
             _ => 1.0,
         };
         if self.ntaps == TAPS {

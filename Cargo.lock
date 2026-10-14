@@ -2434,6 +2434,7 @@ dependencies = [
  "anyhow",
  "cpal",
  "crossbeam-channel",
+ "libm",
  "m2-ir",
  "m2-plugins",
  "m2-runtime",
@@ -2460,6 +2461,7 @@ dependencies = [
  "anyhow",
  "bytemuck",
  "hound",
+ "libm",
  "m2-ir",
  "m2-kernel",
  "m2-plugins",
@@ -2475,6 +2477,7 @@ dependencies = [
 name = "m2-script"
 version = "0.1.0"
 dependencies = [
+ "libm",
  "m2-ir",
  "oxc",
  "rquickjs",

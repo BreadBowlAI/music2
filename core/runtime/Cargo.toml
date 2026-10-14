@@ -15,6 +15,7 @@ toml.workspace = true
 wasmtime.workspace = true
 bytemuck.workspace = true
 hound.workspace = true
+libm.workspace = true
 
 [dev-dependencies]
 wasmtime = { workspace = true, features = ["wat"] }

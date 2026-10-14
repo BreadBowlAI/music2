@@ -42,6 +42,8 @@ bytemuck = "1"
 sha2 = "0.10"
 memchr = "2"
 libc = "0.2"
+# Math with the same bits on every OS and CPU, the code std.wasm's math runs (PLAT-4).
+libm = "0.2"
 icu_normalizer = "2"
 
 [profile.dev]

@@ -185,6 +185,71 @@ export default song(() => kernel("std:sine"));
     .unwrap_or_else(|e| panic!("{e:?}"));
 }
 
+// PLAT-4, RENDER-2: song code's `Math` and `**` compute with libm, so a song builds the same
+// constants on every OS. Each input is one where glibc's answer differs from libm's in the last
+// bit (measured on Linux x86_64), except log1p's and cbrt's, where none was found nearby; `n = 3`
+// is such a note for the `**` form of mtof.
+#[test]
+fn song_math_is_libm_on_every_os() {
+    let js = |x: f64| match x {
+        x if x.is_nan() => "NaN".to_string(),
+        x if x.is_infinite() => format!("{}Infinity", if x < 0.0 { "-" } else { "" }),
+        x => format!("{x:?}"),
+    };
+    let checks: [(&str, f64); 31] = [
+        ("Math.sin(2.5)", libm::sin(2.5)),
+        ("Math.cos(2.3)", libm::cos(2.3)),
+        ("Math.tan(2.2)", libm::tan(2.2)),
+        ("Math.asin(0.32)", libm::asin(0.32)),
+        ("Math.acos(0.05)", libm::acos(0.05)),
+        ("Math.atan(2.4)", libm::atan(2.4)),
+        ("Math.atan2(0.1, 1.7)", libm::atan2(0.1, 1.7)),
+        ("Math.sinh(3.69)", libm::sinh(3.69)),
+        ("Math.cosh(1.7)", libm::cosh(1.7)),
+        ("Math.tanh(0.3)", libm::tanh(0.3)),
+        ("Math.asinh(2.6)", libm::asinh(2.6)),
+        ("Math.acosh(2.3)", libm::acosh(2.3)),
+        ("Math.atanh(0.039)", libm::atanh(0.039)),
+        ("Math.exp(1)", libm::exp(1.0)),
+        ("Math.expm1(0.92)", libm::expm1(0.92)),
+        ("Math.log(1.4)", libm::log(1.4)),
+        ("Math.log1p(0.5)", libm::log1p(0.5)),
+        ("Math.log2(1.3)", libm::log2(1.3)),
+        ("Math.log10(0.6)", libm::log10(0.6)),
+        ("Math.cbrt(3)", libm::cbrt(3.0)),
+        ("Math.pow(0.1, 0.7)", libm::pow(0.1, 0.7)),
+        ("0.1 ** 0.7", libm::pow(0.1, 0.7)),
+        ("(() => { let y = 2; y **= -89 / 12; return y; })()", libm::pow(2.0, -89.0 / 12.0)),
+        ("Math.hypot(0.1, 0.1)", libm::hypot(0.1, 0.1)),
+        // As QuickJS's own: folded, |x| alone, 0 for none, Infinity over NaN.
+        ("Math.hypot(0.1, 0.1, 0.2)", libm::hypot(libm::hypot(0.1, 0.1), 0.2)),
+        ("Math.hypot(-3)", 3.0),
+        ("Math.hypot()", 0.0),
+        ("Math.hypot(NaN, -Infinity)", f64::INFINITY),
+        // JS's pow, not C's: NaN for 1 to an infinite power. Arguments as JS takes them.
+        ("Math.pow(1, Infinity)", f64::NAN),
+        ("Math.sin()", f64::NAN),
+        ("Math.sin(\"2.5\", 1)", libm::sin(2.5)),
+    ];
+    let rows: String = checks.iter().map(|(e, want)| format!("  [{e:?}, {e}, {}],\n", js(*want))).collect();
+    let song = format!(
+        r#"import {{ song, kernel }} from "@m2/core";
+const checks: [string, number, number][] = [
+{rows}];
+const wrong = checks.filter(([, got, want]) => !Object.is(got, want)).map(([what, got, want]) => `${{what}}: got ${{got}}, want ${{want}}`);
+if (wrong.length > 0) throw new Error(`${{wrong.length}} wrong: ${{wrong.join("; ")}}`);
+if (Math.sin.name !== "sin" || Math.sin.length !== 1 || Math.hypot.length !== 2) throw new Error("not like a built-in");
+const n = 3;
+export default song(() => kernel("std:sine", {{ freq: 440 * 2 ** ((n - 69) / 12) }}));
+"#
+    );
+    let ir = build_of(&[("song.ts", &song)]).unwrap_or_else(|e| panic!("{e:?}"));
+    let freq = 440.0 * libm::pow(2.0, (3.0 - 69.0) / 12.0);
+    let consts: Vec<f64> =
+        ir.modules[0].nodes.iter().filter_map(|n| if let Op::Const { value, .. } = n.op { Some(value) } else { None }).collect();
+    assert!(consts.iter().any(|c| c.to_bits() == freq.to_bits()), "{freq:?} in {consts:?}");
+}
+
 // ---------------------------------------------------------------- keys and labels
 
 /// A song that adds the `out` exports of `tracks/a.ts` and `tracks/b.ts`.
