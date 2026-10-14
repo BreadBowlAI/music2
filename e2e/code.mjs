@@ -16,7 +16,8 @@ const errors = [];
 // The API checks below get refusals on purpose; the browser logs those as failed loads.
 page.on("console", (m) => m.type() === "error" && !/status of (400|409)/.test(m.text()) && errors.push(m.text()));
 page.on("pageerror", (e) => { console.log("PAGEERROR", String(e), e.stack?.slice(0, 300)); errors.push(String(e)); });
-await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; }, sess.token);
+// The dock as tall as the panel it replaced was at this size (45%): the editor shows the whole of bass.ts.
+await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; try { localStorage.setItem("m2.graph.panel", "450"); } catch {} }, sess.token);
 
 let pass = 0, fail = 0;
 const check = (ok, what) => { console.log(`${ok ? "PASS" : "FAIL"}  ${what}`); ok ? pass++ : fail++; };
@@ -174,10 +175,15 @@ check(await until(async () => (await strip()).state === "error"), "the strip say
 const problem = await strip();
 check(/doesn't compile/.test(problem.text) && /tracks\/bass\.ts:\d+/.test(problem.text), `naming the place: ${problem.text.replace(/\n/g, " | ")}`);
 check(await until(async () => !!(await page.$("[data-testid=code] .squiggly-error"))), "a marker appears in the editor");
-const banner = await page.evaluate(() => document.body.innerText);
-check(/The code doesn't compile right now/.test(banner), "the banner says the code doesn't compile");
+// The top bar's status pill says it once (taste.md ST-1); its popover holds what the banner said.
+const pill = await page.$eval("[data-status]", (e) => e.textContent).catch(() => "");
+check(/Code doesn't compile/.test(pill), `the status pill says the code doesn't compile (${pill})`);
+await page.click("[data-status]");
+await page.waitForSelector("[data-testid=compile-banner]");
 const bannerText = await page.$eval("[data-testid=compile-banner]", (e) => e.innerText).catch(() => "");
 check(/tracks\/bass\.ts:\d+/.test(bannerText) && !bannerText.includes(proj), `and names the place relative to the project (${bannerText.replace(/\n/g, " | ")})`);
+await key("Escape");
+await page.click("[data-testid=code] .view-lines");
 check((await dirty()).length === 0, "and the file is saved (clean)");
 await page.screenshot({ path: `${S}/code-error.png` });
 const goodLines = good.split("\n").length;
@@ -194,7 +200,7 @@ await key("Meta+s");
 check(await until(() => disk() === good), "fixing it and saving writes the good code");
 check(await until(async () => (await strip()).state === "ok"), "the strip says it compiles");
 check(await until(async () => !(await page.$("[data-testid=code] .squiggly-error"))), "the marker is gone");
-check(!/The code doesn't compile right now/.test(await page.evaluate(() => document.body.innerText)), "and so is the banner");
+check(!(await page.$("[data-status]")), "and so is the status pill");
 
 // ---------------------------------------------------------------- go to definition
 await find("xrange(lfo");
@@ -211,7 +217,9 @@ await page.click("[data-testid=code] .view-lines");
 await key("Meta+ArrowDown");
 await page.keyboard.type("\n// not saved yet");
 check(await until(async () => (await dirty()).includes("tracks/bass.ts")), "an unsaved edit");
-await page.click('button[aria-label="Close the project"]');
+// The close button is gone from the top bar (taste.md TB-11): ⌘W closes the song.
+await page.click("[data-testid=timeline]");
+await key("Meta+w");
 check(await until(async () => (await page.evaluate(() => document.body.innerText)).includes("unsaved edits in the code editor")), "closing the project says a file has unsaved edits");
 await sleep(300);
 check((await api("GET", "")).status === 200 && !!(await page.$("[data-testid=code]")), "and the project stays open");

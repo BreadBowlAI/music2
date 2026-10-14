@@ -4,7 +4,7 @@
 //            as a default (PKG-3, PKG-8, HOME-1). Screenshot: <root>/s5-bass.png, the Bass graph.
 //   insert   turning a knob the call leaves out writes the number into the call: as a new options object
 //            (hat's decay) and after the options written (follow's attack); the knob is then written, and
-//            undo takes out exactly what was inserted (D5, WRITE-21). A double-click puts a knob back at
+//            undo takes out exactly what was inserted (D5, WRITE-21). An ⌥-click puts a knob back at
 //            its declared default, which writes nothing.
 //   browser  the effect browser groups by the descriptors' categories and shows what adding writes (their
 //            `insert`); adding lowpass writes it, and its q, left out, is a knob whose first turn is written
@@ -64,8 +64,8 @@ for (const [module, component, slot, written, range, log] of EXPECTED) {
   if (range) check(range[0] <= x.k.value && x.k.value <= range[1], `${what}: ${x.k.value} lies in its range`);
 }
 
-// On the page: each is a knob on its call's box, a default drawn as one (italic, `data-default`), turned
-// to where its value sits in the declared range.
+// On the page: each is a knob on its call's box, a default drawn as one (`data-default`, its value in
+// the muted grey, never italic), turned to where its value sits in the declared range.
 const LOOK = { song: [], bass: [], hats: [], keys: [], kick: [] };
 for (const x of all) LOOK[x.module].push(x);
 for (const [module, list] of Object.entries(LOOK)) {
@@ -74,7 +74,7 @@ for (const [module, list] of Object.entries(LOOK)) {
     const sel = `[data-module="${module}"] [data-node-id="${node.id}"] [data-knob-id="${k.id}"]`;
     const seen = await page.$eval(sel, (e) => ({
       dflt: e.dataset.default === "true",
-      italic: getComputedStyle(e.querySelector("span.tabular-nums")).fontStyle === "italic",
+      muted: ((v) => getComputedStyle(v).color === "rgb(101, 105, 111)" && getComputedStyle(v).fontStyle !== "italic")(e.querySelector("span.tabular-nums")),
       at: Number(e.querySelector("svg[role=slider]").getAttribute("aria-valuenow")),
       title: e.title,
     })).catch(() => null);
@@ -84,7 +84,7 @@ for (const [module, list] of Object.entries(LOOK)) {
     }
     const where = k.range ? (k.log ? Math.log(k.value / k.range[0]) / Math.log(k.range[1] / k.range[0]) : (k.value - k.range[0]) / (k.range[1] - k.range[0])) : null;
     check(
-      seen.dflt === !k.written && seen.italic === !k.written && (where === null || Math.abs(seen.at - where) < 0.002),
+      seen.dflt === !k.written && seen.muted === !k.written && (where === null || Math.abs(seen.at - where) < 0.002),
       `${module}: ${node.label}'s ${k.label} is drawn ${k.written ? "as written" : "as its default"}${where === null ? "" : `, turned to ${where.toFixed(3)} of its declared range`} (${JSON.stringify(seen)})`,
     );
   }
@@ -143,14 +143,17 @@ check(await until(() => insertedAttack.test(read("tracks/kick.ts"))), `turning f
 await undo();
 check(await until(() => read("tracks/kick.ts") === kick), "undo takes it out again");
 
-// A double-click puts a knob at its declared default: for one already there, that writes nothing.
+// An ⌥-click puts a knob at its declared default (taste.md §5.2; a double-click types a value now):
+// for one already there, that writes nothing.
 const tune = '[data-module="kick"] [data-node="kick"] [data-knob="tune"]';
 await page.$eval(`${tune} svg`, (e) => e.scrollIntoView({ block: "center" }));
 const tb = await box(`${tune} svg`);
 const revision = (await state()).view.revision;
-await page.mouse.click(tb.x + tb.width / 2, tb.y + tb.height / 2, { clickCount: 2 });
+await page.keyboard.down("Alt");
+await page.mouse.click(tb.x + tb.width / 2, tb.y + tb.height / 2);
+await page.keyboard.up("Alt");
 await sleep(1200);
-check(read("tracks/kick.ts") === kick && (await state()).view.revision === revision, "a double-click on a knob at its default writes nothing");
+check(read("tracks/kick.ts") === kick && (await state()).view.revision === revision, "an ⌥-click on a knob at its default writes nothing");
 
 // ------------------------------------------------------------------ browser
 const keys = read("tracks/keys.ts");

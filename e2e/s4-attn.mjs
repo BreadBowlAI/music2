@@ -3,9 +3,10 @@
 import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 
-const { browser, page, errors, state, toasts } = await open();
+const { browser, page, errors, state, toasts, status } = await open();
 const exists = (p) => fs.existsSync(`${PROJ}/${p}`);
-const strip = () => page.$("[data-testid=attention]");
+// What needs attention is in the status pill's popover (taste.md ST-1).
+const strip = async () => (await status(), page.$("[data-testid=attention]"));
 check(!(await strip()), "nothing needs attention at first");
 
 // ID-10: a label changed in code changes no address: the same tab, track and lane, no problem.
@@ -15,7 +16,8 @@ check(!!(await page.$('[data-lane="kick.hits"] [data-clip]')) && !(await strip()
 const label = await page.$eval('[data-track="kick"] [data-testid=track-label]', (e) => e.textContent);
 check(label === "Big Kick", `the timeline shows the label (${label})`);
 const sub = await page.$eval('[data-track="kick"]', (e) => e.innerText);
-check(sub.includes("· kick"), "with the key beside it, since the label doesn't say it");
+// Keys show only in the code and in Details (taste.md principle 3): no caption beside the name.
+check(!sub.includes("· kick") && !/\bkick\b/.test(sub), `and no key beside it (${sub.replace(/\n/g, " | ")})`);
 
 // ID-17: a key renamed by hand leaves the data unclaimed, and Relink makes it play again.
 write("tracks/kick.ts", read("tracks/kick.ts").replace('track("kick"', 'track("kicks"'));

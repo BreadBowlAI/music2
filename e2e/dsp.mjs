@@ -97,7 +97,8 @@ const compressed = `reverb(compress(${pluck}, ${compArgs}), ${reverbArgs})`;
 check(await until(async () => read().includes(`({ lane }) => ${compressed}`)), `between the pluck and the reverb: ${compressed}`);
 const c = await knobs("compress");
 check(
-  c.threshold?.shown === "-18 dB" && c.ratio?.value === "3" && c.attack?.shown === "10 ms" && c.release?.shown === "150 ms" && c.makeup?.shown === "4 dB",
+  // dB with one decimal, a true minus and a plus on gain (taste.md, Words and numbers).
+  c.threshold?.shown === "−18.0 dB" && c.ratio?.value === "3" && c.attack?.shown === "10 ms" && c.release?.shown === "150 ms" && c.makeup?.shown === "+4.0 dB",
   `the compressor's five settings are knobs, with units (${Object.entries(c).map(([k, v]) => `${k} ${v.shown}`).join(", ")})`,
 );
 
@@ -135,9 +136,9 @@ const kb = await (await page.$(`${mixKnob} svg`)).boundingBox();
 const kx = kb.x + kb.width / 2, ky = kb.y + kb.height / 2;
 await page.mouse.move(kx, ky);
 await page.mouse.down();
-for (let i = 1; i <= 8; i++) await page.mouse.move(kx, ky - i * 4);
+for (let i = 1; i <= 8; i++) await page.mouse.move(kx, ky - i * 7.5);
 await page.mouse.up();
-// 32px of 160 on a 0..1 range: 0.25 → 0.45.
+// 60px of 300 (a knob's whole range, taste.md KN-1) on a 0..1 range: 0.25 → 0.45.
 const turned = await until(async () => read().includes("{ size: 0.6, damping: 0.5, mix: 0.45 }"));
 check(turned, `dragging the reverb's mix knob up writes mix: 0.45${turned ? "" : ` (${read().match(/\{ size[^}]*\}/)?.[0]}; shown ${await page.$eval(mixKnob, (e) => e.dataset.value)})`}`);
 

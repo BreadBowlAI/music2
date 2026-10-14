@@ -94,12 +94,22 @@ check(read("song.ts") === orig.song && (await revision()) === rev1, "nothing wri
 write("data/kick/notes.txt", "hits from the old take\n");
 write("tracks/kick.ts", orig.kick.replace('track("kick"', 'track("kicks"'));
 const row = '[data-testid=attention] [data-problem="data.unclaimed"][data-src="data/kick"]';
-check(await until(async () => !!(await page.$(row))), "a track key renamed by hand: Needs attention names its folder");
-const offered = await page.$eval(row, (e) => ({
+// What needs attention is in the status pill's popover (taste.md ST-1): open it to read it.
+const status = async () => {
+  if ((await page.$("[data-status]")) && !(await page.$("[data-testid=status-popover]"))) await page.click("[data-status]").catch(() => {});
+};
+check(await until(async () => (await status(), !!(await page.$(row)))), "a track key renamed by hand: Needs attention names its folder");
+const base = await page.$eval(row, (e) => ({
   message: e.querySelector("[data-testid=problem-message]").textContent,
   likely: e.querySelector("[data-likely]")?.textContent ?? null,
-  moves: [...e.querySelectorAll("[data-fix=relink-pick] option[data-to]")].map((o) => [o.textContent, o.dataset.to]),
 }));
+// The places it could go are a "Move to…" menu, not a native select (taste.md ST-4).
+const relink = async () => {
+  if (!(await page.$("[data-relink-menu]"))) await page.click(`${row} [data-fix=relink-pick]`);
+  return page.waitForSelector("[data-relink-menu]", { timeout: 2000 });
+};
+await relink();
+const offered = { ...base, moves: await page.$$eval("[data-relink-menu] [role=menuitem][data-to]", (els) => els.map((o) => [o.textContent, o.dataset.to])) };
 check(offered.likely === null && !offered.moves.some(([t]) => t.startsWith("Move all")), `no "Move all" is offered, since it couldn't apply (${JSON.stringify(offered.moves)})`);
 check(offered.message.includes("data/kick/notes.txt isn't data"), `the problem names the file that keeps the folder (${offered.message})`);
 await page.$eval(row, (e) => e.scrollIntoView({ block: "center" }));
@@ -107,7 +117,8 @@ await page.screenshot({ path: `${S}/s6-fixes-stray.png` });
 const to = offered.moves.findIndex(([, d]) => d === "data/kicks/hits.json");
 check(to >= 0, "its lane file is offered on its own");
 const revF = await revision();
-await page.select(`${row} [data-fix=relink-pick]`, String(to));
+await relink();
+await page.$$eval("[data-relink-menu] [role=menuitem][data-to]", (els, to) => els[to].click(), to);
 check(await until(() => read("data/kicks/hits.json") === orig.hits && read("data/kick/hits.json") === null), "moving it moves that file alone");
 check(read("data/kick/notes.txt") !== null && (await revision()) === revF + 1, "the stray file stays, one revision");
 await page.mouse.click(800, 850);
@@ -115,7 +126,7 @@ await key("z", ["Meta"]);
 check(await until(() => read("data/kick/hits.json") === orig.hits && read("data/kicks/hits.json") === null), "⌘Z moves it back");
 fs.rmSync(`${proj}/data/kick/notes.txt`);
 write("tracks/kick.ts", orig.kick);
-check(await until(async () => !(await page.$(row))), "the key put back: the folder needs no attention");
+check(await until(async () => (await status(), !(await page.$(row)))), "the key put back: the folder needs no attention");
 
 check(read("song.ts") === orig.song && read("tracks/kick.ts") === orig.kick, "every code file is as it was");
 check(consoleErrors.length === 0, `no console errors ${consoleErrors.length ? JSON.stringify(consoleErrors) : ""}`);

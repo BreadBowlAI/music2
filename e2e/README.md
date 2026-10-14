@@ -76,22 +76,22 @@ diff /tmp/base-head/SHA256SUMS /tmp/base-now/SHA256SUMS
 
 | suite | kind | checks at 933f4de | covers |
 |-------|------|------------------:|--------|
-| `graph` | proj | 19 | module tabs; the Bass graph's nodes and edges; knob drags (slow and fast) write `song.ts` and nothing else; an outside edit shows; a broken save keeps the last good graph, with a banner and "Show in code"; play and stop |
-| `cables` | cables | 12 | dragging a cable from an output onto a knob writes the signal's name there; ✕ writes the declared default back; a cable into its own declaration is refused with a reason |
-| `undo` | cables | 10 | undo and redo of a cable from the toolbar and ⌘Z / ⇧⌘Z, with toasts |
-| `effects` | proj | 12 | the catalog wraps the Keys' pluck in a delay (settings as knobs); removing it unwraps; undo restores the file exactly |
-| `layout` | proj | 38 | the timeline above one module's graph: tracks, lanes in code order, clips, selection both ways, the split's resize, ruler seeks, the playhead, knob drags, playing past the end |
-| `views` | proj | 27 | the graph / code / notes switcher; code follows the module; a notes clip opened from the timeline, and what closes it |
+| `graph` | proj | 19 | a header to select each module, the Song's pinned last; the Bass graph's nodes and edges; knob drags (slow and fast) write `song.ts` and nothing else, with no toast; an outside edit shows; a broken save keeps the last good graph, with the status pill and "Show in code" in its popover; play and stop |
+| `cables` | cables | 12 | dragging a cable from an output onto a knob writes the signal's name there (and makes no toast); ✕ writes the declared default back; a cable into its own declaration is refused with a reason |
+| `undo` | cables | 10 | undo and redo of a cable from the toolbar and ⌘Z / ⇧⌘Z, with toasts that say where, never the diff |
+| `effects` | proj | 12 | the catalog wraps the Keys' pluck in a delay (settings as knobs), said in words with Undo; removing it unwraps; undo restores the file exactly |
+| `layout` | proj | 38 | the timeline above the dock: tracks and the Song's row, automation folded under its track, clips, selection both ways, the split's resize (180px at least), ruler seeks, the playhead, knob drags, playing past the end |
+| `views` | proj | 30 | the dock's Device / Notes / Mix / Code switcher: its view is the producer's, a selection changes only what it shows, and it never moves; code follows the module; Notes shows the selected clip, a double-click opens it, Esc or a removed clip leaves its empty state |
 | `code` | proj | 58 | the code editor: the files API's guards (409, 400), autocomplete, ⌘S, compile errors as markers and in the problems strip, files changed on disk under clean and edited buffers, knobs turned while a file is open |
-| `notes` | proj | 52 | the piano roll and notes clips; every edit is one lane write, checked on disk |
+| `notes` | proj | 52 | the piano roll and notes clips (a click selects, a double-click adds, D4); every edit is one lane write, checked on disk |
 | `ports` | proj | 46 | node ports, port-to-port edges, cables dragged from an output circle, the effect browser, zoom and Fit |
 | `dsp` | proj | 33 | std's reverb, compressor and chorus added after the Keys through the effect browser, each with its settings as knobs, and exactly that in the file |
 | `start` | proj / empty | 24 / 14 | the graph view, page keys, ⌘S, closing to the start screen, the API catch-all; `empty`: a server started with no project |
 | `fixes-graph` | fix | 42 | Enter in the effect browser while playing, a Hz knob at its end, the canvas, feedback loops, one name at two inputs, std helpers as nodes, editor saves and undo, renames, unsaved files, diagnostics columns |
 | `fixes-notes` | fix | 37 | the open clip follows its clip or closes; roll writes name their revision; the roll is read only while the code is broken; Enter in a field doesn't jump playback |
-| `attention` | attn | 56 | data a key rename left behind: the "Needs attention" strip, its one-click move, undo, Delete; per-file picks; every graph event carries the diagnostics; knob undo after an insert in an earlier file |
+| `attention` | attn | 56 | data a key rename left behind: "Needs attention" in the status popover, its one-click move, undo, Delete; per-file picks from a "Move to…" menu; every graph event carries the diagnostics; knob undo after an insert in an earlier file |
 | `newsong` | none | 65 | the start screen, New Song from the templates, Open an Example, names and numbering, ⌘N with a song open |
-| `export` | export | 37 | Export Audio: the button, progress, the done toast, the WAV in `~/Music/music2/Exports`, a second export's name, ⌘E, refusals, and that it equals `m2 render` |
+| `export` | export | 37 | Export Audio: the button, progress, the done toast, the WAV in `~/Music/music2/Exports`, a second export's name, ⇧⌘E, refusals, and that it equals `m2 render` |
 | `fx-fixes` | none | 51 | export progress stays with its song, export names, stale part files swept, reserved and nameless names, long names, the plugins example's message (needs no `CLAP_PATH`), the Empty template's steps, the Starter's bass knob |
 | `s4-clips` | fix | 28 | clips by id in the timeline and the piano roll (FMT-11, FMT-12) |
 | `s4-attn` | fix | 13 | the "Needs attention" strip in the diagnostic model: a label change keeps every address (ID-10); a key renamed by hand leaves data unclaimed and Relink plays it again (ID-17) |
@@ -101,8 +101,10 @@ diff /tmp/base-head/SHA256SUMS /tmp/base-now/SHA256SUMS
 | `live3b` | proj | 51 (40 without plugins) | gesture leases (step 3b): drags stay live through slow compiles, outside saves, a held knob, a closed window, broken code and renumbered calls; with `CLAP_PATH` (Surge XT and Airwindows), plugin instances carried across a rebuild, heard in a captured stream |
 | `s5-knobs` | fix | 101 | descriptors (step 5): every declared control is a knob with its declared range and default; turning a left-out one inserts it, undo takes it out; the browser's categories and inserts; `import { delay as echo }` |
 | `s6-builders` | fix | 55 | the first step-6 builders: rename a track's label in place, automate a knob from its menu, move a renamed track's whole folder from the Needs-attention strip; each one Tx and one undo step |
-| `s6-write` | fix | 35 | the step-6 write path: an outside lane write taken in once it settles; a lane written in two halves never shows empty; a project another program holds opens read-only and writes after Retry; broken code opens in the code view, silent, and plays once a save compiles |
+| `s6-write` | fix | 36 | the step-6 write path: an outside lane write taken in once it settles; a lane written in two halves never shows empty; a project another program holds opens read-only (said once, by the status pill; no edit offered) and writes after Retry; broken code opens in the code view, silent, its tracks shown greyed from `data/` (D2), and plays once a save compiles |
 | `s6-fixes` | fix | 19 | step-6 review fixes: outside edits still taken in after a file that existed for one poll; a Tx naming a file the disk spells another way is refused; refusals answer 422 with diagnostics; a renamed folder holding a non-data file is offered file by file |
+| `taste` | fix | 32 | the taste lint (taste.md §0): first that it catches a planted offence of each kind, then one check per state the UI audit shot and the shell's own (the start screen, New Song, every module's device view, automation unfolded, playing, the loop, the roll, Notes with no clip, Mix, the code view, a knob drag, a toast, the knob menu, a knob's typed value marked unreadable, the effect browser, a cable drag, a browser search, the shortcuts sheet, the status popover for broken code and for Needs attention, an export, read only and its popover, a 1100×700 window): no font size outside 11/12/13/15 px, no radius outside 0/2/4/8 px or a full round, no gradient, no backdrop filter, no monospace outside `[data-code]` |
+| `gestures` | fix | 30 | the knob gestures (taste.md §5.2, KN-1) and how values read: "−6.0 dB", "R 30"; 300px is a knob's whole range and ⇧ drags a tenth as far, without a jump when pressed mid-drag; its whole row drags it, its name too; ⌥-click and ⌫ reset as one edit; a double-click (or Return) types a value ("-3", "L20", "2k"), unreadable text is marked and writes nothing, Escape writes nothing, Tab writes and moves to the next knob; ↑, ⇧↑ and the wheel step it, a run of steps being one edit |
 
 Known failures at 933f4de: none confirmed. `node run.mjs all` passed every suite with the counts
 above twice on the debug build, and every suite but one on the release build. That one, `s5-knobs`,

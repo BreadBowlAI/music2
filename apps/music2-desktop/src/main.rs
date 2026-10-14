@@ -73,15 +73,16 @@ fn main() {
             let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url.parse()?))
                 .title("music2")
                 .inner_size(1440.0, 900.0)
-                .min_inner_size(960.0, 620.0)
+                // taste.md §3.2: the smallest window the layout is drawn for.
+                .min_inner_size(1100.0, 700.0)
                 .theme(Some(tauri::Theme::Light))
                 .initialization_script(&init);
             #[cfg(target_os = "macos")]
             let builder = builder
                 .title_bar_style(tauri::TitleBarStyle::Overlay)
                 .hidden_title(true)
-                // Vertically centred in the UI's 64px top bar.
-                .traffic_light_position(tauri::LogicalPosition::new(20.0, 25.0));
+                // Vertically centred in the UI's 44px top bar, inside the 80px it keeps for them.
+                .traffic_light_position(tauri::LogicalPosition::new(18.0, 16.0));
             let window = builder.build()?;
             keep_title_in_sync(window, server);
             Ok(())

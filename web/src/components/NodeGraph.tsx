@@ -1,36 +1,38 @@
 import clsx from "clsx";
 import {
-  Activity,
   AudioLines,
-  AudioWaveform,
   Clock,
   Hash,
   LogIn,
   LogOut,
-  Minus,
   Music2,
   Piano,
   Plus,
   RotateCcw,
   Scan,
-  SlidersHorizontal,
   Spline,
-  SquareFunction,
   Trash2,
   X,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  controlLabel,
   display,
   fromUnit,
   graphApi,
-  keyNote,
+  lockReason,
   moduleName,
+  parseValue,
+  span,
+  stepValue,
   toUnit,
   type Effect,
   type GraphLease,
   type GraphState,
+  type Home,
   type InputPort,
   type Knob as KnobInfo,
   type ModuleView,
@@ -40,15 +42,26 @@ import {
   type ViewNode,
 } from "../lib/graph";
 import { laneMade } from "../lib/events";
+import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
+import { Dots } from "./draw";
 import EffectBrowser from "./EffectBrowser";
 import { undoAction } from "./GraphCanvas";
-import TrackName from "./TrackName";
+
+/** Why nothing here can be edited right now (the code doesn't compile, read only, offline), or null. */
+const Locked = createContext<string | null>(null);
+/** A track's name by its key, for the controls that name one (a mixer channel's `hats.db`: Hats volume). */
+const Tracks = createContext<(key: string) => string | undefined>(() => undefined);
 
 /** One module's code as a graph to play and tweak: knobs over its values, cables between its signals, effects after its audio. */
 export function NodeGraph({ graph, module }: { graph: GraphState; module: string }) {
   const shown = graph.view.modules.find((m) => m.key === module);
   const laid = useMemo(() => shown && layout(shown), [shown]);
+  const locked = useStore((s) => lockReason(graph, s.connected));
+  const tracks = useMemo(() => {
+    const by = new Map(graph.view.modules.filter((m) => m.track).map((m) => [m.key, moduleName(m)]));
+    return (key: string) => by.get(key);
+  }, [graph.view.modules]);
 
   // The zoom: fitted to the panel until the user picks one, per module.
   const scroller = useRef<HTMLDivElement>(null);
@@ -63,7 +76,7 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
     return () => watch.disconnect();
   }, []);
   const [zooms, setZooms] = useState<Record<string, number>>({});
-  const fit = laid && room ? clampZoom(Math.min((room.w - CHROME_W) / laid.width, (room.h - CHROME_H) / laid.height), MIN_FIT, 1) : 1;
+  const fit = laid && room ? fitZoom(laid, room) : 1;
   const zoom = zooms[module] ?? fit;
   const setZoom = useCallback(
     (z: number | null) =>
@@ -75,6 +88,25 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
       }),
     [module],
   );
+  // A part asked for by name (the Mix view's "Show the Song's mixer"): at full size, scrolled to its top left.
+  const reveal = useShell((s) => s.reveal);
+  useEffect(() => {
+    const node = reveal ? shown?.nodes.find((n) => n.component === reveal) : undefined;
+    if (!node) return;
+    useShell.getState().set({ reveal: null });
+    setZooms((zs) => ({ ...zs, [module]: 1 }));
+    // Once the zoom has drawn: scrolled in the graph alone, never the window.
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const el = scroller.current, card = el?.querySelector(`[data-node-id="${CSS.escape(node.id)}"]`);
+        if (!el || !card) return;
+        const r = card.getBoundingClientRect(), b = el.getBoundingClientRect();
+        el.scrollLeft += r.left - b.left - 16;
+        el.scrollTop += r.top - b.top - 16;
+      }),
+    );
+  }, [reveal, shown, module]);
+
   // ⌘/Ctrl + wheel zooms, and so does a trackpad pinch (Chrome sends it as Ctrl + wheel,
   // WebKit, the desktop app's web view, as gesture events).
   const zoomRef = useRef(zoom);
@@ -107,7 +139,8 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
   }, [setZoom]);
 
   return (
-    <>
+    <Locked.Provider value={locked}>
+      <Tracks.Provider value={tracks}>
       <div ref={scroller} className="flex-1 min-h-0 overflow-auto p-4 flex flex-col" data-testid="graph">
         {shown && laid && (
           <ModuleSection
@@ -117,47 +150,61 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
             zoom={zoom}
             session={graph.session}
             revision={graph.view.revision}
-            editable={graph.view.draft_errors.length === 0}
+            editable={!locked}
             effects={graph.effects}
             leases={graph.leases}
           />
         )}
       </div>
       {shown && <ZoomBar zoom={zoom} fitted={zooms[module] == null} onZoom={setZoom} />}
-    </>
+      </Tracks.Provider>
+    </Locked.Provider>
   );
 }
 
 /** Zooms the graph can take; fitting it to the panel never shrinks it below `MIN_FIT` (it scrolls instead). */
 const clampZoom = (z: number, lo = 0.3, hi = 2) => Math.min(hi, Math.max(lo, Number.isFinite(z) ? z : 1));
-const MIN_FIT = 0.5;
-/** The room around a module's nodes in the scroller: its padding, the section's, and the section's title row. */
-const CHROME_W = 72;
-const CHROME_H = 108;
+/** Fit's floor (taste.md DV-5): below it a card's 12px text would draw under the 11px the type scale allows. */
+const MIN_FIT = 0.75;
+/** The room around a module's nodes in the scroller: its padding (16) and the section's (16), each side. */
+const CHROME_W = 64;
+const CHROME_H = 64;
+
+/**
+ * The zoom Fit picks (taste.md §3.5, DV-5): a sound that fits the panel's height at full size (a
+ * chain, one row of cards) opens at 100% and scrolls sideways, the way signal reads; one that
+ * doesn't is shrunk to fit, down to 75%, and scrolls past that.
+ */
+function fitZoom(laid: { width: number; height: number }, room: { w: number; h: number }) {
+  const tall = (room.h - CHROME_H) / laid.height;
+  if (tall >= 1) return 1;
+  return clampZoom(Math.min((room.w - CHROME_W) / laid.width, tall), MIN_FIT, 1);
+}
 
 /** Zoom out, the zoom (click: actual size), zoom in, fit: floating at the panel's bottom right. */
 function ZoomBar({ zoom, fitted, onZoom }: { zoom: number; fitted: boolean; onZoom: (z: number | null) => void }) {
-  const button = "h-7 grid place-items-center rounded-lg text-ink-300 hover:text-ink-100 hover:bg-black/5 cursor-pointer transition-colors";
+  const button = "h-ctl-sm grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover cursor-pointer transition-colors duration-80 ease-linear";
   return (
-    <div className="absolute right-8 bottom-8 z-20 flex items-center gap-0.5 p-0.5 rounded-[10px] bg-ink-850/90 backdrop-blur ring-1 ring-black/[0.08] shadow-[0_4px_14px_-6px_rgb(0_0_0/0.18)] text-[11px]" data-zoom={zoom.toFixed(2)}>
-      <button className={clsx(button, "w-7")} onClick={() => onZoom(zoom / 1.2)} title="Zoom out (⌘ scroll)" aria-label="Zoom out">
-        <Minus className="size-3.5" />
+    // It floats over the canvas: the one thing here with a shadow.
+    <div className="absolute right-8 bottom-8 z-20 flex items-center gap-0.5 p-0.5 rounded-md bg-raised shadow-pop text-xs" data-zoom={zoom.toFixed(2)}>
+      <button className={clsx(button, "w-ctl-sm")} onClick={() => onZoom(zoom / 1.2)} title="Zoom out (⌘ scroll)" aria-label="Zoom out">
+        <ZoomOut size={14} />
       </button>
-      <button className={clsx(button, "w-11 font-medium tabular-nums")} onClick={() => onZoom(1)} title="Actual size" aria-label="Actual size">
+      <button className={clsx(button, "w-11 font-medium")} onClick={() => onZoom(1)} title="Actual size" aria-label="Actual size">
         {Math.round(zoom * 100)}%
       </button>
-      <button className={clsx(button, "w-7")} onClick={() => onZoom(zoom * 1.2)} title="Zoom in (⌘ scroll)" aria-label="Zoom in">
-        <Plus className="size-3.5" />
+      <button className={clsx(button, "w-ctl-sm")} onClick={() => onZoom(zoom * 1.2)} title="Zoom in (⌘ scroll)" aria-label="Zoom in">
+        <ZoomIn size={14} />
       </button>
-      <span className="w-px h-4 mx-0.5 bg-black/[0.08]" />
+      <span className="w-px h-4 mx-0.5 bg-line" />
       <button
-        className={clsx(button, "px-2 gap-1 inline-flex items-center", fitted && "text-pop-500 hover:text-pop-500")}
+        className={clsx(button, "px-2 gap-1 inline-flex items-center", fitted && "!bg-accent-soft !text-accent-strong")}
         onClick={() => onZoom(null)}
         title="Fit the graph to the panel"
         aria-label="Fit to panel"
         aria-pressed={fitted}
       >
-        <Scan className="size-3.5" />
+        <Scan size={14} />
         Fit
       </button>
     </div>
@@ -166,16 +213,33 @@ function ZoomBar({ zoom, fitted, onZoom }: { zoom: number; fitted: boolean; onZo
 
 // ---------------------------------------------------------------- ports and layout
 
-/** What flows through a port, by colour: the legend, the port dots and the edges. */
-const KIND_COLOR: Record<PortKind, string> = { audio: "#c45c7c", control: "#4a8cc4", notes: "#3e9b78" };
-const KIND_LABEL: Record<PortKind, string> = { audio: "Audio", control: "Control", notes: "Notes" };
+/**
+ * What flows through a port, by shape and line, never colour (taste.md §2.8): audio a circle, control
+ * a diamond, notes a rounded square, all 8px, filled when connected; cables as heavy, light or dashed.
+ */
+const SHAPE: Record<PortKind, string> = { audio: "size-2 rounded-full", control: "size-1.5 rotate-45", notes: "size-2 rounded-xs" };
+/** Where a port's mark sits so that its centre is on the node's edge: half its size out. */
+const SHAPE_AT: Record<PortKind, string> = { audio: "-mt-[4px]", control: "-mt-[3px]", notes: "-mt-[4px]" };
+const CABLE: Record<PortKind, { stroke: string; width: number; dash?: string }> = {
+  audio: { stroke: "var(--color-fg-muted)", width: 2 },
+  control: { stroke: "var(--color-fg-faint)", width: 1.5 },
+  notes: { stroke: "var(--color-fg-faint)", width: 1.5, dash: "4 3" },
+};
+/** A port's mark, filled when something is connected to it, else hollow. */
+const mark = (kind: PortKind, filled: boolean) =>
+  clsx(
+    SHAPE[kind],
+    filled
+      ? "bg-fg-muted shadow-[0_0_0_2px_var(--color-raised)]"
+      : "bg-raised shadow-[inset_0_0_0_1.5px_var(--color-fg-muted),0_0_0_2px_var(--color-raised)]",
+  );
 
 const NODE_W = 216;
 /** A node with only outputs (a lane, an import) or only inputs (an export). */
 const SLIM_W = 152;
 const GAP_X = 60;
 const GAP_Y = 18;
-const HEAD_H = 42;
+const HEAD_H = 40;
 /** Above and below a node's rows. */
 const PAD = 6;
 /** An output, a signal coming in, or a cable. */
@@ -460,11 +524,6 @@ const ModuleSection = memo(function ModuleSection({
     }
     return s;
   }, [module]);
-  const kinds = useMemo(() => {
-    const s = new Set<PortKind>();
-    for (const n of module.nodes) for (const p of [...n.inputs, ...n.outputs]) s.add(p.kind);
-    return (["audio", "control", "notes"] as const).filter((k) => s.has(k));
-  }, [module]);
 
   // Drag from a named output onto a knob: the knob's value is replaced by the signal's name.
   // The cable is drawn in the module's own (unzoomed) coordinates.
@@ -501,9 +560,9 @@ const ModuleSection = memo(function ModuleSection({
         if (ev.type !== "pointerup") return;
         const knob = target(ev);
         if (!knob) return;
+        // The knob turns into "← name": that says it, so no toast does (taste.md §2.14).
         graphApi
-          .connect(gesture.session, gesture.revision, gesture.from, knob.dataset.knobId!)
-          .then((c) => toast(`${c.file}: ${c.before} → ${c.after}`))
+          .connect(gesture.session, gesture.revision, gesture.from, knob.dataset.knobId!, { name: `connecting ${gesture.name}` })
           .catch((error) => toast(error instanceof Error ? error.message : String(error)));
       };
       window.addEventListener("pointermove", move);
@@ -514,39 +573,12 @@ const ModuleSection = memo(function ModuleSection({
   );
 
   return (
-    <section className="grow shrink-0 w-max min-w-full flex flex-col rounded-2xl bg-ink-900 ring-1 ring-black/[0.05] p-5 pt-4" data-module={module.key}>
-      <div className="flex items-center gap-2 mb-5">
-        <h2 className="min-w-0 flex">
-          <TrackName module={module.key} label={module.label} track={module.track} testid="module-title" className="text-sm font-semibold text-ink-100" />
-        </h2>
-        <span className="text-xs text-ink-400">
-          {module.track ? "track" : "mix"}
-          {/* The key the code calls it by, when the label doesn't say it. */}
-          {keyNote(moduleName(module), module.key) && <span className="font-mono text-[11px] text-ink-500"> · {module.key}</span>}
-        </span>
-        <div className="ml-4 pl-4 border-l border-black/[0.08] flex items-center gap-4 text-[11px] text-ink-400" data-legend>
-          {kinds.map((k) => (
-            <span key={k} className="inline-flex items-center gap-1.5" data-legend-kind={k}>
-              <span className="size-2.5 rounded-full" style={{ background: KIND_COLOR[k] }} />
-              {KIND_LABEL[k]}
-            </span>
-          ))}
-          {editable && module.nodes.some((n) => n.outlet) && <span className="pl-3 border-l border-black/[0.08]">Drag a named output onto a knob to connect it</span>}
-        </div>
-      </div>
-      {/* The canvas fills the card, dotted all over; the graph sits in its middle. */}
-      <div
-        data-canvas
-        className="grow grid place-items-center rounded-xl"
-        style={{
-          minWidth: width * zoom,
-          minHeight: height * zoom,
-          backgroundImage: "radial-gradient(circle, rgb(0 0 0 / 0.07) 1px, transparent 1.2px)",
-          backgroundSize: "20px 20px",
-          backgroundPosition: "-10px -10px",
-        }}
-      >
-        <div style={{ width: width * zoom, height: height * zoom }}>
+    // Flat on the dock, edge to edge: no card, no title row, no legend (taste.md DK-3).
+    <section className="grow shrink-0 w-max min-w-full flex flex-col p-4" data-module={module.key}>
+      {/* The canvas fills the panel, dotted all over; the graph sits at its top left, as a chain reads (taste.md §3.5). */}
+      <div data-canvas className="relative grow grid place-items-start" style={{ minWidth: width * zoom, minHeight: height * zoom }}>
+        <Dots />
+        <div className="relative" style={{ width: width * zoom, height: height * zoom }}>
           <div
             ref={area}
             className="relative origin-top-left"
@@ -564,15 +596,14 @@ const ModuleSection = memo(function ModuleSection({
                     key={`${e.from}>${e.from_port}>${e.to}>${e.to_port}`}
                     d={loop ? loopBack(p.x + p.w, p.y + y0, q.x, q.y + y1, height - LOOP_ROOM / 2) : curve(p.x + p.w, p.y + y0, q.x, q.y + y1)}
                     data-loop={loop || undefined}
-                    strokeDasharray={loop ? "6 5" : undefined}
+                    strokeDasharray={loop ? "6 5" : CABLE[e.kind].dash}
                     data-from={e.from}
                     data-from-port={e.from_port}
                     data-to={e.to}
                     data-to-port={e.to_port}
                     data-kind={e.kind}
-                    stroke={KIND_COLOR[e.kind]}
-                    strokeOpacity="0.7"
-                    strokeWidth="2"
+                    stroke={CABLE[e.kind].stroke}
+                    strokeWidth={CABLE[e.kind].width}
                     strokeLinecap="round"
                     fill="none"
                   />
@@ -600,8 +631,8 @@ const ModuleSection = memo(function ModuleSection({
                 <path
                   data-cable={cable.to ?? ""}
                   d={curve(cable.x0, cable.y0, cable.x, cable.y)}
-                  stroke={KIND_COLOR[cable.kind]}
-                  strokeWidth="2.5"
+                  stroke="var(--color-accent)"
+                  strokeWidth="2"
                   strokeDasharray={cable.to ? undefined : "6 5"}
                   strokeLinecap="round"
                   fill="none"
@@ -617,53 +648,51 @@ const ModuleSection = memo(function ModuleSection({
 
 // ---------------------------------------------------------------- nodes
 
-/** The icon for what a node is. */
+/**
+ * The glyph for a card that isn't a call: a lane, the time, a track's signal coming in, an output, a
+ * value, a voice. A call's card has none: its title says what it is, and one glyph on every effect
+ * would repeat the dock's or a category's (taste.md §2.12, one icon per meaning).
+ */
 function NodeIcon({ node }: { node: ViewNode }) {
   const kind = node.outputs[0]?.kind ?? node.inputs[0]?.kind ?? "control";
   const Icon =
     node.kind === "voice"
       ? Piano
       : node.kind === "lane"
-      ? kind === "notes" ? Music2 : kind === "audio" ? AudioLines : Spline
-      : node.kind === "time"
-        ? Clock
-        : node.kind === "import"
-          ? LogIn
-          : node.kind === "export"
-            ? LogOut
-            : node.kind === "value"
-              ? Hash
-              : node.effect
-                ? SlidersHorizontal
-                : kind === "audio"
-                  ? AudioWaveform
-                  : kind === "control"
-                    ? Activity
-                    : SquareFunction;
-  const color = KIND_COLOR[kind];
-  return (
-    <span className="size-6 shrink-0 rounded-[7px] grid place-items-center" style={{ background: `color-mix(in oklab, ${color} 14%, var(--color-ink-800))`, color }}>
-      <Icon className="size-3.5" />
-    </span>
-  );
+        ? kind === "notes" ? Music2 : kind === "audio" ? AudioLines : Spline
+        : node.kind === "time"
+          ? Clock
+          : node.kind === "import"
+            ? LogIn
+            : node.kind === "export"
+              ? LogOut
+              : node.kind === "value"
+                ? Hash
+                : null;
+  // A plain glyph: no tile, no colour (taste.md §2.12).
+  return Icon && <Icon size={14} className="shrink-0 text-fg-faint" />;
 }
 
-/** An input: a small circle on a node's left edge, filled when something is connected to it. */
+/** A track's signal coming in, by the track's name: `Kick.out` is Kick, its other outputs Kick · env. */
+function importTitle(label: string) {
+  const dot = label.lastIndexOf(".");
+  if (dot < 0) return label;
+  const port = label.slice(dot + 1);
+  return port === "out" ? label.slice(0, dot) : `${label.slice(0, dot)} · ${port}`;
+}
+
+/** An input: its kind's mark centred on a node's left edge, filled when something is connected to it. */
 function Dot({ id, kind, filled, className }: { id: string; kind: PortKind; filled: boolean; className?: string }) {
-  const color = KIND_COLOR[kind];
   return (
     <span
       data-port-dot
       data-port="in"
       data-port-id={id}
       data-kind={kind}
-      className={clsx("absolute left-[-6px] top-1/2 -mt-[6px] size-3 rounded-full transition-transform", className)}
-      style={{ background: filled ? color : "var(--color-ink-800)", boxShadow: `inset 0 0 0 2px ${color}, 0 0 0 2px var(--color-ink-800)` }}
+      className={clsx("absolute top-1/2 -translate-x-1/2 left-0 transition-transform duration-80", SHAPE_AT[kind], mark(kind, filled), className)}
     />
   );
 }
-
-const SUBTITLE: Partial<Record<ViewNode["kind"], string>> = { lane: "lane", time: "time", import: "from track", export: "export", value: "value", voice: "each note played" };
 
 function NodeCard({
   nodeKey,
@@ -695,53 +724,50 @@ function NodeCard({
   const toast = useStore((s) => s.toast);
   const [picking, setPicking] = useState<HTMLElement | null>(null);
   const closePicker = useCallback(() => setPicking(null), []);
-  const edited = (p: Promise<{ file: string; before: string; after: string }>) =>
-    p.then((c) => toast(`${c.file}: ${c.before} → ${c.after}`)).catch((error) => toast(error instanceof Error ? error.message : String(error)));
-  const subtitle = SUBTITLE[node.kind];
+  const why = useContext(Locked);
+  /** A structural edit: said in words, with its Undo (taste.md §2.14, ST-5); a refusal says why. */
+  const edited = (p: Promise<{ revision: number }>, words: string) =>
+    p.then((c) => toast(words, undoAction(session, c.revision))).catch((error) => toast(error instanceof Error ? error.message : String(error)));
   // Just the header, its one circle beside it (see `compact`).
   const small = compact(node);
-  const where = node.file ? `${node.file.split("/").pop()}:${node.line}` : null;
+  const where = node.file ? `${node.file}:${node.line}` : null;
+  // A call by its component's label ("LFO", "Reverb"); a track's signal by the track; a lane or an
+  // output by the rule controls follow (`cutoff` → Cutoff). No caption under it: the glyph and the
+  // place say what kind it is (principle 4).
+  const titled =
+    node.kind === "import"
+      ? importTitle(node.label)
+      : node.kind === "lane" || node.kind === "export"
+        ? controlLabel(node.label)
+        : (node.effect ?? node.title ?? effects.find((e) => e.component === node.component)?.label ?? node.label);
   return (
-    <div
-      className={clsx(
-        "absolute rounded-xl bg-ink-800 ring-1 shadow-[0_1px_2px_rgb(0_0_0/0.04),0_6px_16px_-8px_rgb(0_0_0/0.12)] flex flex-col",
-        node.effect ? "ring-pop-500/25" : "ring-black/[0.08]",
-      )}
-      style={style}
-      data-node={node.label}
-      data-node-id={node.id}
-      title={node.file ? `${node.file}:${node.line}` : undefined}
-    >
-      <div className={clsx("h-[42px] shrink-0 pl-2.5 pr-1.5 flex items-center gap-2 min-w-0", !small && "border-b border-black/[0.05]")}>
+    <div className="absolute rounded-md bg-raised ring-1 ring-line flex flex-col" style={style} data-node={node.label} data-node-id={node.id} title={where ?? undefined}>
+      <div className={clsx("h-10 shrink-0 pl-3 pr-1.5 flex items-center gap-2 min-w-0", !small && "border-b border-line")}>
         <NodeIcon node={node} />
-        <div className="min-w-0 flex-1 leading-tight">
-          <div className={clsx("font-mono text-[13px] truncate", node.kind === "call" || node.kind === "lane" || node.kind === "voice" ? "text-ink-100 font-medium" : "text-ink-200")}>{node.label}</div>
-          {(subtitle || node.effect || where) && (
-            <div className="text-[10px] text-ink-400 truncate">
-              {node.effect ? "effect" : subtitle}
-              {(node.effect || subtitle) && where ? " · " : ""}
-              {where && <span className="font-mono">{where}</span>}
-            </div>
-          )}
+        <div className="min-w-0 flex-1">
+          {/* Its label (an effect's descriptor says it), the code's name in the tooltip; its file and line only there. */}
+          <div className={clsx("text-sm truncate", node.kind === "call" || node.kind === "lane" || node.kind === "voice" ? "font-semibold text-fg" : "font-medium text-fg-muted")} title={titled !== node.label ? node.label : undefined}>
+            {titled}
+          </div>
         </div>
         {node.effect && (
           <button
-            className="shrink-0 size-7 grid place-items-center rounded-lg text-ink-400 hover:text-ink-100 hover:bg-black/5 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
-            title={`Remove ${node.effect}, keeping what it was applied to`}
+            className="shrink-0 size-ctl-sm grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover disabled:text-fg-off disabled:pointer-events-none cursor-pointer transition-colors duration-80 ease-linear"
+            title={why ?? `Remove ${titled}, keeping what it was applied to`}
             aria-label={`Remove ${node.effect}`}
             disabled={!editable}
-            onClick={() => void edited(graphApi.removeEffect(session, revision, node.id))}
+            onClick={() => void edited(graphApi.removeEffect(session, revision, node.id, { name: `removing ${titled}`, structural: true }), `Removed ${titled}`)}
           >
-            <Trash2 className="size-3.5" />
+            <Trash2 size={14} />
           </button>
         )}
         {node.audio && effects.length > 0 && (
           <button
             className={clsx(
-              "shrink-0 size-7 grid place-items-center rounded-lg text-ink-400 hover:text-ink-100 hover:bg-black/5 disabled:opacity-40 disabled:pointer-events-none cursor-pointer",
-              picking && "bg-black/5 text-ink-100",
+              "shrink-0 size-ctl-sm grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover disabled:text-fg-off disabled:pointer-events-none cursor-pointer transition-colors duration-80 ease-linear",
+              picking && "bg-accent-soft text-accent-strong",
             )}
-            title="Add an effect after this"
+            title={why ?? "Add an effect after this"}
             aria-label={`Add an effect after ${node.label}`}
             aria-haspopup="dialog"
             aria-expanded={!!picking}
@@ -751,7 +777,7 @@ function NodeCard({
               setPicking((p) => (p ? null : button));
             }}
           >
-            <Plus className="size-4" />
+            <Plus size={14} />
           </button>
         )}
       </div>
@@ -761,24 +787,26 @@ function NodeCard({
           <EffectBrowser
             effects={effects}
             after={node.label}
+            named={titled}
             anchor={picking}
             onClose={closePicker}
             onPick={(effect) => {
               setPicking(null);
-              void edited(graphApi.addEffect(session, revision, node.id, effect));
+              void edited(graphApi.addEffect(session, revision, node.id, effect), `Added ${effect.label} after ${titled}`);
             }}
           />,
           picking.closest("section[data-module]") ?? document.body,
         )}
       {small && node.inputs.map((i) => <Dot key={i.id} id={i.id} kind={i.kind} filled={wired.has(`${node.id}<${i.id}`)} />)}
       {!small && (node.outputs.length > 0 || node.inputs.length > 0) && (
-        <div className="py-[6px]">
+        <div className="py-1.5">
           {node.inputs.map((i) => (
             <InputRow
               key={i.knob ? `knob:${knobKey(i.knob)}` : i.id}
               nodeKey={nodeKey}
               knobKey={knobKey}
               node={node}
+              owner={titled}
               input={i}
               filled={wired.has(`${node.id}<${i.id}`)}
               session={session}
@@ -787,7 +815,7 @@ function NodeCard({
             />
           ))}
           {node.outputs.slice(node.inputs.length).map((o) => (
-            <div key={o.id} className="h-[28px]" />
+            <div key={o.id} className="h-7" />
           ))}
         </div>
       )}
@@ -827,6 +855,7 @@ function OutputPortView({
   onCable: (node: ViewNode, output: OutputPort, e: React.PointerEvent) => void;
 }) {
   const toast = useStore((s) => s.toast);
+  const why = useContext(Locked);
   const cable = output.outlet && node.outlet;
   // Only a named signal can be connected: say how to name this one.
   const last = node.label.split(".").pop()!;
@@ -835,12 +864,12 @@ function OutputPortView({
       ? `To connect ${node.label} to a knob, name it in code first: const my${last[0].toUpperCase()}${last.slice(1)} = ${node.label}(…)`
       : `To connect ${node.label} to a knob, name it with a const in code first.`;
   return (
-    <div className="absolute right-0 h-[28px] -mt-[14px] max-w-[55%] pr-4 flex items-center justify-end text-[11px] pointer-events-none" style={{ top: y }} data-output={output.label}>
-      {labelled && <span className={clsx("truncate", cable ? "font-mono text-ink-200" : "text-ink-400")}>{output.label}</span>}
+    <div className="absolute right-0 h-7 -mt-3.5 max-w-[55%] pr-4 flex items-center justify-end text-xs pointer-events-none" style={{ top: y }} data-output={output.label}>
+      {labelled && <span className={clsx("truncate", cable ? "text-fg-muted" : "text-fg-faint")}>{output.label}</span>}
       {cable ? (
         <button
           className={clsx(
-            "absolute -right-[9px] top-1/2 -mt-[9px] size-[18px] grid place-items-center rounded-full group/outlet",
+            "absolute -right-3 top-1/2 -mt-3 size-6 grid place-items-center rounded-full group/outlet",
             editable ? "cursor-crosshair pointer-events-auto" : "pointer-events-none",
           )}
           data-outlet={node.outlet!}
@@ -848,25 +877,23 @@ function OutputPortView({
           data-port-id={output.id}
           data-kind={output.kind}
           aria-label={`Connect ${node.outlet}`}
-          title={editable ? `Drag onto a knob to connect ${node.outlet}` : "Fix the code errors before connecting."}
+          title={editable ? `Drag onto a knob to connect ${node.outlet}` : (why ?? "")}
           disabled={!editable}
           onPointerDown={(e) => onCable(node, output, e)}
         >
-          <span
-            className="size-3 rounded-full transition-transform group-hover/outlet:scale-125"
-            style={{ background: KIND_COLOR[output.kind], boxShadow: `0 0 0 2px var(--color-ink-800), 0 0 0 4px color-mix(in oklab, ${KIND_COLOR[output.kind]} 25%, transparent)` }}
-          />
+          {/* Where a cable starts: filled, with a ring that says it can be dragged. */}
+          <span className={clsx(SHAPE[output.kind], "bg-fg-muted shadow-[0_0_0_2px_var(--color-raised),0_0_0_3.5px_var(--color-line-strong)] transition-transform duration-80 group-hover/outlet:scale-125")} />
         </button>
       ) : (
         <span
-          className="absolute -right-[9px] top-1/2 -mt-[9px] size-[18px] grid place-items-center cursor-help pointer-events-auto"
+          className="absolute -right-3 top-1/2 -mt-3 size-6 grid place-items-center cursor-help pointer-events-auto"
           data-port="out"
           data-port-id={output.id}
           data-kind={output.kind}
           title={unnamed}
           onPointerDown={(e) => e.button === 0 && output.kind !== "notes" && toast(unnamed)}
         >
-          <span className="size-3 rounded-full" style={{ background: filled ? KIND_COLOR[output.kind] : "var(--color-ink-800)", boxShadow: `inset 0 0 0 2px ${KIND_COLOR[output.kind]}, 0 0 0 2px var(--color-ink-800)` }} />
+          <span className={mark(output.kind, filled)} />
         </span>
       )}
     </div>
@@ -877,6 +904,7 @@ function InputRow({
   nodeKey,
   knobKey,
   node,
+  owner,
   input,
   filled,
   session,
@@ -886,6 +914,8 @@ function InputRow({
   nodeKey: string;
   knobKey: (id: string) => string;
   node: ViewNode;
+  /** What the card is called, to name an edit of its knobs ("Reverb size"). */
+  owner: string;
   input: InputPort;
   filled: boolean;
   session: number;
@@ -893,36 +923,37 @@ function InputRow({
   editable: boolean;
 }) {
   const toast = useStore((s) => s.toast);
+  const tracks = useContext(Tracks);
   const knob = input.knob ? node.knobs.find((k) => k.id === input.knob) : undefined;
   // Keyed by the knob alone: a save that breaks the code mid-drag must not remount it, which
   // would cancel the drag (WRITE-22: the server keeps it, and a release then is saved once the
   // code compiles); nor may one that renumbers it (see `held`).
   if (knob) {
     const key = knobKey(knob.id);
-    return <KnobControl key={key} mountKey={key} nodeKey={nodeKey} knob={knob} port={input.id} label={input.label} session={session} revision={revision} editable={editable} />;
+    return (
+      <KnobControl key={key} mountKey={key} nodeKey={nodeKey} knob={knob} port={input.id} label={controlLabel(input.label, tracks)} owner={owner} session={session} revision={revision} editable={editable} />
+    );
   }
 
   const inlet = input.inlet ? node.inlets.find((i) => i.id === input.inlet) : undefined;
   if (inlet) {
+    // The knob comes back in its place: that says it, so no toast does.
     const disconnect = () =>
-      graphApi
-        .disconnect(session, revision, inlet.id)
-        .then((c) => toast(`${c.file}: ${c.before} → ${c.after}`))
-        .catch((error) => toast(error instanceof Error ? error.message : String(error)));
+      graphApi.disconnect(session, revision, inlet.id, { name: `disconnecting ${inlet.name}` }).catch((error) => toast(error instanceof Error ? error.message : String(error)));
     return (
-      <div className="relative h-[28px] pl-4 pr-3.5 flex items-center gap-1.5 text-xs min-w-0" data-inlet={inlet.label}>
+      <div className="relative h-[28px] pl-4 pr-3 flex items-center gap-1.5 text-xs min-w-0" data-inlet={inlet.label}>
         <Dot id={input.id} kind={input.kind} filled />
-        <span className="text-ink-400 truncate">{inlet.label}</span>
-        <span className="text-ink-500">←</span>
-        <span className="font-mono text-ink-200 truncate">{inlet.name}</span>
+        <span className="text-fg-muted truncate">{controlLabel(inlet.label, tracks)}</span>
+        {/* Its home is a cable (HOME-1): what drives it, in place of a knob. */}
+        <span className="text-fg-muted truncate" title={`Driven by ${inlet.name}.`}>← {inlet.name}</span>
         <button
-          className="ml-auto shrink-0 size-5 grid place-items-center rounded text-ink-400 hover:text-ink-100 hover:bg-black/5 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
+          className="ml-auto shrink-0 size-ctl-xs grid place-items-center rounded-sm text-fg-faint hover:text-fg hover:bg-hover disabled:text-fg-off disabled:pointer-events-none cursor-pointer transition-colors duration-80 ease-linear"
           title={`Disconnect ${inlet.name} (writes the input's default)`}
           aria-label={`Disconnect ${inlet.name} from ${inlet.label}`}
           disabled={!editable}
           onClick={() => void disconnect()}
         >
-          <X className="size-3" />
+          <X size={12} />
         </button>
       </div>
     );
@@ -937,11 +968,11 @@ function InputRow({
         title={`${source.reason}${source.file ? `\n${source.file}:${source.line}` : ""}\n${source.expression}`}
       >
         <Dot id={input.id} kind={input.kind} filled={false} />
-        <div className="flex items-center justify-between gap-2 text-[11px]">
-          <span className="text-ink-300 truncate">{source.label}</span>
-          <span className="shrink-0 text-[10px] text-ink-400">edit in code</span>
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span className="text-fg-muted truncate">{controlLabel(source.label, tracks)}</span>
+          <span className="shrink-0 text-fg-faint">edit in code</span>
         </div>
-        <div className="font-mono text-[11px] text-ink-200 truncate">{source.expression}</div>
+        <div data-code className="font-mono text-xs text-fg truncate">{source.expression}</div>
       </div>
     );
   }
@@ -949,7 +980,7 @@ function InputRow({
   return (
     <div className="relative h-[28px] pl-4 pr-3 flex items-center text-xs min-w-0" data-input={input.label}>
       <Dot id={input.id} kind={input.kind} filled={filled} />
-      <span className="text-ink-300 truncate">{input.label}</span>
+      <span className="text-fg-muted truncate">{controlLabel(input.label, tracks)}</span>
     </div>
   );
 }
@@ -978,6 +1009,7 @@ function KnobControl({
   knob,
   port,
   label,
+  owner,
   session,
   revision,
   editable,
@@ -987,12 +1019,16 @@ function KnobControl({
   nodeKey: string;
   knob: KnobInfo;
   port: string;
+  /** Its name on screen ("Feedback", "Hats volume"). */
   label: string;
+  /** Its card's ("Delay"). */
+  owner: string;
   session: number;
   revision: number;
   editable: boolean;
 }) {
   const toast = useStore((s) => s.toast);
+  const why = useContext(Locked);
   const [value, setValue] = useState(knob.value);
   const [saving, setSaving] = useState(false);
   // Each gesture captures its identity, revision and value mapping. A save elsewhere
@@ -1010,8 +1046,16 @@ function KnobControl({
   const keepalive = useRef<number | null>(null);
   const mounted = useRef(true);
   const committing = useRef(false);
-  // The knob's menu (right-click), where it is opened.
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  // The knob's menu (right-click), anchored to the knob: its left edge, below it (or above it, the room).
+  const [menu, setMenu] = useState<{ x: number; y: number; above: number } | null>(null);
+  const svg = useRef<SVGSVGElement>(null);
+  const readout = useRef<HTMLSpanElement>(null);
+  // A run of steps (the wheel, ↑ ↓) is one gesture, written once they stop for a moment.
+  const idle = useRef<number | null>(null);
+  // A value being typed in place of the readout (taste.md §2.14): its text, the readout's width, and
+  // whether Enter found it unreadable. The ref says whether it is still open, for a late blur.
+  const [typing, setTyping] = useState<{ text: string; width: number; bad: boolean } | null>(null);
+  const typingOpen = useRef(false);
 
   const stopKeepalive = () => {
     if (keepalive.current != null) clearInterval(keepalive.current);
@@ -1024,6 +1068,8 @@ function KnobControl({
       mounted.current = false;
       if (timer.current != null) clearTimeout(timer.current);
       timer.current = null;
+      if (idle.current != null) clearTimeout(idle.current);
+      idle.current = null;
       stopKeepalive();
       pending.current = null;
       dragging.current = null;
@@ -1116,10 +1162,12 @@ function KnobControl({
       // Returning to the starting value still needs a reliable commit: the
       // final audition message may have been dropped by the audio queue.
       gesture.submitted = true;
-      const change = await graphApi.set(gesture.session, gesture.revision, gesture.knob.id, gesture.token, v, gesture.start);
+      // Its undo step's name: the card and the control ("Delay feedback"), or a channel's own ("Hats volume").
+      const name = knob.label.includes(".") ? label : `${owner} ${label.toLowerCase()}`;
+      const change = await graphApi.set(gesture.session, gesture.revision, gesture.knob.id, gesture.token, v, gesture.start, { name });
       // The code doesn't compile right now: the value plays on, and is saved once it does (C5).
-      if (change.pending) toast(`${knob.file}:${knob.line}: saved once the code compiles again`);
-      else if (change.before !== change.after) toast(`${change.file}: ${change.before} → ${change.after}`);
+      // The knob shows the value, so a change makes no toast (taste.md §2.14); one that waits for the code to compile says so.
+      if (change.pending) toast(`${label} is saved once the code compiles again`);
       refresh();
     } catch (error) {
       // Rejections restore audio on the server. An owner-checked cancellation
@@ -1158,27 +1206,115 @@ function KnobControl({
     graphApi
       .automate(session, revision, knob.id)
       .then((r) => {
-        toast(`Automating ${r.name} in a new lane, ${r.lane.lane}`, undoAction(session, r.revision));
+        toast(`Automating ${r.name} in a new lane`, undoAction(session, r.revision));
         laneMade(r.lane.module, r.lane.lane);
       })
       .catch((error) => toast(error instanceof Error ? error.message : String(error)));
   };
 
+  /** A drag (or a run of steps) begins: one gesture, previewed as it goes and kept alive on the server. */
+  const start = () => {
+    // A run of steps still open goes on as this drag: one gesture, one edit.
+    if (idle.current != null) clearTimeout(idle.current);
+    idle.current = null;
+    if (dragging.current || !editable || committing.current) return;
+    dragging.current = begin();
+    latest.current = knob.value;
+    stopKeepalive();
+    keepalive.current = window.setInterval(() => {
+      const gesture = dragging.current;
+      // Only a drag that began on the server, and has nothing on its way already.
+      if (gesture && gesture.previewed && !gesture.failed && !gesture.cancelled && timer.current == null) preview(gesture, latest.current);
+    }, 2000);
+  };
+  /** Let go: what it shows is written. */
+  const end = () => {
+    stopKeepalive();
+    const gesture = dragging.current;
+    if (!gesture) return;
+    dragging.current = null;
+    if (timer.current != null) clearTimeout(timer.current);
+    flushPreview();
+    void commit(gesture, latest.current);
+  };
+  /** `n` steps from where it is (taste.md §5.2), written as one edit half a second after the last. */
+  const step = (n: number) => {
+    if (!dragging.current) start();
+    const gesture = dragging.current;
+    if (!gesture) return;
+    change(Math.min(1, Math.max(0, toUnit(gesture.knob, stepValue(gesture.knob, latest.current, n)))));
+    if (idle.current != null) clearTimeout(idle.current);
+    idle.current = window.setTimeout(() => {
+      idle.current = null;
+      end();
+    }, 500);
+  };
+  /** Type a value: the readout turns into a field of its size, its text selected. */
+  const type = () => {
+    // Steps just made are written first.
+    if (idle.current != null) {
+      clearTimeout(idle.current);
+      idle.current = null;
+      end();
+    }
+    if (!editable || dragging.current) return;
+    typingOpen.current = true;
+    setTyping({ text: display(knob, value), width: Math.max(48, Math.ceil(readout.current?.getBoundingClientRect().width ?? 0) + 8), bad: false });
+  };
+  const closeTyping = () => {
+    typingOpen.current = false;
+    setTyping(null);
+  };
+  /** Write what was typed, if it reads as a value; false (and the field stays) if it doesn't. */
+  const typed = (text: string) => {
+    const v = parseValue(knob, text);
+    if (v === null) return false;
+    closeTyping();
+    if (v !== knob.value) change(Math.min(1, Math.max(0, toUnit(knob, v))));
+    return true;
+  };
+
   const descriptor = dragging.current?.knob ?? knob;
   // A drag already in progress goes on when the code breaks under it; only new ones wait.
   const disabled = (!editable && !dragging.current) || saving;
+  // Drawn from the middle when its span is centred on zero (a pan, a bipolar amount).
+  const range = span(descriptor);
+  const bipolar = range.lo < 0 && range.hi > 0 && Math.abs(range.lo + range.hi) <= 1e-9 * range.hi;
   const shared = knob.uses > 1 ? `Shared value: changes all ${knob.uses} uses. ` : "";
   // A control the call leaves out plays its default until its first edit writes it into the call (PKG-3).
   const written = knob.written ? `written as ${knob.literal}` : "the default: not written in the code yet, turning it writes it in";
   const title = !editable
-    ? "Fix the code errors before editing this control."
-    : `${shared}${knob.file}:${knob.line}  (${written})\nRight-click to automate it or reset it`;
+    ? `${why ?? "It can't be edited right now"}.`
+    : `${shared}${knob.file}:${knob.line}  (${written})\nDrag (⇧ for fine) · double-click to type a value · ⌥-click to reset · right-click to automate it`;
+  const unit = Math.min(1, Math.max(0, toUnit(descriptor, value)));
+  const reset = descriptor.default != null ? Math.min(1, Math.max(0, toUnit(descriptor, descriptor.default))) : undefined;
+  /** A drag let go of without its pointer (lost, or cancelled): the knob goes back to where it was. */
+  const abandon = () => {
+    stopKeepalive();
+    const gesture = dragging.current;
+    if (!gesture) return;
+    dragging.current = null;
+    pending.current = null;
+    if (timer.current != null) clearTimeout(timer.current);
+    timer.current = null;
+    setValue(knob.value);
+    latest.current = knob.value;
+    committing.current = true;
+    setSaving(true);
+    void cancel(gesture).finally(() => {
+      committing.current = false;
+      if (mounted.current) setSaving(false);
+    });
+  };
+  // The whole row drags it, its label and value too, not only the 28px circle (taste.md §2.2).
+  const grip = useKnobDrag({ value: unit, reset, disabled, onChange: change, onStart: start, onEnd: end, onCancel: abandon, focus: () => svg.current?.focus({ preventScroll: true }) });
 
   return (
     <div
       onContextMenu={(e) => {
         e.preventDefault();
-        if (!dragging.current) setMenu({ x: e.clientX, y: e.clientY });
+        const r = e.currentTarget.getBoundingClientRect();
+        if (!dragging.current) setMenu({ x: r.left, y: r.bottom + 4, above: r.top - 4 });
       }}
       data-knob={knob.label}
       data-knob-id={editable ? knob.id : undefined}
@@ -1187,65 +1323,91 @@ function KnobControl({
       data-default={!knob.written || undefined}
       aria-disabled={disabled}
       title={title}
+      {...grip.handlers}
+      // A double-click anywhere on it types a value (taste.md §2.14), but on its input's port.
+      onDoubleClick={(e) => e.currentTarget.contains(e.target as Node) && !(e.target as HTMLElement).closest("[data-port-dot], input") && type()}
       className={clsx(
-        "group/knob relative h-[40px] pl-4 pr-4 flex items-center gap-2 min-w-0 transition-colors",
-        "[[data-cabling]_&[data-knob-id]]:bg-pop-500/[0.06] [[data-cabling]_&[data-knob-id]:hover]:bg-pop-500/[0.14]",
+        "group/knob relative h-10 pl-4 pr-4 flex items-center gap-2 min-w-0 transition-colors duration-80",
+        !disabled && "cursor-ns-resize touch-none",
+        // While a cable is dragged, the knobs it can land on: washed, and the one under it more.
+        "[[data-cabling]_&[data-knob-id]]:bg-accent-wash [[data-cabling]_&[data-knob-id]:hover]:bg-accent-soft",
       )}
     >
       <Dot
         id={port}
         kind="control"
         filled={false}
-        className="[[data-cabling]_[data-knob-id]>&]:scale-[1.35] [[data-cabling]_[data-knob-id]>&]:![box-shadow:inset_0_0_0_2px_var(--color-pop-500),0_0_0_3px_color-mix(in_oklab,var(--color-pop-500)_30%,transparent)]"
+        className="[[data-cabling]_[data-knob-id]>&]:scale-[1.35] [[data-cabling]_[data-knob-id]>&]:![box-shadow:inset_0_0_0_2px_var(--color-accent),0_0_0_3px_var(--color-accent-range)]"
       />
-      <div className="flex-1 min-w-0 leading-tight">
-        <div className="text-xs text-ink-300 truncate">{label}</div>
-        {knob.uses > 1 && <div className="text-[9px] text-pop-500">shared ×{knob.uses}</div>}
+      <div className="flex-1 min-w-0">
+        <div className="text-xs text-fg-muted truncate">{label}</div>
+        {knob.uses > 1 && <div className="text-xs text-fg-faint">shared ×{knob.uses}</div>}
       </div>
-      <span className={clsx("shrink-0 text-[11px] tabular-nums", knob.written ? "text-ink-400" : "text-ink-500 italic")}>{display(descriptor, value)}</span>
-      <div inert={disabled} className={clsx("shrink-0", disabled && "opacity-45 pointer-events-none")}>
+      {/* Its home (HOME-1): a value the code leaves out plays its default, in muted text; written, in full. */}
+      {typing ? (
+        <span className="relative shrink-0">
+          <input
+            autoFocus
+            data-testid="knob-type-in"
+            aria-label={`${label}: type a value`}
+            aria-invalid={typing.bad || undefined}
+            value={typing.text}
+            spellCheck={false}
+            style={{ width: typing.width }}
+            onFocus={(e) => e.currentTarget.select()}
+            onChange={(e) => setTyping({ ...typing, text: e.target.value, bad: false })}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") {
+                if (!typed(typing.text)) setTyping({ ...typing, bad: true });
+              } else if (e.key === "Escape") closeTyping();
+              else if (e.key === "Tab") {
+                // On to the next control (or back, with ⇧), as a form's fields go.
+                e.preventDefault();
+                if (!typed(typing.text)) return setTyping({ ...typing, bad: true });
+                const all = [...document.querySelectorAll<SVGElement>("[data-knob] svg[role=slider][tabindex='0']")];
+                const at = svg.current ? all.indexOf(svg.current) : -1;
+                requestAnimationFrame(() => all[at + (e.shiftKey ? -1 : 1)]?.focus());
+              }
+            }}
+            // A click away writes what reads as a value, and drops what doesn't.
+            onBlur={() => typingOpen.current && !typed(typing.text) && closeTyping()}
+            onPointerDown={(e) => e.stopPropagation()}
+            className={clsx(
+              "h-5 -my-0.5 px-1 rounded-sm bg-raised border text-right text-xs text-fg outline-none",
+              typing.bad ? "border-danger" : "border-accent",
+            )}
+          />
+          {typing.bad && (
+            <span role="alert" className="absolute right-0 top-full mt-0.5 z-10 whitespace-nowrap text-xs text-danger">
+              Type a value, like −6, 2k or 120 ms
+            </span>
+          )}
+        </span>
+      ) : (
+        <span
+          ref={readout}
+          className={clsx("shrink-0 text-xs tabular-nums", knob.written ? "text-fg" : "text-fg-muted")}
+          title={knob.written ? undefined : "Default. Not written in your code yet: changing it writes it in."}
+        >
+          {display(descriptor, value)}
+        </span>
+      )}
+      <HomeMarker home={knob.home} label={label} />
+      {/* Inert only while it can't be edited: a save between steps mustn't take the focus from it. */}
+      <div inert={!editable && !dragging.current} className={clsx("shrink-0", disabled && "pointer-events-none")}>
         <MiniKnob
-          value={Math.min(1, Math.max(0, toUnit(descriptor, value)))}
+          value={unit}
+          bipolar={bipolar}
+          disabled={disabled}
+          readout={display(descriptor, value)}
           label={label}
-          reset={descriptor.default != null ? Math.min(1, Math.max(0, toUnit(descriptor, descriptor.default))) : undefined}
-          onStart={() => {
-            if (!editable || committing.current) return;
-            dragging.current = begin();
-            latest.current = knob.value;
-            stopKeepalive();
-            keepalive.current = window.setInterval(() => {
-              const gesture = dragging.current;
-              // Only a drag that began on the server, and has nothing on its way already.
-              if (gesture && gesture.previewed && !gesture.failed && !gesture.cancelled && timer.current == null) preview(gesture, latest.current);
-            }, 2000);
-          }}
+          reset={reset}
+          svg={svg}
+          pointer={grip.pointer}
           onChange={change}
-          onEnd={() => {
-            stopKeepalive();
-            const gesture = dragging.current;
-            if (!gesture) return;
-            dragging.current = null;
-            if (timer.current != null) clearTimeout(timer.current);
-            flushPreview();
-            void commit(gesture, latest.current);
-          }}
-          onCancel={() => {
-            stopKeepalive();
-            const gesture = dragging.current;
-            if (!gesture) return;
-            dragging.current = null;
-            pending.current = null;
-            if (timer.current != null) clearTimeout(timer.current);
-            timer.current = null;
-            setValue(knob.value);
-            latest.current = knob.value;
-            committing.current = true;
-            setSaving(true);
-            void cancel(gesture).finally(() => {
-              committing.current = false;
-              if (mounted.current) setSaving(false);
-            });
-          }}
+          onStep={step}
+          onType={type}
         />
       </div>
       {menu && (
@@ -1281,7 +1443,7 @@ function KnobMenu({
   knob: KnobInfo;
   label: string;
   value: number;
-  at: { x: number; y: number };
+  at: { x: number; y: number; above: number };
   editable: boolean;
   onAutomate: () => void;
   onReset?: () => void;
@@ -1289,7 +1451,7 @@ function KnobMenu({
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: at.x, top: at.y });
-  const locked = "Fix the code first: it doesn't compile right now";
+  const locked = useContext(Locked) ?? "It can't be edited right now";
   const sentence = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
   const items = [
     {
@@ -1316,15 +1478,15 @@ function KnobMenu({
   ];
   const [active, setActive] = useState(() => items.findIndex((i) => !i.disabled));
 
-  // Opened at the pointer, kept on screen.
+  // Opened at the knob, below it unless there's no room, kept on screen; it stays where it opened.
   useLayoutEffect(() => {
     const r = box.current!.getBoundingClientRect();
     setPos({
       left: Math.max(8, Math.min(at.x, window.innerWidth - r.width - 8)),
-      top: at.y + r.height + 8 > window.innerHeight ? Math.max(8, at.y - r.height) : at.y,
+      top: at.y + r.height + 8 > window.innerHeight ? Math.max(8, at.above - r.height) : at.y,
     });
     box.current!.focus({ preventScroll: true });
-  }, [at.x, at.y]);
+  }, [at.x, at.y, at.above]);
   useEffect(() => {
     const outside = (e: Event) => !box.current?.contains(e.target as Node) && onClose();
     document.addEventListener("pointerdown", outside, true);
@@ -1354,7 +1516,7 @@ function KnobMenu({
       data-testid="knob-menu"
       aria-label={`${label} knob`}
       style={pos}
-      className="fixed z-50 w-[272px] rounded-2xl bg-ink-850 ring-1 ring-black/10 shadow-2xl shadow-black/20 overflow-hidden rise outline-none cursor-default"
+      className="fixed z-50 w-[272px] p-1 rounded-md bg-raised shadow-pop animate-rise outline-none cursor-default"
       onContextMenu={(e) => e.preventDefault()}
       onKeyDown={(e) => {
         e.stopPropagation();
@@ -1366,111 +1528,251 @@ function KnobMenu({
         e.preventDefault();
       }}
     >
-      <div className="px-4 pt-3 pb-2 flex items-baseline gap-2 border-b border-black/[0.06] bg-ink-800">
-        <span className="text-[13px] font-semibold text-ink-100 truncate">{label}</span>
-        <span className="ml-auto shrink-0 text-xs text-ink-400 tabular-nums">{display(knob, value)}</span>
+      <div className="h-ctl px-2 flex items-center gap-2">
+        <span className="text-sm font-semibold text-fg truncate">{label}</span>
+        <span className="ml-auto shrink-0 text-xs text-fg-muted">{display(knob, value)}</span>
       </div>
-      <div className="py-1.5">
-        {items.map((item, k) => (
-          <div
-            key={item.id}
-            role="menuitem"
-            data-menu-item={item.id}
-            aria-disabled={item.disabled || undefined}
-            onPointerEnter={() => !item.disabled && setActive(k)}
-            onClick={() => !item.disabled && item.run()}
-            className={clsx(
-              "mx-1.5 px-2.5 py-2 rounded-xl flex items-start gap-3 transition-colors",
-              item.disabled ? "opacity-55" : clsx("cursor-pointer", k === active ? "bg-ink-700/70" : "hover:bg-ink-700/40"),
-            )}
-          >
-            <span
-              className="mt-px size-7 shrink-0 rounded-[9px] grid place-items-center"
-              style={{ background: `color-mix(in oklab, ${KIND_COLOR.control} 14%, var(--color-ink-800))`, color: KIND_COLOR.control }}
-            >
-              <item.Icon className="size-3.5" />
-            </span>
-            <span className="flex-1 min-w-0">
-              <span className="block text-[13px] font-medium text-ink-100 leading-5">{item.title}</span>
-              <span data-detail className="block text-xs text-ink-400 leading-4">{item.detail}</span>
-            </span>
-          </div>
-        ))}
-      </div>
-      <div className="h-8 px-4 flex items-center gap-2 border-t border-black/[0.06] bg-ink-800 text-[11px] text-ink-400">
-        <span className="font-mono truncate">{knob.file}:{knob.line}</span>
-        <span className="ml-auto shrink-0 truncate">{knob.written ? <span className="font-mono">{knob.literal}</span> : <i>its default</i>}</span>
+      <div className="h-px my-1 bg-line" />
+      {items.map((item, k) => (
+        <div
+          key={item.id}
+          role="menuitem"
+          data-menu-item={item.id}
+          aria-disabled={item.disabled || undefined}
+          onPointerEnter={() => !item.disabled && setActive(k)}
+          onClick={() => !item.disabled && item.run()}
+          className={clsx(
+            "min-h-ctl px-2 py-1.5 rounded-sm flex items-start gap-2 transition-colors duration-80 ease-linear",
+            item.disabled ? "text-fg-off" : clsx("cursor-pointer text-fg", k === active && "bg-accent-soft"),
+          )}
+        >
+          <item.Icon size={14} className={clsx("mt-px shrink-0", !item.disabled && "text-fg-muted")} />
+          <span className="flex-1 min-w-0">
+            <span className="block text-sm">{item.title}</span>
+            {/* The detail decides the choice: what it will do, or why it can't. */}
+            <span data-detail className="block text-xs text-fg-muted">{item.detail}</span>
+          </span>
+        </div>
+      ))}
+      <div className="h-px my-1 bg-line" />
+      <div className="h-ctl-sm px-2 flex items-center gap-2 text-xs text-fg-faint">
+        <span data-code className="font-mono truncate">{knob.file}:{knob.line}</span>
+        <span className="ml-auto shrink-0 truncate">{knob.written ? <span data-code className="font-mono">{knob.literal}</span> : "its default"}</span>
       </div>
     </div>,
     document.body,
   );
 }
 
-/** A small rotary knob, 0..1: drag up and down (160px is the whole range), double-click to reset (its default, else the middle). */
-function MiniKnob({
+/**
+ * Where a value lives, when that isn't the code (HOME-1, taste.md §2.10): a lane, a filled accent
+ * circle; a plugin's state, a small square. Code, written or inherited, has none.
+ */
+function HomeMarker({ home, label }: { home: Home; label: string }) {
+  if (home === "lane") return <span className="shrink-0 size-[5px] rounded-full bg-accent" title={`Follows the ${label} lane.`} />;
+  if (home === "state") return <span className="shrink-0 size-1 bg-fg-faint" title="Saved in the plugin's state." />;
+  return null;
+}
+
+/** Pixels of drag for a knob's whole range (taste.md KN-1), and what ⇧ scales a drag by. */
+const THROW = 300;
+const FINE = 0.1;
+/** Wheel travel (pixels) that is one step, as a mouse wheel's notch is. */
+const NOTCH = 40;
+
+/**
+ * A knob's drag (taste.md §5.2), on whatever element holds it (its whole row): drag up and down
+ * (300px is the whole range, ⇧ for a tenth of that), ⌥-click to reset (its default, else the
+ * middle). Not from its input's port, nor from a field typed in. `pointer` is where the pointer is
+ * while it drags, for the value bubble.
+ */
+function useKnobDrag({
   value,
-  label,
   reset = 0.5,
+  disabled,
   onChange,
   onStart,
   onEnd,
   onCancel,
+  focus,
 }: {
   value: number;
-  label: string;
-  /** Where a double-click puts it: its declared default, else the middle. */
   reset?: number;
+  disabled: boolean;
   onChange: (v: number) => void;
   onStart: () => void;
   onEnd: () => void;
   onCancel: () => void;
+  /** Give the knob the keyboard, for ↑ ↓ after a drag. */
+  focus: () => void;
 }) {
-  const drag = useRef<{ pointer: number; y: number; v: number } | null>(null);
-  const finish = (pointer: number, cancelled: boolean) => {
-    if (drag.current?.pointer !== pointer) return;
+  // The drag: where the pointer was last, and where that has turned the knob. Each move turns it by
+  // its own distance, coarse or (⇧) fine, so pressing or letting go of ⇧ never makes it jump.
+  const drag = useRef<{ pointer: number; y: number; u: number } | null>(null);
+  const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null);
+  const finish = (id: number, cancelled: boolean) => {
+    if (drag.current?.pointer !== id) return;
     drag.current = null;
+    setPointer(null);
     if (cancelled) onCancel();
     else onEnd();
   };
+  const handlers = {
+    onPointerDown: (e: React.PointerEvent<HTMLElement>) => {
+      // Only on the row itself: its menu is a portal, whose events reach the row through React.
+      if (disabled || drag.current || e.button !== 0 || !e.currentTarget.contains(e.target as Node)) return;
+      if ((e.target as HTMLElement).closest("[data-port-dot], input, button")) return;
+      // ⌥-click: back to its default, as one edit (Logic).
+      if (e.altKey) {
+        e.preventDefault();
+        if (Math.abs(reset - value) > 1e-6) onChange(reset);
+        return;
+      }
+      e.currentTarget.setPointerCapture(e.pointerId);
+      drag.current = { pointer: e.pointerId, y: e.clientY, u: value };
+      setPointer({ x: e.clientX, y: e.clientY });
+      focus();
+      onStart();
+    },
+    onPointerMove: (e: React.PointerEvent<HTMLElement>) => {
+      const d = drag.current;
+      if (!d || d.pointer !== e.pointerId) return;
+      setPointer({ x: e.clientX, y: e.clientY });
+      d.u = Math.min(1, Math.max(0, d.u + ((d.y - e.clientY) / THROW) * (e.shiftKey ? FINE : 1)));
+      d.y = e.clientY;
+      if (Math.abs(d.u - value) > (e.shiftKey ? 0.0002 : 0.002)) onChange(d.u);
+    },
+    onPointerUp: (e: React.PointerEvent<HTMLElement>) => finish(e.pointerId, false),
+    onPointerCancel: (e: React.PointerEvent<HTMLElement>) => finish(e.pointerId, true),
+    onLostPointerCapture: (e: React.PointerEvent<HTMLElement>) => finish(e.pointerId, true),
+  };
+  return { pointer, handlers };
+}
+
+/**
+ * A small rotary knob, 0..1: drawn, with the keys and the wheel of taste.md §5.2 (its drag is the
+ * row's, see `useKnobDrag`): Return to type a value, the wheel or ↑ ↓ (⇧ for ten) to step it, ⌫ to
+ * reset. Its arc runs from the minimum, or from 12 o'clock when it is bipolar; while dragged
+ * (`pointer`) it is lit and its value shows above the pointer.
+ */
+function MiniKnob({
+  value,
+  bipolar,
+  disabled,
+  readout,
+  label,
+  reset = 0.5,
+  svg,
+  pointer,
+  onChange,
+  onStep,
+  onType,
+}: {
+  value: number;
+  bipolar: boolean;
+  disabled: boolean;
+  /** The value as it reads, for the bubble while dragging. */
+  readout: string;
+  label: string;
+  /** Where ⌫ puts it: its declared default, else the middle. */
+  reset?: number;
+  svg?: React.RefObject<SVGSVGElement | null>;
+  /** Where the pointer is while it is dragged. */
+  pointer: { x: number; y: number } | null;
+  onChange: (v: number) => void;
+  /** `n` steps up (negative: down), from the wheel or the arrow keys. */
+  onStep: (n: number) => void;
+  /** Type a value in place of the readout. */
+  onType: () => void;
+}) {
+  const own = useRef<SVGSVGElement>(null);
+  const el = svg ?? own;
+  const wheel = useRef(0);
+  const step = useRef(onStep);
+  step.current = onStep;
+  const dragging = useRef(false);
+  dragging.current = !!pointer;
+  // The wheel steps it (one step a notch); ⌘ or ⌃ with it zooms the canvas instead. Not passive, so
+  // the canvas under it doesn't scroll as well.
+  useEffect(() => {
+    const knob = el.current;
+    if (!knob || disabled) return;
+    const turn = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey || dragging.current) return;
+      e.preventDefault();
+      const d = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+      wheel.current -= e.deltaMode === 1 ? d * NOTCH : d;
+      const n = Math.trunc(wheel.current / NOTCH);
+      if (n === 0) return;
+      wheel.current -= n * NOTCH;
+      step.current(n);
+    };
+    knob.addEventListener("wheel", turn, { passive: false });
+    return () => knob.removeEventListener("wheel", turn);
+  }, [el, disabled]);
   const a0 = -135, a1 = 135;
   const angle = a0 + (a1 - a0) * value;
-  const r = 11, c = 15;
+  const from = bipolar ? 0 : a0;
+  const r = 11, c = 14;
   const at = (a: number, radius = r) => [c + radius * Math.sin((a * Math.PI) / 180), c - radius * Math.cos((a * Math.PI) / 180)];
   const arc = (from: number, to: number) => {
     const [x0, y0] = at(from), [x1, y1] = at(to);
     return `M ${x0} ${y0} A ${r} ${r} 0 ${to - from > 180 ? 1 : 0} 1 ${x1} ${y1}`;
   };
-  const [tx, ty] = at(angle, 5.5);
+  const [px, py] = at(angle, 3), [tx, ty] = at(angle, 8.5);
   return (
     <svg
-      width="30"
-      height="30"
+      ref={el}
+      width="28"
+      height="28"
       role="slider"
+      tabIndex={disabled ? -1 : 0}
       aria-label={label}
       aria-valuemin={0}
       aria-valuemax={1}
       aria-valuenow={Number(value.toFixed(3))}
-      className="block cursor-ns-resize touch-none"
-      onPointerDown={(e) => {
-        if (drag.current || e.button !== 0) return;
-        e.currentTarget.setPointerCapture(e.pointerId);
-        drag.current = { pointer: e.pointerId, y: e.clientY, v: value };
-        onStart();
+      aria-valuetext={readout}
+      className="block rounded-full"
+      onKeyDown={(e) => {
+        if (e.metaKey || e.ctrlKey || e.altKey || pointer) return;
+        if (e.key === "ArrowUp" || e.key === "ArrowDown") onStep((e.key === "ArrowUp" ? 1 : -1) * (e.shiftKey ? 10 : 1));
+        else if (e.key === "Enter") onType();
+        else if (e.key === "Backspace" || e.key === "Delete") {
+          if (Math.abs(reset - value) > 1e-6) onChange(reset);
+        } else return;
+        e.preventDefault();
+        e.stopPropagation();
       }}
-      onPointerMove={(e) => {
-        if (!drag.current || drag.current.pointer !== e.pointerId) return;
-        const v = Math.min(1, Math.max(0, drag.current.v + (drag.current.y - e.clientY) / 160));
-        if (Math.abs(v - value) > 0.002) onChange(v);
-      }}
-      onPointerUp={(e) => finish(e.pointerId, false)}
-      onPointerCancel={(e) => finish(e.pointerId, true)}
-      onLostPointerCapture={(e) => finish(e.pointerId, true)}
-      onDoubleClick={() => onChange(reset)}
     >
-      <path d={arc(a0, a1)} stroke="var(--color-ink-600)" strokeWidth="3" fill="none" strokeLinecap="round" />
-      {value > 0.005 && <path d={arc(a0, angle)} stroke={KIND_COLOR.control} strokeWidth="3" fill="none" strokeLinecap="round" />}
-      <circle cx={c} cy={c} r="6.5" fill="var(--color-ink-700)" />
-      <line x1={c} y1={c} x2={tx} y2={ty} stroke="var(--color-ink-200)" strokeWidth="1.75" strokeLinecap="round" />
+      {/* The track, the value from its start, and the pointer (taste.md §2.8). */}
+      <path
+        d={arc(a0, a1)}
+        className={disabled ? "stroke-line" : clsx("stroke-line-strong", !pointer && "group-hover/knob:stroke-fg-off")}
+        strokeWidth="2"
+        fill="none"
+        strokeLinecap="round"
+      />
+      {Math.abs(angle - from) > 1.5 && (
+        <path
+          d={arc(Math.min(from, angle), Math.max(from, angle))}
+          className={disabled ? "stroke-fg-off" : pointer ? "stroke-accent" : "stroke-fg"}
+          strokeWidth="2"
+          fill="none"
+          strokeLinecap="round"
+        />
+      )}
+      <line x1={px} y1={py} x2={tx} y2={ty} className={disabled ? "stroke-fg-off" : "stroke-fg-strong"} strokeWidth="1.5" strokeLinecap="round" />
+      {pointer &&
+        createPortal(
+          <div
+            aria-hidden
+            className="fixed z-50 pointer-events-none -translate-x-1/2 -translate-y-full px-1.5 py-0.5 rounded-sm bg-fg-strong/92 text-white text-xs whitespace-nowrap"
+            style={{ left: pointer.x, top: pointer.y - 12 }}
+          >
+            {readout}
+          </div>,
+          document.body,
+        )}
     </svg>
   );
 }

@@ -40,7 +40,7 @@ const read = (f) => (fs.existsSync(`${proj}/${f}`) ? fs.readFileSync(`${proj}/${
 const write = (f, text) => fs.writeFileSync(`${proj}/${f}`, text);
 const orig = { song: read("song.ts"), kick: read("tracks/kick.ts"), hits: read("data/kick/hits.json") };
 const graph = () => api("graph");
-const toasts = () => page.$$eval(".rise", (els) => els.map((e) => e.textContent));
+const toasts = () => page.$$eval("[data-testid=toast]", (els) => els.map((e) => e.textContent));
 const toasted = (text) => until(async () => (await toasts()).some((t) => t.includes(text)), 4000);
 const key = async (k, mods = []) => {
   for (const m of mods) await page.keyboard.down(m);
@@ -115,28 +115,33 @@ await new Promise((r) => holder.stdout.once("data", r));
 const opened = await post("graph/open", { path: proj });
 check(opened.status === 200 && opened.json.read_only?.why === "held", "it opens, read-only");
 check(opened.json.read_only?.holder?.program === "agent" && opened.json.read_only.holder.pid === holder.pid, "naming the holder");
+// Said once, by the top bar's status pill; its popover says where it is open and how to edit (taste.md ST-2).
 await page.waitForSelector("[data-testid=read-only-banner]", { timeout: 6000 }).catch(() => {});
-const banner = await page.$eval("[data-testid=read-only-banner]", (e) => e.innerText).catch(() => "");
-check(/Read only/.test(banner) && banner.includes(`agent (pid ${holder.pid}`), `a banner says so: ${banner.replace(/\n/g, " | ")}`);
+const pill = await page.$eval("[data-testid=read-only-banner]", (e) => e.innerText).catch(() => "");
+// Wait for the page to take in the read-only state before opening the popover.
+await page.click("[data-testid=read-only-banner]").catch(() => {});
+await page.waitForSelector("[data-testid=status-popover]", { timeout: 3000 }).catch(() => {});
+const banner = await page.$eval("[data-testid=status-popover]", (e) => e.innerText).catch(() => "");
+check(/Read only/.test(pill) && /Open in “agent”/.test(banner) && /close it there, then Retry/.test(banner) && !banner.includes("pid") && !banner.includes("run this again"), `the status pill says so: ${pill} | ${banner.replace(/\n/g, " | ")}`);
 await page.screenshot({ path: `${S}/s6-read-only.png` });
 const g2 = await graph();
 const refused = await post("graph/lane", { session: g2.session, revision: g2.view.revision, module: "kick", lane: "hits", clips: [] });
 check(refused.status === 423 && /nothing was changed/.test(refused.json.error) && refused.json.error.includes("agent"), `an edit is refused, 423: ${refused.json.error}`);
 check(read("data/kick/hits.json") === eight, "and changes nothing");
-// From the UI: renaming a track says why, and writes nothing.
+// From the UI: editing isn't offered at all, rather than refused after (taste.md ST-2).
+await page.keyboard.press("Escape");
 await page.click('[data-track="kick"] [data-testid=track-label]', { count: 2 });
-if (await page.waitForSelector("[data-testid=track-rename]", { timeout: 2000 }).catch(() => null)) {
-  await page.keyboard.type("Kicks");
-  await key("Enter");
-}
-check(await toasted("nothing was changed"), "a rename in the timeline is refused with the same words");
+const field = await page.waitForSelector("[data-testid=track-rename]", { timeout: 1000 }).catch(() => null);
+const why = await page.$eval('[data-track="kick"] [data-testid=track-label]', (e) => e.title).catch(() => "");
+check(!field && /Read only/.test(why) && !(await toasts()).some((t) => t.includes("nothing was changed")), `a rename isn't offered, and the name says why: ${why.replace(/\n/g, " | ")}`);
 check(read("tracks/kick.ts") === orig.kick, "kick.ts is unchanged");
 const stillHeld = await post("graph/lock/retry", { session: g2.session });
 check(stillHeld.status === 200 && stillHeld.json.read_only?.why === "held", "Retry while it is held leaves it read-only");
 holder.stdin.end();
 await new Promise((r) => holder.once("exit", r));
+if (!(await page.$("[data-testid=status-popover]"))) await page.click("[data-testid=read-only-banner]");
 await page.click("[data-testid=read-only-retry]");
-check(await until(async () => !(await page.$("[data-testid=read-only-banner]"))), "once the other program lets go, Retry takes the lock: the banner goes");
+check(await until(async () => !(await page.$("[data-testid=read-only-banner]"))), "once the other program lets go, Retry takes the lock: the pill goes");
 check((await graph()).read_only === null, "and the state says so");
 const ok = await post("graph/lane", { session: g2.session, revision: (await graph()).view.revision, module: "kick", lane: "hits", clips: [{ id: "a", start: 0, length: 4, notes: [{ pitch: "C1", start: 0, length: 1 }] }] });
 check(ok.status === 200 && kickNotes(await graph()) === 1, "an edit goes ahead");
@@ -149,9 +154,17 @@ const broken = await post("graph/open", { path: proj });
 check(broken.status === 200, "a project whose code doesn't compile opens");
 check(broken.json.has_code === false && broken.json.view.modules.length === 0, "with nothing to show or play");
 check(broken.json.diagnostics?.[0]?.file === "song.ts", `its problem placed in song.ts (${JSON.stringify(broken.json.diagnostics?.[0])})`);
-await page.waitForSelector("[data-testid=compile-banner]", { timeout: 6000 }).catch(() => {});
+await page.waitForSelector("[data-status~=compile]", { timeout: 6000 }).catch(() => {});
+await page.click("[data-status~=compile]").catch(() => {});
+await page.waitForSelector("[data-testid=compile-banner]", { timeout: 3000 }).catch(() => {});
 const compile = await page.$eval("[data-testid=compile-banner]", (e) => e.innerText).catch(() => "");
-check(/Nothing plays until it does/.test(compile), `the banner says nothing plays until it compiles: ${compile.replace(/\n/g, " | ")}`);
+check(/Nothing plays until it does/.test(compile), `the status popover says nothing plays until it compiles: ${compile.replace(/\n/g, " | ")}`);
+await page.keyboard.press("Escape");
+// D2: the timeline shows the song's tracks and clips from data/, greyed, never "No tracks yet".
+check(
+  await until(async () => !!(await page.$("[data-testid=waiting]")) && (await page.$$('[data-track="kick"] [data-clip]')).length > 0 && !(await page.evaluate(() => document.body.innerText.includes("No tracks yet")))),
+  "the timeline shows the tracks from data/, waiting for the code to compile",
+);
 check(await until(async () => !!(await page.$("[data-testid=code] .monaco-editor .view-lines")), 10000), "it opens in the code editor");
 const path = () => page.$eval("[data-testid=code-path]", (e) => e.textContent).catch(() => "");
 check(await until(async () => (await path()) === "song.ts"), `on song.ts, where the problem is (${await path()})`);

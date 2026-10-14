@@ -9,9 +9,11 @@ interface Store {
   /** The first check for an open project has finished (the loading screen shows until then). */
   ready: boolean;
   connected: boolean;
+  /** The toast showing: one at a time, a new one replacing it (taste.md §2.14). */
   toasts: Toast[];
   set: (p: Partial<Store>) => void;
   toast: (text: string, action?: Toast["action"]) => void;
+  dismiss: (id: number) => void;
 }
 
 let toastId = 0;
@@ -22,9 +24,7 @@ export const useStore = create<Store>((set, get) => ({
   connected: false,
   toasts: [],
   set: (p) => set(p),
-  toast: (text, action) => {
-    const id = ++toastId;
-    set({ toasts: [...get().toasts, { id, text, action }].slice(-4) });
-    setTimeout(() => set({ toasts: get().toasts.filter((t) => t.id !== id) }), 5000);
-  },
+  // Its timer (4 s, or 6 s with an action, paused while hovered) is the toast's own: see Toasts.
+  toast: (text, action) => set({ toasts: [{ id: ++toastId, text, action }] }),
+  dismiss: (id) => set({ toasts: get().toasts.filter((t) => t.id !== id) }),
 }));

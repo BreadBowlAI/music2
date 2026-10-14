@@ -147,22 +147,25 @@ const bar = async () =>
     const box = name.parentElement;
     const time = document.querySelector("span[title=Time]");
     const exp = document.querySelector("[data-testid=export]");
-    return { box: [r(box).left, r(box).right, r(box).height], time: r(time).right, exp: r(exp).left, cut: name.scrollWidth > name.clientWidth, title: name.title, lines: Math.round(r(name).height / 18) };
+    // The left side ends at the tempo and meter, after the time (which a small window drops).
+    const tempo = document.querySelector("[data-testid=tempo]");
+    return { box: [r(box).left, r(box).right, r(box).height], time: Math.max(r(time).right, r(tempo).right), exp: r(exp).left, cut: name.scrollWidth > name.clientWidth, title: name.title, lines: Math.round(r(name).height / 18) };
   });
-for (const [w, h] of [[960, 620], [1200, 800], [1440, 900]]) {
+// The window's smallest is 1100×700 (taste.md §3.2); below 1180px the time readout goes first (§3.8).
+for (const [w, h] of [[1100, 700], [1200, 800], [1440, 900]]) {
   await page.setViewport({ width: w, height: h, deviceScaleFactor: 2 });
   await sleep(300);
   const b = await bar();
   check(b.box[0] >= b.time + 4 && b.box[1] <= b.exp - 4 && b.lines === 1, `${w}px: the name (${b.box[0].toFixed(0)}–${b.box[1].toFixed(0)}) clears the time (…${b.time.toFixed(0)}) and Export (${b.exp.toFixed(0)}…), on one line, cut short: ${b.cut}`);
 }
 check((await bar()).title.startsWith(longName), "its tooltip has the whole name");
-await page.setViewport({ width: 960, height: 620, deviceScaleFactor: 2 });
+await page.setViewport({ width: 1100, height: 700, deviceScaleFactor: 2 });
 await page.click("[data-testid=export]");
 check(await until(async () => Number(await page.$eval("[data-testid=export-progress]", (e) => e.getAttribute("aria-valuenow")).catch(() => 0)) >= 10, 20000), "exporting it at the smallest window");
 const b = await bar();
 check(b.box[0] >= b.time + 4 && b.box[1] <= b.exp - 4, `the name still clears the wider “Exporting” button (${b.box[1].toFixed(0)} < ${b.exp.toFixed(0)})`);
-await page.screenshot({ path: `${S}/fx-longname-960-exporting.png` });
-await page.screenshot({ path: `${S}/fx-longname-960-bar.png`, clip: { x: 0, y: 0, width: 960, height: 64 } });
+await page.screenshot({ path: `${S}/fx-longname-1100-exporting.png` });
+await page.screenshot({ path: `${S}/fx-longname-1100-bar.png`, clip: { x: 0, y: 0, width: 1100, height: 44 } });
 check(await until(async () => (await text()).includes("Exported My very first summer song"), 60000), "and it finishes");
 await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 2 });
 await idle();

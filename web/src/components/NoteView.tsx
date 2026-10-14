@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { Lock, Magnet, Minus, Plus, X, ZoomIn, ZoomOut } from "lucide-react";
+import { Check, ChevronDown, Lock, Magnet, Minus, MousePointer2, Pencil, Plus, ZoomIn, ZoomOut } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   barAt,
@@ -11,7 +11,8 @@ import {
   findLane,
   findNoteClip,
   graphApi,
-  labelOf,
+  laneTitle,
+  lockReason,
   moduleName,
   laneWriting,
   meterSpans,
@@ -22,30 +23,38 @@ import {
   type Note,
   type NoteClip,
 } from "../lib/graph";
+import { onFrame } from "../lib/clock";
+import { RULER_H } from "../lib/layout";
 import { kbd, native } from "../lib/native";
+import { GRAPHITE, trackColors, type TrackColor } from "../lib/palette";
+import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
-import { trackColor, trackHue } from "./SongTimeline";
-import { Button } from "./ui";
+import { DockSlot } from "./Dock";
+import { Hatch, HBands, VLines } from "./draw";
+import { Button, EmptyState, keepFocus, MenuRow, Popover, Segment } from "./ui";
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
-const KEYS_W = 64;
-const RULER_H = 26;
-const ROW_H = 16;
-const VEL_H = 76;
+// The roll's sizes (taste.md §3.5); its ruler is the arrangement's, 28px.
+const KEYS_W = 56;
+const ROW_H = 14;
+const VEL_H = 64;
 /** The velocity strip's bars stop this far from its edges. */
 const VEL_PAD = 8;
 /** The highest pitch, at the top; the lowest is 0. */
 const TOP = 127;
 const BLACK = [1, 3, 6, 8, 10];
-const SNAPS = [
+/** The grid's steps, in beats; snap (the magnet) puts notes on it, or lets them go anywhere. */
+const GRIDS = [
   { label: "1/4", step: 1 },
   { label: "1/8", step: 0.5 },
   { label: "1/16", step: 0.25 },
   { label: "1/32", step: 0.125 },
-  { label: "Off", step: 0 },
 ];
+/** The snap as it was kept: the grid, or 0 when it was off. */
 const SNAP_KEY = "m2.notes.snap";
+/** The grid, kept apart so that turning snap off and on keeps it. */
+const GRID_KEY = "m2.notes.grid";
 /** What a new note plays at, and what the file leaves unwritten. */
 const VELOCITY = 0.8;
 /** The shortest note, when nothing snaps. */
@@ -63,6 +72,7 @@ type Basis = { revision: number; clips: NoteClip[] } | "pending";
 type Gesture =
   | { kind: "move" | "resize"; pointer: number; x0: number; y0: number; index: number; base: Shape; from: Basis; sel: ReadonlySet<number>; shift: boolean; picked: boolean; result?: Shape }
   | { kind: "empty"; pointer: number; x0: number; y0: number; keep: ReadonlySet<number>; moved: boolean }
+  | { kind: "paint"; pointer: number; base: Shape; from: Basis; cells: Set<string>; result: Shape }
   | { kind: "velocity"; pointer: number; index: number; base: Shape; from: Basis; sel: ReadonlySet<number>; result?: Shape };
 
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
@@ -90,18 +100,22 @@ function tidy(notes: Note[], sel: ReadonlySet<number>): [Note[], Set<number>] {
 
 const same = (a: Shape, b: Shape) => a.length === b.length && JSON.stringify(a.notes) === JSON.stringify(b.notes);
 
-function readSnap() {
-  try {
-    const saved = localStorage.getItem(SNAP_KEY);
-    if (saved !== null && SNAPS.some((s) => s.step === Number(saved))) return Number(saved);
-  } catch {}
-  return 0.25;
+function readSnap(): { grid: number; on: boolean } {
+  const read = (key: string) => {
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  };
+  const valid = (x: string | null) => x !== null && GRIDS.some((g) => g.step === Number(x));
+  const snap = read(SNAP_KEY), grid = read(GRID_KEY);
+  return { grid: valid(grid) ? Number(grid) : valid(snap) ? Number(snap) : 0.25, on: snap !== "0" };
 }
 
-/** A note's colour: the track's hue, pale when played softly and deeper the harder it is played. */
-function fill(hue: string, velocity: number) {
-  const v = clamp(velocity, 0, 1);
-  return v < 0.5 ? `color-mix(in oklab, ${hue}, #fff ${Math.round((0.5 - v) * 110)}%)` : `color-mix(in oklab, ${hue}, #1f2126 ${Math.round((v - 0.5) * 70)}%)`;
+/** A note's colour: the track's bar, mixed toward its ink the harder it is played (never so far its name can't be read). */
+function fill(tone: TrackColor, velocity: number) {
+  return `color-mix(in oklab, ${tone.ink} ${Math.round(clamp(velocity, 0, 1) * 45)}%, ${tone.bar})`;
 }
 
 /**
@@ -109,22 +123,23 @@ function fill(hue: string, velocity: number) {
  * stays open while the lane is edited around it, and closes when it is gone. Every gesture is one
  * lane write, one undo step.
  */
-export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphState; clip: ClipRef; onClose: () => void }) {
+export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip: ClipRef }) {
   const toast = useStore((s) => s.toast);
   const { timeline } = graph;
   const { module, lane } = ref;
   const server = findNoteClip(timeline, ref);
   // A bar as long as the time signature where the clip starts says (FMT-13).
   const bpb = barAt(timeline.meter, server?.start ?? 0).length;
-  const color = trackColor(timeline, module) ?? "rgba(143,101,116,1)";
-  const hue = trackHue(timeline, module) ?? "rgb(143,101,116)";
+  const tone = trackColors(timeline, module) ?? GRAPHITE;
 
   // What the roll shows while a gesture is under way or its write hasn't come back: the
   // clip as edited here. The selection is indices into the notes shown.
   const [draft, setDraft] = useState<Shape | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<number>>(() => new Set());
-  const [snap, setSnapState] = useState(readSnap);
-  const [drawLen, setDrawLen] = useState<number | null>(null);
+  const [{ grid: gridStep, on: snapOn }, setSnapState] = useState(readSnap);
+  // Where a note lands: on the grid while snap is on, anywhere (0) while it is off.
+  const snap = snapOn ? gridStep : 0;
+  const draw = useShell((s) => s.draw);
   const [ppb, setPpb] = useState(48);
   const [visible, setVisible] = useState(0);
   const [marquee, setMarquee] = useState<Box | null>(null);
@@ -145,19 +160,23 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
   // writing them would replace the file's newer text with that old copy (FMT-9).
   const file = `data/${module}/${lane}.json`;
   const broken = graph.problems.find((p) => p.src === file && p.code.startsWith("lane."));
-  const why = graph.view.draft_errors.length > 0 ? "code" : broken ? "lane" : null;
+  const blocked = useStore((s) => lockReason(graph, s.connected));
+  const why = graph.view.draft_errors.length > 0 ? "code" : broken ? "lane" : blocked ? "app" : null;
   const locked = why !== null;
   const lockedTitle =
     why === "lane"
       ? `${file} doesn't read, so these are the notes it played before. Fix the file and they can be edited again.\n\n${broken!.message}`
-      : "Notes live in the code's lanes: they can be edited again once the code compiles";
+      : why === "app"
+        ? blocked!
+        : "Notes live in the code's lanes: they can be edited again once the code compiles";
   const seen = useRef(server?.notes.length);
   /** The beat to keep under the pointer while zooming. */
   const anchor = useRef<{ beat: number; x: number } | null>(null);
 
   const clip: Shape | null = draft ?? (server ? { length: server.length, notes: server.notes } : null);
   const start = server?.start ?? 0;
-  const step = snap || 0.25;
+  // A new note is a grid step long, snapped or not (as in Live).
+  const step = gridStep;
 
   // Once this view's writes have come back in the graph, show the clip as the graph has it.
   // A change made elsewhere (undo, the code editor) that adds or removes notes ends the selection.
@@ -177,9 +196,12 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
     const el = scroller.current;
     if (!el || !server) return;
     setPpb(clamp(Math.floor((el.clientWidth - KEYS_W - 32) / server.length), 12, 160));
+    // Centred on the clip's pitches, so its whole range shows when it fits (a row to spare at
+    // 14px rows for an octave in the 300px dock), and on whole rows: no key cut under the ruler.
     const pitches = server.notes.map((n) => n.pitch);
     const mid = pitches.length ? (Math.min(...pitches) + Math.max(...pitches)) / 2 : 60;
-    el.scrollTop = RULER_H + (TOP - mid) * ROW_H + ROW_H / 2 - (RULER_H + el.clientHeight) / 2;
+    const centred = RULER_H + (TOP - mid) * ROW_H + ROW_H / 2 - (RULER_H + el.clientHeight) / 2;
+    el.scrollTop = Math.round(centred / ROW_H) * ROW_H;
     root.current?.focus({ preventScroll: true });
     // Only on opening: later edits keep the view where the user put it.
   }, []);
@@ -215,10 +237,11 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
     setPpb((p) => clamp(p * by, 8, 400));
   };
 
-  const setSnap = (s: number) => {
-    setSnapState(s);
+  const setSnap = (grid: number, on: boolean) => {
+    setSnapState({ grid, on });
     try {
-      localStorage.setItem(SNAP_KEY, String(s));
+      localStorage.setItem(GRID_KEY, String(grid));
+      localStorage.setItem(SNAP_KEY, String(on ? grid : 0));
     } catch {}
   };
 
@@ -257,7 +280,7 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
     s.busy = true;
     // The clip keeps its id; an anonymous one gets the one its reference names.
     const clips = b.clips.map((c, i) => (i === at ? { id: ref.id, start: c.start, length: shape.length, notes: shape.notes } : c));
-    writeLane(latest.current, module, lane, clips, b.revision)
+    writeLane(latest.current, module, lane, clips, b.revision, { name: `${trackName()} notes` })
       .then((r) => void (written.current = { revision: r.revision, clips: r.clips }))
       .catch((error) => {
         toast(error instanceof Error ? error.message : String(error));
@@ -271,6 +294,23 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
         if (next) send(next, "pending");
         else setWrites((n) => n + 1);
       });
+  };
+
+  /** What the track is called, for the words of its edits ("Hook notes"). */
+  const trackName = () => moduleName(latest.current.view.modules.find((m) => m.key === module) ?? { key: module });
+
+  /**
+   * ⌫ with no note selected, on a clip with no notes: the clip goes, as it would from the timeline,
+   * where it is the selected clip. A clip made by mistake goes with one key; one with notes never does.
+   */
+  const removeClip = () => {
+    const g = latest.current;
+    const l = findLane(g.timeline, module, lane);
+    const i = l?.kind === "notes" ? clipIndex(l.clips, ref) : -1;
+    if (locked || laneWriting(g) || !l || l.kind !== "notes" || i < 0 || l.clips[i].notes.length) return;
+    writeLane(g, module, lane, l.clips.filter((_, k) => k !== i), g.view.revision, { name: `deleting a ${trackName()} clip` }).catch((error) =>
+      toast(error instanceof Error ? error.message : String(error)),
+    );
   };
 
   /** Show and write a changed shape of the clip, made from `from`, selecting `sel` (indices into `shape.notes`). */
@@ -353,6 +393,7 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
     };
     let handled = true;
     if ((e.key === "Delete" || e.key === "Backspace") && picked.length) remove();
+    else if ((e.key === "Delete" || e.key === "Backspace") && !clip.notes.length && !draft) removeClip();
     else if (cmd && key === "d" && !native) duplicate();
     else if (cmd && key === "a") setSelected(new Set(clip.notes.map((_, i) => i)));
     else if (e.key === "Escape" && picked.length) setSelected(new Set());
@@ -373,6 +414,13 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
     const p = at(e);
     const target = (e.target as HTMLElement).closest<HTMLElement>("[data-note]");
     if (!target) {
+      // Draw mode (B): a click adds a note, and a drag paints one in each cell it crosses.
+      if (draw && !locked) {
+        const g: Gesture = { kind: "paint", pointer: e.pointerId, base: clip, from: basis(), cells: new Set(), result: clip };
+        gesture.current = g;
+        paint(g, p);
+        return;
+      }
       gesture.current = { kind: "empty", pointer: e.pointerId, x0: p.x, y0: p.y, keep: e.shiftKey ? selected : new Set(), moved: false };
       return;
     }
@@ -380,7 +428,6 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
     const was = selected.has(i);
     const sel = e.shiftKey ? (was ? selected : new Set([...selected, i])) : was ? selected : new Set([i]);
     setSelected(sel);
-    setDrawLen(clip.notes[i].length);
     // Read only: a click selects, nothing moves.
     if (locked) return;
     const kind = (e.target as HTMLElement).closest("[data-edge]") ? "resize" : "move";
@@ -391,6 +438,7 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
     const g = gesture.current;
     if (!g || g.pointer !== e.pointerId || g.kind === "velocity" || !clip) return;
     const p = at(e);
+    if (g.kind === "paint") return paint(g, p);
     if (g.kind === "empty") {
       if (!g.moved && Math.hypot(p.x - g.x0, p.y - g.y0) < 4) return;
       g.moved = true;
@@ -427,8 +475,14 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
     if (!g || g.pointer !== e.pointerId || g.kind === "velocity" || !clip) return;
     gesture.current = null;
     setMarquee(null);
+    if (g.kind === "paint") {
+      if (same(g.result, g.base)) return setDraft(null);
+      const added = new Set(g.result.notes.map((_, i) => i).filter((i) => i >= g.base.notes.length));
+      return commit(g.result, added, g.from);
+    }
+    // A click on empty grid selects nothing (D4): notes are added by a double-click, or in Draw mode.
     if (g.kind === "empty") {
-      if (!g.moved && !locked) addNote(at(e));
+      if (!g.moved) setSelected(g.keep);
       return;
     }
     if (!g.result) {
@@ -437,7 +491,6 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
       else if (!g.shift) setSelected(new Set([g.index]));
       return;
     }
-    if (g.kind === "resize") setDrawLen(g.result.notes[g.index].length);
     if (same(g.result, g.base)) return setDraft(g.base);
     commit(g.result, g.sel, g.from);
   };
@@ -448,17 +501,32 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
     if (!g || g.pointer !== e.pointerId || g.kind === "velocity") return;
     gesture.current = null;
     setMarquee(null);
-    if (g.kind !== "empty" && g.result) setDraft(g.base);
+    if (g.kind === "paint") setDraft(null);
+    else if (g.kind !== "empty" && g.result) setDraft(g.base);
   };
 
-  /** A click on empty space: a note of the current length in that cell, if it is inside the clip. */
-  const addNote = (p: { beat: number; pitch: number }) => {
-    if (!clip) return;
+  /** A note in the cell at `p`, a grid step long (as in Live), if the cell is inside the clip. */
+  const noteAt = (p: { beat: number; pitch: number }, length: number): Note | null => {
     const from = Math.max(0, snapBeat(p.beat, true));
-    if (from >= clip.length) return;
-    const length = clean(Math.min(drawLen ?? step, clip.length - from));
-    const note = { pitch: p.pitch, start: from, length, velocity: VELOCITY };
+    if (from >= length) return null;
+    return { pitch: p.pitch, start: from, length: clean(Math.min(step, length - from)), velocity: VELOCITY };
+  };
+
+  /** A double-click on empty grid: a note in that cell. */
+  const addNote = (p: { beat: number; pitch: number }) => {
+    const note = clip && noteAt(p, clip.length);
+    if (!clip || !note) return;
     commit({ length: clip.length, notes: [...clip.notes, note] }, new Set([clip.notes.length]));
+  };
+
+  /** Draw mode: a note in each new cell under the pointer that has none starting there; written as one edit on release. */
+  const paint = (g: Extract<Gesture, { kind: "paint" }>, p: { beat: number; pitch: number }) => {
+    const note = noteAt(p, g.base.length);
+    const cell = note && `${note.start}:${note.pitch}`;
+    if (!note || !cell || g.cells.has(cell) || g.result.notes.some((n) => n.start === note.start && n.pitch === note.pitch)) return;
+    g.cells.add(cell);
+    g.result = { length: g.base.length, notes: [...g.result.notes, note] };
+    setDraft(g.result);
   };
 
   // ---------------------------------------------------------------- the velocity strip
@@ -504,7 +572,7 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
   };
 
   if (!clip || !server) {
-    return <div data-testid="notes" className="flex-1 min-h-0 grid place-items-center text-sm text-ink-400">This clip is gone.</div>;
+    return <div data-testid="notes" className="flex-1 min-h-0 grid place-items-center text-sm text-fg-muted">This clip is gone.</div>;
   }
 
   const end = Math.max(clip.length, ...clip.notes.map((n) => n.start + n.length));
@@ -514,9 +582,13 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
   const track = graph.view.modules.find((m) => m.key === module);
   const declared = findLane(timeline, module, lane);
   const title = track ? moduleName(track) : module;
-  const laneName = declared ? labelOf(declared) : lane;
+  const laneName = declared ? laneTitle(declared) : lane;
+  // The view is Notes already: its lane is worth naming only beside the track's other notes lanes.
+  const lanes = timeline.tracks.find((t) => t.module === module)?.lanes.filter((l) => l.kind === "notes").length ?? 0;
   const firstBar = barAt(timeline.meter, start).bar + 1;
   const lastBar = barAt(timeline.meter, start + clip.length - 1e-6).bar + 1;
+  // Notes being dragged lift off the grid.
+  const lifting = gesture.current?.kind === "move" && !!gesture.current.result;
 
   return (
     <div
@@ -524,20 +596,65 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
       data-testid="notes"
       tabIndex={0}
       onKeyDown={onKeyDown}
-      className="flex-1 min-h-0 flex flex-col bg-ink-950 outline-none"
+      className="flex-1 min-h-0 flex flex-col bg-canvas outline-none"
       aria-label={`Notes of ${title}'s ${laneName} clip at bar ${firstBar}`}
     >
-      <header className="h-11 shrink-0 flex items-center gap-3 px-3 bg-ink-850 border-b border-black/[0.06] overflow-x-auto overflow-y-hidden">
-        <div className="shrink-0 flex items-center gap-2 min-w-0">
-          <span className="size-3 rounded-[4px] shadow-sm ring-1 ring-black/10" style={{ background: color }} />
-          <span className="text-[13px] font-semibold text-ink-100">{title}</span>
-          <span className="text-ink-500">/</span>
-          <span className={clsx("text-ink-200", laneName === lane ? "font-mono text-[12px]" : "text-[13px] font-medium")} title={laneName === lane ? lane : `${laneName} (${lane})`}>
-            {laneName}
+      {/* The clip's place and the roll's tools sit in the dock's header: the roll itself is edge to edge (taste.md §3.5). */}
+      <DockSlot at="title">
+        {lanes > 1 && (
+          <>
+            <span className="font-medium text-fg truncate" title={laneName === lane ? lane : `${laneName} (${lane})`}>
+              {laneName}
+            </span>
+            <span className="text-fg-faint">·</span>
+          </>
+        )}
+        <span className="shrink-0">{lastBar > firstBar ? `bars ${firstBar}–${lastBar}` : `bar ${firstBar}`}</span>
+      </DockSlot>
+      <DockSlot at="tools">
+        {locked && (
+          <span
+            data-testid="notes-locked"
+            data-why={why}
+            className="shrink-0 inline-flex items-center gap-1.5 h-ctl-sm px-2 rounded-sm bg-hover text-sm font-medium text-fg"
+            title={lockedTitle}
+          >
+            <Lock size={14} className="text-fg-muted" />
+            {why === "lane" ? `Read only: ${file} doesn't read` : why === "app" ? "Read only" : "Read only until the code compiles"}
           </span>
-          <span className="text-[12px] text-ink-400">· {lastBar > firstBar ? `bars ${firstBar}–${lastBar}` : `bar ${firstBar}`}</span>
-        </div>
-        <Divider />
+        )}
+        {/* The editing tools only while it can be edited: read only, the reason takes their room. */}
+        {!locked && (
+          <>
+            <div role="radiogroup" aria-label="Tool" className="shrink-0 h-ctl-sm flex items-center gap-0.5 p-0.5 rounded-sm bg-hover">
+              <Segment role="radio" aria-checked={!draw} data-tool="select" on={!draw} title="Select (B toggles): click selects, double-click adds a note" onClick={() => useShell.getState().set({ draw: false })} className="!px-1.5">
+                <MousePointer2 size={14} />
+              </Segment>
+              <Segment role="radio" aria-checked={draw} data-tool="draw" on={draw} title="Draw (B): click adds a note, drag paints" onClick={() => useShell.getState().set({ draw: true })} className="!px-1.5">
+                <Pencil size={14} />
+              </Segment>
+            </div>
+            <Divider />
+            {/* Grid [1/16 ▾] and the snap toggle (taste.md §3.5). */}
+            <div className="shrink-0 flex items-center gap-0.5">
+              <GridMenu step={gridStep} onPick={(g) => setSnap(g, snapOn)} />
+              <Button
+                size="sm"
+                data-testid="snap"
+                active={snapOn}
+                aria-pressed={snapOn}
+                onMouseDown={keepFocus}
+                onClick={() => setSnap(gridStep, !snapOn)}
+                title={snapOn ? "Snap to the grid: on. Notes you add or drag land on it" : "Snap to the grid: off. Notes go where you put them"}
+                aria-label="Snap to the grid"
+                className="w-ctl-sm !px-0"
+              >
+                <Magnet size={16} />
+              </Button>
+            </div>
+            <Divider />
+          </>
+        )}
         <LengthField
           bars={Number(beatsToBars(timeline.meter, start, clip.length).toFixed(3))}
           toBeats={(n) => clean(barsToBeats(timeline.meter, start, n))}
@@ -545,56 +662,15 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
           onChange={setLength}
         />
         <Divider />
-        <div className="shrink-0 flex items-center gap-1.5" title="Notes you add or drag land on this grid">
-          <Magnet className="size-3.5 text-ink-400" />
-          <div role="radiogroup" aria-label="Snap" className="flex items-center gap-0.5 p-0.5 rounded-lg bg-ink-950 ring-1 ring-black/[0.04]">
-            {SNAPS.map((s) => (
-              <button
-                key={s.label}
-                role="radio"
-                aria-checked={snap === s.step}
-                data-snap={s.label}
-                onClick={() => setSnap(s.step)}
-                className={clsx(
-                  "h-6 px-2 rounded-md text-[11px] font-medium tabular-nums cursor-pointer transition-colors",
-                  snap === s.step ? "bg-ink-800 text-ink-100 shadow-sm ring-1 ring-black/[0.06]" : "text-ink-400 hover:text-ink-100",
-                )}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
-        </div>
-        <span className="shrink-0 text-[11px] text-ink-400 tabular-nums" title="The length of a note you add by clicking: the last one you clicked or resized" data-testid="draw-length">
-          New notes <span className="font-medium text-ink-200">{noteValue(drawLen ?? step)}</span>
-        </span>
-        <div className="flex-1" />
-        {locked && (
-          <span
-            data-testid="notes-locked"
-            data-why={why}
-            className="shrink-0 inline-flex items-center gap-1.5 h-6 px-2 rounded-md bg-amber-500/10 ring-1 ring-amber-600/20 text-[11px] font-medium text-amber-900"
-            title={lockedTitle}
-          >
-            <Lock className="size-3" />
-            {why === "lane" ? `Read only: ${file} doesn't read` : "Read only until the code compiles"}
-          </span>
-        )}
-        <span className="shrink-0 text-[11px] text-ink-400 tabular-nums">
-          {picked.length ? `${picked.length} of ${clip.notes.length} selected` : `${clip.notes.length} ${clip.notes.length === 1 ? "note" : "notes"}`}
-        </span>
         <div className="shrink-0 flex items-center">
-          <Button size="sm" onClick={() => zoom(0.8)} title="Zoom out (⌘ + scroll)" aria-label="Zoom out" className="!px-1.5">
-            <ZoomOut className="size-3.5" />
+          <Button size="sm" onMouseDown={keepFocus} onClick={() => zoom(0.8)} title="Zoom out (⌘ + scroll)" aria-label="Zoom out" className="w-ctl-sm !px-0">
+            <ZoomOut size={16} />
           </Button>
-          <Button size="sm" onClick={() => zoom(1.25)} title="Zoom in (⌘ + scroll)" aria-label="Zoom in" className="!px-1.5">
-            <ZoomIn className="size-3.5" />
+          <Button size="sm" onMouseDown={keepFocus} onClick={() => zoom(1.25)} title="Zoom in (⌘ + scroll)" aria-label="Zoom in" className="w-ctl-sm !px-0">
+            <ZoomIn size={16} />
           </Button>
         </div>
-        <Button size="sm" onClick={onClose} title="Close the clip" aria-label="Close the clip" className="!px-1.5">
-          <X className="size-4" />
-        </Button>
-      </header>
+      </DockSlot>
 
       <div className="flex-1 min-h-0 relative">
         <div
@@ -605,41 +681,45 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
         >
           <div className="relative" style={{ width: KEYS_W + width, height: RULER_H + height }}>
             <div className="sticky top-0 z-30 flex" style={{ height: RULER_H }}>
-              <div className="sticky left-0 z-40 shrink-0 bg-ink-900 border-r border-b border-black/[0.06]" style={{ width: KEYS_W }} />
-              <Ruler width={width} ppb={ppb} meter={timeline.meter} start={start} length={clip.length} color={color} />
+              <div className="sticky left-0 z-40 shrink-0 bg-chrome border-r border-b border-line" style={{ width: KEYS_W }} />
+              <Ruler width={width} ppb={ppb} meter={timeline.meter} start={start} length={clip.length} tone={tone} />
             </div>
             <div className="flex">
-              <Keys selected={new Set(picked.map((i) => clip.notes[i].pitch))} />
+              <Keys selected={new Set(picked.map((i) => clip.notes[i].pitch))} tone={tone} />
               <div
                 ref={grid}
                 data-testid="roll-grid"
-                className={clsx("relative touch-none", locked ? "cursor-default" : "cursor-cell")}
+                className={clsx("relative touch-none", locked ? "cursor-default" : draw ? "cursor-crosshair" : "cursor-default")}
                 style={{ width, height }}
                 title={
                   locked
                     ? why === "lane"
                       ? `Read only until ${file} reads again`
                       : "Read only until the code compiles"
-                    : `Click to add a note · drag a note to move it · drag its right edge to resize · drag across empty space to select · ⌫ deletes · ${kbd("D")} duplicates · arrows move`
+                    : draw
+                      ? "Draw: click to add a note · drag to paint notes · B to select"
+                      : `Double-click to add a note · drag a note to move it · drag its right edge to resize · drag across empty space to select · ⌫ deletes · ${kbd("D")} duplicates · arrows move · B to draw`
                 }
+                onDoubleClick={(e) => {
+                  // Select mode adds notes with a double-click; Draw mode added one on the first click.
+                  if (locked || draw || (e.target as HTMLElement).closest("[data-note]")) return;
+                  addNote(at(e));
+                }}
                 onPointerDown={onGridDown}
                 onPointerMove={onGridMove}
                 onPointerUp={onGridUp}
                 onPointerCancel={onGridCancel}
                 onLostPointerCapture={onGridCancel}
               >
-                <Lanes width={width} ppb={ppb} meter={timeline.meter} start={start} step={snap} />
-                <div
-                  className="absolute top-0 bottom-0 right-0 pointer-events-none border-l-2"
-                  style={{
-                    left: clip.length * ppb,
-                    borderColor: color,
-                    background: "repeating-linear-gradient(135deg, rgba(0,0,0,0.035) 0 6px, transparent 6px 12px), rgba(225,227,230,0.55)",
-                  }}
-                />
+                <Lanes width={width} ppb={ppb} meter={timeline.meter} start={start} step={gridStep} />
+                {/* Past the clip's end: hatched, behind its edge in the track's colour. */}
+                <div className="absolute top-0 bottom-0 right-0 pointer-events-none border-l-2 bg-chrome/70" style={{ left: clip.length * ppb, borderColor: tone.bar }}>
+                  <Hatch />
+                </div>
                 {clip.notes.map((n, i) => {
                   const w = Math.max(n.length * ppb - 1, 4);
                   const outside = n.start >= clip.length;
+                  const on = shown.has(i);
                   return (
                     <div
                       key={i}
@@ -650,31 +730,44 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
                       data-velocity={n.velocity}
                       data-selected={shown.has(i) || undefined}
                       title={`${pitchName(n.pitch)} · beat ${Number((n.start + 1).toFixed(3))} · ${noteValue(n.length)} · velocity ${Math.round(n.velocity * 100)}%`}
-                      className={clsx("absolute rounded-[4px] cursor-grab active:cursor-grabbing", shown.has(i) ? "z-10" : "", outside && "opacity-40")}
-                      style={{
-                        left: n.start * ppb,
-                        top: (TOP - n.pitch) * ROW_H + 1,
-                        width: w,
-                        height: ROW_H - 2,
-                        background: fill(hue, n.velocity),
-                        color: `color-mix(in oklab, ${hue}, #000 72%)`,
-                        boxShadow: shown.has(i)
-                          ? "inset 0 0 0 1px rgba(255,255,255,0.9), 0 0 0 1.5px #2b2d32, 0 2px 6px rgba(0,0,0,0.18)"
-                          : `inset 0 0 0 1px color-mix(in oklab, ${hue}, #000 40%)`,
-                      }}
+                      className={clsx(
+                        "absolute rounded-xs cursor-grab active:cursor-grabbing",
+                        on
+                          ? clsx(
+                              "z-10 text-white",
+                              lifting
+                                ? "shadow-[inset_0_0_0_1px_white,0_0_0_1px_var(--color-fg-strong),var(--shadow-lift)]"
+                                : "shadow-[inset_0_0_0_1px_white,0_0_0_1px_var(--color-fg-strong)]",
+                            )
+                          : locked
+                            ? "text-fg-muted shadow-[inset_0_0_0_1px_var(--color-fg-off)]"
+                            : "text-fg-strong shadow-[inset_0_0_0_1px_var(--note-ink)] hover:shadow-[inset_0_0_0_2px_var(--note-ink)]",
+                        outside && "opacity-40",
+                      )}
+                      style={
+                        {
+                          left: n.start * ppb,
+                          top: (TOP - n.pitch) * ROW_H + 1,
+                          width: w,
+                          height: ROW_H - 2,
+                          background: on ? tone.ink : locked ? "var(--color-line-strong)" : fill(tone, n.velocity),
+                          "--note-ink": tone.ink,
+                        } as React.CSSProperties
+                      }
                     >
                       {w > 26 && (
-                        <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-[9px] font-semibold leading-none pointer-events-none">
+                        <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-xs font-medium leading-none pointer-events-none">
                           {pitchName(n.pitch)}
                         </span>
                       )}
-                      <div data-edge className="absolute -right-0.5 inset-y-0 w-[7px] cursor-ew-resize rounded-r-[4px] hover:bg-white/30" />
+                      {/* The edge to resize by: never more than half a short note, which must stay draggable. */}
+                      <div data-edge className="absolute -right-0.5 inset-y-0 w-[min(7px,calc(50%+2px))] cursor-ew-resize rounded-r-xs hover:bg-white/30" />
                     </div>
                   );
                 })}
                 {marquee && (
                   <div
-                    className="absolute z-20 pointer-events-none rounded-sm border border-pop-500/70 bg-pop-500/10"
+                    className="absolute z-20 pointer-events-none rounded-xs border border-accent bg-accent/10"
                     style={{ left: marquee.x0, top: marquee.y0, width: marquee.x1 - marquee.x0, height: marquee.y1 - marquee.y0 }}
                   />
                 )}
@@ -684,17 +777,14 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
           </div>
         </div>
         {clip.notes.length === 0 && (
-          <div
-            className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none rounded-full bg-ink-800/90 px-4 py-2 text-[13px] text-ink-300 shadow-lg ring-1 ring-black/[0.06]"
-            style={{ left: KEYS_W + Math.min(clip.length * ppb, visible) / 2 }}
-          >
-            Click in the grid to add a note
-          </div>
+          <EmptyState className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none whitespace-nowrap" style={{ left: KEYS_W + Math.min(clip.length * ppb, visible) / 2 }}>
+            {draw ? "Click in the grid to add a note" : "Double-click in the grid to add a note"}
+          </EmptyState>
         )}
       </div>
 
-      <div data-testid="velocity" className="shrink-0 flex border-t border-black/[0.08] bg-ink-900" style={{ height: VEL_H }}>
-        <div className="shrink-0 flex flex-col justify-center pl-2.5 border-r border-black/[0.06] text-[10px] font-medium text-ink-400 leading-tight" style={{ width: KEYS_W }}>
+      <div data-testid="velocity" className="shrink-0 flex border-t border-line bg-chrome" style={{ height: VEL_H }}>
+        <div className="shrink-0 flex flex-col justify-center pl-2 border-r border-line text-xs font-medium text-fg-muted" style={{ width: KEYS_W }}>
           Velocity
         </div>
         <div className="relative flex-1 min-w-0 overflow-hidden">
@@ -708,9 +798,9 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
             onPointerCancel={(e) => onStripUp(e, true)}
             onLostPointerCapture={(e) => onStripUp(e, true)}
           >
-            <div className="absolute inset-x-0 border-t border-dashed border-black/[0.08] pointer-events-none" style={{ top: VEL_PAD }} />
-            <div className="absolute inset-x-0 border-t border-dashed border-black/[0.06] pointer-events-none" style={{ top: VEL_H / 2 }} />
-            <div className="absolute top-0 bottom-0 right-0 pointer-events-none bg-ink-950/60" style={{ left: clip.length * ppb }} />
+            <div className="absolute inset-x-0 border-t border-dashed border-line pointer-events-none" style={{ top: VEL_PAD }} />
+            <div className="absolute inset-x-0 border-t border-dashed border-line pointer-events-none" style={{ top: VEL_H / 2 }} />
+            <div className="absolute top-0 bottom-0 right-0 pointer-events-none bg-canvas/60" style={{ left: clip.length * ppb }} />
             {/* Selected notes' bars on top, so a chord's can be picked out. */}
             {clip.notes
               .map((n, i) => ({ n, i }))
@@ -722,16 +812,23 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
                     key={i}
                     data-velocity={i}
                     title={`${pitchName(n.pitch)}: velocity ${Math.round(n.velocity * 100)}% (drag up or down)`}
-                    className="absolute inset-y-0 w-3 -ml-[5px] cursor-ns-resize group"
+                    className={clsx("absolute inset-y-0 w-3 -ml-[5px] group", !locked && "cursor-ns-resize")}
                     style={{ left: n.start * ppb }}
                   >
+                    {/* Read only, grey like its notes: nothing here can be dragged. */}
                     <div
                       className="absolute left-[5px] w-[2px] rounded-full"
-                      style={{ bottom: VEL_PAD, height: h, background: shown.has(i) ? "#2b2d32" : `color-mix(in oklab, ${hue}, #000 30%)` }}
+                      style={{ bottom: VEL_PAD, height: h, background: shown.has(i) ? "var(--color-fg-strong)" : locked ? "var(--color-fg-off)" : tone.ink }}
                     />
                     <div
-                      className={clsx("absolute left-[2px] size-2 rounded-full ring-1", shown.has(i) ? "ring-ink-100 bg-white" : "ring-black/20 group-hover:scale-125")}
-                      style={{ bottom: VEL_PAD + h - 4, background: shown.has(i) ? undefined : fill(hue, n.velocity) }}
+                      className={clsx("absolute left-[2px] size-2 rounded-full ring-1", shown.has(i) ? "ring-fg-strong bg-white" : clsx("ring-(--note-ink)", !locked && "group-hover:scale-125"))}
+                      style={
+                        {
+                          bottom: VEL_PAD + h - 4,
+                          background: shown.has(i) ? undefined : locked ? "var(--color-line-strong)" : fill(tone, n.velocity),
+                          "--note-ink": locked ? "var(--color-fg-off)" : tone.ink,
+                        } as React.CSSProperties
+                      }
                     />
                   </div>
                 );
@@ -743,7 +840,54 @@ export default function NoteView({ graph, clip: ref, onClose }: { graph: GraphSt
   );
 }
 
-const Divider = () => <div className="w-px h-5 shrink-0 bg-black/[0.08]" />;
+// In a narrow dock (the browser open in a small window) the tools' dividers go before any tool does.
+const Divider = () => <div className="w-px h-5 shrink-0 bg-line @max-[900px]/dock:hidden" />;
+
+/** The grid (taste.md §3.5): `1/16 ▾`, a menu of its steps; the current one checked. */
+function GridMenu({ step, onPick }: { step: number; onPick: (step: number) => void }) {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const label = GRIDS.find((g) => g.step === step)?.label ?? "1/16";
+  return (
+    <>
+      <Button
+        size="sm"
+        data-testid="grid"
+        data-grid={label}
+        aria-haspopup="menu"
+        aria-expanded={!!anchor}
+        onMouseDown={keepFocus}
+        onClick={(e) => {
+          const b = e.currentTarget;
+          setAnchor((a) => (a ? null : b));
+        }}
+        title="The grid: snapped notes land on it, and new notes are a step long"
+        className={clsx("!px-1.5 !gap-1 text-fg", anchor && "bg-hover")}
+      >
+        {label}
+        <ChevronDown size={12} className="text-fg-muted" />
+      </Button>
+      {anchor && (
+        <Popover anchor={anchor} onClose={() => setAnchor(null)} role="menu" aria-label="Grid" className="w-[220px]">
+          {GRIDS.map((g) => (
+            <MenuRow
+              key={g.label}
+              role="menuitemradio"
+              data-grid={g.label}
+              aria-checked={g.step === step}
+              icon={g.step === step ? <Check size={14} className="text-fg" /> : <span className="block size-3.5" />}
+              onClick={() => {
+                setAnchor(null);
+                onPick(g.step);
+              }}
+            >
+              {g.label}
+            </MenuRow>
+          ))}
+        </Popover>
+      )}
+    </>
+  );
+}
 
 /**
  * The clip's length in bars, typed or stepped a bar at a time. `bars` is how many it spans and
@@ -767,11 +911,11 @@ function LengthField({
     if (text !== null && n > 0 && Number.isFinite(n)) onChange(toBeats(n));
   };
   return (
-    <div className="shrink-0 flex items-center gap-1.5" title="How long the clip is. Notes past its end don't play.">
-      <span className="text-[11px] text-ink-400">Length</span>
-      <div className="flex items-center rounded-lg bg-ink-950 ring-1 ring-black/[0.04]">
-        <button aria-label="One bar shorter" disabled={disabled || value <= 1} onClick={() => onChange(toBeats(Math.ceil(value - 1 - 1e-9) || 1))} className="h-6 w-6 grid place-items-center text-ink-400 enabled:hover:text-ink-100 disabled:opacity-40 cursor-pointer">
-          <Minus className="size-3" />
+    <div className="shrink-0 flex items-center gap-1.5" title="How long the clip is, in bars. Notes past its end don't play.">
+      <span className="text-xs text-fg-muted @max-[900px]/dock:hidden">Length</span>
+      <div className="h-ctl-sm flex items-center rounded-sm bg-raised border border-line-strong hover:not-focus-within:border-fg-off focus-within:border-accent has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent has-[:focus-visible]:outline-offset-1 transition-colors duration-80 ease-linear">
+        <button aria-label="One bar shorter" disabled={disabled || value <= 1} onClick={() => onChange(toBeats(Math.ceil(value - 1 - 1e-9) || 1))} className="h-full w-6 grid place-items-center text-fg-muted enabled:hover:text-fg disabled:text-fg-off cursor-pointer">
+          <Minus size={12} />
         </button>
         <input
           aria-label="Clip length in bars"
@@ -788,22 +932,22 @@ function LengthField({
               e.currentTarget.blur();
             }
           }}
-          className="w-9 h-6 bg-transparent text-center text-[12px] font-medium tabular-nums text-ink-100 outline-none"
+          className="w-9 h-full bg-transparent text-center text-sm font-medium text-fg disabled:text-fg-off outline-none"
         />
-        <button aria-label="One bar longer" disabled={disabled} onClick={() => onChange(toBeats(Math.floor(value + 1 + 1e-9)))} className="h-6 w-6 grid place-items-center text-ink-400 enabled:hover:text-ink-100 disabled:opacity-40 cursor-pointer">
-          <Plus className="size-3" />
+        <button aria-label="One bar longer" disabled={disabled} onClick={() => onChange(toBeats(Math.floor(value + 1 + 1e-9)))} className="h-full w-6 grid place-items-center text-fg-muted enabled:hover:text-fg disabled:text-fg-off cursor-pointer">
+          <Plus size={12} />
         </button>
       </div>
-      <span className="text-[11px] text-ink-400">{value === 1 ? "bar" : "bars"}</span>
+      <span className="text-xs text-fg-muted @max-[900px]/dock:hidden">{value === 1 ? "bar" : "bars"}</span>
     </div>
   );
 }
 
-/** The piano keys, one row per pitch, C's named; keys of selected notes lit. */
+/** The piano keys, one row per pitch, C's named; keys of selected notes lit in the track's colour. */
 const Keys = memo(
-  function Keys({ selected }: { selected: Set<number> }) {
+  function Keys({ selected, tone }: { selected: Set<number>; tone: TrackColor }) {
     return (
-      <div className="sticky left-0 z-20 shrink-0 bg-white border-r border-black/[0.08]" style={{ width: KEYS_W }}>
+      <div className="sticky left-0 z-20 shrink-0 bg-raised border-r border-line" style={{ width: KEYS_W }}>
         {Array.from({ length: TOP + 1 }, (_, k) => {
           const p = TOP - k;
           const black = BLACK.includes(p % 12);
@@ -812,13 +956,16 @@ const Keys = memo(
             <div
               key={p}
               data-key={p}
-              className={clsx("relative", p % 12 === 0 ? "border-b border-black/[0.14]" : !black && !BLACK.includes((p + 11) % 12) && "border-b border-black/[0.07]")}
+              className={clsx("relative", p % 12 === 0 ? "border-b border-line-strong" : !black && !BLACK.includes((p + 11) % 12) && "border-b border-line")}
               style={{ height: ROW_H }}
             >
-              {lit && <div className="absolute inset-0 bg-pop-500/25" />}
-              {black && <div className={clsx("absolute left-0 inset-y-[1px] w-[58%] rounded-r-[3px] shadow-sm", lit ? "bg-pop-600" : "bg-ink-200")} />}
+              {lit && <div className="absolute inset-0" style={{ background: tone.bar }} />}
+              {/* The edge between the two white keys either side of a black one, under it: every white key is a key. */}
+              {black && <div className="absolute inset-x-0 top-1/2 h-px bg-line" />}
+              {black && <div className="absolute left-0 inset-y-[1px] w-[60%] rounded-r-xs" style={{ background: lit ? tone.ink : "var(--color-gray-700)" }} />}
               {p % 12 === 0 && (
-                <span className={clsx("absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] leading-none tabular-nums", p === 60 ? "font-semibold text-ink-200" : "text-ink-400")}>
+                // On a lit key, the strongest grey: the bar tones are light, so it reads.
+                <span className={clsx("absolute right-1.5 top-1/2 -translate-y-1/2 text-xs leading-none", lit ? "font-medium text-fg-strong" : p === 60 ? "font-medium text-fg-muted" : "text-fg-faint")}>
                   {pitchName(p)}
                 </span>
               )}
@@ -828,59 +975,47 @@ const Keys = memo(
       </div>
     );
   },
-  (a, b) => a.selected.size === b.selected.size && [...a.selected].every((p) => b.selected.has(p)),
+  (a, b) => a.tone === b.tone && a.selected.size === b.selected.size && [...a.selected].every((p) => b.selected.has(p)),
 );
 
 /** Row shading (black keys darker, a line under each C) and the bar, beat and snap lines, bars as the song's time signatures count them. */
 const Lanes = memo(function Lanes({ width, ppb, meter, start, step }: { width: number; ppb: number; meter: Meter[]; start: number; step: number }) {
-  // From the top: pitch 127 (G9) down, twelve rows a period.
-  const stops = Array.from({ length: 12 }, (_, k) => {
+  // From the top: pitch 127 (G9) down, twelve rows a period: black keys' rows shaded, a line under each.
+  const bands = Array.from({ length: 12 }, (_, k) => {
     const pc = (TOP - k) % 12;
-    const c = BLACK.includes(pc) ? "rgba(0,0,0,0.045)" : "rgba(255,255,255,0.55)";
-    return `${c} ${k * ROW_H}px ${(k + 1) * ROW_H}px`;
-  }).join(", ");
-  const lines = Array.from({ length: 12 }, (_, k) => {
-    const pc = (TOP - k) % 12;
-    const c = pc === 0 ? "rgba(0,0,0,0.11)" : "rgba(0,0,0,0.035)";
-    return `transparent ${k * ROW_H}px ${(k + 1) * ROW_H - 1}px, ${c} ${(k + 1) * ROW_H - 1}px ${(k + 1) * ROW_H}px`;
-  }).join(", ");
+    return [
+      ...(BLACK.includes(pc) ? [{ y: k * ROW_H, h: ROW_H, color: "var(--color-hover)" }] : []),
+      { y: (k + 1) * ROW_H - 1, h: 1, color: pc === 0 ? "var(--color-line)" : "var(--color-hover)" },
+    ];
+  }).flat();
   /** Where the first of the lines every `period` beats from `origin` falls, in pixels from `from`. */
-  const offset = (origin: number, from: number, period: number) => ((((origin - from) % period) + period) % period * ppb).toFixed(2);
-  const v = (c: string) => `linear-gradient(to right, ${c} 1px, transparent 1px)`;
+  const offset = (origin: number, from: number, period: number) => (((((origin - from) % period) + period) % period) * ppb);
   return (
     <>
-      <div className="absolute inset-0 pointer-events-none" style={{ backgroundImage: `linear-gradient(to bottom, ${lines}), linear-gradient(to bottom, ${stops})`, backgroundSize: `100% ${12 * ROW_H}px`, backgroundPosition: "0 0" }} />
-      {meterSpans(meter, start, start + width / ppb).map((s) => {
-        const layers = [
-          { image: v("rgba(0,0,0,0.17)"), size: s.bar * ppb, x: offset(s.origin, s.start, s.bar) },
-          { image: v("rgba(0,0,0,0.08)"), size: ppb, x: offset(0, s.start, 1) },
-          ...(step && step < 1 && step * ppb >= 6 ? [{ image: v("rgba(0,0,0,0.035)"), size: step * ppb, x: offset(0, s.start, step) }] : []),
-        ];
-        return (
-          <div
-            key={s.start}
-            className="absolute inset-y-0 pointer-events-none"
-            style={{
-              left: (s.start - start) * ppb,
-              width: (s.end - s.start) * ppb,
-              backgroundImage: layers.map((l) => l.image).join(", "),
-              backgroundSize: layers.map((l) => `${l.size}px 100%`).join(", "),
-              backgroundPosition: layers.map((l) => `${l.x}px 0`).join(", "),
-            }}
-          />
-        );
-      })}
+      <HBands period={12 * ROW_H} bands={bands} />
+      {meterSpans(meter, start, start + width / ppb).map((s) => (
+        <VLines
+          key={s.start}
+          className="inset-y-0"
+          style={{ left: (s.start - start) * ppb, width: (s.end - s.start) * ppb }}
+          layers={[
+            ...(step && step < 1 && step * ppb >= 6 ? [{ every: step * ppb, at: offset(0, s.start, step), color: "var(--color-hover)" }] : []),
+            { every: ppb, at: offset(0, s.start, 1), color: "var(--color-line)" },
+            { every: s.bar * ppb, at: offset(s.origin, s.start, s.bar), color: "var(--color-line-strong)" },
+          ]}
+        />
+      ))}
     </>
   );
 });
 
 /** Bar numbers of the song, the clip's extent in its track's colour, and a click to play from there. */
-const Ruler = memo(function Ruler({ width, ppb, meter, start, length, color }: { width: number; ppb: number; meter: Meter[]; start: number; length: number; color: string }) {
+const Ruler = memo(function Ruler({ width, ppb, meter, start, length, tone }: { width: number; ppb: number; meter: Meter[]; start: number; length: number; tone: TrackColor }) {
   const shown = barList(meter, start + width / ppb).filter((b) => b.start >= start - 1e-9);
   return (
     <div
       data-testid="roll-ruler"
-      className="relative bg-ink-900/95 backdrop-blur border-b border-black/[0.06] cursor-pointer overflow-hidden"
+      className="relative bg-chrome border-b border-line cursor-pointer overflow-hidden"
       style={{ width }}
       title="Click to play from here"
       onPointerDown={(e) => {
@@ -889,23 +1024,23 @@ const Ruler = memo(function Ruler({ width, ppb, meter, start, length, color }: {
         void graphApi.seek(Math.max(0, Math.round(start + beat))).catch(() => {});
       }}
     >
-      <div className="absolute bottom-0 left-0 h-[3px] rounded-r-sm" style={{ width: length * ppb, background: color }} />
+      <div className="absolute bottom-0 left-0 h-[3px] rounded-r-xs" style={{ width: length * ppb, background: tone.bar }} />
       {shown.map((b) => {
         // Narrow bars are numbered every second or fourth.
         const w = b.length * ppb;
         const every = w >= 36 ? 1 : w >= 18 ? 2 : 4;
         return (
           <div key={b.bar} className="absolute top-0 bottom-0 pointer-events-none" style={{ left: (b.start - start) * ppb }}>
-            <div className="absolute bottom-0 h-2 w-px bg-black/20" />
-            {b.bar % every === 0 && <span className="absolute top-1.5 left-1.5 text-[11px] font-medium text-ink-400 tabular-nums">{b.bar + 1}</span>}
+            <div className="absolute bottom-0 h-2 w-px bg-line-strong" />
+            {b.bar % every === 0 && <span className="absolute top-1.5 left-1.5 text-xs font-medium text-fg-faint">{b.bar + 1}</span>}
           </div>
         );
       })}
       <div
-        className="absolute bottom-[5px] -translate-x-full pointer-events-none text-[9px] font-semibold tracking-wider px-1 rounded-sm text-white"
-        style={{ left: length * ppb - 3, background: color }}
+        className="absolute bottom-[5px] -translate-x-full pointer-events-none text-xs leading-none font-medium px-1 py-px rounded-xs text-white"
+        style={{ left: length * ppb - 3, background: tone.ink }}
       >
-        END
+        End
       </div>
       <PlayCap start={start} ppb={ppb} />
     </div>
@@ -914,49 +1049,42 @@ const Ruler = memo(function Ruler({ width, ppb, meter, start, length, color }: {
 
 // ---------------------------------------------------------------- the playhead
 
-/** Where playback is, for the roll's playhead: one poll shared by its parts. */
-const play = { beat: null as number | null, listeners: new Set<(beat: number) => void>(), timer: 0 };
-
-function usePlayBeat() {
-  const [beat, setBeat] = useState(play.beat);
-  useEffect(() => {
-    play.listeners.add(setBeat);
-    if (play.listeners.size === 1) {
-      const poll = () =>
-        graphApi.status().then((s) => {
-          play.beat = s.beat;
-          play.listeners.forEach((l) => l(s.beat));
-        }, () => {});
-      void poll();
-      play.timer = window.setInterval(poll, 200);
-    }
-    return () => {
-      play.listeners.delete(setBeat);
-      if (play.listeners.size === 0) window.clearInterval(play.timer);
-    };
-  }, []);
-  return beat;
-}
-
-/** Hidden outside the grid: a transformed line past its end would widen the scrolling area. */
+/**
+ * The roll's playhead: a line over the grid and a triangle in its ruler, moved every frame from
+ * the transport clock (taste.md TL-9). Hidden outside the grid: a line past its end would widen the
+ * scrolling area.
+ */
 function PlayLine({ start, ppb, width }: { start: number; ppb: number; width: number }) {
-  const beat = usePlayBeat();
-  if (beat == null || beat < start || (beat - start) * ppb >= width) return null;
-  return (
-    <div
-      data-testid="roll-playhead"
-      className="absolute top-0 bottom-0 z-10 w-px bg-sun shadow-[0_0_6px_rgba(201,165,78,0.4)] pointer-events-none transition-transform duration-200 ease-linear"
-      style={{ transform: `translateX(${(beat - start) * ppb}px)` }}
-    />
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(
+    () =>
+      onFrame((beat) => {
+        const el = ref.current;
+        if (!el) return;
+        const x = (beat - start) * ppb;
+        el.style.display = beat < start || x >= width ? "none" : "";
+        el.style.transform = `translateX(${x}px)`;
+      }),
+    [start, ppb, width],
   );
+  return <div ref={ref} data-testid="roll-playhead" className="absolute top-0 bottom-0 z-10 w-px bg-fg-strong pointer-events-none" />;
 }
 
 function PlayCap({ start, ppb }: { start: number; ppb: number }) {
-  const beat = usePlayBeat();
-  if (beat == null || beat < start) return null;
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(
+    () =>
+      onFrame((beat) => {
+        const el = ref.current;
+        if (!el) return;
+        el.style.display = beat < start ? "none" : "";
+        el.style.transform = `translateX(${(beat - start) * ppb}px)`;
+      }),
+    [start, ppb],
+  );
   return (
-    <div className="absolute bottom-0 left-0 pointer-events-none transition-transform duration-200 ease-linear" style={{ transform: `translateX(${(beat - start) * ppb}px)` }}>
-      <div className="w-0 h-0 -translate-x-1/2 border-x-[5px] border-x-transparent border-t-[7px] border-t-sun" />
+    <div ref={ref} className="absolute bottom-0 left-0 pointer-events-none">
+      <div className="w-0 h-0 -translate-x-1/2 border-x-[4px] border-x-transparent border-t-[6px] border-t-fg-strong" />
     </div>
   );
 }

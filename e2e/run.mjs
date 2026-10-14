@@ -63,7 +63,7 @@ export const SUITES = [
   ["undo", "cables", { expect: 10 }],
   ["effects", "proj", { expect: 12 }],
   ["layout", "proj", { expect: 38 }],
-  ["views", "proj", { expect: 27 }],
+  ["views", "proj", { expect: 30 }],
   ["code", "proj", { expect: 58 }],
   ["notes", "proj", { expect: 52 }],
   ["ports", "proj", { expect: 46 }],
@@ -84,8 +84,10 @@ export const SUITES = [
   ["live3b", "proj", { clap: true, expect: 51 }],
   ["s5-knobs", "fix", { expect: 101 }],
   ["s6-builders", "fix", { expect: 55 }],
-  ["s6-write", "fix", { expect: 35 }],
+  ["s6-write", "fix", { expect: 36 }],
   ["s6-fixes", "fix", { expect: 19 }],
+  ["taste", "fix", { expect: 32 }],
+  ["gestures", "fix", { expect: 30 }],
 ];
 const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export"];
 

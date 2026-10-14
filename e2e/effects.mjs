@@ -34,7 +34,8 @@ const added = read();
 ok(added.includes(`({ lane }) => ${delayed}`), "pluck is wrapped in a delay");
 ok(/import \{ delay \} from "std\/fx";/.test(added), "and delay is imported");
 ok(added.replace(/\nimport \{ delay \} from "std\/fx";/, "").replace(delayed, "pluck(lane.notes(\"chords\"))") === original, "nothing else changed");
-ok((await page.content()).includes(`pluck(lane.notes("chords")) → ${delayed}`), "toast shows the edit");
+// In words, with its Undo; never the code diff (taste.md ST-5, ST-6). Both by their labels (DV-2).
+ok((await page.$$eval("[data-testid=toast]", (els) => els.map((e) => e.textContent))).includes("Added Delay after PluckUndo"), "a toast says what was added, with Undo");
 ok(!!(await page.$('[data-module="keys"] [data-node="delay"]')), "a delay node appears in Keys");
 
 // The delay node's remove button (since step 5 it names the effect by its descriptor's label).

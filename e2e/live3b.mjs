@@ -129,7 +129,8 @@ check((await putFile(sess, "tracks/bass.ts", slowly(bass), bass)).status === 200
 at = await knobAt(page, hats);
 await page.mouse.move(at.x, at.y);
 await page.mouse.down();
-for (let i = 1; i <= 4; i++) await page.mouse.move(at.x, at.y - i * 4);
+// 60px in all, of a knob's 300 (taste.md KN-1): 0.3 → 0.7 on the pan's -1..1.
+for (let i = 1; i <= 4; i++) await page.mouse.move(at.x, at.y - i * 7.5);
 check(await until(async () => (await leases()).length === 1), "dragging a knob holds a lease on the server");
 const own = (await leases())[0];
 check(own?.client?.length > 0 && own?.file === "song.ts", `the lease is the window's, on song.ts (${JSON.stringify(own)})`);
@@ -137,7 +138,7 @@ const before = (await api("graph")).view.revision;
 fs.writeFileSync(`${proj}/tracks/bass.ts`, bass.replace("khz(2.5)", "khz(3)"));
 check(await until(async () => (await api("graph")).view.revision > before), "the outside save to tracks/bass.ts is taken in");
 check((await leases()).length === 1 && (await leases())[0].lease === own.lease, "the drag goes on through it, on the same lease");
-for (let i = 5; i <= 8; i++) await page.mouse.move(at.x, at.y - i * 4);
+for (let i = 5; i <= 8; i++) await page.mouse.move(at.x, at.y - i * 7.5);
 await page.mouse.up();
 check(await until(() => songTs().includes("pan: 0.7 }")), "releasing wrote `pan: 0.7` into song.ts");
 check(bassTs().includes("khz(3)"), "and the outside edit to bass.ts stays");

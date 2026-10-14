@@ -1,5 +1,6 @@
 // The graph view of the open song project: types, API, layout.
 
+import { recorded, type Step } from "./history";
 import { token } from "./native";
 
 /** A declared control a constant is (PKG-3): its instance's frame, its slot, and whether the call leaves it out. */
@@ -54,6 +55,8 @@ export interface ViewNode {
   component: string | null;
   /** The effect this node is, by its label (`Delay`), if it can be removed. */
   effect: string | null;
+  /** What a call is called on screen: its component's label (`LFO` for `lfo(…)`); `label` is the code's name for it. */
+  title: string | null;
   /** Where signals and values come in, in the order the code writes them. */
   inputs: InputPort[];
   /** The signals it gives to other nodes, its own result first. */
@@ -90,6 +93,25 @@ export interface GraphView { revision: number; modules: ModuleView[]; draft_erro
 
 /** What to show for a lane or a module: its label, which defaults to its key. */
 export const labelOf = (x: { key: string; label?: string | null }) => x.label || x.key;
+/** A word as a label starts: `cutoff` → Cutoff. */
+const sentence = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+/** A lane's name on screen: its label, else its key in sentence case (`cutoff` → Cutoff, taste.md §3.4). */
+export const laneTitle = (lane: { key: string; label?: string | null }) => (lane.label && lane.label !== lane.key ? lane.label : sentence(lane.key));
+/** What a mixer channel's control is called (taste.md's words: `channels.hats.db` is "Hats volume"); its input is the channel itself. */
+const CHANNEL: Record<string, string> = { db: "volume", pan: "pan", in: "" };
+/**
+ * A control's or an input's name on screen, by the one rule lane headers use too (taste.md §3.4):
+ * the key in sentence case (`feedback` → Feedback). A mixer channel's (`hats.db`) names its track,
+ * by `track` when it is one: Hats volume. Never the slot path.
+ */
+export function controlLabel(label: string, track?: (key: string) => string | undefined) {
+  const dot = label.indexOf(".");
+  if (dot < 0) return sentence(label);
+  const ch = label.slice(0, dot), rest = label.slice(dot + 1);
+  const who = track?.(ch) ?? sentence(ch);
+  const word = CHANNEL[rest] ?? rest;
+  return word ? `${who} ${word}` : who;
+}
 /** What to show for a module: its label, and "Song" for the root module unless it has one. */
 export const moduleName = (m: { key: string; label?: string | null }) => (m.key === "song" && (!m.label || m.label === "song") ? "Song" : labelOf(m));
 /** The key, to show beside a name that doesn't already say it (`Lead Vox` · `lead-vox`, not `Bass` · `bass`); "" otherwise. */
@@ -281,10 +303,12 @@ export function barsToBeats(meter: readonly Meter[], from: number, n: number) {
   return at - from;
 }
 
-/** `3.2`: the bar and the beat in it, counted from 1, as the transport shows a position. */
+/** `3.2.1`: the bar, the beat in it and the sixteenth in that, counted from 1, as the transport shows a position. */
 export function position(meter: readonly Meter[], beat: number) {
   const b = barAt(meter, beat);
-  return `${b.bar + 1}.${Math.floor(beat - b.start + 1e-9) + 1}`;
+  const into = beat - b.start + 1e-9;
+  const q = Math.floor(into);
+  return `${b.bar + 1}.${q + 1}.${Math.min(3, Math.floor((into - q) * 4)) + 1}`;
 }
 
 /** A loop between two beats; its range is kept while it is off. */
@@ -415,10 +439,25 @@ export interface Problem {
   severity: Severity;
 }
 
-/** Everything that needs attention in the revision playing, errors first (DIAG-4). */
+/**
+ * Everything that needs attention in the revision playing, errors first (DIAG-4). Not the lock
+ * another program holds: read-only is said once, by the status pill (taste.md ST-2).
+ */
 export function attention(graph: GraphState): Diagnostic[] {
   const rank: Record<Severity, number> = { error: 0, warning: 1, notice: 2 };
-  return [...(graph.problems ?? [])].sort((a, b) => rank[a.severity] - rank[b.severity]);
+  return [...(graph.problems ?? [])].filter((d) => d.code !== "lock.held").sort((a, b) => rank[a.severity] - rank[b.severity]);
+}
+
+/**
+ * Why nothing can be edited right now, or null when it can: the code doesn't compile (C7), another
+ * program holds the project (WRITE-17), or the connection to the app is gone. Edit affordances show
+ * their values then, without drag cursors, and say this instead (taste.md ST-2, ST-7).
+ */
+export function lockReason(graph: GraphState, connected: boolean): string | null {
+  if (!connected) return "Reconnecting to music2: editing is back once it is";
+  if (graph.view.draft_errors.length > 0) return "Fix the code first: it doesn't compile right now";
+  if (graph.read_only) return "Read only: this song is open for writing somewhere else";
+  return null;
 }
 
 const auth: Record<string, string> = token ? { "x-m2-token": token } : {};
@@ -459,8 +498,21 @@ export const editorHooks: {
   saveAll?: () => void;
   duplicate?: () => boolean;
   undo?: (redo: boolean) => boolean;
+  /** A menu command whose chord the code editor binds (⌘D): its own action while it has the keyboard. */
+  chord?: (id: string) => boolean;
   unsaved?: () => number;
 } = {};
+
+/** An edit's call: once it commits a revision, that revision is Undo's, named `step` (lib/history). */
+function edit<T extends { revision: number; before: string; after: string; pending?: boolean }>(session: number, step: Step | ((r: T) => Step), p: Promise<T>) {
+  // A value held while the code doesn't compile (`pending`) commits nothing yet; nor does an edit that changes nothing.
+  return p.then((r) => {
+    if (!r.pending && r.before !== r.after) recorded(session, r.revision, typeof step === "function" ? step(r) : step);
+    return r;
+  });
+}
+
+type Edit = { file: string; before: string; after: string; revision: number };
 
 export const graphApi = {
   get: () => call<GraphState>(""),
@@ -474,46 +526,43 @@ export const graphApi = {
     call("/preview", { session, revision, id, gesture, value, client: clientId }),
   cancel: (session: number, id: string, gesture: string) => call("/preview/cancel", { session, id, gesture, client: clientId }),
   /** Release: one value edit. While the code doesn't compile it is `pending`, and saved once it does. */
-  set: (session: number, revision: number, id: string, gesture: string, value: number, expect: number) =>
-    call<{ file: string; before: string; after: string; revision: number; pending?: boolean; errors?: unknown[] }>("/set", {
+  // Each edit below names its undo step (`step`): what the Undo button's tooltip and an undo's toast say.
+  set: (session: number, revision: number, id: string, gesture: string, value: number, expect: number, step: Step) =>
+    edit(
       session,
-      revision,
-      id,
-      gesture,
-      value,
-      expect,
-      client: clientId,
-    }),
-  connect: (session: number, revision: number, from: string, to: string) =>
-    call<{ file: string; before: string; after: string; revision: number }>("/connect", { session, revision, from, to }),
-  disconnect: (session: number, revision: number, id: string) =>
-    call<{ file: string; before: string; after: string; revision: number }>("/disconnect", { session, revision, id }),
+      step,
+      call<Edit & { pending?: boolean; errors?: unknown[] }>("/set", { session, revision, id, gesture, value, expect, client: clientId }),
+    ),
+  connect: (session: number, revision: number, from: string, to: string, step: Step) =>
+    edit(session, step, call<Edit>("/connect", { session, revision, from, to })),
+  disconnect: (session: number, revision: number, id: string, step: Step) => edit(session, step, call<Edit>("/disconnect", { session, revision, id })),
   addEffect: (session: number, revision: number, node: string, effect: Effect) =>
-    call<{ file: string; before: string; after: string; revision: number }>("/effect/add", { session, revision, call: node, component: effect.component }),
-  removeEffect: (session: number, revision: number, node: string) =>
-    call<{ file: string; before: string; after: string; revision: number }>("/effect/remove", { session, revision, call: node }),
+    edit(session, { name: `adding ${effect.label}`, structural: true }, call<Edit>("/effect/add", { session, revision, call: node, component: effect.component })),
+  removeEffect: (session: number, revision: number, node: string, step: Step) =>
+    edit(session, step, call<Edit>("/effect/remove", { session, revision, call: node })),
   /** Rewrite a notes lane (module and lane keys) with every clip it is to have. Prefer `writeLane`, which queues and gives clips ids. */
-  lane: (session: number, revision: number, module: string, lane: string, clips: NoteClip[]) =>
-    call<{ file: string; before: string; after: string; revision: number }>("/lane", { session, revision, module, lane, clips }),
+  lane: (session: number, revision: number, module: string, lane: string, clips: NoteClip[], step: Step) =>
+    edit(session, step, call<Edit>("/lane", { session, revision, module, lane, clips })),
   /** Show a track, by its key, as `label` (ID-10): its `track()` call's name, nothing that plays. One undoable edit. */
-  label: (session: number, module: string, label: string) =>
-    call<{ file: string; before: string; after: string; revision: number }>("/label", { session, module, label }),
+  label: (session: number, module: string, label: string, step: Step) => edit(session, step, call<Edit>("/label", { session, module, label })),
   /**
    * Automate a knob (HOME-2): its value becomes the fallback of a new, empty control lane read where
    * it was, so the song sounds the same and the timeline shows a lane to draw on. One undoable edit.
    */
   automate: (session: number, revision: number, id: string) =>
-    call<{ file: string; before: string; after: string; revision: number; lane: { module: string; lane: string }; name: string }>(
-      "/automate",
-      { session, revision, id },
+    edit(
+      session,
+      (r) => ({ name: `automating ${r.name}`, structural: true }),
+      call<Edit & { lane: { module: string; lane: string }; name: string }>("/automate", { session, revision, id }),
     ),
   /** Apply a problem's fix, offered at `revision`, exactly as it came: its Tx, one undoable edit. */
   fix: (session: number, revision: number, fix: Fix) =>
-    call<{ file: string; before: string; after: string; revision: number }>("/fix", { session, revision, fix }),
-  undo: (session: number) => call<{ file: string; before: string; after: string; revision: number }>("/undo", { session }),
+    // Named by its own title, quoted: "Undid “Move all to Kick (kicks)”".
+    edit(session, { name: `“${fix.title}”`, structural: true }, call<Edit>("/fix", { session, revision, fix })),
+  undo: (session: number) => call<Edit>("/undo", { session }),
   /** Try the project's lock again (the read-only banner's Retry). Answers with the state. */
   retryLock: (session: number) => call<GraphState>("/lock/retry", { session }),
-  redo: (session: number) => call<{ file: string; before: string; after: string; revision: number }>("/redo", { session }),
+  redo: (session: number) => call<Edit>("/redo", { session }),
   transport: (action: "play" | "stop" | "toggle" | "restart") => call("/transport", { action }),
   /** Set the loop's range (beats; it turns looping on unless `on` says), or turn looping on or off over the range set. Answers with the transport. */
   loop: (req: { start?: number; end?: number; on?: boolean }) => call<GraphStatus>("/loop", req),
@@ -556,7 +605,7 @@ let lanes = { session: 0, revision: 0, pending: 0, queue: Promise.resolve() as P
  * The app builds the write, so it chooses the ids (FMT-11): a clip keeps the id it has, and one
  * without a valid id gets a new one here, so what comes back is exactly what was sent (`clips`).
  */
-export function writeLane(graph: GraphState, module: string, lane: string, clips: NoteClip[], base: number) {
+export function writeLane(graph: GraphState, module: string, lane: string, clips: NoteClip[], base: number, step: Step) {
   if (lanes.session !== graph.session) lanes = { session: graph.session, revision: 0, pending: 0, queue: Promise.resolve() };
   const taken = clips.map((c) => c.id);
   const sent = clips.map((c) => {
@@ -568,7 +617,7 @@ export function writeLane(graph: GraphState, module: string, lane: string, clips
   const q = lanes;
   q.pending++;
   const write = q.queue
-    .then(() => graphApi.lane(graph.session, base, module, lane, sent))
+    .then(() => graphApi.lane(graph.session, base, module, lane, sent, step))
     .then((r) => ((q.revision = Math.max(q.revision, r.revision)), { ...r, clips: sent }))
     .finally(() => q.pending--);
   q.queue = write.catch(() => {});
@@ -634,20 +683,128 @@ export function fromUnit(k: Knob, u: number) {
 }
 
 export function display(k: Knob, v: number) {
-  const n = (x: number, d = 2) => Number(x.toFixed(d)).toString();
-  switch (k.unit) {
-    case "hz":
-      // Rates below hearing (a chorus's 0.8 Hz) keep their decimals.
-      return v >= 1000 ? `${n(v / 1000)} kHz` : `${n(v, v < 20 ? 2 : 0)} Hz`;
-    case "db":
-      return `${n(v, 1)} dB`;
-    case "seconds":
-      return v < 1 ? `${n(v * 1000, 0)} ms` : `${n(v)} s`;
-    case "beats":
-      return `${n(v, 3)} beats`;
-    case "semitones":
-      return `${n(v, 1)} st`;
-    default:
-      return n(v);
+  return formatValue(k.unit, v, k.label);
+}
+
+/** A pan control (`pan`, `hats.pan`, a `hats-pan` lane): it reads "C", "L 20" or "R 35". */
+const isPan = (unit: string | null | undefined, name: string | undefined) => unit === "bipolar" && !!name && /(^|[.\-_])pan$/.test(name);
+
+/**
+ * A value in its unit, as the screen writes it (taste.md, Words and numbers): "−6.0 dB" ("+6.0 dB"), "350 Hz",
+ * "1.2 kHz", "120 ms", "1.50 s", "0.25", "+7 st", "C" or "L 20" for a pan. Negative values take a
+ * true minus (U+2212); code keeps its hyphen. `name` (the control's or lane's key) tells a pan.
+ */
+export function formatValue(unit: string | null | undefined, v: number, name?: string) {
+  // `d` decimals, fixed or (`trim`) with trailing zeros dropped; never a "−0.0".
+  const num = (x: number, d: number, trim = false) => {
+    const r = Number(x.toFixed(d));
+    const t = Object.is(r, -0) || r === 0 ? (0).toFixed(trim ? 0 : d) : trim ? String(r) : r.toFixed(d);
+    return t.replace(/^-/, "\u2212");
+  };
+  if (isPan(unit, name)) {
+    const p = Math.round(v * 100);
+    return p === 0 ? "C" : `${p < 0 ? "L" : "R"} ${Math.abs(p)}`;
   }
+  switch (unit) {
+    case "hz":
+      if (v >= 1000) return `${num(v / 1000, 1)} kHz`;
+      // Rates below hearing (a chorus's 0.8 Hz) keep their decimals; heard pitches are whole.
+      return v < 20 ? `${num(v, 2, true)} Hz` : `${num(v, 0)} Hz`;
+    case "db":
+      // Gain is signed, as a mixer reads it: "+6.0 dB", "−6.0 dB", "0.0 dB".
+      return `${Number(v.toFixed(1)) > 0 ? "+" : ""}${num(v, 1)} dB`;
+    case "seconds":
+      return v < 1 ? `${num(v * 1000, 0)} ms` : `${num(v, 2)} s`;
+    case "beats":
+      return `${num(v, 3, true)} beats`;
+    case "semitones":
+      return `${v > 0 ? "+" : ""}${num(v, 1, true)} st`;
+    case "unit01":
+    case "bipolar":
+      return num(v, 2);
+    default:
+      return num(v, 2, true);
+  }
+}
+
+/** Semitones from C of each note name, for a typed pitch ("C4", "F#3", "Bb2"). */
+const NOTE: Record<string, number> = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
+
+/**
+ * A value typed into a knob (taste.md §2.14), in its unit: "-3", "-3db", "2k", "2.5 khz", "120ms",
+ * "0.5s", "50%", "L20", "+7" (semitones) and "C4" (a pitch, for a frequency). A bare number is in
+ * the unit the knob shows ("3" on a knob reading 2.5 kHz is 3 kHz). Held to the knob's span and
+ * written to three significant figures, as a drag writes it; null if it doesn't read as a value.
+ */
+export function parseValue(k: Knob, text: string): number | null {
+  const t = text.trim().toLowerCase().replace(/\u2212/g, "-").replace(/\s+/g, "");
+  let v: number | null = null;
+  const pitch = /^([a-g])([#b]?)(-?\d)$/.exec(t);
+  const pan = /^([lr])(\d+(?:\.\d+)?)%?$/.exec(t);
+  const m = /^([+-]?(?:\d+\.?\d*|\.\d+))([a-z%]*)$/.exec(t);
+  if (isPan(k.unit, k.label) && (t === "c" || pan)) v = t === "c" ? 0 : ((pan![1] === "l" ? -1 : 1) * Number(pan![2])) / 100;
+  else if (pitch && k.unit === "hz") {
+    const midi = 12 * (Number(pitch[3]) + 1) + NOTE[pitch[1]] + (pitch[2] === "#" ? 1 : pitch[2] === "b" ? -1 : 0);
+    v = 440 * 2 ** ((midi - 69) / 12);
+  } else if (m) {
+    const [n, unit] = [Number(m[1]), m[2]];
+    switch (k.unit) {
+      case "hz":
+        if (unit === "k" || unit === "khz") v = n * 1000;
+        else if (unit === "hz") v = n;
+        // Bare: as shown; a kHz reading takes a small number as kHz.
+        else if (unit === "") v = k.value >= 1000 && Math.abs(n) < 20 ? n * 1000 : n;
+        break;
+      case "seconds":
+        if (unit === "ms") v = n / 1000;
+        else if (unit === "s") v = n;
+        else if (unit === "") v = k.value < 1 ? n / 1000 : n;
+        break;
+      case "db":
+        if (unit === "" || unit === "db") v = n;
+        break;
+      case "semitones":
+        if (unit === "" || unit === "st") v = n;
+        break;
+      case "beats":
+        if (unit === "" || unit === "beats" || unit === "beat") v = n;
+        break;
+      default:
+        if (unit === "%") v = n / 100;
+        else if (unit === "") v = n;
+    }
+  }
+  if (v === null || !Number.isFinite(v)) return null;
+  const { lo, hi } = span(k);
+  return Number(Math.min(hi, Math.max(lo, v)).toPrecision(3));
+}
+
+/**
+ * One step of a knob from `v` (taste.md §5.2), `n` of them (negative is down): a 1% ratio on a
+ * logarithmic span (Hz), 0.1 dB, a semitone, or else 1% of the span. Held to the span.
+ */
+export function stepValue(k: Knob, v: number, n: number) {
+  const { lo, hi, log } = span(k);
+  const next = log ? v * 1.01 ** n : k.unit === "db" ? v + 0.1 * n : k.unit === "semitones" ? v + n : v + (hi - lo) * 0.01 * n;
+  return Number(Math.min(hi, Math.max(lo, next)).toPrecision(3));
+}
+
+/**
+ * What a control lane plays at `beat`: inside a clip (the last one there wins, as they are drawn),
+ * its points joined by straight lines, held before the first and after the last; between clips its
+ * fallback. `follows` says whether a clip is what sets it (HOME-1: its home is the lane).
+ */
+export function laneValue(lane: Extract<TimelineLane, { kind: "control" }>, beat: number): { value: number | null; follows: boolean } {
+  for (let i = lane.clips.length - 1; i >= 0; i--) {
+    const c = lane.clips[i];
+    if (beat < c.start || beat >= c.start + c.length || !c.points.length) continue;
+    const t = beat - c.start, ps = c.points;
+    if (t <= ps[0][0]) return { value: ps[0][1], follows: true };
+    for (let k = 1; k < ps.length; k++) {
+      const [b0, v0] = ps[k - 1], [b1, v1] = ps[k];
+      if (t <= b1) return { value: b1 > b0 ? v0 + ((v1 - v0) * (t - b0)) / (b1 - b0) : v1, follows: true };
+    }
+    return { value: ps[ps.length - 1][1], follows: true };
+  }
+  return { value: lane.default ?? null, follows: false };
 }
