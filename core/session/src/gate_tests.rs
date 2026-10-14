@@ -5,9 +5,10 @@ use std::path::{Path, PathBuf};
 
 use m2_ir::{FNode, FOp, Flat};
 use m2_runtime::{PackageSet, Renderer};
-use m2_song::{Project, Snapshot};
+use m2_song::tx::{Anchor, Base, Edit, Expect, Op, Pos, Range, Tx, TxPath};
+use m2_song::{LaneData, Project, Snapshot};
 
-use crate::{Session, TimelineLane, compile_sources};
+use crate::{Session, compile_sources};
 
 pub(crate) fn std_packages() -> PackageSet {
     let mut p = PackageSet::default();
@@ -59,6 +60,36 @@ impl Drop for Fixture {
     }
 }
 
+/// A copy of `every-component`: a song that calls each std component once, with some controls
+/// written, some connected and some left out.
+pub(crate) fn every_component() -> Fixture {
+    let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/every-component");
+    let f = Fixture::new();
+    for file in files_under(&from) {
+        f.write(file.strip_prefix(&from).unwrap().to_str().unwrap(), std::fs::read(&file).unwrap());
+    }
+    f
+}
+
+/// A `Values` Tx writing `new` over the first `old` after `after` in `file`, as the knob of that
+/// literal commits it (the editor's builder, WRITE-10).
+pub(crate) fn literal(s: &Session, file: &str, after: &str, old: &str, new: f64) -> Tx {
+    let text = s.accepted().snapshot.files[Path::new(file)].clone();
+    let at = text.find(after).unwrap() + text[text.find(after).unwrap()..].find(old).unwrap();
+    let path = TxPath::new(file).unwrap();
+    let (start, end) = (at as u32, (at + old.len()) as u32);
+    let edit = Edit { start: Pos::Byte(start), end: Pos::Byte(end), expected: old.into(), text: new.to_string() };
+    let anchor = Anchor::Written { file: path.clone(), range: Range::bytes(start, end) };
+    let mut tx = Tx::new(
+        "tx-knob",
+        (old.into(), new.to_string()),
+        vec![Op::TextEdit { file: path.clone(), edits: vec![edit] }],
+        Expect::Values(vec![(anchor, new)]),
+    );
+    tx.base.insert(path, Base::text(&text));
+    tx
+}
+
 /// Two seconds of the accepted revision, offline.
 fn render(s: &Session) -> Vec<[f32; 2]> {
     let rev = s.accepted();
@@ -100,10 +131,9 @@ fn changing_a_tracks_label_changes_nothing_but_the_label() {
     assert!(render(&s) == sound, "it sounds the same");
     assert_eq!(data(&f), files);
     assert!(s.problems().is_empty(), "{:?}", s.problems());
-    let track = s.timeline().tracks.into_iter().find(|t| t.module == "kick").unwrap();
-    assert_eq!(track.label, "Big Kick");
-    let module = s.view().modules.into_iter().find(|m| m.key == "kick").unwrap();
-    assert_eq!(module.label, "Big Kick");
+    // What the timeline and the canvas show it by (`crates/editor` reads it there).
+    let module = s.accepted().compiled.ir.modules.iter().find(|m| m.key == "kick").unwrap();
+    assert_eq!(module.label(), "Big Kick");
 }
 
 // The step 4 gate, ID-17, DIAG-6: a track key renamed by hand silences the track until its
@@ -118,7 +148,8 @@ fn relinking_a_renamed_tracks_folder_restores_its_sound() {
     assert!(render(&s) != sound, "the kick is silent");
     let fix = s.problems()[0].fixes[0].clone();
     assert_eq!((s.problems()[0].src.as_deref(), fix.code), (Some("data/kick"), "relink"));
-    s.fix(s.accepted().number, fix.code, &serde_json::to_value(&fix.edit).unwrap()).unwrap();
+    // DIAG-1: applying a fix is committing its Tx.
+    s.commit(fix.tx).unwrap();
     assert!(render(&s) == sound, "the same bits as before the rename");
 }
 
@@ -137,7 +168,7 @@ fn relinking_a_renamed_lanes_file_restores_its_sound() {
     assert_eq!((p.code, p.src.as_deref()), ("data.unclaimed", Some("data/kick/hits.json")));
     let fix = p.fixes[0].clone();
     assert!(fix.code == "relink" && fix.likely, "{fix:?}");
-    s.fix(s.accepted().number, fix.code, &serde_json::to_value(&fix.edit).unwrap()).unwrap();
+    s.commit(fix.tx).unwrap();
     assert!(render(&s) == sound, "the same bits as before the rename");
     assert_eq!(f.read("data/kick/beats.json"), hits, "moved as it was");
     assert!(!f.0.join("data/kick/hits.json").exists() && s.problems().is_empty(), "{:?}", s.problems());
@@ -166,9 +197,9 @@ fn a_data_file_that_cant_be_read_stops_nothing_else() {
     let song = f.read("song.ts");
     f.write("song.ts", format!("// Edited elsewhere.\n{song}"));
     assert!(s.refresh() && s.draft_errors.is_empty() && s.accepted().number == 3, "{:?}", s.draft_errors);
-    let id = s.controls().into_iter().find(|c| c.file == "tracks/bass.ts").unwrap();
-    s.set(s.accepted().number, &id.id, id.value * 2.0, None).unwrap();
-    // On open, only that lane is silent.
+    s.commit(literal(&s, "tracks/bass.ts", "period: ", "0.5", 0.25)).unwrap();
+    // On open, only that lane is silent. The lock is one session's at a time (WRITE-17).
+    drop(s);
     let opened = f.open();
     assert!(opened.problems()[0].message.contains("plays nothing"), "{}", opened.problems()[0].message);
     mode("data/kick/other.json", 0o644);
@@ -189,19 +220,13 @@ fn a_lane_file_with_an_unknown_field_keeps_its_data_or_silences_only_its_lane() 
     assert!(p.message.contains("unknown field `colour`") && p.message.contains("plays the data it had"), "{}", p.message);
     assert!(render(&s) == sound, "the bass plays the notes it had");
 
+    drop(s);
     let s = f.open();
     assert!(s.problems()[0].message.contains("plays nothing"), "{}", s.problems()[0].message);
-    let clips = |module: &str, lane: &str| match s
-        .timeline()
-        .tracks
-        .iter()
-        .find(|t| t.module == module)
-        .unwrap()
-        .lanes
-        .iter()
-        .find(|l| l.key() == lane)
-    {
-        Some(TimelineLane::Notes { clips, .. }) => clips.len(),
+    // What each lane plays, as the timeline shows it.
+    let clips = |module: &str, lane: &str| match s.accepted().compiled.data.lane(module, lane).map(|d| &**d) {
+        Some(LaneData::Notes(clips)) => clips.len(),
+        None => 0,
         _ => panic!("no notes lane {module} › {lane}"),
     };
     assert_eq!((clips("bass", "notes"), clips("kick", "hits") > 0, clips("keys", "chords") > 0), (0, true, true));

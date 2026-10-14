@@ -4,6 +4,7 @@ use std::time::Duration;
 use m2_play::Driver;
 
 use super::*;
+use m2_editor::Gestures;
 
 const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n";
 
@@ -49,14 +50,49 @@ impl Drop for Fixture {
     }
 }
 
+// WRITE-20 (the step 6 design's 20.1): a project whose code doesn't compile opens, with nothing
+// to show or play; why is the first diagnostic, placed in its file and line, and never names the
+// project's folder.
 #[test]
 fn a_project_that_does_not_compile_says_where_without_its_folder() {
     let fixture = Fixture::new();
     fixture.write("export default song(() => osc.sine(hz(800)) oops);\n");
     let graph = Graph::silent();
-    let e = format!("{:#}", graph.open(&fixture.0).unwrap_err());
-    assert!(e.contains("song.ts:3:"), "{e}");
-    assert!(!e.contains(&*fixture.0.canonicalize().unwrap().to_string_lossy()), "{e}");
+    let state = graph.open(&fixture.0).unwrap();
+    let first = &state["diagnostics"][0];
+    assert_eq!((&first["file"], &first["line"]), (&json!("song.ts"), &json!(3)), "{state:#}");
+    let said = first["message"].as_str().unwrap();
+    assert!(!said.contains(&*fixture.0.canonicalize().unwrap().to_string_lossy()), "{said}");
+    assert_eq!((&state["view"]["modules"], &state["timeline"]["tracks"]), (&json!([]), &json!([])));
+    assert!(graph.inspect(|a| a.open.as_ref().unwrap().plays.is_none()), "nothing is loaded");
+}
+
+// WRITE-17, WRITE-18 (the step 6 design's 7.3): a project whose lock another program holds opens
+// read-only: the state says why and who, and an edit is refused with WRITE-18's message, changing
+// nothing; once the lock is let go, Retry makes the session a writer, and the edit goes ahead.
+#[test]
+fn a_project_another_program_holds_opens_read_only_until_retried() {
+    let fixture = Fixture::new();
+    fixture.write(KICK);
+    let held = m2_session::lock::acquire(&fixture.0, "m2", m2_session::lock::RETRY).unwrap();
+    let graph = fixture.open();
+    let state = graph.state().unwrap();
+    let ro = &state["read_only"];
+    assert_eq!((&ro["why"], &ro["holder"]["program"], &ro["holder"]["pid"]), (&json!("held"), &json!("m2"), &json!(std::process::id())));
+    let said = graph.read_only().unwrap();
+    assert!(said.contains("nothing was changed") && said.contains("m2"), "{said}");
+    let (token, revision) = (state["session"].as_u64().unwrap(), state["view"]["revision"].as_u64().unwrap());
+    let song = fixture.read("song.ts");
+    let e = graph.write_notes(token, revision, "kick", "hits", &kick_clips(&["C1"])).unwrap_err().to_string();
+    assert!(e.contains("nothing was changed"), "{e}");
+    assert!(!fixture.0.join("data/kick/hits.json").exists() && fixture.read("song.ts") == song, "nothing written");
+    // Still held: Retry leaves it read-only.
+    assert!(!graph.retry_lock(token).unwrap()["read_only"].is_null());
+    drop(held);
+    let state = graph.retry_lock(token).unwrap();
+    assert!(state["read_only"].is_null() && graph.read_only().is_none(), "{state:#}");
+    graph.write_notes(token, revision, "kick", "hits", &kick_clips(&["C1"])).unwrap();
+    assert!(fixture.0.join("data/kick/hits.json").exists());
 }
 
 /// The open project's token, the accepted revision, and the id of the control whose value is
@@ -147,11 +183,13 @@ fn a_commit_carried_past_inserted_code_rebuilds_instead_of_patching_an_old_origi
     let old_origin = graph.inspect(|a| a.open.as_ref().unwrap().session.controls()[0].origin.clone());
     graph.preview(token, revision, &id, "drag", 900.0).unwrap();
     fixture.write("const first = hz(123);\nconst second = hz(456);\nexport default song(() => osc.sine(hz(800)));\n");
-    // The inserted calls shift the control's position in the graph. The commit is
-    // carried to it, and the player is rebuilt rather than patched at the old one.
+    // The inserted calls shift the control's position in the graph. The commit is carried past
+    // them (its file's outside change rides along through the baseline, R2: one revision holds
+    // both), and since the delta from what plays is more than values (WRITE-8), the player is
+    // rebuilt rather than patched at the old origin.
     graph.set(token, revision, &id, "drag", 950.0, Some(800.0)).unwrap();
     let (playing, accepted) = playing(&graph);
-    assert!(accepted > revision + 1);
+    assert!(accepted > revision);
     assert_eq!(playing, accepted);
     assert!(graph.leases().is_empty());
     let current = graph.inspect(|a| a.open.as_ref().unwrap().session.controls().into_iter().find(|c| c.value == 950.0).unwrap());
@@ -258,6 +296,50 @@ fn undo_and_redo_play_each_revision_they_make() {
     assert!(graph.undo(token + 1).is_err(), "another session's request is refused");
 }
 
+// WRITE-4, WRITE-5, WRITE-11: an agent's Tx, as `/api/tx/*` takes it. A check writes nothing and
+// answers with the delta's hash; a commit on that hash (`Seen`) is written, played and one undo
+// step; the same Tx again is a conflict naming the file, in the editor's one JSON shape.
+#[test]
+fn an_agents_tx_is_checked_then_committed_on_the_hash_its_check_showed() {
+    let fixture = Fixture::new();
+    let graph = fixture.open();
+    let (token, revision, _) = control(&graph);
+    let song = fixture.read("song.ts");
+    let at = song.find("800").unwrap();
+    let edit = json!({"op": "text_edit", "file": "song.ts", "edits": [{"start": at, "end": at + 3, "expected": "800", "text": "900"}]});
+    let anchor = json!({"written": {"file": "song.ts", "range": [at, at + 3]}});
+    let base = json!({"song.ts": m2_song::Sha::of(song.as_bytes()).prefixed()});
+    let tx = |expect: Value| json!({"id": "tx-agent", "base": base, "ops": [edit], "expect": expect});
+    let (status, checked) = graph.tx_check(Some(token), &tx(json!({"values": [[anchor, 900.0]]}))).unwrap();
+    assert_eq!(status, 200, "{checked}");
+    let hash = checked["checked"]["hash"].as_str().unwrap().to_string();
+    assert_eq!(checked["checked"]["delta"]["values"].as_array().map(Vec::len), Some(1), "{checked}");
+    assert_eq!((fixture.read("song.ts"), playing(&graph)), (song.clone(), (revision, revision)), "a check writes nothing");
+
+    let (status, committed) = graph.tx_commit(Some(token), &tx(json!({"seen": hash}))).unwrap();
+    assert_eq!((status, committed["committed"]["hash"].as_str()), (200, Some(hash.as_str())), "{committed}");
+    assert!(fixture.read("song.ts").contains("hz(900)") && synced(&graph));
+    assert_eq!(knob(&graph, 900.0).1, revision + 1, "plays the revision it made");
+
+    let (status, refused) = graph.tx_commit(Some(token), &tx(json!({"seen": hash}))).unwrap();
+    assert_eq!((status, &refused["conflict"]["files"][0]["file"]), (409, &json!("song.ts")), "{refused}");
+    graph.undo(token).unwrap();
+    assert!(fixture.read("song.ts").contains("hz(800)") && synced(&graph));
+
+    // The step 6 design's 1.2: a Tx that doesn't read is rejected (422) with its diagnostics, as
+    // every refusal is answered, never a bare error.
+    let mut extra = tx(json!("identical"));
+    extra["extra"] = json!(1);
+    let remove = json!([{"op": "remove", "file": "../x.json"}]);
+    let outside = json!({"id": "tx-agent", "base": {"../x.json": null}, "ops": remove, "expect": "identical"});
+    for (bad, code) in [(extra, "tx.invalid"), (outside, "tx.path")] {
+        for answer in [graph.tx_check(Some(token), &bad).unwrap(), graph.tx_commit(Some(token), &bad).unwrap()] {
+            assert_eq!((answer.0, &answer.1["rejected"]["diagnostics"][0]["code"]), (422, &json!(code)), "{}", answer.1);
+        }
+    }
+    assert!(fixture.read("song.ts").contains("hz(800)"));
+}
+
 #[test]
 fn effects_are_listed_added_and_removed_and_the_player_follows() {
     let fixture = Fixture::new();
@@ -307,6 +389,44 @@ fn a_lane_write_plays_the_new_notes_and_undo_takes_them_back() {
     assert!(synced(&graph));
 }
 
+// ID-10, HOME-2: the label and automate routes: a rename changes only what the timeline and the
+// canvas show; an automate answers with the new lane, which the timeline shows empty at once, and
+// the player plays each revision; one undo each takes them back.
+#[test]
+fn a_track_renamed_and_a_knob_automated_play_and_undo() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "import { track } from '@m2/core';\n\
+         const t = track('tone', () => osc.sine(hz(800)));\nexport default song(() => t.out);\n",
+    );
+    let graph = fixture.open();
+    let (token, revision, id) = control(&graph);
+    let tracks = |graph: &Graph| graph.state().unwrap()["timeline"]["tracks"][0].clone();
+    let renamed = graph.label(token, "tone", "Lead Tone").unwrap();
+    assert_eq!((&renamed["before"], &renamed["after"], &renamed["file"]), (&json!("tone"), &json!("Lead Tone"), &json!("song.ts")));
+    assert_eq!(tracks(&graph)["label"], "Lead Tone");
+    assert_eq!(graph.state().unwrap()["view"]["modules"][1]["label"], "Lead Tone");
+    assert!(graph.label(token + 1, "tone", "Nope").is_err(), "another session's request is refused");
+    assert!(graph.label(token, "nope", "Nope").is_err());
+
+    let revision = revision + 1;
+    let automated = graph.automate(token, revision, &id).unwrap();
+    assert_eq!((&automated["lane"], &automated["name"]), (&json!({"module": "tone", "lane": "sine-freq"}), &json!("sine freq")));
+    let written = "track('tone', { name: \"Lead Tone\" }, ({ lane }) => osc.sine(lane.control(\"sine-freq\", \"hz\", hz(800))))";
+    assert!(fixture.read("song.ts").contains(written));
+    let lane = &tracks(&graph)["lanes"][0];
+    let shown = (&lane["kind"], &lane["key"], &lane["default"], &lane["clips"]);
+    assert_eq!(shown, (&json!("control"), &json!("sine-freq"), &json!(800.0), &json!([])));
+    assert!(synced(&graph), "the player plays the automated song");
+    assert!(graph.automate(token, revision, &id).is_err(), "the knob is a lane now");
+
+    graph.undo(token).unwrap();
+    assert!(!fixture.0.join("data/tone/sine-freq.json").exists() && synced(&graph));
+    graph.undo(token).unwrap();
+    assert_eq!(tracks(&graph)["label"], "tone");
+    assert!(fixture.read("song.ts").contains("track('tone', () => osc.sine(hz(800)))"));
+}
+
 /// A Kick track renamed Kicks in its code, with its notes left under the old name.
 fn renamed_kick(fixture: &Fixture) {
     fixture.write(
@@ -335,19 +455,20 @@ fn data_a_rename_left_behind_is_a_problem_whose_fixes_play_and_undo() {
     assert!(problem["message"].as_str().unwrap().starts_with("Data filed under kick isn't playing."), "{problem}");
     let relink = problem["fixes"][0].clone();
     assert_eq!((&relink["code"], &relink["likely"]), (&json!("relink"), &json!(true)));
-    assert_eq!(relink["edit"]["ops"], json!([{"op": "rename", "from": "data/kick", "to": "data/kicks"}]));
+    // DIAG-1: the fix is a ready Tx, its JSON as `m2 tx` and agents read it.
+    assert_eq!(relink["tx"]["ops"], json!([{"op": "rename", "from": "data/kick", "to": "data/kicks"}]));
     let news = graph.news();
     assert_eq!((&news["session"], &news["revision"], &news["problems"]), (&json!(token), &json!(revision), &state["problems"]));
 
     let clips = |graph: &Graph| graph.state().unwrap()["timeline"]["tracks"][0]["lanes"][0]["clips"].as_array().unwrap().len();
-    assert!(graph.fix(token + 1, revision, "relink", &relink["edit"]).is_err(), "another session's request is refused");
-    let moved = graph.fix(token, revision, "relink", &relink["edit"]).unwrap();
+    assert!(graph.fix(token + 1, &relink).is_err(), "another session's request is refused");
+    let moved = graph.fix(token, &relink).unwrap();
     assert_eq!((&moved["before"], &moved["after"]), (&json!("unused data"), &json!("kicks")));
     assert!(fixture.0.join("data/kicks/hits.json").exists() && !fixture.0.join("data/kick").exists());
     assert_eq!((graph.state().unwrap()["problems"].clone(), clips(&graph)), (json!([]), 1), "the track plays its notes");
     assert_eq!(graph.news()["problems"], json!([]));
     assert!(synced(&graph));
-    assert!(graph.fix(token, revision, "relink", &relink["edit"]).is_err(), "offered no more");
+    assert!(graph.fix(token, &relink).is_err(), "its base is stale: a conflict");
 
     graph.undo(token).unwrap();
     assert!(fixture.0.join("data/kick/hits.json").exists() && synced(&graph));
@@ -741,8 +862,119 @@ fn a_control_lane_written_by_hand_is_swapped_into_the_playing_renderer() {
     assert!(synced(&graph));
     assert!(graph.inspect(|a| {
         let o = a.open.as_ref().unwrap();
-        o.plays.as_ref().unwrap().data.control("song", "g") == o.session.accepted().compiled.data.control("song", "g")
+        o.plays.as_ref().unwrap().revision.compiled.data.control("song", "g") == o.session.accepted().compiled.data.control("song", "g")
     }));
+}
+
+/// Poll the watcher as the server does, every 50 ms, until `done` or `ms` pass; after each poll,
+/// `after` sees the graph.
+fn watching(graph: &Graph, ms: u64, mut after: impl FnMut(&Graph) -> bool) {
+    let t = Instant::now();
+    while t.elapsed() < Duration::from_millis(ms) {
+        graph.watch();
+        if after(graph) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The accepted revision's number, code and data revisions.
+fn revs(graph: &Graph) -> (u64, u64, u64) {
+    graph.inspect(|a| {
+        let r = a.open.as_ref().unwrap().session.accepted();
+        (r.number, r.code_rev, r.data_rev)
+    })
+}
+
+// PLANE-1, RENDER-26, the step 6 gate: a lane file an outside writer changes is taken in by the
+// watcher once it settles, without running QuickJS: the code revision stays, the data revision
+// moves, and the playing renderer takes it as a lane swap.
+#[test]
+fn an_outside_lane_write_is_swapped() {
+    let fixture = Fixture::new();
+    fixture.write(KICK);
+    let graph = fixture.open();
+    graph.transport("play").unwrap();
+    let first = generation(&graph);
+    // QuickJS runs are counted per thread: the session's are the actor's.
+    let builds = graph.inspect(|_| m2_script::builds());
+    let (number, code_rev, data_rev) = revs(&graph);
+    let hits = r#"{"clips": [{"id": "a", "start": 0, "length": 4, "notes": [{"pitch": "E1", "start": 0, "length": 1}]}]}"#;
+    fixture.put("data/kick/hits.json", hits);
+    watching(&graph, 3000, |g| revs(g).0 > number);
+    let now = revs(&graph);
+    assert_eq!(now, (number + 1, code_rev, number + 1), "a data revision, from {:?}", (number, code_rev, data_rev));
+    assert_eq!(graph.inspect(|_| m2_script::builds()), builds, "no QuickJS run");
+    assert_eq!(generation(&graph), first, "no new renderer");
+    assert!(synced(&graph));
+    let seq = graph.inspect(|a| a.open.as_ref().unwrap().sent).expect("a lane swap was sent");
+    eventually("the engine applies the swap", || graph.applied(seq).is_some());
+    // The session's own write makes no batch: a piano-roll edit is taken in once, by its commit.
+    let state = graph.state().unwrap();
+    let token = state["session"].as_u64().unwrap();
+    graph.write_notes(token, number + 1, "kick", "hits", &kick_clips(&["C1", "D1"])).unwrap();
+    let mine = revs(&graph);
+    watching(&graph, 600, |_| false);
+    assert_eq!(revs(&graph), mine, "nothing more to take in");
+}
+
+/// A notes lane of `n` notes in one clip, as an outside writer would write it.
+fn hits_of(n: usize) -> String {
+    let notes: Vec<Value> = (0..n).map(|i| json!({"pitch": "C1", "start": i, "length": 0.25})).collect();
+    serde_json::to_string_pretty(&json!({"clips": [{"id": "a", "start": 0, "length": 16, "notes": notes}]})).unwrap()
+}
+
+// WRITE-19, FMT-9, the step 6 gate: a lane file an outside writer writes in two halves never makes
+// a revision in which that lane is empty. 60 ms apart, the halves settle as one batch: exactly one
+// revision. 400 ms apart, longer than the quiet window, the first half settles alone: its revision
+// keeps the lane's last data, with `lane.invalid`, and the second half makes the next.
+#[test]
+fn a_lane_written_in_two_halves_never_plays_empty() {
+    for gap in [60u64, 400] {
+        let fixture = Fixture::new();
+        fixture.write(KICK);
+        fixture.put("data/kick/hits.json", &hits_of(4));
+        let graph = fixture.open();
+        let start = revs(&graph).0;
+        let new = hits_of(8);
+        let (a, b) = new.split_at(new.len() / 2);
+        let path = fixture.0.join("data/kick/hits.json");
+        let (a, b) = (a.to_string(), b.to_string());
+        let writer = std::thread::spawn(move || {
+            use std::io::Write;
+            let mut f = std::fs::File::create(&path).unwrap();
+            f.write_all(a.as_bytes()).unwrap();
+            f.flush().unwrap();
+            std::thread::sleep(Duration::from_millis(gap));
+            f.write_all(b.as_bytes()).unwrap();
+            f.flush().unwrap();
+        });
+        // Every revision the watcher takes in, as it plays the lane.
+        let mut seen: Vec<(u64, usize, bool)> = vec![];
+        watching(&graph, gap + 1500, |g| {
+            let now = g.inspect(|a| {
+                let r = a.open.as_ref().unwrap().session.accepted();
+                let invalid = r.compiled.problems.iter().any(|p| p.code == "lane.invalid");
+                (r.number, r.compiled.data.notes("kick", "hits").len(), invalid)
+            });
+            if seen.last().is_none_or(|l| l.0 != now.0) {
+                seen.push(now);
+            }
+            now.1 == 8
+        });
+        writer.join().unwrap();
+        assert!(seen.iter().all(|s| s.1 > 0), "{gap} ms: a revision played the lane empty: {seen:?}");
+        let made: Vec<_> = seen.iter().filter(|s| s.0 > start).collect();
+        if gap == 60 {
+            assert_eq!(made.len(), 1, "{gap} ms: one batch, one revision: {seen:?}");
+            assert_eq!((made[0].1, made[0].2), (8, false));
+        } else {
+            assert_eq!(made.len(), 2, "{gap} ms: {seen:?}");
+            assert_eq!((made[0].1, made[0].2), (4, true), "{gap} ms: the half keeps the last data, and says so");
+            assert_eq!((made[1].1, made[1].2), (8, false));
+        }
+    }
 }
 
 // RENDER-8, RENDER-25a: a structural edit is a new renderer that takes over where playback is:
@@ -1096,6 +1328,40 @@ fn near(x: f32, v: f64) -> bool {
     (x as f64 - v).abs() < 1e-6
 }
 
+// WRITE-20, the step 6 gate: a project whose code doesn't compile opens with its problems and
+// plays nothing; the code editor's save that still doesn't compile is written and stays silent;
+// the one that compiles loads a renderer, and the song plays.
+#[test]
+fn a_broken_project_opens_and_plays_once_saved_fixed() {
+    let fixture = Fixture::new();
+    let broken = A_DC.replace("0.5);", "0.5) oops;");
+    fixture.put("song.ts", SONG_DC);
+    fixture.put("tracks/a.ts", &broken);
+    fixture.put("tracks/b.ts", B_SILENT);
+    let (p, driver) = Player::driven(48_000);
+    let graph = Graph::with_player(p);
+    let state = graph.open(&fixture.0).unwrap();
+    assert_eq!(state["diagnostics"][0]["file"], json!("tracks/a.ts"), "{state:#}");
+    let token = state["session"].as_u64().unwrap();
+    let mut dc = Dc { fixture, graph, driver };
+    assert!(dc.driver.engine().is_none(), "nothing is loaded into the player");
+    assert_eq!(dc.blocks(4), vec![0.0; 4]);
+    // The code editor lists the file as it is on disk, and saves over it.
+    let files = dc.graph.files().unwrap();
+    let a = files["files"].as_array().unwrap().iter().find(|f| f["path"] == "tracks/a.ts").unwrap().clone();
+    assert_eq!(a["text"], json!(broken));
+    let still = broken.replace("oops", "still oops");
+    let saved = dc.graph.write_file(Some(token), "tracks/a.ts", &broken, &still).unwrap();
+    assert_eq!(dc.fixture.read("tracks/a.ts"), still, "a broken save is written");
+    assert!(saved["diagnostics"][0]["message"].as_str().is_some(), "{saved:#}");
+    assert!(dc.driver.engine().is_none());
+    assert_eq!(dc.blocks(4), vec![0.0; 4], "and plays nothing");
+    let saved = dc.graph.write_file(Some(token), "tracks/a.ts", &still, A_DC).unwrap();
+    assert_eq!((&saved["diagnostics"], saved["view"]["modules"].as_array().map(Vec::len)), (&json!([]), Some(3)), "{saved:#}");
+    assert!(dc.blocks(8).iter().skip(4).all(|x| near(*x, 0.5)), "the song plays once it compiles");
+    assert_eq!(playing(&dc.graph), (2, 2));
+}
+
 // WRITE-22, step 3's gate "an outside save to another file during a drag doesn't interrupt the
 // drag": an agent saves tracks/b.ts while a knob in tracks/a.ts is dragged. The save compiles and
 // a new renderer takes over, crossfaded; the drag's value plays on every frame of it, never the
@@ -1227,6 +1493,87 @@ fn a_renderer_that_fails_to_build_leaves_the_drag_where_it_is_heard() {
     assert_ne!(dc.generation(), first);
     assert!(heard.iter().all(|x| near(*x, 0.93)), "the new renderer took the drag's value: {heard:?}");
     assert_eq!(dc.graph.leases().len(), 2);
+}
+
+// RENDER-26, R4 (the step 6 design's 5.5): the engine's path is the delta from what plays, never
+// the last change's alone: after a structural save whose renderer failed to build, a lane edit
+// builds a renderer that plays both, rather than swapping its lane into the stale one.
+#[test]
+fn a_failed_build_then_a_lane_edit_rebuilds() {
+    let fixture = Fixture::new();
+    fixture.write(KICK);
+    let graph = fixture.open();
+    graph.transport("play").unwrap();
+    let first = generation(&graph);
+    graph.inspect(|a| a.fail_builds = true);
+    fixture.write(&KICK.replace("export default", "const spare = track('spare', () => osc.sine(hz(3)));\nexport default"));
+    assert!(graph.poll());
+    let (plays, accepted) = playing(&graph);
+    assert!(plays < accepted, "the structural save didn't build");
+    assert_eq!(generation(&graph), first, "what played plays on");
+    graph.inspect(|a| a.fail_builds = false);
+    let state = graph.state().unwrap();
+    let (token, revision) = (state["session"].as_u64().unwrap(), state["view"]["revision"].as_u64().unwrap());
+    graph.write_notes(token, revision, "kick", "hits", &kick_clips(&["C1", "D1"])).unwrap();
+    assert_ne!(generation(&graph), first, "a new renderer, not a swap into the stale one");
+    assert!(synced(&graph));
+    let spare = graph.inspect(|a| {
+        let p = a.open.as_ref().unwrap().plays.as_ref().unwrap();
+        p.revision.compiled.flat.nodes.iter().any(|n| matches!(&n.op, m2_ir::FOp::Kernel { kernel, .. } if kernel == "std:sine"))
+    });
+    assert!(spare, "what plays has the structural change");
+}
+
+/// `tracks/a.ts` of the DC song with a second gain after the first, a line apart: what is heard is
+/// their product. (Changes on adjacent lines are one hunk between two revisions, which names the
+/// calls in it anew: the step 6 design's risk 1.)
+const A_TWO_GAINS: &str = "import { hz, track } from '@m2/core';\nimport { osc, vca } from 'std/dsp';\n\
+                           export const a = track('a', () => {\n  const first = vca(osc.square(hz(0)), 0.5);\n  \
+                           // then the second gain\n  return vca(first, 1);\n});\n";
+
+// RENDER-22, R4 (the step 6 design's 5.5): a knob commit whose file an outside writer also changed
+// (another literal, not taken in yet) rides along (R2), and what plays takes the whole delta from
+// itself as cell writes: both values are heard, with no new renderer.
+#[test]
+fn a_values_commit_writes_cells_from_what_plays() {
+    let mut dc = Dc::with(A_TWO_GAINS);
+    assert_eq!(dc.blocks(4), vec![0.5; 4]);
+    let first = dc.generation();
+    let (token, revision, id) = dc.knob();
+    // An outside writer turns the second gain down; the session hasn't taken it in.
+    dc.fixture.put("tracks/a.ts", &A_TWO_GAINS.replace("first, 1)", "first, 0.8)"));
+    dc.graph.set(token, revision, &id, "drag", 0.6, Some(0.5)).unwrap();
+    let a = dc.fixture.read("tracks/a.ts");
+    assert!(a.contains("0.6);") && a.contains("first, 0.8)"), "both on disk: {a}");
+    let heard = dc.blocks(8);
+    assert!(heard[4..].iter().all(|x| near(*x, 0.6 * 0.8)), "both are heard: {heard:?}");
+    assert_eq!(dc.generation(), first, "by cell writes, with no new renderer");
+    assert!(synced(&dc.graph));
+    // An outside value edit alone is written into the cells too.
+    dc.fixture.put("tracks/a.ts", &a.replace("first, 0.8)", "first, 0.5)"));
+    assert!(dc.graph.poll());
+    let heard = dc.blocks(8);
+    assert!(heard[4..].iter().all(|x| near(*x, 0.3)), "{heard:?}");
+    assert_eq!(dc.generation(), first);
+}
+
+// WRITE-22, R2 (the step 6 design's 16): an outside edit in the dragged knob's own file, which
+// compiles and isn't taken in yet, doesn't end the drag: its commit carries across it, is judged
+// against the baseline that has it, and writes the knob's value beside it. Both are heard.
+#[test]
+fn a_knob_commit_after_an_outside_edit_in_its_file_keeps_both() {
+    let mut dc = Dc::with(A_TWO_GAINS);
+    let (token, revision, id) = dc.knob();
+    let l = dc.graph.begin(token, revision, &id, Owner::default()).unwrap();
+    dc.graph.update(l.lease, None, 0.9).unwrap();
+    assert!(dc.blocks(4).iter().all(|x| near(*x, 0.9)));
+    dc.fixture.put("tracks/a.ts", &A_TWO_GAINS.replace("first, 1)", "first, 0.8)"));
+    assert!(matches!(dc.graph.commit(l.lease, 0.9, Some(0.5)).unwrap(), Committed::Written(_)));
+    let a = dc.fixture.read("tracks/a.ts");
+    assert!(a.contains("0.9);") && a.contains("first, 0.8)"), "both on disk: {a}");
+    let heard = dc.blocks(8);
+    assert!(heard[4..].iter().all(|x| near(*x, 0.9 * 0.8)), "both are heard: {heard:?}");
+    assert!(dc.graph.leases().is_empty() && synced(&dc.graph));
 }
 
 // WRITE-22 (critique 13): a cancel while the commit is on the session answers "committing", and
@@ -1430,7 +1777,13 @@ fn rebuilds_carry_the_plugin_instances_and_closing_destroys_them() {
     let l = dc.graph.begin(token, revision, &id, Owner::default()).unwrap();
     dc.graph.update(l.lease, None, 0.9).unwrap();
     let generation = dc.generation();
+    // A comment changes nothing that plays: the renderer adopts it (the step 6 design's 5.5).
     dc.fixture.put("tracks/a.ts", &A_DC.replace("  return", "  // a comment\n  return"));
+    assert!(dc.graph.poll());
+    dc.frames(8);
+    assert_eq!(dc.generation(), generation, "no new renderer for a comment");
+    // A new node elsewhere in the dragged knob's file is structural: a new renderer.
+    dc.fixture.put("tracks/a.ts", &A_DC.replace("  return", "  // a comment\n  const spare = osc.sine(hz(1));\n  return"));
     assert!(dc.graph.poll());
     dc.frames(8);
     assert_ne!(dc.generation(), generation, "a new renderer");

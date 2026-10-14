@@ -8,6 +8,7 @@ license.workspace = true
 m2-ir.workspace = true
 m2-runtime.workspace = true
 m2-session.workspace = true
+m2-editor.workspace = true
 m2-script.workspace = true
 m2-song.workspace = true
 m2-play.workspace = true

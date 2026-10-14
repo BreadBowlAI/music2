@@ -2371,6 +2371,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "hound",
+ "m2-editor",
  "m2-ir",
  "m2-plugins",
  "m2-runtime",
@@ -2381,10 +2382,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "m2-editor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hound",
+ "icu_normalizer",
+ "m2-ir",
+ "m2-runtime",
+ "m2-script",
+ "m2-session",
+ "m2-song",
+ "oxc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "m2-gates"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "m2-editor",
  "m2-ir",
  "m2-play",
  "m2-plugins",
@@ -2469,6 +2488,7 @@ dependencies = [
  "anyhow",
  "axum",
  "hound",
+ "m2-editor",
  "m2-ir",
  "m2-play",
  "m2-plugins",
@@ -2490,6 +2510,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "hound",
+ "libc",
  "m2-ir",
  "m2-runtime",
  "m2-script",

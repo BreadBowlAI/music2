@@ -23,3 +23,7 @@ export function connect(onMessage: (msg: any) => void, onStatus: (connected: boo
     ws?.close();
   };
 }
+
+/** A lane an edit just made here (automate), as `module.lane`: the timeline scrolls to it and lights it. */
+export const LANE_MADE = "m2:lane-made";
+export const laneMade = (module: string, lane: string) => window.dispatchEvent(new CustomEvent(LANE_MADE, { detail: `${module}.${lane}` }));

@@ -7,7 +7,7 @@
 //! to the control plane in two phases: first what the engine and leases need, under the lock
 //! and with the engine messages, then the view and the news, before the request replies.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -15,16 +15,18 @@ use std::sync::mpsc;
 use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
-use m2_ir::{Flat, Kind, Origin};
+use m2_editor::render::{Length, Render};
+use m2_editor::{Control, EditError, Edited, Gestures};
+use m2_ir::{FOp, Flat, Kind, Origin};
 use m2_plugins::{HostEvent, HostEvents};
+use m2_runtime::cells::{CellAt, CellId, CellTarget};
 use m2_runtime::{Caps, Carry, CellMap, CellSlots, Fresh, InstanceSource, LaneRef, LaneSwap, PackageSet, Renderer, audio, notes_data};
-use m2_session::render::{Length, Render};
-use m2_session::{Control, EditError, Edited, Session, plane};
-use m2_song::{DataSet, Snapshot};
+use m2_session::{Revision, Session};
+use m2_song::Snapshot;
 use serde_json::{Value, json};
 
 use super::lease::{Committed, PlaysView, Revs, State};
-use super::{Device, EditTiming, EngineView, Inner, Published, Shown, Timing, put_back};
+use super::{Device, EditTiming, EngineView, Inner, Published, Shown, Timing, put_back, watcher};
 use crate::files;
 
 /// A request: run on the actor with its state, answering through what it captured.
@@ -69,6 +71,7 @@ pub(super) fn run(inner: Arc<Inner>, jobs: mpsc::Receiver<Job>, events: HostEven
         if catch_unwind(AssertUnwindSafe(|| job(&mut actor))).is_err() {
             eprintln!("music2: the session hit a bug; that request failed");
         }
+        actor.told_watcher();
         let mut busy = actor.inner.busy.lock();
         busy.since = 0;
         if start > 0 {
@@ -76,6 +79,17 @@ pub(super) fn run(inner: Arc<Inner>, jobs: mpsc::Receiver<Job>, events: HostEven
         }
         while busy.spans.len() > 16 {
             busy.spans.pop_front();
+        }
+    }
+}
+
+impl Actor {
+    /// Tell the watcher what the session wrote itself, so its own writes make no batch (R12).
+    fn told_watcher(&mut self) {
+        let Some(o) = self.open.as_mut() else { return };
+        let wrote = o.session.take_wrote();
+        if let Some(w) = self.inner.watch.lock().as_mut().filter(|w| w.token == o.token) {
+            w.wrote(&wrote, o.session.accepted());
         }
     }
 }
@@ -93,11 +107,9 @@ pub(crate) struct Open {
     /// activation never decodes or warps them again (RENDER-27).
     audio: audio::Cache,
     /// The engine message the last settle sent the new revision in (a swap or an activation).
-    sent: Option<u64>,
-    /// The accepted revision the last settle saw, and its snapshot: a new code revision begins
-    /// where the code differs from it (WRITE-13).
-    seen: u64,
-    snapshot: Snapshot,
+    pub(crate) sent: Option<u64>,
+    /// The session's code revision of the accepted revision the last settle saw (WRITE-13): a
+    /// lane write leaves it, so leases and ids are left alone.
     pub(crate) code_rev: u64,
     /// The accepted revision's controls, by id.
     controls: Arc<HashMap<String, Control>>,
@@ -116,16 +128,15 @@ pub(crate) struct Plays {
     pub(crate) epoch: u64,
     pub(crate) generation: u64,
     rate: u32,
-    flat: Flat,
-    snapshot: Snapshot,
-    pub(crate) data: DataSet,
+    /// The accepted revision it plays: the one it was built from, or adopted since (lanes swapped
+    /// in, cells written). Every settle's engine path is the delta from it to the accepted one
+    /// (RENDER-26; the step 6 design's R4), so a change that never reached the engine (a build
+    /// that failed) is never skipped by a later one.
+    pub(crate) revision: Arc<Revision>,
     slots: Vec<LaneRef>,
     /// The room each notes lane's scheduler has: data that needs more is activated instead.
     caps: Vec<Option<Caps>>,
-    /// The accepted revision it plays, its code revision, and its controls: after a build that
-    /// failed, what updates aim at.
-    revision: u64,
-    code_rev: u64,
+    /// The controls of the code it plays: after a build that failed, what updates aim at.
     controls: Arc<HashMap<String, Control>>,
     /// Its cells' slots, and which cells hold each value of the revision it plays: what gesture
     /// updates and committed values are written to (RENDER-22, RENDER-23).
@@ -142,11 +153,86 @@ fn same_layout(a: &Flat, b: &Flat) -> bool {
     x.len() == y.len() && x.iter().zip(&y).all(|(p, q)| p.at == q.at)
 }
 
+/// The cells whose constants differ from `old` to `new`, with their new values, when nothing else
+/// differs in how the two graphs process (where each node was written aside). None when anything
+/// does: a renderer of `old` can't play `new`. The delta says what changed by name; this checks
+/// that a renderer's cells can carry it, constants folded into kernels included.
+fn value_writes(old: &Flat, new: &Flat) -> Option<Vec<(CellId, f64)>> {
+    if old == new {
+        return Some(vec![]);
+    }
+    let (a, b) = (m2_runtime::cells::cells(old), m2_runtime::cells::cells(new));
+    if a.len() != b.len() || a.iter().zip(&b).any(|(p, q)| p.at != q.at) {
+        return None;
+    }
+    // Both with the new values in their cells and no positions: equal when the cells are all.
+    let bare = |f: &Flat| {
+        let mut f = f.clone();
+        for c in &b {
+            let node = match c.at {
+                CellAt::Top(i) => Some(&mut f.nodes[i]),
+                CellAt::Voice { poly, node } => match &mut f.nodes[poly].op {
+                    FOp::Poly { voice, .. } => voice.nodes.get_mut(node),
+                    _ => None,
+                },
+            };
+            if let Some(n) = node {
+                n.op = FOp::Const(c.value);
+            }
+        }
+        for n in &mut f.nodes {
+            (n.src, n.origin) = (None, None);
+            if let FOp::Poly { voice, .. } = &mut n.op {
+                for v in &mut voice.nodes {
+                    (v.src, v.origin) = (None, None);
+                }
+            }
+        }
+        f
+    };
+    if bare(old) != bare(new) {
+        return None;
+    }
+    let mut out = vec![];
+    for (i, (p, q)) in a.iter().zip(&b).enumerate() {
+        if p.value.to_bits() != q.value.to_bits() {
+            out.push((CellId(i as u32), q.value));
+        }
+    }
+    Some(out)
+}
+
+/// What turns what a renderer plays into another revision without a new renderer: cell writes and
+/// lane swaps.
+struct Reach {
+    cells: Vec<(CellId, f64)>,
+    swaps: Vec<(u32, LaneSwap)>,
+}
+
+/// The state's `read_only` (WRITE-17): null for the lock's holder, else why, WRITE-18's message,
+/// and who holds it when its file says.
+fn read_only(access: &m2_session::lock::Access) -> Value {
+    use m2_session::lock::{Access, ReadOnly};
+    let message = access.refusal().map(|d| d.message);
+    match access {
+        Access::Writer(_) => Value::Null,
+        Access::ReadOnly(ReadOnly::Unsupported(_)) => json!({"why": "unsupported", "message": message}),
+        Access::ReadOnly(ReadOnly::Held(h)) => json!({
+            "why": "held",
+            "message": message,
+            "holder": h.as_ref().map(|h| json!({"pid": h.pid, "program": h.program, "host": h.host, "since": h.since})),
+        }),
+        Access::ReadOnly(ReadOnly::Asked) => json!({"why": "held", "message": message, "holder": null}),
+    }
+}
+
 /// How the accepted revision reaches the engine.
 enum Way {
     /// It plays already.
     Same,
-    Swap(u64, Vec<(u32, LaneSwap)>),
+    /// Into the renderer that plays: its changed constants' cells written (RENDER-22), its
+    /// changed lanes swapped (RENDER-26).
+    Reach(u64, Reach),
     /// A new renderer, crossfaded where the engine is (RENDER-25a), with the instances it carried
     /// and created.
     Activate(Box<Renderer>, Plays, Carry),
@@ -171,7 +257,8 @@ impl Way {
 /// What a settle sent the engine.
 enum Sent {
     Nothing,
-    Swapped,
+    /// Into what plays: these cells written, its lanes swapped.
+    Reached(Vec<CellId>),
     Renderer,
 }
 
@@ -227,19 +314,14 @@ impl Open {
 
     /// What the engine plays once `r`, built from the accepted revision, plays in `epoch`'s player.
     fn describe(&self, r: &Renderer, epoch: u64) -> Plays {
-        let rev = self.session.accepted();
         let slots = r.lane_slots().to_vec();
         Plays {
             epoch,
             generation: r.generation(),
             rate: r.sample_rate(),
-            flat: rev.compiled.flat.clone(),
-            snapshot: rev.snapshot.clone(),
-            data: rev.compiled.data.clone(),
+            revision: self.session.accepted_arc(),
             caps: (0..slots.len()).map(|s| r.caps(s)).collect(),
             slots,
-            revision: rev.number,
-            code_rev: self.code_rev,
             controls: self.controls.clone(),
             cell_slots: r.cell_slots(),
             cells: r.cell_map(),
@@ -247,23 +329,27 @@ impl Open {
     }
 
     /// The renderer plays the accepted revision now (a value commit set what differed, or its
-    /// lanes were swapped): a lane edit after this still finds the graphs equal, and swaps.
+    /// lanes were swapped, or its cells written): the next settle's delta starts from it.
     /// Refused (false) when the accepted graph numbers its cells otherwise, so what plays can't
     /// reach its values: a new renderer must play it.
     fn adopt(&mut self) -> bool {
-        let rev = self.session.accepted();
+        let rev = self.session.accepted_arc();
         let Some(p) = &mut self.plays else { return true };
-        if p.flat != rev.compiled.flat {
-            if !same_layout(&p.flat, &rev.compiled.flat) {
+        if Arc::ptr_eq(&p.revision, &rev) {
+            return true;
+        }
+        let (old, new) = (&p.revision.compiled.flat, &rev.compiled.flat);
+        if old != new {
+            if !same_layout(old, new) {
                 return false;
             }
             // The same cells, now named by the accepted revision's origins.
-            p.cells = Arc::new(CellMap::of(&m2_runtime::cells::cells(&rev.compiled.flat)));
+            p.cells = Arc::new(CellMap::of(&m2_runtime::cells::cells(new)));
         }
-        (p.flat, p.snapshot, p.data, p.revision) = (rev.compiled.flat.clone(), rev.snapshot.clone(), rev.compiled.data.clone(), rev.number);
+        p.revision = rev;
         // Settled already when a swap adopts; a value commit adopts first, and the settle
         // after it brings these up to the new code.
-        (p.code_rev, p.controls) = (self.code_rev, self.controls.clone());
+        p.controls = self.controls.clone();
         true
     }
 
@@ -281,17 +367,23 @@ impl Open {
         Ok(())
     }
 
-    /// The swaps that turn what `p` plays into the accepted revision: only its lane data changed
-    /// (PLANE-1, RENDER-26), and each notes lane fits the scheduler playing it. None: a new
-    /// renderer must play it.
-    fn swaps(&self, p: &Plays) -> Option<Vec<(u32, LaneSwap)>> {
+    /// What turns what `p` plays into the accepted revision without a new renderer, decided by
+    /// the delta between the two (RENDER-26, RENDER-22; the step 6 design's 5.5): the cells of the
+    /// constants whose values alone changed, and the notes and control lanes whose data changed,
+    /// each fitting the scheduler playing it. Whoever wrote the files (PLANE-1). None: a new
+    /// renderer must play it (anything structural, a plugin state, an asset a clip plays, the
+    /// arrangement, an audio lane).
+    fn reach(&self, p: &Plays) -> Option<Reach> {
         let rev = self.session.accepted();
+        let d = m2_session::tx::delta_between(&p.revision, rev);
+        if d.structural() || !d.states.is_empty() || !d.assets.is_empty() || d.arrangement {
+            return None;
+        }
+        let cells = value_writes(&p.revision.compiled.flat, &rev.compiled.flat)?;
         let rate = rev.project.sample_rate();
-        let old = plane::Plays { flat: &p.flat, snapshot: &p.snapshot, data: &p.data, rate: p.rate };
-        let new = plane::Plays { flat: &rev.compiled.flat, snapshot: &rev.snapshot, data: &rev.compiled.data, rate };
         let data = &rev.compiled.data;
-        let mut out = vec![];
-        for addr in plane::lane_swaps(old, new)? {
+        let mut swaps = vec![];
+        for addr in &d.lanes {
             let (module, lane) = (addr.module.as_str(), addr.lane.as_str());
             // A lane no node reads plays nothing, before or after.
             let Some(slot) = p.slots.iter().position(|s| s.module == module && s.lane == lane) else { continue };
@@ -308,9 +400,9 @@ impl Open {
                 // Its clips must be rendered first: a new renderer.
                 Kind::Audio(_) => return None,
             };
-            out.push((slot as u32, swap));
+            swaps.push((slot as u32, swap));
         }
-        Some(out)
+        Some(Reach { cells, swaps })
     }
 
     /// How the accepted revision reaches `device`'s engine, its renderer built if it needs one.
@@ -320,19 +412,23 @@ impl Open {
         if self.loaded(device) && number == self.playing {
             return Way::Same;
         }
+        // Opened with code that doesn't compile (WRITE-20): silent until it does, then loaded.
+        if !rev.has_code() {
+            return Way::Same;
+        }
         enum Kind {
-            Swap(u64, Vec<(u32, LaneSwap)>),
+            Reach(u64, Reach),
             Activate,
             Replace,
             Load,
         }
         let kind = match self.plays.as_ref().filter(|p| p.epoch == device.epoch) {
             Some(p) if p.rate != rate => Kind::Replace,
-            Some(p) => self.swaps(p).map_or(Kind::Activate, |s| Kind::Swap(p.generation, s)),
+            Some(p) => self.reach(p).map_or(Kind::Activate, |r| Kind::Reach(p.generation, r)),
             None => Kind::Load,
         };
-        if let Kind::Swap(generation, swaps) = kind {
-            return Way::Swap(generation, swaps);
+        if let Kind::Reach(generation, reach) = kind {
+            return Way::Reach(generation, reach);
         }
         // Only an activation in the same engine carries instances; a new engine creates them all.
         let Open { session, audio, carry, .. } = self;
@@ -357,11 +453,11 @@ impl Open {
     /// failed): each accepted control's origin in what plays, carried from there.
     fn origins(&self) -> Option<Arc<HashMap<String, Origin>>> {
         let p = self.plays.as_ref()?;
-        if p.code_rev == self.code_rev {
+        if p.revision.code_rev == self.code_rev {
             return None;
         }
-        let carried =
-            p.controls.values().filter_map(|c| Some((self.session.carry(p.revision, &c.id, &self.controls).ok()?.id, c.origin.clone())));
+        let at = p.revision.number;
+        let carried = p.controls.values().filter_map(|c| Some((self.session.carry(at, &c.id, &self.controls).ok()?.id, c.origin.clone())));
         Some(Arc::new(carried.collect()))
     }
 
@@ -383,6 +479,7 @@ impl Open {
         let s = &self.session;
         let rev = s.accepted();
         let diagnostics = files::diagnostics(s);
+        let read_only = read_only(s.access());
         Shown {
             revision: rev.number,
             state: json!({
@@ -397,6 +494,9 @@ impl Open {
                 "diagnostics": diagnostics,
                 "problems": s.problems(),
                 "sample_rate": rev.project.sample_rate(),
+                // WRITE-20: opened with code that doesn't compile, nothing plays until it does.
+                "has_code": rev.has_code(),
+                "read_only": read_only,
             }),
             // What needs attention though the song plays, with the fixes (DIAG-1, DIAG-4).
             news: json!({
@@ -409,17 +509,7 @@ impl Open {
             types: self.types.clone(),
             name: rev.project.manifest.project.name.clone(),
             dir: rev.project.dir.clone(),
-        }
-    }
-
-    /// A value edit `c`, made when revision `before` was accepted, that the renderer can take as
-    /// a value: only a verified single value edit (or none) on the revision that plays. `set()`
-    /// may adopt unrelated changes first, which need a new renderer. Step 6's delta replaces
-    /// this guess.
-    fn single(&mut self, c: &m2_session::Committed, before: u64, device: Option<&Device>) {
-        let single = c.before != c.after && c.revision == before + 1;
-        if (single || c.revision == before) && self.playing == before && device.is_some_and(|d| self.loaded(d)) && self.adopt() {
-            self.playing = c.revision;
+            read_only: s.access().refusal().map(|d| d.message),
         }
     }
 }
@@ -436,24 +526,21 @@ impl Actor {
         let fail = false;
         let Some(o) = self.open.as_mut() else { return Settled { changed: false, sent_ns: 0, published_ns: 0 } };
         let token = o.token;
-        let number = o.session.accepted().number;
-        // WRITE-13: a code revision begins where the code differs from the revision seen last.
-        let code_changed = number != o.seen && plane::code_changed(&o.snapshot, &o.session.accepted().snapshot);
-        if number != o.seen {
-            (o.seen, o.snapshot) = (number, o.session.accepted().snapshot.clone());
-        }
+        let (number, code_rev) = (o.session.accepted().number, o.session.accepted().code_rev);
+        // WRITE-13: the session's code revision; a lane write leaves it, and with it every id.
+        let code_changed = code_rev != o.code_rev;
         if code_changed {
             let old = std::mem::replace(&mut o.controls, Arc::new(o.session.controls_by_id()));
             o.codes.push_back((o.code_rev, old));
             while o.codes.len() > 2 {
                 o.codes.pop_front();
             }
-            o.code_rev = number;
+            o.code_rev = code_rev;
         }
         if o.playing == number
             && let Some(p) = &mut o.plays
         {
-            (p.revision, p.code_rev, p.controls) = (number, o.code_rev, o.controls.clone());
+            p.controls = o.controls.clone();
         }
 
         // Prepared off every lock: the swaps, or the renderer built.
@@ -507,14 +594,21 @@ impl Actor {
         let sent = (|| -> Result<Sent> {
             match way {
                 Way::Same => Ok(Sent::Nothing),
-                Way::Swap(generation, swaps) => {
-                    let player = &device.as_ref().map_err(|e| anyhow!("{e:#}"))?.player;
-                    for (slot, data) in swaps {
-                        o.sent = Some(player.swap_lane(generation, slot, data)?);
+                Way::Reach(generation, reach) => {
+                    let d = device.as_ref().map_err(|e| anyhow!("{e:#}"))?;
+                    let p = o.plays.as_ref().expect("what plays is reached");
+                    let mut written = vec![];
+                    for (cell, value) in reach.cells {
+                        let target = CellTarget { slots: p.cell_slots.clone(), cells: Arc::from([cell]) };
+                        o.sent = Some(d.player.set_cells(&target, value));
+                        written.push(cell);
                     }
-                    // The graphs are equal, so the cells are too.
+                    for (slot, data) in reach.swaps {
+                        o.sent = Some(d.player.swap_lane(generation, slot, data)?);
+                    }
+                    // Its cells hold the accepted values now, and its lanes the accepted data.
                     o.adopt();
-                    Ok(Sent::Swapped)
+                    Ok(Sent::Reached(written))
                 }
                 Way::Activate(r, plays, carry) => {
                     let player = &device.as_ref().map_err(|e| anyhow!("{e:#}"))?.player;
@@ -551,6 +645,13 @@ impl Actor {
             Err(e) => eprintln!("music2: couldn't play the accepted revision: {e:#}"),
         }
         let renderer = matches!(sent, Ok(Sent::Renderer));
+        // Cells written with the accepted constants: a lease that ends there leaves them (the
+        // new code's value plays), never puts its old value back over them.
+        let rewritten: Vec<CellId> = match &sent {
+            Ok(Sent::Reached(cells)) => cells.clone(),
+            _ => vec![],
+        };
+        let keeps = |l: &super::Lease| l.engine.as_ref().is_some_and(|t| t.cells.cells.iter().any(|c| rewritten.contains(c)));
         let plays = o.plays.as_ref().map(|p| PlaysView {
             epoch: p.epoch,
             generation: p.generation,
@@ -585,7 +686,7 @@ impl Actor {
                 Err(why) => {
                     let l = cp.leases.end(i, why);
                     // A new renderer plays the code; the one that plays on gets its value back.
-                    if !renderer {
+                    if !renderer && !keeps(&l) {
                         put_back(&l, dev);
                     }
                     // A pending commit's release was promised a save: say it won't be (C5).
@@ -629,18 +730,34 @@ impl Actor {
             }
         }
         drop(cp);
-        Settled { changed: matches!(sent, Ok(Sent::Swapped | Sent::Renderer)), sent_ns, published_ns: inner.now_ns() }
+        Settled { changed: matches!(sent, Ok(Sent::Reached(_) | Sent::Renderer)), sent_ns, published_ns: inner.now_ns() }
     }
 
     pub(super) fn open(&mut self, dir: &Path) -> Result<Value> {
-        let session = Session::open(dir, packages()?).map_err(|d| {
-            // Files in the project by their names in it (`song.ts:22:5`), so the reason fits a toast.
-            let root = format!("{}/", dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf()).display());
-            anyhow!(d.iter().map(|d| d.to_string().replace(&root, "")).collect::<Vec<_>>().join("\n"))
-        })?;
+        // The project lock is one session's at a time (WRITE-17): opening the open project again
+        // lets the old session's go first, and takes it back if the new one doesn't open.
+        let same = |o: &Open| o.session.accepted().project.dir == dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        let reopening = self.open.as_mut().filter(|o| same(o)).map(|o| o.session.unlock()).is_some();
+        // The watcher starts from the folder as it was before it is read: a write meanwhile is a
+        // change it takes in.
+        let before = watcher::Before::take(dir);
+        let opened = self.open_session(dir).and_then(|s| self.play(s, before));
+        if opened.is_err()
+            && reopening
+            && let Some(o) = self.open.as_mut()
+        {
+            o.session.retry_lock();
+        }
+        opened
+    }
+
+    /// Make `session` the open project, and play it: a fresh engine, stopped at the start, not
+    /// looping; what played before fades out. One opened with code that doesn't compile plays
+    /// nothing until its code does (WRITE-20), and is shown with its problems meanwhile.
+    fn play(&mut self, session: Session, before: watcher::Before) -> Result<Value> {
         let device = self.inner.device()?;
         let token = self.inner.next_session.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        let (number, snapshot) = (session.accepted().number, session.accepted().snapshot.clone());
+        let (number, code_rev) = (session.accepted().number, session.accepted().code_rev);
         let controls = Arc::new(session.controls_by_id());
         let types = Arc::new(files::types(&session.packages));
         let mut o = Open {
@@ -650,18 +767,21 @@ impl Actor {
             plays: None,
             audio: audio::Cache::default(),
             sent: None,
-            seen: number,
-            snapshot,
-            code_rev: number,
+            code_rev,
             controls: controls.clone(),
             codes: VecDeque::new(),
             types,
             carry: Carry::none(),
         };
-        // A fresh engine, stopped at the start, not looping; what played before fades out.
-        let r = build(&o.session, &mut o.audio, &self.inner.owner, &mut Fresh)?;
-        let plays = o.describe(&r, device.epoch);
-        o.carry = Carry::of(&r, device.epoch);
+        let built = match o.session.accepted().has_code() {
+            true => {
+                let r = build(&o.session, &mut o.audio, &self.inner.owner, &mut Fresh)?;
+                let plays = o.describe(&r, device.epoch);
+                o.carry = Carry::of(&r, device.epoch);
+                Some((r, plays))
+            }
+            false => None,
+        };
         {
             // Before the new engine is sent: every gesture of the project before ends, and none
             // aims anywhere, so no update of it can reach the new engine's constants.
@@ -671,9 +791,23 @@ impl Actor {
                 p.engine = Arc::new(EngineView { plays: None, controls: p.engine.controls.clone(), ..*p.engine });
             }
         }
-        let view =
-            PlaysView { epoch: device.epoch, generation: plays.generation, slots: plays.cell_slots.clone(), cells: plays.cells.clone(), origins: None };
-        o.load(&device, r, plays, 0.0, None)?;
+        let view = match built {
+            Some((r, plays)) => {
+                let view = PlaysView {
+                    epoch: device.epoch,
+                    generation: plays.generation,
+                    slots: plays.cell_slots.clone(),
+                    cells: plays.cells.clone(),
+                    origins: None,
+                };
+                o.load(&device, r, plays, 0.0, None)?;
+                Some(view)
+            }
+            None => {
+                device.player.unload()?;
+                None
+            }
+        };
         let rev = o.session.accepted();
         *self.inner.timing.lock() = Some(Timing { tempo: rev.tempo(), rate: rev.project.sample_rate(), range: None, on: false });
         let shown = Arc::new(o.shown());
@@ -682,12 +816,33 @@ impl Actor {
             // Every gesture of the project before ends: a fresh engine plays this one's code.
             self.inner.end_all(&mut cp);
             let mut revs = Revs::default();
-            revs.push(number, number);
-            let engine = Arc::new(EngineView { token, revision: number, code_rev: number, controls, plays: Some(view) });
-            let aliases = Arc::new(super::Aliases { to: number, ids: HashMap::new() });
+            revs.push(number, code_rev);
+            let engine = Arc::new(EngineView { token, revision: number, code_rev, controls, plays: view });
+            let aliases = Arc::new(super::Aliases { to: code_rev, ids: HashMap::new() });
             cp.open = Some(Published { engine, shown, revs, aliases });
         }
+        *self.inner.watch.lock() = Some(watcher::Watch::new(token, o.session.accepted(), before));
         self.open = Some(o);
+        self.inner.state().context("no project is open")
+    }
+
+    /// A session on `dir`, for writing when its lock is free (WRITE-17). One whose code doesn't
+    /// compile opens too, with no accepted code and the build's problems (WRITE-20), so the code
+    /// editor can fix it; only a folder that isn't a project in this format doesn't.
+    fn open_session(&self, dir: &Path) -> Result<Session> {
+        // Files in the project by their names in it (`song.ts:22:5`), so the reason fits a toast.
+        let root = format!("{}/", dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf()).display());
+        let said = |d: &[m2_ir::Diagnostic]| anyhow!(d.iter().map(|d| d.to_string().replace(&root, "")).collect::<Vec<_>>().join("\n"));
+        Session::open_as(dir, packages()?, "music2").map_err(|d| said(&d))
+    }
+
+    /// Take the open project's lock if it is free now (the read-only banner's Retry), and publish
+    /// what that changes.
+    pub(super) fn retry_lock(&mut self, token: u64) -> Result<Value> {
+        let o = self.open.as_mut().context("no project is open")?;
+        o.check_token(token)?;
+        o.session.retry_lock();
+        self.settle(None);
         self.inner.state().context("no project is open")
     }
 
@@ -703,6 +858,7 @@ impl Actor {
         if let Some(d) = self.inner.current_device() {
             let _ = d.player.unload();
         }
+        *self.inner.watch.lock() = None;
         self.open = None;
         *self.inner.timing.lock() = None;
         let owner = &self.inner.owner;
@@ -778,11 +934,10 @@ impl Actor {
             }
             bail!("the open project changed; refresh the graph before editing");
         };
-        let before = o.session.accepted().number;
-        let device = inner.device().ok();
+        // What plays takes the commit as the cells whose constants differ from it (an outside
+        // change in the knob's file that rode along included), in the settle (RENDER-22).
         match o.session.set(revision, &id, value, expect) {
             Ok(c) => {
-                o.single(&c, before, device.as_ref());
                 let written = json!({"file": c.file, "before": c.before, "after": c.after, "revision": c.revision});
                 self.settle(Some(Install { lease: Some(lease), id, origin: c.origin, value: c.value }));
                 Ok(Committed::Written(written))
@@ -863,11 +1018,8 @@ impl Actor {
         let inner = self.inner.clone();
         let o = self.open.as_mut().context("no project is open")?;
         o.check_token(token)?;
-        // Leases read the accepted revision: settle what is on disk first, so the two agree.
-        if o.session.refresh() {
-            self.settle(None);
-        }
-        let o = self.open.as_mut().context("no project is open")?;
+        // The edit plans on the accepted revision, which the watcher keeps up with the disk; an
+        // outside change in the knob's own file rides along through the commit's baseline (R2).
         let mut target = id.to_string();
         if let Ok(c) = o.session.carry(revision, id, &o.controls) {
             let cp = inner.control.lock();
@@ -879,11 +1031,8 @@ impl Actor {
             }
             target = c.id;
         }
-        let before = o.session.accepted().number;
-        let device = inner.device().ok();
         match o.session.set(revision, id, value, expect) {
             Ok(c) => {
-                o.single(&c, before, device.as_ref());
                 let v = json!({"file": c.file, "before": c.before, "after": c.after, "revision": c.revision});
                 self.settle(Some(Install { lease: None, id: target, origin: c.origin, value: c.value }));
                 Ok(v)
@@ -897,6 +1046,12 @@ impl Actor {
 
     /// An edit through the session; whatever happened, the accepted revision plays after it.
     pub(super) fn edit(&mut self, token: u64, edit: impl FnOnce(&mut Session) -> Result<Edited, EditError>) -> Result<Value> {
+        self.edit_and(token, |s| edit(s).map(|e| (e, json!({}))))
+    }
+
+    /// [`Actor::edit`] for a gesture with more to say than its label: what it made (the lane an
+    /// automate added), as more fields of the answer.
+    pub(super) fn edit_and(&mut self, token: u64, edit: impl FnOnce(&mut Session) -> Result<(Edited, Value), EditError>) -> Result<Value> {
         let inner = self.inner.clone();
         let o = self.open.as_mut().context("no project is open")?;
         o.check_token(token)?;
@@ -907,11 +1062,55 @@ impl Actor {
         let s = self.settle(None);
         let seq = self.open.as_ref().and_then(|o| o.sent);
         *inner.last_edit.lock() = Some(EditTiming { requested_ns, compiled_ns, sent_ns: s.sent_ns, published_ns: s.published_ns, seq });
-        let e = result.map_err(|e| anyhow!("{e}"))?;
-        Ok(json!({"file": e.file, "before": e.before, "after": e.after, "revision": e.revision}))
+        let (e, more) = result.map_err(|e| anyhow!("{e}"))?;
+        let mut answer = json!({"file": e.file, "before": e.before, "after": e.after, "revision": e.revision});
+        if let (Some(a), Value::Object(more)) = (answer.as_object_mut(), more) {
+            a.extend(more);
+        }
+        Ok(answer)
     }
 
-    /// Pick up edits made outside the app. Returns whether clients should refresh.
+    /// Take in a batch the watcher settled (WRITE-19): its paths as the folder has them now, each
+    /// only while it still reads as it settled (one written to since goes on in the next batch),
+    /// and nothing else of the folder. Returns whether clients should refresh.
+    pub(super) fn settled(&mut self, token: u64, paths: BTreeSet<PathBuf>) -> bool {
+        let Some(o) = self.open.as_mut().filter(|o| o.token == token) else { return false };
+        let Ok(snapshot) = Snapshot::read(&o.session.accepted().project.dir) else { return false };
+        let paths = match self.inner.watch.lock().as_mut().filter(|w| w.token == token) {
+            Some(w) => w.settle.confirm(&paths, &|p| snapshot.sha(p)),
+            None => return false,
+        };
+        if paths.is_empty() {
+            return false;
+        }
+        let taken = o.session.take_in_only(snapshot, &paths);
+        // DIAG-3: an outside write that makes a module play data nothing played says so, once.
+        if let Some(a) = &taken.accepted {
+            self.inner.notices.lock().extend(a.notices.iter().map(|d| d.message.clone()));
+        }
+        if !taken.draft_changed {
+            return false;
+        }
+        self.settle(None);
+        true
+    }
+
+    /// Settle when the engine is behind the accepted revision (a renderer that didn't build, a
+    /// player let go of): what [`Actor::settled`] and every edit do anyway, done here when nothing
+    /// else changes. Returns whether clients should refresh.
+    pub(super) fn catch_up(&mut self) -> bool {
+        let Some(o) = self.open.as_mut() else { return false };
+        let has_code = o.session.accepted().has_code();
+        let behind = match self.inner.device() {
+            Ok(d) => has_code && (!o.loaded(&d) || o.playing != o.session.accepted().number),
+            // Let go of: the settle starts a new one, and loads the project into it where it was.
+            Err(_) => true,
+        };
+        behind && self.settle(None).changed
+    }
+
+    /// Take in what the folder says now, as one batch, without the settle rule (tests, the gates).
+    /// Returns whether clients should refresh.
     pub(super) fn poll(&mut self) -> bool {
         let Some(o) = self.open.as_mut() else { return false };
         let changed = o.session.refresh();
@@ -926,16 +1125,45 @@ impl Actor {
         self.settle(None).changed || changed
     }
 
-    /// Save a file from the code editor, and take it in.
+    /// Save a file from the code editor (WRITE-2: the session's `save()`), and take it in.
     pub(super) fn write_file(&mut self, token: Option<u64>, path: &str, base: &str, text: &str) -> Result<Value> {
         let o = self.open.as_mut().context("no project is open")?;
         if let Some(token) = token {
             o.check_token(token)?;
         }
-        let before = o.session.accepted().snapshot.files.get(Path::new(path)).cloned();
-        files::write(&o.session.accepted().project.dir, path, base, text)?;
-        o.session.saved(Path::new(path), before);
+        files::save(&mut o.session, path, base, text)?;
         self.settle(None);
         self.inner.state().context("no project is open")
+    }
+
+    /// Check or commit an agent's Tx (WRITE-4, WRITE-5, WRITE-11), answering in the editor's one
+    /// JSON shape, with the status the route answers: 200, or 409 for a conflict, 422 for a
+    /// rejection, 500 for a disk that failed. A commit is played and announced as any edit is.
+    pub(super) fn tx(&mut self, token: Option<u64>, tx: m2_song::Tx, commit: bool) -> Result<(u16, Value)> {
+        let o = self.open.as_mut().context("no project is open")?;
+        if let Some(token) = token {
+            o.check_token(token)?;
+        }
+        let refused = |r: &m2_session::Refusal| {
+            let status = match r {
+                m2_session::Refusal::Conflict { .. } => 409,
+                m2_session::Refusal::Rejected { .. } => 422,
+                m2_session::Refusal::Io { .. } => 500,
+            };
+            (status, m2_editor::json::refusal(r))
+        };
+        if !commit {
+            return Ok(match o.session.check(&tx) {
+                Ok(c) => (200, m2_editor::json::checked(&c)),
+                Err(r) => refused(&r),
+            });
+        }
+        let done = o.session.commit(tx);
+        o.sent = None;
+        self.settle(None);
+        Ok(match done {
+            Ok(c) => (200, m2_editor::json::committed(&c)),
+            Err(r) => refused(&r),
+        })
     }
 }

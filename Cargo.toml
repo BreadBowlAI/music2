@@ -10,6 +10,7 @@ license = "MIT"
 
 [workspace.dependencies]
 m2-server = { path = "crates/server" }
+m2-editor = { path = "crates/editor" }
 m2-ir = { path = "core/ir" }
 m2-kernel = { path = "core/kernel" }
 m2-song = { path = "core/song" }
@@ -39,6 +40,7 @@ rquickjs = { version = "0.14", features = ["loader"] }
 oxc = { version = "0.153", features = ["transformer", "codegen", "semantic", "ast_visit"] }
 bytemuck = "1"
 sha2 = "0.10"
+libc = "0.2"
 icu_normalizer = "2"
 
 [profile.dev]

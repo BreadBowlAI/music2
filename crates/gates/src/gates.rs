@@ -8,6 +8,7 @@
 use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
+use m2_editor::Gestures;
 use m2_runtime::Renderer;
 use m2_session::reference::Reference;
 use m2_song::{LaneAddr, NoteClip};
@@ -967,7 +968,7 @@ pub fn tail_stop(lab: &mut Lab, kind: Kind, o: &Opts) -> Result<Outcome> {
 /// G10: a range render from bar 64 takes no longer than one of the same length from bar 1 (within
 /// 10%), is the same bits every time, and says whether it is exact (RENDER-4, RENDER-5).
 pub fn range(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
-    use m2_session::render::{Length, Render};
+    use m2_editor::render::{Length, Render};
     let song = lab.reference(&o.reference).and_then(|d| lab.compile(&d))?;
     let mut out = Outcome::new("G10 range render", rules("range"), &o.reference.name());
     if !song.data.arrangement.meter.is_empty() {
@@ -1038,9 +1039,9 @@ fn range_labels(_: &Lab, _: &Song, out: &mut Outcome, _: &std::path::Path) -> Re
 /// The session's range render, as `m2 render --from --preroll` makes it: what it says it is.
 #[cfg(feature = "range")]
 fn range_labels(lab: &Lab, song: &Song, out: &mut Outcome, file: &std::path::Path) -> Result<()> {
-    use m2_session::render::{Length, Render};
+    use m2_editor::render::{Length, Render};
     let seconds = |beat: f64| song.data.tempo().seconds_at(beat);
-    let render = |from: f64| -> Result<m2_session::render::Rendered> {
+    let render = |from: f64| -> Result<m2_editor::render::Rendered> {
         let r =
             Render::range(&song.flat, &song.data, &lab.packages, song.rate, seconds(from), seconds(8.0), Length::Seconds(seconds(32.0)))?;
         r.write(file, |_| {})

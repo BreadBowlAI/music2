@@ -14,10 +14,13 @@ const LOOK: Record<Severity, { Icon: typeof CircleAlert; color: string; word: st
   notice: { Icon: Info, color: "text-ink-400", word: "Notice" },
 };
 
-/** What a fix renames, deletes or rewrites: the first file it touches, as its edit says. */
+/** What a fix renames, deletes or rewrites: the first file it touches, as its Tx says. */
 function target(fix: Fix) {
-  const op = fix.edit.ops[0];
-  return !op ? null : op.op === "rename" ? { from: op.from, to: op.to } : { from: op.file, to: null };
+  const op = fix.tx.ops[0];
+  if (!op) return null;
+  if (op.op === "rename") return { from: op.from, to: op.to };
+  if (op.op === "clips") return { from: `data/${op.lane[0]}/${op.lane[1]}.json`, to: null };
+  return { from: op.file, to: null };
 }
 
 /** What the toast says once a fix is made. */

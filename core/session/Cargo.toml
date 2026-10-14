@@ -14,3 +14,4 @@ m2-runtime.workspace = true
 m2-script.workspace = true
 hound.workspace = true
 serde_json.workspace = true
+libc.workspace = true

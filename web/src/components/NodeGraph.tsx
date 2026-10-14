@@ -11,6 +11,7 @@ import {
   Music2,
   Piano,
   Plus,
+  RotateCcw,
   Scan,
   SlidersHorizontal,
   Spline,
@@ -38,8 +39,11 @@ import {
   type PortKind,
   type ViewNode,
 } from "../lib/graph";
+import { laneMade } from "../lib/events";
 import { useStore } from "../lib/store";
 import EffectBrowser from "./EffectBrowser";
+import { undoAction } from "./GraphCanvas";
+import TrackName from "./TrackName";
 
 /** One module's code as a graph to play and tweak: knobs over its values, cables between its signals, effects after its audio. */
 export function NodeGraph({ graph, module }: { graph: GraphState; module: string }) {
@@ -512,7 +516,9 @@ const ModuleSection = memo(function ModuleSection({
   return (
     <section className="grow shrink-0 w-max min-w-full flex flex-col rounded-2xl bg-ink-900 ring-1 ring-black/[0.05] p-5 pt-4" data-module={module.key}>
       <div className="flex items-center gap-2 mb-5">
-        <h2 className="text-sm font-semibold text-ink-100">{moduleName(module)}</h2>
+        <h2 className="min-w-0 flex">
+          <TrackName module={module.key} label={module.label} track={module.track} testid="module-title" className="text-sm font-semibold text-ink-100" />
+        </h2>
         <span className="text-xs text-ink-400">
           {module.track ? "track" : "mix"}
           {/* The key the code calls it by, when the label doesn't say it. */}
@@ -1004,6 +1010,8 @@ function KnobControl({
   const keepalive = useRef<number | null>(null);
   const mounted = useRef(true);
   const committing = useRef(false);
+  // The knob's menu (right-click), where it is opened.
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
   const stopKeepalive = () => {
     if (keepalive.current != null) clearInterval(keepalive.current);
@@ -1126,16 +1134,52 @@ function KnobControl({
     }
   };
 
+  /** A move of the knob to `u` (0..1): previewed while dragged; on its own (a double-click, the menu's reset) one whole gesture. */
+  const change = (u: number) => {
+    if ((!editable && !dragging.current) || committing.current) return;
+    const gesture = dragging.current ?? begin();
+    if (gesture.failed) return;
+    const v = fromUnit(gesture.knob, u);
+    setValue(v);
+    latest.current = v;
+    if (!dragging.current) {
+      // A double-click reset is a complete, revision-bound gesture.
+      preview(gesture, v);
+      void commit(gesture, v);
+      return;
+    }
+    pending.current = { gesture, value: v };
+    if (timer.current == null) timer.current = window.setTimeout(flushPreview, 30);
+  };
+
+  /** Its value becomes a new, empty control lane's fallback (HOME-2): the song sounds the same, and the timeline shows the lane to draw on. */
+  const automate = () => {
+    setMenu(null);
+    graphApi
+      .automate(session, revision, knob.id)
+      .then((r) => {
+        toast(`Automating ${r.name} in a new lane, ${r.lane.lane}`, undoAction(session, r.revision));
+        laneMade(r.lane.module, r.lane.lane);
+      })
+      .catch((error) => toast(error instanceof Error ? error.message : String(error)));
+  };
+
   const descriptor = dragging.current?.knob ?? knob;
   // A drag already in progress goes on when the code breaks under it; only new ones wait.
   const disabled = (!editable && !dragging.current) || saving;
   const shared = knob.uses > 1 ? `Shared value: changes all ${knob.uses} uses. ` : "";
   // A control the call leaves out plays its default until its first edit writes it into the call (PKG-3).
   const written = knob.written ? `written as ${knob.literal}` : "the default: not written in the code yet, turning it writes it in";
-  const title = !editable ? "Fix the code errors before editing this control." : `${shared}${knob.file}:${knob.line}  (${written})`;
+  const title = !editable
+    ? "Fix the code errors before editing this control."
+    : `${shared}${knob.file}:${knob.line}  (${written})\nRight-click to automate it or reset it`;
 
   return (
     <div
+      onContextMenu={(e) => {
+        e.preventDefault();
+        if (!dragging.current) setMenu({ x: e.clientX, y: e.clientY });
+      }}
       data-knob={knob.label}
       data-knob-id={editable ? knob.id : undefined}
       data-value={value}
@@ -1175,22 +1219,7 @@ function KnobControl({
               if (gesture && gesture.previewed && !gesture.failed && !gesture.cancelled && timer.current == null) preview(gesture, latest.current);
             }, 2000);
           }}
-          onChange={(u) => {
-            if ((!editable && !dragging.current) || committing.current) return;
-            const gesture = dragging.current ?? begin();
-            if (gesture.failed) return;
-            const v = fromUnit(gesture.knob, u);
-            setValue(v);
-            latest.current = v;
-            if (!dragging.current) {
-              // A double-click reset is a complete, revision-bound gesture.
-              preview(gesture, v);
-              void commit(gesture, v);
-              return;
-            }
-            pending.current = { gesture, value: v };
-            if (timer.current == null) timer.current = window.setTimeout(flushPreview, 30);
-          }}
+          onChange={change}
           onEnd={() => {
             stopKeepalive();
             const gesture = dragging.current;
@@ -1219,7 +1248,161 @@ function KnobControl({
           }}
         />
       </div>
+      {menu && (
+        <KnobMenu
+          knob={knob}
+          label={label}
+          value={value}
+          at={menu}
+          editable={editable && !saving}
+          onAutomate={automate}
+          onReset={descriptor.default != null ? () => change(Math.min(1, Math.max(0, toUnit(descriptor, descriptor.default!)))) : undefined}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * A knob's menu (right-click on it): Automate, which turns its value into a lane to draw on, and
+ * Reset to its declared default. What can't be done says why in place of what it would do.
+ */
+function KnobMenu({
+  knob,
+  label,
+  value,
+  at,
+  editable,
+  onAutomate,
+  onReset,
+  onClose,
+}: {
+  knob: KnobInfo;
+  label: string;
+  value: number;
+  at: { x: number; y: number };
+  editable: boolean;
+  onAutomate: () => void;
+  onReset?: () => void;
+  onClose: () => void;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ left: at.x, top: at.y });
+  const locked = "Fix the code first: it doesn't compile right now";
+  const sentence = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+  const items = [
+    {
+      id: "automate",
+      Icon: Spline,
+      title: "Automate",
+      detail: !editable ? locked : knob.automate_refused ? `${sentence(knob.automate_refused)}.` : "Draw it over time in a new lane. It sounds the same until you do.",
+      disabled: !editable || !!knob.automate_refused,
+      run: onAutomate,
+    },
+    ...(onReset && knob.default != null
+      ? [{
+          id: "reset",
+          Icon: RotateCcw,
+          title: "Reset to default",
+          detail: knob.default === value ? `It is at its default, ${display(knob, knob.default)}` : display(knob, knob.default),
+          disabled: !editable || knob.default === value,
+          run: () => {
+            onClose();
+            onReset();
+          },
+        }]
+      : []),
+  ];
+  const [active, setActive] = useState(() => items.findIndex((i) => !i.disabled));
+
+  // Opened at the pointer, kept on screen.
+  useLayoutEffect(() => {
+    const r = box.current!.getBoundingClientRect();
+    setPos({
+      left: Math.max(8, Math.min(at.x, window.innerWidth - r.width - 8)),
+      top: at.y + r.height + 8 > window.innerHeight ? Math.max(8, at.y - r.height) : at.y,
+    });
+    box.current!.focus({ preventScroll: true });
+  }, [at.x, at.y]);
+  useEffect(() => {
+    const outside = (e: Event) => !box.current?.contains(e.target as Node) && onClose();
+    document.addEventListener("pointerdown", outside, true);
+    window.addEventListener("blur", onClose);
+    window.addEventListener("resize", onClose);
+    document.addEventListener("scroll", onClose, true);
+    return () => {
+      document.removeEventListener("pointerdown", outside, true);
+      window.removeEventListener("blur", onClose);
+      window.removeEventListener("resize", onClose);
+      document.removeEventListener("scroll", onClose, true);
+    };
+  }, [onClose]);
+
+  const move = (step: number) => {
+    const enabled = items.map((i, k) => (i.disabled ? -1 : k)).filter((k) => k >= 0);
+    if (!enabled.length) return;
+    const at = enabled.indexOf(active);
+    setActive(enabled[(at + step + enabled.length) % enabled.length]);
+  };
+
+  return createPortal(
+    <div
+      ref={box}
+      role="menu"
+      tabIndex={-1}
+      data-testid="knob-menu"
+      aria-label={`${label} knob`}
+      style={pos}
+      className="fixed z-50 w-[272px] rounded-2xl bg-ink-850 ring-1 ring-black/10 shadow-2xl shadow-black/20 overflow-hidden rise outline-none cursor-default"
+      onContextMenu={(e) => e.preventDefault()}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === "Escape") onClose();
+        else if (e.key === "ArrowDown") move(1);
+        else if (e.key === "ArrowUp") move(-1);
+        else if ((e.key === "Enter" || e.key === " ") && items[active] && !items[active].disabled) items[active].run();
+        else return;
+        e.preventDefault();
+      }}
+    >
+      <div className="px-4 pt-3 pb-2 flex items-baseline gap-2 border-b border-black/[0.06] bg-ink-800">
+        <span className="text-[13px] font-semibold text-ink-100 truncate">{label}</span>
+        <span className="ml-auto shrink-0 text-xs text-ink-400 tabular-nums">{display(knob, value)}</span>
+      </div>
+      <div className="py-1.5">
+        {items.map((item, k) => (
+          <div
+            key={item.id}
+            role="menuitem"
+            data-menu-item={item.id}
+            aria-disabled={item.disabled || undefined}
+            onPointerEnter={() => !item.disabled && setActive(k)}
+            onClick={() => !item.disabled && item.run()}
+            className={clsx(
+              "mx-1.5 px-2.5 py-2 rounded-xl flex items-start gap-3 transition-colors",
+              item.disabled ? "opacity-55" : clsx("cursor-pointer", k === active ? "bg-ink-700/70" : "hover:bg-ink-700/40"),
+            )}
+          >
+            <span
+              className="mt-px size-7 shrink-0 rounded-[9px] grid place-items-center"
+              style={{ background: `color-mix(in oklab, ${KIND_COLOR.control} 14%, var(--color-ink-800))`, color: KIND_COLOR.control }}
+            >
+              <item.Icon className="size-3.5" />
+            </span>
+            <span className="flex-1 min-w-0">
+              <span className="block text-[13px] font-medium text-ink-100 leading-5">{item.title}</span>
+              <span data-detail className="block text-xs text-ink-400 leading-4">{item.detail}</span>
+            </span>
+          </div>
+        ))}
+      </div>
+      <div className="h-8 px-4 flex items-center gap-2 border-t border-black/[0.06] bg-ink-800 text-[11px] text-ink-400">
+        <span className="font-mono truncate">{knob.file}:{knob.line}</span>
+        <span className="ml-auto shrink-0 truncate">{knob.written ? <span className="font-mono">{knob.literal}</span> : <i>its default</i>}</span>
+      </div>
+    </div>,
+    document.body,
   );
 }
 

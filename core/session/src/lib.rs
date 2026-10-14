@@ -6,17 +6,22 @@
 //! declaration. What doesn't stop the song comes back as `problems` (DIAG-1): data that doesn't
 //! read (the lane plays what it can), data no lane reads, a plugin that isn't installed.
 //!
-//! [`Session`] (in `edit`) is the editing session built on it: a source snapshot,
-//! revisions, verified value edits and undo.
+//! [`Session`] is the editing session built on it: a source snapshot, revisions numbered
+//! `(code_rev, data_rev)`, and undo. Every write goes through the write path of step 6: `tx`
+//! checks and commits verified edits (bases, the baseline, the delta and the expectations, the
+//! journal and staging, recovery), `take` takes in what changed on disk and the code editor's
+//! saves, `lock` keeps one writer per project, and `watch` settles outside changes. Core holds no
+//! gesture (P10, WRITE-9): `crates/editor` plans each one as a Tx and asserts what it means.
 
-pub mod edit;
-pub mod lanes;
-pub mod plane;
+pub mod lock;
 pub mod reference;
-pub mod render;
-pub mod timeline;
+pub mod session;
+pub mod take;
+pub mod text;
+pub mod texts;
+pub mod tx;
 pub mod unclaimed;
-pub mod view;
+pub mod watch;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -27,16 +32,12 @@ use m2_script::{Descriptor, UnitCtor};
 use m2_song::{DataSet, Project, Version};
 use serde::Serialize;
 
-pub use edit::{Audition, Committed, Control, Declared, EditError, Edited, Inlet, Outlet, Revision, Session};
-pub use edit::effect::EffectInfo;
-/// What [`Session::write_notes`] writes.
-pub use m2_song::{Note, NoteClip};
-pub use timeline::{TimelineLane, TimelineTrack, TimelineView};
+pub use session::{Past, Revision, Session, StepError, Stepped, journal_problems};
+pub use tx::{Checked, Committed, ConflictFile, Patch, Refusal};
 pub use unclaimed::{Seen, SeenLane};
-pub use view::{GraphView, Knob, ModuleView, ReadOnly, ViewNode};
 
 /// Where a value lives (HOME-1): what editing it writes, and what the UI says it is. Every
-/// value [`Session::controls`], the view and gesture leases return names its home.
+/// value the editor's controls, its view and gesture leases return names its home.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Home {
@@ -53,8 +54,10 @@ pub enum Home {
     Local,
 }
 
-/// A project that is ready to render.
-pub struct Compiled {
+/// What QuickJS, the binder and the checker made of a project's code: everything a revision has
+/// that only the code decides (RENDER-15), shared by every revision with the same code, so a data
+/// revision builds nothing (WRITE-13, PLANE-1).
+pub struct Code {
     pub ir: Ir,
     pub flat: Flat,
     /// The call sites that origins in the IR refer to.
@@ -69,6 +72,42 @@ pub struct Compiled {
     /// The unit constructors of `@m2/core`, as the build generated them from its table (PKG-11):
     /// the one table gestures write units with.
     pub units: Arc<[UnitCtor]>,
+    /// What the code declares that reads data: lanes and stateful plugins.
+    pub decls: m2_song::Decls,
+    /// Build problems that don't stop the song: a plugin that isn't installed, a parameter the
+    /// plugin renamed (FMT-18, FMT-18a).
+    pub kept: Vec<Diagnostic>,
+}
+
+impl Code {
+    /// No code: what a project whose code doesn't build opens with (WRITE-20). It plays nothing,
+    /// and no renderer is ever built from it.
+    pub fn none() -> Code {
+        let root = m2_ir::Root { module: m2_song::ROOT.into(), export: "out".into() };
+        let flat = Flat {
+            nodes: vec![],
+            order: vec![],
+            out: m2_ir::PortRef { node: 0, port: 0 },
+            out_kind: m2_ir::Kind::Audio(2),
+            sidechain: vec![],
+        };
+        Code {
+            ir: Ir { ir: m2_ir::IR_VERSION, modules: vec![], root },
+            flat,
+            sites: vec![],
+            outputs: vec![],
+            package_files: vec![],
+            components: BTreeMap::new(),
+            units: Arc::new([]),
+            decls: m2_song::Decls::default(),
+            kept: vec![],
+        }
+    }
+}
+
+/// A project that is ready to render: its code's build, and its data read against it.
+pub struct Compiled {
+    code: Arc<Code>,
     /// What the graph plays: each declared lane and plugin state, read against its declaration.
     pub data: DataSet,
     /// Everything that needs attention but doesn't stop the song (DIAG-1, FMT-9, FMT-18a), with
@@ -76,6 +115,33 @@ pub struct Compiled {
     /// unknown files under `data/`, data no lane or plugin reads, a plugin that isn't
     /// installed, a parameter the plugin renamed. Errors first, then Warnings, then Notices.
     pub problems: Vec<m2_song::Diagnostic>,
+}
+
+impl std::ops::Deref for Compiled {
+    type Target = Code;
+
+    fn deref(&self) -> &Code {
+        &self.code
+    }
+}
+
+impl Compiled {
+    /// The build this revision's data was read against: one `Arc` for every revision with the
+    /// same code.
+    pub fn code(&self) -> &Arc<Code> {
+        &self.code
+    }
+
+    /// No code and no data (WRITE-20).
+    pub fn none() -> Compiled {
+        Compiled { code: Arc::new(Code::none()), data: DataSet::empty(), problems: vec![] }
+    }
+}
+
+impl Clone for Compiled {
+    fn clone(&self) -> Compiled {
+        Compiled { code: self.code.clone(), data: self.data.clone(), problems: self.problems.clone() }
+    }
 }
 
 pub fn compile(project: &Project, packages: &mut PackageSet) -> Result<Compiled, Vec<Diagnostic>> {
@@ -92,6 +158,13 @@ pub fn compile_sources(
     seen: &Seen,
     previous: Option<&DataSet>,
 ) -> Result<Compiled, Vec<Diagnostic>> {
+    let code = build_code(project, packages)?;
+    Ok(read_data(&code, project, seen, previous))
+}
+
+/// Build a project's code: check its dependencies, run the TypeScript (QuickJS), bind the hosted
+/// plugins and check the graph. What only the code decides; the data is [`read_data`]'s.
+pub fn build_code(project: &Project, packages: &mut PackageSet) -> Result<Arc<Code>, Vec<Diagnostic>> {
     let unmet = dependencies(project, packages);
     if !unmet.is_empty() {
         return Err(unmet);
@@ -110,11 +183,19 @@ pub fn compile_sources(
     }
     let flat = m2_ir::check(&ir, packages)?;
     let decls = m2_runtime::decls(&ir);
-    let (data, mut problems) = project.data(&decls, previous);
-    problems.extend(kept.into_iter().map(problem));
-    problems.extend(unclaimed::unclaimed(project, &ir, &decls, seen));
+    Ok(Arc::new(Code { ir, flat, sites, outputs, package_files, components, units: units.into(), decls, kept }))
+}
+
+/// Read a project's data against `code`'s declarations: every declared lane and plugin state,
+/// and the problems found on the way, data no lane reads among them. No QuickJS run: what a
+/// change to data files alone costs (PLANE-1, WRITE-4, WRITE-14). `previous` is the data last
+/// accepted, which a lane whose file fails keeps playing (FMT-9).
+pub fn read_data(code: &Arc<Code>, project: &Project, seen: &Seen, previous: Option<&DataSet>) -> Compiled {
+    let (data, mut problems) = project.data(&code.decls, previous);
+    problems.extend(code.kept.iter().cloned().map(problem));
+    problems.extend(unclaimed::unclaimed(project, &code.ir, &code.decls, seen));
     problems.sort_by_key(|d| d.severity);
-    Ok(Compiled { ir, flat, sites, outputs, package_files, components, units: units.into(), data, problems })
+    Compiled { code: code.clone(), data, problems }
 }
 
 /// Every component `packages` declare, and where each is exported (PKG-11): one sandboxed run
@@ -163,9 +244,6 @@ pub fn problem(d: Diagnostic) -> m2_song::Diagnostic {
 
 #[cfg(test)]
 mod gate_tests;
-
-#[cfg(test)]
-mod gate5_tests;
 
 #[cfg(test)]
 mod tests {

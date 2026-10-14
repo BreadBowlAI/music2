@@ -12,11 +12,12 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::arrangement::{Arrangement, TempoMap};
-use crate::diag::{Diagnostic, Edit, Fix, Op};
+use crate::diag::{Diagnostic, Fix};
 use crate::hash::{HashCache, Sha};
 use crate::key::{ClipId, Key, LaneAddr};
 use crate::lane::{self, AbsNote, AudioClip, ControlLane, Holds, LaneData, LaneError, LaneKind, canonical, number};
 use crate::path::{AssetName, DataPath, slashed};
+use crate::tx::{Base, Confined, Expect, Op, Payload, TxPath};
 use crate::{Project, Stored};
 
 /// What the code declares that reads data: lanes, and plugins with saved state.
@@ -73,6 +74,10 @@ pub struct DataSet {
     dir: Option<PathBuf>,
     /// Where the last clip of any lane file ends, read by a lane or not.
     end: f64,
+    /// The text each lane read here was read from, as its kind: a later read of the same text as
+    /// the same kind keeps the same data instead of parsing it again (PLANE-1's data path costs
+    /// the files a change touches, not the project's). Not data: what plays is `lanes`.
+    read: BTreeMap<LaneAddr, (LaneKind, Arc<str>)>,
 }
 
 impl Default for TempoMap {
@@ -171,10 +176,13 @@ pub struct Unused<'a> {
 
 impl Project {
     /// Read every declared lane and state against its declaration. `previous` is the data the
-    /// session last accepted: a lane whose file fails keeps playing it (FMT-9).
+    /// session last accepted: a lane whose file fails keeps playing it (FMT-9), and one whose
+    /// file is the text it was read from there, as the same kind, keeps that read (the same
+    /// data, as a parse of that text gives) instead of parsing it again.
     pub fn data(&self, decls: &Decls, previous: Option<&DataSet>) -> (DataSet, Vec<Diagnostic>) {
         let mut diags = vec![];
         let mut lanes = BTreeMap::new();
+        let mut read = BTreeMap::new();
         for (addr, kind) in &decls.lanes {
             if lanes.contains_key(addr) {
                 continue;
@@ -187,13 +195,20 @@ impl Project {
             let error = match self.lanes.get(addr) {
                 Some((path, text)) => {
                     let file = slashed(path);
-                    match LaneData::read(text, kind) {
-                        Ok(data) => {
+                    // Read from this very text, as this kind: the same data a parse would give.
+                    let same = previous.and_then(|p| Some((p.read.get(addr)?, p.lanes.get(addr)?)));
+                    let parsed = match same {
+                        Some(((k, t), d)) if k == kind && **t == **text => Ok((d.clone(), t.clone())),
+                        _ => LaneData::read(text, kind).map(|d| (Arc::new(d), Arc::from(text.as_str()))),
+                    };
+                    match parsed {
+                        Ok((data, source)) => {
                             diags.extend(self.clip_ids(addr, &file, text, &data));
-                            if let LaneData::Audio(clips) = &data {
+                            if let LaneData::Audio(clips) = &*data {
                                 diags.extend(self.assets(addr, &file, text, clips, &data));
                             }
-                            lanes.insert(addr.clone(), Arc::new(data));
+                            lanes.insert(addr.clone(), data);
+                            read.insert(addr.clone(), (kind.clone(), source));
                             continue;
                         }
                         Err(e) => lane_error(addr, &file, text, e, then),
@@ -226,7 +241,8 @@ impl Project {
             (DataPath::Asset(a), Stored::Hash(_) | Stored::Listed) => Some(a.as_str().to_string()),
             _ => None,
         });
-        let files = self.lanes.values().filter_map(|(_, text)| {
+        // A file a lane read ends where its data does; only the others are parsed for it here.
+        let files = self.lanes.iter().filter(|(a, _)| !read.contains_key(*a)).filter_map(|(_, (_, text))| {
             let kind = match Holds::of(text) {
                 Holds::Notes => LaneKind::Notes,
                 Holds::Control => LaneKind::Control { unit: None },
@@ -245,6 +261,7 @@ impl Project {
             assets: assets.collect(),
             dir: Some(self.dir.clone()),
             end,
+            read,
         };
         (data, diags)
     }
@@ -307,6 +324,11 @@ impl Project {
     /// Every lane file, by address.
     pub fn lane_files(&self) -> impl Iterator<Item = (&LaneAddr, &Path, &str)> {
         self.lanes.iter().map(|(a, (p, t))| (a, p.as_path(), t.as_str()))
+    }
+
+    /// Files under `data/` that aren't data music2 reads (FMT-7), by path.
+    pub fn unknown_files(&self) -> impl Iterator<Item = &Path> {
+        self.unknown.iter().map(PathBuf::as_path).filter(|p| DataPath::parse(p).unknown_data())
     }
 
     /// Every plugin state file, blobs and sidecars, by path.
@@ -573,26 +595,24 @@ impl Project {
                     .find(|o| Some(&o.plugin) == saved_by.as_ref() && !self.binaries.contains_key(&at(&o.module, &o.path, false)))
             {
                 let (to_blob, to_side) = (at(&to.module, &to.path, false), at(&to.module, &to.path, true));
-                let mut edit = Edit::default();
-                edit.base.insert(file.clone(), stored.sha().map(|s| s.hex()));
-                edit.base.insert(slashed(&to_blob), None);
-                edit.ops.push(Op::Rename { from: file.clone(), to: slashed(&to_blob) });
-                if let Some(t) = sidecar {
-                    edit.base.insert(sidefile.clone(), Some(Sha::of(t.as_bytes()).hex()));
-                    edit.base.insert(slashed(&to_side), None);
-                    edit.ops.push(Op::Rename { from: sidefile.clone(), to: slashed(&to_side) });
+                let at = to.path.iter().map(Key::as_str).collect::<Vec<_>>().join("/");
+                let mut moves = vec![(blob.clone(), stored.sha(), to_blob)];
+                moves.extend(sidecar.map(|t| (side.clone(), Some(Sha::of(t.as_bytes())), to_side)));
+                // A plugin state moves with its sidecar; the state it then loads is the Tx's own
+                // write (C1).
+                let label = ("unused plugin state".to_string(), format!("{} › {at}", to.module));
+                if let Some(f) = relink_fix(&moves, label, format!("Move it to {at}"), false, Expect::Confined(Confined::default())) {
+                    d = d.fix(f);
                 }
-                let title = format!("Move it to {}", to.path.iter().map(Key::as_str).collect::<Vec<_>>().join("/"));
-                d = d.fix(Fix { code: "relink", title, likely: false, edit });
             }
-            let mut edit = Edit::default();
-            edit.base.insert(file.clone(), stored.sha().map(|s| s.hex()));
-            edit.ops.push(Op::Remove { file: file.clone() });
-            if let Some(t) = sidecar {
-                edit.base.insert(sidefile.clone(), Some(Sha::of(t.as_bytes()).hex()));
-                edit.ops.push(Op::Remove { file: sidefile });
-            }
-            diags.push(d.fix(Fix { code: "delete-data", title: "Delete the saved state".into(), likely: false, edit }));
+            let mut files = vec![(blob.clone(), stored.sha())];
+            files.extend(sidecar.map(|t| (side.clone(), Some(Sha::of(t.as_bytes())))));
+            let label = ("unused plugin state".to_string(), "deleted".to_string());
+            let delete = delete_fix(&files, label, "Delete the saved state");
+            diags.push(match delete {
+                Some(f) => d.fix(f),
+                None => d,
+            });
         }
         out
     }
@@ -659,12 +679,51 @@ fn lane_error(addr: &LaneAddr, file: &str, text: &str, e: LaneError, then: &str)
     }
 }
 
-/// A fix that writes the lane file as `data`, in canonical form.
+/// A fix that writes the lane file as `data`, in canonical form: a `Write` on the file's hash,
+/// confined to its lane (the step 6 design's 11).
 fn rewrite(code: &'static str, title: String, likely: bool, file: &str, text: &str, data: &LaneData) -> Fix {
-    let mut edit = Edit::default();
-    edit.base.insert(file.to_string(), Some(Sha::of(text.as_bytes()).hex()));
-    edit.ops.push(Op::Write { file: file.to_string(), text: canonical(data) });
-    Fix { code, title, likely, edit }
+    let path = TxPath::new(file).expect("a lane file's path");
+    let lanes = match path.data() {
+        DataPath::Lane { module, lane } => vec![LaneAddr { module: module.clone(), lane: lane.clone() }],
+        _ => vec![],
+    };
+    let label = (lanes.first().map_or(file.to_string(), |a| format!("{} › {}", a.module, a.lane)), title.to_lowercase());
+    let base = [(path.clone(), Base::Sha(Sha::of(text.as_bytes())))].into();
+    let ops = vec![Op::Write { file: path, bytes: Payload::Text(canonical(data).into()) }];
+    Fix::new(code, title, likely, label, base, ops, Expect::Confined(Confined { lanes, ..Confined::default() }))
+}
+
+/// A fix that renames each `(from, its hash, to)`, none of whose targets may exist; None when a
+/// hash isn't known (a file that can't be read is never moved).
+pub fn relink_fix(
+    moves: &[(PathBuf, Option<Sha>, PathBuf)],
+    label: (String, String),
+    title: String,
+    likely: bool,
+    expect: Expect,
+) -> Option<Fix> {
+    let mut base = BTreeMap::new();
+    let mut ops = vec![];
+    for (from, sha, to) in moves {
+        let (from, to) = (TxPath::new(&slashed(from)).ok()?, TxPath::new(&slashed(to)).ok()?);
+        base.insert(from.clone(), Base::Sha((*sha)?));
+        base.insert(to.clone(), Base::Absent);
+        ops.push(Op::Rename { from, to });
+    }
+    Some(Fix::new("relink", title, likely, label, base, ops, expect))
+}
+
+/// A fix that removes each of `files` while it has its hash; it changes nothing that plays. None
+/// when a hash isn't known.
+pub fn delete_fix(files: &[(PathBuf, Option<Sha>)], label: (String, String), title: &str) -> Option<Fix> {
+    let mut base = BTreeMap::new();
+    let mut ops = vec![];
+    for (file, sha) in files {
+        let file = TxPath::new(&slashed(file)).ok()?;
+        base.insert(file.clone(), Base::Sha((*sha)?));
+        ops.push(Op::Remove { file });
+    }
+    Some(Fix::new("delete-data", title, false, label, base, ops, Expect::Identical))
 }
 
 /// Give a new id to every clip `keep` refuses (by its id and index), derived as a fix derives

@@ -66,11 +66,11 @@ These answer the plan's open questions (2026-10-12).
 
 **PLANE-1.** The plane of a change MUST be chosen by `DataPath::class()` of the files it touches, and for Data, by whether it needs a render or a state load; never by who wrote them.
 - *Why:* a lane file written by an agent or by git must get the same fast path as the app.
-- *Today:* every accepted change, a lane edit included, runs the whole TypeScript build (`core/session/src/lanes.rs:52-58` → `edit.rs:589-608`; outside edits through `refresh`, `edit.rs:396-398`).
+- *Today:* matches since step 6. A Tx or an outside batch that changes no Code, Manifest or Arrangement file takes the data path: its data is read against the accepted code, with no QuickJS run, and only `data_rev` moves (`core/session/src/take.rs`; `kind_of` in `core/session/src/tx/mod.rs`; `an_outside_lane_write_takes_the_data_path`, and through the server's watcher `an_outside_lane_write_is_swapped`). A lane whose file is the text it was read from keeps that read, so only the files a change touches are parsed (`Project::data` in `core/song/src/data.rs`).
 
 **PLANE-2.** A change that touches files of several classes MUST take the slowest of their planes (Code, then Arrangement, then prepared data, then Data).
 - *Why:* one revision must never mix a new graph with stale timing.
-- *Today:* there is one plane: every change compiles.
+- *Today:* matches since step 6: a change is named by the slowest plane of its paths (`take::Plane`), and a batch that changes code is compiled whole with its data (`core/session/src/take.rs`).
 
 **PLANE-3.** Changes to Presentation or Ignored files MUST NOT create a revision.
 - *Why:* moving a node on the canvas must not recompile or rebuild anything.
@@ -82,6 +82,7 @@ These answer the plan's open questions (2026-10-12).
 
 **PLANE-5.** The cost of the journal's durable sync (`F_FULLFSYNC`) MUST be measured on the [reference Mac](#acceptance-gates) in step 6. If it doesn't leave room in the data budget, the budget is revised here, never met by skipping the sync.
 - *Why:* on macOS a durable sync alone can use much of 20 ms.
+- *Today:* measured in step 6 by `m2-gates --server tx-data` (G11; release, 512-frame buffers, 200 piano-roll writes from 1:00, each a journaled `Clips` Tx), on an M1 Pro (MacBookPro18,1, not the base M1) that other work kept busy (load 7 to 10). The barrier alone: p50 4.8 ms, p95 5.3 to 7.3 ms on an idle disk; p50 8.4 ms, p95 12 ms while another writer syncs 4 MB chunks. From the `commit()` call to the first block that plays the write: p16 p95 28.6 ms idle, 35.7 ms busy; p50 p95 26.6 ms idle, 34.6 ms busy, every write a `SwapLane`. So the data plane's 20 ms isn't met, with or without the barrier's 5 ms, and one device buffer of the wait is in it; the owner chooses among the step 6 design's C20 options, and the sync stays. The watcher's stat walk with a 5,000-file `assets/` takes p50 19 to 20 ms (the design's trigger for FSEvents is 2 ms).
 
 ## Render
 
@@ -255,7 +256,7 @@ The default MUST reproduce today's output bit for bit. A voice's RuntimeId is it
 
 **RENDER-26.** `SwapLane` MUST replace one lane's data in the running nodes at a block boundary, without touching any kernel. Step 3a uses it when the old and new `Flat` graphs are equal. From step 6 the Tx delta decides.
 - *Why:* a note edit must be audible within 20 ms with no tails cut.
-- *Today:* a notes edit rebuilds and replays (`crates/server/src/graph.rs:382-386`).
+- *Today:* matches since step 6: the server takes the delta from the revision the playing renderer was built from (or took since) to the accepted one, and swaps the lanes it lists when nothing structural, no state, asset or arrangement changed, and each notes lane fits its scheduler (`reach` in `crates/server/src/graph/actor.rs`); a change that never reached the engine (a build that failed) is never skipped by a later lane edit (`a_failed_build_then_a_lane_edit_rebuilds`).
 
 **RENDER-26a.** Each notes-lane scheduler MUST own the set of notes it has turned on and not yet off: each with its runtime note id and its `(clip, pitch, start beat)`, where an anonymous clip is named by its start. Then:
 - On `SwapLane` it compares that set with the new data. A sounding note that is gone, or whose new end is at or before the transport, gets an Off at the swap frame. One whose end moved is rescheduled. A new note that started before the transport is not chased.
@@ -342,7 +343,7 @@ enum Msg { Activate(Plan, Slots), SwapLane(LaneAddr, Arc<LaneData>), SetArrangem
 **ID-2.** Keys MUST be validated, never normalised. An invalid key is the compile error `key.invalid`, which suggests a valid spelling.
 - A writer (the app's add track, an agent) MAY propose a key from a label once, when it creates the thing: fold to ASCII, lowercase, turn every run of other characters into one `-`, trim to 32 characters and the key rule, and fall back to `track-2`, `track-3`… when the result is empty or taken. It shows the key, writes it into the code, and never derives it again. One shared helper in `crates/editor` does this.
 - *Why:* normalising is what lets two names share files. A key proposed once and then written down is just a default the person can see and change.
-- *Today:* matches since step 4: keys are checked, never normalised, and `key.invalid` suggests a spelling (`m2_ir::key::suggest`). No writer proposes keys yet, so the helper in `crates/editor` isn't built.
+- *Today:* matches: keys are checked, never normalised, and `key.invalid` suggests a spelling (`m2_ir::key::suggest`). Since step 6 the one helper is `keys::propose` in `crates/editor`; automating a knob uses it once, for the new lane's key, which it shows and writes into the code.
 
 **ID-3.** `song` is reserved for the root module.
 - *Today:* matches (`core/script/sdk/core.ts:464`).
@@ -381,7 +382,7 @@ key("chain-l", () => vocalChain(x))                          // a frame: compose
 
 **ID-10.** A label MUST be display text only: never an address, a file name or an import target. It defaults to the key. Changing a label is an `Identical` Tx: labels are ignored when graphs are compared. Code MUST NOT be able to observe a label: the track function's context exposes `key`, never the label, and no handle returns it. The label lives only in the IR (`Module.label`, a lane's `name`).
 - *Why:* renaming a track must never silence it or hand its data to another track, and a song that branched on its label would change its sound when renamed.
-- *Today:* matches since step 4: the context exposes `key`, labels live only in the IR, and no handle returns one (tested in `core/script/src/tests.rs`). A label change changes no data file, graph or sound (`core/session/src/gate_tests.rs`). It is a code save until Tx lands in step 6.
+- *Today:* matches: the context exposes `key`, labels live only in the IR, and no handle returns one (tested in `core/script/src/tests.rs`). A label change changes no data file, graph or sound (`core/session/src/gate_tests.rs`). Since step 6 renaming a label in the app, `m2 label` or `POST /api/graph/label` is an `Identical` Tx on the `track()` call's name (`crates/editor/src/rename.rs`).
 
 **ID-11.** The IR module is `Module { key, label, muted }` (`muted` is "mute in song", [MON-5](#monitoring-overlays-and-mute-in-song)). The key is used by the import op, flat node names, lane addresses, `m2 bounce --track` and `--place`, bounce provenance, `TimelineTrack.module` and UI selection. `slug()` is deleted.
 
@@ -423,7 +424,7 @@ An ambiguous match gets a fresh id, and its state resets.
 - **A label rename** in the UI is an `Identical` Tx.
 - **A key rename** in the app is one Tx that edits the code and renames `data/<key>/`. It may also write `layout.json` ([WRITE-3](#the-two-write-primitives)).
 - **A key rename by hand** leaves the data unclaimed: `data.unclaimed`, with a Relink fix ([DIAG-6](#fixes)): for a track key, of the whole `data/<key>/` folder; for a lane key, of one lane file.
-- *Today:* matches for renames by hand since step 4: a track key renamed in code leaves its folder `data.unclaimed`, offered whole, and a lane key its lane file, in the app and in every CLI command that opens the project ([DIAG-4](#delivery), [DIAG-6](#fixes)). The app's key rename and Restore aren't built.
+- *Today:* matches for label renames and renames by hand: a label rename is an `Identical` Tx (step 6); a track key renamed in code leaves its folder `data.unclaimed`, offered whole as one `Rename` of the folder on its directory hash ("Move all to …"), and a lane key its lane file, in the app and in every CLI command that opens the project ([DIAG-4](#delivery), [DIAG-6](#fixes)). The app's key rename and Restore aren't built.
 
 **ID-18.** Mixer channel keys are dictionary slots where the user's key is identity on purpose. The app writes the track key as the channel key of a new channel, but finds a track's channel by following the graph edge from the track's export into the mixer, never by comparing keys. A key rename Tx renames a channel key only when it equals the old track key, and says so in its label.
 - *Why:* a channel whose key differs from its track's (written by hand, or after a rename) must still be found.
@@ -584,7 +585,7 @@ Notes, control (masks are control lanes in `unit01`) and audio lanes, in that or
 
 **FMT-14.** An asset MUST never be overwritten: a new version gets a new name, and assets are created with create-only semantics (`O_EXCL`). An asset name is a relative path under `assets/`, with `/` between folders. It is NFC, and has no empty, `.` or `..` segment, no segment that starts with `.`, and no `\` or control character. An import whose name is taken gets a numeric suffix (`kick 2.wav`). An asset is always inside the project: importing copies the file. `m2 bounce --force` is removed.
 - *Why:* an overwritten asset can't be undone and silently changes every clip that uses it. Sample-heavy projects need folders, and a reference outside the project breaks when the project moves.
-- *Today:* matches for what writes assets today: `m2 bounce` creates its asset create-only and `--force` is gone, and names are checked as `AssetName`s (`core/song/src/path.rs`). Importing isn't built.
+- *Today:* matches for what writes assets today: `m2 bounce` creates its asset create-only and `--force` is gone, an exact render that `m2 render` or Export Audio writes into `assets/` is created, never written over (`Render::write_for` in `crates/editor/src/render.rs`, since step 6), a Tx's `Write` of an asset must have the base `Absent`, and names are checked as `AssetName`s (`core/song/src/path.rs`). Importing isn't built.
 
 **FMT-15.** A clip's asset reference carries a `hash` pin: the first 16 hex digits of the SHA-256 of the file's bytes. The app always writes it.
 - A reference without a pin is read, and raises the Notice `asset.unpinned` with a RepinAsset fix.
@@ -602,7 +603,7 @@ Notes, control (masks are control lanes in `unit01`) and audio lanes, in that or
 
 **FMT-17.** A plugin's state is the CLAP blob in `data/<module>/<frames>/<plugin-key>.state`, with a required sidecar `<plugin-key>.state.json` that holds exactly `{plugin, plugin_version}`: no parameter values and no hash. A missing state file means the plugin's defaults. A blob whose sidecar names another plugin than the code does raises the Error `state.plugin-mismatch`; a blob without a sidecar raises the Error `state.unverified`. Either way the blob isn't loaded, the plugin plays its defaults, and the fixes are Relink (when another key now has that plugin) and DeleteData. A state write always writes both files in one Tx.
 - *Why:* state belongs to its module's data, and parameter values belong to code or the blob, never both ([HOME-4](#homes-of-values)). One plugin's state loaded into another crashes many plugins, and a hash beside the blob is a second truth that a merge can split from it.
-- *Today:* matches since step 4, except that `m2 plugin-state` writes the blob and its sidecar directly, not as one Tx (step 6).
+- *Today:* matches since step 6: `m2 plugin-state` writes the blob and its sidecar as one Tx, undone as one step (`plugin_state` in `crates/editor/src/data.rs`).
 
 **FMT-18.** A plugin parameter is addressed in code as `<name>_<id>`: its display name, lowercased, with other characters turned to `_`, then its CLAP parameter id (`mix_12`). The build binds by the id alone, and the name part is a label: when it differs from the plugin's current display name, that is the Notice `plugin.param-renamed`, never a rebind. A name without an id (`mix`) is the compile error `plugin.param-unaddressed`, which suggests the full address. Editors and Tx builders always write the full form. The IR stores CLAP parameter ids, and the runtime binds by id.
 - *Why:* a display name is not identity (P1). A plugin update that renames parameters, swaps two names or adds one with a clashing name must not rewire anything, and code that compiled must keep compiling.
@@ -623,7 +624,7 @@ Notes, control (masks are control lanes in `unit01`) and audio lanes, in that or
 - The lock file and every journal record the host name. A journal from another host is reported as `tx.foreign`, with no fix ([WRITE-16](#commit-journal-and-recovery)).
 - Another machine editing the project is an outside writer ([WRITE-19](#outside-writers)).
 - *Why:* overlays, locks, journals and caches are not the song, and a lock or a journal synced from another machine means nothing on this one.
-- *Today:* new projects, from the app and `m2 new`, get a `.gitignore` with `.music2/`, and `.music2/` is Local to `DataPath` (step 4). The sync marker, `project.synced` and host names are not built. `~/.music2/session.json` is per user, not per project (`apps/music2-desktop/src/main.rs:112-115`).
+- *Today:* new projects, from the app and `m2 new`, get a `.gitignore` with `.music2/`, and `.music2/` is Local to `DataPath` (step 4). Since step 6 the first writer also puts a `.gitignore` of `*` in `.music2/`, and the lock file and every journal record the host name, with the machine's hardware UUID as what tells another host's journal (`core/session/src/lock.rs`; the step 6 design's C18). The sync marker and `project.synced` are not built. `~/.music2/session.json` is per user, not per project (`apps/music2-desktop/src/main.rs:112-115`).
 
 ### Conversion
 
@@ -636,11 +637,11 @@ Notes, control (masks are control lanes in `unit01`) and audio lanes, in that or
 
 **WRITE-1.** Every write to a project file through music2 MUST be a `save()` or a `Tx`, except creating a new asset with create-only semantics ([WRITE-18](#the-project-lock)). These bypasses close: `write_whole` becomes private, `PUT /api/graph/file` becomes `save()`, `m2 bounce --place` becomes a data Tx, and `m2 plugin-state` becomes a Tx that writes the state and its sidecar. That Tx may replace existing state as one undoable step, so `m2 plugin-state --force` goes away.
 - *Why:* each bypass skips the lock, the journal or the diagnostics.
-- *Today:* the server writes code saves itself through the public `write_whole` (`crates/server/src/files.rs:77-90`; `core/session/src/edit.rs:208-230`). The CLI writes lane and state files directly (`apps/m2/src/main.rs:204-219`, 344-358).
+- *Today:* matches since step 6: the only writer is the commit's staging (`core/session/src/tx/stage.rs`); `PUT /api/graph/file` is `Session::save` (`crates/server/src/files.rs`); `m2 bounce --place` and `m2 plugin-state` commit Tx, and `--force` is gone (`crates/editor/src/data.rs`, `apps/m2/src/main.rs`); an exact render into `assets/` is created, never written over. `the_write_bypasses_are_closed` (`crates/editor/tests/crate_graph.rs`) keeps it so.
 
 **WRITE-2.** `save(file, base_sha, text)` is a draft write: compare-and-swap on `base_sha`, then an atomic write. It is never rejected for errors. The change is then taken in like an outside write ([WRITE-19](#outside-writers)), and recorded for undo only if it compiles. Code editor saves and agents' free-form edits use it.
 - *Why:* a half-typed file must be saveable, and agents keep writing files directly (owner decision 5).
-- *Today:* matches in behaviour (`crates/server/src/files.rs:77-90`; `core/session/src/edit.rs:633-648`), outside core.
+- *Today:* matches since step 6: `Session::save` compares and swaps on the bytes' hash, writes through the commit's staging, takes in the settled draft with that one file (never a fresh read of the folder), and records an undo step only when it was accepted as written (`core/session/src/take.rs`). A file that isn't UTF-8 is saved over from the lossy text the code editor shows (`crates/server/src/files.rs`).
 
 **WRITE-3.** Every other write is a `Tx`:
 
@@ -676,11 +677,11 @@ The same JSON serves the server, `m2 tx`, MCP and later TypeScript tools. This T
 ```
 
 - *Why:* the next gestures (add track, automate, relink, delete track) all touch several files. A closed op set keeps core from growing with every data feature, and one base per file leaves nothing to disagree. Agents and TypeScript count in UTF-16, so a byte offset alone would make every Tx on a file with `é` or `ベース` in it fail.
-- *Today:* a candidate and a change cover one file (`core/session/src/edit.rs:138-153`, 179-193), and each gesture is its own `Session` method, route and CLI command.
+- *Today:* matches since step 6 (`m2_song::tx` in `core/song/src/tx.rs`; `Session::check` and `Session::commit` in `core/session/src/tx/`), with what the step 6 design's C1 and C3 add for the owner to confirm: `Payload::Local` (a staged file or a before-image, for recovery and the undo of a binary write), `"whole"` in `Confined` ranges, and `Expect::Journal`. Every gesture is a builder of Tx in `crates/editor`; agents send any Tx to `POST /api/tx/check` and `/api/tx/commit`, or `m2 tx`.
 
 **WRITE-3a.** Every path in a Tx (the keys of `base`, `file`, `from`, `to`, and a `Clips` lane) MUST be relative and `/`-separated, with no empty, `.` or `..` segment, and MUST parse through `DataPath::parse` to Code, Manifest, Arrangement, Module, Lane, PluginState, Asset or Presentation. A Local or Unknown path is refused with `tx.path`, and so is a target that is a symlink or whose parent resolves outside the project. `Tx.id` is metadata matching `^[0-9a-z-]{1,32}$`; core names the journal file itself.
 - *Why:* Tx JSON comes from agents, MCP and later sandboxed tools, and `../../song` must never name a file. Ops that carried unparsed paths would also break [FMT-5](#paths).
-- *Today:* there is no Tx. Edits name a file the session already holds, or a lane through `core/session/src/lanes.rs:63-68`.
+- *Today:* matches since step 6: `Tx::validate` and `TxPath` check every path and the shape before anything is read, and the commit checks on disk, under the lock, links (a target that is one, or a folder on its way that is one, inside the project or not), names in other capitals, text that isn't UTF-8, and that every path, whatever its base, is spelled as the disk spells it: on a disk that ignores capitals or Unicode forms, `Song.ts` for `song.ts` would change the real file while the delta saw another (`core/song/src/tx.rs`; `hostile_paths_and_ids_are_refused` in `core/session/src/tx/props.rs`, `hostile_targets_on_disk_are_refused` and `a_file_spelled_another_way_is_refused` in `core/session/src/tx/tests.rs`).
 
 **WRITE-4.** `check(tx)` compiles the candidate in memory and writes nothing. A Tx whose files are all class Data or Arrangement skips QuickJS, as an outside write to such files does ([WRITE-19](#outside-writers)). It returns the `GraphDelta`, the delta's hash and the diagnostics.
 
@@ -708,11 +709,11 @@ Anchor = Written { file, range }                    // a value written in the co
 
 `Confined` holds when, after nodes are matched by their delta names ([WRITE-8](#expectations-and-the-delta)): every node that differs was made by a site written inside a declared range (by its origin, `within` or `src`), or differs only in edges to such nodes; lane data differs only for the declared lanes; modules are added, removed, re-keyed or muted only as declared; and every byte outside the declared ranges is unchanged. A new kind of expectation needs a design review that changes this page.
 - *Why:* gesture-shaped expectations would make core grow with every feature, and checks supplied by tools would take the guarantee out of core. Inserting an omitted argument turns an inherited control into a written one, which must still count as `Values`.
-- *Today:* each gesture verifies with its own closure or comparison (`core/session/src/edit.rs:539-547`, 610-626; `lanes.rs:52-58`; `edit/cable.rs`; `edit/effect.rs`). The value check ignores only `src` (`edit.rs:281-297`).
+- *Today:* matches since step 6: core judges every Tx by its expectation on the delta it computes (`core/session/src/tx/expect.rs`), with the step 6 design's C1 (`Confined`'s rules on bytes and on states, assets and the arrangement) for the owner to confirm; each planner's own assertion stays in `crates/editor`.
 
 **WRITE-7.** Core MUST take structured anchors, never `file#ordinal` strings. Those become debug labels made by `crates/editor`.
 - *Why:* ordinals shift with every inserted call ([ID-12](#derived-identity)).
-- *Today:* controls are named `file#ordinal/arg` and parsed back (`core/session/src/edit.rs:330-337`, 421).
+- *Today:* matches since step 6: core takes `Anchor`s; `file#ordinal/arg` ids are the editor's handles within one code revision (`crates/editor/src/controls.rs`), carried from an older one by the call's range (`controls::carry`).
 
 **WRITE-8.** The `GraphDelta` lists nodes added and removed, inputs rewired, constants changed, lanes changed, plugin states changed, assets changed, whether the arrangement changed, and modules changed (added, removed, re-keyed, `muted`). Nodes are named so that inserting one can't rename another:
 - A node made at a site is named by its module key; then its frame chain, each frame a call site given as its byte range in the new text; then its argument path; then its occurrence within that site. Ranges in the old text are mapped into the new one through the Tx's own `TextEdit`s, or for an outside write through the carry of [WRITE-12](#bases-and-revisions). Sites inside packages keep their package byte ranges, since packages don't change within a Tx. From step 7, SiteIds replace the mapped ranges.
@@ -720,7 +721,7 @@ Anchor = Written { file, range }                    // a value written in the co
 
 `DeltaHash` is the SHA-256 of the delta's JSON in RFC 8785 (JCS) form, with nodes sorted by name. The delta drives the engine: values → `SetCell`, lanes → `SwapLane`, plugin states → `LoadState`, assets and the arrangement → prepared renders and `SetArrangement`, a module's `muted` → its mute-in-song cell, anything structural → prepare and `Activate`.
 - *Why:* the engine needs to know exactly what changed, not guess. Names by walk order would let one inserted node rename every node after it: `Confined` would fail, the engine would replace instances it should keep, and two equal changes would hash differently.
-- *Today:* the server guesses whether an edit was a single value from the revision numbers (`crates/server/src/graph.rs:341-348`). Graphs are compared with nodes numbered in walk order (`core/session/src/edit/cable.rs:177-200`).
+- *Today:* matches since step 6 (`core/session/src/tx/delta.rs`, `delta_between`), except that a site's range is named in the base text's coordinates, not the new text's (the step 6 design's C17), and that of what the delta drives only `SetCell` and `SwapLane` are built: the server writes the cells of changed constants and swaps changed lanes into what plays when that is all the delta from what plays holds, and builds a new renderer for anything else; `LoadState`, prepared renders and `SetArrangement` come in step 7 (`crates/server/src/graph/actor.rs`). The guess is gone.
 
 **WRITE-9.** What a gesture means ("the wrap wrapped", "the named outlet is wired") MUST be asserted by planners in `crates/editor` and their tests, never by core. Adding a gesture MUST NOT change core: no core crate may depend on `crates/editor` (the crate graph checks this), and a change that adds a gesture and touches `core/*` changes this page first.
 - *Why:* core stays small, and its guarantee stays the same for every client.
@@ -753,15 +754,15 @@ Core keeps `save`, `Tx`, `GraphDelta` and its checkers, undo, the journal, the r
 - A directory's hash (for a `Rename` of `data/<module>/`) is the SHA-256 of the `\n`-joined lines `<path>\0<sha256 hex>`, one for each file under it that `DataPath` parses as Lane or PluginState, with paths relative to the folder, `/`-separated and sorted bytewise. Dot files such as `.DS_Store` aren't hashed and move with the folder; any other file makes the `Rename` refuse, naming it.
 - A revision number is only a hint.
 - *Why:* a revision number means nothing outside the session that issued it, the 300 ms poll can miss versions, and the Rust and TypeScript tools must compute the same directory hash.
-- *Today:* an edit names a revision number and carries from up to 64 remembered snapshots (`core/session/src/edit.rs:195-203`, 442-462). Since step 3b a range carries when it lies before the first difference or after the last, or on lines a line diff (Myers', over whole lines) keeps in one run, so edits both above and below it no longer touch it; a change on one of its own lines still does (`carry` in `core/session/src/edit.rs`, shared by undo and gesture leases).
+- *Today:* since step 6 bases are content hashes, `Absent` or `WithText`, found in a 32 MiB store of recent texts when a Tx doesn't carry them (`core/session/src/texts.rs`), and carried by the hunks of a line diff trimmed to bytes, which a change on another part of the same line no longer stops (`core/session/src/text.rs`); the directory hash is `m2_song::dir_hash`. Except: the editor's notes write, relink and delete-data still name the revision they were planned at and plan on the session's remembered snapshot of it (`Session::snapshot`, the last 64), so the piano roll sends no lane hash.
 
 **WRITE-13.** A revision is a pair `(code_rev, data_rev)`. A change to Code or Manifest files bumps `code_rev`. A change to only Data or Arrangement files bumps only `data_rev` and stores lane diffs, not full snapshots. Control ids, gestures and carrying are scoped to `code_rev`, and a lease is re-resolved at every new `code_rev` ([WRITE-22](#gesture-leases)).
 - *Why:* a lane edit must not invalidate a knob drag.
-- *Today:* one counter (`core/session/src/edit.rs:33-39`), and every revision keeps a full snapshot (195-203, 367-375). Since step 3b the server tells a `code_rev` change by the Code and Manifest files of the two snapshots (`plane::code_changed`), and carries leases only then.
+- *Today:* matches since step 6: a `Revision` is numbered `(code_rev, data_rev)` beside its sequence `number` (`core/session/src/session.rs`), and the server's leases and ids follow the session's `code_rev`. Except that the last 64 revisions each keep a full snapshot, not lane diffs.
 
 **WRITE-14.** While the draft code is broken but the session has an accepted code revision, a data Tx MUST still work. It writes data files only and is checked against the last accepted lane declarations. Without an accepted code revision, a data Tx is rejected.
 - *Why:* fixing code must not block editing notes.
-- *Today:* every edit is refused while the draft doesn't compile (`core/session/src/edit.rs:468-471`; `lanes.rs:28-31`).
+- *Today:* matches since step 6 (`the_draft_rule`, `outside_data_is_taken_in_while_the_code_is_broken` in `core/session/src/tx/tests.rs`).
 
 ### Commit, journal and recovery
 
@@ -772,11 +773,11 @@ Core keeps `save`, `Tx`, `GraphDelta` and its checkers, undo, the journal, the r
 4. accept the new revision;
 5. remove the journal and the staging folder.
 - *Why:* several files can't be replaced atomically, and the journal makes an interrupted commit recoverable. Staging beside each target would put temporary files under `data/`, where the watcher and `git status` see them. A 50 MB plugin blob must not be copied into the journal twice per save.
-- *Today:* one file: read, compare, write and rename, with no lock and no journal (`core/session/src/edit.rs:659-689`).
+- *Today:* matches since step 6 (`core/session/src/tx/stage.rs`): the journal, then the staged files, pushed with `fsync`; one barrier (`F_FULLFSYNC`); renames checked at each step (`RENAME_SWAP`, `RENAME_EXCL`), rolled back in process when one finds an outside change. Step 5 comes later than this page says (the step 6 design's C9): a commit's journal and staging are removed after the next commit's barrier, or at close, so the removal is never durable before the renames are. A rollback pushes the folders it renamed into before its barrier; a staging folder is removed before its journal, and what a killed commit left half made (temporary files, a staging folder whose journal went) is swept when a writer next takes the lock. Killing the process at every disk call of a commit is tested (`core/session/src/tx/kill_tests.rs`).
 
 **WRITE-16.** A journal left behind raises `tx.interrupted`, with FinishTx and DiscardTx fixes, when a process on the same host next takes the lock. Finish uses the staged files; Discard uses the recorded before bytes. Each fix is allowed only while every target still matches the hash the journal recorded before or after the Tx. If a target matches neither, the journal is set aside and reported, with no fix, and no project file is touched. A journal from another host (a synced folder) is `tx.foreign`, reported with no fix. Recovery never runs by itself.
 - *Why:* recovery must never overwrite someone else's later edit, and a commit interrupted on another machine is that machine's to recover.
-- *Today:* there is no journal.
+- *Today:* matches since step 6 (`core/session/src/tx/journal.rs`), with the step 6 design's C9 and C18 for the owner to confirm: a journal whose every target is at its after hash is a completed commit, tidied silently when the lock is taken next, a target at a newer journal's start or end (one that started where it ended, such as its undo) counting as at its after hash; another host is told by its hardware UUID, and its journals' before-images, and those of journals set aside, are kept. A Tx overlapping an interrupted commit's targets (a folder holding one included) waits for it. Finish and Discard apply while the interruption left code that doesn't compile (P3), and every CLI command that opens the project says them with their `m2 fix` commands, `m2 check` and `m2 render` included (`killed_at_every_commit_step_the_project_recovers`, `apps/m2/tests/recovery.rs`).
 
 ### The project lock
 
@@ -784,7 +785,7 @@ Core keeps `save`, `Tx`, `GraphDelta` and its checkers, undo, the journal, the r
 - When the app opens a project another process holds (a long `m2 bounce --place`, a second app), it opens it read-only: it plays, shows a banner naming the holder, and offers to retry. Read-only means no `save()` and no Tx.
 - When the volume can't lock (`ENOTSUP` or `ENOLCK`, as on some SMB, cloud and FUSE volumes), the project opens read-only with the Error `lock.unsupported`. music2 never writes unlocked.
 - *Why:* two writer processes with no lock race between compare and rename.
-- *Today:* there is no lock. The CLI opens its own session while the app runs (`apps/m2/src/main.rs:222-311`), and both commit by read, compare, rename (`core/session/src/edit.rs:659-689`).
+- *Today:* matches since step 6 (`core/session/src/lock.rs`). The app opens a held project read-only with a banner naming the holder and Retry (`POST /api/graph/lock/retry`), and answers every write route 423 meanwhile (`crates/server/src/routes.rs`). On a volume without `MNT_LOCAL` it takes the lock and raises the Notice `lock.local`, as the step 6 design's C2 proposes. A lock whose file was removed while held (`git clean -fdx` takes `.music2/` away) excludes nobody, so every write checks it first: it is taken again, or, when another process took it meanwhile, the session turns read-only naming it (`a_lock_whose_folder_was_removed_is_taken_again`).
 
 **WRITE-18.** A writer that can't take the lock MUST fail before changing anything, with a message that names the holder and what to do:
 
@@ -801,18 +802,19 @@ The CLI's commands sort like this:
 
 Forwarding writes to the holder is [deferred](#deferred-with-triggers).
 - *Why:* owner decision 10: the lock now, forwarding when a workflow needs it. While raw file writes are allowed (owner decision 5), the safest writer must not be the one blocked.
+- *Today:* matches since step 6 (`apps/m2/src/main.rs`; `apps/m2/tests/lock.rs`), with `automate` and `label` among the writers, and readers taking the lock for a journal scan when it is free, never while they read (the step 6 design's C19).
 
 ### Outside writers
 
 **WRITE-19.** Outside writers (text editors, agents writing files, git, another machine through a synced folder) are first class. The watcher picks up their changes, classifies the paths with `DataPath`, and takes the same plane a Tx would. It waits for changes to settle: it batches them until the folder has been quiet for 150 ms and every changed path's `(size, mtime, hash)` is the same on two polls in a row, and while `.git/index.lock` exists. It then reads one snapshot and accepts it as one revision, on the slowest plane of the batch ([PLANE-2](#planes-of-change)). The lock can't stop an outside writer; compare-and-swap narrows the race between an outside write and a commit but can't close it.
 - *Why:* files are the truth, whoever wrote them. A checkout, an editor's save-all or an agent writing several files arrives over several polls, and accepting a half-applied state plays wrong music and makes diagnostics flap.
-- *Today:* a 300 ms poll re-reads the whole snapshot and compiles any change (`crates/server/src/lib.rs:112-125`; `core/session/src/edit.rs:380-407`).
+- *Today:* matches since step 6: the settle rule (`core/session/src/watch.rs`) is fed a stat walk of the project every 50 ms by the server's watcher (`crates/server/src/graph/watcher.rs`); a batch that settled is read once and taken in whole, each path only while it reads as it settled (`Session::take_in_only`), and the session's own writes are told to the rule by their stamps; a path there for one poll only settles as gone. FSEvents isn't used; with a 5,000-file `assets/` the walk takes about 20 ms (G11, [PLANE-5](#planes-of-change)), past the step 6 design's 2 ms trigger for it.
 
 ### Opening a project
 
 **WRITE-20.** `Session::open` MUST NOT fail because of code, manifest content, arrangement or data errors. A project whose code doesn't compile opens with diagnostics and no accepted code revision: the code editor works, and playback is silent until the code compiles. Opening fails only when the folder can't be read, has no `music2.toml`, or its `format` is missing, older or newer than this app's ([FMT-3](#manifest-and-versions)). A project whose lock is held elsewhere, or can't be taken, opens read-only ([WRITE-17](#the-project-lock)).
 - *Why:* a project with a half-typed `song.ts` must be fixable in the app (owner decision 6).
-- *Today:* `Session::open` fails when the build fails (`core/session/src/edit.rs:343-349`), and the app opens nothing (`crates/server/src/graph.rs:180-185`).
+- *Today:* matches since step 6: `Session::open` opens a broken project with the empty revision and `draft_errors`, and the app opens it silent, in its code, and plays it once a save compiles (`a_broken_project_opens_and_plays_once_saved_fixed` in `crates/server/src/graph/tests.rs`).
 
 ### Undo
 
@@ -822,7 +824,7 @@ Forwarding writes to the holder is [deferred](#deferred-with-triggers).
 - a `Clips` op applies only while every clip it touches has the content hash the Tx left (or is still absent); otherwise the `Conflict` names the lane and the clip id;
 - the undo of a `save()` is a `Write` whose base is the hash the save wrote.
 - *Why:* undo must restore the edit, not an old copy of the file over someone else's work.
-- *Today:* undo reverts one file's change (`core/session/src/edit.rs:138-177`, 699-791). Step 1 added moves: undoing a relink renames the file back only while it is exactly as the relink left it and its old name is free (`Undo::Move` in `core/session/src/edit.rs`).
+- *Today:* matches since step 6: every step is a stored inverse Tx on one history, at most 500 steps and 64 MiB of retained text (`core/session/src/session.rs`, `TxStep` in `core/session/src/tx/mod.rs`); the inverse of a `Clips` op that meets an outside change to its clip is a `Conflict` naming the lane file and the clip (`undoing_a_clip_after_its_outside_change_conflicts`).
 
 ### Gesture leases
 
@@ -837,7 +839,7 @@ The session runs as an actor on its own thread, so nothing that waits on a compi
 - *Today:* matches since step 3b (`crates/server/src/graph.rs`, `graph/lease.rs`, `graph/actor.rs`), and its cells since step 5, with these differences until step 6:
   - `begin` resolves against what the session last published: a revision among the last 64, through its code revision, or an id of one of the two code revisions before the accepted one's, through aliases the session carries once per code change. Only a client further behind waits for the session, and so does one a code revision or two behind while a settle hasn't yet carried the aliases to the code revision it published (they are read only once they carry to the accepted one's). Its cells are a `CellTarget`, the `CellId`s of its value in the renderer that plays (`Begun.cells` counts them), and what can be leased is a literal written in code or a declared control a call leaves out, which plays its default until its commit writes it in (both `home: code`).
   - `update` is a cell write straight into the slots of the renderer the lease aims at (`Player::set_cells`, by its `CellTarget`), never through the queue, so it is never dropped or kept waiting (RENDER-28). It is written under the control plane's lock, as everything else for a lease is, and a renderer built while the lease lives gets its value before it is sent, so an activation loses no update. Its seq answers `Graph::applied` once a block has heard it: a block late at most, never early.
-  - `commit` is one verified value edit through the session (`Session::set`, one file, one undo step), not yet a `Values` Tx (step 6); for a control its call leaves out, it writes the argument in (the step 5 design's D5). The committed value reaches the engine in the step that ends the lease: in a new renderer built with it, else as a cell write.
+  - `commit` is one `Values` Tx since step 6 (`Gestures::set` in `crates/editor`), one undo step; for a control its call leaves out, it writes the argument in (the step 5 design's D5). An outside change in the knob's own file that compiles rides along in the commit's baseline, and doesn't end the drag (`a_knob_commit_after_an_outside_edit_in_its_file_keeps_both`). The committed value reaches the engine in the step that ends the lease: in a new renderer built with it, else as a cell write.
   - At a code change, a lease is carried by its whole call (WRITE-12's carry, by line diff), which is stricter than its literal's range. A lease's value is written into every new renderer before it is sent, so it plays from its first block, crossfade included. When the new renderer fails to build, the lease's control moves to the accepted revision while its updates go on to the renderer that plays, by its own origins.
   - Pending the owner's decision on the step 3b design's clarifications: `cancel`, idle expiry and "the window closed" act on the control plane at once, never through the session (C2); a commit refused only because the draft doesn't compile is pending, the value plays on and the session writes it once the draft compiles, or cancels it after 30 s (C5); a lease ends when idle for its TTL (10 s, renewed by updates and the web's keepalive every 2 s while a knob is held; `ttl_ms` on `POST /api/graph/lease/begin`, at most 60 s), or when the WebSocket of the window that began it closes (`?client=`); the news and `GET /api/graph/leases` list every live lease, so an agent can cancel one (C6). A pending commit that ends unsaved (its 30 s, the project closing or another opening, an outside save that changes its control, a cancel) is said in a toast.
   - The knob routes (`/preview`, `/set`, `/preview/cancel`) find a lease by its gesture string and the control the request names, so a string holds a lease per control: a script that sends `"script"` for every knob reaches each one's own. A late request of a lease that ended says why, unless its own `/preview/cancel` ended it. `GET /api/graph` lists the live leases with their controls' ids as its view names them, so the page keeps a dragged knob mounted when a save renumbers it.
@@ -864,7 +866,7 @@ The message is plain words, and names the file, the field and the fix where they
 - `likely` marks the one fix the problem plainly calls for, which the app offers in one click. Others are a choice.
 - Fix codes are a closed vocabulary, the kebab-case of the names this page uses: `relink`, `restore`, `delete-data`, `repin-asset`, `fix-asset-name`, `retag`, `convert`, `assign-clip-ids`, `renumber-clips`, `finish-tx`, `discard-tx`. A new fix adds a code here, never a type to core.
 - *Why:* agents and the app need to act on a problem, not parse prose. A fix that is a Tx is checked, journaled and undone like any edit, and a new data feature never grows core's types.
-- *Today:* since step 4 every problem has a severity and a code. Problems that don't stop the song are `m2_song::Diagnostic { severity, code, message, src, module, fixes }` (`core/song/src/diag.rs`), with `src` a project path or `file:line:col`. A fix is `{ code, title, likely, edit }`, where `edit` holds whole-file writes, removes and renames, each with the hash its file must have, applied by named session edits (`Session::fix`). Build and check errors are `m2_ir::Diagnostic`, with a severity and a code but no fixes. Step 6 makes each fix a Tx.
+- *Today:* matches since step 6: a fix is `{ code, title, likely, tx }`, its Tx's id derived from the problem and the hashes of the files it was raised on, and applying it is committing its Tx (`core/song/src/diag.rs`). Build and check errors are `m2_ir::Diagnostic`, with a severity and a code but no fixes. The codes the step 6 design's C2 adds (`tx.invalid`, `tx.expected`, `tx.unexpected`, `lock.held`, `lock.local`, `git.locked`) are raised but not yet in the table below, pending the owner.
 
 ### Codes
 
@@ -923,7 +925,7 @@ The message is plain words, and names the file, the field and the fix where they
 
 **DIAG-4.** Diagnostics MUST be sent with every revision over the WebSocket, returned to agents by project reads, and printed by every CLI command that opens a project.
 - *Why:* a problem nobody sees is the silent data loss this contract exists to end.
-- *Today:* matches for what exists. The session's problems are in the project state the app fetches, and in every `{"t":"graph"}` event over the WebSocket, together with the accepted revision and the draft's errors (`Graph::news` in `crates/server/src/graph.rs`; `graph_changed` in `crates/server/src/lib.rs`). The app shows them in a "Needs attention" strip above the timeline (`web/src/components/Attention.tsx`). Every CLI command that opens a project prints them, each with the commands that apply its fixes (`m2 relink`, `m2 delete-data`, `m2 fix`). Since step 5 a package module that doesn't load (`pkg.invalid`, the session's) comes first among them, in the state, the news and every CLI command's output (`Session::problems`; `package_problems` in `apps/m2/src/main.rs` for the commands that only compile). The draft's errors are still a separate list, `diagnostics`, and there is no MCP yet.
+- *Today:* matches for what exists. The session's problems are in the project state the app fetches, and in every `{"t":"graph"}` event over the WebSocket, together with the accepted revision and the draft's errors (`Graph::news` in `crates/server/src/graph.rs`; `graph_changed` in `crates/server/src/lib.rs`). Since step 6 the session's own (`tx.interrupted`, `tx.foreign`, `lock.*`) come first, and an outside write's `data.claimed` is a toast. The app shows them in a "Needs attention" strip above the timeline (`web/src/components/Attention.tsx`). Every CLI command that opens a project prints them, each with the commands that apply its fixes (`m2 relink`, `m2 delete-data`, `m2 fix`). Since step 5 a package module that doesn't load (`pkg.invalid`, the session's) comes first among them, in the state, the news and every CLI command's output (`Session::problems`; `package_problems` in `apps/m2/src/main.rs` for the commands that only compile). The draft's errors are still a separate list, `diagnostics`, and there is no MCP yet.
 
 ### Fixes
 
@@ -937,7 +939,7 @@ The message is plain words, and names the file, the field and the fix where they
 
 The app shows these in its "Needs attention" strip, with Relink, Restore (rename the key back, a Tx built by `crates/editor`) and Delete.
 - *Why:* a rename by hand must be one click from sounding again, and the offer must be the same in the app, the CLI and an agent's read.
-- *Today:* matches since step 4, except Restore (`core/session/src/unclaimed.rs`). A renamed track's folder is offered whole, then lane by lane; plugin state no plugin reads is offered to a plugin of its kind. The fixes are session edits: each is checked on a candidate, recorded as one undo step, and refused while the draft doesn't compile or once the revision no longer offers it. They are `Session::relink`, `Session::delete_data` and `Session::fix`, `m2 relink`, `m2 delete-data` and `m2 fix`, and `POST /api/graph/relink`, `/api/graph/data/delete` and `/api/graph/fix`, behind the strip's buttons. Restore needs `crates/editor`.
+- *Today:* matches since step 4, except Restore (`core/session/src/unclaimed.rs`). A renamed track's folder is offered whole, then lane by lane (lane by lane only while it holds a file that is neither a lane nor a state, which keeps it from moving whole, and the problem names that file); plugin state no plugin reads is offered to a plugin of its kind. Since step 6 each fix is a Tx built where its problem is raised (`core/session/src/unclaimed.rs`, `core/song/src/data.rs`), and applying it is committing it: `m2 fix` and `POST /api/graph/fix`; `m2 relink`, `m2 delete-data`, `POST /api/graph/relink` and `/api/graph/data/delete` commit the offered fix, or build the same Tx (`crates/editor/src/data.rs`). A fix whose base went stale is a `Conflict`. Restore isn't built.
 
 ## Component descriptors
 
@@ -1025,6 +1027,7 @@ export const delay = component({
 
 **HOME-2.** "Automate this knob" MUST be a `Confined` Tx that replaces the literal with `lane.control(key, unit, <the old literal>)` and creates an empty lane file. Dragging a knob that a lane or a cable drives sets an override latch ([MON-6](#monitoring-overlays-and-mute-in-song)); it never edits the fallback, the lane or the cable.
 - *Why:* the fallback keeps the song sounding the same where no clip is, and a drag must not quietly rewrite automation.
+- *Today:* matches for "Automate" since step 6: one `Confined` Tx on the value's expression and the track function's parameters, with the empty lane file (`crates/editor/src/automate.rs`; renders before and after are the same bits). Override latches aren't built ([MON-6](#monitoring-overlays-and-mute-in-song)).
 
 **HOME-3.** Presentation MUST NOT go in files that define behaviour: no colours in `track()` options, no canvas positions in code.
 
@@ -1225,7 +1228,7 @@ Steps 3 and 4 may run in parallel; everything else is in order.
    - `component()` with declared inputs, controls, settings, defaults and editor metadata, sidechain ports and smooth controls; std rewritten on it.
    - One const per declared control with an `(instance, slot)` origin; ComponentIds in frames; the unit table generated from `core.ts`; runtime cells, written through per-cell slots, ramped where declared.
    - Delete `[[effect]] args`, `EFFECT_CATEGORIES`, the `cable.rs` unit table and the `view.rs` range guesses.
-6. **Tx and the write path** (about 3 weeks, then 1 week of mechanical moves).
+6. **Tx and the write path** (about 3 weeks, then 1 week of mechanical moves). **Built.**
    - The `save`/`Tx` split, with validated paths, the `Clips` op and base texts; the project lock (no forwarding), its read-only open and `lock.unsupported`; content-hash bases.
    - `GraphDelta` with node names an insertion can't shift, and `Identical`, `Values`, `Confined` and `Seen`; the journal, with host names, staging in `.music2/tx/`, and recovery as a diagnostic.
    - `(code_rev, data_rev)`, and a data-only path that skips QuickJS, chosen by path class; the watcher's settle rule; `data.claimed` from Tx.

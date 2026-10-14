@@ -2,18 +2,19 @@
 //! (`data/kick/hits.json`, `data/lead/lead.state`), so renaming a track's, a lane's or a
 //! plugin's key in code leaves its data behind, and it plays nothing. Each such file, or the
 //! whole folder of a track whose key changed, is the Warning `data.unclaimed`: what happened in
-//! plain words, and the fixes, likeliest first. A fix is an edit of whole files, made only when
-//! asked, by the session's named edits (`Session::fix`); nothing applies one by itself (DIAG-5).
+//! plain words, and the fixes, likeliest first. A fix is a ready-to-commit Tx (DIAG-1), committed
+//! only when asked; nothing applies one by itself (DIAG-5).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use m2_ir::{Ir, Kind, LaneDecl, Module, Unit};
-use m2_song::diag::Op;
+use m2_song::data::{delete_fix, relink_fix};
 use m2_song::path::slashed;
 use m2_song::{
-    DataPath, Decls, Diagnostic, Edit, Fix, Holds, Key, LaneAddr, LaneData, LaneKind, Project, ROOT, Sha, Sidecar, Stored, Unused,
+    Confined, DataPath, Decls, Diagnostic, Expect, Fix, Holds, Key, LaneAddr, LaneData, LaneKind, Project, ROOT, Sha, Sidecar, Stored,
+    Unused,
 };
 
 /// What earlier revisions declared, by module key, for messages about data a rename left
@@ -88,24 +89,24 @@ pub fn unclaimed(project: &Project, ir: &Ir, decls: &Decls, seen: &Seen) -> Vec<
 }
 
 /// Every declared lane, with its module.
-pub(crate) fn declared(ir: &Ir) -> impl Iterator<Item = (&Module, &LaneDecl)> {
+pub fn declared(ir: &Ir) -> impl Iterator<Item = (&Module, &LaneDecl)> {
     ir.modules.iter().flat_map(|m| m.lanes.iter().map(move |l| (m, l)))
 }
 
 /// A track as messages name it: its label, with its key when they differ, since the data is
 /// filed under the key and a key renamed by hand keeps its label (ID-17).
-pub(crate) fn named(label: &str, key: &str) -> String {
+pub fn named(label: &str, key: &str) -> String {
     if label == key { key.to_string() } else { format!("{label} ({key})") }
 }
 
 /// The module keyed `key` as messages name it: as declared now, else as last seen.
-pub(crate) fn name_of(ir: &Ir, seen: &Seen, key: &str) -> String {
+pub fn name_of(ir: &Ir, seen: &Seen, key: &str) -> String {
     let label = ir.modules.iter().find(|m| m.key == key).map(|m| m.label()).or(seen.names.get(key).map(String::as_str));
     named(label.unwrap_or(key), key)
 }
 
 /// Every declared lane's address.
-pub(crate) fn used(ir: &Ir) -> BTreeSet<LaneAddr> {
+pub fn used(ir: &Ir) -> BTreeSet<LaneAddr> {
     declared(ir).filter_map(|(m, l)| LaneAddr::new(&m.key, &l.key).ok()).collect()
 }
 
@@ -115,44 +116,43 @@ fn ours(u: &Unused, module: &Module) -> bool {
 }
 
 /// The SHA-256 of a text file's bytes, as a fix's base names it.
-fn sha(text: &str) -> Option<String> {
-    Some(Sha::of(text.as_bytes()).hex())
+fn sha(text: &str) -> Option<Sha> {
+    Some(Sha::of(text.as_bytes()))
 }
 
 /// A binary's base: its hash, if it could be read.
-fn stored(s: &Stored) -> Option<String> {
+fn stored(s: &Stored) -> Option<Sha> {
     match s {
-        Stored::Hash(sha) => Some(sha.hex()),
+        Stored::Hash(sha) => Some(*sha),
         Stored::Listed | Stored::Unreadable(_) => None,
     }
 }
 
-/// A Warning that data isn't used: `title`, then why and what to do.
+/// A Warning that data isn't used: `title`, then why and what to do. Each fix's Tx gets its id
+/// from the problem and its bases (R19).
 fn warning(title: String, message: String, file: &str, module: &Key, fixes: Vec<Fix>) -> Diagnostic {
-    let mut d = Diagnostic::warning("data.unclaimed", format!("{title}. {message}")).file(file).module(module);
-    d.fixes = fixes;
-    d
+    let d = Diagnostic::warning("data.unclaimed", format!("{title}. {message}")).file(file).module(module);
+    fixes.into_iter().fold(d, Diagnostic::fix)
 }
 
-/// The fix that deletes `files`, each with the content it must still have.
-fn delete(files: impl IntoIterator<Item = (String, Option<String>)>, title: &str) -> Fix {
-    let mut edit = Edit::default();
-    for (file, base) in files {
-        edit.base.insert(file.clone(), base);
-        edit.ops.push(Op::Remove { file });
-    }
-    Fix { code: "delete-data", title: title.into(), likely: false, edit }
+/// The fix that deletes `files`, each while it has its hash: it changes nothing that plays, since
+/// nothing reads them (`Identical`). Labelled `what` → `deleted`.
+fn delete(files: impl IntoIterator<Item = (String, Option<Sha>)>, what: &str, title: &str) -> Option<Fix> {
+    let files: Vec<(PathBuf, Option<Sha>)> = files.into_iter().map(|(f, s)| (PathBuf::from(f), s)).collect();
+    delete_fix(&files, (what.to_string(), "deleted".to_string()), title)
 }
 
-/// The fix that renames each of `moves` (from, its base, to), none of whose targets may exist.
-fn relink(moves: impl IntoIterator<Item = (String, Option<String>, String)>, title: String, likely: bool) -> Fix {
-    let mut edit = Edit::default();
-    for (from, base, to) in moves {
-        edit.base.insert(from.clone(), base);
-        edit.base.insert(to.clone(), None);
-        edit.ops.push(Op::Rename { from, to });
-    }
-    Fix { code: "relink", title, likely, edit }
+/// The fix that renames each of `moves` (from, its hash, to), none of whose targets may exist,
+/// confined to `lanes`, the lanes it makes play (WRITE-10), and labelled `label`.
+fn relink(
+    moves: impl IntoIterator<Item = (String, Option<Sha>, String)>,
+    label: (String, String),
+    title: String,
+    likely: bool,
+    lanes: Vec<LaneAddr>,
+) -> Option<Fix> {
+    let moves: Vec<(PathBuf, Option<Sha>, PathBuf)> = moves.into_iter().map(|(f, s, t)| (PathBuf::from(f), s, PathBuf::from(t))).collect();
+    relink_fix(&moves, label, title, likely, Expect::Confined(Confined { lanes, ..Confined::default() }))
 }
 
 // ---------------------------------------------------------------- lanes
@@ -221,9 +221,11 @@ fn lane_offers<'a>(project: &Project, ir: &'a Ir, seen: &Seen, unused: &[Unused]
     Offers { free, to }
 }
 
-/// The fix that moves lane file `u` to `to`.
-fn relink_lane(u: &Unused, to: &Free, likely: bool) -> Fix {
-    relink([(slashed(u.path), sha(u.text), slashed(&to.file))], format!("Move to {}", to.place()), likely)
+/// The fix that moves lane file `u` to `to`, confined to that lane.
+fn relink_lane(u: &Unused, to: &Free, likely: bool) -> Option<Fix> {
+    let addr = LaneAddr::new(&to.module.key, &to.lane.key).ok()?;
+    let label = (format!("unused {}", noun(Holds::of(u.text))), format!("{} › {}", addr.module, addr.lane));
+    relink([(slashed(u.path), sha(u.text), slashed(&to.file))], label, format!("Move to {}", to.place()), likely, vec![addr])
 }
 
 /// `data.unclaimed` on lane file `u`, the `n`th of the unused.
@@ -234,8 +236,8 @@ fn lane_warning(ir: &Ir, seen: &Seen, u: &Unused, offers: &Offers, n: usize) -> 
     let name = name_of(ir, seen, key);
     let mine = &offers.to[n];
     let likely = mine.first().is_some_and(|&(_, l)| l);
-    let mut fixes: Vec<Fix> = mine.iter().map(|&(i, likely)| relink_lane(u, &offers.free[i], likely)).collect();
-    fixes.push(delete([(file.clone(), sha(u.text))], "Delete it"));
+    let mut fixes: Vec<Fix> = mine.iter().filter_map(|&(i, likely)| relink_lane(u, &offers.free[i], likely)).collect();
+    fixes.extend(delete([(file.clone(), sha(u.text))], &format!("unused {}", noun(Holds::of(u.text))), "Delete it"));
 
     let lane = &u.addr.lane;
     let place = format!("{name} › {lane}");
@@ -259,9 +261,9 @@ fn lane_warning(ir: &Ir, seen: &Seen, u: &Unused, offers: &Offers, n: usize) -> 
 /// The hash a `data/<module>/` folder has as a base (WRITE-12): the SHA-256 of the `\n`-joined
 /// lines `<path>\0<sha256 hex>`, one for each lane and state file under it, by its path in the
 /// folder, sorted bytewise. None when a file in it can't be read.
-pub(crate) fn folder_hash(project: &Project, module: &Key) -> Option<String> {
+pub fn folder_hash(project: &Project, module: &Key) -> Option<Sha> {
     let dir = DataPath::Module { module: module.clone() }.path();
-    let lanes = project.lane_files().filter(|(a, ..)| &a.module == module).map(|(_, p, t)| Some((p, Sha::of(t.as_bytes()).hex())));
+    let lanes = project.lane_files().filter(|(a, ..)| &a.module == module).map(|(_, p, t)| Some((p, Sha::of(t.as_bytes()))));
     let states = project.state_files().filter(|p| DataPath::parse(p).module() == Some(module)).map(|p| {
         let hash = match project.sidecar(p) {
             Some(text) => sha(text),
@@ -269,12 +271,11 @@ pub(crate) fn folder_hash(project: &Project, module: &Key) -> Option<String> {
         };
         Some((p, hash?))
     });
-    let mut lines: Vec<String> = lanes
+    let files: Vec<(String, Sha)> = lanes
         .chain(states)
-        .map(|f| f.map(|(p, hex)| format!("{}\0{hex}", slashed(p.strip_prefix(&dir).expect("under its folder")))))
+        .map(|f| f.map(|(p, sha)| (slashed(p.strip_prefix(&dir).expect("under its folder")), sha)))
         .collect::<Option<_>>()?;
-    lines.sort();
-    sha(&lines.join("\n"))
+    Some(m2_song::dir_hash(&files))
 }
 
 /// `data.unclaimed` on the folder of a track whose key changed, `from` to `to.key` (DIAG-6):
@@ -303,27 +304,47 @@ fn folder_warning(
     let states_fit = mine.iter().all(|s| decls.states.iter().any(|d| d.module.as_str() == to.key && d.path == s.path));
     // A module declared beside it in an earlier revision isn't it renamed.
     let beside = seen.lanes.iter().any(|((m, _), l)| m == from.as_str() && l.beside.contains(&to.key));
-    let likely = lanes_fit && states_fit && !beside;
+    // A file in it that is neither a lane nor a state (a dot file aside), or one that can't be
+    // read, keeps the folder from moving whole (WRITE-12's directory hash refuses it): then only
+    // its files are offered, one at a time, never a fix that can't apply (DIAG-1).
+    let folder = DataPath::Module { module: from.clone() }.path();
+    let stray = project.unknown_files().chain(project.unreadable().map(|(p, _)| p)).find(|p| p.starts_with(&folder));
+    let likely = lanes_fit && states_fit && !beside && stray.is_none();
 
     let mut fixes = vec![];
-    if let (Some(base), Ok(key)) = (folder_hash(project, from), Key::new(&to.key)) {
-        let dest = slashed(&DataPath::Module { module: key }.path());
-        fixes.push(relink([(dir.clone(), Some(base), dest)], format!("Move it to {new}"), likely));
+    if let (None, Some(base), Ok(key)) = (stray, folder_hash(project, from), Key::new(&to.key)) {
+        let dest = slashed(&DataPath::Module { module: key.clone() }.path());
+        // Confined to every lane of the new module the folder holds data for (ID-17).
+        let fed: Vec<LaneAddr> = lanes
+            .iter()
+            .filter(|(_, u)| to.lanes.iter().any(|l| l.key == u.addr.lane.as_str()))
+            .map(|(_, u)| LaneAddr { module: key.clone(), lane: u.addr.lane.clone() })
+            .collect();
+        let label = ("unused data".to_string(), new.clone());
+        // "all": the folder whole, beside the offers that move one file (ID-17).
+        fixes.extend(relink([(dir.clone(), Some(base), dest)], label, format!("Move all to {new}"), likely, fed));
     }
     for (n, u) in &lanes {
-        fixes.extend(offers.to[*n].iter().map(|&(i, _)| relink_lane(u, &offers.free[i], false)));
+        fixes.extend(offers.to[*n].iter().filter_map(|&(i, _)| relink_lane(u, &offers.free[i], false)));
     }
     for s in mine.iter().filter(|s| s.blob.is_some()) {
-        fixes.extend(state_targets(project, decls, s).iter().map(|t| s.relink(t, false)));
+        fixes.extend(state_targets(project, decls, s).iter().filter_map(|t| s.relink(t, false)));
     }
     let files = lanes.iter().map(|(_, u)| (slashed(u.path), sha(u.text))).chain(mine.iter().flat_map(|s| s.files()));
-    fixes.push(delete(files, "Delete it all"));
+    fixes.extend(delete(files, "unused data", "Delete it all"));
 
     let mut held: Vec<String> = lanes.iter().map(|(_, u)| held_in(Holds::of(u.text), u.addr.lane.as_str())).collect();
     held.extend(mine.iter().map(|s| format!("the state of {} at {}", s.plugin().unwrap_or_else(|| "a plugin".into()), s.at())));
-    let fix = match likely {
-        true => format!("Did you rename it? Move its data to {new} to hear it again, or delete it."),
-        false => format!("Did you rename it? Move its data to {new}, or its files one at a time where they belong now, or delete it."),
+    let fix = match (likely, stray) {
+        (true, _) => format!("Did you rename it? Move its data to {new} to hear it again, or delete it."),
+        (false, Some(f)) => format!(
+            "Did you rename it? Move its files one at a time where they belong now, or delete it. {} isn't data, so the folder \
+             moves whole only once that file is moved out or deleted.",
+            slashed(f)
+        ),
+        (false, None) => {
+            format!("Did you rename it? Move its data to {new}, or its files one at a time where they belong now, or delete it.")
+        }
     };
     let title = format!("Data filed under {name} isn't playing");
     let message = format!("There's no track called {name} any more, so nothing plays what {dir} holds: {}. {fix}", and(&held));
@@ -357,18 +378,20 @@ impl State<'_> {
     }
 
     /// Its files, each with its base.
-    fn files(&self) -> Vec<(String, Option<String>)> {
+    fn files(&self) -> Vec<(String, Option<Sha>)> {
         let blob = self.blob.map(|(p, s)| (slashed(p), stored(s)));
         blob.into_iter().chain(self.sidecar.map(|(p, t)| (slashed(p), sha(t)))).collect()
     }
 
-    /// The fix that moves it, blob and sidecar together, to `to`.
-    fn relink(&self, to: &m2_song::StateDecl, likely: bool) -> Fix {
+    /// The fix that moves it, blob and sidecar together, to `to`. The state it then loads is the
+    /// Tx's own write (C1), so it is confined to no lane.
+    fn relink(&self, to: &m2_song::StateDecl, likely: bool) -> Option<Fix> {
         let at = |sidecar| slashed(&DataPath::PluginState { module: to.module.clone(), path: to.path.clone(), sidecar }.path());
         let blob = self.blob.map(|(p, s)| (slashed(p), stored(s), at(false)));
         let side = self.sidecar.map(|(p, t)| (slashed(p), sha(t), at(true)));
-        let title = format!("Move it to {} › {}", to.module, to.path.iter().map(Key::as_str).collect::<Vec<_>>().join("/"));
-        relink(blob.into_iter().chain(side), title, likely)
+        let place = format!("{} › {}", to.module, to.path.iter().map(Key::as_str).collect::<Vec<_>>().join("/"));
+        let label = ("unused plugin state".to_string(), place.clone());
+        relink(blob.into_iter().chain(side), label, format!("Move it to {place}"), likely, vec![])
     }
 }
 
@@ -410,8 +433,8 @@ fn state_warning(project: &Project, ir: &Ir, decls: &Decls, seen: &Seen, s: &Sta
     // A sidecar alone has nothing to move: it is only deleted.
     let targets = if s.blob.is_some() { state_targets(project, decls, s) } else { vec![] };
     let likely = matches!(&targets[..], [one] if one.module == s.module);
-    let mut fixes: Vec<Fix> = targets.iter().enumerate().map(|(k, t)| s.relink(t, likely && k == 0)).collect();
-    fixes.push(delete(s.files(), "Delete it"));
+    let mut fixes: Vec<Fix> = targets.iter().enumerate().filter_map(|(k, t)| s.relink(t, likely && k == 0)).collect();
+    fixes.extend(delete(s.files(), "unused plugin state", "Delete it"));
 
     let at = s.at();
     if s.blob.is_none() {
@@ -490,8 +513,8 @@ impl Claim {
 
 /// What a lane file no lane reads holds, as far as can be told.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Held {
-    pub(crate) data: Holds,
+pub struct Held {
+    pub data: Holds,
     /// For automation, the unit the file records (FMT-10), or else that of the lane that last
     /// read it in this session.
     unit: Option<Unit>,
@@ -500,7 +523,7 @@ pub(crate) struct Held {
 }
 
 impl Held {
-    pub(crate) fn of(u: &Unused, seen: &Seen) -> Held {
+    pub fn of(u: &Unused, seen: &Seen) -> Held {
         let data = Holds::of(u.text);
         let control = data == Holds::Control;
         let read = LaneData::read(u.text, &LaneKind::Control { unit: None }).ok().filter(|_| control);
@@ -522,7 +545,7 @@ impl Held {
 
     /// What it holds, in a few words, if a lane of `kind` can't read it: `notes`,
     /// `automation in hz`.
-    pub(crate) fn unreadable(&self, kind: Kind) -> Option<String> {
+    pub fn unreadable(&self, kind: Kind) -> Option<String> {
         let reads = self.data.fits(&m2_runtime::lane_kind(kind));
         if !reads {
             return Some(noun(self.data).to_string());
@@ -547,7 +570,7 @@ impl Held {
 }
 
 /// What a lane file holds, in a few words: `notes`.
-pub(crate) fn noun(data: Holds) -> &'static str {
+pub fn noun(data: Holds) -> &'static str {
     match data {
         Holds::Notes => "notes",
         Holds::Control => "automation",
@@ -602,8 +625,13 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use m2_runtime::PackageSet;
+    use m2_song::{Base, TxOp as Op, TxPath};
 
     use super::*;
+
+    fn tp(s: &str) -> TxPath {
+        TxPath::new(s).unwrap()
+    }
 
     fn project(files: &[(&str, &str)]) -> PathBuf {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -626,7 +654,7 @@ mod tests {
         let mut packages = PackageSet::default();
         packages.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
         let project = Project::open(dir).unwrap();
-        let ir = crate::compile(&project, &mut packages).unwrap_or_else(|d| panic!("{d:?}")).ir;
+        let ir = crate::compile(&project, &mut packages).unwrap_or_else(|d| panic!("{d:?}")).ir.clone();
         let found = unclaimed(&project, &ir, &m2_runtime::decls(&ir), seen);
         assert!(found.iter().all(|d| d.code == "data.unclaimed" && d.severity == m2_song::Severity::Warning));
         found
@@ -676,8 +704,8 @@ mod tests {
             .iter()
             .filter(|f| f.code == "relink")
             .map(|f| {
-                let Some(Op::Rename { to, .. }) = f.edit.ops.first() else { panic!("a relink renames: {f:?}") };
-                let mut segs = to.split('/').skip(1);
+                let Some(Op::Rename { to, .. }) = f.tx.ops.first() else { panic!("a relink renames: {f:?}") };
+                let mut segs = to.as_str().split('/').skip(1);
                 let module = segs.next().unwrap();
                 (module, segs.next().map_or("", |l| l.trim_end_matches(".json")), f.likely)
             })
@@ -704,15 +732,22 @@ mod tests {
         );
         assert_eq!(relinks(&w[0]), [("kicks", "", true), ("kicks", "hits", false)]);
         let folder = &w[0].fixes[0];
-        assert_eq!(folder.title, "Move it to kicks");
-        assert_eq!(folder.edit.ops, [Op::Rename { from: "data/kick".into(), to: "data/kicks".into() }]);
+        assert_eq!(folder.title, "Move all to kicks");
+        assert_eq!(folder.tx.ops, [Op::Rename { from: tp("data/kick"), to: tp("data/kicks") }]);
         // WRITE-12: a folder's base is the hash of its files' paths and hashes.
         let hits = Sha::of(NOTES.as_bytes()).hex();
-        let base = Sha::of(format!("hits.json\0{hits}").as_bytes()).hex();
-        assert_eq!(folder.edit.base, BTreeMap::from([("data/kick".into(), Some(base)), ("data/kicks".into(), None)]));
+        let base = Sha::of(format!("hits.json\0{hits}").as_bytes());
+        assert_eq!(folder.tx.base, BTreeMap::from([(tp("data/kick"), Base::Sha(base)), (tp("data/kicks"), Base::Absent)]));
+        // DIAG-1, ID-17: a ready Tx, confined to the lanes the folder feeds in the new module.
+        assert_eq!(
+            folder.tx.expect,
+            Expect::Confined(Confined { lanes: vec![LaneAddr::new("kicks", "hits").unwrap()], ..Confined::default() })
+        );
+        assert!(folder.tx.validate().is_ok() && folder.tx.id.starts_with("fix-"));
         let delete = w[0].fixes.last().unwrap();
         assert_eq!((delete.code, delete.title.as_str()), ("delete-data", "Delete it all"));
-        assert_eq!(delete.edit.ops, [Op::Remove { file: "data/kick/hits.json".into() }]);
+        assert_eq!(delete.tx.ops, [Op::Remove { file: tp("data/kick/hits.json") }]);
+        assert_eq!(delete.tx.expect, Expect::Identical);
         // A name seen before is the one shown.
         let named = seeing(&dir, &Seen { names: BTreeMap::from([("kick".to_string(), "Kick".to_string())]), ..Seen::default() });
         assert!(named[0].message.starts_with("Data filed under Kick (kick) isn't playing. There's no track called Kick (kick) any more"));
@@ -761,7 +796,7 @@ mod tests {
         assert_eq!(relinks(&w[0])[0], ("leads", "", true));
         assert!(w[0].message.contains("notes in notes and the state of clap:org.example.synth at lead."), "{}", w[0].message);
         let delete = w[0].fixes.last().unwrap();
-        let removed: Vec<&Op> = delete.edit.ops.iter().collect();
+        let removed: Vec<&Op> = delete.tx.ops.iter().collect();
         assert_eq!(removed.len(), 3, "{removed:?}");
         std::fs::remove_dir_all(dir).ok();
 
@@ -775,12 +810,12 @@ mod tests {
             "The plugin state saved at lead › lead isn't loaded. No plugin in lead keeps its state at lead any more. Did you rename \
              its key? Move it to lead › pad to load it again, or delete it."
         );
-        let mv = &state.fixes[0].edit.ops;
+        let mv = &state.fixes[0].tx.ops;
         assert_eq!(
             mv,
             &[
-                Op::Rename { from: "data/lead/lead.state".into(), to: "data/lead/pad.state".into() },
-                Op::Rename { from: "data/lead/lead.state.json".into(), to: "data/lead/pad.state.json".into() },
+                Op::Rename { from: tp("data/lead/lead.state"), to: tp("data/lead/pad.state") },
+                Op::Rename { from: tp("data/lead/lead.state.json"), to: tp("data/lead/pad.state.json") },
             ]
         );
         std::fs::remove_dir_all(dir).ok();
@@ -954,8 +989,8 @@ mod tests {
         let w = compiled(&dir);
         let snare = about(&w, "data/snare/hits.json");
         assert_eq!(
-            snare.fixes.iter().map(|f| (f.code, &f.edit.ops[..])).collect::<Vec<_>>(),
-            [("delete-data", &[Op::Remove { file: "data/snare/hits.json".into() }][..])],
+            snare.fixes.iter().map(|f| (f.code, &f.tx.ops[..])).collect::<Vec<_>>(),
+            [("delete-data", &[Op::Remove { file: tp("data/snare/hits.json") }][..])],
             "kick › hits has its own notes"
         );
         assert_eq!(

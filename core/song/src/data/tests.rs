@@ -154,10 +154,13 @@ fn unit_mismatch_offers_retag() {
     assert!(data.control("bass", "cutoff").is_empty());
     let fix = &diags[0].fixes[0];
     assert_eq!(fix.code, "retag");
-    let Op::Write { file, text: new } = &fix.edit.ops[0] else { panic!() };
-    assert_eq!(file, "data/bass/cutoff.json");
+    let Op::Write { file, bytes: Payload::Text(new) } = &fix.tx.ops[0] else { panic!() };
+    assert_eq!(file.as_str(), "data/bass/cutoff.json");
     assert!(new.starts_with("{\"unit\": \"hz\", "), "{new}");
-    assert_eq!(fix.edit.base[file], Some(Sha::of(text.as_bytes()).hex()));
+    assert_eq!(fix.tx.base[file], Base::Sha(Sha::of(text.as_bytes())));
+    // DIAG-1: the fix is a Tx confined to its lane, with an id derived from what it was raised on.
+    assert_eq!(fix.tx.expect, Expect::Confined(Confined { lanes: vec![LaneAddr::new("bass", "cutoff").unwrap()], ..Default::default() }));
+    assert!(fix.tx.id.starts_with("fix-") && fix.tx.validate().is_ok(), "{}", fix.tx.id);
 }
 
 // FMT-12: anonymous clips, invalid ids and duplicates are diagnostics with fixes, never parse
@@ -173,7 +176,7 @@ fn clip_ids() {
     assert_eq!(data.lane("kick", "hits").unwrap().ids(), [None, Some("BAD"), Some("x1"), Some("x1")], "kept as written");
 
     let fixed = |fix: &Fix| {
-        let Op::Write { text, .. } = &fix.edit.ops[0] else { panic!() };
+        let Op::Write { bytes: Payload::Text(text), .. } = &fix.tx.ops[0] else { panic!() };
         LaneData::read(text, &LaneKind::Notes).unwrap()
     };
     let assigned = fixed(&diags[0].fixes[0]);
@@ -223,7 +226,7 @@ fn asset_pins_and_names() {
     assert!(data.asset_path("drums/kick.wav").is_none(), "a case-only match never plays");
     assert!(data.asset_path("gone.wav").is_none());
     // The repin fixes write the pins.
-    let Op::Write { text: repinned, .. } = &diags[3].fixes[0].edit.ops[0] else { panic!() };
+    let Op::Write { bytes: Payload::Text(repinned), .. } = &diags[3].fixes[0].tx.ops[0] else { panic!() };
     assert!(
         repinned.contains(&format!("\"id\": \"b\", \"start\": 1, \"length\": 1, \"asset\": \"Drums/Kick.wav\", \"hash\": \"{pin}\"")),
         "{repinned}"
@@ -498,7 +501,7 @@ fn an_id_that_is_not_a_string_is_kept_and_read_as_anonymous() {
     assert!(out.contains("{\"id\": 5, \"start\": 0") && out.contains("{\"id\": {\"a\":1}, \"start\": 4"), "{out}");
     assert_eq!(canonical(&LaneData::read(&out, &LaneKind::Notes).unwrap()), out);
     // The fix gives every clip a valid id, in place of what was written.
-    let Op::Write { text: fixed, .. } = &diags[1].fixes[0].edit.ops[0] else { panic!() };
+    let Op::Write { bytes: Payload::Text(fixed), .. } = &diags[1].fixes[0].tx.ops[0] else { panic!() };
     let fixed = LaneData::read(fixed, &LaneKind::Notes).unwrap();
     assert!(fixed.ids().iter().all(|i| i.is_some_and(ClipId::valid)) && fixed.other_ids().iter().all(Option::is_none), "{fixed:?}");
 }
@@ -525,4 +528,96 @@ fn data_under_a_bare_device_name_is_told_where_it_belongs() {
     assert_eq!(codes(&diags), ["file.unknown", "file.unknown"]);
     assert!(diags[0].message.contains("This one belongs at data/aux-/hits.json"), "{}", diags[0].message);
     assert!(diags[1].message.contains("This one belongs at data/kick/con-.json"), "{}", diags[1].message);
+}
+
+// WRITE-12, R24 of the step 6 design: a text file that isn't UTF-8 is read with its bad bytes
+// replaced, for the build, and its base is the hash of its own bytes.
+#[test]
+fn a_file_that_isnt_utf8_is_based_on_its_bytes() {
+    let bytes = b"{\"clips\": []}\xff\n";
+    let d = Dir::new(&[("data/kick/hits.json", bytes)]);
+    let snap = Snapshot::read(&d.0).unwrap();
+    let p = Path::new("data/kick/hits.json");
+    assert_eq!(snap.sha(p), Some(Sha::of(bytes)));
+    assert_ne!(snap.sha(p), Some(Sha::of(snap.files[p].as_bytes())));
+    assert_eq!(snap.sha(Path::new("song.ts")), Some(Sha::of(b"export default 0;\n")));
+    assert_eq!(snap.sha(Path::new("nothing.ts")), None);
+}
+
+// DIAG-1, R19: a fix is a ready Tx whose id comes from what it was raised on: the same file gives
+// the same fix, and another content of the same lane file another id.
+#[test]
+fn a_fixs_id_follows_the_content_it_was_raised_on() {
+    let ids = |text: &str| {
+        let d = Dir::new(&[("data/kick/hits.json", text.as_bytes())]);
+        let (_, diags) = d.project().data(&lanes(&[("kick", "hits", LaneKind::Notes)]), None);
+        diags[0].fixes[0].tx.id.clone()
+    };
+    let one = r#"{"clips": [{"start": 0, "length": 4, "notes": []}]}"#;
+    let two = r#"{"clips": [{"start": 4, "length": 4, "notes": []}]}"#;
+    assert_eq!(ids(one), ids(one));
+    assert_ne!(ids(one), ids(two));
+    assert!(crate::tx::valid_id(&ids(one)), "{}", ids(one));
+}
+
+// PLANE-1 (the step 6 design's 3.2): reading a project again with the data accepted before keeps
+// each lane whose file is the text it was read from, as the same kind, instead of parsing it again;
+// that gives exactly what reading every file anew gives: the same data, problems in the same
+// order, and the same end. Random edits to random lane files, some that don't read, some that
+// change a unit, some that move a file away and back.
+#[test]
+fn reading_again_keeps_unchanged_lanes_as_a_fresh_read_does() {
+    let note = |n: u64| format!(r#"{{"pitch": "C{}", "start": {}, "length": 0.5}}"#, 1 + n % 4, n % 8);
+    let notes = |seed: u64, clips: u64| {
+        let clips: Vec<String> = (0..clips)
+            .map(|c| format!(r#"{{"id": "c{c}", "start": {}, "length": 8, "notes": [{}, {}]}}"#, c * 8, note(seed + c), note(seed * 3 + c)))
+            .collect();
+        format!(r#"{{"clips": [{}]}}"#, clips.join(", "))
+    };
+    let control = |unit: &str, v: u64| {
+        format!(r#"{{"unit": "{unit}", "clips": [{{"id": "p1", "start": 0, "length": 4, "points": [[0, {v}], [4, 1]]}}]}}"#)
+    };
+    let files =
+        [("data/kick/hits.json", notes(1, 2)), ("data/bass/notes.json", notes(2, 3)), ("data/bass/cutoff.json", control("hz", 400))];
+    let bytes: Vec<(&str, Vec<u8>)> = files.iter().map(|(p, t)| (*p, t.clone().into_bytes())).collect();
+    let refs: Vec<(&str, &[u8])> = bytes.iter().map(|(p, b)| (*p, b.as_slice())).collect();
+    let d = Dir::new(&refs);
+    let decls = lanes(&[("kick", "hits", LaneKind::Notes), ("bass", "notes", LaneKind::Notes), ("bass", "cutoff", hz())]);
+    let (mut accepted, _) = d.project().data(&decls, None);
+    let mut rng: u64 = 0x5eed;
+    let mut next = |n: u64| {
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
+        rng % n
+    };
+    let mut reused = 0;
+    for case in 0..300 {
+        let (path, _) = &files[next(files.len() as u64) as usize];
+        let text = match next(6) {
+            0 => "{\"clips\": [".to_string(),
+            1 if path.contains("cutoff") => control(["hz", "db", "gain"][next(3) as usize], next(900)),
+            2 => {
+                std::fs::remove_file(d.0.join(path)).ok();
+                String::new()
+            }
+            _ if path.contains("cutoff") => control("hz", next(900)),
+            _ => notes(next(50), 1 + next(4)),
+        };
+        if !text.is_empty() {
+            d.write(path, text.as_bytes());
+        }
+        let p = d.project();
+        let (kept, kept_diags) = p.data(&decls, Some(&accepted));
+        // The same accepted data, with nothing remembered of what it was read from.
+        let fresh_previous = DataSet { read: BTreeMap::new(), ..accepted.clone() };
+        let (fresh, fresh_diags) = p.data(&decls, Some(&fresh_previous));
+        let lanes = |x: &DataSet| x.lanes().map(|(a, d)| (a.clone(), (**d).clone())).collect::<Vec<_>>();
+        assert_eq!(lanes(&kept), lanes(&fresh), "case {case}: the data");
+        assert_eq!(kept_diags, fresh_diags, "case {case}: the problems, in order");
+        assert_eq!(kept.end(), fresh.end(), "case {case}: the end");
+        reused += kept.lanes().filter(|(a, d)| accepted.lanes.get(*a).is_some_and(|x| Arc::ptr_eq(x, d))).count();
+        accepted = kept;
+    }
+    assert!(reused > 300, "unchanged lanes were kept, not read again: {reused}");
 }

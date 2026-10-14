@@ -162,6 +162,15 @@ pub fn slashed(p: &Path) -> String {
     p.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/")
 }
 
+/// A `data/<module>/` folder's hash as a Tx's base names it (WRITE-12): the SHA-256 of the
+/// `\n`-joined lines `<path>\0<sha256 hex>`, one for each lane and state file under it, by its
+/// path in the folder, `/`-separated, sorted bytewise. The TypeScript tools compute the same.
+pub fn dir_hash(files: &[(String, crate::Sha)]) -> crate::Sha {
+    let mut lines: Vec<String> = files.iter().map(|(p, sha)| format!("{p}\0{}", sha.hex())).collect();
+    lines.sort();
+    crate::Sha::of(lines.join("\n").as_bytes())
+}
+
 /// `segs` after `data/`.
 fn data(segs: &[&str]) -> Option<DataPath> {
     match segs {
@@ -356,6 +365,16 @@ mod tests {
         assert_eq!(parse("data/kick/con-.json"), lane);
         assert!(matches!(parse("data/aux/hits.json"), DataPath::Unknown(_)), "never a bare device name");
         assert!(matches!(parse("data/kick-/hits.json"), DataPath::Unknown(_)), "no key ends in `-`");
+    }
+
+    // WRITE-12: the directory hash, computed by hand.
+    #[test]
+    fn a_folders_hash() {
+        let (a, b) = (crate::Sha::of(b"a"), crate::Sha::of(b"b"));
+        let lines = format!("hits.json\0{}\nlead.state\0{}", a.hex(), b.hex());
+        let want = crate::Sha::of(lines.as_bytes());
+        assert_eq!(dir_hash(&[("lead.state".into(), b), ("hits.json".into(), a)]), want, "sorted, whatever the order given");
+        assert_eq!(dir_hash(&[]), crate::Sha::of(b""));
     }
 
     // FMT-14: a taken name gets a numeric suffix.

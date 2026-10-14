@@ -683,22 +683,27 @@ mod tests {
         assert_eq!(std::fs::read_dir(&t.0).unwrap().count(), 0);
         assert!(graph.dir().is_none());
 
-        // A song that doesn't compile: the folder made for it is removed again, and the
-        // song open before stays open.
+        // A song that doesn't open (FMT-3: a newer format): the folder made for it is removed
+        // again, and the song open before stays open.
         let opened = open_new(&graph, &t.0, "Fine", &template("empty")).unwrap();
         let templates = Temp::new();
+        let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n";
+        let newer = templates.0.join("newer");
+        std::fs::create_dir_all(&newer).unwrap();
+        std::fs::write(newer.join("music2.toml"), manifest.replace("format = 1", "format = 2")).unwrap();
+        std::fs::write(newer.join("song.ts"), "export default song(() => 0);\n").unwrap();
+        let e = format!("{:#}", open_new(&graph, &t.0, "Newer", &newer).unwrap_err());
+        assert!(e.contains("format"), "{e}");
+        assert!(!t.0.join("Newer").exists());
+        assert_eq!(graph.state().unwrap()["session"], opened["session"]);
+        // One whose code doesn't compile opens (WRITE-20), with its problem, and is kept.
         let broken = templates.0.join("broken");
         std::fs::create_dir_all(&broken).unwrap();
-        std::fs::write(
-            broken.join("music2.toml"),
-            "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n",
-        )
-        .unwrap();
+        std::fs::write(broken.join("music2.toml"), manifest).unwrap();
         std::fs::write(broken.join("song.ts"), "export default song(() => oops);\n").unwrap();
-        let e = format!("{:#}", open_new(&graph, &t.0, "Broken", &broken).unwrap_err());
-        assert!(e.starts_with("song.ts:1:"), "{e}");
-        assert!(!t.0.join("Broken").exists());
-        assert_eq!(graph.state().unwrap()["session"], opened["session"]);
+        let state = open_new(&graph, &t.0, "Broken", &broken).unwrap();
+        assert_eq!((&state["diagnostics"][0]["file"], &state["diagnostics"][0]["line"]), (&json!("song.ts"), &json!(1)), "{state:#}");
+        assert!(t.0.join("Broken/song.ts").exists());
     }
 
     #[test]

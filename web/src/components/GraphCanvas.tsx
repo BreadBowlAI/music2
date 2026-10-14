@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { CodeXml, Download, Pause, Piano, Play, Redo2, Repeat, SkipBack, TriangleAlert, Undo2, Workflow, X } from "lucide-react";
+import { CodeXml, Download, Lock, Pause, Piano, Play, Redo2, Repeat, SkipBack, TriangleAlert, Undo2, Workflow, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   attention,
@@ -21,6 +21,7 @@ import {
   type Meter,
   type ModuleView,
   type Problem,
+  type ReadOnly,
 } from "../lib/graph";
 import { exportSong, useExport } from "../lib/exporting";
 import { isMac, kbd } from "../lib/native";
@@ -87,7 +88,8 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
   // The panel's view, and the notes clip open in it. A clip is the selected module's: selecting
   // another module, or an edit that removes the clip, closes it and its notes view shows the graph.
   // The code view stays and follows the selection.
-  const [view, setView] = useState<PanelView>("graph");
+  // A project opened with code that doesn't compile has no graph yet: it opens in its code (WRITE-20).
+  const [view, setView] = useState<PanelView>(graph.has_code === false ? "code" : "graph");
   const [clip, setClip] = useState<ClipRef | null>(null);
   if (clip && !(clip.module === module?.key && findNoteClip(timeline, clip))) {
     setClip(null);
@@ -143,6 +145,7 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
   return (
     <div className="h-full flex flex-col">
       <GraphBar graph={graph} status={status} onSeek={seek} onLoop={setLoop} />
+      {graph.read_only && <ReadOnlyBanner graph={graph} readOnly={graph.read_only} />}
       {graph.view.draft_errors.length > 0 && (
         <CompileBanner
           graph={graph}
@@ -272,7 +275,11 @@ function CompileBanner({ graph, onShow }: { graph: GraphState; onShow: (p: Probl
       <div className="flex-1 min-w-0 space-y-0.5">
         <div>
           <span className="font-medium">The code doesn't compile right now.</span>{" "}
-          <span className="text-amber-900/80">Playing and showing the last version that did; knobs unlock when it compiles.</span>
+          <span className="text-amber-900/80">
+            {graph.has_code === false
+              ? "Nothing plays until it does: fix it in the code, and the song plays once it compiles."
+              : "Playing and showing the last version that did; knobs unlock when it compiles."}
+          </span>
         </div>
         {problems.slice(0, 2).map((p, i) => (
           <div key={i} className="flex items-baseline gap-2 min-w-0 text-xs">
@@ -299,12 +306,69 @@ function CompileBanner({ graph, onShow }: { graph: GraphState; onShow: (p: Probl
   );
 }
 
+/** The project is open for writing in another program (WRITE-17): this window plays it and shows
+ * what changes on disk, but edits are refused until the lock is free and Retry takes it. */
+function ReadOnlyBanner({ graph, readOnly }: { graph: GraphState; readOnly: ReadOnly }) {
+  const toast = useStore((s) => s.toast);
+  const [trying, setTrying] = useState(false);
+  const holder = readOnly.holder;
+  const since = holder ? new Date(holder.since * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
+  const who = holder ? `${holder.program} (pid ${holder.pid}, since ${since})` : "another program";
+  const retry = async () => {
+    setTrying(true);
+    try {
+      const state = await graphApi.retryLock(graph.session);
+      if (state.read_only) toast(`Still read-only: the project is open for writing in ${who}.`);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTrying(false);
+    }
+  };
+  return (
+    <div className="shrink-0 px-5 py-2 bg-sky-500/10 border-b border-sky-600/20 text-[13px] text-sky-950 flex items-center gap-3" data-testid="read-only-banner">
+      <Lock className="size-4 shrink-0 text-sky-700" />
+      <div className="flex-1 min-w-0">
+        <span className="font-medium">Read only.</span>{" "}
+        <span className="text-sky-900/80">
+          {readOnly.why === "held"
+            ? `This project is open for writing in ${who}. Make edits there, or close it there and press Retry.`
+            : readOnly.message}
+        </span>
+      </div>
+      <button
+        onClick={retry}
+        disabled={trying}
+        data-testid="read-only-retry"
+        className="shrink-0 h-7 px-3 rounded-lg bg-sky-600/15 hover:bg-sky-600/25 text-sky-950 text-xs font-medium cursor-pointer transition-colors disabled:opacity-50"
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
+
 /** Undo or redo an edit to the open graph project's code. */
 export async function graphUndo(session: number, id: "undo" | "redo") {
   const toast = useStore.getState().toast;
   await (id === "redo" ? graphApi.redo(session) : graphApi.undo(session))
     .then((c) => toast(`${id === "redo" ? "Redid" : "Undid"}: ${c.file} ${c.before} → ${c.after}`))
     .catch((error) => toast(error instanceof Error ? error.message : String(error)));
+}
+
+/**
+ * A toast's Undo for the edit that made `revision`: it undoes only while that edit is still the
+ * newest change, since later Undo would take back something else.
+ */
+export function undoAction(session: number, revision: number) {
+  return {
+    label: "Undo",
+    run: () => {
+      const now = useStore.getState().graph;
+      if (now?.session === session && now.view.revision <= revision) void graphUndo(session, "undo");
+      else useStore.getState().toast("The song has changed since, so this can't be undone from here. Use Undo in the top bar.");
+    },
+  };
 }
 
 /** `bars 5–8`, or the beats when the loop isn't on bar lines. */
@@ -491,9 +555,10 @@ const PanelBody = memo(function PanelBody({
   return (
     <>
       {view === "graph" && <NodeGraph graph={graph} module={module ?? ""} />}
-      {coded && module && (
+      {/* No module before the code first compiles (WRITE-20): the editor opens on the song's files. */}
+      {coded && (
         <div className={clsx("flex-1 min-h-0 flex-col", view === "code" ? "flex" : "hidden")}>
-          <CodeView graph={graph} module={module} />
+          <CodeView graph={graph} module={module ?? "song"} />
         </div>
       )}
       {view === "notes" && clip && (

@@ -36,6 +36,9 @@ GATES (default: all):
                   compiles a slow save (WRITE-22, RENDER-29)
   drag        G9  (--server only) a knob drag goes on through an agent's saves to other files
                   and to its own, and its commit writes its file alone (WRITE-22)
+  tx-data     G11 (--server only) piano-roll writes as journaled Tx, from the commit() call to the
+                  block that plays them, under 20 ms at p95, on an idle and on a busy disk; the
+                  barrier's F_FULLFSYNC alone; the watcher's stat walk (PLANE-5)
 
 OPTIONS:
   --rig R          engine: step 3a's live engine (needs --features engine); replay: HEAD's
@@ -133,9 +136,9 @@ fn run() -> Result<bool> {
     if via_server {
         // Step 3b's gates exist only through the server.
         if all {
-            names.extend(["previews".to_string(), "drag".to_string()]);
+            names.extend(["previews".to_string(), "drag".to_string(), "tx-data".to_string()]);
         }
-        names.retain(|n| ["seek", "note-edit", "add-effect", "previews", "drag"].contains(&n.as_str()));
+        names.retain(|n| ["seek", "note-edit", "add-effect", "previews", "drag", "tx-data"].contains(&n.as_str()));
     }
     let made = work.is_none();
     let work = work.unwrap_or_else(|| std::env::temp_dir().join(format!("m2-gates-{}", std::process::id())));
@@ -158,6 +161,7 @@ fn run() -> Result<bool> {
             (true, "add-effect") => server::add_effect(&mut lab, &o),
             (true, "previews") => server::previews(&mut lab, &o),
             (true, "drag") => server::drag(&mut lab, &o),
+            (true, "tx-data") => server::tx_data(&mut lab, &o),
             _ => gates::run(name, &mut lab, kind, &o),
         };
         match outcome {

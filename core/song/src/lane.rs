@@ -328,6 +328,69 @@ impl LaneData {
         ends.into_iter().fold(0.0, f64::max)
     }
 
+    /// The kind this data was read as.
+    pub fn kind(&self) -> LaneKind {
+        match self {
+            LaneData::Notes(_) => LaneKind::Notes,
+            LaneData::Control { unit, .. } => LaneKind::Control { unit: unit.clone() },
+            LaneData::Audio(_) => LaneKind::Audio,
+        }
+    }
+
+    /// Each clip's id as written (a string, valid or not) and its line in the canonical form, in
+    /// canonical order: what the `Clips` op compares byte for byte (WRITE-3).
+    pub fn clip_lines(&self) -> Vec<(Option<&str>, String)> {
+        match self {
+            LaneData::Notes(c) => c.iter().map(|c| (c.id.as_deref(), c.line())).collect(),
+            LaneData::Control { clips, .. } => clips.iter().map(|c| (c.id.as_deref(), c.line())).collect(),
+            LaneData::Audio(c) => c.iter().map(|c| (c.id.as_deref(), c.line())).collect(),
+        }
+    }
+
+    /// Whether every clip can be addressed by its id: each has a valid id, written as a string,
+    /// and no id repeats (FMT-12). A lane that isn't is written whole.
+    pub fn addressable(&self) -> bool {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut usable = |id: &Option<&str>| id.is_some_and(|i| crate::ClipId::valid(i) && seen.insert(i.to_string()));
+        self.ids().iter().zip(self.other_ids()).all(|(id, other)| other.is_none() && usable(id))
+    }
+
+    /// The `Clips` op on this data (WRITE-3): each clip of `put` (whole, in the lane format's
+    /// schema) replaces the clip with its id, or is added; each id of `delete` goes, and one that
+    /// isn't here is fine. Clips without a valid id are kept as written (FMT-12). Why not, naming
+    /// the clip, when a clip of `put` doesn't read as this lane's kind.
+    pub fn put_clips(&mut self, put: &[Value], delete: &[String]) -> Result<(), String> {
+        let mut top = Map::new();
+        if let LaneData::Control { unit: Some(u), .. } = self {
+            top.insert("unit".into(), Value::String(u.clone()));
+        }
+        top.insert("clips".into(), Value::Array(put.to_vec()));
+        let new = LaneData::read(&Value::Object(top).to_string(), &self.kind()).map_err(|e| match e {
+            LaneError::Invalid(why) => why,
+            LaneError::Unit { declared, .. } => format!("the clips must be automation in `{declared}`"),
+        })?;
+        let gone: std::collections::BTreeSet<String> =
+            new.ids().into_iter().flatten().map(str::to_string).chain(delete.iter().cloned()).collect();
+        let keep = |id: &Option<String>| !id.as_ref().is_some_and(|i| gone.contains(i));
+        match (&mut *self, new) {
+            (LaneData::Notes(a), LaneData::Notes(b)) => {
+                a.retain(|c| keep(&c.id));
+                a.extend(b);
+            }
+            (LaneData::Control { clips: a, .. }, LaneData::Control { clips: b, .. }) => {
+                a.retain(|c| keep(&c.id));
+                a.extend(b);
+            }
+            (LaneData::Audio(a), LaneData::Audio(b)) => {
+                a.retain(|c| keep(&c.id));
+                a.extend(b);
+            }
+            _ => unreachable!("read as this data's own kind"),
+        }
+        self.sort();
+        Ok(())
+    }
+
     /// Put clips back in canonical order, after an edit.
     pub fn sort(&mut self) {
         match self {
@@ -733,6 +796,41 @@ mod tests {
         assert!(
             invalid(r#"{"unit": "hz", "clips": [{"start": 0, "length": 4, "notes": []}]}"#, &notes_kind()).contains("unknown field `unit`")
         );
+    }
+
+    // WRITE-3: the `Clips` op puts whole clips by id and deletes by id; a clip with no usable id
+    // is kept as written, and a put clip that isn't the lane's kind is refused, naming it.
+    #[test]
+    fn clips_are_put_and_deleted_by_id() {
+        let text = r#"{"clips": [{"id": "a", "start": 0, "length": 4, "notes": []}, {"id": "b", "start": 4, "length": 4, "notes": []},
+                                 {"start": 8, "length": 4, "notes": []}]}"#;
+        let mut data = LaneData::read(text, &notes_kind()).unwrap();
+        assert!(!data.addressable(), "a clip has no id");
+        let lines = data.clip_lines();
+        assert_eq!(lines.iter().map(|l| l.0).collect::<Vec<_>>(), [Some("a"), Some("b"), None]);
+        assert_eq!(lines[0].1, r#"{"id": "a", "start": 0, "length": 4, "notes": []}"#);
+        let put = serde_json::json!({"id": "a", "start": 2, "length": 1, "notes": [{"pitch": "C4", "start": 0, "length": 1}]});
+        data.put_clips(&[put, serde_json::json!({"id": "c", "start": 16, "length": 1, "notes": []})], &["b".into(), "zz".into()]).unwrap();
+        assert_eq!(data.ids(), [Some("a"), None, Some("c")], "in order of start");
+        let line = "{\"id\": \"a\", \"start\": 2, \"length\": 1, \"notes\": [\n    \
+                    {\"pitch\": \"C4\", \"start\": 0, \"length\": 1, \"velocity\": 0.8}\n  ]}";
+        assert_eq!(data.clip_lines()[0].1, line);
+        let wrong = data.put_clips(&[serde_json::json!({"id": "d", "start": 0, "length": 1, "points": []})], &[]).unwrap_err();
+        assert!(wrong.contains("clip 1") && wrong.contains("automation points"), "{wrong}");
+
+        let ok = LaneData::read(r#"{"clips": [{"id": "a", "start": 0, "length": 4, "notes": []}]}"#, &notes_kind()).unwrap();
+        assert!(ok.addressable());
+        for not in [r#"{"id": "A", "start": 0, "length": 4, "notes": []}"#, r#"{"id": 5, "start": 0, "length": 4, "notes": []}"#] {
+            let text = format!(r#"{{"clips": [{not}]}}"#);
+            assert!(!LaneData::read(&text, &notes_kind()).unwrap().addressable(), "{not}");
+        }
+        let twice = r#"{"clips": [{"id": "a", "start": 0, "length": 4, "notes": []}, {"id": "a", "start": 8, "length": 4, "notes": []}]}"#;
+        assert!(!LaneData::read(twice, &notes_kind()).unwrap().addressable());
+        // A control lane's puts are read in its unit.
+        let mut control = LaneData::read(r#"{"unit": "hz", "clips": []}"#, &hz()).unwrap();
+        control.put_clips(&[serde_json::json!({"id": "p", "start": 0, "length": 4, "points": [[0, 1]]})], &[]).unwrap();
+        let lane = "{\"unit\": \"hz\", \"clips\": [\n  {\"id\": \"p\", \"start\": 0, \"length\": 4, \"points\": [[0, 1]]}\n]}\n";
+        assert_eq!(canonical(&control), lane);
     }
 
     // FMT-10: a control lane records its unit, and another unit is lane.unit-mismatch.

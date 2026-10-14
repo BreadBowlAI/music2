@@ -28,8 +28,8 @@ use std::collections::HashMap;
 
 use oxc::allocator::Allocator;
 use oxc::ast::ast::{
-    Argument, BindingPattern, CallExpression, Expression, ImportDeclarationSpecifier, ObjectPropertyKind, PropertyKind, Statement, UnaryOperator,
-    VariableDeclaration, VariableDeclarationKind,
+    Argument, BindingPattern, CallExpression, Expression, ObjectPropertyKind, PropertyKind, UnaryOperator, VariableDeclaration,
+    VariableDeclarationKind,
 };
 use oxc::ast_visit::{Visit, walk};
 use oxc::parser::Parser;
@@ -290,57 +290,6 @@ impl<'a> Visit<'a> for Collect<'_> {
 }
 
 /// Instrument `source` (TypeScript). Site ids start at `first_id`.
-/// The names a file imports from `module` under their own name (`import { hz } from
-/// "@m2/core"`, not `import { hz as h }`): what generated code may call by that name.
-pub fn imported_names(source: &str, module: &str) -> Vec<String> {
-    let allocator = Allocator::default();
-    let ret = Parser::new(&allocator, source, SourceType::ts()).parse();
-    let mut names = vec![];
-    for statement in &ret.program.body {
-        let Statement::ImportDeclaration(import) = statement else { continue };
-        if import.source.value != module || import.import_kind.is_type() {
-            continue;
-        }
-        for specifier in import.specifiers.iter().flatten() {
-            if let ImportDeclarationSpecifier::ImportSpecifier(s) = specifier
-                && !s.import_kind.is_type()
-                && s.imported.name() == s.local.name
-            {
-                names.push(s.local.name.to_string());
-            }
-        }
-    }
-    names
-}
-
-/// Where to insert text so that `source` imports `name` from `module`, and the text;
-/// `None` if it already does. Joins an existing `import { … } from module`, or else adds
-/// a line after the last import.
-pub fn import_insertion(source: &str, module: &str, name: &str) -> Option<(u32, String)> {
-    if imported_names(source, module).iter().any(|n| n == name) {
-        return None;
-    }
-    let allocator = Allocator::default();
-    let ret = Parser::new(&allocator, source, SourceType::ts()).parse();
-    let mut after_imports = None;
-    for statement in &ret.program.body {
-        let Statement::ImportDeclaration(import) = statement else { continue };
-        after_imports = Some(import.span.end);
-        let mut named = import.specifiers.iter().flatten().filter(|s| matches!(s, ImportDeclarationSpecifier::ImportSpecifier(_)));
-        if import.source.value == module
-            && !import.import_kind.is_type()
-            && let Some(last) = named.next_back()
-        {
-            return Some((last.span().end, format!(", {name}")));
-        }
-    }
-    let line = format!("import {{ {name} }} from {};", serde_json::to_string(module).expect("a string"));
-    Some(match after_imports {
-        Some(end) => (end, format!("\n{line}")),
-        None => (0, format!("{line}\n")),
-    })
-}
-
 pub fn instrument(file: &str, source: &str, first_id: u32) -> Result<Instrumented, String> {
     let allocator = Allocator::default();
     let ret = Parser::new(&allocator, source, SourceType::ts()).parse();
@@ -510,24 +459,6 @@ mod tests {
             ("hz(1200)", None),
             ("hz(1300)", None),
         ]);
-    }
-
-    #[test]
-    fn imports_are_joined_or_added_after_the_others() {
-        let insert = |src: &str, module, name| {
-            import_insertion(src, module, name).map(|(at, text)| format!("{}{text}{}", &src[..at as usize], &src[at as usize..]))
-        };
-        let src = "import { hz } from \"@m2/core\";\nimport { drive } from \"std/fx\";\nexport default 1;\n";
-        assert_eq!(insert(src, "std/fx", "drive"), None);
-        assert_eq!(insert(src, "std/fx", "delay").unwrap(), src.replace("{ drive }", "{ drive, delay }"));
-        assert_eq!(
-            insert(src, "std/dsp", "osc").unwrap(),
-            src.replace("from \"std/fx\";", "from \"std/fx\";\nimport { osc } from \"std/dsp\";")
-        );
-        // An alias or a type-only import doesn't bring the name in.
-        let src = "import { delay as echo } from \"std/fx\";\nimport type { Audio } from \"@m2/core\";\n";
-        assert_eq!(insert(src, "std/fx", "delay").unwrap(), src.replace("echo }", "echo, delay }"));
-        assert_eq!(insert("export default 1;\n", "std/fx", "delay").unwrap(), "import { delay } from \"std/fx\";\nexport default 1;\n");
     }
 
     #[test]

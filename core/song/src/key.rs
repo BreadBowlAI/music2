@@ -135,8 +135,18 @@ impl ClipId {
 
 /// The first 8 base32 characters of `bytes` (its first 40 bits, most significant first).
 fn crockford8(bytes: &[u8]) -> String {
-    let bits = bytes[..5].iter().fold(0u64, |acc, &b| acc << 8 | b as u64);
-    (0..8).rev().map(|i| CROCKFORD[(bits >> (i * 5) & 31) as usize] as char).collect()
+    crockford(bytes, 8)
+}
+
+/// The first `n` (at most 12) lowercase Crockford characters of `bytes`, most significant first:
+/// how clip ids and Tx ids are spelled.
+pub fn crockford(bytes: &[u8], n: usize) -> String {
+    let n = n.min(12);
+    let mut first = [0u8; 8];
+    let k = bytes.len().min(8);
+    first[..k].copy_from_slice(&bytes[..k]);
+    let bits = u64::from_be_bytes(first);
+    (0..n).map(|i| CROCKFORD[(bits >> (59 - i * 5) & 31) as usize] as char).collect()
 }
 
 #[cfg(test)]

@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
+use m2_editor::Gestures;
 use m2_server::graph::{EditTiming, Graph};
 use m2_song::NoteClip;
 use m2_song::lane::{LaneData, LaneKind};
@@ -379,6 +380,12 @@ fn update_heard_ms(graph: &Graph, seq: u64, from_ns: u64, rate: u32) -> Option<f
 /// tracks/t02.ts with a counted busy loop ahead of its track: QuickJS spins about 1e8 empty
 /// iterations a second, and `Date` is gone from the build, so a loop is the only way to make a
 /// build slow.
+/// with-plugins' `tracks/kick.ts` with the kick wrapped in a delay: a structural save.
+fn delayed_kick(kick: &str) -> String {
+    kick.replace("import { kick }", "import { delay } from \"std/fx\";\nimport { kick }")
+        .replace("const out = kick(lane.notes(\"hits\"));", "const out = delay(kick(lane.notes(\"hits\")));")
+}
+
 fn slow(base: &str, n: u64) -> String {
     format!("for (let i = 0; i < {n}; i++) {{}}\n{base}")
 }
@@ -527,7 +534,9 @@ fn previews_with_plugins(out: &mut Outcome, lab: &Lab, dir: &Path, graph: &Arc<G
     let generation = graph.leases().first().and_then(|l| l.generation);
     let made = created();
     let kick = std::fs::read_to_string(dir.join("tracks/kick.ts"))?;
-    let slow_kick = slow(&kick, 150_000_000).replace("ms(150)", "ms(160)");
+    // Slow, and structural (the kick wrapped in a delay): from step 6 a save that changes only
+    // values is written into the cells of what plays, with no new renderer to carry instances into.
+    let slow_kick = slow(&delayed_kick(&kick), 150_000_000);
     let saver = {
         let (g, kick) = (graph.clone(), kick.clone());
         std::thread::spawn(move || -> Result<Vec<f64>> {
@@ -587,12 +596,13 @@ fn previews_with_plugins(out: &mut Outcome, lab: &Lab, dir: &Path, graph: &Arc<G
 /// G9 through the server: a knob drag through an agent's saves (WRITE-22). On p16, a lease on t01's
 /// channel level in song.ts is updated every 10 ms for 10 s, each stamp read as it comes, while an
 /// "agent" saves tracks/t05.ts every 700 ms (a comment, an added `delay`, its removal), and once
-/// inserts a comment at the top of song.ts and a line at its bottom. Every save compiles and
-/// activates a new renderer; the drag must go on through all of them, aimed at each new one, and
-/// its commit must write song.ts alone, leaving every outside edit on disk. The same runs on
-/// `examples/with-plugins` when its plugins are installed: the drag is the lead's channel level in
-/// song.ts and the agent edits tracks/kick.ts, so each save activates a renderer that carries the
-/// plugin instances (HOST-5). (A plugin parameter written in code, Airwindows' dry/wet, isn't a
+/// inserts a comment at the top of song.ts and a line at its bottom. Every save compiles; the
+/// structural ones activate a new renderer, and from step 6 a comment builds none (the delta from
+/// what plays is empty). The drag must go on through all of them, aimed at whichever renderer
+/// plays, and its commit must write song.ts alone, leaving every outside edit on disk. The same
+/// runs on `examples/with-plugins` when its plugins are installed: the drag is the lead's channel
+/// level in song.ts and the agent edits tracks/kick.ts (a comment, the kick wrapped in a delay, and
+/// back), so the structural saves activate renderers that carry the plugin instances (HOST-5). (A plugin parameter written in code, Airwindows' dry/wet, isn't a
 /// knob the session offers yet, so it can't be dragged.)
 pub fn drag(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     let mut out = Outcome::new("G9 drag through outside saves", "WRITE-22, WRITE-12, HOST-5", &format!("server on {}", o.reference.name()));
@@ -623,7 +633,9 @@ pub fn drag(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     };
     let knob = file_knobs(lab, &dir, "song.ts", "-4")?.remove(0);
     let kick = std::fs::read_to_string(dir.join("tracks/kick.ts"))?;
-    let saves = [format!("// the agent was here\n{kick}"), kick.replace("ms(150)", "ms(160)"), kick.clone()];
+    // A comment, then the kick wrapped in a delay (structural: a new renderer, which carries the
+    // plugin instances), then back.
+    let saves = [format!("// the agent was here\n{kick}"), delayed_kick(&kick), kick.clone()];
     let dragged = drag_through(
         &mut out,
         "with-plugins",
@@ -639,6 +651,9 @@ pub fn drag(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     dragged?;
     Ok(out)
 }
+
+/// After a save: the renderer the drag aims at, and the one that plays.
+type Aim = (Option<u64>, Option<u64>);
 
 /// A knob on `song`'s files: its id, its file, and how its value is spelled there.
 type Knob<'a> = (&'a str, &'a str, fn(f64) -> String);
@@ -663,7 +678,7 @@ fn drag_through(
     let agent = {
         let (g, d, stop, saves, other, own) =
             (graph.clone(), dir.to_path_buf(), stop.clone(), saves.to_vec(), other.to_string(), file.to_string());
-        std::thread::spawn(move || -> Result<(Vec<f64>, Vec<Option<u64>>)> {
+        std::thread::spawn(move || -> Result<(Vec<f64>, Vec<Aim>)> {
             let (mut took, mut generations) = (vec![], vec![]);
             let mut n = 0;
             while !stop.load(Ordering::Relaxed) {
@@ -679,7 +694,11 @@ fn drag_through(
                 let t = Instant::now();
                 g.poll();
                 took.push(t.elapsed().as_secs_f64() * 1e3);
-                generations.push(g.leases().first().and_then(|l| l.generation));
+                // Where the drag aims, and the renderer that plays once the engine took what was
+                // sent (an activation lands at a later block than the lease moves to it).
+                let aimed = g.leases().first().and_then(|l| l.generation);
+                let _ = wait(Duration::from_millis(500), || g.generation() == aimed);
+                generations.push((aimed, g.generation()));
                 n += 1;
             }
             Ok((took, generations))
@@ -716,11 +735,18 @@ fn drag_through(
             failed.first().map_or("no failure".into(), |f| format!("{} failed: {f}", failed.len()))
         ),
     );
-    let new = generations.windows(2).filter(|w| w[0] != w[1] && w[1].is_some()).count() + 1;
+    // From step 6 a save that changes nothing that plays (a comment) or only values builds no
+    // renderer (the step 6 design's 5.5): the drag must aim at whichever plays, and follow each
+    // new one the structural saves build.
+    let aimed = generations.iter().filter(|(lease, plays)| lease.is_some() && lease == plays).count();
+    let built = generations.windows(2).filter(|w| w[0].1 != w[1].1).count();
     out.check(
-        format!("{on}: after each save the drag aims at the new renderer"),
-        generations.iter().all(Option::is_some) && new == generations.len(),
-        format!("{} saves, {new} renderers aimed at", generations.len()),
+        format!("{on}: after each save the drag aims at the renderer that plays, new ones included"),
+        aimed == generations.len() && built > 0,
+        format!(
+            "{} saves, aimed at what plays after {aimed}; {built} new renderers followed; (aimed, plays): {generations:?}",
+            generations.len()
+        ),
     );
     let alive = graph.leases().iter().any(|l| l.lease == lease);
     out.check(format!("{on}: the drag is alive at the end"), alive, if alive { "yes" } else { "it ended" });
@@ -738,4 +764,128 @@ fn drag_through(
         format!("wrote {written}; outside edits kept: {kept}"),
     );
     Ok(())
+}
+
+/// A disk kept busy, as an export or a bounce keeps it: a thread writing a 1 GB file in 4 MB chunks,
+/// each synced, round and round, until dropped.
+struct Busy {
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Busy {
+    fn start(file: &Path) -> Result<Busy> {
+        use std::io::{Seek, Write};
+        let mut f = std::fs::File::create(file)?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let s = stop.clone();
+        let thread = std::thread::spawn(move || {
+            let chunk = vec![0x5au8; 4 << 20];
+            let mut written = 0u64;
+            while !s.load(Ordering::Relaxed) {
+                if f.write_all(&chunk).and_then(|_| f.sync_data()).is_err() {
+                    return;
+                }
+                written += chunk.len() as u64;
+                if written >= 1 << 30 {
+                    written = 0;
+                    let _ = f.rewind();
+                }
+            }
+        });
+        Ok(Busy { stop, thread: Some(thread) })
+    }
+}
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+/// The durable sync a commit's barrier makes (`File::sync_all`, which is `F_FULLFSYNC` on macOS),
+/// timed `n` times on a small journal-sized file in the project's `.music2/tx/`.
+fn barriers(dir: &Path, n: usize) -> Result<Vec<f64>> {
+    use std::io::Write;
+    let txd = dir.join(".music2/tx");
+    std::fs::create_dir_all(&txd)?;
+    let file = txd.join(".gate-barrier");
+    let mut out = vec![];
+    for i in 0..n {
+        let mut f = std::fs::File::create(&file)?;
+        f.write_all(format!("{{\"journal\": 1, \"n\": {i}}}").as_bytes())?;
+        let t = Instant::now();
+        f.sync_all()?;
+        out.push(t.elapsed().as_secs_f64() * 1e3);
+    }
+    std::fs::remove_file(&file)?;
+    Ok(out)
+}
+
+/// G11 (PLANE-5, the data plane's 20 ms; the step 6 design's 19 calls it G10, which the range
+/// render already is): piano-roll writes through the
+/// server, each one note of `t01` moved (a `Clips` Tx, journaled and synced), from 1:00 playing:
+/// from the request to the block that plays it, and separately the barrier's durable sync. Run on
+/// an idle disk, then while another writer keeps it busy. Also the watcher's stat walk with a
+/// 5,000-file `assets/` beside the project.
+pub fn tx_data(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
+    let dir = lab.reference(&o.reference)?;
+    let song = lab.compile(&dir)?;
+    let mut out = Outcome::new("G11 tx-data", "PLANE-5, PLANE-1, WRITE-15", &format!("server on {}", o.reference.name()));
+    let writes = if o.edits <= 2 { 20 } else { 200 };
+    for loaded in [false, true] {
+        let on = if loaded { "with another writer syncing 4 MB chunks: " } else { "idle disk: " };
+        let busy = if loaded { Some(Busy::start(&lab.dir("busy.bin"))?) } else { None };
+        let graph = open(&dir, &song)?;
+        let first = graph.generation();
+        let mut rng = Rng::new(o.seed);
+        let (mut total, mut heard, mut session, mut swapped) = (vec![], vec![], vec![], 0);
+        for i in 0..writes {
+            let text = std::fs::read_to_string(dir.join("data/t01/notes.json"))?;
+            let LaneData::Notes(mut clips) = LaneData::read(&text, &LaneKind::Notes).map_err(|e| anyhow!("{e:?}"))? else {
+                bail!("not notes")
+            };
+            let c = clips.iter_mut().find(|c| !c.notes.is_empty()).context("no notes in t01")?;
+            // One note moved a sixteenth, back and forth.
+            c.notes[0].start += if i % 2 == 0 { 0.25 } else { -0.25 };
+            let (token, revision) = session_and_revision(&graph)?;
+            graph.write_notes(token, revision, "t01", "notes", &clips)?;
+            let t = graph.last_edit().context("the edit left no timing")?;
+            total.push(taken_ms(&graph, t, t.requested_ns, song.rate)?);
+            heard.push(heard_ms(&graph, t, t.requested_ns, song.rate)?);
+            session.push((t.compiled_ns - t.requested_ns) as f64 / 1e6);
+            swapped += usize::from(graph.generation() == first);
+            std::thread::sleep(Duration::from_secs_f64(rng.range(0.05, 0.2)));
+        }
+        graph.close();
+        let syncs = barriers(&dir, writes)?;
+        drop(busy);
+        let t = Summary::of(&total);
+        out.info(format!("{on}the barrier's durable sync alone (F_FULLFSYNC)"), Summary::of(&syncs));
+        out.info(format!("{on}the session's part: plan, check, journal, stage, sync, rename, accept"), Summary::of(&session));
+        out.info(format!("{on}to the speaker, one device buffer later"), Summary::of(&heard));
+        out.check(format!("{on}every write was a lane swap, never a new renderer"), swapped == writes, format!("{swapped} of {writes}"));
+        out.check(format!("{on}from the commit() call to the first block that plays it, under 20 ms at p95"), t.p95 <= 20.0, t);
+    }
+    // The watcher's stat walk, every 50 ms: with assets/ holding 5,000 files no lane names.
+    let assets = dir.join("assets");
+    std::fs::create_dir_all(&assets)?;
+    for i in 0..5000 {
+        std::fs::write(assets.join(format!("take-{i:04}.wav")), b"")?;
+    }
+    let mut walks = vec![];
+    for _ in 0..50 {
+        let t = Instant::now();
+        let l = m2_session::watch::listing(&dir, &Default::default());
+        walks.push(t.elapsed().as_secs_f64() * 1e3);
+        std::hint::black_box(l);
+    }
+    out.info(
+        "the watcher's stat walk with a 5,000-file assets/ (over 2 ms is the step 6 design's trigger for FSEvents)",
+        Summary::of(&walks),
+    );
+    Ok(out)
 }

@@ -16,6 +16,8 @@ type Kit = typeof import("../lib/codeMonaco");
 interface TypeProblem { path: string; line: number; col: number; message: string }
 
 const isLib = (path: string) => path.startsWith("node_modules/");
+/** What the editor followed while the project had no module (its code never compiled). */
+const NO_MODULES = "\0none";
 /** `node_modules/std/dsp.ts` → `std/dsp.ts`: how its imports name it. */
 const libName = (path: string) => path.replace(/^node_modules\//, "");
 
@@ -165,12 +167,20 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
 
   // Follow the selected module to its file, once the files listed know it: a module just made
   // or renamed (a save, an edit elsewhere) waits for the listing that has it.
+  // With no module at all (the code never compiled, WRITE-20), it opens where the first problem is.
   const followed = useRef<string | null>(null);
+  const diagnostics = graph.diagnostics;
   useEffect(() => {
-    if (!ws || followed.current === module || !ws.modules.some((m) => m.key === module)) return;
-    const path = moduleFile([...ws.docs.keys()], ws.modules, module);
-    if (path && open(path)) followed.current = module;
-  }, [ws, module, open, version]);
+    if (!ws) return;
+    const none = ws.modules.length === 0;
+    // Once the code compiles, the file being fixed stays open.
+    if (!none && followed.current === NO_MODULES) followed.current = module;
+    if (followed.current === module || (!none && !ws.modules.some((m) => m.key === module))) return;
+    const paths = [...ws.docs.keys()];
+    const problem = none ? diagnostics?.map((p) => p.file).find((f): f is string => !!f && paths.includes(f)) : undefined;
+    const path = problem ?? moduleFile(paths, ws.modules, module);
+    if (path && open(path)) followed.current = none ? NO_MODULES : module;
+  }, [ws, module, open, version, diagnostics]);
 
   // The accepted revision or the draft changed (a knob, a cable, a save elsewhere): take in the files.
   const fetched = useRef(0);
@@ -390,6 +400,7 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
           name={name}
           types={typeProblems}
           revision={graph.view.revision}
+          silent={graph.has_code === false}
           canOpen={(p) => !!ws?.docs.has(p)}
           onReveal={reveal}
         />
@@ -489,6 +500,7 @@ function Problems({
   name,
   types,
   revision,
+  silent,
   canOpen,
   onReveal,
 }: {
@@ -497,6 +509,8 @@ function Problems({
   name: (key: string) => string;
   types: TypeProblem[];
   revision: number;
+  /** No version of the code ever compiled (WRITE-20): nothing plays until one does. */
+  silent?: boolean;
   canOpen: (path: string) => boolean;
   onReveal: (path: string, line: number | null, col: number | null) => void;
 }) {
@@ -506,7 +520,7 @@ function Problems({
       <div data-testid="problems" data-state="error" className="shrink-0 max-h-28 overflow-y-auto border-t border-red-600/15 bg-red-500/[0.06] py-1">
         <div className="px-3 h-6 flex items-center gap-2 text-[12px] font-medium text-red-800">
           <CircleAlert className="size-3.5" />
-          The code doesn't compile: playing the last version that did.
+          {silent ? "The code doesn't compile: nothing plays until it does." : "The code doesn't compile: playing the last version that did."}
         </div>
         {problems.map((p, i) => {
           const at = where(p.file, p.line);

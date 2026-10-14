@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
+use m2_editor::Gestures;
 use m2_song::{LaneAddr, NoteClip, Project};
 
 use crate::gates::{Opts, SeekNotes, difference, offline, playing, unchanged};
@@ -46,7 +47,7 @@ pub fn with_plugins(lab: &mut Lab, kind: Kind, o: &Opts) -> Result<Outcome> {
     if project.arrangement.tempo.first().map(|t| t.bpm) != Some(BPM) {
         bail!("examples/with-plugins no longer plays at {BPM} bpm, which these checks count in");
     }
-    let song = Song { dir: dir.clone(), flat: c.flat, data: c.data, rate: project.sample_rate(), compile: t.elapsed() };
+    let song = Song { dir: dir.clone(), flat: c.flat.clone(), data: c.data, rate: project.sample_rate(), compile: t.elapsed() };
     let saved = std::mem::replace(&mut lab.packages, Arc::new(packages));
     let done = checks(lab, kind, o, &song, &mut out);
     lab.packages = saved;

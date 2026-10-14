@@ -123,19 +123,27 @@ pub fn start_with(opts: ServeOptions, graph: graph::Graph) -> Result<Running> {
     Ok(Running { url, state })
 }
 
-/// Pick up edits to the open project made outside the app, and tell clients. Each tick first ends
-/// the knob drags nobody moves any more (C6), and says what ended or was saved on its own.
+/// Take in edits to the open project made outside the app once they settle, and tell clients:
+/// a stat walk every 50 ms (WRITE-19). Every 300 ms it also ends the knob drags nobody moves any
+/// more (C6), says what ended or was saved on its own, and brings an engine that fell behind the
+/// accepted revision up to it.
 fn spawn_graph_watch(state: Arc<AppState>) {
     std::thread::Builder::new()
         .name("music2-graph".into())
         .spawn(move || {
+            let mut tick = 0u64;
             loop {
-                std::thread::sleep(Duration::from_millis(300));
-                let said = state.graph.expire();
-                for s in &said {
-                    state.toast(s.clone());
+                std::thread::sleep(Duration::from_millis(50));
+                tick += 1;
+                let mut changed = state.graph.watch();
+                if tick.is_multiple_of(6) {
+                    let said = state.graph.expire();
+                    for s in &said {
+                        state.toast(s.clone());
+                    }
+                    changed |= state.graph.catch_up() || !said.is_empty();
                 }
-                if state.graph.poll() || !said.is_empty() {
+                if changed {
                     state.graph_changed();
                 }
             }

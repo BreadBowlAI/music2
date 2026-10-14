@@ -64,6 +64,11 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .route("/api/graph/relink", post(graph_relink))
         .route("/api/graph/data/delete", post(graph_delete_data))
         .route("/api/graph/fix", post(graph_fix))
+        .route("/api/graph/label", post(graph_label))
+        .route("/api/graph/automate", post(graph_automate))
+        .route("/api/graph/lock/retry", post(graph_lock_retry))
+        .route("/api/tx/check", post(tx_check))
+        .route("/api/tx/commit", post(tx_commit))
         .route("/api/graph/undo", post(graph_undo))
         .route("/api/graph/redo", post(graph_redo))
         .route("/api/graph/disconnect", post(graph_disconnect))
@@ -80,6 +85,7 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         // An unknown API path is a clear error, not the UI's index.html.
         .route("/api/{*rest}", any(no_such_api))
         .fallback_service(spa)
+        .layer(axum::middleware::from_fn_with_state(state.clone(), writes))
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth))
         .with_state(state)
 }
@@ -93,6 +99,40 @@ async fn auth(State(s): S, req: axum::extract::Request, next: axum::middleware::
         if header != Some(token.as_str()) && !query {
             return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
         }
+    }
+    next.run(req).await
+}
+
+/// The routes that write the open project, or begin a gesture whose commit would.
+const WRITES: [&str; 18] = [
+    "/api/graph/preview",
+    "/api/graph/set",
+    "/api/graph/lease/begin",
+    "/api/graph/lease/commit",
+    "/api/graph/connect",
+    "/api/graph/disconnect",
+    "/api/graph/effect/add",
+    "/api/graph/effect/remove",
+    "/api/graph/lane",
+    "/api/graph/relink",
+    "/api/graph/data/delete",
+    "/api/graph/fix",
+    "/api/graph/label",
+    "/api/graph/automate",
+    "/api/graph/undo",
+    "/api/graph/redo",
+    "/api/graph/file",
+    "/api/tx/commit",
+];
+
+/// A write to a project open read-only answers 423 with WRITE-18's message, before anything is
+/// planned (WRITE-17). Checks, reads, the transport and exports go on.
+async fn writes(State(s): S, req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let path = req.uri().path();
+    if WRITES.contains(&path)
+        && let Some(why) = s.graph.read_only()
+    {
+        return (StatusCode::LOCKED, Json(json!({"error": why}))).into_response();
     }
     next.run(req).await
 }
@@ -384,7 +424,7 @@ struct LaneReq {
     module: String,
     lane: String,
     /// Every clip the lane is to have: pitches as numbers or names, notes relative to their clip.
-    clips: Vec<m2_session::NoteClip>,
+    clips: Vec<m2_song::NoteClip>,
 }
 
 /// Rewrite a notes lane's clips (the piano roll; clips made, moved or deleted in the timeline).
@@ -431,24 +471,92 @@ async fn graph_relink(State(s): S, Json(r): Json<RelinkReq>) -> ApiResult {
 #[derive(Deserialize)]
 struct FixReq {
     session: u64,
-    revision: u64,
-    /// The fix as a problem carried it: its `code` and `edit` are what name it.
-    fix: FixRef,
+    /// The fix as a problem carried it, `{code, title, likely, tx}`: its Tx is what is committed
+    /// (DIAG-1).
+    fix: Value,
+}
+
+/// Apply one of the fixes a problem offers: commit its Tx, which its bases guard, so a fix
+/// offered on files that changed since is a conflict (DIAG-1). Undo takes it back.
+async fn graph_fix(State(s): S, Json(r): Json<FixReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.fix(r.session, &r.fix)).await;
+    s.graph_changed();
+    Ok(Json(result?))
 }
 
 #[derive(Deserialize)]
-struct FixRef {
-    code: String,
-    edit: Value,
+struct LabelReq {
+    session: u64,
+    /// The track by its key; the label is display text only (ID-10).
+    module: String,
+    label: String,
 }
 
-/// Apply one of the fixes a problem of the accepted revision offers (DIAG-1). One no problem
-/// offers any more is refused. Undo takes it back.
-async fn graph_fix(State(s): S, Json(r): Json<FixReq>) -> ApiResult {
+/// Rename a track's label (double-click its name in the timeline or on the canvas).
+async fn graph_label(State(s): S, Json(r): Json<LabelReq>) -> ApiResult {
     let state = s.clone();
-    let result = blocking(move || state.graph.fix(r.session, r.revision, &r.fix.code, &r.fix.edit)).await;
+    let result = blocking(move || state.graph.label(r.session, &r.module, &r.label)).await;
     s.graph_changed();
     Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct AutomateReq {
+    session: u64,
+    revision: u64,
+    /// The knob's control id, at `revision`.
+    id: String,
+}
+
+/// Automate a knob (its menu on the canvas): a new, empty control lane plays its value.
+async fn graph_automate(State(s): S, Json(r): Json<AutomateReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.automate(r.session, r.revision, &r.id)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+/// Try the project's lock again (WRITE-17): the read-only banner's Retry.
+async fn graph_lock_retry(State(s): S, Json(r): Json<SessionReq>) -> ApiResult {
+    let state = s.clone();
+    let v = blocking(move || state.graph.retry_lock(r.session)).await?;
+    s.graph_changed();
+    Ok(Json(v))
+}
+
+#[derive(Deserialize)]
+struct TxReq {
+    /// The open project, when the caller names it.
+    #[serde(default)]
+    session: Option<u64>,
+    /// The Tx's JSON (WRITE-3), as `m2 tx` reads it.
+    tx: Value,
+}
+
+/// Check a Tx (WRITE-4, WRITE-11): its delta, the delta's hash and the diagnostics; nothing is
+/// written. 409 for a conflict, 422 for a rejection.
+async fn tx_check(State(s): S, Json(r): Json<TxReq>) -> Response {
+    let state = s.clone();
+    let result = tokio::task::spawn_blocking(move || state.graph.tx_check(r.session, &r.tx)).await;
+    tx_answer(result)
+}
+
+/// Commit a Tx (WRITE-5): `Seen(hash)` commits only the delta its check showed. The engine plays
+/// what it made, and every window hears of it.
+async fn tx_commit(State(s): S, Json(r): Json<TxReq>) -> Response {
+    let state = s.clone();
+    let result = tokio::task::spawn_blocking(move || state.graph.tx_commit(r.session, &r.tx)).await;
+    s.graph_changed();
+    tx_answer(result)
+}
+
+fn tx_answer(result: Result<anyhow::Result<(u16, Value)>, tokio::task::JoinError>) -> Response {
+    match result {
+        Ok(Ok((status, v))) => (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), Json(v)).into_response(),
+        Ok(Err(e)) => ApiError::from(e).into_response(),
+        Err(e) => err(e.to_string()).into_response(),
+    }
 }
 
 #[derive(Deserialize)]

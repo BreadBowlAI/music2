@@ -25,7 +25,9 @@ import {
   type TimelineTrack,
   type TimelineView,
 } from "../lib/graph";
+import { LANE_MADE } from "../lib/events";
 import { useStore } from "../lib/store";
+import TrackName from "./TrackName";
 
 const HEADER_W = 236;
 const RULER_H = 34;
@@ -45,16 +47,28 @@ type Rgb = [number, number, number];
 const COLORS: Rgb[] = [[255, 94, 135], [255, 159, 67], [255, 214, 92], [94, 214, 140], [72, 196, 230], [124, 131, 253], [196, 113, 237]];
 const dark = (c: Rgb) => rgb([c[0] * 0.55, c[1] * 0.55, c[2] * 0.55]);
 
-/** A module's color, by its key's place in the timeline (null if it has no row there). */
+/** The song's own lanes (the mix): a neutral colour, so a lane made on the song never recolours the tracks. */
+const MIX: Rgb = [150, 146, 158];
+
+/** A module's colour, by its key's place among the tracks (null if it has no row in the timeline). */
+function colorOf(timeline: TimelineView, module: string): Rgb | null {
+  const row = timeline.tracks.find((t) => t.module === module);
+  if (!row) return null;
+  if (!row.track) return MIX;
+  const i = timeline.tracks.filter((t) => t.track).findIndex((t) => t.module === module);
+  return COLORS[i % COLORS.length];
+}
+
+/** A module's colour, muted for the light theme (null if it has no row in the timeline). */
 export function trackColor(timeline: TimelineView, module: string) {
-  const i = timeline.tracks.findIndex((t) => t.module === module);
-  return i < 0 ? null : rgb(COLORS[i % COLORS.length]);
+  const c = colorOf(timeline, module);
+  return c && rgb(c);
 }
 
 /** The same colour at full strength, for small marks such as the piano roll's notes. */
 export function trackHue(timeline: TimelineView, module: string) {
-  const i = timeline.tracks.findIndex((t) => t.module === module);
-  return i < 0 ? null : `rgb(${COLORS[i % COLORS.length].join(",")})`;
+  const c = colorOf(timeline, module);
+  return c && `rgb(${c.join(",")})`;
 }
 
 const UNITS: Record<string, string> = { hz: "Hz", db: "dB", unit01: "0…1", bipolar: "±1", seconds: "s", semitones: "st" };
@@ -261,6 +275,28 @@ export default function SongTimeline({
     // `latest` carries everything that changes; the edits themselves never do.
   }, []);
 
+  // A lane just made from the canvas (automate): scrolled to and lit once the timeline shows it.
+  const [lit, setLit] = useState<string | null>(null);
+  const wanted = useRef<string | null>(null);
+  const reveal = () => {
+    const id = wanted.current;
+    const row = id && scroller.current?.querySelector<HTMLElement>(`[data-lane="${CSS.escape(id)}"]`);
+    if (!id || !row) return;
+    wanted.current = null;
+    row.scrollIntoView({ block: "nearest" });
+    setLit(id);
+    setTimeout(() => setLit((l) => (l === id ? null : l)), 1800);
+  };
+  useEffect(reveal, [timeline]);
+  useEffect(() => {
+    const made = (e: Event) => {
+      wanted.current = (e as CustomEvent<string>).detail;
+      reveal();
+    };
+    window.addEventListener(LANE_MADE, made);
+    return () => window.removeEventListener(LANE_MADE, made);
+  }, []);
+
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (!picked) return;
     if (e.key === "Delete" || e.key === "Backspace") edits.remove();
@@ -298,7 +334,7 @@ export default function SongTimeline({
             <div className="w-0 h-0 -translate-x-1/2 border-x-[6px] border-x-transparent border-t-[8px] border-t-sun" />
           </div>
         </div>
-        <Tracks timeline={timeline} width={width} selected={selected} open={open} picked={picked} moving={moving} issues={issues} edits={edits} onSelect={onSelect} onOpenClip={onOpenClip} />
+        <Tracks timeline={timeline} width={width} selected={selected} open={open} picked={picked} moving={moving} lit={lit} issues={issues} edits={edits} onSelect={onSelect} onOpenClip={onOpenClip} />
         {looping && loopStart !== null && loopEnd !== null && (
           <div
             data-testid="loop-shade"
@@ -453,6 +489,7 @@ const Tracks = memo(function Tracks({
   open,
   picked,
   moving,
+  lit,
   issues,
   edits,
   onSelect,
@@ -464,6 +501,8 @@ const Tracks = memo(function Tracks({
   open: ClipRef | null;
   picked: ClipRef | null;
   moving: { clip: ClipRef; start: number } | null;
+  /** A lane just made, lit for a moment: `module.lane`. */
+  lit: string | null;
   issues: ReadonlyMap<string, Diagnostic[]>;
   edits: ClipEdits;
   onSelect: (module: string) => void;
@@ -477,10 +516,12 @@ const Tracks = memo(function Tracks({
           key={t.module}
           track={t}
           index={i}
+          color={colorOf(timeline, t.module)!}
           selected={t.module === selected}
           open={open?.module === t.module ? open : null}
           picked={picked?.module === t.module ? picked : null}
           moving={moving?.clip.module === t.module ? moving : null}
+          lit={lit?.startsWith(`${t.module}.`) ? lit.slice(t.module.length + 1) : null}
           issues={issues.get(t.module)}
           edits={edits}
           width={width}
@@ -508,10 +549,12 @@ const Tracks = memo(function Tracks({
 const TrackRows = memo(function TrackRows({
   track,
   index,
+  color,
   selected,
   open,
   picked,
   moving,
+  lit,
   issues,
   edits,
   width,
@@ -521,11 +564,14 @@ const TrackRows = memo(function TrackRows({
 }: {
   track: TimelineTrack;
   index: number;
+  color: Rgb;
   selected: boolean;
   /** The clip open for editing, if it is one of this track's; likewise the picked one and one being moved. */
   open: ClipRef | null;
   picked: ClipRef | null;
   moving: { clip: ClipRef; start: number } | null;
+  /** The key of a lane of this track just made, lit for a moment. */
+  lit: string | null;
   /** What needs attention in this track. */
   issues: Diagnostic[] | undefined;
   edits: ClipEdits;
@@ -534,7 +580,6 @@ const TrackRows = memo(function TrackRows({
   onSelect: (module: string) => void;
   onOpenClip: (clip: ClipRef) => void;
 }) {
-  const color = COLORS[index % COLORS.length];
   const name = moduleName({ key: track.module, label: track.label });
   // A track without lanes still gets a row, for its name.
   const rows = track.lanes.length ? track.lanes : [null];
@@ -543,7 +588,12 @@ const TrackRows = memo(function TrackRows({
   return (
     <div data-track={track.module} data-selected={selected || undefined} className="group border-b border-black/[0.07]" onPointerDown={() => onSelect(track.module)}>
       {rows.map((lane, i) => (
-        <div key={lane?.key ?? ""} data-lane={lane ? `${track.module}.${lane.key}` : undefined} className="flex" style={{ height: lane ? LANE_H[lane.kind] : 44 }}>
+        <div
+          key={lane?.key ?? ""}
+          data-lane={lane ? `${track.module}.${lane.key}` : undefined}
+          className={clsx("flex", lane && lane.key === lit && "lit")}
+          style={{ height: lane ? LANE_H[lane.kind] : 44 }}
+        >
           <div
             className={clsx(
               "sticky left-0 z-20 shrink-0 flex items-center gap-2 pl-4 pr-3 border-r border-black/[0.06] transition-colors",
@@ -556,9 +606,7 @@ const TrackRows = memo(function TrackRows({
               {i === 0 && (
                 <>
                   <div className="flex items-center gap-1.5 min-w-0">
-                    <span data-testid="track-label" className="text-sm font-semibold text-ink-100 truncate" title={name === track.module ? name : `${name} (${track.module})`}>
-                      {name}
-                    </span>
+                    <TrackName module={track.module} label={track.label} track={track.track} testid="track-label" className="text-sm font-semibold text-ink-100" />
                     {issues && <Issues issues={issues} />}
                   </div>
                   <div className="text-xs text-ink-400 truncate">

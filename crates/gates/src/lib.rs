@@ -155,7 +155,7 @@ impl Lab {
         if let Some(e) = c.problems.iter().find(|d| d.severity == m2_song::Severity::Error) {
             return Err(anyhow!("{}: {e}", dir.display()));
         }
-        Ok(Song { dir: dir.to_path_buf(), flat: c.flat, data: c.data, rate: project.sample_rate(), compile })
+        Ok(Song { dir: dir.to_path_buf(), flat: c.flat.clone(), data: c.data, rate: project.sample_rate(), compile })
     }
 
     /// A fresh session on the project in `dir`, as the app opens it: for edits made the way the

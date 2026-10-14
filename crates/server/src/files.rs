@@ -1,11 +1,11 @@
 //! The project's TypeScript as text, for the code editor.
 //!
 //! The editor opens the accepted revision's files, type-checks them against the SDK and
-//! the packages' sources, and saves one file at a time. A save names the text it was
-//! based on and is written only if the file on disk still says that, so it never
-//! overwrites a change made since (a knob, a cable, another editor). Code that doesn't
-//! compile is saved too: the session plays on the last revision that did, and the
-//! draft's problems come back as [`diagnostics`].
+//! the packages' sources, and saves one file at a time. A save is the session's `save()`
+//! (WRITE-1, WRITE-2): it names the text it was based on and is written only if the file on
+//! disk still says that, so it never overwrites a change made since (a knob, a cable, another
+//! editor). Code that doesn't compile is saved too: the session plays on the last revision
+//! that did, and the draft's problems come back as [`diagnostics`].
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow};
 use m2_ir::{Diagnostic, Severity};
 use m2_runtime::PackageSet;
-use m2_session::Session;
-use m2_song::{DataPath, Snapshot};
+use m2_session::{Refusal, Session};
+use m2_song::{Base, DataPath, Snapshot};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -75,19 +75,33 @@ pub fn resolve(dir: &Path, path: &str) -> Result<PathBuf> {
     Ok(file)
 }
 
-/// Write `text` to the project's file `path` if it still says `base`; otherwise fail with a
-/// [`Conflict`] carrying what it says now.
-pub fn write(dir: &Path, path: &str, base: &str, text: &str) -> Result<()> {
-    let file = resolve(dir, path)?;
-    let current = std::fs::read_to_string(&file).with_context(|| format!("reading {path}"))?;
+/// Save `text` to the project's file `path` if it still says `base`, through the session's
+/// `save()` (WRITE-2): compared and swapped, staged and renamed whole, then taken in. Otherwise
+/// fail with a [`Conflict`] carrying what it says now. A path that is a link within the project
+/// saves the file it leads to, so the link stays. A file that isn't UTF-8 is shown as its lossy
+/// text, which stands for its bytes here, so saving it as UTF-8 is how it is fixed (WRITE-2).
+pub fn save(session: &mut Session, path: &str, base: &str, text: &str) -> Result<m2_session::take::Saved> {
+    let dir = session.accepted().project.dir.clone();
+    let file = resolve(&dir, path)?;
+    let root = dir.canonicalize().with_context(|| format!("opening {}", dir.display()))?;
+    let rel = file.strip_prefix(&root).map_err(|_| anyhow!("`{path}` is not one of the project's TypeScript files"))?.to_path_buf();
+    let read = || std::fs::read(&file).with_context(|| format!("reading {path}"));
+    let bytes = read()?;
+    let current = String::from_utf8_lossy(&bytes);
     if current != base {
-        return Err(Conflict { path: path.into(), current }.into());
+        return Err(Conflict { path: path.into(), current: current.into_owned() }.into());
     }
-    if current == text {
-        return Ok(());
+    let base = match std::str::from_utf8(&bytes) {
+        Ok(_) => Base::text(base),
+        Err(_) => Base::Sha(m2_song::Sha::of(&bytes)),
+    };
+    match session.save(&rel, base, text) {
+        Ok(saved) => Ok(saved),
+        Err(Refusal::Conflict { .. }) => {
+            Err(Conflict { path: path.into(), current: String::from_utf8_lossy(&read()?).into_owned() }.into())
+        }
+        Err(r) => Err(anyhow!("{path} wasn't saved: {r}")),
     }
-    // Whole or not at all, for the file watcher. Written where links lead, so they stay.
-    m2_session::edit::write_whole(&file, text).with_context(|| format!("writing {path}"))
 }
 
 /// The accepted revision's TypeScript files and modules, as the session's actor publishes them
@@ -368,7 +382,7 @@ mod tests {
         std::os::unix::fs::symlink(p.0.join("tracks/lead.ts"), p.0.join("alias.ts")).unwrap();
         assert!(resolve(&p.0, "tracks/escape.ts").is_err());
         assert!(resolve(&p.0, "linked/secret.ts").is_err());
-        assert!(write(&p.0, "tracks/escape.ts", "// not the project's", "// overwritten").is_err());
+        assert!(save(&mut p.session(), "tracks/escape.ts", "// not the project's", "// overwritten").is_err());
         assert_eq!(std::fs::read_to_string(outside.0.join("secret.ts")).unwrap(), "// not the project's");
         assert!(resolve(&p.0, "alias.ts").unwrap().ends_with("tracks/lead.ts"));
     }
@@ -376,16 +390,30 @@ mod tests {
     #[test]
     fn a_save_is_written_only_over_the_text_it_was_based_on() {
         let p = lead();
+        let mut s = p.session();
         let changed = LEAD.replace("300", "310");
-        write(&p.0, "tracks/lead.ts", LEAD, &changed).unwrap();
+        save(&mut s, "tracks/lead.ts", LEAD, &changed).unwrap();
         assert_eq!(p.read("tracks/lead.ts"), changed);
 
         // Saved again from the old text: refused, and told what the file says now.
-        let e = write(&p.0, "tracks/lead.ts", LEAD, &LEAD.replace("300", "320")).unwrap_err();
+        let e = save(&mut s, "tracks/lead.ts", LEAD, &LEAD.replace("300", "320")).unwrap_err();
         let conflict = e.downcast_ref::<Conflict>().expect("a conflict");
         assert_eq!(conflict.current, changed);
         assert_eq!(p.read("tracks/lead.ts"), changed);
         assert!(!p.0.join("tracks/lead.m2tmp").exists());
+    }
+
+    // WRITE-2: a code file that isn't UTF-8 opens as its lossy text, and saving that text's edit
+    // writes it as UTF-8: how it is fixed. Any other base is still a conflict.
+    #[test]
+    fn a_file_that_isnt_utf8_is_saved_from_its_lossy_text() {
+        let p = lead();
+        std::fs::write(p.0.join("tracks/lead.ts"), [b"// caf\xe9\n".as_slice(), LEAD.as_bytes()].concat()).unwrap();
+        let mut s = p.session();
+        let shown = format!("// caf\u{fffd}\n{LEAD}");
+        assert!(save(&mut s, "tracks/lead.ts", LEAD, LEAD).unwrap_err().downcast_ref::<Conflict>().is_some());
+        save(&mut s, "tracks/lead.ts", &shown, &format!("// café\n{LEAD}")).unwrap();
+        assert_eq!(p.read("tracks/lead.ts"), format!("// café\n{LEAD}"));
     }
 
     #[cfg(unix)]
@@ -396,7 +424,7 @@ mod tests {
         for name in ["tracks/lead.m2tmp", &format!("tracks/.lead.ts.{}-0.m2tmp", std::process::id())] {
             std::os::unix::fs::symlink(outside.0.join("victim.txt"), p.0.join(name)).unwrap();
         }
-        write(&p.0, "tracks/lead.ts", LEAD, "// saved\n").unwrap();
+        save(&mut p.session(), "tracks/lead.ts", LEAD, "// saved\n").unwrap();
         assert_eq!(outside.read("victim.txt"), "victim data\n");
         assert!(!std::fs::symlink_metadata(p.0.join("tracks/lead.ts")).unwrap().file_type().is_symlink());
         assert_eq!(p.read("tracks/lead.ts"), "// saved\n");
@@ -407,7 +435,7 @@ mod tests {
     fn a_save_through_a_link_keeps_the_link() {
         let p = lead();
         std::os::unix::fs::symlink(p.0.join("tracks/lead.ts"), p.0.join("alias.ts")).unwrap();
-        write(&p.0, "alias.ts", LEAD, "// saved\n").unwrap();
+        save(&mut p.session(), "alias.ts", LEAD, "// saved\n").unwrap();
         assert!(std::fs::symlink_metadata(p.0.join("alias.ts")).unwrap().file_type().is_symlink());
         assert_eq!(p.read("tracks/lead.ts"), "// saved\n");
     }

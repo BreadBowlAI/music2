@@ -31,6 +31,8 @@ export interface Knob {
   file: string;
   line: number;
   home: Home;
+  /** Why it can't be automated (HOME-2), when it can't: its menu says so instead of offering it. */
+  automate_refused?: string;
 }
 
 export interface ViewNode {
@@ -314,10 +316,28 @@ export interface GraphState extends GraphStatus {
   /** The rate the song runs and exports at (`[project] sample_rate`). */
   sample_rate: number;
   /**
+   * False while the project was opened with code that doesn't compile (WRITE-20): nothing is
+   * shown or played until a save makes it compile. Absent from older servers.
+   */
+  has_code?: boolean;
+  /**
+   * Why this app can't write the project (WRITE-17): another program holds its lock, or its folder
+   * can't be locked. Null when it can.
+   */
+  read_only?: ReadOnly | null;
+  /**
    * The knob drags in progress (WRITE-22's gesture leases), each with its control's id as this
    * view names it: a save that inserts a call above a dragged knob in its file renumbers it.
    */
   leases?: GraphLease[];
+}
+
+/** Why the open project is read-only here, with WRITE-18's message. */
+export interface ReadOnly {
+  why: "held" | "unsupported";
+  message: string;
+  /** Who holds the lock, as its file says. */
+  holder?: { pid: number; program: string; host: string; since: number } | null;
 }
 
 /** A knob drag in progress, as `GET /api/graph/leases` and the graph's state list it. */
@@ -358,17 +378,28 @@ export interface Diagnostic {
  * A way to fix a problem, applied only when a person asks (DIAG-5), as one undoable edit. `code` is
  * from the contract's closed vocabulary (`relink`, `delete-data`, `repin-asset`, …); `title` says
  * what it does ("Move to Kicks › hits"); `likely` marks the one fix the problem plainly calls for,
- * offered in one click. `edit` is what it changes: whole files, each with the SHA-256 it expects
- * (null: a file that must not exist yet). The app applies a fix by sending it back as it came
- * (`graphApi.fix`); the session applies it as a named edit until fixes are Tx (step 6).
+ * offered in one click. `tx` is what it changes: a ready-to-commit Tx (DIAG-1), each file it
+ * touches with the content it expects. The app applies a fix by sending it back as it came
+ * (`graphApi.fix`): the session commits its Tx, and one whose files changed since is a conflict.
  */
 export interface Fix {
   code: string;
   title: string;
   likely: boolean;
-  edit: { base: Record<string, string | null>; ops: FixOp[] };
+  tx: FixTx;
 }
-export type FixOp = { op: "write"; file: string; text: string } | { op: "remove"; file: string } | { op: "rename"; from: string; to: string };
+/** A fix's Tx, as far as the app reads it: its ops (the rest it sends back as it came). */
+export interface FixTx {
+  id: string;
+  ops: FixOp[];
+  [more: string]: unknown;
+}
+export type FixOp =
+  | { op: "write"; file: string; text?: string; base64?: string }
+  | { op: "remove"; file: string }
+  | { op: "rename"; from: string; to: string }
+  | { op: "text_edit"; file: string }
+  | { op: "clips"; lane: [string, string] };
 
 /**
  * One reason the draft doesn't compile (a `code.build`, `key.duplicate`, … Error): `file` is
@@ -464,10 +495,24 @@ export const graphApi = {
   /** Rewrite a notes lane (module and lane keys) with every clip it is to have. Prefer `writeLane`, which queues and gives clips ids. */
   lane: (session: number, revision: number, module: string, lane: string, clips: NoteClip[]) =>
     call<{ file: string; before: string; after: string; revision: number }>("/lane", { session, revision, module, lane, clips }),
-  /** Apply a problem's fix, offered at `revision`, exactly as it came: one undoable edit. */
+  /** Show a track, by its key, as `label` (ID-10): its `track()` call's name, nothing that plays. One undoable edit. */
+  label: (session: number, module: string, label: string) =>
+    call<{ file: string; before: string; after: string; revision: number }>("/label", { session, module, label }),
+  /**
+   * Automate a knob (HOME-2): its value becomes the fallback of a new, empty control lane read where
+   * it was, so the song sounds the same and the timeline shows a lane to draw on. One undoable edit.
+   */
+  automate: (session: number, revision: number, id: string) =>
+    call<{ file: string; before: string; after: string; revision: number; lane: { module: string; lane: string }; name: string }>(
+      "/automate",
+      { session, revision, id },
+    ),
+  /** Apply a problem's fix, offered at `revision`, exactly as it came: its Tx, one undoable edit. */
   fix: (session: number, revision: number, fix: Fix) =>
     call<{ file: string; before: string; after: string; revision: number }>("/fix", { session, revision, fix }),
   undo: (session: number) => call<{ file: string; before: string; after: string; revision: number }>("/undo", { session }),
+  /** Try the project's lock again (the read-only banner's Retry). Answers with the state. */
+  retryLock: (session: number) => call<GraphState>("/lock/retry", { session }),
   redo: (session: number) => call<{ file: string; before: string; after: string; revision: number }>("/redo", { session }),
   transport: (action: "play" | "stop" | "toggle" | "restart") => call("/transport", { action }),
   /** Set the loop's range (beats; it turns looping on unless `on` says), or turn looping on or off over the range set. Answers with the transport. */

@@ -20,24 +20,27 @@ pub mod arrangement;
 pub mod data;
 pub mod diag;
 pub mod hash;
+pub mod jcs;
 pub mod key;
 pub mod lane;
 pub mod manifest;
 pub mod path;
+pub mod tx;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 pub use arrangement::{Arrangement, Meter, Tempo, TempoMap};
 pub use data::{DataSet, Decls, Sidecar, StateDecl, Unused};
-pub use diag::{Diagnostic, Edit, Fix, Severity};
+pub use diag::{Diagnostic, Fix, Severity};
 pub use hash::{HashCache, Sha};
 pub use key::{ClipId, Key, LaneAddr, ROOT};
 pub use lane::{
     AbsNote, AudioClip, ControlClip, ControlLane, Holds, LaneData, LaneError, LaneKind, Note, NoteClip, canonical, parse_pitch,
 };
 pub use manifest::{FORMAT, Manifest, Requirement, SDK, Version};
-pub use path::{AssetName, Class, DataPath};
+pub use path::{AssetName, Class, DataPath, dir_hash};
+pub use tx::{Anchor, Base, Confined, Declared, DeltaHash, Expect, ModuleChange, Op as TxOp, Payload, Pos, Range, Spot, Tx, TxPath};
 
 /// The files one revision of a project is made of, read once (FMT-6): the text of the
 /// manifest, code, arrangement, lane files and state sidecars, and of the assets and state
@@ -60,6 +63,9 @@ pub struct Snapshot {
     /// manifest's, code's and the arrangement's block; a lane's or a sidecar's never stops
     /// anything else (FMT-9).
     pub unreadable: BTreeMap<PathBuf, String>,
+    /// The hash of the bytes of each text file that isn't UTF-8: its entry in `files` is read
+    /// with the bad bytes replaced, for the build and the code editor, so it isn't its bytes.
+    pub not_utf8: BTreeMap<PathBuf, Sha>,
 }
 
 /// What a snapshot knows of a binary file.
@@ -75,7 +81,8 @@ pub enum Stored {
 /// files don't count.
 impl PartialEq for Snapshot {
     fn eq(&self, other: &Snapshot) -> bool {
-        (&self.dir, &self.files, &self.binaries, &self.unreadable) == (&other.dir, &other.files, &other.binaries, &other.unreadable)
+        (&self.dir, &self.files, &self.binaries, &self.unreadable, &self.not_utf8)
+            == (&other.dir, &other.files, &other.binaries, &other.unreadable, &other.not_utf8)
     }
 }
 
@@ -121,7 +128,10 @@ impl Snapshot {
                     | DataPath::Lane { .. }
                     | DataPath::PluginState { sidecar: true, .. } => match std::fs::read(&p) {
                         Ok(bytes) => {
-                            let text = String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
+                            let text = String::from_utf8(bytes).unwrap_or_else(|e| {
+                                snap.not_utf8.insert(rel.clone(), Sha::of(e.as_bytes()));
+                                String::from_utf8_lossy(e.as_bytes()).into_owned()
+                            });
                             snap.files.insert(rel, text);
                         }
                         // Removed between the listing and the read: as if listed a moment later.
@@ -175,10 +185,72 @@ impl Snapshot {
         }
     }
 
+    /// The SHA-256 of the bytes at `path` as this snapshot read them: a text file's (its raw
+    /// bytes, even when they aren't UTF-8), or a hashed binary's. What a Tx's base names.
+    pub fn sha(&self, path: &Path) -> Option<Sha> {
+        if let Some(sha) = self.not_utf8.get(path) {
+            return Some(*sha);
+        }
+        match (self.files.get(path), self.binaries.get(path)) {
+            (Some(text), _) => Some(Sha::of(text.as_bytes())),
+            (None, Some(Stored::Hash(sha))) => Some(*sha),
+            _ => None,
+        }
+    }
+
     /// The TypeScript files, by absolute path.
     pub fn sources(&self) -> impl Iterator<Item = (PathBuf, &String)> {
         self.files.iter().filter(|(p, _)| matches!(DataPath::parse(p), DataPath::Code(_))).map(|(p, t)| (self.dir.join(p), t))
     }
+
+    /// Every file at `p` or inside it, with what it holds, in path order.
+    pub fn under(&self, p: &Path) -> Vec<(PathBuf, Content)> {
+        let text = self.files.iter().filter(|(k, _)| k.starts_with(p)).map(|(k, t)| (k.clone(), Content::Text(t.clone())));
+        let bin = self.binaries.iter().filter(|(k, _)| k.starts_with(p)).map(|(k, b)| (k.clone(), Content::Binary(b.clone())));
+        let mut all: Vec<(PathBuf, Content)> = text.chain(bin).collect();
+        all.sort_by(|a, b| a.0.cmp(&b.0));
+        all
+    }
+
+    /// A file or folder that has the name `p` on a disk that ignores capitals: `p` itself, `p`
+    /// in other capitals, a file inside such a folder, or a folder on the way to `p` spelled in
+    /// other capitals (`data/Bass` for `data/bass/notes.json`), which such a disk would write
+    /// into. Every path the snapshot lists counts, files music2 doesn't read and ones it can't
+    /// included. Judged by the names alone, so a project acts the same on every disk.
+    pub fn taken(&self, p: &Path) -> Option<PathBuf> {
+        let want: Vec<String> = p.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+        let paths = self.files.keys().chain(self.binaries.keys()).chain(&self.unknown).chain(self.unreadable.keys());
+        paths.into_iter().find_map(|k| {
+            let mut at = PathBuf::new();
+            for (i, c) in k.components().enumerate() {
+                let c = c.as_os_str().to_string_lossy();
+                match want.get(i) {
+                    // `k` is `p`, or inside it, in any capitals.
+                    None => return Some(k.clone()),
+                    Some(w) if *w == c => {}
+                    Some(w) if w.eq_ignore_ascii_case(&c) => return Some(at.join(c.as_ref())),
+                    Some(_) => return None,
+                }
+                at.push(c.as_ref());
+            }
+            // `k` is `p` exactly, or a folder on the way to it in the same capitals.
+            (k.components().count() == want.len()).then(|| k.clone())
+        })
+    }
+
+    /// Why `p`, something in it, or a folder it is in can't be read, if that is so (FMT-9): what
+    /// can't be read can't be checked, so it is never moved or removed.
+    pub fn unread(&self, p: &Path) -> Option<String> {
+        let (at, why) = self.unreadable.iter().find(|(u, _)| u.starts_with(p) || p.starts_with(u))?;
+        Some(format!("{} can't be read ({why}); fix that first, or move it by hand", at.display()))
+    }
+}
+
+/// What a snapshot knows of a file.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Content {
+    Text(String),
+    Binary(Stored),
 }
 
 fn stored(path: &Path) -> Stored {
@@ -283,6 +355,29 @@ impl Project {
         }
         let (binaries, unknown) = (snap.binaries.clone(), snap.unknown.clone());
         Ok(Project { dir: snap.dir.clone(), manifest, arrangement, code, lanes, sidecars, binaries, unknown, unreadable })
+    }
+
+    /// The project a session opens with while its files don't build (WRITE-20): the manifest's
+    /// name and rate read leniently, else the folder's name and 48 kHz; no code and no data.
+    pub fn empty(snap: &Snapshot) -> Project {
+        let table = snap.files.get(Path::new(path::MANIFEST)).and_then(|t| toml::from_str::<toml::Table>(t).ok());
+        let project = table.as_ref().and_then(|t| t.get("project"));
+        let folder = || snap.dir.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        let name = project.and_then(|p| p.get("name")).and_then(|n| n.as_str()).map_or_else(folder, str::to_string);
+        let rate = project.and_then(|p| p.get("sample_rate")).and_then(|r| r.as_integer()).and_then(|r| u32::try_from(r).ok());
+        let sample_rate = rate.filter(|r| (8_000..=384_000).contains(r)).unwrap_or(48_000);
+        let info = manifest::ProjectInfo { name, entry: "song.ts".into(), format: FORMAT, sample_rate };
+        Project {
+            dir: snap.dir.clone(),
+            manifest: Manifest { project: info, dependencies: BTreeMap::new() },
+            arrangement: Arrangement::default(),
+            code: BTreeMap::new(),
+            lanes: BTreeMap::new(),
+            sidecars: BTreeMap::new(),
+            binaries: BTreeMap::new(),
+            unknown: BTreeSet::new(),
+            unreadable: BTreeMap::new(),
+        }
     }
 
     pub fn entry(&self) -> PathBuf {

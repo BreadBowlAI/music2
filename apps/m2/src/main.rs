@@ -7,9 +7,9 @@ use std::time::Instant;
 use anyhow::{Context, Result, anyhow, bail};
 use m2_ir::{Diagnostic, FOp, Flat, Ir};
 use m2_runtime::{PackageSet, Renderer};
-use m2_session::{Compiled, Session, render};
-use m2_song::diag::Op;
-use m2_song::{AudioClip, DataPath, Key, LaneAddr, LaneData, LaneKind, Project};
+use m2_editor::{Gestures, render};
+use m2_session::{Compiled, Session};
+use m2_song::{AudioClip, DataPath, Key, LaneAddr, LaneData, LaneKind, Project, TxOp};
 
 const USAGE: &str = "m2: build, check and render music2 projects
 
@@ -39,6 +39,11 @@ USAGE:
                                          every declared control a call leaves out (inherited: its default)
   m2 set <project> <control> <value> [--expect V]
                                          change one, verified by the compiler (values in the control's units)
+  m2 automate <project> <control>        make a control's value the fallback of a new, empty control lane,
+                                         read where the value was, verified to sound the same
+  m2 label <project> <track> <name>      show a track, named by its key, as <name>: its track() call's
+                                         name, verified to change nothing that plays (its key as <name>
+                                         takes the name out)
   m2 cables <project>                    named signals a cable can start from, and the inputs cables reach
   m2 connect <project> <signal> <control>
                                          write a signal's name in place of a control's value, verified
@@ -54,13 +59,23 @@ USAGE:
                                          (data/kick data/kicks) or a plugin state
   m2 delete-data <project> <path>        delete data no lane or plugin reads: a lane file, a folder, a state
   m2 fix <project> <path> <fix>          apply a fix a problem offers (assign-clip-ids, repin-asset, …)
+  m2 tx <project> <tx.json | -> [--check] [--seen HASH]
+                                         a verified edit as Tx JSON: --check prints its delta, the delta's
+                                         hash and the diagnostics, writing nothing; without it, it is
+                                         committed (with --seen, only while its delta has that hash) and the
+                                         outcome printed as JSON; exit 1 when it isn't committed
   m2 plugins [clap:<id>]                 list installed CLAP plugins, or one plugin's ports
-  m2 plugin-state <project> <track>/<key> clap:<id> [--force]
+  m2 plugin-state <project> <track>/<key> clap:<id>
                                          save a plugin's default state to data/<track>/<key>.state, with the
-                                         .state.json sidecar that says which plugin wrote it
+                                         .state.json sidecar that says which plugin wrote it, as one edit
+                                         (replacing a state that is there, which undo puts back)
 
 Every command that reads a project prints what needs attention in it, such as data no lane reads,
 with the commands that fix it.
+
+One program writes a project at a time (its lock is .music2/lock): while the app has it open, a
+command that writes it stops before changing anything and names the app. Reading, rendering and
+bounce without --place work all the same.
 
 std, the templates and the examples are found at $M2_STD, $M2_TEMPLATES and $M2_EXAMPLES, inside
 music2.app when m2 runs from there, or else in this source tree.
@@ -127,11 +142,17 @@ fn open(dir: &Path) -> Result<Project> {
     Project::open(dir).map_err(|d| report(d.into_iter().map(m2_session::diagnostic).collect()))
 }
 
-/// Compile a project, printing diagnostics on failure, and what needs attention on success.
+/// Compile a project, printing diagnostics on failure, and what needs attention on success. An
+/// interrupted commit is said either way, with its fixes, when the project's lock is free: it may
+/// be why the code doesn't compile (WRITE-16, the step 6 design's 6a.4).
 fn compile(dir: &Path, packages: &mut PackageSet) -> Result<(Project, Compiled)> {
     let project = open(dir)?;
-    let c = m2_session::compile(&project, packages).map_err(report)?;
-    attention(dir, &[package_problems(packages), c.problems.clone()].concat());
+    let journals = m2_session::journal_problems(dir);
+    let c = m2_session::compile(&project, packages).map_err(|d| {
+        attention(dir, &journals);
+        report(d)
+    })?;
+    attention(dir, &[journals, package_problems(packages), c.problems.clone()].concat());
     Ok((project, c))
 }
 
@@ -144,7 +165,52 @@ fn package_problems(packages: &PackageSet) -> Vec<m2_song::Diagnostic> {
 /// Open an editing session on a project, printing diagnostics on failure and what needs
 /// attention on success.
 fn session(dir: &Path) -> Result<Session> {
-    let s = Session::open(dir, packages()?).map_err(report)?;
+    let s = writer(dir)?;
+    attention(dir, s.problems());
+    Ok(s)
+}
+
+/// Open a project for writing (WRITE-17, WRITE-18): a command that can't take its lock fails
+/// before changing anything, naming the holder, and one whose code doesn't compile can't be
+/// edited from here.
+fn writer(dir: &Path) -> Result<Session> {
+    writer_saying(dir, "")
+}
+
+/// [`writer`], whose refusal adds `also` to WRITE-18's message.
+fn writer_saying(dir: &Path, also: &str) -> Result<Session> {
+    let s = locked(dir, also)?;
+    if !s.accepted().has_code() {
+        return Err(broken(dir, &s));
+    }
+    Ok(s)
+}
+
+/// Open a project for writing, whether its code compiles or not: what recovery needs, which
+/// puts back recorded bytes whatever they compile to (P3, the step 6 design's 6.5).
+fn locked(dir: &Path, also: &str) -> Result<Session> {
+    let s = Session::open_as(dir, packages()?, "m2").map_err(report)?;
+    if let Some(r) = s.access().refusal() {
+        bail!("{}{also}", r.message);
+    }
+    Ok(s)
+}
+
+/// Why a project whose code doesn't compile can't be read or edited from here: what needs
+/// attention first (an interrupted commit, with the commands that finish or discard it, may be
+/// why), then the code's errors.
+fn broken(dir: &Path, s: &Session) -> anyhow::Error {
+    attention(dir, s.problems());
+    report(s.draft_errors.clone())
+}
+
+/// Open a project to read it: a reading command never takes the lock (WRITE-18), but reports an
+/// interrupted commit when the lock is free.
+fn reader(dir: &Path) -> Result<Session> {
+    let s = Session::open_read_only(dir, packages()?).map_err(report)?;
+    if !s.accepted().has_code() {
+        return Err(broken(dir, &s));
+    }
     attention(dir, s.problems());
     Ok(s)
 }
@@ -162,8 +228,11 @@ fn attention(dir: &Path, problems: &[m2_song::Diagnostic]) {
         eprintln!("{severity}: {d}");
         let src = quote(d.src.as_deref().unwrap_or_default());
         for fix in &d.fixes {
-            match (fix.code, fix.edit.ops.first()) {
-                ("relink", Some(Op::Rename { from, to })) => eprintln!("  move it:   m2 relink {dir} {} {}", quote(from), quote(to)),
+            // Each fix is a Tx (DIAG-1); its first op says which command applies it.
+            match (fix.code, fix.tx.ops.first()) {
+                ("relink", Some(TxOp::Rename { from, to })) => {
+                    eprintln!("  move it:   m2 relink {dir} {} {}", quote(from.as_str()), quote(to.as_str()))
+                }
                 ("delete-data", _) => eprintln!("  delete it: m2 delete-data {dir} {src}"),
                 (code, _) => eprintln!("  fix it:    m2 fix {dir} {src} {code}   ({})", fix.title),
             }
@@ -275,10 +344,8 @@ fn run() -> Result<()> {
                 // The same render as the app's Export Audio, so both write the same file.
                 None => render::Render::new(&c.flat, &c.data, &pk, sr, from, length)?,
             };
-            if !r.exact() {
-                render::refuse_in_assets(&dir, &out)?;
-            }
-            let r = r.write(&out, |_| {})?;
+            // Into the project's assets/ only exactly, and only as a new file (RENDER-5, WRITE-1).
+            let r = r.write_for(&dir, &out, |_| {})?;
             let took = t.elapsed().as_secs_f64();
             if r.non_finite > 0 {
                 eprintln!("warning: {} samples were not numbers (NaN or infinite) and were silenced, as the app plays them", r.non_finite);
@@ -334,6 +401,16 @@ fn run() -> Result<()> {
             // Everything --place needs is checked before anything is written, so a mistake there
             // leaves no asset behind to block the retry (FMT-14: assets are never replaced).
             let place = flag(&args, "--place").map(|p| Place::parse(&p, &ir, &project)).transpose()?;
+            // Placing it is a Tx on a lane file, so the lock is taken (a writer session) before
+            // anything is rendered (WRITE-18); a bounce alone only creates new assets, and needs
+            // none.
+            let mut placer = match &place {
+                Some(p) => Some(writer_saying(&project.dir, &format!(
+                    "\nThe clip goes on {}: add it by writing that file directly, or bounce without --place.",
+                    m2_song::path::slashed(&p.rel)
+                ))?),
+                None => None,
+            };
             let mut bounced = ir.root.clone();
             if let Some(track) = flag(&args, "--track") {
                 // A track is named by its key, never its label (ID-11).
@@ -410,14 +487,14 @@ fn run() -> Result<()> {
             }
             let impure = if impure { " (includes plugins: not reproducible)" } else { "" };
             println!("bounced {}/{} ({seconds:.2}s) to {}{impure}", bounced.module, bounced.export, path.display());
-            if let Some(place) = place {
+            if let (Some(place), Some(session)) = (place, placer.as_mut()) {
                 let length = tempo.beat_at(tempo.seconds_at(place.beat) + seconds) - place.beat;
                 let hash = m2_song::Sha::of_file(&path)?.pin();
-                place.put(&project, &asset, hash, length)?;
+                place.put(session, &asset, hash, length)?;
             }
         }
         Some("graph") => {
-            let s = session(Path::new(&arg(1)?))?;
+            let s = reader(Path::new(&arg(1)?))?;
             let v = s.view();
             if args.iter().any(|a| a == "--json") {
                 println!("{}", serde_json::to_string_pretty(&v)?);
@@ -445,7 +522,7 @@ fn run() -> Result<()> {
             }
         }
         Some("controls") => {
-            let s = session(Path::new(&arg(1)?))?;
+            let s = reader(Path::new(&arg(1)?))?;
             println!("revision {}", s.accepted().number);
             for c in s.controls() {
                 let unit = c.unit.map_or("number".to_string(), |u| u.name().to_string());
@@ -465,8 +542,29 @@ fn run() -> Result<()> {
             let c = s.set(at, &id, value, expect).map_err(|e| anyhow!("{e}"))?;
             println!("{}: `{}` → `{}` (revision {}, verified in {:.0} ms)", c.file, c.before, c.after, c.revision, t.elapsed().as_secs_f64() * 1000.0);
         }
+        Some("automate") => {
+            let mut s = session(Path::new(&arg(1)?))?;
+            let t = Instant::now();
+            let at = s.accepted().number;
+            let a = s.automate(at, &arg(2)?).map_err(|e| anyhow!("{e}"))?;
+            let (e, ms) = (&a.edited, t.elapsed().as_secs_f64() * 1000.0);
+            println!(
+                "{}: `{}` → `{}`, in the new lane {} (revision {}, verified in {ms:.0} ms)",
+                e.file, e.before, e.after, a.lane, e.revision
+            );
+        }
+        Some("label") => {
+            let mut s = session(Path::new(&arg(1)?))?;
+            let t = Instant::now();
+            let e = s.rename_label(&arg(2)?, &arg(3)?).map_err(|e| anyhow!("{e}"))?;
+            let ms = t.elapsed().as_secs_f64() * 1000.0;
+            match e.before == e.after {
+                true => println!("{}: already shown as {}; nothing to write", arg(2)?, e.after),
+                false => println!("{}: {} → {} (revision {}, verified in {ms:.0} ms)", e.file, e.before, e.after, e.revision),
+            }
+        }
         Some("cables") => {
-            let s = session(Path::new(&arg(1)?))?;
+            let s = reader(Path::new(&arg(1)?))?;
             println!("revision {}", s.accepted().number);
             for o in s.outlets() {
                 println!("signal {:30} {:16} {}  {}:{}", o.id, o.name, o.module, o.file, o.line);
@@ -476,7 +574,7 @@ fn run() -> Result<()> {
             }
         }
         Some("effects") => {
-            let s = session(Path::new(&arg(1)?))?;
+            let s = reader(Path::new(&arg(1)?))?;
             println!("revision {}", s.accepted().number);
             for e in s.effects() {
                 println!("effect {:18} {:14} {:16} {}", e.component, e.label, e.category, e.description);
@@ -522,19 +620,24 @@ fn run() -> Result<()> {
         Some(command @ ("relink" | "delete-data" | "fix")) => {
             // What needs attention is printed after: the fix may have settled it.
             let dir = PathBuf::from(arg(1)?);
-            let mut s = Session::open(&dir, packages()?).map_err(report)?;
+            // A fix opens whatever the code says: finishing or discarding an interrupted commit
+            // needs none that compiles, and may be what makes it compile again (P3).
+            let mut s = if command == "fix" { locked(&dir, "")? } else { writer(&dir)? };
             let t = Instant::now();
             let (at, file) = (s.accepted().number, in_project(&dir, &arg(2)?));
             let e = match command {
                 "relink" => s.relink(at, &file, &in_project(&dir, &arg(3)?)),
                 "delete-data" => s.delete_data(at, &file),
                 _ => {
+                    // Applying a fix is committing its Tx (DIAG-1).
                     let code = arg(3)?;
                     let src = m2_song::path::slashed(&file);
                     let offered = s.problems().iter().filter(|d| d.src.as_deref() == Some(src.as_str())).flat_map(|d| &d.fixes);
-                    match offered.into_iter().find(|f| f.code == code) {
-                        Some(f) => s.fix(at, f.code, &serde_json::to_value(&f.edit)?),
-                        None => Err(m2_session::EditError::NotFound(format!("a `{code}` fix for {src}"))),
+                    let recovery = |f: &m2_song::Fix| matches!(f.tx.expect, m2_song::Expect::Journal(_));
+                    match offered.into_iter().find(|f| f.code == code).cloned() {
+                        Some(f) if s.accepted().has_code() || recovery(&f) => s.apply_fix(&f),
+                        _ if !s.accepted().has_code() => return Err(broken(&dir, &s)),
+                        _ => Err(m2_editor::EditError::NotFound(format!("a `{code}` fix for {src}"))),
                     }
                 }
             };
@@ -578,7 +681,11 @@ fn run() -> Result<()> {
             }
         },
         Some("plugin-state") => {
-            let project = open(Path::new(&arg(1)?))?;
+            if args.iter().any(|a| a == "--force") {
+                bail!("--force is gone: saving a plugin's state replaces what is there as one edit, which undo puts back (WRITE-1)");
+            }
+            let dir = PathBuf::from(arg(1)?);
+            let mut s = writer(&dir)?;
             let keys: Vec<Key> = arg(2)?.split('/').map(Key::new).collect::<Result<_, _>>().map_err(|e| anyhow!("{e}"))?;
             let [module, path @ ..] = &keys[..] else { unreachable!("split gives one at least") };
             if path.is_empty() {
@@ -586,26 +693,22 @@ fn run() -> Result<()> {
             }
             let id = arg(3)?;
             let clap_id = id.strip_prefix("clap:").ok_or_else(|| anyhow!("plugin ids start with `clap:`"))?;
-            let at = |sidecar| project.dir.join(DataPath::PluginState { module: module.clone(), path: path.to_vec(), sidecar }.path());
-            let (blob, sidecar) = (at(false), at(true));
-            if blob.exists() && !args.iter().any(|a| a == "--force") {
-                bail!("{} exists (pass --force to replace it)", blob.display());
-            }
             // Through the host (P11): created and activated on the plugin main thread, saved there,
             // and destroyed.
             let host = m2_plugins::host();
             let (h, info) = host.create(&m2_plugins::find(clap_id)?, None, &m2_plugins::Owner::discard())?;
-            let saved = host.activate(h, project.sample_rate(), 128).and_then(|_| host.save_state(h).recv()?.map_err(|e| anyhow!("{e}")));
+            let rate = s.accepted().project.sample_rate();
+            let saved = host.activate(h, rate, 128).and_then(|_| host.save_state(h).recv()?.map_err(|e| anyhow!("{e}")));
             host.destroy(h);
             let bytes = saved?.bytes;
-            // The blob and the sidecar that says which plugin wrote it, always together (FMT-17).
+            let n = bytes.len();
+            // The blob and the sidecar that says which plugin wrote it, together, as one Tx (FMT-17).
             let side = m2_song::Sidecar { plugin: id.clone(), plugin_version: info.found.version.clone() };
-            std::fs::create_dir_all(blob.parent().expect("has a parent"))?;
-            std::fs::write(&blob, &bytes)?;
-            std::fs::write(&sidecar, side.canonical())?;
-            println!("saved {} bytes of {} state to {}", bytes.len(), info.found.name, blob.display());
-            attention_if_it_compiles(&project.dir);
+            let e = m2_editor::data::plugin_state(&mut s, module, path, bytes, &side).map_err(|e| anyhow!("{e}"))?;
+            println!("saved {n} bytes of {} state to {} (revision {})", info.found.name, e.file, e.revision);
+            attention(&dir, s.problems());
         }
+        Some("tx") => tx(&args)?,
         _ => print!("{USAGE}"),
     }
     Ok(())
@@ -665,28 +768,11 @@ impl Place {
         Ok(Place { addr, beat, rel, was })
     }
 
-    /// Add a clip of `asset` to the lane file, if it still holds what it did when checked.
-    fn put(&self, project: &Project, asset: &m2_song::AssetName, hash: String, length: f64) -> Result<()> {
-        let lane_file = project.dir.join(&self.rel);
-        let now = std::fs::read_to_string(&lane_file).ok();
-        if now != self.was {
-            bail!("{} changed while bouncing; place the clip on it by hand", self.rel.display());
-        }
-        let mut clips = match &now {
-            Some(t) => match LaneData::read(t, &LaneKind::Audio) {
-                Ok(LaneData::Audio(c)) => c,
-                _ => bail!("{} isn't an audio lane's data; place the clip by hand", self.rel.display()),
-            },
-            None => vec![],
-        };
-        // A clip id as the CLI derives it (FMT-11), and the asset's pin (FMT-15).
-        let tx = format!("bounce-{}", m2_song::Sha::of(asset.as_str().as_bytes()).pin());
-        let id = (0..)
-            .map(|n| m2_song::ClipId::derive(&tx, &self.addr, n))
-            .find(|id| !clips.iter().any(|c| c.id.as_deref() == Some(id)))
-            .expect("an id is free");
-        clips.push(AudioClip {
-            id: Some(id),
+    /// Add a clip of `asset` to the lane, as one Tx on the lane file as it was when checked: a
+    /// lane changed while bouncing is a conflict, and the asset stays (WRITE-1).
+    fn put(&self, s: &mut Session, asset: &m2_song::AssetName, hash: String, length: f64) -> Result<()> {
+        let clip = AudioClip {
+            id: None,
             other_id: None,
             start: self.beat,
             length: (length * 1e6).round() / 1e6,
@@ -699,11 +785,76 @@ impl Place {
             reverse: false,
             pitch: 0.0,
             warp: vec![],
-        });
-        std::fs::create_dir_all(lane_file.parent().expect("has a parent"))?;
-        std::fs::write(&lane_file, m2_song::canonical(&LaneData::Audio(clips)))?;
+        };
+        m2_editor::data::place_clip(s, &self.addr, self.was.as_deref(), clip).map_err(|e| {
+            anyhow!("{e}; {asset} is bounced, place it on {} by hand", self.rel.display())
+        })?;
         println!("placed it on {}.{} at beat {} ({})", self.addr.module, self.addr.lane, self.beat, self.rel.display());
         Ok(())
+    }
+}
+
+/// `m2 tx <project> <tx.json | -> [--check] [--seen HASH]` (WRITE-11): a Tx as agents write it.
+/// A check opens the project read-only and writes nothing; a commit takes the lock (WRITE-18).
+/// Bases given by hash alone carry their text when this session or the disk has it, so the Tx
+/// has the same outcome in every process (WRITE-12).
+fn tx(args: &[String]) -> Result<()> {
+    let dir = PathBuf::from(args.get(1).context("m2 tx <project> <tx.json | -> [--check] [--seen HASH]")?);
+    let from = args.get(2).context("m2 tx <project> <tx.json | -> [--check] [--seen HASH]")?;
+    let text = match from.as_str() {
+        "-" => std::io::read_to_string(std::io::stdin())?,
+        file => std::fs::read_to_string(file).with_context(|| format!("reading {file}"))?,
+    };
+    // A Tx that doesn't read is rejected as any other refusal is, in JSON on stdout (the step 6
+    // design's 1.2: `tx.invalid`, or `tx.path` for a path WRITE-3a refuses).
+    let parsed = serde_json::from_str::<serde_json::Value>(&text)
+        .map_err(|e| vec![m2_song::Diagnostic::error("tx.invalid", format!("the Tx isn't JSON: {e}"))])
+        .and_then(|json| m2_song::Tx::from_json(&json));
+    let mut tx = match parsed {
+        Ok(tx) => tx,
+        Err(diagnostics) => {
+            let r = m2_session::Refusal::Rejected { diagnostics, unexpected: None };
+            println!("{}", serde_json::to_string_pretty(&m2_editor::json::refusal(&r))?);
+            bail!("nothing was changed: {r}")
+        }
+    };
+    if let Some(h) = flag(args, "--seen") {
+        let hash = m2_song::Sha::parse_prefixed(&h).with_context(|| format!("--seen {h}: a hash is `sha256:` and 64 hex digits"))?;
+        tx.expect = m2_song::Expect::Seen(hash);
+    }
+    let check = args.iter().any(|a| a == "--check");
+    // Whatever the code says: the session refuses what needs it to compile, in JSON, and a
+    // recovery fix's Tx needs it not (P3).
+    let mut s = match check {
+        true => Session::open_read_only(&dir, packages()?).map_err(report)?,
+        false => locked(&dir, "")?,
+    };
+    for (p, base) in tx.base.iter_mut() {
+        if let m2_song::Base::Sha(sha) = base
+            && p.is_text()
+        {
+            let text = s.text(sha).map(|t| t.to_string()).or_else(|| {
+                std::fs::read_to_string(s.accepted().project.dir.join(p.path())).ok().filter(|t| m2_song::Sha::of(t.as_bytes()) == *sha)
+            });
+            if let Some(text) = text {
+                *base = m2_song::Base::text(&text);
+            }
+        }
+    }
+    let out = match check {
+        true => s.check(&tx).map(|c| m2_editor::json::checked(&c)),
+        false => s.commit(tx).map(|c| m2_editor::json::committed(&c)),
+    };
+    attention(&dir, s.problems());
+    match out {
+        Ok(v) => {
+            println!("{}", serde_json::to_string_pretty(&v)?);
+            Ok(())
+        }
+        Err(r) => {
+            println!("{}", serde_json::to_string_pretty(&m2_editor::json::refusal(&r))?);
+            bail!("nothing was changed: {r}")
+        }
     }
 }
 

@@ -19,9 +19,15 @@
 //!
 //! Every accepted revision reaches the engine the way its files say (PLANE-1,
 //! [`m2_session::plane`]): lane data that changed alone is swapped into the running renderer
-//! (RENDER-26), and anything else is built into a new renderer that takes over where the engine
-//! is, crossfaded, with no jump back (RENDER-25a). Nothing replays the song (RENDER-8). Edits made
-//! elsewhere (a text editor, an agent, git) are picked up by [`Graph::poll`] and take the same way.
+//! (RENDER-26), a value commit is written into its cells when the delta from what plays is values
+//! alone (WRITE-8), and anything else is built into a new renderer that takes over where the
+//! engine is, crossfaded, with no jump back (RENDER-25a). Nothing replays the song (RENDER-8).
+//! Edits made elsewhere (a text editor, an agent, git) are taken in by the watcher once they
+//! settle ([`Graph::watch`], WRITE-19), and take the same way.
+//!
+//! Every write is a Tx or a `save()` (P4): the gestures are `crates/editor`'s builders, an agent's
+//! Tx JSON is checked and committed as it comes ([`Graph::tx_check`], [`Graph::tx_commit`]), and
+//! the code editor's saves are the session's `save()`.
 //!
 //! Every change is announced with what needs attention in the revision it leaves (see
 //! [`Graph::news`]): its problems with their fixes (DIAG-1, DIAG-4), why the draft doesn't
@@ -32,6 +38,7 @@
 
 mod actor;
 pub mod lease;
+mod watcher;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -41,12 +48,12 @@ use std::sync::mpsc;
 use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
+use m2_editor::render::{Length, Render};
+use m2_editor::{Control, Gestures};
 use m2_play::Player;
 use m2_runtime::transport::frame_of;
 use m2_runtime::{Cmd, Transport};
-use m2_session::render::{Length, Render};
-use m2_session::{Control, NoteClip};
-use m2_song::TempoMap;
+use m2_song::{NoteClip, TempoMap};
 use parking_lot::Mutex;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -140,6 +147,8 @@ struct Shown {
     types: Arc<Value>,
     name: String,
     dir: PathBuf,
+    /// Why the session can't write, in WRITE-18's words (WRITE-17): None for the lock's holder.
+    read_only: Option<String>,
 }
 
 /// The open project as the control plane holds it.
@@ -218,6 +227,9 @@ struct Inner {
     /// Who creates this Graph's plugin instances: their events come to its actor alone, and their
     /// count is what closing waits on.
     owner: m2_plugins::Owner,
+    /// The open project's settle rule (WRITE-19): polled by the watcher, told by the actor what the
+    /// session wrote itself. A leaf lock, never held over a call to the actor.
+    watch: Mutex<Option<watcher::Watch>>,
 }
 
 /// How long closing waits for the session's plugin instances to be destroyed.
@@ -259,6 +271,15 @@ fn check_loop(t: &Timing, start: f64, end: f64) -> Result<()> {
     Ok(())
 }
 
+/// A Tx from its JSON (WRITE-3), or the answer to one that doesn't read: rejected, with its
+/// `tx.invalid` or `tx.path` diagnostics, as every other refusal is answered (the step 6 design's
+/// 1.2).
+fn parse_tx(v: &Value) -> Result<m2_song::Tx, (u16, Value)> {
+    m2_song::Tx::from_json(v).map_err(|diagnostics| {
+        (422, m2_editor::json::refusal(&m2_session::Refusal::Rejected { diagnostics, unexpected: None }))
+    })
+}
+
 /// Put a lease's code value back where its updates went: it ended without a commit.
 fn put_back(l: &Lease, device: Option<&Device>) {
     if let (Some(t), Some(d)) = (&l.engine, device)
@@ -282,6 +303,7 @@ impl Inner {
             last_edit: Mutex::default(),
             busy: Mutex::default(),
             notices: Mutex::default(),
+            watch: Mutex::default(),
         }
     }
 
@@ -553,6 +575,18 @@ impl Graph {
         *self.inner.last_edit.lock() =
             Some(EditTiming { requested_ns, compiled_ns: requested_ns, sent_ns, published_ns: sent_ns, seq: Some(seq) });
         Ok(())
+    }
+
+    /// The renderer the player plays, once it took everything sent: what tells a lane swap from a
+    /// new renderer, for the gates. None with no player.
+    #[doc(hidden)]
+    pub fn generation(&self) -> Option<u64> {
+        let p = self.inner.current_device()?.player;
+        let t = Instant::now();
+        while p.status().pending.is_some() && t.elapsed() < std::time::Duration::from_secs(2) {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        Some(p.status().generation)
     }
 
     /// When the last edit made here or the last seek reached the engine (see [`EditTiming`]).
@@ -940,39 +974,92 @@ impl Graph {
     }
 
     /// Move data no lane or plugin reads from `from` to `to`, project paths: a lane file, a
-    /// track's folder or a plugin state (see [`m2_session::Session::relink`]).
+    /// track's folder or a plugin state (see [`m2_editor::data::relink`]).
     pub fn relink(&self, token: u64, revision: u64, from: &str, to: &str) -> Result<Value> {
         let (from, to) = (PathBuf::from(from), PathBuf::from(to));
         self.edit(token, move |s| s.relink(revision, &from, &to))
     }
 
-    /// Delete data no lane or plugin reads (see [`m2_session::Session::delete_data`]); undo puts
-    /// it back.
+    /// Delete data no lane or plugin reads (see [`m2_editor::data::delete_data`]); undo puts it
+    /// back.
     pub fn delete_data(&self, token: u64, revision: u64, file: &str) -> Result<Value> {
         let file = PathBuf::from(file);
         self.edit(token, move |s| s.delete_data(revision, &file))
     }
 
-    /// Apply a fix a problem offers, named by its code and edit as the problem carried them
-    /// (see [`m2_session::Session::fix`]). Undo takes it back.
-    pub fn fix(&self, token: u64, revision: u64, code: &str, edit: &Value) -> Result<Value> {
-        let (code, edit) = (code.to_string(), edit.clone());
-        self.edit(token, move |s| s.fix(revision, &code, &edit))
+    /// Why the open project can't be written from here (WRITE-17, WRITE-18): another program holds
+    /// its lock, or its volume can't lock. None when it can, or none is open.
+    pub fn read_only(&self) -> Option<String> {
+        self.inner.control.lock().open.as_ref()?.shown.read_only.clone()
     }
 
-    /// Undo the last edit made through this session (knob or cable).
+    /// Try to take the open project's lock again (the read-only banner's Retry): when it is free,
+    /// the session can write. Answers with the state.
+    pub fn retry_lock(&self, token: u64) -> Result<Value> {
+        self.call(move |a| a.retry_lock(token))
+    }
+
+    /// Show a track, named by its key, as `label` (ID-10): its `track()` call's name, verified to
+    /// change nothing that plays. Undo takes it back.
+    pub fn label(&self, token: u64, module: &str, label: &str) -> Result<Value> {
+        let (module, label) = (module.to_string(), label.to_string());
+        self.edit(token, move |s| s.rename_label(&module, &label))
+    }
+
+    /// Automate a control, as named at `revision` (HOME-2): its value becomes the fallback of a
+    /// new, empty control lane read where it was. The song sounds the same; the answer names the
+    /// lane (`lane: {module, lane}`) and the knob (`name`).
+    pub fn automate(&self, token: u64, revision: u64, id: &str) -> Result<Value> {
+        let id = id.to_string();
+        self.call(move |a| {
+            a.edit_and(token, |s| {
+                let done = s.automate(revision, &id)?;
+                let lane = json!({"module": done.lane.module.as_str(), "lane": done.lane.lane.as_str()});
+                Ok((done.edited, json!({"lane": lane, "name": done.name})))
+            })
+        })
+    }
+
+    /// Apply a fix a problem offers, as the problem carried it (`{code, title, likely, tx}`):
+    /// committing its Tx (DIAG-1), which its bases guard. Undo takes it back.
+    pub fn fix(&self, token: u64, fix: &Value) -> Result<Value> {
+        let tx = m2_song::Tx::from_json(fix.get("tx").context("a fix carries its Tx")?)
+            .map_err(|d| anyhow!("{}", d.iter().map(|d| d.message.clone()).collect::<Vec<_>>().join("; ")))?;
+        self.edit(token, move |s| m2_editor::data::apply_tx(s, tx))
+    }
+
+    /// Check an agent's Tx (WRITE-4, WRITE-11): its delta, the delta's hash and the
+    /// diagnostics, as `m2 tx --check` prints them; nothing is written. `token` names the open
+    /// project when given. The status says how it went: 200, or 409 for a conflict, 422 for a
+    /// rejection, 500 for a disk that failed.
+    pub fn tx_check(&self, token: Option<u64>, tx: &Value) -> Result<(u16, Value)> {
+        match parse_tx(tx) {
+            Ok(tx) => self.call(move |a| a.tx(token, tx, false)),
+            Err(answer) => Ok(answer),
+        }
+    }
+
+    /// Commit an agent's Tx (WRITE-5), and play what it made: one JSON shape with `m2 tx`.
+    pub fn tx_commit(&self, token: Option<u64>, tx: &Value) -> Result<(u16, Value)> {
+        match parse_tx(tx) {
+            Ok(tx) => self.call(move |a| a.tx(token, tx, true)),
+            Err(answer) => Ok(answer),
+        }
+    }
+
+    /// Undo the last edit made through this session: its stored inverse (WRITE-21).
     pub fn undo(&self, token: u64) -> Result<Value> {
-        self.edit(token, m2_session::Session::undo)
+        self.edit(token, m2_editor::undo)
     }
 
     pub fn redo(&self, token: u64) -> Result<Value> {
-        self.edit(token, m2_session::Session::redo)
+        self.edit(token, m2_editor::redo)
     }
 
     fn edit(
         &self,
         token: u64,
-        edit: impl FnOnce(&mut m2_session::Session) -> Result<m2_session::Edited, m2_session::EditError> + Send + 'static,
+        edit: impl FnOnce(&mut m2_session::Session) -> Result<m2_editor::Edited, m2_editor::EditError> + Send + 'static,
     ) -> Result<Value> {
         self.call(move |a| a.edit(token, edit))
     }
@@ -993,7 +1080,39 @@ impl Graph {
         Ok(())
     }
 
-    /// Pick up edits made outside the app. Returns whether clients should refresh.
+    /// One poll of the watcher (WRITE-19): a stat walk of the open project, fed to the settle
+    /// rule. A batch that settled (no tracked file changed for 150 ms, each the same on two polls,
+    /// git not writing) is read once and taken in whole. Returns whether clients should refresh.
+    /// The server's watcher calls it every 50 ms.
+    pub fn watch(&self) -> bool {
+        let ready = {
+            let mut w = self.inner.watch.lock();
+            let Some(w) = w.as_mut() else { return false };
+            let ready = w.poll().map(|paths| (w.token, paths));
+            if let Some(n) = w.notice.take() {
+                self.inner.notices.lock().push(n);
+            }
+            ready
+        };
+        let Some((token, paths)) = ready else { return false };
+        self.call(move |a| Ok(a.settled(token, paths))).unwrap_or_else(|e| {
+            eprintln!("music2: {e:#}");
+            false
+        })
+    }
+
+    /// Bring the engine up to the accepted revision when it is behind it (a renderer that didn't
+    /// build, a player that stopped responding), without reading the project. Returns whether
+    /// clients should refresh. The server's watcher calls it every 300 ms.
+    pub fn catch_up(&self) -> bool {
+        self.call(|a| Ok(a.catch_up())).unwrap_or_else(|e| {
+            eprintln!("music2: {e:#}");
+            false
+        })
+    }
+
+    /// Take in what the project's folder says now, at once, without the settle rule: tests, and
+    /// the gates that time a save from its write. Returns whether clients should refresh.
     pub fn poll(&self) -> bool {
         self.call(|a| Ok(a.poll())).unwrap_or_else(|e| {
             eprintln!("music2: {e:#}");

@@ -16,9 +16,10 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use m2_editor::Control;
 use m2_ir::Origin;
 use m2_runtime::{CellMap, CellSlots, CellTarget};
-use m2_session::{Control, Home};
+use m2_session::Home;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -56,7 +57,11 @@ impl PartialEq for Target {
 
 impl std::fmt::Debug for Target {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("Target").field("epoch", &self.epoch).field("generation", &self.generation).field("cells", &self.cells.cells).finish()
+        f.debug_struct("Target")
+            .field("epoch", &self.epoch)
+            .field("generation", &self.generation)
+            .field("cells", &self.cells.cells)
+            .finish()
     }
 }
 

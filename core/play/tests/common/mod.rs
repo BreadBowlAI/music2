@@ -76,7 +76,7 @@ pub fn compile(dir: PathBuf) -> Song {
     let project = Project::open(&dir).unwrap_or_else(|d| panic!("{d:?}"));
     let mut packages = std_packages();
     let c = m2_session::compile(&project, &mut packages).unwrap_or_else(|d| panic!("{d:?}"));
-    Song { flat: c.flat, data: c.data, packages, rate: project.sample_rate(), dir }
+    Song { flat: c.flat.clone(), data: c.data, packages, rate: project.sample_rate(), dir }
 }
 
 /// A copy of the repo's fixture `rel`, compiled.

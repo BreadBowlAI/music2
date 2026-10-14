@@ -61,9 +61,42 @@ impl Sha {
         self.hex()[..16].to_string()
     }
 
-    fn parse(hex: &str) -> Option<Sha> {
+    /// All 64 hex digits, lowercase, back to a hash.
+    pub fn parse(hex: &str) -> Option<Sha> {
+        if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+            return None;
+        }
         let bytes: Vec<u8> = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok()).collect::<Option<_>>()?;
         Some(Sha(bytes.try_into().ok()?))
+    }
+
+    /// `sha256:<64 hex digits>`: how a Tx, a journal and a delta write a hash (WRITE-12).
+    pub fn prefixed(&self) -> String {
+        format!("sha256:{}", self.hex())
+    }
+
+    /// [`Sha::prefixed`]'s form back to a hash.
+    pub fn parse_prefixed(s: &str) -> Option<Sha> {
+        Sha::parse(s.strip_prefix("sha256:")?)
+    }
+}
+
+impl fmt::Display for Sha {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.prefixed())
+    }
+}
+
+impl Serialize for Sha {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.prefixed())
+    }
+}
+
+impl<'de> Deserialize<'de> for Sha {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Sha, D::Error> {
+        let s = String::deserialize(d)?;
+        Sha::parse_prefixed(&s).ok_or_else(|| serde::de::Error::custom(format!("`{s}` is not `sha256:` and 64 lowercase hex digits")))
     }
 }
 
@@ -216,6 +249,12 @@ mod tests {
         assert_eq!(sha.pin(), "ba7816bf8f01cfea");
         assert_eq!(Sha::parse(&sha.hex()), Some(sha));
         assert_eq!(Sha::parse("ba78"), None);
+        assert_eq!(Sha::parse(&sha.hex().to_uppercase()), None, "one spelling");
+        assert_eq!(sha.prefixed(), format!("sha256:{}", sha.hex()));
+        assert_eq!(Sha::parse_prefixed(&sha.prefixed()), Some(sha));
+        assert_eq!(Sha::parse_prefixed(&sha.hex()), None);
+        assert_eq!(serde_json::to_string(&sha).unwrap(), format!("\"{}\"", sha.prefixed()));
+        assert_eq!(serde_json::from_str::<Sha>(&format!("\"{}\"", sha.prefixed())).unwrap(), sha);
     }
 
     // FMT-16: an unchanged, verified file is not read again; a changed one is.

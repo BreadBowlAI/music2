@@ -23,11 +23,13 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 - Every control of an instrument or effect that isn't connected to a signal is a knob, even one the code leaves out: `bass(notes)` shows its `drive` at the default, in italics, and turning it writes `{ drive: … }` into the call. Each knob turns through the range the instrument or effect declares, and a double-click puts it back at its default.
 - Connect cables inside one file, and add or remove 17 effects from a searchable browser. An effect is known by what it is, not by its name in the code: `import { delay as echo }` is still the Delay.
 - Write your own instruments and effects in TypeScript, with knobs, defaults and ranges, the way std's are written ([Your own components](../README.md#your-own-components)).
-- Edit the code in the app, with type checks. When the code breaks, the last working version keeps playing.
-- Undo and redo every edit made in the app.
-- Rename a track's label (`track("kick", { name: "Big Kick" }, …)`) without moving or silencing anything: data is filed under the track's key.
+- Edit the code in the app, with type checks. When the code breaks, the last working version keeps playing. A song whose code doesn't compile when it's opened still opens, in its code, and plays once a save makes it compile.
+- Undo and redo every edit made in the app. An edit is refused, rather than written, when it would change anything but what it says, and an undo is refused only when what it puts back was changed since.
+- Rename a track's label without moving or silencing anything: double-click its name in the timeline (or the graph's title), or write `track("kick", { name: "Big Kick" }, …)`. Data is filed under the track's key.
+- Automate a knob: right-click it, **Automate**. It gets an automation lane of its own, which plays the knob's old value until it has points (drawing them is #14).
 - See what needs attention. When a track's or a lane's key is renamed in code, its notes or automation stop playing; a **Needs attention** strip above the timeline says so in plain words, and offers to move the data where it belongs now (a renamed track's whole folder in one click), or to delete it. Undo takes either back. The strip also lists a data file that doesn't read (its lane keeps playing what it had), clips without ids, and a missing sample or plugin, each with its code and fixes. Every `m2` command that opens the song prints the same, with the commands that fix it (`m2 relink`, `m2 delete-data`, `m2 fix`).
-- Edit the files in any other editor or from a script. The app picks the change up within about 300 ms.
+- Edit the files in any other editor, from a script or with git. The app takes a change in once it has settled (no file changed for 150 ms), so a file caught half-written never plays and a lane never plays empty. Agents can also send checked edits (Tx) over HTTP or with `m2 tx`, written as one undo step.
+- One program writes a song at a time: `m2` commands that write a song the app has open stop without changing anything, and a second window opens it read-only, with Retry. An edit cut off by a crash is offered back as Finish or Discard when the song opens next.
 - Export the song as a WAV file (the Export button, or File → Export Audio…, ⌘E), then Show in Finder. Files go in `~/Music/music2/Exports` unless you pick another place. It's the same file `m2 render` writes. Quitting during an export asks first.
 - From the command line (`m2`): make a new song, render a WAV, bounce a track to audio, and make the same edits as the app.
 - Build `music2.app` and move it anywhere: std, the templates and the examples are inside it, so it no longer needs the source folder it was built from. It's signed ad hoc but not notarized, so on another Mac it opens only after **Open Anyway** in System Settings → Privacy & Security (and only on Apple silicon).
@@ -73,7 +75,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
 | 1 | **Add a track without code.** Pick an instrument (bass, keys, drums…) and music2 writes `tracks/<name>.ts`, imports it in `song.ts`, adds a mixer channel and an empty notes lane, as one checked edit you can undo. Also swap a track's instrument later. | Every track is hand-written TypeScript today, and the app's code editor can't even create a new file. This is the biggest wall for a beginner. | Yes | medium |
-| 10 | **Rename, delete, reorder and recolour tracks** from the timeline. | Keeping a song tidy. Today it's code only: change the label (`{ name: "…" }`) or the key in `track()`, delete the file, edit `song.ts`. A label change moves nothing. After a key change in code, **Needs attention** offers to move the track's data folder to its new key. | Yes | medium |
+| 10 | **Rename a track's key, delete, reorder and recolour tracks** from the timeline. | Keeping a song tidy. A track's label (the name shown) can be changed in the app by double-clicking it; everything else is code only: change the key in `track()`, delete the file, edit `song.ts`. After a key change in code, **Needs attention** offers to move the track's whole data folder to its new key. | Yes | medium |
 
 ### Sounds
 
@@ -126,7 +128,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 14 | **Draw automation**: click and drag points on automation lanes in the timeline. The session's lane writer (`core/session/src/lanes.rs`) takes only notes lanes today, so it needs a write for automation lanes. Then "Automate this knob", which makes the lane and the cable. | Filter sweeps, fades and build-ups are everywhere in pop. Today automation lanes can only be looked at in the app, and are edited by hand in JSON. | Yes | medium |
+| 14 | **Draw automation**: click and drag points on automation lanes in the timeline. The editor's lane writer (`crates/editor/src/notes.rs`) takes only notes lanes today, so it needs a write for automation lanes (a `Clips` Tx on a control lane needs nothing new in core). "Automate" on a knob's menu already makes the lane and reads the knob from it. | Filter sweeps, fades and build-ups are everywhere in pop. Today automation lanes can only be looked at in the app, and their points are written by hand in JSON. | Yes | medium |
 
 ### Audio
 
@@ -154,7 +156,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
 | 29 | **Undo that survives closing the app**, and readable undo messages, such as "Undid: Hats pan" instead of "Undid: song.ts 0.5 → 0.2". | Closing the app loses all undo, and today's undo messages are technical. | Partly (readable messages; its undo was lost on closing too) | medium |
-| 30 | **Crash safety**: keep unsaved code-editor text through a crash, run CLAP plugins in a separate process so a crashing plugin can't take the app down, and simple project snapshots or backups. | Edits are on disk at once, which is good. But a plugin crash closes the whole app, and unsaved code is lost. | No | large |
+| 30 | **Crash safety**: keep unsaved code-editor text through a crash, run CLAP plugins in a separate process so a crashing plugin can't take the app down, and simple project snapshots or backups. | Edits are on disk at once, and an edit cut off by a crash is offered back as Finish or Discard, so no file is left half written. But a plugin crash closes the whole app, and unsaved code is lost. | No | large |
 
 ### Settings
 
@@ -186,7 +188,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
 | 37 | **CLI basics**: `m2 import <wav>`, `m2 tempo` and `m2 add-track`. | Scripts and agents need the same basics as the app. Each is small once the matching session edit exists. | Yes (in `music2-cli`) | small |
-| 38 | **A self-describing API**: every `/api/graph` operation listed with a JSON Schema, a short summary of the song, several edits as one undo step, and MCP. (Export over HTTP is there: `POST /api/graph/export`.) | The old command API let Claude Code drive the app. The new routes work, but an agent has to read the source code to learn them. | Yes | medium |
+| 38 | **A self-describing API**: every `/api/graph` operation listed with a JSON Schema, a short summary of the song, and MCP. (Export over HTTP is there: `POST /api/graph/export`; so are checked edits of any files as one undo step: `POST /api/tx/check` and `/api/tx/commit`.) | The old command API let Claude Code drive the app. The new routes work, but an agent has to read the README or the source code to learn them, and a Tx's JSON by the [architecture contract](architecture.md#the-two-write-primitives). | Yes | medium |
 
 ## Never in either version
 
@@ -195,10 +197,14 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 ## Loose ends
 
 - **Undo messages are technical** (#29).
-- **A knob let go while the code doesn't compile** keeps playing its new value, and is written into the code once the code compiles again; after 30 seconds it is dropped, with a message saying so. Writing it at once, beside the broken file, needs verified multi-file edits (step 6 of the [architecture](architecture.md#order-of-work)).
+- **A knob let go while the code doesn't compile** keeps playing its new value, and is written into the code once the code compiles again; after 30 seconds it is dropped, with a message saying so. Writing it at once, when the broken file is another one, is the owner's call (C21 of the step 6 design): the rule today is that an edit of code waits for all the code to compile.
+- **A read-only song's controls still look editable.** While another program holds the song, a blue banner says so and every edit is refused with a message; the knobs, cables and the piano roll aren't greyed out yet.
+- **The code editor reloads a file an edit changed** rather than following the edit in place; unsaved text in it is kept, with the "changed on disk" choice.
+- **A file added to a renamed track's folder afterwards** (a Finder copy, a `notes.txt`) isn't noticed until something else changes: the strip still offers "Move all", and moving the folder is then refused, naming the file and saying to move it out or delete it. Added before the rename, the folder is offered file by file, and the problem names it.
+- **Two literals edited on neighbouring lines by another program** count as a change to the calls between them, so the song is rebuilt (crossfaded) rather than having its numbers written into what plays. A change a line or more apart from the next is written in place.
 - **A missing plugin reads technically**: ``no CLAP plugin `org.surge-synth-team.surge-xt` is installed (looked in [...])``. It no longer silences the song: only that plugin's node is silent, or passes its audio through ([FMT-18a](architecture.md#plugin-state-and-parameters)). Open an Example still names missing plugins plainly, from the example's `example.toml`, and refuses to copy the example (#11).
 - **An error in the browser console with no project open.** `GET /api/graph` answers 400 when nothing is open, which is how the window knows to show the start screen. The browser logs that request as an error even though nothing is wrong. Answering "no project" without an error status would be quieter.
-- **The puppeteer script** that [song-as-program.md](song-as-program.md) mentions for the headless UI test isn't in the repo, and puppeteer isn't in `web/package.json`.
+- **The browser suites** live in `e2e/` (puppeteer, with its own `package.json`), rebuilt after a reboot wiped their old scratch folder.
 
 ## Removed with the old version
 

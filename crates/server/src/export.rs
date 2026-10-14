@@ -1,7 +1,7 @@
 //! Export Audio: the open song rendered offline to a WAV file, on a thread of its own.
 //!
 //! It renders the accepted revision, which is what the app plays, with a renderer of its
-//! own, so playback and every other request carry on meanwhile. [`m2_session::render`] does
+//! own, so playback and every other request carry on meanwhile. [`m2_editor::render`] does
 //! the rendering, as it does for `m2 render`: both write the same file. One export runs at
 //! a time. Clients hear how it goes as `export` events, each naming the `song` and its
 //! project folder (`dir`): `progress` (0..1, at most ten a second), then `done` with the
@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use m2_session::render::Length;
+use m2_editor::render::Length;
 use parking_lot::Mutex;
 use serde_json::json;
 
@@ -88,10 +88,11 @@ fn new_file(song: &str) -> Result<PathBuf> {
     Ok(free_path(&dir, song))
 }
 
-/// Start exporting the open song to `path` (a file the user picked, replaced if it is
-/// there), or to a new file in the songs folder's `Exports`. Returns where it goes; the
-/// render runs on. A new file's name is settled when the render is done, so if another
-/// file took it meanwhile, the `done` event names the next free one.
+/// Start exporting the open song to `path` (a file the user picked, replaced if it is there,
+/// unless it is in the project's `assets/`, where it is only made new), or to a new file in the
+/// songs folder's `Exports`. Returns where it goes; the render runs on. A new file's name is
+/// settled when the render is done, so if another file took it meanwhile, the `done` event
+/// names the next free one.
 pub fn start(state: &Arc<AppState>, path: Option<PathBuf>) -> Result<PathBuf> {
     if state.exports.running.swap(true, Ordering::SeqCst) {
         bail!("A song is already being exported. Wait for it to finish, then try again.");
@@ -124,7 +125,8 @@ pub fn start(state: &Arc<AppState>, path: Option<PathBuf>) -> Result<PathBuf> {
             // A bug in the render mustn't leave every later export refused as "already running".
             let written = std::panic::catch_unwind(AssertUnwindSafe(|| match fresh {
                 Some(names) => render.write_new(names, progress),
-                None => render.write(&thread_path, progress).map(|r| (thread_path.clone(), r)),
+                // A file picked in the project's assets/ is made new, never written over (WRITE-1).
+                None => render.write_for(&dir, &thread_path, progress).map(|r| (thread_path.clone(), r)),
             }))
             .unwrap_or_else(|_| Err(anyhow!("music2 hit a bug while exporting")));
             // Free before saying so: a client may export again as soon as it hears.

@@ -70,6 +70,7 @@ Stop ends the notes, and echoes and reverb ring out as they would on a real inst
 - Click the ruler to move the playhead there. Drag across the ruler to loop those beats: playback goes round them until you turn the loop off with the loop button (it keeps the range for next time). With no loop set, the loop button loops the 4 bars from the playhead.
 - Double-click an empty spot in a notes lane to add a one-bar clip. Drag a clip to move it along its lane. Click a clip and press Delete to remove it.
 - Double-click a notes clip to edit its notes.
+- Double-click a track's name to rename it: type, then press Enter (or click away) to save, or Escape to cancel. This changes only the name the app shows (the track's label, written in its `track()` call); its key, its data and its sound stay as they are, and Undo takes it back.
 - Automation and audio clips are shown, but they can't be edited in the app yet. Tempo and time-signature changes appear on the ruler.
 
 ### The panel below the timeline
@@ -78,12 +79,14 @@ There's a tab for each module (one file's sound): one for each track file, and o
 
 - **Graph:** the module as boxes and knobs.
   - Drag a knob to hear it; let go to write the number into the code. Double-click a knob to put it back at its default (the middle of its range when its control declares no default).
+  - Right-click a knob for **Automate** and **Reset to default**. Automate gives the knob an automation lane of its own, under its track in the timeline: the code reads the knob from the lane (`pan: lane.control("hats-pan", "bipolar", 0.3)`), and the lane plays the old number until it has points, so nothing sounds different. Undo takes the lane out again. When a knob can't be automated (it's shared by several tracks, say), the item is greyed out and says why.
+  - Double-click the module's name at the top of the graph to rename the track, as in the timeline.
   - A knob whose number is in *italics* is a control the code leaves out, such as a bass's `drive` when the code says only `bass(notes)`: it plays the instrument's or effect's default. Turning it writes the number into the call (`bass(notes, { drive: 9 })`), and undo takes it out again.
   - A row that says **edit in code** is a value the app can't turn into a knob (see [Editing from the app](#editing-from-the-app)).
   - Cables: drag from a named output (the dot at the right edge of a box whose result has a `const` name in the code) onto a knob. The ✕ on a connected input disconnects it.
   - **+** on a box that makes sound opens the effect browser: 17 effects in seven groups (Filter, EQ, Dynamics, Distortion, Delay & Reverb, Modulation, Utility), as the effects themselves declare them. Type to search, then press Enter or click. The bin icon on an effect removes it.
   - Zoom with ⌘ and scroll, or pinch. The buttons at the bottom right zoom and fit the graph to the panel.
-- **Code:** the module's TypeScript, with type checks. The list on the left shows the song's files. ⌘-click a name to jump to where it's defined, even inside std (std's files open read-only). ⌘S (or the Save button) saves. When the code has an error, the last working version keeps playing, and a yellow banner offers **Show in code**.
+- **Code:** the module's TypeScript, with type checks. The list on the left shows the song's files. ⌘-click a name to jump to where it's defined, even inside std (std's files open read-only). ⌘S (or the Save button) saves. When the code has an error, the last working version keeps playing, and a yellow banner offers **Show in code**. A song whose code doesn't compile when you open it still opens: in its code, at the error, with nothing to show or play until a save makes it compile, and then it plays.
 - **Notes:** the open clip in a piano roll.
   - Pick a snap grid (1/4 to 1/32, or off). Click to draw a note, drag to move, drag the right edge to resize.
   - The strip at the bottom sets velocity (how hard each note is played).
@@ -109,9 +112,13 @@ There's a tab for each module (one file's sound): one for each track file, and o
 ## Saving and undo
 
 - There's no Save for the song: every change is written to the files at once. ⌘S only saves the code editor's text.
-- Undo (⌘Z) and redo (⇧⌘Z) cover knobs, cables, effects, notes and code saves. The history ends when you close the app.
-- Changes made in another editor, or by a script, show up within a moment.
-- Problems that don't stop the song, such as data no lane reads after a key was renamed in code, a data file that doesn't read, or a missing sample or plugin, are listed in a **Needs attention** strip above the timeline, each with its fixes. A fix runs only when you click it, and Undo takes it back.
+- Every edit made in the app is checked before it's written: the app works out what the change does to the song and refuses it if it would do anything else. An edit that touches several files (automating a knob writes its code and a new lane file) is written as one, all or nothing.
+- Undo (⌘Z) and redo (⇧⌘Z) cover knobs, cables, effects, notes, renames, automation, fixes and code saves. The history ends when you close the app. Undo is refused only when what it would put back has changed since (the same number, or the same clip, edited elsewhere); a change somewhere else in the file doesn't block it.
+- Changes made in another editor, or by a script or git, show up once the other program has stopped writing for a moment (150 milliseconds, so usually within a quarter of a second). A file caught half-written never plays: a lane keeps the notes it had until its file reads again, and a code change that doesn't compile yet holds back the data saved with it, so a lane never plays empty in between.
+- If another program changes a clip while you're editing it in the piano roll, your edit of that clip is refused, saying which clip, and the other program's version stays. Edits to different clips of one lane both stay.
+- One program writes a song at a time. While the app has a song open, `m2` commands that write it stop without changing anything and say so; ones that only read it, render it or bounce a track work. A song that's open for writing elsewhere (another music2 window, say) opens read-only, with a blue banner naming who has it: you can play it and see its changes, and **Retry** takes it over once it's free.
+- The lock and the edits being written live in the song's `.music2/` folder, which git ignores. If the app or the Mac stops in the middle of writing an edit, **Needs attention** says so when the song opens next, with **Finish** and **Discard**: either leaves every file as it was before the edit or after it, never half.
+- Problems that don't stop the song, such as data no lane reads after a key was renamed in code, a data file that doesn't read, or a missing sample or plugin, are listed in a **Needs attention** strip above the timeline, each with its fixes. A fix runs only when you click it, and Undo takes it back. When a track's key was renamed in code, **Move all to …** moves its whole data folder to the new key at once.
 
 ## Shortcuts
 
@@ -339,9 +346,11 @@ The code stays the source of truth; the app edits it for you, one small checked 
 - Computed values (`2 * 440`, a variable holding a plain number) and objects with spreads, getters or computed keys still work, but show **edit in code** instead of a knob.
 - A shared value such as `const cutoff = hz(800)` shows as one box wired to every place it's used. Turning it changes all of them.
 - Parentheses and comments around a number are kept.
-- Before writing anything, the app compiles the new code and checks that only the intended thing changed.
+- Before writing anything, the app compiles the new code and checks that only the intended thing changed: a knob changes only its number, a cable only what reads it, a rename nothing that plays.
 - While the code doesn't compile, the last working version keeps playing and the knobs are locked.
 - Cables inside one file, and adding or removing effects, also work. Cables between tracks, and adding or deleting other boxes, don't yet.
+- Renaming a track writes, changes or takes out the `name` in its `track()` call (a name equal to the key takes it out, since the label defaults to the key). A name written as a variable is left alone: the app says to change it there.
+- Automating a knob writes `lane.control("<key>", "<unit>", <the number as written>)` where the number was, adds `lane` to the track function's parameters when it isn't there (`() =>` becomes `({ lane }) =>`), and makes the empty lane file `data/<track>/<key>.json`. The key comes from the knob's name, such as `hats-pan`.
 
 ## Sounds and effects (std)
 
@@ -398,6 +407,8 @@ const synth = plugin("clap:org.surge-synth-team.surge-xt", { notes: lane.notes("
 | `m2 graph <song> [--json]` | The graph the app shows, as text. |
 | `m2 controls <song>` | Every number the app can turn into a knob, with its id, including the controls a call leaves out (`tracks/hats.ts#1/@decay`, marked inherited). |
 | `m2 set <song> <id> <value>` | Changes one, checked by the compiler. `--expect V` refuses unless it's V now. |
+| `m2 automate <song> <id>` | Gives a knob an automation lane of its own, as the app's Automate does: the knob's number becomes the lane's fallback, so the song sounds the same. |
+| `m2 label <song> <track> <name>` | Shows a track, named by its key, as `<name>`: only its `track()` call's name changes. |
 | `m2 cables <song>` | The named signals a cable can start from, and the inputs that cables reach. |
 | `m2 connect <song> <signal> <control>` | Writes a signal's name in place of a number. |
 | `m2 disconnect <song> <input>` | Writes the input's default back in place of the name. |
@@ -408,7 +419,10 @@ const synth = plugin("clap:org.surge-synth-team.surge-xt", { notes: lane.notes("
 | `m2 plugin-state <song> <track>/<key> clap:<id>` | Saves a plugin's default settings as its saved state. |
 | `m2 relink <song> <from> <to>` | Moves data no lane or plugin reads to where it's read now, after a key was renamed in code: a track's folder (`data/kick data/kicks`), a lane file (`data/kick/hits.json data/kick/beats.json`) or a plugin's state. |
 | `m2 delete-data <song> <path>` | Deletes data no lane or plugin reads. |
-| `m2 fix <song> <path> <fix>` | Applies a fix a problem offers, such as `assign-clip-ids` or `repin-asset`. Every command prints the problems it finds with the commands that fix them. |
+| `m2 fix <song> <path> <fix>` | Applies a fix a problem offers, such as `assign-clip-ids` or `repin-asset`, or `finish-tx` and `discard-tx` for an edit that was cut off (its path is `.music2/tx/<id>.json`). Every command prints the problems it finds with the commands that fix them. |
+| `m2 tx <song> <tx.json \| -> [--check] [--seen HASH]` | A checked edit written as Tx JSON (see [Scripts and agents](#scripts-and-agents)). `--check` prints what it would change and that change's hash, writing nothing; without it, it is written, and `--seen HASH` writes it only while it still makes the change with that hash. The answer is JSON; the exit status is 1 when nothing was written. |
+
+While the app has a song open, the commands that write it (`set`, `automate`, `label`, `connect`, `disconnect`, `add-effect`, `remove-effect`, `relink`, `delete-data`, `fix`, `tx`, `plugin-state` and `bounce --place`) stop at once, change nothing, and say which program has it. Make the edit in the app, or close the song there first. The other commands, and `bounce` without `--place` (it only makes a new file), work while it's open.
 
 Commands that change a song write into its folder, so try them on a copy, not on the examples:
 
@@ -438,11 +452,21 @@ body=$(curl -s -H "$H" $URL/api/graph | jq '{session, revision: .view.revision, 
 curl -s -H "$H" -H 'content-type: application/json' $URL/api/graph/set -d "$body"
 ```
 
-Edits name the open project's `session` and the `revision` they were planned against, so a stale edit is refused rather than landing on the wrong thing.
+Edits name the open project's `session` and the `revision` they were planned against, so a stale edit is refused rather than landing on the wrong thing. While the song is open read-only (another program holds it), every route that writes answers 423 with the reason, and changes nothing.
+
+An agent can also send any edit as a **Tx**: the files it reads, each with the hash (or the text) it was planned on, the changes, and what they may do to the song. The app checks it as it checks its own edits, writes it as one undo step, and refuses it if a file changed under it or the song would change in any other way ([WRITE-3](docs/architecture.md#the-two-write-primitives)). For example, deleting a data file no lane reads:
+
+```bash
+sha=$(shasum -a 256 data/kick/old.json | cut -d' ' -f1)       # in the song's folder
+tx='{"id": "tx-delete-old", "base": {"data/kick/old.json": "sha256:'$sha'"},
+     "ops": [{"op": "remove", "file": "data/kick/old.json"}], "expect": "identical"}'
+curl -s -H "$H" -H 'content-type: application/json' $URL/api/tx/check -d "{\"tx\": $tx}" | jq .checked.hash
+curl -s -H "$H" -H 'content-type: application/json' $URL/api/tx/commit -d "{\"tx\": $tx}"
+```
 
 | Route | What it does |
 |---|---|
-| `GET /api/graph` | The open song: name, folder, `session`, the graph view (with `revision` and every knob's id), the timeline, the effects, problems, where playback is, and the knob drags in progress (`leases`, each with its knob's id in that view) |
+| `GET /api/graph` | The open song: name, folder, `session`, the graph view (with `revision` and every knob's id), the timeline, the effects, problems, where playback is, and the knob drags in progress (`leases`, each with its knob's id in that view). `has_code` is false while the song opened with code that doesn't compile; `read_only` is null, or `{why, message, holder}` when another program holds the song |
 | `POST /api/graph/open` `{path}` | Open a song folder |
 | `POST /api/graph/close` | Close it |
 | `GET /api/graph/status` | Playing or not, seconds and beat, and the loop (`{start, end, on}` in beats, or null) |
@@ -457,6 +481,11 @@ Edits name the open project's `session` and the `revision` they were planned aga
 | `POST /api/graph/fix` `{session, revision, fix}` | Apply one of the fixes a problem in `problems` offers, as it was offered |
 | `POST /api/graph/relink` `{session, revision, from, to}` | Move data no lane or plugin reads (`data/kick` to `data/kicks`, or a lane file) |
 | `POST /api/graph/data/delete` `{session, revision, file}` | Delete data no lane or plugin reads |
+| `POST /api/graph/label` `{session, module, label}` | Rename a track's label (its key stays) |
+| `POST /api/graph/automate` `{session, revision, id}` | Give a knob an automation lane; answers with the `lane` it made |
+| `POST /api/tx/check` `{session?, tx}` | Check a Tx: `{checked: {delta, hash, diagnostics}}`, writing nothing (409 when a file it's based on changed, 422 when it would do something else) |
+| `POST /api/tx/commit` `{session?, tx}` | Write a Tx: `{committed: {revision, delta, hash, …}}`, or `{conflict}`, `{rejected}` or `{io}`. With `"expect": {"seen": hash}` it is written only while it makes the change its check showed |
+| `POST /api/graph/lock/retry` `{session}` | Try again to take a song that opened read-only; answers like `GET /api/graph` |
 | `POST /api/graph/undo`, `/api/graph/redo` `{session}` | Undo or redo |
 | `POST /api/graph/transport` `{action}` | `play`, `stop`, `toggle` or `restart` |
 | `POST /api/graph/seek` `{beat}` | Move the playhead: a jump at the next block, playing or not; nothing is rebuilt |
@@ -471,12 +500,13 @@ Edits name the open project's `session` and the `revision` they were planned aga
 
 `/api/ws` is a WebSocket with three events: `{"t":"toast","text":…}` for messages, `{"t":"graph"}` when the song changed and should be fetched again, and `{"t":"export",…}` while a song is exported, each with the `song`'s name and its folder (`dir`): `progress` (0 to 1, at most ten a second), then `done` with `path`, `seconds` and `peak_db`, or `error`. Toasts sent while nothing was connected, such as why the folder given at launch didn't open, go to the next client that connects.
 
-Or just edit the files: the app picks up the change within about 300 ms.
+Or just edit the files: the app takes the change in once it has settled (no file changed for 150 ms), usually within a quarter of a second.
 
 ## Building and testing
 
 - `cargo test --workspace` runs the tests.
 - To test the UI with no window and no sound: `M2_AUDIO=none cargo run -p m2-server --example headless -- <song-folder | -> <session.json> <token>`, then point a headless browser at the URL in the session file. `-` opens no song, for the start screen. Outside the app, the UI reads its token from `window.__M2__ = {native: false, token}`.
+- The browser suites are in `e2e/`: each drives the UI in headless Chrome against the headless server, on a fresh copy of a song (see `e2e/README.md`).
 - `std/build.sh` rebuilds std's kernels (it needs the `wasm32-unknown-unknown` Rust target). The built `std/kernels/std.wasm` is checked in.
 - `cargo run --release -p m2-runtime --example bench` compares WebAssembly and native speed.
 
@@ -489,7 +519,8 @@ Or just edit the files: the app picks up the change within about 300 ms.
 | `core/song` | The song folder (format 1): the manifest, `DataPath` (every project path), keys, lane and arrangement files in their canonical form, asset hashes, and the problems data can have |
 | `core/runtime` | Loads packages, runs kernels (wasmtime), `poly`, `feedback`, audio clips; the renderer |
 | `core/script` | Runs the TypeScript (oxc + QuickJS) and the `@m2/core` SDK |
-| `core/session` | Compiling, revisions, knobs, cables, effects, notes edits, undo, and the offline render that Export Audio and `m2 render` share |
+| `core/session` | Compiling, revisions, and the write path every edit takes: checking and writing Tx (the change a Tx makes to the graph, what it may change, the journal), the code editor's saves, taking in outside changes once they settle, the project lock, and undo. It knows no gesture |
+| `crates/editor` | Every gesture as a Tx: knobs and their ids, cables, effects, notes, relinks and fixes, renames, automate; the views the app shows; and the offline render that Export Audio and `m2 render` share |
 | `core/plugins` | CLAP plugin hosting |
 | `core/play` | Plays a renderer on the audio device |
 | `std/`, `std/kernels-src` | The standard package, and its kernels' Rust source |
@@ -499,6 +530,7 @@ Or just edit the files: the app picks up the change within about 300 ms.
 | `web/` | The UI: `StartScreen`, `NewSongDialog`, `GraphCanvas` (top bar and panel), `SongTimeline`, `NodeGraph`, `NoteView`, `CodeView`, `EffectBrowser` |
 | `templates/` | What new songs start from: `starter` and `empty`, each a whole song plus a `template.toml` (its name and description) |
 | `examples/` | `first-song`, `with-plugins` and `resample`, each with an `example.toml` for the start screen (and the plugins it needs) |
+| `e2e/` | The browser suites |
 | `docs/` | Design docs and the gap list |
 
 ## Design docs
@@ -506,5 +538,6 @@ Or just edit the files: the app picks up the change within about 300 ms.
 - [Song as a program](docs/song-as-program.md): the design of music2, and what's built so far.
 - [Code and graph editing design](docs/code-graph-editing-design.md): how the app edits code.
 - [Code and graph editing brief](docs/code-graph-editing-brief.md): the request that design answered (historical).
+- [Architecture contract](docs/architecture.md): the rules every part is built and reviewed against, and the order of work.
 - [What music2 can't do yet](docs/gaps.md): the gap list, most important first.
 - [Music basics](docs/music-basics.md): music for beginners.

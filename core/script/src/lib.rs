@@ -471,8 +471,20 @@ pub fn build(opts: &Options) -> Result<Ir, Vec<Diagnostic>> {
     build_full(opts).map(|b| b.ir)
 }
 
+/// How many times this thread has run a song's TypeScript ([`build_full`]): what shows that a
+/// lane edit took the data path, which never runs QuickJS (PLANE-1, WRITE-4). Per thread, so
+/// tests running side by side don't count each other's.
+pub fn builds() -> u64 {
+    BUILDS.with(|b| b.get())
+}
+
+thread_local! {
+    static BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 /// Like [`build`], also returning the call sites the IR's origins refer to.
 pub fn build_full(opts: &Options) -> Result<Build, Vec<Diagnostic>> {
+    BUILDS.with(|b| b.set(b.get() + 1));
     let err = |m: String| vec![Diagnostic::error("code.build", m)];
     if !opts.code.contains_key(&opts.entry) {
         return Err(err(format!("the entry `{}` is not a code file of the project", opts.entry)));
