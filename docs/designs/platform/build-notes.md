@@ -59,3 +59,40 @@ exactly §13.1's S1 row.
 A trial run just before (while this file was being written, so its "repo unchanged" failed) also saw two known
 flakes, each passing on its retry: `live3a` ("dragging across the ruler loops beats 4–12", HANDOFF's ruler-drag flake)
 and `notes-proj` (the file-then-revision race S2 fixes). Its logs: `~/m2-runs/check-build-S1-trial.tgz`.
+
+## S2. The browser suites
+
+**Built**
+
+| What | Where |
+|---|---|
+| The pinned Chrome for this OS (OS-73); `run.mjs` takes it from there | `e2e/chrome.mjs`, `e2e/run.mjs` |
+| Off the Mac, Chrome tells pages it is a Mac, so Monaco takes the Mac's keys (OS-75, Q2) | `e2e/chrome-as-mac.sh` (mode 755) |
+| `isMac` follows the platform a page is given (OS-74): the ⌘E tooltip in the browser suites | `web/src/lib/native.ts` |
+| A new song's folder name is taken in any capitals, on every OS (OS-41, Q1), with a unit test | `crates/server/src/project.rs` (`make()`, `a_name_taken_in_other_capitals_is_taken`) |
+| Wait for the revision to move before counting it (the file-then-revision race) | `e2e/notes.mjs:97`, `e2e/s6-fixes.mjs:112` |
+| How the browser is picked, in two sentences | `e2e/README.md` |
+
+The new unit test fails without the rule ("exports 2" is made beside "Exports 2") and passes with it. Before the full
+check, `run.mjs all` with no `E2E_CHROME` (so the new Linux default) gave 29 of 29 ok, 1,034 of 1,034 checks.
+
+**Deviations:** none. Left as the design has it: `create_at` (`m2 new <dir>`) still makes exactly the folder it is
+given, so on Linux it makes `exports 2` beside `Exports 2`. Q1's rule is for `make()`, New Song's numbering.
+
+**The check** at `c60372a` (`ci/check.sh`, 17 min, logs in `~/m2-runs/check-build-S2/`): exactly §13.1's S2 row.
+
+| Row | Result |
+|---|---|
+| toolchain, web build, build, app | PASS (the app as at S1: it can't host plugins yet, S5) |
+| rust tests | FAIL: the same 11 of §4.1 (10 tests, and the `main_thread` binary); 687 passed, one more than S1 (the new test) |
+| clippy | FAIL at its first lint, `core/plugins/src/main_thread.rs:217`. Without `-D warnings` it lists exactly §4.2's 15 lints. |
+| std kernels, mac lint | PASS |
+| std.wasm | FAIL: stale until S3; the repo untouched |
+| browser suites | PASS: 29 of 29, live3b in full with the plugins. One run passed on its retry, below. |
+| renders | FAIL: 6 of 8 (the two `examples-resample` renders, until S4) |
+| repo unchanged | PASS |
+
+The retry: `s4-meter-fix` crashed once reading `data/hats/hits.json` while the server saved it (`ENOENT`). That is the
+file that goes missing for a moment during each save on Linux until S6 (OS-03, `ground/e2e.md`), the race §13.1 names
+for live3a. Not this slice: S2 changes nothing on that path, the run passed 8 of 8 on its retry, and in the run before
+the check it passed too.
