@@ -86,9 +86,10 @@ export const SUITES = [
   ["s6-builders", "fix", { expect: 55 }],
   ["s6-write", "fix", { expect: 36 }],
   ["s6-fixes", "fix", { expect: 19 }],
-  ["taste", "fix", { expect: 32 }],
+  ["taste", "fix", { expect: 35 }],
   ["gestures", "fix", { expect: 30 }],
   ["g11-play", "fix", { expect: 24 }],
+  ["s8-tracks", "fix", { expect: 75 }],
 ];
 const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export"];
 

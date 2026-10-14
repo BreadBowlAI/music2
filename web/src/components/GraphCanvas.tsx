@@ -22,6 +22,7 @@ import Browser from "./Browser";
 import Dock from "./Dock";
 import SongTimeline from "./SongTimeline";
 import TopBar, { toggleLoop } from "./TopBar";
+import { TracksUi } from "./Tracks";
 
 /** The window's width, for what a small window drops (taste.md §3.8). */
 function useWindowWidth() {
@@ -193,6 +194,7 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
           <Dock graph={graph} module={module} />
         </div>
       </div>
+      <TracksUi graph={graph} />
     </div>
   );
 }

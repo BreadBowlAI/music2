@@ -35,7 +35,8 @@ await page.waitForSelector("[data-testid=graph] [data-module]");
 // Song's own row is pinned at the foot (taste.md §3.1).
 const { timeline } = await api("graph");
 const tracks = await page.$$eval("[data-testid=timeline] [data-track]", (els) => els.map((e) => e.dataset.track));
-check(JSON.stringify(tracks) === JSON.stringify(["bass", "hats", "keys", "kick", "song"]), `timeline tracks, then the Song: ${tracks}`);
+// In the mixer's order (D8: never alphabetical, nor the order song.ts imports them).
+check(JSON.stringify(tracks) === JSON.stringify(["kick", "hats", "bass", "keys", "song"]), `timeline tracks, then the Song: ${tracks}`);
 check(JSON.stringify(timeline.tracks.map((t) => t.module).filter((m) => m !== "song")) === JSON.stringify(tracks.slice(0, -1)), "in the server's order");
 // Automation folds under its track, folded at first (taste.md §3.4): unfold the bass's.
 const bassFolded = await page.$$eval('[data-track="bass"] [data-lane]', (els) => els.map((e) => e.dataset.lane));
@@ -59,9 +60,9 @@ for (const t of timeline.tracks)
 check(allMatch && total > 0, `clips per lane match GET /api/graph (${counts.join(", ")})`);
 check(!!(await page.$('[data-lane="bass.notes"] [data-clip] rect')) && !!(await page.$('[data-lane="bass.cutoff"] [data-clip] polyline')), "notes and the cutoff curve are drawn");
 
-// One module in the panel, the first track by default.
-check(JSON.stringify(await shown()) === JSON.stringify(["bass"]), `the panel shows only Bass at first: ${await shown()}`);
-check(JSON.stringify(await selectedTab()) === JSON.stringify(["bass"]) && JSON.stringify(await highlighted()) === JSON.stringify(["bass"]), "Bass's tab and rows are selected");
+// One module in the panel, the first track by default (the kick, first in the mixer).
+check(JSON.stringify(await shown()) === JSON.stringify(["kick"]), `the panel shows only Kick at first: ${await shown()}`);
+check(JSON.stringify(await selectedTab()) === JSON.stringify(["kick"]) && JSON.stringify(await highlighted()) === JSON.stringify(["kick"]), "Kick's tab and rows are selected");
 
 // Timeline → panel: clicking Keys' header selects it.
 await page.click('[data-track="keys"] [data-lane] > div:first-child');
@@ -121,7 +122,10 @@ check(await until(async () => !(await api("graph/status")).playing), "stopped");
 await page.click('button[aria-label="Back to start"]');
 check(await until(async () => (await playheadBeat()) === 0), "back to start puts the playhead at 0");
 
-// A knob drag in the panel still writes the code, and the selection stays.
+// A knob drag in the panel still writes the code, and the selection stays. The reload above
+// selected the first track again (the kick), so the bass is picked first.
+await page.click('[data-module-tab="bass"]');
+await page.waitForSelector('[data-module="bass"]');
 const bassTs = () => fs.readFileSync(`${proj}/tracks/bass.ts`, "utf8");
 const before = bassTs();
 const rev0 = (await api("graph")).view.revision;

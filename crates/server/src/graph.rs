@@ -318,6 +318,20 @@ struct Inner {
     wake: Arc<watcher::Wake>,
     /// Projects opened from now on are watched by walks alone, never events (the gates).
     walk_only: AtomicBool,
+    /// `layout.json`'s stamp as the watcher last saw it, by project token, and whether a change
+    /// waits to be published: no snapshot holds it (PLANE-3), so it is watched on its own.
+    layout: Mutex<LayoutSeen>,
+}
+
+/// A delete that waits: whether it is blocked, and the code that reads the track.
+type Waits = (bool, Vec<m2_editor::Dependent>);
+
+/// What the watcher last saw of `layout.json`.
+#[derive(Default)]
+struct LayoutSeen {
+    token: u64,
+    stamp: Option<(u64, std::time::SystemTime)>,
+    changed: bool,
 }
 
 /// How long closing waits for the session's plugin instances to be destroyed.
@@ -397,6 +411,7 @@ impl Inner {
             ticking: Mutex::default(),
             wake: Arc::default(),
             walk_only: AtomicBool::default(),
+            layout: Mutex::default(),
         }
     }
 
@@ -1160,6 +1175,72 @@ impl Graph {
         })
     }
 
+    /// Add a track playing instrument `component` (`std:pluck`), named `label` (else the
+    /// instrument's), keyed `key` (else proposed from the label), below track `after` (WRITE-10).
+    /// The answer names the track: `module` and `label`.
+    pub fn add_track(&self, token: u64, component: &str, label: Option<String>, key: Option<String>, after: Option<String>) -> Result<Value> {
+        let component = component.to_string();
+        self.call(move |a| {
+            a.edit_and(token, |s| {
+                let made = s.add_track(&component, label.as_deref(), key.as_deref(), after.as_deref())?;
+                Ok((made.edited, json!({"module": made.module, "label": made.label})))
+            })
+        })
+    }
+
+    /// Duplicate track `module`: its code, data and channel, below it in its colour.
+    pub fn duplicate_track(&self, token: u64, module: &str) -> Result<Value> {
+        let module = module.to_string();
+        self.call(move |a| {
+            a.edit_and(token, |s| {
+                let made = s.duplicate_track(&module)?;
+                Ok((made.edited, json!({"module": made.module, "label": made.label, "new_channel": made.new_channel})))
+            })
+        })
+    }
+
+    /// Delete track `module`. The status the route answers: 200 when done (with the calls taken
+    /// out with it), or 409 with the dependents when other code reads it: `blocked` when that can't
+    /// be taken out from here, else they go with `cascade`.
+    pub fn delete_track(&self, token: u64, module: &str, cascade: bool) -> Result<(u16, Value)> {
+        let module = module.to_string();
+        // What a delete that waits found, kept beside the edit, which wrote nothing.
+        let waits: Arc<Mutex<Option<Waits>>> = Arc::default();
+        let found = waits.clone();
+        let done = self.call(move |a| {
+            a.edit_and(token, |s| match s.delete_track(&module, cascade)? {
+                m2_editor::Deleted::Done { edited, excised } => Ok((edited, json!({"excised": excised}))),
+                m2_editor::Deleted::Asks(d) => {
+                    *found.lock() = Some((false, d));
+                    Err(m2_editor::EditError::Rejected("other tracks read it".into()))
+                }
+                m2_editor::Deleted::Blocked(d) => {
+                    *found.lock() = Some((true, d));
+                    Err(m2_editor::EditError::Rejected("other code reads it".into()))
+                }
+            })
+        });
+        if let Some((blocked, deps)) = waits.lock().take() {
+            let error = match blocked {
+                true => "other code reads this track in a way that can't be taken out from here: change it in code",
+                false => "other tracks read this track: delete again with cascade to take those reads out too",
+            };
+            return Ok((409, json!({"error": error, "blocked": blocked, "dependents": deps})));
+        }
+        done.map(|v| (200, v))
+    }
+
+    /// A layout write (FMT-19): the tracks' new `order`, one track's `colour`, or with `reset` the
+    /// defaults over a file that doesn't read. No revision (PLANE-3); one undo step.
+    pub fn layout(&self, token: u64, order: Option<Vec<String>>, colour: Option<(String, String)>, reset: bool) -> Result<Value> {
+        self.edit(token, move |s| match (order, colour, reset) {
+            (_, _, true) => m2_editor::layout::reset(s),
+            (Some(order), None, false) => s.reorder(&order),
+            (None, Some((module, colour)), false) => s.recolour(&module, &colour),
+            _ => Err(m2_editor::EditError::Rejected("a layout write is an order, a colour or a reset".into())),
+        })
+    }
+
     /// Apply a fix a problem offers, as the problem carried it (`{code, title, likely, tx}`):
     /// committing its Tx (DIAG-1), which its bases guard. Undo takes it back.
     pub fn fix(&self, token: u64, fix: &Value) -> Result<Value> {
@@ -1225,11 +1306,35 @@ impl Graph {
     /// changed for 150 ms, each the same on two polls, git not writing) is read once and taken in
     /// whole. Returns whether clients should refresh. The server's watcher calls it every 50 ms.
     pub fn watch(&self) -> bool {
-        let Some((token, ready)) = self.inner.tick() else { return false };
-        self.call(move |a| Ok(a.settled(token, ready))).unwrap_or_else(|e| {
+        let relayout = self.layout_moved();
+        let Some((token, ready)) = self.inner.tick() else { return relayout && self.republish() };
+        let settled = self.call(move |a| Ok(a.settled(token, ready))).unwrap_or_else(|e| {
             eprintln!("music2: {e:#}");
             false
-        })
+        });
+        settled || (relayout && self.republish())
+    }
+
+    /// Whether `layout.json` changed and has held still since the last look (FMT-19): its size and
+    /// time, compared on every tick, so an outside edit (an agent, git) shows within two ticks.
+    fn layout_moved(&self) -> bool {
+        let Some((token, dir)) = self.inner.control.lock().open.as_ref().map(|p| (p.engine.token, p.shown.dir.clone())) else { return false };
+        let stamp = std::fs::metadata(dir.join(m2_song::path::LAYOUT)).ok().map(|m| (m.len(), m.modified().unwrap_or(std::time::UNIX_EPOCH)));
+        let mut seen = self.inner.layout.lock();
+        if seen.token != token {
+            *seen = LayoutSeen { token, stamp, changed: false };
+            return false;
+        }
+        if seen.stamp != stamp {
+            (seen.stamp, seen.changed) = (stamp, true);
+            return false;
+        }
+        std::mem::take(&mut seen.changed)
+    }
+
+    /// Publish the view again with no revision: the layout changed (PLANE-3).
+    fn republish(&self) -> bool {
+        self.call(|a| Ok(a.republish())).unwrap_or(false)
     }
 
     /// Wait for the watcher's next tick: `most` at most, less when an event names a path while no

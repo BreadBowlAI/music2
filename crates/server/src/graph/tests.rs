@@ -2152,3 +2152,112 @@ fn a_lease_on_a_shared_literal_moves_every_cell() {
     dc.graph.cancel(begun.lease).unwrap();
     assert!(dc.blocks(3).iter().skip(1).all(|x| near(*x, 0.5)), "put back in both");
 }
+
+/// first-song, mixed, as a project to add and delete tracks in.
+fn mixed(fixture: &Fixture) {
+    let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song");
+    let mut stack = vec![from.clone()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else {
+                fixture.put(p.strip_prefix(&from).unwrap().to_str().unwrap(), &std::fs::read_to_string(&p).unwrap());
+            }
+        }
+    }
+}
+
+/// The timeline's tracks, top to bottom, with their colours.
+fn rows(graph: &Graph) -> Vec<(String, String)> {
+    let state = graph.state().unwrap();
+    state["timeline"]["tracks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["track"] == json!(true))
+        .map(|t| (t["module"].as_str().unwrap().to_string(), t["colour"].as_str().unwrap().to_string()))
+        .collect()
+}
+
+// WRITE-10, ID-18: a track added, duplicated and deleted through the server plays each revision;
+// deleting the kick waits (409) with the duck that reads it, until the cascade.
+#[test]
+fn tracks_are_added_duplicated_and_deleted_and_the_player_follows() {
+    let fixture = Fixture::new();
+    mixed(&fixture);
+    let graph = fixture.open();
+    let token = graph.state().unwrap()["session"].as_u64().unwrap();
+    let names: Vec<String> = graph.state().unwrap()["instruments"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap().into()).collect();
+    assert_eq!(names, ["Kick", "Hat", "Bass", "Pluck", "Pad"]);
+    assert_eq!(graph.state().unwrap()["palette"][0], "rose");
+    let added = graph.add_track(token, "std:pluck", None, None, Some("kick".into())).unwrap();
+    assert_eq!((&added["module"], &added["label"], &added["file"]), (&json!("pluck"), &json!("Pluck"), &json!("tracks/pluck.ts")));
+    assert_eq!(rows(&graph)[1], ("pluck".into(), "green".into()), "below the kick, in the first colour no track uses");
+    assert!(synced(&graph));
+    let copy = graph.duplicate_track(token, "pluck").unwrap();
+    assert_eq!((&copy["module"], &copy["new_channel"]), (&json!("pluck-2"), &json!(false)));
+    assert_eq!(rows(&graph)[2], ("pluck-2".into(), "green".into()), "in its original's colour");
+    let (status, asks) = graph.delete_track(token, "kick", false).unwrap();
+    assert_eq!((status, &asks["blocked"], &asks["dependents"][0]["component"]), (409, &json!(false), &json!("Duck")), "{asks}");
+    assert!(fixture.0.join("tracks/kick.ts").exists());
+    let (status, done) = graph.delete_track(token, "kick", true).unwrap();
+    assert_eq!((status, &done["before"]), (200, &json!("Kick")), "{done}");
+    assert!(synced(&graph));
+    assert_eq!(rows(&graph).iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), ["pluck", "pluck-2", "hats", "bass", "keys"]);
+    graph.undo(token).unwrap();
+    assert!(fixture.0.join("tracks/kick.ts").exists() && synced(&graph));
+}
+
+// FMT-19, PLANE-3: an edit of layout.json from outside (an agent, git) is published with no
+// revision once it holds still; a layout write planned before it conflicts rather than writing
+// over it, since its base was read from the disk.
+#[test]
+fn an_outside_layout_edit_is_published_with_no_revision() {
+    let fixture = Fixture::new();
+    mixed(&fixture);
+    let graph = fixture.open();
+    let token = graph.state().unwrap()["session"].as_u64().unwrap();
+    let revision = graph.state().unwrap()["view"]["revision"].clone();
+    graph.watch();
+    fixture.put("layout.json", "{\"order\": [\"keys\", \"bass\"], \"tracks\": {\"keys\": {\"colour\": \"lime\"}}}");
+    eventually("the watcher publishes the new order", || {
+        graph.watch();
+        rows(&graph).first() == Some(&("keys".into(), "lime".into()))
+    });
+    assert_eq!(graph.state().unwrap()["view"]["revision"], revision, "no revision");
+    assert_eq!(rows(&graph).iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), ["keys", "bass", "kick", "hats"]);
+    // A file that doesn't read: the defaults show, and the problem offers Reset layout.
+    fixture.put("layout.json", "{ oops");
+    eventually("the unreadable layout is a problem", || {
+        graph.watch();
+        graph.state().unwrap()["problems"].as_array().unwrap().iter().any(|p| p["code"] == "layout.invalid")
+    });
+    assert!(graph.layout(token, None, Some(("kick".into(), "teal".into())), false).is_err());
+    let reset = graph.layout(token, None, None, true).unwrap();
+    assert_eq!(reset["file"], "layout.json");
+    assert!(!graph.state().unwrap()["problems"].as_array().unwrap().iter().any(|p| p["code"] == "layout.invalid"));
+}
+
+// WRITE-12: a layout write's base is what the disk said when it was planned; an outside write
+// after that is a conflict, never overwritten.
+#[test]
+fn a_layout_write_after_an_outside_edit_conflicts() {
+    let fixture = Fixture::new();
+    mixed(&fixture);
+    let graph = fixture.open();
+    graph.inspect(|a| {
+        let s = &mut a.open.as_mut().unwrap().session;
+        let read = m2_editor::layout::read_disk(&s.accepted().project.dir);
+        let view = m2_editor::layout::effective(&m2_editor::layout::default_order(s), &read);
+        let text = m2_editor::layout::text_after(&read, &m2_editor::layout::Change { order: view.order.clone(), colours: &view.colours, gone: None })
+            .unwrap();
+        let (op, file, base) = m2_editor::layout::write_op(s, text);
+        let mut tx = m2_editor::plan::planned(s, ("a".into(), "b".into()), vec![op], m2_song::tx::Expect::Identical);
+        tx.base.insert(file, base);
+        std::fs::write(s.accepted().project.dir.join("layout.json"), "{\"order\": [\"bass\"]}").unwrap();
+        assert!(matches!(s.commit(tx), Err(m2_session::Refusal::Conflict { .. })), "a conflict");
+        assert_eq!(std::fs::read_to_string(s.accepted().project.dir.join("layout.json")).unwrap(), "{\"order\": [\"bass\"]}");
+    });
+}

@@ -22,6 +22,8 @@ export const bass = component(
     },
     settings: { voices: setting.int(4) },
     output: port.audio(),
+    // The + Track list groups instruments by category (PKG-7); it changes no sound.
+    editor: { category: "Instruments", description: "A punchy bass: saw plus a sub square" },
   },
   // `p.drive`, not a destructured `drive`, which would hide the `drive` effect.
   function bass(notes: Events, p: Params): Audio {
@@ -53,6 +55,7 @@ export const kick = component(
       decay: control.secs(0.32).range(0.01, 2).log(),
     },
     output: port.audio(),
+    editor: { category: "Drums", description: "A sine kick with a fast pitch drop" },
   },
   function kick(notes: Events, { tune, decay }: Params): Audio {
     return poly(
@@ -77,6 +80,7 @@ export const hat = component(
     inputs: { notes: port.notes() },
     controls: { decay: control.ms(45).range(5, 1000).log() },
     output: port.audio(),
+    editor: { category: "Drums", description: "A closed hi-hat: bright noise with a short decay" },
   },
   function hat(notes: Events, { decay }: Params): Audio {
     return poly(
@@ -101,6 +105,7 @@ export const pluck = component(
     controls: { brightness: control.hz(5000).range(200, 20000).log().smooth() },
     settings: { voices: setting.int(12) },
     output: port.audio(),
+    editor: { category: "Instruments", description: "A bright pluck for chords and arps" },
   },
   function pluck(notes: Events, { brightness, voices }: Params): Audio {
     return poly(
@@ -126,6 +131,7 @@ export const pad = component(
     controls: { cutoff: control.hz(1800).range(20, 20000).log().smooth() },
     settings: { voices: setting.int(12) },
     output: port.audio(),
+    editor: { category: "Instruments", description: "A soft pad: two detuned saws, slow and gentle" },
   },
   function pad(notes: Events, { cutoff, voices }: Params): Audio {
     return poly(

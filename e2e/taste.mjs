@@ -101,7 +101,7 @@ await page.waitForSelector("[data-testid=graph] [data-module]");
 
 // ---------------------------------------------------------------- the song
 
-await state("first-song's timeline, the browser and the Bass device");
+await state("first-song's timeline, the browser and the first track's device");
 await page.click('[data-fold="bass"]');
 await page.waitForSelector('[data-lane="bass.cutoff"]');
 await state("the bass's automation unfolded");
@@ -189,6 +189,26 @@ await page.$eval("[data-browser] input", (e) => e.blur());
 await key("Alt+KeyK");
 await page.waitForSelector("[data-testid=shortcuts]");
 await state("the keyboard shortcuts sheet");
+await key("Escape");
+// The track builders' surfaces (design-8b §3.5): + Track's list, a header's menu and its colours, the delete dialog.
+await page.click("[data-testid=add-track]");
+await page.waitForSelector("[data-testid=instrument-list]");
+await state("+ Track's instrument list");
+await key("Escape");
+await page.hover('[data-module-tab="kick"]');
+await page.click('[data-track-menu="kick"]');
+await page.waitForSelector("[data-testid=track-menu]");
+await page.click("[data-testid=colour-row]");
+await page.waitForSelector("[data-testid=colours]");
+await state("a track's header menu, its colours open");
+await key("Escape");
+await key("Escape");
+await page.hover('[data-module-tab="kick"]');
+await page.click('[data-track-menu="kick"]');
+await page.waitForSelector("[data-testid=track-menu]");
+await page.evaluate(() => [...document.querySelectorAll("[data-testid=track-menu] [role=menuitem]")].find((e) => e.textContent.startsWith("Delete"))?.click());
+await page.waitForSelector("[data-testid=delete-dialog]");
+await state("the delete dialog");
 await key("Escape");
 
 // ---------------------------------------------------------------- problems

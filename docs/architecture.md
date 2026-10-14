@@ -432,7 +432,9 @@ An ambiguous match gets a fresh id, and its state resets.
 - *Today:* matches for label renames and renames by hand: a label rename is an `Identical` Tx (step 6); a track key renamed in code leaves its folder `data.unclaimed`, offered whole as one `Rename` of the folder on its directory hash ("Move all to …"), and a lane key its lane file, in the app and in every CLI command that opens the project ([DIAG-4](#delivery), [DIAG-6](#fixes)). The app's key rename and Restore aren't built.
 
 **ID-18.** Mixer channel keys are dictionary slots where the user's key is identity on purpose. The app writes the track key as the channel key of a new channel, but finds a track's channel by following the graph edge from the track's export into the mixer, never by comparing keys. A key rename Tx renames a channel key only when it equals the old track key, and says so in its label.
+- Following the edge means: the mixer is the song's one frame whose ComponentId is `std:mixer`; its channels are the properties of the object its call is given in the project's code; a track is in the channel inside whose property one of its audio exports is read, a read that a frame records as a sidechain input excepted (the duck's `kick.env` only listens). A track in no channel, or in two, has no fader.
 - *Why:* a channel whose key differs from its track's (written by hand, or after a rename) must still be found.
+- *Today:* matches since 8b.1 (`crates/editor/src/mix.rs`). The read's place picks the channel, since a bare `kick: kick.out` makes no strip node of its own until every channel has a gain (design-8b §5.1): the import nodes say where each read is, and the frames' sidechain inputs which only listen. No mixer, two, or one whose channels aren't an object written in the project's code, and the track builders refuse to add a channel, saying so.
 
 ## Project format v1
 
@@ -620,9 +622,13 @@ Notes, control (masks are control lanes in `unit01`) and audio lanes, in that or
 
 ### Presentation and local files
 
-**FMT-19.** `layout.json` holds shared presentation keyed by track key: track order and colour, later canvas positions. It is never part of a revision and never read by the build. Unknown keys in it are ignored.
-- *Why:* presentation must never trigger a compile or change the sound.
-- *Today:* `layout.json` is classed Presentation and never makes a revision (step 4); nothing reads or writes it yet.
+**FMT-19.** `layout.json` holds shared presentation keyed by track key: track order and colour, markers, later canvas positions. It is never part of a revision and never read by the build. Unknown keys in it are ignored.
+- Its schema: `order`, the track keys top to bottom; `tracks.<key>.colour`, one of the palette's twelve names (a `#rrggbb` written by hand reads as the nearest name by hue, and is rewritten as a name when that track's colour is next written); `markers`, each a name and a beat.
+- A key that names no track (one commented out of the song for a while) is ignored when read and kept when the file is written: in `order` after the key before it, in `tracks` with its colour. Only deleting the track removes its key. Unknown keys are written back as read, in the order read. The canonical form is two-space JSON with `order`, `tracks` and `markers` first.
+- The server reads it, watches it, and publishes an outside change with no revision. A Tx that writes it is based on what the disk says when it is planned, since no snapshot holds it, so an outside write in between is a conflict.
+- A file that doesn't parse is `layout.invalid`: the view shows the defaults; the track builders leave it out of their Tx; reorder, recolour and markers refuse; Reset layout writes the defaults over it as one undo step.
+- *Why:* presentation must never trigger a compile or change the sound. A git merge that leaves conflict markers in it must cost order or colour, never the gestures that make tracks.
+- *Today:* matches since 8b.1 for order and colour (`crates/editor/src/layout.rs`; the watch is `Graph::watch`'s stat of the file on every tick, `crates/server/src/graph.rs`). The effective order is the stored order of the tracks there are, then the mixer's channel order, then the order the build made them, never alphabetical; with no colour stored, colours go by place in the palette's default order; a track without one gets the first colour no track uses, or the least used; and every layout write writes every track's colour, so the first one freezes them all (`layout_tests.rs`). Markers are read and kept, and written with 8b.5.
 
 **FMT-20.** `.music2/` is local to one machine. New projects MUST get a `.gitignore` line for it. Caches live outside the project ([RENDER-30](#audio-lanes), [FMT-16](#assets-and-hashes)). A project in a synced folder (iCloud Drive, Dropbox) works with these rules:
 - The app marks `.music2/` for the sync services that honour a marker (Dropbox's ignore attribute), and raises the Notice `project.synced` when the project is under a known synced folder.
@@ -714,7 +720,7 @@ Anchor = Written { file, range }                    // a value written in the co
 
 `Confined` holds when, after nodes are matched by their delta names ([WRITE-8](#expectations-and-the-delta)): every node that differs was made by a site written inside a declared range (by its origin, `within` or `src`), or differs only in edges to such nodes; lane data differs only for the declared lanes; modules are added, removed, re-keyed or muted only as declared; and every byte outside the declared ranges is unchanged. A new kind of expectation needs a design review that changes this page.
 - *Why:* gesture-shaped expectations would make core grow with every feature, and checks supplied by tools would take the guarantee out of core. Inserting an omitted argument turns an inherited control into a written one, which must still count as `Values`.
-- *Today:* matches since step 6: core judges every Tx by its expectation on the delta it computes (`core/session/src/tx/expect.rs`), with the step 6 design's C1 (`Confined`'s rules on bytes and on states, assets and the arrangement) for the owner to confirm; each planner's own assertion stays in `crates/editor`.
+- *Today:* matches since step 6: core judges every Tx by its expectation on the delta it computes (`core/session/src/tx/expect.rs`), with the step 6 design's C1 (`Confined`'s rules on bytes and on states, assets and the arrangement) for the owner to confirm; each planner's own assertion stays in `crates/editor`. A node inside a voice was made within its `poly`, so from 8b.1 it is also placed where that `poly` is: a note field (`lane:gate`) has no place of its own in the project, and before, no range could admit a new track's voices (`scope` in `core/session/src/tx/delta.rs`). From 8b.1 the write API is recorded: every op, expectation, base, declaration, module change, anchor and position, matched with no wildcard, and one Tx per op and expectation that serialises back byte for byte (`the_write_api_is_step_6s` in `core/song/tests/write_api.rs`), so a new one fails CI until this page changes.
 
 **WRITE-7.** Core MUST take structured anchors, never `file#ordinal` strings. Those become debug labels made by `crates/editor`.
 - *Why:* ordinals shift with every inserted call ([ID-12](#derived-identity)).
@@ -741,10 +747,15 @@ Anchor = Written { file, range }                    // a value written in the co
 | relink unused data | `Confined { lanes: the lane it moves to }` |
 | delete unused data | `Identical` |
 | automate a knob | `Confined { the literal's range, a new lane }` |
-| add a track | `Confined { a new file, ranges in song.ts, a new module }` |
+| add a track | `Confined { the new file, the import and the mixer call in song.ts, the new lane, a new module }` |
+| duplicate a track | `Confined { the new file (or the copied statement), the import and the mixer call in song.ts, its lanes, a new module }` |
+| delete a track | `Confined { its file (or its statement), its imports, the mixer call, every excised call and every import that leaves unread, its lanes, the module removed }` |
+| reorder, recolour, Reset layout | writes only `layout.json`: no revision, so `Identical` |
 | rename a label | `Identical` |
 | mute in song | `Confined { the track call's options, modules: that module's muted }` |
 | code editor save | `save()` |
+
+- *Today (8b.1):* add, duplicate and delete a track, reorder and recolour are built (`crates/editor/src/tracks.rs`, `layout.rs`; routes `POST /api/graph/track/{add,duplicate,delete}` and `/api/graph/layout`; `m2 add-track`, `duplicate-track`, `delete-track`, `layout`). The whole mixer call is declared because the new strip's nodes are std's, made inside it; each planner's assertion takes up the rest: exactly one module added or removed, no value changed, nothing of the song removed but an empty mixer's silent stand-in, and every other channel as it was, by key. A delete that other code reads answers with the reads (409 at the route): one an effect that takes audio first can lose (a duck's sidechain) goes with the track only when asked again with `cascade`; any other blocks it.
 
 Core keeps `save`, `Tx`, `GraphDelta` and its checkers, undo, the journal, the raw site, origin and control tables, and diagnostics. `crates/editor` gets `view.rs`, `timeline.rs`, `lens.rs` (with unit spelling generated from `core.ts`), the cable and effect planners, labels, the helpers at `core/script/src/sites.rs:268-317`, and `render.rs` (export at host level).
 
@@ -805,11 +816,11 @@ The CLI's commands sort like this:
 - `check` (and its alias `build`), `render`, `graph`, `controls`, `cables` and `effects` only read. They never take the lock, and open their own session.
 - `kernels` and `plugins` open no project, and `new` creates a new folder. None needs the lock.
 - `bounce` without `--place` only creates a new asset and its provenance, with create-only semantics ([FMT-14](#assets-and-hashes)). That can't race, so it needs no lock and works while the app is open.
-- Every other command that changes a project takes the lock: `set`, `connect`, `disconnect`, `add-effect`, `remove-effect`, `bounce --place`, `plugin-state`, `relink`, `delete-data` and `tx`. The message for `bounce --place` also names the lane file, and says the clip can be added by writing that file directly.
+- Every other command that changes a project takes the lock: `set`, `connect`, `disconnect`, `add-effect`, `remove-effect`, `bounce --place`, `plugin-state`, `relink`, `delete-data`, `tx`, `automate`, `label`, `add-track`, `duplicate-track`, `delete-track` and `layout`. The message for `bounce --place` also names the lane file, and says the clip can be added by writing that file directly.
 
 Forwarding writes to the holder is [deferred](#deferred-with-triggers).
 - *Why:* owner decision 10: the lock now, forwarding when a workflow needs it. While raw file writes are allowed (owner decision 5), the safest writer must not be the one blocked.
-- *Today:* matches since step 6 (`apps/m2/src/main.rs`; `apps/m2/tests/lock.rs`), with `automate` and `label` among the writers, and readers taking the lock for a journal scan when it is free, never while they read (the step 6 design's C19).
+- *Today:* matches since step 6 (`apps/m2/src/main.rs`; `apps/m2/tests/lock.rs`), with `automate` and `label` among the writers, and from 8b.1 `add-track`, `duplicate-track`, `delete-track` and `layout`, and readers taking the lock for a journal scan when it is free, never while they read (the step 6 design's C19).
 
 ### Outside writers
 
@@ -923,6 +934,7 @@ The message is plain words, and names the file, the field and the fix where they
 | `tx.path` | Error | a Tx names a path [WRITE-3a](#the-two-write-primitives) refuses; on the Tx | — | the Tx is rejected |
 | `lock.unsupported` | Error | the volume can't take the project lock; the project is read-only | — | no |
 | `project.synced` | Notice | the project is in a synced folder ([FMT-20](#presentation-and-local-files)) | — | no |
+| `layout.invalid` | Notice | `layout.json` doesn't parse; the view uses the defaults, the track builders leave the file out, and reorder, recolour and markers refuse ([FMT-19](#presentation-and-local-files)); on the session, not a revision | ResetLayout | no |
 | `overlays.active` | Warning | an export while monitoring overlays are active (on the export, not a revision) | — | no |
 | `plugin.crashed` | Error | the plugin host process crashed; its instances are silent | — | no |
 
@@ -992,7 +1004,7 @@ export const delay = component({
 
 **PKG-7.** `editor.category` is a free string that the UI groups. Core MUST NOT hold a list of categories.
 - *Why:* core holds no UI vocabulary (P10).
-- *Today:* matches since step 5: a category is what a descriptor's `editor.category` says, and core lists none (`the_deleted_items_are_gone` in `core/session/src/gate5_tests.rs`). The web's effect browser keeps an order and an icon for the categories it knows, and lists any other as a group of its own after them (`web/src/components/EffectBrowser.tsx`).
+- *Today:* matches since step 5: a category is what a descriptor's `editor.category` says, and core lists none (`the_deleted_items_are_gone` in `core/session/src/gate5_tests.rs`). The web's effect browser keeps an order and an icon for the categories it knows, and lists any other as a group of its own after them (`web/src/components/EffectBrowser.tsx`). From 8b.1 a category on a component that takes notes first lists it as an instrument a new track can play, which must take only its notes, make audio, and build from its notes alone (`core/script/sdk/core.ts`, `Descriptor::is_instrument`); one that takes audio first is an effect, as before. std's instruments say Drums (kick, hat) and Instruments (bass, pluck, pad); the + Track list puts Drums first and plays drums from a `hits` lane.
 
 **PKG-8.** A control's `.range()` is a display hint. It is a validation constraint only when declared as one, and a value is never clamped silently.
 - *Why:* a knob's preferred range must not rewrite what the code says.
@@ -1028,7 +1040,7 @@ export const delay = component({
 | **Code literals** at declared slots | std knobs, mixer faders and pan, effect settings, "mute in song": the code is the preset | `reverb(x, { mix: 0.25 })` |
 | **Lanes** | values that change over time | `data/bass/cutoff.json` |
 | **Plugin state blob** | a plugin's internals | `data/lead/lead.state` |
-| **`layout.json`** | shared presentation: track order and colour, keyed by track key | `{"tracks": {"kick": {"colour": "#e4572e"}}}` |
+| **`layout.json`** | shared presentation: track order and colour (a palette name), keyed by track key; markers | `{"tracks": {"kick": {"colour": "rose"}}}` |
 | **`.music2/`** | local state: mute and solo, override latches, loop range, zoom, selection | `.music2/overlays.json` |
 
 **HOME-1.** Every value MUST have exactly one home, and the UI MUST show which. Every value that `controls()`, the view and leases return carries `home: code | lane | state | layout | local`, and a test checks it for every control of every fixture.

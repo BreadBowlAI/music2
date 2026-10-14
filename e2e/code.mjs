@@ -73,8 +73,9 @@ for (const path of ["../song.ts", "/etc/hosts", "music2.toml", "tracks/../song.t
 // ---------------------------------------------------------------- opening
 await page.click('[data-view-tab="code"]');
 check(await until(async () => !!(await page.$("[data-testid=code] .monaco-editor .view-lines"))), "the code view opens a Monaco editor");
-check(await until(async () => (await openFile()) === "tracks/bass.ts"), `on the selected module's file, tracks/bass.ts (${await openFile()})`);
-check(await until(async () => (await shown()).includes('track("bass"')), "showing its code");
+// The first track is the mixer's first, the kick (D8).
+check(await until(async () => (await openFile()) === "tracks/kick.ts"), `on the selected module's file, tracks/kick.ts (${await openFile()})`);
+check(await until(async () => (await shown()).includes('track("kick"')), "showing its code");
 check(JSON.stringify(await files()) === JSON.stringify(["song.ts", "tracks/bass.ts", "tracks/hats.ts", "tracks/keys.ts", "tracks/kick.ts"]), `song first, then the tracks: ${await files()}`);
 check((await strip()).state === "ok", `the strip says it compiles: ${(await strip()).text}`);
 await page.screenshot({ path: `${S}/code-open.png` });

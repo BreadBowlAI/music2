@@ -269,7 +269,7 @@ fn path_around(site: &Site, at: u32) -> Option<Vec<String>> {
 type Written = (String, u32);
 
 /// A node's `src` (`file:line:col`, both 1-based) as where it is written.
-fn locate(src: &str, files: &BTreeMap<std::path::PathBuf, std::sync::Arc<str>>) -> Option<Written> {
+pub(crate) fn locate(src: &str, files: &BTreeMap<std::path::PathBuf, std::sync::Arc<str>>) -> Option<Written> {
     let mut parts = src.rsplitn(3, ':');
     let (col, line, file) = (parts.next()?.parse::<usize>().ok()?, parts.next()?.parse::<usize>().ok()?, parts.next()?);
     let text = files.get(Path::new(file))?;

@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { AudioWaveform, ChevronRight, CircleAlert, CodeXml, Info, TriangleAlert } from "lucide-react";
+import { AudioWaveform, ChevronRight, CircleAlert, Info, Plus, TriangleAlert } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   barAt,
@@ -27,12 +27,14 @@ import {
   type TimelineView,
 } from "../lib/graph";
 import { onFrame } from "../lib/clock";
-import { LANE_MADE } from "../lib/events";
+import { LANE_MADE, TRACK_MADE } from "../lib/events";
 import { LANE_H, ROW_H, RULER_H } from "../lib/layout";
 import { GRAPHITE, trackColors, type TrackColor } from "../lib/palette";
 import { useShell } from "../lib/shell";
+import { kbd } from "../lib/native";
 import { useStore } from "../lib/store";
 import { addEffectTo, dragsEffect, EFFECT_DRAG } from "./Browser";
+import { addTrack, END, INSTRUMENT_DRAG, openInstruments, openTrackMenu, startReorder, TrackMenuButton, useReorder } from "./Tracks";
 import { VLines } from "./draw";
 import TrackName from "./TrackName";
 import { Button, EmptyState, keepFocus } from "./ui";
@@ -313,8 +315,17 @@ export default function SongTimeline({
       useShell.getState().unfold(id.slice(0, id.indexOf(".")));
       reveal();
     };
+    // A new track: lit where it is, its automation still folded (taste.md §3.4).
+    const track = (e: Event) => {
+      wanted.current = (e as CustomEvent<string>).detail;
+      reveal();
+    };
     window.addEventListener(LANE_MADE, made);
-    return () => window.removeEventListener(LANE_MADE, made);
+    window.addEventListener(TRACK_MADE, track);
+    return () => {
+      window.removeEventListener(LANE_MADE, made);
+      window.removeEventListener(TRACK_MADE, track);
+    };
   }, []);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -344,8 +355,23 @@ export default function SongTimeline({
     >
       <div className="relative flex flex-col" style={{ width: headerW + width, minHeight: "100%" }}>
         <div className="sticky top-0 z-30 shrink-0 flex" style={{ height: RULER_H }}>
-          {/* The corner: "+ Track" comes here with the track builders; on the right, every track's automation (A). */}
-          <div className="sticky left-0 z-40 shrink-0 bg-chrome border-b border-r border-line flex items-center justify-end px-1.5" style={{ width: headerW }}>
+          {/* The corner (taste.md §3.4): + Track (⌘T); on the right, every track's automation (A). */}
+          <div className="sticky left-0 z-40 shrink-0 bg-chrome border-b border-r border-line flex items-center justify-between px-1.5" style={{ width: headerW }}>
+            <Button
+              size="sm"
+              data-testid="add-track"
+              disabled={!!locked}
+              title={locked ? `${locked}.` : `Add a track (${kbd("T")})`}
+              onMouseDown={keepFocus}
+              onClick={(e) => {
+                const s = useShell.getState();
+                openInstruments(e.currentTarget, s.selected && s.selected !== "song" ? s.selected : null);
+              }}
+              className="!px-1.5"
+            >
+              <Plus size={14} />
+              Track
+            </Button>
             {all.length > 0 && (
               <button
                 data-testid="fold-all"
@@ -599,7 +625,23 @@ const Tracks = memo(function Tracks({
           onOpenClip={onOpenClip}
         />
       ))}
-      <div className={clsx("flex-1 flex", said ? "min-h-24" : "min-h-6")}>
+      <div
+        className={clsx("relative flex-1 flex", said ? "min-h-24" : "min-h-6")}
+        // An instrument dragged from the browser onto the space below the tracks adds a track there (BR-1).
+        onDragOver={(e) => {
+          if (!e.dataTransfer.types.includes(INSTRUMENT_DRAG) || locked) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+        }}
+        onDrop={(e) => {
+          const component = e.dataTransfer.getData(INSTRUMENT_DRAG);
+          const instrument = useStore.getState().graph?.instruments?.find((i) => i.component === component);
+          if (!instrument) return;
+          e.preventDefault();
+          void addTrack(instrument, rows.filter((r) => r.track).at(-1)?.module ?? null);
+        }}
+      >
+        <DropLine before={END} />
         <div className="sticky left-0 z-20 shrink-0 bg-chrome border-r border-line" style={{ width: headerW }} />
         <div className="relative" style={{ width }}>
           {grid}
@@ -609,12 +651,25 @@ const Tracks = memo(function Tracks({
               {waiting ? (
                 <EmptyState data-testid="waiting">Waiting for the code to compile.</EmptyState>
               ) : (
-                <EmptyState className="pointer-events-auto">
-                  <p>No tracks yet</p>
-                  <Button variant="secondary" size="sm" onMouseDown={keepFocus} onClick={() => useShell.getState().setView("code")} title="Code (⌥4)">
-                    <CodeXml size={14} />
-                    Write one in code
+                <EmptyState className="pointer-events-auto" data-testid="no-tracks">
+                  <Button
+                    variant="primary"
+                    data-testid="add-first-track"
+                    disabled={!!locked}
+                    title={locked ? `${locked}.` : `Add a track (${kbd("T")})`}
+                    onMouseDown={keepFocus}
+                    onClick={(e) => openInstruments(e.currentTarget, null)}
+                  >
+                    <Plus size={14} />
+                    Add a track
                   </Button>
+                  <button
+                    className="block mx-auto text-sm text-fg-muted hover:text-fg cursor-pointer"
+                    onMouseDown={keepFocus}
+                    onClick={() => useShell.getState().setView("code")}
+                  >
+                    or write one in code <span className="text-fg-faint">⌥4</span>
+                  </button>
                 </EmptyState>
               )}
             </div>
@@ -670,7 +725,7 @@ const TrackRows = memo(function TrackRows({
   const select = () => useShell.getState().select(module);
 
   /** A row: its header (sticky at the left) and its lane. */
-  const row = (lane: TimelineLane | null, header: ReactNode, opts: { first?: boolean; height: number }) => (
+  const row = (lane: TimelineLane | null, header: ReactNode, opts: { first?: boolean; height: number; movable?: boolean }) => (
     <div
       key={lane?.key ?? ""}
       data-lane={lane ? `${module}.${lane.key}` : undefined}
@@ -683,10 +738,21 @@ const TrackRows = memo(function TrackRows({
             { "data-module-tab": module, role: "tab", "aria-selected": selected, "aria-controls": "dock" }
           : {})}
         className={clsx(
-          "sticky left-0 z-20 shrink-0 flex items-center border-r border-line transition-colors duration-80 ease-linear",
+          "group/head sticky left-0 z-20 shrink-0 flex items-center border-r border-line transition-colors duration-80 ease-linear",
           selected ? "bg-accent-soft" : clsx("bg-chrome", !locked && "group-hover:bg-hover"),
         )}
         style={{ width: headerW }}
+        // A track's own header: drag it to move the track, right-click it for its menu.
+        onPointerDown={opts.movable ? (e) => startReorder(e, module) : undefined}
+        onContextMenu={
+          opts.movable
+            ? (e) => {
+                e.preventDefault();
+                const dots = e.currentTarget.querySelector<HTMLElement>("[data-track-menu]");
+                if (dots) openTrackMenu(module, dots);
+              }
+            : undefined
+        }
       >
         {/* The colour bar runs down every row of the track, at 40% beside its lanes. */}
         <div className="absolute left-0 inset-y-0 w-1" style={{ background: color.bar, opacity: opts.first ? 1 : 0.4 }} />
@@ -723,11 +789,15 @@ const TrackRows = memo(function TrackRows({
     </div>
   );
 
+  // Dragged to a new place: it follows the pointer, lifted (taste.md §3.4).
+  const dy = useReorder((s) => (s.module === module ? s.dy : null));
+  const movable = track.track && !last;
   return (
     <div
       data-track={module}
       data-selected={selected || undefined}
-      className={clsx("group relative", !last && "border-b border-line")}
+      className={clsx("group relative", !last && "border-b border-line", dy !== null && "z-30 shadow-lift")}
+      style={dy !== null ? { transform: `translateY(${dy}px)` } : undefined}
       onPointerDown={select}
       // An effect dragged from the browser goes at the end of this track's sound.
       onDragOver={(e) => {
@@ -743,6 +813,7 @@ const TrackRows = memo(function TrackRows({
         addEffectTo(module, component);
       }}
     >
+      {movable && <DropLine before={module} />}
       {row(
         primary,
         <>
@@ -761,7 +832,7 @@ const TrackRows = memo(function TrackRows({
             </button>
           )}
           {/* From x = 28 to the header's padding: M, S and the meter take 60px of it with the mixer (8b), the name 140. */}
-          <div className="absolute left-7 right-3 flex items-center gap-1.5 min-w-0">
+          <div className={clsx("absolute left-7 flex items-center gap-1.5 min-w-0", movable ? "right-9" : "right-3")}>
             <TrackName
               module={module}
               label={track.label}
@@ -772,14 +843,25 @@ const TrackRows = memo(function TrackRows({
             />
             {issues && <Issues issues={issues} />}
           </div>
+          {movable && (
+            <div className="absolute right-2">
+              <TrackMenuButton module={module} name={track.label || module} />
+            </div>
+          )}
         </>,
-        { first: true, height: ROW_H },
+        { first: true, height: ROW_H, movable },
       )}
       {others.map((l) => row(l, <LaneLabel lane={l} />, { height: rowHeight(l) }))}
       {open && controls.map((l) => row(l, <LaneLabel lane={l} />, { height: LANE_H }))}
     </div>
   );
 });
+
+/** Where a dragged header would land: a 2px accent line on the top edge of the track it goes before. */
+function DropLine({ before }: { before: string }) {
+  const here = useReorder((s) => s.module !== null && s.before === before);
+  return here ? <div aria-hidden data-testid="drop-line" className="absolute -top-px inset-x-0 h-0.5 z-40 bg-accent pointer-events-none" /> : null;
+}
 
 /** A mark on a track that something in it needs attention: the worst of it, and every message on hover. */
 function Issues({ issues }: { issues: Diagnostic[] }) {

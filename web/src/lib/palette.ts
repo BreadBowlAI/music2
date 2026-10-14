@@ -31,16 +31,17 @@ export const DEFAULT_ORDER = ["rose", "teal", "amber", "indigo", "green", "plum"
 
 export type TrackColorName = keyof typeof TRACK_COLORS;
 
+/** A colour's tones by name; graphite for a name it doesn't know. */
+export const tones = (name: string | undefined): TrackColor => (name && name in TRACK_COLORS ? TRACK_COLORS[name as TrackColorName] : GRAPHITE);
+
 /**
- * A module's colours, or null if it has no row in the timeline. Tracks take the default order in
- * the order the timeline lists them; the song's own lanes are graphite, so a lane made on the song
- * never recolours a track. (Colours by name in `layout.json`, frozen on its first write, come with
- * the track builders.)
+ * A module's colours, or null if it has no row in the timeline: the name the timeline gives it,
+ * from `layout.json` (frozen on its first write) or by its place, never by its index here (D8).
+ * The song's own lanes are graphite, so a lane made on the song never recolours a track.
  */
 export function trackColors(timeline: TimelineView, module: string): TrackColor | null {
   const row = timeline.tracks.find((t) => t.module === module);
   if (!row) return null;
   if (!row.track) return GRAPHITE;
-  const i = timeline.tracks.filter((t) => t.track).findIndex((t) => t.module === module);
-  return TRACK_COLORS[DEFAULT_ORDER[i % DEFAULT_ORDER.length]];
+  return tones(row.colour);
 }

@@ -83,6 +83,15 @@ export interface PortEdge { from: string; from_port: string; to: string; to_port
 export interface Effect { component: string; label: string; name: string; module: string; description: string; category: string; insert: string }
 
 /**
+ * An instrument a new track can play (+ Track, the browser's Instruments): its component, what it
+ * is called, where it is imported from, and the lane a new track plays it from (`hits` for drums).
+ */
+export interface Instrument { component: string; label: string; name: string; module: string; description: string; category: string; lane: string }
+
+/** What reads a track a delete would take out: the track it is in, the call, and where. */
+export interface Dependent { module: string; label: string; component: string; file: string; line: number; removable: boolean }
+
+/**
  * A module: the song (`song`) or a track. `key` is what the code calls it (`track("lead-vox", …)`):
  * the one address of the module, for selection, its tabs, its lanes and its data (ID-11). `label`
  * is what to call it (`{ name: "Lead Vox" }`, else the key): shown, never an address (ID-10).
@@ -158,7 +167,14 @@ export type TimelineLane =
   | { key: string; label: string; kind: "audio"; channels: number; clips: AudioClip[] };
 
 /** A module that is a track or declares lanes, by its key (as `ModuleView.key`), with its label. */
-export interface TimelineTrack { module: string; label: string; track: boolean; lanes: TimelineLane[] }
+export interface TimelineTrack {
+  module: string;
+  label: string;
+  track: boolean;
+  /** Its colour by palette name (taste.md §2.7), from `layout.json` or by its place; `graphite` for the song. */
+  colour?: string;
+  lanes: TimelineLane[];
+}
 
 /** A time signature from `beat` on: `beats` in a bar of `unit` notes (FMT-13). A beat is a quarter note. */
 export interface Meter { beat: number; beats: number; unit: number }
@@ -329,6 +345,10 @@ export interface GraphState extends GraphStatus {
   can_redo: boolean;
   /** Effects the packages offer to put after audio. */
   effects: Effect[];
+  /** Instruments a new track can play, drums first. Absent from older servers. */
+  instruments?: Instrument[];
+  /** The track colours' names, in their default order. */
+  palette?: string[];
   /** Why the files on disk don't compile, if they don't: the draft's problems, placed in their files. */
   diagnostics: Problem[];
   /**
@@ -472,6 +492,14 @@ async function call<T = any>(path: string, body?: unknown): Promise<T> {
   return request<T>(`/api/graph${path}`, body);
 }
 
+/** POST `body`, answering the status with the JSON: for a route whose 409 says something to ask. */
+async function answer<T>(path: string, body: unknown): Promise<{ status: number; json: T & { error?: string } }> {
+  const res = await fetch(`/api/graph${path}`, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok && res.status !== 409) throw new Error(json.error ?? `HTTP ${res.status}`);
+  return { status: res.status, json };
+}
+
 /** GET, or POST `body` as JSON; an error answer throws with the server's reason. */
 async function request<T>(url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -559,6 +587,37 @@ export const graphApi = {
   fix: (session: number, revision: number, fix: Fix) =>
     // Named by its own title, quoted: "Undid “Move all to Kick (kicks)”".
     edit(session, { name: `“${fix.title}”`, structural: true }, call<Edit>("/fix", { session, revision, fix })),
+  /**
+   * Add a track playing `instrument` (WRITE-10): its file, its import and mixer channel, its lane and
+   * its place below `after` in the layout. One undoable edit; the answer names the new track.
+   */
+  addTrack: (session: number, instrument: Instrument, opts: { label?: string; after?: string | null } = {}) =>
+    edit(
+      session,
+      (r) => ({ name: `adding ${r.label}`, structural: true }),
+      call<Edit & { module: string; label: string }>("/track/add", { session, component: instrument.component, label: opts.label, after: opts.after ?? undefined }),
+    ),
+  /** Duplicate a track: its code, clips (with new ids) and channel, below it in its colour. */
+  duplicateTrack: (session: number, module: string, name: string) =>
+    edit(
+      session,
+      { name: `duplicating ${name}`, structural: true },
+      call<Edit & { module: string; label: string; new_channel: boolean }>("/track/duplicate", { session, module }),
+    ),
+  /**
+   * Delete a track. When other code reads it, nothing is written and the answer lists what: `blocked`
+   * when that can't be taken out from here, else asking again with `cascade` takes it out too.
+   */
+  deleteTrack: async (session: number, module: string, name: string, cascade = false) => {
+    const r = await answer<Edit & { excised?: Dependent[]; dependents?: Dependent[]; blocked?: boolean }>("/track/delete", { session, module, cascade });
+    if (r.status === 409) return { asks: { dependents: r.json.dependents ?? [], blocked: !!r.json.blocked } };
+    await edit(session, { name: `deleting ${name}`, structural: true }, Promise.resolve(r.json));
+    return { done: r.json };
+  },
+  /** A layout write (no revision, PLANE-3): every track in a new order, one track's colour, or the defaults. */
+  // Always a step of its own, though a move says "Kick" before and after: what Undo takes back next.
+  layout: (session: number, change: { order?: string[]; colour?: { module: string; colour: string }; reset?: boolean }, step: Step) =>
+    call<Edit>("/layout", { session, ...change }).then((r) => (recorded(session, r.revision, step), r)),
   undo: (session: number) => call<Edit>("/undo", { session }),
   /** Try the project's lock again (the read-only banner's Retry). Answers with the state. */
   retryLock: (session: number) => call<GraphState>("/lock/retry", { session }),

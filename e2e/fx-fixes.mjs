@@ -76,7 +76,7 @@ check(dots2.json?.name === "My song 2" && dots2.json?.dir.endsWith("/My song 2")
 // ---------------------------------------------------------------- the Empty template's steps work in the app
 const empty = dots2.json.dir;
 const code = fs.readFileSync(`${empty}/song.ts`, "utf8");
-check(code.includes("Delete the // at the start of the two lines") && !code.includes("Make a file"), "song.ts says to delete two //s, not to make a file");
+check(code.includes("delete the // in front of the two") && !code.includes("Make a file"), "song.ts says to delete two //s, not to make a file");
 fs.writeFileSync(`${empty}/song.ts`, code.replace("// const drums", "const drums").replace("// drums: drums.out", "drums: drums.out"));
 check(await until(async () => (await api("graph")).json?.timeline?.tracks?.some((t) => t.track && t.module === "drums")), "with those two lines on, a Drums track shows");
 check(await until(async () => (await page.$$eval("[data-track]", (els) => els.map((e) => e.dataset.track))).includes("drums")), "in the timeline");

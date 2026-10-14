@@ -26,7 +26,7 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
     keys: [
       ["Undo / redo", `${chord("Z")} / ${chord("Z", { shift: true })}`],
       ["Delete the selected clip or notes", "⌫"],
-      ["Duplicate the selected notes", chord("D")],
+      ["Duplicate the selected notes or track", chord("D")],
       ["Select all notes", chord("A")],
       ["Deselect", "Esc"],
       ["Draw mode in Notes", "B"],
@@ -37,6 +37,8 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
   {
     name: "Tracks",
     keys: [
+      ["New track", chord("T")],
+      ["Delete the selected track", chord(isMac ? "⌫" : "Backspace")],
       ["Rename the selected track", `${chord("R")} / ⇧Return`],
       ["Show / hide automation", "A"],
     ],

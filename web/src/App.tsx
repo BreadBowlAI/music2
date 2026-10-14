@@ -11,6 +11,7 @@ import { exportSong, onExportEvent } from "./lib/exporting";
 import { editorHooks, graphApi } from "./lib/graph";
 import { isMac, native, nativeAction, onMenu } from "./lib/native";
 import { canvas, useShell, VIEWS } from "./lib/shell";
+import { deleteTrack, duplicateTrack, newTrack } from "./components/Tracks";
 
 /** Fetch the open project. An error means none is open: the start screen shows. */
 const refreshGraph = () =>
@@ -57,6 +58,8 @@ function chord(e: KeyboardEvent): { id: string; always?: boolean } | null {
   if (k === "e" && e.shiftKey) return { id: "export" };
   if (k === "w" && !e.shiftKey) return { id: "close_song" };
   if (k === "r" && !e.shiftKey) return { id: "rename" };
+  if (k === "t" && !e.shiftKey) return { id: "new_track" };
+  if (e.key === "Backspace" && !e.shiftKey) return { id: "delete_track" };
   if (e.code === "KeyB" && e.altKey) return { id: "browser" };
   return null;
 }
@@ -174,10 +177,34 @@ export function appCommand(id: string) {
       if (editorHooks.undo?.(id === "redo")) return;
       if (editing()) return void document.execCommand(id);
       return void graphUndo(graph.session, id);
-    case "duplicate":
-      // Focus decides (taste.md §5.3): in the code editor, its own ⌘D; else the roll's selected notes.
+    case "duplicate": {
+      // Focus decides (taste.md §5.3): in the code editor, its own ⌘D; else the roll's selected
+      // notes; else the selected track, when no clip of it is selected (design-8b §2.6).
       if (editorHooks.chord?.("duplicate")) return;
-      return void editorHooks.duplicate?.();
+      if (editorHooks.duplicate?.()) return;
+      if (editing()) return;
+      const m = shell.selected;
+      if (m && m !== "song" && !shell.clips[m]) void duplicateTrack(m);
+      return;
+    }
+    case "new_track":
+      return newTrack();
+    case "delete_track": {
+      // In the code editor, its own ⌘⌫ (delete to the line's start); in a field, the field's.
+      if (editorHooks.chord?.("delete_track")) return;
+      const el = document.activeElement;
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+        const at = el.selectionStart ?? 0;
+        if (el.selectionEnd !== at) el.setRangeText("", at, el.selectionEnd ?? at, "start");
+        else el.setRangeText("", el.value.lastIndexOf("\n", at - 1) + 1, at, "start");
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        return;
+      }
+      // In the dock (the roll's notes, a knob), the chord is the dock's, never the track's.
+      if (editing() || document.activeElement?.closest("#dock")) return;
+      if (shell.selected && shell.selected !== "song") void deleteTrack(shell.selected);
+      return;
+    }
     case "play":
       return void graphApi.transport("toggle");
     case "home":

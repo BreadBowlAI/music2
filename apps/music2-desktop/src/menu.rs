@@ -35,6 +35,9 @@ pub const ITEMS: &[(&str, &str, &str, Option<&str>)] = &[
     ("Edit", "redo", "Redo", Some("CmdOrCtrl+Shift+Z")),
     // One item for whatever is selected (the roll's notes today), or the code editor's own ⌘D.
     ("Edit", "duplicate", "Duplicate", Some("CmdOrCtrl+D")),
+    // The instrument list at + Track; the selected track goes, asking first when others read it.
+    ("Track", "new_track", "New Track…", Some("CmdOrCtrl+T")),
+    ("Track", "delete_track", "Delete Track", Some("CmdOrCtrl+Backspace")),
     ("Track", "rename", "Rename", Some("CmdOrCtrl+R")),
     // ⌥1 to ⌥4, X, A, E: the page's keys.
     ("View", "view_device", "Device", None),
@@ -105,7 +108,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .item(&item("duplicate")?)
         .build()?;
 
-    let track = SubmenuBuilder::new(app, "Track").item(&item("rename")?).build()?;
+    let track = SubmenuBuilder::new(app, "Track").item(&item("new_track")?).item(&item("delete_track")?).item(&item("rename")?).build()?;
 
     let view = SubmenuBuilder::new(app, "View")
         .item(&item("view_device")?)

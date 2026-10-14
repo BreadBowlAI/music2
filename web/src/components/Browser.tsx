@@ -1,11 +1,15 @@
 import clsx from "clsx";
 import { ChevronRight, Search } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
-import { graphApi, lockReason, moduleName, type Effect, type GraphState, type ViewNode } from "../lib/graph";
+import { graphApi, lockReason, moduleName, type Effect, type GraphState, type Instrument, type ViewNode } from "../lib/graph";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { category, NoMatch, search } from "./EffectBrowser";
 import { undoAction } from "./GraphCanvas";
+import { addTrack, INSTRUMENT_DRAG, instrumentGroups } from "./Tracks";
+
+/** A row of the browser's one keyboard list: an instrument or an effect. */
+type Row = { instrument: Instrument } | { effect: Effect };
 
 /** What a dragged browser row carries: the effect's component (`std:reverb`). */
 export const EFFECT_DRAG = "application/x-m2-effect";
@@ -80,7 +84,8 @@ function readFolded(): Set<string> {
 /**
  * The side browser (taste.md §3.6): what can be added, by its label, grouped by category. Typing
  * filters it; ↓ moves into the list and Enter adds the row to the selected track; a row can be
- * dragged onto a track or the Device view. (Instruments come here with the track builders.)
+ * dragged onto a track or the Device view. Instruments add a track: Enter or a double-click, below
+ * the selected one; dragged, below the tracks (BR-1).
  */
 export default function Browser({ graph, module }: { graph: GraphState; module: string }) {
   const [query, setQuery] = useState("");
@@ -91,10 +96,17 @@ export default function Browser({ graph, module }: { graph: GraphState; module: 
   const connected = useStore((s) => s.connected);
   const locked = lockReason(graph, connected);
   const groups = useMemo(() => search(graph.effects, query), [graph.effects, query]);
+  const instruments = useMemo(() => instrumentGroups(graph.instruments ?? [], query), [graph.instruments, query]);
   // Folds hold while browsing; a search shows every match.
   const shown = groups.map((g) => ({ ...g, open: !!query.trim() || !folded.has(g.name) }));
-  const flat = shown.flatMap((g) => (g.open ? g.items.map((m) => m.effect) : []));
+  const playable = instruments.map((g) => ({ ...g, open: !!query.trim() || !folded.has(`instruments:${g.name}`) }));
+  // Instruments first, then effects: one keyboard list.
+  const flat: Row[] = [
+    ...playable.flatMap((g) => (g.open ? g.items.map((i) => ({ instrument: i })) : [])),
+    ...shown.flatMap((g) => (g.open ? g.items.map((m) => ({ effect: m.effect })) : [])),
+  ];
   const current = active === null ? null : flat[Math.min(active, flat.length - 1)];
+  const currentId = current && ("instrument" in current ? current.instrument.component : current.effect.component);
   const target = moduleName(graph.view.modules.find((m) => m.key === module) ?? { key: module });
 
   const fold = (name: string) =>
@@ -113,7 +125,12 @@ export default function Browser({ graph, module }: { graph: GraphState; module: 
     setActive(next);
     requestAnimationFrame(() => list.current?.querySelector("[data-active]")?.scrollIntoView({ block: "nearest" }));
   };
-  const add = (e: Effect) => addEffectTo(useShell.getState().module ?? module, e.component);
+  const add = (r: Row) => {
+    if ("effect" in r) return addEffectTo(useShell.getState().module ?? module, r.effect.component);
+    // A new track goes below the selected one.
+    const s = useShell.getState();
+    void addTrack(r.instrument, s.selected && s.selected !== "song" ? s.selected : null);
+  };
 
   let index = 0;
   return (
@@ -150,9 +167,9 @@ export default function Browser({ graph, module }: { graph: GraphState; module: 
       <div
         ref={list}
         role="listbox"
-        aria-label="Effects"
+        aria-label="Instruments and effects"
         tabIndex={0}
-        aria-activedescendant={current ? `browser-${current.component}` : undefined}
+        aria-activedescendant={currentId ? `browser-${currentId}` : undefined}
         className="flex-1 min-h-0 overflow-y-auto px-2 pb-2 outline-none"
         onKeyDown={(e) => {
           if (e.key === "ArrowDown") move(1);
@@ -164,7 +181,49 @@ export default function Browser({ graph, module }: { graph: GraphState; module: 
           e.stopPropagation();
         }}
       >
-        <div className="h-ctl-sm px-1 flex items-center text-sm font-semibold text-fg">Effects</div>
+        {/* Instruments by their groups (Drums, Instruments), each a section as Effects is: no group in a group. */}
+        {playable.map((g, k) => (
+          <div key={g.name} role="group" aria-label={g.name} data-browser-category={`instruments:${g.name}`} className={clsx(k > 0 && "mt-2")}>
+            <button
+              aria-expanded={g.open}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => !query.trim() && fold(`instruments:${g.name}`)}
+              className="w-full h-ctl-sm px-1 flex items-center rounded-sm text-sm font-semibold text-fg hover:bg-hover cursor-pointer transition-colors duration-80 ease-linear"
+            >
+              {g.name}
+            </button>
+            {g.open &&
+              g.items.map((ins) => {
+                const i = index++;
+                const on = currentId === ins.component;
+                return (
+                  <div
+                    key={ins.component}
+                    id={`browser-${ins.component}`}
+                    role="option"
+                    aria-selected={on}
+                    data-browser-instrument={ins.component}
+                    data-active={on || undefined}
+                    draggable={!locked}
+                    title={`${ins.description}\n${ins.name}${locked ? `\n\n${locked}.` : "\n\nEnter or double-click adds a track with it; drag it below the tracks"}`}
+                    onPointerDown={() => setActive(i)}
+                    onDoubleClick={() => add({ instrument: ins })}
+                    onDragStart={(ev) => {
+                      ev.dataTransfer.setData(INSTRUMENT_DRAG, ins.component);
+                      ev.dataTransfer.effectAllowed = "copy";
+                    }}
+                    className={clsx(
+                      "h-ctl-sm pl-4 pr-2 flex items-center rounded-sm text-sm cursor-default transition-colors duration-80 ease-linear",
+                      on ? "bg-accent-soft text-fg" : "text-fg hover:bg-hover",
+                    )}
+                  >
+                    <span className="truncate">{ins.label}</span>
+                  </div>
+                );
+              })}
+          </div>
+        ))}
+        <div className={clsx("h-ctl-sm px-1 flex items-center text-sm font-semibold text-fg", playable.length > 0 && "mt-2")}>Effects</div>
         {flat.length === 0 && query && <NoMatch query={query} className="mt-2" />}
         {shown.map((g) => {
           const { Icon } = category(g.name);
@@ -185,7 +244,7 @@ export default function Browser({ graph, module }: { graph: GraphState; module: 
               {g.open &&
                 g.items.map(({ effect: e }) => {
                   const i = index++;
-                  const on = e === current;
+                  const on = currentId === e.component;
                   return (
                     <div
                       key={e.component}
@@ -197,7 +256,7 @@ export default function Browser({ graph, module }: { graph: GraphState; module: 
                       draggable={!locked}
                       title={`${e.description}\n${e.name}${locked ? `\n\n${locked}.` : `\n\nEnter or double-click adds it to ${target}; drag it onto a track`}`}
                       onPointerDown={() => setActive(i)}
-                      onDoubleClick={() => add(e)}
+                      onDoubleClick={() => add({ effect: e })}
                       onDragStart={(ev) => {
                         ev.dataTransfer.setData(EFFECT_DRAG, e.component);
                         ev.dataTransfer.effectAllowed = "copy";

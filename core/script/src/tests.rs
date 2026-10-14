@@ -1220,7 +1220,12 @@ fn descriptors_are_checked_where_declared() {
         ("{ id: \"lp\", inputs: { xs: port.any().many(), y: port.any() } }".into(), "\"xs\" takes many signals, so it must come last"),
         (format!("{{ id: \"lp\", {a}, settings: {{ voices: setting.int(1.5) }} }}"), "must be a whole number"),
         (format!("{{ id: \"lp\", {a}, editor: {{ category: \"Filter\", insert: {{ cutoff: 1 }} }} }}"), "editor.insert names \"cutoff\", which isn't a control"),
-        ("{ id: \"lp\", inputs: { notes: port.notes() }, output: port.audio(), editor: { category: \"Filter\" } }".into(), "takes audio as its first argument"),
+        ("{ id: \"lp\", inputs: { x: port.control() }, output: port.audio(), editor: { category: \"Filter\" } }".into(), "takes audio as its first argument"),
+        // A category with notes first is an instrument: it makes audio, from its notes alone (PKG-7).
+        ("{ id: \"lp\", inputs: { notes: port.notes() }, output: port.control(), editor: { category: \"Drums\" } }".into(), "an instrument (editor.category, notes first) outputs audio"),
+        ("{ id: \"lp\", inputs: { notes: port.notes(), x: port.audio() }, output: port.audio(), editor: { category: \"Drums\" } }".into(), "has one input"),
+        ("{ id: \"lp\", inputs: { notes: port.notes() }, controls: { c: control.hz() }, output: port.audio(), editor: { category: \"Drums\" } }".into(), "from its notes alone, which leaves out \"c\""),
+        ("{ id: \"lp\", inputs: { notes: port.notes() }, controls: { c: control.hz(1) }, output: port.audio(), editor: { category: \"Drums\", insert: { c: 2 } } }".into(), "has no editor.insert"),
         (format!("{{ id: \"lp\", {a}, controls: {{ c: control.hz() }}, editor: {{ category: \"Filter\" }} }}"), "leaves out \"c\""),
     ] {
         let e = declare(&decl);

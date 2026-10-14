@@ -25,6 +25,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 - Write your own instruments and effects in TypeScript, with knobs, defaults and ranges, the way std's are written ([Your own components](../README.md#your-own-components)).
 - Edit the code in the app, with type checks. When the code breaks, the last working version keeps playing. A song whose code doesn't compile when it's opened still opens, in its code, and plays once a save makes it compile.
 - Undo and redo every edit made in the app. An edit is refused, rather than written, when it would change anything but what it says, and an undo is refused only when what it puts back was changed since.
+- Add a track without writing code: **+ Track** (⌘T) lists the instruments, drums first, and adds the one you pick below the selected track. It writes `tracks/<key>.ts`, imports it in `song.ts`, gives it the mixer's last channel and an empty notes lane, as one edit Undo takes back. Duplicate a track (⌘D), with its clips, its plugins' saved settings and its mixer channel; delete one (⌘⌫), which asks first when another track's effect listens to it. Drag a track's name to reorder, and pick its colour from its menu: both are kept by name in `layout.json`, so colours never shift when tracks come and go. The same from `m2 add-track`, `duplicate-track`, `delete-track` and `layout`.
 - Rename a track's label without moving or silencing anything: double-click its name in the timeline (or the dock's header), or press ⌘R, or write `track("kick", { name: "Big Kick" }, …)`. Data is filed under the track's key.
 - Automate a knob: right-click it, **Automate**. It gets an automation lane of its own, which plays the knob's old value until it has points (drawing them is #14).
 - See what needs attention. When a track's or a lane's key is renamed in code, its notes or automation stop playing; the status pill in the top bar says so, and its popover says it in plain words and offers to move the data where it belongs now (a renamed track's whole folder in one click), or to delete it. Undo takes either back. It also lists a data file that doesn't read (its lane keeps playing what it had), clips without ids, and a missing sample or plugin, each with its code and fixes. Every `m2` command that opens the song prints the same, with the commands that fix it (`m2 relink`, `m2 delete-data`, `m2 fix`).
@@ -38,7 +39,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 ## The top ten
 
-1. **Add a track without writing code.** (medium)
+1. **Swap a track's instrument** (adding a track without code works now). (small)
 2. **More instruments**: lead, keys, strings and a richer pad. (medium)
 3. **A drum kit** with snare and clap. (medium)
 4. **A mixer panel**: volume, pan, mute and solo for each track. (medium)
@@ -47,7 +48,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 7. **Loop** the song or a range of bars. (medium)
 8. **Hear notes** as you draw them in the piano roll. (medium)
 9. **Clip editing**: duplicate, copy and paste, resize, split and move clips on the timeline. (medium)
-10. **Rename, delete, reorder and recolour tracks** from the timeline. (medium)
+10. **Rename a track's key** from the app (delete, duplicate, reorder and recolour work now). (small)
 
 ## Everything, by area
 
@@ -74,8 +75,8 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 1 | **Add a track without code.** Pick an instrument (bass, keys, drums…) and music2 writes `tracks/<name>.ts`, imports it in `song.ts`, adds a mixer channel and an empty notes lane, as one checked edit you can undo. Also swap a track's instrument later. | Every track is hand-written TypeScript today, and the app's code editor can't even create a new file. This is the biggest wall for a beginner. | Yes | medium |
-| 10 | **Rename a track's key, delete, reorder and recolour tracks** from the timeline. | Keeping a song tidy. A track's label (the name shown) can be changed in the app by double-clicking it; everything else is code only: change the key in `track()`, delete the file, edit `song.ts`. After a key change in code, **Needs attention** offers to move the track's whole data folder to its new key. | Yes | medium |
+| 1 | **Swap a track's instrument** later. (Adding a track without code works: see [What works today](#what-works-today).) Adding one to a song that mixes its tracks without std's mixer, or picking a CLAP instrument (#32), still needs code. | Changing your mind about a sound shouldn't mean a new track. | Yes | small |
+| 10 | **Rename a track's key** from the app. (Renaming its label, deleting, duplicating, reordering and recolouring work: see [What works today](#what-works-today).) | Keeping a song tidy. A key is changed in `track()` today; after that, **Needs attention** offers to move the track's whole data folder to its new key. | Yes | small |
 
 ### Sounds
 

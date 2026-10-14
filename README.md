@@ -49,12 +49,13 @@ Press **Space** to play. It's an 8-bar pop beat at 116 BPM: kick, clap, hi-hats,
 
 Things to try:
 
-1. **Turn a knob.** Click the **Song** row at the foot of the timeline. The dock below shows the mix as boxes with knobs. Drag a knob while the song plays and you hear it change. Let go, and the new number is written into `song.ts`.
-2. **Add a clip.** In the timeline, double-click the Bass row past the end of the song. A one-bar clip appears, and opens in the dock's **Notes** view (a piano roll).
-3. **Draw notes.** Double-click the grid to add a note (or press B for Draw mode, where a click adds one and a drag paints), drag a note to move it, and drag its right edge to make it longer.
-4. **Add an effect.** Press ⌥1 (or click **Device**), then click **+** on a box that makes sound and pick an effect such as reverb, or drag one from the browser on the left onto a track.
-5. **Undo.** Press ⌘Z to take these back, one at a time.
-6. **Export it.** Click **Export** in the top bar (or File → Export Audio…, ⇧⌘E). The song is written to a WAV file you can play anywhere or share; click **Show in Finder** when it's done.
+1. **Add a track.** Click **+ Track** above the track names (or press ⌘T), type to find an instrument such as Pluck, and press Enter. The new track appears below the selected one, ready to play.
+2. **Turn a knob.** Click the **Song** row at the foot of the timeline. The dock below shows the mix as boxes with knobs. Drag a knob while the song plays and you hear it change. Let go, and the new number is written into `song.ts`.
+3. **Add a clip.** In the timeline, double-click the Bass row past the end of the song. A one-bar clip appears, and opens in the dock's **Notes** view (a piano roll).
+4. **Draw notes.** Double-click the grid to add a note (or press B for Draw mode, where a click adds one and a drag paints), drag a note to move it, and drag its right edge to make it longer.
+5. **Add an effect.** Press ⌥1 (or click **Device**), then click **+** on a box that makes sound and pick an effect such as reverb, or drag one from the browser on the left onto a track.
+6. **Undo.** Press ⌘Z to take these back, one at a time.
+7. **Export it.** Click **Export** in the top bar (or File → Export Audio…, ⇧⌘E). The song is written to a WAV file you can play anywhere or share; click **Show in Finder** when it's done.
 
 ## The window
 
@@ -67,7 +68,10 @@ Stop ends the notes, and echoes and reverb ring out as they would on a real inst
 ### The timeline
 
 - Each track has a row that draws its first notes (or audio) lane, and a row under it for each of its other notes lanes. Its automation lanes fold under it: the arrow by its name, or A, shows them, each with the value it plays at the playhead (see [Words you'll see](#words-youll-see)). The Song's own row is pinned at the foot. The ruler on top counts bars, following the song's time signatures.
+- Tracks are listed in the order the song mixes them, until you move one. Drag a track's name up or down to move it; its colour stays its own. Both are kept in `layout.json`, which never changes the sound (see [The folder](#the-folder)).
 - Click a track's row to select it: the dock below shows that track. Selecting never changes which view the dock is in.
+- **+ Track** (⌘T) adds a track playing an instrument: drums first, then the others. Typing filters the list, ↑↓ move, Enter adds; the list opens on the instrument you added last, so ⌘T then Enter adds another of the same. The new track goes below the selected one, in the first colour no other track has. It writes `tracks/<its key>.ts`, an empty notes lane in `data/`, and two lines in `song.ts`: its import, and its channel at the end of the mixer. One Undo takes it all back.
+- Right-click a track's name (or click ⋯ beside it) for its menu: Rename, Duplicate (⌘D), Delete (⌘⌫), Colour, its automation, and Edit in code. Duplicate copies the track's code, its clips, its plugins' saved settings and its mixer channel (a duck stays a duck), below it in its colour. Delete takes out its file, its import, its channel and its data. When another track's effect listens to it (the bass ducking to the kick), it asks first, and takes that effect off with it.
 - Click the ruler to move the playhead there. Drag across the ruler to loop those beats: playback goes round them until you turn the loop off with the loop button (it keeps the range for next time). With no loop set, the loop button loops the 4 bars from the playhead.
 - Double-click an empty spot in a notes lane to add a one-bar clip. Drag a clip to move it along its lane. Click a clip and press Delete to remove it.
 - Click a notes clip to select it (Notes shows it); double-click it to open it in Notes.
@@ -76,7 +80,7 @@ Stop ends the notes, and echoes and reverb ring out as they would on a real inst
 
 ### The browser
 
-Down the left (⌥⌘B shows or hides it): the effects, by group. Type to search; Enter or a double-click adds the effect to the end of the selected track's sound, and an effect dragged onto a track or the Device view goes at the end of that sound.
+Down the left (⌥⌘B shows or hides it): the instruments (Drums, Instruments) and the effects, by group. Type to search. Enter or a double-click on an instrument adds a track with it below the selected one, and one dragged onto the space below the tracks adds it there. Enter or a double-click on an effect adds it to the end of the selected track's sound, and an effect dragged onto a track or the Device view goes at the end of that sound.
 
 ### The dock below the timeline
 
@@ -106,7 +110,7 @@ It shows the selected track (or the Song) in one of four views, picked with the 
 
 - **New Song…** (the start screen, or File → New Song…, ⌘N, even while a song is open) asks for a name and how the song starts:
   - **Starter beat**: six tracks (kick, clap, hats, bass, chords and a hook), 8 bars at 116 BPM, ready to play and change.
-  - **Empty**: no tracks yet, so it plays silence. `song.ts` has a drum track ready, switched off: delete the `//` in front of its two lines and save, and a Drums lane appears.
+  - **Empty**: no tracks yet, so it plays silence. Its timeline offers **Add a track**. `song.ts` also has a drum track ready, switched off: delete the `//` in front of its two lines and save, and a Drums lane appears.
 - New songs go in the **songs folder**, `~/Music/music2`, each in a folder named after the song. If the name is taken, the new one gets a number ("My song 2"): nothing is ever replaced. `Exports` there is taken by exports, so a song called "Exports" becomes "Exports 2". In the app, **Choose Folder…** in the New Song dialog saves it somewhere else.
 - **Open an Example** on the start screen copies an example into the songs folder and opens the copy. An example that needs plugins you don't have (With plugins) says which, and nothing is copied.
 - **Export** (the button in the top bar, or File → Export Audio…, ⇧⌘E) writes the song to a WAV file: 24-bit, stereo, at the song's sample rate (48 kHz unless its `music2.toml` says otherwise). It starts at bar 1 and goes to the end of the last clip, then on until the sound has died away (silent for half a second, at most 10 seconds more). A song longer than 3 hours (most likely a clip far past the rest) isn't exported: the message says in which bar the last clip ends.
@@ -144,8 +148,10 @@ Every key is listed in the app too: Help → Keyboard Shortcuts, or ⌥K. Single
 | ⌘W | Close the song |
 | ⌘S | Save the code editor's files |
 | ⇧⌘E | Export the song as a WAV file |
+| ⌘T | New track |
+| ⌘⌫ | Delete the selected track (in the code editor or a field, its own ⌘⌫) |
 | ⌘R or ⇧Return | Rename the selected track |
-| ⌘D | Duplicate the selected notes (in the code editor, its own ⌘D) |
+| ⌘D | Duplicate the selected notes, or with none, the selected track (in the code editor, its own ⌘D) |
 | ⌘A | Select all notes in the open clip |
 | Arrow keys | Move the selected notes (⇧: by an octave or a bar) |
 | Delete | Remove the selected clip or notes |
@@ -201,6 +207,7 @@ my-song/
       notes.json       # one file per lane: data/<track key>/<lane key>.json
       cutoff.json      # (a key that is a Windows device name, such as aux, is written aux-)
   assets/              # audio files (WAV), never overwritten
+  layout.json          # the tracks' order and colours: shown, never heard
   .music2/             # this machine's: not part of the song, and not in git
 ```
 
@@ -218,6 +225,8 @@ std = "0.1"
 ```
 
 `arrangement.json` holds `tempo` (a list of `{ "beat", "bpm" }` changes, the first at beat 0) and `meter` (a list of `{ "beat", "beats", "unit" }` time signatures; empty is 4/4). A beat is a quarter note.
+
+`layout.json` is written the first time you move, recolour or add a track: `{"order": ["kick", "hats", …], "tracks": {"kick": {"colour": "rose"}, …}}`. A colour is one of the twelve names (rose, teal, amber, indigo, green, plum, olive, blue, coral, cyan, violet, lime). A track that is missing for a while (commented out of `song.ts`) keeps its place and colour there, and keys the app doesn't know are kept as they are. If it stops being valid JSON (a git merge can leave `<<<<<<<` lines in it), the tracks show in their own order and colours, the status pill says so, and **Reset layout** there writes the default one over it (Undo brings the old text back).
 
 Tracks, lanes and plugins are filed under their keys: short names in lowercase letters, digits and hyphens, such as `lead-vox`. A key is written in the code, so renaming a track's label never moves its data.
 
@@ -431,6 +440,10 @@ const synth = plugin("clap:org.surge-synth-team.surge-xt", { notes: lane.notes("
 | `m2 set <song> <id> <value>` | Changes one, checked by the compiler. `--expect V` refuses unless it's V now. |
 | `m2 automate <song> <id>` | Gives a knob an automation lane of its own, as the app's Automate does: the knob's number becomes the lane's fallback, so the song sounds the same. |
 | `m2 label <song> <track> <name>` | Shows a track, named by its key, as `<name>`: only its `track()` call's name changes. |
+| `m2 add-track <song> <instrument>` | Adds a track playing an instrument (`pluck` or `std:pluck`), as + Track does. `--name "Lead Vox"` names it, `--key` gives its key, `--after kick` puts it below that track. |
+| `m2 duplicate-track <song> <track>` | Copies a track, named by its key: its code, its clips (with new ids), its plugins' saved settings and its mixer channel. |
+| `m2 delete-track <song> <track> [--cascade]` | Takes a track out: its file, its imports, its channel, its data and its place in `layout.json`. When an effect elsewhere listens to it (a duck), it lists them and changes nothing; `--cascade` takes the track out of them too. |
+| `m2 layout <song> order <keys…>` / `colour <key> <colour>` / `reset` | Reorders or recolours tracks in `layout.json` (rose, teal, amber, indigo, green, plum, olive, blue, coral, cyan, violet, lime), or writes the default layout over one that doesn't read. No revision: the layout never changes the sound. |
 | `m2 cables <song>` | The named signals a cable can start from, and the inputs that cables reach. |
 | `m2 connect <song> <signal> <control>` | Writes a signal's name in place of a number. |
 | `m2 disconnect <song> <input>` | Writes the input's default back in place of the name. |
@@ -444,7 +457,7 @@ const synth = plugin("clap:org.surge-synth-team.surge-xt", { notes: lane.notes("
 | `m2 fix <song> <path> <fix>` | Applies a fix a problem offers, such as `assign-clip-ids` or `repin-asset`, or `finish-tx` and `discard-tx` for an edit that was cut off (its path is `.music2/tx/<id>.json`). Every command prints the problems it finds with the commands that fix them. |
 | `m2 tx <song> <tx.json \| -> [--check] [--seen HASH]` | A checked edit written as Tx JSON (see [Scripts and agents](#scripts-and-agents)). `--check` prints what it would change and that change's hash, writing nothing; without it, it is written, and `--seen HASH` writes it only while it still makes the change with that hash. The answer is JSON; the exit status is 1 when nothing was written. |
 
-While the app has a song open, the commands that write it (`set`, `automate`, `label`, `connect`, `disconnect`, `add-effect`, `remove-effect`, `relink`, `delete-data`, `fix`, `tx`, `plugin-state` and `bounce --place`) stop at once, change nothing, and say which program has it. Make the edit in the app, or close the song there first. The other commands, and `bounce` without `--place` (it only makes a new file), work while it's open.
+While the app has a song open, the commands that write it (`set`, `automate`, `label`, `add-track`, `duplicate-track`, `delete-track`, `layout`, `connect`, `disconnect`, `add-effect`, `remove-effect`, `relink`, `delete-data`, `fix`, `tx`, `plugin-state` and `bounce --place`) stop at once, change nothing, and say which program has it. Make the edit in the app, or close the song there first. The other commands, and `bounce` without `--place` (it only makes a new file), work while it's open.
 
 Commands that change a song write into its folder, so try them on a copy, not on the examples:
 

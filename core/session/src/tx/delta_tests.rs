@@ -259,3 +259,23 @@ fn an_asset_a_clip_plays_is_in_the_delta() {
     let delta = after(&d, &mut s, |d| d.write_bytes("assets/keys-bounce.wav", &other));
     assert_eq!(delta.assets, ["keys-bounce.wav"], "{delta:?}");
 }
+
+// WRITE-6, WRITE-8: a new track whose instrument plays voices is Confined to the lines that add
+// it. A voice's note fields (`lane:gate`) are made by the poly they are in, so they are placed
+// where the poly is: without, nothing in the project placed them and no range admitted them.
+#[test]
+fn a_new_tracks_voices_are_placed_where_its_poly_is() {
+    let d = Dir::first_song();
+    let mut s = d.open();
+    let text = "import { track } from \"@m2/core\";\nimport { pluck } from \"std/instruments\";\n\
+                const probe = track(\"probe\", ({ lane }) => pluck(lane.notes(\"notes\")));\n";
+    let op = TxOp::TextEdit { file: p("song.ts"), edits: vec![insert(0, text)] };
+    let ranges = m2_song::tx::Declared::Ranges(vec![Range::bytes(0, 0)]);
+    let confined = m2_song::tx::Confined {
+        ranges: [(p("song.ts"), ranges)].into(),
+        lanes: vec![],
+        modules: vec![ModuleChange::Added(Key::new("probe").unwrap())],
+    };
+    let checked = s.check(&based(&d, vec![op], Expect::Confined(confined))).unwrap_or_else(|r| panic!("{r:?}"));
+    assert!(checked.delta.added.iter().any(|n| n.name.iter().any(|seg| seg == "voice")), "the voices are in the delta");
+}

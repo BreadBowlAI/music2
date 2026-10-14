@@ -30,6 +30,9 @@ pub struct TimelineTrack {
     /// What to show for it, never an address (ID-10).
     pub label: String,
     pub track: bool,
+    /// Its colour by palette name (taste.md §2.7), from `layout.json` or by its place; `graphite`
+    /// for a module that isn't a track (the song's own lanes).
+    pub colour: String,
     /// In the order they are declared.
     pub lanes: Vec<TimelineLane>,
 }
@@ -94,18 +97,35 @@ pub fn timeline(s: &Session) -> TimelineView {
         return last_known(rev);
     }
     let data = &rev.compiled.data;
+    let layout = crate::layout::view(s);
     let tracks = rev.compiled.ir.modules.iter().filter(|m| m.track || !m.lanes.is_empty());
-    let tracks = tracks
+    let mut tracks: Vec<TimelineTrack> = tracks
         .map(|m| TimelineTrack {
             module: m.key.clone(),
             label: m.label().to_string(),
             track: m.track,
+            colour: colour_of(&layout, &m.key, m.track),
             lanes: m.lanes.iter().map(|l| lane(data, &m.key, l)).collect(),
         })
         .collect();
+    in_order(&mut tracks, &layout);
     let a = &rev.project.arrangement;
     let bar = a.meter_at(0.0).bar();
     TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), end: data.end().max(bar), tracks }
+}
+
+/// A module's colour by name: a track's from the layout, else graphite.
+fn colour_of(layout: &crate::layout::LayoutView, key: &str, track: bool) -> String {
+    match (track, layout.colours.get(key)) {
+        (true, Some(c)) => c.to_string(),
+        _ => "graphite".into(),
+    }
+}
+
+/// `tracks` in the layout's order (FMT-19, taste.md §3.4): the modules it doesn't list (the song's
+/// own lanes) after, as they were.
+fn in_order(tracks: &mut [TimelineTrack], layout: &crate::layout::LayoutView) {
+    tracks.sort_by_key(|t| layout.order.iter().position(|k| *k == t.module).unwrap_or(usize::MAX));
 }
 
 /// A project opened with code that doesn't compile (WRITE-20) declares nothing yet, but its files
@@ -138,10 +158,17 @@ fn last_known(rev: &Revision) -> TimelineView {
         end = end.max(lane_end(&lane));
         modules.entry(addr.module.to_string()).or_default().push(lane);
     }
-    let tracks = modules
+    // Its colours and order as the layout says, over the folders there are.
+    let keys: Vec<String> = modules.keys().filter(|k| *k != m2_song::ROOT).cloned().collect();
+    let layout = crate::layout::effective(&keys, &crate::layout::read_disk(&rev.project.dir));
+    let mut tracks: Vec<TimelineTrack> = modules
         .into_iter()
-        .map(|(module, lanes)| TimelineTrack { label: sentence(&module), track: module != m2_song::ROOT, module, lanes })
+        .map(|(module, lanes)| {
+            let track = module != m2_song::ROOT;
+            TimelineTrack { label: sentence(&module), track, colour: colour_of(&layout, &module, track), module, lanes }
+        })
         .collect();
+    in_order(&mut tracks, &layout);
     let a = &project.arrangement;
     TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), end: end.max(a.meter_at(0.0).bar()), tracks }
 }

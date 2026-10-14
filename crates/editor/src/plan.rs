@@ -32,6 +32,19 @@ pub fn base_of(rev: &Revision, p: &TxPath) -> Base {
     }
 }
 
+/// What the disk has at project path `file` now, as a Tx's base: for a file no snapshot holds
+/// (`layout.json`, PLANE-3), so the commit compares against the disk as for any base. Its text, or
+/// Absent when there is none; a file that isn't text is based on its hash.
+pub fn base_from_disk(s: &Session, file: &str) -> Base {
+    match std::fs::read(s.accepted().project.dir.join(file)) {
+        Ok(bytes) => match String::from_utf8(bytes) {
+            Ok(text) => Base::text(&text),
+            Err(e) => Base::Sha(m2_song::Sha::of(e.as_bytes())),
+        },
+        Err(_) => Base::Absent,
+    }
+}
+
 /// A Tx of `ops`, labelled `label` for history, judged by `expect`, with a fresh id (FMT-11) and
 /// every file it touches based on what the accepted revision has: every position in it is in
 /// the text the builder planned on.

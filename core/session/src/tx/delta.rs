@@ -368,12 +368,16 @@ impl Side<'_> {
 
     /// Every node of one scope (a module's top level, or a voice, which reads its own nodes
     /// first, then the module's), and the voices inside it. Returns the scope's names by id.
+    /// A voice is made inside its poly's calls, so each of its nodes is also placed where the
+    /// poly is (`within`): a note field (`lane:gate`) has no place of its own in the project.
+    #[allow(clippy::too_many_arguments)]
     fn scope(
         &self,
         m: &Module,
         nodes: &[Node],
         prefix: &Name,
         outer: Option<&HashMap<String, Name>>,
+        within: &[At],
         sites: &HashMap<u32, &Site>,
         g: &mut Graph,
     ) -> HashMap<String, Name> {
@@ -386,7 +390,8 @@ impl Side<'_> {
             let (id, port) = split_ref(r);
             Ref { node: ids.get(id).cloned().unwrap_or_else(|| vec![m.key.clone(), format!("?{id}")]), port: port.to_string() }
         };
-        for (n, (name, Places { spans, written, slot })) in nodes.iter().zip(named) {
+        for (n, (name, Places { mut spans, written, slot })) in nodes.iter().zip(named) {
+            spans.extend(within.iter().cloned());
             let mut inputs = BTreeMap::new();
             match &n.op {
                 Op::Kernel { inputs: i, .. } | Op::Plugin { inputs: i, .. } => {
@@ -401,7 +406,7 @@ impl Side<'_> {
                     inputs.insert("events".into(), resolve(&ids, events));
                     let mut voice = name.clone();
                     voice.push("voice".into());
-                    let local = self.scope(m, &body.nodes, &voice, Some(&ids), sites, g);
+                    let local = self.scope(m, &body.nodes, &voice, Some(&ids), &spans, sites, g);
                     inputs.insert("out".into(), resolve(&local, &body.out));
                 }
                 _ => {}
@@ -424,7 +429,7 @@ impl Side<'_> {
         let ir = &self.compiled.ir;
         for m in &ir.modules {
             g.modules.insert(m.key.clone());
-            let ids = self.scope(m, &m.nodes, &vec![m.key.clone()], None, &sites, &mut g);
+            let ids = self.scope(m, &m.nodes, &vec![m.key.clone()], None, &[], &sites, &mut g);
             for (e, r) in &m.exports {
                 let (id, port) = split_ref(r);
                 let node = ids.get(id).cloned().unwrap_or_else(|| vec![m.key.clone(), format!("?{id}")]);

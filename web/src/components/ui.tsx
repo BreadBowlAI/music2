@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 
 /**
  * The app's buttons (taste.md §2.9). `ghost` is a toolbar button, `active` its on state; `primary`
- * the one main action; `secondary` the others. Sizes are the control heights: `sm` 24px (dock
+ * the one main action; `secondary` the others; `danger` a dialog's delete. Sizes are the control heights: `sm` 24px (dock
  * tools), `md` 28px (top bar, rows), `lg` 32px (dialogs).
  */
 export function Button({
@@ -14,7 +14,7 @@ export function Button({
   active,
   className,
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "ghost" | "primary" | "secondary"; size?: "sm" | "md" | "lg"; active?: boolean }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "ghost" | "primary" | "secondary" | "danger"; size?: "sm" | "md" | "lg"; active?: boolean }) {
   return (
     <button
       {...props}
@@ -26,6 +26,8 @@ export function Button({
         variant === "ghost" &&
           (active ? "bg-accent-soft text-accent-strong" : "text-fg-muted hover:text-fg hover:bg-hover active:bg-press disabled:text-fg-off"),
         variant === "primary" && "bg-accent text-white hover:bg-accent-hover active:bg-accent-strong disabled:bg-press disabled:text-fg-off",
+        // What can't be taken back from here in one click: a delete that takes more with it.
+        variant === "danger" && "bg-danger text-white hover:bg-danger-strong active:bg-danger-strong disabled:bg-press disabled:text-fg-off",
         variant === "secondary" &&
           "bg-raised border border-line-strong text-fg hover:border-fg-off active:bg-hover disabled:text-fg-off disabled:border-line",
         className,
@@ -49,6 +51,7 @@ export function Popover({
   anchor,
   onClose,
   align = "start",
+  side = "below",
   className,
   children,
   ...rest
@@ -57,6 +60,8 @@ export function Popover({
   onClose: () => void;
   /** Its left edge on the trigger's, or (`end`) its right edge on the trigger's. */
   align?: "start" | "end";
+  /** Below the trigger, or beside it on the right (a submenu, Colour ▸), on the left at the window's edge. */
+  side?: "below" | "right";
   className?: string;
   children: ReactNode;
 } & Omit<HTMLAttributes<HTMLDivElement>, "children">) {
@@ -64,6 +69,11 @@ export function Popover({
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   useLayoutEffect(() => {
     const a = anchor.getBoundingClientRect(), r = box.current!.getBoundingClientRect();
+    if (side === "right") {
+      const right = a.right + 4 + r.width <= window.innerWidth - 8;
+      setPos({ left: right ? a.right + 4 : Math.max(8, a.left - 4 - r.width), top: Math.max(8, Math.min(a.top - 4, window.innerHeight - r.height - 8)) });
+      return;
+    }
     const left = Math.max(8, Math.min(align === "end" ? a.right - r.width : a.left, window.innerWidth - r.width - 8));
     const below = a.bottom + 4;
     setPos({ left, top: below + r.height > window.innerHeight - 8 ? Math.max(8, a.top - 4 - r.height) : below });
@@ -101,7 +111,9 @@ export function Popover({
     <div
       ref={box}
       {...rest}
-      style={pos ?? { left: 0, top: 0, visibility: "hidden" }}
+      // Measured unseen before it is placed, yet focusable: a field in it takes the keys at once
+      // (⌘T then Enter adds a track before a frame has passed).
+      style={pos ?? { left: 0, top: 0, opacity: 0, pointerEvents: "none" }}
       className={clsx("fixed z-50 p-1 rounded-md bg-raised shadow-pop animate-rise cursor-default", className)}
       onContextMenu={(e) => e.preventDefault()}
     >
