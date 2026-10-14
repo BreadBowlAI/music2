@@ -29,6 +29,8 @@ pub mod tx;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::ops::Bound;
+use std::sync::Arc;
 
 pub use arrangement::{Arrangement, Meter, Tempo, TempoMap};
 pub use data::{DataSet, Decls, Sidecar, StateDecl, Unused};
@@ -49,15 +51,17 @@ pub use tx::{Anchor, Base, Confined, Declared, DeltaHash, Expect, ModuleChange, 
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     pub dir: PathBuf,
-    /// Contents by path relative to `dir`.
-    pub files: BTreeMap<PathBuf, String>,
+    /// Contents by path relative to `dir`. Shared: a snapshot made from another shares every
+    /// text it didn't change, so a clone or a compare costs the files that changed.
+    pub files: BTreeMap<PathBuf, Arc<str>>,
     /// Assets and state blobs by path relative to `dir`: never their bytes (FMT-6). State blobs
-    /// and the assets a lane names are hashed; other assets are listed by name.
-    pub binaries: BTreeMap<PathBuf, Stored>,
+    /// and the assets a lane names are hashed; other assets are listed by name. Shared until
+    /// changed (`Arc::make_mut`), so a project with thousands of assets copies none per edit.
+    pub binaries: Arc<BTreeMap<PathBuf, Stored>>,
     /// Files under `data/` that [`DataPath`] can't parse (FMT-7), and files in `assets/` whose
     /// name is an asset's in another Unicode form (FMT-15). They are Ignored files, so they never
     /// make two snapshots differ (PLANE-3).
-    pub unknown: BTreeSet<PathBuf>,
+    pub unknown: Arc<BTreeSet<PathBuf>>,
     /// Files of the explicit set, and folders, that were listed but couldn't be read, with why:
     /// a lane file at mode 000, a dangling link, a folder that can't be listed. Only the
     /// manifest's, code's and the arrangement's block; a lane's or a sidecar's never stops
@@ -97,6 +101,7 @@ impl Snapshot {
         use anyhow::Context;
         let dir = dir.canonicalize().with_context(|| format!("opening project {}", dir.display()))?;
         let mut snap = Snapshot { dir: dir.clone(), ..Snapshot::default() };
+        let (mut binaries, mut unknown) = (BTreeMap::new(), BTreeSet::new());
         let mut stack = vec![dir.clone()];
         while let Some(d) = stack.pop() {
             let rel = |p: &Path| p.strip_prefix(&dir).expect("inside the project").to_path_buf();
@@ -121,45 +126,82 @@ impl Snapshot {
                     }
                     continue;
                 }
-                match DataPath::parse(&rel) {
-                    DataPath::Manifest
-                    | DataPath::Code(_)
-                    | DataPath::Arrangement
-                    | DataPath::Lane { .. }
-                    | DataPath::PluginState { sidecar: true, .. } => match std::fs::read(&p) {
-                        Ok(bytes) => {
-                            let text = String::from_utf8(bytes).unwrap_or_else(|e| {
-                                snap.not_utf8.insert(rel.clone(), Sha::of(e.as_bytes()));
-                                String::from_utf8_lossy(e.as_bytes()).into_owned()
-                            });
-                            snap.files.insert(rel, text);
-                        }
-                        // Removed between the listing and the read: as if listed a moment later.
-                        // A dangling link is listed, and stays unreadable.
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !kind.as_ref().is_ok_and(|t| t.is_symlink()) => {}
-                        Err(e) => {
-                            snap.unreadable.insert(rel, e.to_string());
-                        }
-                    },
-                    DataPath::PluginState { sidecar: false, .. } => {
-                        snap.binaries.insert(rel, stored(&p));
-                    }
-                    DataPath::Asset(_) => {
-                        snap.binaries.insert(rel, Stored::Listed);
-                    }
-                    // Dot files (`.DS_Store`) are the system's, not a typo.
-                    d if d.unknown_data() && !name.starts_with('.') => {
-                        snap.unknown.insert(rel);
-                    }
-                    // An asset's name in another Unicode form, so a reference to it can say so.
-                    DataPath::Unknown(_) if path::denormal_asset(&rel).is_some() => {
-                        snap.unknown.insert(rel);
-                    }
-                    _ => {}
-                }
+                let link = kind.as_ref().is_ok_and(|t| t.is_symlink());
+                snap.read_entry(&p, rel, link, &mut binaries, &mut unknown);
             }
         }
+        (snap.binaries, snap.unknown) = (Arc::new(binaries), Arc::new(unknown));
         snap.hash_assets();
+        HashCache::global().save();
+        Ok(snap)
+    }
+
+    /// Read the file at `p` (project path `rel`; `link`: a symbolic link) into this snapshot, by what
+    /// [`DataPath`] classes it as, as [`Snapshot::read`] reads each file it lists.
+    fn read_entry(&mut self, p: &Path, rel: PathBuf, link: bool, binaries: &mut BTreeMap<PathBuf, Stored>, unknown: &mut BTreeSet<PathBuf>) {
+        let d = DataPath::parse(&rel);
+        match d {
+            DataPath::Manifest
+            | DataPath::Code(_)
+            | DataPath::Arrangement
+            | DataPath::Lane { .. }
+            | DataPath::PluginState { sidecar: true, .. } => match std::fs::read(p) {
+                Ok(bytes) => {
+                    let text = String::from_utf8(bytes).unwrap_or_else(|e| {
+                        self.not_utf8.insert(rel.clone(), Sha::of(e.as_bytes()));
+                        String::from_utf8_lossy(e.as_bytes()).into_owned()
+                    });
+                    self.files.insert(rel, text.into());
+                }
+                // Removed between the listing and the read: as if listed a moment later. A
+                // dangling link is listed, and stays unreadable.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound && !link => {}
+                Err(e) => {
+                    self.unreadable.insert(rel, e.to_string());
+                }
+            },
+            DataPath::PluginState { sidecar: false, .. } => {
+                binaries.insert(rel, stored(p));
+            }
+            DataPath::Asset(_) => {
+                binaries.insert(rel, Stored::Listed);
+            }
+            d if path::listed_unknown(&d, &rel) => {
+                unknown.insert(rel);
+            }
+            _ => {}
+        }
+    }
+
+    /// What [`Snapshot::read`] reads of `paths` alone (files of the project, by their paths in it),
+    /// with `unknown` as the Ignored files a walk of the project listed: a batch the watcher settled
+    /// is read without reading or listing the rest of the project (WRITE-19). A path with no file
+    /// there is absent. Of the assets, those `hashed` names are hashed and the rest listed: which
+    /// of them a lane names is settled where the paths are taken in.
+    pub fn read_paths(dir: &Path, paths: &BTreeSet<PathBuf>, hashed: &dyn Fn(&Path) -> bool, unknown: BTreeSet<PathBuf>) -> anyhow::Result<Snapshot> {
+        use anyhow::Context;
+        let dir = dir.canonicalize().with_context(|| format!("opening project {}", dir.display()))?;
+        let mut snap = Snapshot { dir: dir.clone(), ..Snapshot::default() };
+        let (mut binaries, mut ignored) = (BTreeMap::new(), BTreeSet::new());
+        let mut folders = BTreeMap::new();
+        for rel in paths {
+            // Only a name the disk lists, as a walk would: one a disk that ignores capitals or
+            // Unicode forms still opens (a rename's old name) is not there.
+            if !listed(&dir, rel, &mut folders) {
+                continue;
+            }
+            let p = dir.join(rel);
+            let Ok(meta) = std::fs::symlink_metadata(&p) else { continue };
+            if !meta.is_dir() {
+                snap.read_entry(&p, rel.clone(), meta.file_type().is_symlink(), &mut binaries, &mut ignored);
+            }
+        }
+        for (p, s) in binaries.iter_mut() {
+            if *s == Stored::Listed && hashed(p) {
+                *s = stored(&dir.join(p));
+            }
+        }
+        (snap.binaries, snap.unknown) = (Arc::new(binaries), Arc::new(unknown));
         HashCache::global().save();
         Ok(snap)
     }
@@ -179,8 +221,9 @@ impl Snapshot {
             }
         }
         for p in named {
-            if let Some(s @ Stored::Listed) = self.binaries.get_mut(&p) {
-                *s = stored(&self.dir.join(&p));
+            if matches!(self.binaries.get(&p), Some(Stored::Listed)) {
+                let s = stored(&self.dir.join(&p));
+                Arc::make_mut(&mut self.binaries).insert(p, s);
             }
         }
     }
@@ -199,14 +242,14 @@ impl Snapshot {
     }
 
     /// The TypeScript files, by absolute path.
-    pub fn sources(&self) -> impl Iterator<Item = (PathBuf, &String)> {
-        self.files.iter().filter(|(p, _)| matches!(DataPath::parse(p), DataPath::Code(_))).map(|(p, t)| (self.dir.join(p), t))
+    pub fn sources(&self) -> impl Iterator<Item = (PathBuf, &str)> {
+        self.files.iter().filter(|(p, _)| matches!(DataPath::parse(p), DataPath::Code(_))).map(|(p, t)| (self.dir.join(p), &**t))
     }
 
     /// Every file at `p` or inside it, with what it holds, in path order.
     pub fn under(&self, p: &Path) -> Vec<(PathBuf, Content)> {
-        let text = self.files.iter().filter(|(k, _)| k.starts_with(p)).map(|(k, t)| (k.clone(), Content::Text(t.clone())));
-        let bin = self.binaries.iter().filter(|(k, _)| k.starts_with(p)).map(|(k, b)| (k.clone(), Content::Binary(b.clone())));
+        let text = under(&self.files, p).map(|(k, t)| (k.clone(), Content::Text(t.clone())));
+        let bin = under(&*self.binaries, p).map(|(k, b)| (k.clone(), Content::Binary(b.clone())));
         let mut all: Vec<(PathBuf, Content)> = text.chain(bin).collect();
         all.sort_by(|a, b| a.0.cmp(&b.0));
         all
@@ -219,7 +262,7 @@ impl Snapshot {
     /// included. Judged by the names alone, so a project acts the same on every disk.
     pub fn taken(&self, p: &Path) -> Option<PathBuf> {
         let want: Vec<String> = p.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
-        let paths = self.files.keys().chain(self.binaries.keys()).chain(&self.unknown).chain(self.unreadable.keys());
+        let paths = self.files.keys().chain(self.binaries.keys()).chain(self.unknown.iter()).chain(self.unreadable.keys());
         paths.into_iter().find_map(|k| {
             let mut at = PathBuf::new();
             for (i, c) in k.components().enumerate() {
@@ -249,8 +292,53 @@ impl Snapshot {
 /// What a snapshot knows of a file.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Content {
-    Text(String),
+    Text(Arc<str>),
     Binary(Stored),
+}
+
+/// The entries of `map` at `p` or inside it, in path order. Paths order by component, so they are
+/// one run, from `p` to [`past`] it: found without visiting the rest (thousands of assets beside a
+/// lane), nor comparing each one's components.
+pub fn under<'a, V>(map: &'a BTreeMap<PathBuf, V>, p: &Path) -> std::collections::btree_map::Range<'a, PathBuf, V> {
+    match past(p) {
+        Some(end) => map.range::<Path, _>((Bound::Included(p), Bound::Excluded(end.as_path()))),
+        None => map.range::<Path, _>(..),
+    }
+}
+
+/// The paths of `set` at `p` or inside it, as [`under`] finds them.
+pub fn under_set<'a>(set: &'a BTreeSet<PathBuf>, p: &Path) -> std::collections::btree_set::Range<'a, PathBuf> {
+    match past(p) {
+        Some(end) => set.range::<Path, _>((Bound::Included(p), Bound::Excluded(end.as_path()))),
+        None => set.range::<Path, _>(..),
+    }
+}
+
+/// The first path after `p` and every path inside it: its last name with a NUL after it, which no
+/// name on a disk has, so nothing sorts between. None for the empty path, which holds them all.
+fn past(p: &Path) -> Option<PathBuf> {
+    let mut name = p.file_name()?.to_os_string();
+    name.push("\0");
+    Some(p.with_file_name(name))
+}
+
+/// Whether each name of project path `rel` is one its folder lists, exactly, under `dir`, through
+/// folders that aren't links: what a walk from the project reaches. `folders` holds the folders
+/// listed so far, by their paths.
+fn listed(dir: &Path, rel: &Path, folders: &mut BTreeMap<PathBuf, Option<BTreeMap<std::ffi::OsString, bool>>>) -> bool {
+    let mut at = PathBuf::new();
+    let parts: Vec<&std::ffi::OsStr> = rel.iter().collect();
+    for (i, name) in parts.iter().enumerate() {
+        // Each name with whether it is a folder (its entry's type, never followed).
+        let names = folders.entry(at.clone()).or_insert_with(|| {
+            std::fs::read_dir(dir.join(&at)).ok().map(|r| r.flatten().map(|e| (e.file_name(), e.file_type().is_ok_and(|t| t.is_dir()))).collect())
+        });
+        match names.as_ref().and_then(|n| n.get(*name)) {
+            Some(&folder) if folder || i + 1 == parts.len() => at.push(name),
+            _ => return false,
+        }
+    }
+    true
 }
 
 fn stored(path: &Path) -> Stored {
@@ -296,13 +384,13 @@ pub struct Project {
     pub arrangement: Arrangement,
     /// Every Code file, by its path in the project, `/`-separated: all the build may import
     /// from the project (FMT-6a).
-    pub code: BTreeMap<String, String>,
-    /// Lane files by address: their path and text.
-    lanes: BTreeMap<LaneAddr, (PathBuf, String)>,
+    pub code: BTreeMap<String, Arc<str>>,
+    /// Lane files by address: their path and text, shared with the snapshot.
+    lanes: BTreeMap<LaneAddr, (PathBuf, Arc<str>)>,
     /// State sidecars' text, by path.
-    sidecars: BTreeMap<PathBuf, String>,
-    binaries: BTreeMap<PathBuf, Stored>,
-    unknown: BTreeSet<PathBuf>,
+    sidecars: BTreeMap<PathBuf, Arc<str>>,
+    binaries: Arc<BTreeMap<PathBuf, Stored>>,
+    unknown: Arc<BTreeSet<PathBuf>>,
     /// Data files and folders that couldn't be read, with why (FMT-9).
     unreadable: BTreeMap<PathBuf, String>,
 }
@@ -374,8 +462,8 @@ impl Project {
             code: BTreeMap::new(),
             lanes: BTreeMap::new(),
             sidecars: BTreeMap::new(),
-            binaries: BTreeMap::new(),
-            unknown: BTreeSet::new(),
+            binaries: Arc::default(),
+            unknown: Arc::default(),
             unreadable: BTreeMap::new(),
         }
     }

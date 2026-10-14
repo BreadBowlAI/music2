@@ -22,9 +22,16 @@
 //! it (FMT-8a), so the order of an array never changes the sound.
 
 use std::cmp::Ordering;
+use std::fmt::Write as _;
+use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+
+#[cfg(test)]
+mod oracle;
+#[cfg(test)]
+mod oracle_tests;
 
 /// What a note written without a velocity plays at.
 pub const VELOCITY: f64 = 0.8;
@@ -63,17 +70,47 @@ fn default_velocity() -> f64 {
     VELOCITY
 }
 
+/// A number, or a name read by [`parse_pitch`]. A visitor rather than an untagged enum, which
+/// tried the number first and made an error for every named pitch; what it says for anything else
+/// is that enum's message, so a file's errors read as they did.
 fn pitch<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum P {
-        N(f64),
-        S(String),
+    struct Pitch;
+    /// What the untagged enum said for a value that is neither.
+    const NEITHER: &str = "data did not match any variant of untagged enum P";
+    impl<'de> serde::de::Visitor<'de> for Pitch {
+        type Value = f64;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a pitch: 60, or \"C4\"")
+        }
+        fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<f64, E> {
+            Ok(v)
+        }
+        fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<f64, E> {
+            Ok(v as f64)
+        }
+        fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<f64, E> {
+            Ok(v as f64)
+        }
+        fn visit_str<E: serde::de::Error>(self, s: &str) -> Result<f64, E> {
+            parse_pitch(s).ok_or_else(|| E::custom(format!("bad pitch `{s}` (try 60 or \"C4\")")))
+        }
+        fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<f64, E> {
+            Err(E::custom(NEITHER))
+        }
+        fn visit_unit<E: serde::de::Error>(self) -> Result<f64, E> {
+            Err(E::custom(NEITHER))
+        }
+        fn visit_none<E: serde::de::Error>(self) -> Result<f64, E> {
+            Err(E::custom(NEITHER))
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, _: A) -> Result<f64, A::Error> {
+            Err(serde::de::Error::custom(NEITHER))
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, _: A) -> Result<f64, A::Error> {
+            Err(serde::de::Error::custom(NEITHER))
+        }
     }
-    match P::deserialize(d)? {
-        P::N(n) => Ok(n),
-        P::S(s) => parse_pitch(&s).ok_or_else(|| serde::de::Error::custom(format!("bad pitch `{s}` (try 60 or \"C4\")"))),
-    }
+    d.deserialize_any(Pitch)
 }
 
 /// `"C4"` → 60, `"A#1"` → 34, `"Bb3"` → 58.
@@ -104,7 +141,14 @@ pub fn parse_pitch(s: &str) -> Option<f64> {
 
 /// A pitch's name, `33` → `A1`, if it is a whole MIDI note.
 pub fn pitch_name(p: f64) -> Option<String> {
-    (p.fract() == 0.0 && (0.0..=127.0).contains(&p)).then(|| format!("{}{}", NAMES[p as usize % 12], p as i32 / 12 - 1))
+    name_of(p).map(str::to_string)
+}
+
+/// Every whole MIDI note's name, made once: what the writer puts for each note.
+static PITCH_NAMES: LazyLock<Vec<String>> = LazyLock::new(|| (0..128).map(|p| format!("{}{}", NAMES[p % 12], p as i32 / 12 - 1)).collect());
+
+fn name_of(p: f64) -> Option<&'static str> {
+    (p.fract() == 0.0 && (0.0..=127.0).contains(&p)).then(|| PITCH_NAMES[p as usize].as_str())
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -347,6 +391,70 @@ impl LaneData {
         }
     }
 
+    /// The canonical lines of the clips whose id, as written, is `id`: [`LaneData::clip_lines`]
+    /// for those clips only.
+    pub fn lines_of(&self, id: &str) -> Vec<String> {
+        fn of<T: Clip>(clips: &[T], ids: Vec<Option<&str>>, id: &str) -> Vec<String> {
+            clips.iter().zip(ids).filter(|(_, i)| *i == Some(id)).map(|(c, _)| c.line()).collect()
+        }
+        match self {
+            LaneData::Notes(c) => of(c, self.ids(), id),
+            LaneData::Control { clips, .. } => of(clips, self.ids(), id),
+            LaneData::Audio(c) => of(c, self.ids(), id),
+        }
+    }
+
+    /// How many clips have `id`, as written.
+    pub fn clips_with(&self, id: &str) -> usize {
+        self.ids().into_iter().filter(|i| *i == Some(id)).count()
+    }
+
+    /// The clip whose id is `id`, as its JSON in the lane format's schema: the last, if two have
+    /// it, as a map of the clips by id keeps it.
+    pub fn clip_value(&self, id: &str) -> Option<Value> {
+        let i = self.ids().iter().rposition(|i| *i == Some(id))?;
+        let v = match self {
+            LaneData::Notes(c) => serde_json::to_value(&c[i]),
+            LaneData::Control { clips, .. } => serde_json::to_value(&clips[i]),
+            LaneData::Audio(c) => serde_json::to_value(&c[i]),
+        };
+        Some(v.expect("a clip serialises"))
+    }
+
+    /// Whether a read of this data's canonical text as `kind` gives exactly this data, every
+    /// number to the bit (FMT-8a): what lets a commit's candidate play the data its plan made
+    /// instead of parsing the text it wrote (PLANE-1). Data read from a file, or made from such
+    /// data by [`LaneData::put_clips`], reads back unless a number is `-0` (written `0`) or a
+    /// control lane's unit isn't one a read of it as `kind` keeps; data with a number JSON can't
+    /// hold (infinite, not a number) never does.
+    pub fn reads_back(&self, kind: &LaneKind) -> bool {
+        let unit = match (self, kind) {
+            (LaneData::Control { unit, clips }, LaneKind::Control { unit: declared }) => match clips.is_empty() {
+                // No clips: a read takes the file's unit, else the declared one.
+                true => unit.is_some() || declared.is_none(),
+                false => declared.is_none() || unit == declared,
+            },
+            _ => self.fits(kind),
+        };
+        unit && !self.has_unwritten()
+    }
+
+    /// Whether any number isn't written as it is: `-0`, which the canonical form writes as `0`,
+    /// or one JSON can't hold.
+    fn has_unwritten(&self) -> bool {
+        let neg = |x: &f64| !x.is_finite() || (*x == 0.0 && x.is_sign_negative());
+        let pairs = |ps: &[(f64, f64)]| ps.iter().any(|(a, b)| neg(a) || neg(b));
+        match self {
+            LaneData::Notes(c) => c.iter().any(|c| {
+                neg(&c.start) || neg(&c.length) || c.notes.iter().any(|n| [n.pitch, n.start, n.length, n.velocity].iter().any(neg))
+            }),
+            LaneData::Control { clips, .. } => clips.iter().any(|c| neg(&c.start) || neg(&c.length) || pairs(&c.points)),
+            LaneData::Audio(c) => c.iter().any(|c| {
+                [c.start, c.length, c.offset, c.gain_db, c.fade_in, c.fade_out, c.pitch].iter().any(neg) || pairs(&c.warp)
+            }),
+        }
+    }
+
     /// Whether every clip can be addressed by its id: each has a valid id, written as a string,
     /// and no id repeats (FMT-12). A lane that isn't is written whole.
     pub fn addressable(&self) -> bool {
@@ -425,24 +533,28 @@ fn at(i: usize, start: f64) -> String {
 fn each<T: for<'de> Deserialize<'de> + Clip>(clips: &[Value], kind: &LaneKind) -> Result<Vec<T>, LaneError> {
     let mut out = Vec::with_capacity(clips.len());
     for (i, c) in clips.iter().enumerate() {
-        let start = c.get("start").and_then(Value::as_f64);
-        let at = start.map_or_else(|| format!("clip {}", i + 1), |s| at(i, s));
-        let mut c = c.clone();
-        let other = match c.as_object_mut() {
-            Some(o) if o.get("id").is_some_and(|id| !id.is_string() && !id.is_null()) => o.remove("id"),
-            _ => None,
+        // Read from the parsed value in place; only a clip whose id is set aside is copied.
+        let other = c.as_object().and_then(|o| o.get("id")).filter(|id| !id.is_string() && !id.is_null()).cloned();
+        let without;
+        let c = match (&other, c) {
+            (Some(_), Value::Object(o)) => {
+                let mut o = o.clone();
+                o.remove("id");
+                without = Value::Object(o);
+                &without
+            }
+            _ => c,
         };
-        let c = &c;
-        let parsed = serde_json::from_value::<T>(c.clone()).map(|mut t| {
+        let parsed = T::deserialize(c).map(|mut t| {
             *t.other_id() = other;
             t
         });
         let parsed = parsed.map_err(|e| {
+            let start = c.get("start").and_then(Value::as_f64);
+            let at = start.map_or_else(|| format!("clip {}", i + 1), |s| at(i, s));
             // Name the note when a note is what's wrong.
             let note = c.get("notes").and_then(Value::as_array).and_then(|ns| {
-                ns.iter()
-                    .enumerate()
-                    .find_map(|(j, n)| serde_json::from_value::<Note>(n.clone()).err().map(|e| format!("note {}: {e}", j + 1)))
+                ns.iter().enumerate().find_map(|(j, n)| Note::deserialize(n).err().map(|e| format!("note {}: {e}", j + 1)))
             });
             let shape = shape_hint(c, kind);
             LaneError::Invalid(format!("{at}: {}{shape}", note.unwrap_or_else(|| e.to_string())))
@@ -486,41 +598,88 @@ fn note_order(a: &Note, b: &Note) -> Ordering {
 }
 
 /// Clips by `(start, id)`, anonymous first; clips equal in both by their canonical text, so
-/// the order is total.
-fn sorted<T: Clip>(clips: Vec<T>, key: impl Fn(&T) -> (f64, Option<&str>)) -> Vec<T> {
-    let mut keyed: Vec<(String, T)> = clips.into_iter().map(|c| (c.line(), c)).collect();
-    keyed.sort_by(|(la, a), (lb, b)| {
+/// the order is total. Stable, so it is the one order a sort by all three keys gives, with the
+/// text made only for clips that tie on the first two (anonymous clips that start together).
+fn sorted<T: Clip>(mut clips: Vec<T>, key: impl Fn(&T) -> (f64, Option<&str>)) -> Vec<T> {
+    let order = |a: &T, b: &T| {
         let ((sa, ia), (sb, ib)) = (key(a), key(b));
-        sa.total_cmp(&sb).then(ia.cmp(&ib)).then(la.cmp(lb))
-    });
-    keyed.into_iter().map(|(_, c)| c).collect()
+        sa.total_cmp(&sb).then(ia.cmp(&ib))
+    };
+    clips.sort_by(order);
+    let mut i = 0;
+    while i < clips.len() {
+        let ties = clips[i + 1..].iter().take_while(|c| order(&clips[i], c).is_eq()).count();
+        if ties > 0 {
+            clips[i..=i + ties].sort_by_cached_key(|c| c.line());
+        }
+        i += ties + 1;
+    }
+    clips
 }
 
 /// A clip's line in the canonical form, and its id written as anything but a string.
 trait Clip {
-    fn line(&self) -> String;
+    /// The line, written onto `out`.
+    fn write_line(&self, out: &mut String);
     fn other_id(&mut self) -> &mut Option<Value>;
+
+    fn line(&self) -> String {
+        let mut out = String::new();
+        self.write_line(&mut out);
+        out
+    }
 }
 
 /// The id as written: a string, or another JSON value kept as it was (FMT-12).
-fn id_field(id: &Option<String>, other: &Option<Value>) -> String {
+fn id_field(out: &mut String, id: &Option<String>, other: &Option<Value>) {
     match (id, other) {
-        (Some(id), _) => format!("\"id\": {}, ", string(id)),
-        (None, Some(v)) => format!("\"id\": {v}, "),
-        (None, None) => String::new(),
+        (Some(id), _) => {
+            out.push_str("\"id\": ");
+            write_string(out, id);
+            out.push_str(", ");
+        }
+        (None, Some(v)) => {
+            let _ = write!(out, "\"id\": {v}, ");
+        }
+        (None, None) => {}
+    }
+}
+
+/// `"start": 0, "length": 4`, as every clip opens after its id.
+fn span(out: &mut String, start: f64, length: f64) {
+    out.push_str("\"start\": ");
+    write_number(out, start);
+    out.push_str(", \"length\": ");
+    write_number(out, length);
+}
+
+/// `[0, 500], [8, 2500]`.
+fn pairs(out: &mut String, pairs: &[(f64, f64)]) {
+    for (i, (a, b)) in pairs.iter().enumerate() {
+        out.push_str(if i == 0 { "[" } else { ", [" });
+        write_number(out, *a);
+        out.push_str(", ");
+        write_number(out, *b);
+        out.push(']');
     }
 }
 
 impl Clip for NoteClip {
     /// The clip's opening line and one line per note.
-    fn line(&self) -> String {
-        let id = id_field(&self.id, &self.other_id);
-        let head = format!("{{{id}\"start\": {}, \"length\": {}, \"notes\": [", number(self.start), number(self.length));
+    fn write_line(&self, out: &mut String) {
+        out.push('{');
+        id_field(out, &self.id, &self.other_id);
+        span(out, self.start, self.length);
+        out.push_str(", \"notes\": [");
         if self.notes.is_empty() {
-            return head + "]}";
+            out.push_str("]}");
+            return;
         }
-        let notes: Vec<String> = self.notes.iter().map(note).collect();
-        format!("{head}\n    {}\n  ]}}", notes.join(",\n    "))
+        for (i, n) in self.notes.iter().enumerate() {
+            out.push_str(if i == 0 { "\n    " } else { ",\n    " });
+            note(out, n);
+        }
+        out.push_str("\n  ]}");
     }
 
     fn other_id(&mut self) -> &mut Option<Value> {
@@ -528,26 +687,34 @@ impl Clip for NoteClip {
     }
 }
 
-fn note(n: &Note) -> String {
-    let pitch = pitch_name(n.pitch).map_or_else(|| number(n.pitch), |p| string(&p));
-    format!(
-        "{{\"pitch\": {pitch}, \"start\": {}, \"length\": {}, \"velocity\": {}}}",
-        number(n.start),
-        number(n.length),
-        number(n.velocity)
-    )
+fn note(out: &mut String, n: &Note) {
+    out.push_str("{\"pitch\": ");
+    match name_of(n.pitch) {
+        // A name is letters, `#` and digits: nothing to escape.
+        Some(name) => {
+            out.push('"');
+            out.push_str(name);
+            out.push('"');
+        }
+        None => write_number(out, n.pitch),
+    }
+    out.push_str(", \"start\": ");
+    write_number(out, n.start);
+    out.push_str(", \"length\": ");
+    write_number(out, n.length);
+    out.push_str(", \"velocity\": ");
+    write_number(out, n.velocity);
+    out.push('}');
 }
 
 impl Clip for ControlClip {
-    fn line(&self) -> String {
-        let points: Vec<String> = self.points.iter().map(|(b, v)| format!("[{}, {}]", number(*b), number(*v))).collect();
-        format!(
-            "{{{}\"start\": {}, \"length\": {}, \"points\": [{}]}}",
-            id_field(&self.id, &self.other_id),
-            number(self.start),
-            number(self.length),
-            points.join(", ")
-        )
+    fn write_line(&self, out: &mut String) {
+        out.push('{');
+        id_field(out, &self.id, &self.other_id);
+        span(out, self.start, self.length);
+        out.push_str(", \"points\": [");
+        pairs(out, &self.points);
+        out.push_str("]}");
     }
 
     fn other_id(&mut self) -> &mut Option<Value> {
@@ -556,24 +723,30 @@ impl Clip for ControlClip {
 }
 
 impl Clip for AudioClip {
-    fn line(&self) -> String {
-        let hash = self.hash.as_ref().map_or_else(String::new, |h| format!("\"hash\": {}, ", string(h)));
-        let warp: Vec<String> = self.warp.iter().map(|(s, b)| format!("[{}, {}]", number(*s), number(*b))).collect();
-        format!(
-            "{{{}\"start\": {}, \"length\": {}, \"asset\": {}, {hash}\"offset\": {}, \"gain_db\": {}, \"fade_in\": {}, \"fade_out\": {}, \
-             \"reverse\": {}, \"pitch\": {}, \"warp\": [{}]}}",
-            id_field(&self.id, &self.other_id),
-            number(self.start),
-            number(self.length),
-            string(&self.asset),
-            number(self.offset),
-            number(self.gain_db),
-            number(self.fade_in),
-            number(self.fade_out),
-            self.reverse,
-            number(self.pitch),
-            warp.join(", ")
-        )
+    fn write_line(&self, out: &mut String) {
+        out.push('{');
+        id_field(out, &self.id, &self.other_id);
+        span(out, self.start, self.length);
+        out.push_str(", \"asset\": ");
+        write_string(out, &self.asset);
+        out.push_str(", ");
+        if let Some(h) = &self.hash {
+            out.push_str("\"hash\": ");
+            write_string(out, h);
+            out.push_str(", ");
+        }
+        for (i, (key, x)) in [("offset", self.offset), ("gain_db", self.gain_db), ("fade_in", self.fade_in), ("fade_out", self.fade_out)]
+            .into_iter()
+            .enumerate()
+        {
+            let _ = write!(out, "{}\"{key}\": ", if i == 0 { "" } else { ", " });
+            write_number(out, x);
+        }
+        let _ = write!(out, ", \"reverse\": {}, \"pitch\": ", self.reverse);
+        write_number(out, self.pitch);
+        out.push_str(", \"warp\": [");
+        pairs(out, &self.warp);
+        out.push_str("]}");
     }
 
     fn other_id(&mut self) -> &mut Option<Value> {
@@ -584,25 +757,54 @@ impl Clip for AudioClip {
 /// The canonical form of a lane file (FMT-8a): a fixed key order per schema, numbers in their
 /// shortest round-trip form and never `-0`, one clip per line and one note per line, clips by
 /// `(start, id)` and notes by `(start, pitch)`, and a final newline. A control lane records its
-/// unit. Reading a canonical file and writing it again gives the same bytes.
+/// unit. Reading a canonical file and writing it again gives the same bytes. Written into one
+/// buffer, with nothing made per note.
 pub fn canonical(data: &LaneData) -> String {
     let mut data = data.clone();
     data.sort();
-    let (unit, lines): (Option<&String>, Vec<String>) = match &data {
-        LaneData::Notes(c) => (None, c.iter().map(Clip::line).collect()),
-        LaneData::Control { unit, clips } => (unit.as_ref(), clips.iter().map(Clip::line).collect()),
-        LaneData::Audio(c) => (None, c.iter().map(Clip::line).collect()),
-    };
-    let unit = unit.map_or_else(String::new, |u| format!("\"unit\": {}, ", string(u)));
-    if lines.is_empty() {
-        return format!("{{{unit}\"clips\": []}}\n");
+    let mut out = String::with_capacity(256);
+    out.push('{');
+    if let LaneData::Control { unit: Some(u), .. } = &data {
+        out.push_str("\"unit\": ");
+        write_string(&mut out, u);
+        out.push_str(", ");
     }
-    format!("{{{unit}\"clips\": [\n  {}\n]}}\n", lines.join(",\n  "))
+    out.push_str("\"clips\": [");
+    fn lines<T: Clip>(out: &mut String, clips: &[T]) {
+        for (i, c) in clips.iter().enumerate() {
+            out.push_str(if i == 0 { "\n  " } else { ",\n  " });
+            c.write_line(out);
+        }
+        if !clips.is_empty() {
+            out.push('\n');
+        }
+    }
+    match &data {
+        LaneData::Notes(c) => lines(&mut out, c),
+        LaneData::Control { clips, .. } => lines(&mut out, clips),
+        LaneData::Audio(c) => lines(&mut out, c),
+    }
+    out.push_str("]}\n");
+    out
 }
 
 /// A number as data files write it: Rust's shortest round-trip form, never `-0`.
 pub fn number(x: f64) -> String {
     if x == 0.0 { "0".into() } else { x.to_string() }
+}
+
+/// [`number`], written onto `out`.
+fn write_number(out: &mut String, x: f64) {
+    if x == 0.0 {
+        out.push('0');
+    } else {
+        let _ = write!(out, "{x}");
+    }
+}
+
+/// A JSON string, written onto `out` as serde_json writes it.
+fn write_string(out: &mut String, s: &str) {
+    out.push_str(&string(s));
 }
 
 fn string(s: &str) -> String {

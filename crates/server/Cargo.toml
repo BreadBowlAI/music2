@@ -24,3 +24,5 @@ toml.workspace = true
 
 [dev-dependencies]
 hound.workspace = true
+# Tests fail, slow down and race the session's disk calls (`Session::open_with_disk`).
+m2-session = { workspace = true, features = ["faults"] }

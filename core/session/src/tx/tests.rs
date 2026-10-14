@@ -222,7 +222,7 @@ fn an_outside_literal_edit_then_a_knob_commit_keeps_both() {
     assert_eq!(done.delta.values.len(), 1, "the knob's change alone: {:?}", done.delta);
     let now = d.read("song.ts");
     assert!(now.contains("db(-4)") && now.contains("pan: 0.45"), "{now}");
-    assert_eq!(s.accepted().snapshot.files[Path::new("song.ts")], now, "the outside change is accepted with it");
+    assert_eq!(*s.accepted().snapshot.files[Path::new("song.ts")], *now, "the outside change is accepted with it");
 
     // The literal changed under it: a conflict naming the file.
     let tx = pan(&d, 0.5);

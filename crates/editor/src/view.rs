@@ -269,7 +269,7 @@ fn path_around(site: &Site, at: u32) -> Option<Vec<String>> {
 type Written = (String, u32);
 
 /// A node's `src` (`file:line:col`, both 1-based) as where it is written.
-fn locate(src: &str, files: &BTreeMap<std::path::PathBuf, String>) -> Option<Written> {
+fn locate(src: &str, files: &BTreeMap<std::path::PathBuf, std::sync::Arc<str>>) -> Option<Written> {
     let mut parts = src.rsplitn(3, ':');
     let (col, line, file) = (parts.next()?.parse::<usize>().ok()?, parts.next()?.parse::<usize>().ok()?, parts.next()?);
     let text = files.get(Path::new(file))?;
@@ -398,7 +398,7 @@ pub fn view(session: &Session) -> GraphView {
     let mut automate_refused = |c: &Control, key: &(u32, Vec<String>)| {
         let modules = in_modules.get(key).cloned().unwrap_or_default();
         let mut read = |file: &str, span: (u32, u32)| {
-            let text = rev.snapshot.files.get(Path::new(file)).map_or("", String::as_str);
+            let text = rev.snapshot.files.get(Path::new(file)).map_or("", |t| &**t);
             params.entry((file.to_string(), span)).or_insert_with(|| fn_params(text, span)).clone()
         };
         match crate::automate::place(session, c, &modules, &mut read) {

@@ -68,8 +68,11 @@ pub struct DataSet {
     /// Verified state blobs: `(module, path)` → the blob, relative to the project, and its hash
     /// as the snapshot read it.
     states: BTreeMap<(Key, Vec<Key>), (PathBuf, Option<Sha>)>,
-    /// Assets clips may play, by exact name.
-    assets: BTreeSet<String>,
+    /// Assets clips may play, by exact name: shared by every revision with the same binaries.
+    assets: Arc<BTreeSet<String>>,
+    /// The binaries `assets` was listed from, so a revision whose binaries are these lists none
+    /// again (thousands of assets beside a lane edit). Not data.
+    assets_of: Option<Arc<BTreeMap<PathBuf, Stored>>>,
     /// The project folder, where assets and state blobs are read from. None: no files.
     dir: Option<PathBuf>,
     /// Where the last clip of any lane file ends, read by a lane or not.
@@ -164,6 +167,24 @@ impl DataSet {
     pub fn end(&self) -> f64 {
         self.end
     }
+
+    /// Lane `addr`'s data, when this set read it from exactly `text` as `kind`: what a parse of
+    /// `text` gives, already made (PLANE-1's data path parses only what a change touched).
+    pub fn parsed(&self, addr: &LaneAddr, kind: &LaneKind, text: &str) -> Option<&Arc<LaneData>> {
+        let (k, t) = self.read.get(addr)?;
+        let same = (t.as_ptr() == text.as_ptr() && t.len() == text.len()) || **t == *text;
+        if k == kind && same { self.lanes.get(addr) } else { None }
+    }
+
+    /// This set as the `previous` of a read in which lane `addr`'s file is `text`, which reads as
+    /// `kind` to exactly `data`: a Tx's own lane, made by its plan, is then not parsed again. The
+    /// caller vouches that `data` is what [`LaneData::read`] gives for `text`.
+    pub fn seeded(&self, addr: &LaneAddr, kind: &LaneKind, text: Arc<str>, data: Arc<LaneData>) -> DataSet {
+        let mut d = self.clone();
+        d.lanes.insert(addr.clone(), data);
+        d.read.insert(addr.clone(), (kind.clone(), text));
+        d
+    }
 }
 
 /// A lane file no declared lane reads (DIAG-6).
@@ -198,8 +219,8 @@ impl Project {
                     // Read from this very text, as this kind: the same data a parse would give.
                     let same = previous.and_then(|p| Some((p.read.get(addr)?, p.lanes.get(addr)?)));
                     let parsed = match same {
-                        Some(((k, t), d)) if k == kind && **t == **text => Ok((d.clone(), t.clone())),
-                        _ => LaneData::read(text, kind).map(|d| (Arc::new(d), Arc::from(text.as_str()))),
+                        Some(((k, t), d)) if k == kind && (Arc::ptr_eq(t, text) || **t == **text) => Ok((d.clone(), t.clone())),
+                        _ => LaneData::read(text, kind).map(|d| (Arc::new(d), text.clone())),
                     };
                     match parsed {
                         Ok((data, source)) => {
@@ -237,9 +258,14 @@ impl Project {
             let file = slashed(p);
             diags.push(Diagnostic::notice("file.unknown", unknown_file(&file)).file(file));
         }
-        let assets = self.binaries.iter().filter_map(|(p, s)| match (DataPath::parse(p), s) {
-            (DataPath::Asset(a), Stored::Hash(_) | Stored::Listed) => Some(a.as_str().to_string()),
-            _ => None,
+        // Listed again only when the binaries changed.
+        let listed = previous.filter(|p| p.assets_of.as_ref().is_some_and(|b| Arc::ptr_eq(b, &self.binaries))).map(|p| p.assets.clone());
+        let assets = listed.unwrap_or_else(|| {
+            let assets = crate::under(&self.binaries, Path::new(crate::path::ASSETS)).filter_map(|(p, s)| match (DataPath::parse(p), s) {
+                (DataPath::Asset(a), Stored::Hash(_) | Stored::Listed) => Some(a.as_str().to_string()),
+                _ => None,
+            });
+            Arc::new(assets.collect())
         });
         // A file a lane read ends where its data does; only the others are parsed for it here.
         let files = self.lanes.iter().filter(|(a, _)| !read.contains_key(*a)).filter_map(|(_, (_, text))| {
@@ -258,7 +284,8 @@ impl Project {
             tempo: Arc::new(self.arrangement.tempo_map()),
             lanes,
             states,
-            assets: assets.collect(),
+            assets,
+            assets_of: Some(self.binaries.clone()),
             dir: Some(self.dir.clone()),
             end,
             read,
@@ -323,7 +350,7 @@ impl Project {
 
     /// Every lane file, by address.
     pub fn lane_files(&self) -> impl Iterator<Item = (&LaneAddr, &Path, &str)> {
-        self.lanes.iter().map(|(a, (p, t))| (a, p.as_path(), t.as_str()))
+        self.lanes.iter().map(|(a, (p, t))| (a, p.as_path(), &**t))
     }
 
     /// Files under `data/` that aren't data music2 reads (FMT-7), by path.
@@ -333,7 +360,10 @@ impl Project {
 
     /// Every plugin state file, blobs and sidecars, by path.
     pub fn state_files(&self) -> impl Iterator<Item = &Path> {
-        let blobs = self.binaries.keys().filter(|p| matches!(DataPath::parse(p), DataPath::PluginState { .. }));
+        // Plugin states are all under `data/`: the assets beside them aren't looked at.
+        let blobs = crate::under(&self.binaries, Path::new(crate::path::DATA))
+            .map(|(p, _)| p)
+            .filter(|p| matches!(DataPath::parse(p), DataPath::PluginState { .. }));
         blobs.chain(self.sidecars.keys()).map(PathBuf::as_path)
     }
 
@@ -344,12 +374,13 @@ impl Project {
 
     /// A state sidecar's text.
     pub fn sidecar(&self, path: &Path) -> Option<&str> {
-        self.sidecars.get(path).map(String::as_str)
+        self.sidecars.get(path).map(|t| &**t)
     }
 
     /// Every module that has a folder under `data/`: lanes or plugin state, read or not.
     pub fn data_modules(&self) -> BTreeSet<Key> {
-        let states = self.binaries.keys().chain(self.sidecars.keys()).filter_map(|p| DataPath::parse(p).module().cloned());
+        let blobs = crate::under(&self.binaries, Path::new(crate::path::DATA)).map(|(p, _)| p);
+        let states = blobs.chain(self.sidecars.keys()).filter_map(|p| DataPath::parse(p).module().cloned());
         let unread = self.unreadable.keys().filter_map(|p| folder_module(p));
         self.lanes.keys().map(|a| a.module.clone()).chain(states).chain(unread).collect()
     }

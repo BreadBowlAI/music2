@@ -10,7 +10,7 @@
 //! gesture means is planned and asserted in `crates/editor`, which builds a Tx from the accepted
 //! revision and commits it here. Undo commits each Tx's stored inverse (WRITE-21).
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -70,7 +70,15 @@ impl Revision {
 pub struct Past {
     pub number: u64,
     pub snapshot: Snapshot,
-    pub sites: Vec<Site>,
+    /// Its code's call sites, shared with its build.
+    sites: Arc<[Site]>,
+}
+
+impl Past {
+    /// The call sites its code had.
+    pub fn sites(&self) -> &[Site] {
+        &self.sites
+    }
 }
 
 /// What an undo or a redo committed (WRITE-21): the revision it made, the file it is shown as,
@@ -163,11 +171,16 @@ pub struct Session {
     pub(crate) program: String,
     /// What the last `check` built, for a `commit` of the same Tx on the same files.
     pub(crate) cache: Option<Prepared>,
+    /// How many times the journals were read again ([`Session::rescan`]): what a commit planned
+    /// before one must be judged anew after.
+    pub(crate) scans: u64,
     /// What the last take-in accepted.
     pub(crate) last: Option<crate::take::Accepted>,
     /// Every path this session wrote since [`Session::take_wrote`] last asked, with the stamp of
     /// its own file there: what the watcher's settle rule must not take for an outside write.
     pub(crate) wrote: Vec<(PathBuf, Option<crate::watch::Stamp>)>,
+    /// What the host does with a commit about to be written (PLANE-5).
+    pub(crate) before_write: Option<crate::tx::BeforeWrite>,
 }
 
 /// A project that can't be read from its snapshot: the manifest's or the arrangement's errors.
@@ -198,6 +211,14 @@ impl Session {
     /// journal scan, when it is free, and reports interrupted commits (the step 6 design's C19).
     pub fn open_read_only(dir: &Path, packages: PackageSet) -> Result<Session, Vec<Diagnostic>> {
         Session::opening(dir, packages, None, Box::new(stage::Real))
+    }
+
+    /// [`Session::open_as`], every disk call a commit makes going through `disk`: what tests of
+    /// other crates fail, slow down or race (the `faults` feature).
+    #[cfg(feature = "faults")]
+    #[doc(hidden)]
+    pub fn open_with_disk(dir: &Path, packages: PackageSet, program: &str, disk: Box<dyn Disk>) -> Result<Session, Vec<Diagnostic>> {
+        Session::opening(dir, packages, Some(program), disk)
     }
 
     /// Open with `disk` for every disk call a commit makes (tests count, fail and kill them).
@@ -266,7 +287,7 @@ impl Session {
         let mut texts = Texts::default();
         for (p, t) in &accepted.snapshot.files {
             if !accepted.snapshot.not_utf8.contains_key(p) {
-                texts.put(t);
+                texts.put_shared(t);
             }
         }
         let mut s = Session {
@@ -293,8 +314,10 @@ impl Session {
             host_id,
             program: program.unwrap_or("m2").to_string(),
             cache: None,
+            scans: 0,
             last: None,
             wrote: vec![],
+            before_write: None,
         };
         s.problems = s.gather_problems();
         Ok(s)
@@ -433,6 +456,12 @@ impl Session {
     /// when code or the manifest differ from the accepted revision's, `data_rev` when data or the
     /// arrangement do.
     pub(crate) fn accept(&mut self, snapshot: Snapshot, project: Project, compiled: Compiled) -> u64 {
+        self.accept_known(snapshot, project, compiled, &BTreeMap::new())
+    }
+
+    /// [`Session::accept`], given the hashes of texts it changed that are known already (a
+    /// commit's own writes), so the text store doesn't hash them again.
+    pub(crate) fn accept_known(&mut self, snapshot: Snapshot, project: Project, compiled: Compiled, known: &BTreeMap<PathBuf, Sha>) -> u64 {
         self.seen.add(&compiled.ir);
         let number = self.accepted.number + 1;
         let changed = crate::tx::changed_paths(&self.accepted.snapshot, &snapshot);
@@ -446,7 +475,11 @@ impl Session {
             if let Some(t) = snapshot.files.get(p)
                 && !snapshot.not_utf8.contains_key(p)
             {
-                self.texts.put(t);
+                // The text is the snapshot's own, now shared by the store and its hash known.
+                if let Some(sha) = known.get(p) {
+                    Sha::remember(t, *sha);
+                }
+                self.texts.put_shared(t);
             }
         }
         let new = Arc::new(Revision { number, code_rev, data_rev, snapshot, project, compiled });

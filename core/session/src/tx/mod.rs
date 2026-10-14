@@ -22,11 +22,17 @@ pub mod stage;
 #[cfg(test)]
 mod delta_tests;
 #[cfg(test)]
+mod hook_tests;
+#[cfg(test)]
 mod kill_tests;
 #[cfg(test)]
 mod props;
 #[cfg(test)]
+mod share_tests;
+#[cfg(test)]
 mod stage_tests;
+#[cfg(test)]
+mod take_tests;
 #[cfg(test)]
 mod tests;
 
@@ -36,7 +42,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use m2_song::tx::{Anchor, Base, Confined, Declared, Edit, Expect, ModuleChange, Op, Payload, Pos, Spot, Tx, TxPath};
-use m2_song::{Class, DataPath, Diagnostic, LaneData, Project, Sha, Snapshot, Stored};
+use m2_song::{Class, DataPath, Diagnostic, LaneAddr, LaneData, Project, Sha, Snapshot, Stored};
 
 use self::delta::{GraphDelta, Positions, Side};
 use self::stage::{Before, Target};
@@ -62,6 +68,11 @@ impl std::fmt::Debug for Checked {
 }
 
 impl Checked {
+    fn of(p: &Prepared) -> Checked {
+        let (candidate, baseline) = (p.candidate.clone(), p.baseline.clone());
+        Checked { delta: p.delta.clone(), hash: p.hash, diagnostics: p.diagnostics.clone(), candidate, baseline }
+    }
+
     /// The candidate, as a revision would be: what planners assert on.
     pub fn candidate(&self) -> &Revision {
         &self.candidate
@@ -73,6 +84,27 @@ impl Checked {
         &self.baseline
     }
 }
+
+/// A commit about to be written (PLANE-5): every check passed (its bases, its candidate read
+/// against the accepted declarations, its delta, its expectation, its planner's assertion) and
+/// every target still reads as its base (WRITE-15 step 1). Nothing is journaled or accepted yet:
+/// when the write then fails, the accepted revision stays.
+pub struct Writing {
+    pub candidate: Arc<Revision>,
+    pub accepted: Arc<Revision>,
+    data_only: bool,
+}
+
+impl Writing {
+    /// Only data files change, and the candidate plays the accepted code: no QuickJS ran
+    /// (PLANE-1).
+    pub fn data_only(&self) -> bool {
+        self.data_only
+    }
+}
+
+/// What the session's host does with a commit about to be written ([`Session::before_write`]).
+pub type BeforeWrite = Box<dyn FnMut(&Writing) + Send>;
 
 /// What a commit made.
 #[derive(Clone, Debug)]
@@ -148,6 +180,15 @@ impl std::fmt::Display for Refusal {
     }
 }
 
+/// Why [`Session::commit_with`] didn't commit.
+#[derive(Debug)]
+pub enum Uncommitted<E> {
+    /// The session refused the Tx (WRITE-5).
+    Refused(Refusal),
+    /// The planner's assertion did (WRITE-9).
+    Asserted(E),
+}
+
 fn rejected(d: Vec<Diagnostic>) -> Refusal {
     Refusal::Rejected { diagnostics: d, unexpected: None }
 }
@@ -180,7 +221,8 @@ pub(crate) struct Current {
 /// What a touched path becomes.
 #[derive(Clone, Debug)]
 enum New {
-    Bytes(Arc<[u8]>),
+    /// These bytes, with their hash when the plan made it already.
+    Bytes(Arc<[u8]>, Option<Sha>),
     Gone,
     /// Renamed: everything at `from` moves here.
     From(TxPath),
@@ -198,11 +240,26 @@ struct Planned {
     inverse: Vec<Op>,
     inverse_base: BTreeMap<TxPath, Base>,
     patches: Vec<Patch>,
+    /// The hash of each of `bases` that is known already: the file's on disk.
+    base_shas: BTreeMap<String, Sha>,
+    /// Lanes the plan read and wrote, as each new file reads (PLANE-1): the candidate's read takes
+    /// them as made, instead of parsing the text the plan just wrote.
+    seeds: Vec<Seed>,
+}
+
+/// A lane a `Clips` op made: its address and kind, its file's new text, and exactly what a read
+/// of that text gives.
+struct Seed {
+    addr: LaneAddr,
+    kind: m2_song::LaneKind,
+    text: Arc<str>,
+    data: Arc<LaneData>,
 }
 
 /// Everything `check` built, which `commit` reuses when nothing moved since.
 pub(crate) struct Prepared {
-    key: (Sha, u64, Vec<Option<Sha>>),
+    /// What `check` cached it under; a commit that plans for itself keys nothing.
+    key: Option<(Sha, u64, Vec<Option<Sha>>)>,
     baseline: Arc<Revision>,
     candidate: Arc<Revision>,
     planned: Planned,
@@ -276,10 +333,10 @@ fn known(snap: &Snapshot, p: &TxPath) -> Option<Option<Sha>> {
     match p.data() {
         DataPath::Module { .. } => {
             let mut files = vec![];
-            for (k, _) in snap.files.iter().filter(|(k, _)| k.starts_with(&path)) {
+            for (k, _) in m2_song::under(&snap.files, &path) {
                 files.push((k.clone(), snap.sha(k)));
             }
-            for (k, s) in snap.binaries.iter().filter(|(k, _)| k.starts_with(&path)) {
+            for (k, s) in m2_song::under(&snap.binaries, &path) {
                 files.push((k.clone(), journal::stored_sha(s)));
             }
             if files.is_empty() {
@@ -302,7 +359,10 @@ fn known(snap: &Snapshot, p: &TxPath) -> Option<Option<Sha>> {
 /// Put `bytes` at `p` in `snap` (None: nothing there), as a fresh read of the disk would have it.
 pub(crate) fn put_file(snap: &mut Snapshot, p: &Path, bytes: Option<&[u8]>) {
     snap.files.remove(p);
-    snap.binaries.remove(p);
+    // Shared until changed: a project's thousands of assets are copied only when one changes.
+    if snap.binaries.contains_key(p) {
+        Arc::make_mut(&mut snap.binaries).remove(p);
+    }
     snap.not_utf8.remove(p);
     snap.unreadable.remove(p);
     let Some(bytes) = bytes else { return };
@@ -312,17 +372,17 @@ pub(crate) fn put_file(snap: &mut Snapshot, p: &Path, bytes: Option<&[u8]>) {
         | DataPath::Arrangement
         | DataPath::Lane { .. }
         | DataPath::PluginState { sidecar: true, .. } => {
-            let text = match std::str::from_utf8(bytes) {
-                Ok(t) => t.to_string(),
+            let text: Arc<str> = match std::str::from_utf8(bytes) {
+                Ok(t) => t.into(),
                 Err(_) => {
                     snap.not_utf8.insert(p.to_path_buf(), Sha::of(bytes));
-                    String::from_utf8_lossy(bytes).into_owned()
+                    String::from_utf8_lossy(bytes).into()
                 }
             };
             snap.files.insert(p.to_path_buf(), text);
         }
         DataPath::PluginState { sidecar: false, .. } | DataPath::Asset(_) => {
-            snap.binaries.insert(p.to_path_buf(), Stored::Hash(Sha::of(bytes)));
+            Arc::make_mut(&mut snap.binaries).insert(p.to_path_buf(), Stored::Hash(Sha::of(bytes)));
         }
         // layout.json and anything else is no part of a snapshot (PLANE-3).
         _ => {}
@@ -333,7 +393,7 @@ pub(crate) fn put_file(snap: &mut Snapshot, p: &Path, bytes: Option<&[u8]>) {
 fn apply_news(snap: &mut Snapshot, news: &[(TxPath, New)]) {
     for (p, new) in news {
         match new {
-            New::Bytes(b) => put_file(snap, &p.path(), Some(b)),
+            New::Bytes(b, _) => put_file(snap, &p.path(), Some(b)),
             New::Gone if news.iter().any(|(_, n)| matches!(n, New::From(f) if f == p)) => {}
             New::Gone => remove_under(snap, &p.path()),
             New::From(from) => move_under(snap, &from.path(), &p.path()),
@@ -344,7 +404,9 @@ fn apply_news(snap: &mut Snapshot, news: &[(TxPath, New)]) {
 /// Every entry of `snap` at `p` or inside it, gone.
 fn remove_under(snap: &mut Snapshot, p: &Path) {
     snap.files.retain(|k, _| !k.starts_with(p));
-    snap.binaries.retain(|k, _| !k.starts_with(p));
+    if m2_song::under(&snap.binaries, p).next().is_some() {
+        Arc::make_mut(&mut snap.binaries).retain(|k, _| !k.starts_with(p));
+    }
     snap.not_utf8.retain(|k, _| !k.starts_with(p));
     snap.unreadable.retain(|k, _| !k.starts_with(p));
 }
@@ -354,51 +416,84 @@ fn move_under(snap: &mut Snapshot, from: &Path, to: &Path) {
     let moved = |k: &Path| k.strip_prefix(from).ok().map(|rest| if rest.as_os_str().is_empty() { to.to_path_buf() } else { to.join(rest) });
     let files = std::mem::take(&mut snap.files);
     snap.files = files.into_iter().map(|(k, v)| (moved(&k).unwrap_or(k), v)).collect();
-    let bins = std::mem::take(&mut snap.binaries);
-    snap.binaries = bins.into_iter().map(|(k, v)| (moved(&k).unwrap_or(k), v)).collect();
+    if m2_song::under(&snap.binaries, from).next().is_some() {
+        let bins = Arc::unwrap_or_clone(std::mem::take(&mut snap.binaries));
+        snap.binaries = Arc::new(bins.into_iter().map(|(k, v)| (moved(&k).unwrap_or(k), v)).collect());
+    }
     let bad = std::mem::take(&mut snap.not_utf8);
     snap.not_utf8 = bad.into_iter().map(|(k, v)| (moved(&k).unwrap_or(k), v)).collect();
     let unread = std::mem::take(&mut snap.unreadable);
     snap.unreadable = unread.into_iter().map(|(k, v)| (moved(&k).unwrap_or(k), v)).collect();
-    let unknown = std::mem::take(&mut snap.unknown);
-    snap.unknown = unknown.into_iter().map(|k| moved(&k).unwrap_or(k)).collect();
+    if m2_song::under_set(&snap.unknown, from).next().is_some() {
+        let unknown = Arc::unwrap_or_clone(std::mem::take(&mut snap.unknown));
+        snap.unknown = Arc::new(unknown.into_iter().map(|k| moved(&k).unwrap_or(k)).collect());
+    }
 }
 
-/// Assets as a fresh read lists them: hashed when a lane names them, else only listed.
-fn settle_assets(snap: &mut Snapshot) {
-    // Only assets are settled: with none, there is nothing to read the lanes for.
-    if !snap.binaries.keys().any(|p| matches!(DataPath::parse(p), DataPath::Asset(_))) {
+/// Assets as a fresh read lists them: hashed when a lane names them, else only listed. Only the
+/// entries whose state changes are written, so the shared map is copied only then.
+pub(crate) fn settle_assets(snap: &mut Snapshot) {
+    // Only assets are settled: with none, there is nothing to read the lanes for. Assets are all
+    // under `assets/`, one run of the map.
+    let assets = Path::new(m2_song::path::ASSETS);
+    if m2_song::under(&snap.binaries, assets).next().is_none() {
         return;
     }
     let mut named = BTreeSet::new();
     for (p, text) in &snap.files {
-        // A lane file names an asset only in an `asset` key, spelled out or escaped.
-        if !matches!(DataPath::parse(p), DataPath::Lane { .. }) || !(text.contains("\"asset\"") || text.contains("\\u")) {
-            continue;
-        }
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else { continue };
-        for c in v.get("clips").and_then(|c| c.as_array()).into_iter().flatten() {
-            if let Some(a) = c.get("asset").and_then(|a| a.as_str()).and_then(|a| m2_song::AssetName::new(a).ok()) {
-                named.insert(DataPath::Asset(a).path());
-            }
+        if matches!(DataPath::parse(p), DataPath::Lane { .. }) {
+            named.extend(named_by(text).iter().cloned());
         }
     }
-    let dir = snap.dir.clone();
-    for (p, s) in snap.binaries.iter_mut() {
-        if !matches!(DataPath::parse(p), DataPath::Asset(_)) {
-            continue;
-        }
-        match (named.contains(p), &s) {
-            (false, _) => *s = Stored::Listed,
-            (true, Stored::Listed) => {
-                *s = match m2_song::HashCache::global().hash(&dir.join(p)) {
+    let changes: Vec<(PathBuf, Stored)> = m2_song::under(&snap.binaries, assets)
+        .filter(|(p, s)| (**s != Stored::Listed || named.contains(*p)) && matches!(DataPath::parse(p), DataPath::Asset(_)))
+        .filter_map(|(p, s)| match (named.contains(p), s) {
+            (false, Stored::Listed) | (true, Stored::Hash(_) | Stored::Unreadable(_)) => None,
+            (false, _) => Some((p.clone(), Stored::Listed)),
+            (true, Stored::Listed) => Some((
+                p.clone(),
+                match m2_song::HashCache::global().hash(&snap.dir.join(p)) {
                     Ok(sha) => Stored::Hash(sha),
                     Err(e) => Stored::Unreadable(e.to_string()),
-                }
+                },
+            )),
+        })
+        .collect();
+    if !changes.is_empty() {
+        Arc::make_mut(&mut snap.binaries).extend(changes);
+    }
+}
+
+/// The assets a lane file's text names, by the text itself: each text is read for them once,
+/// however many snapshots share it. Keyed by the text's address and held weakly, so an entry is
+/// only ever its own text's (an address is never reused while a `Weak` to it lives); entries
+/// whose text is gone are dropped as others come.
+static NAMED: std::sync::Mutex<BTreeMap<usize, Named>> = std::sync::Mutex::new(BTreeMap::new());
+
+/// A lane text, held weakly, and the assets it names.
+type Named = (std::sync::Weak<str>, Arc<[PathBuf]>);
+
+fn named_by(text: &Arc<str>) -> Arc<[PathBuf]> {
+    let key = Arc::as_ptr(text) as *const u8 as usize;
+    let mine = |w: &std::sync::Weak<str>| w.upgrade().is_some_and(|t| Arc::ptr_eq(&t, text));
+    if let Some((_, named)) = NAMED.lock().unwrap_or_else(|e| e.into_inner()).get(&key).filter(|(w, _)| mine(w)) {
+        return named.clone();
+    }
+    // A lane file names an asset only in an `asset` key, spelled out or escaped.
+    let marked = memchr::memmem::find(text.as_bytes(), b"\"asset\"").is_some() || memchr::memmem::find(text.as_bytes(), b"\\u").is_some();
+    let mut named = vec![];
+    if marked && let Ok(v) = serde_json::from_str::<serde_json::Value>(text) {
+        for c in v.get("clips").and_then(|c| c.as_array()).into_iter().flatten() {
+            if let Some(a) = c.get("asset").and_then(|a| a.as_str()).and_then(|a| m2_song::AssetName::new(a).ok()) {
+                named.push(DataPath::Asset(a).path());
             }
-            (true, _) => {}
         }
     }
+    let named: Arc<[PathBuf]> = named.into();
+    let mut memo = NAMED.lock().unwrap_or_else(|e| e.into_inner());
+    memo.retain(|_, (w, _)| w.strong_count() > 0);
+    memo.insert(key, (Arc::downgrade(text), named.clone()));
+    named
 }
 
 /// Whether `p` is spelled under `dir` as the disk spells it, through no link (WRITE-3a). On a
@@ -457,21 +552,47 @@ fn line_col(text: &str, at: usize) -> (u32, u32) {
     (line, text[line_start..at].encode_utf16().count() as u32)
 }
 
-/// The paths of `snap` that differ from `other`'s, of every kind a revision holds.
+/// The paths of `snap` that differ from `other`'s, of every kind a revision holds: the keys
+/// where any of the four maps differ. Each map is walked once in order; a text shared by both
+/// (the same `Arc`) and a binaries map shared whole are equal without looking.
 pub(crate) fn changed_paths(a: &Snapshot, b: &Snapshot) -> BTreeSet<PathBuf> {
     let mut out = BTreeSet::new();
-    let keys = a.files.keys().chain(b.files.keys()).chain(a.binaries.keys()).chain(b.binaries.keys());
-    let keys = keys.chain(a.unreadable.keys()).chain(b.unreadable.keys()).chain(a.not_utf8.keys()).chain(b.not_utf8.keys());
-    for k in keys {
-        if a.files.get(k) != b.files.get(k)
-            || a.binaries.get(k) != b.binaries.get(k)
-            || a.unreadable.get(k) != b.unreadable.get(k)
-            || a.not_utf8.get(k) != b.not_utf8.get(k)
-        {
-            out.insert(k.clone());
+    differ(&a.files, &b.files, |x, y| Arc::ptr_eq(x, y) || x == y, &mut out);
+    if !Arc::ptr_eq(&a.binaries, &b.binaries) {
+        differ(&a.binaries, &b.binaries, PartialEq::eq, &mut out);
+    }
+    differ(&a.unreadable, &b.unreadable, PartialEq::eq, &mut out);
+    differ(&a.not_utf8, &b.not_utf8, PartialEq::eq, &mut out);
+    out
+}
+
+/// The keys where `a` and `b` differ (one has it and the other doesn't, or `same` says they
+/// aren't), into `out`: one merge of the two ordered maps.
+fn differ<V>(a: &BTreeMap<PathBuf, V>, b: &BTreeMap<PathBuf, V>, same: impl Fn(&V, &V) -> bool, out: &mut BTreeSet<PathBuf>) {
+    use std::cmp::Ordering;
+    let (mut x, mut y) = (a.iter().peekable(), b.iter().peekable());
+    loop {
+        let order = match (x.peek(), y.peek()) {
+            (None, None) => return,
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (Some((ka, _)), Some((kb, _))) => ka.cmp(kb),
+        };
+        match order {
+            Ordering::Less => {
+                out.insert(x.next().expect("peeked").0.clone());
+            }
+            Ordering::Greater => {
+                out.insert(y.next().expect("peeked").0.clone());
+            }
+            Ordering::Equal => {
+                let ((k, va), (_, vb)) = (x.next().expect("peeked"), y.next().expect("peeked"));
+                if !same(va, vb) {
+                    out.insert(k.clone());
+                }
+            }
         }
     }
-    out
 }
 
 /// What kind of change a path is (PLANE-1): code (the manifest, code, and a folder that may hold
@@ -571,15 +692,56 @@ impl Session {
         if !seen {
             self.judge(tx, &mut p)?;
         }
-        let checked = Checked {
-            delta: p.delta.clone(),
-            hash: p.hash,
-            diagnostics: p.diagnostics.clone(),
-            candidate: p.candidate.clone(),
-            baseline: p.baseline.clone(),
-        };
+        let checked = Checked::of(&p);
+        p.key = Some(self.key(tx, &currents));
         self.cache = Some(p);
         Ok(checked)
+    }
+
+    /// Check `tx`, let `assert` judge the checked candidate (what a planner says its gesture means,
+    /// WRITE-9), then commit it: what `check`, the assertion and `commit` do one after the other,
+    /// with one read of the targets, one plan and one candidate (WRITE-4, WRITE-5). Nothing moves
+    /// unseen meanwhile: the stage's own pre-check compares every target with what was read here
+    /// (WRITE-15 step 1), and a lock taken again on the way has it judged from the disk anew.
+    pub fn commit_with<E>(
+        &mut self,
+        tx: Tx,
+        assert: impl FnOnce(&Session, &Checked) -> Result<(), E>,
+    ) -> Result<Committed, Uncommitted<E>> {
+        let refused = Uncommitted::Refused;
+        // A recovery is checked against its journal, as `commit` does it.
+        if matches!(tx.expect, Expect::Journal(_)) {
+            let checked = self.check(&tx).map_err(refused)?;
+            assert(self, &checked).map_err(Uncommitted::Asserted)?;
+            return self.commit(tx).map_err(refused);
+        }
+        let currents = self.read_all(&tx).map_err(refused)?;
+        let mut p = self.prepare(&tx, &currents).map_err(refused)?;
+        // The expectation is judged before the assertion, as `check` does, except on `Seen`.
+        let seen = matches!(tx.expect, Expect::Seen(_));
+        if !seen {
+            self.judge(&tx, &mut p).map_err(refused)?;
+        }
+        let checked = Checked::of(&p);
+        assert(self, &checked).map_err(Uncommitted::Asserted)?;
+        // The candidate is the commit's alone again, so accepting it copies nothing.
+        drop(checked);
+        let scans = self.scans;
+        if let Some(r) = self.writable() {
+            return Err(refused(rejected(vec![r])));
+        }
+        if self.scans != scans {
+            // The lock was taken again and the journals read anew: one may hold a target now.
+            return self.commit(tx).map_err(refused);
+        }
+        if seen {
+            self.judge(&tx, &mut p).map_err(refused)?;
+        }
+        let (done, step) = self.write_prepared(&tx, p).map_err(refused)?;
+        if let Some(step) = step {
+            self.record_tx(step);
+        }
+        Ok(done)
     }
 
     /// Commit `tx` (WRITE-5): checked as `check` does, then journaled, staged and renamed into
@@ -607,7 +769,7 @@ impl Session {
         let key = self.key(tx, &currents);
         // What check built is reused when nothing moved since; the expectation is judged here
         // either way (a check on `Seen` never judged it).
-        let mut prepared = match self.cache.take().filter(|c| c.key == key) {
+        let mut prepared = match self.cache.take().filter(|c| c.key.as_ref() == Some(&key)) {
             Some(p) => p,
             None => self.prepare(tx, &currents)?,
         };
@@ -716,7 +878,13 @@ impl Session {
         match std::fs::read(&file) {
             Ok(bytes) => {
                 let text = if p.is_text() { String::from_utf8(bytes.clone()).ok() } else { None };
-                Ok(Current { sha: Some(Sha::of(&bytes)), bytes: Some(bytes.into()), text, folder: vec![] })
+                // A file that is the accepted text has that text's hash, made once.
+                let (accepted, path) = (&self.accepted.snapshot, p.path());
+                let sha = match accepted.files.get(&path) {
+                    Some(t) if !accepted.not_utf8.contains_key(&path) && t.as_bytes() == bytes.as_slice() => Sha::of_shared(t),
+                    _ => Sha::of(&bytes),
+                };
+                Ok(Current { sha: Some(sha), bytes: Some(bytes.into()), text, folder: vec![] })
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Current::default()),
             Err(e) => Err(Refusal::Io { message: format!("{p} can't be read: {e}") }),
@@ -748,7 +916,7 @@ impl Session {
         }
         let path = p.path();
         let revisions = std::iter::once(&self.accepted.snapshot).chain(self.past.iter().map(|x| &x.snapshot));
-        Ok(revisions.filter_map(|s| s.files.get(&path)).find(|t| Sha::of(t.as_bytes()) == sha).cloned())
+        Ok(revisions.filter_map(|s| s.files.get(&path)).find(|t| Sha::of(t.as_bytes()) == sha).map(|t| t.to_string()))
     }
 
     /// Step 5: the bases, and each op applied to the current content.
@@ -763,6 +931,8 @@ impl Session {
             inverse: vec![],
             inverse_base: BTreeMap::new(),
             patches: vec![],
+            base_shas: BTreeMap::new(),
+            seeds: vec![],
         };
         let changed = |p: &TxPath, c: &Current, why: Option<String>| ConflictFile { file: p.to_string(), current: c.sha, clip: None, why };
         // Recovery puts back recorded bytes whatever the draft says (6.5, P3): when the
@@ -778,6 +948,7 @@ impl Session {
                 && b.sha() == currents[p].sha
             {
                 planned.bases.insert(p.to_string(), c.clone());
+                planned.base_shas.extend(currents[p].sha.map(|sha| (p.to_string(), sha)));
             }
         }
         if !conflicts.is_empty() {
@@ -869,7 +1040,7 @@ impl Session {
                     planned.inverse_base.insert(file.clone(), Base::text(&new));
                     let own_base = resolved.iter().map(|(r, _)| Some(r.clone())).collect();
                     planned.coords.insert(file.to_string(), Coords::tx(outside, own, own_base));
-                    planned.news.push((file.clone(), New::Bytes(Arc::from(new.into_bytes()))));
+                    planned.news.push((file.clone(), New::Bytes(Arc::from(new.into_bytes()), None)));
                 }
                 Op::Write { file, bytes } => {
                     let cur = &currents[file];
@@ -905,7 +1076,7 @@ impl Session {
                         None => planned.inverse.push(Op::Remove { file: file.clone() }),
                     }
                     planned.inverse_base.insert(file.clone(), Base::Sha(after));
-                    planned.news.push((file.clone(), New::Bytes(bytes)));
+                    planned.news.push((file.clone(), New::Bytes(bytes, Some(after))));
                 }
                 Op::Remove { file } => {
                     let cur = &currents[file];
@@ -943,13 +1114,18 @@ impl Session {
                             format!("{} › {} isn't a lane the accepted code declares, so its kind isn't known", lane.module, lane.lane),
                         )]));
                     };
-                    let read = |text: Option<&str>| -> Result<LaneData, String> {
+                    // A text the accepted revision read as this lane is that read, shared: the file
+                    // is almost always the accepted one (PLANE-1).
+                    let read = |text: Option<&str>| -> Result<Arc<LaneData>, String> {
                         match text {
-                            None => Ok(LaneData::empty(&kind)),
-                            Some(t) => LaneData::read(t, &kind).map_err(|e| match e {
-                                m2_song::LaneError::Invalid(w) => w,
-                                m2_song::LaneError::Unit { declared, .. } => format!("it isn't automation in `{declared}`"),
-                            }),
+                            None => Ok(Arc::new(LaneData::empty(&kind))),
+                            Some(t) => match self.accepted.compiled.data.parsed(lane, &kind, t) {
+                                Some(d) => Ok(d.clone()),
+                                None => LaneData::read(t, &kind).map(Arc::new).map_err(|e| match e {
+                                    m2_song::LaneError::Invalid(w) => w,
+                                    m2_song::LaneError::Unit { declared, .. } => format!("it isn't automation in `{declared}`"),
+                                }),
+                            },
                         }
                     };
                     let now = match read(cur.text.as_deref()) {
@@ -967,33 +1143,46 @@ impl Session {
                     let base = &tx.base[&file];
                     let base_text = match base {
                         Base::Absent => Some(None),
-                        _ if base.sha() == cur.sha => Some(cur.text.clone()),
-                        _ => self.base_text(&file, base)?.map(Some),
+                        // The file is its base: the base reads as the file does.
+                        _ if base.sha() == cur.sha => None,
+                        _ => match self.base_text(&file, base)? {
+                            Some(t) => Some(Some(t)),
+                            None => {
+                                conflicts.push(changed(&file, cur, None));
+                                continue;
+                            }
+                        },
                     };
-                    let Some(base_text) = base_text else {
-                        conflicts.push(changed(&file, cur, None));
-                        continue;
-                    };
-                    let Ok(was) = read(base_text.as_deref()) else {
-                        conflicts.push(changed(&file, cur, Some("its base doesn't read as the lane".into())));
-                        continue;
+                    let was = match base_text {
+                        None => now.clone(),
+                        Some(t) => match read(t.as_deref()) {
+                            Ok(d) => d,
+                            Err(_) => {
+                                conflicts.push(changed(&file, cur, Some("its base doesn't read as the lane".into())));
+                                continue;
+                            }
+                        },
                     };
                     // Every clip the op touches is the same in the base and the file now, byte for
                     // byte, or absent from both (WRITE-3); a clip whose id is there twice is a guess.
-                    let lines = |d: &LaneData, id: &str| {
-                        d.clip_lines().into_iter().filter(|(i, _)| *i == Some(id)).map(|(_, l)| l).collect::<Vec<_>>()
-                    };
+                    // A base that is the file now is the same read: only an id twice can be wrong.
+                    let same = Arc::ptr_eq(&was, &now);
                     let ids: Vec<&str> =
                         put.iter().filter_map(|c| c.get("id").and_then(|i| i.as_str())).chain(delete.iter().map(String::as_str)).collect();
                     let mut bad = false;
                     for id in &ids {
-                        let (a, b) = (lines(&was, id), lines(&now, id));
-                        let why = if a.len() > 1 || b.len() > 1 {
-                            Some("is in the lane twice; renumber its clips first")
-                        } else if a != b {
-                            Some("changed since the edit was planned")
+                        let twice = Some("is in the lane twice; renumber its clips first");
+                        let why = if same {
+                            if now.clips_with(id) > 1 { twice } else { None }
                         } else {
-                            None
+                            let (a, b) = (was.lines_of(id), now.lines_of(id));
+                            if a.len() > 1 || b.len() > 1 {
+                                twice
+                            } else if a != b {
+                                Some("changed since the edit was planned")
+                            } else {
+                                None
+                            }
                         };
                         if let Some(why) = why {
                             conflicts.push(ConflictFile {
@@ -1008,36 +1197,47 @@ impl Session {
                     if bad {
                         continue;
                     }
-                    let mut next = now.clone();
+                    let mut next = (*now).clone();
                     next.put_clips(put, delete)
                         .map_err(|why| rejected(vec![Diagnostic::error("lane.invalid", format!("{file}: {why}")).file(&file)]))?;
-                    let new = m2_song::canonical(&next);
+                    let new: Arc<str> = m2_song::canonical(&next).into();
+                    let after = Sha::of(new.as_bytes());
                     if let Some(text) = &cur.text {
                         planned.bases.insert(file.to_string(), text.clone());
+                        planned.base_shas.extend(cur.sha.map(|sha| (file.to_string(), sha)));
                     }
                     match &cur.bytes {
                         Some(_) => {
                             // The inverse puts back each touched clip as it was, and deletes the
                             // ones the op added.
-                            let old: BTreeMap<String, serde_json::Value> = clip_values(&now);
                             let mut back = vec![];
                             let mut gone = vec![];
                             for id in &ids {
-                                match old.get(*id) {
-                                    Some(v) => back.push(v.clone()),
-                                    None if lines(&next, id).len() == 1 => gone.push(id.to_string()),
+                                match now.clip_value(id) {
+                                    Some(v) => back.push(v),
+                                    None if next.clips_with(id) == 1 => gone.push(id.to_string()),
                                     None => {}
                                 }
                             }
                             planned.inverse.push(Op::Clips { lane: lane.clone(), put: back, delete: gone });
-                            planned.inverse_base.insert(file.clone(), Base::text(&new));
+                            planned.inverse_base.insert(file.clone(), Base::WithText { sha: after, text: new.clone() });
                         }
                         None => {
                             planned.inverse.push(Op::Remove { file: file.clone() });
-                            planned.inverse_base.insert(file.clone(), Base::Sha(Sha::of(new.as_bytes())));
+                            planned.inverse_base.insert(file.clone(), Base::Sha(after));
                         }
                     }
-                    planned.news.push((file.clone(), New::Bytes(Arc::from(new.into_bytes()))));
+                    // What the candidate reads there is `next`, where its canonical text reads back
+                    // as it bit for bit (FMT-8a): else the text is parsed, as any file is.
+                    if next.reads_back(&kind) {
+                        debug_assert_eq!(
+                            format!("{:?}", LaneData::read(&new, &kind)),
+                            format!("{:?}", Ok::<_, m2_song::LaneError>(&next)),
+                            "the seed is what a read of its text gives"
+                        );
+                        planned.seeds.push(Seed { addr: lane.clone(), kind: kind.clone(), text: new.clone(), data: Arc::new(next) });
+                    }
+                    planned.news.push((file.clone(), New::Bytes(Arc::from(new.as_bytes()), Some(after))));
                 }
             }
         }
@@ -1049,13 +1249,13 @@ impl Session {
             let cur = &currents[p];
             let before = |c: &Current| c.bytes.clone().map(|bytes| Before { sha: c.sha.expect("bytes have a hash"), bytes });
             match new {
-                New::Bytes(b) => {
+                New::Bytes(b, sha) => {
                     if cur.bytes.as_deref() != Some(&**b) {
                         planned.targets.push(Target::Write {
                             path: p.to_string(),
                             before: before(cur),
                             bytes: b.clone(),
-                            after: Sha::of(b),
+                            after: sha.unwrap_or_else(|| Sha::of(b)),
                         });
                     }
                 }
@@ -1081,7 +1281,6 @@ impl Session {
 
     /// Steps 5 to 9 and 11: the bases, the baseline, the candidate, the delta and the diagnostics.
     fn prepare(&mut self, tx: &Tx, currents: &BTreeMap<TxPath, Current>) -> Result<Prepared, Refusal> {
-        let key = self.key(tx, currents);
         let accepted = self.accepted.clone();
         let planned = self.plan(tx, currents, &accepted.compiled.decls)?;
 
@@ -1091,6 +1290,16 @@ impl Session {
             .filter(|(p, c)| {
                 if p.class() == Class::Presentation {
                     return false;
+                }
+                // A text file the accepted revision has: its bytes are compared, not hashed.
+                let path = p.path();
+                if let (Some(text), Some(bytes), false, false) = (
+                    accepted.snapshot.files.get(&path),
+                    &c.bytes,
+                    accepted.snapshot.not_utf8.contains_key(&path),
+                    accepted.snapshot.binaries.contains_key(&path) || matches!(p.data(), DataPath::Module { .. }),
+                ) {
+                    return text.as_bytes() != &**bytes;
                 }
                 match (known(&accepted.snapshot, p), c.sha) {
                     (None, None) => false,
@@ -1148,12 +1357,23 @@ impl Session {
         apply_news(&mut snap, &planned.news);
         settle_assets(&mut snap);
 
-        // 8. Built by the plane of the touched paths: no QuickJS for data alone (WRITE-4).
+        // 8. Built by the plane of the touched paths: no QuickJS for data alone (WRITE-4). A lane
+        // the plan made is read as made, not parsed again (PLANE-1).
         let code = planned.news.iter().any(|(p, _)| matches!(p.class(), Class::Code | Class::Manifest));
-        let (project, compiled) = self
-            .build(&snap, (!code).then(|| baseline.compiled.code().clone()), &baseline.compiled.data)
-            .map_err(|d| rejected(built(d)))?;
-        let candidate = Arc::new(Revision { number: 0, code_rev: 0, data_rev: 0, snapshot: snap, project, compiled });
+        let seeded;
+        let previous = match planned.seeds.as_slice() {
+            [] => &baseline.compiled.data,
+            seeds => {
+                seeded = seeds.iter().fold(baseline.compiled.data.clone(), |d, s| d.seeded(&s.addr, &s.kind, s.text.clone(), s.data.clone()));
+                &seeded
+            }
+        };
+        let (project, compiled) =
+            self.build(&snap, (!code).then(|| baseline.compiled.code().clone()), previous).map_err(|d| rejected(built(d)))?;
+        // One that plays the baseline's code says so: a host that hears it before it is accepted
+        // (PLANE-5) never takes it for a code change.
+        let (number, code_rev) = if code { (0, 0) } else { (baseline.number, baseline.code_rev) };
+        let candidate = Arc::new(Revision { number, code_rev, data_rev: 0, snapshot: snap, project, compiled });
 
         // 9. The delta, named in each touched file's base coordinates.
         let (delta, hash, graphs) = {
@@ -1170,7 +1390,7 @@ impl Session {
         let mut diagnostics: Vec<Diagnostic> =
             candidate.compiled.problems.iter().filter(|d| !baseline.compiled.problems.iter().any(|b| same(b, d))).cloned().collect();
         diagnostics.extend(claimed(&baseline, &candidate));
-        Ok(Prepared { key, baseline, candidate, planned, delta, hash, diagnostics, graphs })
+        Ok(Prepared { key: None, baseline, candidate, planned, delta, hash, diagnostics, graphs })
     }
 
     /// Step 10: the expectation, on the delta (WRITE-6).
@@ -1243,7 +1463,10 @@ impl Session {
                 None,
             ));
         }
-        let wrote = self.stage(tx, &planned.targets, vec![])?;
+        let wrote = {
+            let writing = self.before_write.is_some().then(|| self.writing(&candidate));
+            self.stage(tx, &planned.targets, vec![], writing.as_ref())?
+        };
         // The draft follows the files this commit wrote; nothing else of it changes.
         let mut draft = self.draft.clone();
         for (path, _) in &planned.news {
@@ -1251,19 +1474,23 @@ impl Session {
         }
         for (path, _) in &planned.news {
             let at = path.path();
-            for (k, v) in candidate.snapshot.files.iter().filter(|(k, _)| k.starts_with(&at)) {
+            for (k, v) in m2_song::under(&candidate.snapshot.files, &at) {
                 draft.files.insert(k.clone(), v.clone());
             }
-            for (k, v) in candidate.snapshot.binaries.iter().filter(|(k, _)| k.starts_with(&at)) {
-                draft.binaries.insert(k.clone(), v.clone());
+            let bins: Vec<(PathBuf, Stored)> = m2_song::under(&candidate.snapshot.binaries, &at).map(|(k, v)| (k.clone(), v.clone())).collect();
+            if !bins.is_empty() {
+                Arc::make_mut(&mut draft.binaries).extend(bins);
             }
-            for (k, v) in candidate.snapshot.not_utf8.iter().filter(|(k, _)| k.starts_with(&at)) {
+            for (k, v) in m2_song::under(&candidate.snapshot.not_utf8, &at) {
                 draft.not_utf8.insert(k.clone(), *v);
             }
         }
         settle_assets(&mut draft);
-        for text in planned.bases.values() {
-            self.texts.put(text);
+        for (file, text) in &planned.bases {
+            match planned.base_shas.get(file) {
+                Some(sha) => self.texts.put_hashed(*sha, text),
+                None => self.texts.put(text),
+            };
         }
         let step = self.inverse_step(tx, &planned, self.accepted.number + 1, Some(&baseline));
         // Only layout.json written: no revision (PLANE-3), though it is undone like any Tx.
@@ -1271,7 +1498,12 @@ impl Session {
             self.accepted.number
         } else {
             let Revision { snapshot, project, compiled, .. } = Arc::try_unwrap(candidate).unwrap_or_else(|c| c.duplicate());
-            self.accept(snapshot, project, compiled)
+            // The hashes of the texts written, which the store is keyed by: made already.
+            let known = planned.targets.iter().filter_map(|t| match t {
+                Target::Write { path, after, .. } => Some((PathBuf::from(path), *after)),
+                _ => None,
+            });
+            self.accept_known(snapshot, project, compiled, &known.collect())
         };
         self.draft = draft;
         self.cache = None;
@@ -1303,11 +1535,34 @@ impl Session {
         TxStep::new(inverse, raw, data_only, file)
     }
 
+    /// What a commit to `candidate` tells the host before it is journaled (PLANE-5).
+    fn writing(&self, candidate: &Arc<Revision>) -> Writing {
+        let accepted = self.accepted.clone();
+        let code = Arc::ptr_eq(candidate.compiled.code(), accepted.compiled.code()) && accepted.has_code();
+        let data_only = code && changed_paths(&accepted.snapshot, &candidate.snapshot).iter().all(|p| kind_of(p) == Kind::Data);
+        Writing { candidate: candidate.clone(), accepted, data_only }
+    }
+
+    /// What the host does with a commit once it passed every check and its targets still read as
+    /// their bases, before it is journaled (PLANE-5): the app's engine hears a data commit there,
+    /// while the session makes it durable. Called for each judged Tx (a builder's, an agent's, an
+    /// undo's), never for a save, a recovery or a refused Tx; None takes it away.
+    pub fn before_write(&mut self, hook: Option<BeforeWrite>) {
+        self.before_write = hook;
+    }
+
     /// Stage, journal and rename `targets` under the lock (WRITE-15). `tidy` names journals this
-    /// commit finishes (a recovery's), removed once its renames are done. Returns the paths
-    /// written with the stamps of the session's own files, which [`Session::take_wrote`] also
-    /// collects for the watcher.
-    pub(crate) fn stage(&mut self, tx: &Tx, targets: &[Target], tidy: Vec<String>) -> Result<Vec<(PathBuf, Option<Stamp>)>, Refusal> {
+    /// commit finishes (a recovery's), removed once its renames are done; the host is told of
+    /// `writing` between the pre-check and the journal (PLANE-5). Returns the paths written with
+    /// the stamps of the session's own files, which [`Session::take_wrote`] also collects for the
+    /// watcher.
+    pub(crate) fn stage(
+        &mut self,
+        tx: &Tx,
+        targets: &[Target],
+        tidy: Vec<String>,
+        writing: Option<&Writing>,
+    ) -> Result<Vec<(PathBuf, Option<Stamp>)>, Refusal> {
         if let Some(r) = self.writable() {
             return Err(rejected(vec![r]));
         }
@@ -1315,7 +1570,22 @@ impl Session {
         let (host, host_id, program) = (self.host.clone(), self.host_id.clone(), self.program.clone());
         let writer = stage::Writer { host: &host, host_id: &host_id, program: &program };
         let dir = self.dir.clone();
-        match stage::commit(&mut *self.disk, &dir, &tx.id, &tx.label, targets, &writer, &mut self.pending, &tidy, &keep) {
+        let Session { disk, pending, before_write, access, .. } = self;
+        let mut checked = || {
+            if let (Some(w), Some(hook)) = (writing, before_write.as_mut()) {
+                hook(w);
+                // The host took its time: the lock is checked again before anything is written
+                // (WRITE-17), so a lock lost meanwhile is a commit that fails after the host heard it.
+                if let crate::lock::Access::Writer(lock) = &*access
+                    && !lock.holds(&dir)
+                {
+                    return Err(stage::Failed::Io("the project's lock was let go meanwhile (was .music2/ removed?)".into()));
+                }
+            }
+            Ok(())
+        };
+        let done = stage::commit(&mut **disk, &dir, &tx.id, &tx.label, targets, &writer, pending, &tidy, &keep, &mut checked);
+        match done {
             Ok(w) => {
                 let wrote: Vec<(PathBuf, Option<Stamp>)> = w.stamps.into_iter().map(|(p, s)| (PathBuf::from(p), s)).collect();
                 self.wrote.extend(wrote.iter().cloned());
@@ -1324,7 +1594,11 @@ impl Session {
             Err(stage::Failed::Conflict(c)) => Err(Refusal::Conflict {
                 files: c.into_iter().map(|c| ConflictFile { file: c.file, current: c.current, clip: None, why: None }).collect(),
             }),
-            Err(stage::Failed::Io(message)) => Err(Refusal::Io { message }),
+            Err(stage::Failed::Io(why)) => {
+                // Said with what wasn't saved: the disk's own words name only the call that failed.
+                let files: Vec<&str> = targets.iter().flat_map(Target::paths).collect();
+                Err(Refusal::Io { message: format!("{} couldn't be saved: {why}", files.join(", ")) })
+            }
             Err(stage::Failed::Interrupted { journal, why }) => {
                 // The rollback failed: the journal says what is half done, now (6a.6).
                 self.rescan();
@@ -1338,6 +1612,7 @@ impl Session {
     /// Read the journals again: after a rollback that failed, its journal is reported at once
     /// (6a.6).
     pub(crate) fn rescan(&mut self) {
+        self.scans += 1;
         // This session's own completed commits await its next barrier, not a scan's tidy.
         let scan = journal::scan(&self.dir, &self.host_id, self.access.writer(), &self.pending);
         self.own.retain(|d| !d.code.starts_with("tx."));
@@ -1382,7 +1657,7 @@ impl Session {
             ));
         }
         let before = self.accepted.clone();
-        let wrote = self.stage(tx, &planned.targets, tidy.clone())?;
+        let wrote = self.stage(tx, &planned.targets, tidy.clone(), None)?;
         if !tidy.is_empty() {
             // Every journal is judged again: one this recovery completed (an older commit whose
             // Finish this was) is tidied, and no fix stays offered that no longer applies.
@@ -1482,13 +1757,20 @@ impl Session {
                     let (Some(Base::WithText { text, .. }), Some(now)) = (tx.base.get(&file), snap.files.get(&file.path())) else {
                         return false;
                     };
-                    let (Ok(was), Ok(is)) = (LaneData::read(text, &kind), LaneData::read(now, &kind)) else { return false };
-                    let lines = |d: &LaneData, id: &str| {
-                        d.clip_lines().into_iter().filter(|(i, _)| *i == Some(id)).map(|(_, l)| l).collect::<Vec<_>>()
-                    };
                     let ids = put.iter().filter_map(|c| c.get("id").and_then(|i| i.as_str())).chain(delete.iter().map(String::as_str));
+                    // The base is the file now, which the accepted revision read as this lane: every
+                    // clip is as it was, so only an id there twice stops it (no parse).
+                    if (Arc::ptr_eq(text, now) || **text == **now)
+                        && let Some(is) = self.accepted.compiled.data.parsed(lane, &kind, now)
+                    {
+                        if ids.into_iter().any(|id| is.clips_with(id) > 1) {
+                            return false;
+                        }
+                        continue;
+                    }
+                    let (Ok(was), Ok(is)) = (LaneData::read(text, &kind), LaneData::read(now, &kind)) else { return false };
                     for id in ids {
-                        let (a, b) = (lines(&was, id), lines(&is, id));
+                        let (a, b) = (was.lines_of(id), is.lines_of(id));
                         if a.len() > 1 || a != b {
                             return false;
                         }
@@ -1603,16 +1885,6 @@ fn before_payload(file: &TxPath, sha: Sha, bytes: &Arc<[u8]>) -> Payload {
         Ok(t) if file.is_text() => Payload::Text(t.into()),
         _ => Payload::Local { path: format!(".music2/tx/blobs/{}", sha.hex()), sha },
     }
-}
-
-/// Each clip of `d` with an id, as its JSON.
-fn clip_values(d: &LaneData) -> BTreeMap<String, serde_json::Value> {
-    let clips: Vec<serde_json::Value> = match d {
-        LaneData::Notes(c) => c.iter().map(|c| serde_json::to_value(c).expect("serialises")).collect(),
-        LaneData::Control { clips, .. } => clips.iter().map(|c| serde_json::to_value(c).expect("serialises")).collect(),
-        LaneData::Audio(c) => c.iter().map(|c| serde_json::to_value(c).expect("serialises")).collect(),
-    };
-    clips.into_iter().filter_map(|c| Some((c.get("id")?.as_str()?.to_string(), c))).collect()
 }
 
 /// A `Values` anchor of a committed Tx, where its value is now, with the value it had in the

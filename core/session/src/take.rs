@@ -77,10 +77,13 @@ fn overlay(base: &Snapshot, from: &Snapshot, paths: &BTreeSet<PathBuf>) -> Snaps
             Some(v) => s.files.insert(p.clone(), v.clone()),
             None => s.files.remove(p),
         };
-        match from.binaries.get(p) {
-            Some(v) => s.binaries.insert(p.clone(), v.clone()),
-            None => s.binaries.remove(p),
-        };
+        // Shared until changed: only a batch with a binary in it copies the map.
+        if from.binaries.get(p) != s.binaries.get(p) {
+            match from.binaries.get(p) {
+                Some(v) => Arc::make_mut(&mut s.binaries).insert(p.clone(), v.clone()),
+                None => Arc::make_mut(&mut s.binaries).remove(p),
+            };
+        }
         match from.unreadable.get(p) {
             Some(v) => s.unreadable.insert(p.clone(), v.clone()),
             None => s.unreadable.remove(p),
@@ -121,8 +124,11 @@ impl Session {
     /// Take in `paths` as `snapshot` has them, and nothing else of it: the watcher's batch, once
     /// it settled (WRITE-19). A path that changed since and isn't in the batch stays as the draft
     /// has it, for the batch it is in, so a file someone is still writing is never taken in.
+    /// `snapshot` may be a whole read or one of the paths alone (`Snapshot::read_paths`): the
+    /// assets the lanes then name are hashed, the others listed, as a whole read lists them.
     pub fn take_in_only(&mut self, snapshot: Snapshot, paths: &BTreeSet<PathBuf>) -> TakenIn {
-        let only = overlay(&self.draft, &snapshot, paths);
+        let mut only = overlay(&self.draft, &snapshot, paths);
+        crate::tx::settle_assets(&mut only);
         self.take_in(only)
     }
 
@@ -208,12 +214,12 @@ impl Session {
         let before = cur.bytes.clone().map(|bytes| Before { sha: cur.sha.expect("bytes have a hash"), bytes });
         let target = Target::Write { path: p.to_string(), before, bytes: Arc::from(text.as_bytes()), after };
         let tx = Tx::new("save", (p.to_string(), p.to_string()), vec![], Expect::Identical);
-        self.stage(&tx, &[target], vec![])?;
+        self.stage(&tx, &[target], vec![], None)?;
         // Taken in with the draft as it was settled, this file replaced.
         let mut draft = self.draft.clone();
         crate::tx::put_file(&mut draft, file, Some(text.as_bytes()));
         let taken = self.take_in(draft);
-        let recorded = taken.accepted.is_some() && self.accepted.snapshot.files.get(file).map(String::as_str) == Some(text);
+        let recorded = taken.accepted.is_some() && self.accepted.snapshot.files.get(file).map(|t| &**t) == Some(text);
         if recorded {
             let undo = match &cur.bytes {
                 Some(old) => Op::Write { file: p.clone(), bytes: Payload::Text(String::from_utf8_lossy(old).into()) },

@@ -105,7 +105,7 @@ pub fn start(opts: ServeOptions) -> Result<Running> {
 pub fn start_with(opts: ServeOptions, graph: graph::Graph) -> Result<Running> {
     resources::keep_hashes();
     let state = Arc::new(AppState::new(opts.token, graph));
-    spawn_graph_watch(state.clone());
+    spawn_graph_watch(&state);
 
     let listener = std::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], opts.port)))?;
     listener.set_nonblocking(true)?;
@@ -123,25 +123,33 @@ pub fn start_with(opts: ServeOptions, graph: graph::Graph) -> Result<Running> {
     Ok(Running { url, state })
 }
 
-/// Take in edits to the open project made outside the app once they settle, and tell clients:
-/// a stat walk every 50 ms (WRITE-19). Every 300 ms it also ends the knob drags nobody moves any
-/// more (C6), says what ended or was saved on its own, and brings an engine that fell behind the
-/// accepted revision up to it.
-fn spawn_graph_watch(state: Arc<AppState>) {
+/// How often the server ends idle gestures and says what the user must hear (see
+/// [`spawn_graph_watch`]).
+const TELL_EVERY: Duration = Duration::from_millis(300);
+
+/// Take in edits to the open project made outside the app once they settle, and tell clients, on
+/// two threads, so what the user must hear never waits for the session's actor:
+/// - `music2-graph` ticks the watcher every 50 ms, sooner when an event names a change while none
+///   is settling or a batch's quiet ends (WRITE-19), and every 300 ms brings an engine that fell
+///   behind the accepted revision up to it. Taking in a batch waits for the actor, which may be
+///   busy for seconds: a compile, or a commit the disk is slow to make durable.
+/// - `music2-tell` every 300 ms ends the knob drags nobody moves any more (C6) and says what
+///   ended or was saved on its own, and a commit heard as its preview that isn't saved yet
+///   (PLANE-5). It never waits for the actor.
+///
+/// Both end once the state is dropped.
+fn spawn_graph_watch(state: &Arc<AppState>) {
+    let weak = Arc::downgrade(state);
     std::thread::Builder::new()
         .name("music2-graph".into())
         .spawn(move || {
-            let mut tick = 0u64;
-            loop {
-                std::thread::sleep(Duration::from_millis(50));
-                tick += 1;
+            let mut last = std::time::Instant::now();
+            while let Some(state) = weak.upgrade() {
+                state.graph.watch_wait(Duration::from_millis(50));
                 let mut changed = state.graph.watch();
-                if tick.is_multiple_of(6) {
-                    let said = state.graph.expire();
-                    for s in &said {
-                        state.toast(s.clone());
-                    }
-                    changed |= state.graph.catch_up() || !said.is_empty();
+                if last.elapsed() >= Duration::from_millis(300) {
+                    last = std::time::Instant::now();
+                    changed |= state.graph.catch_up();
                 }
                 if changed {
                     state.graph_changed();
@@ -149,6 +157,24 @@ fn spawn_graph_watch(state: Arc<AppState>) {
             }
         })
         .expect("spawn graph watcher");
+    let weak = Arc::downgrade(state);
+    std::thread::Builder::new()
+        .name("music2-tell".into())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(TELL_EVERY);
+                let Some(state) = weak.upgrade() else { return };
+                let said = state.graph.expire();
+                for s in &said {
+                    state.toast(s.clone());
+                }
+                // What ended changes the gestures clients show.
+                if !said.is_empty() {
+                    state.graph_changed();
+                }
+            }
+        })
+        .expect("spawn the server's notices");
 }
 
 #[cfg(test)]

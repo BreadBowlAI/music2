@@ -20,7 +20,7 @@ use crate::{EditError, Edited, ready};
 
 /// The `track()` call that made `m`: a call of the project's code named `track`, in the file the
 /// module was built from, whose first argument is the module's key written as a string.
-pub(crate) fn track_call<'a>(sites: &'a [Site], files: &BTreeMap<PathBuf, String>, m: &Module) -> Option<&'a Site> {
+pub(crate) fn track_call<'a>(sites: &'a [Site], files: &BTreeMap<PathBuf, std::sync::Arc<str>>, m: &Module) -> Option<&'a Site> {
     // `src` is `file:line:column` of the module's function.
     let file = m.src.as_deref().and_then(|s| s.rsplitn(3, ':').nth(2))?;
     let text = files.get(Path::new(file))?;

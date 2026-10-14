@@ -109,7 +109,7 @@ pub fn save(session: &mut Session, path: &str, base: &str, text: &str) -> Result
 pub struct Accepted {
     revision: u64,
     dir: PathBuf,
-    files: Vec<(PathBuf, String)>,
+    files: Vec<(PathBuf, std::sync::Arc<str>)>,
     modules: Vec<Value>,
 }
 

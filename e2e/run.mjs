@@ -88,6 +88,7 @@ export const SUITES = [
   ["s6-fixes", "fix", { expect: 19 }],
   ["taste", "fix", { expect: 32 }],
   ["gestures", "fix", { expect: 30 }],
+  ["g11-play", "fix", { expect: 24 }],
 ];
 const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export"];
 

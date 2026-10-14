@@ -415,7 +415,8 @@ fn precheck(disk: &mut dyn Disk, dir: &Path, targets: &[Target]) -> Result<Vec<C
 /// Commit `targets` in the project at `dir` (steps 1 to 8 of the module). `previous` holds the
 /// journals awaiting their tidy, removed at step 6; `finished`, the journals of interrupted commits
 /// this one recovers, removed once its renames are done; `keep` the before-images undo still
-/// needs, which the tidy leaves in `blobs/`.
+/// needs, which the tidy leaves in `blobs/`. `checked` runs once every target reads as its base,
+/// before the journal's first byte (PLANE-5): its error is the commit's, with nothing written.
 #[allow(clippy::too_many_arguments)]
 pub fn commit(
     disk: &mut dyn Disk,
@@ -427,11 +428,13 @@ pub fn commit(
     previous: &mut Vec<String>,
     finished: &[String],
     keep: &BTreeSet<Sha>,
+    checked: &mut dyn FnMut() -> Result<(), Failed>,
 ) -> Result<Written, Failed> {
     let changed = precheck(disk, dir, targets)?;
     if !changed.is_empty() {
         return Err(Failed::Conflict(changed));
     }
+    checked()?;
     let txd = tx_dir(dir);
     let jid = journal_id();
     let staging = txd.join(&jid);
@@ -562,10 +565,13 @@ pub fn commit(
             Ok(()) => {
                 // Every target is at its before hash again: the folders the rollback renamed
                 // into are pushed as step 8 pushes them, and made durable, before the journal
-                // can go (6a.6).
+                // can go (6a.6). A barrier that fails leaves the journal to the next one, as a
+                // completed commit's is: a power cut meanwhile finds it with its staging.
                 push_folders(disk, dir, targets);
-                let _ = disk.barrier(&jfile);
-                tidy(disk, &txd, &jid);
+                match disk.barrier(&jfile) {
+                    Ok(()) => tidy(disk, &txd, &jid),
+                    Err(_) => previous.push(jid),
+                }
                 Err(e)
             }
             Err(why) => Err(Failed::Interrupted { journal: jid, why }),

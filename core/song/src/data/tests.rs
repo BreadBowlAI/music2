@@ -621,3 +621,61 @@ fn reading_again_keeps_unchanged_lanes_as_a_fresh_read_does() {
     }
     assert!(reused > 300, "unchanged lanes were kept, not read again: {reused}");
 }
+
+// PLANE-1, FMT-15 (the G11 fix's A.2, A.5): what a read reuses from the data read before is the
+// same as reading anew. A lane whose file is the text read before keeps that data, shared; one
+// whose file changed is read from it. The assets clips may play are listed again exactly when
+// the binaries changed, so an asset added outside plays once taken in.
+#[test]
+fn a_read_reuses_only_what_its_files_are() {
+    let audio = |asset: &str| format!(r#"{{"clips": [{{"id": "a", "start": 0, "length": 4, "asset": "{asset}"}}]}}"#);
+    let notes = r#"{"clips": [{"id": "n", "start": 0, "length": 4, "notes": []}]}"#;
+    let d = Dir::new(&[("data/vox/takes.json", audio("a.wav").as_bytes()), ("data/bass/notes.json", notes.as_bytes()), ("assets/a.wav", b"a")]);
+    let decls = lanes(&[("vox", "takes", LaneKind::Audio), ("bass", "notes", LaneKind::Notes)]);
+    let snap = Snapshot::read(&d.0).unwrap();
+    let (first, _) = Project::from_snapshot(&snap).unwrap().data(&decls, None);
+    assert!(first.parsed(&addr("bass", "notes"), &LaneKind::Notes, notes).is_some());
+    assert!(first.parsed(&addr("bass", "notes"), &LaneKind::Audio, notes).is_none(), "another kind is another read");
+    assert!(first.parsed(&addr("bass", "notes"), &LaneKind::Notes, r#"{"clips": []}"#).is_none(), "another text is another read");
+
+    // A lane edited: the other lane and the assets are shared; the edited one is read from its file.
+    let mut edited = snap.clone();
+    let moved = notes.replace("\"start\": 0", "\"start\": 8");
+    edited.files.insert(PathBuf::from("data/bass/notes.json"), moved.as_str().into());
+    let (second, _) = Project::from_snapshot(&edited).unwrap().data(&decls, Some(&first));
+    assert!(Arc::ptr_eq(second.lane("vox", "takes").unwrap(), first.lane("vox", "takes").unwrap()));
+    assert_eq!(**second.lane("bass", "notes").unwrap(), LaneData::read(&moved, &LaneKind::Notes).unwrap());
+    assert!(Arc::ptr_eq(&second.assets, &first.assets), "the binaries are the same map");
+
+    // An asset added outside, and named: listed again, so it plays.
+    d.write("assets/b.wav", b"b");
+    d.write("data/vox/takes.json", audio("b.wav").as_bytes());
+    let outside = Snapshot::read(&d.0).unwrap();
+    let (third, _) = Project::from_snapshot(&outside).unwrap().data(&decls, Some(&second));
+    assert!(third.asset_path("b.wav").is_some() && second.asset_path("b.wav").is_none());
+    assert!(!Arc::ptr_eq(&third.assets, &second.assets));
+
+    // A seed is taken as the read of its text, and only of that text.
+    let seed = Arc::new(LaneData::read(notes, &LaneKind::Notes).unwrap());
+    let seeded = second.seeded(&addr("bass", "notes"), &LaneKind::Notes, Arc::from(notes), seed.clone());
+    let (fourth, _) = Project::from_snapshot(&snap).unwrap().data(&decls, Some(&seeded));
+    assert!(Arc::ptr_eq(fourth.lane("bass", "notes").unwrap(), &seed));
+}
+
+// FMT-5 (the G11 fix's A.4): the run of paths at or inside one path is exactly the paths that start
+// with it by component, whatever the names around it: one that only starts with the same letters,
+// a dot, a space, a digit, or `assets` itself.
+#[test]
+fn the_paths_under_a_path_are_one_run() {
+    let names = ["assets", "assets0", "assets.wav", "asset", "assets/a.wav", "assets/vox/b.wav", "assets/vox", "assetsz/x", "data",
+        "data/kick", "data/kick/hits.json", "data/kick-2/hits.json", "data/kicks/x.json", "data/kick/sub/a.state", "data/kick.json",
+        "data/ kick", "song.ts", "a b/c", "Assets/x", "assets/z", "assets/vox-2/c.wav"];
+    let map: BTreeMap<PathBuf, usize> = names.iter().enumerate().map(|(i, n)| (PathBuf::from(n), i)).collect();
+    let set: BTreeSet<PathBuf> = map.keys().cloned().collect();
+    for p in names.iter().copied().chain(["", "assets/", "data/kick/", "nothing", "data/kick/hits.json/x"]) {
+        let p = Path::new(p);
+        let want: Vec<&PathBuf> = map.keys().filter(|k| k.starts_with(p)).collect();
+        assert_eq!(crate::under(&map, p).map(|(k, _)| k).collect::<Vec<_>>(), want, "{}", p.display());
+        assert_eq!(crate::under_set(&set, p).collect::<Vec<_>>(), want, "{}", p.display());
+    }
+}

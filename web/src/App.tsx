@@ -70,7 +70,7 @@ export default function App() {
     const { set, toast } = useStore.getState();
     return connect(
       (msg) => {
-        if (msg.t === "toast") toast(msg.text);
+        if (msg.t === "toast") toast(msg.text, undefined, true);
         else if (msg.t === "graph") void refreshGraph();
         else if (msg.t === "export") void onExportEvent(msg);
       },

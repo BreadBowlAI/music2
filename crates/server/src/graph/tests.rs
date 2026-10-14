@@ -8,10 +8,10 @@ use m2_editor::Gestures;
 
 const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n";
 
-struct Fixture(PathBuf);
+pub(super) struct Fixture(pub(super) PathBuf);
 
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!("m2-graph-server-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
         std::fs::create_dir_all(&dir).unwrap();
@@ -21,23 +21,23 @@ impl Fixture {
         fixture
     }
 
-    fn write(&self, body: &str) {
+    pub(super) fn write(&self, body: &str) {
         std::fs::write(self.0.join("song.ts"), format!("import {{ hz, song }} from '@m2/core';\nimport {{ osc }} from 'std/dsp';\n{body}"))
             .unwrap();
     }
 
     /// Write `text` to the project's file `path`, as an outside writer does.
-    fn put(&self, path: &str, text: &str) {
+    pub(super) fn put(&self, path: &str, text: &str) {
         let p = self.0.join(path);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, text).unwrap();
     }
 
-    fn read(&self, path: &str) -> String {
+    pub(super) fn read(&self, path: &str) -> String {
         std::fs::read_to_string(self.0.join(path)).unwrap()
     }
 
-    fn open(&self) -> Graph {
+    pub(super) fn open(&self) -> Graph {
         let graph = Graph::silent();
         graph.open(&self.0).unwrap();
         graph
@@ -97,7 +97,7 @@ fn a_project_another_program_holds_opens_read_only_until_retried() {
 
 /// The open project's token, the accepted revision, and the id of the control whose value is
 /// `value`.
-fn knob(graph: &Graph, value: f64) -> (u64, u64, String) {
+pub(super) fn knob(graph: &Graph, value: f64) -> (u64, u64, String) {
     graph.inspect(move |a| {
         let o = a.open.as_ref().unwrap();
         let control = o.session.controls().into_iter().find(|c| c.value == value).unwrap();
@@ -109,17 +109,17 @@ fn control(graph: &Graph) -> (u64, u64, String) {
     knob(graph, 800.0)
 }
 
-/// What the player plays, and the accepted revision.
-fn playing(graph: &Graph) -> (u64, u64) {
-    graph.inspect(|a| a.open.as_ref().map(|o| (o.playing, o.session.accepted().number)).unwrap())
+/// What the player plays (0 while a preview plays), and the accepted revision.
+pub(super) fn playing(graph: &Graph) -> (u64, u64) {
+    graph.inspect(|a| a.open.as_ref().map(|o| (o.playing.unwrap_or(0), o.session.accepted().number)).unwrap())
 }
 
-fn synced(graph: &Graph) -> bool {
+pub(super) fn synced(graph: &Graph) -> bool {
     let (p, a) = playing(graph);
     p == a
 }
 
-fn player(graph: &Graph) -> Player {
+pub(super) fn player(graph: &Graph) -> Player {
     graph.inner.current_device().expect("a player").player
 }
 
@@ -389,6 +389,53 @@ fn a_lane_write_plays_the_new_notes_and_undo_takes_them_back() {
     assert!(synced(&graph));
 }
 
+// The G11 fix's A.8: the timeline published after each change is the session's timeline, to the
+// value, though each lane's JSON is made only when that lane changed: a write to one lane, an
+// outside write to another, a rename of a track's label, and an undo.
+#[test]
+fn the_published_timeline_is_the_sessions_and_shares_what_didnt_change() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "import { track } from '@m2/core';\nimport { kick } from 'std/instruments';\nimport { sum } from 'std/math';\n\
+         const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\n\
+         const s = track('snare', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => sum(k.out, s.out));\n",
+    );
+    fixture.put("data/snare/hits.json", "{\"clips\": [{\"id\": \"s\", \"start\": 0, \"length\": 4, \"notes\": []}]}\n");
+    let graph = fixture.open();
+    let same = |graph: &Graph| {
+        let session = graph.inspect(|a| serde_json::to_value(a.open.as_ref().unwrap().session.timeline()).unwrap());
+        assert_eq!(graph.state().unwrap()["timeline"], session, "the published timeline is the session's");
+    };
+    let lane = |graph: &Graph, module: &str| {
+        let cp = graph.inner.control.lock();
+        cp.open.as_ref().unwrap().shown.timeline.lane(module, "hits").map(|l| l.json.clone()).unwrap()
+    };
+    same(&graph);
+    let state = graph.state().unwrap();
+    let (token, revision) = (state["session"].as_u64().unwrap(), state["view"]["revision"].as_u64().unwrap());
+    let snare = lane(&graph, "snare");
+    let clips: Vec<NoteClip> =
+        serde_json::from_value(json!([{"id": "k", "start": 0, "length": 4, "notes": [{"pitch": "C1", "start": 0, "length": 0.25}]}])).unwrap();
+    graph.write_notes(token, revision, "kick", "hits", &clips).unwrap();
+    same(&graph);
+    assert!(Arc::ptr_eq(&snare, &lane(&graph, "snare")), "the lane not written is the same JSON");
+    let kick = lane(&graph, "kick");
+
+    fixture.put("data/snare/hits.json", "{\"clips\": [{\"id\": \"s\", \"start\": 8, \"length\": 4, \"notes\": []}]}\n");
+    assert!(graph.poll());
+    same(&graph);
+    assert!(!Arc::ptr_eq(&snare, &lane(&graph, "snare")), "the lane written outside is made again");
+    assert!(Arc::ptr_eq(&kick, &lane(&graph, "kick")));
+    assert_eq!(graph.state().unwrap()["timeline"]["tracks"][1]["lanes"][0]["clips"][0]["start"], 8.0);
+
+    graph.label(token, "kick", "Big Kick").unwrap();
+    same(&graph);
+    assert_eq!(graph.state().unwrap()["timeline"]["tracks"][0]["label"], "Big Kick");
+    graph.undo(token).unwrap();
+    graph.undo(token).unwrap();
+    same(&graph);
+}
+
 // ID-10, HOME-2: the label and automate routes: a rename changes only what the timeline and the
 // canvas show; an automate answers with the new lane, which the timeline shows empty at once, and
 // the player plays each revision; one undo each takes them back.
@@ -543,7 +590,7 @@ fn a_broken_draft_keeps_the_drag_and_poll_syncs_already_refreshed_sources() {
         let o = a.open.as_mut().unwrap();
         assert!(o.session.refresh());
         assert!(!o.session.refresh());
-        assert_ne!(o.playing, o.session.accepted().number);
+        assert_ne!(o.playing, Some(o.session.accepted().number));
     });
     assert!(graph.poll(), "a renderer behind the accepted revision still needs synchronization");
     assert!(synced(&graph));
@@ -572,7 +619,7 @@ fn a_commit_closes_previews_and_a_restart_keeps_them() {
 }
 
 /// Wait for the player's thread to catch up.
-fn eventually(what: &str, done: impl Fn() -> bool) {
+pub(super) fn eventually(what: &str, done: impl Fn() -> bool) {
     let start = Instant::now();
     while !done() {
         assert!(start.elapsed() < Duration::from_secs(5), "timed out waiting until {what}");
@@ -699,7 +746,7 @@ fn seeking_keeps_previews_and_leaves_playing_new_revisions_to_poll() {
     graph.inspect(|a| {
         let o = a.open.as_mut().unwrap();
         assert!(o.session.refresh());
-        assert_ne!(o.playing, o.session.accepted().number);
+        assert_ne!(o.playing, Some(o.session.accepted().number));
     });
     graph.seek(4.0).unwrap();
     assert_eq!((graph.leases().len(), playing(&graph).0), (1, revision));
@@ -756,17 +803,17 @@ fn a_saved_file_plays_at_once_and_a_save_over_a_change_is_refused() {
 }
 
 /// A kick track whose decay is a knob at 0.3 s.
-const KICK: &str = "import { secs, track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+pub(super) const KICK: &str = "import { secs, track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
                     const k = track('kick', ({ lane }) => kick(lane.notes('hits'), { decay: secs(0.3) }));\n\
                     export default song(() => k.out);\n";
 
-fn kick_clips(pitches: &[&str]) -> Vec<NoteClip> {
+pub(super) fn kick_clips(pitches: &[&str]) -> Vec<NoteClip> {
     let notes: Vec<Value> = pitches.iter().enumerate().map(|(i, p)| json!({"pitch": p, "start": i, "length": 0.25})).collect();
     serde_json::from_value(json!([{"id": "a", "start": 0, "length": 4, "notes": notes}])).unwrap()
 }
 
 /// The renderer the player plays, once it has taken everything sent.
-fn generation(graph: &Graph) -> u64 {
+pub(super) fn generation(graph: &Graph) -> u64 {
     let p = player(graph);
     eventually("the player takes what was sent", || p.status().pending.is_none());
     std::thread::sleep(Duration::from_millis(30));
@@ -812,9 +859,10 @@ fn a_lane_write_while_playing_is_swapped_into_the_playing_renderer() {
     assert!(fixture.read("song.ts").contains("secs(0.5)"));
 }
 
-// Step 3's gates time an edit or a seek from when it was asked for (or the session finished)
-// to the callback that took it: what the server records says which message carried it, and
-// the engine's stamp says when it applied.
+// Step 3's gates time an edit or a seek from when it was asked for (or the session was ready to
+// tell the engine) to the callback that took it: what the server records says which message
+// carried it, and the engine's stamp says when it applied. PLANE-5: a lane write's message is its
+// preview, sent once its checks passed and before it is durable (`sent ≤ compiled`).
 #[test]
 fn edits_and_seeks_say_when_the_engine_took_them() {
     let fixture = Fixture::new();
@@ -827,16 +875,20 @@ fn edits_and_seeks_say_when_the_engine_took_them() {
         let seq = t.seq.expect("a message was sent");
         eventually("the engine takes it", || graph.applied(seq).is_some());
         let a = graph.applied(seq).unwrap();
-        assert!(t.requested_ns <= t.compiled_ns && t.compiled_ns <= t.sent_ns && t.sent_ns <= t.published_ns, "{t:?}");
+        assert!(t.requested_ns <= t.ready_ns && t.ready_ns <= t.sent_ns && t.sent_ns <= t.published_ns, "{t:?}");
+        assert!(t.ready_ns <= t.compiled_ns && t.compiled_ns <= t.published_ns, "{t:?}");
+        assert!(!t.previewed || t.sent_ns <= t.compiled_ns, "{t:?}");
         // The callback that took it started after it was queued, or was already running.
-        assert!(t.compiled_ns <= a.callback_ns + 20_000_000, "{t:?} then {a:?}");
+        assert!(t.sent_ns <= a.callback_ns + 20_000_000, "{t:?} then {a:?}");
         assert!(a.callback_ns <= graph.now_ns());
     };
     graph.write_notes(token, revision, "kick", "hits", &kick_clips(&["C1", "D1"])).unwrap();
-    taken(graph.last_edit().unwrap());
+    let t = graph.last_edit().unwrap();
+    assert!(t.previewed && t.taken_back.is_none(), "{t:?}");
+    taken(t);
     graph.seek(2.0).unwrap();
     let seek = graph.last_edit().unwrap();
-    assert_eq!(seek.requested_ns, seek.compiled_ns);
+    assert_eq!((seek.requested_ns, seek.ready_ns, seek.previewed), (seek.compiled_ns, seek.compiled_ns, false));
     taken(seek);
     // An edit that changes nothing sends nothing.
     let revision = graph.state().unwrap()["view"]["revision"].as_u64().unwrap();
@@ -868,7 +920,7 @@ fn a_control_lane_written_by_hand_is_swapped_into_the_playing_renderer() {
 
 /// Poll the watcher as the server does, every 50 ms, until `done` or `ms` pass; after each poll,
 /// `after` sees the graph.
-fn watching(graph: &Graph, ms: u64, mut after: impl FnMut(&Graph) -> bool) {
+pub(super) fn watching(graph: &Graph, ms: u64, mut after: impl FnMut(&Graph) -> bool) {
     let t = Instant::now();
     while t.elapsed() < Duration::from_millis(ms) {
         graph.watch();
@@ -880,7 +932,7 @@ fn watching(graph: &Graph, ms: u64, mut after: impl FnMut(&Graph) -> bool) {
 }
 
 /// The accepted revision's number, code and data revisions.
-fn revs(graph: &Graph) -> (u64, u64, u64) {
+pub(super) fn revs(graph: &Graph) -> (u64, u64, u64) {
     graph.inspect(|a| {
         let r = a.open.as_ref().unwrap().session.accepted();
         (r.number, r.code_rev, r.data_rev)
@@ -920,22 +972,28 @@ fn an_outside_lane_write_is_swapped() {
 }
 
 /// A notes lane of `n` notes in one clip, as an outside writer would write it.
-fn hits_of(n: usize) -> String {
+pub(super) fn hits_of(n: usize) -> String {
     let notes: Vec<Value> = (0..n).map(|i| json!({"pitch": "C1", "start": i, "length": 0.25})).collect();
     serde_json::to_string_pretty(&json!({"clips": [{"id": "a", "start": 0, "length": 16, "notes": notes}]})).unwrap()
 }
 
 // WRITE-19, FMT-9, the step 6 gate: a lane file an outside writer writes in two halves never makes
-// a revision in which that lane is empty. 60 ms apart, the halves settle as one batch: exactly one
-// revision. 400 ms apart, longer than the quiet window, the first half settles alone: its revision
-// keeps the lane's last data, with `lane.invalid`, and the second half makes the next.
+// a revision in which that lane is empty. Watched by walks (a network volume): 60 ms apart, the
+// halves settle as one batch, exactly one revision; 400 ms apart, longer than the quiet window, the
+// first half settles alone: its revision keeps the lane's last data, with `lane.invalid`, and the
+// second half makes the next. Watched by events, which name a file written while open only when it
+// is opened and closed: the same, except that when the opening's event comes after the first half
+// was written (fseventsd behind, as under a busy test run), the halves may settle as one.
 #[test]
 fn a_lane_written_in_two_halves_never_plays_empty() {
-    for gap in [60u64, 400] {
+    for (walk, gap) in [(true, 60u64), (true, 400), (false, 60), (false, 400)] {
         let fixture = Fixture::new();
         fixture.write(KICK);
         fixture.put("data/kick/hits.json", &hits_of(4));
-        let graph = fixture.open();
+        let graph = Graph::silent();
+        graph.watch_by_walking(walk);
+        graph.open(&fixture.0).unwrap();
+        assert_eq!(graph.watch_stats().unwrap().events, !walk);
         let start = revs(&graph).0;
         let new = hits_of(8);
         let (a, b) = new.split_at(new.len() / 2);
@@ -966,7 +1024,9 @@ fn a_lane_written_in_two_halves_never_plays_empty() {
         writer.join().unwrap();
         assert!(seen.iter().all(|s| s.1 > 0), "{gap} ms: a revision played the lane empty: {seen:?}");
         let made: Vec<_> = seen.iter().filter(|s| s.0 > start).collect();
-        if gap == 60 {
+        if !walk && gap == 400 && made.len() == 1 {
+            assert_eq!((made[0].1, made[0].2), (8, false), "events, {gap} ms: {seen:?}");
+        } else if gap == 60 {
             assert_eq!(made.len(), 1, "{gap} ms: one batch, one revision: {seen:?}");
             assert_eq!((made[0].1, made[0].2), (8, false));
         } else {
@@ -1515,6 +1575,9 @@ fn a_failed_build_then_a_lane_edit_rebuilds() {
     let state = graph.state().unwrap();
     let (token, revision) = (state["session"].as_u64().unwrap(), state["view"]["revision"].as_u64().unwrap());
     graph.write_notes(token, revision, "kick", "hits", &kick_clips(&["C1", "D1"])).unwrap();
+    // PLANE-5: what plays lags the accepted revision, so the write isn't previewed: it is heard
+    // once accepted, through the renderer that plays both.
+    assert!(!graph.last_edit().unwrap().previewed);
     assert_ne!(generation(&graph), first, "a new renderer, not a swap into the stale one");
     assert!(synced(&graph));
     let spare = graph.inspect(|a| {

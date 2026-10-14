@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use m2_session::{Checked, Refusal, Revision, Session};
+use m2_session::{Checked, Refusal, Revision, Session, Uncommitted};
 use m2_song::tx::{Base, Edit, Expect, Op, Pos, Tx, TxPath};
 use m2_song::{DataPath, Stored};
 
@@ -25,7 +25,7 @@ pub fn base_of(rev: &Revision, p: &TxPath) -> Base {
         return if files.is_empty() { Base::Absent } else { Base::Sha(m2_song::dir_hash(&files)) };
     }
     match (snap.files.get(&path), snap.binaries.get(&path)) {
-        (Some(text), _) if !snap.not_utf8.contains_key(&path) => Base::text(text),
+        (Some(text), _) if !snap.not_utf8.contains_key(&path) => Base::shared(text),
         (Some(_), _) => snap.sha(&path).map_or(Base::Absent, Base::Sha),
         (None, Some(Stored::Hash(sha))) => Base::Sha(*sha),
         _ => Base::Absent,
@@ -85,9 +85,12 @@ pub fn run_as(
         }
         _ => crate::refused(s, r),
     };
-    let checked = s.check(&tx).map_err(|r| unexpected(s, r))?;
-    assert(s, &checked)?;
-    s.commit(tx).map_err(|r| unexpected(s, r))
+    // One read and one plan for the check, the assertion and the commit (WRITE-4, WRITE-5).
+    match s.commit_with(tx, assert) {
+        Ok(done) => Ok(done),
+        Err(Uncommitted::Asserted(e)) => Err(e),
+        Err(Uncommitted::Refused(r)) => Err(unexpected(s, r)),
+    }
 }
 
 /// A structural planner asserts on positions it planned in the accepted revision: so the file

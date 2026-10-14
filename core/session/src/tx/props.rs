@@ -239,7 +239,7 @@ fn the_inverse_restores_and_check_matches_commit() {
             tx.expect = Expect::Seen(checked.hash);
         }
         let candidate: BTreeMap<String, String> =
-            checked.candidate().snapshot.files.iter().map(|(k, v)| (m2_song::path::slashed(k), v.clone())).collect();
+            checked.candidate().snapshot.files.iter().map(|(k, v)| (m2_song::path::slashed(k), v.to_string())).collect();
         let done = s.commit(tx.clone()).unwrap_or_else(|e| panic!("case {case}: {e}"));
         assert_eq!(done.hash, checked.hash, "case {case}: check then commit, one delta");
         let after = d.tree();
@@ -270,6 +270,70 @@ fn the_inverse_restores_and_check_matches_commit() {
         assert_eq!(d.tree(), after, "case {case}: redo makes them again");
     }
     assert_eq!(kinds.len(), 6, "every kind of Tx was made: {kinds:?}");
+}
+
+// WRITE-4, WRITE-5, WRITE-21 (the G11 fix's A.1): one `commit_with` is `check`, the assertion,
+// then `commit`: over random Tx on two copies of one project, the planner sees the same candidate,
+// the commits say the same (revision, delta, patches, written paths), the disks are the same, and
+// so are the undo and redo after.
+#[test]
+fn commit_with_is_check_then_commit() {
+    let (a, b) = (start(), start());
+    let (mut sa, mut sb) = (a.open(), b.open());
+    let (mut committed, mut refused) = (0, 0);
+    for case in 0..300usize {
+        let mut rng = Rng(0xa1_0000 + case as u64);
+        let mut tx = random(&mut rng, &sa, &a, case);
+        let checked = sa.check(&tx);
+        if let (Ok(c), Expect::Seen(_)) = (&checked, &tx.expect) {
+            // As an agent commits what it learned; a few keep a hash that is wrong.
+            if case % 7 != 0 {
+                tx.expect = Expect::Seen(c.hash);
+            }
+        }
+        let seen = checked.as_ref().map(|c| (c.hash, c.delta.clone(), format!("{:?}", c.diagnostics))).map_err(|e| e.to_string());
+        // Some planners say no: then nothing is committed, as when `run` stops after `check`.
+        let says_no = case % 11 == 3;
+        let mut asserted = None;
+        let one = sb.commit_with(tx.clone(), |_, c: &super::Checked| {
+            asserted = Some((c.hash, c.delta.clone(), format!("{:?}", c.diagnostics)));
+            if says_no { Err(()) } else { Ok(()) }
+        });
+        let two = match checked {
+            Ok(_) if says_no => Err("the planner said no".to_string()),
+            Ok(_) => sa.commit(tx.clone()).map_err(|e| e.to_string()),
+            Err(e) => Err(e.to_string()),
+        };
+        match (&one, &two) {
+            (Ok(x), Ok(y)) => {
+                assert_eq!(asserted.as_ref().map(|a| (a.0, &a.1, &a.2)), seen.as_ref().ok().map(|s| (s.0, &s.1, &s.2)), "case {case}");
+                assert_eq!((x.number, x.code_rev, x.data_rev, x.hash), (y.number, y.code_rev, y.data_rev, y.hash), "case {case}");
+                assert_eq!((&x.delta, &x.patches), (&y.delta, &y.patches), "case {case}");
+                let paths = |c: &super::Committed| c.wrote.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>();
+                assert_eq!(paths(x), paths(y), "case {case}");
+                committed += 1;
+            }
+            (Err(super::Uncommitted::Refused(x)), Err(y)) => {
+                assert_eq!(&x.to_string(), y, "case {case}");
+                refused += 1;
+            }
+            (Err(super::Uncommitted::Asserted(())), Err(_)) if says_no && seen.is_ok() => {
+                assert_eq!(asserted.as_ref().map(|a| a.0), seen.as_ref().ok().map(|s| s.0), "case {case}");
+                refused += 1;
+            }
+            _ => panic!("case {case}: one committed and one didn't
+{one:?}
+{two:?}"),
+        }
+        assert_eq!(a.tree(), b.tree(), "case {case}: the same files");
+        assert_eq!((sa.can_undo(), sa.can_redo()), (sb.can_undo(), sb.can_redo()), "case {case}");
+        if case % 5 == 4 {
+            let (x, y) = (sa.undo().map(|s| s.committed.hash).map_err(|e| e.to_string()), sb.undo().map(|s| s.committed.hash));
+            assert_eq!(x, y.map_err(|e| e.to_string()), "case {case}: undo");
+            assert_eq!(a.tree(), b.tree(), "case {case}: the same files after undo");
+        }
+    }
+    assert!(committed > 100 && refused > 20, "{committed} committed, {refused} refused");
 }
 
 // R17, the step 6 gate (d): a comment typed into a touched file between check and commit, outside

@@ -114,7 +114,7 @@ fn placeless(flat: &Flat) -> Flat {
 /// Every data file of the project, by path.
 fn data(f: &Fixture) -> Vec<(PathBuf, String)> {
     let snap = Snapshot::read(&f.0).unwrap();
-    snap.files.into_iter().filter(|(p, _)| p.starts_with("data")).collect()
+    snap.files.into_iter().filter(|(p, _)| p.starts_with("data")).map(|(p, t)| (p, t.to_string())).collect()
 }
 
 // ID-10, ID-17: a label rename changes nothing but the label: no data file, no graph, no audio.

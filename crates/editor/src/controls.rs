@@ -289,7 +289,7 @@ fn resolve_with(s: &Session, at: u64, id: &str, find: impl Fn(&str) -> Option<Co
     let stale = EditError::Stale { current: accepted.number };
     let carried = || -> Option<Control> {
         let past = s.past(at)?;
-        let (old, arg) = site_by_id(&past.sites, id)?;
+        let (old, arg) = site_by_id(past.sites(), id)?;
         let file = Path::new(&old.file);
         let to =
             carry_text(past.snapshot.files.get(file)?, accepted.snapshot.files.get(file)?, old.start as usize, old.end as usize)? as u32;
