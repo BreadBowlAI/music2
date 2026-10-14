@@ -274,3 +274,54 @@ lowering and uses the OS's `pow`.
 The check again at `00ff1c7` (the fix; logs in `~/m2-runs/check-check-S4-fix/`): the same rows, plus one flake that
 passed on its retry: `tests::cell::cell_heard_never_runs_ahead` ("drained while writing": the writer finished before
 the first drain, while other checks loaded the server). S4 doesn't touch it.
+
+## S5. `m2-os`, and the plugin main thread
+
+**Built**
+
+| What | Where |
+|---|---|
+| The crate `m2-os`: the API in portable files, one folder per OS, what macOS and Linux share in `unix.rs` | `core/os/src/` |
+| Thread identity and CPU time: `token` (`pthread_self`), `is_process_main` (macOS `pthread_main_np`, Linux `gettid() == getpid()`), `cpu_time` (OS-24, 25, 80) | `thread.rs` |
+| The plugin main loop: `Where`, `Loop`, `APP_ON_PROCESS_MAIN`. macOS: the main dispatch queue and the `CFRunLoop` pump, moved (OS-23). Linux: a job queue; the app's runs on a thread of its own, `m2-app-main` (OS-26, 27) | `main_loop.rs`, `mac/main_loop.rs`, `linux/main_loop.rs` |
+| `dirs::home` and `dirs::clap`; plugins are found on `CLAP_PATH`, then in the OS's CLAP folders (OS-32) | `dirs.rs`, `core/plugins/src/lib.rs` |
+| The plugin executor over a `Loop`, with no OS `cfg` left; `token` and `is_process_main` kept as wrappers; `use_process_main_thread` is now `use_app_main_thread` | `core/plugins/src/main_thread.rs` |
+| The app's hook, and its test on every OS, renamed `app_main_thread.rs`; only AppKit's run loop stays macOS-only (OS-30) | `apps/music2-desktop/src/plugin_host.rs`, `tests/app_main_thread.rs` |
+| The gates' thread CPU time from `m2-os`; `m2-gates` no longer needs `libc` | `crates/gates/src/server/watch.rs` |
+| PLAT-2's test, with an allow-list of 11 files (8 for S6, 3 for S8) | `core/os/tests/one_place.rs` |
+| The app row fails when the app says plugins can't be hosted | `ci/check.sh` |
+| HOST-2, HOST-3, and PLAT-2's and PLAT-3's *Today* | `docs/architecture.md` |
+
+**Deviations**
+
+| What | Why |
+|---|---|
+| `dirs::home()` is built here, not in S6 | `dirs::clap()` needs it. S6 adds `songs` and `cache` beside it. |
+| `one_place.rs` ignores comments, also matches `cfg!(unix)` and `cfg!(windows)`, skips modules declared under `#[cfg(test)]` (`oracle.rs`, `props.rs`, `testing.rs`), and fails when a file on the allow-list names no OS any more | A comment that names `libc::` is not OS code. The last rule makes each slice remove its own lines, as §2.8 says. |
+| Linux's `AppMain` loop starts on any thread; macOS's refuses to start off the main thread | Only on macOS is that loop the main thread. The app calls it on the main thread anyway. |
+| `run_main` now checks it runs on the process's main thread on Linux too | macOS always did; every caller is a `main`. |
+
+**The check** at `9d200a4` (`ci/check.sh`, 17 min, logs and screenshots in `~/m2-runs/check-build-S5/`): S1's row, changed only
+by S5, plus two flakes that are not S5's (below).
+
+| Row | Result |
+|---|---|
+| toolchain, web build, build | PASS |
+| app | PASS: the UI connected in 1 s with `first-song` and with `with-plugins`; nothing says plugins can't be hosted |
+| rust tests | FAIL: tests 1 to 10 of §4.1 by name, and the G10 flake below; 694 passed. Test 11 passes, Surge XT included (`main_thread: ok (Surge XT too)`), and so does the app test on Linux (`app_main_thread: ok (… 32 main-thread calls on the app's loop thread …; with-plugins played, carried across a rebuild and closed on the app's loop thread)`). |
+| clippy | FAIL at lint 2 (`core/session/src/lock.rs:213`): it gets past `m2-plugins` now. Without `-D warnings` it lists exactly lints 2 to 6. |
+| std kernels | PASS |
+| std.wasm | FAIL: stale until S3 |
+| mac lint | PASS |
+| browser suites | FAIL: 6 of S1's 7 (code, fixes-graph, attention, export, fx-fixes, s6-write); `notes-proj` passed (below); live3b in full, 51 of 51 |
+| renders | FAIL: 6 of 8 (the two `examples-resample` renders, until S4) |
+| repo unchanged | PASS |
+
+| Flake | Evidence that it isn't S5's |
+|---|---|
+| `the_live_engine_passes_every_gate`: G10's "bar 64 takes no longer than the same length from bar 1" said 1.48 s against 1.31 s | A timing check, run while other slices' checks loaded the server (load average 12 to 17). It passed on the check's own retry, and 3 of 3 times more alone. S5 changes nothing on the render path. |
+| `notes-proj` passed, where S1's check failed it twice | The file-then-revision race S2 fixes (§4.4) depends on timing. It passed 5 of 5 times alone on this build, and S3's check, which doesn't touch saves either, passed it too. |
+
+**The Linux app with plugins.** Opened once more by hand on Xvfb with `examples/with-plugins` and the test plugins: its
+song has no problems (S1's screenshot showed two `plugin.missing`), and it plays. Screenshots in `~/m2-runs/check-build-S5/`:
+`app-first-song.png`, `app-with-plugins.png`, `app-with-plugins-playing.png`.
