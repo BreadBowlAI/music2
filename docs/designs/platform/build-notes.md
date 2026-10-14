@@ -177,3 +177,75 @@ slice's: `m2-plugins`' `tests::surge_plays_notes` failed once ("nothing before t
 on its retry. Its code is the same as at S1. Run alone it fails 6 times in 150, and the whole test binary 4 in 60:
 in those runs Surge XT's output starts a few samples early, at 1e-14 to 3e-8 (below −140 dB), where the test asks
 for exact zeros. Left for the lead (S5 changes the plugin host).
+
+## S4. The same math everywhere
+
+**Built**
+
+| What | Where |
+|---|---|
+| The audio clip path's 8 math calls through `libm`; pitch is `libm::exp2` by name | `core/runtime/src/audio.rs` |
+| The live resampler's 3 calls through `libm` | `core/play/src/resample.rs` |
+| Song code's 22 `Math` functions as native functions over `libm`, with JS's `pow` and QuickJS's `hypot` fold | `core/script/src/lib.rs` (`math`) |
+| `**` and `**=` lowered to `Math.pow` (oxc's `env.es2016.exponentiation_operator`) | `core/script/src/lib.rs` (`strip`) |
+| The test that bans host math in what `m2-runtime` and `m2-play` compile | `core/runtime/tests/host_math.rs` |
+| The test that song math gives `libm`'s bits: 31 values, and one constant in the IR | `core/script/src/tests.rs` (`song_math_is_libm_on_every_os`) |
+| `libm = "0.2"` (0.2.16, already in `Cargo.lock`) | the root `Cargo.toml`, used by `core/{runtime,play,script}` |
+| RENDER-2's rule and *Today*; PLAT-4's *Today* | `docs/architecture.md` |
+| The three changed hashes, in their own commit | `core/session/tests/renders.json`, `e2e/renders.sha256` |
+
+**Measured**
+
+- `host_math.rs` before the change found exactly design §5.1's 11 calls (8 in `audio.rs`, 3 in `resample.rs`); after it,
+  none.
+- The QuickJS test before the change: 23 of its 31 values were wrong on Linux (glibc's last bit). With only the `**`
+  lowering left out: 2 wrong, the two `**` cases. So the test catches either half missing.
+- oxc's `**` option changes no other output: all 38 tracked `.ts` files outside `web/` (the SDK, std, examples,
+  templates, test fixtures) compile to the same JS with it on and off (a temporary test, not committed). This settles
+  design §12's row on it.
+
+| Record | Entry | Before (the Mac at `8aa301e`) | After S4 (Linux) |
+|---|---|---|---|
+| `renders.json` (the fixture test) | `examples/resample` | `cb4d39ba…` | `b3daee50ee7e7193fc6d240f02384fcda83ccbe33b5c20fbf5904005b4aeb58e` |
+| `e2e/renders.sha256` | `examples-resample.wav` | `6ac6fcb1…` | `39f9476492e997a86aec5f94b6d0edf56c098e275186260915a3830bd9cfe0da` |
+| same | `examples-resample-from4-for6.wav` | `a360d04c…` | `d752521b47b66bcb9076f43715baedaa5c018f428ec90546465e6cae031560eb` |
+
+The debug and the release `m2` render the same 8 WAVs; the other 6 are unchanged. All three equal design §5.3's
+prediction. The Mac must give the same three (unverified until the owner's run).
+
+**The two libm hashes in the ground notes (§16).** They don't disagree: they hash different things. `tests.md`'s
+`b3daee50…` is the fixture test's hash of a debug render's samples (`renders.json`). `facts.md`'s `39f94764…` is the
+sha256 of the WAV file `m2 render` writes (`e2e/renders.sha256`). The final code gives both.
+
+**Deviations**
+
+| What | Why |
+|---|---|
+| `host_math.rs` follows each crate's module tree from `lib.rs` and blanks `#[cfg(test)]` items, instead of reading every file under `src` | `core/runtime/src/tests.rs` and `tests/` are test code only through `#[cfg(test)] mod tests;` in `lib.rs`, and hold host math (`tests.rs:599`). Following the module tree leaves exactly them out. Its brace matching skips strings, characters and comments. |
+| It also bans the `f32::sin(x)` and `f64::sin(x)` forms | The method form alone would miss them. |
+| `libm` is a workspace dependency | The repo's way for a crate several members use; one line in the root `Cargo.toml`. |
+
+**Shared files** (S2, S3 and S5 are built beside this): `Cargo.toml` (one line after `libc`), `Cargo.lock` (`"libm"`
+in three dependency lists), `docs/architecture.md` (RENDER-2's rule and *Today* lines, PLAT-4's *Today* line), and
+this section.
+
+**The check** at `01edbf1` (`ci/check.sh`, 18 min, logs in `~/m2-runs/check-build-S4/`): §13.1's S1 row changed only
+by S4, as asked.
+
+| Row | Result |
+|---|---|
+| toolchain, web build, build | PASS |
+| app | PASS, as at S1: the UI connected with `first-song` and `with-plugins`; the app can't host plugins yet (S5) |
+| rust tests | FAIL: the 10 of §4.1 that S4 leaves, by name (9 tests, and the `main_thread` binary); 689 passed (S1's 686, test 10, and the 2 new tests). `fixture_renders_change_only_with_stds_version` passes. |
+| clippy | FAIL at its first lint, `core/plugins/src/main_thread.rs:217`, as at S1. Without `-D warnings` it lists exactly §4.2's 15 lints. |
+| std kernels | PASS |
+| std.wasm | FAIL, as at S1: the rebuild in another folder can't find `core/kernel` until S3 moves it; the repo untouched |
+| mac lint | PASS |
+| browser suites | FAIL: 6 of S1's 7 known (code, fixes-graph, attention, export, fx-fixes, s6-write), each again on its retry. `notes-proj` passed this time: its known file-then-revision race (S2 fixes it) passed by luck. live3b in full, 51 of 51. |
+| renders | **PASS: 8 of 8** match `e2e/renders.sha256` |
+| repo unchanged | PASS |
+
+One known flake, named: `s4-clips-fix` crashed once and passed 28 of 28 on its retry. It read `data/kick/hits.json` in a
+poll loop while a save had renamed it aside (`ENOENT`): the missing-file gap of `ground/e2e.md` (row "any suite that
+reads a project file in a poll loop", which names s4-clips), which S6 closes. Not this slice's code: S4 changes only
+math. Run alone 10 more times on this build: 9 passed in full, 1 crashed the same way.
