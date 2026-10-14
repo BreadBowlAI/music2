@@ -40,7 +40,9 @@ pub const SDK_VERSION: &str = "1.1.0";
 const CORE: &str = "@m2/core";
 
 /// Project modules are named by their snapshot path behind this prefix, so a project file
-/// is never confused with a package file (an absolute path) or the SDK.
+/// is never confused with a package file or the SDK. A package file is named as people see it,
+/// `std/src/dsp.ts`, never by its absolute path: QuickJS cuts a module's name to 63 bytes in its
+/// messages, which would lose the file in a long checkout path.
 const PROJECT: &str = "./";
 
 /// The codes a build raises (DIAG-2). An error from the SDK naming any other is `code.build`.
@@ -219,11 +221,9 @@ impl State {
         if file.starts_with(PROJECT) || file == "<main>" {
             return serde_json::json!({"package": null, "module": display, "file": display});
         }
-        let p = Path::new(file);
-        for (name, dir) in &self.packages {
-            if let Ok(rel) = p.strip_prefix(dir.join("src")) {
-                let sub = rel.to_string_lossy().replace('\\', "/");
-                let sub = sub.strip_suffix(".ts").unwrap_or(&sub);
+        for (name, _) in &self.packages {
+            if let Some(sub) = display.strip_prefix(&format!("{name}/src/")) {
+                let sub = sub.strip_suffix(".ts").unwrap_or(sub);
                 let sub = sub.strip_suffix("/index").or_else(|| (sub == "index").then_some("")).unwrap_or(sub);
                 let module = if sub.is_empty() { name.clone() } else { format!("{name}/{sub}") };
                 return serde_json::json!({"package": name, "module": module, "file": display});
@@ -232,6 +232,8 @@ impl State {
         serde_json::json!({"package": null, "module": display, "file": display})
     }
 
+    /// A module or a file as people see it: `tracks/bass.ts`, `std/src/dsp.ts`. A package
+    /// module is named so already; a path on disk is shortened to its package's name.
     fn display(&self, file: &str) -> String {
         if let Some(rel) = file.strip_prefix(PROJECT) {
             return rel.to_string();
@@ -239,10 +241,17 @@ impl State {
         let p = Path::new(file);
         for (name, dir) in &self.packages {
             if let Ok(rel) = p.strip_prefix(dir) {
-                return format!("{name}/{}", rel.display());
+                // `/` on every OS: the name is a module's, and home() reads it.
+                let parts: Vec<_> = rel.components().map(|c| c.as_os_str().to_string_lossy()).collect();
+                return format!("{name}/{}", parts.join("/"));
             }
         }
         file.to_string()
+    }
+
+    /// The file on disk that a package module (`std/src/dsp.ts`) names.
+    fn package_path(&self, module: &str) -> Option<PathBuf> {
+        self.packages.iter().find_map(|(name, dir)| Some(dir.join(module.strip_prefix(name.as_str())?.strip_prefix('/')?)))
     }
 
     /// The module that `name`, imported from the module `base`, names.
@@ -262,7 +271,7 @@ impl State {
             return self.project_file(dir, name).map(|p| format!("{PROJECT}{p}")).map_err(|m| fail("import.outside-code", m));
         }
         let found = if relative {
-            let dir = Path::new(base).parent().map(Path::to_path_buf).unwrap_or_default();
+            let dir = self.package_path(base).and_then(|f| f.parent().map(Path::to_path_buf)).unwrap_or_default();
             self.package_file(&normalize(&dir.join(name)))
         } else {
             let (pkg, sub) = name.split_once('/').unwrap_or((name, "index"));
@@ -314,9 +323,9 @@ impl State {
         Err(format!("`{spec}` names no code file of the project (looked for {})", tried.join(", ")))
     }
 
-    /// A file inside an installed package: the path, then with `.ts`, then `/index.ts`,
-    /// spelled exactly as in its folder's listing, so every disk finds the same files. An error
-    /// comes with its code.
+    /// The module of a file inside an installed package: the path, then with `.ts`, then
+    /// `/index.ts`, spelled exactly as in its folder's listing, so every disk finds the same
+    /// files. An error comes with its code.
     fn package_file(&self, p: &Path) -> Result<String, (&'static str, String)> {
         let Some((_, dir)) = self.packages.iter().find(|(_, d)| p.starts_with(d)) else {
             return Err(("import.outside-code", "songs can only import files from their own project or from installed packages".into()));
@@ -324,7 +333,7 @@ impl State {
         let tried = [p.to_path_buf(), PathBuf::from(format!("{}.ts", p.display())), p.join("index.ts")];
         let listed: Vec<(&PathBuf, PathBuf)> = tried.iter().filter_map(|c| Some((c, listed(dir, c)?))).collect();
         if let Some((c, _)) = listed.iter().find(|(c, real)| *c == real) {
-            return Ok(c.to_string_lossy().into_owned());
+            return Ok(self.display(&c.to_string_lossy()));
         }
         match listed.first() {
             Some((_, real)) => Err((
@@ -435,11 +444,11 @@ impl Loader for Load {
             let source = match name.strip_prefix(PROJECT) {
                 Some(rel) => st.code.get(rel).cloned().ok_or_else(|| fail("not a code file of the project".into()))?,
                 None => {
-                    let bytes = std::fs::read(name).map_err(|e| fail(e.to_string()))?;
+                    let file = st.package_path(name).ok_or_else(|| fail("not a file of an installed package".into()))?;
+                    let bytes = std::fs::read(&file).map_err(|e| fail(e.to_string()))?;
                     let sha256 = format!("{:x}", Sha256::digest(&bytes));
-                    let path = st.display(name);
-                    st.read.push((PathBuf::from(name), sha256.clone()));
-                    st.package_files.push(PackageFile { path, sha256 });
+                    st.read.push((file, sha256.clone()));
+                    st.package_files.push(PackageFile { path: name.to_string(), sha256 });
                     String::from_utf8(bytes).map_err(|e| fail(e.to_string()))?
                 }
             };
@@ -542,7 +551,7 @@ fn host<'js>(ctx: &Ctx<'js>, state: &Rc<RefCell<State>>, packages: &[(String, Pa
     ctx.eval::<(), _>(PRELUDE)?;
     let g = ctx.globals();
     g.set("__m2_project", PROJECT)?;
-    g.set("__m2_packages", packages.iter().map(|(_, d)| format!("{}/", d.display())).collect::<Vec<_>>())?;
+    g.set("__m2_packages", packages.iter().map(|(n, _)| format!("{n}/")).collect::<Vec<_>>())?;
     let st = state.clone();
     let place = move |at: String| st.try_borrow().map_or_else(|_| at.clone(), |st| st.remap(&at));
     g.set("__m2_where", Function::new(ctx.clone(), place)?)?;
