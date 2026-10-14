@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 fn main() -> anyhow::Result<()> {
     // HOST-2: the server runs on a worker while the main thread serves plugins as their main
-    // thread (its CFRunLoop), and destroys what they created before the process exits.
+    // thread (the OS's main loop), and destroys what they created before the process exits.
     m2_plugins::run_main(serve)
 }
 

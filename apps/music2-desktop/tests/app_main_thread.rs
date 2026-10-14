@@ -1,12 +1,14 @@
 //! HOST-2 in the app, without launching it: the app's own hook ([`plugin_host`], the same file
-//! `main` uses) installed on the process's main thread, which then runs AppKit's event loop,
-//! `[NSApp run]`, as Tauri does (with no window, no Dock icon and no menu bar). Meanwhile the
-//! server, on other threads as in the app, opens a song with the probe plugin off the main thread,
-//! plays it, rebuilds it (the instance carried, HOST-5), changes its state (a new instance), and
-//! closes it the way quit does.
+//! `main` uses) installed on the process's main thread. On macOS the main thread then runs AppKit's
+//! event loop, `[NSApp run]`, as Tauri does (with no window, no Dock icon and no menu bar), and the
+//! plugins' main thread is AppKit's, reached through the main dispatch queue. On Linux it is the
+//! app's loop thread of its own, and the main thread, which GTK would own, only waits. Meanwhile
+//! the server, on other threads as in the app, opens a song with the probe plugin off the main
+//! thread, plays it, rebuilds it (the instance carried, HOST-5), changes its state (a new
+//! instance), and closes it the way quit does.
 //!
-//! Every main-thread call the probe recorded must have run on the process's main thread, reached
-//! through the main dispatch queue that AppKit's loop drains, with the host's thread checks
+//! Every main-thread call the probe recorded must have run on the plugins' main thread, which is
+//! the process's main thread exactly when `APP_ON_PROCESS_MAIN`, with the host's thread checks
 //! answering truthfully; `on_main_thread` must run there and never inside `process`; and quit's
 //! close must leave no instance alive. libtest owns the main thread, so this test has no harness.
 
@@ -20,11 +22,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use m2_os::main_loop::APP_ON_PROCESS_MAIN;
 use m2_plugins::probe;
 use m2_server::ServeOptions;
 
-/// The longest the whole test may take before it is called hung: AppKit's loop never served the
-/// plugins' main thread, or quit never returned.
+/// The longest the whole test may take before it is called hung: the app's main loop never served
+/// the plugins, or quit never returned.
 const HUNG: Duration = Duration::from_secs(120);
 
 #[cfg(target_os = "macos")]
@@ -112,13 +115,8 @@ mod appkit {
     }
 }
 
-fn is_process_main() -> bool {
-    unsafe extern "C" {
-        fn pthread_main_np() -> std::ffi::c_int;
-    }
-    // SAFETY: always safe to call.
-    unsafe { pthread_main_np() != 0 }
-}
+/// Where the plugins' main thread is, for messages.
+const WHERE: &str = if APP_ON_PROCESS_MAIN { "AppKit's main thread" } else { "the app's loop thread" };
 
 /// A song with the probe on a notes lane, keyed `p` so it loads the state `data/p/p.state` (tagged
 /// `desktop`), beside a sine in `tracks/a.ts`.
@@ -130,7 +128,7 @@ fn project(dir: &Path) {
     };
     put(
         "music2.toml",
-        b"[project]\nname = \"appkit\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n",
+        b"[project]\nname = \"app\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n",
     );
     put(
         "song.ts",
@@ -160,11 +158,16 @@ fn work(dir: PathBuf) -> String {
     probe::install();
     let n = |a: &AtomicU64| a.load(Ordering::Relaxed);
     assert!(!m2_plugins::on_main_thread(), "the worker isn't the plugins' main thread");
-    // The executor is AppKit's main thread: a job posted there runs on the process's main thread.
-    let there = m2_plugins::main_thread().unwrap().run(|| (m2_plugins::on_main_thread(), is_process_main())).unwrap();
-    assert_eq!(there, (true, true), "a job ran on the plugins' main thread, the process's");
+    // The executor is the app's main loop: a job posted there runs on the plugins' main thread,
+    // which is the process's main thread exactly when the OS says so.
+    let (on, process_main, main) = m2_plugins::main_thread()
+        .unwrap()
+        .run(|| (m2_plugins::on_main_thread(), m2_os::thread::is_process_main(), m2_os::thread::token()))
+        .unwrap();
+    assert!(on && process_main == APP_ON_PROCESS_MAIN, "a job ran on the plugins' main thread: {on}; on the process's: {process_main}");
+    let there = |c: &probe::Call| c.thread == main && c.process_main == APP_ON_PROCESS_MAIN;
 
-    let running = m2_server::start(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "appkit".into() }).unwrap();
+    let running = m2_server::start(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "app".into() }).unwrap();
     let server = running.state.clone();
     // The launch project, as `setup` opens it: off the main thread.
     plugin_host::open_off_main(server.clone(), dir.clone(), |_, dir, e| panic!("couldn't open {}: {e:#}", dir.display())).join().unwrap();
@@ -194,7 +197,7 @@ fn work(dir: PathBuf) -> String {
     eventually("the new one plays", || n(&second[0].process) > 50);
     eventually("the plugins' requested callbacks ran", || n(&first.callbacks) > 0 && n(&second[0].callbacks) > 0);
 
-    // Quit, from a thread of its own while the main thread runs AppKit's loop.
+    // Quit, from a thread of its own while the app's main loop serves the plugins.
     let quit = std::thread::spawn({
         let server = server.clone();
         move || plugin_host::close_for_quit(&server)
@@ -204,7 +207,7 @@ fn work(dir: PathBuf) -> String {
     assert!(second[0].main_calls().iter().any(|c| c.what == "destroy"), "quit destroyed the playing instance");
 
     // HOST-2: every main-thread call, the describes made while compiling included, ran on the
-    // process's main thread, where the host's checks said main and not audio; `stop_processing`
+    // plugins' main thread, where the host's checks said main and not audio; `stop_processing`
     // ran there with the audio role taken. `process` ran elsewhere, with the audio role, and
     // `on_main_thread` never inside it.
     let mut all = probe::tagged("desktop");
@@ -215,9 +218,9 @@ fn work(dir: PathBuf) -> String {
         for c in s.main_calls() {
             calls += 1;
             if c.what == "stop_processing" {
-                assert!(c.process_main && c.says_audio, "stop_processing: {c:?}");
+                assert!(there(&c) && c.says_audio, "stop_processing: {c:?}");
             } else {
-                assert!(c.process_main && c.says_main && !c.says_audio, "{} ran off the main thread: {c:?}", c.what);
+                assert!(there(&c) && c.says_main && !c.says_audio, "{} ran off the main thread: {c:?}", c.what);
             }
         }
         assert_eq!((n(&s.process_on_main), n(&s.process_says_main), n(&s.process_not_audio)), (0, 0, 0), "process's thread");
@@ -226,7 +229,7 @@ fn work(dir: PathBuf) -> String {
     }
     let surge = with_plugins(&server, &dir);
     format!(
-        "{} probe instances, {calls} main-thread calls on AppKit's main thread, {} callbacks; quit destroyed {} and left {}; {surge}",
+        "{} probe instances, {calls} main-thread calls on {WHERE}, {} callbacks; quit destroyed {} and left {}; {surge}",
         all.len(),
         n(&first.callbacks) + n(&second[0].callbacks),
         teardown.destroyed,
@@ -236,8 +239,8 @@ fn work(dir: PathBuf) -> String {
 
 /// With `CLAP_PATH` naming a folder with Surge XT and Airwindows (tests never read the user's own):
 /// `examples/with-plugins` opened in the same server, played, rebuilt by an outside save that
-/// carries both instances (HOST-5), and closed the way quit does, all while AppKit's loop serves
-/// the plugins.
+/// carries both instances (HOST-5), and closed the way quit does, all while the app's main loop
+/// serves the plugins.
 fn with_plugins(server: &Arc<m2_server::AppState>, scratch: &Path) -> String {
     let installed = ["org.surge-synth-team.surge-xt", "com.airwindows.consolidated"].iter().all(|id| m2_plugins::find(id).is_ok());
     if std::env::var_os("CLAP_PATH").is_none() || !installed {
@@ -259,7 +262,7 @@ fn with_plugins(server: &Arc<m2_server::AppState>, scratch: &Path) -> String {
     let t = plugin_host::close_for_quit(server);
     assert!(t.left == 0 && t.destroyed == 2, "quit left plugin instances alive: {t:?}");
     let _ = std::fs::remove_dir_all(&dir);
-    "with-plugins played, carried across a rebuild and closed on AppKit's main thread".into()
+    format!("with-plugins played, carried across a rebuild and closed on {WHERE}")
 }
 
 fn copy(from: &Path, to: &Path) {
@@ -274,9 +277,8 @@ fn copy(from: &Path, to: &Path) {
     }
 }
 
-#[cfg(target_os = "macos")]
 fn main() {
-    let dir = std::env::temp_dir().join(format!("m2-appkit-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("m2-app-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     // Before any thread starts: the silent player, and a HOME of its own (never the user's).
     // SAFETY: nothing else runs yet.
@@ -285,38 +287,41 @@ fn main() {
         std::env::set_var("HOME", dir.join("home"));
     }
     project(&dir.join("song"));
-    // As `main` does, first: AppKit's main thread is the plugins'.
-    assert!(is_process_main());
+    // As `main` does, first, on the main thread: the plugins' main thread starts.
+    assert!(m2_os::thread::is_process_main());
     plugin_host::install().expect("the app's hook installs on the main thread");
     std::thread::spawn(|| {
         std::thread::sleep(HUNG);
-        eprintln!("appkit_main_thread: hung for {} s (AppKit's loop never served the plugins?)", HUNG.as_secs());
+        eprintln!("app_main_thread: hung for {} s (the app's main loop never served the plugins?)", HUNG.as_secs());
         std::process::exit(1);
     });
-    let app = appkit::app();
-    appkit::prohibit(app);
+    #[cfg(target_os = "macos")]
+    let app = {
+        let app = appkit::app();
+        appkit::prohibit(app);
+        app
+    };
     let result = Arc::new(std::sync::Mutex::new(None));
     let worker = std::thread::spawn({
         let (result, song) = (result.clone(), dir.join("song"));
         move || {
             let r = std::panic::catch_unwind(move || work(song));
             *result.lock().unwrap() = Some(r);
+            #[cfg(target_os = "macos")]
             m2_plugins::main_thread().unwrap().post(appkit::stop);
         }
     });
+    // macOS: AppKit's loop, which serves the plugins. Linux: GTK would run here, but plugins never
+    // use it, so the main thread only waits.
+    #[cfg(target_os = "macos")]
     appkit::run(app);
     worker.join().unwrap();
     let _ = std::fs::remove_dir_all(&dir);
     match result.lock().unwrap().take() {
-        Some(Ok(said)) => println!("appkit_main_thread: ok ({said})"),
+        Some(Ok(said)) => println!("app_main_thread: ok ({said})"),
         _ => {
-            eprintln!("appkit_main_thread: FAILED (the panic above says why)");
+            eprintln!("app_main_thread: FAILED (the panic above says why)");
             std::process::exit(1);
         }
     }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn main() {
-    println!("appkit_main_thread: macOS only");
 }

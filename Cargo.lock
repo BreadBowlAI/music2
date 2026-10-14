@@ -2403,9 +2403,9 @@ name = "m2-gates"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "libc",
  "m2-editor",
  "m2-ir",
+ "m2-os",
  "m2-play",
  "m2-plugins",
  "m2-runtime",
@@ -2426,6 +2426,13 @@ dependencies = [
 [[package]]
 name = "m2-kernel"
 version = "0.1.0"
+
+[[package]]
+name = "m2-os"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "m2-play"
@@ -2451,6 +2458,7 @@ dependencies = [
  "clap-sys",
  "crossbeam-channel",
  "libloading 0.8.9",
+ "m2-os",
  "sha2",
 ]
 
@@ -2666,6 +2674,7 @@ dependencies = [
  "anyhow",
  "dirs",
  "getrandom 0.3.4",
+ "m2-os",
  "m2-plugins",
  "m2-server",
  "open",

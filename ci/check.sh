@@ -308,11 +308,13 @@ elif [ $OS = linux ]; then
     fi
   fi
   closeapp
-  # Until slice S5 of the platform step the Linux app can't host plugins (OS-26): the row says
-  # so, and S5 makes it a failure.
-  if grep -q "plugins can't be hosted" "$OUT"/app-*.log 2> /dev/null; then
-    notes="$notes; the app can't host plugins yet (S5)"
-  fi
+  # The app hosts plugins on every OS (HOST-2, OS-26).
+  for log in "$OUT"/app-*.log; do
+    if grep -q "plugins can't be hosted" "$log" 2> /dev/null; then
+      ok=1
+      echo "app $(basename "$log" .log | sed 's/^app-//'): $(first "$log" "plugins can't be hosted")" >> "$OUT/failed"
+    fi
+  done
   if [ $ok -eq 0 ]; then
     record app PASS "the UI connected: $SAID$notes"
   else

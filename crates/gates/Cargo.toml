@@ -24,6 +24,6 @@ m2-session.workspace = true
 m2-editor.workspace = true
 m2-play.workspace = true
 m2-server.workspace = true
+m2-os.workspace = true
 anyhow.workspace = true
-libc.workspace = true
 parking_lot.workspace = true

@@ -1,13 +1,15 @@
-//! HOST-2 in the app: hosted plugins make their main-thread calls on AppKit's main thread, through
-//! the main dispatch queue, which AppKit's run loop drains (Tauri runs `[NSApp run]` there).
+//! HOST-2 in the app: hosted plugins make their main-thread calls on the app's main loop. On macOS
+//! that is AppKit's main thread, through the main dispatch queue, which AppKit's run loop drains
+//! (Tauri runs `[NSApp run]` there). On Linux, where GTK owns the main thread and plugins never post
+//! to it, it is a loop thread of its own (`m2_os::main_loop`).
 //!
 //! The rule that keeps this free of deadlocks: the main thread never waits on a thread that may be
 //! creating or destroying plugins (the server's session, which waits on the main thread to do
 //! that). So the project opens off the main thread, and quit closes it from a thread of its own
 //! while the main thread goes on serving.
 //!
-//! Kept in a file of its own so `tests/appkit_main_thread.rs` runs this same code under a real
-//! `[NSApp run]` on the process's main thread, without launching the app.
+//! Kept in a file of its own so `tests/app_main_thread.rs` runs this same code on the process's
+//! main thread (under a real `[NSApp run]` on macOS), without launching the app.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -16,11 +18,11 @@ use std::time::{Duration, Instant};
 use m2_server::AppState;
 use m2_server::graph::Teardown;
 
-/// Make this thread, AppKit's main thread, the plugins' main thread. Call it first thing in
-/// `main`, before anything touches a plugin: calls queued before the run loop starts run once it
-/// does.
+/// Start the plugins' main thread: this one, AppKit's, on macOS; a loop thread of its own on Linux.
+/// Call it first thing in `main`, on the main thread, before anything touches a plugin: calls
+/// queued before AppKit's run loop starts run once it does.
 pub fn install() -> anyhow::Result<()> {
-    m2_plugins::use_process_main_thread()
+    m2_plugins::use_app_main_thread()
 }
 
 /// Open a song project folder and tell the UI to show it. Never on the main thread: opening

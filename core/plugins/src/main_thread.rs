@@ -1,11 +1,14 @@
 //! The plugin main thread (HOST-2): where every main-thread CLAP call runs.
 //!
-//! In-process, that is the process's real main thread, because many plugins post timers and work
-//! to the main run loop, and two "main threads" would race:
-//! - the app: AppKit's main thread, reached through the main dispatch queue
-//!   ([`use_process_main_thread`], called first thing in `main`);
+//! It runs the OS's main loop (`m2_os::main_loop`). On macOS that is the process's real main
+//! thread, because many plugins post timers and work to the main run loop, and two "main threads"
+//! would race. Linux has no process-wide run loop for plugins to post to, so there the app's
+//! plugin main thread is a loop thread of its own, and GTK keeps the main thread:
+//! - the app: [`use_app_main_thread`], called first thing in `main` (AppKit's main thread through
+//!   the main dispatch queue on macOS; a loop thread of its own on Linux);
 //! - the CLI, the headless server and the gates: [`run_main`] runs the program on a worker while
-//!   the main thread runs its `CFRunLoop`, which drains the same queue;
+//!   the main thread runs the loop (a `CFRunLoop` draining the main queue on macOS, a job queue on
+//!   Linux);
 //! - tests, where libtest owns the main thread: one dedicated thread ([`test_main_thread`]).
 //!
 //! There is no fallback: a program that installed none gets an error naming what to call, never
@@ -21,107 +24,38 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, bail};
-use crossbeam_channel::{Sender, unbounded};
-
-type Job = Box<dyn FnOnce() + Send>;
+use m2_os::main_loop::{Loop, Where};
 
 /// How long [`run_main`] keeps the main thread serving plugins after the program returned, for the
 /// instances it dropped to be destroyed there.
 pub const DRAIN: Duration = Duration::from_secs(2);
 
 pub struct MainThread {
-    kind: Kind,
+    at: Where,
+    main_loop: Loop,
     closed: AtomicBool,
-}
-
-enum Kind {
-    /// The process's main dispatch queue, which AppKit (the app) or a `CFRunLoop` ([`run_main`])
-    /// services.
-    #[cfg(target_os = "macos")]
-    Dispatch,
-    /// One thread running jobs from a channel: tests' dedicated thread, or, off macOS, the main
-    /// thread under [`run_main`].
-    Queue { tx: Sender<Job>, thread: usize },
 }
 
 static EXEC: OnceLock<MainThread> = OnceLock::new();
 
-/// This thread's identity: `pthread_self()`, a register read. Never a thread-local: on macOS a
-/// thread's first thread-local access allocates, and the audio thread asks (RENDER-28).
+/// This thread's identity (`m2_os::thread::token`): never allocates or locks, since the audio
+/// thread asks (RENDER-28).
+#[inline]
 pub(crate) fn token() -> usize {
-    unsafe extern "C" {
-        fn pthread_self() -> usize;
-    }
-    // SAFETY: always safe to call.
-    unsafe { pthread_self() }
+    m2_os::thread::token()
 }
 
 /// Whether this is the process's main thread.
-#[cfg(target_os = "macos")]
+#[inline]
 pub(crate) fn is_process_main() -> bool {
-    unsafe extern "C" {
-        fn pthread_main_np() -> std::ffi::c_int;
-    }
-    // SAFETY: always safe to call.
-    unsafe { pthread_main_np() != 0 }
-}
-
-#[cfg(not(target_os = "macos"))]
-pub(crate) fn is_process_main() -> bool {
-    false
-}
-
-#[cfg(target_os = "macos")]
-mod darwin {
-    use std::ffi::c_void;
-
-    #[repr(C)]
-    pub struct Queue {
-        _opaque: [u8; 0],
-    }
-
-    unsafe extern "C" {
-        /// What `dispatch_get_main_queue()` returns (a macro in the C headers).
-        pub static _dispatch_main_q: Queue;
-        pub fn dispatch_async_f(queue: *const Queue, context: *mut c_void, work: extern "C" fn(*mut c_void));
-    }
-
-    #[link(name = "CoreFoundation", kind = "framework")]
-    unsafe extern "C" {
-        pub static kCFRunLoopDefaultMode: *const c_void;
-        pub fn CFRunLoopRunInMode(mode: *const c_void, seconds: f64, return_after_source_handled: u8) -> i32;
-    }
-
-    /// Run the main thread's run loop for at most `seconds`, returning after anything ran. The
-    /// main dispatch queue is drained there.
-    pub fn pump(seconds: f64) {
-        // SAFETY: called on the main thread only (run_main).
-        unsafe { CFRunLoopRunInMode(kCFRunLoopDefaultMode, seconds, 1) };
-    }
-
-    pub extern "C" fn trampoline(ctx: *mut c_void) {
-        // SAFETY: `post` boxed the job and gave up ownership of it.
-        let job = unsafe { Box::from_raw(ctx as *mut super::Job) };
-        super::run_job(*job);
-    }
-}
-
-fn run_job(job: Job) {
-    // A panic must never unwind into libdispatch or the run loop.
-    if catch_unwind(AssertUnwindSafe(job)).is_err() {
-        eprintln!("music2: a job on the plugin main thread panicked");
-    }
+    m2_os::thread::is_process_main()
 }
 
 impl MainThread {
     /// Whether the calling thread is the plugin main thread. Never allocates or locks: plugins ask
     /// it from the audio thread.
     pub fn is_current(&self) -> bool {
-        match &self.kind {
-            #[cfg(target_os = "macos")]
-            Kind::Dispatch => is_process_main(),
-            Kind::Queue { thread, .. } => token() == *thread,
-        }
+        self.main_loop.is_current()
     }
 
     /// Whether it has shut down: [`run_main`] drained it, and nothing runs there any more.
@@ -134,18 +68,12 @@ impl MainThread {
         if self.closed() {
             return;
         }
-        let job: Job = Box::new(f);
-        match &self.kind {
-            #[cfg(target_os = "macos")]
-            Kind::Dispatch => {
-                let ctx = Box::into_raw(Box::new(job)) as *mut std::ffi::c_void;
-                // SAFETY: the main queue lives for the whole process; the trampoline takes the box back.
-                unsafe { darwin::dispatch_async_f(&darwin::_dispatch_main_q, ctx, darwin::trampoline) };
+        // A panic must never unwind into the OS's loop.
+        self.main_loop.post(Box::new(move || {
+            if catch_unwind(AssertUnwindSafe(f)).is_err() {
+                eprintln!("music2: a job on the plugin main thread panicked");
             }
-            Kind::Queue { tx, .. } => {
-                let _ = tx.send(job);
-            }
-        }
+        }));
     }
 
     /// Run `f` there and wait for what it returns. On the main thread itself it runs inline. An
@@ -183,12 +111,12 @@ fn why(p: &Box<dyn std::any::Any + Send>) -> String {
 }
 
 /// The process's plugin main thread. An error when the program installed none (C1): call
-/// [`run_main`] in `main`, [`use_process_main_thread`] in the app, or [`test_main_thread`] in tests.
+/// [`run_main`] in `main`, [`use_app_main_thread`] in the app, or [`test_main_thread`] in tests.
 pub fn main_thread() -> Result<&'static MainThread> {
     EXEC.get().ok_or_else(|| {
         anyhow!(
             "plugins need a main thread, and this program set none up (HOST-2): call m2_plugins::run_main in main(), \
-             use_process_main_thread() in the app, or test_main_thread() in tests"
+             use_app_main_thread() in the app, or test_main_thread() in tests"
         )
     })
 }
@@ -198,78 +126,46 @@ pub fn on_main_thread() -> bool {
     EXEC.get().is_some_and(MainThread::is_current)
 }
 
-/// The app: plugins run their main-thread calls on AppKit's main thread, through the main dispatch
-/// queue (HOST-2). Call it first thing in `main`, on the main thread, before anything touches a
-/// plugin. Calls queued before the run loop starts run once it does; the main thread itself must
-/// never wait on a thread that may be creating plugins.
-pub fn use_process_main_thread() -> Result<()> {
-    #[cfg(target_os = "macos")]
-    {
-        if !is_process_main() {
-            bail!("use_process_main_thread must be called on the process's main thread");
+/// The app (HOST-2): plugins make their main-thread calls on the app's main loop: AppKit's main
+/// thread through the main dispatch queue on macOS, a loop thread of its own on Linux. Call it
+/// first thing in `main`, on the main thread, before anything touches a plugin. Calls queued
+/// before AppKit's run loop starts run once it does; the main thread itself must never wait on a
+/// thread that may be creating plugins.
+pub fn use_app_main_thread() -> Result<()> {
+    install(Where::AppMain).map(|_| ())
+}
+
+/// The plugin main thread, started at `at` the first time. Two calls for the same place are
+/// harmless; mixing places isn't.
+fn install(at: Where) -> Result<&'static MainThread> {
+    let m = match EXEC.get() {
+        Some(m) => m,
+        None => {
+            let main_loop = Loop::start(at).map_err(|e| anyhow!("the plugin main thread can't start: {e}"))?;
+            let mut fresh = Some(MainThread { at, main_loop, closed: AtomicBool::new(false) });
+            EXEC.get_or_init(|| fresh.take().expect("installed once"))
         }
-        install(MainThread { kind: Kind::Dispatch, closed: AtomicBool::new(false) })
+    };
+    if m.at != at {
+        bail!("a different plugin main thread is installed already");
     }
-    #[cfg(not(target_os = "macos"))]
-    bail!("the app's main-thread executor is built for macOS only; use run_main")
-}
-
-fn install(m: MainThread) -> Result<()> {
-    let mut fresh = Some(m);
-    let installed = EXEC.get_or_init(|| fresh.take().expect("installed once"));
-    match fresh {
-        None => Ok(()),
-        // Two calls to the same kind are harmless; mixing kinds isn't.
-        Some(m) if std::mem::discriminant(&m.kind) == std::mem::discriminant(&installed.kind) => Ok(()),
-        Some(_) => bail!("a different plugin main thread is installed already"),
-    }
-}
-
-/// A thread that runs jobs from a channel, as long as the process lives.
-fn queue_thread(name: &str) -> MainThread {
-    let (tx, rx) = unbounded::<Job>();
-    let (ready_tx, ready) = crossbeam_channel::bounded(1);
-    std::thread::Builder::new()
-        .name(name.into())
-        .spawn(move || {
-            let _ = ready_tx.send(token());
-            for job in rx {
-                run_job(job);
-            }
-        })
-        .expect("a thread for the plugin main thread");
-    let thread = ready.recv().expect("the plugin main thread started");
-    MainThread { kind: Kind::Queue { tx, thread }, closed: AtomicBool::new(false) }
+    Ok(m)
 }
 
 /// Tests: one dedicated thread is the plugin main thread (libtest owns the process's). Idempotent,
 /// and a no-op when the process installed its real main thread (C1).
 pub fn test_main_thread() {
-    EXEC.get_or_init(|| queue_thread("m2-plugin-main"));
+    let _ = install(Where::Thread("m2-plugin-main"));
 }
 
 /// The CLI, the headless server and the gates (HOST-2): `work` runs on a thread of its own, with an
-/// 8 MiB stack, while the main thread runs its `CFRunLoop` and serves as the plugin main thread.
+/// 8 MiB stack, while the main thread runs the OS's main loop and serves as the plugin main thread.
 /// When `work` returns, the loop keeps serving until every plugin instance is destroyed or
 /// [`DRAIN`] passes; then the executor shuts down, and later calls to it are errors. A panic in
 /// `work` resumes here after the drain. Call it on the main thread, from `main`.
 pub fn run_main<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
-    #[cfg(target_os = "macos")]
-    let exec = {
-        assert!(is_process_main(), "run_main must be called on the process's main thread");
-        if let Err(e) = install(MainThread { kind: Kind::Dispatch, closed: AtomicBool::new(false) }) {
-            panic!("{e:#}");
-        }
-        main_thread().expect("installed")
-    };
-    #[cfg(not(target_os = "macos"))]
-    let (exec, rx) = {
-        let (tx, rx) = unbounded::<Job>();
-        if EXEC.set(MainThread { kind: Kind::Queue { tx, thread: token() }, closed: AtomicBool::new(false) }).is_err() {
-            panic!("a plugin main thread is installed already");
-        }
-        (main_thread().expect("installed"), rx)
-    };
+    assert!(is_process_main(), "run_main must be called on the process's main thread");
+    let exec = install(Where::ProcessMain).unwrap_or_else(|e| panic!("{e:#}"));
     let (done_tx, done) = crossbeam_channel::bounded(1);
     let worker = std::thread::Builder::new()
         .name("m2-main".into())
@@ -283,25 +179,17 @@ pub fn run_main<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) ->
             }
         })
         .expect("a thread for the program");
-    let pump = |seconds: f64| {
-        #[cfg(target_os = "macos")]
-        darwin::pump(seconds);
-        #[cfg(not(target_os = "macos"))]
-        if let Ok(job) = rx.recv_timeout(Duration::from_secs_f64(seconds)) {
-            run_job(job);
-        }
-    };
     let result = loop {
         if let Ok(r) = done.try_recv() {
             break r;
         }
-        pump(0.25);
+        exec.main_loop.run_for(Duration::from_millis(250));
     };
     let _ = worker.join();
     // Instances the program dropped are destroyed here, on the main thread (HOST-2).
     let deadline = Instant::now() + DRAIN;
     while crate::inprocess::live() > 0 && Instant::now() < deadline {
-        pump(0.01);
+        exec.main_loop.run_for(Duration::from_millis(10));
     }
     exec.closed.store(true, Ordering::Release);
     let left = crate::inprocess::live();

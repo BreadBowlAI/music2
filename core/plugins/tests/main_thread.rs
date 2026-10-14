@@ -1,6 +1,7 @@
 //! HOST-2 on the process's real main thread: `run_main` runs the program on a worker while the main
-//! thread runs its CFRunLoop, and every main-thread call reaches it through the main dispatch
-//! queue. libtest owns the main thread, so this test has no harness (`harness = false`).
+//! thread runs the OS's main loop (a CFRunLoop serving the main dispatch queue on macOS, a job queue
+//! on Linux), and every main-thread call reaches it there. libtest owns the main thread, so this
+//! test has no harness (`harness = false`).
 //!
 //! It creates the probe from the worker, checks where each call ran, leaves one instance alive when
 //! the worker returns, and checks that `run_main` destroyed it before returning, and that the

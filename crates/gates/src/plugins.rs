@@ -1,7 +1,7 @@
 //! Step 3's gates on `examples/with-plugins` (contract, Acceptance gates: "on p16 at 1:00 and on
 //! `examples/with-plugins`"): Surge XT plays the lead's notes into Airwindows Consolidated, beside
 //! a std kick, at 120 bpm for 4 bars. The rig builds its renderers with the plugins the project
-//! names, found on the CLAP search path (`CLAP_PATH`, else `~/Library/Audio/Plug-Ins/CLAP`);
+//! names, found on the CLAP search path (`CLAP_PATH`, else the OS's CLAP folders);
 //! without them the gate is skipped, saying why.
 //!
 //! One plugin instance isn't bit-exact with the next, so where the std gates compare bits these

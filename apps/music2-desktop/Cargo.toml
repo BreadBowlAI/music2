@@ -19,7 +19,11 @@ anyhow.workspace = true
 dirs.workspace = true
 open.workspace = true
 
-# HOST-2: this test runs AppKit's event loop on the process's real main thread, which libtest owns.
+[dev-dependencies]
+m2-os.workspace = true
+
+# HOST-2: this test runs the app's hook on the process's real main thread, which libtest owns, and
+# on macOS AppKit's event loop there.
 [[test]]
-name = "appkit_main_thread"
+name = "app_main_thread"
 harness = false

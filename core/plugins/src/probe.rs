@@ -82,12 +82,12 @@ pub(crate) fn library() -> Arc<Library> {
 #[derive(Clone, Debug)]
 pub struct Call {
     pub what: &'static str,
-    /// `pthread_main_np`: the process's real main thread.
+    /// Whether it ran on the process's real main thread (`m2_os::thread::is_process_main`).
     pub process_main: bool,
     /// What the host's thread checks answered.
     pub says_main: bool,
     pub says_audio: bool,
-    /// `pthread_self`.
+    /// The thread's token (`m2_os::thread::token`).
     pub thread: usize,
 }
 

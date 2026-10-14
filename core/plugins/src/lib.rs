@@ -9,8 +9,7 @@
 //! of HOST-3 comes later). Its threads follow CLAP's model, and its thread checks answer truthfully
 //! (HOST-2):
 //! - every main-thread call (create, activate, state, parameters, `on_main_thread`, deactivate,
-//!   destroy) runs on the process's real main thread, which the program installs: see
-//!   [`main_thread`];
+//!   destroy) runs on the plugin main thread, which the program installs: see [`main_thread`];
 //! - `process` and `reset` run on whichever thread renders (the live engine's audio thread, or an
 //!   offline render's), which holds the instance's audio role while it does; they never allocate,
 //!   lock or wait (`src/audio.rs`, RENDER-28);
@@ -39,18 +38,15 @@ use clap_sys::version::clap_version_is_compatible;
 
 pub use host::{Blob, Events, Handle, HostEvent, HostEvents, MainCall, Owner, Pending, PluginHost, RenderMode, Reply, SharedBuffers, Status};
 pub use inprocess::{InProcess, MAX_INSTANCES, host};
-pub use main_thread::{DRAIN, MainThread, main_thread, on_main_thread, run_main, test_main_thread, use_process_main_thread};
+pub use main_thread::{DRAIN, MainThread, main_thread, on_main_thread, run_main, test_main_thread, use_app_main_thread};
 
-/// Where plugins are installed on this machine.
+/// Where plugins are installed on this machine: `CLAP_PATH`, then the OS's CLAP folders.
 pub fn search_paths() -> Vec<PathBuf> {
     let mut v = vec![];
     if let Some(p) = std::env::var_os("CLAP_PATH") {
         v.extend(std::env::split_paths(&p));
     }
-    if let Some(home) = std::env::var_os("HOME") {
-        v.push(PathBuf::from(home).join("Library/Audio/Plug-Ins/CLAP"));
-    }
-    v.push(PathBuf::from("/Library/Audio/Plug-Ins/CLAP"));
+    v.extend(m2_os::dirs::clap());
     v
 }
 
