@@ -3,7 +3,7 @@
 //! Songs go in the songs folder (`~/Music/music2`) unless the user picks another. A new
 //! folder never replaces anything: a name that is taken gets " 2", " 3"… instead.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
@@ -245,7 +245,7 @@ fn reserved(songs: Option<&Path>, parent: &Path, folder: &str) -> bool {
 
 /// Make a new song called `name` in `parent`, copied from `from` (a template or an
 /// example folder). The folder is `name` made safe, or "<name> 2", "<name> 3"… if that
-/// is taken; the song's name in music2.toml says the same. Returns the new folder.
+/// is taken in any capitals; the song's name in music2.toml says the same. Returns the new folder.
 pub fn create(parent: &Path, name: &str, from: &Path) -> Result<PathBuf> {
     make(parent, name, from, songs_dir().ok().as_deref())
 }
@@ -256,9 +256,15 @@ fn make(parent: &Path, name: &str, from: &Path, songs: Option<&Path>) -> Result<
         bail!("{} isn't a folder", parent.display());
     }
     let (base, shown) = (folder_name(name), clean_name(name));
+    // A name is taken in any capitals, on every OS (as macOS has it), so songs stay safe to copy
+    // between computers: "exports 2" beside "Exports 2" is taken.
+    let mut taken = HashSet::new();
+    for e in std::fs::read_dir(parent).with_context(|| format!("reading {}", parent.display()))? {
+        taken.insert(e?.file_name().to_string_lossy().to_lowercase());
+    }
     for n in 1..=999 {
         let (folder, name) = if n == 1 { (base.clone(), shown.clone()) } else { (format!("{base} {n}"), format!("{shown} {n}")) };
-        if reserved(songs, parent, &folder) {
+        if reserved(songs, parent, &folder) || taken.contains(&folder.to_lowercase()) {
             continue;
         }
         let dir = parent.join(&folder);
@@ -467,6 +473,24 @@ mod tests {
         assert_eq!(dir, elsewhere.0.join("Exports"));
         assert!(reserved(Some(&songs.0), &songs.0.join("."), "Exports") && !reserved(None, &songs.0, "Exports"));
         assert!(!reserved(Some(&songs.0), &songs.0, "Exports 2"));
+    }
+
+    // OS-41 (the owner's Q1): a name is taken in any capitals on every OS, as on macOS, whatever
+    // the disk tells apart. Files count too.
+    #[test]
+    fn a_name_taken_in_other_capitals_is_taken() {
+        let t = Temp::new();
+        std::fs::create_dir(t.0.join("Exports 2")).unwrap();
+        std::fs::write(t.0.join("NIGHT DRIVE"), "a file").unwrap();
+        let dir = create(&t.0, "exports 2", &template("empty")).unwrap();
+        assert_eq!((dir.file_name().unwrap().to_str().unwrap(), manifest_name(&dir)), ("exports 2 2", "exports 2 2".into()));
+        let dir = create(&t.0, "Night drive", &template("empty")).unwrap();
+        assert_eq!((dir.file_name().unwrap().to_str().unwrap(), manifest_name(&dir)), ("Night drive 2", "Night drive 2".into()));
+        // Across the numbers too: "Café 2" is taken by "CAFÉ 2".
+        std::fs::create_dir(t.0.join("café")).unwrap();
+        std::fs::create_dir(t.0.join("CAFÉ 2")).unwrap();
+        assert_eq!(create(&t.0, "Café", &template("empty")).unwrap(), t.0.join("Café 3"));
+        assert_eq!(std::fs::read_to_string(t.0.join("NIGHT DRIVE")).unwrap(), "a file");
     }
 
     #[test]

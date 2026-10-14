@@ -109,7 +109,7 @@ check(to >= 0, "its lane file is offered on its own");
 const revF = await revision();
 await page.select(`${row} [data-fix=relink-pick]`, String(to));
 check(await until(() => read("data/kicks/hits.json") === orig.hits && read("data/kick/hits.json") === null), "moving it moves that file alone");
-check(read("data/kick/notes.txt") !== null && (await revision()) === revF + 1, "the stray file stays, one revision");
+check(read("data/kick/notes.txt") !== null && (await until(async () => (await revision()) > revF)) && (await sleep(300), (await revision()) === revF + 1), "the stray file stays, one revision");
 await page.mouse.click(800, 850);
 await key("z", ["Meta"]);
 check(await until(() => read("data/kick/hits.json") === orig.hits && read("data/kicks/hits.json") === null), "⌘Z moves it back");

@@ -94,7 +94,7 @@ rev = await revision();
 let n = await box('[data-note][data-pitch="60"]');
 await drag({ x: n.x + 3, y: n.y + n.height / 2 }, { x: n.x + 3 + 2 * ppb, y: n.y + n.height / 2 - 2 * 16 });
 check(await until(async () => json(onDisk(62)) === json([{ pitch: "D4", start: 3, length: 0.25, velocity: 0.8 }]) && onDisk(60).length === 0), `dragging moves it to D4 at beat 3: ${json(onDisk(62))}`);
-check((await revision()) === rev + 1, "the whole drag is one write");
+check((await until(async () => (await revision()) > rev)) && (await sleep(300), (await revision()) === rev + 1), "the whole drag is one write");
 
 // Resize: drag its right edge half a beat to the right.
 n = await box('[data-note][data-pitch="62"]');

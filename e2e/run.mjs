@@ -28,7 +28,8 @@
 // Environment:
 //   M2_HEADLESS  the server: `cargo build -p m2-server --example headless` → target/<profile>/examples/headless
 //   M2_CLI       the m2 command line, for the export suite (default: <M2_HEADLESS dir>/../m2)
-//   E2E_CHROME   chrome-headless-shell (default: puppeteer's cache, version 133.0.6943.141)
+//   E2E_CHROME   chrome-headless-shell (default: puppeteer's cache, version 133.0.6943.141, for this OS;
+//                off the Mac the suites run it through chrome-as-mac.sh: chrome.mjs)
 //   CLAP_PATH    where hosted CLAP plugins are found. Only suites marked `clap` get it (live3b, whose
 //                plugin part needs Surge XT and Airwindows Consolidated there), and only when you set
 //                it: there is no default, so your own plugin folder is never used unasked
@@ -51,6 +52,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { real as chrome } from "./chrome.mjs";
 
 const E2E = path.dirname(fileURLToPath(import.meta.url));
 
@@ -117,9 +119,6 @@ if (kindArg && !KINDS.includes(kindArg)) usage(`unknown kind ${kindArg} (${KINDS
 const headless = process.env.M2_HEADLESS && path.resolve(process.env.M2_HEADLESS);
 if (!headless || !fs.existsSync(headless)) usage("set M2_HEADLESS to the headless server binary");
 const cli = path.resolve(process.env.M2_CLI ?? path.join(path.dirname(headless), "..", "m2"));
-const chrome =
-  process.env.E2E_CHROME ??
-  path.join(os.homedir(), ".cache/puppeteer/chrome-headless-shell/mac_arm-133.0.6943.141/chrome-headless-shell-mac-arm64/chrome-headless-shell");
 if (!fs.existsSync(chrome)) usage(`no chrome-headless-shell at ${chrome} (set E2E_CHROME)`);
 // No default: a suite gets the plugins you name, never your own folder unasked.
 const clapPath = process.env.CLAP_PATH ? path.resolve(process.env.CLAP_PATH) : null;

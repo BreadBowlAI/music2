@@ -13,7 +13,8 @@ declare global {
 
 export const native = !!window.__M2__?.native;
 export const token = window.__M2__?.token ?? null;
-export const isMac = native ? window.__M2__!.platform === "macos" : /Mac/.test(navigator.platform);
+/** Whether to show the Mac's keys and labels: the platform the page is given (the app, a browser suite), else the browser's. */
+export const isMac = window.__M2__?.platform ? window.__M2__.platform === "macos" : /Mac/.test(navigator.platform);
 
 /** A shortcut as this platform writes it: ⌘D on a Mac, Ctrl+D elsewhere. */
 export const kbd = (key: string, shift = false) => (isMac ? `${shift ? "⇧" : ""}⌘${key}` : `Ctrl+${shift ? "Shift+" : ""}${key}`);

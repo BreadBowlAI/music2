@@ -37,8 +37,9 @@ CLAP_PATH=~/Library/Audio/Plug-Ins/CLAP M2_HEADLESS=target/debug/examples/headle
   follow. Exit status: 0 when every run was `ok`, 1 when any failed, 3 when none failed but some
   were `PART`.
 - `M2_CLI` is the `m2` binary for `export` (default: `<headless dir>/../m2`). `E2E_CHROME` overrides
-  the browser (default: puppeteer's cached `chrome-headless-shell` 133.0.6943.141). `E2E_TIMEOUT`
-  (seconds, default 600) bounds a suite.
+  the browser (default: puppeteer's cached `chrome-headless-shell` 133.0.6943.141 for this OS). Off
+  the Mac the suites start it through `chrome-as-mac.sh`, which gives pages a Mac user agent, so they
+  test the Mac's keys on every OS (`chrome.mjs`). `E2E_TIMEOUT` (seconds, default 600) bounds a suite.
 - Hosted CLAP plugins: only `live3b` gets `CLAP_PATH`, and only when you set it. There is no
   default, so your own plugin folder is never used unasked; `CLAP_PATH=~/Library/Audio/Plug-Ins/CLAP`
   uses it. Its with-plugins part needs Surge XT and Airwindows Consolidated in that folder. Without
