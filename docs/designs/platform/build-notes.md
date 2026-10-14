@@ -96,3 +96,60 @@ The retry: `s4-meter-fix` crashed once reading `data/hats/hits.json` while the s
 file that goes missing for a moment during each save on Linux until S6 (OS-03, `ground/e2e.md`), the race §13.1 names
 for live3a. Not this slice: S2 changes nothing on that path, the run passed 8 of 8 on its retry, and in the run before
 the check it passed too.
+
+## S3. `std.wasm` rebuilds the same
+
+**Built**
+
+| What | Where |
+|---|---|
+| The kernel kit moved into the kernels' workspace (`git mv`), with plain `version`, `edition` and `license` | `std/kernels-src/kernel/` (was `core/kernel/`) |
+| The two paths to it | root `Cargo.toml` (`m2-kernel`), `std/kernels-src/Cargo.toml` |
+| `std.wasm` rebuilt once, on purpose: `83cc5961…` (143,471 bytes) to `909f4881…` (143,431 bytes). It holds no machine path now, only `kernel/src/lib.rs`, `src/fx.rs` and rustc's own paths. | `std/kernels/std.wasm` |
+| PLAT-5's *Today*; ABI-1's path to the kit | `docs/architecture.md` |
+
+Both lock files stay as they were (`--locked` passes): a path package's entry has no path in it.
+
+**What it changes.** Every std kernel's module hash changes once (the commit says so, PLAT-5). No render changes:
+
+| Proof | Before (S1) | After |
+|---|---|---|
+| The renders.json test's printed record | `examples/resample` `e2e93ef0…`, the other three as recorded | the same four hashes (the test still fails on resample: test 10, S4's) |
+| `bit_identity` | 3 pass, 1 ignored | the same; all 4 also pass in release with the ignored one included (106 s) |
+| The 8 offline renders | 6 of 8 match the Mac's record | the same 8 files, byte for byte (resample `d902bacf…`, from4 `ea243ccc…`, as at S1) |
+| `std/build.sh --check` | FAIL: its copy lacked `core/kernel` | PASS. The same bytes in three folders: the worktree, `/tmp/m2-std.*`, and a longer scratch path with another target folder |
+
+`909f4881…` is also what `attack-macos` built in this layout, with a `rustc` that says it is an arm Mac.
+
+**Beyond the design's list** (small; each keeps the tree true after the move)
+
+| What | Why |
+|---|---|
+| README's layout table and `docs/song-as-program.md` name the kit at `std/kernels-src/kernel` | They named `core/kernel`, which no longer exists. Neither line is near a hunk of `taste`, `sounds` or `wip/step7`. |
+| `std/build.sh`'s header loses "Until then --check fails" | It is no longer true. |
+| A two-line "why" above `m2-kernel` in `std/kernels-src/Cargo.toml` | So nobody moves it back out of the workspace. |
+
+**For the merge with S2, S4 and S5.** This slice shares only `docs/architecture.md` (ABI-1 and PLAT-5, one line
+each) and this file with them. The design's §5.1 names `core/kernel/src/lib.rs:235` as host math left alone; it is
+`std/kernels-src/kernel/src/lib.rs:235` now. `one_place.rs` (S5) reads `core/`, which no longer holds the kit; the kit
+has no OS code.
+
+**The check** at `319c804` (`ci/check.sh`, 22 min while three other slices' checks ran; logs in
+`~/m2-runs/check-build-S3/`): §13.1's S1 row with the std.wasm row now PASS, and one flake.
+
+| Row | Result |
+|---|---|
+| toolchain, web build, build, app | PASS (the app's UI connected in 1 s, both songs) |
+| rust tests | FAIL: the 11 of §4.1 by name, as at S1. Also `tests::cell::cell_heard_never_runs_ahead` (m2-runtime) failed once, "drained while writing", and passed on its retry. A flake: see below. |
+| clippy | FAIL at its first lint, `main_thread.rs:217`. Without `-D warnings` it lists exactly §4.2's 15 lints. |
+| std kernels | PASS (tests and clippy, `m2-kernel` now among them) |
+| std.wasm | **PASS**: rebuilt to the same bytes in another folder |
+| mac lint | PASS |
+| browser suites | FAIL: 6 of §4.4's 7, each again on its retry. `notes-proj` passed this time (its race, which S2 fixes); live3b in full, 51 of 51 |
+| renders | FAIL: 6 of 8 match, the same 8 files as at S1 |
+| repo unchanged | PASS |
+
+The cell test's flake: its last check asks that the reader drained more than once while the writer wrote 200,000
+cells. The load average was about 36 to 43 on 32 threads then (four slices' checks at once), so the writer can finish before the
+reader gets a turn. This slice changes no code it runs (`CellSlots` in `m2-runtime`). Re-run afterwards: 50 of 50
+alone, and m2-runtime's whole test binary 10 of 10. No earlier log kept here shows it failing.
