@@ -40,6 +40,22 @@ and passes after it.
 | The app row's "never says plugins can't be hosted" is a note in the row until S5, not a failure | As the task and §13.1 say: the Linux app can't host plugins until S5. S5 turns the note into a failure. |
 | The check's steps are renumbered (the app row is step 4) | It runs right after the build, as §16 says. |
 
-**The check** (`ci/check.sh` on `main`):
+**The check** at `a504a60` (`ci/check.sh`, 13 min, logs and the app's screenshots in `~/m2-runs/check-build-S1/`):
+exactly §13.1's S1 row.
 
-(filled in after the run)
+| Row | Result |
+|---|---|
+| toolchain, web build, build | PASS |
+| app | PASS: the UI connected in 1 s with `first-song` and with `with-plugins`; the app can't host plugins yet (S5) |
+| rust tests | FAIL: the 11 of §4.1 by name (10 tests, and the `main_thread` binary); 686 passed |
+| clippy | FAIL at its first lint, `core/plugins/src/main_thread.rs:217`. Without `-D warnings` it lists exactly §4.2's 15 lints. |
+| std kernels | PASS (tests and clippy) |
+| std.wasm | FAIL: stale until S3; the repo untouched |
+| mac lint | PASS |
+| browser suites | FAIL: the 7 of §4.4 (code, notes, fixes-graph, attention, export, fx-fixes, s6-write), each again on its retry; live3b in full, 51 of 51, with the plugins |
+| renders | FAIL: 6 of 8 match the Mac's record (the two `examples-resample` renders differ, as before S4) |
+| repo unchanged | PASS |
+
+A trial run just before (while this file was being written, so its "repo unchanged" failed) also saw two known
+flakes, each passing on its retry: `live3a` ("dragging across the ruler loops beats 4–12", HANDOFF's ruler-drag flake)
+and `notes-proj` (the file-then-revision race S2 fixes). Its logs: `~/m2-runs/check-build-S1-trial.tgz`.
