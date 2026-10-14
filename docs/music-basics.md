@@ -54,7 +54,7 @@ This is the most important difference in music software.
 | **Counter-melody** | A second tune that answers the melody in its gaps | Plucks, strings |
 | **Arp** (arpeggio) | A chord played one note at a time, fast and repeating | Sparkly 16th-note patterns |
 
-**In music2:** std has `kick`, `hat`, `bass`, `pluck` and `pad` ([`std/src/instruments.ts`](../std/src/instruments.ts)). There's no snare, clap or lead yet ([gaps #2 and #3](gaps.md#sounds)).
+**In music2:** the drums are `drums.kit` (one lane plays kick, snare, clap, hats, toms and more), or each drum alone, such as `drums.snare` ([`std/src/drums.ts`](../std/src/drums.ts)). For the rest: `synth.sub` (an 808 bass) and `synth.bass` (a synth bass), `synth.supersaw` and `synth.pad` (chords), `synth.lead` (a hook that glides), `synth.pluck` (arps), `synth.strings`, `fm.keys` and `fm.bell`, and `fm.metal` (metallic hits) ([`std/src/synth.ts`](../std/src/synth.ts), [`std/src/fm.ts`](../std/src/fm.ts)). The first, simpler instruments are in [`std/src/instruments.ts`](../std/src/instruments.ts). [`examples/sounds`](../examples/sounds) uses them all.
 
 ## How a synthesizer makes sound
 
@@ -67,7 +67,7 @@ Most instruments in music2 are **synthesizers**: they build sound from scratch. 
 
 A **sampler** is the other kind of instrument: instead of building sound, it plays a **recording** (a **sample**) at different pitches.
 
-**In music2:** these blocks are in `std/dsp` (`osc.sine`, `osc.saw`, `osc.square`, `osc.tri`, `adsr`, `svf`), `std/filter` and `std/control` (`lfo`). The `pad` uses two slightly detuned saws, but there's no unison oscillator yet ([gap #2](gaps.md#sounds)), and no sampler ([gap #22](gaps.md#sounds)). Each std instrument is a short function you can read and copy.
+**In music2:** these blocks are in `std/dsp` (`osc.sine`, `osc.saw`, `osc.square`, `osc.tri`, `adsr`, `svf`), `std/filter` and `std/control` (`lfo`). `synth.custom` has them all in one synth, with unison (up to seven stacked voices), a ladder filter with its own envelope, and drive; `fm.custom` builds sound by FM instead (one sine bending another's pitch, which gives bells and electric pianos). There's no sampler yet ([gap #22](gaps.md#sounds)). Each std instrument is a short function you can read and copy.
 
 ## Effects: changing a sound
 

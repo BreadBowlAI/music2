@@ -35,12 +35,13 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 - Build `music2.app` and move it anywhere: std, the templates and the examples are inside it, so it no longer needs the source folder it was built from. It's signed ad hoc but not notarized, so on another Mac it opens only after **Open Anyway** in System Settings → Privacy & Security (and only on Apple silicon).
 - Play CLAP plugins such as Surge XT, with automation and saved settings. A plugin is added by writing it into a track's code (#32). A song whose plugin isn't installed still plays: only that plugin's node is silent, or passes its audio through.
 - Play audio clips with offset, gain, fades, reverse, pitch and warp (written by hand in JSON).
+- Play pop sounds from std: a supersaw, a gliding lead, a pad, a pluck, an 808 sub, a synth bass and strings on one polysynth (`std/synth`), FM keys, bells and metal (`std/fm`), and an 808/909 drum machine whose kit plays kick, snare, clap, hats, toms and more from one lane by General MIDI note, with an open hat cut off by the next hat and a level for each group of drums (`std/drums`). Each has a few named knobs; `synth.custom` and `fm.custom` have every one. One note at a time, a note still held sounds again when the one over it ends, as on a monosynth ([Sounds and effects](../README.md#sounds-and-effects-std)).
 
 ## The top ten
 
 1. **Add a track without writing code.** (medium)
-2. **More instruments**: lead, keys, strings and a richer pad. (medium)
-3. **A drum kit** with snare and clap. (medium)
+2. ~~More instruments~~: done, in `std/synth` and `std/fm` (see What works today).
+3. **Drum names in the piano roll** for the drum kit, the part of it that's left. (medium)
 4. **A mixer panel**: volume, pan, mute and solo for each track. (medium)
 5. **Fast seeking and fast edits** in a full-length song. (large)
 6. **Tempo, time signature and key** in the top bar. (small)
@@ -81,8 +82,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 2 | **More instruments in std**: a lead (detuned saws), keys (electric piano), strings and a richer pad, each with a few named knobs. To sound good they need unison/detune and FM oscillators in `std/dsp`; `osc` is a plain sine, saw, square or triangle today. | Pop needs leads, keys and strings. std has only bass, kick, hat, pluck and pad. | Yes | medium |
-| 3 | **A drum kit**: one `drums()` instrument with kick, snare, clap, closed and open hats, toms, crash and shaker on different notes, with drum names instead of note names in the piano roll. | std has only kick and hat, one sound per track. There's no snare or clap, which almost every pop beat uses. (The Starter beat builds its clap from noise and a filter in its own code.) | Yes | medium |
+| 3 | **Drum names in the piano roll**: `drums.kit` plays each drum on its General MIDI note, but the piano roll shows those notes as C2, D2, F#2 rather than kick, snare, closed hat. A component would declare its note names in its descriptor, and the piano roll would show them. | Drawing a beat by note name means knowing the General MIDI map. | Yes | medium |
 | 22 | **A sampler**: play a recording or a one-shot as an instrument, with a root note, plus drum samples. Kernels can't read assets yet, so the core needs work first. | Sampled drums and vocal chops are pop staples. | Yes | large |
 | 26 | **Presets**: save and load an instrument's or an effect's settings by name, a preset browser, and presets for CLAP plugins. | Beginners start from presets, not from blank knobs. | No | medium |
 
@@ -226,4 +226,4 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 | The command API: `/api/commands`, `/api/describe`, `/api/exec`, `/api/steps` | A self-describing API (#38) |
 | `music2-cli` | `m2` replaces it; the missing commands are #37 |
 | Installing sounds from GitHub (`music2-cli plugin add github:…`) and the Plugins folder | Shared sound packages (#39) |
-| m2plug plugins (the JSON sound files that were in `plugins/`) | std replaces most of them: Shimmer is now `chorus`, Space is `reverb`, Echo is `delay`, Tone is `eq3` and Glue is `compress`. Still missing: lead, keys and strings (#2), the drum kit (#3), Pump (#21) and the sampler (#22). |
+| m2plug plugins (the JSON sound files that were in `plugins/`) | std replaces most of them: Shimmer is now `chorus`, Space is `reverb`, Echo is `delay`, Tone is `eq3` and Glue is `compress`. Lead, keys and strings are in `std/synth` and `std/fm`, and the drum kit in `std/drums`. Still missing: Pump (#21) and the sampler (#22). |

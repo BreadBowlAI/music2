@@ -265,3 +265,135 @@ name = "widen"
 description = "Mid/side width: 0 mono, 1 unchanged, 2 twice as wide; widens mono input too, and stays mono-compatible"
 inputs = ["in: audio<2>", "width: control<scalar> = 1.5 in 0..2"]
 outputs = ["out: audio<2>"]
+
+# ---------------------------------------------------------------- instruments
+# The voices of std/synth, std/fm and std/drums. Each is one kernel per voice: a whole
+# instrument in one place costs far less than the same sound built from small kernels.
+# Each smooths its own continuous controls, reads times and counts when a note starts or
+# on its own control clock (never the host's blocks), and ends in exact silence.
+
+[[kernel]]
+name = "synth"
+description = "Polysynth voice: a unison saw and pulse stack, a sub sine and noise, driven into a 4-pole ladder lowpass with its own envelope, then an amp envelope; stereo. The level follows velocity^(2 × vel_amount), so velocity 0 is silent"
+inputs = [
+  "pitch: control<semitones>",
+  "gate: control<unit01>",
+  "velocity: control<unit01> = 0.8",
+  "saw: control<unit01> = 1",
+  "square: control<unit01> = 0",
+  "width: control<unit01> = 0.5 in 0.05..0.95",
+  "sub: control<unit01> = 0",
+  "sub_octave: control<scalar> = -1 in -2..0",
+  "noise: control<unit01> = 0",
+  "unison: control<scalar> = 1 in 1..7",
+  "detune: control<unit01> = 0.2",
+  "spread: control<unit01> = 0.5",
+  "drop: control<semitones> = 0 in 0..48",
+  "drop_time: control<seconds> = 0.04",
+  "vibrato: control<semitones> = 0 in 0..2",
+  "cutoff: control<hz> = 8000",
+  "resonance: control<unit01> = 0.1",
+  "keytrack: control<unit01> = 0.5",
+  "env: control<scalar> = 0 in -4..8",
+  "f_attack: control<seconds> = 0.002",
+  "f_decay: control<seconds> = 0.3",
+  "f_sustain: control<unit01> = 0",
+  "attack: control<seconds> = 0.003",
+  "decay: control<seconds> = 0.5",
+  "sustain: control<unit01> = 0.8",
+  "release: control<seconds> = 0.3",
+  "drive: control<db> = 0 in 0..24",
+  "vel_amount: control<unit01> = 0.5",
+  "level: control<db> = 0 in -24..12",
+  "seed: control<scalar> = 1",
+]
+outputs = ["out: audio<2>"]
+
+[[kernel]]
+name = "fm"
+description = "FM voice: two sine-operator pairs (a modulator into a carrier each), the first modulator with feedback, at 2× and decimated; brightness follows velocity and key, as on an electric piano, and `drop` bends each note down into its pitch. The level follows velocity^(2 × vel_amount)"
+inputs = [
+  "pitch: control<semitones>",
+  "gate: control<unit01>",
+  "velocity: control<unit01> = 0.8",
+  "ratio_a: control<scalar> = 1 in 0.5..16",
+  "mod_a: control<scalar> = 1 in 0.5..16",
+  "index_a: control<scalar> = 1.5 in 0..8",
+  "fall_a: control<seconds> = 1",
+  "ratio_b: control<scalar> = 1 in 0.5..16",
+  "mod_b: control<scalar> = 14 in 0.5..32",
+  "index_b: control<scalar> = 0.8 in 0..8",
+  "fall_b: control<seconds> = 0.1",
+  "mix_b: control<unit01> = 0.35",
+  "feedback: control<unit01> = 0",
+  "detune: control<scalar> = 0 in 0..20",
+  "tone: control<unit01> = 0.5",
+  "attack: control<seconds> = 0.002",
+  "decay: control<seconds> = 3",
+  "sustain: control<unit01> = 0",
+  "release: control<seconds> = 0.4",
+  "vel_amount: control<unit01> = 0.7",
+  "level: control<db> = 0 in -24..12",
+  "drop: control<semitones> = 0 in 0..48",
+  "drop_time: control<seconds> = 0.04",
+]
+outputs = ["out: audio<1>"]
+
+[[kernel]]
+name = "drum"
+description = "Drum voice, 808 and 909 style. `model` -1 plays the General MIDI kit by pitch (kick, snare, clap, hats, toms, rim, cowbell, cymbals, shakers); 0 kick, 1 snare, 2 clap, 3 hats (G#2 pedal, A#2 open), 4 tom (A2 at its tune), 5 rim, 6 cowbell, 7 cymbal, 8 shaker. `hits` (from drumhit) fades it out when its choke group is hit again; `count` (from hitcount, outside the voices) seeds each hit's noise and metal; the levels move groups of the kit"
+inputs = [
+  "pitch: control<semitones>",
+  "velocity: control<unit01> = 0.8",
+  "hits: audio<1>",
+  "count: audio<1>",
+  "model: control<scalar> = -1",
+  "kick_tune: control<hz> = 48 in 30..120",
+  "kick_decay: control<seconds> = 0.45",
+  "punch: control<unit01> = 0.5",
+  "snare_tune: control<hz> = 190 in 100..400",
+  "snap: control<unit01> = 0.6",
+  "snare_decay: control<seconds> = 0.18",
+  "clap_tone: control<hz> = 1200",
+  "clap_decay: control<seconds> = 0.25",
+  "hat_tone: control<hz> = 8000",
+  "hat_decay: control<seconds> = 0.045",
+  "open_decay: control<seconds> = 0.45",
+  "tom_tune: control<hz> = 130",
+  "tom_decay: control<seconds> = 0.35",
+  "rim_tone: control<hz> = 1700",
+  "bell_tune: control<hz> = 540",
+  "cymbal_decay: control<seconds> = 1.6",
+  "shake_decay: control<seconds> = 0.06",
+  "drive: control<db> = 0 in 0..24",
+  "kick_level: control<db> = 0 in -24..12",
+  "snare_level: control<db> = 0 in -24..12",
+  "hat_level: control<db> = 0 in -24..12",
+  "tom_level: control<db> = 0 in -24..12",
+  "perc_level: control<db> = 0 in -24..12",
+]
+outputs = ["out: audio<1>"]
+
+[[kernel]]
+name = "notecv"
+description = "A note as audio, for std's mono: its gate on the left; on the right, a code holding its pitch and velocity on the note's first sample, and the code negated on the sample its gate falls"
+inputs = ["pitch: control<semitones>", "gate: control<unit01>", "velocity: control<unit01> = 0.8"]
+outputs = ["out: audio<2>"]
+
+[[kernel]]
+name = "mono"
+description = "One note at a time, from two notecv polys: the latest note's gate, pitch and velocity; a note that starts while another is held slides to its pitch over `glide` seconds without restarting the envelopes, and when it ends the newest note still held sounds again, sliding back"
+inputs = ["last: audio<2>", "held: audio<2>", "glide: control<seconds> = 0 in 0..2"]
+outputs = ["gate: control<unit01>", "pitch: control<semitones>", "velocity: control<unit01>"]
+
+[[kernel]]
+name = "drumhit"
+description = "Marks the start of a drum note for std's drums: on its first sample, 16^group for the choke group of its drum (by General MIDI pitch, or `model`) plus 16^5 for every hit, else 0"
+inputs = ["pitch: control<semitones>", "model: control<scalar> = -1"]
+outputs = ["out: audio<1>"]
+
+[[kernel]]
+name = "hitcount"
+description = "How many drum hits a lane has played, from the hits drumhit marks (a poly of it), this sample's included, wrapping at 2^24: read on a hit's first sample, a seed that changes from hit to hit, the same in every render and in live playback from 0. It counts notes, never samples"
+inputs = ["hits: audio<1>"]
+outputs = ["out: audio<1>"]

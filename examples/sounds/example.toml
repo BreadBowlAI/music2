@@ -1,0 +1,4 @@
+# How the start screen lists this example. Not copied into the song.
+name = "Pop sounds"
+description = "A short pop demo of std's sounds: supersaws, an 808 and a synth bass, FM keys, bells and metal, and the drum machine"
+order = 4

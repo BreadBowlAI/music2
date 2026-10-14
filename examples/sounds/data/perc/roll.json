@@ -1,0 +1,38 @@
+{"clips": [
+  {"id": "v1xe96ex", "start": 14, "length": 2, "notes": [
+    {"pitch": "D2", "start": 0, "length": 0.1, "velocity": 0.25},
+    {"pitch": "D2", "start": 0.125, "length": 0.1, "velocity": 0.295},
+    {"pitch": "D2", "start": 0.25, "length": 0.1, "velocity": 0.34},
+    {"pitch": "D2", "start": 0.375, "length": 0.1, "velocity": 0.385},
+    {"pitch": "D2", "start": 0.5, "length": 0.1, "velocity": 0.43},
+    {"pitch": "D2", "start": 0.625, "length": 0.1, "velocity": 0.475},
+    {"pitch": "D2", "start": 0.75, "length": 0.1, "velocity": 0.52},
+    {"pitch": "D2", "start": 0.875, "length": 0.1, "velocity": 0.565},
+    {"pitch": "D2", "start": 1, "length": 0.1, "velocity": 0.61},
+    {"pitch": "D2", "start": 1.125, "length": 0.1, "velocity": 0.655},
+    {"pitch": "D2", "start": 1.25, "length": 0.1, "velocity": 0.7},
+    {"pitch": "D2", "start": 1.375, "length": 0.1, "velocity": 0.745},
+    {"pitch": "D2", "start": 1.5, "length": 0.1, "velocity": 0.79},
+    {"pitch": "D2", "start": 1.625, "length": 0.1, "velocity": 0.835},
+    {"pitch": "D2", "start": 1.75, "length": 0.1, "velocity": 0.88},
+    {"pitch": "D2", "start": 1.875, "length": 0.1, "velocity": 0.925}
+  ]},
+  {"id": "53bqx261", "start": 46, "length": 2, "notes": [
+    {"pitch": "D2", "start": 0, "length": 0.1, "velocity": 0.25},
+    {"pitch": "D2", "start": 0.125, "length": 0.1, "velocity": 0.295},
+    {"pitch": "D2", "start": 0.25, "length": 0.1, "velocity": 0.34},
+    {"pitch": "D2", "start": 0.375, "length": 0.1, "velocity": 0.385},
+    {"pitch": "D2", "start": 0.5, "length": 0.1, "velocity": 0.43},
+    {"pitch": "D2", "start": 0.625, "length": 0.1, "velocity": 0.475},
+    {"pitch": "D2", "start": 0.75, "length": 0.1, "velocity": 0.52},
+    {"pitch": "D2", "start": 0.875, "length": 0.1, "velocity": 0.565},
+    {"pitch": "D2", "start": 1, "length": 0.1, "velocity": 0.61},
+    {"pitch": "D2", "start": 1.125, "length": 0.1, "velocity": 0.655},
+    {"pitch": "D2", "start": 1.25, "length": 0.1, "velocity": 0.7},
+    {"pitch": "D2", "start": 1.375, "length": 0.1, "velocity": 0.745},
+    {"pitch": "D2", "start": 1.5, "length": 0.1, "velocity": 0.79},
+    {"pitch": "D2", "start": 1.625, "length": 0.1, "velocity": 0.835},
+    {"pitch": "D2", "start": 1.75, "length": 0.1, "velocity": 0.88},
+    {"pitch": "D2", "start": 1.875, "length": 0.1, "velocity": 0.925}
+  ]}
+]}

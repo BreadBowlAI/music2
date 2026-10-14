@@ -1,6 +1,7 @@
 //! std on component descriptors (step 5): every export is a descriptor component, the effects
 //! `m2pkg.toml` used to list are its descriptors' editor metadata, every default is the one
-//! songs heard before, and the calls songs write keep working.
+//! songs heard before, and the calls songs write keep working. The instruments added since
+//! (std/synth, std/fm, std/drums) build bare, and every knob of theirs reaches the sound.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -41,7 +42,7 @@ fn component_of<'a>(m: &'a Module, n: &Node) -> &'a str {
     m.frames[slot.frame as usize].component.as_deref().expect("a descriptor component")
 }
 
-/// Each std export, as `(ComponentId, module, name)`: 46 components.
+/// Each std export songs had at step 5, as `(ComponentId, module, name)`: 46 components.
 const EXPORTS: [(&str, &str, &str); 46] = [
     ("std:add", "std/math", "add"),
     ("std:scale", "std/math", "scale"),
@@ -91,15 +92,42 @@ const EXPORTS: [(&str, &str, &str); 46] = [
     ("std:master", "std/mix", "master"),
 ];
 
+/// The instruments added since step 5, as `(ComponentId, module, name)`: one engine each for
+/// the synth, FM and drums, and the instruments voiced on them.
+const INSTRUMENTS: [(&str, &str, &str); 22] = [
+    ("std:synth-custom", "std/synth", "synth.custom"),
+    ("std:synth-supersaw", "std/synth", "synth.supersaw"),
+    ("std:synth-lead", "std/synth", "synth.lead"),
+    ("std:synth-pad", "std/synth", "synth.pad"),
+    ("std:synth-pluck", "std/synth", "synth.pluck"),
+    ("std:synth-sub", "std/synth", "synth.sub"),
+    ("std:synth-bass", "std/synth", "synth.bass"),
+    ("std:synth-strings", "std/synth", "synth.strings"),
+    ("std:fm-custom", "std/fm", "fm.custom"),
+    ("std:fm-keys", "std/fm", "fm.keys"),
+    ("std:fm-bell", "std/fm", "fm.bell"),
+    ("std:fm-metal", "std/fm", "fm.metal"),
+    ("std:drum-kit", "std/drums", "drums.kit"),
+    ("std:drum-kick", "std/drums", "drums.kick"),
+    ("std:drum-snare", "std/drums", "drums.snare"),
+    ("std:drum-clap", "std/drums", "drums.clap"),
+    ("std:drum-hats", "std/drums", "drums.hats"),
+    ("std:drum-tom", "std/drums", "drums.tom"),
+    ("std:drum-rim", "std/drums", "drums.rim"),
+    ("std:drum-cowbell", "std/drums", "drums.cowbell"),
+    ("std:drum-cymbal", "std/drums", "drums.cymbal"),
+    ("std:drum-shaker", "std/drums", "drums.shaker"),
+];
+
 // PKG-1, PKG-2, PKG-9: std declares every component with a descriptor, each export is in the
 // catalog under its ComponentId, and the manifest describes no TypeScript.
 #[test]
 fn std_is_declared_with_descriptors() {
     let catalog = describe(&[("std".into(), std_dir())]);
     assert!(catalog.problems.is_empty(), "{:?}", catalog.problems);
-    let ids: BTreeSet<&str> = EXPORTS.iter().map(|e| e.0).collect();
+    let ids: BTreeSet<&str> = EXPORTS.iter().chain(&INSTRUMENTS).map(|e| e.0).collect();
     assert_eq!(catalog.components.keys().map(String::as_str).collect::<BTreeSet<_>>(), ids);
-    for (id, module, name) in EXPORTS {
+    for (id, module, name) in EXPORTS.into_iter().chain(INSTRUMENTS) {
         let exports = &catalog.exports[id];
         assert!(exports.iter().any(|e| e.module == module && e.name == name), "{id} is exported as {module}.{name}: {exports:?}");
         let d = &catalog.components[id];
@@ -323,7 +351,8 @@ export default song(({ lane, time }) => {
     }
     // Every control that has a default was left out above, so each was compared.
     let catalog = describe(&[("std".into(), std_dir())]);
-    for d in catalog.components.values().filter(|d| d.id != "std:mixer") {
+    let today: BTreeSet<&str> = EXPORTS.iter().map(|e| e.0).collect();
+    for d in catalog.components.values().filter(|d| d.id != "std:mixer" && today.contains(d.id.as_str())) {
         for c in d.controls.iter().filter(|c| c.default.is_some() && !c.optional) {
             assert!(checked.contains(&format!("{}.{}", d.id, c.name)), "{}.{} was not compared", d.id, c.name);
         }
@@ -506,4 +535,90 @@ export default song(() => {
         let names: BTreeSet<&str> = cs.iter().map(|c| c.0.as_str()).collect();
         assert_eq!(names.len(), cs.len(), "frame {f}: {cs:?}");
     }
+}
+
+/// The engines' own knobs and each drum's: left out, each is its kernel port's default, so an
+/// engine and its kernel agree on what a bare note sounds like. The other instruments are
+/// voiced: their defaults are their patches'.
+const ENGINES: [&str; 12] = [
+    "std:synth-custom",
+    "std:fm-custom",
+    "std:drum-kit",
+    "std:drum-kick",
+    "std:drum-snare",
+    "std:drum-clap",
+    "std:drum-hats",
+    "std:drum-tom",
+    "std:drum-rim",
+    "std:drum-cowbell",
+    "std:drum-cymbal",
+    "std:drum-shaker",
+];
+
+// PKG-3, PKG-4: every instrument builds bare, and every knob a call leaves out reaches a kernel:
+// none is left over (except the polysynth's `glide`, which only a voice at a time plays). The
+// engines' knobs default to their kernels' ports, to the f32. mono() hands its voice a pitch in
+// semitones, so an oscillator converts it.
+#[test]
+fn std_instruments_reach_their_kernels() {
+    let calls: Vec<String> = INSTRUMENTS.iter().map(|(_, _, name)| format!("{name}(notes)")).collect();
+    let song = format!(
+        "import {{ song }} from \"@m2/core\";\nimport {{ drums }} from \"std/drums\";\nimport {{ osc }} from \"std/dsp\";\n\
+         import {{ fm }} from \"std/fm\";\nimport {{ mixer }} from \"std/mix\";\nimport {{ mono, synth }} from \"std/synth\";\n\
+         export default song(({{ lane }}) => {{\n  const notes = lane.notes(\"notes\");\n\
+         const all = [{}, mono(notes, (n) => osc.saw(n.pitch))];\n  return mixer({{ a: all[0] }});\n}});\n",
+        calls.join(", ")
+    );
+    let b = build(&song);
+    let m = &b.ir.modules[0];
+    let ns = nodes(m);
+    let mut readers: BTreeMap<&str, Vec<(String, String)>> = BTreeMap::new();
+    for n in &ns {
+        if let Op::Kernel { kernel, inputs } = &n.op {
+            for (port, r) in inputs {
+                readers.entry(split_ref(r).0).or_default().push((kernel.clone(), port.clone()));
+            }
+        }
+    }
+    let defaults = port_defaults();
+    let added: BTreeSet<&str> = INSTRUMENTS.iter().map(|e| e.0).collect();
+    let mut checked = BTreeSet::new();
+    for n in &ns {
+        let (Op::Const { value, .. }, Some(o)) = (&n.op, &n.origin) else { continue };
+        let (component, slot) = (component_of(m, n), o.slot().unwrap());
+        if !o.inherited() || !added.contains(component) {
+            continue;
+        }
+        checked.insert(format!("{component}.{slot}"));
+        let ports = readers.get(n.id.as_str()).cloned().unwrap_or_default();
+        if (component, slot) == ("std:synth-custom", "glide") {
+            assert!(ports.is_empty(), "with a voice per note there is nothing to glide: {ports:?}");
+            continue;
+        }
+        assert!(!ports.is_empty(), "{component}.{slot} reaches no kernel");
+        if ENGINES.contains(&component) {
+            for (kernel, port) in &ports {
+                let want = defaults.get(&(kernel.clone(), port.clone())).unwrap_or_else(|| panic!("{kernel}.{port} has no default"));
+                assert_eq!(*value as f32, *want as f32, "{component}.{slot} is {value}, and {kernel}.{port} defaults to {want}");
+            }
+        }
+    }
+    let catalog = describe(&[("std".into(), std_dir())]);
+    for (id, _, _) in INSTRUMENTS {
+        for c in &catalog.components[id].controls {
+            assert!(checked.contains(&format!("{id}.{}", c.name)), "{id}.{} was not checked", c.name);
+        }
+    }
+    let kernel_of = |r: &str| {
+        ns.iter()
+            .find(|n| n.id == split_ref(r).0)
+            .and_then(|n| if let Op::Kernel { kernel, .. } = &n.op { Some(kernel.as_str()) } else { None })
+    };
+    let converted = ns.iter().any(|n| match &n.op {
+        Op::Kernel { kernel, inputs } if kernel == "std:mtof" => {
+            inputs.get("pitch").is_some_and(|r| kernel_of(r) == Some("std:mono") && split_ref(r).1 == "pitch")
+        }
+        _ => false,
+    });
+    assert!(converted, "mono()'s pitch reaches the saw through mtof");
 }
