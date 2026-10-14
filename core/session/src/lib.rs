@@ -33,7 +33,7 @@ use m2_song::{DataSet, Project, Version};
 use serde::Serialize;
 
 pub use session::{Past, Revision, Session, StepError, Stepped, journal_problems};
-pub use tx::{Checked, Committed, ConflictFile, Patch, Refusal};
+pub use tx::{BeforeWrite, Checked, Committed, ConflictFile, Patch, Refusal, Uncommitted, Writing};
 pub use unclaimed::{Seen, SeenLane};
 
 /// Where a value lives (HOME-1): what editing it writes, and what the UI says it is. Every
@@ -60,8 +60,9 @@ pub enum Home {
 pub struct Code {
     pub ir: Ir,
     pub flat: Flat,
-    /// The call sites that origins in the IR refer to.
-    pub sites: Vec<m2_script::sites::Site>,
+    /// The call sites that origins in the IR refer to, shared with the past revisions that name
+    /// controls by them.
+    pub sites: Arc<[m2_script::sites::Site]>,
     /// What each call returned, when it was a signal.
     pub outputs: Vec<m2_script::Output>,
     /// Every package file the build read (FMT-6a, RENDER-2).
@@ -94,7 +95,7 @@ impl Code {
         Code {
             ir: Ir { ir: m2_ir::IR_VERSION, modules: vec![], root },
             flat,
-            sites: vec![],
+            sites: Arc::new([]),
             outputs: vec![],
             package_files: vec![],
             components: BTreeMap::new(),
@@ -169,7 +170,8 @@ pub fn build_code(project: &Project, packages: &mut PackageSet) -> Result<Arc<Co
     if !unmet.is_empty() {
         return Err(unmet);
     }
-    let mut opts = m2_script::Options::new(project.code.clone(), &project.manifest.project.entry);
+    let code = project.code.iter().map(|(p, t)| (p.clone(), t.to_string())).collect();
+    let mut opts = m2_script::Options::new(code, &project.manifest.project.entry);
     opts.packages = packages.packages().map(|p| (p.name.clone(), p.dir.clone())).collect();
     opts.dependencies = project.manifest.dependencies.keys().filter(|d| *d != m2_song::SDK).cloned().collect();
     let m2_script::Build { mut ir, sites, outputs, package_files, components, units } = m2_script::build_full(&opts)?;
@@ -183,7 +185,7 @@ pub fn build_code(project: &Project, packages: &mut PackageSet) -> Result<Arc<Co
     }
     let flat = m2_ir::check(&ir, packages)?;
     let decls = m2_runtime::decls(&ir);
-    Ok(Arc::new(Code { ir, flat, sites, outputs, package_files, components, units: units.into(), decls, kept }))
+    Ok(Arc::new(Code { ir, flat, sites: sites.into(), outputs, package_files, components, units: units.into(), decls, kept }))
 }
 
 /// Read a project's data against `code`'s declarations: every declared lane and plugin state,

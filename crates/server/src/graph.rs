@@ -37,13 +37,16 @@
 //! counts at that rate.
 
 mod actor;
+#[cfg(target_os = "macos")]
+mod fsevents;
 pub mod lease;
+mod preview;
 mod watcher;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::time::Instant;
 
@@ -62,24 +65,34 @@ use crate::files;
 use actor::{Actor, Job};
 use lease::{Aliases, Lease, Leases, PlaysView, Revs, State, TTL};
 pub use lease::{Begun, Committed, LeaseInfo, Owner};
+pub use watcher::WatchStats;
 
 /// When the last edit or seek reached the engine, for gate measurements (step 3a's design, §9.2):
 /// when it was asked for and when the session had done its part, on the player's clock
 /// ([`Player::now_ns`]), and the message that carried it, whose [`Graph::applied`] stamp says when
-/// the engine took it.
+/// the engine took it. In order: `requested ≤ ready ≤ sent ≤ published`, `ready ≤ compiled ≤
+/// published`, and for a previewed edit `sent ≤ compiled` (PLANE-5).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EditTiming {
     pub requested_ns: u64,
-    /// The session's work done (its compile included): what the edit budgets count from.
+    /// The session's work before the engine could be told: for a previewed data Tx, when its
+    /// checks passed and its files read as their bases (PLANE-5); else `compiled_ns`. What the
+    /// edit budgets count from.
+    pub ready_ns: u64,
+    /// The session's work done, its compile included: for a Tx, durable and accepted.
     pub compiled_ns: u64,
-    /// The engine's message queued (data prepared or a renderer built): the end of the actor's
-    /// first phase.
+    /// The first engine message that carried it queued (data prepared or a renderer built): the
+    /// preview's, or the end of the actor's first phase.
     pub sent_ns: u64,
     /// The view, the timeline and the news published: the end of the second phase, after which
     /// the request replies. It never delays the engine.
     pub published_ns: u64,
     /// None when nothing was sent, or a fresh engine took it (an open, a rate change).
     pub seq: Option<u64>,
+    /// Heard as its commit's preview, before it was durable (PLANE-5).
+    pub previewed: bool,
+    /// Its commit failed after the preview: the message that swapped the accepted data back.
+    pub taken_back: Option<u64>,
 }
 
 /// What the transport needs of the open project, kept apart from it so seek, the loop and status
@@ -140,8 +153,10 @@ struct Shown {
     /// The accepted revision the view shows.
     revision: u64,
     /// The state without the transport and the gestures, which [`Graph::state`] adds as they are
-    /// now.
+    /// now, nor the timeline.
     state: Value,
+    /// The timeline, each lane's JSON shared with the views before it that had the same lane.
+    timeline: Arc<Timeline>,
     news: Value,
     files: files::Accepted,
     types: Arc<Value>,
@@ -149,6 +164,55 @@ struct Shown {
     dir: PathBuf,
     /// Why the session can't write, in WRITE-18's words (WRITE-17): None for the lock's holder.
     read_only: Option<String>,
+}
+
+/// The timeline as published (`m2_editor::TimelineView` as JSON): each lane made once and shared
+/// by every view whose lane is the same data, so a one-lane edit makes one lane's JSON, not every
+/// note of the song's (the G11 fix's A.8).
+#[derive(Default)]
+pub(crate) struct Timeline {
+    /// `tempo`, `meter` and `end`.
+    head: serde_json::Map<String, Value>,
+    tracks: Vec<TimelineRow>,
+}
+
+/// A track of the timeline: its own fields, and its lanes.
+pub(crate) struct TimelineRow {
+    pub(crate) module: String,
+    pub(crate) head: serde_json::Map<String, Value>,
+    pub(crate) lanes: Vec<TimelineLaneJson>,
+}
+
+/// A lane's JSON, with what it was made of: the data it shows (held, so it is never another's),
+/// and the JSON of the rest of it.
+pub(crate) struct TimelineLaneJson {
+    pub(crate) key: String,
+    pub(crate) data: Option<Arc<m2_song::LaneData>>,
+    pub(crate) head: String,
+    pub(crate) json: Arc<Value>,
+}
+
+impl Timeline {
+    pub(crate) fn new(head: serde_json::Map<String, Value>, tracks: Vec<TimelineRow>) -> Timeline {
+        Timeline { head, tracks }
+    }
+
+    /// The lane `key` of `module`, as published.
+    pub(crate) fn lane(&self, module: &str, key: &str) -> Option<&TimelineLaneJson> {
+        self.tracks.iter().find(|t| t.module == module)?.lanes.iter().find(|l| l.key == key)
+    }
+
+    /// As one value: what serialising the timeline view gives.
+    fn to_value(&self) -> Value {
+        let tracks = self.tracks.iter().map(|t| {
+            let mut row = t.head.clone();
+            row.insert("lanes".into(), Value::Array(t.lanes.iter().map(|l| (*l.json).clone()).collect()));
+            Value::Object(row)
+        });
+        let mut out = self.head.clone();
+        out.insert("tracks".into(), Value::Array(tracks.collect()));
+        Value::Object(out)
+    }
 }
 
 /// The open project as the control plane holds it.
@@ -162,7 +226,7 @@ struct Published {
 /// What `begin`, `update`, `cancel` and every read use, behind one short lock. The actor holds it
 /// only to publish a change: never over a compile, a build or a wait for the main thread. Lock
 /// order: `control`, then `player`, then the leaf locks (`timing`, `last_edit`, `unsaved`,
-/// `busy`, `notices`).
+/// `busy`, `notices`, `saving`).
 #[derive(Default)]
 struct ControlPlane {
     open: Option<Published>,
@@ -200,6 +264,20 @@ impl Published {
     }
 }
 
+/// A commit heard as its preview and not yet durable (PLANE-5): since when, whether the user was
+/// told it is taking a while, and whether the transport played meanwhile (what is said of it then
+/// says it played).
+#[derive(Clone, Copy)]
+struct Saving {
+    since: Instant,
+    said: bool,
+    played: bool,
+}
+
+/// How long a commit heard as its preview may take to be durable before the user is told it isn't
+/// saved yet: a disk that stopped answering (a network volume gone, a failing drive).
+const SLOW_SAVE: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// When the actor was busy: since when, and its last requests' spans, on the player's clock.
 #[derive(Default)]
 struct Busy {
@@ -221,15 +299,25 @@ struct Inner {
     /// (its token) it said so for: the app asks before closing or replacing that project.
     unsaved: Mutex<(u64, Vec<String>)>,
     last_edit: Mutex<Option<EditTiming>>,
+    /// When the last batch the watcher settled reached the engine, for the gates.
+    last_taken_in: Mutex<Option<EditTiming>>,
     busy: Mutex<Busy>,
     /// What the actor ended or saved on its own (a pending commit), for the watcher to toast.
     notices: Mutex<Vec<String>>,
+    /// The commit being made durable after its preview, if one is (PLANE-5).
+    saving: Mutex<Option<Saving>>,
     /// Who creates this Graph's plugin instances: their events come to its actor alone, and their
     /// count is what closing waits on.
     owner: m2_plugins::Owner,
     /// The open project's settle rule (WRITE-19): polled by the watcher, told by the actor what the
-    /// session wrote itself. A leaf lock, never held over a call to the actor.
+    /// session wrote itself. A leaf lock, never held over a call to the actor, nor over a stat.
     watch: Mutex<Option<watcher::Watch>>,
+    /// Held through each tick of the watcher, so two never overlap. Never taken by the actor.
+    ticking: Mutex<()>,
+    /// What wakes the watcher's thread early: file system events.
+    wake: Arc<watcher::Wake>,
+    /// Projects opened from now on are watched by walks alone, never events (the gates).
+    walk_only: AtomicBool,
 }
 
 /// How long closing waits for the session's plugin instances to be destroyed.
@@ -301,10 +389,32 @@ impl Inner {
             next_session: AtomicU64::default(),
             unsaved: Mutex::default(),
             last_edit: Mutex::default(),
+            last_taken_in: Mutex::default(),
             busy: Mutex::default(),
             notices: Mutex::default(),
+            saving: Mutex::default(),
             watch: Mutex::default(),
+            ticking: Mutex::default(),
+            wake: Arc::default(),
+            walk_only: AtomicBool::default(),
         }
+    }
+
+    /// One tick of the watcher, up to the batch that settled in it, if one did, for the actor to
+    /// take in.
+    fn tick(&self) -> Option<(u64, watcher::Ready)> {
+        let _one = self.ticking.lock();
+        let plan = self.watch.lock().as_mut().and_then(|w| w.plan(Instant::now()))?;
+        // With no lock held: the actor tells the watcher what the session wrote after every job,
+        // and must never wait for a walk.
+        let looked = plan.look();
+        let mut w = self.watch.lock();
+        let w = w.as_mut().filter(|w| w.token == plan.token)?;
+        let ready = w.apply(&plan, looked, Instant::now()).map(|r| (w.token, r));
+        if let Some(n) = w.notice.take() {
+            self.notices.lock().push(n);
+        }
+        ready
     }
 
     /// The player, started if there is none. One that stopped responding (a send timed out, the
@@ -367,6 +477,7 @@ impl Inner {
         };
         let status = self.status();
         let mut state = shown.state.clone();
+        state["timeline"] = shown.timeline.to_value();
         state["playing"] = json!(status.playing);
         state["seconds"] = json!(status.seconds);
         state["beat"] = json!(status.beat);
@@ -572,8 +683,15 @@ impl Graph {
         let player = self.inner.device()?.player;
         let seq = player.seek(beat.max(0.0))?;
         let sent_ns = player.now_ns();
-        *self.inner.last_edit.lock() =
-            Some(EditTiming { requested_ns, compiled_ns: requested_ns, sent_ns, published_ns: sent_ns, seq: Some(seq) });
+        *self.inner.last_edit.lock() = Some(EditTiming {
+            requested_ns,
+            ready_ns: requested_ns,
+            compiled_ns: requested_ns,
+            sent_ns,
+            published_ns: sent_ns,
+            seq: Some(seq),
+            ..EditTiming::default()
+        });
         Ok(())
     }
 
@@ -592,6 +710,13 @@ impl Graph {
     /// When the last edit made here or the last seek reached the engine (see [`EditTiming`]).
     pub fn last_edit(&self) -> Option<EditTiming> {
         *self.inner.last_edit.lock()
+    }
+
+    /// When the last batch of outside writes the watcher settled reached the engine (WRITE-19), as
+    /// [`EditTiming`] says of an edit: requested when the session's actor began taking it in.
+    #[doc(hidden)]
+    pub fn last_taken_in(&self) -> Option<EditTiming> {
+        *self.inner.last_taken_in.lock()
     }
 
     /// When the engine took message `seq`, while it is among the last few it took: the stamp of
@@ -781,7 +906,9 @@ impl Graph {
 
     /// End every lease idle past its TTL, and every commit that waited too long for the code to
     /// compile, putting their code values back (C6). Returns what to tell the user, with what
-    /// the session ended or saved on its own since. The watcher calls it every tick.
+    /// the session ended or saved on its own since, and a commit heard as its preview that the
+    /// disk is slow to make durable (PLANE-5). It never waits for the session's actor: the server
+    /// calls it every 300 ms from a thread of its own, so this is said while the actor is busy.
     pub fn expire(&self) -> Vec<String> {
         let device = self.inner.current_device();
         let now = Instant::now();
@@ -812,6 +939,19 @@ impl Graph {
             }
         }
         drop(cp);
+        if let Some(s) = self.inner.saving.lock().as_mut() {
+            let playing = device.as_ref().is_some_and(|d| d.player.status().playing);
+            s.played |= playing;
+            if !s.said && s.since.elapsed() >= SLOW_SAVE {
+                s.said = true;
+                // Stopped, nothing plays it: the transport says what the user hears.
+                let plays = if playing { " plays, but" } else { "" };
+                said.push(format!(
+                    "Saving is taking a while: the disk hasn't answered for {} s. The last edit{plays} isn't saved yet.",
+                    SLOW_SAVE.as_secs()
+                ));
+            }
+        }
         said.extend(std::mem::take(&mut *self.inner.notices.lock()));
         said
     }
@@ -1080,31 +1220,48 @@ impl Graph {
         Ok(())
     }
 
-    /// One poll of the watcher (WRITE-19): a stat walk of the open project, fed to the settle
-    /// rule. A batch that settled (no tracked file changed for 150 ms, each the same on two polls,
-    /// git not writing) is read once and taken in whole. Returns whether clients should refresh.
-    /// The server's watcher calls it every 50 ms.
+    /// One tick of the watcher (WRITE-19): what file system events named, or a stat walk of the
+    /// open project (see [`watcher`]), fed to the settle rule. A batch that settled (no tracked file
+    /// changed for 150 ms, each the same on two polls, git not writing) is read once and taken in
+    /// whole. Returns whether clients should refresh. The server's watcher calls it every 50 ms.
     pub fn watch(&self) -> bool {
-        let ready = {
-            let mut w = self.inner.watch.lock();
-            let Some(w) = w.as_mut() else { return false };
-            let ready = w.poll().map(|paths| (w.token, paths));
-            if let Some(n) = w.notice.take() {
-                self.inner.notices.lock().push(n);
-            }
-            ready
-        };
-        let Some((token, paths)) = ready else { return false };
-        self.call(move |a| Ok(a.settled(token, paths))).unwrap_or_else(|e| {
+        let Some((token, ready)) = self.inner.tick() else { return false };
+        self.call(move |a| Ok(a.settled(token, ready))).unwrap_or_else(|e| {
             eprintln!("music2: {e:#}");
             false
         })
     }
 
+    /// Wait for the watcher's next tick: `most` at most, less when an event names a path while no
+    /// batch is open (looked at at once), or when the open batch becomes due (its 150 ms of quiet
+    /// end then). The server's watcher thread waits so between ticks.
+    pub fn watch_wait(&self, most: std::time::Duration) {
+        let until = Instant::now() + most;
+        let (due, heard) = self.inner.watch.lock().as_ref().map_or((None, false), |w| w.wake_at());
+        self.inner.wake.wait(due.map_or(until, |d| d.min(until)), heard);
+    }
+
+    /// What the open project's watcher has done (see [`WatchStats`]), for the gates.
+    #[doc(hidden)]
+    pub fn watch_stats(&self) -> Option<WatchStats> {
+        self.inner.watch.lock().as_ref().map(|w| w.stats)
+    }
+
+    /// Watch projects opened from now on by walks alone, never file system events, as on a
+    /// network volume: the gates' walk mode (`M2_WATCH=walk` does the same for a whole run).
+    #[doc(hidden)]
+    pub fn watch_by_walking(&self, on: bool) {
+        self.inner.walk_only.store(on, Ordering::Relaxed);
+    }
+
     /// Bring the engine up to the accepted revision when it is behind it (a renderer that didn't
     /// build, a player that stopped responding), without reading the project. Returns whether
-    /// clients should refresh. The server's watcher calls it every 300 ms.
+    /// clients should refresh. The server's watcher calls it every 300 ms. While the actor is
+    /// busy it does nothing: what it serves settles when done.
     pub fn catch_up(&self) -> bool {
+        if self.busy().is_some() {
+            return false;
+        }
         self.call(|a| Ok(a.catch_up())).unwrap_or_else(|e| {
             eprintln!("music2: {e:#}");
             false
@@ -1182,4 +1339,8 @@ impl Graph {
 }
 
 #[cfg(test)]
+mod preview_tests;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod watch_tests;

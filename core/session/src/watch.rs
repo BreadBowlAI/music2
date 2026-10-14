@@ -8,6 +8,11 @@
 //! a row, and git isn't writing (its `index.lock` younger than 10 s). The caller then reads one
 //! snapshot and takes it in as one revision.
 //!
+//! A poll sees the whole project, or only some paths ([`Scope`]): the server's watcher stats only
+//! what the file system's events name, and walks everything now and then. Only a poll that saw
+//! every path makes a batch ready: events can arrive late, so a change whose other half they
+//! haven't named yet is never taken in half-applied ([`Settle::due`] says when to look).
+//!
 //! What is tracked (R14 of the step 6 design): revision inputs by their stamp (the manifest,
 //! code, the arrangement, lane files, sidecars, state blobs, and the assets some lane names);
 //! other files under `assets/` only by being there, so a render growing in `assets/` holds
@@ -17,6 +22,7 @@
 //! once its stamp is the same on two polls, never while it grows.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -30,7 +36,7 @@ pub const GIT_STALE: Duration = Duration::from_secs(10);
 const RACY_NS: i128 = 2_000_000_000;
 
 /// What identifies a file's version without reading it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Stamp {
     pub size: u64,
     /// Nanoseconds since the epoch.
@@ -66,50 +72,236 @@ pub enum Track {
     Text,
     /// A binary revision input: by its stamp, hashed once stable.
     Binary,
-    /// Only by being there.
+    /// Only by being there: its stamp is never read (a walk lists it with the default one).
     Present,
 }
 
-/// One stat walk of a project: each tracked path, how, and its stamp.
+/// One stat walk of a project, or of some paths of it: each tracked path, how, and its stamp.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Listing {
-    pub entries: BTreeMap<PathBuf, (Track, Stamp)>,
+    /// By path relative to the project, `/`-separated.
+    pub entries: BTreeMap<String, (Track, Stamp)>,
+    /// The files a snapshot lists as Ignored (`Snapshot::unknown`), as the walk found them: whole
+    /// only in a walk of the whole project.
+    pub unknown: BTreeSet<PathBuf>,
+}
+
+/// How the file at project path `rel` is tracked, if it is: `named` is the assets some lane of
+/// the draft names.
+pub fn track(rel: &str, named: &BTreeSet<String>) -> Option<Track> {
+    track_of(&DataPath::parse(Path::new(rel)), rel, named)
+}
+
+fn track_of(d: &DataPath, rel: &str, named: &BTreeSet<String>) -> Option<Track> {
+    Some(match d {
+        DataPath::Manifest
+        | DataPath::Code(_)
+        | DataPath::Arrangement
+        | DataPath::Lane { .. }
+        | DataPath::PluginState { sidecar: true, .. } => Track::Text,
+        DataPath::PluginState { sidecar: false, .. } => Track::Binary,
+        DataPath::Asset(_) if named.contains(rel) => Track::Binary,
+        DataPath::Asset(_) => Track::Present,
+        _ => return None,
+    })
+}
+
+/// Whether a walk enters a folder of this name: never dot folders (`.music2`, `.git`) or
+/// `node_modules`, as `Snapshot::read`.
+fn entered(name: &str) -> bool {
+    !name.starts_with('.') && name != "node_modules"
+}
+
+/// Whether anything at project path `rel` can be tracked: none of its parts is a folder a walk
+/// never enters. No tracked file has a part that starts with a dot either (FMT-14, keys).
+pub fn walked(rel: &str) -> bool {
+    rel.split('/').all(entered)
 }
 
 /// Walk the project at `dir` with `Snapshot::read`'s rules, reading stamps, never contents.
-/// `named` is the assets some lane of the draft names.
-pub fn listing(dir: &Path, named: &BTreeSet<PathBuf>) -> Listing {
+/// `named` is the assets some lane of the draft names. An asset only tracked by being there is
+/// listed from its folder entry, never stat'd (the default stamp).
+pub fn listing(dir: &Path, named: &BTreeSet<String>) -> Listing {
     let mut out = Listing::default();
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(d) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&d) else { continue };
-        for e in entries.flatten() {
-            let p = e.path();
-            let name = e.file_name();
-            let name = name.to_string_lossy();
-            let Ok(meta) = std::fs::symlink_metadata(&p) else { continue };
-            if meta.is_dir() {
-                if !name.starts_with('.') && name != "node_modules" {
-                    stack.push(p);
-                }
-                continue;
-            }
-            let rel = p.strip_prefix(dir).expect("inside").to_path_buf();
-            let track = match DataPath::parse(&rel) {
-                DataPath::Manifest
-                | DataPath::Code(_)
-                | DataPath::Arrangement
-                | DataPath::Lane { .. }
-                | DataPath::PluginState { sidecar: true, .. } => Track::Text,
-                DataPath::PluginState { sidecar: false, .. } => Track::Binary,
-                DataPath::Asset(_) if named.contains(&rel) => Track::Binary,
-                DataPath::Asset(_) => Track::Present,
-                _ => continue,
-            };
-            out.entries.insert(rel, (track, Stamp::of(&meta)));
+    walk(dir, "", named, false, &mut out);
+    out
+}
+
+/// [`listing`] with every file stat'd, the assets no lane names too: what a watcher starts from
+/// before the session's read says which assets its lanes name.
+pub fn listing_stamped(dir: &Path, named: &BTreeSet<String>) -> Listing {
+    let mut out = Listing::default();
+    walk(dir, "", named, true, &mut out);
+    out
+}
+
+/// The stat walk of only `paths` (each project path, `/`-separated) with [`listing`]'s rules: a
+/// tracked file is stat'd, a folder walked, a path with nothing there gives nothing.
+pub fn listing_of(dir: &Path, paths: &BTreeSet<String>, named: &BTreeSet<String>) -> Listing {
+    let mut out = Listing::default();
+    // A path inside a folder walked already is in the listing.
+    let mut walked_at: Option<&str> = None;
+    let mut folders = BTreeSet::new();
+    for p in paths {
+        if p.is_empty() {
+            walk(dir, "", named, false, &mut out);
+            break;
+        }
+        if walked_at.is_some_and(|w| p.starts_with(w) && p.as_bytes().get(w.len()) == Some(&b'/')) || !walked(p) {
+            continue;
+        }
+        // Only through folders a walk enters, each spelled as the disk spells it: never a link to
+        // one, nor a name a disk that ignores capitals or Unicode forms still opens after a rename
+        // changed only those (a rename's old name), which would give a file a second key.
+        if !reached(dir, p, &mut folders) || !spelled(&dir.join(p)) {
+            continue;
+        }
+        let Ok(meta) = std::fs::symlink_metadata(dir.join(p)) else { continue };
+        if meta.is_dir() {
+            walk(dir, p, named, false, &mut out);
+            walked_at = Some(p);
+        } else if let Some(t) = track(p, named) {
+            // As a walk lists it, so a poll of some paths and one of everything agree.
+            let stamp = if t == Track::Present { Stamp::default() } else { Stamp::of(&meta) };
+            out.entries.insert(p.clone(), (t, stamp));
         }
     }
     out
+}
+
+/// Whether every folder `rel` is in is one (not a link to one) spelled as the disk spells it, as a
+/// walk from the project reaches it. `folders` holds those known to be.
+fn reached(dir: &Path, rel: &str, folders: &mut BTreeSet<String>) -> bool {
+    let mut at = 0;
+    while let Some(i) = rel[at..].find('/') {
+        let folder = &rel[..at + i];
+        if !folders.contains(folder) {
+            let p = dir.join(folder);
+            if !std::fs::symlink_metadata(&p).is_ok_and(|m| m.is_dir()) || !spelled(&p) {
+                return false;
+            }
+            folders.insert(folder.to_string());
+        }
+        at += i + 1;
+    }
+    true
+}
+
+/// Whether the last name of `p` is spelled as the disk stores it (`getattrlist`'s name), or there
+/// is nothing there. A disk that ignores capitals or Unicode forms opens `Song.ts` as `song.ts`.
+fn spelled(p: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let (Some(name), Ok(c)) = (p.file_name(), std::ffi::CString::new(p.as_os_str().as_bytes())) else { return true };
+        // SAFETY: an attrlist asking for the name alone, and a buffer that holds any name (255
+        // UTF-16 units, at most 3 bytes each in UTF-8) after its length and reference.
+        let mut list: libc::attrlist = unsafe { std::mem::zeroed() };
+        list.bitmapcount = libc::ATTR_BIT_MAP_COUNT;
+        list.commonattr = libc::ATTR_CMN_NAME;
+        #[repr(C, align(4))]
+        struct Buf([u8; 1024]);
+        let mut buf = Buf([0; 1024]);
+        let got =
+            unsafe { libc::getattrlist(c.as_ptr(), (&raw mut list).cast(), buf.0.as_mut_ptr().cast(), buf.0.len(), libc::FSOPT_NOFOLLOW) };
+        if got != 0 {
+            return true;
+        }
+        // The length, then the name's reference: its offset from the reference, and its length
+        // with the NUL.
+        let at = |i: usize| u32::from_ne_bytes([buf.0[i], buf.0[i + 1], buf.0[i + 2], buf.0[i + 3]]);
+        let (offset, len) = (at(4) as i32, at(8) as usize);
+        let start = 4 + offset as usize;
+        let Some(stored) = buf.0.get(start..start + len.saturating_sub(1)) else { return true };
+        stored == name.as_bytes()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = p;
+        true
+    }
+}
+
+/// Walk the folder `from` of the project at `dir` ("" for the project) into `out`.
+fn walk(dir: &Path, from: &str, named: &BTreeSet<String>, stat_all: bool, out: &mut Listing) {
+    let mut stack = vec![from.to_string()];
+    while let Some(at) = stack.pop() {
+        let folder = if at.is_empty() { dir.to_path_buf() } else { dir.join(&at) };
+        let Ok(entries) = std::fs::read_dir(&folder) else { continue };
+        for e in entries.flatten() {
+            // A name that isn't UTF-8 is no project path (`DataPath`), nor is anything under it.
+            let name = e.file_name();
+            let Some(name) = name.to_str() else { continue };
+            let rel = if at.is_empty() { name.to_string() } else { format!("{at}/{name}") };
+            // The folder entry's type, without a stat where the volume gives it; a link is never
+            // followed, so a link to a folder is a file here, as for `Snapshot::read`.
+            let Ok(kind) = e.file_type() else { continue };
+            if kind.is_dir() {
+                if entered(name) {
+                    stack.push(rel);
+                }
+                continue;
+            }
+            let d = DataPath::parse(Path::new(&rel));
+            let Some(track) = track_of(&d, &rel, named) else {
+                if m2_song::path::listed_unknown(&d, Path::new(&rel)) {
+                    out.unknown.insert(PathBuf::from(rel));
+                }
+                continue;
+            };
+            let stamp = match (track, stat_all) {
+                (Track::Present, false) => Stamp::default(),
+                _ => match std::fs::symlink_metadata(folder.join(name)) {
+                    Ok(m) => Stamp::of(&m),
+                    Err(_) => continue,
+                },
+            };
+            out.entries.insert(rel, (track, stamp));
+        }
+    }
+}
+
+/// What a poll looked at: every path of the project, or only some, and none of `except`.
+#[derive(Clone, Copy, Debug)]
+pub struct Scope<'a> {
+    /// Only these paths, each with every path under it (a folder's): one in scope and absent from
+    /// the listing is gone, one out of scope is as it was. None: every path.
+    only: Option<&'a BTreeSet<String>>,
+    /// Paths left as they were: the session wrote them while the listing was taken, so it may have
+    /// either version of them ([`Settle::wrote`] says which is its own).
+    except: &'a BTreeSet<String>,
+}
+
+static NONE: BTreeSet<String> = BTreeSet::new();
+
+impl<'a> Scope<'a> {
+    /// The whole project.
+    pub fn all() -> Scope<'static> {
+        Scope { only: None, except: &NONE }
+    }
+
+    /// Only `paths`, each with everything under it.
+    pub fn paths(paths: &'a BTreeSet<String>) -> Scope<'a> {
+        Scope { only: Some(paths), except: &NONE }
+    }
+
+    /// The same, without `paths`.
+    pub fn except(self, paths: &'a BTreeSet<String>) -> Scope<'a> {
+        Scope { except: paths, ..self }
+    }
+
+    /// Whether it is the whole project.
+    pub fn whole(&self) -> bool {
+        self.only.is_none()
+    }
+}
+
+/// The entries of `map` at `q` or under it (`q/...`); every entry for "".
+fn under<'m, V>(map: &'m BTreeMap<String, V>, q: &'m str) -> impl Iterator<Item = &'m String> + 'm {
+    map.range::<str, _>((Bound::Included(q), Bound::Unbounded))
+        .take_while(move |(k, _)| k.starts_with(q))
+        .filter(move |(k, _)| q.is_empty() || k.len() == q.len() || k.as_bytes()[q.len()] == b'/')
+        .map(|(k, _)| k)
 }
 
 /// What a path was when last taken in.
@@ -121,17 +313,17 @@ enum Seen {
 
 /// A path of an open batch: what it was at the last poll, its hash, and on how many polls in a
 /// row since it was the same.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct Pending {
     now: Option<(Track, Stamp)>,
     sha: Option<Sha>,
     same: u32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct Batch {
     last_change: Instant,
-    paths: BTreeMap<PathBuf, Pending>,
+    paths: BTreeMap<String, Pending>,
 }
 
 /// Git's state for the project.
@@ -139,6 +331,13 @@ struct Batch {
 pub struct Git {
     /// How old `index.lock` is in the project's git folder, when it is there.
     pub lock_age: Option<Duration>,
+}
+
+impl Git {
+    /// Whether git is writing: a batch waits for it.
+    pub fn busy(&self) -> bool {
+        self.lock_age.is_some_and(|age| age < GIT_STALE)
+    }
 }
 
 /// What a poll found.
@@ -151,14 +350,56 @@ pub enum Poll {
 }
 
 /// The settle rule's state.
+#[derive(Clone, Debug)]
 pub struct Settle {
     quiet: Duration,
-    baseline: BTreeMap<PathBuf, Seen>,
+    baseline: BTreeMap<String, Seen>,
     batch: Option<Batch>,
     /// The stale `index.lock` already said, so it is said once until it goes.
     told: bool,
     /// A Notice for the session to show: `git.locked`, once.
     pub notice: Option<m2_song::Diagnostic>,
+}
+
+/// Whether `p`, last seen as `seen`, differs in `now` (a poll's entry for it). A text input whose
+/// stamp is racy is hashed (FMT-16): its first hash is recorded, a later one compared.
+fn differs(
+    seen: Option<&mut Seen>,
+    now: Option<(Track, Stamp)>,
+    p: &str,
+    wall_ns: i128,
+    hash: &mut dyn FnMut(&Path) -> Option<Sha>,
+) -> bool {
+    match (seen, now) {
+        (None, None) => false,
+        (Some(Seen::Present), Some((Track::Present, _))) => false,
+        (Some(Seen::Input { track, stamp, sha, read_ns }), Some((t, s))) if *track == t => {
+            if *stamp != s {
+                true
+            } else if t == Track::Text && s.mtime > *read_ns - RACY_NS {
+                // Racy: a same-size rewrite within the timestamp's resolution shows only in its
+                // content (FMT-16).
+                let h = hash(Path::new(p));
+                match sha {
+                    None => {
+                        *sha = h;
+                        *read_ns = wall_ns;
+                        false
+                    }
+                    Some(old) => {
+                        let differs = h.is_some_and(|h| h != *old);
+                        if !differs {
+                            *read_ns = wall_ns;
+                        }
+                        differs
+                    }
+                }
+            } else {
+                false
+            }
+        }
+        _ => true,
+    }
 }
 
 impl Settle {
@@ -173,50 +414,107 @@ impl Settle {
         self.batch.is_some()
     }
 
-    /// One poll at `now` (and `wall_ns`, the wall clock in nanoseconds), given the stat walk,
-    /// git's state and a way to hash a path.
+    /// The paths of the open batch: every poll must stat them, scoped or not.
+    pub fn batch_paths(&self) -> impl Iterator<Item = &str> {
+        self.batch.iter().flat_map(|b| b.paths.keys().map(String::as_str))
+    }
+
+    /// Whether the open batch has been quiet long enough to be ready at `now`, if a poll that sees
+    /// every path finds nothing else changed: when a watcher polling only some paths must look at
+    /// all of them.
+    pub fn due(&self, now: Instant) -> bool {
+        self.due_at().is_some_and(|at| now >= at)
+    }
+
+    /// When the open batch is due ([`Settle::due`]), if nothing else changes first.
+    pub fn due_at(&self) -> Option<Instant> {
+        self.batch.as_ref().map(|b| b.last_change + self.quiet)
+    }
+
+    /// One poll of the whole project at `now` (and `wall_ns`, the wall clock in nanoseconds),
+    /// given the stat walk, git's state and a way to hash a path.
     pub fn poll(&mut self, now: Instant, wall_ns: i128, listing: &Listing, git: Git, hash: &mut dyn FnMut(&Path) -> Option<Sha>) -> Poll {
+        self.poll_in(now, wall_ns, listing, Scope::all(), git, hash)
+    }
+
+    /// One poll of `scope`, whose paths `listing` stats: the same rule, applied to the paths it saw
+    /// (and the open batch's, which every poll stats). Only a poll of the whole project makes a
+    /// batch ready.
+    pub fn poll_in(
+        &mut self,
+        now: Instant,
+        wall_ns: i128,
+        listing: &Listing,
+        scope: Scope<'_>,
+        git: Git,
+        hash: &mut dyn FnMut(&Path) -> Option<Sha>,
+    ) -> Poll {
+        let changed = self.visit(wall_ns, listing, scope, hash);
+        self.conclude(changed, now, wall_ns, listing, scope, git, hash)
+    }
+
+    /// The paths of `scope` that changed since last taken in, or are in the open batch (which
+    /// every poll looks at again).
+    fn visit(&mut self, wall_ns: i128, listing: &Listing, scope: Scope<'_>, hash: &mut dyn FnMut(&Path) -> Option<Sha>) -> Vec<String> {
+        let mut changed: Vec<String> = vec![];
+        let Settle { baseline, batch, .. } = self;
         // A batch's own paths too: one that was there for a single poll, then went, is polled
         // again and settles as gone, instead of holding its batch open for good.
-        let batch = self.batch.iter().flat_map(|b| b.paths.keys());
-        let paths: BTreeSet<PathBuf> = listing.entries.keys().chain(self.baseline.keys()).chain(batch).cloned().collect();
-        let mut changed: Vec<PathBuf> = vec![];
-        for p in &paths {
-            let now_entry = listing.entries.get(p).copied();
-            let differs = match (self.baseline.get_mut(p), now_entry) {
-                (None, None) => false,
-                (Some(Seen::Present), Some((Track::Present, _))) => false,
-                (Some(Seen::Input { track, stamp, sha, read_ns }), Some((t, s))) if *track == t => {
-                    if *stamp != s {
-                        true
-                    } else if t == Track::Text && s.mtime > *read_ns - RACY_NS {
-                        // Racy: a same-size rewrite within the timestamp's resolution shows only
-                        // in its content (FMT-16).
-                        let h = hash(p);
-                        match sha {
-                            None => {
-                                *sha = h;
-                                *read_ns = wall_ns;
-                                false
-                            }
-                            Some(old) => {
-                                let differs = h.is_some_and(|h| h != *old);
-                                if !differs {
-                                    *read_ns = wall_ns;
-                                }
-                                differs
-                            }
-                        }
-                    } else {
-                        false
+        match scope.only {
+            None => {
+                // The listing, the baseline and the batch merged, each sorted, so nothing is
+                // cloned or looked up but what changed.
+                let mut b = baseline.iter_mut().peekable();
+                let mut l = listing.entries.iter().peekable();
+                let mut q = batch.iter().flat_map(|b| b.paths.keys()).peekable();
+                loop {
+                    let (kb, kl, kq) = (b.peek().map(|e| e.0.as_str()), l.peek().map(|e| e.0.as_str()), q.peek().map(|k| k.as_str()));
+                    let Some(min) = [kb, kl, kq].into_iter().flatten().min() else { break };
+                    let (hb, hl, hq) = (kb == Some(min), kl == Some(min), kq == Some(min));
+                    let (be, le, qe) = (hb.then(|| b.next()).flatten(), hl.then(|| l.next()).flatten(), hq.then(|| q.next()).flatten());
+                    let key: &String = be.as_ref().map(|e| e.0).or(le.map(|e| e.0)).or(qe).expect("one has it");
+                    if scope.except.contains(key) {
+                        continue;
+                    }
+                    if differs(be.map(|e| e.1), le.map(|e| e.1).copied(), key, wall_ns, hash) || hq {
+                        changed.push(key.clone());
                     }
                 }
-                _ => true,
-            };
-            if differs || self.batch.as_ref().is_some_and(|b| b.paths.contains_key(p)) {
-                changed.push(p.clone());
+            }
+            Some(only) => {
+                let mut keys: BTreeSet<String> = BTreeSet::new();
+                for p in only {
+                    keys.extend(under(baseline, p).cloned());
+                    keys.extend(under(&listing.entries, p).cloned());
+                }
+                keys.extend(batch.iter().flat_map(|b| b.paths.keys()).cloned());
+                for k in keys {
+                    if scope.except.contains(&k) {
+                        continue;
+                    }
+                    let in_batch = batch.as_ref().is_some_and(|b| b.paths.contains_key(&k));
+                    if differs(baseline.get_mut(&k), listing.entries.get(&k).copied(), &k, wall_ns, hash) || in_batch {
+                        changed.push(k);
+                    }
+                }
             }
         }
+        changed
+    }
+
+    /// The rest of a poll, given what [`Settle::visit`] found: the batch opened or extended, and
+    /// whether it is ready.
+    #[allow(clippy::too_many_arguments)]
+    fn conclude(
+        &mut self,
+        changed: Vec<String>,
+        now: Instant,
+        wall_ns: i128,
+        listing: &Listing,
+        scope: Scope<'_>,
+        git: Git,
+        hash: &mut dyn FnMut(&Path) -> Option<Sha>,
+    ) -> Poll {
         if changed.is_empty() && self.batch.is_none() {
             return Poll::Idle;
         }
@@ -228,7 +526,7 @@ impl Settle {
                     let mut same = pending.now == entry;
                     // A text input is hashed when its stamp changes, and while racy.
                     if same && entry.is_some_and(|(t, s)| t == Track::Text && s.mtime > wall_ns - RACY_NS) {
-                        let h = hash(&p);
+                        let h = hash(Path::new(&p));
                         same = h == pending.sha;
                         pending.sha = h;
                     }
@@ -238,13 +536,13 @@ impl Settle {
                         pending.now = entry;
                         pending.same = 0;
                         if entry.is_some_and(|(t, _)| t == Track::Text) {
-                            pending.sha = hash(&p);
+                            pending.sha = hash(Path::new(&p));
                         }
                         batch.last_change = now;
                     }
                 }
                 None => {
-                    let sha = if entry.is_some_and(|(t, _)| t == Track::Text) { hash(&p) } else { None };
+                    let sha = if entry.is_some_and(|(t, _)| t == Track::Text) { hash(Path::new(&p)) } else { None };
                     batch.paths.insert(p, Pending { now: entry, sha, same: 0 });
                     batch.last_change = now;
                 }
@@ -253,7 +551,7 @@ impl Settle {
         // A binary input is hashed only once it is the same on two polls: never while it grows.
         for (p, pending) in batch.paths.iter_mut() {
             if pending.same >= 1 && pending.sha.is_none() && pending.now.is_some_and(|(t, _)| t == Track::Binary) {
-                pending.sha = hash(p);
+                pending.sha = hash(Path::new(p));
             }
         }
         let git_busy = match git.lock_age {
@@ -276,7 +574,9 @@ impl Settle {
         };
         let quiet = now.duration_since(batch.last_change) >= self.quiet;
         let stable = batch.paths.values().all(|p| p.same >= 1);
-        if !quiet || !stable || git_busy {
+        // A scoped poll can't tell that nothing else changed: events for the rest of a change may
+        // still be on their way (WRITE-19).
+        if !quiet || !stable || git_busy || !scope.whole() {
             return Poll::Settling;
         }
         let batch = self.batch.take().expect("open");
@@ -290,7 +590,7 @@ impl Settle {
                     self.baseline.remove(&p);
                 }
             }
-            out.insert(p);
+            out.insert(PathBuf::from(p));
         }
         Poll::Ready(out)
     }
@@ -302,14 +602,15 @@ impl Settle {
     pub fn confirm(&mut self, paths: &BTreeSet<PathBuf>, now: &dyn Fn(&Path) -> Option<Sha>) -> BTreeSet<PathBuf> {
         let mut out = BTreeSet::new();
         for p in paths {
-            let settled = match self.baseline.get(p) {
+            let key = m2_song::path::slashed(p);
+            let settled = match self.baseline.get(&key) {
                 Some(Seen::Input { sha: Some(sha), .. }) => Some(Some(*sha)),
                 Some(Seen::Input { sha: None, .. }) | Some(Seen::Present) => None,
                 None => Some(None),
             };
             match settled {
                 Some(sha) if sha != now(p) => {
-                    self.baseline.remove(p);
+                    self.baseline.remove(&key);
                 }
                 _ => {
                     out.insert(p.clone());
@@ -325,20 +626,21 @@ impl Settle {
     /// a path the session wrote (another inode), is still taken in (R12).
     pub fn wrote(&mut self, paths: &[(PathBuf, Option<Stamp>)], wall_ns: i128) {
         for (p, stamp) in paths {
+            let p = m2_song::path::slashed(p);
             match stamp {
                 Some(s) => {
-                    let track = self.baseline.get(p).map_or(Track::Text, |b| match b {
+                    let track = self.baseline.get(&p).map_or(Track::Text, |b| match b {
                         Seen::Input { track, .. } => *track,
                         Seen::Present => Track::Present,
                     });
                     self.baseline.insert(p.clone(), seen(track, *s, None, wall_ns));
                 }
                 None => {
-                    self.baseline.remove(p);
+                    self.baseline.remove(&p);
                 }
             }
             if let Some(b) = &mut self.batch {
-                b.paths.remove(p);
+                b.paths.remove(&p);
                 if b.paths.is_empty() {
                     self.batch = None;
                 }
@@ -389,200 +691,6 @@ pub fn wall_ns() -> i128 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn stamp(size: u64, mtime: i128) -> Stamp {
-        Stamp { size, mtime, ctime: mtime, inode: 1 }
-    }
-
-    fn list(entries: &[(&str, Track, Stamp)]) -> Listing {
-        Listing { entries: entries.iter().map(|(p, t, s)| (PathBuf::from(p), (*t, *s))).collect() }
-    }
-
-    const OLD: i128 = 1_000 * 1_000_000_000;
-    const WALL: i128 = 2_000 * 1_000_000_000;
-
-    // WRITE-19: a change every 40 ms keeps a batch settling; 150 ms of quiet with two equal polls
-    // makes it ready, as one batch.
-    #[test]
-    fn a_batch_is_ready_once_quiet_and_stable() {
-        let t0 = Instant::now();
-        let base = list(&[("song.ts", Track::Text, stamp(10, OLD)), ("data/kick/hits.json", Track::Text, stamp(20, OLD))]);
-        let mut s = Settle::new(&base, WALL);
-        let mut hash = |_: &Path| Some(Sha::of(b"x"));
-        assert_eq!(s.poll(t0, WALL, &base, Git::default(), &mut hash), Poll::Idle);
-        // The lane file written in two halves, 40 ms apart, then left.
-        let hits = |size: u64| {
-            list(&[("song.ts", Track::Text, stamp(10, OLD)), ("data/kick/hits.json", Track::Text, stamp(size, OLD + size as i128))])
-        };
-        let at = |ms: u64| t0 + Duration::from_millis(ms);
-        assert_eq!(s.poll(at(40), WALL, &hits(5), Git::default(), &mut hash), Poll::Settling, "the first half");
-        assert_eq!(s.poll(at(80), WALL, &hits(22), Git::default(), &mut hash), Poll::Settling, "the second half");
-        for ms in [120, 160, 200] {
-            assert_eq!(s.poll(at(ms), WALL, &hits(22), Git::default(), &mut hash), Poll::Settling, "{ms} ms: not quiet for 150 ms yet");
-        }
-        let l = hits(22);
-        assert_eq!(s.poll(at(240), WALL, &l, Git::default(), &mut hash), Poll::Ready([PathBuf::from("data/kick/hits.json")].into()));
-        let at = at(240);
-        assert_eq!(s.poll(at + Duration::from_millis(50), WALL, &l, Git::default(), &mut hash), Poll::Idle, "taken: the baseline moved");
-    }
-
-    // WRITE-19, R13: a fresh `index.lock` holds a batch; one older than 10 s doesn't, and is said
-    // once as `git.locked`.
-    #[test]
-    fn git_holds_a_batch_while_it_writes() {
-        let t0 = Instant::now();
-        let base = list(&[("song.ts", Track::Text, stamp(10, OLD))]);
-        let mut s = Settle::new(&base, WALL);
-        let mut hash = |_: &Path| Some(Sha::of(b"x"));
-        let changed = list(&[("song.ts", Track::Text, stamp(11, OLD))]);
-        let busy = Git { lock_age: Some(Duration::from_secs(1)) };
-        s.poll(t0, WALL, &changed, busy, &mut hash);
-        assert_eq!(s.poll(t0 + Duration::from_secs(1), WALL, &changed, busy, &mut hash), Poll::Settling);
-        let stale = Git { lock_age: Some(Duration::from_secs(11)) };
-        assert!(matches!(s.poll(t0 + Duration::from_secs(2), WALL, &changed, stale, &mut hash), Poll::Ready(_)));
-        assert_eq!(s.notice.take().map(|n| n.code), Some("git.locked"));
-        let again = list(&[("song.ts", Track::Text, stamp(12, OLD))]);
-        s.poll(t0 + Duration::from_secs(3), WALL, &again, stale, &mut hash);
-        s.poll(t0 + Duration::from_secs(4), WALL, &again, stale, &mut hash);
-        assert!(s.notice.is_none(), "said once");
-    }
-
-    // WRITE-19 (the step 6 design's 8.2): a batch read once it settled is taken in only where the
-    // read is what settled; a file written to again since goes on, as changed at the next poll.
-    #[test]
-    fn a_path_written_after_it_settled_goes_on() {
-        let t0 = Instant::now();
-        let base = list(&[("a.ts", Track::Text, stamp(10, OLD)), ("b.ts", Track::Text, stamp(10, OLD))]);
-        let mut s = Settle::new(&base, WALL);
-        let mut hash = |p: &Path| Some(Sha::of(p.to_string_lossy().as_bytes()));
-        let l = list(&[("a.ts", Track::Text, stamp(11, OLD)), ("b.ts", Track::Text, stamp(11, OLD))]);
-        s.poll(t0, WALL, &l, Git::default(), &mut hash);
-        s.poll(t0 + Duration::from_millis(50), WALL, &l, Git::default(), &mut hash);
-        let Poll::Ready(paths) = s.poll(t0 + Duration::from_millis(200), WALL, &l, Git::default(), &mut hash) else { panic!() };
-        // The read found a.ts as it settled, b.ts written again.
-        let read = |p: &Path| Some(if p == Path::new("a.ts") { Sha::of(b"a.ts") } else { Sha::of(b"more") });
-        assert_eq!(s.confirm(&paths, &read), [PathBuf::from("a.ts")].into());
-        assert!(matches!(s.poll(t0 + Duration::from_millis(250), WALL, &l, Git::default(), &mut hash), Poll::Settling));
-    }
-
-    // R12: the session's own writes make no batch; an outside write elsewhere meanwhile is still
-    // taken in, and an open batch survives.
-    #[test]
-    fn own_writes_make_no_batch() {
-        let t0 = Instant::now();
-        let base = list(&[("song.ts", Track::Text, stamp(10, OLD)), ("data/kick/hits.json", Track::Text, stamp(20, OLD))]);
-        let mut s = Settle::new(&base, WALL);
-        let mut hash = |_: &Path| Some(Sha::of(b"x"));
-        // An outside writer changes the lane; the session commits song.ts.
-        let l = list(&[("song.ts", Track::Text, stamp(11, OLD + 5)), ("data/kick/hits.json", Track::Text, stamp(21, OLD))]);
-        s.poll(t0, WALL, &l, Git::default(), &mut hash);
-        s.wrote(&[(PathBuf::from("song.ts"), Some(stamp(11, OLD + 5)))], WALL);
-        assert!(s.settling(), "the outside write's batch stays open");
-        s.poll(t0 + Duration::from_millis(50), WALL, &l, Git::default(), &mut hash);
-        assert_eq!(
-            s.poll(t0 + Duration::from_millis(200), WALL, &l, Git::default(), &mut hash),
-            Poll::Ready([PathBuf::from("data/kick/hits.json")].into())
-        );
-        // A file replaced after the session wrote it (another inode) is taken in.
-        let replaced = list(&[
-            ("song.ts", Track::Text, Stamp { inode: 9, ..stamp(11, OLD + 5) }),
-            ("data/kick/hits.json", Track::Text, stamp(21, OLD)),
-        ]);
-        s.poll(t0 + Duration::from_millis(250), WALL, &replaced, Git::default(), &mut hash);
-        s.poll(t0 + Duration::from_millis(300), WALL, &replaced, Git::default(), &mut hash);
-        assert_eq!(
-            s.poll(t0 + Duration::from_millis(450), WALL, &replaced, Git::default(), &mut hash),
-            Poll::Ready([PathBuf::from("song.ts")].into())
-        );
-    }
-
-    // R14: a file growing in assets/ that no lane names holds nothing back; a growing state blob
-    // is hashed only once stable.
-    #[test]
-    fn growing_binaries() {
-        let t0 = Instant::now();
-        let base = list(&[("song.ts", Track::Text, stamp(10, OLD)), ("assets/render.wav", Track::Present, stamp(1, OLD))]);
-        let mut s = Settle::new(&base, WALL);
-        let mut hashed = vec![];
-        let mut hash = |p: &Path| {
-            hashed.push(p.to_path_buf());
-            Some(Sha::of(b"x"))
-        };
-        for i in 0..5 {
-            let l =
-                list(&[("song.ts", Track::Text, stamp(10, OLD)), ("assets/render.wav", Track::Present, stamp(100 * i, OLD + i as i128))]);
-            assert_eq!(s.poll(t0 + Duration::from_millis(50 * i), WALL, &l, Git::default(), &mut hash), Poll::Idle, "poll {i}");
-        }
-        let blob = |size: u64| list(&[("song.ts", Track::Text, stamp(10, OLD)), ("data/lead/lead.state", Track::Binary, stamp(size, OLD))]);
-        let mut s = Settle::new(&list(&[("song.ts", Track::Text, stamp(10, OLD))]), WALL);
-        s.poll(t0, WALL, &blob(1), Git::default(), &mut hash);
-        s.poll(t0 + Duration::from_millis(50), WALL, &blob(2), Git::default(), &mut hash);
-        drop(hash);
-        assert!(hashed.is_empty(), "not while it grows: {hashed:?}");
-        let mut hashed = vec![];
-        let mut hash = |p: &Path| {
-            hashed.push(p.to_path_buf());
-            Some(Sha::of(b"x"))
-        };
-        s.poll(t0 + Duration::from_millis(100), WALL, &blob(2), Git::default(), &mut hash);
-        assert!(matches!(s.poll(t0 + Duration::from_millis(250), WALL, &blob(2), Git::default(), &mut hash), Poll::Ready(_)));
-        assert_eq!(hashed, [PathBuf::from("data/lead/lead.state")], "hashed once, when stable");
-    }
-
-    // WRITE-19: a tracked path that is there for one poll only (a script's temporary file, a file
-    // moved away and back) settles as gone, and never holds its batch, or every change after it,
-    // open.
-    #[test]
-    fn a_path_there_for_one_poll_settles_as_gone() {
-        let t0 = Instant::now();
-        let base = list(&[("song.ts", Track::Text, stamp(10, OLD))]);
-        let mut s = Settle::new(&base, WALL);
-        let mut hash = |_: &Path| Some(Sha::of(b"x"));
-        let at = |ms: u64| t0 + Duration::from_millis(ms);
-        let phantom = list(&[("song.ts", Track::Text, stamp(10, OLD)), ("tracks/scratch.ts", Track::Text, stamp(5, OLD))]);
-        assert_eq!(s.poll(at(0), WALL, &phantom, Git::default(), &mut hash), Poll::Settling);
-        assert_eq!(s.poll(at(50), WALL, &base, Git::default(), &mut hash), Poll::Settling, "gone: polled again");
-        assert_eq!(s.poll(at(200), WALL, &base, Git::default(), &mut hash), Poll::Ready([PathBuf::from("tracks/scratch.ts")].into()));
-        assert_eq!(s.poll(at(250), WALL, &base, Git::default(), &mut hash), Poll::Idle);
-        let edited = list(&[("song.ts", Track::Text, stamp(11, OLD))]);
-        s.poll(at(300), WALL, &edited, Git::default(), &mut hash);
-        s.poll(at(350), WALL, &edited, Git::default(), &mut hash);
-        assert_eq!(s.poll(at(500), WALL, &edited, Git::default(), &mut hash), Poll::Ready([PathBuf::from("song.ts")].into()), "taken in");
-    }
-
-    // FMT-16, R14: a same-size rewrite within 2 s of when a text file was read shows in its hash.
-    #[test]
-    fn a_racy_rewrite_is_seen() {
-        let t0 = Instant::now();
-        let racy = stamp(10, WALL - 1_000_000_000);
-        let base = list(&[("song.ts", Track::Text, racy)]);
-        let mut s = Settle::new(&base, WALL);
-        let mut content = Sha::of(b"one");
-        let mut hash = |_: &Path| Some(content);
-        assert_eq!(s.poll(t0, WALL, &base, Git::default(), &mut hash), Poll::Idle, "its hash recorded");
-        content = Sha::of(b"two");
-        let mut hash = |_: &Path| Some(content);
-        assert_eq!(
-            s.poll(t0 + Duration::from_millis(50), WALL, &base, Git::default(), &mut hash),
-            Poll::Settling,
-            "the same stamp, another content"
-        );
-    }
-
-    #[test]
-    fn the_git_folder_is_found_above_and_through_a_gitdir_file() {
-        let root = std::env::temp_dir().join(format!("m2-watch-git-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(root.join(".git")).unwrap();
-        std::fs::create_dir_all(root.join("songs/a")).unwrap();
-        assert_eq!(git_dir(&root.join("songs/a")), Some(root.join(".git")));
-        std::fs::create_dir_all(root.join("wt/b")).unwrap();
-        std::fs::write(root.join("wt/.git"), "gitdir: ../.git/worktrees/wt\n").unwrap();
-        assert_eq!(git_dir(&root.join("wt/b")), Some(root.join("wt/../.git/worktrees/wt")));
-        std::fs::write(root.join(".git/index.lock"), "").unwrap();
-        assert!(git(git_dir(&root.join("songs/a")).as_deref()).lock_age.is_some());
-        std::fs::remove_dir_all(&root).ok();
-    }
-}
+mod scope_tests;
+#[cfg(test)]
+mod tests;

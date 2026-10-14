@@ -9,8 +9,9 @@
 //! step 3a's design (§15) counts it: to when it is heard, which is the start of the audio callback
 //! that took it ([`Graph::applied`]), plus the frame its block starts at in that callback, plus one
 //! device buffer to the speaker. A seek counts from when it was asked for; an edit from when the
-//! server's session had done its work, its compile included ([`Graph::last_edit`]), which the
-//! contract's budgets leave out.
+//! server's session had done its work before the engine could be told, its compile included
+//! ([`Graph::last_edit`]'s `ready_ns`; for a data Tx heard as its preview, its checks, PLANE-5),
+//! which the contract's budgets leave out. G11 counts a data Tx from its request.
 //!
 //! These time what the app does; they can't listen. The silent player renders into nothing and
 //! the server keeps no note trace, so what is heard after a seek or an edit is judged on the
@@ -32,6 +33,9 @@ use crate::report::Outcome;
 use crate::signal::{Rng, Summary};
 use crate::{Lab, Song, songs};
 
+mod watch;
+pub use watch::watcher;
+
 /// The silent player's buffer, in seconds: counted in every latency, as a device's would be.
 fn period(rate: u32) -> f64 {
     let frames: f64 = std::env::var("M2_AUDIO_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(480.0);
@@ -40,10 +44,14 @@ fn period(rate: u32) -> f64 {
 
 /// The project in `dir`, open and playing from 1:00 in a fresh [`Graph`].
 fn open(dir: &Path, song: &Song) -> Result<Arc<Graph>> {
+    open_with(Arc::new(Graph::default()), dir, song)
+}
+
+/// [`open`] in `graph`.
+fn open_with(graph: Arc<Graph>, dir: &Path, song: &Song) -> Result<Arc<Graph>> {
     if std::env::var("M2_AUDIO").as_deref() != Ok("none") {
         bail!("server gates run on the silent player only: set M2_AUDIO=none");
     }
-    let graph = Arc::new(Graph::default());
     graph.open(dir)?;
     graph.seek(song.beat(song.rate as u64 * 60))?;
     graph.transport("play")?;
@@ -199,25 +207,31 @@ impl Sampler {
     }
 }
 
-/// What edits through the server took: until heard, past the session's work (what is counted);
-/// the session's work; and of what is counted, the server's part before it sent the engine its
-/// message (lane data prepared, or a renderer built), then the wait for the callback that took it.
-/// One device buffer to the speaker makes up the rest.
+/// What edits through the server took: until heard, past the session's work before the engine
+/// could be told (what is counted: its compile included, and for a data Tx heard as its preview,
+/// its checks; PLANE-5); that work; and of what is counted, the server's part before it sent the
+/// engine its message (lane data prepared, or a renderer built), then the wait for the callback
+/// that took it. One device buffer to the speaker makes up the rest. A previewed edit's commit is
+/// made durable beside it: until then is said apart.
 #[derive(Default)]
 struct Timed {
     heard: Vec<f64>,
     session: Vec<f64>,
     prepare: Vec<f64>,
     taken: Vec<f64>,
+    durable: Vec<f64>,
 }
 
 impl Timed {
     fn add(&mut self, graph: &Graph, rate: u32) -> Result<()> {
         let t = graph.last_edit().context("the edit left no timing")?;
-        self.heard.push(heard_ms(graph, t, t.compiled_ns, rate)?);
+        self.heard.push(heard_ms(graph, t, t.ready_ns, rate)?);
         self.taken.push(taken_ms(graph, t, t.sent_ns, rate)?);
-        self.session.push((t.compiled_ns - t.requested_ns) as f64 / 1e6);
-        self.prepare.push((t.sent_ns - t.compiled_ns) as f64 / 1e6);
+        self.session.push((t.ready_ns - t.requested_ns) as f64 / 1e6);
+        self.prepare.push((t.sent_ns - t.ready_ns) as f64 / 1e6);
+        if t.previewed {
+            self.durable.push((t.compiled_ns - t.requested_ns) as f64 / 1e6);
+        }
         Ok(())
     }
 
@@ -227,6 +241,9 @@ impl Timed {
         out.info(format!("{on}the session's own work, its compile included (not counted)"), Summary::of(&self.session));
         out.info(format!("{on}of what is counted, the server's before it sends"), Summary::of(&self.prepare));
         out.info(format!("{on}then waiting for the next callback to take it (one device buffer at most)"), Summary::of(&self.taken));
+        if !self.durable.is_empty() {
+            out.info(format!("{on}heard as its preview (PLANE-5): from the request until its commit is durable"), Summary::of(&self.durable));
+        }
         out.check(format!("{on}audible within compile + {budget:.0} ms"), heard.max <= budget, format!("past the session's work: {heard}"));
     }
 }
@@ -825,67 +842,207 @@ fn barriers(dir: &Path, n: usize) -> Result<Vec<f64>> {
     Ok(out)
 }
 
+/// The disk G11 writes on.
+#[derive(Clone, Copy, PartialEq)]
+enum Disking {
+    Idle,
+    /// Another writer syncing 4 MB chunks.
+    Busy,
+    /// Idle, with 5,000 files in `assets/` that no lane names.
+    Assets,
+}
+
+/// The t01 lane as the file has it now, with its first note moved a sixteenth, back and forth by
+/// `i`'s parity.
+fn moved(dir: &Path, i: usize) -> Result<Vec<NoteClip>> {
+    let text = std::fs::read_to_string(dir.join("data/t01/notes.json"))?;
+    let LaneData::Notes(mut clips) = LaneData::read(&text, &LaneKind::Notes).map_err(|e| anyhow!("{e:?}"))? else { bail!("not notes") };
+    let c = clips.iter_mut().find(|c| !c.notes.is_empty()).context("no notes in t01")?;
+    c.notes[0].start += if i.is_multiple_of(2) { 0.25 } else { -0.25 };
+    Ok(clips)
+}
+
 /// G11 (PLANE-5, the data plane's 20 ms; the step 6 design's 19 calls it G10, which the range
-/// render already is): piano-roll writes through the
-/// server, each one note of `t01` moved (a `Clips` Tx, journaled and synced), from 1:00 playing:
-/// from the request to the block that plays it, and separately the barrier's durable sync. Run on
-/// an idle disk, then while another writer keeps it busy. Also the watcher's stat walk with a
-/// 5,000-file `assets/` beside the project.
+/// render already is): piano-roll writes through the server, each one note of `t01` moved (a
+/// `Clips` Tx, journaled and synced), from 1:00 playing. Each is heard as its commit's preview,
+/// sent once its checks pass, while the session makes it durable: from the request to the first
+/// block that plays it, and apart, until the commit is durable, and the barrier's durable sync
+/// alone. Run on an idle disk, while another writer keeps it busy, and with 5,000 files in
+/// `assets/`. On the idle and the busy disk also: a held arrow key's nudges, written as the piano
+/// roll writes them (the newest waiting for the write before); and on the idle one, a write the
+/// disk refuses, taken back. The watcher has a gate of its own ([`watcher`]).
 pub fn tx_data(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     let dir = lab.reference(&o.reference)?;
     let song = lab.compile(&dir)?;
     let mut out = Outcome::new("G11 tx-data", "PLANE-5, PLANE-1, WRITE-15", &format!("server on {}", o.reference.name()));
     let writes = if o.edits <= 2 { 20 } else { 200 };
-    for loaded in [false, true] {
-        let on = if loaded { "with another writer syncing 4 MB chunks: " } else { "idle disk: " };
-        let busy = if loaded { Some(Busy::start(&lab.dir("busy.bin"))?) } else { None };
+    let ms = |a: u64, b: u64| b.saturating_sub(a) as f64 / 1e6;
+    for disking in [Disking::Idle, Disking::Busy, Disking::Assets] {
+        let on = match disking {
+            Disking::Idle => "idle disk: ",
+            Disking::Busy => "with another writer syncing 4 MB chunks: ",
+            Disking::Assets => "idle disk, 5,000 files in assets/: ",
+        };
+        if disking == Disking::Assets {
+            let assets = dir.join("assets");
+            std::fs::create_dir_all(&assets)?;
+            for i in 0..5000 {
+                std::fs::write(assets.join(format!("take-{i:04}.wav")), b"")?;
+            }
+        }
+        let busy = if disking == Disking::Busy { Some(Busy::start(&lab.dir("busy.bin"))?) } else { None };
         let graph = open(&dir, &song)?;
         let first = graph.generation();
         let mut rng = Rng::new(o.seed);
-        let (mut total, mut heard, mut session, mut swapped) = (vec![], vec![], vec![], 0);
+        let (mut audible, mut heard, mut ready, mut waited, mut durable, mut after) = (vec![], vec![], vec![], vec![], vec![], vec![]);
+        let (mut previewed, mut back, mut swapped) = (0, 0, 0);
+        let mut last = vec![];
         for i in 0..writes {
-            let text = std::fs::read_to_string(dir.join("data/t01/notes.json"))?;
-            let LaneData::Notes(mut clips) = LaneData::read(&text, &LaneKind::Notes).map_err(|e| anyhow!("{e:?}"))? else {
-                bail!("not notes")
-            };
-            let c = clips.iter_mut().find(|c| !c.notes.is_empty()).context("no notes in t01")?;
-            // One note moved a sixteenth, back and forth.
-            c.notes[0].start += if i % 2 == 0 { 0.25 } else { -0.25 };
+            let clips = moved(&dir, i)?;
             let (token, revision) = session_and_revision(&graph)?;
             graph.write_notes(token, revision, "t01", "notes", &clips)?;
+            last = clips;
             let t = graph.last_edit().context("the edit left no timing")?;
-            total.push(taken_ms(&graph, t, t.requested_ns, song.rate)?);
+            audible.push(taken_ms(&graph, t, t.requested_ns, song.rate)?);
             heard.push(heard_ms(&graph, t, t.requested_ns, song.rate)?);
-            session.push((t.compiled_ns - t.requested_ns) as f64 / 1e6);
+            waited.push(taken_ms(&graph, t, t.sent_ns, song.rate)?);
+            ready.push(ms(t.requested_ns, t.ready_ns));
+            durable.push(ms(t.requested_ns, t.compiled_ns));
+            after.push(ms(t.sent_ns, t.compiled_ns));
+            previewed += usize::from(t.previewed);
+            back += usize::from(t.taken_back.is_some());
             swapped += usize::from(graph.generation() == first);
             std::thread::sleep(Duration::from_secs_f64(rng.range(0.05, 0.2)));
+        }
+        if disking != Disking::Assets {
+            last = burst(&mut out, on, &graph, &dir, song.rate)?;
+        }
+        if disking == Disking::Idle {
+            refused(&mut out, &graph, &dir, song.rate)?;
         }
         graph.close();
         let syncs = barriers(&dir, writes)?;
         drop(busy);
-        let t = Summary::of(&total);
+        // As the file has it: the canonical text of what was sent, its notes in order (FMT-8a).
+        let text = std::fs::read_to_string(dir.join("data/t01/notes.json"))?;
+        let mut sent = LaneData::Notes(last.clone());
+        sent.sort();
+        let on_disk = text == m2_song::lane::canonical(&sent);
+        let left = std::fs::read_dir(dir.join(".music2/tx"))?
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "json") && !e.file_name().to_string_lossy().starts_with('.'))
+            .count();
+        let (a, r) = (Summary::of(&audible), Summary::of(&ready));
         out.info(format!("{on}the barrier's durable sync alone (F_FULLFSYNC)"), Summary::of(&syncs));
-        out.info(format!("{on}the session's part: plan, check, journal, stage, sync, rename, accept"), Summary::of(&session));
+        out.check(format!("{on}the session's part before the preview (plan, check, pre-check), under 5 ms at p95"), r.p95 <= 5.0, r);
+        out.info(format!("{on}then waiting for the next callback to take the preview (one device buffer at most)"), Summary::of(&waited));
+        out.check(format!("{on}from the request to the first block that plays it (its preview), under 20 ms at p95"), a.p95 <= 20.0, a);
         out.info(format!("{on}to the speaker, one device buffer later"), Summary::of(&heard));
-        out.check(format!("{on}every write was a lane swap, never a new renderer"), swapped == writes, format!("{swapped} of {writes}"));
-        out.check(format!("{on}from the commit() call to the first block that plays it, under 20 ms at p95"), t.p95 <= 20.0, t);
+        out.info(format!("{on}from the request until the commit is durable and accepted (journal, sync, renames)"), Summary::of(&durable));
+        out.info(format!("{on}of that, the durable write after the preview was sent"), Summary::of(&after));
+        out.check(
+            format!("{on}every write was a preview lane swap, never a new renderer, and none was taken back"),
+            previewed == writes && swapped == writes && back == 0,
+            format!("{previewed} previewed, {swapped} swapped in the same renderer, {back} taken back, of {writes}"),
+        );
+        out.check(
+            format!("{on}the last write is on disk as sent, and no journal is left after close"),
+            on_disk && left == 0,
+            format!("on disk as sent: {on_disk}; {left} journals left"),
+        );
     }
-    // The watcher's stat walk, every 50 ms: with assets/ holding 5,000 files no lane names.
-    let assets = dir.join("assets");
-    std::fs::create_dir_all(&assets)?;
-    for i in 0..5000 {
-        std::fs::write(assets.join(format!("take-{i:04}.wav")), b"")?;
-    }
-    let mut walks = vec![];
-    for _ in 0..50 {
-        let t = Instant::now();
-        let l = m2_session::watch::listing(&dir, &Default::default());
-        walks.push(t.elapsed().as_secs_f64() * 1e3);
-        std::hint::black_box(l);
-    }
-    out.info(
-        "the watcher's stat walk with a 5,000-file assets/ (over 2 ms is the step 6 design's trigger for FSEvents)",
-        Summary::of(&walks),
-    );
     Ok(out)
+}
+
+/// G11's nudges: the piano roll writes each nudge of a held arrow key (`NoteView`'s `nudge`), the
+/// newest waiting while a write is on its way (`NoteView.send`), so each write waits for the one
+/// before to be durable. A hand makes a shape every 16 to 30 ms for 3 s (as fast as a key
+/// repeats), each stamped as it is made (timed from the gesture, as a seek is from its call); each
+/// shape that is written is timed from its stamp to the block that plays the write carrying it.
+/// Like the piano roll, the sender keeps the lane it shows and the revision the last write
+/// answered, asking the server for nothing else.
+fn burst(out: &mut Outcome, on: &str, graph: &Arc<Graph>, dir: &Path, rate: u32) -> Result<Vec<NoteClip>> {
+    let (shapes, made) = std::sync::mpsc::channel::<(usize, u64)>();
+    let hand = {
+        let g = graph.clone();
+        std::thread::spawn(move || {
+            let mut rng = Rng::new(7);
+            let t = Instant::now();
+            let mut k = 0;
+            while t.elapsed() < Duration::from_secs(3) {
+                if shapes.send((k, g.now_ns())).is_err() {
+                    break;
+                }
+                k += 1;
+                std::thread::sleep(Duration::from_secs_f64(rng.range(0.016, 0.030)));
+            }
+            k
+        })
+    };
+    let base = moved(dir, 0)?;
+    let at = |clips: &[NoteClip]| clips.iter().find(|c| !c.notes.is_empty()).map(|c| c.notes[0].start);
+    let (token, mut revision) = session_and_revision(graph)?;
+    let (mut timed, mut last, mut now) = (vec![], vec![], at(&base).map(|s| s - 0.25));
+    // Each write takes the newest shape made meanwhile; the ones it passed over are never sent.
+    while let Ok(mut shape) = made.recv() {
+        while let Ok(newer) = made.try_recv() {
+            shape = newer;
+        }
+        let (k, stamp) = shape;
+        let mut clips = base.clone();
+        let c = clips.iter_mut().find(|c| !c.notes.is_empty()).context("no notes in t01")?;
+        // Somewhere new each time, so every write changes the lane.
+        let mut start = c.notes[0].start.floor() + 0.0625 * (k % 15 + 1) as f64;
+        if Some(start) == now {
+            start += 0.03125;
+        }
+        c.notes[0].start = start.min(c.length - c.notes[0].length);
+        now = Some(c.notes[0].start);
+        let answer = graph.write_notes(token, revision, "t01", "notes", &clips)?;
+        revision = answer["revision"].as_u64().context("the write answered no revision")?;
+        last = clips;
+        let t = graph.last_edit().context("the edit left no timing")?;
+        timed.push(taken_ms(graph, t, stamp, rate)?);
+    }
+    let made = hand.join().map_err(|_| anyhow!("the hand panicked"))?;
+    out.info(
+        format!("{on}a held arrow key's nudges, each written once the write before replied ({} of {made} written): from the nudge to the block that plays it", timed.len()),
+        Summary::of(&timed),
+    );
+    Ok(last)
+}
+
+/// G11's refused write: `.music2/tx/` made read-only for one write, as a full or failing disk
+/// refuses a commit's journal. It is heard as its preview, then taken back (PLANE-5): its error says
+/// so, the swap back follows the preview, and nothing is accepted.
+fn refused(out: &mut Outcome, graph: &Arc<Graph>, dir: &Path, rate: u32) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let name = "idle disk: a write the disk refuses is taken back: its error says so, nothing is accepted, the accepted lane plays again";
+    let tx = dir.join(".music2/tx");
+    let (token, revision) = session_and_revision(graph)?;
+    let before = std::fs::read_to_string(dir.join("data/t01/notes.json"))?;
+    let generation = graph.generation();
+    std::fs::set_permissions(&tx, std::fs::Permissions::from_mode(0o500))?;
+    if std::fs::write(tx.join(".gate-probe"), b"").is_ok() {
+        let _ = std::fs::remove_file(tx.join(".gate-probe"));
+        std::fs::set_permissions(&tx, std::fs::Permissions::from_mode(0o755))?;
+        out.skip(name, "`.music2/tx/` is writable when read-only (run as root)");
+        return Ok(());
+    }
+    let written = graph.write_notes(token, revision, "t01", "notes", &moved(dir, 0)?);
+    std::fs::set_permissions(&tx, std::fs::Permissions::from_mode(0o755))?;
+    let t = graph.last_edit().context("the edit left no timing")?;
+    let said = written.as_ref().err().map(|e| e.to_string()).unwrap_or_default();
+    let (seq, back) = (t.seq.unwrap_or(0), t.taken_back.unwrap_or(0));
+    let heard = t.previewed && back > seq;
+    let span = if heard { taken_ms(graph, EditTiming { seq: Some(back), ..t }, 0, rate)? - taken_ms(graph, t, 0, rate)? } else { f64::NAN };
+    let kept = session_and_revision(graph)?.1 == revision && std::fs::read_to_string(dir.join("data/t01/notes.json"))? == before;
+    out.check(
+        name,
+        heard && said.ends_with("It played for a moment and was taken back.") && kept && graph.generation() == generation,
+        format!("previewed {}, taken back {}; kept {kept}; \"{said}\"", t.previewed, t.taken_back.is_some()),
+    );
+    let one = if span == 0.0 { " (one block took both: none of it was rendered)" } else { "" };
+    out.info("idle disk: from the refused write's preview to the block that swapped it back", format!("{span:.2} ms{one}"));
+    Ok(())
 }

@@ -12,11 +12,11 @@
 //! `~/Library/Caches/music2/` for the app and the CLI. Nothing here picks a folder by itself,
 //! so tests never write outside their own.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,9 @@ const RESOLUTION_NS: i128 = 2_000_000_000;
 /// The cache's file in its folder.
 const FILE: &str = "hashes.json";
 
+/// The hashes [`Sha::of_shared`] made, by the address of their text.
+static SHARED: Mutex<BTreeMap<usize, (Weak<str>, Sha)>> = Mutex::new(BTreeMap::new());
+
 /// A SHA-256 of a file's bytes.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Sha([u8; 32]);
@@ -35,6 +38,30 @@ pub struct Sha([u8; 32]);
 impl Sha {
     pub fn of(bytes: &[u8]) -> Sha {
         Sha(Sha256::digest(bytes).into())
+    }
+
+    /// The hash of a shared text, made once however many snapshots, bases and stores share it:
+    /// a project's texts are shared between its revisions, and a one-note edit names its lane's
+    /// hash several times (WRITE-12). Known by the text's address, held weakly, so an entry is only
+    /// ever its own text's: an address is never reused while a `Weak` to it lives.
+    pub fn of_shared(text: &Arc<str>) -> Sha {
+        let key = Arc::as_ptr(text) as *const u8 as usize;
+        let mine = |w: &Weak<str>| w.upgrade().is_some_and(|t| Arc::ptr_eq(&t, text));
+        if let Some((_, sha)) = SHARED.lock().unwrap_or_else(|e| e.into_inner()).get(&key).filter(|(w, _)| mine(w)) {
+            return *sha;
+        }
+        let sha = Sha::of(text.as_bytes());
+        Sha::remember(text, sha);
+        sha
+    }
+
+    /// Remember `sha` as `text`'s, which it is: made already by whoever has both.
+    pub fn remember(text: &Arc<str>, sha: Sha) {
+        debug_assert!(Sha::of(text.as_bytes()) == sha, "the hash remembered is the text's");
+        let mut shared = SHARED.lock().unwrap_or_else(|e| e.into_inner());
+        // Texts no longer shared by anything are let go as others come.
+        shared.retain(|_, (w, _)| w.strong_count() > 0);
+        shared.insert(Arc::as_ptr(text) as *const u8 as usize, (Arc::downgrade(text), sha));
     }
 
     /// Hash a file as it streams by.
@@ -322,5 +349,22 @@ mod tests {
         assert_eq!(again.hash(&f).unwrap(), Sha::of(b"x"));
         assert_eq!(again.reads(), 0, "read from the saved cache");
         std::fs::remove_dir_all(d).ok();
+    }
+
+    // WRITE-12 (the G11 fix's A.6): a shared text's hash is made once and is always its own: texts
+    // with the same bytes agree, and a text made where a freed one was never gets the old hash.
+    #[test]
+    fn a_shared_texts_hash_is_its_own() {
+        let a: Arc<str> = Arc::from("one text");
+        let b: Arc<str> = Arc::from("one text");
+        assert_eq!(Sha::of_shared(&a), Sha::of(b"one text"));
+        assert_eq!(Sha::of_shared(&b), Sha::of_shared(&a));
+        for i in 0..2000 {
+            // Freed and made again, likely at the same address.
+            let t: Arc<str> = Arc::from(format!("text {i}").as_str());
+            assert_eq!(Sha::of_shared(&t), Sha::of(t.as_bytes()), "{i}");
+            Sha::remember(&t, Sha::of(t.as_bytes()));
+        }
+        assert_eq!(Sha::of_shared(&a), Sha::of(b"one text"));
     }
 }

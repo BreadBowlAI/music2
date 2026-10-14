@@ -388,7 +388,7 @@ pub(crate) fn current_site<'a>(s: &'a Session, at: u64, call: &str) -> Result<&'
     }
     let carried = || -> Option<&Site> {
         let past = s.past(at)?;
-        let old = past.sites.iter().find(|x| x.file == file && x.ordinal == ordinal)?;
+        let old = past.sites().iter().find(|x| x.file == file && x.ordinal == ordinal)?;
         let p = Path::new(file);
         let to = crate::controls::carry_text(
             past.snapshot.files.get(p)?,

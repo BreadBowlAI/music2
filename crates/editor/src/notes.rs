@@ -13,6 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use m2_ir::Kind;
 use m2_session::Session;
@@ -22,9 +23,19 @@ use m2_song::{Arrangement, ClipId, DataPath, LaneAddr, LaneData, LaneKind, Note,
 use crate::plan;
 use crate::{EditError, Edited, ready};
 
-/// Each clip's canonical line by id, for the clips that have one.
-fn lines(d: &LaneData) -> BTreeMap<String, String> {
-    d.clip_lines().into_iter().filter_map(|(id, line)| Some((id?.to_string(), line))).collect()
+/// Each clip by id, for the clips that have one (of an id written twice, the last, as a map
+/// keeps it). Two clips are equal exactly when their canonical lines are: every number compares as
+/// it is written, `-0` as `0`, and a pitch's name stands for one pitch (WRITE-3).
+fn by_id(clips: &[NoteClip]) -> BTreeMap<&str, &NoteClip> {
+    clips.iter().filter_map(|c| Some((c.id.as_deref()?, c))).collect()
+}
+
+/// A notes lane's clips; none for data of another kind.
+fn notes_of(d: &LaneData) -> &[NoteClip] {
+    match d {
+        LaneData::Notes(c) => c,
+        _ => &[],
+    }
 }
 
 /// Replace the clips of `module`'s notes lane `lane`, as edited at revision `at`. Clips are
@@ -68,7 +79,7 @@ pub fn write_notes(s: &mut Session, at: u64, module: &str, lane: &str, clips: &[
         let same = "no change".to_string();
         Ok(Edited { revision: s.accepted().number, file: file.display().to_string(), before: same.clone(), after: same })
     };
-    if now.as_ref() == Some(&text) {
+    if now.as_deref() == Some(text.as_str()) {
         return same();
     }
     let old = match rev.compiled.data.lane(module, lane).map(|d| &**d) {
@@ -77,39 +88,51 @@ pub fn write_notes(s: &mut Session, at: u64, module: &str, lane: &str, clips: &[
     };
     let (before, after) = describe(&old, &clips, &rev.project.arrangement);
     let path = TxPath::lane(&addr);
+    // The text the accepted revision read is that read, shared: a client planned on an older
+    // revision whose file differs is the one parsed (PLANE-1).
     let was = match &base {
-        Some(t) => Some(LaneData::read(t, &LaneKind::Notes).map_err(|_| EditError::Stale { current: rev.number })?),
+        Some(t) => Some(match rev.compiled.data.parsed(&addr, &LaneKind::Notes, t) {
+            Some(d) => d.clone(),
+            None => Arc::new(LaneData::read(t, &LaneKind::Notes).map_err(|_| EditError::Stale { current: rev.number })?),
+        }),
         None => None,
     };
+    let wrote = by_id(&clips);
     // Put and deleted by id where every clip has an address; else the whole lane.
     let (op, put, gone) = match &was {
         Some(was) if was.addressable() => {
-            let (old, new) = (lines(was), lines(&new));
-            let put: Vec<String> = new.iter().filter(|(id, line)| old.get(*id) != Some(line)).map(|(id, _)| id.clone()).collect();
-            let gone: Vec<String> = old.keys().filter(|id| !new.contains_key(*id)).cloned().collect();
+            let old = by_id(notes_of(was));
+            let put: Vec<String> = wrote.iter().filter(|(id, c)| old.get(*id) != Some(c)).map(|(id, _)| id.to_string()).collect();
+            let gone: Vec<String> = old.keys().filter(|id| !wrote.contains_key(*id)).map(|id| id.to_string()).collect();
             if put.is_empty() && gone.is_empty() {
                 return same();
             }
-            let values = put.iter().map(|id| serde_json::from_str(&new[id]).expect("a canonical line is JSON")).collect();
+            let line = |id: &String| new.lines_of(id).pop().expect("a clip put is in the lane");
+            let values = put.iter().map(|id| serde_json::from_str(&line(id)).expect("a canonical line is JSON")).collect();
             (Op::Clips { lane: addr.clone(), put: values, delete: gone.clone() }, put, gone)
         }
         _ => {
-            let put = lines(&new).into_keys().collect();
-            let gone = was.as_ref().map(|w| lines(w).into_keys().collect()).unwrap_or_default();
+            let put = wrote.keys().map(|id| id.to_string()).collect();
+            let gone = was.as_ref().map(|w| by_id(notes_of(w)).into_keys().map(str::to_string).collect()).unwrap_or_default();
             (Op::Write { file: path.clone(), bytes: Payload::Text(text.clone().into()) }, put, gone)
         }
     };
     let lanes = Expect::Confined(Confined { lanes: vec![addr.clone()], ..Confined::default() });
     let mut tx = plan::planned(s, (before.clone(), after.clone()), vec![op], lanes);
     tx.id = id;
-    tx.base.insert(path, base.as_deref().map_or(Base::Absent, Base::text));
-    let wrote = lines(&new);
+    // Based on the text it was planned on: the accepted one's, hashed already, unless older (or
+    // not UTF-8, which `planned` bases on its bytes).
+    if base.as_deref() != now.as_deref() || rev.snapshot.not_utf8.contains_key(&file) {
+        tx.base.insert(path, base.as_deref().map_or(Base::Absent, Base::text));
+    }
     plan::run(s, tx, |_, checked| {
         // The planner's assertion: every clip it put reads as written, and none it deleted is
         // left; nothing but this lane's data changes (`Confined`).
-        let read = checked.candidate().compiled.data.lane(module, lane).map(|d| lines(d)).unwrap_or_default();
-        let kept =
-            put.iter().all(|id| read.get(id) == wrote.get(id)) && gone.iter().all(|id| wrote.contains_key(id) || !read.contains_key(id));
+        let lane = checked.candidate().compiled.data.lane(module, lane);
+        let read = lane.map(|d| by_id(notes_of(d))).unwrap_or_default();
+        let there = |id: &str| lane.is_some_and(|d| d.clips_with(id) > 0);
+        let kept = put.iter().all(|id| read.get(id.as_str()) == wrote.get(id.as_str()))
+            && gone.iter().all(|id| wrote.contains_key(id.as_str()) || !there(id));
         match kept {
             true => Ok(()),
             false => Err(EditError::Rejected(format!("writing {} would change more than the lane's notes", file.display()))),
@@ -649,6 +672,121 @@ mod tests {
         assert_eq!(d(&[], &one), "no clip → clip at bar 2 (2 bars)");
         assert_eq!(d(&one, &[clip(36.0, 8.0, vec![c4.clone()])]), "clip at bar 2 (2 bars) → clip at bar 10 (2 bars)");
         assert_eq!(d(&one, &[clip(4.0, 4.0, vec![c4])]), "clip at bar 2 (2 bars) → clip at bar 2 (1 bar)");
+    }
+
+    /// Each clip's canonical line by id: what the diff and the assertion compared before they
+    /// compared clips (WRITE-3).
+    fn lines(d: &LaneData) -> BTreeMap<String, String> {
+        d.clip_lines().into_iter().filter_map(|(id, line)| Some((id?.to_string(), line))).collect()
+    }
+
+    // WRITE-3 (the G11 fix's A.3): the clips put and deleted, found by comparing clips, are the
+    // ones whose canonical lines changed, over generated lanes: numbers of every kind, `-0`, named
+    // and fractional pitches, ids repeated and missing.
+    #[test]
+    fn a_note_write_puts_the_clips_whose_lines_changed() {
+        let mut x: u64 = 0x5eed_a3a3;
+        let mut below = |n: u64| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x % n
+        };
+        let numbers = [0.0, -0.0, 0.5, 1.0, 0.1 + 0.2, 0.3, 1e-9, 4.0, 60.0, 60.5, 127.0, 128.0];
+        let lane = |below: &mut dyn FnMut(u64) -> u64| -> Vec<NoteClip> {
+            (0..below(5))
+                .map(|_| NoteClip {
+                    id: [None, Some("a"), Some("b"), Some("c")][below(4) as usize].map(str::to_string),
+                    other_id: None,
+                    start: numbers[below(numbers.len() as u64) as usize],
+                    length: numbers[below(numbers.len() as u64) as usize],
+                    notes: (0..below(3))
+                        .map(|_| {
+                            let n = |below: &mut dyn FnMut(u64) -> u64| numbers[below(numbers.len() as u64) as usize];
+                            Note { pitch: n(below), start: n(below), length: n(below), velocity: n(below) }
+                        })
+                        .collect(),
+                })
+                .collect()
+        };
+        for case in 0..20_000 {
+            let was = LaneData::Notes(lane(&mut below));
+            // Often the same lane with one thing changed, so most clips match.
+            let mut new = match &was {
+                LaneData::Notes(c) if below(2) == 0 => c.clone(),
+                _ => lane(&mut below),
+            };
+            if let Some(c) = new.first_mut() {
+                match below(4) {
+                    0 => c.start = numbers[below(numbers.len() as u64) as usize],
+                    1 => c.notes.iter_mut().for_each(|n| n.pitch = numbers[below(numbers.len() as u64) as usize]),
+                    _ => {}
+                }
+            }
+            let mut sorted = LaneData::Notes(new);
+            sorted.sort();
+            let new = notes_of(&sorted);
+            let (old_lines, new_lines) = (lines(&was), lines(&sorted));
+            let line_put: Vec<&String> = new_lines.iter().filter(|(id, l)| old_lines.get(*id) != Some(l)).map(|(id, _)| id).collect();
+            let line_gone: Vec<&String> = old_lines.keys().filter(|id| !new_lines.contains_key(*id)).collect();
+            let (old, wrote) = (by_id(notes_of(&was)), by_id(new));
+            let put: Vec<&str> = wrote.iter().filter(|(id, c)| old.get(*id) != Some(c)).map(|(id, _)| *id).collect();
+            let gone: Vec<&str> = old.keys().filter(|id| !wrote.contains_key(*id)).copied().collect();
+            assert_eq!(put, line_put, "case {case}: {was:?} → {new:?}");
+            assert_eq!(gone, line_gone, "case {case}");
+        }
+    }
+
+    // PLANE-1, WRITE-12, WRITE-3: a lane read once is shared while its text is the file's: the
+    // lanes a write doesn't touch are the very data played before, and the one it writes reads as
+    // its file. An outside edit between two writes is planned on: one to another clip merges,
+    // one to the clip written is a conflict naming it.
+    #[test]
+    fn a_lane_write_after_an_outside_edit_is_planned_on_the_file() {
+        let fixture = Fixture::first_song();
+        let file = "data/bass/notes.json";
+        // A second clip, so one can change while the other is written.
+        let mut two = LaneData::read(&fixture.read(file).unwrap(), &LaneKind::Notes).unwrap();
+        let LaneData::Notes(c) = &mut two else { unreachable!() };
+        c.push(NoteClip { id: Some("second".into()), start: 32.0, ..c[0].clone() });
+        fixture.write(file, &canonical(&two));
+        let mut s = fixture.open();
+        let read = |s: &Session, m: &str, l: &str| s.accepted().compiled.data.lane(m, l).cloned().unwrap();
+        assert!(read(&s, "bass", "notes").addressable());
+        let mut edited = clips(&s, "bass", "notes");
+        edited[0].notes[0].velocity = 0.5;
+        let (keys, hats) = (read(&s, "keys", "chords"), read(&s, "hats", "hits"));
+        let done = s.write_notes(s.accepted().number, "bass", "notes", &edited).unwrap();
+        assert!(Arc::ptr_eq(&keys, &read(&s, "keys", "chords")) && Arc::ptr_eq(&hats, &read(&s, "hats", "hits")));
+        let fresh = || LaneData::read(&fixture.read(file).unwrap(), &LaneKind::Notes).unwrap();
+        assert_eq!(format!("{:?}", *read(&s, "bass", "notes")), format!("{:?}", fresh()), "the written lane reads as its file");
+
+        // Another clip changed on disk, not taken in: the next write keeps it.
+        let other = edited.len() - 1;
+        assert!(other > 0, "two clips at least");
+        let text = fixture.read(file).unwrap();
+        let mut outside = fresh();
+        let LaneData::Notes(c) = &mut outside else { unreachable!() };
+        c[other].notes[0].velocity = 0.25;
+        fixture.write(file, &canonical(&outside));
+        let mut again = clips(&s, "bass", "notes");
+        again[0].notes[0].velocity = 0.75;
+        s.write_notes(done.revision, "bass", "notes", &again).unwrap();
+        let LaneData::Notes(now) = fresh() else { unreachable!() };
+        assert_eq!((now[0].notes[0].velocity, now[other].notes[0].velocity), (0.75, 0.25), "both kept");
+        assert_eq!(format!("{:?}", *read(&s, "bass", "notes")), format!("{:?}", fresh()));
+        assert_ne!(fixture.read(file).unwrap(), text);
+
+        // The clip it writes changed on disk: a conflict, and the file is as the outside left it.
+        let mut outside = fresh();
+        let LaneData::Notes(c) = &mut outside else { unreachable!() };
+        c[0].notes[0].velocity = 1.0;
+        fixture.write(file, &canonical(&outside));
+        let mut third = clips(&s, "bass", "notes");
+        third[0].notes[0].velocity = 0.6;
+        let e = s.write_notes(s.accepted().number, "bass", "notes", &third).unwrap_err();
+        assert!(e.to_string().contains("changed since the edit was planned"), "{e}");
+        assert_eq!(fixture.read(file).unwrap(), canonical(&outside));
     }
 
     // FMT-13: bars are counted in the arrangement's meter.

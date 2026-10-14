@@ -64,6 +64,11 @@ impl Base {
     pub fn text(text: &str) -> Base {
         Base::WithText { sha: Sha::of(text.as_bytes()), text: text.into() }
     }
+
+    /// [`Base::text`] of a text a snapshot shares: neither copied nor hashed again.
+    pub fn shared(text: &Arc<str>) -> Base {
+        Base::WithText { sha: Sha::of_shared(text), text: text.clone() }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

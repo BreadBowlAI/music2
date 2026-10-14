@@ -192,6 +192,14 @@ fn data(segs: &[&str]) -> Option<DataPath> {
     }
 }
 
+/// Whether a file at project path `rel`, classed as `d`, is one a snapshot lists as Ignored
+/// (`Snapshot::unknown`): a file under `data/` that isn't a data path (FMT-7), but for dot files
+/// (`.DS_Store`, the system's, not a typo), or an asset's name in another Unicode form (FMT-15).
+pub fn listed_unknown(d: &DataPath, rel: &Path) -> bool {
+    let dot = rel.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'));
+    (d.unknown_data() && !dot) || (matches!(d, DataPath::Unknown(_)) && denormal_asset(rel).is_some())
+}
+
 /// The asset name a file in `assets/` would have, if only its Unicode form keeps it from being
 /// one (`cafe\u{301}.wav`, as some disks and copies write `café.wav`). Such a file is no asset
 /// (FMT-14), but a reference to its name can say where it is (FMT-15).

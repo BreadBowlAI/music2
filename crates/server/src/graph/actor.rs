@@ -7,7 +7,7 @@
 //! to the control plane in two phases: first what the engine and leases need, under the lock
 //! and with the engine messages, then the view and the news, before the request replies.
 
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -26,8 +26,24 @@ use m2_song::Snapshot;
 use serde_json::{Value, json};
 
 use super::lease::{Committed, PlaysView, Revs, State};
-use super::{Device, EditTiming, EngineView, Inner, Published, Shown, Timing, put_back, watcher};
+use super::{Device, EditTiming, EngineView, Inner, Published, Shown, Timing, preview, put_back, watcher};
 use crate::files;
+
+/// Free `old` on a thread of its own, so a large value (a view of every note) is never dropped on
+/// the actor's way to a reply. When that thread is behind, it is freed here, so nothing piles up.
+fn retire<T: Send + 'static>(old: T) {
+    static DROPS: std::sync::OnceLock<Option<mpsc::SyncSender<Box<dyn Send>>>> = std::sync::OnceLock::new();
+    let drops = DROPS.get_or_init(|| {
+        let (tx, rx) = mpsc::sync_channel::<Box<dyn Send>>(4);
+        let spawned = std::thread::Builder::new().name("m2-retire".into()).spawn(move || rx.into_iter().for_each(drop));
+        spawned.ok().map(|_| tx)
+    });
+    if let Some(tx) = drops
+        && let Err(mpsc::TrySendError::Full(old) | mpsc::TrySendError::Disconnected(old)) = tx.try_send(Box::new(old))
+    {
+        drop(old);
+    }
+}
 
 /// A request: run on the actor with its state, answering through what it captured.
 pub(super) type Job = Box<dyn FnOnce(&mut Actor) + Send>;
@@ -48,6 +64,9 @@ pub(crate) struct Actor {
     /// Tests: run between a settle's two phases, with what it published so far.
     #[cfg(test)]
     pub(super) between_phases: Option<Hook>,
+    /// Tests: every session opened from now on commits through the disk this makes.
+    #[cfg(test)]
+    pub(super) disk: Option<Box<dyn Fn() -> Box<dyn m2_session::tx::stage::Disk> + Send>>,
 }
 
 /// Serve requests until the [`super::Graph`] is dropped.
@@ -60,6 +79,8 @@ pub(super) fn run(inner: Arc<Inner>, jobs: mpsc::Receiver<Job>, events: HostEven
         fail_builds: false,
         #[cfg(test)]
         between_phases: None,
+        #[cfg(test)]
+        disk: None,
     };
     while let Ok(job) = jobs.recv() {
         // On the player's clock: 0 until there is a player (an open starts it).
@@ -98,8 +119,9 @@ impl Actor {
 pub(crate) struct Open {
     pub(crate) token: u64,
     pub(crate) session: Session,
-    /// The accepted revision the player is playing.
-    pub(crate) playing: u64,
+    /// The accepted revision the player is playing: None while a commit's candidate plays, as its
+    /// preview (PLANE-5), until the settle after it.
+    pub(crate) playing: Option<u64>,
     /// What the engine plays, to tell lane data from structure. None until the project is loaded
     /// into the player.
     pub(crate) plays: Option<Plays>,
@@ -120,6 +142,8 @@ pub(crate) struct Open {
     /// The plugin instances of the renderer last sent to the engine, for the next one built for it
     /// (HOST-5): an activation takes them over, with their state, tails and notes.
     pub(crate) carry: Carry,
+    /// The timeline last published, whose lanes the next one shares where they are the same.
+    timeline: Arc<super::Timeline>,
 }
 
 /// The renderer the engine plays: what it was built from, and how `SwapLane` reaches its lanes.
@@ -128,14 +152,15 @@ pub(crate) struct Plays {
     pub(crate) epoch: u64,
     pub(crate) generation: u64,
     rate: u32,
-    /// The accepted revision it plays: the one it was built from, or adopted since (lanes swapped
-    /// in, cells written). Every settle's engine path is the delta from it to the accepted one
-    /// (RENDER-26; the step 6 design's R4), so a change that never reached the engine (a build
-    /// that failed) is never skipped by a later one.
+    /// What it plays: an accepted revision (the one it was built from, or adopted since: lanes
+    /// swapped in, cells written), or a commit's candidate while that is its preview (PLANE-5).
+    /// Every settle's engine path is the delta from it to the accepted one (RENDER-26; the step 6
+    /// design's R4), so a change that never reached the engine (a build that failed) is never
+    /// skipped by a later one, and a preview whose commit failed is swapped back.
     pub(crate) revision: Arc<Revision>,
-    slots: Vec<LaneRef>,
+    pub(super) slots: Arc<[LaneRef]>,
     /// The room each notes lane's scheduler has: data that needs more is activated instead.
-    caps: Vec<Option<Caps>>,
+    pub(super) caps: Arc<[Option<Caps>]>,
     /// The controls of the code it plays: after a build that failed, what updates aim at.
     controls: Arc<HashMap<String, Control>>,
     /// Its cells' slots, and which cells hold each value of the revision it plays: what gesture
@@ -204,9 +229,50 @@ fn value_writes(old: &Flat, new: &Flat) -> Option<Vec<(CellId, f64)>> {
 
 /// What turns what a renderer plays into another revision without a new renderer: cell writes and
 /// lane swaps.
-struct Reach {
-    cells: Vec<(CellId, f64)>,
-    swaps: Vec<(u32, LaneSwap)>,
+pub(super) struct Reach {
+    pub(super) cells: Vec<(CellId, f64)>,
+    pub(super) swaps: Vec<(u32, LaneSwap)>,
+}
+
+/// What turns a renderer playing `from` (its lanes `slots`, each notes lane's room `caps`) into one
+/// playing `to` without a new renderer, decided by the delta between the two (RENDER-26,
+/// RENDER-22; the step 6 design's 5.5): the cells of the constants whose values alone changed, and
+/// the notes and control lanes whose data changed, each fitting the scheduler playing it. Whoever
+/// wrote the files (PLANE-1). None: a new renderer must play it (anything structural, a plugin
+/// state, an asset a clip plays, the arrangement, an audio lane).
+pub(super) fn reach_to(from: &Revision, slots: &[LaneRef], caps: &[Option<Caps>], to: &Revision) -> Option<Reach> {
+    let d = m2_session::tx::delta_between(from, to);
+    if d.structural() || !d.states.is_empty() || !d.assets.is_empty() || d.arrangement {
+        return None;
+    }
+    // The same build plays the same constants: nothing to compare.
+    let cells = match Arc::ptr_eq(from.compiled.code(), to.compiled.code()) {
+        true => vec![],
+        false => value_writes(&from.compiled.flat, &to.compiled.flat)?,
+    };
+    let rate = to.project.sample_rate();
+    let data = &to.compiled.data;
+    let mut swaps = vec![];
+    for addr in &d.lanes {
+        let (module, lane) = (addr.module.as_str(), addr.lane.as_str());
+        // A lane no node reads plays nothing, before or after.
+        let Some(slot) = slots.iter().position(|s| s.module == module && s.lane == lane) else { continue };
+        let swap = match slots[slot].kind {
+            Kind::Events(_) => {
+                let notes = notes_data(data, module, lane, rate as f64);
+                // More notes at once than its scheduler holds: a renderer sized for them.
+                if !caps[slot]?.fits(notes.needs()) {
+                    return None;
+                }
+                LaneSwap::Notes(Arc::new(notes))
+            }
+            Kind::Control(_) => LaneSwap::Control(Arc::new(data.control(module, lane))),
+            // Its clips must be rendered first: a new renderer.
+            Kind::Audio(_) => return None,
+        };
+        swaps.push((slot as u32, swap));
+    }
+    Some(Reach { cells, swaps })
 }
 
 /// The state's `read_only` (WRITE-17): null for the lock's holder, else why, WRITE-18's message,
@@ -314,7 +380,7 @@ impl Open {
 
     /// What the engine plays once `r`, built from the accepted revision, plays in `epoch`'s player.
     fn describe(&self, r: &Renderer, epoch: u64) -> Plays {
-        let slots = r.lane_slots().to_vec();
+        let slots: Arc<[LaneRef]> = r.lane_slots().into();
         Plays {
             epoch,
             generation: r.generation(),
@@ -367,49 +433,16 @@ impl Open {
         Ok(())
     }
 
-    /// What turns what `p` plays into the accepted revision without a new renderer, decided by
-    /// the delta between the two (RENDER-26, RENDER-22; the step 6 design's 5.5): the cells of the
-    /// constants whose values alone changed, and the notes and control lanes whose data changed,
-    /// each fitting the scheduler playing it. Whoever wrote the files (PLANE-1). None: a new
-    /// renderer must play it (anything structural, a plugin state, an asset a clip plays, the
-    /// arrangement, an audio lane).
+    /// What turns what `p` plays into the accepted revision without a new renderer ([`reach_to`]).
     fn reach(&self, p: &Plays) -> Option<Reach> {
-        let rev = self.session.accepted();
-        let d = m2_session::tx::delta_between(&p.revision, rev);
-        if d.structural() || !d.states.is_empty() || !d.assets.is_empty() || d.arrangement {
-            return None;
-        }
-        let cells = value_writes(&p.revision.compiled.flat, &rev.compiled.flat)?;
-        let rate = rev.project.sample_rate();
-        let data = &rev.compiled.data;
-        let mut swaps = vec![];
-        for addr in &d.lanes {
-            let (module, lane) = (addr.module.as_str(), addr.lane.as_str());
-            // A lane no node reads plays nothing, before or after.
-            let Some(slot) = p.slots.iter().position(|s| s.module == module && s.lane == lane) else { continue };
-            let swap = match p.slots[slot].kind {
-                Kind::Events(_) => {
-                    let notes = notes_data(data, module, lane, rate as f64);
-                    // More notes at once than its scheduler holds: a renderer sized for them.
-                    if !p.caps[slot]?.fits(notes.needs()) {
-                        return None;
-                    }
-                    LaneSwap::Notes(Arc::new(notes))
-                }
-                Kind::Control(_) => LaneSwap::Control(Arc::new(data.control(module, lane))),
-                // Its clips must be rendered first: a new renderer.
-                Kind::Audio(_) => return None,
-            };
-            swaps.push((slot as u32, swap));
-        }
-        Some(Reach { cells, swaps })
+        reach_to(&p.revision, &p.slots, &p.caps, self.session.accepted())
     }
 
     /// How the accepted revision reaches `device`'s engine, its renderer built if it needs one.
     fn way(&mut self, device: &Device, owner: &m2_plugins::Owner, fail: bool) -> Way {
         let rev = self.session.accepted();
         let (number, rate) = (rev.number, rev.project.sample_rate());
-        if self.loaded(device) && number == self.playing {
+        if self.loaded(device) && self.playing == Some(number) {
             return Way::Same;
         }
         // Opened with code that doesn't compile (WRITE-20): silent until it does, then loaded.
@@ -475,19 +508,20 @@ impl Open {
     }
 
     /// What reads return for the accepted revision.
-    fn shown(&self) -> Shown {
+    fn shown(&mut self) -> Shown {
+        self.timeline = Arc::new(self.timeline());
         let s = &self.session;
         let rev = s.accepted();
         let diagnostics = files::diagnostics(s);
         let read_only = read_only(s.access());
         Shown {
             revision: rev.number,
+            timeline: self.timeline.clone(),
             state: json!({
                 "session": self.token,
                 "name": rev.project.manifest.project.name,
                 "dir": rev.project.dir,
                 "view": s.view(),
-                "timeline": s.timeline(),
                 "can_undo": s.can_undo(),
                 "can_redo": s.can_redo(),
                 "effects": s.effects(),
@@ -512,6 +546,72 @@ impl Open {
             read_only: s.access().refusal().map(|d| d.message),
         }
     }
+
+    /// The accepted revision's timeline, as JSON: a lane that is the same data, shown the same way,
+    /// as in the timeline last published is that lane's JSON again, shared, so an edit of one lane
+    /// makes one lane's JSON.
+    fn timeline(&self) -> super::Timeline {
+        use m2_editor::{TimelineLane, TimelineTrack};
+        let data = &self.session.accepted().compiled.data;
+        let view = self.session.timeline();
+        let mut head = serde_json::Map::new();
+        for (k, v) in [("tempo", value(&view.tempo)), ("meter", value(&view.meter)), ("end", value(&view.end))] {
+            head.insert(k.into(), v);
+        }
+        let tracks = view.tracks.into_iter().map(|TimelineTrack { module, label, track, lanes }| {
+            let lanes = lanes.into_iter().map(|mut lane| {
+                let key = lane.key().to_string();
+                let shown = data.lane(&module, &key).cloned();
+                // The lane without its clips: what else it shows.
+                let clips = match &mut lane {
+                    TimelineLane::Notes { clips, .. } => Clips::Notes(std::mem::take(clips)),
+                    TimelineLane::Control { clips, .. } => Clips::Control(std::mem::take(clips)),
+                    TimelineLane::Audio { clips, .. } => Clips::Audio(std::mem::take(clips)),
+                };
+                let rest = serde_json::to_string(&lane).expect("a lane serialises");
+                let same = self.timeline.lane(&module, &key).filter(|l| {
+                    l.head == rest && match (&l.data, &shown) {
+                        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                        (None, None) => true,
+                        _ => false,
+                    }
+                });
+                let json = match same {
+                    Some(l) => l.json.clone(),
+                    None => {
+                        match (&mut lane, clips) {
+                            (TimelineLane::Notes { clips, .. }, Clips::Notes(c)) => *clips = c,
+                            (TimelineLane::Control { clips, .. }, Clips::Control(c)) => *clips = c,
+                            (TimelineLane::Audio { clips, .. }, Clips::Audio(c)) => *clips = c,
+                            _ => unreachable!("taken from this lane"),
+                        }
+                        Arc::new(value(&lane))
+                    }
+                };
+                super::TimelineLaneJson { key, data: shown, head: rest, json }
+            });
+            let lanes = lanes.collect();
+            let mut head = match value(&TimelineTrack { module: module.clone(), label, track, lanes: vec![] }) {
+                Value::Object(m) => m,
+                _ => unreachable!("a track is an object"),
+            };
+            head.remove("lanes");
+            super::TimelineRow { module, head, lanes }
+        });
+        super::Timeline::new(head, tracks.collect())
+    }
+}
+
+/// A timeline lane's clips, taken out while the rest of it is compared.
+enum Clips {
+    Notes(Vec<m2_song::NoteClip>),
+    Control(Vec<m2_song::ControlClip>),
+    Audio(Vec<m2_song::AudioClip>),
+}
+
+/// A part of the timeline as a value, as `json!` makes it.
+fn value(v: &impl serde::Serialize) -> Value {
+    serde_json::to_value(v).expect("a timeline serialises")
 }
 
 impl Actor {
@@ -537,7 +637,7 @@ impl Actor {
             }
             o.code_rev = code_rev;
         }
-        if o.playing == number
+        if o.playing == Some(number)
             && let Some(p) = &mut o.plays
         {
             p.controls = o.controls.clone();
@@ -636,7 +736,7 @@ impl Actor {
         })();
         match &sent {
             Ok(_) => {
-                o.playing = number;
+                o.playing = Some(number);
                 let rev = o.session.accepted();
                 if let Some(t) = inner.timing.lock().as_mut() {
                     (t.tempo, t.rate) = (rev.tempo(), rev.project.sample_rate());
@@ -657,7 +757,7 @@ impl Actor {
             generation: p.generation,
             slots: p.cell_slots.clone(),
             cells: p.cells.clone(),
-            origins: if o.playing == number {
+            origins: if o.playing == Some(number) {
                 None
             } else if failed {
                 origins.clone()
@@ -723,13 +823,17 @@ impl Actor {
         let shown = Arc::new(o.shown());
         let aliases = code_changed.then(|| Arc::new(o.aliases()));
         let mut cp = inner.control.lock();
+        let mut old = None;
         if let Some(p) = cp.open.as_mut().filter(|p| p.engine.token == token) {
-            p.shown = shown;
+            old = Some(std::mem::replace(&mut p.shown, shown));
             if let Some(a) = aliases {
                 p.aliases = a;
             }
         }
         drop(cp);
+        // The view it replaces is a tree of every note: freed elsewhere, neither under the lock
+        // nor before the reply (or the next request) on this thread.
+        retire(old);
         Settled { changed: matches!(sent, Ok(Sent::Reached(_) | Sent::Renderer)), sent_ns, published_ns: inner.now_ns() }
     }
 
@@ -740,7 +844,7 @@ impl Actor {
         let reopening = self.open.as_mut().filter(|o| same(o)).map(|o| o.session.unlock()).is_some();
         // The watcher starts from the folder as it was before it is read: a write meanwhile is a
         // change it takes in.
-        let before = watcher::Before::take(dir);
+        let before = watcher::Before::take(dir, self.inner.walk_only.load(std::sync::atomic::Ordering::Relaxed), &self.inner.wake);
         let opened = self.open_session(dir).and_then(|s| self.play(s, before));
         if opened.is_err()
             && reopening
@@ -763,7 +867,7 @@ impl Actor {
         let mut o = Open {
             token,
             session,
-            playing: number,
+            playing: Some(number),
             plays: None,
             audio: audio::Cache::default(),
             sent: None,
@@ -772,6 +876,7 @@ impl Actor {
             codes: VecDeque::new(),
             types,
             carry: Carry::none(),
+            timeline: Arc::default(),
         };
         let built = match o.session.accepted().has_code() {
             true => {
@@ -833,6 +938,10 @@ impl Actor {
         // Files in the project by their names in it (`song.ts:22:5`), so the reason fits a toast.
         let root = format!("{}/", dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf()).display());
         let said = |d: &[m2_ir::Diagnostic]| anyhow!(d.iter().map(|d| d.to_string().replace(&root, "")).collect::<Vec<_>>().join("\n"));
+        #[cfg(test)]
+        if let Some(disk) = &self.disk {
+            return Session::open_with_disk(dir, packages()?, "music2", disk()).map_err(|d| said(&d));
+        }
         Session::open_as(dir, packages()?, "music2").map_err(|d| said(&d))
     }
 
@@ -1056,12 +1165,40 @@ impl Actor {
         let o = self.open.as_mut().context("no project is open")?;
         o.check_token(token)?;
         let requested_ns = inner.now_ns();
-        let result = edit(&mut o.session);
-        let compiled_ns = inner.now_ns();
         o.sent = None;
+        let (result, heard) = self.previewing(edit);
+        let compiled_ns = inner.now_ns();
         let s = self.settle(None);
-        let seq = self.open.as_ref().and_then(|o| o.sent);
-        *inner.last_edit.lock() = Some(EditTiming { requested_ns, compiled_ns, sent_ns: s.sent_ns, published_ns: s.published_ns, seq });
+        let last = self.open.as_ref().and_then(|o| o.sent);
+        // A previewed edit was sent before it was durable; one whose commit failed was swapped
+        // back by the settle (PLANE-5).
+        let timing = match heard.previewed {
+            Some((seq, ready_ns, sent_ns)) => EditTiming {
+                requested_ns,
+                ready_ns,
+                compiled_ns,
+                sent_ns,
+                published_ns: s.published_ns,
+                seq: Some(seq),
+                previewed: true,
+                taken_back: last.filter(|l| result.is_err() && *l != seq),
+            },
+            None => EditTiming {
+                requested_ns,
+                ready_ns: compiled_ns,
+                compiled_ns,
+                sent_ns: s.sent_ns,
+                published_ns: s.published_ns,
+                seq: last,
+                previewed: false,
+                taken_back: None,
+            },
+        };
+        *inner.last_edit.lock() = Some(timing);
+        let result = result.map_err(|e| heard.said(&e.to_string()));
+        // Its user heard it or was told it isn't saved yet: every window hears how it ended,
+        // whoever sent it (PLANE-5).
+        inner.notices.lock().extend(heard.told(result.as_ref().err().map(String::as_str)));
         let (e, more) = result.map_err(|e| anyhow!("{e}"))?;
         let mut answer = json!({"file": e.file, "before": e.before, "after": e.after, "revision": e.revision});
         if let (Some(a), Value::Object(more)) = (answer.as_object_mut(), more) {
@@ -1072,12 +1209,23 @@ impl Actor {
 
     /// Take in a batch the watcher settled (WRITE-19): its paths as the folder has them now, each
     /// only while it still reads as it settled (one written to since goes on in the next batch),
-    /// and nothing else of the folder. Returns whether clients should refresh.
-    pub(super) fn settled(&mut self, token: u64, paths: BTreeSet<PathBuf>) -> bool {
+    /// and nothing else of the folder, which is neither read nor listed. Returns whether clients
+    /// should refresh.
+    pub(super) fn settled(&mut self, token: u64, ready: watcher::Ready) -> bool {
+        let requested_ns = self.inner.now_ns();
         let Some(o) = self.open.as_mut().filter(|o| o.token == token) else { return false };
-        let Ok(snapshot) = Snapshot::read(&o.session.accepted().project.dir) else { return false };
+        let watcher::Ready { paths, unknown, named } = ready;
+        // The assets the watcher tracked by their hashes are hashed, so each reads as it settled.
+        let hashed = |p: &Path| named.contains(&m2_song::path::slashed(p));
+        let Ok(snapshot) = Snapshot::read_paths(&o.session.accepted().project.dir, &paths, &hashed, unknown) else { return false };
         let paths = match self.inner.watch.lock().as_mut().filter(|w| w.token == token) {
-            Some(w) => w.settle.confirm(&paths, &|p| snapshot.sha(p)),
+            Some(w) => {
+                let kept = w.settle.confirm(&paths, &|p| snapshot.sha(p));
+                // Written again since it settled: it goes on in the next batch, which the next tick
+                // looks at whether an event names it or not.
+                w.requeue(paths.difference(&kept).map(|p| m2_song::path::slashed(p)));
+                kept
+            }
             None => return false,
         };
         if paths.is_empty() {
@@ -1091,7 +1239,13 @@ impl Actor {
         if !taken.draft_changed {
             return false;
         }
-        self.settle(None);
+        o.sent = None;
+        let compiled_ns = self.inner.now_ns();
+        let s = self.settle(None);
+        let seq = self.open.as_ref().and_then(|o| o.sent);
+        let (sent_ns, published_ns) = (s.sent_ns, s.published_ns);
+        let timing = EditTiming { requested_ns, ready_ns: compiled_ns, compiled_ns, sent_ns, published_ns, seq, ..EditTiming::default() };
+        *self.inner.last_taken_in.lock() = Some(timing);
         true
     }
 
@@ -1102,7 +1256,7 @@ impl Actor {
         let Some(o) = self.open.as_mut() else { return false };
         let has_code = o.session.accepted().has_code();
         let behind = match self.inner.device() {
-            Ok(d) => has_code && (!o.loaded(&d) || o.playing != o.session.accepted().number),
+            Ok(d) => has_code && (!o.loaded(&d) || o.playing != Some(o.session.accepted().number)),
             // Let go of: the settle starts a new one, and loads the project into it where it was.
             Err(_) => true,
         };
@@ -1115,7 +1269,7 @@ impl Actor {
         let Some(o) = self.open.as_mut() else { return false };
         let changed = o.session.refresh();
         let behind = match self.inner.device() {
-            Ok(d) => !o.loaded(&d) || o.playing != o.session.accepted().number,
+            Ok(d) => !o.loaded(&d) || o.playing != Some(o.session.accepted().number),
             // Let go of: the settle starts a new one, and loads the project into it where it was.
             Err(_) => true,
         };
@@ -1158,12 +1312,52 @@ impl Actor {
                 Err(r) => refused(&r),
             });
         }
-        let done = o.session.commit(tx);
         o.sent = None;
+        let (done, heard) = self.previewing(|s| s.commit(tx));
         self.settle(None);
+        // Heard in the app, or said there to be not saved yet: the app hears how it ended too,
+        // not only the agent (PLANE-5).
+        let said = done.as_ref().err().map(|r| heard.said(&r.to_string()));
+        let told = heard.told(said.as_deref()).map(|t| if said.is_some() { format!("An agent's edit: {t}") } else { t });
+        self.inner.notices.lock().extend(told);
         Ok(match done {
             Ok(c) => (200, m2_editor::json::committed(&c)),
-            Err(r) => refused(&r),
+            Err(r) => {
+                let (status, mut answer) = refused(&r);
+                // Heard before it failed (PLANE-5): an agent is told as the app is.
+                if heard.previewed.is_some()
+                    && let Some(why) = answer.as_object_mut().and_then(|a| a.values_mut().next()).and_then(Value::as_object_mut)
+                {
+                    if !heard.interrupted {
+                        why.insert("taken_back".into(), json!(true));
+                    }
+                    if let Some(Value::String(m)) = why.get_mut("message") {
+                        *m = heard.said(m);
+                    }
+                }
+                (status, answer)
+            }
         })
+    }
+
+    /// Run `edit` on the open project's session with the preview hook installed (PLANE-5): a data
+    /// commit is heard once it passed its checks, while the session makes it durable. What the
+    /// hook sent is recorded in what plays before the settle that follows, whatever the edit did:
+    /// one that panics is brought back to the accepted revision first, then the panic goes on.
+    fn previewing<R>(&mut self, edit: impl FnOnce(&mut Session) -> R) -> (R, preview::Heard) {
+        let inner = self.inner.clone();
+        let o = self.open.as_mut().expect("an open project");
+        let (lent, before) = preview::lend(o);
+        o.session.before_write(Some(preview::hook(inner, lent.clone())));
+        let ran = catch_unwind(AssertUnwindSafe(|| edit(&mut o.session)));
+        o.session.before_write(None);
+        let heard = preview::give_back(&self.inner, &lent, o, before);
+        match ran {
+            Ok(r) => (r, heard),
+            Err(panic) => {
+                self.settle(None);
+                std::panic::resume_unwind(panic)
+            }
+        }
     }
 }

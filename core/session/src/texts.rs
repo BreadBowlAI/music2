@@ -22,7 +22,21 @@ pub struct Texts {
 impl Texts {
     /// Keep `text`, the content of a text file whose bytes are exactly it.
     pub fn put(&mut self, text: &str) -> Sha {
-        let sha = Sha::of(text.as_bytes());
+        self.put_hashed(Sha::of(text.as_bytes()), text)
+    }
+
+    /// [`Texts::put`] for a text whose hash is known already: `sha` is `text`'s.
+    pub fn put_hashed(&mut self, sha: Sha, text: &str) -> Sha {
+        self.keep(sha, || text.into())
+    }
+
+    /// [`Texts::put`] of a text a snapshot shares: kept as that same text, hashed once
+    /// ([`Sha::of_shared`]).
+    pub fn put_shared(&mut self, text: &Arc<str>) -> Sha {
+        self.keep(Sha::of_shared(text), || text.clone())
+    }
+
+    fn keep(&mut self, sha: Sha, text: impl FnOnce() -> Arc<str>) -> Sha {
         if self.by.contains_key(&sha) {
             // Used again: it goes last.
             if let Some(i) = self.order.iter().position(|s| *s == sha) {
@@ -31,9 +45,11 @@ impl Texts {
             self.order.push_back(sha);
             return sha;
         }
-        self.by.insert(sha, text.into());
-        self.order.push_back(sha);
+        let text = text();
+        debug_assert!(Sha::of(text.as_bytes()) == sha, "the hash given is the text's");
         self.bytes += text.len();
+        self.by.insert(sha, text);
+        self.order.push_back(sha);
         while (self.bytes > BYTES || self.order.len() > TEXTS)
             && let Some(old) = self.order.pop_front()
         {

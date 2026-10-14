@@ -103,6 +103,7 @@ diff /tmp/base-head/SHA256SUMS /tmp/base-now/SHA256SUMS
 | `s6-builders` | fix | 55 | the first step-6 builders: rename a track's label in place, automate a knob from its menu, move a renamed track's whole folder from the Needs-attention strip; each one Tx and one undo step |
 | `s6-write` | fix | 35 | the step-6 write path: an outside lane write taken in once it settles; a lane written in two halves never shows empty; a project another program holds opens read-only and writes after Retry; broken code opens in the code view, silent, and plays once a save compiles |
 | `s6-fixes` | fix | 19 | step-6 review fixes: outside edits still taken in after a file that existed for one poll; a Tx naming a file the disk spells another way is refused; refusals answer 422 with diagnostics; a renamed folder holding a non-data file is offered file by file |
+| `g11-play` | fix | 24 | play first, save beside it (PLANE-5): a piano-roll note is written; one the disk refuses (`.music2/tx/` read-only) is taken back with one message saying what wasn't saved, the clip shown as it was and nothing accepted, and an agent's Tx is answered `taken_back` and said in the app; stopped, a refused click's message doesn't say it played; once the disk takes writes, the next edit saves and undo goes back through the saved ones |
 
 Known failures at 933f4de: none confirmed. `node run.mjs all` passed every suite with the counts
 above twice on the debug build, and every suite but one on the release build. That one, `s5-knobs`,

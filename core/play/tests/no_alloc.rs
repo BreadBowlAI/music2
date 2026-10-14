@@ -191,6 +191,11 @@ fn trap_run(device_rate: u32) {
         a.data.tempo(),
         SR as f64,
     );
+    // A's notes as they are: what a preview's swap back puts back (PLANE-5).
+    let notes_a = || match &**a.data.lane("song", "notes").unwrap() {
+        m2_song::LaneData::Notes(c) => NotesData::build(c, a.data.tempo(), SR as f64),
+        _ => unreachable!(),
+    };
     let (player, d) = Player::driven(device_rate);
     player.open(ra).unwrap();
     let (steps, rx) = mpsc::channel::<Step>();
@@ -258,7 +263,15 @@ fn trap_run(device_rate: u32) {
     // Three wraps, voices stolen all along.
     step(s(1.6), true);
     player.set_loop(None).unwrap();
-    player.swap_lane(gen_a, 0, LaneSwap::Notes(Arc::new(more))).unwrap();
+    let more = Arc::new(more);
+    player.swap_lane(gen_a, 0, LaneSwap::Notes(more.clone())).unwrap();
+    step(s(0.3), true);
+    // A preview whose commit failed is swapped back (PLANE-5): once it played, and once in the
+    // same block it was taken in.
+    player.swap_lane(gen_a, 0, LaneSwap::Notes(Arc::new(notes_a()))).unwrap();
+    step(s(0.3), true);
+    player.swap_lane(gen_a, 0, LaneSwap::Notes(more)).unwrap();
+    player.swap_lane(gen_a, 0, LaneSwap::Notes(Arc::new(notes_a()))).unwrap();
     step(s(0.3), true);
     player.activate(rb).unwrap();
     target.store(1, Ordering::Relaxed);
@@ -292,7 +305,7 @@ fn trap_run(device_rate: u32) {
     steps.send(Step::Done).unwrap();
     let (mut d, kept) = audio.join().unwrap();
     let lanes = kept.iter().filter(|g| matches!(g, Gone::Engine(Retired::Lane(_)))).count();
-    assert_eq!(lanes, 121, "every swap was taken and retired, none dropped");
+    assert_eq!(lanes, 124, "every swap was taken and retired, none dropped");
     let old: Vec<&Renderer> =
         kept.iter().filter_map(|g| if let Gone::Engine(Retired::Renderer(r)) = g { Some(&**r) } else { None }).collect();
     assert_eq!(old.iter().map(|r| r.generation()).collect::<Vec<_>>(), [gen_a]);

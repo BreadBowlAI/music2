@@ -209,8 +209,8 @@ fn prepare(dir: &Path) -> Result<(), String> {
 }
 
 /// Whether the volume holding `dir` is local to this machine (`MNT_LOCAL`): on a network volume
-/// the lock stops only this machine's programs.
-fn local_volume(dir: &Path) -> bool {
+/// the lock stops only this machine's programs, and file system events report only its writes.
+pub fn local_volume(dir: &Path) -> bool {
     if fault(Fault::NotLocal) {
         return false;
     }
