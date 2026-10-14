@@ -1,0 +1,13 @@
+#!/bin/sh
+# ci/stub-cc: a C compiler for compile checks only. It writes an empty object wherever it is asked
+# to and succeeds. `cargo check` and `cargo clippy` never link, so C that a build script compiles
+# for macOS is never used. Never use it to build.
+out=
+prev=
+for a in "$@"; do
+  case "$prev" in -o) out=$a ;; esac
+  case "$a" in -Fo*) out=${a#-Fo} ;; /Fo*) out=${a#/Fo} ;; esac
+  prev=$a
+done
+[ -n "$out" ] && : > "$out"
+exit 0

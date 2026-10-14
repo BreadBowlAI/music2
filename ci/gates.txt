@@ -1,0 +1,3 @@
+# ci/gates.txt: the m2-gates options the Mac run times (one line; # starts a comment).
+# The platform step: G11's durable commit and the watcher, whose code this step changes.
+--server tx-data watcher

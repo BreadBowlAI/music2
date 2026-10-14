@@ -1,0 +1,7 @@
+#!/bin/sh
+# ci/stub-ar: an archiver for compile checks only: an empty archive (the 8-byte ar header) at the
+# first argument that ends in .a or .lib.
+for a in "$@"; do
+  case "$a" in *.a|*.lib|-out:*|/OUT:*) f=${a#-out:}; f=${f#/OUT:}; printf '!<arch>\n' > "$f"; exit 0 ;; esac
+done
+exit 0

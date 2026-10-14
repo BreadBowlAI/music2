@@ -5,17 +5,19 @@
 #   e2e/baseline.sh --tree <checkout> <out-dir>     render with the checkout as it is on disk
 #   M2=<m2 binary> e2e/baseline.sh --tree <checkout> <out-dir>    ... with an m2 you already built
 #
-# Cases (the same seven as before): the full renders of examples/first-song, examples/resample,
-# templates/starter and templates/empty, and `--from 4 --seconds 6` of first-song, starter and
-# resample. Each fixture is rendered from a fresh copy, with a scratch HOME, M2_AUDIO=none and the
-# checkout's own std. <out-dir>/SHA256SUMS lists the WAVs; compare two folders with
+# Cases (eight): the full renders of examples/first-song, examples/resample, templates/starter
+# and templates/empty, and `--from 4 --seconds 6` of each of them. Each fixture is rendered from a
+# fresh copy, with a scratch HOME, M2_AUDIO=none and the checkout's own std. <out-dir>/SHA256SUMS
+# lists the WAVs; compare two folders with
 #   diff <a>/SHA256SUMS <b>/SHA256SUMS        (or: cd <b> && shasum -a 256 -c <a>/SHA256SUMS)
+# e2e/renders.sha256 is the record every OS must match (PLAT-4): cd <out-dir> && shasum -a 256 -c
+# <repo>/e2e/renders.sha256 (ci/check.sh does this).
 # CARGO_TARGET_DIR is honoured (default: <out-dir>/.target, removed afterwards); PROFILE=debug builds
 # a debug m2 (default release). The repo is the one this script lives in unless REPO is set.
 set -euo pipefail
 
 REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
-usage() { sed -n '2,13p' "$0" >&2; exit 2; }
+usage() { sed -n '2,16p' "$0" >&2; exit 2; }
 [[ $# -eq 2 || $# -eq 3 ]] || usage
 if [[ $1 == --tree ]]; then
   [[ $# -eq 3 ]] || usage
@@ -57,6 +59,7 @@ r templates/empty templates-empty.wav
 r examples/first-song examples-first-song-from4-for6.wav --from 4 --seconds 6
 r templates/starter templates-starter-from4-for6.wav --from 4 --seconds 6
 r examples/resample examples-resample-from4-for6.wav --from 4 --seconds 6
+r templates/empty templates-empty-from4-for6.wav --from 4 --seconds 6
 rm -rf "$OUT/fx" "$OUT/home"
 (cd "$OUT" && shasum -a 256 *.wav > SHA256SUMS && cat SHA256SUMS)
 echo "rendered from ${COMMIT:-$SRC} into $OUT" >&2
