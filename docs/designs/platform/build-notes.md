@@ -153,3 +153,20 @@ The cell test's flake: its last check asks that the reader drained more than onc
 cells. The load average was about 36 to 43 on 32 threads then (four slices' checks at once), so the writer can finish before the
 reader gets a turn. This slice changes no code it runs (`CellSlots` in `m2-runtime`). Re-run afterwards: 50 of 50
 alone, and m2-runtime's whole test binary 10 of 10. No earlier log kept here shows it failing.
+
+**The independent check** (label `check-S3`, at `e891a0b`; logs in `~/m2-runs/check-check-S3/`)
+
+| What | Result |
+|---|---|
+| The diff against §13.2's S3 row, §5.4, ABI-1 (§6.1) and PLAT-5 (§6.2) | All there. Nothing else changed beyond the three small edits above: no test, gate, rule or macOS code. `core/kernel` is named nowhere outside `docs/designs/`. |
+| `ci/check.sh` (13 min) | §13.1's S1 row with the std.wasm row PASS. Rust tests: the 11 of §4.1 by name (686 passed). Clippy stops at lint 1; without `-D warnings` it lists the 15 lints of §4.2. Suites: 6 of §4.4's 7 (`notes-proj` passed: its race, S2's); live3b 51 of 51. Renders 6 of 8, the same 8 files as the builder's run (resample `d902bacf…`, from4 `ea243ccc…`, as in `ground/facts.md`). The renders.json test prints resample `e2e93ef0…` and the other three as recorded. The cell test passed. |
+| `std/build.sh --check` in a second checkout (a longer path, `TMPDIR` under `/home`), and a rebuild in place there into another target folder | The committed bytes each time, with no `/home/` path in them. One line added to `kernel/src/lib.rs`, or one byte changed in `std.wasm`, makes `--check` fail. |
+| The old and new `std.wasm` | The same 176 exports and the same imports. |
+| The kernels' clippy in a fresh target folder, for the host and for `wasm32-unknown-unknown` | Clean. |
+| `bit_identity` in release, the ignored test included | 4 of 4 (94 s). |
+
+**Fixed by the check** (a follow-up commit)
+
+| What | Why |
+|---|---|
+| `std/build.sh`'s `build()` turns a relative target folder into a full path before it runs cargo | cargo runs inside `std/kernels-src`, so it built into `std/kernels-src/<folder>` while `cp` read `<folder>` from where the script was run. `CARGO_TARGET_DIR=target std/build.sh` failed. Worse: when that folder already held an older `m2_std_kernels.wasm`, the script copied the old file over `std.wasm` and said nothing (shown in a scratch copy with a planted file). A relative `TMPDIR` made `--check` fail the same way. Now all of them build the committed bytes; `--check` still fails on a changed byte. |

@@ -7,8 +7,10 @@
 set -e
 STD=$(cd "$(dirname "$0")" && pwd)
 build() { # <std folder> <target folder>: build, then print the wasm's path
-  (cd "$1/kernels-src" && CARGO_TARGET_DIR=$2 cargo build --locked --release --target wasm32-unknown-unknown) >&2 || return 1
-  echo "$2/wasm32-unknown-unknown/release/m2_std_kernels.wasm"
+  # cargo runs in kernels-src, so a relative target folder (CARGO_TARGET_DIR, TMPDIR) is taken from here first
+  case $2 in /*) t=$2 ;; *) t=$PWD/$2 ;; esac
+  (cd "$1/kernels-src" && CARGO_TARGET_DIR=$t cargo build --locked --release --target wasm32-unknown-unknown) >&2 || return 1
+  echo "$t/wasm32-unknown-unknown/release/m2_std_kernels.wasm"
 }
 if [ "${1:-}" = --check ]; then
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/m2-std.XXXXXX")
