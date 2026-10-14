@@ -259,3 +259,113 @@ fn an_asset_a_clip_plays_is_in_the_delta() {
     let delta = after(&d, &mut s, |d| d.write_bytes("assets/keys-bounce.wav", &other));
     assert_eq!(delta.assets, ["keys-bounce.wav"], "{delta:?}");
 }
+
+/// Whether some segment of `name` is a frame of component `id` (`std:delay@…`).
+fn in_frame(name: &[String], id: &str) -> bool {
+    name.iter().any(|seg| seg.starts_with(&format!("{id}@")))
+}
+
+// ID-13 (identity note F2), RENDER-25: a wrap saved as a file, as an agent or the code editor saves
+// it, keeps every name the wrapped call's nodes had, on the engine's path (`delta_between`): on the
+// reference project's `pluck(…)` and nested `reverb(pad(…))`, the delta adds the delay's nodes and
+// removes none, and the unwrap removes exactly them again.
+#[test]
+fn a_wrap_by_a_file_write_keeps_the_wrapped_names() {
+    let d = Dir::new();
+    crate::reference::write(&d.0, &crate::reference::Reference { tracks: 3, repeats: 1, ..crate::reference::Reference::P16 }).unwrap();
+    let mut s = d.open();
+    for (file, call) in [("tracks/t02.ts", "pluck(lane.notes(\"notes\"))"), ("tracks/t03.ts", "pad(lane.notes(\"notes\"))")] {
+        let text = d.read(file);
+        assert!(text.contains(call), "{text}");
+        let wrapped = text.replace(call, &format!("delay({call})"));
+        let delta = after(&d, &mut s, |d| d.write(file, &wrapped));
+        assert!(delta.removed.is_empty() && delta.values.is_empty(), "{file}: {delta:?}");
+        assert!(!delta.added.is_empty() && delta.added.iter().all(|n| in_frame(&n.name, "std:delay")), "{file}: {:?}", delta.added);
+        let delta = after(&d, &mut s, |d| d.write(file, &text));
+        assert!(delta.added.is_empty() && delta.values.is_empty(), "{file}: {delta:?}");
+        assert!(!delta.removed.is_empty() && delta.removed.iter().all(|n| in_frame(&n.name, "std:delay")), "{file}: {:?}", delta.removed);
+    }
+}
+
+/// A saw through a lowpass, then a delay, each with a literal on its own line.
+const ADJACENT: &str = "import { hz, song } from \"@m2/core\";\nimport { osc, svf } from \"std/dsp\";\nimport { delay } from \"std/fx\";\n\
+                        export default song(() => {\n  const a = svf.lowpass(osc.saw(hz(110)), hz(800));\n  const b = delay(a, { mix: 0.3 });\n  return b;\n});\n";
+
+// ID-13 (identity note F1), WRITE-8: two literals on adjacent lines edited in one save are two
+// value changes, not a structural edit that would restart the delay between them.
+#[test]
+fn adjacent_value_edits_are_values() {
+    let d = Dir::with(&[("song.ts", ADJACENT)]);
+    let mut s = d.open();
+    let delta = after(&d, &mut s, |d| d.write("song.ts", &ADJACENT.replace("hz(800)", "hz(950)").replace("mix: 0.3", "mix: 0.25")));
+    assert!(!delta.structural() && delta.values.len() == 2, "{delta:?}");
+}
+
+// ID-15, PKG-9 (identity note F3): a component swapped at one call is a new instance, though its
+// `(` is kept, so the old delay's `mix` is never the new chorus's; an alias of the same component
+// written at the call (`delay` → `echo`) is the same instance, and changes nothing.
+#[test]
+fn a_component_swap_at_one_call_is_new_and_an_alias_is_not() {
+    let base = "import { hz, song } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { delay } from \"std/fx\";\n\
+                export default song(() => delay(osc.saw(hz(110))));\n";
+    let d = Dir::with(&[("song.ts", base)]);
+    let mut s = d.open();
+    let swapped = base.replace("{ delay }", "{ chorus }").replace("delay(osc", "chorus(osc");
+    let delta = after(&d, &mut s, |d| d.write("song.ts", &swapped));
+    assert!(delta.values.is_empty(), "{:?}", delta.values);
+    assert!(delta.removed.iter().any(|n| in_frame(&n.name, "std:delay") && n.name.iter().any(|x| x == "@mix")), "{:?}", delta.removed);
+    assert!(delta.added.iter().any(|n| in_frame(&n.name, "std:chorus") && n.name.iter().any(|x| x == "@mix")), "{:?}", delta.added);
+    after(&d, &mut s, |d| d.write("song.ts", base));
+    let alias = base.replace("{ delay }", "{ delay as echo }").replace("delay(osc", "echo(osc");
+    assert!(after(&d, &mut s, |d| d.write("song.ts", &alias)).is_empty());
+}
+
+// ID-7, ID-13 (identity note F6): keys are unique per parent key frame, so nothing positional above
+// a `key()` frame names what it holds: moving the component call around it renames none of it.
+#[test]
+fn names_ignore_everything_above_a_key_frame() {
+    let lib = "import { component, key, port, signature, type Audio } from \"@m2/core\";\nimport { delay } from \"std/fx\";\n\
+               export const chain = component(\n  { id: \"chain\", label: \"Chain\", signature: signature<(x: Audio) => Audio>(), inputs: { in: port.audio() }, output: port.audio() },\n  \
+               (x: Audio) => key(\"inner\", () => delay(x)),\n);\n";
+    let song = "import { hz, song } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { chain } from \"./lib/chain\";\n\
+                export default song(() => chain(osc.saw(hz(110))));\n";
+    let d = Dir::with(&[("song.ts", song), ("lib/chain.ts", lib)]);
+    let mut s = d.open();
+    let old = s.accepted_arc();
+    let moved = song.replace("song(() => chain(osc.saw(hz(110))))", "song(() => {\n  const x = osc.saw(hz(110));\n  return chain(x);\n})");
+    d.write("song.ts", &moved);
+    assert!(s.refresh());
+    let new = s.accepted();
+    let coords = super::coords_between(&old.snapshot, &new.snapshot);
+    let open = new.compiled.sites.iter().find(|x| x.callee == "chain").expect("the chain call").open;
+    let at = Positions { coords: &coords, new: true };
+    assert!(matches!(at.point("song.ts", open as usize), crate::text::Point::Own { .. }), "the chain call is new text");
+    let delta = delta_between(&old, new);
+    let touched: Vec<&Vec<String>> = delta.added.iter().chain(&delta.removed).map(|n| &n.name).collect();
+    assert!(touched.iter().all(|n| !in_frame(n, "std:delay")), "{touched:?}");
+    let g = Side { compiled: &new.compiled, snapshot: &new.snapshot, at }.graph();
+    let held: Vec<&Vec<String>> = g.nodes.keys().filter(|n| n.iter().any(|x| x == "key:inner")).collect();
+    assert!(!held.is_empty() && held.iter().all(|n| !in_frame(n, "chain")), "{held:?}");
+}
+
+// WRITE-8, ID-13: the old side of a comparison names every point by its own offset, so its names
+// are its revision's alone, whatever it is compared with.
+#[test]
+fn old_side_names_are_own_offsets() {
+    let d = Dir::with(&[("song.ts", ADJACENT)]);
+    let mut s = d.open();
+    let old = s.accepted_arc();
+    d.write("song.ts", &ADJACENT.replace("  const b", "  // b\n  const b").replace("hz(800)", "hz(900)"));
+    assert!(s.refresh());
+    let coords = super::coords_between(&old.snapshot, &s.accepted().snapshot);
+    assert!(!coords.is_empty());
+    let none = BTreeMap::new();
+    let names = |c| -> Vec<Vec<String>> {
+        Side { compiled: &old.compiled, snapshot: &old.snapshot, at: Positions { coords: c, new: false } }
+            .graph()
+            .nodes
+            .into_keys()
+            .collect()
+    };
+    assert_eq!(names(&coords), names(&none));
+}

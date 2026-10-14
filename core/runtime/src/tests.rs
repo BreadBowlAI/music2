@@ -255,7 +255,6 @@ fn feedback_delays_one_block() {
 fn std_manifest_matches_its_kernels() {
     // Instantiating every kernel checks its port counts against the manifest.
     let pk = std_packages();
-    let mut store = Store::new(&pk.engine, StoreLimitsBuilder::new().build());
     let mut ids: Vec<String> = pk.kernel_sigs().map(|s| s.id.clone()).collect();
     ids.sort();
     assert!(ids.len() >= 20, "{ids:?}");
@@ -270,20 +269,7 @@ fn std_manifest_matches_its_kernels() {
             op: FOp::Const(0.0),
             outputs: sig.outputs.iter().map(|_| Kind::Audio(1)).collect(),
         };
-        let tl = DataSet::empty();
-        let (owner, mut fresh) = (m2_plugins::Owner::discard(), crate::Fresh);
-        let mut b = Builder {
-            store: &mut store,
-            packages: &pk,
-            data: &tl,
-            sample_rate: 48_000.0,
-            slots: &[],
-            lanes: &[],
-            source: &mut fresh,
-            owner: &owner,
-            ordinals: Default::default(),
-        };
-        b.kernel(&node, &id, 1, &inputs).unwrap_or_else(|e| panic!("{e:#}"));
+        KernelInst::new(&pk, &node, &id, 1, &inputs, 48_000.0, 0).unwrap_or_else(|e| panic!("{e:#}"));
     }
 }
 

@@ -244,8 +244,10 @@ fn equal_notes_are_told_apart() {
     assert_eq!((held, o), (5, vec![72_000]), "the shorter duplicate shortened to 3 beats");
 }
 
-// RENDER-26a, RENDER-9: over 2000 random blocks of seeks, stops, plays, loops and swaps, every
-// voice whose gate is open plays a note its scheduler holds, and nothing is held after stop.
+// RENDER-26a, RENDER-9, RENDER-25: over 2000 random blocks of seeks, stops, plays, loops, swaps and
+// activations (an effect added and removed, the voices kept), some with a jump on the activation's
+// block line, every voice whose gate is open plays a note its scheduler holds, and nothing is held
+// after stop.
 #[test]
 fn random_edits_and_jumps_never_strand_a_gate() {
     let notes_of = |seed: &mut u64| {
@@ -258,18 +260,35 @@ fn random_edits_and_jumps_never_strand_a_gate() {
         json!({"clips": [{"id": "a", "start": 0, "length": 32, "notes": n}, {"id": "a", "start": 0, "length": 32, "notes": [n[0].clone()]}]})
     };
     let mut seed = 11;
-    let song = pad(notes_of(&mut seed));
-    let (player, mut d) = play(&song);
+    let first = notes_of(&mut seed);
+    let song = pad(first.clone());
+    let delayed = synth(0.05, json!([{"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "v"}}]), "d", first, at_bpm(120.0));
+    let songs = [&song, &delayed];
+    let r = song.renderer();
+    let mut sent = (0, r.info());
+    let (player, mut d) = playing(r, SR);
     for _ in 0..2000 {
-        match lcg(&mut seed) % 40 {
-            0 => drop(player.seek((lcg(&mut seed) % 64) as f64 / 4.0)),
+        let jump = |seed: &mut u64| match lcg(seed) % 6 {
+            0 => drop(player.seek((lcg(seed) % 64) as f64 / 4.0)),
             1 => player.stop(),
-            2 | 3 => player.play(),
-            4 => drop(player.set_loop(Some(((lcg(&mut seed) % 8) as f64, 8.0 + (lcg(&mut seed) % 8) as f64)))),
-            5 => drop(player.set_loop(None)),
+            2 => player.play(),
+            3 => drop(player.set_loop(Some(((lcg(seed) % 8) as f64, 8.0 + (lcg(seed) % 8) as f64)))),
+            4 => drop(player.set_loop(None)),
+            _ => {}
+        };
+        match lcg(&mut seed) % 40 {
+            0..=5 => jump(&mut seed),
             6 | 7 => {
                 let g = engine(&mut d).current().unwrap().generation();
                 player.swap_lane(g, 0, lane_data(&song, notes_of(&mut seed))).unwrap();
+            }
+            8 | 9 => {
+                // An edit, prepared against the plan sent last, and a jump on its block line.
+                let next = 1 - sent.0;
+                let r = songs[next].after(songs[sent.0], &sent.1);
+                sent = (next, r.info());
+                player.activate(r).unwrap();
+                jump(&mut seed);
             }
             _ => {}
         }
@@ -277,6 +296,7 @@ fn random_edits_and_jumps_never_strand_a_gate() {
         assert!(engine(&mut d).current().unwrap().gates_are_owned(), "a gate is open with no note to close it");
     }
     assert_eq!(engine(&mut d).current().unwrap().dropped_ons(), 0);
+    assert!(engine(&mut d).activations() > 50 && engine(&mut d).refused_activations() == 0);
     player.set_loop(None).unwrap();
     settles(&player, &mut d, "after 2000 random blocks");
 }
@@ -542,7 +562,9 @@ fn tails_decay_after_stop() {
 #[test]
 fn an_activation_never_jumps_back() {
     let song = pad(json!({"clips": [{"start": 0, "length": 32, "notes": [{"pitch": 60, "start": 0, "length": 32}]}]}));
-    let (player, mut d) = play(&song);
+    let r0 = song.renderer();
+    let info = r0.info();
+    let (player, mut d) = playing(r0, SR);
     let mut last = 0;
     let mut sent = None;
     let mut generation = 0;
@@ -551,7 +573,7 @@ fn an_activation_never_jumps_back() {
         assert!(s.pos >= last, "went back from {last} to {}", s.pos);
         last = s.pos;
         if done >= SR as usize && sent.is_none() {
-            let r: Renderer = song.renderer();
+            let r: Renderer = song.after(&song, &info);
             generation = r.generation();
             sent = Some(player.activate(r).unwrap().1);
         }

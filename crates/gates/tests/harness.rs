@@ -139,22 +139,27 @@ fn the_live_engine_passes_every_gate() {
     }
 }
 
-// HOST-5's negative reference: an engine that builds every plugin instance anew fails the checks
-// that carrying exists for, or they measure nothing. Skipped without the plugins on `CLAP_PATH`.
+// HOST-5's and RENDER-25's negative reference: an engine that keeps no instance across an
+// activation fails the checks the arena exists for, or they measure nothing: the untouched tracks'
+// tails and the wrapped instrument's whole mix (G7b), and with the plugins on `CLAP_PATH` the
+// instances kept.
 #[cfg(feature = "engine")]
 #[test]
-fn an_engine_that_never_carries_fails_the_carry_checks() {
+fn an_engine_without_the_arena_fails_the_keep_checks() {
     m2_plugins::test_main_thread();
-    let t = Temp::new("no-carry");
+    let t = Temp::new("no-arena");
     let mut lab = Lab::new(&t.0).unwrap();
-    lab.carry = false;
+    lab.arena = false;
     let o = Opts { loop_minutes: 0.2, seeks: 2, ..Opts::quick() };
+    let tails = gates::run("tails", &mut lab, Kind::Engine, &o).unwrap();
+    assert!(failed(&tails, "untouched tracks bit-identical") && failed(&tails, "every stateful node"), "{tails}");
+    assert!(failed(&tails, "the whole mix bit-identical") && failed(&tails, "t02's pluck kept"), "{tails}");
     let outcome = gates::run("plugins", &mut lab, Kind::Engine, &o).unwrap();
     if outcome.verdict() == Verdict::Skip {
         eprintln!("skipping: {outcome}");
         return;
     }
-    for check in ["carried every plugin instance", "plays on at its level", "ids never repeat", "20 activations create no instance"] {
+    for check in ["kept every plugin instance", "plays on at its level", "ids never repeat", "20 activations create no instance"] {
         assert!(failed(&outcome, check), "{check}: {outcome}");
     }
 }
@@ -164,5 +169,5 @@ fn every_gate_is_named() {
     let t = Temp::new("names");
     let mut lab = Lab::new(&t.0).unwrap();
     assert!(gates::run("nope", &mut lab, Kind::Replay, &quick()).is_err());
-    assert_eq!(GATES.len(), 9);
+    assert_eq!(GATES.len(), 10);
 }

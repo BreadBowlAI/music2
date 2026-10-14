@@ -20,6 +20,8 @@ memchr.workspace = true
 [dev-dependencies]
 # The kill tests' children: a signal's number, and no core dump on Linux (OS-72).
 libc.workspace = true
+# The probe plugin and the tests' plugin main thread (HOST-2): keyed plugins in `continues`.
+m2-plugins.workspace = true
 
 [features]
 # Tests of other crates: a session whose commits go through a disk they give

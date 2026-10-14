@@ -147,7 +147,9 @@ unsafe impl Sync for Core {}
 struct MainSide {
     info: Info,
     active: bool,
-    last_saved: Option<[u8; 32]>,
+    /// The hash of the state it holds: the one it last saved or last loaded, at creation included
+    /// (HOME-6). None while it plays its defaults.
+    holds: Option<[u8; 32]>,
 }
 
 pub(crate) struct AudioSide {
@@ -257,6 +259,7 @@ impl PluginHost for InProcess {
         // Loaded here, never on the main thread: a bundle whose load waits on the main queue
         // would deadlock it (§3.3).
         let lib = library(&plugin.bundle)?;
+        let _shown = owner.creating(&plugin.name);
         let (found, owner) = (plugin.clone(), owner.clone());
         exec.run(move || create_main(lib, found, state, owner))?
     }
@@ -272,12 +275,14 @@ impl PluginHost for InProcess {
         });
     }
 
-    fn load_state(&self, h: Handle, blob: Arc<Blob>) -> Result<()> {
+    fn load_state(&self, h: Handle, blob: Arc<Blob>) -> Result<bool> {
         on_main(h, move |c| {
-            if c.main().last_saved == Some(blob.sha) {
-                return Ok(());
+            if c.main().holds == Some(blob.sha) {
+                return Ok(false);
             }
-            load_state(c.plugin, &blob.bytes).with_context(|| c.main().info.found.id.clone())
+            load_state(c.plugin, &blob.bytes).with_context(|| c.main().info.found.id.clone())?;
+            c.main().holds = Some(blob.sha);
+            Ok(true)
         })
     }
 
@@ -337,7 +342,7 @@ impl PluginHost for InProcess {
         let (tx, rx) = bounded(1);
         reply_on_main(h, tx, |c| {
             let blob = Blob::new(save_state(c.plugin).with_context(|| c.main().info.found.id.clone())?);
-            c.main().last_saved = Some(blob.sha);
+            c.main().holds = Some(blob.sha);
             Ok(blob)
         });
         rx
@@ -425,7 +430,7 @@ fn create_main(lib: Arc<Library>, found: Found, state: Option<Arc<Blob>>, owner:
         host,
         _lib: lib,
         owner: owner.clone(),
-        main: UnsafeCell::new(MainSide { info: info.clone(), active: false, last_saved: None }),
+        main: UnsafeCell::new(MainSide { info: info.clone(), active: false, holds: state.as_ref().map(|b| b.sha) }),
         audio: UnsafeCell::new(AudioSide {
             active: false,
             processing: false,

@@ -14,6 +14,7 @@ use std::sync::Arc;
 use m2_ir::{Module, Node, Op, Origin, Unit};
 use m2_script::Descriptor;
 use m2_script::sites::Site;
+use m2_session::text::Edits;
 use m2_session::{Compiled, Home, Revision, Session};
 
 use crate::EditError;
@@ -266,10 +267,10 @@ pub fn controls_by_id(s: &Session) -> HashMap<String, Control> {
     controls(s).into_iter().map(|c| (c.id.clone(), c)).collect()
 }
 
-/// The control `id` named at revision `at`, as it is in the accepted revision: carried
-/// forward when the files changed without touching its call (WRITE-12, WRITE-22). `current`
-/// is the accepted revision's [`controls_by_id`], so many can be carried for one walk of the
-/// graph. Never builds anything.
+/// The control `id` named at revision `at`, as it is in the accepted revision: carried forward
+/// when the files changed without touching its call, by the correspondence every carried range
+/// uses (`Edits::between`: WRITE-12, WRITE-22). `current` is the accepted revision's
+/// [`controls_by_id`], so many can be carried for one walk of the graph. Never builds anything.
 pub fn carry(s: &Session, at: u64, id: &str, current: &HashMap<String, Control>) -> Result<Control, EditError> {
     resolve_with(s, at, id, |id| current.get(id).cloned())
 }
@@ -291,8 +292,8 @@ fn resolve_with(s: &Session, at: u64, id: &str, find: impl Fn(&str) -> Option<Co
         let past = s.past(at)?;
         let (old, arg) = site_by_id(past.sites(), id)?;
         let file = Path::new(&old.file);
-        let to =
-            carry_text(past.snapshot.files.get(file)?, accepted.snapshot.files.get(file)?, old.start as usize, old.end as usize)? as u32;
+        let (was, is) = (past.snapshot.files.get(file)?, accepted.snapshot.files.get(file)?);
+        let to = Edits::between(was, is).carry(old.start as usize..old.end as usize)?.start as u32;
         let site = accepted.compiled.sites.iter().find(|x| x.file == old.file && x.start == to && x.end == to + (old.end - old.start))?;
         find(&format!("{}#{}/{}", site.file, site.ordinal, arg.join(".")))
     };
@@ -307,60 +308,4 @@ pub(crate) fn site_by_id<'a>(sites: &'a [Site], id: &str) -> Option<(&'a Site, V
     let ordinal: u32 = ordinal.parse().ok()?;
     let site = sites.iter().find(|s| s.file == file && s.ordinal == ordinal)?;
     Some((site, arg.split('.').map(str::to_string).collect()))
-}
-
-/// Where bytes `start..end` of `old` are in `new`, if no change touched them (WRITE-12): they lie
-/// in the text the two share before the first difference or after the last one, or on lines a
-/// line diff keeps (edits above and below them, as when an agent adds an import and a line at
-/// the end). Conservative either way: a change on one of the range's own lines touches it. Ids
-/// and leases carry by it, so a lease lives as long as its whole call's lines are untouched.
-pub fn carry_text(old: &str, new: &str, start: usize, end: usize) -> Option<usize> {
-    if old == new {
-        return Some(start);
-    }
-    carry_ends(old, new, start, end).or_else(|| carry_lines(old, new, start, end))
-}
-
-/// [`carry_text`] by the common prefix and suffix alone: everything between the first and last
-/// difference counts as changed.
-pub(crate) fn carry_ends(old: &str, new: &str, start: usize, end: usize) -> Option<usize> {
-    let p = old.bytes().zip(new.bytes()).take_while(|(a, b)| a == b).count();
-    let s = old.as_bytes()[p..].iter().rev().zip(new.as_bytes()[p..].iter().rev()).take_while(|(a, b)| a == b).count();
-    let to = if end <= p {
-        start
-    } else if start >= old.len() - s {
-        start + new.len() - old.len()
-    } else {
-        return None;
-    };
-    (new.get(to..to + (end - start)) == old.get(start..end)).then_some(to)
-}
-
-/// [`carry_text`] by a line diff: the lines `start..end` spans must all be kept, in one run.
-fn carry_lines(old: &str, new: &str, start: usize, end: usize) -> Option<usize> {
-    if start >= old.len() || end < start || end > old.len() {
-        return None;
-    }
-    // Each line with its newline, and where it starts.
-    fn lines(s: &str) -> Vec<(usize, &str)> {
-        let mut at = 0;
-        s.split_inclusive('\n')
-            .map(|l| {
-                at += l.len();
-                (at - l.len(), l)
-            })
-            .collect()
-    }
-    let (a, b) = (lines(old), lines(new));
-    // The line holding `start`, and the one holding the range's last byte.
-    let line_of = |byte: usize| a.partition_point(|(s, _)| *s <= byte) - 1;
-    let (first, last) = (line_of(start), line_of(end.max(start + 1) - 1));
-    let (at, bt): (Vec<&str>, Vec<&str>) = (a.iter().map(|l| l.1).collect(), b.iter().map(|l| l.1).collect());
-    let kept = m2_session::text::kept_lines(&at, &bt)?;
-    let to_first = kept[first]?;
-    if (first..=last).any(|l| kept[l] != Some(to_first + (l - first))) {
-        return None;
-    }
-    let to = b[to_first].0 + (start - a[first].0);
-    (new.get(to..to + (end - start)) == old.get(start..end)).then_some(to)
 }

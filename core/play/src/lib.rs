@@ -17,6 +17,7 @@
 //!
 //! Live mode: a NaN from a broken kernel is silenced, not an error.
 
+pub mod alloc;
 mod cells;
 mod resample;
 
@@ -133,6 +134,7 @@ struct AppliedSlot {
     clock: AtomicU64,
     callback_ns: AtomicU64,
     frame: AtomicU64,
+    refused: AtomicBool,
 }
 
 /// One [`Heard`] stamp, as atomics, and its place among them all.
@@ -165,10 +167,14 @@ struct Shared {
     /// The engine rate of the project last sent: what positions count in.
     rate: AtomicU32,
     crashed: AtomicBool,
+    /// Activations the engines refused, in all: the sender recovers with a fresh engine.
+    refused: AtomicU64,
     loop_refused: AtomicBool,
     dropped_ons: AtomicU64,
     device_error: AtomicBool,
     stalled: AtomicBool,
+    /// Held for an export, published after the callback returned (RENDER-1).
+    held: AtomicBool,
     /// A device (or the silent clock) calls back: a quiet one has stopped.
     device: AtomicBool,
     /// Seeks and loads sent, and taken by the audio thread, and the last target: until the
@@ -218,9 +224,10 @@ struct Callback {
     a: Vec<[f32; 2]>,
     b: Vec<[f32; 2]>,
     device_rate: u32,
-    /// The engine's applied stamps and heard stamps published so far.
+    /// The engine's applied stamps, heard stamps and refused activations published so far.
     published: u64,
     published_heard: u64,
+    refused: u64,
     seeks: u64,
     loads: u64,
 }
@@ -240,6 +247,7 @@ impl Callback {
             device_rate,
             published: 0,
             published_heard: 0,
+            refused: 0,
             seeks: 0,
             loads: 0,
         }
@@ -263,6 +271,12 @@ impl Callback {
 
     /// The audio callback: fill `data`, interleaved with `channels` channels.
     fn fill(&mut self, data: &mut [f32], channels: usize) {
+        alloc::set_in_callback(true);
+        self.fill_in(data, channels);
+        alloc::set_in_callback(false);
+    }
+
+    fn fill_in(&mut self, data: &mut [f32], channels: usize) {
         let ns = now_ns();
         self.shared.last_callback_ns.store(ns, Ordering::Relaxed);
         for i in 0..GONE {
@@ -313,10 +327,10 @@ impl Callback {
                     if keep == Keep::Position
                         && let (Some(n), Some(o)) = (live.engine.current_mut(), old.as_ref().and_then(|o| o.engine.current()))
                     {
-                        n.enter_from(o.transport(), o.tempo(), o.sample_rate() as f64);
+                        n.enter_from(o);
                     }
                     self.loads += 1;
-                    (self.published, self.published_heard) = (0, 0);
+                    (self.published, self.published_heard, self.refused) = (0, 0, 0);
                     self.live = Some(live);
                     if let Some(old) = old {
                         self.fade_out(old);
@@ -333,7 +347,7 @@ impl Callback {
                         EngineMsg::Activate { renderer } => self.retire(Gone::Engine(Retired::Renderer(renderer))),
                         EngineMsg::SwapLane { data, .. } => self.retire(Gone::Engine(Retired::Lane(data))),
                         EngineMsg::Transport(Cmd::Seek(_)) => self.seeks += 1,
-                        EngineMsg::Transport(_) | EngineMsg::Panic => {}
+                        EngineMsg::Transport(_) | EngineMsg::Panic | EngineMsg::Hold(_) => {}
                     }
                 }
             }
@@ -430,6 +444,7 @@ impl Callback {
                 slot.clock.store(a.clock, Ordering::Relaxed);
                 slot.callback_ns.store(a.callback_ns, Ordering::Relaxed);
                 slot.frame.store(a.frame as u64, Ordering::Relaxed);
+                slot.refused.store(a.refused, Ordering::Relaxed);
                 s.applied_n.fetch_add(1, Ordering::Relaxed);
             }
             self.published = n;
@@ -447,6 +462,9 @@ impl Callback {
                 s.heard_n.store(at + 1, Ordering::Relaxed);
             }
             self.published_heard = n;
+            let refused = l.engine.refused_activations();
+            s.refused.fetch_add(refused - self.refused, Ordering::Relaxed);
+            self.refused = refused;
         }
         s.seq.store(seq + 2, Ordering::Release);
         if let Some(l) = &self.live {
@@ -457,6 +475,8 @@ impl Callback {
         // After the position: a reader that sees a seek or a load taken sees where it went.
         s.seeks_applied.store(self.seeks, Ordering::Release);
         s.loads_applied.store(self.loads, Ordering::Release);
+        // Once the callback's work is done: a reader that sees it held may call the instances.
+        s.held.store(st.held, Ordering::Release);
     }
 }
 
@@ -681,8 +701,9 @@ impl Player {
         self.send(Msg::Unload)
     }
 
-    /// Play `renderer`, built without seeking, from where the engine is: crossfaded, with no
-    /// jump back (RENDER-25a). Returns its generation and the message's sequence number.
+    /// Play `renderer`, prepared against the plan sent last, from where the engine is: what it
+    /// keeps moves into it, and what changed crossfades, with no jump back (RENDER-25a). Returns
+    /// its generation and the message's sequence number.
     pub fn activate(&self, mut renderer: Renderer) -> Result<(u64, u64)> {
         renderer.set_strict(false);
         self.cells.sending(&mut renderer);
@@ -725,6 +746,19 @@ impl Player {
     /// Every note off and every instance reset (RENDER-10).
     pub fn panic(&self) -> Result<u64> {
         self.envelope(EngineMsg::Panic)
+    }
+
+    /// Pause for an export that borrows the live plugin instances, or resume (RENDER-1): the
+    /// engine fades out over 5 ms and processes nothing until it resumes where it held, fading in.
+    /// Applied in order with activations and swaps.
+    pub fn hold(&self, on: bool) -> Result<u64> {
+        self.envelope(EngineMsg::Hold(on))
+    }
+
+    /// Whether the engine is held: published after the callback that held it returned, so once
+    /// this is true no plugin of what it plays is called until it resumes (RENDER-1).
+    pub fn held(&self) -> bool {
+        self.shared.held.load(Ordering::Acquire)
     }
 
     /// Start playing, for tests and tools; [`Player::transport`] says whether it was sent.
@@ -837,6 +871,7 @@ impl Player {
                 clock: x.clock.load(Ordering::Relaxed),
                 callback_ns: x.callback_ns.load(Ordering::Relaxed),
                 frame: x.frame.load(Ordering::Relaxed) as u32,
+                refused: x.refused.load(Ordering::Relaxed),
             });
             fence(Ordering::Acquire);
             if s.seq.load(Ordering::Relaxed) == a {
@@ -865,6 +900,7 @@ impl Player {
                     clock: x.clock.load(Ordering::Relaxed),
                     callback_ns: x.callback_ns.load(Ordering::Relaxed),
                     frame: x.frame.load(Ordering::Relaxed) as u32,
+                    refused: false,
                 });
             fence(Ordering::Acquire);
             if s.seq.load(Ordering::Relaxed) == a {
@@ -886,6 +922,12 @@ impl Player {
             && now_ns().saturating_sub(s.last_callback_ns.load(Ordering::Relaxed)) > SILENT_DEVICE.as_nanos() as u64
             && s.last_callback_ns.load(Ordering::Relaxed) > 0;
         s.stalled.load(Ordering::Relaxed) || s.device_error.load(Ordering::Relaxed) || quiet
+    }
+
+    /// Activations the audio thread refused, in all: each was prepared against a plan that wasn't
+    /// playing when it arrived, which only a bug does. The sender recovers with a fresh engine.
+    pub fn refused(&self) -> u64 {
+        self.shared.refused.load(Ordering::Relaxed)
     }
 
     /// Whether the engine panicked: it plays silence until a project is opened again.

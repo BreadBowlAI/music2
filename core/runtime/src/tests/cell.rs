@@ -22,7 +22,7 @@ pub(super) fn origin(site: u32) -> Origin {
 }
 
 /// A cell: a constant written at `site`.
-fn step_const(id: &str, value: f64, site: u32) -> Value {
+pub(super) fn step_const(id: &str, value: f64, site: u32) -> Value {
     json!({"id": id, "op": "const", "value": value, "origin": {"site": site, "arg": ["0"]}})
 }
 
@@ -56,7 +56,7 @@ fn blocks(r: &mut Renderer, blocks: usize) -> Vec<[f32; 2]> {
     let mut out = vec![];
     for _ in 0..blocks {
         let clock = r.clock();
-        out.extend_from_slice(r.render_block(clock, false).unwrap());
+        out.extend_from_slice(r.render_block(clock).unwrap());
     }
     out
 }
@@ -211,10 +211,10 @@ fn a_steady_cell_is_written_into_its_kernel_once() {
     let g = [CellId(0)];
     // What the scale kernel's `by` input last took from its cell, and the cell's version.
     let by = |r: &Renderer| {
-        let at = r.graph.exec.iter().rposition(|e| matches!(e, Exec::Kernel(_))).unwrap();
-        let Exec::Kernel(k) = &r.graph.exec[at] else { unreachable!() };
+        let at = r.plan.graph.exec.iter().rposition(|e| matches!(e, Exec::Kernel(_))).unwrap();
+        let Exec::Kernel(k) = &r.plan.graph.exec[at] else { unreachable!() };
         let Input::Port { src, .. } = k.inputs[1] else { panic!("`by` comes from the cell") };
-        (k.seen[1], r.graph.versions[src.node])
+        (k.seen[1], r.plan.graph.versions[src.node])
     };
     assert_eq!(by(&r), (COPY, 0), "not yet written");
     blocks(&mut r, 3);

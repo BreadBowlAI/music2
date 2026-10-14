@@ -1,12 +1,14 @@
 //! Export Audio: the open song rendered offline to a WAV file, on a thread of its own.
 //!
-//! It renders the accepted revision, which is what the app plays, with a renderer of its
-//! own, so playback and every other request carry on meanwhile. [`m2_editor::render`] does
-//! the rendering, as it does for `m2 render`: both write the same file. One export runs at
-//! a time. Clients hear how it goes as `export` events, each naming the `song` and its
-//! project folder (`dir`): `progress` (0..1, at most ten a second), then `done` with the
-//! file's `path`, `seconds`, `peak_db` and the `problems` it carries (a plugin that isn't
-//! installed, FMT-18a), or an `error`.
+//! It renders the accepted revision, which is what the app plays. [`m2_editor::render`] does
+//! the rendering, as it does for `m2 render`: both write the same file. A pure song renders with
+//! a renderer of its own, so playback and every other request carry on meanwhile. A song whose
+//! plugins play borrows their live instances (RENDER-1): playback pauses ([`Lent`]), each instance
+//! renders offline from its committed state, and playback resumes where it was once the file is
+//! written. One export runs at a time. Clients hear how it goes as `export` events, each naming
+//! the `song` and its project folder (`dir`), and whether playback is `paused` for it: `progress`
+//! (0..1, at most ten a second), then `done` with the file's `path`, `seconds`, `peak_db` and the
+//! `problems` it carries (a plugin that isn't installed, FMT-18a), or an `error`.
 
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
@@ -16,13 +18,19 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use m2_editor::render::Length;
+use m2_play::Player;
+use m2_plugins::{Blob, Handle, RenderMode};
+use m2_runtime::{BLOCK, PluginInstance};
 use parking_lot::Mutex;
 use serde_json::json;
 
 use crate::AppState;
+use crate::graph::Export;
 
 /// Progress goes out at most this often.
 const PROGRESS_EVERY: Duration = Duration::from_millis(100);
+/// How long an export waits for playback to pause before it renders beside it.
+const HOLD_WAIT: Duration = Duration::from_secs(2);
 /// The songs folder's folder for exports. No song may take its name there.
 pub const EXPORTS: &str = "Exports";
 
@@ -100,8 +108,7 @@ pub fn start(state: &Arc<AppState>, path: Option<PathBuf>) -> Result<PathBuf> {
     }
     state.exports.stop.store(false, Ordering::SeqCst);
     let begun = (|| {
-        let (song, dir, render, carried) = state.graph.render(Length::Song)?;
-        let render = render.stop_when(state.exports.stop.clone());
+        let song = state.graph.name().context("no project is open")?;
         let (path, fresh) = match path {
             Some(p) => (picked(p)?, None),
             None => {
@@ -110,12 +117,15 @@ pub fn start(state: &Arc<AppState>, path: Option<PathBuf>) -> Result<PathBuf> {
                 (p, Some(names))
             }
         };
+        // From here, a song whose plugins play has paused playback: given back when `lent` drops.
+        let Export { song, dir, render, problems: carried, lent } = state.graph.export(Length::Song)?;
+        let render = render.stop_when(state.exports.stop.clone());
         *state.exports.song.lock() = Some(song.clone());
         let thread_state = state.clone();
         let thread_path = path.clone();
         std::thread::Builder::new().name("music2-export".into()).spawn(move || {
             let state = thread_state;
-            let about = json!({"t": "export", "song": song, "dir": dir});
+            let about = json!({"t": "export", "song": song, "dir": dir, "paused": lent.is_some()});
             let mut last: Option<Instant> = None;
             let progress = |progress: f64| {
                 if progress < 1.0 && last.is_none_or(|t| t.elapsed() >= PROGRESS_EVERY) {
@@ -130,6 +140,8 @@ pub fn start(state: &Arc<AppState>, path: Option<PathBuf>) -> Result<PathBuf> {
                 None => render.write_for(&dir, &thread_path, progress).map(|r| (thread_path.clone(), r)),
             }))
             .unwrap_or_else(|_| Err(anyhow!("music2 hit a bug while exporting")));
+            // The instances back, and playback resumed, before it says it's done (RENDER-1).
+            drop(lent);
             // Free before saying so: a client may export again as soon as it hears.
             state.exports.running.store(false, Ordering::SeqCst);
             let event = match written {
@@ -147,6 +159,72 @@ pub fn start(state: &Arc<AppState>, path: Option<PathBuf>) -> Result<PathBuf> {
         state.exports.running.store(false, Ordering::SeqCst);
     }
     begun
+}
+
+/// The live plugin instances an export borrows, and the engine held while it does (RENDER-1).
+/// Given back when it drops, on every path (done, failed, stopped, a panic, quitting): each is
+/// deactivated, set to realtime and activated again, holding the committed blob, with the
+/// parameters its code owns sent again at its next block (HOME-4); then the engine resumes where
+/// it held, and the session plays what waited for the export.
+pub struct Lent {
+    player: Player,
+    insts: Vec<Arc<PluginInstance>>,
+    rate: u32,
+    /// The session it was lent for, and what tells it it is over, with the instances that failed
+    /// to come back active.
+    pub(crate) token: u64,
+    pub(crate) done: Option<Box<dyn FnOnce(Vec<Handle>) + Send>>,
+}
+
+impl Lent {
+    /// Hold `player`'s engine, then take each instance offline with its committed blob loaded
+    /// (skipped where it holds it, HOME-6). The engine says it is held only after the callback
+    /// that held it returned, so from then on nothing it plays calls these until the resume. When
+    /// it doesn't hold within 2 s (its device stalled), or a host call fails, what was taken is
+    /// given back, playback resumes, and this fails.
+    pub(crate) fn take(player: Player, lent: Vec<(Arc<PluginInstance>, Option<Arc<Blob>>)>, rate: u32, token: u64) -> Result<Lent> {
+        let mut l = Lent { player, insts: Vec::with_capacity(lent.len()), rate, token, done: None };
+        l.player.hold(true)?;
+        let t = Instant::now();
+        while !l.player.held() {
+            if t.elapsed() > HOLD_WAIT {
+                bail!("playback didn't pause within {} s", HOLD_WAIT.as_secs());
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        for (inst, blob) in lent {
+            let (host, h) = (inst.host(), inst.handle());
+            host.deactivate(h);
+            l.insts.push(inst.clone());
+            if let Some(b) = blob {
+                host.load_state(h, b)?;
+            }
+            host.set_render_mode(h, RenderMode::Offline)?;
+            host.activate(h, rate, BLOCK as u32)?;
+        }
+        Ok(l)
+    }
+}
+
+impl Drop for Lent {
+    fn drop(&mut self) {
+        let mut failed = vec![];
+        for inst in self.insts.drain(..) {
+            let (host, h) = (inst.host(), inst.handle());
+            host.deactivate(h);
+            let _ = host.set_render_mode(h, RenderMode::Realtime);
+            // One that won't come back active is replaced from its committed state (HOST-5).
+            if let Err(e) = host.activate(h, self.rate, BLOCK as u32) {
+                eprintln!("music2: a plugin didn't come back after the export: {e:#}");
+                failed.push(h);
+            }
+            inst.mark_reloaded();
+        }
+        let _ = self.player.hold(false);
+        if let Some(done) = self.done.take() {
+            done(failed);
+        }
+    }
 }
 
 /// `about`'s fields and `more`'s.

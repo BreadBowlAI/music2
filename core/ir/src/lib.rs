@@ -134,23 +134,6 @@ pub struct Sidechain {
     pub source: String,
 }
 
-/// A ControlId (ID-15): the module key, the frame chain of the instance (`site:occurrence`,
-/// and `:key` for a `key()` frame), then the slot the callee declares. It holds only within
-/// the build it came from, since sites are numbered per build (ID-12), and is never saved
-/// (ID-16).
-pub fn control_id(module: &Module, frame: u32, slot: &str) -> String {
-    let mut id = module.key.clone();
-    for f in module.chain(Some(frame)) {
-        id.push('/');
-        id.push_str(&format!("{}:{}", f.site, f.occurrence));
-        if let Some(k) = &f.key {
-            id.push(':');
-            id.push_str(k);
-        }
-    }
-    format!("{id}/@{slot}")
-}
-
 /// A lane, addressed by its module's key and its own (ID-6).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct LaneDecl {

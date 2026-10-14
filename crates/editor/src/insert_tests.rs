@@ -233,8 +233,8 @@ fn undo_of_an_inserted_argument_survives_other_edits() {
     let q = inherited(&s, "lowpass", "q");
     s.set(s.accepted().number, &q.id, 0.9, None).unwrap();
     assert!(fixture.source().contains("lowpass(osc.saw(110), 800, 0.9)"));
-    // An outside save above it and on another line: a comment, and another number. (A change on
-    // the insertion's own line touches it, as for any carried range, WRITE-12.)
+    // An outside save above it and on another line: a comment, and another number. (A change
+    // inside the insertion touches it, as for any carried range, WRITE-12.)
     fixture.edit(|t| format!("// a note\n{}", t.replace("{ time: 0.3 }", "{ time: 0.35 }")));
     assert!(s.refresh());
     assert!(s.can_undo());

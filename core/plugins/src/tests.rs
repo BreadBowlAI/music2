@@ -299,21 +299,59 @@ fn saves_answer_their_own_callers() {
     assert_eq!(lat, Ok(0));
 }
 
-// HOME-6: a blob equal to the state the instance last saved isn't loaded again; another is.
+// HOME-6: a blob equal to the state the instance holds isn't loaded again: the one it was created
+// with, or the one it last saved; another is, and is then the state it holds.
 #[test]
-fn a_state_it_saved_is_not_pushed_back() {
+fn a_load_of_the_held_state_is_skipped() {
     setup();
     let f = find(probe::ID).unwrap();
-    let inst = Inst::new(&f, Some(probe::state("pushed", 1.0)), &Owner::discard());
+    let created = Blob::new(probe::state("created", 1.0));
+    let inst = Inst::new(&f, Some(created.bytes.clone()), &Owner::discard());
     let stats = probe::stats(inst.h).unwrap();
     let loads = || stats.main_calls().iter().filter(|c| c.what == "load").count();
     assert_eq!(loads(), 1);
+    assert!(!inst.host.load_state(inst.h, Arc::new(created)).unwrap(), "the blob it was created with, skipped");
     let saved = inst.host.save_state(inst.h).recv().unwrap().unwrap();
-    inst.host.load_state(inst.h, Arc::new(saved)).unwrap();
-    assert_eq!(loads(), 1, "its own state, skipped");
-    inst.host.load_state(inst.h, Arc::new(Blob::new(probe::state("other", 0.5)))).unwrap();
+    assert!(!inst.host.load_state(inst.h, Arc::new(saved)).unwrap(), "its own save, skipped");
+    assert_eq!(loads(), 1);
+    let other = Arc::new(Blob::new(probe::state("other", 0.5)));
+    assert!(inst.host.load_state(inst.h, other.clone()).unwrap());
     assert_eq!((loads(), inst.value(probe::GAIN)), (2, Some(0.5)));
     assert_eq!(*stats.tag.lock().unwrap(), "other");
+    assert!(!inst.host.load_state(inst.h, other).unwrap(), "the blob it just loaded, skipped");
+}
+
+// HOME-6: the skip compares with what the instance holds now, not with its last save: save S, load
+// C (an undo), load S (a redo), and S loads.
+#[test]
+fn a_reload_after_another_load_is_never_skipped() {
+    setup();
+    let f = find(probe::ID).unwrap();
+    let inst = Inst::new(&f, Some(probe::state("s", 1.0)), &Owner::discard());
+    let s = Arc::new(inst.host.save_state(inst.h).recv().unwrap().unwrap());
+    assert!(inst.host.load_state(inst.h, Arc::new(Blob::new(probe::state("c", 0.5)))).unwrap());
+    assert!(inst.host.load_state(inst.h, s).unwrap(), "the redo loads");
+    assert_eq!((probe::stats(inst.h).unwrap().tag.lock().unwrap().as_str(), inst.value(probe::GAIN)), ("s", Some(1.0)));
+}
+
+// RENDER-25: while a plugin is created its owner says so, by name, and no longer once it is.
+#[test]
+fn an_owner_shows_what_it_is_loading() {
+    let host = setup();
+    let f = find(probe::ID).unwrap();
+    let owner = Owner::discard();
+    let creating = {
+        let (host, f, owner) = (host.clone(), f.clone(), owner.clone());
+        std::thread::spawn(move || host.create(&f, Some(Arc::new(Blob::new(b"slow patch".to_vec()))), &owner).unwrap().0)
+    };
+    let t = Instant::now();
+    while owner.loading().is_empty() && t.elapsed() < Duration::from_secs(2) {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(owner.loading(), ["m2 probe"]);
+    let h = creating.join().unwrap();
+    assert!(owner.loading().is_empty());
+    host.destroy(h);
 }
 
 // A state the plugin refuses fails `create`, and leaves nothing behind.

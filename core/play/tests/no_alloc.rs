@@ -1,65 +1,39 @@
-//! RENDER-28: the audio callback never allocates, from its very first fill on a fresh thread,
-//! through everything step 3a does live: play, seek, a loop and its wraps, voices stolen, a lane
-//! swap, an activation across a tempo change (a crossfade with a retime), stop, idle, play, panic,
-//! and a full retire channel; and, from step 5, cell writes from another thread all along (a step,
-//! a ramp and a cell in voices), with no rebuild. Kernel memory never grows either: a reset on the
-//! audio thread would grow a delay's (§1.5 of the step 3a design).
+//! RENDER-28: the audio callback never allocates or frees, from its very first fill on a fresh
+//! thread, through everything the engine does live: play, seek, a loop and its wraps, voices
+//! stolen, a lane swap, an activation across a tempo change that keeps kernels, voices, a ring and
+//! an audio player, swaps the audio lane's renders, grows a lane, and plays out a ghost reading a
+//! ghost lane while its edges fade, a panic in that window, the window's end and its leftovers, a
+//! stale activation refused, stop, idle, play, panic, and a full retire channel; and, from step 5,
+//! cell writes from another thread all along (a step, a ramp and a cell in voices), with no
+//! rebuild. Kernel memory never grows either: a reset on the audio thread would grow a delay's
+//! (§1.5 of the step 3a design).
 //!
 //! Everything is built and sent on the test's thread; only the callback runs under the trap.
 
 mod common;
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 
 use common::*;
 use m2_ir::Origin;
-use m2_play::{Gone, Player};
+use m2_play::{Gone, Player, alloc};
 use m2_runtime::{CellTarget, LaneSwap, NotesData, Renderer, Retired};
 use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
 
-struct Trap;
-
-thread_local! {
-    static IN_AUDIO: Cell<bool> = const { Cell::new(false) };
-    static COUNT: Cell<usize> = const { Cell::new(0) };
-}
-
-fn count(what: &str, size: usize) {
-    let _ = IN_AUDIO.try_with(|on| {
-        if on.get() {
-            let _ = COUNT.try_with(|n| n.set(n.get() + 1));
-            if std::env::var_os("M2_TRAP_TRACE").is_some() {
-                on.set(false);
-                eprintln!("{what} of {size} bytes on the audio thread:\n{}", std::backtrace::Backtrace::force_capture());
-                on.set(true);
-            }
-        }
-    });
-}
-
-unsafe impl GlobalAlloc for Trap {
-    unsafe fn alloc(&self, l: Layout) -> *mut u8 {
-        count("alloc", l.size());
-        unsafe { System.alloc(l) }
-    }
-
-    unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
-        count("dealloc", l.size());
-        unsafe { System.dealloc(p, l) }
-    }
-
-    unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 {
-        count("realloc", n);
-        unsafe { System.realloc(p, l, n) }
-    }
-}
-
+// The app's debug counter (`m2_play::alloc`): it counts what the callback allocates or frees, as
+// the callback marks its own thread.
 #[global_allocator]
-static TRAP: Trap = Trap;
+static TRAP: alloc::Counting = alloc::Counting;
+
+/// A device callback's fill under the trap: what it allocated or freed.
+fn trapped(f: impl FnOnce()) -> u64 {
+    alloc::trace(std::env::var_os("M2_TRAP_TRACE").is_some());
+    let before = alloc::here();
+    f();
+    alloc::here() - before
+}
 
 /// Where the song's cells are written: the feedback gain (a step), the reverb's mix in the voices
 /// (a step in every voice), and the level at the end (declared smooth, so a ramp).
@@ -77,7 +51,8 @@ fn targets(r: &Renderer) -> Vec<CellTarget> {
 
 /// The song: voices that hold a delay and a reverb and are stolen, notes with equal keys, a
 /// control lane, time, a feedback loop and a delay at the top, an audio lane, and the cells of
-/// [`cells`]. `fx` adds a reverb at the end.
+/// [`cells`]. `fx` adds a reverb at the end, and scales the voices by a constant where the control
+/// lane was (whose node then plays out the window as a ghost, reading the lane as a ghost lane).
 fn nodes(fx: bool) -> (Value, &'static str) {
     let mut n = vec![
         json!({"id": "n", "op": "lane", "lane": "notes"}),
@@ -93,7 +68,8 @@ fn nodes(fx: bool) -> (Value, &'static str) {
         json!({"id": "c", "op": "lane", "lane": "level"}),
         json!({"id": "t", "op": "time", "of": "beats"}),
         json!({"id": "l", "op": "kernel", "kernel": "std:lfo", "inputs": {"beats": "t"}}),
-        json!({"id": "vc", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "v", "by": "c"}}),
+        json!({"id": "half", "op": "const", "value": 0.5}),
+        json!({"id": "vc", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "v", "by": if fx { "half" } else { "c" }}}),
         json!({"id": "vl", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "vc", "by": "l"}}),
         json!({"id": "a", "op": "lane", "lane": "clips"}),
         json!({"id": "x", "op": "kernel", "kernel": "std:add", "inputs": {"a": "vl", "b": "a"}}),
@@ -115,10 +91,14 @@ fn nodes(fx: bool) -> (Value, &'static str) {
     (Value::Array(n), "out")
 }
 
-/// The song's project at `bpm`, in a temp folder, compiled from `nodes` without TypeScript.
+/// The song's project at `bpm`, in a temp folder, compiled from `nodes` without TypeScript. With
+/// `fx`, 300 notes more at beat 12 outgrow the notes lane's scheduler.
 fn build(fx: bool, bpm: f64) -> Song {
     let dir = temp("trap");
-    let ns: Vec<Value> = (0..64).map(|k| json!({"pitch": 48 + (k % 7) * 3, "start": k as f64 * 0.25, "length": 0.4})).collect();
+    let mut ns: Vec<Value> = (0..64).map(|k| json!({"pitch": 48 + (k % 7) * 3, "start": k as f64 * 0.25, "length": 0.4})).collect();
+    if fx {
+        ns.extend((0..300).map(|k| json!({"pitch": k % 120, "start": 12, "length": 1})));
+    }
     let files = [
         ("music2.toml", "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\n".to_string()),
         ("song.ts", String::new()),
@@ -163,7 +143,7 @@ enum Step {
 
 /// What the audio thread saw after a step.
 struct Report {
-    allocs: usize,
+    allocs: u64,
     idle: bool,
     pos: u64,
 }
@@ -174,8 +154,15 @@ fn trap_run(device_rate: u32) {
     let mut ra = a.renderer();
     ra.set_strict(false);
     let (gen_a, mem_a) = (ra.generation(), ra.kernel_memory_bytes());
-    let rb = b.renderer();
+    // Prepared against A as it plays: the kept instances move into it at the block line.
+    let (info_a, stale_from) = (ra.info(), a.renderer());
+    let rb = b.after(&a, &info_a);
     let (gen_b, mem_b) = (rb.generation(), rb.kernel_memory_bytes());
+    let s = rb.stats().clone();
+    assert!(s.kept.kernels > 5 && s.kept.polys == 1 && s.kept.rings == 1 && s.ghosts == 1 && s.fades >= 2, "{s:?}");
+    // A plan prepared against A again, sent once B plays: refused.
+    let stale = a.after(&a, &stale_from.info());
+    drop(stale_from);
     // Where gestures write in each, taken before they are sent.
     let both = Arc::new([targets(&ra), targets(&rb)]);
     // A swap of A's notes: the same notes and one more.
@@ -207,18 +194,16 @@ fn trap_run(device_rate: u32) {
         let mut buf = vec![0.0f32; 2 * 4096];
         while let Ok(Step::Fill(frames, take)) = rx.recv() {
             let mut done = 0;
-            COUNT.with(|n| n.set(0));
-            for n in SIZES.iter().cycle() {
-                let n = (*n).min(frames - done);
-                if n == 0 {
-                    break;
+            let allocs = trapped(|| {
+                for n in SIZES.iter().cycle() {
+                    let n = (*n).min(frames - done);
+                    if n == 0 {
+                        break;
+                    }
+                    d.fill(&mut buf[..2 * n], 2);
+                    done += n;
                 }
-                IN_AUDIO.with(|on| on.set(true));
-                d.fill(&mut buf[..2 * n], 2);
-                IN_AUDIO.with(|on| on.set(false));
-                done += n;
-            }
-            let allocs = COUNT.with(|n| n.get());
+            });
             if take {
                 kept.extend(d.drain_retired());
             }
@@ -274,8 +259,12 @@ fn trap_run(device_rate: u32) {
     player.swap_lane(gen_a, 0, LaneSwap::Notes(Arc::new(notes_a()))).unwrap();
     step(s(0.3), true);
     player.activate(rb).unwrap();
+    // In the window: its ghost and fades reset with the plan.
+    player.panic().unwrap();
     target.store(1, Ordering::Relaxed);
     step(s(0.5), true);
+    player.activate(stale).unwrap();
+    step(s(0.1), true);
     writing.store(false, Ordering::Relaxed);
     assert!(writer.join().unwrap() > 10, "it wrote while the callback ran");
     step(s(0.1), true);
@@ -308,13 +297,16 @@ fn trap_run(device_rate: u32) {
     assert_eq!(lanes, 124, "every swap was taken and retired, none dropped");
     let old: Vec<&Renderer> =
         kept.iter().filter_map(|g| if let Gone::Engine(Retired::Renderer(r)) = g { Some(&**r) } else { None }).collect();
-    assert_eq!(old.iter().map(|r| r.generation()).collect::<Vec<_>>(), [gen_a]);
-    assert_eq!(old[0].kernel_memory_bytes(), mem_a, "no kernel grew its memory on the audio thread");
+    assert_eq!(old.iter().map(|r| r.generation()).collect::<Vec<_>>()[..1], [gen_a]);
+    assert_eq!(old.len(), 2, "the plan B replaced, and the stale one, refused");
+    assert!(kept.iter().any(|g| matches!(g, Gone::Engine(Retired::Nodes(_)))), "the window's leftovers left");
+    let old_mem = old[0].kernel_memory_bytes();
     let e = d.engine().unwrap();
-    assert_eq!((e.resets(), e.activations(), e.refused_swaps()), (1, 1, 0));
+    assert_eq!((e.resets(), e.activations(), e.refused_swaps(), e.refused_activations(), e.leaked()), (2, 1, 0, 1, 0));
     let cur = e.current().unwrap();
     assert_eq!(cur.generation(), gen_b, "cell writes rebuilt nothing");
-    assert_eq!(cur.kernel_memory_bytes(), mem_b, "nor after the panic reset every kernel");
+    // Every kept instance moved, none grew: what A held is in A and B, as it was.
+    assert_eq!(cur.kernel_memory_bytes() + old_mem, mem_a + mem_b, "no kernel grew its memory on the audio thread, nor after the panics");
     let map = cur.cell_map();
     for o in cells() {
         assert_eq!(map.cells(&o).iter().map(|c| cur.cell_value(*c)).collect::<Vec<_>>(), [Some(0.42)], "the last write plays");
@@ -362,50 +354,44 @@ fn probes(gain: f64) -> Song {
 }
 
 // RENDER-28, step 3b (§6.5): the callback never allocates with plugins either: two probe instances
-// played, then an activation that carries both while notes sound into one (adoption, release and
-// lending through the crossfade), a cell write into a parameter, a panic, stop, the plugins
-// asleep and the engine idle, then woken by a plugin's request from a thread of its own. The probe
+// played, then an activation that moves both while notes sound into one (its notes and last-sent
+// values with it), a hold for an export and its resume with a panic deferred to it (RENDER-1), a
+// cell write into a parameter, a panic, stop, the plugins asleep and the engine idle, then woken
+// by a plugin's request from a thread of its own. The probe
 // asks for its main-thread callback from `process` every 10 calls. Only the host glue is trapped
 // here: a real plugin's own allocations are its own (step 3a §13).
 #[test]
 fn the_audio_thread_never_allocates_with_plugins() {
     let (a, b) = (probes(1.0), probes(0.5));
     let owner = m2_plugins::Owner::discard();
-    let build = |s: &Song, source: &mut dyn m2_runtime::InstanceSource| {
-        let mut r = Renderer::build_live(&s.flat, &s.data, &s.packages, SR, &mut m2_runtime::audio::Cache::default(), &owner, source).unwrap();
-        r.set_strict(false);
-        r
-    };
-    let ra = build(&a, &mut m2_runtime::Fresh);
+    let mut ra = Renderer::prepare(&a.flat, &a.data, &a.packages, SR, &mut m2_runtime::audio::Cache::default(), &owner, m2_runtime::Basis::Fresh).unwrap();
+    ra.set_strict(false);
     let handles = ra.plugin_handles();
-    let mut carry = m2_runtime::Carry::of(&ra, 1);
-    let rb = build(&b, carry.source(1));
+    let rb = b.after(&a, &ra.info());
     let gain = CellTarget { slots: rb.cell_slots(), cells: rb.cell_map().cells(&cells()[0]).into() };
     assert_eq!(gain.cells.len(), 1, "the gain parameter's value is a cell");
-    assert_eq!(rb.plugin_handles(), handles, "both carried");
+    assert_eq!(rb.stats().kept.plugins, 2, "both kept");
     let stats: Vec<_> = handles.iter().map(|h| m2_plugins::probe::stats(*h).unwrap()).collect();
     let (player, d) = Player::driven(SR);
     player.open(ra).unwrap();
     let (steps, rx) = mpsc::channel::<usize>();
-    let (reports, back) = mpsc::channel::<(usize, bool)>();
+    let (reports, back) = mpsc::channel::<(u64, bool)>();
     let audio = std::thread::spawn(move || {
         let mut d = d;
         let mut kept: Vec<Gone> = vec![];
         let mut buf = vec![0.0f32; 2 * 4096];
         while let Ok(frames) = rx.recv() {
             let mut done = 0;
-            COUNT.with(|n| n.set(0));
-            for n in SIZES.iter().cycle() {
-                let n = (*n).min(frames - done);
-                if n == 0 {
-                    break;
+            let allocs = trapped(|| {
+                for n in SIZES.iter().cycle() {
+                    let n = (*n).min(frames - done);
+                    if n == 0 {
+                        break;
+                    }
+                    d.fill(&mut buf[..2 * n], 2);
+                    done += n;
                 }
-                IN_AUDIO.with(|on| on.set(true));
-                d.fill(&mut buf[..2 * n], 2);
-                IN_AUDIO.with(|on| on.set(false));
-                done += n;
-            }
-            let allocs = COUNT.with(|n| n.get());
+            });
             kept.extend(d.drain_retired());
             reports.send((allocs, d.engine().unwrap().is_idle())).unwrap();
         }
@@ -422,6 +408,17 @@ fn the_audio_thread_never_allocates_with_plugins() {
     assert!(stats[0].sounding.load(std::sync::atomic::Ordering::Relaxed) > 0, "notes sound into the instrument");
     player.activate(rb).unwrap();
     step(SR as usize / 2);
+    player.hold(true).unwrap();
+    step(SR as usize / 10);
+    assert!(player.held(), "held");
+    let calls = stats[0].process.load(std::sync::atomic::Ordering::Relaxed);
+    player.panic().unwrap();
+    step(SR as usize / 10);
+    assert_eq!(stats[0].process.load(std::sync::atomic::Ordering::Relaxed), calls, "nothing processed while held");
+    assert_eq!(stats[0].resets.load(std::sync::atomic::Ordering::Relaxed), 0, "the panic waits for the resume");
+    player.hold(false).unwrap();
+    step(SR as usize / 10);
+    assert!(!player.held() && stats[0].resets.load(std::sync::atomic::Ordering::Relaxed) == 1, "resumed, then the panic");
     player.set_cells(&gain, 0.5);
     player.panic().unwrap();
     step(SR as usize / 4);
@@ -455,13 +452,33 @@ fn the_audio_thread_never_allocates_with_plugins() {
     assert!(!player.crashed());
 }
 
-// The trap itself: an allocation under it is counted (or the tests above prove nothing).
+// RENDER-28: what a callback allocates is counted, a plugin's included, as the callback marks its
+// own thread: what the app's debug counter logs.
+#[test]
+fn an_allocation_in_the_callback_is_counted() {
+    let a = probes(1.0);
+    let owner = m2_plugins::Owner::discard();
+    let r = Renderer::prepare(&a.flat, &a.data, &a.packages, SR, &mut m2_runtime::audio::Cache::default(), &owner, m2_runtime::Basis::Fresh).unwrap();
+    let probe = m2_plugins::probe::stats(r.plugin_handles()[0]).unwrap();
+    let (player, mut d) = Player::driven(SR);
+    player.open(r).unwrap();
+    player.play();
+    let mut buf = vec![0.0f32; 2 * 512];
+    assert_eq!(trapped(|| d.fill(&mut buf, 2)), 0);
+    probe.allocate.store(true, Ordering::Relaxed);
+    assert_eq!(trapped(|| d.fill(&mut buf, 2)), 2, "the probe's box, made and freed");
+    drop(d.drain_retired());
+}
+
+// The trap itself: an allocation under it is counted (or the tests above prove nothing), and
+// outside a callback nothing is.
 #[test]
 fn the_trap_counts() {
-    COUNT.with(|n| n.set(0));
-    IN_AUDIO.with(|on| on.set(true));
+    let before = alloc::here();
+    alloc::set_in_callback(true);
     let b = std::hint::black_box(Box::new(7u64));
     drop(b);
-    IN_AUDIO.with(|on| on.set(false));
-    assert_eq!(COUNT.with(|n| n.get()), 2);
+    alloc::set_in_callback(false);
+    drop(std::hint::black_box(Box::new(7u64)));
+    assert_eq!(alloc::here() - before, 2);
 }

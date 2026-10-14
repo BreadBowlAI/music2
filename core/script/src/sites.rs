@@ -47,6 +47,10 @@ pub struct Site {
     /// Byte range of the whole call expression in the original source.
     pub start: u32,
     pub end: u32,
+    /// The byte of the `(` that opens its arguments: what names the call across edits (ID-13),
+    /// since a wrap or a changed callee keeps it, wherever a diff puts the closing brackets.
+    #[serde(default)]
+    pub open: u32,
     /// 1-based line of the call's start.
     pub line: u32,
     /// The callee as written: `bass`, `osc.saw`, `lane.notes`.
@@ -193,6 +197,20 @@ fn plain_object(e: &Expression) -> bool {
     }
 }
 
+/// The `(` of a call's arguments: past its callee or type arguments, whitespace, comments and `?.`.
+fn open_paren(source: &str, it: &CallExpression) -> u32 {
+    let mut at = it.type_arguments.as_ref().map_or(it.callee.span().end, |t| t.span.end) as usize;
+    while let Some(c) = source[at..].chars().next().filter(|c| *c != '(') {
+        let rest = &source[at..];
+        at += match rest.strip_prefix("/*") {
+            Some(comment) => comment.find("*/").map_or(rest.len(), |e| e + 4),
+            None if rest.starts_with("//") => rest.find('\n').unwrap_or(rest.len()),
+            None => c.len_utf8(),
+        };
+    }
+    at as u32
+}
+
 /// How an instrumented call's arguments end, which the recording passes on to the SDK.
 enum Ends {
     /// With the wrapped expression, its last argument.
@@ -283,6 +301,7 @@ impl<'a> Visit<'a> for Collect<'_> {
                 ordinal: 0,
                 start: it.span.start,
                 end: it.span.end,
+                open: open_paren(self.source, it),
                 line,
                 callee,
                 binding,
@@ -494,6 +513,35 @@ mod tests {
         serialized.as_object_mut().unwrap().remove("binding");
         let restored: Site = serde_json::from_value(serialized).unwrap();
         assert_eq!(restored.binding, None);
+    }
+
+    // ID-13: every call's `open` is the `(` of its own arguments, inside its range: past type
+    // arguments, comments and `?.`, and one per call of a chain or a curried call. On these forms,
+    // and on every fixture and std file.
+    #[test]
+    fn every_call_has_an_open_paren() {
+        let src = "f<Array<(a: number) => void>>(x); obj.m /* (c) */ (y); g?.(z); a.b(1).c(2); h(3)(4); (k)(5); f(); obj.m();";
+        let i = instrument("t.ts", src, 0).unwrap();
+        let after: Vec<&str> = i.sites.iter().map(|s| &src[s.open as usize..s.end as usize]).collect();
+        assert_eq!(after, ["(x)", "(y)", "(z)", "(2)", "(1)", "(4)", "(3)", "(5)", "()", "()"]);
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut dirs: Vec<std::path::PathBuf> = ["std/src", "examples", "templates"].iter().map(|d| root.join(d)).collect();
+        let mut files = 0;
+        while let Some(dir) = dirs.pop() {
+            for f in std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()) {
+                if f.is_dir() {
+                    dirs.push(f);
+                } else if f.extension().is_some_and(|x| x == "ts") {
+                    let text = std::fs::read_to_string(&f).unwrap();
+                    for s in instrument("f.ts", &text, 0).unwrap().sites {
+                        let ok = s.start <= s.open && s.open < s.end && text.as_bytes()[s.open as usize] == b'(';
+                        assert!(ok, "{}: {} at {}..{} opens at {}", f.display(), s.callee, s.start, s.end, s.open);
+                    }
+                    files += 1;
+                }
+            }
+        }
+        assert!(files > 10, "{files} files");
     }
 
     #[test]

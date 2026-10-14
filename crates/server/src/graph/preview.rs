@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use m2_runtime::{Caps, LaneRef};
+use m2_runtime::PlanInfo;
 use m2_session::{BeforeWrite, Revision, Session, Writing};
 use parking_lot::Mutex;
 
@@ -23,8 +23,7 @@ struct View {
     epoch: u64,
     generation: u64,
     revision: Arc<Revision>,
-    slots: Arc<[LaneRef]>,
-    caps: Arc<[Option<Caps>]>,
+    info: Arc<PlanInfo>,
 }
 
 /// A preview sent: its last message, when the session's checks were done and when it was queued,
@@ -98,13 +97,8 @@ fn interrupted(s: &Session) -> usize {
 /// What plays, lent to the hook for the edit about to run. Only `Arc`s are copied: the actor's
 /// record stays, so nothing is lost when the edit panics.
 pub(super) fn lend(o: &Open) -> (Arc<Mutex<Lent>>, usize) {
-    let view = o.plays.as_ref().map(|p| View {
-        epoch: p.epoch,
-        generation: p.generation,
-        revision: p.revision.clone(),
-        slots: p.slots.clone(),
-        caps: p.caps.clone(),
-    });
+    let view =
+        o.plays.as_ref().map(|p| View { epoch: p.epoch, generation: p.generation, revision: p.revision.clone(), info: p.info.clone() });
     (Arc::new(Mutex::new(Lent { view, sent: None, broken: false })), interrupted(&o.session))
 }
 
@@ -124,7 +118,7 @@ pub(super) fn hook(inner: Arc<Inner>, lent: Arc<Mutex<Lent>>) -> BeforeWrite {
         // Never into a player that stopped taking messages: the commit mustn't wait for it.
         let device = inner.current_device().filter(|d| d.epoch == v.epoch && !d.player.stalled() && !d.player.crashed());
         let Some(d) = device else { return };
-        let Some(reach) = reach_to(&v.revision, &v.slots, &v.caps, &w.candidate) else { return };
+        let Some(reach) = reach_to(&v.revision, &v.info, &w.candidate) else { return };
         // Lanes alone: a lane no node reads, or a commit that changes nothing that plays, sends
         // nothing and says nothing of a preview.
         if !reach.cells.is_empty() || reach.swaps.is_empty() {

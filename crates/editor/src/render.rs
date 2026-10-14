@@ -12,6 +12,7 @@
 //! complete. The part is locked while it's written, so one left by a render that never
 //! finished (the program was killed) is found unlocked and removed by the next render there.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, ErrorKind};
 use std::path::{Path, PathBuf};
@@ -20,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result, anyhow, bail};
 use m2_ir::{FOp, Flat};
-use m2_runtime::{PackageSet, Renderer};
+use m2_runtime::{PackageSet, PluginInstance, Renderer};
 use m2_song::DataSet;
 
 /// The longest render. A WAV file's sizes are 32-bit, so it can't hold much over 4 hours of
@@ -133,6 +134,25 @@ impl Render {
         let mut renderer = Renderer::new(flat, data, packages, sample_rate)?;
         renderer.set_strict(false);
         renderer.seek(first)?;
+        Ok(Render { renderer, sample_rate, first, end, length, stop: Arc::default(), exact: true, reproducible: pure(flat) })
+    }
+
+    /// An export from the song's start, as [`Render::new`] makes one, that plays the live engine's
+    /// plugin instances `lent` names, by node (RENDER-1): the app's export of a song with plugins.
+    /// Each lent instance is reset at its first call; kernels start from init, and any other plugin
+    /// is created for it. The live engine must be held while it renders, and each lent instance
+    /// loaded with its committed state, set to offline mode and activated first.
+    pub fn lending(
+        flat: &Flat,
+        data: &DataSet,
+        packages: &PackageSet,
+        sample_rate: u32,
+        length: Length,
+        lent: &HashMap<usize, Arc<PluginInstance>>,
+    ) -> Result<Render> {
+        let (first, end) = bounds(data, sample_rate, 0.0, length)?;
+        let mut renderer = Renderer::lending(flat, data, packages, sample_rate, lent)?;
+        renderer.set_strict(false);
         Ok(Render { renderer, sample_rate, first, end, length, stop: Arc::default(), exact: true, reproducible: pure(flat) })
     }
 

@@ -390,12 +390,8 @@ pub(crate) fn current_site<'a>(s: &'a Session, at: u64, call: &str) -> Result<&'
         let past = s.past(at)?;
         let old = past.sites().iter().find(|x| x.file == file && x.ordinal == ordinal)?;
         let p = Path::new(file);
-        let to = crate::controls::carry_text(
-            past.snapshot.files.get(p)?,
-            accepted.snapshot.files.get(p)?,
-            old.start as usize,
-            old.end as usize,
-        )? as u32;
+        let (was, is) = (past.snapshot.files.get(p)?, accepted.snapshot.files.get(p)?);
+        let to = m2_session::text::Edits::between(was, is).carry(old.start as usize..old.end as usize)?.start as u32;
         sites.iter().find(|x| x.file == file && x.start == to && x.end == to + (old.end - old.start))
     };
     carried().ok_or(EditError::Stale { current: accepted.number })

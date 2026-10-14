@@ -1,13 +1,15 @@
 //! `GraphDelta` (WRITE-8): what changed from one revision's graph to another's, computed by core
 //! itself, with nodes named so that inserting one can't rename another.
 //!
-//! A node made at a site is named by its module key, its frame chain (each frame its call's
-//! range), what it is and where it was made, and its occurrence among nodes otherwise named
-//! alike. Ranges are points in each file's reference coordinates (`text::Coords`): offsets in the
-//! reference text, or bytes of what a change made. So nothing an insertion elsewhere does can
-//! shift a name, and two processes checking one Tx name every node alike (the step 6 design's
-//! 5.2, C17). Source positions, labels, node ids, site numbers and whether a control was written
-//! or inherited are no part of a node, so they never differ (WRITE-6).
+//! A node made at a site is named by its module key, its frame chain (each frame its ComponentId
+//! and its call, nothing positional above a `key()` frame), what it is and the call that made it,
+//! and its occurrence among nodes otherwise named alike. A call is the point of the `(` that
+//! opens its arguments (ID-13), in each file's reference coordinates (`text::Coords`): an offset
+//! in the reference text, or a byte of what a change made. So nothing an insertion elsewhere does
+//! can shift a name, a wrap keeps what it wraps, and two processes checking one Tx name every
+//! node alike (the step 6 design's 5.2, C17). Source positions, labels, node ids, site numbers and
+//! whether a control was written or inherited are no part of a node, so they never differ
+//! (WRITE-6).
 //!
 //! The delta drives the engine and judges expectations; its hash is SHA-256 of its JSON in JCS
 //! form, every list sorted by name.
@@ -181,6 +183,9 @@ pub struct Facts {
     pub written: Option<At>,
     /// A declared control's constant: its instance's call and its slot (PKG-3).
     pub slot: Option<(At, String)>,
+    /// How many times each positional segment's call ran in its parent, then how many nodes share
+    /// the name but for its occurrence: what is kept by index only while it is the same (ID-14).
+    pub counts: Vec<u32>,
 }
 
 /// Where a node was made, as [`Facts`] keeps it.
@@ -188,6 +193,15 @@ struct Places {
     spans: Vec<At>,
     written: Option<At>,
     slot: Option<(At, String)>,
+    counts: Vec<u32>,
+}
+
+/// A module as its names read it: the calls by site, and how many times each call ran in each
+/// parent frame (ID-14).
+struct Within<'a> {
+    m: &'a Module,
+    sites: &'a HashMap<u32, &'a Site>,
+    runs: HashMap<(Option<u32>, u32), u32>,
 }
 
 /// A module's nodes with its key taken off every name, to tell a module re-keyed.
@@ -240,35 +254,45 @@ impl Side<'_> {
         At { file: file.to_string(), start: self.at.point(file, s), end: self.at.point(file, e) }
     }
 
-    /// `@file:start-end`, its points spelled.
-    fn spell(&self, at: &At) -> String {
-        format!("@{}:{}-{}", at.file, self.at.spell(&at.file, &at.start), self.at.spell(&at.file, &at.end))
+    /// `@file:point`: a call named by the point of its `(` (ID-13).
+    fn called(&self, s: &Site) -> String {
+        format!("@{}:{}", s.file, self.at.spell(&s.file, &self.at.point(&s.file, s.open as usize)))
     }
 
-    /// The chain segments of `frame` in `m`: `key:<k>` for a `key()` frame, else its call's place
-    /// and its occurrence; with each frame's call as a place.
-    fn chain(&self, m: &Module, frame: Option<u32>, sites: &HashMap<u32, &Site>) -> (Vec<String>, Vec<At>) {
-        let mut segs = vec![];
-        let mut places = vec![];
-        for f in m.chain(frame) {
-            let place = sites.get(&f.site).map(|s| self.place(&s.file, s.start, s.end));
-            segs.push(match (&f.key, &place) {
-                (Some(k), _) => format!("key:{k}"),
-                (None, Some(p)) => format!("{}#{}", self.spell(p), f.occurrence),
-                (None, None) => format!("@?#{}", f.occurrence),
-            });
-            places.extend(place);
+    /// The chain segments of `frame`, each frame's call as a place, and how many times each
+    /// positional segment's call ran in its parent (ID-14). A `key()` frame is `key:<k>`, a
+    /// component frame its ComponentId, its call and its occurrence (ID-15). Keys are unique per
+    /// parent key frame, so nothing positional above the innermost one names anything (ID-7).
+    fn chain(&self, w: &Within, frame: Option<u32>) -> (Vec<String>, Vec<At>, Vec<u32>) {
+        let frames = w.m.chain(frame);
+        let pinned = frames.iter().rposition(|f| f.key.is_some());
+        let (mut segs, mut places, mut counts) = (vec![], vec![], vec![]);
+        for (i, f) in frames.iter().enumerate() {
+            let site = w.sites.get(&f.site);
+            places.extend(site.map(|s| self.place(&s.file, s.start, s.end)));
+            match &f.key {
+                Some(k) => segs.push(format!("key:{k}")),
+                None if pinned.is_some_and(|p| i < p) => {}
+                None => {
+                    let call = site.map_or("@?".to_string(), |s| self.called(s));
+                    segs.push(format!("{}{call}#{}", f.component.as_deref().unwrap_or(""), f.occurrence));
+                    counts.push(w.runs.get(&(f.parent, f.site)).copied().unwrap_or(1));
+                }
+            }
         }
-        (segs, places)
+        (segs, places, counts)
     }
 
     /// A node's name segments after its module key (before its occurrence), and what it is.
-    fn segments(&self, m: &Module, n: &Node, sites: &HashMap<u32, &Site>) -> (Vec<String>, Places) {
+    fn segments(&self, w: &Within, n: &Node) -> (Vec<String>, Places) {
+        let (m, sites) = (w.m, w.sites);
         let site = n.origin.as_ref().and_then(|o| sites.get(&o.site).copied());
         let call = site.map(|s| self.place(&s.file, s.start, s.end));
+        let called = site.map(|s| self.called(s)).unwrap_or_default();
         let mut spans = vec![];
         let mut written = None;
         let mut slot = None;
+        let mut counts = vec![];
         if let (Some(o), Some(s)) = (&n.origin, site) {
             match s.arg(&o.arg).filter(|_| !o.arg.is_empty()) {
                 Some(a) => {
@@ -285,31 +309,34 @@ impl Side<'_> {
         let segs = match (&n.op, &n.origin) {
             (Op::Const { .. }, Some(o)) if o.control.is_some() => {
                 let c = o.control.as_ref().expect("checked");
-                let (mut segs, places) = self.chain(m, Some(c.frame), sites);
+                let (mut segs, places, runs) = self.chain(w, Some(c.frame));
                 if let Some(instance) = m.frames.get(c.frame as usize).and_then(|f| sites.get(&f.site)) {
                     slot = Some((self.place(&instance.file, instance.start, instance.end), c.slot.clone()));
                 }
                 spans.extend(places);
+                counts = runs;
                 segs.push(format!("@{}", c.slot));
                 segs
             }
-            (Op::Lane { lane }, _) => vec![format!("lane:{lane}{}", call.as_ref().map(|c| self.spell(c)).unwrap_or_default())],
+            (Op::Lane { lane }, _) => vec![format!("lane:{lane}{called}")],
             (Op::Time { of }, _) => {
                 vec![format!("time:{}", serde_json::to_value(of).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default())]
             }
             (Op::Import { module, export }, _) => vec![format!("import:{module}.{export}")],
             (op, Some(o)) => {
-                let (mut segs, places) = self.chain(m, n.frame, sites);
+                let (mut segs, places, runs) = self.chain(w, n.frame);
                 spans.extend(places);
-                segs.push(format!("{}{}", op_name(op), call.as_ref().map(|c| self.spell(c)).unwrap_or_default()));
+                counts = runs;
+                segs.push(format!("{}{called}", op_name(op)));
                 if matches!(op, Op::Const { .. }) && !o.arg.is_empty() {
                     segs.push(format!("[{}]", o.arg.join(".")));
                 }
                 segs
             }
             (op, None) => {
-                let (mut segs, places) = self.chain(m, n.frame, sites);
+                let (mut segs, places, runs) = self.chain(w, n.frame);
                 spans.extend(places);
+                counts = runs;
                 let id = match op {
                     Op::Kernel { kernel, .. } => kernel.as_str(),
                     Op::Plugin { plugin, .. } => plugin.as_str(),
@@ -328,7 +355,7 @@ impl Side<'_> {
             let p = self.at.point(file, at);
             spans.push(At { file: file.to_string(), start: p, end: p });
         }
-        (segs, Places { spans, written, slot })
+        (segs, Places { spans, written, slot, counts })
     }
 
     /// The node's op, without its inputs.
@@ -350,17 +377,21 @@ impl Side<'_> {
     }
 
     /// Name every node of `nodes` (one scope: a module's top level, or a voice) under `prefix`.
-    fn name_all(&self, m: &Module, nodes: &[Node], prefix: &Name, sites: &HashMap<u32, &Site>) -> Vec<(Name, Places)> {
-        let mut count: HashMap<Vec<String>, usize> = HashMap::new();
-        nodes
-            .iter()
-            .map(|n| {
-                let (segs, places) = self.segments(m, n, sites);
-                let k = count.entry(segs.clone()).or_default();
+    fn name_all(&self, w: &Within, nodes: &[Node], prefix: &Name) -> Vec<(Name, Places)> {
+        let made: Vec<(Vec<String>, Places)> = nodes.iter().map(|n| self.segments(w, n)).collect();
+        // For each name but its occurrence: how many share it, and the next occurrence.
+        let mut groups: HashMap<Vec<String>, (u32, u32)> = HashMap::new();
+        for (segs, _) in &made {
+            groups.entry(segs.clone()).or_default().0 += 1;
+        }
+        made.into_iter()
+            .map(|(segs, mut places)| {
+                let (size, next) = groups.get_mut(&segs).expect("counted");
+                places.counts.push(*size);
                 let mut name = prefix.clone();
                 name.extend(segs);
-                name.push(format!("#{k}"));
-                *k += 1;
+                name.push(format!("#{next}"));
+                *next += 1;
                 (name, places)
             })
             .collect()
@@ -370,14 +401,13 @@ impl Side<'_> {
     /// first, then the module's), and the voices inside it. Returns the scope's names by id.
     fn scope(
         &self,
-        m: &Module,
+        w: &Within,
         nodes: &[Node],
         prefix: &Name,
         outer: Option<&HashMap<String, Name>>,
-        sites: &HashMap<u32, &Site>,
         g: &mut Graph,
     ) -> HashMap<String, Name> {
-        let named = self.name_all(m, nodes, prefix, sites);
+        let (m, named) = (w.m, self.name_all(w, nodes, prefix));
         let mut ids: HashMap<String, Name> = outer.cloned().unwrap_or_default();
         for (n, (name, ..)) in nodes.iter().zip(&named) {
             ids.insert(n.id.clone(), name.clone());
@@ -386,7 +416,7 @@ impl Side<'_> {
             let (id, port) = split_ref(r);
             Ref { node: ids.get(id).cloned().unwrap_or_else(|| vec![m.key.clone(), format!("?{id}")]), port: port.to_string() }
         };
-        for (n, (name, Places { spans, written, slot })) in nodes.iter().zip(named) {
+        for (n, (name, Places { spans, written, slot, counts })) in nodes.iter().zip(named) {
             let mut inputs = BTreeMap::new();
             match &n.op {
                 Op::Kernel { inputs: i, .. } | Op::Plugin { inputs: i, .. } => {
@@ -401,7 +431,7 @@ impl Side<'_> {
                     inputs.insert("events".into(), resolve(&ids, events));
                     let mut voice = name.clone();
                     voice.push("voice".into());
-                    let local = self.scope(m, &body.nodes, &voice, Some(&ids), sites, g);
+                    let local = self.scope(w, &body.nodes, &voice, Some(&ids), g);
                     inputs.insert("out".into(), resolve(&local, &body.out));
                 }
                 _ => {}
@@ -412,19 +442,37 @@ impl Side<'_> {
             };
             let sig = Side::sig(m, n, outer.is_some());
             debug_assert!(!g.nodes.contains_key(&name), "a name built twice: {name:?}");
-            g.nodes.insert(name, Facts { sig, inputs, value, spans, written, slot });
+            g.nodes.insert(name, Facts { sig, inputs, value, spans, written, slot, counts });
         }
         ids
     }
 
     /// The whole graph, by name.
     pub fn graph(&self) -> Graph {
+        self.walk(None)
+    }
+
+    /// The whole graph, and each top-level node's name by its checked name (`<module>/<node id>`,
+    /// `FNode::name`): what `continues` joins a revision's nodes by.
+    pub fn named(&self) -> (Graph, HashMap<String, Name>) {
+        let mut top = HashMap::new();
+        (self.walk(Some(&mut top)), top)
+    }
+
+    fn walk(&self, mut top: Option<&mut HashMap<String, Name>>) -> Graph {
         let sites = self.sites();
         let mut g = Graph::default();
         let ir = &self.compiled.ir;
         for m in &ir.modules {
             g.modules.insert(m.key.clone());
-            let ids = self.scope(m, &m.nodes, &vec![m.key.clone()], None, &sites, &mut g);
+            let mut runs = HashMap::new();
+            for f in &m.frames {
+                *runs.entry((f.parent, f.site)).or_default() += 1;
+            }
+            let ids = self.scope(&Within { m, sites: &sites, runs }, &m.nodes, &vec![m.key.clone()], None, &mut g);
+            if let Some(top) = top.as_deref_mut() {
+                top.extend(ids.iter().map(|(id, name)| (format!("{}/{id}", m.key), name.clone())));
+            }
             for (e, r) in &m.exports {
                 let (id, port) = split_ref(r);
                 let node = ids.get(id).cloned().unwrap_or_else(|| vec![m.key.clone(), format!("?{id}")]);

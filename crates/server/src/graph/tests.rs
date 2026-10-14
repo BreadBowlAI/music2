@@ -1425,8 +1425,8 @@ fn a_broken_project_opens_and_plays_once_saved_fixed() {
 
 // WRITE-22, step 3's gate "an outside save to another file during a drag doesn't interrupt the
 // drag": an agent saves tracks/b.ts while a knob in tracks/a.ts is dragged. The save compiles and
-// a new renderer takes over, crossfaded; the drag's value plays on every frame of it, never the
-// code's, and the next update reaches the new renderer. The commit writes a.ts alone.
+// a new plan takes over, keeping a.ts's instances; the drag's value plays on every frame of it,
+// never the code's, and the next update reaches the new plan. The commit writes a.ts alone.
 #[test]
 fn an_outside_save_to_another_file_during_a_drag_does_not_interrupt_it() {
     let mut dc = Dc::new();
@@ -1445,13 +1445,13 @@ fn an_outside_save_to_another_file_during_a_drag_does_not_interrupt_it() {
     assert!(dc.graph.poll());
     let mut heard = dc.frames(1);
     assert_ne!(dc.generation(), first, "a new renderer plays");
-    assert!(dc.driver.engine().unwrap().fading().is_some(), "crossfading from the old one");
+    assert!(dc.driver.engine().unwrap().in_window(), "b.ts's changed edges crossfading");
     // Mid-fade, the drag moves on: it reaches the new renderer.
     let lease = &dc.graph.leases()[0];
     assert_eq!((lease.lease, lease.generation), (l.lease, Some(dc.generation())), "the lease aims at the new renderer");
     assert!(dc.graph.update(l.lease, None, 0.92).unwrap().is_some());
     heard.extend(dc.frames(6));
-    assert!(dc.driver.engine().unwrap().fading().is_none());
+    assert!(!dc.driver.engine().unwrap().in_window());
     // Never the code's 0.5, not for one frame: 0.9 until the update, then on to 0.92.
     assert!(heard.iter().all(|x| (0.9 - 1e-6..=0.92 + 1e-6).contains(&(*x as f64))), "{heard:?}");
     assert!(near(*heard.last().unwrap(), 0.92));
@@ -1829,11 +1829,16 @@ impl Dc {
     }
 }
 
-// HOST-5, RENDER-25, WRITE-22: an outside save that rebuilds the song carries its plugin instances
-// into the new renderer, and a drag through it goes on; a rate change, a new engine, creates them
-// anew; closing the project destroys every one before it returns.
+/// The plugin instances of the plan last sent, as the actor knows them.
+fn plays_handles(graph: &Graph) -> Vec<m2_plugins::Handle> {
+    graph.inspect(|a| a.open.as_ref().unwrap().plays.as_ref().unwrap().info.plugins.iter().map(|p| p.1).collect())
+}
+
+// HOST-5, RENDER-25, WRITE-22: an outside save that changes the song's structure keeps its plugin
+// instances in the new plan, and a drag through it goes on; a rate change, a new engine, creates
+// them anew; closing the project destroys every one before it returns.
 #[test]
-fn rebuilds_carry_the_plugin_instances_and_closing_destroys_them() {
+fn activations_keep_the_plugin_instances_and_closing_destroys_them() {
     let mut dc = with_probe();
     let first = dc.handles();
     assert_eq!(first.len(), 1);
@@ -1853,12 +1858,12 @@ fn rebuilds_carry_the_plugin_instances_and_closing_destroys_them() {
     assert_ne!(dc.generation(), generation, "a new renderer");
     assert_eq!(dc.handles(), first, "with the same instance");
     assert_eq!(dc.graph.leases()[0].generation, Some(dc.generation()));
-    assert_eq!(dc.graph.inspect(|a| a.open.as_ref().unwrap().carry.handles()), first);
+    assert_eq!(plays_handles(&dc.graph), first);
 
     // A new engine at another rate: never carried.
     dc.fixture.put("music2.toml", &MANIFEST.replace("48000", "44100"));
     assert!(dc.graph.poll());
-    let fresh = dc.graph.inspect(|a| a.open.as_ref().unwrap().carry.handles());
+    let fresh = plays_handles(&dc.graph);
     assert!(fresh.len() == 1 && fresh != first, "{fresh:?} after {first:?}");
 
     // Closing waits for the instances to be destroyed, while the device plays the fade out.
@@ -1877,11 +1882,11 @@ fn rebuilds_carry_the_plugin_instances_and_closing_destroys_them() {
     assert_eq!(dc.graph.inner.owner.live(), 0);
 }
 
-// HOST-5, RENDER-25: a renderer that fails to build (a plugin added after the probe can't load its
-// state) leaves what plays playing, and the build after the fix still carries the probe's instance:
-// the failed build gave back what it took.
+// HOST-5, RENDER-25: a plan that fails to prepare (a plugin added after the probe can't load its
+// state) leaves what plays playing, and the plan after the fix still keeps the probe's instance:
+// the failed prepare touched nothing that plays.
 #[test]
-fn a_build_that_failed_doesnt_stop_the_next_one_carrying() {
+fn a_failed_prepare_leaves_what_plays_untouched() {
     let mut dc = with_probe();
     let first = dc.handles();
     let generation = dc.generation();
@@ -1898,13 +1903,14 @@ fn a_build_that_failed_doesnt_stop_the_next_one_carrying() {
     let (plays, accepted) = playing(&dc.graph);
     assert!(plays < accepted, "the new revision's renderer didn't build");
     assert_eq!((dc.generation(), dc.handles()), (generation, first.clone()), "what played plays on");
-    // Fixed: the next build carries the probe, and creates only the new plugin.
+    // Fixed: the next plan keeps the probe (wrapped, by its name: its `(` is kept, ID-13), and
+    // creates only the new plugin.
     dc.fixture.put("data/p/bad.state", "loads");
     assert!(dc.graph.poll());
     dc.frames(8);
     let now = dc.handles();
     assert_ne!(dc.generation(), generation, "a new renderer");
-    assert!(now.len() == 2 && now.contains(&first[0]), "the probe was carried: {now:?} after {first:?}");
+    assert!(now.len() == 2 && now.contains(&first[0]), "the probe was kept: {now:?} after {first:?}");
 }
 
 // HOST-5 (critique 17): a player that stopped responding is replaced, and the project loaded into
@@ -1912,7 +1918,7 @@ fn a_build_that_failed_doesnt_stop_the_next_one_carrying() {
 #[test]
 fn a_new_player_after_a_stall_creates_every_instance_anew() {
     let dc = with_probe();
-    let first = dc.graph.inspect(|a| a.open.as_ref().unwrap().carry.handles());
+    let first = plays_handles(&dc.graph);
     let t = Instant::now();
     while dc.graph.seek(1.0).is_ok() {
         assert!(t.elapsed() < Duration::from_secs(5), "the queue never filled");
@@ -1920,10 +1926,7 @@ fn a_new_player_after_a_stall_creates_every_instance_anew() {
     assert!(dc.graph.transport("play").is_err(), "the stalled player is let go");
     dc.fixture.put("tracks/a.ts", &A_DC.replace("  return", "  // a comment\n  return"));
     assert!(dc.graph.poll());
-    let (epoch, now) = dc.graph.inspect(|a| {
-        let o = a.open.as_ref().unwrap();
-        (o.plays.as_ref().unwrap().epoch, o.carry.handles())
-    });
+    let (epoch, now) = (dc.graph.inspect(|a| a.open.as_ref().unwrap().plays.as_ref().unwrap().epoch), plays_handles(&dc.graph));
     assert_eq!(epoch, 1, "loaded into the new player");
     assert!(now.len() == 1 && now != first, "{now:?} after {first:?}");
 }
@@ -2152,4 +2155,146 @@ fn a_lease_on_a_shared_literal_moves_every_cell() {
     assert_eq!(dc.graph.leases()[0].home, m2_session::Home::Code, "HOME-1");
     dc.graph.cancel(begun.lease).unwrap();
     assert!(dc.blocks(3).iter().skip(1).all(|x| near(*x, 0.5)), "put back in both");
+}
+
+/// A copy of the repository's project `rel`, open in a driven player and playing.
+fn example(rel: &str) -> Dc {
+    fn copy(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for e in std::fs::read_dir(from).unwrap().flatten() {
+            let (f, t) = (e.path(), to.join(e.file_name()));
+            if f.is_dir() { copy(&f, &t) } else { std::fs::copy(&f, &t).map(drop).unwrap() }
+        }
+    }
+    let fixture = Fixture::new();
+    copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(rel), &fixture.0);
+    let (p, driver) = Player::driven(48_000);
+    let graph = Graph::with_player(p);
+    graph.open(&fixture.0).unwrap();
+    let mut dc = Dc { fixture, graph, driver };
+    dc.graph.transport("play").unwrap();
+    dc.frames(40);
+    dc
+}
+
+impl Dc {
+    /// What the playing plan's activation kept and made.
+    fn stats(&mut self) -> m2_runtime::Stats {
+        self.driver.engine().unwrap().current().unwrap().stats().clone()
+    }
+}
+
+// RENDER-27, RENDER-25 (§8.3): an edited audio clip is an activation of the same structure that
+// keeps every instance: nothing is new, nothing fades but the lane, whose renders crossfade.
+#[test]
+fn an_audio_edit_is_an_activation_that_keeps_every_instance() {
+    let mut dc = example("examples/resample");
+    let first = dc.generation();
+    let clips = dc.fixture.read("data/chops/clips.json");
+    dc.fixture.put("data/chops/clips.json", &clips.replacen("\"gain_db\": 0", "\"gain_db\": -3", 1));
+    assert!(dc.graph.poll());
+    dc.frames(1);
+    assert_ne!(dc.generation(), first, "an activation");
+    assert!(dc.driver.engine().unwrap().in_window(), "the lane's renders crossfade");
+    let s = dc.stats();
+    assert_eq!((s.fresh.total(), s.ghosts, s.fades, s.resets), (0, 0, 0, 0), "{s:?}");
+    assert!(s.kept.total() >= 5, "every kernel and voice pool: {s:?}");
+}
+
+// RENDER-27 (§8.4): a tempo change is an activation of the same structure: every instance kept,
+// nothing fades, and the beat goes on.
+#[test]
+fn a_tempo_change_keeps_every_instance() {
+    let mut dc = example("examples/resample");
+    let before = player(&dc.graph).status().beats;
+    dc.fixture.put("data/arrangement.json", "{\"tempo\": [{\"beat\": 0, \"bpm\": 100}], \"meter\": []}\n");
+    assert!(dc.graph.poll());
+    dc.frames(1);
+    let s = dc.stats();
+    assert_eq!((s.fresh.total(), s.ghosts, s.fades, s.resets), (0, 0, 0, 0), "{s:?}");
+    let after = player(&dc.graph).status().beats;
+    assert!(after > before && after - before < 0.1, "the beat goes on: {before} then {after}");
+}
+
+// HOST-5 (§10.3): a plugin that asks to be restarted is replaced at once, by the catch-up's
+// activation: a new instance from its committed state, and the old one destroyed.
+#[test]
+fn a_restart_request_replaces_the_instance_from_its_committed_state() {
+    let mut dc = with_probe();
+    let first = dc.handles();
+    m2_plugins::probe::stats(first[0]).unwrap().restart.store(true, Ordering::Relaxed);
+    dc.frames(4);
+    eventually("the restart is heard", || dc.graph.catch_up());
+    dc.frames(8);
+    let now = dc.handles();
+    assert!(now.len() == 1 && now != first, "{now:?} after {first:?}");
+    assert_eq!(dc.stats().fresh.plugins, 1);
+    eventually("the old instance is destroyed", || dc.graph.inner.owner.live() == 1);
+}
+
+// RENDER-28 (§7.5): an activation the engine refuses (here, prepared against a plan the engine no
+// longer plays: something else was activated behind the actor's back) leaves what plays playing,
+// and the next settle recovers with a fresh engine at the same beat.
+#[test]
+fn a_refused_activation_recovers_by_replace() {
+    let mut dc = Dc::new();
+    // Behind the actor's back: a plan of what plays, prepared against it and activated.
+    let other = dc.graph.inspect(|a| {
+        let o = a.open.as_ref().unwrap();
+        let p = o.plays.as_ref().unwrap();
+        let (flat, data) = (&p.revision.compiled.flat, &p.revision.compiled.data);
+        let restarts = std::collections::HashSet::new();
+        let cont = m2_runtime::Continues::identity(flat);
+        let keep = m2_runtime::Keep { old: flat, old_data: data, info: &p.info, cont: &cont, restarts: &restarts };
+        let (mut cache, owner) = (m2_runtime::audio::Cache::default(), m2_plugins::Owner::discard());
+        m2_runtime::Renderer::prepare(flat, data, &o.session.packages, 48_000, &mut cache, &owner, m2_runtime::Basis::Keep(keep)).unwrap()
+    });
+    player(&dc.graph).activate(other).unwrap();
+    dc.frames(4);
+    // The actor's next activation is prepared against the plan it sent last: refused.
+    dc.fixture.put("tracks/b.ts", &B_SILENT.replace("vca(osc.saw(hz(110)), 0)", "vca(osc.saw(hz(220)), 0)"));
+    dc.fixture.put("tracks/a.ts", &A_DC.replace("  return", "  const spare = osc.sine(hz(1));\n  return"));
+    assert!(dc.graph.poll());
+    dc.frames(4);
+    assert_eq!(player(&dc.graph).refused(), 1);
+    assert_eq!(dc.blocks(2), [0.5, 0.5], "what played plays on");
+    // The catch-up waits while the actor is busy.
+    eventually("a fresh engine replaces it", || dc.graph.catch_up());
+    dc.frames(8);
+    let (plays, generation, refused) = dc.graph.inspect(|a| {
+        let o = a.open.as_ref().unwrap();
+        (o.playing, o.plays.as_ref().unwrap().generation, o.plays.as_ref().unwrap().refused)
+    });
+    assert_eq!(dc.generation(), generation, "it plays what the actor sent");
+    assert_eq!(plays, Some(playing(&dc.graph).1));
+    assert_eq!(refused, player(&dc.graph).refused(), "and is in step");
+    assert_eq!(dc.blocks(2), [0.5, 0.5]);
+}
+
+// HOST-5, ID-8 (§3.2): two keyed plugins whose keys swap places in the code keep their instances,
+// each following its key; none is created.
+#[test]
+fn swapping_two_plugin_keys_moves_the_instances() {
+    m2_plugins::probe::install();
+    let fixture = Fixture::new();
+    let song = |first: &str, second: &str| {
+        format!(
+            "import {{ plugin, song }} from '@m2/core';\nimport {{ sum }} from 'std/math';\nexport default song(() => sum(\n  \
+             plugin('clap:m2.probe', {{ key: '{first}' }}),\n  plugin('clap:m2.probe', {{ key: '{second}' }}),\n));\n"
+        )
+    };
+    fixture.put("song.ts", &song("lead", "pad"));
+    let (p, driver) = Player::driven(48_000);
+    let graph = Graph::with_player(p);
+    graph.open(&fixture.0).unwrap();
+    let mut dc = Dc { fixture, graph, driver };
+    dc.graph.transport("play").unwrap();
+    dc.frames(4);
+    let first = dc.handles();
+    let created = m2_plugins::InProcess::counts().0;
+    dc.fixture.put("song.ts", &song("pad", "lead"));
+    assert!(dc.graph.poll());
+    dc.frames(4);
+    assert_eq!(dc.handles(), [first[1], first[0]], "each key kept its instance");
+    assert_eq!(m2_plugins::InProcess::counts().0, created, "none created");
 }

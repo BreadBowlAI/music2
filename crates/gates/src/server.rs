@@ -49,11 +49,16 @@ fn open(dir: &Path, song: &Song) -> Result<Arc<Graph>> {
 
 /// [`open`] in `graph`.
 fn open_with(graph: Arc<Graph>, dir: &Path, song: &Song) -> Result<Arc<Graph>> {
+    open_at(graph, dir, song, 60.0)
+}
+
+/// [`open_with`], playing from `seconds`.
+fn open_at(graph: Arc<Graph>, dir: &Path, song: &Song, seconds: f64) -> Result<Arc<Graph>> {
     if std::env::var("M2_AUDIO").as_deref() != Ok("none") {
         bail!("server gates run on the silent player only: set M2_AUDIO=none");
     }
     graph.open(dir)?;
-    graph.seek(song.beat(song.rate as u64 * 60))?;
+    graph.seek(song.beat((seconds * song.rate as f64) as u64))?;
     graph.transport("play")?;
     std::thread::sleep(Duration::from_secs(1));
     Ok(graph)
@@ -280,34 +285,53 @@ pub fn note_edit(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     Ok(out)
 }
 
-/// G5 through the server: `add_effect` puts a delay after a track's `pluck`, from 1:00, on up to
-/// `o.edits` tracks one after another. The playhead, sampled every 2 ms meanwhile, must never jump
-/// back (RENDER-8, RENDER-25a).
+/// G5 and G7a through the server, from `o.at` (1:00; G7a's recorded run is p50 from 3:00): `o.edits`
+/// edits through the app, alternately a delay added after t02's `pluck` (`add_effect`) and taken
+/// out again (`undo`), each a code edit the engine hears as an activation. Each must be heard within
+/// compile + 100 ms (G5) and within 200 ms of its request, its compile, check and verify included
+/// (G7a, which is stricter than the contract's "after the compile finishes"); the playhead, sampled
+/// every 2 ms meanwhile, must never jump back (RENDER-8, RENDER-25a).
 pub fn add_effect(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     let dir = lab.reference(&o.reference)?;
     let song = lab.compile(&dir)?;
-    let graph = open(&dir, &song)?;
-    let mut out =
-        Outcome::new("G5 add effect, through the server", "RENDER-8, RENDER-25, RENDER-25a", &format!("server on {}", o.reference.name()));
-    let calls: Vec<String> = {
+    let graph = open_at(Arc::new(Graph::default()), &dir, &song, o.at)?;
+    let rules = "RENDER-8, RENDER-25, RENDER-25a";
+    let mut out = Outcome::new("G5 and G7a add effect, through the server", rules, &format!("server on {} from {:.0} s", o.reference.name(), o.at));
+    let call = {
         let s = lab.session(&dir)?;
-        let sites = s.accepted().compiled.sites.iter().filter(|x| x.in_project && x.file.starts_with("tracks/") && x.callee == "pluck");
-        sites.map(|x| format!("{}#{}", x.file, x.ordinal)).take(o.edits).collect()
+        let site = s.accepted().compiled.sites.iter().find(|x| x.in_project && x.file == "tracks/t02.ts" && x.callee == "pluck").cloned();
+        site.map(|x| format!("{}#{}", x.file, x.ordinal)).context("no pluck in the reference project's t02")?
     };
-    if calls.is_empty() {
-        bail!("no pluck in the reference project's tracks");
-    }
     let mut rng = Rng::new(o.seed);
     let mut timed = Timed::default();
+    let (mut asked, mut since_compile, mut cont, mut prepare, mut fresh) = (vec![], vec![], vec![], vec![], vec![]);
     let sampler = Sampler::start(&graph);
-    for call in &calls {
+    for k in 0..o.edits {
         let (token, revision) = session_and_revision(&graph)?;
-        graph.add_effect(token, revision, call, "std:delay")?;
+        if k % 2 == 0 {
+            graph.add_effect(token, revision, &call, "std:delay")?;
+        } else {
+            graph.undo(token)?;
+        }
         timed.add(&graph, song.rate)?;
+        let t = graph.last_edit().context("the edit left no timing")?;
+        asked.push(heard_ms(&graph, t, t.requested_ns, song.rate)?);
+        since_compile.push(heard_ms(&graph, t, t.compiled_ns, song.rate)?);
+        cont.push(t.continues_ns as f64 / 1e6);
+        prepare.push(t.prepare_ns as f64 / 1e6);
+        fresh.push(t.fresh);
         std::thread::sleep(Duration::from_secs_f64(rng.range(0.3, 1.0)));
     }
     let back = sampler.finish();
     timed.report(&mut out, "", 100.0);
+    out.info("G7a: of the server's part, naming what continues", Summary::of(&cont));
+    out.info("G7a: and preparing the plan", Summary::of(&prepare));
+    out.info("G7a: heard after the compile finished (the contract's own start)", Summary::of(&since_compile));
+    let heard = Summary::of(&asked);
+    out.check("G7a: heard within 200 ms of the request, its compile included", heard.max <= 200.0, heard);
+    // The delay's own instances only: the pluck it wraps, and everything else, goes on (ID-13).
+    let most = fresh.iter().copied().max().unwrap_or(0);
+    out.check("G7a: at most 3 instances made new per edit", most <= 3, format!("{fresh:?} made new by the {} edits", fresh.len()));
     out.check(
         "no jump back",
         back <= 1e-9,
@@ -327,9 +351,9 @@ pub fn add_effect(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
 }
 
 /// G5 on `examples/with-plugins`, playing from its start: a delay after the kick, then after the
-/// lead's last plugin (Airwindows). Each activation must carry Surge XT and Airwindows (HOST-5),
-/// so building the new renderer creates no plugin instance and the server's part before it sends
-/// costs no plugin load (RENDER-25); and the playhead never jumps back.
+/// lead's last plugin (Airwindows). Each activation must keep Surge XT and Airwindows (HOST-5,
+/// RENDER-25), so preparing the new plan creates no plugin instance and the server's part before it
+/// sends costs no plugin load; and the playhead never jumps back.
 fn add_effect_with_plugins(out: &mut Outcome, lab: &Lab, o: &Opts, dir: &Path, graph: &Arc<Graph>) -> Result<()> {
     let rate = graph.state().context("no project is open")?["sample_rate"].as_u64().context("no rate")? as u32;
     let calls: Vec<String> = {
@@ -356,7 +380,7 @@ fn add_effect_with_plugins(out: &mut Outcome, lab: &Lab, o: &Opts, dir: &Path, g
     timed.report(out, "with-plugins: ", 100.0);
     out.check("with-plugins: no jump back", back <= 1e-9, format!("largest step back {back:.3} beats"));
     out.check(
-        "with-plugins: each activation carried every plugin instance, creating none",
+        "with-plugins: each activation kept every plugin instance, creating none",
         created() == made,
         format!("{} created over {} activations", created() - made, calls.len()),
     );
@@ -540,7 +564,7 @@ fn created() -> u64 {
 
 /// G8 on `examples/with-plugins`: a lease on the lead's channel level in song.ts, updated every
 /// 10 ms, while a save to tracks/kick.ts compiles for over a second and changes the kick's
-/// envelope, then is saved back. Both saves activate a new renderer, which must carry Surge XT and
+/// envelope, then is saved back. Both saves activate a new plan, which must keep Surge XT and
 /// Airwindows (HOST-5): the drag's updates are heard as fast during the compile, and it aims at the
 /// newest renderer after.
 fn previews_with_plugins(out: &mut Outcome, lab: &Lab, dir: &Path, graph: &Arc<Graph>) -> Result<()> {
@@ -552,7 +576,7 @@ fn previews_with_plugins(out: &mut Outcome, lab: &Lab, dir: &Path, graph: &Arc<G
     let made = created();
     let kick = std::fs::read_to_string(dir.join("tracks/kick.ts"))?;
     // Slow, and structural (the kick wrapped in a delay): from step 6 a save that changes only
-    // values is written into the cells of what plays, with no new renderer to carry instances into.
+    // values is written into the cells of what plays, with no new plan to keep instances in.
     let slow_kick = slow(&delayed_kick(&kick), 150_000_000);
     let saver = {
         let (g, kick) = (graph.clone(), kick.clone());
@@ -603,7 +627,7 @@ fn previews_with_plugins(out: &mut Outcome, lab: &Lab, dir: &Path, graph: &Arc<G
     }
     let now = graph.leases().into_iter().find(|l| l.lease == lease).and_then(|l| l.generation);
     out.check(
-        "with-plugins: both saves activated renderers that carried every plugin instance, and the drag aims at the newest",
+        "with-plugins: both saves activated plans that kept every plugin instance, and the drag aims at the newest",
         created() == made && now.is_some() && now != generation,
         format!("{} instances created; the drag's renderer {generation:?} then {now:?}", created() - made),
     );
@@ -619,7 +643,7 @@ fn previews_with_plugins(out: &mut Outcome, lab: &Lab, dir: &Path, graph: &Arc<G
 /// plays, and its commit must write song.ts alone, leaving every outside edit on disk. The same
 /// runs on `examples/with-plugins` when its plugins are installed: the drag is the lead's channel
 /// level in song.ts and the agent edits tracks/kick.ts (a comment, the kick wrapped in a delay, and
-/// back), so the structural saves activate renderers that carry the plugin instances (HOST-5). (A plugin parameter written in code, Airwindows' dry/wet, isn't a
+/// back), so the structural saves activate plans that keep the plugin instances (HOST-5). (A plugin parameter written in code, Airwindows' dry/wet, isn't a
 /// knob the session offers yet, so it can't be dragged.)
 pub fn drag(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     let mut out = Outcome::new("G9 drag through outside saves", "WRITE-22, WRITE-12, HOST-5", &format!("server on {}", o.reference.name()));

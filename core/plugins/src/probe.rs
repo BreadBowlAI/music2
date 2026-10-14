@@ -12,7 +12,8 @@
 //! - and it calls `request_callback` from `process` every 10 calls.
 //!
 //! Its state is `m2probe\0`, the two parameters, then a tag; any other bytes load as the tag
-//! alone. `m2.probe.fails-state` refuses a state that starts with `fail`.
+//! alone. `m2.probe.fails-state` refuses a state that starts with `fail`, and any probe takes
+//! 300 ms to load one that starts with `slow`, as a big patch does.
 
 use std::ffi::{CStr, c_char, c_void};
 use std::path::{Path, PathBuf};
@@ -112,6 +113,10 @@ pub struct Stats {
     pub process_on_main: AtomicU64,
     /// Calls whose block was already processed: the instance ran twice for one engine block.
     pub doubled: AtomicU64,
+    /// Times the thread calling `process` changed: an export borrows an instance from the audio
+    /// thread and gives it back (RENDER-1), two.
+    pub threads: AtomicU64,
+    last_thread: AtomicUsize,
     pub start_on_audio: AtomicU64,
     pub start_elsewhere: AtomicU64,
     /// `on_main_thread` calls, and those made inside a `process` call, on its thread (the main
@@ -123,6 +128,9 @@ pub struct Stats {
     pub sleep: AtomicBool,
     /// Call `request_restart` from the next `process` call.
     pub restart: AtomicBool,
+    /// Allocate and free once in the next `process` call: what the audio thread's allocation
+    /// counter must see (RENDER-28).
+    pub allocate: AtomicBool,
     pub slept: AtomicU64,
     pub resets: AtomicU64,
     /// Notes sounding, Ons whose id wasn't above every id before, Offs and chokes for a note it
@@ -149,6 +157,8 @@ impl Stats {
             process_not_audio: AtomicU64::new(0),
             process_on_main: AtomicU64::new(0),
             doubled: AtomicU64::new(0),
+            threads: AtomicU64::new(0),
+            last_thread: AtomicUsize::new(0),
             start_on_audio: AtomicU64::new(0),
             start_elsewhere: AtomicU64::new(0),
             callbacks: AtomicU64::new(0),
@@ -156,6 +166,7 @@ impl Stats {
             requested: AtomicU64::new(0),
             sleep: AtomicBool::new(false),
             restart: AtomicBool::new(false),
+            allocate: AtomicBool::new(false),
             slept: AtomicU64::new(0),
             resets: AtomicU64::new(0),
             sounding: AtomicU32::new(0),
@@ -468,6 +479,8 @@ unsafe extern "C" fn activate(p: *const clap_plugin, rate: f64, _: u32, _: u32) 
     let me = unsafe { probe(p) };
     me.record("activate");
     me.rate = rate;
+    // A new activation is a new steady timeline: an export's starts at 0 (RENDER-1).
+    me.done_to = i64::MIN;
     true
 }
 
@@ -506,7 +519,8 @@ unsafe extern "C" fn on_main_thread(p: *const clap_plugin) {
     me.record("on_main_thread");
 }
 
-/// Never allocates or locks: it runs under the audio thread's allocation trap.
+/// Never allocates or locks (unless asked to, `allocate`): it runs under the audio thread's
+/// allocation trap.
 unsafe extern "C" fn process(p: *const clap_plugin, proc_: *const clap_process) -> clap_process_status {
     let me = unsafe { probe(p) };
     let pr = unsafe { &*proc_ };
@@ -525,6 +539,11 @@ unsafe extern "C" fn process(p: *const clap_plugin, proc_: *const clap_process) 
     }
     if pr.steady_time < me.done_to {
         st.doubled.fetch_add(1, Ordering::Relaxed);
+    }
+    let thread = crate::main_thread::token();
+    let last = st.last_thread.swap(thread, Ordering::Relaxed);
+    if last != 0 && last != thread {
+        st.threads.fetch_add(1, Ordering::Relaxed);
     }
     me.done_to = pr.steady_time + pr.frames_count as i64;
     let n = pr.frames_count as usize;
@@ -574,6 +593,9 @@ unsafe extern "C" fn process(p: *const clap_plugin, proc_: *const clap_process) 
     {
         st.requested.fetch_add(1, Ordering::Relaxed);
         unsafe { f(me.host) };
+    }
+    if st.allocate.swap(false, Ordering::Relaxed) {
+        drop(std::hint::black_box(Box::new(0u64)));
     }
     if st.restart.swap(false, Ordering::Relaxed)
         && let Some(f) = unsafe { (*me.host).request_restart }
@@ -748,6 +770,9 @@ unsafe extern "C" fn load(p: *const clap_plugin, s: *const clap_istream) -> bool
     }
     if me.fails_state && bytes.starts_with(b"fail") {
         return false;
+    }
+    if bytes.starts_with(b"slow") {
+        std::thread::sleep(std::time::Duration::from_millis(300));
     }
     let tag = if bytes.starts_with(MAGIC) && bytes.len() >= MAGIC.len() + 16 {
         let f = |at: usize| f64::from_le_bytes(bytes[at..at + 8].try_into().expect("8 bytes"));

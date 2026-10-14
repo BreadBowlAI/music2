@@ -80,13 +80,13 @@ fn a_cell_write_never_waits_for_the_queue() {
     assert!(t.elapsed() < Duration::from_millis(5), "never waits");
     assert!(seq > CELL_SEQ, "a cell write's seq");
     assert_eq!(rx.len(), 1, "only the play is queued");
-    r.render_block(0, false).unwrap();
-    r.render_block(BLOCK as u64, false).unwrap();
+    r.render_block(0).unwrap();
+    r.render_block(BLOCK as u64).unwrap();
     assert_eq!(r.cell_value(target.cells[0]), Some(0.25));
     assert_eq!(r.take_heard(), Some((0, seq)));
     let next = player.set_cells(&target, 0.75);
     assert!(next > seq && rx.len() == 1);
-    r.render_block(2 * BLOCK as u64, false).unwrap();
+    r.render_block(2 * BLOCK as u64).unwrap();
     assert_eq!((r.cell_value(target.cells[0]), r.take_heard()), (Some(0.75), Some((seq, next))));
 }
 

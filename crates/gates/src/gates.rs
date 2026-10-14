@@ -33,12 +33,15 @@ pub struct Opts {
     pub activations: usize,
     /// Edits G3 and G5 time through the server.
     pub edits: usize,
+    /// Where G5, G7a and G7b edit, in seconds of the song: 1:00, and 3:00 for step 7's recorded
+    /// runs on p50 (`--at`).
+    pub at: f64,
 }
 
 impl Opts {
     /// The contract's recorded runs: p16, 10 minutes of loop, 50 seeks.
     pub fn recorded() -> Opts {
-        Opts { reference: Reference::P16, seed: 3, period: PERIOD, loop_minutes: 10.0, seeks: 50, activations: 50, edits: 10 }
+        Opts { reference: Reference::P16, seed: 3, period: PERIOD, loop_minutes: 10.0, seeks: 50, activations: 50, edits: 10, at: 60.0 }
     }
 
     /// Small and quick enough for CI.
@@ -55,12 +58,13 @@ impl Opts {
 }
 
 /// The rule ids each gate checks.
-pub const GATES: [(&str, &str); 9] = [
+pub const GATES: [(&str, &str); 10] = [
     ("seek", "RENDER-8, 9, 10, 11"),
     ("loop", "RENDER-9, 9a, 10"),
     ("note-edit", "RENDER-26, PLANE-1"),
     ("stuck", "RENDER-13, 26a, 9, 6a"),
     ("add-effect", "RENDER-25, 25a, 8"),
+    ("tails", "RENDER-25, 25a"),
     ("step", "RENDER-25a, 27"),
     ("tail-stop", "RENDER-6a, 10"),
     ("range", "RENDER-4, 5"),
@@ -74,6 +78,7 @@ pub fn run(name: &str, lab: &mut Lab, kind: Kind, o: &Opts) -> Result<Outcome> {
         "note-edit" => note_edit(lab, kind, o),
         "stuck" => stuck(lab, kind, o),
         "add-effect" => add_effect(lab, kind, o),
+        "tails" => tails(lab, kind, o),
         "step" => step(lab, kind, o),
         "tail-stop" => tail_stop(lab, kind, o),
         "range" => range(lab, o),
@@ -731,15 +736,16 @@ fn call(session: &m2_session::Session, file: &str, callee: &str) -> Result<Strin
     Ok(format!("{}#{}", site.file, site.ordinal))
 }
 
-/// G5: an added effect is audible within compile time + 100 ms, entered at the audio thread's own
-/// position, with no jump back (RENDER-25a, RENDER-8), and heard: against a twin that activates the
-/// song as it was at the same frame, what differs is the effect alone (RENDER-25).
+/// G5 (and G7a's engine-rig twin): an added effect is audible within compile time + 100 ms, entered
+/// at the audio thread's own position, with no jump back (RENDER-25a, RENDER-8), and heard: against
+/// a twin that activates the song as it was at the same frame, what differs is the effect alone
+/// (RENDER-25). From `o.at` (1:00; 3:00 for G7a's recorded run).
 pub fn add_effect(lab: &mut Lab, kind: Kind, o: &Opts) -> Result<Outcome> {
     let dir = lab.reference(&o.reference)?;
     let song = lab.compile(&dir)?;
-    let one_minute = song.beat(song.rate as u64 * 60);
-    let (mut a, _) = playing(lab, kind, o, &song, one_minute, 1.0)?;
-    let (mut b, _) = playing(lab, kind, o, &song, one_minute, 1.0)?;
+    let at = song.beat((o.at * song.rate as f64) as u64);
+    let (mut a, _) = playing(lab, kind, o, &song, at, 1.0)?;
+    let (mut b, _) = playing(lab, kind, o, &song, at, 1.0)?;
     let mut out = Outcome::new("G5 add effect", rules("add-effect"), &format!("{} on {}", a.rig.name(), o.reference.name()));
     let mut session = lab.session(&dir)?;
     let target = call(&session, "tracks/t02.ts", "pluck")?;
@@ -773,6 +779,20 @@ pub fn add_effect(lab: &mut Lab, kind: Kind, o: &Opts) -> Result<Outcome> {
     let jump = moved - (a.now() - e0) as i64;
     let latency = a.latency_ms(&sent).context("the activation was never applied")?;
     out.check("audible within compile + 100 ms", latency <= 100.0, format!("{latency:.1} ms after the compile"));
+    if let Some(arena) = a.rig.arena() {
+        let s = arena.stats;
+        out.info(
+            "the activation (step 7)",
+            format!(
+                "{} instances kept, {} new, {} ghosts, {} fades; prepared in {:.1} ms",
+                s.kept.total(),
+                s.fresh.total(),
+                s.ghosts,
+                s.fades,
+                sent.prepare.as_secs_f64() * 1e3
+            ),
+        );
+    }
     out.check(
         "no jump back: the transport moved on by what was played (RENDER-25a)",
         jump == 0,
@@ -795,6 +815,191 @@ pub fn add_effect(lab: &mut Lab, kind: Kind, o: &Opts) -> Result<Outcome> {
         format!("{diff:.1} dBFS of difference in the second after, from a twin that activated the song as it was"),
     );
     Ok(out)
+}
+
+// ---------------------------------------------------------------- G7b
+
+/// Each untouched track's output node in `song`: its module's first export, by module key, in
+/// module order. The root (the mixer) and `edited` are left out.
+fn track_taps(song: &Song, edited: &str) -> Vec<(String, String)> {
+    let ir = &song.code.0.ir;
+    ir.modules
+        .iter()
+        .filter(|m| m.key != ir.root.module && m.key != edited)
+        .filter_map(|m| {
+            let r = m.exports.get("out").or_else(|| m.exports.values().next())?;
+            Some((m.key.clone(), format!("{}/{}", m.key, m2_ir::split_ref(r).0)))
+        })
+        .collect()
+}
+
+/// The node of `song`'s graph named `name`.
+fn node_named(song: &Song, name: &str) -> Result<usize> {
+    song.flat.nodes.iter().position(|n| n.name == name).with_context(|| format!("no node {name}"))
+}
+
+/// G7b (step 7): "the tails of untouched tracks are intact". Two decks play the reference project
+/// from `o.at` − 5 s, a block per fill; at `o.at` deck A takes an edit of t02 and deck B nothing.
+/// Every other track's output (its module's export) must be the same bits on both decks on every
+/// block until `o.at` + 10 s (the reverb and delay tails ringing at the edit, every voice sounding
+/// there), the activation must have kept every stateful node outside t02 and reset none, and the
+/// decks' resets and held notes must agree at the end. The edits: G5's (a delay after t02's
+/// pluck), then the pluck wrapped in `vca(…, 1)`, an exact multiply by 1, through a Tx as the
+/// app's gestures commit one and as a file save, as an agent saves one: those keep the pluck, so
+/// the whole mix must be the same bits too, the fade window included (ID-13, RENDER-25a). With
+/// `--no-arena` (every instance new, the whole old graph a ghost) it must fail.
+pub fn tails(lab: &mut Lab, kind: Kind, o: &Opts) -> Result<Outcome> {
+    let dir = lab.reference(&o.reference)?;
+    let song = lab.compile(&dir)?;
+    let mut session = lab.session(&dir)?;
+    let target = call(&session, "tracks/t02.ts", "pluck")?;
+    session.add_effect(session.accepted().number, &target, "std:delay").map_err(|e| anyhow!("{e}"))?;
+    let delayed = crate::accepted(&session, std::time::Duration::ZERO);
+    let mut out = Outcome::new("G7b tails of untouched tracks", rules("tails"), &format!("{} on {}", kind.name(), o.reference.name()));
+    tails_of(lab, kind, o, &song, &delayed, None, &mut out)?;
+    for by_tx in [true, false] {
+        let (song, wrapped) = wrapped_pluck(lab, o, by_tx)?;
+        tails_of(lab, kind, o, &song, &wrapped, Some(if by_tx { "through a Tx" } else { "as a file save" }), &mut out)?;
+    }
+    Ok(out)
+}
+
+/// The reference project, and it with t02's pluck wrapped in `vca(…, 1)` (`std:scale` by exactly
+/// 1): committed through a Tx of two insertions around the call and an import, as the app's
+/// gestures commit one, or saved as a file of the same text, as an agent saves one.
+fn wrapped_pluck(lab: &mut Lab, o: &Opts, by_tx: bool) -> Result<(Song, Song)> {
+    use m2_song::tx::{Base, Confined, Declared, Edit, Expect, Op, Pos, Range, Tx, TxPath};
+    let dir = lab.reference(&o.reference)?;
+    let song = lab.compile(&dir)?;
+    let (file, call, import) = ("tracks/t02.ts", "pluck(lane.notes(\"notes\"))", "import { vca } from \"std/dsp\";\n");
+    let text = std::fs::read_to_string(dir.join(file))?;
+    let at = text.find(call).context("no pluck in t02")?;
+    if !by_tx {
+        std::fs::write(dir.join(file), format!("{import}{}", text.replacen(call, &format!("vca({call}, 1)"), 1)))?;
+        return Ok((song, lab.compile(&dir)?));
+    }
+    let ins = |at: usize, t: &str| Edit { start: Pos::Byte(at as u32), end: Pos::Byte(at as u32), expected: String::new(), text: t.into() };
+    let path = TxPath::new(file).map_err(anyhow::Error::msg)?;
+    let edits = vec![ins(0, import), ins(at, "vca("), ins(at + call.len(), ", 1)")];
+    let ranges = vec![Range::bytes(0, 0), Range::bytes(at as u32, (at + call.len()) as u32)];
+    let confined = Confined { ranges: [(path.clone(), Declared::Ranges(ranges))].into(), ..Confined::default() };
+    let mut tx = Tx::new(
+        "wrap-pluck",
+        ("pluck".into(), "vca(pluck)".into()),
+        vec![Op::TextEdit { file: path.clone(), edits }],
+        Expect::Confined(confined),
+    );
+    tx.base.insert(path, Base::text(&text));
+    let mut session = lab.session(&dir)?;
+    session.commit(tx).map_err(|e| anyhow!("the wrap was refused: {e:?}"))?;
+    Ok((song, crate::accepted(&session, std::time::Duration::ZERO)))
+}
+
+/// One G7b edit: `song` played on two decks, deck A taking `edited` at `o.at`. `wrapped` names a
+/// wrapped-pluck case, whose whole mix must be the same bits on both decks too; it is taken at the
+/// first block line from `o.at` on where t02 sounds, so the pluck's voices ring through it.
+fn tails_of(lab: &mut Lab, kind: Kind, o: &Opts, song: &Song, edited: &Song, wrapped: Option<&str>, out: &mut Outcome) -> Result<()> {
+    let block = m2_runtime::BLOCK as u64;
+    let o = Opts { period: block as usize, ..o.clone() };
+    let from = song.beat(((o.at - 5.0) * song.rate as f64) as u64);
+    let (mut a, _) = playing(lab, kind, &o, song, from, 0.0)?;
+    let (mut b, _) = playing(lab, kind, &o, song, from, 0.0)?;
+    out.rig = format!("{} on {}", a.rig.name(), o.reference.name());
+    let case = wrapped.map_or(String::new(), |w| format!("the pluck wrapped {w}: "));
+    let taps = track_taps(song, "t02");
+    let nodes: Vec<(String, usize, usize)> =
+        taps.iter().map(|(m, n)| Ok((m.clone(), node_named(song, n)?, node_named(edited, n)?))).collect::<Result<_>>()?;
+    let t02 = track_taps(song, "").into_iter().find(|(m, _)| m == "t02").context("no t02")?;
+    let t02 = node_named(song, &t02.1)?;
+    a.run(block)?;
+    b.run(block)?;
+    if a.rig.output_of(nodes[0].1).is_none() {
+        out.skip(format!("{case}every check"), "this rig has no taps");
+        return Ok(());
+    }
+    let from = (a.now() + a.frames(5.0)).div_ceil(block) * block;
+    let (mut end, mut differs, mut fills) = (u64::MAX, vec![None; nodes.len()], vec![]);
+    let (mut edit, mut applied_at, mut first, mut sounding) = (u64::MAX, None, 0, 0.0f32);
+    while a.now() < end {
+        if a.now() >= from && applied_at.is_none() && (wrapped.is_none() || sounding > 1e-3) {
+            a.rig.prepare(edited, &Change::Structure)?;
+            applied_at = Some(a.rig.commit()?);
+            (edit, end, first) = (a.now(), a.now() + a.frames(10.0), fills.len());
+        } else if a.now() >= from + a.frames(10.0) && applied_at.is_none() {
+            bail!("t02 never sounded in the 10 s from {from}");
+        }
+        let t = Instant::now();
+        a.run(block)?;
+        fills.push(t.elapsed().as_secs_f64() * 1e6);
+        b.run(block)?;
+        sounding = b.rig.output_of(t02).map_or(0.0, |x| x.iter().fold(0.0, |m: f32, v| m.max(v.abs())));
+        let now = a.now() - block;
+        for (k, (_, before, after)) in nodes.iter().enumerate() {
+            let (x, y) = (b.rig.output_of(*before), a.rig.output_of(if now >= edit { *after } else { *before }));
+            if differs[k].is_none() && x != y {
+                differs[k] = Some(now);
+            }
+        }
+    }
+    let applied = applied_at.and_then(|s| a.rig.applied(&s)).context("the edit was never applied")?;
+    let cut: Vec<String> = nodes.iter().zip(&differs).filter_map(|((m, ..), d)| Some(format!("{m} from engine frame {}", (*d)?))).collect();
+    out.check(
+        format!("{case}{} untouched tracks bit-identical to the twin on every block, from 5 s before the edit to 10 s after", nodes.len()),
+        cut.is_empty(),
+        cut.first().map_or(format!("{} blocks, the edit at engine frame {applied}", fills.len()), |c| format!("{} differ; {c}", cut.len())),
+    );
+    if wrapped.is_some() {
+        out.info(
+            format!("{case}t02 sounding at the edit"),
+            format!("{:.0} ms after {:.0} s", (edit - from) as f64 * 1e3 / a.rate as f64, o.at),
+        );
+        let first_diff = a.tape.iter().zip(&b.tape).position(|(x, y)| x != y);
+        out.check(
+            format!("{case}the whole mix bit-identical to the twin on every block, the fade window included"),
+            first_diff.is_none() && a.tape.len() == b.tape.len(),
+            first_diff.map_or(format!("{} frames", a.tape.len()), |f| format!("differs from engine frame {f} (the edit at {applied})")),
+        );
+    }
+    match a.rig.arena() {
+        Some(arena) => {
+            let s = arena.stats;
+            let mut outside: Vec<&str> =
+                s.fresh_nodes.iter().map(|&i| edited.flat.nodes[i].module.as_str()).filter(|m| *m != "t02").collect();
+            outside.dedup();
+            let detail = format!(
+                "{} kept, {} new ({} modules besides t02), {} ghosts, {} fades, {} reset",
+                s.kept.total(),
+                s.fresh.total(),
+                outside.len(),
+                s.ghosts,
+                s.fades,
+                s.resets
+            );
+            out.check(
+                format!("{case}every stateful node of the other tracks and the mixer kept, none reset"),
+                outside.is_empty() && s.resets == 0,
+                &detail,
+            );
+            if wrapped.is_some() {
+                // The vca's one `std:scale` is the only instance made: the pluck's voices go on.
+                out.check(format!("{case}t02's pluck kept, its voice pool among them"), s.fresh.polys == 0 && s.fresh.total() <= 1, detail);
+            }
+        }
+        None => out.skip(format!("{case}every stateful node kept"), "this rig has no arena"),
+    }
+    let (pa, pb) = (a.rig.probe(), b.rig.probe());
+    out.check(
+        format!("{case}resets and held notes agree at the end"),
+        pa.resets == pb.resets && pa.held_notes == pb.held_notes,
+        format!("resets {:?} and {:?}, held {:?} and {:?}", pa.resets, pb.resets, pa.held_notes, pb.held_notes),
+    );
+    let mut sorted = fills.clone();
+    sorted.sort_by(f64::total_cmp);
+    out.info(
+        format!("{case}the activation's block (not judged; G7f part 2 bounds it)"),
+        format!("{:.0} µs, against a median block of {:.0} µs", fills[first], sorted[sorted.len() / 2]),
+    );
+    Ok(())
 }
 
 // ---------------------------------------------------------------- G6

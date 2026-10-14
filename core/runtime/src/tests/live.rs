@@ -1,7 +1,7 @@
 //! The live engine at the runtime's level (step 3a): two clocks, jumps that reset nothing,
 //! events, the range render, activation and the engine's message order.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
 use m2_song::{Arrangement, LaneData, LaneKind};
 
@@ -24,7 +24,7 @@ pub(super) fn at_bpm(bpm: f64) -> Arrangement {
 
 /// A poly of sine voices at their notes' pitches, through an envelope that releases over
 /// `release` seconds (0: the gate alone), then the nodes `after`, with output `out`.
-fn synth(release: f64, after: Value, out: &str) -> Ir {
+pub(super) fn synth(release: f64, after: Value, out: &str) -> Ir {
     let mut body = vec![
         json!({"id": "p", "op": "lane", "lane": "pitch"}),
         json!({"id": "g", "op": "lane", "lane": "gate"}),
@@ -59,22 +59,54 @@ pub(super) fn live(ir: &Ir, data: &DataSet) -> Renderer {
     r
 }
 
+/// `ir` checked against std.
+pub(super) fn flat(ir: &Ir) -> Flat {
+    check(ir, &std_packages()).unwrap_or_else(|e| panic!("{e:?}"))
+}
+
 /// An engine driven by hand: messages in, what it retires out.
 pub(super) struct Rig {
     pub(super) e: Engine,
     pub(super) inbox: VecDeque<Envelope>,
-    retired: Vec<Retired>,
+    pub(super) retired: Vec<Retired>,
     /// Refuse to take retired objects, as a full channel does.
-    refuse: bool,
+    pub(super) refuse: bool,
     seq: u64,
+    /// The plan last sent, and what it was made from: what the next is prepared against.
+    pub(super) last: Option<(Flat, DataSet, Arc<PlanInfo>)>,
 }
 
 impl Rig {
     pub(super) fn new(r: Renderer) -> Rig {
-        Rig { e: Engine::with(Box::new(r)), inbox: VecDeque::new(), retired: vec![], refuse: false, seq: 0 }
+        Rig { e: Engine::with(Box::new(r)), inbox: VecDeque::new(), retired: vec![], refuse: false, seq: 0, last: None }
     }
 
-    fn send(&mut self, msg: Msg) -> u64 {
+    /// An engine playing `r`, made from `flat` and `data`, which plans can be prepared against.
+    pub(super) fn of(flat: &Flat, data: &DataSet, r: Renderer) -> Rig {
+        let last = Some((flat.clone(), data.clone(), r.info()));
+        Rig { last, ..Rig::new(r) }
+    }
+
+    /// A plan for `flat` and `data` prepared against the plan sent last, its nodes matched by
+    /// name, as the live engine gets one; the next is prepared against it.
+    pub(super) fn prepare(&mut self, flat: &Flat, data: &DataSet, pk: &PackageSet) -> Renderer {
+        let (old, _, _) = self.last.as_ref().expect("a plan to prepare against");
+        let cont = Continues::named(old, flat);
+        self.prepare_with(flat, data, pk, &m2_plugins::Owner::discard(), &cont).unwrap()
+    }
+
+    /// [`Rig::prepare`] with what continues given, its instances reporting to `owner`.
+    pub(super) fn prepare_with(&mut self, flat: &Flat, data: &DataSet, pk: &PackageSet, owner: &m2_plugins::Owner, cont: &Continues) -> Result<Renderer> {
+        let (old, old_data, info) = self.last.as_ref().expect("a plan to prepare against");
+        let restarts = HashSet::new();
+        let keep = Keep { old, old_data, info, cont, restarts: &restarts };
+        let mut r = Renderer::prepare(flat, data, pk, SR, &mut audio::Cache::default(), owner, Basis::Keep(keep))?;
+        r.set_strict(false);
+        self.last = Some((flat.clone(), data.clone(), r.info()));
+        Ok(r)
+    }
+
+    pub(super) fn send(&mut self, msg: Msg) -> u64 {
         self.seq += 1;
         self.inbox.push_back(Envelope { seq: self.seq, msg });
         self.seq
@@ -99,13 +131,13 @@ impl Rig {
     }
 
     /// The renderers retired so far.
-    fn retired_renderers(&self) -> Vec<&Renderer> {
+    pub(super) fn retired_renderers(&self) -> Vec<&Renderer> {
         self.retired.iter().filter_map(|r| if let Retired::Renderer(r) = r { Some(&**r) } else { None }).collect()
     }
 }
 
 /// The largest step from one sample to the next.
-fn max_step(x: &[[f32; 2]]) -> f32 {
+pub(super) fn max_step(x: &[[f32; 2]]) -> f32 {
     x.windows(2).map(|w| (w[1][0] - w[0][0]).abs().max((w[1][1] - w[0][1]).abs())).fold(0.0, f32::max)
 }
 
@@ -153,18 +185,21 @@ fn a_jump_never_resets_a_kernel() {
 }
 
 // RENDER-10: every reset of a renderer's graph is counted, wherever it comes from: an offline seek
-// replays from one, and a panic resets the playing renderer and, during a fade, the fading one;
-// the count outlives the renderer retired. Jumps, a swap and an activation reset nothing. The
+// replays from one, and a panic resets the playing renderer, during a window its ghosts with it, as
+// one reset; the count outlives the renderer retired. Jumps, a swap and an activation reset nothing. The
 // gates' "no kernel reset" checks read this count.
 #[test]
 fn every_graph_reset_is_counted() {
     let ir = synth(0.0, json!([]), "v");
+    let delayed = synth(0.0, json!([{"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "v"}}]), "d");
     let data = with_notes(json!({"clips": [{"start": 0, "length": 8, "notes": [{"pitch": 60, "start": 0, "length": 1}]}]}), at_bpm(120.0));
     let mut offline = live(&ir, &data);
     assert_eq!(offline.resets(), 0, "building isn't a reset");
     offline.seek(1000).unwrap();
     assert_eq!(offline.resets(), 1, "an offline seek replays from a reset (RENDER-1)");
-    let mut rig = Rig::new(live(&ir, &data));
+    let pk = std_packages();
+    let (plain, delayed) = (flat(&ir), flat(&delayed));
+    let mut rig = Rig::of(&plain, &data, live(&ir, &data));
     rig.cmd(Cmd::Play);
     rig.cmd(Cmd::Loop(Some((0.0, 1.0))));
     rig.run(SR as usize);
@@ -175,17 +210,20 @@ fn every_graph_reset_is_counted() {
     rig.cmd(Cmd::Play);
     let generation = rig.e.current().unwrap().generation();
     rig.send(Msg::SwapLane { generation, slot: 0, data: LaneSwap::Notes(Arc::new(notes_data(&data, "song", "notes", SR as f64))) });
-    rig.send(Msg::Activate { renderer: Box::new(live(&ir, &data)) });
+    let next = rig.prepare(&plain, &data, &pk);
+    rig.send(Msg::Activate { renderer: Box::new(next) });
     rig.run(SR as usize / 10);
     assert_eq!((rig.e.resets(), rig.e.activations(), rig.e.seeks()), (0, 1, 1), "wraps, a seek, a stop, a swap and an activation");
-    rig.send(Msg::Activate { renderer: Box::new(live(&ir, &data)) });
+    // An edit's plan, whose window a panic falls in: one plan, its ghosts and fades with it.
+    let next = rig.prepare(&delayed, &data, &pk);
+    rig.send(Msg::Activate { renderer: Box::new(next) });
     rig.send(Msg::Panic);
     rig.run(BLOCK);
-    assert!(rig.e.fading().is_some());
-    assert_eq!(rig.e.resets(), 2, "a panic during a fade resets both renderers");
+    assert!(rig.e.in_window());
+    assert_eq!(rig.e.resets(), 1, "a panic during a window resets the plan that plays");
     rig.run(SR as usize / 10);
-    assert!(rig.e.fading().is_none() && rig.retired_renderers().len() == 2);
-    assert_eq!(rig.e.resets(), 2, "counted after the faded renderer is retired");
+    assert!(!rig.e.in_window() && rig.retired_renderers().len() == 2);
+    assert_eq!(rig.e.resets(), 1, "counted after the plan before is retired");
 }
 
 // RENDER-13, RENDER-11: a voice's gate closes at its note's Off. A seek into the middle of a
@@ -240,7 +278,7 @@ fn stopped_lanes_and_time_hold_while_kernels_run() {
     rig.run(256);
     let stop = rig.e.status();
     assert!(!stop.playing);
-    let held = |rig: &Rig, i: usize| rig.e.current().unwrap().graph.bufs[i][0].clone();
+    let held = |rig: &Rig, i: usize| rig.e.current().unwrap().plan.graph.bufs[i][0].clone();
     let (c0, t0, l0) = (held(&rig, c), held(&rig, t), held(&rig, l));
     assert!((t0[0] as f64 - stop.beats).abs() < 1e-4, "time holds the stop position: {} vs {}", t0[0], stop.beats);
     assert!(c0[0] > 0.2, "the lane holds its value there");
@@ -278,6 +316,52 @@ fn an_audio_lane_crossfades_at_a_wrap() {
     assert!(out[wrap + 240..wrap + 2000] == material[240..2000], "exact once the fade is done");
     assert_eq!(rig.e.resets(), 0);
     std::fs::remove_dir_all(dir).ok();
+}
+
+// RENDER-9 item 5, RENDER-33: two nodes on one audio lane copy its one player, which fills once a
+// block, and each hears what a node of its own heard: the lane added to itself is the lane doubled,
+// bit for bit, through seeks, a wrap, a stop and a start inside a clip.
+#[test]
+fn one_player_per_lane_gives_the_old_bits() {
+    let (one, tl, dir) =
+        audio_song(&[("a441.wav", vec![sine(441.0, 3.0, SR)], SR)], json!([{"start": 0, "length": 4, "asset": "a441.wav"}]));
+    let lane = |id: &str| json!({"id": id, "op": "lane", "lane": "clips"});
+    let add = json!({"id": "o", "op": "kernel", "kernel": "std:add", "inputs": {"a": "a", "b": "b"}});
+    let two = song(json!([lane("a"), lane("b"), add]), "o", json!([{"key": "clips", "kind": "audio<2>"}]));
+    let play = |ir: &Ir| {
+        let mut rig = Rig::new(live(ir, &tl));
+        rig.cmd(Cmd::Play);
+        let mut out = rig.run(10_000);
+        for c in [Cmd::Seek(0.5), Cmd::Loop(Some((0.25, 0.9))), Cmd::Stop, Cmd::Play, Cmd::Loop(None), Cmd::Seek(1.7)] {
+            rig.cmd(c);
+            out.extend(rig.run(7_000));
+        }
+        out
+    };
+    let doubled: Vec<[f32; 2]> = play(&one).iter().map(|f| [2.0 * f[0], 2.0 * f[1]]).collect();
+    assert!(peak(&doubled) > 0.5);
+    assert!(play(&two) == doubled, "two nodes, one player: the old bits");
+    std::fs::remove_dir_all(dir).ok();
+}
+
+// HOST-5: a constant parameter is sent whenever it differs from the last value sent, as a port's
+// sample is, so an instance that outlives its plan hears a plain number the code changed; a steady
+// one is sent once.
+#[test]
+fn a_changed_constant_is_sent() {
+    use m2_plugins::Event as P;
+    let bufs: Vec<Vec<Buf>> = vec![];
+    let (mut keys, mut out) = (Vec::with_capacity(1), m2_plugins::Events::with_capacity(16));
+    let mut send = |params: &mut [(u32, Input, Option<f32>)]| {
+        plugin_events(&[], &[], &[], &mut 0, params, &bufs, (0, BLOCK), &mut keys, &mut out);
+        out.iter().collect::<Vec<_>>()
+    };
+    // A kept instance was last sent 0.7; the code now says 0.5.
+    let mut kept = [(3, Input::Const(0.5), Some(0.7))];
+    assert_eq!(send(&mut kept), [P::Param { time: 0, id: 3, value: 0.5 }]);
+    assert_eq!(send(&mut kept), [], "once");
+    let mut fresh = [(3, Input::Const(0.5), None)];
+    assert_eq!(send(&mut fresh), [P::Param { time: 0, id: 3, value: 0.5 }], "a new instance at its first call");
 }
 
 // RENDER-14, RENDER-28, HOST-6: a plugin hears the lane's notes and its sampled parameters in the
@@ -401,39 +485,35 @@ fn prewarming_keeps_kernel_memory_flat() {
     r.render(2.5).unwrap();
     assert_eq!(r.kernel_memory_bytes(), before, "eight steals later");
     // What pre-warming spares the audio thread: the first reset grows a fresh graph's memory.
-    let mut store = Store::new(&pk.engine, StoreLimitsBuilder::new().build());
     let slots = lane_slots(&flat);
-    let lanes = vec![LaneSlot::Notes(NoteScheduler::new(Arc::new(NotesData::empty())))];
-    let (owner, mut fresh) = (m2_plugins::Owner::discard(), crate::Fresh);
-    let mut g = Builder {
-        store: &mut store,
-        packages: &pk,
-        data: &data,
-        sample_rate: SR as f64,
-        slots: &slots,
-        lanes: &lanes,
-        source: &mut fresh,
-        owner: &owner,
-        ordinals: Default::default(),
-    }
-    .graph(&flat.nodes, &flat.order, false)
+    let owner = m2_plugins::Owner::discard();
+    let mut g = Builder { packages: &pk, data: &data, sample_rate: SR as f64, slots: &slots, caps: &[Caps::FLOOR], owner: &owner }
+        .graph(&flat.nodes, &flat.order, false, &|_| Some(0), &HashMap::new())
         .unwrap();
-    let fresh = g.kernel_memory(&store);
-    g.prewarm(&mut store).unwrap();
-    assert!(g.kernel_memory(&store) > fresh);
+    let fresh = g.kernel_memory();
+    g.prewarm().unwrap();
+    assert!(g.kernel_memory() > fresh);
 }
 
-// RENDER-28: once a thread has rendered a block, rendering, the engine's messages and cell
-// writes (a step in a voice, a ramp at the top) allocate nothing. (core/play's trap checks the
-// audio callback from its very first fill.)
+// RENDER-28: once a thread has rendered a block, rendering, the engine's messages, an activation
+// (its moves, fades and window) and cell writes (a step in a voice, a ramp at the top) allocate
+// nothing. (core/play's trap checks the audio callback from its very first fill.)
 #[test]
 fn rendering_live_allocates_nothing() {
     let (ir, data) = retriggered();
-    let mut rig = Rig::new(live(&ir, &data));
+    let pk = std_packages();
+    let flat = check(&ir, &pk).unwrap();
+    let mut rig = Rig::of(&flat, &data, live(&ir, &data));
     rig.cmd(Cmd::Play);
     rig.run(BLOCK);
-    let flat = check(&ir, &std_packages()).unwrap();
-    let next = live(&ir, &data);
+    // An edit: a delay after the level, which the output fades to.
+    let mut edited = ir.clone();
+    edited.modules[0].nodes.push(serde_json::from_value(json!({"id": "d2", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "out"}})).unwrap());
+    edited.modules[0].exports.insert("out".into(), "d2".into());
+    let next = rig.prepare(&check(&edited, &pk).unwrap(), &data, &pk);
+    // A box marked as gone non-finite, which the activation resets as it moves it (RENDER-25).
+    let v = flat.nodes.iter().position(|n| n.name == "song/v").unwrap();
+    rig.e.current_mut().unwrap().plan.graph.poisoned[v] = true;
     let generation = rig.e.current().unwrap().generation();
     let lane = LaneSwap::Notes(Arc::new(notes_data(&data, "song", "notes", SR as f64)));
     let msgs = [
@@ -468,14 +548,16 @@ fn rendering_live_allocates_nothing() {
         }
     });
     assert_eq!(allocs, 0);
-    // The swap's old data and the replaced renderer; cell writes retire nothing.
-    assert!(inbox.is_empty() && kept.len() == 2, "{} retired", kept.len());
-    // The panic came during the activation's fade: it reset both renderers.
-    assert_eq!((e.resets(), e.activations()), (2, 1));
-    drop(flat);
+    // The swap's old data, the replaced renderer and the window's leftovers; cell writes retire
+    // nothing.
+    assert!(inbox.is_empty() && kept.len() == 3, "{} retired", kept.len());
+    assert!(kept.iter().any(|r| matches!(r, Retired::Nodes(_))), "the window ended");
+    assert_eq!(e.current().unwrap().stats().resets, 1, "the marked box was reset at entry");
+    // The panic came in the activation's window: it reset the plan that plays.
+    assert_eq!((e.resets(), e.activations()), (1, 1));
 }
 
-// RENDER-25a: an activation crossfades the whole output over 5 ms, at the engine's position
+// RENDER-25a: an activation crossfades the edges it changed over 5 ms, at the engine's position
 // (no jump back), whichever block it lands on. Step 3 gate (G6): adding or removing an effect
 // while a sine plays makes no step larger than twice the sine's own largest.
 #[test]
@@ -493,14 +575,16 @@ fn activations_crossfade_without_jumping_back() {
     );
     let own = max_step(&render(&sine_ir, &DataSet::empty(), 0.1));
     let mut seed = 7;
-    let mut rig = Rig::new(live(&sine_ir, &DataSet::empty()));
+    let pk = std_packages();
+    let (plain, delayed) = (flat(&sine_ir), flat(&delayed));
+    let mut rig = Rig::of(&plain, &DataSet::empty(), live(&sine_ir, &DataSet::empty()));
     rig.cmd(Cmd::Play);
     let mut out = vec![];
     let mut last_pos = 0;
     for k in 0..12 {
         out.extend(rig.run(500 + lcg(&mut seed) as usize % 6000));
-        let next = if k % 2 == 0 { &delayed } else { &sine_ir };
-        rig.send(Msg::Activate { renderer: Box::new(live(next, &DataSet::empty())) });
+        let next = rig.prepare(if k % 2 == 0 { &delayed } else { &plain }, &DataSet::empty(), &pk);
+        rig.send(Msg::Activate { renderer: Box::new(next) });
         for _ in 0..8 {
             out.extend(rig.run(97));
             let pos = rig.e.status().pos;
@@ -547,18 +631,20 @@ fn an_activation_across_a_tempo_change_keeps_the_beat() {
     };
     let (d120, dir1) = data(120.0);
     let mut seed = 3;
+    let pk = std_packages();
+    let f = flat(&ir);
     for bpm in [90.0, 150.0, 90.0, 150.0] {
         let (other, dir2) = data(bpm);
         let mut r = live(&ir, &d120);
         r.trace(4096);
-        let mut rig = Rig::new(r);
+        let mut rig = Rig::of(&f, &d120, r);
         rig.cmd(Cmd::Play);
         let before = rig.run(SR as usize + lcg(&mut seed) as usize % 40_000);
         // The transport at the next block line, where the activation lands.
         let old = rig.e.current().unwrap();
         let beat = old.transport().beat(old.tempo(), SR as f64);
         let clock = rig.e.clock();
-        let mut next = live(&ir, &other);
+        let mut next = rig.prepare(&f, &other, &pk);
         next.trace(64);
         rig.send(Msg::Activate { renderer: Box::new(next) });
         let after = rig.run(4096);
@@ -584,41 +670,43 @@ fn an_activation_across_a_tempo_change_keeps_the_beat() {
 }
 
 // RENDER-28: structural messages apply in order; one that can't apply yet waits, and the ones
-// after it wait in the inbox. Only consecutive activations coalesce: a plan that never played is
-// retired unrun. A swap reaches only the renderer it was made for.
+// after it wait in the inbox. An activation waits for the window before it to end, and none is
+// coalesced: each was prepared against the one before. A swap reaches only the plan it was made
+// for.
 #[test]
 fn structural_messages_keep_their_order() {
     let ir = synth(0.0, json!([]), "v");
+    let delayed = synth(0.0, json!([{"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "v"}}]), "d");
     let data = with_notes(json!({"clips": [{"start": 0, "length": 8, "notes": [{"pitch": 60, "start": 0, "length": 1}]}]}), at_bpm(120.0));
-    let mut rig = Rig::new(live(&ir, &data));
+    let pk = std_packages();
+    let (plain, delayed) = (flat(&ir), flat(&delayed));
+    let mut rig = Rig::of(&plain, &data, live(&ir, &data));
     rig.cmd(Cmd::Play);
     rig.run(1000);
     let first = rig.e.current().unwrap().generation();
-    let a1 = live(&ir, &data);
-    let g1 = a1.generation();
-    rig.send(Msg::Activate { renderer: Box::new(a1) });
-    // Then, in the same block line and so during its fade: two more plans, then a swap for the
-    // second, and one for the first renderer.
-    let (a2, a3) = (live(&ir, &data), live(&ir, &data));
-    let (g2, g3) = (a2.generation(), a3.generation());
-    rig.send(Msg::Activate { renderer: Box::new(a2) });
-    rig.send(Msg::Activate { renderer: Box::new(a3) });
+    // Three edits, each with a window, sent on one block line; then a swap for the third, and
+    // one for the first renderer.
+    let a1 = rig.prepare(&delayed, &data, &pk);
+    let a2 = rig.prepare(&plain, &data, &pk);
+    let a3 = rig.prepare(&delayed, &data, &pk);
+    let (g1, g3) = (a1.generation(), a3.generation());
+    for a in [a1, a2, a3] {
+        rig.send(Msg::Activate { renderer: Box::new(a) });
+    }
     let lane = || LaneSwap::Notes(Arc::new(notes_data(&data, "song", "notes", SR as f64)));
     rig.send(Msg::SwapLane { generation: g3, slot: 0, data: lane() });
     rig.send(Msg::SwapLane { generation: first, slot: 0, data: lane() });
     rig.cmd(Cmd::Seek(0.0));
     rig.run(BLOCK);
     assert_eq!(rig.e.current().unwrap().generation(), g1);
-    assert_eq!(rig.inbox.len(), 2, "the swap waits behind the activation, and what follows it waits too");
+    assert_eq!(rig.inbox.len(), 3, "the second activation waits for the first one's window, and what follows waits too");
     assert_eq!(rig.e.seeks(), 0);
     rig.run(1000);
     assert!(rig.inbox.is_empty());
     assert_eq!(rig.e.current().unwrap().generation(), g3);
-    assert_eq!(rig.e.activations(), 2, "the second plan never played");
-    let unrun: Vec<&Renderer> = rig.retired_renderers().into_iter().filter(|r| r.generation() == g2).collect();
-    assert_eq!(unrun.len(), 1);
-    assert_eq!(unrun[0].clock(), 0, "retired without rendering a block");
-    // The swap for the third renderer applied (its old data retired); the one for the first,
+    assert_eq!(rig.e.activations(), 3, "every plan played: none coalesced");
+    assert_eq!(rig.e.refused_activations(), 0);
+    // The swap for the third plan applied (its old data retired); the one for the first renderer,
     // long gone, was retired unapplied.
     let lanes = rig.retired.iter().filter(|r| matches!(r, Retired::Lane(_))).count();
     assert_eq!(lanes, 2);
@@ -701,9 +789,10 @@ fn the_engine_idles_only_when_nothing_can_sound() {
     assert_eq!(rig.e.resets(), 0);
 }
 
-// RENDER-25a, step 3 gate (G6), the poly variant: activations while a note plays through an
-// envelope. The replaced renderer releases it, the new one doesn't chase it, and no step is larger
-// than twice the sine's own.
+// RENDER-25, RENDER-25a, step 3 gate (G6), the poly variant: activations while a note plays through
+// an envelope, adding and removing a delay after it. The poly is kept, so the note sounds on
+// through every activation (where a rebuild released it), and no step is larger than twice the
+// sine's own.
 #[test]
 fn activations_while_a_voice_sounds_dont_click() {
     let held = |after: Value, out: &str| synth(0.05, after, out);
@@ -721,17 +810,21 @@ fn activations_while_a_voice_sounds_dont_click() {
     );
     let own = max_step(&render(&sine, &DataSet::empty(), 0.1));
     let mut seed = 5;
+    let pk = std_packages();
+    let (p, d) = (flat(&plain), flat(&delayed));
     for k in 0..6 {
-        let mut rig = Rig::new(live(&plain, &data));
+        let mut rig = Rig::of(&p, &data, live(&plain, &data));
         rig.cmd(Cmd::Play);
         let mut out = rig.run(4000 + lcg(&mut seed) as usize % 20_000);
         assert!(peak(&out[out.len() - 100..]) > 0.5, "the note sounds");
-        rig.send(Msg::Activate { renderer: Box::new(live(if k % 2 == 0 { &delayed } else { &plain }, &data)) });
+        let next = rig.prepare(if k % 2 == 0 { &d } else { &p }, &data, &pk);
+        rig.send(Msg::Activate { renderer: Box::new(next) });
         out.extend(rig.run(SR as usize / 5));
         assert!(max_step(&out) <= 2.0 * own, "{} against the sine's own {own}", max_step(&out));
-        assert!(peak(&out[out.len() - 1000..]) < 1e-3, "released, and not chased");
-        assert_eq!(rig.e.current().unwrap().held_notes(), 0);
+        assert!(peak(&out[out.len() - 1000..]) > 0.5, "the kept voice sounds on");
+        assert_eq!(rig.e.current().unwrap().held_notes(), 1);
+        assert_eq!(rig.e.current().unwrap().stats().kept.polys, 1);
     }
 }
 
-mod carry;
+mod keep;

@@ -14,8 +14,8 @@
 
 use std::ops::Range;
 
-/// Lines a line diff may find different (about 2 MB of work at worst); a change that differs in
-/// more is one hunk between the common prefix and suffix.
+/// Lines a line diff, or tokens a run of changed lines, may find different (about 2 MB of work at
+/// worst); a change that differs in more is one hunk between the common prefix and suffix.
 pub(crate) const DIFF_LINES: usize = 500;
 
 /// One change: bytes `old` of the old text became bytes `new` of the new one.
@@ -67,15 +67,114 @@ fn suffix(a: &str, b: &str) -> usize {
     n
 }
 
+/// The hunk `old[o]` → `new[n]` trimmed by the bytes they share at both ends, when they differ.
+fn trimmed(old: &str, new: &str, o: Range<usize>, n: Range<usize>, out: &mut Vec<Hunk>) {
+    let p = prefix(&old[o.clone()], &new[n.clone()]);
+    let s = suffix(&old[o.start + p..o.end], &new[n.start + p..n.end]);
+    if o.start + p < o.end - s || n.start + p < n.end - s {
+        out.push(Hunk { old: o.start + p..o.end - s, new: n.start + p..n.end - s });
+    }
+}
+
+/// The tokens of `s`, which starts at byte `at` of its text, each with where it starts:
+/// identifiers and numbers, strings, and single punctuation characters, with whitespace and
+/// comments left between them. A guess wrong about a regex or a template only makes a token
+/// coarser or finer; the hunks still cover every byte that differs.
+fn tokens(s: &str, at: usize) -> Vec<(usize, &str)> {
+    let word = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+    let mut out = vec![];
+    let mut i = 0;
+    while let Some(c) = s[i..].chars().next() {
+        let rest = &s[i..];
+        let (len, token) = match c {
+            _ if rest.starts_with("//") => (rest.find('\n').unwrap_or(rest.len()), false),
+            _ if let Some(comment) = rest.strip_prefix("/*") => (comment.find("*/").map_or(rest.len(), |e| e + 4), false),
+            _ if c.is_whitespace() => (c.len_utf8(), false),
+            '"' | '\'' | '`' => {
+                // To its closing quote, past escaped ones.
+                let mut escaped = false;
+                let close = rest[1..].char_indices().find(|&(_, d)| {
+                    let end = !escaped && d == c;
+                    escaped = !escaped && d == '\\';
+                    end
+                });
+                (close.map_or(rest.len(), |(e, _)| e + 2), true)
+            }
+            _ if word(c) => (rest.find(|d: char| !word(d)).unwrap_or(rest.len()), true),
+            _ => (c.len_utf8(), true),
+        };
+        if token {
+            out.push((at + i, &rest[..len]));
+        }
+        i += len;
+    }
+    out
+}
+
+/// Slides each run of inserted, or deleted, tokens of `kept` (which maps `a`'s tokens to `b`'s) up
+/// as far as it goes, then back down to the first place where it starts with a word: Myers keeps
+/// whatever matches first, so a `plugin(…)` wrapped in another `plugin(` would give its `(` to the
+/// wrapper. A wrap is inserted as `name(`, and what it wraps keeps its tokens whole (ID-13).
+fn slide(kept: &mut [Option<usize>], a: &[&str], b: &[&str]) {
+    let word = |t: &str| t.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '$');
+    // Inserted: `b[j + 1..k]`, between two old tokens side by side.
+    for i in 1..kept.len() {
+        let (Some(j), Some(k)) = (kept[i - 1], kept[i]) else { continue };
+        if k == j + 1 {
+            continue;
+        }
+        let up = (1..=i.min(j + 1)).take_while(|&t| kept[i - t] == Some(j + 1 - t) && b[j + 1 - t] == b[k - t]).count();
+        if let Some(d) = (1..=up).rev().find(|&d| word(b[j + 1 - d])) {
+            for t in 1..=d {
+                kept[i - t] = Some(k - t);
+            }
+        }
+    }
+    // Deleted: `a[s..e]`, between two new tokens side by side.
+    let mut s = 1;
+    while s < kept.len() {
+        let e = (s..kept.len()).find(|&e| kept[e].is_some()).unwrap_or(kept.len());
+        if e > s
+            && e < kept.len()
+            && let Some(j) = kept[s - 1]
+            && kept[e] == Some(j + 1)
+        {
+            let up = (1..=s.min(j + 1)).take_while(|&t| kept[s - t] == Some(j + 1 - t) && a[s - t] == a[e - t]).count();
+            if let Some(d) = (1..=up).rev().find(|&d| word(a[s - d])) {
+                for t in 1..=d {
+                    (kept[e - t], kept[s - t]) = (kept[s - t], None);
+                }
+            }
+        }
+        s = e + 1;
+    }
+}
+
+/// The hunks from `old[o]` to `new[n]`, a run of whole lines that differ: a Myers diff over their
+/// tokens, then one hunk for each gap between kept tokens whose bytes differ, trimmed. Past
+/// [`DIFF_LINES`] different tokens, the run is one hunk.
+fn refine(old: &str, new: &str, o: Range<usize>, n: Range<usize>, out: &mut Vec<Hunk>) {
+    let (a, b) = (tokens(&old[o.clone()], o.start), tokens(&new[n.clone()], n.start));
+    let (at, bt): (Vec<&str>, Vec<&str>) = (a.iter().map(|t| t.1).collect(), b.iter().map(|t| t.1).collect());
+    let mut kept = kept_lines(&at, &bt).unwrap_or_else(|| vec![None; a.len()]);
+    slide(&mut kept, &at, &bt);
+    let (mut os, mut ns) = (o.start, n.start);
+    for (i, j) in kept.iter().enumerate().filter_map(|(i, j)| Some((i, (*j)?))) {
+        trimmed(old, new, os..a[i].0, ns..b[j].0, out);
+        (os, ns) = (a[i].0 + a[i].1.len(), b[j].0 + b[j].1.len());
+    }
+    trimmed(old, new, os..o.end, ns..n.end, out);
+}
+
 impl Edits {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    /// The change from `old` to `new`: Myers' diff over whole lines, each hunk then trimmed by
-    /// the bytes its old and new text share at both ends, so a changed literal is a hunk of the
-    /// literal alone. Past [`DIFF_LINES`] different lines, one hunk between the common prefix and
-    /// suffix.
+    /// The change from `old` to `new`: Myers' diff over whole lines, each run of changed lines
+    /// then refined by a Myers diff over its tokens ([`refine`]), so two literals edited on
+    /// adjacent lines are two hunks, and a wrap keeps every token of what it wraps (ID-13). Past
+    /// [`DIFF_LINES`] different lines, one hunk between the common prefix and suffix.
     pub fn between(old: &str, new: &str) -> Edits {
         if old == new {
             return Edits::default();
@@ -83,9 +182,9 @@ impl Edits {
         let (a, b) = (lines(old), lines(new));
         let (at, bt): (Vec<&str>, Vec<&str>) = (a.iter().map(|l| l.1).collect(), b.iter().map(|l| l.1).collect());
         let Some(kept) = kept_lines(&at, &bt) else {
-            let p = prefix(old, new);
-            let s = suffix(&old[p..], &new[p..]);
-            return Edits(vec![Hunk { old: p..old.len() - s, new: p..new.len() - s }]);
+            let mut whole = vec![];
+            trimmed(old, new, 0..old.len(), 0..new.len(), &mut whole);
+            return Edits(whole);
         };
         let start = |ls: &[(usize, &str)], i: usize, len: usize| ls.get(i).map_or(len, |l| l.0);
         let mut hunks = vec![];
@@ -102,11 +201,7 @@ impl Edits {
             let m = if k < a.len() { kept[k].expect("kept") } else { b.len() };
             let (os, oe) = (start(&a, i, old.len()), start(&a, k, old.len()));
             let (ns, ne) = (start(&b, j, new.len()), start(&b, m, new.len()));
-            let p = prefix(&old[os..oe], &new[ns..ne]);
-            let s = suffix(&old[os + p..oe], &new[ns + p..ne]);
-            if os + p < oe - s || ns + p < ne - s {
-                hunks.push(Hunk { old: os + p..oe - s, new: ns + p..ne - s });
-            }
+            refine(old, new, os..oe, ns..ne, &mut hunks);
             (i, j) = (k, m);
         }
         Edits(hunks)
@@ -387,6 +482,88 @@ mod tests {
         let e = Edits::between(old, new);
         assert_eq!((&old[e.0[0].old.clone()], &new[e.0[0].new.clone()]), ("ス", "キ"));
         assert!(Edits::between(old, old).is_empty());
+    }
+
+    // ID-13 (identity note F1): two literals edited on adjacent lines in one save are two hunks,
+    // each the literal alone, so the calls between them keep their points; so is a wrap's each
+    // insertion, whatever the closing brackets do.
+    #[test]
+    fn two_literals_on_adjacent_lines_are_two_hunks() {
+        let old = "const a = lowpass(x, { cutoff: 800 });\nconst b = delay(a, { mix: 0.3 });\n";
+        let new = "const a = lowpass(x, { cutoff: 950 });\nconst b = delay(a, { mix: 0.25 });\n";
+        let e = Edits::between(old, new);
+        let shown: Vec<(&str, &str)> = e.0.iter().map(|h| (&old[h.old.clone()], &new[h.new.clone()])).collect();
+        assert_eq!(shown, [("80", "95"), ("3", "25")]);
+        let (old, new) = ("reverb(pad(lane.notes(\"n\")));\n", "reverb(delay(pad(lane.notes(\"n\"))));\n");
+        let e = Edits::between(old, new);
+        let kept = |at: usize| e.carry(at..at + 1).map(|r| r.start);
+        assert_eq!((kept(6), kept(10), kept(21)), (Some(6), Some(16), Some(27)), "the `(` of reverb, pad and notes: {:?}", e.0);
+    }
+
+    // ID-13: a call wrapped in a call of the same callee keeps its own `(`, not the wrapper's, and
+    // so does the unwrap: the wrap is inserted as `plugin(…`, whatever Myers matched first.
+    #[test]
+    fn a_wrap_by_the_same_callee_keeps_the_wrapped_paren() {
+        let old = "  const p = plugin('probe', { gain: 0.5 });\n";
+        let new = "  const p = plugin('outer', { in: plugin('probe', { gain: 0.5 }), key: 'k' });\n";
+        let (at, to) = (old.find('(').unwrap(), new.rfind("plugin(").unwrap() + 6);
+        assert_eq!(Edits::between(old, new).carry(at..at + 1).map(|r| r.start), Some(to), "{:?}", Edits::between(old, new));
+        assert_eq!(Edits::between(new, old).carry(to..to + 1).map(|r| r.start), Some(at), "{:?}", Edits::between(new, old));
+        // Where the callees differ, nothing slides: the outer call keeps the outer `(`.
+        let (old, new) = ("reverb(pad(x));\n", "reverb(delay(pad(x)));\n");
+        assert_eq!(Edits::between(old, new).carry(6..7).map(|r| r.start), Some(6));
+    }
+
+    // ID-13: a reformat moves whitespace only, so every hunk lies between tokens.
+    #[test]
+    fn a_reformat_changes_no_token() {
+        let old = "export default track(\"t\", ({ lane }) => reverb(pad(lane.notes(\"n\")), { mix: 0.3 }));\n";
+        let new = "export default track(\"t\", ({ lane }) =>\n  reverb(\n    pad(lane.notes( \"n\" )),\n    { mix: 0.3 } // wet\n  )\n);\n";
+        let e = Edits::between(old, new);
+        assert!(!e.is_empty());
+        for h in &e.0 {
+            assert!(
+                tokens(&old[h.old.clone()], 0).is_empty() && tokens(&new[h.new.clone()], 0).is_empty(),
+                "{:?} → {:?}",
+                &old[h.old.clone()],
+                &new[h.new.clone()]
+            );
+        }
+    }
+
+    // ID-13, WRITE-12: on code-like text, the hunks are an edit script: sorted and disjoint, on
+    // character boundaries, what lies between them equal on both sides, and applied to the old
+    // text they give the new one.
+    #[test]
+    fn token_hunks_are_an_edit_script() {
+        let mut rng = Xorshift(0x5851_f42d_4c95_7f2d);
+        let words =
+            ["pluck", "(", ")", "lane", ".", "notes", "\"n\"", "800", ",", " ", "\n", "// c\n", "/* d */", "é", "'x\\'y'", "{", "}"];
+        for case in 0..500 {
+            let old: String = (0..rng.below(40)).map(|_| words[rng.below(words.len())]).collect();
+            let mut new = old.clone();
+            for _ in 0..1 + rng.below(4) {
+                let chars: Vec<usize> = new.char_indices().map(|(i, _)| i).chain([new.len()]).collect();
+                let at = chars[rng.below(chars.len())];
+                let end = chars.iter().copied().filter(|&c| c >= at).nth(rng.below(3)).unwrap_or(at);
+                let text: String = (0..rng.below(4)).map(|_| words[rng.below(words.len())]).collect();
+                new.replace_range(at..end, &text);
+            }
+            let e = Edits::between(&old, &new);
+            assert_eq!(apply(&old, &new, &e), new, "case {case}: {old:?} → {new:?}");
+            let (mut o, mut n) = (0, 0);
+            for h in &e.0 {
+                assert!(
+                    o <= h.old.start && n <= h.new.start && h.old.start <= h.old.end && h.new.start <= h.new.end,
+                    "case {case}: {:?}",
+                    e.0
+                );
+                assert!([h.old.start, h.old.end].iter().all(|&x| old.is_char_boundary(x)), "case {case}");
+                assert!([h.new.start, h.new.end].iter().all(|&x| new.is_char_boundary(x)), "case {case}");
+                assert_eq!(old[o..h.old.start], new[n..h.new.start], "case {case}: carried bytes are equal");
+                (o, n) = (h.old.end, h.new.end);
+            }
+        }
     }
 
     // WRITE-12: carry is strict. A range is carried past changes elsewhere, its own line included;

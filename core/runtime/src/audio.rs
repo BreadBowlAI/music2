@@ -8,7 +8,8 @@
 //!
 //! Live, a lane crossfades over 5 ms from its old position to its new one at a seek or a loop
 //! wrap, fades out on stop, and fades in on play from inside a clip (RENDER-9); offline it is a
-//! plain copy.
+//! plain copy. Its player persists across plan activations, and one that brings new renders (an
+//! edited clip, a tempo change) crossfades linearly from the old renders to them (RENDER-27).
 //!
 //! Time-stretching (WSOLA) lives here for now. The design makes stretching a package
 //! kernel so better algorithms can replace it; that needs an offline-kernel ABI
@@ -19,12 +20,13 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use anyhow::{Context, Result};
 use m2_song::{AudioClip, DataSet, HashCache, Sha, TempoMap};
 
 use crate::BLOCK;
+use crate::fade::xfade;
 use crate::transport::{Jump, Runs};
 
 /// Decoded audio, planar, at its own sample rate.
@@ -173,6 +175,11 @@ impl Cache {
     pub fn work(&self) -> (usize, usize) {
         (self.decodes, self.renders)
     }
+
+    /// Every clip render it holds, weakly: tests check that what no plan plays any more is freed.
+    pub fn renders(&self) -> Vec<Weak<RenderedClip>> {
+        self.clips.values().map(Arc::downgrade).collect()
+    }
 }
 
 /// Read `x` at fractional position `pos` (cubic Hermite); silence outside.
@@ -319,7 +326,20 @@ pub struct AudioLane {
     channels: usize,
 }
 
+impl std::fmt::Debug for AudioLane {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("AudioLane").field("clips", &self.clips.len()).field("channels", &self.channels).finish()
+    }
+}
+
 impl AudioLane {
+    /// Whether it plays the very renders `o` plays, at the same samples: what a plan keeps.
+    pub(crate) fn same(&self, o: &AudioLane) -> bool {
+        self.channels == o.channels
+            && self.clips.len() == o.clips.len()
+            && self.clips.iter().zip(&o.clips).all(|(a, b)| a.0 == b.0 && Arc::ptr_eq(&a.1, &b.1))
+    }
+
     /// Render `clips`, in the order given (canonical: by start and id, so overlapping clips
     /// always sum in one order). A clip whose asset may not be played (`asset.missing`) or
     /// can't be decoded is silent; it never silences the rest (FMT-15).
@@ -384,12 +404,93 @@ const MAX_RATE: u64 = 384_000;
 /// one. A seek on every block line, each with a wrap just after, runs 30 of them at 384 kHz.
 const TAPS: usize = 2 * (MAX_RATE as usize * 5 / 1000).div_ceil(BLOCK) + 2;
 
-/// An audio lane node's declicking (RENDER-9 item 5): at a seek or a wrap the old position
-/// fades out while the new one fades in, equal-power over 5 ms; stop fades out; play fades in
-/// only from inside a clip, so playing from 0 or from a clip's start is exact (RENDER-33).
-/// Nothing is faded at a renderer's first block: the whole-output crossfade covers it.
-pub struct AudioNode {
-    pub(crate) slot: usize,
+/// An audio lane as the engine plays it: its clips' renders and its declicking, filled once per
+/// block before the graph runs; every node that reads the lane copies [`AudioPlayer::out`]. Two
+/// nodes on one lane computed the same output from the same runs, so one player gives their bits.
+/// It moves from plan to plan with its lane; an activation that brings new renders swaps them in,
+/// and for one fade window the old ones play on beside them (RENDER-27).
+pub(crate) struct AudioPlayer {
+    cur: Arc<AudioLane>,
+    /// The renders an activation replaced: read for one window, then retired with the window.
+    prev: Option<Arc<AudioLane>>,
+    /// `prev`'s transport frame minus the transport's, fixed at the swap: not 0 only when the
+    /// activation retimed the transport (a tempo change).
+    shift: i64,
+    /// Frames since the swap.
+    since: u32,
+    decl: Declick,
+    /// This block, channel-major, `channels × BLOCK`.
+    out: Box<[f32]>,
+    /// `prev`'s side of the block, while it fades out.
+    old: Box<[f32]>,
+}
+
+impl AudioPlayer {
+    pub(crate) fn new(lane: Arc<AudioLane>, sample_rate: f64) -> AudioPlayer {
+        let out = vec![0.0; lane.channels * BLOCK].into_boxed_slice();
+        AudioPlayer { old: out.clone(), out, cur: lane, prev: None, shift: 0, since: 0, decl: Declick::new(sample_rate) }
+    }
+
+    /// This block, for `runs`. During a swap's window both renders play the same runs, `prev`
+    /// through a copy of the declick state, and each sample crossfades from it to `cur`: a clip
+    /// the edit didn't change is the same bits on both sides, so it stays exact (RENDER-27). Never
+    /// allocates.
+    pub(crate) fn fill(&mut self, runs: &Runs) {
+        let len = self.decl.len;
+        if let Some(prev) = self.prev.as_ref().filter(|_| self.since < len) {
+            let mut decl = self.decl;
+            decl.process(prev, &runs.shifted(self.shift), &mut self.old);
+            self.decl.process(&self.cur, runs, &mut self.out);
+            for c in 0..self.cur.channels {
+                for f in 0..BLOCK {
+                    let i = c * BLOCK + f;
+                    self.out[i] = xfade(self.old[i], self.out[i], self.since + f as u32, len);
+                }
+            }
+            self.since += BLOCK as u32;
+            return;
+        }
+        self.decl.process(&self.cur, runs, &mut self.out);
+    }
+
+    /// Play `lane` from the next block, crossfading from what it played over one window. `shift`
+    /// is where the old renders play relative to the transport. Never allocates: the window it
+    /// fades in is the plan's, so no other swap is still fading.
+    pub(crate) fn swap(&mut self, lane: Arc<AudioLane>, shift: i64) {
+        debug_assert!(self.prev.is_none(), "a swap while another fades");
+        self.prev = Some(std::mem::replace(&mut self.cur, lane));
+        (self.shift, self.since) = (shift, 0);
+    }
+
+    /// The renders a swap replaced, at the window's end.
+    pub(crate) fn take_prev(&mut self) -> Option<Arc<AudioLane>> {
+        self.prev.take()
+    }
+
+    pub(crate) fn fading(&self) -> bool {
+        self.prev.is_some()
+    }
+
+    pub(crate) fn out(&self) -> &[f32] {
+        &self.out
+    }
+
+    pub(crate) fn reset(&mut self) {
+        self.decl.reset();
+    }
+
+    pub(crate) fn dropped_taps(&self) -> u32 {
+        self.decl.dropped
+    }
+}
+
+/// An audio lane's declicking (RENDER-9 item 5): at a seek or a wrap the old position fades out
+/// while the new one fades in, equal-power over 5 ms; stop fades out; play fades in only from
+/// inside a clip, so playing from 0 or from a clip's start is exact (RENDER-33). A plan's first
+/// block (Enter) changes nothing: a player moved into it goes on with its own fade-in, so a no-op
+/// activation is exact, and a new one has none.
+#[derive(Clone, Copy)]
+struct Declick {
     taps: [Tap; TAPS],
     ntaps: usize,
     /// Frames of the fade-in done, while one runs.
@@ -403,18 +504,13 @@ pub struct AudioNode {
     dropped: u32,
 }
 
-impl AudioNode {
-    pub(crate) fn new(slot: usize, sample_rate: f64) -> AudioNode {
+impl Declick {
+    fn new(sample_rate: f64) -> Declick {
         let len = (0.005 * sample_rate).round().max(1.0) as u32;
-        AudioNode { slot, taps: [Tap::default(); TAPS], ntaps: 0, fade_in: None, len, prev_moving: false, cont: 0, dropped: 0 }
+        Declick { taps: [Tap::default(); TAPS], ntaps: 0, fade_in: None, len, prev_moving: false, cont: 0, dropped: 0 }
     }
 
-    /// Taps let go before their fade ended (a small step each).
-    pub(crate) fn dropped_taps(&self) -> u32 {
-        self.dropped
-    }
-
-    pub(crate) fn reset(&mut self) {
+    fn reset(&mut self) {
         (self.ntaps, self.fade_in, self.prev_moving, self.cont) = (0, None, false, 0);
     }
 
@@ -453,7 +549,7 @@ impl AudioNode {
     }
 
     /// Fill `out` (channel-major, `channels × BLOCK`) for one block of `runs`. Never allocates.
-    pub(crate) fn process(&mut self, lane: &AudioLane, runs: &Runs, out: &mut [f32]) {
+    fn process(&mut self, lane: &AudioLane, runs: &Runs, out: &mut [f32]) {
         let rs = runs.as_slice();
         // Offline, and live between jumps: today's copy, bit for bit.
         if let [r] = rs
@@ -480,7 +576,6 @@ impl AudioNode {
                     self.fade_in = None;
                 }
                 Jump::Start => self.fade_in = (r.moving && lane.inside(r.at)).then_some(0),
-                Jump::Enter => self.fade_in = None,
                 _ => {}
             }
             if r.moving {
@@ -530,6 +625,30 @@ mod tests {
     use super::*;
     use crate::transport::Run;
 
+    // RENDER-27: an activation that retimed the transport (a tempo change) swaps a player's renders
+    // with the old ones read at their own position: for the window each sample crossfades from the
+    // old renders at its frame plus the shift to the new ones at its frame, then the new ones alone.
+    #[test]
+    fn a_swap_reads_the_old_renders_at_their_own_position() {
+        let ramp = |k: f32| Arc::new(AudioLane { clips: vec![(0, Arc::new(vec![(0..96_000).map(|i| k * i as f32).collect()]))], channels: 1 });
+        let (old, new) = (ramp(1e-5), ramp(-1e-5));
+        let mut p = AudioPlayer::new(old, 48_000.0);
+        let run = |at: u64| Runs::one(Run { off: 0, n: BLOCK as u32, at, moving: true, jump: Jump::None });
+        p.fill(&run(10_000));
+        p.swap(new, 3_000);
+        let mut out = vec![];
+        for b in 0..3u64 {
+            p.fill(&run(10_128 + b * BLOCK as u64));
+            out.extend_from_slice(&p.out()[..BLOCK]);
+        }
+        for (k, x) in out.iter().enumerate() {
+            let at = 10_128.0 + k as f32;
+            let want = xfade(1e-5 * (at + 3_000.0), -1e-5 * at, k as u32, 240);
+            assert_eq!(x.to_bits(), want.to_bits(), "frame {k}");
+        }
+        assert!(p.fading() && p.take_prev().is_some() && !p.fading(), "the old renders wait for the window's end");
+    }
+
     // RENDER-9 item 5, RENDER-28: at every project rate, the most fades jumps can start at once
     // fit. A seek on every block line with a wrap mid-block after it, block after block, is the
     // most the engine's message loop allows; no fade may be let go before it ends (a step).
@@ -538,7 +657,7 @@ mod tests {
         for rate in [8_000u32, 44_100, 48_000, 96_000, 192_000, 384_000] {
             let material: Vec<f32> = (0..rate as usize).map(|i| (i as f32 * 0.01).sin()).collect();
             let lane = AudioLane { clips: vec![(0, Arc::new(vec![material]))], channels: 1 };
-            let mut node = AudioNode::new(0, rate as f64);
+            let mut node = Declick::new(rate as f64);
             let mut out = [0.0f32; BLOCK];
             node.process(&lane, &Runs::one(Run { off: 0, n: BLOCK as u32, at: 0, moving: true, jump: Jump::None }), &mut out);
             let mut most = 0;
@@ -550,7 +669,7 @@ mod tests {
                 node.process(&lane, &runs, &mut out);
                 most = most.max(node.ntaps);
             }
-            assert_eq!(node.dropped_taps(), 0, "{rate} Hz: {most} fades at once, room for {TAPS}");
+            assert_eq!(node.dropped, 0, "{rate} Hz: {most} fades at once, room for {TAPS}");
             assert!(most + 3 >= 2 * node.len.div_ceil(BLOCK as u32) as usize, "{rate} Hz: the jumps overlapped ({most} fades)");
         }
     }

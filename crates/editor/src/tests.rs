@@ -8,7 +8,11 @@ use m2_session::{Session, StepError};
 use m2_song::tx::{Anchor, Expect, Range};
 
 use super::*;
-use crate::controls::{carry_ends, carry_text as carry};
+
+/// Where `start..end` of `old` is in `new`, when no change touched it: how ids and leases carry.
+fn carry(old: &str, new: &str, start: usize, end: usize) -> Option<usize> {
+    m2_session::text::Edits::between(old, new).carry(start..end).map(|r| r.start)
+}
 
 fn std_packages() -> PackageSet {
     let mut p = PackageSet::default();
@@ -370,8 +374,7 @@ impl Xorshift {
 
 // WRITE-12: a range carries exactly when no change touched it. Random line edits (insert, delete,
 // replace) around a run of lines: with every line unique, the run is found where it went whenever
-// no edit touched it, and never when one did; and wherever the prefix-and-suffix rule carried a
-// range, the line diff keeps the same answer.
+// no edit touched it, and never when one did.
 #[test]
 fn carrying_finds_a_range_wherever_no_edit_touched_it() {
     let mut rng = Xorshift(0x9e37_79b9_7f4a_7c15);
@@ -421,14 +424,11 @@ fn carrying_finds_a_range_wherever_no_edit_touched_it() {
             let moved = new.iter().position(|l| *l == old[r0]).expect("kept");
             assert_eq!(carried, Some(start_of(&new, moved) + 2), "case {case}: the range is where its lines went");
         }
-        if let Some(to) = carry_ends(&o, &w, start, end) {
-            assert_eq!(carried, Some(to), "case {case}: the prefix-and-suffix rule's answer stands");
-        }
     }
 }
 
 // WRITE-12, WRITE-22: an agent's save that adds an import at the top of the file and a line at
-// its end keeps a dragged control: its call is carried, by a line diff, to the same control.
+// its end keeps a dragged control: its call is carried, by `Edits::between`, to the same control.
 #[test]
 fn a_control_is_carried_past_edits_above_and_below_its_call() {
     let dir = project(&[("song.ts", TWO_OSCS)]);
@@ -440,12 +440,17 @@ fn a_control_is_carried_past_edits_above_and_below_its_call() {
     let current = s.controls_by_id();
     let carried = s.carry(sine.revision, &sine.id, &current).unwrap();
     assert_eq!((carried.literal.as_str(), carried.value, carried.revision), ("110", 110.0, s.accepted().number));
-    // Its own line changed too, past the call, while the lines above and below change back: the
-    // line diff counts the line as touched, and the ends differ around it.
-    std::fs::write(dir.join("song.ts"), TWO_OSCS.replace("const s = osc.sine(hz(110));", "const s = osc.sine(hz(110)); // s")).unwrap();
+    // Its own line changed too, past the call, while the lines above and below change back: no
+    // change touched the call, so it carries (WRITE-12: a run of changed lines is refined by
+    // tokens, ID-13); a change inside the call stops it.
+    let commented = TWO_OSCS.replace("const s = osc.sine(hz(110));", "const s = osc.sine(hz(110)); // s");
+    std::fs::write(dir.join("song.ts"), &commented).unwrap();
     assert!(s.refresh());
-    let at = carried.revision;
-    assert_eq!(s.carry(at, &carried.id, &s.controls_by_id()), Err(EditError::Stale { current: s.accepted().number }));
+    let again = s.carry(carried.revision, &carried.id, &s.controls_by_id()).unwrap();
+    assert_eq!((again.literal.as_str(), again.revision), ("110", s.accepted().number));
+    std::fs::write(dir.join("song.ts"), commented.replace("hz(110)", "hz(110 /* Hz */)")).unwrap();
+    assert!(s.refresh());
+    assert_eq!(s.carry(again.revision, &again.id, &s.controls_by_id()), Err(EditError::Stale { current: s.accepted().number }));
     assert_eq!(carried.audition(330.0), Ok(330.0));
     assert!(carried.audition(f64::NAN).is_err());
     std::fs::remove_dir_all(dir).ok();

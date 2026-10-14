@@ -25,7 +25,11 @@ GATES (default: all):
   loop        G2  a 4-bar loop at 127 bpm: no tail cut at a wrap, no drift against the grid
   note-edit   G3  a note edit is heard within compile + 20 ms, by SwapLane, with no tail cut
   stuck       G4  deleting, shortening, stopping, wrapping or seeking through a note leaves none stuck
-  add-effect  G5  an added effect is heard within compile + 100 ms, with no jump back
+  add-effect  G5  an added effect is heard within compile + 100 ms, with no jump back; through the
+                  server, G7a too: ten edits adding and taking out a delay on t02, each heard within
+                  200 ms of its request (step 7)
+  tails       G7b the tails of untouched tracks are intact through an edit: bit for bit against a
+                  twin, every stateful node outside the edited track kept (step 7)
   step        G6  activations while a sine plays make no step over twice the sine's own, and keep
                   the beat
   tail-stop   G7  after stop, reverb and delay tails decay instead of freezing
@@ -44,6 +48,10 @@ GATES (default: all):
   watcher     G11 (--server only) the watcher with 5,000 files in assets/: the CPU it uses while
                   idle, under 1% of a core, and an outside lane write from its last byte to the
                   block that plays it; the full stat walk (WRITE-19)
+  arena       G7f part 2 (named only) the arena's cost to the player's callback: its p99 playing,
+                  against HEAD's, and the callback that takes in each of ten activations (step 7)
+  store       G7f (named only) what one wasmtime Store per kernel instance costs: build, memory,
+                  address space, block time and drop, judged against layout S (RENDER-32)
 
 OPTIONS:
   --rig R          engine: step 3a's live engine (needs --features engine); replay: HEAD's
@@ -51,16 +59,18 @@ OPTIONS:
                    with it, else replay)
   --server         seek, note-edit and add-effect through the app's server in real time, on the
                    silent player, instead of on a rig
-  --no-carry       the engine rig builds every plugin instance anew with each renderer, as step 3a
-                   did: the negative reference for carrying them across rebuilds (HOST-5)
+  --no-arena       the engine rig keeps no instance across an activation: every one is new and the
+                   whole old graph plays out as ghosts, the negative reference for the arena
+                   (RENDER-25, HOST-5)
   --quick          CI sizes: a 3-track reference project, 1 minute of loop, 8 seeks
   --reference N    the reference project the timed gates play: 16 (p16, the default) or 50 (p50)
   --stems N        add N one-minute stems on audio lanes (the audio-heavy variant)
   --minutes M      how long the loop gate loops (default 10)
   --seeks N        seeks for G1 (default 50; 5 on the replay rig, where each one replays)
   --activations N  activations per song for G6 (default 50)
-  --edits N        edits G3 and G5 time through the server (default 10; G5 adds an effect to up to
-                   N tracks)
+  --edits N        edits G3 and G5 time through the server (default 10)
+  --at S           where G5, G7a and G7b edit, in seconds of the song (default 60; 180 for step 7's
+                   recorded runs on p50)
   --seed N         for the random seeks and clocks (default 3)
   --work DIR       where projects are generated (default: a new folder under the temp dir)
   --keep           keep the work folder afterwards
@@ -93,7 +103,7 @@ fn run() -> Result<bool> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut o = Opts::recorded();
     let mut kind = if cfg!(feature = "engine") { Kind::Engine } else { Kind::Replay };
-    let (mut via_server, mut keep, mut work, mut seeks, mut carry) = (false, false, None, None, true);
+    let (mut via_server, mut keep, mut work, mut seeks, mut arena) = (false, false, None, None, true);
     let mut names = vec![];
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -111,7 +121,7 @@ fn run() -> Result<bool> {
                 }
             }
             "--server" => via_server = true,
-            "--no-carry" => carry = false,
+            "--no-arena" => arena = false,
             "--quick" => {
                 let q = Opts::quick();
                 (o.reference, o.loop_minutes, o.seeks, o.activations, o.edits) =
@@ -125,6 +135,7 @@ fn run() -> Result<bool> {
             "--seeks" => seeks = Some(value()?.parse().context("--seeks")?),
             "--activations" => o.activations = value()?.parse().context("--activations")?,
             "--edits" => o.edits = value()?.parse::<usize>().context("--edits")?.max(1),
+            "--at" => o.at = value()?.parse().context("--at")?,
             "--seed" => o.seed = value()?.parse().context("--seed")?,
             "--work" => work = Some(PathBuf::from(value()?)),
             "--keep" => keep = true,
@@ -148,12 +159,12 @@ fn run() -> Result<bool> {
     let made = work.is_none();
     let work = work.unwrap_or_else(|| std::env::temp_dir().join(format!("m2-gates-{}", std::process::id())));
     let mut lab = Lab::new(&work)?;
-    lab.carry = carry;
+    lab.arena = arena;
     println!("m2-gates: {}", report::profile());
     println!(
         "rig: {}{}; reference {}; work in {}",
         if via_server { "server, real time" } else { kind.name() },
-        if carry { "" } else { ", plugin instances never carried" },
+        if arena { "" } else { ", no instance kept" },
         o.reference.name(),
         work.display()
     );
@@ -168,6 +179,8 @@ fn run() -> Result<bool> {
             (true, "drag") => server::drag(&mut lab, &o),
             (true, "tx-data") => server::tx_data(&mut lab, &o),
             (true, "watcher") => server::watcher(&mut lab, &o),
+            (false, "store") => m2_gates::store::store(&mut lab, &o),
+            (false, "arena") => m2_gates::arena::arena(&mut lab, &o),
             _ => gates::run(name, &mut lab, kind, &o),
         };
         match outcome {

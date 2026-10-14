@@ -1199,7 +1199,6 @@ export default song(() => key("chain", () => echo(twice(kernel("std:saw")), 900)
     let svf_frames: Vec<Option<u32>> = m.nodes.iter().filter(|n| matches!(&n.op, Op::Kernel { kernel, .. } if kernel == "std:svf")).map(|n| n.frame).collect();
     assert_eq!(svf_frames, [Some(1), Some(2), Some(3)]);
     assert_eq!(m.chain(Some(3)).iter().map(|f| f.site).collect::<Vec<_>>(), [m.frames[0].site, m.frames[3].site]);
-    assert_eq!(m2_ir::control_id(m, 3, "cutoff"), format!("song/{}:0:chain/{}:0/@cutoff", m.frames[0].site, m.frames[3].site));
     // The component calls a node was made inside are the component frames of its chain.
     let svf = m.nodes.iter().find(|n| n.frame == Some(3) && matches!(n.op, Op::Kernel { .. })).unwrap();
     let calls: Vec<u32> = m.chain(svf.frame).iter().filter(|f| f.component.is_some()).map(|f| f.site).collect();

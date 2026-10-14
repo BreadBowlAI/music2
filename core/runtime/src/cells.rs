@@ -248,6 +248,9 @@ pub(crate) struct Cells {
     /// Smooth cells ramping this block, which end on their value at the next block line. Room
     /// for every smooth cell, so it never grows.
     ramping: Vec<u32>,
+    /// Values an activation carried in (RENDER-22a): applied at the next block line from the
+    /// value the plan before played, as a slot write would be. Room sized when the plan is made.
+    carried: Vec<(u32, f32)>,
     /// Every write up to this seq is applied.
     heard: u64,
     /// `heard` as [`Cells::take_heard`] last reported it.
@@ -261,6 +264,7 @@ impl Cells {
             slots: Arc::new(CellSlots::new(info.len())),
             map: Arc::new(CellMap::of(info)),
             ramping: Vec::with_capacity(info.iter().filter(|c| c.smooth).count()),
+            carried: vec![],
             heard: 0,
             reported: 0,
         }
@@ -279,29 +283,72 @@ impl Cells {
     }
 
     /// At a block line, before the graph runs: ramps from the last block end on their value, then
-    /// what the slots hold is applied (RENDER-22, RENDER-22a). Never allocates.
+    /// what an activation carried in and what the slots hold is applied (RENDER-22, RENDER-22a).
+    /// Never allocates.
     pub(crate) fn apply(&mut self, graph: &mut Graph) {
-        let Cells { table, slots, ramping, heard, .. } = self;
-        for &i in ramping.iter() {
-            let c = &table[i as usize];
-            write(graph, c.at, Write::Step(c.value));
-        }
-        ramping.clear();
-        let drained = slots.drain(|id, v| {
-            let Some(c) = table.get_mut(id.0 as usize) else { return };
+        self.end_ramps(graph);
+        let Cells { table, slots, ramping, carried, heard, .. } = self;
+        let mut set = |id: u32, v: f32| {
+            let Some(c) = table.get_mut(id as usize) else { return };
             if c.value.to_bits() == v.to_bits() {
                 return;
             }
             if c.smooth && ramping.len() < ramping.capacity() {
                 write(graph, c.at, Write::Ramp(c.value, v));
-                ramping.push(id.0);
+                ramping.push(id);
             } else {
                 write(graph, c.at, Write::Step(v));
             }
             c.value = v;
-        });
-        if let Some(p) = drained {
+        };
+        for (id, v) in carried.drain(..) {
+            set(id, v);
+        }
+        if let Some(p) = slots.drain(|id, v| set(id.0, v)) {
             *heard = (*heard).max(p);
+        }
+    }
+
+    /// Ramps written at the last block line end on their value, as the next block line would end
+    /// them: before an activation moves voices whose constants a ramp is in. Never allocates.
+    pub(crate) fn end_ramps(&mut self, graph: &mut Graph) {
+        for &i in &self.ramping {
+            let c = &self.table[i as usize];
+            write(graph, c.at, Write::Step(c.value));
+        }
+        self.ramping.clear();
+    }
+
+    /// Room for `n` values an activation carries in.
+    pub(crate) fn reserve_carry(&mut self, n: usize) {
+        self.carried.reserve_exact(n);
+    }
+
+    /// At an activation, on the audio thread, once the boxes moved: each continued cell whose value
+    /// differs from what the plan before played is applied at the next block line as a `SetCell`
+    /// from that value (RENDER-22a): a smooth one ramps, where a fresh buffer would step. `pairs`
+    /// are top-level cells, (new, old); `voices` the voice cells of kept polys, whose constants
+    /// moved in with their voices and hold the old values. Never allocates.
+    pub(crate) fn carry(&mut self, graph: &Graph, old: &Cells, pairs: &[(CellId, CellId)], voices: &[CellId]) {
+        let room = |c: &Vec<(u32, f32)>| c.len() < c.capacity();
+        for &(id, was) in pairs {
+            let (Some(c), Some(v)) = (self.table.get_mut(id.0 as usize), old.value(was)) else { continue };
+            // A step is in the fresh buffer already.
+            if c.smooth && c.value.to_bits() != v.to_bits() && room(&self.carried) {
+                self.carried.push((id.0, c.value));
+                c.value = v;
+            }
+        }
+        for &id in voices {
+            let Some(c) = self.table.get_mut(id.0 as usize) else { continue };
+            let CellAt::Voice { poly, node } = c.at else { continue };
+            if let Some(held) = graph.voice_const(poly, node)
+                && held.to_bits() != c.value.to_bits()
+                && room(&self.carried)
+            {
+                self.carried.push((id.0, c.value));
+                c.value = held;
+            }
         }
     }
 
@@ -332,7 +379,7 @@ fn write(graph: &mut Graph, at: CellAt, w: Write) {
         CellAt::Top(node) => graph.write_const(node, w),
         CellAt::Voice { poly, node } => {
             if let Exec::Poly(p) = &mut graph.exec[poly] {
-                for v in &mut p.voices {
+                for v in p.pool.iter_mut().flat_map(|pool| &mut pool.voices) {
                     v.graph.write_const(node, w);
                 }
             }

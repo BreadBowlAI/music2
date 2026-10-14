@@ -88,6 +88,15 @@ impl Runs {
     pub fn frame(&self, f: u32) -> u64 {
         self.at(f).frame(f)
     }
+
+    /// The same runs `by` frames later in the transport (earlier when negative, never below 0).
+    pub(crate) fn shifted(&self, by: i64) -> Runs {
+        let mut r = *self;
+        for run in &mut r.runs[..r.len] {
+            run.at = run.at.saturating_add_signed(by);
+        }
+        r
+    }
 }
 
 /// A transport command. Seek targets and loops are beats, so a command means the same in any
@@ -234,11 +243,12 @@ impl Transport {
         }
     }
 
-    /// The next block's runs, and the transport moved past them.
+    /// The next block's runs, and the transport moved past them. A start, stop, seek or wrap on a
+    /// renderer's first block line is that jump, not `Enter`: it ends the notes the renderer took
+    /// over and declicks as on any block, and for what is new it seeks just as `Enter` does
+    /// (RENDER-9, RENDER-26a).
     pub fn advance(&mut self) -> Runs {
-        let jump = if self.enter {
-            Jump::Enter
-        } else if !self.was_playing && self.playing {
+        let jump = if !self.was_playing && self.playing {
             Jump::Start
         } else if self.was_playing && !self.playing {
             Jump::Stop
@@ -246,6 +256,8 @@ impl Transport {
             Jump::Seek
         } else if self.playing && self.wrapped {
             Jump::Wrap
+        } else if self.enter {
+            Jump::Enter
         } else {
             Jump::None
         };
@@ -324,8 +336,36 @@ mod tests {
         t.apply(Cmd::Seek(-3.0), &tempo, RATE);
         assert_eq!(t.pos(), 0, "a negative seek clamps to 0, and a NaN is ignored");
         t.enter();
-        t.apply(Cmd::Play, &tempo, RATE);
         assert_eq!(t.advance().first().jump, Jump::Enter, "a renderer's first block is Enter");
+        t.enter();
+        t.apply(Cmd::Play, &tempo, RATE);
+        assert_eq!(t.advance().first().jump, Jump::Start, "unless a real jump shares its line");
+    }
+
+    // RENDER-9, RENDER-26a: on a renderer's first block line a start, stop, seek or block-line wrap
+    // wins over Enter, so the notes it took over end and its audio declicks; alone, Enter it is.
+    #[test]
+    fn a_jump_on_an_entry_line_wins() {
+        let tempo = at(120.0);
+        let jump = |t: &mut Transport, cmd: Option<Cmd>| {
+            t.enter();
+            if let Some(c) = cmd {
+                t.apply(c, &tempo, RATE);
+            }
+            t.advance().first().jump
+        };
+        let mut t = Transport::new(0, true);
+        assert_eq!(jump(&mut t, None), Jump::Enter);
+        assert_eq!(jump(&mut t, Some(Cmd::Seek(2.0))), Jump::Seek);
+        assert_eq!(jump(&mut t, Some(Cmd::Stop)), Jump::Stop);
+        assert_eq!(jump(&mut t, Some(Cmd::Play)), Jump::Start);
+        // A loop of two blocks wraps on the block line: carried to the entry's line, it is a Wrap.
+        let mut t = Transport::new(0, true);
+        t.apply(Cmd::Loop(Some((0.0, 256.0 / 24_000.0))), &tempo, RATE);
+        t.advance();
+        t.advance();
+        assert_eq!(jump(&mut t, None), Jump::Wrap);
+        assert_eq!(t.pos(), 128, "and plays the loop's start");
     }
 
     // RENDER-9a: a wrap falls at the loop end's exact frame, mid-block, and one on the block

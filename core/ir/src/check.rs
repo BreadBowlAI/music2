@@ -1480,10 +1480,9 @@ mod tests {
         assert_eq!(check(&p, &kernels()).unwrap(), f, "the same for the same code");
     }
 
-    // ID-15: a frame's chain is its parents, outermost first, and a ControlId is the module key,
-    // that chain and the slot.
+    // ID-15: a frame's chain is its parents, outermost first.
     #[test]
-    fn frame_chains_and_control_ids() {
+    fn frame_chains() {
         let m: Module = serde_json::from_value(json!({"key": "bass", "nodes": [], "exports": {}, "frames": [
             {"site": 3, "key": "chain-l"}, {"site": 7, "component": "std:bass", "parent": 0},
             {"site": 9, "component": "std:lowpass", "occurrence": 1, "parent": 1}, {"site": 2}]}))
@@ -1491,8 +1490,6 @@ mod tests {
         let sites: Vec<u32> = m.chain(Some(2)).iter().map(|f| f.site).collect();
         assert_eq!(sites, [3, 7, 9]);
         assert!(m.chain(None).is_empty() && m.chain(Some(9)).is_empty());
-        assert_eq!(crate::control_id(&m, 2, "q"), "bass/3:0:chain-l/7:0/9:1/@q");
-        assert_eq!(crate::control_id(&m, 3, "channels.hats.db"), "bass/2:0/@channels.hats.db");
     }
 
     // PKG-3, WRITE-6: one written literal is one value whatever slots it reaches; an inherited

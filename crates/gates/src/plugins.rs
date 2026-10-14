@@ -8,10 +8,10 @@
 //! check notes (the engine's trace), the notes each plugin holds, levels, and the engine's counters.
 //! The checks that listen for the lead's tails play a copy whose kick doesn't play.
 //!
-//! Step 3b carries plugin instances across rebuilds (HOST-5): the engine rig builds as the server
-//! does, from the instances of the renderer last sent, and these check that seeks, loops and swaps
-//! keep every instance, that an edit carries the ones its code still names with the notes
-//! sounding into them, and what a carry must not keep. `--no-carry` is the negative reference.
+//! Plugin instances persist across plans (HOST-5, RENDER-25): the engine rig prepares each plan as
+//! the server does, against the plan last sent, and these check that seeks, loops and swaps keep
+//! every instance, that an edit keeps the ones its code still names with the notes sounding into
+//! them, and what must not be kept. `--no-arena` is the negative reference.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -19,7 +19,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
 use m2_editor::Gestures;
-use m2_song::{LaneAddr, NoteClip, Project};
+use m2_song::{LaneAddr, NoteClip};
 
 use crate::gates::{Opts, SeekNotes, difference, offline, playing, unchanged};
 use crate::report::Outcome;
@@ -38,7 +38,7 @@ pub fn with_plugins(lab: &mut Lab, kind: Kind, o: &Opts) -> Result<Outcome> {
     // Compiled with a set of its own that binds the plugins: the rig builds with that set.
     let mut packages = load_std()?;
     let t = Instant::now();
-    let project = Project::open(&dir).map_err(|d| anyhow!("{} doesn't open: {d:?}", dir.display()))?;
+    let (project, snapshot) = crate::open(&dir)?;
     let c = m2_session::compile(&project, &mut packages).map_err(|d| anyhow!("{} doesn't compile: {d:?}", dir.display()))?;
     if let Some(d) = c.problems.iter().find(|d| d.code == "plugin.missing") {
         out.skip("every check", format!("{d} (CLAP_PATH says where Surge XT and Airwindows are)"));
@@ -47,7 +47,7 @@ pub fn with_plugins(lab: &mut Lab, kind: Kind, o: &Opts) -> Result<Outcome> {
     if project.arrangement.tempo.first().map(|t| t.bpm) != Some(BPM) {
         bail!("examples/with-plugins no longer plays at {BPM} bpm, which these checks count in");
     }
-    let song = Song { dir: dir.clone(), flat: c.flat.clone(), data: c.data, rate: project.sample_rate(), compile: t.elapsed() };
+    let song = Song::of(&dir, c, snapshot, project.sample_rate(), t.elapsed());
     let saved = std::mem::replace(&mut lab.packages, Arc::new(packages));
     let done = checks(lab, kind, o, &song, &mut out);
     lab.packages = saved;
@@ -67,7 +67,7 @@ fn checks(lab: &mut Lab, kind: Kind, o: &Opts, song: &Song, out: &mut Outcome) -
     stuck(lab, kind, o, &lead, out)?;
     tail_after_stop(lab, kind, o, &lead, out)?;
     add_effect(lab, kind, o, song, out)?;
-    carried(lab, kind, o, &lead, out)?;
+    kept(lab, kind, o, &lead, out)?;
     removed(lab, kind, o, &lead, out)?;
     inside(lab, kind, o, &lead, out)?;
     new_state(lab, kind, o, &lead, out)?;
@@ -534,7 +534,7 @@ fn kick_call(session: &m2_session::Session, dir: &Path) -> Result<String> {
     Ok(format!("{}#{}", site.file, site.ordinal))
 }
 
-// ---------------------------------------------------------------- step 3b: instances carried
+// ---------------------------------------------------------------- instances kept (HOST-5)
 
 /// Wait up to a second for the plugin main thread to destroy what was dropped.
 fn settled(f: impl Fn() -> bool) -> bool {
@@ -565,16 +565,16 @@ fn surge(p: &Plugins) -> Option<&m2_runtime::PluginView> {
 }
 
 /// Step 3b, G5 on the plugins (HOST-5, RENDER-25, C7): an effect added on the kick at beat 1.5, the
-/// lead's first chord held (beats 0 to 3.5), carries both plugin instances. None is created; Surge's
+/// lead's first chord held (beats 0 to 3.5), keeps both plugin instances. None is created; Surge's
 /// node holds the same notes with the same ids after the activation; no NoteOff reaches it there,
 /// and the chord's Offs arrive at beat 3.5; the lead's level over the 200 ms after the activation is
 /// at least 0.9 times the 200 ms before, relative to the same windows offline; and no step across
-/// the crossfade is larger than twice the chord's own (G6's rule). With `--no-carry` the level check
+/// the crossfade is larger than twice the chord's own (G6's rule). With `--no-arena` the level check
 /// must fail: a fresh Surge chases nothing, and the old one fades out.
-fn carried(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome) -> Result<()> {
-    let (mut deck, played, song) = lead_deck(lab, kind, o, lead, "carry")?;
+fn kept(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome) -> Result<()> {
+    let (mut deck, played, song) = lead_deck(lab, kind, o, lead, "kept")?;
     let Some(_) = deck.rig.plugins() else {
-        out.skip("G5 (3b): plugin instances carried", "this rig doesn't say which instances it plays");
+        out.skip("G5 (3b): plugin instances kept", "this rig doesn't say which instances it plays");
         return Ok(());
     };
     let mut session = lab.session(&song.dir)?;
@@ -588,13 +588,8 @@ fn carried(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome) 
     deck.run(deck.period as u64)?;
     let at = deck.rig.applied(&sent).context("the activation was never applied")?;
     let first = deck.rig.plugins().expect("checked");
-    out.info("G5 (3b): preparing the activation, plugins carried", format!("{:.1} ms", sent.prepare.as_secs_f64() * 1e3));
-    same_instances(
-        out,
-        "G5 (3b): the edit's renderer carried every plugin instance, creating none",
-        &Some(pre.clone()),
-        &Some(first.clone()),
-    );
+    out.info("G5 (3b): preparing the activation, plugins kept", format!("{:.1} ms", sent.prepare.as_secs_f64() * 1e3));
+    same_instances(out, "G5 (3b): the edit's plan kept every plugin instance, creating none", &Some(pre.clone()), &Some(first.clone()));
     deck.run_to(played + song.frame(3.75))?;
     // The lead's level over 200 ms each side of the activation (its chorus and unison move it by
     // several dB from one 5 ms to the next), against the same windows offline, in one instance.
@@ -642,7 +637,7 @@ fn carried(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome) 
 }
 
 /// Step 3b (RENDER-26a, C7): one revision changes the lead's code and drops the chord's top note.
-/// The instances are carried; the dropped note's NoteOff reaches Surge at the activation's first
+/// The instances are kept; the dropped note's NoteOff reaches Surge at the activation's first
 /// frame, the other two go on to beat 3.5, and the next chord's notes take ids above every one Surge
 /// had (CLAP matches voices by id).
 fn removed(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome) -> Result<()> {
@@ -665,7 +660,7 @@ fn removed(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome) 
     deck.run(deck.period as u64)?;
     let at = deck.rig.applied(&sent).context("the activation was never applied")?;
     let first = deck.rig.plugins().expect("checked");
-    same_instances(out, "removed note (3b): the instances are carried", &Some(pre.clone()), &Some(first.clone()));
+    same_instances(out, "removed note (3b): the instances are kept", &Some(pre.clone()), &Some(first.clone()));
     let s1 = first.nodes.iter().find(|n| n.handle == s0.handle).cloned().unwrap_or_else(|| s0.clone());
     let kept: Vec<(u32, i16)> = s0.notes.iter().copied().filter(|n| *n != top).collect();
     out.check(
@@ -682,15 +677,15 @@ fn removed(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome) 
     let ids: Vec<u32> =
         next.nodes.iter().find(|n| n.handle == s0.handle).map(|n| n.notes.iter().map(|x| x.0).collect()).unwrap_or_default();
     out.check(
-        "removed note (3b): ids never repeat into the carried instance",
+        "removed note (3b): ids never repeat into the kept instance",
         !ids.is_empty() && ids.iter().all(|i| *i > had),
         format!("the next chord's ids {ids:?}, every one Surge had up to {had}"),
     );
     Ok(())
 }
 
-/// Step 3b (HOST-5, HOME-4): a code edit inside the lead (Airwindows' dry/wet, 0.35 to 0.9) carries
-/// both instances, and the new value reaches the carried instance at its first call.
+/// Step 3b (HOST-5, HOME-4): a code edit inside the lead (Airwindows' dry/wet, 0.35 to 0.9) keeps
+/// both instances, and the new value reaches the kept instance at its first call.
 fn inside(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome) -> Result<()> {
     let (mut deck, played, song) = lead_deck(lab, kind, o, lead, "inside")?;
     deck.run_to(played + song.frame(1.0))?;
@@ -708,14 +703,14 @@ fn inside(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome) -
     deck.change(&edited, Change::Structure)?;
     deck.run_secs(0.1)?;
     let after = deck.rig.plugins().expect("checked");
-    same_instances(out, "code edit inside the lead (3b): both instances carried", &Some(pre.clone()), &Some(after.clone()));
+    same_instances(out, "code edit inside the lead (3b): both instances kept", &Some(pre.clone()), &Some(after.clone()));
     let air = after.nodes.iter().find(|n| n.notes.is_empty() && Some(n.handle) != surge(&pre).map(|s| s.handle));
     let value = air.and_then(|n| match m2_plugins::host().main_call(n.handle, m2_plugins::MainCall::Value(2_944_917_344)) {
         Ok(m2_plugins::Reply::Value(v)) => v,
         _ => None,
     });
     out.check(
-        "code edit inside the lead (3b): the new value reached the carried instance",
+        "code edit inside the lead (3b): the new value reached the kept instance",
         value.is_some_and(|v| (v - 0.9).abs() < 1e-6),
         format!("Airwindows' dry/wet reads {value:?}"),
     );
@@ -723,7 +718,7 @@ fn inside(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome) -
 }
 
 /// Step 3b (HOST-5): a changed state blob is a new instance: one is created (Surge; Airwindows is
-/// carried), and the old Surge is destroyed only once the renderer that played it is retired, never
+/// kept), and the old Surge is destroyed only once the plan that played it is retired, never
 /// during the crossfade.
 fn new_state(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome) -> Result<()> {
     let (mut deck, played, song) = lead_deck(lab, kind, o, lead, "new-state")?;
@@ -764,11 +759,11 @@ fn new_state(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome
     let retired = settled(|| m2_plugins::InProcess::counts().1 > pre.destroyed);
     let after = deck.rig.plugins().expect("checked");
     let surge_new = surge(&pre).is_some_and(|s| after.nodes.iter().all(|n| n.handle != s.handle));
-    let carried = after.nodes.iter().filter(|n| pre.nodes.iter().any(|p| p.handle == n.handle)).count();
+    let kept = after.nodes.iter().filter(|n| pre.nodes.iter().any(|p| p.handle == n.handle)).count();
     out.check(
-        "changed state (3b): a new Surge, Airwindows carried",
-        surge_new && carried == 1 && after.created == pre.created + 1,
-        format!("{} created; {carried} of {} carried", after.created - pre.created, after.nodes.len()),
+        "changed state (3b): a new Surge, Airwindows kept",
+        surge_new && kept == 1 && after.created == pre.created + 1,
+        format!("{} created; {kept} of {} kept", after.created - pre.created, after.nodes.len()),
     );
     out.check(
         "changed state (3b): the old Surge is destroyed once its renderer is retired, not before",

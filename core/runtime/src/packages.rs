@@ -55,6 +55,9 @@ pub struct Package {
     /// names as the package contents that ran (RENDER-2).
     pub files: BTreeMap<String, String>,
     module: Option<Module>,
+    /// The SHA-256 of its wasm module: part of each of its kernels' shapes, so a module rebuilt
+    /// with the same kernel ids starts every instance from init (RENDER-25).
+    module_sha: Option<m2_song::Sha>,
 }
 
 impl Package {
@@ -131,17 +134,18 @@ impl PackageSet {
             );
         }
         let mut files = BTreeMap::from([(format!("{name}/m2pkg.toml"), m2_song::Sha::of(text.as_bytes()).hex())]);
-        let module = match &m.package.wasm {
+        let (module, module_sha) = match &m.package.wasm {
             Some(w) => {
                 let wasm_path = dir.join(w);
                 let bytes = std::fs::read(&wasm_path).with_context(|| format!("reading {}", wasm_path.display()))?;
-                files.insert(format!("{name}/{w}"), m2_song::Sha::of(&bytes).hex());
+                let sha = m2_song::Sha::of(&bytes);
+                files.insert(format!("{name}/{w}"), sha.hex());
                 let module = Module::new(&self.engine, &bytes).wctx(|| format!("compiling {}", wasm_path.display()))?;
                 verify_module(&self.engine, &module, &m.kernel).with_context(|| format!("package `{name}`: {}", wasm_path.display()))?;
-                Some(module)
+                (Some(module), Some(sha))
             }
             None if !m.kernel.is_empty() => bail!("package `{name}` declares kernels but no `wasm` file"),
-            None => None,
+            None => (None, None),
         };
         for k in &m.kernel {
             let id = format!("{name}:{}", k.name);
@@ -155,6 +159,7 @@ impl PackageSet {
             dir: dir.to_path_buf(),
             files,
             module,
+            module_sha,
         };
         Ok(self.packages.entry(name).or_insert(pkg))
     }
@@ -268,6 +273,12 @@ impl PackageSet {
             });
         }
         diags
+    }
+
+    /// The SHA-256 of the wasm module holding kernel `id`.
+    pub fn module_sha(&self, id: &str) -> Option<m2_song::Sha> {
+        let (_, pkg) = self.kernels.get(id)?;
+        self.packages.get(pkg)?.module_sha
     }
 
     /// The compiled module holding kernel `id`, and the kernel's export prefix.

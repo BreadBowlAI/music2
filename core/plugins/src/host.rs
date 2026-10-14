@@ -4,8 +4,8 @@
 
 use std::ffi::c_void;
 use std::ptr::null_mut;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use clap_sys::events::*;
@@ -26,11 +26,14 @@ pub trait PluginHost: Send + Sync {
     /// (RENDER-17: after the state `create` loaded). CLAP reads latency only while activating or
     /// active.
     fn activate(&self, h: Handle, sample_rate: u32, max_frames: u32) -> Result<u32>;
-    /// Only while no renderer holds `h`: the main thread then takes the instance's audio role to
-    /// stop processing first, which CLAP's thread model allows.
+    /// Only while no renderer calls `h`: none holds it, or every one that does is held (an export,
+    /// RENDER-1). The main thread then takes the instance's audio role to stop processing first,
+    /// which CLAP's thread model allows.
     fn deactivate(&self, h: Handle);
-    /// Skipped when the blob's hash equals the state the instance last saved (HOME-6).
-    fn load_state(&self, h: Handle, blob: Arc<Blob>) -> Result<()>;
+    /// Load `blob`, active or not (CLAP's `state.load` is a main-thread call). Skipped when the
+    /// blob's hash equals the state the instance holds: the one it last saved or last loaded, at
+    /// creation included (HOME-6). True when it loaded.
+    fn load_state(&self, h: Handle, blob: Arc<Blob>) -> Result<bool>;
     /// Realtime or offline (CLAP's render extension); false when the plugin has no such mode.
     fn set_render_mode(&self, h: Handle, mode: RenderMode) -> Result<bool>;
     fn main_call(&self, h: Handle, call: MainCall) -> Result<Reply>;
@@ -95,13 +98,26 @@ pub struct Owner {
     events: Sender<HostEvent>,
     live: Arc<AtomicU64>,
     dropped: Arc<AtomicU64>,
+    /// The plugins being created for it now, by name.
+    loading: Arc<Mutex<Vec<String>>>,
 }
 
 impl Owner {
     /// An owner and the receiver of its events.
     pub fn new() -> (Owner, HostEvents) {
         let (events, rx) = unbounded();
-        (Owner { events, live: Arc::default(), dropped: Arc::default() }, rx)
+        (Owner { events, live: Arc::default(), dropped: Arc::default(), loading: Arc::default() }, rx)
+    }
+
+    /// The plugins being created for it now, by name: what "loading <plugin>" shows (RENDER-25).
+    pub fn loading(&self) -> Vec<String> {
+        self.loading.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// `name` shows as loading until the guard drops.
+    pub(crate) fn creating(&self, name: &str) -> Creating<'_> {
+        self.loading.lock().unwrap_or_else(|e| e.into_inner()).push(name.to_string());
+        Creating { owner: self, name: name.to_string() }
     }
 
     /// An owner whose events nobody reads (describing a plugin, an export): they are counted only.
@@ -131,6 +147,21 @@ impl Owner {
 
     pub(crate) fn destroyed(&self) {
         self.live.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// A plugin shown as loading while it is created ([`Owner::loading`]).
+pub(crate) struct Creating<'a> {
+    owner: &'a Owner,
+    name: String,
+}
+
+impl Drop for Creating<'_> {
+    fn drop(&mut self) {
+        let mut l = self.owner.loading.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(i) = l.iter().position(|n| *n == self.name) {
+            l.remove(i);
+        }
     }
 }
 

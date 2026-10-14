@@ -2,12 +2,13 @@
 //! time, first in, first out. Each may compile; nothing else waits for it but the request's own
 //! caller.
 //!
-//! After every change the actor settles: it plays the accepted revision (a lane swap, or a new
-//! renderer activated where the engine is), carries every gesture lease to it, and publishes it
+//! After every change the actor settles: it plays the accepted revision (a lane swap, cell
+//! writes, or a plan prepared against what plays and activated where the engine is, keeping every
+//! instance that continues), carries every gesture lease to it, and publishes it
 //! to the control plane in two phases: first what the engine and leases need, under the lock
 //! and with the engine messages, then the view and the news, before the request replies.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -18,9 +19,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use m2_editor::render::{Length, Render};
 use m2_editor::{Control, EditError, Edited, Gestures};
 use m2_ir::{FOp, Flat, Kind, Origin};
-use m2_plugins::{HostEvent, HostEvents};
+use m2_plugins::{Handle, HostEvent, HostEvents};
 use m2_runtime::cells::{CellAt, CellId, CellTarget};
-use m2_runtime::{Caps, Carry, CellMap, CellSlots, Fresh, InstanceSource, LaneRef, LaneSwap, PackageSet, Renderer, audio, notes_data};
+use m2_runtime::{Basis, CellMap, Continues, Keep, LaneSwap, PackageSet, PlanInfo, Renderer, audio, notes_data};
 use m2_session::{Revision, Session};
 use m2_song::Snapshot;
 use serde_json::{Value, json};
@@ -139,33 +140,40 @@ pub(crate) struct Open {
     /// client a little behind names, which aliases carry to the accepted ids.
     codes: VecDeque<(u64, Arc<HashMap<String, Control>>)>,
     types: Arc<Value>,
-    /// The plugin instances of the renderer last sent to the engine, for the next one built for it
-    /// (HOST-5): an activation takes them over, with their state, tails and notes.
-    pub(crate) carry: Carry,
+    /// Plugin instances that asked to be restarted (`HostEvent::Restart`): the next activation,
+    /// made at once, replaces each from its committed state (HOST-5).
+    pub(crate) restarts: HashSet<Handle>,
+    /// An export borrows the live plugin instances (RENDER-1): settles prepare nothing and send no
+    /// activation until it gives them back, so no host call reaches them meanwhile.
+    pub(crate) exporting: bool,
+    /// What preparing the last plan took, for the edit's timing.
+    pub(super) prepared: Prepared,
     /// The timeline last published, whose lanes the next one shares where they are the same.
     timeline: Arc<super::Timeline>,
 }
 
-/// The renderer the engine plays: what it was built from, and how `SwapLane` reaches its lanes.
+/// The plan the engine plays: what it was built from, and how `SwapLane` reaches its lanes.
 pub(crate) struct Plays {
     /// The player it was loaded into ([`Device::epoch`]).
     pub(crate) epoch: u64,
     pub(crate) generation: u64,
     rate: u32,
+    /// The activations the player had refused when it was sent: one more means it never played,
+    /// and a fresh engine replaces what does (RENDER-28).
+    pub(super) refused: u64,
     /// What it plays: an accepted revision (the one it was built from, or adopted since: lanes
     /// swapped in, cells written), or a commit's candidate while that is its preview (PLANE-5).
     /// Every settle's engine path is the delta from it to the accepted one (RENDER-26; the step 6
     /// design's R4), so a change that never reached the engine (a build that failed) is never
     /// skipped by a later one, and a preview whose commit failed is swapped back.
     pub(crate) revision: Arc<Revision>,
-    pub(super) slots: Arc<[LaneRef]>,
-    /// The room each notes lane's scheduler has: data that needs more is activated instead.
-    pub(super) caps: Arc<[Option<Caps>]>,
+    /// Its lanes (and each notes lane's room: data that needs more is activated instead), its
+    /// shapes and instances, which the next plan is prepared against, and its cells' slots.
+    pub(super) info: Arc<PlanInfo>,
     /// The controls of the code it plays: after a build that failed, what updates aim at.
     controls: Arc<HashMap<String, Control>>,
-    /// Its cells' slots, and which cells hold each value of the revision it plays: what gesture
-    /// updates and committed values are written to (RENDER-22, RENDER-23).
-    cell_slots: Arc<CellSlots>,
+    /// Which cells hold each value of the revision it plays: what gesture updates and committed
+    /// values are written to (RENDER-22, RENDER-23).
     cells: Arc<CellMap>,
 }
 
@@ -234,13 +242,13 @@ pub(super) struct Reach {
     pub(super) swaps: Vec<(u32, LaneSwap)>,
 }
 
-/// What turns a renderer playing `from` (its lanes `slots`, each notes lane's room `caps`) into one
-/// playing `to` without a new renderer, decided by the delta between the two (RENDER-26,
-/// RENDER-22; the step 6 design's 5.5): the cells of the constants whose values alone changed, and
-/// the notes and control lanes whose data changed, each fitting the scheduler playing it. Whoever
-/// wrote the files (PLANE-1). None: a new renderer must play it (anything structural, a plugin
-/// state, an asset a clip plays, the arrangement, an audio lane).
-pub(super) fn reach_to(from: &Revision, slots: &[LaneRef], caps: &[Option<Caps>], to: &Revision) -> Option<Reach> {
+/// What turns a plan playing `from` (its lanes and each notes lane's room in `info`) into one
+/// playing `to` without a new plan, decided by the delta between the two (RENDER-26, RENDER-22;
+/// the step 6 design's 5.5): the cells of the constants whose values alone changed, and the notes
+/// and control lanes whose data changed, each fitting the scheduler playing it. Whoever wrote the
+/// files (PLANE-1). None: an activation must play it (anything structural, a plugin state, an
+/// asset a clip plays, the arrangement, an audio lane), keeping every instance that continues.
+pub(super) fn reach_to(from: &Revision, info: &PlanInfo, to: &Revision) -> Option<Reach> {
     let d = m2_session::tx::delta_between(from, to);
     if d.structural() || !d.states.is_empty() || !d.assets.is_empty() || d.arrangement {
         return None;
@@ -256,18 +264,18 @@ pub(super) fn reach_to(from: &Revision, slots: &[LaneRef], caps: &[Option<Caps>]
     for addr in &d.lanes {
         let (module, lane) = (addr.module.as_str(), addr.lane.as_str());
         // A lane no node reads plays nothing, before or after.
-        let Some(slot) = slots.iter().position(|s| s.module == module && s.lane == lane) else { continue };
-        let swap = match slots[slot].kind {
+        let Some(slot) = info.lanes.iter().position(|s| s.lane.module == module && s.lane.lane == lane) else { continue };
+        let swap = match info.lanes[slot].lane.kind {
             Kind::Events(_) => {
                 let notes = notes_data(data, module, lane, rate as f64);
-                // More notes at once than its scheduler holds: a renderer sized for them.
-                if !caps[slot]?.fits(notes.needs()) {
+                // More notes at once than its scheduler holds: an activation grows it.
+                if !info.lanes[slot].caps?.fits(notes.needs()) {
                     return None;
                 }
                 LaneSwap::Notes(Arc::new(notes))
             }
             Kind::Control(_) => LaneSwap::Control(Arc::new(data.control(module, lane))),
-            // Its clips must be rendered first: a new renderer.
+            // Its clips must be rendered first, then crossfade in an activation (RENDER-27).
             Kind::Audio(_) => return None,
         };
         swaps.push((slot as u32, swap));
@@ -299,16 +307,20 @@ enum Way {
     /// Into the renderer that plays: its changed constants' cells written (RENDER-22), its
     /// changed lanes swapped (RENDER-26).
     Reach(u64, Reach),
-    /// A new renderer, crossfaded where the engine is (RENDER-25a), with the instances it carried
-    /// and created.
-    Activate(Box<Renderer>, Plays, Carry),
-    /// A fresh engine at the same beat: the rate changed (RENDER-31). Never carries.
-    Replace(Box<Renderer>, Plays, Carry),
-    /// A new player (the one before stopped responding): where it was, looping as it did. Never
-    /// carries: the old device thread may still be inside an instance's `process`.
-    Load(Box<Renderer>, Plays, Carry),
+    /// A plan prepared against what plays, activated where the engine is: the instances that
+    /// continue move into it, and what changed crossfades (RENDER-25, RENDER-25a).
+    Activate(Box<Renderer>, Plays),
+    /// A fresh engine at the same beat: the rate changed (RENDER-31), or the engine refused an
+    /// activation (RENDER-28). Every instance new.
+    Replace(Box<Renderer>, Plays),
+    /// A new player (the one before stopped responding): where it was, looping as it did. Every
+    /// instance new: the old device thread may still be inside an instance's `process`.
+    Load(Box<Renderer>, Plays),
     /// The renderer didn't build, or there is no player: what plays plays on.
     Failed(anyhow::Error),
+    /// An export borrows the live instances: what plays plays on until it gives them back, and
+    /// the settle after it plays this (RENDER-1).
+    Deferred,
 }
 
 impl Way {
@@ -323,6 +335,8 @@ impl Way {
 /// What a settle sent the engine.
 enum Sent {
     Nothing,
+    /// Nothing yet: it waits for an export (RENDER-1).
+    Deferred,
     /// Into what plays: these cells written, its lanes swapped.
     Reached(Vec<CellId>),
     Renderer,
@@ -345,22 +359,30 @@ struct Settled {
     published_ns: u64,
 }
 
+/// What preparing the last activation took: naming what continues, and the plan (nanoseconds);
+/// and how many instances the plan made new.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Prepared {
+    pub(super) continues_ns: u64,
+    pub(super) prepare_ns: u64,
+    pub(super) fresh: usize,
+}
+
 fn packages() -> Result<PackageSet> {
     let mut p = PackageSet::default();
     p.load(&crate::resources::std_dir()).context("loading the std package")?;
     Ok(p)
 }
 
-/// A renderer for the accepted revision at the project's rate (RENDER-31), built without playing
+/// A plan for the accepted revision at the project's rate (RENDER-31), built without playing
 /// anything: the engine puts it where it is (RENDER-8). Assets and clip renders come from `audio`,
-/// which then keeps only what this one uses (the renderer it replaces holds its own until it is
-/// retired). Plugin instances come from `source` when one matches (HOST-5), and the rest are
-/// created, reporting to `owner`, on the plugin main thread while the old renderer plays
-/// (RENDER-25).
-fn build(session: &Session, audio: &mut audio::Cache, owner: &m2_plugins::Owner, source: &mut dyn InstanceSource) -> Result<Renderer> {
+/// which then keeps only what this one uses (the plan it replaces holds its own until it is
+/// retired). Against `basis` it keeps every instance that continues; the rest are created,
+/// reporting to `owner`, on the plugin main thread while the old plan plays (RENDER-25).
+fn build(session: &Session, audio: &mut audio::Cache, owner: &m2_plugins::Owner, basis: Basis) -> Result<Renderer> {
     let rev = session.accepted();
     let (flat, data, rate) = (&rev.compiled.flat, &rev.compiled.data, rev.project.sample_rate());
-    let r = Renderer::build_live(flat, data, &session.packages, rate, audio, owner, source)?;
+    let r = Renderer::prepare(flat, data, &session.packages, rate, audio, owner, basis)?;
     audio.prune();
     Ok(r)
 }
@@ -378,19 +400,18 @@ impl Open {
         self.plays.as_ref().is_some_and(|p| p.epoch == device.epoch)
     }
 
-    /// What the engine plays once `r`, built from the accepted revision, plays in `epoch`'s player.
-    fn describe(&self, r: &Renderer, epoch: u64) -> Plays {
-        let slots: Arc<[LaneRef]> = r.lane_slots().into();
+    /// What the engine plays once `r`, built from the accepted revision, plays in `device`'s player.
+    fn describe(&self, r: &Renderer, device: &Device) -> Plays {
+        let info = r.info();
         Plays {
-            epoch,
-            generation: r.generation(),
-            rate: r.sample_rate(),
+            epoch: device.epoch,
+            generation: info.id,
+            rate: info.rate,
+            refused: device.player.refused(),
             revision: self.session.accepted_arc(),
-            caps: (0..slots.len()).map(|s| r.caps(s)).collect(),
-            slots,
+            cells: info.cell_map.clone(),
+            info,
             controls: self.controls.clone(),
-            cell_slots: r.cell_slots(),
-            cells: r.cell_map(),
         }
     }
 
@@ -433,21 +454,29 @@ impl Open {
         Ok(())
     }
 
-    /// What turns what `p` plays into the accepted revision without a new renderer ([`reach_to`]).
+    /// What turns what `p` plays into the accepted revision without a new plan ([`reach_to`]).
     fn reach(&self, p: &Plays) -> Option<Reach> {
-        reach_to(&p.revision, &p.slots, &p.caps, self.session.accepted())
+        reach_to(&p.revision, &p.info, self.session.accepted())
     }
 
-    /// How the accepted revision reaches `device`'s engine, its renderer built if it needs one.
-    fn way(&mut self, device: &Device, owner: &m2_plugins::Owner, fail: bool) -> Way {
+    /// Whether `device`'s engine refused the last activation it was sent: it plays what it played,
+    /// and only a fresh engine brings it back in step (RENDER-28).
+    fn refused(&self, device: &Device) -> bool {
+        self.plays.as_ref().is_some_and(|p| p.epoch == device.epoch && device.player.refused() != p.refused)
+    }
+
+    /// How the accepted revision reaches `device`'s engine, its plan prepared if it needs one, and
+    /// what preparing it took.
+    fn way(&mut self, device: &Device, owner: &m2_plugins::Owner, fail: bool) -> (Way, Prepared) {
         let rev = self.session.accepted();
         let (number, rate) = (rev.number, rev.project.sample_rate());
-        if self.loaded(device) && self.playing == Some(number) {
-            return Way::Same;
+        let refused = self.refused(device);
+        if self.loaded(device) && self.playing == Some(number) && self.restarts.is_empty() && !refused {
+            return (Way::Same, Prepared::default());
         }
         // Opened with code that doesn't compile (WRITE-20): silent until it does, then loaded.
         if !rev.has_code() {
-            return Way::Same;
+            return (Way::Same, Prepared::default());
         }
         enum Kind {
             Reach(u64, Reach),
@@ -456,30 +485,57 @@ impl Open {
             Load,
         }
         let kind = match self.plays.as_ref().filter(|p| p.epoch == device.epoch) {
-            Some(p) if p.rate != rate => Kind::Replace,
+            Some(p) if p.rate != rate || refused => Kind::Replace,
+            // A restart replaces instances: an activation, though nothing else changed.
+            Some(_) if !self.restarts.is_empty() => Kind::Activate,
             Some(p) => self.reach(p).map_or(Kind::Activate, |r| Kind::Reach(p.generation, r)),
             None => Kind::Load,
         };
         if let Kind::Reach(generation, reach) = kind {
-            return Way::Reach(generation, reach);
+            return (Way::Reach(generation, reach), Prepared::default());
         }
-        // Only an activation in the same engine carries instances; a new engine creates them all.
-        let Open { session, audio, carry, .. } = self;
-        let source: &mut dyn InstanceSource = match kind {
-            Kind::Activate => carry.source(device.epoch),
-            _ => &mut Fresh,
+        // An export borrows the live instances: nothing is prepared, so no state load or other host
+        // call reaches them, and nothing is sent until it gives them back (RENDER-1).
+        if self.exporting {
+            return (Way::Deferred, Prepared::default());
+        }
+        // Only an activation in the same engine keeps instances; a new engine creates them all.
+        let Open { session, audio, plays, restarts, .. } = self;
+        let mut prepared = Prepared::default();
+        let t = std::time::Instant::now();
+        let accepted = session.accepted();
+        let keep = match (&kind, plays.as_ref()) {
+            (Kind::Activate, Some(p)) => {
+                // The same build: every node continues itself. Else the names of what changed.
+                let cont = match Arc::ptr_eq(p.revision.compiled.code(), accepted.compiled.code()) {
+                    true => Continues::identity(&accepted.compiled.flat),
+                    false => m2_session::tx::continues::continues(&p.revision, accepted),
+                };
+                prepared.continues_ns = t.elapsed().as_nanos() as u64;
+                Some((p, cont))
+            }
+            _ => None,
         };
-        let built = if fail { Err(anyhow!("the renderer failed to build (a test)")) } else { build(session, audio, owner, source) };
+        let basis = match &keep {
+            Some((p, cont)) => {
+                Basis::Keep(Keep { old: &p.revision.compiled.flat, old_data: &p.revision.compiled.data, info: &p.info, cont, restarts })
+            }
+            None => Basis::Fresh,
+        };
+        let built = if fail { Err(anyhow!("the renderer failed to build (a test)")) } else { build(session, audio, owner, basis) };
+        prepared.prepare_ns = t.elapsed().as_nanos() as u64 - prepared.continues_ns;
         let r = match built {
             Ok(r) => Box::new(r),
-            Err(e) => return Way::Failed(e),
+            Err(e) => return (Way::Failed(e), prepared),
         };
-        let (plays, next) = (self.describe(&r, device.epoch), Carry::of(&r, device.epoch));
-        match kind {
-            Kind::Activate => Way::Activate(r, plays, next),
-            Kind::Replace => Way::Replace(r, plays, next),
-            _ => Way::Load(r, plays, next),
-        }
+        prepared.fresh = r.stats().fresh.total();
+        let plays = self.describe(&r, device);
+        let way = match kind {
+            Kind::Activate => Way::Activate(r, plays),
+            Kind::Replace => Way::Replace(r, plays),
+            _ => Way::Load(r, plays),
+        };
+        (way, prepared)
     }
 
     /// While what plays is built from older code than the accepted revision's (its build
@@ -645,13 +701,23 @@ impl Actor {
 
         // Prepared off every lock: the swaps, or the renderer built.
         let device = inner.device();
-        let mut way = match &device {
+        let (mut way, prepared) = match &device {
             Ok(d) => o.way(d, &inner.owner, fail),
-            Err(e) => Way::Failed(anyhow!("{e:#}")),
+            Err(e) => (Way::Failed(anyhow!("{e:#}")), Prepared::default()),
         };
+        o.prepared = prepared;
+        // A state load that gave a plugin latency plays it uncompensated, and says so (RENDER-26b).
+        if let Some(r) = way.renderer() {
+            inner.notices.lock().extend(r.stats().latent.iter().map(|(name, frames)| {
+                format!(
+                    "{name} has {frames} samples of latency since its state changed; latency compensation isn't built yet, so it plays \
+                     that late (plugin.latency-uncompensated)"
+                )
+            }));
+        }
         // When the old build plays on, where the accepted revision's controls are in it: a carry
         // per control, done once here rather than under the lock.
-        let failed = matches!(way, Way::Failed(_));
+        let failed = matches!(way, Way::Failed(_) | Way::Deferred);
         let origins = if failed { o.origins() } else { None };
 
         // Phase 1, under the control plane's lock: what `begin` and `update` need, with the
@@ -699,7 +765,7 @@ impl Actor {
                     let p = o.plays.as_ref().expect("what plays is reached");
                     let mut written = vec![];
                     for (cell, value) in reach.cells {
-                        let target = CellTarget { slots: p.cell_slots.clone(), cells: Arc::from([cell]) };
+                        let target = CellTarget { slots: p.info.cell_slots.clone(), cells: Arc::from([cell]) };
                         o.sent = Some(d.player.set_cells(&target, value));
                         written.push(cell);
                     }
@@ -710,31 +776,36 @@ impl Actor {
                     o.adopt();
                     Ok(Sent::Reached(written))
                 }
-                Way::Activate(r, plays, carry) => {
+                Way::Activate(r, plays) => {
                     let player = &device.as_ref().map_err(|e| anyhow!("{e:#}"))?.player;
-                    // Crossfaded where the engine is, with no jump back (RENDER-25a).
+                    // Where the engine is, with no jump back (RENDER-25a); what restarted is new.
                     o.sent = Some(player.activate(*r)?.1);
-                    (o.plays, o.carry) = (Some(plays), carry);
+                    o.plays = Some(plays);
+                    o.restarts.clear();
                     Ok(Sent::Renderer)
                 }
-                Way::Replace(r, plays, carry) => {
+                Way::Replace(r, plays) => {
                     let player = &device.as_ref().map_err(|e| anyhow!("{e:#}"))?.player;
-                    // A manifest edit changed the rate: a fresh engine at the same beat (RENDER-31).
+                    // A manifest edit changed the rate, or the engine refused an activation: a
+                    // fresh engine at the same beat (RENDER-31, RENDER-28).
                     player.replace(*r)?;
-                    (o.plays, o.carry) = (Some(plays), carry);
+                    o.plays = Some(plays);
+                    o.restarts.clear();
                     Ok(Sent::Renderer)
                 }
-                Way::Load(r, plays, carry) => {
+                Way::Load(r, plays) => {
                     let d = device.as_ref().map_err(|e| anyhow!("{e:#}"))?;
                     let looping = inner.timing.lock().as_ref().and_then(|t| t.range.filter(|_| t.on));
                     o.load(d, *r, plays, d.resume, looping)?;
-                    o.carry = carry;
+                    o.restarts.clear();
                     Ok(Sent::Renderer)
                 }
                 Way::Failed(e) => Err(e),
+                Way::Deferred => Ok(Sent::Deferred),
             }
         })();
         match &sent {
+            Ok(Sent::Deferred) => {}
             Ok(_) => {
                 o.playing = Some(number);
                 let rev = o.session.accepted();
@@ -755,7 +826,7 @@ impl Actor {
         let plays = o.plays.as_ref().map(|p| PlaysView {
             epoch: p.epoch,
             generation: p.generation,
-            slots: p.cell_slots.clone(),
+            slots: p.info.cell_slots.clone(),
             cells: p.cells.clone(),
             origins: if o.playing == Some(number) {
                 None
@@ -875,14 +946,15 @@ impl Actor {
             controls: controls.clone(),
             codes: VecDeque::new(),
             types,
-            carry: Carry::none(),
+            restarts: HashSet::new(),
+            exporting: false,
+            prepared: Prepared::default(),
             timeline: Arc::default(),
         };
         let built = match o.session.accepted().has_code() {
             true => {
-                let r = build(&o.session, &mut o.audio, &self.inner.owner, &mut Fresh)?;
-                let plays = o.describe(&r, device.epoch);
-                o.carry = Carry::of(&r, device.epoch);
+                let r = build(&o.session, &mut o.audio, &self.inner.owner, Basis::Fresh)?;
+                let plays = o.describe(&r, &device);
                 Some((r, plays))
             }
             false => None,
@@ -901,7 +973,7 @@ impl Actor {
                 let view = PlaysView {
                     epoch: device.epoch,
                     generation: plays.generation,
-                    slots: plays.cell_slots.clone(),
+                    slots: plays.info.cell_slots.clone(),
                     cells: plays.cells.clone(),
                     origins: None,
                 };
@@ -979,13 +1051,14 @@ impl Actor {
     }
 
     /// Take in what the session's plugin instances reported unasked. An instance that asked for a
-    /// restart isn't carried into the next renderer: that one creates it anew, activated again.
+    /// restart is replaced by the next activation, which the catch-up makes at once: a new
+    /// instance from the committed state, which fades in as the old one rings out (HOST-5).
     fn heard_plugins(&mut self) {
         while let Ok(e) = self.events.try_recv() {
             match e {
                 HostEvent::Restart(h) => {
-                    if let Some(o) = &self.open {
-                        o.carry.restart(h);
+                    if let Some(o) = &mut self.open {
+                        o.restarts.insert(h);
                     }
                 }
                 // Latency compensation and state autosave come later (RENDER-17, HOME-6).
@@ -1002,6 +1075,59 @@ impl Actor {
         let r = Render::new(&rev.compiled.flat, &rev.compiled.data, &o.session.packages, rev.project.sample_rate(), 0.0, length)?;
         let carried = rev.compiled.problems.iter().filter(|d| d.code == "plugin.missing").cloned().collect();
         Ok((rev.project.manifest.project.name.clone(), rev.project.dir.clone(), r, carried))
+    }
+
+    /// The accepted revision ready to export (RENDER-1). A song whose plugins play borrows their
+    /// live instances: matched as an activation matches them (`PlanInfo::lend`), playback held,
+    /// and each instance taken offline holding its committed blob. Settles prepare nothing until
+    /// they are given back ([`Self::export_done`]). With none playing, or when playback can't
+    /// pause (its device stalled), it renders with instances of its own, beside playback.
+    pub(super) fn export(&mut self, length: Length) -> Result<super::Export> {
+        let device = self.inner.current_device();
+        let o = self.open.as_mut().context("no project is open")?;
+        let rev = o.session.accepted_arc();
+        let (flat, data, rate, packages) = (&rev.compiled.flat, &rev.compiled.data, rev.project.sample_rate(), &o.session.packages);
+        let problems = rev.compiled.problems.iter().filter(|d| d.code == "plugin.missing").cloned().collect();
+        let (song, dir) = (rev.project.manifest.project.name.clone(), rev.project.dir.clone());
+        let lend = match (&device, &o.plays) {
+            (Some(d), Some(p)) if p.epoch == d.epoch && p.rate == rate && !o.exporting => {
+                let cont = match Arc::ptr_eq(p.revision.compiled.code(), rev.compiled.code()) {
+                    true => Continues::identity(flat),
+                    false => m2_session::tx::continues::continues(&p.revision, &rev),
+                };
+                p.info.lend(flat, data, packages, &cont)
+            }
+            _ => HashMap::new(),
+        };
+        // Offline renders run at the project's rate (RENDER-31a).
+        let own = || Render::new(flat, data, packages, rate, 0.0, length);
+        let Some(d) = device.filter(|_| !lend.is_empty()) else {
+            return Ok(super::Export { song, dir, render: own()?, problems, lent: None });
+        };
+        let render = Render::lending(flat, data, packages, rate, length, &lend)?;
+        let mut blobs = vec![];
+        for (&i, inst) in &lend {
+            blobs.push((inst.clone(), m2_runtime::state_blob(data, &flat.nodes[i])?));
+        }
+        o.exporting = true;
+        match crate::export::Lent::take(d.player, blobs, rate, o.token) {
+            Ok(l) => Ok(super::Export { song, dir, render, problems, lent: Some(l) }),
+            Err(e) => {
+                o.exporting = false;
+                drop(render);
+                self.inner.notices.lock().push(format!("Playback couldn't pause for the export ({e:#}): it renders beside playback."));
+                Ok(super::Export { song, dir, render: own()?, problems, lent: None })
+            }
+        }
+    }
+
+    /// An export gave back the live instances it borrowed (RENDER-1): what waited for it plays
+    /// now, and an instance that didn't come back active is replaced from its committed state.
+    pub(super) fn export_done(&mut self, token: u64, failed: Vec<Handle>) {
+        let Some(o) = self.open.as_mut().filter(|o| o.token == token) else { return };
+        o.exporting = false;
+        o.restarts.extend(failed);
+        self.settle(None);
     }
 
     /// A gesture named at a revision the control plane no longer knows: the session carries it.
@@ -1170,6 +1296,7 @@ impl Actor {
         let compiled_ns = inner.now_ns();
         let s = self.settle(None);
         let last = self.open.as_ref().and_then(|o| o.sent);
+        let prepared = self.open.as_ref().map(|o| o.prepared).unwrap_or_default();
         // A previewed edit was sent before it was durable; one whose commit failed was swapped
         // back by the settle (PLANE-5).
         let timing = match heard.previewed {
@@ -1182,6 +1309,7 @@ impl Actor {
                 seq: Some(seq),
                 previewed: true,
                 taken_back: last.filter(|l| result.is_err() && *l != seq),
+                ..EditTiming::default()
             },
             None => EditTiming {
                 requested_ns,
@@ -1192,6 +1320,9 @@ impl Actor {
                 seq: last,
                 previewed: false,
                 taken_back: None,
+                continues_ns: prepared.continues_ns,
+                prepare_ns: prepared.prepare_ns,
+                fresh: prepared.fresh,
             },
         };
         *inner.last_edit.lock() = Some(timing);
@@ -1256,7 +1387,11 @@ impl Actor {
         let Some(o) = self.open.as_mut() else { return false };
         let has_code = o.session.accepted().has_code();
         let behind = match self.inner.device() {
-            Ok(d) => has_code && (!o.loaded(&d) || o.playing != Some(o.session.accepted().number)),
+            // An export's end settles what waited for it.
+            Ok(_) if o.exporting => false,
+            Ok(d) => {
+                has_code && (!o.loaded(&d) || o.playing != Some(o.session.accepted().number) || !o.restarts.is_empty() || o.refused(&d))
+            }
             // Let go of: the settle starts a new one, and loads the project into it where it was.
             Err(_) => true,
         };

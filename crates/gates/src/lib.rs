@@ -14,6 +14,7 @@
 //!
 //! Run them with `cargo run -p m2-gates --release -- --help`; see this crate's README.
 
+pub mod arena;
 pub mod gates;
 pub mod plugins;
 pub mod replay;
@@ -22,6 +23,7 @@ pub mod rig;
 pub mod server;
 pub mod signal;
 pub mod songs;
+pub mod store;
 
 #[cfg(feature = "engine")]
 pub mod engine;
@@ -35,7 +37,7 @@ use anyhow::{Context, Result, anyhow};
 use m2_ir::Flat;
 use m2_runtime::PackageSet;
 use m2_session::reference::Reference;
-use m2_song::{DataSet, Project};
+use m2_song::{DataSet, Project, Snapshot};
 
 /// A compiled song, ready to play.
 #[derive(Clone)]
@@ -46,9 +48,25 @@ pub struct Song {
     pub rate: u32,
     /// How long compiling it took: what the contract's edit budgets are counted after.
     pub compile: Duration,
+    /// Its build and the snapshot it read: what names its nodes against another song's, as the
+    /// server names a revision's against what plays (`m2_session::tx::continues`).
+    pub code: Arc<(m2_session::Compiled, Snapshot)>,
 }
 
 impl Song {
+    /// A song of build `c`, read from `snapshot` of the project in `dir`.
+    pub fn of(dir: &Path, c: m2_session::Compiled, snapshot: Snapshot, rate: u32, compile: Duration) -> Song {
+        let (flat, data) = (c.flat.clone(), c.data.clone());
+        Song { dir: dir.to_path_buf(), flat, data, rate, compile, code: Arc::new((c, snapshot)) }
+    }
+
+    /// For each of its top-level nodes, the node of `old` it continues: what an activation from
+    /// `old` may keep (ID-15), as the server names them.
+    pub fn continues(&self, old: &Song) -> m2_runtime::Continues {
+        let ((a, sa), (b, sb)) = (&*old.code, &*self.code);
+        m2_session::tx::continues::between((a, sa), (b, sb))
+    }
+
     /// The transport frame of `beat`, by the formula notes use (step 3a's design, §3).
     pub fn frame(&self, beat: f64) -> u64 {
         (self.data.tempo().seconds_at(beat) * self.rate as f64).round() as u64
@@ -88,9 +106,10 @@ pub struct Lab {
     /// Compiling binds plugins, so it needs a set of its own.
     compiler: PackageSet,
     pub packages: Arc<PackageSet>,
-    /// Whether the engine rig carries plugin instances across rebuilds (HOST-5); off, it is the
-    /// negative reference (`--no-carry`).
-    pub carry: bool,
+    /// Whether the engine rig keeps the instances that continue across activations (RENDER-25);
+    /// off, every one is new and the whole old graph plays out as ghosts: the negative reference
+    /// (`--no-arena`).
+    pub arena: bool,
     n: AtomicUsize,
 }
 
@@ -117,7 +136,7 @@ impl Lab {
     /// A lab in `work`, which is created if missing.
     pub fn new(work: &Path) -> Result<Lab> {
         std::fs::create_dir_all(work).with_context(|| format!("creating {}", work.display()))?;
-        Ok(Lab { work: work.to_path_buf(), compiler: load_std()?, packages: Arc::new(load_std()?), carry: true, n: AtomicUsize::new(0) })
+        Ok(Lab { work: work.to_path_buf(), compiler: load_std()?, packages: Arc::new(load_std()?), arena: true, n: AtomicUsize::new(0) })
     }
 
     /// A new folder in the lab, never used before.
@@ -149,13 +168,13 @@ impl Lab {
     /// Compile the project in `dir`; it must have nothing that stops it playing as written.
     pub fn compile(&mut self, dir: &Path) -> Result<Song> {
         let t = Instant::now();
-        let project = Project::open(dir).map_err(|d| anyhow!("{} doesn't open: {d:?}", dir.display()))?;
+        let (project, snapshot) = open(dir)?;
         let c = m2_session::compile(&project, &mut self.compiler).map_err(|d| anyhow!("{} doesn't compile: {d:?}", dir.display()))?;
         let compile = t.elapsed();
         if let Some(e) = c.problems.iter().find(|d| d.severity == m2_song::Severity::Error) {
             return Err(anyhow!("{}: {e}", dir.display()));
         }
-        Ok(Song { dir: dir.to_path_buf(), flat: c.flat.clone(), data: c.data, rate: project.sample_rate(), compile })
+        Ok(Song::of(dir, c, snapshot, project.sample_rate(), compile))
     }
 
     /// A fresh session on the project in `dir`, as the app opens it: for edits made the way the
@@ -168,13 +187,14 @@ impl Lab {
 /// The accepted revision of `session`, as a [`Song`] whose compile took `compile`.
 pub fn accepted(session: &m2_session::Session, compile: Duration) -> Song {
     let rev = session.accepted();
-    Song {
-        dir: rev.project.dir.clone(),
-        flat: rev.compiled.flat.clone(),
-        data: rev.compiled.data.clone(),
-        rate: rev.project.sample_rate(),
-        compile,
-    }
+    Song::of(&rev.project.dir, rev.compiled.clone(), rev.snapshot.clone(), rev.project.sample_rate(), compile)
+}
+
+/// The project in `dir`, and the snapshot it was read from.
+pub fn open(dir: &Path) -> Result<(Project, Snapshot)> {
+    let snapshot = Snapshot::read(dir).with_context(|| format!("reading {}", dir.display()))?;
+    let project = Project::from_snapshot(&snapshot).map_err(|d| anyhow!("{} doesn't open: {d:?}", dir.display()))?;
+    Ok((project, snapshot))
 }
 
 fn copy_tree(from: &Path, to: &Path) -> Result<()> {

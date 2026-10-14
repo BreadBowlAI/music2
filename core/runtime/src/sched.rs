@@ -174,11 +174,13 @@ impl NotesData {
     }
 }
 
-/// New data for one lane, built off the audio thread (RENDER-26).
+/// New data for one lane, built off the audio thread (RENDER-26). `SwapLane` carries notes and
+/// control data; an audio lane's new renders come only in an activation, which crossfades them.
 #[derive(Clone, Debug)]
 pub enum LaneSwap {
     Notes(Arc<NotesData>),
     Control(Arc<ControlLane>),
+    Audio(Arc<crate::audio::AudioLane>),
 }
 
 /// A note the scheduler turned on and hasn't turned off.
@@ -196,13 +198,8 @@ pub struct NoteScheduler {
     /// The next note to turn on.
     cursor: usize,
     sounding: Vec<Sounding>,
-    next_id: u32,
     /// New data arrived: match the sounding notes to it in the next block.
     swapped: bool,
-    /// The renderer is being replaced: everything was turned off, and nothing starts.
-    released: bool,
-    /// It took over another scheduler's sounding notes (a carried plugin instance): once only.
-    adopted: bool,
     events: Events,
     caps: Caps,
 }
@@ -215,10 +212,7 @@ impl NoteScheduler {
             data,
             cursor: 0,
             sounding: Vec::with_capacity(caps.sounding),
-            next_id: 1,
             swapped: false,
-            released: false,
-            adopted: false,
             events: Events::with_capacity(caps.events()),
             caps,
         }
@@ -242,41 +236,19 @@ impl NoteScheduler {
         self.sounding.iter().any(|s| s.id == id)
     }
 
-    /// The id its next note gets.
-    pub fn next_id(&self) -> u32 {
-        self.next_id
-    }
-
-    /// Never give a note an id below `id`: a plugin instance carried from another scheduler had
-    /// notes up to it, and CLAP matches voices by id (§5.3).
-    pub fn raise_next_id(&mut self, id: u32) {
-        self.next_id = self.next_id.max(id);
-    }
-
-    /// Take over the notes `old` turned on and hasn't turned off, keeping their ids, as far as this
-    /// scheduler has room: an activation that carries a plugin instance whose notes go on (C7,
-    /// RENDER-25). At its first block they are matched against this scheduler's data as a swap's
-    /// are (RENDER-26a): one the data dropped, or that ends at or before the transport, gets an
-    /// Off there, and the rest keep sounding until their ends in the new data. Once per scheduler;
-    /// returns how many it took. Never allocates.
-    pub fn adopt(&mut self, old: &NoteScheduler) -> usize {
-        if self.adopted {
-            return 0;
-        }
-        self.adopted = true;
-        self.next_id = self.next_id.max(old.next_id);
-        let mut n = 0;
-        for s in &old.sounding {
+    /// Take over the notes `small` turned on and hasn't turned off, with their ids: this scheduler
+    /// replaces it on its lane at an activation, sized for data that outgrew it (RENDER-26a). At its
+    /// first block they are matched against this scheduler's data as a swap's are. Never allocates:
+    /// it is the bigger of the two.
+    pub(crate) fn take_state(&mut self, small: &NoteScheduler) {
+        for s in &small.sounding {
             if self.sounding.len() == self.sounding.capacity() {
+                debug_assert!(false, "a grown scheduler has less room than the one it replaces");
                 break;
             }
             self.sounding.push(*s);
-            n += 1;
         }
-        if n > 0 {
-            self.swapped = true;
-        }
-        n
+        self.swapped = true;
     }
 
     /// Play `data` from the next block on. Returns the data replaced, to retire off the audio
@@ -290,31 +262,24 @@ impl NoteScheduler {
     }
 
     /// Back to the state after building, without Offs: the voices they would reach were reset.
-    /// Ids go on counting, so an id is never reused.
+    /// Ids are the engine's, so none is reused.
     pub fn reset(&mut self) {
         self.cursor = 0;
         self.sounding.clear();
         self.swapped = false;
-        self.released = false;
         self.events.clear();
     }
 
-    /// Fill this block's events for `runs`. `release_all`: this renderer is being replaced, so
-    /// every sounding note ends at frame 0 and no note starts from now on (RENDER-26a).
-    /// Never allocates.
-    pub fn run(&mut self, runs: &Runs, release_all: bool) {
+    /// Fill this block's events for `runs`, giving each note it starts the id `next` holds and
+    /// counting it on: the engine's, so ids never repeat across lanes or plans (RENDER-26a). Never
+    /// allocates.
+    pub fn run(&mut self, runs: &Runs, next: &mut u32) {
         self.events.clear();
-        if release_all && !self.released {
-            self.released = true;
-            for s in self.sounding.drain(..) {
-                self.events.push(Event::Off { frame: 0, id: s.id, velocity: 0.0 });
-            }
-        }
         for (i, run) in runs.as_slice().iter().enumerate() {
             if run.jump != Jump::None {
-                // RENDER-9: a jump ends every sounding note, and the cursor seeks. A renderer's
-                // first block (Enter) has nothing of its own sounding: only notes it adopted from
-                // the renderer it replaces, which go on (C7).
+                // RENDER-9: a jump ends every sounding note, and the cursor seeks. A plan's first
+                // block with no other jump (Enter) ends nothing: the scheduler moved into it with
+                // the notes its consumers hold, which go on.
                 if run.jump != Jump::Enter {
                     for s in self.sounding.drain(..) {
                         self.events.push(Event::Off { frame: run.off, id: s.id, velocity: 0.0 });
@@ -328,7 +293,7 @@ impl NoteScheduler {
                 self.swapped = false;
             }
             if run.moving {
-                self.play(run);
+                self.play(run, next);
             }
         }
         self.events.sort();
@@ -352,9 +317,9 @@ impl NoteScheduler {
         });
     }
 
-    fn play(&mut self, run: &Run) {
+    fn play(&mut self, run: &Run, next_id: &mut u32) {
         let end = run.at + run.n as u64;
-        let Self { data, cursor, sounding, next_id, released, events, .. } = self;
+        let Self { data, cursor, sounding, events, .. } = self;
         sounding.retain(|s| {
             if s.end >= end {
                 return true;
@@ -369,9 +334,6 @@ impl NoteScheduler {
             if n.start < run.at {
                 // Only after a jump this scheduler missed: never chased, never an On before the run.
                 debug_assert!(false, "a note before the run");
-                continue;
-            }
-            if *released {
                 continue;
             }
             // An On needs room for itself and its Off, and a place among the sounding.
@@ -414,12 +376,38 @@ mod tests {
         Arc::new(NotesData::build(&clips(v), &TempoMap::constant(120.0), RATE))
     }
 
+    /// A scheduler and the note ids it gives, which are the engine's (RENDER-26a).
+    struct Sched(NoteScheduler, u32);
+
+    impl Sched {
+        fn new(data: Arc<NotesData>) -> Sched {
+            Sched(NoteScheduler::new(data), 1)
+        }
+
+        fn run(&mut self, runs: &Runs) {
+            self.0.run(runs, &mut self.1);
+        }
+    }
+
+    impl std::ops::Deref for Sched {
+        type Target = NoteScheduler;
+        fn deref(&self) -> &NoteScheduler {
+            &self.0
+        }
+    }
+
+    impl std::ops::DerefMut for Sched {
+        fn deref_mut(&mut self) -> &mut NoteScheduler {
+            &mut self.0
+        }
+    }
+
     /// Every event of `blocks` blocks, with its transport frame.
-    fn drive(s: &mut NoteScheduler, t: &mut Transport, blocks: usize) -> Vec<(u64, Event)> {
+    fn drive(s: &mut Sched, t: &mut Transport, blocks: usize) -> Vec<(u64, Event)> {
         let mut out = vec![];
         for _ in 0..blocks {
             let runs = t.advance();
-            s.run(&runs, false);
+            s.run(&runs);
             out.extend(s.events().as_slice().iter().map(|e| (runs.frame(e.frame()), *e)));
         }
         out
@@ -459,7 +447,7 @@ mod tests {
     #[test]
     fn ons_and_offs_land_on_their_frames() {
         // 120 bpm: beat 0.01 is 240 frames; 128 frames is 0.0053 beats.
-        let mut s = NoteScheduler::new(data(json!({"clips": [{"start": 0, "length": 4, "notes": [
+        let mut s = Sched::new(data(json!({"clips": [{"start": 0, "length": 4, "notes": [
             {"pitch": 60, "start": 0.01, "length": 0.01}, {"pitch": 62, "start": 0, "length": 0.016}]}]})));
         let mut t = Transport::new(0, true);
         let ev = drive(&mut s, &mut t, 6);
@@ -474,7 +462,7 @@ mod tests {
     #[test]
     fn a_jump_ends_notes_and_never_chases() {
         let tempo = TempoMap::constant(120.0);
-        let mut s = NoteScheduler::new(data(json!({"clips": [{"start": 0, "length": 8, "notes": [
+        let mut s = Sched::new(data(json!({"clips": [{"start": 0, "length": 8, "notes": [
             {"pitch": 60, "start": 0, "length": 4}, {"pitch": 64, "start": 2, "length": 1}]}]})));
         let mut t = Transport::new(0, true);
         drive(&mut s, &mut t, 2);
@@ -503,7 +491,7 @@ mod tests {
         };
         let tempo = TempoMap::constant(120.0);
         let start = || {
-            let mut s = NoteScheduler::new(base(4.0, true));
+            let mut s = Sched::new(base(4.0, true));
             let mut t = Transport::new(0, false);
             t.apply(Cmd::Play, &tempo, RATE);
             drive(&mut s, &mut t, 100); // 12 800 frames: beat 0.53
@@ -560,7 +548,7 @@ mod tests {
                 {"start": 1, "length": 8, "notes": [{"pitch": 67, "start": 0, "length": 3}]},
                 {"start": 1, "length": 8, "notes": [{"pitch": 67, "start": 0, "length": 3}]}]})
         };
-        let mut s = NoteScheduler::new(data(lane(2)));
+        let mut s = Sched::new(data(lane(2)));
         let mut t = Transport::new(0, true);
         drive(&mut s, &mut t, 200); // beat 1.07
         assert_eq!(s.held(), 6);
@@ -574,20 +562,11 @@ mod tests {
         assert_eq!(s.held(), 0);
     }
 
-    // RENDER-26a: an activation's old renderer ends every note at frame 0 and starts none;
-    // a swap that needs more room than the scheduler has is refused.
+    // RENDER-26a: a swap that needs more room than the scheduler has is refused (an activation
+    // grows the lane instead).
     #[test]
-    fn release_all_and_capacity() {
-        let mut s = NoteScheduler::new(data(json!({"clips": [{"start": 0, "length": 8, "notes": [
-            {"pitch": 60, "start": 0, "length": 4}, {"pitch": 62, "start": 0.01, "length": 4}]}]})));
-        let mut t = Transport::new(0, true);
-        drive(&mut s, &mut t, 1);
-        s.run(&t.advance(), true);
-        assert_eq!(s.events().as_slice(), [Event::Off { frame: 0, id: 1, velocity: 0.0 }]);
-        for _ in 0..10 {
-            s.run(&t.advance(), true);
-            assert!(s.events().as_slice().is_empty(), "nothing starts once released");
-        }
+    fn a_swap_past_the_room_is_refused() {
+        let mut s = Sched::new(data(json!({"clips": [{"start": 0, "length": 8, "notes": [{"pitch": 60, "start": 0, "length": 4}]}]})));
         let many: Vec<Value> = (0..300).map(|k| json!({"pitch": k % 128, "start": 0, "length": 1})).collect();
         let big = data(json!({"clips": [{"start": 0, "length": 8, "notes": many}]}));
         assert_eq!(big.needs(), Caps { sounding: 300, ons: 300 });
@@ -595,62 +574,57 @@ mod tests {
         assert_eq!(Caps::FLOOR.events(), 256 + 4 * 128 + 8);
     }
 
-    // C7, RENDER-26a: a scheduler adopts the notes another turned on, with their ids. At its first
-    // block (Enter) they go on: one its data dropped ends at frame 0, the rest end where its data
-    // says, and its own notes take ids above every adopted one. Adopting is once, within its room.
+    // RENDER-26a: a lane that outgrows its scheduler gets a bigger one at an activation, which
+    // takes over the sounding notes with their ids. At its first block (Enter) they go on: one its
+    // data dropped ends at frame 0, the rest end where its data says, and new notes take the
+    // engine's next ids.
     #[test]
-    fn adopted_notes_go_on_through_enter() {
-        let lane = |top: bool| {
+    fn take_state_keeps_sounding_notes() {
+        let lane = |top: bool, extra: usize| {
             let mut ns = vec![json!({"pitch": 60, "start": 0, "length": 1}), json!({"pitch": 67, "start": 2, "length": 1})];
             if top {
                 ns.push(json!({"pitch": 64, "start": 0, "length": 1}));
             }
+            ns.extend((0..extra).map(|k| json!({"pitch": k % 100, "start": 4, "length": 1})));
             data(json!({"clips": [{"id": "c", "start": 0, "length": 8, "notes": ns}]}))
         };
-        let mut old = NoteScheduler::new(lane(true));
+        let mut old = Sched::new(lane(true, 0));
         let mut t = Transport::new(0, true);
         drive(&mut old, &mut t, 100); // beat 0.53
         assert_eq!(old.held(), 2);
-        let mut new = NoteScheduler::new(lane(false));
-        assert_eq!(new.adopt(&old), 2);
-        assert_eq!(new.adopt(&old), 0, "once");
-        assert_eq!(old.held(), 2, "the old scheduler keeps its copy, for its own consumers' release");
+        let mut big = Sched::new(lane(false, 300));
+        assert!(big.caps().sounding > old.caps().sounding);
+        big.1 = old.1; // the engine's next id, as the activation takes it over
+        big.take_state(&old);
         t.enter();
         let runs = t.advance();
         assert_eq!(runs.first().jump, Jump::Enter);
-        new.run(&runs, false);
-        let top = new.events().as_slice().to_vec();
-        assert_eq!(top, [Event::Off { frame: 0, id: 2, velocity: 0.0 }], "the note the data dropped");
-        assert!(new.is_sounding(1) && new.held() == 1);
-        let ev = drive(&mut new, &mut t, 900); // past beat 2
+        big.run(&runs);
+        assert_eq!(big.events().as_slice(), [Event::Off { frame: 0, id: 2, velocity: 0.0 }], "the note the data dropped");
+        assert!(big.is_sounding(1) && big.held() == 1);
+        let ev = drive(&mut big, &mut t, 900); // past beat 2
         assert_eq!(ev.iter().find(|e| matches!(e.1, Event::Off { id: 1, .. })).map(|e| e.0), Some(24_000), "at its own end");
-        assert_eq!(ids(&ev, true), [3], "a new note never takes an adopted id");
-        // Without adopting, Enter is what it always was: nothing sounds, nothing ends.
-        let mut fresh = NoteScheduler::new(lane(false));
+        assert_eq!(ids(&ev, true).first(), Some(&3), "the next note takes the next id");
+        // Enter alone, on a scheduler that took nothing: nothing sounds, nothing ends.
+        let mut fresh = Sched::new(lane(false, 0));
         let mut t = Transport::new(12_800, true);
         t.enter();
-        fresh.run(&t.advance(), false);
+        fresh.run(&t.advance());
         assert!(fresh.events().as_slice().is_empty() && fresh.held() == 0);
-        // Past its room: the rest isn't taken (whoever held it lets it go).
-        let many: Vec<Value> = (0..300).map(|k| json!({"pitch": k % 128, "start": 0, "length": 4})).collect();
-        let mut big = NoteScheduler::new(data(json!({"clips": [{"start": 0, "length": 8, "notes": many}]})));
-        drive(&mut big, &mut Transport::new(0, true), 2);
-        assert_eq!(big.held(), 300);
-        assert_eq!(NoteScheduler::new(lane(false)).adopt(&big), Caps::FLOOR.sounding);
     }
 
     // RENDER-9a: a wrap ends the sounding notes at its frame and plays the loop's start again.
     #[test]
     fn a_wrap_ends_notes_at_its_frame() {
         let tempo = TempoMap::constant(120.0);
-        let mut s = NoteScheduler::new(data(json!({"clips": [{"start": 0, "length": 8, "notes": [
+        let mut s = Sched::new(data(json!({"clips": [{"start": 0, "length": 8, "notes": [
             {"pitch": 60, "start": 0.5, "length": 4}]}]})));
         let mut t = Transport::new(0, true);
         t.apply(Cmd::Loop(Some((0.0, 1.0))), &tempo, RATE);
         // One On per lap, mid-loop, and one Off at each wrap, by engine frame.
         let (mut engine, mut frames) = (0u64, vec![]);
         for _ in 0..400 {
-            s.run(&t.advance(), false);
+            s.run(&t.advance());
             frames.extend(s.events().as_slice().iter().map(|e| (engine + e.frame() as u64, matches!(e, Event::On { .. }))));
             engine += 128;
         }

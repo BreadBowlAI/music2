@@ -7,7 +7,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use m2_ir::{Flat, Ir};
 use m2_play::{Driver, Player};
-use m2_runtime::{PackageSet, Renderer};
+use m2_plugins::Owner;
+use m2_runtime::audio::Cache;
+use m2_runtime::{Basis, Continues, Keep, PackageSet, PlanInfo, Renderer};
 use m2_song::{Arrangement, DataSet, LaneAddr, LaneData, LaneKind, Project};
 use serde_json::{Value, json};
 
@@ -35,7 +37,7 @@ pub fn temp(what: &str) -> PathBuf {
     dir
 }
 
-fn copy(from: &Path, to: &Path) {
+pub fn copy(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap();
     for e in std::fs::read_dir(from).unwrap().flatten() {
         let (src, dst) = (e.path(), to.join(e.file_name()));
@@ -57,6 +59,35 @@ impl Song {
         let mut r = Renderer::new(&self.flat, &self.data, &self.packages, self.rate).unwrap();
         r.set_strict(false);
         r
+    }
+
+    /// A plan of this song prepared against `old`'s, playing as `info` describes it, with what
+    /// continues given (RENDER-25): what the live engine is sent for an edit.
+    pub fn against(&self, old: &Song, info: &PlanInfo, cont: &Continues) -> Renderer {
+        let restarts = std::collections::HashSet::new();
+        let keep = Keep { old: &old.flat, old_data: &old.data, info, cont, restarts: &restarts };
+        let mut r = Renderer::prepare(
+            &self.flat,
+            &self.data,
+            &self.packages,
+            self.rate,
+            &mut Cache::default(),
+            &Owner::discard(),
+            Basis::Keep(keep),
+        )
+        .unwrap();
+        r.set_strict(false);
+        r
+    }
+
+    /// [`Song::against`] with the nodes matched by name (graphs written as IR).
+    pub fn after(&self, old: &Song, info: &PlanInfo) -> Renderer {
+        self.against(old, info, &Continues::named(&old.flat, &self.flat))
+    }
+
+    /// Its graph and rate, with `data` and packages of their own (its folder stays with this one).
+    pub fn with_data(&self, data: DataSet) -> Song {
+        Song { flat: self.flat.clone(), data, packages: std_packages(), rate: self.rate, dir: temp("parts") }
     }
 
     /// The whole song and a second past its last clip, offline, as it plays live.

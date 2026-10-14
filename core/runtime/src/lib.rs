@@ -40,7 +40,10 @@ pub mod cells;
 pub mod data;
 pub mod engine;
 pub mod event;
+mod fade;
+mod keep;
 pub mod packages;
+mod plan;
 pub mod plugins;
 pub mod sched;
 pub mod trace;
@@ -48,11 +51,11 @@ pub mod transport;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use anyhow::{Context, Result, bail};
 use m2_ir::{FNode, FOp, Flat, Input, Kind, NoteField, PortRef, TimeOf};
-use m2_song::{Arrangement, ControlLane, DataSet, LaneData, TempoMap};
+use m2_song::{Arrangement, DataSet, LaneData, TempoMap};
 use wasmtime::{Instance, Memory, Store, StoreLimits, StoreLimitsBuilder, TypedFunc};
 
 pub use cells::{CellAt, CellId, CellInfo, CellMap, CellSlots, CellTarget};
@@ -60,13 +63,16 @@ pub use data::{decls, lane_kind};
 pub use engine::{Applied, CallbackStamp, Engine, Envelope, Heard, Msg, Retired};
 pub use event::{Event, Events};
 pub use packages::{Package, PackageSet};
-pub use plugins::{Carry, CarryKey, Fresh, InstanceSource, PluginInstance};
+pub use plan::{Basis, Continues, Count, Keep, LaneInfo, Leftovers, PlanInfo, PluginAt, Shape, Stats};
+pub use plugins::PluginInstance;
 pub use sched::{Caps, LaneSwap, NotesData};
 pub use trace::{TraceEntry, TraceKind};
 pub use transport::{Cmd, Jump, Loop, MAX_RUNS, Run, Runs, Transport};
 
 use crate::cells::{Cells, Write};
-use crate::sched::NoteScheduler;
+use crate::fade::xfade;
+use crate::keep::{Edge, Wiring, used};
+use crate::plan::{Entry, LanePlan, LaneSlot, Lanes, Plan};
 use crate::trace::Trace;
 
 pub const BLOCK: usize = 128;
@@ -108,6 +114,8 @@ struct Block {
     beats64: [f64; BLOCK],
     sample_rate: f64,
     strict: bool,
+    /// An activation's fade window while it runs: the engine clock it began at, and its frames.
+    window: Option<(u64, u32)>,
 }
 
 impl Block {
@@ -137,7 +145,12 @@ impl Seg {
 /// the block.
 type Buf = Vec<f32>;
 
-struct KernelNode {
+/// One kernel instance, in a wasmtime `Store` of its own (RENDER-32): a box a plan activation can
+/// move into the next plan, whose memory goes when it drops.
+struct KernelInst {
+    store: Store<StoreLimits>,
+    /// The hash of the shape it was made for: what an activation checks before moving it.
+    shape: u64,
     name: String,
     memory: Memory,
     reset: TypedFunc<(), ()>,
@@ -145,11 +158,6 @@ struct KernelNode {
     active: TypedFunc<(), u32>,
     in_ptrs: Vec<usize>,
     out_ptrs: Vec<usize>,
-    inputs: Vec<Input>,
-    /// For each input, the version of its source constant last written into its memory
-    /// ([`COPY`] when it was copied for one segment): a steady constant is written once
-    /// (RENDER-22).
-    seen: Vec<u64>,
     out_channels: Vec<u8>,
     /// Debug builds: input memory before a call into the kernel, to compare after (ABI-1), and
     /// the kernel id and its inputs' names, for the message.
@@ -161,38 +169,148 @@ struct KernelNode {
     in_names: Vec<String>,
 }
 
-impl KernelNode {
+/// Kernel instances alive in the process: what a churn of activations must give back (§7.6).
+static LIVE_KERNELS: AtomicUsize = AtomicUsize::new(0);
+
+/// Kernel instances alive in the process now.
+pub fn live_kernels() -> usize {
+    LIVE_KERNELS.load(Ordering::Relaxed)
+}
+
+impl Drop for KernelInst {
+    fn drop(&mut self) {
+        LIVE_KERNELS.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// A kernel node: what feeds it, and the instance it holds.
+struct KernelNode {
+    inputs: Vec<Input>,
+    /// For each input, the version of its source constant last written into its memory
+    /// ([`COPY`] when it was copied for one segment): a steady constant is written once
+    /// (RENDER-22).
+    seen: Vec<u64>,
+    /// Empty only while its instance moves between plans: it plays silence then.
+    inst: Option<Box<KernelInst>>,
+}
+
+impl KernelInst {
+    /// Instantiate kernel `id` for node `n` in a store of its own, initialise it and check its ports;
+    /// constant inputs are written into its memory once.
+    fn new(packages: &PackageSet, n: &FNode, id: &str, channels: u8, inputs: &[Input], sample_rate: f64, shape: u64) -> Result<KernelInst> {
+        let (module, prefix) = packages.module_for(id).with_context(|| format!("{}: kernel `{id}` is not loaded", n.name))?;
+        let limits = StoreLimitsBuilder::new().memory_size(KERNEL_MEMORY).instances(1).memories(1).tables(1).build();
+        let mut store = Store::new(&packages.engine, limits);
+        store.limiter(|l| l);
+        let instance = Instance::new(&mut store, module, &[]).wctx(|| format!("{}: instantiating `{id}`", n.name))?;
+        let f = |name: &str| format!("{prefix}_{name}");
+        let init = instance.get_typed_func::<(f32, u32, u32), ()>(&mut store, &f("init"))?;
+        let ports = instance.get_typed_func::<(), u32>(&mut store, &f("ports"))?;
+        let port = instance.get_typed_func::<u32, u32>(&mut store, &f("port"))?;
+        let reset = instance.get_typed_func::<(), ()>(&mut store, &f("reset"))?;
+        let process = instance.get_typed_func::<u32, ()>(&mut store, &f("process"))?;
+        let active = instance.get_typed_func::<(), u32>(&mut store, &f("active"))?;
+        let memory = instance.get_memory(&mut store, "memory").context("kernel has no memory")?;
+        init.call(&mut store, (sample_rate as f32, BLOCK as u32, channels as u32))?;
+
+        let (n_in, n_out) = (inputs.len(), n.outputs.len());
+        let declared = ports.call(&mut store, ())?;
+        if declared != ((n_in as u32) << 8 | n_out as u32) {
+            bail!(
+                "{}: `{id}` has {} inputs and {} outputs, but its manifest declares {n_in} and {n_out}",
+                n.name,
+                declared >> 8,
+                declared & 0xff
+            );
+        }
+        let mut ptrs = vec![];
+        for i in 0..(n_in + n_out) as u32 {
+            let p = port.call(&mut store, i)? as usize;
+            if p == 0 || !p.is_multiple_of(4) || p + PORT_BYTES > memory.data_size(&store) {
+                bail!("{}: `{id}` returned a bad buffer for port {i}", n.name);
+            }
+            ptrs.push(p);
+        }
+        // ABI-1, in every build: a port that shared memory with another would let one write the
+        // other, so an input written once could change behind the host's back.
+        let sig = m2_ir::Kernels::kernel(packages, id).with_context(|| format!("{}: kernel `{id}` has no signature", n.name))?;
+        let names: Vec<&str> = sig.inputs.iter().chain(&sig.outputs).map(|p| p.name.as_str()).collect();
+        let mut by_start: Vec<(usize, usize)> = ptrs.iter().enumerate().map(|(i, &p)| (p, i)).collect();
+        by_start.sort_unstable();
+        if let Some(w) = by_start.windows(2).find(|w| w[0].0 + PORT_BYTES > w[1].0) {
+            let name = |i: usize| names.get(i).copied().unwrap_or("?");
+            bail!(
+                "{}: `{id}` returned overlapping buffers for ports `{}` and `{}` (ABI-1: each port has its own memory)",
+                n.name,
+                name(w[0].1),
+                name(w[1].1)
+            );
+        }
+        let out_ptrs = ptrs.split_off(n_in);
+        // Unconnected and constant inputs are written once; kernels never write inputs.
+        let data = memory.data_mut(&mut store);
+        for (inp, &ptr) in inputs.iter().zip(&ptrs) {
+            if let Input::Const(v) = inp {
+                floats(data, ptr, 2 * BLOCK).fill(*v as f32);
+            }
+        }
+        LIVE_KERNELS.fetch_add(1, Ordering::Relaxed);
+        Ok(KernelInst {
+            store,
+            shape,
+            name: n.name.clone(),
+            memory,
+            reset,
+            process,
+            active,
+            in_ptrs: ptrs,
+            out_ptrs,
+            out_channels: n.outputs.iter().map(|k| k.channels()).collect(),
+            #[cfg(debug_assertions)]
+            before: vec![0; n_in * PORT_BYTES],
+            #[cfg(debug_assertions)]
+            kernel: id.to_string(),
+            #[cfg(debug_assertions)]
+            in_names: (0..n_in).map(|i| names.get(i).copied().unwrap_or("?").to_string()).collect(),
+        })
+    }
+
     /// `k_process` for `frames` frames. Debug builds check it left its inputs alone (ABI-1).
-    fn process(&mut self, store: &mut Store<StoreLimits>, frames: usize) -> Result<()> {
+    fn process(&mut self, frames: usize) -> Result<()> {
         #[cfg(debug_assertions)]
-        self.keep_inputs(store);
-        self.process.call(&mut *store, frames as u32).wctx(|| format!("{} crashed", self.name))?;
+        self.keep_inputs();
+        self.process.call(&mut self.store, frames as u32).wctx(|| format!("{} crashed", self.name))?;
         #[cfg(debug_assertions)]
-        self.check_inputs(store, false)?;
+        self.check_inputs(false)?;
         Ok(())
     }
 
     /// `k_reset`. Debug builds check it left its inputs alone (ABI-1).
-    fn reset(&mut self, store: &mut Store<StoreLimits>) -> Result<()> {
+    fn reset(&mut self) -> Result<()> {
         #[cfg(debug_assertions)]
-        self.keep_inputs(store);
-        self.reset.call(&mut *store, ())?;
+        self.keep_inputs();
+        self.reset.call(&mut self.store, ())?;
         #[cfg(debug_assertions)]
-        self.check_inputs(store, true)?;
+        self.check_inputs(true)?;
         Ok(())
     }
 
+    /// Whether it still holds sound that will come out later.
+    fn active(&mut self) -> Result<bool> {
+        Ok(self.active.call(&mut self.store, ())? != 0)
+    }
+
     #[cfg(debug_assertions)]
-    fn keep_inputs(&mut self, store: &Store<StoreLimits>) {
-        let data = self.memory.data(store);
+    fn keep_inputs(&mut self) {
+        let data = self.memory.data(&self.store);
         for (k, &ptr) in self.in_ptrs.iter().enumerate() {
             self.before[k * PORT_BYTES..(k + 1) * PORT_BYTES].copy_from_slice(&data[ptr..ptr + PORT_BYTES]);
         }
     }
 
     #[cfg(debug_assertions)]
-    fn check_inputs(&self, store: &Store<StoreLimits>, reset: bool) -> Result<()> {
-        let data = self.memory.data(store);
+    fn check_inputs(&self, reset: bool) -> Result<()> {
+        let data = self.memory.data(&self.store);
         for (k, &ptr) in self.in_ptrs.iter().enumerate() {
             if data[ptr..ptr + PORT_BYTES] != self.before[k * PORT_BYTES..(k + 1) * PORT_BYTES] {
                 let (kernel, port) = (&self.kernel, &self.in_names[k]);
@@ -202,6 +320,55 @@ impl KernelNode {
                     format!("`{kernel}` wrote its input `{port}`")
                 };
                 bail!("{}: {what} (ABI-1: kernel input memory is read-only)", self.name);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl KernelNode {
+    /// Frames `seg` of block `b`: its inputs copied into its memory as they change, the call, and
+    /// its outputs copied out. Never allocates.
+    fn process(&mut self, b: &Block, seg: Seg, bufs: &[Vec<Buf>], versions: &[u64], out: &mut [Buf]) -> Result<()> {
+        let n = seg.n;
+        let Some(k) = &mut self.inst else {
+            for o in out.iter_mut() {
+                for c in 0..o.len() / BLOCK {
+                    o[seg.range(c)].fill(0.0);
+                }
+            }
+            return Ok(());
+        };
+        let data = k.memory.data_mut(&mut k.store);
+        for ((inp, &ptr), seen) in self.inputs.iter().zip(&k.in_ptrs).zip(&mut self.seen) {
+            if let Input::Port { src, src_channels, channels } = inp {
+                let s = &bufs[src.node][src.port];
+                // A steady constant is written over the whole block, once per value, so every
+                // later segment finds it in place; anything else is copied for this segment.
+                let version = versions[src.node];
+                if version != COPY && *seen == version {
+                    continue;
+                }
+                let (off, len) = if version == COPY { (seg.off, n) } else { (0, BLOCK) };
+                for c in 0..*channels as usize {
+                    let sc = if c < *src_channels as usize { c } else { 0 };
+                    floats(data, ptr + c * BLOCK * 4, len).copy_from_slice(&s[sc * BLOCK + off..sc * BLOCK + off + len]);
+                }
+                *seen = version;
+            }
+        }
+        k.process(n)?;
+        let (out_ptrs, out_channels) = (&k.out_ptrs, &k.out_channels);
+        let data = k.memory.data_mut(&mut k.store);
+        for (o, (&ptr, &ch)) in out.iter_mut().zip(out_ptrs.iter().zip(out_channels)) {
+            for c in 0..ch as usize {
+                let dst = &mut o[seg.range(c)];
+                dst.copy_from_slice(floats(data, ptr + c * BLOCK * 4, n));
+                if b.strict
+                    && let Some(at) = dst.iter().position(|x| !x.is_finite())
+                {
+                    bail!("{} produced {} at {:.3}s", k.name, dst[at], b.time(seg.off + at));
+                }
             }
         }
         Ok(())
@@ -240,20 +407,35 @@ struct Planned {
     note: VoiceNote,
 }
 
+/// A `poly`'s voices, with their graphs and notes: one box, which a plan activation moves whole
+/// (RENDER-16).
+struct VoicePool {
+    voices: Vec<VoiceSlot>,
+    born: u64,
+    shape: u64,
+}
+
 struct PolyNode {
     /// The notes lane it plays.
     slot: usize,
-    voices: Vec<VoiceSlot>,
+    /// The voice graph's output.
     out: PortRef,
-    born: u64,
+    /// What its voices' `Capture` nodes read, by index: outputs of the graph around it. Kept out of
+    /// the voices, so a pool moved into another plan reads that plan's nodes.
+    captures: Vec<PortRef>,
     /// This block's Ons, by voice: room for two runs of the lane's Ons.
     plan: Vec<Planned>,
+    /// Empty only while it moves between plans: it plays silence then.
+    pool: Option<Box<VoicePool>>,
+    /// A replaced poly playing out an activation's window: it reads no notes.
+    ghost: bool,
 }
 
 /// A hosted plugin and what feeds it. It reaches its instance only through the host (P11).
 struct PluginNode {
     name: String,
-    inst: Arc<PluginInstance>,
+    /// Empty only while it moves between plans: it plays silence then.
+    inst: Option<Arc<PluginInstance>>,
     audio_in: Option<Input>,
     /// The notes lane it plays, if any.
     notes: Option<usize>,
@@ -263,9 +445,9 @@ struct PluginNode {
     /// its voices through a reset, and nothing else would end them (RENDER-10, RENDER-26a). As
     /// big as `keys`.
     ended: Vec<(u32, i16)>,
-    /// Notes a carried instance held that this node's scheduler didn't adopt: each let go (a
-    /// NoteOff, not a choke) at frame 0 of its first call (§5.3). As big as any node that used the
-    /// instance could hold.
+    /// Notes its instance held that this node lets go (a NoteOff, not a choke) at frame 0 of its
+    /// next call: it replaced a node at an activation (a ghost), or was rewired to another lane
+    /// (RENDER-26a). As big as `keys`, or as the node it took the instance from could hold.
     release: Vec<(u32, i16)>,
     /// (parameter id, input, value last sent).
     params: Vec<(u32, Input, Option<f32>)>,
@@ -273,14 +455,14 @@ struct PluginNode {
     /// gestures, HOST-4) is kept for one call: nothing consumes it before plugin windows.
     events: m2_plugins::Events,
     out: m2_plugins::Events,
-    /// During an activation's crossfade, the node of the new renderer its instance was carried
-    /// into: that node processes the instance, and this one only copies its output.
-    lent: Option<usize>,
     /// What its last call reported: whether the engine may idle (RENDER-6a).
     status: m2_plugins::Status,
     /// NoteOffs sent to it since it was built, and the engine sample of the last (gates).
     offs: u64,
     last_off: Option<u64>,
+    /// An export's borrowed instance: reset at its first call, so it starts from silence as a
+    /// fresh one would (RENDER-1).
+    reset_first: bool,
 }
 
 /// A top-level plugin node, as the gates and tests see it.
@@ -292,8 +474,6 @@ pub struct PluginView {
     /// NoteOffs sent to it since it was built, and the engine sample of the last.
     pub offs: u64,
     pub last_off: Option<u64>,
-    /// Lent to the renderer that replaced this one, for the crossfade.
-    pub lent: bool,
     pub status: m2_plugins::Status,
 }
 
@@ -371,8 +551,10 @@ fn plugin_events(
         }
         for (id, input, last) in params.iter_mut() {
             match input {
+                // Sent whenever it differs from the last value sent, as a port's sample is: an
+                // instance that outlives its plan may have been sent another (HOST-5).
                 Input::Const(v) => {
-                    if last.is_none() {
+                    if *last != Some(*v as f32) {
                         out.push(P::Param { time: (f - lo) as u32, id: *id, value: *v });
                         *last = Some(*v as f32);
                     }
@@ -394,15 +576,23 @@ fn plugin_events(
 
 impl PluginNode {
     fn process(&mut self, b: &Block, bufs: &[Vec<Buf>], out: &mut Buf, lanes: &[LaneSlot]) -> Result<()> {
-        if self.lent.is_some() {
-            // Its output was copied in from the node it was carried into (`plugins::lend`).
+        let Some(inst) = &self.inst else {
+            out.fill(0.0);
             return Ok(());
-        }
+        };
         let notes = self.notes.map_or(&[][..], |s| lanes[s].events());
         let mut next = 0;
         let channels = out.len() / BLOCK;
-        let host = self.inst.host();
-        let h = self.inst.handle();
+        let (host, h) = (inst.host(), inst.handle());
+        // Its state was loaded since its last call: every parameter code owns goes again (HOME-4).
+        if inst.take_reloaded() {
+            for p in &mut self.params {
+                p.2 = None;
+            }
+        }
+        if std::mem::take(&mut self.reset_first) {
+            host.reset(h);
+        }
         // One call per run: a call never spans a jump, and each gets its own transport (RENDER-9).
         for (ri, run) in b.runs.as_slice().iter().enumerate() {
             let (lo, hi) = (run.off as usize, (run.off + run.n) as usize);
@@ -458,11 +648,8 @@ impl PluginNode {
     }
 
     fn reset(&mut self) -> Result<()> {
-        if self.lent.is_some() {
-            // The node it was carried into resets the instance.
-            return Ok(());
-        }
-        self.inst.host().reset(self.inst.handle());
+        let Some(inst) = &self.inst else { return Ok(()) };
+        inst.host().reset(inst.handle());
         // Within its room (`ended` is as big as `keys`): never allocates on the audio thread.
         for k in self.keys.drain(..) {
             if self.ended.len() < self.ended.capacity() {
@@ -473,23 +660,6 @@ impl PluginNode {
             p.2 = None;
         }
         Ok(())
-    }
-}
-
-/// A lane the renderer plays: what its nodes read, by slot.
-enum LaneSlot {
-    Notes(NoteScheduler),
-    Control(Arc<ControlLane>),
-    Audio(audio::AudioLane),
-}
-
-impl LaneSlot {
-    /// This block's note events (none for other lanes).
-    fn events(&self) -> &[Event] {
-        match self {
-            LaneSlot::Notes(s) => s.events().as_slice(),
-            _ => &[],
-        }
     }
 }
 
@@ -531,12 +701,15 @@ enum Exec {
         slot: usize,
         default: f32,
     },
-    Audio(Box<audio::AudioNode>),
+    /// An audio lane: its player fills once per block before the graph, and this copies it.
+    Audio {
+        slot: usize,
+    },
     /// A notes lane: its scheduler runs before the graph, once per block.
     Notes,
     Time(TimeOf),
     Const(f32),
-    Kernel(Box<KernelNode>),
+    Kernel(KernelNode),
     Plugin(Box<PluginNode>),
     /// A plugin that isn't installed (FMT-18a): its audio input passed through, or silence.
     Missing(Option<Input>),
@@ -547,9 +720,19 @@ enum Exec {
         ring: Buf,
     },
     NoteField(NoteField),
-    Capture(PortRef),
+    /// Voice graphs only: the output its `poly` captures at this index ([`PolyNode::captures`]).
+    Capture(usize),
+    /// A changed edge into a kept node, or the song's output, or a new node's input from a node
+    /// that plays on, during and after an activation's window: after `wait` frames `old`
+    /// crossfades to `new` (RENDER-25a), then it copies `new` exactly.
+    Fade {
+        old: Input,
+        new: Input,
+        wait: u32,
+    },
 }
 
+#[derive(Default)]
 struct Graph {
     exec: Vec<Exec>,
     order: Vec<usize>,
@@ -562,24 +745,36 @@ struct Graph {
     version: u64,
     /// Whole-graph resets since it was built (a voice's graph counts its own).
     resets: u64,
+    /// Live, by top-level node holding a box: its output had a non-finite sample in its last
+    /// block, or it trapped. An activation resets such a box as it moves it (RENDER-25).
+    poisoned: Vec<bool>,
 }
 
-/// Builds instances for a graph.
+/// Builds a graph's nodes, and the instances of those that get new ones.
 struct Builder<'a> {
-    store: &'a mut Store<StoreLimits>,
     packages: &'a PackageSet,
     /// The revision's data: lanes, the tempo, and where assets and verified state blobs are.
     data: &'a DataSet,
     sample_rate: f64,
+    /// Every lane slot, ghost lanes included, and the room each notes lane will have.
     slots: &'a [LaneRef],
-    lanes: &'a [LaneSlot],
-    /// Where top-level plugin instances come from before any is created (HOST-5).
-    source: &'a mut dyn InstanceSource,
+    caps: &'a [Caps],
     /// Who the instances it creates report to.
     owner: &'a m2_plugins::Owner,
-    /// Top-level plugin nodes so far, by module, plugin and state path: each one's ordinal.
-    ordinals: HashMap<(String, String, Option<Vec<String>>), u32>,
 }
+
+/// What a node's box is made of.
+enum Make {
+    /// A new instance, for a node of this shape (its hash).
+    New(u64),
+    /// None: an activation moves one in.
+    Moved,
+    /// The live engine's plugin instance, lent to an export (RENDER-1).
+    Lent(Arc<PluginInstance>),
+}
+
+/// What each node of a graph is built with, by node.
+type Boxed<'a> = &'a dyn Fn(usize) -> Make;
 
 impl Builder<'_> {
     fn slot(&self, module: &str, lane: &str) -> Result<usize> {
@@ -587,125 +782,111 @@ impl Builder<'_> {
     }
 
     fn caps(&self, slot: usize) -> Caps {
-        match &self.lanes[slot] {
-            LaneSlot::Notes(s) => s.caps(),
-            _ => Caps::default(),
-        }
+        self.caps.get(slot).copied().unwrap_or_default()
     }
 
-    fn graph(&mut self, nodes: &[FNode], order: &[usize], in_voice: bool) -> Result<Graph> {
-        let mut exec = Vec::with_capacity(nodes.len());
-        let mut bufs: Vec<Vec<Buf>> = Vec::with_capacity(nodes.len());
+    /// The graph of `nodes` in `order`. `room` is the room some plugin nodes need beyond their lane's:
+    /// what the node they take an instance from could hold.
+    fn graph(&mut self, nodes: &[FNode], order: &[usize], in_voice: bool, boxed: Boxed, room: &HashMap<usize, Caps>) -> Result<Graph> {
+        let mut g = Graph { exec: Vec::with_capacity(nodes.len()), bufs: Vec::with_capacity(nodes.len()), ..Graph::default() };
         let used: HashSet<usize> = order.iter().copied().collect();
+        // A voice graph's captures are numbered in node order (`PolyNode::captures`).
+        let mut captures = 0;
         for (i, n) in nodes.iter().enumerate() {
-            bufs.push(
-                n.outputs.iter().map(|k| vec![0.0; if matches!(k, Kind::Events(_)) { 0 } else { k.channels() as usize * BLOCK }]).collect(),
-            );
-            if !used.contains(&i) {
-                exec.push(Exec::Const(0.0));
-                continue;
-            }
-            let e = match &n.op {
-                FOp::Lane { module, lane, kind: Kind::Control(_), default } => {
-                    Exec::Control { slot: self.slot(module, lane)?, default: *default as f32 }
-                }
-                FOp::Lane { kind: Kind::Events(_), .. } => Exec::Notes,
-                FOp::Lane { module, lane, kind: Kind::Audio(_), .. } => {
-                    Exec::Audio(Box::new(audio::AudioNode::new(self.slot(module, lane)?, self.sample_rate)))
-                }
-                FOp::Time(t) => Exec::Time(*t),
-                FOp::Const(v) => Exec::Const(*v as f32),
-                FOp::Kernel { kernel, channels, inputs } => Exec::Kernel(Box::new(self.kernel(n, kernel, *channels, inputs)?)),
-                FOp::Plugin { plugin, inputs, .. } if self.packages.plugin_missing(plugin) => {
-                    // Typed with `in` first (see `PackageSet::bind_plugins`).
-                    Exec::Missing(inputs.first().filter(|i| matches!(i, Input::Port { .. })).cloned())
-                }
-                FOp::Plugin { plugin, inputs, state, .. } => {
-                    Exec::Plugin(Box::new(self.plugin(nodes, n, plugin, inputs, state.as_deref(), in_voice)?))
-                }
-                FOp::Poly { lane, voices, voice, .. } => {
-                    if in_voice {
-                        bail!("{}: poly inside poly", n.name);
-                    }
-                    let FOp::Lane { module, lane: lane_id, .. } = &nodes[*lane].op else { bail!("{}: poly needs a notes lane", n.name) };
-                    let slot = self.slot(module, lane_id)?;
-                    let mut slots = Vec::with_capacity(*voices as usize);
-                    for _ in 0..*voices {
-                        let graph = self.graph(&voice.nodes, &voice.order, true).with_context(|| format!("{}: voice", n.name))?;
-                        slots.push(VoiceSlot { graph, note: None, born: 0, dirty: false, last_peak: 0.0, taken: false });
-                    }
-                    let plan = Vec::with_capacity(2 * self.caps(slot).ons);
-                    Exec::Poly(Box::new(PolyNode { slot, voices: slots, out: voice.out, born: 0, plan }))
-                }
-                FOp::Feedback { input, channels } => Exec::Feedback { input: *input, ring: vec![0.0; *channels as usize * BLOCK] },
-                FOp::NoteField(f) => Exec::NoteField(*f),
-                FOp::Capture(p) => Exec::Capture(*p),
+            let capture = captures;
+            captures += matches!(n.op, FOp::Capture(_)) as usize;
+            let e = match used.contains(&i) {
+                true => self.node(nodes, n, in_voice, boxed(i), false, room.get(&i).copied(), capture)?,
+                false => Exec::Const(0.0),
             };
-            exec.push(e);
+            g.push(e, &n.outputs);
         }
-        // Constants change only through their cells: fill them once.
-        for (i, e) in exec.iter().enumerate() {
-            if let Exec::Const(v) = e {
-                for b in &mut bufs[i] {
-                    b.fill(*v);
-                }
-            }
-        }
-        let versions = exec.iter().map(|e| if matches!(e, Exec::Const(_)) { 0 } else { COPY }).collect();
-        Ok(Graph { exec, order: order.to_vec(), bufs, versions, version: 0, resets: 0 })
+        g.order = order.to_vec();
+        Ok(g)
     }
 
-    /// A plugin node: its instance carried from the source when one matches (top level only), or
-    /// created through the host, its verified state loaded, and activated.
+    /// One node. A ghost, a replaced node that plays out an activation's window, reads no notes.
+    #[allow(clippy::too_many_arguments)]
+    fn node(&mut self, nodes: &[FNode], n: &FNode, in_voice: bool, boxed: Make, ghost: bool, room: Option<Caps>, capture: usize) -> Result<Exec> {
+        Ok(match &n.op {
+            FOp::Lane { module, lane, kind: Kind::Control(_), default } => Exec::Control { slot: self.slot(module, lane)?, default: *default as f32 },
+            FOp::Lane { kind: Kind::Events(_), .. } => Exec::Notes,
+            FOp::Lane { module, lane, kind: Kind::Audio(_), .. } => Exec::Audio { slot: self.slot(module, lane)? },
+            FOp::Time(t) => Exec::Time(*t),
+            FOp::Const(v) => Exec::Const(*v as f32),
+            FOp::Kernel { kernel, channels, inputs } => {
+                let inst = match boxed {
+                    Make::New(shape) => Some(Box::new(KernelInst::new(self.packages, n, kernel, *channels, inputs, self.sample_rate, shape)?)),
+                    _ => None,
+                };
+                Exec::Kernel(KernelNode { inputs: inputs.to_vec(), seen: vec![COPY; inputs.len()], inst })
+            }
+            FOp::Plugin { plugin, inputs, .. } if self.packages.plugin_missing(plugin) => {
+                // Typed with `in` first (see `PackageSet::bind_plugins`).
+                Exec::Missing(inputs.first().filter(|i| matches!(i, Input::Port { .. })).cloned())
+            }
+            FOp::Plugin { plugin, inputs, .. } => Exec::Plugin(Box::new(self.plugin(nodes, n, plugin, inputs, boxed, ghost, room)?)),
+            FOp::Poly { lane, voices, voice, .. } => {
+                if in_voice {
+                    bail!("{}: poly inside poly", n.name);
+                }
+                let slot = match ghost {
+                    true => 0,
+                    false => {
+                        let FOp::Lane { module, lane: lane_id, .. } = &nodes[*lane].op else { bail!("{}: poly needs a notes lane", n.name) };
+                        self.slot(module, lane_id)?
+                    }
+                };
+                let pool = match boxed {
+                    Make::New(shape) => {
+                        let mut slots = Vec::with_capacity(*voices as usize);
+                        for _ in 0..*voices {
+                            let graph = self.graph(&voice.nodes, &voice.order, true, &|_| Make::New(0), &HashMap::new()).with_context(|| format!("{}: voice", n.name))?;
+                            slots.push(VoiceSlot { graph, note: None, born: 0, dirty: false, last_peak: 0.0, taken: false });
+                        }
+                        Some(Box::new(VoicePool { voices: slots, born: 0, shape }))
+                    }
+                    _ => None,
+                };
+                let captures = voice.nodes.iter().filter_map(|n| if let FOp::Capture(p) = n.op { Some(p) } else { None }).collect();
+                let plan = Vec::with_capacity(if ghost { 0 } else { 2 * self.caps(slot).ons });
+                Exec::Poly(Box::new(PolyNode { slot, out: voice.out, captures, plan, pool, ghost }))
+            }
+            FOp::Feedback { input, channels } => Exec::Feedback { input: *input, ring: vec![0.0; *channels as usize * BLOCK] },
+            FOp::NoteField(f) => Exec::NoteField(*f),
+            FOp::Capture(_) => Exec::Capture(capture),
+        })
+    }
+
+    /// A plugin node, and with `boxed` its instance: created through the host, its verified state
+    /// loaded, and activated, on the plugin main thread while the plan before plays (RENDER-25);
+    /// or one lent by the live engine, which it resets at its first call (RENDER-1).
+    #[allow(clippy::too_many_arguments)]
     fn plugin(
         &mut self,
         nodes: &[FNode],
         n: &FNode,
         id: &str,
         inputs: &[Input],
-        state: Option<&[String]>,
-        in_voice: bool,
+        boxed: Make,
+        ghost: bool,
+        room: Option<Caps>,
     ) -> Result<PluginNode> {
         let info = self.packages.plugin_info(id).with_context(|| format!("{}: plugin `{id}` was not described", n.name))?;
-        let keys: Vec<&str> = state.unwrap_or_default().iter().map(String::as_str).collect();
-        let state_path = state.map(<[String]>::to_vec);
-        let ordinal = if in_voice {
-            u32::MAX
-        } else {
-            let o = self.ordinals.entry((n.module.clone(), id.to_string(), state_path.clone())).or_insert(0);
-            *o += 1;
-            *o - 1
-        };
-        let key = CarryKey {
-            module: n.module.clone(),
-            plugin: info.found.id.clone(),
-            version: info.found.version.clone(),
-            state_path,
-            ordinal,
-            state: state.and_then(|_| self.data.state_hash(&n.module, &keys)),
-        };
         let rate = self.sample_rate as u32;
-        // Plugins inside voices aren't carried: a voice resets its instances on every retrigger.
-        let carried = if in_voice { None } else { self.source.take(&key, rate) };
-        let inst = match carried {
-            Some(inst) => inst,
-            None => {
-                // Only a blob whose sidecar names this plugin is loaded (FMT-17); without one the
-                // plugin plays its defaults, and the data's diagnostics say why.
-                let blob = match state.and_then(|_| self.data.state(&n.module, &keys)) {
-                    Some(path) => {
-                        let bytes = std::fs::read(&path).with_context(|| format!("{}: reading plugin state {}", n.name, path.display()))?;
-                        Some(Arc::new(m2_plugins::Blob::new(bytes)))
-                    }
-                    None => None,
-                };
+        let reset_first = matches!(boxed, Make::Lent(_));
+        let inst = match boxed {
+            Make::Lent(inst) => Some(inst),
+            Make::New(shape) => {
+                let blob = state_blob(self.data, n)?;
                 let host = self.packages.host();
                 let (h, _) = host.create(&info.found, blob, self.owner).with_context(|| n.name.clone())?;
                 // Owned from here: dropped on an error, it is destroyed.
-                let inst = Arc::new(PluginInstance::new(host.clone(), h, key, rate));
+                let inst = Arc::new(PluginInstance::new(host.clone(), h, shape));
                 host.activate(h, rate, BLOCK as u32).with_context(|| n.name.clone())?;
-                inst
+                Some(inst)
             }
+            Make::Moved => None,
         };
         // Inputs come in the order of the plugin's ports; a parameter is bound by the id in its
         // address, never by its place in the list (FMT-18).
@@ -714,25 +895,25 @@ impl Builder<'_> {
         for (port, input) in sig.inputs.iter().zip(inputs) {
             match (port.name.as_str(), input) {
                 ("in", _) => audio_in = Some(input.clone()),
-                ("notes", Input::Port { src, .. }) => {
+                ("notes", Input::Port { src, .. }) if !ghost => {
                     if let FOp::Lane { module, lane, .. } = &nodes[src.node].op {
                         notes = Some(self.slot(module, lane)?);
                     }
                 }
-                (_, Input::Unset) => {}
+                ("notes", _) | (_, Input::Unset) => {}
                 (name, _) => {
                     let (_, pid) = packages::address(name).with_context(|| format!("{}: `{name}` isn't a parameter address", n.name))?;
                     params.push((pid, input.clone(), None));
                 }
             }
         }
-        // Room for one run's notes, a Tuning for each On, every parameter sampled, a choke and a
-        // NoteOff for every note it held when it was reset, and a NoteOff for every note a carried
-        // instance held that this node lets go.
+        // Room for one run's notes, a Tuning for each On, every parameter sampled, and a choke and
+        // a NoteOff for every note it holds, a NoteOff for every note it lets go, as many as its
+        // lane's room holds or the node it took its instance from held.
         let caps = notes.map_or(Caps::default(), |s| self.caps(s));
-        let held = caps.sounding + 2 * caps.ons + 8;
-        let release = inst.hold(held);
-        let events = caps.events() + caps.ons + (BLOCK / PARAM_STEP) * params.len() + 8 + 2 * held + release;
+        let held = |c: Caps| c.sounding + 2 * c.ons + 8;
+        let held = held(caps).max(room.map_or(0, held));
+        let events = caps.events() + caps.ons + (BLOCK / PARAM_STEP) * params.len() + 8 + 3 * held;
         Ok(PluginNode {
             name: n.name.clone(),
             inst,
@@ -740,91 +921,25 @@ impl Builder<'_> {
             notes,
             keys: Vec::with_capacity(held),
             ended: Vec::with_capacity(held),
-            release: Vec::with_capacity(release),
+            release: Vec::with_capacity(held),
             params,
             events: m2_plugins::Events::with_capacity(events),
             out: m2_plugins::Events::with_capacity(OUT_EVENTS),
-            lent: None,
             status: m2_plugins::Status::Continue,
             offs: 0,
             last_off: None,
+            reset_first,
         })
     }
+}
 
-    fn kernel(&mut self, n: &FNode, id: &str, channels: u8, inputs: &[Input]) -> Result<KernelNode> {
-        let (module, prefix) = self.packages.module_for(id).with_context(|| format!("{}: kernel `{id}` is not loaded", n.name))?;
-        let instance = Instance::new(&mut *self.store, module, &[]).wctx(|| format!("{}: instantiating `{id}`", n.name))?;
-        let f = |name: &str| format!("{prefix}_{name}");
-        let store = &mut *self.store;
-        let init = instance.get_typed_func::<(f32, u32, u32), ()>(&mut *store, &f("init"))?;
-        let ports = instance.get_typed_func::<(), u32>(&mut *store, &f("ports"))?;
-        let port = instance.get_typed_func::<u32, u32>(&mut *store, &f("port"))?;
-        let reset = instance.get_typed_func::<(), ()>(&mut *store, &f("reset"))?;
-        let process = instance.get_typed_func::<u32, ()>(&mut *store, &f("process"))?;
-        let active = instance.get_typed_func::<(), u32>(&mut *store, &f("active"))?;
-        let memory = instance.get_memory(&mut *store, "memory").context("kernel has no memory")?;
-        init.call(&mut *store, (self.sample_rate as f32, BLOCK as u32, channels as u32))?;
-
-        let (n_in, n_out) = (inputs.len(), n.outputs.len());
-        let declared = ports.call(&mut *store, ())?;
-        if declared != ((n_in as u32) << 8 | n_out as u32) {
-            bail!(
-                "{}: `{id}` has {} inputs and {} outputs, but its manifest declares {n_in} and {n_out}",
-                n.name,
-                declared >> 8,
-                declared & 0xff
-            );
-        }
-        let mut ptrs = vec![];
-        for i in 0..(n_in + n_out) as u32 {
-            let p = port.call(&mut *store, i)? as usize;
-            if p == 0 || !p.is_multiple_of(4) || p + PORT_BYTES > memory.data_size(&*store) {
-                bail!("{}: `{id}` returned a bad buffer for port {i}", n.name);
-            }
-            ptrs.push(p);
-        }
-        // ABI-1, in every build: a port that shared memory with another would let one write the
-        // other, so an input written once could change behind the host's back.
-        let sig = m2_ir::Kernels::kernel(self.packages, id).with_context(|| format!("{}: kernel `{id}` has no signature", n.name))?;
-        let names: Vec<&str> = sig.inputs.iter().chain(&sig.outputs).map(|p| p.name.as_str()).collect();
-        let mut by_start: Vec<(usize, usize)> = ptrs.iter().enumerate().map(|(i, &p)| (p, i)).collect();
-        by_start.sort_unstable();
-        if let Some(w) = by_start.windows(2).find(|w| w[0].0 + PORT_BYTES > w[1].0) {
-            let name = |i: usize| names.get(i).copied().unwrap_or("?");
-            bail!(
-                "{}: `{id}` returned overlapping buffers for ports `{}` and `{}` (ABI-1: each port has its own memory)",
-                n.name,
-                name(w[0].1),
-                name(w[1].1)
-            );
-        }
-        let out_ptrs = ptrs.split_off(n_in);
-        // Unconnected and constant inputs are written once; kernels never write inputs.
-        let data = memory.data_mut(&mut *store);
-        for (inp, &ptr) in inputs.iter().zip(&ptrs) {
-            if let Input::Const(v) = inp {
-                floats(data, ptr, 2 * BLOCK).fill(*v as f32);
-            }
-        }
-        Ok(KernelNode {
-            name: n.name.clone(),
-            memory,
-            reset,
-            process,
-            active,
-            in_ptrs: ptrs,
-            out_ptrs,
-            inputs: inputs.to_vec(),
-            seen: vec![COPY; n_in],
-            out_channels: n.outputs.iter().map(|k| k.channels()).collect(),
-            #[cfg(debug_assertions)]
-            before: vec![0; n_in * PORT_BYTES],
-            #[cfg(debug_assertions)]
-            kernel: id.to_string(),
-            #[cfg(debug_assertions)]
-            in_names: (0..n_in).map(|i| names.get(i).copied().unwrap_or("?").to_string()).collect(),
-        })
-    }
+/// The verified state blob plugin node `n` loads, read: only a blob whose sidecar names its plugin
+/// (FMT-17). Without one it plays its defaults, and the data's diagnostics say why.
+pub fn state_blob(data: &DataSet, n: &FNode) -> Result<Option<Arc<m2_plugins::Blob>>> {
+    let FOp::Plugin { state: Some(keys), .. } = &n.op else { return Ok(None) };
+    let Some(path) = data.state(&n.module, &keys.iter().map(String::as_str).collect::<Vec<_>>()) else { return Ok(None) };
+    let bytes = std::fs::read(&path).with_context(|| format!("{}: reading plugin state {}", n.name, path.display()))?;
+    Ok(Some(Arc::new(m2_plugins::Blob::new(bytes))))
 }
 
 /// `with_context` for wasmtime's own error type.
@@ -842,14 +957,71 @@ fn floats(data: &mut [u8], ptr: usize, len: usize) -> &mut [f32] {
     bytemuck::cast_slice_mut(&mut data[ptr..ptr + len * 4])
 }
 
+/// A fade node's block (RENDER-25a): during the window, each frame crossfades from `old` to `new`;
+/// after it, `new` is copied only when its version changes, and the fade takes that version, so a
+/// steady cell behind it still costs nothing per block (RENDER-22). `had` is its version before;
+/// returns its version now. Never allocates.
+fn fade(b: &Block, (old, new, wait): (&Input, &Input, u32), bufs: &[Vec<Buf>], versions: &[u64], had: u64, out: &mut Buf) -> u64 {
+    // Channel `c` of an input, a mono one in every channel.
+    let read = |i: &Input, c: usize, f: usize| match i {
+        Input::Port { src, .. } => {
+            let s = &bufs[src.node][src.port];
+            s[c.min(s.len() / BLOCK - 1) * BLOCK + f]
+        }
+        Input::Const(v) => *v as f32,
+        Input::Unset => 0.0,
+    };
+    let channels = out.len() / BLOCK;
+    match b.window {
+        Some((from, len)) if b.engine < from + (wait + len) as u64 => {
+            for c in 0..channels {
+                for f in 0..BLOCK {
+                    let k = (b.engine + f as u64 - from) as u32;
+                    let o = read(old, c, f);
+                    out[c * BLOCK + f] = if k < wait { o } else { xfade(o, read(new, c, f), k - wait, len) };
+                }
+            }
+            COPY
+        }
+        _ => {
+            let v = match new {
+                Input::Port { src, .. } => versions[src.node],
+                _ => 0,
+            };
+            if v == COPY || v != had {
+                for c in 0..channels {
+                    for f in 0..BLOCK {
+                        out[c * BLOCK + f] = read(new, c, f);
+                    }
+                }
+            }
+            v
+        }
+    }
+}
+
 impl Graph {
-    /// Process frames `seg` of block `b`. Buffers are indexed by position in the block.
+    /// Append node `e`, with outputs of `outputs`' kinds.
+    fn push(&mut self, e: Exec, outputs: &[Kind]) {
+        let mut bufs: Vec<Buf> =
+            outputs.iter().map(|k| vec![0.0; if matches!(k, Kind::Events(_)) { 0 } else { k.channels() as usize * BLOCK }]).collect();
+        // Constants change only through their cells: filled once.
+        if let Exec::Const(v) = e {
+            bufs.iter_mut().for_each(|b| b.fill(v));
+        }
+        self.versions.push(if matches!(e, Exec::Const(_)) { 0 } else { COPY });
+        self.exec.push(e);
+        self.bufs.push(bufs);
+        self.poisoned.push(false);
+    }
+
+    /// Process frames `seg` of block `b`. Buffers are indexed by position in the block. A voice graph
+    /// gets the outputs around its `poly` and what its captures read in them.
     fn process(
         &mut self,
-        store: &mut Store<StoreLimits>,
         b: &Block,
         seg: Seg,
-        outer: Option<&[Vec<Buf>]>,
+        outer: Option<(&[Vec<Buf>], &[PortRef])>,
         note: Option<VoiceNote>,
         lanes: &[LaneSlot],
     ) -> Result<()> {
@@ -858,62 +1030,43 @@ impl Graph {
             let i = self.order[oi];
             let mut out = std::mem::take(&mut self.bufs[i]);
             let (bufs, versions) = (&self.bufs, &self.versions);
-            match &mut self.exec[i] {
+            let mut version = None;
+            let done = match &mut self.exec[i] {
                 Exec::Control { slot, default } => {
-                    let LaneSlot::Control(lane) = &lanes[*slot] else { unreachable!("a control lane's slot holds control data") };
                     let o = &mut out[0][seg.range(0)];
-                    if lane.is_empty() {
-                        o.fill(*default);
-                    } else {
-                        for (x, &beat) in o.iter_mut().zip(&b.beats64[seg.off..]) {
-                            *x = lane.value_at(beat, *default as f64) as f32;
+                    match &lanes[*slot] {
+                        LaneSlot::Control(Some(lane)) if !lane.is_empty() => {
+                            for (x, &beat) in o.iter_mut().zip(&b.beats64[seg.off..]) {
+                                *x = lane.value_at(beat, *default as f64) as f32;
+                            }
                         }
+                        _ => o.fill(*default),
                     }
+                    Ok(())
                 }
-                Exec::Audio(a) => {
+                Exec::Audio { slot } => {
                     debug_assert_eq!((seg.off, seg.n), (0, BLOCK), "audio lanes only play at the top level");
-                    let LaneSlot::Audio(lane) = &lanes[a.slot] else { unreachable!("an audio lane's slot holds audio") };
-                    a.process(lane, &b.runs, &mut out[0]);
-                }
-                Exec::Notes | Exec::Const(_) => {}
-                Exec::Time(TimeOf::Beats) => out[0][seg.range(0)].copy_from_slice(&b.beats[seg.off..seg.off + n]),
-                Exec::Time(TimeOf::Seconds) => out[0][seg.range(0)].copy_from_slice(&b.seconds[seg.off..seg.off + n]),
-                Exec::Kernel(k) => {
-                    let data = k.memory.data_mut(&mut *store);
-                    for ((inp, &ptr), seen) in k.inputs.iter().zip(&k.in_ptrs).zip(&mut k.seen) {
-                        if let Input::Port { src, src_channels, channels } = inp {
-                            let s = &bufs[src.node][src.port];
-                            // A steady constant is written over the whole block, once per value, so
-                            // every later segment finds it in place; anything else is copied for
-                            // this segment.
-                            let version = versions[src.node];
-                            if version != COPY && *seen == version {
-                                continue;
-                            }
-                            let (off, len) = if version == COPY { (seg.off, n) } else { (0, BLOCK) };
-                            for c in 0..*channels as usize {
-                                let sc = if c < *src_channels as usize { c } else { 0 };
-                                floats(data, ptr + c * BLOCK * 4, len).copy_from_slice(&s[sc * BLOCK + off..sc * BLOCK + off + len]);
-                            }
-                            *seen = version;
+                    match &lanes[*slot] {
+                        LaneSlot::Audio(Some(p)) => {
+                            let n = out[0].len().min(p.out().len());
+                            out[0][..n].copy_from_slice(&p.out()[..n]);
                         }
+                        _ => out[0].fill(0.0),
                     }
-                    k.process(store, n)?;
-                    let data = k.memory.data_mut(&mut *store);
-                    for (o, (&ptr, &ch)) in out.iter_mut().zip(k.out_ptrs.iter().zip(&k.out_channels)) {
-                        for c in 0..ch as usize {
-                            let dst = &mut o[seg.range(c)];
-                            dst.copy_from_slice(floats(data, ptr + c * BLOCK * 4, n));
-                            if b.strict
-                                && let Some(at) = dst.iter().position(|x| !x.is_finite())
-                            {
-                                bail!("{} produced {} at {:.3}s", k.name, dst[at], b.time(seg.off + at));
-                            }
-                        }
-                    }
+                    Ok(())
                 }
-                Exec::Poly(p) => p.process(store, b, bufs, &mut out[0], lanes)?,
-                Exec::Plugin(p) => p.process(b, bufs, &mut out[0], lanes)?,
+                Exec::Notes | Exec::Const(_) => Ok(()),
+                Exec::Time(TimeOf::Beats) => {
+                    out[0][seg.range(0)].copy_from_slice(&b.beats[seg.off..seg.off + n]);
+                    Ok(())
+                }
+                Exec::Time(TimeOf::Seconds) => {
+                    out[0][seg.range(0)].copy_from_slice(&b.seconds[seg.off..seg.off + n]);
+                    Ok(())
+                }
+                Exec::Kernel(k) => k.process(b, seg, bufs, versions, &mut out),
+                Exec::Poly(p) => p.process(b, bufs, &mut out[0], lanes),
+                Exec::Plugin(p) => p.process(b, bufs, &mut out[0], lanes),
                 Exec::Missing(input) => {
                     for c in 0..out[0].len() / BLOCK {
                         match input {
@@ -924,6 +1077,7 @@ impl Graph {
                             _ => out[0][seg.range(c)].fill(0.0),
                         }
                     }
+                    Ok(())
                 }
                 Exec::Feedback { ring, .. } => {
                     for c in 0..out[0].len() / BLOCK {
@@ -932,6 +1086,7 @@ impl Graph {
                             out[0][c * BLOCK + seg.off + f] = ring[c * BLOCK + at];
                         }
                     }
+                    Ok(())
                 }
                 Exec::NoteField(field) => {
                     let note = note.expect("note fields only run in voices");
@@ -947,15 +1102,32 @@ impl Graph {
                             }
                         }
                     }
+                    Ok(())
                 }
-                Exec::Capture(p) => {
-                    let src = &outer.expect("captures only run in voices")[p.node][p.port];
+                Exec::Capture(k) => {
+                    let (outer, captures) = outer.expect("captures only run in voices");
+                    let p = captures[*k];
+                    let src = &outer[p.node][p.port];
                     for c in 0..out[0].len() / BLOCK {
                         out[0][seg.range(c)].copy_from_slice(&src[seg.range(c.min(src.len() / BLOCK - 1))]);
                     }
+                    Ok(())
                 }
+                Exec::Fade { old, new, wait } => {
+                    version = Some(fade(b, (old, new, *wait), bufs, versions, versions[i], &mut out[0]));
+                    Ok(())
+                }
+            };
+            // RENDER-25: live, a box whose output went non-finite, or that trapped, is marked; an
+            // activation resets it as it moves it. A finite block clears the mark.
+            if outer.is_none() && !b.strict && matches!(self.exec[i], Exec::Kernel(_) | Exec::Poly(_) | Exec::Plugin(_) | Exec::Feedback { .. }) {
+                self.poisoned[i] = done.is_err() || out.iter().any(|o| o.iter().fold(false, |a, x| a | !x.is_finite()));
             }
             self.bufs[i] = out;
+            if let Some(v) = version {
+                self.versions[i] = v;
+            }
+            done?;
         }
         // Feedback stores its input for `BLOCK` samples later.
         for i in 0..self.exec.len() {
@@ -974,42 +1146,101 @@ impl Graph {
         Ok(())
     }
 
-    /// Back to the state right after building.
-    fn reset(&mut self, store: &mut Store<StoreLimits>) -> Result<()> {
+    /// Back to the state right after building, every mark cleared (RENDER-10).
+    fn reset(&mut self) -> Result<()> {
         // Counted here, so no path resets the graph unseen (RENDER-10).
         self.resets += 1;
-        for e in &mut self.exec {
-            match e {
-                Exec::Kernel(k) => k.reset(store)?,
-                Exec::Plugin(p) => p.reset()?,
-                Exec::Feedback { ring, .. } => ring.fill(0.0),
-                Exec::Audio(a) => a.reset(),
-                Exec::Poly(p) => {
-                    p.born = 0;
-                    p.plan.clear();
-                    for v in &mut p.voices {
+        self.poisoned.iter_mut().for_each(|p| *p = false);
+        for i in 0..self.exec.len() {
+            self.reset_node(i)?;
+        }
+        Ok(())
+    }
+
+    /// Node `i`'s box back to the state right after building, as a panic resets it: a kernel's
+    /// `k_reset`, a pool's voices with their notes dropped, a plugin's `reset` with its notes to
+    /// end, a ring zeroed. Never allocates.
+    fn reset_node(&mut self, i: usize) -> Result<()> {
+        match &mut self.exec[i] {
+            Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.reset()?,
+            Exec::Plugin(p) => p.reset()?,
+            Exec::Feedback { ring, .. } => ring.fill(0.0),
+            Exec::Poly(p) => {
+                p.plan.clear();
+                if let Some(pool) = &mut p.pool {
+                    pool.born = 0;
+                    for v in &mut pool.voices {
                         if v.dirty {
-                            v.graph.reset(store)?;
+                            v.graph.reset()?;
                         }
                         (v.note, v.born, v.dirty, v.last_peak, v.taken) = (None, 0, false, 0.0, false);
                     }
                 }
-                _ => {}
             }
+            _ => {}
         }
         Ok(())
+    }
+
+    /// The notes sounding into node `i` end now, at engine sample `clock`: a poly's voices go into
+    /// their release, a plugin's notes get a NoteOff at its next call (RENDER-26a). Never allocates.
+    fn release(&mut self, i: usize, clock: u64) {
+        match &mut self.exec[i] {
+            Exec::Poly(p) => {
+                for n in p.pool.iter_mut().flat_map(|pool| &mut pool.voices).filter_map(|v| v.note.as_mut()) {
+                    n.off = n.off.min(clock);
+                }
+            }
+            Exec::Plugin(p) => {
+                let PluginNode { keys, release, .. } = &mut **p;
+                for k in keys.drain(..) {
+                    if release.len() < release.capacity() {
+                        release.push(k);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Node `i`'s input `edge` reads fade node `f` from now on (RENDER-25a).
+    fn rewire(&mut self, i: usize, edge: Edge, f: usize) {
+        let ch = (self.bufs[f][0].len() / BLOCK) as u8;
+        let src = PortRef { node: f, port: 0 };
+        // A constant filled both channels; a port keeps the channels it copied.
+        let reads = |was: Option<&Input>| {
+            let channels = if let Some(Input::Port { channels, .. }) = was { *channels } else { 2 };
+            Input::Port { src, src_channels: ch, channels }
+        };
+        match (&mut self.exec[i], edge) {
+            (Exec::Kernel(k), Edge::Input(p)) => k.inputs[p] = reads(k.inputs.get(p)),
+            (Exec::Plugin(p), Edge::Input(_)) => p.audio_in = Some(reads(p.audio_in.as_ref())),
+            (Exec::Missing(m), Edge::Input(_)) => *m = Some(Input::Port { src, src_channels: ch, channels: ch }),
+            (Exec::Poly(p), Edge::Capture(k)) => p.captures[k] = src,
+            (Exec::Feedback { input, .. }, Edge::Feedback) => *input = src,
+            _ => debug_assert!(false, "node {i} has no input {edge:?}"),
+        }
+    }
+
+    /// What constant `node` of poly `poly`'s first voice holds.
+    fn voice_const(&self, poly: usize, node: usize) -> Option<f32> {
+        let Exec::Poly(p) = self.exec.get(poly)? else { return None };
+        match p.pool.as_ref()?.voices.first()?.graph.exec.get(node)? {
+            Exec::Const(v) => Some(*v),
+            _ => None,
+        }
     }
 
     /// Reset every kernel once, in voices too: a kernel's first reset may grow its memory
     /// (it builds the new state before dropping the old), so it happens here, off the audio
     /// thread, and never again later. A reset is the same as init, so nothing sounds different.
-    fn prewarm(&mut self, store: &mut Store<StoreLimits>) -> Result<()> {
+    fn prewarm(&mut self) -> Result<()> {
         for e in &mut self.exec {
             match e {
-                Exec::Kernel(k) => k.reset(store)?,
+                Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.reset()?,
                 Exec::Poly(p) => {
-                    for v in &mut p.voices {
-                        v.graph.prewarm(store)?;
+                    for v in p.pool.iter_mut().flat_map(|pool| &mut pool.voices) {
+                        v.graph.prewarm()?;
                     }
                 }
                 _ => {}
@@ -1019,12 +1250,12 @@ impl Graph {
     }
 
     /// The memory every kernel instance holds, in bytes.
-    fn kernel_memory(&self, store: &Store<StoreLimits>) -> usize {
+    fn kernel_memory(&self) -> usize {
         self.exec
             .iter()
             .map(|e| match e {
-                Exec::Kernel(k) => k.memory.data_size(store),
-                Exec::Poly(p) => p.voices.iter().map(|v| v.graph.kernel_memory(store)).sum(),
+                Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.memory.data_size(&k.store),
+                Exec::Poly(p) => p.pool.iter().flat_map(|pool| &pool.voices).map(|v| v.graph.kernel_memory()).sum(),
                 _ => 0,
             })
             .sum()
@@ -1055,12 +1286,15 @@ impl Graph {
     }
 
     /// Whether any kernel still holds sound that will come out later.
-    fn active(&self, store: &mut Store<StoreLimits>) -> Result<bool> {
-        for e in &self.exec {
-            match e {
-                Exec::Kernel(k) if k.active.call(&mut *store, ())? != 0 => return Ok(true),
-                Exec::Feedback { ring, .. } if ring.iter().any(|x| x.abs() > QUIET) => return Ok(true),
-                _ => {}
+    fn active(&mut self) -> Result<bool> {
+        for e in &mut self.exec {
+            let active = match e {
+                Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.active()?,
+                Exec::Feedback { ring, .. } => ring.iter().any(|x| x.abs() > QUIET),
+                _ => false,
+            };
+            if active {
+                return Ok(true);
             }
         }
         Ok(false)
@@ -1070,10 +1304,15 @@ impl Graph {
 impl PolyNode {
     /// One block. The lane's events say which notes start and end; voices are given notes in
     /// event order, and a voice's graph is split where its note changes. Never allocates.
-    fn process(&mut self, store: &mut Store<StoreLimits>, b: &Block, outer: &[Vec<Buf>], out: &mut Buf, lanes: &[LaneSlot]) -> Result<()> {
+    fn process(&mut self, b: &Block, outer: &[Vec<Buf>], out: &mut Buf, lanes: &[LaneSlot]) -> Result<()> {
         let (start, end) = (b.engine, b.engine + BLOCK as u64);
-        let events = lanes[self.slot].events();
-        let PolyNode { voices, out: voice_out, born, plan, .. } = self;
+        let events = if self.ghost { &[] } else { lanes[self.slot].events() };
+        let PolyNode { out: voice_out, captures, plan, pool, .. } = self;
+        let Some(pool) = pool else {
+            out.fill(0.0);
+            return Ok(());
+        };
+        let VoicePool { voices, born, .. } = &mut **pool;
         // Offs for notes already in voices. A stolen note's Off finds nothing.
         for e in events {
             if let Event::Off { frame, id, .. } = *e
@@ -1088,7 +1327,7 @@ impl PolyNode {
             if let Some(n) = v.note
                 && n.off == start
                 && v.last_peak < QUIET
-                && !v.graph.active(store)?
+                && !v.graph.active()?
             {
                 v.note = None;
             }
@@ -1122,6 +1361,7 @@ impl PolyNode {
 
         out.fill(0.0);
         let out_ch = out.len() / BLOCK;
+        let outer = (outer, &captures[..]);
         for (vi, v) in voices.iter_mut().enumerate() {
             let taken = std::mem::take(&mut v.taken);
             if v.note.is_none() && !taken {
@@ -1131,29 +1371,28 @@ impl PolyNode {
             let mut at = 0;
             let mut current = v.note;
             let mut peak = 0.0f32;
-            let mut segment =
-                |v: &mut VoiceSlot, store: &mut Store<StoreLimits>, seg: Seg, note: VoiceNote, peak: &mut f32| -> Result<()> {
-                    v.graph.process(store, b, seg, Some(outer), Some(note), &[])?;
-                    let vo = &v.graph.bufs[voice_out.node][voice_out.port];
-                    let v_ch = vo.len() / BLOCK;
-                    for c in 0..out_ch {
-                        let sc = if c < v_ch { c } else { 0 };
-                        for (o, x) in out[seg.range(c)].iter_mut().zip(&vo[seg.range(sc)]) {
-                            *o += x;
-                            *peak = peak.max(x.abs());
-                        }
+            let mut segment = |v: &mut VoiceSlot, seg: Seg, note: VoiceNote, peak: &mut f32| -> Result<()> {
+                v.graph.process(b, seg, Some(outer), Some(note), &[])?;
+                let vo = &v.graph.bufs[voice_out.node][voice_out.port];
+                let v_ch = vo.len() / BLOCK;
+                for c in 0..out_ch {
+                    let sc = if c < v_ch { c } else { 0 };
+                    for (o, x) in out[seg.range(c)].iter_mut().zip(&vo[seg.range(sc)]) {
+                        *o += x;
+                        *peak = peak.max(x.abs());
                     }
-                    Ok(())
-                };
+                }
+                Ok(())
+            };
             for p in plan.iter().filter(|p| p.voice as usize == vi) {
                 let off = p.frame as usize;
                 if let Some(c) = current
                     && off > at
                 {
-                    segment(v, store, Seg { off: at, n: off - at }, c, &mut peak)?;
+                    segment(v, Seg { off: at, n: off - at }, c, &mut peak)?;
                 }
                 if v.dirty {
-                    v.graph.reset(store)?;
+                    v.graph.reset()?;
                 }
                 v.dirty = true;
                 v.note = Some(p.note);
@@ -1162,11 +1401,11 @@ impl PolyNode {
                 at = off;
             }
             if let Some(c) = current {
-                segment(v, store, Seg { off: at, n: BLOCK - at }, c, &mut peak)?;
+                segment(v, Seg { off: at, n: BLOCK - at }, c, &mut peak)?;
             }
             if let Some(n) = v.note {
                 if n.off < end {
-                    if peak < QUIET && !v.graph.active(store)? {
+                    if peak < QUIET && !v.graph.active()? {
                         v.note = None;
                     }
                 } else {
@@ -1233,21 +1472,19 @@ impl Pending {
 /// Unique per renderer: what `SwapLane` checks it reaches the renderer it was made for.
 static GENERATION: AtomicU64 = AtomicU64::new(1);
 
-/// Renders a checked song.
+/// Renders a checked song: one plan, the lanes its nodes read, and the song position.
 pub struct Renderer {
-    store: Store<StoreLimits>,
-    graph: Graph,
-    /// Its editable constants and their slots (RENDER-22).
-    cells: Cells,
-    lanes: Vec<LaneSlot>,
-    slots: Vec<LaneRef>,
-    out: PortRef,
+    plan: Plan,
+    lanes: Lanes,
     tempo: TempoMap,
     arrangement: Arc<Arrangement>,
     sample_rate: f64,
     transport: Transport,
     /// The engine clock of the next block.
     clock: u64,
+    /// The id the next note gets, across every lane: unique for the engine's life, as the
+    /// activation that replaces this renderer takes it over (RENDER-26a).
+    next_note: u32,
     /// The last block, and its transport.
     frames: [[f32; 2]; BLOCK],
     runs: Runs,
@@ -1255,8 +1492,6 @@ pub struct Renderer {
     delivered: u64,
     strict: bool,
     non_finite: u64,
-    generation: u64,
-    plugins: bool,
     /// A kernel crashed live: it renders silence from then on.
     broken: bool,
     trace: Option<Trace>,
@@ -1266,85 +1501,209 @@ pub struct Renderer {
 impl Renderer {
     /// A renderer for a checked graph and the data it plays: a revision's [`DataSet`], which
     /// also says where its assets and verified plugin states are ([`DataSet::empty`] for none).
-    /// It plays from sample 0, offline.
+    /// Every instance is new. It plays from sample 0, offline.
     pub fn new(flat: &Flat, data: &DataSet, packages: &PackageSet, sample_rate: u32) -> Result<Renderer> {
-        Renderer::build_with(flat, data, packages, sample_rate, &mut audio::Cache::default())
+        Renderer::prepare(flat, data, packages, sample_rate, &mut audio::Cache::default(), &m2_plugins::Owner::discard(), Basis::Fresh)
     }
 
-    /// [`Renderer::new`], sharing decoded assets and clip renders with earlier builds through
-    /// `cache` (a live session's). Its plugin instances are all new, reporting to no one.
-    pub fn build_with(flat: &Flat, data: &DataSet, packages: &PackageSet, sample_rate: u32, cache: &mut audio::Cache) -> Result<Renderer> {
-        Renderer::build_live(flat, data, packages, sample_rate, cache, &m2_plugins::Owner::discard(), &mut Fresh)
-    }
-
-    /// [`Renderer::build_with`] for the live engine: top-level plugin instances come from `source`
-    /// when one matches (HOST-5, a [`Carry`] of the renderer it will replace), and the rest are
-    /// created through the host, reporting to `owner`. Instances are created and activated on the
-    /// plugin main thread, while the old renderer plays (RENDER-25).
-    pub fn build_live(
+    /// A renderer for the live engine, sharing decoded assets and clip renders with earlier ones
+    /// through `cache` (a live session's), its new plugin instances reporting to `owner`. Against
+    /// [`Basis::Keep`] it is a plan the engine activates in place of the one that plays: every
+    /// instance that continues and has the same shape moves into it at the block line, and the
+    /// rest are made here, plugins created and activated on the plugin main thread while the old
+    /// plan plays (RENDER-25). A prepare that fails drops what it made, here; the one call it makes
+    /// into what plays comes last: a kept plugin whose committed state changed gets it loaded, on
+    /// the plugin main thread (RENDER-26b). [`Basis::Lend`] is an offline render sharing the live
+    /// engine's plugin instances (RENDER-1).
+    pub fn prepare(
         flat: &Flat,
         data: &DataSet,
         packages: &PackageSet,
         sample_rate: u32,
         cache: &mut audio::Cache,
         owner: &m2_plugins::Owner,
-        source: &mut dyn InstanceSource,
+        basis: Basis,
     ) -> Result<Renderer> {
-        let limits =
-            StoreLimitsBuilder::new().memory_size(KERNEL_MEMORY).instances(1_000_000).memories(1_000_000).tables(1_000_000).build();
-        let mut store = Store::new(&packages.engine, limits);
-        store.limiter(|l| l);
         let tempo = data.tempo().clone();
         let rate = sample_rate as f64;
-        let slots = lane_slots(flat);
-        let mut lanes = Vec::with_capacity(slots.len());
-        for s in &slots {
-            lanes.push(match s.kind {
-                Kind::Events(_) => LaneSlot::Notes(NoteScheduler::new(Arc::new(notes_data(data, &s.module, &s.lane, rate)))),
-                Kind::Control(_) => LaneSlot::Control(Arc::new(data.control(&s.module, &s.lane))),
-                Kind::Audio(ch) => {
-                    LaneSlot::Audio(audio::AudioLane::build(data.audio(&s.module, &s.lane), data, cache, &tempo, rate, ch as usize))
+        let keep = match &basis {
+            Basis::Keep(k) if k.info.rate != sample_rate => bail!("a plan is prepared against one at {} Hz, not {sample_rate}", k.info.rate),
+            Basis::Keep(k) => Some(k),
+            Basis::Fresh | Basis::Lend(_) => None,
+        };
+        let lent = if let Basis::Lend(l) = &basis { Some(*l) } else { None };
+        let mut lanes = LanePlan::new(flat, data, cache, &tempo, rate, keep);
+        let used = used(flat);
+        let shapes: Vec<Option<Shape>> = flat.nodes.iter().zip(&used).map(|(n, &u)| if u { Shape::of(n, packages) } else { None }).collect();
+        let blobs: Vec<Option<m2_song::Sha>> = flat.nodes.iter().map(|n| plan::blob(n, data)).collect();
+        let w = match keep {
+            Some(k) => keep::wire(k, flat, &shapes, &blobs, packages, &mut lanes),
+            None => Wiring::fresh(flat),
+        };
+        let mut b = Builder { packages, data, sample_rate: rate, slots: &lanes.lanes.refs, caps: &lanes.caps, owner };
+        let boxed = |i: usize| match (w.kept[i], lent.and_then(|l| l.get(&i))) {
+            (true, _) => Make::Moved,
+            (false, Some(inst)) => Make::Lent(inst.clone()),
+            (false, None) => Make::New(shapes[i].as_ref().map_or(0, Shape::hash64)),
+        };
+        let mut graph = b.graph(&flat.nodes, &flat.order, false, &boxed, &w.room)?;
+        graph.prewarm()?;
+        // Ghosts, then fade nodes, after the new graph's nodes (RENDER-25a).
+        let n = flat.nodes.len();
+        for (g, (_, node)) in w.ghosts.iter().enumerate() {
+            let e = b.node(&flat.nodes, node, false, Make::Moved, true, w.room.get(&(n + g)).copied(), 0)?;
+            graph.push(e, &node.outputs);
+        }
+        let len = (0.005 * rate).round().max(1.0) as u32;
+        for f in &w.fades {
+            let wait = if f.waits { len } else { 0 };
+            graph.push(Exec::Fade { old: f.old.clone(), new: f.new.clone(), wait }, &[Kind::Audio(f.channels)]);
+        }
+        for &(i, edge, f) in &w.rewire {
+            graph.rewire(i, edge, f);
+        }
+        let ghosts = n..n + w.ghosts.len();
+        let order_after: Vec<usize> = w.order.iter().copied().filter(|i| !ghosts.contains(i)).collect();
+        graph.order = w.order.clone();
+        let mut cells = Cells::new(&cells::cells(flat));
+        // What moves in, and what it keeps and makes.
+        let mut stats = Stats { ghosts: w.ghosts.len(), fades: w.fades.len(), ..Stats::default() };
+        for (i, s) in shapes.iter().enumerate() {
+            match (s, w.kept[i]) {
+                (Some(s), true) => stats.kept.add(s),
+                (Some(s), false) => {
+                    stats.fresh.add(s);
+                    stats.fresh_nodes.push(i);
                 }
-            });
+                _ => {}
+            }
         }
-        let mut graph = Builder {
-            store: &mut store,
-            packages,
-            data,
-            sample_rate: rate,
-            slots: &slots,
-            lanes: &lanes,
-            source,
-            owner,
-            ordinals: HashMap::new(),
+        let plugins: Vec<PluginAt> = (0..n)
+            .filter_map(|i| {
+                let Exec::Plugin(p) = &graph.exec[i] else { return None };
+                let (handle, inst) = match (&p.inst, keep, w.same[i]) {
+                    (Some(inst), ..) => (inst.handle(), Arc::downgrade(inst)),
+                    (None, Some(k), Some(j)) => k.info.plugin(j).map(|at| (at.handle, at.inst.clone()))?,
+                    _ => return None,
+                };
+                Some(PluginAt { node: i, handle, inst, blob: blobs[i] })
+            })
+            .collect();
+        // State loads into kept instances, last, once nothing else can fail (RENDER-26b): each
+        // kept plugin whose committed blob isn't the one it holds, compared node by node. The host
+        // skips a blob the instance holds already (HOME-6); after a load its node sends the
+        // parameters code owns again (HOME-4).
+        if let Some(k) = keep {
+            let mut loads = vec![];
+            for p in &plugins {
+                let Some(j) = w.same[p.node].filter(|_| w.kept[p.node]) else { continue };
+                if k.info.plugin(j).is_some_and(|o| o.blob != p.blob)
+                    && let Some(blob) = state_blob(data, &flat.nodes[p.node])?
+                {
+                    loads.push((p, blob));
+                }
+            }
+            let host = packages.host();
+            for (p, blob) in loads {
+                let name = &flat.nodes[p.node].name;
+                if host.load_state(p.handle, blob).with_context(|| format!("{name}: loading its state"))? {
+                    stats.loads += 1;
+                    if let Some(inst) = p.inst.upgrade() {
+                        inst.mark_reloaded();
+                    }
+                    // Compensation isn't built, and the check refuses latency at default state
+                    // (RENDER-21): a patch that adds some plays uncompensated, and says so.
+                    if let Ok(Ok(frames)) = host.latency(p.handle).recv()
+                        && frames > 0
+                    {
+                        stats.latent.push((name.clone(), frames));
+                    }
+                }
+            }
         }
-        .graph(&flat.nodes, &flat.order, false)?;
-        graph.prewarm(&mut store)?;
-        let plugins = graph.exec.iter().any(|e| matches!(e, Exec::Plugin(_)));
-        Ok(Renderer {
-            store,
+        let swaps = plan::audio_swaps(&lanes.moves);
+        let (lane_info, ghost_lanes) = (lanes.info(), plan::ghost_lanes(&lanes.lanes));
+        let windowed = !w.ghosts.is_empty() || !w.fades.is_empty() || swaps > 0;
+        let entry = keep.map(|k| {
+            // Continued cells, carried at entry (RENDER-22a).
+            let old: HashMap<usize, CellId> = cells::cells(k.old)
+                .iter()
+                .enumerate()
+                .filter_map(|(c, info)| if let CellAt::Top(j) = info.at { Some((j, CellId(c as u32))) } else { None })
+                .collect();
+            let infos = cells::cells(flat);
+            let mut pairs = vec![];
+            let mut voice_cells = vec![];
+            for (c, info) in infos.iter().enumerate() {
+                match info.at {
+                    CellAt::Top(i) => pairs.extend(w.same[i].and_then(|j| old.get(&j)).map(|&o| (CellId(c as u32), o))),
+                    CellAt::Voice { poly, .. } if w.kept[poly] => voice_cells.push(CellId(c as u32)),
+                    CellAt::Voice { .. } => {}
+                }
+            }
+            cells.reserve_carry(pairs.len() + voice_cells.len());
+            Box::new(Entry { after: k.info.id, moves: w.moves, lanes: lanes.moves, cells: pairs, voice_cells, release: w.release })
+        });
+        let id = GENERATION.fetch_add(1, Ordering::Relaxed);
+        let info = Arc::new(PlanInfo {
+            id,
+            rate: sample_rate,
+            shapes,
+            plugins,
+            lanes: lane_info,
+            cell_slots: cells.slots().clone(),
+            cell_map: cells.map().clone(),
+        });
+        let plan = Plan {
+            id,
+            plugins: graph.exec.iter().any(|e| matches!(e, Exec::Plugin(_))),
             graph,
-            cells: Cells::new(&cells::cells(flat)),
-            lanes,
-            slots,
-            out: flat.out,
+            nodes: n,
+            cells,
+            out: w.out,
+            entry,
+            leftovers: windowed.then(|| Plan::leftovers(ghosts.len(), ghost_lanes, swaps)),
+            ghosts,
+            order_after,
+            fade: if windowed { len } else { 0 },
+            wait: if w.fades.iter().any(|f| f.waits) { len } else { 0 },
+            faded_from: None,
+            stats,
+            info,
+        };
+        Ok(Renderer {
+            plan,
+            lanes: lanes.lanes,
             tempo,
             arrangement: data.arrangement.clone(),
             sample_rate: rate,
             transport: Transport::new(0, true),
             clock: 0,
+            next_note: 1,
             frames: [[0.0; 2]; BLOCK],
             runs: Runs::one(Run { off: 0, n: BLOCK as u32, at: 0, moving: true, jump: Jump::None }),
             pending: Pending::EMPTY,
             delivered: 0,
             strict: true,
             non_finite: 0,
-            generation: GENERATION.fetch_add(1, Ordering::Relaxed),
-            plugins,
             broken: false,
             trace: None,
             dropped: 0,
         })
+    }
+
+    /// An offline render from 0, as [`Renderer::new`] makes one, playing the live engine's plugin
+    /// instances that `lent` names by node ([`PlanInfo::lend`], RENDER-1): each is reset at its
+    /// first call. The live engine must be held while it renders.
+    pub fn lending(
+        flat: &Flat,
+        data: &DataSet,
+        packages: &PackageSet,
+        sample_rate: u32,
+        lent: &HashMap<usize, Arc<PluginInstance>>,
+    ) -> Result<Renderer> {
+        let owner = m2_plugins::Owner::discard();
+        Renderer::prepare(flat, data, packages, sample_rate, &mut audio::Cache::default(), &owner, Basis::Lend(lent))
     }
 
     /// A range render (RENDER-4): fresh from init at engine time 0, with the transport starting
@@ -1374,6 +1733,7 @@ impl Renderer {
             beats64: [0.0; BLOCK],
             sample_rate: self.sample_rate,
             strict: self.strict,
+            window: self.plan.faded_from.map(|f| (f, self.plan.fade)),
         };
         for r in runs.as_slice() {
             for f in r.off..r.off + r.n {
@@ -1384,7 +1744,7 @@ impl Renderer {
                 b.beats64[f as usize] = beat;
             }
         }
-        if self.plugins {
+        if self.plan.plugins {
             for (i, r) in runs.as_slice().iter().enumerate() {
                 let beat = b.beats64[r.off as usize];
                 let meter = self.arrangement.meter_at(beat);
@@ -1405,44 +1765,36 @@ impl Renderer {
     }
 
     /// Render the next block at engine clock `clock`, advancing the transport. The live
-    /// engine's step, and the offline one's. `release_all`: this renderer is being replaced,
-    /// so every note sounding into it ends now (RENDER-26a). Never allocates while it
-    /// succeeds (RENDER-28).
-    pub fn render_block(&mut self, clock: u64, release_all: bool) -> Result<&[[f32; 2]; BLOCK]> {
-        self.render_block_lent(clock, release_all, None)
-    }
-
-    /// [`Self::render_block`] for a renderer fading out after an activation that carried some of
-    /// its plugin instances into `current`, which rendered this block first: each lent node takes
-    /// the output its instance made there, so an instance is processed once per block (§5.3).
-    pub fn render_block_lent(&mut self, clock: u64, release_all: bool, current: Option<&Renderer>) -> Result<&[[f32; 2]; BLOCK]> {
+    /// engine's step, and the offline one's. Never allocates while it succeeds (RENDER-28).
+    pub fn render_block(&mut self, clock: u64) -> Result<&[[f32; 2]; BLOCK]> {
         self.runs = self.transport.advance();
         self.clock = clock + BLOCK as u64;
         // Cell values written since the last block line (RENDER-22, RENDER-28); offline renders
         // never get any.
-        self.cells.apply(&mut self.graph);
+        self.plan.cells.apply(&mut self.plan.graph);
         if self.broken {
             self.frames = [[0.0; 2]; BLOCK];
             return Ok(&self.frames);
         }
+        // Lanes play before the graph, once per block: schedulers fill their events, in slot
+        // order, and audio players their block, which every node on the lane copies.
         let runs = self.runs;
-        for l in &mut self.lanes {
-            if let LaneSlot::Notes(s) = l {
-                s.run(&runs, release_all);
+        for l in &mut self.lanes.slots {
+            match l {
+                LaneSlot::Notes(Some(s)) => s.run(&runs, &mut self.next_note),
+                LaneSlot::Audio(Some(p)) => p.fill(&runs),
+                _ => {}
             }
         }
         if self.trace.is_some() {
             self.record(clock);
         }
         let b = self.block(clock);
-        if let Some(c) = current {
-            plugins::lend(&mut self.graph, &c.graph);
-        }
-        if let Err(e) = self.graph.process(&mut self.store, &b, Seg::WHOLE, None, None, &self.lanes) {
+        if let Err(e) = self.plan.graph.process(&b, Seg::WHOLE, None, None, &self.lanes.slots) {
             self.broken = !self.strict;
             return Err(e);
         }
-        let o = &self.graph.bufs[self.out.node][self.out.port];
+        let o = &self.plan.graph.bufs[self.plan.out.node][self.plan.out.port];
         let stereo = o.len() >= 2 * BLOCK;
         for f in 0..BLOCK {
             let mut frame = [o[f], if stereo { o[BLOCK + f] } else { o[f] }];
@@ -1468,8 +1820,8 @@ impl Renderer {
             t.push(TraceEntry { engine: clock + r.off as u64, transport: r.at, slot: u32::MAX, id: 0, kind: TraceKind::Jump(r.jump) });
         }
         let mut dropped = 0;
-        for (slot, l) in self.lanes.iter().enumerate() {
-            let LaneSlot::Notes(s) = l else { continue };
+        for (slot, l) in self.lanes.slots.iter().enumerate() {
+            let LaneSlot::Notes(Some(s)) = l else { continue };
             dropped += s.events().dropped_ons();
             for e in s.events().as_slice() {
                 let (id, kind) = match *e {
@@ -1491,7 +1843,7 @@ impl Renderer {
     pub fn process(&mut self, out: &mut [[f32; 2]]) -> Result<()> {
         for frame in out.iter_mut() {
             if self.pending.is_empty() {
-                self.render_block(self.clock, false)?;
+                self.render_block(self.clock)?;
                 self.pending.load(&self.frames, &self.runs, self.transport.pos());
             }
             *frame = self.pending.pop().0;
@@ -1509,10 +1861,12 @@ impl Renderer {
 
     /// Back to the state right after building, transport aside.
     fn reset(&mut self) -> Result<()> {
-        self.graph.reset(&mut self.store)?;
-        for l in &mut self.lanes {
-            if let LaneSlot::Notes(s) = l {
-                s.reset();
+        self.plan.graph.reset()?;
+        for l in &mut self.lanes.slots {
+            match l {
+                LaneSlot::Notes(Some(s)) => s.reset(),
+                LaneSlot::Audio(Some(p)) => p.reset(),
+                _ => {}
             }
         }
         Ok(())
@@ -1566,36 +1920,30 @@ impl Renderer {
         &self.tempo
     }
 
-    /// Take over from a renderer whose transport is `from`, in its tempo map and rate: the same
-    /// beat, play state and loop (RENDER-25a, no jump back), and a first block that seeks
-    /// without chasing.
-    pub fn enter_from(&mut self, from: &Transport, tempo: &TempoMap, rate: f64) {
-        let mut t = *from;
-        t.retime(tempo, rate, &self.tempo, self.sample_rate);
+    /// Take over from `old`, which may play in its own tempo map and at its own rate: the same
+    /// beat, play state and loop (RENDER-25a, no jump back), a first block that seeks without
+    /// chasing, and the next note id, so no id repeats into an instance that goes on (RENDER-26a).
+    pub fn enter_from(&mut self, old: &Renderer) {
+        let mut t = old.transport;
+        t.retime(&old.tempo, old.sample_rate, &self.tempo, self.sample_rate);
         t.enter();
         self.transport = t;
+        self.next_note = old.next_note;
     }
 
     /// The lanes it plays, by slot.
     pub fn lane_slots(&self) -> &[LaneRef] {
-        &self.slots
-    }
-
-    /// The room a notes lane's scheduler has, by slot.
-    pub fn caps(&self, slot: usize) -> Option<Caps> {
-        match self.lanes.get(slot)? {
-            LaneSlot::Notes(s) => Some(s.caps()),
-            _ => None,
-        }
+        &self.lanes.refs[..self.lanes.live]
     }
 
     /// Replace one lane's data at the next block line, touching no kernel (RENDER-26). Returns
     /// the data replaced, to retire, or `data` itself when it doesn't fit the slot (another
-    /// kind, or more notes than its scheduler holds). Never allocates.
+    /// kind, more notes than its scheduler holds, or audio renders, which an activation brings).
+    /// Never allocates.
     pub fn swap_lane(&mut self, slot: usize, data: LaneSwap) -> Result<LaneSwap, LaneSwap> {
-        let swapped = match (self.lanes.get_mut(slot), data) {
-            (Some(LaneSlot::Notes(s)), LaneSwap::Notes(d)) => s.swap(d).map(LaneSwap::Notes).map_err(LaneSwap::Notes),
-            (Some(LaneSlot::Control(c)), LaneSwap::Control(d)) => Ok(LaneSwap::Control(std::mem::replace(c, d))),
+        let swapped = match (self.lanes.slots[..self.lanes.live].get_mut(slot), data) {
+            (Some(LaneSlot::Notes(Some(s))), LaneSwap::Notes(d)) => s.swap(d).map(LaneSwap::Notes).map_err(LaneSwap::Notes),
+            (Some(LaneSlot::Control(Some(c))), LaneSwap::Control(d)) => Ok(LaneSwap::Control(std::mem::replace(c, d))),
             (_, d) => Err(d),
         };
         if swapped.is_ok()
@@ -1609,75 +1957,81 @@ impl Renderer {
     /// Its cells' slots: where values for its cells go while it plays, from any thread
     /// (RENDER-28). They live as long as the renderer, and longer while anyone holds them.
     pub fn cell_slots(&self) -> Arc<CellSlots> {
-        self.cells.slots().clone()
+        self.plan.cells.slots().clone()
     }
 
     /// Which of its cells hold each value written in the code.
     pub fn cell_map(&self) -> Arc<CellMap> {
-        self.cells.map().clone()
+        self.plan.cells.map().clone()
     }
 
     /// What cell `id` holds now.
     pub fn cell_value(&self, id: CellId) -> Option<f32> {
-        self.cells.value(id)
+        self.plan.cells.value(id)
     }
 
     /// Set `cells` to `value` at once, a step, off the audio thread: a renderer not yet sent, so
     /// that it plays a gesture's value from its first block. `value` is in the constant's own units
     /// (the source number times its scale).
     pub fn set_cells(&mut self, cells: &[CellId], value: f64) {
-        self.cells.set_now(&mut self.graph, cells, value as f32);
+        self.plan.cells.set_now(&mut self.plan.graph, cells, value as f32);
     }
 
     /// Every cell write up to `seq` is in this renderer already (it was built with the values, or
     /// they were set before it was sent): what it reports as heard starts there.
     pub fn hear_from(&mut self, seq: u64) {
-        self.cells.hear_from(seq);
+        self.plan.cells.hear_from(seq);
     }
 
     /// `(from, to)` when its blocks since the last call applied every cell write up to `to`: the
     /// engine's stamps of when writes were heard. Never allocates.
     pub fn take_heard(&mut self) -> Option<(u64, u64)> {
-        self.cells.take_heard()
+        self.plan.cells.take_heard()
     }
 
     /// Voices currently sounding, across every `poly`.
     pub fn active_voices(&self) -> usize {
-        self.graph.exec.iter().map(|e| if let Exec::Poly(p) = e { p.voices.iter().filter(|v| v.note.is_some()).count() } else { 0 }).sum()
+        self.voices().filter(|(_, v)| v.note.is_some()).count()
     }
 
     /// Notes still held: voices whose gate is open, and notes sounding into plugins. After a
     /// stop or a release this is 0, or a note is stuck (RENDER-26a).
     pub fn held_notes(&self) -> usize {
         let clock = self.clock;
-        self.graph
-            .exec
-            .iter()
-            .map(|e| match e {
-                Exec::Poly(p) => p.voices.iter().filter(|v| v.note.is_some_and(|n| n.off >= clock)).count(),
-                // A lent node's notes went with its instance.
-                Exec::Plugin(p) if p.lent.is_none() => p.keys.len() + p.release.len(),
-                _ => 0,
-            })
-            .sum()
+        let voices = self.voices().filter(|(_, v)| v.note.is_some_and(|n| n.off >= clock)).count();
+        let plugins = self.top().iter().map(|e| match e {
+            Exec::Plugin(p) => p.keys.len() + p.release.len(),
+            _ => 0,
+        });
+        voices + plugins.sum::<usize>()
     }
 
     /// Notes the schedulers hold: turned on and not yet off.
     pub fn sounding_notes(&self) -> usize {
-        self.lanes.iter().map(|l| if let LaneSlot::Notes(s) = l { s.held() } else { 0 }).sum()
+        self.lanes.slots.iter().map(|l| if let LaneSlot::Notes(Some(s)) = l { s.held() } else { 0 }).sum()
     }
 
     /// Whether every voice with an open gate plays a note its scheduler holds: a gated voice
     /// nobody will turn off is a stuck note.
     pub fn gates_are_owned(&self) -> bool {
         let clock = self.clock;
-        self.graph.exec.iter().all(|e| match e {
-            Exec::Poly(p) => p.voices.iter().filter_map(|v| v.note.filter(|n| n.off >= clock)).all(|n| match &self.lanes[p.slot] {
-                LaneSlot::Notes(s) => s.is_sounding(n.id),
+        self.voices().filter_map(|(slot, v)| Some((slot, v.note.filter(|n| n.off >= clock)?))).all(|(slot, n)| {
+            match &self.lanes.slots[slot] {
+                LaneSlot::Notes(Some(s)) => s.is_sounding(n.id),
                 _ => false,
-            }),
-            _ => true,
+            }
         })
+    }
+
+    /// Its top-level nodes, without the ghosts and fades of an activation's window.
+    fn top(&self) -> &[Exec] {
+        &self.plan.graph.exec[..self.plan.nodes]
+    }
+
+    /// Every top-level `poly`'s voices, with the lane slot each plays. Never allocates.
+    fn voices(&self) -> impl Iterator<Item = (usize, &VoiceSlot)> {
+        let polys = self.top().iter().filter_map(|e| if let Exec::Poly(p) = e { Some(p) } else { None });
+        polys.flat_map(|p| p.pool.iter().flat_map(|pool| &pool.voices).map(move |v| (p.slot, v)))
     }
 
     /// Panic (RENDER-10): every note off, every instance reset. The next block seeks without
@@ -1688,19 +2042,21 @@ impl Renderer {
         Ok(())
     }
 
-    /// Whether the engine may stop processing this renderer while stopped (RENDER-6a): no voice
-    /// sounds, no kernel at the top reports `active`, and every plugin at the top said it sleeps,
-    /// or that it may stop once quiet and its output is (a plugin's tail is its own to report).
+    /// Whether the engine may stop processing this renderer while stopped (RENDER-6a): no fade
+    /// window runs, no voice sounds, no kernel at the top reports `active`, and every plugin at the
+    /// top said it sleeps, or that it may stop once quiet and its output is (a plugin's tail is its
+    /// own to report).
     pub fn can_idle(&mut self) -> bool {
-        self.active_voices() == 0 && self.plugins_sleep() && !self.graph.active(&mut self.store).unwrap_or(true)
+        !self.in_window() && self.active_voices() == 0 && self.plugins_sleep() && !self.plan.graph.active().unwrap_or(true)
     }
 
     fn plugins_sleep(&self) -> bool {
         use m2_plugins::Status as S;
-        self.graph.exec.iter().enumerate().all(|(i, e)| match e {
+        let graph = &self.plan.graph;
+        graph.exec.iter().enumerate().all(|(i, e)| match e {
             Exec::Plugin(p) => match p.status {
                 S::Sleep => true,
-                S::ContinueIfNotQuiet => self.graph.bufs[i].first().is_none_or(|b| b.iter().all(|x| x.abs() < QUIET)),
+                S::ContinueIfNotQuiet => graph.bufs[i].first().is_none_or(|b| b.iter().all(|x| x.abs() < QUIET)),
                 _ => false,
             },
             _ => true,
@@ -1711,45 +2067,34 @@ impl Renderer {
     /// processed (CLAP's `request_process`), either of which wakes it within one block, as a
     /// message does. Atomic loads and swaps only.
     pub fn woken(&self) -> bool {
-        self.cells.slots().pending()
-            || self.graph.exec.iter().any(|e| match e {
-                Exec::Plugin(p) if p.status == m2_plugins::Status::Sleep => p.inst.host().take_process_request(p.inst.handle()),
+        self.plan.cells.slots().pending()
+            || self.plan.graph.exec.iter().any(|e| match e {
+                Exec::Plugin(p) if p.status == m2_plugins::Status::Sleep => {
+                    p.inst.as_ref().is_some_and(|i| i.host().take_process_request(i.handle()))
+                }
                 _ => false,
             })
     }
 
     pub fn hosts_plugins(&self) -> bool {
-        self.plugins
-    }
-
-    /// Take over the plugin instances this renderer shares with `old`, which it replaces now: the
-    /// notes sounding into them go on, and `old` lends them for the crossfade (`plugins`,
-    /// RENDER-25). The engine calls it at activation. Never allocates.
-    pub fn carry_from(&mut self, old: &mut Renderer) {
-        plugins::carry_from(self, old);
+        self.plan.plugins
     }
 
     /// The instances of its top-level plugin nodes, in node order (gates, tests; off the audio
     /// thread).
     pub fn plugin_handles(&self) -> Vec<m2_plugins::Handle> {
-        self.graph.exec.iter().filter_map(|e| if let Exec::Plugin(p) = e { Some(p.inst.handle()) } else { None }).collect()
+        self.top().iter().filter_map(|e| if let Exec::Plugin(p) = e { Some(p.inst.as_ref()?.handle()) } else { None }).collect()
     }
 
     /// Its top-level plugin nodes, in node order: the notes each holds, what it was sent and what
     /// it said (gates, tests; off the audio thread).
     pub fn plugins(&self) -> Vec<PluginView> {
-        self.graph
-            .exec
+        self.top()
             .iter()
             .filter_map(|e| match e {
-                Exec::Plugin(p) => Some(PluginView {
-                    handle: p.inst.handle(),
-                    notes: p.keys.clone(),
-                    offs: p.offs,
-                    last_off: p.last_off,
-                    lent: p.lent.is_some(),
-                    status: p.status,
-                }),
+                Exec::Plugin(p) => {
+                    Some(PluginView { handle: p.inst.as_ref()?.handle(), notes: p.keys.clone(), offs: p.offs, last_off: p.last_off, status: p.status })
+                }
                 _ => None,
             })
             .collect()
@@ -1758,7 +2103,7 @@ impl Renderer {
     /// Events plugins output in their last calls, and those that didn't fit (HOST-4: collected,
     /// not yet consumed).
     pub fn plugin_out_events(&self) -> (usize, u32) {
-        self.graph.exec.iter().fold((0, 0), |(n, d), e| match e {
+        self.plan.graph.exec.iter().fold((0, 0), |(n, d), e| match e {
             Exec::Plugin(p) => (n + p.out.len(), d + p.out.dropped()),
             _ => (n, d),
         })
@@ -1767,12 +2112,12 @@ impl Renderer {
     /// The memory every kernel instance holds: unchanged by playing, or a reset grew it on the
     /// audio thread. Off the audio thread only.
     pub fn kernel_memory_bytes(&self) -> usize {
-        self.graph.kernel_memory(&self.store)
+        self.plan.graph.kernel_memory()
     }
 
     /// Unique to this renderer.
     pub fn generation(&self) -> u64 {
-        self.generation
+        self.plan.id
     }
 
     /// Keep the last `cap` scheduler events, jumps and swaps.
@@ -1787,18 +2132,19 @@ impl Renderer {
 
     /// Ons dropped by full event buffers (never offline, nor live in step 3a).
     pub fn dropped_ons(&self) -> u32 {
-        self.lanes.iter().map(|l| if let LaneSlot::Notes(s) = l { s.events().dropped_ons() } else { 0 }).sum()
+        self.lanes.slots.iter().map(|l| if let LaneSlot::Notes(Some(s)) = l { s.events().dropped_ons() } else { 0 }).sum()
     }
 
     /// Audio lane fades let go before they ended for want of room: never at a project rate.
     pub fn dropped_taps(&self) -> u32 {
-        self.graph.exec.iter().map(|e| if let Exec::Audio(a) = e { a.dropped_taps() } else { 0 }).sum()
+        self.lanes.slots.iter().map(|l| if let LaneSlot::Audio(Some(p)) = l { p.dropped_taps() } else { 0 }).sum()
     }
 
     /// Times every kernel was reset since it was built: a panic, and offline each [`Self::seek`].
-    /// A jump, a swap or an activation never moves it (RENDER-10).
+    /// A jump, a swap or an activation never moves it (RENDER-10); an activation resets only the
+    /// boxes that went non-finite or trapped, counted in its [`Stats`].
     pub fn resets(&self) -> u64 {
-        self.graph.resets
+        self.plan.graph.resets
     }
 
     /// Samples silenced in live mode because they were NaN or infinite.

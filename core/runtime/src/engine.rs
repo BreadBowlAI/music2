@@ -2,24 +2,32 @@
 //! playing one renderer, which owns the transport.
 //!
 //! It never replays. It keeps processing while stopped, so tails decay (RENDER-6a), and may
-//! idle once nothing can sound. A new renderer is activated at the engine's own position: it
-//! takes over the transport, the old one ends its notes and both play for 5 ms while the output
-//! crossfades (RENDER-25a); the old one is then retired. Lane data is swapped in place
-//! (RENDER-26). Transport commands are beats, applied to the playing renderers at the block
-//! line (RENDER-9).
+//! idle once nothing can sound. A new plan is activated at the engine's own position, at a block
+//! line: it takes over the transport, and the instances it was prepared to keep move into it
+//! (`Renderer::take_over`); its changed edges crossfade over 5 ms while what it replaced plays out
+//! as ghosts (RENDER-25a). The old renderer leaves at once, with every instance nothing moved.
+//! Lane data is swapped in place (RENDER-26). Transport commands are beats, applied to the playing
+//! renderer at the block line (RENDER-9).
 //!
 //! Messages come from an inbox and leave through a retire callback, both supplied by the
 //! caller (the player's channels). The audio thread never allocates, locks, waits or drops
 //! anything that owns memory here (RENDER-28): what can't be retired yet waits in a fixed stash.
 //!
 //! Order: transport commands and panic apply as soon as they are read. Structural messages
-//! (activate, swap) apply in strict order: one that can't apply yet waits at the head, and the
-//! one after it waits in the inbox; only consecutive activations coalesce.
+//! (activate, swap, hold) apply in strict order: one that can't apply yet waits at the head, and
+//! the one after it waits in the inbox. Activations never coalesce: each is prepared against the
+//! plan before it (RENDER-28), and one that doesn't fit what plays is refused whole.
+//!
+//! A hold, for an export that borrows the live plugin instances (RENDER-1), is a tape pause and
+//! RENDER-6a's one exception: the output fades out over 5 ms, then the engine processes nothing,
+//! its clock stands still, and it says so ([`Status::held`]); a resume fades back in where it held.
+//! While held, a swap applies, transport commands apply to the frozen transport, and an activation
+//! and a panic wait for the resume.
 //!
 //! Cell values are never messages (RENDER-28): each renderer reads its own cells' slots as it
 //! renders a block, after the block line's messages, and the engine stamps when it heard them.
 
-use crate::{BLOCK, Cmd, LaneSwap, Pending, Renderer};
+use crate::{BLOCK, Cmd, LaneSwap, Leftovers, Pending, Renderer};
 
 /// A message and its sequence number, which [`Applied`] stamps report.
 pub struct Envelope {
@@ -28,7 +36,8 @@ pub struct Envelope {
 }
 
 pub enum Msg {
-    /// Play this renderer from the engine's position (built without seeking).
+    /// Play this renderer from the engine's position (built without seeking), taking over the
+    /// plan it was prepared against.
     Activate {
         renderer: Box<Renderer>,
     },
@@ -41,6 +50,8 @@ pub enum Msg {
     Transport(Cmd),
     /// Every note off and every instance reset (RENDER-10).
     Panic,
+    /// Pause (true) for an export that borrows the live plugin instances, or resume (RENDER-1).
+    Hold(bool),
 }
 
 impl Msg {
@@ -53,6 +64,8 @@ impl Msg {
 pub enum Retired {
     Renderer(Box<Renderer>),
     Lane(LaneSwap),
+    /// A plan's ghosts, ghost lanes and replaced renders, once its fade window is over.
+    Nodes(Box<Leftovers>),
 }
 
 /// When a message took effect: the engine clock of the block it applied at, the callback that
@@ -63,6 +76,8 @@ pub struct Applied {
     pub clock: u64,
     pub callback_ns: u64,
     pub frame: u32,
+    /// An activation that didn't fit what plays: retired unplayed, what played plays on.
+    pub refused: bool,
 }
 
 /// When cell writes were heard: a renderer's block applied every cell write after seq `from` up
@@ -82,6 +97,11 @@ pub struct CallbackStamp {
     pub ns: u64,
 }
 
+/// A hold's fades: 5 ms at `rate`.
+fn fade_len(rate: u32) -> u32 {
+    (0.005 * rate as f64).round().max(1.0) as u32
+}
+
 /// Retired objects that can wait on the audio thread for the retire channel.
 pub const STASH: usize = 16;
 /// Applied stamps kept.
@@ -90,15 +110,6 @@ pub const APPLIED: usize = 16;
 const IDLE_AFTER: u32 = 8;
 /// Silence: below -100 dBFS.
 const SILENT: f32 = 1e-5;
-
-struct Fade {
-    old: Box<Renderer>,
-    /// Frames of the fade done.
-    done: u32,
-    first: bool,
-    /// Done, but the stash was full: kept, silent, until it can be retired.
-    finished: bool,
-}
 
 /// What the engine reports after each callback.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -111,16 +122,17 @@ pub struct Status {
     pub generation: u64,
     pub loop_refused: bool,
     pub dropped_ons: u32,
+    /// Held for an export: nothing was processed since its fade out ended, and nothing is until a
+    /// resume (RENDER-1).
+    pub held: bool,
 }
 
 pub struct Engine {
     current: Option<Box<Renderer>>,
-    fading: Option<Fade>,
     head: Option<Envelope>,
     blocked: Option<Envelope>,
     clock: u64,
     rate: f64,
-    fade_len: u32,
     out: Pending,
     /// The transport position after the last frame handed out.
     pos: u64,
@@ -137,6 +149,16 @@ pub struct Engine {
     seeks: u64,
     crashes: u64,
     refused_swaps: u64,
+    refused_activations: u64,
+    /// Retired objects forgotten for want of room: unreachable, as room is checked first.
+    leaked: u64,
+    /// Held or holding for an export: the output fades to silence and stays there (RENDER-1).
+    hold: bool,
+    /// The output's level through a hold's fades, in frames of `fade`: `fade` is whole, 0 silent.
+    level: u32,
+    fade: u32,
+    /// A panic read while held or holding: applied at the resume, so no plugin is touched.
+    panic_held: bool,
 }
 
 impl Engine {
@@ -144,12 +166,10 @@ impl Engine {
     pub fn new(rate: u32) -> Engine {
         Engine {
             current: None,
-            fading: None,
             head: None,
             blocked: None,
             clock: 0,
             rate: rate as f64,
-            fade_len: (0.005 * rate as f64).round().max(1.0) as u32,
             out: Pending::EMPTY,
             pos: 0,
             stash: Default::default(),
@@ -164,6 +184,12 @@ impl Engine {
             seeks: 0,
             crashes: 0,
             refused_swaps: 0,
+            refused_activations: 0,
+            leaked: 0,
+            hold: false,
+            level: fade_len(rate),
+            fade: fade_len(rate),
+            panic_held: false,
         }
     }
 
@@ -193,16 +219,16 @@ impl Engine {
         self.current.as_deref_mut()
     }
 
-    /// The renderer fading out after an activation, while it plays.
-    pub fn fading(&self) -> Option<&Renderer> {
-        self.fading.as_ref().map(|f| &*f.old)
+    /// Whether the playing plan's activation window runs: its ghosts and fades.
+    pub fn in_window(&self) -> bool {
+        self.current.as_ref().is_some_and(|r| r.in_window())
     }
 
     /// Kernel resets of every renderer it played, counted where the graph resets
-    /// ([`Renderer::resets`]): a panic resets the playing renderer, and the fading one during a
-    /// fade. Nothing else may, live (RENDER-10).
+    /// ([`Renderer::resets`]): a panic resets the playing renderer. Nothing else may, live, but an
+    /// activation's reset of a box that went non-finite (RENDER-10, counted in its stats).
     pub fn resets(&self) -> u64 {
-        self.resets_gone + self.current.as_ref().map_or(0, |r| r.resets()) + self.fading.as_ref().map_or(0, |f| f.old.resets())
+        self.resets_gone + self.current.as_ref().map_or(0, |r| r.resets())
     }
 
     pub fn activations(&self) -> u64 {
@@ -224,8 +250,23 @@ impl Engine {
         self.refused_swaps
     }
 
+    /// Activations refused for not fitting what plays (RENDER-25).
+    pub fn refused_activations(&self) -> u64 {
+        self.refused_activations
+    }
+
+    /// Retired objects forgotten for want of room: 0, or memory leaked (RENDER-28).
+    pub fn leaked(&self) -> u64 {
+        self.leaked
+    }
+
     pub fn is_idle(&self) -> bool {
         self.idle
+    }
+
+    /// Held for an export: processing nothing until a resume (RENDER-1).
+    pub fn is_held(&self) -> bool {
+        self.hold && self.level == 0
     }
 
     /// The last [`APPLIED`] stamps, and how many messages were applied in all.
@@ -250,8 +291,9 @@ impl Engine {
                 generation: r.generation(),
                 loop_refused: r.transport().loop_refused(),
                 dropped_ons: r.dropped_ons(),
+                held: self.is_held(),
             },
-            None => Status { pos: self.pos, seconds, ..Status::default() },
+            None => Status { pos: self.pos, seconds, held: self.is_held(), ..Status::default() },
         }
     }
 
@@ -276,7 +318,11 @@ impl Engine {
     }
 
     fn stash_room(&self) -> bool {
-        self.stash.iter().any(Option::is_none)
+        self.stash_free() > 0
+    }
+
+    fn stash_free(&self) -> usize {
+        self.stash.iter().filter(|s| s.is_none()).count()
     }
 
     /// Retire `r` now, or keep it in the stash; give it back when both are full.
@@ -298,6 +344,7 @@ impl Engine {
         if let Err(r) = self.retire(r, retire) {
             // Unreachable when the room was checked; forgetting leaks rather than freeing here.
             debug_assert!(false, "retired with no room");
+            self.leaked += 1;
             std::mem::forget(r);
         }
     }
@@ -308,8 +355,9 @@ impl Engine {
         self.retire_now(Retired::Renderer(r), retire);
     }
 
-    fn stamp(&mut self, seq: u64, stamp: CallbackStamp, frame: u32) {
-        self.applied[(self.applied_n % APPLIED as u64) as usize] = Applied { seq, clock: self.clock, callback_ns: stamp.ns, frame };
+    fn stamp(&mut self, seq: u64, stamp: CallbackStamp, frame: u32, refused: bool) {
+        self.applied[(self.applied_n % APPLIED as u64) as usize] =
+            Applied { seq, clock: self.clock, callback_ns: stamp.ns, frame, refused };
         self.applied_n += 1;
     }
 
@@ -323,50 +371,63 @@ impl Engine {
                 if let Some(r) = &mut self.current {
                     r.transport_cmd(cmd);
                 }
-                if let Some(f) = &mut self.fading {
-                    f.old.transport_cmd(cmd);
-                }
             }
-            Msg::Panic => {
-                for r in self.current.iter_mut().map(|r| &mut **r).chain(self.fading.iter_mut().map(|f| &mut *f.old)) {
-                    if r.panic().is_err() {
-                        r.transport_cmd(Cmd::Stop);
-                    }
-                }
-            }
+            // Held or holding, no plugin may be called: at the resume.
+            Msg::Panic if self.hold => self.panic_held = true,
+            Msg::Panic => self.panic(),
             _ => unreachable!("structural messages wait their turn"),
         }
     }
 
-    /// Apply a structural message, or give it back when it can't apply yet.
-    fn try_apply(&mut self, env: Envelope, retire: &mut dyn FnMut(Retired) -> Result<(), Retired>) -> Result<(), Envelope> {
+    fn panic(&mut self) {
+        // Ghosts too: the window goes on, and ends on time.
+        if let Some(r) = &mut self.current
+            && r.panic().is_err()
+        {
+            r.transport_cmd(Cmd::Stop);
+        }
+    }
+
+    /// Apply a structural message, or give it back when it can't apply yet. Ok(true): an activation
+    /// that was refused.
+    fn try_apply(&mut self, env: Envelope, retire: &mut dyn FnMut(Retired) -> Result<(), Retired>) -> Result<bool, Envelope> {
+        // An activation waits for the window before it to end, and for room to retire the plan it
+        // replaces, its window's leftovers and one to spare.
         let ready = match &env.msg {
-            Msg::Activate { .. } => self.current.is_none() || self.fading.is_none(),
+            Msg::Activate { .. } => !self.in_window() && self.stash_free() >= 3 && !self.hold,
+            Msg::Hold(true) => !self.in_window(),
+            Msg::Hold(false) => true,
             _ => self.stash_room(),
         };
         if !ready {
             return Err(env);
         }
+        let mut refused = false;
         match env.msg {
             Msg::Activate { mut renderer } => {
                 if renderer.sample_rate() != self.rate as u32 {
                     // A rate change replaces the whole engine (the player's job): never played.
                     debug_assert!(false, "activated a renderer at another rate");
                     self.retire_renderer(renderer, retire);
-                    return Ok(());
+                    return Ok(false);
                 }
-                match self.current.take() {
-                    None => self.current = Some(renderer),
-                    Some(mut old) => {
-                        renderer.enter_from(old.transport(), old.tempo(), self.rate);
-                        // Plugin instances both share go on in the new one, with their notes; the
-                        // old one lends them for the fade (HOST-5, RENDER-25).
-                        renderer.carry_from(&mut old);
-                        self.fading = Some(Fade { old, done: 0, first: true, finished: false });
-                        self.current = Some(renderer);
+                let took = match self.current.as_deref_mut() {
+                    None => !renderer.has_entry(),
+                    Some(old) => renderer.take_over(old),
+                };
+                if took {
+                    // Every box nothing moved leaves with what played, off the audio thread.
+                    if let Some(old) = self.current.replace(renderer) {
+                        self.retire_renderer(old, retire);
                     }
+                    self.activations += 1;
+                } else {
+                    // Prepared against another plan, or a box isn't what it was prepared for: the
+                    // whole activation is refused, and what plays plays on (RENDER-25).
+                    self.refused_activations += 1;
+                    refused = true;
+                    self.retire_renderer(renderer, retire);
                 }
-                self.activations += 1;
             }
             Msg::SwapLane { generation, slot, data } => {
                 let back = match &mut self.current {
@@ -382,9 +443,15 @@ impl Engine {
                 };
                 self.retire_now(Retired::Lane(back), retire);
             }
+            Msg::Hold(on) => {
+                self.hold = on;
+                if !on && std::mem::take(&mut self.panic_held) {
+                    self.panic();
+                }
+            }
             Msg::Transport(_) | Msg::Panic => unreachable!("applied at once"),
         }
-        Ok(())
+        Ok(refused)
     }
 
     /// One block: messages at its line, then the render.
@@ -404,21 +471,19 @@ impl Engine {
                 break;
             }
         }
-        // A fade that is over retires its renderer: an activation waits for that.
-        if let Some(f) = &mut self.fading
-            && f.done >= self.fade_len
+        // A window that is over retires its ghosts: an activation waits for that. Without room, the
+        // ghosts play on a block, faded to nothing.
+        if self.current.as_ref().is_some_and(|r| r.window_over(self.clock))
+            && self.stash_room()
+            && let Some(l) = self.current.as_mut().and_then(|r| r.end_fade())
         {
-            f.finished = true;
-            if self.stash_room() {
-                let f = self.fading.take().expect("a fade");
-                self.retire_renderer(f.old, retire);
-            }
+            self.retire_now(Retired::Nodes(l), retire);
         }
         // Structural messages that waited, in order.
         if let Some(h) = self.head.take() {
             let seq = h.seq;
             match self.try_apply(h, retire) {
-                Ok(()) => self.stamp(seq, stamp, frame),
+                Ok(refused) => self.stamp(seq, stamp, frame, refused),
                 Err(h) => self.head = Some(h),
             }
         }
@@ -427,7 +492,7 @@ impl Engine {
         {
             let seq = b.seq;
             match self.try_apply(b, retire) {
-                Ok(()) => self.stamp(seq, stamp, frame),
+                Ok(refused) => self.stamp(seq, stamp, frame, refused),
                 Err(b) => self.head = Some(b),
             }
         }
@@ -437,19 +502,14 @@ impl Engine {
             let seq = env.seq;
             if !env.msg.structural() {
                 self.apply_now(&env.msg);
-                self.stamp(seq, stamp, frame);
+                self.stamp(seq, stamp, frame, false);
                 continue;
             }
             match &self.head {
                 None => match self.try_apply(env, retire) {
-                    Ok(()) => self.stamp(seq, stamp, frame),
+                    Ok(refused) => self.stamp(seq, stamp, frame, refused),
                     Err(env) => self.head = Some(env),
                 },
-                // RENDER-28: a newer plan replaces one that never played.
-                Some(Envelope { msg: Msg::Activate { .. }, .. }) if matches!(env.msg, Msg::Activate { .. }) && self.stash_room() => {
-                    let Some(Envelope { msg: Msg::Activate { renderer }, .. }) = self.head.replace(env) else { unreachable!() };
-                    self.retire_renderer(renderer, retire);
-                }
                 Some(_) => self.blocked = Some(env),
             }
         }
@@ -463,6 +523,11 @@ impl Engine {
     }
 
     fn render(&mut self, stamp: CallbackStamp, frame: u32) {
+        // Held: nothing runs and the clock stands still (RENDER-6a's exception, RENDER-1).
+        if self.is_held() {
+            self.out.silence(self.pos);
+            return;
+        }
         let clock = self.clock;
         self.clock += BLOCK as u64;
         let Some(cur) = self.current.as_deref_mut() else {
@@ -479,7 +544,7 @@ impl Engine {
                 return;
             }
         }
-        let mut frames = match cur.render_block(clock, false) {
+        let mut frames = match cur.render_block(clock) {
             Ok(f) => *f,
             Err(e) => {
                 // A kernel trapped: silence it and stop, as an error can't play (the error
@@ -491,38 +556,23 @@ impl Engine {
             }
         };
         let runs = *cur.last_runs();
-        let mut heard = [cur.take_heard(), None];
-        if let Some(f) = &mut self.fading
-            && !f.finished
-        {
-            let old = match f.old.render_block_lent(clock, f.first, Some(&*cur)) {
-                Ok(o) => *o,
-                Err(e) => {
-                    drop(e);
-                    [[0.0; 2]; BLOCK]
-                }
-            };
-            f.first = false;
-            // Linear: the two are the same music, correlated (RENDER-25a).
-            for (k, (x, o)) in frames.iter_mut().zip(old).enumerate() {
-                let i = f.done + k as u32;
-                if i < self.fade_len {
-                    let g = (i + 1) as f32 / self.fade_len as f32;
-                    *x = [o[0] * (1.0 - g) + x[0] * g, o[1] * (1.0 - g) + x[1] * g];
-                }
-            }
-            f.done = (f.done + BLOCK as u32).min(self.fade_len);
-            heard[1] = f.old.take_heard();
-        }
-        for h in heard.into_iter().flatten() {
+        if let Some(h) = cur.take_heard() {
             self.stamp_heard(h, clock, stamp, frame);
         }
         let Some(cur) = self.current.as_deref_mut() else { unreachable!("rendered above") };
+        // A hold's fade out, or a resume's fade in: linear, sample by sample.
+        if self.hold || self.level < self.fade {
+            for f in &mut frames {
+                self.level = if self.hold { self.level.saturating_sub(1) } else { (self.level + 1).min(self.fade) };
+                let g = self.level as f32 / self.fade as f32;
+                *f = [f[0] * g, f[1] * g];
+            }
+        }
         self.out.load(&frames, &runs, cur.transport().pos());
         // RENDER-6a: idle only stopped, after 8 silent blocks, when nothing can sound later.
         let silent = frames.iter().all(|f| f[0].abs() < SILENT && f[1].abs() < SILENT);
         self.silent_blocks = if silent && !cur.transport().playing() { self.silent_blocks + 1 } else { 0 };
-        if self.silent_blocks >= IDLE_AFTER && self.fading.is_none() && cur.can_idle() {
+        if self.silent_blocks >= IDLE_AFTER && cur.can_idle() {
             self.idle = true;
         }
     }

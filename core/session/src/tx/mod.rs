@@ -14,11 +14,14 @@
 //! No step reads the folder beyond the Tx's own targets: outside changes reach the session
 //! through the watcher, and through the targets' current bytes here.
 
+pub mod continues;
 pub mod delta;
 pub mod expect;
 pub mod journal;
 pub mod stage;
 
+#[cfg(test)]
+mod continues_tests;
 #[cfg(test)]
 mod delta_tests;
 #[cfg(test)]
@@ -651,15 +654,22 @@ pub(crate) fn claimed(before: &Revision, after: &Revision) -> Vec<Diagnostic> {
 /// coordinates with its change as hunks: what the engine hears when what plays is `a` and the
 /// accepted revision is `b` (the step 6 design's 5.5).
 pub fn delta_between(a: &Revision, b: &Revision) -> GraphDelta {
-    let mut coords = BTreeMap::new();
-    for p in changed_paths(&a.snapshot, &b.snapshot) {
-        if let (Class::Code, Some(x), Some(y)) = (DataPath::parse(&p).class(), a.snapshot.files.get(&p), b.snapshot.files.get(&p)) {
-            coords.insert(m2_song::path::slashed(&p), Coords::revisions(Edits::between(x, y)));
-        }
-    }
+    let coords = coords_between(&a.snapshot, &b.snapshot);
     let old = Side { compiled: &a.compiled, snapshot: &a.snapshot, at: Positions { coords: &coords, new: false } };
     let new = Side { compiled: &b.compiled, snapshot: &b.snapshot, at: Positions { coords: &coords, new: true } };
     delta::compare(&old, &new).0
+}
+
+/// Each code file that changed from `a` to `b`, in `a`'s coordinates with its change as hunks: how
+/// two revisions' nodes are named alike.
+pub(crate) fn coords_between(a: &Snapshot, b: &Snapshot) -> BTreeMap<String, Coords> {
+    let mut coords = BTreeMap::new();
+    for p in changed_paths(a, b) {
+        if let (Class::Code, Some(x), Some(y)) = (DataPath::parse(&p).class(), a.files.get(&p), b.files.get(&p)) {
+            coords.insert(m2_song::path::slashed(&p), Coords::revisions(Edits::between(x, y)));
+        }
+    }
+    coords
 }
 
 /// A problem's identity, to tell a candidate's new problems from the baseline's.

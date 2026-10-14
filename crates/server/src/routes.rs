@@ -237,7 +237,10 @@ async fn graph_close(State(s): S) -> ApiResult {
 }
 
 async fn graph_status(State(s): S) -> Json<Value> {
-    Json(json!(s.graph.status()))
+    let mut v = json!(s.graph.status());
+    let a = s.graph.activity();
+    (v["paused"], v["loading"]) = (json!(a.paused), json!(a.loading));
+    Json(v)
 }
 
 #[derive(Deserialize)]

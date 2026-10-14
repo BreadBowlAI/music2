@@ -92,6 +92,12 @@ pub struct EditTiming {
     pub previewed: bool,
     /// Its commit failed after the preview: the message that swapped the accepted data back.
     pub taken_back: Option<u64>,
+    /// Of the server's part before it sent: naming what continues (a code change's activation),
+    /// and preparing the plan, in nanoseconds; 0 when it prepared none.
+    pub continues_ns: u64,
+    pub prepare_ns: u64,
+    /// The instances the plan it prepared made new (every one for a fresh engine; G7a).
+    pub fresh: usize,
 }
 
 /// What the transport needs of the open project, kept apart from it so seek, the loop and status
@@ -133,6 +139,26 @@ pub struct Loop {
     pub start: f64,
     pub end: f64,
     pub on: bool,
+}
+
+/// An export of the open song (see [`Graph::export`]).
+pub struct Export {
+    pub song: String,
+    pub dir: PathBuf,
+    pub render: Render,
+    /// What the export carries: a plugin that isn't installed is silent in it (FMT-18a).
+    pub problems: Vec<m2_song::Diagnostic>,
+    /// The live plugin instances it borrows, with playback paused, given back when this drops.
+    pub lent: Option<crate::export::Lent>,
+}
+
+/// What the engine is busy with besides playing.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct Activity {
+    /// `"exporting"` while an export holds playback (RENDER-1).
+    pub paused: Option<&'static str>,
+    /// The plugins being created for the next plan, by name (RENDER-25).
+    pub loading: Vec<String>,
 }
 
 /// What `begin` and `update` read: the accepted revision's controls and what plays. Published by
@@ -460,6 +486,11 @@ impl Inner {
         Status { playing: s.playing, seconds, beat, looping }
     }
 
+    fn activity(&self) -> Activity {
+        let held = self.current_device().is_some_and(|d| d.player.held());
+        Activity { paused: held.then_some("exporting"), loading: self.owner.loading() }
+    }
+
     /// The view, the timeline, the project's name and folder, the transport as it is now, and the
     /// gestures in progress as the view names their controls: a save that renumbers the calls
     /// above a dragged knob gives it a new id, and the page finds its drag's knob by its lease
@@ -475,12 +506,15 @@ impl Inner {
             (p.shown.clone(), leases)
         };
         let status = self.status();
+        let activity = self.activity();
         let mut state = shown.state.clone();
         state["timeline"] = shown.timeline.to_value();
         state["playing"] = json!(status.playing);
         state["seconds"] = json!(status.seconds);
         state["beat"] = json!(status.beat);
         state["loop"] = json!(status.looping);
+        state["paused"] = json!(activity.paused);
+        state["loading"] = json!(activity.loading);
         state["leases"] = json!(leases);
         Some(state)
     }
@@ -659,6 +693,27 @@ impl Graph {
     /// renders it on a thread of its own.
     pub fn render(&self, length: Length) -> Result<(String, PathBuf, Render, Vec<m2_song::Diagnostic>)> {
         self.call(move |a| a.render(length))
+    }
+
+    /// The accepted revision ready to export (RENDER-1, RENDER-3). A song whose plugins play
+    /// borrows their live instances: playback is paused, and each instance offline holding its
+    /// committed state, until [`Export::lent`] drops; then the session plays what waited for it.
+    /// Otherwise it renders with instances of its own, beside playback.
+    pub fn export(&self, length: Length) -> Result<Export> {
+        let mut e = self.call(move |a| a.export(length))?;
+        if let Some(l) = e.lent.as_mut() {
+            let (jobs, token) = (self.jobs.clone(), l.token);
+            l.done = Some(Box::new(move |failed| {
+                let _ = jobs.send(Box::new(move |a: &mut Actor| a.export_done(token, failed)));
+            }));
+        }
+        Ok(e)
+    }
+
+    /// What the engine is busy with besides playing: paused for an export, and the plugins being
+    /// loaded for the next plan, by name (RENDER-1, RENDER-25).
+    pub fn activity(&self) -> Activity {
+        self.inner.activity()
     }
 
     /// Where playback is, as the audio thread last said: a seek it hasn't taken yet is where it

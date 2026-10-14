@@ -68,6 +68,17 @@ pub struct Plugins {
     pub owner: Option<m2_plugins::Owner>,
 }
 
+/// What the playing plan's activation kept and made (step 7), and the engine's own counts.
+#[derive(Clone, Debug, Default)]
+pub struct Arena {
+    pub stats: m2_runtime::Stats,
+    /// Activations refused for not fitting what plays, and retired objects forgotten.
+    pub refused: u64,
+    pub leaked: u64,
+    /// Whether its fade window runs.
+    pub window: bool,
+}
+
 /// A note-on from the engine's trace: where it sounded on both clocks.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NoteOn {
@@ -117,6 +128,17 @@ pub trait Rig {
     fn plugins(&mut self) -> Option<Plugins> {
         None
     }
+
+    /// What the playing plan's activation kept and made. None: this engine has no arena.
+    fn arena(&mut self) -> Option<Arena> {
+        None
+    }
+
+    /// The last block's output of top-level node `node` of the playing plan (G7b's taps). None:
+    /// this engine doesn't say.
+    fn output_of(&mut self, _node: usize) -> Option<Vec<f32>> {
+        None
+    }
 }
 
 /// Which engine a gate measures.
@@ -140,7 +162,7 @@ impl Kind {
         match self {
             Kind::Replay => Ok(Box::new(crate::replay::Replay::new(lab.packages.clone()))),
             #[cfg(feature = "engine")]
-            Kind::Engine => Ok(Box::new(crate::engine::Live::new(lab.packages.clone(), lab.carry)?)),
+            Kind::Engine => Ok(Box::new(crate::engine::Live::new(lab.packages.clone(), lab.arena)?)),
             #[cfg(not(feature = "engine"))]
             Kind::Engine => anyhow::bail!("this build has no live engine: build with `--features engine` once step 3a lands"),
         }

@@ -41,7 +41,8 @@ pub struct AppState {
 }
 
 impl AppState {
-    fn new(token: String, graph: graph::Graph) -> AppState {
+    /// The app's state around `graph`, with no server: tests and the gates.
+    pub fn new(token: String, graph: graph::Graph) -> AppState {
         AppState { events: broadcast::channel(256).0, token, graph, exports: Default::default(), unheard: Mutex::default() }
     }
 
