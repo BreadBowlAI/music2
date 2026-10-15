@@ -404,7 +404,7 @@ impl Lent {
 /// and its NoteOffs match the note's id, which the export doesn't know). The same call lets a
 /// plugin that applies a loaded state at its next call, ending every voice and setting every
 /// parameter (Surge XT does), apply it here and not over the export's first notes and the code's
-/// values. The render resets it at its first call.
+/// values. The render resets it at its first call. Marked as one whose notes the export ended.
 fn offline(b: &Borrow, rate: u32) -> Result<()> {
     let (host, h) = (b.inst.host(), b.inst.handle());
     host.deactivate(h);
@@ -425,6 +425,8 @@ fn offline(b: &Borrow, rate: u32) -> Result<()> {
     if host.process(h, &mut io, &end, &mut out, &m2_plugins::Transport::default()) == m2_plugins::Status::Error {
         bail!("it reported a processing error before the export");
     }
+    // Its notes ended here: they start again at the resume, however far the export gets (RENDER-1).
+    b.inst.mark_lent();
     Ok(())
 }
 

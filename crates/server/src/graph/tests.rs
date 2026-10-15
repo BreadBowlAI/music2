@@ -3130,6 +3130,32 @@ fn an_instance_waiting_for_a_restart_isnt_borrowed() {
     assert!(ex.handles() != first, "replaced");
 }
 
+// RENDER-1 (the owner's O4): an export that took a plugin's instance, and so ended the notes
+// playback left in it, but failed before it rendered a block (here it can't write its file) still
+// starts those notes again at the resume, as one that rendered does. Before, only the render's first
+// call marked the instance, so the held notes stayed silent until their next note-on.
+#[cfg(unix)]
+#[test]
+fn a_note_held_across_an_export_that_fails_at_once_plays_again() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut ex = Ex::tagged("unwritten");
+    ex.fill(4);
+    let stats = m2_plugins::probe::stats(ex.handles()[0]).unwrap();
+    assert_eq!(stats.sounding.load(Ordering::Relaxed), 2, "its two long notes sound");
+    let shut = ex.fixture.0.join("shut");
+    std::fs::create_dir(&shut).unwrap();
+    std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let mut events = ex.state.events.subscribe();
+    crate::export::start(&ex.state, Some(shut.join("out.wav"))).unwrap();
+    ex.fill_until("the export is done", |ex| !ex.state.exports.running());
+    std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let end = crate::export::tests::until_finished(&mut events).pop().unwrap();
+    assert!(end["error"].as_str().is_some_and(|e| e.contains("couldn't write")) && end["paused"] == true, "{end}");
+    ex.fill(4);
+    assert_eq!(stats.sounding.load(Ordering::Relaxed), 2, "the held notes play again");
+    assert!(ex.state.graph.status().playing && ex.engine().crashes() == 0, "playback goes on");
+}
+
 // RENDER-26b, HOME-6 (fit-2 and K6 of the step 7 review): a plugin that refuses a new state is named
 // as the user knows it, by its plugin and its track, in plain words, once: a later edit neither tries
 // the refused state again nor says so again. Its old state written back (an undo) loads, as the

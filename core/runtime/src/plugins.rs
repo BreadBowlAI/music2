@@ -23,8 +23,8 @@ pub struct PluginInstance {
     /// Its state was loaded: its node's next calls send every parameter code owns again, as the
     /// blob's values would win over them otherwise (HOME-4). Counts the calls still to do so.
     reloaded: AtomicU8,
-    /// An export rendered with it, so the notes playback left in it ended: at the resume, its live
-    /// node starts again the ones the song still holds (RENDER-1).
+    /// An export took it and ended the notes playback left in it: at the resume, its live node
+    /// starts again the ones the song still holds (RENDER-1).
     lent: AtomicBool,
     /// The code stopped setting one of its parameters, which keeps the value it was last sent
     /// (HOME-5a): it holds a state no file records until a state load lands, so an export doesn't
@@ -124,12 +124,14 @@ impl PluginInstance {
         self.reloaded.try_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1)).is_ok()
     }
 
-    /// An export's render reset it at its first call, ending the notes playback left in it.
-    pub(crate) fn mark_lent(&self) {
+    /// An export ended the notes playback left in it: when it took it offline, and when its render
+    /// reset it at its first call. Marked when it took it too, so an export that fails before its
+    /// first block (a file it can't write) still has those notes start again at the resume.
+    pub fn mark_lent(&self) {
         self.lent.store(true, Ordering::Release);
     }
 
-    /// Whether an export rendered with it since this was last asked (the audio thread's, at a
+    /// Whether an export ended its notes since this was last asked (the audio thread's, at a
     /// resume; an atomic swap, no lock).
     pub(crate) fn take_lent(&self) -> bool {
         self.lent.swap(false, Ordering::AcqRel)
