@@ -499,3 +499,7 @@ Left for the lead:
 - macOS only: when `clonefile` works but the push after it fails, `stage.rs` now copies, which fails with "File exists". The commit still fails, but its error names the copy, not the disk's error (before S6 it named the push's error).
 - `m2 new` (and New Song since S2) now lists the parent folder first. In a folder that can be written but not listed (mode 300), `m2 new dropbox/song` fails with "reading dropbox: Permission denied"; before S6 it made the song. Rare, and the capitals rule can't be checked there.
 - The real home on this server holds `~/Library/Caches/music2/hashes.json`, written 2026-10-14 20:29, before this slice, by a run with the real `HOME`. Not from this check; left as it is.
+
+The check again at `8616d15`, with the fix (logs in `~/m2-runs/check-check-S6b/`): exactly §13.1's S6 row, with no retry.
+Rust tests 715 passed (one more: the new test), the same 5 failed; `m2-session`'s binary 93.5 s. clippy fails at lint 4,
+with only lints 4 to 6. Suites 29 of 29, renders 8 of 8, and every other row PASS.
