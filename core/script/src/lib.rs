@@ -20,14 +20,18 @@ pub use component::{Catalog, Descriptor, UnitCtor};
 
 use m2_ir::{Body, Diagnostic, Ir};
 use oxc::allocator::Allocator;
+use oxc::ast::ast::{CallExpression, Expression, ImportDeclarationSpecifier, Statement};
+use oxc::ast::builder::AstBuilder;
+use oxc::ast_visit::{VisitMut, walk_mut};
 use serde::{Deserialize, Serialize};
 use oxc::codegen::{Codegen, CodegenOptions};
 use oxc::parser::Parser;
 use oxc::semantic::SemanticBuilder;
-use oxc::span::SourceType;
+use oxc::span::{SPAN, SourceType};
 use oxc::transformer::{TransformOptions, Transformer};
 use rquickjs::loader::{ImportAttributes, Loader, Resolver};
 use rquickjs::function::{Opt, Rest};
+use rquickjs::context::EvalOptions;
 use rquickjs::{CatchResultExt, CaughtError, Coerced, Context, Ctx, Function, Module, Object, Runtime};
 use sha2::{Digest, Sha256};
 
@@ -60,10 +64,14 @@ const CODES: &[&str] = &[
 
 const OUTSIDE: &str = "is outside the project: code imports only the project's own .ts files and its packages";
 
-/// Runs before anything else: remove what would make a build non-deterministic. `__m2s`
-/// records the site of the call about to run and what its arguments end with (see `sites`):
-/// `ends` is 0 for its last argument, 1 for none and 2 for a trailing spread's elements, kept
-/// as an array so the SDK can compare them without iterating the spread twice.
+/// Runs before anything else, once `Math` is on libm: remove what would make a build
+/// non-deterministic. `__m2s` records the site of the call about to run and what its arguments
+/// end with (see `sites`): `ends` is 0 for its last argument, 1 for none and 2 for a trailing
+/// spread's elements, kept as an array so the SDK can compare them without iterating the spread
+/// twice. `__m2_pow` is `**` as JS defines it, which song code's `**` is lowered to (see `strip`):
+/// each side converted once (`-(-x)` is JS's ToNumeric), numbers through libm's `Math.pow`, BigInts
+/// through QuickJS's own `**`, which is exact and never calls the C library. Code made from text
+/// (`eval`, the `Function` constructors) would skip that lowering, so song code can't make any.
 const PRELUDE: &str = r#"
 globalThis.__m2_site = -1;
 globalThis.__m2s = function (site, value, ends) {
@@ -74,8 +82,35 @@ globalThis.__m2s = function (site, value, ends) {
   return value;
 };
 delete globalThis.Date;
+delete globalThis.performance;
 Math.random = () => { throw new Error("Math.random isn't available: songs must render the same every time. Use a seeded generator."); };
+{
+  const pow = Math.pow;
+  globalThis.__m2_pow = (a, b) => {
+    a = -(-a);
+    b = -(-b);
+    return typeof a === "bigint" || typeof b === "bigint" ? a ** b : pow(a, b);
+  };
+  const refuse = (what) => function () {
+    throw new Error(`${what} isn't available: songs run only the code in their files, so they render the same on every computer. Write the code in a file instead.`);
+  };
+  globalThis.eval = refuse("eval");
+  // Each kind of function reaches its constructor as `.constructor`. The refusal keeps the
+  // constructor's name and prototype, so `instanceof Function` still works.
+  for (const f of [function () {}, async function () {}, function* () {}, async function* () {}]) {
+    const proto = Object.getPrototypeOf(f);
+    const name = proto.constructor.name;
+    const no = refuse(`The ${name} constructor`);
+    Object.defineProperty(no, "name", { value: name });
+    no.prototype = proto;
+    Object.defineProperty(proto, "constructor", { value: no });
+  }
+  globalThis.Function = Function.prototype.constructor;
+}
 "#;
+
+/// The prelude's name in stack frames: an error it throws is placed at the code that called it.
+const PRELUDE_FILE: &str = "<prelude>";
 
 pub struct Options {
     /// The project's code: every Code file of the snapshot, by its path in the project,
@@ -212,6 +247,56 @@ impl State {
         let f = self.files.values().find(|f| f.instrumented.as_ref().is_some_and(|i| i.sites.iter().any(|x| x.id == site)))?;
         let (l, c) = line_col(&f.original, s.start as usize);
         Some(format!("{}:{l}:{c}", s.file))
+    }
+
+    /// QuickJS's error for an import of a name its module doesn't export (`Could not find export
+    /// 'bar' in module './lib/a.ts'`, or the circular and ambiguous forms) cuts the module's name
+    /// to 63 bytes and says nothing of where the import is. This one names the module as people
+    /// see it, at the first import of that name from it (files in bytewise order: the project's
+    /// first).
+    fn export_error(&self, text: &str) -> Option<Diagnostic> {
+        let (head, rest) = text.split_once(" in module '")?;
+        let (cut, tail) = rest.rsplit_once('\'')?;
+        let name = head.split_once('\'')?.1.strip_suffix('\'')?;
+        let mut files: Vec<&String> = self.files.keys().collect();
+        files.sort();
+        let longer: Vec<&&String> = files.iter().filter(|f| f.starts_with(cut)).collect();
+        let module = files.iter().find(|f| f.as_str() == cut).or((longer.len() == 1).then(|| longer[0]))?;
+        let at = files.iter().find_map(|file| self.import_at(file, name, module));
+        Some(Diagnostic::error("code.build", format!("{head} in module '{}'{tail}", self.display(module))).at(at))
+    }
+
+    /// `file:line:col` of the first import or re-export in `file` that takes `name` from `module`.
+    fn import_at(&self, file: &str, name: &str, module: &str) -> Option<String> {
+        let source = &self.files.get(file)?.original;
+        let allocator = Allocator::default();
+        let program = Parser::new(&allocator, source, SourceType::ts()).parse().program;
+        for statement in &program.body {
+            let (from, at) = match statement {
+                Statement::ImportDeclaration(d) if !d.import_kind.is_type() => {
+                    let at = d.specifiers.iter().flatten().find_map(|s| match s {
+                        ImportDeclarationSpecifier::ImportSpecifier(s) if !s.import_kind.is_type() && s.imported.name() == name => {
+                            Some(s.span)
+                        }
+                        ImportDeclarationSpecifier::ImportDefaultSpecifier(s) if name == "default" => Some(s.span),
+                        _ => None,
+                    });
+                    (&d.source.value, at)
+                }
+                Statement::ExportFromDeclaration(d) if !d.export_kind.is_type() => {
+                    let at = d.specifiers.iter().find(|s| !s.export_kind.is_type() && s.local.name() == name).map(|s| s.span);
+                    (&d.source.value, at)
+                }
+                _ => continue,
+            };
+            if let Some(at) = at
+                && self.resolve(file, from).is_ok_and(|m| m == module)
+            {
+                let (l, c) = line_col(source, at.start as usize);
+                return Some(format!("{}:{l}:{c}", self.display(file)));
+            }
+        }
+        None
     }
 
     /// The package a module file belongs to, as `@m2/core`'s `component()` asks for it
@@ -377,14 +462,15 @@ fn strip(path: &str, source: &str) -> Result<(String, LineMap), String> {
     }
     let mut program = ret.program;
     let scoping = SemanticBuilder::new().build(&program).semantic.into_scoping();
-    // `**` becomes `Math.pow`, which computes with libm like the rest of `Math` (PLAT-4); QuickJS's
-    // own `**` calls the OS's C library.
+    // `**` becomes `__m2_pow`, which computes numbers with libm like the rest of `Math` (PLAT-4);
+    // QuickJS's own `**` calls the OS's C library. oxc lowers it to `Math.pow`, which `Pow` renames.
     let mut options = TransformOptions::default();
     options.env.es2016.exponentiation_operator = true;
     let tr = Transformer::new(&allocator, Path::new(path), &options).build_with_scoping(scoping, &mut program);
     if let Some(e) = tr.diagnostics.first() {
         return Err(format!("{path}: {}", e.message));
     }
+    Pow(AstBuilder::new(&allocator)).visit_program(&mut program);
     let out = Codegen::new().with_options(CodegenOptions { source_map_path: Some(PathBuf::from(path)), ..Default::default() }).build(&program);
     let mut map = LineMap::default();
     if let Some(sm) = &out.map {
@@ -392,6 +478,23 @@ fn strip(path: &str, source: &str) -> Result<(String, LineMap), String> {
         map.tokens.sort_unstable();
     }
     Ok((out.code, map))
+}
+
+/// Points each `Math.pow` call that oxc's `**` lowering made at the prelude's `__m2_pow`, which
+/// takes BigInts too, as `**` does, and which no `Math` the song declares can stand in for. The
+/// lowering's `Math` and `pow` have no place in the source; a `Math.pow` the code wrote has.
+struct Pow<'a>(AstBuilder<'a>);
+
+impl<'a> VisitMut<'a> for Pow<'a> {
+    fn visit_call_expression(&mut self, call: &mut CallExpression<'a>) {
+        if let Expression::StaticMemberExpression(m) = &call.callee
+            && let Expression::Identifier(math) = &m.object
+            && (math.name == "Math" && math.span.is_empty() && m.property.name == "pow" && m.property.span.is_empty())
+        {
+            call.callee = Expression::new_identifier(SPAN, "__m2_pow", &self.0);
+        }
+        walk_mut::walk_call_expression(self, call);
+    }
 }
 
 /// Byte offset of a 0-based line and column (in characters).
@@ -548,12 +651,14 @@ fn sandbox(state: &Rc<RefCell<State>>, memory_limit: usize, time_limit: Duration
     Ok((rt, ctx, deadline))
 }
 
-/// Run the prelude and put `Math` on libm, then give the SDK what it asks the host while it runs:
+/// Put `Math` on libm and run the prelude, then give the SDK what it asks the host while it runs:
 /// where a call or a stack frame is in the TypeScript, whether a key is valid (one rule, in
 /// m2_ir::key), and the package a module file belongs to.
 fn host<'js>(ctx: &Ctx<'js>, state: &Rc<RefCell<State>>, packages: &[(String, PathBuf)]) -> rquickjs::Result<()> {
-    ctx.eval::<(), _>(PRELUDE)?;
     math(ctx)?;
+    let mut prelude = EvalOptions::default();
+    prelude.filename = Some(PRELUDE_FILE.into());
+    ctx.eval_with_options::<(), _>(PRELUDE, prelude)?;
     let g = ctx.globals();
     g.set("__m2_project", PROJECT)?;
     g.set("__m2_packages", packages.iter().map(|(n, _)| format!("{n}/")).collect::<Vec<_>>())?;
@@ -789,6 +894,9 @@ fn caught(st: &mut State, e: CaughtError, timed_out: bool) -> Diagnostic {
     if let Some(d) = st.failed.take().filter(|d| text.contains(&d.message)) {
         return d;
     }
+    if let Some(d) = st.export_error(&text) {
+        return d;
+    }
     match e {
         CaughtError::Exception(ex) => {
             let message = ex.message().unwrap_or_else(|| "error".into());
@@ -796,7 +904,7 @@ fn caught(st: &mut State, e: CaughtError, timed_out: bool) -> Diagnostic {
             let code = field("code").and_then(|c| CODES.iter().copied().find(|k| *k == c)).unwrap_or("code.build");
             let stack = ex.stack().unwrap_or_default();
             let frame = stack.lines().filter_map(frame_at).find(|at| at.starts_with(PROJECT));
-            let other = || stack.lines().filter_map(frame_at).find(|at| !at.starts_with(CORE) && !at.starts_with("<main>"));
+            let other = || stack.lines().filter_map(frame_at).find(|at| ![CORE, "<main>", PRELUDE_FILE].iter().any(|f| at.starts_with(f)));
             let src = frame.or_else(other).map(|at| st.remap(&at));
             let mut d = Diagnostic::error(code, message).at(src);
             d.module = field("module");

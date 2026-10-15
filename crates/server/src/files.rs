@@ -528,9 +528,14 @@ mod tests {
         assert_eq!(utf16_col("a🎸b", 1, 3), 4);
         assert_eq!(utf16_col("ab", 1, 5), 5, "past the end stays past it");
 
-        // No location at all.
-        let none = problems(&p, &LEAD.replace("{ osc }", "{ nope }").replace("osc.sine", "nope"));
+        // An import of a name its module doesn't export, at the import.
+        let export = problems(&p, &LEAD.replace("{ osc }", "{ nope }").replace("osc.sine", "nope"));
+        assert_eq!((export[0].file.as_deref(), export[0].line, export[0].col), (Some("tracks/lead.ts"), Some(2), Some(10)));
+        assert!(export[0].message.contains("'std/src/dsp.ts'"), "package paths are shortened: {}", export[0].message);
+
+        // No location at all: a thrown value that isn't an error has no stack.
+        let none = problems(&p, &LEAD.replace("export default", "throw 1;\nexport default"));
         assert_eq!((none[0].file.as_deref(), none[0].line), (None, None));
-        assert!(none[0].message.contains("'std/src/dsp.ts'"), "package paths are shortened: {}", none[0].message);
+        assert!(none[0].message.starts_with("the song threw"), "{}", none[0].message);
     }
 }

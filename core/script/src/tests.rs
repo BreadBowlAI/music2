@@ -250,6 +250,94 @@ export default song(() => kernel("std:sine", {{ freq: 440 * 2 ** ((n - 69) / 12)
     assert!(consts.iter().any(|c| c.to_bits() == freq.to_bits()), "{freq:?} in {consts:?}");
 }
 
+// PLAT-4: song code's `**` is JavaScript's on every value, though the build lowers it. Numbers
+// compute with libm (above); BigInts exactly; a BigInt with a number, or a negative BigInt
+// exponent, throws what JS throws. `**=` evaluates its target once, a `Math` the song declares
+// doesn't change `**`, and `Math.pow` stays JS's, numbers only, like QuickJS's own `Math.sqrt`. oxc
+// leaves a `**` with a BigInt literal to QuickJS, so `2n ** hundred` is the reference for `two ** hundred`.
+#[test]
+fn exponents_are_javascripts() {
+    build_of(&[(
+        "song.ts",
+        r#"import { song, kernel } from "@m2/core";
+const two = 2n, hundred = 100n, three = 3, half = 0.5;
+const thrown = (f: () => unknown) => { try { f(); return "nothing"; } catch (e) { return `${(e as Error).name}: ${(e as Error).message}`; } };
+const order: string[] = [];
+const key = (k: string) => { order.push(k); return k; };
+const o: { [k: string]: bigint } = { v: 3n };
+o[key("v")] **= two;
+let n = 3n;
+n **= hundred;
+const checks: [string, unknown, unknown][] = [
+  ["BigInts", two ** hundred, 1267650600228229401496703205376n],
+  ["BigInts as QuickJS's own", two ** hundred, 2n ** hundred],
+  ["**= on a variable", n, 3n ** hundred],
+  ["**= on a member", o.v, 9n],
+  ["its key evaluated once", order.join(","), "v"],
+  ["a negative base", (-two) ** (two + 1n), -8n],
+  ["converted as JS converts", ({ valueOf: () => two } as any) ** ({ valueOf: () => two } as any), 4n],
+  ["a BigInt and a number", thrown(() => two ** three), thrown(() => 2n ** three)],
+  ["a number and a BigInt", thrown(() => three ** two), thrown(() => three ** 2n)],
+  ["a negative exponent", thrown(() => two ** -hundred), thrown(() => 2n ** -hundred)],
+  ["numbers", three ** half, Math.pow(3, 0.5)],
+  ["a song's own Math", (() => { const Math = { pow: () => 42 }; return three ** three + Math.pow(); })(), 69],
+  ["Math.pow takes numbers only", thrown(() => Math.pow(two as any, two as any)), thrown(() => Math.sqrt(two as any))],
+];
+const wrong = checks.filter(([, got, want]) => got !== want).map(([what, got, want]) => `${what}: got ${String(got)}, want ${String(want)}`);
+if (wrong.length > 0) throw new Error(`${wrong.length} wrong: ${wrong.join("; ")}`);
+const errors = [thrown(() => two ** three), thrown(() => two ** -hundred), thrown(() => Math.pow(two as any, 1))];
+if (!errors[0].startsWith("TypeError: ") || !errors[1].startsWith("RangeError: ") || !errors[2].startsWith("TypeError: ")) throw new Error(errors.join("; "));
+export default song(() => kernel("std:sine"));
+"#,
+    )])
+    .unwrap_or_else(|e| panic!("{e:?}"));
+}
+
+// RENDER-2, PLAT-4: song code can't make code from text while it runs, which would skip the
+// build's lowering of `**` and compute it with the OS's `pow`: `eval` and each kind of function's
+// constructor throw, saying why, as `Math.random` does. It reads no clock either: `Date` and
+// `performance` are gone. Functions and modules work as before.
+#[test]
+fn song_code_cannot_make_code_from_text() {
+    for (code, what) in [
+        ("eval(\"0.1 ** 0.7\")", "eval"),
+        ("(0, eval)(\"1\")", "eval"),
+        ("globalThis[\"ev\" + \"al\"](\"1\")", "eval"),
+        ("new Function(\"return 0.1 ** 0.7\")()", "The Function constructor"),
+        ("Function(\"return 1\")", "The Function constructor"),
+        ("(() => 1).constructor(\"return 1\")", "The Function constructor"),
+        ("Reflect.construct(Object.getPrototypeOf(class {}).constructor, [\"return 1\"])", "The Function constructor"),
+        ("(async () => 1).constructor(\"return 1\")", "The AsyncFunction constructor"),
+        ("(function* () {}).constructor(\"yield 1\")", "The GeneratorFunction constructor"),
+        ("Object.getPrototypeOf(async function* () {}).constructor(\"yield 1\")", "The AsyncGeneratorFunction constructor"),
+    ] {
+        let song =
+            format!("import {{ song, kernel }} from \"@m2/core\";\nconst x = {code};\nexport default song(() => kernel(\"std:sine\"));\n");
+        let e = error_of(&[("song.ts", &song)]);
+        assert!(e.message.starts_with(&format!("{what} isn't available: songs run only the code in their files")), "{code}: {e}");
+        assert!(e.src.as_deref().is_some_and(|s| s.starts_with("song.ts:2:")), "{code}: {e:?}");
+    }
+    build_full(&options(&[(
+        "song.ts",
+        r#"import { song } from "@m2/core";
+import { osc } from "std/dsp";
+const kinds = [function () {}, () => 1, async () => 1, function* () {}, async function* () {}, class {}];
+if (!kinds.every((f) => f instanceof Function && typeof f === "function")) throw new Error("not functions");
+if (Function.name !== "Function" || (async () => 1).constructor.name !== "AsyncFunction") throw new Error("renamed");
+if (typeof Date !== "undefined" || typeof performance !== "undefined") throw new Error("a clock");
+const add = function (a: number, b: number) { return a + b; };
+export default song(() => osc.sine(add.call(null, 220, 220)));
+"#,
+    )]))
+    .unwrap_or_else(|e| panic!("{e:?}"));
+
+    // From a package's own code too, placed in it (not in the prelude that throws).
+    let pkg = TempPackage::new("eval", &[("index.ts", "export const n = 1;\neval(\"n\");\n")]);
+    let problems = describe(&[("pkg".into(), pkg.0.clone())]).problems;
+    assert!(problems[0].message.contains("eval isn't available"), "{problems:?}");
+    assert!(problems[0].src.as_deref().is_some_and(|s| s.starts_with("pkg/src/index.ts:2:")), "{problems:?}");
+}
+
 // ---------------------------------------------------------------- keys and labels
 
 /// A song that adds the `out` exports of `tracks/a.ts` and `tracks/b.ts`.
@@ -654,6 +742,35 @@ fn package_imports() {
     assert!(e.message.contains("own project or from installed packages"), "{e}");
     let s = song("std/no-such-file");
     assert_eq!(error_of(&[("song.ts", &s)]).code, "code.build");
+}
+
+// DIAG-1: an import of a name its module doesn't export names the module in full and as people
+// see it, at the import. QuickJS cuts a module's name to 63 bytes and gives no place.
+#[test]
+fn a_missing_export_is_named_in_full_at_the_import() {
+    let long = "tracks/a-folder-with-a-long-name-for-its-tracks/one-more-long-name-past-63-bytes.ts";
+    assert!(long.len() > 63);
+    let song = format!(
+        "import {{ song }} from \"@m2/core\";\nimport {{ type bar as Bar }} from \"./{long}\";\nimport {{ foo, bar }} from \"./{long}\";\nexport default song(() => [foo, bar as Bar]);\n"
+    );
+    let e = error_of(&[("song.ts", &song), (long, "export const foo = 1;\n")]);
+    assert_eq!(e.message, format!("Could not find export 'bar' in module '{long}'"));
+    assert_eq!(e.src.as_deref(), Some("song.ts:3:15"), "{e}");
+
+    // A re-export, a package module, the SDK, and QuickJS's other forms of the message.
+    let t = "export { nope } from \"std/dsp\";\nexport const out = 1;\n";
+    let e = error_of(&[("song.ts", PLAY_T), ("tracks/t.ts", t)]);
+    assert_eq!(
+        (e.message.as_str(), e.src.as_deref()),
+        ("Could not find export 'nope' in module 'std/src/dsp.ts'", Some("tracks/t.ts:1:10"))
+    );
+    let s = "import { song, sogn } from \"@m2/core\";\nexport default song(sogn);\n";
+    let e = error_of(&[("song.ts", s)]);
+    assert_eq!((e.message.as_str(), e.src.as_deref()), ("Could not find export 'sogn' in module '@m2/core'", Some("song.ts:1:16")));
+    let s = "import { song } from \"@m2/core\";\nimport { x } from \"./lib/c\";\nexport default song(() => x);\n";
+    let c = "export * from \"./a\";\nexport * from \"./b\";\n";
+    let e = error_of(&[("lib/a.ts", "export const x = 1;\n"), ("lib/b.ts", "export const x = 2;\n"), ("lib/c.ts", c), ("song.ts", s)]);
+    assert_eq!((e.message.as_str(), e.src.as_deref()), ("export 'x' in module 'lib/c.ts' is ambiguous", Some("song.ts:2:10")));
 }
 
 // DIAG-2: an error the SDK throws keeps its code only when it is a build code.
