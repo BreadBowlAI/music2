@@ -1178,3 +1178,56 @@ library tests passed 30 of 30 alone and 20 of 20 beside 32 busy loops; `m2-serve
 - Left alone, as asked (for `HANDOFF.md`, S9): export names over 63 bytes cut by QuickJS; old rustfmt diffs in
   `core/script` and `core/session`; the kill test's 130 s; Surge's 32-sample blocks in `surge_plays_notes`; G10 under
   load; the Windows notes.
+
+## S9. Handoff, the contract's rows, and the last Linux check
+
+**In short.** Docs only: the handoff for the next session, the contract's gates row and deferred rows for this step,
+and the two pointers in the step 8 designs. Then `ci/check.sh` passed at `1a24fee` with no retry: Linux is green at
+the step's end. The Mac run (the owner) and the push (the lead) are what is left.
+
+**Built**
+
+| What | Where |
+|---|---|
+| Rewritten for the next session: where things stand (Linux green at `1a24fee`; macOS unverified since `4ae1b32`), the check on both OSes and what to paste back, the order of work, §13.3's merge table with what the build learned, the flakes (fixed ones with their causes), what is left, and the server's facts | `HANDOFF.md` |
+| The acceptance-gates row for the platform step (6b), and two gates that keep running from it (shared render bits and `std.wasm`'s bytes; no OS code outside `m2-os`) | `docs/architecture.md` |
+| Eight Deferred rows: §6.5's seven, as built, and one for the review's det-3 | `docs/architecture.md` |
+| PLAT-6's *Today* names `1a24fee` | `docs/architecture.md` |
+| 8b.10 takes notes through `midir` | `docs/designs/step8/design-8b.md` §19 |
+| A two-line note: `rt.rs`, `Sem` and the QoS calls go into `m2-os`; the overload listener gives way to cpal's xrun errors | `docs/designs/step8/design-8a.md` §6.3 |
+
+**Deviations**
+
+| What | Why |
+|---|---|
+| The gates row names the app row, and says `one_place.rs` passes "with no file excepted", not "has an empty allow-list" | The app row came after the design (§16). The review's fit-7 removed the empty list. |
+| An eighth Deferred row: an allocator that counts song code's bytes, so QuickJS's 256 MB limit falls at the same place on every OS | The review's det-3 left it, and it has a clear trigger. RENDER-2's *Today* already says the limit differs. |
+| Each Deferred row says what the code does today (`stored_name` answers nothing on Linux, a commit copies where it can't clone, an out-of-watches folder asks for one walk) | So each row can be checked against the code. |
+| `HANDOFF.md`'s merge note on `graph/fsevents.rs` says where its code went, not "use `-M`" | git pairs it with `core/os/src/mac/watch.rs` only at `-M40%` (48% alike), and never with `graph/events.rs`. No branch changes the file, so a merge doesn't meet it. |
+| Only §19's "CoreMIDI" in design-8b changed | §15, §18 and §20 record the question as it was asked. |
+
+**The check** at `1a24fee` (`ci/check.sh`, 8 min on a quiet server; logs and the app's screenshots in
+`~/m2-runs/check-s9/`, all logs in `~/m2-runs/check-s9.tgz`): `music2 check: PASS`, every row PASS.
+
+| Row | Result |
+|---|---|
+| toolchain, web build, build | PASS (rustc 1.99.0) |
+| app | PASS: the UI connected in 1 s with `first-song` and with `with-plugins`; no panic, nothing says plugins can't be hosted |
+| rust tests | PASS: 753 passed, 0 failed; `m2-session` 126 tests in 132.6 s |
+| clippy, std kernels, std.wasm, mac lint | PASS |
+| browser suites | PASS: 29 of 29, 1,034 of 1,034 checks; `attention-attn` 56 of 56, `live3b` 51 of 51 with the plugins |
+| renders | PASS: 8 of 8 match `e2e/renders.sha256` |
+| repo unchanged | PASS |
+
+Nothing passed only on a retry, and "what failed" is empty.
+
+**A first run that I spoiled** (logs in `~/m2-runs/check-s9-run1/`). It said `music2 check: FAIL (1 of 12 checks)`: only
+"repo unchanged" failed, "1 entries changed". That entry was `HANDOFF.md`, which I edited in this checkout while the
+check ran; the row compares `git status` before and after. Every other row passed with the same numbers as above
+(753 tests, `m2-session` 132.9 s, 29 of 29 suites, renders 8 of 8). So I put the file back as committed, touched
+nothing, and ran the check again: the run above. Lesson for the next session: edit no tracked file while a check runs.
+
+The app's two screenshots are copied for the owner to `~/m2-runs/app-shots/platform-1a24fee/`.
+
+**Left for later:** nothing new. `HANDOFF.md` lists the items above ("Left for later" here and in each slice's notes),
+one line each.
