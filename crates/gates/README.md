@@ -27,9 +27,11 @@ CLAP_PATH=~/Library/Audio/Plug-Ins/CLAP cargo run -p m2-gates --release -- plugi
 CLAP_PATH=~/Library/Audio/Plug-Ins/CLAP cargo run -p m2-gates --release -- plugins --quick --no-arena
 
 # Step 7's recorded runs on p50 from 3:00: G7a through the server, its engine-rig twin, G7b, and G7f's
-# two parts (what one wasmtime Store per kernel instance costs, then what the arena costs the callback).
+# two parts (what one wasmtime Store per kernel instance costs, then what the arena costs the callback);
+# and G7e, an export of with-plugins that pauses playback and borrows its plugins.
 cargo run -p m2-gates --release -- --server --reference 50 --at 180 add-effect
 cargo run -p m2-gates --release --features engine -- --reference 50 --at 180 add-effect tails
+CLAP_PATH=~/Library/Audio/Plug-Ins/CLAP cargo run -p m2-gates --release -- --server export
 cargo run -p m2-gates --release -- store --reference 50
 cargo run -p m2-gates --release -- arena --reference 50 --at 180
 
