@@ -9,6 +9,9 @@
 //! (§1.5 of the step 3a design).
 //!
 //! Everything is built and sent on the test's thread; only the callback runs under the trap.
+//! Only debug builds' callbacks mark their thread for it (a release callback touches no
+//! thread-local), so these count in debug builds, as ci/check.sh runs them; in release they count
+//! nothing, which `an_allocation_in_the_callback_is_counted` checks.
 
 mod common;
 
@@ -453,7 +456,8 @@ fn the_audio_thread_never_allocates_with_plugins() {
 }
 
 // RENDER-28: what a callback allocates is counted, a plugin's included, as the callback marks its
-// own thread: what the app's debug counter logs.
+// own thread: what the app's debug counter logs. A release build's callback marks nothing, so it
+// touches no thread-local, whose first touch may allocate on macOS: nothing is counted there.
 #[test]
 fn an_allocation_in_the_callback_is_counted() {
     let a = probes(1.0);
@@ -466,7 +470,8 @@ fn an_allocation_in_the_callback_is_counted() {
     let mut buf = vec![0.0f32; 2 * 512];
     assert_eq!(trapped(|| d.fill(&mut buf, 2)), 0);
     probe.allocate.store(true, Ordering::Relaxed);
-    assert_eq!(trapped(|| d.fill(&mut buf, 2)), 2, "the probe's box, made and freed");
+    let counted = if cfg!(debug_assertions) { 2 } else { 0 };
+    assert_eq!(trapped(|| d.fill(&mut buf, 2)), counted, "the probe's box, made and freed, counted in debug builds only");
     drop(d.drain_retired());
 }
 

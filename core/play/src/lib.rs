@@ -359,8 +359,12 @@ impl Callback {
 
     /// The audio callback: fill `data`, interleaved with `channels` channels.
     fn fill(&mut self, data: &mut [f32], channels: usize) {
+        // Marked for the allocation counter in debug builds only, the only ones that install it:
+        // a release callback touches no thread-local, whose first touch may allocate (macOS).
+        #[cfg(debug_assertions)]
         alloc::set_in_callback(true);
         self.fill_in(data, channels);
+        #[cfg(debug_assertions)]
         alloc::set_in_callback(false);
     }
 
