@@ -48,6 +48,9 @@ GATES (default: all):
   watcher     G11 (--server only) the watcher with 5,000 files in assets/: the CPU it uses while
                   idle, under 1% of a core, and an outside lane write from its last byte to the
                   block that plays it; the full stat walk (WRITE-19)
+  export      G7e (--server only) an export of examples/with-plugins (Surge XT and
+                  Airwindows on the CLAP path) pauses playback, reuses its plugin instances, and
+                  playback resumes where it was with their state intact (step 7, RENDER-1)
   arena       G7f part 2 (named only) the arena's cost to the player's callback: its p99 playing,
                   against HEAD's, and the callback that takes in each of ten activations (step 7)
   store       G7f (named only) what one wasmtime Store per kernel instance costs: build, memory,
@@ -152,9 +155,9 @@ fn run() -> Result<bool> {
     if via_server {
         // Step 3b's gates exist only through the server.
         if all {
-            names.extend(["previews".to_string(), "drag".to_string(), "tx-data".to_string(), "watcher".to_string()]);
+            names.extend(["previews", "drag", "tx-data", "watcher", "export"].map(String::from));
         }
-        names.retain(|n| ["seek", "note-edit", "add-effect", "previews", "drag", "tx-data", "watcher"].contains(&n.as_str()));
+        names.retain(|n| ["seek", "note-edit", "add-effect", "previews", "drag", "tx-data", "watcher", "export"].contains(&n.as_str()));
     }
     let made = work.is_none();
     let work = work.unwrap_or_else(|| std::env::temp_dir().join(format!("m2-gates-{}", std::process::id())));
@@ -179,6 +182,7 @@ fn run() -> Result<bool> {
             (true, "drag") => server::drag(&mut lab, &o),
             (true, "tx-data") => server::tx_data(&mut lab, &o),
             (true, "watcher") => server::watcher(&mut lab, &o),
+            (true, "export") => server::export(&mut lab, &o),
             (false, "store") => m2_gates::store::store(&mut lab, &o),
             (false, "arena") => m2_gates::arena::arena(&mut lab, &o),
             _ => gates::run(name, &mut lab, kind, &o),

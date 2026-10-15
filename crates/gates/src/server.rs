@@ -30,7 +30,7 @@ use m2_song::lane::{LaneData, LaneKind};
 
 use crate::gates::Opts;
 use crate::report::Outcome;
-use crate::signal::{Rng, Summary};
+use crate::signal::{Rng, Summary, db, max_step, span};
 use crate::{Lab, Song, songs};
 
 mod watch;
@@ -1069,4 +1069,307 @@ fn refused(out: &mut Outcome, graph: &Arc<Graph>, dir: &Path, rate: u32) -> Resu
     let one = if span == 0.0 { " (one block took both: none of it was rendered)" } else { "" };
     out.info("idle disk: from the refused write's preview to the block that swapped it back", format!("{span:.2} ms{one}"));
     Ok(())
+}
+
+// ---------------------------------------------------------------- G7e (step 7)
+
+/// A driven player whose callback a thread of the gate's calls in real time, a device buffer at a
+/// time, keeping what it played: the silent player with a tape, so a server gate can listen.
+struct Tape {
+    played: Arc<parking_lot::Mutex<Played>>,
+    stop: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+struct Played {
+    frames: Vec<[f32; 2]>,
+    /// Each callback: when it started ([`m2_play::now_ns`]) and where its frames start.
+    calls: Vec<(u64, usize)>,
+}
+
+impl Tape {
+    fn start(rate: u32, frames: usize) -> Result<(m2_play::Player, Tape)> {
+        let (player, mut driver) = m2_play::Player::driven(rate);
+        let (played, stop) = (Arc::new(parking_lot::Mutex::new(Played::default())), Arc::new(AtomicBool::new(false)));
+        let (p, s) = (played.clone(), stop.clone());
+        std::thread::Builder::new().name("m2-gates-tape".into()).spawn(move || {
+            let mut buf = vec![0.0f32; frames * 2];
+            let period = Duration::from_secs_f64(frames as f64 / rate as f64);
+            let mut next = Instant::now();
+            while !s.load(Ordering::Relaxed) {
+                let ns = m2_play::now_ns();
+                driver.fill(&mut buf, 2);
+                {
+                    let mut p = p.lock();
+                    let at = p.frames.len();
+                    p.calls.push((ns, at));
+                    p.frames.extend(buf.chunks(2).map(|f| [f[0], f[1]]));
+                }
+                drop(driver.drain_retired());
+                next += period;
+                next = next.max(Instant::now().checked_sub(period).unwrap_or(next));
+                std::thread::sleep(next.saturating_duration_since(Instant::now()));
+            }
+        })?;
+        Ok((player, Tape { played, stop }))
+    }
+
+    /// Where on the tape the block an [`m2_play::Applied`] stamp names starts.
+    fn at(&self, a: m2_play::Applied) -> Option<usize> {
+        let p = self.played.lock();
+        p.calls.iter().rev().find(|(ns, _)| *ns <= a.callback_ns).map(|(_, at)| at + a.frame as usize)
+    }
+
+    fn frames(&self) -> Vec<[f32; 2]> {
+        self.played.lock().frames.clone()
+    }
+}
+
+impl Drop for Tape {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+/// A 24-bit stereo WAV file's frames, as an export writes them.
+fn read_wav(path: &Path) -> Result<Vec<[f32; 2]>> {
+    let b = std::fs::read(path)?;
+    if b.len() < 12 || &b[0..4] != b"RIFF" || &b[8..12] != b"WAVE" {
+        bail!("{} isn't a WAV file", path.display());
+    }
+    let (mut at, mut fmt, mut data) = (12, None, None);
+    while at + 8 <= b.len() {
+        let size = u32::from_le_bytes(b[at + 4..at + 8].try_into()?) as usize;
+        let body = &b[at + 8..(at + 8 + size).min(b.len())];
+        match &b[at..at + 4] {
+            b"fmt " => fmt = Some((u16::from_le_bytes(body[2..4].try_into()?), u16::from_le_bytes(body[14..16].try_into()?))),
+            b"data" => data = Some(body),
+            _ => {}
+        }
+        at += 8 + size + (size & 1);
+    }
+    let (Some((2, 24)), Some(data)) = (fmt, data) else { bail!("{} isn't 24-bit stereo: {fmt:?}", path.display()) };
+    let sample = |s: &[u8]| (i32::from_le_bytes([0, s[0], s[1], s[2]]) >> 8) as f32 / 8_388_608.0;
+    Ok(data.as_chunks::<6>().0.iter().map(|f| [sample(&f[0..3]), sample(&f[3..6])]).collect())
+}
+
+/// G7e (step 7 design §12.5, RENDER-1, RENDER-6a, HOME-4, HOME-6): an export of
+/// `examples/with-plugins` pauses playback, reuses its plugin instances, and playback resumes where
+/// it was with their state intact. Through the server's own export (`m2_server::export::start`),
+/// the song playing from 0:02 in real time on a player whose output the gate keeps (the silent
+/// player's buffer); skipped without Surge XT and Airwindows on `CLAP_PATH`.
+/// - Pauses: the engine said it held before the export's first host call; `paused: "exporting"`
+///   was published while it ran; the engine clock and the transport didn't move meanwhile, and the
+///   output was silence.
+/// - Reuses: no instance created, and the plan's instances before and after are the same.
+/// - State intact: each instance's saved state before the export equals the one after the first
+///   resumed block. The gate's copy holds the lead's cutoff lane still, so the code's values are
+///   the same at both saves.
+/// - Resumes: the engine resumes at the clock it held, within two device buffers of the instances
+///   being given back, with no step at the fade out or the fade in over G6's bound.
+/// - The file: as long as `m2 render`'s within a second, its level in each second within 1 dB of
+///   it and its onsets within 10 ms (plugins aren't bit-exact from one instance to the next).
+pub fn export(lab: &mut Lab, _o: &Opts) -> Result<Outcome> {
+    let mut out = Outcome::new("G7e export", "RENDER-1, RENDER-6a, HOME-4, HOME-6", "server on examples/with-plugins, real time");
+    let dir = lab.copy(&crate::fixture("examples/with-plugins"), "export")?;
+    let missing = lab.session(&dir)?.problems().iter().find(|d| d.code == "plugin.missing").map(|d| d.to_string());
+    if let Some(d) = missing {
+        out.skip("every check", format!("{d} (CLAP_PATH says where Surge XT and Airwindows are)"));
+        return Ok(out);
+    }
+    std::fs::write(
+        dir.join("data/lead/cutoff.json"),
+        r#"{"unit": "scalar", "clips": [{"id": "rt0wbb3b", "start": 0, "length": 16, "points": [[0, 0.6], [16, 0.6]]}]}"#,
+    )?;
+    let song = lab.compile(&dir)?;
+    let frames: usize = std::env::var("M2_AUDIO_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(512);
+    let (player, tape) = Tape::start(song.rate, frames)?;
+    let state = Arc::new(m2_server::AppState::new(String::new(), Graph::with_player(player)));
+    let graph = &state.graph;
+    graph.open(&dir)?;
+    graph.seek(song.beat(2 * song.rate as u64))?;
+    graph.transport("play")?;
+    std::thread::sleep(Duration::from_secs(1));
+    let handles = graph.plugin_handles();
+    if handles.len() != 2 {
+        bail!("with-plugins plays {} plugin instances, not 2", handles.len());
+    }
+    let host = m2_plugins::host();
+    let save = |h| host.save_state(h).recv().map_err(|e| anyhow!("{e}"))?.map_err(|e| anyhow!("{e}")).map(|b| b.bytes);
+    let before: Vec<Vec<u8>> = handles.iter().map(|&h| save(h)).collect::<Result<_>>()?;
+    let made = created();
+
+    // The export, with the playhead and the engine sampled every millisecond meanwhile.
+    let path = dir.join("export.wav");
+    let t = Instant::now();
+    m2_server::export::start(&state, Some(path.clone()))?;
+    let mut paused = vec![];
+    while state.exports.running() {
+        if t.elapsed() > Duration::from_secs(120) {
+            bail!("the export took over two minutes");
+        }
+        if graph.activity().paused == Some("exporting") {
+            paused.push((graph.engine_clock().unwrap_or(0), graph.status().seconds));
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let took = t.elapsed();
+    let b = state.exports.borrowed().context("the export borrowed no instance")?;
+    let applied = |seq: u64| wait(Duration::from_secs(5), || graph.applied(seq).is_some()).and_then(|()| graph.applied(seq));
+    let (held, resumed) = (applied(b.hold_seq), applied(b.resume_seq));
+    // The first resumed block, and a device buffer for its saves to see.
+    std::thread::sleep(Duration::from_millis(50));
+    let after: Vec<Vec<u8>> = handles.iter().map(|&h| save(h)).collect::<Result<_>>()?;
+    std::thread::sleep(Duration::from_millis(300));
+    let tape_frames = tape.frames();
+    out.info(
+        "the export, until it was done",
+        format!("{:.0} ms; paused for {:.0} ms", took.as_secs_f64() * 1e3, b.given_back_ns.saturating_sub(b.held_ns) as f64 / 1e6),
+    );
+
+    // Pauses.
+    out.check(
+        "pauses: the engine said it held before the export's first host call",
+        b.held_ns > 0 && b.first_call_ns >= b.held_ns && b.taken == 2 && b.anew == 0,
+        format!(
+            "held at {} ns, first call {} ns later; {} taken, {} anew",
+            b.held_ns,
+            b.first_call_ns.saturating_sub(b.held_ns),
+            b.taken,
+            b.anew
+        ),
+    );
+    let still = paused.windows(2).all(|w| w[0] == w[1]);
+    out.check(
+        "pauses: paused: \"exporting\" published, the engine clock and the transport still meanwhile",
+        paused.len() >= 3 && still,
+        format!("{} samples while paused, all the same: {still} ({:?})", paused.len(), paused.first()),
+    );
+    let (Some(held), Some(resumed)) = (held, resumed) else {
+        out.check("resumes", false, "the hold or the resume was never applied");
+        return Ok(out);
+    };
+    let (Some(hold_at), Some(resume_at)) = (tape.at(held), tape.at(resumed)) else {
+        out.check("resumes", false, "the hold or the resume isn't on the tape");
+        return Ok(out);
+    };
+    let fade = (0.005 * song.rate as f64).round() as usize;
+    let quiet = span(&tape_frames, (hold_at + 2 * fade) as u64, resume_at as u64);
+    out.check(
+        "pauses: silence while held",
+        !quiet.is_empty() && quiet.iter().all(|f| *f == [0.0; 2]),
+        format!("{} frames between the fade out and the resume, peak {:.1} dBFS", quiet.len(), db(crate::signal::peak(quiet))),
+    );
+
+    // Reuses.
+    let now = graph.plugin_handles();
+    out.check(
+        "reuses: the plan's instances before and after are the same, none created",
+        now == handles && created() == made,
+        format!("{handles:?} before, {now:?} after; {} created", created() - made),
+    );
+    // State intact.
+    let same: Vec<bool> = before.iter().zip(&after).map(|(a, b)| a == b).collect();
+    out.check(
+        "state intact: each instance's saved state after the first resumed block is the one before",
+        same.iter().all(|s| *s),
+        format!("{same:?} ({} and {} bytes)", before[0].len(), before.last().map_or(0, Vec::len)),
+    );
+
+    // Resumes.
+    let period_ns = (frames as f64 / song.rate as f64 * 1e9) as u64;
+    let late = resumed.callback_ns.saturating_sub(b.given_back_ns);
+    out.check(
+        "resumes: at the engine clock it held, within two device buffers of the instances given back",
+        resumed.clock == paused.first().map_or(held.clock, |p| p.0) && late <= 2 * period_ns,
+        format!(
+            "held at clock {}, resumed at {}; {:.1} ms after they were back (bound {:.1})",
+            paused.first().map_or(0, |p| p.0),
+            resumed.clock,
+            late as f64 / 1e6,
+            2.0 * period_ns as f64 / 1e6
+        ),
+    );
+    let own = max_step(span(&tape_frames, hold_at.saturating_sub(song.rate as usize / 5) as u64, hold_at as u64)).0;
+    let down = max_step(span(&tape_frames, hold_at.saturating_sub(1) as u64, (hold_at + fade + 1) as u64)).0;
+    let up = max_step(span(&tape_frames, resume_at.saturating_sub(1) as u64, (resume_at + fade + 1) as u64)).0;
+    out.check(
+        "resumes: no step at the fade out or the fade in over G6's bound",
+        own > 0.0 && down <= 2.0 * own && up <= 2.0 * own,
+        format!("{down:.4} out, {up:.4} in; twice the music's own over the 200 ms before: {:.4}", 2.0 * own),
+    );
+
+    // The file, against `m2 render`'s (new instances).
+    let (_, _, fresh, _) = graph.render(m2_editor::render::Length::Song)?;
+    let fresh_path = dir.join("render.wav");
+    fresh.write(&fresh_path, |_| {})?;
+    let (got, want) = (read_wav(&path)?, read_wav(&fresh_path)?);
+    let sec = song.rate as usize;
+    out.check(
+        "the file: as long as m2 render's, within a second, and the song's length at least",
+        got.len().abs_diff(want.len()) <= sec && got.len() as u64 >= song.end(),
+        format!(
+            "{:.2} s against {:.2} s; the song is {:.2} s",
+            got.len() as f64 / sec as f64,
+            want.len() as f64 / sec as f64,
+            song.end() as f64 / sec as f64
+        ),
+    );
+    // Over the song's seconds: its release tail after them differs from one instance to the next by
+    // more than the bound (Surge's random phases), so there it is printed beside two m2 renders'.
+    let level = |x: &[[f32; 2]]| crate::signal::levels(x, sec).into_iter().map(db).collect::<Vec<f64>>();
+    let (lg, lw) = (level(&got), level(&want));
+    let song_secs = (song.end() as usize).div_ceil(sec);
+    let worst = |a: &[f64], b: &[f64], from: usize, to: usize| {
+        let pairs = a.iter().zip(b).take(to).skip(from);
+        pairs.filter(|(a, b)| a.max(**b) > -60.0).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max)
+    };
+    let w = worst(&lg, &lw, 0, song_secs);
+    out.check(
+        "the file: its level in each second of the song within 1 dB of m2 render's",
+        w <= 1.0 && lg.len() >= song_secs,
+        format!("worst {w:.2} dB over {song_secs} seconds"),
+    );
+    let (_, _, twin, _) = graph.render(m2_editor::render::Length::Song)?;
+    let twin_path = dir.join("render-twin.wav");
+    twin.write(&twin_path, |_| {})?;
+    let lt = level(&read_wav(&twin_path)?);
+    out.info(
+        "the file: its tail's level against m2 render's (above -60 dBFS)",
+        format!(
+            "worst {:.2} dB; two m2 renders' own tails differ by {:.2} dB",
+            worst(&lg, &lw, song_secs, usize::MAX),
+            worst(&lt, &lw, song_secs, usize::MAX)
+        ),
+    );
+    // The lead alone, where the kick that hits every beat is quiet: from 60% to 90% of each beat.
+    // Two m2 renders differ there by up to about 3 dB (Surge's random phases); a lead that a
+    // loaded state left silent, or with the wrong filter, misses by 6 to 50 dB.
+    let lead = |x: &[[f32; 2]]| -> Vec<f64> {
+        let beats = song.beat(song.end()).floor() as usize;
+        (0..beats)
+            .map(|b| {
+                let (from, to) = (song.frame(b as f64 + 0.6), song.frame(b as f64 + 0.9));
+                db(crate::signal::rms(span(x, from, to)))
+            })
+            .collect()
+    };
+    let (ag, aw, at) = (lead(&got), lead(&want), lead(&read_wav(&twin_path)?));
+    let off = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0, f64::max);
+    out.check(
+        "the file: the lead between the kicks, beat by beat, within 6 dB of m2 render's",
+        ag.len() >= 16 && off(&ag, &aw) <= 6.0,
+        format!("worst {:.2} dB over {} beats; two m2 renders' own differ by {:.2} dB", off(&ag, &aw), ag.len(), off(&at, &aw)),
+    );
+    // The kick's hits, over the lead's held chord.
+    let onsets = |x: &[[f32; 2]]| crate::signal::rises(x, sec / 200, 10, 6.0, -40.0, sec / 10);
+    let (og, ow) = (onsets(&got), onsets(&want));
+    let near = og.len() == ow.len() && og.iter().zip(&ow).all(|(a, b)| a.abs_diff(*b) <= sec as u64 / 100);
+    out.check(
+        "the file: its onsets within 10 ms of m2 render's",
+        near && og.len() >= 15,
+        format!("{} onsets against {}; the first {:?}", og.len(), ow.len(), &og[..og.len().min(4)]),
+    );
+    graph.close();
+    Ok(out)
 }

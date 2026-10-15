@@ -108,6 +108,23 @@ pub fn onsets(x: &[[f32; 2]], threshold: f64, gap: usize) -> Vec<u64> {
     out
 }
 
+/// Frames where a sound starts over another that goes on (a kick over a held chord): the start of
+/// each `window`-frame window whose level is at least `jump_db` above the loudest of the `back`
+/// windows before it, and above `floor_db`, at least `gap` frames after the last one found. The
+/// loudest, not the last: a sound that beats (detuned voices) dips and comes back to where it
+/// was, which isn't a start.
+pub fn rises(x: &[[f32; 2]], window: usize, back: usize, jump_db: f64, floor_db: f64, gap: usize) -> Vec<u64> {
+    let l: Vec<f64> = levels(x, window).into_iter().map(db).collect();
+    let mut out: Vec<u64> = vec![];
+    for i in back.max(1)..l.len() {
+        let (at, before) = ((i * window) as u64, l[i - back.max(1)..i].iter().copied().fold(f64::MIN, f64::max));
+        if l[i] >= floor_db && l[i] - before >= jump_db && out.last().is_none_or(|&o| at - o >= gap as u64) {
+            out.push(at);
+        }
+    }
+    out
+}
+
 /// The first frame from which the level stays below `db_floor` (RMS over `window`-frame
 /// windows) to the end, or None when it never settles.
 pub fn settles(x: &[[f32; 2]], window: usize, db_floor: f64) -> Option<u64> {
@@ -234,6 +251,30 @@ mod tests {
         assert!((1000..1010).contains(&found[0]) && (5000..5010).contains(&found[1]), "{found:?}");
         assert_eq!(settles(&x, 100, -80.0), Some(5200));
         assert_eq!(settles(&sine(1000, 440.0, 0.5), 100, -80.0), None);
+    }
+
+    #[test]
+    fn rises_are_found_over_a_sound_that_goes_on() {
+        // A sine at -26 dBFS that beats (dipping 20 dB every 2,400 frames), and a burst 16 dB louder
+        // every 24,000 frames: two of them 100 frames apart, under the gap asked for.
+        let mut x = sine(100_000, 440.0, 0.05);
+        for (i, f) in x.iter_mut().enumerate() {
+            let g = if (i / 1_200) % 2 == 1 { 0.1 } else { 1.0 };
+            *f = [f[0] * g, f[1] * g];
+        }
+        for start in [10_000, 34_000, 34_100, 58_000] {
+            for (k, f) in x[start..start + 2_000].iter_mut().enumerate() {
+                *f = [f[0] + 0.3 * (k as f32 * 0.2).sin(); 2];
+            }
+        }
+        let found = rises(&x, 240, 10, 6.0, -40.0, 4_800);
+        assert_eq!(found.len(), 3, "{found:?}");
+        for (f, want) in found.iter().zip([10_000u64, 34_000, 58_000]) {
+            assert!(f.abs_diff(want) <= 480, "{found:?}");
+        }
+        let naive = rises(&x, 240, 2, 6.0, -40.0, 4_800);
+        assert!(naive.len() > 10, "against the level just before, the beating starts too: {naive:?}");
+        assert!(rises(&sine(50_000, 440.0, 0.5), 240, 10, 6.0, -40.0, 4_800).is_empty(), "a steady sound starts nowhere");
     }
 
     #[test]
