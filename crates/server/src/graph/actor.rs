@@ -360,12 +360,12 @@ struct Settled {
 }
 
 /// What preparing the last activation took: naming what continues, and the plan (nanoseconds);
-/// and how many instances the plan made new.
+/// and the instances the plan made new, by kind.
 #[derive(Clone, Copy, Default)]
 pub(super) struct Prepared {
     pub(super) continues_ns: u64,
     pub(super) prepare_ns: u64,
-    pub(super) fresh: usize,
+    pub(super) fresh: m2_runtime::Count,
 }
 
 fn packages() -> Result<PackageSet> {
@@ -528,7 +528,7 @@ impl Open {
             Ok(r) => Box::new(r),
             Err(e) => return (Way::Failed(e), prepared),
         };
-        prepared.fresh = r.stats().fresh.total();
+        prepared.fresh = r.stats().fresh;
         let plays = self.describe(&r, device);
         let way = match kind {
             Kind::Activate => Way::Activate(r, plays),

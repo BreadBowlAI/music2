@@ -96,8 +96,8 @@ pub struct EditTiming {
     /// and preparing the plan, in nanoseconds; 0 when it prepared none.
     pub continues_ns: u64,
     pub prepare_ns: u64,
-    /// The instances the plan it prepared made new (every one for a fresh engine; G7a).
-    pub fresh: usize,
+    /// The instances the plan it prepared made new, by kind (every one for a fresh engine; G7a).
+    pub fresh: m2_runtime::Count,
 }
 
 /// What the transport needs of the open project, kept apart from it so seek, the loop and status

@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use m2_editor::Gestures;
+use m2_runtime::Count;
 use m2_server::graph::{EditTiming, Graph};
 use m2_song::NoteClip;
 use m2_song::lane::{LaneData, LaneKind};
@@ -329,9 +330,8 @@ pub fn add_effect(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     out.info("G7a: heard after the compile finished (the contract's own start)", Summary::of(&since_compile));
     let heard = Summary::of(&asked);
     out.check("G7a: heard within 200 ms of the request, its compile included", heard.max <= 200.0, heard);
-    // The delay's own instances only: the pluck it wraps, and everything else, goes on (ID-13).
-    let most = fresh.iter().copied().max().unwrap_or(0);
-    out.check("G7a: at most 3 instances made new per edit", most <= 3, format!("{fresh:?} made new by the {} edits", fresh.len()));
+    let (ok, made) = made_new(&fresh);
+    out.check("G7a: at most 3 instances made new per edit, the pluck's voice pool never", ok, made);
     out.check(
         "no jump back",
         back <= 1e-9,
@@ -348,6 +348,20 @@ pub fn add_effect(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         }
     }
     Ok(out)
+}
+
+/// G7a's rule on what each edit made new (design §12.1, ID-13): the delay's own instances only, at
+/// most 3, and no voice pool, so the pluck it wraps, and everything else, goes on. The plan counts
+/// a whole voice pool as one, so "at most 3" alone would pass a pluck that starts again.
+fn made_new(fresh: &[Count]) -> (bool, String) {
+    let ok = !fresh.is_empty() && fresh.iter().all(|c| c.polys == 0 && c.total() <= 3);
+    let each = fresh.iter().map(|c| {
+        let kinds = [(c.kernels, "kernel"), (c.polys, "voice pool"), (c.plugins, "plugin"), (c.rings, "feedback ring")];
+        let named: Vec<String> =
+            kinds.iter().filter(|(n, _)| *n > 0).map(|(n, what)| format!("{n} {what}{}", if *n > 1 { "s" } else { "" })).collect();
+        if named.is_empty() { "none".to_string() } else { named.join(" and ") }
+    });
+    (ok, format!("made new by the {} edits: {}", fresh.len(), each.collect::<Vec<_>>().join("; ")))
 }
 
 /// G5 on `examples/with-plugins`, playing from its start: a delay after the kick, then after the
@@ -1391,4 +1405,24 @@ pub fn export(lab: &mut Lab, _o: &Opts) -> Result<Outcome> {
     );
     graph.close();
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // G7a (design §12.1), ID-13: an added delay makes its one kernel new and nothing else. Slice 2's
+    // names, which started the wrapped pluck again, also made its voice pool new: that must fail,
+    // though it is still "at most 3" as the plan counts (a whole voice pool is one).
+    #[test]
+    fn a_pluck_made_new_fails_g7a() {
+        let delay = Count { kernels: 1, ..Count::default() };
+        assert!(made_new(&[delay, Count::default(), delay]).0);
+        let restarted = Count { kernels: 1, polys: 1, ..Count::default() };
+        let (ok, said) = made_new(&[delay, restarted]);
+        assert!(!ok && restarted.total() <= 3, "{said}");
+        assert!(said.ends_with("1 kernel; 1 kernel and 1 voice pool"), "{said}");
+        assert!(!made_new(&[Count { kernels: 4, ..Count::default() }]).0, "more than 3");
+        assert!(!made_new(&[]).0, "no edit");
+    }
 }
