@@ -772,10 +772,13 @@ builds, as the design says. Timings are for information only: the reference Mac 
 
 **In short:** a six-lens review of `d7475b1`, with a skeptic for each finding, confirmed 19 findings and dropped
 5 (its results: `~/m2-runs/review-b1/findings.json`). The owner decided five questions (O1 to O5, below). Four fixers
-then worked on their own branches, one area each, and every finding is fixed but one, fit-3, which no fixer's list
-held (see "Left, and why"). Each fix has a test that fails without it, except one race too narrow for any test
-(rt-4). Their branches and `main` are merged into `step7`. The whole workspace passes: 890 tests, 0 failed, 6
-ignored (852 before, plus 38 new; the 3 more ignored are new recorded runs). Nothing was pushed.
+then worked on their own branches, one area each. Every finding is fixed but one, fit-3, which no fixer's list held
+(see "Left, and why"). Each code fix has a test that fails without it, but two: the rt-4 race, too narrow for any
+test, and O1, a setting whose guard is the renders staying the same. Their branches and `main` are merged into
+`step7`. The whole workspace passes: 890 tests, 0 failed, 6 ignored (852 before, plus 38 new; the 3 more ignored are
+new recorded runs). `ci/check.sh` passed twice, every row, with no retry and the 8 renders unchanged. With `--gates`
+it passes too, now that G7f part 1's address-space rule passes (0.29%). Every step 7 gate passes its rule here, and
+every control fails as it must. The combination needed one more fix: G7e now hears O4. Nothing was pushed.
 
 ### The owner's decisions (2026-10-15)
 
@@ -878,8 +881,8 @@ commit says what it brought.
 
 How the fixes meet in the code. A's O4 and C's plug-2 both touch `PluginNode::process`. A failed instance returns
 silence before anything else, so it never sends A's note-ons. An instance C won't lend is never marked by A's
-export call, so its notes are left alone, as they never stopped. D's G7e was made before O4, so it is run again
-with O4 in (below). The workspace built and passed 890 tests after the merges, before anything else changed.
+export call, so its notes are left alone, as they never stopped. D's G7e was made before O4, so it gained a check for O4
+(below). The workspace built and passed 890 tests after the merges, before anything else changed.
 
 After the merge, two small commits:
 
@@ -891,6 +894,57 @@ After the merge, two small commits:
 
 Two fixer commits have no blank line after the subject, so `git log --oneline` shows the whole body as the subject:
 `e12746b` (fixer B) and `737575a` (fixer C). They are left as they are: rewriting commits is not allowed.
+
+### One more fix, for the combination
+
+| Commit | What | Why |
+|---|---|---|
+| `e82e614` | G7e checks that the lead's chord, held across the pause, plays again after it: 60% to 90% into the beat the hold fell in, where the kick is quiet, above -60 dBFS. Its comments and the gates README no longer say the chord stays silent. | Fixer D's G7e was built before O4 and said the lead's chord doesn't sound at the resume. With O4 that is false, and no check heard O4 with a real plugin: G7e passed with O4 taken out. Now it is -31.1 to -33.8 dBFS in 13 runs; with the resume's note-ons taken out (`Renderer::resumed` not called) it is about -105 dBFS, and G7e fails, 3 of 3. |
+
+### The check
+
+| Run | Commit | Result |
+|---|---|---|
+| `ci/check.sh` (`~/m2-runs/check-s7-c1`, 8 min) | `a1d9914` | **PASS**, every row: toolchain, web build, build, the app (first-song and with-plugins each connected in 1 s), rust tests (890 passed, 0 failed), clippy, std kernels, std.wasm, mac lint, browser suites (29 of 29), renders (8 of 8 match `e2e/renders.sha256`), repo unchanged. Nothing passed only on a retry. |
+| `ci/check.sh` (`~/m2-runs/check-s7-c2`, 8 min) | `a1d9914` | **PASS**, every row, the same numbers. Nothing passed only on a retry. Its two screenshots of the app are in `~/m2-runs/app-shots/step7-a1d9914/`. |
+| `ci/check.sh --gates` (`~/m2-runs/check-s7-cg`, 20 min) | `a1d9914` | **PASS**, all 13 rows. The gates row passes on Linux for the first time in step 7: G7f part 1's 25% rule, which failed at 37.6%, now passes at 0.29% (O1). |
+| `ci/check.sh --gates` (`~/m2-runs/check-s7-cg2`, 20 min) | `e82e614` | FAIL, 1 row of 13: "repo unchanged", because this file was edited while the check ran (the integrator's mistake, not the code's). Every other row passed, the gates row included. |
+| `ci/check.sh --gates` (`~/m2-runs/check-s7-cg3`, 20 min) | `e82e614` | **PASS**, all 13 rows, nothing on a retry, the 8 renders unchanged. The gates row took 12 minutes. |
+
+O1 changed no offline render: the 8 renders match in every run, and fixer D's 4-minute p16 render is the same file
+before and after.
+
+### Every step 7 gate
+
+On this server: Ryzen 9 7950X3D, 32 threads, Ubuntu 24.04.3, load average 1 to 10 (other agents ran beside). Release
+builds. Timings are for information only: the reference Mac judges them (PLAT-1). Logs, the script (`run.sh`) and
+`verdicts` with every run's result are in `~/m2-runs/gates-fix/`; the gates checks' are in
+`~/m2-runs/check-s7-cg/gates.log` and `~/m2-runs/check-s7-cg2/gates.log`.
+
+| Gate | Rule (design-7 §12, with the review's changes) | Here | Verdict |
+|---|---|---|---|
+| G7a through the server (p50 from 3:00, 10 edits) | heard within 200 ms of the request, compile included; at most 3 made new an edit, and the pluck's voice pool never (rg-2); no jump back | p50 103.1 ms, p95 108.7 ms (the three gates checks: p95 115.4, 106.3, 108.6); past the session's work p95 44.8 ms; made new per edit: 1 kernel or none; jump back 0 | passes its rule here; the time is judged on the Mac |
+| G7a's engine-rig twin | heard within compile + 100 ms; no jump back; the effect heard; and, new (K10a), no step over twice the music's own across each edit (G6's bound) | 26.7 ms after the compile; jump 0 frames; −53.6 dBFS of difference; steps 0.028 adding the delay (bound 0.760) and 0.248 taking it out (bound 0.497) | passes |
+| G7b tails (p50 from 3:00) | 49 untouched tracks bit-identical on every block; every stateful node kept, none reset; the wrapped pluck, as a Tx and as a file save: the whole mix bit-identical | 5,625 blocks bit-identical; 200 kept, 1 new, 0 reset; wrapped: 731,392 frames bit-identical both ways, the pluck kept | passes |
+| G7b with `--no-arena` | must fail | 33 tracks differ; 0 kept, 201 new, 417 ghosts; every wrapped check fails | fails, as it must |
+| G7c | live with no edits is offline, bit for bit; a no-op activation changes no bit | `bit_identity.rs`'s 6 tests pass. Recorded, release: `live_is_the_export_on_all_of_p16`, and new (K10b) `live_is_the_export_on_p50` and `a_no_op_activation_on_p50`: pass (353 s together). `p16_loops_ten_minutes_without_drift`: pass (116 s). 8 of 8 renders unchanged. | passes; the p50 runs exist now |
+| G7d | a rebuilt module starts from init; a wrong shape is refused | `a_rebuilt_kernel_module_starts_from_init`, `a_wrong_shape_move_is_refused`: pass | passes |
+| G7e through the server (15 runs: 10 in `gates-fix`, 5 before `e82e614` and 5 after; 1 in each `--server` run; 1 in each gates check) | held before the first host call (printed); still and silent while held; same instances, none made; state intact; resumed at the held clock within two buffers; no step over twice the music's own; and, new, the held chord plays again; the file within 1 dB a second, tail and lead within 6 dB, onsets within 10 ms | paused 252–259 ms; held at beat 6.08, 40 ms after a kick, every run; 2 taken, 0 anew; resumed 0.2–10.4 ms after the instances came back (bound 21.3); steps 0.0038–0.0048 out, 0.0026–0.0027 in (bound 0.051–0.055); the chord after the resume −31.1 to −33.8 dBFS (13 runs with the new check); per second worst 0.06–0.17 dB; tail 0.30–1.67 dB; lead 2.51–4.76 dB (two renders' own 1.08–4.44); 15 of 15 onsets | passes every run |
+| G7e's CI test | the probe's call order; no audio-thread call in the window; bit for bit; its negative control | `an_export_borrows_and_gives_back_the_live_instances`: pass | passes |
+| G7f part 1 (`store`, p50, 5 pairs; 1 run here and 1 in each gates check) | on any machine: at least 2 renderers, at most 25% of the address space with 2. Against S on the same machine: block within S + 80 µs by the mean, footprint within S + 64 MB, build within 1.5 × S | 6,058 instances; build 215 ms (35.4 µs each); 4 side by side; one renderer adds 195 MB and reserves 190 GiB; two hold 380 GiB, **0.29%**; pairs, the app's layout against P1: block mean +16 µs (+5 to +36), p99 −170 µs (−395 to −53); in the gates checks, means +33, +24 and +12 µs; drop 87.3 ms (P1 123.1), the other thread's p99 9 µs during it, 7 before; batched drops +2 µs | **passes** the 25% rule (37.6% at the last integration). The S comparisons are recorded, not judged (S is the Mac's). |
+| G7f part 2 (`arena`, p50 from 3:00; 3 runs here and 1 in each of the 3 gates checks) | callback within HEAD's + 320 µs by the mean (HEAD's record from the same machine); the slowest activation block under 5,333 µs | pairs, the app's layout against P1: mean +55, +0, +106, −60, +65 and +85 µs; p99 −127, −1,058, −477, −1,009, −869 and −264 µs; slowest activation block 3,239 / 3,263 / 3,511 / 4,174 / 3,099 / 3,383 µs | passes its judged rule; the 320 µs rule is recorded, not judged (HEAD's record is the Mac's) |
+| The churn test | after 55 activations, the same kernel instances alive, nothing leaked; and, new (K10c), the recorded p16 run: 200 edits within +20 MB | `random_structural_edits_leak_nothing`: pass. `p16_churns_200_edits_within_20_mb`: 283 activations; footprint 179.1 MB after 70 warm-up edits, then 175.1 MB (−4.0 MB) | passes |
+
+**§12.8, the gates that keep passing:**
+
+| Run | Result |
+|---|---|
+| `m2-gates` (engine rig on p16), release (215 s) and the dev build (264 s) | all 10 PASS on both: G1, G2, G3, G4, G5, G6, G7, G7b, G10, with-plugins. Release: G1 p95 10.7 ms; G3 and G5 13.3 ms after the compile. |
+| `m2-gates --server` (p16), twice | all 8 PASS both times: G1 p95 18.5 ms (20.4 during a compile); G3 p95 17.8 ms; G5 p95 26.3 ms past the session's work, G7a 51.8 ms from the request; G8 p95 19.9 ms during a compile; G9; G11 `tx-data` p95 8.4 / 8.5 / 9.4 ms; `watcher` 0.09% of a core; G7e |
+| `m2-gates plugins --quick` | PASS |
+| `m2-gates plugins --quick --no-arena` | FAILS, as it must (12 checks) |
+| `m2-gates --rig replay --quick` (HEAD's engine) | fails the gates step 3 exists for, as it must (G10 passes) |
+| `no_alloc.rs` (6), `no_blocking.rs` (1), `m2-server`'s lib tests three times (166 each), clippy | pass |
 
 ### Left, and why
 
@@ -926,6 +980,8 @@ Two fixer commits have no blank line after the subject, so `git log --oneline` s
   README gives the command. A `--gates` step running them would make the Mac record them.
 - **The churn run's +20 MB** is read after 70 warm-up edits. The design says "within +20 MB" without saying from when;
   this reading is fixer D's, and the test and README say so.
+- **`ci/check.sh`'s gates row** still says it usually takes 15 minutes. Here it took 12; fixer D expects G7f's pairs
+  to add about 8 minutes on the Mac. The lead's file.
 - **Old rustfmt diffs** remain on lines no fixer wrote. New lines are clean.
 
 ### For `HANDOFF.md`
