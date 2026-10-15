@@ -624,3 +624,49 @@ bound.
 - 8a's `machine()` "gains topology": a new part makes old records stop matching (`same_machine` compares every part but
   the OS). Re-record, or compare only the first parts then.
 - `HANDOFF.md`'s check table still says the gates row runs "G11 `tx-data` and `watcher` now".
+
+### Independent check
+
+**In short:** the module does what platform design §8 asks, on both OSes (the macOS side type-checked only). One new
+test was flaky, about 1 run in 10: fixed. The gates summary now names both machines when a record isn't judged:
+fixed. Nothing else needed a fix. A few things are for the lead to decide (below).
+
+**What was checked:** the diff against design §8, design-7 §11 and §12, and the contract's PLAT-1. The macOS code
+against `<mach/task_info.h>` (`task_vm_info` through rev2: 42 `natural_t`s) and the libc signatures. Nothing here runs
+on an audio thread: `interactive()` is called once, before the drop test's loop.
+
+| Check | Result |
+|---|---|
+| `ci/check.sh --gates` at `56d10f1` (17 min, load 6 to 24; logs in `~/m2-runs/check-check-proc/`) | FAIL, 2 of 13 rows, both known. Rust tests: 827 passed, 3 failed, slice 4's three broken checks (above). Gates: G7f part 1's 25% rule only. Mac lint, clippy, `one_place.rs` and every other row: PASS. |
+| m2-os's tests, 150 runs of the test binary | `the_footprint_counts_touched_pages_and_a_reservation_only_maps` failed 12, then 13 times in 150 |
+| The same, after the fix | 0 failures in 300 runs. A broken `memory()` (`RssFile` for `RssAnon`) fails it 20 times in 20. |
+| After the fixes: m2-os and m2-gates' tests, clippy, the mac lint | PASS. `rustfmt --check` is clean on every changed file. |
+| The gates row, from the script's own lines, on a scratch list | comments and blanks skipped; a gate that doesn't exist named in a FAIL; the "machines" line in the summary |
+| Probes on this server | `RLIMIT_AS` (`ulimit -v`) becomes the address space, in bytes; `machine()` falls back from DMI's empty product name to the board |
+
+The gates in the check (information only, PLAT-1): G11 `tx-data` p95 8.4 to 8.8 ms, `watcher` 0.09% of a core; G7a
+p95 111.2 ms from the request; G7a's twin and G7b PASS. G7f part 1: one renderer adds 195 MB of footprint; with two
+the process holds 37.6% of its address space (FAIL, as on the Mac); block p99 3,333 µs; build 223 ms. G7f part 2:
+the slowest activation block 4,820 µs (bound 5,333 µs); callback p99 13,541 µs, not judged.
+
+**Fixed** (commits on `s7-proc`):
+
+| What | Why | Fix |
+|---|---|---|
+| The footprint test failed in about 1 run of 10 | It read the whole process's memory while the binary's other tests map and unmap beside it. What was mapped fell by up to 149 MB while it touched 64 MB. | Each try reads just before and after its own change; one try of 10 must see it, 50 ms apart. |
+| The gates summary didn't say which machines | When a record is from another machine, the summary said "not judged" but not which machine the run was on. The owner pastes only the summary, so the Mac's machine line, needed to put a record right, stayed in the logs. | The summary keeps the "machines" line. On this server it is cut at 220 characters, in the last word. |
+
+**For the lead to decide** (not changed):
+
+- **The thread count in `machine()` is what the process may use.** On Linux that follows `taskset` and cgroup limits:
+  under `taskset -c 0-3` the same server is "4 threads", so another machine. The G7f runs in
+  `~/m2-runs/g7f-linux/one.sh` use `taskset -c 4,20`: a record made that way names "2 threads" and judges only runs
+  pinned the same way. Counting the CPUs online instead would name the machine, not the run.
+- **Linux's footprint leaves out shared memory.** A memfd's pages, mapped and only read, count in `RssShmem`, not
+  `RssAnon`. In G7f part 1 on p50 that peaked at 180 MB. Only same-machine comparisons are judged, so the rules stay
+  fair. But Linux's numbers are not the Mac's `phys_footprint`.
+- **One record a file.** `store-S.txt` and `callback-S.txt` are read for their first record. A Linux record beside the
+  Mac's would need the reader to pick the one from this machine; today it needs `M2_STORE_S` or `M2_CALLBACK_S`.
+- Platform design §3's rows OS-82, OS-83 and OS-84 still say "Designed (§8)"; they are built now.
+- `cargo fmt --check -p m2-gates` shows two old diffs in `crates/gates/src/server.rs`, from step 7's own commit, not
+  from this work.
