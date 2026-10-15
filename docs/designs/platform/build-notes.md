@@ -1009,3 +1009,86 @@ Left for the lead (small, not fixed):
 - When one test binary keeps failing, tests that passed on the retry are still listed under "what failed" (G10 in the
   builder's run without plugins). Older than this slice.
 - When the app row's song copy fails, the row's note still says "see app-*.log" (the builder named this too).
+
+## S7, S8, the sandbox and the flakes on `main`
+
+**In short.** The four slices built side by side from `e1606e1` came onto `main` in the order S7, S8, sandbox, flakes,
+so `main` is one line. Eight small points their checkers left are fixed in four commits. Then `ci/check.sh` passed
+twice at `9f0b19a`, with no retry: §13.1's S8 row, Linux fully green.
+
+**How they came on.** S7 was a fast-forward. Each later branch was rebased onto `main` in its worktree, built
+(`cargo build --workspace --all-targets`, no warnings from S8 on) and passed its own tests before `main` moved to it.
+
+| Slice | Conflicts | Its own tests after the rebase |
+|---|---|---|
+| S7 | none (a fast-forward) | `m2-session` 123 of 123 in 129 s (both kill tests, the scan-order test); `m2-runtime`, `m2-editor`, `m2`'s tests; `project::` 20 of 20 |
+| S8 | `build-notes.md`: both slices appended a section; kept `main`'s file and S8's section after it. `docs/architecture.md` merged by itself (S7's WRITE-1, 15, 16 beside S8's WRITE-19, PLAT-2, 3). | `m2-os` 27 and `one_place.rs` 3 (its allow-list empty); `m2-server` 135 of 135; `m2-gates` 6 and its harness 6 |
+| sandbox | `build-notes.md` only, the same way. RENDER-2 merged by itself. | `m2-script` 49 and `std.rs` 6; `files::` 9 of 9 |
+| flakes | `build-notes.md` only, the same way. `ci/check.sh` merged by itself. | `m2-runtime` 83, `m2-plugins` 13 and `main_thread`, `m2-server` 135; the cell and Surge tests 10 of 10 each; `bash -n ci/check.sh` |
+
+Each rebased notes file was checked to be `main`'s file with the slice's own section after it, byte for byte, and
+`git range-diff` showed every code commit unchanged. Only S7 touched `Cargo.lock` (a fast-forward), and only S8
+`one_place.rs`.
+
+The rebase gave S8's, the sandbox's and the flakes' commits new hashes. The sections above name the old ones:
+
+| Slice | Old → new |
+|---|---|
+| S7 | unchanged: `758e583`, `a0b217e`, `7ec6404`, `a8a94dc` |
+| S8 | `edcee5f` → `5410421`, `e4e1504` → `f75e836`, `02a9164` → `40fef09`, `09b086a` → `2efc95c` |
+| sandbox | `7d37b6b` → `7077ff6`, `198cdbb` → `0559152`, `2dd9c2d` → `9d46399`, `e9f1970` → `4e864bf` |
+| flakes | `ec5af04` → `d450862`, `9484a18` → `9815f28`, `c9c163b` → `8d7d498`, `5587530` → `e834b27`, `010a49d` → `11bbea2`, `e8a5158` → `85e232f` |
+
+**Fixed here**, points the checkers left that were small and clear:
+
+| What | Why, and how it was checked |
+|---|---|
+| `m2 new a/b/song` syncs each folder it makes in the one above (`create_at`, `7ea63d9`) | It synced only `b/`, the song's parent (S7's check). strace: `a/` synced in `.`, `b/` in `a/`, the song in `b/`; an absolute `…/c/d` syncs `c/` in its parent; an existing parent gets nothing more. |
+| A bounce whose provenance can't be written, pushed or synced removes that provenance too (`apps/m2/src/main.rs`, `7ea63d9`) | Before, only the WAV went, and the provenance left behind made a retry with that name fail (S7's builder and check). strace with an `EIO` injected at each of the provenance's 4 `fsync`s (`m2 bounce song vox/keys`): exit 1, nothing left in `assets/vox/`, and a retry works. The binary before the fix left `keys.wav.json` and refused the retry. |
+| The kill test reopens the project, and runs Finish and Discard, on the disk it was killed on (`kill_tests.rs`, `7ea63d9`) | Both runs recovered on the disk that swaps, so recovery on one that can't was untested (S7's check). Both kill tests pass: `m2-session` 123 of 123. |
+| Song code has no `WeakRef` or `FinalizationRegistry` (`core/script/src/lib.rs`, `bcaecec`) | QuickJS collects garbage after a number of bytes as the OS's malloc counts them, so a song that sees collection could render other bits on another OS (PLAT-4; the sandbox's builder and check). Nothing uses them. The sandbox test fails without the change ("the collector's timing") and passes with it; it also checks that `WeakMap` and `WeakSet` still work. RENDER-2's *Today* and `docs/song-as-program.md` say so. |
+| `thread::cpu_time_grows_while_the_thread_works` works until the clock says 10 ms (`cdab621`) | It gave 30 ms of wall time, which held under 10 ms of CPU in 1 of 20 runs beside 32 busy threads (S8's check). It still asks for 10 ms, and now also that the thread's CPU time never runs ahead of the wall clock. 100 of 100 beside 32 busy loops. |
+| `notes`: after the two undos it waits for the page as well as the file, and "the timeline shows it shorter" measures inside its wait (`cdab621`) | The two races S6's and S7's checks hit. After the undos the page could still hold the revision before them, so the server refused the new length (HTTP 400). The clip was measured once, as at `notes.mjs:97` before S2. Still 52 checks; 8 of 8 alone, 5 of 5 beside 32 busy loops. `taste` changes no line near these. |
+| Test 5's comment says inotify names each write (`cdab621`) | It said events name a file written while open only when it is closed, which is FSEvents only (S8's check). |
+| `ci/check.sh`: "1 line more", and a failed app row says "see "what failed"" (`9f0b19a`) | Cosmetic points the flakes' builder and check left. Every failure in the app row writes a line there. |
+
+PLAT-6's *Today* now says Linux passes the check since S8, first at `9f0b19a`.
+
+**Left for the lead**, not fixed (each a choice, or not provable here):
+- S7: an export into a folder that can be written but not listed fails after the file is whole; New Song, `m2 new`,
+  the bounce and exports fail on a volume that refuses a folder `fsync`, where commits carry on (design §9 attack 3
+  counts that as a failing disk). On Windows, `push_tree`'s read-only handles won't do for `FlushFileBuffers`.
+- S8: when inotify's limits run out the log line is cryptic ("No space left on device"); a folder the watch walk can't
+  list goes unwatched with no Rescan (the 5 s walks and the two-miss rule cover it); running out of watches at the
+  real limit is untested (it needs root). live3b failed once in S8's check under a load of 45 to 74; not seen here.
+  git sees `graph/fsevents.rs` → `graph/events.rs` as a delete and an add, so a merge across it may need `-M`.
+- Sandbox: a TypeScript `enum` in song code aborts a debug build (older than the slice; refuse `enum` with a clear
+  message, or fold it with `libm`: a choice). An export name over 63 bytes is cut by QuickJS. attention-attn's toast
+  Undo can race the page's revision (both of the branch's checks, neither here). `core/script` has older lines rustfmt
+  would change.
+- Flakes: when one test binary keeps failing, tests that passed on the retry are still listed under "what failed"
+  (older). The Surge test can't see a note passed up to 31 samples late (Surge's own blocks); the probe plugin's test
+  checks the exact sample.
+- Only the Mac run tests the macOS side: FSEvents in `m2-os`, the burst test there, the new pushes' durability.
+- §13.3: after `taste` merges, re-run s8-tracks' "layout.json within a second" on the inotify watcher.
+
+**The checks** at `9f0b19a` (`ci/check.sh`, 8 min each on a quiet server; logs and the app's screenshots in
+`~/m2-runs/check-integrate-b/` and `~/m2-runs/check-integrate-b2/`). Both: "music2 check: PASS", every row PASS, nothing
+passed only on a retry, "what failed" empty.
+
+| Row | First run | Second run |
+|---|---|---|
+| toolchain, web build, build | PASS | PASS |
+| app | PASS: the UI connected in 1 s with `first-song` and with `with-plugins`; the plugins hosted (no "can't be hosted", the screenshot shows no "Needs attention") | PASS, the same |
+| rust tests | PASS: 739 passed, 0 failed (S6's 715; S7's 2; tests 1 to 5 of §4.1, S8's 4 watcher tests, its 9 `m2-os` tests and its check's 1; the sandbox's 3); `m2-session` 129.1 s | PASS: 739 passed, 0 failed; `m2-session` 129.3 s |
+| clippy | PASS (without `-D warnings` it lists nothing) | PASS |
+| std kernels, std.wasm, mac lint | PASS | PASS |
+| browser suites | PASS: 29 of 29, 1,034 of 1,034 checks; live3b 51 of 51 with the plugins | PASS, the same |
+| renders | PASS: 8 of 8 match `e2e/renders.sha256` | PASS |
+| repo unchanged | PASS | PASS |
+
+No log of either run says a watcher fell back to walks.
+
+**Tidied.** The four worktrees in `~/m2-runs/wt/plat-*` are removed (about 190 GB of `target/`), and the branches
+`plat/s7`, `plat/s8`, `plat/script` and `plat/flakes` are deleted, each after `git merge-base --is-ancestor` showed it
+on `main`.
