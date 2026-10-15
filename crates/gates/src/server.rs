@@ -1171,17 +1171,20 @@ fn read_wav(path: &Path) -> Result<Vec<[f32; 2]>> {
 /// `examples/with-plugins` pauses playback, reuses its plugin instances, and playback resumes where
 /// it was with their state intact. Through the server's own export (`m2_server::export::start`),
 /// the song playing from 0:02 in real time on a player whose output the gate keeps (the silent
-/// player's buffer); skipped without Surge XT and Airwindows on `CLAP_PATH`.
-/// - Pauses: the engine said it held before the export's first host call; `paused: "exporting"`
-///   was published while it ran; the engine clock and the transport didn't move meanwhile, and the
-///   output was silence.
-/// - Reuses: no instance created, and the plan's instances before and after are the same.
+/// player's buffer), the export started about a second later, just after a kick's attack; skipped
+/// without Surge XT and Airwindows on `CLAP_PATH`.
+/// - Pauses: `paused: "exporting"` was published while it ran; the engine clock and the transport
+///   didn't move meanwhile, and the output was silence. That the engine held before the export's
+///   first host call is printed: the probe test proves the order.
+/// - Reuses: both instances borrowed, none created, and the plan's instances before and after are
+///   the same.
 /// - State intact: each instance's saved state before the export equals the one after the first
 ///   resumed block. The gate's copy holds the lead's cutoff lane still, so the code's values are
 ///   the same at both saves. Surge's saved state is committed, as an autosave will, so the
 ///   instance holds its committed state and the export loads nothing: the usual path.
 /// - Resumes: the engine resumes at the clock it held, within two device buffers of the instances
-///   being given back, with no step at the fade out or the fade in over G6's bound.
+///   being given back, with no step at the fade out or the fade in over G6's bound: twice the
+///   music's own largest step over the 200 ms on each side of the pause.
 /// - The file: as long as `m2 render`'s within a second, its level in each second of the song
 ///   within 1 dB of it, its release tail and the lead between the kicks within 6 dB, and its
 ///   onsets within 10 ms (plugins aren't bit-exact from one instance to the next).
@@ -1227,6 +1230,11 @@ pub fn export(lab: &mut Lab, _o: &Opts) -> Result<Outcome> {
     graph.seek(song.beat(2 * song.rate as u64))?;
     graph.transport("play")?;
     std::thread::sleep(Duration::from_secs(1));
+    // Started 30 to 50 ms after a kick's onset, the hold a callback or two later lands on its body,
+    // past its attack: a kick's attack inside a fade would be the music's own step, not the fade's.
+    // The kick (a std voice, kept by the engine) still sounds at the resume, so the fade in is
+    // heard: the export resets Surge XT's voices, so the lead's chord doesn't sound there.
+    wait(Duration::from_secs(2), || (0.06..0.1).contains(&graph.status().beat.fract())).context("the playhead never reached a kick")?;
     let made = created();
 
     // The export, with the playhead and the engine sampled every millisecond meanwhile.
@@ -1257,17 +1265,17 @@ pub fn export(lab: &mut Lab, _o: &Opts) -> Result<Outcome> {
         format!("{:.0} ms; paused for {:.0} ms", took.as_secs_f64() * 1e3, b.given_back_ns.saturating_sub(b.held_ns) as f64 / 1e6),
     );
 
-    // Pauses.
-    out.check(
+    // Pauses. The export's own thread stamps both times, the hold's once it saw the engine hold, so
+    // their order is printed, not judged: the call order is proved by the probe plugin's log in
+    // `an_export_borrows_and_gives_back_the_live_instances` (crates/server/src/graph/tests.rs).
+    out.info(
         "pauses: the engine said it held before the export's first host call",
-        b.held_ns > 0 && b.first_call_ns >= b.held_ns && b.taken == 2 && b.anew == 0,
-        format!(
-            "held at {} ns, first call {} ns later; {} taken, {} anew",
-            b.held_ns,
-            b.first_call_ns.saturating_sub(b.held_ns),
-            b.taken,
-            b.anew
-        ),
+        format!("held at {} ns, first call {} ns later", b.held_ns, b.first_call_ns.saturating_sub(b.held_ns)),
+    );
+    out.check(
+        "reuses: both plugin instances borrowed, none made anew for the export",
+        b.held_ns > 0 && b.taken == 2 && b.anew == 0,
+        format!("{} taken, {} anew", b.taken, b.anew),
     );
     let still = paused.windows(2).all(|w| w[0] == w[1]);
     out.check(
@@ -1320,13 +1328,25 @@ pub fn export(lab: &mut Lab, _o: &Opts) -> Result<Outcome> {
             2.0 * period_ns as f64 / 1e6
         ),
     );
-    let own = max_step(span(&tape_frames, hold_at.saturating_sub(song.rate as usize / 5) as u64, hold_at as u64)).0;
+    // The music's own largest step on both sides of the pause: 200 ms before the fade out, and
+    // 200 ms after the fade in.
+    let around = song.rate as usize / 5;
+    let own = max_step(span(&tape_frames, hold_at.saturating_sub(around) as u64, hold_at as u64))
+        .0
+        .max(max_step(span(&tape_frames, (resume_at + fade) as u64, (resume_at + fade + around) as u64)).0);
     let down = max_step(span(&tape_frames, hold_at.saturating_sub(1) as u64, (hold_at + fade + 1) as u64)).0;
     let up = max_step(span(&tape_frames, resume_at.saturating_sub(1) as u64, (resume_at + fade + 1) as u64)).0;
+    let beat = paused.first().map_or(0.0, |p| song.beat((p.1 * song.rate as f64).round() as u64));
+    // Sound right after the fade in, or a missing fade there would go unheard.
+    let heard = db(crate::signal::rms(span(&tape_frames, (resume_at + fade) as u64, (resume_at + 2 * fade) as u64)));
     out.check(
         "resumes: no step at the fade out or the fade in over G6's bound",
-        own > 0.0 && down <= 2.0 * own && up <= 2.0 * own,
-        format!("{down:.4} out, {up:.4} in; twice the music's own over the 200 ms before: {:.4}", 2.0 * own),
+        own > 0.0 && heard > -60.0 && down <= 2.0 * own && up <= 2.0 * own,
+        format!(
+            "{down:.4} out, {up:.4} in; twice the music's own over the 200 ms each side: {:.4} (held at beat {beat:.2}, {:.0} ms after a kick; {heard:.1} dBFS just after the fade in)",
+            2.0 * own,
+            beat.fract() * song.data.tempo().seconds_at(1.0) * 1e3
+        ),
     );
 
     // The file, against `m2 render`'s (new instances).
