@@ -5,10 +5,11 @@
 //! a renderer of its own, so playback and every other request carry on meanwhile. A song whose
 //! plugins play borrows their live instances (RENDER-1): on the export's thread, playback pauses
 //! ([`Lent`]), each instance renders offline from its committed state, and playback resumes where
-//! it was once the file is written. One export runs at a time. Clients hear how it goes as `export` events, each naming
-//! the `song` and its project folder (`dir`), and whether playback is `paused` for it: `progress`
-//! (0..1, at most ten a second), then `done` with the file's `path`, `seconds`, `peak_db` and the
-//! `problems` it carries (a plugin that isn't installed, FMT-18a), or an `error`.
+//! it was once the file is written. One export runs at a time. Clients hear how it goes as `export`
+//! events, each naming the `song` and its project folder (`dir`), and whether playback is `paused`
+//! for it: `progress` (0..1, at most ten a second), then `done` with the file's `path`, `seconds`,
+//! `peak_db` and the `problems` it carries (a plugin that isn't installed, FMT-18a; one it couldn't
+//! borrow, `plugin.not-borrowed`), or an `error`.
 
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
@@ -334,13 +335,17 @@ impl Lent {
         }
         let Ok(seq) = self.player.hold(true) else { return false };
         (self.holding, self.record.hold_seq) = (true, seq);
-        let t = Instant::now();
-        // `held` alone could still say an earlier hold's, until this one is applied.
-        while !(self.player.applied(seq).is_some() && self.player.held()) {
+        let (t, mut applied) = (Instant::now(), false);
+        // `held` alone could still say an earlier hold's, until this one is applied. Its stamp is
+        // kept among the last few only, so once seen it is remembered.
+        while !(applied && self.player.held()) {
             if t.elapsed() > HOLD_WAIT {
                 return false;
             }
-            std::thread::sleep(Duration::from_millis(1));
+            applied |= self.player.applied(seq).is_some();
+            if !applied || !self.player.held() {
+                std::thread::sleep(Duration::from_millis(1));
+            }
         }
         (self.held, self.record.held_ns) = (true, m2_play::now_ns());
         true
