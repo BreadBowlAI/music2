@@ -1,9 +1,9 @@
 //! RENDER-25, RENDER-28 (§7.6, §12.7): activations leak nothing. Alone in its binary, so the
-//! process-wide counts it compares see no other test.
+//! process-wide counts it compares see no other test; its two tests take turns (`ALONE`).
 
 mod common;
 
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
 use common::*;
 use m2_plugins::Owner;
@@ -13,6 +13,20 @@ use m2_session::{Revision, Session};
 
 /// An edit: a file, and its new text from its first.
 type Edit = (&'static str, Box<dyn Fn(&str) -> String>);
+
+/// Held by each test while it runs, so each counts what it made alone.
+static ALONE: Mutex<()> = Mutex::new(());
+
+/// What a churn left: the kernel instances alive while its first plan played and once it is over,
+/// the engine's leaks, the clip renders the run made that are still alive with nothing playing
+/// them, and the process's footprint, in bytes, after its warm-up edits and once it is over.
+struct Left {
+    start: usize,
+    end: usize,
+    leaked: u64,
+    stray: usize,
+    footprint: (u64, u64),
+}
 
 /// A plan of the session's accepted revision, prepared against `plays` (its plan's `info`) through
 /// the session's names, as the server prepares one.
@@ -29,10 +43,9 @@ fn prepare(s: &Session, plays: &Revision, info: &PlanInfo, cache: &mut Cache) ->
 }
 
 /// Play the session's project, then make each of `edits` (a file and its new text, or None to put
-/// it back) while it plays, each an activation; then put everything back. Returns the kernel
-/// instances alive while its first plan played and once it is over, the engine's leaks, and the
-/// clip renders the run made that are still alive with nothing playing them.
-fn churn(dir: &std::path::Path, edits: &[Edit]) -> (usize, usize, u64, usize) {
+/// it back) while it plays, each an activation; then put everything back. The footprint is first
+/// read after the first `warm` edits (0: while the first plan plays).
+fn churn(dir: &std::path::Path, edits: &[Edit], warm: usize) -> Left {
     let mut s = Session::open(dir, std_packages()).unwrap_or_else(|d| panic!("{d:?}"));
     let mut cache = Cache::default();
     let mut plays = s.accepted_arc();
@@ -43,6 +56,8 @@ fn churn(dir: &std::path::Path, edits: &[Edit]) -> (usize, usize, u64, usize) {
     player.play();
     hear(&mut d, SR as usize / 2, &mut |_, _| {});
     let start = live_kernels();
+    let footprint = || m2_os::process::memory().map_or(0, |m| m.footprint);
+    let mut first = footprint();
     let mut renders: Vec<Weak<RenderedClip>> = cache.renders();
     let originals: Vec<(String, String)> = edits.iter().map(|(f, _)| (f.to_string(), std::fs::read_to_string(dir.join(f)).unwrap())).collect();
     let mut last = vec![];
@@ -57,6 +72,10 @@ fn churn(dir: &std::path::Path, edits: &[Edit]) -> (usize, usize, u64, usize) {
         player.activate(r).unwrap();
         hear(&mut d, SR as usize / 10, &mut |_, _| {});
         last.push(file.to_string());
+        if k + 1 == warm {
+            drop(d.drain_retired());
+            first = footprint();
+        }
     }
     // Everything back as it was: the plan that plays has the first one's structure.
     for (file, text) in &originals {
@@ -76,7 +95,7 @@ fn churn(dir: &std::path::Path, edits: &[Edit]) -> (usize, usize, u64, usize) {
     let held: Vec<Arc<RenderedClip>> = cache.renders().iter().filter_map(Weak::upgrade).collect();
     let stray = renders.iter().filter_map(Weak::upgrade).filter(|r| !held.iter().any(|h| Arc::ptr_eq(h, r))).count();
     drop(info);
-    (start, live_kernels(), leaked, stray)
+    Left { start, end: live_kernels(), leaked, stray, footprint: (first, footprint()) }
 }
 
 // RENDER-25, RENDER-28 (§12.7): 50 structural edits on first-song while it plays (effects wrapped
@@ -85,6 +104,7 @@ fn churn(dir: &std::path::Path, edits: &[Edit]) -> (usize, usize, u64, usize) {
 // clip edits leave no clip render alive that no plan plays.
 #[test]
 fn random_structural_edits_leak_nothing() {
+    let _alone = ALONE.lock().unwrap_or_else(|e| e.into_inner());
     let first = temp("churn-first-song");
     copy(&repo().join("examples/first-song"), &first);
     let tracks = ["bass", "hats", "keys", "kick"];
@@ -119,8 +139,8 @@ fn random_structural_edits_leak_nothing() {
             edits.push(("data/arrangement.json", Box::new(move |_: &str| format!("{{\"tempo\": [{{\"beat\": 0, \"bpm\": {bpm}}}], \"meter\": []}}\n"))));
         }
     }
-    let (before, after, leaked, _) = churn(&first, &edits);
-    assert_eq!((after, leaked), (before, 0), "first-song: kernel instances alive before and after 55 activations");
+    let left = churn(&first, &edits, 0);
+    assert_eq!((left.end, left.leaked), (left.start, 0), "first-song: kernel instances alive before and after 55 activations");
 
     let resample = temp("churn-resample");
     copy(&repo().join("examples/resample"), &resample);
@@ -134,6 +154,53 @@ fn random_structural_edits_leak_nothing() {
             ("data/chops/clips.json", edit)
         })
         .collect();
-    let (before, after, leaked, stray) = churn(&resample, &edits);
-    assert_eq!((after, leaked, stray), (before, 0, 0), "resample: no instance and no clip render left behind");
+    let left = churn(&resample, &edits, 0);
+    assert_eq!((left.end, left.leaked, left.stray), (left.start, 0, 0), "resample: no instance and no clip render left behind");
+}
+
+// RENDER-25, RENDER-28 (§12.7), recorded: 200 structural edits on p16 while it plays (each track's
+// instrument wrapped in a delay or a reverb, or its call moved to a line of its own) and 10 tempo
+// changes, then everything put back: the kernel instances alive are as many as before, nothing
+// leaked, and the process's footprint grows by at most 20 MB. The footprint is first read after
+// 70 edits more, once the session's ring of 64 past revisions is full: over the first 60 the
+// process grows by about 100 MB, then stays flat (measured every 20 edits; bounded, not a leak).
+// `cargo test -p m2-play --release --test churn -- --ignored`.
+#[test]
+#[ignore = "about half a minute in release"]
+fn p16_churns_200_edits_within_20_mb() {
+    let _alone = ALONE.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = temp("churn-p16");
+    std::fs::remove_dir(&dir).unwrap();
+    m2_session::reference::write(&dir, &m2_session::reference::Reference::P16).unwrap();
+    let file = |k: usize| -> &'static str { Box::leak(format!("tracks/t{:02}.ts", k % 16 + 1).into_boxed_str()) };
+    let mut edits: Vec<Edit> = vec![];
+    let (warm, measured) = (70, 200);
+    for k in 0..warm + measured {
+        // p16's tracks cycle bass, pluck and pad; each file imports delay and reverb already.
+        let instrument = ["bass(lane.notes(\"notes\"))", "pluck(lane.notes(\"notes\"))", "pad(lane.notes(\"notes\"))"][k % 16 % 3];
+        let how = (k / 16) % 3;
+        edits.push((
+            file(k),
+            Box::new(move |text: &str| match how {
+                0 => text.replacen(instrument, &format!("delay({instrument})"), 1),
+                1 => text.replacen(instrument, &format!("reverb({instrument})"), 1),
+                _ => text.replacen(instrument, &format!("\n    {instrument}"), 1),
+            }),
+        ));
+        if k % 20 == 19 {
+            let bpm = 100 + k / 4;
+            edits.push((
+                "data/arrangement.json",
+                Box::new(move |_: &str| format!("{{\"tempo\": [{{\"beat\": 0, \"bpm\": {bpm}}}], \"meter\": []}}\n")),
+            ));
+        }
+    }
+    let left = churn(&dir, &edits, warm + warm / 20);
+    let (first, last) = left.footprint;
+    let mb = |b: u64| b as f64 / 1e6;
+    let grew = mb(last) - mb(first);
+    let n = edits.len();
+    eprintln!("p16, {n} activations: footprint {:.1} MB after {warm} edits, then {:.1} MB ({grew:+.1} MB)", mb(first), mb(last));
+    assert_eq!((left.end, left.leaked), (left.start, 0), "p16: kernel instances alive before and after {n} activations");
+    assert!(first > 0 && grew <= 20.0, "p16: the footprint grew by {grew:.1} MB over {measured} edits");
 }

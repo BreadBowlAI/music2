@@ -2,8 +2,10 @@
 # is that run's m2-gates options, as crates/gates/README.md gives them.
 # The platform step: G11's durable commit and the watcher, whose code this step changes.
 --server tx-data watcher
-# Step 7 (design-7 §12): G7a through the server on p50 from 3:00; its engine-rig twin and G7b; G7e, an
-# export of with-plugins; G7f's two parts. G7c and G7d are tests in the rust tests row.
+# Step 7 (design-7 §12): G7a through the server on p50 from 3:00; its engine-rig twin (which also holds
+# G6's step bound across each edit) and G7b; G7e, an export of with-plugins; G7f's two parts, each 5
+# pairs of the app's layout and P1, about 5 minutes on the Mac. G7c and G7d are tests in the rust
+# tests row; G7c's p50 runs and the churn test's p16 run are recorded tests (crates/gates/README.md).
 --server --reference 50 --at 180 add-effect
 --reference 50 --at 180 add-effect tails
 --server export

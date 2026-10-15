@@ -111,6 +111,22 @@ Step 7's gates, on the runtime itself:
 
 Not measured: the property test over random blocks (the runtime's own). A CLAP reset doesn't cut Surge XT's or Airwindows' tails, so on with-plugins a panic at each wrap is printed rather than used as the tail detector's negative control, which runs on the std probes (G2).
 
+## Recorded tests
+
+Some gates are engine tests too long for every check. `cargo test` skips them (`#[ignore]`); they run on demand, in release, and their results are recorded like a gate run's (step 7's design, §12.3 and §12.7). `ci/check.sh` doesn't run them.
+
+```bash
+cargo test -p m2-play --release --test bit_identity --test live --test churn -- --ignored --nocapture
+```
+
+| Test | Gate | Passes when |
+|---|---|---|
+| `live_is_the_export_on_all_of_p16` (`core/play/tests/bit_identity.rs`) | RENDER-33 on p16 | all of p16 (4:02), played live from 0, is the export, bit for bit |
+| `live_is_the_export_on_p50` (the same file) | G7c on p50 (RENDER-33) | the same on all of p50 |
+| `a_no_op_activation_on_p50` (the same file) | G7c on p50 (RENDER-33, RENDER-25) | a plan of the same revision activated three times mid-note, from 5 s, keeps every instance (none new, no ghost, no fade, no reset), and the 10 s played are the export, bit for bit |
+| `p16_loops_ten_minutes_without_drift` (`core/play/tests/live.rs`) | G2 on p16 (RENDER-33, RENDER-9a) | ten minutes of a 4-bar loop from 1:00: every lap plays the same notes at the same transport frames |
+| `p16_churns_200_edits_within_20_mb` (`core/play/tests/churn.rs`) | the churn test on p16 (RENDER-25, RENDER-28) | 200 structural edits while it plays (each track's instrument wrapped in a delay or a reverb, or its call moved to a line of its own) and 10 tempo changes, then everything put back: as many kernel instances alive as before, nothing leaked, and the process's footprint (`m2_os::process::memory`) grown by at most 20 MB (printed). It is first read after 70 edits more, once the session's ring of 64 past revisions is full: the process grows by about 100 MB over the first 60 edits, then stays flat. Keeping every old revision alive fails it (+498 MB) |
+
 ## The engine calls the engine rig makes
 
 `src/engine.rs` holds every call into the engine, so following its interface as it changes happens there:
