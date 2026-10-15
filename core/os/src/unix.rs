@@ -124,14 +124,30 @@ mod tests {
 
     // OS-82, what G7f measures: touched pages count in the footprint and in what is mapped; a
     // reservation no page backs, as wasmtime makes for each kernel's memory, counts only in what is
-    // mapped. One test, so this binary's tests can't map and unmap between its readings; others
-    // allocate beside it, so only floors and generous ceilings hold.
+    // mapped. The other tests in this binary map and unmap memory beside it: in about 1 run of 10
+    // here, what was mapped fell, by up to 149 MB, while this touched 64 MB. So each try reads just
+    // before and after its own change, and one try of 10 must see it; a memory() that misses the
+    // pages fails every try.
     #[test]
     fn the_footprint_counts_touched_pages_and_a_reservation_only_maps() {
-        let before = memory().expect("the OS says what the process holds");
-        assert!(before.footprint > 0 && before.mapped > 0, "{before:?}");
-        assert!(before.address_space >= 1 << 39 && before.address_space > before.mapped, "{before:?}");
+        let first = memory().expect("the OS says what the process holds");
+        assert!(first.footprint > 0 && first.mapped > 0, "{first:?}");
+        assert!(first.address_space >= 1 << 39 && first.address_space > first.mapped, "{first:?}");
+        let mut tries = vec![];
+        while tries.len() < 10 {
+            match one_try() {
+                Ok(()) => return,
+                Err(seen) => tries.push(seen),
+            }
+            // Apart, so the tries don't all fall while the other tests start and end.
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        panic!("no try of 10 saw it:\n{}", tries.join("\n"));
+    }
 
+    /// 64 MB touched, then 16 GiB reserved, each read just before and after.
+    fn one_try() -> Result<(), String> {
+        let before = memory().unwrap();
         let mut v = vec![0u8; (64 * MB) as usize];
         for i in (0..v.len()).step_by(4096) {
             v[i] = 1;
@@ -139,19 +155,22 @@ mod tests {
         std::hint::black_box(&v);
         let touched = memory().unwrap();
         drop(v);
-        assert!(touched.footprint >= before.footprint + 32 * MB, "{before:?} then {touched:?}");
-        assert!(touched.mapped >= before.mapped + 32 * MB, "{before:?} then {touched:?}");
-        assert_eq!(touched.address_space, before.address_space);
 
-        let size = 16usize << 30;
+        let size = 16u64 << 30;
         let flags = libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_NORESERVE;
+        let unreserved = memory().unwrap();
         // SAFETY: a new private mapping no page backs, unmapped below and never touched.
-        let p = unsafe { libc::mmap(std::ptr::null_mut(), size, libc::PROT_NONE, flags, -1, 0) };
+        let p = unsafe { libc::mmap(std::ptr::null_mut(), size as usize, libc::PROT_NONE, flags, -1, 0) };
         assert_ne!(p, libc::MAP_FAILED, "{}", std::io::Error::last_os_error());
         let reserved = memory().unwrap();
         // SAFETY: the mapping made above, whole.
-        unsafe { libc::munmap(p, size) };
-        assert!(reserved.mapped >= before.mapped + size as u64 - 64 * MB, "{before:?} then {reserved:?}");
-        assert!(reserved.footprint < touched.footprint + 1024 * MB, "{touched:?} then {reserved:?}");
+        unsafe { libc::munmap(p, size as usize) };
+
+        let seen = touched.footprint >= before.footprint + 32 * MB
+            && touched.mapped >= before.mapped + 32 * MB
+            && touched.address_space == before.address_space
+            && reserved.mapped >= unreserved.mapped + size - 64 * MB
+            && reserved.footprint < unreserved.footprint + 1024 * MB;
+        if seen { Ok(()) } else { Err(format!("{before:?}, touched {touched:?}; {unreserved:?}, reserved {reserved:?}")) }
     }
 }
