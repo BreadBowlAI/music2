@@ -670,3 +670,100 @@ the slowest activation block 4,820 µs (bound 5,333 µs); callback p99 13,541 µ
 - Platform design §3's rows OS-82, OS-83 and OS-84 still say "Designed (§8)"; they are built now.
 - `cargo fmt --check -p m2-gates` shows two old diffs in `crates/gates/src/server.rs`, from step 7's own commit, not
   from this work.
+
+## Integration and the whole step's check
+
+**In short:** bug 1, slice 4 and the `m2-os` process module are all on `step7` now. `ci/check.sh` passes on Linux:
+every row, no retry, and the 8 offline renders unchanged. Every step 7 gate that exists passes its rule here, but one:
+G7f part 1's address-space rule (37.6%), which the Mac's own record misses too (37.9%). That is the owner's open
+decision. The combination needed one list fix, one flaky test fixed, and one new test. Nothing was pushed.
+
+### What was merged
+
+- `s7-proc` (the `m2-os` process module, 5 commits) was rebased onto `step7`, then `step7` was fast-forwarded to it.
+  One conflict: both sides added a section at the end of this file. Both are kept, in order: Bug 1, Slice 4, then
+  m2-os process.
+- `s7-bug1` was already in `step7` (slice 4's builder fast-forwarded it first).
+- Then the worktrees `~/m2-runs/wt/s7-bug1` and `~/m2-runs/wt/s7-proc` were removed, and the branches `s7-bug1` and
+  `s7-proc` deleted, after checking each is in `step7`.
+
+### Fixes for the combination
+
+| Commit | What | Why |
+|---|---|---|
+| `c1c9201` | `ci/gates.txt` runs G7e (`--server export`); the README's run list names it | The process module's list said G7e would join "once it is built". Slice 4 built it, and `m2-gates --server` knows `export`. The Mac run now times it too. |
+| `1a1b47c` | `a_second_export_waits_for_its_own_hold` fills buffers only until the engine holds | Slice 4's test raced. The export sends its resume just before it says it is done, so one more fill could take the resume, and the test's own setup failed. Run alone it failed 5 of 100 times; now 0 of 200. With the hold's stamp check taken out, it still fails 20 of 20. Found in the third of three runs of `m2-server`'s tests. |
+| `15874a2` | New test `a_device_change_during_an_export_loads_a_new_player_after_it` (`crates/server/src/graph/tests.rs`) | Bug 1 lets a player go when its output moves; slice 4's export borrows that player's plugin. Bug 1's checker said nothing tested the two together. |
+
+The new test changes the output device inside an export's window. It passes, 100 runs of 100:
+
+- the action that meets the change fails and says why ("the sound output moved to another device");
+- nothing loads and no instance is made until the export gives its instance back;
+- only the export calls the instance in its window, and the player that was let go never plays it again;
+- the file equals one made with new instances, bit for bit;
+- then the project loads into a new player where playback held, with a new instance from the committed state.
+
+With the export's deferral of loads taken out (`way()` in `actor.rs`), it fails: the new player loads during the
+export. One thing it showed: once given back, the borrowed instance is deactivated again and destroyed at once,
+since the player that played it is gone. That is right.
+
+### The check
+
+| Run | Commit | Result |
+|---|---|---|
+| `ci/check.sh` (`~/m2-runs/check-s7-a`, 8 min) | `c1c9201` | **PASS**, every row. 851 tests passed, 0 failed, 3 ignored. Nothing passed only on a retry. 29 of 29 browser suites. 8 of 8 renders match `e2e/renders.sha256`: step 7 changes no offline render. The mac lint and `one_place.rs` pass (the process module moved `store.rs`'s OS code). |
+| `ci/check.sh --gates` (`~/m2-runs/check-s7-a-gates`, 13 min) | `c1c9201` | FAIL, 1 row of 13: the gates row, only on G7f part 1's address-space rule (below). Every other row as above, and every other gate run passes. |
+| `ci/check.sh` (`~/m2-runs/check-s7-b`, 8 min) | `15874a2` | **PASS**, every row, with the two test commits. 852 tests passed, 0 failed, 3 ignored. Nothing passed only on a retry. 29 of 29 suites; 8 of 8 renders. |
+
+### Every step 7 gate
+
+On this server: ASRockRack B665D4U-1L, Ryzen 9 7950X3D, 32 threads, Ubuntu 24.04.3. Load average 1 to 5. Release
+builds, as the design says. Timings are for information only: the reference Mac judges them (PLAT-1). Logs, and
+`verdicts` with every run's result, are in `~/m2-runs/gates-integrate/`; the gates check's are in
+`~/m2-runs/check-s7-a-gates/gates.log`.
+
+| Gate | Rule (design-7 §12) | Here | Verdict |
+|---|---|---|---|
+| G7a through the server (p50 from 3:00, 10 edits) | heard within 200 ms of the request, compile included; at most 3 new instances an edit; no jump back | p50 106.1 ms, p95 111.7 ms (the gates check: p95 108.4); after the compile p95 45.3 ms; new instances per edit 1, 0, 1, 0 …; jump back 0 | passes its rule here; the time is judged on the Mac |
+| G7a's engine-rig twin | heard within compile + 100 ms; no jump back; the effect heard | 32.0 ms after the compile; 200 kept, 1 new; jump 0 frames; −53.6 dBFS of difference | passes here |
+| G7a: "G6's step bound holds across each edit" | §12.1 | no gate measures it on p50 (the server can't listen; the twin doesn't measure steps) | not checked anywhere |
+| G7b tails (p50 from 3:00) | 49 untouched tracks bit-identical on every block; every stateful node kept, none reset; the wrapped pluck (as a Tx, and as a file save): the whole mix bit-identical | 5,625 blocks bit-identical; 200 kept, 0 reset; wrapped: 731,392 frames bit-identical, both ways; the pluck kept | passes |
+| G7b with `--no-arena` | must fail | 33 tracks differ; 0 kept, 201 new, 417 ghosts; every wrapped check fails | fails, as it must |
+| G7b on HEAD's engine | must fail | the replay rig has no taps, so G7b skips there | can't run here |
+| G7b on slice 2's names | must fail | recorded once, in slice 3 | not run again (slice 2's code isn't here) |
+| G7c | live with no edits is offline, bit for bit; a no-op activation changes no bit | `a_no_op_activation_changes_no_bit`, `an_activation_with_rebuilt_lane_data_changes_no_bit`, `an_identity_arrangement_activation_changes_no_bit`, the three older ones: pass. Recorded (release): `live_is_the_export_on_all_of_p16` (93 s), `p16_loops_ten_minutes_without_drift` (116 s): pass. 8 of 8 renders unchanged. | passes. The design's recorded `live_is_the_export_on_p50` and `a_no_op_activation_on_p50` don't exist. |
+| G7d | a rebuilt module starts from init; a wrong shape is refused | `a_rebuilt_kernel_module_starts_from_init`, `a_wrong_shape_move_is_refused`: pass | passes |
+| G7e through the server (4 runs: 3 here, 1 in the gates check) | held before the first host call; still and silent while held; same instances, none made; state intact; resumed at the held clock within two buffers; no step over G6's bound; the file per second within 1 dB, release tail within 6 dB, lead within 6 dB, onsets within 10 ms | paused 249–254 ms; first host call 140–280 ns after held; 2 taken, 0 new; resumed 1.5–5.7 ms after the instances came back (bound 21.3); steps 0.014–0.016 out, 0.006 in (bound about 0.052); per second worst 0.06–0.15 dB; tail 0.37–1.00 dB; lead 1.90–2.68 dB; 15 of 15 onsets | passes, 4 of 4 |
+| G7e's CI test, with its negative control | the probe's call order; no audio-thread call in the window; bit for bit; with no hold, the audio thread calls it | `an_export_borrows_and_gives_back_the_live_instances`: pass | passes |
+| G7f part 1 (`store`, p50) | §11.3 against S from the same machine: p99 block within S + 80 µs, footprint within S + 64 MB, build within 1.5 × S. On any machine: at least 2 renderers, and at most 25% of the address space with 2 | 6,058 instances; build 220 ms (36.3–36.4 µs each); 4 side by side; one renderer adds 195 MB and reserves 24,611 GiB; with two, 37.6% of 131,072 GiB; block p99 3,474–3,546 µs; drop 120 ms, the other thread's p99 6–10 µs | **fails here** on the 25% rule (37.6%), as the Mac's S does (37.9%): the owner's open decision. The S comparisons are recorded, not judged (S is the Mac's). |
+| G7f part 2 (`arena`, p50 from 3:00, 4 runs) | p99 callback within HEAD's + 80 µs (HEAD's record from the same machine); the slowest activation block under 5,333 µs | p99 callback 12,925 / 13,001 / 13,862 / 13,447 µs; slowest activation block 3,184 / 3,025 / 3,868 / 4,339 µs | passes its judged rule; the p99 rule is recorded, not judged (HEAD's record is the Mac's) |
+| The churn test | after 55 activations, the same kernel instances alive, nothing leaked, no clip render left | `random_structural_edits_leak_nothing`: pass | passes. The design's recorded p16 run (200 edits, footprint within +20 MB) doesn't exist. |
+
+**§12.8, the gates that keep passing:**
+
+| Run | Result |
+|---|---|
+| `m2-gates` (engine rig on p16), release (215 s) and the dev build (261 s) | all 10 PASS on both: G1, G2, G3, G4, G5, G6, G7, G7b, G10, with-plugins. Release: G1 p95 10.7 ms; G3 13.3 ms and G5 16.0 ms after the compile. |
+| `m2-gates --server` (p16) | all 8 PASS: G1 p95 18.9 ms (20.1 during a compile); G3 p95 17.6 ms; G5 and G7a p95 55.3 ms from the request; G8 p95 19.7 ms during a compile; G9; G11 `tx-data` p95 8.6 / 8.2 / 8.7 ms; `watcher` 0.10% of a core; G7e |
+| `m2-gates plugins --quick` | PASS, the changed-state checks included |
+| `m2-gates plugins --quick --no-arena` | FAILS, as it must (12 checks) |
+| `m2-gates --rig replay --quick` (HEAD's engine) | fails the gates step 3 exists for, as it must (G10 passes; G7b skips) |
+| `no_alloc.rs` (6), `no_blocking.rs` (1), the step 6 Tx tests | pass |
+
+### Not checked, or not built
+
+1. G7a's "G6's step bound holds across each edit": no gate measures it on p50. G6 itself passes on its sine cases.
+2. G7b's HEAD's-engine control: the replay rig has no taps. `--no-arena` is the control that runs.
+3. G7c's recorded p50 tests, and the churn test's recorded p16 run with its +20 MB footprint rule, were never built.
+   `m2_os::process::memory()` now measures Linux too, so the churn run could be.
+4. G7f is judged on the Mac only: no S or HEAD record exists from this machine.
+
+### Left for later
+
+- **Merging `main`:** `main` moved to `0ebc6e6` (the Mac run's fixes and notes). A dry-run merge into `step7` conflicts
+  only in `docs/architecture.md`'s gates table: `main` rewrote row 6b, step 7 row 7, on neighbouring lines. Keep both.
+- `HANDOFF.md`'s check table still says the gates row runs "G11 `tx-data` and `watcher` now". `ci/gates.txt` now names
+  6 runs. The lead's file.
+- Old rustfmt diffs remain (for example `crates/server/src/graph/tests.rs:415`); the new lines are clean.
+- The Mac run before step 7 lands on `main`. It also confirms the Mac's machine line written by hand into
+  `store-S.txt` and `callback-S.txt`.
