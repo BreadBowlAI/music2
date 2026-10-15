@@ -838,3 +838,48 @@ then clicks the toast's Undo, whose answer depends on the revision the page hold
 revision hasn't reached the page, it asks the server to undo instead of saying it can't. Most likely that happened
 under load (the file-then-revision race S2 and S6's checker met in other suites); this is read from the code, not
 caught in the act. This slice changes nothing on that path. No earlier check log in `~/m2-runs` shows this failure.
+
+**The independent check** (label `check-script`, at `198cdbb`; logs in `~/m2-runs/check-check-script/`)
+
+| What | Result |
+|---|---|
+| The diff against the task (the three loose ends) | All three are there. Nothing extra but the deviations above. No test is weaker: `files.rs`'s export case now checks a place and still checks the short package path, and its no-place case is `throw 1`. Only `core/script` and docs change: no OS code, no macOS code. |
+| `ci/check.sh` (8 min) | §13.1's S6 row with the 3 new tests: Rust tests 718 passed, 5 failed (tests 1 to 5 of §4.1 by name). clippy fails at lint 4; without `-D warnings` it lists exactly lints 4 to 6. Suites 29 of 29 after one retry: `attention-attn`, the same check as in the builder's run (below). live3b 51 of 51. Renders 8 of 8. Every other row PASS. |
+| Everything reachable from `globalThis` and the four kinds of function (a temporary test walking own keys, prototypes, getters and setters: over 500 objects) | No `eval` or `Function` constructor that still makes code: each one found throws the refusal. |
+| `**` in static and instance class fields, private fields (`this.#p **= …`), `super.g ** …`, default parameters, destructuring defaults, optional chains, `arr[i++] **= …`, templates, `a ** b ** c`, getters; with `-0`, `NaN ** 0`, `1 ** Infinity`, strings, `null`, `true`, a Symbol | All as JS defines them. Numbers give libm's bits (`10 ** -0.7` is `0.19952623149688797`). |
+| 32 threads, 4 builds each, of a song with BigInt `**`, number `**` and a refused `eval` | 128 builds, all the same IR. |
+| A missing export from a 75-byte module name with accents, from a name with `'` in it, and the circular form | The full name, at the right place. |
+| A missing export, where a file that sorts first imports the same name only for types | **Wrong place** (fixed, below). |
+| An export name over 63 bytes | QuickJS cuts it too: the message keeps the cut name and has no place (left, below). |
+| A TypeScript `enum` in song code | **The process aborts** in a debug build. Older than this slice: the same on `main` (left, below). |
+
+| Fixed | Why |
+|---|---|
+| `import_at` reads each file's imports after the TypeScript strip the build runs (`Transformer`, as in `strip`), so it sees only the imports the build keeps. Its own type-only checks went: the strip drops those. Test: `a_missing_export_is_named_in_full_at_the_import`, with this case and the circular form, which had no test. | The strip drops an import that only types use. With `import { Foo }` used as a type in `tracks/a.ts` and as a value in `tracks/b.ts` (where it fails), the error pointed at `tracks/a.ts:1:10`, whose import is fine. Now `tracks/b.ts:1:10`. The new case failed without the fix. |
+
+The `attention-attn` retry: both checks of this branch failed the same check once, "the move's toast Undo says it
+can't any more". No other check log in `~/m2-runs` (19 of them) has it. So I ran the suite alone, taking turns between
+`main`'s build (`8616d15`, without this slice) and this branch's:
+
+| Load | `main` | this branch |
+|---|---|---|
+| idle (load about 3) | 8 of 8 passed | 8 of 8 passed |
+| 12 busy loops sharing the suite's 8 cores (load up to 38) | 9 of 10: one run failed 12 checks of another kind, at the load's peak | 10 of 10 passed |
+
+It did not come back on either. The slice changes nothing on that path: the move and its undo change only data, so
+they run no QuickJS. The builder's reading of the code stands: the suite clicks the toast's Undo as soon as the files
+on disk show the undo, which can be before the undo's revision reaches the page.
+
+**Left for the lead**
+- **A TypeScript `enum` in song code aborts a debug build** (the tests, and the app or server from `cargo run`). It
+  happens on `main` too, and nothing in std, the SDK, the examples or the templates uses `enum`. oxc 0.153's enum
+  transform asserts (in debug builds only) that the semantic was built `with_enum_eval(true)`, which `strip` doesn't
+  do. The panic happens inside QuickJS's module loader, which can't unwind, so the whole process stops ("panic in a
+  function that cannot unwind"). A release build doesn't stop, but oxc says string members then get wrong reverse
+  mappings (oxc#21667). The plain fix, `with_enum_eval(true)`, folds constant members in Rust, and a `**` there would
+  use Rust's `powf`, the OS's `pow` (PLAT-4). So it needs a choice: refuse `enum` with a clear message, or fold with libm.
+- An export name over 63 bytes: QuickJS cuts it as it cut module names, so the message keeps the cut name and has no
+  place. Rare; matching the name by its first bytes would find the import.
+- `WeakRef` and `FinalizationRegistry` (the builder's point above): I agree. The other globals left (`queueMicrotask`,
+  `SharedArrayBuffer`, `Atomics`, `atob`, `btoa`, `DOMException`, ...) are the same on every computer, and
+  `Atomics.wait` can't block here (QuickJS's `can_block` is off), so it can't outlast the 10 s limit.

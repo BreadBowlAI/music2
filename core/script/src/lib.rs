@@ -266,25 +266,26 @@ impl State {
         Some(Diagnostic::error("code.build", format!("{head} in module '{}'{tail}", self.display(module))).at(at))
     }
 
-    /// `file:line:col` of the first import or re-export in `file` that takes `name` from `module`.
+    /// `file:line:col` of the first import or re-export in `file` that takes `name` from `module`
+    /// and that the build keeps: stripping TypeScript drops one that only types use, which never fails.
     fn import_at(&self, file: &str, name: &str, module: &str) -> Option<String> {
         let source = &self.files.get(file)?.original;
         let allocator = Allocator::default();
-        let program = Parser::new(&allocator, source, SourceType::ts()).parse().program;
+        let mut program = Parser::new(&allocator, source, SourceType::ts()).parse().program;
+        let scoping = SemanticBuilder::new().build(&program).semantic.into_scoping();
+        Transformer::new(&allocator, Path::new(file), &TransformOptions::default()).build_with_scoping(scoping, &mut program);
         for statement in &program.body {
             let (from, at) = match statement {
-                Statement::ImportDeclaration(d) if !d.import_kind.is_type() => {
+                Statement::ImportDeclaration(d) => {
                     let at = d.specifiers.iter().flatten().find_map(|s| match s {
-                        ImportDeclarationSpecifier::ImportSpecifier(s) if !s.import_kind.is_type() && s.imported.name() == name => {
-                            Some(s.span)
-                        }
+                        ImportDeclarationSpecifier::ImportSpecifier(s) if s.imported.name() == name => Some(s.span),
                         ImportDeclarationSpecifier::ImportDefaultSpecifier(s) if name == "default" => Some(s.span),
                         _ => None,
                     });
                     (&d.source.value, at)
                 }
-                Statement::ExportFromDeclaration(d) if !d.export_kind.is_type() => {
-                    let at = d.specifiers.iter().find(|s| !s.export_kind.is_type() && s.local.name() == name).map(|s| s.span);
+                Statement::ExportFromDeclaration(d) => {
+                    let at = d.specifiers.iter().find(|s| s.local.name() == name).map(|s| s.span);
                     (&d.source.value, at)
                 }
                 _ => continue,

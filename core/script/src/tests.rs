@@ -756,6 +756,13 @@ fn a_missing_export_is_named_in_full_at_the_import() {
     let e = error_of(&[("song.ts", &song), (long, "export const foo = 1;\n")]);
     assert_eq!(e.message, format!("Could not find export 'bar' in module '{long}'"));
     assert_eq!(e.src.as_deref(), Some("song.ts:3:15"), "{e}");
+    // An import only types use is dropped with the types, so it is never the place, though it comes first.
+    let a = "export interface Foo { x: number }\n";
+    let typed = "import { Foo } from \"../lib/a\";\nexport const v: Foo = { x: 1 };\n";
+    let used = "import { Foo } from \"../lib/a\";\nexport const w = Foo;\n";
+    let s = "import { song } from \"@m2/core\";\nimport { v } from \"./tracks/a\";\nimport { w } from \"./tracks/b\";\nexport default song(() => [v, w] as any);\n";
+    let e = error_of(&[("lib/a.ts", a), ("tracks/a.ts", typed), ("tracks/b.ts", used), ("song.ts", s)]);
+    assert_eq!((e.message.as_str(), e.src.as_deref()), ("Could not find export 'Foo' in module 'lib/a.ts'", Some("tracks/b.ts:1:10")));
 
     // A re-export, a package module, the SDK, and QuickJS's other forms of the message.
     let t = "export { nope } from \"std/dsp\";\nexport const out = 1;\n";
@@ -771,6 +778,12 @@ fn a_missing_export_is_named_in_full_at_the_import() {
     let c = "export * from \"./a\";\nexport * from \"./b\";\n";
     let e = error_of(&[("lib/a.ts", "export const x = 1;\n"), ("lib/b.ts", "export const x = 2;\n"), ("lib/c.ts", c), ("song.ts", s)]);
     assert_eq!((e.message.as_str(), e.src.as_deref()), ("export 'x' in module 'lib/c.ts' is ambiguous", Some("song.ts:2:10")));
+    let (a, b) = ("export { x } from \"./b\";\n", "export { x } from \"./a\";\n");
+    let e = error_of(&[("lib/a.ts", a), ("lib/b.ts", b), ("song.ts", s.replace("./lib/c", "./lib/a").as_str())]);
+    assert_eq!(
+        (e.message.as_str(), e.src.as_deref()),
+        ("circular reference when looking for export 'x' in module 'lib/a.ts'", Some("lib/b.ts:1:10"))
+    );
 }
 
 // DIAG-2: an error the SDK throws keeps its code only when it is a build code.
