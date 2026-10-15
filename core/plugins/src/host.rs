@@ -97,6 +97,8 @@ pub type HostEvents = Receiver<HostEvent>;
 pub struct Owner {
     events: Sender<HostEvent>,
     live: Arc<AtomicU64>,
+    /// Its instances created so far, destroyed or not.
+    made: Arc<AtomicU64>,
     dropped: Arc<AtomicU64>,
     /// The plugins being created for it now, by name.
     loading: Arc<Mutex<Vec<String>>>,
@@ -106,7 +108,7 @@ impl Owner {
     /// An owner and the receiver of its events.
     pub fn new() -> (Owner, HostEvents) {
         let (events, rx) = unbounded();
-        (Owner { events, live: Arc::default(), dropped: Arc::default(), loading: Arc::default() }, rx)
+        (Owner { events, live: Arc::default(), made: Arc::default(), dropped: Arc::default(), loading: Arc::default() }, rx)
     }
 
     /// The plugins being created for it now, by name: what "loading <plugin>" shows (RENDER-25).
@@ -130,6 +132,12 @@ impl Owner {
         self.live.load(Ordering::Acquire)
     }
 
+    /// Its instances created so far, destroyed or not: what a test or a gate counts, which other
+    /// owners' instances, made at the same time, never add to.
+    pub fn made(&self) -> u64 {
+        self.made.load(Ordering::Acquire)
+    }
+
     /// Events nobody received.
     pub fn dropped(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
@@ -142,6 +150,7 @@ impl Owner {
     }
 
     pub(crate) fn created(&self) {
+        self.made.fetch_add(1, Ordering::AcqRel);
         self.live.fetch_add(1, Ordering::AcqRel);
     }
 

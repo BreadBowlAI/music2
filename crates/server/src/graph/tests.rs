@@ -2341,10 +2341,11 @@ fn swapping_two_plugin_keys_moves_the_instances() {
     dc.graph.transport("play").unwrap();
     dc.frames(4);
     let first = dc.handles();
-    let created = m2_plugins::InProcess::counts().0;
+    // This session's own count: other tests' instances, made meanwhile, never add to it.
+    let created = dc.graph.inner.owner.made();
     dc.fixture.put("song.ts", &song("pad", "lead"));
     assert!(dc.graph.poll());
     dc.frames(4);
     assert_eq!(dc.handles(), [first[1], first[0]], "each key kept its instance");
-    assert_eq!(m2_plugins::InProcess::counts().0, created, "none created");
+    assert_eq!(dc.graph.inner.owner.made(), created, "none created");
 }
