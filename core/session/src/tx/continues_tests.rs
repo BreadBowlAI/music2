@@ -194,3 +194,22 @@ fn adding_a_plugin_key_continues_its_instance() {
     let new = b.compiled.flat.nodes.iter().position(|n| matches!(n.op, m2_ir::FOp::Plugin { .. })).unwrap();
     assert!(c.top[new].is_some(), "the keyed plugin continues the unkeyed one");
 }
+
+// ID-13 (review id-3): a whole file re-indented, or its line ends made CRLF, changes no token,
+// however long it is: past 500 changed lines the token diff still runs, so every node continues.
+#[test]
+fn a_long_file_reformatted_continues_everything() {
+    let body: String = (0..300).map(|k| format!("  y = lowpass(y, {});\n", 200 + k)).collect();
+    let song = format!(
+        "import {{ song, track }} from \"@m2/core\";\nimport {{ osc }} from \"std/dsp\";\nimport {{ lowpass }} from \"std/filter\";\n\
+         const t = track(\"t\", () => {{\n  let y = osc.saw(110);\n{body}  return y;\n}});\nexport default song(() => t.out);\n"
+    );
+    let d = Dir::with(&[("song.ts", &song)]);
+    let mut s = d.open();
+    for edit in [|t: &str| t.lines().map(|l| format!("  {l}\n")).collect::<String>(), |t: &str| t.replace('\n', "\r\n")] {
+        let (a, b) = edited(&d, &mut s, "song.ts", edit);
+        let c = continues(&a, &b);
+        assert!(a.compiled.flat.nodes.len() > 300);
+        assert_eq!(pairs(&a.compiled.flat, &b.compiled.flat, &c).len(), a.compiled.flat.nodes.len(), "every node continues");
+    }
+}

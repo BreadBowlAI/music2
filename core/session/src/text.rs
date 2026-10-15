@@ -14,8 +14,9 @@
 
 use std::ops::Range;
 
-/// Lines a line diff, or tokens a run of changed lines, may find different (about 2 MB of work at
-/// worst); a change that differs in more is one hunk between the common prefix and suffix.
+/// Lines a line diff, or tokens a token diff, may find different (about 2 MB of work at worst). Past
+/// it, the line diff leaves the lines between the common prefix and suffix to the token diff, and
+/// the token diff leaves them one hunk.
 pub(crate) const DIFF_LINES: usize = 500;
 
 /// One change: bytes `old` of the old text became bytes `new` of the new one.
@@ -277,7 +278,9 @@ impl Edits {
     /// The change from `old` to `new`: Myers' diff over whole lines, each run of changed lines
     /// then refined by a Myers diff over its tokens ([`refine`]), so two literals edited on
     /// adjacent lines are two hunks, and a wrap keeps every token of what it wraps (ID-13). Past
-    /// [`DIFF_LINES`] different lines, one hunk between the common prefix and suffix.
+    /// [`DIFF_LINES`] different lines (a whole file re-indented, say), the token diff refines
+    /// every line between the common prefix and suffix; past as many different tokens, they are
+    /// one hunk.
     pub fn between(old: &str, new: &str) -> Edits {
         if old == new {
             return Edits::default();
@@ -285,9 +288,13 @@ impl Edits {
         let (a, b) = (lines(old), lines(new));
         let (at, bt): (Vec<&str>, Vec<&str>) = (a.iter().map(|l| l.1).collect(), b.iter().map(|l| l.1).collect());
         let Some(kept) = kept_lines(&at, &bt) else {
-            let mut whole = vec![];
-            trimmed(old, new, 0..old.len(), 0..new.len(), &mut whole);
-            return Edits(whole);
+            // Widened to whole lines, so no token is cut.
+            let p = old[..prefix(old, new)].rfind('\n').map_or(0, |n| n + 1);
+            let s = suffix(&old[p..], &new[p..]);
+            let s = old[old.len() - s..].find('\n').map_or(0, |n| s - n - 1);
+            let mut hunks = vec![];
+            refine(old, new, p..old.len() - s, p..new.len() - s, &mut hunks);
+            return Edits(hunks);
         };
         let start = |ls: &[(usize, &str)], i: usize, len: usize| ls.get(i).map_or(len, |l| l.0);
         let mut hunks = vec![];
@@ -675,6 +682,33 @@ mod tests {
         let e = Edits::between(two, one);
         assert!(opens.iter().all(|&o| e.carry(o..o + 1).is_none()), "{e:?}");
         assert_eq!(apply(two, one, &e), one);
+    }
+
+    // ID-13: a reformat of a whole file too long for the line diff (every line re-indented, or
+    // its line ends made CRLF) still changes no token: every call's `(` is carried.
+    #[test]
+    fn a_long_file_reformatted_keeps_every_paren() {
+        let lines: Vec<String> =
+            (0..400).map(|k| format!("  const v{k} = delay(pluck(lane.notes(\"n{k}\")), {{ time: 0.{k} }});\n")).collect();
+        let old: String = lines.concat();
+        let parens: Vec<usize> = old.match_indices('(').map(|(i, _)| i).collect();
+        for new in [lines.iter().map(|l| format!("  {l}")).collect::<String>(), old.replace('\n', "\r\n")] {
+            let e = Edits::between(&old, &new);
+            assert_eq!(apply(&old, &new, &e), new);
+            let to: Vec<Option<usize>> = parens.iter().map(|&p| e.carry(p..p + 1).map(|r| r.start)).collect();
+            let wrong = to.iter().zip(new.match_indices('(')).filter(|(t, (i, _))| **t != Some(*i)).count();
+            assert_eq!(wrong, 0, "of {} `(`s, {wrong} not carried to their place", parens.len());
+        }
+    }
+
+    // DIFF_LINES: a change of more tokens than the token diff may find different is one hunk
+    // between the common prefix and suffix, whatever the line diff did.
+    #[test]
+    fn a_change_past_the_token_limit_is_one_hunk() {
+        let old: String = (0..600).map(|k| format!("  const v{k} = delay(x, {k});\n")).collect();
+        let new = old.replace("delay(", "echo(");
+        let e = Edits::between(&old, &new);
+        assert_eq!(e.0, [Hunk { old: 13..old.len() - 10, new: 13..new.len() - 10 }]);
     }
 
     // ID-13: a reformat moves whitespace only, so every hunk lies between tokens.
