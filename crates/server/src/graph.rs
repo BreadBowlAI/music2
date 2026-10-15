@@ -410,7 +410,8 @@ fn let_go(player: &Player) -> Option<&'static str> {
 
 /// Let go of a player that stopped responding or whose output moved, off the caller's thread:
 /// telling its engine to stop waits for room, and its device may never call back again. Its device
-/// thread is left behind.
+/// thread ends once its last clone is dropped: it stops the stream, and the engine is freed off
+/// the audio thread.
 fn retire(player: Player) {
     let _ = std::thread::Builder::new().name("m2-play-retire".into()).spawn(move || {
         let _ = player.unload();
