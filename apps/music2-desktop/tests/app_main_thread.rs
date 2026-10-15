@@ -4,8 +4,8 @@
 //! plugins' main thread is AppKit's, reached through the main dispatch queue. On Linux it is the
 //! app's loop thread of its own, and the main thread, which GTK would own, only waits. Meanwhile
 //! the server, on other threads as in the app, opens a song with the probe plugin off the main
-//! thread, plays it, rebuilds it (the instance carried, HOST-5), changes its state (a new
-//! instance), and closes it the way quit does.
+//! thread, plays it, rebuilds it (the instance carried, HOST-5), changes its state (loaded into
+//! the same instance, RENDER-26b), and closes it the way quit does.
 //!
 //! Every main-thread call the probe recorded must have run on the plugins' main thread, which is
 //! the process's main thread exactly when `APP_ON_PROCESS_MAIN`, with the host's thread checks
@@ -188,14 +188,17 @@ fn work(dir: PathBuf) -> String {
     assert_eq!(probe::tagged("desktop").len(), 1, "carried, not created again");
     assert_eq!(first.main_calls().iter().filter(|c| c.what == "init").count(), 1, "initialised once");
 
-    // A changed state blob is a new instance; the old one is destroyed once its renderer is retired.
+    // RENDER-26b: a changed state blob loads into the instance that plays, on the plugins' main
+    // thread (checked with every call below): none is made.
+    let loads = |s: &probe::Stats| s.main_calls().iter().filter(|c| c.what == "load").count();
+    let loaded = loads(&first);
     std::fs::write(dir.join("data/p/p.state"), probe::state("desktop-2", 0.5)).unwrap();
     assert!(server.graph.poll());
-    let second = probe::tagged("desktop-2");
-    assert_eq!(second.len(), 1, "a new instance for the new state");
-    eventually("the old instance is destroyed", || first.main_calls().iter().any(|c| c.what == "destroy"));
-    eventually("the new one plays", || n(&second[0].process) > 50);
-    eventually("the plugins' requested callbacks ran", || n(&first.callbacks) > 0 && n(&second[0].callbacks) > 0);
+    assert_eq!((first.tag.lock().unwrap().clone(), loads(&first)), ("desktop-2".to_string(), loaded + 1), "one load, into it");
+    assert!(probe::tagged("desktop").is_empty() && probe::tagged("desktop-2").len() == 1, "no instance made for the new state");
+    let played = n(&first.process);
+    eventually("it plays on", || n(&first.process) > played + 50);
+    eventually("the plugin's requested callbacks ran", || n(&first.callbacks) > 0);
 
     // Quit, from a thread of its own while the app's main loop serves the plugins.
     let quit = std::thread::spawn({
@@ -204,7 +207,7 @@ fn work(dir: PathBuf) -> String {
     });
     let teardown = quit.join().unwrap();
     assert!(teardown.left == 0 && teardown.destroyed >= 1, "quit left plugin instances alive: {teardown:?}");
-    assert!(second[0].main_calls().iter().any(|c| c.what == "destroy"), "quit destroyed the playing instance");
+    assert!(first.main_calls().iter().any(|c| c.what == "destroy"), "quit destroyed the playing instance");
 
     // HOST-2: every main-thread call, the describes made while compiling included, ran on the
     // plugins' main thread, where the host's checks said main and not audio; `stop_processing`
@@ -231,7 +234,7 @@ fn work(dir: PathBuf) -> String {
     format!(
         "{} probe instances, {calls} main-thread calls on {WHERE}, {} callbacks; quit destroyed {} and left {}; {surge}",
         all.len(),
-        n(&first.callbacks) + n(&second[0].callbacks),
+        n(&first.callbacks),
         teardown.destroyed,
         teardown.left
     )

@@ -1578,7 +1578,7 @@ impl Renderer {
                 _ => {}
             }
         }
-        let plugins: Vec<PluginAt> = (0..n)
+        let mut plugins: Vec<PluginAt> = (0..n)
             .filter_map(|i| {
                 let Exec::Plugin(p) = &graph.exec[i] else { return None };
                 let (handle, inst) = match (&p.inst, keep, w.same[i]) {
@@ -1595,28 +1595,43 @@ impl Renderer {
         // parameters code owns again (HOME-4).
         if let Some(k) = keep {
             let mut loads = vec![];
-            for p in &plugins {
+            for (at, p) in plugins.iter().enumerate() {
                 let Some(j) = w.same[p.node].filter(|_| w.kept[p.node]) else { continue };
-                if k.info.plugin(j).is_some_and(|o| o.blob != p.blob)
+                if let Some(old) = k.info.plugin(j).filter(|o| o.blob != p.blob)
                     && let Some(blob) = state_blob(data, &flat.nodes[p.node])?
                 {
-                    loads.push((p, blob));
+                    loads.push((at, old.blob, blob));
                 }
             }
             let host = packages.host();
-            for (p, blob) in loads {
+            for (at, old, blob) in loads {
+                let p = &mut plugins[at];
                 let name = &flat.nodes[p.node].name;
-                if host.load_state(p.handle, blob).with_context(|| format!("{name}: loading its state"))? {
-                    stats.loads += 1;
-                    if let Some(inst) = p.inst.upgrade() {
-                        inst.mark_reloaded();
+                let loaded = host.load_state(p.handle, blob);
+                // Its code-owned parameters go again whatever the plugin made of the bytes.
+                if let Some(inst) = p.inst.upgrade()
+                    && !matches!(loaded, Ok(false))
+                {
+                    inst.mark_reloaded();
+                }
+                match loaded {
+                    Ok(true) => {
+                        stats.loads += 1;
+                        // Compensation isn't built, and the check refuses latency at default
+                        // state (RENDER-21): a patch that adds some plays uncompensated, and says so.
+                        if let Ok(Ok(frames)) = host.latency(p.handle).recv()
+                            && frames > 0
+                        {
+                            stats.latent.push((name.clone(), frames));
+                        }
                     }
-                    // Compensation isn't built, and the check refuses latency at default state
-                    // (RENDER-21): a patch that adds some plays uncompensated, and says so.
-                    if let Ok(Ok(frames)) = host.latency(p.handle).recv()
-                        && frames > 0
-                    {
-                        stats.latent.push((name.clone(), frames));
+                    Ok(false) => {}
+                    // Never fails the prepare: loads before it have landed in instances that play.
+                    // It plays on as the plugin left it, and the next plan tries again, as this
+                    // one says it holds what it held before.
+                    Err(e) => {
+                        stats.unloaded.push((name.clone(), format!("{e:#}")));
+                        p.blob = old;
                     }
                 }
             }

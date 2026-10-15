@@ -256,11 +256,16 @@ pub fn request_process(h: Handle) -> bool {
     }
 }
 
-/// A state blob the probe loads as carrying `tag`.
+/// A state blob the probe loads as carrying `tag`, with its `Level` at its default.
 pub fn state(tag: &str, gain: f64) -> Vec<u8> {
+    state_with(tag, gain, 0.1)
+}
+
+/// A state blob the probe loads as carrying `tag`, `gain` and `level`.
+pub fn state_with(tag: &str, gain: f64, level: f64) -> Vec<u8> {
     let mut b = MAGIC.to_vec();
     b.extend_from_slice(&gain.to_le_bytes());
-    b.extend_from_slice(&0.1f64.to_le_bytes());
+    b.extend_from_slice(&level.to_le_bytes());
     b.extend_from_slice(tag.as_bytes());
     b
 }

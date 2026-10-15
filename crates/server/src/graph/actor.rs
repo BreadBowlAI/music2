@@ -706,14 +706,19 @@ impl Actor {
             Err(e) => (Way::Failed(anyhow!("{e:#}")), Prepared::default()),
         };
         o.prepared = prepared;
-        // A state load that gave a plugin latency plays it uncompensated, and says so (RENDER-26b).
+        // A state load that gave a plugin latency plays it uncompensated, and says so; one that
+        // failed leaves the plugin as it was, and says why (RENDER-26b).
         if let Some(r) = way.renderer() {
-            inner.notices.lock().extend(r.stats().latent.iter().map(|(name, frames)| {
+            let mut notices = inner.notices.lock();
+            notices.extend(r.stats().latent.iter().map(|(name, frames)| {
                 format!(
                     "{name} has {frames} samples of latency since its state changed; latency compensation isn't built yet, so it plays \
                      that late (plugin.latency-uncompensated)"
                 )
             }));
+            notices.extend(
+                r.stats().unloaded.iter().map(|(name, why)| format!("{name} couldn't load its new state, so it plays as it was: {why}")),
+            );
         }
         // When the old build plays on, where the accepted revision's controls are in it: a carry
         // per control, done once here rather than under the lock.

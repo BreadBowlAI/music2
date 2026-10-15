@@ -717,13 +717,23 @@ fn inside(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome) -
     Ok(())
 }
 
-/// Step 3b (HOST-5): a changed state blob is a new instance: one is created (Surge; Airwindows is
-/// kept), and the old Surge is destroyed only once the plan that played it is retired, never
-/// during the crossfade.
+/// One of a plugin's parameters, as it reads now (on the plugin main thread).
+fn param(h: m2_plugins::Handle, id: u32) -> Option<f64> {
+    match m2_plugins::host().main_call(h, m2_plugins::MainCall::Value(id)) {
+        Ok(m2_plugins::Reply::Value(v)) => v,
+        _ => None,
+    }
+}
+
+/// Step 7 (RENDER-26b, HOME-6, HOST-5): a changed state blob (another Surge patch, its volume turned
+/// down) is loaded into the Surge that plays as the plan is prepared, as the server does: the same
+/// instance and Airwindows kept, none created, exactly one state load, and Surge's volume then
+/// reads the new patch's. Then Surge's own state, saved and committed (as an autosave will), loads
+/// nothing: the host skips the state the instance holds (HOME-6).
 fn new_state(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome) -> Result<()> {
     let (mut deck, played, song) = lead_deck(lab, kind, o, lead, "new-state")?;
-    if deck.rig.plugins().is_none() {
-        out.skip("changed state (3b)", "this rig doesn't say which instances it plays");
+    if deck.rig.plugins().is_none() || deck.rig.arena().is_none() {
+        out.skip("changed state", "this rig doesn't say which instances it plays");
         return Ok(());
     }
     // Another patch: a fresh Surge with its volume turned down, saved through the host (a fresh
@@ -733,11 +743,12 @@ fn new_state(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome
     let gone = m2_plugins::InProcess::counts().1;
     let (h, info) = host.create(&found, None, &m2_plugins::Owner::discard())?;
     let volume = info.params.iter().find(|p| !p.stepped && p.name.contains("Volume")).context("Surge XT has a volume parameter")?;
+    let want = volume.min + (volume.max - volume.min) * 0.3;
     let blob = host.activate(h, song.rate, 128).and_then(|_| {
         let (mut l, mut r, silence) = (vec![0.0f32; 128], vec![0.0f32; 128], vec![0.0f32; 128]);
         let mut io = m2_plugins::SharedBuffers { inputs: [&silence, &silence], n_in: 2, outputs: [&mut l, &mut r], n_out: 2, frames: 128 };
         let mut ev = m2_plugins::Events::with_capacity(1);
-        ev.push(m2_plugins::Event::Param { time: 0, id: volume.id, value: volume.min + (volume.max - volume.min) * 0.3 });
+        ev.push(m2_plugins::Event::Param { time: 0, id: volume.id, value: want });
         host.process(h, &mut io, &ev, &mut m2_plugins::Events::with_capacity(16), &m2_plugins::Transport::default());
         host.save_state(h).recv()?.map_err(|e| anyhow!("{e}"))
     });
@@ -748,31 +759,43 @@ fn new_state(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome
     std::fs::write(song.dir.join("data/lead/lead.state"), blob?.bytes)?;
     let edited = lab.compile(&song.dir)?;
     let hash = |s: &Song| s.data.state_hash("lead", &["lead"]).map(|h| h.hex()[..8].to_string());
-    out.info("changed state (3b): the blob's hash", format!("{:?} before, {:?} after", hash(&song), hash(&edited)));
+    out.info("changed state: the blob's hash", format!("{:?} before, {:?} after", hash(&song), hash(&edited)));
     deck.run_to(played + song.frame(1.0))?;
     let pre = deck.rig.plugins().expect("checked");
+    let surge0 = surge(&pre).map(|s| s.handle).context("Surge holds no chord at beat 1")?;
+    let was = param(surge0, volume.id);
     deck.change(&edited, Change::Structure)?;
-    // The activation and the first block of its 5 ms crossfade, with no device buffer after it.
-    deck.run(m2_runtime::BLOCK as u64)?;
-    let during = deck.rig.plugins().expect("checked");
     deck.run_secs(0.1)?;
-    let retired = settled(|| m2_plugins::InProcess::counts().1 > pre.destroyed);
     let after = deck.rig.plugins().expect("checked");
-    let surge_new = surge(&pre).is_some_and(|s| after.nodes.iter().all(|n| n.handle != s.handle));
-    let kept = after.nodes.iter().filter(|n| pre.nodes.iter().any(|p| p.handle == n.handle)).count();
+    let stats = deck.rig.arena().expect("checked").stats;
+    same_instances(out, "changed state: the same Surge, Airwindows kept, none created", &Some(pre.clone()), &Some(after.clone()));
     out.check(
-        "changed state (3b): a new Surge, Airwindows kept",
-        surge_new && kept == 1 && after.created == pre.created + 1,
-        format!("{} created; {kept} of {} kept", after.created - pre.created, after.nodes.len()),
+        "changed state: exactly one state load, into the kept Surge",
+        stats.loads == 1 && stats.kept.plugins == 2 && stats.fresh.plugins == 0 && stats.unloaded.is_empty(),
+        format!("{} loaded, {} kept, {} new, {} refused", stats.loads, stats.kept.plugins, stats.fresh.plugins, stats.unloaded.len()),
     );
+    let now = param(surge0, volume.id);
     out.check(
-        "changed state (3b): the old Surge is destroyed once its renderer is retired, not before",
-        during.destroyed == pre.destroyed && retired,
-        format!(
-            "{} destroyed by the crossfade's first block, {} once it was retired",
-            during.destroyed - pre.destroyed,
-            m2_plugins::InProcess::counts().1 - pre.destroyed
-        ),
+        "changed state: Surge's volume reads the new patch's",
+        now.is_some_and(|v| (v - want).abs() < 1e-4),
+        format!("{now:?}, the patch's {want:.4}; {was:?} before"),
+    );
+    // HOME-6: Surge's own state, committed as an autosave would: the instance holds it already.
+    let own = host.save_state(surge0).recv()?.map_err(|e| anyhow!("{e}"))?;
+    std::fs::write(song.dir.join("data/lead/lead.state"), own.bytes)?;
+    let autosaved = lab.compile(&song.dir)?;
+    deck.change(&autosaved, Change::Structure)?;
+    deck.run_secs(0.1)?;
+    let skipped = deck.rig.arena().expect("checked").stats;
+    let last = deck.rig.plugins().expect("checked");
+    same_instances(out, "changed state (HOME-6): its own saved state committed keeps both instances", &Some(after), &Some(last));
+    // Its save holds the parameters code set since, so its bytes are the patch's only by chance:
+    // then the plan's own compare skips it before the host is asked.
+    let by = if hash(&autosaved) == hash(&edited) { "the patch's own bytes: the plan's compare" } else { "new bytes: the host" };
+    out.check(
+        "changed state (HOME-6): its own saved state committed loads nothing",
+        skipped.loads == 0 && skipped.unloaded.is_empty(),
+        format!("{} loaded; the blob {:?} after {:?} ({by} skipped it)", skipped.loads, hash(&autosaved), hash(&edited)),
     );
     Ok(())
 }

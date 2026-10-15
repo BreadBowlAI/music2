@@ -308,6 +308,9 @@ pub struct Stats {
     /// Plugins whose latency is nonzero after such a load, by node name, and how many frames: they
     /// play uncompensated (`plugin.latency-uncompensated`).
     pub latent: Vec<(String, u32)>,
+    /// Kept plugins whose new state didn't load, by node name, and why: each plays on as the plugin
+    /// left it, and the next plan prepared loads it again (RENDER-26b).
+    pub unloaded: Vec<(String, String)>,
     /// The top-level nodes with new instances.
     pub fresh_nodes: Vec<usize>,
 }

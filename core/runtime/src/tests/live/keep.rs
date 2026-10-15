@@ -850,60 +850,192 @@ fn a_lane_that_shrank_lets_go_of_what_doesnt_fit() {
     assert_eq!((stats.sounding.load(Ordering::Relaxed), rig.e.current().unwrap().held_notes()), (0, 0), "nothing stuck");
 }
 
-// HOST-5, RENDER-25: a changed state blob is a new instance (until state loads land). The old one
-// plays out the window as a ghost and is destroyed on the plugin main thread only once the plan
-// that held it is retired and dropped, never by the engine.
-#[test]
-fn a_changed_state_is_a_new_instance_and_the_old_one_goes_with_its_renderer() {
-    let mut pk = probe_packages();
-    let owner = Owner::discard();
-    let state = |tag: &str| {
-        let dir = project(&[(
-            "data/song/notes.json",
-            json!({"clips": [{"start": 0, "length": 8, "notes": [{"pitch": 60, "start": 0, "length": 4}]}]}),
-        )]);
-        std::fs::write(dir.join("data/song/lead.state"), probe::state(tag, 1.0)).unwrap();
+/// The probe's main-thread calls named `what` so far.
+fn calls(stats: &Stats, what: &str) -> usize {
+    stats.main_calls().iter().filter(|c| c.what == what).count()
+}
+
+/// One of the probe's parameters, as the plugin reads it now.
+fn param_of(h: Handle, id: u32) -> f64 {
+    match m2_plugins::host().main_call(h, m2_plugins::MainCall::Value(id)) {
+        Ok(m2_plugins::Reply::Value(Some(v))) => v,
+        other => panic!("the probe's parameter {id}: {other:?}"),
+    }
+}
+
+/// A project whose keyed probe `lead` has `blob` saved (its bytes), the IR its data is read
+/// against, and the folder.
+fn with_blob(blob: Option<Vec<u8>>) -> (DataSet, PathBuf) {
+    let dir = project(&[(
+        "data/song/notes.json",
+        json!({"clips": [{"start": 0, "length": 8, "notes": [{"pitch": 60, "start": 0, "length": 4}]}]}),
+    )]);
+    if let Some(b) = blob {
+        std::fs::write(dir.join("data/song/lead.state"), b).unwrap();
         let side = json!({"plugin": "clap:m2.probe", "plugin_version": "1.0.0"});
         std::fs::write(dir.join("data/song/lead.state.json"), side.to_string()).unwrap();
-        dir
-    };
-    let flat = probe_song(&mut pk, 1.0, Some("lead"), json!([]), "p");
+    }
     // What the data is read against: the lane, and the state the keyed probe files (ID-8).
     let ir = song(
         json!([{"id": "n", "op": "lane", "lane": "notes"}, {"id": "p", "op": "plugin", "plugin": "clap:m2.probe", "key": "lead", "inputs": {"notes": "n"}}]),
         "p",
         json!([{"key": "notes", "kind": "events<note>"}]),
     );
-    let (d1, d2) = (state("one"), state("two"));
-    let (data1, data2) = (data(&ir, &d1), data(&ir, &d2));
-    assert!(data1.state_hash("song", &["lead"]).is_some());
+    (data(&ir, &dir), dir)
+}
+
+// RENDER-26b, HOME-6, HOST-5: a changed state blob loads into the instance that plays, on the plugin
+// main thread, while the plan is prepared and the old one plays: none is made. The same blob again
+// loads nothing. A blob taken away makes the instance new (CLAP has no "load defaults"): the old one
+// plays out the window as a ghost, and is destroyed on the plugin main thread only once the plan
+// that held it is retired and dropped.
+#[test]
+fn a_changed_state_loads_into_the_same_instance() {
+    let mut pk = probe_packages();
+    let owner = Owner::discard();
+    let flat = probe_song(&mut pk, 1.0, Some("lead"), json!([]), "p");
+    let (data1, d1) = with_blob(Some(probe::state("one", 1.0)));
+    let (data2, d2) = with_blob(Some(probe::state("two", 1.0)));
+    let (data0, d0) = with_blob(None);
+    assert!(data1.state_hash("song", &["lead"]).is_some() && data0.state_hash("song", &["lead"]).is_none());
     let r1 = build(&flat, &data1, &pk, &owner);
-    let h1 = r1.plugin_handles()[0];
-    assert_eq!(*probe::stats(h1).unwrap().tag.lock().unwrap(), "one");
+    let h = r1.plugin_handles()[0];
+    let stats = probe::stats(h).unwrap();
+    assert_eq!(*stats.tag.lock().unwrap(), "one");
     let mut rig = Rig::of(&flat, &data1, r1);
-    // The same blob keeps the instance; another doesn't.
-    let same = rig.prepare_with(&flat, &data1, &pk, &owner, &Continues::identity(&flat)).unwrap();
-    assert_eq!((same.stats().kept.plugins, owner.live()), (1, 1));
-    rig.last = Some((flat.clone(), data1.clone(), rig.e.current().unwrap().info()));
-    drop(same);
-    let r2 = rig.prepare_with(&flat, &data2, &pk, &owner, &Continues::identity(&flat)).unwrap();
-    let h2 = r2.plugin_handles()[0];
-    assert_ne!(h1, h2);
-    assert_eq!(*probe::stats(h2).unwrap().tag.lock().unwrap(), "two");
     rig.cmd(Cmd::Play);
     rig.run(BLOCK);
+
+    // The same blob: kept, nothing loaded.
+    let same = rig.prepare_with(&flat, &data1, &pk, &owner, &Continues::identity(&flat)).unwrap();
+    assert_eq!((same.stats().kept.plugins, same.stats().loads), (1, 0));
+    rig.send(Msg::Activate { renderer: Box::new(same) });
+    rig.run(BLOCK);
+
+    // Another blob: loaded into it as the plan is prepared, while the old plan plays.
+    let loads = calls(&stats, "load");
+    let r2 = rig.prepare_with(&flat, &data2, &pk, &owner, &Continues::identity(&flat)).unwrap();
+    let s = r2.stats().clone();
+    assert_eq!((s.kept.plugins, s.fresh.plugins, s.loads), (1, 0, 1), "{s:?}");
+    assert_eq!((r2.info().plugins[0].handle, owner.live()), (h, 1), "the same instance, none made");
+    assert_eq!((calls(&stats, "load"), stats.tag.lock().unwrap().clone()), (loads + 1, "two".to_string()));
+    let load = stats.main_calls().into_iter().rfind(|c| c.what == "load").unwrap();
+    assert!(load.says_main && !load.says_audio, "loaded on the plugin main thread: {load:?}");
     rig.send(Msg::Activate { renderer: Box::new(r2) });
+    rig.run(BLOCK);
+    assert_eq!(rig.e.current().unwrap().plugin_handles(), [h]);
+    // Its blob again: nothing to load.
+    let again = rig.prepare_with(&flat, &data2, &pk, &owner, &Continues::identity(&flat)).unwrap();
+    assert_eq!((again.stats().kept.plugins, again.stats().loads, calls(&stats, "load")), (1, 0, loads + 1));
+    rig.send(Msg::Activate { renderer: Box::new(again) });
+    rig.run(BLOCK);
+
+    // The blob taken away: a new instance, on its defaults.
+    let r0 = rig.prepare_with(&flat, &data0, &pk, &owner, &Continues::identity(&flat)).unwrap();
+    assert_eq!((r0.stats().kept.plugins, r0.stats().fresh.plugins), (0, 1));
+    let h0 = r0.plugin_handles()[0];
+    assert_ne!(h0, h);
+    rig.send(Msg::Activate { renderer: Box::new(r0) });
     rig.run(10 * BLOCK);
-    assert_eq!(rig.retired_renderers().len(), 1, "the old plan was retired");
+    assert_eq!(rig.retired_renderers().len(), 4, "every plan before was retired");
     std::thread::sleep(Duration::from_millis(50));
     assert_eq!(owner.live(), 2, "retired, but not dropped: its instance lives");
     rig.retired.clear();
     assert!(eventually(|| owner.live() == 1), "dropped: its instance is destroyed");
-    assert!(probe::stats(h1).is_none());
-    let calls = probe::tagged("one").pop().unwrap().main_calls();
+    assert!(probe::stats(h).is_none());
+    let calls = stats.main_calls();
     assert!(calls.iter().any(|c| c.what == "destroy" && c.says_main && !c.says_audio));
-    std::fs::remove_dir_all(d1).ok();
-    std::fs::remove_dir_all(d2).ok();
+    for d in [d1, d2, d0] {
+        std::fs::remove_dir_all(d).ok();
+    }
+}
+
+// RENDER-26b (build notes, slice 4): a state load that fails never fails the prepare, as the loads
+// before it have landed in instances that play. Two keyed plugins get new blobs; the first loads,
+// the second refuses its. The plan is prepared whole and both instances are kept; the refusal is
+// named, and the plan says the refused one holds what it held, so the next plan tries again.
+#[test]
+fn a_state_that_fails_to_load_never_fails_the_prepare() {
+    let mut pk = probe_packages();
+    let owner = Owner::discard();
+    let nodes = json!([
+        {"id": "n", "op": "lane", "lane": "notes"},
+        {"id": "p", "op": "plugin", "plugin": "clap:m2.probe", "key": "lead", "inputs": {"notes": "n"}},
+        {"id": "q", "op": "plugin", "plugin": "clap:m2.probe.fails-state", "key": "bad", "inputs": {"in": "p"}},
+    ]);
+    let ir = song(nodes, "q", json!([{"key": "notes", "kind": "events<note>"}]));
+    let flat = plugged(&mut pk, ir.clone());
+    let files = |lead: &str, bad: &str| {
+        let dir = project(&[]);
+        std::fs::create_dir_all(dir.join("data/song")).unwrap();
+        for (key, plugin, bytes) in [("lead", "clap:m2.probe", lead), ("bad", "clap:m2.probe.fails-state", bad)] {
+            std::fs::write(dir.join(format!("data/song/{key}.state")), bytes).unwrap();
+            let side = json!({"plugin": plugin, "plugin_version": "1.0.0"});
+            std::fs::write(dir.join(format!("data/song/{key}.state.json")), side.to_string()).unwrap();
+        }
+        let d = data(&ir, &dir);
+        (d, dir)
+    };
+    let (data1, d1) = files("one", "fine");
+    let (data2, d2) = files("two", "fail: this blob doesn't load");
+    let r1 = build(&flat, &data1, &pk, &owner);
+    let hs = r1.plugin_handles();
+    let mut rig = Rig::of(&flat, &data1, r1);
+    rig.cmd(Cmd::Play);
+    rig.run(BLOCK);
+    let r2 = rig.prepare_with(&flat, &data2, &pk, &owner, &Continues::identity(&flat)).expect("a failed load fails no prepare");
+    let s = r2.stats().clone();
+    assert_eq!((s.kept.plugins, s.fresh.plugins, s.loads), (2, 0, 1), "{s:?}");
+    assert_eq!(s.unloaded.len(), 1, "{s:?}");
+    assert!(s.unloaded[0].0.ends_with("/q") && s.unloaded[0].1.contains("fails-state"), "{s:?}");
+    assert_eq!(*probe::stats(hs[0]).unwrap().tag.lock().unwrap(), "two", "the first landed");
+    let info = r2.info();
+    let held = |node: &str| info.plugins.iter().find(|p| flat.nodes[p.node].name.ends_with(node)).unwrap().blob;
+    assert_eq!(held("/p"), data2.state_hash("song", &["lead"]));
+    assert_eq!(held("/q"), data1.state_hash("song", &["bad"]), "the refused one holds what it held");
+    rig.send(Msg::Activate { renderer: Box::new(r2) });
+    rig.run(BLOCK);
+    assert_eq!(rig.e.current().unwrap().plugin_handles(), hs, "both kept");
+    // The next plan tries again, and fails again: it says so again.
+    let again = rig.prepare_with(&flat, &data2, &pk, &owner, &Continues::identity(&flat)).unwrap();
+    assert_eq!((again.stats().loads, again.stats().unloaded.len()), (0, 1));
+    for d in [d1, d2] {
+        std::fs::remove_dir_all(d).ok();
+    }
+}
+
+// HOME-4, RENDER-26b: code beats the blob. A state load sets every parameter the blob holds, and
+// the instance's next call (here the old plan's, before the activation) sends every parameter code
+// owns again, whatever was last sent: the blob's value for one of those plays for less than a
+// block. A parameter code doesn't own keeps the blob's value.
+#[test]
+fn a_state_load_resends_code_owned_parameters() {
+    let mut pk = probe_packages();
+    let owner = Owner::discard();
+    // Code owns the gain (1); the level is the blob's.
+    let flat = probe_song(&mut pk, 1.0, Some("lead"), json!([]), "p");
+    let (data1, d1) = with_blob(Some(probe::state_with("one", 0.25, 0.2)));
+    let (data2, d2) = with_blob(Some(probe::state_with("two", 0.75, 0.6)));
+    let r1 = build(&flat, &data1, &pk, &owner);
+    let h = r1.plugin_handles()[0];
+    let mut rig = Rig::of(&flat, &data1, r1);
+    rig.cmd(Cmd::Play);
+    rig.run(BLOCK);
+    assert_eq!((param_of(h, probe::GAIN), param_of(h, probe::LEVEL)), (1.0, 0.2), "code's gain, the blob's level");
+    let r2 = rig.prepare_with(&flat, &data2, &pk, &owner, &Continues::identity(&flat)).unwrap();
+    assert_eq!(r2.stats().loads, 1);
+    assert_eq!((param_of(h, probe::GAIN), param_of(h, probe::LEVEL)), (0.75, 0.6), "loaded: the blob's values");
+    rig.run(BLOCK);
+    assert_eq!((param_of(h, probe::GAIN), param_of(h, probe::LEVEL)), (1.0, 0.6), "the next call: code's gain, the blob's level");
+    rig.send(Msg::Activate { renderer: Box::new(r2) });
+    rig.run(4 * BLOCK);
+    assert_eq!((param_of(h, probe::GAIN), param_of(h, probe::LEVEL)), (1.0, 0.6));
+    // Nothing loaded: nothing sent again, and the level the blob set stays.
+    let same = rig.prepare_with(&flat, &data2, &pk, &owner, &Continues::identity(&flat)).unwrap();
+    assert_eq!(same.stats().loads, 0);
+    for d in [d1, d2] {
+        std::fs::remove_dir_all(d).ok();
+    }
 }
 
 // RENDER-6a, §5.6: with every plugin asleep, a stopped engine idles; a plugin that asks to be

@@ -2321,8 +2321,23 @@ fn a_refused_activation_recovers_by_replace() {
     assert_eq!(dc.blocks(2), [0.5, 0.5]);
 }
 
-// HOST-5, ID-8 (§3.2): two keyed plugins whose keys swap places in the code keep their instances,
-// each following its key; none is created.
+impl Fixture {
+    /// Save `bytes` as the probe's state for key `key` of module `module`, with its sidecar
+    /// (FMT-17), as the plugin's own save would.
+    fn probe_state(&self, module: &str, key: &str, bytes: &[u8]) {
+        self.put(&format!("data/{module}/{key}.state.json"), r#"{"plugin": "clap:m2.probe", "plugin_version": "1.0.0"}"#);
+        std::fs::write(self.0.join(format!("data/{module}/{key}.state")), bytes).unwrap();
+    }
+}
+
+/// The probe instance `h`'s state, saved now.
+fn saved(h: m2_plugins::Handle) -> Vec<u8> {
+    m2_plugins::host().save_state(h).recv().unwrap().unwrap().bytes
+}
+
+// HOST-5, ID-8, RENDER-26b (§3.2, §10.2): two keyed plugins, each with its own saved state, whose
+// keys swap places in the code keep their instances, each following its key: none is created and
+// none loads another's state, so each instance still saves its own key's state.
 #[test]
 fn swapping_two_plugin_keys_moves_the_instances() {
     m2_plugins::probe::install();
@@ -2333,7 +2348,10 @@ fn swapping_two_plugin_keys_moves_the_instances() {
              plugin('clap:m2.probe', {{ key: '{first}' }}),\n  plugin('clap:m2.probe', {{ key: '{second}' }}),\n));\n"
         )
     };
+    let (lead, pad) = (m2_plugins::probe::state("lead", 1.0), m2_plugins::probe::state("pad", 1.0));
     fixture.put("song.ts", &song("lead", "pad"));
+    fixture.probe_state("song", "lead", &lead);
+    fixture.probe_state("song", "pad", &pad);
     let (p, driver) = Player::driven(48_000);
     let graph = Graph::with_player(p);
     graph.open(&fixture.0).unwrap();
@@ -2341,6 +2359,7 @@ fn swapping_two_plugin_keys_moves_the_instances() {
     dc.graph.transport("play").unwrap();
     dc.frames(4);
     let first = dc.handles();
+    assert_eq!((saved(first[0]), saved(first[1])), (lead.clone(), pad.clone()), "each made from its key's state");
     // This session's own count: other tests' instances, made meanwhile, never add to it.
     let created = dc.graph.inner.owner.made();
     dc.fixture.put("song.ts", &song("pad", "lead"));
@@ -2348,4 +2367,63 @@ fn swapping_two_plugin_keys_moves_the_instances() {
     dc.frames(4);
     assert_eq!(dc.handles(), [first[1], first[0]], "each key kept its instance");
     assert_eq!(dc.graph.inner.owner.made(), created, "none created");
+    assert_eq!(dc.stats().loads, 0, "none loaded another's state");
+    assert_eq!((saved(first[0]), saved(first[1])), (lead, pad), "each holds its own key's state");
+}
+
+// RENDER-26b, HOST-5 (§10.2, §8.3): a plugin's state file changed from outside (an agent, an undo
+// through the files) is an activation of the same structure that loads the new state into the
+// instance that plays, on the plugin main thread: none is created. Its gain, which the code owns,
+// is the code's again from the next block (HOME-4). The same file written again loads nothing.
+#[test]
+fn a_state_change_loads_into_the_running_instance() {
+    m2_plugins::probe::install();
+    let fixture = Fixture::new();
+    fixture.put(
+        "song.ts",
+        "import { plugin, song, track } from '@m2/core';\n\
+         const p = track('p', ({ lane }) => plugin('clap:m2.probe', { notes: lane.notes('n'), key: 'lead', gain_1: 0.5 }));\n\
+         export default song(() => p.out);\n",
+    );
+    fixture.put(
+        "data/p/n.json",
+        r#"{"clips": [{"id": "a", "start": 0, "length": 64, "notes": [{"pitch": "C4", "start": 0, "length": 60}]}]}"#,
+    );
+    fixture.probe_state("p", "lead", &m2_plugins::probe::state("one", 0.25));
+    let (p, driver) = Player::driven(48_000);
+    let graph = Graph::with_player(p);
+    graph.open(&fixture.0).unwrap();
+    let mut dc = Dc { fixture, graph, driver };
+    dc.graph.transport("play").unwrap();
+    dc.frames(4);
+    let first = dc.handles();
+    let stats = m2_plugins::probe::stats(first[0]).unwrap();
+    let tag = || stats.tag.lock().unwrap().clone();
+    let gain = || match m2_plugins::host().main_call(first[0], m2_plugins::MainCall::Value(m2_plugins::probe::GAIN)) {
+        Ok(m2_plugins::Reply::Value(Some(v))) => v,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!((tag(), gain()), ("one".to_string(), 0.5));
+    let (made, generation) = (dc.graph.inner.owner.made(), dc.generation());
+    let loads = stats.main_calls().iter().filter(|c| c.what == "load").count();
+    dc.fixture.probe_state("p", "lead", &m2_plugins::probe::state("two", 0.75));
+    assert!(dc.graph.poll());
+    assert_eq!(tag(), "two", "loaded as the plan was prepared");
+    dc.frames(4);
+    assert_ne!(dc.generation(), generation, "an activation");
+    assert_eq!(dc.handles(), first, "into the instance that plays");
+    assert_eq!(dc.graph.inner.owner.made(), made, "none created");
+    let s = dc.stats();
+    assert_eq!((s.kept.plugins, s.fresh.total(), s.loads, s.ghosts), (1, 0, 1, 0), "{s:?}");
+    let calls = stats.main_calls();
+    let new: Vec<_> = calls.iter().filter(|c| c.what == "load").skip(loads).collect();
+    assert!(new.len() == 1 && new[0].says_main && !new[0].says_audio, "one load, on the plugin main thread: {new:?}");
+    assert_eq!(gain(), 0.5, "the code's gain again (HOME-4)");
+    // The same bytes written again: nothing to load.
+    let generation = dc.generation();
+    dc.fixture.probe_state("p", "lead", &m2_plugins::probe::state("two", 0.75));
+    dc.graph.poll();
+    dc.frames(4);
+    assert_eq!(stats.main_calls().iter().filter(|c| c.what == "load").count(), loads + 1);
+    assert!(dc.generation() == generation || dc.stats().loads == 0);
 }
