@@ -738,7 +738,7 @@ Agents may keep writing files directly: that is the save path, and every problem
 - Units in TypeScript are functions (`hz(800)`), and plain numbers are untyped literals.
 - `feedback()` declares its kind up front (`feedback("audio<1>")`), and its input is given later with `.set()`.
 - Inside `poly`, a voice can read any signal from its module. Lanes, imports and `time` are always created at module level, so voices never contain them.
-- The sandbox deletes `Date` and `performance`, makes `Math.random`, `eval` and the `Function` constructors throw, can only import project files, `@m2/core` and installed packages, and stops a build after 10 s or 256 MB.
+- The sandbox deletes `Date`, `performance`, `WeakRef` and `FinalizationRegistry`, makes `Math.random`, `eval` and the `Function` constructors throw, can only import project files, `@m2/core` and installed packages, and stops a build after 10 s or 256 MB.
 
 **Experiment: hosted plugins (CLAP), done.** `core/plugins` (`m2-plugins`) hosts CLAP plugins, tested with Surge XT, Surge XT Effects and Airwindows Consolidated:
 - A plugin is a graph node: `plugin("clap:<id>", { in, notes, <name>_<id>: value, key: "name" })` (since step 4: a parameter is addressed by its name and CLAP id, and `key` replaced `state`).

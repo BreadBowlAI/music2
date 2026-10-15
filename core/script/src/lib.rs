@@ -83,6 +83,9 @@ globalThis.__m2s = function (site, value, ends) {
 };
 delete globalThis.Date;
 delete globalThis.performance;
+// When garbage is collected depends on the bytes the OS's malloc counts, so a song must not see it.
+delete globalThis.WeakRef;
+delete globalThis.FinalizationRegistry;
 Math.random = () => { throw new Error("Math.random isn't available: songs must render the same every time. Use a seeded generator."); };
 {
   const pow = Math.pow;

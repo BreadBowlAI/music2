@@ -296,7 +296,9 @@ export default song(() => kernel("std:sine"));
 // RENDER-2, PLAT-4: song code can't make code from text while it runs, which would skip the
 // build's lowering of `**` and compute it with the OS's `pow`: `eval` and each kind of function's
 // constructor throw, saying why, as `Math.random` does. It reads no clock either: `Date` and
-// `performance` are gone. Functions and modules work as before.
+// `performance` are gone. Nor does it see when garbage is collected: `WeakRef` and
+// `FinalizationRegistry` are gone (QuickJS collects after a number of bytes as the OS's malloc counts
+// them, which differs between OSes). Functions, modules, `WeakMap` and `WeakSet` work as before.
 #[test]
 fn song_code_cannot_make_code_from_text() {
     for (code, what) in [
@@ -325,6 +327,8 @@ const kinds = [function () {}, () => 1, async () => 1, function* () {}, async fu
 if (!kinds.every((f) => f instanceof Function && typeof f === "function")) throw new Error("not functions");
 if (Function.name !== "Function" || (async () => 1).constructor.name !== "AsyncFunction") throw new Error("renamed");
 if (typeof Date !== "undefined" || typeof performance !== "undefined") throw new Error("a clock");
+if (typeof WeakRef !== "undefined" || typeof FinalizationRegistry !== "undefined") throw new Error("the collector's timing");
+if (!new WeakMap([[kinds[0], 1]]).has(kinds[0]) || !new WeakSet([kinds[1]]).has(kinds[1])) throw new Error("no weak collections");
 const add = function (a: number, b: number) { return a + b; };
 export default song(() => osc.sine(add.call(null, 220, 220)));
 "#,
