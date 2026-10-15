@@ -584,7 +584,8 @@ impl PluginNode {
         let mut next = 0;
         let channels = out.len() / BLOCK;
         let (host, h) = (inst.host(), inst.handle());
-        // Its state was loaded since its last call: every parameter code owns goes again (HOME-4).
+        // Its state was loaded: every parameter code owns goes again (HOME-4), at its next two
+        // calls, as a plugin may apply the state at the first, over what that call brings.
         if inst.take_reloaded() {
             for p in &mut self.params {
                 p.2 = None;
@@ -880,11 +881,7 @@ impl Builder<'_> {
             Make::New(shape) => {
                 let blob = state_blob(self.data, n)?;
                 let host = self.packages.host();
-                let (h, _) = host.create(&info.found, blob, self.owner).with_context(|| n.name.clone())?;
-                // Owned from here: dropped on an error, it is destroyed.
-                let inst = Arc::new(PluginInstance::new(host.clone(), h, shape));
-                host.activate(h, rate, BLOCK as u32).with_context(|| n.name.clone())?;
-                Some(inst)
+                Some(PluginInstance::create(host, &info.found, blob, self.owner, rate, shape).with_context(|| n.name.clone())?)
             }
             Make::Moved => None,
         };
@@ -1719,6 +1716,20 @@ impl Renderer {
     ) -> Result<Renderer> {
         let owner = m2_plugins::Owner::discard();
         Renderer::prepare(flat, data, packages, sample_rate, &mut audio::Cache::default(), &owner, Basis::Lend(lent))
+    }
+
+    /// Play `inst`, a new instance, at top-level node `node` in place of the live one lent to this
+    /// offline render ([`Renderer::lending`], RENDER-1): taking that one offline failed, or the
+    /// live engine didn't hold. Only before the render's first block. False when the node plays
+    /// no lent instance.
+    pub fn unlend(&mut self, node: usize, inst: Arc<PluginInstance>) -> bool {
+        match self.plan.graph.exec.get_mut(node) {
+            Some(Exec::Plugin(p)) if p.reset_first => {
+                (p.inst, p.reset_first) = (Some(inst), false);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// A range render (RENDER-4): fresh from init at engine time 0, with the transport starting

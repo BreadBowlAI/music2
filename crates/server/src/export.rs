@@ -3,9 +3,9 @@
 //! It renders the accepted revision, which is what the app plays. [`m2_editor::render`] does
 //! the rendering, as it does for `m2 render`: both write the same file. A pure song renders with
 //! a renderer of its own, so playback and every other request carry on meanwhile. A song whose
-//! plugins play borrows their live instances (RENDER-1): playback pauses ([`Lent`]), each instance
-//! renders offline from its committed state, and playback resumes where it was once the file is
-//! written. One export runs at a time. Clients hear how it goes as `export` events, each naming
+//! plugins play borrows their live instances (RENDER-1): on the export's thread, playback pauses
+//! ([`Lent`]), each instance renders offline from its committed state, and playback resumes where
+//! it was once the file is written. One export runs at a time. Clients hear how it goes as `export` events, each naming
 //! the `song` and its project folder (`dir`), and whether playback is `paused` for it: `progress`
 //! (0..1, at most ten a second), then `done` with the file's `path`, `seconds`, `peak_db` and the
 //! `problems` it carries (a plugin that isn't installed, FMT-18a), or an `error`.
@@ -17,10 +17,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use m2_editor::render::Length;
+use m2_editor::render::{Length, Render};
 use m2_play::Player;
-use m2_plugins::{Blob, Handle, RenderMode};
+use m2_plugins::{Blob, Found, Handle, RenderMode};
 use m2_runtime::{BLOCK, PluginInstance};
+use m2_song::Diagnostic;
 use parking_lot::Mutex;
 use serde_json::json;
 
@@ -42,9 +43,33 @@ pub struct Exports {
     stop: Arc<AtomicBool>,
     /// The song being exported.
     song: Mutex<Option<String>>,
+    /// How the last export that borrowed live instances went.
+    borrowed: Mutex<Option<Borrowing>>,
+}
+
+/// How an export that borrowed the live plugin instances went, its times on the player's clock
+/// ([`m2_play::now_ns`]): what G7e reads.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Borrowing {
+    /// The hold's message, and when the engine said it held it (0: it never did).
+    pub hold_seq: u64,
+    pub held_ns: u64,
+    /// Its first host call on a borrowed instance (0: none).
+    pub first_call_ns: u64,
+    /// When every instance was back, and the resume's message (0: none was sent).
+    pub given_back_ns: u64,
+    pub resume_seq: u64,
+    /// Instances taken offline, and nodes that played a new one in the export.
+    pub taken: usize,
+    pub anew: usize,
 }
 
 impl Exports {
+    /// How the last export that borrowed live instances went, once it has given them back.
+    pub fn borrowed(&self) -> Option<Borrowing> {
+        *self.borrowed.lock()
+    }
+
     pub fn running(&self) -> bool {
         self.running.load(Ordering::SeqCst)
     }
@@ -117,15 +142,30 @@ pub fn start(state: &Arc<AppState>, path: Option<PathBuf>) -> Result<PathBuf> {
                 (p, Some(names))
             }
         };
-        // From here, a song whose plugins play has paused playback: given back when `lent` drops.
-        let Export { song, dir, render, problems: carried, lent } = state.graph.export(Length::Song)?;
+        // From here the session prepares nothing for a song whose plugins play: until `lent` drops.
+        let Export { song, dir, render, problems, lent } = state.graph.export(Length::Song)?;
         let render = render.stop_when(state.exports.stop.clone());
         *state.exports.song.lock() = Some(song.clone());
         let thread_state = state.clone();
         let thread_path = path.clone();
         std::thread::Builder::new().name("music2-export".into()).spawn(move || {
-            let state = thread_state;
-            let about = json!({"t": "export", "song": song, "dir": dir, "paused": lent.is_some()});
+            let (state, mut render, mut carried, mut lent) = (thread_state, render, problems, lent);
+            // Playback held and the live instances taken offline here, off the session's actor
+            // (RENDER-1). One that can't be taken plays a new instance in the export.
+            let taken = match lent.as_mut() {
+                Some(l) => std::panic::catch_unwind(AssertUnwindSafe(|| l.take(&mut render, &mut carried)))
+                    .unwrap_or_else(|_| Err(anyhow!("music2 hit a bug while pausing playback"))),
+                None => Ok(()),
+            };
+            let paused = lent.as_ref().is_some_and(Lent::held);
+            if lent.is_some() && !paused && taken.is_ok() {
+                state.toast("Playback couldn't pause for the export, so it renders beside playback, with plugins of its own.");
+            }
+            #[cfg(test)]
+            if let Some(l) = lent.as_ref() {
+                l.inside();
+            }
+            let about = json!({"t": "export", "song": song, "dir": dir, "paused": paused});
             let mut last: Option<Instant> = None;
             let progress = |progress: f64| {
                 if progress < 1.0 && last.is_none_or(|t| t.elapsed() >= PROGRESS_EVERY) {
@@ -133,19 +173,30 @@ pub fn start(state: &Arc<AppState>, path: Option<PathBuf>) -> Result<PathBuf> {
                     let _ = state.events.send(with(&about, json!({"progress": progress})).to_string());
                 }
             };
-            // A bug in the render mustn't leave every later export refused as "already running".
-            let written = std::panic::catch_unwind(AssertUnwindSafe(|| match fresh {
-                Some(names) => render.write_new(names, progress),
-                // A file picked in the project's assets/ is made new, never written over (WRITE-1).
-                None => render.write_for(&dir, &thread_path, progress).map(|r| (thread_path.clone(), r)),
-            }))
-            .unwrap_or_else(|_| Err(anyhow!("music2 hit a bug while exporting")));
+            let written = match taken {
+                // A bug in the render mustn't leave every later export refused as "already running".
+                Ok(()) => std::panic::catch_unwind(AssertUnwindSafe(|| match fresh {
+                    Some(names) => render.write_new(names, progress),
+                    // A file picked in the project's assets/ is made new, never written over (WRITE-1).
+                    None => render.write_for(&dir, &thread_path, progress).map(|r| (thread_path.clone(), r)),
+                }))
+                .unwrap_or_else(|_| Err(anyhow!("music2 hit a bug while exporting"))),
+                Err(e) => {
+                    drop(render);
+                    Err(e)
+                }
+            };
             // The instances back, and playback resumed, before it says it's done (RENDER-1).
+            if let Some(l) = lent.as_mut() {
+                l.give_back();
+                *state.exports.borrowed.lock() = Some(l.record);
+            }
             drop(lent);
             // Free before saying so: a client may export again as soon as it hears.
             state.exports.running.store(false, Ordering::SeqCst);
             let event = match written {
-                // What the export carries: a plugin that isn't installed is silent in it (FMT-18a).
+                // What the export carries: a plugin that isn't installed is silent in it (FMT-18a),
+                // and one it couldn't borrow played anew (RENDER-1).
                 Ok((path, r)) => {
                     json!({"done": true, "path": path, "seconds": r.seconds(), "peak_db": r.peak_db, "problems": carried})
                 }
@@ -161,69 +212,211 @@ pub fn start(state: &Arc<AppState>, path: Option<PathBuf>) -> Result<PathBuf> {
     begun
 }
 
+/// One live plugin instance an export borrows (RENDER-1), and what makes a new one in its place.
+pub(crate) struct Borrow {
+    /// The export plan's node it plays.
+    pub(crate) node: usize,
+    pub(crate) inst: Arc<PluginInstance>,
+    /// Its committed state, read.
+    pub(crate) blob: Option<Arc<Blob>>,
+    pub(crate) plugin: Found,
+}
+
+/// Tests: what an export does inside its window, and an export with no hold (the negative control
+/// of the G7e probe test, `an_export_borrows_and_gives_back_the_live_instances`).
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct Hooks {
+    pub(crate) no_hold: AtomicBool,
+    pub(crate) inside: Mutex<Option<Box<dyn FnMut() + Send>>>,
+}
+
 /// The live plugin instances an export borrows, and the engine held while it does (RENDER-1).
-/// Given back when it drops, on every path (done, failed, stopped, a panic, quitting): each is
-/// deactivated, set to realtime and activated again, holding the committed blob, with the
-/// parameters its code owns sent again at its next block (HOME-4); then the engine resumes where
-/// it held, and the session plays what waited for the export.
+/// Made on the session's actor, which prepares nothing for the engine while it lives, and taken on
+/// the export's thread ([`Lent::take`]). Given back when it drops, on every path (done, failed,
+/// stopped, a panic, quitting, never taken): each instance it took offline is deactivated, set to
+/// realtime and activated again, holding the committed blob, with the parameters its code owns
+/// sent again at its next block (HOME-4); then the engine resumes where it held, and the session
+/// plays what waited for the export.
 pub struct Lent {
     player: Player,
-    insts: Vec<Arc<PluginInstance>>,
     rate: u32,
-    /// The session it was lent for, and what tells it it is over, with the instances that failed
-    /// to come back active.
+    /// Still to be taken.
+    borrows: Vec<Borrow>,
+    /// Taken offline: given back when it drops.
+    taken: Vec<Arc<PluginInstance>>,
+    /// The engine was told to hold: told to resume when it drops.
+    holding: bool,
+    /// It said it held.
+    held: bool,
+    /// Instances that didn't come back active: replaced from their committed state (HOST-5).
+    failed: Vec<Handle>,
+    /// How it went.
+    pub(crate) record: Borrowing,
+    /// The session it was lent for, and what tells it it is over.
     pub(crate) token: u64,
     pub(crate) done: Option<Box<dyn FnOnce(Vec<Handle>) + Send>>,
+    #[cfg(test)]
+    pub(crate) hooks: Option<Arc<Hooks>>,
 }
 
 impl Lent {
-    /// Hold `player`'s engine, then take each instance offline with its committed blob loaded
-    /// (skipped where it holds it, HOME-6). The engine says it is held only after the callback
-    /// that held it returned, so from then on nothing it plays calls these until the resume. When
-    /// it doesn't hold within 2 s (its device stalled), or a host call fails, what was taken is
-    /// given back, playback resumes, and this fails.
-    pub(crate) fn take(player: Player, lent: Vec<(Arc<PluginInstance>, Option<Arc<Blob>>)>, rate: u32, token: u64) -> Result<Lent> {
-        let mut l = Lent { player, insts: Vec::with_capacity(lent.len()), rate, token, done: None };
-        l.player.hold(true)?;
+    pub(crate) fn new(player: Player, borrows: Vec<Borrow>, rate: u32, token: u64) -> Lent {
+        Lent {
+            player,
+            rate,
+            taken: Vec::with_capacity(borrows.len()),
+            borrows,
+            holding: false,
+            held: false,
+            failed: vec![],
+            record: Borrowing::default(),
+            token,
+            done: None,
+            #[cfg(test)]
+            hooks: None,
+        }
+    }
+
+    /// Whether the engine said it held: playback is paused for the export.
+    pub fn held(&self) -> bool {
+        self.held
+    }
+
+    /// On the export's thread: hold the engine, then take each instance offline with its committed
+    /// blob loaded (skipped where it holds it, HOME-6), for `render`. The engine says it is held only
+    /// after the callback that held it returned, and only once it has taken this hold, so from then
+    /// on nothing it plays calls these until the resume. An instance whose host calls fail is given
+    /// back at once, and a new one plays its node in the export, as `problems` says
+    /// (`plugin.not-borrowed`). When the engine doesn't hold within 2 s (its device stalled),
+    /// playback resumes and every node plays a new instance. Fails only when a new one can't be made.
+    pub(crate) fn take(&mut self, render: &mut Render, problems: &mut Vec<Diagnostic>) -> Result<()> {
+        let borrows = std::mem::take(&mut self.borrows);
+        if !self.hold() {
+            // Nothing was taken: the session may play what waits now.
+            self.give_back();
+            for b in borrows {
+                render.unlend(b.node, b.inst.another(&b.plugin, b.blob, self.rate)?);
+                self.record.anew += 1;
+            }
+            return Ok(());
+        }
+        for b in borrows {
+            // Given back on every path from here, its first call included.
+            self.taken.push(b.inst.clone());
+            if self.record.first_call_ns == 0 {
+                self.record.first_call_ns = m2_play::now_ns();
+            }
+            self.record.taken += 1;
+            if let Err(e) = offline(&b, self.rate) {
+                let inst = self.taken.pop().expect("pushed above");
+                self.give(&inst);
+                (self.record.taken, self.record.anew) = (self.record.taken - 1, self.record.anew + 1);
+                render.unlend(b.node, b.inst.another(&b.plugin, b.blob, self.rate)?);
+                problems.push(Diagnostic::warning(
+                    "plugin.not-borrowed",
+                    format!(
+                        "{} couldn't pause for the export ({e:#}), so a new one played it in the export, from its saved state.",
+                        b.plugin.name
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Tell the engine to hold, and wait up to 2 s for it to say it holds this hold.
+    fn hold(&mut self) -> bool {
+        #[cfg(test)]
+        if self.hooks.as_ref().is_some_and(|h| h.no_hold.load(Ordering::SeqCst)) {
+            // The negative control: the instances are taken while the engine plays on.
+            return true;
+        }
+        let Ok(seq) = self.player.hold(true) else { return false };
+        (self.holding, self.record.hold_seq) = (true, seq);
         let t = Instant::now();
-        while !l.player.held() {
+        // `held` alone could still say an earlier hold's, until this one is applied.
+        while !(self.player.applied(seq).is_some() && self.player.held()) {
             if t.elapsed() > HOLD_WAIT {
-                bail!("playback didn't pause within {} s", HOLD_WAIT.as_secs());
+                return false;
             }
             std::thread::sleep(Duration::from_millis(1));
         }
-        for (inst, blob) in lent {
-            let (host, h) = (inst.host(), inst.handle());
-            host.deactivate(h);
-            l.insts.push(inst.clone());
-            if let Some(b) = blob {
-                host.load_state(h, b)?;
-            }
-            host.set_render_mode(h, RenderMode::Offline)?;
-            host.activate(h, rate, BLOCK as u32)?;
-        }
-        Ok(l)
+        (self.held, self.record.held_ns) = (true, m2_play::now_ns());
+        true
     }
+
+    /// One instance back to realtime and active, holding its committed blob, its code-owned
+    /// parameters sent again at its next block.
+    fn give(&mut self, inst: &PluginInstance) {
+        let (host, h) = (inst.host(), inst.handle());
+        host.deactivate(h);
+        let _ = host.set_render_mode(h, RenderMode::Realtime);
+        // One that won't come back active is replaced from its committed state (HOST-5).
+        if let Err(e) = host.activate(h, self.rate, BLOCK as u32) {
+            eprintln!("music2: a plugin didn't come back after the export: {e:#}");
+            self.failed.push(h);
+        }
+        inst.mark_reloaded();
+    }
+
+    /// Every instance taken back, playback resumed, and the session told. Once.
+    pub(crate) fn give_back(&mut self) {
+        let back = !self.taken.is_empty();
+        for inst in std::mem::take(&mut self.taken) {
+            self.give(&inst);
+        }
+        if back {
+            self.record.given_back_ns = m2_play::now_ns();
+        }
+        if std::mem::take(&mut self.holding) {
+            self.record.resume_seq = self.player.hold(false).unwrap_or(0);
+        }
+        self.held = false;
+        if let Some(done) = self.done.take() {
+            done(std::mem::take(&mut self.failed));
+        }
+    }
+
+    /// Tests: what runs inside the export's window, after the instances were taken.
+    #[cfg(test)]
+    fn inside(&self) {
+        if let Some(f) = self.hooks.as_ref().and_then(|h| h.inside.lock().take()) {
+            let mut f = f;
+            f();
+        }
+    }
+}
+
+/// Take `b`'s instance offline for the export: deactivated, its committed blob loaded (skipped
+/// where it holds it), set to offline mode and activated. After a load, one call with no events
+/// on this thread lets the plugin apply the state: one that applies it at its next call, ending
+/// every voice and setting every parameter (Surge XT does), would take the export's first notes
+/// and the code's values with it. The render resets it at its first call.
+fn offline(b: &Borrow, rate: u32) -> Result<()> {
+    let (host, h) = (b.inst.host(), b.inst.handle());
+    host.deactivate(h);
+    let loaded = match &b.blob {
+        Some(blob) => host.load_state(h, blob.clone())?,
+        None => false,
+    };
+    host.set_render_mode(h, RenderMode::Offline)?;
+    host.activate(h, rate, BLOCK as u32)?;
+    if loaded {
+        let (mut l, mut r, silence) = ([0.0f32; BLOCK], [0.0f32; BLOCK], [0.0f32; BLOCK]);
+        let mut io =
+            m2_plugins::SharedBuffers { inputs: [&silence, &silence], n_in: 0, outputs: [&mut l, &mut r], n_out: 2, frames: BLOCK as u32 };
+        let (none, mut out) = (m2_plugins::Events::with_capacity(0), m2_plugins::Events::with_capacity(64));
+        if host.process(h, &mut io, &none, &mut out, &m2_plugins::Transport::default()) == m2_plugins::Status::Error {
+            bail!("it reported a processing error once its state was loaded");
+        }
+    }
+    Ok(())
 }
 
 impl Drop for Lent {
     fn drop(&mut self) {
-        let mut failed = vec![];
-        for inst in self.insts.drain(..) {
-            let (host, h) = (inst.host(), inst.handle());
-            host.deactivate(h);
-            let _ = host.set_render_mode(h, RenderMode::Realtime);
-            // One that won't come back active is replaced from its committed state (HOST-5).
-            if let Err(e) = host.activate(h, self.rate, BLOCK as u32) {
-                eprintln!("music2: a plugin didn't come back after the export: {e:#}");
-                failed.push(h);
-            }
-            inst.mark_reloaded();
-        }
-        let _ = self.player.hold(false);
-        if let Some(done) = self.done.take() {
-            done(failed);
-        }
+        self.give_back();
     }
 }
 
@@ -259,7 +452,7 @@ fn picked(path: PathBuf) -> Result<PathBuf> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::atomic::AtomicU64;
 
     use serde_json::Value;
@@ -317,7 +510,7 @@ mod tests {
     }
 
     /// Events until the export says it's finished; the last one is that.
-    fn until_finished(events: &mut broadcast::Receiver<String>) -> Vec<Value> {
+    pub(crate) fn until_finished(events: &mut broadcast::Receiver<String>) -> Vec<Value> {
         let start = Instant::now();
         let mut seen = vec![];
         while start.elapsed() < Duration::from_secs(30) {

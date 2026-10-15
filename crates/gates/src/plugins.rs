@@ -717,6 +717,9 @@ fn inside(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome) -
     Ok(())
 }
 
+/// Surge XT's filter 1 type, which `tracks/lead.ts` sets to 0.05 ("LP 24 dB").
+const FILTER_TYPE: u32 = 1_537_728_286;
+
 /// One of a plugin's parameters, as it reads now (on the plugin main thread).
 fn param(h: m2_plugins::Handle, id: u32) -> Option<f64> {
     match m2_plugins::host().main_call(h, m2_plugins::MainCall::Value(id)) {
@@ -763,7 +766,7 @@ fn new_state(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome
     deck.run_to(played + song.frame(1.0))?;
     let pre = deck.rig.plugins().expect("checked");
     let surge0 = surge(&pre).map(|s| s.handle).context("Surge holds no chord at beat 1")?;
-    let was = param(surge0, volume.id);
+    let (was, code_type) = (param(surge0, volume.id), param(surge0, FILTER_TYPE));
     deck.change(&edited, Change::Structure)?;
     deck.run_secs(0.1)?;
     let after = deck.rig.plugins().expect("checked");
@@ -779,6 +782,15 @@ fn new_state(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome
         "changed state: Surge's volume reads the new patch's",
         now.is_some_and(|v| (v - want).abs() < 1e-4),
         format!("{now:?}, the patch's {want:.4}; {was:?} before"),
+    );
+    // HOME-4: the patch has the filter off; the code sets it ("LP 24 dB"), and wins. Surge applies a
+    // loaded state at its next call, over the values that call brings: the call after sends them again.
+    // A stepped parameter, it reads as Surge stores the code's 0.05: as it read before the load.
+    let ftype = param(surge0, FILTER_TYPE);
+    out.check(
+        "changed state (HOME-4): Surge's filter type, which the code sets, reads as before the load",
+        ftype.is_some() && ftype == code_type,
+        format!("{ftype:?}; {code_type:?} before, from the code's 0.05"),
     );
     // HOME-6: Surge's own state, committed as an autosave would: the instance holds it already.
     let own = host.save_state(surge0).recv()?.map_err(|e| anyhow!("{e}"))?;

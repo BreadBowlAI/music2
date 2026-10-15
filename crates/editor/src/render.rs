@@ -156,6 +156,13 @@ impl Render {
         Ok(Render { renderer, sample_rate, first, end, length, stop: Arc::default(), exact: true, reproducible: pure(flat) })
     }
 
+    /// Play `inst`, a new instance, at node `node` in place of the live one lent to this export
+    /// ([`Render::lending`]): taking that one offline failed, or playback didn't pause (RENDER-1).
+    /// Only before it renders. False when the node plays no lent instance.
+    pub fn unlend(&mut self, node: usize, inst: Arc<PluginInstance>) -> bool {
+        self.renderer.unlend(node, inst)
+    }
+
     /// A range render (RENDER-4): from `from` seconds in, after `preroll` seconds rendered and
     /// dropped. The engine starts from init where the preroll starts, with the transport there,
     /// as a live jump does: notes sounding there aren't chased, and tails from before it are

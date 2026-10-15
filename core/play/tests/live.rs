@@ -585,6 +585,65 @@ fn an_activation_never_jumps_back() {
     assert!(last >= 2 * SR as u64 - 4096);
 }
 
+// RENDER-6a's one exception, RENDER-1 (step 7 design §10.5; owner question Q6, a tape pause): a hold
+// fades the output out linearly over 5 ms from the block line after it is sent, then the engine
+// processes nothing: silence, its clock and its transport still, which it says (`Player::held`)
+// only after the callback that held it. A resume fades back in where it held: the output is that
+// of a twin that never held, from where the hold froze it, times the ramp, bit for bit. No step
+// across either ramp is larger than twice the music's own (G6's rule).
+#[test]
+fn a_hold_freezes_and_resumes_without_a_step() {
+    let delay = json!([
+        {"id": "t", "op": "const", "value": 0.25, "unit": "seconds"},
+        {"id": "f", "op": "const", "value": 0.6},
+        {"id": "m", "op": "const", "value": 0.5},
+        {"id": "x", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "v", "time": "t", "feedback": "f", "mix": "m"}},
+    ]);
+    let notes = json!({"clips": [{"start": 0, "length": 8, "notes": [{"pitch": 69, "start": 0, "length": 4}]}]});
+    let song = synth(0.05, delay, "x", notes, at_bpm(120.0));
+    let (player, mut d) = playing(song.renderer(), SR);
+    let (_twin, mut twin) = playing(song.renderer(), SR);
+    // 5 ms at 48 kHz; the engine's block lines are every 128 device frames here.
+    const FADE: usize = 240;
+    let line = |frames: usize| frames.div_ceil(128) * 128;
+    let scaled = |x: [f32; 2], level: usize| {
+        let g = level as f32 / FADE as f32;
+        [x[0] * g, x[1] * g]
+    };
+    let mut out = fill(&mut d, 24_000);
+    let seq = player.hold(true).unwrap();
+    assert!(!player.held(), "not before a callback took it");
+    let from = line(out.len());
+    out.extend(fill(&mut d, 4_096));
+    // The fade's two blocks rendered, then nothing.
+    let frozen = from + 2 * 128;
+    assert!(player.applied(seq).is_some() && player.held() && engine(&mut d).is_held());
+    let (clock, pos) = (player.clock(), player.status().pos);
+    assert_eq!((clock, pos), (frozen as u64, frozen as u64), "the clock and the transport stopped once the fade was out");
+    out.extend(fill(&mut d, 10_000));
+    assert_eq!((player.clock(), player.status().pos), (clock, pos), "nothing moves while held");
+    let resumed = line(out.len());
+    player.hold(false).unwrap();
+    out.extend(fill(&mut d, 24_000));
+    assert!(!player.held() && !engine(&mut d).is_held());
+    assert_eq!(player.status().pos, (frozen + out.len() - resumed) as u64, "the transport goes on from where it held");
+
+    let want = fill(&mut twin, frozen + 24_000);
+    assert_eq!(first_diff(&out[..from], &want[..from]), None, "the same before the hold");
+    for k in 0..frozen - from {
+        assert_eq!(out[from + k], scaled(want[from + k], FADE.saturating_sub(k + 1)), "fading out, frame {k}");
+    }
+    assert!(out[frozen..resumed].iter().all(|f| *f == [0.0; 2]), "silent while held");
+    for k in 0..FADE {
+        assert_eq!(out[resumed + k], scaled(want[frozen + k], k + 1), "fading in, frame {k}");
+    }
+    let after = out.len() - resumed;
+    assert_eq!(first_diff(&out[resumed + FADE..], &want[frozen + FADE..frozen + after]), None, "then the twin's own, where it held");
+    let own = max_step(&want[from - 9_600..from]);
+    let (down, up) = (max_step(&out[from - 1..frozen + 1]), max_step(&out[resumed - 1..resumed + FADE + 1]));
+    assert!(own > 0.01 && down <= 2.0 * own && up <= 2.0 * own, "steps: {down} out, {up} in; the music's own {own}");
+}
+
 // RENDER-9: a seek takes effect at the next block line: its target is the position at once, and
 // the engine plays from there.
 #[test]

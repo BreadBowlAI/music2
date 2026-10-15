@@ -1083,10 +1083,10 @@ impl Actor {
     }
 
     /// The accepted revision ready to export (RENDER-1). A song whose plugins play borrows their
-    /// live instances: matched as an activation matches them (`PlanInfo::lend`), playback held,
-    /// and each instance taken offline holding its committed blob. Settles prepare nothing until
-    /// they are given back ([`Self::export_done`]). With none playing, or when playback can't
-    /// pause (its device stalled), it renders with instances of its own, beside playback.
+    /// live instances: matched as an activation matches them (`PlanInfo::lend`), with what the
+    /// export's thread needs to hold playback and take each offline ([`crate::export::Lent`]).
+    /// Settles prepare nothing for the engine until they are given back ([`Self::export_done`]).
+    /// With none playing, it renders with instances of its own, beside playback.
     pub(super) fn export(&mut self, length: Length) -> Result<super::Export> {
         let device = self.inner.current_device();
         let o = self.open.as_mut().context("no project is open")?;
@@ -1104,26 +1104,29 @@ impl Actor {
             }
             _ => HashMap::new(),
         };
-        // Offline renders run at the project's rate (RENDER-31a).
-        let own = || Render::new(flat, data, packages, rate, 0.0, length);
         let Some(d) = device.filter(|_| !lend.is_empty()) else {
-            return Ok(super::Export { song, dir, render: own()?, problems, lent: None });
+            // Offline renders run at the project's rate (RENDER-31a).
+            let render = Render::new(flat, data, packages, rate, 0.0, length)?;
+            return Ok(super::Export { song, dir, render, problems, lent: None });
         };
         let render = Render::lending(flat, data, packages, rate, length, &lend)?;
-        let mut blobs = vec![];
-        for (&i, inst) in &lend {
-            blobs.push((inst.clone(), m2_runtime::state_blob(data, &flat.nodes[i])?));
+        let mut borrows = vec![];
+        for (&node, inst) in &lend {
+            let n = &flat.nodes[node];
+            let FOp::Plugin { plugin, .. } = &n.op else { bail!("{}: lent to a node that isn't a plugin", n.name) };
+            let found =
+                packages.plugin_info(plugin).with_context(|| format!("{}: plugin `{plugin}` was not described", n.name))?.found.clone();
+            borrows.push(crate::export::Borrow { node, inst: inst.clone(), blob: m2_runtime::state_blob(data, n)?, plugin: found });
         }
+        // Nothing fails from here: the export's guard clears it, on every path.
         o.exporting = true;
-        match crate::export::Lent::take(d.player, blobs, rate, o.token) {
-            Ok(l) => Ok(super::Export { song, dir, render, problems, lent: Some(l) }),
-            Err(e) => {
-                o.exporting = false;
-                drop(render);
-                self.inner.notices.lock().push(format!("Playback couldn't pause for the export ({e:#}): it renders beside playback."));
-                Ok(super::Export { song, dir, render: own()?, problems, lent: None })
-            }
+        #[allow(unused_mut)]
+        let mut lent = crate::export::Lent::new(d.player, borrows, rate, o.token);
+        #[cfg(test)]
+        {
+            lent.hooks = Some(self.inner.export_hooks.clone());
         }
+        Ok(super::Export { song, dir, render, problems, lent: Some(lent) })
     }
 
     /// An export gave back the live instances it borrowed (RENDER-1): what waited for it plays

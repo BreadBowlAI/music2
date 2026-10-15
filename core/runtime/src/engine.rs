@@ -531,6 +531,8 @@ impl Engine {
         let clock = self.clock;
         self.clock += BLOCK as u64;
         let Some(cur) = self.current.as_deref_mut() else {
+            // Silent already: nothing to fade, so a hold holds at once.
+            self.level = if self.hold { 0 } else { self.fade };
             self.out.silence(self.pos);
             return;
         };
@@ -540,6 +542,9 @@ impl Engine {
             if cur.woken() {
                 (self.idle, self.silent_blocks) = (false, 0);
             } else {
+                if self.hold {
+                    self.level = 0;
+                }
                 self.out.silence(cur.transport().pos());
                 return;
             }

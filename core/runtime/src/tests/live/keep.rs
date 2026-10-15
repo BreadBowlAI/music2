@@ -1005,9 +1005,11 @@ fn a_state_that_fails_to_load_never_fails_the_prepare() {
 }
 
 // HOME-4, RENDER-26b: code beats the blob. A state load sets every parameter the blob holds, and
-// the instance's next call (here the old plan's, before the activation) sends every parameter code
+// the instance's next calls (here the old plan's, before the activation) send every parameter code
 // owns again, whatever was last sent: the blob's value for one of those plays for less than a
-// block. A parameter code doesn't own keeps the blob's value.
+// block, or two for a plugin that applies a loaded state at the end of its next call, over what
+// that call sent (the probe's `defer_load`, as Surge XT does). A parameter code doesn't own keeps
+// the blob's value.
 #[test]
 fn a_state_load_resends_code_owned_parameters() {
     let mut pk = probe_packages();
@@ -1016,23 +1018,32 @@ fn a_state_load_resends_code_owned_parameters() {
     let flat = probe_song(&mut pk, 1.0, Some("lead"), json!([]), "p");
     let (data1, d1) = with_blob(Some(probe::state_with("one", 0.25, 0.2)));
     let (data2, d2) = with_blob(Some(probe::state_with("two", 0.75, 0.6)));
-    let r1 = build(&flat, &data1, &pk, &owner);
-    let h = r1.plugin_handles()[0];
-    let mut rig = Rig::of(&flat, &data1, r1);
-    rig.cmd(Cmd::Play);
-    rig.run(BLOCK);
-    assert_eq!((param_of(h, probe::GAIN), param_of(h, probe::LEVEL)), (1.0, 0.2), "code's gain, the blob's level");
-    let r2 = rig.prepare_with(&flat, &data2, &pk, &owner, &Continues::identity(&flat)).unwrap();
-    assert_eq!(r2.stats().loads, 1);
-    assert_eq!((param_of(h, probe::GAIN), param_of(h, probe::LEVEL)), (0.75, 0.6), "loaded: the blob's values");
-    rig.run(BLOCK);
-    assert_eq!((param_of(h, probe::GAIN), param_of(h, probe::LEVEL)), (1.0, 0.6), "the next call: code's gain, the blob's level");
-    rig.send(Msg::Activate { renderer: Box::new(r2) });
-    rig.run(4 * BLOCK);
-    assert_eq!((param_of(h, probe::GAIN), param_of(h, probe::LEVEL)), (1.0, 0.6));
-    // Nothing loaded: nothing sent again, and the level the blob set stays.
-    let same = rig.prepare_with(&flat, &data2, &pk, &owner, &Continues::identity(&flat)).unwrap();
-    assert_eq!(same.stats().loads, 0);
+    for deferred in [false, true] {
+        let r1 = build(&flat, &data1, &pk, &owner);
+        let h = r1.plugin_handles()[0];
+        probe::stats(h).unwrap().defer_load.store(deferred, Ordering::Relaxed);
+        let read = || (param_of(h, probe::GAIN), param_of(h, probe::LEVEL));
+        let mut rig = Rig::of(&flat, &data1, r1);
+        rig.cmd(Cmd::Play);
+        rig.run(BLOCK);
+        assert_eq!(read(), (1.0, 0.2), "code's gain, the blob's level");
+        let r2 = rig.prepare_with(&flat, &data2, &pk, &owner, &Continues::identity(&flat)).unwrap();
+        assert_eq!(r2.stats().loads, 1);
+        rig.run(BLOCK);
+        if deferred {
+            assert_eq!(read(), (0.75, 0.6), "applied at the end of the next call, over what it sent");
+            rig.run(BLOCK);
+        } else {
+            assert_eq!(read(), (1.0, 0.6), "the next call: code's gain, the blob's level");
+        }
+        assert_eq!(read(), (1.0, 0.6), "code's gain again, the blob's level (deferred: {deferred})");
+        rig.send(Msg::Activate { renderer: Box::new(r2) });
+        rig.run(4 * BLOCK);
+        assert_eq!(read(), (1.0, 0.6));
+        // Nothing loaded: nothing sent again, and the level the blob set stays.
+        let same = rig.prepare_with(&flat, &data2, &pk, &owner, &Continues::identity(&flat)).unwrap();
+        assert_eq!(same.stats().loads, 0);
+    }
     for d in [d1, d2] {
         std::fs::remove_dir_all(d).ok();
     }

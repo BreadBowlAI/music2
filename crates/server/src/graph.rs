@@ -148,7 +148,8 @@ pub struct Export {
     pub render: Render,
     /// What the export carries: a plugin that isn't installed is silent in it (FMT-18a).
     pub problems: Vec<m2_song::Diagnostic>,
-    /// The live plugin instances it borrows, with playback paused, given back when this drops.
+    /// The live plugin instances it borrows, taken on the export's thread with playback paused,
+    /// given back when this drops.
     pub lent: Option<crate::export::Lent>,
 }
 
@@ -349,6 +350,9 @@ struct Inner {
     wake: Arc<watcher::Wake>,
     /// Projects opened from now on are watched by walks alone, never events (the gates).
     walk_only: AtomicBool,
+    /// Tests: what an export of this project does inside its window, and whether it holds.
+    #[cfg(test)]
+    export_hooks: Arc<crate::export::Hooks>,
 }
 
 /// How long closing waits for the session's plugin instances to be destroyed.
@@ -441,6 +445,8 @@ impl Inner {
             ticking: Mutex::default(),
             wake: Arc::default(),
             walk_only: AtomicBool::default(),
+            #[cfg(test)]
+            export_hooks: Arc::default(),
         }
     }
 
@@ -727,9 +733,10 @@ impl Graph {
     }
 
     /// The accepted revision ready to export (RENDER-1, RENDER-3). A song whose plugins play
-    /// borrows their live instances: playback is paused, and each instance offline holding its
-    /// committed state, until [`Export::lent`] drops; then the session plays what waited for it.
-    /// Otherwise it renders with instances of its own, beside playback.
+    /// borrows their live instances ([`Export::lent`]): its thread pauses playback and takes each
+    /// instance offline, holding its committed state; when it drops, they are given back, playback
+    /// resumes, and the session plays what waited for it. Otherwise it renders with instances of
+    /// its own, beside playback.
     pub fn export(&self, length: Length) -> Result<Export> {
         let mut e = self.call(move |a| a.export(length))?;
         if let Some(l) = e.lent.as_mut() {
@@ -746,6 +753,20 @@ impl Graph {
     /// (RENDER-28).
     pub fn activity(&self) -> Activity {
         self.inner.activity()
+    }
+
+    /// The engine clock after the player's last callback, in frames (gates).
+    #[doc(hidden)]
+    pub fn engine_clock(&self) -> Option<u64> {
+        self.inner.current_device().map(|d| d.player.clock())
+    }
+
+    /// The plugin instances of the plan last sent to the engine (gates).
+    #[doc(hidden)]
+    pub fn plugin_handles(&self) -> Vec<m2_plugins::Handle> {
+        let handles =
+            |a: &mut Actor| a.open.as_ref().and_then(|o| o.plays.as_ref()).map(|p| p.info.plugins.iter().map(|p| p.handle).collect());
+        self.call(move |a| Ok(handles(a).unwrap_or_default())).unwrap_or_default()
     }
 
     /// Where playback is, as the audio thread last said: a seek it hasn't taken yet is where it

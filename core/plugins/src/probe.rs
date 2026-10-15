@@ -6,6 +6,8 @@
 //! It is an instrument and an effect at once: stereo in and out, notes in. Its output is its input
 //! times `Gain`, plus a sine at each sounding note's key, times `Level`. It records:
 //! - every main-thread call, with the thread it ran on and what the host's thread checks said;
+//! - every `process` call's thread, each call of either kind stamped from one process-wide
+//!   counter, so a test can tell which came first;
 //! - in atomics, from `process`: calls, wrong thread-check answers, blocks whose steady time was
 //!   already processed (an instance processed twice), `on_main_thread` entered during a `process`
 //!   call, and every note event with its steady time;
@@ -13,7 +15,9 @@
 //!
 //! Its state is `m2probe\0`, the two parameters, then a tag; any other bytes load as the tag
 //! alone. `m2.probe.fails-state` refuses a state that starts with `fail`, and any probe takes
-//! 300 ms to load one that starts with `slow`, as a big patch does.
+//! 300 ms to load one that starts with `slow`, as a big patch does. With [`Stats::defer_load`] set,
+//! a probe applies the parameters of a state it loads at the end of its next `process` call, after
+//! that call's events, ending every voice, as Surge XT does.
 
 use std::ffi::{CStr, c_char, c_void};
 use std::path::{Path, PathBuf};
@@ -56,6 +60,11 @@ const EVENTS: usize = 1 << 16;
 
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 
+/// What orders every probe's main-thread and `process` calls, across threads.
+static TICK: AtomicU64 = AtomicU64::new(1);
+/// `process` calls one instance remembers.
+const PROCESS_LOG: usize = 1 << 14;
+
 /// Make the probe findable (tests only). Idempotent.
 pub fn install() {
     INSTALLED.store(true, Ordering::Release);
@@ -90,6 +99,8 @@ pub struct Call {
     pub says_audio: bool,
     /// The thread's token (`m2_os::thread::token`).
     pub thread: usize,
+    /// When it was made, on the counter `process` calls are stamped from ([`Stats::process_calls`]).
+    pub tick: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,11 +139,19 @@ pub struct Stats {
     pub sleep: AtomicBool,
     /// Call `request_restart` from the next `process` call.
     pub restart: AtomicBool,
+    /// Refuse the next `activate`, as a plugin that can't start does.
+    pub refuse_activate: AtomicBool,
+    /// Apply a loaded state at the end of the next `process` call, ending every voice (Surge XT).
+    pub defer_load: AtomicBool,
+    /// A loaded state's gain and level (as bits), waiting for that call.
+    deferred: (AtomicBool, AtomicU64, AtomicU64),
     /// Allocate and free once in the next `process` call: what the audio thread's allocation
     /// counter must see (RENDER-28).
     pub allocate: AtomicBool,
     pub slept: AtomicU64,
     pub resets: AtomicU64,
+    /// The last `reset`: its tick and its thread's token.
+    pub reset_at: (AtomicU64, AtomicUsize),
     /// Notes sounding, Ons whose id wasn't above every id before, Offs and chokes for a note it
     /// doesn't hold, Ons it had no voice for.
     pub sounding: AtomicU32,
@@ -144,6 +163,9 @@ pub struct Stats {
     in_process: AtomicUsize,
     events: Box<[(AtomicU64, AtomicU64)]>,
     next: AtomicUsize,
+    /// Each `process` call: its tick and its thread's token.
+    processes: Box<[(AtomicU64, AtomicUsize)]>,
+    next_process: AtomicUsize,
 }
 
 impl Stats {
@@ -166,9 +188,13 @@ impl Stats {
             requested: AtomicU64::new(0),
             sleep: AtomicBool::new(false),
             restart: AtomicBool::new(false),
+            refuse_activate: AtomicBool::new(false),
+            defer_load: AtomicBool::new(false),
+            deferred: (AtomicBool::new(false), AtomicU64::new(0), AtomicU64::new(0)),
             allocate: AtomicBool::new(false),
             slept: AtomicU64::new(0),
             resets: AtomicU64::new(0),
+            reset_at: (AtomicU64::new(0), AtomicUsize::new(0)),
             sounding: AtomicU32::new(0),
             repeated_ids: AtomicU64::new(0),
             unknown_offs: AtomicU64::new(0),
@@ -177,7 +203,16 @@ impl Stats {
             in_process: AtomicUsize::new(0),
             events: (0..EVENTS).map(|_| (AtomicU64::new(0), AtomicU64::new(0))).collect(),
             next: AtomicUsize::new(0),
+            processes: (0..PROCESS_LOG).map(|_| (AtomicU64::new(0), AtomicUsize::new(0))).collect(),
+            next_process: AtomicUsize::new(0),
         }
+    }
+
+    /// Every `process` call so far, the first [`PROCESS_LOG`] of them: its tick (the counter
+    /// [`Call::tick`] reads) and its thread's token, in order.
+    pub fn process_calls(&self) -> Vec<(u64, usize)> {
+        let n = self.next_process.load(Ordering::Acquire).min(PROCESS_LOG);
+        self.processes[..n].iter().map(|(t, th)| (t.load(Ordering::Relaxed), th.load(Ordering::Relaxed))).collect()
     }
 
     /// Every note event it was sent: `(steady time of its frame, kind, note id)`, in order.
@@ -364,8 +399,14 @@ impl Probe {
     /// Record a main-thread call (off the audio thread: it locks and allocates).
     fn record(&self, what: &'static str) {
         let (says_main, says_audio) = self.thread();
-        let call =
-            Call { what, process_main: crate::main_thread::is_process_main(), says_main, says_audio, thread: crate::main_thread::token() };
+        let call = Call {
+            what,
+            process_main: crate::main_thread::is_process_main(),
+            says_main,
+            says_audio,
+            thread: crate::main_thread::token(),
+            tick: TICK.fetch_add(1, Ordering::AcqRel),
+        };
         self.stats.calls.lock().unwrap_or_else(|e| e.into_inner()).push(call);
     }
 
@@ -483,6 +524,9 @@ unsafe extern "C" fn destroy(p: *const clap_plugin) {
 unsafe extern "C" fn activate(p: *const clap_plugin, rate: f64, _: u32, _: u32) -> bool {
     let me = unsafe { probe(p) };
     me.record("activate");
+    if me.stats.refuse_activate.swap(false, Ordering::Relaxed) {
+        return false;
+    }
     me.rate = rate;
     // A new activation is a new steady timeline: an export's starts at 0 (RENDER-1).
     me.done_to = i64::MIN;
@@ -509,6 +553,8 @@ unsafe extern "C" fn stop_processing(p: *const clap_plugin) {
 unsafe extern "C" fn reset(p: *const clap_plugin) {
     let me = unsafe { probe(p) };
     me.stats.resets.fetch_add(1, Ordering::Relaxed);
+    me.stats.reset_at.0.store(TICK.fetch_add(1, Ordering::AcqRel), Ordering::Relaxed);
+    me.stats.reset_at.1.store(crate::main_thread::token(), Ordering::Relaxed);
     for v in &mut me.voices {
         v.on = false;
     }
@@ -546,6 +592,11 @@ unsafe extern "C" fn process(p: *const clap_plugin, proc_: *const clap_process) 
         st.doubled.fetch_add(1, Ordering::Relaxed);
     }
     let thread = crate::main_thread::token();
+    let i = st.next_process.fetch_add(1, Ordering::AcqRel);
+    if let Some((t, th)) = st.processes.get(i) {
+        t.store(TICK.fetch_add(1, Ordering::AcqRel), Ordering::Relaxed);
+        th.store(thread, Ordering::Relaxed);
+    }
     let last = st.last_thread.swap(thread, Ordering::Relaxed);
     if last != 0 && last != thread {
         st.threads.fetch_add(1, Ordering::Relaxed);
@@ -598,6 +649,15 @@ unsafe extern "C" fn process(p: *const clap_plugin, proc_: *const clap_process) 
     {
         st.requested.fetch_add(1, Ordering::Relaxed);
         unsafe { f(me.host) };
+    }
+    // A deferred state: its values over what this call's events set, and every voice ended.
+    if st.deferred.0.swap(false, Ordering::AcqRel) {
+        me.gain = f64::from_bits(st.deferred.1.load(Ordering::Relaxed));
+        me.level = f64::from_bits(st.deferred.2.load(Ordering::Relaxed));
+        for v in &mut me.voices {
+            v.on = false;
+        }
+        st.sounding.store(0, Ordering::Relaxed);
     }
     if st.allocate.swap(false, Ordering::Relaxed) {
         drop(std::hint::black_box(Box::new(0u64)));
@@ -781,7 +841,15 @@ unsafe extern "C" fn load(p: *const clap_plugin, s: *const clap_istream) -> bool
     }
     let tag = if bytes.starts_with(MAGIC) && bytes.len() >= MAGIC.len() + 16 {
         let f = |at: usize| f64::from_le_bytes(bytes[at..at + 8].try_into().expect("8 bytes"));
-        (me.gain, me.level) = (f(MAGIC.len()), f(MAGIC.len() + 8));
+        let (gain, level) = (f(MAGIC.len()), f(MAGIC.len() + 8));
+        if me.stats.defer_load.load(Ordering::Relaxed) {
+            let d = &me.stats.deferred;
+            d.1.store(gain.to_bits(), Ordering::Relaxed);
+            d.2.store(level.to_bits(), Ordering::Relaxed);
+            d.0.store(true, Ordering::Release);
+        } else {
+            (me.gain, me.level) = (gain, level);
+        }
         String::from_utf8_lossy(&bytes[MAGIC.len() + 16..]).into_owned()
     } else {
         String::from_utf8_lossy(&bytes).into_owned()
@@ -798,7 +866,7 @@ unsafe extern "C" fn no(_: *const clap_plugin) -> bool {
     false
 }
 
-unsafe extern "C" fn render_set(p: *const clap_plugin, _: clap_plugin_render_mode) -> bool {
-    unsafe { probe(p) }.record("render");
+unsafe extern "C" fn render_set(p: *const clap_plugin, mode: clap_plugin_render_mode) -> bool {
+    unsafe { probe(p) }.record(if mode == CLAP_RENDER_OFFLINE { "render_offline" } else { "render_realtime" });
     true
 }

@@ -2427,3 +2427,445 @@ fn a_state_change_loads_into_the_running_instance() {
     assert_eq!(stats.main_calls().iter().filter(|c| c.what == "load").count(), loads + 1);
     assert!(dc.generation() == generation || dc.stats().loads == 0);
 }
+
+// ---------------------------------------------------------------- exports that borrow (RENDER-1)
+
+/// A song whose keyed probe (key `lead`, its state saved) plays two long notes, its gain read from
+/// a control lane that holds 0.2 for 32 beats, then rises to 0.8 at beat 64, where its clip and
+/// the song end: an export leaves the plugin at the lane's default, 0.5. Open in the app's state
+/// on a driven player, playing, four blocks in. The test's thread is the audio thread: it fills.
+struct Ex {
+    fixture: Fixture,
+    state: Arc<crate::AppState>,
+    driver: Driver,
+}
+
+/// Its notes: two held from beat 0 to 60, so a later edit of the lane fits the room it has.
+const EX_NOTES: &str = r#"{"clips": [{"id": "a", "start": 0, "length": 64, "notes": [{"pitch": "C4", "start": 0, "length": 60}, {"pitch": "G4", "start": 0, "length": 60}]}]}"#;
+
+impl Ex {
+    fn new() -> Ex {
+        Ex::tagged("lead")
+    }
+
+    /// [`Ex::new`], its probe's saved state tagged `tag` ([`m2_plugins::probe::tagged`]).
+    fn tagged(tag: &str) -> Ex {
+        m2_plugins::probe::install();
+        let fixture = Fixture::new();
+        fixture.put("song.ts", &Ex::song("p.out"));
+        fixture.put("data/p/n.json", EX_NOTES);
+        fixture.put(
+            "data/p/g.json",
+            r#"{"unit": "scalar", "clips": [{"id": "r", "start": 0, "length": 64, "points": [[0, 0.2], [32, 0.2], [64, 0.8]]}]}"#,
+        );
+        fixture.probe_state("p", "lead", &m2_plugins::probe::state(tag, 1.0));
+        let (p, driver) = Player::driven(48_000);
+        let state = Arc::new(crate::AppState::new(String::new(), Graph::with_player(p)));
+        state.graph.open(&fixture.0).unwrap();
+        state.graph.transport("play").unwrap();
+        let mut ex = Ex { fixture, state, driver };
+        ex.fill(4);
+        ex
+    }
+
+    /// song.ts, its output `out` (of `p.out`).
+    fn song(out: &str) -> String {
+        format!(
+            "import {{ plugin, song, track }} from '@m2/core';\nimport {{ vca }} from 'std/dsp';\n\
+             const p = track('p', ({{ lane }}) =>\n  plugin('clap:m2.probe', {{ notes: lane.notes('n'), key: 'lead', gain_1: lane.control('g', 'scalar', 0.5) }}),\n);\n\
+             export default song(() => {out});\n"
+        )
+    }
+
+    /// `n` device buffers of a block, as the audio thread fills them.
+    fn fill(&mut self, n: usize) {
+        for _ in 0..n {
+            let mut buf = [0.0f32; 256];
+            self.driver.fill(&mut buf, 2);
+            drop(self.driver.drain_retired());
+        }
+    }
+
+    fn handles(&mut self) -> Vec<m2_plugins::Handle> {
+        self.driver.engine().unwrap().current().unwrap().plugin_handles()
+    }
+
+    fn engine(&mut self) -> &mut m2_runtime::Engine {
+        self.driver.engine().unwrap()
+    }
+
+    fn hooks(&self) -> &crate::export::Hooks {
+        &self.state.graph.inner.export_hooks
+    }
+
+    /// The export's thread stops inside its window, once it has taken the instances, until the
+    /// sender returned is sent to; the receiver returned hears when it got there.
+    fn stop_inside(&self) -> (mpsc::Sender<()>, mpsc::Receiver<()>) {
+        let (to_test, at_test) = mpsc::channel();
+        let (to_export, at_export) = mpsc::channel::<()>();
+        *self.hooks().inside.lock() = Some(Box::new(move || {
+            to_test.send(()).unwrap();
+            let _ = at_export.recv_timeout(Duration::from_secs(30));
+        }));
+        (to_export, at_test)
+    }
+
+    /// Fill, as the device does, until `done`.
+    fn fill_until(&mut self, what: &str, mut done: impl FnMut(&mut Ex) -> bool) {
+        let t = Instant::now();
+        while !done(self) {
+            assert!(t.elapsed() < Duration::from_secs(30), "timed out waiting until {what}");
+            self.fill(1);
+            std::thread::sleep(Duration::from_micros(200));
+        }
+    }
+
+    /// The probe's gain as the plugin reads it.
+    fn gain(&self, h: m2_plugins::Handle) -> f64 {
+        match m2_plugins::host().main_call(h, m2_plugins::MainCall::Value(m2_plugins::probe::GAIN)) {
+            Ok(m2_plugins::Reply::Value(Some(v))) => v,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// What the control lane `g` reads at `beat`.
+    fn ramp(beat: f64) -> f64 {
+        0.2 + 0.6 * ((beat - 32.0) / 32.0).clamp(0.0, 1.0)
+    }
+}
+
+/// The calls among `calls` from `from` on that move an instance between the engine and an export.
+fn moves(calls: &[m2_plugins::probe::Call], from: usize) -> Vec<&'static str> {
+    let kinds = ["deactivate", "activate", "load", "save", "render_offline", "render_realtime"];
+    calls[from..].iter().map(|c| c.what).filter(|w| kinds.contains(w)).collect()
+}
+
+// G7e (step 7 design §12.5), RENDER-1, RENDER-6a, HOME-4, HOME-6: an export of a song whose plugin
+// plays borrows its live instance, on the export's thread. In order: the engine holds, and says
+// so after its callback; the instance is deactivated, not loaded again (it holds its committed
+// state, HOME-6), set to offline mode and activated, and reset on the export's thread at its first
+// call; after the render it is deactivated, set to realtime and activated. No save, no second load.
+// No `process` call comes from the audio thread between the first deactivate and the last
+// activate, and the engine's clock doesn't move meanwhile. The export equals one made with new
+// instances, bit for bit; the instance is the same and none is made; after the resume its gain
+// reads the code's value where playback is (`reloaded`), not where the export ended. The negative
+// control: with no hold, the audio thread calls `process` inside the window.
+#[test]
+fn an_export_borrows_and_gives_back_the_live_instances() {
+    let mut ex = Ex::new();
+    let first = ex.handles();
+    let stats = m2_plugins::probe::stats(first[0]).unwrap();
+    let (made, before) = (ex.state.graph.inner.owner.made(), stats.main_calls().len());
+    let (audio, resets) = (m2_os::thread::token(), stats.resets.load(Ordering::Relaxed));
+    let gain = ex.gain(first[0]);
+    assert!((gain - Ex::ramp(player(&ex.state.graph).status().beats)).abs() < 0.01, "the lane's gain: {gain}");
+    let borrowed = ex.fixture.0.join("borrowed.wav");
+    let mut events = ex.state.events.subscribe();
+    crate::export::start(&ex.state, Some(borrowed.clone())).unwrap();
+    let (mut paused, mut clocks) = (false, vec![]);
+    ex.fill_until("the export is done", |ex| {
+        if ex.state.graph.activity().paused == Some("exporting") {
+            paused = true;
+            clocks.push(player(&ex.state.graph).clock());
+        }
+        !ex.state.exports.running()
+    });
+    let said = crate::export::tests::until_finished(&mut events);
+    assert!(said.iter().all(|e| e["paused"] == true), "{said:?}");
+    assert_eq!(said.last().unwrap()["done"], true, "{said:?}");
+    ex.fill(4);
+
+    // The hold, published, and nothing moved while it held.
+    assert!(paused && clocks.windows(2).all(|w| w[0] == w[1]), "paused: {paused}; engine clocks while held {clocks:?}");
+    // The instance, out and back, on the plugin main thread.
+    let calls = stats.main_calls();
+    assert_eq!(
+        moves(&calls, before),
+        ["deactivate", "render_offline", "activate", "deactivate", "render_realtime", "activate"],
+        "{calls:?}"
+    );
+    assert!(calls[before..].iter().filter(|c| c.what != "stop_processing").all(|c| c.says_main && !c.says_audio), "{calls:?}");
+    let tick = |what: &str, last: bool| {
+        let mut it = calls[before..].iter().filter(|c| c.what == what).map(|c| c.tick);
+        if last { it.next_back() } else { it.next() }.unwrap()
+    };
+    let (from, to) = (tick("deactivate", false), tick("activate", true));
+    let inside: Vec<(u64, usize)> = stats.process_calls().into_iter().filter(|(t, _)| *t > from && *t < to).collect();
+    assert!(!inside.is_empty() && inside.iter().all(|(_, th)| *th != audio), "the export processed it, the audio thread didn't");
+    let (at, on) = (stats.reset_at.0.load(Ordering::Relaxed), stats.reset_at.1.load(Ordering::Relaxed));
+    assert_eq!(stats.resets.load(Ordering::Relaxed), resets + 1, "reset once");
+    assert!(at > tick("activate", false) && at < to && on == inside[0].1, "reset on the export's thread, at its first call");
+    // The same instance, none made; back on the audio thread.
+    assert_eq!((ex.handles(), ex.state.graph.inner.owner.made()), (first.clone(), made));
+    assert!(stats.process_calls().last().unwrap().1 == audio, "played live again");
+    // HOME-4: its gain is the code's again, where playback is (unchanged since before the export,
+    // so sent again only because it was lent), not where the export ended.
+    let gain = ex.gain(first[0]);
+    let beat = player(&ex.state.graph).status().beats;
+    assert!((gain - Ex::ramp(beat)).abs() < 1e-6 && gain < 0.5, "gain {gain} at beat {beat}");
+
+    // The same file as an export with new instances.
+    let (_, _, fresh, _) = ex.state.graph.render(Length::Song).unwrap();
+    let fresh_wav = ex.fixture.0.join("fresh.wav");
+    fresh.write(&fresh_wav, |_| {}).unwrap();
+    let samples = |p: &Path| hound::WavReader::open(p).unwrap().into_samples::<i32>().map(Result::unwrap).collect::<Vec<i32>>();
+    let (a, b) = (samples(&borrowed), samples(&fresh_wav));
+    assert!(a.len() > 48_000 && a.iter().any(|x| *x != 0), "{} samples", a.len());
+    assert!(a == b, "the borrowed export is the fresh one, bit for bit");
+
+    // The negative control: no hold, and the audio thread plays one buffer inside the window
+    // while the export's thread waits there. No two threads ever call the instance at once.
+    let before = stats.main_calls().len();
+    ex.hooks().no_hold.store(true, Ordering::SeqCst);
+    let (go, there) = ex.stop_inside();
+    crate::export::start(&ex.state, Some(ex.fixture.0.join("unheld.wav"))).unwrap();
+    there.recv_timeout(Duration::from_secs(10)).expect("the export took the instance");
+    ex.fill(1);
+    go.send(()).unwrap();
+    eventually("the unheld export is done", || !ex.state.exports.running());
+    ex.hooks().no_hold.store(false, Ordering::SeqCst);
+    let calls = stats.main_calls();
+    let (from, to) = (
+        calls[before..].iter().find(|c| c.what == "deactivate").unwrap().tick,
+        calls[before..].iter().rfind(|c| c.what == "activate").unwrap().tick,
+    );
+    let audio_inside = stats.process_calls().iter().filter(|(t, th)| *t > from && *t < to && *th == audio).count();
+    assert!(audio_inside > 0, "with no hold, the audio thread calls the instance inside the window");
+}
+
+// RENDER-1, R6 (step 7 design §10.5): while an export borrows the live instances, settles prepare
+// nothing and send no activation, so no state load or other host call reaches them: a structural
+// edit and a new state wait, while the engine holds. Once they are given back, one settle plays
+// what waited: one activation, of the latest revision, keeping the instance and loading its state.
+#[test]
+fn settles_during_an_export_wait_then_apply_once() {
+    let mut ex = Ex::new();
+    let first = ex.handles();
+    let stats = m2_plugins::probe::stats(first[0]).unwrap();
+    let loads = || stats.main_calls().iter().filter(|c| c.what == "load").count();
+    let (activations, generation, loaded) = (ex.engine().activations(), ex.engine().current().unwrap().generation(), loads());
+    let (go, there) = ex.stop_inside();
+    crate::export::start(&ex.state, Some(ex.fixture.0.join("out.wav"))).unwrap();
+    ex.fill_until("the export took the instance", |_| there.try_recv().is_ok());
+
+    // Inside the window: a structural edit and a new state, each taken in.
+    ex.fixture.put("song.ts", &Ex::song("vca(p.out, 0.5)"));
+    assert!(ex.state.graph.poll());
+    ex.fixture.probe_state("p", "lead", &m2_plugins::probe::state("two", 1.0));
+    ex.state.graph.poll();
+    ex.fill(8);
+    let (plays, accepted) = playing(&ex.state.graph);
+    assert!(plays < accepted && ex.state.graph.inspect(|a| a.open.as_ref().unwrap().exporting), "{plays} plays, {accepted} accepted");
+    assert_eq!((ex.engine().activations(), loads(), stats.tag.lock().unwrap().clone()), (activations, loaded, "lead".to_string()));
+    assert!(ex.engine().is_held());
+
+    go.send(()).unwrap();
+    ex.fill_until("the export is done", |ex| !ex.state.exports.running());
+    ex.fill_until("what waited plays", |ex| synced(&ex.state.graph));
+    ex.fill(8);
+    assert_eq!(ex.engine().activations(), activations + 1, "one activation");
+    let cur = ex.engine().current().unwrap();
+    assert!(cur.generation() != generation && cur.plugin_handles() == first, "the latest plan, with the same instance");
+    assert_eq!((cur.stats().loads, stats.tag.lock().unwrap().clone()), (1, "two".to_string()), "its state loaded then");
+    assert!(!ex.state.graph.inspect(|a| a.open.as_ref().unwrap().exporting));
+}
+
+// RENDER-1, RENDER-26, PLANE-5 (step 7 design §10.5): while an export holds playback, a notes edit's
+// preview still reaches the engine: its `SwapLane` touches no plugin, so it applies while held,
+// and the new notes play from the resume.
+#[test]
+fn lane_previews_play_during_an_export() {
+    let mut ex = Ex::new();
+    let (go, there) = ex.stop_inside();
+    crate::export::start(&ex.state, Some(ex.fixture.0.join("out.wav"))).unwrap();
+    ex.fill_until("the export took the instance", |_| there.try_recv().is_ok());
+    let (generation, clock) = (ex.engine().current().unwrap().generation(), player(&ex.state.graph).clock());
+    let (token, revision) = ex.state.graph.inspect(|a| {
+        let o = a.open.as_ref().unwrap();
+        (o.token, o.session.accepted().number)
+    });
+    // The G4 becomes an E4 from beat 1: the same room.
+    let clips: Vec<NoteClip> =
+        serde_json::from_str::<Value>(EX_NOTES).map(|v| serde_json::from_value(v["clips"].clone()).unwrap()).unwrap();
+    let mut edited = clips.clone();
+    edited[0].notes[1].pitch = 64.0;
+    edited[0].notes[1].start = 1.0;
+    edited[0].notes[1].length = 58.0;
+    ex.state.graph.write_notes(token, revision, "p", "n", &edited).unwrap();
+    let seq = ex.state.graph.last_edit().and_then(|t| t.seq).expect("sent to the engine");
+    ex.fill(2);
+    assert!(player(&ex.state.graph).applied(seq).is_some(), "the swap applied while held");
+    assert!(ex.engine().is_held() && player(&ex.state.graph).clock() == clock, "still held");
+    assert_eq!(ex.engine().current().unwrap().generation(), generation, "no new plan");
+
+    go.send(()).unwrap();
+    ex.fill_until("the export is done", |ex| !ex.state.exports.running());
+    // Played on from beat 0.01 or so: at beat 1.5 the C4 and the new E4 sound.
+    ex.fill_until("beat 1.5", |ex| player(&ex.state.graph).status().beats > 1.5);
+    let keys: Vec<i16> = ex.engine().current().unwrap().plugins()[0].notes.iter().map(|n| n.1).collect();
+    assert_eq!(keys, [60, 64], "the new notes play");
+}
+
+// RENDER-25 (step 7 design §10.4): while the plan for an edit creates a plugin instance (here a
+// second probe, whose saved state takes 300 ms to load), the engine view and the status say which
+// plugin is loading, and the old plan plays meanwhile; once it is made, nothing is.
+#[test]
+fn loading_is_published_while_a_plugin_is_created() {
+    let mut dc = with_probe();
+    let song = dc.fixture.read("song.ts");
+    let probe = "plugin('clap:m2.probe', { notes: lane.notes('n'), gain_1: 0.5 })";
+    let slow = song.replace(probe, &format!("plugin('clap:m2.probe', {{ in: {probe}, key: 'slow' }})"));
+    assert_ne!(slow, song);
+    dc.fixture.probe_state("p", "slow", b"slow: a big patch");
+    dc.fixture.put("song.ts", &slow);
+    let Dc { graph, driver, .. } = &mut dc;
+    let (seen, viewed, heard) = std::thread::scope(|s| {
+        let poll = s.spawn(|| graph.poll());
+        let (mut seen, mut viewed, mut heard) = (vec![], Value::Null, 0);
+        while !poll.is_finished() {
+            let a = graph.activity();
+            if !a.loading.is_empty() {
+                seen = a.loading;
+                viewed = graph.state().unwrap()["loading"].clone();
+                // The device plays on meanwhile.
+                let mut buf = [0.0f32; 256];
+                driver.fill(&mut buf, 2);
+                heard += 1;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(poll.join().unwrap());
+        (seen, viewed, heard)
+    });
+    assert_eq!((seen, viewed), (vec!["m2 probe".to_string()], json!(["m2 probe"])));
+    assert!(heard > 10, "the old plan played meanwhile: {heard} buffers");
+    assert!(graph.activity().loading.is_empty() && graph.state().unwrap()["loading"] == json!([]));
+}
+
+// RENDER-1 (step 7 design §10.5, failures): a borrowed instance whose host calls fail (here, it
+// refuses to activate for the export) is given back at once, and a new instance from the committed
+// state plays its node in the export, which carries `plugin.not-borrowed`: the file is still the
+// one new instances make, bit for bit. The live instance plays on after the resume.
+#[test]
+fn an_instance_that_cant_be_borrowed_plays_anew_in_the_export() {
+    // A tag no other test's probe has: this test counts the instances made from it.
+    let mut ex = Ex::tagged("anew");
+    let first = ex.handles();
+    let stats = m2_plugins::probe::stats(first[0]).unwrap();
+    let (before, made) = (stats.main_calls().len(), m2_plugins::probe::tagged("anew").len());
+    let out = ex.fixture.0.join("out.wav");
+    let mut events = ex.state.events.subscribe();
+    stats.refuse_activate.store(true, Ordering::Relaxed);
+    crate::export::start(&ex.state, Some(out.clone())).unwrap();
+    ex.fill_until("the export is done", |ex| !ex.state.exports.running());
+    let done = crate::export::tests::until_finished(&mut events).pop().unwrap();
+    assert_eq!(done["done"], true, "{done}");
+    let problems: Vec<&str> = done["problems"].as_array().unwrap().iter().map(|p| p["code"].as_str().unwrap()).collect();
+    assert_eq!(problems, ["plugin.not-borrowed"], "{done}");
+    let calls = stats.main_calls();
+    // The refused activate left it inactive: given back, it has nothing to deactivate.
+    assert_eq!(
+        moves(&calls, before),
+        ["deactivate", "render_offline", "activate", "render_realtime", "activate"],
+        "taken, refused, given back at once: {calls:?}"
+    );
+    let anew = m2_plugins::probe::tagged("anew");
+    assert_eq!(anew.len(), made + 1, "one new instance for the export");
+    let fresh = anew.last().unwrap();
+    assert!(fresh.process.load(Ordering::Relaxed) > 0, "it played the export");
+    eventually("the new instance is destroyed", || fresh.main_calls().iter().any(|c| c.what == "destroy"));
+    let (_, _, own, _) = ex.state.graph.render(Length::Song).unwrap();
+    let own_wav = ex.fixture.0.join("own.wav");
+    own.write(&own_wav, |_| {}).unwrap();
+    let samples = |p: &Path| hound::WavReader::open(p).unwrap().into_samples::<i32>().map(Result::unwrap).collect::<Vec<i32>>();
+    assert!(samples(&out) == samples(&own_wav), "what new instances make, bit for bit");
+    let played = stats.process.load(Ordering::Relaxed);
+    ex.fill(4);
+    assert_eq!((ex.handles(), stats.process.load(Ordering::Relaxed)), (first, played + 4), "the live instance plays on");
+}
+
+// RENDER-1 (step 7 design §10.5): when playback doesn't pause within 2 s (its device stopped
+// calling back), the export touches no live instance: it renders beside playback with instances of
+// its own, says so, and the session plays on. When the device calls back again, it isn't held.
+#[test]
+fn an_export_whose_playback_cant_pause_renders_beside_it() {
+    let mut ex = Ex::new();
+    let first = ex.handles();
+    let stats = m2_plugins::probe::stats(first[0]).unwrap();
+    let before = stats.main_calls().len();
+    let mut events = ex.state.events.subscribe();
+    let t = Instant::now();
+    // Nothing fills: the device is stalled.
+    crate::export::start(&ex.state, Some(ex.fixture.0.join("out.wav"))).unwrap();
+    eventually("the export is done", || !ex.state.exports.running());
+    assert!(t.elapsed() >= Duration::from_secs(2), "it waited 2 s for the pause");
+    let mut said = vec![];
+    let start = Instant::now();
+    while said.last().is_none_or(|e: &Value| e["t"] != "export" || e.get("progress").is_some()) {
+        assert!(start.elapsed() < Duration::from_secs(10), "{said:?}");
+        if let Ok(text) = events.try_recv() {
+            said.push(serde_json::from_str::<Value>(&text).unwrap());
+        }
+    }
+    let done = said.last().unwrap();
+    assert!(done["done"] == true && done["paused"] == false, "{done}");
+    assert!(said.iter().any(|e| e["t"] == "toast" && e["text"].as_str().unwrap().contains("couldn't pause")), "{said:?}");
+    assert!(moves(&stats.main_calls(), before).is_empty(), "the live instance was never touched");
+    assert!(!ex.state.graph.inspect(|a| a.open.as_ref().unwrap().exporting), "the session plays on");
+    ex.fill(8);
+    assert!(!ex.engine().is_held() && !player(&ex.state.graph).held(), "the hold and the resume, in order");
+    let played = stats.process.load(Ordering::Relaxed);
+    ex.fill(4);
+    assert_eq!(stats.process.load(Ordering::Relaxed), played + 4);
+}
+
+// RENDER-1: an export started right after another waits for its own hold. The first's resume has
+// been sent but no callback has taken it, so the engine still says it is held, from the first's
+// hold: the second takes nothing until the engine has taken its own hold too.
+#[test]
+fn a_second_export_waits_for_its_own_hold() {
+    let mut ex = Ex::tagged("twice");
+    let stats = m2_plugins::probe::stats(ex.handles()[0]).unwrap();
+    crate::export::start(&ex.state, Some(ex.fixture.0.join("one.wav"))).unwrap();
+    ex.fill_until("the first export is done", |ex| !ex.state.exports.running());
+    assert!(player(&ex.state.graph).held(), "no callback has taken the resume yet");
+    let before = stats.main_calls().len();
+    crate::export::start(&ex.state, Some(ex.fixture.0.join("two.wav"))).unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(moves(&stats.main_calls(), before).is_empty(), "nothing taken on the first's hold");
+    ex.fill_until("the second export is done", |ex| !ex.state.exports.running());
+    assert_eq!(moves(&stats.main_calls(), before).len(), 6, "taken and given back once the engine held again");
+}
+
+// RENDER-1, HOME-4: a borrowed instance that doesn't hold its committed state (here it saved its
+// own since) has it loaded for the export; a plugin that applies a loaded state at its next call,
+// ending its voices (the probe's `defer_load`, as Surge XT does), is given that call before the
+// render, so the export's first notes and the code's values aren't lost: the export equals one
+// made with new instances, bit for bit. After the resume, the code's gain wins again.
+#[test]
+fn an_export_that_loads_a_state_lets_the_plugin_apply_it_first() {
+    let mut ex = Ex::tagged("applied");
+    let first = ex.handles();
+    let stats = m2_plugins::probe::stats(first[0]).unwrap();
+    stats.defer_load.store(true, Ordering::Relaxed);
+    m2_plugins::host().save_state(first[0]).recv().unwrap().unwrap();
+    let before = stats.main_calls().len();
+    let out = ex.fixture.0.join("out.wav");
+    crate::export::start(&ex.state, Some(out.clone())).unwrap();
+    ex.fill_until("the export is done", |ex| !ex.state.exports.running());
+    ex.fill(4);
+    assert_eq!(
+        moves(&stats.main_calls(), before),
+        ["deactivate", "load", "render_offline", "activate", "deactivate", "render_realtime", "activate"],
+        "its committed state loaded"
+    );
+    let (_, _, fresh, _) = ex.state.graph.render(Length::Song).unwrap();
+    let fresh_wav = ex.fixture.0.join("fresh.wav");
+    fresh.write(&fresh_wav, |_| {}).unwrap();
+    let samples = |p: &Path| hound::WavReader::open(p).unwrap().into_samples::<i32>().map(Result::unwrap).collect::<Vec<i32>>();
+    let (a, b) = (samples(&out), samples(&fresh_wav));
+    assert!(a.iter().any(|x| *x != 0) && a == b, "the export is the fresh one, bit for bit");
+    let gain = ex.gain(first[0]);
+    let beat = player(&ex.state.graph).status().beats;
+    assert!((gain - Ex::ramp(beat)).abs() < 1e-6, "the code's gain again: {gain} at beat {beat}");
+}
