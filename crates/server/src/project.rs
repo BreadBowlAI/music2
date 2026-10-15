@@ -238,10 +238,25 @@ pub fn folder_name(name: &str) -> String {
 }
 
 /// The songs folder's `Exports` holds exported audio, so no song is made there. Any case:
-/// macOS doesn't tell `exports` from `Exports`.
+/// macOS doesn't tell `exports` from `Exports`. Either folder may not be made yet (`m2 new`
+/// checks before it makes one), so each is compared as [`resolved`].
 fn reserved(songs: Option<&Path>, parent: &Path, folder: &str) -> bool {
-    let same = |a: &Path, b: &Path| a == b || matches!((a.canonicalize(), b.canonicalize()), (Ok(x), Ok(y)) if x == y);
+    let same = |a: &Path, b: &Path| a == b || matches!((resolved(a), resolved(b)), (Some(x), Some(y)) if x == y);
     folder.to_lowercase() == crate::export::EXPORTS.to_lowercase() && songs.is_some_and(|s| same(s, parent))
+}
+
+/// `p` with its deepest folder that is there resolved (links, `..`, a path relative to where m2
+/// runs), and the names after it, not made yet, as written. None when it can't be told.
+fn resolved(p: &Path) -> Option<PathBuf> {
+    let mut rest = vec![];
+    let mut at = p;
+    loop {
+        if let Ok(there) = (if at.as_os_str().is_empty() { Path::new(".") } else { at }).canonicalize() {
+            return Some(rest.iter().rev().fold(there, |p, name| p.join(name)));
+        }
+        rest.push(at.file_name()?);
+        at = at.parent()?;
+    }
 }
 
 /// Make a new song called `name` in `parent`, copied from `from` (a template or an
@@ -521,6 +536,26 @@ mod tests {
         assert_eq!(dir, elsewhere.0.join("Exports"));
         assert!(reserved(Some(&songs.0), &songs.0.join("."), "Exports") && !reserved(None, &songs.0, "Exports"));
         assert!(!reserved(Some(&songs.0), &songs.0, "Exports 2"));
+    }
+
+    // PLAT-7 (decision D3 of the platform review, checked again): `m2 new` checks before it makes
+    // any folder, so the songs folder may not be there yet. Its `Exports` is still refused when
+    // the path names it another way: through a link, or relative to where m2 runs (`m2 new
+    // music2/Exports` in `~/Music`).
+    #[cfg(unix)]
+    #[test]
+    fn exports_is_reserved_before_the_songs_folder_is_made() {
+        let t = Temp::new();
+        std::fs::create_dir(t.0.join("Music")).unwrap();
+        std::os::unix::fs::symlink(t.0.join("Music"), t.0.join("M")).unwrap();
+        let songs = t.0.join("Music/music2");
+        assert!(reserved(Some(&songs), &t.0.join("M/music2"), "Exports"), "through a link");
+        // From this test's folder up to `/`, then down to the songs folder.
+        let up: PathBuf = std::env::current_dir().unwrap().components().skip(1).map(|_| "..").collect();
+        assert!(reserved(Some(&songs), &up.join(songs.strip_prefix("/").unwrap()), "exports"), "relative");
+        assert!(!reserved(Some(&songs), &t.0.join("M/music3"), "Exports") && !reserved(Some(&songs), &t.0.join("M/music2"), "Night"));
+        assert!(!songs.exists(), "nothing made");
+        assert_eq!(resolved(&t.0.join("M/music2/a")), Some(t.0.canonicalize().unwrap().join("Music/music2/a")));
     }
 
     // PLAT-7, OS-41 (the owner's Q1): a name is taken in any capitals on every OS, as on macOS,
