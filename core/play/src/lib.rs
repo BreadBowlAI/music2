@@ -241,7 +241,7 @@ struct Shared {
     /// The device's errors so far, one count per [`DeviceEvent`].
     device_errors: [AtomicU64; 4],
     stalled: AtomicBool,
-    /// Held for an export, published after the callback returned (RENDER-1).
+    /// Held for an export, published after the callback's work, with its stamps (RENDER-1).
     held: AtomicBool,
     /// A device (or the silent clock) calls back: a quiet one has stopped.
     device: AtomicBool,
@@ -554,6 +554,10 @@ impl Callback {
             s.refused.fetch_add(refused - self.refused, Ordering::Relaxed);
             self.refused = refused;
         }
+        // Once the callback's work is done: a reader that sees it held may call the instances. Before
+        // the stamps are released, so a reader that sees a hold's stamp sees this callback's
+        // `held` or a later one, never the one before (an export's wait reads both).
+        s.held.store(st.held, Ordering::Release);
         s.seq.store(seq + 2, Ordering::Release);
         if let Some(l) = &self.live {
             s.clock.store(l.engine.clock(), Ordering::Relaxed);
@@ -563,8 +567,6 @@ impl Callback {
         // After the position: a reader that sees a seek or a load taken sees where it went.
         s.seeks_applied.store(self.seeks, Ordering::Release);
         s.loads_applied.store(self.loads, Ordering::Release);
-        // Once the callback's work is done: a reader that sees it held may call the instances.
-        s.held.store(st.held, Ordering::Release);
     }
 }
 
