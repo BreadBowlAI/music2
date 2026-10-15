@@ -564,7 +564,7 @@ fn surge(p: &Plugins) -> Option<&m2_runtime::PluginView> {
     p.nodes.iter().find(|n| !n.notes.is_empty())
 }
 
-/// Step 3b, G5 on the plugins (HOST-5, RENDER-25, C7): an effect added on the kick at beat 1.5, the
+/// Step 3b, G5 on the plugins (HOST-5, RENDER-25): an effect added on the kick at beat 1.5, the
 /// lead's first chord held (beats 0 to 3.5), keeps both plugin instances. None is created; Surge's
 /// node holds the same notes with the same ids after the activation; no NoteOff reaches it there,
 /// and the chord's Offs arrive at beat 3.5; the lead's level over the 200 ms after the activation is
@@ -636,7 +636,7 @@ fn kept(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome) -> 
     Ok(())
 }
 
-/// Step 3b (RENDER-26a, C7): one revision changes the lead's code and drops the chord's top note.
+/// Step 3b (RENDER-26a, RENDER-25): one revision changes the lead's code and drops the chord's top note.
 /// The instances are kept; the dropped note's NoteOff reaches Surge at the activation's first
 /// frame, the other two go on to beat 3.5, and the next chord's notes take ids above every one Surge
 /// had (CLAP matches voices by id).
