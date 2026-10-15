@@ -68,11 +68,7 @@ fn export_path(app: &AppHandle) -> anyhow::Result<Option<String>> {
 fn song_folder(app: &AppHandle, start: Option<String>) -> anyhow::Result<Option<String>> {
     let dir = match start.map(PathBuf::from).filter(|d| d.is_dir()) {
         Some(d) => d,
-        None => {
-            let songs = m2_server::project::songs_dir()?;
-            std::fs::create_dir_all(&songs)?;
-            songs
-        }
+        None => m2_server::project::make_songs_dir()?,
     };
     let mut dialog = app.dialog().file().set_title("Choose Where to Save the Song").set_directory(dir).set_can_create_directories(true);
     if let Some(w) = app.get_webview_window("main") {

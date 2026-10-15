@@ -247,12 +247,12 @@ impl Render {
         name: impl FnOnce(&Path) -> std::io::Result<PathBuf>,
     ) -> Result<(PathBuf, Rendered)> {
         let part = part_path(path)?;
-        sweep(folder_of(&part));
+        sweep(m2_os::fs::folder_of(&part));
         let written = self.write_to(&part, &mut progress).and_then(|(lock, r)| {
             m2_os::fs::push(&lock)?;
             let named = name(&part)?;
             drop(lock);
-            m2_os::fs::sync_dir(folder_of(&named))?;
+            m2_os::fs::sync_dir(m2_os::fs::folder_of(&named))?;
             Ok((named, r))
         });
         if written.is_err() {
@@ -415,11 +415,6 @@ fn file_id(p: &Path) -> Option<m2_os::fs::FileId> {
 fn part_path(path: &Path) -> Result<PathBuf> {
     let name = path.file_name().with_context(|| format!("{} is not a file name", path.display()))?;
     Ok(path.with_file_name(format!(".{}.{}.part", name.to_string_lossy(), std::process::id())))
-}
-
-/// The folder `p` is in: `.` for a bare file name.
-fn folder_of(p: &Path) -> &Path {
-    p.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."))
 }
 
 /// A [`part_path`] name: `.<file>.<process id>.part`.

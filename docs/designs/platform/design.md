@@ -153,6 +153,8 @@ pub fn push(f: &File) -> io::Result<()>;
 pub fn barrier(f: &File) -> io::Result<()>;
 /// Make a folder's new entries durable once a barrier follows: fsync of the folder opened
 /// read-only. Ok where the OS keeps new entries durable by itself (Windows' write-through renames).
+/// (The review's D2: also Ok where it can't be done, a volume with no folder fsync (EINVAL) or a
+/// folder that can't be opened (permission), so every writer skips those alike; EIO is returned.)
 pub fn sync_dir(dir: &Path) -> io::Result<()>;
 /// Swap two existing names, or rename only where nothing is. Unsupported when the volume can't
 /// (each OS's own error list, below); AlreadyExists for Excl onto a taken name.
@@ -1790,7 +1792,7 @@ taken in. "Accepted" means the fix is in this revision as proposed or close to i
 | Folders (`dirs`) | `cache_dir` and `clap_dirs` only; `HOME` only | a full `dirs` module; honours `XDG_*` | **both in part**: home, songs, cache, clap; `HOME` only | every `$HOME` read in one place (Windows changes only `home()`); `bundled()` stays plain path code; `XDG_*` waits for Linux packaging, so tests stay isolated by `HOME` alone |
 | FUSE volumes | network (walks, `lock.local`) | local | **small** | the safe side for sshfs; the cost on ntfs-3g is only walks |
 | `FICLONE` on btrfs/XFS | `Unsupported` for now | built | **small** | no such volume here to test it; a body change later, no move |
-| A folder sync refused by FUSE | no change | `EINVAL` → `Unsupported` | **small** | unverifiable here; no change in behaviour today |
+| A folder sync refused by FUSE | no change | `EINVAL` → `Unsupported` | **small** | unverifiable here; no change in behaviour today. *Review D2: skipped by `sync_dir` itself, for every writer.* |
 | Audio bug 1 and OS-61 | at step 7's finish / 8a | in this step (S7) | **small** | not OS-specific; bug 1 is the first item of step 7's finish, before `Hold` needs it |
 | QuickJS `Math` and `**` | not mentioned | libm-backed | **shaped** | the decided rule covers every transcendental on the render path; song constants are on it |
 | The host-math test's scope | `audio.rs` and `resample.rs` | all of `core/runtime/src` and `core/play/src` | **shaped** | catches new host math in any file step 7 or 8a adds; finds exactly today's 11 calls |

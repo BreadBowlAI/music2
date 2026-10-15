@@ -78,9 +78,29 @@ pub fn barrier(f: &File) -> io::Result<()> {
 }
 
 /// Make a folder's new entries durable once a barrier follows: `fsync` of the folder opened
-/// read-only. Ok where the OS keeps new entries durable by itself.
+/// read-only. Ok where the OS keeps new entries durable by itself, and where it can't be done: a
+/// folder that can be written but not listed can't be opened to sync it, and some volumes have no
+/// folder sync (`vboxsf`). Every writer would skip those, so the rule is here once (WRITE-1,
+/// WRITE-15). Any other error, `EIO` above all, is returned.
 pub fn sync_dir(dir: &Path) -> io::Result<()> {
     os::sync_dir(dir)
+}
+
+/// Make `folder`, with every folder above it that isn't there, each one made synced in the one
+/// above it (WRITE-1): a file then made in `folder`, pushed and its folder synced, is durable with
+/// every folder on its way by the next barrier.
+pub fn make_dirs(folder: &Path) -> io::Result<()> {
+    let made: Vec<&Path> = folder.ancestors().take_while(|f| !f.as_os_str().is_empty() && !f.exists()).collect();
+    std::fs::create_dir_all(folder)?;
+    for new in made.iter().rev() {
+        sync_dir(folder_of(new))?;
+    }
+    Ok(())
+}
+
+/// The folder `p` is in: `.` for a bare name.
+pub fn folder_of(p: &Path) -> &Path {
+    p.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."))
 }
 
 /// Swap two existing names, or rename only where nothing is (macOS `renamex_np`, Linux
@@ -189,6 +209,12 @@ mod tests {
         for code in [EINVAL, ENOTTY, EEXIST, EIO] {
             assert!(!os::lock_unsupported(code), "lock: {code}");
         }
+        for code in [EINVAL, ENOTSUP, EOPNOTSUPP] {
+            assert!(os::sync_refused(code), "folder sync: {code}");
+        }
+        for code in [EIO, ENOLCK, ENOTTY, EEXIST] {
+            assert!(!os::sync_refused(code), "folder sync: {code}");
+        }
         let e = unsupported_if(io::Error::from_raw_os_error(ENOTSUP), os::lock_unsupported);
         assert_eq!(e.kind(), ErrorKind::Unsupported);
         assert_eq!(unsupported_if(io::Error::from_raw_os_error(EIO), os::lock_unsupported).raw_os_error(), Some(EIO), "as it is");
@@ -250,6 +276,39 @@ mod tests {
         std::fs::write(t.0.join("taken"), "mine").unwrap();
         assert!(clone_file(&f, &t.0.join("taken")).is_err());
         assert_eq!(std::fs::read_to_string(t.0.join("taken")).unwrap(), "mine");
+    }
+
+    // WRITE-1, WRITE-15 (decision D2 of the platform review): a folder sync is skipped where it
+    // can't be done, by every writer alike: a folder that can be written but not listed, and a
+    // volume with no folder sync (Linux's `/proc` has none, as `vboxsf` has none). Any other error
+    // fails: a folder that isn't there.
+    #[test]
+    fn a_folder_sync_is_skipped_only_where_it_cant_be_done() {
+        use std::os::unix::fs::PermissionsExt;
+        let t = Temp::new("syncdir");
+        let w = t.0.join("write-only");
+        std::fs::create_dir(&w).unwrap();
+        std::fs::set_permissions(&w, std::fs::Permissions::from_mode(0o300)).unwrap();
+        let synced = sync_dir(&w);
+        std::fs::set_permissions(&w, std::fs::Permissions::from_mode(0o700)).unwrap();
+        synced.unwrap();
+        #[cfg(target_os = "linux")]
+        sync_dir(Path::new("/proc")).unwrap();
+        assert_eq!(sync_dir(&t.0.join("none")).unwrap_err().kind(), ErrorKind::NotFound);
+    }
+
+    // WRITE-1: the folders made for a new file, each made one synced in the one above it.
+    #[test]
+    fn make_dirs_makes_every_folder_on_the_way() {
+        let t = Temp::new("makedirs");
+        make_dirs(&t.0.join("a/b/c")).unwrap();
+        assert!(t.0.join("a/b/c").is_dir());
+        make_dirs(&t.0.join("a/b")).unwrap();
+        std::fs::write(t.0.join("a/file"), "x").unwrap();
+        assert!(make_dirs(&t.0.join("a/file/d")).is_err(), "a file in the way");
+        assert_eq!(folder_of(Path::new("song.ts")), Path::new("."));
+        assert_eq!(folder_of(Path::new("a/song.ts")), Path::new("a"));
+        assert_eq!(folder_of(Path::new("/song.ts")), Path::new("/"));
     }
 
     // OS-08: one holder at a time, a second open of the file included; let go with the file.

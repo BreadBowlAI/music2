@@ -39,9 +39,24 @@ pub(crate) fn push(f: &File) -> io::Result<()> {
     check(unsafe { libc::fsync(f.as_raw_fd()) })
 }
 
-/// Never `O_PATH` on Linux: `fsync` gives `EBADF` on such a descriptor.
+/// Never `O_PATH` on Linux: `fsync` gives `EBADF` on such a descriptor. A folder that can't be
+/// opened to sync it, and a volume that refuses a folder `fsync`, are skipped: nothing more can be
+/// done there.
 pub(crate) fn sync_dir(dir: &Path) -> io::Result<()> {
-    push(&File::open(dir)?)
+    let f = match File::open(dir) {
+        Err(e) if e.kind() == ErrorKind::PermissionDenied => return Ok(()),
+        f => f?,
+    };
+    match push(&f) {
+        Err(e) if e.raw_os_error().is_some_and(sync_refused) => Ok(()),
+        done => done,
+    }
+}
+
+/// What `fsync` of a folder says on a volume that has no folder sync (Linux's `vboxsf` and
+/// `/proc`: `EINVAL`). Any other error, `EIO` above all, means the sync failed.
+pub(crate) fn sync_refused(code: i32) -> bool {
+    [libc::EINVAL, libc::ENOTSUP, libc::EOPNOTSUPP].contains(&code)
 }
 
 /// The change time in ns and the inode, for a stamp.

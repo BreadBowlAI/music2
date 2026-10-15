@@ -84,7 +84,8 @@ pub fn default_path(state: &AppState) -> Result<PathBuf> {
 
 fn new_file(song: &str) -> Result<PathBuf> {
     let dir = exports_dir()?;
-    std::fs::create_dir_all(&dir).with_context(|| format!("making {}", dir.display()))?;
+    // Synced in the songs folder as it is made, as a new song's folder is (WRITE-1).
+    m2_os::fs::make_dirs(&dir).with_context(|| format!("making {}", dir.display()))?;
     Ok(free_path(&dir, song))
 }
 

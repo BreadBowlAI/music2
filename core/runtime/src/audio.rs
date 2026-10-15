@@ -78,7 +78,7 @@ pub fn write_wav(path: &Path, channels: &[Vec<f32>], sample_rate: u32) -> Result
 pub fn write_new_wav(path: &Path, channels: &[Vec<f32>], sample_rate: u32) -> Result<()> {
     let file =
         std::fs::OpenOptions::new().write(true).create_new(true).open(path).with_context(|| format!("creating {}", path.display()))?;
-    let folder = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let folder = m2_os::fs::folder_of(path);
     wav_to(&file, channels, sample_rate)
         .and_then(|()| m2_os::fs::push(&file).with_context(|| format!("writing {}", path.display())))
         .and_then(|()| m2_os::fs::sync_dir(folder).with_context(|| format!("syncing {}", folder.display())))

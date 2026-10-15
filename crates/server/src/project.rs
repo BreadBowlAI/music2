@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
@@ -22,9 +22,17 @@ pub const DEFAULT_TEMPLATE: &str = "starter";
 const MAX_NAME: usize = 80;
 
 /// Where songs are made: `$HOME/Music/music2` (`m2_os::dirs::songs`). From `$HOME`, so tests can
-/// point it elsewhere. It is created when a song is first made there.
+/// point it elsewhere. It is created when a song is first made there ([`make_songs_dir`]).
 pub fn songs_dir() -> Result<PathBuf> {
     m2_os::dirs::songs().ok_or_else(|| anyhow!("can't find your home folder ($HOME isn't set)"))
+}
+
+/// [`songs_dir`], made if it isn't there, each folder made synced in the one above it, as every
+/// folder a new song's files are in (WRITE-1).
+pub fn make_songs_dir() -> Result<PathBuf> {
+    let songs = songs_dir()?;
+    m2_os::fs::make_dirs(&songs).with_context(|| format!("making {}", songs.display()))?;
+    Ok(songs)
 }
 
 /// A template or an example, as the New Song dialog and the start screen list them.
@@ -102,11 +110,7 @@ pub fn new_song(graph: &Graph, req: &NewSong) -> Result<Value> {
     let parent = match &req.dir {
         Some(dir) if !dir.is_absolute() => bail!("the folder to make the song in must be a full path, not {}", dir.display()),
         Some(dir) => dir.clone(),
-        None => {
-            let songs = songs_dir()?;
-            std::fs::create_dir_all(&songs).with_context(|| format!("making {}", songs.display()))?;
-            songs
-        }
+        None => make_songs_dir()?,
     };
     open_new(graph, &parent, &name, &from)
 }
@@ -253,7 +257,7 @@ fn make(parent: &Path, name: &str, from: &Path, songs: Option<&Path>) -> Result<
         bail!("{} isn't a folder", parent.display());
     }
     let (base, shown) = (folder_name(name), clean_name(name));
-    let taken = taken(parent)?;
+    let taken = taken(parent)?.unwrap_or_default();
     for n in 1..=999 {
         let (folder, name) = if n == 1 { (base.clone(), shown.clone()) } else { (format!("{base} {n}"), format!("{shown} {n}")) };
         if reserved(songs, parent, &folder) || taken.contains(&folder.to_lowercase()) {
@@ -275,35 +279,56 @@ fn make(parent: &Path, name: &str, from: &Path, songs: Option<&Path>) -> Result<
 
 /// The names in `parent`, in lower case. A name is taken in any capitals, on every OS (as macOS
 /// has it), so songs stay safe to copy between computers (PLAT-7): "exports 2" beside "Exports 2"
-/// is taken.
-fn taken(parent: &Path) -> Result<HashSet<String>> {
+/// is taken. None when `parent` can be written but not listed: then only the exact name is checked,
+/// by the create-only `create_dir`.
+fn taken(parent: &Path) -> Result<Option<HashSet<String>>> {
+    let entries = match std::fs::read_dir(parent) {
+        Err(e) if e.kind() == ErrorKind::PermissionDenied => return Ok(None),
+        entries => entries.with_context(|| format!("reading {}", parent.display()))?,
+    };
     let mut taken = HashSet::new();
-    for e in std::fs::read_dir(parent).with_context(|| format!("reading {}", parent.display()))? {
+    for e in entries {
         taken.insert(e?.file_name().to_string_lossy().to_lowercase());
     }
-    Ok(taken)
+    Ok(Some(taken))
+}
+
+/// `dir` with each `..` that follows a folder not there yet taken out with that folder
+/// (`NIGHT/../night` is `night` while there is no `NIGHT`): such a folder would only be made to be
+/// left behind. A `..` after a folder that is there stays, since that folder may be a link.
+fn without_new_parents(dir: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in dir.components() {
+        if c == Component::ParentDir && matches!(out.components().next_back(), Some(Component::Normal(_))) && !out.exists() {
+            out.pop();
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Make a new song at exactly `dir`, named after its folder (`m2 new`). Refuses if
-/// something is there already, in any capitals ([`taken`]), as macOS does.
+/// something is there already, in any capitals ([`taken`]), as macOS does. Every check comes
+/// before any folder is made, so a refusal leaves nothing behind.
 pub fn create_at(dir: &Path, from: &Path) -> Result<PathBuf> {
+    let dir = &without_new_parents(dir);
     let name = dir.file_name().and_then(|n| n.to_str()).ok_or_else(|| anyhow!("{} needs a folder name", dir.display()))?.to_string();
     let parent = dir.parent().filter(|p| !p.as_os_str().is_empty());
-    if let Some(parent) = parent {
-        // The folders made for it, deepest first (`b/` then `a/` for `a/b/song`): each is synced
-        // in the one above, as the song's own folder is in `fill` (WRITE-1).
-        let made: Vec<&Path> = parent.ancestors().take_while(|f| !f.as_os_str().is_empty() && !f.exists()).collect();
-        std::fs::create_dir_all(parent).with_context(|| format!("making {}", parent.display()))?;
-        for new in made {
-            let above = new.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
-            m2_os::fs::sync_dir(above).with_context(|| format!("syncing {}", above.display()))?;
-        }
-        if reserved(songs_dir().ok().as_deref(), parent, &name) {
-            bail!("{} is where music2 puts exported audio: give the song another name", dir.display());
-        }
+    if let Some(parent) = parent
+        && reserved(songs_dir().ok().as_deref(), parent, &name)
+    {
+        bail!("{} is where music2 puts exported audio: give the song another name", dir.display());
     }
-    if taken(parent.unwrap_or(Path::new(".")))?.contains(&name.to_lowercase()) {
+    // A folder not made yet holds nothing.
+    let above = m2_os::fs::folder_of(dir);
+    if above.is_dir() && taken(above)?.is_some_and(|t| t.contains(&name.to_lowercase())) {
         bail!("{} already exists", dir.display());
+    }
+    if let Some(parent) = parent {
+        // Each folder made for it is synced in the one above, as the song's own folder is in
+        // `fill` (WRITE-1).
+        m2_os::fs::make_dirs(parent).with_context(|| format!("making {}", parent.display()))?;
     }
     match std::fs::create_dir(dir) {
         Ok(()) => {}
@@ -324,7 +349,7 @@ fn fill(dir: &Path, name: &str, from: &Path) -> Result<()> {
         .and_then(|()| ignore_local(dir))
         .and_then(|()| push_tree(dir))
         .and_then(|()| {
-            let parent = dir.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+            let parent = m2_os::fs::folder_of(dir);
             m2_os::fs::sync_dir(parent).with_context(|| format!("syncing {}", parent.display()))
         });
     if result.is_err() {
@@ -498,8 +523,8 @@ mod tests {
         assert!(!reserved(Some(&songs.0), &songs.0, "Exports 2"));
     }
 
-    // OS-41 (the owner's Q1): a name is taken in any capitals on every OS, as on macOS, whatever
-    // the disk tells apart. Files count too.
+    // PLAT-7, OS-41 (the owner's Q1): a name is taken in any capitals on every OS, as on macOS,
+    // whatever the disk tells apart. Files count too.
     #[test]
     fn a_name_taken_in_other_capitals_is_taken() {
         let t = Temp::new();
@@ -628,8 +653,8 @@ mod tests {
         assert!(!dir.join("tracks").exists());
     }
 
-    // OS-41 (the owner's Q1) for `m2 new`: a name there in other capitals is taken on every OS,
-    // and refused in the words macOS gives; nothing is made, nothing there changes.
+    // PLAT-7, OS-41 (the owner's Q1) for `m2 new`: a name there in other capitals is taken on every
+    // OS, and refused in the words macOS gives; nothing is made, nothing there changes.
     #[test]
     fn create_at_refuses_a_name_taken_in_other_capitals() {
         let t = Temp::new();
@@ -643,6 +668,44 @@ mod tests {
         names.sort();
         assert_eq!(names, ["DRIVE", "Night"]);
         assert!(!night.join("tracks").exists() && std::fs::read_to_string(t.0.join("DRIVE")).unwrap() == "a file");
+    }
+
+    // PLAT-7 (decision D3 of the platform review): `m2 new NIGHT/../night` beside `Night` is
+    // refused before any folder is made, so no empty `NIGHT` is left behind; with no `Night`, the
+    // song is made at `night`, and still no `NIGHT`.
+    #[test]
+    fn create_at_checks_before_it_makes_a_folder() {
+        let t = Temp::new();
+        std::fs::create_dir(t.0.join("Night")).unwrap();
+        let e = create_at(&t.0.join("NIGHT/../night"), &template("empty")).unwrap_err().to_string();
+        assert_eq!(e, format!("{} already exists", t.0.join("night").display()));
+        std::fs::remove_dir(t.0.join("Night")).unwrap();
+        assert_eq!(create_at(&t.0.join("NIGHT/../night"), &template("empty")).unwrap(), t.0.join("night"));
+        let names: Vec<String> = std::fs::read_dir(&t.0).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        assert_eq!(names, ["night"]);
+    }
+
+    // PLAT-7, WRITE-1 (decisions D2 and D3 of the platform review): New Song and `m2 new` in a
+    // folder that can be written but not listed make the song. Its name is checked exactly, by the
+    // create-only `create_dir`, as its capitals can't be; the folder's sync is skipped, since the
+    // folder can't be opened for it.
+    #[cfg(unix)]
+    #[test]
+    fn a_song_is_made_in_a_folder_that_cant_be_listed() {
+        use std::os::unix::fs::PermissionsExt;
+        let t = Temp::new();
+        let shut = t.0.join("shut");
+        std::fs::create_dir(&shut).unwrap();
+        std::fs::create_dir(shut.join("Taken")).unwrap();
+        std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o300)).unwrap();
+        let made = (create(&shut, "Night", &template("empty")), create(&shut, "Taken", &template("empty")));
+        let at = (create_at(&shut.join("Drive"), &template("empty")), create_at(&shut.join("Taken"), &template("empty")));
+        std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(made.0.unwrap(), shut.join("Night"));
+        assert_eq!(made.1.unwrap(), shut.join("Taken 2"), "the exact name is taken");
+        assert_eq!(at.0.unwrap(), shut.join("Drive"));
+        assert_eq!(at.1.unwrap_err().to_string(), format!("{} already exists", shut.join("Taken").display()));
+        assert_eq!(manifest_name(&shut.join("Drive")), "Drive");
     }
 
     #[test]
