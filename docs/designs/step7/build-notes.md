@@ -202,3 +202,80 @@ No real regression was found: every other test passes, the slice 1-3 ones includ
    own instances) and the failed-load gap in prepare.
 4. `ci/gates.txt`: design-7 §12's gates for the Mac run.
 5. G7f on Linux can only be judged against a layout-S record made here (a worktree at `8aa301e`); none exists.
+
+## Bug 1
+
+**In short:** one xrun no longer stops play. The player now sorts the audio device's errors by kind. An xrun (a
+dropout) is counted and play goes on. A change of output device makes a new player. Only a device that is gone
+stalls it. The error callback only adds to a counter. Tests inject errors, since this server has no sound card.
+Branch `s7-bug1`, from `step7` at `a06c543`; worktree `~/m2-runs/wt/s7-bug1`.
+
+### What was wrong
+
+Platform design §8's first row, and survey-later §2.2 (owner question O1: "now"). cpal reports CoreAudio's overloads
+as errors. The player's error callback set one flag for every error, and `stalled()` read it. So one xrun let the
+player go at the next action ("the audio device stopped responding"), which cut every tail. Step 7's export `Hold`
+needs a player one xrun doesn't retire. On ALSA the same callback runs on the audio thread, and it printed there.
+
+### What changed
+
+| Where | What |
+|---|---|
+| `core/play/src/lib.rs` | `DeviceEvent::of` sorts cpal's `ErrorKind`: `Xrun`; `DeviceChanged`; `StreamInvalidated` and `DeviceNotAvailable` are `Gone`; every other kind is `Other`. cpal already turns each OS's xrun into `Xrun` (ALSA's `EPIPE` and suspends, CoreAudio's overload, PipeWire, JACK), so nothing more is needed per OS. |
+| | The error callback (`Shared::device_error`) only adds 1 to an atomic count for its kind. It never allocates, locks or prints. |
+| | `stalled()` is true for a device that is `Gone`, never for an xrun or another error. A device that stops calling back is still stalled after a second, as before. |
+| | `Player::changed()` says the output moved to another device. `Player::device_errors()` gives the four counts. |
+| | The stream's thread used to sleep forever. Now it wakes once a second and logs what the device reported, if anything ("music2: the audio device reported 3 dropouts"). |
+| | `Driver::error()` gives a driven player an error, as cpal's callback would. Tests use it. |
+| `crates/server/src/graph.rs` | `device()` lets a player go when it stalled, crashed, or its output changed (`let_go`). The action that meets it fails and says why: "the sound output moved to another device; it starts again with the next action". The next action, or the watcher's catch-up within 300 ms, loads the project into a new player where it was. |
+| | `Activity` gains `xruns` and `device_errors` (since this player started). The engine view (`state()`) and `/api/graph/status` carry both, beside `paused` and `loading`. |
+| `docs/architecture.md` | RENDER-28: a new bullet says what a stall is, and its *Today* line says how it is built and tested. |
+
+### Choices (not in the design's words)
+
+| Choice | Why |
+|---|---|
+| A device change uses the stall's path: the action that meets it fails, and the new player starts stopped at the same beat. | The project must be loaded into the new player before an action can go to it: a play or seek sent to an empty player is lost. This path already does that. Starting stopped is also safer: when headphones are pulled out, cpal moves the old player to the speakers, and the music stops there once it is let go (within about 300 ms, at the catch-up), as before this fix. |
+| `HostUnavailable` and every other kind are only counted. | The design says only "invalidated" or "unavailable" stalls. If the device then stops calling back, the one-second rule stalls the player anyway. |
+| An error with a text cpal formatted (rare: ALSA's unsorted errors) is freed in the callback. | cpal made that text on the same thread just before. An xrun never has such a text (checked in cpal 0.18.2's source), so the common path frees nothing; `the_device_error_callback_never_allocates` checks it. |
+| Counts are per player. A new player starts from 0. | Simplest. Nothing reads them yet; 8b.8's DSP readout will. |
+| The JSON names are `xruns` and `device_errors`. | snake_case, as the server's other keys. |
+
+### Checks
+
+On this server (Ryzen 9 7950X3D, Ubuntu 24.04), scratch `HOME`, `M2_AUDIO=none`, the test plugins in `CLAP_PATH`.
+
+| Check | Result |
+|---|---|
+| `cargo test -p m2-play` | PASS: unit tests 13 of 13 (5 new), `no_alloc.rs` 6 of 6 (1 new), `bit_identity`, `churn`, `knobs`, `live` (12, 1 ignored as before), `no_blocking` |
+| `cargo test -p m2-server` | PASS: 146 of 146 (2 new) |
+| The old rule put back (any error stalls) | the new tests fail, as they must: `an_xrun_is_counted_and_play_goes_on`, `a_device_change_asks_for_a_new_player_and_plays_on_meanwhile` and the server's `an_xrun_is_counted_and_the_player_plays_on` |
+| `cargo build --workspace --all-targets` (after the web build) | PASS, no warnings (2 min 13 s, a fresh `target/`) |
+| `cargo clippy --workspace --all-targets -D warnings` | PASS |
+| mac lint | FAIL only on the rebase's known `crates/gates/src/store.rs:172` and `:290` (5 errors, `libc`). Without `m2-gates` it passes, so `m2-play` and `m2-server` lint clean for macOS. |
+| rustfmt | the new lines are clean; the files' old diffs are unchanged |
+| `cargo test --workspace` (for information) | 824 passed, 3 ignored, 4 failed: the rebase's same four (`one_place.rs`; `a_changed_state_is_a_new_instance_and_the_old_one_goes_with_its_renderer`; with-plugins' two "changed state (3b)" checks in `the_live_engine_passes_every_gate`; `app_main_thread`). None is new. 824 is the rebase's 816 and the 8 new tests. |
+
+The new tests (rule ids in their comments):
+
+| Test | Where | Checks |
+|---|---|---|
+| `the_devices_errors_are_sorted_by_kind` | `core/play/src/tests.rs` | all 14 kinds of cpal 0.18.2 |
+| `an_xrun_is_counted_and_play_goes_on` | same | 3 xruns and every other kind: counted, not stalled, the same bits as the offline render, messages still taken |
+| `a_device_change_asks_for_a_new_player_and_plays_on_meanwhile` | same | `changed()`, not stalled, plays on bit for bit |
+| `a_device_that_is_gone_stalls_the_player` | same | both kinds stall at once |
+| `what_the_device_reported_is_said_in_words` | same | the log line |
+| `the_device_error_callback_never_allocates` | `core/play/tests/no_alloc.rs` | 0 allocations or frees for 5 errors as cpal makes them |
+| `an_xrun_is_counted_and_the_player_plays_on` | `crates/server/src/graph/tests.rs` | no action fails, the same player plays on, the counts in `activity()` and the view |
+| `a_device_change_or_loss_makes_a_new_player_where_it_was` | same | each of the 3 kinds: the words, a new player at the same beat, its counts at 0 |
+
+### Left for later
+
+- No test here meets a real xrun: this server has no sound card. The Mac run has a device, but nothing forces an
+  overload there either.
+- A player let go still leaves its device thread and its open stream behind, as after a stall. Each device change
+  now adds one. 8a's new player work is the place to close it.
+- The web shows neither count yet (8b.8).
+- A device change during an export lets the player go, as a stall does today. By reading the code (not tested):
+  the export keeps its instances, a load waits while it runs (`actor.rs:499`), and `export_done` loads the project
+  into the new player after it.
