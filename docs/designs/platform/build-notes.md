@@ -749,3 +749,92 @@ Left for the lead:
   (os error 28))", or "Too many open files" for instances. True, but cryptic.
 - A folder the watch walk can't list (`read_dir` fails, out of file descriptors say) leaves the folders under it
   unwatched, with no `Rescan`. Their changes are found by the 5 s walks, as misses. Rare.
+
+## Script. Song code's sandbox
+
+Three loose ends S4 left in `core/script`, found by its checker. Built from `e1606e1` (the end of S6) on the branch
+`plat/script`, beside S7, S8 and "flakes".
+
+**Built**
+
+| What | Where |
+|---|---|
+| `**` and `**=` are lowered to `__m2_pow`, not `Math.pow`: oxc still lowers to `Math.pow`, and a small pass renames the calls oxc made (theirs have no place in the source; a `Math.pow` the code wrote has one) | `core/script/src/lib.rs` (`strip`, `Pow`) |
+| `__m2_pow` in the prelude: each side converted as JS converts it (`-(-x)` is JS's ToNumeric), numbers through the libm `Math.pow`, BigInts through QuickJS's own `**` (exact integer arithmetic, no C library) | `PRELUDE` |
+| `eval`, and the constructors of plain, async, generator and async generator functions, throw with a message in `Math.random`'s style; each refusal keeps its constructor's name and prototype, so `instanceof Function` still works | `PRELUDE` |
+| `performance` is removed, as `Date` is (see the deviations) | `PRELUDE` |
+| The prelude is named `<prelude>` in stack frames, and an error it throws is placed at the code that called it | `host`, `caught` |
+| An import of a name its module doesn't export names the module in full, as people see it, at the import (also the circular and ambiguous forms of QuickJS's message) | `State::export_error`, `State::import_at` |
+| Tests: `exponents_are_javascripts`, `song_code_cannot_make_code_from_text`, `a_missing_export_is_named_in_full_at_the_import` | `core/script/src/tests.rs` |
+| RENDER-2's rule says song code reads no clock and no randomness and makes no code from text; its *Today* says how | `docs/architecture.md` |
+| The sandbox's line in "Settled while building" | `docs/song-as-program.md` |
+
+Nothing in the SDK, `std/src`, the examples, the templates, the tests' songs or the browser suites uses `eval`,
+`Function`, a function's `.constructor` or `performance` in song code (grep over every tracked file outside `web/`,
+which is the UI, not song code; the suites' own `$eval` and `Date.now()` run in Node). No `.ts` file there uses `**` or
+`Math.pow`, so the rename changes no compiled song, and the 8 renders are unchanged. Modules load through QuickJS's C
+API (`JS_Eval`), which the prelude doesn't touch: every build test loads the SDK and std after it.
+
+**Measured** (a temporary probe test, not committed; the same song before and after)
+
+| Song code | Before | After |
+|---|---|---|
+| `a ** b` with `a = 2n`, `b = 3n` | TypeError: cannot convert BigInt to number | `8n` |
+| `a ** b` with `a = 2n`, `b = 3` | TypeError: cannot convert BigInt to number | the same: it is what QuickJS's own `2n ** b` throws |
+| `x ** y` in a function that declares `const Math = 1` | TypeError: not a function | `8` |
+| `x ** y` beside `const Math = { pow: () => 42 }` | `42` | `8` |
+| `eval("0.1 ** 0.7")`, `new Function("return 0.1 ** 0.7")()` | `0.199526231496888` (glibc's `pow`) | refused: "eval isn't available: songs run only the code in their files, so they render the same on every computer. Write the code in a file instead." |
+| `0.1 ** 0.7`, `Math.pow(0.1, 0.7)` | `0.19952623149688797` (libm) | the same |
+| `performance` | on the global object (QuickJS-ng's; its `now()` reads the clock) | gone: `typeof performance` is `"undefined"` |
+| `import { bar } from "./tracks/<a long name>"`, with no `bar` there | "Could not find export 'bar' in module './tracks/a-very-long-folder-name-to-push-the-module-name/past-s'", no place | the full name, without `./`, at `song.ts:2:10` |
+| `eval("1")` at the top of a package module (describe), with the refusal in place | without the prelude's name: placed at `eval_script:20:24`, a line of the prelude (so was `Math.random`'s error) | placed at `pkg/src/index.ts:2:6` |
+
+Each piece was taken out once, and its test failed: the rename (`exponents_are_javascripts`), `-(-x)` (the same test,
+on `{ valueOf } ** { valueOf }`), numbers through QuickJS's `**` instead of libm (`song_math_is_libm_on_every_os`:
+`0.1 ** 0.7` and `y **= -89 / 12` wrong), the `eval` refusal, the constructor refusals, removing `performance`, the
+prelude's frame name (`song_code_cannot_make_code_from_text`), and the export message
+(`a_missing_export_is_named_in_full_at_the_import`).
+
+**Deviations**
+
+| What | Why |
+|---|---|
+| `**` is lowered to a helper of its own, `__m2_pow`, instead of `Math.pow` handing BigInts on (the lead's suggestion) | With `Math.pow` as the target, `Math.pow(2n, 3n)` would give `8n` where JS throws, and a `Math` the song declares would still change `**`: oxc calls the nearest `Math` in scope (measured above, a bug S4's lowering brought). The rename is one small pass over oxc's output. A song that declares its own `__m2_pow` changes its own `**`, as one that declares `__m2s` breaks its call sites; nothing it can reach differs between computers, so that is no determinism hole. |
+| `performance` is removed too | QuickJS-ng puts `performance.now()` on the global object: a clock song code could read, as it could `Date` before. Nothing uses it. Found by listing the sandbox's globals. |
+| The contract has no rule that named the clock and randomness, so RENDER-2 gets one sentence: song code reads no clock and no randomness and makes no code from text | RENDER-2 is the rule about a render's bits, and already names song code's math. |
+| The prelude has a name in stack frames, and `caught` skips its frames | Without it, an error the prelude throws for code that has no project frame (a package module's top level, in describe) was placed in the prelude. `Math.random`'s error took the same path. |
+| `files.rs`'s diagnostics test: its case "No location at all" was the missing export, which now has a place | The missing-export case now checks the place (`tracks/lead.ts`, line 2, column 10) and keeps its check that the package's path is shortened. The case without a place is now a value thrown that isn't an error (`throw 1`), which has no stack; it checks the message too. |
+| The import's place is found by parsing the files the build loaded, only when this error happens | QuickJS's error names only the module imported from. The first import of that name from that module, in bytewise order of the files (the project's first), skipping type-only imports. About 45 lines, with the full name. |
+
+**Shared files** (S7, S8 and "flakes" are built beside this): `docs/architecture.md` (RENDER-2's rule and *Today*,
+one sentence each), `crates/server/src/files.rs` (the end of one test), `docs/song-as-program.md` (one line), and this
+section. No `Cargo.lock`, `ci/check.sh` or `one_place.rs` change.
+
+**Left for the lead**
+- `WeakRef` and `FinalizationRegistry` are reachable. QuickJS frees most garbage at once, by reference counts, the
+  same on every computer; garbage in cycles waits for its cycle collector, which runs after a number of bytes
+  allocated, as the OS's `malloc` counts them (`js_trigger_gc`). So the moment a `WeakRef` to a cycle empties could
+  differ between macOS and Linux, and so could whether a build near the 256 MB limit fits. No song uses them;
+  removing the two would be one line beside `Date`.
+
+**The check** at `7d37b6b` (`ci/check.sh`, 13 min while other slices' checks loaded the server, logs and the app's
+screenshots in `~/m2-runs/check-build-script/`): §13.1's S6 row, with this slice's 3 new tests passing, and one known
+kind of flake that passed on its retry.
+
+| Row | Result |
+|---|---|
+| toolchain, web build, build | PASS |
+| app | PASS: the UI connected in 1 s with `first-song` and with `with-plugins` |
+| rust tests | FAIL: tests 1 to 5 of §4.1 by name (the 4 watch tests and `a_lane_written_in_two_halves_never_plays_empty`), as at S6; 718 passed (S6's 715 and the 3 new tests) |
+| clippy | FAIL at lint 4, `crates/server/src/graph/watcher.rs:55` ("3 findings"). Without `-D warnings` (`cargo clippy --locked --workspace --all-targets`, run after the check) it lists exactly lints 4 to 6: `wake` (`watcher.rs:55`), `backstop` (`:134`), `deaf` (`:216`). |
+| std kernels, std.wasm, mac lint | PASS |
+| browser suites | PASS: 29 of 29 after one retry; live3b 51 of 51 with the plugins |
+| renders | PASS: 8 of 8 match `e2e/renders.sha256` |
+| repo unchanged | PASS |
+
+The retry: `attention-attn` failed one check, "the move's toast Undo says it can't any more", and passed 56 of 56 on its
+retry. Run alone 10 more times on this build: 10 of 10 passed. The step waits until the files on disk show the undo,
+then clicks the toast's Undo, whose answer depends on the revision the page holds (`Attention.tsx`): while the undo's
+revision hasn't reached the page, it asks the server to undo instead of saying it can't. Most likely that happened
+under load (the file-then-revision race S2 and S6's checker met in other suites); this is read from the code, not
+caught in the act. This slice changes nothing on that path. No earlier check log in `~/m2-runs` shows this failure.
