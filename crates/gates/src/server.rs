@@ -1184,7 +1184,8 @@ fn read_wav(path: &Path) -> Result<Vec<[f32; 2]>> {
 ///   instance holds its committed state and the export loads nothing: the usual path.
 /// - Resumes: the engine resumes at the clock it held, within two device buffers of the instances
 ///   being given back, with no step at the fade out or the fade in over G6's bound: twice the
-///   music's own largest step over the 200 ms on each side of the pause.
+///   music's own largest step over the 200 ms on each side of the pause. The lead's chord, held
+///   across the pause, plays again after it (the owner's O4).
 /// - The file: as long as `m2 render`'s within a second, its level in each second of the song
 ///   within 1 dB of it, its release tail and the lead between the kicks within 6 dB, and its
 ///   onsets within 10 ms (plugins aren't bit-exact from one instance to the next).
@@ -1233,7 +1234,7 @@ pub fn export(lab: &mut Lab, _o: &Opts) -> Result<Outcome> {
     // Started 30 to 50 ms after a kick's onset, the hold a callback or two later lands on its body,
     // past its attack: a kick's attack inside a fade would be the music's own step, not the fade's.
     // The kick (a std voice, kept by the engine) still sounds at the resume, so the fade in is
-    // heard: the export resets Surge XT's voices, so the lead's chord doesn't sound there.
+    // heard. The export ends Surge XT's voices; the lead's chord starts again at the resume (O4).
     wait(Duration::from_secs(2), || (0.06..0.1).contains(&graph.status().beat.fract())).context("the playhead never reached a kick")?;
     let made = created();
 
@@ -1258,7 +1259,8 @@ pub fn export(lab: &mut Lab, _o: &Opts) -> Result<Outcome> {
     // The first resumed block, and a device buffer for its saves to see.
     std::thread::sleep(Duration::from_millis(50));
     let after: Vec<Vec<u8>> = handles.iter().map(|&h| save(h)).collect::<Result<_>>()?;
-    std::thread::sleep(Duration::from_millis(300));
+    // Past the end of the beat the hold fell in, for the lead's check below.
+    std::thread::sleep(Duration::from_millis(600));
     let tape_frames = tape.frames();
     out.info(
         "the export, until it was done",
@@ -1348,6 +1350,28 @@ pub fn export(lab: &mut Lab, _o: &Opts) -> Result<Outcome> {
             beat.fract() * song.data.tempo().seconds_at(1.0) * 1e3
         ),
     );
+    // The lead's chord, held across the pause, plays again after it (RENDER-1, the owner's O4): the
+    // export ended the notes playback left in Surge XT, and the resume starts again the ones the song
+    // still holds. Judged where the kick is quiet, 60% to 90% into the beat the hold fell in, when a
+    // lead note spans the hold and that stretch. Without the note-ons it is silence there (about
+    // -104 dBFS on Linux), with them the chord (about -33).
+    let (from, to) = (beat.floor() + 0.6, beat.floor() + 0.9);
+    let lanes = m2_runtime::lane_slots(&song.flat);
+    let lead = lanes.iter().filter(|l| l.lane == "notes" && matches!(l.kind, m2_ir::Kind::Events(_)));
+    let held_on = lead.flat_map(|l| song.data.notes(&l.module, &l.lane)).any(|n| n.start <= beat && n.end >= to);
+    let on_tape = |b: f64| resume_at as u64 + song.frame(b).saturating_sub(song.frame(beat));
+    let again = span(&tape_frames, on_tape(from), on_tape(to));
+    let name = "resumes: the lead's chord held across the pause plays again after it";
+    if held_on {
+        let level = db(crate::signal::rms(again));
+        out.check(
+            name,
+            again.len() as u64 == on_tape(to) - on_tape(from) && level > -60.0,
+            format!("{level:.1} dBFS at beats {from:.1} to {to:.1}, where the kick is quiet (held at beat {beat:.2})"),
+        );
+    } else {
+        out.skip(name, format!("no lead note spans beat {beat:.2} to {to:.1}"));
+    }
 
     // The file, against `m2 render`'s (new instances).
     let (_, _, fresh, _) = graph.render(m2_editor::render::Length::Song)?;
