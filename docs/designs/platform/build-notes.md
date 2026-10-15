@@ -1275,3 +1275,28 @@ The app's two screenshots are copied for the owner to `~/m2-runs/app-shots/platf
 
 **Left for later:** nothing new. `HANDOFF.md` lists the items above ("Left for later" here and in each slice's notes),
 one line each.
+
+## The Mac runs
+
+The owner ran `ci/check.sh` on their MacBookPro18,1 (M1 Pro, macOS 26.6.2), with Surge XT 1.3.4 and Airwindows
+Consolidated 1.2026.285 in `~/Library/Audio/Plug-Ins/CLAP`.
+
+| Run | Commit | Result |
+|---|---|---|
+| 1 | `b90bacf` | FAIL (1 of 11): 743 passed, 2 failed; every other row PASS, the gates included (14 min) |
+| 2 | `1750322` | **PASS**: 745 passed, 0 failed; 29/29 suites; renders 8 of 8; std.wasm the same bytes; gates PASS (12 min) |
+
+The two failures of run 1, both tests written on Linux, fixed in `1750322`:
+
+| Test | Why it failed on the Mac | Fix |
+|---|---|---|
+| `project::tests::create_at_checks_before_it_makes_a_folder` | the disk ignores capitals, so `NIGHT` is there (it is `Night`) and the `..` after it stays; the refusal names the path as written | the test accepts either spelling, and checks that nothing was made |
+| `watch::tests::a_write_is_named_by_the_time_flush_returns` | one `FSEventStreamFlushSync` returned before a file written again reached FSEvents' daemon | the tests wait for the name (5 s), as the watcher does (a miss counts after 60 s); `Events::flush` says what each OS gives |
+
+The gates in run 2 (judged, PLAT-1): G11 `tx-data` on p16, from the request to the first block that plays it, p95
+8.6 ms idle, 9.2 ms beside a writer syncing 4 MB chunks, 8.9 ms with 5,000 files in `assets/` (under 20 ms); the
+session's part before the preview p95 3.0, 2.5 and 3.1 ms (under 5 ms). G11 `watcher` with 5,000 assets: 0.40% of a
+core over 10 s idle (under 1%).
+
+**macOS: green at `1750322`.** The step is done.
+

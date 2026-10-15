@@ -4,17 +4,20 @@ Written 2026-10-15, at the end of the platform step (6b in the contract's order 
 `docs/architecture.md` (the contract) and the design for whatever you pick up.
 
 **In short**
-- The platform layer is built on `main`. Linux is green: `ci/check.sh` passed at `63c45da`.
-- **macOS: unverified since `4ae1b32`**, the step's first code commit (last verified at `8aa301e`). The Mac code is
-  only type-checked and linted from Linux. The owner's Mac run comes next.
-- Then: finish step 7, merge `sounds`, merge `taste`; then 8a, 8b and step 9.
+- The platform layer is done on `main`: `ci/check.sh` passes on Linux and on the owner's Mac.
+- **macOS: green at `1750322`** (ci/check.sh on the owner's MacBookPro18,1, macOS 26.6.2, 2026-10-15, 12 min). G11
+  `tx-data` p95 8.6 ms idle, 9.2 ms beside a syncing writer, 8.9 ms with 5,000 assets (under 20 ms); the session's
+  part p95 2.5–3.1 ms (under 5 ms); `watcher` 0.40% of a core idle (under 1%). The first Mac run, at `b90bacf`,
+  failed two tests that assumed Linux; `1750322` fixed them.
+- Next: finish step 7 (in progress on branch `step7`, worktree `~/m2-runs/wt/s7`), merge `sounds`, merge `taste`;
+  then 8a, 8b and step 9.
 
 ## Where everything is
 
 | Branch | Commit | State |
 |---|---|---|
 | `main` | this commit | Steps 1–6, the fast note edits (8aa301e), and the platform layer. |
-| Platforms | | Linux green at `63c45da` (ci/check.sh). macOS unverified since `4ae1b32`. Windows: designed only. |
+| Platforms | | Green on Linux and macOS at `1750322` (ci/check.sh). Windows: designed only. |
 | `origin/wip/step7` | 5079233 | Step 7, the engine: slices 1–3 done, slice 4 half done. Doesn't build yet (`core/runtime/src/tests/live.rs:491` expects `Make`). |
 | `origin/taste` | 4804247 | The new look (T and S); 8b.1 Tracks done (a0d5f91); 8b.2 song bar unfinished. |
 | `origin/sounds` | 916127d | 20 new std sounds (polysynth, FM, drum kit). Its last independent check was cut short. |
@@ -94,7 +97,7 @@ fixes it on Linux, checks the mac lint, and asks for one more run. The logs are 
 
 ## What to do next, in order
 
-1. **The Mac run** (above), at `main`'s head once the lead has pushed. The step is done only when it passes (PLAT-6).
+1. ~~The Mac run~~: done, green at `1750322`.
 2. **Finish step 7** on `wip/step7`: bring it onto `main` (merge or rebase; notes below) and make it build. First
    platform design §8's bug 1 in `core/play` (sort cpal's errors: an xrun is counted and play goes on). Then finish
    slice 4 (design-7 §18: state loads into kept instances in prepare, restart from the committed blob, export with
@@ -156,12 +159,11 @@ Fixed in this step:
 
 One line each; the details are in `platform/build-notes.md`.
 
-- **The macOS side is type-checked only** until the Mac run: everything moved into `core/os/src/mac/` (the barrier's
-  `fsync` fallback, `renamex_np`, `clonefile`, `getattrlist`, `gethostuuid`, FSEvents, the main loop), and the
-  review's fixes there (D6's clone error, `sync_dir`'s error list, `c_numbers`).
-- FSEvents, unproven: one `FSEventStreamFlushSync` delivers a write made just before it; a burst of 4,196 files is
-  named file by file; a link-count change is named (evt-2).
-- `ci/check.sh --gates` has never run whole; the Mac run is its first full run.
+- **The macOS side passes** every test of `core/os/src/mac/` and its callers. Paths no test takes stay unrun there: the barrier's `fsync` fallback on a volume that refuses
+  `F_FULLFSYNC`, D6's clone error, `sync_dir` on a volume that refuses a folder sync.
+- FSEvents: one `FSEventStreamFlushSync` can return before a write made just before it reaches the daemon (the
+  first Mac run showed it); the tests wait for the name, and the watcher counts a miss only after 60 s. The burst
+  test (4,196 files) passed on the Mac. A link-count change being named (evt-2) is still unproven there.
 - Step 8's folder push, after a save's renames, still ignores errors, `EIO` too: the save has landed (D2).
 - QuickJS's 256 MB limit counts bytes as each OS's `malloc` does (det-3); a contract deferred row.
 - `retry_lock` scans with no journal skipped (`rescan` skips `pending`): after a lost lock and an outside edit, Retry
