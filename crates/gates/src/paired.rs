@@ -73,7 +73,7 @@ pub fn value(values: &[(String, f64)], key: &str) -> Option<f64> {
 /// summary keeps 220 characters of a line.
 pub fn estimate(here: &Diffs, recorded: f64) -> (f64, String) {
     let total = here.median() + recorded;
-    (total, format!("{total:+.0} µs: {here} here over P1, and P1 {recorded:+.0} on the Mac"))
+    (total, format!("{total:+.0} µs = {here} over P1 + P1's {recorded:+.0}"))
 }
 
 /// The judged line of a G7f part: the mean's estimate against `bound`, then the p99's, printed.
@@ -101,7 +101,7 @@ mod tests {
         assert!(pass, "{said}");
         assert_eq!(
             said,
-            "+72 µs: +40 µs (3 pairs, +38 to +45) here over P1, and P1 +32 on the Mac (bound 80). p99, not judged: +335 µs: +300 µs (3 pairs, -400 to +900) here over P1, and P1 +35 on the Mac"
+            "+72 µs = +40 µs (3 pairs, +38 to +45) over P1 + P1's +32 (bound 80). p99, not judged: +335 µs = +300 µs (3 pairs, -400 to +900) over P1 + P1's +35"
         );
         assert!(!judge([&Diffs(vec![50.0, 52.0, 47.0]), &p99], [32.0, 35.0], 80.0).0);
     }
