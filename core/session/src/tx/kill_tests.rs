@@ -88,6 +88,7 @@ fn child() {
     else {
         return;
     };
+    no_core_dump();
     let d = Dir(PathBuf::from(dir));
     let r = Recorder::default();
     let mut s = recorded(&d, &r);
@@ -96,6 +97,16 @@ fn child() {
     r.act(r.count() + at.parse::<usize>().unwrap(), Act::Abort);
     let _ = s.commit(t);
     std::mem::forget(d);
+}
+
+/// A child that aborts on purpose leaves no core dump: on Linux apport takes about a second over
+/// each one, even with `ulimit -c 0`, which made this test 473 s instead of about 100 s (OS-72).
+pub(super) fn no_core_dump() {
+    #[cfg(target_os = "linux")]
+    // SAFETY: a prctl that changes only this process's own flag.
+    unsafe {
+        libc::prctl(libc::PR_SET_DUMPABLE, 0);
+    }
 }
 
 /// Run the child on `d`, killed at call `at`.

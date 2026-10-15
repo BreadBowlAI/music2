@@ -39,8 +39,8 @@ GATES (default: all):
   tx-data     G11 (--server only) piano-roll writes as journaled Tx, each heard as its preview:
                   from the request to the block that plays it, under 20 ms at p95, and apart until
                   the commit is durable, on an idle disk, a busy one and with 5,000 assets; a
-                  held arrow key's nudges; a refused write taken back; the barrier's F_FULLFSYNC
-                  alone (PLANE-5)
+                  held arrow key's nudges; a refused write taken back; the barrier's durable
+                  sync alone (F_FULLFSYNC on macOS, fsync on Linux) (PLANE-5)
   watcher     G11 (--server only) the watcher with 5,000 files in assets/: the CPU it uses while
                   idle, under 1% of a core, and an outside lane write from its last byte to the
                   block that plays it; the full stat walk (WRITE-19)

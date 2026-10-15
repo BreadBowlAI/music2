@@ -21,12 +21,10 @@ pub const DEFAULT_TEMPLATE: &str = "starter";
 /// Longest song name, in characters: folder names stay readable in Finder.
 const MAX_NAME: usize = 80;
 
-/// Where songs are made: `$HOME/Music/music2`. From `$HOME`, so tests can point it elsewhere.
-/// It is created when a song is first made there.
+/// Where songs are made: `$HOME/Music/music2` (`m2_os::dirs::songs`). From `$HOME`, so tests can
+/// point it elsewhere. It is created when a song is first made there.
 pub fn songs_dir() -> Result<PathBuf> {
-    let home =
-        std::env::var_os("HOME").filter(|h| !h.is_empty()).ok_or_else(|| anyhow!("can't find your home folder ($HOME isn't set)"))?;
-    Ok(PathBuf::from(home).join("Music").join("music2"))
+    m2_os::dirs::songs().ok_or_else(|| anyhow!("can't find your home folder ($HOME isn't set)"))
 }
 
 /// A template or an example, as the New Song dialog and the start screen list them.
@@ -62,8 +60,7 @@ const EXAMPLE_TOML: &str = "example.toml";
 /// What a new song can start from, and where it goes by default (`GET /api/project/templates`).
 /// `home` lets the UI write the songs folder as `~/Music/music2`.
 pub fn catalog() -> Value {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    json!({"templates": templates(), "examples": examples(), "songs": songs_dir().ok(), "home": home})
+    json!({"templates": templates(), "examples": examples(), "songs": songs_dir().ok(), "home": m2_os::dirs::home()})
 }
 
 /// A New Song request (`POST /api/project/new`).
@@ -256,12 +253,7 @@ fn make(parent: &Path, name: &str, from: &Path, songs: Option<&Path>) -> Result<
         bail!("{} isn't a folder", parent.display());
     }
     let (base, shown) = (folder_name(name), clean_name(name));
-    // A name is taken in any capitals, on every OS (as macOS has it), so songs stay safe to copy
-    // between computers: "exports 2" beside "Exports 2" is taken.
-    let mut taken = HashSet::new();
-    for e in std::fs::read_dir(parent).with_context(|| format!("reading {}", parent.display()))? {
-        taken.insert(e?.file_name().to_string_lossy().to_lowercase());
-    }
+    let taken = taken(parent)?;
     for n in 1..=999 {
         let (folder, name) = if n == 1 { (base.clone(), shown.clone()) } else { (format!("{base} {n}"), format!("{shown} {n}")) };
         if reserved(songs, parent, &folder) || taken.contains(&folder.to_lowercase()) {
@@ -281,15 +273,30 @@ fn make(parent: &Path, name: &str, from: &Path, songs: Option<&Path>) -> Result<
     bail!("{} already has songs called “{shown}” up to “{shown} 999”", parent.display())
 }
 
+/// The names in `parent`, in lower case. A name is taken in any capitals, on every OS (as macOS
+/// has it), so songs stay safe to copy between computers (PLAT-7): "exports 2" beside "Exports 2"
+/// is taken.
+fn taken(parent: &Path) -> Result<HashSet<String>> {
+    let mut taken = HashSet::new();
+    for e in std::fs::read_dir(parent).with_context(|| format!("reading {}", parent.display()))? {
+        taken.insert(e?.file_name().to_string_lossy().to_lowercase());
+    }
+    Ok(taken)
+}
+
 /// Make a new song at exactly `dir`, named after its folder (`m2 new`). Refuses if
-/// something is there already.
+/// something is there already, in any capitals ([`taken`]), as macOS does.
 pub fn create_at(dir: &Path, from: &Path) -> Result<PathBuf> {
     let name = dir.file_name().and_then(|n| n.to_str()).ok_or_else(|| anyhow!("{} needs a folder name", dir.display()))?.to_string();
-    if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
+    let parent = dir.parent().filter(|p| !p.as_os_str().is_empty());
+    if let Some(parent) = parent {
         std::fs::create_dir_all(parent).with_context(|| format!("making {}", parent.display()))?;
         if reserved(songs_dir().ok().as_deref(), parent, &name) {
             bail!("{} is where music2 puts exported audio: give the song another name", dir.display());
         }
+    }
+    if taken(parent.unwrap_or(Path::new(".")))?.contains(&name.to_lowercase()) {
+        bail!("{} already exists", dir.display());
     }
     match std::fs::create_dir(dir) {
         Ok(()) => {}
@@ -327,26 +334,11 @@ fn copy_tree(from: &Path, to: &Path, top: bool) -> Result<()> {
             copy_tree(&src, &dst, false)?;
         } else if kind.is_file() {
             std::fs::copy(&src, &dst).with_context(|| format!("copying {}", src.display()))?;
-            writable(&dst)?;
+            // The copy is the user's to change, even if what it was copied from (an installed app)
+            // is read-only.
+            m2_os::fs::make_writable(&dst).with_context(|| format!("making {} writable", dst.display()))?;
         }
     }
-    Ok(())
-}
-
-/// The copy is the user's to change, even if what it was copied from (an installed app) is read-only.
-#[cfg(unix)]
-fn writable(file: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let mut perms = std::fs::metadata(file)?.permissions();
-    if perms.mode() & 0o200 == 0 {
-        perms.set_mode(perms.mode() | 0o200);
-        std::fs::set_permissions(file, perms)?;
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn writable(_: &Path) -> Result<()> {
     Ok(())
 }
 
@@ -603,6 +595,23 @@ mod tests {
         assert!(again.contains("already exists"), "{again}");
         // Untouched by the refusal: still the empty template.
         assert!(!dir.join("tracks").exists());
+    }
+
+    // OS-41 (the owner's Q1) for `m2 new`: a name there in other capitals is taken on every OS,
+    // and refused in the words macOS gives; nothing is made, nothing there changes.
+    #[test]
+    fn create_at_refuses_a_name_taken_in_other_capitals() {
+        let t = Temp::new();
+        let night = create_at(&t.0.join("Night"), &template("empty")).unwrap();
+        std::fs::write(t.0.join("DRIVE"), "a file").unwrap();
+        for asked in ["night", "NIGHT", "drive"] {
+            let e = create_at(&t.0.join(asked), &template("starter")).unwrap_err().to_string();
+            assert_eq!(e, format!("{} already exists", t.0.join(asked).display()));
+        }
+        let mut names: Vec<String> = std::fs::read_dir(&t.0).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        names.sort();
+        assert_eq!(names, ["DRIVE", "Night"]);
+        assert!(!night.join("tracks").exists() && std::fs::read_to_string(t.0.join("DRIVE")).unwrap() == "a file");
     }
 
     #[test]

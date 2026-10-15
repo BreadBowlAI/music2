@@ -32,19 +32,8 @@ const NAMES_AN_OS: [&str; 11] = [
 const OS_IN_CFG: [&str; 4] = ["unix", "windows", "target_family", "target_vendor"];
 
 /// Files whose OS code a later slice moves into `m2-os`, and that slice.
-const NOT_YET: &[(&str, &str)] = &[
-    ("core/song/src/hash.rs", "S6"),
-    ("core/session/src/watch.rs", "S6"),
-    ("core/session/src/lock.rs", "S6"),
-    ("core/session/src/tx/mod.rs", "S6"),
-    ("core/session/src/tx/stage.rs", "S6"),
-    ("crates/editor/src/render.rs", "S6"),
-    ("crates/server/src/project.rs", "S6"),
-    ("crates/server/src/resources.rs", "S6"),
-    ("crates/server/src/graph.rs", "S8"),
-    ("crates/server/src/graph/fsevents.rs", "S8"),
-    ("crates/server/src/graph/watcher.rs", "S8"),
-];
+const NOT_YET: &[(&str, &str)] =
+    &[("crates/server/src/graph.rs", "S8"), ("crates/server/src/graph/fsevents.rs", "S8"), ("crates/server/src/graph/watcher.rs", "S8")];
 
 /// The one function allowed to name an OS outside `m2-os`: G11's refused write, a measuring tool's
 /// fault (PLAT-2).

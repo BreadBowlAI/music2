@@ -823,8 +823,8 @@ impl Drop for Busy {
     }
 }
 
-/// The durable sync a commit's barrier makes (`File::sync_all`, which is `F_FULLFSYNC` on macOS),
-/// timed `n` times on a small journal-sized file in the project's `.music2/tx/`.
+/// The durable sync a commit's barrier makes (`m2_os::fs::barrier`: `F_FULLFSYNC` on macOS,
+/// `fsync` on Linux), timed `n` times on a small journal-sized file in the project's `.music2/tx/`.
 fn barriers(dir: &Path, n: usize) -> Result<Vec<f64>> {
     use std::io::Write;
     let txd = dir.join(".music2/tx");
@@ -835,7 +835,7 @@ fn barriers(dir: &Path, n: usize) -> Result<Vec<f64>> {
         let mut f = std::fs::File::create(&file)?;
         f.write_all(format!("{{\"journal\": 1, \"n\": {i}}}").as_bytes())?;
         let t = Instant::now();
-        f.sync_all()?;
+        m2_os::fs::barrier(&f)?;
         out.push(t.elapsed().as_secs_f64() * 1e3);
     }
     std::fs::remove_file(&file)?;
@@ -933,7 +933,7 @@ pub fn tx_data(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
             .filter(|e| e.path().extension().is_some_and(|x| x == "json") && !e.file_name().to_string_lossy().starts_with('.'))
             .count();
         let (a, r) = (Summary::of(&audible), Summary::of(&ready));
-        out.info(format!("{on}the barrier's durable sync alone (F_FULLFSYNC)"), Summary::of(&syncs));
+        out.info(format!("{on}the barrier's durable sync alone (F_FULLFSYNC on macOS, fsync on Linux)"), Summary::of(&syncs));
         out.check(format!("{on}the session's part before the preview (plan, check, pre-check), under 5 ms at p95"), r.p95 <= 5.0, r);
         out.info(format!("{on}then waiting for the next callback to take the preview (one device buffer at most)"), Summary::of(&waited));
         out.check(format!("{on}from the request to the first block that plays it (its preview), under 20 ms at p95"), a.p95 <= 20.0, a);

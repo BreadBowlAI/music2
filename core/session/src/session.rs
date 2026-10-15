@@ -237,7 +237,7 @@ impl Session {
             return Err(unread(d));
         }
         let dir = snapshot.dir.clone();
-        let (host_id, host) = (crate::lock::host_id(), crate::lock::host_name());
+        let (host_id, host) = (crate::lock::host_id(), m2_os::host::name());
         let mut own = vec![];
         let mut interrupted = vec![];
         let mut kept = vec![];

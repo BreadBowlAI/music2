@@ -10,6 +10,19 @@ pub fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from)
 }
 
+/// Where New Song puts songs: `~/Music/music2`, on Linux too (`XDG_MUSIC_DIR` waits for Linux
+/// packaging).
+pub fn songs() -> Option<PathBuf> {
+    home().map(|h| h.join("Music").join("music2"))
+}
+
+/// Where music2 keeps what it can always rebuild, outside every project: the hash cache (FMT-16),
+/// later decoded and warped renders (RENDER-30). `~/Library/Caches/music2` on macOS,
+/// `~/.cache/music2` on Linux: from `HOME` alone, so a test's scratch `HOME` holds it too.
+pub fn cache() -> Option<PathBuf> {
+    home().map(|h| os::cache(&h))
+}
+
 /// The OS's CLAP folders, the user's first (the CLAP standard's): `~/Library/Audio/Plug-Ins/CLAP`
 /// and `/Library/Audio/Plug-Ins/CLAP` on macOS, `~/.clap` and `/usr/lib/clap` on Linux.
 pub fn clap() -> Vec<PathBuf> {
@@ -19,6 +32,16 @@ pub fn clap() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+
+    #[test]
+    fn what_music2_writes_is_under_home() {
+        let cache = super::os::cache(Path::new("/h"));
+        assert!(cache.starts_with("/h") && cache.ends_with("music2") && cache != Path::new("/h/music2"), "{}", cache.display());
+        if let Some(home) = super::home() {
+            assert_eq!(super::songs().unwrap(), home.join("Music/music2"));
+            assert_eq!(super::cache().unwrap(), super::os::cache(&home));
+        }
+    }
 
     #[test]
     fn the_users_clap_folder_comes_first_and_the_systems_is_outside_home() {

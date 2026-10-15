@@ -9,6 +9,8 @@
 //! the caller.
 
 pub mod dirs;
+pub mod fs;
+pub mod host;
 pub mod main_loop;
 pub mod thread;
 

@@ -9,13 +9,17 @@ license.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 m2-ir.workspace = true
+m2-os.workspace = true
 m2-song.workspace = true
 m2-runtime.workspace = true
 m2-script.workspace = true
 hound.workspace = true
 serde_json.workspace = true
-libc.workspace = true
 memchr.workspace = true
+
+[dev-dependencies]
+# The kill tests' children: a signal's number, and no core dump on Linux (OS-72).
+libc.workspace = true
 
 [features]
 # Tests of other crates: a session whose commits go through a disk they give

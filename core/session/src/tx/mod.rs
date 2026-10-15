@@ -518,21 +518,13 @@ fn spelled(dir: &Path, p: &TxPath) -> Result<(), Refusal> {
             .map(|e| e.file_name())
             .collect();
         if !listed.iter().any(|n| n == name) {
-            // The entry it reaches, by its inode, to say how the disk spells it.
-            #[cfg(unix)]
-            let real = {
-                use std::os::unix::fs::MetadataExt;
-                let same = |n: &&std::ffi::OsString| {
-                    std::fs::symlink_metadata(at.join(n)).is_ok_and(|m| (m.dev(), m.ino()) == (meta.dev(), meta.ino()))
-                };
-                listed.iter().find(same).map(|n| {
-                    let mut real: PathBuf = parts[..i].iter().collect();
-                    real.push(n);
-                    m2_song::path::slashed(&real)
-                })
-            };
-            #[cfg(not(unix))]
-            let real: Option<String> = None;
+            // The entry it reaches, by its file id, to say how the disk spells it.
+            let id = m2_os::fs::file_id(&next).ok();
+            let real = listed.iter().find(|n| id.is_some() && m2_os::fs::file_id(&at.join(n)).ok() == id).map(|n| {
+                let mut real: PathBuf = parts[..i].iter().collect();
+                real.push(n);
+                m2_song::path::slashed(&real)
+            });
             let real = real.map_or_else(|| "another way".to_string(), |r| format!("`{r}`"));
             return Err(bad_path(format!("{p} is spelled {real} on this disk: a Tx names a file exactly as the disk does")));
         }

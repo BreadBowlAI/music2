@@ -10,11 +10,11 @@
 //!    into `blobs/` (a copy that shares no inode, so a writer that rewrites the target in place
 //!    can't change it) and synced;
 //! 4. the staging folder, `blobs/` and `.music2/tx/` are synced, for their new entries;
-//! 5. one barrier (`F_FULLFSYNC` on macOS) makes all of that durable before the project changes;
+//! 5. one barrier (`m2_os::fs::barrier`) makes all of that durable before the project changes;
 //! 6. the previous commit's journal and staging go: its renames were drained by this barrier;
-//! 7. each target is renamed into place, checked as it goes: a replaced file is swapped
-//!    (`RENAME_SWAP`) and what it held compared with its base, a created one is renamed only
-//!    where nothing is (`RENAME_EXCL`), a removed one is moved aside and compared;
+//! 7. each target is renamed into place, checked as it goes: a replaced file is swapped (an
+//!    exchange) and what it held compared with its base, a created one is renamed only where
+//!    nothing is (a create-only rename), a removed one is moved aside and compared;
 //! 8. each target's folder is synced, so the renames reach the disk by the next barrier.
 //!
 //! A commit's journal stays until a later barrier covers its renames: the next commit's step 6,
@@ -31,6 +31,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use m2_os::fs;
 use m2_song::{DataPath, Sha};
 
 use super::journal::{self, JTarget, Journal};
@@ -65,7 +66,7 @@ pub trait Disk: Send {
     fn create(&mut self, p: &Path, bytes: &[u8]) -> io::Result<()>;
     fn mkdirs(&mut self, p: &Path) -> io::Result<()>;
     fn sync_dir(&mut self, p: &Path) -> io::Result<()>;
-    /// Make everything written so far durable: `F_FULLFSYNC` on `file` on macOS, else its sync.
+    /// Make everything written so far durable: the barrier on `file` (`m2_os::fs::barrier`).
     fn barrier(&mut self, file: &Path) -> io::Result<()>;
     /// `Unsupported` when the volume can't rename that way.
     fn rename(&mut self, from: &Path, to: &Path, how: How) -> io::Result<()>;
@@ -80,33 +81,12 @@ pub trait Disk: Send {
     fn list(&mut self, dir: &Path) -> io::Result<Vec<String>>;
 }
 
-/// The disk as it is.
+/// The disk as it is. Files and folders are pushed with `m2_os::fs::push` (`fsync`), never
+/// `File::sync_all`, which is `F_FULLFSYNC` on macOS: the commit's one barrier makes everything
+/// pushed before it durable, so a commit flushes the drive's cache once (the step 6 design's 6a.2,
+/// R1).
 #[derive(Default)]
 pub struct Real;
-
-/// Push a file's bytes, or a folder's entries, to the drive without flushing the drive's cache:
-/// `fsync(2)`. On macOS that alone isn't durable; the commit's one barrier (`F_FULLFSYNC`) makes
-/// everything pushed before it durable, so a commit flushes the drive once (the step 6 design's
-/// 6a.2, R1). `File::sync_all` is `F_FULLFSYNC` there: a drive-cache flush each time.
-fn push(f: &std::fs::File) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::fd::AsRawFd;
-        // SAFETY: an fsync on a descriptor the caller owns.
-        if unsafe { libc::fsync(f.as_raw_fd()) } == 0 {
-            return Ok(());
-        }
-        Err(io::Error::last_os_error())
-    }
-    #[cfg(not(unix))]
-    f.sync_all()
-}
-
-#[cfg(unix)]
-fn cpath(p: &Path) -> io::Result<std::ffi::CString> {
-    use std::os::unix::ffi::OsStrExt;
-    std::ffi::CString::new(p.as_os_str().as_bytes()).map_err(|_| io::Error::new(ErrorKind::InvalidInput, "a NUL in a path"))
-}
 
 impl Disk for Real {
     fn read(&mut self, p: &Path) -> io::Result<Vec<u8>> {
@@ -127,7 +107,7 @@ impl Disk for Real {
         use std::io::Write;
         let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(p)?;
         f.write_all(bytes)?;
-        push(&f)
+        fs::push(&f)
     }
 
     fn mkdirs(&mut self, p: &Path) -> io::Result<()> {
@@ -135,43 +115,19 @@ impl Disk for Real {
     }
 
     fn sync_dir(&mut self, p: &Path) -> io::Result<()> {
-        push(&std::fs::File::open(p)?)
+        fs::sync_dir(p)
     }
 
     fn barrier(&mut self, file: &Path) -> io::Result<()> {
-        let f = std::fs::File::open(file)?;
-        #[cfg(target_os = "macos")]
-        {
-            use std::os::fd::AsRawFd;
-            // SAFETY: an fcntl on a descriptor this function owns.
-            if unsafe { libc::fcntl(f.as_raw_fd(), libc::F_FULLFSYNC) } == 0 {
-                return Ok(());
-            }
-        }
-        // A volume without F_FULLFSYNC (some network and FAT volumes): its own sync.
-        f.sync_all()
+        fs::barrier(&std::fs::File::open(file)?)
     }
 
     fn rename(&mut self, from: &Path, to: &Path, how: How) -> io::Result<()> {
-        if how == How::Plain {
-            return std::fs::rename(from, to);
+        match how {
+            How::Plain => std::fs::rename(from, to),
+            How::Swap => fs::rename(from, to, fs::Rename::Swap),
+            How::Excl => fs::rename(from, to, fs::Rename::Excl),
         }
-        #[cfg(target_os = "macos")]
-        {
-            let flags = if how == How::Swap { libc::RENAME_SWAP } else { libc::RENAME_EXCL };
-            let (a, b) = (cpath(from)?, cpath(to)?);
-            // SAFETY: two NUL-terminated paths that outlive the call.
-            if unsafe { libc::renamex_np(a.as_ptr(), b.as_ptr(), flags) } == 0 {
-                return Ok(());
-            }
-            let e = io::Error::last_os_error();
-            return match e.raw_os_error() {
-                Some(c) if c == libc::ENOTSUP || c == libc::EINVAL => Err(io::Error::new(ErrorKind::Unsupported, e)),
-                _ => Err(e),
-            };
-        }
-        #[allow(unreachable_code)]
-        Err(io::Error::new(ErrorKind::Unsupported, "this volume can't swap or rename exclusively"))
     }
 
     fn remove_file(&mut self, p: &Path) -> io::Result<()> {
@@ -190,21 +146,14 @@ impl Disk for Real {
     }
 
     fn clone_file(&mut self, from: &Path, to: &Path) -> io::Result<()> {
-        #[cfg(target_os = "macos")]
-        {
-            let (a, b) = (cpath(from)?, cpath(to)?);
-            // SAFETY: two NUL-terminated paths that outlive the call.
-            if unsafe { libc::clonefile(a.as_ptr(), b.as_ptr(), 0) } == 0 {
-                return push(&std::fs::File::open(to)?);
+        match fs::clone_file(from, to) {
+            // No clone here (another file system, or an OS without one): a copy.
+            Err(e) if e.kind() != ErrorKind::AlreadyExists => {
+                let bytes = std::fs::read(from)?;
+                self.create(to, &bytes)
             }
-            let e = io::Error::last_os_error();
-            if e.kind() == ErrorKind::AlreadyExists {
-                return Err(e);
-            }
+            done => done,
         }
-        // No clones here (another file system): a copy.
-        let bytes = std::fs::read(from)?;
-        self.create(to, &bytes)
     }
 
     fn list(&mut self, dir: &Path) -> io::Result<Vec<String>> {
@@ -340,7 +289,7 @@ enum Done {
         staged: PathBuf,
         target: PathBuf,
     },
-    /// Without `RENAME_SWAP`: `target` was moved to `aside`, then `staged` to `target`.
+    /// Without a swap (the volume can't exchange): `target` was moved to `aside`, then `staged` to `target`.
     Replaced {
         staged: PathBuf,
         target: PathBuf,

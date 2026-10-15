@@ -35,35 +35,9 @@ pub const GIT_STALE: Duration = Duration::from_secs(10);
 /// The coarsest timestamp resolution of a volume a project may be on (FMT-16).
 const RACY_NS: i128 = 2_000_000_000;
 
-/// What identifies a file's version without reading it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Stamp {
-    pub size: u64,
-    /// Nanoseconds since the epoch.
-    pub mtime: i128,
-    pub ctime: i128,
-    pub inode: u64,
-}
-
-impl Stamp {
-    pub fn of(meta: &std::fs::Metadata) -> Stamp {
-        let ns =
-            |t: std::io::Result<SystemTime>| t.ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos() as i128);
-        #[cfg(unix)]
-        let (ctime, inode) = {
-            use std::os::unix::fs::MetadataExt;
-            (meta.ctime() as i128 * 1_000_000_000 + meta.ctime_nsec() as i128, meta.ino())
-        };
-        #[cfg(not(unix))]
-        let (ctime, inode) = (ns(meta.created()), 0);
-        Stamp { size: meta.len(), mtime: ns(meta.modified()), ctime, inode }
-    }
-
-    /// The stamp of the file at `p`, if there is one.
-    pub fn at(p: &Path) -> Option<Stamp> {
-        std::fs::symlink_metadata(p).ok().map(|m| Stamp::of(&m))
-    }
-}
+/// What identifies a file's version without reading it: one type for the watcher and the hash
+/// cache.
+pub use m2_os::fs::Stamp;
 
 /// How a path is tracked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -187,39 +161,11 @@ fn reached(dir: &Path, rel: &str, folders: &mut BTreeSet<String>) -> bool {
     true
 }
 
-/// Whether the last name of `p` is spelled as the disk stores it (`getattrlist`'s name), or there
-/// is nothing there. A disk that ignores capitals or Unicode forms opens `Song.ts` as `song.ts`.
+/// Whether the last name of `p` is spelled as the disk stores it (`m2_os::fs::stored_name`), or
+/// there is nothing there, or the OS can't tell. A disk that ignores capitals or Unicode forms
+/// opens `Song.ts` as `song.ts`.
 fn spelled(p: &Path) -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        let (Some(name), Ok(c)) = (p.file_name(), std::ffi::CString::new(p.as_os_str().as_bytes())) else { return true };
-        // SAFETY: an attrlist asking for the name alone, and a buffer that holds any name (255
-        // UTF-16 units, at most 3 bytes each in UTF-8) after its length and reference.
-        let mut list: libc::attrlist = unsafe { std::mem::zeroed() };
-        list.bitmapcount = libc::ATTR_BIT_MAP_COUNT;
-        list.commonattr = libc::ATTR_CMN_NAME;
-        #[repr(C, align(4))]
-        struct Buf([u8; 1024]);
-        let mut buf = Buf([0; 1024]);
-        let got =
-            unsafe { libc::getattrlist(c.as_ptr(), (&raw mut list).cast(), buf.0.as_mut_ptr().cast(), buf.0.len(), libc::FSOPT_NOFOLLOW) };
-        if got != 0 {
-            return true;
-        }
-        // The length, then the name's reference: its offset from the reference, and its length
-        // with the NUL.
-        let at = |i: usize| u32::from_ne_bytes([buf.0[i], buf.0[i + 1], buf.0[i + 2], buf.0[i + 3]]);
-        let (offset, len) = (at(4) as i32, at(8) as usize);
-        let start = 4 + offset as usize;
-        let Some(stored) = buf.0.get(start..start + len.saturating_sub(1)) else { return true };
-        stored == name.as_bytes()
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = p;
-        true
-    }
+    p.file_name().is_none_or(|name| m2_os::fs::stored_name(p).is_none_or(|stored| stored == name))
 }
 
 /// Walk the folder `from` of the project at `dir` ("" for the project) into `out`.

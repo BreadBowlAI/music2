@@ -9,8 +9,8 @@
 //! changed in the last 2 seconds before it was hashed is hashed once more.
 //!
 //! The cache lives in memory, and on disk only where a host asks ([`HashCache::persist_in`]):
-//! `~/Library/Caches/music2/` for the app and the CLI. Nothing here picks a folder by itself,
-//! so tests never write outside their own.
+//! the OS's cache folder (`m2_os::dirs::cache`) for the app and the CLI. Nothing here picks a
+//! folder by itself, so tests never write outside their own.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -133,7 +133,8 @@ impl fmt::Debug for Sha {
     }
 }
 
-/// What identifies a file's version on disk without reading it.
+/// What identifies a file's version on disk without reading it: `m2_os::fs::Stamp`'s four
+/// numbers, in the form the cache file saves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct Stamp {
     size: u64,
@@ -144,16 +145,8 @@ struct Stamp {
 
 impl Stamp {
     fn of(meta: &std::fs::Metadata) -> Stamp {
-        let ns =
-            |t: std::io::Result<SystemTime>| t.ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos() as i128);
-        #[cfg(unix)]
-        let (ctime, inode) = {
-            use std::os::unix::fs::MetadataExt;
-            (meta.ctime() as i128 * 1_000_000_000 + meta.ctime_nsec() as i128, meta.ino())
-        };
-        #[cfg(not(unix))]
-        let (ctime, inode) = (ns(meta.created()), 0);
-        Stamp { size: meta.len(), mtime: ns(meta.modified()), ctime, inode }
+        let m2_os::fs::Stamp { size, mtime, ctime, inode } = m2_os::fs::Stamp::of(meta);
+        Stamp { size, mtime, ctime, inode }
     }
 }
 
@@ -192,8 +185,8 @@ impl HashCache {
         CACHE.get_or_init(HashCache::new)
     }
 
-    /// Keep the cache in `dir` (`~/Library/Caches/music2/`): load what is there, and save to it
-    /// from now on. A missing or unreadable cache file is an empty cache.
+    /// Keep the cache in `dir` (`m2_os::dirs::cache`): load what is there, and save to it from now
+    /// on. A missing or unreadable cache file is an empty cache.
     pub fn persist_in(&self, dir: &Path) {
         let file = dir.join(FILE);
         if let Ok(text) = std::fs::read_to_string(&file)

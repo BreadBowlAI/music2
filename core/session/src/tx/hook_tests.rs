@@ -372,6 +372,7 @@ fn a_lock_lost_while_the_host_heard_it_fails_the_commit() {
 #[test]
 fn hook_child() {
     let Ok(dir) = std::env::var("M2_TX_HOOK_DIR") else { return };
+    super::kill_tests::no_core_dump();
     let d = Dir(PathBuf::from(dir));
     let mut s = d.open();
     s.before_write(Some(Box::new(|_| std::process::abort())));

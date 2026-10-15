@@ -211,7 +211,7 @@ impl Render {
         if out.symlink_metadata().is_ok() {
             return Err(taken());
         }
-        // Named only if the name is still free when it is done (a hard link never replaces).
+        // Named only if the name is still free when it is done (a create-only rename never replaces).
         match self.write_new([out.to_path_buf()], progress) {
             Ok((_, r)) => Ok(r),
             Err(_) if out.symlink_metadata().is_ok() => Err(taken()),
@@ -268,7 +268,7 @@ impl Render {
         // A second handle on the same open file keeps the lock after the writer closes its own.
         // A disk that can't lock just goes unswept.
         let lock = file.try_clone()?;
-        let _ = lock.try_lock();
+        let _ = m2_os::fs::try_lock(&lock);
         let mut out = Out { wav: hound::WavWriter::new(BufWriter::new(file), spec)?, frames: 0, peak: 0.0 };
         let mut chunk = vec![[0.0f32; 2]; CHUNK];
         let start = self.first;
@@ -404,16 +404,9 @@ pub fn in_assets(project: &Path, out: &Path) -> Result<bool> {
     Ok(inside || made)
 }
 
-/// What a path names, whatever it is called: its device and inode.
-#[cfg(unix)]
-fn file_id(p: &Path) -> Option<(u64, u64)> {
-    use std::os::unix::fs::MetadataExt;
-    std::fs::metadata(p).ok().map(|m| (m.dev(), m.ino()))
-}
-
-#[cfg(not(unix))]
-fn file_id(p: &Path) -> Option<PathBuf> {
-    p.canonicalize().ok()
+/// What a path names, whatever it is called.
+fn file_id(p: &Path) -> Option<m2_os::fs::FileId> {
+    m2_os::fs::file_id(p).ok()
 }
 
 /// Where a render is written until it's complete: hidden, beside the file it becomes.
@@ -437,23 +430,19 @@ fn sweep(dir: &Path) {
         if !e.file_type().is_ok_and(|t| t.is_file()) || !e.file_name().to_str().is_some_and(is_part) {
             continue;
         }
-        if File::open(e.path()).is_ok_and(|f| f.try_lock().is_ok()) {
+        if File::open(e.path()).is_ok_and(|f| m2_os::fs::try_lock(&f).is_ok_and(|taken| taken)) {
             let _ = std::fs::remove_file(e.path());
         }
     }
 }
 
-/// Give the finished `part` the name `path` only if nothing has it: a hard link fails if
-/// something does, even a file made a moment ago. Then the part's own name goes.
+/// Give the finished `part` the name `path` only if nothing has it: a create-only rename fails if
+/// something does, even a file made a moment ago (OS-07).
 fn name_new(part: &Path, path: &Path) -> std::io::Result<()> {
-    match std::fs::hard_link(part, path) {
-        Ok(()) => {
-            let _ = std::fs::remove_file(part);
-            Ok(())
-        }
-        // A disk without hard links (FAT): look, then rename.
+    match m2_os::fs::rename(part, path, m2_os::fs::Rename::Excl) {
+        // A volume that can't rename that way: look, then rename.
         Err(e) if e.kind() == ErrorKind::Unsupported && path.symlink_metadata().is_err() => std::fs::rename(part, path),
-        Err(e) => Err(e),
+        named => named,
     }
 }
 
