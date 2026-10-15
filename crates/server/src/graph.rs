@@ -37,8 +37,7 @@
 //! counts at that rate.
 
 mod actor;
-#[cfg(target_os = "macos")]
-mod fsevents;
+mod events;
 pub mod lease;
 mod preview;
 mod watcher;

@@ -13,6 +13,7 @@ pub mod fs;
 pub mod host;
 pub mod main_loop;
 pub mod thread;
+pub mod watch;
 
 #[cfg_attr(target_os = "macos", path = "mac/mod.rs")]
 #[cfg_attr(target_os = "linux", path = "linux/mod.rs")]

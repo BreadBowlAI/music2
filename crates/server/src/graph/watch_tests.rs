@@ -1,6 +1,7 @@
 //! The watcher with real file system events (WRITE-19): what an idle tick does, the session's own
 //! writes, outside writes events name as one folder, a case-only rename, the watch lock never held
-//! over a walk, and events that miss changes giving way to walks.
+//! over a walk, events that miss changes giving way to walks, and folders made, filled or renamed
+//! after open, or filled past the hint limit, watched by events alone.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -270,4 +271,105 @@ fn an_event_wakes_an_idle_watcher_and_a_batch_wakes_it_when_due() {
     assert!(waited >= Duration::from_millis(100) && waited < Duration::from_secs(1), "woken when due: {waited:?}");
     assert!(graph.watch(), "taken in by the tick it was woken for");
     assert_eq!(revs(&graph).0, number + 1);
+}
+
+/// Only an event can make a tick look: the walk of everything comes every 60 s, not 5 s, and a
+/// change no event named is a miss after 300 ms.
+fn events_only(graph: &Graph) {
+    walked_once(graph);
+    assert!(stats(graph).events, "a temp folder is on a local volume");
+    let mut w = graph.inner.watch.lock();
+    let w = w.as_mut().unwrap();
+    let minute = Duration::from_secs(60);
+    (w.backstop, w.grace, w.next_walk) = (minute, Duration::from_millis(300), std::time::Instant::now() + minute);
+}
+
+/// Write `text` to `path` as an outside writer does, and wait at most 1.5 s for it to be taken in.
+fn taken_in(fixture: &Fixture, graph: &Graph, path: &str, text: &str) {
+    fixture.put(path, text);
+    let t = std::time::Instant::now();
+    let taken = |g: &Graph| accepted_at(g, path).0.as_deref() == Some(text);
+    watching(graph, 1500, taken);
+    assert!(taken(graph), "{path} not taken in after {:?}: {:?}", t.elapsed(), stats(graph));
+}
+
+/// Past the grace, no change counts as missed, and events are still trusted.
+fn no_misses(graph: &Graph) {
+    watching(graph, 600, |_| false);
+    let s = stats(graph);
+    assert!(s.events && s.misses == 0, "{s:?}");
+}
+
+// WRITE-19: a folder made after the project opened is watched from its own event: a file written
+// there later, and written again, is named each time, well before the walk of everything.
+#[test]
+fn a_folder_made_after_open_is_watched() {
+    let fixture = Fixture::new();
+    fixture.write(KICK);
+    let graph = fixture.open();
+    events_only(&graph);
+    std::fs::create_dir(fixture.0.join("tracks")).unwrap();
+    watching(&graph, 300, |_| false);
+    taken_in(&fixture, &graph, "tracks/extra.ts", "export const extra = 1;\n");
+    taken_in(&fixture, &graph, "tracks/extra.ts", "export const extra = 2;\n");
+    no_misses(&graph);
+}
+
+// WRITE-19: folders made and filled at once, three deep, are watched before they are listed: the
+// file written before its folder was watched is taken in from the folder's event, and written
+// again it is named.
+#[test]
+fn a_folder_made_and_filled_at_once_is_watched() {
+    let fixture = Fixture::new();
+    fixture.write(KICK);
+    let graph = fixture.open();
+    events_only(&graph);
+    taken_in(&fixture, &graph, "lib/a/b/c.ts", "export const c = 1;\n");
+    taken_in(&fixture, &graph, "lib/a/b/c.ts", "export const c = 2;\n");
+    no_misses(&graph);
+}
+
+// WRITE-19: a folder renamed in the project is watched under its new name, the folders under it
+// too: a file written there is named by its new path.
+#[test]
+fn a_folder_renamed_in_the_project_is_watched_by_its_new_name() {
+    let fixture = Fixture::new();
+    fixture.write(KICK);
+    fixture.put("tracks/drums/beat.ts", "export const beat = 1;\n");
+    let graph = fixture.open();
+    events_only(&graph);
+    std::fs::rename(fixture.0.join("tracks"), fixture.0.join("parts")).unwrap();
+    let moved = |g: &Graph| accepted_at(g, "parts/drums/beat.ts").0.is_some() && accepted_at(g, "tracks/drums/beat.ts").0.is_none();
+    watching(&graph, 1500, moved);
+    assert!(moved(&graph), "{:?}", stats(&graph));
+    taken_in(&fixture, &graph, "parts/drums/beat.ts", "export const beat = 2;\n");
+    no_misses(&graph);
+}
+
+// WRITE-19: a burst of more than 4,096 tracked files in a new folder (a checkout) is more than
+// the watcher keeps names for: one walk of everything takes it in, and lost or dropped names are
+// no misses. A file of the burst written again is named.
+#[test]
+fn a_burst_past_the_hint_limit_is_walked_and_never_missed() {
+    let fixture = Fixture::new();
+    fixture.write(KICK);
+    let graph = fixture.open();
+    events_only(&graph);
+    let flush = |g: &Graph| g.inner.watch.lock().as_ref().unwrap().flush();
+    std::fs::create_dir(fixture.0.join("burst")).unwrap();
+    // The folder is watched before it fills, so each file is named, and the names overflow.
+    flush(&graph);
+    let n = events::MAX_HINTS + 100;
+    for i in 0..n {
+        std::fs::write(fixture.0.join(format!("burst/f{i:04}.ts")), format!("export const f = {i};\n")).unwrap();
+    }
+    flush(&graph);
+    let all = |g: &Graph| {
+        g.inspect(|a| a.open.as_ref().unwrap().session.accepted().snapshot.files.keys().filter(|p| p.starts_with("burst")).count())
+    };
+    watching(&graph, 20_000, |g| all(g) == n);
+    assert_eq!(all(&graph), n, "{:?}", stats(&graph));
+    assert!(stats(&graph).rescans > 0, "the walk was a rescan: {:?}", stats(&graph));
+    taken_in(&fixture, &graph, "burst/f0007.ts", "export const f = -7;\n");
+    no_misses(&graph);
 }

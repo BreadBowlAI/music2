@@ -1,6 +1,6 @@
-//! G11's watcher (WRITE-19; the step 6 design's 24: over 2 ms per poll, FSEvents with a slow walk
-//! as the fallback): p16 with 5,000 files in `assets/`, playing, its watcher ticked as the server
-//! ticks it.
+//! G11's watcher (WRITE-19; the step 6 design's 24: over 2 ms per poll, file-system events with a
+//! slow walk as the fallback): p16 with 5,000 files in `assets/`, playing, its watcher ticked as
+//! the server ticks it.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -158,7 +158,7 @@ pub fn watcher(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         let graph = open_with(graph, &dir, &song)?;
         let stats = graph.watch_stats().context("no watcher")?;
         if !walk {
-            out.check("watched by FSEvents (a local volume)", stats.events, if stats.events { "FSEvents" } else { "walks alone" });
+            out.check("watched by file-system events (a local volume)", stats.events, if stats.events { "events" } else { "walks alone" });
         }
         let ticker = Ticker::start(&graph);
         let before = graph.watch_stats().context("no watcher")?;

@@ -4,14 +4,14 @@
 //! told to the rule by their stamps, so they make no batch.
 //!
 //! What a tick looks at:
-//! - With events (FSEvents, on a local volume): the paths they named, the open batch's, and what
-//!   the session just wrote, each stat'd. An idle tick stats nothing. The whole project is walked
-//!   at open, every 5 s as a backstop, when events were dropped or too many came, and whenever a
-//!   batch is due, since only a poll that saw everything makes a batch ready (a late event for
-//!   another half of a change must never let the first half play alone).
-//! - Without (a network volume, where events report only this Mac's writes; FSEvents that won't
-//!   start; events that missed changes twice in 10 minutes): a walk of everything, every tick
-//!   while a batch is open, else every 50 ms to 1 s, so it uses at most about 5% of a core.
+//! - With events (the OS's file-system events, on a local volume): the paths they named, the open
+//!   batch's, and what the session just wrote, each stat'd. An idle tick stats nothing. The whole
+//!   project is walked at open, every 5 s as a backstop, when events were lost or too many came,
+//!   and whenever a batch is due, since only a poll that saw everything makes a batch ready (a
+//!   late event for another half of a change must never let the first half play alone).
+//! - Without (a network volume, where events report only this computer's writes; events that
+//!   won't start; events that missed changes twice in 10 minutes): a walk of everything, every
+//!   tick while a batch is open, else every 50 ms to 1 s, so it uses at most about 5% of a core.
 //!
 //! A tick holds the watch lock only to plan what to look at and to apply what it found, never over
 //! a stat ([`Plan::look`]): the actor, which tells it what the session wrote after every job,
@@ -27,8 +27,7 @@ use m2_session::Revision;
 use m2_session::watch::{self, Git, Listing, Poll, Scope, Settle, Stamp, Track};
 use m2_song::{AssetName, DataPath, LaneKind, Sha};
 
-#[cfg(target_os = "macos")]
-use super::fsevents;
+use super::events;
 
 /// How often the whole project is walked while events name what changes.
 const BACKSTOP: Duration = Duration::from_secs(5);
@@ -76,9 +75,8 @@ impl Wake {
 
 /// Where a tick learns what changed.
 enum Source {
-    /// File system events name the paths.
-    #[cfg(target_os = "macos")]
-    Events(Arc<fsevents::Stream>),
+    /// File-system events name the paths.
+    Events(Arc<events::Stream>),
     /// Only a walk of everything.
     Walk,
 }
@@ -96,6 +94,8 @@ pub struct WatchStats {
     pub idle: u64,
     /// Changes a walk found that no event named in time.
     pub misses: u64,
+    /// Walks of everything that lost events asked for (their changes are no misses).
+    pub rescans: u64,
     /// How long the last walk of everything took, in milliseconds.
     pub last_walk_ms: f64,
 }
@@ -177,20 +177,16 @@ fn source(dir: &Path, walk: bool, wake: &Arc<Wake>) -> Source {
     if walk || std::env::var("M2_WATCH").as_deref() == Ok("walk") {
         return Source::Walk;
     }
-    #[cfg(target_os = "macos")]
-    {
-        let why = if !m2_session::lock::local_volume(dir) {
-            "it is on a network volume, where file system events name only this Mac's writes"
-        } else {
-            // Events spell the folder as the disk does.
-            match dir.canonicalize().ok().and_then(|d| fsevents::Stream::start(&d, wake.clone())) {
-                Some(s) => return Source::Events(Arc::new(s)),
-                None => "FSEvents didn't start",
-            }
-        };
-        eprintln!("music2: watching {} by walking it: {why}", dir.display());
-    }
-    let _ = (dir, wake);
+    let why = if !m2_session::lock::local_volume(dir) {
+        "it is on a network volume, where file-system events name only this computer's writes".to_string()
+    } else {
+        // Events spell the folder as the disk does.
+        match dir.canonicalize().and_then(|d| events::Stream::start(&d, wake.clone())) {
+            Ok(s) => return Source::Events(Arc::new(s)),
+            Err(e) => format!("file-system events didn't start ({e})"),
+        }
+    };
+    eprintln!("music2: watching {} by walking it: {why}", dir.display());
     Source::Walk
 }
 
@@ -204,12 +200,13 @@ pub(crate) struct Plan {
     all: bool,
     /// Walk everything unless git is writing: the open batch is due.
     due: bool,
+    /// Lost events asked for the walk: what it finds is no miss.
+    rescan: bool,
     /// Else these paths, each with what is under it.
     paths: BTreeSet<String>,
     /// The paths events named.
     named_by_events: BTreeSet<String>,
-    #[cfg(target_os = "macos")]
-    stream: Option<Arc<fsevents::Stream>>,
+    stream: Option<Arc<events::Stream>>,
     #[cfg(test)]
     looking: Option<Arc<dyn Fn() + Send + Sync>>,
     #[cfg(test)]
@@ -252,7 +249,6 @@ impl Plan {
         let git = watch::git(self.git.as_deref());
         let all = self.all || (self.due && !git.busy());
         let (listing, scope) = if all {
-            #[cfg(target_os = "macos")]
             if let Some(s) = &self.stream {
                 s.flush();
             }
@@ -263,19 +259,18 @@ impl Plan {
         let took = t.elapsed();
         // What events named by the end of a walk: a change it found that they haven't is either on
         // its way (in a later tick's hints) or missed.
-        #[allow(unused_mut)]
-        let mut after = BTreeSet::new();
-        #[cfg(target_os = "macos")]
-        if let (true, Some(s)) = (all, &self.stream) {
-            s.flush();
-            let h = s.take();
-            after = h.paths.keys().cloned().collect();
-            s.put_back(h);
-            #[cfg(test)]
-            if self.deaf {
-                after.clear();
+        let after = match (all, &self.stream) {
+            (true, Some(s)) => {
+                s.flush();
+                let h = s.take();
+                let after = h.paths.clone();
+                s.put_back(h);
+                after
             }
-        }
+            _ => BTreeSet::new(),
+        };
+        #[cfg(test)]
+        let after = if self.deaf { BTreeSet::new() } else { after };
         Looked { listing, scope, git, after, took }
     }
 }
@@ -332,9 +327,9 @@ impl Watch {
             git: self.git.clone(),
             all: now >= self.next_walk,
             due: false,
+            rescan: false,
             paths: BTreeSet::new(),
             named_by_events: BTreeSet::new(),
-            #[cfg(target_os = "macos")]
             stream: None,
             #[cfg(test)]
             looking: self.looking.clone(),
@@ -342,18 +337,15 @@ impl Watch {
             deaf: self.deaf,
         };
         match &self.source {
-            #[cfg(target_os = "macos")]
             Source::Events(stream) => {
-                #[allow(unused_mut)]
-                let mut h = stream.take();
+                let h = stream.take();
                 #[cfg(test)]
-                if self.deaf {
-                    h = fsevents::Hints::default();
-                }
+                let h = if self.deaf { events::Hints::default() } else { h };
                 self.stats.hints = stream.events();
                 plan.all |= h.rescan;
+                plan.rescan = h.rescan;
                 plan.due = self.settle.due(now);
-                plan.named_by_events = h.paths.into_keys().collect();
+                plan.named_by_events = h.paths;
                 plan.stream = Some(stream.clone());
                 // Their events may come once they are closed: each one that does is no miss.
                 self.unnamed.retain(|(p, _)| !covered(p, &plan.named_by_events));
@@ -398,11 +390,15 @@ impl Watch {
             self.stats.last_walk_ms = looked.took.as_secs_f64() * 1e3;
             self.next_walk = now
                 + match self.source {
-                    #[cfg(target_os = "macos")]
                     Source::Events(_) => self.backstop,
                     Source::Walk => (looked.took * 20).clamp(WALK_MIN, WALK_MAX),
                 };
-            if self.stats.events {
+            if plan.rescan {
+                // Lost events asked for this walk: what it found was never named, and neither
+                // was what waits for its event. Neither is a miss.
+                self.stats.rescans += 1;
+                self.unnamed.clear();
+            } else if self.stats.events {
                 // A change only the walk found: unless an event for it is on its way, events
                 // missed it. What the tick looked at anyway (the session's own writes, an asset a
                 // lane names now) changed as expected.
@@ -451,6 +447,14 @@ impl Watch {
     pub fn wake_at(&self) -> (Option<Instant>, bool) {
         let due = self.settle.due_at().filter(|at| *at > self.last_tick);
         (due, !self.settle.settling())
+    }
+
+    /// Tests: have every event for a change made before now heard.
+    #[cfg(test)]
+    pub(crate) fn flush(&self) {
+        if let Source::Events(s) = &self.source {
+            s.flush();
+        }
     }
 
     /// Look at `paths` again at the next tick, whether events name them or not.

@@ -1,7 +1,8 @@
-//! Linux: thread identity, the disk, this machine, and the folders. The main loop is in
-//! `main_loop.rs`.
+//! Linux: thread identity, the disk, this machine, and the folders. The main loop and file-system
+//! events are in `main_loop.rs` and `watch.rs`.
 
 pub(crate) mod main_loop;
+pub(crate) mod watch;
 
 use std::ffi::OsString;
 use std::fs::File;
