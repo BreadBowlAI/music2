@@ -5,3 +5,9 @@ with layout P1 (4 runs for the drop's three values, which the harness's final fo
 The record's machine (last on its line) was written at step 7's merge, as `m2_os::process::machine()`
 names that Mac: a run is judged against this record only on the same machine (PLAT-1).
 store-record count=6058.000 build_ms=103.335 footprint_mb=554.124 reserved_gib=24610.625 reserved2_gib=49636.505 limit_gib=131067.929 side_by_side=4.000 mean_us=2194.878 p99_us=3082.562 max_us=4782.520 drop_ms=102.247 audio_base_us=85.395 audio_drop_us=15.895 machine=MacBookPro18,1, macOS 26.6.2, Apple M1 Pro, aarch64, 10 threads
+P1 against S on the same Mac, the estimate G7f part 1's verdict adds to what the app's layout costs
+over P1 (each run measures that in pairs, RENDER-32). From the campaign above, as RENDER-32's Today
+line records it (16 runs of each, alternated): P1's mean block +32 µs (2,227 against 2,195 by the
+medians; the mean is what the gate judges), its p99 block +35 µs paired (printed), and its drop
+raising the audio-like thread's p99 no more than S's (4 runs: neither raised it, so 0 µs).
+store-p1 mean_us=32.000 p99_us=35.000 raise_us=0.000 machine=MacBookPro18,1, macOS 26.6.2, Apple M1 Pro, aarch64, 10 threads

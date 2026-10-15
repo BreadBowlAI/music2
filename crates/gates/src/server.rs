@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use m2_editor::Gestures;
+use m2_runtime::Count;
 use m2_server::graph::{EditTiming, Graph};
 use m2_song::NoteClip;
 use m2_song::lane::{LaneData, LaneKind};
@@ -329,9 +330,8 @@ pub fn add_effect(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     out.info("G7a: heard after the compile finished (the contract's own start)", Summary::of(&since_compile));
     let heard = Summary::of(&asked);
     out.check("G7a: heard within 200 ms of the request, its compile included", heard.max <= 200.0, heard);
-    // The delay's own instances only: the pluck it wraps, and everything else, goes on (ID-13).
-    let most = fresh.iter().copied().max().unwrap_or(0);
-    out.check("G7a: at most 3 instances made new per edit", most <= 3, format!("{fresh:?} made new by the {} edits", fresh.len()));
+    let (ok, made) = made_new(&fresh);
+    out.check("G7a: at most 3 instances made new per edit, the pluck's voice pool never", ok, made);
     out.check(
         "no jump back",
         back <= 1e-9,
@@ -348,6 +348,20 @@ pub fn add_effect(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         }
     }
     Ok(out)
+}
+
+/// G7a's rule on what each edit made new (design §12.1, ID-13): the delay's own instances only, at
+/// most 3, and no voice pool, so the pluck it wraps, and everything else, goes on. The plan counts
+/// a whole voice pool as one, so "at most 3" alone would pass a pluck that starts again.
+fn made_new(fresh: &[Count]) -> (bool, String) {
+    let ok = !fresh.is_empty() && fresh.iter().all(|c| c.polys == 0 && c.total() <= 3);
+    let each = fresh.iter().map(|c| {
+        let kinds = [(c.kernels, "kernel"), (c.polys, "voice pool"), (c.plugins, "plugin"), (c.rings, "feedback ring")];
+        let named: Vec<String> =
+            kinds.iter().filter(|(n, _)| *n > 0).map(|(n, what)| format!("{n} {what}{}", if *n > 1 { "s" } else { "" })).collect();
+        if named.is_empty() { "none".to_string() } else { named.join(" and ") }
+    });
+    (ok, format!("made new by the {} edits: {}", fresh.len(), each.collect::<Vec<_>>().join("; ")))
 }
 
 /// G5 on `examples/with-plugins`, playing from its start: a delay after the kick, then after the
@@ -1157,17 +1171,20 @@ fn read_wav(path: &Path) -> Result<Vec<[f32; 2]>> {
 /// `examples/with-plugins` pauses playback, reuses its plugin instances, and playback resumes where
 /// it was with their state intact. Through the server's own export (`m2_server::export::start`),
 /// the song playing from 0:02 in real time on a player whose output the gate keeps (the silent
-/// player's buffer); skipped without Surge XT and Airwindows on `CLAP_PATH`.
-/// - Pauses: the engine said it held before the export's first host call; `paused: "exporting"`
-///   was published while it ran; the engine clock and the transport didn't move meanwhile, and the
-///   output was silence.
-/// - Reuses: no instance created, and the plan's instances before and after are the same.
+/// player's buffer), the export started about a second later, just after a kick's attack; skipped
+/// without Surge XT and Airwindows on `CLAP_PATH`.
+/// - Pauses: `paused: "exporting"` was published while it ran; the engine clock and the transport
+///   didn't move meanwhile, and the output was silence. That the engine held before the export's
+///   first host call is printed: the probe test proves the order.
+/// - Reuses: both instances borrowed, none created, and the plan's instances before and after are
+///   the same.
 /// - State intact: each instance's saved state before the export equals the one after the first
 ///   resumed block. The gate's copy holds the lead's cutoff lane still, so the code's values are
 ///   the same at both saves. Surge's saved state is committed, as an autosave will, so the
 ///   instance holds its committed state and the export loads nothing: the usual path.
 /// - Resumes: the engine resumes at the clock it held, within two device buffers of the instances
-///   being given back, with no step at the fade out or the fade in over G6's bound.
+///   being given back, with no step at the fade out or the fade in over G6's bound: twice the
+///   music's own largest step over the 200 ms on each side of the pause.
 /// - The file: as long as `m2 render`'s within a second, its level in each second of the song
 ///   within 1 dB of it, its release tail and the lead between the kicks within 6 dB, and its
 ///   onsets within 10 ms (plugins aren't bit-exact from one instance to the next).
@@ -1213,6 +1230,11 @@ pub fn export(lab: &mut Lab, _o: &Opts) -> Result<Outcome> {
     graph.seek(song.beat(2 * song.rate as u64))?;
     graph.transport("play")?;
     std::thread::sleep(Duration::from_secs(1));
+    // Started 30 to 50 ms after a kick's onset, the hold a callback or two later lands on its body,
+    // past its attack: a kick's attack inside a fade would be the music's own step, not the fade's.
+    // The kick (a std voice, kept by the engine) still sounds at the resume, so the fade in is
+    // heard: the export resets Surge XT's voices, so the lead's chord doesn't sound there.
+    wait(Duration::from_secs(2), || (0.06..0.1).contains(&graph.status().beat.fract())).context("the playhead never reached a kick")?;
     let made = created();
 
     // The export, with the playhead and the engine sampled every millisecond meanwhile.
@@ -1243,17 +1265,17 @@ pub fn export(lab: &mut Lab, _o: &Opts) -> Result<Outcome> {
         format!("{:.0} ms; paused for {:.0} ms", took.as_secs_f64() * 1e3, b.given_back_ns.saturating_sub(b.held_ns) as f64 / 1e6),
     );
 
-    // Pauses.
-    out.check(
+    // Pauses. The export's own thread stamps both times, the hold's once it saw the engine hold, so
+    // their order is printed, not judged: the call order is proved by the probe plugin's log in
+    // `an_export_borrows_and_gives_back_the_live_instances` (crates/server/src/graph/tests.rs).
+    out.info(
         "pauses: the engine said it held before the export's first host call",
-        b.held_ns > 0 && b.first_call_ns >= b.held_ns && b.taken == 2 && b.anew == 0,
-        format!(
-            "held at {} ns, first call {} ns later; {} taken, {} anew",
-            b.held_ns,
-            b.first_call_ns.saturating_sub(b.held_ns),
-            b.taken,
-            b.anew
-        ),
+        format!("held at {} ns, first call {} ns later", b.held_ns, b.first_call_ns.saturating_sub(b.held_ns)),
+    );
+    out.check(
+        "reuses: both plugin instances borrowed, none made anew for the export",
+        b.held_ns > 0 && b.taken == 2 && b.anew == 0,
+        format!("{} taken, {} anew", b.taken, b.anew),
     );
     let still = paused.windows(2).all(|w| w[0] == w[1]);
     out.check(
@@ -1306,13 +1328,25 @@ pub fn export(lab: &mut Lab, _o: &Opts) -> Result<Outcome> {
             2.0 * period_ns as f64 / 1e6
         ),
     );
-    let own = max_step(span(&tape_frames, hold_at.saturating_sub(song.rate as usize / 5) as u64, hold_at as u64)).0;
+    // The music's own largest step on both sides of the pause: 200 ms before the fade out, and
+    // 200 ms after the fade in.
+    let around = song.rate as usize / 5;
+    let own = max_step(span(&tape_frames, hold_at.saturating_sub(around) as u64, hold_at as u64))
+        .0
+        .max(max_step(span(&tape_frames, (resume_at + fade) as u64, (resume_at + fade + around) as u64)).0);
     let down = max_step(span(&tape_frames, hold_at.saturating_sub(1) as u64, (hold_at + fade + 1) as u64)).0;
     let up = max_step(span(&tape_frames, resume_at.saturating_sub(1) as u64, (resume_at + fade + 1) as u64)).0;
+    let beat = paused.first().map_or(0.0, |p| song.beat((p.1 * song.rate as f64).round() as u64));
+    // Sound right after the fade in, or a missing fade there would go unheard.
+    let heard = db(crate::signal::rms(span(&tape_frames, (resume_at + fade) as u64, (resume_at + 2 * fade) as u64)));
     out.check(
         "resumes: no step at the fade out or the fade in over G6's bound",
-        own > 0.0 && down <= 2.0 * own && up <= 2.0 * own,
-        format!("{down:.4} out, {up:.4} in; twice the music's own over the 200 ms before: {:.4}", 2.0 * own),
+        own > 0.0 && heard > -60.0 && down <= 2.0 * own && up <= 2.0 * own,
+        format!(
+            "{down:.4} out, {up:.4} in; twice the music's own over the 200 ms each side: {:.4} (held at beat {beat:.2}, {:.0} ms after a kick; {heard:.1} dBFS just after the fade in)",
+            2.0 * own,
+            beat.fract() * song.data.tempo().seconds_at(1.0) * 1e3
+        ),
     );
 
     // The file, against `m2 render`'s (new instances).
@@ -1391,4 +1425,24 @@ pub fn export(lab: &mut Lab, _o: &Opts) -> Result<Outcome> {
     );
     graph.close();
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // G7a (design §12.1), ID-13: an added delay makes its one kernel new and nothing else. Slice 2's
+    // names, which started the wrapped pluck again, also made its voice pool new: that must fail,
+    // though it is still "at most 3" as the plan counts (a whole voice pool is one).
+    #[test]
+    fn a_pluck_made_new_fails_g7a() {
+        let delay = Count { kernels: 1, ..Count::default() };
+        assert!(made_new(&[delay, Count::default(), delay]).0);
+        let restarted = Count { kernels: 1, polys: 1, ..Count::default() };
+        let (ok, said) = made_new(&[delay, restarted]);
+        assert!(!ok && restarted.total() <= 3, "{said}");
+        assert!(said.ends_with("1 kernel; 1 kernel and 1 voice pool"), "{said}");
+        assert!(!made_new(&[Count { kernels: 4, ..Count::default() }]).0, "more than 3");
+        assert!(!made_new(&[]).0, "no edit");
+    }
 }

@@ -2446,6 +2446,7 @@ dependencies = [
  "crossbeam-channel",
  "libm",
  "m2-ir",
+ "m2-os",
  "m2-plugins",
  "m2-runtime",
  "m2-session",

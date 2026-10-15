@@ -5,3 +5,8 @@ in callbacks of 512 frames at 48 kHz. Each value is the median of 16 runs altern
 The record's machine (last on its line) was written at step 7's merge, as `m2_os::process::machine()`
 names that Mac: a run is judged against this record only on the same machine (PLAT-1).
 callback-record p99_us=12909.604 mean_us=8935.735 max_us=17022.895 machine=MacBookPro18,1, macOS 26.6.2, Apple M1 Pro, aarch64, 10 threads
+P1 with the arena against HEAD on the same Mac, the estimate G7f part 2's verdict adds to what the
+app's layout costs over P1 (each run measures that in pairs, RENDER-32). From the campaign above,
+as RENDER-32's Today line records it (16 runs of each, alternated): the mean callback +187 µs paired
+(what the gate judges), and the p99 +232 µs paired (printed).
+callback-p1 p99_us=232.000 mean_us=187.000 machine=MacBookPro18,1, macOS 26.6.2, Apple M1 Pro, aarch64, 10 threads

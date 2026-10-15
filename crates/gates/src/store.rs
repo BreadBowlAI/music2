@@ -1,28 +1,32 @@
 //! G7f, part 1 (step 7's design, §11): what one wasmtime `Store` per kernel instance costs at p50,
-//! measured on the runtime itself, with no server and no device, and the store layout chosen by a
+//! measured on the runtime itself, with no server and no device, and the store layout judged by a
 //! rule written down before anything was measured (RENDER-32).
 //!
 //! It uses only what HEAD `8aa301e` already had (`Renderer::new`, `set_transport`, `render_block`,
 //! `Drop`, and the `Flat` for counting), so this same file ran in a worktree at HEAD to record
-//! layout S, one `Store` per renderer, and measures whatever layout the tree it is built in has.
-//! S's record is read from `store-S.txt` beside this crate's manifest, or from `$M2_STORE_S`; every
-//! run prints its own record line (`store-record …`), which is what that file holds. A record names
-//! its machine, and the rule compares only with S's record from the same machine (PLAT-1).
+//! layout S, one `Store` per renderer. S's record is read from `store-S.txt` beside this crate's
+//! manifest, or from `$M2_STORE_S`; every run prints its own record line (`store-record …`), which
+//! is what that file holds. A record names its machine, and the rule compares only with S's record
+//! from the same machine (PLAT-1).
 //!
-//! The rule (§11.3): choose one `Store` per kernel instance (P1) unless one of these fails
-//! against S:
-//! - the p99 block time is worse by more than 80 µs, 3% of a 2.67 ms block;
-//! - the footprint is worse by more than 64 MB;
-//! - fewer than 2 renderers build side by side, or the address space the process holds with 2
-//!   renderers exceeds 25% of its limit;
-//! - p50's full build, what opening a project costs, is worse by more than 50%.
+//! The app's layout is the owner's (`m2_runtime::packages::Layout::P2`: 32 MiB reserved per
+//! memory, bounds-checked). Its build and memory are measured once. Its block time and its drop are
+//! measured in pairs with step 7's first layout, P1 (4 GiB reserved per memory, unchecked), in turns
+//! in one process (`paired`), and judged as their difference plus P1's cost over S on the
+//! reference Mac, recorded in `store-S.txt` from the campaign that measured P1.
+//!
+//! The rule (§11.3), against S:
+//! - the block time is worse by no more than 80 µs, 3% of a 2.67 ms block. The rule names the p99,
+//!   but even paired it moves by more than that between pairs, so the mean is judged and the p99's
+//!   estimate printed;
+//! - the footprint is worse by no more than 64 MB;
+//! - at least 2 renderers build side by side, and the address space the process holds with 2
+//!   renderers is at most 25% of its limit;
+//! - p50's full build, what opening a project costs, is worse by no more than 50%.
 //!
 //! The two memory rules fail when the OS doesn't say what the process holds: they never pass
-//! unmeasured (`m2_os::process::memory`).
-//!
-//! If P1 fails, wasmtime's pooling allocator (P3) is measured, then a smaller memory reservation
-//! (P2), and the first that passes is chosen; a shared store never is. Batched drops are built
-//! only if the chosen layout's drop raises an audio-like thread's p99 more than S's drop does.
+//! unmeasured (`m2_os::process::memory`). Batched drops are needed only if the app's layout's drop
+//! raises an audio-like thread's p99 more than S's drop does, in every pair.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,9 +35,11 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, bail};
 use m2_ir::{FNode, FOp};
 use m2_os::process::{self, Memory};
+use m2_runtime::packages::Layout;
 use m2_runtime::{BLOCK, Renderer, Transport};
 
 use crate::gates::Opts;
+use crate::paired::Diffs;
 use crate::report::{Outcome, same_machine};
 use crate::{Lab, songs};
 
@@ -44,6 +50,13 @@ const FROM_SECONDS: f64 = 180.0;
 const BLOCKS: usize = 11_250;
 /// The most p50 renderers built side by side.
 const SIDE_BY_SIDE: usize = 4;
+/// Pairs of runs, each the app's layout and P1 over the same 30 s in turns (`paired`): about 5
+/// minutes on the reference Mac. On a quiet Linux machine the pairs' mean differences stayed
+/// within ±12 µs, so their median moves by a few µs from run to run.
+const PAIRS: usize = 5;
+/// Blocks one layout renders before the other's turn: 1 s, so a change in the machine's load
+/// lasting longer than that meets both alike.
+const TURN: usize = 375;
 /// Why the memory rules fail where the OS doesn't say what the process holds.
 const UNMEASURED: &str = "not measured: this OS doesn't say what the process holds";
 
@@ -163,14 +176,50 @@ fn instances(nodes: &[FNode], order: &[usize]) -> usize {
         .sum()
 }
 
-/// The rule (§11.3) on `rec`: each check into `out`, and whether all passed. A comparison with S
-/// needs S's record from this machine, else it is skipped with why (PLAT-1). The memory rules fail
-/// when the memory wasn't measured (`memory`: before and after one renderer; `with_two`: with two
+/// P1 against S on the reference Mac, from its campaign of alternated runs (RENDER-32): what
+/// P1's mean and p99 block, and its drop's raise of another thread's p99, cost over S's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct P1VsS {
+    pub mean_us: f64,
+    pub p99_us: f64,
+    pub raise_us: f64,
+}
+
+impl P1VsS {
+    /// The first `store-p1` line of `text`, whose machine must be S's record's.
+    pub fn parse(text: &str) -> Option<P1VsS> {
+        let (values, machine) = crate::paired::line(text, "store-p1")?;
+        let s = Record::parse(text)?;
+        same_machine(&s.machine, &machine).then_some(())?;
+        let get = |k| crate::paired::value(&values, k);
+        Some(P1VsS { mean_us: get("mean_us")?, p99_us: get("p99_us")?, raise_us: get("raise_us")? })
+    }
+}
+
+/// Whether batched drops are needed (§11.3): only if the app's layout's drop raised the audio-like
+/// thread's p99 more than S's would, P1's estimated as its own plus `recorded`, in every pair. A
+/// raise of a few µs either way is the thread's own jitter, and every pair agreeing by chance is
+/// a 1 in 32 event with 5 pairs.
+fn needed(raises: &Diffs, recorded: f64) -> bool {
+    !raises.0.is_empty() && raises.0.iter().all(|r| r + recorded > 0.0)
+}
+
+/// The rule (§11.3) on `rec`, and on `[mean, p99]`, the app's layout's block times against P1's
+/// pair by pair: each check into `out`, and whether all passed. A comparison with S needs S's
+/// records from this machine, else it is skipped with why (PLAT-1). The memory rules fail when the
+/// memory wasn't measured (`memory`: before and after one renderer; `with_two`: with two
 /// renderers), whatever S is: they never pass unmeasured.
-fn rule(out: &mut Outcome, rec: &Record, s: &Result<Record, String>, memory: bool, with_two: bool) -> bool {
-    let against_s = |out: &mut Outcome, name: &str, judge: &dyn Fn(&Record) -> (bool, String)| match s {
-        Ok(s) => {
-            let (ok, detail) = judge(s);
+fn rule(
+    out: &mut Outcome,
+    rec: &Record,
+    [mean, p99]: [&Diffs; 2],
+    s: &Result<(Record, P1VsS), String>,
+    memory: bool,
+    with_two: bool,
+) -> bool {
+    let against_s = |out: &mut Outcome, name: &str, judge: &dyn Fn(&Record, &P1VsS) -> (bool, String)| match s {
+        Ok((s, p1)) => {
+            let (ok, detail) = judge(s, p1);
             out.check(name, ok, detail)
         }
         Err(why) => {
@@ -178,12 +227,13 @@ fn rule(out: &mut Outcome, rec: &Record, s: &Result<Record, String>, memory: boo
             false
         }
     };
-    let mut pass = against_s(out, "p99 block within S + 80 µs", &|s| {
-        (rec.p99_us <= s.p99_us + 80.0, format!("{:.0} µs against S's {:.0} µs", rec.p99_us, s.p99_us))
-    });
+    // The rule bounds the p99 block, but even the pairs' p99 moves by more than 80 µs: the mean is
+    // judged with the same bound, and the p99's estimate printed (`paired`).
+    let mut pass =
+        against_s(out, "block within S + 80 µs, by the mean", &|_, p1| crate::paired::judge([mean, p99], [p1.mean_us, p1.p99_us], 80.0));
     let footprint = "footprint within S + 64 MB";
     pass &= if memory {
-        against_s(out, footprint, &|s| {
+        against_s(out, footprint, &|s, _| {
             (rec.footprint_mb <= s.footprint_mb + 64.0, format!("{:.0} MB against S's {:.0} MB", rec.footprint_mb, s.footprint_mb))
         })
     } else {
@@ -195,24 +245,15 @@ fn rule(out: &mut Outcome, rec: &Record, s: &Result<Record, String>, memory: boo
         (false, _) => out.check(side, false, format!("{} built", rec.side_by_side)),
         (true, false) => out.check(side, false, format!("{} built; {UNMEASURED}", rec.side_by_side)),
         (true, true) => {
-            let of_s = s.as_ref().map_or(String::new(), |s| format!(" (S: {:.1}%)", 100.0 * s.reserved2_gib / s.limit_gib));
+            let of_s = s.as_ref().map_or(String::new(), |(s, _)| format!(" (S: {:.1}%)", 100.0 * s.reserved2_gib / s.limit_gib));
             let held = 100.0 * rec.reserved2_gib / rec.limit_gib;
-            out.check(side, rec.reserved2_gib <= 0.25 * rec.limit_gib, format!("{} built; {held:.1}%{of_s}", rec.side_by_side))
+            out.check(side, rec.reserved2_gib <= 0.25 * rec.limit_gib, format!("{} built; {held:.2}%{of_s}", rec.side_by_side))
         }
     };
-    pass &= against_s(out, "full build within 1.5 × S", &|s| {
+    pass &= against_s(out, "full build within 1.5 × S", &|s, _| {
         (rec.build_ms <= 1.5 * s.build_ms, format!("{:.0} ms against S's {:.0} ms", rec.build_ms, s.build_ms))
     });
     pass
-}
-
-/// Nearest rank: the smallest value at or above share `p`.
-fn rank(v: &mut [f64], p: f64) -> f64 {
-    if v.is_empty() {
-        return 0.0;
-    }
-    v.sort_by(f64::total_cmp);
-    v[((p * v.len() as f64).ceil() as usize).clamp(1, v.len()) - 1]
 }
 
 const MB: f64 = 1024.0 * 1024.0;
@@ -230,10 +271,10 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     // Build: one renderer, then more side by side.
     let before = process::memory();
     let t = Instant::now();
-    let mut first = Renderer::new(&song.flat, &song.data, &lab.packages, song.rate)?;
+    let first = Renderer::new(&song.flat, &song.data, &lab.packages, song.rate)?;
     rec.build_ms = t.elapsed().as_secs_f64() * 1e3;
     let one = process::memory();
-    let mut more = vec![];
+    let mut more = vec![first];
     rec.side_by_side = 1;
     let mut two = None;
     let mut failed = None;
@@ -293,28 +334,165 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         (None, _) => out.info("memory", UNMEASURED),
     }
 
-    // Block time: 30 s from 3:00, live (non-finite samples silenced, as the engine plays).
-    first.set_strict(false);
-    first.set_transport(Transport::starting((FROM_SECONDS * song.rate as f64).round() as u64));
-    let mut times = Vec::with_capacity(BLOCKS);
-    for k in 0..BLOCKS {
-        let t = Instant::now();
-        first.render_block((k * BLOCK) as u64)?;
-        times.push(t.elapsed().as_secs_f64() * 1e6);
+    // Block time and the drop, in pairs: the app's layout and P1 in turns over the same music, so
+    // what disturbs one disturbs the other alike (RENDER-32).
+    let p1 = crate::load_std_laid_out(Layout::P1)?;
+    let pairs = PAIRS;
+    let (mut runs, mut drops): ([Vec<Vec<f64>>; 2], [Vec<Dropped>; 2]) = Default::default();
+    let mut class = None;
+    for i in 0..pairs {
+        let app = Renderer::new(&song.flat, &song.data, &lab.packages, song.rate)?;
+        let old = Renderer::new(&song.flat, &song.data, &p1, song.rate)?;
+        // Each layout first in every other pair.
+        let mut both = [app, old];
+        let [a, b] = in_turns(&mut both, i % 2 == 0, song.rate)?;
+        out.info(format!("pair {}", i + 1), format!("the app's layout {}; P1 {}", Run::of(&a), Run::of(&b)));
+        runs[0].push(a);
+        runs[1].push(b);
+        // Each layout's drop first in every other pair too.
+        let [app, old] = both;
+        let (d_app, d_old) = if i % 2 == 0 {
+            let d_old = dropped(old, lab, &small)?;
+            (dropped(app, lab, &small)?, d_old)
+        } else {
+            let d_app = dropped(app, lab, &small)?;
+            (d_app, dropped(old, lab, &small)?)
+        };
+        class.get_or_insert(d_app.class.clone());
+        drops[0].push(d_app);
+        drops[1].push(d_old);
     }
-    rec.mean_us = times.iter().sum::<f64>() / times.len() as f64;
-    rec.p99_us = rank(&mut times, 0.99);
-    rec.max_us = rank(&mut times, 1.0);
-    let (p50, p90, p999) = (rank(&mut times, 0.5), rank(&mut times, 0.9), rank(&mut times, 0.999));
+    let (app, old) = (Run::median(&runs[0]), Run::median(&runs[1]));
+    (rec.mean_us, rec.p99_us, rec.max_us) = (app.mean, app.p99, app.max);
+    out.info(format!("block, the app's layout (medians of {pairs} runs)"), format!("{app} over {BLOCKS} blocks from 3:00"));
+    out.info(format!("block, P1 (medians of {pairs} runs)"), format!("{old}"));
+    let p99 = Diffs::of(&runs[0], &runs[1], |v| crate::paired::rank(v, 0.99));
+    let mean = Diffs::of(&runs[0], &runs[1], |v| v.iter().sum::<f64>() / v.len().max(1) as f64);
+    out.info("block, the app's layout against P1, pair by pair", format!("mean {mean}; p99 {p99}"));
+    let med = |f: fn(&Dropped) -> f64, d: &[Dropped]| crate::paired::median(&d.iter().map(f).collect::<Vec<_>>());
+    (rec.drop_ms, rec.audio_base_us, rec.audio_drop_us) =
+        (med(|d| d.ms, &drops[0]), med(|d| d.base_us, &drops[0]), med(|d| d.during_us, &drops[0]));
+    let raises = Diffs(drops[0].iter().zip(&drops[1]).map(|(a, b)| a.raise() - b.raise()).collect());
     out.info(
-        "block",
+        "drop",
         format!(
-            "mean {:.0} µs; p50 {p50:.0}, p90 {p90:.0}, p99 {:.0}, p99.9 {p999:.0}, max {:.0} µs over {BLOCKS} blocks from 3:00",
-            rec.mean_us, rec.p99_us, rec.max_us
+            "{:.1} ms (P1 {:.1}); the audio-like thread's p99 block {:.0} µs during it, {:.0} µs before (medians of {pairs}); {}",
+            rec.drop_ms,
+            med(|d| d.ms, &drops[1]),
+            rec.audio_drop_us,
+            rec.audio_base_us,
+            match class.unwrap_or(Ok(())) {
+                Ok(()) => "that thread marked latency-sensitive".to_string(),
+                Err(e) => format!("that thread at its default priority ({e})"),
+            }
         ),
     );
+    out.info("record", rec.line());
 
-    // Drop: off an audio-like thread that renders a small song every 2.67 ms meanwhile.
+    // The rule (§11.3). Its comparisons with S are judged only against S's records from this same
+    // machine (PLAT-1); its memory rules fail, never pass, when the memory wasn't measured.
+    let path =
+        std::env::var_os("M2_STORE_S").map_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("store-S.txt"), Into::into);
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let s = match (Record::parse(&text), P1VsS::parse(&text)) {
+        (None, _) => Err(format!("no record of layout S in {}", path.display())),
+        (_, None) => Err(format!("no record of P1 against S in {}", path.display())),
+        (Some(s), _) if !same_machine(&s.machine, &rec.machine) => {
+            out.info("machines", format!("S's record is from {}; this run is on {}", s.machine, rec.machine));
+            Err("recorded, not judged: S's record is from another machine (PLAT-1)".to_string())
+        }
+        (Some(s), Some(p)) => Ok((s, p)),
+    };
+    let pass = rule(&mut out, &rec, [&mean, &p99], &s, measured.is_some(), measured.is_some() && two.is_some());
+    let Ok((_, p1_s)) = s else {
+        out.info("batched drops", format!("the drop raises the audio-like thread's p99 {raises} more than P1's; not compared with S here"));
+        out.info("layout", "not judged here: the rule needs S's records from this machine (§11.3, PLAT-1)");
+        return Ok(out);
+    };
+    out.info(
+        "batched drops",
+        format!(
+            "{}: the drop raises the audio-like thread's p99 {raises} more than P1's here, and P1's {:+.0} µs more than S's on the reference Mac; needed only if more than S's in every pair",
+            if needed(&raises, p1_s.raise_us) { "needed" } else { "not needed" },
+            p1_s.raise_us
+        ),
+    );
+    out.info(
+        "layout",
+        if pass { "the app's layout passes the rule (RENDER-32)" } else { "the app's layout fails the rule (§11.3): the owner decides" },
+    );
+    Ok(out)
+}
+
+/// One run's block times: mean, p99 and max, in µs.
+#[derive(Clone, Copy, Debug, Default)]
+struct Run {
+    mean: f64,
+    p99: f64,
+    max: f64,
+}
+
+impl Run {
+    fn of(times: &[f64]) -> Run {
+        let mean = times.iter().sum::<f64>() / times.len().max(1) as f64;
+        Run { mean, p99: crate::paired::rank(times, 0.99), max: crate::paired::rank(times, 1.0) }
+    }
+
+    /// Each statistic's median over `runs`.
+    fn median(runs: &[Vec<f64>]) -> Run {
+        let each: Vec<Run> = runs.iter().map(|t| Run::of(t)).collect();
+        let m = |f: fn(&Run) -> f64| crate::paired::median(&each.iter().map(f).collect::<Vec<_>>());
+        Run { mean: m(|r| r.mean), p99: m(|r| r.p99), max: m(|r| r.max) }
+    }
+}
+
+impl std::fmt::Display for Run {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "mean {:.0} µs, p99 {:.0}, max {:.0}", self.mean, self.p99, self.max)
+    }
+}
+
+/// The block times of both renderers over the same `BLOCKS` from 3:00, rendered in turns of `TURN`
+/// blocks, the first first in even turns when `first_first`, else in odd ones: each as often
+/// first, so neither always meets caches the other left cold.
+fn in_turns(both: &mut [Renderer; 2], first_first: bool, rate: u32) -> Result<[Vec<f64>; 2]> {
+    for r in both.iter_mut() {
+        // Live: non-finite samples silenced, as the engine plays.
+        r.set_strict(false);
+        r.set_transport(Transport::starting((FROM_SECONDS * rate as f64).round() as u64));
+    }
+    let mut times = [Vec::with_capacity(BLOCKS), Vec::with_capacity(BLOCKS)];
+    for (n, from) in (0..BLOCKS).step_by(TURN).enumerate() {
+        let order = if (n % 2 == 0) == first_first { [0, 1] } else { [1, 0] };
+        for i in order {
+            for k in from..(from + TURN).min(BLOCKS) {
+                let t = Instant::now();
+                both[i].render_block((k * BLOCK) as u64)?;
+                times[i].push(t.elapsed().as_secs_f64() * 1e6);
+            }
+        }
+    }
+    Ok(times)
+}
+
+/// A renderer's drop, off an audio-like thread that renders a small song every 2.67 ms meanwhile.
+struct Dropped {
+    ms: f64,
+    /// That thread's p99 block over the second before the drop, and during it.
+    base_us: f64,
+    during_us: f64,
+    class: std::result::Result<(), String>,
+}
+
+impl Dropped {
+    /// What the drop adds to the thread's p99 over its own before; none when it adds nothing.
+    fn raise(&self) -> f64 {
+        (self.during_us - self.base_us).max(0.0)
+    }
+}
+
+/// Drop `r` while an audio-like thread renders `small`.
+fn dropped(r: Renderer, lab: &Lab, small: &crate::Song) -> Result<Dropped> {
     let mut player = Renderer::new(&small.flat, &small.data, &lab.packages, small.rate)?;
     player.set_strict(false);
     let stop = Arc::new(AtomicBool::new(false));
@@ -324,7 +502,7 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         std::thread::spawn(move || {
             // Marked latency-sensitive, as an audio thread is (on macOS, kept on a performance
             // core), so its blocks time the drop rather than the scheduler. Linux can't: reported.
-            let class = m2_os::thread::interactive();
+            let class = m2_os::thread::interactive().map_err(|e| e.to_string());
             let mut blocks: Vec<(Instant, f64)> = Vec::with_capacity(4096);
             let (mut next, mut clock) = (Instant::now(), 0u64);
             while !stop.load(Ordering::Relaxed) {
@@ -346,66 +524,15 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     };
     std::thread::sleep(Duration::from_secs(3));
     let t0 = Instant::now();
-    drop(first);
+    drop(r);
     let t1 = Instant::now();
     std::thread::sleep(Duration::from_millis(300));
     stop.store(true, Ordering::Relaxed);
     let Ok((class, blocks)) = audio.join() else { bail!("the audio-like thread panicked") };
-    rec.drop_ms = (t1 - t0).as_secs_f64() * 1e3;
-    let mut base: Vec<f64> = blocks.iter().filter(|b| b.0 < t0 && b.0 + Duration::from_secs(1) >= t0).map(|b| b.1).collect();
-    let mut during: Vec<f64> = blocks.iter().filter(|b| b.0 + Duration::from_secs_f64(b.1 / 1e6) >= t0 && b.0 <= t1).map(|b| b.1).collect();
-    rec.audio_base_us = rank(&mut base, 0.99);
-    rec.audio_drop_us = rank(&mut during, 0.99);
-    out.info(
-        "drop",
-        format!(
-            "{:.1} ms; the audio-like thread's p99 block {:.0} µs during it ({} blocks), {:.0} µs before; {}",
-            rec.drop_ms,
-            rec.audio_drop_us,
-            during.len(),
-            rec.audio_base_us,
-            match class {
-                Ok(()) => "that thread marked latency-sensitive".to_string(),
-                Err(e) => format!("that thread at its default priority ({e})"),
-            }
-        ),
-    );
-    out.info("record", rec.line());
-
-    // The rule (§11.3). Its comparisons with S are judged only against S's record from this same
-    // machine (PLAT-1); its memory rules fail, never pass, when the memory wasn't measured.
-    let path =
-        std::env::var_os("M2_STORE_S").map_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("store-S.txt"), Into::into);
-    let s = match std::fs::read_to_string(&path).ok().and_then(|t| Record::parse(&t)) {
-        None => Err(format!("no record of layout S in {}", path.display())),
-        Some(s) if !same_machine(&s.machine, &rec.machine) => {
-            out.info("machines", format!("S's record is from {}; this run is on {}", s.machine, rec.machine));
-            Err("recorded, not judged: S's record is from another machine (PLAT-1)".to_string())
-        }
-        Some(s) => Ok(s),
-    };
-    let pass = rule(&mut out, &rec, &s, measured.is_some(), measured.is_some() && two.is_some());
-    // What the drop adds to the audio-like thread's p99 over its own before; none when it adds nothing.
-    let raise = |r: &Record| (r.audio_drop_us - r.audio_base_us).max(0.0);
-    let Ok(s) = s else {
-        out.info(
-            "batched drops",
-            format!("the drop raises the audio-like thread's p99 by {:.0} µs; not compared with S here", raise(&rec)),
-        );
-        out.info("layout", "not chosen here: the rule needs S's record from this machine (§11.3, PLAT-1)");
-        return Ok(out);
-    };
-    out.info(
-        "batched drops",
-        format!(
-            "{}: the drop raises the audio-like thread's p99 by {:.0} µs, S's by {:.0} µs",
-            if raise(&rec) > raise(&s) { "needed" } else { "not needed" },
-            raise(&rec),
-            raise(&s)
-        ),
-    );
-    out.info("layout", if pass { "one Store per kernel instance (P1)" } else { "P1 fails the rule: measure P3, then P2 (§11.3)" });
-    Ok(out)
+    let base: Vec<f64> = blocks.iter().filter(|b| b.0 < t0 && b.0 + Duration::from_secs(1) >= t0).map(|b| b.1).collect();
+    let during: Vec<f64> = blocks.iter().filter(|b| b.0 + Duration::from_secs_f64(b.1 / 1e6) >= t0 && b.0 <= t1).map(|b| b.1).collect();
+    let p99 = |v: &[f64]| crate::paired::rank(v, 0.99);
+    Ok(Dropped { ms: (t1 - t0).as_secs_f64() * 1e3, base_us: p99(&base), during_us: p99(&during), class })
 }
 
 #[cfg(test)]
@@ -441,9 +568,11 @@ mod tests {
             ..Record::default()
         };
         let memory = ["footprint within S + 64 MB", "2 renderers side by side, reserving at most 25% of the address space"];
-        for s in [Ok(s.clone()), Err("recorded, not judged: S's record is from another machine (PLAT-1)".to_string())] {
+        let p1 = P1VsS { mean_us: 32.0, p99_us: 35.0, raise_us: 0.0 };
+        let (mean, p99) = (Diffs(vec![10.0, 12.0, 8.0]), Diffs(vec![-300.0, 20.0, 250.0]));
+        for s in [Ok((s.clone(), p1)), Err("recorded, not judged: S's record is from another machine (PLAT-1)".to_string())] {
             let mut out = Outcome::new("G7f store", "RENDER-32", "a test");
-            assert!(!rule(&mut out, &rec, &s, false, false));
+            assert!(!rule(&mut out, &rec, [&mean, &p99], &s, false, false));
             let failed: Vec<&str> = out.checks.iter().filter(|c| c.verdict == Verdict::Fail).map(|c| c.name.as_str()).collect();
             assert_eq!(failed, memory, "{out}");
             assert_eq!(out.verdict(), Verdict::Fail);
@@ -451,8 +580,29 @@ mod tests {
         let measured =
             Record { p99_us: 3_050.0, footprint_mb: 600.0, build_ms: 120.0, reserved2_gib: 30_000.0, limit_gib: 131_072.0, ..rec.clone() };
         let mut out = Outcome::new("G7f store", "RENDER-32", "a test");
-        assert!(rule(&mut out, &measured, &Ok(s), true, true), "{out}");
+        assert!(rule(&mut out, &measured, [&mean, &p99], &Ok((s.clone(), p1)), true, true), "{out}");
         assert_eq!(out.checks.iter().filter(|c| c.verdict == Verdict::Pass).count(), 4, "{out}");
+
+        // RENDER-32, rg-1: the pairs' mean is judged, the app's layout's cost over P1 here plus P1's
+        // over S on the Mac: +10 and +32 pass the 80 µs bound, +50 and +32 don't. The p99's estimate
+        // is printed, never judged: one far over the bound fails nothing.
+        let mut out = Outcome::new("G7f store", "RENDER-32", "a test");
+        assert!(rule(&mut out, &measured, [&mean, &Diffs(vec![900.0; 3])], &Ok((s.clone(), p1)), true, true), "{out}");
+        assert!(out.checks.iter().any(|c| c.verdict == Verdict::Pass && c.detail.contains("p99, not judged: +935 µs")), "{out}");
+        let mut out = Outcome::new("G7f store", "RENDER-32", "a test");
+        assert!(!rule(&mut out, &measured, [&Diffs(vec![50.0, 48.0, 55.0]), &p99], &Ok((s, p1)), true, true), "{out}");
+        let failed: Vec<&str> = out.checks.iter().filter(|c| c.verdict == Verdict::Fail).map(|c| c.name.as_str()).collect();
+        assert_eq!(failed, ["block within S + 80 µs, by the mean"], "{out}");
+    }
+
+    // RENDER-32 (§11.3), rg-1: batched drops are needed only when the app's layout's drop raises the
+    // other thread's p99 more than S's in every pair, not on one pair's jitter.
+    #[test]
+    fn batched_drops_need_every_pair() {
+        assert!(!needed(&Diffs(vec![0.0, 0.0, 1.0, -2.0, 0.0]), 0.0));
+        assert!(!needed(&Diffs(vec![5.0, 6.0, 7.0, 8.0, -1.0]), 0.0));
+        assert!(needed(&Diffs(vec![5.0, 6.0, 7.0, 8.0, 1.0]), 0.0));
+        assert!(!needed(&Diffs(vec![]), 0.0));
     }
 
     // PLAT-1: S's own record, as checked in, names the reference Mac.
@@ -461,5 +611,7 @@ mod tests {
         let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("store-S.txt")).unwrap();
         let s = Record::parse(&text).expect("store-S.txt holds a record");
         assert!(s.machine.starts_with("MacBookPro18,1, macOS "), "{}", s.machine);
+        // RENDER-32: and P1's cost over S that the paired verdict adds, from the same machine.
+        assert_eq!(P1VsS::parse(&text), Some(P1VsS { mean_us: 32.0, p99_us: 35.0, raise_us: 0.0 }));
     }
 }

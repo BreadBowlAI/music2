@@ -24,9 +24,10 @@
 //              is heard in the capture before the save returns (WRITE-22, RENDER-29);
 //            - the negative control: a seek mid-chord ends its notes (RENDER-9), and the same
 //              check sees the sound fall;
-//            - Export borrows the plugins (RENDER-1, step 7): playback pauses, the top bar says
-//              "Paused for export", the capture is silent and the playhead still, and play goes
-//              on from there once the file is written.
+//            - Export borrows the plugins (RENDER-1, step 7): with the lead back at its own level,
+//              playback pauses, the top bar says "Paused for export", the capture is silent and
+//              the playhead still for as long as the pause lasts (sampled until it ends, however
+//              short the export), and play goes on from there once the file is written.
 // The second server is E2E_HEADLESS and examples/ come from E2E_REPO (run.mjs sets both, see env.mjs).
 import puppeteer from "puppeteer-core";
 import fs from "node:fs";
@@ -270,17 +271,17 @@ async function withPlugins() {
     check(missing.length === 0, `with-plugins opens with its plugins (${missing.map((p) => p.message).join("; ") || "none missing"})`);
 
     // The capture: interleaved stereo f32 at 48 kHz. Frames played so far, and the level (RMS, dB)
-    // of each 100 ms window between two frames.
+    // of each 100 ms window (or `win` frames) between two frames.
     const RATE = 48_000, WIN = 4_800;
     const frames = () => Math.floor(fs.statSync(capture).size / 8);
-    const levels = (from, to) => {
+    const levels = (from, to, win = WIN) => {
       const buf = fs.readFileSync(capture);
       const x = new Float32Array(buf.buffer, buf.byteOffset, Math.floor(buf.length / 4));
       const out = [];
-      for (let f = Math.max(0, from); f + WIN <= Math.min(to, x.length / 2); f += WIN) {
+      for (let f = Math.max(0, from); f + win <= Math.min(to, x.length / 2); f += win) {
         let sum = 0;
-        for (let i = 2 * f; i < 2 * (f + WIN); i++) sum += x[i] * x[i];
-        out.push(10 * Math.log10(sum / (2 * WIN) + 1e-24));
+        for (let i = 2 * f; i < 2 * (f + win); i++) sum += x[i] * x[i];
+        out.push(10 * Math.log10(sum / (2 * win) + 1e-24));
       }
       return out;
     };
@@ -329,6 +330,7 @@ async function withPlugins() {
     // The lead's level dragged down while a save of tracks/kick.ts compiles: heard before it returns.
     await show(p2, "song");
     const lead = '[data-module="song"] [data-knob="lead.db"]';
+    const song0 = fs.readFileSync(`${dir}/song.ts`, "utf8");
     const kick = kickTs();
     at = await knobAt(p2, lead);
     await p2.mouse.move(at.x, at.y);
@@ -363,18 +365,39 @@ async function withPlugins() {
     // The export resets the plugins' voices, its stated cost: from the start the chord sounds again.
     const exports = `${root}/home/Music/music2/Exports`;
     const note = () => p2.evaluate(() => document.querySelector('[data-testid="engine-note"]')?.textContent ?? null);
-    // The chord at the lead's level as the drag above left it.
+    // The lead back at its own level (the drag above left it near -60 dB), so the checks below hear
+    // the chord well above silence.
+    const dragged = fs.readFileSync(`${dir}/song.ts`, "utf8");
+    await putFile(s2, "song.ts", dragged, song0);
+    await sleep(800);
     const playing = median(levels(frames() - RATE / 2, frames()));
     await p2.click('[data-testid="export"]');
     check(await until(async () => (await api2("graph/status")).paused === "exporting", 5000), "an export of with-plugins pauses playback");
-    check(await until(async () => (await note()) === "Paused for export", 3000), "the top bar says Paused for export");
+    // Sampled until it resumes, however long the export takes: each frame count read before the
+    // status that says it still holds, so every one is from the pause.
     const heldFrom = frames();
-    const beatHeld = (await api2("graph/status")).beat;
-    await sleep(600);
-    const held = levels(heldFrom + 2400, frames());
-    check(held.length >= 4 && Math.max(...held) < Math.min(-100, playing - 20), `silent while paused (${fmt(held)} dB; ${playing.toFixed(1)} dB playing)`);
-    check((await api2("graph/status")).beat === beatHeld, `the playhead holds still while paused (beat ${beatHeld.toFixed(2)})`);
-    check(await until(async () => (await api2("graph/status")).paused == null, 120_000), "playback resumes once the file is written");
+    const seen = [];
+    let noted = false;
+    for (const t0 = Date.now(); Date.now() - t0 < 120_000; ) {
+      const frame = frames();
+      const status = await api2("graph/status");
+      if (status.paused !== "exporting") break;
+      seen.push({ frame, beat: status.beat });
+      noted ||= (await note()) === "Paused for export";
+      await sleep(20);
+    }
+    check(noted, "the top bar says Paused for export");
+    // In 25 ms windows, from 50 ms in (the 5 ms fade out, and the hold's callback) to 50 ms short of
+    // the last frame seen holding, so a short pause is judged too.
+    const held = levels(heldFrom + 2400, (seen.at(-1)?.frame ?? heldFrom) - 2400, 1200);
+    const pausedFor = seen.length ? ((seen.at(-1).frame - heldFrom) / RATE).toFixed(2) : "0";
+    check(
+      held.length >= 2 && playing > -45 && Math.max(...held) < Math.min(-100, playing - 20),
+      `silent while paused (${fmt(held)} dB over ${pausedFor} s; ${playing.toFixed(1)} dB playing)`,
+    );
+    const beatHeld = seen[0]?.beat ?? NaN;
+    check(seen.length >= 2 && seen.every((x) => x.beat === beatHeld), `the playhead holds still while paused (beat ${beatHeld.toFixed(2)}, ${seen.length} samples)`);
+    check(await until(async () => (await api2("graph/status")).paused == null, 1000), "playback resumes once the file is written");
     check(await until(() => fs.existsSync(exports) && fs.readdirSync(exports).some((f) => f.endsWith(".wav")), 5000), "the export is written");
     check(await until(async () => (await note()) === null, 3000), "the top bar no longer says paused");
     const resumed = await api2("graph/status");

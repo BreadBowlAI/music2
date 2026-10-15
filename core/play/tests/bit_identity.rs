@@ -79,9 +79,14 @@ fn a_no_op_swap_changes_no_bit() {
 
 /// The 16-track reference project (p16), written into a temp folder.
 fn p16() -> Song {
-    let dir = temp("p16");
+    reference(&m2_session::reference::Reference::P16)
+}
+
+/// A reference project, written into a temp folder.
+fn reference(r: &m2_session::reference::Reference) -> Song {
+    let dir = temp(&r.name());
     std::fs::remove_dir(&dir).unwrap();
-    m2_session::reference::write(&dir, &m2_session::reference::Reference::P16).unwrap();
+    m2_session::reference::write(&dir, r).unwrap();
     compile(dir)
 }
 
@@ -182,4 +187,26 @@ fn an_identity_arrangement_activation_changes_no_bit() {
     let reread = song.with_data(Project::open(&song.dir).unwrap().data(&decls, None).0);
     let heard = activated(&song, frames, &points(&song), &|info| reread.against(&song, info, &Continues::identity(&song.flat)));
     assert_eq!(first_diff(&heard, &export), None, "an arrangement read again changed the output");
+}
+
+// RENDER-33 (G7c) on all of p50 (4:02), recorded: `cargo test -p m2-play --release --test
+// bit_identity -- --ignored`.
+#[test]
+#[ignore = "about five minutes in release"]
+fn live_is_the_export_on_p50() {
+    let song = reference(&m2_session::reference::Reference::P50);
+    let frames = (song.seconds() * SR as f64) as usize;
+    check("p50", &song, frames, None);
+}
+
+// RENDER-33, RENDER-25 (G7c) on p50, recorded: a plan of the same revision activated three times
+// mid-note keeps every one of its instances and changes no bit of the export.
+#[test]
+#[ignore = "about half a minute in release"]
+fn a_no_op_activation_on_p50() {
+    let song = reference(&m2_session::reference::Reference::P50);
+    let frames = 10 * SR as usize;
+    let export = offline(&song, frames);
+    let heard = activated(&song, frames, &points(&song), &|info| song.against(&song, info, &Continues::identity(&song.flat)));
+    assert_eq!(first_diff(&heard, &export), None, "p50: a no-op activation changed the output");
 }

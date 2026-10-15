@@ -87,6 +87,19 @@ enum Hosted {
     Missing(KernelSig),
 }
 
+/// How each kernel instance's memory is laid out in the address space (RENDER-32).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Layout {
+    /// The app's, the owner's choice: each memory reserves its 32 MiB and a 64 KiB guard and
+    /// never moves, so each access is bounds-checked against a constant. Two renderers of p50
+    /// hold well under 1% of the address space.
+    P2,
+    /// Step 7's first slice: wasmtime's defaults, 4 GiB reserved per memory plus guards, so no
+    /// access is checked; two renderers of p50 hold about 38% of the address space. Only G7f
+    /// builds it, to measure what the app's layout costs against it.
+    P1,
+}
+
 /// The engine every kernel runs in.
 ///
 /// WebAssembly floating point is bit-exact on every machine except for the bits
@@ -94,15 +107,42 @@ enum Hosted {
 /// the renderer silences non-finite output (a NaN means a kernel is broken anyway).
 /// Relaxed SIMD is off because its results may differ between CPUs.
 pub fn engine() -> Engine {
+    engine_with(Layout::P2)
+}
+
+/// The engine, its kernels' memories laid out as `layout` says. Bounds checks don't change the
+/// arithmetic: every layout renders the same bits.
+pub fn engine_with(layout: Layout) -> Engine {
     let mut config = wasmtime::Config::new();
     config.cranelift_nan_canonicalization(false);
     config.wasm_relaxed_simd(false);
+    if layout == Layout::P2 {
+        config.memory_reservation(crate::KERNEL_MEMORY as u64);
+        config.memory_guard_size(64 << 10);
+        config.memory_reservation_for_growth(0);
+        config.memory_may_move(false);
+        // Kernels import nothing, so they have no clock to time a speculative read with: the
+        // Spectre guard on each memory access would cost about 6% of block time for nothing.
+        // Revisit before kernels from other people's packages run.
+        // SAFETY: a documented Cranelift setting; it changes no result, only speculation.
+        unsafe {
+            config.cranelift_flag_set("enable_heap_access_spectre_mitigation", "false");
+        }
+    }
     Engine::new(&config).expect("wasmtime engine")
 }
 
 impl Default for PackageSet {
     fn default() -> Self {
-        PackageSet { engine: engine(), packages: BTreeMap::new(), kernels: HashMap::new(), plugins: HashMap::new(), host: m2_plugins::host() }
+        PackageSet::laid_out(Layout::P2)
+    }
+}
+
+impl PackageSet {
+    /// A set whose kernels' memories are laid out as `layout` says; the default is the app's.
+    pub fn laid_out(layout: Layout) -> PackageSet {
+        let (packages, kernels, plugins) = (BTreeMap::new(), HashMap::new(), HashMap::new());
+        PackageSet { engine: engine_with(layout), packages, kernels, plugins, host: m2_plugins::host() }
     }
 }
 

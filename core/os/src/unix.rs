@@ -127,7 +127,9 @@ mod tests {
     // mapped. The other tests in this binary map and unmap memory beside it: in about 1 run of 10
     // here, what was mapped fell, by up to 149 MB, while this touched 64 MB. So each try reads just
     // before and after its own change, and one try of 10 must see it; a memory() that misses the
-    // pages fails every try.
+    // pages fails every try. Each try maps its own pages and unmaps them: a freed allocation might
+    // stay with the allocator (macOS's malloc keeps large blocks), and a later try that reused it
+    // would see nothing grow.
     #[test]
     fn the_footprint_counts_touched_pages_and_a_reservation_only_maps() {
         let first = memory().expect("the OS says what the process holds");
@@ -145,16 +147,21 @@ mod tests {
         panic!("no try of 10 saw it:\n{}", tries.join("\n"));
     }
 
-    /// 64 MB touched, then 16 GiB reserved, each read just before and after.
+    /// 64 MB mapped and touched, then 16 GiB reserved, each read just before and after.
     fn one_try() -> Result<(), String> {
+        let len = (64 * MB) as usize;
         let before = memory().unwrap();
-        let mut v = vec![0u8; (64 * MB) as usize];
-        for i in (0..v.len()).step_by(4096) {
-            v[i] = 1;
+        let flags = libc::MAP_PRIVATE | libc::MAP_ANON;
+        // SAFETY: a new private mapping, written only below, within it, and unmapped whole.
+        let p = unsafe { libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ | libc::PROT_WRITE, flags, -1, 0) };
+        assert_ne!(p, libc::MAP_FAILED, "{}", std::io::Error::last_os_error());
+        for i in (0..len).step_by(4096) {
+            // SAFETY: inside the mapping made above.
+            unsafe { p.cast::<u8>().add(i).write_volatile(1) };
         }
-        std::hint::black_box(&v);
         let touched = memory().unwrap();
-        drop(v);
+        // SAFETY: the mapping made above, whole.
+        unsafe { libc::munmap(p, len) };
 
         let size = 16u64 << 30;
         let flags = libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_NORESERVE;
