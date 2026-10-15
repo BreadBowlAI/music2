@@ -43,7 +43,7 @@ CLAP_PATH=~/Library/Audio/Plug-Ins/CLAP M2_HEADLESS=target/debug/examples/headle
 - Hosted CLAP plugins: only `live3b` gets `CLAP_PATH`, and only when you set it. There is no
   default, so your own plugin folder is never used unasked; `CLAP_PATH=~/Library/Audio/Plug-Ins/CLAP`
   uses it. Its with-plugins part needs Surge XT and Airwindows Consolidated in that folder. Without
-  them, live3b skips those 11 checks with one `SKIP` line and passes 40 of its 51, and `run.mjs`
+  them, live3b skips those 20 checks with one `SKIP` line and passes 40 of its 60, and `run.mjs`
   reports it `PART` (with a note at the start when `CLAP_PATH` isn't set). Every other suite runs
   **without** `CLAP_PATH`; `fx-fixes` must.
 
@@ -102,7 +102,7 @@ diff /tmp/base-head/SHA256SUMS /tmp/base-now/SHA256SUMS
 | `s4-problems` | fix | 18 | a lane file that doesn't read keeps its last data with an Error naming the field (FMT-9); clips without ids are a Notice with a fix (FMT-12); a stray file under `data/` (FMT-7) |
 | `s4-meter` | fix | 8 | bars by the time signatures: a 7/8 and a tempo change from bar 5, in the timeline and the roll (FMT-13) |
 | `live3a` | fix | 49 | the live engine (step 3a): seeks and loops are transport jumps, notes and effects added while playing don't jump back, stop holds, the roll locks while its lane file doesn't read |
-| `live3b` | proj | 51 (40 without plugins) | gesture leases (step 3b): drags stay live through slow compiles, outside saves, a held knob, a closed window, broken code and renumbered calls; with `CLAP_PATH` (Surge XT and Airwindows), plugin instances carried across a rebuild, heard in a captured stream |
+| `live3b` | proj | 60 (40 without plugins) | gesture leases (step 3b): drags stay live through slow compiles, outside saves, a held knob, a closed window, broken code and renumbered calls; with `CLAP_PATH` (Surge XT and Airwindows), plugin instances carried across a rebuild, heard in a captured stream, and an export that borrows them: playback paused, "Paused for export" in the top bar, and play going on from there (step 7) |
 | `s5-knobs` | fix | 101 | descriptors (step 5): every declared control is a knob with its declared range and default; turning a left-out one inserts it, undo takes it out; the browser's categories and inserts; `import { delay as echo }` |
 | `s6-builders` | fix | 55 | the first step-6 builders: rename a track's label in place, automate a knob from its menu, move a renamed track's whole folder from the Needs-attention strip; each one Tx and one undo step |
 | `s6-write` | fix | 35 | the step-6 write path: an outside lane write taken in once it settles; a lane written in two halves never shows empty; a project another program holds opens read-only and writes after Retry; broken code opens in the code view, silent, and plays once a save compiles |

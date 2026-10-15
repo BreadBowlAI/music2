@@ -83,7 +83,7 @@ export const SUITES = [
   ["s4-problems", "fix", { expect: 18 }],
   ["s4-meter", "fix", { expect: 8 }],
   ["live3a", "fix", { expect: 49 }],
-  ["live3b", "proj", { clap: true, expect: 51 }],
+  ["live3b", "proj", { clap: true, expect: 60 }],
   ["s5-knobs", "fix", { expect: 101 }],
   ["s6-builders", "fix", { expect: 55 }],
   ["s6-write", "fix", { expect: 35 }],

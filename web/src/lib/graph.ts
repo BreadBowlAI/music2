@@ -290,8 +290,12 @@ export function position(meter: readonly Meter[], beat: number) {
 /** A loop between two beats; its range is kept while it is off. */
 export interface Loop { start: number; end: number; on: boolean }
 
-/** Where playback is; `beat` counts with the accepted revision's tempo map. `loop` is null until one is set. */
-export interface GraphStatus { playing: boolean; seconds: number; beat: number; loop: Loop | null }
+/**
+ * Where playback is; `beat` counts with the accepted revision's tempo map. `loop` is null until one is set.
+ * `paused` is "exporting" while an export borrows the plugins that play, and `loading` names the plugins
+ * being loaded for an edit (RENDER-1, RENDER-25).
+ */
+export interface GraphStatus { playing: boolean; seconds: number; beat: number; loop: Loop | null; paused?: string | null; loading?: string[] }
 
 /** The open project, and where playback was when it was read. */
 export interface GraphState extends GraphStatus {

@@ -15,7 +15,7 @@
 //            plays into a file (M2_AUDIO_CAPTURE) that the suite listens to; Surge XT holds one long
 //            chord into Airwindows. Needs CLAP_PATH naming the folder with both (never the user's
 //            own by default: run.mjs has no default and passes CLAP_PATH on only when it is set).
-//            Without it, these 11 checks are skipped with one SKIP line (40 of the suite's 51 run),
+//            Without it, these 20 checks are skipped with one SKIP line (40 of the suite's 60 run),
 //            and run.mjs reports the run PART, not ok:
 //            - an effect added from the UI while the chord sounds activates a renderer that
 //              carries the instances, and the captured sound goes on with no gap or dip (HOST-5,
@@ -23,7 +23,10 @@
 //            - the lead's level dragged while a save of tracks/kick.ts compiles for over a second
 //              is heard in the capture before the save returns (WRITE-22, RENDER-29);
 //            - the negative control: a seek mid-chord ends its notes (RENDER-9), and the same
-//              check sees the sound fall.
+//              check sees the sound fall;
+//            - Export borrows the plugins (RENDER-1, step 7): playback pauses, the top bar says
+//              "Paused for export", the capture is silent and the playhead still, and play goes
+//              on from there once the file is written.
 // The second server is E2E_HEADLESS and examples/ come from E2E_REPO (run.mjs sets both, see env.mjs).
 import puppeteer from "puppeteer-core";
 import fs from "node:fs";
@@ -354,6 +357,32 @@ async function withPlugins() {
     const releasedAt = await value(p2, lead);
     await p2.mouse.up();
     check(await until(() => fs.readFileSync(`${dir}/song.ts`, "utf8").includes(`db: db(${releasedAt})`), 5000), `its release writes db(${releasedAt})`);
+
+    // RENDER-1 (step 7): Export borrows the plugins that play. Playback pauses (a tape pause: it
+    // fades out, holds, and resumes where it was), the top bar says so, and the file is written.
+    // The export resets the plugins' voices, its stated cost: from the start the chord sounds again.
+    const exports = `${root}/home/Music/music2/Exports`;
+    const note = () => p2.evaluate(() => document.querySelector('[data-testid="engine-note"]')?.textContent ?? null);
+    // The chord at the lead's level as the drag above left it.
+    const playing = median(levels(frames() - RATE / 2, frames()));
+    await p2.click('[data-testid="export"]');
+    check(await until(async () => (await api2("graph/status")).paused === "exporting", 5000), "an export of with-plugins pauses playback");
+    check(await until(async () => (await note()) === "Paused for export", 3000), "the top bar says Paused for export");
+    const heldFrom = frames();
+    const beatHeld = (await api2("graph/status")).beat;
+    await sleep(600);
+    const held = levels(heldFrom + 2400, frames());
+    check(held.length >= 4 && Math.max(...held) < Math.min(-100, playing - 20), `silent while paused (${fmt(held)} dB; ${playing.toFixed(1)} dB playing)`);
+    check((await api2("graph/status")).beat === beatHeld, `the playhead holds still while paused (beat ${beatHeld.toFixed(2)})`);
+    check(await until(async () => (await api2("graph/status")).paused == null, 120_000), "playback resumes once the file is written");
+    check(await until(() => fs.existsSync(exports) && fs.readdirSync(exports).some((f) => f.endsWith(".wav")), 5000), "the export is written");
+    check(await until(async () => (await note()) === null, 3000), "the top bar no longer says paused");
+    const resumed = await api2("graph/status");
+    check(resumed.playing && resumed.beat >= beatHeld, `it plays on from where it paused (beat ${beatHeld.toFixed(2)}, then ${resumed.beat.toFixed(2)})`);
+    await api2("graph/seek", { method: "POST", body: JSON.stringify({ beat: 0 }) });
+    await sleep(1200);
+    const again = median(levels(frames() - RATE / 2, frames()));
+    check(again > playing - 6, `from the start, the chord sounds again after the export (${again.toFixed(1)} dB; ${playing.toFixed(1)} before it)`);
 
     await p2.close();
   } finally {

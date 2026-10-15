@@ -451,6 +451,7 @@ function GraphBar({
         <span className="text-[15px] text-ink-100 min-w-12" title="Bar and beat">{at}</span>
         <span className="text-xs text-ink-400 w-12" title="Time">{time}</span>
       </div>
+      <EngineNote status={status} />
       <div data-tauri-drag-region className="flex-1 self-stretch" />
       {/* Centred in the window, whatever the transport and buttons beside it take. It keeps clear of
           them (400px a side holds the widest, the loop button and an export running included): a
@@ -485,6 +486,19 @@ function GraphBar({
         <X className="size-4" />
       </Button>
     </header>
+  );
+}
+
+/** What the engine is busy with besides playing (RENDER-1, RENDER-25): paused while an export borrows the
+ * plugins that play, or loading the plugins an edit needs. The song plays on while plugins load. */
+function EngineNote({ status }: { status: GraphStatus }) {
+  const loading = status.loading ?? [];
+  const text = status.paused === "exporting" ? "Paused for export" : loading.length ? `Loading ${loading.join(", ")}…` : null;
+  if (!text) return null;
+  return (
+    <span data-testid="engine-note" role="status" className="text-xs text-ink-400 whitespace-nowrap truncate max-w-48" title={text}>
+      {text}
+    </span>
   );
 }
 
