@@ -602,3 +602,8 @@ Left for the lead:
 - The committed kill test reopens and runs Finish and Discard on the disk that swaps in both runs, so recovery on a
   disk that can't swap is untested there. It passes when changed (above): 2 lines.
 - The Windows step: `push_tree` opens each file read-only to push it; `FlushFileBuffers` needs write access.
+
+The check again at `7ec6404`, with the fix (logs in `~/m2-runs/check-check-s7b/`): exactly §13.1's S7 row, with no
+retry. Rust tests 717 passed, the same 5 failed; `m2-session`'s binary 138.7 s. clippy fails at lint 4, with only lints
+4 to 6. Suites 29 of 29 (1,034 of 1,034 checks; live3b 51 of 51 with the plugins), renders 8 of 8, and every other row
+PASS.
