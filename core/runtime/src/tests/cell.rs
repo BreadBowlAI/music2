@@ -296,7 +296,7 @@ fn cell_heard_never_runs_ahead() {
             for (k, &c) in plan.iter().enumerate() {
                 let s = k as u64 + 1;
                 slots.set(&[CellId(c)], s as f32, s);
-                if s % GATE == 0 && s < writes {
+                if s.is_multiple_of(GATE) && s < writes {
                     let seen = drains.load(Ordering::Acquire);
                     while drains.load(Ordering::Acquire) == seen {
                         std::thread::yield_now();
