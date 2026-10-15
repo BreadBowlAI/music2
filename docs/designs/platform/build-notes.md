@@ -1179,6 +1179,50 @@ library tests passed 30 of 30 alone and 20 of 20 beside 32 busy loops; `m2-serve
   `core/script` and `core/session`; the kill test's 130 s; Surge's 32-sample blocks in `surge_plays_notes`; G10 under
   load; the Windows notes.
 
+**The independent check of the fixes** (after S9). Each fix commit read line by line, the macOS code with it, and
+probed in scratch folders. Two small bugs found and fixed, each with a test that fails without its fix. Then
+`ci/check.sh` passed at `63c45da` with no retry: Linux is green there, not at `1a24fee` any more.
+
+| Commit | Verdict | Evidence |
+|---|---|---|
+| `976a7d8` (dur-1, dur-2, D6) | right | A scan's journals awaiting a barrier join `pending`, and a rescan skips `pending`, so none is counted twice. A close whose barrier fails tidies nothing; the next lock's scan tidies after its own barrier. `copy_after` changes only what a failed clone push reports. Each test fails without its fix. |
+| `7f7d4bc` (D2, D3, dur-4, fit-10) | right, but D3 brought one regression (fixed in `136b1e7`) | ext4, XFS, btrfs and APFS report a folder `fsync` that failed as `EIO` or `EROFS`, never `EINVAL` or `ENOTSUP`, and `EACCES` comes only from the open, so D2 hides no failure on a normal disk. D3 moved the check of the songs folder's `Exports` before any folder is made, where `canonicalize` fails: `m2 new music2/Exports` in `~/Music`, before `~/Music/music2` was made, made a song where exports go. |
+| `70d1cc0` (evt-1, evt-2, evt-3, D4, fit-5) | right | The root's stat is in `flush`, which only the walks call (every 5 s, and when a batch is due): an idle tick still stats nothing. A root that is gone gives no rebuild, so no walk loop; a root replaced between the stat and the watch is put right by the next flush. |
+| `5442360` (det-1, det-2, det-3, D1) | right | The real app on an invisible Xvfb screen, with a song whose pans come from `JSON.parse`: in `de_DE.UTF-8` (made with `localedef`) its whole graph state is the one it has in C, but for its folder's path; with `uselocale` made a no-op (`LD_PRELOAD`, as before the fix) its build fails ("JSON.parse read pan 0 and keys 0") and Add effect offers a delay of `{ time: 0, feedback: 0, mix: 0 }`. QuickJS runs only in `sandbox()`, and both its callers pin; in this QuickJS only `JSON.parse` reads numbers with `strtod`. No other C code in the process reads or writes a song's numbers (a plugin's `value_to_text` is for display). The locale test fails without the pin. A build thread costs 37 µs at p50 (32 MB stack, release), against 170 ms for a debug `m2 check`, and no build is on G11's data path. None of 24 more `**` forms is refused (private and static fields, static blocks, default values, `super`, BigInts). `newlocale` is made once, never per build; `LC_ALL_MASK`, `newlocale` and `uselocale` are the libc crate's own for macOS. |
+| `d410ad9` (D5, rev-mac-2, fit-2, fit-1) | right | The test row's script run on real cargo 1.99 output (a toy crate: a failing and a flaky test, a no-harness binary that fails and one that flakes, a failing doctest): "what failed" names exactly what failed again, each with its panic's place, and "passed only on a retry" the two flaky ones. |
+| `57062a7` (fit-3, fit-4, fit-7, fit-9, fit-11, dur-3) | right | |
+
+**Fixed**
+
+| Bug | Fix | Commit |
+|---|---|---|
+| After D3, `m2 new` made a song in the songs folder's `Exports` when that folder wasn't made yet and the path named it relatively or through a link | Each folder is compared with its deepest part that is there resolved, and the rest as written. Test: `exports_is_reserved_before_the_songs_folder_is_made`. The real `m2 new music2/Exports` in `~/Music` is refused again, and makes no folder. | `136b1e7` |
+| The locale test left the locale it compiled, about 3 MB, in the temp folder at each run (10 were there) | The folder goes right after `setlocale` has read it in; the test still fails without the pin | `63c45da` |
+
+**Left for the lead** (debatable, so not changed):
+- `retry_lock` scans with no journal skipped, while `rescan` skips `pending`: a session that lost its lock with a
+  commit awaiting its barrier, whose file an outside writer then changed, would set that journal aside as
+  interrupted at Retry. From before this step, and rare.
+- WRITE-15's *Today* says only step 8's folder push ignores errors; a rollback's push and the tidy at the lock ignore
+  them too, each before its barrier.
+- D4's words: `inotify_init1` gives `EMFILE` for the process's own file limit too, which they don't name.
+
+**The checks** (`ci/check.sh`, 8 and 10 min on a quiet server). At `049f0d1`, before the fixes (logs in
+`~/m2-runs/check-final/`), and at `63c45da` (logs and the app's screenshots in `~/m2-runs/check-final2/`): both
+"music2 check: PASS", every row PASS, nothing passed only on a retry, "what failed" empty.
+
+| Row | At `049f0d1` | At `63c45da` |
+|---|---|---|
+| toolchain, web build, build | PASS (rustc 1.99.0) | PASS |
+| app | PASS: the UI connected in 1 s with `first-song` and with `with-plugins` | PASS, the same |
+| rust tests | PASS: 753 passed, 0 failed; `m2-session` 126 tests in 132.4 s | PASS: 754 passed, 0 failed; 132.8 s |
+| clippy, std kernels, std.wasm, mac lint | PASS | PASS |
+| browser suites | PASS: 29 of 29, 1,034 of 1,034 checks | PASS, the same; `attention-attn` 56 of 56, `live3b` 51 of 51 |
+| renders | PASS: 8 of 8 match `e2e/renders.sha256` | PASS |
+| repo unchanged | PASS | PASS |
+
+The app's two screenshots at `63c45da` are copied for the owner to `~/m2-runs/app-shots/platform-63c45da/`.
+
 ## S9. Handoff, the contract's rows, and the last Linux check
 
 **In short.** Docs only: the handoff for the next session, the contract's gates row and deferred rows for this step,

@@ -4,7 +4,7 @@ Written 2026-10-15, at the end of the platform step (6b in the contract's order 
 `docs/architecture.md` (the contract) and the design for whatever you pick up.
 
 **In short**
-- The platform layer is built on `main`. Linux is green: `ci/check.sh` passed at `1a24fee`.
+- The platform layer is built on `main`. Linux is green: `ci/check.sh` passed at `63c45da`.
 - **macOS: unverified since `4ae1b32`**, the step's first code commit (last verified at `8aa301e`). The Mac code is
   only type-checked and linted from Linux. The owner's Mac run comes next.
 - Then: finish step 7, merge `sounds`, merge `taste`; then 8a, 8b and step 9.
@@ -14,7 +14,7 @@ Written 2026-10-15, at the end of the platform step (6b in the contract's order 
 | Branch | Commit | State |
 |---|---|---|
 | `main` | this commit | Steps 1–6, the fast note edits (8aa301e), and the platform layer. |
-| Platforms | | Linux green at `1a24fee` (ci/check.sh). macOS unverified since `4ae1b32`. Windows: designed only. |
+| Platforms | | Linux green at `63c45da` (ci/check.sh). macOS unverified since `4ae1b32`. Windows: designed only. |
 | `origin/wip/step7` | 5079233 | Step 7, the engine: slices 1–3 done, slice 4 half done. Doesn't build yet (`core/runtime/src/tests/live.rs:491` expects `Make`). |
 | `origin/taste` | 4804247 | The new look (T and S); 8b.1 Tracks done (a0d5f91); 8b.2 song bar unfinished. |
 | `origin/sounds` | 916127d | 20 new std sounds (polysynth, FM, drum kit). Its last independent check was cut short. |
@@ -39,7 +39,7 @@ short summary. Its first line says `music2 check: PASS` or `FAIL`.
 |---|---|
 | toolchain, web build, build | Rust 1.99.0 (pinned), the web UI, every binary |
 | app | Linux only: the desktop app on an invisible screen (Xvfb), with `first-song` and `with-plugins`, a screenshot of each |
-| rust tests | every Rust test, with a scratch `HOME` (753 at `1a24fee`) |
+| rust tests | every Rust test, with a scratch `HOME` (754 at `63c45da`) |
 | clippy | the whole workspace; a warning is an error |
 | std kernels, std.wasm | the kernels' tests and lints; `std.wasm` rebuilt to the same bytes in another folder |
 | mac lint | Linux only: the Mac-only code, type-checked and linted |
@@ -63,7 +63,7 @@ TW_WAIT=3500 ~/m2-runs/tw check-<label> 'M2_CHECK_OUT=$HOME/m2-runs/check-<label
 
 `M2_CHECK_OUT` must be a new folder. It gets `summary.txt`, every log, and the app's two screenshots
 (`app-first-song.png`, `app-with-plugins.png`); all logs are also packed in `<folder>.tgz`. Send the owner the
-screenshots once per step (this step's: `~/m2-runs/app-shots/platform-1a24fee/`).
+screenshots once per step (this step's: `~/m2-runs/app-shots/platform-63c45da/`).
 
 **On the Mac** (the owner; about 45 minutes, mostly waiting *(estimate)*):
 
@@ -164,7 +164,10 @@ One line each; the details are in `platform/build-notes.md`.
 - `ci/check.sh --gates` has never run whole; the Mac run is its first full run.
 - Step 8's folder push, after a save's renames, still ignores errors, `EIO` too: the save has landed (D2).
 - QuickJS's 256 MB limit counts bytes as each OS's `malloc` does (det-3); a contract deferred row.
-- The real desktop app under `LANG=de_DE.UTF-8` was not run again; `core/script/tests/locale.rs` covers the build.
+- `retry_lock` scans with no journal skipped (`rescan` skips `pending`): after a lost lock and an outside edit, Retry
+  could set the session's own completed journal aside as interrupted. From before this step; rare.
+- WRITE-15's *Today* names only step 8's push as ignoring errors; a rollback's and the lock's tidy's do too.
+- D4's words name inotify's instance limit for `EMFILE`, which is also the process's own file limit.
 - An export name over 63 bytes is cut by QuickJS, so its error loses its place.
 - Old rustfmt diffs in `core/script` and `core/session`: only new lines were formatted.
 - The kill test takes about 130 s of `m2-session`'s test time; split per case, its cases would run side by side.
