@@ -30,7 +30,10 @@ fn decimal_comma() {
     let made = std::process::Command::new("localedef").args(["-i", "de_DE", "-f", "UTF-8"]).arg(dir.join("de_DE.UTF-8")).output();
     // SAFETY: no other thread reads the environment yet.
     unsafe { std::env::set_var("LOCPATH", &dir) };
-    assert!(set(), "no locale with a decimal comma (install glibc's locale sources for localedef): {made:?}");
+    let done = set();
+    // setlocale has read every category in: the folder goes, so no run leaves one behind.
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(done, "no locale with a decimal comma (install glibc's locale sources for localedef): {made:?}");
 }
 
 // PLAT-4, RENDER-2: in a locale with a decimal comma, song code's `JSON.parse` and `toFixed` read
