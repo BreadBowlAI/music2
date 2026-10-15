@@ -2391,6 +2391,7 @@ dependencies = [
  "icu_normalizer",
  "m2-ir",
  "m2-os",
+ "m2-plugins",
  "m2-runtime",
  "m2-script",
  "m2-session",

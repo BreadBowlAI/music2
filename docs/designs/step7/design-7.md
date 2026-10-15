@@ -295,6 +295,14 @@ slice 2.
   whose blobs differ. A false *reset* cuts a tail, which is what G7b looks for.
   After slice 3, the remaining false resets are a reformat of a whole track call (only that track) and
   a cut-and-paste (deferred, with ID-13's rule 4).
+- **Corrected 2026-10-15 (review id-1): a false keep can click.** Only the edges into a node fade,
+  not the kept node's own settings. A kept `std:delay` whose time changes reads its buffer of echoes
+  at a new place at once: a step of about 0.17 in silence, and other echoes for a second. The review
+  found this through the app's own Add Effect: a delay put inside a delay took the old one's
+  instance. So the slide in `text.rs` now gives the old `(` to the call of the same callee whose
+  arguments match it, and when neither call matches, both are new. The line diff can still keep
+  the wrong call: a call of the same callee written on lines of its own, above the old one or
+  around it (R5).
 
 ### 3.5 A rewired note consumer (identity note F8)
 
@@ -1799,7 +1807,7 @@ G7a measures from the session's request, which is harder (§12.1).
 | R2 | The ghost set grows to the whole song (a package change, a master rewire with everything replaced) | 5 ms at 2× DSP, which is today's cost on every edit, now only on rare ones; G7f part 2 includes one |
 | R3 | During the window, a ghost reading a kept node gets that node's new output, not its old one | A kept instance has one output. It is still click-free (G6), just not a perfect A/B for 5 ms |
 | R4 | A blanked voice compare misses a structural difference, so a pool moves into a graph it doesn't fit | `Voice` `PartialEq` on everything but values, origins, names and capture targets; the audio thread's shape hash; a debug node-count check at entry; `a_changed_shape_starts_from_init` covers voice changes |
-| R5 | Myers misaligns repeated tokens (many identical `kernel(` calls, one deleted) and hands a neighbour's state over | Bounded by shape and ID-14 counts; can't click, since consumers' changed inputs fade; keyed plugins aren't exposed (path pass); ID-14 accepts the same exposure for reorders |
+| R5 | Myers misaligns repeated tokens (many identical `kernel(` calls, one deleted) and hands a neighbour's state over | Bounded by shape and ID-14 counts; can't click, since consumers' changed inputs fade; keyed plugins aren't exposed (path pass); ID-14 accepts the same exposure for reorders. *Corrected 2026-10-15:* it can click, since a kept node's own settings don't fade (a kept `std:delay` whose time changes jumps, §3.4). A call of the same callee put inside another is now paired by its arguments, or made new; one written on lines of its own is still exposed |
 | R6 | The export's hold races something: a state load on a borrowed instance, or an activation | While `exporting`, the actor sends no `Activate` and prepares nothing, so no load runs; `Activate` can't apply while held anyway; the guard always reactivates and resumes; probe CI test |
 | R7 | Slice 3 changes delta spellings, so an older `Seen(hash)` stops matching | A stale hash is a `Conflict` that rechecks, never a wrong write; noted in slice 3's commit |
 | R8 | "A rebuilt kernel module" is reachable only in a runtime test, since packages load once per session | The shape compares content hashes, so any future reload path is safe by construction; G7d tests the rule directly |

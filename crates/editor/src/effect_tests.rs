@@ -393,3 +393,204 @@ fn a_native_caller_takes_no_site() {
         s.accepted().compiled.ir.modules[0].frames.iter().map(|f| sites.iter().find(|x| x.id == f.site).unwrap().callee.as_str()).collect();
     assert!(!frames.iter().any(|c| c.ends_with("map") || *c == "Array.from"), "{frames:?}");
 }
+
+// ---------------------------------------------------------------- what the engine keeps (ID-13)
+
+/// A kernel node by what it reads as constants: `std:delay[0.388,0.3,0.3]`.
+fn by_consts(flat: &m2_ir::Flat, n: &m2_ir::FNode) -> String {
+    let m2_ir::FOp::Kernel { kernel, inputs, .. } = &n.op else { return n.name.clone() };
+    let consts: Vec<String> = inputs
+        .iter()
+        .filter_map(|i| match i {
+            m2_ir::Input::Const(v) => Some(*v),
+            m2_ir::Input::Port { src, .. } => match flat.nodes[src.node].op {
+                m2_ir::FOp::Const(v) => Some(v),
+                _ => None,
+            },
+            m2_ir::Input::Unset => None,
+        })
+        .map(|v| v.to_string())
+        .collect();
+    format!("{kernel}[{}]", consts.join(","))
+}
+
+/// Each `kernel` node after `edit`, and the node before it that it continues, as the engine is
+/// told when it activates the edit (`m2_session::tx::continues`), sorted.
+fn continued(s: &mut Session, kernel: &str, edit: impl FnOnce(&mut Session)) -> Vec<(String, Option<String>)> {
+    let before = s.accepted_arc();
+    edit(s);
+    let after = s.accepted_arc();
+    let c = m2_session::tx::continues::continues(&before, &after);
+    let (old, new) = (&before.compiled.flat, &after.compiled.flat);
+    let mut out: Vec<(String, Option<String>)> = new
+        .nodes
+        .iter()
+        .zip(&c.top)
+        .filter(|(n, _)| matches!(&n.op, m2_ir::FOp::Kernel { kernel: k, .. } if k == kernel))
+        .map(|(n, j)| (by_consts(new, n), j.map(|j| by_consts(old, &old.nodes[j as usize]))))
+        .collect();
+    out.sort();
+    out
+}
+
+/// The calls to `callee` in `file`, in the order they are written: `file#ordinal`.
+fn calls_in(s: &Session, file: &str, callee: &str) -> Vec<String> {
+    let mut sites: Vec<_> = s.accepted().compiled.sites.iter().filter(|x| x.in_project && x.file == file && x.callee == callee).collect();
+    sites.sort_by_key(|x| x.start);
+    sites.iter().map(|x| format!("{}#{}", x.file, x.ordinal)).collect()
+}
+
+fn kept(new: &str, old: &str) -> (String, Option<String>) {
+    (new.to_string(), Some(old.to_string()))
+}
+
+fn made(new: &str) -> (String, Option<String>) {
+    (new.to_string(), None)
+}
+
+// ID-13, R5: Add Effect puts a delay inside the user's own delay (after its sound). The user's
+// delay is the outer call now, and it keeps its instance, echoes and time; the new one starts
+// fresh. Before the fix the old delay went to the new inner call and its time jumped.
+#[test]
+fn a_delay_added_inside_a_delay_keeps_the_users_delay() {
+    let f = Fixture::new(&format!(
+        "{HEAD}import {{ delay }} from \"std/fx\";\nexport default song(() => delay(osc.saw(hz(110)), {{ time: 0.388 }}));\n"
+    ));
+    let mut s = f.open();
+    let saw = call(&s, "osc.saw");
+    let pairs = continued(&mut s, "std:delay", |s| drop(s.add_effect(rev(s), &saw, "std:delay").unwrap()));
+    assert!(f.source().contains("delay(delay(osc.saw(hz(110)), { time: 0.25, feedback: 0.3, mix: 0.3 }), { time: 0.388 })"));
+    assert_eq!(pairs, [made("std:delay[0.25,0.3,0.3]"), kept("std:delay[0.388,0.3,0.3]", "std:delay[0.388,0.3,0.3]")]);
+}
+
+// ID-13: Add Effect on the delay call itself wraps it in a new delay: the wrapped one keeps its
+// instance.
+#[test]
+fn a_delay_wrapped_around_a_delay_keeps_the_wrapped_one() {
+    let f = Fixture::new(&format!(
+        "{HEAD}import {{ delay }} from \"std/fx\";\nexport default song(() => delay(osc.saw(hz(110)), {{ time: 0.388 }}));\n"
+    ));
+    let mut s = f.open();
+    let delay = call(&s, "delay");
+    let pairs = continued(&mut s, "std:delay", |s| drop(s.add_effect(rev(s), &delay, "std:delay").unwrap()));
+    assert!(f.source().contains("delay(delay(osc.saw(hz(110)), { time: 0.388 }), { time: 0.25, feedback: 0.3, mix: 0.3 })"));
+    assert_eq!(pairs, [made("std:delay[0.25,0.3,0.3]"), kept("std:delay[0.388,0.3,0.3]", "std:delay[0.388,0.3,0.3]")]);
+}
+
+// ID-13: Remove Effect on either of two delays, one inside the other: the delay that stays keeps
+// its own instance, never the removed one's.
+#[test]
+fn removing_either_of_two_delays_keeps_the_other() {
+    let source = format!(
+        "{HEAD}import {{ delay }} from \"std/fx\";\nexport default song(() => delay(delay(osc.saw(hz(110)), {{ time: 0.25 }}), {{ time: 0.388 }}));\n"
+    );
+    for (which, stays) in [(1, "std:delay[0.388,0.3,0.3]"), (0, "std:delay[0.25,0.3,0.3]")] {
+        let f = Fixture::new(&source);
+        let mut s = f.open();
+        let target = calls_in(&s, "song.ts", "delay")[which].clone();
+        let pairs = continued(&mut s, "std:delay", |s| drop(s.remove_effect(rev(s), &target).unwrap()));
+        assert_eq!(pairs, [kept(stays, stays)], "removing the {} delay", ["outer", "inner"][which]);
+    }
+}
+
+// ID-13: the same for a filter, whose setting is written positionally: a lowpass added inside a
+// lowpass leaves the user's on the outer call, and one wrapped around it leaves it on the inner.
+#[test]
+fn a_lowpass_added_inside_or_around_a_lowpass_keeps_the_users_lowpass() {
+    let source = format!("{HEAD}import {{ lowpass }} from \"std/filter\";\nexport default song(() => lowpass(osc.saw(hz(110)), 6000));\n");
+    for (on, written) in
+        [("osc.saw", "lowpass(lowpass(osc.saw(hz(110)), 1000), 6000)"), ("lowpass", "lowpass(lowpass(osc.saw(hz(110)), 6000), 1000)")]
+    {
+        let f = Fixture::new(&source);
+        let mut s = f.open();
+        let target = call(&s, on);
+        let pairs = continued(&mut s, "std:svf", |s| drop(s.add_effect(rev(s), &target, "std:lowpass").unwrap()));
+        assert!(f.source().contains(written), "{}", f.source());
+        assert_eq!(pairs, [made("std:svf[1000,0.707]"), kept("std:svf[6000,0.707]", "std:svf[6000,0.707]")], "after {on}");
+    }
+}
+
+// ID-13: the starter's hook, Add Reverb after its `widen(...)`: the track's own reverb is the outer
+// call and keeps its tail; so does every other node of the track. The chords' Add Chorus after
+// `widen(...)` is the same.
+#[test]
+fn the_starters_add_reverb_keeps_the_hooks_reverb() {
+    let f = crate::testing::fixture("templates/starter");
+    let mut s = f.open();
+    let widen = calls_in(&s, "tracks/hook.ts", "widen")[0].clone();
+    let pairs = continued(&mut s, "std:reverb", |s| drop(s.add_effect(rev(s), &widen, "std:reverb").unwrap()));
+    assert!(
+        f.read("tracks/hook.ts")
+            .contains("reverb(reverb(widen(echoes, { width: 1.3 }), { size: 0.6, damping: 0.5, mix: 0.25 }), { size: 0.6, mix: 0.2 })")
+    );
+    let hook = [made("std:reverb[0.6,0.5,0.25]"), kept("std:reverb[0.6,0.5,0.2]", "std:reverb[0.6,0.5,0.2]")];
+    assert!(pairs.iter().filter(|p| p.1.is_none()).count() == 1 && hook.iter().all(|p| pairs.contains(p)), "{pairs:?}");
+    let widen = calls_in(&s, "tracks/chords.ts", "widen")[0].clone();
+    let pairs = continued(&mut s, "std:chorus", |s| drop(s.add_effect(rev(s), &widen, "std:chorus").unwrap()));
+    assert_eq!(pairs, [kept("std:chorus[0.6,0.4,0.4]", "std:chorus[0.6,0.4,0.4]"), made("std:chorus[0.8,0.5,0.5]")]);
+}
+
+/// `rev` played live from 0 for `frames`; when `next` is given, it is activated at frame `at` as the
+/// server activates an edit: prepared against what plays, keeping what the session says continues.
+fn played(rev: &m2_session::Revision, packages: &PackageSet, frames: usize, next: Option<(usize, &m2_session::Revision)>) -> Vec<[f32; 2]> {
+    use m2_runtime::{Basis, CallbackStamp, Engine, Envelope, Keep, Msg, Renderer, Transport, audio::Cache};
+    let (flat, data) = (&rev.compiled.flat, &rev.compiled.data);
+    let mut r = Renderer::new(flat, data, packages, 48_000).unwrap();
+    r.set_strict(false);
+    r.set_transport(Transport::new(0, true));
+    let info = r.info();
+    let mut e = Engine::with(Box::new(r));
+    let mut retired = vec![];
+    let mut run = |e: &mut Engine, inbox: &mut Option<Envelope>, n: usize| {
+        let mut out = vec![[0.0; 2]; n];
+        let mut retire = |r| {
+            retired.push(r);
+            Ok(())
+        };
+        e.process(&mut out, &mut || inbox.take(), &mut retire, CallbackStamp::default());
+        out
+    };
+    let Some((at, new)) = next else { return run(&mut e, &mut None, frames) };
+    let mut out = run(&mut e, &mut None, at);
+    let cont = m2_session::tx::continues::continues(rev, new);
+    let restarts = Default::default();
+    let keep = Keep { old: flat, old_data: data, info: &info, cont: &cont, restarts: &restarts };
+    let (flat, data) = (&new.compiled.flat, &new.compiled.data);
+    let owner = m2_plugins::Owner::discard();
+    let mut r = Renderer::prepare(flat, data, packages, 48_000, &mut Cache::default(), &owner, Basis::Keep(keep)).unwrap();
+    r.set_strict(false);
+    let mut inbox = Some(Envelope { seq: 1, msg: Msg::Activate { renderer: Box::new(r) } });
+    out.extend(run(&mut e, &mut inbox, frames - at));
+    assert!(inbox.is_none() && e.refused_activations() == 0, "the edit was activated");
+    out
+}
+
+// ID-13, R5, RENDER-25: what it sounds like. A delay added inside the user's delay while its echoes
+// ring and nothing goes in: the kept delay's echoes go on exactly as with no edit, to the bit. With
+// the old pairing the user's 0.388 s echoes went to the new 0.25 s delay, whose time cell then
+// stepped on a buffer of echoes: a jump in the silence, and other echoes for a second.
+#[test]
+fn a_delay_added_inside_a_ringing_delay_changes_no_bit_of_its_echoes() {
+    let f = Fixture::new(
+        "import { poly, song, track } from \"@m2/core\";\nimport { osc, vca } from \"std/dsp\";\nimport { delay } from \"std/fx\";\n\
+         const t = track(\"t\", ({ lane }) => delay(poly(lane.notes(\"n\"), (n) => vca(osc.sine(n.pitch), n.gate)), { time: 0.388, feedback: 0.5 }));\n\
+         export default song(() => t.out);\n",
+    );
+    std::fs::create_dir_all(f.0.join("data/t")).unwrap();
+    std::fs::write(f.0.join("data/arrangement.json"), "{\"tempo\": [{\"beat\": 0, \"bpm\": 120}], \"meter\": []}").unwrap();
+    // One note, an eighth long (0.25 s): from then on the delay hears exact silence.
+    let note = "{\"clips\": [{\"id\": \"c\", \"start\": 0, \"length\": 4, \"notes\": [{\"pitch\": \"A4\", \"start\": 0, \"length\": 0.5, \"velocity\": 1}]}]}";
+    std::fs::write(f.0.join("data/t/n.json"), note).unwrap();
+    let mut s = f.open();
+    let before = s.accepted_arc();
+    let poly = call(&s, "poly");
+    s.add_effect(rev(&s), &poly, "std:delay").unwrap();
+    let after = s.accepted_arc();
+    let (at, frames) = (33_600, 48_000 * 2);
+    let alone = played(&before, &s.packages, frames, None);
+    let edited = played(&before, &s.packages, frames, Some((at, &after)));
+    let peak = alone[at..at + 4800].iter().flatten().fold(0f32, |m, x| m.max(x.abs()));
+    assert!(peak > 0.05, "echoes ring through the edit: {peak}");
+    let first = alone.iter().zip(&edited).position(|(x, y)| x.map(f32::to_bits) != y.map(f32::to_bits));
+    assert_eq!(first, None, "the first frame that differs from no edit (the edit is at {at})");
+}
