@@ -249,3 +249,24 @@ One known flake, named: `s4-clips-fix` crashed once and passed 28 of 28 on its r
 poll loop while a save had renamed it aside (`ENOENT`): the missing-file gap of `ground/e2e.md` (row "any suite that
 reads a project file in a poll loop", which names s4-clips), which S6 closes. Not this slice's code: S4 changes only
 math. Run alone 10 more times on this build: 9 passed in full, 1 crashed the same way.
+
+**Independent check** (label `check-S4`, at `fa09cf0`; `ci/check.sh`, 13 min, logs in `~/m2-runs/check-check-S4/`):
+§13.1's S1 row changed only by S4. Rust tests: the 10 S4 leaves (9 tests and the `main_thread` binary), 689 passed,
+`fixture_renders_change_only_with_stds_version` passes. Clippy: lint 1 first; without `-D warnings` exactly §4.2's 15,
+none in S4's crates. std kernels PASS, std.wasm FAIL (S3), mac lint PASS. Browser suites: 23 of 29, the 6 key and
+case suites S2 owns failing; `notes-proj` passed (its race, as in the builder's run); live3b 51 of 51. Renders 8 of 8.
+Repo unchanged. A release `m2` also renders the 8 to `e2e/renders.sha256`.
+
+Probes: the QuickJS test fails with 23 wrong when both halves are off and with the 2 `**` cases when only the lowering
+is off; `host_math.rs` fails when the WSOLA `cosf`, the gain `powf`, the pitch `powf` or a resampler `cos` is put back,
+and passes with host math inside `#[cfg(test)]`.
+
+| Fixed in `host_math.rs` (a follow-up commit) | Why |
+|---|---|
+| Bans `.asinh(`, `.acosh(` and `.atanh(` too | Rust 1.99's `asinh` and `acosh` call the OS's `asinh` and `acosh`, and `atanh` its `log1p` (read in std's source). Before, `(0.5f32).asinh()` in `audio.rs` passed the test. |
+| Bans `f32::sin` and the rest by path without a bracket | `.map(f32::sin)` calls the OS's `sin`, and passed. Clippy's `redundant_closure` turns `.map(\|x\| f32::sin(x))` into that form. |
+| Fails when a `.rs` file under `src` is not in the module tree | A `mod` line the parser didn't know made the test skip the file in silence: with `mod resample; // x` or `pub(super) mod resample;`, a `cos` put back in `resample.rs` passed. The parser now takes any visibility and a comment, and a form it still can't read fails the test. |
+
+Reported, not fixed (design choices or bigger than a fix): song code's `**` on BigInt variables now throws (`2n ** 3n`
+with literals still works; oxc lowers only the others to `Math.pow`); `**` inside `eval` or `new Function` skips the
+lowering and uses the OS's `pow`.
