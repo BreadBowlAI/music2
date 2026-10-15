@@ -16,11 +16,12 @@
 #   CLAP_PATH         a folder holding "Surge XT.clap" and "Airwindows Consolidated.clap". The
 #                     default, when both are there: ~/Library/Audio/Plug-Ins/CLAP on a Mac,
 #                     ~/.local/share/m2-test-plugins/clap on Linux (ci/plugins.sh fills it).
-#                     Without them the summary says "PASS without plugins".
+#                     Without them the check can't pass (PLAT-6): it says FAIL, even when no row
+#                     failed.
 #   CARGO_TARGET_DIR  where cargo builds (default: target/ in the repo)
 #   M2_CHECK_OUT      where the logs go (default: ~/m2-check/<commit>). Only a folder an earlier
 #                     check made is ever replaced.
-# Exit status: 0 when every check passed, 1 when one failed, 2 when it couldn't start.
+# Exit status: 0 when every check passed with the test plugins, 1 when not, 2 when it couldn't start.
 #
 # Needs rustup and Node 24. The first run installs Rust 1.99.0 (rust-toolchain.toml) and
 # chrome-headless-shell 133.0.6943.141. On a Mac, run it in Terminal on the Mac itself, not over
@@ -80,6 +81,9 @@ if [ -z "${CLAP_PATH:-}" ] && [ -e "$PLUGINS/Surge XT.clap" ] && [ -e "$PLUGINS/
   CLAP_PATH=$PLUGINS
 fi
 if [ -n "${CLAP_PATH:-}" ]; then export CLAP_PATH; else unset CLAP_PATH; fi
+# Whether both test plugins are there: a check passes only with them (PLAT-6).
+TESTPLUGINS=
+if [ -e "${CLAP_PATH:-}/Surge XT.clap" ] && [ -e "${CLAP_PATH:-}/Airwindows Consolidated.clap" ]; then TESTPLUGINS=1; fi
 # A Mac stays awake while this runs: idle sleep breaks timed tests.
 if [ $OS = macos ]; then caffeinate -i -w $$ & fi
 
@@ -122,8 +126,8 @@ suites() { env E2E_CHROME="$CHROME" M2_HEADLESS="$TARGET/debug/examples/headless
 version() { /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$CLAP_PATH/$1.clap/Contents/Info.plist" 2> /dev/null || echo '?'; }
 # plugins: the folder the plugin checks used, and which builds are in it.
 plugins() {
-  if [ -z "${CLAP_PATH:-}" ]; then
-    echo none
+  if [ -z "$TESTPLUGINS" ]; then
+    echo "none: ${CLAP_PATH:-$PLUGINS} doesn't hold both"
   elif [ $OS = macos ]; then
     echo "$CLAP_PATH (Surge XT $(version 'Surge XT'), Airwindows Consolidated $(version 'Airwindows Consolidated'))"
   elif (cd "$CLAP_PATH" && grep '\.clap$' "$ROOT/ci/plugins.sha256" | sha256sum -c --quiet) > /dev/null 2>&1; then
@@ -141,8 +145,8 @@ summary() {
   if [ -s "$SCR/before" ]; then state="with local changes"; else state=clean; fi
   if [ "$fails" -gt 0 ]; then
     verdict="FAIL ($fails of $total checks)"
-  elif [ -z "${CLAP_PATH:-}" ]; then
-    verdict="PASS without plugins"
+  elif [ -z "$TESTPLUGINS" ]; then
+    verdict="FAIL: no row failed, but the test plugins weren't there, so it isn't a pass (PLAT-6)"
   else
     verdict=PASS
   fi
@@ -161,7 +165,13 @@ summary() {
     awk -F"$TAB" '{printf "%-16s %-4s  %s\n", $1, $2, $3}' "$OUT/results"
     if [ -s "$OUT/gates.sum" ]; then echo; echo "gates:"; sed 's/^/  /' "$OUT/gates.sum"; fi
     if [ -s "$OUT/flaky" ]; then echo; echo "passed only on a retry:"; sed 's/^/  /' "$OUT/flaky"; fi
-    if [ -s "$OUT/failed" ]; then echo; echo "what failed:"; head -40 "$OUT/failed" | sed 's/^/  /'; fi
+    if [ -s "$OUT/failed" ]; then
+      echo
+      echo "what failed:"
+      head -40 "$OUT/failed" | sed 's/^/  /'
+      cut=$(( $(grep -c '' "$OUT/failed") - 40 ))
+      if [ $cut -gt 0 ]; then echo "  ($cut lines more: the whole list is $OUT/failed, and \"failed\" in the logs file)"; fi
+    fi
     echo
     echo "logs     $OUT.tgz"
   } | tee "$OUT/summary.txt"
@@ -193,6 +203,9 @@ trap stopped INT TERM
 
 echo "music2 check of $SHA on $MACHINE (logs in $OUT)"
 git status --porcelain > "$SCR/before"
+if [ -z "$TESTPLUGINS" ]; then
+  echo "plugins: Surge XT.clap and Airwindows Consolidated.clap aren't both in ${CLAP_PATH:-$PLUGINS} (on Linux, ci/plugins.sh installs them)" >> "$OUT/failed"
+fi
 
 # 0. Plugins in a folder music2 always searches make fx-fixes fail, so the run could never pass:
 #    stop at once, before 45 minutes are spent, and say what to do.
@@ -242,7 +255,10 @@ fi
 app() {
   name=$1
   dir=$SCR/app-$1
-  mkdir -p "$dir/home" "$dir/run" && chmod 700 "$dir/run" && cp -R "$2" "$dir/song" || return 1
+  if ! err=$({ mkdir -p "$dir/home" "$dir/run" && chmod 700 "$dir/run" && cp -R "$2" "$dir/song"; } 2>&1); then
+    echo "app $name: $2 couldn't be copied: $(echo "$err" | head -1 | cut -c1-120)" >> "$OUT/failed"
+    return 1
+  fi
   shift 2
   log=$OUT/app-$name.log
   env -i PATH=/usr/bin:/bin HOME="$dir/home" DISPLAY=":$DISPLAYN" XDG_RUNTIME_DIR="$dir/run" M2_AUDIO=none \
@@ -327,7 +343,13 @@ fi
 begin "rust tests" "10 min"
 quiet test.log env HOME="$OUT/home" cargo test --locked --workspace --no-fail-fast
 st=$?
-counts=$(grep -E '^test result:' "$OUT/test.log" | awk '{p += $4; f += $6} END {printf "%d passed, %d failed", p, f}')
+# A test binary that failed with no failed test to show for it (no harness, or it crashed) counts
+# as one failure.
+counts=$(awk '
+  /^     Running |^   Doc-tests / { result = 0; failed = 0 }
+  /^test result:/ { p += $4; f += $6; result = 1; failed = $6 }
+  /^error: (test|doctest) failed, to rerun pass / && !(result && failed) { f++; whole++ }
+  END { printf "%d passed, %d failed", p, f; if (whole) printf " (%d of them a whole test binary)", whole }' "$OUT/test.log")
 grep -E '^    [A-Za-z0-9_:]+$' "$OUT/test.log" | sed 's/^ *//' | sort -u > "$SCR/tests"
 grep -o 'to rerun pass `[^`]*`' "$OUT/test.log" | sed 's/^to rerun pass `//; s/`$//' > "$SCR/binaries"
 again=1
@@ -472,4 +494,4 @@ fi
 
 trap '' INT TERM
 summary
-[ "$fails" -eq 0 ]
+[ "$fails" -eq 0 ] && [ -n "$TESTPLUGINS" ]
