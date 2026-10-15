@@ -2897,3 +2897,64 @@ fn an_export_ends_the_notes_playback_left_sounding() {
     let (a, b) = (samples(&out), samples(&fresh_wav));
     assert!(a.iter().any(|x| *x != 0) && a == b, "the export is the fresh one, bit for bit");
 }
+
+// RENDER-1, RENDER-28 (bug 1): the output moves to another device while an export has playback's
+// instance. The player is let go as any changed one is, and the action that met it says why; the
+// export keeps what it borrowed. Nothing loads meanwhile: no instance is made and nothing else calls
+// this one. The export finishes as one made with new instances, bit for bit, and gives the instance
+// back; then the project loads into a new player where playback held, with an instance of its own,
+// and the borrowed one is destroyed.
+#[test]
+fn a_device_change_during_an_export_loads_a_new_player_after_it() {
+    // A tag no other test's probe has: this test counts the instances made from it.
+    let mut ex = Ex::tagged("moved");
+    let first = ex.handles();
+    let stats = m2_plugins::probe::stats(first[0]).unwrap();
+    let (before, audio) = (stats.main_calls().len(), m2_os::thread::token());
+    let epoch = |ex: &Ex| ex.state.graph.inspect(|a| a.open.as_ref().unwrap().plays.as_ref().map(|p| p.epoch));
+    let first_epoch = epoch(&ex).expect("it plays");
+    let out = ex.fixture.0.join("out.wav");
+    let (go, there) = ex.stop_inside();
+    crate::export::start(&ex.state, Some(out.clone())).unwrap();
+    ex.fill_until("the export took the instance", |_| there.try_recv().is_ok());
+    let beat = player(&ex.state.graph).status().beats;
+    ex.driver.error(DeviceErrorKind::DeviceChanged.into());
+    let e = ex.state.graph.transport("stop").unwrap_err();
+    assert!(e.to_string().starts_with("the sound output moved to another device"), "{e:#}");
+    ex.state.graph.poll();
+    ex.fill(4);
+    assert_eq!(epoch(&ex), Some(first_epoch), "nothing loads while the export has the instance");
+    assert_eq!(m2_plugins::probe::tagged("moved").len(), 1, "no instance made meanwhile");
+    go.send(()).unwrap();
+    ex.fill_until("the export is done", |ex| !ex.state.exports.running());
+
+    // Given back, then destroyed: the player that played it is gone.
+    eventually("the borrowed instance is destroyed", || stats.main_calls().iter().any(|c| c.what == "destroy"));
+    let calls = stats.main_calls();
+    assert_eq!(
+        moves(&calls, before),
+        ["deactivate", "render_offline", "activate", "deactivate", "render_realtime", "activate", "deactivate"],
+        "taken, given back, then deactivated to be destroyed: {calls:?}"
+    );
+    let (from, to) = (
+        calls[before..].iter().find(|c| c.what == "deactivate").unwrap().tick,
+        calls[before..].iter().rfind(|c| c.what == "activate").unwrap().tick,
+    );
+    let inside: Vec<(u64, usize)> = stats.process_calls().into_iter().filter(|(t, _)| *t > from && *t < to).collect();
+    assert!(!inside.is_empty() && inside.iter().all(|(_, th)| *th != audio), "only the export called it in its window");
+    assert!(stats.process_calls().iter().all(|(t, _)| *t < to), "the player let go never played it again");
+    // The new player, where playback held, stopped, with a new instance from the committed state.
+    eventually("a new player plays the project", || epoch(&ex) == Some(first_epoch + 1));
+    eventually("where playback held", || (ex.state.graph.status().beat - beat).abs() < 1e-3);
+    assert_eq!(player(&ex.state.graph).device, "none", "a new player (silent in tests)");
+    let made = m2_plugins::probe::tagged("moved");
+    assert_eq!(made.len(), 2, "one new instance, for the new player");
+    eventually("it plays", || made[1].process.load(Ordering::Relaxed) > 0);
+
+    let (_, _, fresh, _) = ex.state.graph.render(Length::Song).unwrap();
+    let fresh_wav = ex.fixture.0.join("fresh.wav");
+    fresh.write(&fresh_wav, |_| {}).unwrap();
+    let samples = |p: &Path| hound::WavReader::open(p).unwrap().into_samples::<i32>().map(Result::unwrap).collect::<Vec<i32>>();
+    let (a, b) = (samples(&out), samples(&fresh_wav));
+    assert!(a.iter().any(|x| *x != 0) && a == b, "the export is the fresh one, bit for bit");
+}
