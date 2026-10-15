@@ -13,7 +13,7 @@ use crate::fs::Rename;
 #[cfg(test)]
 pub(crate) use crate::unix::sync_refused;
 pub(crate) use crate::unix::{
-    change_and_inode, cpu_time, file_id, file_id_of, host_name, local_time, make_writable, push, sync_dir, token,
+    c_numbers, change_and_inode, cpu_time, file_id, file_id_of, host_name, local_time, make_writable, push, sync_dir, token,
 };
 use crate::unix::{check, cpath};
 

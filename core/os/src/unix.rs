@@ -24,6 +24,17 @@ pub(crate) fn cpu_time() -> Duration {
     Duration::new(t.tv_sec as u64, t.tv_nsec as u32)
 }
 
+pub(crate) fn c_numbers() {
+    // Made once and kept for the process: a thread's locale must outlive its use.
+    static C: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    // SAFETY: newlocale with "C", which every system has; nothing frees it.
+    let c = *C.get_or_init(|| unsafe { libc::newlocale(libc::LC_ALL_MASK, c"C".as_ptr(), std::ptr::null_mut()) } as usize);
+    if c != 0 {
+        // SAFETY: a locale newlocale made, which lives as long as the process.
+        unsafe { libc::uselocale(c as libc::locale_t) };
+    }
+}
+
 /// A path for a C call.
 pub(crate) fn cpath(p: &Path) -> io::Result<CString> {
     CString::new(p.as_os_str().as_bytes()).map_err(|_| io::Error::new(ErrorKind::InvalidInput, "a NUL in a path"))

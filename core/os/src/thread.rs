@@ -23,6 +23,14 @@ pub fn cpu_time() -> Duration {
     os::cpu_time()
 }
 
+/// From now on the calling thread reads and writes numbers as C does, with a `.`, whatever locale
+/// the process has. A GTK app takes the user's (`setlocale(LC_ALL, "")`), whose decimal comma
+/// makes the C library's `strtod` read "0.5" as 0, and QuickJS's `JSON.parse` uses it. For a
+/// thread of its own: nothing puts the locale it had back.
+pub fn c_numbers() {
+    os::c_numbers()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

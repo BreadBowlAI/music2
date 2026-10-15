@@ -20,7 +20,11 @@ pub use component::{Catalog, Descriptor, UnitCtor};
 
 use m2_ir::{Body, Diagnostic, Ir};
 use oxc::allocator::Allocator;
-use oxc::ast::ast::{CallExpression, Expression, ImportDeclarationSpecifier, Statement};
+use oxc::allocator::TakeIn;
+use oxc::ast::ast::{
+    AssignmentExpression, AssignmentOperator, AssignmentTarget, BinaryExpression, BinaryOperator, CallExpression, Expression,
+    ImportDeclarationSpecifier, Statement,
+};
 use oxc::ast::builder::AstBuilder;
 use oxc::ast_visit::{VisitMut, walk_mut};
 use serde::{Deserialize, Serialize};
@@ -465,6 +469,9 @@ fn strip(path: &str, source: &str) -> Result<(String, LineMap), String> {
         return Err(format!("{path}:{line}:{col}: {}", e.message));
     }
     let mut program = ret.program;
+    // oxc lowers `**=` before it strips the types around its target: `x! **= y` would be left to
+    // QuickJS's own `**`.
+    Unwrap(&allocator).visit_program(&mut program);
     let scoping = SemanticBuilder::new().build(&program).semantic.into_scoping();
     // `**` becomes `__m2_pow`, which computes numbers with libm like the rest of `Math` (PLAT-4);
     // QuickJS's own `**` calls the OS's C library. oxc lowers it to `Math.pow`, which `Pow` renames.
@@ -474,7 +481,13 @@ fn strip(path: &str, source: &str) -> Result<(String, LineMap), String> {
     if let Some(e) = tr.diagnostics.first() {
         return Err(format!("{path}: {}", e.message));
     }
-    Pow(AstBuilder::new(&allocator)).visit_program(&mut program);
+    let mut pow = Pow { ast: AstBuilder::new(&allocator), left: None };
+    pow.visit_program(&mut program);
+    if let Some(at) = pow.left {
+        // Every `**` on numbers is lowered: one that isn't would use the OS's `pow`.
+        let (line, _) = line_col(source, at as usize);
+        return Err(format!("{path}:{line}: this `**` can't be made to compute alike on every computer: write Math.pow(a, b)"));
+    }
     let out = Codegen::new().with_options(CodegenOptions { source_map_path: Some(PathBuf::from(path)), ..Default::default() }).build(&program);
     let mut map = LineMap::default();
     if let Some(sm) = &out.map {
@@ -486,8 +499,12 @@ fn strip(path: &str, source: &str) -> Result<(String, LineMap), String> {
 
 /// Points each `Math.pow` call that oxc's `**` lowering made at the prelude's `__m2_pow`, which
 /// takes BigInts too, as `**` does, and which no `Math` the song declares can stand in for. The
-/// lowering's `Math` and `pow` have no place in the source; a `Math.pow` the code wrote has.
-struct Pow<'a>(AstBuilder<'a>);
+/// lowering's `Math` and `pow` have no place in the source; a `Math.pow` the code wrote has. `left`
+/// is where a `**` on something other than a BigInt literal was left unlowered, if one was.
+struct Pow<'a> {
+    ast: AstBuilder<'a>,
+    left: Option<u32>,
+}
 
 impl<'a> VisitMut<'a> for Pow<'a> {
     fn visit_call_expression(&mut self, call: &mut CallExpression<'a>) {
@@ -495,9 +512,45 @@ impl<'a> VisitMut<'a> for Pow<'a> {
             && let Expression::Identifier(math) = &m.object
             && (math.name == "Math" && math.span.is_empty() && m.property.name == "pow" && m.property.span.is_empty())
         {
-            call.callee = Expression::new_identifier(SPAN, "__m2_pow", &self.0);
+            call.callee = Expression::new_identifier(SPAN, "__m2_pow", &self.ast);
         }
         walk_mut::walk_call_expression(self, call);
+    }
+
+    // oxc leaves a `**` with a BigInt literal to QuickJS, whose BigInt `**` is exact.
+    fn visit_binary_expression(&mut self, b: &mut BinaryExpression<'a>) {
+        if b.operator == BinaryOperator::Exponential && !b.left.is_big_int_literal() && !b.right.is_big_int_literal() {
+            self.left = self.left.or(Some(b.span.start));
+        }
+        walk_mut::walk_binary_expression(self, b);
+    }
+
+    fn visit_assignment_expression(&mut self, a: &mut AssignmentExpression<'a>) {
+        if a.operator == AssignmentOperator::Exponential && !a.right.is_big_int_literal() {
+            self.left = self.left.or(Some(a.span.start));
+        }
+        walk_mut::walk_assignment_expression(self, a);
+    }
+}
+
+/// Takes the types off the target of each `**=` (`x! **= y`, `(x as number) **= y`), as the
+/// TypeScript strip would, before oxc lowers `**`: it lowers only plain names and members.
+struct Unwrap<'a>(&'a Allocator);
+
+impl<'a> VisitMut<'a> for Unwrap<'a> {
+    fn visit_assignment_expression(&mut self, a: &mut AssignmentExpression<'a>) {
+        if a.operator == AssignmentOperator::Exponential
+            && let Some(wrapped) = a.left.get_expression_mut()
+        {
+            let inner = wrapped.get_inner_expression_mut();
+            if let Expression::Identifier(_) = inner {
+                let Expression::Identifier(name) = inner.take_in(&self.0) else { unreachable!() };
+                a.left = AssignmentTarget::AssignmentTargetIdentifier(name);
+            } else if inner.is_member_expression() {
+                a.left = AssignmentTarget::from(inner.take_in(&self.0).into_member_expression());
+            }
+        }
+        walk_mut::walk_assignment_expression(self, a);
     }
 }
 
@@ -602,9 +655,38 @@ thread_local! {
     static BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
+/// The C stack each build and describe run has. QuickJS recurses in C for each call in song code,
+/// so how deep a song may recurse depends on how each compiler lays out its frames (at 1 MB, about
+/// 1,300 calls with gcc and 950 with clang). Only address space is reserved: pages are used as the
+/// stack grows.
+const STACK: usize = 32 << 20;
+/// What QuickJS may use of it, about 15,000 calls or more: far deeper than a real song goes. The
+/// rest is room for the host's own calls under it. rquickjs takes no more than 16 MB: a larger limit
+/// means none, and endless recursion would overflow the thread.
+const JS_STACK: usize = 16 << 20;
+
+/// Run `f` on a thread of its own, with [`STACK`] and numbers read as C reads them whatever the
+/// process's locale (`m2_os::thread::c_numbers`), and wait for it: the same build on every OS and
+/// in every app (PLAT-4).
+fn on_own_thread<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+    std::thread::scope(|s| {
+        let run = move || {
+            m2_os::thread::c_numbers();
+            f()
+        };
+        let t = std::thread::Builder::new().name("m2-script".into()).stack_size(STACK).spawn_scoped(s, run).expect("a thread to build on");
+        t.join().unwrap_or_else(|e| std::panic::resume_unwind(e))
+    })
+}
+
 /// Like [`build`], also returning the call sites the IR's origins refer to.
 pub fn build_full(opts: &Options) -> Result<Build, Vec<Diagnostic>> {
     BUILDS.with(|b| b.set(b.get() + 1));
+    on_own_thread(|| build_here(opts))
+}
+
+/// [`build_full`], on this thread.
+fn build_here(opts: &Options) -> Result<Build, Vec<Diagnostic>> {
     let err = |m: String| vec![Diagnostic::error("code.build", m)];
     if !opts.code.contains_key(&opts.entry) {
         return Err(err(format!("the entry `{}` is not a code file of the project", opts.entry)));
@@ -647,7 +729,7 @@ pub fn build_full(opts: &Options) -> Result<Build, Vec<Diagnostic>> {
 fn sandbox(state: &Rc<RefCell<State>>, memory_limit: usize, time_limit: Duration) -> rquickjs::Result<(Runtime, Context, Instant)> {
     let rt = Runtime::new()?;
     rt.set_memory_limit(memory_limit);
-    rt.set_max_stack_size(1 << 20);
+    rt.set_max_stack_size(JS_STACK);
     let deadline = Instant::now() + time_limit;
     rt.set_interrupt_handler(Some(Box::new(move || Instant::now() > deadline)));
     rt.set_loader(Resolve(state.clone()), Load(state.clone()));
@@ -798,6 +880,11 @@ fn described(packages: &[(String, PathBuf)], spec: &str) -> Result<Described, Di
 
 /// One sandboxed run that imports `spec` and asks `@m2/core` what it registered.
 fn describe_run(packages: &[(String, PathBuf)], spec: &str) -> (Vec<(PathBuf, String)>, Result<Described, Diagnostic>) {
+    on_own_thread(|| describe_here(packages, spec))
+}
+
+/// [`describe_run`], on this thread.
+fn describe_here(packages: &[(String, PathBuf)], spec: &str) -> (Vec<(PathBuf, String)>, Result<Described, Diagnostic>) {
     let state = Rc::new(RefCell::new(State {
         packages: packages.to_vec(),
         dependencies: packages.iter().map(|(n, _)| n.clone()).collect(),

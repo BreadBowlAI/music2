@@ -2488,8 +2488,10 @@ dependencies = [
 name = "m2-script"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "libm",
  "m2-ir",
+ "m2-os",
  "oxc",
  "rquickjs",
  "serde",

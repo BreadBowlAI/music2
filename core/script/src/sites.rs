@@ -28,8 +28,8 @@ use std::collections::HashMap;
 
 use oxc::allocator::Allocator;
 use oxc::ast::ast::{
-    Argument, BindingPattern, CallExpression, Expression, ObjectPropertyKind, PropertyKind, UnaryOperator, VariableDeclaration,
-    VariableDeclarationKind,
+    Argument, BindingPattern, CallExpression, Expression, ObjectPropertyKind, PropertyKind, TSEnumDeclaration, UnaryOperator,
+    VariableDeclaration, VariableDeclarationKind,
 };
 use oxc::ast_visit::{Visit, walk};
 use oxc::parser::Parser;
@@ -214,9 +214,15 @@ struct Collect<'s> {
     bindings: HashMap<(u32, u32), (String, bool)>,
     /// `(offset, sort key, text)`.
     inserts: Vec<(u32, (u8, i64), String)>,
+    /// Where the first `enum` is, which song code can't have.
+    enumeration: Option<u32>,
 }
 
 impl<'a> Visit<'a> for Collect<'_> {
+    fn visit_ts_enum_declaration(&mut self, it: &TSEnumDeclaration<'a>) {
+        self.enumeration = self.enumeration.or(Some(it.span.start));
+    }
+
     fn visit_variable_declaration(&mut self, it: &VariableDeclaration<'a>) {
         for declarator in &it.declarations {
             if let BindingPattern::BindingIdentifier(binding) = &declarator.id
@@ -289,19 +295,38 @@ impl<'a> Visit<'a> for Collect<'_> {
     }
 }
 
-/// Instrument `source` (TypeScript). Site ids start at `first_id`.
+/// The line and column, from 1 (in characters), of byte `at` in `source`.
+fn place(source: &str, at: usize) -> (usize, usize) {
+    let before = &source[..at.min(source.len())];
+    (before.matches('\n').count() + 1, before.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1)
+}
+
+/// Instrument `source` (TypeScript). Site ids start at `first_id`. Song code can't have an `enum`.
 pub fn instrument(file: &str, source: &str, first_id: u32) -> Result<Instrumented, String> {
     let allocator = Allocator::default();
     let ret = Parser::new(&allocator, source, SourceType::ts()).parse();
     if let Some(e) = ret.diagnostics.first() {
-        let at = e.labels.first().map(|l| l.offset() as usize).unwrap_or(0);
-        let before = &source[..at.min(source.len())];
-        let line = before.matches('\n').count() + 1;
-        let col = before.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
+        let (line, col) = place(source, e.labels.first().map(|l| l.offset() as usize).unwrap_or(0));
         return Err(format!("{file}:{line}:{col}: {}", e.message));
     }
-    let mut c = Collect { source, file: file.to_string(), next_id: first_id, sites: vec![], bindings: HashMap::new(), inserts: vec![] };
+    let mut c = Collect {
+        source,
+        file: file.to_string(),
+        next_id: first_id,
+        sites: vec![],
+        bindings: HashMap::new(),
+        inserts: vec![],
+        enumeration: None,
+    };
     c.visit_program(&ret.program);
+    if let Some(at) = c.enumeration {
+        // oxc's enum transform stops a debug build's whole process (an assertion inside QuickJS's
+        // loader, which can't unwind), and gives string members wrong reverse mappings (oxc#21667).
+        let (line, col) = place(source, at as usize);
+        return Err(format!(
+            "{file}:{line}:{col}: enum isn't available in song code: use a plain object, like const Mode = {{ A: 0, B: 1 }}"
+        ));
+    }
     let mut sites = c.sites;
     sites.sort_by_key(|s| (s.start, std::cmp::Reverse(s.end)));
     for (i, s) in sites.iter_mut().enumerate() {

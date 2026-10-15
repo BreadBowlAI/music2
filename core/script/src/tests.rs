@@ -196,7 +196,7 @@ fn song_math_is_libm_on_every_os() {
         x if x.is_infinite() => format!("{}Infinity", if x < 0.0 { "-" } else { "" }),
         x => format!("{x:?}"),
     };
-    let checks: [(&str, f64); 31] = [
+    let checks: [(&str, f64); 38] = [
         ("Math.sin(2.5)", libm::sin(2.5)),
         ("Math.cos(2.3)", libm::cos(2.3)),
         ("Math.tan(2.2)", libm::tan(2.2)),
@@ -220,6 +220,14 @@ fn song_math_is_libm_on_every_os() {
         ("Math.pow(0.1, 0.7)", libm::pow(0.1, 0.7)),
         ("0.1 ** 0.7", libm::pow(0.1, 0.7)),
         ("(() => { let y = 2; y **= -89 / 12; return y; })()", libm::pow(2.0, -89.0 / 12.0)),
+        // `**=` on a target in TypeScript's clothes (review det-2 of the platform step).
+        ("(() => { let a: number | undefined = 0.1; a! **= 0.7; return a; })()", libm::pow(0.1, 0.7)),
+        ("(() => { let b = 0.1; (b as number) **= 0.7; return b; })()", libm::pow(0.1, 0.7)),
+        ("(() => { let c = 0.1; (<number>c) **= 0.7; return c; })()", libm::pow(0.1, 0.7)),
+        ("(() => { let d = 0.1; (d satisfies number) **= 0.7; return d; })()", libm::pow(0.1, 0.7)),
+        ("(() => { const o: { p?: number } = { p: 0.1 }; o.p! **= 0.7; return o.p!; })()", libm::pow(0.1, 0.7)),
+        ("(() => { const r = [0.1]; r[0]! **= 0.7; return r[0]; })()", libm::pow(0.1, 0.7)),
+        ("(() => { const h = [0.1]; ((h[0] as number)) **= 0.7; return h[0]; })()", libm::pow(0.1, 0.7)),
         ("Math.hypot(0.1, 0.1)", libm::hypot(0.1, 0.1)),
         // As QuickJS's own: folded, |x| alone, 0 for none, Infinity over NaN.
         ("Math.hypot(0.1, 0.1, 0.2)", libm::hypot(libm::hypot(0.1, 0.1), 0.2)),
@@ -248,6 +256,42 @@ export default song(() => kernel("std:sine", {{ freq: 440 * 2 ** ((n - 69) / 12)
     let consts: Vec<f64> =
         ir.modules[0].nodes.iter().filter_map(|n| if let Op::Const { value, .. } = n.op { Some(value) } else { None }).collect();
     assert!(consts.iter().any(|c| c.to_bits() == freq.to_bits()), "{freq:?} in {consts:?}");
+}
+
+// RENDER-2, PLAT-4 (review det-3 of the platform step): a build runs on a thread with a large stack,
+// so a song recursing far deeper than any real one builds the same whichever compiler built
+// QuickJS. With 1 MB, gcc's QuickJS stopped at about 1,300 calls and clang's at about 950. Endless
+// recursion still ends, with QuickJS's own message, never overflowing the thread.
+#[test]
+fn deep_recursion_builds_alike_on_every_os() {
+    let deep = "import { song, kernel } from \"@m2/core\";\nconst depth = (i: number): number => (i === 0 ? 0 : 1 + depth(i - 1));\n\
+                if (depth(5000) !== 5000) throw new Error(\"wrong depth\");\nexport default song(() => kernel(\"std:sine\", { freq: 440 }));\n";
+    build_of(&[("song.ts", deep)]).unwrap_or_else(|e| panic!("{e:?}"));
+    let endless = "import { song, kernel } from \"@m2/core\";\nconst f = (): number => 1 + f();\nf();\n\
+                   export default song(() => kernel(\"std:sine\", { freq: 440 }));\n";
+    let e = error_of(&[("song.ts", endless)]);
+    assert!(e.message.contains("stack"), "{e:?}");
+}
+
+// RENDER-2 (decision D1 of the platform review): song code can't have an `enum`. It is refused
+// at its place, saying what to write instead: oxc's enum transform stopped a debug build's whole
+// process (an assertion inside QuickJS's loader, which can't unwind), and gives string members
+// wrong reverse mappings in a release build (oxc#21667). In a package module too.
+#[test]
+fn an_enum_is_refused_at_its_place() {
+    for code in ["enum Mode { A, B }", "const enum Mode { A = \"a\", B = \"b\" }"] {
+        let song = format!(
+            "import {{ song, kernel }} from \"@m2/core\";\n\n  {code}\nexport default song(() => kernel(\"std:sine\", {{ freq: 440 }}));\n"
+        );
+        let e = error_of(&[("song.ts", &song)]);
+        assert_eq!(
+            (e.message.as_str(), e.src.as_deref()),
+            ("enum isn't available in song code: use a plain object, like const Mode = { A: 0, B: 1 }", Some("song.ts:3:3")),
+            "{code}"
+        );
+    }
+    let e = error_of(&[("song.ts", PLAY_T), ("tracks/t.ts", "export enum Kind { Kick }\nexport const out = 1;\n")]);
+    assert_eq!(e.src.as_deref(), Some("tracks/t.ts:1:8"), "{e}");
 }
 
 // PLAT-4: song code's `**` is JavaScript's on every value, though the build lowers it. Numbers
