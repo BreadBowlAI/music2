@@ -13,7 +13,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use m2_editor::render::{Length, Render};
@@ -29,6 +29,10 @@ use serde_json::{Value, json};
 use super::lease::{Committed, PlaysView, Revs, State};
 use super::{Device, EditTiming, EngineView, Inner, Published, Shown, Timing, preview, put_back, watcher};
 use crate::files;
+
+/// A plugin whose new instance fails this soon after it was started again (HOST-5) fails at every
+/// call: it is left silent. One that fails later is started again.
+const REVIVED: Duration = Duration::from_secs(10);
 
 /// Free `old` on a thread of its own, so a large value (a view of every note) is never dropped on
 /// the actor's way to a reply. When that thread is behind, it is freed here, so nothing piles up.
@@ -149,6 +153,10 @@ pub(crate) struct Open {
     /// The accepted revision whose renderer didn't build, once the user was told: the catch-up
     /// tries it again every 300 ms, and says so once.
     told_unbuilt: Option<u64>,
+    /// Plugin nodes, by name, whose instance failed: when it was started again, or None once the
+    /// new one failed too, within [`REVIVED`], and was left silent. So one that fails at every
+    /// call is started again once, not every 300 ms, until the song is opened again (HOST-5).
+    pub(crate) revived: HashMap<String, Option<Instant>>,
     /// What preparing the last plan took, for the edit's timing.
     pub(super) prepared: Prepared,
     /// The timeline last published, whose lanes the next one shares where they are the same.
@@ -1006,6 +1014,7 @@ impl Actor {
             restarts: HashSet::new(),
             exporting: false,
             told_unbuilt: None,
+            revived: HashMap::new(),
             prepared: Prepared::default(),
             timeline: Arc::default(),
         };
@@ -1111,16 +1120,35 @@ impl Actor {
     /// Take in what the session's plugin instances reported unasked. An instance that asked for a
     /// restart is replaced by the next activation, which the catch-up makes at once: a new
     /// instance from the committed state, which fades in as the old one rings out (HOST-5). So is
-    /// one that failed (it plays silence meanwhile), and the user is told.
+    /// one that failed (it plays silence meanwhile), once, and the user is told. One whose new
+    /// instance fails too is left silent, and the user told that once.
     fn heard_plugins(&mut self) {
         if let Some(o) = &mut self.open
             && let Some(p) = &o.plays
         {
             for at in &p.info.plugins {
-                if at.inst.upgrade().is_some_and(|i| i.dead()) && o.restarts.insert(at.handle) {
-                    let who = plugin_named(&p.revision, &o.session.packages, at.node);
-                    self.inner.notices.lock().push(format!("{who} stopped working, so music2 started it again from its saved settings."));
+                if !at.inst.upgrade().is_some_and(|i| i.dead()) || o.restarts.contains(&at.handle) {
+                    continue;
                 }
+                let Some(n) = p.revision.compiled.flat.nodes.get(at.node) else { continue };
+                let again = match o.revived.get(&n.name) {
+                    Some(None) => continue,
+                    Some(Some(t)) => t.elapsed() < REVIVED,
+                    None => false,
+                };
+                let who = plugin_named(&p.revision, &o.session.packages, at.node);
+                let (said, revived) = match again {
+                    true => (
+                        format!("{who} stopped working again, so music2 left it silent. Open the song again to give it another try."),
+                        None,
+                    ),
+                    false => {
+                        o.restarts.insert(at.handle);
+                        (format!("{who} stopped working, so music2 started it again from its saved settings."), Some(Instant::now()))
+                    }
+                };
+                o.revived.insert(n.name.clone(), revived);
+                self.inner.notices.lock().push(said);
             }
         }
         while let Ok(e) = self.events.try_recv() {

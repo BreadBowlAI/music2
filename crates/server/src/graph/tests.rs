@@ -3156,6 +3156,35 @@ fn a_note_held_across_an_export_that_fails_at_once_plays_again() {
     assert!(ex.state.graph.status().playing && ex.engine().crashes() == 0, "playback goes on");
 }
 
+// HOST-5: a plugin that fails at every call is started again from its saved settings once. When
+// the new instance fails too, soon after, it is left silent and the user is told once; the song
+// plays on, and no new instance is made for it every 300 ms. One whose new instance failed long
+// after it was started again is started again. Before, each catch-up made a new one, and said so.
+#[test]
+fn a_plugin_that_keeps_failing_is_started_again_once() {
+    let mut ex = Ex::tagged("fails-process");
+    let rounds = |ex: &mut Ex, n: usize| {
+        for _ in 0..n {
+            ex.fill(4);
+            ex.state.graph.catch_up();
+        }
+    };
+    rounds(&mut ex, 1);
+    // As if the instance it was started again with had played for a minute.
+    ex.state.graph.inspect(|a| {
+        let back = Instant::now() - Duration::from_secs(60);
+        a.open.as_mut().unwrap().revived.values_mut().for_each(|t| *t = Some(back));
+    });
+    rounds(&mut ex, 20);
+    let made = m2_plugins::probe::tagged("fails-process");
+    assert!(made.len() == 3 && made.iter().all(|s| s.process.load(Ordering::Relaxed) > 0), "two new instances, each failed");
+    let told: Vec<String> = ex.state.graph.expire().into_iter().filter(|t| t.starts_with("m2 probe (p)")).collect();
+    let again = "m2 probe (p) stopped working, so music2 started it again from its saved settings.";
+    let silent = "m2 probe (p) stopped working again, so music2 left it silent. Open the song again to give it another try.";
+    assert_eq!(told, [again, again, silent]);
+    assert!(ex.state.graph.status().playing && ex.engine().crashes() == 0, "the song plays on");
+}
+
 // RENDER-26b, HOME-6 (fit-2 and K6 of the step 7 review): a plugin that refuses a new state is named
 // as the user knows it, by its plugin and its track, in plain words, once: a later edit neither tries
 // the refused state again nor says so again. Its old state written back (an undo) loads, as the

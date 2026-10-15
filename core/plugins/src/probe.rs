@@ -15,7 +15,9 @@
 //!
 //! Its state is `m2probe\0`, the two parameters, then a tag; any other bytes load as the tag
 //! alone. `m2.probe.fails-state` refuses a state that starts with `fail`, and any probe takes
-//! 300 ms to load one that starts with `slow`, as a big patch does. With [`Stats::defer_load`] set,
+//! 300 ms to load one that starts with `slow`, as a big patch does. One whose tag starts with
+//! `fails-process` reports an error from every `process` call, as a broken plugin does. With
+//! [`Stats::defer_load`] set,
 //! a probe applies the parameters of a state it loads at the end of its next `process` call, after
 //! that call's events, ending every voice, as Surge XT does. With [`Stats::reset_keeps_voices`]
 //! set, `reset` ends no voice, as Surge XT's doesn't.
@@ -453,6 +455,8 @@ struct Probe {
     host: *const clap_host,
     checks: Option<&'static clap_host_thread_check>,
     fails_state: bool,
+    /// Its state's tag starts with `fails-process`: every `process` call reports an error.
+    fails_process: bool,
     stats: Arc<Stats>,
     rate: f64,
     gain: f64,
@@ -573,6 +577,7 @@ unsafe extern "C" fn create(_: *const clap_plugin_factory, host: *const clap_hos
         host,
         checks: None,
         fails_state,
+        fails_process: false,
         stats: stats.clone(),
         rate: 48_000.0,
         gain: 1.0,
@@ -690,6 +695,10 @@ unsafe extern "C" fn process(p: *const clap_plugin, proc_: *const clap_process) 
         st.threads.fetch_add(1, Ordering::Relaxed);
     }
     me.done_to = pr.steady_time + pr.frames_count as i64;
+    if me.fails_process {
+        st.in_process.store(0, Ordering::Release);
+        return CLAP_PROCESS_ERROR;
+    }
     let n = pr.frames_count as usize;
     let (ins, outs) = unsafe {
         let i = (pr.audio_inputs_count > 0 && !pr.audio_inputs.is_null()).then(|| &*pr.audio_inputs);
@@ -942,6 +951,7 @@ unsafe extern "C" fn load(p: *const clap_plugin, s: *const clap_istream) -> bool
     } else {
         String::from_utf8_lossy(&bytes).into_owned()
     };
+    me.fails_process = tag.starts_with("fails-process");
     *me.stats.tag.lock().unwrap_or_else(|e| e.into_inner()) = tag;
     true
 }
