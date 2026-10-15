@@ -407,3 +407,70 @@ The rebase gave the slices' commits new hashes. The notes above name the old one
 | browser suites | PASS: 29 of 29, 1,034 of 1,034 checks; live3b 51 of 51 with the plugins |
 | renders | PASS: 8 of 8 match `e2e/renders.sha256` |
 | repo unchanged | PASS |
+
+## S6. Files, the lock, identity and folders
+
+**Built**
+
+| What | Where |
+|---|---|
+| `fs`: `push`, `barrier`, `sync_dir`, `rename` (`Swap`, `Excl`), `clone_file`, `file_id`, `file_id_of`, `same_volume`, `is_local`, `stored_name`, `try_lock`, `make_writable`; one `Stamp` and `FileId` | `core/os/src/fs.rs` |
+| Each OS's error lists: `rename_unsupported`, `lock_unsupported`, and macOS's `barrier_refused` | `core/os/src/mac/mod.rs`, `linux/mod.rs` |
+| macOS: `F_FULLFSYNC`, and `fsync` when a volume refuses it (before, `sync_all`, which is `F_FULLFSYNC` again); `renamex_np`, `clonefile`, `MNT_LOCAL`, `getattrlist` and `gethostuuid`, moved | `mac/mod.rs` |
+| Linux: `renameat2` with `RENAME_EXCHANGE` and `RENAME_NOREPLACE` (new); `is_local` by `statfs`'s type (NFS, SMB, CIFS, SMB2, 9p, Ceph, AFS, Coda, FUSE); `/etc/machine-id`; no clone, no stored name | `linux/mod.rs` |
+| What both share: `fsync`, the folder sync, stamps, file ids, the write bit, the host name, local time | `unix.rs` |
+| `host`: `machine_id`, `name`, `local_time`; `dirs::songs`, `dirs::cache` (`~/.cache/music2` on Linux) | `host.rs`, `dirs.rs` |
+| Every `Disk` call of `Real` is one call into `m2_os::fs`; the copy when a clone fails stays here | `core/session/src/tx/stage.rs` |
+| The lock, the volume checks, the machine id and the clock from `m2-os`; `host_id()` stays (the machine id, else the host name) | `core/session/src/lock.rs`, `session.rs` |
+| `watch::Stamp` is `m2_os::fs::Stamp`; the hash cache saves the same four numbers from it; `spelled()` asks `fs::stored_name` | `core/session/src/watch.rs`, `core/song/src/hash.rs` |
+| A Tx's spelling check finds the disk's name by `fs::file_id` | `core/session/src/tx/mod.rs` |
+| Export into `assets/` names the file by `fs::rename(Excl)`, not a hard link; the part file's lock and its sweeper use `fs::try_lock` | `crates/editor/src/render.rs` |
+| The songs and cache folders from `m2_os::dirs`; copies made writable by `fs::make_writable` | `crates/server/src/project.rs`, `resources.rs` |
+| `m2 new` refuses a name taken in other capitals on every OS, in the Mac's words ("already exists"), with a unit test (the lead's decision on Q1) | `project.rs` (`create_at`, `taken`, `create_at_refuses_a_name_taken_in_other_capitals`) |
+| No core dump from the kill tests' children on Linux (`prctl(PR_SET_DUMPABLE, 0)`) | `core/session/src/tx/kill_tests.rs` (`no_core_dump`), `hook_tests.rs` |
+| The gates time `fs::barrier` and say "the durable sync alone (F_FULLFSYNC on macOS, fsync on Linux)" | `crates/gates/src/server.rs`, `main.rs`, `README.md` |
+| The eight files leave `one_place.rs`'s allow-list; 3 are left, all S8's | `core/os/tests/one_place.rs` |
+| PLANE-5 (rule and *Why*), WRITE-15, 16 and 17 *Today*, FMT-16, FMT-20, RENDER-30, the layout block, PLAT-2, 3 and 7; Q1's rule is written into PLAT-7 | `docs/architecture.md` |
+
+**Measured**
+
+| What | Result |
+|---|---|
+| A file going missing during saves. A temporary test (not committed) saved `song.ts` 1,000 times while another thread read it in a loop. | On a disk that can't swap (`Recorder { plain: true }`, which is how Linux saved before this slice): 8,888 of 3,188,491 reads found it missing. With `renameat2`'s swap: 0 of 3,169,767. |
+| The kill test, alone | 92.9 s (473 s before, `ground/tests.md`). In the check, `m2-session`'s whole test binary took 93 s. |
+| The mac lint reads `mac/mod.rs` | A type error put there for a moment failed it at once. |
+| Linux's network types | All 9 equal the kernel's `linux/magic.h`. No network or FUSE volume is mounted here, so `is_local` saying no is untested on Linux (as design §12 says). |
+| The hash cache's folder | After the check, `hashes.json` is in the scratch `HOME`'s `.cache/music2`; no `Library/Caches` was made. |
+| `m2 new night` beside `Night` (the debug `m2`, scratch `HOME`, a relative path) | "error: night already exists" |
+
+**Deviations**
+
+| What | Why |
+|---|---|
+| The barrier's error list is tested in `mac/mod.rs`, not in the portable test | Only macOS has the barrier's fallback, so Linux has no such list. The portable test in `fs.rs` feeds the rename and lock lists by name. It leaves out `EOPNOTSUPP` for renames: Linux lists it (it is `ENOTSUP` there), macOS's list is today's (`ENOTSUP`, `EINVAL`). |
+| `try_lock` and `same_volume` are portable code in `fs.rs` | `try_lock` is std's `File::try_lock` (`flock`, as before) with each OS's error list. `same_volume` compares two `FileId`s. Neither needs code per OS. |
+| One helper, `kill_tests::no_core_dump()`, that both test children call | The design says each child calls `prctl` itself. It is still test code, not an `m2-os` item (attack 12), with one SAFETY comment instead of two. |
+| `lock::host_name()` is gone | Its two callers call `m2_os::host::name()`. `host_id()` stays, as §2.3 says. |
+| `m2-session` has `libc` as a dev-dependency only | Only the test children use it now, so product code can't call `libc` there. |
+| The Tx spelling check finds the disk's name by `fs::file_id`, which follows links; before, by `lstat` | It is the design's API. Only the refusal's message can change: on a disk that folds capitals, when the folder also holds a link to the same file, the message may name the link. |
+| `lock.local` says "this computer", not "this Mac" | Linux shows it too now that `is_local` has a Linux body. |
+| `host::name()` gives "this computer" when the OS gives no name | As `lock.rs` did. |
+| `create_at` and `make()` share one helper, `taken()` | The lead's decision on Q1 for `m2 new`. |
+
+**The check** at `6f9f602` (`ci/check.sh`, 8 min, logs and the app's screenshots in `~/m2-runs/check-build-S6/`):
+exactly §13.1's S6 row, on its first run, with no retry.
+
+| Row | Result |
+|---|---|
+| toolchain, web build, build | PASS |
+| app | PASS: the UI connected in 1 s with `first-song` and with `with-plugins`, and the app hosts the plugins (the screenshot shows no "Needs attention") |
+| rust tests | FAIL: tests 1 to 5 of §4.1 by name (`an_idle_project_is_watched_without_a_stat`, `own_commits_make_no_batch_with_events`, `events_that_miss_changes_give_way_to_walks`, `an_event_wakes_an_idle_watcher_and_a_batch_wakes_it_when_due`, `a_lane_written_in_two_halves_never_plays_empty`); 714 passed (700, tests 6 to 9, and 10 new tests). |
+| clippy | FAIL at lint 4, `crates/server/src/graph/watcher.rs:55` ("3 findings": lints 4, 5 and 6 stop `m2-server`). Without `-D warnings` it lists exactly lints 4 to 6 (`wake`, `backstop`, `deaf`). |
+| std kernels, std.wasm, mac lint | PASS |
+| browser suites | PASS: 29 of 29, 1,034 of 1,034 checks, none on a retry; live3b 51 of 51 with the plugins |
+| renders | PASS: 8 of 8 match `e2e/renders.sha256` |
+| repo unchanged | PASS |
+
+**Left for the lead**
+- Only the Mac run tests the macOS bodies: the barrier's `fsync` fallback, the error numbers 45 and 102, and the moved `renamex_np`, `clonefile`, `getattrlist` and `gethostuuid` calls. The mac lint only type-checks them.
+- `m2 new NIGHT/../night` beside `Night` is refused, but on Linux it first makes an empty `NIGHT`: `create_at` makes the parent folder before any check. That is older than this slice and needs `..` in the path.
