@@ -4,8 +4,9 @@ Written 2026-10-16, at the end of step 7 (the engine). Read this first, then `do
 and the design for whatever you pick up.
 
 **In short**
-- **Step 7 is done on Linux**, on branch `step7` at `FINAL`: `ci/check.sh` passes there, every row, with nothing
-  passed only on a retry. **macOS: unverified since `1750322`**: step 7 waits for the owner's Mac run (below).
+- **Step 7 is done on Linux**, on branch `step7` at `6297c9a`: `ci/check.sh` passes there, every row, with nothing
+  passed only on a retry (893 Rust tests, 29/29 browser suites, 8 of 8 renders; `~/m2-runs/check-s7-final`).
+- **macOS: unverified since `1750322`.** Step 7 waits for the owner's Mac run (below).
 - `main` is at `0ebc6e6` (the platform step, macOS green at `1750322`). `step7` has `main` merged in.
 - The owner decided O1 to O5 on 2026-10-15 (below).
 - Next: the Mac run; then `step7` onto `main`; then merge `sounds`, then `taste`; then 8a, 8b and step 9.
@@ -15,7 +16,7 @@ and the design for whatever you pick up.
 | Branch | Commit | State |
 |---|---|---|
 | `main` | `0ebc6e6` | Steps 1–6, the fast note edits, and the platform layer. Green on Linux and macOS at `1750322`. |
-| `step7` | `FINAL` | Step 7, the engine: built, reviewed, fixed and checked on Linux. Local only: the lead pushes it as a branch for the Mac run. Worktree `~/m2-runs/wt/s7` (its `target/` is about 70 GB). |
+| `step7` | `6297c9a`, then docs only | Step 7, the engine: built, reviewed, fixed and checked on Linux. Local only: the lead pushes it as a branch for the Mac run. Worktree `~/m2-runs/wt/s7` (its `target/` is about 70 GB). |
 | `origin/wip/step7` | `5079233` | The Mac's half-done step 7. All of it is in `step7` (cherry-picked as `c8117c3`). Delete it once `step7` is on `main`. |
 | `origin/taste` | `4804247` | The new look (T and S); 8b.1 Tracks done (`a0d5f91`); 8b.2 song bar unfinished. |
 | `origin/sounds` | `916127d` | 20 new std sounds (polysynth, FM, drum kit). Its last independent check was cut short. |
@@ -76,7 +77,7 @@ short summary. Its first line says `music2 check: PASS` or `FAIL`.
 |---|---|
 | toolchain, web build, build | Rust 1.99.0 (pinned), the web UI, every binary |
 | app | Linux only: the desktop app on an invisible screen (Xvfb), with `first-song` and `with-plugins`, a screenshot of each |
-| rust tests | every Rust test, with a scratch `HOME` (893 at `FINAL`); G7c and G7d are tests here |
+| rust tests | every Rust test, with a scratch `HOME` (893 at `6297c9a`); G7c and G7d are tests here |
 | clippy | the whole workspace; a warning is an error |
 | std kernels, std.wasm | the kernels' tests and lints; `std.wasm` rebuilt to the same bytes in another folder |
 | mac lint | Linux only: the Mac-only code, type-checked and linted |
@@ -103,9 +104,9 @@ The gates (`ci/gates.txt`, one `m2-gates` run a line, all in release):
 
 Recorded tests, too long for the check (`#[ignore]`): G7c on all of p16 and of p50, p16 looping ten minutes, and the
 churn test's 200 edits on p16 (within +20 MB). Run them with `cargo test -p m2-play --release --test bit_identity
---test live --test churn -- --ignored --nocapture` (about 10 minutes; all passed at `a1d9914`).
+--test live --test churn -- --ignored --nocapture` (about 10 minutes; all 5 passed at `6297c9a`).
 
-**On the server** (9 minutes with the repo's warm `target/` on a quiet server; 20 with `--gates`):
+**On the server** (8 to 9 minutes with a warm `target/` on a quiet server; 20 with `--gates`):
 
 ```sh
 cd ~/dev/suite2/music2
@@ -114,7 +115,7 @@ TW_WAIT=3500 ~/m2-runs/tw check-<label> 'M2_CHECK_OUT=$HOME/m2-runs/check-<label
 
 `M2_CHECK_OUT` must be a new folder. It gets `summary.txt`, every log, and the app's two screenshots
 (`app-first-song.png`, `app-with-plugins.png`); all logs are also packed in `<folder>.tgz`. Send the owner the
-screenshots once per step (this step's: `~/m2-runs/app-shots/step7-FINAL/`).
+screenshots once per step (this step's: `~/m2-runs/app-shots/step7-6297c9a/`).
 
 ## The Mac run (for the owner)
 
@@ -174,8 +175,8 @@ numbers. If a row fails, the lead fixes it on Linux, checks the mac lint, and as
 - "rust tests" includes the first Mac runs of four `core/os` tests (`the_footprint_counts_touched_pages_and_a_reservation_only_maps`,
   `interactive_gives_the_thread_the_user_interactive_class`, `the_mac_is_named`, `the_machine_is_named_in_five_parts`),
   `app_main_thread` (a state load on AppKit's main thread), `no_alloc.rs`, and the server's export, hold and device
-  tests. If the footprint test fails, macOS's malloc may be keeping freed pages (unverified).
-- "browser suites" 29/29, with `live3b` at 60 checks: its export checks need the pause to last about 0.7 s.
+  tests. The footprint test now maps and unmaps its own pages, so macOS's malloc cache can't hide them (unverified there).
+- "browser suites" 29/29, with `live3b` at 60 checks: it exports with-plugins from the UI on real Surge XT.
 - "renders" 8 of 8: the owner's layout changes no bit (checked on Linux).
 - G7e compares the export with `m2 render`, which now runs plugins in offline mode (K4): its pass on the Mac
   confirms Surge XT renders the same there.

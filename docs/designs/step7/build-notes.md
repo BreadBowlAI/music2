@@ -1062,3 +1062,57 @@ retry. The gates row wasn't run (`--gates`); the gates above were run by hand.
   Spectre guard on.
 - **K4** (plugins in offline mode in `m2 render`) and G7f's costs need the Mac run.
 - The scratch worktree and its target are removed.
+
+## Finish
+
+**In short:** the last slice of step 7, docs only. The contract's stale *Today* lines are rewritten from the code
+(fit-3, the one finding no fixer had), RENDER-32 says the owner's layout and how G7f judges it, gate row 7 says what
+was measured, and the Deferred rows step 7 changes are updated. `HANDOFF.md` is rewritten for the next session, with
+the Mac run as numbered steps for the owner. `ci/check.sh` passes at `6297c9a`, every row, with no retry. Nothing was
+pushed.
+
+### What was done
+
+| What | Done | Commit |
+|---|---|---|
+| fit-3: the *Today* lines design-7 §15 gave step 7 | RENDER-6, 9, 9a, 12, 13, 14, 17 and 33 rewritten from the code, with no line numbers | `19f3287` |
+| Stale lines beside them, which the rewrites would contradict | RENDER-6a's first sentence (the engine keeps processing while stopped), RENDER-7, RENDER-8 (live never replays), RENDER-11 | `19f3287` |
+| *Today* lines the fixes made false | WRITE-8 (state loads are built), HOME-5a (a released parameter keeps its value: plug-1), ID-15 (a file that moved), and the line pointers in RENDER-1 and RENDER-3 | `19f3287` |
+| Every *Today* line step 7 touched (RENDER-1 to 33, ID-7, 13, 14, 15, WRITE-8, 12, HOME-4, 5a, 6, HOST-5, 6, PLAT-6, PLANE-5) | checked against the code: a script found every function, type, test and file they name (only the ones above were missing), and the claims were read against the code | — |
+| RENDER-32 | the rule now says the owner's layout (O1), the bounds (O2), the statistic (the mean of 5 pairs plus P1's cost the Mac recorded) and the other §11.3 limits; its *Today* has the Linux numbers and what the Mac measured of P1 | `19f3287` |
+| Gate row 7; the order of work | passed on Linux, what each gate measured there (information only), the Mac's run to come | `19f3287`, and the commit after the check |
+| Deferred rows | latency compensation, and mono, legato and glide: the arena they need is built; better structural matching: id-1's remaining limit; a new row: the Spectre guard back on before other packages' kernels run | `19f3287` |
+| `README.md` | a song with plugins pauses while it exports, and a held note starts again | `19f3287` |
+| `HANDOFF.md` | rewritten: where things stand, O1 to O5, the open questions, the check and its six gate runs, the Mac run, the work order, the merge notes, the flakes, what is left | `6297c9a`, and the commit after the check |
+
+### Found while checking
+
+- A new plugin instance's latency is measured when it is activated, then not used. One whose saved state adds latency
+  plays uncompensated, and nothing says so: only a state load into a kept instance raises
+  `plugin.latency-uncompensated`. RENDER-17's *Today* says so now; it is in `HANDOFF.md`'s "Left for later".
+- O3's fix needs std's version bumped, and FMT-3 makes that release the trigger for a lockfile and several bundled std
+  versions. Put to the owner in `HANDOFF.md`, with a recommendation.
+- `sounds` changes `core/play/tests/bit_identity.rs` and `common/mod.rs`, which step 7 changed too, and its new test
+  uses the player's API from before step 7. In `HANDOFF.md`'s merge notes.
+- *Today* lines from before step 7, in rules it didn't touch, are left: RENDER-4 and 5 say the range render isn't built
+  (step 3a built it), and RENDER-15, 21, 30, ID-3, ID-12, FMT-20, PKG-4, 8, 10, 11, MON-1, ABI-2 and 3 cite old line
+  numbers. Listed in `HANDOFF.md`.
+
+### The check
+
+`ci/check.sh` at `6297c9a` (`~/m2-runs/check-s7-final`, 8 min): **PASS**, every row. 893 Rust tests passed, 0 failed
+(6 ignored: the recorded runs). Clippy, std's kernels, `std.wasm` (the same bytes), the mac lint pass. The app connected
+for first-song and with-plugins in 1 s each (screenshots in `~/m2-runs/app-shots/step7-6297c9a/`). Browser suites 29 of
+29, 1,049 checks (live3b 60, fx-fixes 57). Renders 8 of 8. Repo unchanged. Nothing passed only on a retry.
+
+The recorded tests, after it, at the same commit (release, scratch `HOME`; `cargo test -p m2-play --release --test
+bit_identity --test live --test churn -- --ignored`): all 5 pass. `live_is_the_export_on_all_of_p16`,
+`live_is_the_export_on_p50` and `a_no_op_activation_on_p50` in 343 s; `p16_churns_200_edits_within_20_mb` in 16 s
+(283 activations, the footprint 177.0 MB after 70 edits, then 175.4 MB: -1.6 MB); `p16_loops_ten_minutes_without_drift`
+in 116 s. They last ran at `a1d9914`, before the independent check's fixes.
+
+### Left, and why
+
+- What `HANDOFF.md`'s "Left for later" lists, for step 7 and the platform step: nothing in this slice changed code.
+- `ci/check.sh`'s gates row still says "usually 15 min"; the Mac's first run of step 7's gates will say how long. The
+  gates row wasn't run here (no `--gates`, as the task said); the gates ran by hand in the two parts before.
