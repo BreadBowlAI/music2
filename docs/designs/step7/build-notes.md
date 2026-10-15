@@ -522,3 +522,105 @@ serving; `prewarm` touches no lent instance.
    both). The probe test's call order is the real proof.
 7. **live3b's export checks** run just after a drag that turns the lead to `db(-60)`, so they hear the chord
    at about -85.5 dBFS. They still tell sound from digital silence (-240), with little margin.
+
+## m2-os process
+
+**In short:** `m2-os` has a new `process` module: how much memory the process holds, and which machine it runs on.
+`thread::interactive()` marks a thread as an audio thread is marked. `store.rs` uses them and names no OS, so
+`one_place.rs` passes and `m2-gates` builds for the Mac again. G7f now measures memory on Linux, and its memory rules
+fail when memory can't be measured. Every gate run and record names its machine; a record judges only runs on its own
+machine. `ci/gates.txt` names step 7's gates, and `ci/check.sh` runs each of its lines.
+
+### What was built
+
+| Piece | macOS | Linux |
+|---|---|---|
+| `process::memory() -> Option<Memory>` (`footprint`, `mapped`, `address_space`, in bytes) | `task_info(TASK_VM_INFO)`, moved from `store.rs` as it was | `/proc/self/status`: `RssAnon` + `VmSwap` is the footprint, `VmSize` what is mapped. The address space is the user half of the CPU's virtual-address bits (`/proc/cpuinfo`: 48 bits here, so 128 TiB), or `RLIMIT_AS` when lower |
+| `process::machine() -> String` | `hw.model`, `macOS` + `kern.osproductversion`, `machdep.cpu.brand_string` | DMI's product (else its board), `/etc/os-release`'s `PRETTY_NAME`, `/proc/cpuinfo`'s model name |
+| `thread::interactive() -> io::Result<()>` | QoS user-interactive, moved from `store.rs` | changes nothing and returns `Unsupported` ("Linux has no QoS class") |
+
+`machine()` has five parts: model, OS, CPU, architecture, threads. Here it says `ASRockRack B665D4U-1L, Ubuntu 24.04.3
+LTS, AMD Ryzen 9 7950X3D 16-Core Processor, x86_64, 32 threads`.
+
+In the gates:
+
+| Where | What changed |
+|---|---|
+| `crates/gates/src/store.rs` | No OS code. The rule (§11.3) is its own function, `rule`. Its two memory rules (footprint, and 2 renderers within 25% of the address space) fail when memory wasn't measured, whatever S's record is. The audio-like thread says what `interactive()` gave it. |
+| Records | `store-record` and `callback-record` lines end with `machine=<machine()>`. A record without one doesn't parse. |
+| Judging | A comparison with a record (S's, HEAD's) is judged only when the record is from the same machine: model, CPU, architecture and threads equal; the OS version may differ (`report::same_machine`). Otherwise it is skipped: "recorded, not judged … (PLAT-1)", and an info line names both machines. The 25% address-space rule compares with this machine's own limit, so it is judged everywhere. |
+| `main.rs` | Every run prints `machine: …` as its second line. |
+| `ci/gates.txt` | Five runs: G11 as before; G7a through the server; G7a's engine-rig twin and G7b; G7f part 1; G7f part 2. These are the README's recorded runs. |
+| `ci/check.sh` | The gates row runs every line of `ci/gates.txt`, each logged under `=== m2-gates <options>`, and fails naming the runs that failed. The summary keeps each run's heading, its p95 and p99 lines, and every "not judged" line. |
+
+Tests added (each names its rule): in `core/os`, `the_footprint_counts_touched_pages_and_a_reservation_only_maps`
+(`unix.rs`, both OS: 64 MB touched counts in the footprint; a 16 GiB reservation only in what is mapped), the Linux
+parsers, `interactive_says_linux_has_no_qos_class`, `the_machine_is_named_in_five_parts`; for the Mac only,
+`interactive_gives_the_thread_the_user_interactive_class` and `the_mac_is_named` (type-checked by the mac lint, run on
+the Mac). In `m2-gates`, `the_memory_rules_fail_unmeasured`, `a_record_judges_its_own_machine_only`, and that each
+record reads back with its machine, the checked-in ones naming the Mac.
+
+### Where this left the design, and why
+
+| What | Why |
+|---|---|
+| `thread::interactive()` returns `io::Result<()>`; the design wrote `fn interactive();` | PLAT-3: `m2-os` says what it can't do. G7f prints it. |
+| `machine()` names the architecture and the threads too, not only model, OS and CPU | They tell machines apart (the same board with another CPU count, or a Rosetta build). |
+| A record judges runs on the same machine **whatever its OS version** | Otherwise a macOS update on the reference Mac would stop G7f's comparisons until S is measured again at `8aa301e`. |
+| The machine in `store-S.txt` and `callback-S.txt` was written by hand: `MacBookPro18,1, macOS 26.6.2, Apple M1 Pro, aarch64, 10 threads` | It comes from the files' own words (M1 Pro, 10 cores, macOS 26.6.2) and the first Mac run's model. **Unverified until the Mac run.** If the Mac prints another model, CPU name or thread count, G7f's comparisons say "not judged" in the summary; then copy the Mac's `machine:` line into both records. |
+| `ci/check.sh` changed, not only `ci/gates.txt` | The row read one line. Step 7's gates need four runs: server and rig gates can't share a run, and G7f part 1 runs alone, as S was measured. |
+| On Linux the address space is capped at 128 TiB | A CPU with 57 address bits still maps below 128 TiB unless asked for an address above it, which wasmtime never does. |
+| On arm64 Linux `memory()` is `None` | Its `/proc/cpuinfo` gives no address bits. G7f then fails, as it must. PLAT-1's Linux is x86_64. |
+
+Linux's footprint is not macOS's: one p50 renderer adds 195 MB here (`RssAnon`) against 554 MB in S's Mac record
+(`phys_footprint`). That is why only same-machine comparisons are judged.
+
+### Checks
+
+On this server (Ryzen 9 7950X3D, 32 threads, Ubuntu 24.04), in `~/m2-runs/wt/s7-proc` with its own `target/`, a
+scratch `HOME` and `M2_AUDIO=none`. Other agents' builds ran beside some of these (load 8 to 27).
+
+| Check | Result |
+|---|---|
+| `cargo test -p m2-os` | PASS: 38 unit tests, and `one_place.rs`'s 3 (`os_code_lives_in_m2_os` passes now) |
+| `cargo test -p m2-gates` | lib: 11 pass. `harness.rs`: 5 pass, 1 fails: `the_live_engine_passes_every_gate`, only on with-plugins' two "changed state (3b)" checks, slice 4's known broken check (above). Unchanged by this work. |
+| clippy, whole workspace, `-D warnings` | PASS |
+| mac lint (`aarch64-apple-darwin`, the check's command) | PASS: `store.rs`'s `libc` lines are gone |
+| rustfmt on every changed file | clean |
+| `ci/check.sh`'s gates row | Run alone, from the script's own lines. On a scratch list (a quick run, `store --reference 3`, a blank line, a comment, a gate that doesn't exist): comments and blanks skipped, the bad run named in a FAIL, the summary grouped by run with the "not judged" lines. On the real `ci/gates.txt` (5 min here, load 2): FAIL, only on G7f part 1's 25% rule (below). G11 passes (preview p95 8.6 to 8.9 ms; watcher 0.10% of a core); G7a passes (p95 183.6 ms from the request, under 200); G7a's twin and G7b pass; G7f part 2 passes its one judged rule. The whole `ci/check.sh` was not run. |
+
+**G7f part 1** (`m2-gates store --reference 50`, release, load 8, falling): FAIL, on the one rule judged here.
+
+| Measure | Here | S (the Mac's record) |
+|---|---|---|
+| kernel instances | 6,058 | 6,058 |
+| build | 229 ms (37.8 µs each) | 103 ms |
+| one renderer's footprint | 195 MB | 554 MB |
+| one renderer reserves | 24,611 GiB | 24,611 GiB |
+| with two, the process holds | 49,222 GiB: 37.6% of 131,072 GiB | 49,637 GiB: 37.9% |
+| block p99 (mean) | 3,851 µs (1,980) | 3,083 µs (2,195) |
+| drop | 125 ms; the other thread's p99 7 µs during it, 7 µs before | 102 ms |
+
+The comparisons with S were skipped ("recorded, not judged"). The 25% rule failed (37.6%), as it fails on the Mac
+(37.9%): that is the open owner decision on G7f. A first run at load 27 gave the same memory numbers and a p99 of
+12,301 µs.
+
+**G7f part 2** (`m2-gates arena --reference 50 --at 180`, release): PASS here. The p99 callback (15,722 µs; mean 7,828)
+was recorded, not judged against HEAD's Mac record. The slowest activation block took 3,343 µs, under the 5,333 µs
+bound.
+
+### What the next Mac run should show
+
+- The gates log's second line: `machine: MacBookPro18,1, macOS …, Apple M1 Pro, aarch64, 10 threads`.
+- No "(PLAT-1)" lines in the gates summary: G7f's comparisons with S and HEAD are judged.
+- G7f part 1 fails its 25% rule as before, so **the gates row fails until the owner decides G7f**. G7f part 2's p99
+  rule failed on the Mac in slices 2 and 3.
+- The two new Mac tests in `core/os` pass.
+
+### Left for later
+
+- G7e: add `--server export` to `ci/gates.txt` once the gate exists. With `--server`, `m2-gates` drops gate names it
+  doesn't know without a word (`names.retain` in `main.rs`), so the gate must be known there first.
+- 8a's `machine()` "gains topology": a new part makes old records stop matching (`same_machine` compares every part but
+  the OS). Re-record, or compare only the first parts then.
+- `HANDOFF.md`'s check table still says the gates row runs "G11 `tx-data` and `watcher` now".
