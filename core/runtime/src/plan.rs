@@ -170,11 +170,6 @@ pub struct LaneInfo {
 }
 
 impl PlanInfo {
-    /// The lanes' refs, by slot.
-    pub fn lane_refs(&self) -> impl Iterator<Item = &LaneRef> {
-        self.lanes.iter().map(|l| &l.lane)
-    }
-
     /// Top-level node `node`'s plugin, if it hosts one.
     pub fn plugin(&self, node: usize) -> Option<&PluginAt> {
         self.plugins.iter().find(|p| p.node == node)

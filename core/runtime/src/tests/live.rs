@@ -406,8 +406,9 @@ fn plugin_events_merge_as_a_stable_sort_did() {
     assert_eq!(out.iter().collect::<Vec<_>>(), before);
     assert_eq!(keys, [(5, 61), (7, 64)], "held: the notes that started and didn't end");
     // RENDER-10, RENDER-26a: what a plugin held when a panic reset it is choked and let go first,
-    // as a plugin may keep its voices through a reset. C7: what a carried instance held that the
-    // new data dropped is let go, with no choke, after them.
+    // as a plugin may keep its voices through a reset. RENDER-26a: what its instance held that its
+    // node lets go at an activation (a ghost, or a node rewired to another lane) gets a NoteOff,
+    // with no choke, after them.
     let (mut next, mut none) = (0, Vec::with_capacity(4));
     let release = [(3, 70)];
     let (sent, allocs) = during(|| plugin_events(&keys, &release, &[], &mut next, &mut [], &bufs, (0, BLOCK), &mut none, &mut out));
