@@ -270,3 +270,7 @@ and passes with host math inside `#[cfg(test)]`.
 Reported, not fixed (design choices or bigger than a fix): song code's `**` on BigInt variables now throws (`2n ** 3n`
 with literals still works; oxc lowers only the others to `Math.pow`); `**` inside `eval` or `new Function` skips the
 lowering and uses the OS's `pow`.
+
+The check again at `00ff1c7` (the fix; logs in `~/m2-runs/check-check-S4-fix/`): the same rows, plus one flake that
+passed on its retry: `tests::cell::cell_heard_never_runs_ahead` ("drained while writing": the writer finished before
+the first drain, while other checks loaded the server). S4 doesn't touch it.
