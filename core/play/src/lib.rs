@@ -245,6 +245,8 @@ struct Shared {
     held: AtomicBool,
     /// A device (or the silent clock) calls back: a quiet one has stopped.
     device: AtomicBool,
+    /// The last callback played no engine and faded none out: an unload's fade out is done.
+    quiet: AtomicBool,
     /// Seeks and loads sent, and taken by the audio thread, and the last target: until the
     /// audio thread takes them, they are where playback is.
     seeks_sent: AtomicU64,
@@ -572,6 +574,7 @@ impl Callback {
         // the stamps are released, so a reader that sees a hold's stamp sees this callback's
         // `held` or a later one, never the one before (an export's wait reads both).
         s.held.store(st.held, Ordering::Release);
+        s.quiet.store(self.live.is_none() && self.fade.is_none(), Ordering::Release);
         s.seq.store(seq + 2, Ordering::Release);
         if let Some(l) = &self.live {
             s.clock.store(l.engine.clock(), Ordering::Relaxed);
@@ -651,11 +654,17 @@ impl Driver {
 
 /// How often a device's thread looks whether its player was let go.
 const LOOK: Duration = Duration::from_millis(50);
+/// How long a device's thread waits, once its player is let go, for the callback to go quiet: one
+/// that stopped calling back never does.
+const LINGER: Duration = Duration::from_millis(500);
+/// Then how long it lets the device play the buffers the callback filled before.
+const PLAYED: Duration = Duration::from_millis(50);
 
 /// A device's thread while `stream` plays: say what the device reported, once a second while it
 /// reports anything, until every clone of the player is let go (`alive` is gone: the server lets
-/// go of one that stalled, crashed or whose output moved). Then stop the stream, which drops the
-/// callback: what that played leaves for the dropper ([`Callback`]'s drop), and the dropper ends.
+/// go of one that stalled, crashed or whose output moved). Then, once the device has played the
+/// unload's fade out, stop the stream, which drops the callback: what that played leaves for the
+/// dropper ([`Callback`]'s drop), and the dropper ends.
 fn serve<S>(stream: S, shared: Arc<Shared>, alive: Weak<()>) {
     let (mut seen, mut said) = (DeviceErrors::default(), Instant::now());
     while alive.strong_count() > 0 {
@@ -667,6 +676,16 @@ fn serve<S>(stream: S, shared: Arc<Shared>, alive: Weak<()>) {
             }
             (seen, said) = (now, Instant::now());
         }
+    }
+    // The server unloads a player before it lets go of it, and the engine fades out over 5 ms in
+    // the next callback: a stream stopped before the device played that cuts the sound off with a
+    // click (an output that moved may still sound).
+    let t = Instant::now();
+    while !shared.quiet.load(Ordering::Acquire) && t.elapsed() < LINGER {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    if shared.quiet.load(Ordering::Acquire) {
+        std::thread::sleep(PLAYED);
     }
     drop(stream);
 }

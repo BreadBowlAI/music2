@@ -436,6 +436,64 @@ impl Drop for Stream {
     }
 }
 
+/// A stream whose callback runs once for each `()` sent, with the peak of each buffer it filled
+/// kept, until the stream drops.
+struct Stepped {
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Stepped {
+    fn new(mut cb: Callback) -> (Stepped, crossbeam_channel::Sender<()>, crossbeam_channel::Receiver<f32>) {
+        let (stop, (go, steps), (peaks, peak)) =
+            (Arc::new(AtomicBool::new(false)), crossbeam_channel::unbounded(), crossbeam_channel::unbounded());
+        let s = stop.clone();
+        let thread = std::thread::spawn(move || {
+            let mut buf = vec![0.0f32; 2 * 512];
+            while !s.load(Ordering::Relaxed) {
+                if steps.recv_timeout(Duration::from_millis(1)).is_ok() {
+                    cb.fill(&mut buf, 2);
+                    let _ = peaks.send(buf.iter().fold(0.0f32, |m, x| m.max(x.abs())));
+                }
+            }
+        });
+        (Stepped { stop, thread: Some(thread) }, go, peak)
+    }
+}
+
+impl Drop for Stepped {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(t) = self.thread.take() {
+            t.join().unwrap();
+        }
+    }
+}
+
+// RENDER-28 (K1): a player let go stops its stream only once the device has played the unload's
+// fade out. The server unloads a player before it lets go of it (its output moved, say, where it
+// may still sound), and a stream stopped before that fade cuts the sound off with a click. Before,
+// the stream stopped up to 50 ms after the last clone was dropped, whatever the device had played.
+#[test]
+fn a_player_let_go_stops_its_stream_after_its_fade_out() {
+    let (player, cb, _retired) = Player::parts(48_000, "test");
+    let (shared, alive) = (player.shared.clone(), Arc::downgrade(&player.alive));
+    let (stream, go, peak) = Stepped::new(cb);
+    let device = std::thread::spawn(move || serve(stream, shared, alive));
+    player.open(sine(48_000)).unwrap();
+    let step = || go.send(()).ok().and_then(|()| peak.recv_timeout(Duration::from_secs(5)).ok());
+    let playing: Vec<Option<f32>> = (0..4).map(|_| step()).collect();
+    assert!(playing.iter().all(|p| p.is_some_and(|p| p > 0.5)), "it plays: {playing:?}");
+    player.unload().unwrap();
+    drop(player);
+    std::thread::sleep(Duration::from_millis(150));
+    assert!(!device.is_finished(), "the stream plays on until the device has played the fade out");
+    // The callback that reads the unload plays on, the next fades out, then silence.
+    let after: Vec<Option<f32>> = (0..4).map(|_| step()).collect();
+    assert!(after[1].is_some_and(|p| 0.0 < p && p < 1.0) && after[2..].iter().all(|p| *p == Some(0.0)), "it faded out: {after:?}");
+    device.join().unwrap();
+}
+
 // RENDER-28 (K1): a device's player let go stops its stream, and its thread ends; the engine the
 // callback played leaves the audio thread for the dropper, even when the stream drops the callback
 // there. With a device that calls back and one that stopped (a stall, when the server lets a player
