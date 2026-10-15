@@ -23,8 +23,8 @@
 //! A hold, for an export that borrows the live plugin instances (RENDER-1), is a tape pause and
 //! RENDER-6a's one exception: the output fades out over 5 ms, then the engine processes nothing,
 //! its clock stands still, and it says so ([`Status::held`]); a resume fades back in where it held.
-//! While held, a swap applies, transport commands apply to the frozen transport, and an activation
-//! and a panic wait for the resume.
+//! While held, a swap applies, transport commands apply to the frozen transport (where it is is
+//! published at once), and an activation and a panic wait for the resume.
 //!
 //! Cell values are never messages (RENDER-28): each renderer reads its own cells' slots as it
 //! renders a block, after the block line's messages, and the engine stamps when it heard them.
@@ -535,9 +535,10 @@ impl Engine {
     }
 
     fn render(&mut self, stamp: CallbackStamp, frame: u32) {
-        // Held: nothing runs and the clock stands still (RENDER-6a's exception, RENDER-1).
+        // Held: nothing runs and the clock stands still (RENDER-6a's exception, RENDER-1). The
+        // transport's position, which a seek moves at once, is what the status says.
         if self.is_held() {
-            self.out.silence(self.pos);
+            self.out.silence(self.current.as_deref().map_or(self.pos, |r| r.transport().pos()));
             return;
         }
         let clock = self.clock;
