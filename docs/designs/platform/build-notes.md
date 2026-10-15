@@ -883,3 +883,8 @@ on disk show the undo, which can be before the undo's revision reaches the page.
 - `WeakRef` and `FinalizationRegistry` (the builder's point above): I agree. The other globals left (`queueMicrotask`,
   `SharedArrayBuffer`, `Atomics`, `atob`, `btoa`, `DOMException`, ...) are the same on every computer, and
   `Atomics.wait` can't block here (QuickJS's `can_block` is off), so it can't outlast the 10 s limit.
+
+The check again at `2dd9c2d`, with the fix (11 min, logs in `~/m2-runs/check-check-script-b/`): exactly §13.1's S6 row
+with the 3 new tests, with no retry. Rust tests 718 passed, the same 5 failed. clippy fails at lint 4; without
+`-D warnings` it lists exactly lints 4 to 6. Suites 29 of 29 (1,034 of 1,034 checks, `attention-attn` 56 of 56),
+live3b 51 of 51, renders 8 of 8, and every other row PASS.
