@@ -2,4 +2,6 @@ G7f part 2's baseline (RENDER-32): HEAD 8aa301e's player callback, measured by t
 (`callbacks`, HEAD's API only) from a worktree at that commit (`m2-gates arena --reference 50`, release)
 on the reference Mac (M1 Pro, 10 cores, 32 GB, macOS 26.6.2), 2026-10-14: p50 played from 3:00 for 30 s
 in callbacks of 512 frames at 48 kHz. Each value is the median of 16 runs alternated with slice 2's.
-callback-record p99_us=12909.604 mean_us=8935.735 max_us=17022.895
+The record's machine (last on its line) was written at step 7's merge, as `m2_os::process::machine()`
+names that Mac: a run is judged against this record only on the same machine (PLAT-1).
+callback-record p99_us=12909.604 mean_us=8935.735 max_us=17022.895 machine=MacBookPro18,1, macOS 26.6.2, Apple M1 Pro, aarch64, 10 threads

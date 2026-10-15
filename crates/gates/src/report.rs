@@ -82,6 +82,14 @@ impl fmt::Display for Outcome {
     }
 }
 
+/// Whether a record made on machine `then` judges a run on machine `now` (PLAT-1): the same
+/// machine, whatever version of its OS it runs. Both are `m2_os::process::machine()`, whose second
+/// part is the OS.
+pub fn same_machine(then: &str, now: &str) -> bool {
+    let hardware = |m: &str| m.split(", ").enumerate().filter(|(i, _)| *i != 1).map(|(_, part)| part.to_string()).collect::<Vec<_>>();
+    hardware(then) == hardware(now)
+}
+
 /// Which build measured: timings from a dev build and a release build differ several times over,
 /// and the gates must pass on both (step 3a's design, §15).
 pub fn profile() -> String {
@@ -94,5 +102,23 @@ pub fn profile() -> String {
             "{other} (opt-level {} here; {raised} of the 4 audio-path crates raised to opt-level 3 by [profile.dev.package.*]), {checks}",
             env!("M2_GATES_OPT_LEVEL")
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // PLAT-1: a record judges runs on its own machine only, through an OS update too.
+    #[test]
+    fn a_record_judges_its_own_machine_only() {
+        let mac = "MacBookPro18,1, macOS 26.6.2, Apple M1 Pro, aarch64, 10 threads";
+        assert!(same_machine(mac, mac));
+        assert!(same_machine(mac, "MacBookPro18,1, macOS 26.7, Apple M1 Pro, aarch64, 10 threads"), "an OS update");
+        assert!(!same_machine(mac, "Mac14,2, macOS 26.6.2, Apple M2, aarch64, 8 threads"));
+        let linux = "ASRockRack B665D4U-1L, Ubuntu 24.04.3 LTS, AMD Ryzen 9 7950X3D 16-Core Processor, x86_64, 32 threads";
+        assert!(!same_machine(mac, linux) && !same_machine(linux, mac));
+        assert!(!same_machine(linux, &linux.replace("32 threads", "8 threads")), "fewer threads are another machine");
+        assert!(same_machine(&m2_os::process::machine(), &m2_os::process::machine()));
     }
 }

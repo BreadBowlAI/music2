@@ -115,3 +115,43 @@ pub(crate) fn local_time(unix_secs: u64) -> Option<(u8, u8)> {
     }
     Some((tm.tm_hour as u8, tm.tm_min as u8))
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::process::memory;
+
+    const MB: u64 = 1 << 20;
+
+    // OS-82, what G7f measures: touched pages count in the footprint and in what is mapped; a
+    // reservation no page backs, as wasmtime makes for each kernel's memory, counts only in what is
+    // mapped. One test, so this binary's tests can't map and unmap between its readings; others
+    // allocate beside it, so only floors and generous ceilings hold.
+    #[test]
+    fn the_footprint_counts_touched_pages_and_a_reservation_only_maps() {
+        let before = memory().expect("the OS says what the process holds");
+        assert!(before.footprint > 0 && before.mapped > 0, "{before:?}");
+        assert!(before.address_space >= 1 << 39 && before.address_space > before.mapped, "{before:?}");
+
+        let mut v = vec![0u8; (64 * MB) as usize];
+        for i in (0..v.len()).step_by(4096) {
+            v[i] = 1;
+        }
+        std::hint::black_box(&v);
+        let touched = memory().unwrap();
+        drop(v);
+        assert!(touched.footprint >= before.footprint + 32 * MB, "{before:?} then {touched:?}");
+        assert!(touched.mapped >= before.mapped + 32 * MB, "{before:?} then {touched:?}");
+        assert_eq!(touched.address_space, before.address_space);
+
+        let size = 16usize << 30;
+        let flags = libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_NORESERVE;
+        // SAFETY: a new private mapping no page backs, unmapped below and never touched.
+        let p = unsafe { libc::mmap(std::ptr::null_mut(), size, libc::PROT_NONE, flags, -1, 0) };
+        assert_ne!(p, libc::MAP_FAILED, "{}", std::io::Error::last_os_error());
+        let reserved = memory().unwrap();
+        // SAFETY: the mapping made above, whole.
+        unsafe { libc::munmap(p, size) };
+        assert!(reserved.mapped >= before.mapped + size as u64 - 64 * MB, "{before:?} then {reserved:?}");
+        assert!(reserved.footprint < touched.footprint + 1024 * MB, "{touched:?} then {reserved:?}");
+    }
+}

@@ -164,6 +164,8 @@ fn run() -> Result<bool> {
     let mut lab = Lab::new(&work)?;
     lab.arena = arena;
     println!("m2-gates: {}", report::profile());
+    // Every run names its machine: only the reference Mac's timings are judged (PLAT-1).
+    println!("machine: {}", m2_os::process::machine());
     println!(
         "rig: {}{}; reference {}; work in {}",
         if via_server { "server, real time" } else { kind.name() },

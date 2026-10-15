@@ -12,6 +12,7 @@ pub mod dirs;
 pub mod fs;
 pub mod host;
 pub mod main_loop;
+pub mod process;
 pub mod thread;
 pub mod watch;
 

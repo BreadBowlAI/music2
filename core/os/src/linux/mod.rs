@@ -1,5 +1,5 @@
-//! Linux: thread identity, the disk, this machine, and the folders. The main loop and file-system
-//! events are in `main_loop.rs` and `watch.rs`.
+//! Linux: thread identity, the disk, this machine and this process, and the folders. The main loop
+//! and file-system events are in `main_loop.rs` and `watch.rs`.
 
 pub(crate) mod main_loop;
 pub(crate) mod watch;
@@ -10,6 +10,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::fs::Rename;
+use crate::process::Memory;
 #[cfg(test)]
 pub(crate) use crate::unix::sync_refused;
 pub(crate) use crate::unix::{
@@ -101,6 +102,86 @@ pub(crate) fn machine_id() -> Option<String> {
         .find(|id| !id.is_empty())
 }
 
+/// Linux has no class like macOS's QoS. A higher priority needs rights (`RLIMIT_NICE`,
+/// `RLIMIT_RTPRIO` or rtkit) that this server doesn't grant and 8a's realtime threads will ask for.
+pub(crate) fn interactive() -> io::Result<()> {
+    Err(crate::unsupported("Linux has no QoS class: the thread keeps its priority"))
+}
+
+/// `/proc/self/status` for the footprint and what is mapped; the CPU's virtual-address bits, or
+/// `RLIMIT_AS` when lower, for the most the process can map.
+pub(crate) fn memory() -> Option<Memory> {
+    let (footprint, mapped) = status_memory(&std::fs::read_to_string("/proc/self/status").ok()?)?;
+    let mut address_space = user_space(&std::fs::read_to_string("/proc/cpuinfo").ok()?)?;
+    let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    // SAFETY: getrlimit fills `limit`, which outlives the call.
+    if unsafe { libc::getrlimit(libc::RLIMIT_AS, &mut limit) } == 0 && limit.rlim_cur != libc::RLIM_INFINITY {
+        address_space = address_space.min(limit.rlim_cur);
+    }
+    Some(Memory { footprint, mapped, address_space })
+}
+
+/// `RssAnon` + `VmSwap` (what the process alone is charged for, as macOS's footprint counts it)
+/// and `VmSize` (every mapping, reservations no page backs included), in bytes.
+fn status_memory(status: &str) -> Option<(u64, u64)> {
+    let kb = |key: &str| {
+        let value = status.lines().find_map(|l| l.strip_prefix(key)?.strip_prefix(':'))?;
+        Some(value.trim().strip_suffix("kB")?.trim().parse::<u64>().ok()? * 1024)
+    };
+    Some((kb("RssAnon")? + kb("VmSwap")?, kb("VmSize")?))
+}
+
+/// The user half of the CPU's virtual addresses, from `/proc/cpuinfo`'s "address sizes" (x86):
+/// 48 bits give 128 TiB. A CPU with 57 (five-level paging) still maps below 128 TiB unless asked
+/// for an address above it, which wasmtime never does. Other CPUs don't say: None.
+fn user_space(cpuinfo: &str) -> Option<u64> {
+    let bits: u32 = cpuinfo.lines().find_map(|l| {
+        let (key, value) = l.split_once(':')?;
+        if key.trim() != "address sizes" {
+            return None;
+        }
+        value.split(',').find_map(|p| p.trim().strip_suffix("bits virtual")?.trim().parse().ok())
+    })?;
+    (32..=64).contains(&bits).then(|| 1 << (bits.min(48) - 1))
+}
+
+/// The model from DMI (the product, else the board) or the device tree; the OS from
+/// `/etc/os-release`; the CPU's name from `/proc/cpuinfo`.
+pub(crate) fn machine() -> (String, String, String) {
+    let read = |f: &str| {
+        let text = std::fs::read_to_string(f).ok()?;
+        Some(text.trim_matches(|c: char| c.is_whitespace() || c == '\0').to_string()).filter(|t| !t.is_empty())
+    };
+    let dmi = |vendor: &str, name: &str| {
+        let name = read(&format!("/sys/class/dmi/id/{name}"))?;
+        Some(match read(&format!("/sys/class/dmi/id/{vendor}")) {
+            Some(v) if !name.starts_with(&v) => format!("{v} {name}"),
+            _ => name,
+        })
+    };
+    let model = dmi("sys_vendor", "product_name")
+        .or_else(|| dmi("board_vendor", "board_name"))
+        .or_else(|| read("/proc/device-tree/model"))
+        .unwrap_or_else(|| "unknown model".into());
+    let system = read("/etc/os-release").and_then(|t| os_name(&t)).unwrap_or_else(|| "Linux".into());
+    let cpu = read("/proc/cpuinfo").and_then(|t| cpu_name(&t)).unwrap_or_else(|| "unknown CPU".into());
+    (model, system, cpu)
+}
+
+/// `PRETTY_NAME` in `/etc/os-release`, its quotes taken off.
+fn os_name(release: &str) -> Option<String> {
+    let v = release.lines().find_map(|l| l.strip_prefix("PRETTY_NAME="))?.trim().trim_matches(['"', '\'']).trim();
+    (!v.is_empty()).then(|| v.to_string())
+}
+
+/// The first "model name" in `/proc/cpuinfo`.
+fn cpu_name(cpuinfo: &str) -> Option<String> {
+    cpuinfo.lines().find_map(|l| {
+        let (key, value) = l.split_once(':')?;
+        (key.trim() == "model name" && !value.trim().is_empty()).then(|| value.trim().to_string())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     // OS-15, WRITE-17: the network file systems are not local, by the numbers libc names, and the
@@ -117,5 +198,46 @@ mod tests {
         for t in [EXT4_SUPER_MAGIC, TMPFS_MAGIC, BTRFS_SUPER_MAGIC, XFS_SUPER_MAGIC, OVERLAYFS_SUPER_MAGIC] {
             assert!(!super::NOT_LOCAL.contains(&(t as u32)), "{t:#x}");
         }
+    }
+
+    // OS-82: the footprint is the anonymous memory and the swap, what is mapped is `VmSize`, in
+    // bytes; without them, nothing.
+    #[test]
+    fn status_gives_the_footprint_and_what_is_mapped() {
+        let status =
+            "Name:\tm2\nVmSize:\t 1313576 kB\nVmRSS:\t    7284 kB\nRssAnon:\t    1356 kB\nRssFile:\t    5928 kB\nVmSwap:\t      12 kB\n";
+        assert_eq!(super::status_memory(status), Some(((1356 + 12) * 1024, 1_313_576 * 1024)));
+        assert_eq!(super::status_memory("VmSize:\t 100 kB\nVmSwap:\t 0 kB\n"), None, "no RssAnon");
+    }
+
+    // OS-82: the process may map the user half of the CPU's virtual addresses, and no more than
+    // 128 TiB without asking for an address above it.
+    #[test]
+    fn the_address_space_is_the_user_half_of_the_cpus() {
+        let cpu = |bits: &str| format!("processor\t: 0\naddress sizes\t: 48 bits physical, {bits} bits virtual\npower management:\n");
+        assert_eq!(super::user_space(&cpu("48")), Some(1 << 47));
+        assert_eq!(super::user_space(&cpu("57")), Some(1 << 47));
+        assert_eq!(super::user_space(&cpu("39")), Some(1 << 38));
+        assert_eq!(super::user_space("processor\t: 0\nBogoMIPS\t: 50.00\n"), None, "an arm64 cpuinfo");
+        let m = crate::process::memory().expect("Linux says");
+        assert!(m.address_space <= 1 << 47, "{m:?}");
+    }
+
+    // OS-84: the OS and the CPU are named as the system names them.
+    #[test]
+    fn the_os_and_the_cpu_are_named() {
+        assert_eq!(super::os_name("NAME=\"Ubuntu\"\nPRETTY_NAME=\"Ubuntu 24.04.3 LTS\"\n").as_deref(), Some("Ubuntu 24.04.3 LTS"));
+        assert_eq!(super::os_name("NAME=Arch\n"), None);
+        let cpuinfo = "processor\t: 0\nvendor_id\t: AuthenticAMD\nmodel name\t: AMD Ryzen 9 7950X3D 16-Core Processor\n";
+        assert_eq!(super::cpu_name(cpuinfo).as_deref(), Some("AMD Ryzen 9 7950X3D 16-Core Processor"));
+        let (model, system, cpu) = super::machine();
+        assert!(![&model, &system, &cpu].iter().any(|p| p.is_empty()), "{model}, {system}, {cpu}");
+    }
+
+    // OS-83: Linux gives a thread no QoS class, and says so; nothing fails.
+    #[test]
+    fn interactive_says_linux_has_no_qos_class() {
+        let e = std::thread::spawn(crate::thread::interactive).join().unwrap().unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::Unsupported, "{e}");
     }
 }

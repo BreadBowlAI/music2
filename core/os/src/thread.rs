@@ -1,5 +1,6 @@
-//! Who the calling thread is, and the CPU time it used.
+//! Who the calling thread is, the CPU time it used, and how it is scheduled.
 
+use std::io;
 use std::time::Duration;
 
 use crate::os;
@@ -21,6 +22,14 @@ pub fn is_process_main() -> bool {
 /// The CPU time the calling thread has used (G11's watcher check).
 pub fn cpu_time() -> Duration {
     os::cpu_time()
+}
+
+/// Marks the calling thread latency-sensitive, as an audio thread is: on macOS the user-interactive
+/// QoS class, which also keeps it on a performance core. Linux has no such class and changes
+/// nothing: it says so (`Unsupported`). Never fatal: the caller reports what it got (step 7's G7f
+/// drop test).
+pub fn interactive() -> io::Result<()> {
+    os::interactive()
 }
 
 /// From now on the calling thread reads and writes numbers as C does, with a `.`, whatever locale

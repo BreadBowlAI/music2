@@ -5,7 +5,8 @@
 //!   callback timed. [`callbacks`] uses only what HEAD `8aa301e` had (`Player::driven`,
 //!   `Renderer::new`, `open`, `seek`, `play`, `Driver::fill`), so the same function, built in a
 //!   worktree at HEAD, recorded HEAD's numbers in `callback-S.txt` beside this crate's manifest (or
-//!   `$M2_CALLBACK_S`); every run prints its own record line (`callback-record …`).
+//!   `$M2_CALLBACK_S`); every run prints its own record line (`callback-record …`). A record names
+//!   its machine, and a run is compared only with HEAD's record from the same machine (PLAT-1).
 //! - **The activation block:** ten edits, a delay added after t02's pluck and taken out again,
 //!   each prepared against what plays as the server prepares it. The callback that takes each one
 //!   in is one block long (128 frames), so its time is the activation block's own, and the ordinary
@@ -24,7 +25,7 @@ use m2_play::{Driver, Player};
 use m2_runtime::{BLOCK, Basis, Keep, Renderer};
 
 use crate::gates::Opts;
-use crate::report::Outcome;
+use crate::report::{Outcome, same_machine};
 use crate::signal::Summary;
 use crate::{Lab, Song};
 
@@ -70,10 +71,14 @@ fn record(times: &[f64]) -> (f64, f64, f64) {
     (rank(times, 0.99), times.iter().sum::<f64>() / times.len().max(1) as f64, rank(times, 1.0))
 }
 
-fn parse(text: &str) -> Option<(f64, f64, f64)> {
+/// The first `callback-record` line of `text`: its p99 and mean, and the machine that measured
+/// them, which is last on the line since it holds spaces.
+fn parse(text: &str) -> Option<(f64, f64, String)> {
     let line = text.lines().find_map(|l| l.trim().strip_prefix("callback-record "))?;
+    let (line, machine) = line.split_once(" machine=")?;
+    let machine = Some(machine.trim().to_string()).filter(|m| !m.is_empty())?;
     let get = |k: &str| line.split_whitespace().find_map(|w| w.strip_prefix(k)?.strip_prefix('=')?.parse().ok());
-    Some((get("p99_us")?, get("mean_us")?, get("max_us")?))
+    Some((get("p99_us")?, get("mean_us")?, machine))
 }
 
 /// G7f, part 2, on `o.reference` (p50 for the gate) from `o.at`.
@@ -91,18 +96,21 @@ pub fn arena(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         "callback, playing",
         format!("mean {mean:.0} µs, p99 {p99:.0}, max {max:.0} over {} callbacks of {FRAMES} frames", times.len()),
     );
-    out.info("record", format!("callback-record p99_us={p99:.3} mean_us={mean:.3} max_us={max:.3}"));
+    let machine = m2_os::process::machine();
+    out.info("record", format!("callback-record p99_us={p99:.3} mean_us={mean:.3} max_us={max:.3} machine={machine}"));
     let path = std::env::var_os("M2_CALLBACK_S")
         .map_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("callback-S.txt"), Into::into);
+    let name = "the p99 callback within HEAD's + 80 µs";
     match std::fs::read_to_string(&path).ok().and_then(|t| parse(&t)) {
-        Some((head, head_mean, _)) => {
-            out.check(
-                "the p99 callback within HEAD's + 80 µs",
-                p99 <= head + 80.0,
-                format!("{p99:.0} µs against HEAD's {head:.0} µs (means {mean:.0} and {head_mean:.0})"),
-            );
+        // Only against HEAD's record from this same machine (PLAT-1).
+        Some((head, head_mean, then)) if same_machine(&then, &machine) => {
+            out.check(name, p99 <= head + 80.0, format!("{p99:.0} µs against HEAD's {head:.0} µs (means {mean:.0} and {head_mean:.0})"));
         }
-        None => out.skip("the p99 callback within HEAD's + 80 µs", format!("no record of HEAD in {}", path.display())),
+        Some((.., then)) => {
+            out.info("machines", format!("HEAD's record is from {then}; this run is on {machine}"));
+            out.skip(name, "recorded, not judged: HEAD's record is from another machine (PLAT-1)");
+        }
+        None => out.skip(name, format!("no record of HEAD in {}", path.display())),
     }
 
     // Ten edits on t02 while it plays, each prepared against what plays.
@@ -180,4 +188,24 @@ pub fn arena(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         ),
     );
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse;
+
+    // RENDER-32, PLAT-1: a callback record names its machine, and HEAD's, as checked in, the
+    // reference Mac.
+    #[test]
+    fn a_callback_record_names_its_machine() {
+        let line = "callback-record p99_us=12909.604 mean_us=8935.735 max_us=17022.895 machine=Mac14,2, macOS 26.6.2, Apple M2, aarch64, 8 threads";
+        assert_eq!(
+            parse(&format!("noise\n{line}\n")),
+            Some((12909.604, 8935.735, "Mac14,2, macOS 26.6.2, Apple M2, aarch64, 8 threads".into()))
+        );
+        assert_eq!(parse(line.split(" machine=").next().unwrap()), None, "a record names its machine");
+        let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("callback-S.txt")).unwrap();
+        let (.., machine) = parse(&text).expect("callback-S.txt holds a record");
+        assert!(machine.starts_with("MacBookPro18,1, macOS "), "{machine}");
+    }
 }

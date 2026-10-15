@@ -526,18 +526,30 @@ fi
 #     Only the reference Mac's timings are judged; elsewhere they are recorded (PLAT-1).
 if [ -n "$GATES" ]; then
   begin gates "15 min"
-  args=$(grep -v '^#' ci/gates.txt | head -1)
-  # ci/gates.txt's line of m2-gates options: split into words on purpose.
-  if quiet gates-build.log cargo build --locked --release -p m2-gates &&
-     quiet gates.log env HOME="$OUT/home" "$TARGET/release/m2-gates" $args; then
-    record gates PASS "$args"
+  # ci/gates.txt: one m2-gates run a line; # starts a comment.
+  grep -v -e '^#' -e '^[[:space:]]*$' ci/gates.txt > "$SCR/gates"
+  bad=
+  : > "$OUT/gates.log"
+  if quiet gates-build.log cargo build --locked --release -p m2-gates; then
+    while read -r args; do
+      echo "=== m2-gates $args" >> "$OUT/gates.log"
+      # The line's m2-gates options: split into words on purpose.
+      env HOME="$OUT/home" "$TARGET/release/m2-gates" $args >> "$OUT/gates.log" 2>&1 < /dev/null || bad="$bad${bad:+; }$args"
+    done < "$SCR/gates"
   else
-    record gates FAIL "$args: see gates.log"
+    bad=build
     first "$OUT/gates-build.log" '^error' | sed 's/^/gates: /' >> "$OUT/failed"
   fi
-  # The verdicts, and each judged check with its numbers (p95, or the CPU as a share of a core),
-  # so a green run's timings can be recorded from the summary alone (PLAT-1).
-  grep -E '^(PASS|FAIL|SKIP)  |^      FAIL  |^      ok    .*(p95|of a core)' "$OUT/gates.log" 2> /dev/null | cut -c1-220 > "$OUT/gates.sum"
+  if [ -z "$bad" ]; then
+    record gates PASS "the $(grep -c '' "$SCR/gates") runs ci/gates.txt names"
+  else
+    record gates FAIL "$bad: see gates.log"
+  fi
+  # Each run, its verdicts, and each judged check with its numbers (p95 or p99, or the CPU as a
+  # share of a core), so a green run's timings can be recorded from the summary alone; and each
+  # comparison with a record that isn't from this machine, so not judged (PLAT-1).
+  grep -E '^=== |^(PASS|FAIL|SKIP)  |^      FAIL  |^      ok    .*(p95|p99|of a core)|^      skip  .*\(PLAT-1\)' "$OUT/gates.log" 2> /dev/null |
+    cut -c1-220 > "$OUT/gates.sum"
 fi
 
 # 12. The check changed nothing in the repo.

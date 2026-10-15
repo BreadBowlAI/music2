@@ -6,7 +6,8 @@
 //! `Drop`, and the `Flat` for counting), so this same file ran in a worktree at HEAD to record
 //! layout S, one `Store` per renderer, and measures whatever layout the tree it is built in has.
 //! S's record is read from `store-S.txt` beside this crate's manifest, or from `$M2_STORE_S`; every
-//! run prints its own record line (`store-record …`), which is what that file holds.
+//! run prints its own record line (`store-record …`), which is what that file holds. A record names
+//! its machine, and the rule compares only with S's record from the same machine (PLAT-1).
 //!
 //! The rule (§11.3): choose one `Store` per kernel instance (P1) unless one of these fails
 //! against S:
@@ -15,6 +16,9 @@
 //! - fewer than 2 renderers build side by side, or the address space the process holds with 2
 //!   renderers exceeds 25% of its limit;
 //! - p50's full build, what opening a project costs, is worse by more than 50%.
+//!
+//! The two memory rules fail when the OS doesn't say what the process holds: they never pass
+//! unmeasured (`m2_os::process::memory`).
 //!
 //! If P1 fails, wasmtime's pooling allocator (P3) is measured, then a smaller memory reservation
 //! (P2), and the first that passes is chosen; a shared store never is. Batched drops are built
@@ -26,10 +30,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 use m2_ir::{FNode, FOp};
+use m2_os::process::{self, Memory};
 use m2_runtime::{BLOCK, Renderer, Transport};
 
 use crate::gates::Opts;
-use crate::report::Outcome;
+use crate::report::{Outcome, same_machine};
 use crate::{Lab, songs};
 
 /// What the contract's acceptance gate 7 names as p50's instance count.
@@ -39,9 +44,11 @@ const FROM_SECONDS: f64 = 180.0;
 const BLOCKS: usize = 11_250;
 /// The most p50 renderers built side by side.
 const SIDE_BY_SIDE: usize = 4;
+/// Why the memory rules fail where the OS doesn't say what the process holds.
+const UNMEASURED: &str = "not measured: this OS doesn't say what the process holds";
 
-/// One layout's numbers.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// One layout's numbers, and the machine that measured them.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Record {
     pub count: usize,
     /// `Renderer::new` on the reference project.
@@ -61,6 +68,8 @@ pub struct Record {
     pub drop_ms: f64,
     pub audio_base_us: f64,
     pub audio_drop_us: f64,
+    /// `m2_os::process::machine()`: last on the line, since it holds spaces.
+    pub machine: String,
 }
 
 /// `Record`'s fields as `key=value` words, in this order.
@@ -101,12 +110,17 @@ impl Record {
 
     pub fn line(&self) -> String {
         let words: Vec<String> = KEYS.iter().zip(self.values()).map(|(k, v)| format!("{k}={v:.3}")).collect();
-        format!("store-record {}", words.join(" "))
+        format!("store-record {} machine={}", words.join(" "), self.machine)
     }
 
     /// The first `store-record` line of `text`.
     pub fn parse(text: &str) -> Option<Record> {
         let line = text.lines().find_map(|l| l.trim().strip_prefix("store-record "))?;
+        let (line, machine) = line.split_once(" machine=")?;
+        let machine = machine.trim().to_string();
+        if machine.is_empty() {
+            return None;
+        }
         let mut v = [f64::NAN; 13];
         for w in line.split_whitespace() {
             let (k, x) = w.split_once('=')?;
@@ -131,6 +145,7 @@ impl Record {
             drop_ms: v[10],
             audio_base_us: v[11],
             audio_drop_us: v[12],
+            machine,
         })
     }
 }
@@ -148,34 +163,47 @@ fn instances(nodes: &[FNode], order: &[usize]) -> usize {
         .sum()
 }
 
-/// The process's memory, from `task_info(TASK_VM_INFO)`: physical footprint, address space in use,
-/// and the address-space limit, in bytes.
-#[cfg(target_os = "macos")]
-fn memory() -> Option<(u64, u64, u64)> {
-    // `task_vm_info` through rev2 (<mach/task_info.h>).
-    #[repr(C)]
-    #[derive(Default)]
-    struct VmInfo {
-        virtual_size: u64,
-        region_count: i32,
-        page_size: i32,
-        sizes: [u64; 16],
-        phys_footprint: u64,
-        min_address: u64,
-        max_address: u64,
-    }
-    const TASK_VM_INFO: u32 = 22;
-    let mut info = VmInfo::default();
-    let mut count = (std::mem::size_of::<VmInfo>() / 4) as u32;
-    // SAFETY: `info` is a `task_vm_info` through rev2 and `count` its size in `natural_t`s.
-    #[allow(deprecated)]
-    let kr = unsafe { libc::task_info(libc::mach_task_self(), TASK_VM_INFO, &mut info as *mut VmInfo as libc::task_info_t, &mut count) };
-    (kr == 0).then_some((info.phys_footprint, info.virtual_size, info.max_address - info.min_address))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn memory() -> Option<(u64, u64, u64)> {
-    None
+/// The rule (§11.3) on `rec`: each check into `out`, and whether all passed. A comparison with S
+/// needs S's record from this machine, else it is skipped with why (PLAT-1). The memory rules fail
+/// when the memory wasn't measured (`memory`: before and after one renderer; `with_two`: with two
+/// renderers), whatever S is: they never pass unmeasured.
+fn rule(out: &mut Outcome, rec: &Record, s: &Result<Record, String>, memory: bool, with_two: bool) -> bool {
+    let against_s = |out: &mut Outcome, name: &str, judge: &dyn Fn(&Record) -> (bool, String)| match s {
+        Ok(s) => {
+            let (ok, detail) = judge(s);
+            out.check(name, ok, detail)
+        }
+        Err(why) => {
+            out.skip(name, why);
+            false
+        }
+    };
+    let mut pass = against_s(out, "p99 block within S + 80 µs", &|s| {
+        (rec.p99_us <= s.p99_us + 80.0, format!("{:.0} µs against S's {:.0} µs", rec.p99_us, s.p99_us))
+    });
+    let footprint = "footprint within S + 64 MB";
+    pass &= if memory {
+        against_s(out, footprint, &|s| {
+            (rec.footprint_mb <= s.footprint_mb + 64.0, format!("{:.0} MB against S's {:.0} MB", rec.footprint_mb, s.footprint_mb))
+        })
+    } else {
+        out.check(footprint, false, UNMEASURED)
+    };
+    // Against the process's own limit, so judged on any machine.
+    let side = "2 renderers side by side, reserving at most 25% of the address space";
+    pass &= match (rec.side_by_side >= 2, with_two) {
+        (false, _) => out.check(side, false, format!("{} built", rec.side_by_side)),
+        (true, false) => out.check(side, false, format!("{} built; {UNMEASURED}", rec.side_by_side)),
+        (true, true) => {
+            let of_s = s.as_ref().map_or(String::new(), |s| format!(" (S: {:.1}%)", 100.0 * s.reserved2_gib / s.limit_gib));
+            let held = 100.0 * rec.reserved2_gib / rec.limit_gib;
+            out.check(side, rec.reserved2_gib <= 0.25 * rec.limit_gib, format!("{} built; {held:.1}%{of_s}", rec.side_by_side))
+        }
+    };
+    pass &= against_s(out, "full build within 1.5 × S", &|s| {
+        (rec.build_ms <= 1.5 * s.build_ms, format!("{:.0} ms against S's {:.0} ms", rec.build_ms, s.build_ms))
+    });
+    pass
 }
 
 /// Nearest rank: the smallest value at or above share `p`.
@@ -196,15 +224,15 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     // A sine into a delay: the same small cost every block, so what moves it during the drop is the drop.
     let small = lab.project("sine", &songs::sine(true)).and_then(|d| lab.compile(&d))?;
     let mut out = Outcome::new("G7f store", "RENDER-32", &format!("the runtime on {}", o.reference.name()));
-    let mut rec = Record { count: instances(&song.flat.nodes, &song.flat.order), ..Record::default() };
+    let mut rec = Record { count: instances(&song.flat.nodes, &song.flat.order), machine: process::machine(), ..Record::default() };
     out.info("kernel instances", format!("{} (acceptance gate 7 names {CONTRACT_COUNT})", rec.count));
 
     // Build: one renderer, then more side by side.
-    let before = memory();
+    let before = process::memory();
     let t = Instant::now();
     let mut first = Renderer::new(&song.flat, &song.data, &lab.packages, song.rate)?;
     rec.build_ms = t.elapsed().as_secs_f64() * 1e3;
-    let one = memory();
+    let one = process::memory();
     let mut more = vec![];
     rec.side_by_side = 1;
     let mut two = None;
@@ -219,17 +247,19 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         }
         rec.side_by_side += 1;
         if rec.side_by_side == 2 {
-            two = memory();
+            two = process::memory();
         }
     }
     drop(more);
-    if let (Some(b), Some(a)) = (before, one) {
-        rec.footprint_mb = a.0.saturating_sub(b.0) as f64 / MB;
-        rec.reserved_gib = a.1.saturating_sub(b.1) as f64 / GIB;
-        rec.limit_gib = a.2 as f64 / GIB;
+    // Without the process's memory these stay 0, and the memory rules below fail.
+    let measured: Option<(Memory, Memory)> = before.zip(one);
+    if let Some((b, a)) = measured {
+        rec.footprint_mb = a.footprint.saturating_sub(b.footprint) as f64 / MB;
+        rec.reserved_gib = a.mapped.saturating_sub(b.mapped) as f64 / GIB;
+        rec.limit_gib = a.address_space as f64 / GIB;
     }
     if let Some(a) = two {
-        rec.reserved2_gib = a.1 as f64 / GIB;
+        rec.reserved2_gib = a.mapped as f64 / GIB;
     }
     out.info(
         "build",
@@ -241,17 +271,27 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
             failed.map_or(String::new(), |e| format!(" (the next failed: {e})"))
         ),
     );
-    out.info(
-        "memory",
-        format!(
-            "one renderer adds {:.0} MB of footprint and reserves {:.0} GiB; with two the process holds {:.0} GiB, {:.1}% of its {:.0} GiB",
-            rec.footprint_mb,
-            rec.reserved_gib,
-            rec.reserved2_gib,
-            100.0 * rec.reserved2_gib / rec.limit_gib.max(1.0),
-            rec.limit_gib
+    match (measured, two) {
+        (Some(_), Some(_)) => out.info(
+            "memory",
+            format!(
+                "one renderer adds {:.0} MB of footprint and reserves {:.0} GiB; with two the process holds {:.0} GiB, {:.1}% of its {:.0} GiB",
+                rec.footprint_mb,
+                rec.reserved_gib,
+                rec.reserved2_gib,
+                100.0 * rec.reserved2_gib / rec.limit_gib.max(1.0),
+                rec.limit_gib
+            ),
         ),
-    );
+        (Some(_), None) => out.info(
+            "memory",
+            format!(
+                "one renderer adds {:.0} MB of footprint and reserves {:.0} GiB, of the process's {:.0} GiB",
+                rec.footprint_mb, rec.reserved_gib, rec.limit_gib
+            ),
+        ),
+        (None, _) => out.info("memory", UNMEASURED),
+    }
 
     // Block time: 30 s from 3:00, live (non-finite samples silenced, as the engine plays).
     first.set_strict(false);
@@ -282,13 +322,9 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     let audio = {
         let stop = stop.clone();
         std::thread::spawn(move || {
-            // Kept on a performance core, as an audio thread is, so its blocks time the drop rather
-            // than the scheduler.
-            // SAFETY: sets this thread's own QoS class.
-            #[cfg(target_os = "macos")]
-            unsafe {
-                libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_USER_INTERACTIVE, 0);
-            }
+            // Marked latency-sensitive, as an audio thread is (on macOS, kept on a performance
+            // core), so its blocks time the drop rather than the scheduler. Linux can't: reported.
+            let class = m2_os::thread::interactive();
             let mut blocks: Vec<(Instant, f64)> = Vec::with_capacity(4096);
             let (mut next, mut clock) = (Instant::now(), 0u64);
             while !stop.load(Ordering::Relaxed) {
@@ -305,7 +341,7 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
                     None => next = Instant::now(),
                 }
             }
-            blocks
+            (class, blocks)
         })
     };
     std::thread::sleep(Duration::from_secs(3));
@@ -314,7 +350,7 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     let t1 = Instant::now();
     std::thread::sleep(Duration::from_millis(300));
     stop.store(true, Ordering::Relaxed);
-    let Ok(blocks) = audio.join() else { bail!("the audio-like thread panicked") };
+    let Ok((class, blocks)) = audio.join() else { bail!("the audio-like thread panicked") };
     rec.drop_ms = (t1 - t0).as_secs_f64() * 1e3;
     let mut base: Vec<f64> = blocks.iter().filter(|b| b.0 < t0 && b.0 + Duration::from_secs(1) >= t0).map(|b| b.1).collect();
     let mut during: Vec<f64> = blocks.iter().filter(|b| b.0 + Duration::from_secs_f64(b.1 / 1e6) >= t0 && b.0 <= t1).map(|b| b.1).collect();
@@ -323,47 +359,42 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     out.info(
         "drop",
         format!(
-            "{:.1} ms; the audio-like thread's p99 block {:.0} µs during it ({} blocks), {:.0} µs before",
+            "{:.1} ms; the audio-like thread's p99 block {:.0} µs during it ({} blocks), {:.0} µs before; {}",
             rec.drop_ms,
             rec.audio_drop_us,
             during.len(),
-            rec.audio_base_us
+            rec.audio_base_us,
+            match class {
+                Ok(()) => "that thread marked latency-sensitive".to_string(),
+                Err(e) => format!("that thread at its default priority ({e})"),
+            }
         ),
     );
     out.info("record", rec.line());
 
-    // The rule, against S.
+    // The rule (§11.3). Its comparisons with S are judged only against S's record from this same
+    // machine (PLAT-1); its memory rules fail, never pass, when the memory wasn't measured.
     let path =
         std::env::var_os("M2_STORE_S").map_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("store-S.txt"), Into::into);
-    let Some(s) = std::fs::read_to_string(&path).ok().and_then(|t| Record::parse(&t)) else {
-        out.skip("the rule (§11.3)", format!("no record of layout S in {}", path.display()));
-        return Ok(out);
+    let s = match std::fs::read_to_string(&path).ok().and_then(|t| Record::parse(&t)) {
+        None => Err(format!("no record of layout S in {}", path.display())),
+        Some(s) if !same_machine(&s.machine, &rec.machine) => {
+            out.info("machines", format!("S's record is from {}; this run is on {}", s.machine, rec.machine));
+            Err("recorded, not judged: S's record is from another machine (PLAT-1)".to_string())
+        }
+        Some(s) => Ok(s),
     };
-    let checks = [
-        ("p99 block within S + 80 µs", rec.p99_us <= s.p99_us + 80.0, format!("{:.0} µs against S's {:.0} µs", rec.p99_us, s.p99_us)),
-        (
-            "footprint within S + 64 MB",
-            rec.footprint_mb <= s.footprint_mb + 64.0,
-            format!("{:.0} MB against S's {:.0} MB", rec.footprint_mb, s.footprint_mb),
-        ),
-        (
-            "2 renderers side by side, reserving at most 25% of the address space",
-            rec.side_by_side >= 2 && rec.reserved2_gib <= 0.25 * rec.limit_gib,
-            format!(
-                "{} built; {:.1}% (S: {:.1}%)",
-                rec.side_by_side,
-                100.0 * rec.reserved2_gib / rec.limit_gib,
-                100.0 * s.reserved2_gib / s.limit_gib
-            ),
-        ),
-        ("full build within 1.5 × S", rec.build_ms <= 1.5 * s.build_ms, format!("{:.0} ms against S's {:.0} ms", rec.build_ms, s.build_ms)),
-    ];
-    let mut pass = true;
-    for (name, ok, detail) in checks {
-        pass &= out.check(name, ok, detail);
-    }
+    let pass = rule(&mut out, &rec, &s, measured.is_some(), measured.is_some() && two.is_some());
     // What the drop adds to the audio-like thread's p99 over its own before; none when it adds nothing.
     let raise = |r: &Record| (r.audio_drop_us - r.audio_base_us).max(0.0);
+    let Ok(s) = s else {
+        out.info(
+            "batched drops",
+            format!("the drop raises the audio-like thread's p99 by {:.0} µs; not compared with S here", raise(&rec)),
+        );
+        out.info("layout", "not chosen here: the rule needs S's record from this machine (§11.3, PLAT-1)");
+        return Ok(out);
+    };
     out.info(
         "batched drops",
         format!(
@@ -381,11 +412,54 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
 mod tests {
     use super::*;
 
-    // RENDER-32: a record line reads back as itself.
+    // RENDER-32, PLAT-1: a record line reads back as itself, its machine included.
     #[test]
     fn a_record_reads_back() {
-        let r = Record { count: 6_060, build_ms: 151.5, side_by_side: 4, p99_us: 812.25, limit_gib: 131_072.0, ..Record::default() };
-        assert_eq!(Record::parse(&format!("noise\n{}\n", r.line())), Some(r));
+        let machine = "MacBookPro18,1, macOS 26.6.2, Apple M1 Pro, aarch64, 10 threads".to_string();
+        let r =
+            Record { count: 6_060, build_ms: 151.5, side_by_side: 4, p99_us: 812.25, limit_gib: 131_072.0, machine, ..Record::default() };
+        assert_eq!(Record::parse(&format!("noise\n{}\n", r.line())), Some(r.clone()));
         assert_eq!(Record::parse("store-record count=1"), None, "every field is needed");
+        let unnamed = r.line().split(" machine=").next().unwrap().to_string();
+        assert_eq!(Record::parse(&unnamed), None, "a record names its machine");
+    }
+
+    // OS-82, RENDER-32: unmeasured, the memory rules fail, never pass, also where S's record is
+    // from another machine; measured, the same rules are judged on the numbers.
+    #[test]
+    fn the_memory_rules_fail_unmeasured() {
+        use crate::report::Verdict;
+        let here = "a model, an OS, a CPU, aarch64, 8 threads".to_string();
+        let rec = Record { side_by_side: 4, machine: here.clone(), ..Record::default() };
+        let s = Record {
+            p99_us: 3_000.0,
+            footprint_mb: 554.0,
+            build_ms: 100.0,
+            reserved2_gib: 49_636.0,
+            limit_gib: 131_068.0,
+            machine: here,
+            ..Record::default()
+        };
+        let memory = ["footprint within S + 64 MB", "2 renderers side by side, reserving at most 25% of the address space"];
+        for s in [Ok(s.clone()), Err("recorded, not judged: S's record is from another machine (PLAT-1)".to_string())] {
+            let mut out = Outcome::new("G7f store", "RENDER-32", "a test");
+            assert!(!rule(&mut out, &rec, &s, false, false));
+            let failed: Vec<&str> = out.checks.iter().filter(|c| c.verdict == Verdict::Fail).map(|c| c.name.as_str()).collect();
+            assert_eq!(failed, memory, "{out}");
+            assert_eq!(out.verdict(), Verdict::Fail);
+        }
+        let measured =
+            Record { p99_us: 3_050.0, footprint_mb: 600.0, build_ms: 120.0, reserved2_gib: 30_000.0, limit_gib: 131_072.0, ..rec.clone() };
+        let mut out = Outcome::new("G7f store", "RENDER-32", "a test");
+        assert!(rule(&mut out, &measured, &Ok(s), true, true), "{out}");
+        assert_eq!(out.checks.iter().filter(|c| c.verdict == Verdict::Pass).count(), 4, "{out}");
+    }
+
+    // PLAT-1: S's own record, as checked in, names the reference Mac.
+    #[test]
+    fn the_checked_in_record_of_s_names_its_machine() {
+        let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("store-S.txt")).unwrap();
+        let s = Record::parse(&text).expect("store-S.txt holds a record");
+        assert!(s.machine.starts_with("MacBookPro18,1, macOS "), "{}", s.machine);
     }
 }
