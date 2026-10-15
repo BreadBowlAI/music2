@@ -348,3 +348,8 @@ Left as they are, for the lead:
 - The app row passes when the app finds no plugins; only "can't be hosted" fails it, as §16 says. The probe above is what
   shows they load.
 - On macOS, `run_main` after `use_app_main_thread` is now an error (before, both were the main queue). Nothing does that.
+
+The check again at `0a68727`, with the fix (logs in `~/m2-runs/check-check-S5b/`): the same rows. Rust tests 696 passed
+(one more: the new test), the same 10 failed. Suites: 6 of S1's 7 failed again, and `notes-proj` passed. `live3a`
+failed "dragging across the ruler loops beats 4–12" once and passed on its retry. That is `HANDOFF.md`'s ruler-drag flake,
+which S1's trial saw too; `live3a` hosts no plugin, so S5's loop only idles there. Alone it failed 1 of 6 runs more.
