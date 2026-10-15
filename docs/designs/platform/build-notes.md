@@ -607,3 +607,106 @@ The check again at `7ec6404`, with the fix (logs in `~/m2-runs/check-check-s7b/`
 retry. Rust tests 717 passed, the same 5 failed; `m2-session`'s binary 138.7 s. clippy fails at lint 4, with only lints
 4 to 6. Suites 29 of 29 (1,034 of 1,034 checks; live3b 51 of 51 with the plugins), renders 8 of 8, and every other row
 PASS.
+
+## S8. File events
+
+**Built**
+
+| What | Where |
+|---|---|
+| `watch::Events` (`start`, `flush`, and drop: nothing is heard after it), `Heard` (`Path`, `Rescan`) | `core/os/src/watch.rs` |
+| macOS: the FSEvents stream, moved from `graph/fsevents.rs`; its flags become `Heard` (dropped, root changed, mount, unmount, and the root's entry with "must scan subfolders" → `Rescan`) | `core/os/src/mac/watch.rs` |
+| Linux: inotify, new. One instance per process and one reader thread (`m2-watch`) that rests 10 ms after each read with the instance free. Each folder is watched before it is listed. A new folder is watched with the folders under it, then named. A watched folder that moves (`IN_MOVE_SELF`, not the root), and a queue overflow, make the watcher watch its project again, let go of what that didn't reach, and get `Rescan`. A flush reads until `EAGAIN`. | `core/os/src/linux/watch.rs` |
+| `graph/fsevents.rs` becomes `graph/events.rs`, the same on every OS: the hints, `MAX_HINTS`, the filters, take, put back, the event count, the wake | `crates/server/src/graph/events.rs` |
+| No OS `cfg` left; `source()` asks for a local volume and `Events::start`, and says why it walks | `crates/server/src/graph/watcher.rs`, `graph.rs` |
+| A walk a `Rescan` asked for counts no misses and clears the waiting ones; `WatchStats::rescans` counts those walks | `watcher.rs` |
+| The 4 new tests, as §13.2 says (60 s walk, 300 ms grace, the last write taken in within 1.5 s, `misses == 0`, `events` still true) | `crates/server/src/graph/watch_tests.rs` |
+| 9 tests in `m2-os`: 4 for every OS (a write named once `flush` returns, a renamed folder, the root going, `Send + Sync`), 5 for Linux (folders not entered, a file named at each write while open, two watchers sharing a folder, a folder moved out, a real overflow) | `core/os/src/watch.rs`, `linux/watch.rs` |
+| G11 says "watched by file-system events" | `crates/gates/src/server/watch.rs`, `crates/gates/README.md` |
+| `one_place.rs`'s allow-list is empty | `core/os/tests/one_place.rs` |
+| WRITE-19's *Today* (§6.1's three edits), PLAT-2's and PLAT-3's *Today* | `docs/architecture.md` |
+
+**Test 5** (`a_lane_written_in_two_halves_never_plays_empty`, design §4.1 "unverified until S8"). inotify does name each
+write separately, so the test's one-revision branch is never taken on Linux.
+
+| Measured | Result |
+|---|---|
+| Its events cases, 20 runs | 20 of 20: at 400 ms, two revisions (the half keeps the last data, with `lane.invalid`; then all 8 notes); at 60 ms, one |
+| What the watcher heard (a temporary print, removed) | The event count rose after the first half (1 → 2 or 3) and again after the second (→ 4 or 5). Each half opened its batch in a tick its events started (a look at the named path), long before the 5 s walk. |
+| `a_file_written_while_open_is_named_at_each_write` (new, Linux) | Each of two writes to a file still open is named by its own event (`IN_MODIFY`), before the close |
+
+So the "one revision" case at 400 ms is for FSEvents, which names such a file when it is closed. The test stays as it is.
+
+**Each new test catches what it is for** (a change put in for one run, then taken out)
+
+| Broken on purpose | Fails |
+|---|---|
+| New folders never watched | made after open, made and filled at once, the burst |
+| A renamed folder keeps its old paths (no path update, no rebuild) | the rename test, and 2 `m2-os` tests |
+| A `Rescan`'s walk counts misses, as before S8 | the burst test, with `misses: 4094` |
+
+**Repeats**
+
+| What | Result |
+|---|---|
+| The 4 new tests and tests 1 to 5, each run alone 20 times | 20 of 20 each |
+| The same with 32 threads spinning (load average up to 39) | 20 of 20 each |
+| `m2-server`'s whole test binary (135 tests, one inotify instance shared by all) | 5 of 5 |
+
+**G11 on Linux**, for information (PLAT-1; `m2-gates --server tx-data watcher`, release, a quiet server; the log is
+`~/m2-runs/logs/build-s8-gates-g11.log`)
+
+| Gate | Result |
+|---|---|
+| `tx-data` | PASS: to the first block that plays a write, p95 8.5 ms; the barrier alone p95 0.1 ms |
+| `watcher` | PASS: watched by file-system events; idle, 0.10% of a core (2 walks in 10 s, 197 ticks that looked at nothing); an outside write played p50 159 ms, p95 213 ms in place, p50 166 ms, p95 173 ms as an atomic save. By walks alone: 3.43%, p50 217 to 218 ms. |
+
+**Deviations**
+
+| What | Why |
+|---|---|
+| `Hints::paths` is a set; FSEvents' flags are no longer kept per path | Only the rescan read them, and that is decided in `mac/watch.rs` now. The watcher reads the paths alone (design §11). |
+| `WatchStats` gains `rescans` | The burst test checks that its walk was a `Rescan`, so it can't pass by never reaching the limit. |
+| A test-only `Watch::flush` | The burst test makes sure the new folder is watched before it fills and that every name is heard before the next tick. Otherwise whether the names pass 4,096 depends on timing. |
+| `source()` still asks `m2_session::lock::local_volume` | It is `fs::is_local` plus the session's test fault. The design names `fs::is_local`. |
+| A folder that can't be read (`EACCES`) is skipped, like one gone (`ENOENT`, `ENOTDIR`) | A walk can't list it either. Failing the start for it would move the whole project to walks. |
+| macOS doesn't use `enter` | FSEvents watches the whole tree; `events.rs` filters with `walked()`, as before. The API says a source may name paths in folders it doesn't enter. |
+| `m2-os`'s watch tests share a test-only lock; the overflow test takes it alone | An overflow gives every watcher in the process a `Rescan`. |
+| WRITE-19's added sentence also names the new tests; PLAT-3's *Today* changes too | The *Today* line names a test for each claim. PLAT-3 said "file-system events move in with S8". |
+
+The overflow rebuild, which §12 says can't be tested without a hook, is tested in `m2-os`: the test holds the
+instance's lock (test code) while more than 16,384 events queue, then makes a folder whose event is lost. After the
+overflow that folder is watched, and a write in it is named.
+
+The mac lint caught one mistake while this was built: in `mac/watch.rs` the `heard` parameter hid FSEvents' callback
+of the same name. The callback is `callback` now.
+
+**Shared files** (S7, "script" and "flakes" are built beside this): `docs/architecture.md` (WRITE-19's *Today*, and
+the *Today* lines of PLAT-2 and PLAT-3), `core/os/tests/one_place.rs` (S8's three lines leave `NOT_YET`), one `mod`
+line and the header in `core/os/src/lib.rs`, `linux/mod.rs` and `mac/mod.rs`, and this section. `Cargo.lock` and
+`ci/check.sh` are unchanged (`m2-server` already used `m2-os`).
+
+**The check** at `edcee5f` (`ci/check.sh`, 10 min, logs and the app's screenshots in `~/m2-runs/check-build-s8/`):
+`music2 check: PASS`, on its first run, with no retry. That is §13.1's S8 row: Linux fully green.
+
+| Row | Result |
+|---|---|
+| toolchain, web build, build | PASS |
+| app | PASS: the UI connected in 1 s with `first-song` and with `with-plugins`; the plugins hosted (no "Needs attention" in the screenshot) |
+| rust tests | PASS: 733 passed, 0 failed (S6's 715, tests 1 to 5, the 4 new watcher tests, and the 9 new `m2-os` tests) |
+| clippy | PASS. Without `-D warnings` it reports nothing. |
+| std kernels, std.wasm, mac lint | PASS |
+| browser suites | PASS: 29 of 29, none on a retry |
+| renders | PASS: 8 of 8 match `e2e/renders.sha256` |
+| repo unchanged | PASS |
+
+Watched by events, not walks: neither app log says "watching … by walking it" (they keep the app's stderr), and
+neither do the headless server's logs of `notes` and `s4-clips`, run once more with `--keep` (the check doesn't keep
+them). Both suites passed (52 of 52, 28 of 28).
+
+**Left for the lead**
+- Only the Mac run tests the moved FSEvents code; the mac lint only type-checks it. It is meant to behave as before.
+- Running out of inotify watches after start (`ENOSPC`) gives a `Rescan` and leaves the folder to the 5 s walks; a
+  change there is then a miss, so the two-miss rule moves the project to walks. Untested: lowering the limit needs root.
+- One inotify instance and its reader thread live until the process ends, by design.
+- §13.3 still applies after `taste` merges: re-run s8-tracks' "layout.json within a second" on this watcher.
