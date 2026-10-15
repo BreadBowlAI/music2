@@ -394,27 +394,32 @@ impl Lent {
 }
 
 /// Take `b`'s instance offline for the export: deactivated, its committed blob loaded (skipped
-/// where it holds it), set to offline mode and activated. After a load, one call with no events
-/// on this thread lets the plugin apply the state: one that applies it at its next call, ending
-/// every voice and setting every parameter (Surge XT does), would take the export's first notes
-/// and the code's values with it. The render resets it at its first call.
+/// where it holds it), set to offline mode and activated. Then one call on this thread, before the
+/// render, ends every note playback left sounding: a choke and a NoteOff for every key, as a panic
+/// sends them, since CLAP's `reset` doesn't end them in every plugin (Surge XT keeps its voices,
+/// and its NoteOffs match the note's id, which the export doesn't know). The same call lets a
+/// plugin that applies a loaded state at its next call, ending every voice and setting every
+/// parameter (Surge XT does), apply it here and not over the export's first notes and the code's
+/// values. The render resets it at its first call.
 fn offline(b: &Borrow, rate: u32) -> Result<()> {
     let (host, h) = (b.inst.host(), b.inst.handle());
     host.deactivate(h);
-    let loaded = match &b.blob {
-        Some(blob) => host.load_state(h, blob.clone())?,
-        None => false,
-    };
+    if let Some(blob) = &b.blob {
+        host.load_state(h, blob.clone())?;
+    }
     host.set_render_mode(h, RenderMode::Offline)?;
     host.activate(h, rate, BLOCK as u32)?;
-    if loaded {
-        let (mut l, mut r, silence) = ([0.0f32; BLOCK], [0.0f32; BLOCK], [0.0f32; BLOCK]);
-        let mut io =
-            m2_plugins::SharedBuffers { inputs: [&silence, &silence], n_in: 0, outputs: [&mut l, &mut r], n_out: 2, frames: BLOCK as u32 };
-        let (none, mut out) = (m2_plugins::Events::with_capacity(0), m2_plugins::Events::with_capacity(64));
-        if host.process(h, &mut io, &none, &mut out, &m2_plugins::Transport::default()) == m2_plugins::Status::Error {
-            bail!("it reported a processing error once its state was loaded");
-        }
+    let mut end = m2_plugins::Events::with_capacity(2 * 128);
+    for key in 0..128 {
+        end.push(m2_plugins::Event::NoteChoke { time: 0, id: -1, key });
+        end.push(m2_plugins::Event::NoteOff { time: 0, id: -1, key });
+    }
+    let (mut l, mut r, silence) = ([0.0f32; BLOCK], [0.0f32; BLOCK], [0.0f32; BLOCK]);
+    let mut io =
+        m2_plugins::SharedBuffers { inputs: [&silence, &silence], n_in: 0, outputs: [&mut l, &mut r], n_out: 2, frames: BLOCK as u32 };
+    let mut out = m2_plugins::Events::with_capacity(64);
+    if host.process(h, &mut io, &end, &mut out, &m2_plugins::Transport::default()) == m2_plugins::Status::Error {
+        bail!("it reported a processing error before the export");
     }
     Ok(())
 }
@@ -561,6 +566,8 @@ pub(crate) mod tests {
         // Every event says which song it's about, even after another song is opened.
         let dir = project.0.canonicalize().unwrap();
         assert!(seen.iter().all(|e| e["song"] == "untitled" && e["dir"].as_str() == dir.to_str()), "{seen:?}");
+        // RENDER-1 (step 7 design §12.5): a pure song exports beside playback, never paused for it.
+        assert!(seen.iter().all(|e| e["paused"] == false) && state.exports.borrowed().is_none(), "{seen:?}");
         let seconds = done["seconds"].as_f64().unwrap();
         assert!(seconds > 60.5 && seconds < 70.0, "the minute, and the chord's release: {seconds}");
         let progress: Vec<f64> = seen[..seen.len() - 1].iter().map(|e| e["progress"].as_f64().unwrap()).collect();

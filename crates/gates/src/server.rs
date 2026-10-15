@@ -1164,11 +1164,13 @@ fn read_wav(path: &Path) -> Result<Vec<[f32; 2]>> {
 /// - Reuses: no instance created, and the plan's instances before and after are the same.
 /// - State intact: each instance's saved state before the export equals the one after the first
 ///   resumed block. The gate's copy holds the lead's cutoff lane still, so the code's values are
-///   the same at both saves.
+///   the same at both saves. Surge's saved state is committed, as an autosave will, so the
+///   instance holds its committed state and the export loads nothing: the usual path.
 /// - Resumes: the engine resumes at the clock it held, within two device buffers of the instances
 ///   being given back, with no step at the fade out or the fade in over G6's bound.
-/// - The file: as long as `m2 render`'s within a second, its level in each second within 1 dB of
-///   it and its onsets within 10 ms (plugins aren't bit-exact from one instance to the next).
+/// - The file: as long as `m2 render`'s within a second, its level in each second of the song
+///   within 1 dB of it, its release tail and the lead between the kicks within 6 dB, and its
+///   onsets within 10 ms (plugins aren't bit-exact from one instance to the next).
 pub fn export(lab: &mut Lab, _o: &Opts) -> Result<Outcome> {
     let mut out = Outcome::new("G7e export", "RENDER-1, RENDER-6a, HOME-4, HOME-6", "server on examples/with-plugins, real time");
     let dir = lab.copy(&crate::fixture("examples/with-plugins"), "export")?;
@@ -1187,9 +1189,8 @@ pub fn export(lab: &mut Lab, _o: &Opts) -> Result<Outcome> {
     let state = Arc::new(m2_server::AppState::new(String::new(), Graph::with_player(player)));
     let graph = &state.graph;
     graph.open(&dir)?;
-    graph.seek(song.beat(2 * song.rate as u64))?;
-    graph.transport("play")?;
-    std::thread::sleep(Duration::from_secs(1));
+    // Stopped, the engine still runs (RENDER-6a): the code's values reach the instances at once.
+    std::thread::sleep(Duration::from_millis(200));
     let handles = graph.plugin_handles();
     if handles.len() != 2 {
         bail!("with-plugins plays {} plugin instances, not 2", handles.len());
@@ -1197,6 +1198,21 @@ pub fn export(lab: &mut Lab, _o: &Opts) -> Result<Outcome> {
     let host = m2_plugins::host();
     let save = |h| host.save_state(h).recv().map_err(|e| anyhow!("{e}"))?.map_err(|e| anyhow!("{e}")).map(|b| b.bytes);
     let before: Vec<Vec<u8>> = handles.iter().map(|&h| save(h)).collect::<Result<_>>()?;
+    // A save leaves Surge holding bytes that aren't committed, so the export would load the committed
+    // ones, which ends every voice in Surge XT. Committed as an autosave will commit them (HOME-6), it
+    // holds its committed state, as an instance does in the app: the export loads nothing, the usual
+    // path (step 7 design §10.5), with the notes playback left sounding still in it.
+    let surge = handles
+        .iter()
+        .position(
+            |&h| matches!(host.main_call(h, m2_plugins::MainCall::Info), Ok(m2_plugins::Reply::Info(i)) if i.found.id.contains("surge")),
+        )
+        .context("with-plugins plays no Surge XT")?;
+    std::fs::write(dir.join("data/lead/lead.state"), &before[surge])?;
+    graph.poll();
+    graph.seek(song.beat(2 * song.rate as u64))?;
+    graph.transport("play")?;
+    std::thread::sleep(Duration::from_secs(1));
     let made = created();
 
     // The export, with the playhead and the engine sampled every millisecond meanwhile.
@@ -1316,7 +1332,7 @@ pub fn export(lab: &mut Lab, _o: &Opts) -> Result<Outcome> {
         ),
     );
     // Over the song's seconds: its release tail after them differs from one instance to the next by
-    // more than the bound (Surge's random phases), so there it is printed beside two m2 renders'.
+    // more than the bound (Surge's random phases), so there it is judged more loosely, below.
     let level = |x: &[[f32; 2]]| crate::signal::levels(x, sec).into_iter().map(db).collect::<Vec<f64>>();
     let (lg, lw) = (level(&got), level(&want));
     let song_secs = (song.end() as usize).div_ceil(sec);
@@ -1334,12 +1350,15 @@ pub fn export(lab: &mut Lab, _o: &Opts) -> Result<Outcome> {
     let twin_path = dir.join("render-twin.wav");
     twin.write(&twin_path, |_| {})?;
     let lt = level(&read_wav(&twin_path)?);
-    out.info(
-        "the file: its tail's level against m2 render's (above -60 dBFS)",
+    // Two m2 renders' tails differ by up to about 1.5 dB (Surge's random phases), so within 6 dB, as
+    // the lead below: a note that playback left sounding rings on in the export 60 dB over it.
+    let (tail, twins) = (worst(&lg, &lw, song_secs, usize::MAX), worst(&lt, &lw, song_secs, usize::MAX));
+    out.check(
+        "the file: its release tail, each second above -60 dBFS, within 6 dB of m2 render's",
+        tail <= 6.0 && lg.len() > song_secs,
         format!(
-            "worst {:.2} dB; two m2 renders' own tails differ by {:.2} dB",
-            worst(&lg, &lw, song_secs, usize::MAX),
-            worst(&lt, &lw, song_secs, usize::MAX)
+            "worst {tail:.2} dB over {} seconds; two m2 renders' own tails differ by {twins:.2} dB",
+            lg.len().saturating_sub(song_secs)
         ),
     );
     // The lead alone, where the kick that hits every beat is quiet: from 60% to 90% of each beat.

@@ -2869,3 +2869,29 @@ fn an_export_that_loads_a_state_lets_the_plugin_apply_it_first() {
     let beat = player(&ex.state.graph).status().beats;
     assert!((gain - Ex::ramp(beat)).abs() < 1e-6, "the code's gain again: {gain} at beat {beat}");
 }
+
+// RENDER-1: an export borrows an instance while playback's notes still sound in it. It holds its
+// committed state, so nothing is loaded (HOME-6, the usual path), and CLAP's `reset` doesn't end
+// the notes in every plugin (the probe's `reset_keeps_voices`, as Surge XT's keeps its voices), so a
+// call before the render ends every key: none of playback's notes is in the file, which equals one
+// made with new instances, bit for bit. Without that call, playback's two notes rang through the
+// export and on after its end (with Surge XT, G7e's tail 60 dB over m2 render's).
+#[test]
+fn an_export_ends_the_notes_playback_left_sounding() {
+    let mut ex = Ex::tagged("ringing");
+    let first = ex.handles();
+    let stats = m2_plugins::probe::stats(first[0]).unwrap();
+    stats.reset_keeps_voices.store(true, Ordering::Relaxed);
+    assert_eq!(stats.sounding.load(Ordering::Relaxed), 2, "playback's two notes sound");
+    let before = stats.main_calls().len();
+    let out = ex.fixture.0.join("out.wav");
+    crate::export::start(&ex.state, Some(out.clone())).unwrap();
+    ex.fill_until("the export is done", |ex| !ex.state.exports.running());
+    assert!(!moves(&stats.main_calls(), before).contains(&"load"), "it held its committed state: nothing loaded");
+    let (_, _, fresh, _) = ex.state.graph.render(Length::Song).unwrap();
+    let fresh_wav = ex.fixture.0.join("fresh.wav");
+    fresh.write(&fresh_wav, |_| {}).unwrap();
+    let samples = |p: &Path| hound::WavReader::open(p).unwrap().into_samples::<i32>().map(Result::unwrap).collect::<Vec<i32>>();
+    let (a, b) = (samples(&out), samples(&fresh_wav));
+    assert!(a.iter().any(|x| *x != 0) && a == b, "the export is the fresh one, bit for bit");
+}

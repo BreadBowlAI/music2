@@ -17,7 +17,8 @@
 //! alone. `m2.probe.fails-state` refuses a state that starts with `fail`, and any probe takes
 //! 300 ms to load one that starts with `slow`, as a big patch does. With [`Stats::defer_load`] set,
 //! a probe applies the parameters of a state it loads at the end of its next `process` call, after
-//! that call's events, ending every voice, as Surge XT does.
+//! that call's events, ending every voice, as Surge XT does. With [`Stats::reset_keeps_voices`]
+//! set, `reset` ends no voice, as Surge XT's doesn't.
 
 use std::ffi::{CStr, c_char, c_void};
 use std::path::{Path, PathBuf};
@@ -143,6 +144,8 @@ pub struct Stats {
     pub refuse_activate: AtomicBool,
     /// Apply a loaded state at the end of the next `process` call, ending every voice (Surge XT).
     pub defer_load: AtomicBool,
+    /// Keep every voice through `reset`, as Surge XT does: only a NoteOff or a choke ends one.
+    pub reset_keeps_voices: AtomicBool,
     /// A loaded state's gain and level (as bits), waiting for that call.
     deferred: (AtomicBool, AtomicU64, AtomicU64),
     /// Allocate and free once in the next `process` call: what the audio thread's allocation
@@ -190,6 +193,7 @@ impl Stats {
             restart: AtomicBool::new(false),
             refuse_activate: AtomicBool::new(false),
             defer_load: AtomicBool::new(false),
+            reset_keeps_voices: AtomicBool::new(false),
             deferred: (AtomicBool::new(false), AtomicU64::new(0), AtomicU64::new(0)),
             allocate: AtomicBool::new(false),
             slept: AtomicU64::new(0),
@@ -555,6 +559,9 @@ unsafe extern "C" fn reset(p: *const clap_plugin) {
     me.stats.resets.fetch_add(1, Ordering::Relaxed);
     me.stats.reset_at.0.store(TICK.fetch_add(1, Ordering::AcqRel), Ordering::Relaxed);
     me.stats.reset_at.1.store(crate::main_thread::token(), Ordering::Relaxed);
+    if me.stats.reset_keeps_voices.load(Ordering::Relaxed) {
+        return;
+    }
     for v in &mut me.voices {
         v.on = false;
     }
