@@ -48,6 +48,24 @@ export async function exportSong() {
 let home: Promise<string | null> | null = null;
 const homeDir = () => (home ??= projectApi.catalog().then((c) => c.home, () => null));
 
+/** One of an export's problems, as the server sends it. */
+type Problem = { code: string; message: string };
+
+/**
+ * What an export's problems mean for its file, in plain words, or null with none: a plugin that
+ * isn't installed plays nothing in it (FMT-18a; the problems list names it), and any other says
+ * its own message (an instance the export couldn't borrow, RENDER-1).
+ */
+export function exportNotes(problems: Problem[]): string | null {
+  const missing = problems.filter((p) => p.code === "plugin.missing").length;
+  const said = problems.filter((p) => p.code !== "plugin.missing").map((p) => p.message);
+  if (missing) {
+    const which = missing === 1 ? "A plugin isn't installed, so the export plays without it" : `${missing} plugins aren't installed, so the export plays without them`;
+    said.unshift(`${which} (the problems list says which).`);
+  }
+  return said.length ? said.join(" ") : null;
+}
+
 /** An `export` event from the server: progress, then the finished file or why it failed. */
 export async function onExportEvent(msg: {
   song?: string;
@@ -58,6 +76,7 @@ export async function onExportEvent(msg: {
   seconds?: number;
   peak_db?: number;
   error?: string;
+  problems?: Problem[];
 }) {
   const toast = useStore.getState().toast;
   if (typeof msg.progress === "number") return useExport.setState({ progress: msg.progress, song: msg.song ?? null, dir: msg.dir ?? null });
@@ -73,4 +92,7 @@ export async function onExportEvent(msg: {
   const reveal = () => void nativeAction("reveal_file", msg.path).catch((error) => toast(message(error)));
   if (native) toast(`${text}.${loud}`, { label: isMac ? "Show in Finder" : "Show in Folder", run: reveal });
   else toast(`${text} to ${folder}.${loud}`);
+  // What the file carries that the user should know, after it.
+  const notes = exportNotes(msg.problems ?? []);
+  if (notes) toast(notes);
 }

@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 use m2_editor::render::{Length, Render};
 use m2_play::Player;
-use m2_plugins::{Blob, Found, Handle, RenderMode};
+use m2_plugins::{Blob, Found, RenderMode};
 use m2_runtime::{BLOCK, PluginInstance};
 use m2_song::Diagnostic;
 use parking_lot::Mutex;
@@ -186,7 +186,9 @@ pub fn start(state: &Arc<AppState>, path: Option<PathBuf>) -> Result<PathBuf> {
                     drop(render);
                     Err(e)
                 }
-            };
+            }
+            // Running out of memory says so plainly, with the detail after.
+            .map_err(crate::graph::plainly);
             // The instances back, and playback resumed, before it says it's done (RENDER-1).
             if let Some(l) = lent.as_mut() {
                 l.give_back();
@@ -221,6 +223,8 @@ pub(crate) struct Borrow {
     /// Its committed state, read.
     pub(crate) blob: Option<Arc<Blob>>,
     pub(crate) plugin: Found,
+    /// How the user knows it: "Surge XT (lead)".
+    pub(crate) who: String,
 }
 
 /// Tests: what an export does inside its window, and an export with no hold (the negative control
@@ -230,6 +234,8 @@ pub(crate) struct Borrow {
 pub(crate) struct Hooks {
     pub(crate) no_hold: AtomicBool,
     pub(crate) inside: Mutex<Option<Box<dyn FnMut() + Send>>>,
+    /// The session's job fails once it has made the export (`Actor::export`).
+    pub(crate) panic_after: AtomicBool,
 }
 
 /// The live plugin instances an export borrows, and the engine held while it does (RENDER-1).
@@ -238,7 +244,8 @@ pub(crate) struct Hooks {
 /// stopped, a panic, quitting, never taken): each instance it took offline is deactivated, set to
 /// realtime and activated again, holding the committed blob, with the parameters its code owns
 /// sent again at its next block (HOME-4); then the engine resumes where it held, and the session
-/// plays what waited for the export.
+/// plays what waited for the export. One that doesn't come back active is marked failed first, so
+/// its node plays silence until the session replaces it (HOST-5).
 pub struct Lent {
     player: Player,
     rate: u32,
@@ -250,19 +257,16 @@ pub struct Lent {
     holding: bool,
     /// It said it held.
     held: bool,
-    /// Instances that didn't come back active: replaced from their committed state (HOST-5).
-    failed: Vec<Handle>,
     /// How it went.
     pub(crate) record: Borrowing,
-    /// The session it was lent for, and what tells it it is over.
-    pub(crate) token: u64,
-    pub(crate) done: Option<Box<dyn FnOnce(Vec<Handle>) + Send>>,
+    /// What tells the session it is over.
+    pub(crate) done: Option<Box<dyn FnOnce() + Send>>,
     #[cfg(test)]
     pub(crate) hooks: Option<Arc<Hooks>>,
 }
 
 impl Lent {
-    pub(crate) fn new(player: Player, borrows: Vec<Borrow>, rate: u32, token: u64) -> Lent {
+    pub(crate) fn new(player: Player, borrows: Vec<Borrow>, rate: u32) -> Lent {
         Lent {
             player,
             rate,
@@ -270,9 +274,7 @@ impl Lent {
             borrows,
             holding: false,
             held: false,
-            failed: vec![],
             record: Borrowing::default(),
-            token,
             done: None,
             #[cfg(test)]
             hooks: None,
@@ -317,8 +319,8 @@ impl Lent {
                 problems.push(Diagnostic::warning(
                     "plugin.not-borrowed",
                     format!(
-                        "{} couldn't pause for the export ({e:#}), so a new one played it in the export, from its saved state.",
-                        b.plugin.name
+                        "{} couldn't be lent to the export, so a new one played it there, from its saved settings. (In detail: {e:#})",
+                        b.who
                     ),
                 ));
             }
@@ -353,14 +355,16 @@ impl Lent {
 
     /// One instance back to realtime and active, holding its committed blob, its code-owned
     /// parameters sent again at its next block.
-    fn give(&mut self, inst: &PluginInstance) {
+    fn give(&self, inst: &PluginInstance) {
         let (host, h) = (inst.host(), inst.handle());
         host.deactivate(h);
         let _ = host.set_render_mode(h, RenderMode::Realtime);
-        // One that won't come back active is replaced from its committed state (HOST-5).
+        // One that won't come back active is marked failed before playback resumes, so its node
+        // plays silence and never calls it; the session replaces it from its committed state
+        // (HOST-5) and says so.
         if let Err(e) = host.activate(h, self.rate, BLOCK as u32) {
             eprintln!("music2: a plugin didn't come back after the export: {e:#}");
-            self.failed.push(h);
+            inst.kill();
         }
         inst.mark_reloaded();
     }
@@ -379,7 +383,7 @@ impl Lent {
         }
         self.held = false;
         if let Some(done) = self.done.take() {
-            done(std::mem::take(&mut self.failed));
+            done();
         }
     }
 

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use anyhow::Result;
-use m2_plugins::{Blob, Found, Handle, Owner, PluginHost};
+use m2_plugins::{Blob, Found, Handle, Owner, PluginHost, RenderMode};
 
 use crate::BLOCK;
 
@@ -26,6 +26,14 @@ pub struct PluginInstance {
     /// An export rendered with it, so the notes playback left in it ended: at the resume, its live
     /// node starts again the ones the song still holds (RENDER-1).
     lent: AtomicBool,
+    /// The code stopped setting one of its parameters, which keeps the value it was last sent
+    /// (HOME-5a): it holds a state no file records until a state load lands, so an export doesn't
+    /// borrow it, and plays that node from the committed state, as `m2 render` does (RENDER-1).
+    released: AtomicBool,
+    /// It failed live (a processing error, or it didn't come back active after an export): its
+    /// node plays silence and never calls it again, and the session replaces it from its
+    /// committed state (HOST-5).
+    dead: AtomicBool,
 }
 
 /// The calls after a state load that send every code-owned parameter again. Two: a plugin may
@@ -36,12 +44,21 @@ const RELOADED_CALLS: u8 = 2;
 impl PluginInstance {
     /// Take ownership of `h`, created through `host` for a node of `shape`.
     pub(crate) fn new(host: Arc<dyn PluginHost>, h: Handle, shape: u64) -> PluginInstance {
-        PluginInstance { host, h, shape, reloaded: AtomicU8::new(0), lent: AtomicBool::new(false) }
+        PluginInstance {
+            host,
+            h,
+            shape,
+            reloaded: AtomicU8::new(0),
+            lent: AtomicBool::new(false),
+            released: AtomicBool::new(false),
+            dead: AtomicBool::new(false),
+        }
     }
 
     /// A new instance of `plugin` for a node of shape `shape` (its hash): created through `host`
-    /// with `blob` loaded, reporting to `owner`, and activated at `rate`, all on the plugin main
-    /// thread (RENDER-25).
+    /// with `blob` loaded, reporting to `owner`, set to `mode` and activated at `rate`, all on the
+    /// plugin main thread (RENDER-25). A plugin starts in realtime mode (CLAP's default); one for
+    /// a render that isn't live is set to offline mode before it is activated (RENDER-1).
     pub(crate) fn create(
         host: Arc<dyn PluginHost>,
         plugin: &Found,
@@ -49,18 +66,50 @@ impl PluginInstance {
         owner: &Owner,
         rate: u32,
         shape: u64,
+        mode: RenderMode,
     ) -> Result<Arc<PluginInstance>> {
         let (h, _) = host.create(plugin, blob, owner)?;
         // Owned from here: dropped on an error, it is destroyed.
         let inst = Arc::new(PluginInstance::new(host.clone(), h, shape));
+        if mode == RenderMode::Offline {
+            host.set_render_mode(h, mode)?;
+        }
         host.activate(h, rate, BLOCK as u32)?;
         Ok(inst)
     }
 
-    /// A new instance to play in its place: the same plugin and shape, made from `blob` and
-    /// activated at `rate`. An export makes one when it can't borrow this one (RENDER-1).
+    /// A new instance to play in its place in an export: the same plugin and shape, made from
+    /// `blob`, set to offline mode and activated at `rate`. An export makes one when it can't
+    /// borrow this one (RENDER-1).
     pub fn another(&self, plugin: &Found, blob: Option<Arc<Blob>>, rate: u32) -> Result<Arc<PluginInstance>> {
-        PluginInstance::create(self.host.clone(), plugin, blob, &Owner::discard(), rate, self.shape)
+        PluginInstance::create(self.host.clone(), plugin, blob, &Owner::discard(), rate, self.shape, RenderMode::Offline)
+    }
+
+    /// The code stopped setting one of its parameters: until a state load lands it holds a value
+    /// no file records (HOME-5a), and an export makes that node anew (RENDER-1).
+    pub(crate) fn release(&self) {
+        self.released.store(true, Ordering::Release);
+    }
+
+    /// A state load landed: it holds that committed blob, with its code-owned parameters sent again.
+    pub(crate) fn loaded(&self) {
+        self.released.store(false, Ordering::Release);
+    }
+
+    /// Whether it holds a parameter value the code released and no file records ([`Self::release`]).
+    pub fn released(&self) -> bool {
+        self.released.load(Ordering::Acquire)
+    }
+
+    /// It failed: it plays silence and is never called again (an atomic store, safe on the audio
+    /// thread). The session replaces it (HOST-5).
+    pub fn kill(&self) {
+        self.dead.store(true, Ordering::Release);
+    }
+
+    /// Whether it failed ([`Self::kill`]).
+    pub fn dead(&self) -> bool {
+        self.dead.load(Ordering::Acquire)
     }
 
     /// Its state was loaded outside its node (a state change, an export): the node's next calls

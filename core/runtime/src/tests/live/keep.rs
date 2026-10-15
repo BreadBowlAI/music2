@@ -14,6 +14,8 @@ use super::*;
 /// 120 bpm: a beat is 24 000 frames.
 const BEAT: u64 = 24_000;
 
+mod plugins;
+
 fn probe_packages() -> PackageSet {
     m2_plugins::test_main_thread();
     probe::install();
@@ -1057,10 +1059,12 @@ fn a_changed_state_loads_into_the_same_instance() {
     }
 }
 
-// RENDER-26b (build notes, slice 4): a state load that fails never fails the prepare, as the loads
-// before it have landed in instances that play. Two keyed plugins get new blobs; the first loads,
-// the second refuses its. The plan is prepared whole and both instances are kept; the refusal is
-// named, and the plan says the refused one holds what it held, so the next plan tries again.
+// RENDER-26b (build notes, slice 4), HOME-6: a state load that fails never fails the prepare, as the
+// loads before it have landed in instances that play. Two keyed plugins get new blobs; the first
+// loads, the second refuses its. The plan is prepared whole and both instances are kept; the refusal
+// is named once: the plan says the refused blob was given, so the next plan neither tries it again
+// nor says so again. The blob it held before, written back (an undo), loads: the plugin may hold
+// part of the refused one.
 #[test]
 fn a_state_that_fails_to_load_never_fails_the_prepare() {
     let mut pk = probe_packages();
@@ -1094,18 +1098,24 @@ fn a_state_that_fails_to_load_never_fails_the_prepare() {
     let s = r2.stats().clone();
     assert_eq!((s.kept.plugins, s.fresh.plugins, s.loads), (2, 0, 1), "{s:?}");
     assert_eq!(s.unloaded.len(), 1, "{s:?}");
-    assert!(s.unloaded[0].0.ends_with("/q") && s.unloaded[0].1.contains("fails-state"), "{s:?}");
+    assert!(flat.nodes[s.unloaded[0].0].name.ends_with("/q") && s.unloaded[0].1.contains("fails-state"), "{s:?}");
     assert_eq!(*probe::stats(hs[0]).unwrap().tag.lock().unwrap(), "two", "the first landed");
     let info = r2.info();
     let held = |node: &str| info.plugins.iter().find(|p| flat.nodes[p.node].name.ends_with(node)).unwrap().blob;
     assert_eq!(held("/p"), data2.state_hash("song", &["lead"]));
-    assert_eq!(held("/q"), data1.state_hash("song", &["bad"]), "the refused one holds what it held");
+    assert_eq!(held("/q"), data2.state_hash("song", &["bad"]), "the refused blob counts as given");
     rig.send(Msg::Activate { renderer: Box::new(r2) });
     rig.run(BLOCK);
     assert_eq!(rig.e.current().unwrap().plugin_handles(), hs, "both kept");
-    // The next plan tries again, and fails again: it says so again.
+    // The next plan neither tries it again nor says so again.
+    let q = probe::stats(hs[1]).unwrap();
+    let loads = || q.main_calls().iter().filter(|c| c.what == "load").count();
+    let tried = loads();
     let again = rig.prepare_with(&flat, &data2, &pk, &owner, &Continues::identity(&flat)).unwrap();
-    assert_eq!((again.stats().loads, again.stats().unloaded.len()), (0, 1));
+    assert_eq!((again.stats().loads, again.stats().unloaded.len(), loads()), (0, 0, tried));
+    // Its old blob written back loads, though it was what the plugin held before the refusal.
+    let back = rig.prepare_with(&flat, &data1, &pk, &owner, &Continues::identity(&flat)).unwrap();
+    assert_eq!((back.stats().loads, back.stats().unloaded.len(), loads()), (2, 0, tried + 1), "{:?}", back.stats());
     for d in [d1, d2] {
         std::fs::remove_dir_all(d).ok();
     }

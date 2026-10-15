@@ -488,9 +488,17 @@ fn prewarming_keeps_kernel_memory_flat() {
     // What pre-warming spares the audio thread: the first reset grows a fresh graph's memory.
     let slots = lane_slots(&flat);
     let owner = m2_plugins::Owner::discard();
-    let mut g = Builder { packages: &pk, data: &data, sample_rate: SR as f64, slots: &slots, caps: &[Caps::FLOOR], owner: &owner }
-        .graph(&flat.nodes, &flat.order, false, &|_| Make::New(0), &HashMap::new())
-        .unwrap();
+    let mut g = Builder {
+        packages: &pk,
+        data: &data,
+        sample_rate: SR as f64,
+        slots: &slots,
+        caps: &[Caps::FLOOR],
+        owner: &owner,
+        mode: m2_plugins::RenderMode::Offline,
+    }
+    .graph(&flat.nodes, &flat.order, false, &|_| Make::New(0), &HashMap::new())
+    .unwrap();
     let fresh = g.kernel_memory();
     g.prewarm().unwrap();
     assert!(g.kernel_memory() > fresh);

@@ -2450,15 +2450,20 @@ impl Ex {
 
     /// [`Ex::new`], its probe's saved state tagged `tag` ([`m2_plugins::probe::tagged`]).
     fn tagged(tag: &str) -> Ex {
+        Ex::with(&Ex::song("p.out"), &m2_plugins::probe::state(tag, 1.0))
+    }
+
+    /// [`Ex::new`] with `song` as song.ts, and `state` as its probe's saved state.
+    fn with(song: &str, state: &[u8]) -> Ex {
         m2_plugins::probe::install();
         let fixture = Fixture::new();
-        fixture.put("song.ts", &Ex::song("p.out"));
+        fixture.put("song.ts", song);
         fixture.put("data/p/n.json", EX_NOTES);
         fixture.put(
             "data/p/g.json",
             r#"{"unit": "scalar", "clips": [{"id": "r", "start": 0, "length": 64, "points": [[0, 0.2], [32, 0.2], [64, 0.8]]}]}"#,
         );
-        fixture.probe_state("p", "lead", &m2_plugins::probe::state(tag, 1.0));
+        fixture.probe_state("p", "lead", state);
         let (p, driver) = Player::driven(48_000);
         let state = Arc::new(crate::AppState::new(String::new(), Graph::with_player(p)));
         state.graph.open(&fixture.0).unwrap();
@@ -2957,4 +2962,297 @@ fn a_device_change_during_an_export_loads_a_new_player_after_it() {
     let samples = |p: &Path| hound::WavReader::open(p).unwrap().into_samples::<i32>().map(Result::unwrap).collect::<Vec<i32>>();
     let (a, b) = (samples(&out), samples(&fresh_wav));
     assert!(a.iter().any(|x| *x != 0) && a == b, "the export is the fresh one, bit for bit");
+}
+
+// ---------------------------------------------------------------- the step 7 review's fixes
+
+/// The samples of the WAV file at `p`.
+fn wav(p: &Path) -> Vec<i32> {
+    hound::WavReader::open(p).unwrap().into_samples::<i32>().map(Result::unwrap).collect()
+}
+
+/// The song the session exports now, as `m2 render` makes it: every instance new.
+fn rendered(ex: &Ex) -> Vec<i32> {
+    let (_, _, fresh, _) = ex.state.graph.render(Length::Song).unwrap();
+    let at = ex.fixture.0.join("rendered.wav");
+    fresh.write(&at, |_| {}).unwrap();
+    wav(&at)
+}
+
+/// Export the open song to `out.wav` as the app does, filling meanwhile; its `done` or `error` event.
+fn export_now(ex: &mut Ex) -> (PathBuf, Value) {
+    let out = ex.fixture.0.join("out.wav");
+    let mut events = ex.state.events.subscribe();
+    crate::export::start(&ex.state, Some(out.clone())).unwrap();
+    ex.fill_until("the export is done", |ex| !ex.state.exports.running());
+    (out, crate::export::tests::until_finished(&mut events).pop().unwrap())
+}
+
+/// A probe parameter's value as the plugin reads it.
+fn param(h: m2_plugins::Handle, id: u32) -> f64 {
+    match m2_plugins::host().main_call(h, m2_plugins::MainCall::Value(id)) {
+        Ok(m2_plugins::Reply::Value(Some(v))) => v,
+        other => panic!("{other:?}"),
+    }
+}
+
+// HOME-5a, RENDER-1 (plug-1 of the step 7 review): a plugin parameter the code stops setting keeps,
+// live, the value it was last sent, which no file records. An export then doesn't borrow that
+// instance: its node plays a new one from the committed state, so the file is the one `m2 render`
+// makes, bit for bit, and the live instance keeps its value. Before, the export borrowed it and
+// baked in the released value (the level 0.05, where `m2 render` plays the saved 0.4).
+#[test]
+fn an_export_after_a_released_parameter_is_what_m2_render_makes() {
+    let song = |more: &str| {
+        format!(
+            "import {{ plugin, song, track }} from '@m2/core';\n\
+             const p = track('p', ({{ lane }}) => plugin('clap:m2.probe', {{ notes: lane.notes('n'), key: 'lead'{more} }}));\n\
+             export default song(() => p.out);\n"
+        )
+    };
+    let mut ex = Ex::with(&song(", level_2: 0.05"), &m2_plugins::probe::state_with("released", 1.0, 0.4));
+    let first = ex.handles();
+    let stats = m2_plugins::probe::stats(first[0]).unwrap();
+    assert_eq!(param(first[0], m2_plugins::probe::LEVEL), 0.05, "the code's level");
+    ex.fixture.put("song.ts", &song(""));
+    assert!(ex.state.graph.poll());
+    ex.fill(4);
+    assert!(synced(&ex.state.graph) && ex.handles() == first, "the same instance plays the edit");
+    assert_eq!(param(first[0], m2_plugins::probe::LEVEL), 0.05, "it keeps the value it was last sent (HOME-5a)");
+    let before = stats.main_calls().len();
+    let (out, done) = export_now(&mut ex);
+    assert!(done["done"] == true && done["paused"] == false, "{done}");
+    assert!(moves(&stats.main_calls(), before).is_empty(), "the live instance wasn't borrowed");
+    let (a, b) = (wav(&out), rendered(&ex));
+    assert!(a.iter().any(|x| *x != 0) && a == b, "the export is what m2 render makes, bit for bit");
+    assert_eq!(param(first[0], m2_plugins::probe::LEVEL), 0.05, "live keeps it");
+}
+
+// HOST-5, RENDER-1 (plug-2 of the step 7 review): a borrowed plugin that won't come back active
+// after an export (here it refuses the activate) is marked failed before playback resumes: its node
+// plays silence and never calls it, so playback goes on with no crash, the user is told, and the
+// settle after the export replaces it from its committed state, which plays. Before, the inactive
+// instance's error stopped the engine (a crash, the transport stopped), and broke its replacement.
+#[test]
+fn a_plugin_that_doesnt_come_back_after_an_export_is_replaced_as_playback_goes_on() {
+    let mut ex = Ex::tagged("revived");
+    let first = ex.handles();
+    let stats = m2_plugins::probe::stats(first[0]).unwrap();
+    let (go, there) = ex.stop_inside();
+    crate::export::start(&ex.state, Some(ex.fixture.0.join("out.wav"))).unwrap();
+    ex.fill_until("the export took the instance", |_| there.try_recv().is_ok());
+    stats.refuse_activate.store(true, Ordering::Relaxed);
+    go.send(()).unwrap();
+    ex.fill_until("the export is done", |ex| !ex.state.exports.running());
+    ex.fill_until("a new instance plays", |ex| synced(&ex.state.graph) && ex.handles() != first);
+    ex.fill(8);
+    assert!(ex.state.graph.status().playing && ex.engine().crashes() == 0, "playback went on, with no crash");
+    let told = ex.state.graph.expire();
+    assert!(told.iter().any(|t| t == "m2 probe (p) stopped working, so music2 started it again from its saved settings."), "{told:?}");
+    // From the start its two notes sound in the new instance.
+    ex.state.graph.seek(0.0).unwrap();
+    let mut peak = 0.0f32;
+    for _ in 0..16 {
+        let mut buf = [0.0f32; 256];
+        ex.driver.fill(&mut buf, 2);
+        drop(ex.driver.drain_retired());
+        peak = buf.iter().fold(peak, |m, x| m.max(x.abs()));
+    }
+    let fresh = m2_plugins::probe::stats(ex.handles()[0]).unwrap();
+    assert!(fresh.sounding.load(Ordering::Relaxed) == 2 && peak > 0.01, "it plays: peak {peak}");
+}
+
+// RENDER-1 (plug-3 of the step 7 review): an export while what plays lags the accepted revision (the
+// renderer for a new state didn't build) doesn't borrow the instance whose committed state changed:
+// its node plays a new instance from the new state, and the live one holds what its plan says. So
+// an undo back to that state loads nothing and plays what it says. Before, the export loaded the new
+// state into the live instance, which then played it after the undo.
+#[test]
+fn an_export_never_changes_what_a_live_instance_holds() {
+    let mut ex = Ex::tagged("held");
+    let first = ex.handles();
+    let stats = m2_plugins::probe::stats(first[0]).unwrap();
+    let tag = || stats.tag.lock().unwrap().clone();
+    ex.state.graph.inspect(|a| a.fail_builds = true);
+    ex.fixture.probe_state("p", "lead", &m2_plugins::probe::state("newer", 1.0));
+    ex.state.graph.poll();
+    let (plays, accepted) = playing(&ex.state.graph);
+    assert!(plays < accepted && tag() == "held", "what plays lags: {plays} plays, {accepted} accepted");
+    let before = stats.main_calls().len();
+    let (out, done) = export_now(&mut ex);
+    assert_eq!(done["done"], true, "{done}");
+    assert!(moves(&stats.main_calls(), before).is_empty() && tag() == "held", "the live instance wasn't borrowed");
+    assert!(wav(&out) == rendered(&ex), "the export is the accepted revision's, bit for bit");
+    // The state write undone, with builds working again: it plays what it says, as it held it.
+    ex.state.graph.inspect(|a| a.fail_builds = false);
+    ex.fixture.probe_state("p", "lead", &m2_plugins::probe::state("held", 1.0));
+    ex.state.graph.poll();
+    ex.fill(4);
+    assert!(synced(&ex.state.graph) && ex.handles() == first && tag() == "held", "tag {}", tag());
+}
+
+// RENDER-1 (K3 of the step 7 review): the session's job fails after it made an export that borrows
+// the live instances (here a test's panic). The export's guard, dropped with it, still tells the
+// session it is over, so the edits after it play. Before, the session was told only once the job
+// returned, and no edit played again until the project was opened again.
+#[test]
+fn an_export_whose_job_fails_still_frees_the_session() {
+    let mut ex = Ex::tagged("panicked");
+    ex.hooks().panic_after.store(true, Ordering::SeqCst);
+    let e = crate::export::start(&ex.state, Some(ex.fixture.0.join("out.wav"))).unwrap_err();
+    assert!(e.to_string().contains("hit a bug"), "{e:#}");
+    assert!(!ex.state.exports.running());
+    eventually("the session is told", || !ex.state.graph.inspect(|a| a.open.as_ref().unwrap().exporting));
+    ex.fixture.put("song.ts", &Ex::song("vca(p.out, 0.5)"));
+    assert!(ex.state.graph.poll());
+    ex.fill(4);
+    assert!(synced(&ex.state.graph), "an edit plays");
+}
+
+// HOST-5, RENDER-1 (K7 of the step 7 review): an instance that asked for a restart isn't borrowed by
+// an export that starts before the session replaced it: the export makes its own, from the
+// committed state, beside playback, and the file is what new instances make. The catch-up after
+// replaces the live one.
+#[test]
+fn an_instance_waiting_for_a_restart_isnt_borrowed() {
+    let mut ex = Ex::tagged("restarting");
+    let first = ex.handles();
+    let stats = m2_plugins::probe::stats(first[0]).unwrap();
+    let h = first[0];
+    ex.state.graph.inspect(move |a| a.open.as_mut().unwrap().restarts.insert(h));
+    let before = stats.main_calls().len();
+    let (out, done) = export_now(&mut ex);
+    assert!(done["done"] == true && done["paused"] == false, "{done}");
+    assert!(moves(&stats.main_calls(), before).is_empty(), "not borrowed");
+    assert!(wav(&out) == rendered(&ex), "what new instances make, bit for bit");
+    eventually("the catch-up replaces it", || ex.state.graph.catch_up());
+    ex.fill(4);
+    assert!(ex.handles() != first, "replaced");
+}
+
+// RENDER-26b, HOME-6 (fit-2 and K6 of the step 7 review): a plugin that refuses a new state is named
+// as the user knows it, by its plugin and its track, in plain words, once: a later edit neither tries
+// the refused state again nor says so again. Its old state written back (an undo) loads, as the
+// plugin may hold part of the refused one.
+#[test]
+fn a_refused_state_is_said_once_by_the_plugins_name() {
+    m2_plugins::probe::install();
+    let fixture = Fixture::new();
+    fixture.put(
+        "song.ts",
+        "import { plugin, song, track } from '@m2/core';\nimport { sum } from 'std/math';\nimport { a } from './tracks/a';\n\
+         const p = track('p', ({ lane }) => plugin('clap:m2.probe.fails-state', { notes: lane.notes('n'), key: 'lead' }));\n\
+         export default song(() => sum(a.out, p.out));\n",
+    );
+    fixture.put("tracks/a.ts", A_DC);
+    fixture.put(
+        "data/p/n.json",
+        r#"{"clips": [{"id": "a", "start": 0, "length": 64, "notes": [{"pitch": "C4", "start": 0, "length": 60}]}]}"#,
+    );
+    fixture.put("data/p/lead.state.json", r#"{"plugin": "clap:m2.probe.fails-state", "plugin_version": "1.0.0"}"#);
+    std::fs::write(fixture.0.join("data/p/lead.state"), m2_plugins::probe::state("fine", 1.0)).unwrap();
+    let (p, driver) = Player::driven(48_000);
+    let graph = Graph::with_player(p);
+    graph.open(&fixture.0).unwrap();
+    let mut dc = Dc { fixture, graph, driver };
+    dc.graph.transport("play").unwrap();
+    dc.frames(4);
+    let h = dc.handles()[0];
+    let stats = m2_plugins::probe::stats(h).unwrap();
+    let loads = || stats.main_calls().iter().filter(|c| c.what == "load").count();
+    let refused = |graph: &Graph| graph.expire().into_iter().filter(|t| t.contains("couldn't load")).collect::<Vec<_>>();
+    std::fs::write(dc.fixture.0.join("data/p/lead.state"), b"fail: refused").unwrap();
+    assert!(dc.graph.poll());
+    let told = refused(&dc.graph);
+    assert!(
+        told.len() == 1
+            && told[0].starts_with("m2 probe (fails state) (p) couldn't load its new settings, so it keeps the sound it had. (In detail: ")
+            && told[0].contains("it refused the saved state"),
+        "{told:?}"
+    );
+    let tried = loads();
+    // A structural edit elsewhere: the same instance plays it, and nothing is tried or said again.
+    dc.fixture.put("tracks/a.ts", &A_DC.replace("  return", "  const spare = osc.sine(hz(1));\n  return"));
+    assert!(dc.graph.poll());
+    dc.frames(4);
+    assert!(synced(&dc.graph) && dc.handles() == [h] && loads() == tried && refused(&dc.graph).is_empty());
+    // The old state written back loads.
+    std::fs::write(dc.fixture.0.join("data/p/lead.state"), m2_plugins::probe::state("fine", 1.0)).unwrap();
+    assert!(dc.graph.poll());
+    assert_eq!((loads(), refused(&dc.graph).len()), (tried + 1, 0));
+}
+
+// RENDER-28 (K2 of the step 7 review): a change whose renderer doesn't build is saved, and the
+// version before it plays on; the user is told so in plain words, once, though the catch-up tries
+// again every 300 ms. Once it builds, it plays; a later change that fails is told again.
+#[test]
+fn a_change_that_cant_get_ready_to_play_says_so_once() {
+    let dc = Dc::new();
+    let failing = |dc: &Dc| dc.graph.expire().into_iter().filter(|t| t.contains("keeps playing")).collect::<Vec<_>>();
+    dc.graph.inspect(|a| a.fail_builds = true);
+    dc.fixture.put("tracks/a.ts", &A_DC.replace("  return", "  const spare = osc.sine(hz(1));\n  return"));
+    assert!(dc.graph.poll());
+    // The catch-up's tries, made on the actor so none is skipped as busy.
+    for _ in 0..3 {
+        assert!(!dc.graph.inspect(|a| a.catch_up()));
+    }
+    let told = failing(&dc);
+    let start = "Your last change is saved, but music2 couldn't get it ready to play, so the version before it keeps playing. Undo";
+    assert!(
+        told.len() == 1 && told[0].starts_with(start) && told[0].ends_with("(In detail: the renderer failed to build (a test))"),
+        "{told:?}"
+    );
+    dc.graph.inspect(|a| a.fail_builds = false);
+    eventually("it plays once it builds", || dc.graph.catch_up() && synced(&dc.graph));
+    dc.graph.inspect(|a| a.fail_builds = true);
+    dc.fixture.put("tracks/a.ts", &A_DC.replace("  return", "  const spare = osc.sine(hz(2));\n  return"));
+    assert!(dc.graph.poll());
+    assert_eq!(failing(&dc).len(), 1, "a later change that fails is told again");
+}
+
+// K2 of the step 7 review: running out of memory, as wasmtime says it ("mmap failed to reserve …"),
+// reads in plain words, with its text as the detail, in an open, an export and a change that can't
+// play; any other error is left in its own words.
+#[test]
+fn running_out_of_memory_is_said_plainly() {
+    let e = || {
+        anyhow!("mmap failed to reserve 0x104000000 bytes: Cannot allocate memory (os error 12)")
+            .context("pad/n27: instantiating `std:adsr`")
+    };
+    let said = format!("{:#}", super::plainly(e()));
+    let detail = "(In detail: pad/n27: instantiating `std:adsr`: mmap failed to reserve 0x104000000 bytes";
+    assert!(
+        said.starts_with("the computer ran out of memory for it. Close other apps or songs, then try again. ") && said.contains(detail),
+        "{said}"
+    );
+    let change = super::actor::unbuilt(&e());
+    assert!(change.starts_with("Your last change is saved, but the computer ran out of memory") && change.contains(detail), "{change}");
+    assert_eq!(format!("{:#}", super::plainly(anyhow!("a plugin failed"))), "a plugin failed");
+}
+
+// RENDER-28 (fit-1 of the step 7 review): the output device changes, or stops answering, while
+// playing, and no action meets it first: the catch-up lets the player go, and the user is told in
+// plain words that playback stopped, why, and to press Play. Stopped, nothing is said.
+#[test]
+fn playback_the_device_stopped_is_said() {
+    for (kind, why, plays) in [
+        (DeviceErrorKind::DeviceChanged, "the sound output moved to another device", true),
+        (DeviceErrorKind::DeviceNotAvailable, "the audio device stopped responding", true),
+        (DeviceErrorKind::DeviceChanged, "", false),
+    ] {
+        let mut dc = Dc::new();
+        if plays {
+            dc.graph.transport("play").unwrap();
+        }
+        dc.blocks(2);
+        dc.driver.error(kind.into());
+        // The catch-up waits while the actor is busy.
+        eventually("a new player", || dc.graph.catch_up());
+        let told: Vec<String> = dc.graph.expire().into_iter().filter(|t| t.starts_with("Playback stopped")).collect();
+        match plays {
+            true => assert_eq!(told, [format!("Playback stopped: {why}. Press Play to go on.")], "{kind:?}"),
+            false => assert!(told.is_empty(), "{told:?}"),
+        }
+        assert_eq!(dc.graph.inspect(|a| a.open.as_ref().unwrap().plays.as_ref().unwrap().epoch), 1, "{kind:?}");
+    }
 }

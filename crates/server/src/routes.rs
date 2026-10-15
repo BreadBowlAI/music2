@@ -238,9 +238,7 @@ async fn graph_close(State(s): S) -> ApiResult {
 
 async fn graph_status(State(s): S) -> Json<Value> {
     let mut v = json!(s.graph.status());
-    let a = s.graph.activity();
-    (v["paused"], v["loading"]) = (json!(a.paused), json!(a.loading));
-    (v["xruns"], v["device_errors"]) = (json!(a.xruns), json!(a.device_errors));
+    s.graph.activity().put(&mut v);
     Json(v)
 }
 

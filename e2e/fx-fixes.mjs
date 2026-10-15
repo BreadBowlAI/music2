@@ -1,7 +1,8 @@
 // The review fixes, end to end: export progress stays with its song, a new export name is
 // settled when it's done, stale part files are swept, "Exports" is reserved, nameless names,
-// long names in the top bar, the plugins example's message, the Empty template's steps and
-// the Starter's bass knob. Started with no project and a scratch HOME.
+// long names in the top bar, the engine's note under them, an export's problems said plainly,
+// the plugins example's message, the Empty template's steps and the Starter's bass knob.
+// Started with no project and a scratch HOME.
 // node run.mjs fx-fixes, without CLAP_PATH   (node fx-fixes.mjs <root> <home>)
 import puppeteer from "puppeteer-core";
 import fs from "node:fs";
@@ -156,6 +157,41 @@ for (const [w, h] of [[960, 620], [1200, 800], [1440, 900]]) {
   check(b.box[0] >= b.time + 4 && b.box[1] <= b.exp - 4 && b.lines === 1, `${w}px: the name (${b.box[0].toFixed(0)}–${b.box[1].toFixed(0)}) clears the time (…${b.time.toFixed(0)}) and Export (${b.exp.toFixed(0)}…), on one line, cut short: ${b.cut}`);
 }
 check((await bar()).title.startsWith(longName), "its tooltip has the whole name");
+
+// RENDER-1, RENDER-25 (fit-4 of the step 7 review): what the engine is busy with ("Paused for
+// export", "Loading <plugins>…") shows under the song's name, in the same room, so it never covers
+// the name, the time or Export, at the app's smallest window (960) and at 1280. Without plugins
+// here, the status the page reads is made to say so.
+await page.evaluate(() => {
+  const real = window.fetch.bind(window);
+  window.__status = null;
+  window.fetch = async (url, init) => {
+    const r = await real(url, init);
+    if (!window.__status || !String(url).includes("/api/graph/status")) return r;
+    return new Response(JSON.stringify({ ...(await r.json()), ...window.__status }), { status: r.status, headers: r.headers });
+  };
+});
+const busy = [
+  [{ paused: "exporting" }, "Paused for export"],
+  [{ paused: null, loading: ["Surge XT", "Airwindows Consolidated"] }, "Loading Surge XT, Airwindows Consolidated…"],
+];
+for (const [status, said] of busy) {
+  await page.evaluate((s) => { window.__status = s; }, status);
+  for (const w of [960, 1280]) {
+    await page.setViewport({ width: w, height: 800, deviceScaleFactor: 2 });
+    const shown = await until(async () => (await page.$eval("[data-testid=engine-note]", (e) => e.textContent).catch(() => null)) === said, 3000);
+    const r = await page.evaluate(() => {
+      const rect = (el) => { const b = el.getBoundingClientRect(); return { l: b.left, r: b.right, t: b.top, b: b.bottom }; };
+      const name = document.querySelector("[data-testid=bar-song-name]");
+      return { note: rect(document.querySelector("[data-testid=engine-note]")), name: rect(name), rev: rect(name.nextElementSibling), time: rect(document.querySelector("span[title=Time]")), exp: rect(document.querySelector("[data-testid=export]")) };
+    });
+    const apart = (a, b) => a.r <= b.l || b.r <= a.l || a.b <= b.t || b.b <= a.t;
+    const clear = apart(r.note, r.name) && apart(r.note, r.rev) && r.note.l >= r.time.r && r.note.r <= r.exp.l && r.note.r > r.note.l;
+    check(shown && clear, `${w}px: “${said}” shows under the name (${r.note.l.toFixed(0)}–${r.note.r.toFixed(0)}, ${r.note.t.toFixed(0)}–${r.note.b.toFixed(0)}), clear of it (${r.name.t.toFixed(0)}–${r.name.b.toFixed(0)}), the time and Export`);
+    await page.screenshot({ path: `${S}/fx-note-${w}-${status.paused ? "paused" : "loading"}.png`, clip: { x: 0, y: 0, width: w, height: 64 } });
+  }
+}
+await page.evaluate(() => { window.__status = null; });
 await page.setViewport({ width: 960, height: 620, deviceScaleFactor: 2 });
 await page.click("[data-testid=export]");
 check(await until(async () => Number(await page.$eval("[data-testid=export-progress]", (e) => e.getAttribute("aria-valuenow")).catch(() => 0)) >= 10, 20000), "exporting it at the smallest window");
@@ -165,6 +201,23 @@ await page.screenshot({ path: `${S}/fx-longname-960-exporting.png` });
 await page.screenshot({ path: `${S}/fx-longname-960-bar.png`, clip: { x: 0, y: 0, width: 960, height: 64 } });
 check(await until(async () => (await text()).includes("Exported My very first summer song"), 60000), "and it finishes");
 await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 2 });
+await idle();
+
+// ---------------------------------------------------------------- an export's problems are said plainly
+// FMT-18a, RENDER-1 (fit-5 of the step 7 review): a song whose plugin isn't installed exports, and
+// after the done toast the app says plainly that the file plays without it.
+const nop = `${S}/no-plugin`;
+fs.rmSync(nop, { recursive: true, force: true });
+fs.mkdirSync(nop, { recursive: true });
+fs.writeFileSync(`${nop}/music2.toml`, `[project]\nname = "No plugin"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n"@m2/core" = "1"\nstd = "0.1"\n`);
+fs.writeFileSync(`${nop}/song.ts`, "import { hz, plugin, song } from '@m2/core';\nimport { osc } from 'std/dsp';\nexport default song(() => plugin('clap:com.example.not-installed', { in: osc.sine(hz(440)) }));\n");
+const opened = await api("graph/open", { path: nop });
+check(opened.status === 200 && (opened.json?.problems ?? []).some((p) => p.code === "plugin.missing"), "a song whose plugin isn't installed opens, saying so");
+await until(async () => (await page.$eval("[data-testid=bar-song-name]", (e) => e.textContent).catch(() => "")) === "No plugin");
+await sleep(300);
+await page.click("[data-testid=export]");
+const without = "A plugin isn't installed, so the export plays without it (the problems list says which).";
+check(await until(async () => { const t = await text(); return t.includes("Exported No plugin.wav") && t.includes(without); }, 30000), `its export's toasts say: ${without}`);
 await idle();
 
 // ---------------------------------------------------------------- a song too long for a WAV file is refused plainly

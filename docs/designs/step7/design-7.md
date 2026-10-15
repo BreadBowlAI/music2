@@ -1184,7 +1184,13 @@ Around it:
 
 Until plugin windows ship, an instance's state is its committed blob plus its code-owned parameters,
 which the fresh node sends at its first call, so nothing is lost and no `save_state` round trip is
-needed. Today waits for the next rebuild and loads the blob from disk.
+needed. One exception (the step 7 review's plug-1): a parameter the code stopped setting keeps the
+value it was last sent (HOME-5a), which no file records, and a restart takes it back to the blob's
+value. Today waits for the next rebuild and loads the blob from disk.
+
+A plugin that fails live (a processing error, or no activate after an export) takes the same path:
+its node plays silence and never calls it again, and the session puts it in `restarts` (review fix
+plug-2).
 
 ### 10.4 "loading <plugin>" (RENDER-25, slice 4)
 
@@ -1251,8 +1257,14 @@ otherwise:
 ```
 
 **Nothing is saved or restored.** After the render each instance holds the committed blob, which is
-the state it had: until plugin windows ship, nothing else changes an instance's state, and `reloaded`
-sends its code-owned parameters again at the first resumed block. HOME-6's "a saved state is never
+the state it had, and `reloaded` sends its code-owned parameters again at the first resumed block.
+That holds because `PlanInfo::lend` borrows only an instance that holds its node's committed blob and
+the parameters its code sets. A parameter the code stopped setting keeps the value it was last sent
+(HOME-5a), which no file records (the step 7 review's plug-1), so such an instance isn't borrowed:
+its node plays a new instance from the committed blob, as `m2 render`'s does. Neither is one whose
+plan never loaded its node's committed blob (a build that failed since, plug-3), one that failed, or
+one waiting for a restart (K7). So an export never changes what a live instance holds, and the file
+depends on the project's files alone, not on the edits that led to them. HOME-6's "a saved state is never
 pushed back into the instance that produced it" holds, and the pause costs no second patch load per
 instance (tens of ms for Surge XT, seconds for a sample-based instrument). When plugin windows ship,
 an export must first commit a pending autosave, so the committed blob is again what the instance holds
@@ -1262,8 +1274,9 @@ an export must first commit a pending autosave, so the committed blob is again w
 
 - A failed host call on one instance before the render makes that node fresh for the export, and it
   goes in the export's `problems`.
-- A failed reactivation after the render puts the handle in `restarts`, so the next settle replaces it
-  from the committed blob (§10.3).
+- A failed reactivation after the render marks the instance failed before playback resumes, so its
+  node plays silence and never calls it; the session puts it in `restarts`, and the settle after the
+  export replaces it from the committed blob (§10.3, review fix plug-2).
 - Quitting during an export takes the same guard path.
 
 **What the producer hears and sees:**
@@ -1276,6 +1289,11 @@ an export must first commit a pending autosave, so the committed blob is again w
 
 **CLI.** `m2 render`, `m2 bounce` and agent range renders keep creating their own instances: the CLI
 has no live engine.
+
+**Render mode** (review fix K4). Every render that isn't live sets each new instance to CLAP's offline
+mode on the plugin main thread before activating it: `m2 render`, range renders, an export's own
+instances and the one it makes for an instance it can't borrow. The live engine's stay in realtime
+mode, CLAP's default. A borrowed instance goes offline for the export and back to realtime after it.
 
 ---
 

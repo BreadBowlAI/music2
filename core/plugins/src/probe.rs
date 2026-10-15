@@ -10,7 +10,7 @@
 //!   counter, so a test can tell which came first;
 //! - in atomics, from `process`: calls, wrong thread-check answers, blocks whose steady time was
 //!   already processed (an instance processed twice), `on_main_thread` entered during a `process`
-//!   call, and every note event with its steady time;
+//!   call, every note event with its steady time, and the transport the last calls were told;
 //! - and it calls `request_callback` from `process` every 10 calls.
 //!
 //! Its state is `m2probe\0`, the two parameters, then a tag; any other bytes load as the tag
@@ -36,6 +36,7 @@ use clap_sys::ext::render::*;
 use clap_sys::ext::state::*;
 use clap_sys::ext::thread_check::*;
 use clap_sys::factory::plugin_factory::*;
+use clap_sys::fixedpoint::{CLAP_BEATTIME_FACTOR, CLAP_SECTIME_FACTOR};
 use clap_sys::host::clap_host;
 use clap_sys::id::{CLAP_INVALID_ID, clap_id};
 use clap_sys::plugin::{clap_plugin, clap_plugin_descriptor};
@@ -65,6 +66,10 @@ static INSTALLED: AtomicBool = AtomicBool::new(false);
 static TICK: AtomicU64 = AtomicU64::new(1);
 /// `process` calls one instance remembers.
 const PROCESS_LOG: usize = 1 << 14;
+/// The last `process` calls whose transport one instance remembers ([`Stats::told`]).
+const TOLD: usize = 32;
+/// What one call's transport is kept as: CLAP's event, packed into this many words.
+const TOLD_WORDS: usize = 11;
 
 /// Make the probe findable (tests only). Idempotent.
 pub fn install() {
@@ -102,6 +107,24 @@ pub struct Call {
     pub thread: usize,
     /// When it was made, on the counter `process` calls are stamped from ([`Stats::process_calls`]).
     pub tick: u64,
+}
+
+/// What one `process` call was told of the transport (HOST-6): CLAP's transport event, read back
+/// from its fixed-point form, with the call's `steady_time` and length.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Told {
+    pub steady: i64,
+    pub frames: u32,
+    pub playing: bool,
+    pub looping: bool,
+    pub tempo: f64,
+    pub beats: f64,
+    pub seconds: f64,
+    pub loop_beats: (f64, f64),
+    pub loop_seconds: (f64, f64),
+    pub bar_start: f64,
+    pub bar: i32,
+    pub tsig: (u16, u16),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -169,6 +192,9 @@ pub struct Stats {
     /// Each `process` call: its tick and its thread's token.
     processes: Box<[(AtomicU64, AtomicUsize)]>,
     next_process: AtomicUsize,
+    /// The transport each of the last [`TOLD`] calls was told, packed, in a ring.
+    told: Box<[[AtomicU64; TOLD_WORDS]]>,
+    next_told: AtomicUsize,
 }
 
 impl Stats {
@@ -209,7 +235,59 @@ impl Stats {
             next: AtomicUsize::new(0),
             processes: (0..PROCESS_LOG).map(|_| (AtomicU64::new(0), AtomicUsize::new(0))).collect(),
             next_process: AtomicUsize::new(0),
+            told: (0..TOLD).map(|_| std::array::from_fn(|_| AtomicU64::new(0))).collect(),
+            next_told: AtomicUsize::new(0),
         }
+    }
+
+    /// What the last calls (up to 32) were told of the transport, oldest first (HOST-6).
+    pub fn told(&self) -> Vec<Told> {
+        let n = self.next_told.load(Ordering::Acquire);
+        let beats = |w: u64| w as i64 as f64 / CLAP_BEATTIME_FACTOR as f64;
+        let secs = |w: u64| w as i64 as f64 / CLAP_SECTIME_FACTOR as f64;
+        (n.saturating_sub(TOLD)..n)
+            .map(|i| {
+                let w: [u64; TOLD_WORDS] = std::array::from_fn(|k| self.told[i % TOLD][k].load(Ordering::Relaxed));
+                let flags = w[0] as u32;
+                Told {
+                    steady: w[10] as i64,
+                    frames: (w[0] >> 32) as u32,
+                    playing: flags & CLAP_TRANSPORT_IS_PLAYING != 0,
+                    looping: flags & CLAP_TRANSPORT_IS_LOOP_ACTIVE != 0,
+                    tempo: f64::from_bits(w[3]),
+                    beats: beats(w[1]),
+                    seconds: secs(w[2]),
+                    loop_beats: (beats(w[4]), beats(w[5])),
+                    loop_seconds: (secs(w[6]), secs(w[7])),
+                    bar_start: beats(w[8]),
+                    bar: w[9] as u32 as i32,
+                    tsig: ((w[9] >> 32) as u16, (w[9] >> 48) as u16),
+                }
+            })
+            .collect()
+    }
+
+    /// Keep what a call was told of the transport. Atomic stores only: it runs in `process`.
+    fn tell(&self, t: &clap_event_transport, steady: i64, frames: u32) {
+        let i = self.next_told.load(Ordering::Relaxed);
+        let bar = t.bar_number as u32 as u64 | (t.tsig_num as u64) << 32 | (t.tsig_denom as u64) << 48;
+        let w = [
+            t.flags as u64 | (frames as u64) << 32,
+            t.song_pos_beats as u64,
+            t.song_pos_seconds as u64,
+            t.tempo.to_bits(),
+            t.loop_start_beats as u64,
+            t.loop_end_beats as u64,
+            t.loop_start_seconds as u64,
+            t.loop_end_seconds as u64,
+            t.bar_start as u64,
+            bar,
+            steady as u64,
+        ];
+        for (slot, v) in self.told[i % TOLD].iter().zip(w) {
+            slot.store(v, Ordering::Relaxed);
+        }
+        self.next_told.store(i + 1, Ordering::Release);
     }
 
     /// Every `process` call so far, the first [`PROCESS_LOG`] of them: its tick (the counter
@@ -603,6 +681,9 @@ unsafe extern "C" fn process(p: *const clap_plugin, proc_: *const clap_process) 
     if let Some((t, th)) = st.processes.get(i) {
         t.store(TICK.fetch_add(1, Ordering::AcqRel), Ordering::Relaxed);
         th.store(thread, Ordering::Relaxed);
+    }
+    if !pr.transport.is_null() {
+        st.tell(unsafe { &*pr.transport }, pr.steady_time, pr.frames_count);
     }
     let last = st.last_thread.swap(thread, Ordering::Relaxed);
     if last != 0 && last != thread {

@@ -451,16 +451,19 @@ function GraphBar({
         <span className="text-[15px] text-ink-100 min-w-12" title="Bar and beat">{at}</span>
         <span className="text-xs text-ink-400 w-12" title="Time">{time}</span>
       </div>
-      <EngineNote status={status} />
       <div data-tauri-drag-region className="flex-1 self-stretch" />
       {/* Centred in the window, whatever the transport and buttons beside it take. It keeps clear of
           them (400px a side holds the widest, the loop button and an export running included): a
-          long name is cut short. */}
-      <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 max-w-[calc(100%-800px)] flex items-center gap-2 whitespace-nowrap pointer-events-none">
-        <span data-testid="bar-song-name" className="min-w-0 truncate text-[15px] font-semibold text-ink-100 pointer-events-auto" title={`${graph.name}\n${graph.dir}${graph.sample_rate ? `\n${graph.sample_rate / 1000} kHz` : ""}`}>
-          {graph.name}
-        </span>
-        <span className="shrink-0 text-xs text-ink-400 font-mono pointer-events-auto" title="Every accepted change to the code is a new revision">rev {graph.view.revision}</span>
+          long name is cut short. What the engine is busy with shows under the name, inside the
+          same room, so it never covers the name or the buttons. */}
+      <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 max-w-[calc(100%-800px)] flex flex-col items-center justify-center whitespace-nowrap pointer-events-none">
+        <div className="max-w-full flex items-center gap-2">
+          <span data-testid="bar-song-name" className="min-w-0 truncate text-[15px] font-semibold text-ink-100 pointer-events-auto" title={`${graph.name}\n${graph.dir}${graph.sample_rate ? `\n${graph.sample_rate / 1000} kHz` : ""}`}>
+            {graph.name}
+          </span>
+          <span className="shrink-0 text-xs text-ink-400 font-mono pointer-events-auto" title="Every accepted change to the code is a new revision">rev {graph.view.revision}</span>
+        </div>
+        <EngineNote status={status} />
       </div>
       <ExportButton dir={graph.dir} />
       <div className="w-px h-5 bg-black/[0.08] mx-0.5" />
@@ -496,7 +499,7 @@ function EngineNote({ status }: { status: GraphStatus }) {
   const text = status.paused === "exporting" ? "Paused for export" : loading.length ? `Loading ${loading.join(", ")}…` : null;
   if (!text) return null;
   return (
-    <span data-testid="engine-note" role="status" className="text-xs text-ink-400 whitespace-nowrap truncate max-w-48" title={text}>
+    <span data-testid="engine-note" role="status" className="max-w-full text-xs text-ink-400 truncate pointer-events-auto" title={text}>
       {text}
     </span>
   );

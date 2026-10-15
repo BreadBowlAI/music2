@@ -32,9 +32,11 @@ pub trait PluginHost: Send + Sync {
     fn deactivate(&self, h: Handle);
     /// Load `blob`, active or not (CLAP's `state.load` is a main-thread call). Skipped when the
     /// blob's hash equals the state the instance holds: the one it last saved or last loaded, at
-    /// creation included (HOME-6). True when it loaded.
+    /// creation included (HOME-6). True when it loaded. After a load that fails it holds nothing
+    /// known, so the next load isn't skipped.
     fn load_state(&self, h: Handle, blob: Arc<Blob>) -> Result<bool>;
     /// Realtime or offline (CLAP's render extension); false when the plugin has no such mode.
+    /// CLAP's `render.set` is a main-thread call; music2 makes it while the instance is inactive.
     fn set_render_mode(&self, h: Handle, mode: RenderMode) -> Result<bool>;
     fn main_call(&self, h: Handle, call: MainCall) -> Result<Reply>;
     /// Queued: returns at once, so a renderer dropped on any thread never waits. Stops processing

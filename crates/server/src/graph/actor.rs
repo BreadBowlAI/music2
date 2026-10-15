@@ -146,6 +146,9 @@ pub(crate) struct Open {
     /// An export borrows the live plugin instances (RENDER-1): settles prepare nothing and send no
     /// activation until it gives them back, so no host call reaches them meanwhile.
     pub(crate) exporting: bool,
+    /// The accepted revision whose renderer didn't build, once the user was told: the catch-up
+    /// tries it again every 300 ms, and says so once.
+    told_unbuilt: Option<u64>,
     /// What preparing the last plan took, for the edit's timing.
     pub(super) prepared: Prepared,
     /// The timeline last published, whose lanes the next one shares where they are the same.
@@ -316,8 +319,10 @@ enum Way {
     /// A new player (the one before stopped responding): where it was, looping as it did. Every
     /// instance new: the old device thread may still be inside an instance's `process`.
     Load(Box<Renderer>, Plays),
-    /// The renderer didn't build, or there is no player: what plays plays on.
+    /// There is no player: what plays plays on.
     Failed(anyhow::Error),
+    /// The renderer didn't build: what plays plays on, and the user is told.
+    Unbuilt(anyhow::Error),
     /// An export borrows the live instances: what plays plays on until it gives them back, and
     /// the settle after it plays this (RENDER-1).
     Deferred,
@@ -372,6 +377,43 @@ fn packages() -> Result<PackageSet> {
     let mut p = PackageSet::default();
     p.load(&crate::resources::std_dir()).context("loading the std package")?;
     Ok(p)
+}
+
+/// What of `from`'s graph each node of `to`'s continues (ID-15): every node itself for the same
+/// build, else the names of what changed. An activation keeps by it, and an export borrows by it.
+fn continuing(from: &Revision, to: &Revision) -> Continues {
+    match Arc::ptr_eq(from.compiled.code(), to.compiled.code()) {
+        true => Continues::identity(&to.compiled.flat),
+        false => m2_session::tx::continues::continues(from, to),
+    }
+}
+
+/// How the user knows plugin node `node` of `rev`'s graph: its plugin's name and its track's, as
+/// the app shows them ("Surge XT (lead)").
+fn plugin_named(rev: &Revision, packages: &PackageSet, node: usize) -> String {
+    let Some(n) = rev.compiled.flat.nodes.get(node) else { return "A plugin".into() };
+    let plugin = match &n.op {
+        FOp::Plugin { plugin, .. } => packages.plugin_info(plugin).map_or_else(|| plugin.clone(), |i| i.found.name.clone()),
+        _ => n.name.clone(),
+    };
+    let track = rev.compiled.ir.modules.iter().find(|m| m.key == n.module).map_or(n.module.as_str(), |m| m.label());
+    format!("{plugin} ({track})")
+}
+
+/// What the user is told when the accepted revision's renderer didn't build: that the change is
+/// saved, that the version before it plays on, why, and what to do.
+pub(super) fn unbuilt(e: &anyhow::Error) -> String {
+    let saved = "Your last change is saved, but";
+    match super::out_of_memory(e) {
+        true => format!(
+            "{saved} the computer ran out of memory to get it ready to play, so the version before it keeps playing. Close other apps \
+             or songs; music2 keeps trying. (In detail: {e:#})"
+        ),
+        false => format!(
+            "{saved} music2 couldn't get it ready to play, so the version before it keeps playing. Undo it, or fix what the detail \
+             names; music2 keeps trying. (In detail: {e:#})"
+        ),
+    }
 }
 
 /// A plan for the accepted revision at the project's rate (RENDER-31), built without playing
@@ -506,11 +548,7 @@ impl Open {
         let accepted = session.accepted();
         let keep = match (&kind, plays.as_ref()) {
             (Kind::Activate, Some(p)) => {
-                // The same build: every node continues itself. Else the names of what changed.
-                let cont = match Arc::ptr_eq(p.revision.compiled.code(), accepted.compiled.code()) {
-                    true => Continues::identity(&accepted.compiled.flat),
-                    false => m2_session::tx::continues::continues(&p.revision, accepted),
-                };
+                let cont = continuing(&p.revision, accepted);
                 prepared.continues_ns = t.elapsed().as_nanos() as u64;
                 Some((p, cont))
             }
@@ -526,7 +564,7 @@ impl Open {
         prepared.prepare_ns = t.elapsed().as_nanos() as u64 - prepared.continues_ns;
         let r = match built {
             Ok(r) => Box::new(r),
-            Err(e) => return (Way::Failed(e), prepared),
+            Err(e) => return (Way::Unbuilt(e), prepared),
         };
         prepared.fresh = r.stats().fresh.total();
         let plays = self.describe(&r, device);
@@ -707,22 +745,35 @@ impl Actor {
         };
         o.prepared = prepared;
         // A state load that gave a plugin latency plays it uncompensated, and says so; one that
-        // failed leaves the plugin as it was, and says why (RENDER-26b).
+        // failed leaves the plugin as it was, and says why (RENDER-26b). Each plugin is named as
+        // the user knows it. A refused state isn't loaded again, so it is said once.
         if let Some(r) = way.renderer() {
+            let (rev, rate) = (o.session.accepted(), o.session.accepted().project.sample_rate() as f64);
+            let named = |node: usize| plugin_named(rev, &o.session.packages, node);
             let mut notices = inner.notices.lock();
-            notices.extend(r.stats().latent.iter().map(|(name, frames)| {
+            notices.extend(r.stats().latent.iter().map(|&(node, frames)| {
+                let ms = frames as f64 / rate * 1e3;
                 format!(
-                    "{name} has {frames} samples of latency since its state changed; latency compensation isn't built yet, so it plays \
-                     that late (plugin.latency-uncompensated)"
+                    "{}'s new settings make it play {ms:.1} ms late, and music2 can't make up for that yet \
+                     (plugin.latency-uncompensated).",
+                    named(node)
                 )
             }));
-            notices.extend(
-                r.stats().unloaded.iter().map(|(name, why)| format!("{name} couldn't load its new state, so it plays as it was: {why}")),
-            );
+            notices.extend(r.stats().unloaded.iter().map(|(node, why)| {
+                format!("{} couldn't load its new settings, so it keeps the sound it had. (In detail: {why})", named(*node))
+            }));
+        }
+        // A renderer that didn't build: the version before plays on, and the user is told, once
+        // for each revision, though the catch-up tries again every 300 ms.
+        if let Way::Unbuilt(e) = &way
+            && o.told_unbuilt != Some(number)
+        {
+            o.told_unbuilt = Some(number);
+            inner.notices.lock().push(unbuilt(e));
         }
         // When the old build plays on, where the accepted revision's controls are in it: a carry
         // per control, done once here rather than under the lock.
-        let failed = matches!(way, Way::Failed(_) | Way::Deferred);
+        let failed = matches!(way, Way::Failed(_) | Way::Unbuilt(_) | Way::Deferred);
         let origins = if failed { o.origins() } else { None };
 
         // Phase 1, under the control plane's lock: what `begin` and `update` need, with the
@@ -805,7 +856,7 @@ impl Actor {
                     o.restarts.clear();
                     Ok(Sent::Renderer)
                 }
-                Way::Failed(e) => Err(e),
+                Way::Failed(e) | Way::Unbuilt(e) => Err(e),
                 Way::Deferred => Ok(Sent::Deferred),
             }
         })();
@@ -921,7 +972,8 @@ impl Actor {
         // The watcher starts from the folder as it was before it is read: a write meanwhile is a
         // change it takes in.
         let before = watcher::Before::take(dir, self.inner.walk_only.load(std::sync::atomic::Ordering::Relaxed), &self.inner.wake);
-        let opened = self.open_session(dir).and_then(|s| self.play(s, before));
+        // Running out of memory says so plainly, with wasmtime's words as the detail.
+        let opened = self.open_session(dir).and_then(|s| self.play(s, before)).map_err(super::plainly);
         if opened.is_err()
             && reopening
             && let Some(o) = self.open.as_mut()
@@ -953,6 +1005,7 @@ impl Actor {
             types,
             restarts: HashSet::new(),
             exporting: false,
+            told_unbuilt: None,
             prepared: Prepared::default(),
             timeline: Arc::default(),
         };
@@ -1057,8 +1110,19 @@ impl Actor {
 
     /// Take in what the session's plugin instances reported unasked. An instance that asked for a
     /// restart is replaced by the next activation, which the catch-up makes at once: a new
-    /// instance from the committed state, which fades in as the old one rings out (HOST-5).
+    /// instance from the committed state, which fades in as the old one rings out (HOST-5). So is
+    /// one that failed (it plays silence meanwhile), and the user is told.
     fn heard_plugins(&mut self) {
+        if let Some(o) = &mut self.open
+            && let Some(p) = &o.plays
+        {
+            for at in &p.info.plugins {
+                if at.inst.upgrade().is_some_and(|i| i.dead()) && o.restarts.insert(at.handle) {
+                    let who = plugin_named(&p.revision, &o.session.packages, at.node);
+                    self.inner.notices.lock().push(format!("{who} stopped working, so music2 started it again from its saved settings."));
+                }
+            }
+        }
         while let Ok(e) = self.events.try_recv() {
             match e {
                 HostEvent::Restart(h) => {
@@ -1085,9 +1149,10 @@ impl Actor {
     /// The accepted revision ready to export (RENDER-1). A song whose plugins play borrows their
     /// live instances: matched as an activation matches them (`PlanInfo::lend`), with what the
     /// export's thread needs to hold playback and take each offline ([`crate::export::Lent`]).
-    /// Settles prepare nothing for the engine until they are given back ([`Self::export_done`]).
-    /// With none playing, it renders with instances of its own, beside playback.
-    pub(super) fn export(&mut self, length: Length) -> Result<super::Export> {
+    /// Settles prepare nothing for the engine until they are given back: `jobs` hears it
+    /// ([`Self::export_done`]). With none playing, it renders with instances of its own, beside
+    /// playback.
+    pub(super) fn export(&mut self, length: Length, jobs: mpsc::Sender<Job>) -> Result<super::Export> {
         let device = self.inner.current_device();
         let o = self.open.as_mut().context("no project is open")?;
         let rev = o.session.accepted_arc();
@@ -1096,45 +1161,54 @@ impl Actor {
         let (song, dir) = (rev.project.manifest.project.name.clone(), rev.project.dir.clone());
         let lend = match (&device, &o.plays) {
             (Some(d), Some(p)) if p.epoch == d.epoch && p.rate == rate && !o.exporting => {
-                let cont = match Arc::ptr_eq(p.revision.compiled.code(), rev.compiled.code()) {
-                    true => Continues::identity(flat),
-                    false => m2_session::tx::continues::continues(&p.revision, &rev),
-                };
-                p.info.lend(flat, data, packages, &cont)
+                let mut lend = p.info.lend(flat, data, packages, &continuing(&p.revision, &rev));
+                // One that asked for a restart is replaced at the next settle: the export makes its own.
+                lend.retain(|_, inst| !o.restarts.contains(&inst.handle()));
+                lend
             }
             _ => HashMap::new(),
         };
+        // Running out of memory says so plainly, with wasmtime's words as the detail.
         let Some(d) = device.filter(|_| !lend.is_empty()) else {
             // Offline renders run at the project's rate (RENDER-31a).
-            let render = Render::new(flat, data, packages, rate, 0.0, length)?;
+            let render = Render::new(flat, data, packages, rate, 0.0, length).map_err(super::plainly)?;
             return Ok(super::Export { song, dir, render, problems, lent: None });
         };
-        let render = Render::lending(flat, data, packages, rate, length, &lend)?;
+        let render = Render::lending(flat, data, packages, rate, length, &lend).map_err(super::plainly)?;
         let mut borrows = vec![];
         for (&node, inst) in &lend {
             let n = &flat.nodes[node];
             let FOp::Plugin { plugin, .. } = &n.op else { bail!("{}: lent to a node that isn't a plugin", n.name) };
             let found =
                 packages.plugin_info(plugin).with_context(|| format!("{}: plugin `{plugin}` was not described", n.name))?.found.clone();
-            borrows.push(crate::export::Borrow { node, inst: inst.clone(), blob: m2_runtime::state_blob(data, n)?, plugin: found });
+            let (blob, who) = (m2_runtime::state_blob(data, n)?, plugin_named(&rev, packages, node));
+            borrows.push(crate::export::Borrow { node, inst: inst.clone(), blob, plugin: found, who });
         }
-        // Nothing fails from here: the export's guard clears it, on every path.
+        // Nothing fails from here: the export's guard clears it, on every path, and tells the
+        // session here, so a job that fails after this one returns still clears it.
         o.exporting = true;
-        #[allow(unused_mut)]
-        let mut lent = crate::export::Lent::new(d.player, borrows, rate, o.token);
+        let mut lent = crate::export::Lent::new(d.player, borrows, rate);
+        let token = o.token;
+        lent.done = Some(Box::new(move || {
+            let _ = jobs.send(Box::new(move |a: &mut Actor| a.export_done(token)));
+        }));
         #[cfg(test)]
         {
-            lent.hooks = Some(self.inner.export_hooks.clone());
+            let hooks = self.inner.export_hooks.clone();
+            if hooks.panic_after.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                panic!("a test: the job fails once the export is made");
+            }
+            lent.hooks = Some(hooks);
         }
         Ok(super::Export { song, dir, render, problems, lent: Some(lent) })
     }
 
     /// An export gave back the live instances it borrowed (RENDER-1): what waited for it plays
-    /// now, and an instance that didn't come back active is replaced from its committed state.
-    pub(super) fn export_done(&mut self, token: u64, failed: Vec<Handle>) {
+    /// now. One that didn't come back active failed: [`Self::heard_plugins`] has put it in
+    /// `restarts`, so this settle replaces it from its committed state.
+    pub(super) fn export_done(&mut self, token: u64) {
         let Some(o) = self.open.as_mut().filter(|o| o.token == token) else { return };
         o.exporting = false;
-        o.restarts.extend(failed);
         self.settle(None);
     }
 
@@ -1394,14 +1468,23 @@ impl Actor {
     pub(super) fn catch_up(&mut self) -> bool {
         let Some(o) = self.open.as_mut() else { return false };
         let has_code = o.session.accepted().has_code();
+        let before = self.inner.current_device();
         let behind = match self.inner.device() {
             // An export's end settles what waited for it.
             Ok(_) if o.exporting => false,
             Ok(d) => {
                 has_code && (!o.loaded(&d) || o.playing != Some(o.session.accepted().number) || !o.restarts.is_empty() || o.refused(&d))
             }
-            // Let go of: the settle starts a new one, and loads the project into it where it was.
-            Err(_) => true,
+            // Let go of: the settle starts a new one, and loads the project into it where it was,
+            // stopped. Let go of here, no action failed to say why: if it played, the user is told.
+            Err(_) => {
+                if let Some(d) = before.filter(|d| d.player.status().playing)
+                    && let Some(why) = super::let_go(&d.player)
+                {
+                    self.inner.notices.lock().push(format!("Playback stopped: {why}. Press Play to go on."));
+                }
+                true
+            }
         };
         behind && self.settle(None).changed
     }

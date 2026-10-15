@@ -334,6 +334,21 @@ fn a_reload_after_another_load_is_never_skipped() {
     assert_eq!((probe::stats(inst.h).unwrap().tag.lock().unwrap().as_str(), inst.value(probe::GAIN)), ("s", Some(1.0)));
 }
 
+// HOME-6: a load the plugin refuses leaves it holding nothing known (part of it may have landed), so
+// the blob it held before isn't skipped when it comes back: an undo of the refused write loads.
+#[test]
+fn after_a_refused_load_the_old_blob_loads_again() {
+    setup();
+    let f = find(probe::FAILS_STATE).unwrap();
+    let inst = Inst::new(&f, Some(probe::state("old", 1.0)), &Owner::discard());
+    let old = Arc::new(Blob::new(probe::state("old", 1.0)));
+    assert!(!inst.host.load_state(inst.h, old.clone()).unwrap(), "held: skipped");
+    let e = inst.host.load_state(inst.h, Arc::new(Blob::new(b"fail: refused".to_vec()))).unwrap_err();
+    assert!(format!("{e:#}").contains("refused the saved state"), "{e:#}");
+    assert!(inst.host.load_state(inst.h, old).unwrap(), "the old blob loads again");
+    assert_eq!(*probe::stats(inst.h).unwrap().tag.lock().unwrap(), "old");
+}
+
 // RENDER-25: while a plugin is created its owner says so, by name, and no longer once it is.
 #[test]
 fn an_owner_shows_what_it_is_loading() {
