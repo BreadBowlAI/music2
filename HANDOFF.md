@@ -4,20 +4,20 @@ Written 2026-10-15, at the end of the platform step (6b in the contract's order 
 `docs/architecture.md` (the contract) and the design for whatever you pick up.
 
 **In short**
-- The platform layer is built on `main`. Linux is green: `ci/check.sh` passed at `63c45da`.
-- **macOS: unverified since `4ae1b32`**, the step's first code commit (last verified at `8aa301e`). The owner's first
-  Mac run (at `b90bacf`, MacBookPro18,1, macOS 26.6.2, 14 min) passed every row except two tests that assumed Linux
-  (fixed after it: a refusal's path on a disk that ignores capitals, and one FSEvents flush). One more Mac run
-  confirms. Its gates: G11 `tx-data` p95 8.6 ms idle, 9.5 ms beside a syncing writer, 9.5 ms with 5,000 assets
-  (under 20 ms); the session's part p95 2.4–3.2 ms (under 5 ms); `watcher` 0.40% of a core idle (under 1%).
-- Then: finish step 7, merge `sounds`, merge `taste`; then 8a, 8b and step 9.
+- The platform layer is done on `main`: `ci/check.sh` passes on Linux and on the owner's Mac.
+- **macOS: green at `1750322`** (ci/check.sh on the owner's MacBookPro18,1, macOS 26.6.2, 2026-10-15, 12 min). G11
+  `tx-data` p95 8.6 ms idle, 9.2 ms beside a syncing writer, 8.9 ms with 5,000 assets (under 20 ms); the session's
+  part p95 2.5–3.1 ms (under 5 ms); `watcher` 0.40% of a core idle (under 1%). The first Mac run, at `b90bacf`,
+  failed two tests that assumed Linux; `1750322` fixed them.
+- Next: finish step 7 (in progress on branch `step7`, worktree `~/m2-runs/wt/s7`), merge `sounds`, merge `taste`;
+  then 8a, 8b and step 9.
 
 ## Where everything is
 
 | Branch | Commit | State |
 |---|---|---|
 | `main` | this commit | Steps 1–6, the fast note edits (8aa301e), and the platform layer. |
-| Platforms | | Linux green at `63c45da` (ci/check.sh). macOS unverified since `4ae1b32`. Windows: designed only. |
+| Platforms | | Green on Linux and macOS at `1750322` (ci/check.sh). Windows: designed only. |
 | `origin/wip/step7` | 5079233 | Step 7, the engine: slices 1–3 done, slice 4 half done. Doesn't build yet (`core/runtime/src/tests/live.rs:491` expects `Make`). |
 | `origin/taste` | 4804247 | The new look (T and S); 8b.1 Tracks done (a0d5f91); 8b.2 song bar unfinished. |
 | `origin/sounds` | 916127d | 20 new std sounds (polysynth, FM, drum kit). Its last independent check was cut short. |
@@ -97,7 +97,7 @@ fixes it on Linux, checks the mac lint, and asks for one more run. The logs are 
 
 ## What to do next, in order
 
-1. **The Mac run** (above), at `main`'s head once the lead has pushed. The step is done only when it passes (PLAT-6).
+1. ~~The Mac run~~: done, green at `1750322`.
 2. **Finish step 7** on `wip/step7`: bring it onto `main` (merge or rebase; notes below) and make it build. First
    platform design §8's bug 1 in `core/play` (sort cpal's errors: an xrun is counted and play goes on). Then finish
    slice 4 (design-7 §18: state loads into kept instances in prepare, restart from the committed blob, export with
@@ -159,8 +159,7 @@ Fixed in this step:
 
 One line each; the details are in `platform/build-notes.md`.
 
-- **The macOS side ran once** (the first Mac run): every test of `core/os/src/mac/` and its callers passed except the
-  two noted above. Paths no test takes stay unrun there: the barrier's `fsync` fallback on a volume that refuses
+- **The macOS side passes** every test of `core/os/src/mac/` and its callers. Paths no test takes stay unrun there: the barrier's `fsync` fallback on a volume that refuses
   `F_FULLFSYNC`, D6's clone error, `sync_dir` on a volume that refuses a folder sync.
 - FSEvents: one `FSEventStreamFlushSync` can return before a write made just before it reaches the daemon (the
   first Mac run showed it); the tests wait for the name, and the watcher counts a miss only after 60 s. The burst
