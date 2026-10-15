@@ -26,6 +26,11 @@ const NAMES_AN_OS: [&str; 11] = [
     "var(\"HOME\")",
 ];
 
+/// Words that make a `cfg`, `cfg!` or `cfg_attr` name an OS anywhere in its condition, so that
+/// `cfg(all(unix, test))`, `cfg(not(windows))` and `cfg(target_family = "unix")` count too
+/// (`target_os` counts wherever it is).
+const OS_IN_CFG: [&str; 4] = ["unix", "windows", "target_family", "target_vendor"];
+
 /// Files whose OS code a later slice moves into `m2-os`, and that slice.
 const NOT_YET: &[(&str, &str)] = &[
     ("core/song/src/hash.rs", "S6"),
@@ -183,7 +188,28 @@ impl Source {
                 v.push((code[..byte].chars().count(), p));
             }
         }
+        for (at, condition) in self.cfgs() {
+            let names_os = condition.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|w| OS_IN_CFG.contains(&w));
+            if names_os && !v.iter().any(|&(h, _)| h == at) {
+                v.push((at, "a cfg on the OS"));
+            }
+        }
         v.sort();
+        v
+    }
+
+    /// Where each `cfg(…)`, `cfg!(…)` and `cfg_attr(…)` starts, and its condition, strings blanked.
+    fn cfgs(&self) -> Vec<(usize, String)> {
+        let mut v = vec![];
+        for at in self.find("cfg") {
+            if at > 0 && (self.bare[at - 1].is_alphanumeric() || self.bare[at - 1] == '_') {
+                continue;
+            }
+            let after: String = self.bare[at + 3..].iter().take(6).collect();
+            let Some(open) = ["(", "!(", "_attr("].into_iter().find(|p| after.starts_with(p)) else { continue };
+            let from = at + 3 + open.len();
+            v.push((at, self.bare[from..self.item_end(from)].iter().collect()));
+        }
         v
     }
 
@@ -284,5 +310,28 @@ fn the_reader_sees_through_strings_comments_and_test_items() {
     let seen: Vec<_> = hits.iter().filter(|(at, _)| !skip.iter().any(|r| r.contains(at))).map(|(at, p)| (src.line_of(*at), *p)).collect();
     assert_eq!(seen, [(8, "var_os(\"HOME\")")], "only the code outside the test module counts");
     assert!(src.test_modules(&file).contains(&dir.join("props.rs")));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_cfg_names_an_os_anywhere_in_its_condition() {
+    let dir = std::env::temp_dir().join(format!("m2-one-place-cfg-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("lib.rs");
+    std::fs::write(
+        &file,
+        concat!(
+            "#[cfg(all(unix, not(test)))]\n",
+            "fn a() -> bool { cfg!(target_family = \"unix\") }\n",
+            "#[cfg_attr(not(windows), allow(dead_code))]\n",
+            "#[cfg_attr(test, path = \"unix.rs\")]\n",
+            "#[cfg(feature = \"windows\")]\n",
+            "mod unix;\n",
+        ),
+    )
+    .unwrap();
+    let src = Source::read(&file);
+    let seen: Vec<_> = src.hits().iter().map(|&(at, p)| (src.line_of(at), p)).collect();
+    assert_eq!(seen, [(1, "a cfg on the OS"), (2, "a cfg on the OS"), (3, "a cfg on the OS")], "not a feature or a path named unix");
     let _ = std::fs::remove_dir_all(&dir);
 }

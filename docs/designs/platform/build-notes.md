@@ -325,3 +325,26 @@ by S5, plus two flakes that are not S5's (below).
 **The Linux app with plugins.** Opened once more by hand on Xvfb with `examples/with-plugins` and the test plugins: its
 song has no problems (S1's screenshot showed two `plugin.missing`), and it plays. Screenshots in `~/m2-runs/check-build-S5/`:
 `app-first-song.png`, `app-with-plugins.png`, `app-with-plugins-playing.png`.
+
+**The independent check** (label `check-S5`, at `eefa929`; logs in `~/m2-runs/check-check-S5/`)
+
+| What | Result |
+|---|---|
+| The diff against §13.2's S5 row | All of the row is there, and nothing else. No test is weaker: the app test checks the same on macOS, and now also the thread. No OS code outside `core/os` but the 11 files on the allow-list and G11's `refused`. |
+| `ci/check.sh` | S1's row changed only by S5. app PASS. Rust tests: tests 1 to 10 of §4.1 fail, 695 pass; test 11 and the app test pass with Surge XT. clippy stops at lint 2; without `-D warnings` it lists exactly lints 2 to 6. std kernels PASS, std.wasm FAIL (until S3), mac lint PASS. Suites: S1's 7, with `notes-proj` passing on its retry (S2's race, "the whole drag is one write"); live3b 51 of 51. Renders 6 of 8. Repo unchanged. |
+| Test 11 and the app test with the test plugins | 5 and 3 runs more: all pass. |
+| The Linux app on Xvfb with `examples/with-plugins` | Both plugin libraries are loaded in the app's process, and its `m2-app-main` thread runs. Without `CLAP_PATH`, none is loaded. |
+| The mac lint | A type error and a missing function put in `core/os/src/mac/` pass Linux's check and fail the mac lint. |
+| `one_place.rs` | It fails on `target_os`, `$HOME`, an `extern "C"` block outside `refused`, and a file left on the allow-list with no OS code; comments and test modules don't count. It missed a `cfg` with an OS inside a longer condition: fixed below. |
+| 32 threads calling `test_main_thread()` at once, 20 times | One loop thread is left, and it serves. |
+
+| Fixed | Why |
+|---|---|
+| `one_place.rs` also fails on a `cfg`, `cfg!` or `cfg_attr` whose condition names an OS anywhere (`unix`, `windows`, `target_family`, `target_vendor`), with a test | PLAT-2 says "no `cfg` on the OS", but the test knew only the exact `cfg(unix)`, `cfg(not(unix))` and `cfg(windows)`. `#[cfg(all(unix, not(test)))]` or `#[cfg(not(windows))]` outside `m2-os` passed. Today's code passes the stricter test as it is. |
+
+Left as they are, for the lead:
+- `apps/music2-desktop/src/main.rs` still says the plugins' main thread is AppKit's, which is true on macOS only. §2.3 keeps
+  this step out of that file.
+- The app row passes when the app finds no plugins; only "can't be hosted" fails it, as §16 says. The probe above is what
+  shows they load.
+- On macOS, `run_main` after `use_app_main_thread` is now an error (before, both were the main queue). Nothing does that.
