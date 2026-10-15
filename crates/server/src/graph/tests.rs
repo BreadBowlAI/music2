@@ -2827,7 +2827,9 @@ fn a_second_export_waits_for_its_own_hold() {
     let mut ex = Ex::tagged("twice");
     let stats = m2_plugins::probe::stats(ex.handles()[0]).unwrap();
     crate::export::start(&ex.state, Some(ex.fixture.0.join("one.wav"))).unwrap();
-    ex.fill_until("the first export is done", |ex| !ex.state.exports.running());
+    // Filled only until the engine holds: the first's resume is then sent, and no callback takes it.
+    ex.fill_until("the engine holds", |ex| player(&ex.state.graph).held());
+    eventually("the first export is done", || !ex.state.exports.running());
     assert!(player(&ex.state.graph).held(), "no callback has taken the resume yet");
     let before = stats.main_calls().len();
     crate::export::start(&ex.state, Some(ex.fixture.0.join("two.wav"))).unwrap();
