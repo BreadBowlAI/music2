@@ -547,8 +547,9 @@ if [ -n "$GATES" ]; then
   fi
   # Each run, its verdicts, and each judged check with its numbers (p95 or p99, or the CPU as a
   # share of a core), so a green run's timings can be recorded from the summary alone; and each
-  # comparison with a record that isn't from this machine, so not judged (PLAT-1).
-  grep -E '^=== |^(PASS|FAIL|SKIP)  |^      FAIL  |^      ok    .*(p95|p99|of a core)|^      skip  .*\(PLAT-1\)' "$OUT/gates.log" 2> /dev/null |
+  # comparison with a record that isn't from this machine, so not judged (PLAT-1), with the two
+  # machines, so a record's machine can be corrected from the summary alone too.
+  grep -E '^=== |^(PASS|FAIL|SKIP)  |^      FAIL  |^      ok    .*(p95|p99|of a core)|^      skip  .*\(PLAT-1\)|^      info  machines: ' "$OUT/gates.log" 2> /dev/null |
     cut -c1-220 > "$OUT/gates.sum"
 fi
 
