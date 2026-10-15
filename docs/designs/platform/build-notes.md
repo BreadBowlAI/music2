@@ -474,3 +474,28 @@ exactly §13.1's S6 row, on its first run, with no retry.
 **Left for the lead**
 - Only the Mac run tests the macOS bodies: the barrier's `fsync` fallback, the error numbers 45 and 102, and the moved `renamex_np`, `clonefile`, `getattrlist` and `gethostuuid` calls. The mac lint only type-checks them.
 - `m2 new NIGHT/../night` beside `Night` is refused, but on Linux it first makes an empty `NIGHT`: `create_at` makes the parent folder before any check. That is older than this slice and needs `..` in the path.
+
+**The independent check** (label `check-S6`, at `5ef6613`; logs in `~/m2-runs/check-check-S6/`)
+
+| What | Result |
+|---|---|
+| The diff against §13.2's S6 row (and §2, §3.1 to 3.3, §3.7, §6.1) | All of the row is there, and the lead's `create_at` decision. Nothing extra but the deviations above. No test is weaker. No OS code outside `core/os` but S8's 3 files and G11's `refused`. The macOS code says what it said, with the barrier's `fsync` fallback as the one change meant; one small side effect is left for the lead (below). |
+| `ci/check.sh` | §13.1's S6 row, with one retry that is not the vanishing file: `live3a` failed "dragging across the ruler loops beats 4–12" and passed on its retry. That is `HANDOFF.md`'s ruler-drag flake: setting a loop writes nothing to disk (`Graph::set_loop` only tells the player). Rust tests: 714 passed, 5 failed (tests 1 to 5 of §4.1 by name); `m2-session`'s binary, the kill test included, 93.4 s. clippy fails at lint 4; without `-D warnings` it lists exactly lints 4 to 6. Suites 29 of 29 after the retry, live3b 51 of 51. Renders 8 of 8. toolchain, web build, build, app, std rows, mac lint and repo unchanged PASS. |
+| A FUSE volume, mounted without root (a squashfs image through `snapfuse`) | `is_local` says no, and `same_volume` with `/tmp` says no. `m2 check` and `m2 render` work on a song there; `m2 set` refuses in plain words (the volume is read-only, so the lock can't be made). `/`, `/tmp`, `/dev/shm`, `/proc`, `/sys`, `/run` count as local. |
+| Odd names | Swap and create-only rename work with a name that is not UTF-8, one with a line break, spaces, a leading dash, 255 bytes, an emoji. A name too long, a NUL in a path and a rename across volumes are errors, never `Unsupported` (which would make a caller fall back). A create-only rename onto a dangling link says `AlreadyExists` and leaves the link. |
+| 32 threads at once | 32 writers each swapping a file 2,000 times while 32 readers read: 0 of 10.2 million reads found it missing. 32 threads racing a create-only rename onto one name, 200 times: exactly one winner each time. 32 threads taking one lock 500 times each: never two holders. |
+| Saves through the session (a temporary test, not committed) | 1,000 saves of `song.ts` with 4 readers: with the swap, 0 of 10.8 million reads missing; on a disk that can't swap (`Recorder { plain: true }`), 181,704 of 10.8 million (S7's part). |
+| A second run, under load | `m2-session`'s tests twice at once while 32 threads spin: both pass (121 each, the kill test included, 245 s); `m2-os`'s tests 5 times meanwhile: all pass. |
+| `m2 new` beside `Night` (the debug `m2`, scratch `HOME`) | `night`, `NIGHT`, `./night`, `night/`, `night/.` and an absolute `.../nIGHT` are refused, and so are `DANGLING` beside a dangling link `dangling`, `üML` beside `Üml`, `CAFÉ` beside `Café`: "already exists" each time. |
+| Suites near saves, alone, 8 runs each | `live3a`, `s6-write`, `s6-fixes`, `export`, `fx-fixes`: 8 of 8. `notes`: 7 of 8, then 16 of 16 (below). |
+| The hash cache | The check's scratch `HOME` has `.cache/music2/hashes.json` and no `Library/`. |
+
+| Fixed | Why |
+|---|---|
+| `is_local` says no for the kernel's own AFS (kAFS) too: its number, `0x6B414653` (`AFS_FS_MAGIC`), joins the list, with a test that feeds the list by libc's names | The list had only OpenAFS's `AFS_SUPER_MAGIC` (`0x5346414F`), from design §3.2. This kernel's `kafs.ko` holds `0x6B414653` once and `0x5346414F` never, so a kAFS volume counted as local: no `lock.local` (and from S8, events trusted where only walks see other computers' writes), where WRITE-17 says AFS is a network volume. |
+
+Left for the lead:
+- `notes` failed "the timeline shows it shorter" once in 25 runs (8 alone, 16 more alone, 1 in the check). It waits until the file on disk says 16 beats, then measures the clip on screen once, without waiting for the screen. That is the file-then-screen race §4.4 fixed at `notes.mjs:97`. No earlier check log in `~/m2-runs` shows it. S6 doesn't change the order (the file is renamed before the revision goes out); an `until` around the width in `notes.mjs:155` would close it. Left alone: suite lines on `main` are kept few for `taste`'s merge.
+- macOS only: when `clonefile` works but the push after it fails, `stage.rs` now copies, which fails with "File exists". The commit still fails, but its error names the copy, not the disk's error (before S6 it named the push's error).
+- `m2 new` (and New Song since S2) now lists the parent folder first. In a folder that can be written but not listed (mode 300), `m2 new dropbox/song` fails with "reading dropbox: Permission denied"; before S6 it made the song. Rare, and the capitals rule can't be checked there.
+- The real home on this server holds `~/Library/Caches/music2/hashes.json`, written 2026-10-14 20:29, before this slice, by a run with the real `HOME`. Not from this check; left as it is.

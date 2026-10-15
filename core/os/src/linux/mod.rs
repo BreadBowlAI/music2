@@ -65,10 +65,12 @@ pub(crate) fn clone_file(_from: &Path, _to: &Path) -> io::Result<()> {
     Err(crate::unsupported("no file clones on Linux yet"))
 }
 
-/// File systems on another machine, by `statfs`'s type: NFS, SMB, CIFS, SMB2, 9p, Ceph, AFS and
-/// Coda; and FUSE, since sshfs and ntfs-3g look the same there (the safe side: walks and
+/// File systems on another machine, by `statfs`'s type: NFS, SMB, CIFS, SMB2, 9p, Ceph, AFS (two
+/// numbers: OpenAFS's `AFS_SUPER_MAGIC`, and the kernel's own kAFS, which reports `AFS_FS_MAGIC`)
+/// and Coda; and FUSE, since sshfs and ntfs-3g look the same there (the safe side: walks and
 /// `lock.local`). A type not on the list counts as local.
-const NOT_LOCAL: [u32; 9] = [0x6969, 0x517B, 0xFF53_4D42, 0xFE53_4D42, 0x0102_1997, 0x00C3_6400, 0x5346_414F, 0x7375_7245, 0x6573_5546];
+const NOT_LOCAL: [u32; 10] =
+    [0x6969, 0x517B, 0xFF53_4D42, 0xFE53_4D42, 0x0102_1997, 0x00C3_6400, 0x5346_414F, 0x6B41_4653, 0x7375_7245, 0x6573_5546];
 
 pub(crate) fn is_local(dir: &Path) -> bool {
     let Ok(c) = cpath(dir) else { return true };
@@ -94,4 +96,23 @@ pub(crate) fn machine_id() -> Option<String> {
         .filter_map(|f| std::fs::read_to_string(f).ok())
         .map(|id| id.trim().to_string())
         .find(|id| !id.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    // OS-15, WRITE-17: the network file systems are not local, by the numbers libc names, and the
+    // kernel's own AFS too, whose number libc doesn't name (`AFS_FS_MAGIC` in linux/magic.h; this
+    // kernel's kafs.ko holds it, never OpenAFS's `AFS_SUPER_MAGIC`). Local ones stay local.
+    #[test]
+    fn network_file_systems_are_not_local() {
+        use libc::{AFS_SUPER_MAGIC, CODA_SUPER_MAGIC, FUSE_SUPER_MAGIC, NFS_SUPER_MAGIC, SMB_SUPER_MAGIC};
+        use libc::{BTRFS_SUPER_MAGIC, EXT4_SUPER_MAGIC, OVERLAYFS_SUPER_MAGIC, TMPFS_MAGIC, XFS_SUPER_MAGIC};
+        for t in [NFS_SUPER_MAGIC, SMB_SUPER_MAGIC, AFS_SUPER_MAGIC, CODA_SUPER_MAGIC, FUSE_SUPER_MAGIC] {
+            assert!(super::NOT_LOCAL.contains(&(t as u32)), "{t:#x}");
+        }
+        assert!(super::NOT_LOCAL.contains(&0x6B41_4653), "kAFS");
+        for t in [EXT4_SUPER_MAGIC, TMPFS_MAGIC, BTRFS_SUPER_MAGIC, XFS_SUPER_MAGIC, OVERLAYFS_SUPER_MAGIC] {
+            assert!(!super::NOT_LOCAL.contains(&(t as u32)), "{t:#x}");
+        }
+    }
 }
