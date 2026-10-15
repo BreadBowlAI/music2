@@ -295,9 +295,12 @@ fn cell_heard_never_runs_ahead() {
         std::thread::spawn(move || {
             for (k, &c) in plan.iter().enumerate() {
                 let s = k as u64 + 1;
+                // The count is read before the write, so the drain that hears this write moves it
+                // even when the writer is held up between the two and the drain comes first.
+                let gate = s.is_multiple_of(GATE) && s < writes;
+                let seen = if gate { drains.load(Ordering::Acquire) } else { 0 };
                 slots.set(&[CellId(c)], s as f32, s);
-                if s.is_multiple_of(GATE) && s < writes {
-                    let seen = drains.load(Ordering::Acquire);
+                if gate {
                     while drains.load(Ordering::Acquire) == seen {
                         std::thread::yield_now();
                     }
