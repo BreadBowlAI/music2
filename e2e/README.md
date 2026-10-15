@@ -74,7 +74,7 @@ diff /tmp/base-head/SHA256SUMS /tmp/base-now/SHA256SUMS
 ```
 
 `renders.sha256` is the one record every OS must match (PLAT-4); `ci/check.sh` renders with
-`baseline.sh` and checks against it (`cd <out> && shasum -a 256 -c e2e/renders.sha256`).
+`baseline.sh` and checks against it (`cd <out> && shasum -a 256 -c <repo>/e2e/renders.sha256`).
 
 ## Suites
 

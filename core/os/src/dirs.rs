@@ -33,6 +33,7 @@ pub fn clap() -> Vec<PathBuf> {
 mod tests {
     use std::path::Path;
 
+    // PLAT-7: every folder music2 writes outside a project is under `$HOME`.
     #[test]
     fn what_music2_writes_is_under_home() {
         let cache = super::os::cache(Path::new("/h"));

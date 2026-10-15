@@ -5,9 +5,7 @@
 //! `#[cfg(test)]`) and `#[cfg(test)]` items, matched by braces. Comments don't count.
 //!
 //! The desktop shell (`apps/music2-desktop/src`) is outside what it reads, and G11's fault
-//! injection (`refused` in the gates' `server.rs`) is allowed. `NOT_YET` lists the files whose OS
-//! code a later slice of the platform step moves into `m2-os`; each slice removes its own lines, and
-//! the list is empty after S8.
+//! injection (`refused` in the gates' `server.rs`) is allowed.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -31,9 +29,6 @@ const NAMES_AN_OS: [&str; 11] = [
 /// (`target_os` counts wherever it is).
 const OS_IN_CFG: [&str; 4] = ["unix", "windows", "target_family", "target_vendor"];
 
-/// Files whose OS code a later slice moves into `m2-os`, and that slice.
-const NOT_YET: &[(&str, &str)] = &[];
-
 /// The one function allowed to name an OS outside `m2-os`: G11's refused write, a measuring tool's
 /// fault (PLAT-2).
 const ALLOWED_FN: (&str, &str) = ("crates/gates/src/server.rs", "fn refused(");
@@ -49,7 +44,6 @@ fn os_code_lives_in_m2_os() {
     let sources: Vec<(PathBuf, Source)> = files.into_iter().map(|f| (f.clone(), Source::read(&f))).collect();
     let test_modules: BTreeSet<PathBuf> = sources.iter().flat_map(|(f, s)| s.test_modules(f)).collect();
     let mut found = vec![];
-    let mut named = BTreeSet::new();
     for (file, src) in &sources {
         if test_modules.contains(file) {
             continue;
@@ -60,18 +54,12 @@ fn os_code_lives_in_m2_os() {
             skip.extend(src.item_at(ALLOWED_FN.1));
         }
         for (at, pattern) in src.hits() {
-            if skip.iter().any(|r| r.contains(&at)) {
-                continue;
-            }
-            named.insert(rel.clone());
-            if !NOT_YET.iter().any(|(f, _)| *f == rel) {
+            if !skip.iter().any(|r| r.contains(&at)) {
                 found.push(format!("{rel}:{}: {pattern}: {}", src.line_of(at), src.line_text(at).trim()));
             }
         }
     }
     assert!(found.is_empty(), "OS code outside m2-os (PLAT-2): move it into core/os, or name the OS only in a test:\n{}", found.join("\n"));
-    let moved: Vec<_> = NOT_YET.iter().filter(|(f, _)| !named.contains(*f)).map(|(f, s)| format!("{f} ({s})")).collect();
-    assert!(moved.is_empty(), "these files name no OS any more: remove them from NOT_YET in core/os/tests/one_place.rs: {moved:?}");
 }
 
 /// Every `.rs` file under `dir`, outside `tests/` folders and test files.

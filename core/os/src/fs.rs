@@ -191,7 +191,7 @@ mod tests {
         }
     }
 
-    // §2.2 of the platform design: each OS's lists, fed by name. On Linux ENOTSUP and EOPNOTSUPP
+    // PLAT-3 (§2.2 of the platform design): each OS's lists, fed by name. On Linux ENOTSUP and EOPNOTSUPP
     // are both 95; the Mac run checks its 45 and 102, which std's ErrorKind would miss. macOS's
     // list for the barrier's fallback is tested in mac/mod.rs, the one OS that has it.
     #[test]
@@ -220,7 +220,8 @@ mod tests {
         assert_eq!(unsupported_if(io::Error::from_raw_os_error(EIO), os::lock_unsupported).raw_os_error(), Some(EIO), "as it is");
     }
 
-    // OS-03, OS-07: a swap exchanges two files; a create-only rename never replaces one.
+    // WRITE-15, PLAT-3, OS-03, OS-07: a swap exchanges two files; a create-only rename never
+    // replaces one.
     #[test]
     fn a_swap_exchanges_and_an_exclusive_rename_never_replaces() {
         let t = Temp::new("rename");
@@ -236,7 +237,8 @@ mod tests {
         assert_eq!(rename(&a, &b, Rename::Swap).unwrap_err().kind(), ErrorKind::NotFound, "a swap needs both");
     }
 
-    // OS-10, OS-11, OS-16, OS-17: a file's id follows it under any name; its stamp, its version.
+    // FMT-16, WRITE-19, OS-10, OS-11, OS-16, OS-17: a file's id follows it under any name; its
+    // stamp, its version.
     #[test]
     fn a_file_is_told_by_its_id_and_its_version_by_its_stamp() {
         let t = Temp::new("id");
@@ -311,7 +313,8 @@ mod tests {
         assert_eq!(folder_of(Path::new("/song.ts")), Path::new("/"));
     }
 
-    // OS-08: one holder at a time, a second open of the file included; let go with the file.
+    // WRITE-17, OS-08: one holder at a time, a second open of the file included; let go with the
+    // file.
     #[test]
     fn a_lock_has_one_holder() {
         let t = Temp::new("lock");
@@ -335,7 +338,8 @@ mod tests {
         assert!(!std::fs::metadata(&f).unwrap().permissions().readonly());
     }
 
-    // OS-19: a disk that folds capitals says how it stores a name; one that can't say gives None.
+    // WRITE-19, OS-19: a disk that folds capitals says how it stores a name; one that can't say
+    // gives None.
     #[test]
     fn a_stored_name_is_the_disks_spelling() {
         let t = Temp::new("stored");

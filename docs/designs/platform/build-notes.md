@@ -594,9 +594,11 @@ Left for the lead:
   says "couldn't write …: Permission denied" and exits 1, and the WAV is there (tried). Before S7 it passed: the
   folder sync can't open the folder. Into `assets/`, `write_for` would then say the file "is there already". Only
   files a Tx names need the sync; an export outside the project could let a failed sync pass.
-- New Song, `m2 new`, the bounce and exports now fail on a volume that refuses a folder `fsync`, while commits go on
-  (`push_parents` ignores a failed folder sync). Linux's `vboxsf` has no folder `fsync` (from the kernel's source, not
-  run here); the Mac's volumes are unknown. Design §9 attack 3 counts a failed folder sync as a failing disk.
+- New Song, `m2 new`, the bounce and exports now fail on a volume that refuses a folder `fsync`. *(Corrected in the
+  review: commits fail there too, at step 4's folder syncs. Only step 8's push ignores a failure. So every write path
+  failed alike; since the review's D2 every one skips such a sync.)* Linux's `vboxsf` has no folder `fsync` (from the
+  kernel's source, not run here); the Mac's volumes are unknown. Design §9 attack 3 counts a failed folder sync as a
+  failing disk.
 - `m2 new a/b/song` makes `a/` and `b/`, and syncs only `b/`, the song's parent. A power cut could lose the whole
   song, but nothing outside it names it.
 - The committed kill test reopens and runs Finish and Discard on the disk that swaps in both runs, so recovery on a
@@ -1056,8 +1058,9 @@ PLAT-6's *Today* now says Linux passes the check since S8, first at `9f0b19a`.
 
 **Left for the lead**, not fixed (each a choice, or not provable here):
 - S7: an export into a folder that can be written but not listed fails after the file is whole; New Song, `m2 new`,
-  the bounce and exports fail on a volume that refuses a folder `fsync`, where commits carry on (design §9 attack 3
-  counts that as a failing disk). On Windows, `push_tree`'s read-only handles won't do for `FlushFileBuffers`.
+  the bounce and exports fail on a volume that refuses a folder `fsync` (design §9 attack 3 counts that as a failing
+  disk). *(Corrected in the review: commits fail there too, at step 4; see "Review and fixes", D2.)* On Windows,
+  `push_tree`'s read-only handles won't do for `FlushFileBuffers`.
 - S8: when inotify's limits run out the log line is cryptic ("No space left on device"); a folder the watch walk can't
   list goes unwatched with no Rescan (the 5 s walks and the two-miss rule cover it); running out of watches at the
   real limit is untested (it needs root). live3b failed once in S8's check under a load of 45 to 74; not seen here.
