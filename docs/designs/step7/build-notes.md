@@ -325,3 +325,123 @@ fixed here: a count per owner, or a lock the five probe tests share, would fix i
 - An export can start on a changed player in the 300 ms before it is let go: the pause works, then the catch-up
   lets that player go during the export. Reading the code, the new player loads after the export. Slice 4's
   export `Hold` should test this.
+
+## Slice 4
+
+**In short:** slice 4 is built. A new plugin state now loads into the plugin that plays, and an export
+of a song with plugins pauses playback and borrows them, on the export's own thread. The web's top bar
+says "Paused for export" and "Loading Surge XT…". G7e passes, and so does every slice 4 test. Testing
+with the real Surge XT found two real bugs, now fixed: after a state load, Surge kept its old filter
+setting instead of the code's (HOME-4), and a borrowed export lost the lead. `ci/check.sh` fails only
+on the two known `store.rs` lines. Branch `step7`, worktree `~/m2-runs/wt/s7`.
+
+### What was done first
+
+Bug 1's checker found a flaky test, `swapping_two_plugin_keys_moves_the_instances`. It counted every
+plugin instance made in the whole test process. Now each `Owner` counts the instances it made
+(`Owner::made`), and the test reads its own session's count. Run beside the other probe tests: 40 of
+40 pass; the old count fails 10 of 10 (`cc84d6a`).
+
+### What was built
+
+| Item (design §18) | State | Where |
+|---|---|---|
+| State loads into kept instances, as prepare's last step | done | `Renderer::prepare` (`core/runtime/src/lib.rs`) |
+| A load that fails | changed (deviation 1) | `Stats.unloaded`; the actor says why in a notice |
+| `PluginInstance.reloaded` | changed (deviation 2): two calls | `core/runtime/src/plugins.rs` |
+| The latency warning | a notice, as before; the code is now in the contract's table | `plugin.latency-uncompensated` |
+| `holds` host fix | done (the Mac's) | `core/plugins/src/inprocess.rs` |
+| `Msg::Hold`, `Status.held`, `Player::hold` and `held` | done; a hold now also completes when the engine idles or plays nothing | `core/runtime/src/engine.rs` |
+| `Basis::Lend` (the design's `Borrow`) and `reset_first` | done (the Mac's) | `plan.rs`, `lib.rs` |
+| The export thread's protocol and guard | done as designed: the hold, the wait and the host calls now run on the export's thread, not the actor's | `Lent` in `crates/server/src/export.rs` |
+| One borrowed instance that can't be taken | done as designed: a new one plays its node, and the export carries `plugin.not-borrowed` | `Lent::take`, `Renderer::unlend` |
+| Playback can't pause in 2 s | done as designed: nothing live is touched, a toast says so | `Lent::take` |
+| `Open.exporting`, `ExportDone` | done (`ExportDone` is the guard's callback to the actor) | `actor.rs` |
+| "loading" and "paused for export" | done: the web shows both in the top bar | `EngineNote` in `web/src/components/GraphCanvas.tsx` |
+| Debug-build allocation counter | done (the Mac's) | `core/play/src/alloc.rs` |
+| G7e: the server gate and the probe test | done | `m2-gates --server export`; `an_export_borrows_and_gives_back_the_live_instances` |
+| with-plugins' `new_state` | rewritten: one load into the same Surge, the new patch's volume, the code's filter type kept, Surge's own saved state skipped | `crates/gates/src/plugins.rs` |
+| Contract edits | done: RENDER-1, RENDER-6a, RENDER-26b, RENDER-28's `Hold`, the engine shape, HOST-5, HOST-6, HOME-4, HOME-6, the Deferred plugin-windows row, two new codes | `docs/architecture.md` |
+
+### Found with Surge XT
+
+Surge XT applies a loaded state at its next `process` call, not at the load. That call's parameter
+values are lost, and every voice in it ends, notes started in that same call too. A temporary test drove
+Surge directly through the host to show it: after a real load, the notes in the next call made exact
+silence; one empty call first, and they sounded.
+
+| What it broke | Fix |
+|---|---|
+| Live: after a state change, Surge's filter type read the patch's 0.005, not the code's (HOME-4) | The code's parameters now go again at the next **two** calls after a load. with-plugins checks it now; with one call it fails. |
+| Export: when a borrowed instance really loads its state (it doesn't hold it), the export's first notes and the code's values were lost. With Surge alone the lead was silent; in with-plugins it was 6 to 15 dB off between the kicks | After a real load, the export makes one empty `process` call on its own thread before the render |
+| What stays | Live, a note that starts in the very block after a state change doesn't sound in Surge. It can't be fixed on the audio thread. A state change is rare: an undo of a state write, an agent writing a blob. |
+
+The probe can now act like Surge (`defer_load`), so CI tests show both fixes without Surge. Each test
+fails with its fix taken out.
+
+### Deviations from the design
+
+| # | What | Why |
+|---|---|---|
+| 1 | A state load that fails doesn't fail the prepare. That plugin plays on as it left itself, a notice says why, and the next plan tries again. | The loads before it have landed in instances that play, so failing the prepare then would break "a prepare that fails changes nothing". |
+| 2 | After a load, the code's parameters go again at the next two calls, not one. The blob's value plays for up to two blocks. | Surge applies a loaded state at its next call (above). A plugin that applies one later still needs HOME-5a's revert, which comes with plugin windows. |
+| 3 | An export that really loads a state makes one empty `process` call before the render. | The same Surge behaviour; without it the export isn't exact (RENDER-1). |
+| 4 | The export waits for the engine to have applied *its* hold (the stamp), then for `held`. | `held` alone can still say the last export's. A second export started straight after the first took the instances while the audio thread could still call them; `a_second_export_waits_for_its_own_hold` fails with the old wait. |
+| 5 | "loading" isn't pushed to clients. The host's `Owner` keeps the list, and every read sees it as it is; the web polls the status five times a second. | The same thing for the user, with no new event. |
+| 6 | `a_state_load_resends_code_owned_parameters` is in `core/runtime`, not `core/plugins`. | `m2-plugins` can't run a renderer: `m2-runtime` depends on it. |
+| 7 | G7e's server gate holds the lead's cutoff lane still in its copy of with-plugins. | So the code's values are the same at the two saves "state intact" compares. |
+| 8 | G7e's "each second within 1 dB of `m2 render`" is judged over the song's 8 seconds. The release tail after them is printed beside two `m2 render`s' own spread. | Two renders with new instances already differ there by up to 1.5 dB (Surge's random phases). |
+| 9 | G7e has one more check: the lead between the kicks, beat by beat, within 6 dB of `m2 render`. Two renders differ by up to about 3 dB there. | Each second's level is mostly the kick, and it missed the silent lead above. This check sees it by 12 to 15 dB. |
+| 10 | G7e also runs in `m2-gates --server` with no gates named. | It is quick (about 3 s), and skips without the plugins. |
+
+### New tests
+
+Beyond §18's list (all of which are there and pass):
+- `a_state_that_fails_to_load_never_fails_the_prepare` (deviation 1).
+- `an_instance_that_cant_be_borrowed_plays_anew_in_the_export`, `an_export_whose_playback_cant_pause_renders_beside_it` (§10.5's failures).
+- `a_second_export_waits_for_its_own_hold` (deviation 4).
+- `an_export_that_loads_a_state_lets_the_plugin_apply_it_first` (deviation 3).
+- The G7e probe test's negative control: with no hold, the audio thread plays one buffer inside the window while the export thread waits there. It never lets two threads call one instance at once.
+- live3b exports with-plugins from the UI on real Surge: playback pauses, the top bar says so, the capture is silent and the playhead still, the file is written, and play goes on (60 checks; 40 without plugins).
+
+Tests that showed they can fail: each fix taken out made its test fail (the export deferral, the reload
+flag, the warm-up, the two calls, the hold's stamp).
+
+### Results
+
+On this server (Ryzen 9 7950X3D, 32 threads, Ubuntu 24.04), with a scratch `HOME`, `M2_AUDIO=none`
+and the test plugins, at `7f7cfd7`. The load average was under 3.
+
+| Check | Result |
+|---|---|
+| Every slice 4 test, by name | PASS; the server's ten export and state tests 3 times |
+| `cargo test --workspace --no-fail-fast` | 838 passed, 3 ignored, 2 failed: `os_code_lives_in_m2_os` (known), and the no-arena control in the gates' harness, which the changed-state check stopped. Fixed (`7f7cfd7`); the harness then passed 6 of 6. |
+| clippy (`--workspace --all-targets -D warnings`) | PASS |
+| mac lint | FAIL only on `crates/gates/src/store.rs:172` and `:290` (`libc`), as before. PASS without `m2-gates`. |
+| with-plugins (`m2-gates plugins`, release) | PASS, every check, the new changed-state ones included |
+| with-plugins with `--no-arena` (must fail) | FAILS, as it must: no instance kept |
+| G7e (`m2-gates --server export`, release) | PASS 3 of 3 (below) |
+| `ci/check.sh` (`~/m2-runs/check-s7-slice4/`, 8 min) | FAIL, 2 of 12 rows: rust tests (839 passed; only `os_code_lives_in_m2_os`) and the mac lint (`store.rs`). Every other row passed: app, clippy, std kernels, `std.wasm`, 29 of 29 browser suites (1,043 checks), 8 of 8 renders, repo unchanged. Nothing passed only on a retry. |
+
+G7e's numbers (one run; Linux, for information only, PLAT-1):
+
+| | |
+|---|---|
+| The export, until done | 267 ms; playback paused 256 ms |
+| Held before the first host call | yes: the first call 320 ns after the engine said it held |
+| While paused | 244 samples, the engine clock and the transport the same in all; silence (-240 dBFS) |
+| Instances | the same two before and after, none made; each one's saved state the same after the resume |
+| The resume | at the clock it held (48,384), 10.0 ms after the instances were back (bound 21.3) |
+| Steps at the fades | 0.0134 out, 0.0059 in; bound 0.0534 (twice the music's own) |
+| The file against `m2 render` | 18.00 s against 17.71 s; each second within 0.11 dB; the lead within 2.74 dB beat by beat (two renders: 2.13); 15 of 15 onsets; the tail 1.05 dB off (two renders: 0.66) |
+
+### Left for later
+
+- `crates/gates/src/store.rs`'s Mach calls still need `m2_os::process` (platform design §8). That one
+  move fixes both `one_place.rs` and the mac lint.
+- `ci/gates.txt`: add design-7 §12's gates, G7e included, for the Mac run.
+- After an export, the plugins' voices are reset, as RENDER-1 says. A note held across the export stays
+  silent until its next note-on. In live3b, a long chord stayed silent until a seek.
+- A plugin that applies a loaded state later than its next call (a sampler loading in the background)
+  could still win over the code's values. HOME-5a's revert, with plugin windows, is the real fix.
+- The latency warning is a toast, not an entry in the problems list.
