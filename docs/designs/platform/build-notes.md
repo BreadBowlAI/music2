@@ -393,3 +393,17 @@ The rebase gave the slices' commits new hashes. The notes above name the old one
 - Flakes not caused by a slice: `m2-plugins`' `surge_plays_notes` (Surge XT's output starts below −140 dB a few
   samples early), `m2-runtime`'s `cell_heard_never_runs_ahead` under heavy load, and G10's timing in
   `the_live_engine_passes_every_gate` under load.
+
+**The check** at `7e20eba` (`ci/check.sh`, 8 min on a quiet server, logs in `~/m2-runs/check-integrate/`): exactly
+§13.1's S5 row, with no retries.
+
+| Row | Result |
+|---|---|
+| toolchain, web build, build | PASS |
+| app | PASS: the UI connected in 1 s with `first-song` and with `with-plugins`, and the app hosts the plugins (no "can't be hosted"; the screenshot shows no "Needs attention") |
+| rust tests | FAIL: tests 1 to 9 of §4.1 by name (the 4 watch tests, `a_lane_written_in_two_halves_never_plays_empty`, the hook, stage and kill tests, the preview test); 700 passed. Test 10, test 11 ("main_thread: ok (Surge XT too)") and the app test pass. |
+| clippy | FAIL at lint 2, `core/session/src/lock.rs:213` ("2 findings": lints 2 and 3 stop `m2-session`). Without `-D warnings` it lists exactly lints 2 to 6. |
+| std kernels, std.wasm, mac lint | PASS |
+| browser suites | PASS: 29 of 29, 1,034 of 1,034 checks; live3b 51 of 51 with the plugins |
+| renders | PASS: 8 of 8 match `e2e/renders.sha256` |
+| repo unchanged | PASS |
