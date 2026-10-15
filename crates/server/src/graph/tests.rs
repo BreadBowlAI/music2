@@ -1831,7 +1831,7 @@ impl Dc {
 
 /// The plugin instances of the plan last sent, as the actor knows them.
 fn plays_handles(graph: &Graph) -> Vec<m2_plugins::Handle> {
-    graph.inspect(|a| a.open.as_ref().unwrap().plays.as_ref().unwrap().info.plugins.iter().map(|p| p.1).collect())
+    graph.inspect(|a| a.open.as_ref().unwrap().plays.as_ref().unwrap().info.plugins.iter().map(|p| p.handle).collect())
 }
 
 // HOST-5, RENDER-25, WRITE-22: an outside save that changes the song's structure keeps its plugin

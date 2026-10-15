@@ -488,7 +488,7 @@ fn prewarming_keeps_kernel_memory_flat() {
     let slots = lane_slots(&flat);
     let owner = m2_plugins::Owner::discard();
     let mut g = Builder { packages: &pk, data: &data, sample_rate: SR as f64, slots: &slots, caps: &[Caps::FLOOR], owner: &owner }
-        .graph(&flat.nodes, &flat.order, false, &|_| Some(0), &HashMap::new())
+        .graph(&flat.nodes, &flat.order, false, &|_| Make::New(0), &HashMap::new())
         .unwrap();
     let fresh = g.kernel_memory();
     g.prewarm().unwrap();
