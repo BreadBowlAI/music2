@@ -290,7 +290,14 @@ pub fn create_at(dir: &Path, from: &Path) -> Result<PathBuf> {
     let name = dir.file_name().and_then(|n| n.to_str()).ok_or_else(|| anyhow!("{} needs a folder name", dir.display()))?.to_string();
     let parent = dir.parent().filter(|p| !p.as_os_str().is_empty());
     if let Some(parent) = parent {
+        // The folders made for it, deepest first (`b/` then `a/` for `a/b/song`): each is synced
+        // in the one above, as the song's own folder is in `fill` (WRITE-1).
+        let made: Vec<&Path> = parent.ancestors().take_while(|f| !f.as_os_str().is_empty() && !f.exists()).collect();
         std::fs::create_dir_all(parent).with_context(|| format!("making {}", parent.display()))?;
+        for new in made {
+            let above = new.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+            m2_os::fs::sync_dir(above).with_context(|| format!("syncing {}", above.display()))?;
+        }
         if reserved(songs_dir().ok().as_deref(), parent, &name) {
             bail!("{} is where music2 puts exported audio: give the song another name", dir.display());
         }

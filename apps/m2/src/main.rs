@@ -478,17 +478,16 @@ fn run() -> Result<()> {
                 "packages": packages,
             });
             // Created only if it isn't there, as the asset is. An asset without its provenance
-            // isn't kept, so the name stays free for a retry. Its bytes are pushed, and its
-            // folder synced, with each folder made for it in the one above, before --place names
-            // the asset (WRITE-1).
+            // isn't kept, nor is a provenance this run made but couldn't finish, so the name
+            // stays free for a retry. Its bytes are pushed, and its folder synced, with each
+            // folder made for it in the one above, before --place names the asset (WRITE-1).
             let written = serde_json::to_string_pretty(&provenance).map_err(anyhow::Error::from).and_then(|text| {
                 let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&record)?;
-                std::io::Write::write_all(&mut f, (text + "\n").as_bytes())?;
-                m2_os::fs::push(&f)?;
-                m2_os::fs::sync_dir(folder)?;
-                for new in &made {
-                    m2_os::fs::sync_dir(new.parent().expect("inside the project"))?;
-                }
+                std::io::Write::write_all(&mut f, (text + "\n").as_bytes())
+                    .and_then(|()| m2_os::fs::push(&f))
+                    .and_then(|()| m2_os::fs::sync_dir(folder))
+                    .and_then(|()| made.iter().try_for_each(|new| m2_os::fs::sync_dir(new.parent().expect("inside the project"))))
+                    .inspect_err(|_| drop(std::fs::remove_file(&record)))?;
                 Ok(())
             });
             if let Err(e) = written {

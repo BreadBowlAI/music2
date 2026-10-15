@@ -184,13 +184,20 @@ fn killed_at_every_commit_step_the_project_recovers() {
 // WRITE-15, WRITE-16 (S7 of the platform step): the same on a disk that can't swap or rename
 // exclusively. A file it replaces is compared, then renamed over in one step, so at every kill
 // point each target holds its before or its after bytes, never neither, and recovery offers its
-// fixes: `music2.toml` included, without which the folder wouldn't open as a project.
+// fixes, which apply on that disk too: `music2.toml` included, without which the folder wouldn't
+// open as a project.
 #[test]
 fn killed_at_every_commit_step_without_a_swap_the_project_recovers() {
     recovers_wherever_killed(true);
 }
 
-/// Every case killed at every disk call, on a disk that swaps or (`plain`) on one that can't.
+/// The project at `d` opened again on the disk it was killed on, where Finish and Discard run.
+fn reopen(d: &Dir, plain: bool, what: &str) -> Session {
+    Session::opening(&d.0, std_packages(), Some("music2"), Box::new(disk(plain))).unwrap_or_else(|e| panic!("{what}: {e:?}"))
+}
+
+/// Every case killed at every disk call, on a disk that swaps or (`plain`) on one that can't, and
+/// recovered on the same disk.
 fn recovers_wherever_killed(plain: bool) {
     for case in ["several", "blob", "two", "code", "dataonly", "manifest"] {
         // `dataonly`'s song.ts doesn't compile before or after it.
@@ -204,7 +211,7 @@ fn recovers_wherever_killed(plain: bool) {
             let status = kill(&a, case, plain, k);
             assert_eq!(status.signal(), Some(libc::SIGABRT), "{name} {k}: the kill point fired ({status:?})");
             let b = copy(&a);
-            let mut s = Session::open(&a.0, std_packages()).unwrap_or_else(|e| panic!("{name} {k}: {e:?}"));
+            let mut s = reopen(&a, plain, &format!("{name} {k}"));
             let interrupted = s.problems().iter().find(|d| d.code == "tx.interrupted").cloned();
             let Some(problem) = interrupted else {
                 let tree = a.tree();
@@ -230,7 +237,7 @@ fn recovers_wherever_killed(plain: bool) {
                 drop(s);
             }
             // Discard through the session's fix, as the app's strip and `m2 fix` apply it.
-            let mut s = Session::open(&b.0, std_packages()).unwrap();
+            let mut s = reopen(&b, plain, &format!("{name} {k}"));
             let offered = s
                 .problems()
                 .iter()
