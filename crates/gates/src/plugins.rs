@@ -771,13 +771,17 @@ fn new_state(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome
     deck.run_secs(0.1)?;
     let after = deck.rig.plugins().expect("checked");
     let stats = deck.rig.arena().expect("checked").stats;
+    // The Surge that plays now, at the node the first played at: the same one, unless an engine
+    // with no arena made it anew.
+    let at = pre.nodes.iter().position(|n| n.handle == surge0).expect("found above");
+    let surge1 = after.nodes.get(at).map_or(surge0, |n| n.handle);
     same_instances(out, "changed state: the same Surge, Airwindows kept, none created", &Some(pre.clone()), &Some(after.clone()));
     out.check(
         "changed state: exactly one state load, into the kept Surge",
         stats.loads == 1 && stats.kept.plugins == 2 && stats.fresh.plugins == 0 && stats.unloaded.is_empty(),
         format!("{} loaded, {} kept, {} new, {} refused", stats.loads, stats.kept.plugins, stats.fresh.plugins, stats.unloaded.len()),
     );
-    let now = param(surge0, volume.id);
+    let now = param(surge1, volume.id);
     out.check(
         "changed state: Surge's volume reads the new patch's",
         now.is_some_and(|v| (v - want).abs() < 1e-4),
@@ -786,14 +790,20 @@ fn new_state(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome
     // HOME-4: the patch has the filter off; the code sets it ("LP 24 dB"), and wins. Surge applies a
     // loaded state at its next call, over the values that call brings: the call after sends them again.
     // A stepped parameter, it reads as Surge stores the code's 0.05: as it read before the load.
-    let ftype = param(surge0, FILTER_TYPE);
+    let ftype = param(surge1, FILTER_TYPE);
     out.check(
         "changed state (HOME-4): Surge's filter type, which the code sets, reads as before the load",
         ftype.is_some() && ftype == code_type,
         format!("{ftype:?}; {code_type:?} before, from the code's 0.05"),
     );
     // HOME-6: Surge's own state, committed as an autosave would: the instance holds it already.
-    let own = host.save_state(surge0).recv()?.map_err(|e| anyhow!("{e}"))?;
+    let own = match host.save_state(surge1).recv().map_err(|e| anyhow!("{e}")).and_then(|r| r.map_err(|e| anyhow!("{e}"))) {
+        Ok(b) => b,
+        Err(e) => {
+            out.check("changed state (HOME-6): its own saved state committed loads nothing", false, format!("Surge didn't save: {e:#}"));
+            return Ok(());
+        }
+    };
     std::fs::write(song.dir.join("data/lead/lead.state"), own.bytes)?;
     let autosaved = lab.compile(&song.dir)?;
     deck.change(&autosaved, Change::Structure)?;
