@@ -991,3 +991,74 @@ builds. Timings are for information only: the reference Mac judges them (PLAT-1)
   The remaining mispair belongs with the deferred row "better structural matching".
 - G7f's verdict is the mean of 5 pairs plus the Mac's recorded P1 cost. The p99 is printed, not judged.
 - `HANDOFF.md`'s check table still names only G11's gates; `ci/gates.txt` now names 6 runs.
+
+## The independent check of the fixes
+
+**In short:** every confirmed finding, K item and owner decision the fixers took on is fixed. Each fix was taken out
+in turn, and its test failed every time. The gates' negative controls fail as they must, but one: G7a's new step
+check (K10a) passed with every fade taken out. That is fixed, with three other things the fixes left: four commits,
+each with a test that fails without it. `ci/check.sh` passes at `8e1d84f`, every row, with no retry. Run on this
+server (scratch `HOME`, `M2_AUDIO=none`, the test plugins), with other agents' jobs beside it; Linux timings are for
+information only (PLAT-1). Nothing was pushed.
+
+### What was tried
+
+- **Each fix taken out**, in a scratch worktree, then its guard tests run (34 cuts, script `~/m2-runs/xc/mut/run.py`).
+  Every guard failed: rt-1, rt-2, rt-3, O4 (and `no_alloc`'s plugin step), K1 (all three parts; the stream one
+  hangs), K5 (in a release build), plug-1 (the flag not read, and never set), plug-2 (the runtime test; the server
+  test with both layers off), plug-3, K2 (told once; plain words), K3, K4, K6, K7, fit-1, fit-2 (said again; named by
+  node), fit-7 (bar number, loop flag, playing flag), id-1 (always to the inner call, added or taken out; no forced
+  hunk; no end of stretch), id-3, rg-1 (the mean always passing; drops "needed" on one pair), rg-2, and the footprint
+  test with `memory()` reading the wrong field. rt-4 and plug-5 have no test: read, `held` is now stored before the
+  stamps are released, which closes the window.
+- **id-1, fuzzed:** 30,000 random edits of nested calls of one callee (a wrap, a call put inside, an unwrap, an
+  argument changed, a new element), each also undone. In the 20,000 with each call on one line, no call took the
+  instance of a call with other arguments (at `d7475b1`, 4,363 did), and every undo gave back the same pairs. In the
+  10,000 with each call's arguments on lines of their own, 3,640 still did, the same as at `d7475b1`: the known limit
+  (the line diff pairs lines first; the deferred structural matching).
+- **O4, probed:** a stop, a seek, a seek into a held note, a panic while held, and an activation just after the resume.
+  No note starts again after a stop, a seek or a panic; otherwise each held note starts once, with its own id, and
+  nothing is doubled. The workspace allocation tests pass.
+- **O1:** the p16 render is the same file (`ebc87e0b…`) at `018c587`; the 8 renders match at `8e1d84f`.
+- **The gates** (release, at `84e4339` and `018c587`; logs in `~/m2-runs/xc/g7f/`):
+
+| Run | Result |
+|---|---|
+| G7f, judged here against records naming this machine, with P1's cost set to 0 | block +28 µs a block by the mean (bound 80), callback +118 µs (bound 320): pass |
+| The same with the Spectre guard on (negative control) | +128 µs (bound 80) and +473 µs (bound 320): both **fail**, as they must |
+| G7e, 5 runs | pass 5 of 5: steps 0.0040 to 0.0047 out, 0.0026 to 0.0027 in (bound about 0.052); the held chord -31.8 to -33.7 dBFS |
+| G7e with no fade out at the hold | **fails**: 0.5414 out |
+| G7e with no note-ons at the resume | **fails**: the chord at -105.6 dBFS |
+| G7a's twin (K10a) with the fade window taken out, as built | **passed**, with the same numbers as with fades (0.0276 and 0.2477): it couldn't fail. Fixed below. |
+
+### Found and fixed
+
+| Commit | What was wrong | What was done | Test that fails without it |
+|---|---|---|---|
+| `822940f` | O4: an export ends the held notes when it takes an instance offline, but only its render's first call marked the instance. One that failed before its first block (a file it can't write) left them silent until their next note-on. | `offline()` marks the instance after the call that ends its notes. | `a_note_held_across_an_export_that_fails_at_once_plays_again`: without it, 0 notes sound after the resume, not 2. |
+| `84e4339` | plug-2: a plugin that fails at every call was started again at every catch-up, for good. 20 catch-ups made 21 instances and 20 toasts: a toast and a new plugin every 300 ms. | It is started again once. If the new one fails within 10 s, it is left silent, and the user told once to open the song again. One that fails later is started again. | `a_plugin_that_keeps_failing_is_started_again_once` (the probe gains a state that fails every call). |
+| `018c587` | K10(a): the twin's step check measured the whole mix. On p50 its own steps are as large as a click. | It measures the edit's own sound: this run less the twin. | Passes at HEAD, 3 of 3 (0.0002 against 0.0015, 0.0005 against 0.0041). Fails with the fade window taken out (0.0022 against 0.0015). The README says it is no sharper: an edge's crossfade made a cut still passes (0.0011). |
+| `8e1d84f` | K1: a player let go stopped its stream within 50 ms, maybe before the unload's fade out played. Where the output moved and still sounds, that is a click. | The device's thread waits for a quiet callback (at most 500 ms), then 50 ms, then stops the stream. | `a_player_let_go_stops_its_stream_after_its_fade_out`: without it the stream is gone 150 ms after the drop, before any fade. |
+
+### The check
+
+`ci/check.sh` at `8e1d84f` (`~/m2-runs/check-s7-x`, 9 min): **PASS**, every row. 893 Rust tests passed, 0 failed
+(890 before, plus the 3 above). Clippy, std's kernels, std.wasm, the mac lint pass. Browser suites 29 of 29 (fx-fixes
+57 checks, live3b 60). Renders 8 of 8. The app connected for first-song and with-plugins. Nothing passed only on a
+retry. The gates row wasn't run (`--gates`); the gates above were run by hand.
+
+### Left, and why
+
+- **id-1's known limit** stays: a call of the same callee on lines of its own can still take the old instance. The
+  fuzz shows it at the same rate as before.
+- **rt-2's rest** stays (read, not run): an activation sent while held, then another structural message, then the
+  resume. The actor sends none while exporting.
+- **A panic while held** sends, at the resume, a choke and an Off for notes the export already ended. Harmless, and as
+  before O4.
+- **K10(a)'s check** is weak on p50 at 3:00, where t02's pluck is quiet; it catches a missing fade window only.
+- **The 10 s** after which a plugin that failed may be started again is this check's choice. The owner may pick
+  another.
+- **G7f judges the mean**, not the p99 O2 named (fixer D's choice, above). The judged path works: it fails with the
+  Spectre guard on.
+- **K4** (plugins in offline mode in `m2 render`) and G7f's costs need the Mac run.
+- The scratch worktree and its target are removed.
