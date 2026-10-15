@@ -186,6 +186,10 @@ impl State {
 
     /// Watch `dir` for watcher `id`: its descriptor, which a folder already watched keeps.
     fn add(&mut self, fd: RawFd, id: u64, dir: &Path) -> io::Result<i32> {
+        #[cfg(test)]
+        if tests::NO_WATCH_LEFT.lock().unwrap().contains(dir) {
+            return Err(io::Error::from_raw_os_error(libc::ENOSPC));
+        }
         let c = cpath(dir)?;
         // SAFETY: a NUL-terminated path that outlives the call.
         let wd = unsafe { libc::inotify_add_watch(fd, c.as_ptr(), MASK) };
@@ -212,9 +216,12 @@ impl State {
     }
 
     /// Watch every folder under `dir` (watched already) that `enter` allows, each before it is
-    /// listed. An error when a watch can't be made: watches or memory ran out.
+    /// listed. An error when a watch can't be made (watches or memory ran out): that folder is left
+    /// to the walks, and every other one is still watched, so a rebuild never lets go of a folder
+    /// it could watch.
     fn watch_under(&mut self, fd: RawFd, id: u64, dir: &Path, rel: &str) -> io::Result<()> {
         let Some(enter) = self.watchers.get(&id).map(|w| w.enter) else { return Ok(()) };
+        let mut failed = None;
         let mut stack = vec![(dir.to_path_buf(), rel.to_string())];
         while let Some((dir, rel)) = stack.pop() {
             let Ok(entries) = std::fs::read_dir(&dir) else { continue };
@@ -234,11 +241,11 @@ impl State {
                 match self.add(fd, id, &path) {
                     Ok(_) => stack.push((path, rel)),
                     Err(e) if skipped(&e) => {}
-                    Err(e) => return Err(e),
+                    Err(e) => failed = failed.or(Some(e)),
                 }
             }
         }
-        Ok(())
+        failed.map_or(Ok(()), Err)
     }
 
     /// Watch watcher `id`'s root and every folder under it again, let go of the descriptors that
@@ -371,6 +378,9 @@ mod tests {
 
     type Log = Arc<std::sync::Mutex<Vec<Option<PathBuf>>>>;
 
+    /// Folders whose watch fails as when the user's watches have run out (`ENOSPC`).
+    pub(super) static NO_WATCH_LEFT: std::sync::Mutex<BTreeSet<PathBuf>> = std::sync::Mutex::new(BTreeSet::new());
+
     fn start(root: &Path) -> (crate::watch::Events, Log) {
         let log: Log = Arc::default();
         let l = log.clone();
@@ -417,6 +427,8 @@ mod tests {
     #[test]
     fn a_file_written_while_open_is_named_at_each_write() {
         use std::io::Write;
+        // The overflow test's rescan would come between the halves.
+        let _shared = crate::watch::TESTS.read();
         let dir = Dir::new();
         let (events, log) = start(&dir.0);
         let p = dir.0.join("hits.json");
@@ -474,6 +486,37 @@ mod tests {
         std::fs::write(dir.0.join("lib/inner/x.ts"), "x").unwrap();
         events.flush();
         assert_eq!(heard(&log), vec![], "outside the project now");
+    }
+
+    // WRITE-19: a folder that can't be watched (the user's watches ran out) is left to the walks,
+    // and the watcher is told to walk. A rebuild that meets it again still watches every other
+    // folder: it never lets go of one it could watch.
+    #[test]
+    fn a_folder_that_cant_be_watched_leaves_the_others_watched() {
+        let _shared = crate::watch::TESTS.read();
+        let dir = Dir::new();
+        for n in ["a", "b", "c", "d"] {
+            std::fs::create_dir_all(dir.0.join(n).join("in")).unwrap();
+        }
+        let (events, log) = start(&dir.0);
+        let full = dir.0.join("full");
+        NO_WATCH_LEFT.lock().unwrap().insert(full.clone());
+        std::fs::create_dir_all(full.join("in")).unwrap();
+        events.flush();
+        assert!(heard(&log).contains(&None), "a rescan: {:?}", heard(&log));
+        // A folder moved within the project: the rebuild meets `full` again.
+        std::fs::rename(dir.0.join("d"), dir.0.join("e")).unwrap();
+        events.flush();
+        let watched: Vec<PathBuf> = watched_under(&dir.0).into_iter().map(|(p, _)| p).collect();
+        let mut all = vec![dir.0.clone()];
+        all.extend(["a", "a/in", "b", "b/in", "c", "c/in", "e", "e/in"].map(|r| dir.0.join(r)));
+        assert_eq!(watched, all, "all but `full`");
+        log.lock().unwrap().clear();
+        let p = dir.0.join("a/in/x.ts");
+        std::fs::write(&p, "x").unwrap();
+        events.flush();
+        assert!(heard(&log).contains(&Some(p)), "{:?}", heard(&log));
+        NO_WATCH_LEFT.lock().unwrap().remove(&full);
     }
 
     // WRITE-19: when the queue overflows, events are lost for every watcher, a new folder's among
