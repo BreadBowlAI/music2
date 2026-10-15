@@ -170,3 +170,10 @@ alone, and m2-runtime's whole test binary 10 of 10. No earlier log kept here sho
 | What | Why |
 |---|---|
 | `std/build.sh`'s `build()` turns a relative target folder into a full path before it runs cargo | cargo runs inside `std/kernels-src`, so it built into `std/kernels-src/<folder>` while `cp` read `<folder>` from where the script was run. `CARGO_TARGET_DIR=target std/build.sh` failed. Worse: when that folder already held an older `m2_std_kernels.wasm`, the script copied the old file over `std.wasm` and said nothing (shown in a scratch copy with a planted file). A relative `TMPDIR` made `--check` fail the same way. Now all of them build the committed bytes; `--check` still fails on a changed byte. |
+
+**The check again** at the fix (`bd608d7`, 14 min, logs in `~/m2-runs/check-check-S3-fix/`): the same rows. All 7 of
+§4.4's suites failed this time; `notes-proj` passed on its retry. Renders: the same 8 files. One new flake, not this
+slice's: `m2-plugins`' `tests::surge_plays_notes` failed once ("nothing before the note's sample offset") and passed
+on its retry. Its code is the same as at S1. Run alone it fails 6 times in 150, and the whole test binary 4 in 60:
+in those runs Surge XT's output starts a few samples early, at 1e-14 to 3e-8 (below −140 dB), where the test asks
+for exact zeros. Left for the lead (S5 changes the plugin host).
