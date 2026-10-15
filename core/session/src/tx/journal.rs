@@ -212,6 +212,9 @@ pub struct Scan {
     /// Completed journals tidied, and journals set aside (a writer's scan only).
     pub tidied: Vec<String>,
     pub aside: Vec<String>,
+    /// Completed journals whose tidy found the barrier failing: their folders are pushed, and they
+    /// go after the session's next barrier, as its own commits' do (its `pending`).
+    pub awaiting: Vec<String>,
     /// The before-images journals left alone still name: another machine's, which can still be
     /// discarded there, and those set aside, for whoever checks them by hand. The tidy of
     /// `blobs/` keeps them (6a.2 step 6: blobs no journal names).
@@ -356,7 +359,8 @@ pub fn scan(dir: &Path, host_id: &str, tidy: Option<&mut dyn Disk>, skip: &[Stri
 
 /// Remove the journals of `completed` commits once their renames are durable (WRITE-15): their
 /// folders pushed, as each commit's step 8 would have (it may have been killed before), then one
-/// barrier. A barrier that fails leaves them to the next lock.
+/// barrier. A barrier that fails leaves them `awaiting` the session's next barrier: left to the next
+/// lock alone, a later commit to the same file would leave it at neither of their hashes.
 fn tidy_completed(disk: &mut dyn Disk, dir: &Path, completed: &[&Journal], out: &mut Scan) {
     let Some(first) = completed.first() else { return };
     let paths = completed.iter().flat_map(|j| &j.targets).flat_map(|t| {
@@ -367,6 +371,7 @@ fn tidy_completed(disk: &mut dyn Disk, dir: &Path, completed: &[&Journal], out: 
     });
     stage::push_parents(disk, dir, paths);
     if disk.barrier(&tx_dir(dir).join(format!("{}.json", first.id))).is_err() {
+        out.awaiting.extend(completed.iter().map(|j| j.id.clone()));
         return;
     }
     for j in completed {

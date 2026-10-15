@@ -150,10 +150,7 @@ impl Disk for Real {
     fn clone_file(&mut self, from: &Path, to: &Path) -> io::Result<()> {
         match fs::clone_file(from, to) {
             // No clone here (another file system, or an OS without one): a copy.
-            Err(e) if e.kind() != ErrorKind::AlreadyExists => {
-                let bytes = std::fs::read(from)?;
-                self.create(to, &bytes)
-            }
+            Err(e) if e.kind() != ErrorKind::AlreadyExists => copy_after(e, from, to),
             done => done,
         }
     }
@@ -163,6 +160,14 @@ impl Disk for Real {
         names.sort();
         Ok(names)
     }
+}
+
+/// A copy of `from` at `to`, after its clone failed with `clone`. A copy refused because `to` is
+/// there finds a clone that was made but couldn't be pushed (macOS): the push's own error says what
+/// failed, not the copy's "File exists".
+pub(super) fn copy_after(clone: io::Error, from: &Path, to: &Path) -> io::Result<()> {
+    let bytes = std::fs::read(from)?;
+    Real.create(to, &bytes).map_err(|e| if e.kind() == ErrorKind::AlreadyExists { clone } else { e })
 }
 
 /// `.music2/tx/` of the project at `dir`.
@@ -769,11 +774,15 @@ fn rollback(disk: &mut dyn Disk, done: &mut Vec<Done>) -> Result<(), String> {
 
 /// The last barrier and tidy, at close: the journals awaiting their tidy go once their renames
 /// are durable, and with them the before-images only undo needed (`keep`: those interrupted
-/// journals still need).
+/// journals still need). A barrier that fails removes nothing: the next writer's lock tidies them
+/// after its own barrier, so a removal is never durable before the renames are (WRITE-15).
 pub fn close(disk: &mut dyn Disk, dir: &Path, previous: &mut Vec<String>, keep: &BTreeSet<Sha>) {
     let txd = tx_dir(dir);
-    if let Some(last) = previous.last() {
-        let _ = disk.barrier(&txd.join(format!("{last}.json")));
+    if let Some(last) = previous.last()
+        && disk.barrier(&txd.join(format!("{last}.json"))).is_err()
+    {
+        previous.clear();
+        return;
     }
     for p in previous.drain(..) {
         tidy(disk, &txd, &p);

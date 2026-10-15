@@ -516,6 +516,39 @@ fn a_completed_journal_goes_after_its_folders_are_pushed_and_a_barrier() {
     assert!(journals(&d).is_empty() && !dir.join(".music2/tx/100-1-0").exists());
 }
 
+// WRITE-15, WRITE-16: a completed journal whose tidy at the lock met a failing barrier awaits the
+// session's next barrier, as the session's own commits do. Left to the next open, a later commit
+// to the same file would leave that file at neither of its hashes, and the open would set the
+// journal aside as an interrupted commit to check by hand (review dur-1 of the platform step).
+#[test]
+fn a_completed_journal_whose_barrier_failed_goes_after_the_next() {
+    let setup = || {
+        let d = Dir::first_song();
+        d.write("data/kick/a.json", "B");
+        journal(&d, "100-1-0", vec![file("data/kick/a.json", "A", "B")]);
+        d
+    };
+    // Where the tidy's barrier is among the open's disk calls.
+    let probe = setup();
+    let r = Recorder::default();
+    drop(recorded(&probe, &r));
+    let barrier = r.calls.lock().unwrap().iter().position(|c| c.starts_with("barrier")).expect("the tidy's barrier");
+    let d = setup();
+    let r = Recorder::default();
+    r.act(barrier, Act::Fail);
+    let mut s = recorded(&d, &r);
+    assert!(s.problems().iter().all(|p| !p.code.starts_with("tx.")), "{:?}", s.problems());
+    assert_eq!(journals(&d).len(), 1, "kept: its barrier failed");
+    let ops = vec![Op::Write { file: p("data/kick/a.json"), bytes: Payload::Text("C".into()) }];
+    s.commit(based(&d, ops, Expect::Confined(Default::default()))).unwrap();
+    assert_eq!(journals(&d).len(), 1, "the commit's barrier covered it: only the commit's own awaits its tidy");
+    drop(s);
+    assert!(journals(&d).is_empty());
+    let s = d.open();
+    assert!(s.problems().iter().all(|p| !p.code.starts_with("tx.")), "{:?}", s.problems());
+    assert_eq!(d.read("data/kick/a.json"), "C");
+}
+
 // 6a.4, 6a.2 step 6: the before-images of journals left alone are kept by the tidy of `blobs/`,
 // through this machine's commits and its close: another machine's, so Discard is still offered
 // there, and one set aside.

@@ -1612,6 +1612,7 @@ impl Session {
         self.own.extend(scan.problems);
         self.interrupted = scan.interrupted;
         self.kept = scan.keep;
+        self.pending.extend(scan.awaiting);
         self.problems = self.gather_problems();
     }
 

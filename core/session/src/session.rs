@@ -241,6 +241,7 @@ impl Session {
         let mut own = vec![];
         let mut interrupted = vec![];
         let mut kept = vec![];
+        let mut pending = vec![];
         let access = match program {
             Some(program) => match crate::lock::acquire(&dir, program, crate::lock::RETRY) {
                 Ok(lock) => {
@@ -251,6 +252,7 @@ impl Session {
                     own.extend(scan.problems);
                     interrupted = scan.interrupted;
                     kept = scan.keep;
+                    pending = scan.awaiting;
                     Access::Writer(lock)
                 }
                 Err(why) => {
@@ -309,7 +311,7 @@ impl Session {
             kept,
             texts,
             disk,
-            pending: vec![],
+            pending,
             host,
             host_id,
             program: program.unwrap_or("m2").to_string(),
@@ -409,6 +411,7 @@ impl Session {
                 self.own = lock.notices.iter().cloned().chain(scan.problems).collect();
                 self.interrupted = scan.interrupted;
                 self.kept = scan.keep;
+                self.pending.extend(scan.awaiting);
                 self.access = Access::Writer(lock);
                 self.problems = self.gather_problems();
                 true

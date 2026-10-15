@@ -257,6 +257,28 @@ fn a_rollback_whose_barrier_fails_keeps_its_journal_until_the_next() {
     assert!(journals(&d).is_empty());
 }
 
+// WRITE-15: a close whose barrier fails removes no journal and no before-image: the renames they
+// cover may not be durable. The next writer's lock tidies them after its own barrier, saying
+// nothing (review dur-2 of the platform step).
+#[test]
+fn a_close_whose_barrier_fails_keeps_its_journal_until_the_next_lock() {
+    let d = project();
+    let r = Recorder::default();
+    let mut s = recorded(&d, &r);
+    s.commit(one(&d, "D1")).unwrap();
+    let close = r.count();
+    r.act(close, Act::Fail);
+    drop(s);
+    let calls = r.calls.lock().unwrap()[close..].to_vec();
+    assert!(calls[0].starts_with("barrier"), "the close's barrier: {calls:#?}");
+    assert_eq!(calls.len(), 1, "nothing after it: {calls:#?}");
+    assert_eq!(journals(&d).len(), 1, "the journal stays");
+    let s = d.open();
+    assert!(s.problems().iter().all(|p| !p.code.starts_with("tx.")), "{:?}", s.problems());
+    assert!(journals(&d).is_empty(), "tidied at the lock");
+    assert!(d.read("data/kick/hits.json").contains("D1"));
+}
+
 // PLANE-5: the host is never told of a Tx that is refused (bases that don't apply, a broken
 // expectation, a planner's assertion, a target changed between the read and the pre-check, a
 // read-only session), of one that writes nothing, of a save, or of the undo of a save, which is

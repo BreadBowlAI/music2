@@ -341,6 +341,22 @@ fn before_images_share_no_inode() {
     assert_eq!(std::fs::read(d.0.join("data/lead/lead.state")).unwrap(), old);
 }
 
+// R10, WRITE-15: a clone that was made but whose push failed (macOS) is reported by the push's own
+// error. The copy that follows finds the clone there, and its "File exists" would hide why
+// (decision D6 of the platform review). A copy that fails for itself says so.
+#[test]
+fn a_clone_whose_push_failed_says_why() {
+    let d = project();
+    let (from, to) = (d.0.join("data/kick/hits.json"), d.0.join("clone"));
+    std::fs::write(&to, "a clone, not pushed").unwrap();
+    let e = super::stage::copy_after(io::Error::other("the push failed"), &from, &to).unwrap_err();
+    assert_eq!(e.to_string(), "the push failed");
+    let e = super::stage::copy_after(io::Error::other("no clone here"), &d.0.join("none"), &d.0.join("other")).unwrap_err();
+    assert_eq!(e.kind(), io::ErrorKind::NotFound, "{e}");
+    super::stage::copy_after(io::Error::other("no clone here"), &from, &d.0.join("copy")).unwrap();
+    assert_eq!(std::fs::read(d.0.join("copy")).unwrap(), std::fs::read(&from).unwrap());
+}
+
 // 6a.6, WRITE-15: a rollback pushes every folder it renamed into or out of (a removed file put
 // back, a created one unlinked, the folders above them) before its barrier, and the journal goes
 // only after that barrier: never durably before the rollback is.
