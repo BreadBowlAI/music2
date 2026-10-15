@@ -68,18 +68,24 @@ pub fn load_wav(path: &Path) -> Result<Asset> {
 /// Write planar audio as a 32-bit float WAV (lossless for anything the engine makes).
 pub fn write_wav(path: &Path, channels: &[Vec<f32>], sample_rate: u32) -> Result<()> {
     let file = std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
-    wav_to(file, channels, sample_rate)
+    wav_to(&file, channels, sample_rate)
 }
 
 /// [`write_wav`] to a file that must not exist yet: assets are never overwritten, so a new one
-/// is created with create-only semantics (FMT-14). A failed write leaves nothing behind.
+/// is created with create-only semantics (FMT-14). A failed write leaves nothing behind. Its
+/// bytes are pushed and its folder synced before it returns, so a Tx that names it makes them
+/// durable by its barrier at the latest (WRITE-1).
 pub fn write_new_wav(path: &Path, channels: &[Vec<f32>], sample_rate: u32) -> Result<()> {
     let file =
         std::fs::OpenOptions::new().write(true).create_new(true).open(path).with_context(|| format!("creating {}", path.display()))?;
-    wav_to(file, channels, sample_rate).inspect_err(|_| drop(std::fs::remove_file(path)))
+    let folder = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    wav_to(&file, channels, sample_rate)
+        .and_then(|()| m2_os::fs::push(&file).with_context(|| format!("writing {}", path.display())))
+        .and_then(|()| m2_os::fs::sync_dir(folder).with_context(|| format!("syncing {}", folder.display())))
+        .inspect_err(|_| drop(std::fs::remove_file(path)))
 }
 
-fn wav_to(file: std::fs::File, channels: &[Vec<f32>], sample_rate: u32) -> Result<()> {
+fn wav_to(file: &std::fs::File, channels: &[Vec<f32>], sample_rate: u32) -> Result<()> {
     let spec =
         hound::WavSpec { channels: channels.len() as u16, sample_rate, bits_per_sample: 32, sample_format: hound::SampleFormat::Float };
     let mut w = hound::WavWriter::new(std::io::BufWriter::new(file), spec)?;

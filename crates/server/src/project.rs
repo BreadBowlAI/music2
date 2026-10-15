@@ -308,13 +308,37 @@ pub fn create_at(dir: &Path, from: &Path) -> Result<PathBuf> {
 }
 
 /// Copy `from` into the new, empty `dir` and name the song. On failure `dir` is removed
-/// again: it only holds what was copied.
+/// again: it only holds what was copied. Every file is pushed and every folder synced, `dir`'s
+/// own entry last, so the song's first Tx makes them durable by its barrier at the latest
+/// (WRITE-1).
 fn fill(dir: &Path, name: &str, from: &Path) -> Result<()> {
-    let result = copy_tree(from, dir, true).and_then(|()| set_name(dir, name)).and_then(|()| ignore_local(dir));
+    let result = copy_tree(from, dir, true)
+        .and_then(|()| set_name(dir, name))
+        .and_then(|()| ignore_local(dir))
+        .and_then(|()| push_tree(dir))
+        .and_then(|()| {
+            let parent = dir.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+            m2_os::fs::sync_dir(parent).with_context(|| format!("syncing {}", parent.display()))
+        });
     if result.is_err() {
         let _ = std::fs::remove_dir_all(dir);
     }
     result.with_context(|| format!("making {}", dir.display()))
+}
+
+/// Push every file under `dir`, then sync each folder, so each of their names and bytes reaches
+/// the disk.
+fn push_tree(dir: &Path) -> Result<()> {
+    for e in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+        let e = e?;
+        if e.file_type()?.is_dir() {
+            push_tree(&e.path())?;
+        } else {
+            let file = std::fs::File::open(e.path()).with_context(|| format!("reading {}", e.path().display()))?;
+            m2_os::fs::push(&file).with_context(|| format!("writing {}", e.path().display()))?;
+        }
+    }
+    m2_os::fs::sync_dir(dir).with_context(|| format!("syncing {}", dir.display()))
 }
 
 /// Copy a song folder's files: not hidden ones (`.DS_Store`), links, or at the top the

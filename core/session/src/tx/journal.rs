@@ -23,7 +23,7 @@ use m2_song::tx::{Base, Expect, Op, Payload, Tx, TxPath, valid_journal};
 use m2_song::{Diagnostic, Fix, Sha, Stored};
 use serde_json::{Value, json};
 
-use super::stage::{Before, tx_dir};
+use super::stage::{self, Before, Disk, tx_dir};
 
 /// A commit as its journal records it.
 #[derive(Clone, Debug, PartialEq)]
@@ -241,20 +241,20 @@ fn journals(dir: &Path) -> Vec<(String, Result<Journal, String>)> {
 }
 
 /// Read every journal of the project at `dir` (6a.4), as `host_id` (this machine). A writer
-/// (`tidy`) removes completed ones and sets aside the ones it can't fix, and sweeps what a crash
-/// left half made (temporary files, a staging folder whose journal went); a reader changes
-/// nothing and only reports. `skip` names journals of the scanning session's own completed
-/// commits, which await its next barrier.
-pub fn scan(dir: &Path, host_id: &str, tidy: bool, skip: &[String]) -> Scan {
+/// (`tidy`, through its disk) removes completed ones and sets aside the ones it can't fix, and
+/// sweeps what a crash left half made (temporary files, a staging folder whose journal went); a
+/// reader changes nothing and only reports. `skip` names journals of the scanning session's own
+/// completed commits, which await its next barrier.
+pub fn scan(dir: &Path, host_id: &str, tidy: Option<&mut dyn Disk>, skip: &[String]) -> Scan {
     let mut out = Scan::default();
     let all: Vec<(String, Result<Journal, String>)> = journals(dir).into_iter().filter(|(id, _)| !skip.contains(id)).collect();
-    let mut barrier_done = false;
+    let mut completed: Vec<&Journal> = vec![];
     for (n, (id, parsed)) in all.iter().enumerate() {
         let src = format!(".music2/tx/{id}.json");
         let j = match parsed {
             Ok(j) => j,
             Err(why) => {
-                if tidy {
+                if tidy.is_some() {
                     set_aside(dir, id);
                     out.aside.push(id.clone());
                 }
@@ -289,17 +289,7 @@ pub fn scan(dir: &Path, host_id: &str, tidy: bool, skip: &[String]) -> Scan {
         let newer: Vec<&Journal> = all[n + 1..].iter().filter_map(|(_, j)| j.as_ref().ok()).collect();
         let states = states(dir, j, &newer);
         if states.iter().all(|s| *s == At::After) {
-            if tidy {
-                if !barrier_done {
-                    // The completed commit's renames are made durable before its journal goes.
-                    let _ = super::stage::Disk::barrier(&mut super::stage::Real, &tx_dir(dir).join(format!("{id}.json")));
-                    barrier_done = true;
-                }
-                // Its staging first: a journal never outlives its staging unseen (6a.3).
-                let _ = std::fs::remove_dir_all(tx_dir(dir).join(id));
-                let _ = std::fs::remove_file(tx_dir(dir).join(format!("{id}.json")));
-                out.tidied.push(id.clone());
-            }
+            completed.push(j);
             continue;
         }
         let what = if j.label.1.is_empty() { j.tx.clone() } else { format!("{} → {}", j.label.0, j.label.1) };
@@ -307,7 +297,7 @@ pub fn scan(dir: &Path, host_id: &str, tidy: bool, skip: &[String]) -> Scan {
             let changed: Vec<&str> =
                 j.targets.iter().zip(&states).filter(|(_, s)| **s == At::Neither).flat_map(|(t, _)| target_paths(t)).collect();
             out.keep.extend(j.blobs());
-            if tidy {
+            if tidy.is_some() {
                 set_aside(dir, id);
                 out.aside.push(id.clone());
             }
@@ -319,7 +309,7 @@ pub fn scan(dir: &Path, host_id: &str, tidy: bool, skip: &[String]) -> Scan {
                          {} by hand{}",
                         changed.join(", "),
                         if changed.len() == 1 { "it" } else { "them" },
-                        if tidy { "; the journal is in .music2/tx/aside/" } else { "" }
+                        if tidy.is_some() { "; the journal is in .music2/tx/aside/" } else { "" }
                     ),
                 )
                 .file(&src),
@@ -357,10 +347,33 @@ pub fn scan(dir: &Path, host_id: &str, tidy: bool, skip: &[String]) -> Scan {
             }
         }
     }
-    if tidy {
+    if let Some(disk) = tidy {
+        tidy_completed(disk, dir, &completed, &mut out);
         sweep(dir);
     }
     out
+}
+
+/// Remove the journals of `completed` commits once their renames are durable (WRITE-15): their
+/// folders pushed, as each commit's step 8 would have (it may have been killed before), then one
+/// barrier. A barrier that fails leaves them to the next lock.
+fn tidy_completed(disk: &mut dyn Disk, dir: &Path, completed: &[&Journal], out: &mut Scan) {
+    let Some(first) = completed.first() else { return };
+    let paths = completed.iter().flat_map(|j| &j.targets).flat_map(|t| {
+        // A file written over is renamed in its folder alone; any other target makes, removes or
+        // moves a name, maybe with folders above it.
+        let deep = !matches!(t, JTarget::File { before: Some(_), after: Some(_), .. });
+        target_paths(t).into_iter().map(move |p| (p, deep))
+    });
+    stage::push_parents(disk, dir, paths);
+    if disk.barrier(&tx_dir(dir).join(format!("{}.json", first.id))).is_err() {
+        return;
+    }
+    for j in completed {
+        // Its staging first: a journal never outlives its staging unseen (6a.3).
+        stage::tidy(disk, &tx_dir(dir), &j.id);
+        out.tidied.push(j.id.clone());
+    }
 }
 
 /// Remove what a commit killed half way left that no journal accounts for (6a.3): a journal's

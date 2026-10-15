@@ -1606,7 +1606,8 @@ impl Session {
     pub(crate) fn rescan(&mut self) {
         self.scans += 1;
         // This session's own completed commits await its next barrier, not a scan's tidy.
-        let scan = journal::scan(&self.dir, &self.host_id, self.access.writer(), &self.pending);
+        let disk: Option<&mut dyn stage::Disk> = if self.access.writer() { Some(&mut *self.disk) } else { None };
+        let scan = journal::scan(&self.dir, &self.host_id, disk, &self.pending);
         self.own.retain(|d| !d.code.starts_with("tx."));
         self.own.extend(scan.problems);
         self.interrupted = scan.interrupted;

@@ -190,37 +190,45 @@ fn the_order_of_a_commit() {
 
 // 6a.6: a failure at any disk call before the first rename leaves the project and `.music2/tx/`
 // as they were; one after it rolls the commit back; either way the result is an error, never a
-// half commit.
+// half commit. On a disk that can't swap too (S7 of the platform step), where the rollback
+// renames the before bytes over a replaced file: `song.ts` is never renamed away or removed, so
+// it is never missing.
 #[test]
 fn a_failure_at_any_call_changes_nothing() {
-    let probe = project();
-    let r = Recorder::default();
-    let mut s = recorded(&probe, &r);
-    let start = r.count();
-    s.commit(several(&probe)).unwrap();
-    let n = r.count() - start;
-    drop(s);
-    for k in 0..n {
-        let d = project();
-        let before = d.tree();
-        let r = Recorder::default();
-        let mut s = recorded(&d, &r);
-        r.act(r.count() + k, Act::Fail);
-        let result = s.commit(several(&d));
-        let calls = r.calls.lock().unwrap().clone();
-        match result {
-            // A failure in the tidy of nothing or the folder syncs after the renames doesn't
-            // undo a commit that landed.
-            Ok(_) => {
-                let failed = &calls[start + k];
-                let best_effort = ["sync_dir", "remove", "list", "kind"].iter().any(|x| failed.starts_with(x));
-                assert!(best_effort, "call {k} ({failed}) failed, yet it committed");
+    for plain in [false, true] {
+        let probe = project();
+        let r = Recorder { plain, ..Recorder::default() };
+        let mut s = recorded(&probe, &r);
+        let start = r.count();
+        s.commit(several(&probe)).unwrap();
+        let n = r.count() - start;
+        drop(s);
+        for k in 0..n {
+            let d = project();
+            let before = d.tree();
+            let r = Recorder { plain, ..Recorder::default() };
+            let mut s = recorded(&d, &r);
+            r.act(r.count() + k, Act::Fail);
+            let result = s.commit(several(&d));
+            let calls = r.calls.lock().unwrap().clone();
+            match result {
+                // A failure in the tidy of nothing or the folder syncs after the renames doesn't
+                // undo a commit that landed.
+                Ok(_) => {
+                    let failed = &calls[start + k];
+                    let best_effort = ["sync_dir", "remove", "list", "kind"].iter().any(|x| failed.starts_with(x));
+                    assert!(best_effort, "{plain}: call {k} ({failed}) failed, yet it committed");
+                }
+                Err(_) => {
+                    let failed = calls.get(start + k).map_or("", String::as_str);
+                    assert_eq!(d.tree(), before, "{plain}: call {k} ({failed}): the project is as it was");
+                    assert!(journals(&d).is_empty(), "{plain}: call {k}: no journal is left");
+                    assert_eq!(s.accepted().number, 1);
+                }
             }
-            Err(_) => {
-                assert_eq!(d.tree(), before, "call {k} ({}): the project is as it was", calls.get(k).map_or("", String::as_str));
-                assert!(journals(&d).is_empty(), "call {k}: no journal is left");
-                assert_eq!(s.accepted().number, 1);
-            }
+            let song = d.0.canonicalize().unwrap().join("song.ts");
+            let away = [format!("rename {} ", song.display()), format!("remove_file {}", song.display())];
+            assert!(!calls.iter().any(|c| away.iter().any(|a| c.starts_with(a.as_str()))), "{plain}: call {k}: {calls:#?}");
         }
     }
 }

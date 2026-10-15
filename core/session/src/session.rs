@@ -162,7 +162,7 @@ pub struct Session {
     pub(crate) kept: Vec<Sha>,
     /// Recent texts by hash: where a Tx's base text is found (WRITE-12).
     pub(crate) texts: Texts,
-    /// Every disk call a commit makes.
+    /// Every disk call a commit makes, and a writer's tidy of completed journals.
     pub(crate) disk: Box<dyn Disk>,
     /// Journals of commits whose renames await the next barrier, then their tidy.
     pub(crate) pending: Vec<String>,
@@ -226,7 +226,7 @@ impl Session {
         dir: &Path,
         packages: PackageSet,
         program: Option<&str>,
-        disk: Box<dyn Disk>,
+        mut disk: Box<dyn Disk>,
     ) -> Result<Session, Vec<Diagnostic>> {
         let mut packages = packages;
         let snapshot = Snapshot::read(dir).map_err(unreadable)?;
@@ -247,7 +247,7 @@ impl Session {
                     own.extend(lock.notices.iter().cloned());
                     // Journals are read once the lock is ours: completed ones tidied, the rest
                     // reported with their fixes (WRITE-16, 6a.4).
-                    let scan = crate::tx::journal::scan(&dir, &host_id, true, &[]);
+                    let scan = crate::tx::journal::scan(&dir, &host_id, Some(&mut *disk), &[]);
                     own.extend(scan.problems);
                     interrupted = scan.interrupted;
                     kept = scan.keep;
@@ -405,7 +405,7 @@ impl Session {
         }
         match crate::lock::acquire(&self.dir, &self.program, std::time::Duration::ZERO) {
             Ok(lock) => {
-                let scan = crate::tx::journal::scan(&self.dir, &self.host_id, true, &[]);
+                let scan = crate::tx::journal::scan(&self.dir, &self.host_id, Some(&mut *self.disk), &[]);
                 self.own = lock.notices.iter().cloned().chain(scan.problems).collect();
                 self.interrupted = scan.interrupted;
                 self.kept = scan.keep;
@@ -588,7 +588,7 @@ impl Session {
 pub fn journal_problems(dir: &Path) -> Vec<m2_song::Diagnostic> {
     let Ok(dir) = dir.canonicalize() else { return vec![] };
     match crate::lock::probe(&dir) {
-        Some(_held) => crate::tx::journal::scan(&dir, &crate::lock::host_id(), false, &[]).problems,
+        Some(_held) => crate::tx::journal::scan(&dir, &crate::lock::host_id(), None, &[]).problems,
         None => vec![],
     }
 }

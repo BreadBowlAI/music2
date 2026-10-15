@@ -9,6 +9,7 @@ license.workspace = true
 m2-ir.workspace = true
 m2-song.workspace = true
 m2-plugins.workspace = true
+m2-os.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 toml.workspace = true

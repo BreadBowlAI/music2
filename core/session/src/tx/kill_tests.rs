@@ -34,8 +34,16 @@ fn start(case: &str) -> Dir {
 
 /// What the case commits. `code` changes two code files whose halves don't compile alone (an
 /// export renamed, and the import of it), so a kill between its renames reopens with code that
-/// doesn't compile; `dataonly` is `several` without its code edit.
+/// doesn't compile; `dataonly` is `several` without its code edit; `manifest` changes
+/// `music2.toml`, without which the folder isn't a project, and `song.ts`.
 fn tx(case: &str, d: &Dir) -> m2_song::Tx {
+    // Committed on the delta its check shows (WRITE-11).
+    let seen = |ops: Vec<Op>| {
+        let mut t = based(d, ops, Expect::Seen(Sha::of(b"")));
+        let mut r = Session::open_read_only(&d.0, std_packages()).unwrap();
+        t.expect = Expect::Seen(r.check(&t).unwrap().hash);
+        t
+    };
     match case {
         "blob" => {
             let ops = vec![Op::Write { file: p("data/lead/lead.state"), bytes: Payload::Bytes(blob(2).into()) }];
@@ -43,15 +51,17 @@ fn tx(case: &str, d: &Dir) -> m2_song::Tx {
         }
         "code" => {
             let (hats, song) = (d.read("tracks/hats.ts"), d.read("song.ts"));
-            let ops = vec![
+            seen(vec![
                 replace("tracks/hats.ts", &hats, "export", "export default track(", "export const hatsTrack = track(").0,
                 replace("song.ts", &song, "import hats", "import hats from", "import { hatsTrack as hats } from").0,
-            ];
-            // Committed on the delta its check shows (WRITE-11).
-            let mut t = based(d, ops, Expect::Seen(Sha::of(b"")));
-            let mut r = Session::open_read_only(&d.0, std_packages()).unwrap();
-            t.expect = Expect::Seen(r.check(&t).unwrap().hash);
-            t
+            ])
+        }
+        "manifest" => {
+            let (manifest, song) = (d.read("music2.toml"), d.read("song.ts"));
+            seen(vec![
+                replace("music2.toml", &manifest, "name = ", "first-song", "second-song").0,
+                replace("song.ts", &song, "pan: ", "0.3", "0.45").0,
+            ])
         }
         "dataonly" => {
             let ops = vec![
@@ -80,8 +90,15 @@ fn prelude(case: &str, d: &Dir, s: &mut Session) {
     }
 }
 
+/// The disk a case runs on: one that swaps, or with `plain` one that can't swap or rename
+/// exclusively (exFAT, SMB, NFS; NTFS always).
+fn disk(plain: bool) -> Recorder {
+    Recorder { plain, ..Recorder::default() }
+}
+
 /// The child's part: in the project `M2_TX_KILL_DIR`, commit case `M2_TX_KILL_CASE` after its
-/// prelude, aborting at its `M2_TX_KILL_AT`-th disk call.
+/// prelude, aborting at its `M2_TX_KILL_AT`-th disk call, on a disk that can't swap when
+/// `M2_TX_KILL_PLAIN` is set.
 #[test]
 fn child() {
     let (Ok(dir), Ok(at), Ok(case)) = (std::env::var("M2_TX_KILL_DIR"), std::env::var("M2_TX_KILL_AT"), std::env::var("M2_TX_KILL_CASE"))
@@ -90,7 +107,7 @@ fn child() {
     };
     no_core_dump();
     let d = Dir(PathBuf::from(dir));
-    let r = Recorder::default();
+    let r = disk(std::env::var_os("M2_TX_KILL_PLAIN").is_some());
     let mut s = recorded(&d, &r);
     prelude(&case, &d, &mut s);
     let t = tx(&case, &d);
@@ -110,15 +127,17 @@ pub(super) fn no_core_dump() {
 }
 
 /// Run the child on `d`, killed at call `at`.
-fn kill(d: &Dir, case: &str, at: usize) -> std::process::ExitStatus {
-    Command::new(std::env::current_exe().unwrap())
+fn kill(d: &Dir, case: &str, plain: bool, at: usize) -> std::process::ExitStatus {
+    let mut child = Command::new(std::env::current_exe().unwrap());
+    child
         .args(["--exact", "tx::kill_tests::child", "--nocapture", "--test-threads", "1"])
         .env("M2_TX_KILL_DIR", &d.0)
         .env("M2_TX_KILL_CASE", case)
-        .env("M2_TX_KILL_AT", at.to_string())
-        .output()
-        .unwrap()
-        .status
+        .env("M2_TX_KILL_AT", at.to_string());
+    if plain {
+        child.env("M2_TX_KILL_PLAIN", "1");
+    }
+    child.output().unwrap().status
 }
 
 /// A copy of the whole folder `from`, `.music2/` included.
@@ -139,9 +158,9 @@ fn copy(from: &Dir) -> Dir {
 type Tree = std::collections::BTreeMap<String, Vec<u8>>;
 
 /// The tree before the killed commit, after it completes, and how many disk calls it makes.
-fn ends(case: &str) -> (Tree, Tree, usize) {
+fn ends(case: &str, plain: bool) -> (Tree, Tree, usize) {
     let d = start(case);
-    let r = Recorder::default();
+    let r = disk(plain);
     let mut s = recorded(&d, &r);
     prelude(case, &d, &mut s);
     let before = d.tree();
@@ -159,37 +178,53 @@ fn ends(case: &str) -> (Tree, Tree, usize) {
 // was saved broken; recovery puts back recorded bytes whatever they compile to (P3).
 #[test]
 fn killed_at_every_commit_step_the_project_recovers() {
-    for case in ["several", "blob", "two", "code", "dataonly"] {
+    recovers_wherever_killed(false);
+}
+
+// WRITE-15, WRITE-16 (S7 of the platform step): the same on a disk that can't swap or rename
+// exclusively. A file it replaces is compared, then renamed over in one step, so at every kill
+// point each target holds its before or its after bytes, never neither, and recovery offers its
+// fixes: `music2.toml` included, without which the folder wouldn't open as a project.
+#[test]
+fn killed_at_every_commit_step_without_a_swap_the_project_recovers() {
+    recovers_wherever_killed(true);
+}
+
+/// Every case killed at every disk call, on a disk that swaps or (`plain`) on one that can't.
+fn recovers_wherever_killed(plain: bool) {
+    for case in ["several", "blob", "two", "code", "dataonly", "manifest"] {
         // `dataonly`'s song.ts doesn't compile before or after it.
         let compiles = case != "dataonly";
-        let (before, after, n) = ends(case);
+        let (before, after, n) = ends(case, plain);
         let (mut offered, mut silent, mut finished) = (0, 0, 0);
+        // Named in every message with the disk it ran on.
+        let name = if plain { format!("{case} (no swap)") } else { case.to_string() };
         for k in 0..n {
             let a = start(case);
-            let status = kill(&a, case, k);
-            assert_eq!(status.signal(), Some(libc::SIGABRT), "{case} {k}: the kill point fired ({status:?})");
+            let status = kill(&a, case, plain, k);
+            assert_eq!(status.signal(), Some(libc::SIGABRT), "{name} {k}: the kill point fired ({status:?})");
             let b = copy(&a);
-            let mut s = Session::open(&a.0, std_packages()).unwrap_or_else(|e| panic!("{case} {k}: {e:?}"));
+            let mut s = Session::open(&a.0, std_packages()).unwrap_or_else(|e| panic!("{name} {k}: {e:?}"));
             let interrupted = s.problems().iter().find(|d| d.code == "tx.interrupted").cloned();
             let Some(problem) = interrupted else {
                 let tree = a.tree();
-                assert!(tree == before || tree == after, "{case} {k}: reopened with no diagnostic, half changed");
+                assert!(tree == before || tree == after, "{name} {k}: reopened with no diagnostic, half changed");
                 silent += usize::from(tree == after);
                 drop(s);
-                assert!(journals(&a).is_empty(), "{case} {k}: a completed journal is tidied");
+                assert!(journals(&a).is_empty(), "{name} {k}: a completed journal is tidied");
                 continue;
             };
             offered += 1;
             assert!(problem.message.contains("interrupted"), "{}", problem.message);
             let fix = |code: &str| problem.fixes.iter().find(|f| f.code == code).map(|f| f.tx.clone());
-            let discard = fix("discard-tx").unwrap_or_else(|| panic!("{case} {k}: Discard is always offered: {problem:?}"));
+            let discard = fix("discard-tx").unwrap_or_else(|| panic!("{name} {k}: Discard is always offered: {problem:?}"));
             if let Some(finish) = fix("finish-tx") {
-                s.commit(finish).unwrap_or_else(|e| panic!("{case} {k}: finish: {e}"));
-                assert_eq!(a.tree(), after, "{case} {k}: Finish holds every target's after bytes");
+                s.commit(finish).unwrap_or_else(|e| panic!("{name} {k}: finish: {e}"));
+                assert_eq!(a.tree(), after, "{name} {k}: Finish holds every target's after bytes");
                 assert!(s.problems().iter().all(|d| d.code != "tx.interrupted"));
                 drop(s);
-                assert!(journals(&a).is_empty(), "{case} {k}: no journal is left");
-                assert_eq!(Session::open(&a.0, std_packages()).unwrap().accepted().has_code(), compiles, "{case} {k}");
+                assert!(journals(&a).is_empty(), "{name} {k}: no journal is left");
+                assert_eq!(Session::open(&a.0, std_packages()).unwrap().accepted().has_code(), compiles, "{name} {k}");
                 finished += 1;
             } else {
                 drop(s);
@@ -208,13 +243,13 @@ fn killed_at_every_commit_step_the_project_recovers() {
                 .clone();
             assert_eq!(offered.tx, discard);
             // Applying a fix is committing its Tx (DIAG-1).
-            s.commit(offered.tx).unwrap_or_else(|e| panic!("{case} {k}: discard: {e}"));
-            assert_eq!(b.tree(), before, "{case} {k}: Discard holds every target's before bytes");
+            s.commit(offered.tx).unwrap_or_else(|e| panic!("{name} {k}: discard: {e}"));
+            assert_eq!(b.tree(), before, "{name} {k}: Discard holds every target's before bytes");
             drop(s);
-            assert!(journals(&b).is_empty(), "{case} {k}: no journal is left");
-            assert_eq!(Session::open(&b.0, std_packages()).unwrap().accepted().has_code(), compiles, "{case} {k}");
+            assert!(journals(&b).is_empty(), "{name} {k}: no journal is left");
+            assert_eq!(Session::open(&b.0, std_packages()).unwrap().accepted().has_code(), compiles, "{name} {k}");
         }
-        assert!(offered > 0 && silent > 0 && finished > 0, "{case}: {offered} offered, {silent} silent, {finished} finished of {n}");
+        assert!(offered > 0 && silent > 0 && finished > 0, "{name}: {offered} offered, {silent} silent, {finished} finished of {n}");
     }
 }
 
@@ -428,6 +463,50 @@ fn leftovers_of_a_killed_commit_are_swept() {
     drop(d.open());
     assert!(left.iter().all(|f| !d.0.join(f).exists()), "swept");
     assert!(d.0.join(".music2/tx/aside/100-1-2.json").exists() && d.0.join(".music2/tx/100-1-2/0").exists());
+}
+
+// WRITE-15 (S7 of the platform step): a completed journal found when the lock is taken goes only
+// after its commit's folders are pushed, as its step 8 does (a kill may have come before it), and
+// a barrier: a file written over by its folder, one made or removed by every folder up to the
+// project. Then its staging, then the journal.
+#[test]
+fn a_completed_journal_goes_after_its_folders_are_pushed_and_a_barrier() {
+    let d = Dir::first_song();
+    d.write("data/kick/a.json", "B");
+    d.write("data/pad/hits.json", "N");
+    d.write(".music2/tx/100-1-0/1", "N");
+    let made = JTarget::File {
+        path: "data/pad/hits.json".into(),
+        before: None,
+        after: Some(Sha::of(b"N")),
+        text: None,
+        blob: false,
+        staged: Some(1),
+    };
+    let gone = JTarget::File {
+        path: "data/hats/gone.json".into(),
+        before: Some(Sha::of(b"G")),
+        after: None,
+        text: Some("G".into()),
+        blob: false,
+        staged: None,
+    };
+    journal(&d, "100-1-0", vec![file("data/kick/a.json", "A", "B"), made, gone]);
+    let r = Recorder::default();
+    let s = recorded(&d, &r);
+    assert!(s.problems().iter().all(|p| !p.code.starts_with("tx.")), "{:?}", s.problems());
+    let calls = r.calls.lock().unwrap().clone();
+    let dir = d.0.canonicalize().unwrap();
+    let at = |c: String| calls.iter().position(|x| *x == c).unwrap_or_else(|| panic!("no {c}: {calls:#?}"));
+    let barrier = at(format!("barrier {}", dir.join(".music2/tx/100-1-0.json").display()));
+    for f in ["data/kick", "data/pad", "data/hats", "data", ""] {
+        let sync = format!("sync_dir {}", dir.join(f).display());
+        assert!(at(sync.trim_end_matches('/').to_string()) < barrier, "{f} pushed before the barrier: {calls:#?}");
+    }
+    let staging = at(format!("remove_tree {}", dir.join(".music2/tx/100-1-0").display()));
+    let journal = at(format!("remove_file {}", dir.join(".music2/tx/100-1-0.json").display()));
+    assert!(barrier < staging && staging < journal, "{calls:#?}");
+    assert!(journals(&d).is_empty() && !dir.join(".music2/tx/100-1-0").exists());
 }
 
 // 6a.4, 6a.2 step 6: the before-images of journals left alone are kept by the tidy of `blobs/`,

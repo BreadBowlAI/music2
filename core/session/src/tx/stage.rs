@@ -13,8 +13,10 @@
 //! 5. one barrier (`m2_os::fs::barrier`) makes all of that durable before the project changes;
 //! 6. the previous commit's journal and staging go: its renames were drained by this barrier;
 //! 7. each target is renamed into place, checked as it goes: a replaced file is swapped (an
-//!    exchange) and what it held compared with its base, a created one is renamed only where
-//!    nothing is (a create-only rename), a removed one is moved aside and compared;
+//!    exchange) and what it held compared with its base, or, on a volume that can't exchange,
+//!    compared and then renamed over in one step, so it always holds its before or its after
+//!    bytes; a created one is renamed only where nothing is (a create-only rename), a removed one
+//!    is moved aside and compared;
 //! 8. each target's folder is synced, so the renames reach the disk by the next barrier.
 //!
 //! A commit's journal stays until a later barrier covers its renames: the next commit's step 6,
@@ -289,10 +291,12 @@ enum Done {
         staged: PathBuf,
         target: PathBuf,
     },
-    /// Without a swap (the volume can't exchange): `target` was moved to `aside`, then `staged` to `target`.
+    /// Without a swap (the volume can't exchange): the staged file renamed over `target`, which
+    /// held `before`. Undone by renaming `before`'s bytes, written to `aside`, over it the same way.
     Replaced {
-        staged: PathBuf,
         target: PathBuf,
+        after: Sha,
+        before: Before,
         aside: PathBuf,
     },
     Created {
@@ -533,18 +537,25 @@ pub fn commit(
 /// above it up to the project, where a folder made for it, pruned after it, or made again by a
 /// rollback changed an entry.
 fn push_folders(disk: &mut dyn Disk, dir: &Path, targets: &[Target]) {
-    let mut parents: BTreeSet<PathBuf> = BTreeSet::new();
-    for t in targets {
+    let paths = targets.iter().flat_map(|t| {
         let deep = !matches!(t, Target::Write { before: Some(_), .. });
-        for p in t.paths() {
-            let mut at = dir.join(p);
-            while let Some(parent) = at.parent().filter(|x| x.starts_with(dir)) {
-                parents.insert(parent.to_path_buf());
-                if !deep {
-                    break;
-                }
-                at = parent.to_path_buf();
+        t.paths().into_iter().map(move |p| (p, deep))
+    });
+    push_parents(disk, dir, paths);
+}
+
+/// Push the folder of each `(path, deep)` in the project at `dir`, and when `deep`, each folder
+/// above it up to the project: [`push_folders`] for targets known by their paths (a journal's).
+pub(super) fn push_parents<'a>(disk: &mut dyn Disk, dir: &Path, paths: impl IntoIterator<Item = (&'a str, bool)>) {
+    let mut parents: BTreeSet<PathBuf> = BTreeSet::new();
+    for (p, deep) in paths {
+        let mut at = dir.join(p);
+        while let Some(parent) = at.parent().filter(|x| x.starts_with(dir)) {
+            parents.insert(parent.to_path_buf());
+            if !deep {
+                break;
             }
+            at = parent.to_path_buf();
         }
     }
     for p in parents {
@@ -556,7 +567,7 @@ fn push_folders(disk: &mut dyn Disk, dir: &Path, targets: &[Target]) {
 
 /// Remove journal `id` and its staging folder, the staging first, so a crash between the two
 /// never leaves a staging folder that no journal names (6a.3).
-fn tidy(disk: &mut dyn Disk, txd: &Path, id: &str) {
+pub(super) fn tidy(disk: &mut dyn Disk, txd: &Path, id: &str) {
     let _ = disk.remove_tree(&txd.join(id));
     let _ = disk.remove_file(&txd.join(format!("{id}.json")));
 }
@@ -600,7 +611,7 @@ fn rename_all(
     let conflict = |file: &str, current: Option<Sha>| Failed::Conflict(vec![Changed { file: file.to_string(), current }]);
     for (k, t) in targets.iter().enumerate() {
         match t {
-            Target::Write { path, before: Some(before), .. } => {
+            Target::Write { path, before: Some(before), after, .. } => {
                 let (staged, target) = (staging.join(k.to_string()), dir.join(path));
                 // Not a disk call of the commit's: only what the watcher is told (R12).
                 let ours = Stamp::at(&staged);
@@ -614,17 +625,17 @@ fn rename_all(
                             return Err(conflict(path, Some(was)));
                         }
                     }
+                    // No exchange here: compared, then one rename over it, so the target is never
+                    // missing (a plain rename replaces in one step). A writer between the two is
+                    // overwritten: comparing narrows that race but can't close it (WRITE-19).
                     Err(e) if e.kind() == ErrorKind::Unsupported => {
-                        let aside = staging.join(format!("old-{k}"));
-                        disk.rename(&target, &aside, How::Plain).map_err(io)?;
-                        done.push(Done::Removed { target: target.clone(), aside: aside.clone() });
-                        let was = Sha::of(&disk.read(&aside).map_err(io)?);
-                        if was != before.sha {
-                            return Err(conflict(path, Some(was)));
+                        let was = file_sha(disk, &target).map_err(io)?;
+                        if was != Some(before.sha) {
+                            return Err(conflict(path, was));
                         }
                         disk.rename(&staged, &target, How::Plain).map_err(io)?;
-                        done.pop();
-                        done.push(Done::Replaced { staged, target: target.clone(), aside });
+                        let aside = staging.join(format!("old-{k}"));
+                        done.push(Done::Replaced { target: target.clone(), after: *after, before: before.clone(), aside });
                     }
                     Err(e) => return Err(io(e)),
                 }
@@ -712,15 +723,24 @@ fn put_back(disk: &mut dyn Disk, aside: &Path, target: &Path) -> io::Result<()> 
     }
 }
 
+/// Undo a replace made without a swap: `before`'s bytes, from memory, are written to `aside`
+/// (pushed), and once `target` is checked to hold the commit's `after`, renamed over it in one
+/// step, so it is never missing either.
+fn put_before(disk: &mut dyn Disk, target: &Path, after: Sha, before: &Before, aside: &Path) -> io::Result<()> {
+    disk.create(aside, &before.bytes)?;
+    match file_sha(disk, target)? {
+        Some(sha) if sha == after => disk.rename(aside, target, How::Plain),
+        _ => Err(io::Error::other(format!("{} was written over meanwhile", target.display()))),
+    }
+}
+
 /// Undo what [`rename_all`] did, newest first. Each step is checked as the forward one was: no
 /// file anyone else wrote is touched.
 fn rollback(disk: &mut dyn Disk, done: &mut Vec<Done>) -> Result<(), String> {
     while let Some(d) = done.pop() {
         let undone = match &d {
             Done::Swapped { staged, target } => disk.rename(staged, target, How::Swap),
-            Done::Replaced { staged, target, aside } => {
-                disk.rename(target, staged, How::Plain).and_then(|_| disk.rename(aside, target, How::Plain))
-            }
+            Done::Replaced { target, after, before, aside } => put_before(disk, target, *after, before, aside),
             Done::Created { target, after } => match file_sha(disk, target) {
                 Ok(Some(sha)) if sha == *after => disk.remove_file(target),
                 Ok(_) => Err(io::Error::other(format!("{} was written over meanwhile", target.display()))),

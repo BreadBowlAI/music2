@@ -237,7 +237,9 @@ impl Render {
         })
     }
 
-    /// Render into a part file beside `path`, then `name` it. The part is gone either way.
+    /// Render into a part file beside `path`, then `name` it. The part is gone either way. Its
+    /// bytes are pushed before it gets its name, and its folder synced after, so a Tx that names
+    /// it (a clip placed on a lane) makes it durable by its barrier at the latest (WRITE-1).
     fn write_as(
         mut self,
         path: &Path,
@@ -245,12 +247,12 @@ impl Render {
         name: impl FnOnce(&Path) -> std::io::Result<PathBuf>,
     ) -> Result<(PathBuf, Rendered)> {
         let part = part_path(path)?;
-        if let Some(dir) = part.parent() {
-            sweep(if dir.as_os_str().is_empty() { Path::new(".") } else { dir });
-        }
+        sweep(folder_of(&part));
         let written = self.write_to(&part, &mut progress).and_then(|(lock, r)| {
+            m2_os::fs::push(&lock)?;
             let named = name(&part)?;
             drop(lock);
+            m2_os::fs::sync_dir(folder_of(&named))?;
             Ok((named, r))
         });
         if written.is_err() {
@@ -413,6 +415,11 @@ fn file_id(p: &Path) -> Option<m2_os::fs::FileId> {
 fn part_path(path: &Path) -> Result<PathBuf> {
     let name = path.file_name().with_context(|| format!("{} is not a file name", path.display()))?;
     Ok(path.with_file_name(format!(".{}.{}.part", name.to_string_lossy(), std::process::id())))
+}
+
+/// The folder `p` is in: `.` for a bare file name.
+fn folder_of(p: &Path) -> &Path {
+    p.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."))
 }
 
 /// A [`part_path`] name: `.<file>.<process id>.part`.
