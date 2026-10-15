@@ -981,9 +981,10 @@ pub(super) fn hits_of(n: usize) -> String {
 // a revision in which that lane is empty. Watched by walks (a network volume): 60 ms apart, the
 // halves settle as one batch, exactly one revision; 400 ms apart, longer than the quiet window, the
 // first half settles alone: its revision keeps the lane's last data, with `lane.invalid`, and the
-// second half makes the next. Watched by events, which name a file written while open only when it
-// is opened and closed: the same, except that when the opening's event comes after the first half
-// was written (fseventsd behind, as under a busy test run), the halves may settle as one.
+// second half makes the next. Watched by events: the same. inotify names each write; FSEvents names
+// a file written while open only when it is opened and closed, so when the opening's event comes
+// after the first half was written (fseventsd behind, as under a busy test run), the halves may
+// settle as one.
 #[test]
 fn a_lane_written_in_two_halves_never_plays_empty() {
     for (walk, gap) in [(true, 60u64), (true, 400), (false, 60), (false, 400)] {

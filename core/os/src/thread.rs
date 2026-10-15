@@ -38,13 +38,20 @@ mod tests {
 
     #[test]
     fn cpu_time_grows_while_the_thread_works() {
+        // Work until the clock says 10 ms, however long that takes on a busy machine: beside 32
+        // busy threads, 30 ms of wall time held less than 10 ms of CPU in 1 run of 20. A thread's
+        // CPU time never runs ahead of the wall clock.
         let before = cpu_time();
         let t = std::time::Instant::now();
         let mut x = 0u64;
-        while t.elapsed() < Duration::from_millis(30) {
-            x = std::hint::black_box(x.wrapping_mul(31).wrapping_add(7));
+        let mut used = Duration::ZERO;
+        while used < Duration::from_millis(10) && t.elapsed() < Duration::from_secs(5) {
+            for _ in 0..10_000 {
+                x = std::hint::black_box(x.wrapping_mul(31).wrapping_add(7));
+            }
+            used = cpu_time() - before;
         }
-        let used = cpu_time() - before;
-        assert!(used >= Duration::from_millis(10) && used <= Duration::from_secs(5), "{used:?} for 30 ms of work");
+        let wall = t.elapsed();
+        assert!(used >= Duration::from_millis(10) && used <= wall + Duration::from_millis(1), "{used:?} of CPU in {wall:?}");
     }
 }

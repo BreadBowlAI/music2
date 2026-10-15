@@ -145,14 +145,15 @@ await page.keyboard.down("Meta"); await page.keyboard.press("d"); await page.key
 check(await until(async () => disk().clips[0].notes.length === 48 + first.length), `⌘D duplicates them (${disk().clips[0].notes.length} notes)`);
 check(await until(async () => (await notes()).filter((x) => x.selected).every((x) => x.start >= 2)), "the copies are selected, right after the originals");
 await undo(); await sleep(250); await undo();
-check(await until(async () => fs.readFileSync(FILE, "utf8") === original), "two undos put them back");
+// The page too, so the next edit is made from the revision the undos wrote, not one it refuses.
+check(await until(async () => fs.readFileSync(FILE, "utf8") === original && json((await notes()).filter((x) => x.start < 2).map((x) => x.pitch)) === json(first.map((x) => x.pitch))), "two undos put them back");
 
 // The clip's length.
 await lengthInput.click({ clickCount: 3 });
 await page.keyboard.type("4");
 await page.keyboard.press("Enter");
 check(await until(async () => disk().clips[0].length === 16), "typing 4 bars makes the clip 16 beats long");
-check(await until(async () => (await page.$eval("[data-testid=timeline]", (e) => !!e))) && (await box('[data-lane="bass.notes"] :nth-child(1 of [data-clip])')).width < clipBox.width * 0.6, "the timeline shows it shorter");
+check(await until(async () => (await page.$eval("[data-testid=timeline]", (e) => !!e)) && (await box('[data-lane="bass.notes"] :nth-child(1 of [data-clip])')).width < clipBox.width * 0.6), "the timeline shows it shorter");
 await undo();
 check(await until(async () => fs.readFileSync(FILE, "utf8") === original), "undo restores the length");
 await page.screenshot({ path: `${S}/notes-roll.png` });
