@@ -35,7 +35,10 @@ impl Events {
         os::watch::Events::start(root, enter, heard).map(Events)
     }
 
-    /// Return once every event for a change made before this call has been given to `heard`.
+    /// Give `heard` every event the source holds, then return. inotify queues an event before the
+    /// writer's call returns, so there that is every change made before this call. FSEvents' daemon
+    /// can get a change a moment after the write, so a flush right after it may return first and
+    /// the event come later (measured on a Mac: a file written again wasn't named by one flush).
     /// Never call it while holding a lock that `heard` takes.
     pub fn flush(&self) {
         self.0.flush()
@@ -89,12 +92,13 @@ mod tests {
         (Events::start(root, |rel| !rel.starts_with('.') && !rel.contains("/."), heard).unwrap(), log)
     }
 
-    /// Whether `log` named `p` (or a folder it is in) within 5 s, flushing as it waits.
-    fn named(events: &Events, log: &Log, p: &Path) -> bool {
+    /// Whether `log` named a path `matches` takes within 5 s, flushing as it waits: on macOS one
+    /// flush may return before a change just made reaches FSEvents (see `Events::flush`).
+    fn heard(events: &Events, log: &Log, matches: impl Fn(&Path) -> bool) -> bool {
         let t = Instant::now();
         while t.elapsed() < Duration::from_secs(5) {
             events.flush();
-            if log.lock().unwrap().iter().flatten().any(|h| p.starts_with(h)) {
+            if log.lock().unwrap().iter().flatten().any(|h| matches(h)) {
                 return true;
             }
             std::thread::sleep(Duration::from_millis(5));
@@ -102,10 +106,15 @@ mod tests {
         false
     }
 
-    // WRITE-19: a write is named once flush returns, in the folder watched at start and in a
-    // folder made and filled after it, at any depth.
+    /// Whether `log` named `p` (or a folder it is in) within 5 s.
+    fn named(events: &Events, log: &Log, p: &Path) -> bool {
+        heard(events, log, |h| p.starts_with(h))
+    }
+
+    // WRITE-19: a write is named, in the folder watched at start and in a folder made and filled
+    // after it, at any depth, and so is the same file written again.
     #[test]
-    fn a_write_is_named_by_the_time_flush_returns() {
+    fn every_write_is_named() {
         let _shared = crate::watch::TESTS.read();
         let dir = Dir::new();
         std::fs::create_dir_all(dir.0.join("data/kick")).unwrap();
@@ -118,8 +127,7 @@ mod tests {
             log.lock().unwrap().clear();
             // Written again, in a folder that may have been made after the watch started.
             std::fs::write(&p, format!("{i} again")).unwrap();
-            events.flush();
-            assert!(log.lock().unwrap().iter().flatten().any(|h| p.starts_with(h)), "{rel} again: {:?}", log.lock().unwrap());
+            assert!(named(&events, &log, &p), "{rel} again: {:?}", log.lock().unwrap());
             log.lock().unwrap().clear();
         }
     }
@@ -132,14 +140,16 @@ mod tests {
         std::fs::create_dir_all(dir.0.join("lib/inner")).unwrap();
         let (events, log) = start(&dir.0);
         std::fs::rename(dir.0.join("lib"), dir.0.join("src")).unwrap();
-        events.flush();
+        assert!(named(&events, &log, &dir.0.join("src")), "the rename: {:?}", log.lock().unwrap());
         log.lock().unwrap().clear();
         let p = dir.0.join("src/inner/x.ts");
         std::fs::write(&p, "x").unwrap();
-        events.flush();
+        assert!(heard(&events, &log, |h| h == p), "{:?}", log.lock().unwrap());
+        // The rename's old name may still come late on macOS, for the folder itself; never for
+        // what is in it.
+        let lib = dir.0.join("lib");
         let heard = log.lock().unwrap().clone();
-        assert!(heard.iter().flatten().any(|h| *h == p), "{heard:?}");
-        assert!(!heard.iter().flatten().any(|h| h.starts_with(dir.0.join("lib"))), "never the old name: {heard:?}");
+        assert!(!heard.iter().flatten().any(|h| h.starts_with(&lib) && *h != lib), "never the old name: {heard:?}");
     }
 
     // WRITE-19: the root itself going is a rescan; nothing is heard after drop.

@@ -707,13 +707,17 @@ mod tests {
 
     // PLAT-7 (decision D3 of the platform review): `m2 new NIGHT/../night` beside `Night` is
     // refused before any folder is made, so no empty `NIGHT` is left behind; with no `Night`, the
-    // song is made at `night`, and still no `NIGHT`.
+    // song is made at `night`, and still no `NIGHT`. A disk that ignores capitals (a Mac's) finds
+    // `NIGHT` there, so its refusal names the path as written.
     #[test]
     fn create_at_checks_before_it_makes_a_folder() {
         let t = Temp::new();
         std::fs::create_dir(t.0.join("Night")).unwrap();
         let e = create_at(&t.0.join("NIGHT/../night"), &template("empty")).unwrap_err().to_string();
-        assert_eq!(e, format!("{} already exists", t.0.join("night").display()));
+        let asked = [t.0.join("night"), t.0.join("NIGHT/../night")].map(|p| format!("{} already exists", p.display()));
+        assert!(asked.contains(&e), "{e}");
+        let names: Vec<String> = std::fs::read_dir(&t.0).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        assert_eq!(names, ["Night"]);
         std::fs::remove_dir(t.0.join("Night")).unwrap();
         assert_eq!(create_at(&t.0.join("NIGHT/../night"), &template("empty")).unwrap(), t.0.join("night"));
         let names: Vec<String> = std::fs::read_dir(&t.0).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();

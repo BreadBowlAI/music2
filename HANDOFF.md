@@ -5,8 +5,11 @@ Written 2026-10-15, at the end of the platform step (6b in the contract's order 
 
 **In short**
 - The platform layer is built on `main`. Linux is green: `ci/check.sh` passed at `63c45da`.
-- **macOS: unverified since `4ae1b32`**, the step's first code commit (last verified at `8aa301e`). The Mac code is
-  only type-checked and linted from Linux. The owner's Mac run comes next.
+- **macOS: unverified since `4ae1b32`**, the step's first code commit (last verified at `8aa301e`). The owner's first
+  Mac run (at `b90bacf`, MacBookPro18,1, macOS 26.6.2, 14 min) passed every row except two tests that assumed Linux
+  (fixed after it: a refusal's path on a disk that ignores capitals, and one FSEvents flush). One more Mac run
+  confirms. Its gates: G11 `tx-data` p95 8.6 ms idle, 9.5 ms beside a syncing writer, 9.5 ms with 5,000 assets
+  (under 20 ms); the session's part p95 2.4–3.2 ms (under 5 ms); `watcher` 0.40% of a core idle (under 1%).
 - Then: finish step 7, merge `sounds`, merge `taste`; then 8a, 8b and step 9.
 
 ## Where everything is
@@ -156,12 +159,12 @@ Fixed in this step:
 
 One line each; the details are in `platform/build-notes.md`.
 
-- **The macOS side is type-checked only** until the Mac run: everything moved into `core/os/src/mac/` (the barrier's
-  `fsync` fallback, `renamex_np`, `clonefile`, `getattrlist`, `gethostuuid`, FSEvents, the main loop), and the
-  review's fixes there (D6's clone error, `sync_dir`'s error list, `c_numbers`).
-- FSEvents, unproven: one `FSEventStreamFlushSync` delivers a write made just before it; a burst of 4,196 files is
-  named file by file; a link-count change is named (evt-2).
-- `ci/check.sh --gates` has never run whole; the Mac run is its first full run.
+- **The macOS side ran once** (the first Mac run): every test of `core/os/src/mac/` and its callers passed except the
+  two noted above. Paths no test takes stay unrun there: the barrier's `fsync` fallback on a volume that refuses
+  `F_FULLFSYNC`, D6's clone error, `sync_dir` on a volume that refuses a folder sync.
+- FSEvents: one `FSEventStreamFlushSync` can return before a write made just before it reaches the daemon (the
+  first Mac run showed it); the tests wait for the name, and the watcher counts a miss only after 60 s. The burst
+  test (4,196 files) passed on the Mac. A link-count change being named (evt-2) is still unproven there.
 - Step 8's folder push, after a save's renames, still ignores errors, `EIO` too: the save has landed (D2).
 - QuickJS's 256 MB limit counts bytes as each OS's `malloc` does (det-3); a contract deferred row.
 - `retry_lock` scans with no journal skipped (`rescan` skips `pending`): after a lost lock and an outside edit, Retry
