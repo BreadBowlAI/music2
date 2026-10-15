@@ -1095,3 +1095,86 @@ No log of either run says a watcher fell back to walks.
 **Tidied.** The four worktrees in `~/m2-runs/wt/plat-*` are removed (about 190 GB of `target/`), and the branches
 `plat/s7`, `plat/s8`, `plat/script` and `plat/flakes` are deleted, each after `git merge-base --is-ancestor` showed it
 on `main`.
+
+## Review and fixes
+
+**In short.** The review of the whole platform step confirmed 21 findings, and the lead added 7 decisions. All are
+done in six commits, but D7, which waits for the `taste` merge (below). Each fix has a test that fails without it,
+where one is practical. Then `ci/check.sh` passed twice at `57062a7`, with no retry: 753 Rust tests (739 and 14 new),
+29 of 29 suites, renders 8 of 8 unchanged.
+
+| Finding or decision | What was done | Commit |
+|---|---|---|
+| dur-1: a completed journal kept after a failed barrier at the lock later became a false "interrupted, check it by hand" | The scan returns those journals (`Scan::awaiting`); the session adds them to the journals awaiting its next barrier, at open, retry and rescan. Test: `a_completed_journal_whose_barrier_failed_goes_after_the_next` (fails without: the reopen reports `tx.interrupted`). | `976a7d8` |
+| dur-2: close removed the journals even when its barrier failed | A close whose barrier fails removes nothing (no tidy, no blob sweep); the next writer's lock tidies them after its own barrier. Test: `a_close_whose_barrier_fails_keeps_its_journal_until_the_next_lock`. Checked with `strace`: `EIO` on the close's `fsync` keeps the journal, and the next `m2 set` tidies it silently. | `976a7d8` |
+| D6 (macOS): a clone made whose push failed was reported as the copy's "File exists" | `copy_after` reports the clone's own error when the copy finds the clone there. Test: `a_clone_whose_push_failed_says_why`. | `976a7d8` |
+| D2: one rule for folder syncs | In `m2_os::fs::sync_dir` itself: a folder that can't be opened (permission) and a volume that refuses a folder `fsync` (`EINVAL`, `ENOTSUP`, `EOPNOTSUPP`) are skipped; any other error is returned. So commits, New Song, `m2 new`, the bounce and exports all behave alike. Test: `a_folder_sync_is_skipped_only_where_it_cant_be_done` (a mode-300 folder, Linux's `/proc`, which has no folder `fsync`). `strace`: `EINVAL` at the staging folder's `fsync` now saves; `EIO` there still fails. WRITE-15's *Today* says so. | `7f7d4bc` |
+| dur-4, fit-10: New Song's songs folder and `Exports/` were made without syncing them in the folder above; the same code was written twice | `m2_os::fs::make_dirs` makes the missing folders and syncs each in the one above; used by `m2 new`, New Song (`make_songs_dir`), the shell's folder picker, Exports and the bounce. `m2_os::fs::folder_of` replaces five copies of one expression. `strace` of `m2 new a/b/song`: `a` synced in `.`, `b` in `a`, then the song. | `7f7d4bc` |
+| D3: New Song and `m2 new` in a folder that can be written but not listed; `m2 new NIGHT/../night` left an empty `NIGHT` | A parent that can't be listed is checked by the exact name only (the create-only `create_dir`). A `..` after a folder not made yet is taken out with it, and every check comes before any folder is made. Tests: `a_song_is_made_in_a_folder_that_cant_be_listed`, `create_at_checks_before_it_makes_a_folder`. PLAT-7's *Today* says so. | `7f7d4bc` |
+| evt-1: a project folder replaced while open was never watched again (Linux) | Each flush checks what the root's path names, by volume and inode, and rebuilds when a new folder is there; the root's own `IN_MOVE_SELF` or `IN_DELETE_SELF` rebuilds at once, letting the old tree go. Never a rebuild for a root that is gone, so no walk loop. Test: `a_root_put_back_is_watched_again` (moved away, a copy moved in, removed while a file in it is open, made again); it fails without either half. Design §3.4 corrected. | `70d1cc0` |
+| evt-2: a hard link made or removed outside the project made false misses | A change of the change time alone is no miss (`Settle::stamp`, read in `apply`); the settle rule still uses the change time. Test: `a_change_of_the_change_time_alone_is_no_miss` (two links made and removed: no miss, events still trusted, no revision). | `70d1cc0` |
+| evt-3: a folder unreadable when made was never watched (Linux) | `IN_ATTRIB` on a folder this watcher doesn't hold watches it then. Test: `a_folder_readable_only_later_is_watched_then`. | `70d1cc0` |
+| D4: the watcher's words, and a folder the watch walk can't list | "Linux's limit on watched folders is reached (fs.inotify.max_user_watches)", and the same for instances; the server's line says it watches by walking. A folder that can't be listed (no file descriptor left) asks for a walk. Test: `a_limit_run_out_is_named_and_an_unlisted_folder_walked`. | `70d1cc0` |
+| fit-5: a local FUSE disk was called a network volume | The notice and the log line say "may be shared with other computers (it is on a network drive, or on a disk music2 can't tell from one)". The behaviour is unchanged. | `70d1cc0` |
+| det-1: the Linux app's builds read numbers in the user's locale (`JSON.parse('0.5')` was 0 in German) | Every build and describe run is on a thread of its own pinned to the C locale (`m2_os::thread::c_numbers`: `newlocale` and `uselocale`), which also covers a hosted plugin that calls `setlocale`. Test: `core/script/tests/locale.rs`, a process in `de_DE.UTF-8` (made with `localedef` when missing): `JSON.parse`, `toFixed`, `toPrecision`, `toExponential`, and std:delay's mix in the catalog. Without the pin it fails as the review found ("JSON.parse gives gain 0 and hz 261"). | `5442360` |
+| det-2: `**=` on a target in TypeScript's types used the OS's `pow` | A pass takes the types off a `**=` target before oxc lowers `**`; a `**` left unlowered (operands not BigInt literals) fails the build. Test: seven wrapped forms in `song_math_is_libm_on_every_os`. | `5442360` |
+| det-3: how deep a song can recurse depended on the compiler | The build thread has a 32 MB stack and QuickJS 16 MB of it: rquickjs takes no more (it reads a larger limit as none, and endless recursion then overflowed the thread, found while building this). About 15,000 calls, far past any real song. Test: `deep_recursion_builds_alike_on_every_os` (5,000 calls; endless recursion still ends with QuickJS's message). The memory limit stays; RENDER-2's *Today* says a song that reaches either limit, or catches those errors, may build differently on another OS. | `5442360` |
+| D1: an `enum` aborted a debug build | Refused at its place: "enum isn't available in song code: use a plain object, like const Mode = { A: 0, B: 1 }". Test: `an_enum_is_refused_at_its_place` (without the refusal the test binary aborts). RENDER-2's *Today* says so. | `5442360` |
+| D5: "what failed" listed tests that passed on their retry | Only what failed again is listed; what passed then goes under "passed only on a retry". Checked with a stub `cargo` on made-up logs. | `d410ad9` |
+| rev-mac-2: a retry-pass listed the tests or the binaries, never both | Both are listed, so a flaky no-harness binary (the Mac's main-loop tests) is never hidden. | `d410ad9` |
+| fit-2: no cause for a no-harness binary or a link error | Each whole binary that failed shows its first panic, or its own "hung" or "FAILED" line; a failed doctest its first FAILED line; a build or test row that fails to link shows the missing symbol, else a compile error's place. | `d410ad9` |
+| fit-1, rev-mac-1: the Mac summary dropped every gate number | `gates.sum` keeps each judged check with its p95 or its share of a core, cut at 220 characters. On S8's real G11 log that is the two verdicts and 7 lines, every number whole. | `d410ad9` |
+| fit-3: HOST-2 said the app had never run its open | Says the Linux app row runs it, with the plugins; quit's close has run in neither app. | `57062a7` |
+| fit-4: PLAT-2 was broader than the code | It is about Rust code; the web UI's keys and labels go through `isMac` in `web/src/lib/native.ts`. | `57062a7` |
+| fit-7: `one_place.rs`'s empty allow-list | Removed, with what served it. | `57062a7` |
+| fit-9: tests cited survey ids only | The contract's rule ids beside them (PLAT-3, PLAT-7, WRITE-15, WRITE-17, WRITE-19, FMT-16). | `7f7d4bc`, `57062a7` |
+| fit-11: e2e/README's render check couldn't work | `shasum -a 256 -c <repo>/e2e/renders.sha256`. | `57062a7` |
+| dur-3: the notes said commits carry on where a folder `fsync` is refused | Corrected in S7's notes and the integration's: commits failed there too, at step 4. D2 now skips it everywhere. | `57062a7` |
+| D7: attention-attn's toast Undo race | Recorded for the taste merge (below): `taste` rewrites the lines around it. | — |
+
+**Deviations**
+
+| What | Why |
+|---|---|
+| D2: step 8's folder push still ignores an error, `EIO` included | It comes after the renames: failing the save then can't undo what landed. The journal still waits for a barrier that works. |
+| D2 lives in `sync_dir` itself, not its callers | One place for every writer, as the lead allowed. The design's §2.2 already let `sync_dir` answer Ok where a sync is not needed. |
+| det-1 pins the build thread, not the app's whole locale | It also covers a hosted plugin that calls `setlocale` later, and leaves the user's locale to the rest of the app (input methods). |
+| det-3's numbers: 32 MB and 16 MB, not the review's 256 MB | rquickjs reads a limit over 16 MB as no limit at all. |
+| evt-2 is in `apply`, by a stamp's fields | The settle rule keeps the change time: it catches a write that sets the modified time back. |
+
+**The checks** at `57062a7` (`ci/check.sh`, 8 min each on a quiet server; logs and the app's screenshots in
+`~/m2-runs/check-fix-c/` and `~/m2-runs/check-fix-c2/`). Both: "music2 check: PASS", every row PASS, nothing passed
+only on a retry, "what failed" empty.
+
+| Row | First run | Second run |
+|---|---|---|
+| toolchain, web build, build | PASS | PASS |
+| app | PASS: the UI connected in 1 s with `first-song` and with `with-plugins` | PASS, the same |
+| rust tests | PASS: 753 passed, 0 failed; `m2-session` 126 tests in 132.6 s | PASS: 753 passed, 0 failed; 132.6 s |
+| clippy, std kernels, std.wasm, mac lint | PASS | PASS |
+| browser suites | PASS: 29 of 29, 1,034 of 1,034 checks | PASS, the same |
+| renders | PASS: 8 of 8 match `e2e/renders.sha256` | PASS |
+| repo unchanged | PASS | PASS |
+
+Before the checks: every new test failed with its fix taken out (a temporary change, then put back). `m2-os`'s
+library tests passed 30 of 30 alone and 20 of 20 beside 32 busy loops; `m2-server`'s watch tests 10 of 10 alone and
+5 of 5 beside them.
+
+**Left for later**
+- D7, for the `taste` merge: `attention-attn` clicks the move's toast Undo as soon as the files show the undo, which
+  can be before the undo's revision reaches the page. `taste` rewrites those lines (it waits for the server's revision
+  after an outside edit), so the fix goes in with the merge: wait for the page's revision (as `notes` does since
+  `cdab621`) before clicking the toast's Undo.
+- fit-1's other half: `ci/check.sh --gates` has still never run whole. The step-11 block ran verbatim in the review's
+  check, and the new `gates.sum` filter was tried on S8's real G11 log; the owner's Mac run is its first full run.
+- det-3, memory: the 256 MB limit counts bytes differently on each OS (each OS's `malloc` sizes, and QuickJS's own
+  overhead per block), so a song near it, or one that catches running out, may build differently. Only an allocator
+  that counts the bytes asked for would make it the same; RENDER-2's *Today* says so.
+- evt-2 on the Mac: whether FSEvents names a file whose link count changed is not known; the fix covers both OSes.
+- The real desktop app under `LANG=de_DE.UTF-8` was not run again here. The locale test builds and describes in a
+  process whose locale is German, as GTK leaves the app's.
+- Only the Mac run tests the macOS side of these fixes: the clone's error (D6), `sync_dir`'s error list (D2) and
+  `c_numbers` (`newlocale`, `uselocale`) are type-checked and linted only.
+- Left alone, as asked (for `HANDOFF.md`, S9): export names over 63 bytes cut by QuickJS; old rustfmt diffs in
+  `core/script` and `core/session`; the kill test's 130 s; Surge's 32-sample blocks in `surge_plays_notes`; G10 under
+  load; the Windows notes.
