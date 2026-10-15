@@ -580,6 +580,12 @@ impl PluginNode {
             out.fill(0.0);
             return Ok(());
         };
+        // One that failed live plays silence and is never called again: the session replaces it.
+        if inst.dead() {
+            out.fill(0.0);
+            self.status = m2_plugins::Status::Sleep;
+            return Ok(());
+        }
         let notes = self.notes.map_or(&[][..], |s| lanes[s].events());
         let mut next = 0;
         let channels = out.len() / BLOCK;
@@ -633,7 +639,15 @@ impl PluginNode {
             self.out.clear();
             self.status = host.process(h, &mut io, &self.events, &mut self.out, &transport);
             if self.status == m2_plugins::Status::Error {
-                bail!("{} reported a processing error", self.name);
+                if b.strict {
+                    bail!("{} reported a processing error", self.name);
+                }
+                // Live, only this plugin goes silent, never the song: the session replaces it from
+                // its committed state (HOST-5). An atomic store: nothing here allocates.
+                inst.kill();
+                out.fill(0.0);
+                self.status = m2_plugins::Status::Sleep;
+                return Ok(());
             }
             if ri == 0 {
                 self.ended.clear();
@@ -650,7 +664,9 @@ impl PluginNode {
 
     fn reset(&mut self) -> Result<()> {
         let Some(inst) = &self.inst else { return Ok(()) };
-        inst.host().reset(inst.handle());
+        if !inst.dead() {
+            inst.host().reset(inst.handle());
+        }
         // Within its room (`ended` is as big as `keys`): never allocates on the audio thread.
         for k in self.keys.drain(..) {
             if self.ended.len() < self.ended.capacity() {
@@ -762,6 +778,8 @@ struct Builder<'a> {
     caps: &'a [Caps],
     /// Who the instances it creates report to.
     owner: &'a m2_plugins::Owner,
+    /// What mode the plugin instances it creates are set to: realtime live, offline otherwise.
+    mode: m2_plugins::RenderMode,
 }
 
 /// What a node's box is made of.
@@ -881,7 +899,7 @@ impl Builder<'_> {
             Make::New(shape) => {
                 let blob = state_blob(self.data, n)?;
                 let host = self.packages.host();
-                Some(PluginInstance::create(host, &info.found, blob, self.owner, rate, shape).with_context(|| n.name.clone())?)
+                Some(PluginInstance::create(host, &info.found, blob, self.owner, rate, shape, self.mode).with_context(|| n.name.clone())?)
             }
             Make::Moved => None,
         };
@@ -937,6 +955,15 @@ pub fn state_blob(data: &DataSet, n: &FNode) -> Result<Option<Arc<m2_plugins::Bl
     let Some(path) = data.state(&n.module, &keys.iter().map(String::as_str).collect::<Vec<_>>()) else { return Ok(None) };
     let bytes = std::fs::read(&path).with_context(|| format!("{}: reading plugin state {}", n.name, path.display()))?;
     Ok(Some(Arc::new(m2_plugins::Blob::new(bytes))))
+}
+
+/// Whether plugin node `new`, which keeps `old`'s instance, stops setting a parameter `old` set in
+/// code (its literal or cable deleted): the instance keeps the value it was last sent (HOME-5a).
+fn releases(old: &FNode, new: &FNode, packages: &PackageSet) -> bool {
+    let (FOp::Plugin { plugin, inputs: was, .. }, FOp::Plugin { inputs: now, .. }) = (&old.op, &new.op) else { return false };
+    let Some(sig) = m2_ir::Kernels::plugin(packages, plugin) else { return false };
+    let param = |name: &str| !matches!(name, "in" | "notes");
+    sig.inputs.iter().zip(was.iter().zip(now)).any(|(port, (a, b))| param(&port.name) && *a != Input::Unset && *b == Input::Unset)
 }
 
 /// `with_context` for wasmtime's own error type.
@@ -1498,9 +1525,11 @@ pub struct Renderer {
 impl Renderer {
     /// A renderer for a checked graph and the data it plays: a revision's [`DataSet`], which
     /// also says where its assets and verified plugin states are ([`DataSet::empty`] for none).
-    /// Every instance is new. It plays from sample 0, offline.
+    /// Every instance is new. It plays from sample 0, offline, its plugins in offline mode
+    /// (RENDER-1).
     pub fn new(flat: &Flat, data: &DataSet, packages: &PackageSet, sample_rate: u32) -> Result<Renderer> {
-        Renderer::prepare(flat, data, packages, sample_rate, &mut audio::Cache::default(), &m2_plugins::Owner::discard(), Basis::Fresh)
+        let (cache, owner) = (&mut audio::Cache::default(), &m2_plugins::Owner::discard());
+        Renderer::build(flat, data, packages, sample_rate, cache, owner, Basis::Fresh, m2_plugins::RenderMode::Offline)
     }
 
     /// A renderer for the live engine, sharing decoded assets and clip renders with earlier ones
@@ -1511,7 +1540,8 @@ impl Renderer {
     /// plan plays (RENDER-25). A prepare that fails drops what it made, here; the one call it makes
     /// into what plays comes last: a kept plugin whose committed state changed gets it loaded, on
     /// the plugin main thread (RENDER-26b). [`Basis::Lend`] is an offline render sharing the live
-    /// engine's plugin instances (RENDER-1).
+    /// engine's plugin instances (RENDER-1). Its new plugin instances run in realtime mode: it
+    /// plays live.
     pub fn prepare(
         flat: &Flat,
         data: &DataSet,
@@ -1520,6 +1550,22 @@ impl Renderer {
         cache: &mut audio::Cache,
         owner: &m2_plugins::Owner,
         basis: Basis,
+    ) -> Result<Renderer> {
+        Renderer::build(flat, data, packages, sample_rate, cache, owner, basis, m2_plugins::RenderMode::Realtime)
+    }
+
+    /// [`Renderer::prepare`], its new plugin instances set to `mode`: realtime for the live
+    /// engine, offline for every other render (RENDER-1).
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        flat: &Flat,
+        data: &DataSet,
+        packages: &PackageSet,
+        sample_rate: u32,
+        cache: &mut audio::Cache,
+        owner: &m2_plugins::Owner,
+        basis: Basis,
+        mode: m2_plugins::RenderMode,
     ) -> Result<Renderer> {
         let tempo = data.tempo().clone();
         let rate = sample_rate as f64;
@@ -1537,7 +1583,7 @@ impl Renderer {
             Some(k) => keep::wire(k, flat, &shapes, &blobs, packages, &mut lanes),
             None => Wiring::fresh(flat),
         };
-        let mut b = Builder { packages, data, sample_rate: rate, slots: &lanes.lanes.refs, caps: &lanes.caps, owner };
+        let mut b = Builder { packages, data, sample_rate: rate, slots: &lanes.lanes.refs, caps: &lanes.caps, owner, mode };
         let boxed = |i: usize| match (w.kept[i], lent.and_then(|l| l.get(&i))) {
             (true, _) => Make::Moved,
             (false, Some(inst)) => Make::Lent(inst.clone()),
@@ -1575,7 +1621,7 @@ impl Renderer {
                 _ => {}
             }
         }
-        let mut plugins: Vec<PluginAt> = (0..n)
+        let plugins: Vec<PluginAt> = (0..n)
             .filter_map(|i| {
                 let Exec::Plugin(p) = &graph.exec[i] else { return None };
                 let (handle, inst) = match (&p.inst, keep, w.same[i]) {
@@ -1587,26 +1633,31 @@ impl Renderer {
             })
             .collect();
         // State loads into kept instances, last, once nothing else can fail (RENDER-26b): each
-        // kept plugin whose committed blob isn't the one it holds, compared node by node. The host
-        // skips a blob the instance holds already (HOME-6); after a load its node sends the
-        // parameters code owns again (HOME-4).
+        // kept plugin whose committed blob isn't the one it was last given, compared node by node.
+        // The host skips a blob the instance holds already (HOME-6); after a load its node sends
+        // the parameters code owns again (HOME-4).
         if let Some(k) = keep {
-            let mut loads = vec![];
+            let (mut loads, mut released) = (vec![], vec![]);
             for (at, p) in plugins.iter().enumerate() {
                 let Some(j) = w.same[p.node].filter(|_| w.kept[p.node]) else { continue };
-                if let Some(old) = k.info.plugin(j).filter(|o| o.blob != p.blob)
+                if releases(&k.old.nodes[j], &flat.nodes[p.node], packages) {
+                    released.extend(p.inst.upgrade());
+                }
+                if k.info.plugin(j).is_some_and(|o| o.blob != p.blob)
                     && let Some(blob) = state_blob(data, &flat.nodes[p.node])?
                 {
-                    loads.push((at, old.blob, blob));
+                    loads.push((at, blob));
                 }
             }
+            // A parameter the code stopped setting keeps its value (HOME-5a), which no file records.
+            released.iter().for_each(|inst| inst.release());
             let host = packages.host();
-            for (at, old, blob) in loads {
-                let p = &mut plugins[at];
-                let name = &flat.nodes[p.node].name;
+            for (at, blob) in loads {
+                let p = &plugins[at];
                 let loaded = host.load_state(p.handle, blob);
+                let inst = p.inst.upgrade();
                 // Its code-owned parameters go again whatever the plugin made of the bytes.
-                if let Some(inst) = p.inst.upgrade()
+                if let Some(inst) = &inst
                     && !matches!(loaded, Ok(false))
                 {
                     inst.mark_reloaded();
@@ -1614,22 +1665,21 @@ impl Renderer {
                 match loaded {
                     Ok(true) => {
                         stats.loads += 1;
+                        inst.iter().for_each(|i| i.loaded());
                         // Compensation isn't built, and the check refuses latency at default
                         // state (RENDER-21): a patch that adds some plays uncompensated, and says so.
                         if let Ok(Ok(frames)) = host.latency(p.handle).recv()
                             && frames > 0
                         {
-                            stats.latent.push((name.clone(), frames));
+                            stats.latent.push((p.node, frames));
                         }
                     }
                     Ok(false) => {}
                     // Never fails the prepare: loads before it have landed in instances that play.
-                    // It plays on as the plugin left it, and the next plan tries again, as this
-                    // one says it holds what it held before.
-                    Err(e) => {
-                        stats.unloaded.push((name.clone(), format!("{e:#}")));
-                        p.blob = old;
-                    }
+                    // It plays on as the plugin left it. The plan says it was given this blob, so
+                    // the next plan doesn't try it again, nor say so again, until another is
+                    // committed; then that one loads whatever this left (HOME-6).
+                    Err(e) => stats.unloaded.push((p.node, format!("{e:#}"))),
                 }
             }
         }
@@ -1714,8 +1764,8 @@ impl Renderer {
         sample_rate: u32,
         lent: &HashMap<usize, Arc<PluginInstance>>,
     ) -> Result<Renderer> {
-        let owner = m2_plugins::Owner::discard();
-        Renderer::prepare(flat, data, packages, sample_rate, &mut audio::Cache::default(), &owner, Basis::Lend(lent))
+        let (cache, owner) = (&mut audio::Cache::default(), &m2_plugins::Owner::discard());
+        Renderer::build(flat, data, packages, sample_rate, cache, owner, Basis::Lend(lent), m2_plugins::RenderMode::Offline)
     }
 
     /// Play `inst`, a new instance, at top-level node `node` in place of the live one lent to this
@@ -2096,7 +2146,7 @@ impl Renderer {
         self.plan.cells.slots().pending()
             || self.plan.graph.exec.iter().any(|e| match e {
                 Exec::Plugin(p) if p.status == m2_plugins::Status::Sleep => {
-                    p.inst.as_ref().is_some_and(|i| i.host().take_process_request(i.handle()))
+                    p.inst.as_ref().is_some_and(|i| !i.dead() && i.host().take_process_request(i.handle()))
                 }
                 _ => false,
             })

@@ -155,8 +155,9 @@ pub struct PluginAt {
     pub handle: m2_plugins::Handle,
     /// The instance, while a plan holds it: what an export borrows (RENDER-1).
     pub inst: Weak<PluginInstance>,
-    /// The hash of the committed state blob it holds: the one it was created from or last loaded,
-    /// None for its defaults. The next plan loads another (RENDER-26b).
+    /// The hash of the committed state blob it was last given: the one it was created from or
+    /// last loaded, None for its defaults. The next plan loads another (RENDER-26b). A blob it
+    /// refused counts too: it isn't tried again until another is committed.
     pub blob: Option<Sha>,
 }
 
@@ -187,7 +188,11 @@ impl PlanInfo {
 
     /// The live instances an offline render of `flat` and `data` may share, by node (RENDER-1):
     /// each installed plugin node that continues one of this plan's (`cont`) with the same shape,
-    /// each instance once, and none whose committed blob is gone (CLAP has no "load defaults").
+    /// each instance once. Only one that holds the committed blob `data` gives its node: none
+    /// whose blob changed since this plan was prepared (a build that failed since), or is gone
+    /// (CLAP has no "load defaults"), so an export never changes what an instance holds; none
+    /// that holds a parameter value the code released (HOME-5a); none that failed. Each of those
+    /// nodes plays a new instance from the committed blob in the render, as `m2 render`'s do.
     pub fn lend(&self, flat: &Flat, data: &DataSet, packages: &PackageSet, cont: &Continues) -> HashMap<usize, Arc<PluginInstance>> {
         let mut lent: HashMap<usize, Arc<PluginInstance>> = HashMap::new();
         for &i in &flat.order {
@@ -195,10 +200,10 @@ impl PlanInfo {
             let Some(shape @ Shape::Plugin { .. }) = Shape::of(n, packages) else { continue };
             let Some(j) = cont.top.get(i).copied().flatten().map(|j| j as usize) else { continue };
             let Some(at) = self.plugin(j).filter(|_| self.shapes.get(j) == Some(&Some(shape))) else { continue };
-            if at.blob.is_some() && blob(n, data).is_none() {
+            if blob(n, data) != at.blob {
                 continue;
             }
-            if let Some(inst) = at.inst.upgrade()
+            if let Some(inst) = at.inst.upgrade().filter(|i| !i.released() && !i.dead())
                 && !lent.values().any(|x| Arc::ptr_eq(x, &inst))
             {
                 lent.insert(i, inst);
@@ -305,12 +310,12 @@ pub struct Stats {
     /// Committed state blobs loaded into kept plugin instances while it was prepared (RENDER-26b);
     /// a load the host skipped, as the instance held that state (HOME-6), isn't counted.
     pub loads: usize,
-    /// Plugins whose latency is nonzero after such a load, by node name, and how many frames: they
-    /// play uncompensated (`plugin.latency-uncompensated`).
-    pub latent: Vec<(String, u32)>,
-    /// Kept plugins whose new state didn't load, by node name, and why: each plays on as the plugin
-    /// left it, and the next plan prepared loads it again (RENDER-26b).
-    pub unloaded: Vec<(String, String)>,
+    /// Plugins whose latency is nonzero after such a load, by top-level node, and how many frames:
+    /// they play uncompensated (`plugin.latency-uncompensated`).
+    pub latent: Vec<(usize, u32)>,
+    /// Kept plugins whose new state didn't load, by top-level node, and why: each plays on as the
+    /// plugin left it, and no plan tries that blob again; another committed blob loads (RENDER-26b).
+    pub unloaded: Vec<(usize, String)>,
     /// The top-level nodes with new instances.
     pub fresh_nodes: Vec<usize>,
 }

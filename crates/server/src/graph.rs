@@ -153,7 +153,8 @@ pub struct Export {
     pub lent: Option<crate::export::Lent>,
 }
 
-/// What the engine is busy with besides playing, and what its device reported.
+/// What the engine is busy with besides playing, and what its device reported. Its fields go into
+/// the engine view and `/api/graph/status` by these names ([`Activity::put`]).
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Activity {
     /// `"exporting"` while an export holds playback (RENDER-1).
@@ -166,6 +167,15 @@ pub struct Activity {
     /// The device's other errors since the player started. A change of output device, or a
     /// device that is gone, lets the player go; the rest are only counted.
     pub device_errors: u64,
+}
+
+impl Activity {
+    /// Its fields, set in the JSON object `v`.
+    pub fn put(&self, v: &mut Value) {
+        if let (Some(v), Value::Object(fields)) = (v.as_object_mut(), json!(self)) {
+            v.extend(fields);
+        }
+    }
 }
 
 /// What `begin` and `update` read: the accepted revision's controls and what plays. Published by
@@ -367,6 +377,25 @@ pub struct Teardown {
     pub left: u64,
 }
 
+/// Whether `e` says the computer ran out of memory, or of address space: wasmtime's "mmap failed to
+/// reserve …" when a kernel instance's memory can't be reserved.
+pub(crate) fn out_of_memory(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| {
+        let t = c.to_string();
+        ["mmap failed", "Cannot allocate memory", "out of memory"].iter().any(|s| t.contains(s))
+    })
+}
+
+/// `e`, from making a song ready to play (opening it, exporting it), in plain words: running out
+/// of memory says so and what to do, with wasmtime's text after as the detail. Anything else is
+/// already in the app's words.
+pub(crate) fn plainly(e: anyhow::Error) -> anyhow::Error {
+    match out_of_memory(&e) {
+        true => anyhow!("the computer ran out of memory for it. Close other apps or songs, then try again. (In detail: {e:#})"),
+        false => e,
+    }
+}
+
 /// Why `player` must be let go, if it must: it stopped responding or its engine panicked; or its
 /// output moved to another device, whose rate and period a new player opens with.
 fn let_go(player: &Player) -> Option<&'static str> {
@@ -541,17 +570,13 @@ impl Inner {
             (p.shown.clone(), leases)
         };
         let status = self.status();
-        let activity = self.activity();
         let mut state = shown.state.clone();
         state["timeline"] = shown.timeline.to_value();
         state["playing"] = json!(status.playing);
         state["seconds"] = json!(status.seconds);
         state["beat"] = json!(status.beat);
         state["loop"] = json!(status.looping);
-        state["paused"] = json!(activity.paused);
-        state["loading"] = json!(activity.loading);
-        state["xruns"] = json!(activity.xruns);
-        state["device_errors"] = json!(activity.device_errors);
+        self.activity().put(&mut state);
         state["leases"] = json!(leases);
         Some(state)
     }
@@ -738,14 +763,10 @@ impl Graph {
     /// resumes, and the session plays what waited for it. Otherwise it renders with instances of
     /// its own, beside playback.
     pub fn export(&self, length: Length) -> Result<Export> {
-        let mut e = self.call(move |a| a.export(length))?;
-        if let Some(l) = e.lent.as_mut() {
-            let (jobs, token) = (self.jobs.clone(), l.token);
-            l.done = Some(Box::new(move |failed| {
-                let _ = jobs.send(Box::new(move |a: &mut Actor| a.export_done(token, failed)));
-            }));
-        }
-        Ok(e)
+        // What tells the session the export is over: given to the export on the actor, so a job
+        // that fails after it still tells (the export's guard drops then).
+        let jobs = self.jobs.clone();
+        self.call(move |a| a.export(length, jobs))
     }
 
     /// What the engine is busy with besides playing: paused for an export, and the plugins being

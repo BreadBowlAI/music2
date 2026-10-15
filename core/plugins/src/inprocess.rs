@@ -280,6 +280,9 @@ impl PluginHost for InProcess {
             if c.main().holds == Some(blob.sha) {
                 return Ok(false);
             }
+            // A load that fails may have landed in part: the plugin then holds nothing known, and
+            // the next load of any blob, the one it held before included, isn't skipped.
+            c.main().holds = None;
             load_state(c.plugin, &blob.bytes).with_context(|| c.main().info.found.id.clone())?;
             c.main().holds = Some(blob.sha);
             Ok(true)
