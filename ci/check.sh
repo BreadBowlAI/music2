@@ -107,11 +107,57 @@ quiet() {
 }
 # first <file> <pattern>: the first line that matches, cut to 160 characters.
 first() { grep -m1 -E "$2" "$1" 2> /dev/null | cut -c1-160; }
-# panicked <test>: where the test panicked, and the first line of why. Rust prints the thread's
-# id after its name: "thread 'a::b' (1234) panicked at src/x.rs:1:2:".
+# panicked <test> <log>: where the test panicked, and the first line of why. Rust prints the
+# thread's id after its name: "thread 'a::b' (1234) panicked at src/x.rs:1:2:".
 panicked() {
-  grep -A1 -E "^thread '$1' (\([0-9]+\) )?panicked at " "$OUT/test.log" | head -2 | tr '\n' ' ' |
+  grep -A1 -E "^thread '$1' (\([0-9]+\) )?panicked at " "$2" | head -2 | tr '\n' ' ' |
     sed -E "s/^thread '[^']*' (\([0-9]+\) )?panicked at //; s/ *$//" | cut -c1-160
+}
+# tally <log> <prefix>: the failed tests in <log>, one name a line, in $SCR/<prefix>tests, and in
+# $SCR/<prefix>whole each failed test binary that names no failed test: cargo's rerun arguments, a
+# tab, and why. One with no harness, or that crashed, says why by its first panic (or its own "hung"
+# or "FAILED" line), and counts as one failure; a failed doctest by its first FAILED line. Prints
+# the counts.
+tally() {
+  grep -E '^    [A-Za-z0-9_:]+$' "$1" | sed 's/^ *//' | sort -u > "$SCR/$2tests"
+  awk -v W="$SCR/$2whole" '
+    BEGIN { printf "" > W }
+    /^     Running |^   Doc-tests / { result = 0; failed = 0; named = 0; why = ""; grab = 0; test = "" }
+    grab { why = why " " $0; grab = 0 }
+    why == "" && /panicked at / { why = $0; sub(/^thread .* panicked at /, "", why); grab = 1 }
+    why == "" && /^[a-z_]+: (hung|FAILED)/ { why = $0 }
+    test == "" && /^test .* \.\.\. FAILED$/ { test = $0 }
+    /^    [A-Za-z0-9_:]+$/ { named++ }
+    /^test result:/ { p += $4; f += $6; result = 1; failed = $6 }
+    /^error: (test|doctest) failed, to rerun pass / {
+      lone = !(result && failed)
+      if (lone) { f++; whole++ }
+      if (lone || !named) {
+        args = $0; sub(/^[^`]*`/, "", args); sub(/`.*$/, "", args)
+        print args "\t" substr(lone ? why : test, 1, 160) > W
+      }
+    }
+    END { printf "%d passed, %d failed", p, f; if (whole) printf " (%d of them a whole test binary)", whole }' "$1"
+}
+# failures <prefix> <log>: what failed, for "what failed": each test with where it panicked, each
+# whole test binary with why.
+failures() {
+  while read -r t; do
+    echo "test $t"
+    r=$(panicked "$t" "$2")
+    if [ -n "$r" ]; then echo "  $r"; fi
+  done < "$SCR/$1tests"
+  while IFS="$TAB" read -r args why; do
+    echo "test binary $args"
+    if [ -n "$why" ]; then echo "  $why"; fi
+  done < "$SCR/$1whole"
+}
+# cause <log>: the line after "error:" that says why a build failed: a link error's missing symbol
+# (named only below "linking with cc failed"), else a compile error's place.
+cause() {
+  w=$(grep -m1 -A1 -E 'Undefined symbols|undefined reference' "$1" 2> /dev/null | tr -s ' \n' '  ' | sed 's/^ *//' | cut -c1-160)
+  if [ -z "$w" ]; then w=$(first "$1" '^ *--> ' | sed 's/^ *//'); fi
+  if [ -n "$w" ]; then echo "  $w"; fi
 }
 # stuck: the tests libtest called slow that never finished, when a run was stopped.
 stuck() {
@@ -241,7 +287,7 @@ if quiet build.log cargo build --locked --workspace --all-targets; then
   record build PASS ""
 else
   record build FAIL "see build.log"
-  first "$OUT/build.log" '^error' | sed 's/^/build: /' >> "$OUT/failed"
+  { first "$OUT/build.log" '^error' | sed 's/^/build: /'; cause "$OUT/build.log"; } >> "$OUT/failed"
 fi
 
 # 4. Linux only: the desktop app, opened on an invisible screen (Xvfb), never on one you can see,
@@ -341,40 +387,48 @@ fi
 
 # 5. Every Rust test, the desktop app's included, with a scratch HOME. A test binary that failed
 #    runs once more alone; if every one passes then, the run passes and names them as retried.
+#    Otherwise "what failed" names what failed again, and what passed then is named as retried.
 begin "rust tests" "10 min"
 quiet test.log env HOME="$OUT/home" cargo test --locked --workspace --no-fail-fast
 st=$?
-# A test binary that failed with no failed test to show for it (no harness, or it crashed) counts
-# as one failure.
-counts=$(awk '
-  /^     Running |^   Doc-tests / { result = 0; failed = 0 }
-  /^test result:/ { p += $4; f += $6; result = 1; failed = $6 }
-  /^error: (test|doctest) failed, to rerun pass / && !(result && failed) { f++; whole++ }
-  END { printf "%d passed, %d failed", p, f; if (whole) printf " (%d of them a whole test binary)", whole }' "$OUT/test.log")
-grep -E '^    [A-Za-z0-9_:]+$' "$OUT/test.log" | sed 's/^ *//' | sort -u > "$SCR/tests"
+counts=$(tally "$OUT/test.log" "")
 grep -o 'to rerun pass `[^`]*`' "$OUT/test.log" | sed 's/^to rerun pass `//; s/`$//' > "$SCR/binaries"
 again=1
 if [ $st -ne 0 ] && [ -s "$SCR/binaries" ]; then
   again=0
+  : > "$OUT/test-retry.log"
   while read -r args; do
     # cargo's own "-p <crate> --lib" or "--test <name>": split into words on purpose.
     env HOME="$OUT/home" cargo test --locked --no-fail-fast $args >> "$OUT/test-retry.log" 2>&1 < /dev/null || again=1
   done < "$SCR/binaries"
+  tally "$OUT/test-retry.log" again- > /dev/null
 fi
+# retried: what failed at first but not on its retry, for "passed only on a retry".
+retried() {
+  comm -23 "$SCR/tests" "$SCR/again-tests" | sed 's/^/test /'
+  cut -f1 "$SCR/whole" | sort -u | comm -23 - "$SCR/again-binaries" | sed 's/^/test binary /'
+}
 if [ $st -eq 0 ]; then
   record "rust tests" PASS "$counts"
 elif [ $again -eq 0 ]; then
   record "rust tests" PASS "$counts; passed on a retry"
-  if [ -s "$SCR/tests" ]; then sed 's/^/test /' "$SCR/tests"; else sed 's/^/test binary /' "$SCR/binaries"; fi >> "$OUT/flaky"
+  : > "$SCR/again-binaries"
+  retried > "$SCR/retried"
+  # A failure "what failed" can't name (a failed doctest): the binaries, by cargo's arguments.
+  if [ -s "$SCR/retried" ]; then cat "$SCR/retried"; else sed 's/^/test binary /' "$SCR/binaries"; fi >> "$OUT/flaky"
+elif [ -s "$SCR/binaries" ]; then
+  record "rust tests" FAIL "$counts: see test.log and test-retry.log"
+  # Only what failed again; a binary that failed again with nothing named is listed by its arguments.
+  cut -f1 "$SCR/again-whole" | sort -u > "$SCR/again-binaries"
+  failures again- "$OUT/test-retry.log" >> "$OUT/failed"
+  if [ ! -s "$SCR/again-tests" ] && [ ! -s "$SCR/again-whole" ]; then
+    grep -o 'to rerun pass `[^`]*`' "$OUT/test-retry.log" | sed 's/^to rerun pass `/test binary /; s/`$//' >> "$OUT/failed"
+  fi
+  retried >> "$OUT/flaky"
 else
   record "rust tests" FAIL "$counts: see test.log"
-  while read -r t; do
-    echo "test $t"
-    r=$(panicked "$t")
-    if [ -n "$r" ]; then echo "  $r"; fi
-  done < "$SCR/tests" >> "$OUT/failed"
-  sed 's/^/test binary /' "$SCR/binaries" >> "$OUT/failed"
-  if [ ! -s "$SCR/binaries" ]; then first "$OUT/test.log" '^error' | sed 's/^/tests: /' >> "$OUT/failed"; fi
+  failures "" "$OUT/test.log" >> "$OUT/failed"
+  { first "$OUT/test.log" '^error' | sed 's/^/tests: /'; cause "$OUT/test.log"; } >> "$OUT/failed"
 fi
 
 # 6. Clippy, every warning an error.
@@ -481,7 +535,9 @@ if [ -n "$GATES" ]; then
     record gates FAIL "$args: see gates.log"
     first "$OUT/gates-build.log" '^error' | sed 's/^/gates: /' >> "$OUT/failed"
   fi
-  grep -E '^(PASS|FAIL|SKIP)  |^      FAIL  ' "$OUT/gates.log" 2> /dev/null | cut -c1-160 > "$OUT/gates.sum"
+  # The verdicts, and each judged check with its numbers (p95, or the CPU as a share of a core),
+  # so a green run's timings can be recorded from the summary alone (PLAT-1).
+  grep -E '^(PASS|FAIL|SKIP)  |^      FAIL  |^      ok    .*(p95|of a core)' "$OUT/gates.log" 2> /dev/null | cut -c1-220 > "$OUT/gates.sum"
 fi
 
 # 12. The check changed nothing in the repo.
