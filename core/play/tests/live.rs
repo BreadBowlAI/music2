@@ -644,6 +644,64 @@ fn a_hold_freezes_and_resumes_without_a_step() {
     assert!(own > 0.01 && down <= 2.0 * own && up <= 2.0 * own, "steps: {down} out, {up} in; the music's own {own}");
 }
 
+// RENDER-1, RENDER-28 (step 7 design §10.5: while held, an activation waits for the resume): an
+// activation sent while held waits, and the resume after it still applies, then the activation,
+// and everything sent after them. Before, the resume queued behind the activation, which waited
+// for it: the engine stayed held and silent for good and took no message again, a seek, a stop,
+// a panic or a play included, while the player never looked stalled.
+#[test]
+fn a_resume_never_waits_behind_an_activation_waiting_for_it() {
+    let notes = json!([{"pitch": 60, "start": 0, "length": 32}, {"pitch": 64, "start": 3, "length": 4}]);
+    let song = pad(json!({"clips": [{"start": 0, "length": 32, "notes": notes}]}));
+    let r = song.renderer();
+    let info = r.info();
+    let (player, mut d) = playing(r, SR);
+    fill(&mut d, 4_800);
+    player.hold(true).unwrap();
+    fill(&mut d, 4_800);
+    assert!(player.held());
+    let (_, activation) = player.activate(song.after(&song, &info)).unwrap();
+    let sent = [activation, player.hold(false).unwrap(), player.seek(2.0).unwrap(), player.transport(m2_runtime::Cmd::Stop).unwrap()];
+    fill(&mut d, 10 * SR as usize);
+    for seq in sent {
+        assert!(player.applied(seq).is_some_and(|a| !a.refused), "message {seq} applied");
+    }
+    assert!(!player.held() && !engine(&mut d).is_held());
+    assert_eq!(engine(&mut d).activations(), 1);
+    let s = player.status();
+    assert!(!s.playing && s.pending.is_none(), "{s:?}");
+    let (panic, _) = (player.panic().unwrap(), player.play());
+    // From beat 2: the note at beat 3.
+    let out = fill(&mut d, SR as usize);
+    assert!(player.applied(panic).is_some() && player.is_playing() && peak(&out) > 0.1, "it plays again");
+    assert!(!player.stalled());
+}
+
+// RENDER-1, RENDER-9: a seek while held moves the frozen transport, and the status says so at
+// once, as it does for a seek while playing: the position is the target from the next callback
+// on, the whole hold long, and playback resumes there. Before, the status kept the frozen
+// position until the resume, though the seek no longer counted as pending.
+#[test]
+fn a_seek_while_held_is_where_playback_is() {
+    let song = pad(json!({"clips": [{"start": 0, "length": 32, "notes": [{"pitch": 60, "start": 0, "length": 32}]}]}));
+    let (player, mut d) = play(&song);
+    fill(&mut d, 24_000);
+    player.hold(true).unwrap();
+    fill(&mut d, 4_800);
+    assert!(player.held());
+    player.seek(6.0).unwrap();
+    assert_eq!(player.status().pending, Some(6.0));
+    for _ in 0..2 {
+        fill(&mut d, 24_000);
+        let s = player.status();
+        assert_eq!((s.pending, s.pos, s.beats), (None, 6 * 24_000, 6.0), "while held");
+    }
+    player.hold(false).unwrap();
+    fill(&mut d, 4_800);
+    let s = player.status();
+    assert!(!player.held() && s.beats > 6.0 && s.beats < 6.3, "resumed there: {s:?}");
+}
+
 // RENDER-9: a seek takes effect at the next block line: its target is the position at once, and
 // the engine plays from there.
 #[test]

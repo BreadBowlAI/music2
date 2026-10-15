@@ -546,6 +546,37 @@ fn an_inserted_effect_fades_dry_to_wet() {
     assert!(out[2 * len..].iter().zip(&t[1][2 * len..]).all(|(f, w)| f[0] == *w), "the wet side exactly after the window");
 }
 
+// RENDER-25a, RENDER-6a: an edit that lands while the engine idles (stopped and silent: the common
+// "stop, then edit and save") fades in as one made while it plays. A new drone added at the output
+// is silent while its input fades in, then ramps in over 5 ms. Before, the window started at the
+// clock the renderer last rendered at, long gone by, so it was over at once and the drone came in
+// at full level: a step of 1.0.
+#[test]
+fn an_edit_on_an_idle_engine_fades_in() {
+    let pk = std_packages();
+    let x = json!([{"id": "h", "op": "const", "value": 0.5}, {"id": "x", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "v", "by": "h"}}]);
+    let mut drone = x.as_array().unwrap().clone();
+    drone.extend([
+        json!({"id": "hz", "op": "const", "value": 110, "unit": "hz"}),
+        json!({"id": "tri", "op": "kernel", "kernel": "std:tri", "inputs": {"freq": "hz"}}),
+        json!({"id": "y", "op": "kernel", "kernel": "std:add", "inputs": {"a": "x", "b": "tri"}}),
+    ]);
+    let (a, b) = (flat(&synth(0.05, x, "x")), flat(&synth(0.05, Value::Array(drone), "y")));
+    let data = one_note();
+    let mut rig = Rig::of(&a, &data, build(&a, &data, &pk, &Owner::discard()));
+    rig.run(SR as usize);
+    assert!(rig.e.is_idle(), "stopped and silent, the engine idles");
+    let r = rig.prepare(&b, &data, &pk);
+    rig.send(Msg::Activate { renderer: Box::new(r) });
+    let out = rig.run(8 * BLOCK);
+    assert_eq!(rig.e.current().unwrap().stats().fresh.kernels, 2, "the drone and the add are new");
+    let fade = 240;
+    assert!(out[..fade].iter().all(|f| *f == [0.0; 2]), "silent while the add's input fades in");
+    assert!(peak(&out[2 * fade..]) > 0.9, "then the drone plays");
+    let step = max_step(&out);
+    assert!(step < 0.02, "it ramps in over 5 ms: a step of {step}");
+}
+
 // RENDER-25a (G6): a delay inserted on a sounding sine never takes a step into its memory, so its
 // first echo starts as smoothly as the sine moves: no sample-to-sample step over twice the sine's.
 #[test]
@@ -791,6 +822,82 @@ fn note_ids_never_repeat_into_a_plugin() {
     let ons: Vec<i32> = stats.notes().iter().filter(|e| e.1 == Note::On).map(|e| e.2).collect();
     assert_eq!(ons, [1, 2, 3, 4, 5], "the note at beat 7 takes an id the instance never had");
     assert_eq!(n(&stats.repeated_ids) + n(&stats.unknown_offs), 0);
+}
+
+/// What an export does with the live instances `lent` lends, on this thread while the engine holds
+/// (RENDER-1, `Lent` in `crates/server/src/export.rs`): each is taken offline (deactivated and
+/// activated again), the export's renderer plays `flat` with them from 0 for `frames` (its first
+/// call resets each), and each is given back, active again, its code's parameters sent again.
+fn export_with(flat: &Flat, data: &DataSet, pk: &PackageSet, lent: &HashMap<usize, Arc<PluginInstance>>, frames: u64) {
+    let cycle = |inst: &PluginInstance| {
+        let (host, h) = (inst.host(), inst.handle());
+        host.deactivate(h);
+        host.activate(h, SR, BLOCK as u32).unwrap();
+    };
+    lent.values().for_each(|i| cycle(i));
+    let mut r = Renderer::lending(flat, data, pk, SR, lent).unwrap();
+    for k in 0..frames.div_ceil(BLOCK as u64) {
+        r.render_block(k * BLOCK as u64).unwrap();
+    }
+    drop(r);
+    for i in lent.values() {
+        cycle(i);
+        i.mark_reloaded();
+    }
+}
+
+// RENDER-1 (the owner's decision of 2026-10-15): a note held across an export plays again after
+// the resume. The export ended every note playback left in the plugin it borrowed, so at the resume
+// block that plugin gets a NoteOn for each note the song still holds, with the note's own id, which
+// its Off later ends. None for a note that ended before the hold, none for one an edit made while
+// held removed (and no Off for it either: the plugin no longer holds it), and nothing for a plugin
+// the export didn't borrow, whose voices were only frozen.
+#[test]
+fn a_note_held_across_an_export_plays_again_at_the_resume() {
+    let mut pk = probe_packages();
+    let q = json!([{"id": "q", "op": "plugin", "plugin": "clap:m2.probe", "inputs": {"in": "p", "notes": "n"}}]);
+    let flat = probe_song(&mut pk, 1.0, None, q, "q");
+    let notes = |pitches: &[(u32, f64)]| {
+        let ns: Vec<Value> = pitches.iter().map(|&(p, len)| json!({"pitch": p, "start": 0, "length": len})).collect();
+        with_notes(json!({"clips": [{"id": "c", "start": 0, "length": 8, "notes": ns}]}), at_bpm(120.0))
+    };
+    // A long note, one that ends before the hold, and one the edit made while held removes.
+    let data = notes(&[(60, 4.0), (64, 0.5), (67, 4.0)]);
+    let r = build(&flat, &data, &pk, &Owner::discard());
+    let [hp, hq] = r.plugin_handles()[..] else { panic!("two probes") };
+    let (sp, sq) = (probe::stats(hp).unwrap(), probe::stats(hq).unwrap());
+    let mut rig = Rig::of(&flat, &data, r);
+    rig.cmd(Cmd::Play);
+    rig.run(BEAT as usize);
+    let held: Vec<(u32, i16)> = rig.e.current().unwrap().plugins()[0].notes.clone();
+    let id = |key: i16| held.iter().find(|k| k.1 == key).map(|k| k.0 as i32).unwrap();
+    assert_eq!(held.len(), 2, "the long notes sound: {held:?}");
+    rig.send(Msg::Hold(true));
+    rig.run(4 * BLOCK);
+    assert!(rig.e.is_held());
+    let generation = rig.e.current().unwrap().generation();
+    let edited = notes(&[(60, 4.0), (64, 0.5)]);
+    rig.send(Msg::SwapLane { generation, slot: 0, data: LaneSwap::Notes(Arc::new(notes_data(&edited, "song", "notes", SR as f64))) });
+    rig.run(BLOCK);
+    let mut lent = rig.e.current().unwrap().info().lend(&flat, &edited, &pk, &Continues::identity(&flat));
+    lent.retain(|&i, _| i == node(&flat, "p"));
+    export_with(&flat, &edited, &pk, &lent, 5 * BEAT);
+    drop(lent);
+    assert_eq!(sp.sounding.load(Ordering::Relaxed), 0, "the export ended every note");
+    // What each probe hears from the resume on, after the export's own notes.
+    let (resume, unknown, from) = (rig.e.clock() as i64, n(&sp.unknown_offs), (sp.notes().len(), sq.notes().len()));
+    let since = |s: &Stats, from: usize| s.notes()[from..].to_vec();
+    rig.send(Msg::Hold(false));
+    rig.run(BLOCK);
+    assert_eq!(since(&sp, from.0), [(resume, Note::On, id(60))], "the long note again, at the resume");
+    assert_eq!(since(&sq, from.1), [(resume, Note::Off, id(67))], "the other probe only lets go of the removed note");
+    assert_eq!(rig.e.current().unwrap().plugins()[0].notes, [(id(60) as u32, 60)]);
+    assert_eq!(sp.sounding.load(Ordering::Relaxed), 1);
+    rig.run(3 * BEAT as usize);
+    let end = (4 * BEAT) as i64;
+    assert_eq!(since(&sp, from.0)[1..], [(end, Note::Off, id(60))], "its Off ends it, where it was written");
+    assert_eq!((sp.sounding.load(Ordering::Relaxed), n(&sp.unknown_offs) - unknown), (0, 0), "nothing left on, no Off for a note it lacks");
+    assert_eq!(rig.e.current().unwrap().held_notes(), 0);
 }
 
 // RENDER-25, RENDER-26a: a plan that keeps nothing (an instance made fresh) doesn't chase the

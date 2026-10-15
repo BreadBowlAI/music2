@@ -26,7 +26,7 @@ mod resample;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering, fence};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
@@ -241,7 +241,7 @@ struct Shared {
     /// The device's errors so far, one count per [`DeviceEvent`].
     device_errors: [AtomicU64; 4],
     stalled: AtomicBool,
-    /// Held for an export, published after the callback returned (RENDER-1).
+    /// Held for an export, published after the callback's work, with its stamps (RENDER-1).
     held: AtomicBool,
     /// A device (or the silent clock) calls back: a quiet one has stopped.
     device: AtomicBool,
@@ -359,8 +359,12 @@ impl Callback {
 
     /// The audio callback: fill `data`, interleaved with `channels` channels.
     fn fill(&mut self, data: &mut [f32], channels: usize) {
+        // Marked for the allocation counter in debug builds only, the only ones that install it:
+        // a release callback touches no thread-local, whose first touch may allocate (macOS).
+        #[cfg(debug_assertions)]
         alloc::set_in_callback(true);
         self.fill_in(data, channels);
+        #[cfg(debug_assertions)]
         alloc::set_in_callback(false);
     }
 
@@ -498,6 +502,16 @@ impl Callback {
         }
     }
 
+    /// What a message never taken holds, to drop elsewhere.
+    fn leftover(m: Msg) -> Option<Gone> {
+        match m {
+            Msg::Replace { live, .. } => Some(Gone::Live(live)),
+            Msg::Engine(Envelope { msg: EngineMsg::Activate { renderer }, .. }) => Some(Gone::Engine(Retired::Renderer(renderer))),
+            Msg::Engine(Envelope { msg: EngineMsg::SwapLane { data, .. }, .. }) => Some(Gone::Engine(Retired::Lane(data))),
+            Msg::Engine(_) | Msg::Unload => None,
+        }
+    }
+
     /// A panic in the engine: what played is retired, never dropped here, and the callback
     /// plays silence until a project is opened again.
     fn crash(&mut self) {
@@ -554,6 +568,10 @@ impl Callback {
             s.refused.fetch_add(refused - self.refused, Ordering::Relaxed);
             self.refused = refused;
         }
+        // Once the callback's work is done: a reader that sees it held may call the instances. Before
+        // the stamps are released, so a reader that sees a hold's stamp sees this callback's
+        // `held` or a later one, never the one before (an export's wait reads both).
+        s.held.store(st.held, Ordering::Release);
         s.seq.store(seq + 2, Ordering::Release);
         if let Some(l) = &self.live {
             s.clock.store(l.engine.clock(), Ordering::Relaxed);
@@ -563,8 +581,23 @@ impl Callback {
         // After the position: a reader that sees a seek or a load taken sees where it went.
         s.seeks_applied.store(self.seeks, Ordering::Release);
         s.loads_applied.store(self.loads, Ordering::Release);
-        // Once the callback's work is done: a reader that sees it held may call the instances.
-        s.held.store(st.held, Ordering::Release);
+    }
+}
+
+impl Drop for Callback {
+    /// Its player was let go and its stream stopped (or its silent clock): what it plays, what it
+    /// fades out, what waited for it and what it kept leaves for the dropper, as anything it
+    /// retires does. So no engine is freed on the audio thread, even by a stream that drops its
+    /// callback there (cpal's ALSA stream does). It is no callback any more: what the dropper has no
+    /// room for is dropped here.
+    fn drop(&mut self) {
+        let mut rest = vec![self.live.take().map(Gone::Live), self.fade.take().map(|f| Gone::Live(f.old))];
+        rest.extend(self.held.take().map(Callback::leftover));
+        rest.extend(self.gone.iter_mut().map(Option::take));
+        rest.extend(self.rx.try_iter().map(Callback::leftover));
+        for g in rest.into_iter().flatten() {
+            let _ = self.retired.try_send(g);
+        }
     }
 }
 
@@ -576,6 +609,8 @@ pub struct Player {
     shared: Arc<Shared>,
     next_seq: Arc<AtomicU64>,
     cells: Arc<Writer>,
+    /// Held by every clone: once the last is let go, its stream stops and its threads end.
+    alive: Arc<()>,
     /// The device's own rate. The engine runs at the project's.
     pub device_rate: u32,
     pub device: String,
@@ -614,7 +649,30 @@ impl Driver {
     }
 }
 
-/// Drop what the audio thread retires, polling: no thread ever blocks on the channel.
+/// How often a device's thread looks whether its player was let go.
+const LOOK: Duration = Duration::from_millis(50);
+
+/// A device's thread while `stream` plays: say what the device reported, once a second while it
+/// reports anything, until every clone of the player is let go (`alive` is gone: the server lets
+/// go of one that stalled, crashed or whose output moved). Then stop the stream, which drops the
+/// callback: what that played leaves for the dropper ([`Callback`]'s drop), and the dropper ends.
+fn serve<S>(stream: S, shared: Arc<Shared>, alive: Weak<()>) {
+    let (mut seen, mut said) = (DeviceErrors::default(), Instant::now());
+    while alive.strong_count() > 0 {
+        std::thread::sleep(LOOK);
+        if said.elapsed() >= Duration::from_secs(1) {
+            let now = shared.device_errors();
+            if let Some(words) = now.since(seen) {
+                eprintln!("music2: {words}");
+            }
+            (seen, said) = (now, Instant::now());
+        }
+    }
+    drop(stream);
+}
+
+/// Drop what the audio thread retires, polling: no thread ever blocks on the channel. Ends once
+/// the callback is gone and everything it retired is dropped.
 fn drop_retired(retired: Receiver<Gone>) {
     std::thread::Builder::new()
         .name("m2-play-drop".into())
@@ -640,7 +698,15 @@ impl Player {
         let (retired_tx, retired) = bounded::<Gone>(RETIRED);
         let shared = Arc::new(Shared::default());
         let cb = Callback::new(rx, retired_tx, shared.clone(), device_rate);
-        let player = Player { tx, shared, next_seq: Arc::default(), cells: Arc::default(), device_rate, device: device.into() };
+        let player = Player {
+            tx,
+            shared,
+            next_seq: Arc::default(),
+            cells: Arc::default(),
+            alive: Arc::default(),
+            device_rate,
+            device: device.into(),
+        };
         (player, cb, retired)
     }
 
@@ -671,21 +737,10 @@ impl Player {
             };
             match open() {
                 Ok((stream, player, retired)) => {
-                    let shared = player.shared.clone();
+                    let (shared, alive) = (player.shared.clone(), Arc::downgrade(&player.alive));
                     let _ = ready_tx.send(Ok(player));
-                    // Keep the stream alive, drop retired objects, and say what the device
-                    // reported, once a second while it reports anything.
                     drop_retired(retired);
-                    let mut seen = DeviceErrors::default();
-                    loop {
-                        std::thread::sleep(Duration::from_secs(1));
-                        let now = shared.device_errors();
-                        if let Some(said) = now.since(seen) {
-                            eprintln!("music2: {said}");
-                        }
-                        seen = now;
-                        let _ = &stream;
-                    }
+                    serve(stream, shared, alive);
                 }
                 Err(e) => {
                     let _ = ready_tx.send(Err(e));
@@ -702,11 +757,13 @@ impl Player {
         let frames: usize = std::env::var("M2_AUDIO_FRAMES").ok().and_then(|v| v.parse().ok()).filter(|&n| n > 0).unwrap_or(480);
         let (player, mut cb, retired) = Player::parts(SR, "none");
         player.shared.device.store(true, Ordering::Relaxed);
+        let alive = Arc::downgrade(&player.alive);
         std::thread::Builder::new().name("m2-play-silent".into()).spawn(move || {
             let mut buf = vec![0.0f32; frames * 2];
             let period = Duration::from_secs_f64(frames as f64 / SR as f64);
             let mut next = Instant::now();
-            loop {
+            // Until the player is let go; then `cb` drops here, its engine leaving for the dropper.
+            while alive.strong_count() > 0 {
                 cb.fill(&mut buf, 2);
                 next += period;
                 // A callback that ran late doesn't make the next ones early.
@@ -848,7 +905,8 @@ impl Player {
 
     /// Pause for an export that borrows the live plugin instances, or resume (RENDER-1): the
     /// engine fades out over 5 ms and processes nothing until it resumes where it held, fading in.
-    /// Applied in order with activations and swaps.
+    /// A hold applies in order with activations and swaps. A resume applies as soon as the engine
+    /// reads it, never behind an activation that waits for it, but never before its hold.
     pub fn hold(&self, on: bool) -> Result<u64> {
         self.envelope(EngineMsg::Hold(on))
     }

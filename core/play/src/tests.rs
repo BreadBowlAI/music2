@@ -68,8 +68,15 @@ fn freq(x: &[[f32; 2]], rate: u32) -> f64 {
 #[test]
 fn a_cell_write_never_waits_for_the_queue() {
     let (tx, rx) = bounded(1);
-    let player =
-        Player { tx, shared: Arc::default(), next_seq: Arc::default(), cells: Arc::default(), device_rate: 48_000, device: "test".into() };
+    let player = Player {
+        tx,
+        shared: Arc::default(),
+        next_seq: Arc::default(),
+        cells: Arc::default(),
+        alive: Arc::default(),
+        device_rate: 48_000,
+        device: "test".into(),
+    };
     let mut r = leveled();
     let target = level_of(&r);
     assert_eq!(target.cells.len(), 1);
@@ -126,8 +133,15 @@ fn peak(x: &[[f32; 2]]) -> f32 {
 #[test]
 fn a_full_queue_stalls_instead_of_hanging() {
     let (tx, _rx) = bounded(1);
-    let player =
-        Player { tx, shared: Arc::default(), next_seq: Arc::default(), cells: Arc::default(), device_rate: 48_000, device: "test".into() };
+    let player = Player {
+        tx,
+        shared: Arc::default(),
+        next_seq: Arc::default(),
+        cells: Arc::default(),
+        alive: Arc::default(),
+        device_rate: 48_000,
+        device: "test".into(),
+    };
     player.play();
     let t = Instant::now();
     let e = player.seek(4.0).unwrap_err();
@@ -354,4 +368,98 @@ fn what_the_device_reported_is_said_in_words() {
         all.since(one).as_deref(),
         Some("the audio device reported 3 dropouts, the output moved to another device, the device is gone, 3 other errors")
     );
+}
+
+/// Wait up to 2 s for `f`.
+fn eventually(mut f: impl FnMut() -> bool) -> bool {
+    let t = Instant::now();
+    while t.elapsed() < Duration::from_secs(2) {
+        if f() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    false
+}
+
+// RENDER-28 (K1): a silent player let go stops. Its clock's thread ends once every clone is let
+// go, and the engine it played leaves for the dropper, which frees it and ends too. Before, the
+// thread rendered on for good, holding the engine (264 kernel instances alive a second after the
+// server let go of a player, measured).
+#[test]
+fn a_silent_player_let_go_stops_and_frees_its_engine() {
+    let player = Player::silent().unwrap();
+    let r = sine(48_000);
+    let plan = Arc::downgrade(&r.info());
+    player.open(r).unwrap();
+    assert!(eventually(|| player.status().pending.is_none()), "the clock took the project");
+    let (shared, also) = (Arc::downgrade(&player.shared), player.clone());
+    drop(player);
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(plan.strong_count(), 1, "a clone left keeps it playing");
+    drop(also);
+    assert!(eventually(|| plan.strong_count() == 0), "the engine is freed");
+    assert!(eventually(|| shared.strong_count() == 0), "the clock's thread ended");
+}
+
+/// A stream as cpal's ALSA one runs: the callback on a thread of its own (calling back, or not, as
+/// a stalled device), until the stream drops, which stops that thread and waits for it. The
+/// callback drops there, on the audio thread.
+struct Stream {
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Stream {
+    fn new(mut cb: Callback, calls_back: bool) -> Stream {
+        let stop = Arc::new(AtomicBool::new(false));
+        let s = stop.clone();
+        let thread = std::thread::spawn(move || {
+            let mut buf = vec![0.0f32; 2 * 128];
+            while !s.load(Ordering::Relaxed) {
+                if calls_back {
+                    cb.fill(&mut buf, 2);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        });
+        Stream { stop, thread: Some(thread) }
+    }
+}
+
+impl Drop for Stream {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(t) = self.thread.take() {
+            t.join().unwrap();
+        }
+    }
+}
+
+// RENDER-28 (K1): a device's player let go stops its stream, and its thread ends; the engine the
+// callback played leaves the audio thread for the dropper, even when the stream drops the callback
+// there. With a device that calls back and one that stopped (a stall, when the server lets a player
+// go, with the project it sent never taken). Before, the thread parked for good, holding the stream.
+#[test]
+fn a_device_player_let_go_stops_its_stream_and_frees_its_engine_elsewhere() {
+    for calls_back in [true, false] {
+        let (player, cb, retired) = Player::parts(48_000, "test");
+        let (shared, alive) = (player.shared.clone(), Arc::downgrade(&player.alive));
+        let device = std::thread::spawn(move || serve(Stream::new(cb, calls_back), shared, alive));
+        let r = sine(48_000);
+        let plan = Arc::downgrade(&r.info());
+        player.open(r).unwrap();
+        if calls_back {
+            assert!(eventually(|| player.status().pending.is_none()), "the callback took the project");
+        }
+        let shared = Arc::downgrade(&player.shared);
+        drop(player);
+        device.join().unwrap();
+        assert_eq!(shared.strong_count(), 0, "the stream stopped, its callback gone (calls back: {calls_back})");
+        let gone: Vec<Gone> = retired.try_iter().collect();
+        assert!(gone.iter().any(|g| matches!(g, Gone::Live(_))), "the engine left for the dropper (calls back: {calls_back})");
+        assert_eq!(plan.strong_count(), 1);
+        drop(gone);
+        assert_eq!(plan.strong_count(), 0, "freed there");
+    }
 }

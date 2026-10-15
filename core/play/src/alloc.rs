@@ -1,7 +1,8 @@
 //! The audio thread's allocation counter (RENDER-28). Installed as the global allocator, as debug
 //! builds of the app do and `tests/no_alloc.rs` does, it counts every allocation, free and
-//! reallocation made while a device callback runs: the callback marks its thread around its work.
-//! It never panics or prints in the callback; [`watch`] logs from a thread of its own.
+//! reallocation made while a device callback runs: in debug builds the callback marks its thread
+//! around its work. A release callback marks nothing, so it touches no thread-local. It never
+//! panics or prints in the callback; [`watch`] logs from a thread of its own.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -20,8 +21,8 @@ thread_local! {
 static ALL: AtomicU64 = AtomicU64::new(0);
 static TRACE: AtomicBool = AtomicBool::new(false);
 
-/// Mark the calling thread as running a device callback, or not. Touches only a thread-local
-/// whose first use allocates nothing.
+/// Mark the calling thread as running a device callback, or not: debug builds' callbacks do. It
+/// touches a thread-local, and a thread's first touch of one may allocate (on macOS).
 pub fn set_in_callback(on: bool) {
     let _ = IN_CALLBACK.try_with(|c| c.set(on));
 }

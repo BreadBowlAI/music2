@@ -463,6 +463,9 @@ struct PluginNode {
     /// An export's borrowed instance: reset at its first call, so it starts from silence as a
     /// fresh one would (RENDER-1).
     reset_first: bool,
+    /// Its instance is back from an export, which ended its notes: at its next call, each note it
+    /// holds that its lane still holds starts again, and the others are forgotten (RENDER-1).
+    again: bool,
 }
 
 /// A top-level plugin node, as the gates and tests see it.
@@ -484,16 +487,19 @@ const PARAM_STEP: usize = 16;
 const OUT_EVENTS: usize = 256;
 
 /// One call's events for a plugin, for the block's frames `lo..hi`: first a choke and a NoteOff
-/// at its first frame for each of `ended`, and a NoteOff for each of `release`, then the lane's
-/// note events (already in order) from `*next` on, merged with `params` sampled every
-/// [`PARAM_STEP`] frames. At one frame parameters come after notes, the order a stable sort by
-/// time gave before. An On becomes a NoteOn (and a Tuning between keys), an Off a NoteOff for the
-/// key `keys` holds for it. Returns how many NoteOffs it sent, and the time of the last. Never
-/// allocates: `out` and `keys` keep their room (RENDER-28).
+/// at its first frame for each of `ended`, and a NoteOff for each of `release`; with `again` (the
+/// lane's scheduler, once an export gave the instance back), a NoteOn there for each of `keys` the
+/// scheduler still holds, and the others forgotten; then the lane's note events (already in order)
+/// from `*next` on, merged with `params` sampled every [`PARAM_STEP`] frames. At one frame
+/// parameters come after notes, the order a stable sort by time gave before. An On becomes a
+/// NoteOn (and a Tuning between keys), an Off a NoteOff for the key `keys` holds for it. Returns
+/// how many NoteOffs it sent, and the time of the last. Never allocates: `out` and `keys` keep
+/// their room (RENDER-28).
 #[allow(clippy::too_many_arguments)]
 fn plugin_events(
     ended: &[(u32, i16)],
     release: &[(u32, i16)],
+    again: Option<&sched::NoteScheduler>,
     notes: &[Event],
     next: &mut usize,
     params: &mut [(u32, Input, Option<f32>)],
@@ -515,6 +521,20 @@ fn plugin_events(
     for &(id, key) in release {
         out.push(P::NoteOff { time: 0, id: id as i32, key });
         (offs, last) = (offs + 1, Some(0));
+    }
+    // Back from an export, which ended them (RENDER-1): the notes the song still holds start
+    // again, with their own ids, so their Offs end them. One the lane let go at this block line,
+    // or lets go within it, isn't started: the plugin no longer holds it, so no Off is sent for it.
+    if let Some(s) = again {
+        keys.retain(|&(id, key)| {
+            let Some((pitch, velocity)) = s.sounding_note(id) else { return false };
+            out.push(P::NoteOn { time: 0, id: id as i32, key, velocity: velocity as f64 });
+            let tune = pitch as f64 - key as f64;
+            if tune.abs() > 1e-6 {
+                out.push(P::Tuning { time: 0, id: id as i32, key, semitones: tune });
+            }
+            true
+        });
     }
     let mut note = |e: Event, out: &mut m2_plugins::Events| match e {
         Event::On { frame, id, pitch, velocity, .. } => {
@@ -593,13 +613,27 @@ impl PluginNode {
         }
         if std::mem::take(&mut self.reset_first) {
             host.reset(h);
+            // With the export's call before it, that ended the notes playback left in it: its live
+            // node starts the ones the song still holds again at the resume.
+            inst.mark_lent();
         }
+        let mut again = std::mem::take(&mut self.again).then(|| self.notes.and_then(|s| lanes[s].scheduler())).flatten();
         // One call per run: a call never spans a jump, and each gets its own transport (RENDER-9).
         for (ri, run) in b.runs.as_slice().iter().enumerate() {
             let (lo, hi) = (run.off as usize, (run.off + run.n) as usize);
             let (ended, release) = if ri == 0 { (&self.ended[..], &self.release[..]) } else { (&[][..], &[][..]) };
-            let (offs, last) =
-                plugin_events(ended, release, notes, &mut next, &mut self.params, bufs, (lo, hi), &mut self.keys, &mut self.events);
+            let (offs, last) = plugin_events(
+                ended,
+                release,
+                again.take(),
+                notes,
+                &mut next,
+                &mut self.params,
+                bufs,
+                (lo, hi),
+                &mut self.keys,
+                &mut self.events,
+            );
             self.offs += offs as u64;
             if let Some(t) = last {
                 self.last_off = Some(b.engine + (lo as u32 + t) as u64);
@@ -905,12 +939,13 @@ impl Builder<'_> {
             }
         }
         // Room for one run's notes, a Tuning for each On, every parameter sampled, and a choke and
-        // a NoteOff for every note it holds, a NoteOff for every note it lets go, as many as its
-        // lane's room holds or the node it took its instance from held.
+        // a NoteOff for every note it holds, a NoteOff for every note it lets go, and a NoteOn and
+        // a Tuning for every note it starts again after an export, as many as its lane's room holds
+        // or the node it took its instance from held.
         let caps = notes.map_or(Caps::default(), |s| self.caps(s));
         let held = |c: Caps| c.sounding + 2 * c.ons + 8;
         let held = held(caps).max(room.map_or(0, held));
-        let events = caps.events() + caps.ons + (BLOCK / PARAM_STEP) * params.len() + 8 + 3 * held;
+        let events = caps.events() + caps.ons + (BLOCK / PARAM_STEP) * params.len() + 8 + 5 * held;
         Ok(PluginNode {
             name: n.name.clone(),
             inst,
@@ -926,6 +961,7 @@ impl Builder<'_> {
             offs: 0,
             last_off: None,
             reset_first,
+            again: false,
         })
     }
 }
@@ -2066,6 +2102,19 @@ impl Renderer {
         self.reset()?;
         self.transport.enter();
         Ok(())
+    }
+
+    /// The engine resumes after a hold (RENDER-1): each plugin node whose instance an export
+    /// rendered with starts again, at its next call, the notes the song still holds. Kernels and
+    /// voices were frozen, not reset, so they need nothing. Atomic swaps only.
+    pub(crate) fn resumed(&mut self) {
+        for e in &mut self.plan.graph.exec {
+            if let Exec::Plugin(p) = e
+                && p.inst.as_ref().is_some_and(|i| i.take_lent())
+            {
+                p.again = true;
+            }
+        }
     }
 
     /// Whether the engine may stop processing this renderer while stopped (RENDER-6a): no fade
