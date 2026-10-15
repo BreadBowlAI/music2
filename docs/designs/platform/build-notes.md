@@ -973,3 +973,39 @@ the plugins.
 
 Left alone, as asked: G10's timing under load (PLAT-1). Not this task's: the `notes` and `s5-knobs` flakes that
 `HANDOFF.md` and S6's checker name.
+
+**The independent check** (label `check-flakes`, at `5587530`, then `010a49d` with the fix below; logs in
+`~/m2-runs/check-check-flakes/` and `~/m2-runs/check-check-flakes-noplugins/`). "Under load" means beside 32 busy loops,
+one per thread.
+
+| What | Result |
+|---|---|
+| The diff against the task (three flakes, four `ci/check.sh` issues) | All there, and nothing extra. No product code changed, no macOS code touched, no OS code outside `core/os`. No test is weaker: the cell test now asks for 48 drains mid-stream (it asked for 2 drains in all); the Surge test catches a note passed one sample early, which the old one didn't. |
+| The cell test, on `010a49d` | 200 of 200 alone; 50 of 50 under load; `m2-runtime`'s lib binary 20 of 20 under load. The test as it was before this slice failed 10 of 50 under the same load, so the load was enough. With `published` stored before the cells are written, the test fails 50 of 50. |
+| Surge or the host? | A probe (not committed), 8 runs per offset. With Osc 1's retrigger on, notes at 0, 5, 31, 32, 64, 95, 96, 97 and 127 first sounded at 0, 0, 0, 32, 64, 64, 96, 96 and 96, every time: Surge's own block line. With it off, the first sound came anywhere up to about 140 samples after that line, and once before the note (a note at 5 sounding from 3). The builder's cause holds. The new test catches a note passed early. It can't catch one passed up to 31 samples late, since Surge plays those on the same line; the probe plugin's test (`the_thread_checks_answer_truthfully`) still checks the exact sample. |
+| The Surge test | 200 of 200 alone; 50 of 50 under load; `m2-plugins`' lib binary 20 of 20 under load. |
+| `live3a-fix` | 30 of 30 alone, 10 of 10 under load. Why the wait is enough: the timeline follows the playhead only while playing, so after the stop it scrolls back because its width shrinks once the page learns of beat 2. That is the same render that sets the playhead's `data-beat`. |
+| (d) No plugins, forced on a trimmed copy of the script | No `CLAP_PATH` and a scratch `HOME`, then `CLAP_PATH` at an empty folder: "FAIL: no row failed, but the test plugins weren't there…", exit 1, and the first line of "what failed" names the folder. With the plugins: PASS, exit 0. |
+| (e) The app row's copy | A song that isn't there: "app first-song: examples/no-such-song couldn't be copied: cp: cannot stat …". A song folder named `odd name 'q' é`: the app opens it, PASS. |
+| (f) The test count | S1's log: 686 passed, 11 failed (1 of them a whole test binary). The builder's and S6's logs: unchanged. A made-up log with a crashed binary (SIGSEGV), one with no harness and a failed doctest: 4 failed, 2 of them whole binaries, as it should be. |
+| (g) The cut | 40 lines: no note. 41: "(1 lines more: …)". 50: "(10 lines more: …)". |
+
+| Fixed | Why |
+|---|---|
+| The cell test's gate reads the drain count before the gate's write, not after (`010a49d`) | If the writer was held up between its write and that read (a preemption, on a busy machine) and the reader drained the write in between, the writer then waited for one more drain. None could come: nothing more was written, so every drain found nothing. The test hung, and the check with it, until someone pressed Ctrl-C. A 2 ms sleep put there hung it every time (stopped by a 60 s timeout). With the fix, it passes with a 2 ms sleep before or after the write, and still fails 50 of 50 on the broken publish order. The builder's runs didn't hit it: the window is a few instructions wide. |
+
+**The check** at `010a49d` (`ci/check.sh`, 8 min): exactly §13.1's S6 row, with no retry. Rust tests 715 passed, 5 failed
+(tests 1 to 5 of §4.1 by name), the cell and Surge tests among the passes. clippy fails at lint 4 (`watcher.rs:55`, "3
+findings"); without `-D warnings` it lists exactly lints 4 to 6 (`wake`, `backstop`, `deaf`). Suites 29 of 29 (1,034 of
+1,034 checks; `live3a-fix` 49 of 49, `live3b` 51 of 51). Renders 8 of 8. toolchain, web build, build, app, std rows, mac
+lint and repo unchanged PASS.
+
+**Without the plugins** at `010a49d` (a scratch `HOME`, no `CLAP_PATH`; 7 min): it fails, as PLAT-6 says. "plugins none:
+… doesn't hold both", the first line of "what failed" names the folder, exit 1. The rows are as above, except the
+browser suites row: PART, 28 of 29 (live3b without plugins). G10 didn't fail this time.
+
+Left for the lead (small, not fixed):
+- The cut's note says "1 lines more" when one line is cut.
+- When one test binary keeps failing, tests that passed on the retry are still listed under "what failed" (G10 in the
+  builder's run without plugins). Older than this slice.
+- When the app row's song copy fails, the row's note still says "see app-*.log" (the builder named this too).
