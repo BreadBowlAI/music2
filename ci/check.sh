@@ -170,7 +170,8 @@ summary() {
       echo "what failed:"
       head -40 "$OUT/failed" | sed 's/^/  /'
       cut=$(( $(grep -c '' "$OUT/failed") - 40 ))
-      if [ $cut -gt 0 ]; then echo "  ($cut lines more: the whole list is $OUT/failed, and \"failed\" in the logs file)"; fi
+      if [ $cut -eq 1 ]; then more=line; else more=lines; fi
+      if [ $cut -gt 0 ]; then echo "  ($cut $more more: the whole list is $OUT/failed, and \"failed\" in the logs file)"; fi
     fi
     echo
     echo "logs     $OUT.tgz"
@@ -334,7 +335,7 @@ elif [ $OS = linux ]; then
   if [ $ok -eq 0 ]; then
     record app PASS "the UI connected: $SAID$notes"
   else
-    record app FAIL "see app-*.log$notes"
+    record app FAIL "see \"what failed\"$notes"
   fi
 fi
 
