@@ -152,13 +152,19 @@ pub struct Export {
     pub lent: Option<crate::export::Lent>,
 }
 
-/// What the engine is busy with besides playing.
+/// What the engine is busy with besides playing, and what its device reported.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Activity {
     /// `"exporting"` while an export holds playback (RENDER-1).
     pub paused: Option<&'static str>,
     /// The plugins being created for the next plan, by name (RENDER-25).
     pub loading: Vec<String>,
+    /// The dropouts (xruns) the device reported since the player started: counted, and play
+    /// goes on (RENDER-28).
+    pub xruns: u64,
+    /// The device's other errors since the player started. A change of output device, or a
+    /// device that is gone, lets the player go; the rest are only counted.
+    pub device_errors: u64,
 }
 
 /// What `begin` and `update` read: the accepted revision's controls and what plays. Published by
@@ -357,8 +363,21 @@ pub struct Teardown {
     pub left: u64,
 }
 
-/// Let go of a player that stopped responding, off the caller's thread: telling its engine to stop
-/// waits for room, and its device may never call back again. Its device thread is left behind.
+/// Why `player` must be let go, if it must: it stopped responding or its engine panicked; or its
+/// output moved to another device, whose rate and period a new player opens with.
+fn let_go(player: &Player) -> Option<&'static str> {
+    if player.crashed() || player.stalled() {
+        Some("the audio device stopped responding")
+    } else if player.changed() {
+        Some("the sound output moved to another device")
+    } else {
+        None
+    }
+}
+
+/// Let go of a player that stopped responding or whose output moved, off the caller's thread:
+/// telling its engine to stop waits for room, and its device may never call back again. Its device
+/// thread is left behind.
 fn retire(player: Player) {
     let _ = std::thread::Builder::new().name("m2-play-retire".into()).spawn(move || {
         let _ = player.unload();
@@ -443,15 +462,18 @@ impl Inner {
     }
 
     /// The player, started if there is none. One that stopped responding (a send timed out, the
-    /// device failed or went quiet) or whose engine panicked is let go: this call fails, the next
-    /// starts a new one, and the next settle loads the project into it where it was.
+    /// device is gone or went quiet), whose engine panicked, or whose output moved to another
+    /// device is let go: this call fails, the next starts a new one, on the device that is the
+    /// default then, and the next settle loads the project into it where it was. An xrun lets
+    /// nothing go: the player counts it and plays on (RENDER-28).
     fn device(&self) -> Result<Device> {
         let mut d = self.player.lock();
-        if let Some(old) = d.take_if(|d| d.player.crashed() || d.player.stalled()) {
+        if let Some(why) = d.as_ref().and_then(|d| let_go(&d.player)) {
+            let old = d.take().expect("a player to let go");
             let st = old.player.status();
             *self.resume.lock() = st.pending.unwrap_or(st.beats);
             retire(old.player);
-            bail!("the audio device stopped responding; it starts again with the next action");
+            bail!("{why}; it starts again with the next action");
         }
         if d.is_none() {
             // Unit tests never open an audio device.
@@ -487,8 +509,15 @@ impl Inner {
     }
 
     fn activity(&self) -> Activity {
-        let held = self.current_device().is_some_and(|d| d.player.held());
-        Activity { paused: held.then_some("exporting"), loading: self.owner.loading() }
+        let device = self.current_device();
+        let held = device.as_ref().is_some_and(|d| d.player.held());
+        let e = device.map(|d| d.player.device_errors()).unwrap_or_default();
+        Activity {
+            paused: held.then_some("exporting"),
+            loading: self.owner.loading(),
+            xruns: e.xruns,
+            device_errors: e.changes + e.gone + e.other,
+        }
     }
 
     /// The view, the timeline, the project's name and folder, the transport as it is now, and the
@@ -515,6 +544,8 @@ impl Inner {
         state["loop"] = json!(status.looping);
         state["paused"] = json!(activity.paused);
         state["loading"] = json!(activity.loading);
+        state["xruns"] = json!(activity.xruns);
+        state["device_errors"] = json!(activity.device_errors);
         state["leases"] = json!(leases);
         Some(state)
     }
@@ -711,7 +742,8 @@ impl Graph {
     }
 
     /// What the engine is busy with besides playing: paused for an export, and the plugins being
-    /// loaded for the next plan, by name (RENDER-1, RENDER-25).
+    /// loaded for the next plan, by name (RENDER-1, RENDER-25); and what its device reported
+    /// (RENDER-28).
     pub fn activity(&self) -> Activity {
         self.inner.activity()
     }

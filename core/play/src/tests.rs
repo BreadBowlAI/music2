@@ -248,3 +248,110 @@ fn a_replaced_engine_keeps_the_beat_at_its_rate() {
     assert!(e.current().unwrap().transport().looping().is_some_and(|l| l.end_beat == 64.0), "the loop is kept");
     assert!(d.fading() || d.drain_retired().len() == 1, "the old engine fades out, then is retired");
 }
+
+/// Every kind of error cpal 0.18.2 reports, and what it means for the player.
+const KINDS: [(DeviceErrorKind, DeviceEvent); 14] = {
+    use DeviceErrorKind as K;
+    use DeviceEvent::{Changed, Gone, Other, Xrun};
+    [
+        (K::Xrun, Xrun),
+        (K::DeviceChanged, Changed),
+        (K::StreamInvalidated, Gone),
+        (K::DeviceNotAvailable, Gone),
+        (K::DeviceBusy, Other),
+        (K::HostUnavailable, Other),
+        (K::InvalidInput, Other),
+        (K::PermissionDenied, Other),
+        (K::RealtimeDenied, Other),
+        (K::ResourceExhausted, Other),
+        (K::UnsupportedConfig, Other),
+        (K::UnsupportedOperation, Other),
+        (K::BackendError, Other),
+        (K::Other, Other),
+    ]
+};
+
+// RENDER-28 (platform survey-later's bug 1): the device's errors are sorted by kind. An xrun is a
+// dropout; a change of output device asks for a new player; only a stream invalidated or a device
+// unavailable is gone; every other kind is just counted.
+#[test]
+fn the_devices_errors_are_sorted_by_kind() {
+    for (kind, event) in KINDS {
+        assert_eq!(DeviceEvent::of(kind), event, "{kind:?}");
+    }
+}
+
+// RENDER-28, bug 1: xruns and every other error that isn't a change or a loss of the device are
+// counted, and play goes on: the player isn't stalled, it plays the same bits, and it takes its
+// messages. Before, one xrun marked it stalled, and the server let it go at the next action,
+// which cut every tail.
+#[test]
+fn an_xrun_is_counted_and_play_goes_on() {
+    let (player, mut d) = Player::driven(48_000);
+    player.open(sine(48_000)).unwrap();
+    player.play();
+    let mut live = hear(&mut d, 4_800);
+    for _ in 0..3 {
+        d.error(DeviceErrorKind::Xrun.into());
+    }
+    let others: Vec<DeviceErrorKind> = KINDS.iter().filter(|(_, e)| *e == DeviceEvent::Other).map(|(k, _)| *k).collect();
+    for kind in &others {
+        d.error((*kind).into());
+    }
+    // With a text cpal formats, as ALSA's unsorted errors carry.
+    d.error(DeviceError::with_message(DeviceErrorKind::BackendError, format!("poll failed: {}", 5)));
+    assert_eq!(player.device_errors(), DeviceErrors { xruns: 3, other: others.len() as u64 + 1, ..DeviceErrors::default() });
+    assert!(!player.stalled() && !player.changed());
+    live.extend(hear(&mut d, 4_800));
+    assert_eq!(live, sine(48_000).render(0.2).unwrap(), "it played on, bit for bit");
+    player.stop();
+    hear(&mut d, 128);
+    assert!(!player.is_playing(), "and takes its messages");
+}
+
+// RENDER-28, bug 1: a change of output device asks for a new player (`changed`), which the server
+// opens on the new device. Meanwhile this one isn't stalled and plays on, as cpal reroutes it.
+#[test]
+fn a_device_change_asks_for_a_new_player_and_plays_on_meanwhile() {
+    let (player, mut d) = Player::driven(48_000);
+    player.open(sine(48_000)).unwrap();
+    player.play();
+    let mut live = hear(&mut d, 4_800);
+    assert!(!player.changed());
+    d.error(DeviceErrorKind::DeviceChanged.into());
+    assert!(player.changed() && !player.stalled());
+    assert_eq!(player.device_errors(), DeviceErrors { changes: 1, ..DeviceErrors::default() });
+    live.extend(hear(&mut d, 4_800));
+    assert_eq!(live, sine(48_000).render(0.2).unwrap());
+}
+
+// RENDER-28, bug 1: a stream invalidated or a device unavailable means the device is gone: the
+// player is stalled at once, as one whose sender timed out is, and the server lets it go.
+#[test]
+fn a_device_that_is_gone_stalls_the_player() {
+    for kind in [DeviceErrorKind::StreamInvalidated, DeviceErrorKind::DeviceNotAvailable] {
+        let (player, mut d) = Player::driven(48_000);
+        player.open(sine(48_000)).unwrap();
+        hear(&mut d, 128);
+        assert!(!player.stalled());
+        d.error(kind.into());
+        assert!(player.stalled() && !player.changed(), "{kind:?}");
+        assert_eq!(player.device_errors(), DeviceErrors { gone: 1, ..DeviceErrors::default() });
+    }
+}
+
+// The player's thread logs what the device reported, once a second while it reports anything:
+// the error callback itself never prints (RENDER-28).
+#[test]
+fn what_the_device_reported_is_said_in_words() {
+    let none = DeviceErrors::default();
+    assert_eq!(none.since(none), None);
+    let one = DeviceErrors { xruns: 1, ..none };
+    assert_eq!(one.since(none).as_deref(), Some("the audio device reported 1 dropout"));
+    assert_eq!(one.since(one), None, "nothing new");
+    let all = DeviceErrors { xruns: 4, changes: 1, gone: 2, other: 3 };
+    assert_eq!(
+        all.since(one).as_deref(),
+        Some("the audio device reported 3 dropouts, the output moved to another device, the device is gone, 3 other errors")
+    );
+}

@@ -17,7 +17,7 @@ use std::sync::{Arc, mpsc};
 
 use common::*;
 use m2_ir::Origin;
-use m2_play::{Gone, Player, alloc};
+use m2_play::{DeviceError, DeviceErrorKind, Gone, Player, alloc};
 use m2_runtime::{CellTarget, LaneSwap, NotesData, Renderer, Retired};
 use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
@@ -481,4 +481,30 @@ fn the_trap_counts() {
     alloc::set_in_callback(false);
     drop(std::hint::black_box(Box::new(7u64)));
     assert_eq!(alloc::here() - before, 2);
+}
+
+// RENDER-28 (platform survey-later's bug 1): cpal's error callback runs on the audio thread on
+// ALSA, and CoreAudio's overloads on its realtime thread. Counting an error there allocates and
+// frees nothing, for errors as cpal makes them: an xrun with no text, or with a static one (an
+// ALSA suspend), a change, or a loss of the device.
+#[test]
+fn the_device_error_callback_never_allocates() {
+    let (player, d) = Player::driven(SR);
+    let errors: [DeviceError; 5] = [
+        DeviceErrorKind::Xrun.into(),
+        DeviceError::with_message(DeviceErrorKind::Xrun, "Device does not support suspend/resume"),
+        DeviceErrorKind::DeviceChanged.into(),
+        DeviceErrorKind::StreamInvalidated.into(),
+        DeviceErrorKind::DeviceNotAvailable.into(),
+    ];
+    let n = trapped(|| {
+        alloc::set_in_callback(true);
+        for e in errors {
+            d.error(e);
+        }
+        alloc::set_in_callback(false);
+    });
+    assert_eq!(n, 0);
+    let e = player.device_errors();
+    assert_eq!((e.xruns, e.changes, e.gone, e.other), (2, 1, 2, 0), "every one counted");
 }

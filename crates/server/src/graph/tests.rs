@@ -1,7 +1,7 @@
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
-use m2_play::Driver;
+use m2_play::{DeviceErrorKind, Driver};
 
 use super::*;
 use m2_editor::Gestures;
@@ -1186,6 +1186,56 @@ fn a_stalled_player_is_replaced_and_the_project_plays_on_where_it_was() {
     eventually("where it was", || graph.status() == Status { playing: false, seconds: 1.5, beat: 3.0, looping: None });
     assert_eq!(player(&graph).device, "none");
     drop(driver);
+}
+
+// RENDER-28 (platform survey-later's bug 1): an xrun is counted and play goes on. No action
+// fails and the same player plays the project; the counts are in the engine view and its status.
+// Before, one xrun (a CoreAudio overload) let the player go at the next action, cutting every tail.
+#[test]
+fn an_xrun_is_counted_and_the_player_plays_on() {
+    let mut dc = Dc::new();
+    dc.graph.transport("play").unwrap();
+    dc.blocks(2);
+    for _ in 0..3 {
+        dc.driver.error(DeviceErrorKind::Xrun.into());
+    }
+    dc.driver.error(DeviceErrorKind::BackendError.into());
+    dc.graph.seek(1.0).unwrap();
+    dc.graph.transport("play").unwrap();
+    assert!(!dc.graph.poll(), "nothing to bring up to date");
+    assert_eq!(dc.blocks(4), vec![0.5; 4], "the same player plays on");
+    assert_eq!(dc.graph.inspect(|a| a.open.as_ref().unwrap().plays.as_ref().unwrap().epoch), 0, "never let go");
+    let a = dc.graph.activity();
+    assert_eq!((a.xruns, a.device_errors), (3, 1));
+    let state = dc.graph.state().unwrap();
+    assert_eq!((&state["xruns"], &state["device_errors"]), (&json!(3), &json!(1)), "in the engine view");
+}
+
+// RENDER-28, bug 1: a change of output device makes a new player, and only a device that is gone
+// (its stream invalidated, or unavailable) stalls one. Either way the action that meets it says
+// why, and the next settle loads the project into a new player, on the device that is the default
+// then, where it was. The new player's counts start from nothing.
+#[test]
+fn a_device_change_or_loss_makes_a_new_player_where_it_was() {
+    for (kind, why) in [
+        (DeviceErrorKind::DeviceChanged, "the sound output moved to another device"),
+        (DeviceErrorKind::StreamInvalidated, "the audio device stopped responding"),
+        (DeviceErrorKind::DeviceNotAvailable, "the audio device stopped responding"),
+    ] {
+        let mut dc = Dc::new();
+        dc.graph.seek(3.0).unwrap();
+        dc.blocks(2);
+        dc.driver.error(kind.into());
+        assert_eq!(dc.graph.activity().device_errors, 1, "{kind:?}");
+        let e = dc.graph.transport("play").unwrap_err();
+        assert!(e.to_string().starts_with(why), "{kind:?}: {e:#}");
+        assert!(dc.graph.poll(), "{kind:?}: a new player plays the project");
+        assert_eq!(dc.graph.inspect(|a| a.open.as_ref().unwrap().plays.as_ref().unwrap().epoch), 1, "{kind:?}");
+        eventually("where it was", || dc.graph.status().beat == 3.0);
+        assert_eq!(player(&dc.graph).device, "none", "{kind:?}: a new player (silent in tests)");
+        assert_eq!(dc.graph.activity(), Activity::default(), "{kind:?}");
+        dc.graph.transport("play").unwrap();
+    }
 }
 
 // ---------------------------------------------------------------- leases (WRITE-22)

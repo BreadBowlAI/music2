@@ -16,6 +16,9 @@
 //! the queue: they are written into the slots of the renderer they are for ([`Player::set_cells`]).
 //!
 //! Live mode: a NaN from a broken kernel is silenced, not an error.
+//!
+//! The device's errors are sorted by kind ([`DeviceEvent`]): an xrun is counted and play goes on,
+//! a change of output device asks for a new player, and only a device that is gone stalls it.
 
 pub mod alloc;
 mod cells;
@@ -28,6 +31,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+pub use cpal::{Error as DeviceError, ErrorKind as DeviceErrorKind};
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use m2_runtime::engine::{APPLIED, Msg as EngineMsg};
 pub use m2_runtime::engine::{Applied, CallbackStamp, Engine, Envelope, Heard, Retired};
@@ -127,6 +131,69 @@ impl std::fmt::Display for Stalled {
 
 impl std::error::Error for Stalled {}
 
+/// What an error the device reports means for the player. cpal gives every OS's errors one set of
+/// kinds, its xruns included (ALSA's `EPIPE` and suspends, CoreAudio's overloads, PipeWire's and
+/// JACK's), so this is the same on every OS (platform survey-later §2.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceEvent {
+    /// A buffer underrun or overrun: a dropout. Counted, and play goes on.
+    Xrun,
+    /// The output moved to another device, as cpal follows the default one. It plays on there,
+    /// but the new device has its own rate and period, so a new player should take over.
+    Changed,
+    /// The stream was invalidated or the device is unavailable (unplugged, or no default output
+    /// is left): the player is stalled.
+    Gone,
+    /// Anything else: counted, and play goes on. A device that stops calling back after one is
+    /// stalled a second later, as any quiet device is.
+    Other,
+}
+
+impl DeviceEvent {
+    /// What an error of `kind` means for the player.
+    pub fn of(kind: DeviceErrorKind) -> DeviceEvent {
+        match kind {
+            DeviceErrorKind::Xrun => DeviceEvent::Xrun,
+            DeviceErrorKind::DeviceChanged => DeviceEvent::Changed,
+            DeviceErrorKind::StreamInvalidated | DeviceErrorKind::DeviceNotAvailable => DeviceEvent::Gone,
+            _ => DeviceEvent::Other,
+        }
+    }
+}
+
+/// The errors a player's device reported since it started, counted by kind ([`DeviceEvent`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DeviceErrors {
+    pub xruns: u64,
+    pub changes: u64,
+    pub gone: u64,
+    pub other: u64,
+}
+
+impl DeviceErrors {
+    /// What the device reported since `before`, in words for the log, if anything.
+    pub fn since(self, before: DeviceErrors) -> Option<String> {
+        let n = |now: u64, then: u64| now.saturating_sub(then);
+        let s = |n: u64| if n == 1 { "" } else { "s" };
+        let mut said = vec![];
+        match n(self.xruns, before.xruns) {
+            0 => {}
+            x => said.push(format!("{x} dropout{}", s(x))),
+        }
+        if n(self.changes, before.changes) > 0 {
+            said.push("the output moved to another device".into());
+        }
+        if n(self.gone, before.gone) > 0 {
+            said.push("the device is gone".into());
+        }
+        match n(self.other, before.other) {
+            0 => {}
+            x => said.push(format!("{x} other error{}", s(x))),
+        }
+        (!said.is_empty()).then(|| format!("the audio device reported {}", said.join(", ")))
+    }
+}
+
 /// One [`Applied`] stamp, as atomics.
 #[derive(Default)]
 struct AppliedSlot {
@@ -171,7 +238,8 @@ struct Shared {
     refused: AtomicU64,
     loop_refused: AtomicBool,
     dropped_ons: AtomicU64,
-    device_error: AtomicBool,
+    /// The device's errors so far, one count per [`DeviceEvent`].
+    device_errors: [AtomicU64; 4],
     stalled: AtomicBool,
     /// Held for an export, published after the callback returned (RENDER-1).
     held: AtomicBool,
@@ -188,6 +256,26 @@ struct Shared {
     /// Where a load not yet taken starts: its beat (f64 bits), and whether it plays.
     load_beat: AtomicU64,
     load_playing: AtomicBool,
+}
+
+impl Shared {
+    /// cpal's error callback: count `e` by kind, and nothing else. On ALSA it runs on the audio
+    /// thread, and CoreAudio's overloads come from its realtime thread, so it never allocates,
+    /// locks or prints (RENDER-28): the stream's thread logs the counts. cpal makes an xrun's
+    /// error with no text of its own, so dropping it frees nothing.
+    fn device_error(&self, e: DeviceError) {
+        self.device_errors[DeviceEvent::of(e.kind()) as usize].fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn device_errors(&self) -> DeviceErrors {
+        let n = |e: DeviceEvent| self.device_errors[e as usize].load(Ordering::Relaxed);
+        DeviceErrors {
+            xruns: n(DeviceEvent::Xrun),
+            changes: n(DeviceEvent::Changed),
+            gone: n(DeviceEvent::Gone),
+            other: n(DeviceEvent::Other),
+        }
+    }
 }
 
 /// Where playback is, as the audio thread last published it.
@@ -519,6 +607,11 @@ impl Driver {
     pub fn fading(&self) -> bool {
         self.cb.fade.is_some()
     }
+
+    /// One error from the device, as cpal's error callback gets it.
+    pub fn error(&self, e: DeviceError) {
+        self.cb.shared.device_error(e);
+    }
 }
 
 /// Drop what the audio thread retires, polling: no thread ever blocks on the channel.
@@ -569,10 +662,7 @@ impl Player {
                 let stream = device.build_output_stream::<f32, _, _>(
                     config,
                     move |data: &mut [f32], _| cb.fill(data, channels),
-                    move |e| {
-                        shared.device_error.store(true, Ordering::Relaxed);
-                        eprintln!("music2: audio stream error: {e}");
-                    },
+                    move |e| shared.device_error(e),
                     None,
                 )?;
                 stream.play()?;
@@ -581,11 +671,19 @@ impl Player {
             };
             match open() {
                 Ok((stream, player, retired)) => {
+                    let shared = player.shared.clone();
                     let _ = ready_tx.send(Ok(player));
-                    // Keep the stream alive, and drop retired objects here.
+                    // Keep the stream alive, drop retired objects, and say what the device
+                    // reported, once a second while it reports anything.
                     drop_retired(retired);
+                    let mut seen = DeviceErrors::default();
                     loop {
-                        std::thread::park();
+                        std::thread::sleep(Duration::from_secs(1));
+                        let now = shared.device_errors();
+                        if let Some(said) = now.since(seen) {
+                            eprintln!("music2: {said}");
+                        }
+                        seen = now;
                         let _ = &stream;
                     }
                 }
@@ -914,14 +1012,27 @@ impl Player {
         now_ns()
     }
 
-    /// Whether the audio thread stopped taking messages: a sender timed out, the device
-    /// reported an error, or it hasn't called back for a second.
+    /// Whether the audio thread stopped taking messages: a sender timed out, the device is gone
+    /// ([`DeviceEvent::Gone`]), or it hasn't called back for a second. Nothing else the device
+    /// reports stalls the player: an xrun is only counted ([`Player::device_errors`]).
     pub fn stalled(&self) -> bool {
         let s = &self.shared;
         let quiet = s.device.load(Ordering::Relaxed)
             && now_ns().saturating_sub(s.last_callback_ns.load(Ordering::Relaxed)) > SILENT_DEVICE.as_nanos() as u64
             && s.last_callback_ns.load(Ordering::Relaxed) > 0;
-        s.stalled.load(Ordering::Relaxed) || s.device_error.load(Ordering::Relaxed) || quiet
+        let gone = s.device_errors[DeviceEvent::Gone as usize].load(Ordering::Relaxed) > 0;
+        s.stalled.load(Ordering::Relaxed) || gone || quiet
+    }
+
+    /// Whether the output moved to another device ([`DeviceEvent::Changed`]): this player plays
+    /// on there, but a new one should take over, opened at the new device's rate and period.
+    pub fn changed(&self) -> bool {
+        self.shared.device_errors[DeviceEvent::Changed as usize].load(Ordering::Relaxed) > 0
+    }
+
+    /// The errors the device reported since this player started, by kind.
+    pub fn device_errors(&self) -> DeviceErrors {
+        self.shared.device_errors()
     }
 
     /// Activations the audio thread refused, in all: each was prepared against a plan that wasn't
