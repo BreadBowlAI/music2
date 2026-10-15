@@ -503,3 +503,70 @@ Left for the lead:
 The check again at `8616d15`, with the fix (logs in `~/m2-runs/check-check-S6b/`): exactly §13.1's S6 row, with no retry.
 Rust tests 715 passed (one more: the new test), the same 5 failed; `m2-session`'s binary 93.5 s. clippy fails at lint 4,
 with only lints 4 to 6. Suites 29 of 29, renders 8 of 8, and every other row PASS.
+
+## S7. Saves that a crash can't break
+
+**Built**
+
+| What | Where |
+|---|---|
+| On a disk that can't swap, a save compares the file, then renames the new one over it in one step. Before, it moved the file aside first, so a crash in between left it missing. | `core/session/src/tx/stage.rs` (`rename_all`) |
+| The rollback of such a save writes the before bytes it holds in memory to `old-<k>` (pushed), checks the file still holds the save's bytes, and renames the before bytes over it in one step | `stage.rs` (`put_before`) |
+| The kill test runs every case on a disk that swaps and on one that can't (`Recorder { plain: true }`), as two tests that share one body; a new case `manifest` writes `music2.toml` and `song.ts` | `core/session/src/tx/kill_tests.rs` |
+| `a_failure_at_any_call_changes_nothing` runs on both disks too, and checks that `song.ts` is never renamed away or removed | `core/session/src/tx/stage_tests.rs` |
+| The scan at the lock pushes a completed commit's folders (as its step 8 does), then one barrier, then removes its staging and journal, all through the session's disk; a new test checks that order | `core/session/src/tx/journal.rs` (`tidy_completed`), `stage.rs` (`push_parents`), `session.rs`, `tx/mod.rs`; `a_completed_journal_goes_after_its_folders_are_pushed_and_a_barrier` |
+| A new WAV is pushed and its folder synced | `core/runtime/src/audio.rs` (`write_new_wav`) |
+| The bounce's provenance is pushed and `assets/` synced (and the project folder when `assets/` is new), before `--place` names the WAV | `apps/m2/src/main.rs` |
+| An export's part file is pushed before it gets its name, and its folder synced after | `crates/editor/src/render.rs` (`write_as`) |
+| A new song's files are pushed and every folder synced, the song's own entry last | `crates/server/src/project.rs` (`fill`, `push_tree`) |
+| WRITE-1 (files made outside a Tx), WRITE-15 *Today* (the fallback, the tidy at the lock), WRITE-16 *Today* (the kill test on both disks) | `docs/architecture.md` |
+
+**Measured**
+
+| What | Result |
+|---|---|
+| The kill test, both disks, side by side | Both pass, 130 s (the two tests run at once). In the check, `m2-session`'s whole binary took 147 s (93 s at S6). |
+| The no-swap kill test against the old move-aside fallback (put back for a moment, not committed) | Fails at `several (no swap) 22`: "song.ts changed since … Check it by hand", no fix (`ground/tests.md`'s kill point 22). The `manifest` case alone fails at kill point 16: "has no music2.toml, so it isn't a music2 project". With S7's fallback both pass. |
+| `strace` of the debug `m2` (scratch `HOME`): `m2 new … --example resample` | Every file `fsync`ed, then each folder, then the song's folder, then its parent `songs/`. |
+| `m2 bounce … --place chops.clips@16` | The WAV `fsync`ed, `assets/` synced, the provenance `fsync`ed, `assets/` synced; only then the placing Tx (journal, barrier, `RENAME_EXCHANGE` onto `clips.json`). |
+| `m2 render` into `assets/` | The part file `fsync`ed, then `renameat2(RENAME_NOREPLACE)`, then `assets/` synced. |
+
+**Deviations**
+
+| What | Why |
+|---|---|
+| The rollback writes `old-<k>` first, then checks the file, then renames (the design: check, write, rename) | The check sits right before the rename, so an outside write between them is as unlikely as on the way forward. |
+| The scan keeps the completed journals when its barrier fails (before, it removed them anyway) | The removal must never be durable before the renames (WRITE-15). A rollback whose barrier fails already does the same. No new state: the next lock tries again. |
+| `journal::scan` takes `Option<&mut dyn Disk>` (a writer's disk) instead of `tidy: bool` | The tidy goes through the session's disk, so a test can see its order. A reader passes `None` and still can't change anything. |
+| `fill` pushes, so New Song (`create`) gets it as well as `m2 new` (`create_at`) | Both share `fill`; a new song from the app needs it as much. |
+| The bounce also syncs the project folder when it made `assets/` | Otherwise `assets/` itself could be lost, with the WAV in it. |
+| `write_new_wav` removes the WAV when its push or folder sync fails | As for a failed write: "a failed write leaves nothing behind". |
+| An export whose folder sync fails after the file is named is an error, and the file stays | It is named and whole; the error tells nothing should rely on it. A folder `fsync` fails only on a failing disk (§9, attack 3). |
+| `m2-runtime` and `m2` gain an `m2-os` dependency | For `fs::push` and `fs::sync_dir`. Two lines in `Cargo.lock`; both already built `m2-os` through other crates. |
+| `a_failure_at_any_call_changes_nothing` names the failed call by `start + k` | It printed `calls[k]`, the wrong call. |
+
+Shared files this slice touches, each edit small: `Cargo.lock` (2 lines), `docs/architecture.md` (WRITE-1, WRITE-15 and WRITE-16, 3 lines), this file (this section). Not `ci/check.sh`, not `one_place.rs`.
+
+**The check** at `758e583` (`ci/check.sh`, 14 min while other slices' checks ran; logs and the app's screenshots in
+`~/m2-runs/check-build-s7/`): §13.1's S7 row, with one known flake.
+
+| Row | Result |
+|---|---|
+| toolchain, web build, build | PASS |
+| app | PASS: the UI connected in 1 s with `first-song` and with `with-plugins` |
+| rust tests | FAIL: tests 1 to 5 of §4.1 by name (`an_idle_project_is_watched_without_a_stat`, `own_commits_make_no_batch_with_events`, `events_that_miss_changes_give_way_to_walks`, `an_event_wakes_an_idle_watcher_and_a_batch_wakes_it_when_due`, `a_lane_written_in_two_halves_never_plays_empty`), and `m2-plugins`' `surge_plays_notes` once ("nothing before the note's sample offset"), which passed on its retry. 716 passed: S6's 715 and S7's 2 new tests, less the flake. |
+| clippy | FAIL at lint 4, `watcher.rs:55` ("3 findings"). Without `-D warnings` it lists exactly lints 4 to 6 (`wake`, `backstop`, `deaf`). |
+| std kernels, std.wasm, mac lint | PASS |
+| browser suites | PASS: 29 of 29, 1,034 of 1,034 checks, none on a retry; live3b 51 of 51 with the plugins |
+| renders | PASS: 8 of 8 match `e2e/renders.sha256` |
+| repo unchanged | PASS |
+
+`surge_plays_notes` is the flake the S2 to S5 notes name. Run alone 40 times on this checkout: 38 passed, 2 failed with
+the same message. S7 changes nothing in `core/plugins` or `core/os`.
+
+**Left for the lead**
+- The kill test makes `m2-session`'s binary about 50 s longer. Splitting it per case would run the cases side by side;
+  left as the design's two runs of one test, the name the contract cites kept.
+- The bounce's failure path keeps its old gap: when the provenance can't be written (now also when its push or the
+  folder sync fails), the WAV goes but the provenance file stays, so a retry with that name is refused. Older than
+  this slice.
