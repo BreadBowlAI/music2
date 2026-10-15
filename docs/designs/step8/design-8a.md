@@ -613,6 +613,9 @@ workers.
 
 ### 6.3 The macOS realtime set-up (`core/play/src/rt.rs`, new, macOS only)
 
+> **Platform step** (platform design §8): `rt.rs`, `Sem` and the QoS calls go into `m2-os` (`mac/rt.rs`, `linux/rt.rs`).
+> Step 5's overload listener gives way to cpal's `ErrorKind::Xrun` errors on every OS (`platform/survey-later.md` §5.5).
+
 When the stream opens:
 1. **Device id.** Take `DeviceTrait::id()`, the device's UID (`cpal-0.18.2/src/host/coreaudio/macos/device.rs:431`), and
    translate it with `kAudioHardwarePropertyTranslateUIDToDevice` into an `AudioDeviceID`. objc2-core-audio 0.3.2 is

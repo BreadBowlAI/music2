@@ -2253,7 +2253,7 @@ About 14.5 weeks in all *estimate*. §12 says what each slice costs when built b
   early slices onto step 7 slice 2's `actor.rs` and `graph.rs`, and structural edits that cut tails until step 7 lands.
   8b.5 must also wait for the G11 workflow's `notes.rs`.
 
-If the owner answers yes to Q3, **8b.10 MIDI input** follows 8b.6: CoreMIDI note input to the selected track's lane as a
+If the owner answers yes to Q3, **8b.10 MIDI input** follows 8b.6: midir note input to the selected track's lane as a
 device source (§8.1), no recording, released when the device disconnects; about 1 week *estimate*.
 
 ---
