@@ -710,3 +710,42 @@ them). Both suites passed (52 of 52, 28 of 28).
   change there is then a miss, so the two-miss rule moves the project to walks. Untested: lowering the limit needs root.
 - One inotify instance and its reader thread live until the process ends, by design.
 - §13.3 still applies after `taste` merges: re-run s8-tracks' "layout.json within a second" on this watcher.
+
+**The independent check** (label `check-s8`, at `e4e1504`; logs in `~/m2-runs/check-check-s8/`)
+
+| What | Result |
+|---|---|
+| The diff against §13.2's S8 row and §3.4 | All of the row is there, and nothing extra but the deviations above. Tests 1 to 5 are unchanged, and no test is weaker. No OS code outside `core/os`: `one_place.rs` passes with an empty list. The macOS code says what it said: the same FSEvents calls, flags, flush and drop; each flag gives the same hint as before, now split between `mac/watch.rs` and `events.rs`. |
+| `ci/check.sh` | `music2 check: PASS`, with 2 retries, neither in this slice's area: `m2-plugins`' `surge_plays_notes` (the known flake), and `live3b` once (below). Rust tests 732 passed, then the flake on its retry; clippy PASS, and without `-D warnings` it reports nothing; 29 of 29 suites after the retry; renders 8 of 8; toolchain, web build, build, app, std rows, mac lint and repo unchanged PASS. No app or server log says the watcher fell back to walks. |
+| Test 5 on Linux (design §4.1, "unverified until S8") | Verified: inotify names each write of a file still open. A copy of its events case at 400 ms that asks for exactly two revisions (not committed) passed 20 of 20 alone and 20 of 20 under load: the half (4 notes, `lane.invalid`), then all 8. Only an event can make that first revision: the next walk was 5 s away, and the case lasts under 2 s. So the test's "one revision" branch is for FSEvents; Linux never takes it. |
+| The 4 new tests and tests 1 to 5 | 20 of 20 each, run alone; 20 of 20 each with 32 threads spinning (load average 23 to 68) |
+| `m2-server`'s whole test binary, two copies at once, 3 times, with 32 threads spinning | all pass (136 tests each) |
+| `m2-os`'s tests with 9 probes (not committed), 20 runs alone and 20 under load | Every watch test and probe passed every run. The probes: a tree 60 deep made at once (every level watched, a write at the bottom named); 3,000 folders made at once (all watched, a write in each named); two folders swapped with `RENAME_EXCHANGE`; a folder moved out, then made again; a folder renamed and written into before the reader could look (named by its new path); a folder renamed to `.lib` (let go, nothing heard); names that aren't UTF-8 (not watched), with a line break, of 255 bytes; drop racing a writer, 200 times (nothing heard after drop); 32 threads starting and dropping watchers on nested folders while folders come, move and go (no watch left after). |
+| `live3b` alone, 8 runs, and 8 more with 32 threads spinning | 16 of 16 |
+
+| Fixed | Why |
+|---|---|
+| A rebuild keeps watching past a folder it can't watch (`watch_under`) | The walk that adds watches stopped at the first watch that failed (`ENOSPC` when the user's watches run out, `ENOMEM`). A rebuild (a folder moved, an overflow) then let go of every folder it hadn't reached yet, though they were watched: with one such folder, only the project folder stayed watched. Design §3.4 says only that folder is left to the walks. The walk now goes on, and still asks for a walk. New test `a_folder_that_cant_be_watched_leaves_the_others_watched`, with a test-only list of folders whose watch fails; it fails 5 of 5 without the fix. |
+| `a_file_written_while_open_is_named_at_each_write` takes the watch tests' shared lock | The overflow test's `Rescan` could land between its halves. 3 of 100 runs of `m2-os`'s tests failed; run beside the overflow test alone, 84 of 100. After the fix, 0 of 100 each. |
+
+The check again at `02a9164`, with the fix (logs in `~/m2-runs/check-check-s8b/`): `music2 check: PASS`, with no
+retry. Rust tests 734 passed, 0 failed (one more: the new test); clippy PASS, and without `-D warnings` nothing; 29 of
+29 suites; renders 8 of 8; every other row PASS. That is §13.1's S8 row.
+
+Left for the lead:
+- `live3b` failed once in the first check: "its release writes db(-32) into song.ts" (it waits 4 s). Other jobs had
+  the load average at 45 to 74 then, and its slow save compiled for 3,248 ms (1,400 to 1,900 ms in quiet checks). The
+  server's log says nothing (no miss, no walk). It passed on its retry and 16 of 16 times after. Not traced to this
+  slice; watch for it.
+- `thread::tests::cpu_time_grows_while_the_thread_works` (S5's) failed 1 of 20 runs with 32 threads spinning, and once
+  in 100 runs while only other jobs loaded the server: it needs 10 ms of CPU within 30 ms. A load-sensitive test
+  outside this slice.
+- Test 5's comment still says events name a file written while open only when it is opened and closed. True for
+  FSEvents, not for inotify. Left as it is.
+- Only the Mac run shows two things the new tests assume of FSEvents: that one `FSEventStreamFlushSync` delivers a
+  write made just before it (`m2-os`'s portable tests assert it after one flush), and that a burst of 4,196 files is
+  named file by file (if FSEvents folds it into one folder event, the burst test's walk is not a `Rescan`).
+- When inotify's limits run out at start, the watcher says "file-system events didn't start (No space left on device
+  (os error 28))", or "Too many open files" for instances. True, but cryptic.
+- A folder the watch walk can't list (`read_dir` fails, out of file descriptors say) leaves the folders under it
+  unwatched, with no `Rescan`. Their changes are found by the 5 s walks, as misses. Rare.
