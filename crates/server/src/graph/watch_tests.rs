@@ -244,6 +244,34 @@ fn events_that_miss_changes_give_way_to_walks() {
     }
 }
 
+// WRITE-19 (review evt-2 of the platform step): a hard link made or removed outside the project
+// changes a project file's change time alone, which inotify names only to a watch on the file
+// itself, never to its folder's: the walk that finds it counts no miss, and events stay trusted.
+#[test]
+fn a_change_of_the_change_time_alone_is_no_miss() {
+    let fixture = Fixture::new();
+    fixture.write(KICK);
+    fixture.put("data/kick/hits.json", &hits_of(4));
+    let graph = fixture.open();
+    walked_once(&graph);
+    {
+        let mut w = graph.inner.watch.lock();
+        let w = w.as_mut().unwrap();
+        (w.backstop, w.grace, w.next_walk) = (Duration::from_millis(100), Duration::from_millis(300), std::time::Instant::now());
+    }
+    let (file, link) = (fixture.0.join("data/kick/hits.json"), fixture.0.with_extension("link"));
+    let number = revs(&graph).0;
+    for _ in 0..2 {
+        std::fs::hard_link(&file, &link).unwrap();
+        watching(&graph, 600, |_| false);
+        std::fs::remove_file(&link).unwrap();
+        watching(&graph, 600, |_| false);
+    }
+    let s = stats(&graph);
+    assert!(s.events && s.misses == 0, "{s:?}");
+    assert_eq!(revs(&graph).0, number, "nothing to take in");
+}
+
 // WRITE-19: the server's watcher thread waits for its next tick no longer than it must: an event
 // naming a change wakes it at once while no batch is open, and the open batch wakes it when its
 // 150 ms of quiet end, when the poll that sees everything takes it in.

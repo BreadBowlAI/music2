@@ -56,6 +56,9 @@ struct Watcher {
     root: PathBuf,
     /// The root's descriptor; -1 when the root is watched no more.
     root_wd: i32,
+    /// What the root's path named when it was last watched, by its volume and inode: a folder put
+    /// in its place (a restore from a backup) is a new one to watch.
+    root_id: Option<(u64, u64)>,
     enter: fn(&str) -> bool,
     heard: Arc<dyn Fn(Heard<'_>) + Send + Sync>,
     /// The descriptors this watcher holds.
@@ -159,24 +162,37 @@ impl State {
         let path = if name.is_empty() { f.path.clone() } else { f.path.join(OsStr::from_bytes(name)) };
         let gone = name.is_empty() && mask & (libc::IN_MOVE_SELF | libc::IN_DELETE_SELF | libc::IN_UNMOUNT) != 0;
         let made = mask & libc::IN_ISDIR != 0 && mask & (libc::IN_CREATE | libc::IN_MOVED_TO) != 0;
+        // A folder's mode changed: one that couldn't be read when it was made may be readable now.
+        let opened = mask & libc::IN_ISDIR != 0 && mask & libc::IN_ATTRIB != 0 && !name.is_empty();
         for id in f.watchers.iter().copied().collect::<Vec<_>>() {
             let Some(w) = self.watchers.get(&id) else { continue };
             let (heard, root_wd, enter) = (w.heard.clone(), w.root_wd, w.enter);
             if gone {
-                if mask & libc::IN_MOVE_SELF != 0 && wd != root_wd {
+                if mask & libc::IN_MOVE_SELF != 0 || wd == root_wd {
                     // A folder moved within the project or out of it: its watches, and those under
-                    // it, still have the old paths.
+                    // it, still have the old paths. The root moved or went: whatever is at its path
+                    // now is watched, and the old tree let go.
                     self.rebuild(fd, id);
-                } else if wd == root_wd || mask & libc::IN_UNMOUNT != 0 {
+                } else if mask & libc::IN_UNMOUNT != 0 {
                     heard(Heard::Rescan);
                 }
                 // A folder under the root that went is named by its parent's event.
                 continue;
             }
-            if made && let Some(rel) = rel(&self.watchers[&id].root, &path).filter(|r| enter(r)) {
-                // A folder made, or moved in: watch it and the folders under it. Naming it then
-                // makes the watcher walk it, which finds what was written before the watch.
-                if self.watch_tree(fd, id, &path, &rel).is_err() {
+            if (made || opened)
+                && let Some(rel) = rel(&self.watchers[&id].root, &path).filter(|r| enter(r))
+            {
+                // A folder made, moved in, or readable at last: watch it and the folders under it.
+                // Naming it then makes the watcher walk it, which finds what was written before the
+                // watch. A folder whose mode changed that this watcher holds already is left as it is.
+                let held = self.watchers[&id].wds.len();
+                let fresh = match self.add(fd, id, &path) {
+                    Ok(_) if made || self.watchers[&id].wds.len() > held => self.watch_under(fd, id, &path, &rel),
+                    Ok(_) => Ok(()),
+                    Err(e) if skipped(&e) => Ok(()),
+                    Err(e) => Err(e),
+                };
+                if fresh.is_err() {
                     heard(Heard::Rescan);
                 }
             }
@@ -206,25 +222,27 @@ impl State {
         Ok(wd)
     }
 
-    /// Watch `dir`, at `rel` under the watcher's root, and the folders under it.
-    fn watch_tree(&mut self, fd: RawFd, id: u64, dir: &Path, rel: &str) -> io::Result<()> {
-        match self.add(fd, id, dir) {
-            Ok(_) => self.watch_under(fd, id, dir, rel),
-            Err(e) if skipped(&e) => Ok(()),
-            Err(e) => Err(e),
-        }
-    }
-
     /// Watch every folder under `dir` (watched already) that `enter` allows, each before it is
-    /// listed. An error when a watch can't be made (watches or memory ran out): that folder is left
-    /// to the walks, and every other one is still watched, so a rebuild never lets go of a folder
-    /// it could watch.
+    /// listed. An error when a watch can't be made (watches or memory ran out) or a folder can't be
+    /// listed (no file descriptor left): what is under it is left to the walks, and every other
+    /// folder is still watched, so a rebuild never lets go of a folder it could watch.
     fn watch_under(&mut self, fd: RawFd, id: u64, dir: &Path, rel: &str) -> io::Result<()> {
         let Some(enter) = self.watchers.get(&id).map(|w| w.enter) else { return Ok(()) };
         let mut failed = None;
         let mut stack = vec![(dir.to_path_buf(), rel.to_string())];
         while let Some((dir, rel)) = stack.pop() {
-            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            let listed = std::fs::read_dir(&dir);
+            #[cfg(test)]
+            let listed =
+                if tests::NOT_LISTED.lock().unwrap().contains(&dir) { Err(io::Error::from_raw_os_error(libc::EMFILE)) } else { listed };
+            let entries = match listed {
+                Ok(entries) => entries,
+                Err(e) if skipped(&e) => continue,
+                Err(e) => {
+                    failed = failed.or(Some(e));
+                    continue;
+                }
+            };
             for e in entries.flatten() {
                 // A link is never followed, as the walks never follow one.
                 if !e.file_type().is_ok_and(|t| t.is_dir()) {
@@ -254,6 +272,7 @@ impl State {
         let Some(w) = self.watchers.get_mut(&id) else { return };
         let (root, heard, held) = (w.root.clone(), w.heard.clone(), std::mem::take(&mut w.wds));
         w.root_wd = -1;
+        w.root_id = identity(&root);
         if let Ok(wd) = self.add(fd, id, &root) {
             self.watchers.get_mut(&id).expect("registered").root_wd = wd;
             // Out of watches: the folders left unwatched are found by the walks.
@@ -302,9 +321,22 @@ impl State {
 }
 
 /// A folder gone again, no folder any more, or one that can't be read: no watch, and nothing a
-/// walk could read in it either. Its parent's events name it.
+/// walk could read in it either. Its parent's events name it, and its mode's change (`IN_ATTRIB`)
+/// when it becomes readable.
 fn skipped(e: &io::Error) -> bool {
     matches!(e.raw_os_error(), Some(libc::ENOENT | libc::ENOTDIR | libc::EACCES))
+}
+
+/// What `root` names, by its volume and inode; None when nothing is there.
+fn identity(root: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(root).ok().map(|m| (m.dev(), m.ino()))
+}
+
+/// `e` in plain words, `what`, when it is `code`: one of inotify's limits ran out. They are the
+/// user's, shared with every program that watches files, and raised with `sysctl`.
+fn limit(e: io::Error, code: i32, what: &'static str) -> io::Error {
+    if e.raw_os_error() == Some(code) { io::Error::new(e.kind(), what) } else { e }
 }
 
 /// `path` relative to `root`, `/`-separated; None outside it or not UTF-8.
@@ -321,27 +353,41 @@ pub(crate) struct Events {
 impl Events {
     /// A failed watch at start is an error: the watcher walks, and says why.
     pub(crate) fn start(root: &Path, enter: fn(&str) -> bool, heard: Hear) -> io::Result<Events> {
-        let instance = instance()?;
+        let instance = instance()
+            .map_err(|e| limit(e, libc::EMFILE, "Linux's limit on programs watching files is reached (fs.inotify.max_user_instances)"))?;
         let fd = instance.fd.as_raw_fd();
         let mut st = instance.lock();
         let id = st.next;
         st.next += 1;
         let heard = Arc::from(heard);
-        st.watchers.insert(id, Watcher { root: root.to_path_buf(), root_wd: -1, enter, heard, wds: BTreeSet::new() });
+        let root_id = identity(root);
+        st.watchers.insert(id, Watcher { root: root.to_path_buf(), root_wd: -1, root_id, enter, heard, wds: BTreeSet::new() });
         let started = st.add(fd, id, root).and_then(|wd| {
             st.watchers.get_mut(&id).expect("registered").root_wd = wd;
             st.watch_under(fd, id, root, "")
         });
         if let Err(e) = started {
             st.unregister(fd, id);
-            return Err(e);
+            return Err(limit(e, libc::ENOSPC, "Linux's limit on watched folders is reached (fs.inotify.max_user_watches)"));
         }
         Ok(Events { id, instance })
     }
 
-    /// Under the instance's lock, which every dispatch holds: one in progress ends first.
+    /// Under the instance's lock, which every dispatch holds: one in progress ends first. Then a
+    /// folder put at the root's path since it was watched (removed and made again, or a copy moved
+    /// in) is watched: nothing else tells it, and while a file in the project is held open (the
+    /// session's lock), the root's removal makes no event of its own.
     pub(crate) fn flush(&self) {
-        self.instance.drain(&mut self.instance.lock());
+        let st = &mut self.instance.lock();
+        self.instance.drain(st);
+        let Some(w) = st.watchers.get(&self.id) else { return };
+        // Only a folder that is there and is another: a root that is gone gives no walk at each
+        // flush, since each walk flushes.
+        if let Some(now) = identity(&w.root)
+            && w.root_id != Some(now)
+        {
+            st.rebuild(self.instance.fd.as_raw_fd(), self.id);
+        }
     }
 }
 
@@ -380,6 +426,8 @@ mod tests {
 
     /// Folders whose watch fails as when the user's watches have run out (`ENOSPC`).
     pub(super) static NO_WATCH_LEFT: std::sync::Mutex<BTreeSet<PathBuf>> = std::sync::Mutex::new(BTreeSet::new());
+    /// Folders that can't be listed, as when the process has no file descriptor left (`EMFILE`).
+    pub(super) static NOT_LISTED: std::sync::Mutex<BTreeSet<PathBuf>> = std::sync::Mutex::new(BTreeSet::new());
 
     fn start(root: &Path) -> (crate::watch::Events, Log) {
         let log: Log = Arc::default();
@@ -517,6 +565,99 @@ mod tests {
         events.flush();
         assert!(heard(&log).contains(&Some(p)), "{:?}", heard(&log));
         NO_WATCH_LEFT.lock().unwrap().remove(&full);
+    }
+
+    // WRITE-19 (review evt-1 of the platform step): a folder put where the root was is watched by
+    // the next flush, and the old tree let go: a copy moved into its place, and the root removed
+    // while a file in it is held open (as the session holds its lock), which gives the root no
+    // event of its own, then made again.
+    #[test]
+    fn a_root_put_back_is_watched_again() {
+        let _shared = crate::watch::TESTS.read();
+        let dir = Dir::new();
+        let root = dir.0.join("project");
+        std::fs::create_dir_all(root.join("lib")).unwrap();
+        let (events, log) = start(&root);
+        // Moved away: the old tree is let go at once, so its writes aren't heard as the project's.
+        std::fs::rename(&root, dir.0.join("old")).unwrap();
+        events.flush();
+        assert!(heard(&log).contains(&None), "a rescan: {:?}", heard(&log));
+        assert_eq!(watched_under(&dir.0), vec![], "the old tree let go");
+        log.lock().unwrap().clear();
+        std::fs::write(dir.0.join("old/lib/a.ts"), "y").unwrap();
+        events.flush();
+        assert_eq!(heard(&log), vec![], "the old tree is heard no more");
+        // A copy moved in.
+        std::fs::create_dir_all(dir.0.join("copy/lib")).unwrap();
+        std::fs::rename(dir.0.join("copy"), &root).unwrap();
+        events.flush();
+        assert!(heard(&log).contains(&None), "a rescan: {:?}", heard(&log));
+        assert_eq!(watched_under(&dir.0), vec![(root.clone(), 1), (root.join("lib"), 1)]);
+        log.lock().unwrap().clear();
+        for p in [root.join("song.ts"), root.join("lib/a.ts")] {
+            std::fs::write(&p, "x").unwrap();
+            events.flush();
+            assert!(heard(&log).contains(&Some(p.clone())), "{p:?}: {:?}", heard(&log));
+        }
+        // Removed while a file in it is open, then made again.
+        std::fs::create_dir_all(root.join(".music2")).unwrap();
+        let held = std::fs::File::create(root.join(".music2/lock")).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        events.flush();
+        std::fs::create_dir_all(root.join("lib")).unwrap();
+        events.flush();
+        log.lock().unwrap().clear();
+        let p = root.join("lib/b.ts");
+        std::fs::write(&p, "x").unwrap();
+        events.flush();
+        assert!(heard(&log).contains(&Some(p)), "{:?}", heard(&log));
+        drop(held);
+    }
+
+    // WRITE-19 (review evt-3 of the platform step): a folder that can't be read when it is made gets
+    // no watch, and is watched once its mode lets it be read.
+    #[test]
+    fn a_folder_readable_only_later_is_watched_then() {
+        use std::os::unix::fs::PermissionsExt;
+        let _shared = crate::watch::TESTS.read();
+        let dir = Dir::new();
+        let (events, log) = start(&dir.0);
+        let locked = dir.0.join("locked");
+        {
+            // The reader sees the folder made only once it can't be read.
+            let _held = instance().unwrap().lock();
+            std::fs::create_dir(&locked).unwrap();
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        events.flush();
+        assert_eq!(watched_under(&dir.0), vec![(dir.0.clone(), 1)], "no watch on a folder it can't read");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        events.flush();
+        log.lock().unwrap().clear();
+        let p = locked.join("x.ts");
+        std::fs::write(&p, "x").unwrap();
+        events.flush();
+        assert!(heard(&log).contains(&Some(p)), "{:?}", heard(&log));
+    }
+
+    // WRITE-19 (decision D4 of the platform review): when the user's watches have run out at start,
+    // the error says which of Linux's limits, in words; a folder the watch walk can't list (no file
+    // descriptor left) leaves what is under it to the walks, and the watcher is told to walk.
+    #[test]
+    fn a_limit_run_out_is_named_and_an_unlisted_folder_walked() {
+        let _shared = crate::watch::TESTS.read();
+        let dir = Dir::new();
+        NO_WATCH_LEFT.lock().unwrap().insert(dir.0.clone());
+        let e = crate::watch::Events::start(&dir.0, |_| true, Box::new(|_| {})).err().expect("no watch left");
+        NO_WATCH_LEFT.lock().unwrap().remove(&dir.0);
+        assert_eq!(e.to_string(), "Linux's limit on watched folders is reached (fs.inotify.max_user_watches)");
+        let (events, log) = start(&dir.0);
+        let full = dir.0.join("full");
+        NOT_LISTED.lock().unwrap().insert(full.clone());
+        std::fs::create_dir_all(full.join("in")).unwrap();
+        events.flush();
+        NOT_LISTED.lock().unwrap().remove(&full);
+        assert!(heard(&log).contains(&None), "a rescan: {:?}", heard(&log));
     }
 
     // WRITE-19: when the queue overflows, events are lost for every watcher, a new folder's among

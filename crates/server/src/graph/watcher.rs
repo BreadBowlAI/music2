@@ -178,15 +178,17 @@ fn source(dir: &Path, walk: bool, wake: &Arc<Wake>) -> Source {
         return Source::Walk;
     }
     let why = if !m2_session::lock::local_volume(dir) {
-        "it is on a network volume, where file-system events name only this computer's writes".to_string()
+        "it may be shared with other computers (it is on a network drive, or on a disk music2 can't tell from one), and \
+         file-system events name only this computer's writes"
+            .to_string()
     } else {
         // Events spell the folder as the disk does.
         match dir.canonicalize().and_then(|d| events::Stream::start(&d, wake.clone())) {
             Ok(s) => return Source::Events(Arc::new(s)),
-            Err(e) => format!("file-system events didn't start ({e})"),
+            Err(e) => format!("file-system events didn't start: {e}"),
         }
     };
-    eprintln!("music2: watching {} by walking it: {why}", dir.display());
+    eprintln!("music2: watching {} by walking it, looking at every file for changes: {why}", dir.display());
     Source::Walk
 }
 
@@ -408,7 +410,16 @@ impl Watch {
                     .map(String::from)
                     .chain(ready.iter().flat_map(|r| &r.paths).map(|p| m2_song::path::slashed(p)));
                 let heard: BTreeSet<String> = plan.paths.union(&looked.after).cloned().collect();
-                for p in found.filter(|p| !before.contains(p) && !except.contains(p) && !covered(p, &heard)).collect::<Vec<_>>() {
+                // A change of its change time alone (a hard link to it made or removed elsewhere)
+                // changes no content, and is named only to a watch on the file itself: no miss.
+                let settle = &self.settle;
+                let ctime_only = |p: &str| match (settle.stamp(p), looked.listing.entries.get(p)) {
+                    (Some(was), Some((_, now))) => was.ctime != now.ctime && Stamp { ctime: was.ctime, ..*now } == was,
+                    _ => false,
+                };
+                let missed: Vec<String> =
+                    found.filter(|p| !before.contains(p) && !except.contains(p) && !covered(p, &heard) && !ctime_only(p)).collect();
+                for p in missed {
                     self.unnamed.push((p, now));
                 }
             }

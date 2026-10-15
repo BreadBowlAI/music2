@@ -530,7 +530,10 @@ and the scan runs once per lock.
   new folders' `IN_CREATE`, and those folders stay unwatched: 668 to 679 of 2,000 in a probe whose reader was held up
   300 ms.
 - **Rescan** also on `IN_UNMOUNT`, and on the root's `IN_MOVE_SELF` or `IN_DELETE_SELF`. `IN_IGNORED`: forget the
-  descriptor.
+  descriptor. *(Corrected in the review: the root's `IN_DELETE_SELF` never comes while a file in the project is held
+  open, and the session holds `.music2/lock` open. So each flush also checks what the root's path names, by volume and
+  inode, and a folder put there since (a restore, the folder made again, a copy moved in) is watched, and the old tree
+  let go. The root's `IN_MOVE_SELF` or `IN_DELETE_SELF` rebuilds at once.)*
 - **A watch that fails after start** (`ENOSPC` when the user's watches run out, `ENOMEM`) leaves that folder
   unwatched and gives `Rescan`. Changes there are then found only by the 5 s walks, and the watcher's existing rule
   ("events that missed changes twice in 10 minutes give way to walks") moves the project to walks.

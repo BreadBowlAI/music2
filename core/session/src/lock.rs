@@ -231,8 +231,8 @@ pub fn acquire(dir: &Path, program: &str, retry: Duration) -> Result<ProjectLock
     if !local_volume(dir) {
         notices.push(m2_song::Diagnostic::notice(
             "lock.local",
-            "This folder is on a network volume: the project lock stops other programs on this computer only, so another computer \
-             editing it is an outside writer",
+            "This folder may be shared with other computers (it is on a network drive, or on a disk music2 can't tell from one): \
+             the project lock stops other programs on this computer only, so another computer editing it is an outside writer",
         ));
     }
     Ok(ProjectLock { _file: file, holder, notices })

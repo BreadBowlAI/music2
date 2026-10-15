@@ -360,6 +360,14 @@ impl Settle {
         self.batch.is_some()
     }
 
+    /// The stamp `p` was last taken in with, when it is tracked by one.
+    pub fn stamp(&self, p: &str) -> Option<Stamp> {
+        match self.baseline.get(p) {
+            Some(Seen::Input { stamp, .. }) => Some(*stamp),
+            _ => None,
+        }
+    }
+
     /// The paths of the open batch: every poll must stat them, scoped or not.
     pub fn batch_paths(&self) -> impl Iterator<Item = &str> {
         self.batch.iter().flat_map(|b| b.paths.keys().map(String::as_str))
