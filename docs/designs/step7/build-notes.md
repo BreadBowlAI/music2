@@ -445,3 +445,80 @@ G7e's numbers (one run; Linux, for information only, PLAT-1):
 - A plugin that applies a loaded state later than its next call (a sampler loading in the background)
   could still win over the code's values. HOME-5a's revert, with plugin windows, is the real fix.
 - The latency warning is a toast, not an entry in the problems list.
+
+### The independent check
+
+**In short:** one real bug, now fixed. An export made while a note played kept that note in the
+file: it rang through the whole export and on after the song ended (Surge XT). G7e couldn't see
+it, because the gate's own state save made every export take the rarer path that loads the state.
+The export now ends every note before it renders. A new CI test and G7e show it, and both fail
+without the fix (`6dd49e0`). The rest of slice 4 checks out. Points for later are at the end.
+Run on this server (Ryzen 9 7950X3D, Ubuntu 24.04), scratch `HOME`, `M2_AUDIO=none`, the test
+plugins in `CLAP_PATH`.
+
+**The bug**
+
+| | |
+|---|---|
+| Seen | G7e with the gate's save left out, so the instance holds its committed state and the export loads nothing (as in the app): after the song's 8 s, the file stayed at about -28.5 dBFS for its whole 10 s tail, where `m2 render` fades to -97. That is 62 to 71 dB off. Between the kicks, the lead was 6.4 to 7.1 dB over. |
+| Cause | When the engine holds, the notes playback sent Surge are still on. CLAP's `reset` doesn't end them in Surge XT, and Surge matches a NoteOff by the note's id, which the export doesn't know. A state load does end every voice in Surge, and the gate's save had made Surge hold other bytes than the committed ones, so every gate export loaded. With playback stopped before the export (its notes ended), the tail matched: 0.68 dB. |
+| Fix | `offline()` in `crates/server/src/export.rs` always makes its one call before the render, now with a choke and a NoteOff for every key (note id -1: any note on that key), as a panic sends them for the keys it knows. The call after a load (deviation 3) is the same call. |
+| With the fix, real Surge | the usual path: tail 0.26 to 0.72 dB off, lead 2.1 to 3.5 dB (3 runs); the gate as it was (a load): PASS 3 of 3 |
+| CI | the probe can now keep its voices through `reset`, as Surge does (`Stats::reset_keeps_voices`). `an_export_ends_the_notes_playback_left_sounding` (`crates/server/src/graph/tests.rs`): two notes sound, the export loads nothing, and the file equals one made with new instances, bit for bit. Without the fix it fails. |
+
+After an export, a note held across it is now silent until its next note-on, as RENDER-1 says
+(plugin voices are reset). Before, Surge's notes went on after the resume.
+
+**G7e changed** (`crates/gates/src/server.rs`, README row)
+
+| Change | Why |
+|---|---|
+| Each instance's state is saved before playback starts, and Surge's is committed, as an autosave will commit it | So the instance holds its committed state and the export loads nothing: the usual path, which §12.5's own probe test describes ("the host reports it skipped"). Before, the gate only tested the load path. Saving before playback keeps the pause where it was (3.008 s, just after a kick), so the fade-in step check still hears sound. |
+| The release tail is judged: each second above -60 dBFS within 6 dB of `m2 render`'s | Two renders' tails differ by up to 1.86 dB here, so the design's 1 dB can't hold there (deviation 8 stands). A note left sounding is 60 dB over. The lead check alone missed the bug once (5.73 dB). |
+
+Also: the pure song's export test (`an_export_renders_on_its_own_while_a_second_is_refused`) now
+checks what §12.5 asks: it never pauses, and borrows nothing.
+
+**Checks**
+
+| Check | Result |
+|---|---|
+| The diff against the design (§10.2 to §10.5, §12.5, §12.8, §13, §15, §18 slice 4) | Every item is there. The engine's hold, the player's `held` (published after the callback), the stamp wait, the guard on every path, `Open.exporting`, and the per-node compare read right. Nothing on the audio thread allocates, locks or logs: `take_reloaded` is one atomic step, and the hold path only sets flags. |
+| `cargo test --workspace --no-fail-fast` | before the fix: 839 passed, 3 ignored, 1 failed (`os_code_lives_in_m2_os`, known). After: 840 passed, the same one failed. |
+| `m2-server` tests, 5 runs | 156 of 156 each time |
+| clippy (`--workspace --all-targets -D warnings`) | PASS, before and after |
+| mac lint | FAIL only on `crates/gates/src/store.rs:172` and `:290` (`libc`), as before. PASS without `m2-gates`. |
+| G7e as the builder left it | PASS 3 of 3; the numbers match theirs (paused about 255 ms; resumed 2.7 to 9.3 ms after the instances were back; steps 0.014 out, 0.006 in) |
+| G7e now | PASS 3 of 3 (above); without the fix FAIL 2 of 2 (the tail 62.85 and 68.54 dB off) |
+| with-plugins (`m2-gates plugins`, release) | PASS, the changed-state checks included |
+| with-plugins `--quick --no-arena` | FAILS, as it must |
+| `ci/check.sh` | FAIL, 2 of 12 rows, as the builder's run (`~/m2-runs/check-cs4/`, 8 min, at `6dd49e0`): rust tests (840 passed; only `os_code_lives_in_m2_os`) and the mac lint (`store.rs`). Every other row passed: app, clippy, std kernels, `std.wasm`, 29 of 29 browser suites (live3b 60 of 60), 8 of 8 renders, repo unchanged. Nothing passed only on a retry. |
+
+Read closely and found right: a hold sent while a window runs waits for it; an idle engine wakes on
+the hold message; quit stops an export from a thread of its own, so the plugin main thread keeps
+serving; `prewarm` touches no lent instance.
+
+**Points for later** (not fixed: choices, or bigger)
+
+1. **Render mode.** Only borrowed instances are set to offline mode. `m2 render`, an export's
+   new instances (`another()`, and nodes it doesn't borrow) stay in realtime mode. So one export
+   can run some plugins one way and some the other, and Export and `m2 render` can differ for a
+   plugin that renders differently offline. With Surge's borrowed instances left in realtime mode, G7e's
+   numbers stayed within their run-to-run spread.
+2. **macOS, the callback's thread-local.** `m2_play::alloc::set_in_callback` touches a
+   thread-local in every callback, in release builds too. On macOS a thread's first touch of a
+   thread-local can allocate (dyld), which `core/plugins/src/audio.rs` avoids on purpose, and the
+   counter can't see it. Once per audio thread. Mark the thread only in debug builds, or check it
+   on the Mac.
+3. **`Lent::done`** is set in `Graph::export` after the actor's job returns. If that job panics
+   after `Actor::export` (in `retry_pending`), the `Lent` drops with no `done`, and
+   `Open.exporting` stays set: nothing plays an edit until the project is opened again. Setting
+   `done` inside the actor would close it.
+4. **A failed state load** (deviation 1) leaves the old hash as what the instance holds. If the
+   blob is then set back to the old one, nothing loads, though the plugin may hold part of the
+   failed load.
+5. **An instance that asked for a restart** can be borrowed by an export; it is replaced after.
+6. **G7e's "held before the first host call"** is true by how it is measured (one thread records
+   both). The probe test's call order is the real proof.
+7. **live3b's export checks** run just after a drag that turns the lead to `db(-60)`, so they hear the chord
+   at about -85.5 dBFS. They still tell sound from digital silence (-240), with little margin.
