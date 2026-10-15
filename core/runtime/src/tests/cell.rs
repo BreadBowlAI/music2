@@ -3,7 +3,7 @@
 //! RENDER-28); and kernel input memory that is the host's alone (ABI-1, RENDER-24).
 
 use std::collections::BTreeSet;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use m2_ir::{Frame, KernelSig, Origin, PortKind, Unit};
 
@@ -263,9 +263,16 @@ fn a_cell_write_wakes_an_idle_engine() {
 // RENDER-28: the slot protocol never reports a write heard before it is applied. One thread
 // writes cells with rising seqs while another drains; after each drain that reports `p`, every
 // cell holds a write at least as new as the last write to it up to `p`.
+//
+// The scheduler doesn't promise that the reader runs while the writer writes: on a loaded machine
+// the writes (about a millisecond in all) can end before the reader's first turn, and then only the
+// end state is checked (76 of 300 runs beside 32 busy threads). So at every `GATE`th write the
+// writer waits for one more drain, which makes the reader drain mid-stream at least once per gate.
+// Between gates the two still race freely.
 #[test]
 fn cell_heard_never_runs_ahead() {
     const CELLS: usize = 128;
+    const GATE: u64 = 4096;
     let writes: u64 = if cfg!(debug_assertions) { 200_000 } else { 1_000_000 };
     let mut seed = 0x9e3779b97f4a7c15u64;
     // Write `s` (from 1) sets cell `plan[s - 1]` to `s`, which an f32 holds exactly.
@@ -281,17 +288,25 @@ fn cell_heard_never_runs_ahead() {
     );
     let slots = Arc::new(CellSlots::new(CELLS));
     let done = Arc::new(AtomicBool::new(false));
+    // How many drains have reported something: the writer's gates wait for it to move.
+    let drains = Arc::new(AtomicU64::new(0));
     let writer = {
-        let (plan, slots, done) = (plan.clone(), slots.clone(), done.clone());
+        let (plan, slots, done, drains) = (plan.clone(), slots.clone(), done.clone(), drains.clone());
         std::thread::spawn(move || {
             for (k, &c) in plan.iter().enumerate() {
                 let s = k as u64 + 1;
                 slots.set(&[CellId(c)], s as f32, s);
+                if s % GATE == 0 && s < writes {
+                    let seen = drains.load(Ordering::Acquire);
+                    while drains.load(Ordering::Acquire) == seen {
+                        std::thread::yield_now();
+                    }
+                }
             }
             done.store(true, Ordering::Release);
         })
     };
-    let (mut held, mut least, mut heard, mut drains) = (vec![0u64; CELLS], vec![0u64; CELLS], 0u64, 0);
+    let (mut held, mut least, mut heard, mut mid) = (vec![0u64; CELLS], vec![0u64; CELLS], 0u64, 0);
     loop {
         let finished = done.load(Ordering::Acquire);
         if let Some(p) = slots.drain(|id, v| held[id.0 as usize] = v as u64) {
@@ -300,10 +315,11 @@ fn cell_heard_never_runs_ahead() {
                 least[plan[s as usize - 1] as usize] = s;
             }
             heard = p;
-            drains += 1;
+            mid += (p < writes) as u64;
             if let Some(c) = (0..CELLS).find(|&c| held[c] < least[c]) {
                 panic!("write {p} was heard, but cell {c} holds write {} and write {} set it", held[c], least[c]);
             }
+            drains.fetch_add(1, Ordering::Release);
         }
         if finished && !slots.pending() {
             break;
@@ -312,7 +328,8 @@ fn cell_heard_never_runs_ahead() {
     writer.join().unwrap();
     assert_eq!(heard, writes);
     assert_eq!(held, least, "every cell ends on its last write");
-    assert!(drains > 1, "drained while writing");
+    // Each gate's wait ends on a drain that heard no more than the gate's write.
+    assert!(mid >= (writes - 1) / GATE, "drained while writing: {mid} times mid-stream");
 }
 
 // ---------------------------------------------------------------- ABI-1

@@ -86,6 +86,10 @@ check((await status()).loop === null && !(await page.$("[data-testid=loop-range]
 check((await page.$eval(toggle, (e) => e.getAttribute("aria-pressed"))) === "false", "the loop button is off");
 await seek(2);
 await until(async () => near((await status()).beat, 2), 1000);
+// The page hears of a seek made here at its next poll (every 200 ms). Until then the timeline can
+// still be scrolled to beat 400, where it followed the playhead above, so the bar lines are
+// measured only once the page shows beat 2.
+await until(async () => near(Number(await page.$eval("[data-testid=playhead]", (e) => e.dataset.beat)), 2), 2000);
 // Drag across the ruler from bar 2 to bar 4: beats 4 to 12.
 const [b2, b4] = [await barLine(2), await barLine(4)];
 await drag({ x: b2.x + 2, y: b2.y }, { x: b4.x + 2, y: b4.y });

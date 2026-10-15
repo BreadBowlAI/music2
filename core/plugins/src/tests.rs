@@ -107,17 +107,27 @@ fn finds_installed_plugins() {
     assert!(found.iter().any(|f| f.id == probe::ID), "the probe, once installed");
 }
 
+// Notes reach the plugin on their sample. Surge XT works in blocks of 32 samples of its own and
+// applies each event at the start of the block it falls in (`clap_direct_process`, Surge XT 1.3.4),
+// so a note at sample 5 can sound from sample 0; its oscillator starts at a random phase, so the
+// first sound comes up to a cycle later (a note at 5: first non-zero sample at 0 to 108, before 5
+// in 10 of 200 runs). So the note sits on one of Surge's block lines inside the host's block, with
+// the oscillator's retrigger on: it then sounds from exactly that sample (100 of 100 runs at ten
+// offsets), and a note passed a sample early, at the block's start or a block late does not.
 #[test]
 fn surge_plays_notes() {
     setup();
     let Some(f) = plugin("org.surge-synth-team.surge-xt") else { return };
     let s = Inst::new(&f, None, &Owner::discard());
     assert!(s.info.note_in && s.info.audio_out == Some(2));
+    let retrigger = s.info.params.iter().find(|p| p.name == "A Osc 1 Retrigger").expect("Osc 1's retrigger").id;
+    const AT: u32 = 96;
     let off = (0.3 * SR as f64) as u64;
     let out = render(&s, 1.5, None, &|t| {
         let mut e = vec![];
         if t == 0 {
-            e.push(Event::NoteOn { time: 5, id: 1, key: 57, velocity: 0.9 });
+            e.push(Event::Param { time: 0, id: retrigger, value: 1.0 });
+            e.push(Event::NoteOn { time: AT, id: 1, key: 57, velocity: 0.9 });
         }
         if (t..t + BLOCK as u64).contains(&off) {
             e.push(Event::NoteOff { time: (off - t) as u32, id: 1, key: 57 });
@@ -128,7 +138,7 @@ fn surge_plays_notes() {
     assert!(out.iter().all(|x| x.is_finite()));
     assert!(peak(&out[..(0.3 * sr) as usize]) > 0.01, "the note is audible");
     assert!(peak(&out[(1.3 * sr) as usize..]) < 1e-3, "and released after note-off");
-    assert!(peak(&out[..5]) == 0.0, "nothing before the note's sample offset");
+    assert_eq!(out.iter().position(|x| *x != 0.0), Some(AT as usize), "the note sounds from its sample, and nothing before it");
 }
 
 #[test]
