@@ -413,7 +413,7 @@ impl Engine {
                 }
                 let took = match self.current.as_deref_mut() {
                     None => !renderer.has_entry(),
-                    Some(old) => renderer.take_over(old),
+                    Some(old) => renderer.take_over(old, self.clock),
                 };
                 if took {
                     // Every box nothing moved leaves with what played, off the audio thread.

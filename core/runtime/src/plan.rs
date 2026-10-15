@@ -564,11 +564,11 @@ impl Renderer {
         e.after == old.plan.id && old.plan.entry.is_none() && moves && lanes
     }
 
-    /// Take over from `old`, the renderer the engine plays, at a block line (RENDER-25): verify
-    /// every move, then make them, all by swap, so nothing is allocated or freed here and whatever
-    /// a move displaces leaves with `old`. Returns false, with nothing changed, when this plan
-    /// wasn't prepared against `old` or a box isn't what it was prepared for.
-    pub(crate) fn take_over(&mut self, old: &mut Renderer) -> bool {
+    /// Take over from `old`, the renderer the engine plays, at a block line at engine clock
+    /// `clock` (RENDER-25): verify every move, then make them, all by swap, so nothing is allocated
+    /// or freed here and whatever a move displaces leaves with `old`. Returns false, with nothing
+    /// changed, when this plan wasn't prepared against `old` or a box isn't what it was prepared for.
+    pub(crate) fn take_over(&mut self, old: &mut Renderer, clock: u64) -> bool {
         if !self.verify(old) {
             return false;
         }
@@ -590,8 +590,10 @@ impl Renderer {
             }
         }
         // The song position: the same beat in this plan's map, and the engine's clock and note ids.
+        // The engine's own clock, not `old`'s: an idle engine renders nothing, so `old`'s stopped,
+        // and a window started there would be over at once (a new drone in at full level).
         self.enter_from(old);
-        self.clock = old.clock;
+        self.clock = clock;
         let shift = old.transport.pos() as i64 - self.transport.pos() as i64;
         for lm in &mut e.lanes {
             let (to, from) = (lm.to as usize, lm.from as usize);

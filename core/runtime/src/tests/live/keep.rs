@@ -546,6 +546,37 @@ fn an_inserted_effect_fades_dry_to_wet() {
     assert!(out[2 * len..].iter().zip(&t[1][2 * len..]).all(|(f, w)| f[0] == *w), "the wet side exactly after the window");
 }
 
+// RENDER-25a, RENDER-6a: an edit that lands while the engine idles (stopped and silent: the common
+// "stop, then edit and save") fades in as one made while it plays. A new drone added at the output
+// is silent while its input fades in, then ramps in over 5 ms. Before, the window started at the
+// clock the renderer last rendered at, long gone by, so it was over at once and the drone came in
+// at full level: a step of 1.0.
+#[test]
+fn an_edit_on_an_idle_engine_fades_in() {
+    let pk = std_packages();
+    let x = json!([{"id": "h", "op": "const", "value": 0.5}, {"id": "x", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "v", "by": "h"}}]);
+    let mut drone = x.as_array().unwrap().clone();
+    drone.extend([
+        json!({"id": "hz", "op": "const", "value": 110, "unit": "hz"}),
+        json!({"id": "tri", "op": "kernel", "kernel": "std:tri", "inputs": {"freq": "hz"}}),
+        json!({"id": "y", "op": "kernel", "kernel": "std:add", "inputs": {"a": "x", "b": "tri"}}),
+    ]);
+    let (a, b) = (flat(&synth(0.05, x, "x")), flat(&synth(0.05, Value::Array(drone), "y")));
+    let data = one_note();
+    let mut rig = Rig::of(&a, &data, build(&a, &data, &pk, &Owner::discard()));
+    rig.run(SR as usize);
+    assert!(rig.e.is_idle(), "stopped and silent, the engine idles");
+    let r = rig.prepare(&b, &data, &pk);
+    rig.send(Msg::Activate { renderer: Box::new(r) });
+    let out = rig.run(8 * BLOCK);
+    assert_eq!(rig.e.current().unwrap().stats().fresh.kernels, 2, "the drone and the add are new");
+    let fade = 240;
+    assert!(out[..fade].iter().all(|f| *f == [0.0; 2]), "silent while the add's input fades in");
+    assert!(peak(&out[2 * fade..]) > 0.9, "then the drone plays");
+    let step = max_step(&out);
+    assert!(step < 0.02, "it ramps in over 5 ms: a step of {step}");
+}
+
 // RENDER-25a (G6): a delay inserted on a sounding sine never takes a step into its memory, so its
 // first echo starts as smoothly as the sine moves: no sample-to-sample step over twice the sine's.
 #[test]
