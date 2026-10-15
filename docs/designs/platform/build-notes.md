@@ -888,3 +888,88 @@ The check again at `2dd9c2d`, with the fix (11 min, logs in `~/m2-runs/check-che
 with the 3 new tests, with no retry. Rust tests 718 passed, the same 5 failed. clippy fails at lint 4; without
 `-D warnings` it lists exactly lints 4 to 6. Suites 29 of 29 (1,034 of 1,034 checks, `attention-attn` 56 of 56),
 live3b 51 of 51, renders 8 of 8, and every other row PASS.
+
+## Flakes: three flaky tests and four small `ci/check.sh` issues
+
+Built beside S7, S8 and "script", from `e1606e1` (the end of S6), on branch `plat/flakes`.
+
+**In short.** Each flake had one cause, found by repeat runs, alone and beside 32 busy loops (one per thread). Two were
+tests asking for more than the scheduler or the plugin promises; one was a suite reading the screen before the page
+caught up. No product code changed. `ci/check.sh` now agrees with PLAT-6: no pass without the test plugins.
+
+**Built**
+
+| What | Where |
+|---|---|
+| The cell test's writer waits for one more drain at every 4,096th write; the test asserts the reader drained mid-stream at least once per gate | `core/runtime/src/tests/cell.rs` |
+| The Surge test puts its note on one of Surge's own block lines (sample 96), with Osc 1's retrigger on, and asks that the first sound is exactly that sample | `core/plugins/src/tests.rs` |
+| live3a waits until the page's playhead shows beat 2 before it measures the ruler's bar lines | `e2e/live3a.mjs` |
+| No pass without the test plugins; a failed song copy in the app row is named; a test binary with no count of its own counts as a failure; the cut of "what failed" says how much was cut and where the rest is | `ci/check.sh` |
+
+**The flakes' causes** (for `HANDOFF.md`'s flake list in S9)
+
+| Flake | Cause | Evidence |
+|---|---|---|
+| `m2-runtime` `tests::cell::cell_heard_never_runs_ahead`, "drained while writing" | The test's own expectation. Its 200,000 writes take about a millisecond. Nothing makes the reader (the test thread) run during them, so on a busy machine the writer can finish before the reader's first drain. `CellSlots` itself was fine. | Before: 0 of 1,000 failed alone; 76 of 300 failed beside 32 busy loops. |
+| `m2-plugins` `tests::surge_plays_notes`, "nothing before the note's sample offset" | Surge XT itself, not the host. Surge works in blocks of 32 samples of its own and applies every event at the start of the block it falls in (`clap_direct_process` in Surge XT 1.3.4's `SurgeSynthProcessor.cpp`: events with a time before `s + BLOCK_SIZE` are applied when `blockPos == 0`). So a note at sample 5 starts at sample 0. Its oscillator starts at a random phase, so the first non-zero sample comes anywhere up to a cycle later. When it came before sample 5 (10 of 200 probe runs; S3 saw the test fail 6 of 150 times), the test failed. The values were tiny (1e-14 to 3e-8): the note's first samples, rising. | A probe (not committed), 200 runs at each of ten note offsets: notes at 0, 5, 20 and 31 gave the same spread of first sounds (sample 0 to 108); notes at 32 and 37 gave 32 to 140; a note at 100 sounded from 96. Nothing was ever non-zero before Surge's block line, so no buffer is dirty or reused. The host passes each note on its sample: the probe plugin, through the same path, heard notes at 0, 5, 20, 31, 32, 37, 64, 100, 127, 133, 165 and 300 each on its own sample. The values are not denormals (they are far above 1e-38), so FTZ and DAZ play no part. With Osc 1's retrigger on, Surge's first sound was exactly its block line in 100 of 100 runs at every offset. |
+| browser suite `live3a-fix`, "dragging across the ruler loops beats 4–12: null" | The suite's timing. Earlier, playing, it seeks to beat 400 through the API, and the timeline follows the playhead to its far end (`scrollLeft` 8,428). Then it seeks back, stops, seeks to beat 2, and measures bar 2 and bar 4 as soon as the server says beat 2. The page only hears of a seek made through the API at its next status poll (every 200 ms). If that poll hadn't landed, the timeline was still scrolled, bar 2 measured at x = -8,096, and the mouse went down outside the page. The ruler never saw it go down, so no loop was sent. No product bug: the page catches up at its next poll, as designed. | Instrumented runs (not committed): the failing run's mouse went down at x = -8,094 on the page's root, and no request was sent. Alone, 1 failure in 30 before the fix. With the fix and a log line, the page was still scrolled when the suite got there in 2 of 30 runs, and the wait (47 to 261 ms) covered both. |
+
+**After the fixes.** "Alone" means the test ran by itself; other agents' builds ran on the server throughout (load
+average 28 to 42). The busy loops were 32 shell loops, one per thread (load average up to 67 with them).
+
+| Test | Alone | Beside 32 busy loops | Still catches |
+|---|---|---|---|
+| `cell_heard_never_runs_ahead` | 600 of 600 (200 on the last commit) | 400 of 400 (50 on the last commit); `m2-runtime`'s lib binary 20 of 20 | `published` stored before the cell is written (a broken protocol): fails 50 of 50 alone, 40 of 50 under load |
+| `surge_plays_notes` | 600 of 600 (200 on the last commit) | 200 of 200 (50 on the last commit); `m2-plugins`' lib binary 20 of 20 | every event passed one sample early: fails each time (first sound at 64, not 96). The old test couldn't catch that. |
+| `live3a-fix` | 30 of 30, and 30 more with the log line | 10 of 10 | (its checks are unchanged: 49 of 49 each run) |
+
+**`ci/check.sh`**, each forced on a scratch copy that runs only some steps from this checkout (`if false` around the rest),
+and on `main`'s script the same way:
+
+| Issue | Forced by | `main`'s script | Now |
+|---|---|---|---|
+| (d) No plugins | no `CLAP_PATH` and a scratch `HOME` with no plugins; then `CLAP_PATH` at an empty folder; then the real plugins | "music2 check: PASS without plugins", exit 0 | "FAIL: no row failed, but the test plugins weren't there, so it isn't a pass (PLAT-6)", exit 1, and "what failed" names the folder. With the plugins: PASS, exit 0. |
+| (e) The app row can't copy the song | the app row given `examples/no-such-song` | app FAIL, nothing in "what failed" | "app first-song: examples/no-such-song couldn't be copied: cp: cannot stat …" |
+| (f) A failing binary with no harness | `core/plugins/tests/main_thread.rs` made to panic for the run (put back after) | "14 passed, 0 failed" | "14 passed, 1 failed (1 of them a whole test binary)". On the earlier checks' logs: S1's now reads 686 passed, 11 failed (design §4.1's 10 tests and the `main_thread` binary); S5's, `main`'s and S6's are unchanged. |
+| (g) "What failed" cut at 40 lines | 50 extra lines put into it | 40 lines, then nothing | 40 lines, then "(10 lines more: the whole list is …/failed, and "failed" in the logs file)" |
+
+**Deviations**
+
+| What | Why |
+|---|---|
+| Without the plugins the summary's first line says FAIL, not "PASS without plugins" | PLAT-6 says that is not a pass, and the contract wins over design §7.1's draft. A first line that starts with PASS would read as a pass. |
+| "With the plugins" now means `CLAP_PATH` (or the default folder) holds both `.clap` files | Before, any `CLAP_PATH` counted, even an empty folder. The top of the script already says `CLAP_PATH` is a folder holding both. The suites row still passes `CLAP_PATH` on as given, so with an empty folder live3b's plugin part fails there too. |
+| The rust tests row counts a binary that failed without a count of its own as one failure, and says so | Design §4.1 counts the `main_thread` binary as one of the 11. A test binary that crashes part way prints no count either, and is counted the same way. |
+
+**Shared files.** `ci/check.sh` (small hunks in the header, the plugin detection, `plugins()`, `summary()`, the app
+row's copy, the test count and the last line) and this section. Not touched: `Cargo.lock`, `docs/architecture.md`,
+`one_place.rs`.
+
+**The check** at `c9c163b` (`ci/check.sh`, 13 min, logs and the app's screenshots in `~/m2-runs/check-build-flakes/`):
+exactly §13.1's S6 row, with no retry.
+
+| Row | Result |
+|---|---|
+| toolchain, web build, build | PASS |
+| app | PASS: the UI connected in 1 s with `first-song` and with `with-plugins` |
+| rust tests | FAIL: tests 1 to 5 of §4.1 by name (the 4 watch tests and `a_lane_written_in_two_halves_never_plays_empty`); 715 passed, the cell and Surge tests among them |
+| clippy | FAIL at lint 4, `crates/server/src/graph/watcher.rs:55` ("3 findings"). Without `-D warnings` it lists exactly lints 4 to 6 (`wake`, `backstop`, `deaf`). |
+| std kernels, std.wasm, mac lint | PASS |
+| browser suites | PASS: 29 of 29, none on a retry; `live3a-fix` 49 of 49 |
+| renders | PASS: 8 of 8 match `e2e/renders.sha256` |
+| repo unchanged | PASS |
+
+The first run, at `9484a18`, failed clippy and the mac lint at the cell test: clippy's `manual_is_multiple_of` on the
+gate's `s % GATE == 0`. `c9c163b` writes it `s.is_multiple_of(GATE)` (the same meaning); the counts above were run
+again on it.
+
+**The check without the plugins** at `c9c163b` (a scratch `HOME` with no plugins, no `CLAP_PATH`; 9 min, logs in
+`~/m2-runs/check-build-flakes-noplugins/`): it fails, as PLAT-6 says. "plugins none: … doesn't hold both", and the
+first line of "what failed" says where they were looked for; exit status 1. The rows are as above, but the browser
+suites row is PART (28 of 29, live3b without plugins), and G10's timing failed once in the rust tests ("bar 64 takes no
+longer than the same length from bar 1": 2.57 s against 2.12 s, while other agents' checks loaded the server) and
+passed on the check's own retry. That is the G10 flake under load left alone below; it didn't occur in the run with
+the plugins.
+
+Left alone, as asked: G10's timing under load (PLAT-1). Not this task's: the `notes` and `s5-knobs` flakes that
+`HANDOFF.md` and S6's checker name.
