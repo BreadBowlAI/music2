@@ -733,6 +733,10 @@ pub enum Msg {
   do today. A `Hold(false)` sent while its `Hold(true)` still waits can't overtake it, so the engine
   can't be left held. Nothing queued during an export waits for "not held": the actor sends no
   `Activate` then, and `SwapLane` applies while held.
+- **Corrected 2026-10-15 (review rt-2):** `Hold(false)` now applies as soon as it is read, like
+  `Transport`, unless its own `Hold(true)` still waits at the head. In strict order, an `Activate`
+  sent while held waited at the head for the resume, and the resume waited behind it, so the engine
+  stayed held for good.
 
 **An `Activate` is ready** when all of these hold:
 
@@ -1223,6 +1227,11 @@ are all missing, exports beside playback as today.
   - cell writes wait in their slots.
 - `Hold(false)`, in order after its `Hold(true)`: the engine resumes from where it held, with its
   output ramped linearly from 0 over `fade` frames. This is a tape pause (owner question Q6).
+- **Corrected 2026-10-15 (the step 7 review):** `Hold(false)` applies as soon as it is read, never
+  before its own `Hold(true)` (§7.1, rt-2). While held, the status says where the transport is, so a
+  seek shows at once (rt-3). At the resume, each plugin node whose instance the export rendered with
+  starts again, under the fade in, the notes its lane still holds, with their own ids (the owner's
+  decision O4). Before, they stayed silent until their next note-on, as the export had ended them.
 
 **The actor** (`crates/server/src/export.rs` `start`, and `Open.exporting`):
 
@@ -1363,6 +1372,16 @@ never chosen.
 
 **Batched drops** are built only if the chosen layout's drop raises the audio-like thread's p99 more
 than dropping S's single store does. That drop is today's cost on every edit.
+
+**Decided 2026-10-15 (the owner, after the study in `g7f-linux.md`).** P1 fails the 25% rule, on the
+Mac and on Linux. The engine uses P2: each kernel memory reserves 32 MiB with a 64 KiB guard, keeps no
+room to grow and never moves, and Cranelift's Spectre guard on memory accesses is off (kernels import
+nothing, so they have no clock; revisit before kernels from other people's packages run). P1 stays as
+a gate-only option. Part 2's callback bound is 3% of a callback, 320 µs at 512 frames; part 1's stays
+80 µs a block. Built in the review's fixes: both parts run 5 pairs of the app's layout and P1, in turns,
+and add the median of the pairs' differences to P1's cost the Mac recorded. The mean is judged against
+the bound, and the p99's estimate is printed beside it, as the p99 moves by hundreds of µs between
+pairs (build notes, "Review and fixes").
 
 **After slice 2,** G7f's second part plays p50 at 3:00 for 30 s with the arena, in a recorded release
 run, and applies the same rule to the real numbers:
