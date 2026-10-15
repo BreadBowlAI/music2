@@ -570,3 +570,35 @@ the same message. S7 changes nothing in `core/plugins` or `core/os`.
 - The bounce's failure path keeps its old gap: when the provenance can't be written (now also when its push or the
   folder sync fails), the WAV goes but the provenance file stays, so a retry with that name is refused. Older than
   this slice.
+
+**The independent check** (label `check-s7`, at `a0b217e`; logs in `~/m2-runs/check-check-s7/`)
+
+| What | Result |
+|---|---|
+| The diff against §13.2's S7 row (and §3.1, §6.1) | All of the row is there: the fallback without the move aside, its rollback from the before bytes, the kill test on both disks with the `manifest` case, the four places that push before naming, the scan's push before its barrier, and the three contract edits word for word. Nothing extra but the deviations above. No test is weaker. No OS code outside `core/os`: S7 only calls `m2_os::fs`, and `one_place.rs` passes with its allow-list untouched. `core/os` is not touched, so the macOS code says what it said. |
+| `ci/check.sh` (9 min, while S8's check ran beside it) | §13.1's S7 row, with one suite retry that S7 didn't cause (below). Rust tests: 717 passed, 5 failed (tests 1 to 5 of §4.1 by name), no retry; `m2-session` 123 of 123 in 140.9 s. clippy fails at lint 4; without `-D warnings` it lists exactly lints 4 to 6. Suites 29 of 29 after the retry. Renders 8 of 8. toolchain, web build, build, app, std rows, mac lint and repo unchanged PASS. |
+| The old move-aside put back (in a scratch copy) | The no-swap kill test fails at `several (no swap) 22` with no fix offered (`ground/tests.md` surprise 1), and `a_failure_at_any_call_changes_nothing` fails too. With S7's code both pass. |
+| Recovery on a disk that can't swap (a temporary change: the kill test reopens, and runs Finish and Discard, on `Recorder { plain: true }` too) | Every case passes at every kill point. |
+| Two failures in a row at every call of the multi-file commit, both disks (the second often hits the rollback's first step) | `song.ts` is never missing. A rollback that fails is reported at once, and its Discard (and Finish when offered), run on the same kind of disk, puts every target back: 4 such rollbacks on the swap disk, 5 on the other. |
+| 1,000 saves of `song.ts` while 32 threads read it | Without a swap: 0 of 59.9 million reads found it missing (S6's check: 181,704 of 10.8 million before S7). With the swap: 0 of 63.5 million. |
+| The tidy at the lock, killed at each of its 15 disk calls (a child opens a project holding two completed journals) | The next open tidies both, offers nothing, and the project holds the commit. |
+| A second run under load | `m2-session`'s tests (with these probes) twice at once, load average about 70: both pass, 126 of 126, 275 s. |
+| `notes`, the suite that needed the retry | It failed "typing 4 bars makes the clip 16 beats long" (two requests refused, HTTP 400) and passed on its retry. Alone it passed 12 of 12, and 10 of 10 with 32 busy threads. The suite waits for two undos on disk, then types into the length field at once; the likely cause is a clip on screen that is still older than the file. S7 doesn't change that path (ext4 swaps, as at S6). |
+
+| Fixed | Why |
+|---|---|
+| `m2 bounce` into a folder in `assets/` (`vox/keys`, a name `relink.rs` uses) syncs each folder it made in the one above (`apps/m2/src/main.rs`) | The slice synced only `assets/`'s own entry, as if the WAV were always right in `assets/`. strace showed `assets/vox/` new, and never synced in `assets/`: a placing Tx could be durable while `vox/` is not, so the lane names a file a power cut can lose (design §3.1). strace after the fix: `vox/lead` with neither folder there syncs `vox/`, `assets/`, the project; `drums/kick/one` with `assets/` there syncs `kick/`, `drums/`, `assets/`; a name right in `assets/` syncs only `assets/`. `m2`'s tests pass. |
+
+Left for the lead:
+- An export into a folder that can be written but not listed (mode 300) now fails after the file is whole: `m2 render`
+  says "couldn't write …: Permission denied" and exits 1, and the WAV is there (tried). Before S7 it passed: the
+  folder sync can't open the folder. Into `assets/`, `write_for` would then say the file "is there already". Only
+  files a Tx names need the sync; an export outside the project could let a failed sync pass.
+- New Song, `m2 new`, the bounce and exports now fail on a volume that refuses a folder `fsync`, while commits go on
+  (`push_parents` ignores a failed folder sync). Linux's `vboxsf` has no folder `fsync` (from the kernel's source, not
+  run here); the Mac's volumes are unknown. Design §9 attack 3 counts a failed folder sync as a failing disk.
+- `m2 new a/b/song` makes `a/` and `b/`, and syncs only `b/`, the song's parent. A power cut could lose the whole
+  song, but nothing outside it names it.
+- The committed kill test reopens and runs Finish and Discard on the disk that swaps in both runs, so recovery on a
+  disk that can't swap is untested there. It passes when changed (above): 2 lines.
+- The Windows step: `push_tree` opens each file read-only to push it; `FlushFileBuffers` needs write access.

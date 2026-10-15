@@ -449,9 +449,10 @@ fn run() -> Result<()> {
             let mut r = Renderer::new(&flat, &data, &pk, sr)?;
             r.seek((from * sr as f64).round() as u64)?;
             let frames = r.render(seconds)?;
-            let assets = path.parent().expect("inside assets/");
-            let made = !assets.exists();
-            std::fs::create_dir_all(assets)?;
+            let folder = path.parent().expect("inside assets/");
+            // The folders made for it, deepest first: `assets/`, and `vox/` in it for `vox/keys`.
+            let made: Vec<&Path> = folder.ancestors().take_while(|f| !f.exists()).collect();
+            std::fs::create_dir_all(folder)?;
             let channels = vec![frames.iter().map(|f| f[0]).collect::<Vec<f32>>(), frames.iter().map(|f| f[1]).collect()];
             m2_runtime::audio::write_new_wav(&path, &channels, sr)?;
             // Where it came from, so a bounce of open kernels can always be reproduced: the module
@@ -478,15 +479,15 @@ fn run() -> Result<()> {
             });
             // Created only if it isn't there, as the asset is. An asset without its provenance
             // isn't kept, so the name stays free for a retry. Its bytes are pushed, and its
-            // folder synced (with `assets/`'s own entry when it is new), before --place names
+            // folder synced, with each folder made for it in the one above, before --place names
             // the asset (WRITE-1).
             let written = serde_json::to_string_pretty(&provenance).map_err(anyhow::Error::from).and_then(|text| {
                 let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&record)?;
                 std::io::Write::write_all(&mut f, (text + "\n").as_bytes())?;
                 m2_os::fs::push(&f)?;
-                m2_os::fs::sync_dir(assets)?;
-                if made {
-                    m2_os::fs::sync_dir(&project.dir)?;
+                m2_os::fs::sync_dir(folder)?;
+                for new in &made {
+                    m2_os::fs::sync_dir(new.parent().expect("inside the project"))?;
                 }
                 Ok(())
             });
