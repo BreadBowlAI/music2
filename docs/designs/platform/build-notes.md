@@ -353,3 +353,43 @@ The check again at `0a68727`, with the fix (logs in `~/m2-runs/check-check-S5b/`
 (one more: the new test), the same 10 failed. Suites: 6 of S1's 7 failed again, and `notes-proj` passed. `live3a`
 failed "dragging across the ruler loops beats 4–12" once and passed on its retry. That is `HANDOFF.md`'s ruler-drag flake,
 which S1's trial saw too; `live3a` hosts no plugin, so S5's loop only idles there. Alone it failed 1 of 6 runs more.
+
+## S2 to S5 on `main`
+
+S2 to S5 were built side by side, each from `512a96a`. They came onto `main` in order, each rebased onto the one
+before, so `main` is one line. Each one built (`cargo build --workspace`) and passed its own tests before `main` moved
+to it.
+
+| Slice | Conflicts | Its own tests after the rebase |
+|---|---|---|
+| S2 | none (it was a fast-forward) | `project::` unit tests 19 of 19; `tsc` clean |
+| S3 | `build-notes.md` only: both kept | std kernels' tests and clippy; `std/build.sh --check` gives the committed bytes; `bit_identity` 3 pass, 1 ignored; test 10 still prints resample `e2e93ef0…` |
+| S4 | `build-notes.md` only: both kept. RENDER-2 and PLAT-4 merged cleanly beside S3's PLAT-5. | `host_math`; `song_math_is_libm_on_every_os`; `gate_tests` 11 of 11 (test 10 passes); `bit_identity`; the 8 renders match `e2e/renders.sha256` |
+| S5 | `build-notes.md` only: both kept. Git merged `Cargo.lock` itself; main's lock with cargo's new edges gives the same file. | `m2-os` (with `one_place.rs`), `m2-plugins` (test 11: "main_thread: ok (Surge XT too)"), `m2-gates` and the app test, with the test plugins |
+
+The rebase gave the slices' commits new hashes. The notes above name the old ones:
+
+| Slice | Old → new |
+|---|---|
+| S2 | unchanged: `c60372a`, `1b50386` |
+| S3 | `319c804` → `cc6a4e9`, `e891a0b` → `145d251`, `bd608d7` → `2cb26bf`, `c99992e` → `b04e0d9` |
+| S4 | `23db463` → `d501be2`, `01edbf1` → `7559c6f`, `fa09cf0` → `b3a50c5`, `00ff1c7` → `a856c55`, `ce2c10a` → `d0687ff` |
+| S5 | `9d200a4` → `8d840ce`, `eefa929` → `96ba069`, `0a68727` → `b82de37`, `4890b64` → `6150310` |
+
+**Fixed here**, small points the checkers found and left:
+
+| What | Why |
+|---|---|
+| `e2e/env.mjs`'s header says `exe` goes through `chrome-as-mac.sh` off the Mac | It said only "E2E_CHROME, else puppeteer's Chrome", untrue since S2. |
+| `e2e/fx-fixes.mjs:57`'s comment: "exports 2" is taken because a name is taken in any capitals on every OS | It said macOS can't tell the two apart, which is no longer the reason (Q1). The check is unchanged. |
+| `ci/check.sh`'s clippy row counts lints only | It counted cargo's "could not compile" and "build failed" lines too, so one lint showed as 3 or 4 findings. Only the note changes, not when the row fails. |
+
+**Left for the lead**, as the checkers reported them:
+- `create_at` (`m2 new <dir>`) makes exactly the folder it is given, so on Linux it can make `night` beside `Night`.
+  §4.4 and OS-41 put Q1's rule in `make()` only.
+- Song code: `a ** b` on BigInt variables now throws (oxc lowers `**` to `Math.pow`), and `**` inside `eval` or
+  `new Function` still uses the OS's `pow`.
+- `apps/music2-desktop/src/main.rs` still says the plugins' main thread is AppKit's (§2.3 keeps this step out of it).
+- Flakes not caused by a slice: `m2-plugins`' `surge_plays_notes` (Surge XT's output starts below −140 dB a few
+  samples early), `m2-runtime`'s `cell_heard_never_runs_ahead` under heavy load, and G10's timing in
+  `the_live_engine_passes_every_gate` under load.

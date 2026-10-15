@@ -54,7 +54,7 @@ const ex = await api("project/new", { name: "Exports", template: "empty" });
 check(ex.status === 200 && ex.json.name === "Exports 2", `a song called Exports becomes “${ex.json?.name}”`);
 check(fs.existsSync(`${songs}/Exports 2/song.ts`) && !fs.existsSync(exportsDir), "in Exports 2; Exports itself isn't made");
 const lower = await api("project/new", { name: "exports", template: "empty" });
-// (“exports 2” is taken too: macOS doesn't tell it from “Exports 2”.)
+// (“exports 2” is taken too: a song's folder name is taken in any capitals, on every OS.)
 check(lower.json?.name === "exports 3" && !fs.existsSync(`${songs}/exports/song.ts`), `any case: “exports” becomes “${lower.json?.name}”`);
 // A stale part from an export that was cut off, and one that isn't a render's.
 fs.mkdirSync(exportsDir, { recursive: true });

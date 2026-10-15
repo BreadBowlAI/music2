@@ -359,7 +359,9 @@ begin clippy "2 min"
 if quiet clippy.log cargo clippy --locked --workspace --all-targets -- -D warnings; then
   record clippy PASS ""
 else
-  record clippy FAIL "$(grep -cE '^(warning|error)' "$OUT/clippy.log") findings: see clippy.log"
+  # Count the lints, not cargo's "could not compile" and "build failed" lines.
+  n=$(grep -E '^(warning|error)(\[[^]]*\])?: ' "$OUT/clippy.log" | grep -cvE '^(error: could not compile|warning: build failed|error: aborting)')
+  record clippy FAIL "$n findings: see clippy.log"
   first "$OUT/clippy.log" '^ *--> ' | sed 's/^ *--> /clippy: /' >> "$OUT/failed"
 fi
 
