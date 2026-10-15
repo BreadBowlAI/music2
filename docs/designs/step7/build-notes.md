@@ -279,3 +279,49 @@ The new tests (rule ids in their comments):
 - A device change during an export lets the player go, as a stall does today. By reading the code (not tested):
   the export keeps its instances, a load waits while it runs (`actor.rs:499`), and `export_done` loads the project
   into the new player after it.
+
+### The independent check
+
+**In short:** no bug found in bug 1's code, so its code is unchanged. Every test and lint passes again here, and
+probes that tried to break it passed. One flaky step 7 test showed up (not bug 1's). Points for later are below.
+Run on this server (Ryzen 9 7950X3D, Ubuntu 24.04), scratch `HOME`, `M2_AUDIO=none`, the test plugins in `CLAP_PATH`,
+other agents' jobs beside it (load about 10).
+
+| Check | Result |
+|---|---|
+| `cargo test -p m2-play -p m2-server` | PASS: `m2-play` unit 13, `no_alloc` 6, `live` 12 (1 ignored), `bit_identity` 6 (1 ignored), `churn`, `knobs`, `no_blocking`; `m2-server` 146. Then `m2-server` 8 more times: 146 each time. |
+| clippy, the whole workspace, `-D warnings` | PASS |
+| mac lint (ci/check.sh's command) | FAIL only on `crates/gates/src/store.rs:172` and `:290` (5 errors, `libc`), as at the rebase. PASS with `--exclude m2-gates`. |
+| The old rule put back (`stalled()` true on any error) | 4 of the new tests fail, not 3: also `a_device_change_or_loss_makes_a_new_player_where_it_was` (a change then says "stopped responding") |
+| `m2-gates --server --quick` (release; Linux, for information) | G1 PASS (p95 20.5 ms), G3 PASS (p95 17.4 ms), G5 and G7a PASS (p95 18.9 ms; G7a 31.6 ms), G8 PASS (p95 20.9 ms). `drag` can't run with `--quick`: it edits `tracks/t05.ts`, which p3 has not (its code is from before step 7). G9 on p16: PASS. |
+| `the_live_engine_passes_every_gate` | FAIL only on with-plugins' two "changed state (3b)" checks, as at the rebase (slice 4) |
+| `cargo test --workspace --no-fail-fast` | 823 passed, 3 ignored. Failed: the rebase's four, and once `swapping_two_plugin_keys_moves_the_instances` (below) |
+| The headless server's `/api/graph/status` and `/api/graph` | both carry `xruns` and `device_errors` (0 and 0) |
+
+Probes (temporary, not kept), all passed:
+- 40,000 errors from 4 threads while the callback plays: each counted, never stalled, the same bits.
+- A change, then the device gone: the player is stalled, and changed too.
+- A change with no action: the 300 ms catch-up alone lets the player go and loads a new one at the same beat.
+- 10,000 xruns, then an edit: the same player takes the edit and is never let go.
+- A knob drag across a device change: the drag goes on in the new player, and its commit is written.
+
+Read in cpal 0.18.2's source: a macOS stream on the default output (as music2 opens one) reports `Xrun`,
+`DeviceChanged` and `DeviceNotAvailable`, and `Other` only if the clock can't be read. ALSA and CoreAudio make an
+xrun's error with no text that must be freed.
+
+**A flaky step 7 test (not bug 1's).** `swapping_two_plugin_keys_moves_the_instances` (`crates/server/src/graph/tests.rs`,
+from `c8117c3`) checks "none created" against the count of plugin instances made in the whole process
+(`InProcess::counts`). Another test that makes probe instances at the same time adds to it. Run together with the
+other four probe tests, it failed 59 times out of 60 ("left: 11, right: 3" to "10"). Alone it passed 5 of 5. Not
+fixed here: a count per owner, or a lock the five probe tests share, would fix it.
+
+**Points for later** (choices or bigger work, not fixed):
+- Playback stops on a device change. When the catch-up lets the player go, nobody is told why, as after a stall.
+  The owner may want play to go on in the new player.
+- The stream's thread now sleeps a second at a time. Design-8a §6.5 plans to wake it with `unpark` to close the
+  stream; `park_timeout` would serve both.
+- A player let go keeps logging its counts. After a change, its stream plays silence on the new device, so an
+  overload there is logged twice.
+- An export can start on a changed player in the 300 ms before it is let go: the pause works, then the catch-up
+  lets that player go during the export. Reading the code, the new player loads after the export. Slice 4's
+  export `Hold` should test this.
