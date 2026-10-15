@@ -3125,7 +3125,7 @@ fn an_instance_waiting_for_a_restart_isnt_borrowed() {
     assert!(done["done"] == true && done["paused"] == false, "{done}");
     assert!(moves(&stats.main_calls(), before).is_empty(), "not borrowed");
     assert!(wav(&out) == rendered(&ex), "what new instances make, bit for bit");
-    assert!(ex.state.graph.catch_up());
+    eventually("the catch-up replaces it", || ex.state.graph.catch_up());
     ex.fill(4);
     assert!(ex.handles() != first, "replaced");
 }
@@ -3192,8 +3192,9 @@ fn a_change_that_cant_get_ready_to_play_says_so_once() {
     dc.graph.inspect(|a| a.fail_builds = true);
     dc.fixture.put("tracks/a.ts", &A_DC.replace("  return", "  const spare = osc.sine(hz(1));\n  return"));
     assert!(dc.graph.poll());
+    // The catch-up's tries, made on the actor so none is skipped as busy.
     for _ in 0..3 {
-        assert!(!dc.graph.catch_up());
+        assert!(!dc.graph.inspect(|a| a.catch_up()));
     }
     let told = failing(&dc);
     let start = "Your last change is saved, but music2 couldn't get it ready to play, so the version before it keeps playing. Undo";
@@ -3202,7 +3203,7 @@ fn a_change_that_cant_get_ready_to_play_says_so_once() {
         "{told:?}"
     );
     dc.graph.inspect(|a| a.fail_builds = false);
-    assert!(dc.graph.catch_up() && synced(&dc.graph), "it plays once it builds");
+    eventually("it plays once it builds", || dc.graph.catch_up() && synced(&dc.graph));
     dc.graph.inspect(|a| a.fail_builds = true);
     dc.fixture.put("tracks/a.ts", &A_DC.replace("  return", "  const spare = osc.sine(hz(2));\n  return"));
     assert!(dc.graph.poll());
@@ -3245,7 +3246,8 @@ fn playback_the_device_stopped_is_said() {
         }
         dc.blocks(2);
         dc.driver.error(kind.into());
-        assert!(dc.graph.catch_up(), "{kind:?}: a new player");
+        // The catch-up waits while the actor is busy.
+        eventually("a new player", || dc.graph.catch_up());
         let told: Vec<String> = dc.graph.expire().into_iter().filter(|t| t.starts_with("Playback stopped")).collect();
         match plays {
             true => assert_eq!(told, [format!("Playback stopped: {why}. Press Play to go on.")], "{kind:?}"),
