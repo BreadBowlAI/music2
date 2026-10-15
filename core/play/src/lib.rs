@@ -848,7 +848,8 @@ impl Player {
 
     /// Pause for an export that borrows the live plugin instances, or resume (RENDER-1): the
     /// engine fades out over 5 ms and processes nothing until it resumes where it held, fading in.
-    /// Applied in order with activations and swaps.
+    /// A hold applies in order with activations and swaps. A resume applies as soon as the engine
+    /// reads it, never behind an activation that waits for it, but never before its hold.
     pub fn hold(&self, on: bool) -> Result<u64> {
         self.envelope(EngineMsg::Hold(on))
     }

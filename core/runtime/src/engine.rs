@@ -16,7 +16,9 @@
 //! Order: transport commands and panic apply as soon as they are read. Structural messages
 //! (activate, swap, hold) apply in strict order: one that can't apply yet waits at the head, and
 //! the one after it waits in the inbox. Activations never coalesce: each is prepared against the
-//! plan before it (RENDER-28), and one that doesn't fit what plays is refused whole.
+//! plan before it (RENDER-28), and one that doesn't fit what plays is refused whole. A resume
+//! applies as soon as it is read too, as resuming never conflicts with an activation or a swap: it
+//! waits only behind the hold it ends, while that hold waits for a window to end.
 //!
 //! A hold, for an export that borrows the live plugin instances (RENDER-1), is a tape pause and
 //! RENDER-6a's one exception: the output fades out over 5 ms, then the engine processes nothing,
@@ -361,7 +363,8 @@ impl Engine {
         self.applied_n += 1;
     }
 
-    /// Apply a transport command or a panic: always possible, as seeks and loops are beats.
+    /// Apply a transport command, a panic or a resume: always possible, as seeks and loops are
+    /// beats.
     fn apply_now(&mut self, msg: &Msg) {
         match *msg {
             Msg::Transport(cmd) => {
@@ -375,7 +378,17 @@ impl Engine {
             // Held or holding, no plugin may be called: at the resume.
             Msg::Panic if self.hold => self.panic_held = true,
             Msg::Panic => self.panic(),
+            Msg::Hold(false) => self.resume(),
             _ => unreachable!("structural messages wait their turn"),
+        }
+    }
+
+    /// The end of a hold: the output fades back in from the next block, and a panic read
+    /// meanwhile applies.
+    fn resume(&mut self) {
+        self.hold = false;
+        if std::mem::take(&mut self.panic_held) {
+            self.panic();
         }
     }
 
@@ -443,12 +456,8 @@ impl Engine {
                 };
                 self.retire_now(Retired::Lane(back), retire);
             }
-            Msg::Hold(on) => {
-                self.hold = on;
-                if !on && std::mem::take(&mut self.panic_held) {
-                    self.panic();
-                }
-            }
+            Msg::Hold(true) => self.hold = true,
+            Msg::Hold(false) => self.resume(),
             Msg::Transport(_) | Msg::Panic => unreachable!("applied at once"),
         }
         Ok(refused)
@@ -500,7 +509,10 @@ impl Engine {
             let Some(env) = inbox() else { break };
             (self.idle, self.silent_blocks) = (false, 0);
             let seq = env.seq;
-            if !env.msg.structural() {
+            // A resume never waits behind an activation that waits for it, which would hold the
+            // engine for good; only behind the hold it ends.
+            let resume = matches!(env.msg, Msg::Hold(false)) && !self.head.as_ref().is_some_and(|h| matches!(h.msg, Msg::Hold(true)));
+            if !env.msg.structural() || resume {
                 self.apply_now(&env.msg);
                 self.stamp(seq, stamp, frame, false);
                 continue;
