@@ -739,8 +739,9 @@ fn call(session: &m2_session::Session, file: &str, callee: &str) -> Result<Strin
 /// G5 (and G7a's engine-rig twin): an added effect is audible within compile time + 100 ms, entered
 /// at the audio thread's own position, with no jump back (RENDER-25a, RENDER-8), and heard: against
 /// a twin that activates the song as it was at the same frame, what differs is the effect alone
-/// (RENDER-25). Then the effect is taken out again; across each of the two activations, no step
-/// over twice the music's own (G6's bound, G7a). From `o.at` (1:00; 3:00 for G7a's recorded run).
+/// (RENDER-25). Then the effect is taken out again; across each of the two activations, no step in
+/// the edit's own sound (this run less the twin) over twice its own (G6's bound, G7a). From `o.at`
+/// (1:00; 3:00 for G7a's recorded run).
 pub fn add_effect(lab: &mut Lab, kind: Kind, o: &Opts) -> Result<Outcome> {
     let dir = lab.reference(&o.reference)?;
     let song = lab.compile(&dir)?;
@@ -818,8 +819,10 @@ pub fn add_effect(lab: &mut Lab, kind: Kind, o: &Opts) -> Result<Outcome> {
 
     // G7a (design §12.1): G6's step bound holds across each edit. The effect is taken out again, the
     // other edit G7a's server run makes, the twin again activating the song as it was at the same
-    // frame. Across each activation, from its block line through its 5 ms fades, no sample-to-sample
-    // step over twice the music's own largest, as the twin plays it over the 200 ms on each side.
+    // frame. What the edit does is this run's output less the twin's: across each activation, from
+    // its block line through its fades, no sample-to-sample step in it over twice its own largest
+    // over the 200 ms on each side. A fade that is missing jumps it by the whole effect at once. The
+    // whole mix's own steps would hide that: p50's are about as large as a click.
     let e1 = a.now();
     let back = a.change(&song, Change::Structure)?;
     let twin = b.change_after(&song, Change::Structure, a.now() - e1)?;
@@ -829,16 +832,25 @@ pub fn add_effect(lab: &mut Lab, kind: Kind, o: &Opts) -> Result<Outcome> {
     if b.rig.applied(&twin) != Some(undone) {
         bail!("the twin's second activation took effect at engine frame {:?}, the edit's at {undone}", b.rig.applied(&twin));
     }
-    let (window, around) = (a.frames(0.010), a.frames(0.2));
+    // Its wait and its 5 ms fade, with room to spare.
+    let (window, around) = (a.frames(0.020), a.frames(0.2));
+    let edit = |from: u64, to: u64| difference(span(&a.tape, from, to), span(&b.tape, from, to));
+    let steps = |from: u64, to: u64| signal::max_step(&edit(from, to)).0;
     let across = |at: u64| {
-        let step = signal::max_step(span(&a.tape, at.saturating_sub(1), at + window)).0;
-        (step, signal::max_step(span(&b.tape, at.saturating_sub(around), at + around)).0)
+        let own = steps(at.saturating_sub(around), at).max(steps(at + window, at + window + around));
+        (steps(at.saturating_sub(1), at + window), own)
     };
     let (added, taken) = (across(applied), across(undone));
     out.check(
-        "G7a: no step over twice the music's own across each edit (G6's bound)",
+        "G7a: no step over twice the edit's own across each edit (G6's bound)",
         [added, taken].iter().all(|(step, own)| *own > 0.0 && step <= &(2.0 * own)),
-        format!("adding the delay {:.4} (bound {:.4}); taking it out {:.4} (bound {:.4})", added.0, 2.0 * added.1, taken.0, 2.0 * taken.1),
+        format!(
+            "in the edit's own sound (this run less the twin): adding the delay {:.4} (bound {:.4}); taking it out {:.4} (bound {:.4})",
+            added.0,
+            2.0 * added.1,
+            taken.0,
+            2.0 * taken.1
+        ),
     );
     Ok(out)
 }
