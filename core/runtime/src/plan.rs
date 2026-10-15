@@ -364,6 +364,14 @@ impl LaneSlot {
         }
     }
 
+    /// A notes lane's scheduler, while it is here.
+    pub(crate) fn scheduler(&self) -> Option<&NoteScheduler> {
+        match self {
+            LaneSlot::Notes(Some(s)) => Some(s),
+            _ => None,
+        }
+    }
+
     fn empty(kind: Kind) -> LaneSlot {
         match kind {
             Kind::Events(_) => LaneSlot::Notes(None),
@@ -687,7 +695,7 @@ fn take_from(new: &mut Graph, to: usize, old: &mut Graph, from: usize) {
                 debug_assert!(from.len() <= room, "a kept plugin node with less room than the old one");
                 to.extend(from.iter().take(room));
             }
-            (n.status, n.offs, n.last_off) = (o.status, o.offs, o.last_off);
+            (n.status, n.offs, n.last_off, n.again) = (o.status, o.offs, o.last_off, o.again);
             // Last-sent values by parameter id: a constant is sent again only when it changed.
             for p in &mut n.params {
                 p.2 = o.params.iter().find(|q| q.0 == p.0).and_then(|q| q.2);

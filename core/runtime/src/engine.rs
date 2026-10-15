@@ -24,7 +24,8 @@
 //! RENDER-6a's one exception: the output fades out over 5 ms, then the engine processes nothing,
 //! its clock stands still, and it says so ([`Status::held`]); a resume fades back in where it held.
 //! While held, a swap applies, transport commands apply to the frozen transport (where it is is
-//! published at once), and an activation and a panic wait for the resume.
+//! published at once), and an activation and a panic wait for the resume. At the resume, each
+//! plugin the export borrowed starts again the notes the song still holds, as the export ended them.
 //!
 //! Cell values are never messages (RENDER-28): each renderer reads its own cells' slots as it
 //! renders a block, after the block line's messages, and the engine stamps when it heard them.
@@ -383,10 +384,14 @@ impl Engine {
         }
     }
 
-    /// The end of a hold: the output fades back in from the next block, and a panic read
-    /// meanwhile applies.
+    /// The end of a hold: the output fades back in from the next block, a panic read meanwhile
+    /// applies, and each plugin an export borrowed starts again the notes the song still holds
+    /// (RENDER-1).
     fn resume(&mut self) {
         self.hold = false;
+        if let Some(r) = &mut self.current {
+            r.resumed();
+        }
         if std::mem::take(&mut self.panic_held) {
             self.panic();
         }

@@ -236,6 +236,15 @@ impl NoteScheduler {
         self.sounding.iter().any(|s| s.id == id)
     }
 
+    /// The pitch and velocity of note `id` while it sounds, as its data has them now: what starts
+    /// it again in a plugin an export borrowed (RENDER-1). Never allocates.
+    pub(crate) fn sounding_note(&self, id: u32) -> Option<(f32, f32)> {
+        let s = self.sounding.iter().find(|s| s.id == id)?;
+        let i = *self.data.group(&s.key).get(s.ord as usize)?;
+        let n = &self.data.notes[i as usize];
+        Some((n.pitch, n.velocity))
+    }
+
     /// Take over the notes `small` turned on and hasn't turned off, with their ids: this scheduler
     /// replaces it on its lane at an activation, sized for data that outgrew it (RENDER-26a). At its
     /// first block they are matched against this scheduler's data as a swap's are. Never allocates:

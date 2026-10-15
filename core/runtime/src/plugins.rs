@@ -6,7 +6,7 @@
 //! the plugin main thread (queued, never on the audio thread: plans are retired off it).
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use anyhow::Result;
 use m2_plugins::{Blob, Found, Handle, Owner, PluginHost};
@@ -23,6 +23,9 @@ pub struct PluginInstance {
     /// Its state was loaded: its node's next calls send every parameter code owns again, as the
     /// blob's values would win over them otherwise (HOME-4). Counts the calls still to do so.
     reloaded: AtomicU8,
+    /// An export rendered with it, so the notes playback left in it ended: at the resume, its live
+    /// node starts again the ones the song still holds (RENDER-1).
+    lent: AtomicBool,
 }
 
 /// The calls after a state load that send every code-owned parameter again. Two: a plugin may
@@ -33,7 +36,7 @@ const RELOADED_CALLS: u8 = 2;
 impl PluginInstance {
     /// Take ownership of `h`, created through `host` for a node of `shape`.
     pub(crate) fn new(host: Arc<dyn PluginHost>, h: Handle, shape: u64) -> PluginInstance {
-        PluginInstance { host, h, shape, reloaded: AtomicU8::new(0) }
+        PluginInstance { host, h, shape, reloaded: AtomicU8::new(0), lent: AtomicBool::new(false) }
     }
 
     /// A new instance of `plugin` for a node of shape `shape` (its hash): created through `host`
@@ -70,6 +73,17 @@ impl PluginInstance {
     /// thread's; an atomic step, no lock).
     pub(crate) fn take_reloaded(&self) -> bool {
         self.reloaded.try_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1)).is_ok()
+    }
+
+    /// An export's render reset it at its first call, ending the notes playback left in it.
+    pub(crate) fn mark_lent(&self) {
+        self.lent.store(true, Ordering::Release);
+    }
+
+    /// Whether an export rendered with it since this was last asked (the audio thread's, at a
+    /// resume; an atomic swap, no lock).
+    pub(crate) fn take_lent(&self) -> bool {
+        self.lent.swap(false, Ordering::AcqRel)
     }
 
     pub fn handle(&self) -> Handle {

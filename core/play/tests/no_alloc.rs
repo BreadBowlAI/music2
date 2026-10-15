@@ -21,7 +21,7 @@ use std::sync::{Arc, mpsc};
 use common::*;
 use m2_ir::Origin;
 use m2_play::{DeviceError, DeviceErrorKind, Gone, Player, alloc};
-use m2_runtime::{CellTarget, LaneSwap, NotesData, Renderer, Retired};
+use m2_runtime::{BLOCK, CellTarget, Continues, LaneSwap, NotesData, Renderer, Retired};
 use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
 
@@ -356,10 +356,32 @@ fn probes(gain: f64) -> Song {
     Song { flat, data, packages, rate: SR, dir }
 }
 
+/// What an export does with the live instances `lent` lends while the engine holds (RENDER-1,
+/// `Lent` in `crates/server/src/export.rs`): each taken offline, `song`'s renderer playing them
+/// through the song from 0 (its first call resets each), each given back, active again.
+fn export_with(song: &Song, lent: &std::collections::HashMap<usize, Arc<m2_runtime::PluginInstance>>) {
+    let cycle = |inst: &m2_runtime::PluginInstance| {
+        let (host, h) = (inst.host(), inst.handle());
+        host.deactivate(h);
+        host.activate(h, SR, BLOCK as u32).unwrap();
+    };
+    lent.values().for_each(|i| cycle(i));
+    let mut r = Renderer::lending(&song.flat, &song.data, &song.packages, SR, lent).unwrap();
+    for k in 0..(song.seconds() * SR as f64) as u64 / BLOCK as u64 {
+        r.render_block(k * BLOCK as u64).unwrap();
+    }
+    drop(r);
+    for i in lent.values() {
+        cycle(i);
+        i.mark_reloaded();
+    }
+}
+
 // RENDER-28, step 3b (§6.5): the callback never allocates with plugins either: two probe instances
 // played, then an activation that moves both while notes sound into one (its notes and last-sent
 // values with it), a hold for an export and its resume with a panic deferred to it (RENDER-1), a
-// cell write into a parameter, a panic, stop, the plugins asleep and the engine idle, then woken
+// cell write into a parameter, a panic, a hold an export renders in and its resume, which starts
+// the notes the export ended again, stop, the plugins asleep and the engine idle, then woken
 // by a plugin's request from a thread of its own. The probe
 // asks for its main-thread callback from `process` every 10 calls. Only the host glue is trapped
 // here: a real plugin's own allocations are its own (step 3a §13).
@@ -371,6 +393,7 @@ fn the_audio_thread_never_allocates_with_plugins() {
     ra.set_strict(false);
     let handles = ra.plugin_handles();
     let rb = b.after(&a, &ra.info());
+    let info_b = rb.info();
     let gain = CellTarget { slots: rb.cell_slots(), cells: rb.cell_map().cells(&cells()[0]).into() };
     assert_eq!(gain.cells.len(), 1, "the gain parameter's value is a cell");
     assert_eq!(rb.stats().kept.plugins, 2, "both kept");
@@ -425,6 +448,19 @@ fn the_audio_thread_never_allocates_with_plugins() {
     player.set_cells(&gain, 0.5);
     player.panic().unwrap();
     step(SR as usize / 4);
+    // RENDER-1: an export renders with the instances while held, here on this thread as on the
+    // export's, which ends the notes playback left in them; at the resume the instrument starts
+    // again the notes the song still holds, on the audio thread.
+    player.hold(true).unwrap();
+    step(SR as usize / 10);
+    assert!(player.held());
+    export_with(&b, &info_b.lend(&b.flat, &b.data, &b.packages, &Continues::identity(&b.flat)));
+    let ons = |s: &m2_plugins::probe::Stats| s.notes().iter().filter(|e| e.1 == m2_plugins::probe::Note::On).count();
+    let (before, sounding) = (ons(&stats[0]), stats[0].sounding.load(std::sync::atomic::Ordering::Relaxed));
+    player.hold(false).unwrap();
+    step(BLOCK);
+    assert_eq!(sounding, 0, "the export ended them");
+    assert!(ons(&stats[0]) > before && stats[0].sounding.load(std::sync::atomic::Ordering::Relaxed) > 0, "they start again");
     player.stop();
     step(SR as usize / 4);
     for s in &stats {
