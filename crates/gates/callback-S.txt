@@ -3,6 +3,7 @@ from a worktree at that commit (`m2-gates arena --reference 50`, release) on the
 32 GB, macOS 26.6.2), 2026-10-14: p50 played from 3:00 for 30 s in callbacks of 512 frames at 48 kHz. Each value is
 the median of 16 runs alternated with slice 2's. The record's machine (last on its line) was written at step 7's
 merge, as `m2_os::process::machine()` names that Mac.
-Not judged: G7f now measures S itself in every run, in S's runner (s/README.md). A run on the same machine prints
-this record beside S measured then, to show whether the two agree.
+Its numbers are not judged: G7f measures S itself in every run, in S's runner (s/README.md). Its machine line decides
+where G7f part 2 is judged: only on that machine (PLAT-1). A run there prints this record beside S measured in the
+same run, to show whether the two agree.
 callback-record p99_us=12909.604 mean_us=8935.735 max_us=17022.895 machine=MacBookPro18,1, macOS 26.6.2, Apple M1 Pro, aarch64, 10 threads

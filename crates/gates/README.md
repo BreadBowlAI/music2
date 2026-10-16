@@ -45,7 +45,7 @@ cargo run -p m2-gates --release --features engine -- seek loop --reference 50
 cargo run -p m2-gates --release --features engine -- add-effect --stems 4
 ```
 
-`--help` lists every option. The first line of every run says which build measured: timings from a dev and a release build differ several times over, and the gates must pass on both. The second line names the machine (`m2_os::process::machine()`): only the reference Mac's timings are judged, and a record (`store-S.txt`, `callback-S.txt`) is used only on the machine it names, whatever its OS version (PLAT-1). G7f's comparisons with S need no record: S is measured in the same run.
+`--help` lists every option. The first line of every run says which build measured: timings from a dev and a release build differ several times over, and the gates must pass on both. The second line names the machine (`m2_os::process::machine()`): only the reference Mac's timings are judged, and a record (`store-S.txt`, `callback-S.txt`) is used only on the machine it names, whatever its OS version (PLAT-1). G7f measures S in the same run, but the machine lines of `store-S.txt` and `callback-S.txt` still say which Mac judges it: on any other machine its timings are printed, not judged, and on a Mac they also say what to do if it is the reference Mac now. So keep both records, machine lines and all.
 
 Projects are generated into a new folder under the temp dir and removed afterwards (`--work DIR` and `--keep` to look at them). Nothing reads `~/.music2` or `~/Music`, and nothing plays on a device: the binary sets `M2_AUDIO=none` before anything starts, and `M2_AUDIO_FRAMES=512` unless it is set.
 

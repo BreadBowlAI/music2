@@ -1,6 +1,6 @@
 # S's runner (G7f)
 
-G7f ([RENDER-32](../../../docs/architecture.md#engine-shape-step-7)) asks what step 7 costs. It judges the app against **S**: HEAD `8aa301e`, the commit before step 7. Each G7f run measures S fresh, beside the app, over the same music, on the same machine. So no old number is added in. As for every timing, only the reference Mac judges it ([PLAT-1](../../../docs/architecture.md#platforms)); other machines print it.
+G7f ([RENDER-32](../../../docs/architecture.md#engine-shape-step-7)) asks what step 7 costs. It judges the app against **S**: HEAD `8aa301e`, the commit before step 7. Each G7f run measures S fresh, beside the app, over the same music, on the same machine. So no old number is added in. As for every timing, only the reference Mac judges it ([PLAT-1](../../../docs/architecture.md#platforms)): the Mac that the machine lines of `../store-S.txt` and `../callback-S.txt` name. Other machines print it. A Mac the records don't name also says what to do if it is the reference Mac now, and `ci/check.sh` marks its gates row PART.
 
 S's code can't be built into today's m2-gates. So this folder holds a small program that plays S in a process of its own:
 
