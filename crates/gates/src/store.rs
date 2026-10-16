@@ -703,11 +703,11 @@ mod tests {
             out.checks.iter().filter(|c| c.verdict == Verdict::Skip).map(|c| (c.name.as_str(), c.detail.as_str())).collect();
         assert_eq!(skipped.len(), 3, "{out}");
         assert_eq!(skipped[0].0, "block within S + 80 µs, by the mean");
+        assert!(skipped[0].1.starts_with("would pass: +10 µs (3 pairs, +8 to +12)"), "{out}");
         assert!(
-            skipped[0].1.starts_with("not judged on this Mac (PLAT-1), not the Mac S's records name: if this is the reference Mac, copy "),
+            skipped[0].1.contains("; not judged on this Mac (PLAT-1), not the Mac S's records name: if this is the reference Mac, copy "),
             "{out}"
         );
-        assert!(skipped[0].1.contains("; would pass: +10 µs (3 pairs, +8 to +12)"), "{out}");
         assert_eq!(skipped[1].0, "footprint within S + 64 MB");
         assert!(skipped[1].1.starts_with("not judged on this Mac (PLAT-1)"), "{out}");
         assert_eq!(skipped[2].0, "full build within 1.5 × S");

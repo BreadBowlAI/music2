@@ -75,7 +75,8 @@ pub fn value(values: &[(String, f64)], key: &str) -> Option<f64> {
 }
 
 /// The judged line of a G7f part: the median of the pairs' mean differences from S against
-/// `bound`, then the p99's, printed. The gates' summary keeps 220 characters of a line.
+/// `bound`, then the p99's, printed. The gates' summary keeps 220 characters of a line, so whatever
+/// [`timed`] adds comes after it.
 pub fn judge([mean, p99]: [&Diffs; 2], bound: f64) -> (bool, String) {
     (mean.median() <= bound, format!("{mean} over S, measured here (bound {bound:.0}). p99, not judged: {p99}"))
 }
@@ -122,7 +123,7 @@ pub fn timed(out: &mut Outcome, name: &str, place: &Place, (pass, detail): (bool
     match place {
         Place::Reference => out.check(name, pass, detail),
         Place::OtherMac(why) => {
-            out.skip(name, format!("{}; {would}: {detail}", not_the_reference(why)));
+            out.skip(name, format!("{would}: {detail}; {}", not_the_reference(why)));
             false
         }
         Place::Elsewhere => {
@@ -409,10 +410,17 @@ mod tests {
                 (Verdict::Pass, "+200 µs"),
                 (
                     Verdict::Skip,
-                    "not judged on this Mac (PLAT-1), not the Mac S's records name: if this is the reference Mac, copy its machine line into crates/gates/store-S.txt and callback-S.txt; would pass: +20 µs"
+                    "would pass: +20 µs; not judged on this Mac (PLAT-1), not the Mac S's records name: if this is the reference Mac, copy its machine line into crates/gates/store-S.txt and callback-S.txt"
                 ),
             ]
         );
+        // The summary keeps 220 bytes of a line: the numbers come first, the advice after.
+        let mut out = Outcome::new("G7f", "RENDER-32", "a test");
+        let judged = judge([&Diffs(vec![100.0, 80.0, 120.0, 95.0, 110.0]), &Diffs(vec![-137.0, -235.0, -57.0, -100.0, -150.0])], 320.0);
+        timed(&mut out, "callback within S's + 320 µs, by the mean", &Place::OtherMac("not the Mac S's records name"), judged);
+        let line = format!("{out}").lines().nth(1).unwrap().to_string();
+        let kept = String::from_utf8_lossy(&line.as_bytes()[..220]).to_string();
+        assert!(kept.contains("would pass: +100 µs (5 pairs, +80 to +120) over S, measured here (bound 320). p99, not judged: -137 µs (5 pairs, -235 to -57)"), "{kept}");
     }
 
     // PLAT-1: the reference Mac is the machine S's records name, through an OS update too; a Mac they
