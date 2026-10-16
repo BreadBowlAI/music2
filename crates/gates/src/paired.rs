@@ -235,6 +235,12 @@ impl Turns {
 /// ([`Turns::starts`]). Before, every step was judged and the orders were played one after another:
 /// S never followed itself, while the app's layout and P1 each did one turn in six. That favoured
 /// the app's layout by about 20 µs a callback on Linux, and made most of the p99's difference.
+///
+/// A side in S's runner takes its turns in another process. With the app's own engine on both
+/// sides (the A/A control in `crates/gates/s/README.md`), held on one die of the Linux machine's
+/// CPU, a block came out at 0 within a few µs, but a callback anywhere from -145 to +38 µs from one
+/// run to the next: each process runs a little faster or slower as a whole, all run long, which the
+/// rounds can't average out. With these turns, two runs gave +9 and +14. Not measured on the Mac.
 pub fn in_turns(sides: &mut [&mut dyn Side], warm: usize, n: usize, turn: usize, lead: usize, round: usize) -> Result<Turns> {
     if turn == 0 {
         bail!("a turn of no steps");

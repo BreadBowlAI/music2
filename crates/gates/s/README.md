@@ -31,7 +31,19 @@ A turn starts on the caches the side before it left, so its first steps are slow
 
 Before 2026-10-16 every step was judged, and the turns went through every order one after another. Then S always followed another side, while the app's layout and P1 each followed themselves in one turn of six. On Linux that made the app's layout look about 20 µs a callback faster than it was, and made most of the p99's difference.
 
-Taking turns across two processes adds no bias of its own. A control with the app's own engine on both sides, one in m2-gates and one in a runner, both processes held on one die of the Linux server's CPU, differed by -4 µs a block (5 pairs, -5 to +1) and -10 µs a callback (-14 to -3). When the processes aren't held there, where the scheduler puts them moves the comparison by up to about 100 µs a callback from one run to the next on that CPU (one of its two dies has a far bigger cache).
+## How far off the method itself can be
+
+A control plays the app's own engine on both sides: in m2-gates, and in a runner built from the same code (an "A/A" run). It should come out at 0. Here is what it gave on the Linux server, the app's layout in m2-gates against the same engine in the runner, by the mean, as the gate judges (5 rounds a run):
+
+| Turns | Held on one CPU die | Not held (as `ci/check.sh` runs it) |
+|---|---|---|
+| Today's (2 s, half a second not judged): a block | −0 µs (−2 to +1) | |
+| Today's: a callback | +9 µs (+1 to +18); +14 (+4 to +17) | +73 µs (−105 to +152) |
+| 1 s turns, every order one after another (before 2026-10-16; the second of each pair with each turn's first step left out): a block | −4 (−5 to +1); +2 (+1 to +3) | +11 (−3 to +20); −6 (−8 to +11) |
+| The same: a callback | −10 (−14 to −3); +7 (−5 to +18) | +130 (+36 to +199); +50 (+11 to +175) |
+| Scratch tries in between (no side following itself, 1 s turns): a callback | −145 (no step left out); −53, +20 (2 left out) | |
+
+Blocks come out at 0 within a few µs. Callbacks don't always. Each process runs a little faster or slower as a whole, and that lasts for the whole run: in one run the runner's copy was 145 µs a callback slower, through all 5 rounds. The rounds share the same two processes, so they can't average that out, and their range doesn't show it. (Starting the runner again for each round, in a scratch try, spread S's rounds by about 60 µs, as that would.) Not held on one die, where the scheduler puts the two processes adds more: the same tree gave +14 µs a block held and +43 not held. On the Mac none of this has been measured. So treat one run's result as good to about ±150 µs a callback and ±30 µs a block: near a bound, run it again before deciding.
 
 The runner says which code it is when it starts (a hash of `main.rs` and `wire.rs`) and which commit it was built at. m2-gates refuses a runner built from other code, or at another commit.
 
