@@ -1,7 +1,8 @@
 //! S, HEAD `8aa301e`, the commit before step 7: G7f's baseline (RENDER-32), measured fresh in every
 //! run. S's runner (`crates/gates/s/`, built from a clean copy of S by its `build.sh`) plays it in a
 //! process of its own and takes turns with the players here over a pipe ([`wire`]), so the app and
-//! S are timed over the same music in the same minutes, and the comparison is judged on any machine.
+//! S are timed over the same music in the same minutes. Only the reference Mac judges the timings
+//! (PLAT-1).
 //! `$M2_GATES_S` names the runner; ci/check.sh builds it and sets that.
 
 use std::io::BufReader;

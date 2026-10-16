@@ -14,7 +14,8 @@
 //!   block just before it is timed the same way beside it.
 //!
 //! The rule: the callback within S's + 320 µs (3% of a 10.7 ms callback, the owner's bound), the
-//! median of the rounds' differences, the app's layout minus S, both measured here. The rule names
+//! median of the rounds' differences, the app's layout minus S, both measured here, and judged only
+//! on the reference Mac, the machine `callback-S.txt` names (PLAT-1). The rule names
 //! the p99, but even paired it moves by far more than that between pairs, so the mean is judged
 //! and the p99's difference printed. What P1 costs over S (step 7 with wasmtime's default layout)
 //! and the app's layout over P1 (the owner's layout alone) are printed, not judged. And the slowest
@@ -179,9 +180,9 @@ pub fn arena(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     // S as its campaign recorded it on this machine, beside S measured now: printed, not judged.
     let path = std::env::var_os("M2_CALLBACK_S")
         .map_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("callback-S.txt"), Into::into);
-    if let Some((then99, then_mean, then)) = parse(&std::fs::read_to_string(&path).unwrap_or_default())
-        && same_machine(&then, &machine)
-    {
+    // That record names the reference Mac: only there is the callback judged (PLAT-1).
+    let recorded = parse(&std::fs::read_to_string(&path).unwrap_or_default()).filter(|(.., then)| same_machine(then, &machine));
+    if let Some((then99, then_mean, _)) = recorded {
         out.info(
             "S as recorded",
             format!(
@@ -194,8 +195,8 @@ pub fn arena(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     }
     // The rule bounds the p99 callback, 3% of it (O2), but even the pairs' p99 moves by more than
     // that: the mean is judged with the same bound, and the p99's difference printed (`paired`).
-    let (ok, detail) = crate::paired::judge([&dmean, &d99], 320.0);
-    out.check("callback within S's + 320 µs, by the mean", ok, detail);
+    let judged = crate::paired::judge([&dmean, &d99], 320.0);
+    crate::paired::timed(&mut out, "callback within S's + 320 µs, by the mean", recorded.is_some(), judged);
 
     // Ten edits on t02 while it plays, each prepared against what plays.
     let mut session = lab.session(&dir)?;

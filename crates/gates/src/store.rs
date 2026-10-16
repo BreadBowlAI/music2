@@ -42,7 +42,7 @@ use m2_runtime::{BLOCK, Renderer, Transport};
 
 use crate::baseline::{Runner, wire::Heard};
 use crate::gates::Opts;
-use crate::paired::{Diffs, Side, in_turns, judge};
+use crate::paired::{Diffs, Side, in_turns, judge, timed};
 use crate::report::{Outcome, same_machine};
 use crate::{Lab, songs};
 
@@ -199,22 +199,25 @@ fn needed(raises: &Diffs, recorded: f64) -> bool {
 }
 
 /// S where this run judges against it: its first build, measured here, in ms, and its record from
-/// this machine for what its runner can't measure, its memory, or why there is none (PLAT-1).
+/// this machine for what its runner can't measure, its memory, or why there is none (PLAT-1). The
+/// record names the reference Mac: only there are the timings judged.
 struct OfS {
     build_ms: f64,
     record: Result<Record, String>,
 }
 
 /// The rule (§11.3) on `rec`, and on `[mean, p99]`, the app's layout's block times against S's,
-/// pair by pair: each check into `out`, and whether all passed. The footprint is compared with S's
-/// record only when it is from this machine, else skipped with why (PLAT-1). The memory rules fail
+/// pair by pair: each check into `out`, and whether all passed. The block time and the build are
+/// judged only on the machine S's record names, the reference Mac, and printed elsewhere; the
+/// footprint is compared with that record only there too, else skipped with why (PLAT-1). The
+/// memory rules fail
 /// when the memory wasn't measured (`memory`: before and after one renderer; `with_two`: with two
 /// renderers), whatever S is: they never pass unmeasured.
 fn rule(out: &mut Outcome, rec: &Record, [mean, p99]: [&Diffs; 2], s: &OfS, memory: bool, with_two: bool) -> bool {
     // The rule bounds the p99 block, but even the pairs' p99 moves by more than 80 µs: the mean is
     // judged with the same bound, and the p99's difference printed (`paired`).
-    let (ok, detail) = judge([mean, p99], 80.0);
-    let mut pass = out.check("block within S + 80 µs, by the mean", ok, detail);
+    let on_reference = s.record.is_ok();
+    let mut pass = timed(out, "block within S + 80 µs, by the mean", on_reference, judge([mean, p99], 80.0));
     let footprint = "footprint within S + 64 MB";
     pass &= match (memory, &s.record) {
         (false, _) => out.check(footprint, false, UNMEASURED),
@@ -240,11 +243,8 @@ fn rule(out: &mut Outcome, rec: &Record, [mean, p99]: [&Diffs; 2], s: &OfS, memo
             out.check(side, rec.reserved2_gib <= 0.25 * rec.limit_gib, format!("{} built; {held:.2}%{of_s}", rec.side_by_side))
         }
     };
-    pass &= out.check(
-        "full build within 1.5 × S",
-        rec.build_ms <= 1.5 * s.build_ms,
-        format!("{:.0} ms against S's {:.0} ms, each its process's first, measured here", rec.build_ms, s.build_ms),
-    );
+    let build = format!("{:.0} ms against S's {:.0} ms, each its process's first, measured here", rec.build_ms, s.build_ms);
+    pass &= timed(out, "full build within 1.5 × S", on_reference, (rec.build_ms <= 1.5 * s.build_ms, build));
     pass
 }
 
@@ -415,9 +415,9 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     );
     out.info("record", rec.line());
 
-    // The rule (§11.3): the block and the build against S measured here, on any machine; the
-    // footprint against S's record from this same machine only (PLAT-1). Its memory rules fail,
-    // never pass, when the memory wasn't measured.
+    // The rule (§11.3): the block and the build against S measured here, and the footprint against
+    // S's record, judged only on the reference Mac, the machine that record names (PLAT-1). Its
+    // memory rules fail, never pass, when the memory wasn't measured.
     let path =
         std::env::var_os("M2_STORE_S").map_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("store-S.txt"), Into::into);
     let text = std::fs::read_to_string(&path).unwrap_or_default();
@@ -454,7 +454,7 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         match (pass, failed) {
             (true, _) => "the app's layout passes the rule (RENDER-32)",
             (false, true) => "the app's layout fails the rule (§11.3): the owner decides",
-            (false, false) => "not judged in full here: the footprint rule needs S's record from this machine (§11.3, PLAT-1)",
+            (false, false) => "not judged in full here: only the reference Mac, which S's record names, judges it (§11.3, PLAT-1)",
         },
     );
     Ok(out)
@@ -640,13 +640,25 @@ mod tests {
         let mut out = Outcome::new("G7f store", "RENDER-32", "a test");
         assert!(rule(&mut out, &measured, [&mean, &p99], &of_s(Ok(s.clone())), true, true), "{out}");
         assert_eq!(out.checks.iter().filter(|c| c.verdict == Verdict::Pass).count(), 4, "{out}");
-        // From another machine, S's record can't judge the footprint, and the rule isn't passed
-        // in full; the block and the build, measured here, still are.
+        // PLAT-1: off the reference Mac, which S's record names, the block time and the build are
+        // printed with what they would say, and the footprint can't be compared: none of the three
+        // is judged, and the rule isn't passed in full. The 25% rule is the process's own: judged.
         let mut out = Outcome::new("G7f store", "RENDER-32", "a test");
-        assert!(!rule(&mut out, &measured, [&mean, &p99], &of_s(Err("another machine".into())), true, true), "{out}");
-        let skipped: Vec<&str> = out.checks.iter().filter(|c| c.verdict == Verdict::Skip).map(|c| c.name.as_str()).collect();
-        assert_eq!(skipped, ["footprint within S + 64 MB"], "{out}");
-        assert_eq!(out.checks.iter().filter(|c| c.verdict == Verdict::Pass).count(), 3, "{out}");
+        let slow = Record { build_ms: 151.0, ..measured.clone() };
+        assert!(!rule(&mut out, &slow, [&Diffs(vec![109.0; 3]), &p99], &of_s(Err("another machine".into())), true, true), "{out}");
+        let skipped: Vec<(&str, &str)> =
+            out.checks.iter().filter(|c| c.verdict == Verdict::Skip).map(|c| (c.name.as_str(), c.detail.as_str())).collect();
+        assert_eq!(skipped.len(), 3, "{out}");
+        assert_eq!(skipped[0].0, "block within S + 80 µs, by the mean");
+        assert!(
+            skipped[0].1.starts_with("would fail, not judged off the reference Mac (PLAT-1): +109 µs (3 pairs, +109 to +109)"),
+            "{out}"
+        );
+        assert_eq!(skipped[1], ("footprint within S + 64 MB", "another machine"));
+        assert_eq!(skipped[2].0, "full build within 1.5 × S");
+        assert!(skipped[2].1.starts_with("would fail, not judged off the reference Mac (PLAT-1): 151 ms against S's 100 ms"), "{out}");
+        assert_eq!(out.checks.iter().filter(|c| c.verdict == Verdict::Pass).count(), 1, "{out}");
+        assert_eq!(out.verdict(), Verdict::Pass, "nothing failed: {out}");
 
         // RENDER-32, rg-1: the pairs' mean is judged, the app's layout's cost over S, both measured
         // in this run: +10 passes the 80 µs bound, +81 doesn't. The p99's difference is printed,

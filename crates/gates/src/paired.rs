@@ -17,6 +17,7 @@ use std::fmt;
 use anyhow::{Result, bail};
 
 use crate::baseline::wire::Heard;
+use crate::report::Outcome;
 
 /// The median: the middle value, or the mean of the two middle ones; 0 when there is none.
 pub fn median(v: &[f64]) -> f64 {
@@ -77,6 +78,18 @@ pub fn value(values: &[(String, f64)], key: &str) -> Option<f64> {
 /// `bound`, then the p99's, printed. The gates' summary keeps 220 characters of a line.
 pub fn judge([mean, p99]: [&Diffs; 2], bound: f64) -> (bool, String) {
     (mean.median() <= bound, format!("{mean} over S, measured here (bound {bound:.0}). p99, not judged: {p99}"))
+}
+
+/// A G7f timing check (PLAT-1): judged on the reference Mac, the machine S's records name
+/// (`on_reference`); elsewhere printed with its numbers and what it would say, not judged. Whether
+/// it passed.
+pub fn timed(out: &mut Outcome, name: &str, on_reference: bool, (pass, detail): (bool, String)) -> bool {
+    if on_reference {
+        return out.check(name, pass, detail);
+    }
+    let would = if pass { "would pass" } else { "would fail" };
+    out.skip(name, format!("{would}, not judged off the reference Mac (PLAT-1): {detail}"));
+    false
 }
 
 /// One side of the turns: a player or a renderer, here or in S's runner.
@@ -225,6 +238,28 @@ mod tests {
         assert!(said.starts_with("round 2: S played 8 samples (hash "), "{said}");
         assert_eq!(same_music(&[[Heard::default(); 3]]), (false, "nothing was heard".to_string()));
         assert!(!same_music(&[]).0);
+    }
+
+    // PLAT-1, RENDER-32: off the reference Mac a G7f timing is printed with its numbers and what it
+    // would say, and judged nowhere else; there, it is judged.
+    #[test]
+    fn a_timing_is_judged_on_the_reference_mac_only() {
+        use crate::report::Verdict;
+        let mut out = Outcome::new("G7f", "RENDER-32", "a test");
+        assert!(!timed(&mut out, "block", false, (false, "+109 µs".into())));
+        assert!(!timed(&mut out, "build", false, (true, "220 ms".into())));
+        assert!(!timed(&mut out, "callback", true, (false, "+356 µs".into())));
+        assert!(timed(&mut out, "callback", true, (true, "+200 µs".into())));
+        let said: Vec<(Verdict, &str)> = out.checks.iter().map(|c| (c.verdict.clone(), c.detail.as_str())).collect();
+        assert_eq!(
+            said,
+            [
+                (Verdict::Skip, "would fail, not judged off the reference Mac (PLAT-1): +109 µs"),
+                (Verdict::Skip, "would pass, not judged off the reference Mac (PLAT-1): 220 ms"),
+                (Verdict::Fail, "+356 µs"),
+                (Verdict::Pass, "+200 µs"),
+            ]
+        );
     }
 
     // RENDER-32: every order sides can take, each side as often in each place.
