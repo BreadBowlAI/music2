@@ -72,5 +72,7 @@ fn fixture_data_files_are_canonical() {
             }
         }
     }
-    assert!(std::env::var_os("M2_FIXTURES").is_none() || checked > 0, "no data files under M2_FIXTURES");
+    // Finding none fails: a test built in a folder that has since moved looks for the repo's
+    // projects where they no longer are, and would pass having checked nothing.
+    assert!(checked > 0, "no data files under M2_FIXTURES, or the repo's examples/ and templates/ beside {}", env!("CARGO_MANIFEST_DIR"));
 }
