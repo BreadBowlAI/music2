@@ -27,6 +27,8 @@ The copy is taken again only when the runner's code changes. On the owner's Linu
 
 m2-gates starts the runner, sends a command, and waits for the answer. So only one of them runs at a time. Each round, three players (or renderers) take turns of about a second each, over the same music: the app's layout and P1 in m2-gates, and S in the runner. The order changes every turn. Each side hashes what its timed callbacks or blocks played. The gate checks that all three played the same bits.
 
+The first callback or block of each turn is played but not timed. It meets the caches the side before it left. The app's layout and P1 share one thread, so they always do; S, in a process of its own, may find its own data still there. Timed, that first step made the same engine seem 7 µs a block slower in m2-gates than in the runner (on Linux, 5 pairs, +3 to +39 µs). Untimed, the difference was -6 µs (-8 to +11).
+
 The runner says which code it is when it starts (a hash of `main.rs` and `wire.rs`) and which commit it was built at. m2-gates refuses a runner built from other code, or at another commit.
 
 The runner plays S's own std, whatever `$M2_STD` says.

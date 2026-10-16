@@ -83,9 +83,9 @@ pub fn judge([mean, p99]: [&Diffs; 2], bound: f64) -> (bool, String) {
 pub trait Side {
     /// `n` callbacks or blocks, not timed.
     fn warm(&mut self, n: usize) -> Result<()>;
-    /// `n` more, each one's time in µs; what each played is added to the side's [`Heard`] off the
-    /// clock.
-    fn turn(&mut self, n: usize) -> Result<Vec<f64>>;
+    /// `lead` more, not timed nor heard, then `n`, each one's time in µs; what each of those played
+    /// is added to the side's [`Heard`] off the clock.
+    fn turn(&mut self, lead: usize, n: usize) -> Result<Vec<f64>>;
     /// What the timed ones played so far.
     fn heard(&mut self) -> Result<Heard>;
 }
@@ -105,9 +105,18 @@ pub fn orders(k: usize) -> Vec<Vec<usize>> {
     all
 }
 
+/// What each turn plays before its timed steps, not timed: its first step meets the caches the
+/// sides before it left. A side here always does (the app's layout and P1 share a thread), while S's
+/// runner, in a process of its own, may find its own still warm. Timed, that step made the same
+/// engine on both sides seem 7 µs a block slower here than in the runner on Linux (5 pairs, +3 to
+/// +39); untimed, -6 µs (-8 to +11).
+pub const LEAD: usize = 1;
+
 /// Each side's times over `n` callbacks or blocks, after `warm` untimed ones each: in turns of
-/// `turn`, each turn in the next of [`orders`], round `round` starting `round` orders on, so what
-/// disturbs one side disturbs the others alike and none always meets caches another left cold.
+/// `turn` timed after [`LEAD`] untimed, each turn in the next of [`orders`], round `round` starting
+/// `round` orders on, so what disturbs one side disturbs the others alike and none always meets
+/// caches another left cold. All the sides play the same steps, so their timed ones are the same
+/// music.
 pub fn in_turns(sides: &mut [&mut dyn Side], warm: usize, n: usize, turn: usize, round: usize) -> Result<Vec<Vec<f64>>> {
     if turn == 0 {
         bail!("a turn of no steps");
@@ -120,7 +129,7 @@ pub fn in_turns(sides: &mut [&mut dyn Side], warm: usize, n: usize, turn: usize,
     for (t, from) in (0..n).step_by(turn).enumerate() {
         let m = turn.min(n - from);
         for &i in &orders[(t + round) % orders.len()] {
-            let got = sides[i].turn(m)?;
+            let got = sides[i].turn(LEAD, m)?;
             if got.len() != m {
                 bail!("a turn of {m} timed {}", got.len());
             }
@@ -193,8 +202,8 @@ mod tests {
             self.log.borrow_mut().push(format!("warm {} {n}", self.n));
             Ok(())
         }
-        fn turn(&mut self, n: usize) -> Result<Vec<f64>> {
-            self.log.borrow_mut().push(format!("{} {n}", self.n));
+        fn turn(&mut self, lead: usize, n: usize) -> Result<Vec<f64>> {
+            self.log.borrow_mut().push(format!("{} {lead}+{n}", self.n));
             self.heard.add(&vec![self.n as f32; n]);
             Ok(vec![self.us; n])
         }
@@ -248,7 +257,7 @@ mod tests {
         assert_eq!(times, [vec![1.0; 7], vec![2.0; 7], vec![3.0; 7]]);
         assert_eq!(
             log.borrow().join(", "),
-            "warm 0 5, warm 1 5, warm 2 5, 0 3, 2 3, 1 3, 1 3, 0 3, 2 3, 1 1, 2 1, 0 1",
+            "warm 0 5, warm 1 5, warm 2 5, 0 1+3, 2 1+3, 1 1+3, 1 1+3, 0 1+3, 2 1+3, 1 1+1, 2 1+1, 0 1+1",
             "round 1 starts at the second order"
         );
         let mut want = Heard::default();
@@ -257,7 +266,7 @@ mod tests {
         log.borrow_mut().clear();
         let (mut a, mut b) = (side(0, 1.0), side(1, 2.0));
         in_turns(&mut [&mut a, &mut b], 0, 6, 2, 0).unwrap();
-        assert_eq!(log.borrow().join(", "), "warm 0 0, warm 1 0, 0 2, 1 2, 1 2, 0 2, 0 2, 1 2");
+        assert_eq!(log.borrow().join(", "), "warm 0 0, warm 1 0, 0 1+2, 1 1+2, 1 1+2, 0 1+2, 0 1+2, 1 1+2");
         assert!(in_turns(&mut [&mut a], 0, 6, 0, 0).is_err(), "a turn of no steps");
     }
 
@@ -269,7 +278,7 @@ mod tests {
             fn warm(&mut self, _: usize) -> Result<()> {
                 Ok(())
             }
-            fn turn(&mut self, n: usize) -> Result<Vec<f64>> {
+            fn turn(&mut self, _: usize, n: usize) -> Result<Vec<f64>> {
                 Ok(vec![1.0; n - 1])
             }
             fn heard(&mut self) -> Result<Heard> {

@@ -27,8 +27,11 @@ pub enum Cmd {
     },
     /// `n` callbacks or blocks, not timed.
     Warm(usize),
-    /// `n` more, each timed.
-    Turn(usize),
+    /// `lead` more, not timed, then `n`, each timed.
+    Turn {
+        lead: usize,
+        n: usize,
+    },
     /// The hash of what the timed ones played.
     Hash,
     /// Drop the player or renderer, timed.
@@ -100,7 +103,7 @@ impl Cmd {
             Cmd::Player { from, frames, dir } => format!("player {from} {frames} {}", dir.display()),
             Cmd::Renderer { from, dir } => format!("renderer {from} {}", dir.display()),
             Cmd::Warm(n) => format!("warm {n}"),
-            Cmd::Turn(n) => format!("turn {n}"),
+            Cmd::Turn { lead, n } => format!("turn {lead} {n}"),
             Cmd::Hash => "hash".into(),
             Cmd::Drop => "drop".into(),
             Cmd::Quit => "quit".into(),
@@ -126,7 +129,10 @@ impl Cmd {
                 Cmd::Renderer { from: number(from).ok_or_else(bad)?, dir: dir(d).ok_or_else(bad)? }
             }
             "warm" => Cmd::Warm(count(rest).ok_or_else(bad)?),
-            "turn" => Cmd::Turn(count(rest).ok_or_else(bad)?),
+            "turn" => {
+                let (lead, n) = rest.split_once(' ').ok_or_else(bad)?;
+                Cmd::Turn { lead: count(lead).ok_or_else(bad)?, n: count(n).ok_or_else(bad)? }
+            }
             "hash" if rest.is_empty() => Cmd::Hash,
             "drop" if rest.is_empty() => Cmd::Drop,
             "quit" if rest.is_empty() => Cmd::Quit,
@@ -183,9 +189,9 @@ pub trait Deck {
     /// The build's time (`build_ms`) and the kernel instances it made (`count`).
     fn renderer(&mut self, dir: &Path, from: f64) -> Result<Vec<(String, f64)>, String>;
     fn warm(&mut self, n: usize) -> Result<(), String>;
-    /// `n` callbacks or blocks, each one's time pushed onto `times` in µs, and what it played added
-    /// to `heard` after its time was taken.
-    fn turn(&mut self, n: usize, times: &mut Vec<f64>, heard: &mut Heard) -> Result<(), String>;
+    /// `lead` callbacks or blocks, not timed nor heard, then `n`, each one's time pushed onto
+    /// `times` in µs, and what it played added to `heard` after its time was taken.
+    fn turn(&mut self, lead: usize, n: usize, times: &mut Vec<f64>, heard: &mut Heard) -> Result<(), String>;
     /// Drop what plays: how long that took, in ms.
     fn drop_it(&mut self) -> f64;
 }
@@ -208,9 +214,9 @@ pub fn serve(ready: Reply, input: impl BufRead, mut output: impl Write, deck: &m
                 deck.renderer(&dir, from).map(Reply::Ok)
             }
             Ok(Cmd::Warm(n)) => deck.warm(n).map(|()| Reply::Ok(vec![])),
-            Ok(Cmd::Turn(n)) => {
+            Ok(Cmd::Turn { lead, n }) => {
                 let mut times = Vec::with_capacity(n);
-                deck.turn(n, &mut times, &mut heard).map(|()| Reply::Times(times))
+                deck.turn(lead, n, &mut times, &mut heard).map(|()| Reply::Times(times))
             }
             Ok(Cmd::Hash) => Ok(Reply::Heard(heard)),
             Ok(Cmd::Drop) => Ok(Reply::Ok(vec![("drop_ms".into(), deck.drop_it())])),
@@ -275,7 +281,8 @@ mod tests {
             Cmd::Player { from: 0.25, frames: 1, dir: dir.clone() },
             Cmd::Renderer { from: 180.0, dir: dir.clone() },
             Cmd::Warm(94),
-            Cmd::Turn(375),
+            Cmd::Turn { lead: 1, n: 375 },
+            Cmd::Turn { lead: 0, n: 0 },
             Cmd::Hash,
             Cmd::Drop,
             Cmd::Quit,
@@ -309,6 +316,8 @@ mod tests {
             "warm",
             "warm -1",
             "turn 1.5",
+            "turn 1",
+            "turn 1 x",
             "hash 1",
         ] {
             assert!(Cmd::parse(l).is_err(), "{l:?}");
@@ -368,10 +377,11 @@ mod tests {
             self.step += n as f32;
             Ok(())
         }
-        fn turn(&mut self, n: usize, times: &mut Vec<f64>, heard: &mut Heard) -> Result<(), String> {
+        fn turn(&mut self, lead: usize, n: usize, times: &mut Vec<f64>, heard: &mut Heard) -> Result<(), String> {
             if !self.playing {
                 return Err("nothing plays".into());
             }
+            self.step += lead as f32;
             for _ in 0..n {
                 times.push(1.0);
                 heard.add(&[self.step]);
@@ -399,20 +409,20 @@ mod tests {
         });
         let (mut c, code, s) = Client::new(io::BufReader::new(from_runner), to_runner).unwrap();
         assert_eq!((code, s.as_str()), (7, "8aa301e"));
-        assert!(c.ask(&Cmd::Turn(2)).unwrap_err().contains("nothing plays"));
+        assert!(c.ask(&Cmd::Turn { lead: 0, n: 2 }).unwrap_err().contains("nothing plays"));
         let missing = Cmd::Player { from: 180.0, frames: 512, dir: "/no/such folder".into() };
         assert!(c.ask(&missing).unwrap_err().contains("/no/such folder isn't there"));
         let here = std::env::temp_dir();
         assert_eq!(c.ask(&Cmd::Player { from: 180.0, frames: 512, dir: here.clone() }), Ok(Reply::Ok(vec![])));
         assert_eq!(c.ask(&Cmd::Warm(10)), Ok(Reply::Ok(vec![])));
-        assert_eq!(c.ask(&Cmd::Turn(3)), Ok(Reply::Times(vec![1.0; 3])));
+        assert_eq!(c.ask(&Cmd::Turn { lead: 1, n: 3 }), Ok(Reply::Times(vec![1.0; 3])));
         let mut want = Heard::default();
-        want.add(&[10.0, 11.0, 12.0]);
+        want.add(&[11.0, 12.0, 13.0]);
         assert_eq!(c.ask(&Cmd::Hash), Ok(Reply::Heard(want)));
         assert_eq!(c.ask(&Cmd::Drop), Ok(Reply::Ok(vec![("drop_ms".into(), 2.5)])));
         assert_eq!(c.ask(&Cmd::Renderer { from: 4.0, dir: here }), Ok(Reply::Ok(vec![("build_ms".into(), 4.0), ("count".into(), 3.0)])));
         assert_eq!(c.ask(&Cmd::Hash), Ok(Reply::Heard(Heard::default())), "a new renderer is heard anew");
         c.quit();
-        assert_eq!(runner.join().unwrap(), 13.0);
+        assert_eq!(runner.join().unwrap(), 14.0);
     }
 }

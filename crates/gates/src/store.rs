@@ -516,7 +516,8 @@ impl Side for Blocks {
         Ok(())
     }
 
-    fn turn(&mut self, n: usize) -> Result<Vec<f64>> {
+    fn turn(&mut self, lead: usize, n: usize) -> Result<Vec<f64>> {
+        self.warm(lead)?;
         let mut times = Vec::with_capacity(n);
         for _ in 0..n {
             let t = Instant::now();
