@@ -234,14 +234,25 @@ pub struct Turns {
 }
 
 impl Turns {
-    /// What starting a turn costs `side`, in µs over the mean of its judged steps: the mean of each
-    /// turn's first step (judged when there is no lead), and of each turn's first judged step.
+    /// What starting a turn costs `side`, in µs: the mean of each turn's first step (judged when
+    /// there is no lead) over the mean of its judged steps; and what of it is left in the judged
+    /// steps, the mean of the first half of each turn's judged steps over the mean of the second
+    /// half's.
     pub fn starts(&self, side: usize) -> (f64, f64) {
-        let mean = |v: Vec<f64>| v.iter().sum::<f64>() / v.len().max(1) as f64;
-        let all = mean(self.timed[side].clone());
-        let judged = mean(self.timed[side].iter().step_by(self.turn.max(1)).copied().collect());
-        let first = if self.leads == 0 { judged } else { mean(self.lead[side].iter().step_by(self.leads).copied().collect()) };
-        (first - all, judged - all)
+        let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len().max(1) as f64;
+        let timed = &self.timed[side];
+        let first: Vec<f64> = if self.leads == 0 {
+            timed.iter().step_by(self.turn.max(1)).copied().collect()
+        } else {
+            self.lead[side].iter().step_by(self.leads).copied().collect()
+        };
+        let (mut early, mut late) = (vec![], vec![]);
+        for t in timed.chunks(self.turn.max(1)).filter(|t| t.len() >= 2) {
+            let (a, b) = t.split_at(t.len() / 2);
+            early.extend_from_slice(a);
+            late.extend_from_slice(b);
+        }
+        (mean(&first) - mean(timed), mean(&early) - mean(&late))
     }
 }
 
@@ -253,13 +264,18 @@ impl Turns {
 /// No side takes two turns in a row, so each starts every turn on the caches another side left.
 /// That costs each a different amount, far more than the bounds: on Linux a turn's first callback
 /// took 4 to 7 ms more than the rest, and its first block 2 to 3 ms. Most of it is gone after a few
-/// steps, but not all: the app's layout's cost over S, which its bounds checks make larger once the
+/// steps, but not all. In the one look by position, held on the 96 MB-cache die of the Linux
+/// machine's CPU, the app's layout's cost over S, which its bounds checks make larger once the
 /// caches are warm, rose from about 0 to +60 µs a callback over a turn's first 50 callbacks, and to
 /// +11 µs a block over its first 200 blocks. So each turn's `lead` steps, about half a second, are
-/// played but left out: they are timed apart, to show what starting a turn costs
-/// ([`Turns::starts`]). Before, every step was judged and the orders were played one after another:
-/// S never followed itself, while the app's layout and P1 each did one turn in six. That favoured
-/// the app's layout by about 20 µs a callback on Linux, and made most of the p99's difference.
+/// played but left out, and timed apart to show what starting a turn costs. Half a second was sized
+/// from that look, and shown enough only there: it wasn't tried on the 32 MB die, and not held, as
+/// `ci/check.sh` and the Mac run, S's first judged callback was still 42 to 121 µs slower against
+/// its mean than the others' (three runs). So each run also says whether any start is left in its
+/// judged steps ([`Turns::starts`], [`starting`]). Before, every step was judged and the orders
+/// were played one after another: S never followed itself, while the app's layout and P1 each did
+/// one turn in six. That favoured the app's layout by about 20 µs a callback on Linux, and made
+/// most of the p99's difference.
 ///
 /// A side in S's runner takes its turns in another process. With the app's own engine on both
 /// sides (the A/A control in `crates/gates/s/README.md`), held on one die of the Linux machine's
@@ -293,20 +309,24 @@ pub fn in_turns(sides: &mut [&mut dyn Side], warm: usize, n: usize, turn: usize,
 
 /// What starting a turn cost each side ([`Turns::starts`], one a round: the app's layout, P1 and S),
 /// said in a line: the medians over the rounds of each turn's first step, in µs over the side's
-/// mean, and of its first judged step's against S's, each over its own side's mean. The music
-/// changes from step to step, by far more than that, but alike on every side; what is left is the
-/// start's cost the lead didn't take out, the app's layout's and P1's beyond S's. `lead` is the
-/// steps each turn starts with, not judged, and `step` what a step is.
+/// mean; and of what is left of it in the judged steps, each turn's first half over its second,
+/// the app's layout's and P1's against S's. The music changes from step to step, by far more than
+/// that, but alike on every side, so only against S's does it tell. If a side's start lasted into
+/// its judged steps, its first half would be slower than its second: a value under 0 says S's
+/// start lasted longer than that side's, so the judged means favour that side, by about half the
+/// value when the start is gone by the second half. One step can't say how long a start lasts;
+/// the halves, a thousand steps or more each, can. `lead` is the steps each turn starts with, not
+/// judged, and `step` what a step is.
 pub fn starting(starts: &[Vec<(f64, f64)>; 3], lead: usize, step: &str) -> String {
     let first = |k: usize| median(&starts[k].iter().map(|s| s.0).collect::<Vec<_>>());
-    let judged = |k: usize| median(&starts[k].iter().zip(&starts[2]).map(|(a, s)| a.1 - s.1).collect::<Vec<_>>());
+    let left = |k: usize| median(&starts[k].iter().zip(&starts[2]).map(|(a, s)| a.1 - s.1).collect::<Vec<_>>());
     format!(
-        "each turn's first {step} {:+.0} µs over the mean (the app's layout), {:+.0} (P1), {:+.0} (S); its first judged one against S's {:+.0}, {:+.0} ({lead} a turn not judged; medians of {})",
+        "each turn's first {step} {:+.0} µs over the mean (the app's layout), {:+.0} (P1), {:+.0} (S); of the judged ones, each turn's first half over its second, against S's: {:+.0}, {:+.0} ({lead} a turn not judged; medians of {})",
         first(0),
         first(1),
         first(2),
-        judged(0),
-        judged(1),
+        left(0),
+        left(1),
         starts[0].len()
     )
 }
@@ -610,14 +630,21 @@ mod tests {
         }
         assert_eq!(
             starting(&starts, 2, "callback"),
-            "each turn's first callback +4400 µs over the mean (the app's layout), +5300 (P1), +6300 (S); its first judged one against S's +0, +0 (2 a turn not judged; medians of 6)"
+            "each turn's first callback +4400 µs over the mean (the app's layout), +5300 (P1), +6300 (S); of the judged ones, each turn's first half over its second, against S's: +0, +0 (2 a turn not judged; medians of 6)"
         );
-        // A run on Linux: each side's first judged callback 1 ms under its mean, as the music was
-        // there; against S's, what the lead left is 20 µs, the app's layout's.
-        let linux = [vec![(5_200.0, -1_031.0)], vec![(6_655.0, -1_014.0)], vec![(6_638.0, -1_011.0)]];
-        assert!(
-            starting(&linux, 47, "callback").contains("; its first judged one against S's -20, -3 (47 a turn not judged; medians of 1)")
-        );
+        // But when S's start lasts past the lead, its first 20 judged callbacks 40 µs slow a turn,
+        // S's first half comes out 17 µs slower than its second, against the others' none: twice
+        // what it takes off the app's layout's cost over S by the mean, as it is gone by the second
+        // half. One step can't tell how long it lasts; the halves do.
+        let cold = [vec![4_400.0, 25.0], vec![5_300.0, 355.0], [vec![6_300.0, 93.0], vec![40.0; 20]].concat()];
+        let mut sides: Vec<Cached> = (0..3).map(|n| Cached { n, us: 7_000.0, cold: cold[n].clone(), last: &last }).collect();
+        let [a, b, c] = &mut sides[..] else { unreachable!() };
+        let t = in_turns(&mut [a, b, c], 94, 2_820, 94, 2, 0).unwrap();
+        let lean = mean(&t.timed[0]) - mean(&t.timed[2]);
+        assert!((lean + 20.0 * 40.0 / 94.0).abs() < 1e-6, "{lean}");
+        assert!((t.starts(2).1 - 20.0 * 40.0 / 47.0).abs() < 1e-6, "{:?}", t.starts(2));
+        let said = starting(&[vec![t.starts(0)], vec![t.starts(1)], vec![t.starts(2)]], 2, "callback");
+        assert!(said.ends_with("against S's: -17, -17 (2 a turn not judged; medians of 1)"), "{said}");
     }
 
     // A side that times fewer steps than it was asked for stops the run, never shifts the pairs.

@@ -53,8 +53,9 @@ const ROUNDS: usize = 5;
 /// every player follows each other one as often.
 const TURN: usize = 155;
 /// Callbacks each turn starts with, before those: about half a second, timed but not judged, as
-/// they meet the caches the other players left (`paired::in_turns`). On Linux the app's layout's
-/// cost over S rose from about 0 to +60 µs over a turn's first 50 callbacks.
+/// they meet the caches the other players left (`paired::in_turns`). On Linux, held on the CPU's
+/// 96 MB-cache die, the app's layout's cost over S rose from about 0 to +60 µs over a turn's first
+/// 50 callbacks. Each run prints whether any start is left in the judged callbacks.
 const LEAD: usize = 47;
 
 /// One callback's frames through `d`, timed in microseconds.

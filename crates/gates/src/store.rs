@@ -71,8 +71,9 @@ const ROUNDS: usize = 5;
 /// follows each other one as often.
 const TURN: usize = 625;
 /// Blocks each turn starts with, before those: half a second, timed but not judged, as they meet the
-/// caches the other renderers left (`paired::in_turns`). On Linux the app's layout's cost over S
-/// rose from about 0 to +11 µs over a turn's first 200 blocks.
+/// caches the other renderers left (`paired::in_turns`). On Linux, held on the CPU's 96 MB-cache
+/// die, the app's layout's cost over S rose from about 0 to +11 µs over a turn's first 200 blocks.
+/// Each run prints whether any start is left in the judged blocks.
 const LEAD: usize = 188;
 /// Why the memory rules fail where the OS doesn't say what the process holds.
 const UNMEASURED: &str = "not measured: this OS doesn't say what the process holds";
