@@ -474,7 +474,8 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
 
 /// The rule's checks into `out` ([`rule`]), and its verdict on the layout in words: from the rule's
 /// own checks, and none when the three sides didn't play the same music (`same`), as then nothing
-/// was compared.
+/// was compared. A check that failed fails the rule wherever it ran: on a Mac S's records don't
+/// name, the 25% rule and an unmeasured footprint are still judged.
 fn layout(out: &mut Outcome, rec: &Record, diffs: [&Diffs; 2], s: &OfS, memory: bool, with_two: bool, same: bool) -> String {
     let before = out.checks.len();
     let pass = rule(out, rec, diffs, s, memory, with_two);
@@ -482,8 +483,8 @@ fn layout(out: &mut Outcome, rec: &Record, diffs: [&Diffs; 2], s: &OfS, memory: 
     match (same, pass, failed, &s.place) {
         (false, ..) => "not judged: the three didn't play the same music (see above), so nothing was compared".to_string(),
         (true, true, ..) => "the app's layout passes the rule (RENDER-32)".to_string(),
-        (true, false, _, Place::OtherMac(why)) => not_the_reference(why),
         (true, false, true, _) => "the app's layout fails the rule (§11.3): the owner decides".to_string(),
+        (true, false, false, Place::OtherMac(why)) => not_the_reference(why),
         (true, false, false, _) => {
             "not judged in full here: only the reference Mac, which S's record names, judges it (§11.3, PLAT-1)".to_string()
         }
@@ -780,6 +781,19 @@ mod tests {
             layout(&mut out, &slow, [&mean, &p99], &of_s(Ok(s), Place::Reference), true, true, true),
             "the app's layout fails the rule (§11.3): the owner decides"
         );
+        // PLAT-1: on a Mac S's records don't name, the timings aren't judged, so the line says what
+        // to do then. But the checks judged on any machine still judge: when one fails there (one
+        // renderer built, or two holding over 25% of the address space), the line says it fails,
+        // not "copy its machine line".
+        let other = Place::OtherMac("not the Mac S's records name");
+        let unnamed = said(true, Err("another machine".into()), other.clone());
+        assert_eq!(unnamed, (not_the_reference("not the Mac S's records name"), Verdict::Pass));
+        for bad in [Record { side_by_side: 1, ..rec.clone() }, Record { reserved2_gib: 40_000.0, ..rec.clone() }] {
+            let mut out = Outcome::new("G7f store", "RENDER-32", "a test");
+            let line = layout(&mut out, &bad, [&mean, &p99], &of_s(Err("another machine".into()), other.clone()), true, true, true);
+            assert_eq!(line, "the app's layout fails the rule (§11.3): the owner decides", "{out}");
+            assert_eq!(out.verdict(), Verdict::Fail, "{out}");
+        }
     }
 
     // RENDER-32 (§11.3), rg-1: batched drops are needed only when the app's layout's drop raises the
