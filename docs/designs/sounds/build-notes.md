@@ -16,7 +16,8 @@ What each slice of the `sounds` merge did, and what its checks said. The plan is
   `renders.json` hashes did not move.
 - A new test checks that every std kernel fits its 32 MiB memory at 384 kHz. The most is `std:delay`,
   11.88 MiB. Each of the 7 new kernels holds 0.19 MiB.
-- `ci/check.sh --gates` passes at `e8bba0e`: every row, nothing passed only on a retry.
+- `ci/check.sh --gates` passes at `e8bba0e`, and `ci/check.sh` at `ec0acad`: every row, nothing passed
+  only on a retry.
 - G7f plays the same music as before the merge. Its numbers moved less than one run's noise. No lead
   decision (L5) was needed.
 - Found on the way: this worktree's `target/` had moved from step 7's worktree, and some of what was in
@@ -91,7 +92,8 @@ Red first: with the bound set to 4 MiB for a trial, the test fails and names `st
 | Run | Result |
 |---|---|
 | `ci/check.sh --gates` at `e8bba0e` (`~/m2-runs/check-sm1c`, 31 min) | **PASS**, every row: 915 Rust tests, 0 failed; clippy; std kernels; std.wasm; mac lint; 29/29 browser suites; 10 of 10 renders; old engine (S); the gates, all 6 runs; repo unchanged. Nothing passed only on a retry. G11 p95 9.0 to 9.4 ms; G7a heard at p95 113 ms. |
-| The two runs before it (`check-sm1`, `check-sm1b`) | FAIL, both from the moved `target/` (below). Not counted. |
+| `ci/check.sh` at `ec0acad`, the slice's tip but these notes' last lines (`~/m2-runs/check-sm1d`, 10 min) | **PASS**, every row, the same counts: 915 Rust tests, 0 failed; 29/29 browser suites; 10 of 10 renders. Nothing passed only on a retry. No gates: the commits after `e8bba0e` change a test and these notes only. |
+| The two runs before them (`check-sm1`, `check-sm1b`) | FAIL, both from the moved `target/` (below). Not counted. |
 
 ### G7f beside step 7's (information on Linux, PLAT-1)
 
