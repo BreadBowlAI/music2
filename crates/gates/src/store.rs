@@ -449,13 +449,14 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         Some(r) => Ok(r),
     };
     let recorded = record.is_ok();
-    let pass = rule(
+    let line = layout(
         &mut out,
         &rec,
         [&mean, &p99],
-        &OfS { build_ms: first.build_ms, record, place: place.clone() },
+        &OfS { build_ms: first.build_ms, record, place },
         measured.is_some(),
         measured.is_some() && two.is_some(),
+        same,
     );
     match p1_raise(&text).filter(|_| recorded) {
         Some(raise) => out.info(
@@ -467,19 +468,26 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         ),
         None => out.info("batched drops", format!("the drop raises the audio-like thread's p99 {raises} more than P1's; not compared with S here")),
     }
-    let failed = out.checks.iter().any(|c| c.verdict == crate::report::Verdict::Fail);
-    out.info(
-        "layout",
-        match (pass, failed, place) {
-            (true, ..) => "the app's layout passes the rule (RENDER-32)".to_string(),
-            (false, _, Place::OtherMac(why)) => not_the_reference(why),
-            (false, true, _) => "the app's layout fails the rule (§11.3): the owner decides".to_string(),
-            (false, false, _) => {
-                "not judged in full here: only the reference Mac, which S's record names, judges it (§11.3, PLAT-1)".to_string()
-            }
-        },
-    );
+    out.info("layout", line);
     Ok(out)
+}
+
+/// The rule's checks into `out` ([`rule`]), and its verdict on the layout in words: from the rule's
+/// own checks, and none when the three sides didn't play the same music (`same`), as then nothing
+/// was compared.
+fn layout(out: &mut Outcome, rec: &Record, diffs: [&Diffs; 2], s: &OfS, memory: bool, with_two: bool, same: bool) -> String {
+    let before = out.checks.len();
+    let pass = rule(out, rec, diffs, s, memory, with_two);
+    let failed = out.checks[before..].iter().any(|c| c.verdict == crate::report::Verdict::Fail);
+    match (same, pass, failed, &s.place) {
+        (false, ..) => "not judged: the three didn't play the same music (see above), so nothing was compared".to_string(),
+        (true, true, ..) => "the app's layout passes the rule (RENDER-32)".to_string(),
+        (true, false, _, Place::OtherMac(why)) => not_the_reference(why),
+        (true, false, true, _) => "the app's layout fails the rule (§11.3): the owner decides".to_string(),
+        (true, false, false, _) => {
+            "not judged in full here: only the reference Mac, which S's record names, judges it (§11.3, PLAT-1)".to_string()
+        }
+    }
 }
 
 /// One run's block times: mean, p99 and max, in µs.
@@ -733,6 +741,45 @@ mod tests {
         let failed: Vec<&str> = out.checks.iter().filter(|c| c.verdict == Verdict::Fail).map(|c| c.name.as_str()).collect();
         assert_eq!(failed, ["full build within 1.5 × S"], "{out}");
         assert!(out.checks.iter().any(|c| c.detail == "151 ms against S's 100 ms, each its process's first, measured here"), "{out}");
+    }
+
+    // RENDER-32: the layout's verdict comes from the rule's own checks. When the three didn't play
+    // the same music nothing was compared, so it says so, never "fails the rule: the owner decides"
+    // (a bug to fix, not the owner's call), nor "passes".
+    #[test]
+    fn the_layout_is_judged_only_on_the_same_music() {
+        use crate::report::Verdict;
+        let here = "a model, an OS, a CPU, aarch64, 8 threads".to_string();
+        let s = Record { footprint_mb: 554.0, machine: here.clone(), ..Record::default() };
+        let rec = Record {
+            side_by_side: 4,
+            footprint_mb: 600.0,
+            build_ms: 120.0,
+            reserved2_gib: 30_000.0,
+            limit_gib: 131_072.0,
+            machine: here,
+            ..Record::default()
+        };
+        let (mean, p99) = (Diffs(vec![10.0, 12.0, 8.0]), Diffs(vec![-300.0, 20.0, 250.0]));
+        let of_s = |record: Result<Record, String>, place| OfS { build_ms: 100.0, record, place };
+        let said = |same, record, place| {
+            let mut out = Outcome::new("G7f store", "RENDER-32", "a test");
+            out.check("the same music: every renderer's timed blocks the same bits", same, "a test");
+            let line = layout(&mut out, &rec, [&mean, &p99], &of_s(record, place), true, true, same);
+            (line, out.verdict())
+        };
+        let music = "not judged: the three didn't play the same music (see above), so nothing was compared".to_string();
+        assert_eq!(said(false, Ok(s.clone()), Place::Reference), (music.clone(), Verdict::Fail), "the reference Mac");
+        assert_eq!(said(false, Err("another machine".into()), Place::Elsewhere), (music, Verdict::Fail), "Linux");
+        assert_eq!(said(true, Ok(s.clone()), Place::Reference).0, "the app's layout passes the rule (RENDER-32)");
+        let elsewhere = said(true, Err("another machine".into()), Place::Elsewhere);
+        assert_eq!(elsewhere.0, "not judged in full here: only the reference Mac, which S's record names, judges it (§11.3, PLAT-1)");
+        let slow = Record { build_ms: 151.0, ..rec.clone() };
+        let mut out = Outcome::new("G7f store", "RENDER-32", "a test");
+        assert_eq!(
+            layout(&mut out, &slow, [&mean, &p99], &of_s(Ok(s), Place::Reference), true, true, true),
+            "the app's layout fails the rule (§11.3): the owner decides"
+        );
     }
 
     // RENDER-32 (§11.3), rg-1: batched drops are needed only when the app's layout's drop raises the
