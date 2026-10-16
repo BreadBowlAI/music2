@@ -310,25 +310,26 @@ pub fn in_turns(sides: &mut [&mut dyn Side], warm: usize, n: usize, turn: usize,
 }
 
 /// What starting a turn cost each side ([`Turns::starts`], one a round: the app's layout, P1 and S),
-/// said in a line: the medians over the rounds of each turn's first step, in µs over the side's
-/// mean; and of what is left of it in the judged steps, each turn's first half over its second,
-/// the app's layout's and P1's against S's. The music changes from step to step, by far more than
+/// said in a line: the medians over the rounds of what is left of it in the judged steps, each
+/// turn's first half over its second, the app's layout's and P1's against S's; and of each turn's
+/// first step, in µs over the side's mean. The music changes from step to step, by far more than
 /// that, but alike on every side, so only against S's does it tell. If a side's start lasted into
 /// its judged steps, its first half would be slower than its second: a value under 0 says S's
 /// start lasted longer than that side's, so the judged means favour that side, by about half the
 /// value when the start is gone by the second half. One step can't say how long a start lasts;
-/// the halves, a thousand steps or more each, can. `lead` is the steps each turn starts with, not
-/// judged, and `step` what a step is.
+/// the halves, a thousand steps or more each, can. They come first, as the gates' summary keeps
+/// 220 bytes of a line. `lead` is the steps each turn starts with, not judged, and `step` what a
+/// step is.
 pub fn starting(starts: &[Vec<(f64, f64)>; 3], lead: usize, step: &str) -> String {
     let first = |k: usize| median(&starts[k].iter().map(|s| s.0).collect::<Vec<_>>());
     let left = |k: usize| median(&starts[k].iter().zip(&starts[2]).map(|(a, s)| a.1 - s.1).collect::<Vec<_>>());
     format!(
-        "each turn's first {step} {:+.0} µs over the mean (the app's layout), {:+.0} (P1), {:+.0} (S); of the judged ones, each turn's first half over its second, against S's: {:+.0}, {:+.0} ({lead} a turn not judged; medians of {})",
+        "of the judged ones, each turn's first half over its second, against S's: {:+.0} µs (the app's layout), {:+.0} (P1); each turn's first {step} over the mean: {:+.0} µs, {:+.0}, {:+.0} (S); {lead} a turn not judged; medians of {}",
+        left(0),
+        left(1),
         first(0),
         first(1),
         first(2),
-        left(0),
-        left(1),
         starts[0].len()
     )
 }
@@ -632,7 +633,7 @@ mod tests {
         }
         assert_eq!(
             starting(&starts, 2, "callback"),
-            "each turn's first callback +4400 µs over the mean (the app's layout), +5300 (P1), +6300 (S); of the judged ones, each turn's first half over its second, against S's: +0, +0 (2 a turn not judged; medians of 6)"
+            "of the judged ones, each turn's first half over its second, against S's: +0 µs (the app's layout), +0 (P1); each turn's first callback over the mean: +4400 µs, +5300, +6300 (S); 2 a turn not judged; medians of 6"
         );
         // But when S's start lasts past the lead, its first 20 judged callbacks 40 µs slow a turn,
         // S's first half comes out 17 µs slower than its second, against the others' none: twice
@@ -646,7 +647,23 @@ mod tests {
         assert!((lean + 20.0 * 40.0 / 94.0).abs() < 1e-6, "{lean}");
         assert!((t.starts(2).1 - 20.0 * 40.0 / 47.0).abs() < 1e-6, "{:?}", t.starts(2));
         let said = starting(&[vec![t.starts(0)], vec![t.starts(1)], vec![t.starts(2)]], 2, "callback");
-        assert!(said.ends_with("against S's: -17, -17 (2 a turn not judged; medians of 1)"), "{said}");
+        assert!(
+            said.starts_with(
+                "of the judged ones, each turn's first half over its second, against S's: -17 µs (the app's layout), -17 (P1); "
+            ),
+            "{said}"
+        );
+        // The gates' summary keeps 220 bytes of a line: the halves, which say whether the lead was
+        // enough, come first, so they are kept whole even far from Linux's numbers.
+        let far = [vec![(16_182.0, -108.0)], vec![(17_494.0, -123.0)], vec![(16_786.0, 0.0)]];
+        let mut out = Outcome::new("G7f", "RENDER-32", "a test");
+        out.info("callback, starting a turn", starting(&far, 47, "callback"));
+        let line = format!("{out}").lines().nth(1).unwrap().to_string();
+        let kept = String::from_utf8_lossy(&line.as_bytes()[..220.min(line.len())]).to_string();
+        assert!(
+            kept.contains("against S's: -108 µs (the app's layout), -123 (P1); each turn's first callback over the mean: +16182 µs"),
+            "{kept}"
+        );
     }
 
     // A side that times fewer steps than it was asked for stops the run, never shifts the pairs.
