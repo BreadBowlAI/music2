@@ -51,10 +51,13 @@ GATES (default: all):
   export      G7e (--server only) an export of examples/with-plugins (Surge XT and
                   Airwindows on the CLAP path) pauses playback, reuses its plugin instances, and
                   playback resumes where it was with their state intact (step 7, RENDER-1)
-  arena       G7f part 2 (named only) the arena's cost to the player's callback: its p99 playing,
-                  against HEAD's, and the callback that takes in each of ten activations (step 7)
-  store       G7f (named only) what one wasmtime Store per kernel instance costs: build, memory,
-                  address space, block time and drop, judged against layout S (RENDER-32)
+  arena       G7f part 2 (named only) step 7's cost to the player's callback, by the mean against
+                  S measured in the same run (S: 8aa301e, the commit before step 7), and the
+                  callback that takes in each of ten activations (step 7). Needs S's runner:
+                  $M2_GATES_S, from crates/gates/s/build.sh
+  store       G7f part 1 (named only) what one wasmtime Store per kernel instance costs: build,
+                  memory, address space, block time and drop; the block time (by the mean) and the
+                  build against S measured in the same run (RENDER-32). Needs $M2_GATES_S too
 
 OPTIONS:
   --rig R          engine: step 3a's live engine (needs --features engine); replay: HEAD's
@@ -210,4 +213,25 @@ fn run() -> Result<bool> {
     }
     println!("\n{} gates: {} passed, {failed} failed, {skipped} not measured here", names.len(), names.len() - failed - skipped);
     Ok(failed == 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::USAGE;
+
+    // RENDER-32: --help says what G7f judges, against S measured in the same run, and that both
+    // parts need S's runner, which they can't run without.
+    #[test]
+    fn the_help_says_what_g7f_needs() {
+        for gate in ["arena", "store"] {
+            let mut lines = USAGE.lines().skip_while(|l| !l.starts_with(&format!("  {gate} ")));
+            let first = lines.next().unwrap();
+            let rest = lines.take_while(|l| l.starts_with(&" ".repeat(18)));
+            let entry = std::iter::once(first).chain(rest).flat_map(str::split_whitespace).collect::<Vec<_>>().join(" ");
+            assert!(entry.contains("by the mean"), "{gate}: {entry}");
+            assert!(entry.contains("against S measured in the same run"), "{gate}: {entry}");
+            assert!(entry.contains("$M2_GATES_S"), "{gate}: {entry}");
+        }
+        assert!(!USAGE.contains("p99 playing"), "the p99 is printed, not judged");
+    }
 }
