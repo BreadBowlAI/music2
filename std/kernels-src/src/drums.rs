@@ -183,6 +183,8 @@ impl Burst {
 }
 
 /// The sound of each drum, and the state it needs.
+// `Metal` is the largest variant. Boxing it would allocate at a hit, on the audio thread; held in
+// place, each `Drum` takes its room once, and a hit only writes a new sound over the old one.
 #[allow(clippy::large_enum_variant)]
 enum Sound {
     Silent,
