@@ -5,10 +5,11 @@
 #   e2e/baseline.sh --tree <checkout> <out-dir>     render with the checkout as it is on disk
 #   M2=<m2 binary> e2e/baseline.sh --tree <checkout> <out-dir>    ... with an m2 you already built
 #
-# Cases (eight): the full renders of examples/first-song, examples/resample, templates/starter
-# and templates/empty, and `--from 4 --seconds 6` of each of them. Each fixture is rendered from a
-# fresh copy, with a scratch HOME, M2_AUDIO=none and the checkout's own std. <out-dir>/SHA256SUMS
-# lists the WAVs; compare two folders with
+# Cases (ten): the full renders of examples/first-song, examples/resample, examples/sounds,
+# templates/starter and templates/empty, and `--from 4 --seconds 6` of each of them. A fixture the
+# commit doesn't have (examples/sounds before the sounds merge) is skipped, and the script says so.
+# Each fixture is rendered from a fresh copy, with a scratch HOME, M2_AUDIO=none and the checkout's
+# own std. <out-dir>/SHA256SUMS lists the WAVs; compare two folders with
 #   diff <a>/SHA256SUMS <b>/SHA256SUMS        (or: cd <b> && shasum -a 256 -c <a>/SHA256SUMS)
 # e2e/renders.sha256 is the record every OS must match (PLAT-4): cd <out-dir> && shasum -a 256 -c
 # <repo>/e2e/renders.sha256 (ci/check.sh does this).
@@ -17,7 +18,7 @@
 set -euo pipefail
 
 REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
-usage() { sed -n '2,16p' "$0" >&2; exit 2; }
+usage() { sed -n '2,17p' "$0" >&2; exit 2; }
 [[ $# -eq 2 || $# -eq 3 ]] || usage
 if [[ $1 == --tree ]]; then
   [[ $# -eq 3 ]] || usage
@@ -48,18 +49,14 @@ if [[ -z ${M2:-} ]]; then
   M2=$CARGO_TARGET_DIR/$PROFILE/m2
 fi
 
-for f in examples/first-song examples/resample templates/starter templates/empty; do
-  mkdir -p "$OUT/fx/$(dirname $f)"; cp -R "$SRC/$f" "$OUT/fx/$f"
+HAVE=()
+for f in examples/first-song examples/resample examples/sounds templates/starter templates/empty; do
+  if [[ ! -d $SRC/$f ]]; then echo "skipped $f: ${COMMIT:-$SRC} doesn't have it" >&2; continue; fi
+  mkdir -p "$OUT/fx/$(dirname $f)"; cp -R "$SRC/$f" "$OUT/fx/$f"; HAVE+=("$f")
 done
 r() { HOME=$OUT/home M2_AUDIO=none M2_STD=$SRC/std "$M2" render "$OUT/fx/$1" "$OUT/$2" "${@:3}" >/dev/null; }
-r examples/first-song examples-first-song.wav
-r examples/resample examples-resample.wav
-r templates/starter templates-starter.wav
-r templates/empty templates-empty.wav
-r examples/first-song examples-first-song-from4-for6.wav --from 4 --seconds 6
-r templates/starter templates-starter-from4-for6.wav --from 4 --seconds 6
-r examples/resample examples-resample-from4-for6.wav --from 4 --seconds 6
-r templates/empty templates-empty-from4-for6.wav --from 4 --seconds 6
+for f in "${HAVE[@]}"; do r "$f" "${f//\//-}.wav"; done
+for f in "${HAVE[@]}"; do r "$f" "${f//\//-}-from4-for6.wav" --from 4 --seconds 6; done
 rm -rf "$OUT/fx" "$OUT/home"
 (cd "$OUT" && shasum -a 256 *.wav > SHA256SUMS && cat SHA256SUMS)
 echo "rendered from ${COMMIT:-$SRC} into $OUT" >&2

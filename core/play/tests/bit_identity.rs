@@ -250,10 +250,12 @@ fn points(song: &Song) -> Vec<usize> {
     [5 * SR as usize, 5 * SR as usize + 77_777, 5 * SR as usize + 151_515].into_iter().filter(|&a| a + SR as usize <= end).collect()
 }
 
-/// The fixtures G7c plays: every pure one, and p16.
+/// The fixtures G7c plays: every pure one but the silent templates/empty, and p16.
 fn g7c() -> Vec<(String, Song)> {
-    let mut out: Vec<(String, Song)> =
-        ["examples/first-song", "examples/resample", "templates/starter"].into_iter().map(|n| (n.to_string(), fixture(n))).collect();
+    let mut out: Vec<(String, Song)> = ["examples/first-song", "examples/resample", "examples/sounds", "templates/starter"]
+        .into_iter()
+        .map(|n| (n.to_string(), fixture(n)))
+        .collect();
     out.push(("p16".into(), p16()));
     out
 }
