@@ -210,9 +210,8 @@ struct OfS {
 /// pair by pair: each check into `out`, and whether all passed. The block time and the build are
 /// judged only on the machine S's record names, the reference Mac, and printed elsewhere; the
 /// footprint is compared with that record only there too, else skipped with why (PLAT-1). The
-/// memory rules fail
-/// when the memory wasn't measured (`memory`: before and after one renderer; `with_two`: with two
-/// renderers), whatever S is: they never pass unmeasured.
+/// memory rules fail when the memory wasn't measured (`memory`: before and after one renderer;
+/// `with_two`: with two renderers), whatever S is: they never pass unmeasured.
 fn rule(out: &mut Outcome, rec: &Record, [mean, p99]: [&Diffs; 2], s: &OfS, memory: bool, with_two: bool) -> bool {
     // The rule bounds the p99 block, but even the pairs' p99 moves by more than 80 µs: the mean is
     // judged with the same bound, and the p99's difference printed (`paired`).
