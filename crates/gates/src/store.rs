@@ -65,9 +65,11 @@ const SIDE_BY_SIDE: usize = 4;
 /// quiet Linux machine the pairs' mean differences stayed within ±12 µs, so their median moves by a
 /// few µs from run to run.
 const ROUNDS: usize = 5;
-/// Blocks one renderer renders, and judges, before the next one's turn: 2 s, so a change in the
-/// machine's load lasting longer than that meets all alike.
-const TURN: usize = 750;
+/// Blocks one renderer renders, and judges, before the next one's turn: about 1.67 s, so a change in
+/// the machine's load lasting longer than that meets all alike. 11,250 blocks make 18 turns of each
+/// renderer, three whole cycles of the orders (`paired::cycle`), so within each round every renderer
+/// follows each other one as often.
+const TURN: usize = 625;
 /// Blocks each turn starts with, before those: half a second, timed but not judged, as they meet the
 /// caches the other renderers left (`paired::in_turns`). On Linux the app's layout's cost over S
 /// rose from about 0 to +11 µs over a turn's first 200 blocks.
@@ -799,6 +801,18 @@ mod tests {
             assert_eq!(line, "the app's layout fails the rule (§11.3): the owner decides", "{out}");
             assert_eq!(out.verdict(), Verdict::Fail, "{out}");
         }
+    }
+
+    // RENDER-32: a round is whole cycles of the turns' orders, all its turns as long, so within each
+    // pair every renderer follows each other one as often, and waits for its turns as the cycle says.
+    #[test]
+    fn a_round_is_whole_cycles_of_turns() {
+        let orders = BLOCKS.div_ceil(TURN);
+        assert_eq!(
+            (BLOCKS % TURN, orders % crate::paired::cycle(3).unwrap().len()),
+            (0, 0),
+            "{BLOCKS} blocks in turns of {TURN}: {orders} orders"
+        );
     }
 
     // RENDER-32 (§11.3), rg-1: batched drops are needed only when the app's layout's drop raises the

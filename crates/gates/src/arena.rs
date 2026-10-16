@@ -47,9 +47,11 @@ const SECONDS: f64 = 30.0;
 /// pairs' mean differences spread over about 200 µs, so their median moves by a few tens of µs from
 /// run to run.
 const ROUNDS: usize = 5;
-/// Callbacks one player plays, and judges, before the next one's turn: about 2 s, so a change in
-/// the machine's load lasting longer than that meets all alike.
-const TURN: usize = 188;
+/// Callbacks one player plays, and judges, before the next one's turn: about 1.65 s, so a change in
+/// the machine's load lasting longer than that meets all alike. 2,790 callbacks a round make 18
+/// turns of each player, three whole cycles of the orders (`paired::cycle`), so within each round
+/// every player follows each other one as often.
+const TURN: usize = 155;
 /// Callbacks each turn starts with, before those: about half a second, timed but not judged, as
 /// they meet the caches the other players left (`paired::in_turns`). On Linux the app's layout's
 /// cost over S rose from about 0 to +60 µs over a turn's first 50 callbacks.
@@ -300,7 +302,20 @@ pub fn arena(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse;
+    use super::{FRAMES, SECONDS, TURN, parse};
+
+    // RENDER-32: a round is whole cycles of the turns' orders, all its turns as long, so within each
+    // pair every player follows each other one as often, and waits for its turns as the cycle says.
+    #[test]
+    fn a_round_is_whole_cycles_of_turns() {
+        let n = (SECONDS * (48_000 / FRAMES) as f64) as usize;
+        let orders = n.div_ceil(TURN);
+        assert_eq!(
+            (n % TURN, orders % crate::paired::cycle(3).unwrap().len()),
+            (0, 0),
+            "{n} callbacks in turns of {TURN}: {orders} orders"
+        );
+    }
 
     // RENDER-32, PLAT-1: a callback record names its machine, and HEAD's, as checked in, the
     // reference Mac.

@@ -37,8 +37,8 @@ A control plays the app's own engine on both sides: in m2-gates, and in a runner
 
 | Turns | Held on one CPU die | Not held (as `ci/check.sh` runs it) |
 |---|---|---|
-| Today's (2 s, half a second not judged): a block | −0 µs (−2 to +1) | |
-| Today's: a callback | +9 µs (+1 to +18); +14 (+4 to +17) | +73 µs (−105 to +152) |
+| 2 s turns after half a second not judged (98fc493 to 651cad4): a block | −0 µs (−2 to +1) | |
+| The same: a callback | +9 µs (+1 to +18); +14 (+4 to +17) | +73 µs (−105 to +152) |
 | 1 s turns, every order one after another (before 2026-10-16; the second of each pair with each turn's first step left out): a block | −4 (−5 to +1); +2 (+1 to +3) | +11 (−3 to +20); −6 (−8 to +11) |
 | The same: a callback | −10 (−14 to −3); +7 (−5 to +18) | +130 (+36 to +199); +50 (+11 to +175) |
 | Scratch tries in between (no side following itself, 1 s turns): a callback | −145 (no step left out); −53, +20 (2 left out) | |

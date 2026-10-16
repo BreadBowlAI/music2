@@ -163,6 +163,13 @@ pub fn orders(k: usize) -> Vec<Vec<usize>> {
 /// back to the first too: every turn starts just after another side's. Where one order ends and
 /// the next starts, each side follows each other side as often, so each starts its turns after
 /// each other side as often. None for fewer than three sides, which can't do that.
+///
+/// And the first side and the last, the two G7f compares, wait alike for their turns ([`waits`]):
+/// as many turns of one as of the other come with one other turn between it and its own before,
+/// as many with two, and so on. One side must come back sooner than the others (with three sides,
+/// four of its six turns with one other turn between), and so it is the middle one, P1 in G7f,
+/// which isn't judged. The sides are renamed to get that, which keeps all of the above, where some
+/// naming can (with three sides, one can).
 pub fn cycle(k: usize) -> Option<Vec<Vec<usize>>> {
     /// Extend `path` (indices into `all`) to the whole cycle, `joins[a][b]` counting where `b`
     /// starts an order just after `a` ends one, at most `most` each.
@@ -193,7 +200,25 @@ pub fn cycle(k: usize) -> Option<Vec<Vec<usize>>> {
     // k! joins over k(k-1) pairs of sides.
     let most = all.len() / (k * (k - 1));
     let mut path = vec![0];
-    next(&all, &mut path, &mut vec![vec![0; k]; k], most).then(|| path.iter().map(|&j| all[j].clone()).collect())
+    if !next(&all, &mut path, &mut vec![vec![0; k]; k], most) {
+        return None;
+    }
+    let found: Vec<Vec<usize>> = path.iter().map(|&j| all[j].clone()).collect();
+    // Side i named to[i]: every order is still there once, and every join as often.
+    let named = |to: &Vec<usize>| -> Vec<Vec<usize>> { found.iter().map(|o| o.iter().map(|&i| to[i]).collect()).collect() };
+    let alike = orders(k).iter().map(named).find(|c| waits(c, 0) == waits(c, k - 1));
+    Some(alike.unwrap_or(found))
+}
+
+/// How many other turns come between each turn of `side` and its own turn before it, in `cycle`
+/// played round and round, smallest first: how a side waits for its turns.
+fn waits(cycle: &[Vec<usize>], side: usize) -> Vec<usize> {
+    let played: Vec<usize> = cycle.iter().flatten().copied().collect();
+    let n = played.len();
+    let mut out: Vec<usize> =
+        (0..n).filter(|&i| played[i] == side).map(|i| (1..=n).find(|&d| played[(i + n - d) % n] == side).unwrap_or(n) - 1).collect();
+    out.sort_unstable();
+    out
 }
 
 /// Each side's times from [`in_turns`].
@@ -240,7 +265,8 @@ impl Turns {
 /// sides (the A/A control in `crates/gates/s/README.md`), held on one die of the Linux machine's
 /// CPU, a block came out at 0 within a few µs, but a callback anywhere from -145 to +38 µs from one
 /// run to the next: each process runs a little faster or slower as a whole, all run long, which the
-/// rounds can't average out. With these turns, two runs gave +9 and +14. Not measured on the Mac.
+/// rounds can't average out. With 2 s turns after the half second (98fc493 to 651cad4), two runs
+/// gave +9 and +14. Not measured on the Mac.
 pub fn in_turns(sides: &mut [&mut dyn Side], warm: usize, n: usize, turn: usize, lead: usize, round: usize) -> Result<Turns> {
     if turn == 0 {
         bail!("a turn of no steps");
@@ -463,7 +489,13 @@ mod tests {
         assert_eq!(three, [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]]);
         assert_eq!(orders(1), [[0]]);
         let cycle3 = cycle(3).unwrap();
-        assert_eq!(cycle3, [[0, 1, 2], [0, 2, 1], [2, 1, 0], [1, 0, 2], [1, 2, 0], [2, 0, 1]]);
+        assert_eq!(cycle3, [[0, 2, 1], [0, 1, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0], [1, 0, 2]]);
+        // The app's layout and S, the two compared, wait alike between their turns. One side must
+        // come back sooner, four of its six turns with one other turn between: P1, not judged.
+        assert_eq!(waits(&cycle3, 0), [1, 1, 1, 2, 3, 4]);
+        assert_eq!(waits(&cycle3, 2), waits(&cycle3, 0));
+        assert_eq!(waits(&cycle3, 1), [1, 1, 1, 1, 4, 4]);
+        assert_eq!(waits(&[vec![0, 1], vec![1, 0]], 1), [0, 2], "a side that follows itself waits for no turn");
         for place in 0..3 {
             for side in 0..3 {
                 assert_eq!(cycle3.iter().filter(|o| o[place] == side).count(), 2, "side {side} in place {place}");
@@ -499,7 +531,7 @@ mod tests {
         assert_eq!((t.leads, t.turn), (2, 3));
         assert_eq!(
             log.borrow().join(", "),
-            "warm 0 5, warm 1 5, warm 2 5, 0 2+3, 2 2+3, 1 2+3, 2 2+3, 1 2+3, 0 2+3, 1 2+1, 0 2+1, 2 2+1",
+            "warm 0 5, warm 2 5, warm 1 5, 0 2+3, 1 2+3, 2 2+3, 1 2+3, 2 2+3, 0 2+3, 2 2+1, 0 2+1, 1 2+1",
             "round 1 starts at the cycle's second order"
         );
         assert_eq!(t.starts(1), (100.0, 0.0));
@@ -509,7 +541,7 @@ mod tests {
         log.borrow_mut().clear();
         let (mut a, mut b, mut c) = (side(0, 1.0), side(1, 2.0), side(2, 3.0));
         let t = in_turns(&mut [&mut a, &mut b, &mut c], 0, 3, 3, 0, 0).unwrap();
-        assert_eq!(log.borrow().join(", "), "warm 2 0, warm 0 0, warm 1 0, 0 0+3, 1 0+3, 2 0+3", "round 0 warms in the cycle's last order");
+        assert_eq!(log.borrow().join(", "), "warm 1 0, warm 0 0, warm 2 0, 0 0+3, 2 0+3, 1 0+3", "round 0 warms in the cycle's last order");
         assert_eq!((t.starts(2), t.lead), ((0.0, 0.0), vec![vec![]; 3]));
         assert!(in_turns(&mut [&mut a, &mut b, &mut c], 0, 6, 0, 1, 0).is_err(), "a turn of no steps");
         let e = in_turns(&mut [&mut a, &mut b], 0, 6, 2, 1, 0).unwrap_err();
