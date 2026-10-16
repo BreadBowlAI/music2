@@ -6,8 +6,10 @@
 //! memory, bounds-checked). Its build and memory are measured once. Its block time is measured in 5
 //! rounds of three renderers taking turns over the same music: the app's layout and step 7's first
 //! layout, P1 (4 GiB reserved per memory, unchecked), in this process, and S, HEAD `8aa301e`, one
-//! `Store` per renderer, in its runner's (`baseline`), which also times S's first build. Each round,
-//! the three render the same bits, and not silence, which the gate checks. The drop is measured in
+//! `Store` per renderer, in its runner's (`baseline`), which also times S's first build. No renderer
+//! takes two turns in a row, and each turn's first blocks, which meet the caches the renderer before
+//! left, are timed apart and not judged. Each round, the three render the same bits, and not
+//! silence, which the gate checks. The drop is measured in
 //! each round for the app's layout and P1, each while an audio-like thread renders beside it.
 //!
 //! What the runner can't measure, S's memory, comes from S's record, `store-S.txt` beside this
@@ -49,20 +51,26 @@ use crate::{Lab, songs};
 
 /// What the contract's acceptance gate 7 names as p50's instance count.
 const CONTRACT_COUNT: usize = 6_176;
-/// The block time measured: 30 s from 3:01, after a second from 3:00 untimed.
+/// The block time measured: 30 s of blocks from 3:01 on, after a second from 3:00 untimed, each turn's
+/// lead (not judged) between them.
 const FROM_SECONDS: f64 = 180.0;
 const BLOCKS: usize = 11_250;
 const WARM: usize = 375;
 /// The most p50 renderers built side by side.
 const SIDE_BY_SIDE: usize = 4;
 /// Rounds of the three renderers, each over the same 30 s in turns (`paired`), each with two drops:
-/// about 7 minutes on the reference Mac (an estimate: three renderers of about 2.2 ms a block). On a
+/// about 8 minutes on the reference Mac (an estimate: three renderers of about 2.2 ms a block, 38.5 s
+/// each a round). On a
 /// quiet Linux machine the pairs' mean differences stayed within ±12 µs, so their median moves by a
 /// few µs from run to run.
 const ROUNDS: usize = 5;
-/// Blocks one renderer renders before the next one's turn: 1 s, so a change in the machine's load
-/// lasting longer than that meets all alike.
-const TURN: usize = 375;
+/// Blocks one renderer renders, and judges, before the next one's turn: 2 s, so a change in the
+/// machine's load lasting longer than that meets all alike.
+const TURN: usize = 750;
+/// Blocks each turn starts with, before those: half a second, timed but not judged, as they meet the
+/// caches the other renderers left (`paired::in_turns`). On Linux the app's layout's cost over S
+/// rose from about 0 to +11 µs over a turn's first 200 blocks.
+const LEAD: usize = 188;
 /// Why the memory rules fail where the OS doesn't say what the process holds.
 const UNMEASURED: &str = "not measured: this OS doesn't say what the process holds";
 
@@ -355,11 +363,16 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     let mut peak = 0.0f32;
     let mut drops: [Vec<Dropped>; 2] = Default::default();
     let (mut s_drops, mut class) = (vec![], None);
+    let mut starts: [Vec<(f64, f64)>; 3] = Default::default();
     for i in 0..ROUNDS {
         let mut app = Blocks::new(&lab.packages, &song)?;
         let mut old = Blocks::new(&p1, &song)?;
         s.renderer(&dir, FROM_SECONDS)?;
-        let times = in_turns(&mut [&mut app, &mut old, &mut s], WARM, BLOCKS, TURN, i)?;
+        let turns = in_turns(&mut [&mut app, &mut old, &mut s], WARM, BLOCKS, TURN, LEAD, i)?;
+        for (k, at) in starts.iter_mut().enumerate() {
+            at.push(turns.starts(k));
+        }
+        let times = turns.timed;
         heard.push([app.heard()?, old.heard()?, s.heard()?]);
         peak = peak.max(app.peak);
         s_drops.push(s.drop_it()?);
@@ -400,6 +413,7 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     out.info("block, the app's layout against S, pair by pair", format!("mean {mean}; p99 {p99}"));
     out.info("block, P1 against S (step 7 with wasmtime's default layout)", format!("mean {p1_mean}; p99 {p1_99}"));
     out.info("block, the app's layout against P1 (the owner's layout alone)", format!("mean {o1_mean}; p99 {o1_99}"));
+    out.info("block, starting a turn", crate::paired::starting(&starts, LEAD, "block"));
     let med = |f: fn(&Dropped) -> f64, d: &[Dropped]| crate::paired::median(&d.iter().map(f).collect::<Vec<_>>());
     (rec.drop_ms, rec.audio_base_us, rec.audio_drop_us) =
         (med(|d| d.ms, &drops[0]), med(|d| d.base_us, &drops[0]), med(|d| d.during_us, &drops[0]));
@@ -528,8 +542,14 @@ impl Side for Blocks {
         Ok(())
     }
 
-    fn turn(&mut self, n: usize) -> Result<Vec<f64>> {
-        let mut times = Vec::with_capacity(n);
+    fn turn(&mut self, lead: usize, n: usize) -> Result<Vec<f64>> {
+        let mut times = Vec::with_capacity(lead + n);
+        for _ in 0..lead {
+            let t = Instant::now();
+            self.r.render_block((self.k * BLOCK) as u64)?;
+            times.push(t.elapsed().as_secs_f64() * 1e6);
+            self.k += 1;
+        }
         for _ in 0..n {
             let t = Instant::now();
             let out = self.r.render_block((self.k * BLOCK) as u64)?;

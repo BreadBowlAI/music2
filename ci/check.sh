@@ -566,8 +566,9 @@ if [ -n "$GATES" ]; then
   # comparison with a record that isn't from this machine, so not judged (PLAT-1), with the two
   # machines, so a record's machine can be corrected from the summary alone too. G7f's proof that
   # the app and S played the same music, and what it printed beside its verdict: P1 against S
-  # (step 7 with wasmtime's default layout) and the app's layout against P1.
-  grep -E '^=== |^(PASS|FAIL|SKIP)  |^      FAIL  |^      ok    .*(p95|p99|of a core)|^      skip  .*\(PLAT-1\)|^      info  machines: |^      ok    the same music|^      info  (block|callback), (P1 against S|the app.s layout against P1)' "$OUT/gates.log" 2> /dev/null |
+  # (step 7 with wasmtime's default layout), the app's layout against P1, and what starting a turn
+  # cost each side (the steps it leaves out).
+  grep -E '^=== |^(PASS|FAIL|SKIP)  |^      FAIL  |^      ok    .*(p95|p99|of a core)|^      skip  .*\(PLAT-1\)|^      info  machines: |^      ok    the same music|^      info  (block|callback), (P1 against S|the app.s layout against P1|starting a turn)' "$OUT/gates.log" 2> /dev/null |
     cut -c1-220 > "$OUT/gates.sum"
 fi
 

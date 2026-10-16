@@ -5,8 +5,9 @@
 //!   warm-up) with no edit, every callback timed, in 5 rounds of three players taking turns over
 //!   the same music: the app's layout (`m2_runtime::packages::Layout::P2`) and step 7's first, P1,
 //!   in this process, and S, HEAD `8aa301e`, the commit before step 7, in its runner's
-//!   (`baseline`). Each round, the three play the same bits, and not silence, which the gate
-//!   checks. Every run prints its own record line (`callback-record …`, the app's layout's
+//!   (`baseline`). No player takes two turns in a row, and each turn's first callbacks, which meet
+//!   the caches the player before left, are timed apart and not judged. Each round, the three play
+//!   the same bits, and not silence, which the gate checks. Every run prints its own record line (`callback-record …`, the app's layout's
 //!   medians), and S's as recorded in `callback-S.txt` on the same machine beside S's fresh numbers.
 //! - **The activation block:** ten edits, a delay added after t02's pluck and taken out again,
 //!   each prepared against what plays as the server prepares it. The callback that takes each one
@@ -41,14 +42,18 @@ use crate::{Lab, Song};
 /// The device buffer the callback is timed in: 512 frames at 48 kHz, 10.7 ms.
 const FRAMES: usize = 512;
 const SECONDS: f64 = 30.0;
-/// Rounds of the three players, each over the same 30 s in turns (`paired`): about 7 minutes on the
-/// reference Mac (an estimate: three players of about 9 ms a callback). On a quiet Linux machine the
+/// Rounds of the three players, each over the same 30 s in turns (`paired`): about 8 minutes on the
+/// reference Mac (an estimate: three players of about 9 ms a callback, 38.5 s each a round). On a quiet Linux machine the
 /// pairs' mean differences spread over about 200 µs, so their median moves by a few tens of µs from
 /// run to run.
 const ROUNDS: usize = 5;
-/// Callbacks one player plays before the next one's turn: about 1 s, so a change in the machine's
-/// load lasting longer than that meets all alike.
-const TURN: usize = 94;
+/// Callbacks one player plays, and judges, before the next one's turn: about 2 s, so a change in
+/// the machine's load lasting longer than that meets all alike.
+const TURN: usize = 188;
+/// Callbacks each turn starts with, before those: about half a second, timed but not judged, as
+/// they meet the caches the other players left (`paired::in_turns`). On Linux the app's layout's
+/// cost over S rose from about 0 to +60 µs over a turn's first 50 callbacks.
+const LEAD: usize = 47;
 
 /// One callback's frames through `d`, timed in microseconds.
 fn fill(d: &mut Driver, buf: &mut [f32]) -> f64 {
@@ -91,8 +96,11 @@ impl Side for Here {
         Ok(())
     }
 
-    fn turn(&mut self, n: usize) -> Result<Vec<f64>> {
-        let mut times = Vec::with_capacity(n);
+    fn turn(&mut self, lead: usize, n: usize) -> Result<Vec<f64>> {
+        let mut times = Vec::with_capacity(lead + n);
+        for _ in 0..lead {
+            times.push(fill(&mut self.d, &mut self.buf));
+        }
         for _ in 0..n {
             times.push(fill(&mut self.d, &mut self.buf));
             self.heard.add(&self.buf);
@@ -139,10 +147,15 @@ pub fn arena(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     let n = (SECONDS * per_second as f64) as usize;
     let (mut runs, mut heard): ([Vec<Vec<f64>>; 3], Vec<[Heard; 3]>) = Default::default();
     let mut peak = 0.0f32;
+    let mut starts: [Vec<(f64, f64)>; 3] = Default::default();
     for i in 0..ROUNDS {
         let (mut app, mut old) = (Here::new(&lab.packages, &song, o.at)?, Here::new(&p1, &song, o.at)?);
         s.player(&dir, o.at, FRAMES)?;
-        let times = in_turns(&mut [&mut app, &mut old, &mut s], per_second, n, TURN, i)?;
+        let turns = in_turns(&mut [&mut app, &mut old, &mut s], per_second, n, TURN, LEAD, i)?;
+        for (k, at) in starts.iter_mut().enumerate() {
+            at.push(turns.starts(k));
+        }
+        let times = turns.timed;
         heard.push([app.heard()?, old.heard()?, s.heard()?]);
         peak = peak.max(app.peak);
         s.drop_it()?;
@@ -180,6 +193,7 @@ pub fn arena(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     out.info("callback, the app's layout against S, pair by pair", format!("mean {dmean}; p99 {d99}"));
     out.info("callback, P1 against S (step 7 with wasmtime's default layout)", format!("mean {p1_mean}; p99 {p1_99}"));
     out.info("callback, the app's layout against P1 (the owner's layout alone)", format!("mean {o1_mean}; p99 {o1_99}"));
+    out.info("callback, starting a turn", crate::paired::starting(&starts, LEAD, "callback"));
     let machine = m2_os::process::machine();
     out.info("record", format!("callback-record p99_us={p99:.3} mean_us={mean:.3} max_us={max:.3} machine={machine}"));
     // S as its campaign recorded it on this machine, beside S measured now: printed, not judged.

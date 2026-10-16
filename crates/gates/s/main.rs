@@ -118,7 +118,11 @@ impl wire::Deck for S {
         Ok(())
     }
 
-    fn turn(&mut self, n: usize, times: &mut Vec<f64>, heard: &mut wire::Heard) -> Result<(), String> {
+    fn turn(&mut self, lead: usize, n: usize, times: &mut Vec<f64>, heard: &mut wire::Heard) -> Result<(), String> {
+        let mut nobody = wire::Heard::default();
+        for _ in 0..lead {
+            times.push(self.step(&mut nobody)?);
+        }
         for _ in 0..n {
             times.push(self.step(heard)?);
         }

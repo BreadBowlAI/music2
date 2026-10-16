@@ -5,7 +5,7 @@
 # Step 7 (design-7 §12): G7a through the server on p50 from 3:00; its engine-rig twin (which also holds
 # G6's step bound across each edit) and G7b; G7e, an export of with-plugins; G7f's two parts, each 5
 # rounds of the app's layout, P1 and S (the commit before step 7, in the runner ci/check.sh builds
-# first) taking turns, about 7 minutes on the Mac (an estimate). G7c and G7d are tests in the rust
+# first) taking turns, about 8 minutes on the Mac (an estimate). G7c and G7d are tests in the rust
 # tests row; G7c's p50 runs and the churn test's p16 run are recorded tests (crates/gates/README.md).
 --server --reference 50 --at 180 add-effect
 --reference 50 --at 180 add-effect tails

@@ -126,8 +126,8 @@ impl Side for Runner {
         self.ok(wire::Cmd::Warm(n)).map(drop)
     }
 
-    fn turn(&mut self, n: usize) -> Result<Vec<f64>> {
-        match self.ask(wire::Cmd::Turn(n))? {
+    fn turn(&mut self, lead: usize, n: usize) -> Result<Vec<f64>> {
+        match self.ask(wire::Cmd::Turn { lead, n })? {
             wire::Reply::Times(t) => Ok(t),
             other => bail!("S's runner said {:?}, not its times", other.line()),
         }
@@ -228,7 +228,7 @@ mod tests {
         let b = r.renderer(Path::new("/a lab/p50-0"), 180.0).unwrap();
         assert_eq!((b.build_ms, b.count), (103.5, 6058));
         r.warm(375).unwrap();
-        assert_eq!(r.turn(2).unwrap(), [1.5, 2.5]);
+        assert_eq!(r.turn(1, 1).unwrap(), [1.5, 2.5]);
         assert_eq!(r.heard().unwrap(), wire::Heard { hash: 255, samples: 4 });
         assert_eq!(r.drop_it().unwrap(), 2.0);
         assert_eq!(r.player(Path::new("/a"), 180.0, 512).unwrap_err().to_string(), "S's runner: no player");
