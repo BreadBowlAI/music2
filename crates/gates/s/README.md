@@ -29,7 +29,7 @@ m2-gates starts the runner, sends a command, and waits for the answer. So only o
 
 A turn starts on the caches the side before it left, so its first steps are slow. On Linux the first callback of a turn took 4 to 7 ms more than the rest, and the first block 2 to 3 ms more. That costs each side a different amount. Most of it is gone after a few steps, but not all. One look by position showed this, held on the 96 MB-cache die of the Linux server's CPU. The app's layout has bounds checks, which cost more once the caches are warm. So over a turn's first 50 callbacks, its cost over S rose from about 0 to +60 µs a callback (and to +11 µs a block over the first 200 blocks). So each turn starts with half a second (47 callbacks, or 188 blocks) that is timed but not judged. It is sent in the same command as the turn, so nothing runs between them.
 
-Half a second was shown to be enough only on that die. It wasn't tried on the other die, whose cache is 32 MB. Not held on one die, as `ci/check.sh` and the Mac run, S's first judged callback was still 42 to 121 µs slower, against its own mean, than the other sides' (three runs). One step can't say how long that lasts. So the gate prints two things about starting a turn:
+At first, half a second was shown to be enough only on that die. It wasn't tried on the other die, whose cache is 32 MB. Not held on one die, as `ci/check.sh` and the Mac run, S's first judged callback was still 42 to 121 µs slower, against its own mean, than the other sides' (three runs). One step can't say how long that lasts. So the gate prints two things about starting a turn:
 
 | Printed | What it says |
 |---|---|

@@ -270,13 +270,14 @@ impl Turns {
 /// caches are warm, rose from about 0 to +60 µs a callback over a turn's first 50 callbacks, and to
 /// +11 µs a block over its first 200 blocks. So each turn's `lead` steps, about half a second, are
 /// played but left out, and timed apart to show what starting a turn costs. Half a second was sized
-/// from that look, and shown enough only there: it wasn't tried on the 32 MB die, and not held, as
-/// `ci/check.sh` and the Mac run, S's first judged callback was still 42 to 121 µs slower against
-/// its mean than the others' (three runs). So each run also says whether any start is left in its
-/// judged steps ([`Turns::starts`], [`starting`]). Before, every step was judged and the orders
-/// were played one after another: S never followed itself, while the app's layout and P1 each did
-/// one turn in six. That favoured the app's layout by about 20 µs a callback on Linux, and made
-/// most of the p99's difference.
+/// from that look, and at first shown enough only there: it wasn't tried on the 32 MB die, and not
+/// held, as `ci/check.sh` and the Mac run, S's first judged callback was still 42 to 121 µs slower
+/// against its mean than the others' (three runs). So each run also says whether any start is left
+/// in its judged steps ([`Turns::starts`], [`starting`]): on Linux, held on either die or not, none
+/// was seen beyond about 25 µs a callback (`crates/gates/s/README.md`). Before, every step was
+/// judged and the orders were played one after another: S never followed itself, while the app's
+/// layout and P1 each did one turn in six. That favoured the app's layout by about 20 µs a callback
+/// on Linux, and made most of the p99's difference.
 ///
 /// A side in S's runner takes its turns in another process. With the app's own engine on both
 /// sides (the A/A control in `crates/gates/s/README.md`), held on one die of the Linux machine's
