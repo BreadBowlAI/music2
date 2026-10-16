@@ -3166,7 +3166,8 @@ fn a_plugin_that_keeps_failing_is_started_again_once() {
     let rounds = |ex: &mut Ex, n: usize| {
         for _ in 0..n {
             ex.fill(4);
-            ex.state.graph.catch_up();
+            // On the actor, so a busy actor never skips a round, as the watcher's catch-up does.
+            ex.state.graph.inspect(|a| a.catch_up());
         }
     };
     rounds(&mut ex, 1);
@@ -3177,8 +3178,14 @@ fn a_plugin_that_keeps_failing_is_started_again_once() {
     });
     rounds(&mut ex, 20);
     let made = m2_plugins::probe::tagged("fails-process");
-    assert!(made.len() == 3 && made.iter().all(|s| s.process.load(Ordering::Relaxed) > 0), "two new instances, each failed");
     let told: Vec<String> = ex.state.graph.expire().into_iter().filter(|t| t.starts_with("m2 probe (p)")).collect();
+    // What was made, and what was said, if not.
+    assert!(
+        made.len() == 3 && made.iter().all(|s| s.process.load(Ordering::Relaxed) > 0),
+        "two new instances, each failed: made {}, process {:?}, told {told:?}",
+        made.len(),
+        made.iter().map(|s| s.process.load(Ordering::Relaxed)).collect::<Vec<_>>()
+    );
     let again = "m2 probe (p) stopped working, so music2 started it again from its saved settings.";
     let silent = "m2 probe (p) stopped working again, so music2 left it silent. Open the song again to give it another try.";
     assert_eq!(told, [again, again, silent]);
