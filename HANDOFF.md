@@ -207,10 +207,14 @@ numbers. If a row fails, the lead fixes it on Linux, checks the mac lint, and as
 - G7f's two "the same music" lines say ok: the app's layout, P1 and S played the same bits.
 - "S as recorded": S measured now, beside S's record of 2026-10-14 (a mean of 8,936 µs a callback). Each turn's
   cold first half second is left out of the mean now, so the two should be close (the judged callbacks now spread
-  over 3:01 to 3:38, not 3:00 to 3:30). If they differ by more than about 1% (90 µs), doubt the runner before
+  over 3:01 to 3:40, not 3:00 to 3:30). If they differ by more than about 1% (90 µs), doubt the runner before
   trusting a verdict near the bound.
-- The "starting a turn" lines: the first judged step against S's should be within a few tens of µs. If it is far
-  off, half a second wasn't enough on the Mac: tell the lead.
+- The "starting a turn" lines, their second part: each turn's first half over its second, against S's. It says
+  whether any of a turn's start is left in the judged steps. On Linux it read −48 to +60 µs a callback and −10 to
+  +8 a block, held on one die or not, the A/A control included. Under 0 means S's start lasted longer, and the
+  verdict then favours the app's layout by about half the value. Below −100 µs a callback (or −30 a block), half a
+  second wasn't enough on the Mac: then a pass within half that value of its bound is unsure, and the lead asks
+  for one more run.
 - G7f's printed comparisons: P1 against S (step 7's own cost) and the app's layout against P1 (O1's cost). They say
   where the time goes if a rule fails.
 - "rust tests" includes the first Mac runs of four `core/os` tests (`the_footprint_counts_touched_pages_and_a_reservation_only_maps`,

@@ -38,6 +38,17 @@ Half a second was shown to be enough only on that die. It wasn't tried on the ot
 
 If a side's start lasted into its judged steps, its first half would be slower than its second. So a value under 0 means S's start lasted longer: the judged means then favour the app's layout, by about half the value (when the start is gone by the second half). Each half holds a thousand steps or more a round, so this is far steadier than one step. (The music differs from step to step, by far more than that, but alike on every side, so only the comparison with S tells.)
 
+What it read on Linux, one run each, at `33812c4` (the medians of 5 rounds, the app's layout first, then P1):
+
+| Run | A callback | A block |
+|---|---|---|
+| Held on the 96 MB die | −6, −1 µs | −1, −0 µs |
+| Held on the 32 MB die | −21, +60 | |
+| Not held | +4, +23 | +7, +8 |
+| The A/A control, not held | −48, −23 | −0, −10 |
+
+So no start was seen left in the judged steps, held or not, beyond about 25 µs a callback on the mean (half the A/A's −48), and a few µs a block. Far under 0, below about −100 µs a callback or −30 µs a block, would say S's start lasted past the half second.
+
 Before 2026-10-16 every step was judged, and the turns went through every order one after another. Then S always followed another side, while the app's layout and P1 each followed themselves in one turn of six. On Linux that made the app's layout look about 20 µs a callback faster than it was, and made most of the p99's difference.
 
 ## How far off the method itself can be
@@ -48,6 +59,8 @@ A control plays the app's own engine on both sides: in m2-gates, and in a runner
 |---|---|---|
 | 2 s turns after half a second not judged (98fc493 to 651cad4): a block | −0 µs (−2 to +1) | |
 | The same: a callback | +9 µs (+1 to +18); +14 (+4 to +17) | +73 µs (−105 to +152) |
+| Today's: 18 turns a round, three whole cycles (`1b8ce99`; at `33812c4`): a block | | −1 (−20 to +28) |
+| Today's: a callback | | −74 (−207 to −48) |
 | 1 s turns, every order one after another (before 2026-10-16; the second of each pair with each turn's first step left out): a block | −4 (−5 to +1); +2 (+1 to +3) | +11 (−3 to +20); −6 (−8 to +11) |
 | The same: a callback | −10 (−14 to −3); +7 (−5 to +18) | +130 (+36 to +199); +50 (+11 to +175) |
 | Scratch tries in between (no side following itself, 1 s turns): a callback | −145 (no step left out); −53, +20 (2 left out) | |

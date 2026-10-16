@@ -1128,8 +1128,10 @@ bound of 320. The owner said "Speed it up first". So:
   one of about 6,000, for its memory. One cut took that away: each kernel instance keeps its memory's
   address. No sound changed.
 - A review found that G7f's turns leaned slightly the app's way, and some docs were wrong or stale. All
-  of it is fixed. The lean is gone: no side follows itself, and each turn's first half second is not
-  judged.
+  of it is fixed: no side follows itself, and each turn's first half second is not judged. Held on one
+  CPU die, that took the lean out. Not held, as `ci/check.sh` and the Mac run, it wasn't shown at first.
+  So G7f now says in every run whether any of a turn's start is left in the judged steps. On Linux, held
+  or not, none was seen beyond about 25 µs a callback ("The review of the fixes", below).
 - On Linux (information only, PLAT-1), the app against S is now +14 µs a block and +55 µs a callback,
   held on one CPU die. Before the speed work it was +53 and +236.
 - `ci/check.sh` passes on Linux at `a894448`: twice without the gates, once with them, every row, with
@@ -1285,7 +1287,9 @@ The same music in every round: callbacks `c642ecd65553fc29`, blocks `78490957822
 the judged steps are other steps now), peak −1.0 dB. The slowest activation block: 2,289 µs held,
 4,026 µs in the check (bound 5,333). Each turn's first callback cost 5.2 to 7.1 ms over the mean. The
 first judged one, against S's: −20 µs (the app's layout) and −3 (P1) held; −71 and −121 in the check,
-not held. G7f takes 6 to 7 minutes a part here now, about a minute more than before.
+not held. Not held, three runs read −42 to −121: more than the "few tens" HANDOFF expected then, which
+only the held runs met. One step can't say how long a start lasts, so the review of the fixes replaced
+it with each turn's first half against its second (below). G7f takes 6 to 7 minutes a part here now, about a minute more than before.
 
 ### The honest Mac estimate
 
