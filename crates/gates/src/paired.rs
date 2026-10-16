@@ -260,19 +260,21 @@ pub fn in_turns(sides: &mut [&mut dyn Side], warm: usize, n: usize, turn: usize,
 }
 
 /// What starting a turn cost each side ([`Turns::starts`], one a round: the app's layout, P1 and S),
-/// said in a line: the medians over the rounds of each turn's first step and first judged step,
-/// in µs over the side's mean, `lead` being the steps each turn starts with, not judged, and `step`
-/// what a step is.
+/// said in a line: the medians over the rounds of each turn's first step, in µs over the side's
+/// mean, and of its first judged step's against S's, each over its own side's mean. The music
+/// changes from step to step, by far more than that, but alike on every side; what is left is the
+/// start's cost the lead didn't take out, the app's layout's and P1's beyond S's. `lead` is the
+/// steps each turn starts with, not judged, and `step` what a step is.
 pub fn starting(starts: &[Vec<(f64, f64)>; 3], lead: usize, step: &str) -> String {
-    let m = |k: usize, f: fn(&(f64, f64)) -> f64| median(&starts[k].iter().map(f).collect::<Vec<_>>());
+    let first = |k: usize| median(&starts[k].iter().map(|s| s.0).collect::<Vec<_>>());
+    let judged = |k: usize| median(&starts[k].iter().zip(&starts[2]).map(|(a, s)| a.1 - s.1).collect::<Vec<_>>());
     format!(
-        "each turn's first {step} {:+.0} µs over the mean (the app's layout), {:+.0} (P1), {:+.0} (S); its first judged one {:+.0}, {:+.0}, {:+.0} ({lead} a turn not judged; medians of {} rounds)",
-        m(0, |s| s.0),
-        m(1, |s| s.0),
-        m(2, |s| s.0),
-        m(0, |s| s.1),
-        m(1, |s| s.1),
-        m(2, |s| s.1),
+        "each turn's first {step} {:+.0} µs over the mean (the app's layout), {:+.0} (P1), {:+.0} (S); its first judged one against S's {:+.0}, {:+.0} ({lead} a turn not judged; medians of {})",
+        first(0),
+        first(1),
+        first(2),
+        judged(0),
+        judged(1),
         starts[0].len()
     )
 }
@@ -565,7 +567,13 @@ mod tests {
         }
         assert_eq!(
             starting(&starts, 2, "callback"),
-            "each turn's first callback +4400 µs over the mean (the app's layout), +5300 (P1), +6300 (S); its first judged one +0, +0, +0 (2 a turn not judged; medians of 6 rounds)"
+            "each turn's first callback +4400 µs over the mean (the app's layout), +5300 (P1), +6300 (S); its first judged one against S's +0, +0 (2 a turn not judged; medians of 6)"
+        );
+        // A run on Linux: each side's first judged callback 1 ms under its mean, as the music was
+        // there; against S's, what the lead left is 20 µs, the app's layout's.
+        let linux = [vec![(5_200.0, -1_031.0)], vec![(6_655.0, -1_014.0)], vec![(6_638.0, -1_011.0)]];
+        assert!(
+            starting(&linux, 47, "callback").contains("; its first judged one against S's -20, -3 (47 a turn not judged; medians of 1)")
         );
     }
 
