@@ -3,11 +3,12 @@
 #
 # In short: run it in the repo with no arguments. It builds everything, runs every Rust test,
 # clippy, the web build, every browser suite, std's checks and the offline renders; on a Mac it
-# also times the gates ci/gates.txt names, after building the old engine they compare with (S) in
-# a folder of its own: ~/m2-check/s-8aa301e on a Mac, ~/.cache/m2-check/s-8aa301e on Linux. Then
-# it prints a short summary to paste back. It changes nothing in the repo, never opens the app on a
-# screen you can see, never plays sound, and never touches your ~/Music or ~/.music2. If one line says "running" for over 30 minutes,
-# press Ctrl-C once: it stops and prints the summary anyway.
+# also times the gates ci/gates.txt names. First it builds the old engine G7f compares with (S),
+# in a folder of its own: ~/m2-check/s-8aa301e on a Mac, ~/.cache/m2-check/s-8aa301e on Linux.
+# Then it prints a short summary to paste back. It changes nothing in the repo, never opens the
+# app on a screen you can see, never plays sound, and never touches your ~/Music or ~/.music2. If
+# one line says "running" for over 30 minutes, press Ctrl-C once: it stops and prints the summary
+# anyway.
 #
 #   ci/check.sh             everything (on a Mac, the timing gates too)
 #   ci/check.sh --gates     on Linux, the timing gates too (recorded for information, PLAT-1)
@@ -531,7 +532,7 @@ fi
 if [ -n "$GATES" ]; then
   if [ $OS = macos ]; then SCACHE=$HOME/m2-check/s-8aa301e; else SCACHE=${XDG_CACHE_HOME:-$HOME/.cache}/m2-check/s-8aa301e; fi
   begin "old engine (S)" "seconds; 3 min the first time"
-  echo "                 building the old engine (S) for G7f in $SCACHE; the first time takes about 3 minutes"
+  echo "                 building the old engine (S) for G7f in $SCACHE"
   if quiet gates-s.log crates/gates/s/build.sh "$SCACHE" && [ -x "$(tail -1 "$OUT/gates-s.log")" ]; then
     M2_GATES_S=$(tail -1 "$OUT/gates-s.log")
     export M2_GATES_S
