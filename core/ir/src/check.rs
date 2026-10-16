@@ -664,10 +664,7 @@ impl<'a> Checker<'a> {
             let (m, node) = items[i];
             let typed: Result<(FOp, Vec<Kind>), String> = match (&node.op, &res[i]) {
                 (Op::Lane { lane }, _) => scope.lane(m, lane).map(|(op, k)| (op, vec![k])),
-                (Op::Time { of }, _) => {
-                    let u = if *of == TimeOf::Beats { Unit::Beats } else { Unit::Seconds };
-                    Ok((FOp::Time(*of), vec![Kind::Control(Some(u))]))
-                }
+                (Op::Time { of }, _) => Ok((FOp::Time(*of), vec![Kind::Control(Some(of.unit()))])),
                 (Op::Const { value, unit }, _) => Ok((FOp::Const(*value), vec![Kind::Control(*unit)])),
                 (Op::Kernel { kernel, .. } | Op::Plugin { plugin: kernel, .. }, Res::Kernel(conns)) => {
                     let is_plugin = matches!(node.op, Op::Plugin { .. });
@@ -1022,6 +1019,7 @@ mod tests {
             ("t:mtof", &["pitch: control<semitones>"], &["out: control<hz>"]),
             ("t:follow", &["in: audio<*>"], &["out: control<unit01>"]),
             ("t:vca", &["in: audio<*>", "g: control<gain> = 1"], &["out: audio<*>"]),
+            ("t:wobble", &["in: audio<*>", "playing: control<unit01> = 1"], &["out: audio<*>"]),
         ] {
             m.insert(id.to_string(), KernelSig::parse(id, "", &s(i), &s(o), 0).unwrap());
         }
@@ -1378,6 +1376,46 @@ mod tests {
         let e = check(&bad, &kernels()).unwrap_err();
         assert!(e[0].message.contains("note fields"), "{}", e[0]);
     }
+    // RENDER-7: a `time` node reads song time in its own unit. `playing` is 0..1, and reaches a
+    // kernel at the top level and in a voice; beats and seconds don't fit where it goes.
+    #[test]
+    fn time_reads_in_its_own_unit() {
+        let p = ir(json!({"ir": crate::IR_VERSION, "root": {"module": "song", "export": "out"}, "modules": [
+            {"key": "song",
+             "lanes": [{"key": "notes", "kind": "events<note>"}],
+             "nodes": [
+                {"id": "n", "op": "lane", "lane": "notes"},
+                {"id": "t", "op": "time", "of": "playing"},
+                {"id": "o", "op": "kernel", "kernel": "t:saw"},
+                {"id": "w", "op": "kernel", "kernel": "t:wobble", "inputs": {"in": "o", "playing": "t"}},
+                {"id": "v", "op": "poly", "events": "n", "voices": 2, "body": {"out": "vw", "nodes": [
+                    {"id": "vt", "op": "time", "of": "playing"},
+                    {"id": "vo", "op": "kernel", "kernel": "t:saw"},
+                    {"id": "vw", "op": "kernel", "kernel": "t:wobble", "inputs": {"in": "vo", "playing": "vt"}}]}},
+                {"id": "a", "op": "kernel", "kernel": "t:add", "inputs": {"a": "w", "b": "v"}}],
+             "exports": {"out": "a"}}]}));
+        let f = check(&p, &kernels()).unwrap_or_else(|e| panic!("{e:?}"));
+        let playing = |n: &FNode| n.op == FOp::Time(TimeOf::Playing) && n.outputs == [Kind::Control(Some(Unit::Unit01))];
+        assert!(f.nodes.iter().any(|n| n.name == "song/t" && playing(n)), "at the top level");
+        let FOp::Poly { voice, .. } = &f.nodes.iter().find(|n| n.name == "song/v").unwrap().op else { panic!("the poly") };
+        assert!(voice.nodes.iter().any(playing), "in a voice");
+        assert_eq!(serde_json::to_value(TimeOf::Playing).unwrap(), json!("playing"));
+        for (of, unit) in [("beats", "beats"), ("seconds", "seconds")] {
+            let e = check(
+                &song(
+                    json!([
+                        {"id": "t", "op": "time", "of": of},
+                        {"id": "o", "op": "kernel", "kernel": "t:saw"},
+                        {"id": "w", "op": "kernel", "kernel": "t:wobble", "inputs": {"in": "o", "playing": "t"}}]),
+                    "w",
+                ),
+                &kernels(),
+            )
+            .unwrap_err();
+            assert!(e[0].message.contains(&format!("expects control<unit01>, got control<{unit}>")), "{}", e[0]);
+        }
+    }
+
     /// A song with frames: `o` made in a component frame 0 inside the `key()` frame 1's parent.
     fn framed(frames: serde_json::Value, nodes: serde_json::Value) -> Ir {
         ir(json!({"ir": crate::IR_VERSION, "root": {"module": "song", "export": "out"},

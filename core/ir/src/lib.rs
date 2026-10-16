@@ -266,11 +266,27 @@ pub struct Body {
     pub out: String,
 }
 
+/// What a `time` node reads: song time, never engine time (RENDER-7).
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum TimeOf {
+    /// The song's position in beats.
     Beats,
+    /// The song's position in seconds.
     Seconds,
+    /// 1 on a frame where the song plays (the transport moves), else 0.
+    Playing,
+}
+
+impl TimeOf {
+    /// The unit of what it reads.
+    pub fn unit(self) -> Unit {
+        match self {
+            TimeOf::Beats => Unit::Beats,
+            TimeOf::Seconds => Unit::Seconds,
+            TimeOf::Playing => Unit::Unit01,
+        }
+    }
 }
 
 impl Op {

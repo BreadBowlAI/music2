@@ -294,6 +294,52 @@ fn stopped_lanes_and_time_hold_while_kernels_run() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+// RENDER-7, HOST-6's twin for kernels: `time.playing` is 1 on every frame where the song plays,
+// through a seek and through a loop wrap that falls mid-block, and 0 while stopped, from the block
+// line the stop lands on.
+#[test]
+fn time_playing_follows_the_transport() {
+    let ir = song(
+        json!([
+            {"id": "t", "op": "time", "of": "playing"},
+            {"id": "o", "op": "kernel", "kernel": "std:sine"},
+            {"id": "a", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "t"}}]),
+        "a",
+        json!([]),
+    );
+    let flat = flat(&ir);
+    let t = flat.nodes.iter().position(|n| n.name == "song/t").unwrap();
+    let mut rig = Rig::new(live(&ir, &with_notes(json!({"clips": []}), at_bpm(120.0))));
+    // The block just processed: its `time.playing`, and the output.
+    let block = |rig: &mut Rig| {
+        let out = rig.run(BLOCK);
+        (rig.e.current().unwrap().plan.graph.bufs[t][0].clone(), out)
+    };
+    let (stopped, out) = block(&mut rig);
+    assert!(stopped.iter().all(|&x| x == 0.0) && peak(&out) == 0.0, "stopped: 0");
+    rig.cmd(Cmd::Play);
+    let (playing, out) = block(&mut rig);
+    assert!(playing.iter().all(|&x| x == 1.0) && peak(&out) > 0.0, "playing: 1, from the block line the play lands on");
+    rig.cmd(Cmd::Seek(3.0));
+    assert!(block(&mut rig).0.iter().all(|&x| x == 1.0), "through a seek");
+    assert!(rig.e.status().pos >= 72_000);
+    // 0.9 beats at 120 bpm: the wrap is at frame 21 600 of the loop, 96 frames into a block.
+    rig.cmd(Cmd::Seek(0.0));
+    rig.cmd(Cmd::Loop(Some((0.0, 0.9))));
+    let mut wrapped = false;
+    for _ in 0..200 {
+        let before = rig.e.status().pos;
+        assert!(block(&mut rig).0.iter().all(|&x| x == 1.0), "through a loop wrap");
+        wrapped |= rig.e.status().pos < before;
+    }
+    assert!(wrapped, "the loop wrapped");
+    assert_eq!(21_600 % BLOCK, 96, "mid-block");
+    rig.cmd(Cmd::Stop);
+    let (stop, _) = block(&mut rig);
+    assert!(stop.iter().all(|&x| x == 0.0), "0 from the stop on");
+    assert!(!rig.e.status().playing);
+}
+
 // RENDER-9 item 5: an audio lane crossfades over 5 ms at a loop wrap, which falls on its exact
 // frame mid-block; once the fade is done it plays the material bit for bit.
 #[test]

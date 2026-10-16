@@ -1175,6 +1175,16 @@ impl Graph {
                     out[0][seg.range(0)].copy_from_slice(&b.seconds[seg.off..seg.off + n]);
                     Ok(())
                 }
+                // From the block's runs, as plugins are told (HOST-6): 1 where the transport moves.
+                Exec::Time(TimeOf::Playing) => {
+                    for r in b.runs.as_slice() {
+                        let (lo, hi) = ((r.off as usize).max(seg.off), ((r.off + r.n) as usize).min(seg.off + n));
+                        if lo < hi {
+                            out[0][lo..hi].fill(if r.moving { 1.0 } else { 0.0 });
+                        }
+                    }
+                    Ok(())
+                }
                 Exec::Kernel(k) => k.process(b, seg, bufs, versions, &mut out),
                 Exec::Poly(p) => p.process(b, bufs, &mut out[0], lanes),
                 Exec::Plugin(p) => p.process(b, bufs, &mut out[0], lanes),
