@@ -1,12 +1,15 @@
 # Handoff
 
-Written 2026-10-16, at the end of step 7 (the engine). Read this first, then `docs/architecture.md` (the contract)
-and the design for whatever you pick up.
+Written 2026-10-16, at the end of step 7 (the engine), and updated after its speed work the same day. Read this
+first, then `docs/architecture.md` (the contract) and the design for whatever you pick up.
 
 **In short**
-- **Step 7 is done on Linux**, on branch `step7` at `6297c9a`: `ci/check.sh` passes there, every row, with nothing
-  passed only on a retry (893 Rust tests, 29/29 browser suites, 8 of 8 renders; `~/m2-runs/check-s7-final`).
-- **macOS: unverified since `1750322`.** Step 7 waits for the owner's Mac run (below).
+- **Step 7 and its speed work are done on Linux**, on branch `step7` at `a894448`: `ci/check.sh` passes there, every
+  row, with nothing passed only on a retry, twice without the gates and once with them (910 Rust tests, 29/29 browser
+  suites, 8 of 8 renders, the old engine S built, the 6 gate runs; `~/m2-runs/check-s7-sp1`, `-sp2`, `-spg`).
+- **macOS:** the owner's Mac run at `ed7fc8e` passed every row but the gates, and the gates failed on one rule:
+  G7f part 2, +328 µs a callback against 320, by the old sum. The owner said "speed it up first". Now the engine is
+  faster and G7f measures S fresh. **Step 7 waits for one more Mac run** (below).
 - `main` is at `0ebc6e6` (the platform step, macOS green at `1750322`). `step7` has `main` merged in.
 - The owner decided O1 to O5 on 2026-10-15 (below).
 - Next: the Mac run; then `step7` onto `main`; then merge `sounds`, then `taste`; then 8a, 8b and step 9.
@@ -16,7 +19,7 @@ and the design for whatever you pick up.
 | Branch | Commit | State |
 |---|---|---|
 | `main` | `0ebc6e6` | Steps 1–6, the fast note edits, and the platform layer. Green on Linux and macOS at `1750322`. |
-| `step7` | `6297c9a`, then docs only | Step 7, the engine: built, reviewed, fixed and checked on Linux. Local only: the lead pushes it as a branch for the Mac run. Worktree `~/m2-runs/wt/s7` (its `target/` is about 70 GB). |
+| `step7` | `a894448`, then docs only | Step 7, the engine, with the speed work of 2026-10-16: built, reviewed, fixed and checked on Linux. `origin/step7` is at `ed7fc8e`: the lead pushes the new commits for the Mac run. Worktree `~/m2-runs/wt/s7` (its `target/` is about 70 GB). |
 | `origin/wip/step7` | `5079233` | The Mac's half-done step 7. All of it is in `step7` (cherry-picked as `c8117c3`). Delete it once `step7` is on `main`. |
 | `origin/taste` | `4804247` | The new look (T and S); 8b.1 Tracks done (`a0d5f91`); 8b.2 song bar unfinished. |
 | `origin/sounds` | `916127d` | 20 new std sounds (polysynth, FM, drum kit). Its last independent check was cut short. |
@@ -28,14 +31,17 @@ Designs, all in `docs/designs/`:
 - `step7/design-7.md` (revision 2, with dated notes from the review; §18 the slices, §19 the owner's questions).
 - `step7/build-notes.md`: what each part of step 7 built, every check and gate with its numbers, and what is left.
   Its sections: Rebase, Bug 1, Slice 4, m2-os process, Integration, Review and fixes, The independent check of
-  the fixes, Finish.
+  the fixes, Finish, Speed (2026-10-16: the fresh comparison with S, the profile, the cut, the review, the checks,
+  the Mac estimate).
 - `step7/g7f-linux.md`: the study behind the owner's Store layout (O1).
 - `platform/design.md` (§8: how later steps add to `m2-os`; §13.3: the merges) and `platform/build-notes.md`.
 - `step8/design-8a.md`, `design-8b.md`, `taste.md` (the look), `audit-ui.md` (98-shot audit).
 - `step6/`: the Tx and write path (C1–C21, cited by the contract). `workflows/`: old workflow scripts (Mac paths).
 
 The step 7 review: `~/m2-runs/review-b1/findings.json` (19 confirmed findings, 5 dropped, each lens's summary).
-Every confirmed one is fixed; fit-3 (stale *Today* lines) was done in the finish.
+Every confirmed one is fixed; fit-3 (stale *Today* lines) was done in the finish. The speed work's plan, attack,
+profile and review: `~/m2-runs/speed/` (`plan.md`; `prof/results.md`; `review-rt`, `review-gate`; 11 confirmed
+findings, all fixed).
 
 ## The owner's decisions
 
@@ -48,6 +54,10 @@ Step 7, 2026-10-15:
 | O3 | std's chorus, phaser and tremolo LFOs run on engine time, so after a stop they differ from the export. Fixed at the `sounds` merge, not in step 7. | "What to do next", 3 |
 | O4 | A note held across an export plays again after the resume: a note-on at the resume, under the 5 ms fade in. | [RENDER-1](docs/architecture.md#offline) |
 | O5 | Slice 3's two additions beyond the design stay: a new node's inputs fade in over 5 ms, and `text::slide`. | RENDER-25a, ID-13 |
+
+Step 7, 2026-10-16, after the Mac run at `ed7fc8e`: speed the engine up first, with no change to any sound; make
+G7f measure the whole cost fresh, against S in the same run; then one more Mac run (about 45 minutes at most). O1
+and O2 stay as they are.
 
 Decided earlier, and still in force:
 - Step 7's Q1–Q9 as design-7 §19 recommends (a SiteId is a call's `(` point; export is a tape pause).
@@ -77,12 +87,13 @@ short summary. Its first line says `music2 check: PASS` or `FAIL`.
 |---|---|
 | toolchain, web build, build | Rust 1.99.0 (pinned), the web UI, every binary |
 | app | Linux only: the desktop app on an invisible screen (Xvfb), with `first-song` and `with-plugins`, a screenshot of each |
-| rust tests | every Rust test, with a scratch `HOME` (893 at `6297c9a`); G7c and G7d are tests here |
+| rust tests | every Rust test, with a scratch `HOME` (910 at `a894448`); G7c and G7d are tests here |
 | clippy | the whole workspace; a warning is an error |
 | std kernels, std.wasm | the kernels' tests and lints; `std.wasm` rebuilt to the same bytes in another folder |
 | mac lint | Linux only: the Mac-only code, type-checked and linted |
 | browser suites | 29 suites (1,049 checks), each on a fresh headless server |
 | renders | 8 offline renders against `e2e/renders.sha256`, one record for every OS |
+| old engine (S) | with the gates: builds S's runner, the old engine G7f measures beside the app (`crates/gates/s/build.sh`, outside the repo); about 3 minutes the first time, seconds after |
 | gates | on the Mac always; on Linux only with `--gates` (information only, PLAT-1): the 6 runs `ci/gates.txt` names (below) |
 | repo unchanged | the check changed nothing in the repo |
 
@@ -99,14 +110,15 @@ The gates (`ci/gates.txt`, one `m2-gates` run a line, all in release):
 | `--server --reference 50 --at 180 add-effect` | G5 and G7a through the server: an effect added on p50 at 3:00 | heard within 200 ms of the request, compile included; no voice pool made new | p95 106 to 115 ms |
 | `--reference 50 --at 180 add-effect tails` | G5, G7a's engine-rig twin, G7b | no jump back; no click in the edit's own sound; untouched tracks bit-identical | pass |
 | `--server export` | G7e: an export of `with-plugins` | pauses, borrows its 2 plugins, resumes within 21.3 ms with no click, the held chord sounds again, the file matches `m2 render` | pass; paused about 255 ms |
-| `store --reference 50` | G7f part 1: what the Store layout costs a block, and memory | mean block within S + 80 µs; footprint within S + 64 MB; build within 1.5 × S; 2 renderers within 25% of the address space | 0.29% of the address space; the rest is judged only on the Mac |
-| `arena --reference 50 --at 180` | G7f part 2: a 512-frame callback with the arena | mean callback within HEAD's + 320 µs; slowest activation block under 5,333 µs | 3.1 to 4.2 ms; the rest is judged only on the Mac |
+| `store --reference 50` | G7f part 1: what the Store layout costs a block, and memory, against S (the commit before step 7) measured in the same run | mean block within S + 80 µs; footprint within S + 64 MB; build within 1.5 × S; 2 renderers within 25% of the address space; the same music | +23 µs a block (+14 held on one die); 0.29% of the address space |
+| `arena --reference 50 --at 180` | G7f part 2: a 512-frame callback with the arena, against S measured in the same run | mean callback within S's + 320 µs; slowest activation block under 5,333 µs; the same music | +97 µs a callback (+55 held); 2.3 to 4.0 ms |
 
 Recorded tests, too long for the check (`#[ignore]`): G7c on all of p16 and of p50, p16 looping ten minutes, and the
 churn test's 200 edits on p16 (within +20 MB). Run them with `cargo test -p m2-play --release --test bit_identity
---test live --test churn -- --ignored --nocapture` (about 10 minutes; all 5 passed at `6297c9a`).
+--test live --test churn -- --ignored --nocapture` (about 10 minutes; all 5 passed at `18966cd`, after the kept
+memory address).
 
-**On the server** (8 to 9 minutes with a warm `target/` on a quiet server; 20 with `--gates`):
+**On the server** (8 to 9 minutes with a warm `target/` on a quiet server; 25 with `--gates`):
 
 ```sh
 cd ~/dev/suite2/music2
@@ -119,8 +131,9 @@ screenshots once per step (this step's: `~/m2-runs/app-shots/step7-6297c9a/`).
 
 ## The Mac run (for the owner)
 
-About 30 minutes, mostly waiting *(an estimate: 12 last time, plus step 7's timing tests)*. First the lead pushes the
-`step7` branch.
+About 35 minutes, mostly waiting *(an estimate: 25 at `ed7fc8e`; this time it also builds the old engine
+S, about 3 minutes the first time, and G7f plays longer, about 8 minutes a part)*. First the lead pushes
+the `step7` branch.
 
 | # | Do this | Why |
 |---|---|---|
@@ -131,23 +144,37 @@ About 30 minutes, mostly waiting *(an estimate: 12 last time, plus step 7's timi
 | 5 | If one line says `running` for more than 30 minutes, press Ctrl-C once. | It stops that check and still prints the summary. |
 | 6 | Copy the last lines, from `music2 check:` to the `logs` line, and paste them back. | That is all the lead needs. |
 
-**What must pass:** every row says PASS, with nothing "passed only on a retry". In the gates part:
+**What changed since the last run (`ed7fc8e`, 2026-10-16):**
+- The engine is faster. Each kernel call now reads its memory straight away, instead of asking its
+  store for it (`444fc66`). No sound changed.
+- G7f measures S, the commit before step 7, in the same run, beside the app. S plays in a small program
+  of its own, which a new row, "old engine (S)", builds first. G7f no longer adds an old recorded number.
+- G7f's turns: no side takes two turns in a row, and the first half second of each turn is not judged.
+- A Mac whose name the records don't hold gets G7f printed, not judged, and the gates row says PART.
+
+**What must pass:** every row says PASS (the gates row too, not PART), with nothing "passed only on a
+retry". In the gates part:
 - G11, as last time.
 - G5 and G7a through the server: heard within 200 ms of the request.
 - G5 and G7b on the engine rig, with G7a's click check.
 - G7e: the export pauses, borrows both plugins, comes back with no click, and the held chord sounds again.
-- G7f part 1: the 25% rule (now under 1%), and the block, memory and build checks against the Mac's own record.
-- G7f part 2: the slowest activation block under 5,333 µs.
+- G7f part 1 (`store`): "block within S + 80 µs, by the mean", "footprint within S + 64 MB", "full build
+  within 1.5 × S", the 25% rule, and "the same music".
+- G7f part 2 (`arena`): "callback within S's + 320 µs, by the mean", "the same music", and the slowest
+  activation block under 5,333 µs.
 
 **What may fail, and why:**
-- G7f part 2's "callback within HEAD's + 320 µs, by the mean". On Linux the same sum came to between +130 and +340 µs,
-  so on the Mac it may land near its bound. If it fails, that is what O1 costs on the Mac: the lead brings the
-  numbers, and the owner decides.
-- G7f part 1's "block within S + 80 µs, by the mean" should pass (about +45 to +65 µs by Linux's numbers), but the Mac
-  measures the owner's layout for the first time. The Mac's numbers decide O1's cost.
-- An `info machines:` line, or a "(PLAT-1)" one, means the Mac's name differs from the two records written by hand.
-  Nothing else is wrong then: the lead copies the printed `machine:` line into `crates/gates/store-S.txt` and
-  `callback-S.txt`, and asks for one more run.
+- G7f part 2's callback rule. Our guess is about +110 µs (likely +30 to +220), against 320. But on Linux
+  one run of this method can be off by about ±150 µs a callback. If it says more than +170, or it fails,
+  the lead asks for one more run before deciding. If it still fails, cut 3 (one Store per voice pool)
+  goes to the owner: it changes RENDER-32's words.
+- G7f part 1's block rule. Our guess is about +30 µs (likely +10 to +60), against 80. A run can be off by
+  about ±30 µs. Above +50, one more run.
+- The "old engine (S)" row. It builds S on the Mac for the first time (Linux only type-checked it for
+  macOS). If it fails, the gates can't run G7f, and the lead reads `gates-s.log` in the logs.
+- The gates row says PART, or there is an `info machines:` line: the Mac's name differs from the two
+  records written by hand. Nothing else is wrong then: the lead copies the printed `machine:` line into
+  `crates/gates/store-S.txt` and `callback-S.txt`, and asks for one more run.
 - Anything else that fails is new.
 
 **Then a check by ear** (about 10 minutes; no test can do it, as the tests play no sound):
@@ -172,6 +199,15 @@ numbers. If a row fails, the lead fixes it on Linux, checks the mac lint, and as
 
 **What the lead checks in the pasted lines:**
 - The gates part's second line reads `machine: MacBookPro18,1, macOS …, Apple M1 Pro, aarch64, 10 threads`.
+- G7f's two "the same music" lines say ok: the app's layout, P1 and S played the same bits.
+- "S as recorded": S measured now, beside S's record of 2026-10-14 (a mean of 8,936 µs a callback). Each turn's
+  cold first half second is left out of the mean now, so the two should be close (the judged callbacks now spread
+  over 3:01 to 3:38, not 3:00 to 3:30). If they differ by more than about 1% (90 µs), doubt the runner before
+  trusting a verdict near the bound.
+- The "starting a turn" lines: the first judged step against S's should be within a few tens of µs. If it is far
+  off, half a second wasn't enough on the Mac: tell the lead.
+- G7f's printed comparisons: P1 against S (step 7's own cost) and the app's layout against P1 (O1's cost). They say
+  where the time goes if a rule fails.
 - "rust tests" includes the first Mac runs of four `core/os` tests (`the_footprint_counts_touched_pages_and_a_reservation_only_maps`,
   `interactive_gives_the_thread_the_user_interactive_class`, `the_mac_is_named`, `the_machine_is_named_in_five_parts`),
   `app_main_thread` (a state load on AppKit's main thread), `no_alloc.rs`, and the server's export, hold and device
@@ -239,6 +275,7 @@ Fixed in step 7 (none was seen in a `ci/check.sh` run):
 | `the_footprint_counts_touched_pages_and_a_reservation_only_maps` | other tests mapped memory beside it (1 run in 10); each try reads around its own change (`9408619`), and maps and unmaps its own 64 MB, for macOS's malloc (`70bd927`) |
 | `playback_the_device_stopped_is_said`, and two other new server tests | called the catch-up while the actor was busy (1 run in 5 under load); they wait for it (`ed77c41`) |
 | G7e's fade-in check | failed 3 of 20 when the hold landed near a kick's attack; the export now starts on a kick's body (`857bd5a`) |
+| `a_plugin_that_keeps_failing_is_started_again_once` | passed only on a retry once (the speed work's first check): its rounds' catch-up did nothing while the actor was busy. They run on the actor now (`a894448`): under a stress run, 33 of 200 runs failed before, 0 of 200 after |
 | `live3b`'s export checks | heard the chord at about -85 dBFS; the lead goes back to its own level first (`987bf0d`) |
 
 ## Left for later
@@ -259,7 +296,16 @@ Step 7:
 - G7a's click check (K10a) on p50 at 3:00 catches a missing fade window, but not an edge crossfade made a cut (t02's pluck is quiet there).
 - The churn run's +20 MB is read after 70 warm-up edits; the design doesn't say from when.
 - The recorded tests aren't in `ci/check.sh`; a `--gates` step could run them on the Mac.
-- `ci/check.sh`'s gates row says "usually 15 min": 12 here, likely more on the Mac.
+- `ci/check.sh`'s gates row says "usually 22 min": 17 here with the speed work's longer G7f turns, likely about 20 on
+  the Mac.
+- The speed work's cut 3 (one Store per voice pool, about −118 µs a callback more on Linux) and cut 4 (the
+  non-finite check at activations, −14 to −21 µs) are held: cut 3 changes RENDER-32's words, so it is the owner's
+  call, and only if the Mac misses. Cut 2 (the instance inline) was dropped: it didn't save on both CPU dies here.
+- G7f's own error: with the app's engine on both sides (the A/A control), a callback came out anywhere from −145 to
+  +38 µs from one run to the next on Linux, a block within a few µs. A whole process runs a little faster or
+  slower, all run long. Starting every side in a fresh process each round would let the rounds average that out;
+  it needs a runner for HEAD's engine too. Unmeasured on the Mac.
+- S's footprint and its drop beside another thread still come from `store-S.txt`: S's runner can't use m2-os.
 - `machine()`'s thread count follows `taskset` and cgroups on Linux, so a pinned run names another machine.
 - Linux's footprint leaves out shared memory (`RssShmem`), so it isn't the Mac's `phys_footprint`.
 - `store-S.txt` and `callback-S.txt` hold one record each; a Linux record beside the Mac's needs the reader to pick by machine.
@@ -269,7 +315,8 @@ Step 7:
 - The latency warning is a toast, not an entry in the problems list.
 - Contract *Today* lines from before step 7 that are still stale: RENDER-4 and 5 say the range render isn't built (step 3a built it); RENDER-15, 21, 30, ID-3, ID-12, FMT-20, PKG-4, 8, 10, 11, MON-1, ABI-2 and 3 cite old line numbers.
 - Old rustfmt diffs remain on lines no step 7 commit wrote (for example `crates/server/src/graph/tests.rs`).
-- Two fixer commits have no blank line after the subject (`e12746b`, `737575a`): left, as commits aren't rewritten.
+- Three commits have no blank line after the subject (`e12746b`, `737575a`, `444fc66`): left, as commits aren't
+  rewritten.
 
 From the platform step:
 - The macOS paths no test takes stay unrun: the barrier's `fsync` fallback, D6's clone error, `sync_dir` on a volume that refuses a folder sync.
@@ -308,6 +355,6 @@ From the platform step:
 | The desktop app | Only on an invisible Xvfb screen, as the check's app row opens it. Never on a real screen. |
 | Scratch `HOME` | Anything that runs music2 gets a scratch `HOME` and `M2_AUDIO=none`, and then `CARGO_HOME=/home/jerry/.cargo RUSTUP_HOME=/home/jerry/.rustup`. Never the real `~/.music2` or `~/Music`. `ci/check.sh` does this itself. |
 | Scratch copies | `git worktree add --detach ~/m2-runs/scratch-<label>`, with its own `target/`; delete it when done (they once filled 390 GB). The repo's own `target/` is about 140 GB, `~/m2-runs/wt/s7`'s about 70 GB. |
-| Logs | Each check's folder in `~/m2-runs/check-*` (step 7's last: `check-s7-final`); the step 7 gate runs in `~/m2-runs/gates-fix/` and `~/m2-runs/xc/g7f/`; the review in `~/m2-runs/review-b1/`. |
+| Logs | Each check's folder in `~/m2-runs/check-*` (step 7's last: `check-s7-sp1`, `-sp2` and `-spg`, with the gates); the step 7 gate runs in `~/m2-runs/gates-fix/` and `~/m2-runs/xc/g7f/`; the review in `~/m2-runs/review-b1/`. |
 | Tools | Rust 1.99.0 (`rust-toolchain.toml`), Node 24, chrome-headless-shell 133.0.6943.141 (the check installs Rust and Chrome when missing), Xvfb. |
 | MIDI | `/dev/snd/seq` gives `EACCES` here: tests inject notes and never open a device. |

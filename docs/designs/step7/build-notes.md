@@ -1116,3 +1116,206 @@ in 116 s. They last ran at `a1d9914`, before the independent check's fixes.
 - What `HANDOFF.md`'s "Left for later" lists, for step 7 and the platform step: nothing in this slice changed code.
 - `ci/check.sh`'s gates row still says "usually 15 min"; the Mac's first run of step 7's gates will say how long. The
   gates row wasn't run here (no `--gates`, as the task said); the gates ran by hand in the two parts before.
+
+## Speed (2026-10-16)
+
+**In short:** the owner's Mac run at `ed7fc8e` failed one rule: G7f part 2, +328 µs a callback against a
+bound of 320. The owner said "Speed it up first". So:
+
+- G7f now measures S, the commit before step 7, fresh in every run, beside the app. It no longer adds an
+  old recorded number.
+- A profile found where step 7's engine spent its extra time: each kernel call asked its own store,
+  one of about 6,000, for its memory. One cut took that away: each kernel instance keeps its memory's
+  address. No sound changed.
+- A review found that G7f's turns leaned slightly the app's way, and some docs were wrong or stale. All
+  of it is fixed. The lean is gone: no side follows itself, and each turn's first half second is not
+  judged.
+- On Linux (information only, PLAT-1), the app against S is now +14 µs a block and +55 µs a callback,
+  held on one CPU die. Before the speed work it was +53 and +236.
+- `ci/check.sh` passes on Linux at `a894448`: twice without the gates, once with them, every row, with
+  nothing passed only on a retry.
+- The Mac's run decides. Our honest guess for it: about +110 µs a callback (likely +30 to +220) and
+  about +30 µs a block (likely +10 to +60), both under their bounds. One run can be off by about
+  ±150 µs a callback, so a result near 320 needs a second run.
+
+Nothing was pushed.
+
+### Why
+
+The owner's Mac run at `ed7fc8e` (MacBookPro18,1, M1 Pro, 2026-10-16): every row passed but the gates,
+and the gates failed on one rule only.
+
+| G7f part | What the gate added up | Result | Bound |
+|---|---|---|---|
+| 1, a block | the app's layout over P1, measured: +41 µs (5 pairs, +37 to +48), plus P1's +32 recorded | +73 µs: pass | 80 |
+| 2, a callback | the app's layout over P1, measured: +141 µs (5 pairs, +111 to +177), plus P1's +187 recorded | +328 µs: **fail** | 320 |
+
+P1's +187 was recorded on 2026-10-14, against slice 2's code, not today's. So today's real step-7 cost
+was unknown. A callback is 512 frames at 48 kHz, 10,667 µs; on the Mac an S callback takes about
+8,936 µs.
+
+The owner's decision: (1) find where step 7's engine spends its extra time, and cut the waste, with no
+change to any sound; (2) make G7f measure the whole cost fresh, against S in the same run; (3) then one
+more Mac run, about 45 minutes at most. O1 (the owner's Store layout) and O2 (the bounds: 80 µs a block,
+320 µs a callback) stay as they are.
+
+### G7f measures S fresh (branch `s7-sg`)
+
+| What | Done | Commit |
+|---|---|---|
+| S's runner | A small program plays S in a process of its own (`crates/gates/s/`). It is built from a clean `git archive` of `8aa301e`, with S's own `Cargo.lock`, outside the repo. S needed no patch. Linux builds it in 40 s cold, 0.1 s warm; it type-checks for macOS. | `5b77ae4` |
+| Taking turns | m2-gates sends a command and waits for the answer, so only one side runs at a time. Each round, the app's layout, P1 and S take turns over the same music. | `5b77ae4` |
+| The same music | Each side hashes what it played. All three must match, in every round. | `5b77ae4` |
+| The verdict | The median of 5 rounds' mean differences, the app's layout minus S, both measured in the run. P1's recorded numbers left the judged path. | `5b77ae4` |
+| PLAT-1 | The fresh timings are judged only on the Mac the records name; elsewhere they are printed with "would pass" or "would fail". | `de96546` |
+| `ci/check.sh` | A new row, "old engine (S)", builds the runner before the gates. | `5b77ae4` |
+
+A first try at a lead step (`ecbae3c`) was taken out again (`f75ff8e`) on a pinned A/A control. The
+reason given there was wrong: the review showed that the untimed step had taken away a lean in the
+app's favour, not added one (below).
+
+At `8177eb2` on Linux, held on one die: the app against S +52 to +59 µs a block, +213 to +261 µs a
+callback.
+
+### Where the time went (the profile)
+
+A study on Linux (`~/m2-runs/speed/prof/results.md`). Tools built for it: valgrind 3.27.1 from source,
+with its address-space limit raised (`~/m2-runs/tools/valgrind`), gimli's addr2line, and a small
+sampler on the thread's CPU clock.
+
+- HEAD against S, fresh, p50 from 3:00: +144 to +158 µs a callback with P1 (2.1% of S's 7,020 µs), and
+  +204 to +212 with the app's layout. The platform step costs nothing (−2 µs, −42 to +39).
+- All of step 7's own cost is host code, not the kernels: each of the 6,058 kernel instances has a
+  wasmtime `Store` of its own, and each of about 9,250 kernel calls a callback touches that store, which
+  is no longer in the cache. Step 7 added only 0.5% more instructions, but about a third more L1 misses
+  and three times the L2 misses in host code (callgrind with a cache like an M1 Pro's).
+- What is left over S is O1's own bounds checks: +9.6 million kernel instructions a callback (+12%).
+  That stays, as the owner chose.
+
+| Cut | What | Linux saving, a callback | Decision |
+|---|---|---|---|
+| 1 | Keep each memory's address in the instance, instead of two store lookups a call | −181 µs with the app's layout (5 runs, −217 to −146) | **made** (`444fc66`) |
+| 2 | Keep the kernel instance inline, not boxed | −47 on the 96 MB die; mixed or worse on the 32 MB die | dropped (it must save on both dies) |
+| 3 | One `Store` per voice pool | about −118 more | held: it changes RENDER-32's words, the owner's call |
+| 4 | The non-finite check at activations, not every block | −14 to −21 | held: too small to see |
+
+### Cut 1: each kernel instance keeps its memory's address (branch `s7-sp`)
+
+| What | Done | Test | Commit |
+|---|---|---|---|
+| The address | `KernelInst` keeps a `MemView` (base and length) from when it is built. `ports(&mut self)` hands out the memory's bytes with the port lists, so nothing else can hold the memory meanwhile. One `unsafe` block. | `a_kernel_memory_never_moves` (RENDER-32): a kernel grows its memory to the 32 MiB cap and plays its input bit for bit, under P2 and P1. With a layout that may move, it and 32 other runtime tests fail in debug. | `444fc66` |
+| Why it is safe | A memory never moves in either layout: P2 refuses to move one, and P1 reserves 4 GiB against the 32 MiB cap. `PackageSet::engine` is crate-private now, so no other engine can be put in. Building checks the address after each kernel's first reset; debug builds check it at every call. | the same | `444fc66` |
+| Its saving | Lockstep, the app's layout: −204 µs a callback (−248 to −154) on the 96 MB die, −331 (−506 to −190) on the 32 MB die. G7f, pinned: callback +236 → +31, block +53 → +3 over S. | — | — |
+| No sound change | 8 of 8 renders; the p16 render still `ebc87e0b…`; the five recorded tests pass; a differential probe (the review) found every std-only hash the same over 3 seeds of 1,500 random steps, under P1 and P2. | — | — |
+
+444fc66's message has no blank line after its subject, so git shows a paragraph as its subject. It was
+not amended (the rules).
+
+Also on `s7-sp`: `18966cd` (a Mac the records don't name failed G7f, and silence wasn't the same
+music) and `d9655a2` (RENDER-32's Today numbers).
+
+### The review
+
+Three lenses (the runtime cut, the measurement's honesty, fit and words) and a skeptic. The cut itself
+is correct: nothing changes a sound, allocates, locks or waits on the audio thread. 11 findings were
+confirmed. All are fixed, each in a commit of its own (F3 and the docs part of the turn-order finding
+share one, as the skeptic said):
+
+| Finding | Fix | Test, or how it was shown | Commit |
+|---|---|---|---|
+| gate-turn-order-bias (medium): played in every order end to end, S never followed itself, while the app's layout and P1 each did one turn in six. On Linux that favoured the app's layout by about 20 µs a callback and made most of the printed p99 difference. The docs said "no bias". | The orders form a cycle where no side follows itself and each follows each other side as often. Every turn starts with a lead that is timed but not judged, sent in the same command. A look by position showed the cold start fades slowly (the app's layout's cost over S rose from about 0 to +60 µs a callback over a turn's first 50 callbacks, +11 µs a block over 200 blocks), so the lead is half a second (47 callbacks, 188 blocks) and turns are 2 s. Each part prints what a turn's start cost each side. | `starting_a_turn_favours_no_side` (a model of cold starts): with the old turns, S came out 27 µs slower than the same-cost app. | `98fc493`, `bac2c5b` |
+| rt-rt-2 (low): `18966cd` made G7f fail on a Mac the records don't name; PLAT-1 says every Mac must pass and other machines record their timings. | There it is printed, not judged, and says what to do; `ci/check.sh` marks the gates row PART, so a Mac's run can't pass with G7f unjudged. | `a_timing_is_judged_on_the_reference_mac_only`, `the_memory_rules_fail_unmeasured`; check.sh's verdict tried on fake logs (PART there, PASS on the reference Mac and Linux, FAIL when a run fails) | `2f0c4aa` |
+| fit-F5 (low): on such a Mac the advice came first, and the summary's 220 characters cut the numbers off. | Numbers first, advice after. | `a_timing_is_judged_on_the_reference_mac_only` checks a 220-byte cut; with the advice first it fails | `c2ed4a9` |
+| fit-F9 (low): the store's "layout" line said "passes" or "the owner decides" when only the music differed. | `layout()` uses the rule's own checks, and says nothing was compared without the same music. | `the_layout_is_judged_only_on_the_same_music`; with the old line it fails | `351defa` |
+| fit-F6 (low): `--help` still said part 2 judged "its p99 playing, against HEAD's" and named no runner. | Both entries: by the mean, against S measured in the same run; they need `$M2_GATES_S`. | `the_help_says_what_g7f_needs`; with the old help it fails | `5e77e81` |
+| fit-F1 (medium): docs said S's records were no longer needed, though their machine lines decide where G7f is judged. | The gates README, both records and the runner's README say so, and to keep both records whole. | docs | `eb8b80f` |
+| fit-F2 (medium): the pasted summary dropped "S as recorded", which the lead needs near a bound, and the build and footprint lines. | The grep keeps all three. | tried on a fake log: before, none kept; after, all three | `ea64e5b` |
+| fit-F7 (low): check.sh's header line ran to 133 characters; "the old engine they compare with"; "3 minutes" said twice; gates.txt read as 7 minutes for both parts. | Rewrapped; "G7f compares with"; once; "each part about 8 minutes". | text | `8daea12` |
+| fit-F3 (low), with the docs part of the turn order: "adds no bias of its own" rounded the A/A control down. | The runner's README gives every A/A run (below), and how far one run can be off. | docs | `2e5c7f5` |
+| fit-F4 (low): RENDER-32's Today line had hard sentences and two "On Linux" parts. | Short sentences; today's numbers in one place; the rest marked as history. | text | `0c9ef33` |
+| gate-pinned-only-headline (low): the Today line gave only pinned numbers, though the Mac can't pin. | It gives an unpinned run too, and how far one run can be off. | text | `d2b3eb6` |
+
+Two more: `37250bd` (the gates row usually takes 22 minutes now) and `a894448` (a flaky server test,
+below). 98fc493's message says the longer turns add "about 2 minutes" on the Mac; it is about 3 (1.5 a
+part). Not amended.
+
+### How far off the method itself can be (the A/A control)
+
+The app's own engine on both sides, in m2-gates and in a runner built from the same code. It should
+give 0. Linux, by the mean, 5 rounds a run:
+
+| Turns | Held on one die | Not held |
+|---|---|---|
+| Today's: a block | −0 µs (−2 to +1) | |
+| Today's: a callback | +9 (+1 to +18); +14 (+4 to +17) | +73 (−105 to +152) |
+| 1 s turns, every order end to end: a block | −4; +2 | +11; −6 |
+| The same: a callback | −10; +7 | +130; +50 |
+| Scratch tries (no side following itself, 1 s turns): a callback | −145 (nothing left out); −53, +20 (2 left out); +38, +16 (the runner started again each round) | |
+
+Blocks come out at 0 within a few µs. Callbacks don't always: a whole process runs a little faster or
+slower, all run long, and the 5 rounds share the same processes, so they can't average it out. Starting
+the runner again each round spread S's rounds by about 60 µs, as that would. So one run's callback
+result is good to about ±150 µs, and a block result to about ±30 µs (not held). The Mac's is
+unmeasured. This is new: it was found while fixing the turn order.
+
+### The checks
+
+All on Linux, at `a894448` unless said.
+
+| Check | Result |
+|---|---|
+| `ci/check.sh`, the first, at `37250bd` (`~/m2-runs/check-s7-sp1-retry`) | PASS, but 1 passed only on a retry: `a_plugin_that_keeps_failing_is_started_again_once`. Its catch-up rounds were skipped while the actor was busy. Fixed in `a894448` (stress: 33 of 200 runs failed before, 0 of 200 after). |
+| `ci/check.sh` (`~/m2-runs/check-s7-sp1`, 8 min) | **PASS**, every row: 910 Rust tests, 0 failed; clippy; std kernels; std.wasm; mac lint; 29/29 browser suites; 8 of 8 renders; repo unchanged. Nothing passed only on a retry. |
+| `ci/check.sh` (`~/m2-runs/check-s7-sp2`, 8 min) | **PASS**, the same. |
+| `ci/check.sh --gates` (`~/m2-runs/check-s7-spg`, 25 min) | **PASS**, every row: the same, plus "old engine (S)" (built from a clean copy of `8aa301e`) and the gates, all 6 runs `ci/gates.txt` names. G11 p95 9.0 to 9.2 ms; G7a heard at p95 110 ms. G7f, printed as PLAT-1 skips: a block +23 µs (+15 to +59), would pass; a callback +97 µs (+56 to +201), would pass; the build 215 ms against S's 183. The slowest activation block 4,026 µs (bound 5,333). The gates row took 17 minutes. |
+| The p16 render (release `m2 render` of the reference example's p16, as the build notes made it) | `ebc87e0b…` at `a894448`: the same file (46 s) |
+| m2-gates' own tests (in the rust tests row) | 31 in the library, 1 in the binary, 6 in the harness: all pass. rustfmt is clean on every changed file. |
+
+### Linux's numbers (information only, PLAT-1)
+
+G7f by hand, at `8daea12` (the timed code as at `a894448`), the app's layout against S by the mean:
+
+| Run | A block (bound 80) | A callback (bound 320) | P1 against S | The app's layout against P1 |
+|---|---|---|---|---|
+| Held on the 96 MB-cache die | +14 µs (+9 to +14) | +55 µs (+52 to +60) | −11; −45 | +25; +97 |
+| Not held | +43 (+9 to +59) | +78 (+3 to +292) | +16; +57 | −1; +27 |
+| `ci/check.sh --gates`, not held | +23 (+15 to +59) | +97 (+56 to +201) | +7; −2 | +13; +63 |
+
+The same music in every round: callbacks `c642ecd65553fc29`, blocks `78490957822afb29` (new hashes:
+the judged steps are other steps now), peak −1.0 dB. The slowest activation block: 2,289 µs held,
+4,026 µs in the check (bound 5,333). Each turn's first callback cost 5.2 to 7.1 ms over the mean. The
+first judged one, against S's: −20 µs (the app's layout) and −3 (P1) held; −71 and −121 in the check,
+not held. G7f takes 6 to 7 minutes a part here now, about a minute more than before.
+
+### The honest Mac estimate
+
+Only the Mac's run decides. What we know:
+- The Mac measured O1 (the app's layout over P1) at +141 µs a callback and +41 a block, with the old
+  turns. On Linux, held on one die, today's turns give O1 about 20 to 40% more than the old ones did
+  (+97, +108 and +131 a callback in three runs, against +73 to +92), as the old turns hid part of it.
+  So on the Mac expect O1 about +150 to +230 a callback, most likely +180, and about +47 a block.
+- Cut 1 took P1 from +122 to +174 µs over S down to −45 on Linux, and saved more on the smaller-cache
+  die. The Mac's caches are smaller still. From the Mac's old +187, expect P1 against S about −140 to
+  −10 µs a callback.
+- So a callback: about +110 µs (likely +30 to +220), against 320. A block: about +30 µs (likely +10 to
+  +60), against 80.
+- One run can be off by about ±150 µs a callback and ±30 µs a block (the A/A control on Linux). If part 2
+  lands above +170, or part 1 above +50, run it again before deciding.
+- If it still fails: cut 3 (one Store per voice pool, about −118 µs a callback more on Linux) goes to the
+  owner, as it changes RENDER-32's words.
+
+### Left, and why
+
+- The Mac run: only it judges G7f.
+- Cut 3 and cut 4: held, as above. Cut 2: dropped (`~/m2-runs/speed/build/cut2.diff`).
+- The method's per-process error (the A/A table): G7f could start every side in a fresh process each
+  round, so the median samples 5 placements. Not done: it needs a runner for HEAD's engine too, a bigger
+  change, and the Mac's error is unmeasured. Worth it if the Mac's result lands near a bound.
+- S's footprint and its drop beside another thread still come from `store-S.txt` (the runner can't use
+  m2-os, which S doesn't have).
+- design-7 §11.3's "Decided 2026-10-15" paragraph still says G7f adds P1's recorded cost: it is the record
+  of that decision, left as it is.
+- HANDOFF's "Open owner decisions" row on the mean against the p99 stays: the owner's choice isn't
+  recorded anywhere else.
+- Scratch: logs and scripts are kept in `~/m2-runs/speed/{sg,prof,design,attack,build,review-*,finish}`;
+  every scratch `target/` is deleted.
