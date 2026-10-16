@@ -75,8 +75,8 @@ pub fn value(values: &[(String, f64)], key: &str) -> Option<f64> {
 }
 
 /// The judged line of a G7f part: the median of the pairs' mean differences from S against
-/// `bound`, then the p99's, printed. The gates' summary keeps 220 characters of a line, so whatever
-/// [`timed`] adds comes after it.
+/// `bound`, then the p99's, printed. The gates' summary keeps 220 bytes of a line, so whatever
+/// [`timed`] adds, wherever it is, comes after it.
 pub fn judge([mean, p99]: [&Diffs; 2], bound: f64) -> (bool, String) {
     (mean.median() <= bound, format!("{mean} over S, measured here (bound {bound:.0}). p99, not judged: {p99}"))
 }
@@ -127,7 +127,7 @@ pub fn timed(out: &mut Outcome, name: &str, place: &Place, (pass, detail): (bool
             false
         }
         Place::Elsewhere => {
-            out.skip(name, format!("{would}, not judged off the reference Mac (PLAT-1): {detail}"));
+            out.skip(name, format!("{would}: {detail}; not judged off the reference Mac (PLAT-1)"));
             false
         }
     }
@@ -412,8 +412,8 @@ mod tests {
         assert_eq!(
             said,
             [
-                (Verdict::Skip, "would fail, not judged off the reference Mac (PLAT-1): +109 µs"),
-                (Verdict::Skip, "would pass, not judged off the reference Mac (PLAT-1): 220 ms"),
+                (Verdict::Skip, "would fail: +109 µs; not judged off the reference Mac (PLAT-1)"),
+                (Verdict::Skip, "would pass: 220 ms; not judged off the reference Mac (PLAT-1)"),
                 (Verdict::Fail, "+356 µs"),
                 (Verdict::Pass, "+200 µs"),
                 (
@@ -422,13 +422,18 @@ mod tests {
                 ),
             ]
         );
-        // The summary keeps 220 bytes of a line: the numbers come first, the advice after.
-        let mut out = Outcome::new("G7f", "RENDER-32", "a test");
-        let judged = judge([&Diffs(vec![100.0, 80.0, 120.0, 95.0, 110.0]), &Diffs(vec![-137.0, -235.0, -57.0, -100.0, -150.0])], 320.0);
-        timed(&mut out, "callback within S's + 320 µs, by the mean", &Place::OtherMac("not the Mac S's records name"), judged);
-        let line = format!("{out}").lines().nth(1).unwrap().to_string();
-        let kept = String::from_utf8_lossy(&line.as_bytes()[..220]).to_string();
-        assert!(kept.contains("would pass: +100 µs (5 pairs, +80 to +120) over S, measured here (bound 320). p99, not judged: -137 µs (5 pairs, -235 to -57)"), "{kept}");
+        // The summary keeps 220 bytes of a line: the numbers come first, then where it isn't judged,
+        // on another Mac and elsewhere alike. The numbers of the Linux check at a894448 lost their
+        // end when "not judged off the reference Mac" came first.
+        let judged = judge([&Diffs(vec![97.0, 56.0, 201.0, 90.0, 110.0]), &Diffs(vec![-614.0, -797.0, 6.0, -700.0, -500.0])], 320.0);
+        for place in [Place::OtherMac("not the Mac S's records name"), Place::Elsewhere] {
+            let mut out = Outcome::new("G7f", "RENDER-32", "a test");
+            timed(&mut out, "callback within S's + 320 µs, by the mean", &place, judged.clone());
+            let line = format!("{out}").lines().nth(1).unwrap().to_string();
+            let kept = String::from_utf8_lossy(&line.as_bytes()[..220.min(line.len())]).to_string();
+            let numbers = "would pass: +97 µs (5 pairs, +56 to +201) over S, measured here (bound 320). p99, not judged: -614 µs (5 pairs, -797 to +6)";
+            assert!(kept.contains(numbers), "{place:?}: {kept}");
+        }
     }
 
     // PLAT-1: the reference Mac is the machine S's records name, through an OS update too; a Mac they

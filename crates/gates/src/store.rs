@@ -694,12 +694,17 @@ mod tests {
         assert_eq!(skipped.len(), 3, "{out}");
         assert_eq!(skipped[0].0, "block within S + 80 µs, by the mean");
         assert!(
-            skipped[0].1.starts_with("would fail, not judged off the reference Mac (PLAT-1): +109 µs (3 pairs, +109 to +109)"),
+            skipped[0].1.starts_with("would fail: +109 µs (3 pairs, +109 to +109)")
+                && skipped[0].1.ends_with("; not judged off the reference Mac (PLAT-1)"),
             "{out}"
         );
         assert_eq!(skipped[1], ("footprint within S + 64 MB", "another machine"));
         assert_eq!(skipped[2].0, "full build within 1.5 × S");
-        assert!(skipped[2].1.starts_with("would fail, not judged off the reference Mac (PLAT-1): 151 ms against S's 100 ms"), "{out}");
+        assert_eq!(
+            skipped[2].1,
+            "would fail: 151 ms against S's 100 ms, each its process's first, measured here; not judged off the reference Mac (PLAT-1)",
+            "{out}"
+        );
         assert_eq!(out.checks.iter().filter(|c| c.verdict == Verdict::Pass).count(), 1, "{out}");
         assert_eq!(out.verdict(), Verdict::Pass, "nothing failed: {out}");
         // PLAT-1: on a Mac S's record doesn't name, the same three are printed, not judged, as on any
