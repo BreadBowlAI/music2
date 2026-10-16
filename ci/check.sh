@@ -542,7 +542,7 @@ if [ -n "$GATES" ]; then
     record "old engine (S)" FAIL "it didn't build, so G7f can't run: see gates-s.log"
     echo "old engine (S): $(grep -m1 -E '^build\.sh: |^error' "$OUT/gates-s.log" | cut -c1-140)" >> "$OUT/failed"
   fi
-  begin gates "20 min"
+  begin gates "22 min"
   # ci/gates.txt: one m2-gates run a line; # starts a comment.
   grep -v -e '^#' -e '^[[:space:]]*$' ci/gates.txt > "$SCR/gates"
   bad=
