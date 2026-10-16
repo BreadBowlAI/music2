@@ -174,9 +174,11 @@ with nothing "passed only on a retry". In the gates part:
   about ±30 µs. Above +50, one more run.
 - The "old engine (S)" row. It builds S on the Mac for the first time (Linux only type-checked it for
   macOS). If it fails, the gates can't run G7f, and the lead reads `gates-s.log` in the logs.
-- The first line and the gates row say PART, or there is an `info machines:` line: the Mac's name differs from the two
-  records written by hand. Nothing else is wrong then: the lead copies the printed `machine:` line into
-  `crates/gates/store-S.txt` and `callback-S.txt`, and asks for one more run.
+- The first line and the gates row say PART, or there is an `info machines:` line: the Mac's name differs from
+  the two records written by hand. Nothing else is wrong then. The gates part's first line names the Mac
+  (`machine: …`): the lead copies what follows `machine: ` over the `machine=` value of the three record lines
+  (`store-record` and `store-p1` in `crates/gates/store-S.txt`, `callback-record` in `callback-S.txt`), and asks
+  for one more run.
 - Anything else that fails is new.
 
 **Then a check by ear** (about 10 minutes; no test can do it, as the tests play no sound):
@@ -200,7 +202,8 @@ numbers. If a row fails, the lead fixes it on Linux, checks the mac lint, and as
 `~/m2-check/<commit>.tgz` on the Mac if needed.
 
 **What the lead checks in the pasted lines:**
-- The gates part's second line reads `machine: MacBookPro18,1, macOS …, Apple M1 Pro, aarch64, 10 threads`.
+- The gates part's first line reads `machine: MacBookPro18,1, macOS …, Apple M1 Pro, aarch64, 10 threads`: the Mac S's
+  records name. Then there is no `info machines:` line, and no G7f line says `(PLAT-1)`.
 - G7f's two "the same music" lines say ok: the app's layout, P1 and S played the same bits.
 - "S as recorded": S measured now, beside S's record of 2026-10-14 (a mean of 8,936 µs a callback). Each turn's
   cold first half second is left out of the mean now, so the two should be close (the judged callbacks now spread

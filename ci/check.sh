@@ -572,16 +572,18 @@ if [ -n "$GATES" ]; then
   else
     record gates FAIL "$bad: see gates.log"
   fi
-  # Each run, its verdicts, and each judged check with its numbers (p95 or p99, or the CPU as a
-  # share of a core), so a green run's timings can be recorded from the summary alone; and each
+  # First the machine m2-gates names, once: only on the one S's records name are G7f's timings
+  # judged, and on a Mac they don't name it is the line to copy into them (PLAT-1). Then each run,
+  # its verdicts, and each judged check with its numbers (p95 or p99, or the CPU as a share of a
+  # core), so a green run's timings can be recorded from the summary alone; and each
   # comparison with a record that isn't from this machine, so not judged (PLAT-1), with the two
   # machines, so a record's machine can be corrected from the summary alone too. G7f's proof that
   # the app and S played the same music, and what it printed beside its verdict: P1 against S
   # (step 7 with wasmtime's default layout), the app's layout against P1, and what starting a turn
-  # cost each side (the steps it leaves out); S measured now beside S's record (on the reference Mac
-  # only: if the two differ by much, doubt the runner first); and the build and footprint checks,
-  # whose ok lines have no p99.
-  grep -E '^=== |^(PASS|FAIL|SKIP)  |^      FAIL  |^      ok    .*(p95|p99|of a core)|^      skip  .*\(PLAT-1\)|^      info  machines: |^      ok    the same music|^      info  (block|callback), (P1 against S|the app.s layout against P1|starting a turn)|^      info  S as recorded: |^      ok    (full build within|footprint within) ' "$OUT/gates.log" 2> /dev/null |
+  # cost each side (the steps it leaves out, and whether any is left in the judged ones); S measured
+  # now beside S's record (on the reference Mac only: if the two differ by much, doubt the runner
+  # first); and the build and footprint checks, whose ok lines have no p99.
+  { grep -m1 '^machine: ' "$OUT/gates.log"; grep -E '^=== |^(PASS|FAIL|SKIP)  |^      FAIL  |^      ok    .*(p95|p99|of a core)|^      skip  .*\(PLAT-1\)|^      info  machines: |^      ok    the same music|^      info  (block|callback), (P1 against S|the app.s layout against P1|starting a turn)|^      info  S as recorded: |^      ok    (full build within|footprint within) ' "$OUT/gates.log"; } 2> /dev/null |
     cut -c1-220 > "$OUT/gates.sum"
 fi
 
