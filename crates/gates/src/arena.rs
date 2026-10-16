@@ -88,8 +88,7 @@ impl Side for Here {
         Ok(())
     }
 
-    fn turn(&mut self, lead: usize, n: usize) -> Result<Vec<f64>> {
-        self.warm(lead)?;
+    fn turn(&mut self, n: usize) -> Result<Vec<f64>> {
         let mut times = Vec::with_capacity(n);
         for _ in 0..n {
             times.push(fill(&mut self.d, &mut self.buf));
