@@ -7,13 +7,14 @@
 //! rounds of three renderers taking turns over the same music: the app's layout and step 7's first
 //! layout, P1 (4 GiB reserved per memory, unchecked), in this process, and S, HEAD `8aa301e`, one
 //! `Store` per renderer, in its runner's (`baseline`), which also times S's first build. Each round,
-//! the three render the same bits, which the gate checks. The drop is measured in each round for
-//! the app's layout and P1, each while an audio-like thread renders beside it.
+//! the three render the same bits, and not silence, which the gate checks. The drop is measured in
+//! each round for the app's layout and P1, each while an audio-like thread renders beside it.
 //!
 //! What the runner can't measure, S's memory, comes from S's record, `store-S.txt` beside this
 //! crate's manifest or `$M2_STORE_S`, with P1's drop against S's from the same campaign; every run
 //! prints its own record line (`store-record …`), which is what that file holds. A record names its
-//! machine, and is used only on the same machine (PLAT-1).
+//! machine, and is used only on the same machine (PLAT-1). The timings are judged only there, the
+//! reference Mac; on another Mac they fail, saying what to do, and elsewhere they are printed.
 //!
 //! The rule (§11.3), against S:
 //! - the block time is worse by no more than 80 µs, 3% of a 2.67 ms block, measured here. The rule
@@ -42,7 +43,7 @@ use m2_runtime::{BLOCK, Renderer, Transport};
 
 use crate::baseline::{Runner, wire::Heard};
 use crate::gates::Opts;
-use crate::paired::{Diffs, Side, in_turns, judge, timed};
+use crate::paired::{Diffs, Place, Side, in_turns, judge, not_the_reference, timed};
 use crate::report::{Outcome, same_machine};
 use crate::{Lab, songs};
 
@@ -200,23 +201,24 @@ fn needed(raises: &Diffs, recorded: f64) -> bool {
 
 /// S where this run judges against it: its first build, measured here, in ms, and its record from
 /// this machine for what its runner can't measure, its memory, or why there is none (PLAT-1). The
-/// record names the reference Mac: only there are the timings judged.
+/// record names the reference Mac: only there are the timings judged (`place`).
 struct OfS {
     build_ms: f64,
     record: Result<Record, String>,
+    place: Place,
 }
 
 /// The rule (§11.3) on `rec`, and on `[mean, p99]`, the app's layout's block times against S's,
 /// pair by pair: each check into `out`, and whether all passed. The block time and the build are
 /// judged only on the machine S's record names, the reference Mac, and printed elsewhere; the
-/// footprint is compared with that record only there too, else skipped with why (PLAT-1). The
+/// footprint is compared with that record only there too, else skipped with why (PLAT-1). On a Mac
+/// the record doesn't name, all three fail, saying what to do: a Mac's run is the reference run. The
 /// memory rules fail when the memory wasn't measured (`memory`: before and after one renderer;
 /// `with_two`: with two renderers), whatever S is: they never pass unmeasured.
 fn rule(out: &mut Outcome, rec: &Record, [mean, p99]: [&Diffs; 2], s: &OfS, memory: bool, with_two: bool) -> bool {
     // The rule bounds the p99 block, but even the pairs' p99 moves by more than 80 µs: the mean is
     // judged with the same bound, and the p99's difference printed (`paired`).
-    let on_reference = s.record.is_ok();
-    let mut pass = timed(out, "block within S + 80 µs, by the mean", on_reference, judge([mean, p99], 80.0));
+    let mut pass = timed(out, "block within S + 80 µs, by the mean", &s.place, judge([mean, p99], 80.0));
     let footprint = "footprint within S + 64 MB";
     pass &= match (memory, &s.record) {
         (false, _) => out.check(footprint, false, UNMEASURED),
@@ -225,10 +227,13 @@ fn rule(out: &mut Outcome, rec: &Record, [mean, p99]: [&Diffs; 2], s: &OfS, memo
             rec.footprint_mb <= r.footprint_mb + 64.0,
             format!("{:.0} MB against S's {:.0} MB, as recorded on this machine", rec.footprint_mb, r.footprint_mb),
         ),
-        (true, Err(why)) => {
-            out.skip(footprint, why);
-            false
-        }
+        (true, Err(why)) => match s.place {
+            Place::OtherMac(why) => out.check(footprint, false, not_the_reference(why)),
+            _ => {
+                out.skip(footprint, why);
+                false
+            }
+        },
     };
     // Against the process's own limit, so judged on any machine.
     let side = "2 renderers side by side, reserving at most 25% of the address space";
@@ -243,7 +248,7 @@ fn rule(out: &mut Outcome, rec: &Record, [mean, p99]: [&Diffs; 2], s: &OfS, memo
         }
     };
     let build = format!("{:.0} ms against S's {:.0} ms, each its process's first, measured here", rec.build_ms, s.build_ms);
-    pass &= timed(out, "full build within 1.5 × S", on_reference, (rec.build_ms <= 1.5 * s.build_ms, build));
+    pass &= timed(out, "full build within 1.5 × S", &s.place, (rec.build_ms <= 1.5 * s.build_ms, build));
     pass
 }
 
@@ -347,6 +352,7 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     // over the same music, so what disturbs one disturbs the others alike (RENDER-32).
     let p1 = crate::load_std_laid_out(Layout::P1)?;
     let (mut runs, mut heard): ([Vec<Vec<f64>>; 3], Vec<[Heard; 3]>) = Default::default();
+    let mut peak = 0.0f32;
     let mut drops: [Vec<Dropped>; 2] = Default::default();
     let (mut s_drops, mut class) = (vec![], None);
     for i in 0..ROUNDS {
@@ -355,6 +361,7 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         s.renderer(&dir, FROM_SECONDS)?;
         let times = in_turns(&mut [&mut app, &mut old, &mut s], WARM, BLOCKS, TURN, i)?;
         heard.push([app.heard()?, old.heard()?, s.heard()?]);
+        peak = peak.max(app.peak);
         s_drops.push(s.drop_it()?);
         out.info(
             format!("round {}", i + 1),
@@ -377,7 +384,7 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         drops[1].push(d_old);
     }
     drop(s);
-    let (same, said) = crate::paired::same_music(&heard);
+    let (same, said) = crate::paired::same_music(&heard, peak);
     out.check("the same music: every renderer's timed blocks the same bits", same, said);
     let app = Run::median(&runs[0]);
     (rec.mean_us, rec.p99_us, rec.max_us) = (app.mean, app.p99, app.max);
@@ -420,6 +427,7 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     let path =
         std::env::var_os("M2_STORE_S").map_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("store-S.txt"), Into::into);
     let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let place = Place::of(Record::parse(&text).map(|r| r.machine).as_deref(), &rec.machine);
     let record = match Record::parse(&text) {
         None => Err(format!("no record of layout S in {}", path.display())),
         Some(r) if !same_machine(&r.machine, &rec.machine) => {
@@ -433,7 +441,7 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         &mut out,
         &rec,
         [&mean, &p99],
-        &OfS { build_ms: first.build_ms, record },
+        &OfS { build_ms: first.build_ms, record, place: place.clone() },
         measured.is_some(),
         measured.is_some() && two.is_some(),
     );
@@ -450,10 +458,13 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     let failed = out.checks.iter().any(|c| c.verdict == crate::report::Verdict::Fail);
     out.info(
         "layout",
-        match (pass, failed) {
-            (true, _) => "the app's layout passes the rule (RENDER-32)",
-            (false, true) => "the app's layout fails the rule (§11.3): the owner decides",
-            (false, false) => "not judged in full here: only the reference Mac, which S's record names, judges it (§11.3, PLAT-1)",
+        match (pass, failed, place) {
+            (true, ..) => "the app's layout passes the rule (RENDER-32)".to_string(),
+            (false, _, Place::OtherMac(why)) => format!("not judged: {}", not_the_reference(why)),
+            (false, true, _) => "the app's layout fails the rule (§11.3): the owner decides".to_string(),
+            (false, false, _) => {
+                "not judged in full here: only the reference Mac, which S's record names, judges it (§11.3, PLAT-1)".to_string()
+            }
         },
     );
     Ok(out)
@@ -494,6 +505,8 @@ struct Blocks {
     /// The next block's index: the engine clock is `k * BLOCK`.
     k: usize,
     heard: Heard,
+    /// The loudest sample of its timed blocks.
+    peak: f32,
 }
 
 impl Blocks {
@@ -502,7 +515,7 @@ impl Blocks {
         // Live: non-finite samples silenced, as the engine plays.
         r.set_strict(false);
         r.set_transport(Transport::starting((FROM_SECONDS * song.rate as f64).round() as u64));
-        Ok(Blocks { r, k: 0, heard: Heard::default() })
+        Ok(Blocks { r, k: 0, heard: Heard::default(), peak: 0.0 })
     }
 }
 
@@ -522,6 +535,7 @@ impl Side for Blocks {
             let out = self.r.render_block((self.k * BLOCK) as u64)?;
             times.push(t.elapsed().as_secs_f64() * 1e6);
             self.heard.add_frames(out);
+            self.peak = out.iter().fold(self.peak, |m, f| m.max(f[0].abs()).max(f[1].abs()));
             self.k += 1;
         }
         Ok(times)
@@ -624,7 +638,10 @@ mod tests {
             machine: here,
             ..Record::default()
         };
-        let of_s = |record: Result<Record, String>| OfS { build_ms: 100.0, record };
+        let of_s = |record: Result<Record, String>| {
+            let place = if record.is_ok() { Place::Reference } else { Place::Elsewhere };
+            OfS { build_ms: 100.0, record, place }
+        };
         let memory = ["footprint within S + 64 MB", "2 renderers side by side, reserving at most 25% of the address space"];
         let (mean, p99) = (Diffs(vec![10.0, 12.0, 8.0]), Diffs(vec![-300.0, 20.0, 250.0]));
         for record in [Ok(s.clone()), Err("recorded, not judged: S's record is from another machine (PLAT-1)".to_string())] {
@@ -658,6 +675,24 @@ mod tests {
         assert!(skipped[2].1.starts_with("would fail, not judged off the reference Mac (PLAT-1): 151 ms against S's 100 ms"), "{out}");
         assert_eq!(out.checks.iter().filter(|c| c.verdict == Verdict::Pass).count(), 1, "{out}");
         assert_eq!(out.verdict(), Verdict::Pass, "nothing failed: {out}");
+        // PLAT-1: on a Mac S's record doesn't name, the same three fail, never pass unjudged, and say
+        // how to make that Mac the reference; the 25% rule is still judged.
+        let mut out = Outcome::new("G7f store", "RENDER-32", "a test");
+        let other = OfS { build_ms: 100.0, record: Err("another machine".into()), place: Place::OtherMac("not the Mac S's records name") };
+        assert!(!rule(&mut out, &measured, [&mean, &p99], &other, true, true), "{out}");
+        let failed: Vec<(&str, &str)> =
+            out.checks.iter().filter(|c| c.verdict == Verdict::Fail).map(|c| (c.name.as_str(), c.detail.as_str())).collect();
+        assert_eq!(failed.len(), 3, "{out}");
+        assert_eq!(failed[0].0, "block within S + 80 µs, by the mean");
+        assert!(
+            failed[0].1.starts_with("not the Mac S's records name: if this is the reference Mac, copy its machine line into "),
+            "{out}"
+        );
+        assert!(failed[0].1.contains("; would pass: +10 µs (3 pairs, +8 to +12)"), "{out}");
+        assert_eq!(failed[1].0, "footprint within S + 64 MB");
+        assert_eq!(failed[2].0, "full build within 1.5 × S");
+        assert_eq!(out.checks.iter().filter(|c| c.verdict == Verdict::Pass).count(), 1, "the 25% rule: {out}");
+        assert_eq!(out.verdict(), Verdict::Fail);
 
         // RENDER-32, rg-1: the pairs' mean is judged, the app's layout's cost over S, both measured
         // in this run: +10 passes the 80 µs bound, +81 doesn't. The p99's difference is printed,

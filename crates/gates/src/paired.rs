@@ -17,7 +17,7 @@ use std::fmt;
 use anyhow::{Result, bail};
 
 use crate::baseline::wire::Heard;
-use crate::report::Outcome;
+use crate::report::{Outcome, same_machine};
 
 /// The median: the middle value, or the mean of the two middle ones; 0 when there is none.
 pub fn median(v: &[f64]) -> f64 {
@@ -80,16 +80,50 @@ pub fn judge([mean, p99]: [&Diffs; 2], bound: f64) -> (bool, String) {
     (mean.median() <= bound, format!("{mean} over S, measured here (bound {bound:.0}). p99, not judged: {p99}"))
 }
 
-/// A G7f timing check (PLAT-1): judged on the reference Mac, the machine S's records name
-/// (`on_reference`); elsewhere printed with its numbers and what it would say, not judged. Whether
-/// it passed.
-pub fn timed(out: &mut Outcome, name: &str, on_reference: bool, (pass, detail): (bool, String)) -> bool {
-    if on_reference {
-        return out.check(name, pass, detail);
+/// Where a G7f timing is judged (PLAT-1).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Place {
+    /// The reference Mac, the machine S's records name: judged.
+    Reference,
+    /// A Mac those records don't name, and why. A Mac's check is the reference run, so its timings
+    /// fail rather than pass unjudged, and say what to do.
+    OtherMac(&'static str),
+    /// Any other machine: printed with what they would say, not judged.
+    Elsewhere,
+}
+
+impl Place {
+    /// Where a run on machine `now` stands, given the machine S's record names (`then`, none
+    /// without a record). Both are `m2_os::process::machine()` lines, whose second part is the OS.
+    pub fn of(then: Option<&str>, now: &str) -> Place {
+        let mac = now.split(", ").nth(1).is_some_and(|os| os.starts_with("macOS "));
+        match then {
+            Some(then) if same_machine(then, now) => Place::Reference,
+            Some(_) if mac => Place::OtherMac("not the Mac S's records name"),
+            None if mac => Place::OtherMac("no record of S"),
+            _ => Place::Elsewhere,
+        }
     }
+}
+
+/// What a check fails with on a Mac S's records don't name (`why`).
+pub fn not_the_reference(why: &str) -> String {
+    format!("{why}: if this is the reference Mac, copy its machine line into crates/gates/store-S.txt and callback-S.txt (PLAT-1)")
+}
+
+/// A G7f timing check (PLAT-1): judged on the reference Mac, the machine S's records name; on
+/// another Mac failed with what to do; elsewhere printed with its numbers and what it would say,
+/// not judged. Whether it passed.
+pub fn timed(out: &mut Outcome, name: &str, place: &Place, (pass, detail): (bool, String)) -> bool {
     let would = if pass { "would pass" } else { "would fail" };
-    out.skip(name, format!("{would}, not judged off the reference Mac (PLAT-1): {detail}"));
-    false
+    match place {
+        Place::Reference => out.check(name, pass, detail),
+        Place::OtherMac(why) => out.check(name, false, format!("{}; {would}: {detail}", not_the_reference(why))),
+        Place::Elsewhere => {
+            out.skip(name, format!("{would}, not judged off the reference Mac (PLAT-1): {detail}"));
+            false
+        }
+    }
 }
 
 /// One side of the turns: a player or a renderer, here or in S's runner.
@@ -149,17 +183,28 @@ pub fn in_turns(sides: &mut [&mut dyn Side], warm: usize, n: usize, turn: usize,
     Ok(times)
 }
 
+/// Output at or under this is silence (-80 dB): three sides that all played silence would play the
+/// same bits and time nothing worth comparing.
+const QUIET: f32 = 1e-4;
+
 /// Whether every side in every round played the same bits (the app's layout, P1 and S, in that
-/// order), and that said: the comparison means something only then.
-pub fn same_music(heard: &[[Heard; 3]]) -> (bool, String) {
+/// order), and not silence, the app's layout's loudest sample being `peak`; and that said: the
+/// comparison means something only then. The same bits, so S was as loud.
+pub fn same_music(heard: &[[Heard; 3]], peak: f32) -> (bool, String) {
     let first = heard.first().map(|h| h[0]).unwrap_or_default();
     let names = ["the app's layout", "P1", "S"];
     let other = heard.iter().enumerate().find_map(|(i, h)| (0..3).find(|&k| h[k] != first).map(|k| (i, k, h[k])));
+    let db = 20.0 * peak.max(1e-12).log10();
     match other {
         None if first.samples == 0 => (false, "nothing was heard".to_string()),
-        None => {
-            (true, format!("the same {} samples (hash {:016x}) from the app's layout, P1 and S in every round", first.samples, first.hash))
-        }
+        None if peak <= QUIET => (false, format!("the same {} samples from all three, but silence (peak {db:.0} dB)", first.samples)),
+        None => (
+            true,
+            format!(
+                "the same {} samples (hash {:016x}) from the app's layout, P1 and S in every round, peak {db:.1} dB",
+                first.samples, first.hash
+            ),
+        ),
         Some((i, k, h)) => (
             false,
             format!(
@@ -230,26 +275,36 @@ mod tests {
         a.add(&[0.25; 8]);
         b.add(&[0.25; 7]);
         b.add(&[f32::from_bits(0.25f32.to_bits() + 1)]);
-        let (same, said) = same_music(&[[a; 3], [a; 3]]);
+        let (same, said) = same_music(&[[a; 3], [a; 3]], 0.25);
         assert!(same, "{said}");
-        assert_eq!(said, format!("the same 8 samples (hash {:016x}) from the app's layout, P1 and S in every round", a.hash));
-        let (same, said) = same_music(&[[a; 3], [a, a, b]]);
+        assert_eq!(
+            said,
+            format!("the same 8 samples (hash {:016x}) from the app's layout, P1 and S in every round, peak -12.0 dB", a.hash)
+        );
+        let (same, said) = same_music(&[[a; 3], [a, a, b]], 0.25);
         assert!(!same);
         assert!(said.starts_with("round 2: S played 8 samples (hash "), "{said}");
-        assert_eq!(same_music(&[[Heard::default(); 3]]), (false, "nothing was heard".to_string()));
-        assert!(!same_music(&[]).0);
+        assert_eq!(same_music(&[[Heard::default(); 3]], 0.25), (false, "nothing was heard".to_string()));
+        assert!(!same_music(&[], 0.25).0);
+        // Three sides that all played silence play the same bits, and time nothing worth comparing.
+        let mut quiet = Heard::default();
+        quiet.add(&[0.0; 8]);
+        assert_eq!(same_music(&[[quiet; 3]], 0.0), (false, "the same 8 samples from all three, but silence (peak -240 dB)".to_string()));
+        assert!(!same_music(&[[a; 3]], 1e-4).0, "-80 dB is silence");
     }
 
     // PLAT-1, RENDER-32: off the reference Mac a G7f timing is printed with its numbers and what it
-    // would say, and judged nowhere else; there, it is judged.
+    // would say, and judged nowhere else; there, it is judged. On a Mac S's records don't name it
+    // fails, never passes unjudged, and says how to make that Mac the reference.
     #[test]
     fn a_timing_is_judged_on_the_reference_mac_only() {
         use crate::report::Verdict;
         let mut out = Outcome::new("G7f", "RENDER-32", "a test");
-        assert!(!timed(&mut out, "block", false, (false, "+109 µs".into())));
-        assert!(!timed(&mut out, "build", false, (true, "220 ms".into())));
-        assert!(!timed(&mut out, "callback", true, (false, "+356 µs".into())));
-        assert!(timed(&mut out, "callback", true, (true, "+200 µs".into())));
+        assert!(!timed(&mut out, "block", &Place::Elsewhere, (false, "+109 µs".into())));
+        assert!(!timed(&mut out, "build", &Place::Elsewhere, (true, "220 ms".into())));
+        assert!(!timed(&mut out, "callback", &Place::Reference, (false, "+356 µs".into())));
+        assert!(timed(&mut out, "callback", &Place::Reference, (true, "+200 µs".into())));
+        assert!(!timed(&mut out, "callback", &Place::OtherMac("not the Mac S's records name"), (true, "+20 µs".into())));
         let said: Vec<(Verdict, &str)> = out.checks.iter().map(|c| (c.verdict.clone(), c.detail.as_str())).collect();
         assert_eq!(
             said,
@@ -258,8 +313,29 @@ mod tests {
                 (Verdict::Skip, "would pass, not judged off the reference Mac (PLAT-1): 220 ms"),
                 (Verdict::Fail, "+356 µs"),
                 (Verdict::Pass, "+200 µs"),
+                (
+                    Verdict::Fail,
+                    "not the Mac S's records name: if this is the reference Mac, copy its machine line into crates/gates/store-S.txt and callback-S.txt (PLAT-1); would pass: +20 µs"
+                ),
             ]
         );
+    }
+
+    // PLAT-1: the reference Mac is the machine S's records name, through an OS update too; a Mac they
+    // don't name, or with no record, is another Mac; anything else is elsewhere.
+    #[test]
+    fn the_reference_mac_is_the_one_the_records_name() {
+        let mac = "MacBookPro18,1, macOS 26.6.2, Apple M1 Pro, aarch64, 10 threads";
+        let linux = "ASRockRack B665D4U-1L, Ubuntu 24.04.3 LTS, AMD Ryzen 9 7950X3D 16-Core Processor, x86_64, 32 threads";
+        assert_eq!(Place::of(Some(mac), mac), Place::Reference);
+        assert_eq!(Place::of(Some(mac), &mac.replace("26.6.2", "26.7")), Place::Reference, "an OS update");
+        let m2 = "Mac14,2, macOS 26.6.2, Apple M2, aarch64, 8 threads";
+        assert_eq!(Place::of(Some(mac), m2), Place::OtherMac("not the Mac S's records name"));
+        assert_eq!(Place::of(Some(mac), &mac.replace("10 threads", "8 threads")), Place::OtherMac("not the Mac S's records name"));
+        assert_eq!(Place::of(None, mac), Place::OtherMac("no record of S"));
+        assert_eq!(Place::of(Some(mac), linux), Place::Elsewhere);
+        assert_eq!(Place::of(None, linux), Place::Elsewhere);
+        assert_eq!(Place::of(Some(linux), linux), Place::Reference, "a record made here judges here");
     }
 
     // RENDER-32: every order sides can take, each side as often in each place.

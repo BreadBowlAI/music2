@@ -5,9 +5,9 @@
 //!   warm-up) with no edit, every callback timed, in 5 rounds of three players taking turns over
 //!   the same music: the app's layout (`m2_runtime::packages::Layout::P2`) and step 7's first, P1,
 //!   in this process, and S, HEAD `8aa301e`, the commit before step 7, in its runner's
-//!   (`baseline`). Each round, the three play the same bits, which the gate checks. Every run
-//!   prints its own record line (`callback-record …`, the app's layout's medians), and S's as
-//!   recorded in `callback-S.txt` on the same machine beside S's fresh numbers.
+//!   (`baseline`). Each round, the three play the same bits, and not silence, which the gate
+//!   checks. Every run prints its own record line (`callback-record …`, the app's layout's
+//!   medians), and S's as recorded in `callback-S.txt` on the same machine beside S's fresh numbers.
 //! - **The activation block:** ten edits, a delay added after t02's pluck and taken out again,
 //!   each prepared against what plays as the server prepares it. The callback that takes each one
 //!   in is one block long (128 frames), so its time is the activation block's own, and the ordinary
@@ -15,13 +15,13 @@
 //!
 //! The rule: the callback within S's + 320 µs (3% of a 10.7 ms callback, the owner's bound), the
 //! median of the rounds' differences, the app's layout minus S, both measured here, and judged only
-//! on the reference Mac, the machine `callback-S.txt` names (PLAT-1). The rule names
-//! the p99, but even paired it moves by far more than that between pairs, so the mean is judged
-//! and the p99's difference printed. What P1 costs over S (step 7 with wasmtime's default layout)
-//! and the app's layout over P1 (the owner's layout alone) are printed, not judged. And the slowest
-//! activation block under half the device buffer's period (5.3 ms), printed against the run's p99
-//! callback. The bound is on the block, not the 512-frame callback around it: on p50 a plain
-//! callback at S already takes about 8.8 ms.
+//! on the reference Mac, the machine `callback-S.txt` names (PLAT-1); on another Mac it fails, saying
+//! what to do, and elsewhere it is printed. The rule names the p99, but even paired it moves by far
+//! more than that between pairs, so the mean is judged and the p99's difference printed. What P1
+//! costs over S (step 7 with wasmtime's default layout) and the app's layout over P1 (the owner's
+//! layout alone) are printed, not judged. And the slowest activation block under half the device
+//! buffer's period (5.3 ms), printed against the run's p99 callback. The bound is on the block, not
+//! the 512-frame callback around it: on p50 a plain callback at S already takes about 8.8 ms.
 
 use std::time::Instant;
 
@@ -33,7 +33,7 @@ use m2_runtime::{BLOCK, Basis, Keep, PackageSet, Renderer};
 
 use crate::baseline::{Runner, wire::Heard};
 use crate::gates::Opts;
-use crate::paired::{Diffs, Side, in_turns, rank};
+use crate::paired::{Diffs, Place, Side, in_turns, rank};
 use crate::report::{Outcome, same_machine};
 use crate::signal::Summary;
 use crate::{Lab, Song};
@@ -66,6 +66,8 @@ struct Here {
     d: Driver,
     buf: Vec<f32>,
     heard: Heard,
+    /// The loudest sample of its timed callbacks.
+    peak: f32,
 }
 
 impl Here {
@@ -77,7 +79,7 @@ impl Here {
         player.open(r)?;
         player.seek(song.beat((from * song.rate as f64) as u64))?;
         player.play();
-        Ok(Here { _player: player, d, buf: vec![0.0; 2 * FRAMES], heard: Heard::default() })
+        Ok(Here { _player: player, d, buf: vec![0.0; 2 * FRAMES], heard: Heard::default(), peak: 0.0 })
     }
 }
 
@@ -94,6 +96,7 @@ impl Side for Here {
         for _ in 0..n {
             times.push(fill(&mut self.d, &mut self.buf));
             self.heard.add(&self.buf);
+            self.peak = self.buf.iter().fold(self.peak, |m, x| m.max(x.abs()));
         }
         Ok(times)
     }
@@ -135,11 +138,13 @@ pub fn arena(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     let per_second = song.rate as usize / FRAMES;
     let n = (SECONDS * per_second as f64) as usize;
     let (mut runs, mut heard): ([Vec<Vec<f64>>; 3], Vec<[Heard; 3]>) = Default::default();
+    let mut peak = 0.0f32;
     for i in 0..ROUNDS {
         let (mut app, mut old) = (Here::new(&lab.packages, &song, o.at)?, Here::new(&p1, &song, o.at)?);
         s.player(&dir, o.at, FRAMES)?;
         let times = in_turns(&mut [&mut app, &mut old, &mut s], per_second, n, TURN, i)?;
         heard.push([app.heard()?, old.heard()?, s.heard()?]);
+        peak = peak.max(app.peak);
         s.drop_it()?;
         let r: Vec<(f64, f64, f64)> = times.iter().map(|t| record(t)).collect();
         out.info(
@@ -154,7 +159,7 @@ pub fn arena(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         }
     }
     drop(s);
-    let (same, said) = crate::paired::same_music(&heard);
+    let (same, said) = crate::paired::same_music(&heard, peak);
     out.check("the same music: every player's timed callbacks the same bits", same, said);
     let med =
         |runs: &[Vec<f64>], f: fn((f64, f64, f64)) -> f64| crate::paired::median(&runs.iter().map(|t| f(record(t))).collect::<Vec<_>>());
@@ -181,8 +186,12 @@ pub fn arena(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     let path = std::env::var_os("M2_CALLBACK_S")
         .map_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("callback-S.txt"), Into::into);
     // That record names the reference Mac: only there is the callback judged (PLAT-1).
-    let recorded = parse(&std::fs::read_to_string(&path).unwrap_or_default()).filter(|(.., then)| same_machine(then, &machine));
-    if let Some((then99, then_mean, _)) = recorded {
+    let record = parse(&std::fs::read_to_string(&path).unwrap_or_default());
+    let place = Place::of(record.as_ref().map(|(.., then)| then.as_str()), &machine);
+    if let Some((.., then)) = record.as_ref().filter(|(.., then)| !same_machine(then, &machine)) {
+        out.info("machines", format!("S's record is from {then}; this run is on {machine}"));
+    }
+    if let Some((then99, then_mean, _)) = record.filter(|_| place == Place::Reference) {
         out.info(
             "S as recorded",
             format!(
@@ -196,7 +205,7 @@ pub fn arena(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     // The rule bounds the p99 callback, 3% of it (O2), but even the pairs' p99 moves by more than
     // that: the mean is judged with the same bound, and the p99's difference printed (`paired`).
     let judged = crate::paired::judge([&dmean, &d99], 320.0);
-    crate::paired::timed(&mut out, "callback within S's + 320 µs, by the mean", recorded.is_some(), judged);
+    crate::paired::timed(&mut out, "callback within S's + 320 µs, by the mean", &place, judged);
 
     // Ten edits on t02 while it plays, each prepared against what plays.
     let mut session = lab.session(&dir)?;
