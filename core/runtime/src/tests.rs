@@ -273,6 +273,41 @@ fn std_manifest_matches_its_kernels() {
     }
 }
 
+// O1, RENDER-32: every std kernel fits under the 32 MiB a kernel memory may grow to, at the highest
+// rate a project may have (384 kHz) and in stereo. Std's kernels take their memory as they start and
+// reset (delay lines and reverbs sized by the rate), so built, one block played and reset is the most
+// an instance ever holds. A kernel added later is checked too. Prints the one that holds the most.
+#[test]
+fn every_std_kernel_fits_its_memory_at_the_highest_rate() {
+    const RATE: f64 = 384_000.0;
+    let pk = std_packages();
+    let mut held: Vec<(usize, String)> = vec![];
+    for sig in pk.kernel_sigs() {
+        let inputs: Vec<Input> = sig.inputs.iter().map(|p| Input::Const(p.default.unwrap_or(0.0))).collect();
+        let node = FNode {
+            name: sig.id.clone(),
+            module: "t".into(),
+            src: None,
+            origin: None,
+            op: FOp::Const(0.0),
+            outputs: sig.outputs.iter().map(|_| Kind::Audio(2)).collect(),
+        };
+        let id = &sig.id;
+        let mut k = KernelInst::new(&pk, &node, id, 2, &inputs, RATE, 0).unwrap_or_else(|e| panic!("{id}: {e:#}"));
+        k.prewarm().unwrap_or_else(|e| panic!("{id}: {e:#}"));
+        k.process(BLOCK).unwrap_or_else(|e| panic!("{id}: {e:#}"));
+        k.reset().unwrap_or_else(|e| panic!("{id}: {e:#}"));
+        held.push((k.memory.data_size(&k.store), id.clone()));
+    }
+    assert!(held.len() >= 20, "{held:?}");
+    held.sort();
+    let mib = |b: usize| b as f64 / (1 << 20) as f64;
+    let (most, id) = held.last().unwrap();
+    println!("the most a std kernel holds at 384 kHz in stereo: {id}, {:.2} MiB of {} MiB", mib(*most), mib(KERNEL_MEMORY));
+    // At the cap, the kernel's next allocation fails: it crashes as it plays.
+    assert!(*most < KERNEL_MEMORY, "{id} holds {:.2} MiB at 384 kHz: all the {} MiB it may have", mib(*most), mib(KERNEL_MEMORY));
+}
+
 // Regression tests for bugs reported in review (2026-10-11).
 
 #[test]
