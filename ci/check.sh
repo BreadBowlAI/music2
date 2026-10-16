@@ -570,8 +570,10 @@ if [ -n "$GATES" ]; then
   # machines, so a record's machine can be corrected from the summary alone too. G7f's proof that
   # the app and S played the same music, and what it printed beside its verdict: P1 against S
   # (step 7 with wasmtime's default layout), the app's layout against P1, and what starting a turn
-  # cost each side (the steps it leaves out).
-  grep -E '^=== |^(PASS|FAIL|SKIP)  |^      FAIL  |^      ok    .*(p95|p99|of a core)|^      skip  .*\(PLAT-1\)|^      info  machines: |^      ok    the same music|^      info  (block|callback), (P1 against S|the app.s layout against P1|starting a turn)' "$OUT/gates.log" 2> /dev/null |
+  # cost each side (the steps it leaves out); S measured now beside S's record (on the reference Mac
+  # only: if the two differ by much, doubt the runner first); and the build and footprint checks,
+  # whose ok lines have no p99.
+  grep -E '^=== |^(PASS|FAIL|SKIP)  |^      FAIL  |^      ok    .*(p95|p99|of a core)|^      skip  .*\(PLAT-1\)|^      info  machines: |^      ok    the same music|^      info  (block|callback), (P1 against S|the app.s layout against P1|starting a turn)|^      info  S as recorded: |^      ok    (full build within|footprint within) ' "$OUT/gates.log" 2> /dev/null |
     cut -c1-220 > "$OUT/gates.sum"
 fi
 
