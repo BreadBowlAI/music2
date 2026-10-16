@@ -1226,7 +1226,7 @@ share one, as the skeptic said):
 | Finding | Fix | Test, or how it was shown | Commit |
 |---|---|---|---|
 | gate-turn-order-bias (medium): played in every order end to end, S never followed itself, while the app's layout and P1 each did one turn in six. On Linux that favoured the app's layout by about 20 µs a callback and made most of the printed p99 difference. The docs said "no bias". | The orders form a cycle where no side follows itself and each follows each other side as often. Every turn starts with a lead that is timed but not judged, sent in the same command. A look by position showed the cold start fades slowly (the app's layout's cost over S rose from about 0 to +60 µs a callback over a turn's first 50 callbacks, +11 µs a block over 200 blocks), so the lead is half a second (47 callbacks, 188 blocks) and turns are 2 s. Each part prints what a turn's start cost each side. | `starting_a_turn_favours_no_side` (a model of cold starts): with the old turns, S came out 27 µs slower than the same-cost app. | `98fc493`, `bac2c5b` |
-| rt-rt-2 (low): `18966cd` made G7f fail on a Mac the records don't name; PLAT-1 says every Mac must pass and other machines record their timings. | There it is printed, not judged, and says what to do; `ci/check.sh` marks the gates row PART, so a Mac's run can't pass with G7f unjudged. | `a_timing_is_judged_on_the_reference_mac_only`, `the_memory_rules_fail_unmeasured`; check.sh's verdict tried on fake logs (PART there, PASS on the reference Mac and Linux, FAIL when a run fails) | `2f0c4aa` |
+| rt-rt-2 (low): `18966cd` made G7f fail on a Mac the records don't name; PLAT-1 says every Mac must pass and other machines record their timings. | There it is printed, not judged, and says what to do; `ci/check.sh` marks the gates row PART. (Its first line still said PASS then: fixed after the review of the fixes, below.) | `a_timing_is_judged_on_the_reference_mac_only`, `the_memory_rules_fail_unmeasured`; check.sh's verdict tried on fake logs (PART there, PASS on the reference Mac and Linux, FAIL when a run fails) | `2f0c4aa` |
 | fit-F5 (low): on such a Mac the advice came first, and the summary's 220 characters cut the numbers off. | Numbers first, advice after. | `a_timing_is_judged_on_the_reference_mac_only` checks a 220-byte cut; with the advice first it fails | `c2ed4a9` |
 | fit-F9 (low): the store's "layout" line said "passes" or "the owner decides" when only the music differed. | `layout()` uses the rule's own checks, and says nothing was compared without the same music. | `the_layout_is_judged_only_on_the_same_music`; with the old line it fails | `351defa` |
 | fit-F6 (low): `--help` still said part 2 judged "its p99 playing, against HEAD's" and named no runner. | Both entries: by the mean, against S measured in the same run; they need `$M2_GATES_S`. | `the_help_says_what_g7f_needs`; with the old help it fails | `5e77e81` |
@@ -1259,6 +1259,46 @@ slower, all run long, and the 5 rounds share the same processes, so they can't a
 the runner again each round spread S's rounds by about 60 µs, as that would. So one run's callback
 result is good to about ±150 µs, and a block result to about ±30 µs (not held). The Mac's is
 unmeasured. This is new: it was found while fixing the turn order.
+
+### The review of the fixes
+
+**In short:** a review of the fixes above confirmed 13 findings: 2 medium, 11 low. Some are one thing
+seen from two sides. All are fixed, each in a commit of its own. The main one: on a Mac S's records
+don't name, `ci/check.sh` still said "music2 check: PASS" with G7f not judged. Now its first line says
+PART there, and it exits with 1.
+
+| Finding | Fix | Test, or how it was shown | Commit |
+|---|---|---|---|
+| vp-1 and part-verdict-still-pass (medium): a gates row PART still gave "music2 check: PASS" and exit status 0, though the docs said a Mac's run couldn't pass with G7f unjudged. | The first line says "PART: no row failed, but the gates row wasn't judged in full, so it isn't a pass", and the exit status is 1. | `~/m2-runs/speed/rv/scripts/test-verdict.sh` runs the script's own `summary()` on fake rows: before, PASS and 0; after, PART and 1. All PASS, a FAIL row, and no plugins give what they did. | `3320557` |
+| vp-2 (low): on such a Mac, a check judged there that failed (the 25% rule) gave "copy its machine line". | A failed check comes first: "the app's layout fails the rule". | `the_layout_is_judged_only_on_the_same_music` gains the other Mac; with the old order it fails | `041cf06` |
+| vp-3 (low): off the Mac, "not judged off the reference Mac" came before the numbers, so the summary's 220-byte cut took the end of the Linux callback line. | The numbers first, as on another Mac. | `a_timing_is_judged_on_the_reference_mac_only` cuts both places at 220 bytes, with the check's own numbers; before, it fails | `9ebcf21` |
+| vp-4 and handoff-machine-line-not-pasted (low): HANDOFF pointed at a `machine:` line the summary didn't keep. | The gates part starts with the machine m2-gates names, once. HANDOFF says what to copy, into which three record lines. | `test-machine.sh` on a fake log: before none, after one, first | `33812c4` |
+| round-is-2.5-cycles (low): a round was 2.5 cycles of the orders; and the cycle gave S the turns that come soonest after its own, 10 of its 15 a round. | The sides are renamed, so the app's layout and S wait alike; P1, not judged, comes back soonest. Turns are 155 callbacks and 625 blocks, so a round is 18 turns, three whole cycles. | `every_order_is_taken` checks the waits; `a_round_is_whole_cycles_of_turns` in each part; before, all three fail | `1b8ce99`, `c24460e` |
+| lead-sized-on-big-die-only, start-line-criterion-unsupported, handoff-starting-a-turn-threshold (low): half a second was sized held on the 96 MB die only. Not held, the line's one step read −42 to −121 µs, past HANDOFF's "a few tens", and one step can't say how long a start lasts. | The line gives each turn's first half over its second, against S's. The docs say where half a second was measured, and what Linux read. HANDOFF says what is far off. | `starting_a_turn_favours_no_side`: an S whose start lasts 20 callbacks past the lead reads −17, twice the 8.5 µs the means lean. The runs below. | `d4ee726`, `3f2a412` |
+| handoff-aa-range-held-only (low): HANDOFF's A/A range was the held runs' only. | It gives both, and about ±150 µs. | docs | `0f5e8f4` |
+| handoff-fixed-table-header (low): "none was seen in a check" headed a flake a check saw. | The header names it. | docs | `0f5e8f4` |
+| render32-only-footprint-from-record (low): RENDER-32 said only S's footprint comes from its record. | It names all three things G7f reads there. | docs | `6d004eb` |
+
+G7f by hand after the fixes, one run each, at `33812c4` (the gates as at `d4ee726`). The app's layout
+against S, by the mean, and the new starting line (each turn's first half over its second, against
+S's: the app's layout, then P1):
+
+| Run | A block (bound 80) | A callback (bound 320) | The starting line: blocks | callbacks |
+|---|---|---|---|---|
+| Held on the 96 MB die | +16 µs (+15 to +20) | +48 µs (+45 to +72) | −1, −0 | −6, −1 |
+| Held on the 32 MB die | | −208 (−257 to −76) | | −21, +60 |
+| Not held | +10 (+3 to +37) | +112 (+12 to +151) | +7, +8 | +4, +23 |
+| The A/A control, not held | −1 (−20 to +28) | −74 (−207 to −48) | −0, −10 | −48, −23 |
+
+- No start was seen left in the judged steps beyond about 25 µs a callback on the mean (half the A/A's
+  −48), and a few µs a block, held or not.
+- Held on the 96 MB die, the numbers are about as before the fixes (+14 and +55). On the 32 MB die the app's
+  layout came out 208 µs a callback under S: cut 1 saved more there.
+- The A/A control's −74 is inside the ±150 µs one run can be off by.
+- The same music in every round: callbacks `cdb85ca0bbb29381`, blocks `22cd1b3810530499` (new hashes:
+  the judged steps are other steps again).
+- Not done: a look by position not held, or on the 32 MB die. The new line stands in for it in every
+  run, the Mac's included.
 
 ### The checks
 

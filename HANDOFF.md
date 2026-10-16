@@ -41,7 +41,8 @@ Designs, all in `docs/designs/`:
 The step 7 review: `~/m2-runs/review-b1/findings.json` (19 confirmed findings, 5 dropped, each lens's summary).
 Every confirmed one is fixed; fit-3 (stale *Today* lines) was done in the finish. The speed work's plan, attack,
 profile and review: `~/m2-runs/speed/` (`plan.md`; `prof/results.md`; `review-rt`, `review-gate`; 11 confirmed
-findings, all fixed).
+findings, all fixed). A review of those fixes confirmed 13 more, all fixed (the build notes' "The review of the
+fixes"; the runs and scripts in `~/m2-runs/speed/rv/`).
 
 ## The owner's decisions
 
