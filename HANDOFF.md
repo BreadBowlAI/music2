@@ -271,7 +271,7 @@ Seen, not fixed:
 | `live3b` | "its release writes db(-32) into song.ts" | once, at load 45–74, before step 7; not seen since; watch for it |
 | `s5-knobs` | page detached after a double-click on a knob at its default (3 of 11 release runs) | from before the platform step; not seen in its checks |
 
-Fixed in step 7 (none was seen in a `ci/check.sh` run):
+Fixed in step 7 (of these, only `a_plugin_that_keeps_failing_is_started_again_once` was seen in a `ci/check.sh` run):
 
 | Test | Cause |
 |---|---|
@@ -307,9 +307,10 @@ Step 7:
   non-finite check at activations, −14 to −21 µs) are held: cut 3 changes RENDER-32's words, so it is the owner's
   call, and only if the Mac misses. Cut 2 (the instance inline) was dropped: it didn't save on both CPU dies here.
 - G7f's own error: with the app's engine on both sides (the A/A control), a callback came out anywhere from −145 to
-  +38 µs from one run to the next on Linux, a block within a few µs. A whole process runs a little faster or
-  slower, all run long. Starting every side in a fresh process each round would let the rounds average that out;
-  it needs a runner for HEAD's engine too. Unmeasured on the Mac.
+  +38 µs from one run to the next on Linux held on one die, and up to +130 not held, as `ci/check.sh` runs it (the
+  A/A table in `crates/gates/s/README.md`): about ±150 µs. A block came out within a few µs. A whole process runs a
+  little faster or slower, all run long. Starting every side in a fresh process each round would let the rounds
+  average that out; it needs a runner for HEAD's engine too. Unmeasured on the Mac.
 - S's footprint and its drop beside another thread still come from `store-S.txt`: S's runner can't use m2-os.
 - `machine()`'s thread count follows `taskset` and cgroups on Linux, so a pinned run names another machine.
 - Linux's footprint leaves out shared memory (`RssShmem`), so it isn't the Mac's `phys_footprint`.
