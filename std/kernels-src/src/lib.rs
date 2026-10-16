@@ -619,3 +619,18 @@ export!(limit, Limit);
 mod fx;
 
 pub use fx::{Bitcrush, Chorus, Compress, Eq3, Phaser, Reverb, Tremolo, Widen};
+
+// ---------------------------------------------------------------- instruments
+
+mod drums;
+mod fm;
+mod notes;
+mod synth;
+#[cfg(test)]
+mod testkit;
+mod voice;
+
+pub use drums::Drum;
+pub use fm::Fm;
+pub use notes::{DrumHit, HitCount, Mono, NoteCv};
+pub use synth::Synth;

@@ -8,9 +8,12 @@ import { choose, lfo, when } from "std/control";
 import { adsr, follow, gain, noise, osc, pan, svf, vca } from "std/dsp";
 import { bandpass, highpass, lowpass, notch } from "std/filter";
 import { bitcrush, chorus, compress, delay, drive, duck, eq3, limit, phaser, reverb, tremolo, widen } from "std/fx";
+import { drums } from "std/drums";
+import { fm } from "std/fm";
 import { bass, hat, kick, pad, pluck } from "std/instruments";
 import { add, blend, mtof, range, scale, sum, xrange } from "std/math";
 import { master, mixer } from "std/mix";
+import { mono, synth } from "std/synth";
 
 declare const x: Audio, notes: Events, beats: Control<"beats">, l: Control<"unit01">, pitch: Control<"semitones">, s: Signal;
 
@@ -41,6 +44,38 @@ export const written = [
   reverb(chorus(widen(x, { width: 1.6 }), { rate: 0.6, depth: 0.4, mix: 0.4 }), { size: 0.75, damping: 0.5, mix: 0.3 }),
   delay(x, { time: 0.388, feedback: 0.3, mix: 0.25 }),
   reverb(x, { size: 0.6, mix: 0.2 }),
+];
+
+// The instruments of std/synth, std/fm and std/drums: bare, with knobs and settings written,
+// and mono() around a voice of one's own.
+export const instruments: Audio[] = [
+  synth.custom(notes),
+  synth.custom(notes, { unison: 7, detune: 0.4, filterEnv: 2, filterDecay: ms(250), voices: 1, glide: ms(80) }),
+  synth.supersaw(notes, { detune: 0.5, cutoff: khz(12), release: secs(0.5) }),
+  synth.lead(notes, { glide: ms(80), vibrato: semis(0.2) }),
+  synth.lead(notes, { voices: 4 }),
+  synth.pad(notes, { attack: secs(1), cutoff: l }),
+  synth.pluck(notes, { brightness: hz(6000), decay: 0.3 }),
+  synth.sub(notes, { drop: semis(12), drive: db(9), glide: ms(50), decay: secs(1.5) }),
+  synth.bass(notes, { cutoff: hz(500), bite: 2, decay: ms(150), glide: ms(30), velSens: 0.6 }),
+  synth.strings(notes, { ensemble: 0.7 }),
+  fm.custom(notes, { carrierA: 2, modulatorA: 3.5, amountA: 3, feedback: 0.3, drop: semis(5), voices: 6 }),
+  fm.custom(notes, { voices: 1 }),
+  fm.keys(notes, { tone: 0.7, tine: 0.5, velSens: 1 }),
+  fm.bell(notes, { decay: secs(6) }),
+  fm.metal(notes, { drop: semis(12), feedback: 0.6, decay: ms(300) }),
+  drums.kit(notes, { kickTune: hz(52), hatDecay: ms(30), drive: db(6), hatLevel: db(4), kickLevel: db(-2) }),
+  drums.kick(notes, { tune: 50, punch: 0.8 }),
+  drums.snare(notes, { snap: 0.8 }),
+  drums.clap(notes),
+  drums.hats(notes, { decay: ms(40), openDecay: ms(600) }),
+  drums.tom(notes, { tune: hz(110) }),
+  drums.rim(notes),
+  drums.cowbell(notes),
+  drums.cymbal(notes, { decay: secs(2.5) }),
+  drums.shaker(notes),
+  mono(notes, (n) => vca(osc.saw(n.pitch), adsr(n.gate)), { glide: ms(60) }),
+  mono(notes, (n) => osc.square(n.pitch)),
 ];
 
 // Every effect as the editor adds it, then left bare.
@@ -113,3 +148,11 @@ bass(notes, { voices: l });
 duck(x, { depth: -6 });
 // @ts-expect-error mtof's pitch left out
 mtof();
+// @ts-expect-error glide belongs to the instruments that can play one note at a time
+synth.supersaw(notes, { glide: ms(80) });
+// @ts-expect-error a signal for the unison count, a setting
+synth.custom(notes, { unison: l });
+// @ts-expect-error the kit's knobs are named by their drum
+drums.kit(notes, { tune: 52 });
+// @ts-expect-error the 808's drop was called punch once
+synth.sub(notes, { punch: 7 });

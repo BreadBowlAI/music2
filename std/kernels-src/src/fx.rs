@@ -18,36 +18,36 @@ use m2_kernel::{Io, Kernel, db_to_gain, export};
 
 /// `clamp` that maps NaN to `lo` (`f32::clamp` passes NaN through, and a NaN in a
 /// feedback path never leaves).
-fn clampf(x: f32, lo: f32, hi: f32) -> f32 {
+pub(crate) fn clampf(x: f32, lo: f32, hi: f32) -> f32 {
     x.max(lo).min(hi)
 }
 
 /// Audio about to enter an effect: non-finite samples become silence, and anything
 /// beyond +80 dBFS is capped so no state can overflow.
-fn sane(x: f32) -> f32 {
+pub(crate) fn sane(x: f32) -> f32 {
     if x.is_finite() { x.clamp(-1e4, 1e4) } else { 0.0 }
 }
 
 /// Zero for values far below hearing (-300 dB), so decaying state never goes denormal
 /// and a tail ends in exact silence.
-fn flush(x: f32) -> f32 {
+pub(crate) fn flush(x: f32) -> f32 {
     if x.abs() < 1e-15 { 0.0 } else { x }
 }
 
 /// One-pole smoother for controls. It starts at its first target and lands exactly on a
 /// target once it is close, so a settled control costs nothing to compare against.
-struct Glide {
+pub(crate) struct Glide {
     value: f32,
     coef: f32,
     primed: bool,
 }
 
 impl Glide {
-    fn new(time: f32, sr: f32) -> Self {
+    pub(crate) fn new(time: f32, sr: f32) -> Self {
         Glide { value: 0.0, coef: (-1.0 / (time * sr)).exp(), primed: false }
     }
 
-    fn next(&mut self, target: f32) -> f32 {
+    pub(crate) fn next(&mut self, target: f32) -> f32 {
         if !self.primed {
             self.primed = true;
             self.value = target;
@@ -63,17 +63,17 @@ impl Glide {
 
 /// `exp(-1 / (time × sr))`, the one-pole coefficient for a time constant, recomputed
 /// only when the time changes.
-struct Coef {
+pub(crate) struct Coef {
     time: f32,
     coef: f32,
 }
 
 impl Coef {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Coef { time: f32::NAN, coef: 0.0 }
     }
 
-    fn get(&mut self, time: f32, sr: f32) -> f32 {
+    pub(crate) fn get(&mut self, time: f32, sr: f32) -> f32 {
         if time != self.time {
             self.time = time;
             self.coef = (-1.0 / (time * sr)).exp();
@@ -83,14 +83,14 @@ impl Coef {
 }
 
 /// `tan(π f / sr)`, the prewarped gain of a TPT filter at `f` Hz, kept below Nyquist.
-fn prewarp(f: f32, sr: f32) -> f32 {
+pub(crate) fn prewarp(f: f32, sr: f32) -> f32 {
     (PI * clampf(f, 10.0, 0.45 * sr) / sr).tan()
 }
 
 /// A TPT state-variable filter (Cytomic's), mixed into a highpass, a shelf or a bell.
 /// Unlike a direct-form biquad it stays clean while its settings move.
 #[derive(Clone, Copy)]
-struct Filter {
+pub(crate) struct Filter {
     a1: f32,
     a2: f32,
     a3: f32,
@@ -99,7 +99,7 @@ struct Filter {
 }
 
 impl Filter {
-    fn new(g: f32, k: f32, m: [f32; 3]) -> Self {
+    pub(crate) fn new(g: f32, k: f32, m: [f32; 3]) -> Self {
         let a1 = 1.0 / (1.0 + g * (g + k));
         let a2 = g * a1;
         Filter { a1, a2, a3: g * a2, m }
@@ -129,7 +129,7 @@ impl Filter {
     }
 
     /// One sample through the filter; `s` is one channel's state.
-    fn tick(&self, s: &mut [f32; 2], x: f32) -> f32 {
+    pub(crate) fn tick(&self, s: &mut [f32; 2], x: f32) -> f32 {
         let v3 = x - s[1];
         let v1 = self.a1 * s[0] + self.a2 * v3;
         let v2 = s[1] + self.a2 * s[0] + self.a3 * v3;

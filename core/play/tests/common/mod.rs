@@ -112,8 +112,16 @@ pub fn compile(dir: PathBuf) -> Song {
 
 /// A copy of the repo's fixture `rel`, compiled.
 pub fn fixture(rel: &str) -> Song {
+    fixture_with(rel, &[])
+}
+
+/// A copy of the repo's fixture `rel` with `files` (path, text) written over it, compiled.
+pub fn fixture_with(rel: &str, files: &[(&str, &str)]) -> Song {
     let dir = temp("fixture");
     copy(&repo().join(rel), &dir);
+    for (path, text) in files {
+        std::fs::write(dir.join(path), text).unwrap();
+    }
     compile(dir)
 }
 

@@ -4,7 +4,7 @@ music2 is a music studio for the Mac: a DAW (digital audio workstation), the kin
 
 The app shows that folder as a timeline, a graph of knobs and cables, a piano roll (a grid for drawing notes) and a code editor. Every change you make there is written into the files right away.
 
-There's no AI inside the app. Scripts and AI agents (such as a Claude Code session) use the same files, and a local API (a way for programs on your Mac to talk to the app). music2 is part of **suite2**, alongside film2 and dj2. Status: early. A lot is missing: tracks are added in code, there are only a few instruments, and there's no mixer panel yet. See [What music2 can't do yet](docs/gaps.md).
+There's no AI inside the app. Scripts and AI agents (such as a Claude Code session) use the same files, and a local API (a way for programs on your Mac to talk to the app). music2 is part of **suite2**, alongside film2 and dj2. Status: early. A lot is missing: tracks are added in code, there's no sampler, and there's no mixer panel yet. See [What music2 can't do yet](docs/gaps.md).
 
 ## Run the app
 
@@ -358,7 +358,35 @@ The code stays the source of truth; the app edits it for you, one small checked 
 
 std is an ordinary package in `std/`: TypeScript in `std/src`, kernels in `std/kernels/std.wasm`, built from Rust in `std/kernels-src`.
 
-**Instruments** (`std/instruments`): `bass`, `kick`, `hat`, `pluck` and `pad`. Each takes a notes lane and returns sound.
+**Instruments.** Each takes a notes lane and returns sound. The `voices` setting is how many notes can sound at once (`synth.lead(notes, { voices: 4 })` plays chords). A typical note, at velocity 0.8, peaks between -15 and -12 dBFS, so a four-note chord still has room, and the drums sit as on a drum machine: the kick near -6, snare and clap near -9, hats near -16. Notes played harder are louder, and most sounds get brighter too. On the synths and FM sounds, `velSens` ("vel sens") is how much: the level follows velocity^(2 × velSens), so a note at velocity 0 is silent, and at 0.5 a note at 0.3 is 10 dB below one at 1. The keys start widest (0.8), the 808 narrowest (0.3).
+
+- **Synths** (`std/synth`), all one polysynth:
+  - `synth.supersaw`: seven detuned saws, bright and wide, for big chords and hooks. Its filter starts wide open, as on a JP-8000; turn `cutoff` down to tame it. Knobs: `detune`, `spread` (how wide), `cutoff`, `attack`, `release`, `velSens`.
+  - `synth.lead`: a singing lead that plays one note at a time. A note that starts before the last one ends slides into it, and a vibrato fades in on long notes. Knobs: `cutoff`, `glide`, `vibrato`, `drive`, `velSens`.
+  - `synth.pad`: a big, slow, wide pad that swells open. Knobs: `cutoff`, `attack`, `release`, `spread`, `velSens`.
+  - `synth.pluck`: a bright, wide pluck for arps and chords, whose filter snaps shut. Knobs: `brightness`, `decay`, `spread`, `velSens`.
+  - `synth.sub`: an 808 bass, one note at a time: a deep, warm sine that drops into each note (by `drop` semitones), rings out over `decay` (to -60 dB: 0.2 s for a tight hit, 4 s by default, longer for long slides) and slides between overlapping notes. Knobs: `drop`, `drive`, `glide`, `decay`, `velSens`.
+  - `synth.bass`: a synth bass, one note at a time: a saw and a pulse with a sine under them, through a filter that bites as each note starts. Knobs: `cutoff`, `bite` (how many octaves the filter opens), `decay` (how fast it closes), `glide`, `velSens`.
+  - `synth.strings`: a string machine, soft saws through an ensemble chorus. Knobs: `cutoff`, `attack`, `release`, `ensemble`, `velSens`.
+  - `synth.custom`: the synth itself with every knob, to make your own sound: saw, pulse, sub and noise, a ladder filter with its own envelope, the amp envelope, drive, vibrato, a pitch drop and glide. `unison` (1 to 7 stacked voices) is a setting: `synth.custom(notes, { unison: 5 })`.
+  - With `voices: 1` any of them, and any FM sound, plays one note at a time: a note that starts before the last one ends carries on from it, without starting again (legato), and the ones with a `glide` knob slide to it. When that note ends while an older one is still held, the older one sounds again, sliding back: hold A1 on the 808 and tap A2 over it for the classic slide up and back. Notes that start together count as one, the last of them. `synth.lead`, `synth.sub` and `synth.bass` start that way. For a voice of your own, `mono(notes, voice, { glide })` is `poly` with one note at a time.
+- **FM** (`std/fm`), one FM synth: `fm.keys`, an electric piano with a warm body and a tine that barks when you play hard (knobs `tone`, `tine`, `decay`, `release`, `velSens`); `fm.bell`, a glassy bell (`tone`, `decay`, `velSens`); `fm.metal`, a short, clangy metallic hit that zaps down into its note (`tone`, `decay`, `feedback`, `drop`, `velSens`); and `fm.custom`, the FM synth with every knob. Its carriers and modulators are frequency ratios to the note: whole numbers sound harmonic, halves (the bell's 3.5) like a bell, and others such as 3.17 clang like metal. A ratio typed into the code is exact; dragged on a knob it lands near a value (2.03, say), so type the musical ones.
+- **Drums** (`std/drums`), an 808/909-style drum machine. `drums.kit` plays a whole beat from one notes lane, each drum on its General MIDI note, the numbers drum parts usually use:
+
+  | Note | Drum | Note | Drum |
+  |---|---|---|---|
+  | C2 (36), B1 (35) | kick (B1 lower and softer) | F#2 (42) | closed hat |
+  | D2 (38), E2 (40) | snare (E2 higher and snappier) | G#2 (44) | pedal hat |
+  | D#2 (39) | clap | A#2 (46) | open hat |
+  | C#2 (37) | rim | C#3 (49), A3 (57) | crash |
+  | F2, G2, A2, B2, C3, D3 (41 to 50) | toms, low to high | D#3 (51), B3 (59) | ride |
+  | G#3 (56) | cowbell | F#3 (54) | tambourine |
+  | A4, A#4 (69, 70) | shakers | D#5 (75) | claves |
+
+  A hit cuts off the drum before it, as on a drum machine: a kick the kick still ringing, a closed hat an open one. Toms, rim, cowbell, ride and shakers ring on. No two hits are quite the same, as on an analog machine (each catches its noise and metal at a new place), yet every render of a song is. The kit's knobs are `kickTune`, `kickDecay`, `punch` (from a deep 808 boom to a hard 909 thump), `snareTune`, `snap`, `hatDecay`, `openDecay`, `hatTone`, `tomTune`, `drive`, and a level in dB for each group: `kickLevel`, `snareLevel` (with the clap and rim), `hatLevel`, `tomLevel` and `percLevel` (cymbals and the rest). Each drum is also an instrument of its own, on every note: `drums.kick`, `drums.snare`, `drums.clap`, `drums.hats` (closed, with G#2 pedal and A#2 open), `drums.tom` (tuned by the note: A2 plays at its `tune`), `drums.rim`, `drums.cowbell`, `drums.cymbal` and `drums.shaker`. The kit comes out as one sound, so a drum you want to treat on its own (a kick for the bass to duck under, a snare with a reverb of its own) goes on a lane of its own, played by that drum alone, as `examples/sounds` does with its kick.
+- **The first instruments** (`std/instruments`): `bass`, `kick`, `hat`, `pluck` and `pad`, simple versions built from the building blocks below, short enough to read and copy. For a song, the ones above sound fuller: `synth.bass` or `synth.sub`, `drums.kick`, `drums.hats`, `synth.pluck` and `synth.pad`. The templates still start new songs with the first ones.
+
+[`examples/sounds`](examples/sounds) plays every synth, FM sound and drum in a short pop song, mastered near -11.5 LUFS.
 
 **Effects**, as the effect browser groups them:
 
@@ -531,7 +559,7 @@ Or just edit the files: the app takes the change in once it has settled (no file
 | `crates/server` | The app's local server: `graph.rs` (the open song), `files.rs` (the code editor's files), `project.rs` (new songs and the songs folder), `export.rs` (Export Audio), `resources.rs` (finding std, the templates and the examples), `routes.rs` (the API) |
 | `web/` | The UI: `StartScreen`, `NewSongDialog`, `GraphCanvas` (top bar and panel), `SongTimeline`, `NodeGraph`, `NoteView`, `CodeView`, `EffectBrowser` |
 | `templates/` | What new songs start from: `starter` and `empty`, each a whole song plus a `template.toml` (its name and description) |
-| `examples/` | `first-song`, `with-plugins` and `resample`, each with an `example.toml` for the start screen (and the plugins it needs) |
+| `examples/` | `first-song`, `resample`, `with-plugins` and `sounds`, each with an `example.toml` for the start screen (and the plugins it needs) |
 | `e2e/` | The browser suites |
 | `docs/` | Design docs and the gap list |
 

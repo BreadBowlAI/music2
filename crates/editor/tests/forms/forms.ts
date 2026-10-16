@@ -5,10 +5,13 @@ import { semis, song } from "@m2/core";
 import { choose, lfo, when } from "std/control";
 import { adsr, follow, gain, noise, osc, pan, svf, vca } from "std/dsp";
 import { bandpass, highpass, lowpass, notch } from "std/filter";
+import { drums } from "std/drums";
+import { fm } from "std/fm";
 import { bitcrush, chorus, compress, delay, drive, duck, eq3, limit, phaser, reverb, tremolo, widen } from "std/fx";
 import { bass, hat, kick, pad, pluck } from "std/instruments";
 import { add, blend, mtof, range, scale, sum, xrange } from "std/math";
 import { master, mixer } from "std/mix";
+import { mono, synth } from "std/synth";
 export default song(({ lane, time }) => {
   const sweep = lfo(time.beats, { period: 2 });
   const wobble = xrange(sweep, 300, 3000);
@@ -20,217 +23,684 @@ export default song(({ lane, time }) => {
   const env = adsr(lane.mask("gate"), { attack: 0.01 });
   const hit = kick(lane.notes("kick"));
   const side = follow(hit);
-  const drums = add(hit, hat(lane.notes("hats")));
-  const synth = sum(bass(lane.notes("bass"), { cutoff: wobble }), pluck(lane.notes("chords")), pad(lane.notes("pad")));
-  const filtered = notch(bandpass(highpass(lowpass(synth, 1200), 200, 0.9), wobble), 3000);
+  const beat = add(hit, hat(lane.notes("hats")));
+  const tones = sum(bass(lane.notes("bass"), { cutoff: wobble }), pluck(lane.notes("chords")), pad(lane.notes("pad")));
+  const filtered = notch(bandpass(highpass(lowpass(tones, 1200), 200, 0.9), wobble), 3000);
   const shaped = svf.highpass(svf.bandpass(svf.lowpass(buzz, 800), 900), 100);
   const voiced = vca(add(tone, add(pulse, add(soft, noise(7)))), env);
   const picked = choose(lane.mask("pick"), when(lane.mask("open"), blend(shaped, voiced, level)), scale(filtered, 0.5));
   const wet = widen(bitcrush(eq3(compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })))))))));
   const fx = duck(pan(gain(wet, -3), 0.2), side, { depth: -6 });
+  const saws = sum(
+    synth.supersaw(lane.notes("saws"), { cutoff: wobble, detune: 0.5 }),
+    synth.pad(lane.notes("swell"), { attack: 1.2 }),
+    synth.pluck(lane.notes("arp")),
+    synth.strings(lane.notes("strings"), { ensemble: level }),
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5 }),
+  );
+  const lines = sum(
+    synth.lead(lane.notes("lead"), { glide: 0.08 }),
+    synth.sub(lane.notes("sub"), { drop: semis(12) }),
+    synth.bass(lane.notes("bass2"), { bite: 4 }),
+    mono(lane.notes("line"), (n) => osc.saw(n.pitch), { glide: 0.05 }),
+  );
+  const keys = sum(fm.keys(lane.notes("keys"), { tone: level }), fm.bell(lane.notes("bell"), { decay: 6 }), fm.custom(lane.notes("fm"), { carrierA: 2 }));
+  const metal = fm.metal(lane.notes("metal"), { drop: semis(12) });
+  const kit = sum(
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3 }),
+    drums.kick(lane.notes("boom"), { decay: 1.2 }),
+    drums.snare(lane.notes("snare")),
+    drums.clap(lane.notes("clap")),
+    drums.hats(lane.notes("hats2"), { openDecay: 0.6 }),
+    drums.tom(lane.notes("toms")),
+    drums.rim(lane.notes("rim")),
+    drums.cowbell(lane.notes("cowbell")),
+    drums.cymbal(lane.notes("crash")),
+    drums.shaker(lane.notes("shaker")),
+  );
   const planned = [
-    // song.ts:13 `lfo` leaves out phase: a value written in
+    // song.ts:16 `lfo` leaves out phase: a value written in
     lfo(time.beats, { period: 2, phase: 0 }),
-    // song.ts:18 `osc.square` leaves out width: a value written in
+    // song.ts:21 `osc.square` leaves out width: a value written in
     osc.square(110, 0.5),
-    // song.ts:18 `osc.square` leaves out width: a cable written in
+    // song.ts:21 `osc.square` leaves out width: a cable written in
     osc.square(110, wobble),
-    // song.ts:19 `osc.tri` leaves out freq: a value written in
+    // song.ts:22 `osc.tri` leaves out freq: a value written in
     osc.tri(440),
-    // song.ts:19 `osc.tri` leaves out freq: a cable written in
+    // song.ts:22 `osc.tri` leaves out freq: a cable written in
     osc.tri(wobble),
-    // song.ts:20 `adsr` leaves out decay: a value written in
+    // song.ts:23 `adsr` leaves out decay: a value written in
     adsr(lane.mask("gate"), { attack: 0.01, decay: 0.2 }),
-    // song.ts:20 `adsr` leaves out decay: a cable written in
+    // song.ts:23 `adsr` leaves out decay: a cable written in
     adsr(lane.mask("gate"), { attack: 0.01, decay: wobble }),
-    // song.ts:20 `adsr` leaves out release: a value written in
+    // song.ts:23 `adsr` leaves out release: a value written in
     adsr(lane.mask("gate"), { attack: 0.01, release: 0.2 }),
-    // song.ts:20 `adsr` leaves out release: a cable written in
+    // song.ts:23 `adsr` leaves out release: a cable written in
     adsr(lane.mask("gate"), { attack: 0.01, release: wobble }),
-    // song.ts:20 `adsr` leaves out sustain: a value written in
+    // song.ts:23 `adsr` leaves out sustain: a value written in
     adsr(lane.mask("gate"), { attack: 0.01, sustain: 0.7 }),
-    // song.ts:20 `adsr` leaves out sustain: a cable written in
+    // song.ts:23 `adsr` leaves out sustain: a cable written in
     adsr(lane.mask("gate"), { attack: 0.01, sustain: wobble }),
-    // song.ts:21 `kick` leaves out decay: a value written in
+    // song.ts:24 `kick` leaves out decay: a value written in
     kick(lane.notes("kick"), { decay: 0.32 }),
-    // song.ts:21 `kick` leaves out decay: a cable written in
+    // song.ts:24 `kick` leaves out decay: a cable written in
     kick(lane.notes("kick"), { decay: wobble }),
-    // song.ts:21 `kick` leaves out tune: a value written in
+    // song.ts:24 `kick` leaves out tune: a value written in
     kick(lane.notes("kick"), { tune: 48 }),
-    // song.ts:21 `kick` leaves out tune: a cable written in
+    // song.ts:24 `kick` leaves out tune: a cable written in
     kick(lane.notes("kick"), { tune: wobble }),
-    // song.ts:22 `follow` leaves out attack: a value written in
+    // song.ts:25 `follow` leaves out attack: a value written in
     follow(hit, { attack: 0.002 }),
-    // song.ts:22 `follow` leaves out attack: a cable written in
+    // song.ts:25 `follow` leaves out attack: a cable written in
     follow(hit, { attack: wobble }),
-    // song.ts:22 `follow` leaves out release: a value written in
+    // song.ts:25 `follow` leaves out release: a value written in
     follow(hit, { release: 0.12 }),
-    // song.ts:22 `follow` leaves out release: a cable written in
+    // song.ts:25 `follow` leaves out release: a cable written in
     follow(hit, { release: wobble }),
-    // song.ts:23 `hat` leaves out decay: a value written in
+    // song.ts:26 `hat` leaves out decay: a value written in
     hat(lane.notes("hats"), { decay: 0.045 }),
-    // song.ts:23 `hat` leaves out decay: a cable written in
+    // song.ts:26 `hat` leaves out decay: a cable written in
     hat(lane.notes("hats"), { decay: wobble }),
-    // song.ts:24 `bass` leaves out drive: a value written in
+    // song.ts:27 `bass` leaves out drive: a value written in
     bass(lane.notes("bass"), { cutoff: wobble, drive: 4 }),
-    // song.ts:24 `bass` leaves out drive: a cable written in
+    // song.ts:27 `bass` leaves out drive: a cable written in
     bass(lane.notes("bass"), { cutoff: wobble, drive: wobble }),
-    // song.ts:24 `pluck` leaves out brightness: a value written in
+    // song.ts:27 `pluck` leaves out brightness: a value written in
     pluck(lane.notes("chords"), { brightness: 5000 }),
-    // song.ts:24 `pluck` leaves out brightness: a cable written in
+    // song.ts:27 `pluck` leaves out brightness: a cable written in
     pluck(lane.notes("chords"), { brightness: wobble }),
-    // song.ts:24 `pad` leaves out cutoff: a value written in
+    // song.ts:27 `pad` leaves out cutoff: a value written in
     pad(lane.notes("pad"), { cutoff: 1800 }),
-    // song.ts:24 `pad` leaves out cutoff: a cable written in
+    // song.ts:27 `pad` leaves out cutoff: a cable written in
     pad(lane.notes("pad"), { cutoff: wobble }),
-    // song.ts:25 `notch` leaves out q: a value written in
-    notch(bandpass(highpass(lowpass(synth, 1200), 200, 0.9), wobble), 3000, 0.707),
-    // song.ts:25 `notch` leaves out q: a cable written in
-    notch(bandpass(highpass(lowpass(synth, 1200), 200, 0.9), wobble), 3000, wobble),
-    // song.ts:25 `bandpass` leaves out q: a value written in
-    bandpass(highpass(lowpass(synth, 1200), 200, 0.9), wobble, 0.707),
-    // song.ts:25 `bandpass` leaves out q: a cable written in
-    bandpass(highpass(lowpass(synth, 1200), 200, 0.9), wobble, wobble),
-    // song.ts:25 `lowpass` leaves out q: a value written in
-    lowpass(synth, 1200, 0.707),
-    // song.ts:25 `lowpass` leaves out q: a cable written in
-    lowpass(synth, 1200, wobble),
-    // song.ts:26 `svf.highpass` leaves out q: a value written in
+    // song.ts:28 `notch` leaves out q: a value written in
+    notch(bandpass(highpass(lowpass(tones, 1200), 200, 0.9), wobble), 3000, 0.707),
+    // song.ts:28 `notch` leaves out q: a cable written in
+    notch(bandpass(highpass(lowpass(tones, 1200), 200, 0.9), wobble), 3000, wobble),
+    // song.ts:28 `bandpass` leaves out q: a value written in
+    bandpass(highpass(lowpass(tones, 1200), 200, 0.9), wobble, 0.707),
+    // song.ts:28 `bandpass` leaves out q: a cable written in
+    bandpass(highpass(lowpass(tones, 1200), 200, 0.9), wobble, wobble),
+    // song.ts:28 `lowpass` leaves out q: a value written in
+    lowpass(tones, 1200, 0.707),
+    // song.ts:28 `lowpass` leaves out q: a cable written in
+    lowpass(tones, 1200, wobble),
+    // song.ts:29 `svf.highpass` leaves out q: a value written in
     svf.highpass(svf.bandpass(svf.lowpass(buzz, 800), 900), 100, 0.707),
-    // song.ts:26 `svf.highpass` leaves out q: a cable written in
+    // song.ts:29 `svf.highpass` leaves out q: a cable written in
     svf.highpass(svf.bandpass(svf.lowpass(buzz, 800), 900), 100, wobble),
-    // song.ts:26 `svf.bandpass` leaves out q: a value written in
+    // song.ts:29 `svf.bandpass` leaves out q: a value written in
     svf.bandpass(svf.lowpass(buzz, 800), 900, 0.707),
-    // song.ts:26 `svf.bandpass` leaves out q: a cable written in
+    // song.ts:29 `svf.bandpass` leaves out q: a cable written in
     svf.bandpass(svf.lowpass(buzz, 800), 900, wobble),
-    // song.ts:26 `svf.lowpass` leaves out q: a value written in
+    // song.ts:29 `svf.lowpass` leaves out q: a value written in
     svf.lowpass(buzz, 800, 0.707),
-    // song.ts:26 `svf.lowpass` leaves out q: a cable written in
+    // song.ts:29 `svf.lowpass` leaves out q: a cable written in
     svf.lowpass(buzz, 800, wobble),
-    // song.ts:29 `widen` leaves out width: a value written in
+    // song.ts:32 `widen` leaves out width: a value written in
     widen(bitcrush(eq3(compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })))))))), { width: 1.5 }),
-    // song.ts:29 `widen` leaves out width: a cable written in
+    // song.ts:32 `widen` leaves out width: a cable written in
     widen(bitcrush(eq3(compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })))))))), { width: wobble }),
-    // song.ts:29 `bitcrush` leaves out bits: a value written in
+    // song.ts:32 `bitcrush` leaves out bits: a value written in
     bitcrush(eq3(compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 }))))))), { bits: 8 }),
-    // song.ts:29 `bitcrush` leaves out bits: a cable written in
+    // song.ts:32 `bitcrush` leaves out bits: a cable written in
     bitcrush(eq3(compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 }))))))), { bits: wobble }),
-    // song.ts:29 `bitcrush` leaves out mix: a value written in
+    // song.ts:32 `bitcrush` leaves out mix: a value written in
     bitcrush(eq3(compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 }))))))), { mix: 1 }),
-    // song.ts:29 `bitcrush` leaves out mix: a cable written in
+    // song.ts:32 `bitcrush` leaves out mix: a cable written in
     bitcrush(eq3(compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 }))))))), { mix: wobble }),
-    // song.ts:29 `bitcrush` leaves out rate: a value written in
+    // song.ts:32 `bitcrush` leaves out rate: a value written in
     bitcrush(eq3(compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 }))))))), { rate: 12000 }),
-    // song.ts:29 `bitcrush` leaves out rate: a cable written in
+    // song.ts:32 `bitcrush` leaves out rate: a cable written in
     bitcrush(eq3(compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 }))))))), { rate: wobble }),
-    // song.ts:29 `eq3` leaves out high: a value written in
+    // song.ts:32 `eq3` leaves out high: a value written in
     eq3(compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })))))), { high: 0 }),
-    // song.ts:29 `eq3` leaves out high: a cable written in
+    // song.ts:32 `eq3` leaves out high: a cable written in
     eq3(compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })))))), { high: wobble }),
-    // song.ts:29 `eq3` leaves out highFreq: a value written in
+    // song.ts:32 `eq3` leaves out highFreq: a value written in
     eq3(compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })))))), { highFreq: 4000 }),
-    // song.ts:29 `eq3` leaves out highFreq: a cable written in
+    // song.ts:32 `eq3` leaves out highFreq: a cable written in
     eq3(compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })))))), { highFreq: wobble }),
-    // song.ts:29 `eq3` leaves out low: a value written in
+    // song.ts:32 `eq3` leaves out low: a value written in
     eq3(compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })))))), { low: 0 }),
-    // song.ts:29 `eq3` leaves out low: a cable written in
+    // song.ts:32 `eq3` leaves out low: a cable written in
     eq3(compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })))))), { low: wobble }),
-    // song.ts:29 `eq3` leaves out lowFreq: a value written in
+    // song.ts:32 `eq3` leaves out lowFreq: a value written in
     eq3(compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })))))), { lowFreq: 200 }),
-    // song.ts:29 `eq3` leaves out lowFreq: a cable written in
+    // song.ts:32 `eq3` leaves out lowFreq: a cable written in
     eq3(compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })))))), { lowFreq: wobble }),
-    // song.ts:29 `eq3` leaves out mid: a value written in
+    // song.ts:32 `eq3` leaves out mid: a value written in
     eq3(compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })))))), { mid: 0 }),
-    // song.ts:29 `eq3` leaves out mid: a cable written in
+    // song.ts:32 `eq3` leaves out mid: a cable written in
     eq3(compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })))))), { mid: wobble }),
-    // song.ts:29 `eq3` leaves out midFreq: a value written in
+    // song.ts:32 `eq3` leaves out midFreq: a value written in
     eq3(compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })))))), { midFreq: 1000 }),
-    // song.ts:29 `eq3` leaves out midFreq: a cable written in
+    // song.ts:32 `eq3` leaves out midFreq: a cable written in
     eq3(compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })))))), { midFreq: wobble }),
-    // song.ts:29 `compress` leaves out attack: a value written in
+    // song.ts:32 `compress` leaves out attack: a value written in
     compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 }))))), { attack: 0.01 }),
-    // song.ts:29 `compress` leaves out attack: a cable written in
+    // song.ts:32 `compress` leaves out attack: a cable written in
     compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 }))))), { attack: wobble }),
-    // song.ts:29 `compress` leaves out makeup: a value written in
+    // song.ts:32 `compress` leaves out makeup: a value written in
     compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 }))))), { makeup: 0 }),
-    // song.ts:29 `compress` leaves out makeup: a cable written in
+    // song.ts:32 `compress` leaves out makeup: a cable written in
     compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 }))))), { makeup: wobble }),
-    // song.ts:29 `compress` leaves out ratio: a value written in
+    // song.ts:32 `compress` leaves out ratio: a value written in
     compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 }))))), { ratio: 3 }),
-    // song.ts:29 `compress` leaves out ratio: a cable written in
+    // song.ts:32 `compress` leaves out ratio: a cable written in
     compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 }))))), { ratio: wobble }),
-    // song.ts:29 `compress` leaves out release: a value written in
+    // song.ts:32 `compress` leaves out release: a value written in
     compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 }))))), { release: 0.15 }),
-    // song.ts:29 `compress` leaves out release: a cable written in
+    // song.ts:32 `compress` leaves out release: a cable written in
     compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 }))))), { release: wobble }),
-    // song.ts:29 `compress` leaves out threshold: a value written in
+    // song.ts:32 `compress` leaves out threshold: a value written in
     compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 }))))), { threshold: -18 }),
-    // song.ts:29 `compress` leaves out threshold: a cable written in
+    // song.ts:32 `compress` leaves out threshold: a cable written in
     compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 }))))), { threshold: wobble }),
-    // song.ts:29 `tremolo` leaves out depth: a value written in
+    // song.ts:32 `tremolo` leaves out depth: a value written in
     tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })))), { depth: 0.5 }),
-    // song.ts:29 `tremolo` leaves out depth: a cable written in
+    // song.ts:32 `tremolo` leaves out depth: a cable written in
     tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })))), { depth: wobble }),
-    // song.ts:29 `tremolo` leaves out rate: a value written in
+    // song.ts:32 `tremolo` leaves out rate: a value written in
     tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })))), { rate: 5 }),
-    // song.ts:29 `tremolo` leaves out rate: a cable written in
+    // song.ts:32 `tremolo` leaves out rate: a cable written in
     tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })))), { rate: wobble }),
-    // song.ts:29 `phaser` leaves out depth: a value written in
+    // song.ts:32 `phaser` leaves out depth: a value written in
     phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 }))), { depth: 0.7 }),
-    // song.ts:29 `phaser` leaves out depth: a cable written in
+    // song.ts:32 `phaser` leaves out depth: a cable written in
     phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 }))), { depth: wobble }),
-    // song.ts:29 `phaser` leaves out feedback: a value written in
+    // song.ts:32 `phaser` leaves out feedback: a value written in
     phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 }))), { feedback: 0.5 }),
-    // song.ts:29 `phaser` leaves out feedback: a cable written in
+    // song.ts:32 `phaser` leaves out feedback: a cable written in
     phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 }))), { feedback: wobble }),
-    // song.ts:29 `phaser` leaves out mix: a value written in
+    // song.ts:32 `phaser` leaves out mix: a value written in
     phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 }))), { mix: 0.5 }),
-    // song.ts:29 `phaser` leaves out mix: a cable written in
+    // song.ts:32 `phaser` leaves out mix: a cable written in
     phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 }))), { mix: wobble }),
-    // song.ts:29 `phaser` leaves out rate: a value written in
+    // song.ts:32 `phaser` leaves out rate: a value written in
     phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 }))), { rate: 0.4 }),
-    // song.ts:29 `phaser` leaves out rate: a cable written in
+    // song.ts:32 `phaser` leaves out rate: a cable written in
     phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 }))), { rate: wobble }),
-    // song.ts:29 `chorus` leaves out depth: a value written in
+    // song.ts:32 `chorus` leaves out depth: a value written in
     chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })), { depth: 0.5 }),
-    // song.ts:29 `chorus` leaves out depth: a cable written in
+    // song.ts:32 `chorus` leaves out depth: a cable written in
     chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })), { depth: wobble }),
-    // song.ts:29 `chorus` leaves out mix: a value written in
+    // song.ts:32 `chorus` leaves out mix: a value written in
     chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })), { mix: 0.5 }),
-    // song.ts:29 `chorus` leaves out mix: a cable written in
+    // song.ts:32 `chorus` leaves out mix: a cable written in
     chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })), { mix: wobble }),
-    // song.ts:29 `chorus` leaves out rate: a value written in
+    // song.ts:32 `chorus` leaves out rate: a value written in
     chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })), { rate: 0.8 }),
-    // song.ts:29 `chorus` leaves out rate: a cable written in
+    // song.ts:32 `chorus` leaves out rate: a cable written in
     chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })), { rate: wobble }),
-    // song.ts:29 `reverb` leaves out damping: a value written in
+    // song.ts:32 `reverb` leaves out damping: a value written in
     reverb(delay(drive(limit(picked, -3)), { time: 0.3 }), { damping: 0.5 }),
-    // song.ts:29 `reverb` leaves out damping: a cable written in
+    // song.ts:32 `reverb` leaves out damping: a cable written in
     reverb(delay(drive(limit(picked, -3)), { time: 0.3 }), { damping: wobble }),
-    // song.ts:29 `reverb` leaves out mix: a value written in
+    // song.ts:32 `reverb` leaves out mix: a value written in
     reverb(delay(drive(limit(picked, -3)), { time: 0.3 }), { mix: 0.25 }),
-    // song.ts:29 `reverb` leaves out mix: a cable written in
+    // song.ts:32 `reverb` leaves out mix: a cable written in
     reverb(delay(drive(limit(picked, -3)), { time: 0.3 }), { mix: wobble }),
-    // song.ts:29 `reverb` leaves out size: a value written in
+    // song.ts:32 `reverb` leaves out size: a value written in
     reverb(delay(drive(limit(picked, -3)), { time: 0.3 }), { size: 0.6 }),
-    // song.ts:29 `reverb` leaves out size: a cable written in
+    // song.ts:32 `reverb` leaves out size: a cable written in
     reverb(delay(drive(limit(picked, -3)), { time: 0.3 }), { size: wobble }),
-    // song.ts:29 `delay` leaves out feedback: a value written in
+    // song.ts:32 `delay` leaves out feedback: a value written in
     delay(drive(limit(picked, -3)), { time: 0.3, feedback: 0.3 }),
-    // song.ts:29 `delay` leaves out feedback: a cable written in
+    // song.ts:32 `delay` leaves out feedback: a cable written in
     delay(drive(limit(picked, -3)), { time: 0.3, feedback: wobble }),
-    // song.ts:29 `delay` leaves out mix: a value written in
+    // song.ts:32 `delay` leaves out mix: a value written in
     delay(drive(limit(picked, -3)), { time: 0.3, mix: 0.3 }),
-    // song.ts:29 `delay` leaves out mix: a cable written in
+    // song.ts:32 `delay` leaves out mix: a cable written in
     delay(drive(limit(picked, -3)), { time: 0.3, mix: wobble }),
-    // song.ts:29 `drive` leaves out amount: a value written in
+    // song.ts:32 `drive` leaves out amount: a value written in
     drive(limit(picked, -3), 6),
-    // song.ts:29 `drive` leaves out amount: a cable written in
+    // song.ts:32 `drive` leaves out amount: a cable written in
     drive(limit(picked, -3), wobble),
-    // song.ts:31 `master` leaves out ceiling: a value written in
-    master(mixer({ drums, fx: { in: fx, db: -4 }, synth: { in: synth, pan: -0.3 } }), { ceiling: -1 }),
-    // song.ts:31 `master` leaves out ceiling: a cable written in
-    master(mixer({ drums, fx: { in: fx, db: -4 }, synth: { in: synth, pan: -0.3 } }), { ceiling: wobble }),
+    // song.ts:35 `synth.supersaw` leaves out attack: a value written in
+    synth.supersaw(lane.notes("saws"), { cutoff: wobble, detune: 0.5, attack: 0.003 }),
+    // song.ts:35 `synth.supersaw` leaves out attack: a cable written in
+    synth.supersaw(lane.notes("saws"), { cutoff: wobble, detune: 0.5, attack: wobble }),
+    // song.ts:35 `synth.supersaw` leaves out release: a value written in
+    synth.supersaw(lane.notes("saws"), { cutoff: wobble, detune: 0.5, release: 0.35 }),
+    // song.ts:35 `synth.supersaw` leaves out release: a cable written in
+    synth.supersaw(lane.notes("saws"), { cutoff: wobble, detune: 0.5, release: wobble }),
+    // song.ts:35 `synth.supersaw` leaves out spread: a value written in
+    synth.supersaw(lane.notes("saws"), { cutoff: wobble, detune: 0.5, spread: 0.85 }),
+    // song.ts:35 `synth.supersaw` leaves out spread: a cable written in
+    synth.supersaw(lane.notes("saws"), { cutoff: wobble, detune: 0.5, spread: wobble }),
+    // song.ts:35 `synth.supersaw` leaves out velSens: a value written in
+    synth.supersaw(lane.notes("saws"), { cutoff: wobble, detune: 0.5, velSens: 0.4 }),
+    // song.ts:35 `synth.supersaw` leaves out velSens: a cable written in
+    synth.supersaw(lane.notes("saws"), { cutoff: wobble, detune: 0.5, velSens: wobble }),
+    // song.ts:36 `synth.pad` leaves out cutoff: a value written in
+    synth.pad(lane.notes("swell"), { attack: 1.2, cutoff: 2500 }),
+    // song.ts:36 `synth.pad` leaves out cutoff: a cable written in
+    synth.pad(lane.notes("swell"), { attack: 1.2, cutoff: wobble }),
+    // song.ts:36 `synth.pad` leaves out release: a value written in
+    synth.pad(lane.notes("swell"), { attack: 1.2, release: 1.6 }),
+    // song.ts:36 `synth.pad` leaves out release: a cable written in
+    synth.pad(lane.notes("swell"), { attack: 1.2, release: wobble }),
+    // song.ts:36 `synth.pad` leaves out spread: a value written in
+    synth.pad(lane.notes("swell"), { attack: 1.2, spread: 0.9 }),
+    // song.ts:36 `synth.pad` leaves out spread: a cable written in
+    synth.pad(lane.notes("swell"), { attack: 1.2, spread: wobble }),
+    // song.ts:36 `synth.pad` leaves out velSens: a value written in
+    synth.pad(lane.notes("swell"), { attack: 1.2, velSens: 0.35 }),
+    // song.ts:36 `synth.pad` leaves out velSens: a cable written in
+    synth.pad(lane.notes("swell"), { attack: 1.2, velSens: wobble }),
+    // song.ts:37 `synth.pluck` leaves out brightness: a value written in
+    synth.pluck(lane.notes("arp"), { brightness: 4500 }),
+    // song.ts:37 `synth.pluck` leaves out brightness: a cable written in
+    synth.pluck(lane.notes("arp"), { brightness: wobble }),
+    // song.ts:37 `synth.pluck` leaves out decay: a value written in
+    synth.pluck(lane.notes("arp"), { decay: 0.45 }),
+    // song.ts:37 `synth.pluck` leaves out decay: a cable written in
+    synth.pluck(lane.notes("arp"), { decay: wobble }),
+    // song.ts:37 `synth.pluck` leaves out spread: a value written in
+    synth.pluck(lane.notes("arp"), { spread: 0.85 }),
+    // song.ts:37 `synth.pluck` leaves out spread: a cable written in
+    synth.pluck(lane.notes("arp"), { spread: wobble }),
+    // song.ts:37 `synth.pluck` leaves out velSens: a value written in
+    synth.pluck(lane.notes("arp"), { velSens: 0.5 }),
+    // song.ts:37 `synth.pluck` leaves out velSens: a cable written in
+    synth.pluck(lane.notes("arp"), { velSens: wobble }),
+    // song.ts:38 `synth.strings` leaves out attack: a value written in
+    synth.strings(lane.notes("strings"), { ensemble: level, attack: 0.25 }),
+    // song.ts:38 `synth.strings` leaves out attack: a cable written in
+    synth.strings(lane.notes("strings"), { ensemble: level, attack: wobble }),
+    // song.ts:38 `synth.strings` leaves out cutoff: a value written in
+    synth.strings(lane.notes("strings"), { ensemble: level, cutoff: 4000 }),
+    // song.ts:38 `synth.strings` leaves out cutoff: a cable written in
+    synth.strings(lane.notes("strings"), { ensemble: level, cutoff: wobble }),
+    // song.ts:38 `synth.strings` leaves out release: a value written in
+    synth.strings(lane.notes("strings"), { ensemble: level, release: 0.7 }),
+    // song.ts:38 `synth.strings` leaves out release: a cable written in
+    synth.strings(lane.notes("strings"), { ensemble: level, release: wobble }),
+    // song.ts:38 `synth.strings` leaves out velSens: a value written in
+    synth.strings(lane.notes("strings"), { ensemble: level, velSens: 0.35 }),
+    // song.ts:38 `synth.strings` leaves out velSens: a cable written in
+    synth.strings(lane.notes("strings"), { ensemble: level, velSens: wobble }),
+    // song.ts:39 `synth.custom` leaves out attack: a value written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, attack: 0.003 }),
+    // song.ts:39 `synth.custom` leaves out attack: a cable written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, attack: wobble }),
+    // song.ts:39 `synth.custom` leaves out cutoff: a value written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, cutoff: 8000 }),
+    // song.ts:39 `synth.custom` leaves out cutoff: a cable written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, cutoff: wobble }),
+    // song.ts:39 `synth.custom` leaves out decay: a value written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, decay: 0.5 }),
+    // song.ts:39 `synth.custom` leaves out decay: a cable written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, decay: wobble }),
+    // song.ts:39 `synth.custom` leaves out detune: a value written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, detune: 0.2 }),
+    // song.ts:39 `synth.custom` leaves out detune: a cable written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, detune: wobble }),
+    // song.ts:39 `synth.custom` leaves out drive: a value written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, drive: 0 }),
+    // song.ts:39 `synth.custom` leaves out drive: a cable written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, drive: wobble }),
+    // song.ts:39 `synth.custom` leaves out drop: a value written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, drop: 0 }),
+    // song.ts:39 `synth.custom` leaves out drop: a cable written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, drop: wobble }),
+    // song.ts:39 `synth.custom` leaves out dropTime: a value written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, dropTime: 0.04 }),
+    // song.ts:39 `synth.custom` leaves out dropTime: a cable written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, dropTime: wobble }),
+    // song.ts:39 `synth.custom` leaves out filterAttack: a value written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, filterAttack: 0.002 }),
+    // song.ts:39 `synth.custom` leaves out filterAttack: a cable written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, filterAttack: wobble }),
+    // song.ts:39 `synth.custom` leaves out filterDecay: a value written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, filterDecay: 0.3 }),
+    // song.ts:39 `synth.custom` leaves out filterDecay: a cable written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, filterDecay: wobble }),
+    // song.ts:39 `synth.custom` leaves out filterSustain: a value written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, filterSustain: 0 }),
+    // song.ts:39 `synth.custom` leaves out filterSustain: a cable written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, filterSustain: wobble }),
+    // song.ts:39 `synth.custom` leaves out glide: a value written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, glide: 0.05 }),
+    // song.ts:39 `synth.custom` leaves out glide: a cable written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, glide: wobble }),
+    // song.ts:39 `synth.custom` leaves out keytrack: a value written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, keytrack: 0.5 }),
+    // song.ts:39 `synth.custom` leaves out keytrack: a cable written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, keytrack: wobble }),
+    // song.ts:39 `synth.custom` leaves out level: a value written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, level: 0 }),
+    // song.ts:39 `synth.custom` leaves out level: a cable written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, level: wobble }),
+    // song.ts:39 `synth.custom` leaves out noise: a value written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, noise: 0 }),
+    // song.ts:39 `synth.custom` leaves out noise: a cable written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, noise: wobble }),
+    // song.ts:39 `synth.custom` leaves out release: a value written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, release: 0.3 }),
+    // song.ts:39 `synth.custom` leaves out release: a cable written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, release: wobble }),
+    // song.ts:39 `synth.custom` leaves out resonance: a value written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, resonance: 0.1 }),
+    // song.ts:39 `synth.custom` leaves out resonance: a cable written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, resonance: wobble }),
+    // song.ts:39 `synth.custom` leaves out saw: a value written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, saw: 1 }),
+    // song.ts:39 `synth.custom` leaves out saw: a cable written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, saw: wobble }),
+    // song.ts:39 `synth.custom` leaves out spread: a value written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, spread: 0.5 }),
+    // song.ts:39 `synth.custom` leaves out spread: a cable written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, spread: wobble }),
+    // song.ts:39 `synth.custom` leaves out square: a value written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, square: 0 }),
+    // song.ts:39 `synth.custom` leaves out square: a cable written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, square: wobble }),
+    // song.ts:39 `synth.custom` leaves out sub: a value written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, sub: 0 }),
+    // song.ts:39 `synth.custom` leaves out sub: a cable written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, sub: wobble }),
+    // song.ts:39 `synth.custom` leaves out sustain: a value written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, sustain: 0.8 }),
+    // song.ts:39 `synth.custom` leaves out sustain: a cable written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, sustain: wobble }),
+    // song.ts:39 `synth.custom` leaves out velSens: a value written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, velSens: 0.5 }),
+    // song.ts:39 `synth.custom` leaves out velSens: a cable written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, velSens: wobble }),
+    // song.ts:39 `synth.custom` leaves out vibrato: a value written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, vibrato: 0 }),
+    // song.ts:39 `synth.custom` leaves out vibrato: a cable written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, vibrato: wobble }),
+    // song.ts:39 `synth.custom` leaves out width: a value written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, width: 0.5 }),
+    // song.ts:39 `synth.custom` leaves out width: a cable written in
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5, width: wobble }),
+    // song.ts:42 `synth.lead` leaves out cutoff: a value written in
+    synth.lead(lane.notes("lead"), { glide: 0.08, cutoff: 3500 }),
+    // song.ts:42 `synth.lead` leaves out cutoff: a cable written in
+    synth.lead(lane.notes("lead"), { glide: 0.08, cutoff: wobble }),
+    // song.ts:42 `synth.lead` leaves out drive: a value written in
+    synth.lead(lane.notes("lead"), { glide: 0.08, drive: 4 }),
+    // song.ts:42 `synth.lead` leaves out drive: a cable written in
+    synth.lead(lane.notes("lead"), { glide: 0.08, drive: wobble }),
+    // song.ts:42 `synth.lead` leaves out velSens: a value written in
+    synth.lead(lane.notes("lead"), { glide: 0.08, velSens: 0.4 }),
+    // song.ts:42 `synth.lead` leaves out velSens: a cable written in
+    synth.lead(lane.notes("lead"), { glide: 0.08, velSens: wobble }),
+    // song.ts:42 `synth.lead` leaves out vibrato: a value written in
+    synth.lead(lane.notes("lead"), { glide: 0.08, vibrato: 0.15 }),
+    // song.ts:42 `synth.lead` leaves out vibrato: a cable written in
+    synth.lead(lane.notes("lead"), { glide: 0.08, vibrato: wobble }),
+    // song.ts:43 `synth.sub` leaves out decay: a value written in
+    synth.sub(lane.notes("sub"), { drop: semis(12), decay: 4 }),
+    // song.ts:43 `synth.sub` leaves out decay: a cable written in
+    synth.sub(lane.notes("sub"), { drop: semis(12), decay: wobble }),
+    // song.ts:43 `synth.sub` leaves out drive: a value written in
+    synth.sub(lane.notes("sub"), { drop: semis(12), drive: 18 }),
+    // song.ts:43 `synth.sub` leaves out drive: a cable written in
+    synth.sub(lane.notes("sub"), { drop: semis(12), drive: wobble }),
+    // song.ts:43 `synth.sub` leaves out glide: a value written in
+    synth.sub(lane.notes("sub"), { drop: semis(12), glide: 0.08 }),
+    // song.ts:43 `synth.sub` leaves out glide: a cable written in
+    synth.sub(lane.notes("sub"), { drop: semis(12), glide: wobble }),
+    // song.ts:43 `synth.sub` leaves out velSens: a value written in
+    synth.sub(lane.notes("sub"), { drop: semis(12), velSens: 0.3 }),
+    // song.ts:43 `synth.sub` leaves out velSens: a cable written in
+    synth.sub(lane.notes("sub"), { drop: semis(12), velSens: wobble }),
+    // song.ts:44 `synth.bass` leaves out cutoff: a value written in
+    synth.bass(lane.notes("bass2"), { bite: 4, cutoff: 350 }),
+    // song.ts:44 `synth.bass` leaves out cutoff: a cable written in
+    synth.bass(lane.notes("bass2"), { bite: 4, cutoff: wobble }),
+    // song.ts:44 `synth.bass` leaves out decay: a value written in
+    synth.bass(lane.notes("bass2"), { bite: 4, decay: 0.2 }),
+    // song.ts:44 `synth.bass` leaves out decay: a cable written in
+    synth.bass(lane.notes("bass2"), { bite: 4, decay: wobble }),
+    // song.ts:44 `synth.bass` leaves out glide: a value written in
+    synth.bass(lane.notes("bass2"), { bite: 4, glide: 0.04 }),
+    // song.ts:44 `synth.bass` leaves out glide: a cable written in
+    synth.bass(lane.notes("bass2"), { bite: 4, glide: wobble }),
+    // song.ts:44 `synth.bass` leaves out velSens: a value written in
+    synth.bass(lane.notes("bass2"), { bite: 4, velSens: 0.4 }),
+    // song.ts:44 `synth.bass` leaves out velSens: a cable written in
+    synth.bass(lane.notes("bass2"), { bite: 4, velSens: wobble }),
+    // song.ts:47 `fm.keys` leaves out decay: a value written in
+    fm.keys(lane.notes("keys"), { tone: level, decay: 3.5 }),
+    // song.ts:47 `fm.keys` leaves out decay: a cable written in
+    fm.keys(lane.notes("keys"), { tone: level, decay: wobble }),
+    // song.ts:47 `fm.keys` leaves out release: a value written in
+    fm.keys(lane.notes("keys"), { tone: level, release: 0.35 }),
+    // song.ts:47 `fm.keys` leaves out release: a cable written in
+    fm.keys(lane.notes("keys"), { tone: level, release: wobble }),
+    // song.ts:47 `fm.keys` leaves out tine: a value written in
+    fm.keys(lane.notes("keys"), { tone: level, tine: 0.35 }),
+    // song.ts:47 `fm.keys` leaves out tine: a cable written in
+    fm.keys(lane.notes("keys"), { tone: level, tine: wobble }),
+    // song.ts:47 `fm.keys` leaves out velSens: a value written in
+    fm.keys(lane.notes("keys"), { tone: level, velSens: 0.8 }),
+    // song.ts:47 `fm.keys` leaves out velSens: a cable written in
+    fm.keys(lane.notes("keys"), { tone: level, velSens: wobble }),
+    // song.ts:47 `fm.bell` leaves out tone: a value written in
+    fm.bell(lane.notes("bell"), { decay: 6, tone: 0.5 }),
+    // song.ts:47 `fm.bell` leaves out tone: a cable written in
+    fm.bell(lane.notes("bell"), { decay: 6, tone: wobble }),
+    // song.ts:47 `fm.bell` leaves out velSens: a value written in
+    fm.bell(lane.notes("bell"), { decay: 6, velSens: 0.6 }),
+    // song.ts:47 `fm.bell` leaves out velSens: a cable written in
+    fm.bell(lane.notes("bell"), { decay: 6, velSens: wobble }),
+    // song.ts:47 `fm.custom` leaves out amountA: a value written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, amountA: 1.5 }),
+    // song.ts:47 `fm.custom` leaves out amountA: a cable written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, amountA: wobble }),
+    // song.ts:47 `fm.custom` leaves out amountB: a value written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, amountB: 0.8 }),
+    // song.ts:47 `fm.custom` leaves out amountB: a cable written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, amountB: wobble }),
+    // song.ts:47 `fm.custom` leaves out attack: a value written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, attack: 0.002 }),
+    // song.ts:47 `fm.custom` leaves out attack: a cable written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, attack: wobble }),
+    // song.ts:47 `fm.custom` leaves out brightDecayA: a value written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, brightDecayA: 1 }),
+    // song.ts:47 `fm.custom` leaves out brightDecayA: a cable written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, brightDecayA: wobble }),
+    // song.ts:47 `fm.custom` leaves out brightDecayB: a value written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, brightDecayB: 0.1 }),
+    // song.ts:47 `fm.custom` leaves out brightDecayB: a cable written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, brightDecayB: wobble }),
+    // song.ts:47 `fm.custom` leaves out carrierB: a value written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, carrierB: 1 }),
+    // song.ts:47 `fm.custom` leaves out carrierB: a cable written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, carrierB: wobble }),
+    // song.ts:47 `fm.custom` leaves out decay: a value written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, decay: 3 }),
+    // song.ts:47 `fm.custom` leaves out decay: a cable written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, decay: wobble }),
+    // song.ts:47 `fm.custom` leaves out detune: a value written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, detune: 0 }),
+    // song.ts:47 `fm.custom` leaves out detune: a cable written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, detune: wobble }),
+    // song.ts:47 `fm.custom` leaves out drop: a value written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, drop: 0 }),
+    // song.ts:47 `fm.custom` leaves out drop: a cable written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, drop: wobble }),
+    // song.ts:47 `fm.custom` leaves out dropTime: a value written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, dropTime: 0.04 }),
+    // song.ts:47 `fm.custom` leaves out dropTime: a cable written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, dropTime: wobble }),
+    // song.ts:47 `fm.custom` leaves out feedback: a value written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, feedback: 0 }),
+    // song.ts:47 `fm.custom` leaves out feedback: a cable written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, feedback: wobble }),
+    // song.ts:47 `fm.custom` leaves out level: a value written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, level: 0 }),
+    // song.ts:47 `fm.custom` leaves out level: a cable written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, level: wobble }),
+    // song.ts:47 `fm.custom` leaves out mixB: a value written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, mixB: 0.35 }),
+    // song.ts:47 `fm.custom` leaves out mixB: a cable written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, mixB: wobble }),
+    // song.ts:47 `fm.custom` leaves out modulatorA: a value written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, modulatorA: 1 }),
+    // song.ts:47 `fm.custom` leaves out modulatorA: a cable written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, modulatorA: wobble }),
+    // song.ts:47 `fm.custom` leaves out modulatorB: a value written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, modulatorB: 14 }),
+    // song.ts:47 `fm.custom` leaves out modulatorB: a cable written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, modulatorB: wobble }),
+    // song.ts:47 `fm.custom` leaves out release: a value written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, release: 0.4 }),
+    // song.ts:47 `fm.custom` leaves out release: a cable written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, release: wobble }),
+    // song.ts:47 `fm.custom` leaves out sustain: a value written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, sustain: 0 }),
+    // song.ts:47 `fm.custom` leaves out sustain: a cable written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, sustain: wobble }),
+    // song.ts:47 `fm.custom` leaves out tone: a value written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, tone: 0.5 }),
+    // song.ts:47 `fm.custom` leaves out tone: a cable written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, tone: wobble }),
+    // song.ts:47 `fm.custom` leaves out velSens: a value written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, velSens: 0.7 }),
+    // song.ts:47 `fm.custom` leaves out velSens: a cable written in
+    fm.custom(lane.notes("fm"), { carrierA: 2, velSens: wobble }),
+    // song.ts:48 `fm.metal` leaves out decay: a value written in
+    fm.metal(lane.notes("metal"), { drop: semis(12), decay: 0.5 }),
+    // song.ts:48 `fm.metal` leaves out decay: a cable written in
+    fm.metal(lane.notes("metal"), { drop: semis(12), decay: wobble }),
+    // song.ts:48 `fm.metal` leaves out feedback: a value written in
+    fm.metal(lane.notes("metal"), { drop: semis(12), feedback: 0.35 }),
+    // song.ts:48 `fm.metal` leaves out feedback: a cable written in
+    fm.metal(lane.notes("metal"), { drop: semis(12), feedback: wobble }),
+    // song.ts:48 `fm.metal` leaves out tone: a value written in
+    fm.metal(lane.notes("metal"), { drop: semis(12), tone: 0.5 }),
+    // song.ts:48 `fm.metal` leaves out tone: a cable written in
+    fm.metal(lane.notes("metal"), { drop: semis(12), tone: wobble }),
+    // song.ts:48 `fm.metal` leaves out velSens: a value written in
+    fm.metal(lane.notes("metal"), { drop: semis(12), velSens: 0.5 }),
+    // song.ts:48 `fm.metal` leaves out velSens: a cable written in
+    fm.metal(lane.notes("metal"), { drop: semis(12), velSens: wobble }),
+    // song.ts:50 `drums.kit` leaves out drive: a value written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, drive: 0 }),
+    // song.ts:50 `drums.kit` leaves out drive: a cable written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, drive: wobble }),
+    // song.ts:50 `drums.kit` leaves out hatDecay: a value written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, hatDecay: 0.045 }),
+    // song.ts:50 `drums.kit` leaves out hatDecay: a cable written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, hatDecay: wobble }),
+    // song.ts:50 `drums.kit` leaves out hatTone: a value written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, hatTone: 8000 }),
+    // song.ts:50 `drums.kit` leaves out hatTone: a cable written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, hatTone: wobble }),
+    // song.ts:50 `drums.kit` leaves out kickDecay: a value written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, kickDecay: 0.45 }),
+    // song.ts:50 `drums.kit` leaves out kickDecay: a cable written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, kickDecay: wobble }),
+    // song.ts:50 `drums.kit` leaves out kickLevel: a value written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, kickLevel: 0 }),
+    // song.ts:50 `drums.kit` leaves out kickLevel: a cable written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, kickLevel: wobble }),
+    // song.ts:50 `drums.kit` leaves out openDecay: a value written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, openDecay: 0.45 }),
+    // song.ts:50 `drums.kit` leaves out openDecay: a cable written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, openDecay: wobble }),
+    // song.ts:50 `drums.kit` leaves out percLevel: a value written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, percLevel: 0 }),
+    // song.ts:50 `drums.kit` leaves out percLevel: a cable written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, percLevel: wobble }),
+    // song.ts:50 `drums.kit` leaves out punch: a value written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, punch: 0.5 }),
+    // song.ts:50 `drums.kit` leaves out punch: a cable written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, punch: wobble }),
+    // song.ts:50 `drums.kit` leaves out snap: a value written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, snap: 0.6 }),
+    // song.ts:50 `drums.kit` leaves out snap: a cable written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, snap: wobble }),
+    // song.ts:50 `drums.kit` leaves out snareLevel: a value written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, snareLevel: 0 }),
+    // song.ts:50 `drums.kit` leaves out snareLevel: a cable written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, snareLevel: wobble }),
+    // song.ts:50 `drums.kit` leaves out snareTune: a value written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, snareTune: 190 }),
+    // song.ts:50 `drums.kit` leaves out snareTune: a cable written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, snareTune: wobble }),
+    // song.ts:50 `drums.kit` leaves out tomLevel: a value written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, tomLevel: 0 }),
+    // song.ts:50 `drums.kit` leaves out tomLevel: a cable written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, tomLevel: wobble }),
+    // song.ts:50 `drums.kit` leaves out tomTune: a value written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, tomTune: 130 }),
+    // song.ts:50 `drums.kit` leaves out tomTune: a cable written in
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3, tomTune: wobble }),
+    // song.ts:51 `drums.kick` leaves out drive: a value written in
+    drums.kick(lane.notes("boom"), { decay: 1.2, drive: 0 }),
+    // song.ts:51 `drums.kick` leaves out drive: a cable written in
+    drums.kick(lane.notes("boom"), { decay: 1.2, drive: wobble }),
+    // song.ts:51 `drums.kick` leaves out punch: a value written in
+    drums.kick(lane.notes("boom"), { decay: 1.2, punch: 0.5 }),
+    // song.ts:51 `drums.kick` leaves out punch: a cable written in
+    drums.kick(lane.notes("boom"), { decay: 1.2, punch: wobble }),
+    // song.ts:51 `drums.kick` leaves out tune: a value written in
+    drums.kick(lane.notes("boom"), { decay: 1.2, tune: 48 }),
+    // song.ts:51 `drums.kick` leaves out tune: a cable written in
+    drums.kick(lane.notes("boom"), { decay: 1.2, tune: wobble }),
+    // song.ts:52 `drums.snare` leaves out decay: a value written in
+    drums.snare(lane.notes("snare"), { decay: 0.18 }),
+    // song.ts:52 `drums.snare` leaves out decay: a cable written in
+    drums.snare(lane.notes("snare"), { decay: wobble }),
+    // song.ts:52 `drums.snare` leaves out snap: a value written in
+    drums.snare(lane.notes("snare"), { snap: 0.6 }),
+    // song.ts:52 `drums.snare` leaves out snap: a cable written in
+    drums.snare(lane.notes("snare"), { snap: wobble }),
+    // song.ts:52 `drums.snare` leaves out tune: a value written in
+    drums.snare(lane.notes("snare"), { tune: 190 }),
+    // song.ts:52 `drums.snare` leaves out tune: a cable written in
+    drums.snare(lane.notes("snare"), { tune: wobble }),
+    // song.ts:53 `drums.clap` leaves out decay: a value written in
+    drums.clap(lane.notes("clap"), { decay: 0.25 }),
+    // song.ts:53 `drums.clap` leaves out decay: a cable written in
+    drums.clap(lane.notes("clap"), { decay: wobble }),
+    // song.ts:53 `drums.clap` leaves out tone: a value written in
+    drums.clap(lane.notes("clap"), { tone: 1200 }),
+    // song.ts:53 `drums.clap` leaves out tone: a cable written in
+    drums.clap(lane.notes("clap"), { tone: wobble }),
+    // song.ts:54 `drums.hats` leaves out decay: a value written in
+    drums.hats(lane.notes("hats2"), { openDecay: 0.6, decay: 0.045 }),
+    // song.ts:54 `drums.hats` leaves out decay: a cable written in
+    drums.hats(lane.notes("hats2"), { openDecay: 0.6, decay: wobble }),
+    // song.ts:54 `drums.hats` leaves out tone: a value written in
+    drums.hats(lane.notes("hats2"), { openDecay: 0.6, tone: 8000 }),
+    // song.ts:54 `drums.hats` leaves out tone: a cable written in
+    drums.hats(lane.notes("hats2"), { openDecay: 0.6, tone: wobble }),
+    // song.ts:55 `drums.tom` leaves out decay: a value written in
+    drums.tom(lane.notes("toms"), { decay: 0.35 }),
+    // song.ts:55 `drums.tom` leaves out decay: a cable written in
+    drums.tom(lane.notes("toms"), { decay: wobble }),
+    // song.ts:55 `drums.tom` leaves out tune: a value written in
+    drums.tom(lane.notes("toms"), { tune: 130 }),
+    // song.ts:55 `drums.tom` leaves out tune: a cable written in
+    drums.tom(lane.notes("toms"), { tune: wobble }),
+    // song.ts:56 `drums.rim` leaves out tone: a value written in
+    drums.rim(lane.notes("rim"), { tone: 1700 }),
+    // song.ts:56 `drums.rim` leaves out tone: a cable written in
+    drums.rim(lane.notes("rim"), { tone: wobble }),
+    // song.ts:57 `drums.cowbell` leaves out tune: a value written in
+    drums.cowbell(lane.notes("cowbell"), { tune: 540 }),
+    // song.ts:57 `drums.cowbell` leaves out tune: a cable written in
+    drums.cowbell(lane.notes("cowbell"), { tune: wobble }),
+    // song.ts:58 `drums.cymbal` leaves out decay: a value written in
+    drums.cymbal(lane.notes("crash"), { decay: 1.6 }),
+    // song.ts:58 `drums.cymbal` leaves out decay: a cable written in
+    drums.cymbal(lane.notes("crash"), { decay: wobble }),
+    // song.ts:59 `drums.shaker` leaves out decay: a value written in
+    drums.shaker(lane.notes("shaker"), { decay: 0.06 }),
+    // song.ts:59 `drums.shaker` leaves out decay: a cable written in
+    drums.shaker(lane.notes("shaker"), { decay: wobble }),
+    // song.ts:61 `master` leaves out ceiling: a value written in
+    master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit }), { ceiling: -1 }),
+    // song.ts:61 `master` leaves out ceiling: a cable written in
+    master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit }), { ceiling: wobble }),
     // std:gain added after a sound
     gain(osc.saw(semis(60)), 0),
     // std:pan added after a sound
@@ -267,5 +737,5 @@ export default song(({ lane, time }) => {
     widen(osc.saw(semis(60)), { width: 1.5 }),
   ];
   void planned;
-  return master(mixer({ drums, fx: { in: fx, db: -4 }, synth: { in: synth, pan: -0.3 } }));
+  return master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit }));
 });

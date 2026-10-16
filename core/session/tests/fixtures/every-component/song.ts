@@ -4,10 +4,13 @@ import { semis, song } from "@m2/core";
 import { choose, lfo, when } from "std/control";
 import { adsr, follow, gain, noise, osc, pan, svf, vca } from "std/dsp";
 import { bandpass, highpass, lowpass, notch } from "std/filter";
+import { drums } from "std/drums";
+import { fm } from "std/fm";
 import { bitcrush, chorus, compress, delay, drive, duck, eq3, limit, phaser, reverb, tremolo, widen } from "std/fx";
 import { bass, hat, kick, pad, pluck } from "std/instruments";
 import { add, blend, mtof, range, scale, sum, xrange } from "std/math";
 import { master, mixer } from "std/mix";
+import { mono, synth } from "std/synth";
 
 export default song(({ lane, time }) => {
   const sweep = lfo(time.beats, { period: 2 });
@@ -20,13 +23,40 @@ export default song(({ lane, time }) => {
   const env = adsr(lane.mask("gate"), { attack: 0.01 });
   const hit = kick(lane.notes("kick"));
   const side = follow(hit);
-  const drums = add(hit, hat(lane.notes("hats")));
-  const synth = sum(bass(lane.notes("bass"), { cutoff: wobble }), pluck(lane.notes("chords")), pad(lane.notes("pad")));
-  const filtered = notch(bandpass(highpass(lowpass(synth, 1200), 200, 0.9), wobble), 3000);
+  const beat = add(hit, hat(lane.notes("hats")));
+  const tones = sum(bass(lane.notes("bass"), { cutoff: wobble }), pluck(lane.notes("chords")), pad(lane.notes("pad")));
+  const filtered = notch(bandpass(highpass(lowpass(tones, 1200), 200, 0.9), wobble), 3000);
   const shaped = svf.highpass(svf.bandpass(svf.lowpass(buzz, 800), 900), 100);
   const voiced = vca(add(tone, add(pulse, add(soft, noise(7)))), env);
   const picked = choose(lane.mask("pick"), when(lane.mask("open"), blend(shaped, voiced, level)), scale(filtered, 0.5));
   const wet = widen(bitcrush(eq3(compress(tremolo(phaser(chorus(reverb(delay(drive(limit(picked, -3)), { time: 0.3 })))))))));
   const fx = duck(pan(gain(wet, -3), 0.2), side, { depth: -6 });
-  return master(mixer({ drums, fx: { in: fx, db: -4 }, synth: { in: synth, pan: -0.3 } }));
+  const saws = sum(
+    synth.supersaw(lane.notes("saws"), { cutoff: wobble, detune: 0.5 }),
+    synth.pad(lane.notes("swell"), { attack: 1.2 }),
+    synth.pluck(lane.notes("arp")),
+    synth.strings(lane.notes("strings"), { ensemble: level }),
+    synth.custom(lane.notes("custom"), { filterEnv: 2, unison: 5 }),
+  );
+  const lines = sum(
+    synth.lead(lane.notes("lead"), { glide: 0.08 }),
+    synth.sub(lane.notes("sub"), { drop: semis(12) }),
+    synth.bass(lane.notes("bass2"), { bite: 4 }),
+    mono(lane.notes("line"), (n) => osc.saw(n.pitch), { glide: 0.05 }),
+  );
+  const keys = sum(fm.keys(lane.notes("keys"), { tone: level }), fm.bell(lane.notes("bell"), { decay: 6 }), fm.custom(lane.notes("fm"), { carrierA: 2 }));
+  const metal = fm.metal(lane.notes("metal"), { drop: semis(12) });
+  const kit = sum(
+    drums.kit(lane.notes("kit"), { kickTune: 52, hatLevel: 3 }),
+    drums.kick(lane.notes("boom"), { decay: 1.2 }),
+    drums.snare(lane.notes("snare")),
+    drums.clap(lane.notes("clap")),
+    drums.hats(lane.notes("hats2"), { openDecay: 0.6 }),
+    drums.tom(lane.notes("toms")),
+    drums.rim(lane.notes("rim")),
+    drums.cowbell(lane.notes("cowbell")),
+    drums.cymbal(lane.notes("crash")),
+    drums.shaker(lane.notes("shaker")),
+  );
+  return master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit }));
 });
