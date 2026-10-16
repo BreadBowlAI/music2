@@ -1,32 +1,39 @@
 # Handoff
 
-Written 2026-10-16, at the end of step 7 (the engine), and updated after its speed work the same day. Read this
-first, then `docs/architecture.md` (the contract) and the design for whatever you pick up.
+Written 2026-10-16, at the end of step 7 (the engine), updated after its speed work the same day, and again on
+2026-10-17, when step 7 landed on `main`. Read this first, then `docs/architecture.md` (the contract) and the
+design for whatever you pick up.
 
 **In short**
-- **Step 7 and its speed work are done on Linux**, on branch `step7` at `ffc36aa`, after a review of the speed work's
-  fixes: `ci/check.sh` passes there, every row, with nothing passed only on a retry, once without the gates and once
-  with them (912 Rust tests, 29/29 browser suites, 8 of 8 renders, the old engine S built, the 6 gate runs;
-  `~/m2-runs/check-s7-rv1`, `-rvg`). Before that review it passed at `a894448` (`-sp1`, `-sp2`, `-spg`).
+- **Step 7 is on `main`** (2026-10-17): Linux green, macOS owed. With its speed work it is done on Linux at
+  `ffc36aa`, after a review of the speed work's fixes: `ci/check.sh` passes there, every row, with nothing passed
+  only on a retry, once without the gates and once with them (912 Rust tests, 29/29 browser suites, 8 of 8
+  renders, the old engine S built, the 6 gate runs; `~/m2-runs/check-s7-rv1`, `-rvg`). Before that review it
+  passed at `a894448` (`-sp1`, `-sp2`, `-spg`).
 - **macOS:** the owner's Mac run at `ed7fc8e` passed every row but the gates, and the gates failed on one rule:
   G7f part 2, +328 µs a callback against 320, by the old sum. The owner said "speed it up first". Now the engine is
-  faster and G7f measures S fresh. **Step 7 waits for one more Mac run** (below).
-- `main` is at `0ebc6e6` (the platform step, macOS green at `1750322`). `step7` has `main` merged in.
+  faster and G7f measures S fresh. **One Mac run is owed** for step 7, now on `main` (below). The owner runs it
+  by hand, later.
+- `main` has step 7: it fast-forwarded from `0ebc6e6` (the platform step, macOS green at `1750322`).
+- **Two gaps found on 2026-10-16** (Left for later): a kernel that crashes while the song plays stops the whole
+  song with no message; and a kernel that runs out of its 32 MiB fails with a message that never says "memory".
+- **A layout to decide before step 9:** idea 3, one sandbox per box (`docs/designs/kernel-layout/report.md`).
+  Research only; it is in Open owner decisions.
 - The owner decided O1 to O5 on 2026-10-15 (below).
-- Next: the Mac run; then `step7` onto `main`; then merge `sounds`, then `taste`; then 8a, 8b and step 9.
+- Next: merge `sounds`, then `taste`; then 8a, 8b and step 9. The Mac runs are owed and listed below.
 
 ## Where everything is
 
 | Branch | Commit | State |
 |---|---|---|
-| `main` | `0ebc6e6` | Steps 1–6, the fast note edits, and the platform layer. Green on Linux and macOS at `1750322`. |
-| `step7` | `ffc36aa`, then docs only | Step 7, the engine, with the speed work of 2026-10-16: built, reviewed, fixed and checked on Linux, its fixes reviewed and fixed too. `origin/step7` is at `ed7fc8e`: the lead pushes the new commits for the Mac run. Worktree `~/m2-runs/wt/s7` (its `target/` is about 70 GB). |
-| `origin/wip/step7` | `5079233` | The Mac's half-done step 7. All of it is in `step7` (cherry-picked as `c8117c3`). Delete it once `step7` is on `main`. |
+| `main` | the tip | Steps 1–7, the fast note edits, and the platform layer. Green on Linux and macOS at `1750322` (the platform step). Step 7: green on Linux at `ffc36aa`, macOS owed. |
+| `step7` | `95c8a73` | Step 7's commits, all on `main` now. Worktree `~/m2-runs/wt/s7` (its `target/` is about 70 GB). Delete the branch and the worktree once the Mac run passes. |
 | `origin/taste` | `4804247` | The new look (T and S); 8b.1 Tracks done (`a0d5f91`); 8b.2 song bar unfinished. |
 | `origin/sounds` | `916127d` | 20 new std sounds (polysynth, FM, drum kit). Its last independent check was cut short. |
 
 `taste` and `sounds` start at `8aa301e`, before the platform step. Each has a detached worktree in `~/m2-runs/wt/`
-(`taste`, `sounds`). `~/m2-runs/wt/step7` is the old `5079233`: remove it with the `wip/step7` branch.
+(`taste`, `sounds`). `origin/wip/step7` (the Mac's half-done step 7, all of it in `step7` as `c8117c3`) and its
+worktree were deleted when step 7 landed.
 
 Designs, all in `docs/designs/`:
 - `step7/design-7.md` (revision 2, with dated notes from the review; §18 the slices, §19 the owner's questions).
@@ -35,6 +42,8 @@ Designs, all in `docs/designs/`:
   the fixes, Finish, Speed (2026-10-16: the fresh comparison with S, the profile, the cut, the review, the checks,
   the Mac estimate).
 - `step7/g7f-linux.md`: the study behind the owner's Store layout (O1).
+- `kernel-layout/report.md`: idea 3, one sandbox per box (2026-10-16). Research only, for the owner to decide
+  before step 9. Its notes and sources sit beside it.
 - `platform/design.md` (§8: how later steps add to `m2-os`; §13.3: the merges) and `platform/build-notes.md`.
 - `step8/design-8a.md`, `design-8b.md`, `taste.md` (the look), `audit-ui.md` (98-shot audit).
 - `step6/`: the Tx and write path (C1–C21, cited by the contract). `workflows/`: old workflow scripts (Mac paths).
@@ -78,6 +87,7 @@ Decided earlier, and still in force:
 | G7f: O2 named a p99 rule. | The mean is judged against the same bounds; the p99's estimate is printed beside it. The p99 moved by hundreds of µs a block (thousands a callback) from one pair to the next; the mean by about 12 µs. It is more lenient than a p99 rule. | Keep the mean. |
 | A plugin that keeps failing. | It is started again once. If the new one fails within 10 s, it stays silent until the song is opened again, and the user is told once. | Keep 10 s. |
 | The output device changes while playing (headphones in or out). | Playback stops, and a message says why: "Press Play to go on". | Keep it: music shouldn't jump to the speakers on its own. |
+| The kernel layout (idea 3): one sandbox per box, with wasmtime's own 4 GiB layout. It undoes the 32 MiB layout of O1 (2026-10-15). | Nothing: research only (`docs/designs/kernel-layout/report.md`). | Decide before kernel ABI v1 freezes in step 9. If yes, build it after 8a, after a short test build that measures it. |
 | O3's fix needs std's version bumped (0.1 to 0.2). FMT-3 makes that release the trigger for a lockfile and several bundled std versions (the contract's Deferred list). | Nothing yet. | Bump to 0.2 and move the fixtures and templates with it (no backwards compatibility); move the lockfile's trigger to "the first std release after people have songs". |
 
 ## The check: `ci/check.sh`
@@ -135,14 +145,13 @@ screenshots once per step (this step's: `~/m2-runs/app-shots/step7-6297c9a/`).
 ## The Mac run (for the owner)
 
 About 35 minutes, mostly waiting *(an estimate: 25 at `ed7fc8e`; this time it also builds the old engine
-S, about 3 minutes the first time, and G7f plays longer, about 8 minutes a part)*. First the lead pushes
-the `step7` branch.
+S, about 3 minutes the first time, and G7f plays longer, about 8 minutes a part)*. Step 7 is on `main`, pushed.
 
 | # | Do this | Why |
 |---|---|---|
 | 1 | Plug the Mac in, keep the lid open, and quit other apps. | The speed tests need a quiet Mac. |
 | 2 | Open Terminal on the Mac itself, not over ssh. | One test needs your login session. |
-| 3 | Type `cd ~/dev/suite2/music2`, then `git fetch`, then `git switch step7`, then `git pull`. | This gets step 7. |
+| 3 | Type `cd ~/dev/suite2/music2`, then `git fetch`, then `git switch main`, then `git pull`. | This gets step 7. |
 | 4 | Type `ci/check.sh` and press Return. | It runs every check and the speed tests. |
 | 5 | If one line says `running` for more than 30 minutes, press Ctrl-C once. | It stops that check and still prints the summary. |
 | 6 | Copy the last lines, from `music2 check:` to the `logs` line, and paste them back. | That is all the lead needs. |
@@ -230,10 +239,18 @@ numbers. If a row fails, the lead fixes it on Linux, checks the mac lint, and as
 
 ## What to do next, in order
 
-1. **The Mac run** (above). Fix what it finds on Linux, then ask for one more run.
-2. **Land `step7` on `main`** (`main`'s `0ebc6e6` is already in it, so it fast-forwards). Write "macOS: green at …"
-   here and in the contract's gates row 7, with G7f's numbers in RENDER-32's *Today*. Push. Delete
-   `origin/wip/step7` and the worktree `~/m2-runs/wt/step7`.
+The owner said on 2026-10-16 to go on without waiting for the Mac: each step lands on `main` once Linux is green
+and reviewed, and its Mac run is owed. **Mac runs owed:**
+
+| Step | On `main` at | Mac run |
+|---|---|---|
+| Step 7 and its speed work | `ffc36aa` (Linux checks), then docs only | owed: the run above, then the by-ear steps |
+
+1. **The Mac runs** (above), when the owner has time. Fix what they find on Linux, then ask for one more run. When
+   step 7's passes, write "macOS: green at …" here and in the contract's gates row 7, with G7f's Mac numbers in
+   RENDER-32's *Today*. Then delete the `step7` branch, `origin/step7` and the worktree `~/m2-runs/wt/s7`.
+2. **The two gaps found on 2026-10-16** (Left for later): fix them before step 9, or with idea 3 if the owner
+   says yes to it.
 3. **Merge `sounds`**: re-run its full checks first (its commit says why), then merge it (notes below). Never take a
    side on `std.wasm` or `Cargo.lock`: rebuild `std.wasm` (`std/build.sh`, then `std/build.sh --check`), check the
    renders, commit once. Fix O3 there: chorus, phaser and tremolo follow the song's time, not engine time. It changes
@@ -241,7 +258,8 @@ numbers. If a row fails, the lead fixes it on Linux, checks the mac lint, and as
    lockfile question above first). Mac run before it lands.
 4. **Merge `taste`**: finish 8b.2 (song bar) and build 8b.3 (Mix faders) per design-8b, then merge (notes below):
    bundle Inter for Linux, D7's attention fix, re-run s8-tracks. Mac run before it lands.
-5. Then **8a** (all CPU cores), **8b.4–8b.10**, and **step 9**. Each adds its OS pieces to `m2-os` as platform design
+5. Then **8a** (all CPU cores), **8b.4–8b.10**, and **step 9**. Before step 9 freezes kernel ABI v1, the owner
+   decides the kernel layout (Open owner decisions). Each adds its OS pieces to `m2-os` as platform design
    §8 says (8a's `rt.rs` becomes `mac/rt.rs` and `linux/rt.rs`; 8b.10's MIDI uses `midir`). Mac run at the end of each.
 
 ## Merge notes
@@ -294,6 +312,15 @@ Fixed in step 7 (of these, only `a_plugin_that_keeps_failing_is_started_again_on
 One line each; the details are in `step7/build-notes.md` and `platform/build-notes.md`.
 
 Step 7:
+- **Gap: a kernel crash stops the song, with no message.** If a kernel traps while the song plays,
+  `core/runtime/src/engine.rs:570-579` drops the error, counts it and stops the transport. Only tests read the
+  count (`Engine::crashes`). Pressing Play plays silence until the next edit that rebuilds the song. It should mute
+  only the part that crashed, rebuild it (HOST-5's path), and tell the user once. No std kernel is known to trap.
+- **Gap: a kernel out of memory doesn't say so.** A kernel whose memory would pass 32 MiB gets a refused grow,
+  and its Rust code then most likely aborts (unverified): "wasm trap: wasm `unreachable` instruction executed".
+  `out_of_memory` (`crates/server/src/graph.rs:382-387`) doesn't match that, so the user isn't told it is memory.
+  No std kernel comes near (the largest, `delay`, is about 1.6 MiB); other people's kernels could (step 9). The
+  full path is in `kernel-layout/code-map.md` §3.7.
 - **K13:** a note that starts in the very block after a state change doesn't sound in Surge XT (Surge ends its voices when it applies a state).
 - **K14:** a plugin that applies a loaded state later than its next call could still win over the code's values (HOME-5a's revert, with plugin windows, is the real fix).
 - A new plugin instance whose saved state adds latency plays uncompensated, and nothing says so (RENDER-17; found in the finish).

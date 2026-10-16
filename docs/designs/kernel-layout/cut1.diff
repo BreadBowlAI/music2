@@ -1,0 +1,300 @@
+commit 444fc668529a8b89ffcd7e584c242c76e5370cee
+Author: Jerry Xu <mxudev@gmail.com>
+Date:   Fri Oct 16 13:51:41 2026 +0200
+
+    Kernel calls keep their memory's address instead of asking the store
+    Since step 7 each of p50's 6,058 kernel instances has a store of its
+    own, and every kernel call asked that store for its memory twice. Those
+    lookups miss the cache now (the profile: about +188 us of host time a
+    512-frame callback). Each instance now keeps its memory's address and
+    size from its build, and a call slices them through `&mut self`, so
+    nothing else can reach the memory meanwhile. This is sound because a
+    kernel memory never moves in either layout: P2 refuses to move one and
+    P1 reserves 4 GiB against the 32 MiB cap. The engine field is now
+    crate-private, so no other engine can be put in a PackageSet.
+    Building checks the address after each kernel's first reset, and debug
+    builds at every call. New test a_kernel_memory_never_moves (RENDER-32):
+    a kernel that grows by a page every call up to the cap plays its input
+    bit for bit, under P2 and P1. Under a layout that may move, it and 32
+    other runtime tests fail. No sound changes: 8 of 8 renders, the p16
+    render ebc87e0b..., and the five recorded tests pass.
+    
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01R1SbPDdWrZoQ7z8dxU28hJ
+
+diff --git a/core/runtime/src/lib.rs b/core/runtime/src/lib.rs
+index 57b963c..20a0af4 100644
+--- a/core/runtime/src/lib.rs
++++ b/core/runtime/src/lib.rs
+@@ -50,6 +50,7 @@ pub mod trace;
+ pub mod transport;
+ 
+ use std::collections::{HashMap, HashSet};
++use std::ptr::NonNull;
+ use std::sync::Arc;
+ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+ 
+@@ -153,6 +154,8 @@ struct KernelInst {
+     shape: u64,
+     name: String,
+     memory: Memory,
++    /// Where `memory` is, so a call needn't ask the store, one of thousands and cold (RENDER-32).
++    view: MemView,
+     reset: TypedFunc<(), ()>,
+     process: TypedFunc<u32, ()>,
+     active: TypedFunc<(), u32>,
+@@ -169,6 +172,27 @@ struct KernelInst {
+     in_names: Vec<String>,
+ }
+ 
++/// A kernel memory's address and its size when its ports were checked, kept from its build. A
++/// memory never moves (RENDER-32): every layout reserves all of the 32 MiB a memory may grow to,
++/// and a memory never shrinks, so every port stays inside the first `len` bytes at `base`.
++struct MemView {
++    base: NonNull<u8>,
++    len: usize,
++}
++
++// SAFETY: `base` is dereferenced only in `KernelInst::ports`, which holds by `&mut` the instance, and
++// so the store that owns the memory; the memory goes to another thread only with that store.
++unsafe impl Send for MemView {}
++
++/// One call's view of a kernel's memory: its bytes, the ports in them, and the instance's name.
++struct Ports<'a> {
++    data: &'a mut [u8],
++    ins: &'a [usize],
++    outs: &'a [usize],
++    out_channels: &'a [u8],
++    name: &'a str,
++}
++
+ /// Kernel instances alive in the process: what a churn of activations must give back (§7.6).
+ static LIVE_KERNELS: AtomicUsize = AtomicUsize::new(0);
+ 
+@@ -254,12 +278,15 @@ impl KernelInst {
+                 floats(data, ptr, 2 * BLOCK).fill(*v as f32);
+             }
+         }
++        let base = NonNull::new(memory.data_ptr(&store)).with_context(|| format!("{}: `{id}`'s memory has no address", n.name))?;
++        let view = MemView { base, len: memory.data_size(&store) };
+         LIVE_KERNELS.fetch_add(1, Ordering::Relaxed);
+         Ok(KernelInst {
+             store,
+             shape,
+             name: n.name.clone(),
+             memory,
++            view,
+             reset,
+             process,
+             active,
+@@ -300,6 +327,31 @@ impl KernelInst {
+         Ok(self.active.call(&mut self.store, ())? != 0)
+     }
+ 
++    /// Its first reset, while it is built: a reset may grow the memory (a kernel builds its new
++    /// state before dropping the old), never move it, which this checks in every build. It sees a
++    /// move in this reset only: what keeps a memory in place later is the layout and the 32 MiB cap
++    /// (RENDER-32), and debug builds check at every call ([`KernelInst::ports`]).
++    fn prewarm(&mut self) -> Result<()> {
++        self.reset()?;
++        if self.memory.data_ptr(&self.store) != self.view.base.as_ptr() {
++            bail!("{}: its kernel memory moved as it grew (RENDER-32: a kernel memory never moves)", self.name);
++        }
++        Ok(())
++    }
++
++    /// Its memory's bytes for one call's copies, with its ports and its name, without asking the
++    /// store. Debug builds check the memory is still where it was built: one lookup in the store, as
++    /// each copy made before the address was kept.
++    fn ports(&mut self) -> Ports<'_> {
++        debug_assert_eq!(self.memory.data_ptr(&self.store), self.view.base.as_ptr(), "{}: a kernel memory moved (RENDER-32)", self.name);
++        // SAFETY: `base..base + len` is this instance's memory, which its store owns and which never
++        // moves or shrinks (RENDER-32). `&mut self` holds that store for as long as the slice lives,
++        // so no call into the kernel and no other view of the memory can happen meanwhile, as with
++        // `Memory::data_mut`.
++        let data = unsafe { std::slice::from_raw_parts_mut(self.view.base.as_ptr(), self.view.len) };
++        Ports { data, ins: &self.in_ptrs, outs: &self.out_ptrs, out_channels: &self.out_channels, name: &self.name }
++    }
++
+     #[cfg(debug_assertions)]
+     fn keep_inputs(&mut self) {
+         let data = self.memory.data(&self.store);
+@@ -339,8 +391,8 @@ impl KernelNode {
+             }
+             return Ok(());
+         };
+-        let data = k.memory.data_mut(&mut k.store);
+-        for ((inp, &ptr), seen) in self.inputs.iter().zip(&k.in_ptrs).zip(&mut self.seen) {
++        let p = k.ports();
++        for ((inp, &ptr), seen) in self.inputs.iter().zip(p.ins).zip(&mut self.seen) {
+             if let Input::Port { src, src_channels, channels } = inp {
+                 let s = &bufs[src.node][src.port];
+                 // A steady constant is written over the whole block, once per value, so every
+@@ -352,22 +404,21 @@ impl KernelNode {
+                 let (off, len) = if version == COPY { (seg.off, n) } else { (0, BLOCK) };
+                 for c in 0..*channels as usize {
+                     let sc = if c < *src_channels as usize { c } else { 0 };
+-                    floats(data, ptr + c * BLOCK * 4, len).copy_from_slice(&s[sc * BLOCK + off..sc * BLOCK + off + len]);
++                    floats(p.data, ptr + c * BLOCK * 4, len).copy_from_slice(&s[sc * BLOCK + off..sc * BLOCK + off + len]);
+                 }
+                 *seen = version;
+             }
+         }
+         k.process(n)?;
+-        let (out_ptrs, out_channels) = (&k.out_ptrs, &k.out_channels);
+-        let data = k.memory.data_mut(&mut k.store);
+-        for (o, (&ptr, &ch)) in out.iter_mut().zip(out_ptrs.iter().zip(out_channels)) {
++        let p = k.ports();
++        for (o, (&ptr, &ch)) in out.iter_mut().zip(p.outs.iter().zip(p.out_channels)) {
+             for c in 0..ch as usize {
+                 let dst = &mut o[seg.range(c)];
+-                dst.copy_from_slice(floats(data, ptr + c * BLOCK * 4, n));
++                dst.copy_from_slice(floats(p.data, ptr + c * BLOCK * 4, n));
+                 if b.strict
+                     && let Some(at) = dst.iter().position(|x| !x.is_finite())
+                 {
+-                    bail!("{} produced {} at {:.3}s", k.name, dst[at], b.time(seg.off + at));
++                    bail!("{} produced {} at {:.3}s", p.name, dst[at], b.time(seg.off + at));
+                 }
+             }
+         }
+@@ -1297,7 +1348,7 @@ impl Graph {
+     fn prewarm(&mut self) -> Result<()> {
+         for e in &mut self.exec {
+             match e {
+-                Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.reset()?,
++                Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.prewarm()?,
+                 Exec::Poly(p) => {
+                     for v in p.pool.iter_mut().flat_map(|pool| &mut pool.voices) {
+                         v.graph.prewarm()?;
+diff --git a/core/runtime/src/packages.rs b/core/runtime/src/packages.rs
+index 2bda7f4..73cc281 100644
+--- a/core/runtime/src/packages.rs
++++ b/core/runtime/src/packages.rs
+@@ -70,7 +70,9 @@ impl Package {
+ /// Every package a song can use, the kernels they declare, and the hosted plugins
+ /// a song has asked about.
+ pub struct PackageSet {
+-    pub engine: Engine,
++    /// Always one of [`engine_with`]'s, whose memories never move: each kernel instance keeps its
++    /// memory's address from its build (RENDER-32), so no other engine may be put here.
++    pub(crate) engine: Engine,
+     packages: BTreeMap<String, Package>,
+     kernels: HashMap<String, (KernelSig, String)>,
+     plugins: HashMap<String, Hosted>,
+@@ -111,7 +113,8 @@ pub fn engine() -> Engine {
+ }
+ 
+ /// The engine, its kernels' memories laid out as `layout` says. Bounds checks don't change the
+-/// arithmetic: every layout renders the same bits.
++/// arithmetic: every layout renders the same bits. In every layout a kernel memory never moves: P2
++/// refuses to move one, and P1 reserves 4 GiB, far more than the 32 MiB a memory may grow to.
+ pub fn engine_with(layout: Layout) -> Engine {
+     let mut config = wasmtime::Config::new();
+     config.cranelift_nan_canonicalization(false);
+diff --git a/core/runtime/src/tests.rs b/core/runtime/src/tests.rs
+index 39c5f2e..c5aad3c 100644
+--- a/core/runtime/src/tests.rs
++++ b/core/runtime/src/tests.rs
+@@ -452,16 +452,18 @@ fn strict_mode_names_the_kernel_that_broke() {
+ 
+ /// A package folder holding one hand-written kernel module.
+ fn package(wat: &str) -> PathBuf {
++    package_with(wat, "outputs = [\"out: audio<1>\"]")
++}
++
++/// A package folder holding one hand-written kernel module, `t:k`, its ports as `ports` declares.
++fn package_with(wat: &str, ports: &str) -> PathBuf {
+     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+     let dir =
+         std::env::temp_dir().join(format!("m2-pkg-test-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
+     std::fs::create_dir_all(&dir).unwrap();
+     std::fs::write(dir.join("k.wasm"), wat).unwrap();
+-    std::fs::write(
+-        dir.join("m2pkg.toml"),
+-        "[package]\nname = \"t\"\nversion = \"0.1.0\"\nwasm = \"k.wasm\"\n\n[[kernel]]\nname = \"k\"\noutputs = [\"out: audio<1>\"]\n",
+-    )
+-    .unwrap();
++    let manifest = format!("[package]\nname = \"t\"\nversion = \"0.1.0\"\nwasm = \"k.wasm\"\n\n[[kernel]]\nname = \"k\"\n{ports}\n");
++    std::fs::write(dir.join("m2pkg.toml"), manifest).unwrap();
+     dir
+ }
+ 
+@@ -498,6 +500,64 @@ fn packages_must_be_sandboxed_and_speak_our_abi() {
+     }
+ }
+ 
++// RENDER-32: a kernel memory never moves, in either layout, however it grows, so the address each
++// instance keeps from its build stays its memory's (`KernelInst::ports`). This kernel grows its
++// memory by a page at every call, up to the 32 MiB cap, and copies its input to its output: it plays
++// the sine it is given, bit for bit, every block, and its memory stays where it was built.
++#[test]
++fn a_kernel_memory_never_moves() {
++    let wat = r#"(module
++      (func (export "m2_abi") (result i32) (i32.const 0))
++      (memory (export "memory") 1)
++      (func (export "k_init") (param f32 i32 i32))
++      (func (export "k_ports") (result i32) (i32.const 0x101))
++      (func (export "k_port") (param i32) (result i32) (select (i32.const 1024) (i32.const 4096) (i32.eqz (local.get 0))))
++      (func (export "k_reset"))
++      (func (export "k_process") (param i32)
++        (drop (memory.grow (i32.const 1)))
++        (memory.copy (i32.const 4096) (i32.const 1024) (i32.shl (local.get 0) (i32.const 2))))
++      (func (export "k_active") (result i32) (i32.const 0)))"#;
++    let dir = package_with(wat, "inputs = [\"in: audio<1>\"]\noutputs = [\"out: audio<1>\"]");
++    let nodes = |out: &str| {
++        song(
++            json!([
++                {"id": "f", "op": "const", "value": 440, "unit": "hz"},
++                {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "f"}},
++                {"id": "k", "op": "kernel", "kernel": "t:k", "inputs": {"in": "o"}},
++            ]),
++            out,
++            json!([]),
++        )
++    };
++    for layout in [packages::Layout::P2, packages::Layout::P1] {
++        let mut pk = PackageSet::laid_out(layout);
++        pk.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
++        pk.load(&dir).unwrap();
++        let mut copied = Renderer::new(&check(&nodes("k"), &pk).unwrap(), &DataSet::empty(), &pk, SR).unwrap();
++        let mut sine = Renderer::new(&check(&nodes("o"), &pk).unwrap(), &DataSet::empty(), &pk, SR).unwrap();
++        // Where the copying kernel's memory is, and how big: what its store says, and what it kept.
++        let at = |r: &Renderer| {
++            let k = r.plan.graph.exec.iter().find_map(|e| match e {
++                Exec::Kernel(KernelNode { inst: Some(k), .. }) if k.name == "song/k" => Some(k),
++                _ => None,
++            });
++            let k = k.expect("the copying kernel");
++            (k.memory.data_ptr(&k.store), k.view.base.as_ptr(), k.memory.data_size(&k.store))
++        };
++        let (built, ..) = at(&copied);
++        let (mut a, mut b) = ([[0.0; 2]; BLOCK], [[0.0; 2]; BLOCK]);
++        for block in 0..600 {
++            copied.process(&mut a).unwrap();
++            sine.process(&mut b).unwrap();
++            assert!(a == b, "{layout:?}: block {block} isn't the sine it was given");
++            let (now, kept, _) = at(&copied);
++            assert!(now == built && kept == built, "{layout:?}: the memory moved by block {block}");
++        }
++        assert_eq!(at(&copied).2, KERNEL_MEMORY, "{layout:?}: it grew to the cap");
++    }
++    std::fs::remove_dir_all(dir).ok();
++}
++
+ #[test]
+ fn voices_end_when_their_envelope_closes_but_not_while_echoes_remain() {
+     // saw → filter → amp: the oscillator never stops, but the voice is over once the
+diff --git a/docs/architecture.md b/docs/architecture.md
+index d868dcf..a1a10f0 100644
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -327,7 +327,7 @@ The arena is the boxes in the playing plan's stateful nodes; they move at activa
+ 
+ **RENDER-32.** Store layout: one wasmtime `Store` per kernel instance. Each kernel memory reserves 32 MiB with a 64 KiB guard, keeps no room to grow and never moves, so every access is checked against a fixed bound, and Cranelift's Spectre guard on those checks is off. That guard goes back on, or the layout is measured again, before a kernel from a package other than std runs ([Deferred](#deferred-with-triggers)). Never a `Store` shared across plans, which keeps every replaced instance's memory until it drops. G7f judges a layout against S, the commit before step 7 (one `Store` per renderer, no arena), measured fresh in every run: S plays in a process of its own, taking turns with the app over the same music, in 5 rounds. By the mean, a p50 block MUST cost at most 80 µs more than S's (3% of a 2.67 ms block), and a 512-frame callback at most 320 µs more than S's (3% of a callback). Against S, p50's footprint MUST grow by at most 64 MB and its build by at most half, and two p50 renderers MUST build side by side within 25% of the process's address space. An activation's block MUST take under half the device period (5.3 ms at 512 frames). The layout and the bounds are the owner's (2026-10-15; design-7 §11.3).
+ - *Why:* per-instance stores make instances movable between plans, and free a replaced instance's memory when it drops. wasmtime's default reserves 4 GiB a memory, so only about 5 copies of p50 fit in one process, and an export holds two. Kernels import nothing, so they have no clock to time a speculative read with, and the guard cost 6% to 10% of block time (Linux, the Mac). The mean is judged, not the p99: even paired, the p99's difference moves by hundreds of µs a block from one pair to the next, which 5 pairs can't settle, while the mean's stays within about 12 µs.
+-- *Today:* matches since step 7. One `Store` per kernel instance (`KernelInst` in `core/runtime/src/lib.rs`, its memory capped at 32 MiB) since the first slice; the owner's layout since the review's fixes, after the Linux study `docs/designs/step7/g7f-linux.md` (`Layout::P2` in `engine()`, `core/runtime/src/packages.rs`; P1 is a gate-only option). Bounds checks change no arithmetic: the 8 recorded renders still match `e2e/renders.sha256`, and a 4-minute p16 render is the same file as before. G7f measures the app's layout against S fresh in every run (`m2-gates store --reference 50` for blocks, `crates/gates/src/store.rs`; `m2-gates arena --reference 50 --at 180` for callbacks, `crates/gates/src/arena.rs`). S, HEAD `8aa301e`, plays in a runner built from a clean copy of it, outside the repo (`crates/gates/s/`, which `ci/check.sh` builds first). In 5 rounds the app's layout, P1 and S take turns of about a second over the same music, and all three play the same bits. The median of the rounds' differences, the app's layout minus S, is judged by the mean, with the p99's difference printed beside it; P1 against S and the app's layout against P1 are printed too. Only S's footprint still comes from its record (`crates/gates/store-S.txt`). As for every timing, only the reference Mac, the machine that record names, judges the comparisons; other machines print them with what they would say (PLAT-1). Numbers measured this way come with the next runs. Before that, G7f added the app's layout's cost over P1 to P1's recorded cost over S: on the reference Mac at `ed7fc8e`, +73 µs a block (passed) and +328 µs a callback (failed 320), with P1's +187 µs a callback recorded against slice 2's code, not today's. On Linux (information only, PLAT-1): two p50 renderers hold 380 GiB, 0.29% of 131,072 GiB; the app's layout against P1, by the mean, +12 to +33 µs a block and −60 to +118 µs a callback; with the Spectre guard on, +128 and +473 µs, which fail. What the Mac measured of P1 at slice 2, on p50's 6,058 kernel instances (an M1 Pro, 16 alternated release runs each): against one `Store` per renderer (S, HEAD `8aa301e`), the build 108 ms against 103, the footprint 575 MB against 554, block time over 30 s from 3:00 a mean of 2,227 µs against 2,195 (+32 µs, the cost the gate added until it measured S itself) and a p99 of 3,197 against 3,083 by the medians (+35 µs paired; runs vary by ±200 µs), the drop about 100 ms either way, raising another thread's block time not at all; two renderers held 49,637 GiB, 37.9% of the address space, as S did, so P1 failed the 25% rule. The pooling allocator reserves as much per slot, up front (74.8% with the gate's two engines). With the arena, P1's 512-frame callback against HEAD's, p50 from 3:00 for 30 s: a mean of 9,141 µs against 8,936 (+187 µs paired, the cost the gate added until it measured S itself), a p99 of 13,817 against 12,910 by the medians (+232 µs paired; one run's p99 varies from 11.6 to 15.6 ms). Most of it is the per-instance store (about +32 µs a block, four blocks a callback); RENDER-25's non-finite check costs at most about 4 µs a block. At HEAD a plain p50 callback already takes 84% of the 10.7 ms period and its p99 passes it, so p50 isn't real time on one thread with or without the arena (8a's partitions are for that). The activation block, over ten edits in each of 8 runs on the Mac (P1), as its own one-block callback: the slowest 3.0 to 3.8 ms, under the rule's 5.3 ms (half the device period); on Linux with the owner's layout, 3.1 to 4.2 ms.
++- *Today:* matches since step 7. One `Store` per kernel instance (`KernelInst` in `core/runtime/src/lib.rs`, its memory capped at 32 MiB) since the first slice. Each instance keeps its memory's address from its build, so a kernel call doesn't ask its store, one of thousands and cold; this relies on a memory never moving, which both layouts guarantee (test `a_kernel_memory_never_moves`; building checks it after each kernel's first reset, and debug builds at every call). The owner's layout since the review's fixes, after the Linux study `docs/designs/step7/g7f-linux.md` (`Layout::P2` in `engine()`, `core/runtime/src/packages.rs`; P1 is a gate-only option). Bounds checks change no arithmetic: the 8 recorded renders still match `e2e/renders.sha256`, and a 4-minute p16 render is the same file as before. G7f measures the app's layout against S fresh in every run (`m2-gates store --reference 50` for blocks, `crates/gates/src/store.rs`; `m2-gates arena --reference 50 --at 180` for callbacks, `crates/gates/src/arena.rs`). S, HEAD `8aa301e`, plays in a runner built from a clean copy of it, outside the repo (`crates/gates/s/`, which `ci/check.sh` builds first). In 5 rounds the app's layout, P1 and S take turns of about a second over the same music, and all three play the same bits. The median of the rounds' differences, the app's layout minus S, is judged by the mean, with the p99's difference printed beside it; P1 against S and the app's layout against P1 are printed too. Only S's footprint still comes from its record (`crates/gates/store-S.txt`). As for every timing, only the reference Mac, the machine that record names, judges the comparisons; other machines print them with what they would say (PLAT-1). Numbers measured this way come with the next runs. Before that, G7f added the app's layout's cost over P1 to P1's recorded cost over S: on the reference Mac at `ed7fc8e`, +73 µs a block (passed) and +328 µs a callback (failed 320), with P1's +187 µs a callback recorded against slice 2's code, not today's. On Linux (information only, PLAT-1): two p50 renderers hold 380 GiB, 0.29% of 131,072 GiB; the app's layout against P1, by the mean, +12 to +33 µs a block and −60 to +118 µs a callback; with the Spectre guard on, +128 and +473 µs, which fail. What the Mac measured of P1 at slice 2, on p50's 6,058 kernel instances (an M1 Pro, 16 alternated release runs each): against one `Store` per renderer (S, HEAD `8aa301e`), the build 108 ms against 103, the footprint 575 MB against 554, block time over 30 s from 3:00 a mean of 2,227 µs against 2,195 (+32 µs, the cost the gate added until it measured S itself) and a p99 of 3,197 against 3,083 by the medians (+35 µs paired; runs vary by ±200 µs), the drop about 100 ms either way, raising another thread's block time not at all; two renderers held 49,637 GiB, 37.9% of the address space, as S did, so P1 failed the 25% rule. The pooling allocator reserves as much per slot, up front (74.8% with the gate's two engines). With the arena, P1's 512-frame callback against HEAD's, p50 from 3:00 for 30 s: a mean of 9,141 µs against 8,936 (+187 µs paired, the cost the gate added until it measured S itself), a p99 of 13,817 against 12,910 by the medians (+232 µs paired; one run's p99 varies from 11.6 to 15.6 ms). Most of it is the per-instance store (about +32 µs a block, four blocks a callback); RENDER-25's non-finite check costs at most about 4 µs a block. At HEAD a plain p50 callback already takes 84% of the 10.7 ms period and its p99 passes it, so p50 isn't real time on one thread with or without the arena (8a's partitions are for that). The activation block, over ten edits in each of 8 runs on the Mac (P1), as its own one-block callback: the slowest 3.0 to 3.8 ms, under the rule's 5.3 ms (half the device period); on Linux with the owner's layout, 3.1 to 4.2 ms.
+ 
+ ### The bit-identity test
+ 
