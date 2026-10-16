@@ -1132,10 +1132,12 @@ bound of 320. The owner said "Speed it up first". So:
   CPU die, that took the lean out. Not held, as `ci/check.sh` and the Mac run, it wasn't shown at first.
   So G7f now says in every run whether any of a turn's start is left in the judged steps. On Linux, held
   or not, none was seen beyond about 25 µs a callback ("The review of the fixes", below).
-- On Linux (information only, PLAT-1), the app against S is now +14 µs a block and +55 µs a callback,
-  held on one CPU die. Before the speed work it was +53 and +236.
-- `ci/check.sh` passes on Linux at `a894448`: twice without the gates, once with them, every row, with
-  nothing passed only on a retry.
+- On Linux (information only, PLAT-1), the app against S is now +16 µs a block and +48 µs a callback,
+  held on one CPU die (+14 and +55 before the review of the fixes). Before the speed work it was +53
+  and +236.
+- `ci/check.sh` passes on Linux at `ffc36aa`, after the review of the fixes: once without the gates,
+  once with them, every row, with nothing passed only on a retry. Before that review it passed at
+  `a894448`: twice without the gates, once with them.
 - The Mac's run decides. Our honest guess for it: about +110 µs a callback (likely +30 to +220) and
   about +30 µs a block (likely +10 to +60), both under their bounds. One run can be off by about
   ±150 µs a callback, so a result near 320 needs a second run.
@@ -1274,7 +1276,7 @@ PART there, and it exits with 1.
 | vp-3 (low): off the Mac, "not judged off the reference Mac" came before the numbers, so the summary's 220-byte cut took the end of the Linux callback line. | The numbers first, as on another Mac. | `a_timing_is_judged_on_the_reference_mac_only` cuts both places at 220 bytes, with the check's own numbers; before, it fails | `9ebcf21` |
 | vp-4 and handoff-machine-line-not-pasted (low): HANDOFF pointed at a `machine:` line the summary didn't keep. | The gates part starts with the machine m2-gates names, once. HANDOFF says what to copy, into which three record lines. | `test-machine.sh` on a fake log: before none, after one, first | `33812c4` |
 | round-is-2.5-cycles (low): a round was 2.5 cycles of the orders; and the cycle gave S the turns that come soonest after its own, 10 of its 15 a round. | The sides are renamed, so the app's layout and S wait alike; P1, not judged, comes back soonest. Turns are 155 callbacks and 625 blocks, so a round is 18 turns, three whole cycles. | `every_order_is_taken` checks the waits; `a_round_is_whole_cycles_of_turns` in each part; before, all three fail | `1b8ce99`, `c24460e` |
-| lead-sized-on-big-die-only, start-line-criterion-unsupported, handoff-starting-a-turn-threshold (low): half a second was sized held on the 96 MB die only. Not held, the line's one step read −42 to −121 µs, past HANDOFF's "a few tens", and one step can't say how long a start lasts. | The line gives each turn's first half over its second, against S's. The docs say where half a second was measured, and what Linux read. HANDOFF says what is far off. | `starting_a_turn_favours_no_side`: an S whose start lasts 20 callbacks past the lead reads −17, twice the 8.5 µs the means lean. The runs below. | `d4ee726`, `3f2a412` |
+| lead-sized-on-big-die-only, start-line-criterion-unsupported, handoff-starting-a-turn-threshold (low): half a second was sized held on the 96 MB die only. Not held, the line's one step read −42 to −121 µs, past HANDOFF's "a few tens", and one step can't say how long a start lasts. | The line gives each turn's first half over its second, against S's. The docs say where half a second was measured, and what Linux read. HANDOFF says what is far off. | `starting_a_turn_favours_no_side`: an S whose start lasts 20 callbacks past the lead reads −17, twice the 8.5 µs the means lean. The runs below. | `d4ee726`, `3f2a412`, `8ef238d`, `ffc36aa` |
 | handoff-aa-range-held-only (low): HANDOFF's A/A range was the held runs' only. | It gives both, and about ±150 µs. | docs | `0f5e8f4` |
 | handoff-fixed-table-header (low): "none was seen in a check" headed a flake a check saw. | The header names it. | docs | `0f5e8f4` |
 | render32-only-footprint-from-record (low): RENDER-32 said only S's footprint comes from its record. | It names all three things G7f reads there. | docs | `6d004eb` |
@@ -1289,9 +1291,13 @@ S's: the app's layout, then P1):
 | Held on the 32 MB die | | −208 (−257 to −76) | | −21, +60 |
 | Not held | +10 (+3 to +37) | +112 (+12 to +151) | +7, +8 | +4, +23 |
 | The A/A control, not held | −1 (−20 to +28) | −74 (−207 to −48) | −0, −10 | −48, −23 |
+| `ci/check.sh --gates` at `ffc36aa`, not held | +20 (+17 to +27) | +86 (+46 to +147) | +1, +17 | +63, +26 |
 
-- No start was seen left in the judged steps beyond about 25 µs a callback on the mean (half the A/A's
-  −48), and a few µs a block, held or not.
+- No start of S's was seen left in the judged steps beyond about 25 µs a callback on the mean (half
+  the A/A's −48), and a few µs a block, held or not. Once the app's layout's lasted longer (the
+  check's +63): that leans S's way, by about 30 µs.
+- `ffc36aa` puts the halves first in the line, as the summary keeps 220 bytes of a line; the numbers
+  are the same.
 - Held on the 96 MB die, the numbers are about as before the fixes (+14 and +55). On the 32 MB die the app's
   layout came out 208 µs a callback under S: cut 1 saved more there.
 - The A/A control's −74 is inside the ±150 µs one run can be off by.
@@ -1302,7 +1308,7 @@ S's: the app's layout, then P1):
 
 ### The checks
 
-All on Linux, at `a894448` unless said.
+All on Linux, at `a894448` unless said. After the review of the fixes, the last two, at `ffc36aa`.
 
 | Check | Result |
 |---|---|
@@ -1312,6 +1318,8 @@ All on Linux, at `a894448` unless said.
 | `ci/check.sh --gates` (`~/m2-runs/check-s7-spg`, 25 min) | **PASS**, every row: the same, plus "old engine (S)" (built from a clean copy of `8aa301e`) and the gates, all 6 runs `ci/gates.txt` names. G11 p95 9.0 to 9.2 ms; G7a heard at p95 110 ms. G7f, printed as PLAT-1 skips: a block +23 µs (+15 to +59), would pass; a callback +97 µs (+56 to +201), would pass; the build 215 ms against S's 183. The slowest activation block 4,026 µs (bound 5,333). The gates row took 17 minutes. |
 | The p16 render (release `m2 render` of the reference example's p16, as the build notes made it) | `ebc87e0b…` at `a894448`: the same file (46 s) |
 | m2-gates' own tests (in the rust tests row) | 31 in the library, 1 in the binary, 6 in the harness: all pass. rustfmt is clean on every changed file. |
+| `ci/check.sh` at `ffc36aa` (`~/m2-runs/check-s7-rv1`, 8 min) | **PASS**, every row: 912 Rust tests (the two new ones are m2-gates': 33 in its library now), 0 failed; clippy; std kernels; std.wasm; mac lint; 29/29 browser suites; 8 of 8 renders; repo unchanged. Nothing passed only on a retry. |
+| `ci/check.sh --gates` at `ffc36aa` (`~/m2-runs/check-s7-rvg`, 26 min) | **PASS**, every row: the same, plus "old engine (S)" and the gates, all 6 runs. The gates part starts with the machine line. G11 p95 8.8 to 9.4 ms; G7a heard at p95 116 ms; G7e paused 252 ms. G7f, printed as PLAT-1 skips, the numbers first: a block +20 µs (+17 to +27), would pass; a callback +86 µs (+46 to +147), would pass; the build 219 ms against S's 183. The starting line: +1, +17 a block; +63, +26 a callback. The slowest activation block 3,142 µs (bound 5,333). The gates row took 18 minutes. |
 
 ### Linux's numbers (information only, PLAT-1)
 

@@ -4,9 +4,10 @@ Written 2026-10-16, at the end of step 7 (the engine), and updated after its spe
 first, then `docs/architecture.md` (the contract) and the design for whatever you pick up.
 
 **In short**
-- **Step 7 and its speed work are done on Linux**, on branch `step7` at `a894448`: `ci/check.sh` passes there, every
-  row, with nothing passed only on a retry, twice without the gates and once with them (910 Rust tests, 29/29 browser
-  suites, 8 of 8 renders, the old engine S built, the 6 gate runs; `~/m2-runs/check-s7-sp1`, `-sp2`, `-spg`).
+- **Step 7 and its speed work are done on Linux**, on branch `step7` at `ffc36aa`, after a review of the speed work's
+  fixes: `ci/check.sh` passes there, every row, with nothing passed only on a retry, once without the gates and once
+  with them (912 Rust tests, 29/29 browser suites, 8 of 8 renders, the old engine S built, the 6 gate runs;
+  `~/m2-runs/check-s7-rv1`, `-rvg`). Before that review it passed at `a894448` (`-sp1`, `-sp2`, `-spg`).
 - **macOS:** the owner's Mac run at `ed7fc8e` passed every row but the gates, and the gates failed on one rule:
   G7f part 2, +328 µs a callback against 320, by the old sum. The owner said "speed it up first". Now the engine is
   faster and G7f measures S fresh. **Step 7 waits for one more Mac run** (below).
@@ -19,7 +20,7 @@ first, then `docs/architecture.md` (the contract) and the design for whatever yo
 | Branch | Commit | State |
 |---|---|---|
 | `main` | `0ebc6e6` | Steps 1–6, the fast note edits, and the platform layer. Green on Linux and macOS at `1750322`. |
-| `step7` | `a894448`, then docs only | Step 7, the engine, with the speed work of 2026-10-16: built, reviewed, fixed and checked on Linux. `origin/step7` is at `ed7fc8e`: the lead pushes the new commits for the Mac run. Worktree `~/m2-runs/wt/s7` (its `target/` is about 70 GB). |
+| `step7` | `ffc36aa`, then docs only | Step 7, the engine, with the speed work of 2026-10-16: built, reviewed, fixed and checked on Linux, its fixes reviewed and fixed too. `origin/step7` is at `ed7fc8e`: the lead pushes the new commits for the Mac run. Worktree `~/m2-runs/wt/s7` (its `target/` is about 70 GB). |
 | `origin/wip/step7` | `5079233` | The Mac's half-done step 7. All of it is in `step7` (cherry-picked as `c8117c3`). Delete it once `step7` is on `main`. |
 | `origin/taste` | `4804247` | The new look (T and S); 8b.1 Tracks done (`a0d5f91`); 8b.2 song bar unfinished. |
 | `origin/sounds` | `916127d` | 20 new std sounds (polysynth, FM, drum kit). Its last independent check was cut short. |
@@ -89,7 +90,7 @@ couldn't judge G7f: the Mac isn't the one S's records name. Only PASS is a pass.
 |---|---|
 | toolchain, web build, build | Rust 1.99.0 (pinned), the web UI, every binary |
 | app | Linux only: the desktop app on an invisible screen (Xvfb), with `first-song` and `with-plugins`, a screenshot of each |
-| rust tests | every Rust test, with a scratch `HOME` (910 at `a894448`); G7c and G7d are tests here |
+| rust tests | every Rust test, with a scratch `HOME` (912 at `ffc36aa`); G7c and G7d are tests here |
 | clippy | the whole workspace; a warning is an error |
 | std kernels, std.wasm | the kernels' tests and lints; `std.wasm` rebuilt to the same bytes in another folder |
 | mac lint | Linux only: the Mac-only code, type-checked and linted |
@@ -108,12 +109,12 @@ The gates (`ci/gates.txt`, one `m2-gates` run a line, all in release):
 
 | Run | Gates | Rule, judged on the Mac | Linux at the last checks (information) |
 |---|---|---|---|
-| `--server tx-data watcher` | G11: a piano-roll write; the watcher | heard within 20 ms at p95; under 1% of a core | p95 8.9 to 9.1 ms; 0.10% |
-| `--server --reference 50 --at 180 add-effect` | G5 and G7a through the server: an effect added on p50 at 3:00 | heard within 200 ms of the request, compile included; no voice pool made new | p95 106 to 115 ms |
+| `--server tx-data watcher` | G11: a piano-roll write; the watcher | heard within 20 ms at p95; under 1% of a core | p95 8.8 to 9.4 ms; 0.10% |
+| `--server --reference 50 --at 180 add-effect` | G5 and G7a through the server: an effect added on p50 at 3:00 | heard within 200 ms of the request, compile included; no voice pool made new | p95 106 to 116 ms |
 | `--reference 50 --at 180 add-effect tails` | G5, G7a's engine-rig twin, G7b | no jump back; no click in the edit's own sound; untouched tracks bit-identical | pass |
 | `--server export` | G7e: an export of `with-plugins` | pauses, borrows its 2 plugins, resumes within 21.3 ms with no click, the held chord sounds again, the file matches `m2 render` | pass; paused about 255 ms |
-| `store --reference 50` | G7f part 1: what the Store layout costs a block, and memory, against S (the commit before step 7) measured in the same run | mean block within S + 80 µs; footprint within S + 64 MB; build within 1.5 × S; 2 renderers within 25% of the address space; the same music | +23 µs a block (+14 held on one die); 0.29% of the address space |
-| `arena --reference 50 --at 180` | G7f part 2: a 512-frame callback with the arena, against S measured in the same run | mean callback within S's + 320 µs; slowest activation block under 5,333 µs; the same music | +97 µs a callback (+55 held); 2.3 to 4.0 ms |
+| `store --reference 50` | G7f part 1: what the Store layout costs a block, and memory, against S (the commit before step 7) measured in the same run | mean block within S + 80 µs; footprint within S + 64 MB; build within 1.5 × S; 2 renderers within 25% of the address space; the same music | +20 µs a block (+16 held on one die); 0.29% of the address space |
+| `arena --reference 50 --at 180` | G7f part 2: a 512-frame callback with the arena, against S measured in the same run | mean callback within S's + 320 µs; slowest activation block under 5,333 µs; the same music | +86 µs a callback (+48 held); 2.3 to 3.1 ms |
 
 Recorded tests, too long for the check (`#[ignore]`): G7c on all of p16 and of p50, p16 looping ten minutes, and the
 churn test's 200 edits on p16 (within +20 MB). Run them with `cargo test -p m2-play --release --test bit_identity
@@ -212,7 +213,7 @@ numbers. If a row fails, the lead fixes it on Linux, checks the mac lint, and as
   trusting a verdict near the bound.
 - The "starting a turn" lines, their first two numbers: of the judged steps, each turn's first half over its
   second, against S's. They say whether any of a turn's start is left in the judged steps. On Linux they read −48
-  to +60 µs a callback and −10 to +8 a block, held on one die or not, the A/A control included. Under 0 means S's
+  to +63 µs a callback and −10 to +17 a block, held on one die or not, the A/A control included. Under 0 means S's
   start lasted longer, and the verdict then favours the app's layout by about half the value. Below −100 µs a
   callback (or −30 a block), half a second wasn't enough on the Mac: then a pass within half that value of its
   bound is unsure, and the lead asks for one more run.
@@ -306,8 +307,8 @@ Step 7:
 - G7a's click check (K10a) on p50 at 3:00 catches a missing fade window, but not an edge crossfade made a cut (t02's pluck is quiet there).
 - The churn run's +20 MB is read after 70 warm-up edits; the design doesn't say from when.
 - The recorded tests aren't in `ci/check.sh`; a `--gates` step could run them on the Mac.
-- `ci/check.sh`'s gates row says "usually 22 min": 17 here with the speed work's longer G7f turns, likely about 20 on
-  the Mac.
+- `ci/check.sh`'s gates row says "usually 22 min": 17 to 18 here with the speed work's longer G7f turns, likely
+  about 20 on the Mac.
 - The speed work's cut 3 (one Store per voice pool, about −118 µs a callback more on Linux) and cut 4 (the
   non-finite check at activations, −14 to −21 µs) are held: cut 3 changes RENDER-32's words, so it is the owner's
   call, and only if the Mac misses. Cut 2 (the instance inline) was dropped: it didn't save on both CPU dies here.
@@ -366,6 +367,6 @@ From the platform step:
 | The desktop app | Only on an invisible Xvfb screen, as the check's app row opens it. Never on a real screen. |
 | Scratch `HOME` | Anything that runs music2 gets a scratch `HOME` and `M2_AUDIO=none`, and then `CARGO_HOME=/home/jerry/.cargo RUSTUP_HOME=/home/jerry/.rustup`. Never the real `~/.music2` or `~/Music`. `ci/check.sh` does this itself. |
 | Scratch copies | `git worktree add --detach ~/m2-runs/scratch-<label>`, with its own `target/`; delete it when done (they once filled 390 GB). The repo's own `target/` is about 140 GB, `~/m2-runs/wt/s7`'s about 70 GB. |
-| Logs | Each check's folder in `~/m2-runs/check-*` (step 7's last: `check-s7-sp1`, `-sp2` and `-spg`, with the gates); the step 7 gate runs in `~/m2-runs/gates-fix/` and `~/m2-runs/xc/g7f/`; the review in `~/m2-runs/review-b1/`. |
+| Logs | Each check's folder in `~/m2-runs/check-*` (step 7's last: `check-s7-rv1`, and `-rvg` with the gates; before them `-sp1`, `-sp2` and `-spg`); the step 7 gate runs in `~/m2-runs/gates-fix/` and `~/m2-runs/xc/g7f/`; the review in `~/m2-runs/review-b1/`. |
 | Tools | Rust 1.99.0 (`rust-toolchain.toml`), Node 24, chrome-headless-shell 133.0.6943.141 (the check installs Rust and Chrome when missing), Xvfb. |
 | MIDI | `/dev/snd/seq` gives `EACCES` here: tests inject notes and never open a device. |
