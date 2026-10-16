@@ -50,6 +50,7 @@ pub mod trace;
 pub mod transport;
 
 use std::collections::{HashMap, HashSet};
+use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
@@ -153,6 +154,8 @@ struct KernelInst {
     shape: u64,
     name: String,
     memory: Memory,
+    /// Where `memory` is, so a call needn't ask the store, one of thousands and cold (RENDER-32).
+    view: MemView,
     reset: TypedFunc<(), ()>,
     process: TypedFunc<u32, ()>,
     active: TypedFunc<(), u32>,
@@ -167,6 +170,27 @@ struct KernelInst {
     kernel: String,
     #[cfg(debug_assertions)]
     in_names: Vec<String>,
+}
+
+/// A kernel memory's address and its size when its ports were checked, kept from its build. A
+/// memory never moves (RENDER-32): every layout reserves all of the 32 MiB a memory may grow to,
+/// and a memory never shrinks, so every port stays inside the first `len` bytes at `base`.
+struct MemView {
+    base: NonNull<u8>,
+    len: usize,
+}
+
+// SAFETY: `base` is dereferenced only in `KernelInst::ports`, which holds by `&mut` the instance, and
+// so the store that owns the memory; the memory goes to another thread only with that store.
+unsafe impl Send for MemView {}
+
+/// One call's view of a kernel's memory: its bytes, the ports in them, and the instance's name.
+struct Ports<'a> {
+    data: &'a mut [u8],
+    ins: &'a [usize],
+    outs: &'a [usize],
+    out_channels: &'a [u8],
+    name: &'a str,
 }
 
 /// Kernel instances alive in the process: what a churn of activations must give back (§7.6).
@@ -254,12 +278,15 @@ impl KernelInst {
                 floats(data, ptr, 2 * BLOCK).fill(*v as f32);
             }
         }
+        let base = NonNull::new(memory.data_ptr(&store)).with_context(|| format!("{}: `{id}`'s memory has no address", n.name))?;
+        let view = MemView { base, len: memory.data_size(&store) };
         LIVE_KERNELS.fetch_add(1, Ordering::Relaxed);
         Ok(KernelInst {
             store,
             shape,
             name: n.name.clone(),
             memory,
+            view,
             reset,
             process,
             active,
@@ -298,6 +325,31 @@ impl KernelInst {
     /// Whether it still holds sound that will come out later.
     fn active(&mut self) -> Result<bool> {
         Ok(self.active.call(&mut self.store, ())? != 0)
+    }
+
+    /// Its first reset, while it is built: a reset may grow the memory (a kernel builds its new
+    /// state before dropping the old), never move it, which this checks in every build. It sees a
+    /// move in this reset only: what keeps a memory in place later is the layout and the 32 MiB cap
+    /// (RENDER-32), and debug builds check at every call ([`KernelInst::ports`]).
+    fn prewarm(&mut self) -> Result<()> {
+        self.reset()?;
+        if self.memory.data_ptr(&self.store) != self.view.base.as_ptr() {
+            bail!("{}: its kernel memory moved as it grew (RENDER-32: a kernel memory never moves)", self.name);
+        }
+        Ok(())
+    }
+
+    /// Its memory's bytes for one call's copies, with its ports and its name, without asking the
+    /// store. Debug builds check the memory is still where it was built: one lookup in the store, as
+    /// each copy made before the address was kept.
+    fn ports(&mut self) -> Ports<'_> {
+        debug_assert_eq!(self.memory.data_ptr(&self.store), self.view.base.as_ptr(), "{}: a kernel memory moved (RENDER-32)", self.name);
+        // SAFETY: `base..base + len` is this instance's memory, which its store owns and which never
+        // moves or shrinks (RENDER-32). `&mut self` holds that store for as long as the slice lives,
+        // so no call into the kernel and no other view of the memory can happen meanwhile, as with
+        // `Memory::data_mut`.
+        let data = unsafe { std::slice::from_raw_parts_mut(self.view.base.as_ptr(), self.view.len) };
+        Ports { data, ins: &self.in_ptrs, outs: &self.out_ptrs, out_channels: &self.out_channels, name: &self.name }
     }
 
     #[cfg(debug_assertions)]
@@ -339,8 +391,8 @@ impl KernelNode {
             }
             return Ok(());
         };
-        let data = k.memory.data_mut(&mut k.store);
-        for ((inp, &ptr), seen) in self.inputs.iter().zip(&k.in_ptrs).zip(&mut self.seen) {
+        let p = k.ports();
+        for ((inp, &ptr), seen) in self.inputs.iter().zip(p.ins).zip(&mut self.seen) {
             if let Input::Port { src, src_channels, channels } = inp {
                 let s = &bufs[src.node][src.port];
                 // A steady constant is written over the whole block, once per value, so every
@@ -352,22 +404,21 @@ impl KernelNode {
                 let (off, len) = if version == COPY { (seg.off, n) } else { (0, BLOCK) };
                 for c in 0..*channels as usize {
                     let sc = if c < *src_channels as usize { c } else { 0 };
-                    floats(data, ptr + c * BLOCK * 4, len).copy_from_slice(&s[sc * BLOCK + off..sc * BLOCK + off + len]);
+                    floats(p.data, ptr + c * BLOCK * 4, len).copy_from_slice(&s[sc * BLOCK + off..sc * BLOCK + off + len]);
                 }
                 *seen = version;
             }
         }
         k.process(n)?;
-        let (out_ptrs, out_channels) = (&k.out_ptrs, &k.out_channels);
-        let data = k.memory.data_mut(&mut k.store);
-        for (o, (&ptr, &ch)) in out.iter_mut().zip(out_ptrs.iter().zip(out_channels)) {
+        let p = k.ports();
+        for (o, (&ptr, &ch)) in out.iter_mut().zip(p.outs.iter().zip(p.out_channels)) {
             for c in 0..ch as usize {
                 let dst = &mut o[seg.range(c)];
-                dst.copy_from_slice(floats(data, ptr + c * BLOCK * 4, n));
+                dst.copy_from_slice(floats(p.data, ptr + c * BLOCK * 4, n));
                 if b.strict
                     && let Some(at) = dst.iter().position(|x| !x.is_finite())
                 {
-                    bail!("{} produced {} at {:.3}s", k.name, dst[at], b.time(seg.off + at));
+                    bail!("{} produced {} at {:.3}s", p.name, dst[at], b.time(seg.off + at));
                 }
             }
         }
@@ -1297,7 +1348,7 @@ impl Graph {
     fn prewarm(&mut self) -> Result<()> {
         for e in &mut self.exec {
             match e {
-                Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.reset()?,
+                Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.prewarm()?,
                 Exec::Poly(p) => {
                     for v in p.pool.iter_mut().flat_map(|pool| &mut pool.voices) {
                         v.graph.prewarm()?;

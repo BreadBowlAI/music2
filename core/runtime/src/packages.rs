@@ -70,7 +70,9 @@ impl Package {
 /// Every package a song can use, the kernels they declare, and the hosted plugins
 /// a song has asked about.
 pub struct PackageSet {
-    pub engine: Engine,
+    /// Always one of [`engine_with`]'s, whose memories never move: each kernel instance keeps its
+    /// memory's address from its build (RENDER-32), so no other engine may be put here.
+    pub(crate) engine: Engine,
     packages: BTreeMap<String, Package>,
     kernels: HashMap<String, (KernelSig, String)>,
     plugins: HashMap<String, Hosted>,
@@ -111,7 +113,8 @@ pub fn engine() -> Engine {
 }
 
 /// The engine, its kernels' memories laid out as `layout` says. Bounds checks don't change the
-/// arithmetic: every layout renders the same bits.
+/// arithmetic: every layout renders the same bits. In every layout a kernel memory never moves: P2
+/// refuses to move one, and P1 reserves 4 GiB, far more than the 32 MiB a memory may grow to.
 pub fn engine_with(layout: Layout) -> Engine {
     let mut config = wasmtime::Config::new();
     config.cranelift_nan_canonicalization(false);

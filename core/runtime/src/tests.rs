@@ -452,16 +452,18 @@ fn strict_mode_names_the_kernel_that_broke() {
 
 /// A package folder holding one hand-written kernel module.
 fn package(wat: &str) -> PathBuf {
+    package_with(wat, "outputs = [\"out: audio<1>\"]")
+}
+
+/// A package folder holding one hand-written kernel module, `t:k`, its ports as `ports` declares.
+fn package_with(wat: &str, ports: &str) -> PathBuf {
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let dir =
         std::env::temp_dir().join(format!("m2-pkg-test-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("k.wasm"), wat).unwrap();
-    std::fs::write(
-        dir.join("m2pkg.toml"),
-        "[package]\nname = \"t\"\nversion = \"0.1.0\"\nwasm = \"k.wasm\"\n\n[[kernel]]\nname = \"k\"\noutputs = [\"out: audio<1>\"]\n",
-    )
-    .unwrap();
+    let manifest = format!("[package]\nname = \"t\"\nversion = \"0.1.0\"\nwasm = \"k.wasm\"\n\n[[kernel]]\nname = \"k\"\n{ports}\n");
+    std::fs::write(dir.join("m2pkg.toml"), manifest).unwrap();
     dir
 }
 
@@ -496,6 +498,64 @@ fn packages_must_be_sandboxed_and_speak_our_abi() {
     for d in [ok, wrong_abi, imports, missing] {
         std::fs::remove_dir_all(d).ok();
     }
+}
+
+// RENDER-32: a kernel memory never moves, in either layout, however it grows, so the address each
+// instance keeps from its build stays its memory's (`KernelInst::ports`). This kernel grows its
+// memory by a page at every call, up to the 32 MiB cap, and copies its input to its output: it plays
+// the sine it is given, bit for bit, every block, and its memory stays where it was built.
+#[test]
+fn a_kernel_memory_never_moves() {
+    let wat = r#"(module
+      (func (export "m2_abi") (result i32) (i32.const 0))
+      (memory (export "memory") 1)
+      (func (export "k_init") (param f32 i32 i32))
+      (func (export "k_ports") (result i32) (i32.const 0x101))
+      (func (export "k_port") (param i32) (result i32) (select (i32.const 1024) (i32.const 4096) (i32.eqz (local.get 0))))
+      (func (export "k_reset"))
+      (func (export "k_process") (param i32)
+        (drop (memory.grow (i32.const 1)))
+        (memory.copy (i32.const 4096) (i32.const 1024) (i32.shl (local.get 0) (i32.const 2))))
+      (func (export "k_active") (result i32) (i32.const 0)))"#;
+    let dir = package_with(wat, "inputs = [\"in: audio<1>\"]\noutputs = [\"out: audio<1>\"]");
+    let nodes = |out: &str| {
+        song(
+            json!([
+                {"id": "f", "op": "const", "value": 440, "unit": "hz"},
+                {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "f"}},
+                {"id": "k", "op": "kernel", "kernel": "t:k", "inputs": {"in": "o"}},
+            ]),
+            out,
+            json!([]),
+        )
+    };
+    for layout in [packages::Layout::P2, packages::Layout::P1] {
+        let mut pk = PackageSet::laid_out(layout);
+        pk.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
+        pk.load(&dir).unwrap();
+        let mut copied = Renderer::new(&check(&nodes("k"), &pk).unwrap(), &DataSet::empty(), &pk, SR).unwrap();
+        let mut sine = Renderer::new(&check(&nodes("o"), &pk).unwrap(), &DataSet::empty(), &pk, SR).unwrap();
+        // Where the copying kernel's memory is, and how big: what its store says, and what it kept.
+        let at = |r: &Renderer| {
+            let k = r.plan.graph.exec.iter().find_map(|e| match e {
+                Exec::Kernel(KernelNode { inst: Some(k), .. }) if k.name == "song/k" => Some(k),
+                _ => None,
+            });
+            let k = k.expect("the copying kernel");
+            (k.memory.data_ptr(&k.store), k.view.base.as_ptr(), k.memory.data_size(&k.store))
+        };
+        let (built, ..) = at(&copied);
+        let (mut a, mut b) = ([[0.0; 2]; BLOCK], [[0.0; 2]; BLOCK]);
+        for block in 0..600 {
+            copied.process(&mut a).unwrap();
+            sine.process(&mut b).unwrap();
+            assert!(a == b, "{layout:?}: block {block} isn't the sine it was given");
+            let (now, kept, _) = at(&copied);
+            assert!(now == built && kept == built, "{layout:?}: the memory moved by block {block}");
+        }
+        assert_eq!(at(&copied).2, KERNEL_MEMORY, "{layout:?}: it grew to the cap");
+    }
+    std::fs::remove_dir_all(dir).ok();
 }
 
 #[test]
