@@ -81,7 +81,8 @@ Decided earlier, and still in force:
 ## The check: `ci/check.sh`
 
 One script checks everything, on the server and on the Mac ([PLAT-6](docs/architecture.md#platforms)). It ends with a
-short summary. Its first line says `music2 check: PASS` or `FAIL`.
+short summary. Its first line says `music2 check: PASS`, `FAIL`, or `PART`. PART means no row failed, but the gates
+couldn't judge G7f: the Mac isn't the one S's records name. Only PASS is a pass.
 
 | Row | What it checks |
 |---|---|
@@ -150,10 +151,11 @@ the `step7` branch.
 - G7f measures S, the commit before step 7, in the same run, beside the app. S plays in a small program
   of its own, which a new row, "old engine (S)", builds first. G7f no longer adds an old recorded number.
 - G7f's turns: no side takes two turns in a row, and the first half second of each turn is not judged.
-- A Mac whose name the records don't hold gets G7f printed, not judged, and the gates row says PART.
+- A Mac whose name the records don't hold gets G7f printed, not judged. The gates row says PART, and so does the
+  first line.
 
-**What must pass:** every row says PASS (the gates row too, not PART), with nothing "passed only on a
-retry". In the gates part:
+**What must pass:** the first line says `music2 check: PASS`. Every row says PASS (the gates row too, not PART),
+with nothing "passed only on a retry". In the gates part:
 - G11, as last time.
 - G5 and G7a through the server: heard within 200 ms of the request.
 - G5 and G7b on the engine rig, with G7a's click check.
@@ -172,7 +174,7 @@ retry". In the gates part:
   about ±30 µs. Above +50, one more run.
 - The "old engine (S)" row. It builds S on the Mac for the first time (Linux only type-checked it for
   macOS). If it fails, the gates can't run G7f, and the lead reads `gates-s.log` in the logs.
-- The gates row says PART, or there is an `info machines:` line: the Mac's name differs from the two
+- The first line and the gates row say PART, or there is an `info machines:` line: the Mac's name differs from the two
   records written by hand. Nothing else is wrong then: the lead copies the printed `machine:` line into
   `crates/gates/store-S.txt` and `callback-S.txt`, and asks for one more run.
 - Anything else that fails is new.

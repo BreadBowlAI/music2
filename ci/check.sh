@@ -23,7 +23,8 @@
 #   CARGO_TARGET_DIR  where cargo builds (default: target/ in the repo)
 #   M2_CHECK_OUT      where the logs go (default: ~/m2-check/<commit>). Only a folder an earlier
 #                     check made is ever replaced.
-# Exit status: 0 when every check passed with the test plugins, 1 when not, 2 when it couldn't start.
+# Exit status: 0 when every check passed, all of it judged, with the test plugins; 1 when not; 2 when
+# it couldn't start.
 #
 # Needs rustup and Node 24. The first run installs Rust 1.99.0 (rust-toolchain.toml) and
 # chrome-headless-shell 133.0.6943.141. On a Mac, run it in Terminal on the Mac itself, not over
@@ -95,7 +96,8 @@ begin() {
   T0=$(date +%s)
   printf '%-16s ...   running, usually %s (started %s)\n' "$1" "$2" "$(date +%H:%M)"
 }
-# record <check> <PASS|PART|FAIL|SKIP> <note>: one row of the summary.
+# record <check> <PASS|PART|FAIL|SKIP> <note>: one row of the summary. PART: it ran and nothing failed,
+# but not all of it could be judged, so the check isn't a pass.
 record() {
   RUNNING=
   printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$OUT/results"
@@ -188,6 +190,8 @@ plugins() {
 # The summary to paste back, and every log packed into one small file beside the logs.
 summary() {
   fails=$(awk -F"$TAB" '$2 == "FAIL"' "$OUT/results" | wc -l | tr -d ' ')
+  # The rows that ran but weren't judged in full (the gates on a Mac S's records don't name).
+  partial=$(awk -F"$TAB" '$2 == "PART" { printf "%s%s", (n++ ? ", " : ""), $1 }' "$OUT/results")
   total=$(wc -l < "$OUT/results" | tr -d ' ')
   mins=$(( ($(date +%s) - START + 59) / 60 ))
   if [ -s "$SCR/before" ]; then state="with local changes"; else state=clean; fi
@@ -195,6 +199,8 @@ summary() {
     verdict="FAIL ($fails of $total checks)"
   elif [ -z "$TESTPLUGINS" ]; then
     verdict="FAIL: no row failed, but the test plugins weren't there, so it isn't a pass (PLAT-6)"
+  elif [ -n "$partial" ]; then
+    verdict="PART: no row failed, but the $partial row wasn't judged in full, so it isn't a pass: see that row"
   else
     verdict=PASS
   fi
@@ -557,7 +563,8 @@ if [ -n "$GATES" ]; then
     bad=build
     first "$OUT/gates-build.log" '^error' | sed 's/^/gates: /' >> "$OUT/failed"
   fi
-  # A Mac S's records don't name runs G7f but can't judge its timings (PLAT-1): never a plain PASS.
+  # A Mac S's records don't name runs G7f but can't judge its timings (PLAT-1): the row says PART, and
+  # so does the check's first line, never PASS.
   if [ -z "$bad" ] && grep -q '^      skip  .*not judged on this Mac (PLAT-1)' "$OUT/gates.log"; then
     record gates PART "the $(grep -c '' "$SCR/gates") runs ci/gates.txt names, but G7f wasn't judged: this Mac isn't the one S's records name (see gates)"
   elif [ -z "$bad" ]; then
@@ -589,4 +596,4 @@ fi
 
 trap '' INT TERM
 summary
-[ "$fails" -eq 0 ] && [ -n "$TESTPLUGINS" ]
+[ "$fails" -eq 0 ] && [ -n "$TESTPLUGINS" ] && [ -z "$partial" ]

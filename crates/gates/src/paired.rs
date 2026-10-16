@@ -88,7 +88,8 @@ pub enum Place {
     Reference,
     /// A Mac those records don't name, and why: printed, not judged, as on any machine but the
     /// reference Mac (PLAT-1), saying what to do if it is the reference Mac now. ci/check.sh then
-    /// marks the gates row PART, so a Mac's run never passes with G7f unjudged.
+    /// marks the gates row PART, and its first line PART, not PASS, with exit status 1: so a Mac's
+    /// run never passes with G7f unjudged.
     OtherMac(&'static str),
     /// Any other machine: printed with what they would say, not judged.
     Elsewhere,
