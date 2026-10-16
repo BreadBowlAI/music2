@@ -2,31 +2,33 @@
 //! measured on the runtime itself, with no server and no device, and the store layout judged by a
 //! rule written down before anything was measured (RENDER-32).
 //!
-//! It uses only what HEAD `8aa301e` already had (`Renderer::new`, `set_transport`, `render_block`,
-//! `Drop`, and the `Flat` for counting), so this same file ran in a worktree at HEAD to record
-//! layout S, one `Store` per renderer. S's record is read from `store-S.txt` beside this crate's
-//! manifest, or from `$M2_STORE_S`; every run prints its own record line (`store-record …`), which
-//! is what that file holds. A record names its machine, and the rule compares only with S's record
-//! from the same machine (PLAT-1).
-//!
 //! The app's layout is the owner's (`m2_runtime::packages::Layout::P2`: 32 MiB reserved per
-//! memory, bounds-checked). Its build and memory are measured once. Its block time and its drop are
-//! measured in pairs with step 7's first layout, P1 (4 GiB reserved per memory, unchecked), in turns
-//! in one process (`paired`), and judged as their difference plus P1's cost over S on the
-//! reference Mac, recorded in `store-S.txt` from the campaign that measured P1.
+//! memory, bounds-checked). Its build and memory are measured once. Its block time is measured in 5
+//! rounds of three renderers taking turns over the same music: the app's layout and step 7's first
+//! layout, P1 (4 GiB reserved per memory, unchecked), in this process, and S, HEAD `8aa301e`, one
+//! `Store` per renderer, in its runner's (`baseline`), which also times S's first build. Each round,
+//! the three render the same bits, which the gate checks. The drop is measured in each round for
+//! the app's layout and P1, each while an audio-like thread renders beside it.
+//!
+//! What the runner can't measure, S's memory, comes from S's record, `store-S.txt` beside this
+//! crate's manifest or `$M2_STORE_S`, with P1's drop against S's from the same campaign; every run
+//! prints its own record line (`store-record …`), which is what that file holds. A record names its
+//! machine, and is used only on the same machine (PLAT-1).
 //!
 //! The rule (§11.3), against S:
-//! - the block time is worse by no more than 80 µs, 3% of a 2.67 ms block. The rule names the p99,
-//!   but even paired it moves by more than that between pairs, so the mean is judged and the p99's
-//!   estimate printed;
-//! - the footprint is worse by no more than 64 MB;
+//! - the block time is worse by no more than 80 µs, 3% of a 2.67 ms block, measured here. The rule
+//!   names the p99, but even paired it moves by more than that between pairs, so the mean is judged
+//!   and the p99's difference printed;
+//! - the footprint is worse by no more than 64 MB, against S's record;
 //! - at least 2 renderers build side by side, and the address space the process holds with 2
 //!   renderers is at most 25% of its limit;
-//! - p50's full build, what opening a project costs, is worse by no more than 50%.
+//! - p50's full build, what opening a project costs, is worse by no more than 50%, each process's
+//!   first build, measured here.
 //!
 //! The two memory rules fail when the OS doesn't say what the process holds: they never pass
 //! unmeasured (`m2_os::process::memory`). Batched drops are needed only if the app's layout's drop
-//! raises an audio-like thread's p99 more than S's drop does, in every pair.
+//! raises an audio-like thread's p99 more than S's drop does, in every pair: the app's layout's
+//! raise over P1's here, plus P1's over S's as recorded.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -38,24 +40,27 @@ use m2_os::process::{self, Memory};
 use m2_runtime::packages::Layout;
 use m2_runtime::{BLOCK, Renderer, Transport};
 
+use crate::baseline::{Runner, wire::Heard};
 use crate::gates::Opts;
-use crate::paired::Diffs;
+use crate::paired::{Diffs, Side, in_turns, judge};
 use crate::report::{Outcome, same_machine};
 use crate::{Lab, songs};
 
 /// What the contract's acceptance gate 7 names as p50's instance count.
 const CONTRACT_COUNT: usize = 6_176;
-/// The block time measured: 30 s from 3:00.
+/// The block time measured: 30 s from 3:01, after a second from 3:00 untimed.
 const FROM_SECONDS: f64 = 180.0;
 const BLOCKS: usize = 11_250;
+const WARM: usize = 375;
 /// The most p50 renderers built side by side.
 const SIDE_BY_SIDE: usize = 4;
-/// Pairs of runs, each the app's layout and P1 over the same 30 s in turns (`paired`): about 5
-/// minutes on the reference Mac. On a quiet Linux machine the pairs' mean differences stayed
-/// within ±12 µs, so their median moves by a few µs from run to run.
-const PAIRS: usize = 5;
-/// Blocks one layout renders before the other's turn: 1 s, so a change in the machine's load
-/// lasting longer than that meets both alike.
+/// Rounds of the three renderers, each over the same 30 s in turns (`paired`), each with two drops:
+/// about 7 minutes on the reference Mac (an estimate: three renderers of about 2.2 ms a block). On a
+/// quiet Linux machine the pairs' mean differences stayed within ±12 µs, so their median moves by a
+/// few µs from run to run.
+const ROUNDS: usize = 5;
+/// Blocks one renderer renders before the next one's turn: 1 s, so a change in the machine's load
+/// lasting longer than that meets all alike.
 const TURN: usize = 375;
 /// Why the memory rules fail where the OS doesn't say what the process holds.
 const UNMEASURED: &str = "not measured: this OS doesn't say what the process holds";
@@ -176,24 +181,13 @@ fn instances(nodes: &[FNode], order: &[usize]) -> usize {
         .sum()
 }
 
-/// P1 against S on the reference Mac, from its campaign of alternated runs (RENDER-32): what
-/// P1's mean and p99 block, and its drop's raise of another thread's p99, cost over S's.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct P1VsS {
-    pub mean_us: f64,
-    pub p99_us: f64,
-    pub raise_us: f64,
-}
-
-impl P1VsS {
-    /// The first `store-p1` line of `text`, whose machine must be S's record's.
-    pub fn parse(text: &str) -> Option<P1VsS> {
-        let (values, machine) = crate::paired::line(text, "store-p1")?;
-        let s = Record::parse(text)?;
-        same_machine(&s.machine, &machine).then_some(())?;
-        let get = |k| crate::paired::value(&values, k);
-        Some(P1VsS { mean_us: get("mean_us")?, p99_us: get("p99_us")?, raise_us: get("raise_us")? })
-    }
+/// What P1's drop raised an audio-like thread's p99 more than S's did, in µs, from the campaign
+/// of alternated runs on the machine of S's record (`store-p1` in `text`, RENDER-32): the estimate
+/// of S's drop the batched-drops verdict adds to what the app's layout's drop costs over P1's here.
+fn p1_raise(text: &str) -> Option<f64> {
+    let (values, machine) = crate::paired::line(text, "store-p1")?;
+    same_machine(&Record::parse(text)?.machine, &machine).then_some(())?;
+    crate::paired::value(&values, "raise_us")
 }
 
 /// Whether batched drops are needed (§11.3): only if the app's layout's drop raised the audio-like
@@ -204,40 +198,35 @@ fn needed(raises: &Diffs, recorded: f64) -> bool {
     !raises.0.is_empty() && raises.0.iter().all(|r| r + recorded > 0.0)
 }
 
-/// The rule (§11.3) on `rec`, and on `[mean, p99]`, the app's layout's block times against P1's
-/// pair by pair: each check into `out`, and whether all passed. A comparison with S needs S's
-/// records from this machine, else it is skipped with why (PLAT-1). The memory rules fail when the
-/// memory wasn't measured (`memory`: before and after one renderer; `with_two`: with two
+/// S where this run judges against it: its first build, measured here, in ms, and its record from
+/// this machine for what its runner can't measure, its memory, or why there is none (PLAT-1).
+struct OfS {
+    build_ms: f64,
+    record: Result<Record, String>,
+}
+
+/// The rule (§11.3) on `rec`, and on `[mean, p99]`, the app's layout's block times against S's,
+/// pair by pair: each check into `out`, and whether all passed. The footprint is compared with S's
+/// record only when it is from this machine, else skipped with why (PLAT-1). The memory rules fail
+/// when the memory wasn't measured (`memory`: before and after one renderer; `with_two`: with two
 /// renderers), whatever S is: they never pass unmeasured.
-fn rule(
-    out: &mut Outcome,
-    rec: &Record,
-    [mean, p99]: [&Diffs; 2],
-    s: &Result<(Record, P1VsS), String>,
-    memory: bool,
-    with_two: bool,
-) -> bool {
-    let against_s = |out: &mut Outcome, name: &str, judge: &dyn Fn(&Record, &P1VsS) -> (bool, String)| match s {
-        Ok((s, p1)) => {
-            let (ok, detail) = judge(s, p1);
-            out.check(name, ok, detail)
-        }
-        Err(why) => {
-            out.skip(name, why);
+fn rule(out: &mut Outcome, rec: &Record, [mean, p99]: [&Diffs; 2], s: &OfS, memory: bool, with_two: bool) -> bool {
+    // The rule bounds the p99 block, but even the pairs' p99 moves by more than 80 µs: the mean is
+    // judged with the same bound, and the p99's difference printed (`paired`).
+    let (ok, detail) = judge([mean, p99], 80.0);
+    let mut pass = out.check("block within S + 80 µs, by the mean", ok, detail);
+    let footprint = "footprint within S + 64 MB";
+    pass &= match (memory, &s.record) {
+        (false, _) => out.check(footprint, false, UNMEASURED),
+        (true, Ok(r)) => out.check(
+            footprint,
+            rec.footprint_mb <= r.footprint_mb + 64.0,
+            format!("{:.0} MB against S's {:.0} MB, as recorded on this machine", rec.footprint_mb, r.footprint_mb),
+        ),
+        (true, Err(why)) => {
+            out.skip(footprint, why);
             false
         }
-    };
-    // The rule bounds the p99 block, but even the pairs' p99 moves by more than 80 µs: the mean is
-    // judged with the same bound, and the p99's estimate printed (`paired`).
-    let mut pass =
-        against_s(out, "block within S + 80 µs, by the mean", &|_, p1| crate::paired::judge([mean, p99], [p1.mean_us, p1.p99_us], 80.0));
-    let footprint = "footprint within S + 64 MB";
-    pass &= if memory {
-        against_s(out, footprint, &|s, _| {
-            (rec.footprint_mb <= s.footprint_mb + 64.0, format!("{:.0} MB against S's {:.0} MB", rec.footprint_mb, s.footprint_mb))
-        })
-    } else {
-        out.check(footprint, false, UNMEASURED)
     };
     // Against the process's own limit, so judged on any machine.
     let side = "2 renderers side by side, reserving at most 25% of the address space";
@@ -245,14 +234,17 @@ fn rule(
         (false, _) => out.check(side, false, format!("{} built", rec.side_by_side)),
         (true, false) => out.check(side, false, format!("{} built; {UNMEASURED}", rec.side_by_side)),
         (true, true) => {
-            let of_s = s.as_ref().map_or(String::new(), |(s, _)| format!(" (S: {:.1}%)", 100.0 * s.reserved2_gib / s.limit_gib));
+            let of_s =
+                s.record.as_ref().map_or(String::new(), |r| format!(" (S, as recorded: {:.1}%)", 100.0 * r.reserved2_gib / r.limit_gib));
             let held = 100.0 * rec.reserved2_gib / rec.limit_gib;
             out.check(side, rec.reserved2_gib <= 0.25 * rec.limit_gib, format!("{} built; {held:.2}%{of_s}", rec.side_by_side))
         }
     };
-    pass &= against_s(out, "full build within 1.5 × S", &|s, _| {
-        (rec.build_ms <= 1.5 * s.build_ms, format!("{:.0} ms against S's {:.0} ms", rec.build_ms, s.build_ms))
-    });
+    pass &= out.check(
+        "full build within 1.5 × S",
+        rec.build_ms <= 1.5 * s.build_ms,
+        format!("{:.0} ms against S's {:.0} ms, each its process's first, measured here", rec.build_ms, s.build_ms),
+    );
     pass
 }
 
@@ -261,7 +253,8 @@ const GIB: f64 = 1024.0 * MB;
 
 /// G7f, part 1: the layout this tree builds, measured on `o.reference` (p50 for the gate).
 pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
-    let song = lab.reference(&o.reference).and_then(|d| lab.compile(&d))?;
+    let dir = lab.reference(&o.reference)?;
+    let song = lab.compile(&dir)?;
     // A sine into a delay: the same small cost every block, so what moves it during the drop is the drop.
     let small = lab.project("sine", &songs::sine(true)).and_then(|d| lab.compile(&d))?;
     let mut out = Outcome::new("G7f store", "RENDER-32", &format!("the runtime on {}", o.reference.name()));
@@ -305,8 +298,9 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     out.info(
         "build",
         format!(
-            "{:.0} ms for p50's renderer, {:.1} µs per instance; {} side by side{}",
+            "{:.0} ms for {}'s renderer, {:.1} µs per instance; {} side by side{}",
             rec.build_ms,
+            o.reference.name(),
             rec.build_ms * 1e3 / rec.count.max(1) as f64,
             rec.side_by_side,
             failed.map_or(String::new(), |e| format!(" (the next failed: {e})"))
@@ -334,23 +328,44 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         (None, _) => out.info("memory", UNMEASURED),
     }
 
-    // Block time and the drop, in pairs: the app's layout and P1 in turns over the same music, so
-    // what disturbs one disturbs the other alike (RENDER-32).
+    // S's first build, in its own process, as the app's above was in this one; then S is played in
+    // the rounds below, beside the app's layout.
+    let mut s = Runner::start(&lab.work)?;
+    out.info("S", s.about());
+    let first = s.renderer(&dir, FROM_SECONDS)?;
+    s.drop_it()?;
+    out.info(
+        "S's build",
+        format!(
+            "{:.0} ms for {}'s renderer, its runner's first; {} kernel instances by the same count",
+            first.build_ms,
+            o.reference.name(),
+            first.count
+        ),
+    );
+
+    // Block time and the drop, in rounds: the app's layout and P1 here and S in its runner, in turns
+    // over the same music, so what disturbs one disturbs the others alike (RENDER-32).
     let p1 = crate::load_std_laid_out(Layout::P1)?;
-    let pairs = PAIRS;
-    let (mut runs, mut drops): ([Vec<Vec<f64>>; 2], [Vec<Dropped>; 2]) = Default::default();
-    let mut class = None;
-    for i in 0..pairs {
-        let app = Renderer::new(&song.flat, &song.data, &lab.packages, song.rate)?;
-        let old = Renderer::new(&song.flat, &song.data, &p1, song.rate)?;
-        // Each layout first in every other pair.
-        let mut both = [app, old];
-        let [a, b] = in_turns(&mut both, i % 2 == 0, song.rate)?;
-        out.info(format!("pair {}", i + 1), format!("the app's layout {}; P1 {}", Run::of(&a), Run::of(&b)));
-        runs[0].push(a);
-        runs[1].push(b);
-        // Each layout's drop first in every other pair too.
-        let [app, old] = both;
+    let (mut runs, mut heard): ([Vec<Vec<f64>>; 3], Vec<[Heard; 3]>) = Default::default();
+    let mut drops: [Vec<Dropped>; 2] = Default::default();
+    let (mut s_drops, mut class) = (vec![], None);
+    for i in 0..ROUNDS {
+        let mut app = Blocks::new(&lab.packages, &song)?;
+        let mut old = Blocks::new(&p1, &song)?;
+        s.renderer(&dir, FROM_SECONDS)?;
+        let times = in_turns(&mut [&mut app, &mut old, &mut s], WARM, BLOCKS, TURN, i)?;
+        heard.push([app.heard()?, old.heard()?, s.heard()?]);
+        s_drops.push(s.drop_it()?);
+        out.info(
+            format!("round {}", i + 1),
+            format!("the app's layout {}; P1 {}; S {}", Run::of(&times[0]), Run::of(&times[1]), Run::of(&times[2])),
+        );
+        for (run, t) in runs.iter_mut().zip(times) {
+            run.push(t);
+        }
+        // Each layout's drop first in every other round.
+        let (app, old) = (app.r, old.r);
         let (d_app, d_old) = if i % 2 == 0 {
             let d_old = dropped(old, lab, &small)?;
             (dropped(app, lab, &small)?, d_old)
@@ -362,13 +377,23 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         drops[0].push(d_app);
         drops[1].push(d_old);
     }
-    let (app, old) = (Run::median(&runs[0]), Run::median(&runs[1]));
+    drop(s);
+    let (same, said) = crate::paired::same_music(&heard);
+    out.check("the same music: every renderer's timed blocks the same bits", same, said);
+    let app = Run::median(&runs[0]);
     (rec.mean_us, rec.p99_us, rec.max_us) = (app.mean, app.p99, app.max);
-    out.info(format!("block, the app's layout (medians of {pairs} runs)"), format!("{app} over {BLOCKS} blocks from 3:00"));
-    out.info(format!("block, P1 (medians of {pairs} runs)"), format!("{old}"));
-    let p99 = Diffs::of(&runs[0], &runs[1], |v| crate::paired::rank(v, 0.99));
-    let mean = Diffs::of(&runs[0], &runs[1], |v| v.iter().sum::<f64>() / v.len().max(1) as f64);
-    out.info("block, the app's layout against P1, pair by pair", format!("mean {mean}; p99 {p99}"));
+    out.info(format!("block, the app's layout (medians of {ROUNDS} runs)"), format!("{app} over {BLOCKS} blocks from 3:01"));
+    out.info(format!("block, P1 (medians of {ROUNDS} runs)"), format!("{}", Run::median(&runs[1])));
+    out.info(format!("block, S (medians of {ROUNDS} runs)"), format!("{}", Run::median(&runs[2])));
+    let against = |a: usize, b: usize| {
+        let mean = Diffs::of(&runs[a], &runs[b], |v| v.iter().sum::<f64>() / v.len().max(1) as f64);
+        (mean, Diffs::of(&runs[a], &runs[b], |v| crate::paired::rank(v, 0.99)))
+    };
+    let (mean, p99) = against(0, 2);
+    let ((p1_mean, p1_99), (o1_mean, o1_99)) = (against(1, 2), against(0, 1));
+    out.info("block, the app's layout against S, pair by pair", format!("mean {mean}; p99 {p99}"));
+    out.info("block, P1 against S (step 7 with wasmtime's default layout)", format!("mean {p1_mean}; p99 {p1_99}"));
+    out.info("block, the app's layout against P1 (the owner's layout alone)", format!("mean {o1_mean}; p99 {o1_99}"));
     let med = |f: fn(&Dropped) -> f64, d: &[Dropped]| crate::paired::median(&d.iter().map(f).collect::<Vec<_>>());
     (rec.drop_ms, rec.audio_base_us, rec.audio_drop_us) =
         (med(|d| d.ms, &drops[0]), med(|d| d.base_us, &drops[0]), med(|d| d.during_us, &drops[0]));
@@ -376,9 +401,10 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     out.info(
         "drop",
         format!(
-            "{:.1} ms (P1 {:.1}); the audio-like thread's p99 block {:.0} µs during it, {:.0} µs before (medians of {pairs}); {}",
+            "{:.1} ms (P1 {:.1}, S {:.1} with no thread beside it); the audio-like thread's p99 block {:.0} µs during it, {:.0} µs before (medians of {ROUNDS}); {}",
             rec.drop_ms,
             med(|d| d.ms, &drops[1]),
+            crate::paired::median(&s_drops),
             rec.audio_drop_us,
             rec.audio_base_us,
             match class.unwrap_or(Ok(())) {
@@ -389,37 +415,47 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     );
     out.info("record", rec.line());
 
-    // The rule (§11.3). Its comparisons with S are judged only against S's records from this same
-    // machine (PLAT-1); its memory rules fail, never pass, when the memory wasn't measured.
+    // The rule (§11.3): the block and the build against S measured here, on any machine; the
+    // footprint against S's record from this same machine only (PLAT-1). Its memory rules fail,
+    // never pass, when the memory wasn't measured.
     let path =
         std::env::var_os("M2_STORE_S").map_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("store-S.txt"), Into::into);
     let text = std::fs::read_to_string(&path).unwrap_or_default();
-    let s = match (Record::parse(&text), P1VsS::parse(&text)) {
-        (None, _) => Err(format!("no record of layout S in {}", path.display())),
-        (_, None) => Err(format!("no record of P1 against S in {}", path.display())),
-        (Some(s), _) if !same_machine(&s.machine, &rec.machine) => {
-            out.info("machines", format!("S's record is from {}; this run is on {}", s.machine, rec.machine));
+    let record = match Record::parse(&text) {
+        None => Err(format!("no record of layout S in {}", path.display())),
+        Some(r) if !same_machine(&r.machine, &rec.machine) => {
+            out.info("machines", format!("S's record is from {}; this run is on {}", r.machine, rec.machine));
             Err("recorded, not judged: S's record is from another machine (PLAT-1)".to_string())
         }
-        (Some(s), Some(p)) => Ok((s, p)),
+        Some(r) => Ok(r),
     };
-    let pass = rule(&mut out, &rec, [&mean, &p99], &s, measured.is_some(), measured.is_some() && two.is_some());
-    let Ok((_, p1_s)) = s else {
-        out.info("batched drops", format!("the drop raises the audio-like thread's p99 {raises} more than P1's; not compared with S here"));
-        out.info("layout", "not judged here: the rule needs S's records from this machine (§11.3, PLAT-1)");
-        return Ok(out);
-    };
-    out.info(
-        "batched drops",
-        format!(
-            "{}: the drop raises the audio-like thread's p99 {raises} more than P1's here, and P1's {:+.0} µs more than S's on the reference Mac; needed only if more than S's in every pair",
-            if needed(&raises, p1_s.raise_us) { "needed" } else { "not needed" },
-            p1_s.raise_us
-        ),
+    let recorded = record.is_ok();
+    let pass = rule(
+        &mut out,
+        &rec,
+        [&mean, &p99],
+        &OfS { build_ms: first.build_ms, record },
+        measured.is_some(),
+        measured.is_some() && two.is_some(),
     );
+    match p1_raise(&text).filter(|_| recorded) {
+        Some(raise) => out.info(
+            "batched drops",
+            format!(
+                "{}: the drop raises the audio-like thread's p99 {raises} more than P1's here, and P1's {raise:+.0} µs more than S's as recorded on this machine; needed only if more than S's in every pair",
+                if needed(&raises, raise) { "needed" } else { "not needed" },
+            ),
+        ),
+        None => out.info("batched drops", format!("the drop raises the audio-like thread's p99 {raises} more than P1's; not compared with S here")),
+    }
+    let failed = out.checks.iter().any(|c| c.verdict == crate::report::Verdict::Fail);
     out.info(
         "layout",
-        if pass { "the app's layout passes the rule (RENDER-32)" } else { "the app's layout fails the rule (§11.3): the owner decides" },
+        match (pass, failed) {
+            (true, _) => "the app's layout passes the rule (RENDER-32)",
+            (false, true) => "the app's layout fails the rule (§11.3): the owner decides",
+            (false, false) => "not judged in full here: the footprint rule needs S's record from this machine (§11.3, PLAT-1)",
+        },
     );
     Ok(out)
 }
@@ -452,27 +488,49 @@ impl std::fmt::Display for Run {
     }
 }
 
-/// The block times of both renderers over the same `BLOCKS` from 3:00, rendered in turns of `TURN`
-/// blocks, the first first in even turns when `first_first`, else in odd ones: each as often
-/// first, so neither always meets caches the other left cold.
-fn in_turns(both: &mut [Renderer; 2], first_first: bool, rate: u32) -> Result<[Vec<f64>; 2]> {
-    for r in both.iter_mut() {
+/// A renderer here, its kernels built by one layout's packages, its transport at 3:00: one side of
+/// the turns, as S's runner renders S on another, with the same calls.
+struct Blocks {
+    r: Renderer,
+    /// The next block's index: the engine clock is `k * BLOCK`.
+    k: usize,
+    heard: Heard,
+}
+
+impl Blocks {
+    fn new(packages: &m2_runtime::PackageSet, song: &crate::Song) -> Result<Blocks> {
+        let mut r = Renderer::new(&song.flat, &song.data, packages, song.rate)?;
         // Live: non-finite samples silenced, as the engine plays.
         r.set_strict(false);
-        r.set_transport(Transport::starting((FROM_SECONDS * rate as f64).round() as u64));
+        r.set_transport(Transport::starting((FROM_SECONDS * song.rate as f64).round() as u64));
+        Ok(Blocks { r, k: 0, heard: Heard::default() })
     }
-    let mut times = [Vec::with_capacity(BLOCKS), Vec::with_capacity(BLOCKS)];
-    for (n, from) in (0..BLOCKS).step_by(TURN).enumerate() {
-        let order = if (n % 2 == 0) == first_first { [0, 1] } else { [1, 0] };
-        for i in order {
-            for k in from..(from + TURN).min(BLOCKS) {
-                let t = Instant::now();
-                both[i].render_block((k * BLOCK) as u64)?;
-                times[i].push(t.elapsed().as_secs_f64() * 1e6);
-            }
+}
+
+impl Side for Blocks {
+    fn warm(&mut self, n: usize) -> Result<()> {
+        for _ in 0..n {
+            self.r.render_block((self.k * BLOCK) as u64)?;
+            self.k += 1;
         }
+        Ok(())
     }
-    Ok(times)
+
+    fn turn(&mut self, n: usize) -> Result<Vec<f64>> {
+        let mut times = Vec::with_capacity(n);
+        for _ in 0..n {
+            let t = Instant::now();
+            let out = self.r.render_block((self.k * BLOCK) as u64)?;
+            times.push(t.elapsed().as_secs_f64() * 1e6);
+            self.heard.add_frames(out);
+            self.k += 1;
+        }
+        Ok(times)
+    }
+
+    fn heard(&mut self) -> Result<Heard> {
+        Ok(self.heard)
+    }
 }
 
 /// A renderer's drop, off an audio-like thread that renders a small song every 2.67 ms meanwhile.
@@ -567,12 +625,12 @@ mod tests {
             machine: here,
             ..Record::default()
         };
+        let of_s = |record: Result<Record, String>| OfS { build_ms: 100.0, record };
         let memory = ["footprint within S + 64 MB", "2 renderers side by side, reserving at most 25% of the address space"];
-        let p1 = P1VsS { mean_us: 32.0, p99_us: 35.0, raise_us: 0.0 };
         let (mean, p99) = (Diffs(vec![10.0, 12.0, 8.0]), Diffs(vec![-300.0, 20.0, 250.0]));
-        for s in [Ok((s.clone(), p1)), Err("recorded, not judged: S's record is from another machine (PLAT-1)".to_string())] {
+        for record in [Ok(s.clone()), Err("recorded, not judged: S's record is from another machine (PLAT-1)".to_string())] {
             let mut out = Outcome::new("G7f store", "RENDER-32", "a test");
-            assert!(!rule(&mut out, &rec, [&mean, &p99], &s, false, false));
+            assert!(!rule(&mut out, &rec, [&mean, &p99], &of_s(record), false, false));
             let failed: Vec<&str> = out.checks.iter().filter(|c| c.verdict == Verdict::Fail).map(|c| c.name.as_str()).collect();
             assert_eq!(failed, memory, "{out}");
             assert_eq!(out.verdict(), Verdict::Fail);
@@ -580,19 +638,35 @@ mod tests {
         let measured =
             Record { p99_us: 3_050.0, footprint_mb: 600.0, build_ms: 120.0, reserved2_gib: 30_000.0, limit_gib: 131_072.0, ..rec.clone() };
         let mut out = Outcome::new("G7f store", "RENDER-32", "a test");
-        assert!(rule(&mut out, &measured, [&mean, &p99], &Ok((s.clone(), p1)), true, true), "{out}");
+        assert!(rule(&mut out, &measured, [&mean, &p99], &of_s(Ok(s.clone())), true, true), "{out}");
         assert_eq!(out.checks.iter().filter(|c| c.verdict == Verdict::Pass).count(), 4, "{out}");
+        // From another machine, S's record can't judge the footprint, and the rule isn't passed
+        // in full; the block and the build, measured here, still are.
+        let mut out = Outcome::new("G7f store", "RENDER-32", "a test");
+        assert!(!rule(&mut out, &measured, [&mean, &p99], &of_s(Err("another machine".into())), true, true), "{out}");
+        let skipped: Vec<&str> = out.checks.iter().filter(|c| c.verdict == Verdict::Skip).map(|c| c.name.as_str()).collect();
+        assert_eq!(skipped, ["footprint within S + 64 MB"], "{out}");
+        assert_eq!(out.checks.iter().filter(|c| c.verdict == Verdict::Pass).count(), 3, "{out}");
 
-        // RENDER-32, rg-1: the pairs' mean is judged, the app's layout's cost over P1 here plus P1's
-        // over S on the Mac: +10 and +32 pass the 80 µs bound, +50 and +32 don't. The p99's estimate
-        // is printed, never judged: one far over the bound fails nothing.
+        // RENDER-32, rg-1: the pairs' mean is judged, the app's layout's cost over S, both measured
+        // in this run: +10 passes the 80 µs bound, +81 doesn't. The p99's difference is printed,
+        // never judged: one far over the bound fails nothing.
         let mut out = Outcome::new("G7f store", "RENDER-32", "a test");
-        assert!(rule(&mut out, &measured, [&mean, &Diffs(vec![900.0; 3])], &Ok((s.clone(), p1)), true, true), "{out}");
-        assert!(out.checks.iter().any(|c| c.verdict == Verdict::Pass && c.detail.contains("p99, not judged: +935 µs")), "{out}");
+        assert!(rule(&mut out, &measured, [&mean, &Diffs(vec![900.0; 3])], &of_s(Ok(s.clone())), true, true), "{out}");
+        assert!(out.checks.iter().any(|c| c.verdict == Verdict::Pass && c.detail.contains("p99, not judged: +900 µs")), "{out}");
         let mut out = Outcome::new("G7f store", "RENDER-32", "a test");
-        assert!(!rule(&mut out, &measured, [&Diffs(vec![50.0, 48.0, 55.0]), &p99], &Ok((s, p1)), true, true), "{out}");
+        assert!(!rule(&mut out, &measured, [&Diffs(vec![81.0, 48.0, 85.0]), &p99], &of_s(Ok(s.clone())), true, true), "{out}");
         let failed: Vec<&str> = out.checks.iter().filter(|c| c.verdict == Verdict::Fail).map(|c| c.name.as_str()).collect();
         assert_eq!(failed, ["block within S + 80 µs, by the mean"], "{out}");
+
+        // RENDER-32: the build against S's first build in its runner, measured here: 151 ms against
+        // 100 fails, whatever S's record says.
+        let slow = Record { build_ms: 151.0, ..measured.clone() };
+        let mut out = Outcome::new("G7f store", "RENDER-32", "a test");
+        assert!(!rule(&mut out, &slow, [&mean, &p99], &of_s(Ok(s)), true, true), "{out}");
+        let failed: Vec<&str> = out.checks.iter().filter(|c| c.verdict == Verdict::Fail).map(|c| c.name.as_str()).collect();
+        assert_eq!(failed, ["full build within 1.5 × S"], "{out}");
+        assert!(out.checks.iter().any(|c| c.detail == "151 ms against S's 100 ms, each its process's first, measured here"), "{out}");
     }
 
     // RENDER-32 (§11.3), rg-1: batched drops are needed only when the app's layout's drop raises the
@@ -611,7 +685,11 @@ mod tests {
         let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("store-S.txt")).unwrap();
         let s = Record::parse(&text).expect("store-S.txt holds a record");
         assert!(s.machine.starts_with("MacBookPro18,1, macOS "), "{}", s.machine);
-        // RENDER-32: and P1's cost over S that the paired verdict adds, from the same machine.
-        assert_eq!(P1VsS::parse(&text), Some(P1VsS { mean_us: 32.0, p99_us: 35.0, raise_us: 0.0 }));
+        // RENDER-32: and what P1's drop raised another thread's p99 over S's, from the same machine,
+        // which the batched-drops verdict adds.
+        assert_eq!(p1_raise(&text), Some(0.0));
+        let s_line = text.lines().find(|l| l.starts_with("store-record ")).unwrap();
+        let other = format!("{s_line}\nstore-p1 raise_us=9.000 machine=Mac14,2, macOS 26.6.2, Apple M2, aarch64, 8 threads\n");
+        assert_eq!(p1_raise(&other), None, "only from S's record's machine");
     }
 }

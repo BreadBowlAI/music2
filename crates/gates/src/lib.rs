@@ -15,6 +15,7 @@
 //! Run them with `cargo run -p m2-gates --release -- --help`; see this crate's README.
 
 pub mod arena;
+pub mod baseline;
 pub mod gates;
 pub mod paired;
 pub mod plugins;

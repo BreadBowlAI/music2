@@ -3,9 +3,10 @@
 #
 # In short: run it in the repo with no arguments. It builds everything, runs every Rust test,
 # clippy, the web build, every browser suite, std's checks and the offline renders; on a Mac it
-# also times the gates ci/gates.txt names. Then it prints a short summary to paste back. It
-# changes nothing in the repo, never opens the app on a screen you can see, never plays sound,
-# and never touches your ~/Music or ~/.music2. If one line says "running" for over 30 minutes,
+# also times the gates ci/gates.txt names, after building the old engine they compare with (S) in
+# a folder of its own: ~/m2-check/s-8aa301e on a Mac, ~/.cache/m2-check/s-8aa301e on Linux. Then
+# it prints a short summary to paste back. It changes nothing in the repo, never opens the app on a
+# screen you can see, never plays sound, and never touches your ~/Music or ~/.music2. If one line says "running" for over 30 minutes,
 # press Ctrl-C once: it stops and prints the summary anyway.
 #
 #   ci/check.sh             everything (on a Mac, the timing gates too)
@@ -523,9 +524,24 @@ else
 fi
 
 # 11. The timing gates ci/gates.txt names, in release: on a Mac by default, on Linux with --gates.
-#     Only the reference Mac's timings are judged; elsewhere they are recorded (PLAT-1).
+#     Only the reference Mac's timings are judged; elsewhere they are recorded (PLAT-1). First, G7f's
+#     old engine: S, the commit before step 7, which G7f measures beside the app in every run. Its
+#     runner is built from a clean copy of S, in a cache folder outside the repo, and kept there
+#     (crates/gates/s/README.md).
 if [ -n "$GATES" ]; then
-  begin gates "15 min"
+  if [ $OS = macos ]; then SCACHE=$HOME/m2-check/s-8aa301e; else SCACHE=${XDG_CACHE_HOME:-$HOME/.cache}/m2-check/s-8aa301e; fi
+  begin "old engine (S)" "seconds; 3 min the first time"
+  echo "                 building the old engine (S) for G7f in $SCACHE; the first time takes about 3 minutes"
+  if quiet gates-s.log crates/gates/s/build.sh "$SCACHE" && [ -x "$(tail -1 "$OUT/gates-s.log")" ]; then
+    M2_GATES_S=$(tail -1 "$OUT/gates-s.log")
+    export M2_GATES_S
+    record "old engine (S)" PASS "built for G7f from a clean copy of 8aa301e, in $SCACHE"
+  else
+    unset M2_GATES_S
+    record "old engine (S)" FAIL "it didn't build, so G7f can't run: see gates-s.log"
+    echo "old engine (S): $(grep -m1 -E '^build\.sh: |^error' "$OUT/gates-s.log" | cut -c1-140)" >> "$OUT/failed"
+  fi
+  begin gates "20 min"
   # ci/gates.txt: one m2-gates run a line; # starts a comment.
   grep -v -e '^#' -e '^[[:space:]]*$' ci/gates.txt > "$SCR/gates"
   bad=
