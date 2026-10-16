@@ -85,8 +85,9 @@ pub fn judge([mean, p99]: [&Diffs; 2], bound: f64) -> (bool, String) {
 pub enum Place {
     /// The reference Mac, the machine S's records name: judged.
     Reference,
-    /// A Mac those records don't name, and why. A Mac's check is the reference run, so its timings
-    /// fail rather than pass unjudged, and say what to do.
+    /// A Mac those records don't name, and why: printed, not judged, as on any machine but the
+    /// reference Mac (PLAT-1), saying what to do if it is the reference Mac now. ci/check.sh then
+    /// marks the gates row PART, so a Mac's run never passes with G7f unjudged.
     OtherMac(&'static str),
     /// Any other machine: printed with what they would say, not judged.
     Elsewhere,
@@ -106,19 +107,24 @@ impl Place {
     }
 }
 
-/// What a check fails with on a Mac S's records don't name (`why`).
+/// What a check says on a Mac S's records don't name (`why`). ci/check.sh looks for its first words.
 pub fn not_the_reference(why: &str) -> String {
-    format!("{why}: if this is the reference Mac, copy its machine line into crates/gates/store-S.txt and callback-S.txt (PLAT-1)")
+    format!(
+        "not judged on this Mac (PLAT-1), {why}: if this is the reference Mac, copy its machine line into crates/gates/store-S.txt and callback-S.txt"
+    )
 }
 
-/// A G7f timing check (PLAT-1): judged on the reference Mac, the machine S's records name; on
-/// another Mac failed with what to do; elsewhere printed with its numbers and what it would say,
-/// not judged. Whether it passed.
+/// A G7f timing check (PLAT-1): judged on the reference Mac, the machine S's records name;
+/// elsewhere printed with its numbers and what it would say, not judged, and on another Mac with
+/// what to do if it is the reference Mac now. Whether it passed.
 pub fn timed(out: &mut Outcome, name: &str, place: &Place, (pass, detail): (bool, String)) -> bool {
     let would = if pass { "would pass" } else { "would fail" };
     match place {
         Place::Reference => out.check(name, pass, detail),
-        Place::OtherMac(why) => out.check(name, false, format!("{}; {would}: {detail}", not_the_reference(why))),
+        Place::OtherMac(why) => {
+            out.skip(name, format!("{}; {would}: {detail}", not_the_reference(why)));
+            false
+        }
         Place::Elsewhere => {
             out.skip(name, format!("{would}, not judged off the reference Mac (PLAT-1): {detail}"));
             false
@@ -382,8 +388,8 @@ mod tests {
     }
 
     // PLAT-1, RENDER-32: off the reference Mac a G7f timing is printed with its numbers and what it
-    // would say, and judged nowhere else; there, it is judged. On a Mac S's records don't name it
-    // fails, never passes unjudged, and says how to make that Mac the reference.
+    // would say, and judged nowhere else; there, it is judged. On a Mac S's records don't name it is
+    // printed too, as PLAT-1 says, never passed, and says how to make that Mac the reference.
     #[test]
     fn a_timing_is_judged_on_the_reference_mac_only() {
         use crate::report::Verdict;
@@ -402,8 +408,8 @@ mod tests {
                 (Verdict::Fail, "+356 µs"),
                 (Verdict::Pass, "+200 µs"),
                 (
-                    Verdict::Fail,
-                    "not the Mac S's records name: if this is the reference Mac, copy its machine line into crates/gates/store-S.txt and callback-S.txt (PLAT-1); would pass: +20 µs"
+                    Verdict::Skip,
+                    "not judged on this Mac (PLAT-1), not the Mac S's records name: if this is the reference Mac, copy its machine line into crates/gates/store-S.txt and callback-S.txt; would pass: +20 µs"
                 ),
             ]
         );

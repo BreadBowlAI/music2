@@ -16,8 +16,8 @@
 //!
 //! The rule: the callback within S's + 320 µs (3% of a 10.7 ms callback, the owner's bound), the
 //! median of the rounds' differences, the app's layout minus S, both measured here, and judged only
-//! on the reference Mac, the machine `callback-S.txt` names (PLAT-1); on another Mac it fails, saying
-//! what to do, and elsewhere it is printed. The rule names the p99, but even paired it moves by far
+//! on the reference Mac, the machine `callback-S.txt` names (PLAT-1); elsewhere it is printed, and on
+//! another Mac it also says what to do if it is the reference Mac now. The rule names the p99, but even paired it moves by far
 //! more than that between pairs, so the mean is judged and the p99's difference printed. What P1
 //! costs over S (step 7 with wasmtime's default layout) and the app's layout over P1 (the owner's
 //! layout alone) are printed, not judged. And the slowest activation block under half the device

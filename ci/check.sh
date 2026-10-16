@@ -556,7 +556,10 @@ if [ -n "$GATES" ]; then
     bad=build
     first "$OUT/gates-build.log" '^error' | sed 's/^/gates: /' >> "$OUT/failed"
   fi
-  if [ -z "$bad" ]; then
+  # A Mac S's records don't name runs G7f but can't judge its timings (PLAT-1): never a plain PASS.
+  if [ -z "$bad" ] && grep -q '^      skip  .*not judged on this Mac (PLAT-1)' "$OUT/gates.log"; then
+    record gates PART "the $(grep -c '' "$SCR/gates") runs ci/gates.txt names, but G7f wasn't judged: this Mac isn't the one S's records name (see gates)"
+  elif [ -z "$bad" ]; then
     record gates PASS "the $(grep -c '' "$SCR/gates") runs ci/gates.txt names"
   else
     record gates FAIL "$bad: see gates.log"

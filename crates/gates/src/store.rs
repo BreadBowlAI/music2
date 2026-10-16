@@ -16,7 +16,8 @@
 //! crate's manifest or `$M2_STORE_S`, with P1's drop against S's from the same campaign; every run
 //! prints its own record line (`store-record …`), which is what that file holds. A record names its
 //! machine, and is used only on the same machine (PLAT-1). The timings are judged only there, the
-//! reference Mac; on another Mac they fail, saying what to do, and elsewhere they are printed.
+//! reference Mac; elsewhere they are printed, and on another Mac they also say what to do if it is
+//! the reference Mac now.
 //!
 //! The rule (§11.3), against S:
 //! - the block time is worse by no more than 80 µs, 3% of a 2.67 ms block, measured here. The rule
@@ -220,7 +221,7 @@ struct OfS {
 /// pair by pair: each check into `out`, and whether all passed. The block time and the build are
 /// judged only on the machine S's record names, the reference Mac, and printed elsewhere; the
 /// footprint is compared with that record only there too, else skipped with why (PLAT-1). On a Mac
-/// the record doesn't name, all three fail, saying what to do: a Mac's run is the reference run. The
+/// the record doesn't name, all three also say what to do if it is the reference Mac now. The
 /// memory rules fail when the memory wasn't measured (`memory`: before and after one renderer;
 /// `with_two`: with two renderers), whatever S is: they never pass unmeasured.
 fn rule(out: &mut Outcome, rec: &Record, [mean, p99]: [&Diffs; 2], s: &OfS, memory: bool, with_two: bool) -> bool {
@@ -235,13 +236,10 @@ fn rule(out: &mut Outcome, rec: &Record, [mean, p99]: [&Diffs; 2], s: &OfS, memo
             rec.footprint_mb <= r.footprint_mb + 64.0,
             format!("{:.0} MB against S's {:.0} MB, as recorded on this machine", rec.footprint_mb, r.footprint_mb),
         ),
-        (true, Err(why)) => match s.place {
-            Place::OtherMac(why) => out.check(footprint, false, not_the_reference(why)),
-            _ => {
-                out.skip(footprint, why);
-                false
-            }
-        },
+        (true, Err(why)) => {
+            out.skip(footprint, if let Place::OtherMac(other) = s.place { not_the_reference(other) } else { why.clone() });
+            false
+        }
     };
     // Against the process's own limit, so judged on any machine.
     let side = "2 renderers side by side, reserving at most 25% of the address space";
@@ -474,7 +472,7 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
         "layout",
         match (pass, failed, place) {
             (true, ..) => "the app's layout passes the rule (RENDER-32)".to_string(),
-            (false, _, Place::OtherMac(why)) => format!("not judged: {}", not_the_reference(why)),
+            (false, _, Place::OtherMac(why)) => not_the_reference(why),
             (false, true, _) => "the app's layout fails the rule (§11.3): the owner decides".to_string(),
             (false, false, _) => {
                 "not judged in full here: only the reference Mac, which S's record names, judges it (§11.3, PLAT-1)".to_string()
@@ -695,24 +693,26 @@ mod tests {
         assert!(skipped[2].1.starts_with("would fail, not judged off the reference Mac (PLAT-1): 151 ms against S's 100 ms"), "{out}");
         assert_eq!(out.checks.iter().filter(|c| c.verdict == Verdict::Pass).count(), 1, "{out}");
         assert_eq!(out.verdict(), Verdict::Pass, "nothing failed: {out}");
-        // PLAT-1: on a Mac S's record doesn't name, the same three fail, never pass unjudged, and say
-        // how to make that Mac the reference; the 25% rule is still judged.
+        // PLAT-1: on a Mac S's record doesn't name, the same three are printed, not judged, as on any
+        // machine but the reference Mac, never passed, and say how to make that Mac the reference;
+        // the 25% rule is still judged.
         let mut out = Outcome::new("G7f store", "RENDER-32", "a test");
         let other = OfS { build_ms: 100.0, record: Err("another machine".into()), place: Place::OtherMac("not the Mac S's records name") };
         assert!(!rule(&mut out, &measured, [&mean, &p99], &other, true, true), "{out}");
-        let failed: Vec<(&str, &str)> =
-            out.checks.iter().filter(|c| c.verdict == Verdict::Fail).map(|c| (c.name.as_str(), c.detail.as_str())).collect();
-        assert_eq!(failed.len(), 3, "{out}");
-        assert_eq!(failed[0].0, "block within S + 80 µs, by the mean");
+        let skipped: Vec<(&str, &str)> =
+            out.checks.iter().filter(|c| c.verdict == Verdict::Skip).map(|c| (c.name.as_str(), c.detail.as_str())).collect();
+        assert_eq!(skipped.len(), 3, "{out}");
+        assert_eq!(skipped[0].0, "block within S + 80 µs, by the mean");
         assert!(
-            failed[0].1.starts_with("not the Mac S's records name: if this is the reference Mac, copy its machine line into "),
+            skipped[0].1.starts_with("not judged on this Mac (PLAT-1), not the Mac S's records name: if this is the reference Mac, copy "),
             "{out}"
         );
-        assert!(failed[0].1.contains("; would pass: +10 µs (3 pairs, +8 to +12)"), "{out}");
-        assert_eq!(failed[1].0, "footprint within S + 64 MB");
-        assert_eq!(failed[2].0, "full build within 1.5 × S");
+        assert!(skipped[0].1.contains("; would pass: +10 µs (3 pairs, +8 to +12)"), "{out}");
+        assert_eq!(skipped[1].0, "footprint within S + 64 MB");
+        assert!(skipped[1].1.starts_with("not judged on this Mac (PLAT-1)"), "{out}");
+        assert_eq!(skipped[2].0, "full build within 1.5 × S");
         assert_eq!(out.checks.iter().filter(|c| c.verdict == Verdict::Pass).count(), 1, "the 25% rule: {out}");
-        assert_eq!(out.verdict(), Verdict::Fail);
+        assert_eq!(out.verdict(), Verdict::Pass, "nothing failed, and ci/check.sh marks the row PART: {out}");
 
         // RENDER-32, rg-1: the pairs' mean is judged, the app's layout's cost over S, both measured
         // in this run: +10 passes the 80 µs bound, +81 doesn't. The p99's difference is printed,
