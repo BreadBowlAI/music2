@@ -616,6 +616,8 @@ function Pan({
   const g = useKnobGesture({ session, revision: live.revision, knob: live.knob, editable, name: label, label });
   // The first pan being written: the value to go on with, and whether the drag was let go (or lost) meanwhile.
   const writing = useRef<{ value: number; released: boolean; cancelled: boolean } | null>(null);
+  // The first pan was refused during this press: the rest of it asks no more (one toast, not one a move).
+  const refused = useRef(false);
   const svg = useRef<SVGSVGElement>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; above: number } | null>(null);
   const [typing, setTyping] = useState<{ text: string; bad: boolean } | null>(null);
@@ -642,6 +644,7 @@ function Pan({
         if (now.released) g.end();
       })
       .catch((error) => {
+        refused.current = true;
         g.show(0);
         toast(message(error));
       })
@@ -682,10 +685,14 @@ function Pan({
     value: unit,
     reset: 0.5,
     disabled,
-    onStart: () => !first && g.start(),
+    onStart: () => {
+      refused.current = false;
+      if (!first) g.start();
+    },
     onChange: (u, moved) => {
       const v = fromUnit(k, u);
       if (!first || g.dragging()) return void g.change(v);
+      if (refused.current) return;
       // Not written yet: shown as it goes, and written once the drag passes 4 px.
       g.show(v);
       if (writing.current) writing.current.value = v;

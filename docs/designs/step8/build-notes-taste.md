@@ -829,3 +829,7 @@ The name's field, open with a long name, in a page laid out as the Mac app's bar
 | M and S, mute in song, a meter per strip, the sidechain row | 8b.4, 8b.8 |
 | The full `ci/check.sh` | the final phase |
 | Scratch: `~/m2-runs/tn-scratch/b5/`. Logs: `~/m2-runs/logs/tn-b5b-*`. | — |
+
+A last commit after these notes: a first pan refused in the middle of a drag asks no more until the
+next press (one toast, not one a move). s8-mix, gestures, taste and live3b (with the test plugins)
+pass again: 67, 30, 39, 60.
