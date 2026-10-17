@@ -1373,29 +1373,41 @@ impl Graph {
     /// The answer names the track: `module` and `label`.
     pub fn add_track(&self, token: u64, component: &str, label: Option<String>, key: Option<String>, after: Option<String>) -> Result<Value> {
         let component = component.to_string();
-        self.call(move |a| {
+        let added = self.call(move |a| {
             a.edit_and(token, |s| {
                 let made = s.add_track(&component, label.as_deref(), key.as_deref(), after.as_deref())?;
                 Ok((made.edited, json!({"module": made.module, "label": made.label})))
             })
-        })
+        })?;
+        self.forget_made(&added);
+        Ok(added)
+    }
+
+    /// A track just made under a key a gone track's mute or solo was kept for starts heard (Q7).
+    fn forget_made(&self, made: &Value) {
+        if let Some(k) = made["module"].as_str() {
+            self.forget_overlays(&[k.to_string()]);
+        }
     }
 
     /// Duplicate track `module`: its code, data and channel, below it in its colour.
     pub fn duplicate_track(&self, token: u64, module: &str) -> Result<Value> {
         let module = module.to_string();
-        self.call(move |a| {
+        let copy = self.call(move |a| {
             a.edit_and(token, |s| {
                 let made = s.duplicate_track(&module)?;
                 Ok((made.edited, json!({"module": made.module, "label": made.label, "new_channel": made.new_channel})))
             })
-        })
+        })?;
+        self.forget_made(&copy);
+        Ok(copy)
     }
 
     /// Delete track `module`. The status the route answers: 200 when done (with the calls taken
     /// out with it), or 409 with the dependents when other code reads it: `blocked` when that can't
     /// be taken out from here, else they go with `cascade`.
     pub fn delete_track(&self, token: u64, module: &str, cascade: bool) -> Result<(u16, Value)> {
+        let gone = module.to_string();
         let module = module.to_string();
         // What a delete that waits found, kept beside the edit, which wrote nothing.
         let waits: Arc<Mutex<Option<Waits>>> = Arc::default();
@@ -1420,7 +1432,10 @@ impl Graph {
             };
             return Ok((409, json!({"error": error, "blocked": blocked, "dependents": deps})));
         }
-        done.map(|v| (200, v))
+        let done = done?;
+        // Its mute and solo go with it (Q7): undone, it comes back heard.
+        self.forget_overlays(&[gone]);
+        Ok((200, done))
     }
 
     /// A layout write (FMT-19): the tracks' new `order`, one track's `colour`, or with `reset` the
@@ -1722,6 +1737,8 @@ impl Graph {
     }
 }
 
+#[cfg(test)]
+mod forget_tests;
 #[cfg(test)]
 mod preview_tests;
 #[cfg(test)]
