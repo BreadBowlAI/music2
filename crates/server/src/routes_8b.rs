@@ -23,13 +23,14 @@ type S = State<Arc<AppState>>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
 /// The routes here that write the open project.
-pub const WRITES_8B: &[&str] = &["/api/graph/track/mute", "/api/graph/clips"];
+pub const WRITES_8B: &[&str] = &["/api/graph/track/mute", "/api/graph/clips", "/api/graph/automate/remove"];
 
 pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/graph/overlay", post(graph_overlay))
         .route("/api/graph/track/mute", post(track_mute))
         .route("/api/graph/clips", post(graph_clips))
+        .route("/api/graph/automate/remove", post(automate_remove))
         .route("/api/graph/audition", post(graph_audition))
         .route_layer(axum::middleware::from_fn_with_state(state, writes))
 }
@@ -98,6 +99,37 @@ async fn graph_clips(State(s): S, Json(r): Json<ClipsReq>) -> Result<Response, A
         Answer::Done(v) => Json(v).into_response(),
         Answer::Changed(why) => (StatusCode::CONFLICT, Json(json!({"error": why, "changed": true}))).into_response(),
     })
+}
+
+#[derive(Deserialize)]
+struct UnautomateReq {
+    session: u64,
+    module: String,
+    lane: String,
+    /// The playhead: the lane's value there is written. None: its fallback.
+    #[serde(default)]
+    beat: Option<f64>,
+}
+
+/// Remove automation (HOME-2): `{session, module, lane, beat?}`. A write. Answers `{file, before,
+/// after, revision}`.
+async fn automate_remove(State(s): S, Json(r): Json<UnautomateReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.remove_automation(r.session, r.module, r.lane, r.beat)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+/// Notes clips as the timeline shows them, each with its `sha` (8b.5), read as clips: what the
+/// piano roll's whole-lane write sends back until it sends `notes` gestures (Q9).
+pub(crate) fn shown_clips<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<m2_song::NoteClip>, D::Error> {
+    let mut clips = Vec::<Value>::deserialize(d)?;
+    for c in &mut clips {
+        if let Some(c) = c.as_object_mut() {
+            c.remove("sha");
+        }
+    }
+    clips.into_iter().map(|c| serde_json::from_value(c).map_err(serde::de::Error::custom)).collect()
 }
 
 #[derive(Deserialize)]

@@ -14,6 +14,9 @@ The `8b-backend` track builds the back ends of 8b.4 (mute, solo, mute in song), 
 | B4 | Mute in song as a builder: `mute_in_song`, `feeds`, `POST /api/graph/track/mute`, `m2 mute-in-song` | built |
 | B5 | Gate 8's ducking clauses on `env` and `follow`; live equals offline on them | built |
 | B6 | Clip gestures by id: create, move, resize, duplicate, paste, delete, set; `POST /api/graph/clips`, `m2 clips` | built |
+| B7 | Split, join, quantize, a clip's notes and points; each clip's `sha` in the timeline | built |
+| B8 | Automate names lanes after the control; Remove automation (`POST /api/graph/automate/remove`, `m2 unautomate`); lane-driven inputs in the view | built |
+| W2 | Markers | handed to taste-next (S7) |
 | B9 | Audition in the engine: live notes on a lane (`Msg::Live`), `Player::live`, how many are held | built |
 | B10 | Audition on the server: the WebSocket and `POST /api/graph/audition`, sources, the watchdog, `live` in the status | built |
 | B11 | Meters in the engine: taps on the output and each track; the callback's time; whether the engine idles | built |
@@ -288,6 +291,120 @@ of `m2-editor`, `m2-server`, `m2`.
 
 **Contract:** WRITE-10 and WRITE-18 (a bullet each, "From 8b.5"), FMT-12 (ids for the lanes a builder
 writes, and its *Today*).
+
+---
+
+## B7. Split, join, quantize, notes and points; the clip's hash
+
+**In short:** a clip can now be split and joined back, its notes quantized, its notes or its
+points drawn. Each clip in the timeline carries a hash, so a gesture on a clip that changed since
+the window drew it is refused, naming the clip.
+
+| Piece | What it does | Where |
+|---|---|---|
+| `split` | At a beat, every picked clip it crosses. Notes that cross are shortened; the rest go to a new clip, in place. Automation ends and starts at the value at the split. An audio clip's second half starts later in its asset (A8: not when pitched or reversed). | `crates/editor/src/clips.rs` |
+| `join` | Notes clips of one lane, as one: earliest start to latest end, the earliest's id. Every note plays as it did (below). Automation and audio refuse, in words. | same |
+| `quantize` | Note starts to the nearest grid line, ends too with `ends`; `notes` picks notes of one clip. | same |
+| `notes`, `points` | One clip's notes (and length), one clip's points: the piano roll's edit and automation drawn in place. | same |
+| `sha` per clip | The first 16 hex of the SHA-256 of the clip's canonical line, added to each clip of a rebuilt lane's JSON (G6, one call). | `clips::with_sha`; one call in `actor.rs`'s `timeline()` |
+| Seen | A `ClipRef` with a `sha` the clip no longer has is `Changed`: "data/kick/hits.json (clip `a`) is the Kick clip at bar 1, which was changed in another window or by an agent. It shows as it is now; try again". 409 at the route. | `clips.rs`, `graph/clips.rs` |
+| The roll's lane write | Reads clips as the timeline shows them, `sha` and all (Q9: it stays until the roll sends `notes`). | `routes_8b::shown_clips`; one attribute in `routes.rs` |
+| `m2 clips split\|join\|quantize` | `--at <place>`; `--grid B [--ends]`. | `apps/m2/src/edits.rs` |
+
+**Join keeps every note in time.** A note keeps its place. One a clip's edge hid only partly, and
+that the joined clip would now let through, is cut to what played; one hidden whole that would now
+play is dropped. A note that played whole, or stays as hidden as it was, is kept whole. So a split
+and a join play exactly what played (`join_makes_one_clip_and_keeps_every_note_in_time`).
+
+**Tests:**
+
+| Test | Where | Red first? |
+|---|---|---|
+| `a_split_shortens_the_crossing_notes`, `a_split_control_clip_stays_continuous` (every quarter beat the same) | `crates/editor/src/clips_tests.rs` | red against the stub |
+| `a_split_audio_clip_plays_the_same_samples` (the resample song, to the bit; pitch and reverse refused) | same | red against the stub |
+| `join_makes_one_clip_and_keeps_every_note_in_time`, `control_and_audio_clips_dont_join` | same | red against the stub |
+| `quantize_to_sixteenths_and_triplets`, `notes_and_points_edit_one_clip` | same | red against the stub |
+| `with_sha_gives_each_clip_its_hash` | same | red against the stub |
+| `a_gesture_on_a_changed_clip_is_changed`, `undoing_after_an_outside_change_to_the_clip_conflicts` | same | — (the check came with B6's `resolve`) |
+| `an_outside_edit_to_another_clip_merges` | same | **red: a B6 bug** (below) |
+| `the_timeline_carries_each_clips_sha_and_a_stale_one_is_refused` (not taken in: the commit's conflict; taken in: the stale `sha`) | `crates/server/src/graph/clips_tests.rs` | red before `timeline()` added it |
+| `the_rolls_lane_write_takes_clips_as_the_timeline_shows_them` | `crates/server/src/routes_8b_tests.rs` | red: 422, `sha` an unknown field |
+| `split_join_and_quantize_from_the_terminal` | `apps/m2/tests/clips.rs` | — (written with the code) |
+
+**A B6 bug B7's tests found** (fixed in its own commit, `dd3e44c`): the planner's assertion checked every clip of a lane, so an outside
+edit to another clip, which WRITE-3 merges, made the gesture refuse ("would change more than its
+clips"). It now checks the clips put and deleted only, as the notes write does.
+
+**Choices made here:**
+- **A split with no picked clip crossing it** says so; picked clips it doesn't cross are left.
+- **Quantize from the song's start:** grid lines are multiples of `grid` beats from beat 0. A clip
+  that starts on the grid gets exact multiples, so sixteenths stay short numbers in the file.
+- **A warped audio clip** splits and trims by moving its markers, which keeps its timing exact;
+  `offset` isn't read with warp.
+- **`sha` in the timeline only:** `m2_editor::timeline()` is unchanged (taste-next edits it); the
+  server adds it where it rebuilds a lane's JSON, so an unchanged lane costs nothing. The test that
+  compares the published timeline with the session's leaves `sha` out.
+
+**Checks:** `cargo check --workspace --all-targets`; clippy on `m2-editor`, `m2-server`, `m2`; tests
+of `m2-editor`, `m2-server`, `m2`.
+
+**Contract:** WRITE-10 (the 8b.5 bullet names every gesture), WRITE-12 *Today* (the clip hash; the
+roll's write stays), `docs/gaps.md` #9, #14, #17.
+
+---
+
+## B8. Automation: names, Remove, and what a lane drives
+
+**In short:** Automate now names a lane after its control: `decay`, not `out-decay`. Remove
+automation takes a lane out again and writes back what it played. The canvas data says which lane
+drives an input.
+
+| Piece | What it does | Where |
+|---|---|---|
+| Lane names (D6, M7) | The key is the control's label as a key (`decay`, `detune-cents`); a mixer channel's control stays `hats-pan`. On a clash, the call's binding (else its component) goes in front (`pad-decay`), then a number. `{ name: "Detune (cents)" }` is written only when the key, read as words, isn't the label. | `crates/editor/src/automate.rs` (`name_of`) |
+| `automate::remove(s, module, lane, beat)` | The lane's read becomes what it plays at `beat` (the playhead), in its fallback's spelling (`hz(1250)`), or the fallback as written when `beat` is none; the lane file goes. One `Confined` Tx; undo puts both back. | same |
+| `POST /api/graph/automate/remove` | `{session, module, lane, beat?}` → `{file, before, after, revision}`. In `WRITES_8B`. | `crates/server/src/routes_8b.rs`, `graph/clips.rs` |
+| `m2 unautomate <project> <track>/<lane> [--at <place>]` | G9: its own command, not a flag on `automate`. Takes the lock. | `apps/m2/src/edits.rs` |
+| `InputPort.lane` | `{module, lane}` on every input a control lane drives, cabled or not. Left out where none does. | `crates/editor/src/view.rs` |
+
+**Tests:**
+
+| Test | Where | Red first? |
+|---|---|---|
+| `the_lane_is_named_after_the_control` (the name written only when needed; a clash) | `crates/editor/src/automate_tests.rs` | red before `name_of` changed |
+| `an_inherited_control_is_written_into_its_call_as_a_lane`, `each_way_a_function_takes_its_context_reaches_the_lane` (now `decay`, `cutoff`) | same | red before `name_of` changed |
+| `the_new_lanes_key_is_free` (a clash puts the binding in front) | same | — (passed on the old names too) |
+| `remove_automation_puts_the_heard_value_back` (at a clip, past it, the fallback; undo; automate then remove) | same | red against the stub |
+| `remove_automation_refuses_what_it_cant_take_out` | same | red against the stub |
+| `a_lane_read_by_name_is_taken_out` | same | — (written after the fix the CLI test showed) |
+| `an_input_a_lane_drives_names_the_lane` | `crates/editor/src/view_lane_tests.rs` (new) | red with the field always none |
+| `remove_automation_over_http` (the words; 423 read-only) | `crates/server/src/routes_8b_tests.rs` | red against the stub |
+| `unautomate_from_the_terminal` (`--at`, a mask, a notes lane, the lock) | `apps/m2/tests/clips.rs` | **red: the mask was refused** (below) |
+| `a_track_renamed_and_a_knob_automated_play_and_undo` (now `freq`) | `crates/server/src/graph/tests.rs` | updated |
+
+**What the CLI test found:** removing `const drop = lane.mask("drop")` was refused by `Confined`: the
+plain number written in its place is made where `blend(…, drop)` reads the name, outside the read's
+range (PKG-3). Remove now also declares each place the file reads the binding by name. Nothing is
+written there.
+
+**Choices made here:**
+- **`name` in automate's answer stays the knob's words** (`decay`, `hats pan`), as the toast uses
+  it; the lane shows them as a label, first letter a capital.
+- **The fallback's spelling** is kept: a unit call stays that call (`khz(1.25)`), a plain number
+  stays a number; with no fallback, the unit's own call, imported if needed.
+- **A lane read in several places** (a shared lane), or outside the song's own code, is refused in
+  words: take it out in the code.
+- **`e2e/s6-builders.mjs`** expects `hi`, not `wobble-hi` (M7). Run at the End.
+- **No test of "a lane-driven knob refuses a drag":** the back end has no knob there to drag; the UI
+  reads `InputPort.lane`. Latches stay MON-6's.
+
+**Checks:** `cargo check --workspace --all-targets`; clippy on `m2-editor`, `m2-server`, `m2`; tests
+of `m2-editor`, `m2-server`, `m2`.
+
+**Contract:** HOME-2 (its 8b.5 *Today*), WRITE-10 and WRITE-18 (the 8b.5 bullets), `docs/gaps.md`
+#14. README's automate line.
+
+**Markers (W2):** handed to taste-next, as S7 decides: they live in its `layout.rs`. Nothing here.
 
 ---
 

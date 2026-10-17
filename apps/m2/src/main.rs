@@ -102,9 +102,16 @@ USAGE:
                                            create <track>/<lane> --at <place> [--length B]
                                            move <clip>… --by B [--to <track>/<lane>] [--copy]
                                            resize <clip> --start <place> --length B
+                                           split <clip>… --at <place>
+                                           join <clip>…
                                            duplicate <clip>… [--grid B]
+                                           quantize <clip>… --grid B [--ends]
                                            delete <clip>…
                                            json <gesture.json | ->   (any gesture, as the app sends it)
+  m2 unautomate <project> <track>/<lane> [--at <place>] [--beats]
+                                         take a knob's automation out: what the lane plays at the place
+                                         (else its fallback) is written back where the lane is read, and
+                                         the lane file goes, as one edit that undo takes back
 
 Every command that reads a project prints what needs attention in it, such as data no lane reads,
 with the commands that fix it.

@@ -21,8 +21,10 @@ import { createPortal } from "react-dom";
 import {
   controlLabel,
   display,
+  findLane,
   fromUnit,
   graphApi,
+  laneTitle,
   lockReason,
   moduleName,
   parseValue,
@@ -48,6 +50,7 @@ import { useStore } from "../lib/store";
 import { Dots } from "./draw";
 import EffectBrowser from "./EffectBrowser";
 import { undoAction } from "./GraphCanvas";
+import PointMenu, { unautomate } from "./ClipMenu";
 
 /** Why nothing here can be edited right now (the code doesn't compile, read only, offline), or null. */
 const Locked = createContext<string | null>(null);
@@ -925,6 +928,9 @@ function InputRow({
 }) {
   const toast = useStore((s) => s.toast);
   const tracks = useContext(Tracks);
+  const why = useContext(Locked);
+  // The menu of an input an automation lane drives (KN-2): Show lane, Remove automation.
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const knob = input.knob ? node.knobs.find((k) => k.id === input.knob) : undefined;
   // Keyed by the knob alone: a save that breaks the code mid-drag must not remount it, which
   // would cancel the drag (WRITE-22: the server keeps it, and a release then is saved once the
@@ -978,10 +984,42 @@ function InputRow({
     );
   }
 
+  // Driven by an automation lane: its home is the lane (HOME-1), and its menu shows the lane or
+  // takes the automation out (KN-2).
+  const driven = input.lane;
+  const label = controlLabel(input.label, tracks);
+  const lane = driven && useStore.getState().graph ? findLane(useStore.getState().graph!.timeline, driven.module, driven.lane) : undefined;
+  const laneName = lane ? laneTitle(lane) : label;
   return (
-    <div className="relative h-[28px] pl-4 pr-3 flex items-center text-xs min-w-0" data-input={input.label}>
+    <div
+      className="relative h-[28px] pl-4 pr-3 flex items-center gap-2 text-xs min-w-0"
+      data-input={input.label}
+      data-lane-input={driven ? `${driven.module}.${driven.lane}` : undefined}
+      title={driven ? `Follows the ${laneName} lane. Right-click to show it, or to take the automation out.` : undefined}
+      onContextMenu={
+        driven
+          ? (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setMenu({ x: e.clientX, y: e.clientY });
+            }
+          : undefined
+      }
+    >
       <Dot id={input.id} kind={input.kind} filled={filled} />
-      <span className="text-fg-muted truncate">{controlLabel(input.label, tracks)}</span>
+      <span className="text-fg-muted truncate">{label}</span>
+      {driven && <span aria-hidden className="ml-auto shrink-0 size-[5px] rounded-full bg-accent" />}
+      {menu && driven && (
+        <PointMenu
+          at={menu}
+          label={`${label} input`}
+          items={[
+            { id: "show", label: `Show ${laneName} lane`, run: () => laneMade(driven.module, driven.lane) },
+            { id: "unautomate", label: "Remove automation", off: editable ? null : `${why ?? "It can't be edited right now"}.`, run: () => unautomate(driven) },
+          ]}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </div>
   );
 }

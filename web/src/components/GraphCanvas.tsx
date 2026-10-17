@@ -17,6 +17,7 @@ import {
 } from "../lib/graph";
 import { setClock } from "../lib/clock";
 import { continuePlay, playStop, resetTransport, startAt } from "../lib/transport";
+import { pickedIn, useClipSelection } from "../lib/clips";
 import { stepped } from "../lib/history";
 import { HEADS_W, HEADS_W_SMALL, WIDE } from "../lib/layout";
 import { canvas, useShell } from "../lib/shell";
@@ -224,7 +225,11 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
  * the playhead is in. It turns looping on.
  */
 function loopSelection(timeline: TimelineView, beat: number, onLoop: (req: { start: number; end: number }) => void) {
-  const picked = Object.values(useShell.getState().clips).flatMap((c) => findNoteClip(timeline, c) ?? []);
+  // The timeline's selection: a marquee's bars, or the clips picked; else the clips Notes shows.
+  const sel = useClipSelection.getState();
+  if (sel.range) return onLoop({ start: sel.range[0], end: sel.range[1] });
+  const inTimeline = pickedIn(timeline, sel.picked).map((p) => p.clip);
+  const picked = inTimeline.length ? inTimeline : Object.values(useShell.getState().clips).flatMap((c) => findNoteClip(timeline, c) ?? []);
   if (picked.length) {
     return onLoop({ start: Math.min(...picked.map((c) => c.start)), end: Math.max(...picked.map((c) => c.start + c.length)) });
   }

@@ -313,3 +313,68 @@ fn clip_gestures_over_http() {
     drop(held);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// Q9: until the piano roll sends `notes` gestures, it writes a whole lane, with the clips as the
+// timeline shows them, each with its `sha` (8b.5): the lane route reads them as clips.
+#[test]
+fn the_rolls_lane_write_takes_clips_as_the_timeline_shows_them() {
+    let dir = std::env::temp_dir().join(format!("m2-routes-8b-lane-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n";
+    std::fs::write(dir.join("music2.toml"), manifest).unwrap();
+    std::fs::write(
+        dir.join("song.ts"),
+        "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+         const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.join("data/kick")).unwrap();
+    std::fs::write(dir.join("data/kick/hits.json"), "{\"clips\": [{\"id\": \"a\", \"start\": 0, \"length\": 4, \"notes\": []}]}\n").unwrap();
+    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
+    let state = running.state.graph.open(&dir).unwrap();
+    let (session, revision) = (state["session"].as_u64().unwrap(), state["view"]["revision"].as_u64().unwrap());
+    let mut clips = state["timeline"]["tracks"][0]["lanes"][0]["clips"].clone();
+    assert!(clips[0]["sha"].is_string(), "{clips}");
+    clips[0]["length"] = json!(8);
+    let body = json!({"session": session, "revision": revision, "module": "kick", "lane": "hits", "clips": clips});
+    let (status, done) = post(&running.url, "/api/graph/lane", Some("t0k"), &body);
+    assert_eq!(status, 200, "{done:#}");
+    let file = std::fs::read_to_string(dir.join("data/kick/hits.json")).unwrap();
+    assert_eq!(file, "{\"clips\": [\n  {\"id\": \"a\", \"start\": 0, \"length\": 8, \"notes\": []}\n]}\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// HOME-2, Q10: `POST /api/graph/automate/remove` puts the lane's value at the playhead back where
+// the lane was read, and takes the lane file away; a write, so 423 read-only.
+#[test]
+fn remove_automation_over_http() {
+    let dir = std::env::temp_dir().join(format!("m2-routes-8b-unautomate-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n";
+    std::fs::write(dir.join("music2.toml"), manifest).unwrap();
+    let song = "import { hz, song } from '@m2/core';\nimport { osc } from 'std/dsp';\n\
+                export default song(({ lane }) => osc.sine(lane.control(\"freq\", \"hz\", hz(440))));\n";
+    std::fs::write(dir.join("song.ts"), song).unwrap();
+    std::fs::create_dir_all(dir.join("data/song")).unwrap();
+    std::fs::write(dir.join("data/song/freq.json"), "{\"unit\": \"hz\", \"clips\": [{\"id\": \"a\", \"start\": 0, \"length\": 4, \"points\": [[0, 200], [4, 600]]}]}\n").unwrap();
+    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
+    let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+    let body = json!({"session": session, "module": "song", "lane": "freq", "beat": 2});
+    let (status, done) = post(&running.url, "/api/graph/automate/remove", Some("t0k"), &body);
+    assert_eq!((status, &done["before"], &done["after"]), (200, &json!("freq automated"), &json!("freq hz(400)")), "{done:#}");
+    assert!(std::fs::read_to_string(dir.join("song.ts")).unwrap().contains("osc.sine(hz(400))"));
+    assert!(!dir.join("data/song/freq.json").exists());
+    let (status, refused) = post(&running.url, "/api/graph/automate/remove", Some("t0k"), &body);
+    assert_eq!(status, 400);
+    assert!(refused["error"].as_str().unwrap().contains("no lane `freq`"), "{refused:#}");
+
+    running.state.graph.close();
+    let held = m2_session::lock::acquire(&dir, "m2", m2_session::lock::RETRY).unwrap();
+    let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+    let body = json!({"session": session, "module": "song", "lane": "freq"});
+    assert_eq!(post(&running.url, "/api/graph/automate/remove", Some("t0k"), &body).0, 423);
+    drop(held);
+    let _ = std::fs::remove_dir_all(&dir);
+}

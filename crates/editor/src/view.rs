@@ -86,11 +86,21 @@ pub struct InputPort {
     /// The value written there that can only be edited in code: its index in `readonly`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub readonly: Option<usize>,
+    /// The automation lane that drives it (8b.5): "Follows the Cutoff lane", and Show lane.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lane: Option<LaneRef>,
+}
+
+/// A lane, by its module's key and its own.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct LaneRef {
+    pub module: String,
+    pub lane: String,
 }
 
 impl InputPort {
     fn new(id: String, label: &str, kind: &'static str) -> InputPort {
-        InputPort { id, label: label.to_string(), kind, knob: None, inlet: None, readonly: None }
+        InputPort { id, label: label.to_string(), kind, knob: None, inlet: None, readonly: None, lane: None }
     }
 }
 
@@ -886,6 +896,8 @@ pub fn view(session: &Session) -> GraphView {
                 at.into_iter().min_by_key(|c| c.label != *port)
             });
         }
+        // The inputs an automation lane drives, by node and port (8b.5).
+        let mut driven: HashMap<(String, String), LaneRef> = HashMap::new();
         for ((to, _, r, from), cable) in reads.iter().zip(cables) {
             let (to_id, from_id) = (&ids[to], &ids[from]);
             let from_port = give(from_id, r);
@@ -921,6 +933,11 @@ pub fn view(session: &Session) -> GraphView {
                     id
                 }
             };
+            if let Some(Op::Lane { lane }) = source(r).map(|n| &n.op)
+                && m.lanes.iter().any(|l| &l.key == lane && matches!(l.kind, Kind::Control(_)))
+            {
+                driven.insert((to_id.clone(), to_port.clone()), LaneRef { module: m.key.clone(), lane: lane.clone() });
+            }
             let late = late.contains(&(to.clone(), *r));
             wire(PortEdge { from: from_id.clone(), from_port, to: to_id.clone(), to_port, kind: kind(r), late });
         }
@@ -942,6 +959,9 @@ pub fn view(session: &Session) -> GraphView {
             let mut row = inputs.remove(&n.id).unwrap_or_default();
             row.sort_by_key(|(_, at)| at.as_ref().filter(|(f, _)| files.get(&n.id) == Some(&f.as_str())).map(|(_, o)| *o));
             n.inputs = row.into_iter().map(|(p, _)| p).collect();
+            for p in &mut n.inputs {
+                p.lane = driven.get(&(n.id.clone(), p.id.clone())).cloned();
+            }
             n.outputs = outputs.remove(&n.id).unwrap_or_default();
             let mut names = HashSet::new();
             if !n.inputs.iter().all(|p| names.insert(p.label.clone())) {
@@ -962,3 +982,7 @@ pub fn view(session: &Session) -> GraphView {
 #[cfg(test)]
 #[path = "view_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "view_lane_tests.rs"]
+mod lane_tests;

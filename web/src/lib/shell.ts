@@ -189,6 +189,8 @@ export const canvas: {
   /** Track ▸ Mute in Song: one undo step. */
   muteInSong?: (module: string) => void;
   grid?: (op: GridOp) => void;
+  /** ⌘D on the selected clips, after the roll's notes: false when none is selected. */
+  duplicate?: () => boolean;
   /** ⌘E, ⌘J, Edit ▸ Quantize: on the selected clips. */
   split?: () => void;
   join?: () => void;

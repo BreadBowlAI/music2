@@ -107,10 +107,10 @@ fn an_inherited_control_is_written_into_its_call_as_a_lane() {
     let sound = render(&s);
     let kick = f.read("tracks/kick.ts");
     let a = s.automate(s.accepted().number, "tracks/kick.ts#1/@decay").unwrap();
-    assert_eq!((a.lane.to_string(), a.name.as_str()), ("kick/out-decay".to_string(), "out decay"));
+    assert_eq!((a.lane.to_string(), a.name.as_str()), ("kick/decay".to_string(), "decay"));
     let now = f.read("tracks/kick.ts");
-    assert!(now.contains("kick(lane.notes(\"hits\"), { decay: lane.control(\"out-decay\", \"seconds\", "), "{now}");
-    assert_eq!(lane(&s, "kick", "out-decay").map(|l| (l.0, l.2)), Some((Some("seconds"), 0)));
+    assert!(now.contains("kick(lane.notes(\"hits\"), { decay: lane.control(\"decay\", \"seconds\", "), "{now}");
+    assert_eq!(lane(&s, "kick", "decay").map(|l| (l.0, l.2)), Some((Some("seconds"), 0)));
     assert_eq!(render(&s), sound, "the default, as spelled, is what played");
     s.undo().unwrap();
     assert_eq!(f.read("tracks/kick.ts"), kick);
@@ -143,24 +143,54 @@ fn each_way_a_function_takes_its_context_reaches_the_lane() {
         assert!(sound.iter().any(|x| x[0] != 0.0), "{head}: a render that says something");
         let id = s.controls().into_iter().find(|c| c.literal == "900").map(|c| c.id).unwrap();
         let a = s.automate(s.accepted().number, &id).unwrap();
-        assert_eq!(a.lane.to_string(), "lead/tone-cutoff", "{head}");
+        assert_eq!(a.lane.to_string(), "lead/cutoff", "{head}");
         let text = f.read("song.ts");
         assert!(text.contains(&format!("{writes} => {{")), "{head}: {text}");
-        assert!(text.contains(&format!("cutoff: {reads}.control(\"tone-cutoff\", \"hz\", hz(900))")), "{head}: {text}");
+        assert!(text.contains(&format!("cutoff: {reads}.control(\"cutoff\", \"hz\", hz(900))")), "{head}: {text}");
         assert_eq!(render(&s), sound, "{head}");
     }
 }
 
-// ID-2: the lane's key is never one the track has, in any capitals: a declared lane or a file.
+// ID-2, D6: the lane's key is never one the track has, in any capitals: a declared lane or a
+// file. On a clash the call's binding goes in front of the control's name, then a number.
 #[test]
 fn the_new_lanes_key_is_free() {
-    let body = "{\n  const tone = lowpass(osc.saw(hz(110)), { cutoff: hz(900) });\n  lane.mask(\"tone-cutoff\");\n  return tone;\n}";
+    let body = "{\n  const tone = lowpass(osc.saw(hz(110)), { cutoff: hz(900) });\n  lane.mask(\"cutoff\");\n  return tone;\n}";
     let f = one_track("({ lane })", body);
-    f.write("data/lead/Tone-Cutoff-2.json", "{\"unit\": \"hz\", \"clips\": []}\n");
+    f.write("data/lead/Tone-Cutoff.json", "{\"unit\": \"hz\", \"clips\": []}\n");
     let mut s = f.open();
     let id = s.controls().into_iter().find(|c| c.literal == "900").map(|c| c.id).unwrap();
     let a = s.automate(s.accepted().number, &id).unwrap();
-    assert_eq!(a.lane.to_string(), "lead/tone-cutoff-3");
+    assert_eq!(a.lane.to_string(), "lead/tone-cutoff-2");
+}
+
+// D6, M7: a lane is named after its control: the control's label as a key, with the call's
+// binding in front only on a clash. The code names the lane (`{ name }`) only when its key, read as
+// words, isn't the label: "Detune (cents)" has to be written, "decay" never.
+#[test]
+fn the_lane_is_named_after_the_control() {
+    let f = Fixture::new();
+    f.write("music2.toml", MANIFEST);
+    let song = "import { secs, song, track } from \"@m2/core\";\nimport { fm } from \"std/fm\";\nimport { sum } from \"std/math\";\n\
+                const keys = track(\"keys\", ({ lane }) => {\n  const lead = fm.custom(lane.notes(\"a\"), { detune: 5, decay: secs(2) });\n  \
+                const pad = fm.custom(lane.notes(\"b\"), { decay: secs(4) });\n  return sum(lead, pad);\n});\n\
+                export default song(() => keys.out);\n";
+    f.write("song.ts", song);
+    let mut s = f.open();
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    let id = |s: &Session, literal: &str| s.controls().into_iter().find(|c| c.literal == literal).map(|c| c.id).unwrap();
+    let a = s.automate(s.accepted().number, &id(&s, "5")).unwrap();
+    assert_eq!((a.lane.to_string(), a.name.as_str()), ("keys/detune-cents".to_string(), "detune (cents)"));
+    assert!(f.read("song.ts").contains("detune: lane.control(\"detune-cents\", \"scalar\", 5, { name: \"Detune (cents)\" })"), "{}", f.read("song.ts"));
+    let shown = s.timeline().tracks.into_iter().flat_map(|t| t.lanes).find(|l| l.key() == "detune-cents").unwrap();
+    assert!(matches!(shown, TimelineLane::Control { label, .. } if label == "Detune (cents)"));
+    let a = s.automate(s.accepted().number, &id(&s, "2")).unwrap();
+    assert_eq!((a.lane.to_string(), a.name.as_str()), ("keys/decay".to_string(), "decay"));
+    assert!(f.read("song.ts").contains("decay: lane.control(\"decay\", \"seconds\", secs(2)) }"), "{}", f.read("song.ts"));
+    // The pad's decay: `decay` is the lead's lane now.
+    let a = s.automate(s.accepted().number, &id(&s, "4")).unwrap();
+    assert_eq!((a.lane.to_string(), a.name.as_str()), ("keys/pad-decay".to_string(), "pad decay"));
+    assert!(f.read("song.ts").contains("decay: lane.control(\"pad-decay\", \"seconds\", secs(4)) }"), "{}", f.read("song.ts"));
 }
 
 // HOME-2: what can't be automated where it is says why, and nothing is written: a call shared by
@@ -192,4 +222,59 @@ fn a_knob_automate_cant_follow_is_refused() {
     }
     assert_eq!(f.read("song.ts"), song);
     assert!(!f.0.join("data").exists() && !s.can_undo(), "nothing was written");
+}
+
+// HOME-2, Q10: Remove automation writes what the lane plays, at the playhead or else its fallback,
+// where the lane was read, in the fallback's spelling, and takes the lane file away: one edit, that
+// undo takes back whole. The track function keeps its `lane`.
+#[test]
+fn remove_automation_puts_the_heard_value_back() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let (bass, cutoff) = (f.read("tracks/bass.ts"), f.read("data/bass/cutoff.json"));
+    // The cutoff's clip rises from 300 to 2200 Hz over beats 0 to 16; the fallback is hz(500).
+    for (beat, written) in [(Some(8.0), "hz(1250)"), (Some(40.0), "hz(500)"), (None, "hz(500)")] {
+        let e = remove(&mut s, "bass", "cutoff", beat).unwrap();
+        assert_eq!((e.file.as_str(), e.before.as_str(), e.after.as_str()), ("tracks/bass.ts", "cutoff automated", &*format!("cutoff {written}")));
+        let now = f.read("tracks/bass.ts");
+        assert_eq!(now, bass.replace("lane.control(\"cutoff\", \"hz\", hz(500))", written), "at {beat:?}");
+        assert!(!f.0.join("data/bass/cutoff.json").exists(), "the lane file is gone");
+        assert!(lane(&s, "bass", "cutoff").is_none(), "and the lane");
+        s.undo().unwrap();
+        assert_eq!((f.read("tracks/bass.ts"), f.read("data/bass/cutoff.json")), (bass.clone(), cutoff.clone()), "undo puts both back");
+    }
+    // Automate, then remove: the value is back as it was written.
+    let song = f.read("song.ts");
+    let a = s.automate(s.accepted().number, "song.ts#2/0.hats.pan").unwrap();
+    remove(&mut s, "song", a.lane.lane.as_str(), None).unwrap();
+    assert_eq!(f.read("song.ts"), song.replace("song(() =>", "song(({ lane }) =>"), "the literal is back; the function keeps its lanes");
+    assert!(!f.0.join("data/song/hats-pan.json").exists());
+}
+
+// What isn't an automation lane read in one place says why, and nothing is written.
+#[test]
+fn remove_automation_refuses_what_it_cant_take_out() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    for (module, key, says) in [("bass", "notes", "isn't an automation lane"), ("bass", "nope", "no lane"), ("nobody", "x", "no track")] {
+        let why = remove(&mut s, module, key, None).unwrap_err().to_string();
+        assert!(why.contains(says), "{module}/{key}: {why}");
+    }
+    let why = remove(&mut s, "bass", "cutoff", Some(f64::NAN)).unwrap_err().to_string();
+    assert!(why.contains("beat"), "{why}");
+    assert!(!s.can_undo());
+}
+
+// A mask read into a `const` and used by name: the number written in its place is made where the
+// name is read (`blend(…, drop)`), which the Tx declares, and the song plays what the lane played
+// there.
+#[test]
+fn a_lane_read_by_name_is_taken_out() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let bass = f.read("tracks/bass.ts");
+    // The drop's clip is 1 from half a beat in until half a beat before its end (beats 16 to 32).
+    remove(&mut s, "bass", "drop", Some(20.0)).unwrap();
+    assert_eq!(f.read("tracks/bass.ts"), bass.replace("lane.mask(\"drop\")", "1"));
+    assert!(!f.0.join("data/bass/drop.json").exists());
 }
