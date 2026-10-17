@@ -851,11 +851,12 @@ pass again: 67, 30, 39, 60.
 | Conflicts | 3 files: `core/play/src/lib.rs` (the player's message counts: both kept, by `git rerere`'s recorded resolution, read again), `docs/gaps.md` #4, #8, #20 (both said), `docs/architecture.md` RENDER-29, WRITE-10, WRITE-18 and PKG-13 (both said) |
 | `std.wasm` | `std/build.sh`, then `std/build.sh --check`: the same bytes |
 | Rust | the whole workspace builds; every test passes; clippy is clean |
-| Browser suites | 35 of 35 runs pass (live3b with the test plugins), 1,343 checks |
+| Browser suites | 35 of 35 runs pass (live3b with the test plugins), 1,414 checks |
 | Render records | unchanged since `09b2dfd` |
 
 ### The review's fixes
 
 | Finding | Commit | What changed | The test that failed before |
 |---|---|---|---|
-| meter-drift | this commit | A later time signature change keeps its bar, not its beat: an edit and its inverse give back the same file, and a meter before a change at bar 2 is never refused. The song.rs header, WRITE-10's *Today* and design-8b §4.1 say so. | `a_later_meter_change_keeps_its_bar` (the 3/4 went 32 → 20), `a_meter_before_a_change_at_bar_2_is_accepted`; `a_meter_change_lands_on_a_bar_line` updated |
+| meter-drift | `db70c95` | A later time signature change keeps its bar, not its beat: an edit and its inverse give back the same file, and a meter before a change at bar 2 is never refused. The song.rs header, WRITE-10's *Today* and design-8b §4.1 say so. | `a_later_meter_change_keeps_its_bar` (the 3/4 went 32 → 20), `a_meter_before_a_change_at_bar_2_is_accepted`; `a_meter_change_lands_on_a_bar_line` updated |
+| add-track-channel-key-collision | this commit | A new track's key (and so its channel's) skips every channel key the mixer has, in any capitals: + Track offers `lead-2` when a channel is called `lead`, and Duplicate skips them too. A key asked for that a channel has is refused in words: "The mixer already has a channel called lead: pick another ID". ID-18 says so. | `a_new_key_skips_the_mixers_channel_keys` (the add was refused: "would not reach the mixer through its own channel") |

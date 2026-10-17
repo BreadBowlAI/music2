@@ -155,6 +155,27 @@ fn a_key_never_takes_an_unclaimed_folder() {
     assert!(f.read("song.ts").contains("\"lead-vox\": leadVox.out"), "a key that isn't an identifier is quoted");
 }
 
+// ID-18: a channel's key is its own, and may differ from its track's. A new track's key, which is its
+// new channel's, skips every channel key the mixer has; one asked for that a channel has is refused
+// in words. Duplicate's `<key>-2` skips them too.
+#[test]
+fn a_new_key_skips_the_mixers_channel_keys() {
+    let f = fixture("examples/first-song");
+    f.write("song.ts", f.read("song.ts").replace("keys: { in: keys.out,", "lead: { in: keys.out,"));
+    let mut s = f.open();
+    let made = s.add_track("std:synth-lead", None, None, None).unwrap();
+    assert_eq!((made.module.as_str(), made.label.as_str()), ("lead-2", "Lead"));
+    assert!(f.read("song.ts").contains("\"lead-2\": lead2.out"), "its own channel: {}", f.read("song.ts"));
+    let e = s.add_track("std:synth-lead", None, Some("lead"), None).unwrap_err().to_string();
+    assert!(e.contains("The mixer already has a channel called lead: pick another ID"), "{e}");
+    // Duplicate's key too.
+    let f = fixture("examples/first-song");
+    f.write("song.ts", f.read("song.ts").replace("keys: { in: keys.out,", "\"bass-2\": { in: keys.out,"));
+    let mut s = f.open();
+    let made = s.duplicate_track("bass");
+    assert_eq!(made.as_ref().map(|m| m.module.as_str()).map_err(|e| e.to_string()), Ok("bass-3"));
+}
+
 // ID-1: bindings never collide with what the file binds, and a key of digits is bound as `t808`.
 #[test]
 fn bindings_never_collide() {

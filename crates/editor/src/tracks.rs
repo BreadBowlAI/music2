@@ -125,16 +125,27 @@ pub enum Deleted {
     Blocked(Vec<Dependent>),
 }
 
-/// The modules' keys and the folders and track files taken, in any capitals: what a new key must
-/// not be (ID-2). An unclaimed `data/<k>/` folder counts, so a new track never takes over a
-/// deleted one's data.
+/// The modules' keys, the mixer's channel keys and the folders and track files taken, in any
+/// capitals: what a new key must not be (ID-2). A new track's key is its new channel's (ID-18), and
+/// a channel's key may differ from its track's. An unclaimed `data/<k>/` folder counts, so a new
+/// track never takes over a deleted one's data.
 fn taken(rev: &Revision) -> impl Fn(&str) -> bool + '_ {
+    let channels = channel_keys(rev);
     move |k: &str| {
         let Ok(key) = Key::new(k) else { return true };
         k == ROOT
             || rev.compiled.ir.modules.iter().any(|m| m.key == k)
+            || channels.iter().any(|c| c.eq_ignore_ascii_case(k))
             || rev.snapshot.taken(&DataPath::Module { module: key }.path()).is_some()
             || rev.snapshot.taken(Path::new(&format!("tracks/{k}.ts"))).is_some()
+    }
+}
+
+/// The keys of the song's mixer's channels.
+fn channel_keys(rev: &Revision) -> Vec<String> {
+    match mix::mixer(rev) {
+        Mixing::One(m) => m.channels.into_iter().map(|c| c.key).collect(),
+        _ => vec![],
     }
 }
 
@@ -364,7 +375,13 @@ pub fn add(s: &mut Session, component: &str, label: Option<&str>, key: Option<&s
                 keys::propose(k, &taken).chars().take(32).collect::<String>().trim_matches('-')
             )));
         }
-        Some(k) if taken(k) => return Err(EditError::Rejected(format!("{k} is taken: another track or its data has that ID"))),
+        Some(k) if taken(k) => {
+            let track = rev.compiled.ir.modules.iter().any(|m| m.key == k);
+            return Err(EditError::Rejected(match channel_keys(rev).iter().any(|c| c.eq_ignore_ascii_case(k)) && !track {
+                true => format!("The mixer already has a channel called {k}: pick another ID"),
+                false => format!("{k} is taken: another track or its data has that ID"),
+            }));
+        }
         Some(k) => k.to_string(),
         None => match keys::propose(&label, &taken) {
             k if k.is_empty() => keys::propose("track", &taken),
