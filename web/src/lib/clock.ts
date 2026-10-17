@@ -20,7 +20,9 @@ let shown = NaN;
 
 /** A poll's answer: where playback is now. */
 export function setClock(status: GraphStatus, tempo: { beat: number; bpm: number }[]) {
-  clock = { beat: status.beat, playing: status.playing, at: performance.now(), tempo, loop: status.loop };
+  // While an export holds playback (RENDER-6a) the transport plays but the engine processes
+  // nothing, so the beat stands still: the playhead waits with it rather than run ahead and jump back.
+  clock = { beat: status.beat, playing: status.playing && !status.paused, at: performance.now(), tempo, loop: status.loop };
 }
 
 const bpmAt = (beat: number) => {

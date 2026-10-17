@@ -3,7 +3,7 @@ import { Download, PanelLeft, Play, Redo2, Repeat, SkipBack, Square, Undo2 } fro
 import { barAt, barsToBeats, graphApi, position, type GraphState, type GraphStatus, type Loop, type Meter, type Problem } from "../lib/graph";
 import { exportSong, useExport } from "../lib/exporting";
 import { next } from "../lib/history";
-import { isMac, kbd, native } from "../lib/native";
+import { isMac, kbd } from "../lib/native";
 import { useShell } from "../lib/shell";
 import { graphUndo } from "./GraphCanvas";
 import Status from "./Status";
@@ -67,7 +67,8 @@ export default function TopBar({
   return (
     <header
       data-tauri-drag-region
-      className={clsx("relative h-bar shrink-0 flex items-center pr-3 border-b border-line bg-chrome", native && isMac ? "pl-20" : "pl-3")}
+      // The Mac app (`data-app="mac"`, main.tsx) starts 80px in, for the window's buttons: 68px more than a page.
+      className="relative h-bar shrink-0 flex items-center pl-3 pr-3 border-b border-line bg-chrome [:root[data-app=mac]_&]:pl-20"
     >
       {/* The browser's toggle, on screen so a window that starts without it (under 1280px) can show it. */}
       <BarButton
@@ -114,7 +115,10 @@ export default function TopBar({
           72px, so its last digits stay put as it counts (5.3.2 → 10.1.1). */}
       <div className="flex items-baseline">
         <span data-testid="position" className="w-18 text-right text-lg font-medium text-fg" title="Bar, beat and sixteenth">{at}</span>
-        <span className="w-13 ml-3 text-sm text-fg-muted max-[1180px]:hidden" title="Time">{time}</span>
+        {/* It goes first as the window narrows (§3.8); in the Mac app, whose bar starts further in, sooner. */}
+        <span className="w-13 ml-3 text-sm text-fg-muted max-[1180px]:hidden [:root[data-app=mac]_&]:max-[1280px]:hidden" title="Time">
+          {time}
+        </span>
         <Divider />
         {/* The tempo and time signature as the arrangement has them: fields to drag and type in come with the tempo bar. */}
         <div className="flex items-baseline gap-3" data-testid="tempo">
@@ -129,8 +133,9 @@ export default function TopBar({
       </div>
       <div data-tauri-drag-region className="flex-1 self-stretch" />
       {/* Centred in the window, whatever the transport and buttons beside it take: kept clear of them
-          (480px a side), a long name is cut short, and in a small window it goes (§3.8). */}
-      <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 max-w-[calc(100%-960px)] flex items-center whitespace-nowrap pointer-events-none max-[1040px]:hidden">
+          (480px a side; in the Mac app, once the time shows, 548), a long name is cut short, and in a
+          small window it goes (§3.8). */}
+      <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 max-w-[calc(100%-960px)] flex items-center whitespace-nowrap pointer-events-none max-[1040px]:hidden [:root[data-app=mac]_&]:min-[1280px]:max-w-[calc(100%-1096px)]">
         <span
           data-testid="bar-song-name"
           className="min-w-0 truncate text-base font-semibold text-fg-strong pointer-events-auto"
@@ -139,7 +144,7 @@ export default function TopBar({
           {graph.name}
         </span>
       </div>
-      <Status graph={graph} onShowCode={onShowCode} />
+      <Status graph={graph} status={status} onShowCode={onShowCode} />
       <Divider />
       <BarButton
         onClick={() => void graphUndo(graph.session, "undo")}

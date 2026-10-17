@@ -939,6 +939,14 @@ view at first launch.
 - At 1100 px wide the browser starts hidden and the headers shrink to 200 px.
 - The top bar drops items in this order: the time readout, the DSP percentage text (the bar stays),
   then the song name.
+- In the Mac app the bar starts 80 px in, for the window's buttons, and the browser's toggle sits
+  before Go to start, so the left side ends about 500 px in once the time shows. There the time
+  shows from 1280 px (not 1180), and from 1280 px the name keeps 548 px clear on each side (the
+  480 plus the 68 px the window's buttons add). `fx-fixes` checks both bars at 1100, 1180, 1280
+  and 1440 px (the taste plan's attack, item C).
+- What the engine is busy with ("Paused for export", "Loading Surge XT…") is a neutral state of
+  the status pill, ranked below every problem (ST-1): nothing sits under the song's name (lead
+  decision T2).
 - The dock body is never shorter than 180 px, and the lanes are never shorter than 3 rows.
 - Nothing scrolls horizontally except the arrangement, the roll, the Device chain and the Mix
   strips.

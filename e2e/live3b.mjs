@@ -365,7 +365,8 @@ async function withPlugins() {
     // fades out, holds, and resumes where it was), the top bar says so, and the file is written.
     // The export resets the plugins' voices, its stated cost: from the start the chord sounds again.
     const exports = `${root}/home/Music/music2/Exports`;
-    const note = () => p2.evaluate(() => document.querySelector('[data-testid="engine-note"]')?.textContent ?? null);
+    // What the engine is busy with is a state of the top bar's status pill (taste ST-1): its title lists every state.
+    const note = () => p2.evaluate(() => document.querySelector("[data-status]")?.title ?? null);
     // The lead back at its own level (the drag above left it near -60 dB), so the checks below hear
     // the chord well above silence.
     const dragged = fs.readFileSync(`${dir}/song.ts`, "utf8");
@@ -384,10 +385,10 @@ async function withPlugins() {
       const status = await api2("graph/status");
       if (status.paused !== "exporting") break;
       seen.push({ frame, beat: status.beat });
-      noted ||= (await note()) === "Paused for export";
+      noted ||= ((await note()) ?? "").split(" · ").includes("Paused for export");
       await sleep(20);
     }
-    check(noted, "the top bar says Paused for export");
+    check(noted, "the top bar's status pill says Paused for export");
     // In 25 ms windows, from 50 ms in (the 5 ms fade out, and the hold's callback) to 50 ms short of
     // the last frame seen holding, so a short pause is judged too.
     const held = levels(heldFrom + 2400, (seen.at(-1)?.frame ?? heldFrom) - 2400, 1200);

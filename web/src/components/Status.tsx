@@ -1,13 +1,13 @@
 import clsx from "clsx";
-import { CircleAlert, CodeXml, Info, Lock, TriangleAlert, WifiOff } from "lucide-react";
+import { CircleAlert, CodeXml, Hourglass, Info, Lock, Pause, TriangleAlert, WifiOff } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { attention, graphApi, lockReason, type GraphState, type Problem, type ReadOnly } from "../lib/graph";
+import { attention, graphApi, lockReason, type GraphState, type GraphStatus, type Problem, type ReadOnly } from "../lib/graph";
 import { useStore } from "../lib/store";
 import Attention from "./Attention";
 import { Button, Details, keepFocus, Popover } from "./ui";
 
 type Tone = "danger" | "warn" | "neutral";
-interface State { id: "offline" | "compile" | "problems" | "read-only"; tone: Tone; label: string; Icon: typeof Lock }
+interface State { id: "offline" | "compile" | "problems" | "read-only" | "paused" | "loading"; tone: Tone; label: string; Icon: typeof Lock }
 
 // Hover darkens every tone, as it does a ghost button: the soft fill mixed toward its strong colour.
 const TONE: Record<Tone, string> = {
@@ -17,8 +17,12 @@ const TONE: Record<Tone, string> = {
 };
 const ICON: Record<Tone, string> = { danger: "text-danger", warn: "text-warn", neutral: "text-fg-muted" };
 
-/** What the pill can say, the most severe first (taste.md ST-1). */
-function states(graph: GraphState, connected: boolean): State[] {
+/** The plugins loading, as the pill says it: "Loading Surge XT…". */
+const loadingLabel = (names: string[]) => `Loading ${names.join(", ")}…`;
+
+/** What the pill can say, the most severe first (taste.md ST-1). What the engine is busy with
+ * (RENDER-1, RENDER-25) comes last: it is no problem, so any problem shows over it. */
+function states(graph: GraphState, status: GraphStatus | undefined, connected: boolean): State[] {
   const out: State[] = [];
   if (!connected) out.push({ id: "offline", tone: "danger", label: "Reconnecting…", Icon: WifiOff });
   // Danger when nothing plays at all (WRITE-20); otherwise the last version that compiled plays on.
@@ -35,6 +39,8 @@ function states(graph: GraphState, connected: boolean): State[] {
     });
   }
   if (graph.read_only) out.push({ id: "read-only", tone: "neutral", label: "Read only", Icon: Lock });
+  if (status?.paused === "exporting") out.push({ id: "paused", tone: "neutral", label: "Paused for export", Icon: Pause });
+  if (status?.loading?.length) out.push({ id: "loading", tone: "neutral", label: loadingLabel(status.loading), Icon: Hourglass });
   return out;
 }
 
@@ -43,10 +49,10 @@ function states(graph: GraphState, connected: boolean): State[] {
  * needs saying, taking no room in the layout. It shows the most severe state and counts the rest;
  * a click opens a popover with each of them and what fixes it. Nothing else repeats them.
  */
-export default function Status({ graph, onShowCode }: { graph: GraphState; onShowCode: (p: Problem) => void }) {
+export default function Status({ graph, status, onShowCode }: { graph: GraphState; status?: GraphStatus; onShowCode: (p: Problem) => void }) {
   const connected = useStore((s) => s.connected);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  const all = states(graph, connected);
+  const all = states(graph, status, connected);
   if (!all.length) return null;
   const [main, ...rest] = all;
   const readOnly = all.some((s) => s.id === "read-only");
@@ -66,8 +72,9 @@ export default function Status({ graph, onShowCode }: { graph: GraphState; onSho
         }}
         className={clsx("h-ctl-sm px-2 shrink-0 rounded-sm inline-flex items-center gap-1.5 text-sm font-medium cursor-pointer transition-colors duration-80 ease-linear", TONE[main.tone])}
       >
-        <main.Icon size={14} className={ICON[main.tone]} />
-        {main.label}
+        <main.Icon size={14} className={clsx("shrink-0", ICON[main.tone])} />
+        {/* A long list of plugins loading is cut short; the title has it whole. */}
+        <span className="max-w-60 truncate">{main.label}</span>
         {rest.length > 0 && <span className="opacity-70">+{rest.length}</span>}
       </button>
       {anchor && (
@@ -100,6 +107,16 @@ export default function Status({ graph, onShowCode }: { graph: GraphState; onSho
                   </div>
                 )}
                 {s.id === "read-only" && graph.read_only && <ReadOnlyItem graph={graph} state={s} readOnly={graph.read_only} />}
+                {s.id === "paused" && (
+                  <Item state={s} title="Paused for export">
+                    The export is using the song's plugins. It plays on from here when the export is done.
+                  </Item>
+                )}
+                {s.id === "loading" && (
+                  <Item state={s} title={`Loading ${status?.loading?.length === 1 ? "a plugin" : "plugins"}`}>
+                    {`${status?.loading?.join(", ")}. The song plays on meanwhile, and your change joins it once they're ready.`}
+                  </Item>
+                )}
               </div>
             ))}
           </div>
