@@ -66,7 +66,9 @@ fn delay(op: &FOp) -> bool {
     matches!(op, FOp::Kernel { kernel, .. } if kernel == "std:delay")
 }
 
-const AGAIN: &str = "To start it again, choose Transport ▸ Stop All Sound (⌘.).";
+/// What starts it again, in words every platform shares: the key is the menu's to show, ⌘. on a Mac
+/// and Ctrl+. elsewhere (PLAT-2).
+const AGAIN: &str = "To start it again, choose Transport ▸ Stop All Sound.";
 
 // RENDER-25: a sound that stops while the song plays is told once, by what it is and its track, with
 // what starts it again: a kernel by its name, an instrument as such, one of the song's own "in the

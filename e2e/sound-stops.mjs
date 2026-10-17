@@ -32,7 +32,7 @@ const check = (ok, what) => {
 const FLOOR = -60;
 const SAID =
   "The instrument on Hats stopped working, so music2 made it silent. The rest of the song plays on. " +
-  "To start it again, choose Transport ▸ Stop All Sound (⌘.).";
+  "To start it again, choose Transport ▸ Stop All Sound.";
 
 // std with its `noise` kernel trapping, and first-song, each a copy of the run's own.
 const std = `${ROOT}/std-noise-traps`;

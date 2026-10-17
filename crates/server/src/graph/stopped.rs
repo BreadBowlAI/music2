@@ -19,14 +19,15 @@ pub(super) fn heard(inner: &Inner, open: Option<&Open>) {
     }
 }
 
-/// What the user is told when node `node` of `rev`'s graph stopped, for `why`.
+/// What the user is told when node `node` of `rev`'s graph stopped, for `why`. No key: the menu row
+/// shows the platform's own, ⌘. on a Mac and Ctrl+. elsewhere (PLAT-2).
 fn said(rev: &Revision, node: usize, why: Why) -> String {
     let what = match why {
         Why::Crashed => "stopped working",
         Why::OutOfMemory => "ran out of memory (a sound may use up to 32 MB)",
     };
     format!(
-        "{} {what}, so music2 made it silent. The rest of the song plays on. To start it again, choose Transport ▸ Stop All Sound (⌘.).",
+        "{} {what}, so music2 made it silent. The rest of the song plays on. To start it again, choose Transport ▸ Stop All Sound.",
         sound_named(rev, node)
     )
 }
