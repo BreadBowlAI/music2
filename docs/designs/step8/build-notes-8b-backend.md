@@ -650,3 +650,22 @@ deleted, as the new graph no longer says it was muted.
 
 **Contract:** MON-1's window rule.
 
+
+### S1. What isn't there is said as it is
+
+**What was wrong:** the 8b builders put whole sentences into `EditError::NotFound`, which shows
+as "no control `…` in that revision". So `m2 clips p delete nosuch/notes:abc` said "no control
+`There's no track `nosuch`.` in that revision", and mute in song called a missing track a
+control. The tests checked only part of the text, so they passed anyway.
+
+**The fix:** a new `EditError::Missing(sentence)`, shown as it is. Clips (a missing track, lane,
+clip or note), Remove automation and mute in song use it. Mute in song says "There's no track
+`kik`.". `NotFound` stays for controls.
+
+| Test | Red first? |
+|---|---|
+| `the_song_and_missing_tracks_are_refused`, `remove_automation_refuses_what_it_cant_take_out`, `kinds_and_units_never_mix` (a missing clip, track and lane), `quantize_to_sixteenths_and_triplets` (a missing note): the whole message | red: "no control `…` in that revision" |
+| `remove_automation_over_http`, `clip_gestures_over_http`: the route's whole `error` | red |
+| `clip_gestures_from_the_terminal`, `unautomate_from_the_terminal`, `mute_in_song_writes_the_option_and_takes_the_lock`: the whole `error:` line | red |
+
+**Checks:** tests of `m2-editor`, `m2-server`, `m2`; clippy on them.

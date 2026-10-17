@@ -299,6 +299,9 @@ fn clip_gestures_over_http() {
     let (status, refused) = post(url, "/api/graph/clips", Some("t0k"), &back);
     assert_eq!(status, 400);
     assert!(refused["error"].as_str().unwrap().contains("before the song starts"), "{refused:#}");
+    let gone = json!({"session": session, "gesture": {"op": "delete", "clips": [{"module": "kick", "lane": "hits", "id": "zzzzzzzz"}]}});
+    let (status, refused) = post(url, "/api/graph/clips", Some("t0k"), &gone);
+    assert_eq!((status, &refused["error"]), (400, &json!("kick's hits lane has no clip `zzzzzzzz` now.")), "said whole");
     let unknown = json!({"session": session, "gesture": {"op": "fold"}});
     assert_eq!(post(url, "/api/graph/clips", Some("t0k"), &unknown).0, 422, "a gesture that doesn't read");
 
@@ -368,7 +371,7 @@ fn remove_automation_over_http() {
     assert!(!dir.join("data/song/freq.json").exists());
     let (status, refused) = post(&running.url, "/api/graph/automate/remove", Some("t0k"), &body);
     assert_eq!(status, 400);
-    assert!(refused["error"].as_str().unwrap().contains("no lane `freq`"), "{refused:#}");
+    assert_eq!(refused["error"], json!("song has no lane `freq`."), "said whole");
 
     running.state.graph.close();
     let held = m2_session::lock::acquire(&dir, "m2", m2_session::lock::RETRY).unwrap();

@@ -368,7 +368,7 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
                     None => (0..c.notes.len()).collect(),
                 };
                 if let Some(k) = picked.iter().find(|k| **k >= c.notes.len()) {
-                    return Err(EditError::NotFound(format!("The clip has {} notes, so it has no note {}.", c.notes.len(), k + 1)));
+                    return Err(EditError::Missing(format!("The clip has {} notes, so it has no note {}.", c.notes.len(), k + 1)));
                 }
                 for k in picked {
                     quantized(&mut c.notes[k], c.start, *grid, *ends);
@@ -721,8 +721,8 @@ impl Work<'_> {
             let rev = self.rev;
             let (module, key) = (addr.module.as_str(), addr.lane.as_str());
             let m = rev.compiled.ir.modules.iter().find(|m| m.key == module);
-            let m = m.ok_or_else(|| EditError::NotFound(format!("There's no track `{module}`.")))?;
-            let decl: &LaneDecl = m.lanes.iter().find(|l| l.key == key).ok_or_else(|| EditError::NotFound(format!("{} has no lane `{key}`.", m.label())))?;
+            let m = m.ok_or_else(|| EditError::Missing(format!("There's no track `{module}`.")))?;
+            let decl: &LaneDecl = m.lanes.iter().find(|l| l.key == key).ok_or_else(|| EditError::Missing(format!("{} has no lane `{key}`.", m.label())))?;
             let shown = DataPath::lane(addr).to_string();
             if let Some(d) = rev.compiled.problems.iter().find(|d| d.src.as_deref() == Some(&shown) && d.code.starts_with("lane.")) {
                 return Err(EditError::Rejected(format!(
@@ -790,7 +790,7 @@ impl Work<'_> {
         let i = match found {
             Ok(i) => i,
             Err(why) if r.sha.is_some() => return Err(changed(format!("{why} It was changed in another window or by an agent; try again."), r.id.clone())),
-            Err(why) => return Err(EditError::NotFound(why)),
+            Err(why) => return Err(EditError::Missing(why)),
         };
         let c = &l.was[i];
         if let Some(seen) = &r.sha

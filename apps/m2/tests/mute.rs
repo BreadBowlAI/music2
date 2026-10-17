@@ -43,6 +43,8 @@ fn mute_in_song_writes_the_option_and_takes_the_lock() {
     let off = m2(&["mute-in-song", dir, "kick", "off"]);
     assert!(off.status.success(), "{}", said(&off));
     assert_eq!(std::fs::read_to_string(&kick).unwrap(), before);
+    let missing = m2(&["mute-in-song", dir, "kik", "on"]);
+    assert!(!missing.status.success() && said(&missing).ends_with("error: There's no track `kik`.\n"), "said whole: {}", said(&missing));
     let bad = m2(&["mute-in-song", dir, "kick", "maybe"]);
     assert!(!bad.status.success() && said(&bad).contains("on or off"), "{}", said(&bad));
 

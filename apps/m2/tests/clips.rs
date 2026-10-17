@@ -72,7 +72,10 @@ fn clip_gestures_from_the_terminal() {
     // Refused in words, and nothing changes.
     let now = read();
     for (args, says) in [
-        (&["move", "kick/hits:nothere", "--by", "1"][..], "no clip `nothere`"),
+        // What isn't there: said whole, as the user reads it.
+        (&["move", "kick/hits:nothere", "--by", "1"][..], "error: Kick's hits lane has no clip `nothere` now.\n"),
+        (&["delete", "nosuch/notes:abc"][..], "error: There's no track `nosuch`.\n"),
+        (&["delete", "bass/nolane:abc"][..], "error: Bass has no lane `nolane`.\n"),
         (&["move", "kick/hits@9.3.2", "--by", "1", "--to", "bass/cutoff"][..], "A notes clip can't go on an automation lane"),
         (&["create", "kick/hits", "--at", "9.5"][..], "bar 9 has 4 beats"),
         (&["delete", "kick/hits"][..], "isn't a clip"),
@@ -134,4 +137,6 @@ fn unautomate_from_the_terminal() {
     assert!(o.status.success(), "{}", said(&o));
     let o = m2(&["unautomate", dir, "bass/notes"]);
     assert!(!o.status.success() && said(&o).contains("isn't an automation lane"), "{}", said(&o));
+    let o = m2(&["unautomate", dir, "nosuch/cutoff"]);
+    assert!(!o.status.success() && said(&o).ends_with("error: There's no track `nosuch`.\n"), "said whole: {}", said(&o));
 }

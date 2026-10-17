@@ -85,7 +85,8 @@ fn the_song_and_missing_tracks_are_refused() {
         e => format!("{e:?}"),
     };
     assert!(said(mute_in_song(&mut s, &keys(&["song"]), true).unwrap_err()).contains("song itself can't be muted"));
-    assert!(said(mute_in_song(&mut s, &keys(&["nope"]), true).unwrap_err()).contains("nope"));
+    // Said whole, as the user reads it.
+    assert_eq!(mute_in_song(&mut s, &keys(&["nope"]), true).unwrap_err().to_string(), "There's no track `nope`.");
     assert!(said(mute_in_song(&mut s, &[], true).unwrap_err()).contains("Name a track"));
 }
 

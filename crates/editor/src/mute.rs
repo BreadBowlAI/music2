@@ -80,7 +80,7 @@ pub fn mute_in_song(s: &mut Session, modules: &[String], muted: bool) -> Result<
         if key == ROOT {
             return Err(EditError::Rejected("The song itself can't be muted: mute its tracks.".into()));
         }
-        let m = rev.compiled.ir.modules.iter().find(|m| &m.key == key).ok_or_else(|| EditError::NotFound(key.clone()))?;
+        let m = rev.compiled.ir.modules.iter().find(|m| &m.key == key).ok_or_else(|| EditError::Missing(format!("There's no track `{key}`.")))?;
         if !m.track {
             return Err(EditError::Rejected(format!("{key} isn't a track, so it can't be muted in the song")));
         }

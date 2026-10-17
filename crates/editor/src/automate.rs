@@ -234,8 +234,8 @@ pub fn remove(s: &mut Session, module: &str, lane: &str, beat: Option<f64>) -> R
     }
     let rev = s.accepted();
     let m = rev.compiled.ir.modules.iter().find(|m| m.key == module);
-    let m = m.ok_or_else(|| EditError::NotFound(format!("There's no track `{module}`.")))?;
-    let decl = m.lanes.iter().find(|l| l.key == lane).ok_or_else(|| EditError::NotFound(format!("{} has no lane `{lane}`.", m.label())))?;
+    let m = m.ok_or_else(|| EditError::Missing(format!("There's no track `{module}`.")))?;
+    let decl = m.lanes.iter().find(|l| l.key == lane).ok_or_else(|| EditError::Missing(format!("{} has no lane `{lane}`.", m.label())))?;
     let name = decl.label().to_string();
     let Kind::Control(unit) = decl.kind else {
         return Err(EditError::Rejected(format!("{}'s {name} lane isn't an automation lane, so it has no value to put back.", m.label())));
