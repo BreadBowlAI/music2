@@ -84,7 +84,7 @@ diff /tmp/base-head/SHA256SUMS /tmp/base-now/SHA256SUMS
 | `cables` | cables | 12 | dragging a cable from an output onto a knob writes the signal's name there (and makes no toast); ✕ writes the declared default back; a cable into its own declaration is refused with a reason |
 | `undo` | cables | 10 | undo and redo of a cable from the toolbar and ⌘Z / ⇧⌘Z, with toasts that say where, never the diff |
 | `effects` | proj | 12 | the catalog wraps the Keys' pluck in a delay (settings as knobs), said in words with Undo; removing it unwraps; undo restores the file exactly |
-| `layout` | proj | 38 | the timeline above the dock: tracks and the Song's row, automation folded under its track, clips, selection both ways, the split's resize (180px at least), ruler seeks, the playhead, knob drags, playing past the end |
+| `layout` | proj | 39 | the timeline above the dock: tracks and the Song's row, automation folded under its track, clips, selection both ways, the split's resize (180px at least), ruler seeks, the playhead, knob drags, playing past the end, Stop back where play started |
 | `views` | proj | 30 | the dock's Device / Notes / Mix / Code switcher: its view is the producer's, a selection changes only what it shows, and it never moves; code follows the module; Notes shows the selected clip, a double-click opens it, Esc or a removed clip leaves its empty state |
 | `code` | proj | 58 | the code editor: the files API's guards (409, 400), autocomplete, ⌘S, compile errors as markers and in the problems strip, files changed on disk under clean and edited buffers, knobs turned while a file is open |
 | `notes` | proj | 52 | the piano roll and notes clips (a click selects, a double-click adds, D4); every edit is one lane write, checked on disk |

@@ -148,9 +148,11 @@ const post = async (path, body) =>
 // Playing on past the song's end (and past the drawn width): the ruler and rows run on under the playhead.
 await page.$eval("[data-testid=timeline]", (e) => { e.scrollLeft = 0; });
 const drawnBeats = (await page.$eval("[data-testid=ruler]", (e) => e.getBoundingClientRect().width)) / 24;
-await post("graph/seek", { beat: Math.floor(drawnBeats) - 2 });
+const from = Math.floor(drawnBeats) - 2;
+await post("graph/seek", { beat: from });
 await page.click('[data-testid=play]');
 let inside = true;
+let last = 0;
 const samples = [];
 for (let i = 0; i < 8; i++) {
   await sleep(500);
@@ -163,11 +165,14 @@ for (let i = 0; i < 8; i++) {
     return { beat: Number(ph.dataset.beat), x: ph.getBoundingClientRect().left, rulerRight: ruler.right, right: box.right, header: header.left - box.left, overflow: tl.scrollWidth - (header.width + ruler.width) };
   });
   inside &&= m.x < m.rulerRight - 24 && m.x < m.right && Math.abs(m.header) < 1 && m.overflow <= 1;
+  last = m.beat;
   samples.push(`${m.beat.toFixed(1)}: x ${m.x.toFixed(0)}, ruler to ${m.rulerRight.toFixed(0)}`);
 }
+check(last > drawnBeats + 2 && inside, `past the drawn width (${drawnBeats.toFixed(1)} beats) the playhead stays over the ruler and rows, headers in place (${samples.join("; ")})`);
+// Stop goes back to where play started (taste.md §5.1).
 await page.click('[data-testid=play]');
-check((await playheadBeat()) > drawnBeats + 2 && inside, `past the drawn width (${drawnBeats.toFixed(1)} beats) the playhead stays over the ruler and rows, headers in place (${samples.join("; ")})`);
 check(await until(async () => !(await api("graph/status")).playing), "stopped again");
+check(await until(async () => Math.abs((await playheadBeat()) - from) < 0.01), `and back where play started (beat ${from}; the playhead at ${await playheadBeat()})`);
 
 // Notes that never play (before their clip, or of no length) are neither drawn nor counted, and don't stretch the clip's pitch range.
 const notesFile = `${proj}/data/bass/notes.json`;
