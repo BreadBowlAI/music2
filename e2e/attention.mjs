@@ -179,6 +179,10 @@ const songBefore = read("song.ts");
 const revBefore = (await state()).view.revision;
 write("song.ts", `${songBefore}// an edit made outside the app\n`);
 await until(async () => (await state()).view.revision > revBefore);
+// The page too (D7): a toast's Undo judges by the revision the page shows, so the page must have the
+// outside edit's before the click. Then the top bar's Undo names nothing, since the step isn't its own.
+const undoTitle = () => page.$eval('button[aria-label="Undo"]', (b) => b.title);
+check(await until(async () => (await undoTitle()) === "Undo (⌘Z)"), `the page has the outside edit: its Undo names nothing (${await undoTitle()})`);
 const clicked = await page.evaluate(() => {
   const moved = [...document.querySelectorAll("[data-testid=toast]")].filter((t) => t.textContent.startsWith("Moved data/kick to data/kicks."));
   moved.at(-1)?.querySelector("button")?.click();

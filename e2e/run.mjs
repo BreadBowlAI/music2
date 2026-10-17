@@ -74,7 +74,7 @@ export const SUITES = [
   ["start", "empty", { expect: 14 }],
   ["fixes-graph", "fix", { expect: 42 }],
   ["fixes-notes", "fix", { expect: 37 }],
-  ["attention", "attn", { expect: 56 }],
+  ["attention", "attn", { expect: 57 }],
   ["newsong", "none", { expect: 65 }],
   ["export", "export", { expect: 37 }],
   ["fx-fixes", "none", { expect: 75 }],
