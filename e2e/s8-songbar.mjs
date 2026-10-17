@@ -128,7 +128,7 @@ const r = await ruler();
 await page.mouse.click(r.x + 16 * 24 + 2, r.y + r.height / 2, { button: "right" });
 const menu = await page.waitForSelector("[data-testid=ruler-menu]", { timeout: 2000 }).catch(() => null);
 const rows = menu ? await page.$$eval("[data-testid=ruler-menu] [role=menuitem]", (els) => els.map((e) => e.textContent)) : [];
-check(same(rows, ["Add tempo change at 5.1", "Add time signature change at bar 5"]), `a right-click on bar 5 offers a change there: ${rows.join(" | ")}`);
+check(same(rows, ["Add tempo change at 5.1", "Add time signature change at bar 5", "Add marker at bar 5"]), `a right-click on bar 5 offers a change there: ${rows.join(" | ")}`);
 await page.$$eval("[data-testid=ruler-menu] [role=menuitem]", (els) => els[0].click());
 check(await until(() => same(tempos(), [[0, 124], [16, 124]])), `Add tempo change writes a second entry at beat 16: ${JSON.stringify(tempos())}`);
 const typing = await page.waitForSelector("[data-testid=mark-tempo-input]", { timeout: 3000 }).catch(() => null);

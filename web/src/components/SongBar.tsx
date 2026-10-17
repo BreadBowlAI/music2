@@ -514,7 +514,10 @@ export function MarkPopover({
   );
 }
 
-/** The ruler's right-click menu: a tempo change at the beat clicked, or a time signature change at its bar. */
+/**
+ * The ruler's right-click menu: a tempo change at the beat clicked, a time signature change at its
+ * bar, or a marker at the bar line nearest it (Q13).
+ */
 export function RulerMenu({
   session,
   timeline,
@@ -523,6 +526,7 @@ export function RulerMenu({
   locked,
   onClose,
   onMade,
+  onMarker,
 }: {
   session: number;
   timeline: TimelineView;
@@ -532,10 +536,16 @@ export function RulerMenu({
   onClose: () => void;
   /** Where the change was made, to open it. */
   onMade: (beat: number) => void;
+  /** Add a marker at `beat`: its name field opens there. */
+  onMarker?: (beat: number) => void;
 }) {
   const toast = useStore((s) => s.toast);
   const bar = barAt(timeline.meter, beat);
   const at = `${bar.bar + 1}.${Math.floor(beat - bar.start + 1e-9) + 1}`;
+  // The bar line nearest the click, and whether a marker is there.
+  const line = beat - bar.start > bar.length / 2 ? bar.start + bar.length : bar.start;
+  const lineBar = barAt(timeline.meter, line).bar + 1;
+  const taken = (timeline.markers ?? []).some((m) => Math.abs(m.beat - line) < 1e-6);
   const add = (p: Promise<unknown>, where: number) => {
     onClose();
     p.then(() => onMade(where), (e) => toast(message(e)));
@@ -557,6 +567,19 @@ export function RulerMenu({
       >
         Add time signature change at bar {bar.bar + 1}
       </MenuRow>
+      {onMarker && (
+        <MenuRow
+          data-menu-item="add-marker"
+          disabled={!!locked || taken}
+          title={locked ? `${locked}.` : taken ? `A marker is at bar ${lineBar} already` : undefined}
+          onClick={() => {
+            onClose();
+            onMarker(line);
+          }}
+        >
+          Add marker at bar {lineBar}
+        </MenuRow>
+      )}
     </Popover>
   );
 }

@@ -41,6 +41,7 @@ pub mod audition;
 pub mod clips;
 mod events;
 pub mod lease;
+mod markers;
 pub mod meters;
 pub mod overlay;
 mod preview;

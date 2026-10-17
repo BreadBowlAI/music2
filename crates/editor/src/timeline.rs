@@ -23,6 +23,8 @@ pub struct TimelineView {
     pub end: f64,
     /// Modules with rows: tracks, and any other module that declares a lane.
     pub tracks: Vec<TimelineTrack>,
+    /// The ruler's markers, by beat, from `layout.json` (Q13): none while it doesn't read.
+    pub markers: Vec<crate::markers::Marker>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -113,7 +115,8 @@ pub fn timeline(s: &Session) -> TimelineView {
     in_order(&mut tracks, &layout);
     let a = &rev.project.arrangement;
     let bar = a.meter_at(0.0).bar();
-    TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), home: Home::Arrangement, end: data.end().max(bar), tracks }
+    let markers = crate::markers::on_disk(&rev.project.dir);
+    TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), home: Home::Arrangement, end: data.end().max(bar), tracks, markers }
 }
 
 /// A module's colour by name: a track's from the layout, else graphite.
@@ -138,7 +141,8 @@ fn in_order(tracks: &mut [TimelineTrack], layout: &crate::layout::LayoutView) {
 fn last_known(rev: &Revision) -> TimelineView {
     let Ok(project) = Project::from_snapshot(&rev.snapshot) else {
         let a = &rev.project.arrangement;
-        return TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), home: Home::Arrangement, end: a.meter_at(0.0).bar(), tracks: vec![] };
+        let markers = crate::markers::on_disk(&rev.project.dir);
+        return TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), home: Home::Arrangement, end: a.meter_at(0.0).bar(), tracks: vec![], markers };
     };
     let mut modules: BTreeMap<String, Vec<TimelineLane>> = BTreeMap::new();
     let mut end: f64 = 0.0;
@@ -172,7 +176,8 @@ fn last_known(rev: &Revision) -> TimelineView {
         .collect();
     in_order(&mut tracks, &layout);
     let a = &project.arrangement;
-    TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), home: Home::Arrangement, end: end.max(a.meter_at(0.0).bar()), tracks }
+    let markers = crate::markers::on_disk(&rev.project.dir);
+    TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), home: Home::Arrangement, end: end.max(a.meter_at(0.0).bar()), tracks, markers }
 }
 
 /// `kick` → `Kick`.

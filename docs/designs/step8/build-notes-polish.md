@@ -161,6 +161,73 @@ then `failed to find element matching selector "[data-height-edge="bass"]"`.
 
 **Contract.** None beyond the view store's.
 
+### B5. Markers
+
+**In short.** You can put markers on the ruler: Intro, Verse, Chorus and so on. They show where
+each part of the song starts. They are saved in the song, so they are shared.
+
+| Do this | How |
+|---|---|
+| Add one | Right-click the ruler: "Add marker at bar 9". It opens as a field called "Marker 1", with a short list: Intro, Verse, Pre-chorus, Chorus, Bridge, Drop, Outro |
+| Name it | Type and press Return, or pick from the list. A click away keeps "Marker 1". Esc adds nothing |
+| Go to it | Click it. Or ⌥← and ⌥→ (Alt+← and Alt+→) for the one before or after |
+| Move it | Drag it: it lands on the grid. Hold ⌘ (Ctrl on Linux) to place it freely |
+| Rename it | Double-click it |
+| Its menu | Right-click it: Rename, Delete, Loop to next marker (to the next marker, or the song's end) |
+
+- Each change is one undo step, with no toast. Undo names it: "Undo Chorus at bar 17", "Undo moving
+  Chorus", "Undo renaming Verse", "Undo deleting Marker 1".
+- A new marker is written once, when its name is kept (X19): one Undo takes it away.
+- Two markers on one beat are refused: "A marker is at bar 9 already". The ruler's row says so too.
+- While `layout.json` doesn't read, no markers show, and adding one is refused: "layout.json doesn't
+  read: fix it, or reset the layout".
+- Transport ▸ Add Marker adds one at the playhead's bar.
+
+**What changed**
+
+- `crates/editor/src/markers.rs` (new): `Marker {beat, name}`, `read(&Layout)` (well-formed entries
+  by beat), `on_disk(dir)`, and `set(s, list)`: the whole list, checked, sorted, written into
+  `Layout.markers` by `canonical()`, as one layout-only Tx with its label from the change. Whole
+  beats are written without `.0`. `layout.rs`: `layout_tx`, `commit` and `unreadable` are
+  `pub(crate)`.
+- `timeline.rs`: `TimelineView.markers`, in `timeline()` and `last_known()`; `actor.rs` publishes
+  it in the timeline's head.
+- `crates/server/src/graph/markers.rs` (new): `Graph::markers`. `routes_view.rs`:
+  `POST /api/graph/markers {session, markers}`, a write (423 read-only), with its own `writes`
+  layer, as `routes_8b.rs`.
+- `web/src/lib/markers.ts` (new): the call, the next free "Marker N", the one before and after, the
+  open field (`useMarkerEdit`), the list drawn until the timeline shows it.
+  `web/src/components/Markers.tsx` (new): the flags, their drag, menu and the name field.
+  `SongTimeline.tsx`: the ruler draws them; `canvas.marker` (Add, Previous, Next); ⌥→ twice goes on
+  to the second marker even before the clock has heard of the first. `SongBar.tsx` `RulerMenu`:
+  the Add marker row. `Shortcuts.tsx`: ⌥← ⌥→.
+- `e2e/s8-songbar.mjs`: its check of the ruler menu's rows names the third row.
+
+**Tests.** Rust, `crates/editor/src/markers_tests.rs`: `markers_are_written_sorted_into_layout_json`
+(and each change's label, no step when nothing changes, no key when none are left),
+`a_second_marker_on_a_beat_is_refused`, `a_name_of_two_lines_is_refused` (and empty, 41
+characters, a beat before 0; 40 é is fine), `markers_keep_unknown_keys_and_the_key`,
+`undo_puts_the_old_list_back`, `an_unreadable_layout_refuses`. `m2-editor` 257 tests and
+`m2-server` 220 pass; clippy of both clean. Suite `pl-arrange` (kind `fix`, 44 checks, after
+`pl-zoom`). Moved suites green: `s8-songbar` 82, `layout` 39, `s8-tracks` 75, `taste` 39,
+`pc-keys` 37.
+
+**Red first.** Rust, with `set` a stub that refuses: all six fail (`markers_tests.rs:18:88`,
+`:52:5`, `:67:9`, `:82:56`, `:97:40`, `:118:5`). The suite, on the page and server of `29430e8`:
+`FAIL the ruler's menu has Add marker at bar 5: Add tempo change at 5.1 | Add time signature
+change at bar 5`.
+
+**Left.** Transport ▸ Add Marker is checked only on the desktop app (no browser suite reaches the
+menu bar). A marker keeps no fields but its beat and name. Markers don't move with a tempo or
+meter change.
+
+**For gaps.md.** Markers on the ruler (#23's markers) are done; sections (copy a chorus, insert
+bars) are left.
+
+**Contract.** FMT-19: `markers` is `[{ "beat", "name" }]`, sorted, one a beat, names one line of 1
+to 40 characters, written by `POST /api/graph/markers`, not `/api/graph/layout` (X45). WRITE-10's
+route list gains it.
+
 ## Lane C
 
 Songs and tracks.

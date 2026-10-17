@@ -176,7 +176,7 @@ pub struct Layout {
     pub order: Vec<String>,
     /// `tracks`: each key's fields as read, `colour` among them.
     pub tracks: Vec<(String, Vec<(String, J)>)>,
-    /// `markers`, kept as read (8b.5 reads them).
+    /// `markers`, kept as read: `crate::markers` reads and writes them.
     pub markers: Option<J>,
     /// Every other key, in the order read.
     pub other: Vec<(String, J)>,
@@ -454,12 +454,12 @@ pub fn view(s: &Session) -> LayoutView {
 }
 
 /// Refused while the file doesn't read: what reorder and recolour say (R15).
-fn unreadable() -> EditError {
+pub(crate) fn unreadable() -> EditError {
     EditError::Rejected("layout.json doesn't read: fix it, or reset the layout".into())
 }
 
 /// A Tx that writes only `layout.json`: no revision (PLANE-3), one undo step.
-fn layout_tx(s: &Session, label: (String, String), text: String) -> Tx {
+pub(crate) fn layout_tx(s: &Session, label: (String, String), text: String) -> Tx {
     let (op, file, base) = write_op(s, text);
     let mut tx = plan::planned(s, label, vec![op], Expect::Identical);
     tx.base.insert(file, base);
@@ -467,7 +467,7 @@ fn layout_tx(s: &Session, label: (String, String), text: String) -> Tx {
 }
 
 /// Commit a layout-only Tx, saying what was written.
-fn commit(s: &mut Session, tx: Tx) -> Result<crate::Edited, EditError> {
+pub(crate) fn commit(s: &mut Session, tx: Tx) -> Result<crate::Edited, EditError> {
     let label = tx.label.clone();
     let done = plan::run(s, tx, |_, _| Ok(()))?;
     Ok(crate::Edited { revision: done.number, file: FILE.into(), before: label.0, after: label.1 })

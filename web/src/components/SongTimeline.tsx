@@ -30,6 +30,7 @@ import {
 import { beatNow, onFrame } from "../lib/clock";
 import { LANE_MADE, TRACK_MADE } from "../lib/events";
 import { useHeard } from "../lib/graph8b";
+import { after, before, markerAt, markersOf, useMarkerEdit } from "../lib/markers";
 import { heightsNow, laneHeight, setHeights, snapHeight, stepHeight, LANE_HS, TRACK_H, trackHeight, useHeights } from "../lib/heights";
 import { LANE_H, ROW_H, RULER_H } from "../lib/layout";
 import { GRAPHITE, trackColors, type TrackColor } from "../lib/palette";
@@ -58,6 +59,7 @@ import { useStore } from "../lib/store";
 import { addEffectTo, dragsEffect, EFFECT_DRAG } from "./Browser";
 import { addTrack, END, INSTRUMENT_DRAG, openInstruments, openTrackMenu, startReorder, useReorder } from "./Tracks";
 import { MarkPopover, placeOf, RulerMenu } from "./SongBar";
+import { RulerMarkers } from "./Markers";
 import { Hatch, VLines } from "./draw";
 import GridChip from "./GridChip";
 import PointMenu, { unautomate, type MenuItem } from "./ClipMenu";
@@ -442,10 +444,39 @@ export default function SongTimeline({
     const now = heightsNow();
     setHeights(Object.fromEntries(tracks.map((t) => [t, stepHeight(trackHeight(now, t), dir)])));
   };
+  /**
+   * Transport ▸ Add Marker, at the playhead's bar; ⌥← and ⌥→, to the marker before or after it (as
+   * a ruler click). From the marker just gone to, until the transport's clock has heard of it, so
+   * ⌥→ pressed twice goes on to the second.
+   */
+  const jumped = useRef<{ beat: number; at: number } | null>(null);
+  const marker = (op: "add" | "prev" | "next") => {
+    const { timeline, locked, onSeek } = latest.current;
+    const list = markersOf(timeline);
+    const j = jumped.current;
+    const now = j && performance.now() - j.at < 600 ? j.beat : beatNow();
+    if (op !== "add") {
+      const m = op === "prev" ? before(list, now) : after(list, now);
+      if (!m) return;
+      jumped.current = { beat: m.beat, at: performance.now() };
+      return onSeek(m.beat);
+    }
+    if (locked) return useStore.getState().toast(`${locked}.`);
+    const bar = barAt(timeline.meter, now);
+    if (markerAt(list, bar.start)) return useStore.getState().toast(`A marker is at bar ${bar.bar + 1} already`);
+    // Its field opens at the bar: in view.
+    const el = scroller.current;
+    if (el) {
+      const view = el.clientWidth - latest.current.headerW;
+      const x = bar.start * zoomNow() - el.scrollLeft;
+      if (x < 0 || x > view - 200) scrollTo(bar.start * zoomNow() - view * 0.15);
+    }
+    useMarkerEdit.setState({ editing: { beat: bar.start, from: null } });
+  };
   useEffect(() => {
-    Object.assign(canvas, { zoom: zoomStep, zoomFit, follow: () => setFollow(!followNow()), height });
+    Object.assign(canvas, { zoom: zoomStep, zoomFit, follow: () => setFollow(!followNow()), height, marker });
     return () => {
-      for (const k of ["zoom", "zoomFit", "follow", "height"] as const) delete canvas[k];
+      for (const k of ["zoom", "zoomFit", "follow", "height", "marker"] as const) delete canvas[k];
     };
   });
   // A pinch, or ⌘-scroll (Ctrl-scroll): around the pointer. Chrome and WebKitGTK send a pinch as a
@@ -1420,7 +1451,7 @@ const Ruler = memo(function Ruler({
       data-testid="ruler"
       className="relative overflow-hidden bg-chrome border-b border-line cursor-pointer touch-none"
       style={{ width }}
-      title={`Click to move the playhead · drag across to loop${locked ? "" : " · right-click to change the tempo or time signature here"}`}
+      title={`Click to move the playhead · drag across to loop${locked ? "" : " · right-click to change the tempo or time signature here, or add a marker"}`}
       onContextMenu={(e) => {
         e.preventDefault();
         // Its popovers are portals, whose events reach the ruler through React: only its own.
@@ -1482,6 +1513,7 @@ const Ruler = memo(function Ruler({
           </span>
         ) : null;
       })}
+      <RulerMarkers timeline={timeline} ppb={ppb} width={width} locked={locked} onSeek={onSeek} onLoop={onLoop} />
       {/* Where the tempo or the time signature changes: both at one beat share a mark, which opens them. */}
       {marks.map((c) => (
         <span
@@ -1539,6 +1571,7 @@ const Ruler = memo(function Ruler({
             setMenuAt(null);
           }}
           onMade={(beat) => setMark({ beat, typing: true })}
+          onMarker={(beat) => useMarkerEdit.setState({ editing: { beat, from: null } })}
         />
       )}
     </div>

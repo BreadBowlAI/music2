@@ -18,6 +18,7 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
       ["Loop the selected clips, or the bar", chord("L")],
       ["Stop all sound", chord(".")],
       ["Follow the playhead on / off", chord("F", { shift: true })],
+      ["Go to the marker before / after", `${opt("←")} / ${opt("→")}`],
     ],
   },
   {
