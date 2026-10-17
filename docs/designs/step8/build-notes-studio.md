@@ -1557,9 +1557,9 @@ The lead's last checks, docs and pictures.
 
 ### The review's fixes
 
-The End's review confirmed 12 findings (R1 to R7, R9, F1 to F3, F6; R3 and F2 are one). Each is fixed in a commit of its own, with
-a test that failed first. Red runs: the Rust tests in `~/m2-runs/logs/st-end-red1-*`, the browser checks on the
-page and server from `37a6936` (`bin/st-67b2197`, the same Rust) in `st-end-e2e-red-*`.
+The End's review confirmed 12 findings (R1 to R7, R9, F1 to F3, F6; R3 and F2 are one). Each is fixed in a commit of
+its own, with a test that failed first. Red runs: the Rust tests in `~/m2-runs/logs/st-end-red1-*`, the browser checks
+on the page and server from `37a6936` (`bin/st-67b2197`, the same Rust) in `st-end-e2e-red-*`.
 
 #### R1. Recording while the code doesn't compile
 
@@ -1728,3 +1728,128 @@ The second full check, at `4fe49f9` (`~/m2-runs/check-studio-2`), passed every r
   same time on this machine, the same arena run included, and "the block before it" was also slow (max 5,327 µs):
   the machine was busy, not the block. Nothing in this track changes a block since the first check. The next check
   was started once 8a's had ended.
+
+#### The third full check, and `main` moving
+
+The third, at `eb76768` (`~/m2-runs/check-studio-3`), ran beside 8a's own `ci/check.sh --gates`, started a minute
+after it. `pl-mix` failed, and again on its retry: the Hats meters read the floor in nearly all ten reads. `main` had
+fixed that meanwhile (`e66e6cd`: first-song's hats are 45 ms hits, and ten reads 150 ms apart can all land between
+them). The check was stopped at its gates, so as not to time them beside 8a's.
+
+A fourth (`check-studio-4`) was stopped at its build: `main` had moved by 42 commits (8a's live half and `macfix`). It
+is merged in as `ad5f111`; git joined every file by itself. On the merge, before the final check: the tests of
+`m2-server`, `m2-play`, `m2-runtime`, `m2-editor` and `music2-desktop` passed, and so did `st-record` (66), `st-stems`
+(49) and `attention` (57).
+
+### The End, in short
+
+**The review** (12 confirmed findings; R3 and F2 are one): each fixed in a commit of its own with a test that failed
+first.
+
+| Finding | Fix | Test |
+|---|---|---|
+| R1 (high): a take ended while the code doesn't compile was thrown away, blamed on a gone track | R refused in lockReason's words, on the server and the page; a take that ends then waits, said once, and is written once the code compiles | `record_is_refused_while_the_code_doesnt_compile`, `a_take_that_ends_while_the_code_is_broken_waits_for_the_code`; `st-record` |
+| R2: the loop changed during a take left its end wrong | `record_loop` from `set_loop`: the take's end follows the loop | `a_loop_turned_on_during_a_take_ends_it_at_the_loops_end`, `a_loop_turned_off_during_a_take_lets_it_go_on` |
+| R3 and F2: the drop's words promised MIDI files | "music2 opens WAV files" until C2b | `st-audio` (a `.mid` dropped) |
+| R4: the count's last beat measured through the tempo before the start | measured in engine frames, as the clicks are | `the_counts_last_beat_is_measured_in_time` |
+| R5: a new player cut held notes to 1/64 beat | the take ends where it was last heard | `a_new_player_ends_the_take_where_it_was_last_heard` |
+| R6: a snapped note moved later was cut at the clip's end | the clip reaches the bar after the latest note's end | `a_note_the_grid_moves_later_still_ends_inside_the_clip` |
+| R7: a cancel right as the count ended left the song playing | it stops whenever the take was still counting as the windows were told | `a_cancel_just_after_the_count_still_stops_the_song` |
+| R9: the upload limit's comment was wrong; over it, "HTTP 413" | the comment; the page adds up sizes first and says the file is too big in words | `st-audio` (a file over 1 GiB) |
+| F1 (high): Export as MIDI in the app: "unknown action save_file" | the app's `save_file` action (the system's save panel) | `every_action_the_page_asks_for_is_known`, `the_save_dialog_takes_its_ask_from_the_page` |
+| F3: Settings on the start screen named no keyboard | the settings answer names the keyboards plugged in | `settings_name_the_keyboards_with_no_song_open`; `st-record` |
+| F6: the guide said "Exports folder" for any save; MIDI never ticked | in the app it names the file; a MIDI export ticks "Export it." | `st-guide` (MIDI, and an app page's save panel) |
+
+**Other checks** on the fixes: every test of `m2-server` (366) and `music2-desktop` (24), their clippy and the Mac
+lint; the web build; `st-audio` 94, `st-record` 66, `st-guide` 38, `st-midi` 19, `nx-settings` 42, `taste` 39,
+`st-tips` 45, `st-stems` 49, `st-errors` 34.
+
+**Pictures** (the Linux app on `:97`, at `ee2012c`): `~/m2-runs/app-shots/studio-ee2012c/`, six with
+`captions.txt`: an audio clip trimmed and faded, a take recording, the Export dialog with Stems, a MIDI file in a
+track (through the server's route: the app has no way in yet), the guide half done, and a code mistake in plain
+words with Details closed.
+
+**The final check** at `ad5f111` (the three before it are above), with `main` at `44b104a` merged in:
+`TW_WAIT=5400 ~/m2-runs/tw check-studio-5 'cd ~/m2-runs/wt/st && M2_CHECK_OUT=$HOME/m2-runs/check-studio-5
+ci/check.sh --gates'`, verbatim:
+
+```
+music2 check: PASS
+commit   ad5f11157c08 on studio (clean)
+machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
+tools    rustc 1.99.0, node v24.21.0, 37 min
+plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+
+toolchain        PASS  rustc 1.99.0
+web build        PASS  
+build            PASS  
+app              PASS  the UI connected: first-song in 1 s, with-plugins in 1 s
+rust tests       PASS  1564 passed, 0 failed
+clippy           PASS  
+pool models      PASS  29 passed, 0 failed
+std kernels      PASS  tests and clippy
+std.wasm         PASS  rebuilt to the same bytes in another folder
+mac lint         PASS  the macOS code type-checks and lints
+browser suites   PASS  66/66 suites ok
+renders          PASS  10 of 10 match e2e/renders.sha256
+old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
+gates            PASS  the 7 runs ci/gates.txt names
+repo unchanged   PASS  
+
+gates:
+  machine: ASRockRack B665D4U-1L, Ubuntu 24.04.3 LTS, AMD Ryzen 9 7950X3D 16-Core Processor, x86_64, 32 threads
+  === m2-gates --server tx-data watcher
+  PASS  G11 tx-data (PLANE-5, PLANE-1, WRITE-15) on server on p16
+        ok    idle disk: the session's part before the preview (plan, check, pre-check), under 5 ms at p95: p50 1.0 ms, p95 1.3 ms, max 1.5 ms (n=200)
+        ok    idle disk: from the request to the first block that plays it (its preview), under 20 ms at p95: p50 5.2 ms, p95 9.0 ms, max 10.3 ms (n=200)
+        ok    with another writer syncing 4 MB chunks: the session's part before the preview (plan, check, pre-check), under 5 ms at p95: p50 1.1 ms, p95 1.5 ms, max 3.0 ms (n=200)
+        ok    with another writer syncing 4 MB chunks: from the request to the first block that plays it (its preview), under 20 ms at p95: p50 4.8 ms, p95 8.6 ms, max 10.7 ms (n=200)
+        ok    idle disk, 5,000 files in assets/: the session's part before the preview (plan, check, pre-check), under 5 ms at p95: p50 1.1 ms, p95 1.4 ms, max 2.9 ms (n=200)
+        ok    idle disk, 5,000 files in assets/: from the request to the first block that plays it (its preview), under 20 ms at p95: p50 5.4 ms, p95 9.5 ms, max 10.9 ms (n=200)
+  PASS  G11 watcher (WRITE-19) on server on p16 with 5,000 files in assets/
+        ok    idle: the CPU its ticks used over 10 s, under 1% of a core: 0.10% of a core (199 ticks in 10 s)
+  === m2-gates --server --reference 50 --at 180 add-effect
+  PASS  G5 and G7a add effect, through the server (RENDER-8, RENDER-25, RENDER-25a) on server on p50 from 180 s
+        ok    audible within compile + 100 ms: past the session's work: p50 44.8 ms, p95 54.5 ms, max 54.5 ms (n=10)
+        ok    G7a: heard within 200 ms of the request, its compile included: p50 110.3 ms, p95 115.9 ms, max 115.9 ms (n=10)
+        ok    with-plugins: audible within compile + 100 ms: past the session's work: p50 14.8 ms, p95 16.5 ms, max 16.5 ms (n=2)
+  === m2-gates --reference 50 --at 180 add-effect tails
+  PASS  G5 add effect (RENDER-25, 25a, 8) on engine (step 7) on p50
+  PASS  G7b tails of untouched tracks (RENDER-25, 25a) on engine (step 7) on p50
+  === m2-gates --server export
+  PASS  G7e export (RENDER-1, RENDER-6a, HOME-4, HOME-6) on server on examples/with-plugins, real time
+  === m2-gates store --reference 50
+  PASS  G7f store (RENDER-32) on the runtime on p50
+        ok    the same music: every renderer's timed blocks the same bits: the same 2880000 samples (hash 22cd1b3810530499) from the app's layout, P1 and S in every round, peak -1.0 dB
+        info  block, P1 against S (step 7 with wasmtime's default layout): mean -192 µs (5 pairs, -254 to -156); p99 -137 µs (5 pairs, -512 to +94)
+        info  block, the app's layout against P1 (the owner's layout alone): mean +18 µs (5 pairs, -4 to +40); p99 -97 µs (5 pairs, -402 to +151)
+        info  block, starting a turn: of the judged ones, each turn's first half over its second, against S's: +6 µs (the app's layout), +7 (P1); each turn's first block over the mean: +2117 µs, +2643, +2568 (S); 188 a t
+        info  machines: S's record is from MacBookPro18,1, macOS 26.6.2, Apple M1 Pro, aarch64, 10 threads; this run is on ASRockRack B665D4U-1L, Ubuntu 24.04.3 LTS, AMD Ryzen 9 7950X3D 16-Core Processor, x86_64, 32 thread
+        skip  block within S + 80 µs, by the mean: would pass: -179 µs (5 pairs, -236 to -137) over S, measured here (bound 80). p99, not judged: -310 µs (5 pairs, -486 to +13); not judged off the reference Mac (PLAT-1)
+        skip  footprint within S + 64 MB: recorded, not judged: S's record is from another machine (PLAT-1)
+        skip  full build within 1.5 × S: would pass: 220 ms against S's 189 ms, each its process's first, measured here; not judged off the reference Mac (PLAT-1)
+  === m2-gates arena --reference 50 --at 180
+  PASS  G7f the arena's callback (RENDER-32, RENDER-25) on the player on p50 from 180 s
+        ok    the same music: every player's timed callbacks the same bits: the same 2856960 samples (hash cdb85ca0bbb29381) from the app's layout, P1 and S in every round, peak -1.0 dB
+        info  callback, P1 against S (step 7 with wasmtime's default layout): mean -840 µs (5 pairs, -935 to -751); p99 -1025 µs (5 pairs, -2049 to -592)
+        info  callback, the app's layout against P1 (the owner's layout alone): mean -29 µs (5 pairs, -108 to -1); p99 -916 µs (5 pairs, -1785 to +660)
+        info  callback, starting a turn: of the judged ones, each turn's first half over its second, against S's: -17 µs (the app's layout), -54 (P1); each turn's first callback over the mean: +6293 µs, +7881, +6703 (S);
+        info  machines: S's record is from MacBookPro18,1, macOS 26.6.2, Apple M1 Pro, aarch64, 10 threads; this run is on ASRockRack B665D4U-1L, Ubuntu 24.04.3 LTS, AMD Ryzen 9 7950X3D 16-Core Processor, x86_64, 32 thread
+        skip  callback within S's + 320 µs, by the mean: would pass: -869 µs (5 pairs, -936 to -855) over S, measured here (bound 320). p99, not judged: -1941 µs (5 pairs, -2599 to -484); not judged off the reference Ma
+        ok    the slowest activation block under half the device buffer's period: 2985 µs, p50 1661; the block before it p50 2551, max 3896 (bound 5333 µs; the run's p99 callback 11539)
+  === m2-gates realtime --reference 50 --minutes 1
+  PASS  G12 live (RENDER-28, RENDER-28a) on the silent clock on p50, 128 frames
+
+logs     /home/jerry/m2-runs/check-studio-5.tgz
+```
+
+**What's left**
+
+- C2b: a MIDI file as new tracks (File ▸ Import MIDI…, `.mid` drops, the tempo question). The server's
+  one-part import into a lane is there; nothing in the app calls it.
+- Q30: Export while a take records or waits to be written isn't refused yet.
+- `tips()` in `st-audio`, `st-record`, `st-midi` and `st-stems`; `st-tips`' places for the Record button and its
+  menu, the take, the Export dialog, the volume popover and the drop hint.
+- README, `docs/architecture.md` and `taste.md`: each section above ends with its Contract line; they aren't joined
+  into the docs yet.
+- The Mac's by-ear steps 61 to 72 (HANDOFF).

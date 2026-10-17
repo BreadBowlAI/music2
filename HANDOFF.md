@@ -8,11 +8,37 @@ for `polish` (the rest of the top ten), after its review and final check, and wh
 8a's offline half, after its review and final check, and when it landed on `main`; and for `next` (8b.7,
 8b.10 and the settings work), after its review and final check, and when it landed on `main`; for `macfix`
 (the two rows the Mac's run at `85b069a` failed), after its review and final check; and for 8a's live half (on
-`8a`), after its review and final check.
+`8a`), after its review and final check; and for `studio` (audio, recording, MIDI files and stems, help), after its
+review and final check.
 Read this first, then `docs/architecture.md` (the contract) and the design for
 whatever you pick up.
 
 **In short**
+- **`studio` is ready to land** (2026-10-18): Linux green at `ad5f111`; macOS owed. It is on branch `studio`, from
+  `main` at `85b069a`, with `main` at `44b104a` (8a's live half and `macfix`) merged in. Not on `main` yet: the
+  lead lands it. It added:
+
+  | You can now | Where |
+  |---|---|
+  | Bring in WAV files | File ▸ Import Audio… (⇧⌘I), or drag them from the Finder onto the window |
+  | Add an empty audio track | + Track ▸ Audio track |
+  | See a clip's waveform; trim it, fade it, change its volume, play it backwards | drag its edges and the small squares at its top; its menu |
+  | Record what you play into a clip, after one bar of clicks | R, or the red Record button after Play; R again stops |
+  | Choose which MIDI keyboards play | Settings (⌘,) ▸ MIDI keyboards |
+  | Export each track as its own file (stems), or the notes as a MIDI file | Export (⇧⌘E): Song, Stems or MIDI; a clip's menu: Export as MIDI… |
+  | Learn the app step by step | Help ▸ Make Your First Song |
+  | See what every button does, and its key | hold the mouse over it |
+  | Read a mistake in the code in plain words, with a fix | the red banner; Details has the rest |
+
+  Not built yet: bringing a MIDI file in from the app (as new tracks), MP3 export, stems of a song that plays plugins,
+  and recording audio. Nothing you hear in an export changed: every render is the same, and the count-in never reaches
+  a file. A review found 12 things: all fixed, each with a test. The first two full checks passed three older tests
+  only on a retry (each read a result a moment too soon): all fixed. One gate timing also failed once, while another
+  track's check timed its gates at the same time. Then `ci/check.sh --gates` passed: every row, nothing passed only on
+  a retry (1,564 Rust tests, 66/66 browser suites, 10 of 10 renders, the 7 gate runs; 37 minutes). Pictures:
+  `~/m2-runs/app-shots/studio-ee2012c/`. What was built and checked: `docs/designs/step8/build-notes-studio.md`; the
+  plan: `studio-plan.md` beside it. Owed: the Mac by-ear steps 61 to 72 (the Finder, a real MIDI keyboard, stems in
+  another app).
 - **8a's live half is done on `8a`** (2026-10-17): Linux green at `21a7a1b`; macOS owed. Not on `main` yet: the
   lead merges it (a merge; `8a` already has `main` at `1cc7382`, `macfix` included). It adds:
 
@@ -185,7 +211,8 @@ whatever you pick up.
 | `origin/sounds` | `916127d` | 22 new std sounds (8 on the polysynth, 4 FM, 10 drums), merged; on `main` since 2026-10-17. |
 | `next` | `1560a19`, then docs only | All on `main` (a fast-forward, 2026-10-17). From `main` at `70f9b61`, with `main` at `8a6d9e1` (8a's offline half) merged in. 8b.7 (heard while dragging: lanes and the tempo), 8b.10 (the metronome, the keyboard piano, a MIDI keyboard through `midir`), no sound device, Settings, undo names, effect bypass, order and the Duck picker, small fixes. Built in four lanes, joined as merge commits. Reviewed (12 findings, all fixed with tests). Linux green at `1560a19` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Branch and worktree deleted. Plan `docs/designs/step8/next-plan.md`; build notes `build-notes-next.md`. |
 | `macfix` | `ac5d8c0`, then docs only | From `main` at `85b069a`. Fixes the two rows the Mac's run at `85b069a` failed: G7f store (`std:gain` skips its `powf` while its dB holds still, the same bits) and `new_songs_go_where_settings_say` (the songs folder by its real path). Reviewed (2 findings, both fixed). Linux green at `ac5d8c0` (`ci/check.sh --gates`, nothing passed only on a retry); macOS owed. Worktree `~/m2-runs/wt/mf` and its `target/` stay until it lands. Build notes `docs/designs/step8/build-notes-macfix.md`. |
-| Mac runs owed | — | `ci/check.sh` ran on `main` at `85b069a`: 11 of 13 rows (`macfix` fixes the two). One more on `main` once `macfix` is on it covers every branch above; then G7f store on the old gain. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 60. Once `8a` is merged: 8a's Mac sweep, one paste (What to do next). |
+| `studio` | `ad5f111`, then docs only | Not on `main` yet: the lead lands it (`main` at `44b104a` is in it, so `main` can fast-forward to it if it hasn't moved). From `main` at `85b069a`. Audio in the app (#18), recording notes (#24) with the count-in (#19) and the MIDI keyboards setting (#31), MIDI files and stems (#36), help in plain words (#11), `m2 import` (#37). Built in four lanes, joined as merge commits. Reviewed (12 findings, all fixed with tests). Linux green at `ad5f111` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Worktree `~/m2-runs/wt/st` and its `target/` stay until it lands. Plan `docs/designs/step8/studio-plan.md`; build notes `build-notes-studio.md`. |
+| Mac runs owed | — | `ci/check.sh` ran on `main` at `85b069a`: 11 of 13 rows (`macfix` fixes the two). One more on `main` once `macfix` is on it covers every branch above; then G7f store on the old gain. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 60, and 61 to 72 once `studio` is on `main`. Once `8a` is merged: 8a's Mac sweep, one paste (What to do next). |
 
 `taste` and `sounds` start at `8aa301e`, before the platform step. Each has a detached worktree in `~/m2-runs/wt/`
 (`taste`, `sounds`); `sounds`' can go once the tracks in flight land. `origin/wip/step7` (the Mac's half-done step 7,
@@ -351,6 +378,9 @@ S, about 3 minutes the first time, and G7f plays longer, about 8 minutes a part)
   the designed set-up" and what to set. The Mac's own real-time code runs its tests for the first time
   (`an_engine_thread_has_the_time_constraint_policy`, `a_worker_joins_and_leaves_the_default_outputs_workgroup`).
   No render moved.
+- `studio`: 1,564 Rust tests on Linux and 7 more browser suites (66/66): `st-audio`, `st-record`, `st-midi`,
+  `st-stems`, `st-tips`, `st-errors` and `st-guide`. `st-record` has a capture server of its own, which plays the
+  count-in into a file. No render moved.
 
 **What must pass:** the first line says `music2 check: PASS`. Every row says PASS (the gates row too, not PART),
 with nothing "passed only on a retry". In the gates part:
@@ -453,6 +483,19 @@ bar, its Ctrl-click, and the sound.
 | 58 | Press ⌘, for Settings. Plug in headphones. Under Sound output, pick them. Then under Buffer size, pick 128. | The sound moves to the headphones and stops: press Space to go on. The Now row says the headphones and 128 samples (2.7 ms). No crackles. |
 | 59 | Unplug the headphones while the song plays. Press Space. Look at Settings. | It plays on the Mac's speakers. Sound output says the headphones "(not connected)". The Now row says "(the output chosen can't be used now)". |
 | 60 | Tell the lead what you saw, heard and felt at 51 to 59. | |
+| | **`studio`**: what only a Mac can show: the Finder, a real MIDI keyboard, and the sound. Start the app with step 39's command, and open **First song**. | |
+| 61 | In the Finder, drag a WAV file (a song or a loop) onto the window, below the tracks, at bar 3. | While you drag, a blue outline and a few words say where it goes ("New audio track · bar 3"). Let go: a new track, named after the file, with its waveform. |
+| 62 | Drag another WAV file onto that new track, at bar 9. Press Space. | It lands on the same track at bar 9. Both play with the song, in time. |
+| 63 | Press Space to stop. Drag the right edge of a clip to the left. Then drag the small square at its top left to the right. Press Space. | The clip gets shorter. It fades in: the sound starts quiet and grows. No clicks. Two ⌘Z put it back. |
+| 64 | Press ⇧⌘I and pick a WAV file. | The Mac's own open window, "Import Audio", shows WAV files. The file lands at the playhead's bar. |
+| 65 | Plug in a MIDI keyboard. Click Bass's name. Press R. | The Record button counts 4, 3, 2, 1, with a click on each beat. Then the song plays. |
+| 66 | Play a few notes, then press R. | Each note shows in Bass's row as you play it. R stops recording, and the song plays on. The notes are one clip, where you played them. ⌘Z takes it back. |
+| 67 | Press Space to stop. Drag across the ruler from bar 1 to bar 3 to loop it. Press R and play until the loop goes round. | The take ends where the loop goes back: only the first time round is kept. The loop plays on. |
+| 68 | Press ⌘, for Settings. Under MIDI keyboards, untick your keyboard. Play a key. Then tick it again. | Unticked, the keyboard plays nothing, and Record would record nothing from it. Ticked, it plays again. |
+| 69 | Press ⇧⌘E. Click **Stems**, then **Export…**. When it is done, click **Show in Finder**. | A new folder in Exports, with one WAV file for each track. Open one in QuickTime Player or GarageBand: it is that track alone. |
+| 70 | Press ⇧⌘E. Click **MIDI**, then **Export…**. Save. Open the file in GarageBand. | The Mac's own save window opens in Exports. In GarageBand the tracks and their notes are there. |
+| 71 | Click **Help**, then **Make Your First Song**. Click **Start from an empty song…**, and follow the steps. | Each step ticks itself when you do it. At the end, the card says where your song was saved. |
+| 72 | Tell the lead what you saw, heard and felt at 61 to 71. | |
 
 After a green run the lead writes here: "macOS: green at <commit> (ci/check.sh on <model>, <date>)", with G7f's
 numbers. If a row fails, the lead fixes it on Linux, checks the mac lint, and asks for one more run. The logs are in
@@ -508,6 +551,7 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
 | `next`: 8b.7, 8b.10, Settings, no sound device, undo names, effect comforts | `1560a19` (Linux checks), then docs only | ran at `85b069a`; owed: the same one more run, then the by-ear steps 51 to 60 (a real MIDI keyboard, the metronome against the beat, switching the output) |
 | `macfix`: G7f store (the gain's fast path) and the songs folder by its real path | `ac5d8c0` (Linux checks), then docs only | owed once it is on `main`: one more `ci/check.sh`, then G7f store once more on the old gain (below) |
 | 8a's live half (live on several cores, a sound that breaks, G12) | `21a7a1b` (Linux checks), then docs only; on `main` once merged | owed: 8a's Mac sweep below, one paste, about 40 minutes. The same `ci/check.sh` covers its Mac tests and G12's minute |
+| `studio`: audio in the app, recording notes, MIDI files and stems, help in plain words | `ad5f111` (Linux checks), then docs only; on `main` once landed | owed: the same one more `ci/check.sh`, then the by-ear steps 61 to 72 (the Finder, a real MIDI keyboard, stems in another app) |
 
 **8a's Mac sweep (for the owner): offline and live, one paste.** Once the lead has merged `8a` into `main`.
 

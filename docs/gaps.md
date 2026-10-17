@@ -44,17 +44,19 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 - Repeat a clip: **Repeat…** in its menu makes 1 to 64 copies one after another, as one undo step.
 - Hear a drag while the song plays: a clip or its edge, an automation point, or notes in Notes play where they are before you let go. Letting go saves it once, as one undo step; Esc puts it back. (An audio clip is heard when you let go.)
 - Turn on the metronome: the **Metronome** button after Loop, K, or Transport → Metronome. While the song plays it clicks each beat, higher on the first beat of a bar. Each song keeps its own setting, and an export never has the click.
-- Play the selected track live. ⌘K (Ctrl+K off the Mac) turns the computer's keys into a piano: A is middle C, the row above has the black keys, and Z and X change the octave; a card shows the keys. A MIDI keyboard plugged in plays it too, as hard as you press, with the sustain pedal, and a mark in the top bar says it is connected. Nothing you play is recorded yet (#24).
+- Play the selected track live. ⌘K (Ctrl+K off the Mac) turns the computer's keys into a piano: A is middle C, the row above has the black keys, and Z and X change the octave; a card shows the keys. A MIDI keyboard plugged in plays it too, as hard as you press, with the sustain pedal, and a mark in the top bar says it is connected. **Settings → MIDI keyboards** turns one off: it then plays and records nothing.
+- Record what you play: R, the **Record** button after Play, or Transport → Record. Stopped, it counts in one bar of clicks (the button says 4, 3, 2, 1), then the song plays and the take starts; playing, it starts at once. The notes show in the track as you play them, from a MIDI keyboard or the keyboard piano. R again, or Space, ends it: it becomes one clip over whole bars, selected, as one undo step ("Undo recording on Bass"). Right-click the button for **Count in first** and **Snap notes to the grid**. While looping, the first time round is kept. While the code doesn't compile, R says to fix it first.
 - Turn an effect off and on, or move it before or after the effect next to it, from its card's ⋯ menu in the Device view; pick what a Duck listens to from its card. Each is one undo step, kept in the code (`bypass: true`).
 - Play and stop like Live: Space stops back where play started, and ⇧Space goes on from where it stopped. Click the ruler, or an empty spot in a lane while stopped, to start somewhere else. Loop with the loop button or C, a drag across the ruler, or ⌘L for the selected clips; the loop is kept for next time. ⌘. (Transport → Stop All Sound) stops every note at once.
 - Choose the sound output and its buffer size in **Settings** (⌘,), see what plays now, and set where new songs go. They are kept for this computer, in `~/.music2/settings.json`. A song opens with no sound device too: it plays silently, the status says "No sound output", and a device plugged in is used within a few seconds.
-- Export the song as a WAV file (the Export button, or File → Export Audio…, ⇧⌘E), then Show in Finder. Files go in `~/Music/music2/Exports` unless you pick another place. It's the same file `m2 render` writes. Quitting during an export asks first.
+- Export (the Export button, or File → Export…, ⇧⌘E) asks what to make: **Song**, one WAV file, the same file `m2 render` writes; **Stems**, each track as its own WAV file, before its volume and pan, in a new folder (not yet for a song that plays plugins); or **MIDI**, the notes as a MIDI file other music apps open, with a fitting General MIDI sound for each part and drums on channel 10. A notes clip's menu has **Export as MIDI…**. Files go in `~/Music/music2/Exports` unless you pick another place in the app's save window; then Show in Finder. Quitting during an export asks first.
 - From the command line (`m2`): make a new song, render a WAV, bounce a track to audio, and make the same edits as the app.
 - Build `music2.app` and move it anywhere: std, the templates and the examples are inside it, so it no longer needs the source folder it was built from. It's signed ad hoc but not notarized, so on another Mac it opens only after **Open Anyway** in System Settings → Privacy & Security (and only on Apple silicon).
 - Play CLAP plugins such as Surge XT, with automation and saved settings. A plugin is added by writing it into a track's code (#32). A song whose plugin isn't installed still plays: only that plugin's node is silent, or passes its audio through.
 - Keep playing when one sound breaks. If a sound fails while the song plays (a bug in it, or it asks for more than the 32 MB a sound may use), only that sound goes silent. The rest plays on, and a message says which sound, on which track, and that Transport → Stop All Sound starts it again. An export never leaves such a sound out: it stops, and names it.
 - Play and export big songs on several cores. Playback uses the fast cores that share a cache (4 on an M1 Pro) as real-time audio threads; where the computer refuses real time (some Linux setups), it plays on one core. An export with nothing playing uses every fast core. Either sounds exactly as on one core. `M2_THREADS`, or `--threads` on `m2 render` and `m2 bounce`, sets how many. A song with CLAP plugins plays on one core for now.
-- Play audio clips with offset, gain, fades, reverse, pitch and warp (written by hand in JSON).
+- Bring in audio: File → Import Audio… (⇧⌘I), or drag WAV files from the Finder onto the window: onto an audio track (at the bar under the pointer), onto another track (a new audio track right after it), or below the tracks (a new audio track for each file, named after it). While you drag, an outline and a few words say where they go. + Track → Audio track adds an empty one. Each file is copied into the song's `assets/` (the same file twice is kept once), and its clip shows its waveform. Drag a clip's edges to trim it and the small squares at its top to fade it; its menu sets its volume, plays it backwards, or removes the fades. Each is one undo step. The same from `m2 import`. The engine also plays pitch and warp, written by hand in JSON.
+- Learn as you go: **Help → Make Your First Song** opens a guide at the top of the side browser, seven steps that tick themselves as you do them. Every button, knob and fader has a tooltip in plain words, with its key. A mistake in the code is said in plain words with a fix, pointing at your own line ("Cutoff wants a frequency (Hz), but gets a level (dB). Write it in Hz, such as hz(800)."); the original message is under Details. [Music basics](music-basics.md) explains the words.
 - Play pop sounds from std: a supersaw, a gliding lead, a pad, a pluck, an 808 sub, a synth bass and strings on one polysynth (`std/synth`), FM keys, bells and metal (`std/fm`), and an 808/909 drum machine whose kit plays kick, snare, clap, hats, toms and more from one lane by General MIDI note, with an open hat cut off by the next hat and a level for each group of drums (`std/drums`). Each has a few named knobs; `synth.custom` and `fm.custom` have every one. One note at a time, a note still held sounds again when the one over it ends, as on a monosynth ([Sounds and effects](../README.md#sounds-and-effects-std)).
 - Hear a song as it exports. std's chorus, phaser and tremolo wobble only while the song plays, and the drums' noise follows the hits, so they sound as in the export when you press Play, however long the song sat first. An oscillator or noise written straight into a track's code, outside a voice, or a plugin, may still run on while stopped. Going back to bar 1 after playing is a jump: the wobble and the drums' noise carry on from where they were, so that play may differ a little from the export.
 
@@ -90,7 +92,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 36 | **MIDI files**: import a `.mid` into a notes lane, and export notes as `.mid`. Also export stems (one file per track) and MP3 or AAC from the app. Stems exist only as `m2 bounce`, one track at a time. | Sharing ideas with other apps and people. | No | medium |
+| 36 | **The rest of MIDI files and export**: bring a MIDI file in as new tracks (File → Import MIDI…, or a drop), with a question when its tempo differs from the song's; MP3 or AAC export; stems of a song that plays plugins. (Saving the song or a clip as a MIDI file, stems, and the Export dialog work: see [What works today](#what-works-today). The server can already bring a one-part MIDI file into a notes lane, but nothing in the app calls it yet.) | Sharing ideas with other apps and people. | No | medium |
 
 ### Tracks and instruments
 
@@ -125,7 +127,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
 | 5 | **Fast seeking and fast edits** in a full-length song. A persistent live engine where a seek is a transport event, never a replay, and a notes edit swaps only that lane's data (step 3 of the [order of work](architecture.md#order-of-work); [RENDER-8](architecture.md#live-engine-and-its-two-clocks), [RENDER-9](architecture.md#seek-and-loop)). | Today a seek replays the song from 0, and every notes, cable, effect or code edit rebuilds the player at the playhead the same way. The example renders about 30 times faster than real time, so late in a busy 3-minute song each seek or edit could stall for several seconds. | Yes | large |
-| 19 | **The rest of the metronome**: a count-in (it comes with recording, #24), and the click's level and sound. (The click, with its button, is done: see [What works today](#what-works-today).) | A count-in helps you start playing in time. | No | small |
+| 19 | **The click's level and sound.** (The click, its button and the count-in before recording are done: see [What works today](#what-works-today).) | Some songs need a quieter or a different click. | No | small |
 
 ### Timeline and clips
 
@@ -151,13 +153,13 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 18 | **Audio in the app**: import a WAV from a menu, or drag it onto a bar; add an audio track; show waveforms; move, trim, fade and set the gain of audio clips. The engine already plays offset, gain, fades, reverse, pitch and warp. | Vocals, loops and samples. Today this means copying files into `assets/` and writing clip JSON by hand. | Yes | large |
+| 18 | **The rest of audio in the app**: stretch an imported file to the song's tempo (warp: the engine has it, but there's no way to place its markers), join audio clips, clear out audio files no clip uses, import MP3, AIFF or FLAC, and play very long files from disk. (Importing WAV files, drops, audio tracks, waveforms, trims, fades, volume and reverse work: see [What works today](#what-works-today).) | A loop at another tempo has to be stretched by hand today, and every file stays in `assets/` until you delete it. | Yes | medium |
 
 ### Recording and MIDI
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 24 | **Record what you play** into a notes clip, with a count-in and quantize; pick which MIDI keyboard plays (today every one does), pitch bend and the mod wheel; and the computer keyboard's velocity and sustain. (Playing the selected track live from a MIDI keyboard or the computer's keys works: see [What works today](#what-works-today).) | Most people write melodies by playing them. | No | large |
+| 24 | **The rest of recording notes**: pitch bend and the mod wheel; recording over a clip into it (overdub), and one clip for each time round a loop; the computer keyboard's velocity and sustain. (Recording from a MIDI keyboard or the computer's keys, with a count-in and snap, and choosing which keyboards play work: see [What works today](#what-works-today).) | Expressive parts use the pitch wheel; loop recording builds a part in layers. | No | medium |
 | 25 | **Record audio** (vocals, guitar) from an input into an audio clip, and hear yourself while recording. | Vocals are central to pop. It needs an input stream, a low-latency path for hearing yourself, and the audio clip work (#18). | No | large |
 
 ### Effects and plugins
@@ -179,13 +181,13 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 31 | **The rest of Settings**: an input device (with #25), and view settings that hold for every song (today zoom, grids and the audition toggle are kept per song). (Choosing the output and buffer size, seeing what plays, and where new songs go work: see [What works today](#what-works-today).) The sample rate stays the song's (`music2.toml`, [RENDER-31](architecture.md#sample-rate)). | Recording needs an input; most people want one zoom for every song. | Partly (it showed the device and the folders, with nothing to choose) | small |
+| 31 | **The rest of Settings**: an input device (with #25), and view settings that hold for every song (today zoom, grids and the audition toggle are kept per song). (Choosing the output and buffer size, seeing what plays, where new songs go, and which MIDI keyboards play work: see [What works today](#what-works-today).) The sample rate stays the song's (`music2.toml`, [RENDER-31](architecture.md#sample-rate)). | Recording needs an input; most people want one zoom for every song. | Partly (it showed the device and the folders, with nothing to choose) | small |
 
 ### Help
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 11 | **Plain-language help**: a "make your first song" guide in the app, tooltips on every control, and friendlier error messages. Today a unit mistake reads like ``input `cutoff` expects control<hz>, got control<db>``, and it points at `std/src/filter.ts` rather than at your own line. | Many people who open music2 are new to making music. [Music basics](music-basics.md) and the README's first sections are a start; the rest of the docs are technical. | Yes | medium |
+| 11 | **The rest of plain-language help**: a missing plugin still reads technically (Loose ends), and the docs past [Music basics](music-basics.md) and the README's first sections are technical. (The first-song guide, a tooltip on every control, and code mistakes in plain words work: see [What works today](#what-works-today).) | Many people who open music2 are new to making music. | Yes | small |
 
 ### Code editor
 
@@ -203,7 +205,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 37 | **CLI basics**: `m2 import <wav>`, and `m2` commands for what the app's polish added: change instrument, markers, the song's key, a track's ID, Save As. Agents can send these as JSON to the app's routes, or as a Tx. (`m2 tempo`, `meter`, `title` and `add-track` work.) | Scripts and agents need the same basics as the app. Each is small once the matching session edit exists. | Yes (in `music2-cli`) | small |
+| 37 | **CLI basics**: `m2` commands for what the app's polish added: change instrument, markers, the song's key, a track's ID, Save As. Agents can send these as JSON to the app's routes, or as a Tx. (`m2 import`, `tempo`, `meter`, `title` and `add-track` work.) | Scripts and agents need the same basics as the app. Each is small once the matching session edit exists. | Yes (in `music2-cli`) | small |
 | 38 | **A self-describing API**: every `/api/graph` operation listed with a JSON Schema, a short summary of the song, and MCP. (Export over HTTP is there: `POST /api/graph/export`; so are checked edits of any files as one undo step: `POST /api/tx/check` and `/api/tx/commit`.) | The old command API let Claude Code drive the app. The new routes work, but an agent has to read the README or the source code to learn them, and a Tx's JSON by the [architecture contract](architecture.md#the-two-write-primitives). | Yes | medium |
 
 ## Never in either version
@@ -221,7 +223,9 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **The browser suites** live in `e2e/` (puppeteer, with its own `package.json`), rebuilt after a reboot wiped their old scratch folder.
 - **The dock and the browser panel start over at each launch of the app** (which view the dock shows, and its height). They are kept in the browser's storage, which starts empty since the app's page gets a new address each time. Every other view setting is kept per song in `.music2/view.json`.
 - **Renaming a song's folder starts Undo over**: the song closes and opens again from the new folder (Rename Song… says so). Renaming only the name is one undo step.
-- **Checks owed on a Mac**: a trackpad pinch to zoom, Open Recent in the menu bar, reopening at launch, ⇧⌘S, and a Ctrl-click on a marker (a right-click there); a real MIDI keyboard (plug, play, the pedal, unplug), the metronome against the beat, and switching the sound output in Settings. They are checked on Linux and in the browser suites, with notes posted as a keyboard would send them (see HANDOFF).
+- **Checks owed on a Mac**: a trackpad pinch to zoom, Open Recent in the menu bar, reopening at launch, ⇧⌘S, and a Ctrl-click on a marker (a right-click there); a real MIDI keyboard (plug, play, the pedal, unplug, and recording from it), the metronome and the count-in against the beat, switching the sound output in Settings; dropping files from the Finder, the Mac's own open and save windows (Import Audio, Export MIDI), and stems opened in another app. They are checked on Linux and in the browser suites, with notes posted as a keyboard would send them (see HANDOFF).
+- **A recording waits while the code doesn't compile.** A take that ends then is kept, and written once the code compiles; closing the song before that loses it (a message says so).
+- **Dropping a MIDI file** says "music2 opens WAV files": bringing a MIDI file in from the app comes with #36.
 - **A nudged clip is heard once it lands** (← →), and so is a dragged audio clip (it needs renders); a dragged notes or automation clip is heard while it moves.
 - **A tempo drag in a song with an audio clip** is heard only when you let go: the clip's audio is timed in the tempo before the drag. Its tooltip says so.
 - **The output list on Linux** shows each card once, by its name, from the device a person means (the sound server's, else the card's shared one). An output that won't open plays on the default, and Settings says "the output chosen can't be used now".
@@ -234,12 +238,12 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 |---|---|
 | New Song, Open and Save of `.m2song` files | A song is now a folder, and every change is written at once. New Song… is back (File → New Song…, ⌘N) and makes a song folder from a template. Old `.m2song` files can't be opened. Recent songs and Save As are back (File → Open Recent, File → Save As…, ⇧⌘S). |
 | The Song Library | Back as the recent list on the start screen and File → Open Recent. A picture of each song is #12 |
-| Import Audio | Audio in the app (#18) |
-| Export as WAV | Back as Export Audio (File → Export Audio…, ⇧⌘E) |
-| Settings | Back: Settings (⌘,) chooses the sound output and its buffer size, and the songs folder. An input and view settings for every song are #31 |
+| Import Audio | Back: File → Import Audio… (⇧⌘I) and dropping WAV files. Warp and other file types are #18 |
+| Export as WAV | Back: File → Export… (⇧⌘E): the song, stems or MIDI |
+| Settings | Back: Settings (⌘,) chooses the sound output and its buffer size, the songs folder, and which MIDI keyboards play. An input and view settings for every song are #31 |
 | The Track inspector (volume, pan, output, sends, effects, sidechain) | Volume and pan: back in the Mix view. Effects on and off, and their order: back on the effect cards. The sidechain: back, as a Duck's "Listens to". Output and sends: sends and buses (#27) |
 | A level meter on each track | Back: a meter in every track header, on the Song row and on every Mix strip. Meters after the fader and loudness are #20 |
-| The Sounds panel | Audio in the app (#18), the sampler (#22) |
+| The Sounds panel | Audio files: back (File → Import Audio…, drops). The sampler is #22 |
 | Drawing automation | Back: drawn on the timeline, a frequency on a log scale. Curves are #14 |
 | Loop | Back: the loop button or C, a drag across the ruler, or ⌘L for the selected clips |
 | Hearing notes as you draw them | Back: audition in Notes |
