@@ -90,19 +90,21 @@ fn ghost_reads(op: &FOp, e: Edge) -> Option<PortRef> {
 /// set on a fade's side; each node goes right after its source in `w.order`.
 pub(crate) fn place(flat: &Flat, old: Option<&Flat>, w: &mut Wiring, fades: usize, base: usize) -> Placed {
     let init = |module: &str| if flat.muted.iter().any(|m| m == module) { 0.0 } else { 1.0 };
+    // The output's fade, when it changed: decided before the output reads an overlay.
+    let out_fade = (w.out != flat.out).then_some(w.out.node);
     let mut nodes: Vec<Node> = vec![];
     // The new graph's sites: the consumer reads its node, or a fade on that input reads it new.
     for (k, s) in flat.overlays.iter().enumerate() {
         let ov = base + nodes.len();
         nodes.push(Node { src: s.src, channels: s.channels, value: init(&s.module), follows: Some(k) });
         let to = PortRef { node: ov, port: 0 };
-        match edge(s.consumer) {
-            None if w.out == flat.out => w.out = to,
-            None => {
-                let f = &mut w.fades[w.out.node - fades];
+        match (edge(s.consumer), out_fade) {
+            (None, None) => w.out = to,
+            (None, Some(f)) => {
+                let f = &mut w.fades[f - fades];
                 f.new = reading(&f.new, to);
             }
-            Some((c, e)) => match w.rewire.iter().find(|r| r.0 == c && r.1 == e) {
+            (Some((c, e)), _) => match w.rewire.iter().find(|r| r.0 == c && r.1 == e) {
                 Some(&(_, _, f)) => {
                     let f = &mut w.fades[f - fades];
                     f.new = reading(&f.new, to);
@@ -125,8 +127,8 @@ pub(crate) fn place(flat: &Flat, old: Option<&Flat>, w: &mut Wiring, fades: usiz
         // Fades of changed edges, on continuing nodes and on the output.
         let mut changed: Vec<(Consumer, usize)> =
             w.rewire.iter().filter(|r| (fades..fades + w.fades.len()).contains(&r.2)).filter_map(|&(i, e, f)| Some((consumer(w.same[i]?, e), f))).collect();
-        if w.out != flat.out {
-            changed.push((Consumer::Out, w.out.node));
+        if let Some(f) = out_fade {
+            changed.push((Consumer::Out, f));
         }
         for (c, f) in changed {
             let Some(s) = was(c) else { continue };

@@ -163,6 +163,21 @@ fn an_edit_while_muted_keeps_the_track_silent() {
             kicked(json!([scale("m", "k", "x"), c("x", 0.5)]), "m", false),
             kicked(json!([scale("fx", "k", "y"), c("y", 0.5), scale("m", "fx", "x"), c("x", 0.5)]), "m", false),
         ),
+        // The song's output reads the kick, and only the kick's pitch changes: its node's input fades,
+        // and the output's overlay stays where it was.
+        ("output", kicked(json!([]), "k", false), {
+            let mut ir = kicked(json!([]), "k", false);
+            ir.modules[0].nodes[0] = serde_json::from_value(json!({"id": "f", "op": "const", "value": 220, "unit": "hz"})).unwrap();
+            ir
+        }),
+        // The song's output reads the kick, whose export changes: the output's fade reads it on both sides.
+        ("export", kicked(json!([]), "k", false), {
+            let mut ir = kicked(json!([]), "k", false);
+            ir.modules[0].nodes.push(serde_json::from_value(scale("g", "o", "h")).unwrap());
+            ir.modules[0].nodes.push(serde_json::from_value(c("h", 0.5)).unwrap());
+            ir.modules[0].exports.insert("out".into(), "g".into());
+            ir
+        }),
     ];
     for (what, before, after) in cases {
         for muted in [true, false] {
