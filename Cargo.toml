@@ -20,6 +20,7 @@ m2-session = { path = "core/session" }
 m2-plugins = { path = "core/plugins" }
 m2-play = { path = "core/play" }
 m2-os = { path = "core/os" }
+m2-pool = { path = "core/pool" }
 
 anyhow = "1"
 serde = { version = "1", features = ["derive", "rc"] }
@@ -66,4 +67,7 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev.package.m2-song]
+opt-level = 3
+
+[profile.dev.package.m2-pool]
 opt-level = 3
