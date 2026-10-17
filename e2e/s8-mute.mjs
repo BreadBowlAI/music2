@@ -1,6 +1,6 @@
 // 8b.4 Mute and solo in the app, and 8b.8's load (design-8b §6.6, §6.7, taste.md §2.9, §3.3, §3.4;
 // the 8b-ui plan's U1, U2, U3 and U11): M and S in every track header, placed from its right edge; a click, ⌥-click on S, a
-// drag across several, three quick clicks; the M and S keys; the mutes pill "2 muted · 1 solo" and
+// drag across several, three quick clicks; Return on a focused M; the M and S keys; the mutes pill "2 muted · 1 solo" and
 // its list, with each track's ×, "Still drives Duck" and Clear all; the pill clear of the song's
 // name and the status pill at 1100 to 1280 px; nothing written but .music2/overlays.json; mute in
 // the song from the header menu (the option written, struck through and hatched, one undo step,
@@ -189,6 +189,20 @@ check(await settled([], ["hats"]), "quick clicks on three Ms and an S land as cl
 check((await pill()) === "1 solo", `the pill says “${await pill()}”`);
 
 // ---------------------------------------------------------------- the keys
+
+// Tab reaches M and S. Return on a focused M presses it, and only it: the start point stays.
+// (Space stays the transport everywhere, taste.md §2.11.)
+await post("/seek", { beat: 8 });
+await until(async () => Math.abs((await api("/status")).body.beat - 8) < 0.01);
+await page.$eval('[data-mute="kick"]', (e) => e.focus());
+await page.keyboard.press("Enter");
+check(await settled(["kick"], ["hats"]), "Return on a focused M mutes Kick");
+await sleep(300);
+check(Math.abs((await api("/status")).body.beat - 8) < 0.01, `and the start point stays at beat 8: ${(await api("/status")).body.beat}`);
+await page.keyboard.press("Enter");
+check(await settled([], ["hats"]), "Return again unmutes it");
+await page.$eval('[data-mute="kick"]', (e) => e.blur());
+await post("/seek", { beat: 0 });
 
 await select("bass");
 await key("m");

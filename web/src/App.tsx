@@ -117,6 +117,9 @@ export default function App() {
       // A key a field or a panel already took (Enter that adds an effect) isn't a shortcut
       // too, even if that field is gone or blurred by now.
       if (editing() || field(e.target) || e.defaultPrevented) return;
+      // Return on a button Tab reached presses that button, and only it: it doesn't go to the
+      // start too. Space stays the transport everywhere (taste.md §2.11).
+      if (e.key === "Enter" && e.target instanceof HTMLButtonElement) return;
       const id = key(e);
       if (!id) return;
       if (id === "play" || id === "continue" || id.startsWith("view_") || id === "shortcuts") e.preventDefault();

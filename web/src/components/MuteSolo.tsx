@@ -71,7 +71,7 @@ export default function MuteSolo({ module, name }: { module: string; name: strin
     window.addEventListener("pointerup", up);
     window.addEventListener("pointercancel", up);
   };
-  /** A click from the keyboard (Tab, then Space or Return): the pointer's are handled on press. */
+  /** A click from the keyboard (Tab, then Return; Space stays the transport): the pointer's are handled on press. */
   const keyed = (kind: Kind) => (e: React.MouseEvent<HTMLButtonElement>) => {
     if (e.detail !== 0 || !connected) return;
     if (kind === "solo") return toggleSolo(module);
