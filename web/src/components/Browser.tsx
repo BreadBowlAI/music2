@@ -181,7 +181,7 @@ export default function Browser({ graph, module }: { graph: GraphState; module: 
           e.stopPropagation();
         }}
       >
-        {/* Instruments by their groups (Drums, Instruments), each a section as Effects is: no group in a group. */}
+        {/* Instruments by their groups (Drums, Instruments, Sound design), each a section as Effects is: no group in a group. */}
         {playable.map((g, k) => (
           <div key={g.name} role="group" aria-label={g.name} data-browser-category={`instruments:${g.name}`} className={clsx(k > 0 && "mt-2")}>
             <button
