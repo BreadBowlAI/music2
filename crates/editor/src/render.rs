@@ -79,16 +79,16 @@ impl Threads {
     /// A count of threads, 1 to 64, as `--threads` and `M2_THREADS` give it.
     pub fn parse(text: &str) -> Result<Threads> {
         match text.trim().parse::<usize>() {
-            Ok(n @ 1..=64) => Ok(Threads::Exactly(n)),
+            Ok(n @ 1..=Pool::MAX_THREADS) => Ok(Threads::Exactly(n)),
             _ => bail!("say how many threads a render may use: a number from 1 to 64, not `{}`", text.trim()),
         }
     }
 
-    /// How many threads this is on a machine with `cores`.
+    /// How many threads this is on a machine with `cores`: never more than a pool has.
     pub fn count(self, cores: &Cores) -> usize {
         match self {
-            Threads::Alone => cores.per_cache.max(1),
-            Threads::Beside => cores.slow.max(1),
+            Threads::Alone => cores.per_cache.clamp(1, Pool::MAX_THREADS),
+            Threads::Beside => cores.slow.clamp(1, Pool::MAX_THREADS),
             Threads::Exactly(n) => n,
         }
     }
@@ -963,7 +963,8 @@ mod tests {
     }
 
     // 8a: `M2_THREADS` and `--threads` take 1 to 64, and refuse anything else in plain words; the
-    // defaults count one cache's fast cores alone, and the slow ones (one at least) beside playback.
+    // defaults count one cache's fast cores alone, and the slow ones (one at least) beside playback,
+    // 64 at most.
     #[test]
     fn m2_threads_is_read_and_nonsense_refused() {
         assert_eq!(Threads::parse("4").unwrap(), Threads::Exactly(4));
@@ -976,5 +977,8 @@ mod tests {
         let mac = Cores { fast: 8, slow: 2, per_cache: 4 };
         assert_eq!([Threads::Alone, Threads::Beside, Threads::Exactly(3)].map(|t| t.count(&server)), [8, 1, 3]);
         assert_eq!([Threads::Alone, Threads::Beside].map(|t| t.count(&mac)), [4, 2]);
+        // More cores behind one cache than a pool has threads: as many as it has, never one.
+        let big = Cores { fast: 96, slow: 80, per_cache: 72 };
+        assert_eq!([Threads::Alone, Threads::Beside].map(|t| t.count(&big)), [64, 64]);
     }
 }

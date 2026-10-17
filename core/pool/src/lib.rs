@@ -64,11 +64,14 @@ pub struct Pool {
 }
 
 impl Pool {
+    /// The most threads a pool has, the caller included.
+    pub const MAX_THREADS: usize = 64;
+
     /// A pool for `threads` threads in all, the caller of each run included: `threads − 1`
-    /// workers, named `m2-pool-<k>`, with 2 MiB stacks. `threads` is 1 to 64. Fails if the OS
-    /// won't start a thread; then none is left running.
+    /// workers, named `m2-pool-<k>`, with 2 MiB stacks. `threads` is 1 to [`Pool::MAX_THREADS`].
+    /// Fails if the OS won't start a thread; then none is left running.
     pub fn new(threads: usize, setup: Setup) -> io::Result<(Pool, Runner)> {
-        if !(1..=64).contains(&threads) {
+        if !(1..=Pool::MAX_THREADS).contains(&threads) {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("a pool has 1 to 64 threads, not {threads}")));
         }
         let workers = (1..threads).map(|_| run::Worker::new()).collect();
