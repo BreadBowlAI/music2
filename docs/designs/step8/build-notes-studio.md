@@ -252,6 +252,37 @@ fades, volume, reverse, remove fades.
 
 **Contract**: WRITE-10 rows: audio clip settings (`Gesture::Audio`: volume, fades, direction), one Tx each. TL rows:
 an audio clip's edges stop at its file, mirrored for a reversed clip.
+### A4. `m2 import`
+
+**In short**
+
+| What | Now |
+|---|---|
+| `m2 import <song> <file.wav>… --track ID [--at BAR]` | Brings WAV files into the song from the terminal, as File ▸ Import Audio… does: onto a track's audio lane, one after another from that bar. One undo takes it back |
+| While the app has the song open | It stops before copying anything and names the app, as every command that writes does |
+
+**What changed**
+
+- `apps/m2/src/main.rs` (A's arm and usage line): `import`: `session` (the lock), `--at` by `clips::position`
+  (bar.beat.sixteenth, from 1), `--track` names a track with an audio lane, then `import::audio` for each file and one
+  `import::place`. A track to make (no `--track`) waits for P0's `add_tracks`: it says to name one.
+- `apps/m2/tests/lock.rs`: WRITE-18's list gains `import`.
+
+**Tests**: `apps/m2/tests/import.rs`: `import_places_a_clip_and_takes_the_lock` (two files at bar 9 one after another,
+the copy byte for byte, no `--track` and a text file refused in words, the lock held: refused, nothing copied).
+`lock.rs`' list with `import`.
+
+**Red first**: with the arm taken out, `m2 import` prints the usage: `panicked at apps/m2/tests/import.rs:50:5: m2:
+build, check and render music2 projects`.
+
+**Checks**: clippy and the mac lint of `m2`; `cargo test -p m2` (every test file green).
+
+**Left**: `m2 import` onto a new audio track (with P0's `add_tracks`).
+
+**For gaps.md**: #37's first item: `m2 import` (onto a track's audio lane). `m2 bounce --place` keeps its gap (D1: it
+names the asset before the session takes it in): one line.
+
+**Contract**: WRITE-18's list of writers gains `m2 import`.
 
 ## Lane B
 
