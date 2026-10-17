@@ -457,6 +457,7 @@ struct LaneReq {
     module: String,
     lane: String,
     /// Every clip the lane is to have: pitches as numbers or names, notes relative to their clip.
+    #[serde(deserialize_with = "crate::routes_8b::shown_clips")]
     clips: Vec<m2_song::NoteClip>,
 }
 

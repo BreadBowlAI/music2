@@ -404,7 +404,7 @@ The code stays the source of truth; the app edits it for you, one small checked 
 - While the code doesn't compile, the last working version keeps playing and the knobs are locked.
 - Cables inside one file, and adding or removing effects, also work. Cables between tracks, and adding or deleting other boxes, don't yet.
 - Renaming a track writes, changes or takes out the `name` in its `track()` call (a name equal to the key takes it out, since the label defaults to the key). A name written as a variable is left alone: the app says to change it there.
-- Automating a knob writes `lane.control("<key>", "<unit>", <the number as written>)` where the number was, adds `lane` to the track function's parameters when it isn't there (`() =>` becomes `({ lane }) =>`), and makes the empty lane file `data/<track>/<key>.json`. The key comes from the knob's name, such as `hats-pan`.
+- Automating a knob writes `lane.control("<key>", "<unit>", <the number as written>)` where the number was, adds `lane` to the track function's parameters when it isn't there (`() =>` becomes `({ lane }) =>`), and makes the empty lane file `data/<track>/<key>.json`. The key comes from the control's name (`decay`, or `hats-pan` for a mixer channel's), with the call's name in front only when the track has that key already (`pad-decay`); `{ name: … }` is written only when the key, read as words, isn't the control's label.
 
 ## Sounds and effects (std)
 

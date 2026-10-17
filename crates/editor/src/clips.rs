@@ -276,11 +276,167 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
                 }
             }
         }
-        Gesture::Split { .. } | Gesture::Join { .. } | Gesture::Notes { .. } | Gesture::Points { .. } | Gesture::Quantize { .. } => {
-            return Err(EditError::Rejected("not built yet".into()));
+        Gesture::Split { clips, at } => {
+            finite("the split", *at)?;
+            let mut split = false;
+            for (lane, i) in w.resolve_all(clips)? {
+                let l = w.lanes.get_mut(&lane).expect("resolved");
+                let c = &l.was[i];
+                if !(c.start() < *at && *at < c.end()) {
+                    continue;
+                }
+                let (first, second) = c.split(*at, rev.compiled.data.tempo())?;
+                l.keep[i] = Some(first);
+                l.added.push((second, true));
+                split = true;
+            }
+            if !split {
+                return Err(EditError::Rejected(format!("No clip picked crosses {}, so there is nothing to split.", crate::notes::place(arr, *at))));
+            }
+        }
+        Gesture::Join { clips } => {
+            let refs = w.resolve_all(clips)?;
+            let lane = &refs[0].0;
+            if refs.iter().any(|(l, _)| l != lane) {
+                return Err(EditError::Rejected("Clips join only within one lane.".into()));
+            }
+            if refs.len() < 2 {
+                return Err(EditError::Rejected("Pick two clips or more to join.".into()));
+            }
+            let l = w.lanes.get_mut(lane).expect("resolved");
+            let mut picked: Vec<usize> = refs.iter().map(|(_, i)| *i).collect();
+            // The earliest keeps its id: by start, then the lane's order.
+            picked.sort_by(|a, b| l.was[*a].start().total_cmp(&l.was[*b].start()).then(a.cmp(b)));
+            let notes: Vec<&NoteClip> = picked
+                .iter()
+                .map(|i| match &l.was[*i] {
+                    Clip::Notes(c) => Ok(c),
+                    Clip::Control(_) => Err("Automation clips can't be joined: the lane's fallback would stop playing in their gaps."),
+                    Clip::Audio(_) => Err("Audio clips can't be joined yet: that needs a render of them as one sound."),
+                })
+                .collect::<Result<_, _>>()
+                .map_err(|why| EditError::Rejected(why.into()))?;
+            let joined = joined(&notes);
+            for i in &picked[1..] {
+                l.keep[*i] = None;
+            }
+            l.keep[picked[0]] = Some(Clip::Notes(joined));
+        }
+        Gesture::Notes { clip, notes, length } => {
+            notes_fit(notes)?;
+            if let Some(length) = length {
+                lasts(*length)?;
+            }
+            let (lane, i) = w.resolve(clip)?;
+            let l = w.lanes.get_mut(&lane).expect("resolved");
+            let Clip::Notes(mut c) = l.was[i].clone() else {
+                return Err(EditError::Rejected("Only a notes clip has notes to edit.".into()));
+            };
+            c.notes = notes.clone();
+            c.length = length.unwrap_or(c.length);
+            l.keep[i] = Some(Clip::Notes(c));
+        }
+        Gesture::Points { clip, points } => {
+            if points.iter().any(|(b, v)| !b.is_finite() || !v.is_finite()) {
+                return Err(EditError::Rejected("Each point is a beat and a value, both numbers.".into()));
+            }
+            let (lane, i) = w.resolve(clip)?;
+            let l = w.lanes.get_mut(&lane).expect("resolved");
+            let Clip::Control(mut c) = l.was[i].clone() else {
+                return Err(EditError::Rejected("Only an automation clip has points to draw.".into()));
+            };
+            c.points = points.clone();
+            // Stable: two points at one beat are a step, in the order drawn.
+            c.points.sort_by(|a, b| a.0.total_cmp(&b.0));
+            l.keep[i] = Some(Clip::Control(c));
+        }
+        Gesture::Quantize { clips, notes, grid, ends } => {
+            if !(grid.is_finite() && *grid > 0.0) {
+                return Err(EditError::Rejected("The grid is a number of beats above 0, such as 0.25 for sixteenths.".into()));
+            }
+            let refs = w.resolve_all(clips)?;
+            if notes.is_some() && refs.len() > 1 {
+                return Err(EditError::Rejected("Pick notes in one clip, or whole clips.".into()));
+            }
+            for (lane, i) in refs {
+                let l = w.lanes.get_mut(&lane).expect("resolved");
+                let Clip::Notes(mut c) = l.was[i].clone() else {
+                    return Err(EditError::Rejected("Only notes can be quantized.".into()));
+                };
+                let picked: Vec<usize> = match notes {
+                    Some(n) => n.iter().map(|&k| k as usize).collect(),
+                    None => (0..c.notes.len()).collect(),
+                };
+                if let Some(k) = picked.iter().find(|k| **k >= c.notes.len()) {
+                    return Err(EditError::NotFound(format!("The clip has {} notes, so it has no note {}.", c.notes.len(), k + 1)));
+                }
+                for k in picked {
+                    quantized(&mut c.notes[k], c.start, *grid, *ends);
+                }
+                l.keep[i] = Some(Clip::Notes(c));
+            }
         }
     }
     Ok(w.finish(mint))
+}
+
+/// Notes as the lane format holds them: each a pitch, a start, a length above 0 and a velocity of 0
+/// or more.
+fn notes_fit(notes: &[Note]) -> Result<(), EditError> {
+    match notes.iter().find(|n| ![n.pitch, n.start, n.length, n.velocity].iter().all(|x| x.is_finite()) || n.length <= 0.0 || n.velocity < 0.0) {
+        Some(n) => Err(EditError::Rejected(format!("A note needs a pitch, a start, a length above 0 and a velocity of 0 or more, not {n:?}."))),
+        None => Ok(()),
+    }
+}
+
+/// `x` on the grid of `grid` beats from the song's start, as a place in a clip that starts at
+/// `start`: exact multiples when the clip starts on the grid.
+fn on_grid(x: f64, start: f64, grid: f64) -> f64 {
+    let line = ((start + x) / grid).round();
+    let k = (start / grid).round();
+    match (k * grid - start).abs() < 1e-9 {
+        true => (line - k) * grid,
+        false => line * grid - start,
+    }
+}
+
+/// Note `n` of a clip starting at `start`, its start (and end, with `ends`) on the nearest line of
+/// `grid`. An end that would meet its start lands a line later.
+fn quantized(n: &mut Note, start: f64, grid: f64, ends: bool) {
+    let end = n.start + n.length;
+    n.start = on_grid(n.start, start, grid);
+    if ends {
+        let mut e = on_grid(end, start, grid);
+        if e <= n.start {
+            e = n.start + grid;
+        }
+        n.length = e - n.start;
+    }
+}
+
+/// Notes clips of one lane as one clip, from the earliest start to the latest end, with the first's
+/// id (it is the earliest). Every note keeps its place in time. A note whose sound would change
+/// (part of it hidden by its clip's edge, now inside) is cut to what played, and dropped when
+/// nothing of it played; a note that played whole, or stays as hidden as it was, is kept whole.
+fn joined(clips: &[&NoteClip]) -> NoteClip {
+    let start = clips.iter().map(|c| c.start).fold(f64::INFINITY, f64::min);
+    let end = clips.iter().map(|c| c.start + c.length).fold(f64::NEG_INFINITY, f64::max);
+    let mut notes = vec![];
+    for c in clips {
+        for n in &c.notes {
+            let (a, z) = (c.start + n.start, c.start + n.start + n.length);
+            // What played, and what would play in the joined clip, in song time.
+            let was = (a.max(c.start), z.min(c.start + c.length));
+            let now = (a.max(start), z.min(end));
+            let heard = |(x, y): (f64, f64)| (y > x).then_some((x, y));
+            match (heard(was), heard(now)) {
+                (w, n2) if w == n2 => notes.push(Note { start: a - start, ..n.clone() }),
+                (Some((x, y)), _) => notes.push(Note { start: x - start, length: y - x, ..n.clone() }),
+                (None, _) => {}
+            }
+        }
+    }
+    NoteClip { id: clips[0].id.clone(), other_id: None, start, length: end - start, notes }
 }
 
 /// A clip of any kind, as the lane format holds it.
@@ -382,9 +538,83 @@ impl Clip {
         Ok(())
     }
 
+    /// The clip cut at song beat `at`, inside it: the first part keeps the id and ends there; the
+    /// second, with no id, starts there. Notes that cross are shortened to end at the cut (as
+    /// Live does); a note at or after it goes to the second part. Automation takes the value at
+    /// the cut as the first part's last point and the second's first, so the curve plays on. An
+    /// audio clip's second part starts later in its asset; the first keeps the fade in, the
+    /// second the fade out.
+    fn split(&self, at: f64, tempo: &m2_song::TempoMap) -> Result<(Clip, Clip), EditError> {
+        let cut = at - self.start();
+        let (mut first, mut second) = (self.clone(), self.clone());
+        first.set_length(cut);
+        second.set_start(at);
+        second.set_length(self.length() - cut);
+        second.set_id(None);
+        match (&mut first, &mut second) {
+            (Clip::Notes(a), Clip::Notes(b)) => {
+                a.notes.retain(|n| n.start < cut);
+                for n in &mut a.notes {
+                    n.length = n.length.min(cut - n.start);
+                }
+                b.notes.retain(|n| n.start >= cut);
+                b.notes.iter_mut().for_each(|n| n.start -= cut);
+            }
+            (Clip::Control(a), Clip::Control(b)) => {
+                let (left, right) = (value_before(&a.points, cut), value_at(&a.points, cut));
+                let before: Vec<(f64, f64)> = a.points.iter().copied().filter(|p| p.0 < cut).collect();
+                let after: Vec<(f64, f64)> = a.points.iter().filter(|p| p.0 > cut).map(|p| (p.0 - cut, p.1)).collect();
+                if let (Some(l), Some(r)) = (left, right) {
+                    a.points = before.into_iter().chain([(cut, l)]).collect();
+                    b.points = [(0.0, r)].into_iter().chain(after).collect();
+                }
+            }
+            (Clip::Audio(a), Clip::Audio(b)) => {
+                audio_edge(a, "split")?;
+                if a.warp.is_empty() {
+                    b.offset = a.offset + tempo.seconds_at(at) - tempo.seconds_at(a.start);
+                } else {
+                    b.warp.iter_mut().for_each(|m| m.1 -= cut);
+                }
+                a.fade_out = 0.0;
+                b.fade_in = 0.0;
+            }
+            _ => unreachable!("both parts are this clip"),
+        }
+        Ok((first, second))
+    }
+
     /// Its line in the canonical form, as `kind` writes it.
     fn line(&self, kind: &LaneKind) -> String {
         lane_data(kind, vec![self.clone()]).clip_lines().remove(0).1
+    }
+}
+
+/// What automation `points` play at `t`, beats from the clip's start, as a control lane reads
+/// them: linear between points, held flat before the first and after the last; of points at one
+/// beat, the last. None with no points (the lane's fallback plays).
+fn value_at(points: &[(f64, f64)], t: f64) -> Option<f64> {
+    let last = points.last()?;
+    Some(match points.iter().position(|(b, _)| *b > t) {
+        None => last.1,
+        Some(0) => points[0].1,
+        Some(i) => {
+            let ((b0, v0), (b1, v1)) = (points[i - 1], points[i]);
+            if b1 > b0 { v0 + (v1 - v0) * (t - b0) / (b1 - b0) } else { v1 }
+        }
+    })
+}
+
+/// What `points` play just before `t`: where a step is at `t`, the value it steps from.
+fn value_before(points: &[(f64, f64)], t: f64) -> Option<f64> {
+    let first_at = points.iter().position(|(b, _)| *b >= t);
+    match first_at {
+        Some(i) if i > 0 && points[i].0 == t => {
+            let ((b0, v0), (b1, v1)) = (points[i - 1], points[i]);
+            Some(if b1 > b0 { v0 + (v1 - v0) * (t - b0) / (b1 - b0) } else { v1 })
+        }
+        Some(0) => points.first().map(|p| p.1),
+        _ => value_at(points, t),
     }
 }
 
@@ -688,7 +918,7 @@ pub fn edit(s: &mut Session, g: &Gesture) -> Result<ClipsEdited, EditError> {
     let edits = apply(rev, g, &mut mint)?;
     let made: Vec<(LaneAddr, String)> = edits.iter().flat_map(|e| e.made.iter().map(|id| (e.lane.clone(), id.clone()))).collect();
     let mut ops = vec![];
-    // Per lane: each clip written, by id, with its line; and the ids gone.
+    // Per lane: each clip put, by id, with its line; and the ids gone.
     let mut wrote: Vec<(LaneAddr, BTreeMap<String, String>, Vec<String>)> = vec![];
     for e in &edits {
         let file = DataPath::lane(&e.lane).path();
@@ -717,7 +947,8 @@ pub fn edit(s: &mut Session, g: &Gesture) -> Result<ClipsEdited, EditError> {
             },
             false => Op::Write { file: TxPath::lane(&e.lane), bytes: Payload::Text(canonical(&e.data).into()) },
         });
-        wrote.push((e.lane.clone(), new, gone));
+        let put = put.into_iter().map(|id| (id.clone(), new[id].clone())).collect();
+        wrote.push((e.lane.clone(), put, gone));
     }
     let shown = edits.first().map(|e| DataPath::lane(&e.lane).to_string()).unwrap_or_default();
     if ops.is_empty() {
@@ -730,13 +961,14 @@ pub fn edit(s: &mut Session, g: &Gesture) -> Result<ClipsEdited, EditError> {
     let mut tx = plan::planned(s, label.clone(), ops, Expect::Confined(Confined { lanes, ..Confined::default() }));
     tx.id = tx_id.clone();
     let done = plan::run(s, tx, |_, checked| {
-        // The planner's assertion: each lane reads every clip written as written, and none
-        // deleted; the rest of each lane is as the file has it (`Confined`).
+        // The planner's assertion: each lane reads every clip put as written, and none deleted;
+        // the rest of each lane is as the file has it, an outside edit to another clip merged
+        // (WRITE-3), and nothing else changes (`Confined`).
         let data = &checked.candidate().compiled.data;
-        for (lane, new, gone) in &wrote {
+        for (lane, put, gone) in &wrote {
             let read = data.lane(lane.module.as_str(), lane.lane.as_str());
             let line = |id: &str| read.map(|d| d.lines_of(id)).unwrap_or_default();
-            let kept = new.iter().all(|(id, l)| line(id) == [l.clone()]) && gone.iter().all(|id| line(id).is_empty());
+            let kept = put.iter().all(|(id, l)| line(id) == [l.clone()]) && gone.iter().all(|id| line(id).is_empty());
             if !kept {
                 return Err(EditError::Rejected(format!("writing {} would change more than its clips", DataPath::lane(lane))));
             }
@@ -845,6 +1077,22 @@ fn bar_start(arr: &m2_song::Arrangement, n: u64) -> f64 {
         }
     }
     unreachable!("the last time signature runs forever")
+}
+
+/// A timeline lane's JSON with each clip's [`sha`], from `data`, the lane it shows: none when the
+/// clips aren't the data's, one for one.
+pub fn with_sha(mut lane: Value, data: Option<&LaneData>) -> Value {
+    let lines = data.map(LaneData::clip_lines).unwrap_or_default();
+    if let Some(clips) = lane.get_mut("clips").and_then(Value::as_array_mut)
+        && clips.len() == lines.len()
+    {
+        for (c, (id, line)) in clips.iter_mut().zip(&lines) {
+            if let Some(c) = c.as_object_mut().filter(|c| c.get("id").and_then(Value::as_str) == *id) {
+                c.insert("sha".into(), Value::String(sha(line)));
+            }
+        }
+    }
+    lane
 }
 
 /// A clip's hash, as the timeline gives it and a gesture names it by: the first 16 hex digits of

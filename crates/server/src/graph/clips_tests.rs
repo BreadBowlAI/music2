@@ -52,3 +52,41 @@ fn a_clip_gesture_takes_the_data_path() {
     // Another session's gesture is refused.
     assert!(graph.clips(token + 1, Gesture::Create { lane: hits, start: 8.0, length: None }).is_err());
 }
+
+// WRITE-12, G6: every clip in the published timeline carries its `sha`; a gesture that names a
+// clip with the `sha` it was drawn with goes ahead, and one drawn before an outside change is
+// answered 409's words, naming the clip, and changes nothing.
+#[test]
+fn the_timeline_carries_each_clips_sha_and_a_stale_one_is_refused() {
+    let fixture = Fixture::new();
+    fixture.write(KICK);
+    fixture.put("data/kick/hits.json", "{\"clips\": [{\"id\": \"a\", \"start\": 0, \"length\": 4, \"notes\": []}, {\"start\": 4, \"length\": 4, \"notes\": []}]}\n");
+    let graph = fixture.open();
+    let token = session(&graph);
+    let clips = |graph: &Graph| graph.state().unwrap()["timeline"]["tracks"][0]["lanes"][0]["clips"].clone();
+    let shown = clips(&graph);
+    let line = "{\"id\": \"a\", \"start\": 0, \"length\": 4, \"notes\": []}";
+    assert_eq!(shown[0]["sha"], json!(m2_editor::clips::sha(line)), "{shown}");
+    assert_eq!(shown[1]["sha"].as_str().map(str::len), Some(16), "an anonymous clip has one too");
+    let hits = LaneAddr::new("kick", "hits").unwrap();
+    let seen = |sha: &Value| ClipRef { lane: hits.clone(), id: Some("a".into()), at: None, sha: sha.as_str().map(str::to_string) };
+    done(graph.clips(token, Gesture::Move { clips: vec![seen(&shown[0]["sha"])], by: 8.0, to: None, copy: false }).unwrap());
+    let moved = clips(&graph);
+    assert_ne!(moved[1]["sha"], shown[0]["sha"], "the moved clip's line, and its sha, changed");
+
+    let text = fixture.read("data/kick/hits.json").replacen("\"start\": 8", "\"start\": 12", 1);
+    fixture.put("data/kick/hits.json", &text);
+    let stale = || Gesture::Delete { clips: vec![seen(&moved[1]["sha"])] };
+    // Not taken in yet: the commit finds the clip changed on disk (WRITE-3).
+    match graph.clips(token, stale()).unwrap() {
+        Answer::Changed(why) => assert!(why.contains("clip `a`") && why.contains("changed since"), "{why}"),
+        Answer::Done(v) => panic!("deleted a clip changed since: {v}"),
+    }
+    // Taken in: the window's `sha` is stale.
+    assert!(graph.poll());
+    match graph.clips(token, stale()).unwrap() {
+        Answer::Changed(why) => assert!(why.contains("clip `a`") && why.contains("changed in another window"), "{why}"),
+        Answer::Done(v) => panic!("deleted a clip changed since: {v}"),
+    }
+    assert_eq!(fixture.read("data/kick/hits.json"), text);
+}

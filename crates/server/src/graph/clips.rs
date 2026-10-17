@@ -1,6 +1,6 @@
 //! Clip gestures on the open project (8b.5): each one Tx through the session, which a lane edit
 //! takes as the data path (PLANE-1): no QuickJS run, a `SwapLane` for notes and automation, heard
-//! before it is durable (PLANE-5).
+//! before it is durable (PLANE-5). And Remove automation, which writes code.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -43,6 +43,14 @@ impl Graph {
             Err(e) if changed.load(Ordering::Relaxed) => Ok(Answer::Changed(format!("{e:#}"))),
             Err(e) => Err(e),
         }
+    }
+}
+
+impl Graph {
+    /// Remove automation (HOME-2's inverse): the lane's read becomes a literal of its value at
+    /// `beat` (the playhead; the fallback when none), and its file goes. One Tx, one undo step.
+    pub fn remove_automation(&self, token: u64, module: String, lane: String, beat: Option<f64>) -> Result<Value> {
+        self.edit(token, move |s| m2_editor::automate::remove(s, &module, &lane, beat))
     }
 }
 
