@@ -97,8 +97,8 @@ fn a_tempo_out_of_range_is_refused() {
 }
 
 // FMT-13's bar-line rule: a new time signature lands on the bar line at or before where it was
-// asked for, so it is never refused for being off one; and a change before it moves it back onto a
-// bar line of the new meter, or is refused when it would land on the change before.
+// asked for, so it is never refused for being off one; and a change before it moves it to where
+// its bar now starts.
 #[test]
 fn a_meter_change_lands_on_a_bar_line() {
     let f = fixture("examples/first-song");
@@ -111,26 +111,65 @@ fn a_meter_change_lands_on_a_bar_line() {
     let e = meter_change(&mut s, 16.0 + 3.0 * 3.5 + 1.0, 3, 4).unwrap();
     assert_eq!(e.after, "3/4 from bar 8");
     assert_eq!(meters(&s), vec![(0.0, 4, 4), (16.0, 7, 8), (26.5, 3, 4)]);
-    // The song's own becomes 3/4: the 7/8 goes back to beat 15, the bar line before 16, and the
-    // 3/4 after it moves with the 7/8's bars.
+    // The song's own becomes 3/4: the 7/8 stays at bar 5, now beat 12, and the 3/4 at bar 8, three
+    // bars of 7/8 after it.
     let e = meter(&mut s, 2.0, 3, 4).unwrap();
     assert_eq!((e.before.as_str(), e.after.as_str()), ("4/4", "3/4"));
-    assert_eq!(meters(&s), vec![(0.0, 3, 4), (15.0, 7, 8), (25.5, 3, 4)]);
-    assert_eq!(s.accepted().project.arrangement.bar_at(15.0), (5, 0.0), "still bar 6 of the song's");
+    assert_eq!(meters(&s), vec![(0.0, 3, 4), (12.0, 7, 8), (22.5, 3, 4)]);
+    assert_eq!(s.accepted().project.arrangement.bar_at(12.0), (4, 0.0), "still bar 5");
     // The meter at the playhead: in the 7/8.
     let e = meter(&mut s, 20.0, 5, 8).unwrap();
-    assert_eq!((e.before.as_str(), e.after.as_str()), ("7/8 from bar 6", "5/8 from bar 6"));
-    // Bars of 4/1 from the start are 16 beats long: the change at beat 15 would move back to beat
-    // 0, onto the song's own, so it is refused in words.
-    match meter(&mut s, 0.0, 4, 1) {
-        Err(EditError::Rejected(why)) => assert!(why.contains("would land on the 4/1 before it"), "{why}"),
-        other => panic!("{other:?}"),
-    }
+    assert_eq!((e.before.as_str(), e.after.as_str()), ("7/8 from bar 5", "5/8 from bar 5"));
+    assert_eq!(meters(&s), vec![(0.0, 3, 4), (12.0, 5, 8), (19.5, 3, 4)]);
+    // Bars of 4/1 are 16 beats long: the changes keep their bars, never refused.
+    meter(&mut s, 0.0, 4, 1).unwrap();
+    assert_eq!(meters(&s), vec![(0.0, 4, 1), (64.0, 5, 8), (71.5, 3, 4)]);
+    crate::undo(&mut s).unwrap();
     assert!(matches!(meter(&mut s, 0.0, 65, 4), Err(EditError::Rejected(_))));
     assert!(matches!(meter(&mut s, 0.0, 4, 3), Err(EditError::Rejected(_))));
-    let e = remove_meter(&mut s, 15.0).unwrap();
-    assert_eq!((e.before.as_str(), e.after.as_str()), ("5/8 from bar 6", "3/4"));
-    assert_eq!(meters(&s), vec![(0.0, 3, 4), (24.0, 3, 4)], "the 3/4 after it lands on the song's bar line at or before beat 25");
+    let e = remove_meter(&mut s, 12.0).unwrap();
+    assert_eq!((e.before.as_str(), e.after.as_str()), ("5/8 from bar 5", "3/4"));
+    assert_eq!(meters(&s), vec![(0.0, 3, 4), (21.0, 3, 4)], "the 3/4 after it stays at bar 8");
+}
+
+// FMT-13: a time signature change keeps its bar when one before it changes, so an edit and its
+// inverse give back the same file. The picker writes every click: + three times and - three times
+// leave the 3/4 at bar 9 where it was.
+#[test]
+fn a_later_meter_change_keeps_its_bar() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    meter_change(&mut s, 32.0, 3, 4).unwrap();
+    let bar_9 = f.read(FILE);
+    let meters = |s: &Session| s.accepted().project.arrangement.meter.iter().map(|m| (m.beat, m.beats, m.unit)).collect::<Vec<_>>();
+    assert_eq!(meters(&s), vec![(0.0, 4, 4), (32.0, 3, 4)]);
+    for (beats, unit, at) in [(5, 4, 40.0), (6, 4, 48.0), (7, 4, 56.0), (6, 4, 48.0), (5, 4, 40.0), (4, 4, 32.0)] {
+        meter(&mut s, 0.0, beats, unit).unwrap();
+        assert_eq!(meters(&s), vec![(0.0, beats, unit), (at, 3, 4)], "the 3/4 is at bar 9 of the {beats}/{unit}");
+    }
+    assert_eq!(f.read(FILE), bar_9, "back in 4/4, the file is as it was");
+    let e = meter(&mut s, 0.0, 7, 8).unwrap();
+    assert_eq!((e.before.as_str(), e.after.as_str()), ("4/4", "7/8"));
+    assert_eq!(meters(&s), vec![(0.0, 7, 8), (28.0, 3, 4)]);
+    assert_eq!(s.accepted().project.arrangement.bar_at(28.0), (8, 0.0), "still bar 9");
+    meter(&mut s, 0.0, 4, 4).unwrap();
+    assert_eq!(f.read(FILE), bar_9);
+}
+
+// A change at bar 2 stays at bar 2 whatever the song's own meter is: an ordinary meter before it is
+// never refused.
+#[test]
+fn a_meter_before_a_change_at_bar_2_is_accepted() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    meter_change(&mut s, 4.0, 3, 4).unwrap();
+    let meters = |s: &Session| s.accepted().project.arrangement.meter.iter().map(|m| (m.beat, m.beats, m.unit)).collect::<Vec<_>>();
+    meter(&mut s, 0.0, 5, 4).unwrap();
+    assert_eq!(meters(&s), vec![(0.0, 5, 4), (5.0, 3, 4)]);
+    meter(&mut s, 0.0, 9, 8).unwrap();
+    assert_eq!(meters(&s), vec![(0.0, 9, 8), (4.5, 3, 4)]);
+    meter(&mut s, 0.0, 4, 1).unwrap();
+    assert_eq!(meters(&s), vec![(0.0, 4, 1), (16.0, 3, 4)]);
 }
 
 // The first tempo and the first time signature are the song's own: changed, never removed.

@@ -732,7 +732,8 @@ keys. It is small, needs no engine work, and the lease comes in 8b.7.
   removed.
 - **`meter(s, at_beat, beats, unit)`** sets the meter in effect at `at_beat`, keeping its beat. A new change is snapped
   to the bar line at or before `at_beat` in the meter before it (FMT-13's rule), so it is never refused for being off a
-  bar line. `beats` is 1–64 and `unit` is 1, 2, 4, 8, 16 or 32.
+  bar line. `beats` is 1–64 and `unit` is 1, 2, 4, 8, 16 or 32. *Built:* later changes keep their bar (bar 9 stays bar
+  9), so an edit and its inverse give back the same file.
 - **`title(s, name)`** is a `TextEdit` of `[project] name` in `music2.toml`, written as a TOML basic string, with
   `Expect::Identical`. It takes the code plane (a compile) and its delta is empty. The folder isn't renamed (gaps #28
   covers that).
