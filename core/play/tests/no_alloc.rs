@@ -5,7 +5,7 @@
 //! ghost lane while its edges fade, a panic in that window, the window's end and its leftovers, a
 //! stale activation refused, stop, idle, play, panic, and a full retire channel; and, from step 5,
 //! cell writes from another thread all along (a step, a ramp and a cell in voices), with no
-//! rebuild. Kernel memory never grows either: a reset on the audio thread would grow a delay's
+//! rebuild; from 8b, overlay cell writes and live notes. Kernel memory never grows either: a reset on the audio thread would grow a delay's
 //! (§1.5 of the step 3a design).
 //!
 //! Everything is built and sent on the test's thread; only the callback runs under the trap.
@@ -21,7 +21,7 @@ use std::sync::{Arc, mpsc};
 use common::*;
 use m2_ir::Origin;
 use m2_play::{DeviceError, DeviceErrorKind, Gone, Player, alloc};
-use m2_runtime::{BLOCK, CellTarget, Continues, LaneSwap, NotesData, Renderer, Retired};
+use m2_runtime::{BLOCK, CellTarget, Continues, LaneSwap, LiveEv, NotesData, Renderer, Retired};
 use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
 
@@ -363,6 +363,68 @@ fn overlay_writes_never_allocate() {
         drop(d.drain_retired());
     }
     assert_eq!(allocs, 0, "the callback allocated or freed");
+}
+
+// RENDER-28, MON-7: live notes allocate and free nothing: struck and let go while the song plays
+// (into voices and into a plugin), through a wrap and a stop, waking the idle engine, a full
+// table, a source's release, a panic, and messages for a renderer that is gone.
+#[test]
+fn live_notes_never_allocate() {
+    for song in [build(false, 120.0), probes(1.0)] {
+        let r = song.renderer();
+        let (generation, info) = (r.generation(), r.info());
+        let slot = info.lanes.iter().position(|l| l.lane.lane == "notes").unwrap() as u32;
+        let (player, mut d) = Player::driven(SR);
+        player.open(r).unwrap();
+        let mut data = vec![0.0f32; 2 * 4096];
+        let mut allocs = 0;
+        let mut fill = |d: &mut m2_play::Driver, frames: usize| {
+            let mut done = 0;
+            for n in SIZES.iter().cycle() {
+                let n = (*n).min(frames - done);
+                if n == 0 {
+                    break;
+                }
+                allocs += trapped(|| d.fill(&mut data[..2 * n], 2));
+                done += n;
+            }
+            drop(d.drain_retired());
+        };
+        let on = |h: u32| LiveEv::On { source: 1, handle: h, pitch: 40.0 + (h % 40) as f32, velocity: 0.8 };
+        let off = |h: u32| LiveEv::Off { source: 1, handle: h };
+        fill(&mut d, 4096);
+        player.play();
+        player.set_loop(Some((0.0, 1.0))).unwrap();
+        for h in 0..40 {
+            player.live(generation, slot, on(h)).unwrap();
+            fill(&mut d, 1000);
+            player.live(generation, slot, off(h)).unwrap();
+            fill(&mut d, 300);
+        }
+        player.set_loop(None).unwrap();
+        player.stop();
+        // Idle, then woken by a key.
+        fill(&mut d, 48_000);
+        player.live(generation, slot, on(1)).unwrap();
+        fill(&mut d, 2000);
+        assert_eq!(player.live_notes(), 1);
+        // A full table, a release, a panic, and a renderer that is gone.
+        for h in 0..20 {
+            player.live(generation, slot, on(100 + h)).unwrap();
+        }
+        fill(&mut d, 1000);
+        assert_eq!(player.live_notes(), 16);
+        player.live(generation, slot, LiveEv::Release { source: 1 }).unwrap();
+        fill(&mut d, 1000);
+        assert_eq!(player.live_notes(), 0);
+        player.live(generation, slot, on(7)).unwrap();
+        player.panic().unwrap();
+        player.live(generation + 1000, slot, on(8)).unwrap();
+        fill(&mut d, 2000);
+        assert_eq!(player.live_notes(), 0);
+        assert_eq!(allocs, 0, "the callback allocated or freed");
+        assert!(!player.crashed());
+    }
 }
 
 /// A probe instrument on 64 notes into a probe effect (step 3b, §6.5), `gain` on the instrument,

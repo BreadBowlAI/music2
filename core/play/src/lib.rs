@@ -35,7 +35,7 @@ pub use cpal::{Error as DeviceError, ErrorKind as DeviceErrorKind};
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use m2_runtime::engine::{APPLIED, Msg as EngineMsg};
 pub use m2_runtime::engine::{Applied, CallbackStamp, Engine, Envelope, Heard, Retired};
-use m2_runtime::{CellTarget, Cmd, LaneSwap, Renderer, Transport};
+use m2_runtime::{CellTarget, Cmd, LaneSwap, LiveEv, Renderer, Transport};
 pub use resample::Resampler;
 
 use crate::cells::{CELL_SEQ, Writer};
@@ -238,6 +238,8 @@ struct Shared {
     refused: AtomicU64,
     loop_refused: AtomicBool,
     dropped_ons: AtomicU64,
+    /// Live notes held in the renderer playing (MON-7).
+    live: AtomicU32,
     /// The device's errors so far, one count per [`DeviceEvent`].
     device_errors: [AtomicU64; 4],
     stalled: AtomicBool,
@@ -581,6 +583,7 @@ impl Callback {
         }
         s.loop_refused.store(st.loop_refused, Ordering::Relaxed);
         s.dropped_ons.store(st.dropped_ons as u64, Ordering::Relaxed);
+        s.live.store(st.live, Ordering::Relaxed);
         // After the position: a reader that sees a seek or a load taken sees where it went.
         s.seeks_applied.store(self.seeks, Ordering::Release);
         s.loads_applied.store(self.loads, Ordering::Release);
@@ -917,6 +920,13 @@ impl Player {
         self.transport(Cmd::Loop(beats))
     }
 
+    /// A live note's On or Off, or its source's release, for lane `slot` of the renderer
+    /// `generation` (MON-7): in order behind the activations sent before it, so it reaches the plan
+    /// it names. Never refused here: the engine refuses what doesn't fit, and counts it.
+    pub fn live(&self, generation: u64, slot: u32, ev: LiveEv) -> Result<u64> {
+        self.envelope(EngineMsg::Live { generation, slot, ev })
+    }
+
     /// Every note off and every instance reset (RENDER-10).
     pub fn panic(&self) -> Result<u64> {
         self.envelope(EngineMsg::Panic)
@@ -1131,6 +1141,11 @@ impl Player {
     /// Ons dropped by full event buffers in the renderer playing.
     pub fn dropped_ons(&self) -> u64 {
         self.shared.dropped_ons.load(Ordering::Relaxed)
+    }
+
+    /// Live notes held in the renderer playing, after the last callback (MON-7).
+    pub fn live_notes(&self) -> u32 {
+        self.shared.live.load(Ordering::Relaxed)
     }
 }
 

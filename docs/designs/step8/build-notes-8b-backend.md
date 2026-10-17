@@ -13,6 +13,7 @@ The `8b-backend` track builds the back ends of 8b.4 (mute, solo, mute in song), 
 | B3 | Server mute and solo: the path rule, `.music2/overlays.json`, `POST /api/graph/overlay`, new plans' values, mute in song as cell writes, renames, the export's warning | built |
 | B4 | Mute in song as a builder: `mute_in_song`, `feeds`, `POST /api/graph/track/mute`, `m2 mute-in-song` | built |
 | B5 | Gate 8's ducking clauses on `env` and `follow`; live equals offline on them | built |
+| B9 | Audition in the engine: live notes on a lane (`Msg::Live`), `Player::live`, how many are held | built |
 | W1 | The keyed compressor and the gate's third clause | waits for std 0.2 on main |
 
 ---
@@ -217,3 +218,59 @@ MON-2 promises.
 **Checks:** `m2-play` tests; clippy on `m2-play`.
 
 **Contract:** gate 8's row says which of 8b's clauses pass. The keyed compressor (W1) waits for std 0.2.
+
+---
+
+## B9. Live notes in the engine
+
+**In short:** a key held in the app can now sound in the engine. A lane plays a note that isn't
+in its data, from the next block. It keeps sounding through stop, seek, loop wraps and edits,
+until it is let go. Nothing offline changes.
+
+| Piece | What it does | Where |
+|---|---|---|
+| `LiveEv` | `On { source, handle, pitch, velocity }`, `Off { source, handle }`, `Release { source }`. A source is a window; it names its own notes by handle. | `core/runtime/src/sched.rs` |
+| The live table | Each notes lane's scheduler holds up to 16 live notes, each with an engine id. The 17th On is refused and counted with the dropped Ons. | `NoteScheduler::live` |
+| Merging | Each block sends the live Ons and Offs first, at frame 0, before the song's notes, playing or stopped. A jump or a swap never touches them. | `NoteScheduler::run` (`send_live`) |
+| Edits | The table moves with its lane's scheduler at an activation, into a grown one too (`take_state`). A replaced consumer's notes end with its ghost (S5). | `sched.rs` |
+| Panic | Clears the table without Offs (A10): the voices are reset. | `NoteScheduler::reset` |
+| `Renderer::live`, `live_notes` | Takes a note for a slot; a release reaches every lane. Refuses a slot it doesn't have, a pitch outside 0 to 127, a velocity outside 0 to 1 (R2). `can_idle` is false while any is held. | `core/runtime/src/lib.rs` |
+| `Msg::Live { generation, slot, ev }` | In order behind activations. Another plan's is refused and counted (`Engine::refused_live`). Needs no stash room (M4). `Status.live`. | `core/runtime/src/engine.rs` |
+| `Player::live`, `live_notes` | Sends it; the count is published after each callback. | `core/play/src/lib.rs` |
+| Room | Each consumer has room for 32 more held notes (a poly's plan, a plugin's keys and events). | `Builder::node`, `Builder::plugin` |
+
+**Tests** (`core/runtime/src/tests/audition.rs`, new; `core/play/tests/no_alloc.rs`):
+
+| Test | Red first? |
+|---|---|
+| `a_live_note_sounds_and_ends` | red against stubs (all 11 below were) |
+| `live_ids_never_meet_scheduled_ids` (the probe sees no repeated id, no unknown Off) | red against stubs |
+| `a_live_note_survives_stop_seek_and_wrap` | red against stubs |
+| `a_live_note_moves_with_its_lane_across_an_activation` (kept, and grown) | red against stubs; red again with `take_state` not copying the table |
+| `a_replaced_consumer_ends_its_live_notes` | red against stubs |
+| `a_key_struck_and_let_go_at_once_still_ends` | red with the On and Off sent in one block (the note stayed on) |
+| `a_full_table_refuses_and_counts`, `release_ends_one_sources_notes`, `panic_ends_live_notes` | red against stubs |
+| `a_live_note_wakes_an_idle_engine`, `another_generations_live_is_refused` | red against stubs |
+| `held_for_an_export_an_on_is_refused_and_an_off_waits` (M4) | red against stubs |
+| `live_notes_never_allocate` (voices and a plugin) | red with the panic's reset allocating a new table |
+
+**Choices made here:**
+- **Held for an export (M4):** the plan said "refused and counted". Only an On is refused. An Off
+  or a release is kept and sent at the resume. Refusing an Off would leave the note on for good.
+- **A key struck and let go at one block line** sends its On then and its Off at the next block.
+  At one frame an Off sorts before an On, which would leave the note on.
+- **Room:** the table has 32 places, and 16 notes may be held. So a key let go and another struck
+  at one block line (a pitch drag) never refuse each other.
+- **Ids are given when the message applies**, not in `run()`. Both happen at the same block line,
+  so the order of ids is the same.
+- **A release names no lane:** it ends the source's notes on every lane.
+- After an export that borrowed a plugin, the plugin starts its live notes again at the resume, as
+  it does the song's (`sounding_note` knows them). Not tested here.
+
+**Checks:** `cargo check --workspace --all-targets`; clippy on `m2-runtime` and `m2-play`; tests of
+`m2-runtime`, `m2-play`, `m2-session` (`renders.json` unchanged: offline renders never get a live
+note).
+
+**Contract:** MON-7 (the live note, its source, room, ids, what ends it) and its *Today*, RENDER-9
+(item 1: notes a lane scheduled), RENDER-14 (merging at frame 0, and its *Today*), RENDER-26a,
+RENDER-28 (the message list, and its *Today*), the Engine shape.
