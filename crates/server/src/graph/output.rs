@@ -3,7 +3,8 @@
 //! A song opens with no sound device (gaps #13): when no output starts, the silent player stands
 //! in, so the playhead moves and nothing sounds, and the status says "No sound output". While it
 //! stands in, the server looks for an output every 2 s ([`Graph::look_for_output`]); once one
-//! starts, the next action plays the song there, where it was, stopped, and the user is told.
+//! starts, the server's own catch-up (every 300 ms), or any action before it, plays the song
+//! there, where it was, stopped, and the user is told: within a few seconds, with no action (R6).
 //!
 //! A start that failed isn't tried again until the default output changes, or for 30 s: a device
 //! the OS lists that won't open would otherwise be tried, and fail, at every action (plan X23).
@@ -72,7 +73,7 @@ struct OutputState {
     stand_in: Option<u64>,
     /// When a start last failed, and the default output then.
     failed: Option<(Instant, Option<String>)>,
-    /// An output to try: the next action does.
+    /// An output to try: the next catch-up or action does.
     back: bool,
     /// The log said once that none started.
     told: bool,
@@ -160,7 +161,7 @@ impl Outputs {
     }
 
     /// While the stand-in plays: whether a default output exists now that wasn't tried, or was
-    /// tried long enough ago. If so, the next action tries it.
+    /// tried long enough ago. If so, the next catch-up or action tries it.
     fn look(&self) {
         if self.state.lock().stand_in.is_none() {
             return;
@@ -178,8 +179,9 @@ impl Outputs {
 }
 
 impl Graph {
-    /// While no output plays (the silent player stands in), look for one: the next action plays
-    /// the song there. Called every [`LOOK_EVERY`] by the server's `music2-tell` thread.
+    /// While no output plays (the silent player stands in), look for one: the next catch-up or
+    /// action plays the song there. Called every [`LOOK_EVERY`] by the server's `music2-tell`
+    /// thread.
     pub fn look_for_output(&self) {
         self.inner.output.look();
     }

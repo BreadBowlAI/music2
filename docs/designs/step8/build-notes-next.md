@@ -630,7 +630,7 @@ P0's `env` rows in `run.mjs`.
 |---|---|
 | No sound device when a song opens | The song opens. It plays silently: the playhead moves, nothing sounds |
 | The status pill | "No sound output", in the warning colour, with a crossed-out speaker |
-| Its popover | "No sound device was found, so the song plays silently. Plug one in: it's used from your next action." |
+| Its popover | "No sound device was found, so the song plays silently. Plug one in: within a few seconds the song moves to it, and stops." (review R6: it said "from your next action") |
 | A device plugged in | Within about 2 s the song moves to it, where it was, stopped. A toast says "Sound output is back. Press Play to go on." |
 | A device that is listed but won't open | Not tried at every action: again only when the default device changes, or after 30 s |
 
@@ -682,11 +682,11 @@ P0's `env` rows in `run.mjs`.
 - The look for an output only runs while a song is open; with none open, the next song's open tries again.
 
 **For gaps.md:** #13 done: a song opens with no sound device, plays silently, the pill says so, and a device plugged
-in is used from the next action.
+in is used within a few seconds, with no action (the server's catch-up; review R6).
 
 **Contract:** RENDER-28 or the player's section: a start that fails starts the silent player instead, and the status
-says `no_output`; the server looks for an output every 2 s while it stands in; a start that failed is tried again
-when the default output changes or after 30 s.
+says `no_output`; the server looks for an output every 2 s while it stands in, and its catch-up (every 300 ms) moves
+the song there, stopped; a start that failed is tried again when the default output changes or after 30 s.
 
 **For 8a's merge** (`core/play/src/lib.rs`, each a small block):
 - `pub mod outputs;` and its `pub use` line.
@@ -1283,6 +1283,7 @@ here as the fixes land; the final check is in the End.
 | R1 | `nx-nits`' check of the ruler's end never scrolled (first-song is 8 bars, the window shows 18) and passed by the number filter alone; taking `+ TOOLS_W` out of the timeline's width left it green | The check runs on a song longer than the window (a kick clip in bar 39), zoomed to bars of about 43 px: it asserts the timeline scrolls, and that scrolled to the end, bar 39's number (the song's last) and bar 40's (its spare) are drawn and end left of Follow and zoom. 27 checks now | `nx-nits` b | On the page with only `+ TOOLS_W` taken out: `FAIL scrolled to the end, bar 39's number … and bar 40's … : ["none","none"] < 1355` (also in D4's red-first list) | `nx-nits` 27 of 27: `[1289,1332] < 1355` |
 | R4 | In a browser, a songs folder typed and then left with Done was dropped without a word when the server refused it: Done closed the window while the field's change was on its way | `applyTyped` returns whether the folder was taken, and the change in flight is shared (the field's blur starts it, Done waits for it). Done, Return outside the field and a click outside the window apply a typed folder first and close only if it was taken. Esc still closes without it | `nx-settings`: "a relative folder typed, then Done: the window stays open and says why"; "a full path typed, then Done: … Done closes the window" (40 checks) | On the page before: `FAIL a relative folder typed, then Done: the window stays open and says why: null` (and the suite stops there: 32 of 40) | `nx-settings` 40 of 40; `taste` 39 of 39 |
 | R5 | Settings read "an export runs" once, when it opened: once the export ended, both lists stayed greyed and the window still said "Wait for the export to finish." until it was opened again | The window greys the lists while the page hears an export run (`useExport`) or the server said one ran, and reads the settings again when the page hears it end | `nx-settings`: an export of a 300-bar song started while Settings opens: greyed and said; "once it ends, they can change again, the window still open" (42 checks) | On the page before: `FAIL once it ends, they can change again, the window still open: [true,true]` | `nx-settings` 42 of 42 |
+| R6 | The "No sound output" popover said a device plugged in is "used from your next action". The server takes it on its own: it looks every 2 s, and its catch-up (every 300 ms) moves the song there, stopped, and toasts "Sound output is back. Press Play to go on." | The popover says "Plug one in: within a few seconds the song moves to it, and stops." `output.rs`'s comments, C1's In short, its gaps.md and contract lines say the same | `nx-nodevice`'s words; `a_device_plugged_in_is_used_with_no_action` (a server of its own: no request after the plug, used in 1.9 s, and the toast sent) | On the page before: `FAIL the popover says why and what to do: "No sound output…it's used from your next action."` | `nx-nodevice` 11 of 11; the server test ok |
 
 **For 8a's merge (NX-S5).** In `core/play/src/lib.rs`, five small blocks, each marked "NX-S5" or next to `freed`:
 `Shared` gains `freed: AtomicBool`; `serve` stores it after `drop(stream)`; `silent_as` clones `shared` into its

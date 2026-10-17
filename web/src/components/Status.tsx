@@ -150,7 +150,7 @@ export default function Status({ graph, status, onShowCode }: { graph: GraphStat
                 )}
                 {s.id === "no-output" && (
                   <Item state={s} title="No sound output" action={<SettingsLink onOpen={() => setAnchor(null)}>Settings…</SettingsLink>}>
-                    No sound device was found, so the song plays silently. Plug one in: it's used from your next action.
+                    No sound device was found, so the song plays silently. Plug one in: within a few seconds the song moves to it, and stops.
                   </Item>
                 )}
                 {s.id === "dropout" && (

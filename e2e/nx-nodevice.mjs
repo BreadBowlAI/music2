@@ -105,7 +105,7 @@ await page.click("[data-status]");
 await page.waitForSelector("[data-testid=status-popover]", { timeout: 3000 }).catch(() => null);
 const words = await page.$eval("[data-testid=status-popover]", (e) => e.textContent ?? "").catch(() => "");
 check(
-  words.includes("No sound output") && words.includes("No sound device was found, so the song plays silently. Plug one in: it's used from your next action."),
+  words.includes("No sound output") && words.includes("No sound device was found, so the song plays silently. Plug one in: within a few seconds the song moves to it, and stops."),
   `the popover says why and what to do: ${JSON.stringify(words.slice(0, 160))}`,
 );
 const bad = await page.evaluate(lintIn, "[data-testid=status-popover]");

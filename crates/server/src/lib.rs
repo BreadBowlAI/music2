@@ -348,6 +348,57 @@ pub(crate) fn midi_injects() -> bool {
 mod tests {
     use super::*;
 
+    // gaps #13, R6: with no sound device, one plugged in is used within a few seconds with no
+    // action at all: the server looks for it every 2 s, and its catch-up moves the song there,
+    // stopped, and says so. (The popover says just this.)
+    #[test]
+    fn a_device_plugged_in_is_used_with_no_action() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let there = Arc::new(AtomicBool::new(false));
+        let plugged = there.clone();
+        let listed = there.clone();
+        let graph = graph::Graph::starting(
+            Box::new(move |_| match plugged.load(Ordering::Relaxed) {
+                true => m2_play::Player::silent(),
+                false => Err(anyhow::anyhow!("no audio output device")),
+            }),
+            Box::new(move || listed.load(Ordering::Relaxed).then(|| "Headphones".to_string())),
+        );
+        let dir = std::env::temp_dir().join(format!("m2-plug-{}", std::process::id()));
+        let song = dir.join("song");
+        std::fs::create_dir_all(&song).unwrap();
+        std::fs::write(song.join("music2.toml"), "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.2\"\n").unwrap();
+        std::fs::write(song.join("song.ts"), "import { hz, song } from '@m2/core';\nimport { osc } from 'std/dsp';\nexport default song(() => osc.sine(hz(800)));\n").unwrap();
+        let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t".into() }, graph).unwrap();
+        let state = running.state.clone();
+        state.graph.open(&song).unwrap();
+        assert!(state.graph.no_output());
+        let mut news = state.events.subscribe();
+        there.store(true, Ordering::Relaxed);
+        let t = std::time::Instant::now();
+        while state.graph.no_output() {
+            assert!(t.elapsed() < Duration::from_secs(6), "not used within 6 s");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let took = t.elapsed();
+        assert!(took < Duration::from_secs(4), "used in {took:?}: within a few seconds");
+        eprintln!("a device plugged in was used in {took:?}");
+        // The window is told, as a toast.
+        let mut told = false;
+        while let Ok(m) = news.try_recv() {
+            told |= m.contains("Sound output is back");
+        }
+        let t = std::time::Instant::now();
+        while !told && t.elapsed() < Duration::from_secs(2) {
+            match news.try_recv() {
+                Ok(m) => told |= m.contains("Sound output is back"),
+                Err(_) => std::thread::sleep(Duration::from_millis(20)),
+            }
+        }
+        assert!(told, "the window is told");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // R3: a server this crate's tests start never opens a MIDI device, whatever `M2_MIDI` says,
     // so a keyboard plugged in never plays into a test.
     #[test]

@@ -1,5 +1,5 @@
 //! A song opens with no sound device (gaps #13, plan C1): the silent player stands in and says so,
-//! plays on its clock, and an output that comes back is used from the next action. Settings'
+//! plays on its clock, and an output that comes back is used from the next catch-up or action. Settings'
 //! choice of output (gaps #31, C2) makes a new player where the song was.
 
 use std::sync::Arc;
