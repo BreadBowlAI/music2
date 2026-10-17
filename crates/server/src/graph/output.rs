@@ -55,6 +55,9 @@ pub(super) struct Outputs {
     start: Start,
     ready: Ready,
     state: Mutex<OutputState>,
+    /// Tests: what runs once a change of output has taken the old player out of its slot.
+    #[cfg(test)]
+    pub(super) changing: Mutex<Option<Box<dyn FnMut() + Send>>>,
 }
 
 #[derive(Default)]
@@ -82,7 +85,13 @@ impl Outputs {
     }
 
     pub(super) fn with(start: Start, ready: Ready) -> Outputs {
-        Outputs { start, ready, state: Mutex::default() }
+        Outputs {
+            start,
+            ready,
+            state: Mutex::default(),
+            #[cfg(test)]
+            changing: Mutex::default(),
+        }
     }
 
     /// A player for the epoch `epoch`, on the output chosen; when none starts, the silent player
@@ -200,7 +209,7 @@ impl Graph {
     /// window says "Playback stopped. Press Play to go on."). With no player yet, the next song's
     /// opens there. Refused while an export holds the player (plan X22).
     pub fn set_output(&self, choice: Choice) -> Result<bool> {
-        let old = {
+        let (old, st) = {
             let mut d = self.inner.player.lock();
             if d.as_ref().is_some_and(|d| d.player.held()) {
                 bail!("Wait for the export to finish.");
@@ -208,11 +217,17 @@ impl Graph {
             if !self.inner.output.choose(choice) {
                 return Ok(false);
             }
-            d.take()
+            let Some(old) = d.take() else { return Ok(false) };
+            // Where it was, kept before the slot is let go: another action may start a player
+            // the moment it is, and loads the song where it was (NX-S6).
+            let st = old.player.status();
+            *self.inner.resume.lock() = st.pending.unwrap_or(st.beats);
+            (old, st)
         };
-        let Some(old) = old else { return Ok(false) };
-        let st = old.player.status();
-        *self.inner.resume.lock() = st.pending.unwrap_or(st.beats);
+        #[cfg(test)]
+        if let Some(f) = self.inner.output.changing.lock().as_mut() {
+            f();
+        }
         retire(old.player);
         self.inner.device()?;
         // The song goes into it now, not at the server's next catch-up: Play pressed at once plays.

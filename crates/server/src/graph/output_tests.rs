@@ -174,3 +174,27 @@ fn choosing_an_output_makes_a_new_player_where_it_was() {
     assert!(!graph.set_output(speakers).unwrap());
     assert_eq!(graph.inner.current_device().unwrap().epoch, epoch);
 }
+
+// gaps #31: a change of output keeps where the song was, though another action (the actor's
+// catch-up, a settle, the transport) asks for the player the moment the old one is out of its
+// slot: the new player starts the song where it was, never at beat 0 (NX-S6).
+#[test]
+fn an_output_change_keeps_the_beat_beside_another_action() {
+    let graph = Graph::starting(Box::new(|_| Player::silent()), Box::new(|| Some("Speakers".into())));
+    let fixture = Fixture::new();
+    graph.open(&fixture.0).unwrap();
+    graph.transport("play").unwrap();
+    eventually("the playhead moves", || graph.status().beat > 0.5);
+    let inner = Arc::downgrade(&graph.inner);
+    *graph.inner.output.changing.lock() = Some(Box::new(move || {
+        let inner = inner.upgrade().expect("the graph");
+        // On a thread of its own, as another action is: it waits while the player is locked.
+        std::thread::spawn(move || drop(inner.device())).join().unwrap();
+    }));
+    let before = graph.inner.current_device().unwrap().epoch;
+    assert!(graph.set_output(Choice { device: None, frames: Some(128) }).unwrap(), "it was playing");
+    *graph.inner.output.changing.lock() = None;
+    assert!(graph.inner.current_device().unwrap().epoch > before, "a new player");
+    let st = graph.status();
+    assert!(!st.playing && st.beat > 0.5, "where it was, stopped: {st:?}");
+}
