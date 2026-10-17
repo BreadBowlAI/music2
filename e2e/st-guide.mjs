@@ -1,11 +1,12 @@
 // Make Your First Song (the studio plan's D3, Q47): Help ▸ Make Your First Song opens a card at the
 // top of the side browser; its seven steps tick themselves as the song is made (drums, a beat, a
-// bass, bass notes, a listen, a sound changed, an export); kept in `.music2/view.json`; the fold,
-// ×, and the start screen's link.
+// bass, bass notes, a listen, a sound changed, an export: here as a MIDI file); kept in
+// `.music2/view.json`; the done line says where the file is (in the app, the one its save panel
+// picked: the review's F6); the fold, ×, and the start screen's link.
 //
 //   node e2e/st-guide.mjs <root> <home>     (the `none` kind: no song open; it makes an Empty one)
 import fs from "node:fs";
-import { check, done, open, sess, sleep, until } from "./fixlib.mjs";
+import { HOME, check, done, open, sess, sleep, until } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 import { tips } from "./tiplib.mjs";
 
@@ -25,13 +26,13 @@ const viewFile = () => {
 
 const { browser, page, errors, key, box, view } = await open(1440, 900, { browser: false });
 
-/** A page as the desktop app's: its menu commands come with `window.__menu(id)`. */
-async function appPage() {
+/** A page as the desktop app's: its menu commands come with `window.__menu(id)`; `answers` are what its actions answer. */
+async function appPage(answers = {}) {
   const context = await browser.createBrowserContext();
   const p = await context.newPage();
   await p.setViewport({ width: 1440, height: 900 });
   p.on("pageerror", (e) => errors.push(`app page: ${e}`));
-  await p.evaluateOnNewDocument((token) => {
+  await p.evaluateOnNewDocument((token, answers) => {
     window.__M2__ = { native: true, token, platform: "macos" };
     try {
       localStorage.setItem("m2.browser.open", "false");
@@ -42,6 +43,7 @@ async function appPage() {
     window.__TAURI_INTERNALS__ = {
       invoke: async (cmd, args) => {
         if (cmd === "plugin:event|listen" && args?.event === "menu") menu.push(args.handler);
+        if (cmd === "action" && args?.id in answers) return answers[args.id];
         return null;
       },
       transformCallback: (cb) => {
@@ -52,7 +54,7 @@ async function appPage() {
     };
     window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
     window.__menu = (id) => menu.forEach((h) => callbacks.get(h)?.({ event: "menu", id: 0, payload: id }));
-  }, sess.token);
+  }, sess.token, answers);
   await p.goto(sess.url, { waitUntil: "domcontentloaded" });
   await p.waitForSelector("[data-testid=timeline]", { timeout: 10000 });
   return p;
@@ -151,16 +153,31 @@ if (kb) {
 }
 check(await ticked("sound"), "6. a knob turned: Change a sound ticks");
 await key("Meta+Shift+e");
-// With the Export dialog (lane C), its Export… goes on.
-const dialog = await page.waitForSelector("[data-testid=export-dialog]", { timeout: 1500 }).catch(() => null);
-if (dialog) await page.keyboard.press("Enter");
-check(await ticked("export"), "7. exported: Export it ticks");
+// The Export dialog's MIDI choice counts too.
+await page.waitForSelector("[data-testid=export-dialog]", { timeout: 3000 });
+await page.click("[data-export-choice=midi]");
+await page.click("[data-testid=export-dialog-go]");
+check(await ticked("export"), "7. exported as a MIDI file: Export it ticks");
 const all = await steps();
 check(all.every((s) => s.done) && !all.some((s) => s.now), "every step is done");
 const doneLine = await page.$eval("[data-testid=guide-done]", (e) => e.innerText.trim()).catch(() => "");
 check(doneLine.startsWith("You made a song. It is in your Exports folder."), `the done line: ${doneLine}`);
 check(await until(() => viewFile().guide?.done?.length === 7), `view.json keeps the ticks: ${JSON.stringify(viewFile().guide)}`);
 await clean("[data-testid=guide]", "the guide done");
+// In the app the save panel can put the song anywhere: the done line names the file it saved.
+fs.mkdirSync(`${HOME}/Desktop`, { recursive: true });
+const app2 = await appPage({ export_path: `${HOME}/Desktop/First.wav` });
+await app2.waitForSelector("[data-testid=guide-done]", { timeout: 5000 }).catch(() => null);
+await app2.evaluate(() => window.__menu("export"));
+await app2.waitForSelector("[data-testid=export-dialog]", { timeout: 3000 }).catch(() => null);
+await app2.keyboard.press("Enter");
+const appLine = async () => app2.$eval("[data-testid=guide-done]", (e) => e.innerText.replace(/\s+/g, " ").trim()).catch(() => "");
+check(
+  await until(async () => (await appLine()).startsWith("You made a song. It is saved as First.wav."), 15000) && fs.existsSync(`${HOME}/Desktop/First.wav`),
+  `in the app, saved to the Desktop: the done line names the file (${await appLine()})`,
+);
+check((await appLine()).endsWith("Show in Finder"), `with Show in Finder: ${await appLine()}`);
+await app2.close();
 
 // ---------------------------------------------------------------- kept, folded, closed
 

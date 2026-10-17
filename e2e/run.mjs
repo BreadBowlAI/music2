@@ -81,7 +81,7 @@ export const SUITES = [
   ["dsp", "proj", { expect: 33 }],
   ["start", "proj", { expect: 24 }],
   ["start", "empty", { expect: 14 }],
-  ["st-guide", "none", { expect: 36 }],
+  ["st-guide", "none", { expect: 38 }],
   ["fixes-graph", "fix", { expect: 42 }],
   ["fixes-notes", "fix", { expect: 37 }],
   ["attention", "attn", { expect: 57 }],

@@ -99,7 +99,13 @@ export function guideDid(id: "sound") {
   tick([id]);
 }
 
-/** The last file an export made, while this window has been open: the done line shows it. */
+/** The song was saved as a MIDI file at `path`: Export it ticks, as an audio export does (the review's F6). */
+export function guideExported(path: string) {
+  useExported.setState({ path });
+  tick(["export"]);
+}
+
+/** The last file an export made, while this window has been open: the done line names it. */
 export const useExported = create<{ path: string | null }>(() => ({ path: null }));
 
 // What ticks the steps, for as long as the page is open: the song as it changes, the transport

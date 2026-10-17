@@ -7,6 +7,16 @@ import { openNewSong } from "./NewSongDialog";
 import { Button, keepFocus } from "./ui";
 
 /**
+ * Where the song went, in the done line. A browser's export always goes to the Exports folder; the
+ * app's goes where its save panel says, so the line names the file (the review's F6).
+ */
+function doneWords(exported: string | null) {
+  if (!native) return "You made a song. It is in your Exports folder.";
+  if (!exported) return "You made a song.";
+  return `You made a song. It is saved as ${exported.split(/[\\/]/).pop()}.`;
+}
+
+/**
  * Make Your First Song (the studio plan's Q47): a card at the top of the side browser, so it never
  * covers the timeline. Seven steps that tick themselves: the current one in `fg` 600 with what to
  * do under it, the ones done `fg-muted` with a check, the rest `fg-faint`. Folded, one line.
@@ -73,7 +83,7 @@ export default function Guide() {
           </ol>
           {!current && (
             <div data-testid="guide-done" className="mt-2 pt-2 border-t border-line text-sm text-fg">
-              You made a song. It is in your Exports folder.
+              {doneWords(exported)}
               {native && exported && (
                 <Button variant="secondary" size="sm" onClick={reveal} className="mt-1.5">
                   {revealLabel}

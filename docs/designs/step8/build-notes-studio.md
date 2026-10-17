@@ -1679,3 +1679,16 @@ said "No MIDI keyboard is plugged in."
 - Tests: `settings_name_the_keyboards_with_no_song_open` (`routes_record_tests.rs`); `st-record` closes the song,
   opens a new window on the start screen and finds the keyboard's row (63 to 66). Green with `nx-settings` (42).
 - Red: `left: Null, right: ["Keys"]` (the answer had only `off`); `FAIL  the keyboard plugged in has its row ()`.
+
+#### F6. The guide's done line, and a MIDI export
+
+The guide's done line always said "It is in your Exports folder.", but the app's save panel can put the song anywhere.
+And the Export dialog's MIDI choice never ticked "Export it."
+
+- `Guide.tsx`: in a browser (whose exports always go to Exports) the line is as before; in the app it names the file:
+  "You made a song. It is saved as First.wav.", with Show in Finder.
+- `guide.ts`' `guideExported`, called by `midiFiles.ts` when the song is saved as a MIDI file: "Export it." ticks.
+- Tests: `st-guide` exports step 7 as a MIDI file, then exports from an app page whose save panel picks the Desktop
+  and reads the done line (36 to 38). Green with `st-midi` (19).
+- Red: `FAIL  7. exported as a MIDI file: Export it ticks`, `FAIL  in the app, saved to the Desktop: the done line
+  names the file (You made a song. It is in your Exports folder.Show in Finder)`.

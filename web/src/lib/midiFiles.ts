@@ -4,6 +4,7 @@
 // written by the server (crates/server/src/routes_exchange.rs): never into the song.
 
 import { projectApi, readJson, tilde, type ClipRef, type GraphState } from "./graph";
+import { guideExported } from "./guide";
 import { native, nativeAction, revealLabel, token } from "./native";
 import { useStore } from "./store";
 
@@ -58,6 +59,7 @@ export async function exportMidi(clip?: ClipRef): Promise<string | null> {
     const slash = done.path.lastIndexOf("/");
     const file = done.path.slice(slash + 1);
     const saved = `Saved ${what} as a MIDI file: ${file}`;
+    if (!clip) guideExported(done.path);
     if (native) {
       const reveal = () => void nativeAction("reveal_file", done.path).catch((error) => toast(message(error)));
       toast(`${saved}.`, { label: revealLabel, run: reveal });
