@@ -750,3 +750,25 @@ fn the_counts_last_beat_is_measured_in_time() {
     let (pitch, start, _, _) = note(c, 0);
     assert_eq!((pitch, start), (60.0, 0.0), "on the first beat: {c}");
 }
+
+// The review's R5: a new player (another output, a fallback) ends the take where it was last heard,
+// not at its start: a note held then keeps its length.
+#[test]
+fn a_new_player_ends_the_take_where_it_was_last_heard() {
+    let mut r = Rig::new();
+    r.anchored(0, 0.0);
+    r.start(false, None);
+    r.to(1.0);
+    let on = r.key(&[0x90, 60, 100]);
+    r.to(2.5);
+    let last = r.at();
+    // The take thread looks, as it does every 100 ms; then the output changes.
+    r.graph.record_tick();
+    let (player, _driver) = Player::driven(48_000);
+    *r.graph.inner.player.lock() = Some(Device { player, epoch: 1, resume: 0.0 });
+    let said = r.written();
+    assert!(said["written"].is_object(), "{said}");
+    let (_, start, length, _) = note(&r.clips()[0], 0);
+    assert!(on.has(start), "{on:?}: {start}");
+    assert!((start + length - last).abs() < 0.05, "held to where it was last heard ({last}): {start} + {length}");
+}

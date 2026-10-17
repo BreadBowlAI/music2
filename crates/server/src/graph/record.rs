@@ -13,7 +13,8 @@
 //!   time, as its clicks are, whatever the tempo before the start (the review's R4).
 //! - **First pass only** (Q27, D5): a note heard past the loop's end isn't kept, and the take ends
 //!   there. A loop turned on, moved or turned off while it records moves that end (the review's
-//!   R2). A Stop, R, a jump, or a new player ends it where it is heard.
+//!   R2). A Stop, R, a jump, or a new player ends it where it is heard: a new player where it was
+//!   last heard (the review's R5).
 //! - **Ending never waits** (D7): held notes end and the end bar is fixed under the control plane's
 //!   lock, and the take waits in a queue. The take thread ([`Graph::record_tick`]) writes it: one
 //!   `Clips` Tx on the lane (`Gesture::Set`), one undo step, "recording on Bass".
@@ -101,6 +102,9 @@ struct Take {
     anchor: Option<u64>,
     /// Where the first pass ends: the loop's end, when it loops over `from`.
     until: Option<f64>,
+    /// The latest beat heard, by a note or the take thread's tick: where the take ends when its
+    /// player is gone (the review's R5).
+    last: f64,
     notes: Vec<Note>,
     /// Notes sounding, by source and handle: where each started, its pitch and its velocity.
     held: BTreeMap<(u32, u32), (f64, f64, f64)>,
@@ -197,7 +201,13 @@ impl Take {
         (early <= self.lead + 1.0).then_some(self.from)
     }
 
+    /// `beat` was heard: the latest so far, unless it is earlier.
+    fn heard(&mut self, beat: f64) {
+        self.last = self.last.max(beat);
+    }
+
     fn on(&mut self, key: (u32, u32), pitch: f64, velocity: f64, (clock, beat): (u64, f64)) -> bool {
+        self.heard(beat);
         let Some(start) = self.admit(clock, beat) else { return false };
         self.off(key, beat);
         self.held.insert(key, (start, pitch, velocity));
@@ -205,6 +215,7 @@ impl Take {
     }
 
     fn off(&mut self, key: (u32, u32), beat: f64) -> bool {
+        self.heard(beat);
         let Some((start, pitch, velocity)) = self.held.remove(&key) else { return false };
         let end = self.until.map_or(beat, |u| beat.min(u));
         self.notes.push(Note { pitch, start, length: (end - start).max(SHORTEST), velocity });
@@ -315,7 +326,7 @@ impl Recorder {
             self.drop_take();
             return;
         }
-        let beat = heard.and_then(|h| t.beat_of(h)).unwrap_or(t.from);
+        let beat = heard.and_then(|h| t.beat_of(h)).unwrap_or(t.last);
         self.end_at(beat);
     }
 
@@ -389,6 +400,7 @@ impl Graph {
             phase: Phase::Take,
             anchor: None,
             until: None,
+            last: 0.0,
             notes: vec![],
             held: BTreeMap::new(),
             began: Instant::now(),
@@ -418,6 +430,7 @@ impl Graph {
             }
         }
         take.start = bar_before(&take.arrangement, take.from);
+        take.last = take.from;
         take.until = looped.filter(|(_, end)| take.from < *end).map(|(_, end)| end);
         let shown = take.shown(None);
         cp.record.take = Some(take);
@@ -528,14 +541,18 @@ impl Graph {
                     // The song closed or another opened: nothing is kept.
                     r.drop_take();
                 } else if same.is_none() {
-                    // A new player (a crash, another output): its clock starts again (D29).
-                    let beat = t.from;
+                    // A new player (a crash, another output): its clock starts again (D29). The take
+                    // ends where it was last heard.
+                    let beat = t.last;
                     r.end_at(beat);
                 } else if let Some(d) = same {
                     t.resolve(&d.player);
                     let heard = d.player.heard_frame();
                     let clock = heard.map(|(c, _)| c);
                     let beat = heard.and_then(|h| t.beat_of(h));
+                    if let Some(b) = beat {
+                        t.heard(b);
+                    }
                     let counting = t.counting(clock);
                     let playing = d.player.is_playing();
                     match t.phase {
@@ -561,7 +578,7 @@ impl Graph {
                         }
                         // Stopped some other way: the take ends there.
                         _ if !playing && t.anchor.is_some() => {
-                            let at = beat.unwrap_or(t.from);
+                            let at = beat.unwrap_or(t.last);
                             r.end_at(at);
                         }
                         _ => {}

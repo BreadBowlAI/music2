@@ -1599,3 +1599,13 @@ kept (against D27).
 - Test: `the_counts_last_beat_is_measured_in_time` (120 BPM before beat 8, 60 from it: a note 0.9 s early lands on
   the first beat, one 1.1 s early isn't kept). `Rig::with` puts extra files in the test song.
 - Red: `index out of bounds: the len is 0 but the index is 0` (both notes dropped: the take was empty).
+
+#### R5. A new player cut held notes to a blip
+
+A take whose player went (another output, a fallback, 8a's crash recovery) ended at its start, so every note still
+held became 1/64 beat long.
+
+- `record.rs`: the take keeps the latest beat heard (`last`), from each note and each tick of the take thread; a take
+  whose player is gone, or that has no heard frame, ends there.
+- Test: `a_new_player_ends_the_take_where_it_was_last_heard` (a note held from beat 1, the output changed at 2.5).
+- Red: `held to where it was last heard (2.5): 1.0000416666666667 + 0.015625`.
