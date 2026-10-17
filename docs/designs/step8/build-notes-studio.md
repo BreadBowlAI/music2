@@ -283,6 +283,78 @@ build, check and render music2 projects`.
 names the asset before the session takes it in): one line.
 
 **Contract**: WRITE-18's list of writers gains `m2 import`.
+### A2, second part. Drops and audio tracks (with P0's pieces built here)
+
+**In short**
+
+| What | Now |
+|---|---|
+| + Track ▸ Audio | The list's last group, "Audio": "Audio track · Plays recordings and loops: drop a WAV file on it". Typing "audio" finds it. "Added Audio", with Undo |
+| Drag WAV files onto the window | Onto an audio track: there, at the bar. Onto another track: a new audio track right after it. Below the tracks: a new audio track for each file, at the end. Each named after its file ("Drum loop") |
+| While dragging | A blue outline where the files land, and words: "Audio · bar 2", "New audio track · bar 3", "3 new audio tracks · bar 5". Another kind of file: "music2 opens WAV and MIDI files" |
+| File ▸ Import Audio… with no audio track selected | A new audio track after the selected one (at the end with none) |
+| The toast | Only when a track was added: "Added Drum loop, playing drum loop.wav", with Undo |
+
+**For the merge with P0:** P0 wasn't on `studio` while lane A ran (nothing of it by the evening of Day 1), and
+without its pieces nobody could make an audio track in the app. Lane A built them to the plan's P0 spec, each so
+the integrator keeps one side:
+
+| P0 piece | Built here | At the merge |
+|---|---|---|
+| P0.3 `tracks::add_tracks` (`Play`, `NewTrack`, `adds`, `add` as `add_tracks` with one track) | `crates/editor/src/tracks.rs`: one block replacing `adds_one`/`add` (`adds_one` kept as `adds` with one), plus `AUDIO_LANE`, `audio_call_text`, `joined_entries`, `with_fresh_ids`, `unique_label_among`; its four tests and one more in `tracks_tests.rs`; the audio form in `gate5_tests.rs` and `tests/forms/forms.ts` | If P0 built its own, keep P0's and point `import::place` and `Graph::add_audio_track` at it (same names, same shapes) |
+| P0.4 the drop layer | `web/src/lib/drop.ts` (`onFiles(extensions, types, {hint, drop, where})`, `target(x, y)`, `listenForDrops`, `useDropHint`) and `components/DropLayer.tsx` (mounted after `<Toasts />`). The beat origin is the ruler's left edge, so `SongTimeline.tsx` needs no `data-beat-origin` | Keep one. Lane C registers `.mid` with `onFiles` (its `types` argument is new: the MIME types a browser says while it drags) |
+| P0.5 `open_file` | Not built: the page's file input stands in, in the app too (WebKit shows the system's dialog for it) | `importAudio()` already asks `nativeAction("open_file")` first, so P0's action takes over by itself |
+| P0.6 `applib`/`droplib` | Not built: `st-audio` has its own `wav()` and drops files as a browser does (a `DataTransfer` with `File`s) | The app page's Tauri drag events are checked by hand on the Mac (HANDOFF) until `applib` lands |
+
+**What changed (lane A's own)**
+
+- `crates/editor/src/import.rs`: `place` with `Target::Track` and `Target::Below`: one `add_tracks` with a
+  `NewTrack { play: Audio, label: "Lead vox" for lead vox.wav, clips: [its clip] }` per file, after the track or at
+  the end; the clips made are read back for the page to select.
+- `crates/server/src/graph/import.rs`: `Graph::add_audio_track(token, label, after)`, the step named "adding Audio".
+  `routes_audio.rs`: `POST /api/graph/audio/track {session, label?, after?}` (a write: 423 read only).
+- `web/src/lib/audioImport.ts`: `AUDIO_TRACK` (+ Track's Audio row) and `addAudioTrack`; the WAV kind registered with
+  the drop layer: its hint words, `where` (the outline on the lane it really goes to: a notes lane's drop outlines a
+  new track under it), and its drop; the import's toast has Undo when a track was added.
+- `web/src/components/Tracks.tsx` (A's block): the Audio group last when adding (never in Change Instrument), its
+  foot `tracks/audio.ts · lane.audio("clips")`.
+- `web/src/components/SongTimeline.tsx`: an audio lane's tooltip says "Drop WAV files here, or use File ▸ Import Audio
+  (⇧⌘I)".
+- `e2e/s8-tracks.mjs`: the list's groups and rows end with Audio (the check's values; its count stays).
+
+**Tests**
+
+- `tracks_tests.rs`: `two_tracks_in_one_tx_are_one_undo_step`, `an_audio_track_plays_its_lane` (the render: the
+  clip sounds, nothing else changes), `a_new_track_carries_its_clips_with_fresh_ids`,
+  `an_arrangement_written_with_new_tracks_is_admitted` (one undo takes the tempo back too),
+  `two_new_tracks_of_one_name_stay_apart`; every earlier `tracks_tests` test unchanged and green.
+- `import_tests.rs`: `a_drop_below_the_tracks_adds_a_track_and_its_clip_in_one_step`,
+  `a_drop_on_a_notes_track_adds_an_audio_track_after_it`.
+- `routes_audio_tests.rs`: `an_audio_track_through_the_route`.
+- `st-audio` part 4 (90 checks in all): "audio" finds the Audio group, its foot, lint; Enter adds Audio (its file, its
+  empty lane, "Added Audio", "Undo adding Audio"); a drop below the tracks ("New audio track · bar 3", a dashed
+  outline) makes "Drum loop" at bar 3 with its waveform, "Undo importing drum loop.wav"; a drop on Kick ("New audio
+  track · bar 2", outlined under Kick) makes an audio track right after Kick; two files onto the Audio lane ("Audio ·
+  bar 2", a solid outline, linted) land one after another; the hint goes after a drop; an MP3 says "music2 opens WAV
+  and MIDI files" and writes nothing; an instrument's drag shows no file hint (D12); lint.
+
+**Red first**
+
+- `add_tracks` as one `add` per track: `two_tracks_in_one_tx_are_one_undo_step`: `one revision left: 3 right: 2`.
+- `st-audio` on `a-dist-before`: `FAIL typing "audio" finds the Audio group: []`, then no foot line to read.
+
+**Checks**: clippy (`m2-editor`, `m2-server`, `m2`) and the mac lint; tests (329 + 320; one timing test,
+`midi_never_waits_for_a_compile`, failed once under the machine's load and passed three times alone: unchanged code);
+the web build (with the forms' type check); `st-audio` 90/90, `taste` 39/39, `s8-tracks` 75/75, `pl-tracks` 20/20,
+`pc-keys` 37/37, `s8-clips` 94/94, `pl-sounds` 45/45, `s8-leases` 55/55, `nx-effects` 47/47.
+
+**Left**: the app's Tauri drop checked by a suite (P0.6's app page), `open_file` (P0.5), `tips()` in st-audio;
+`m2 import` onto a new track (it can use `add_tracks` now: a small follow-up).
+
+**For gaps.md**: #18: drops (onto a track, a new track, below the tracks) and + Track ▸ Audio track.
+
+**Contract**: WRITE-10 rows: several tracks in one Tx (`add_tracks`, with an arrangement written whole); an audio
+track (`lane.audio("clips")`, no instrument import). taste.md §3.6: + Track's last group is Audio. The drop hint.
 
 ## Lane B
 

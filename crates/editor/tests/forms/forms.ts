@@ -840,6 +840,8 @@ export default song(({ lane, time }) => {
     track("fm-synth", { name: "FM synth" }, ({ lane }) => fm.custom(lane.notes("notes"))),
     // std:synth-custom added as a track
     track("polysynth", { name: "Polysynth" }, ({ lane }) => synth.custom(lane.notes("notes"))),
+    // an audio track added
+    track("audio", { name: "Audio" }, ({ lane }) => lane.audio("clips")),
   ];
   void planned;
   return master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit }));

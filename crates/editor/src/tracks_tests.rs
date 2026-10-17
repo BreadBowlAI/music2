@@ -520,3 +520,101 @@ fn the_empty_templates_comment_reads_true_after_add() {
     // The same words on every OS: no key in them, which would be ⌘T on a Mac and Ctrl+T elsewhere.
     assert!(!song.contains('⌘'));
 }
+
+// ---------------------------------------------------------------- several tracks in one Tx (P0.3, built in lane A)
+
+fn audio_track(label: &str, clips: Vec<serde_json::Value>) -> NewTrack {
+    NewTrack { play: Play::Audio, label: Some(label.into()), key: None, clips }
+}
+
+// WRITE-10: two new tracks are one Tx, one undo step: their files, imports, channels, lanes and
+// layout all at once, and one undo takes every byte back.
+#[test]
+fn two_tracks_in_one_tx_are_one_undo_step() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let before = tree(&f);
+    let number = s.accepted().number;
+    let pluck = NewTrack { play: Play::Instrument("std:synth-pluck".into()), label: None, key: None, clips: vec![] };
+    let made = add_tracks(&mut s, &[pluck, audio_track("Vox", vec![])], Some("kick"), None).unwrap();
+    assert_eq!(s.accepted().number, number + 1, "one revision");
+    assert_eq!(made.iter().map(|m| (m.module.as_str(), m.label.as_str())).collect::<Vec<_>>(), [("synth-pluck", "Synth pluck"), ("vox", "Vox")]);
+    let song = f.read("song.ts");
+    assert!(song.contains("import synthPluck from \"./tracks/synth-pluck\";\nimport vox from \"./tracks/vox\";"), "{song}");
+    assert!(song.contains("\"synth-pluck\": synthPluck.out,\n      vox: vox.out"), "{song}");
+    // Both right after Kick, in the order given; each in a colour no other track has.
+    assert_eq!(order(&s)[..3], ["kick".to_string(), "synth-pluck".into(), "vox".into()]);
+    let c = colours(&s);
+    assert_ne!(c["synth-pluck"], c["vox"]);
+    crate::undo(&mut s).unwrap();
+    assert_eq!(tree(&f), before, "one undo takes both back, byte for byte");
+}
+
+// Lane A's Q8: an audio track's file plays its `clips` lane, with no instrument import; the clips
+// it carries play.
+#[test]
+fn an_audio_track_plays_its_lane() {
+    let f = fixture("examples/resample");
+    let mut s = f.open();
+    let quiet = render(&s, 12.0);
+    let clip = serde_json::json!({"start": 20, "length": 2, "asset": "keys-bounce.wav", "offset": 0});
+    let made = add_tracks(&mut s, &[audio_track("Keys bounce", vec![clip])], None, None).unwrap();
+    assert_eq!(made[0].module, "keys-bounce");
+    assert_eq!(
+        f.read("tracks/keys-bounce.ts"),
+        "import { track } from \"@m2/core\";\n\nexport default track(\"keys-bounce\", { name: \"Keys bounce\" }, ({ lane }) => lane.audio(\"clips\"));\n"
+    );
+    let LaneData::Audio(clips) = LaneData::read(&f.read("data/keys-bounce/clips.json"), &m2_song::LaneKind::Audio).unwrap() else { unreachable!() };
+    assert_eq!((clips.len(), clips[0].start, clips[0].asset.as_str()), (1, 20.0, "keys-bounce.wav"));
+    let heard = render(&s, 12.0);
+    // Beat 20 at 120 BPM is 10 s: silent before as it was, sounding after.
+    assert_eq!(heard[..480_000 - 4_800], quiet[..480_000 - 4_800], "nothing else changes");
+    assert!(heard[480_000..].iter().zip(&quiet[480_000..]).any(|(a, b)| a != b), "the new track's clip plays");
+    assert_eq!(s.timeline().tracks.iter().find(|t| t.module == "keys-bounce").map(|t| t.lanes[0].key().to_string()), Some("clips".into()));
+}
+
+// FMT-11, FMT-12: a new track's clips get fresh ids, as a gesture mints them, whatever they had.
+#[test]
+fn a_new_track_carries_its_clips_with_fresh_ids() {
+    let f = fixture("examples/resample");
+    let mut s = f.open();
+    let a = serde_json::json!({"id": "a3s9vpxb", "start": 4, "length": 1, "asset": "keys-bounce.wav"});
+    let b = serde_json::json!({"start": 0, "length": 1, "asset": "keys-bounce.wav"});
+    add_tracks(&mut s, &[audio_track("Two", vec![a, b])], None, None).unwrap();
+    let text = f.read("data/two/clips.json");
+    let data = LaneData::read(&text, &m2_song::LaneKind::Audio).unwrap();
+    let ids: Vec<String> = data.ids().into_iter().map(|i| i.unwrap().to_string()).collect();
+    assert_eq!(ids.len(), 2);
+    assert!(ids.iter().all(|i| m2_song::ClipId::valid(i) && i != "a3s9vpxb"), "{ids:?}");
+    assert_ne!(ids[0], ids[1]);
+    assert_eq!(m2_song::canonical(&data), text, "canonical, by start");
+    let LaneData::Audio(c) = data else { unreachable!() };
+    assert_eq!((c[0].start, c[1].start), (0.0, 4.0));
+}
+
+// WRITE-10's tempo rule: an arrangement written whole with the new tracks is admitted (a MIDI
+// file's tempo), in the same Tx.
+#[test]
+fn an_arrangement_written_with_new_tracks_is_admitted() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let number = s.accepted().number;
+    let arrangement = "{\n  \"tempo\": [\n    {\"beat\": 0, \"bpm\": 128}\n  ],\n  \"meter\": []\n}\n".to_string();
+    add_tracks(&mut s, &[audio_track("Drums", vec![])], None, Some(arrangement.clone())).unwrap();
+    assert_eq!(s.accepted().number, number + 1);
+    assert_eq!(f.read("data/arrangement.json"), arrangement);
+    assert_eq!(s.accepted().compiled.data.tempo().bpm_at(0.0), 128.0);
+    crate::undo(&mut s).unwrap();
+    assert_eq!(s.accepted().compiled.data.tempo().bpm_at(0.0), 124.0, "one undo takes the tempo back too");
+}
+
+// Names and IDs stay apart within one Tx: two "Vox" are Vox and Vox 2, keyed vox and vox-2.
+#[test]
+fn two_new_tracks_of_one_name_stay_apart() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let made = add_tracks(&mut s, &[audio_track("Vox", vec![]), audio_track("Vox", vec![])], None, None).unwrap();
+    assert_eq!(made.iter().map(|m| (m.module.as_str(), m.label.as_str())).collect::<Vec<_>>(), [("vox", "Vox"), ("vox-2", "Vox 2")]);
+    let song = f.read("song.ts");
+    assert!(song.contains("vox: vox.out,\n      \"vox-2\": vox2.out"), "{song}");
+}

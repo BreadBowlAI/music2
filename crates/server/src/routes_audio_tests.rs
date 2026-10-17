@@ -170,3 +170,29 @@ fn a_read_only_window_cant_import() {
     drop(held);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// Q8: + Track ▸ Audio track adds one, named "Audio", as one step named "adding Audio"; a read-only
+// window can't.
+#[test]
+fn an_audio_track_through_the_route() {
+    // The first song: a mixer to give the track a channel.
+    let dir = std::env::temp_dir().join(format!("m2-routes-audio-track-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    copy(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song"), &dir);
+    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
+    let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+    let (status, done) = post(&running.url, "/api/graph/audio/track", "application/json", serde_json::json!({"session": session}).to_string().as_bytes());
+    assert_eq!((status, &done["module"], &done["label"]), (200, &serde_json::json!("audio"), &serde_json::json!("Audio")), "{done:#}");
+    assert!(std::fs::read_to_string(dir.join("tracks/audio.ts")).unwrap().contains("lane.audio(\"clips\")"));
+    let state = running.state.graph.state().unwrap();
+    assert_eq!(state["undo_name"]["name"], "adding Audio", "{:#}", state["undo_name"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn copy(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap().flatten() {
+        let (f, t) = (e.path(), to.join(e.file_name()));
+        if f.is_dir() { copy(&f, &t) } else { std::fs::copy(&f, &t).map(drop).unwrap() }
+    }
+}

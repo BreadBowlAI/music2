@@ -8,8 +8,8 @@
 //! A failure leaves nothing. music2 never deletes an asset (Q4).
 //!
 //! [`place`] puts the files' clips in the song as one Tx, one undo step, after taking the new
-//! files in (D1): onto an audio lane, one after another; or onto a new audio track each (P0's
-//! `tracks::add_tracks`). A clip plays its file at its own speed from where it lands: it is as
+//! files in (D1): onto an audio lane, one after another; or onto a new audio track each
+//! (`tracks::add_tracks`). A clip plays its file at its own speed from where it lands: it is as
 //! long as the file at the song's tempo there (Q5).
 
 use std::collections::BTreeSet;
@@ -26,6 +26,7 @@ use serde_json::json;
 
 use crate::clips::{self, Gesture};
 use crate::render::{name_new, part_path, sweep};
+use crate::tracks::{self, AUDIO_LANE, NewTrack, Play};
 use crate::{EditError, Edited};
 
 /// The longest file an import takes, in seconds: audio is kept in memory for now (RENDER-30).
@@ -325,7 +326,25 @@ pub fn place(s: &mut Session, files: &[Imported], at: &Target) -> Result<Placed,
             Ok(Placed { edited: done.edited, made: done.made, tracks: vec![] })
         }
         Target::Track { .. } | Target::Below { .. } => {
-            Err(refused("A new audio track for a file waits for P0's tracks::add_tracks.".into()))
+            // A new audio track for each file, named after it, its clip at the beat: one Tx.
+            let after = match at {
+                Target::Track { module, .. } => Some(module.as_str()),
+                _ => None,
+            };
+            let new: Vec<NewTrack> = files
+                .iter()
+                .map(|f| NewTrack { play: Play::Audio, label: Some(track_label(f)), key: None, clips: vec![clip_json(f, beat, length_at(&tempo, beat, f.seconds))] })
+                .collect();
+            let made = tracks::add_tracks(s, &new, after, None)?;
+            let data = &s.accepted().compiled.data;
+            let mut clips = vec![];
+            for m in &made {
+                let lane = LaneAddr { module: Key::new(&m.module).map_err(refused)?, lane: Key::new(AUDIO_LANE).map_err(refused)? };
+                let ids = data.lane(&m.module, AUDIO_LANE).map(|d| d.ids().into_iter().flatten().map(str::to_string).collect::<Vec<_>>()).unwrap_or_default();
+                clips.extend(ids.into_iter().map(|id| (lane.clone(), id)));
+            }
+            let edited = made[0].edited.clone();
+            Ok(Placed { edited, made: clips, tracks: made.into_iter().map(|m| (m.module, m.label)).collect() })
         }
     }
 }

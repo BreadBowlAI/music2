@@ -3,13 +3,15 @@
 // there again) and places its clip, as one undo step ("Undo importing vox.wav"). In the app the
 // files go as paths; in a browser, as bytes.
 
-import { barAt, graphApi, lockReason, readJson, type GraphState } from "./graph";
+import { barAt, graphApi, lockReason, moduleName, readJson, type GraphState, type Instrument } from "./graph";
+import { onFiles, type DropTarget } from "./drop";
 import { useClipSelection } from "./clips";
 import { beatNow } from "./clock";
 import { native, nativeAction, token } from "./native";
 import { useShell } from "./shell";
 import { useStore } from "./store";
 import { trackMade } from "./events";
+import { undoAction } from "../components/GraphCanvas";
 
 /** A file to bring in: its path on this computer (the app), or the file itself (a browser). */
 export type Incoming = { name: string; path: string } | { name: string; file: File };
@@ -77,7 +79,8 @@ export async function bringIn(files: Incoming[], to: Target) {
     const said = [...done.notes];
     if (done.tracks.length === 1) said.unshift(`Added ${done.tracks[0].label}, playing ${done.assets[0]}`);
     else if (done.tracks.length > 1) said.unshift(`Added ${done.tracks.length} audio tracks`);
-    if (said.length) toast(said.join(" "));
+    // A new track may be off screen: its toast has Undo.
+    if (said.length) toast(said.join(" "), done.tracks.length ? undoAction(graph.session, done.revision) : undefined);
   } catch (error) {
     toast(`Nothing was added to the song: ${words(error)}`);
   }
@@ -141,3 +144,87 @@ export async function importAudio() {
   if (!now || now.session !== graph.session || files.length === 0) return;
   await bringIn(files, menuTarget(now));
 }
+
+/** + Track's last group, "Audio" (Q8): an audio track, not an instrument. Never in Change Instrument. */
+export const AUDIO_TRACK: Instrument = {
+  component: "audio:track",
+  label: "Audio track",
+  name: "",
+  module: "",
+  description: "Plays recordings and loops: drop a WAV file on it",
+  category: "Audio",
+  lane: "clips",
+};
+
+/**
+ * + Track ▸ Audio track: an audio track after `after` (else last), selected and lit, with a toast
+ * that has Undo ("Undo adding Audio").
+ */
+export async function addAudioTrack(after: string | null) {
+  const { graph, connected, toast } = useStore.getState();
+  if (!graph) return;
+  const why = lockReason(graph, connected);
+  if (why) return void toast(`${why}.`);
+  try {
+    const res = await fetch("/api/graph/audio/track", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...auth },
+      body: JSON.stringify({ session: graph.session, ...(after ? { after } : {}) }),
+    });
+    const json = await readJson(res);
+    if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+    const fresh = await graphApi.get();
+    useStore.getState().set({ graph: fresh });
+    useShell.getState().select(json.module);
+    trackMade(json.module, AUDIO_TRACK.lane);
+    toast(`Added ${json.label}`, undoAction(graph.session, json.revision));
+  } catch (error) {
+    toast(words(error));
+  }
+}
+
+// ---------------------------------------------------------------- drops (Q6)
+
+/** The WAV types a browser says while it drags a file (no names until the drop). */
+const WAV_TYPES = ["audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave"];
+
+/**
+ * Where dropped audio goes (Q6): onto the audio lane under the pointer, or a track's audio lane;
+ * any other track gets a new audio track right after it; below the tracks, a new one for each file.
+ */
+function audioTarget(t: DropTarget): Target | null {
+  const graph = useStore.getState().graph;
+  if (!graph || t.kind === "none") return null;
+  if (t.kind === "below") return { kind: "below", beat: t.beat };
+  const track = graph.timeline.tracks.find((x) => x.module === t.module);
+  if (!track) return null;
+  const here = t.kind === "lane" ? track.lanes.find((l) => l.key === t.lane) : undefined;
+  const audio = here?.kind === "audio" ? here : t.kind === "track" ? track.lanes.find((l) => l.kind === "audio") : undefined;
+  if (audio) return { kind: "lane", module: t.module, lane: audio.key, beat: t.beat };
+  return track.track ? { kind: "track", module: t.module, beat: t.beat } : null;
+}
+
+onFiles(WAV, WAV_TYPES, {
+  hint(files, t) {
+    const graph = useStore.getState().graph;
+    const to = audioTarget(t);
+    if (!graph || !to) return null;
+    const bar = `bar ${barAt(graph.timeline.meter, to.beat).bar + 1}`;
+    if (to.kind === "lane") {
+      const t = graph.timeline.tracks.find((x) => x.module === to.module);
+      return `${moduleName({ key: to.module, label: t?.label })} · ${bar}`;
+    }
+    return files.length > 1 ? `${files.length} new audio tracks · ${bar}` : `New audio track · ${bar}`;
+  },
+  where(t) {
+    const to = audioTarget(t);
+    if (!to) return { kind: "none" };
+    return to.kind === "lane" ? { kind: "lane", module: to.module, lane: to.lane, beat: to.beat } : to;
+  },
+  drop(files, t) {
+    const to = audioTarget(t);
+    if (!to) return;
+    const incoming = files.flatMap((f): Incoming[] => (f.path ? [{ name: f.name, path: f.path }] : f.file ? [{ name: f.name, file: f.file }] : []));
+    void bringIn(incoming, to);
+  },
+});

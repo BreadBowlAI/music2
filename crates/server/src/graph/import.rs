@@ -120,6 +120,28 @@ impl Graph {
     }
 }
 
+impl Graph {
+    /// The + Track list's Audio track (Q8): an audio track named `label` (else "Audio"), after
+    /// track `after` (else last), as one undo step named "adding Audio". Answers `{module, label,
+    /// revision}`.
+    pub fn add_audio_track(&self, token: u64, label: Option<String>, after: Option<String>) -> Result<Value> {
+        let added = self.call(move |a| {
+            a.edit_and(token, |s| {
+                let new = m2_editor::tracks::NewTrack { play: m2_editor::tracks::Play::Audio, label, key: None, clips: vec![] };
+                let made = m2_editor::tracks::add_tracks(s, &[new], after.as_deref(), None)?.remove(0);
+                Ok((made.edited, json!({"module": made.module, "label": made.label})))
+            })
+        })?;
+        if let (Some(revision), Some(label)) = (added["revision"].as_u64(), added["label"].as_str()) {
+            self.name_step(token, revision, format!("adding {label}"), true)?;
+        }
+        if let Some(k) = added["module"].as_str() {
+            self.forget_overlays(&[k.to_string()]);
+        }
+        Ok(added)
+    }
+}
+
 /// An import's refusal as the page says it: without "edit rejected: ".
 fn words(e: &m2_editor::EditError) -> String {
     e.to_string().trim_start_matches("edit rejected: ").to_string()

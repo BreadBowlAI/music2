@@ -23,6 +23,7 @@ import { togglePiano } from "./lib/piano";
 import "./lib/midi";
 import KeyboardPiano from "./components/KeyboardPiano";
 import { importAudio } from "./lib/audioImport";
+import DropLayer from "./components/DropLayer";
 
 /** Fetch the open project. An error means none is open: the start screen shows. */
 const refreshGraph = () =>
@@ -201,6 +202,7 @@ export default function App() {
         <Shortcuts />
         <SettingsDialog />
         <Toasts />
+        <DropLayer />
         <KeyboardPiano />
         {/* With a song open, the top bar's status pill says it; on the start screen, this one does. */}
         {!connected && !graph && (

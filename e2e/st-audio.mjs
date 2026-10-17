@@ -12,6 +12,11 @@
 // of tone.wav"); a fade handle dragged in writes a fade ("Fade in 0.40 s", "Undo Tone fade in");
 // Volume… −6 writes −6 dB and the waveform halves; Reverse writes it, checked, and mirrors the
 // waveform; Remove fades; a reversed clip trims; each new state linted.
+// Part 4 (A2, drops and + Track): + Track ▸ Audio track ("audio" finds it; its foot says the code;
+// "Added Audio"; "Undo adding Audio"); WAV files dropped (as a browser drops them) below the tracks
+// make a new audio track at the bar with its waveform, on Kick (notes) one right after it, on an
+// audio lane they land there; the hints say so while dragging, with an outline; an MP3 says what
+// music2 opens and writes nothing; an instrument's drag shows no file hint; each state linted.
 //
 //   node e2e/st-audio.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -277,10 +282,10 @@ const rows = async () => {
 const listed = await rows();
 const at = (id) => listed.findIndex((r) => r[0] === id);
 check(at("volume") === at("split") + 1 && at("reverse") === at("volume") + 1 && at("unfade") === at("reverse") + 1, `Volume…, Reverse and Remove fades come after Split: ${listed.map((r) => r[0])}`);
-check(listed[at("reverse")][1] === "false" && listed[at("unfade")][2] === false, `Reverse unchecked, Remove fades on: ${JSON.stringify(listed.slice(at("volume"), at("unfade") + 1))}`);
+check(listed[at("reverse")]?.[1] === "false" && listed[at("unfade")]?.[2] === false, `Reverse unchecked, Remove fades on: ${JSON.stringify(listed.slice(at("volume"), at("unfade") + 1))}`);
 
 // Volume… −6: the label says it and the waveform halves.
-const full = mean((await columns("p3")).map((c) => c.ink));
+const full = mean((await columns("p3")).map((c) => c.ink)) || 1;
 await (await menu(p3, "volume"))?.click();
 await page.waitForSelector("[data-testid=volume-popover] input", { timeout: 3000 }).catch(() => null);
 const focused = await page.evaluate(() => document.activeElement?.dataset.testid);
@@ -343,4 +348,103 @@ check(await until(() => laneClips().filter((c) => c.asset === "tone.wav" && c.ga
 check(await stepIs("deleting a Tone clip"), `"deleting a Tone clip": ${await undoTitle()}`);
 await linted(lane, "the lane after its edits");
 if (process.env.ST_SHOT) await page.screenshot({ path: `${process.env.ST_SHOT}/a3.png` });
+
+// ---------------------------------------------------------------- part 4: + Track ▸ Audio track, and drops
+
+const tracksNow = async () => (await api("")).body.timeline.tracks.filter((t) => t.track).map((t) => t.module);
+await page.keyboard.press("Escape");
+await page.click("[data-testid=add-track]");
+await page.waitForSelector("[data-testid=instrument-list] input");
+await page.keyboard.type("audio");
+const row = await page.$$eval("[data-testid=instrument-list] [role=group]", (gs) => gs.map((g) => [g.getAttribute("aria-label"), [...g.querySelectorAll("[role=option]")].map((o) => o.textContent)]));
+check(JSON.stringify(row) === JSON.stringify([["Audio", ["Audio trackPlays recordings and loops: drop a WAV file on it"]]]), `typing "audio" finds the Audio group: ${JSON.stringify(row)}`);
+const foot = await page.$eval("[data-testid=instrument-code]", (e) => e.textContent);
+check(foot === 'tracks/audio.ts · lane.audio("clips")', `its foot says the code: ${foot}`);
+await linted("[data-testid=instrument-list]", "+ Track's list with Audio");
+await page.keyboard.press("Enter");
+check(await until(async () => (await tracksNow()).includes("audio")), `+ Track ▸ Audio track adds one: ${await tracksNow()}`);
+check(fs.existsSync(`${PROJ}/tracks/audio.ts`) && read("tracks/audio.ts").includes('lane.audio("clips")') && JSON.parse(read("data/audio/clips.json")).clips.length === 0, "its file plays an empty clips lane");
+check(await until(async () => (await toasts()).some((t) => t.startsWith("Added Audio"))), `a toast says so: ${await toasts()}`);
+check(await stepIs("adding Audio"), `named "adding Audio": ${await undoTitle()}`);
+
+/** Drag files over (`x`, `y`) as a browser does, then (unless `hold`) drop them there; the hint said while over. */
+async function dropFiles(x, y, files, hold = false) {
+  return page.evaluate(
+    async (x, y, files, hold) => {
+      const dt = new DataTransfer();
+      for (const f of files) dt.items.add(new File([Uint8Array.from(atob(f.b64), (c) => c.charCodeAt(0))], f.name, { type: f.type }));
+      const at = document.elementFromPoint(x, y) ?? document.body;
+      const fire = (type) => at.dispatchEvent(new DragEvent(type, { dataTransfer: dt, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+      fire("dragenter");
+      fire("dragover");
+      // The hint draws on the next frame.
+      await new Promise((r) => setTimeout(r, 120));
+      const hint = document.querySelector("[data-testid=drop-hint]")?.textContent ?? null;
+      const outline = document.querySelector("[data-testid=drop-outline]")?.dataset.kind ?? null;
+      if (!hold) fire("drop");
+      return { hint, outline };
+    },
+    x,
+    y,
+    files.map((f) => ({ name: f.name, type: f.type ?? "audio/wav", b64: fs.readFileSync(f.path).toString("base64") })),
+    hold,
+  );
+}
+await sleep(150);
+await page.evaluate(() => document.querySelector("[data-testid=timeline]").scrollTo({ left: 0 }));
+await sleep(200);
+const ruler = await box("[data-testid=ruler]");
+const xAt = (beat) => ruler.x + beat * ppb + 6;
+const yBelow = async () => {
+  const rows = await page.$$eval("[data-track]", (els) => els.filter((e) => e.dataset.track !== "song").map((e) => e.getBoundingClientRect().bottom));
+  return Math.max(...rows) + 20;
+};
+wav(files, "drum loop.wav", 1, (t) => Math.sin(2 * Math.PI * 110 * t) * Math.exp(-((t * 4) % 1) * 6));
+// Below the tracks at bar 3: a new audio track, named after the file.
+const below = await dropFiles(xAt(9), await yBelow(), [{ name: "drum loop.wav", path: `${files}/drum loop.wav` }]);
+check(below.hint === "New audio track · bar 3" && below.outline === "below", `the hint below the tracks: ${JSON.stringify(below)}`);
+check(await until(async () => (await tracksNow()).includes("drum-loop")), `a drop below the tracks makes "Drum loop": ${await tracksNow()}`);
+const dl = () => JSON.parse(read("data/drum-loop/clips.json")).clips;
+check(dl().length === 1 && dl()[0].start === 8 && dl()[0].asset === "drum loop.wav", `its clip at bar 3: ${JSON.stringify(dl())}`);
+check(await until(() => page.$$eval('[data-lane="drum-loop.clips"] [data-clip] canvas', (cs) => cs.length === 1)), "with its waveform");
+check(await stepIs("importing drum loop.wav"), `named "importing drum loop.wav": ${await undoTitle()}`);
+// On Kick (notes) at bar 2: a new audio track right after Kick.
+const kick = await box('[data-lane="kick.hits"]');
+const onKick = await dropFiles(xAt(5), kick.y + kick.height / 2, [{ name: "hit.wav", path: `${files}/hit.wav` }]);
+check(onKick.hint === "New audio track · bar 2" && onKick.outline === "track", `the hint on Kick: ${JSON.stringify(onKick)}`);
+check(await until(async () => {
+  const t = await tracksNow();
+  return t[t.indexOf("kick") + 1] === "hit";
+}), `a drop on Kick makes an audio track right after it: ${await tracksNow()}`);
+// Two files onto the Audio track's lane at bar 2: onto it, one after another.
+const audioRow = await box('[data-lane="audio.clips"]');
+const onLane = await dropFiles(xAt(6), audioRow.y + audioRow.height / 2, [{ name: "hit.wav", path: `${files}/hit.wav` }, { name: "Lead Vox.WAV", path: `${files}/Lead Vox.WAV` }], true);
+check(onLane.hint === "Audio · bar 2" && onLane.outline === "lane", `the hint on the audio lane: ${JSON.stringify(onLane)}`);
+await linted("[data-testid=drop-hint]", "the drop hint");
+if (process.env.ST_SHOT) await page.screenshot({ path: `${process.env.ST_SHOT}/a4-hint.png` });
+await dropFiles(xAt(6), audioRow.y + audioRow.height / 2, [{ name: "hit.wav", path: `${files}/hit.wav` }, { name: "Lead Vox.WAV", path: `${files}/Lead Vox.WAV` }]);
+const audioClips = () => JSON.parse(read("data/audio/clips.json")).clips;
+check(await until(() => audioClips().length === 2), `two files onto the lane: ${audioClips().length}`);
+check(audioClips()[0].start === 4 && close(audioClips()[1].start, 4 + beats(0.3)), `one after another from bar 2: ${JSON.stringify(audioClips().map((c) => c.start))}`);
+check(!(await page.$("[data-testid=drop-hint]")), "the hint is gone after the drop");
+// Not a WAV: says what music2 opens, writes nothing.
+const rev = (await api("")).body.view.revision;
+const mp3 = await dropFiles(xAt(9), await yBelow(), [{ name: "song.mp3", path: `${files}/song.mp3`, type: "audio/mpeg" }]);
+check(mp3.hint === "music2 opens WAV and MIDI files" && mp3.outline === null, `an MP3's hint: ${JSON.stringify(mp3)}`);
+await sleep(400);
+check((await api("")).body.view.revision === rev && !fs.existsSync(`${PROJ}/assets/song.mp3`), "and nothing is written");
+// An instrument dragged from the browser is no file: no hint.
+const instrument = await page.evaluate(async (x, y) => {
+  const dt = new DataTransfer();
+  dt.setData("application/x-m2-instrument", "std:synth-pluck");
+  const at = document.elementFromPoint(x, y);
+  at.dispatchEvent(new DragEvent("dragenter", { dataTransfer: dt, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+  at.dispatchEvent(new DragEvent("dragover", { dataTransfer: dt, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+  await new Promise((r) => setTimeout(r, 120));
+  const hint = !!document.querySelector("[data-testid=drop-hint]");
+  at.dispatchEvent(new DragEvent("dragleave", { dataTransfer: dt, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+  return hint;
+}, xAt(9), await yBelow());
+check(!instrument, "an instrument's drag shows no file hint");
+await linted(lane, "the timeline after the drops");
 done(errors);

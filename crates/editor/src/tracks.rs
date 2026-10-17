@@ -331,10 +331,20 @@ fn with_layout(
 /// song removed but an empty mixer's stand-in, no value changed, and the new track in a channel
 /// of its own (ID-18).
 fn adds_one(checked: &Checked, key: &str, channel: &str) -> Result<(), EditError> {
+    adds(checked, &[(key.to_string(), channel.to_string())])
+}
+
+/// [`adds_one`] for several tracks at once: exactly the modules `made` names added, in any order,
+/// nothing of the song removed but an empty mixer's stand-in, no value changed, and each new track
+/// in its own channel.
+fn adds(checked: &Checked, made: &[(String, String)]) -> Result<(), EditError> {
     let d = &checked.delta;
     let refused = |why: &str| EditError::Rejected(format!("adding the track would {why}"));
-    let k = Key::new(key).map_err(EditError::Rejected)?;
-    if d.modules != [ModuleChange::Added(k)] {
+    let mut want = made.iter().map(|(k, _)| Key::new(k).map(ModuleChange::Added).map_err(EditError::Rejected)).collect::<Result<Vec<_>, _>>()?;
+    let mut got = d.modules.clone();
+    want.sort_by_key(|m| format!("{m:?}"));
+    got.sort_by_key(|m| format!("{m:?}"));
+    if got != want {
         return Err(refused("change other tracks too"));
     }
     if !d.values.is_empty() {
@@ -349,85 +359,263 @@ fn adds_one(checked: &Checked, key: &str, channel: &str) -> Result<(), EditError
         return Err(refused("take something out of the song"));
     }
     match mix::mixer(checked.candidate()) {
-        Mixing::One(m) if m.channel_of(key).is_some_and(|c| c.key == channel) => Ok(()),
+        Mixing::One(m) if made.iter().all(|(key, channel)| m.channel_of(key).is_some_and(|c| c.key == *channel)) => Ok(()),
         _ => Err(refused("not reach the mixer through its own channel")),
     }
+}
+
+/// What a new track plays: an instrument (its ComponentId, `std:synth-pluck`) from a notes lane,
+/// or audio clips from an audio lane (lane A's A2).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Play {
+    Instrument(String),
+    Audio,
+}
+
+/// A track to add: what it plays, its name (else the instrument's, or "Audio"), its key (else one
+/// proposed from its name, ID-2), and its lane's first clips, as the lane format writes them (each
+/// gets a fresh id, as a gesture mints one).
+#[derive(Clone, Debug, PartialEq)]
+pub struct NewTrack {
+    pub play: Play,
+    pub label: Option<String>,
+    pub key: Option<String>,
+    pub clips: Vec<serde_json::Value>,
+}
+
+/// The lane an audio track plays its clips from.
+pub const AUDIO_LANE: &str = "clips";
+
+/// The `track(…)` call a new audio track's file makes (lane A's Q8): also checked as a call form.
+pub(crate) fn audio_call_text(key: &str, label: &str) -> String {
+    let options = if label == key { String::new() } else { format!(", {{ name: {} }}", quoted(label)) };
+    format!("track({}{options}, ({{ lane }}) => lane.audio({}))", quoted(key), quoted(AUDIO_LANE))
 }
 
 /// Add a track playing instrument `component` (a ComponentId), shown as `label` (else the
 /// instrument's), keyed `key` (else one proposed from the label, ID-2), placed after track
 /// `after` in the layout (else last).
 pub fn add(s: &mut Session, component: &str, label: Option<&str>, key: Option<&str>, after: Option<&str>) -> Result<Made, EditError> {
+    let one = NewTrack { play: Play::Instrument(component.to_string()), label: label.map(str::to_string), key: key.map(str::to_string), clips: vec![] };
+    Ok(add_tracks(s, &[one], after, None)?.remove(0))
+}
+
+/// Add `tracks` as one Tx, one undo step (WRITE-10): each new track's file, all their imports in
+/// one insertion, all their channels in one edit of the mixer's object (in order, last), each
+/// lane's file with its clips, `layout.json` with each one's colour, after track `after` (else
+/// last); and, when given, `arrangement` as `data/arrangement.json`, written whole (a MIDI file's
+/// tempo). The planner asserts that exactly those modules are added, each in a channel of its own.
+pub fn add_tracks(s: &mut Session, tracks: &[NewTrack], after: Option<&str>, arrangement: Option<String>) -> Result<Vec<Made>, EditError> {
     ready(s)?;
-    let inst = instruments(s).into_iter().find(|i| i.component == component).ok_or_else(|| EditError::NotFound(component.to_string()))?;
+    if tracks.is_empty() {
+        return Err(EditError::Rejected("No track to add.".into()));
+    }
+    let catalog = instruments(s);
     let rev = s.accepted();
     let mixer = the_mixer(rev)?;
-    let label = match label.map(str::trim).filter(|l| !l.is_empty()) {
-        Some(l) if l.chars().any(char::is_control) => return Err(EditError::Rejected("a name is one line of text".into())),
-        Some(l) => unique_label(rev, l),
-        None => unique_label(rev, &inst.label),
-    };
-    let taken = taken(rev);
-    let key = match key {
-        Some(k) if !Key::valid(k) => {
-            return Err(EditError::Rejected(format!(
-                "{k} isn't an ID: IDs are lowercase letters, digits and hyphens, such as {}",
-                keys::propose(k, &taken).chars().take(32).collect::<String>().trim_matches('-')
-            )));
-        }
-        Some(k) if taken(k) => {
-            let track = rev.compiled.ir.modules.iter().any(|m| m.key == k);
-            return Err(EditError::Rejected(match channel_keys(rev).iter().any(|c| c.eq_ignore_ascii_case(k)) && !track {
-                true => format!("The mixer already has a channel called {k}: pick another ID"),
-                false => format!("{k} is taken: another track or its data has that ID"),
-            }));
-        }
-        Some(k) => k.to_string(),
-        None => match keys::propose(&label, &taken) {
-            k if k.is_empty() => keys::propose("track", &taken),
-            k => k,
-        },
-    };
-    let file = track_file(rev, &key);
     let song_text = rev.snapshot.files[Path::new(&mixer.file)].clone();
-    let binding = free_binding(&song_text, &camel(&key));
-    let entry = format!("{}: {binding}.out", prop_key(&key));
-    let (import_at, import) = import_edit(&song_text, &mixer.file, &file, &binding);
-    let mut edits = channel_edits(&song_text, &mixer, &entry);
-    edits.push((import_at, import_at, import));
+    let taken = taken(rev);
+    let tx_id = m2_song::tx::random_id();
+    // Names, keys, files and bindings made so far in this Tx: no two new tracks share one.
+    let (mut labels, mut keys_made, mut files, mut bindings) = (vec![], vec![], vec![], vec![]);
+    let mut entries = vec![];
+    let mut imports = vec![];
+    let mut writes = vec![];
+    let mut lanes = vec![];
+    let mut ranges: BTreeMap<TxPath, Declared> = BTreeMap::new();
+    for t in tracks {
+        let inst = match &t.play {
+            Play::Instrument(c) => Some(catalog.iter().find(|i| i.component == *c).ok_or_else(|| EditError::NotFound(c.clone()))?),
+            Play::Audio => None,
+        };
+        let fallback = inst.map_or("Audio", |i| i.label.as_str());
+        let label = match t.label.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
+            Some(l) if l.chars().any(char::is_control) => return Err(EditError::Rejected("a name is one line of text".into())),
+            Some(l) => unique_label_among(rev, l, &labels),
+            None => unique_label_among(rev, fallback, &labels),
+        };
+        let free = |k: &str| !taken(k) && !keys_made.iter().any(|m: &String| m.eq_ignore_ascii_case(k));
+        let key = match t.key.as_deref() {
+            Some(k) if !Key::valid(k) => {
+                return Err(EditError::Rejected(format!(
+                    "{k} isn't an ID: IDs are lowercase letters, digits and hyphens, such as {}",
+                    keys::propose(k, &taken).chars().take(32).collect::<String>().trim_matches('-')
+                )));
+            }
+            Some(k) if !free(k) => {
+                let track = rev.compiled.ir.modules.iter().any(|m| m.key == k);
+                return Err(EditError::Rejected(match channel_keys(rev).iter().any(|c| c.eq_ignore_ascii_case(k)) && !track {
+                    true => format!("The mixer already has a channel called {k}: pick another ID"),
+                    false => format!("{k} is taken: another track or its data has that ID"),
+                }));
+            }
+            Some(k) => k.to_string(),
+            None => match keys::propose(&label, |k| !free(k)) {
+                k if k.is_empty() => keys::propose("track", |k| !free(k)),
+                k => k,
+            },
+        };
+        let file = match track_file(rev, &key) {
+            f if files.contains(&f) => (2..).map(|n| format!("tracks/{key}-{n}.ts")).find(|f| !files.contains(f) && rev.snapshot.taken(Path::new(f)).is_none()).expect("a free file"),
+            f => f,
+        };
+        let mut binding = free_binding(&song_text, &camel(&key));
+        if bindings.contains(&binding) {
+            binding = (2..).map(|n| format!("{binding}{n}")).find(|b| !bindings.contains(b) && free_binding(&song_text, b) == *b).expect("a free binding");
+        }
+        entries.push(format!("{}: {binding}.out", prop_key(&key)));
+        imports.push(import_edit(&song_text, &mixer.file, &file, &binding));
+        let k = Key::new(&key).map_err(EditError::Rejected)?;
+        let lane_key = inst.map_or(AUDIO_LANE, |i| i.lane.as_str());
+        let lane = LaneAddr { module: k.clone(), lane: Key::new(lane_key).map_err(EditError::Rejected)? };
+        let kind = if inst.is_some() { m2_song::LaneKind::Notes } else { m2_song::LaneKind::Audio };
+        let data = with_fresh_ids(&t.clips, &kind, &tx_id, &lane)?;
+        let new_file = path(&file)?;
+        let text = match inst {
+            Some(i) => track_text(i, &key, &label, &file),
+            None => format!("import {{ track }} from \"@m2/core\";\n\nexport default {};\n", audio_call_text(&key, &label)),
+        };
+        writes.push(Op::Write { file: new_file.clone(), bytes: Payload::Text(text.into()) });
+        writes.push(Op::Write { file: TxPath::lane(&lane), bytes: Payload::Text(m2_song::canonical(&data).into()) });
+        ranges.insert(new_file, Declared::Whole);
+        lanes.push(lane);
+        labels.push(label);
+        keys_made.push(key);
+        files.push(file);
+        bindings.push(binding);
+    }
+    // The imports in one insertion where they share a place; the channels in one edit.
+    let mut edits = channel_edits(&song_text, &mixer, &joined_entries(&song_text, &mixer, &entries));
+    let mut grouped: Vec<(u32, String)> = vec![];
+    for (at, text) in imports {
+        match grouped.iter_mut().find(|g| g.0 == at) {
+            Some(g) => g.1.push_str(&text),
+            None => grouped.push((at, text)),
+        }
+    }
+    let mut declared = vec![Range::bytes(mixer.call.0, mixer.call.1)];
+    for (at, text) in grouped {
+        declared.push(Range::bytes(at, at));
+        edits.push((at, at, text));
+    }
     let edits = sorted(edits)?;
-
-    let k = Key::new(&key).map_err(EditError::Rejected)?;
-    let lane = LaneAddr { module: k.clone(), lane: Key::new(&inst.lane).map_err(EditError::Rejected)? };
-    let empty = m2_song::canonical(&LaneData::Notes(vec![]));
     let song_file = path(&mixer.file)?;
-    let new_file = path(&file)?;
-    let ops = vec![
-        Op::Write { file: new_file.clone(), bytes: Payload::Text(track_text(&inst, &key, &label, &file).into()) },
-        plan::text_edit(&song_file, &song_text, &edits),
-        Op::Write { file: TxPath::lane(&lane), bytes: Payload::Text(empty.into()) },
-    ];
-    let ranges = vec![Range::bytes(import_at, import_at), Range::bytes(mixer.call.0, mixer.call.1)];
+    let mut ops = vec![plan::text_edit(&song_file, &song_text, &edits)];
+    ops.extend(writes);
+    ranges.insert(song_file, Declared::Ranges(declared));
+    let arrangement = match arrangement {
+        Some(text) => {
+            let file = path(&DataPath::Arrangement.to_string())?;
+            ops.push(Op::Write { file: file.clone(), bytes: Payload::Text(text.into()) });
+            Some(file)
+        }
+        None => None,
+    };
     let expect = Expect::Confined(Confined {
-        ranges: [(new_file, Declared::Whole), (song_file, Declared::Ranges(ranges))].into(),
-        lanes: vec![lane],
-        modules: vec![ModuleChange::Added(k)],
+        ranges,
+        lanes: lanes.clone(),
+        modules: keys_made.iter().map(|k| Key::new(k).map(ModuleChange::Added)).collect::<Result<_, _>>().map_err(EditError::Rejected)?,
     });
     let layout = layout_write(s, |v| {
         let mut colours = v.colours.clone();
-        colours.insert(key.clone(), layout::unused(v.colours.values().copied()));
-        (placed(&v.order, &key, after), colours, None)
+        let mut order = v.order.clone();
+        let mut prev = after.map(str::to_string);
+        for key in &keys_made {
+            colours.insert(key.clone(), layout::unused(colours.values().copied()));
+            order = placed(&order, key, prev.as_deref());
+            prev = Some(key.clone());
+        }
+        (order, colours, None)
     });
     drop(taken);
-    let tx = with_layout(s, (String::new(), label.clone()), ops, expect, layout);
-    let said = |why: &str| EditError::Rejected(format!("adding {label} would change more than adding a track ({why})"));
-    let channel = key.clone();
+    let shown = labels.join(", ");
+    let mut tx = with_layout(s, (String::new(), shown.clone()), ops, expect, layout);
+    tx.id = tx_id;
+    if let Some(file) = arrangement {
+        // Written whole, over what is there now.
+        let base = rev_base(s, &file);
+        tx.base.insert(file, base);
+    }
+    let said = |why: &str| EditError::Rejected(format!("adding {shown} would change more than adding tracks ({why})"));
+    let made: Vec<(String, String)> = keys_made.iter().map(|k| (k.clone(), k.clone())).collect();
     let done = plan::run_as(s, tx, said, |s, checked| {
         unmoved(s, checked)?;
-        adds_one(checked, &key, &channel)
+        adds(checked, &made)
     })?;
-    let edited = Edited { revision: done.number, file, before: String::new(), after: label.clone() };
-    Ok(Made { module: key, label, edited, new_channel: false })
+    let edited = Edited { revision: done.number, file: files[0].clone(), before: String::new(), after: shown };
+    Ok(keys_made.into_iter().zip(labels).map(|(module, label)| Made { module, label, edited: edited.clone(), new_channel: false }).collect())
+}
+
+/// What `data/arrangement.json` is now, as a Tx's base: the bytes on disk, or none.
+fn rev_base(s: &Session, file: &TxPath) -> m2_song::tx::Base {
+    match std::fs::read(s.accepted().project.dir.join(file.as_str())) {
+        Ok(bytes) => m2_song::tx::Base::Sha(m2_song::Sha::of(&bytes)),
+        Err(_) => m2_song::tx::Base::Absent,
+    }
+}
+
+/// `label`, or `label 2`… free among the tracks and the names `also` already took in this Tx.
+fn unique_label_among(rev: &Revision, label: &str, also: &[String]) -> String {
+    let used: Vec<&str> = rev.compiled.ir.modules.iter().filter(|m| m.track).map(|m| m.label()).chain(also.iter().map(String::as_str)).collect();
+    if !used.contains(&label) {
+        return label.to_string();
+    }
+    (2..).map(|n| format!("{label} {n}")).find(|l| !used.contains(&l.as_str())).expect("a free name")
+}
+
+/// Several channel entries as one: on lines of their own at the properties' indentation when the
+/// mixer's object is written on lines, else inline. One is as it is.
+fn joined_entries(text: &str, mixer: &Mixer, entries: &[String]) -> String {
+    if entries.len() < 2 {
+        return entries.concat();
+    }
+    let (open, close) = (mixer.object.0 as usize, mixer.object.1 as usize - 1);
+    let indent = match mixer.channels.first() {
+        Some(first) if text[open + 1..first.property.start as usize].contains('\n') => {
+            let last = mixer.channels.last().expect("a channel");
+            let line_start = text[..last.property.start as usize].rfind('\n').map_or(0, |i| i + 1);
+            Some(text[line_start..].chars().take_while(|c| *c == ' ' || *c == '\t').collect::<String>())
+        }
+        Some(_) => None,
+        None if text[open + 1..close].contains('\n') => {
+            let inner = &text[open + 1..close];
+            let brace_line = text[..close].rfind('\n').map_or(0, |i| i + 1);
+            let brace_indent: String = text[brace_line..close].chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+            Some(
+                inner
+                    .lines()
+                    .find(|l| !l.trim().is_empty())
+                    .map(|l| l.chars().take_while(|c| *c == ' ' || *c == '\t').collect::<String>())
+                    .unwrap_or_else(|| format!("{brace_indent}  ")),
+            )
+        }
+        None => None,
+    };
+    match indent {
+        Some(i) => entries.join(&format!(",\n{i}")),
+        None => entries.join(", "),
+    }
+}
+
+/// `clips` (the lane format's) as a lane of `kind`, each with a fresh id as a gesture mints them
+/// (FMT-11, FMT-12), in canonical order.
+fn with_fresh_ids(clips: &[serde_json::Value], kind: &m2_song::LaneKind, tx_id: &str, lane: &LaneAddr) -> Result<LaneData, EditError> {
+    let mut n = 0;
+    let fresh: Vec<serde_json::Value> = clips
+        .iter()
+        .map(|c| {
+            let mut c = c.clone();
+            if let Some(o) = c.as_object_mut() {
+                o.insert("id".into(), serde_json::Value::String(m2_song::ClipId::derive(tx_id, lane, n)));
+            }
+            n += 1;
+            c
+        })
+        .collect();
+    let mut data = LaneData::read(&serde_json::json!({ "clips": fresh }).to_string(), kind)
+        .map_err(|e| EditError::Rejected(format!("a new track's clips don't read: {e:?}")))?;
+    data.sort();
+    Ok(data)
 }
 
 /// The top-level statement of `text` that holds bytes `at..end`.

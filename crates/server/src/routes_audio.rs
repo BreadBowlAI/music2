@@ -22,7 +22,7 @@ use crate::routes::ApiError;
 type S = State<Arc<AppState>>;
 
 /// The routes here that write the open project.
-pub const WRITES_AUDIO: &[&str] = &["/api/graph/audio/import"];
+pub const WRITES_AUDIO: &[&str] = &["/api/graph/audio/import", "/api/graph/audio/track"];
 
 /// The most an uploaded file may be: a 15-minute file of 8 channels of 32 bits at 96 kHz is less.
 const UPLOAD: usize = 1 << 30;
@@ -31,6 +31,7 @@ pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/graph/audio/peaks", get(audio_peaks))
         .route("/api/graph/audio/import", post(audio_import).layer(DefaultBodyLimit::max(UPLOAD)))
+        .route("/api/graph/audio/track", post(audio_track))
         .route_layer(axum::middleware::from_fn_with_state(state, writes))
 }
 
@@ -123,6 +124,24 @@ async fn audio_import(State(s): S, Query(q): Query<ImportQuery>, headers: Header
     };
     let state = s.clone();
     let result = blocking(move || state.graph.import_audio(session, sources, to)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct TrackReq {
+    session: u64,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    after: Option<String>,
+}
+
+/// The + Track list's Audio track (Q8): `{session, label?, after?}`. A write. Answers `{module, label, file,
+/// before, after, revision}`; the step is named "adding Audio".
+async fn audio_track(State(s): S, Json(r): Json<TrackReq>) -> Result<Json<Value>, ApiError> {
+    let state = s.clone();
+    let result = blocking(move || state.graph.add_audio_track(r.session, r.label, r.after)).await;
     s.graph_changed();
     Ok(Json(result?))
 }

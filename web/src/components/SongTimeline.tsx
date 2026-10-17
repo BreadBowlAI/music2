@@ -1917,7 +1917,7 @@ const TrackRows = memo(function TrackRows({
         // The lane dragged clips would land on is lit; one that can't take them isn't (design-8b §7.5).
         className={clsx("relative overflow-hidden", !opts.first && "border-t border-hover", (selected || (lane && drag?.to?.module === module && drag.to.lane === lane.key)) && "bg-accent-wash")}
         style={{ width }}
-        title={lane && lane.kind !== "audio" && !locked ? "Double-click to add a one-bar clip" : undefined}
+        title={!lane || locked ? undefined : lane.kind === "audio" ? `Drop WAV files here, or use File ▸ Import Audio (${chord("I", { shift: true })})` : "Double-click to add a one-bar clip"}
         onPointerDown={(e) => {
           const empty = !(e.target as HTMLElement).closest("[data-clip]");
           if (empty) edits.unpick(module);

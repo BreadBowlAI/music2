@@ -8,6 +8,7 @@ use m2_session::Session;
 use m2_song::{LaneData, Stored};
 
 use super::*;
+use crate::Gestures;
 use crate::testing::{Fixture, fixture};
 
 /// What a test runs mid-copy.
@@ -287,4 +288,45 @@ fn a_file_name_makes_a_track_name() {
     assert_eq!(track_label(&i("lead vox.wav")), "Lead vox");
     assert_eq!(track_label(&i("ベース.wav")), "ベース");
     assert_eq!(track_label(&i(".wav")), "Audio");
+}
+
+// Q6: a drop below the tracks makes a new audio track for each file, named after it, with its
+// clip at the beat: one step, which one undo takes back whole.
+#[test]
+fn a_drop_below_the_tracks_adds_a_track_and_its_clip_in_one_step() {
+    let song = fixture("examples/resample");
+    let mut s = song.open();
+    let number = s.accepted().number;
+    let a = audio(&song.0, bytes("lead vox.wav", tone(1.0, 20.0))).unwrap().0;
+    let b = audio(&song.0, bytes("hit.wav", tone(0.5, 21.0))).unwrap().0;
+    let placed = place(&mut s, &[a, b], &Target::Below { beat: 8.0 }).unwrap();
+    assert_eq!(placed.tracks, [("lead-vox".to_string(), "Lead vox".to_string()), ("hit".to_string(), "Hit".to_string())]);
+    assert_eq!(placed.made.len(), 2, "{placed:?}");
+    // The take-in, then the one Tx.
+    assert_eq!(s.accepted().number, number + 2);
+    let lane = |m: &str| match s.accepted().compiled.data.lane(m, "clips").map(|d| (**d).clone()) {
+        Some(LaneData::Audio(c)) => c,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!((lane("lead-vox")[0].start, lane("lead-vox")[0].length, lane("lead-vox")[0].asset.as_str()), (8.0, 2.0, "lead vox.wav"));
+    assert_eq!((lane("hit")[0].start, lane("hit")[0].length), (8.0, 1.0), "each at the beat, on its own track");
+    let order: Vec<String> = s.timeline().tracks.into_iter().filter(|t| t.track).map(|t| t.module).collect();
+    assert_eq!(order[order.len() - 2..], ["lead-vox".to_string(), "hit".into()], "at the end");
+    crate::undo(&mut s).unwrap();
+    assert!(!song.0.join("tracks/hit.ts").exists() && !song.read("song.ts").contains("lead-vox"), "one undo takes both tracks back");
+    assert!(song.0.join("assets/hit.wav").exists(), "the files stay");
+}
+
+// Q6: a drop on a notes track makes an audio track right after it.
+#[test]
+fn a_drop_on_a_notes_track_adds_an_audio_track_after_it() {
+    let song = fixture("examples/first-song");
+    let mut s = song.open();
+    let a = audio(&song.0, bytes("vox.wav", tone(1.0, 22.0))).unwrap().0;
+    let placed = place(&mut s, &[a], &Target::Track { module: "kick".into(), beat: 4.0 }).unwrap();
+    assert_eq!(placed.tracks, [("vox".to_string(), "Vox".to_string())]);
+    let order: Vec<String> = s.timeline().tracks.into_iter().filter(|t| t.track).map(|t| t.module).collect();
+    let kick = order.iter().position(|m| m == "kick").unwrap();
+    assert_eq!(order[kick + 1], "vox");
+    assert!(song.read("tracks/vox.ts").contains("lane.audio(\"clips\")"));
 }

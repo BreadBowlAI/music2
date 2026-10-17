@@ -13,6 +13,7 @@ import { useStore } from "../lib/store";
 import DeleteDialog from "./DeleteDialog";
 import { undoAction } from "./GraphCanvas";
 import { MenuRow, Popover } from "./ui";
+import { addAudioTrack, AUDIO_TRACK } from "../lib/audioImport";
 
 // Tracks (design-8b §3, taste.md §3.4, TL-2, TL-3): + Track and its instrument list, the header
 // menu, duplicate, delete with its dialog, reorder by dragging a header, and colours by name.
@@ -303,7 +304,9 @@ function InstrumentPicker({
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
-  const all = graph.instruments ?? [];
+  // + Track's last group is Audio (lane A's Q8); Change Instrument has none.
+  const listed = graph.instruments;
+  const all = useMemo(() => [...(listed ?? []), ...(swap ? [] : [AUDIO_TRACK])], [listed, swap]);
   const groups = useMemo(() => instrumentGroups(all, query), [all, query]);
   const flat = groups.flatMap((g) => g.items);
   const playing = swap ? currentInstrument(graph, swap) : undefined;
@@ -321,6 +324,7 @@ function InstrumentPicker({
   const pick = (i: Instrument | undefined) => {
     if (!i) return;
     onClose();
+    if (i === AUDIO_TRACK) return void addAudioTrack(after);
     if (!swap) return void addTrack(i, after);
     // The one it plays: nothing to change.
     if (i.component !== playing?.component) void changeInstrument(swap, i);
@@ -409,7 +413,9 @@ function InstrumentPicker({
           <span data-code data-testid="instrument-code" className="flex-1 min-w-0 truncate font-mono" title={swap ? "What changing it writes in your code" : "What adding it writes in your code"}>
             {swap
               ? `${fileOf(graph, swap) ?? "its code"} · ${current.name}(lane.notes("${notesLane(graph, swap)}"))`
-              : `tracks/${proposed(current.label, taken)}.ts · ${current.name}(lane.notes("${current.lane}"))`}
+              : current === AUDIO_TRACK
+                ? `tracks/${proposed("Audio", taken)}.ts · lane.audio("clips")`
+                : `tracks/${proposed(current.label, taken)}.ts · ${current.name}(lane.notes("${current.lane}"))`}
           </span>
         </div>
       )}
