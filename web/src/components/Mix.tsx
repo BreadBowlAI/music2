@@ -653,6 +653,13 @@ function Fader({
       // Sideways: the strips scroll (T6).
       if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
       e.preventDefault();
+      // Shift with the wheel never moves a fader, on any OS (next D4f): it scrolls the strips.
+      // A browser that sends it as up and down (Linux, Windows) gets it turned sideways here.
+      if (e.shiftKey) {
+        const strips = el.closest<HTMLElement>("[data-testid=mix-strips]");
+        if (strips) strips.scrollLeft += e.deltaMode === 1 ? e.deltaY * NOTCH : e.deltaY;
+        return;
+      }
       wheel.current -= e.deltaMode === 1 ? e.deltaY * NOTCH : e.deltaY;
       const n = Math.trunc(wheel.current / NOTCH);
       if (n === 0) return;

@@ -50,7 +50,7 @@ const reopen = async (v) => {
 check(!!(await page.$("[data-testid=view-tools] [data-testid=zoom-in]")) && !!(await page.$("[data-testid=view-tools] [data-testid=zoom-out]")), "the ruler has Zoom in and Zoom out");
 const tools = await box("[data-testid=view-tools]");
 const tl = await box("[data-testid=timeline]");
-check(!!tools && near(tools.x + tools.width, tl.x + tl.width, 1) && near(tools.height, 28, 1), `at the right of the ruler's row, 28 px tall: ${tools && JSON.stringify(tools)}`);
+check(!!tools && near(tools.x + tools.width, tl.x + tl.width, 1) && near(tools.height, 36, 1), `at the right of the ruler's row, 36 px tall (next D4a): ${tools && JSON.stringify(tools)}`);
 const titles = await page.$$eval("[data-testid=view-tools] button", (els) => els.map((e) => e.title));
 check(titles.join(" | ") === "Follow the playhead (⇧⌘F) | Zoom out (⌘−) | Zoom in (⌘=)", `their tooltips: ${titles.join(" | ")}`);
 

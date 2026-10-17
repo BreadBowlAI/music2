@@ -3,8 +3,13 @@
 
 /** The top bar. */
 export const BAR_H = 44;
-/** The timeline's ruler. */
-export const RULER_H = 28;
+/**
+ * The timeline's ruler (next D4a): the markers' 14 px band at its top, the bar numbers and the
+ * tempo and time signature changes on the line under it, the beat ticks and the loop at its foot.
+ */
+export const RULER_H = 36;
+/** The roll's ruler, which has no markers. */
+export const ROLL_RULER_H = 28;
 /** A track's own row (medium height), and a notes or audio sub-row under it. */
 export const ROW_H = 44;
 /** An automation lane under its track. */

@@ -1,13 +1,19 @@
 import clsx from "clsx";
 import {
+  ArrowLeft,
+  ArrowRight,
   AudioLines,
+  Check,
+  ChevronDown,
   Clock,
+  Ellipsis,
   Hash,
   LogIn,
   LogOut,
   Music2,
   Piano,
   Plus,
+  Power,
   Scan,
   Spline,
   Trash2,
@@ -42,6 +48,7 @@ import {
   type PortKind,
   type ViewNode,
 } from "../lib/graph";
+import { listenTo, moveEffect, turnEffect } from "../lib/effects";
 import { laneMade } from "../lib/events";
 import { mod, opt } from "../lib/native";
 import { useShell } from "../lib/shell";
@@ -49,6 +56,7 @@ import { useStore } from "../lib/store";
 import { Dots } from "./draw";
 import EffectBrowser from "./EffectBrowser";
 import { focusNext, HomeMarker, KnobMenu, MiniKnob, useKnobDrag, useKnobGesture } from "./Knob";
+import { MenuRow, Popover } from "./ui";
 import { undoAction } from "./GraphCanvas";
 import PointMenu, { unautomate } from "./ClipMenu";
 
@@ -616,13 +624,15 @@ const ModuleSection = memo(function ModuleSection({
                     key={`${e.from}>${e.from_port}>${e.to}>${e.to_port}`}
                     d={loop ? loopBack(p.x + p.w, p.y + y0, q.x, q.y + y1, height - LOOP_ROOM / 2) : curve(p.x + p.w, p.y + y0, q.x, q.y + y1)}
                     data-loop={loop || undefined}
-                    strokeDasharray={loop ? "6 5" : CABLE[e.kind].dash}
+                    // From an effect turned off: its sound goes past it, so the line is dashed and quiet.
+                    data-bypassed={e.bypassed || undefined}
+                    strokeDasharray={loop || e.bypassed ? "6 5" : CABLE[e.kind].dash}
                     data-from={e.from}
                     data-from-port={e.from_port}
                     data-to={e.to}
                     data-to-port={e.to_port}
                     data-kind={e.kind}
-                    stroke={CABLE[e.kind].stroke}
+                    stroke={e.bypassed ? "var(--color-line-strong)" : CABLE[e.kind].stroke}
                     strokeWidth={CABLE[e.kind].width}
                     strokeLinecap="round"
                     fill="none"
@@ -744,6 +754,11 @@ function NodeCard({
   const toast = useStore((s) => s.toast);
   const [picking, setPicking] = useState<HTMLElement | null>(null);
   const closePicker = useCallback(() => setPicking(null), []);
+  // The effect card's ⋯ menu, open from this button. A card kept across an edit may show
+  // another call now: its menu closes then.
+  const [menu, setMenu] = useState<HTMLElement | null>(null);
+  const call = `${node.id} ${node.label}`;
+  useEffect(() => setMenu(null), [call]);
   const why = useContext(Locked);
   /** A structural edit: said in words, with its Undo (taste.md §2.14, ST-5); a refusal says why. */
   const edited = (p: Promise<{ revision: number }>, words: string) =>
@@ -763,16 +778,52 @@ function NodeCard({
       : node.kind === "lane" || node.kind === "export"
         ? controlLabel(node.label)
         : (node.effect ?? node.title ?? effects.find((e) => e.component === node.component)?.label ?? node.label);
+  // Turned off: the title says so in `fg-muted`, and the body is half seen (taste.md §3.5).
+  const off = !!node.bypassed;
   return (
-    <div className="absolute rounded-md bg-raised ring-1 ring-line flex flex-col" style={style} data-node={node.label} data-node-id={node.id} title={where ?? undefined}>
+    <div
+      className="group/card absolute rounded-md bg-raised ring-1 ring-line flex flex-col"
+      style={style}
+      data-node={node.label}
+      data-node-id={node.id}
+      data-bypassed={off || undefined}
+      title={where ?? undefined}
+    >
       <div className={clsx("h-10 shrink-0 pl-3 pr-1.5 flex items-center gap-2 min-w-0", !small && "border-b border-line")}>
         <NodeIcon node={node} />
         <div className="min-w-0 flex-1">
           {/* Its label (an effect's descriptor says it), the code's name in the tooltip; its file and line only there. */}
-          <div className={clsx("text-sm truncate", node.kind === "call" || node.kind === "lane" || node.kind === "voice" ? "font-semibold text-fg" : "font-medium text-fg-muted")} title={titled !== node.label ? node.label : undefined}>
-            {titled}
+          <div
+            data-node-title
+            className={clsx(
+              "text-sm truncate",
+              off ? "font-semibold text-fg-muted" : node.kind === "call" || node.kind === "lane" || node.kind === "voice" ? "font-semibold text-fg" : "font-medium text-fg-muted",
+            )}
+            title={titled !== node.label ? node.label : undefined}
+          >
+            {off ? `${titled} · Off` : titled}
           </div>
         </div>
+        {node.effect && node.menu && (
+          <button
+            className={clsx(
+              "shrink-0 size-ctl-sm grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover cursor-pointer transition-[opacity,color,background-color] duration-80 ease-linear",
+              menu ? "opacity-100 bg-accent-soft text-accent-strong" : "opacity-0 group-hover/card:opacity-100 focus-visible:opacity-100",
+            )}
+            data-effect-menu={node.id}
+            title={`More for ${titled}`}
+            aria-label={`${node.effect} menu`}
+            aria-haspopup="menu"
+            aria-expanded={!!menu}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              const button = e.currentTarget;
+              setMenu((m) => (m ? null : button));
+            }}
+          >
+            <Ellipsis size={14} />
+          </button>
+        )}
         {node.effect && (
           <button
             className="shrink-0 size-ctl-sm grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover disabled:text-fg-off disabled:pointer-events-none cursor-pointer transition-colors duration-80 ease-linear"
@@ -804,6 +855,9 @@ function NodeCard({
           </button>
         )}
       </div>
+      {menu && node.menu && (
+        <EffectMenuPopover node={node} title={titled} anchor={menu} locked={why ?? (editable ? null : "This song can't be edited here")} onClose={() => setMenu(null)} />
+      )}
       {/* In the module, outside its zoomed nodes: it keeps its size and its place by the +. */}
       {picking &&
         createPortal(
@@ -840,7 +894,7 @@ function NodeCard({
         </div>
       )}
       {!small && !mixing && (node.outputs.length > 0 || node.inputs.length > 0) && (
-        <div className="py-1.5">
+        <div data-node-body className={clsx("py-1.5", off && "opacity-50")}>
           {node.inputs.map((i) => (
             <InputRow
               key={i.knob ? `knob:${knobKey(i.knob)}` : i.id}
@@ -874,6 +928,51 @@ function NodeCard({
         />
       ))}
     </div>
+  );
+}
+
+/**
+ * An effect card's ⋯ menu (taste.md §3.5, next X11): Turn off or Turn on, Move left and Move
+ * right. A row that can't run here is greyed, with why in its tooltip.
+ */
+function EffectMenuPopover({ node, title, anchor, locked, onClose }: { node: ViewNode; title: string; anchor: HTMLElement; locked: string | null; onClose: () => void }) {
+  const off = !!node.bypassed;
+  const bypass = locked ?? node.menu?.bypass ?? null;
+  return (
+    <Popover anchor={anchor} onClose={onClose} align="end" role="menu" aria-label={`${title} menu`} data-testid="effect-menu" className="w-[220px]">
+      <MenuRow
+        icon={<Power size={14} />}
+        disabled={!!bypass}
+        title={bypass ?? (off ? `Turn ${title} back on` : `Turn ${title} off (keeps its settings)`)}
+        data-testid="effect-bypass"
+        onClick={() => {
+          onClose();
+          void turnEffect(node, title, !off);
+        }}
+      >
+        {off ? "Turn on" : "Turn off"}
+      </MenuRow>
+      {([true, false] as const).map((earlier) => {
+        const row = earlier ? node.menu?.left : node.menu?.right;
+        const why = locked ?? row?.refused ?? null;
+        const other = row?.with;
+        return (
+          <MenuRow
+            key={String(earlier)}
+            icon={earlier ? <ArrowLeft size={14} /> : <ArrowRight size={14} />}
+            disabled={!!why || !other}
+            title={why ?? `Move ${title} ${earlier ? "before" : "after"} ${other}`}
+            data-testid={earlier ? "effect-left" : "effect-right"}
+            onClick={() => {
+              onClose();
+              if (other) void moveEffect(node, title, other, earlier);
+            }}
+          >
+            {earlier ? "Move left" : "Move right"}
+          </MenuRow>
+        );
+      })}
+    </Popover>
   );
 }
 
@@ -1021,6 +1120,9 @@ function InputRow({
     );
   }
 
+  // A Duck's side input: what it listens to, and a list of the tracks it could (next D3).
+  if (node.listens && node.listens.port === input.id) return <ListensRow node={node} input={input} filled={filled} editable={editable} />;
+
   // Driven by an automation lane: its home is the lane (HOME-1), and its menu shows the lane or
   // takes the automation out (KN-2).
   const driven = input.lane;
@@ -1056,6 +1158,65 @@ function InputRow({
           ]}
           onClose={() => setMenu(null)}
         />
+      )}
+    </div>
+  );
+}
+
+/**
+ * A Duck's side input (next D3, X28): "Listens to: Kick ▾". Its list has the song's other tracks;
+ * one picked is written in the Duck's call. Where it can't change (a Duck in a track's file), the
+ * button is greyed and its tooltip says why.
+ */
+function ListensRow({ node, input, filled, editable }: { node: ViewNode; input: InputPort; filled: boolean; editable: boolean }) {
+  const tracks = useContext(Tracks);
+  const why = useContext(Locked);
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const l = node.listens!;
+  const name = (key: string) => l.choices.find(([k]) => k === key)?.[1] ?? tracks(key) ?? key;
+  const now = l.track ? name(l.track) : "another sound";
+  const off = why ?? (editable ? null : "This song can't be edited here") ?? l.refused ?? null;
+  return (
+    <div className="relative h-[28px] pl-4 pr-3 flex items-center gap-1.5 text-xs min-w-0" data-input={input.label} data-listens>
+      <Dot id={input.id} kind={input.kind} filled={filled} />
+      <span className="shrink-0 text-fg-muted">Listens to:</span>
+      <button
+        data-testid="listens-to"
+        className={clsx(
+          "min-w-0 h-ctl-xs px-1 -mx-1 flex items-center gap-1 rounded-sm text-xs font-medium transition-colors duration-80 ease-linear",
+          off ? "text-fg-muted cursor-default" : "text-fg hover:bg-hover cursor-pointer",
+          anchor && "bg-accent-soft text-accent-strong",
+        )}
+        aria-haspopup="menu"
+        aria-expanded={!!anchor}
+        aria-disabled={!!off || undefined}
+        title={off ?? `It ducks when ${now} plays. Choose another track`}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={(e) => {
+          if (off) return;
+          const b = e.currentTarget;
+          setAnchor((a) => (a ? null : b));
+        }}
+      >
+        <span className="truncate">{now}</span>
+        <ChevronDown size={12} className="shrink-0" />
+      </button>
+      {anchor && (
+        <Popover anchor={anchor} onClose={() => setAnchor(null)} role="menu" aria-label="Listens to" data-testid="listens-menu" className="w-[200px]">
+          {l.choices.map(([key, label]) => (
+            <MenuRow
+              key={key}
+              data-track={key}
+              icon={<Check size={14} className={key === l.track ? undefined : "invisible"} />}
+              onClick={() => {
+                setAnchor(null);
+                if (key !== l.track) void listenTo(node, key, label);
+              }}
+            >
+              {label}
+            </MenuRow>
+          ))}
+        </Popover>
       )}
     </div>
   );

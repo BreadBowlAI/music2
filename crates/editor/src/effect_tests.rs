@@ -594,3 +594,381 @@ fn a_delay_added_inside_a_ringing_delay_changes_no_bit_of_its_echoes() {
     let first = alone.iter().zip(&edited).position(|(x, y)| x.map(f32::to_bits) != y.map(f32::to_bits));
     assert_eq!(first, None, "the first frame that differs from no edit (the edit is at {at})");
 }
+
+// ---------------------------------------------------------------- turned off (Next D1)
+
+/// The song with `body` as its function's result, the saw and std's effects imported.
+fn fx_song(body: &str) -> String {
+    format!(
+        "{HEAD}import {{ delay, reverb }} from \"std/fx\";\nimport {{ lowpass }} from \"std/filter\";\nimport {{ master, mixer }} from \"std/mix\";\n\
+         export default song(() => {body});\n"
+    )
+}
+
+/// Turn `callee`'s call off (`on`) or on.
+fn switch(s: &mut Session, callee: &str, on: bool) -> Result<Edited, EditError> {
+    let (at, id) = (rev(s), call(s, callee));
+    bypass(s, at, &id, on)
+}
+
+/// Turn `callee`'s call off (`on`) or on, and say what the file says now.
+fn turned(f: &Fixture, s: &mut Session, callee: &str, on: bool) -> String {
+    switch(s, callee, on).unwrap_or_else(|e| panic!("{callee} {on}: {e}"));
+    f.source()
+}
+
+/// The kernels the engine runs: the checked graph's order.
+fn running(s: &Session) -> Vec<String> {
+    let flat = &s.accepted().compiled.flat;
+    flat.order
+        .iter()
+        .filter_map(|&i| match &flat.nodes[i].op {
+            m2_ir::FOp::Kernel { kernel, .. } => Some(kernel.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+// Next D1 (Q24): turning an effect off writes `bypass: true` after its options' last property; its
+// call still makes its nodes and knobs, and gives its input on, so the engine runs none of it.
+// Undo puts the code back.
+#[test]
+fn bypass_writes_bypass_true_into_the_options() {
+    let original = fx_song("reverb(osc.saw(hz(110)), { size: 0.8 })");
+    let f = Fixture::new(&original);
+    let mut s = f.open();
+    let knobs = s.controls().len();
+    assert!(running(&s).contains(&"std:reverb".to_string()));
+    let done = switch(&mut s, "reverb", true).unwrap();
+    assert_eq!(f.source(), original.replace("{ size: 0.8 }", "{ size: 0.8, bypass: true }"));
+    assert_eq!(
+        (done.before.as_str(), done.after.as_str()),
+        ("reverb(osc.saw(hz(110)), { size: 0.8 })", "reverb(osc.saw(hz(110)), { size: 0.8, bypass: true })")
+    );
+    let site = s.accepted().compiled.sites.iter().find(|x| x.callee == "reverb").unwrap().id;
+    assert!(is_bypassed(&s.accepted().compiled, site));
+    assert_eq!(running(&s), ["std:saw"], "the reverb runs nothing");
+    assert_eq!(s.controls().len(), knobs, "its knobs stay to set");
+    s.undo().unwrap();
+    assert_eq!(f.source(), original);
+    assert!(running(&s).contains(&"std:reverb".to_string()));
+}
+
+// Next D1: a call with no options object gets a new one, after its last argument; one written
+// over lines gets it on a line of its own (D4e); `bypass: false` becomes true.
+#[test]
+fn bypass_into_a_call_with_no_options() {
+    let cases = [
+        ("reverb(osc.saw(hz(110)))", "reverb", "reverb(osc.saw(hz(110)), { bypass: true })"),
+        ("lowpass(osc.saw(hz(110)), 800)", "lowpass", "lowpass(osc.saw(hz(110)), 800, { bypass: true })"),
+        ("delay(osc.saw(hz(110)), {})", "delay", "delay(osc.saw(hz(110)), { bypass: true })"),
+        ("delay(osc.saw(hz(110)), { bypass: false })", "delay", "delay(osc.saw(hz(110)), { bypass: true })"),
+        (
+            "master(\n    reverb(\n      osc.saw(hz(110)),\n    ),\n  )",
+            "reverb",
+            "master(\n    reverb(\n      osc.saw(hz(110)),\n      { bypass: true },\n    ),\n  )",
+        ),
+    ];
+    for (call_text, callee, after) in cases {
+        let original = fx_song(call_text);
+        let f = Fixture::new(&original);
+        let mut s = f.open();
+        let before = running(&s);
+        assert_eq!(turned(&f, &mut s, callee, true), fx_song(after), "{call_text}");
+        let site = s.accepted().compiled.sites.iter().find(|x| x.callee == callee).unwrap().id;
+        assert!(is_bypassed(&s.accepted().compiled, site), "{call_text}");
+        assert!(running(&s).len() < before.len(), "{call_text}: the effect's kernels don't run");
+    }
+}
+
+// Next D1: turning it on again takes the property out with its comma, and the options object
+// when it was alone.
+#[test]
+fn bypass_off_takes_it_out_and_its_braces() {
+    let cases = [
+        ("reverb(osc.saw(hz(110)), { size: 0.8, bypass: true })", "reverb(osc.saw(hz(110)), { size: 0.8 })"),
+        ("reverb(osc.saw(hz(110)), { bypass: true, size: 0.8 })", "reverb(osc.saw(hz(110)), { size: 0.8 })"),
+        ("reverb(osc.saw(hz(110)), { size: 0.8, bypass: true, mix: 0.2 })", "reverb(osc.saw(hz(110)), { size: 0.8, mix: 0.2 })"),
+        ("reverb(osc.saw(hz(110)), { bypass: true })", "reverb(osc.saw(hz(110)))"),
+        ("reverb(osc.saw(hz(110)), {\n    size: 0.8,\n    bypass: true,\n  })", "reverb(osc.saw(hz(110)), {\n    size: 0.8,\n  })"),
+    ];
+    for (call_text, after) in cases {
+        let original = fx_song(call_text);
+        let f = Fixture::new(&original);
+        let mut s = f.open();
+        assert_eq!(running(&s), ["std:saw"], "{call_text}: off at first");
+        assert_eq!(turned(&f, &mut s, "reverb", false), fx_song(after), "{call_text}");
+        assert!(running(&s).contains(&"std:reverb".to_string()), "{call_text}");
+    }
+}
+
+// Next D1: off then on is the code it was, in each place an options object can go.
+#[test]
+fn bypass_then_unbypass_is_the_same_code() {
+    for body in [
+        "reverb(osc.saw(hz(110)))",
+        "reverb(osc.saw(hz(110)), { size: 0.8 })",
+        "lowpass(osc.saw(hz(110)), 800)",
+        "master(\n    reverb(osc.saw(hz(110))),\n  )",
+        "master(\n    reverb(\n      osc.saw(hz(110)),\n    ),\n  )",
+        "master(\n    reverb(\n      osc.saw(hz(110))\n    ),\n  )",
+    ] {
+        let original = fx_song(body);
+        let f = Fixture::new(&original);
+        let mut s = f.open();
+        let callee = if body.contains("lowpass") { "lowpass" } else { "reverb" };
+        assert_ne!(turned(&f, &mut s, callee, true), original, "{body}");
+        assert_eq!(turned(&f, &mut s, callee, false), original, "{body}");
+    }
+}
+
+// Next D1: a bypassed effect is in the graph but nothing reads it, so the song sounds exactly as
+// it does with the effect removed; and remove still takes it out.
+#[test]
+fn a_bypassed_effect_runs_nothing() {
+    let f = Fixture::new(&fx_song("delay(reverb(osc.saw(hz(110)), { bypass: true }), { time: 0.1 })"));
+    let mut s = f.open();
+    assert_eq!(running(&s), ["std:saw", "std:delay"]);
+    let off = s.accepted_arc();
+    let removed = s.remove_effect(rev(&s), &call(&s, "reverb")).unwrap();
+    assert_eq!(removed.after, "osc.saw(hz(110))");
+    let without = s.accepted_arc();
+    let (a, b) = (played(&off, &s.packages, 4800, None), played(&without, &s.packages, 4800, None));
+    assert!(a.iter().any(|x| x[0] != 0.0));
+    assert!(a.iter().zip(&b).all(|(x, y)| x.map(f32::to_bits) == y.map(f32::to_bits)), "the same to the bit");
+}
+
+// Next D1: what can't be turned off here says why in words.
+#[test]
+fn bypass_refuses_a_call_that_spreads_its_arguments() {
+    let f = Fixture::new(&fx_song("reverb(...([osc.saw(hz(110)), { size: 0.8 }] as const))"));
+    let mut s = f.open();
+    let e = switch(&mut s, "reverb", true).unwrap_err().to_string();
+    assert!(e.contains("Reverb can't be turned off here: its call spreads its arguments. Turn it off in code."), "{e}");
+    // On again when it is on already, and off when it is off.
+    let f = Fixture::new(&fx_song("reverb(osc.saw(hz(110)))"));
+    let mut s = f.open();
+    let e = switch(&mut s, "reverb", false).unwrap_err().to_string();
+    assert!(e.contains("Reverb is on already."), "{e}");
+    // A component with a bypass of its own keeps it.
+    let own = "import { component, control, kernel, port, song, type Audio, type Params } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\n\
+               const fuzz = component(\n  { id: \"fuzz\", label: \"Fuzz\", inputs: { in: port.audio() }, controls: { bypass: control.db(0) }, output: port.audio(), editor: { category: \"Drive\" } },\n  \
+               (x: Audio, { bypass }: Params) => kernel(\"std:gain\", { in: x, db: bypass }),\n);\nexport default song(() => fuzz(osc.saw(110)));\n";
+    let f = Fixture::new(own);
+    let mut s = f.open();
+    let e = switch(&mut s, "fuzz", true).unwrap_err().to_string();
+    assert!(e.contains("It has its own Bypass knob."), "{e}");
+    let view = crate::view::view(&s);
+    let card = view.modules[0].nodes.iter().find(|n| n.label == "fuzz").unwrap();
+    assert_eq!(card.menu.as_ref().and_then(|m| m.bypass.as_deref()), Some("It has its own Bypass knob."));
+}
+
+// Next D1 (X10): the Device view keeps a turned-off card where it was: what reads the call is
+// drawn from the card, dashed, not from the effect's input.
+#[test]
+fn a_bypassed_effect_keeps_its_place_in_the_chain() {
+    let f = Fixture::new(&fx_song("master(reverb(osc.saw(hz(110)), { size: 0.8 }))"));
+    let mut s = f.open();
+    let shape = |s: &Session| {
+        let v = crate::view::view(s);
+        let m = &v.modules[0];
+        let name = |id: &str| m.nodes.iter().find(|n| n.id == id).map_or(id.to_string(), |n| n.label.clone());
+        let mut e: Vec<(String, String, bool)> = m.port_edges.iter().map(|e| (name(&e.from), name(&e.to), e.bypassed)).collect();
+        e.sort();
+        let card = m.nodes.iter().find(|n| n.label == "reverb").unwrap();
+        (e, card.bypassed, card.menu.clone().unwrap().bypass)
+    };
+    let on = shape(&s);
+    let edge = |a: &str, b: &str, dashed: bool| (a.to_string(), b.to_string(), dashed);
+    assert!(on.0.contains(&edge("osc.saw", "reverb", false)) && on.0.contains(&edge("reverb", "master", false)), "{on:?}");
+    assert_eq!((on.1, on.2), (false, None));
+    switch(&mut s, "reverb", true).unwrap();
+    let off = shape(&s);
+    let edges: Vec<(String, String, bool)> = on.0.iter().map(|(a, b, _)| (a.clone(), b.clone(), a == "reverb")).collect();
+    assert_eq!(off.0, edges, "the same edges; the one out of the card is dashed");
+    assert_eq!((off.1, off.2), (true, None), "off, and Turn on can run");
+}
+
+// ---------------------------------------------------------------- moved (Next D2)
+
+/// Move `callee`'s effect before the one it is written around (`earlier`) or after the one around it.
+fn moved(s: &mut Session, callee: &str, earlier: bool) -> Result<Edited, EditError> {
+    let (at, id) = (rev(s), call(s, callee));
+    reorder(s, at, &id, earlier)
+}
+
+// Next D2 (Q26): two effects written one inside the other swap: each keeps its own options, the
+// sound they work on stays where it is, and the chain plays them the other way round. Either
+// effect's row does it; undo puts the code back.
+#[test]
+fn two_nested_effects_swap() {
+    let original = fx_song("delay(reverb(osc.saw(hz(110)), { size: 0.8 }), { time: 0.1 })");
+    let swapped = fx_song("reverb(delay(osc.saw(hz(110)), { time: 0.1 }), { size: 0.8 })");
+    let f = Fixture::new(&original);
+    let mut s = f.open();
+    assert_eq!(running(&s), ["std:saw", "std:reverb", "std:delay"]);
+    let done = moved(&mut s, "delay", true).unwrap();
+    assert_eq!(f.source(), swapped);
+    assert_eq!((done.before.as_str(), done.after.as_str()), ("delay(reverb(…))", "reverb(delay(…))"));
+    assert_eq!(running(&s), ["std:saw", "std:delay", "std:reverb"]);
+    s.undo().unwrap();
+    assert_eq!(f.source(), original);
+    moved(&mut s, "reverb", false).unwrap();
+    assert_eq!(f.source(), swapped, "Move right on the inner one is the same swap");
+}
+
+// Next D2: the options go with their effect, positional or in an object, or none; a call over
+// lines keeps its line breaks where they were.
+#[test]
+fn the_options_go_with_their_effect() {
+    for (body, callee, earlier, after) in [
+        ("lowpass(delay(osc.saw(hz(110)), { time: 0.1 }), 800)", "lowpass", true, "delay(lowpass(osc.saw(hz(110)), 800), { time: 0.1 })"),
+        ("delay(reverb(osc.saw(hz(110))))", "reverb", false, "reverb(delay(osc.saw(hz(110))))"),
+        ("delay(reverb(osc.saw(hz(110)), { size: 0.8, bypass: true }))", "delay", true, "reverb(delay(osc.saw(hz(110))), { size: 0.8, bypass: true })"),
+        (
+            "master(\n    delay(\n      reverb(osc.saw(hz(110)), { size: 0.8 }),\n      { time: 0.1 },\n    ),\n  )",
+            "delay",
+            true,
+            "master(\n    reverb(\n      delay(osc.saw(hz(110)),\n      { time: 0.1 },\n    ), { size: 0.8 }),\n  )",
+        ),
+    ] {
+        let original = fx_song(body);
+        let f = Fixture::new(&original);
+        let mut s = f.open();
+        moved(&mut s, callee, earlier).unwrap_or_else(|e| panic!("{body}: {e}"));
+        assert_eq!(f.source(), fx_song(after), "{body}");
+        s.undo().unwrap();
+        assert_eq!(f.source(), original, "{body}: undone");
+    }
+}
+
+// Next D2 (Q26): effects next to each other in the sound but not written one inside the other
+// can't swap here, and say so in words; so does the first effect's Move left and the last one's
+// Move right. The menu's rows say the same.
+#[test]
+fn an_effect_not_next_to_another_is_refused_in_words() {
+    let f = Fixture::new(&fx_song("{\n  const wet = reverb(osc.saw(hz(110)));\n  return delay(wet, { time: 0.1 });\n}"));
+    let mut s = f.open();
+    let words = |r: Result<Edited, EditError>| r.unwrap_err().to_string();
+    let apart = "Reverb and Delay aren't next to each other in the code, so they can't swap here. Change their order in code.";
+    assert!(words(moved(&mut s, "delay", true)).contains(apart));
+    assert!(words(moved(&mut s, "reverb", false)).contains(apart));
+    assert!(words(moved(&mut s, "reverb", true)).contains("Reverb is the first effect here."));
+    assert!(words(moved(&mut s, "delay", false)).contains("Delay is the last effect here."));
+    let view = crate::view::view(&s);
+    let menu = |label: &str| view.modules[0].nodes.iter().find(|n| n.label == label).and_then(|n| n.menu.clone()).unwrap();
+    assert_eq!(menu("delay").left.refused.as_deref(), Some(apart));
+    assert_eq!(menu("reverb").right.refused.as_deref(), Some(apart));
+    // Written one inside the other, the rows name the effect they swap with.
+    let f = Fixture::new(&fx_song("delay(reverb(osc.saw(hz(110))))"));
+    let s = f.open();
+    let view = crate::view::view(&s);
+    let menu = |label: &str| view.modules[0].nodes.iter().find(|n| n.label == label).and_then(|n| n.menu.clone()).unwrap();
+    assert_eq!((menu("delay").left.with.as_deref(), menu("reverb").right.with.as_deref()), (Some("Reverb"), Some("Delay")));
+    assert_eq!(menu("reverb").left.refused.as_deref(), Some("Reverb is the first effect here."));
+}
+
+// Next D2: moving one way and back is the code it was.
+#[test]
+fn moving_twice_is_the_same_code() {
+    let original = fx_song("delay(reverb(osc.saw(hz(110)), { size: 0.8 }), { time: 0.1 })");
+    let f = Fixture::new(&original);
+    let mut s = f.open();
+    moved(&mut s, "delay", true).unwrap();
+    assert_ne!(f.source(), original);
+    moved(&mut s, "delay", false).unwrap();
+    assert_eq!(f.source(), original);
+}
+
+// ---------------------------------------------------------------- what a Duck listens to (Next D3)
+
+/// The Duck call of `s` whose audio is `audio` (`bass.out`), as `file#ordinal`.
+fn duck_on(s: &Session, audio: &str) -> String {
+    let rev = s.accepted();
+    let site = rev.compiled.sites.iter().find(|x| {
+        x.callee == "duck"
+            && x.args.first().is_some_and(|a| {
+                let text = &rev.snapshot.files[Path::new(&x.file)];
+                &text[a.span().0 as usize..a.span().1 as usize] == audio
+            })
+    });
+    let site = site.unwrap_or_else(|| panic!("no duck on {audio}"));
+    format!("{}#{}", site.file, site.ordinal)
+}
+
+fn listen(s: &mut Session, audio: &str, track: &str) -> Result<Edited, EditError> {
+    let (at, id) = (rev(s), duck_on(s, audio));
+    sidechain(s, at, &id, track)
+}
+
+// Next D3 (Q27, X28): a track with no `env` export is heard through `follow(<its>.out)`, and
+// `follow` is imported from std/dsp; undo takes both back. The Duck's card says what it listens
+// to, and offers the song's other tracks.
+#[test]
+fn a_track_with_no_env_gets_follow_of_its_out_and_the_import() {
+    let f = crate::testing::fixture("templates/starter");
+    let mut s = f.open();
+    let original = f.read("song.ts");
+    let card = |s: &Session| {
+        let v = crate::view::view(s);
+        let song = v.modules.iter().find(|m| m.key == "song").unwrap();
+        let id = duck_on(s, "bass.out");
+        song.nodes.iter().find(|n| n.id == id).and_then(|n| n.listens.clone()).expect("the Duck's Listens to row")
+    };
+    let was = card(&s);
+    assert_eq!(was.track.as_deref(), Some("kick"));
+    let keys: Vec<&str> = was.choices.iter().map(|(k, _)| k.as_str()).collect();
+    assert!(keys.contains(&"clap") && keys.contains(&"kick") && !keys.contains(&"bass"), "{keys:?}");
+    assert!(was.port.starts_with("in:"), "{}", was.port);
+    let done = listen(&mut s, "bass.out", "clap").unwrap();
+    assert_eq!((done.before.as_str(), done.after.as_str()), ("kick.env", "follow(clap.out)"));
+    let expected = original
+        .replace("import { compress, duck } from \"std/fx\";\n", "import { compress, duck } from \"std/fx\";\nimport { follow } from \"std/dsp\";\n")
+        .replace("duck(bass.out, kick.env,", "duck(bass.out, follow(clap.out),");
+    let now = f.read("song.ts");
+    assert!(now.contains("duck(bass.out, follow(clap.out), { depth: db(-9) })") && now.contains("import { follow } from \"std/dsp\";"), "{now}");
+    assert_eq!(now.replace("import { follow } from \"std/dsp\";\n", ""), expected.replace("import { follow } from \"std/dsp\";\n", ""));
+    assert_eq!(card(&s).track.as_deref(), Some("clap"));
+    s.undo().unwrap();
+    assert_eq!(f.read("song.ts"), original);
+}
+
+// Next D3 (X28): a track that exports `env` is heard through it, as the starter's kick is.
+#[test]
+fn the_picker_writes_the_tracks_env() {
+    let f = crate::testing::fixture("templates/starter");
+    let mut s = f.open();
+    let original = f.read("song.ts");
+    listen(&mut s, "chords.out", "hats").unwrap();
+    assert!(f.read("song.ts").contains("duck(chords.out, follow(hats.out), { depth: db(-6) })"));
+    let done = listen(&mut s, "chords.out", "kick").unwrap();
+    assert_eq!(done.after, "kick.env");
+    assert!(f.read("song.ts").contains("duck(chords.out, kick.env, { depth: db(-6) })"));
+    let e = listen(&mut s, "chords.out", "kick").unwrap_err().to_string();
+    assert!(e.contains("Duck listens to Kick already."), "{e}");
+    s.undo().unwrap();
+    s.undo().unwrap();
+    assert_eq!(f.read("song.ts"), original);
+}
+
+// Next D3 (Q27): a Duck in a track's file can't hear other tracks: refused in words, and its card
+// says so.
+#[test]
+fn a_duck_in_a_track_file_is_refused_in_words() {
+    let f = crate::testing::fixture("templates/starter");
+    let bass = f.read("tracks/bass.ts");
+    f.write(
+        "tracks/bass.ts",
+        bass.replace("import { bass } from \"std/instruments\";", "import { bass } from \"std/instruments\";\nimport { duck } from \"std/fx\";")
+            .replace("({ lane }) => bass(lane.notes(\"notes\"), { cutoff: hz(420), drive: 3 })", "({ lane }) => duck(bass(lane.notes(\"notes\"), { cutoff: hz(420), drive: 3 }), lane.mask(\"pump\"))"),
+    );
+    let mut s = f.open();
+    let id = s.accepted().compiled.sites.iter().find(|x| x.callee == "duck" && x.file == "tracks/bass.ts").map(|x| format!("{}#{}", x.file, x.ordinal)).unwrap();
+    let words = "Bass's Duck is in tracks/bass.ts, which can't hear other tracks. Change it in code.";
+    let at = rev(&s);
+    let e = sidechain(&mut s, at, &id, "kick").unwrap_err().to_string();
+    assert!(e.contains(words), "{e}");
+    let v = crate::view::view(&s);
+    let card = v.modules.iter().find(|m| m.key == "bass").and_then(|m| m.nodes.iter().find(|n| n.id == id)).unwrap();
+    assert_eq!(card.listens.as_ref().and_then(|l| l.refused.as_deref()), Some(words));
+}

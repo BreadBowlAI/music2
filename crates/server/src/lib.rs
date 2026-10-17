@@ -15,6 +15,7 @@ mod routes_mix;
 mod routes_notes;
 mod routes_project;
 mod routes_view;
+mod routes_fx;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};

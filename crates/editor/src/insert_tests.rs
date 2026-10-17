@@ -214,6 +214,32 @@ fn a_long_call_is_shown_around_what_was_written() {
     assert_eq!(shown, ("delay(osc.saw(110), { mix: … })", "delay(osc.saw(110), { mix: …, feedback: 0.5 })"));
 }
 
+// Next D4e (Q31): a first options object in a call written over lines goes on a line of its own,
+// at the arguments' indent, with a comma after it when the last argument had one. A call written
+// on one line, or whose first argument starts on the `(`'s line, keeps it after the last argument.
+#[test]
+fn a_first_options_object_goes_on_its_own_line() {
+    let head = format!("{HEAD}import {{ master, mixer }} from \"std/mix\";\nexport default song(() =>\n");
+    let cases = [
+        ("  master(\n    mixer({ a: osc.sine(220) }),\n  ),\n", "  master(\n    mixer({ a: osc.sine(220) }),\n    { ceiling: -3 },\n  ),\n"),
+        ("  master(\n    mixer({ a: osc.sine(220) })\n  ),\n", "  master(\n    mixer({ a: osc.sine(220) }),\n    { ceiling: -3 }\n  ),\n"),
+        ("  master(\n\tmixer({ a: osc.sine(220) }), // the mix\n  ),\n", "  master(\n\tmixer({ a: osc.sine(220) }),\n\t{ ceiling: -3 }, // the mix\n  ),\n"),
+        ("  master(mixer({ a: osc.sine(220) })),\n", "  master(mixer({ a: osc.sine(220) }), { ceiling: -3 }),\n"),
+        ("  master(mixer({\n    a: osc.sine(220),\n  })),\n", "  master(mixer({\n    a: osc.sine(220),\n  }), { ceiling: -3 }),\n"),
+    ];
+    for (call, after) in cases {
+        let original = format!("{head}{call});\n");
+        let fixture = Fixture::new(&original);
+        let mut s = fixture.open();
+        let ceiling = inherited(&s, "master", "ceiling");
+        let done = s.set(s.accepted().number, &ceiling.id, -3.0, None).unwrap_or_else(|e| panic!("{call}: {e}"));
+        assert_eq!(fixture.source(), format!("{head}{after});\n"), "{call}");
+        assert!(done.after.ends_with(", { ceiling: -3 })"), "{call}: shown on one line: {}", done.after);
+        s.undo().unwrap();
+        assert_eq!(fixture.source(), original, "{call}: undone");
+    }
+}
+
 // D5: a call is folded onto one line for a message: a line comment goes, since it would run on
 // over what follows it, and block comments and strings stay as written.
 #[test]

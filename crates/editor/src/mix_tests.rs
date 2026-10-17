@@ -357,7 +357,7 @@ fn an_insertion_follows_the_objects_style() {
 }
 
 // design-8b §5.6 `the_master_fader_writes_master`: the master's fader, left out, is written into
-// its call as its options; undo takes it out.
+// its call as its options, on a line of their own (next D4e); undo takes it out.
 #[test]
 fn the_master_fader_writes_master() {
     let f = fixture("examples/first-song");
@@ -366,7 +366,7 @@ fn the_master_fader_writes_master() {
     let id = s.mix().master.unwrap().db.unwrap();
     let done = s.set(s.accepted().number, &id, -2.5, None).unwrap();
     assert_eq!((done.before.as_str(), done.after.as_str()), ("master(…)", "master(…, { db: -2.5 })"));
-    assert_eq!(f.read("song.ts"), original.replacen("    }),\n  ),\n);", "    }), { db: -2.5 },\n  ),\n);", 1));
+    assert_eq!(f.read("song.ts"), original.replacen("    }),\n  ),\n);", "    }),\n    { db: -2.5 },\n  ),\n);", 1));
     s.undo().unwrap();
     assert_eq!(f.read("song.ts"), original);
 }

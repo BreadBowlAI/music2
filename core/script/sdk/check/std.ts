@@ -101,6 +101,18 @@ export const effects = [
   ...[reverb(x), chorus(x), phaser(x), tremolo(x), compress(x), eq3(x), bitcrush(x), widen(x)],
 ];
 
+// Every effect turned off (Next D1): `bypass` in its options, a new options object when it had none.
+export const bypassed = [
+  reverb(x, { size: 0.8, bypass: true }),
+  reverb(x, { bypass: true }),
+  lowpass(x, 1000, { bypass: true }),
+  gain(x, 0, { bypass: true }),
+  gain(x, { bypass: false }),
+  limit(x, -1, { bypass: true }),
+  duck(x, l, { depth: db(-9), bypass: true }),
+  master(x, { bypass: true }),
+];
+
 // A control left out, written in: after the positional arguments when that is contiguous,
 // else in an options object, or a cable's name in its place.
 export const inserted = [
@@ -156,3 +168,11 @@ synth.custom(notes, { unison: l });
 drums.kit(notes, { tune: 52 });
 // @ts-expect-error the 808's drop was called punch once
 synth.sub(notes, { punch: 7 });
+// @ts-expect-error an instrument can't be bypassed: it takes notes
+kick(notes, { bypass: true });
+// @ts-expect-error a source can't be bypassed
+osc.saw(110, { bypass: true });
+// @ts-expect-error a control's call can't be bypassed
+lfo(beats, { bypass: true });
+// @ts-expect-error bypass is true or false
+reverb(x, { bypass: 1 });
