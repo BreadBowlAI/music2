@@ -110,14 +110,10 @@ impl<'g> GraphView<'g> {
         #[cfg(not(debug_assertions))]
         let _ = (parts, p, i);
         Reader {
-            view: self.erased(),
+            view: self,
             #[cfg(debug_assertions)]
             at: (parts, p, i),
         }
-    }
-
-    fn erased(&self) -> &GraphView<'_> {
-        self
     }
 }
 
