@@ -30,6 +30,14 @@ pub struct Song {
 impl Song {
     /// The song `s` has open: its files, what its packages export, and its tracks' names.
     pub fn of(s: &Session) -> Song {
+        let mut song = Song::named(s);
+        song.exports = exports(s);
+        song
+    }
+
+    /// The song `s` has open without what its packages export (which reads their sources): enough
+    /// for the revision's problems, which name tracks and files, never an import.
+    pub fn named(s: &Session) -> Song {
         let rev = s.accepted();
         // From the folder: a song whose code never compiled has no code in its revision.
         let mut tracks: Vec<String> = std::fs::read_dir(rev.project.dir.join("tracks"))
@@ -39,36 +47,41 @@ impl Song {
             .filter_map(|e| Some(e.file_name().to_str()?.strip_suffix(".ts")?.to_string()))
             .collect();
         tracks.sort();
-        let mut exports = BTreeMap::new();
-        // Every top-level `export const` and `export function` of each package's own modules.
-        for p in s.packages.packages() {
-            let Ok(entries) = std::fs::read_dir(p.dir.join("src")) else { continue };
-            let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
-            paths.sort();
-            for path in paths {
-                let (Some(stem), Some("ts")) = (path.file_stem().and_then(|s| s.to_str()), path.extension().and_then(|s| s.to_str())) else {
-                    continue;
-                };
-                let Ok(text) = std::fs::read_to_string(&path) else { continue };
-                let module = if stem == "index" { p.name.clone() } else { format!("{}/{stem}", p.name) };
-                for name in exported(&text) {
-                    exports.entry(name).or_insert_with(|| module.clone());
-                }
-            }
-        }
-        // The components, where each is exported first (PKG-11).
-        for list in s.catalog().exports.values() {
-            if let Some(e) = list.iter().find(|e| !e.name.contains('.')) {
-                exports.entry(e.name.clone()).or_insert_with(|| e.module.clone());
-            }
-        }
         let names = rev.compiled.code().ir.modules.iter().map(|m| (m.key.clone(), m.label().to_string())).collect();
-        Song { tracks, exports, names }
+        Song { tracks, exports: BTreeMap::new(), names }
     }
 
     fn name(&self, key: &str) -> String {
         self.names.get(key).cloned().unwrap_or_else(|| title(key))
     }
+}
+
+/// Each name the packages of `s` export, with the module it is imported from: every top-level
+/// `export const`, `export let` and `export function` of each package's own modules, then the
+/// catalog's components where each is exported first (PKG-11).
+fn exports(s: &Session) -> BTreeMap<String, String> {
+    let mut exports = BTreeMap::new();
+    for p in s.packages.packages() {
+        let Ok(entries) = std::fs::read_dir(p.dir.join("src")) else { continue };
+        let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+        paths.sort();
+        for path in paths {
+            let (Some(stem), Some("ts")) = (path.file_stem().and_then(|s| s.to_str()), path.extension().and_then(|s| s.to_str())) else {
+                continue;
+            };
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let module = if stem == "index" { p.name.clone() } else { format!("{}/{stem}", p.name) };
+            for name in exported(&text) {
+                exports.entry(name).or_insert_with(|| module.clone());
+            }
+        }
+    }
+    for list in s.catalog().exports.values() {
+        if let Some(e) = list.iter().find(|e| !e.name.contains('.')) {
+            exports.entry(e.name.clone()).or_insert_with(|| e.module.clone());
+        }
+    }
+    exports
 }
 
 /// The names `export const`, `export let` and `export function` declare at the start of a line.
@@ -108,7 +121,9 @@ pub fn explain(code: &str, message: &str, song: &Song, at: &At) -> Option<Plain>
         // Several mistakes at one node are joined with "; ": the first one known speaks.
         "code.check" => message.split("; ").find_map(|part| check(part, at)),
         "code.build" => {
-            if let Some(name) = message.strip_suffix(" is not defined").map(|n| n.trim_start_matches("ReferenceError: ")).filter(|n| ident(n)) {
+            if let Some(name) =
+                message.strip_suffix(" is not defined").map(|n| n.trim_start_matches("ReferenceError: ")).filter(|n| ident(n))
+            {
                 let import = |n: &str, m: &str| format!("Import it: `import {{ {n} }} from \"{m}\"`.");
                 let fix = match song.exports.get(name) {
                     Some(module) => import(name, module),
@@ -120,7 +135,9 @@ pub fn explain(code: &str, message: &str, song: &Song, at: &At) -> Option<Plain>
                 return plain(format!("`{name}` isn't known in {file}."), fix);
             }
             // A component called without its sound: `reverb(): the input in is missing`.
-            if let Some((id, port)) = message.split_once("(): the input ").and_then(|(id, rest)| Some((id, rest.strip_suffix(" is missing")?))) {
+            if let Some((id, port)) =
+                message.split_once("(): the input ").and_then(|(id, rest)| Some((id, rest.strip_suffix(" is missing")?)))
+            {
                 return Some(empty(&title(id), port));
             }
             if PARSE.iter().any(|p| message.starts_with(p)) {
@@ -151,11 +168,17 @@ pub fn explain(code: &str, message: &str, song: &Song, at: &At) -> Option<Plain>
         }
         "pkg.undeclared" => {
             let pkg = message.split_once("from the package `")?.1.split_once('`')?.0;
-            plain(format!("{file} uses {pkg}, but music2.toml doesn't list it."), format!("Add `{pkg} = \"…\"` under `[dependencies]` in music2.toml."))
+            plain(
+                format!("{file} uses {pkg}, but music2.toml doesn't list it."),
+                format!("Add `{pkg} = \"…\"` under `[dependencies]` in music2.toml."),
+            )
         }
         "key.duplicate" => {
             let id = quoted(message, '"').or_else(|| quoted(message, '`'))?;
-            plain(format!("Two tracks have the ID {id}."), "Give one another ID: in Code, right-click its file, then Change track ID….".into())
+            plain(
+                format!("Two tracks have the ID {id}."),
+                "Give one another ID: in Code, right-click its file, then Change track ID….".into(),
+            )
         }
         "plugin.missing" => {
             let track = at.module.map(|m| song.name(m));
@@ -170,15 +193,24 @@ pub fn explain(code: &str, message: &str, song: &Song, at: &At) -> Option<Plain>
                     format!("An effect on {t} is a plugin that isn't installed on this computer, so it lets the sound through unchanged."),
                     "Install it, or take the effect out in Device.".into(),
                 ),
-                (None, _) => plain("A plugin isn't installed on this computer, so it plays nothing.".into(), "Install it, or pick another sound.".into()),
+                (None, _) => plain(
+                    "A plugin isn't installed on this computer, so it plays nothing.".into(),
+                    "Install it, or pick another sound.".into(),
+                ),
             }
         }
         "asset.missing" => {
             let name = quoted(message, '`')?;
             if message.contains("` isn't in assets/") {
-                plain(format!("{name} isn't in the song's assets folder, so its clip plays nothing."), "Put the file back, or delete the clip.".into())
+                plain(
+                    format!("{name} isn't in the song's assets folder, so its clip plays nothing."),
+                    "Put the file back, or delete the clip.".into(),
+                )
             } else if message.contains("` can't be read") {
-                plain(format!("{name} can't be read, so its clip plays nothing."), "Put a good copy of the file back, or delete the clip.".into())
+                plain(
+                    format!("{name} can't be read, so its clip plays nothing."),
+                    "Put a good copy of the file back, or delete the clip.".into(),
+                )
             } else {
                 None
             }
@@ -227,7 +259,10 @@ fn check(part: &str, at: &At) -> Option<Plain> {
         return Some(empty(&thing, port));
     }
     if rest.starts_with(" is mono") && rest.ends_with("but a stereo signal is connected") {
-        return Some(Plain { words: format!("{thing} takes one channel, but gets two."), fix: Some("Make it mono first, or use the stereo version.".into()) });
+        return Some(Plain {
+            words: format!("{thing} takes one channel, but gets two."),
+            fix: Some("Make it mono first, or use the stereo version.".into()),
+        });
     }
     None
 }
@@ -266,7 +301,11 @@ fn missing_import(spec: &str, from: &str, song: &Song) -> Option<Plain> {
     } else {
         let pkg = spec.split('/').next().unwrap_or(spec);
         let modules: BTreeSet<&str> = song.exports.values().map(String::as_str).filter(|m| m.split('/').next() == Some(pkg)).collect();
-        if modules.is_empty() { "Check its name.".to_string() } else { format!("Check its name: {pkg} has {}.", modules.into_iter().collect::<Vec<_>>().join(", ")) }
+        if modules.is_empty() {
+            "Check its name.".to_string()
+        } else {
+            format!("Check its name: {pkg} has {}.", modules.into_iter().collect::<Vec<_>>().join(", "))
+        }
     };
     Some(Plain { words, fix: Some(fix) })
 }
@@ -307,7 +346,11 @@ fn near<'a>(name: &str, names: impl Iterator<Item = &'a String>) -> Option<&'a s
         return None;
     }
     let lower = name.to_lowercase();
-    names.map(|n| (distance(&lower, &n.to_lowercase()), n)).filter(|(d, _)| *d <= 2).min_by_key(|(d, n)| (*d, n.len())).map(|(_, n)| n.as_str())
+    names
+        .map(|n| (distance(&lower, &n.to_lowercase()), n))
+        .filter(|(d, _)| *d <= 2)
+        .min_by_key(|(d, n)| (*d, n.len()))
+        .map(|(_, n)| n.as_str())
 }
 
 /// The edit distance between two names (Levenshtein), in characters.

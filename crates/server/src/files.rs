@@ -225,7 +225,13 @@ pub fn diagnostics(session: &Session) -> Vec<Problem> {
             let text = std::fs::read_to_string(absolute(file)).ok()?;
             text.lines().nth(line.checked_sub(1)? as usize).map(str::to_string)
         });
-        let at = m2_editor::explain::At { file: p.file.as_deref(), line: p.line, col: p.col, text: text.as_deref(), module: p.module.as_deref() };
+        let at = m2_editor::explain::At {
+            file: p.file.as_deref(),
+            line: p.line,
+            col: p.col,
+            text: text.as_deref(),
+            module: p.module.as_deref(),
+        };
         if let Some(plain) = m2_editor::explain::explain(p.code, &p.message, &song, &at) {
             (p.plain, p.fix) = (Some(plain.words), plain.fix);
         }
@@ -246,7 +252,7 @@ pub fn plain_problems(session: &Session, problems: &[m2_song::Diagnostic]) -> Ve
     if problems.is_empty() {
         return vec![];
     }
-    let song = m2_editor::explain::Song::of(session);
+    let song = m2_editor::explain::Song::named(session);
     problems
         .iter()
         .map(|d| {
@@ -279,7 +285,13 @@ fn utf16_col(text: &str, line: u32, col: u32) -> u32 {
 
 fn problem(d: &Diagnostic, relative: &impl Fn(&str) -> String, dir: &Path) -> Problem {
     let message = relative(&d.message);
-    let mut p = Problem { code: d.code, severity: d.severity, module: d.module.clone(), inner: d.inner.as_deref().map(|i| relative(i)), ..Default::default() };
+    let mut p = Problem {
+        code: d.code,
+        severity: d.severity,
+        module: d.module.clone(),
+        inner: d.inner.as_deref().map(|i| relative(i)),
+        ..Default::default()
+    };
     // A parse error names its place in the message: `Error loading module '…': tracks/bass.ts:3:1: Expected …`.
     if let Some((at, rest)) = find_location(&message) {
         let (file, line, col) = at;
@@ -627,7 +639,10 @@ mod tests {
 
         // A revision's problem: a clip's file isn't in assets/.
         let vox = Project::new(&[
-            ("song.ts", "import { song, track } from '@m2/core';\nconst v = track('vox', { name: 'Vox' }, ({ lane }) => lane.audio('takes'));\nexport default song(() => v.out);\n"),
+            (
+                "song.ts",
+                "import { song, track } from '@m2/core';\nconst v = track('vox', { name: 'Vox' }, ({ lane }) => lane.audio('takes'));\nexport default song(() => v.out);\n",
+            ),
             ("data/vox/takes.json", r#"{"clips": [{"id": "a", "start": 0, "length": 4, "asset": "vox.wav"}]}"#),
         ]);
         let s = vox.session();

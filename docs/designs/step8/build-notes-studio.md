@@ -132,7 +132,8 @@ checks it, and every new suite runs it on what it adds."
 - `crates/server/src/files.rs`: `Problem` gains `plain`, `fix`, `inner` (each serialized only when set);
   `problem()` fills `inner`, made relative; `diagnostics()` explains each draft error from its place and its line's
   text (the column in characters, before the UTF-16 conversion). `plain_problems(session, problems)` (new): the
-  revision's problems as JSON, each with `plain` and `fix` when a rule knows it.
+  revision's problems as JSON, each with `plain` and `fix` when a rule knows it, from `Song::named` (the tracks'
+  names and files: it never reads the packages' sources, as it runs at every publish that has a problem).
 - `crates/server/src/graph/actor.rs`: one line where the published `problems` are made: through `plain_problems`.
 - Web: `lib/plain.tsx` (new; `.tsx`, not the plan's `.ts`, for `Words`): `plain`, `fix`, `inner` on `Problem` and
   `plain`, `fix` on `Diagnostic` by `declare module "./graph"`; `placeOf` ("tracks/bass.ts, line 12"), `Words`

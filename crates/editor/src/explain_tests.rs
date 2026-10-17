@@ -33,16 +33,19 @@ fn draft(f: &Fixture, s: &Session) -> (String, Plain) {
 
 /// The revision's first problem with `code`, in plain words.
 fn problem(f: &Fixture, s: &Session, code: &str) -> (String, Plain) {
-    let d = s.problems().iter().find(|d| d.code == code).unwrap_or_else(|| panic!("no {code} in {:?} (draft: {:?})", s.problems(), s.draft_errors));
+    let d = s
+        .problems()
+        .iter()
+        .find(|d| d.code == code)
+        .unwrap_or_else(|| panic!("no {code} in {:?} (draft: {:?})", s.problems(), s.draft_errors));
     explained(f, s, d.code, &d.message, d.src.as_deref(), d.module.as_deref())
 }
 
 fn explained(f: &Fixture, s: &Session, code: &str, message: &str, src: Option<&str>, module: Option<&str>) -> (String, Plain) {
     let (file, line, col) = place(src);
-    let text = file
-        .as_deref()
-        .zip(line)
-        .and_then(|(file, line)| std::fs::read_to_string(f.0.join(file)).ok().and_then(|t| t.lines().nth(line as usize - 1).map(str::to_string)));
+    let text = file.as_deref().zip(line).and_then(|(file, line)| {
+        std::fs::read_to_string(f.0.join(file)).ok().and_then(|t| t.lines().nth(line as usize - 1).map(str::to_string))
+    });
     let at = At { file: file.as_deref(), line, col, text: text.as_deref(), module };
     let plain = explain(code, message, &Song::of(s), &at).unwrap_or_else(|| panic!("no plain words for {code}: {message}"));
     (format!("{code} {message} at {src:?}"), plain)
@@ -101,7 +104,9 @@ fn a_name_not_known_proposes_its_import() {
     assert_eq!(fix(&p), "Did you mean pluck? Import it: `import { pluck } from \"std/instruments\"`.");
     // Spelt right, not imported: its import. A plain function std exports (not a component) too.
     for (name, module) in [("pluck", "std/instruments"), ("lfo", "std/control")] {
-        let keys = format!("import {{ track }} from \"@m2/core\";\n\nexport default track(\"keys\", {{ name: \"Keys\" }}, ({{ lane }}) => {name}(lane.notes(\"notes\")));\n");
+        let keys = format!(
+            "import {{ track }} from \"@m2/core\";\n\nexport default track(\"keys\", {{ name: \"Keys\" }}, ({{ lane }}) => {name}(lane.notes(\"notes\")));\n"
+        );
         let (f, s) = broken(&[("tracks/keys.ts", &keys)]);
         let (raw, p) = draft(&f, &s);
         assert_eq!(fix(&p), format!("Import it: `import {{ {name} }} from \"{module}\"`."), "{raw}");
@@ -208,7 +213,9 @@ fn a_lane_file_that_doesnt_read() {
 #[test]
 fn an_unknown_message_keeps_its_words() {
     let song = Song::default();
-    for (code, message) in [("code.build", "something new went wrong"), ("code.check", "voices must be 1..128, not 0"), ("arrangement.invalid", "tempo 5 BPM")] {
+    for (code, message) in
+        [("code.build", "something new went wrong"), ("code.check", "voices must be 1..128, not 0"), ("arrangement.invalid", "tempo 5 BPM")]
+    {
         assert_eq!(explain(code, message, &song, &At::default()), None, "{code}: {message}");
     }
 }

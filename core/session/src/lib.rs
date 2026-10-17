@@ -188,7 +188,8 @@ pub fn build_code(project: &Project, packages: &mut PackageSet) -> Result<Arc<Co
     if !blocking.is_empty() {
         return Err(blocking);
     }
-    let flat = m2_ir::check(&ir, packages).map_err(|e| e.into_iter().map(|d| at_project_call(d, &ir, &sites, project)).collect::<Vec<_>>())?;
+    let flat =
+        m2_ir::check(&ir, packages).map_err(|e| e.into_iter().map(|d| at_project_call(d, &ir, &sites, project)).collect::<Vec<_>>())?;
     let decls = m2_runtime::decls(&ir);
     Ok(Arc::new(Code { ir, flat, sites: sites.into(), outputs, package_files, components, units: units.into(), decls, kept }))
 }
