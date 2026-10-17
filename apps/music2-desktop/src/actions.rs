@@ -22,6 +22,7 @@ static BUSY: AtomicBool = AtomicBool::new(false);
 /// picked for a new song (the New Song dialog's Choose Folder…), starting at `arg`: a folder, or
 /// `{"start": folder, "title": words}` (Settings' "Choose Where New Songs Go", plan X38).
 /// "open_file" returns the files picked in an open dialog, as a JSON list (File ▸ Import Audio…).
+/// "save_file" returns the file picked in a save dialog (Export ▸ MIDI, a clip's Export as MIDI…).
 #[tauri::command]
 pub async fn action(app: AppHandle, id: String, arg: Option<String>) -> Result<Option<String>, String> {
     let answer = match id.as_str() {
@@ -51,6 +52,14 @@ pub async fn action(app: AppHandle, id: String, arg: Option<String>) -> Result<O
             BUSY.store(false, Ordering::SeqCst);
             picked
         }),
+        "save_file" => tauri::async_runtime::spawn_blocking(move || {
+            if BUSY.swap(true, Ordering::SeqCst) {
+                return Ok(None);
+            }
+            let picked = save_file(&app, arg);
+            BUSY.store(false, Ordering::SeqCst);
+            picked
+        }),
         _ => {
             run(&app, &id);
             return Ok(None);
@@ -69,14 +78,58 @@ struct OpenAsk {
     multiple: bool,
 }
 
-fn open_ask(arg: Option<&str>) -> OpenAsk {
-    let v: serde_json::Value = arg.and_then(|a| serde_json::from_str(a).ok()).unwrap_or_default();
-    let text = |v: &serde_json::Value| v.as_str().unwrap_or_default().to_string();
-    let filters = v["filters"]
+/// A string of the page's ask, or "".
+fn text(v: &serde_json::Value) -> String {
+    v.as_str().unwrap_or_default().to_string()
+}
+
+/// The ask's filters: each one's name and extensions.
+fn filters(v: &serde_json::Value) -> Vec<(String, Vec<String>)> {
+    v["filters"]
         .as_array()
         .map(|fs| fs.iter().map(|f| (text(&f["name"]), f["extensions"].as_array().map(|e| e.iter().map(text).collect()).unwrap_or_default())).collect())
-        .unwrap_or_default();
-    OpenAsk { title: text(&v["title"]), filters, multiple: v["multiple"].as_bool().unwrap_or(false) }
+        .unwrap_or_default()
+}
+
+fn open_ask(arg: Option<&str>) -> OpenAsk {
+    let v: serde_json::Value = arg.and_then(|a| serde_json::from_str(a).ok()).unwrap_or_default();
+    OpenAsk { title: text(&v["title"]), filters: filters(&v), multiple: v["multiple"].as_bool().unwrap_or(false) }
+}
+
+/// What the page asks of the save dialog (the review's F1): `{"title", "name", "start", "filters":
+/// [{"name", "extensions"}]}`: the file's name, the folder it starts in.
+#[derive(Debug, Default, PartialEq)]
+struct SaveAsk {
+    title: String,
+    name: String,
+    start: String,
+    filters: Vec<(String, Vec<String>)>,
+}
+
+fn save_ask(arg: Option<&str>) -> SaveAsk {
+    let v: serde_json::Value = arg.and_then(|a| serde_json::from_str(a).ok()).unwrap_or_default();
+    SaveAsk { title: text(&v["title"]), name: text(&v["name"]), start: text(&v["start"]), filters: filters(&v) }
+}
+
+/// The file picked in the save dialog (Export ▸ MIDI, a clip's Export as MIDI…), or None when
+/// cancelled.
+fn save_file(app: &AppHandle, arg: Option<String>) -> anyhow::Result<Option<String>> {
+    let ask = save_ask(arg.as_deref());
+    let mut dialog = app.dialog().file().set_title(if ask.title.is_empty() { "Save" } else { &ask.title }).set_can_create_directories(true);
+    for (name, extensions) in &ask.filters {
+        let exts: Vec<&str> = extensions.iter().map(String::as_str).collect();
+        dialog = dialog.add_filter(name, &exts);
+    }
+    if Path::new(&ask.start).is_dir() {
+        dialog = dialog.set_directory(&ask.start);
+    }
+    if !ask.name.is_empty() {
+        dialog = dialog.set_file_name(&ask.name);
+    }
+    if let Some(w) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&w);
+    }
+    Ok(dialog.blocking_save_file().and_then(|p| p.into_path().ok()).map(|p| p.display().to_string()))
 }
 
 /// Files picked in the open dialog (File ▸ Import Audio…): a JSON list of their paths, or None
@@ -324,5 +377,54 @@ mod tests {
         assert_eq!(ask.filters, [("WAV files".to_string(), vec!["wav".to_string(), "wave".to_string()])]);
         assert_eq!(open_ask(Some("{}")), OpenAsk::default());
         assert_eq!(open_ask(None), OpenAsk::default());
+    }
+
+    /// Whether the shell has the action `id`: one of `action`'s arms that answer the page, or one
+    /// `perform` runs.
+    fn known(id: &str) -> bool {
+        matches!(id, "export_path" | "reveal_file" | "song_folder" | "open_file" | "save_file")
+            || matches!(id, "open_project" | "clear_recent" | "reveal" | "ready" | "quit")
+            || id.starts_with(crate::menu::OPEN_RECENT)
+    }
+
+    /// The review's F1: every action the page asks for (`nativeAction("…")` in web/src) has an arm
+    /// here. One without reaches `perform`, whose "unknown action" is an error box, and the page
+    /// hears nothing.
+    #[test]
+    fn every_action_the_page_asks_for_is_known() {
+        fn files(dir: &Path, out: &mut Vec<PathBuf>) {
+            for e in std::fs::read_dir(dir).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    files(&p, out);
+                } else if p.extension().is_some_and(|x| x == "ts" || x == "tsx") {
+                    out.push(p);
+                }
+            }
+        }
+        let mut all = vec![];
+        files(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/src"), &mut all);
+        let mut asked = std::collections::BTreeSet::new();
+        for f in all {
+            let text = std::fs::read_to_string(&f).unwrap();
+            for (i, call) in text.match_indices("nativeAction(\"") {
+                let rest = &text[i + call.len()..];
+                asked.insert(rest[..rest.find('"').unwrap()].to_string());
+            }
+        }
+        assert!(asked.contains("open_file") && asked.contains("save_file"), "{asked:?}");
+        let unknown: Vec<&String> = asked.iter().filter(|id| !known(id)).collect();
+        assert!(unknown.is_empty(), "the page asks for actions the app doesn't have: {unknown:?}");
+    }
+
+    /// The save dialog takes its title, file name, folder and filters from the page (Export ▸ MIDI,
+    /// a clip's Export as MIDI…).
+    #[test]
+    fn the_save_dialog_takes_its_ask_from_the_page() {
+        let arg = r#"{"title": "Export MIDI", "name": "First.mid", "start": "/Users/me/Music/music2/Exports", "filters": [{"name": "MIDI file", "extensions": ["mid", "midi"]}]}"#;
+        let ask = save_ask(Some(arg));
+        assert_eq!((ask.title.as_str(), ask.name.as_str(), ask.start.as_str()), ("Export MIDI", "First.mid", "/Users/me/Music/music2/Exports"));
+        assert_eq!(ask.filters, [("MIDI file".to_string(), vec!["mid".to_string(), "midi".to_string()])]);
+        assert_eq!(save_ask(None), SaveAsk::default());
     }
 }

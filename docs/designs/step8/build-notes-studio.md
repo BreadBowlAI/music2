@@ -916,8 +916,8 @@ C3 came before C2's second half for that reason (the plan's order was C1, C2, C3
 
 **What's left**
 
-- The app's save panel needs P0's `save_file` action; until the merge, the app's row would answer "unknown action"
-  in its toast. The browser path is what st-midi checks; C2 adds the app page's.
+- The app's save panel needs a `save_file` action. Until the End added it (the review's F1), the app showed an error
+  box, "unknown action save_file", and saved nothing. The browser path is what st-midi checks.
 - The tiplib check (`tips()`) is P0's: added to st-midi once `studio` has it.
 
 **For gaps.md:** #36: a notes clip saves as a MIDI file (Export as MIDI…), with a fitting General MIDI sound and
@@ -1655,3 +1655,16 @@ browser's upload over it got axum's 413: "Nothing was added to the song: HTTP 41
 - Test: `st-audio` drops a file whose size reads 1 GiB + 1 (2 checks; 92 to 94). Green with `st-record` (63) on the
   server and page of this commit (`st-end-e2e-g1-*`).
 - Red: `FAIL  a file over 1 GB says so:`, `FAIL  and nothing is sent or written (1)`.
+
+#### F1. Export as MIDI in the app
+
+The page asked the app for `save_file`, which it didn't have: the Export dialog's MIDI row and a clip's Export as
+MIDI… showed a native error box, "unknown action save_file", and saved nothing.
+
+- `apps/music2-desktop/src/actions.rs`: a `save_file` arm, built as `open_file` is (its own thread, one dialog at a
+  time): the page's title, file name, start folder and filters, then the system's save panel. `open_ask` and
+  `save_ask` share how filters are read.
+- Tests: `every_action_the_page_asks_for_is_known` reads every `nativeAction("…")` in `web/src` and checks the app has
+  each; `the_save_dialog_takes_its_ask_from_the_page`. The Mac lint is clean.
+- Red: `the page asks for actions the app doesn't have: ["save_file"]`.
+- Left: the panel itself is seen only on a Mac (HANDOFF's by-ear steps).
