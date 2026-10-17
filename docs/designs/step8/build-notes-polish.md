@@ -1405,3 +1405,9 @@ no ring), as the track name and the top bar's fields had before polish.
 | Suites | `pl-projects` (66 now): Tab to Alpha's row and to gone Beta's row: both `rgb(224, 234, 251)`. `pl-ids` (39 now): the field's outline is `solid 2px` accent and it has no box shadow |
 | Red first (this page before the fix) | `FAIL Tab to a row lights it accent-soft, a gone song's too: ["rgb(230, 232, 235)","rgba(0, 0, 0, 0)"]` and `FAIL it shows the one focus ring, as every dialog's field does (review PL-T5): {"outline":"none 0px rgb(56, 98, 167)","shadow":"… rgb(200, 218, 248) 0px 0px 0px 2px …"}` |
 | Green | `pl-projects` C2: `["rgb(224, 234, 251)","rgb(224, 234, 251)"]`; `pl-ids` 39/39. A first try also gave the field `transition-colors`: the outline then faded in from the text colour (`solid 2px rgb(51, 55, 60)` when read) and the danger border check read it half way, so it was taken out |
+
+#### Also: the unused rename hook is gone
+
+The Merge left `canvas.renameSong` for the End to drop: nothing called it since File ▸ Rename Song…
+opens lane C's dialog. It is gone from `SongBar.tsx` and `shell.ts`. A double-click on the name still
+renames it in place (`s8-songbar`, `pl-notes`).

@@ -181,7 +181,6 @@ export const canvas: {
   play?: () => void;
   continue?: () => void;
   home?: () => void;
-  renameSong?: () => void;
   /** M, Track ▸ Mute (⌃M on a Mac): mute or unmute track `module` while listening. */
   mute?: (module: string) => void;
   /** S, Track ▸ Solo (⌃S on a Mac). */

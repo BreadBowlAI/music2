@@ -3,7 +3,6 @@ import { Minus, Plus } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { barAt, graphApi, type Meter, type TimelineView } from "../lib/graph";
 import { mod } from "../lib/native";
-import { canvas } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { Bubble } from "./Knob";
 import { Button, MenuRow, Popover, Segment } from "./ui";
@@ -392,10 +391,6 @@ export function SongTitle({
   useEffect(() => {
     if (pending !== null && name === pending) setPending(null);
   }, [name, pending]);
-  useEffect(() => {
-    canvas.renameSong = () => !locked && setDraft(pending ?? name);
-    return () => void delete canvas.renameSong;
-  }, [name, pending, locked]);
   const editing = draft !== null;
   // The room when typing began. The field keeps at least that width while it is typed in, also
   // when the room goes for a moment (a status pill shows in a small window): it is drawn over its
