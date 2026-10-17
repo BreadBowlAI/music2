@@ -527,7 +527,8 @@ fn the_starters_add_reverb_keeps_the_hooks_reverb() {
     assert!(pairs.iter().filter(|p| p.1.is_none()).count() == 1 && hook.iter().all(|p| pairs.contains(p)), "{pairs:?}");
     let widen = calls_in(&s, "tracks/chords.ts", "widen")[0].clone();
     let pairs = continued(&mut s, "std:chorus", |s| drop(s.add_effect(rev(s), &widen, "std:chorus").unwrap()));
-    assert_eq!(pairs, [kept("std:chorus[0.6,0.4,0.4]", "std:chorus[0.6,0.4,0.4]"), made("std:chorus[0.8,0.5,0.5]")]);
+    // The last constant is the kernel's `playing`, left at its default.
+    assert_eq!(pairs, [kept("std:chorus[0.6,0.4,0.4,1]", "std:chorus[0.6,0.4,0.4,1]"), made("std:chorus[0.8,0.5,0.5,1]")]);
 }
 
 /// `rev` played live from 0 for `frames`; when `next` is given, it is activated at frame `at` as the

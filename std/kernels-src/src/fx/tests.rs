@@ -42,15 +42,16 @@ struct Fx {
 }
 
 /// Every effect at the settings the effect menu starts it with (the EQ gets some boost and
-/// cut, since flat it does nothing).
+/// cut, since flat it does nothing), and playing: the last of chorus's, phaser's, tremolo's and
+/// bitcrush's is `playing`, 1.
 const ALL: [Fx; 8] = [
     Fx { name: "reverb", run: run::<Reverb>, controls: &[0.6, 0.5, 0.25] },
-    Fx { name: "chorus", run: run::<Chorus>, controls: &[0.8, 0.5, 0.5] },
-    Fx { name: "phaser", run: run::<Phaser>, controls: &[0.4, 0.7, 0.5, 0.5] },
-    Fx { name: "tremolo", run: run::<Tremolo>, controls: &[5.0, 0.5] },
+    Fx { name: "chorus", run: run::<Chorus>, controls: &[0.8, 0.5, 0.5, 1.0] },
+    Fx { name: "phaser", run: run::<Phaser>, controls: &[0.4, 0.7, 0.5, 0.5, 1.0] },
+    Fx { name: "tremolo", run: run::<Tremolo>, controls: &[5.0, 0.5, 1.0] },
     Fx { name: "compress", run: run::<Compress>, controls: &[-18.0, 3.0, 0.01, 0.15, 4.0] },
     Fx { name: "eq3", run: run::<Eq3>, controls: &[4.0, -3.0, 5.0, 200.0, 1000.0, 4000.0] },
-    Fx { name: "bitcrush", run: run::<Bitcrush>, controls: &[8.0, 12_000.0, 1.0] },
+    Fx { name: "bitcrush", run: run::<Bitcrush>, controls: &[8.0, 12_000.0, 1.0, 1.0] },
     Fx { name: "widen", run: run::<Widen>, controls: &[1.5] },
 ];
 
@@ -283,10 +284,10 @@ fn chorus_spreads_a_centred_sound_at_the_same_level() {
 #[test]
 fn phaser_is_an_allpass_until_mixed_with_the_dry_sound() {
     let dry = rms(&(0..48_000).map(|t| [noise(0, t), 0.0]).collect::<Vec<_>>(), 0);
-    let wet = (ALL[2].run)(1, 48_000, BLOCK, &with(&noise, &[0.4, 0.7, 0.0, 1.0]));
+    let wet = (ALL[2].run)(1, 48_000, BLOCK, &with(&noise, &[0.4, 0.7, 0.0, 1.0, 1.0]));
     let level = db(rms(&wet, 0) / dry);
     assert!(level.abs() < 1.0, "fully wet without feedback is {level:.1} dB from dry");
-    let mixed = (ALL[2].run)(1, 48_000, BLOCK, &with(&noise, &[0.4, 0.7, 0.0, 0.5]));
+    let mixed = (ALL[2].run)(1, 48_000, BLOCK, &with(&noise, &[0.4, 0.7, 0.0, 0.5, 1.0]));
     let level = db(rms(&mixed, 0) / dry);
     assert!(level < -1.5, "the notches only take away {level:.1} dB");
 }
@@ -294,13 +295,13 @@ fn phaser_is_an_allpass_until_mixed_with_the_dry_sound() {
 #[test]
 fn tremolo_dips_by_its_depth() {
     let dc = |_, _| 0.5;
-    let out = (ALL[3].run)(1, 48_000, BLOCK, &with(&dc, &[5.0, 1.0]));
+    let out = (ALL[3].run)(1, 48_000, BLOCK, &with(&dc, &[5.0, 1.0, 1.0]));
     let (lo, hi) = out.iter().fold((f32::MAX, 0.0f32), |(lo, hi), f| (lo.min(f[0]), hi.max(f[0])));
     assert!(lo < 0.005 && hi > 0.499, "level swings between {lo} and {hi}");
     // Five dips a second.
     let dips = out.windows(3).filter(|w| w[1][0] < w[0][0] && w[1][0] <= w[2][0]).count();
     assert_eq!(dips, 5);
-    let still = (ALL[3].run)(1, 4_800, BLOCK, &with(&dc, &[5.0, 0.0]));
+    let still = (ALL[3].run)(1, 4_800, BLOCK, &with(&dc, &[5.0, 0.0, 1.0]));
     assert!(still.iter().all(|f| f[0] == 0.5), "depth 0 changes the sound");
 }
 
@@ -349,13 +350,13 @@ fn eq3_is_transparent_when_flat_and_boosts_its_bands() {
 #[test]
 fn bitcrush_rounds_and_holds() {
     let fx = ALL[6].run;
-    let clean = fx(2, 4_800, BLOCK, &with(&noise, &[24.0, SR, 1.0]));
+    let clean = fx(2, 4_800, BLOCK, &with(&noise, &[24.0, SR, 1.0, 1.0]));
     assert!(clean.iter().enumerate().all(|(t, f)| (f[0] - noise(0, t)).abs() < 1e-6), "24 bits at full rate isn't clean");
-    let two_bits = fx(2, 4_800, BLOCK, &with(&noise, &[2.0, SR, 1.0]));
+    let two_bits = fx(2, 4_800, BLOCK, &with(&noise, &[2.0, SR, 1.0, 1.0]));
     assert!(two_bits.iter().all(|f| (f[0] * 2.0).fract() == 0.0 && f[0].abs() <= 1.0), "2 bits gives more than 5 levels");
-    let held = fx(1, 4_800, BLOCK, &with(&noise, &[24.0, 12_000.0, 1.0]));
+    let held = fx(1, 4_800, BLOCK, &with(&noise, &[24.0, 12_000.0, 1.0, 1.0]));
     assert!(held.chunks(4).all(|c| c.iter().all(|f| f[0] == c[0][0])), "12 kHz doesn't hold each sample 4 times");
-    let dry = fx(2, 4_800, BLOCK, &with(&noise, &[2.0, 4_000.0, 0.0]));
+    let dry = fx(2, 4_800, BLOCK, &with(&noise, &[2.0, 4_000.0, 0.0, 1.0]));
     assert!(dry.iter().enumerate().all(|(t, f)| f[0] == noise(0, t)), "mix 0 changes the sound");
 }
 
@@ -395,4 +396,133 @@ fn pan_places_a_mono_sound_and_balances_a_stereo_one() {
     assert!(right.iter().enumerate().all(|(t, f)| f[0].abs() < 1e-6 && f[1] == x(1, t)));
     let half = pan(2, -0.5);
     assert!(half.iter().enumerate().all(|(t, f)| f[0] == x(0, t) && (f[1] - x(1, t) * (0.25 * PI).cos()).abs() < 1e-6));
+}
+
+// ---------------------------------------------------------------- following the song
+
+/// The effects whose last input is `playing`.
+const FOLLOW: [&str; 4] = ["chorus", "phaser", "tremolo", "bitcrush"];
+
+/// The LFO phase before it followed the song, kept here as the oracle: what [`Phase`] must still
+/// do while the song plays.
+fn old_phase(at: &mut f32, sr: f32, rate: f32, max: f32) -> f32 {
+    let now = *at;
+    *at += clampf(rate, 0.0, max) / sr;
+    if *at >= 1.0 {
+        *at -= 1.0;
+    }
+    now
+}
+
+// While the song plays, the LFO steps exactly as it always did, at any rate: no render changes.
+#[test]
+fn playing_the_lfo_steps_as_it_always_did() {
+    let rates = [0.8, 5.0, 19.9, 0.05, 0.0, -1.0, f32::NAN, f32::INFINITY, 1e9, 7.3];
+    for (max, sr) in [(20.0, SR), (40.0, SR), (20.0, 44_100.0), (40.0, 384_000.0)] {
+        let (mut phase, mut old) = (Phase { sr, at: 0.0 }, 0.0f32);
+        for t in 0..400_000 {
+            let rate = rates[t / 9_000 % rates.len()];
+            let (now, was) = (phase.next(rate, max, 1.0), old_phase(&mut old, sr, rate, max));
+            assert_eq!(now.to_bits(), was.to_bits(), "sample {t} at {rate} Hz, {sr} Hz");
+        }
+    }
+}
+
+/// The bitcrusher before it followed the song, kept here as the oracle.
+struct OldBitcrush {
+    sr: f32,
+    clock: f32,
+    held: [f32; 2],
+    bits: f32,
+    steps: f32,
+    mix: Glide,
+}
+
+impl OldBitcrush {
+    fn process(&mut self, x: [f32; 2], bits: f32, rate: f32, mix: f32) -> [f32; 2] {
+        let b = clampf(bits, 1.0, 24.0);
+        if b != self.bits {
+            self.bits = b;
+            self.steps = (b - 1.0).exp2();
+        }
+        let x = x.map(sane);
+        if self.clock >= 1.0 {
+            self.clock -= 1.0;
+            self.held = x.map(|x| (x * self.steps).round() / self.steps);
+        }
+        self.clock += clampf(rate, 20.0, self.sr) / self.sr;
+        let m = self.mix.next(clampf(mix, 0.0, 1.0));
+        [x[0] * (1.0 - m) + self.held[0] * m, x[1] * (1.0 - m) + self.held[1] * m]
+    }
+}
+
+// While the song plays, the bitcrusher is what it always was, whatever its settings do.
+#[test]
+fn playing_the_bitcrusher_crushes_as_it_always_did() {
+    let fx = ALL.iter().find(|fx| fx.name == "bitcrush").unwrap();
+    for set in torture(fx).into_iter().map(|mut s| {
+        *s.last_mut().unwrap() = 1.0;
+        s
+    }) {
+        // Controls that move every 700 samples, around each setting.
+        let control = |p: usize, t: usize| set[p - 1] * [1.0, 0.37, 1.9][t / 700 % 3];
+        for channels in [1, 2] {
+            let out = (fx.run)(channels, 5_000, 100, &|p, c, t| {
+                if p == 0 {
+                    noise(c, t)
+                } else if p == 4 {
+                    1.0
+                } else {
+                    control(p, t)
+                }
+            });
+            let mut old = OldBitcrush { sr: SR, clock: 1.0, held: [0.0; 2], bits: f32::NAN, steps: 1.0, mix: Glide::new(0.02, SR) };
+            for (t, got) in out.iter().enumerate() {
+                let x = [noise(0, t), if channels == 2 { noise(1, t) } else { 0.0 }];
+                let want = old.process(x, control(1, t), control(2, t), control(3, t));
+                let want = [want[0], if channels == 2 { want[1] } else { 0.0 }];
+                assert_eq!(got.map(f32::to_bits), want.map(f32::to_bits), "sample {t}, {channels} ch, controls {set:?}");
+            }
+        }
+    }
+}
+
+/// `fx` on `channels`: silence for `pre` samples, then `stopped` samples with `playing` at `wait`
+/// (and silence), then a saw. Played on through, `wait` is 1.
+fn stopped(fx: &Fx, channels: usize, pre: usize, stopped: usize, wait: f32) -> Vec<[f32; 2]> {
+    let n = fx.controls.len();
+    let start = pre + stopped;
+    (fx.run)(channels, start + 24_000, BLOCK, &|p, c, t| {
+        if p == 0 {
+            if t < start { 0.0 } else { saw(c, t - start) }
+        } else if p == n && (pre..start).contains(&t) {
+            wait
+        } else {
+            fx.controls[p - 1]
+        }
+    })
+}
+
+// Stopped (`playing` 0, or NaN), each LFO waits where it is, and the bitcrusher's clock is put
+// back at Play: played on, the effect is what it is with no stop at all, bit for bit. A fresh one
+// that sat stopped plays as one made at Play.
+#[test]
+fn stopped_the_effects_wait_and_play_on_where_they_were() {
+    // 20 003 samples: no whole number of any of their cycles.
+    let pause = 20_003;
+    for fx in ALL.iter().filter(|fx| FOLLOW.contains(&fx.name)) {
+        for channels in [1, 2] {
+            for pre in [0, 30_000] {
+                let straight = stopped(fx, channels, pre, 0, 1.0);
+                let free = stopped(fx, channels, pre, pause, 1.0);
+                assert!(free[pre + pause..] != straight[pre..], "{}: what its LFO did while stopped can't be heard", fx.name);
+                for wait in [0.0, f32::NAN] {
+                    let out = stopped(fx, channels, pre, pause, wait);
+                    let diff =
+                        out[pre + pause..].iter().zip(&straight[pre..]).position(|(a, b)| a.map(f32::to_bits) != b.map(f32::to_bits));
+                    assert_eq!(diff, None, "{} ({channels} ch), after {pre} samples, stopped with playing {wait}", fx.name);
+                }
+            }
+        }
+    }
 }

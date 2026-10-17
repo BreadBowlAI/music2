@@ -180,7 +180,9 @@ outputs = ["out: audio<*>"]
 # ---------------------------------------------------------------- more effects
 # The kernels of std/fx's reverb, modulation, compression, EQ, lo-fi and width.
 # Each kernel is safe with any input or setting: no NaN, no runaway feedback, and
-# tails that end in exact silence.
+# tails that end in exact silence. Chorus, phaser, tremolo and bitcrush follow the song
+# through their last input, `playing`: std/fx connects it to `time.playing`. Left out, it
+# is 1, as if the song always played.
 
 [[kernel]]
 name = "reverb"
@@ -195,31 +197,33 @@ outputs = ["out: audio<*>"]
 
 [[kernel]]
 name = "chorus"
-description = "Chorus: two sweeping delay taps per side; stereo sides sweep a quarter cycle apart"
+description = "Chorus: two sweeping delay taps per side; stereo sides sweep a quarter cycle apart. The sweep moves only while playing is 1 (left out, always)"
 inputs = [
   "in: audio<*>",
   "rate: control<hz> = 0.8 in 0.05..20",
   "depth: control<unit01> = 0.5",
   "mix: control<unit01> = 0.5",
+  "playing: control<unit01> = 1",
 ]
 outputs = ["out: audio<*>"]
 
 [[kernel]]
 name = "phaser"
-description = "Six-stage phaser with feedback; stereo sides sweep a quarter cycle apart"
+description = "Six-stage phaser with feedback; stereo sides sweep a quarter cycle apart. The sweep moves only while playing is 1 (left out, always)"
 inputs = [
   "in: audio<*>",
   "rate: control<hz> = 0.4 in 0.05..20",
   "depth: control<unit01> = 0.7",
   "feedback: control<unit01> = 0.5",
   "mix: control<unit01> = 0.5",
+  "playing: control<unit01> = 1",
 ]
 outputs = ["out: audio<*>"]
 
 [[kernel]]
 name = "tremolo"
-description = "Sine tremolo: dips the level by depth (1 = to silence), rate times a second"
-inputs = ["in: audio<*>", "rate: control<hz> = 5 in 0.05..20", "depth: control<unit01> = 0.5"]
+description = "Sine tremolo: dips the level by depth (1 = to silence), rate times a second. It pulses only while playing is 1 (left out, always)"
+inputs = ["in: audio<*>", "rate: control<hz> = 5 in 0.05..20", "depth: control<unit01> = 0.5", "playing: control<unit01> = 1"]
 outputs = ["out: audio<*>"]
 
 [[kernel]]
@@ -251,12 +255,13 @@ outputs = ["out: audio<*>"]
 
 [[kernel]]
 name = "bitcrush"
-description = "Bitcrusher: rounds to `bits` and holds samples at `rate` Hz"
+description = "Bitcrusher: rounds to `bits` and holds samples at `rate` Hz. When playing goes to 1, its sample clock is put back to where it was when playing went to 0 (left out, playing is always 1)"
 inputs = [
   "in: audio<*>",
   "bits: control<scalar> = 8 in 1..16",
   "rate: control<hz> = 12000",
   "mix: control<unit01> = 1",
+  "playing: control<unit01> = 1",
 ]
 outputs = ["out: audio<*>"]
 

@@ -9,6 +9,11 @@
 //! that shape the sound are smoothed, so turning a knob doesn't click. Controls are read
 //! every sample and nothing depends on block boundaries, so the output is the same
 //! however the host splits its blocks.
+//!
+//! Chorus, phaser, tremolo and the bitcrusher follow the song, not the engine: their last input,
+//! `playing`, is 1 while the song plays (std/fx passes `time.playing`; left out it is 1). Stopped,
+//! the LFOs wait where they are, and the bitcrusher's clock is put back at Play to where it was at
+//! Stop. So a song played after the engine sat stopped is the export, bit for bit (RENDER-33).
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
@@ -175,18 +180,21 @@ impl Line {
     }
 }
 
-/// A free-running LFO phase, 0..1, advanced by a rate in Hz.
+/// An LFO phase, 0..1, advanced by a rate in Hz on each sample the song plays. Stopped
+/// (`playing` 0, or NaN) it waits where it is, so it carries on at Play as if never stopped.
 struct Phase {
     sr: f32,
     at: f32,
 }
 
 impl Phase {
-    fn next(&mut self, rate: f32, max: f32) -> f32 {
+    fn next(&mut self, rate: f32, max: f32, playing: f32) -> f32 {
         let now = self.at;
-        self.at += clampf(rate, 0.0, max) / self.sr;
-        if self.at >= 1.0 {
-            self.at -= 1.0;
+        if playing > 0.5 {
+            self.at += clampf(rate, 0.0, max) / self.sr;
+            if self.at >= 1.0 {
+                self.at -= 1.0;
+            }
         }
         now
     }
@@ -331,7 +339,7 @@ const CHORUS_SWEEP: f32 = 0.006;
 
 /// Chorus: two copies of the sound on slowly sweeping delays, swinging in opposite
 /// directions. On a stereo input the right side sweeps a quarter cycle behind the left,
-/// which spreads even a centred sound wide. Inputs: in, rate (Hz), depth, mix.
+/// which spreads even a centred sound wide. Inputs: in, rate (Hz), depth, mix, playing.
 pub struct Chorus {
     sr: f32,
     lines: [Line; 2],
@@ -341,7 +349,7 @@ pub struct Chorus {
 }
 
 impl Kernel for Chorus {
-    const INPUTS: usize = 4;
+    const INPUTS: usize = 5;
     const OUTPUTS: usize = 1;
 
     fn new(sample_rate: f32, _: usize) -> Self {
@@ -358,13 +366,13 @@ impl Kernel for Chorus {
 
     fn process(&mut self, io: &mut Io) {
         let sides = io.channels.min(2);
-        let ([l, r, rate, depth, mix], [ol, or]) = io.ports([(0, 0), (0, 1), (1, 0), (2, 0), (3, 0)], [(0, 0), (0, 1)]);
+        let ([l, r, rate, depth, mix, playing], [ol, or]) = io.ports([(0, 0), (0, 1), (1, 0), (2, 0), (3, 0), (4, 0)], [(0, 0), (0, 1)]);
         let base = CHORUS_BASE * self.sr;
         for i in 0..ol.len() {
             let x = [sane(l[i]), if sides == 2 { sane(r[i]) } else { 0.0 }];
             let sweep = self.depth.next(clampf(depth[i], 0.0, 1.0)) * CHORUS_SWEEP * self.sr;
             let m = self.mix.next(clampf(mix[i], 0.0, 1.0));
-            let (sin, cos) = (TAU * self.lfo.next(rate[i], 20.0)).sin_cos();
+            let (sin, cos) = (TAU * self.lfo.next(rate[i], 20.0, playing[i])).sin_cos();
             let mut out = [0.0; 2];
             for (c, lfo) in [(0, sin), (1, cos)].into_iter().take(sides) {
                 let line = &mut self.lines[c];
@@ -389,7 +397,7 @@ const PHASER_MAX_FEEDBACK: f32 = 0.7;
 
 /// Six first-order allpasses swept by a sine LFO, with feedback. Mixed with the dry
 /// sound they cut moving notches; stereo sides sweep a quarter cycle apart.
-/// Inputs: in, rate (Hz), depth, feedback, mix (0.5 gives the deepest notches).
+/// Inputs: in, rate (Hz), depth, feedback, mix (0.5 gives the deepest notches), playing.
 pub struct Phaser {
     sr: f32,
     lfo: Phase,
@@ -401,7 +409,7 @@ pub struct Phaser {
 }
 
 impl Kernel for Phaser {
-    const INPUTS: usize = 5;
+    const INPUTS: usize = 6;
     const OUTPUTS: usize = 1;
 
     fn new(sample_rate: f32, _: usize) -> Self {
@@ -419,13 +427,14 @@ impl Kernel for Phaser {
 
     fn process(&mut self, io: &mut Io) {
         let channels = io.channels.min(2);
-        let ([l, r, rate, depth, feedback, mix], [ol, or]) = io.ports([(0, 0), (0, 1), (1, 0), (2, 0), (3, 0), (4, 0)], [(0, 0), (0, 1)]);
+        let ([l, r, rate, depth, feedback, mix, playing], [ol, or]) =
+            io.ports([(0, 0), (0, 1), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0)], [(0, 0), (0, 1)]);
         let (ins, outs) = ([l, r], [ol, or]);
         for i in 0..ins[0].len() {
             let d = self.depth.next(clampf(depth[i], 0.0, 1.0));
             let fb = PHASER_MAX_FEEDBACK * self.feedback.next(clampf(feedback[i], 0.0, 1.0));
             let m = self.mix.next(clampf(mix[i], 0.0, 1.0));
-            let (sin, cos) = (TAU * self.lfo.next(rate[i], 20.0)).sin_cos();
+            let (sin, cos) = (TAU * self.lfo.next(rate[i], 20.0, playing[i])).sin_cos();
             for c in 0..2 {
                 if c >= channels {
                     outs[c][i] = 0.0;
@@ -451,14 +460,14 @@ impl Kernel for Phaser {
 export!(phaser, Phaser);
 
 /// Tremolo: a sine LFO that dips the level by `depth` (1 = down to silence) and starts
-/// at full level. Inputs: in, rate (Hz), depth.
+/// at full level. Inputs: in, rate (Hz), depth, playing.
 pub struct Tremolo {
     lfo: Phase,
     depth: Glide,
 }
 
 impl Kernel for Tremolo {
-    const INPUTS: usize = 3;
+    const INPUTS: usize = 4;
     const OUTPUTS: usize = 1;
 
     fn new(sample_rate: f32, _: usize) -> Self {
@@ -468,10 +477,10 @@ impl Kernel for Tremolo {
 
     fn process(&mut self, io: &mut Io) {
         let stereo = io.channels > 1;
-        let ([l, r, rate, depth], [ol, or]) = io.ports([(0, 0), (0, 1), (1, 0), (2, 0)], [(0, 0), (0, 1)]);
+        let ([l, r, rate, depth, playing], [ol, or]) = io.ports([(0, 0), (0, 1), (1, 0), (2, 0), (3, 0)], [(0, 0), (0, 1)]);
         for i in 0..ol.len() {
             let d = self.depth.next(clampf(depth[i], 0.0, 1.0));
-            let g = 1.0 - d * (0.5 - 0.5 * (TAU * self.lfo.next(rate[i], 40.0)).cos());
+            let g = 1.0 - d * (0.5 - 0.5 * (TAU * self.lfo.next(rate[i], 40.0, playing[i])).cos());
             ol[i] = sane(l[i]) * g;
             or[i] = if stereo { sane(r[i]) * g } else { 0.0 };
         }
@@ -607,11 +616,19 @@ impl Kernel for Eq3 {
 export!(eq3, Eq3);
 
 /// Bitcrusher: holds samples at a lower `rate` (Hz) and rounds them to `bits` of
-/// resolution (fractional bits sweep smoothly). Inputs: in, bits, rate, mix.
+/// resolution (fractional bits sweep smoothly). Inputs: in, bits, rate, mix, playing.
+///
+/// Its clock runs on while the song is stopped, so a tail is still crushed; it can't wait, as a
+/// held sample would freeze into a DC level. Instead it is put back at Play to where it was at
+/// Stop, or to its start, 1, if the song has not played: where the export's clock is.
 pub struct Bitcrush {
     sr: f32,
     /// Fraction of a held sample elapsed; a new sample is taken when it reaches 1.
     clock: f32,
+    /// The clock at the last Stop, put back at the next Play.
+    kept: f32,
+    /// Whether the song played at the last sample.
+    playing: bool,
     held: [f32; 2],
     bits: f32,
     /// Quantisation steps per unit for `bits`.
@@ -620,18 +637,27 @@ pub struct Bitcrush {
 }
 
 impl Kernel for Bitcrush {
-    const INPUTS: usize = 4;
+    const INPUTS: usize = 5;
     const OUTPUTS: usize = 1;
 
     fn new(sample_rate: f32, _: usize) -> Self {
         let sr = sample_rate.max(1.0);
-        Bitcrush { sr, clock: 1.0, held: [0.0; 2], bits: f32::NAN, steps: 1.0, mix: Glide::new(0.02, sr) }
+        Bitcrush { sr, clock: 1.0, kept: 1.0, playing: false, held: [0.0; 2], bits: f32::NAN, steps: 1.0, mix: Glide::new(0.02, sr) }
     }
 
     fn process(&mut self, io: &mut Io) {
         let stereo = io.channels > 1;
-        let ([l, r, bits, rate, mix], [ol, or]) = io.ports([(0, 0), (0, 1), (1, 0), (2, 0), (3, 0)], [(0, 0), (0, 1)]);
+        let ([l, r, bits, rate, mix, playing], [ol, or]) = io.ports([(0, 0), (0, 1), (1, 0), (2, 0), (3, 0), (4, 0)], [(0, 0), (0, 1)]);
         for i in 0..ol.len() {
+            let now = playing[i] > 0.5;
+            if now != self.playing {
+                if now {
+                    self.clock = self.kept;
+                } else {
+                    self.kept = self.clock;
+                }
+                self.playing = now;
+            }
             let b = clampf(bits[i], 1.0, 24.0);
             if b != self.bits {
                 self.bits = b;
