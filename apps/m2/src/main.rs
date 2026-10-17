@@ -51,11 +51,12 @@ USAGE:
                                          add a track playing an instrument (std:synth-pluck, or synth.pluck): its file in
                                          tracks/, its import and mixer channel in song.ts, an empty notes lane,
                                          and its place and colour in layout.json, verified
-  m2 import <project> <file.wav>… --track ID [--at BAR]
+  m2 import <project> <file.wav>… [--track ID] [--at BAR]
                                          bring WAV files into assets/ (a copy, or the same bytes already
-                                         there; a taken name numbered) and place their clips on a track's
-                                         audio lane, one after another from bar BAR (1 if not given), as one
-                                         edit that undo takes back
+                                         there; a taken name numbered) and place their clips from bar BAR
+                                         (1 if not given): on a track's audio lane one after another, or
+                                         without --track each on a new audio track named after it, at the
+                                         end; one edit that undo takes back
   m2 duplicate-track <project> <track>   copy a track, named by its ID: its code, its clips (with new ids), its
                                          plugin states and its mixer channel, verified
   m2 delete-track <project> <track> [--cascade]
@@ -687,12 +688,15 @@ fn run() -> Result<()> {
                 Some(p) => m2_editor::clips::position(&s.accepted().project.arrangement, &p).map_err(|e| anyhow!("--at: {e}"))?,
                 None => 0.0,
             };
-            let key = flag(&args, "--track").ok_or_else(|| anyhow!("m2 import puts the files on a track's audio lane: name it with --track ID"))?;
-            let lane = {
-                let ir = &s.accepted().compiled.ir;
-                let m = ir.modules.iter().find(|m| m.key == key).ok_or_else(|| anyhow!("there's no track `{key}`: the tracks are {}", tracks(ir)))?;
-                let lane = m.lanes.iter().find(|l| m2_runtime::lane_kind(l.kind) == LaneKind::Audio);
-                lane.ok_or_else(|| anyhow!("`{key}` has no audio lane: bring audio onto a track that plays one (lane.audio)"))?.key.clone()
+            let target = match flag(&args, "--track") {
+                Some(key) => {
+                    let ir = &s.accepted().compiled.ir;
+                    let m = ir.modules.iter().find(|m| m.key == key).ok_or_else(|| anyhow!("there's no track `{key}`: the tracks are {}", tracks(ir)))?;
+                    let lane = m.lanes.iter().find(|l| m2_runtime::lane_kind(l.kind) == LaneKind::Audio);
+                    let lane = lane.ok_or_else(|| anyhow!("`{key}` has no audio lane: bring audio onto a track that plays one (lane.audio), or leave out --track for new ones"))?;
+                    m2_editor::import::Target::Lane { module: key, lane: lane.key.clone(), beat }
+                }
+                None => m2_editor::import::Target::Below { beat },
             };
             let words = |e: m2_editor::EditError| anyhow!("{}", e.to_string().trim_start_matches("edit rejected: "));
             let mut imported = vec![];
@@ -703,12 +707,15 @@ fn run() -> Result<()> {
                 }
                 imported.push(i);
             }
-            let target = m2_editor::import::Target::Lane { module: key.clone(), lane, beat };
             let placed = m2_editor::import::place(&mut s, &imported, &target).map_err(words)?;
             for i in &imported {
                 println!("imported {} as assets/{}{}", i.name, i.asset, if i.reused { " (the same bytes were there)" } else { "" });
             }
-            println!("onto {key} from beat {} (revision {})", m2_song::lane::number(beat), placed.edited.revision);
+            let onto: Vec<String> = match &target {
+                m2_editor::import::Target::Lane { module, .. } => vec![module.clone()],
+                _ => placed.tracks.iter().map(|(k, l)| format!("a new track {l} (ID {k})")).collect(),
+            };
+            println!("onto {} from beat {} (revision {})", onto.join(", "), m2_song::lane::number(beat), placed.edited.revision);
         }
         Some("duplicate-track") => {
             let mut s = session(Path::new(&arg(1)?))?;

@@ -355,6 +355,33 @@ the web build (with the forms' type check); `st-audio` 90/90, `taste` 39/39, `s8
 
 **Contract**: WRITE-10 rows: several tracks in one Tx (`add_tracks`, with an arrangement written whole); an audio
 track (`lane.audio("clips")`, no instrument import). taste.md §3.6: + Track's last group is Audio. The drop hint.
+### A2, third part. The app's open dialog, and `m2 import` onto new tracks
+
+**In short**
+
+| What | Now |
+|---|---|
+| ⇧⌘I in the app | The system's open dialog, "Import Audio", showing WAV files; several can be picked. Checked on Linux on `:97`: a WAV picked lands on a new "Swell" track after the selected Kick, with its waveform, "Undo importing swell.wav" |
+| `m2 import <song> <file.wav>…` with no `--track` | Each file on a new audio track named after it, at the end |
+
+**What changed**
+
+- `apps/music2-desktop/src/actions.rs` (P0.5, built here to its spec): `open_file`: arg `{"title", "filters": [{"name",
+  "extensions"}], "multiple"}` (read by hand: the desktop has no `serde`, and `Cargo.lock` stays), answers a JSON
+  list of paths or null, one dialog at a time (`BUSY`). Before it, an unknown action showed an error dialog in the
+  app ("unknown action open_file"), seen on `:97`.
+- `apps/m2/src/main.rs`: `import` without `--track` places each file on a new audio track (`Target::Below`).
+
+**Tests**: `actions.rs`: `the_open_dialog_takes_its_ask_from_the_page`. `apps/m2/tests/import.rs` gains a new track
+from the terminal and a track with no audio lane refused. The app on `:97`: File ▸ Import Audio… is Shift+Ctrl+I after
+Save As and a line; Ctrl+Shift+I opens the dialog; a file picked lands (pictures in `scratch/a-app1`, `a-app3`, `a-app8`).
+
+**Red first**: the app on `:97` before: Ctrl+Shift+I showed "unknown action open_file" (`scratch/a-app2`).
+
+**Checks**: clippy and the mac lint of `music2-desktop` and `m2`; `cargo test -p music2-desktop` (19 and the main-thread
+test), `m2`'s `import` and `lock`.
+
+**For the merge with P0:** P0.5's `open_file` is this one; if P0 made its own, keep one (same arg, same answer).
 
 ## Lane B
 

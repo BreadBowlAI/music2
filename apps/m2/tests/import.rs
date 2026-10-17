@@ -1,6 +1,7 @@
 //! `m2 import` (studio lane A's A4): WAV files into a song from the terminal, as the app's File ▸
 //! Import Audio… brings them: copied into `assets/`, their clips on a track's audio lane one after
-//! another, one edit that undo takes back. It takes the project's lock (WRITE-18).
+//! another, or each on a new audio track; one edit that undo takes back. It takes the project's
+//! lock (WRITE-18).
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -53,9 +54,15 @@ fn import_places_a_clip_and_takes_the_lock() {
     assert!(lane.contains(r#""start": 32, "length": 2, "asset": "Lead Vox.wav""#), "{lane}");
     assert!(lane.contains(r#""start": 34, "length": 0.5, "asset": "hit.wav""#), "{lane}");
     assert_eq!(std::fs::read(song.join("assets/hit.wav")).unwrap(), std::fs::read(&b).unwrap());
-    // Refused in words: no track named, a file that isn't a WAV.
-    let none = m2(&["import", dir, b.to_str().unwrap()]);
-    assert!(!none.status.success() && String::from_utf8_lossy(&none.stderr).contains("--track"));
+    // With no track named: a new audio track, named after the file, at the end.
+    let new = m2(&["import", dir, a.to_str().unwrap(), "--at", "3"]);
+    assert!(new.status.success(), "{}", String::from_utf8_lossy(&new.stderr));
+    assert!(String::from_utf8_lossy(&new.stdout).contains("onto a new track Lead Vox (ID lead-vox) from beat 8"), "{}", String::from_utf8_lossy(&new.stdout));
+    assert!(std::fs::read_to_string(song.join("tracks/lead-vox.ts")).unwrap().contains("lane.audio(\"clips\")"));
+    assert!(std::fs::read_to_string(song.join("data/lead-vox/clips.json")).unwrap().contains(r#""start": 8, "length": 2, "asset": "Lead Vox.wav""#));
+    // Refused in words: a track with no audio lane, a file that isn't a WAV.
+    let none = m2(&["import", dir, b.to_str().unwrap(), "--track", "keys"]);
+    assert!(!none.status.success() && String::from_utf8_lossy(&none.stderr).contains("has no audio lane"));
     let text = temp.0.join("notes.wav");
     std::fs::write(&text, "words").unwrap();
     let bad = m2(&["import", dir, text.to_str().unwrap(), "--track", "chops"]);
