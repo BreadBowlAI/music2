@@ -21,8 +21,9 @@ pub struct TapSlots {
     tracks: Vec<(String, usize, usize)>,
 }
 
-/// What [`TapSlots::take`] read: each channel's largest `|x|`, linear (1.0 is 0 dBFS). A sample
-/// that wasn't finite reads as `f32::MAX`.
+/// What [`TapSlots::take`] read: each channel's largest `|x|`, linear (1.0 is 0 dBFS). A track's
+/// NaN is passed over and an infinity reads as `f32::MAX`, so every peak is a number JSON can
+/// carry. `out` reads the block as played: its samples that weren't finite are 0 already.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Peaks {
     pub out: [f32; 2],
@@ -112,4 +113,15 @@ impl Taps {
 /// The largest `|x|`: a NaN is passed over, and an infinity reads as `f32::MAX`.
 fn peak(x: impl Iterator<Item = f32>) -> f32 {
     x.fold(0.0f32, |m, v| m.max(v.abs())).min(f32::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    // `Peaks` says it: a NaN is passed over, and an infinity reads as `f32::MAX`.
+    #[test]
+    fn a_nan_is_passed_over_and_an_infinity_reads_as_max() {
+        assert_eq!(super::peak([f32::NAN, f32::NAN].into_iter()), 0.0);
+        assert_eq!(super::peak([0.5, f32::NAN, -0.25].into_iter()), 0.5);
+        assert_eq!(super::peak([0.5, f32::NEG_INFINITY, f32::NAN].into_iter()), f32::MAX);
+    }
 }

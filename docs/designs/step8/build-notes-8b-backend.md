@@ -723,3 +723,19 @@ a project opens (its file may be the one read next), and for the one it replaces
 **Checks:** tests of `m2-server`; clippy on it.
 
 **Contract:** MON-4 *Today* (when the file is written).
+
+### R2. The meters' doc says what a NaN reads
+
+**What was wrong:** the `Peaks` doc said a sample that isn't finite reads as `f32::MAX`. The code
+passes a NaN over (it reads 0) and reads an infinity as `f32::MAX`, as B11 chose: so a meter never
+holds a value JSON can't carry. The song's output is tapped after its non-finite samples are set
+to 0, so `out` never reads `f32::MAX`. The design and the contract promise nothing here.
+
+**The fix:** the doc says what the code does. A test pins it.
+
+| Test | Red first? |
+|---|---|
+| `a_nan_is_passed_over_and_an_infinity_reads_as_max` (`core/runtime/src/taps.rs`) | — (green before: only the doc was wrong) |
+
+**Checks:** `m2-runtime` tests; clippy on it.
+
