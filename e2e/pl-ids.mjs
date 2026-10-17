@@ -92,6 +92,11 @@ const d = await page.$eval(DIALOG, (e) => ({
 }));
 check(d.title === "Change Bass's track ID" && d.value === "bass" && d.mono, `titled for Bass, a mono field holding bass (${JSON.stringify(d)})`);
 check(d.focused && d.selected, "the field has the focus, its ID selected");
+const ring = await page.$eval(FIELD, (e) => {
+  const s = getComputedStyle(e);
+  return { outline: `${s.outlineStyle} ${s.outlineWidth} ${s.outlineColor}`, shadow: s.boxShadow };
+});
+check(ring.outline === "solid 2px rgb(56, 98, 167)" && ring.shadow === "none", `it shows the one focus ring, as every dialog's field does (review PL-T5): ${JSON.stringify(ring)}`);
 check(d.text.includes("The track ID names this track in code and files its data (data/bass/). Changing it moves both, as one change you can undo."), "its help says what an ID is");
 check(!/\bkey\b/i.test(d.text), "no word in it calls the ID a key");
 check((await canChange()) === false, "Change ID is off while the ID is as it was");

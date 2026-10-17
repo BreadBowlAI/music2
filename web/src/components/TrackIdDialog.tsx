@@ -77,7 +77,7 @@ function Dialog({ module, name }: { module: string; name: string }) {
               setProblem(null);
             }}
             className={clsx(
-              "w-full h-8 px-2 rounded-sm bg-raised border font-mono text-sm text-fg outline-none focus:ring-2 focus:ring-accent-range",
+              "w-full h-8 px-2 rounded-sm bg-raised border font-mono text-sm text-fg",
               problem ? "border-danger" : "border-line-strong focus:border-accent",
             )}
           />

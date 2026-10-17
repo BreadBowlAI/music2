@@ -80,7 +80,7 @@ export const SUITES = [
   ["fixes-notes", "fix", { expect: 37 }],
   ["attention", "attn", { expect: 57 }],
   ["newsong", "none", { expect: 71 }],
-  ["pl-projects", "none", { expect: 65 }],
+  ["pl-projects", "none", { expect: 66 }],
   ["export", "export", { expect: 37 }],
   ["fx-fixes", "none", { expect: 75 }],
   ["s4-clips", "fix", { expect: 28 }],
@@ -107,7 +107,7 @@ export const SUITES = [
   ["s8-mix", "fix", { expect: 80 }],
   ["pl-mix", "fix", { expect: 47 }],
   ["pl-sounds", "fix", { expect: 44 }],
-  ["pl-ids", "fix", { expect: 38 }],
+  ["pl-ids", "fix", { expect: 39 }],
   ["pc-keys", "fix", { expect: 37 }],
 ];
 const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export"];

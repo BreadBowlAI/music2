@@ -6,8 +6,9 @@
 //       new song starts with the defaults.
 //   C2  recent songs (Q17, taste.md SS-2): songs made with New Song are listed newest first on the
 //       start screen with their tempo and "opened today"; a click opens one, Return opens the
-//       newest; a folder that is gone says "Moved or deleted" and its × forgets it; Close Song
-//       keeps the newest from opening at the next launch; `~/.music2/recent.json` holds the list.
+//       newest; Tab lights a row accent-soft; a folder that is gone says "Moved or deleted" and
+//       its × forgets it; Close Song keeps the newest from opening at the next launch;
+//       `~/.music2/recent.json` holds the list.
 //   C3  Save As (⇧⌘S, Q19): a copy under a new name, byte for byte without `.music2/`, which
 //       opens, the song kept as it was, both in Recent; and Rename Song… from the menu (Q20): the
 //       name and the folder, the name only, a taken folder refused in words. Neither dialog lets
@@ -270,6 +271,22 @@ if (part("c2")) {
   const faint = await page.$eval(`[data-recent="${songs}/Beta"] span`, (e) => getComputedStyle(e).color).catch(() => null);
   const plain = await page.$eval(`[data-recent="${songs}/Alpha"] span`, (e) => getComputedStyle(e).color).catch(() => null);
   check(!!faint && faint !== plain, `its name is fainter: ${faint} (Alpha's ${plain})`);
+  // Keyboard focus on a row looks as a list row's does, accent-soft, as the Examples menu's rows
+  // (taste.md §2.9, §2.11); a gone song's row shows it too (review PL-T5).
+  const tabTo = async (path) => {
+    for (let i = 0; i < 20; i++) {
+      await page.keyboard.press("Tab");
+      if (await page.evaluate((p) => document.activeElement?.dataset?.recent === p, path)) return true;
+    }
+    return false;
+  };
+  const focusFill = async (path) => {
+    if (!(await tabTo(path))) return null;
+    await sleep(200);
+    return page.evaluate(() => getComputedStyle(document.activeElement).backgroundColor);
+  };
+  const fills = [await focusFill(`${songs}/Alpha`), await focusFill(`${songs}/Beta`)];
+  check(same(fills, ["rgb(224, 234, 251)", "rgb(224, 234, 251)"]), `Tab to a row lights it accent-soft, a gone song's too: ${JSON.stringify(fills)}`);
   await page.click(`[data-recent="${songs}/Beta"]`);
   await sleep(400);
   check((await openName()) === null, "a click on it opens nothing");

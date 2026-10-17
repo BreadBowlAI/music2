@@ -127,9 +127,11 @@ function Recent({ home }: { home: string | null }) {
               aria-disabled={song.missing || undefined}
               title={tilde(song.path, home)}
               onClick={() => void open(song)}
+              // A list row (taste.md §2.9): accent-soft under the pointer, and the same with the
+              // keyboard's focus, a gone song's row too (review PL-T5).
               className={clsx(
-                "w-full h-11 px-2 pr-9 rounded-sm flex flex-col justify-center text-left outline-none transition-colors duration-80 ease-linear",
-                song.missing ? "cursor-default" : "cursor-pointer hover:bg-hover focus-visible:bg-hover",
+                "w-full h-11 px-2 pr-9 rounded-sm flex flex-col justify-center text-left outline-none transition-colors duration-80 ease-linear focus-visible:bg-accent-soft",
+                song.missing ? "cursor-default" : "cursor-pointer hover:bg-accent-soft",
               )}
             >
               <span className={clsx("block w-full truncate text-base font-medium", song.missing ? "text-fg-faint" : "text-fg")}>{song.name}</span>

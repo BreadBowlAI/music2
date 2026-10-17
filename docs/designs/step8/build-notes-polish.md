@@ -1386,3 +1386,22 @@ backdrop rule; none checked `::before` and `::after`. All four now run `e2e/lint
 | Green | On the tip, every state these suites lint passes lintlib: `pl-tracks` 20/20, `pl-lanes` 28/28, `pl-notes` 102/102, `pl-projects` 65 |
 | Also | `pl-projects`' count goes 58 → 65 here: PL-R1's commit added 7 checks and missed it |
 | Left | `s8-mute` (8b's suite) still has its own copy |
+
+#### PL-T5. Two new controls broke the one focus ring
+
+taste.md §2.11 says one focus ring everywhere, and §2.9 says a list row is `accent-soft` under the
+pointer and the same with the keyboard. Two new places broke that:
+
+| Where | Was | Now |
+|---|---|---|
+| Change track ID's field | Its own pale-blue ring (`focus:ring-2 focus:ring-accent-range`), no outline | The one ring, as every other dialog's field |
+| A recent song on the start screen | Keyboard focus looked like the grey hover; a "Moved or deleted" row showed no focus at all | `accent-soft` under the pointer and with the keyboard, as the Examples menu's rows; a gone song's row too |
+
+The marker's name field and Repeat's count keep the house's in-place field look (an accent border,
+no ring), as the track name and the top bar's fields had before polish.
+
+| | |
+|---|---|
+| Suites | `pl-projects` (66 now): Tab to Alpha's row and to gone Beta's row: both `rgb(224, 234, 251)`. `pl-ids` (39 now): the field's outline is `solid 2px` accent and it has no box shadow |
+| Red first (this page before the fix) | `FAIL Tab to a row lights it accent-soft, a gone song's too: ["rgb(230, 232, 235)","rgba(0, 0, 0, 0)"]` and `FAIL it shows the one focus ring, as every dialog's field does (review PL-T5): {"outline":"none 0px rgb(56, 98, 167)","shadow":"… rgb(200, 218, 248) 0px 0px 0px 2px …"}` |
+| Green | `pl-projects` C2: `["rgb(224, 234, 251)","rgb(224, 234, 251)"]`; `pl-ids` 39/39. A first try also gave the field `transition-colors`: the outline then faded in from the text colour (`solid 2px rgb(51, 55, 60)` when read) and the danger border check read it half way, so it was taken out |
