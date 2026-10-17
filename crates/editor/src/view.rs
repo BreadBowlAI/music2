@@ -130,6 +130,9 @@ pub struct ViewNode {
     pub component: Option<String>,
     /// The effect this node is, by its descriptor's label (`Delay`), if it can be removed.
     pub effect: Option<String>,
+    /// What a call is called on screen: its component's descriptor label (`LFO` for `lfo(…)`), if
+    /// it is a call of a component. `label` stays the name the code calls it by.
+    pub title: Option<String>,
     /// Its inputs in the order they are written: knobs, cables and signals.
     pub inputs: Vec<InputPort>,
     /// Its outputs, its own result first.
@@ -266,7 +269,7 @@ fn path_around(site: &Site, at: u32) -> Option<Vec<String>> {
 type Written = (String, u32);
 
 /// A node's `src` (`file:line:col`, both 1-based) as where it is written.
-fn locate(src: &str, files: &BTreeMap<std::path::PathBuf, std::sync::Arc<str>>) -> Option<Written> {
+pub(crate) fn locate(src: &str, files: &BTreeMap<std::path::PathBuf, std::sync::Arc<str>>) -> Option<Written> {
     let mut parts = src.rsplitn(3, ':');
     let (col, line, file) = (parts.next()?.parse::<usize>().ok()?, parts.next()?.parse::<usize>().ok()?, parts.next()?);
     let text = files.get(Path::new(file))?;
@@ -684,6 +687,10 @@ pub fn view(session: &Session) -> GraphView {
                 Group::Site(s) => m.frames.iter().find(|f| f.site == *s && f.component.is_some()).and_then(|f| f.component.clone()),
                 _ => None,
             };
+            let title = match &component {
+                Some(c) if kind == "call" => rev.compiled.components.get(c.as_str()).map(|d| d.label.clone()),
+                _ => None,
+            };
             nodes.push(ViewNode {
                 id: id.clone(),
                 label,
@@ -697,6 +704,7 @@ pub fn view(session: &Session) -> GraphView {
                 audio,
                 component,
                 effect,
+                title,
                 inputs: vec![],
                 outputs: vec![],
             });
@@ -772,6 +780,7 @@ pub fn view(session: &Session) -> GraphView {
                 audio: false,
                 component: None,
                 effect: None,
+                title: None,
                 inputs: vec![],
                 outputs: vec![],
             });

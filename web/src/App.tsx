@@ -1,13 +1,17 @@
+import { LucideProvider, WifiOff } from "lucide-react";
 import { useEffect } from "react";
 import { connect } from "./lib/events";
 import { useStore } from "./lib/store";
 import Toasts from "./components/Toasts";
-import GraphCanvas, { graphUndo } from "./components/GraphCanvas";
+import GraphCanvas, { closeSong, graphUndo } from "./components/GraphCanvas";
+import Shortcuts from "./components/Shortcuts";
 import StartScreen from "./components/StartScreen";
 import NewSongDialog, { openNewSong } from "./components/NewSongDialog";
 import { exportSong, onExportEvent } from "./lib/exporting";
 import { editorHooks, graphApi } from "./lib/graph";
 import { isMac, native, nativeAction, onMenu } from "./lib/native";
+import { canvas, useShell, VIEWS } from "./lib/shell";
+import { deleteTrack, duplicateTrack, newTrack } from "./components/Tracks";
 
 /** Fetch the open project. An error means none is open: the start screen shows. */
 const refreshGraph = () =>
@@ -21,6 +25,44 @@ const refreshGraph = () =>
       const message = error instanceof Error ? error.message : String(error);
       if (message !== "no project is open") toast(message);
     });
+
+/**
+ * The page's own keys (taste.md §5.3): single keys and ⌥ chords, never while typing. ⌘ and ⌃
+ * chords are the menu bar's in the desktop app; in a browser, `chord` plays its part.
+ */
+function key(e: KeyboardEvent): string | null {
+  if (e.metaKey || e.ctrlKey) return null;
+  if (e.altKey) {
+    // By the key's place: ⌥1 types ¡ on a Mac.
+    const n = /^Digit([1-4])$/.exec(e.code);
+    if (n) return `view_${VIEWS[Number(n[1]) - 1]}`;
+    return e.code === "KeyK" ? "shortcuts" : null;
+  }
+  if (e.code === "Space" && !e.shiftKey) return "play";
+  // ⇧Return renames the selected track, as in Logic; Return alone goes to the start.
+  if (e.key === "Enter" && e.shiftKey) return "rename";
+  if (e.key === "Enter" || e.key === "Home") return "home";
+  if (e.key === "Escape") return "deselect";
+  if (e.shiftKey) return null;
+  return ({ c: "loop", a: "lanes", e: "dock", x: "view_mix", b: "draw" } as Record<string, string>)[e.key.toLowerCase()] ?? null;
+}
+
+/** A ⌘ or ⌃ chord as the menu bar would take it, in a browser; `always`: even while typing (⌘S, ⌘N). */
+function chord(e: KeyboardEvent): { id: string; always?: boolean } | null {
+  if (!(e.metaKey || e.ctrlKey)) return null;
+  const k = e.key.toLowerCase();
+  if (k === "s" && !e.shiftKey) return { id: "save", always: true };
+  if (k === "n" && !e.shiftKey) return { id: "new_song", always: true };
+  if (k === "z") return { id: e.shiftKey ? "redo" : "undo" };
+  if (k === "d" && !e.shiftKey) return { id: "duplicate" };
+  if (k === "e" && e.shiftKey) return { id: "export" };
+  if (k === "w" && !e.shiftKey) return { id: "close_song" };
+  if (k === "r" && !e.shiftKey) return { id: "rename" };
+  if (k === "t" && !e.shiftKey) return { id: "new_track" };
+  if (e.key === "Backspace" && !e.shiftKey) return { id: "delete_track" };
+  if (e.code === "KeyB" && e.altKey) return { id: "browser" };
+  return null;
+}
 
 export default function App() {
   const ready = useStore((s) => s.ready);
@@ -44,35 +86,21 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const cmd = e.metaKey || e.ctrlKey;
-      // In the desktop app the menu bar owns ⌘-shortcuts (they arrive via onMenu).
-      if (cmd && native) return;
-      if (cmd && e.key.toLowerCase() === "s") {
+      const c = chord(e);
+      if (c) {
+        // In the desktop app the menu bar owns ⌘ chords (they arrive via onMenu).
+        if (native) return;
+        if (!c.always && (editing() || field(e.target) || e.defaultPrevented)) return;
         e.preventDefault();
-        return appCommand("save");
-      }
-      if (cmd && e.key.toLowerCase() === "n") {
-        e.preventDefault();
-        return appCommand("new_song");
+        return appCommand(c.id);
       }
       // A key a field or a panel already took (Enter that adds an effect) isn't a shortcut
       // too, even if that field is gone or blurred by now.
       if (editing() || field(e.target) || e.defaultPrevented) return;
-      if (e.code === "Space") {
-        e.preventDefault();
-        appCommand("play");
-      } else if (cmd && e.key.toLowerCase() === "z") {
-        e.preventDefault();
-        appCommand(e.shiftKey ? "redo" : "undo");
-      } else if (cmd && e.key.toLowerCase() === "d") {
-        e.preventDefault();
-        appCommand("duplicate");
-      } else if (cmd && e.key.toLowerCase() === "e") {
-        e.preventDefault();
-        appCommand("export");
-      } else if (e.key === "Enter" || e.key === "Home") {
-        appCommand("home");
-      }
+      const id = key(e);
+      if (!id) return;
+      if (id === "play" || id.startsWith("view_") || id === "shortcuts") e.preventDefault();
+      appCommand(id);
     };
     // Right-click: nothing (rather than the browser's Reload/Inspect menu), except in text fields.
     const onContext = (e: MouseEvent) => {
@@ -92,28 +120,26 @@ export default function App() {
   }, []);
 
   if (!ready) {
-    return (
-      <div className="h-full grid place-items-center">
-        <div className="text-center space-y-3">
-          <div className="text-3xl font-semibold pop-text">music2</div>
-          <div className="text-ink-400 text-sm">{connected ? "Loading…" : "Connecting to music2…"}</div>
-        </div>
-      </div>
-    );
+    return <div className="h-full grid place-items-center text-sm text-fg-muted">{connected ? "Loading…" : "Connecting…"}</div>;
   }
 
   return (
-    <div className="h-full">
-      {graph ? <GraphCanvas key={graph.session} graph={graph} /> : <StartScreen />}
-      <NewSongDialog />
-      <Toasts />
-      {/* Below the 64px top bar, so it doesn't cover the project's name. */}
-      {!connected && (
-        <div className="fixed top-[76px] left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-red-50 text-red-700 text-sm ring-1 ring-red-500/40 shadow-lg shadow-red-900/10">
-          Lost connection to music2 — reconnecting…
-        </div>
-      )}
-    </div>
+    // One icon style everywhere (taste.md §2.12): Lucide at 1.5px, whatever the icon's size.
+    <LucideProvider strokeWidth={1.5} absoluteStrokeWidth>
+      <div className="h-full">
+        {graph ? <GraphCanvas key={graph.session} graph={graph} /> : <StartScreen />}
+        <NewSongDialog />
+        <Shortcuts />
+        <Toasts />
+        {/* With a song open, the top bar's status pill says it; on the start screen, this one does. */}
+        {!connected && !graph && (
+          <div className="fixed top-3 right-3 z-50 h-ctl-sm px-2 inline-flex items-center gap-1.5 rounded-sm bg-danger-soft text-danger-strong text-sm font-medium">
+            <WifiOff size={14} className="text-danger" />
+            Reconnecting…
+          </div>
+        )}
+      </div>
+    </LucideProvider>
   );
 }
 
@@ -125,15 +151,21 @@ function field(a: EventTarget | null) {
   return a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || (a instanceof HTMLElement && a.isContentEditable);
 }
 
-/** Every app-level command, from the keyboard or the menu bar (desktop). */
+/** Every app-level command, from the keyboard or the menu bar (desktop): the command ids are the menu items'. */
 export function appCommand(id: string) {
   const st = useStore.getState();
+  const shell = useShell.getState();
   // The desktop app asks for this before it closes or replaces a project with unsaved code.
   if (id === "save_all") return void editorHooks.saveAll?.();
   // With a song open or not: making one opens it in place of the open one.
   if (id === "new_song") return openNewSong();
+  if (id === "shortcuts") return shell.set({ sheet: !shell.sheet });
   const graph = st.graph;
   if (!graph) return;
+  if (id.startsWith("view_")) {
+    const view = VIEWS.find((v) => `view_${v}` === id);
+    return void (view && shell.setView(view));
+  }
   switch (id) {
     case "save":
       // An open code editor saves its files. Every other edit is written at once.
@@ -145,14 +177,61 @@ export function appCommand(id: string) {
       if (editorHooks.undo?.(id === "redo")) return;
       if (editing()) return void document.execCommand(id);
       return void graphUndo(graph.session, id);
-    case "duplicate":
-      // The piano roll duplicates its selected notes (the desktop menu bar takes ⌘D first).
-      return void editorHooks.duplicate?.();
+    case "duplicate": {
+      // Focus decides (taste.md §5.3): in the code editor, its own ⌘D; else the roll's selected
+      // notes; else the selected track, when no clip of it is selected (design-8b §2.6).
+      if (editorHooks.chord?.("duplicate")) return;
+      if (editorHooks.duplicate?.()) return;
+      if (editing()) return;
+      const m = shell.selected;
+      if (m && m !== "song" && !shell.clips[m]) void duplicateTrack(m);
+      return;
+    }
+    case "new_track":
+      return newTrack();
+    case "delete_track": {
+      // In the code editor, its own ⌘⌫ (delete to the line's start); in a field, the field's.
+      if (editorHooks.chord?.("delete_track")) return;
+      const el = document.activeElement;
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+        const at = el.selectionStart ?? 0;
+        if (el.selectionEnd !== at) el.setRangeText("", at, el.selectionEnd ?? at, "start");
+        else el.setRangeText("", el.value.lastIndexOf("\n", at - 1) + 1, at, "start");
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        return;
+      }
+      // In the dock (the roll's notes, a knob), the chord is the dock's, never the track's.
+      if (editing() || document.activeElement?.closest("#dock")) return;
+      if (shell.selected && shell.selected !== "song") void deleteTrack(shell.selected);
+      return;
+    }
     case "play":
       return void graphApi.transport("toggle");
     case "home":
       return void graphApi.seek(0);
+    case "loop":
+      return canvas.loop?.();
     case "export":
       return void exportSong();
+    case "close_song":
+      return closeSong();
+    case "rename":
+      // The selected track's name turns into a field; typing in a field already, the chord is the field's.
+      if (!editing() && shell.selected) shell.set({ renaming: shell.selected });
+      return;
+    case "lanes": {
+      // The selected track's automation, or every track's with none selected.
+      const all = graph.timeline.tracks.filter((t) => t.lanes.some((l) => l.kind === "control")).map((t) => t.module);
+      if (shell.selected && !all.includes(shell.selected)) return;
+      return shell.toggleLanes(shell.selected, all);
+    }
+    case "dock":
+      return shell.setDock(!shell.dock);
+    case "browser":
+      return shell.setBrowser(!shell.browser);
+    case "draw":
+      return shell.set({ draw: !shell.draw });
+    case "deselect":
+      return shell.deselect();
   }
 }

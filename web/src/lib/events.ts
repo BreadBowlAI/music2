@@ -27,3 +27,7 @@ export function connect(onMessage: (msg: any) => void, onStatus: (connected: boo
 /** A lane an edit just made here (automate), as `module.lane`: the timeline scrolls to it and lights it. */
 export const LANE_MADE = "m2:lane-made";
 export const laneMade = (module: string, lane: string) => window.dispatchEvent(new CustomEvent(LANE_MADE, { detail: `${module}.${lane}` }));
+
+/** A track an edit just made here (+ Track, Duplicate), as `module.lane` of its own row: the timeline scrolls to it and lights it, its automation left folded. */
+export const TRACK_MADE = "m2:track-made";
+export const trackMade = (module: string, lane: string) => window.dispatchEvent(new CustomEvent(TRACK_MADE, { detail: `${module}.${lane}` }));

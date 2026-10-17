@@ -44,6 +44,20 @@ USAGE:
   m2 label <project> <track> <name>      show a track, named by its key, as <name>: its track() call's
                                          name, verified to change nothing that plays (its key as <name>
                                          takes the name out)
+  m2 add-track <project> <instrument> [--name N] [--key ID] [--after ID]
+                                         add a track playing an instrument (std:pluck, or pluck): its file in
+                                         tracks/, its import and mixer channel in song.ts, an empty notes lane,
+                                         and its place and colour in layout.json, verified
+  m2 duplicate-track <project> <track>   copy a track, named by its ID: its code, its clips (with new ids), its
+                                         plugin states and its mixer channel, verified
+  m2 delete-track <project> <track> [--cascade]
+                                         take a track out: its file, its imports, its channel, its data and its
+                                         layout; --cascade also takes it out of effects that read it (a duck's
+                                         sidechain), which are otherwise listed and nothing is changed
+  m2 layout <project> order <IDs…> | colour <ID> <colour> | reset
+                                         reorder or recolour tracks in layout.json (no revision), or write the
+                                         default layout over one that doesn't read; the colours are rose, teal,
+                                         amber, indigo, green, plum, olive, blue, coral, cyan, violet and lime
   m2 cables <project>                    named signals a cable can start from, and the inputs cables reach
   m2 connect <project> <signal> <control>
                                          write a signal's name in place of a control's value, verified
@@ -569,6 +583,66 @@ fn run() -> Result<()> {
                 true => println!("{}: already shown as {}; nothing to write", arg(2)?, e.after),
                 false => println!("{}: {} → {} (revision {}, verified in {ms:.0} ms)", e.file, e.before, e.after, e.revision),
             }
+        }
+        Some("add-track") => {
+            let mut s = session(Path::new(&arg(1)?))?;
+            let wanted = arg(2)?;
+            // By ComponentId (`std:pluck`) or by its export (`pluck`, `std/instruments.pluck`).
+            let list = s.instruments();
+            let inst = list
+                .iter()
+                .find(|i| i.component == wanted || i.name == wanted || format!("{}.{}", i.module, i.name) == wanted)
+                .ok_or_else(|| {
+                    let names: Vec<String> = list.iter().map(|i| format!("{} ({})", i.component, i.label)).collect();
+                    anyhow!("no instrument `{wanted}`: the instruments are {}", names.join(", "))
+                })?;
+            let (name, key, after) = (flag(&args, "--name"), flag(&args, "--key"), flag(&args, "--after"));
+            let made = s.add_track(&inst.component, name.as_deref(), key.as_deref(), after.as_deref()).map_err(|e| anyhow!("{e}"))?;
+            println!("added {} ({}), ID {}, in {} (revision {})", made.label, inst.label, made.module, made.edited.file, made.edited.revision);
+        }
+        Some("duplicate-track") => {
+            let mut s = session(Path::new(&arg(1)?))?;
+            let made = s.duplicate_track(&arg(2)?).map_err(|e| anyhow!("{e}"))?;
+            println!("duplicated {} as {}, ID {}, in {} (revision {})", arg(2)?, made.label, made.module, made.edited.file, made.edited.revision);
+        }
+        Some("delete-track") => {
+            let mut s = session(Path::new(&arg(1)?))?;
+            let track = arg(2)?;
+            let cascade = args.iter().any(|a| a == "--cascade");
+            let shown = |d: &m2_editor::Dependent| format!("  {} in {} ({}, line {})", d.component, d.label, d.file, d.line);
+            match s.delete_track(&track, cascade).map_err(|e| anyhow!("{e}"))? {
+                m2_editor::Deleted::Done { edited, excised } => {
+                    println!("deleted {} (revision {})", edited.before, edited.revision);
+                    for d in &excised {
+                        println!("  and took {track} out of {}'s {} ({}, line {})", d.label, d.component, d.file, d.line);
+                    }
+                }
+                m2_editor::Deleted::Asks(deps) => {
+                    let list: Vec<String> = deps.iter().map(shown).collect();
+                    bail!("other tracks read {track}:
+{}
+run again with --cascade to take {track} out of them too", list.join("
+"));
+                }
+                m2_editor::Deleted::Blocked(deps) => {
+                    let list: Vec<String> = deps.iter().map(shown).collect();
+                    bail!("{track} can't be deleted from here, since other code reads it:
+{}
+change that code first", list.join("
+"));
+                }
+            }
+        }
+        Some("layout") => {
+            let mut s = session(Path::new(&arg(1)?))?;
+            let e = match arg(2)?.as_str() {
+                "order" => s.reorder(&args[3..]),
+                "colour" | "color" => s.recolour(&arg(3)?, &arg(4)?),
+                "reset" => m2_editor::layout::reset(&mut s),
+                other => bail!("m2 layout <project> order <IDs…> | colour <ID> <colour> | reset, not `{other}`"),
+            }
+            .map_err(|e| anyhow!("{e}"))?;
+            println!("layout.json: {} → {} (no revision: the layout isn't part of the song)", e.before, e.after);
         }
         Some("cables") => {
             let s = reader(Path::new(&arg(1)?))?;

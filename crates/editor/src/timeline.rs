@@ -4,11 +4,13 @@
 //! Like the graph view, it is derived from the accepted revision every time, so the
 //! clips shown are the ones that play.
 
+use std::collections::BTreeMap;
+
 use m2_ir::{Kind, LaneDecl, Unit};
-use m2_song::{AudioClip, ControlClip, DataSet, LaneData, Meter, NoteClip, Tempo};
+use m2_song::{AudioClip, ControlClip, DataSet, LaneData, LaneKind, Meter, NoteClip, Project, Tempo};
 use serde::Serialize;
 
-use m2_session::Session;
+use m2_session::{Revision, Session};
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct TimelineView {
@@ -28,6 +30,9 @@ pub struct TimelineTrack {
     /// What to show for it, never an address (ID-10).
     pub label: String,
     pub track: bool,
+    /// Its colour by palette name (taste.md §2.7), from `layout.json` or by its place; `graphite`
+    /// for a module that isn't a track (the song's own lanes).
+    pub colour: String,
     /// In the order they are declared.
     pub lanes: Vec<TimelineLane>,
 }
@@ -88,19 +93,100 @@ fn range(unit: Option<Unit>, default: Option<f64>, clips: &[ControlClip]) -> (f6
 /// The timeline of the accepted revision.
 pub fn timeline(s: &Session) -> TimelineView {
     let rev = s.accepted();
+    if !rev.has_code() {
+        return last_known(rev);
+    }
     let data = &rev.compiled.data;
+    let layout = crate::layout::view(s);
     let tracks = rev.compiled.ir.modules.iter().filter(|m| m.track || !m.lanes.is_empty());
-    let tracks = tracks
+    let mut tracks: Vec<TimelineTrack> = tracks
         .map(|m| TimelineTrack {
             module: m.key.clone(),
             label: m.label().to_string(),
             track: m.track,
+            colour: colour_of(&layout, &m.key, m.track),
             lanes: m.lanes.iter().map(|l| lane(data, &m.key, l)).collect(),
         })
         .collect();
+    in_order(&mut tracks, &layout);
     let a = &rev.project.arrangement;
     let bar = a.meter_at(0.0).bar();
     TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), end: data.end().max(bar), tracks }
+}
+
+/// A module's colour by name: a track's from the layout, else graphite.
+fn colour_of(layout: &crate::layout::LayoutView, key: &str, track: bool) -> String {
+    match (track, layout.colours.get(key)) {
+        (true, Some(c)) => c.to_string(),
+        _ => "graphite".into(),
+    }
+}
+
+/// `tracks` in the layout's order (FMT-19, taste.md §3.4): the modules it doesn't list (the song's
+/// own lanes) after, as they were.
+fn in_order(tracks: &mut [TimelineTrack], layout: &crate::layout::LayoutView) {
+    tracks.sort_by_key(|t| layout.order.iter().position(|k| *k == t.module).unwrap_or(usize::MAX));
+}
+
+/// A project opened with code that doesn't compile (WRITE-20) declares nothing yet, but its files
+/// still say what the song is: a track for each folder of lanes under `data/`, each lane read as
+/// what its clips hold, and the tempo and meter of `data/arrangement.json`. The app shows them
+/// greyed until the code compiles, rather than an empty song at 120 BPM (taste.md TL-13, D2).
+/// Nothing plays or can be edited from it.
+fn last_known(rev: &Revision) -> TimelineView {
+    let Ok(project) = Project::from_snapshot(&rev.snapshot) else {
+        let a = &rev.project.arrangement;
+        return TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), end: a.meter_at(0.0).bar(), tracks: vec![] };
+    };
+    let mut modules: BTreeMap<String, Vec<TimelineLane>> = BTreeMap::new();
+    let mut end: f64 = 0.0;
+    for (addr, _, text) in project.lane_files() {
+        // No code says the labels yet: the keys, in sentence case, as a lane without a label reads.
+        let (key, label) = (addr.lane.to_string(), sentence(addr.lane.as_str()));
+        // Read as notes, as automation in any unit, then as audio: the first that fits is what it holds.
+        let lane = if let Ok(LaneData::Notes(clips)) = LaneData::read(text, &LaneKind::Notes) {
+            TimelineLane::Notes { key, label, clips }
+        } else if let Ok(LaneData::Control { unit, clips }) = LaneData::read(text, &LaneKind::Control { unit: None }) {
+            let unit = unit.and_then(|u| u.parse::<Unit>().ok());
+            let (min, max) = range(unit, None, &clips);
+            TimelineLane::Control { key, label, unit: unit.map(Unit::name), default: None, min, max, clips }
+        } else if let Ok(LaneData::Audio(clips)) = LaneData::read(text, &LaneKind::Audio) {
+            TimelineLane::Audio { key, label, channels: 2, clips }
+        } else {
+            continue;
+        };
+        end = end.max(lane_end(&lane));
+        modules.entry(addr.module.to_string()).or_default().push(lane);
+    }
+    // Its colours and order as the layout says, over the folders there are.
+    let keys: Vec<String> = modules.keys().filter(|k| *k != m2_song::ROOT).cloned().collect();
+    let layout = crate::layout::effective(&keys, &crate::layout::read_disk(&rev.project.dir));
+    let mut tracks: Vec<TimelineTrack> = modules
+        .into_iter()
+        .map(|(module, lanes)| {
+            let track = module != m2_song::ROOT;
+            TimelineTrack { label: sentence(&module), track, colour: colour_of(&layout, &module, track), module, lanes }
+        })
+        .collect();
+    in_order(&mut tracks, &layout);
+    let a = &project.arrangement;
+    TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), end: end.max(a.meter_at(0.0).bar()), tracks }
+}
+
+/// `kick` → `Kick`.
+fn sentence(key: &str) -> String {
+    let mut c = key.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+}
+
+/// Where a lane's last clip ends, in beats.
+fn lane_end(lane: &TimelineLane) -> f64 {
+    let ends: Vec<f64> = match lane {
+        TimelineLane::Notes { clips, .. } => clips.iter().map(|c| c.start + c.length).collect(),
+        TimelineLane::Control { clips, .. } => clips.iter().map(|c| c.start + c.length).collect(),
+        TimelineLane::Audio { clips, .. } => clips.iter().map(|c| c.start + c.length).collect(),
+    };
+    ends.into_iter().fold(0.0, f64::max)
 }
 
 /// A declared lane and the clips it plays, in canonical order (by start, then id), which is
@@ -188,6 +274,37 @@ export default song(() => mixer({ bass: b.out, vox: v.out }));
         let mut packages = PackageSet::default();
         packages.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
         Session::open(dir, packages).unwrap_or_else(|d| panic!("{d:?}"))
+    }
+
+    /// D2: opened with code that doesn't compile, the timeline is what `data/` holds, not an empty song at 120 BPM.
+    #[test]
+    fn code_that_never_compiled_shows_the_data_and_the_arrangement() {
+        let dir = project();
+        std::fs::write(dir.join("song.ts"), format!("{SONG}\nconst broken = ;\n")).unwrap();
+        let s = open(&dir);
+        assert!(!s.accepted().has_code());
+        let v = serde_json::to_value(s.timeline()).unwrap();
+        assert_eq!((&v["tempo"], &v["meter"][0]["beats"], &v["end"]), (&json!([{"beat": 0.0, "bpm": 90.0}]), &json!(3), &json!(12.0)));
+        let tracks: Vec<(&str, &str, bool)> = v["tracks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| (t["module"].as_str().unwrap(), t["label"].as_str().unwrap(), t["track"].as_bool().unwrap()))
+            .collect();
+        assert_eq!(tracks, [("bass", "Bass", true), ("vox", "Vox", true)]);
+        let lanes = |m: usize| -> Vec<(String, String, usize)> {
+            v["tracks"][m]["lanes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|l| (l["key"].as_str().unwrap().into(), l["kind"].as_str().unwrap().into(), l["clips"].as_array().unwrap().len()))
+                .collect()
+        };
+        // Each read as what its clips hold: notes, automation in Hz, audio.
+        assert_eq!(lanes(0), [("cutoff".into(), "control".into(), 1), ("notes".into(), "notes".into(), 2)]);
+        assert_eq!(v["tracks"][0]["lanes"][0]["unit"], json!("hz"));
+        assert_eq!(lanes(1), [("vox".into(), "audio".into(), 2)]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

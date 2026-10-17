@@ -77,7 +77,7 @@ check(dots2.json?.name === "My song 2" && dots2.json?.dir.endsWith("/My song 2")
 // ---------------------------------------------------------------- the Empty template's steps work in the app
 const empty = dots2.json.dir;
 const code = fs.readFileSync(`${empty}/song.ts`, "utf8");
-check(code.includes("Delete the // at the start of the two lines") && !code.includes("Make a file"), "song.ts says to delete two //s, not to make a file");
+check(code.includes("delete the // in front of the two") && !code.includes("Make a file"), "song.ts says to delete two //s, not to make a file");
 fs.writeFileSync(`${empty}/song.ts`, code.replace("// const drums", "const drums").replace("// drums: drums.out", "drums: drums.out"));
 check(await until(async () => (await api("graph")).json?.timeline?.tracks?.some((t) => t.track && t.module === "drums")), "with those two lines on, a Drums track shows");
 check(await until(async () => (await page.$$eval("[data-track]", (els) => els.map((e) => e.dataset.track))).includes("drums")), "in the timeline");
@@ -148,9 +148,12 @@ const bar = async () =>
     const box = name.parentElement;
     const time = document.querySelector("span[title=Time]");
     const exp = document.querySelector("[data-testid=export]");
-    return { box: [r(box).left, r(box).right, r(box).height], time: r(time).right, exp: r(exp).left, cut: name.scrollWidth > name.clientWidth, title: name.title, lines: Math.round(r(name).height / 18) };
+    // The left side ends at the tempo and meter, after the time (which a small window drops).
+    const tempo = document.querySelector("[data-testid=tempo]");
+    return { box: [r(box).left, r(box).right, r(box).height], time: Math.max(r(time).right, r(tempo).right), exp: r(exp).left, cut: name.scrollWidth > name.clientWidth, title: name.title, lines: Math.round(r(name).height / 18) };
   });
-for (const [w, h] of [[960, 620], [1200, 800], [1440, 900]]) {
+// The window's smallest is 1100×700 (taste.md §3.2); below 1180px the time readout goes first (§3.8).
+for (const [w, h] of [[1100, 700], [1200, 800], [1440, 900]]) {
   await page.setViewport({ width: w, height: h, deviceScaleFactor: 2 });
   await sleep(300);
   const b = await bar();
@@ -192,13 +195,13 @@ for (const [status, said] of busy) {
   }
 }
 await page.evaluate(() => { window.__status = null; });
-await page.setViewport({ width: 960, height: 620, deviceScaleFactor: 2 });
+await page.setViewport({ width: 1100, height: 700, deviceScaleFactor: 2 });
 await page.click("[data-testid=export]");
 check(await until(async () => Number(await page.$eval("[data-testid=export-progress]", (e) => e.getAttribute("aria-valuenow")).catch(() => 0)) >= 10, 20000), "exporting it at the smallest window");
 const b = await bar();
 check(b.box[0] >= b.time + 4 && b.box[1] <= b.exp - 4, `the name still clears the wider “Exporting” button (${b.box[1].toFixed(0)} < ${b.exp.toFixed(0)})`);
-await page.screenshot({ path: `${S}/fx-longname-960-exporting.png` });
-await page.screenshot({ path: `${S}/fx-longname-960-bar.png`, clip: { x: 0, y: 0, width: 960, height: 64 } });
+await page.screenshot({ path: `${S}/fx-longname-1100-exporting.png` });
+await page.screenshot({ path: `${S}/fx-longname-1100-bar.png`, clip: { x: 0, y: 0, width: 1100, height: 44 } });
 check(await until(async () => (await text()).includes("Exported My very first summer song"), 60000), "and it finishes");
 await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 2 });
 await idle();

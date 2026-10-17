@@ -151,6 +151,24 @@ fn the_bass_tracks_ports_are_named_where_they_are_written_and_typed() {
 }
 
 #[test]
+fn a_call_is_titled_by_its_components_label_and_keeps_its_code_name() {
+    let fixture = Fixture::first_song();
+    let v = fixture.open().view();
+    let bass = module(&v, "bass");
+    // The canvas says "LFO" and "Bass" (taste.md DV-2); the code's names stay what nodes are found by.
+    for (code, title) in [("lfo", "LFO"), ("xrange", "Xrange"), ("blend", "Blend"), ("bass", "Bass")] {
+        assert_eq!(node(bass, code).title.as_deref(), Some(title), "{code}");
+    }
+    // Lanes, the time and exports aren't calls of a component: they keep their own names.
+    for name in ["notes", "cutoff", "time.beats", "out"] {
+        assert_eq!(node(bass, name).title, None, "{name}");
+    }
+    let song = module(&v, "song");
+    assert_eq!(node(song, "mixer").title.as_deref(), Some("Mixer"));
+    assert_eq!(node(song, "duck").title.as_deref(), Some("Duck"));
+}
+
+#[test]
 fn the_mixers_inputs_follow_the_code_and_imports_land_where_they_are_written() {
     let fixture = Fixture::first_song();
     let v = fixture.open().view();

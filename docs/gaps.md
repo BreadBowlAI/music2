@@ -20,17 +20,18 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 - See every track on a timeline: notes, automation, masks and audio clips, with the tempo shown above the tracks and bars counted by the song's time signatures (written in `data/arrangement.json`).
 - Add, move and delete notes clips. Draw, move, resize and nudge notes, and set how hard each one is played. Every clip has an id, so an edit always lands on the clip it was made on.
 - Drag a number written directly at an input (`0.3`, `hz(800)`, `{ pan: 0.3 }`) as a knob: you hear the change at once, even while the song compiles, and letting go writes it into the code. Saves to other files during the drag (another editor, an agent) don't interrupt it, and nor do saves to its own file that leave its line alone. A number held in a variable, or worked out from other numbers, shows **edit in code** instead (#35).
-- Every control of an instrument or effect that isn't connected to a signal is a knob, even one the code leaves out: `bass(notes)` shows its `drive` at the default, in italics, and turning it writes `{ drive: … }` into the call. Each knob turns through the range the instrument or effect declares, and a double-click puts it back at its default.
+- Every control of an instrument or effect that isn't connected to a signal is a knob, even one the code leaves out: `bass(notes)` shows its `drive` at the default, its number in grey, and turning it writes `{ drive: … }` into the call. Each knob turns through the range the instrument or effect declares (300 pixels of drag, ⇧ for fine), a double-click types a value (`-3`, `2k`, `L20`), and an ⌥-click puts it back at its default.
 - Connect cables inside one file, and add or remove 17 effects from a searchable browser. An effect is known by what it is, not by its name in the code: `import { delay as echo }` is still the Delay.
 - Write your own instruments and effects in TypeScript, with knobs, defaults and ranges, the way std's are written ([Your own components](../README.md#your-own-components)).
 - Edit the code in the app, with type checks. When the code breaks, the last working version keeps playing. A song whose code doesn't compile when it's opened still opens, in its code, and plays once a save makes it compile.
 - Undo and redo every edit made in the app. An edit is refused, rather than written, when it would change anything but what it says, and an undo is refused only when what it puts back was changed since.
-- Rename a track's label without moving or silencing anything: double-click its name in the timeline (or the graph's title), or write `track("kick", { name: "Big Kick" }, …)`. Data is filed under the track's key.
+- Add a track without writing code: **+ Track** (⌘T) lists the instruments, drums first, and adds the one you pick below the selected track. It writes `tracks/<key>.ts`, imports it in `song.ts`, gives it the mixer's last channel and an empty notes lane, as one edit Undo takes back. Duplicate a track (⌘D), with its clips, its plugins' saved settings and its mixer channel; delete one (⌘⌫), which asks first when another track's effect listens to it. Drag a track's name to reorder, and pick its colour from its menu: both are kept by name in `layout.json`, so colours never shift when tracks come and go. The same from `m2 add-track`, `duplicate-track`, `delete-track` and `layout`.
+- Rename a track's label without moving or silencing anything: double-click its name in the timeline (or the dock's header), or press ⌘R, or write `track("kick", { name: "Big Kick" }, …)`. Data is filed under the track's key.
 - Automate a knob: right-click it, **Automate**. It gets an automation lane of its own, which plays the knob's old value until it has points (drawing them is #14).
-- See what needs attention. When a track's or a lane's key is renamed in code, its notes or automation stop playing; a **Needs attention** strip above the timeline says so in plain words, and offers to move the data where it belongs now (a renamed track's whole folder in one click), or to delete it. Undo takes either back. The strip also lists a data file that doesn't read (its lane keeps playing what it had), clips without ids, and a missing sample or plugin, each with its code and fixes. Every `m2` command that opens the song prints the same, with the commands that fix it (`m2 relink`, `m2 delete-data`, `m2 fix`).
+- See what needs attention. When a track's or a lane's key is renamed in code, its notes or automation stop playing; the status pill in the top bar says so, and its popover says it in plain words and offers to move the data where it belongs now (a renamed track's whole folder in one click), or to delete it. Undo takes either back. It also lists a data file that doesn't read (its lane keeps playing what it had), clips without ids, and a missing sample or plugin, each with its code and fixes. Every `m2` command that opens the song prints the same, with the commands that fix it (`m2 relink`, `m2 delete-data`, `m2 fix`).
 - Edit the files in any other editor, from a script or with git. The app takes a change in once it has settled (no file changed for 150 ms), so a file caught half-written never plays and a lane never plays empty. Agents can also send checked edits (Tx) over HTTP or with `m2 tx`, written as one undo step.
 - One program writes a song at a time: `m2` commands that write a song the app has open stop without changing anything, and a second window opens it read-only, with Retry. An edit cut off by a crash is offered back as Finish or Discard when the song opens next.
-- Export the song as a WAV file (the Export button, or File → Export Audio…, ⌘E), then Show in Finder. Files go in `~/Music/music2/Exports` unless you pick another place. It's the same file `m2 render` writes. Quitting during an export asks first.
+- Export the song as a WAV file (the Export button, or File → Export Audio…, ⇧⌘E), then Show in Finder. Files go in `~/Music/music2/Exports` unless you pick another place. It's the same file `m2 render` writes. Quitting during an export asks first.
 - From the command line (`m2`): make a new song, render a WAV, bounce a track to audio, and make the same edits as the app.
 - Build `music2.app` and move it anywhere: std, the templates and the examples are inside it, so it no longer needs the source folder it was built from. It's signed ad hoc but not notarized, so on another Mac it opens only after **Open Anyway** in System Settings → Privacy & Security (and only on Apple silicon).
 - Play CLAP plugins such as Surge XT, with automation and saved settings. A plugin is added by writing it into a track's code (#32). A song whose plugin isn't installed still plays: only that plugin's node is silent, or passes its audio through.
@@ -39,7 +40,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 ## The top ten
 
-1. **Add a track without writing code.** (medium)
+1. **Swap a track's instrument** (adding a track without code works now). (small)
 2. ~~More instruments~~: done, in `std/synth` and `std/fm` (see What works today).
 3. **Drum names in the piano roll** for the drum kit, the part of it that's left. (medium)
 4. **A mixer panel**: volume, pan, mute and solo for each track. (medium)
@@ -48,7 +49,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 7. **Loop** the song or a range of bars. (medium)
 8. **Hear notes** as you draw them in the piano roll. (medium)
 9. **Clip editing**: duplicate, copy and paste, resize, split and move clips on the timeline. (medium)
-10. **Rename, delete, reorder and recolour tracks** from the timeline. (medium)
+10. **Rename a track's key** from the app (delete, duplicate, reorder and recolour work now). (small)
 
 ## Everything, by area
 
@@ -75,8 +76,8 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 1 | **Add a track without code.** Pick an instrument (bass, keys, drums…) and music2 writes `tracks/<name>.ts`, imports it in `song.ts`, adds a mixer channel and an empty notes lane, as one checked edit you can undo. Also swap a track's instrument later. | Every track is hand-written TypeScript today, and the app's code editor can't even create a new file. This is the biggest wall for a beginner. | Yes | medium |
-| 10 | **Rename a track's key, delete, reorder and recolour tracks** from the timeline. | Keeping a song tidy. A track's label (the name shown) can be changed in the app by double-clicking it; everything else is code only: change the key in `track()`, delete the file, edit `song.ts`. After a key change in code, **Needs attention** offers to move the track's whole data folder to its new key. | Yes | medium |
+| 1 | **Swap a track's instrument** later. (Adding a track without code works: see [What works today](#what-works-today).) Adding one to a song that mixes its tracks without std's mixer, or picking a CLAP instrument (#32), still needs code. | Changing your mind about a sound shouldn't mean a new track. | Yes | small |
+| 10 | **Rename a track's key** from the app. (Renaming its label, deleting, duplicating, reordering and recolouring work: see [What works today](#what-works-today).) | Keeping a song tidy. A key is changed in `track()` today; after that, **Needs attention** offers to move the track's whole data folder to its new key. | Yes | small |
 
 ### Sounds
 
@@ -196,11 +197,10 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 
 ## Loose ends
 
-- **Undo messages are technical** (#29).
+- **Undo steps have no names on the server** (#29). The top bar's Undo and Redo name the steps this window made ("Undo Reverb size"), and an undo of a part added or removed says so ("Undid adding Reverb"); a step made elsewhere (another editor, an agent's Tx) leaves them unnamed until this window edits again, and the native Edit menu never names them.
 - **A knob let go while the code doesn't compile** keeps playing its new value, and is written into the code once the code compiles again; after 30 seconds it is dropped, with a message saying so. Writing it at once, when the broken file is another one, is the owner's call (C21 of the step 6 design): the rule today is that an edit of code waits for all the code to compile.
-- **A read-only song's controls still look editable.** While another program holds the song, a blue banner says so and every edit is refused with a message; the knobs, cables and the piano roll aren't greyed out yet.
 - **The code editor reloads a file an edit changed** rather than following the edit in place; unsaved text in it is kept, with the "changed on disk" choice.
-- **A file added to a renamed track's folder afterwards** (a Finder copy, a `notes.txt`) isn't noticed until something else changes: the strip still offers "Move all", and moving the folder is then refused, naming the file and saying to move it out or delete it. Added before the rename, the folder is offered file by file, and the problem names it.
+- **A file added to a renamed track's folder afterwards** (a Finder copy, a `notes.txt`) isn't noticed until something else changes: the status popover still offers "Move all", and moving the folder is then refused, naming the file and saying to move it out or delete it. Added before the rename, the folder is offered file by file, and the problem names it.
 - **Two literals edited on neighbouring lines by another program** count as a change to the calls between them, so the song is rebuilt (crossfaded) rather than having its numbers written into what plays. A change a line or more apart from the next is written in place.
 - **A missing plugin reads technically**: ``no CLAP plugin `org.surge-synth-team.surge-xt` is installed (looked in [...])``. It no longer silences the song: only that plugin's node is silent, or passes its audio through ([FMT-18a](architecture.md#plugin-state-and-parameters)). Open an Example still names missing plugins plainly, from the example's `example.toml`, and refuses to copy the example (#11).
 - **An error in the browser console with no project open.** `GET /api/graph` answers 400 when nothing is open, which is how the window knows to show the start screen. The browser logs that request as an error even though nothing is wrong. Answering "no project" without an error status would be quieter.
@@ -213,7 +213,7 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 | New Song, Open and Save of `.m2song` files | A song is now a folder, and every change is written at once. New Song… is back (File → New Song…, ⌘N) and makes a song folder from a template. Old `.m2song` files can't be opened. Recent projects are #12, Save As #28. |
 | The Song Library | Recent projects (#12) |
 | Import Audio | Audio in the app (#18) |
-| Export as WAV | Back as Export Audio (File → Export Audio…, ⌘E) |
+| Export as WAV | Back as Export Audio (File → Export Audio…, ⇧⌘E) |
 | Settings | A Settings window (#31) |
 | The Track inspector (volume, pan, output, sends, effects, sidechain) | The mixer panel (#4), sends and buses (#27), effect comforts (#21) |
 | A level meter on each track | Level meters (#20) |

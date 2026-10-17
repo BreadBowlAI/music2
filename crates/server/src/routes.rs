@@ -66,6 +66,10 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .route("/api/graph/fix", post(graph_fix))
         .route("/api/graph/label", post(graph_label))
         .route("/api/graph/automate", post(graph_automate))
+        .route("/api/graph/track/add", post(track_add))
+        .route("/api/graph/track/duplicate", post(track_duplicate))
+        .route("/api/graph/track/delete", post(track_delete))
+        .route("/api/graph/layout", post(graph_layout))
         .route("/api/graph/lock/retry", post(graph_lock_retry))
         .route("/api/tx/check", post(tx_check))
         .route("/api/tx/commit", post(tx_commit))
@@ -104,7 +108,7 @@ async fn auth(State(s): S, req: axum::extract::Request, next: axum::middleware::
 }
 
 /// The routes that write the open project, or begin a gesture whose commit would.
-const WRITES: [&str; 18] = [
+const WRITES: [&str; 22] = [
     "/api/graph/preview",
     "/api/graph/set",
     "/api/graph/lease/begin",
@@ -119,6 +123,10 @@ const WRITES: [&str; 18] = [
     "/api/graph/fix",
     "/api/graph/label",
     "/api/graph/automate",
+    "/api/graph/track/add",
+    "/api/graph/track/duplicate",
+    "/api/graph/track/delete",
+    "/api/graph/layout",
     "/api/graph/undo",
     "/api/graph/redo",
     "/api/graph/file",
@@ -515,6 +523,84 @@ struct AutomateReq {
 async fn graph_automate(State(s): S, Json(r): Json<AutomateReq>) -> ApiResult {
     let state = s.clone();
     let result = blocking(move || state.graph.automate(r.session, r.revision, &r.id)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct TrackAddReq {
+    /// The open project. A `revision` sent with it is ignored: the builder plans on the accepted one.
+    session: u64,
+    /// The instrument, by ComponentId (`std:pluck`), as the graph state's `instruments` list it.
+    component: String,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    key: Option<String>,
+    /// The track it goes below in the layout (the selected one); else last.
+    #[serde(default)]
+    after: Option<String>,
+}
+
+/// Add a track (+ Track, ⌘T): its file, its import and channel in the song, its lane, its layout.
+async fn track_add(State(s): S, Json(r): Json<TrackAddReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.add_track(r.session, &r.component, r.label, r.key, r.after)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct TrackReq {
+    session: u64,
+    /// The track, by its key.
+    module: String,
+    /// Delete only: take out the effects' reads of it too.
+    #[serde(default)]
+    cascade: bool,
+}
+
+/// Duplicate a track (⌘D on its header): code, clips with new ids, plugin states and channel.
+async fn track_duplicate(State(s): S, Json(r): Json<TrackReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.duplicate_track(r.session, &r.module)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+/// Delete a track (⌘⌫ on its header). 409 with the dependents when other code reads it.
+async fn track_delete(State(s): S, Json(r): Json<TrackReq>) -> Response {
+    let state = s.clone();
+    let result = tokio::task::spawn_blocking(move || state.graph.delete_track(r.session, &r.module, r.cascade)).await;
+    s.graph_changed();
+    tx_answer(result)
+}
+
+#[derive(Deserialize)]
+struct ColourReq {
+    module: String,
+    colour: String,
+}
+
+#[derive(Deserialize)]
+struct LayoutReq {
+    session: u64,
+    /// Every track, top to bottom.
+    #[serde(default)]
+    order: Option<Vec<String>>,
+    /// One track's colour, by palette name.
+    #[serde(default)]
+    colour: Option<ColourReq>,
+    /// Write the defaults over a `layout.json` that doesn't read.
+    #[serde(default)]
+    reset: bool,
+}
+
+/// Reorder or recolour tracks: a write of `layout.json` only, with no revision (PLANE-3).
+async fn graph_layout(State(s): S, Json(r): Json<LayoutReq>) -> ApiResult {
+    let state = s.clone();
+    let colour = r.colour.map(|c| (c.module, c.colour));
+    let result = blocking(move || state.graph.layout(r.session, r.order, colour, r.reset)).await;
     s.graph_changed();
     Ok(Json(result?))
 }

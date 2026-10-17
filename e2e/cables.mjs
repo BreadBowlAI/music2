@@ -36,7 +36,8 @@ const drew = await drag('[data-outlet="wobble"]', '[data-knob="cutoff"] svg');
 ok(drew, "a cable follows the pointer while dragging");
 await sleep(1200);
 ok(fs.readFileSync(song, "utf8") === original.replace("svf.lowpass(osc.saw(hz(55)), hz(1000))", "svf.lowpass(osc.saw(hz(55)), wobble)"), "dropping on cutoff wrote `wobble` there, nothing else");
-ok((await html()).includes("song.ts: hz(1000) → wobble"), "toast shows the edit");
+// The input reads "cutoff ← wobble" now: that says it, so a cable makes no toast (taste.md §2.14).
+ok(!!(await page.$('[data-inlet="cutoff"]')) && (await page.$$("[data-testid=toast]")).length === 0, "the canvas shows the edit, with no toast");
 ok(!!(await page.$('[data-inlet="cutoff"]')), "the filter shows `cutoff ← wobble`");
 ok(!(await page.$('[data-knob="cutoff"]')), "and no cutoff knob any more");
 

@@ -1,5 +1,5 @@
 // Export Audio end to end: the button, its progress, the done toast, the WAV in <HOME>/Music/music2/Exports,
-// a second export's new name, ⌘E, refusals, and that it equals `m2 render`.
+// a second export's new name, ⇧⌘E, refusals, and that it equals `m2 render`.
 // node export.mjs <scratch> <home> <project> <repo>
 import puppeteer from "puppeteer-core";
 import fs from "node:fs";
@@ -62,9 +62,11 @@ await sleep(400);
 const button = await page.$("[data-testid=export]");
 check(!!button, "the top bar has an Export button");
 check((await page.$eval("[data-testid=export]", (e) => e.innerText.trim())) === "Export", "labelled Export");
-check(/Export the song as a WAV audio file \(⌘E\)/.test(await page.$eval("[data-testid=export]", (e) => e.title)), "with a tooltip naming ⌘E");
+const idleWidth = await page.$eval("[data-testid=export]", (e) => e.getBoundingClientRect().width);
+// ⇧⌘E: ⌘E is kept for Split (taste.md §5.1, TB-9).
+check(/Export the song as a WAV audio file \(⇧⌘E\)/.test(await page.$eval("[data-testid=export]", (e) => e.title)), "with a tooltip naming ⇧⌘E");
 check(!fs.existsSync(exportsDir), "no Exports folder before the first export");
-await page.screenshot({ path: `${S}/export-bar.png`, clip: { x: 0, y: 0, width: 1440, height: 64 } });
+await page.screenshot({ path: `${S}/export-bar.png`, clip: { x: 0, y: 0, width: 1440, height: 44 } });
 
 // Watch for the progress ring: the render is quick, so record every value it shows.
 await page.evaluate(() => {
@@ -108,10 +110,10 @@ const cli = `${S}/export-cli.wav`;
 execFileSync(M2, ["render", P, cli]);
 check(Buffer.compare(fs.readFileSync(cli), fs.readFileSync(first)) === 0, "`m2 render` writes the same file, byte for byte");
 
-// ⌘E exports again, to a new name.
+// ⇧⌘E exports again, to a new name.
 
-await page.keyboard.down("Meta"); await page.keyboard.press("e"); await page.keyboard.up("Meta");
-check(await until(async () => (await text()).includes("Exported first-song 2.wav")), "⌘E exports again, as first-song 2.wav");
+await page.keyboard.down("Meta"); await page.keyboard.down("Shift"); await page.keyboard.press("e"); await page.keyboard.up("Shift"); await page.keyboard.up("Meta");
+check(await until(async () => (await text()).includes("Exported first-song 2.wav")), "⇧⌘E exports again, as first-song 2.wav");
 const second = `${exportsDir}/first-song 2.wav`;
 check(fs.existsSync(second) && Buffer.compare(fs.readFileSync(second), fs.readFileSync(first)) === 0, "the same audio, and the first file is untouched");
 
@@ -147,10 +149,12 @@ check(await until(async () => Number(await page.$eval("[data-testid=export-progr
 await page.screenshot({ path: `${S}/export-progress.png` });
 await page.screenshot({ path: `${S}/export-progress-bar.png`, clip: { x: 900, y: 0, width: 540, height: 64 } });
 const label = await page.$eval("[data-testid=export]", (e) => e.innerText.replace(/\s+/g, " ").trim());
-check(/^Exporting \d+%$/.test(label), `the button says how far: "${label}"`);
+// The ring in the icon's place, the percentage in the label's: the same width, so Undo beside it never moves (taste.md §3.3).
+const busyWidth = await page.$eval("[data-testid=export]", (e) => e.getBoundingClientRect().width);
+check(/^\d+%$/.test(label) && Math.abs(busyWidth - idleWidth) < 0.5, `the button says how far, in its own width: "${label}" (${busyWidth} vs ${idleWidth}px)`);
 check(await page.$eval("[data-testid=export]", (e) => e.getAttribute("aria-busy") === "true"), "and is busy");
-await page.keyboard.down("Meta"); await page.keyboard.press("e"); await page.keyboard.up("Meta");
-check(await until(async () => (await text()).includes("The song is already being exported."), 3000), "⌘E meanwhile says it's already exporting");
+await page.keyboard.down("Meta"); await page.keyboard.down("Shift"); await page.keyboard.press("e"); await page.keyboard.up("Shift"); await page.keyboard.up("Meta");
+check(await until(async () => (await text()).includes("The song is already being exported."), 3000), "⇧⌘E meanwhile says it's already exporting");
 check(await until(async () => (await text()).includes("Exported first-song 4.wav"), 30000), "the long one finishes");
 const lw = readWav(`${exportsDir}/first-song 4.wav`);
 check(lw.seconds > (432 * 60) / 124 && lw.seconds <= (432 * 60) / 124 + 10, `${lw.seconds.toFixed(2)} s long`);

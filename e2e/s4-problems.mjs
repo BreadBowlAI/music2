@@ -5,8 +5,9 @@
 import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 
-const { browser, page, errors, state, toasts } = await open();
-const rows = () => page.$$eval("[data-testid=attention] [data-problem]", (els) => els.map((e) => ({ code: e.dataset.problem, severity: e.dataset.severity, src: e.dataset.src, text: e.innerText })));
+const { browser, page, errors, state, toasts, status } = await open();
+// What needs attention is in the status pill's popover (taste.md ST-1).
+const rows = async () => (await status(), page.$$eval("[data-testid=attention] [data-problem]", (els) => els.map((e) => ({ code: e.dataset.problem, severity: e.dataset.severity, src: e.dataset.src, text: e.innerText }))));
 const clips = (lane) => page.$$eval(`[data-lane="${lane}"] [data-clip]`, (els) => els.length).catch(() => 0);
 const issue = (track) => page.$eval(`[data-track="${track}"] [data-testid=track-issues]`, (e) => ({ severity: e.dataset.severity, title: e.title })).catch(() => null);
 
@@ -32,9 +33,11 @@ check(await until(async () => (await rows()).some((r) => r.code === "clip.anonym
 const anon = (await rows()).find((r) => r.code === "clip.anonymous");
 check(anon.severity === "notice", "a Notice");
 const fixButton = '[data-testid=attention] [data-problem="clip.anonymous"] [data-fix="assign-clip-ids"]';
+await status();
 check(!!(await page.$(fixButton)), "with its fix a click away");
 check((await clips("keys.chords")) === keys.clips.length, "the clips still play and show");
 await page.screenshot({ path: `${ROOT}/s4-problems-anon.png` });
+await status();
 await page.click(fixButton);
 check(await until(() => JSON.parse(read("data/keys/chords.json")).clips.every((c) => /^[0-9a-z]{8}$/.test(c.id))), "the fix gives every clip an id");
 check(await until(async () => !(await rows()).some((r) => r.code === "clip.anonymous")), "and the notice goes");

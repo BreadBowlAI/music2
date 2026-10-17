@@ -24,7 +24,11 @@ export const check = (ok, what) => {
   ok ? pass++ : fail++;
 };
 
-export async function open(width = 1440, height = 900) {
+/**
+ * The app at `width`×`height`. The side browser starts hidden: these suites are about the timeline
+ * and the dock, and place their clicks in the timeline's width (`browser: true` keeps it).
+ */
+export async function open(width = 1440, height = 900, { browser: side = false } = {}) {
   const browser = await puppeteer.launch({ executablePath: exe, args: ["--no-sandbox"] });
   const page = await browser.newPage();
   await page.setViewport({ width, height });
@@ -33,9 +37,12 @@ export async function open(width = 1440, height = 900) {
   page.on("pageerror", (e) => errors.push(String(e)));
   const posts = [];
   page.on("request", (r) => r.method() !== "GET" && posts.push({ url: r.url().replace(/^.*\/api/, "/api"), body: r.postData() ?? "" }));
-  await page.evaluateOnNewDocument((token) => {
+  await page.evaluateOnNewDocument((token, side) => {
     window.__M2__ = { native: false, token, platform: "macos" };
-  }, sess.token);
+    try {
+      if (!localStorage.getItem("m2.browser.open")) localStorage.setItem("m2.browser.open", String(side));
+    } catch {}
+  }, sess.token, side);
   await page.goto(sess.url, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("[data-testid=graph] [data-module]", { timeout: 10000 });
   const api = (path, opts = {}) =>
@@ -49,7 +56,7 @@ export async function open(width = 1440, height = 900) {
       opts,
     );
   const state = async () => (await api("")).body;
-  const toasts = () => page.$$eval(".glass", (els) => els.map((e) => e.textContent ?? ""));
+  const toasts = () => page.$$eval("[data-testid=toast]", (els) => els.map((e) => e.textContent ?? ""));
   const show = async (module) => {
     await page.click(`[data-module-tab="${module}"]`);
     await page.waitForSelector(`[data-module-tab="${module}"][aria-selected=true]`);
@@ -65,13 +72,17 @@ export async function open(width = 1440, height = 900) {
     for (const k of keys.slice(0, -1).reverse()) await page.keyboard.up(k);
   };
   const box = async (sel) => (await page.$(sel))?.boundingBox();
+  /** Open the status pill's popover, if there is a pill and it isn't open: what needs attention is in it (taste.md ST-1). */
+  const status = async () => {
+    if ((await page.$("[data-status]")) && !(await page.$("[data-testid=status-popover]"))) await page.click("[data-status]").catch(() => {});
+  };
   const drag = async (from, to, steps = 12) => {
     await page.mouse.move(from.x, from.y);
     await page.mouse.down();
     await page.mouse.move(to.x, to.y, { steps });
     await page.mouse.up();
   };
-  return { browser, page, errors, posts, api, state, toasts, show, view, key, box, drag };
+  return { browser, page, errors, posts, api, state, toasts, show, view, key, box, drag, status };
 }
 
 export function done(errors) {

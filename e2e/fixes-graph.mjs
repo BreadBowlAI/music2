@@ -60,7 +60,8 @@ check(
   "and the knob sits at the bottom of its range, not the top",
 );
 k = await knob();
-await drag({ x: k.x + 15, y: k.y + 15 }, { x: k.x + 15, y: k.y + 15 - 80 }, 12);
+// Half its 300px throw (taste.md KN-1): half way up its log range, about 630 Hz.
+await drag({ x: k.x + 15, y: k.y + 15 }, { x: k.x + 15, y: k.y + 15 - 150 }, 12);
 const up = () => Number(/lowpass\(reverb\(.*\), ([\d.]+)\)/.exec(read("tracks/keys.ts"))?.[1]);
 check(await until(() => up() > 200), `dragging it up turns it back up: ${up()} Hz`);
 

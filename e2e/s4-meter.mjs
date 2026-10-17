@@ -10,13 +10,14 @@ check(ruler.some(([t]) => t === "7/8 ♩100"), "the 7/8 and the tempo change sha
 await page.screenshot({ path: `${ROOT}/s4-meter.png` });
 const c = await box('[data-lane="hats.hits"] [data-clip]');
 await page.mouse.click(c.x + 40, c.y + c.height / 2, { count: 2 });
-await until(() => page.$("[data-testid=notes]"));
+await until(() => page.$("[data-testid=roll-grid]"));
 await sleep(300);
-const header = await page.$eval("[data-testid=notes] header", (e) => e.textContent);
+// The roll's place and tools are in the dock's header (taste.md §3.5).
+const header = await page.$eval("[data-testid=dock-header]", (e) => e.textContent);
 check(/bars 1–9/.test(header), `the clip's bars, counted by the meter: ${header.slice(0, 40)}`);
-const len = () => page.$eval('[data-testid=notes] input[aria-label="Clip length in bars"]', (e) => e.value);
+const len = () => page.$eval('[data-testid=dock] input[aria-label="Clip length in bars"]', (e) => e.value);
 check((await len()) === "8.571", `its length in bars: 4 of 4/4 and 16 beats of 7/8 (${await len()})`);
-await page.click('[data-testid=notes] button[aria-label="One bar longer"]');
+await page.click('[data-testid=dock] button[aria-label="One bar longer"]');
 const fs = await import("node:fs");
 const hats = () => JSON.parse(fs.readFileSync(`${process.argv[4]}/data/hats/hits.json`, "utf8")).clips[0].length;
 check(await until(() => hats() === 33.5), `one bar longer ends it on the next bar line, beat 33.5 (${hats()})`);

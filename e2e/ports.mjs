@@ -72,14 +72,22 @@ check(
     (await kindsOf('[data-module="bass"] [data-node="bass"] [data-port]')) === "notes,control,control,audio",
   "circles carry their kind: bass takes notes and two controls and gives audio",
 );
-const legend = await page.$$eval('[data-module="bass"] [data-legend-kind]', (els) => els.map((e) => e.dataset.legendKind));
-check(JSON.stringify(legend) === '["audio","control","notes"]', `a legend names the kinds (${legend})`);
+// No legend on every module (taste.md DK-3): each kind's port is its own shape.
+const shapes = await page.$$eval('[data-module="bass"] [data-port-dot]', (els) => {
+  const by = {};
+  for (const e of els) by[e.dataset.kind] = getComputedStyle(e).borderRadius + " " + getComputedStyle(e).transform;
+  return by;
+});
+check(!(await page.$("[data-legend-kind]")) && new Set(Object.values(shapes)).size === Object.keys(shapes).length && Object.keys(shapes).length === 3, `no legend: the kinds are told by shape (${JSON.stringify(shapes)})`);
 
-// Every edge runs from its output circle's centre to its input circle's centre, in the kind's colour.
+// Every edge runs from its output circle's centre to its input circle's centre, drawn as its kind is
+// (since the taste pass: by weight and dash, not by colour).
+// The nodes are laid out at 1 and drawn at the canvas's zoom.
 const geometry = await page.$$eval('[data-module="bass"] svg path[data-from]', (paths) =>
   paths.map((p) => {
     const box = p.ownerSVGElement.getBoundingClientRect();
-    const n = p.getAttribute("d").match(/-?[\d.]+/g).map(Number);
+    const zoom = box.width / p.ownerSVGElement.width.baseVal.value;
+    const n = p.getAttribute("d").match(/-?[\d.]+/g).map((x) => Number(x) * zoom);
     const at = (sel) => {
       const r = document.querySelector(sel)?.getBoundingClientRect();
       return r && { x: r.left + r.width / 2, y: r.top + r.height / 2 };
@@ -88,13 +96,14 @@ const geometry = await page.$$eval('[data-module="bass"] svg path[data-from]', (
     const into = at(`[data-node-id="${p.dataset.to}"] [data-port="in"][data-port-id="${CSS.escape(p.dataset.toPort)}"]`);
     const start = { x: box.left + n[0], y: box.top + n[1] }, end = { x: box.left + n[n.length - 2], y: box.top + n[n.length - 1] };
     const d = (a, b) => (a && b ? Math.hypot(a.x - b.x, a.y - b.y) : Infinity);
-    return { kind: p.dataset.kind, stroke: p.getAttribute("stroke"), dOut: d(start, out), dIn: d(end, into) };
+    const look = [p.getAttribute("stroke"), p.getAttribute("stroke-width"), p.getAttribute("stroke-dasharray") ?? ""].join(" ");
+    return { kind: p.dataset.kind, look, dOut: d(start, out), dIn: d(end, into) };
   }),
 );
 check(geometry.length === 8, `Bass draws 8 edges (${geometry.length})`);
 check(geometry.every((g) => g.dOut < 1.5 && g.dIn < 1.5), `each edge starts on its output circle and ends on its input circle (${geometry.map((g) => `${g.dOut.toFixed(1)}/${g.dIn.toFixed(1)}`).join(" ")})`);
-const colours = new Map(geometry.map((g) => [g.kind, g.stroke]));
-check(colours.size === 3 && new Set(colours.values()).size === 3, `edges are coloured by kind (${[...colours].join(" ")})`);
+const looks = new Map(geometry.map((g) => [g.kind, g.look]));
+check(looks.size === 3 && new Set(looks.values()).size === 3, `edges are drawn by kind (${[...looks].join(" | ")})`);
 const lfoOut = await page.$eval('[data-module="bass"] [data-node="lfo"] [data-port="out"]', (e) => e.getAttribute("title") ?? "");
 check(lfoOut.includes("name it in code first") && lfoOut.includes("lfo(…)"), `lfo's unnamed output explains how to connect it: "${lfoOut}"`);
 
@@ -211,8 +220,14 @@ check(await until(() => read("tracks/bass.ts") === bassOriginal), "undoing the r
 // ---------------------------------------------------------------- zoom
 // Fitted, the whole graph is in the panel; the zoom bar steps it, Fit brings it back.
 await show("bass");
-const fitted = await page.$eval("[data-testid=graph]", (e) => e.scrollWidth <= e.clientWidth + 1 && e.scrollHeight <= e.clientHeight + 1);
-check(fitted, "fitted, the Bass graph fits the panel without scrolling");
+// Fit shrinks it to the panel, but never below 75%, where its text would be too small (taste.md DV-5):
+// past that it scrolls. (A chain that fits the panel's height opens at 100% and scrolls sideways.)
+const fit = await page.$eval("[data-testid=graph]", (e) => ({
+  fits: e.scrollWidth <= e.clientWidth + 1 && e.scrollHeight <= e.clientHeight + 1,
+  tall: e.scrollHeight <= e.clientHeight + 1,
+  zoom: Number(document.querySelector("[data-zoom]").dataset.zoom),
+}));
+check(fit.fits || fit.zoom === 0.75 || (fit.zoom === 1 && fit.tall), `fitted, the Bass graph fits the panel, or scrolls at Fit's 75% floor (zoom ${fit.zoom}, fits ${fit.fits})`);
 const nodeWidth = () => page.$eval('[data-module="bass"] [data-node="bass"]', (e) => e.getBoundingClientRect().width);
 const w0 = await nodeWidth();
 await page.click('button[aria-label="Zoom in"]');

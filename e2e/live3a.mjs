@@ -12,7 +12,9 @@
 //   node run.mjs live3a fix
 import { check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 
-const { browser, page, errors, api, state, show, box, drag } = await open(1600, 1000);
+const { browser, page, errors, api, state, show, view, box, drag } = await open(1600, 1000);
+// The roll's rows and its ruler (taste.md §3.5: 14px rows, the arrangement's 28px ruler).
+const ROW = 14, RULER = 28;
 const status = async () => (await api("/status")).body;
 const playing = async () => (await status()).playing;
 const playButton = 'button[title="Play / stop (Space)"]';
@@ -130,22 +132,22 @@ const original = read(notesFile);
 const clipBox = await box('[data-lane="bass.notes"] :nth-child(1 of [data-clip])');
 await page.mouse.click(clipBox.x + 60, clipBox.y + clipBox.height / 2, { count: 2 });
 check(await until(async () => (await page.$$("[data-testid=notes] [data-note]")).length === 48), "the bass clip opens in the piano roll");
-await page.$eval("[data-testid=roll-scroller]", (el) => { el.scrollTop = 26 + (127 - 60) * 16 - el.clientHeight / 2; });
+await page.$eval("[data-testid=roll-scroller]", (el, row, ruler) => { el.scrollTop = ruler + (127 - 60) * row - el.clientHeight / 2; }, ROW, RULER);
 await sleep(150);
 const grid = await box("[data-testid=roll-grid]");
 const ppb = await page.evaluate(() => {
   const n = [...document.querySelectorAll("[data-testid=notes] [data-note]")].find((e) => Number(e.dataset.start) > 0);
   return (n.getBoundingClientRect().left - document.querySelector("[data-testid=roll-grid]").getBoundingClientRect().left) / Number(n.dataset.start);
 });
-const cell = (pitch, beat) => ({ x: grid.x + beat * ppb, y: grid.y + (127 - pitch) * 16 + 8 });
+const cell = (pitch, beat) => ({ x: grid.x + beat * ppb, y: grid.y + (127 - pitch) * ROW + ROW / 2 });
 await seek(4);
 await play();
 await until(async () => (await status()).beat > 4.5, 3000);
 let rev = await revision();
 let w = watch();
 const c4 = cell(60, 20.1);
-await page.mouse.click(c4.x, c4.y);
-check(await until(() => JSON.parse(read(notesFile)).clips[0].notes.some((n) => n.pitch === "C4" && n.start === 20)), "a click adds C4 at beat 20 while playing");
+await page.mouse.click(c4.x, c4.y, { count: 2 });
+check(await until(() => JSON.parse(read(notesFile)).clips[0].notes.some((n) => n.pitch === "C4" && n.start === 20)), "a double-click adds C4 at beat 20 while playing");
 check(await until(async () => (await revision()) === rev + 1, 3000), "one write");
 await sleep(400);
 let stepBack = await w.finish();
@@ -159,6 +161,8 @@ await stop();
 const keysTs = "tracks/keys.ts";
 const keysOrig = read(keysTs);
 await show("keys");
+// Selecting Keys keeps the dock on Notes (taste.md §3.7): its graph is the Device view.
+await view("graph");
 await seek(4);
 await play();
 await until(async () => (await status()).beat > 4.5, 3000);
@@ -186,11 +190,11 @@ check((await status()).beat === held && !(await playing()), `stopped, the transp
 // ---------------------------------------------------------------- the piano roll's lock
 
 const locked = () => page.$("[data-testid=notes-locked]");
-// Showing Keys closed the clip: open it again.
+// Back from the Device view: open the clip again.
 const again = await box('[data-lane="bass.notes"] :nth-child(1 of [data-clip])');
 await page.mouse.click(again.x + 60, again.y + again.height / 2, { count: 2 });
 check(await until(async () => (await page.$$("[data-testid=notes] [data-note]")).length === 49), "the bass clip opens again, C4 and all");
-await page.$eval("[data-testid=roll-scroller]", (el) => { el.scrollTop = 26 + (127 - 60) * 16 - el.clientHeight / 2; });
+await page.$eval("[data-testid=roll-scroller]", (el, row, ruler) => { el.scrollTop = ruler + (127 - 60) * row - el.clientHeight / 2; }, ROW, RULER);
 await sleep(150);
 check(!(await locked()), "the roll is editable");
 const broken = original.replace('"start": 0, "length": 32,', '"start": 0, "length": 32, "swing": 0.2,');
@@ -202,17 +206,17 @@ check(await until(async () => (await state()).problems.some((p) => p.code === "l
 check(await until(async () => !!(await locked()), 3000), "the open piano roll locks");
 const chip = await page.$eval("[data-testid=notes-locked]", (e) => ({ why: e.dataset.why, text: e.textContent, title: e.title }));
 check(chip.why === "lane" && chip.text.includes("data/bass/notes.json") && /swing/.test(chip.title), `with a chip saying why: "${chip.text}" (${chip.title.slice(0, 120)}…)`);
-check(await page.$eval('[data-testid=notes] input[aria-label="Clip length in bars"]', (e) => e.disabled), "the length can't be changed");
+check(await page.$eval('[data-testid=dock] input[aria-label="Clip length in bars"]', (e) => e.disabled), "the length can't be changed");
 const before = read(notesFile);
 const d4 = cell(62, 6.1);
-await page.mouse.click(d4.x, d4.y);
+await page.mouse.click(d4.x, d4.y, { count: 2 });
 await sleep(800);
-check(read(notesFile) === before, "a click adds nothing: the broken file is left as it is");
+check(read(notesFile) === before, "a double-click adds nothing: the broken file is left as it is");
 check((await page.$$("[data-testid=notes] [data-note]")).length === 49, "the roll still shows the notes the lane plays");
 write(notesFile, withC4);
 check(await until(async () => !(await locked()), 5000), "fixed by hand, it unlocks");
-await page.mouse.click(d4.x, d4.y);
-check(await until(() => JSON.parse(read(notesFile)).clips[0].notes.some((n) => n.pitch === "D4" && n.start === 6), 5000), "and a click adds a note again");
+await page.mouse.click(d4.x, d4.y, { count: 2 });
+check(await until(() => JSON.parse(read(notesFile)).clips[0].notes.some((n) => n.pitch === "D4" && n.start === 6), 5000), "and a double-click adds a note again");
 write(notesFile, original);
 
 await page.screenshot({ path: `${process.argv[2]}/live3a.png` });

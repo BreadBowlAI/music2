@@ -86,6 +86,12 @@ fn a_write_while_another_process_holds_the_lock_fails_and_changes_nothing() {
         // The first new builders (HOME-2, ID-10) are writers too.
         vec!["automate", dir, &id],
         vec!["label", dir, "keys", "Lead Keys"],
+        // The track builders and the layout write too (8b.1).
+        vec!["add-track", dir, "std:pluck"],
+        vec!["duplicate-track", dir, "kick"],
+        vec!["delete-track", dir, "keys"],
+        vec!["layout", dir, "order", "chops", "kick", "keys"],
+        vec!["layout", dir, "colour", "kick", "teal"],
     ];
     for args in &writes {
         let out = m2(args);

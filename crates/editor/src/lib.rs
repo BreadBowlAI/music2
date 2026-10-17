@@ -19,13 +19,16 @@ pub mod effect;
 pub mod json;
 pub mod keys;
 pub mod label;
+pub mod layout;
 pub mod lens;
+pub mod mix;
 pub mod notes;
 pub mod plan;
 pub mod rename;
 pub mod render;
 pub mod sites;
 pub mod timeline;
+pub mod tracks;
 pub mod value;
 pub mod view;
 
@@ -41,6 +44,7 @@ pub use cable::{Inlet, Outlet};
 pub use controls::{Audition, Control, Declared};
 pub use effect::EffectInfo;
 pub use timeline::{TimelineLane, TimelineTrack, TimelineView};
+pub use tracks::{Deleted, Dependent, Instrument, Made};
 pub use view::{GraphView, Knob, ModuleView, ReadOnly, ViewNode};
 
 /// An accepted edit: the revision it made, the file it is shown as, and what the edit said
@@ -200,6 +204,17 @@ pub trait Gestures {
     /// Automate control `id`, named at revision `at` (HOME-2): its value becomes a new control
     /// lane's fallback.
     fn automate(&mut self, at: u64, id: &str) -> Result<Automated, EditError>;
+    /// The instruments a new track can play (the + Track list).
+    fn instruments(&self) -> Vec<Instrument>;
+    /// Add a track playing `component` (WRITE-10): see [`tracks::add`].
+    fn add_track(&mut self, component: &str, label: Option<&str>, key: Option<&str>, after: Option<&str>) -> Result<Made, EditError>;
+    fn duplicate_track(&mut self, module: &str) -> Result<Made, EditError>;
+    /// Delete a track; with `cascade`, the effects that read it lose that input (see [`tracks::delete`]).
+    fn delete_track(&mut self, module: &str, cascade: bool) -> Result<Deleted, EditError>;
+    /// Put the tracks in `order` (every track, once): a layout write, no revision (PLANE-3).
+    fn reorder(&mut self, order: &[String]) -> Result<Edited, EditError>;
+    /// Give a track a palette colour, by name.
+    fn recolour(&mut self, module: &str, colour: &str) -> Result<Edited, EditError>;
     fn view(&self) -> GraphView;
     fn timeline(&self) -> TimelineView;
 }
@@ -275,6 +290,30 @@ impl Gestures for Session {
 
     fn automate(&mut self, at: u64, id: &str) -> Result<Automated, EditError> {
         automate::automate(self, at, id)
+    }
+
+    fn instruments(&self) -> Vec<Instrument> {
+        tracks::instruments(self)
+    }
+
+    fn add_track(&mut self, component: &str, label: Option<&str>, key: Option<&str>, after: Option<&str>) -> Result<Made, EditError> {
+        tracks::add(self, component, label, key, after)
+    }
+
+    fn duplicate_track(&mut self, module: &str) -> Result<Made, EditError> {
+        tracks::duplicate(self, module)
+    }
+
+    fn delete_track(&mut self, module: &str, cascade: bool) -> Result<Deleted, EditError> {
+        tracks::delete(self, module, cascade)
+    }
+
+    fn reorder(&mut self, order: &[String]) -> Result<Edited, EditError> {
+        layout::reorder(self, order)
+    }
+
+    fn recolour(&mut self, module: &str, colour: &str) -> Result<Edited, EditError> {
+        layout::recolour(self, module, colour)
     }
 
     fn view(&self) -> GraphView {

@@ -33,70 +33,80 @@ const opened = () => page.$$eval("[data-clip][data-open]", (els) => els.map((e) 
 await page.goto(sess.url, { waitUntil: "domcontentloaded" });
 await page.waitForSelector("[data-testid=graph] [data-module]", { timeout: 8000 });
 
-// The switcher: three views, the graph first; notes only once a clip is open.
+// The dock's switcher (taste.md §3.5): four views, Device first. Its view is one choice for the
+// window: a selection changes what it shows, never which view it is (§3.7).
 const views = await page.$$eval("[data-view-tab]", (els) => els.map((e) => e.dataset.viewTab));
-check(json(views) === json(["graph", "code", "notes"]), `three views: ${views}`);
-check(json(await selectedView()) === json(["graph"]) && json(await body()) === json(["graph"]), "the graph shows first");
-check(!(await notesEnabled()), "notes is disabled with no clip open");
+check(json(views) === json(["graph", "notes", "mix", "code"]), `four views, the Device (graph) first: ${views}`);
+check(json(await selectedView()) === json(["graph"]) && json(await body()) === json(["graph"]), "the Device view shows first");
+check(await notesEnabled(), "notes is never disabled");
+// Where the switcher is: the same, whatever is selected and whichever view shows (principle 8).
+const switcherX = () => page.$eval('[data-view-tab="graph"]', (e) => Math.round(e.getBoundingClientRect().left));
+const x0 = await switcherX();
 
 // Code follows the selected module.
 await page.click('[data-view-tab="code"]');
 check(await until(async () => json(await body()) === json(["code"])), "the code tab shows the code view, not the graph");
 check(json(await selectedView()) === json(["code"]), "and is selected");
-check((await text("[data-testid=code]")).includes("Bass"), "for the selected module (Bass)");
+check((await text("[data-testid=code]")).includes("bass.ts"), "for the selected module (Bass)");
 await page.click('[data-module-tab="keys"]');
-check(await until(async () => (await text("[data-testid=code]")).includes("Keys")), "selecting Keys keeps the code view, now on Keys");
+check(await until(async () => (await text("[data-testid=code]")).includes("keys.ts")), "selecting Keys keeps the code view, now on Keys");
 check(json(await selectedView()) === json(["code"]), "still the code view");
 await page.click('[data-view-tab="graph"]');
 check(await until(async () => json(await body()) === json(["graph"])) && !!(await page.$('[data-module="keys"]')), "back to Keys' graph");
 check((await page.$$("[data-testid=code]")).length === 1, "the code view stays mounted, hidden");
 
-// A single click on a clip selects its track only.
+// A single click on a clip selects it and its track; the view stays.
 await page.click('[data-lane="bass.notes"] :nth-child(1 of [data-clip])');
 check(await until(async () => json(await highlighted()) === json(["bass"])), "a click on Bass's clip selects Bass");
-check(json(await selectedView()) === json(["graph"]) && !(await notesEnabled()), "and opens nothing");
+check(json(await selectedView()) === json(["graph"]) && !!(await page.$('[data-lane="bass.notes"] [data-clip][data-picked]')), "and the clip, with the view still Device");
+// Notes then shows that clip: the selection decides what it shows.
+await page.click('[data-view-tab="notes"]');
+check(await until(async () => json(await body()) === json(["notes"])) && json(await opened()) === json(["bass.notes#0"]), "Notes shows the selected clip");
 
-// Double-clicking a notes clip opens it.
+// Double-clicking a notes clip opens Notes on it, from any view.
+await page.click('[data-view-tab="graph"]');
 await page.click('[data-module-tab="hats"]');
 await dblclick('[data-lane="bass.notes"] :nth-child(1 of [data-clip])');
 check(await until(async () => json(await body()) === json(["notes"])), "double-clicking Bass's notes clip shows the notes view");
-check(json(await selectedView()) === json(["notes"]) && (await notesEnabled()), "notes is enabled and selected");
+check(json(await selectedView()) === json(["notes"]), "notes is selected");
 check(json(await selectedTab()) === json(["bass"]) && json(await highlighted()) === json(["bass"]), "and Bass is selected");
 check(json(await opened()) === json(["bass.notes#0"]), `the clip is outlined in the timeline (${await opened()})`);
-check(/Bass.*notes.*bars 1–8/.test(await text("[data-testid=notes]")), `the view is for that clip: ${await text("[data-testid=notes]")}`);
+check(/Bass.*Notes.*bars 1–8/.test(await text("[data-testid=dock]")), `the dock is for that clip: ${(await text("[data-testid=dock]")).slice(0, 60)}`);
+check((await switcherX()) === x0, `the switcher hasn't moved, with Hats picked before and a clip open now (x ${await switcherX()} vs ${x0})`);
 await page.screenshot({ path: `${S}/views-notes.png` });
 
-// Other views and back: the clip stays open.
+// Other views and back: the clip stays.
 await page.click('[data-view-tab="code"]');
-check(await until(async () => json(await body()) === json(["code"])) && (await notesEnabled()), "the code view, with the clip still open");
+check(await until(async () => json(await body()) === json(["code"])), "the code view");
 await page.click('[data-view-tab="notes"]');
-check(await until(async () => json(await body()) === json(["notes"])), "notes again");
+check(await until(async () => json(await body()) === json(["notes"])) && json(await opened()) === json(["bass.notes#0"]), "notes again, on the same clip");
 
-// Selecting another module closes the clip: its notes view goes back to the graph.
+// Selecting another track keeps Notes: it shows that track's clip, or says how to pick one.
 await page.click('[data-module-tab="keys"]');
-check(await until(async () => json(await body()) === json(["graph"])) && !!(await page.$('[data-module="keys"]')), "selecting Keys shows Keys' graph");
-check(!(await notesEnabled()) && (await opened()).length === 0, "and closes the clip");
-
-// So does a single click on another track while a clip is open.
-await dblclick('[data-lane="bass.notes"] :nth-child(1 of [data-clip])');
-await until(async () => json(await body()) === json(["notes"]));
+check(await until(async () => json(await selectedView()) === json(["notes"]) && !!(await page.$("[data-testid=notes][data-empty]"))), "selecting Keys keeps the notes view, with nothing picked on Keys");
+check((await text("[data-testid=notes]")).includes("Select a clip, or double-click in the timeline to make one."), "it says how to pick one");
 await page.click('[data-track="hats"] [data-lane] > div:first-child');
-check(await until(async () => json(await body()) === json(["graph"])) && json(await highlighted()) === json(["hats"]), "clicking Hats in the timeline goes back to the graph, for Hats");
+check(await until(async () => json(await highlighted()) === json(["hats"])) && json(await selectedView()) === json(["notes"]), "clicking Hats in the timeline keeps Notes too, for Hats");
+await page.click('[data-module-tab="bass"]');
+check(await until(async () => json(await opened()) === json(["bass.notes#0"])), "and back on Bass, its clip is still the one shown");
 
-// Closing the clip.
-await dblclick('[data-lane="keys.chords"] :nth-child(1 of [data-clip])');
-check(await until(async () => json(await body()) === json(["notes"])) && json(await selectedTab()) === json(["keys"]), "a Keys clip opens on Keys");
-await page.click('[data-testid=notes] button[aria-label="Close the clip"]');
-check(await until(async () => json(await body()) === json(["graph"])) && !(await notesEnabled()), "closing it goes back to the graph");
+// Escape lets the clip go: Notes says so, never blank.
+await page.click("[data-testid=timeline]");
+await page.keyboard.press("Escape");
+check(await until(async () => !!(await page.$("[data-testid=notes][data-empty]")) && (await opened()).length === 0), "Escape lets the clip go: Notes shows its empty state");
 
-// An edit that removes the open clip closes it.
+// An edit that removes the shown clip lets it go too.
 await dblclick('[data-lane="bass.notes"] :nth-child(1 of [data-clip])');
-await until(async () => json(await body()) === json(["notes"]));
+await until(async () => json(await opened()) === json(["bass.notes#0"]));
 const notesFile = `${proj}/data/bass/notes.json`;
 const lane = JSON.parse(fs.readFileSync(notesFile, "utf8"));
 fs.writeFileSync(notesFile, JSON.stringify({ ...lane, clips: [] }));
-check(await until(async () => json(await body()) === json(["graph"]), 8000), "removing the clip on disk closes it: the graph shows");
-check(!(await notesEnabled()), "notes is disabled again");
+check(await until(async () => !!(await page.$("[data-testid=notes][data-empty]")), 8000), "removing the clip on disk lets it go: Notes shows its empty state");
+check(json(await selectedView()) === json(["notes"]), "and the view stays Notes");
+
+// Mix, until the mixer, says what it will hold and where levels are meanwhile.
+await page.click('[data-view-tab="mix"]');
+check(await until(async () => (await text("[data-testid=mix]")).includes("Song")), "Mix says where levels and pans are until the mixer");
 
 await page.click('[data-view-tab="code"]');
 await page.screenshot({ path: `${S}/views-code.png` });

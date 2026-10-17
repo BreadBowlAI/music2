@@ -766,8 +766,10 @@ export type Descriptor = {
   /** Slots written in order after the inputs it doesn't name: `["cutoff", "q"]` makes `lowpass(x, 1000)`. */
   positional?: readonly string[];
   /**
-   * What an editor offers: `category` lists it as an effect, a free string the UI groups
-   * (PKG-7); `insert` is written when the effect is added, each value in its control's spelling.
+   * What an editor offers: `category`, a free string the UI groups (PKG-7), lists it as an
+   * effect when it takes audio first, or as an instrument a new track can play when it takes
+   * notes first; `insert` is written when the effect is added, each value in its control's
+   * spelling.
    */
   editor?: { category?: string; description?: string; insert?: Record<string, number> };
 };
@@ -1122,7 +1124,21 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     if (s.strict && s.range && !((v as number) >= s.range[0] && (v as number) <= s.range[1])) fail(`editor.insert's "${slot}" ${v} is outside its strict range`);
     return { slot, ...spelled(s, v as number) };
   });
-  if (editor.category !== undefined) {
+  // A category on a component that takes notes and makes audio lists it as an instrument, which
+  // a new track plays as `<name>(lane.notes(…))`, so it must build from its notes alone.
+  const instrument = editor.category !== undefined && inputs[0]?.spec.kind === "notes";
+  if (instrument) {
+    const [first, ...rest] = inputs;
+    if (rest.length) fail(`an instrument (editor.category, notes first) has one input, not "${rest[0].name}" too`);
+    if (lead[0] !== first) fail("an instrument (editor.category, notes first) takes its notes as its first argument");
+    if (output?.kind !== "audio") fail("an instrument (editor.category, notes first) outputs audio");
+    if (insert.length) fail("an instrument (editor.category, notes first) has no editor.insert: a new track writes none");
+    const required = [
+      ...controls.filter((c) => c.each || (!c.spec.optional && c.spec.default === undefined)).map((c) => c.name),
+      ...settings.filter((s) => s.spec.default === undefined).map((s) => s.name),
+    ];
+    if (required.length) fail(`an instrument (editor.category, notes first) must build from its notes alone, which leaves out "${required[0]}"`);
+  } else if (editor.category !== undefined) {
     // An effect is added after any audio as `<name>(<audio>, <insert>)`, so that must be a whole call.
     const [first, ...rest] = inputs;
     if (!first || first.spec.kind !== "audio" || lead[0] !== first) fail("an effect (editor.category) takes audio as its first argument");

@@ -154,7 +154,12 @@ check(await until(async () => !(await page.$("[data-testid=new-song-dialog]"))),
 check(folders().length === n, "and makes nothing");
 
 // ---------------------------------------------------------------- Open an example
-await page.click('[aria-label="Close the project"]');
+// The close button is gone from the top bar (taste.md TB-11): ⌘W closes the song.
+const closeSong = async () => {
+  await page.click("[data-testid=timeline]");
+  await page.keyboard.down("Meta"); await page.keyboard.press("w"); await page.keyboard.up("Meta");
+};
+await closeSong();
 await page.waitForSelector("[data-testid=start]");
 await page.waitForSelector("[data-testid=open-example]:not([disabled])");
 await page.click("[data-testid=open-example]");
@@ -169,7 +174,7 @@ await page.waitForSelector("[data-testid=timeline]");
 const exTracks = await page.$$eval("[data-track]", (els) => els.map((e) => e.dataset.track));
 check(["bass", "hats", "keys", "kick"].every((t) => exTracks.includes(t)), `its tracks are in the timeline: ${exTracks.join(", ")}`);
 // Again: another copy.
-await page.click('[aria-label="Close the project"]');
+await closeSong();
 await page.waitForSelector("[data-testid=open-example]:not([disabled])");
 await page.click("[data-testid=open-example]");
 await page.waitForSelector('[data-example="first-song"]');

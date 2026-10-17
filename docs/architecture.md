@@ -432,7 +432,9 @@ Applied when the engine matches instances; a `key()` frame has no occurrence; a 
 - *Today:* matches for label renames and renames by hand: a label rename is an `Identical` Tx (step 6); a track key renamed in code leaves its folder `data.unclaimed`, offered whole as one `Rename` of the folder on its directory hash ("Move all to …"), and a lane key its lane file, in the app and in every CLI command that opens the project ([DIAG-4](#delivery), [DIAG-6](#fixes)). The app's key rename and Restore aren't built.
 
 **ID-18.** Mixer channel keys are dictionary slots where the user's key is identity on purpose. The app writes the track key as the channel key of a new channel, but finds a track's channel by following the graph edge from the track's export into the mixer, never by comparing keys. A key rename Tx renames a channel key only when it equals the old track key, and says so in its label.
+- Following the edge means: the mixer is the song's one frame whose ComponentId is `std:mixer`; its channels are the properties of the object its call is given in the project's code; a track is in the channel inside whose property one of its audio exports is read, a read that a frame records as a sidechain input excepted (the duck's `kick.env` only listens). A track in no channel, or in two, has no fader.
 - *Why:* a channel whose key differs from its track's (written by hand, or after a rename) must still be found.
+- *Today:* matches since 8b.1 (`crates/editor/src/mix.rs`). The read's place picks the channel, since a bare `kick: kick.out` makes no strip node of its own until every channel has a gain (design-8b §5.1): the import nodes say where each read is, and the frames' sidechain inputs which only listen. No mixer, two, or one whose channels aren't an object written in the project's code, and the track builders refuse to add a channel, saying so.
 
 ## Project format v1
 
@@ -620,9 +622,13 @@ Notes, control (masks are control lanes in `unit01`) and audio lanes, in that or
 
 ### Presentation and local files
 
-**FMT-19.** `layout.json` holds shared presentation keyed by track key: track order and colour, later canvas positions. It is never part of a revision and never read by the build. Unknown keys in it are ignored.
-- *Why:* presentation must never trigger a compile or change the sound.
-- *Today:* `layout.json` is classed Presentation and never makes a revision (step 4); nothing reads or writes it yet.
+**FMT-19.** `layout.json` holds shared presentation keyed by track key: track order and colour, markers, later canvas positions. It is never part of a revision and never read by the build. Unknown keys in it are ignored.
+- Its schema: `order`, the track keys top to bottom; `tracks.<key>.colour`, one of the palette's twelve names (a `#rrggbb` written by hand reads as the nearest name by hue, and is rewritten as a name when that track's colour is next written); `markers`, each a name and a beat.
+- A key that names no track (one commented out of the song for a while) is ignored when read and kept when the file is written: in `order` after the key before it, in `tracks` with its colour. Only deleting the track removes its key. Unknown keys are written back as read, in the order read. The canonical form is two-space JSON with `order`, `tracks` and `markers` first.
+- The server reads it, watches it, and publishes an outside change with no revision. A Tx that writes it is based on what the disk says when it is planned, since no snapshot holds it, so an outside write in between is a conflict.
+- A file that doesn't parse is `layout.invalid`: the view shows the defaults; the track builders leave it out of their Tx; reorder, recolour and markers refuse; Reset layout writes the defaults over it as one undo step.
+- *Why:* presentation must never trigger a compile or change the sound. A git merge that leaves conflict markers in it must cost order or colour, never the gestures that make tracks.
+- *Today:* matches since 8b.1 for order and colour (`crates/editor/src/layout.rs`; the watch is `Graph::watch`'s stat of the file on every tick, `crates/server/src/graph.rs`). The effective order is the stored order of the tracks there are, then the mixer's channel order, then the order the build made them, never alphabetical; with no colour stored, colours go by place in the palette's default order; a track without one gets the first colour no track uses, or the least used; and every layout write writes every track's colour, so the first one freezes them all (`layout_tests.rs`). Markers are read and kept, and written with 8b.5.
 
 **FMT-20.** `.music2/` is local to one machine. New projects MUST get a `.gitignore` line for it. Caches live outside the project ([RENDER-30](#audio-lanes), [FMT-16](#assets-and-hashes)). A project in a synced folder (iCloud Drive, Dropbox) works with these rules:
 - The app marks `.music2/` for the sync services that honour a marker (Dropbox's ignore attribute), and raises the Notice `project.synced` when the project is under a known synced folder.
@@ -714,7 +720,7 @@ Anchor = Written { file, range }                    // a value written in the co
 
 `Confined` holds when, after nodes are matched by their delta names ([WRITE-8](#expectations-and-the-delta)): every node that differs was made by a site written inside a declared range (by its origin, `within` or `src`), or differs only in edges to such nodes; lane data differs only for the declared lanes; modules are added, removed, re-keyed or muted only as declared; and every byte outside the declared ranges is unchanged. A new kind of expectation needs a design review that changes this page.
 - *Why:* gesture-shaped expectations would make core grow with every feature, and checks supplied by tools would take the guarantee out of core. Inserting an omitted argument turns an inherited control into a written one, which must still count as `Values`.
-- *Today:* matches since step 6: core judges every Tx by its expectation on the delta it computes (`core/session/src/tx/expect.rs`), with the step 6 design's C1 (`Confined`'s rules on bytes and on states, assets and the arrangement) for the owner to confirm; each planner's own assertion stays in `crates/editor`.
+- *Today:* matches since step 6: core judges every Tx by its expectation on the delta it computes (`core/session/src/tx/expect.rs`), with the step 6 design's C1 (`Confined`'s rules on bytes and on states, assets and the arrangement) for the owner to confirm; each planner's own assertion stays in `crates/editor`. A node inside a voice was made within its `poly`, so from 8b.1 it is also placed where that `poly` is: a note field (`lane:gate`) has no place of its own in the project, and before, no range could admit a new track's voices (`scope` in `core/session/src/tx/delta.rs`). From 8b.1 the write API is recorded: every op, expectation, base, declaration, module change, anchor and position, matched with no wildcard, and one Tx per op and expectation that serialises back byte for byte (`the_write_api_is_step_6s` in `core/song/tests/write_api.rs`), so a new one fails CI until this page changes.
 
 **WRITE-7.** Core MUST take structured anchors, never `file#ordinal` strings. Those become debug labels made by `crates/editor`.
 - *Why:* ordinals shift with every inserted call ([ID-12](#derived-identity)).
@@ -741,10 +747,15 @@ Anchor = Written { file, range }                    // a value written in the co
 | relink unused data | `Confined { lanes: the lane it moves to }` |
 | delete unused data | `Identical` |
 | automate a knob | `Confined { the literal's range, a new lane }` |
-| add a track | `Confined { a new file, ranges in song.ts, a new module }` |
+| add a track | `Confined { the new file, the import and the mixer call in song.ts, the new lane, a new module }` |
+| duplicate a track | `Confined { the new file (or the copied statement), the import and the mixer call in song.ts, its lanes, a new module }` |
+| delete a track | `Confined { its file (or its statement), its imports, the mixer call, every excised call and every import that leaves unread, its lanes, the module removed }` |
+| reorder, recolour, Reset layout | writes only `layout.json`: no revision, so `Identical` |
 | rename a label | `Identical` |
 | mute in song | `Confined { the track call's options, modules: that module's muted }` |
 | code editor save | `save()` |
+
+- *Today (8b.1):* add, duplicate and delete a track, reorder and recolour are built (`crates/editor/src/tracks.rs`, `layout.rs`; routes `POST /api/graph/track/{add,duplicate,delete}` and `/api/graph/layout`; `m2 add-track`, `duplicate-track`, `delete-track`, `layout`). The whole mixer call is declared because the new strip's nodes are std's, made inside it; each planner's assertion takes up the rest: exactly one module added or removed, no value changed, nothing of the song removed but an empty mixer's silent stand-in, and every other channel as it was, by key. A delete that other code reads answers with the reads (409 at the route): one an effect that takes audio first can lose (a duck's sidechain) goes with the track only when asked again with `cascade`; any other blocks it.
 
 Core keeps `save`, `Tx`, `GraphDelta` and its checkers, undo, the journal, the raw site, origin and control tables, and diagnostics. `crates/editor` gets `view.rs`, `timeline.rs`, `lens.rs` (with unit spelling generated from `core.ts`), the cable and effect planners, labels, the helpers at `core/script/src/sites.rs:268-317`, and `render.rs` (export at host level).
 
@@ -789,10 +800,10 @@ Between steps 1 and 2 the engine may hear the candidate as a preview ([PLANE-5](
 ### The project lock
 
 **WRITE-17.** A process that writes a project through music2 MUST hold an exclusive OS advisory lock on `.music2/lock` (the std file lock `core/session/src/render.rs:166-174` already uses) for as long as it may write: the app while the project is open, a CLI write command for its run. So one process at a time writes. The file holds `{pid, program, host, token, since}` only to make messages clear. The OS releases the lock when the process exits, so a crash leaves no stale lock.
-- When the app opens a project another process holds (a long `m2 bounce --place`, a second app), it opens it read-only: it plays, shows a banner naming the holder, and offers to retry. Read-only means no `save()` and no Tx.
+- When the app opens a project another process holds (a long `m2 bounce --place`, a second app), it opens it read-only: it plays, says so naming the holder, and offers to retry. Read-only means no `save()` and no Tx.
 - When the volume can't lock (`ENOTSUP` or `ENOLCK`, as on some SMB, cloud and FUSE volumes), the project opens read-only with the Error `lock.unsupported`. music2 never writes unlocked.
 - *Why:* two writer processes with no lock race between compare and rename.
-- *Today:* matches since step 6 (`core/session/src/lock.rs`). The app opens a held project read-only with a banner naming the holder and Retry (`POST /api/graph/lock/retry`), and answers every write route 423 meanwhile (`crates/server/src/routes.rs`). On a network volume (`m2_os::fs::is_local`: no `MNT_LOCAL` on macOS; on Linux an NFS, SMB, CIFS, 9p, Ceph, AFS, Coda or FUSE file system) it takes the lock and raises the Notice `lock.local`, as the step 6 design's C2 proposes. A lock whose file was removed while held (`git clean -fdx` takes `.music2/` away) excludes nobody, so every write checks it first: it is taken again, or, when another process took it meanwhile, the session turns read-only naming it (`a_lock_whose_folder_was_removed_is_taken_again`).
+- *Today:* matches since step 6 (`core/session/src/lock.rs`). The app opens a held project read-only, with a Read only pill in its top bar whose popover names the holder and offers Retry (`POST /api/graph/lock/retry`), and its controls disabled, and answers every write route 423 meanwhile (`crates/server/src/routes.rs`). On a network volume (`m2_os::fs::is_local`: no `MNT_LOCAL` on macOS; on Linux an NFS, SMB, CIFS, 9p, Ceph, AFS, Coda or FUSE file system) it takes the lock and raises the Notice `lock.local`, as the step 6 design's C2 proposes. A lock whose file was removed while held (`git clean -fdx` takes `.music2/` away) excludes nobody, so every write checks it first: it is taken again, or, when another process took it meanwhile, the session turns read-only naming it (`a_lock_whose_folder_was_removed_is_taken_again`).
 
 **WRITE-18.** A writer that can't take the lock MUST fail before changing anything, with a message that names the holder and what to do:
 
@@ -805,11 +816,11 @@ The CLI's commands sort like this:
 - `check` (and its alias `build`), `render`, `graph`, `controls`, `cables` and `effects` only read. They never take the lock, and open their own session.
 - `kernels` and `plugins` open no project, and `new` creates a new folder. None needs the lock.
 - `bounce` without `--place` only creates a new asset and its provenance, with create-only semantics ([FMT-14](#assets-and-hashes)). That can't race, so it needs no lock and works while the app is open.
-- Every other command that changes a project takes the lock: `set`, `connect`, `disconnect`, `add-effect`, `remove-effect`, `bounce --place`, `plugin-state`, `relink`, `delete-data` and `tx`. The message for `bounce --place` also names the lane file, and says the clip can be added by writing that file directly.
+- Every other command that changes a project takes the lock: `set`, `connect`, `disconnect`, `add-effect`, `remove-effect`, `bounce --place`, `plugin-state`, `relink`, `delete-data`, `tx`, `automate`, `label`, `add-track`, `duplicate-track`, `delete-track` and `layout`. The message for `bounce --place` also names the lane file, and says the clip can be added by writing that file directly.
 
 Forwarding writes to the holder is [deferred](#deferred-with-triggers).
 - *Why:* owner decision 10: the lock now, forwarding when a workflow needs it. While raw file writes are allowed (owner decision 5), the safest writer must not be the one blocked.
-- *Today:* matches since step 6 (`apps/m2/src/main.rs`; `apps/m2/tests/lock.rs`), with `automate` and `label` among the writers, and readers taking the lock for a journal scan when it is free, never while they read (the step 6 design's C19).
+- *Today:* matches since step 6 (`apps/m2/src/main.rs`; `apps/m2/tests/lock.rs`), with `automate` and `label` among the writers, and from 8b.1 `add-track`, `duplicate-track`, `delete-track` and `layout`, and readers taking the lock for a journal scan when it is free, never while they read (the step 6 design's C19).
 
 ### Outside writers
 
@@ -925,6 +936,7 @@ The message is plain words, and names the file, the field and the fix where they
 | `tx.path` | Error | a Tx names a path [WRITE-3a](#the-two-write-primitives) refuses; on the Tx | — | the Tx is rejected |
 | `lock.unsupported` | Error | the volume can't take the project lock; the project is read-only | — | no |
 | `project.synced` | Notice | the project is in a synced folder ([FMT-20](#presentation-and-local-files)) | — | no |
+| `layout.invalid` | Notice | `layout.json` doesn't parse; the view uses the defaults, the track builders leave the file out, and reorder, recolour and markers refuse ([FMT-19](#presentation-and-local-files)); on the session, not a revision | ResetLayout | no |
 | `overlays.active` | Warning | an export while monitoring overlays are active (on the export, not a revision) | — | no |
 | `plugin.crashed` | Error | the plugin host process crashed; its instances are silent | — | no |
 
@@ -937,7 +949,7 @@ The message is plain words, and names the file, the field and the fix where they
 
 **DIAG-4.** Diagnostics MUST be sent with every revision over the WebSocket, returned to agents by project reads, and printed by every CLI command that opens a project.
 - *Why:* a problem nobody sees is the silent data loss this contract exists to end.
-- *Today:* matches for what exists. The session's problems are in the project state the app fetches, and in every `{"t":"graph"}` event over the WebSocket, together with the accepted revision and the draft's errors (`Graph::news` in `crates/server/src/graph.rs`; `graph_changed` in `crates/server/src/lib.rs`). Since step 6 the session's own (`tx.interrupted`, `tx.foreign`, `lock.*`) come first, and an outside write's `data.claimed` is a toast. The app shows them in a "Needs attention" strip above the timeline (`web/src/components/Attention.tsx`). Every CLI command that opens a project prints them, each with the commands that apply its fixes (`m2 relink`, `m2 delete-data`, `m2 fix`). Since step 5 a package module that doesn't load (`pkg.invalid`, the session's) comes first among them, in the state, the news and every CLI command's output (`Session::problems`; `package_problems` in `apps/m2/src/main.rs` for the commands that only compile). The draft's errors are still a separate list, `diagnostics`, and there is no MCP yet.
+- *Today:* matches for what exists. The session's problems are in the project state the app fetches, and in every `{"t":"graph"}` event over the WebSocket, together with the accepted revision and the draft's errors (`Graph::news` in `crates/server/src/graph.rs`; `graph_changed` in `crates/server/src/lib.rs`). Since step 6 the session's own (`tx.interrupted`, `tx.foreign`, `lock.*`) come first, and an outside write's `data.claimed` is a toast. The app counts them in the top bar's status pill and lists them, with their fixes, in its popover (`web/src/components/Status.tsx`, `Attention.tsx`). Every CLI command that opens a project prints them, each with the commands that apply its fixes (`m2 relink`, `m2 delete-data`, `m2 fix`). Since step 5 a package module that doesn't load (`pkg.invalid`, the session's) comes first among them, in the state, the news and every CLI command's output (`Session::problems`; `package_problems` in `apps/m2/src/main.rs` for the commands that only compile). The draft's errors are still a separate list, `diagnostics`, and there is no MCP yet.
 
 ### Fixes
 
@@ -949,7 +961,7 @@ The message is plain words, and names the file, the field and the fix where they
 - **A track key changed:** when exactly one `data/<k>/` folder is claimed by no module and exactly one declared module has no folder, `data.unclaimed` on that folder offers Relink of the whole folder first (`DataPath::Module(k)` to `Module(new)`: lanes and state together, one `Rename`). It is likely when the folder's lane files match the new module's declared lanes. The per-lane offers follow.
 - A fix is `likely` only when it is alone in first place and on the data's own track or lane.
 
-The app shows these in its "Needs attention" strip, with Relink, Restore (rename the key back, a Tx built by `crates/editor`) and Delete.
+The app shows these in its status popover ("Needs attention"), with Relink, Restore (rename the key back, a Tx built by `crates/editor`) and Delete.
 - *Why:* a rename by hand must be one click from sounding again, and the offer must be the same in the app, the CLI and an agent's read.
 - *Today:* matches since step 4, except Restore (`core/session/src/unclaimed.rs`). A renamed track's folder is offered whole, then lane by lane (lane by lane only while it holds a file that is neither a lane nor a state, which keeps it from moving whole, and the problem names that file); plugin state no plugin reads is offered to a plugin of its kind. Since step 6 each fix is a Tx built where its problem is raised (`core/session/src/unclaimed.rs`, `core/song/src/data.rs`), and applying it is committing it: `m2 fix` and `POST /api/graph/fix`; `m2 relink`, `m2 delete-data`, `POST /api/graph/relink` and `/api/graph/data/delete` commit the offered fix, or build the same Tx (`crates/editor/src/data.rs`). A fix whose base went stale is a `Conflict`. Restore isn't built.
 
@@ -994,7 +1006,7 @@ export const delay = component({
 
 **PKG-7.** `editor.category` is a free string that the UI groups. Core MUST NOT hold a list of categories.
 - *Why:* core holds no UI vocabulary (P10).
-- *Today:* matches since step 5: a category is what a descriptor's `editor.category` says, and core lists none (`the_deleted_items_are_gone` in `core/session/src/gate5_tests.rs`). The web's effect browser keeps an order and an icon for the categories it knows, and lists any other as a group of its own after them (`web/src/components/EffectBrowser.tsx`).
+- *Today:* matches since step 5: a category is what a descriptor's `editor.category` says, and core lists none (`the_deleted_items_are_gone` in `core/session/src/gate5_tests.rs`). The web's effect browser keeps an order and an icon for the categories it knows, and lists any other as a group of its own after them (`web/src/components/EffectBrowser.tsx`). From 8b.1 a category on a component that takes notes first lists it as an instrument a new track can play, which must take only its notes, make audio, and build from its notes alone (`core/script/sdk/core.ts`, `Descriptor::is_instrument`); one that takes audio first is an effect, as before. std's instruments say Drums (kick, hat) and Instruments (bass, pluck, pad); the + Track list puts Drums first and plays drums from a `hits` lane.
 
 **PKG-8.** A control's `.range()` is a display hint. It is a validation constraint only when declared as one, and a value is never clamped silently.
 - *Why:* a knob's preferred range must not rewrite what the code says.
@@ -1030,7 +1042,7 @@ export const delay = component({
 | **Code literals** at declared slots | std knobs, mixer faders and pan, effect settings, "mute in song": the code is the preset | `reverb(x, { mix: 0.25 })` |
 | **Lanes** | values that change over time | `data/bass/cutoff.json` |
 | **Plugin state blob** | a plugin's internals | `data/lead/lead.state` |
-| **`layout.json`** | shared presentation: track order and colour, keyed by track key | `{"tracks": {"kick": {"colour": "#e4572e"}}}` |
+| **`layout.json`** | shared presentation: track order and colour (a palette name), keyed by track key; markers | `{"tracks": {"kick": {"colour": "rose"}}}` |
 | **`.music2/`** | local state: mute and solo, override latches, loop range, zoom, selection | `.music2/overlays.json` |
 
 **HOME-1.** Every value MUST have exactly one home, and the UI MUST show which. Every value that `controls()`, the view and leases return carries `home: code | lane | state | layout | local`, and a test checks it for every control of every fixture.
@@ -1264,7 +1276,7 @@ Each item below is decided where this page says so, and built when its trigger a
 Steps 3 and 4 may run in parallel; everything else is in order.
 
 1. **Close today's silent paths** (2 days). **Built.**
-   - The session's warnings reach every client: the app's state and every graph event over the WebSocket carry them, the app shows them in a "Needs attention" strip, and every CLI command that opens a project prints them with the commands that fix them ([DIAG-4](#delivery)).
+   - The session's warnings reach every client: the app's state and every graph event over the WebSocket carry them, the app shows them in its status pill's popover, and every CLI command that opens a project prints them with the commands that fix them ([DIAG-4](#delivery)).
    - Lane data no lane reads, left behind when a track or a lane is renamed in code, is the Warning `data.unclaimed`, with Relink and Delete fixes: `m2 relink`, `m2 delete-data`, and the strip's Move and Delete. Each fix is a checked, undoable session edit, applied only when asked ([DIAG-6](#fixes)).
    - `revert()` uses the current origin of the control at the carried position, with the regression test ([ID-12](#derived-identity)).
 2. **Write the contract** (this page) and have it reviewed.

@@ -1,17 +1,15 @@
 import clsx from "clsx";
-import { CircleAlert, Info, MoveRight, Trash2, TriangleAlert, Wand2 } from "lucide-react";
+import { ChevronDown, CircleAlert, Info, MoveRight, Trash2, TriangleAlert, Wand2 } from "lucide-react";
 import { useState } from "react";
 import { attention, graphApi, type Diagnostic, type Fix, type GraphState, type Severity } from "../lib/graph";
 import { useStore } from "../lib/store";
-import { graphUndo } from "./GraphCanvas";
+import { undoAction } from "./GraphCanvas";
+import { Details, MenuRow, Popover } from "./ui";
 
-/** How many problems show before "Show all". */
-const SHOWN = 2;
-
-const LOOK: Record<Severity, { Icon: typeof CircleAlert; color: string; word: string }> = {
-  error: { Icon: CircleAlert, color: "text-red-600", word: "Error" },
-  warning: { Icon: TriangleAlert, color: "text-amber-600", word: "Warning" },
-  notice: { Icon: Info, color: "text-ink-400", word: "Notice" },
+export const LOOK: Record<Severity, { Icon: typeof CircleAlert; color: string; word: string }> = {
+  error: { Icon: CircleAlert, color: "text-danger", word: "Error" },
+  warning: { Icon: TriangleAlert, color: "text-warn", word: "Warning" },
+  notice: { Icon: Info, color: "text-fg-faint", word: "Notice" },
 };
 
 /** What a fix renames, deletes or rewrites: the first file it touches, as its Tx says. */
@@ -32,67 +30,35 @@ function done(fix: Fix, problem: Diagnostic) {
 }
 
 /**
- * What needs attention in the song though it plays (DIAG-4): data no lane reads since a track's or
- * a lane's key was renamed in code, a lane file that doesn't read, a missing asset, clips without
- * ids. Each says what is wrong in plain words, the worst first, with its fixes a click away: the
- * one it plainly calls for, then the others. Nothing is fixed until asked (DIAG-5), and undo takes
- * a fix back.
+ * What needs attention in the song though it plays (DIAG-4), in the status popover: data no lane
+ * reads since a track's or a lane's key was renamed in code, a lane file that doesn't read, a
+ * missing asset, clips without ids. Each says what is wrong in plain words, the worst first, with
+ * its fixes a click away: the one it plainly calls for, then the others. Its code is behind
+ * Details. Nothing is fixed until asked (DIAG-5), and undo takes a fix back.
  */
-export default function Attention({ graph }: { graph: GraphState }) {
-  const [all, setAll] = useState(false);
+export default function Attention({ graph, locked }: { graph: GraphState; /** Why fixes can't be made now, if they can't. */ locked: string | null }) {
   const [busy, setBusy] = useState(false);
   const toast = useStore((s) => s.toast);
   const items = attention(graph);
   if (!items.length) return null;
-  // Fixes are edits: like knobs, they wait for code that compiles.
-  const locked = graph.view.draft_errors.length > 0;
   const session = graph.session;
 
   const apply = (problem: Diagnostic, fix: Fix) => {
     setBusy(true);
     graphApi
       .fix(session, graph.view.revision, fix)
-      .then(({ revision }) =>
-        toast(done(fix, problem), {
-          label: "Undo",
-          run: () => {
-            // Only while the fix is still the newest change: later, Undo would take back something else.
-            const now = useStore.getState().graph;
-            if (now?.session === session && now.view.revision <= revision) void graphUndo(session, "undo");
-            else toast("The song has changed since, so this can't be undone from here. Use Undo in the top bar.");
-          },
-        }),
-      )
+      .then(({ revision }) => toast(done(fix, problem), undoAction(session, revision)))
       .catch((error) => toast(error instanceof Error ? error.message : String(error)))
       .finally(() => setBusy(false));
   };
 
-  // Tinted by the worst of it: the strip is at its loudest only when something is silent.
-  const worst = items[0].severity;
-  const shown = all ? items : items.slice(0, SHOWN);
   return (
-    <section
-      data-testid="attention"
-      aria-label="Needs attention"
-      className={clsx(
-        "shrink-0 max-h-[30vh] overflow-y-auto px-5 py-2 border-b text-[13px] text-ink-100",
-        worst === "error" ? "bg-red-500/[0.05] border-red-600/15" : worst === "warning" ? "bg-pop-500/[0.07] border-pop-500/20" : "bg-ink-900 border-black/[0.06]",
-      )}
-    >
-      <div className={clsx("flex items-center gap-2 text-xs font-medium", worst === "error" ? "text-red-700" : worst === "warning" ? "text-pop-600" : "text-ink-400")}>
-        <CircleAlert className="size-3.5" />
-        Needs attention{items.length > 1 && ` · ${items.length}`}
-      </div>
-      <ul className="mt-1 divide-y divide-black/[0.06]">
-        {shown.map((d, i) => (
-          <Row key={`${d.code}:${d.src ?? ""}:${i}`} problem={d} disabled={busy || locked} locked={locked} onFix={(f) => apply(d, f)} />
+    <section data-testid="attention" aria-label="Needs attention" className="text-base text-fg">
+      <ul className="divide-y divide-line">
+        {items.map((d, i) => (
+          <Row key={`${d.code}:${d.src ?? ""}:${i}`} problem={d} disabled={busy || !!locked} why={locked} onFix={(f) => apply(d, f)} />
         ))}
       </ul>
-      {items.length > SHOWN && (
-        <button onClick={() => setAll(!all)} className="mt-0.5 text-xs text-pop-600 hover:text-pop-500 cursor-pointer">
-          {all ? "Show fewer" : `Show ${items.length - SHOWN} more`}
-        </button>
-      )}
     </section>
   );
 }
@@ -100,88 +66,104 @@ export default function Attention({ graph }: { graph: GraphState }) {
 /** A fix's mark: a move, a delete, or a file rewritten. */
 function FixIcon({ fix }: { fix: Fix }) {
   const I = fix.code === "relink" ? MoveRight : fix.code === "delete-data" ? Trash2 : Wand2;
-  return <I className="size-3.5 shrink-0" />;
+  return <I size={14} className="shrink-0" />;
 }
 
-function Row({ problem, disabled, locked, onFix }: { problem: Diagnostic; disabled: boolean; locked: boolean; onFix: (f: Fix) => void }) {
+const BUTTON = "h-ctl-sm px-2 shrink-0 rounded-sm text-sm font-medium inline-flex items-center gap-1.5 cursor-pointer transition-colors duration-80 ease-linear disabled:cursor-default";
+
+function Row({ problem, disabled, why, onFix }: { problem: Diagnostic; disabled: boolean; why: string | null; onFix: (f: Fix) => void }) {
   const fixes = problem.fixes ?? [];
-  // The fix it plainly calls for is one click; other places the data could go are a pick; the
+  // The fix it plainly calls for is one click; other places the data could go are a menu; the
   // rest (delete, or another rewrite) are buttons of their own.
   const likely = fixes.find((f) => f.likely);
   const moves = fixes.filter((f) => f !== likely && f.code === "relink");
   const others = fixes.filter((f) => f !== likely && f.code !== "relink");
-  const why = locked ? "Fix the code first: it doesn't compile right now" : undefined;
   const { Icon, color, word } = LOOK[problem.severity] ?? LOOK.warning;
   const src = problem.src && !problem.message.includes(problem.src) ? problem.src : null;
-  const button =
-    "h-7 px-2.5 shrink-0 rounded-lg text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-default";
+  const [menu, setMenu] = useState<HTMLElement | null>(null);
   return (
-    <li data-problem={problem.code} data-severity={problem.severity} data-src={problem.src ?? undefined} className="py-1.5 flex items-start gap-3">
-      <Icon className={clsx("size-3.5 mt-[3px] shrink-0", color)} aria-label={word} />
-      <div className="flex-1 min-w-0">
-        <p data-testid="problem-message" className="select-text leading-snug break-words">
+    <li data-problem={problem.code} data-severity={problem.severity} data-src={problem.src ?? undefined} className="px-2 py-2 flex items-start gap-2">
+      <Icon size={14} className={clsx("mt-0.5 shrink-0", color)} aria-label={word} />
+      <div className="flex-1 min-w-0 space-y-1.5">
+        <p data-testid="problem-message" className="select-text break-words">
           {problem.message}
         </p>
-        <p className="flex items-baseline gap-2 min-w-0 text-[11px] text-ink-400">
-          {src && <span className="font-mono truncate">{src}</span>}
-          <span className="font-mono shrink-0 text-ink-500" title="The problem's code">
-            {problem.code}
-          </span>
-        </p>
-      </div>
-      <div className="shrink-0 flex items-center gap-1.5">
-        {likely && (
-          <button
-            data-fix={likely.code}
-            data-to={target(likely)?.to ?? undefined}
-            data-likely
-            disabled={disabled}
-            title={why ?? likely.title}
-            onClick={() => onFix(likely)}
-            className={`${button} max-w-72 pop-gradient text-white enabled:hover:brightness-110`}
-          >
-            <FixIcon fix={likely} />
-            <span className="truncate">{likely.title}</span>
-          </button>
-        )}
-        {moves.length > 0 && (
-          // No place plainly its own, or others that could take it: the person picks.
-          <select
-            data-fix="relink-pick"
-            aria-label={likely ? "Move it somewhere else" : "Move it"}
-            disabled={disabled}
-            title={why}
-            value=""
-            onChange={(e) => {
-              const f = moves[Number(e.target.value)];
-              if (f) onFix(f);
-            }}
-            className={`${button} w-32 pl-2 pr-1 bg-ink-800 ring-1 ring-black/10 text-ink-100`}
-          >
-            <option value="" disabled>
-              {likely ? "Elsewhere…" : "Move to…"}
-            </option>
-            {moves.map((f, i) => (
-              <option key={`${f.title}:${i}`} value={i} data-to={target(f)?.to ?? undefined}>
-                {f.title}
-              </option>
+        {fixes.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {/* In one row: the plain fix, the other places, and Delete as just its icon (named in its tooltip). */}
+            {likely && (
+              <button
+                data-fix={likely.code}
+                data-to={target(likely)?.to ?? undefined}
+                data-likely
+                disabled={disabled}
+                title={why ?? likely.title}
+                onClick={() => onFix(likely)}
+                className={`${BUTTON} max-w-full bg-accent text-white enabled:hover:bg-accent-hover enabled:active:bg-accent-strong disabled:bg-press disabled:text-fg-off`}
+              >
+                <FixIcon fix={likely} />
+                <span className="truncate">{likely.title}</span>
+              </button>
+            )}
+            {moves.length > 0 && (
+              // No place plainly its own, or others that could take it: the person picks, from a menu.
+              <button
+                data-fix="relink-pick"
+                aria-haspopup="menu"
+                aria-expanded={!!menu}
+                disabled={disabled}
+                title={why ?? undefined}
+                onClick={(e) => {
+                  const b = e.currentTarget;
+                  setMenu((m) => (m ? null : b));
+                }}
+                className={`${BUTTON} bg-raised border border-line-strong text-fg enabled:hover:border-fg-off disabled:bg-chrome disabled:text-fg-off`}
+              >
+                {likely ? "Elsewhere…" : "Move to…"}
+                <ChevronDown size={12} className="text-fg-muted" />
+              </button>
+            )}
+            {others.map((f, i) => (
+              <button
+                key={`${f.code}:${i}`}
+                data-fix={f.code}
+                disabled={disabled}
+                title={why ?? (f.code === "delete-data" ? `${f.title} (undo puts it back)` : f.title)}
+                aria-label={f.code === "delete-data" ? "Delete" : undefined}
+                onClick={() => onFix(f)}
+                className={clsx(BUTTON, "max-w-56 text-fg-muted enabled:hover:text-fg enabled:hover:bg-hover disabled:text-fg-off", f.code === "delete-data" && "w-ctl-sm !px-0 justify-center")}
+              >
+                <FixIcon fix={f} />
+                {f.code !== "delete-data" && <span className="truncate">{f.title}</span>}
+              </button>
             ))}
-          </select>
+          </div>
         )}
-        {others.map((f, i) => (
-          <button
-            key={`${f.code}:${i}`}
-            data-fix={f.code}
-            disabled={disabled}
-            title={why ?? (f.code === "delete-data" ? `${f.title} (undo puts it back)` : f.title)}
-            onClick={() => onFix(f)}
-            className={`${button} max-w-56 text-ink-300 enabled:hover:text-ink-100 enabled:hover:bg-black/[0.05]`}
-          >
-            <FixIcon fix={f} />
-            <span className="truncate">{f.code === "delete-data" ? "Delete" : f.title}</span>
-          </button>
-        ))}
+        {/* The problem's code and its file: literal, for agents and power users. */}
+        <Details>
+          <div className="mt-1 space-y-0.5 select-text">
+            <div data-code className="font-mono" title="The problem's code">{problem.code}</div>
+            {src && <div data-code className="font-mono break-all">{src}</div>}
+          </div>
+        </Details>
       </div>
+      {menu && (
+        <Popover anchor={menu} onClose={() => setMenu(null)} role="menu" data-relink-menu className="w-[280px]">
+          {moves.map((f, i) => (
+            <MenuRow
+              key={`${f.title}:${i}`}
+              data-to={target(f)?.to ?? undefined}
+              icon={<MoveRight size={14} />}
+              onClick={() => {
+                setMenu(null);
+                onFix(f);
+              }}
+            >
+              {f.title}
+            </MenuRow>
+          ))}
+        </Popover>
+      )}
     </li>
   );
 }

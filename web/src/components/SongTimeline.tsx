@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { AudioWaveform, CircleAlert, Info, TriangleAlert } from "lucide-react";
+import { AudioWaveform, ChevronRight, CircleAlert, Info, Plus, TriangleAlert } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   barAt,
@@ -8,12 +8,13 @@ import {
   clipRef,
   findLane,
   findNoteClip,
+  formatValue,
   hasOwnId,
-  keyNote,
-  labelOf,
-  moduleName,
+  laneTitle,
+  laneValue,
   laneWriting,
   meterSpans,
+  moduleName,
   newClipId,
   writeLane,
   type ClipRef,
@@ -25,66 +26,41 @@ import {
   type TimelineTrack,
   type TimelineView,
 } from "../lib/graph";
-import { LANE_MADE } from "../lib/events";
+import { onFrame } from "../lib/clock";
+import { LANE_MADE, TRACK_MADE } from "../lib/events";
+import { LANE_H, ROW_H, RULER_H } from "../lib/layout";
+import { GRAPHITE, trackColors, type TrackColor } from "../lib/palette";
+import { useShell } from "../lib/shell";
+import { kbd } from "../lib/native";
 import { useStore } from "../lib/store";
+import { addEffectTo, dragsEffect, EFFECT_DRAG } from "./Browser";
+import { addTrack, END, INSTRUMENT_DRAG, openInstruments, openTrackMenu, startReorder, TrackMenuButton, useReorder } from "./Tracks";
+import { VLines } from "./draw";
 import TrackName from "./TrackName";
+import { Button, EmptyState, keepFocus } from "./ui";
 
-const HEADER_W = 236;
-const RULER_H = 34;
 /** Pixels per beat. */
 const PPB = 24;
-const LANE_H: Record<TimelineLane["kind"], number> = { notes: 64, control: 48, audio: 52 };
-/** A clip sits this far inside its lane; its drawing starts below the color bar. */
+/** A clip sits this far inside its row, inside its 1px border; its drawing this far inside that. */
 const CLIP_INSET = 4;
-const BODY_TOP = 7;
-const BODY_BOTTOM = 3;
+const BORDER = 1;
+const BODY_TOP = 4;
+const BODY_BOTTOM = 4;
 
-/** Track color, muted toward gray to fit the light theme. */
-const mute = (v: number) => Math.round(v * 0.5 + 155 * 0.5);
-const rgb = (c: [number, number, number], a = 1) => `rgba(${mute(c[0])},${mute(c[1])},${mute(c[2])},${a})`;
-
-type Rgb = [number, number, number];
-const COLORS: Rgb[] = [[255, 94, 135], [255, 159, 67], [255, 214, 92], [94, 214, 140], [72, 196, 230], [124, 131, 253], [196, 113, 237]];
-const dark = (c: Rgb) => rgb([c[0] * 0.55, c[1] * 0.55, c[2] * 0.55]);
-
-/** The song's own lanes (the mix): a neutral colour, so a lane made on the song never recolours the tracks. */
-const MIX: Rgb = [150, 146, 158];
-
-/** A module's colour, by its key's place among the tracks (null if it has no row in the timeline). */
-function colorOf(timeline: TimelineView, module: string): Rgb | null {
-  const row = timeline.tracks.find((t) => t.module === module);
-  if (!row) return null;
-  if (!row.track) return MIX;
-  const i = timeline.tracks.filter((t) => t.track).findIndex((t) => t.module === module);
-  return COLORS[i % COLORS.length];
-}
-
-/** A module's colour, muted for the light theme (null if it has no row in the timeline). */
-export function trackColor(timeline: TimelineView, module: string) {
-  const c = colorOf(timeline, module);
-  return c && rgb(c);
-}
-
-/** The same colour at full strength, for small marks such as the piano roll's notes. */
-export function trackHue(timeline: TimelineView, module: string) {
-  const c = colorOf(timeline, module);
-  return c && `rgb(${c.join(",")})`;
-}
-
-const UNITS: Record<string, string> = { hz: "Hz", db: "dB", unit01: "0…1", bipolar: "±1", seconds: "s", semitones: "st" };
 const beats = (n: number) => Number(n.toFixed(3));
 const span = (c: { start: number; length: number }) => `beats ${beats(c.start)}–${beats(c.start + c.length)}`;
+const rowHeight = (lane: TimelineLane) => (lane.kind === "control" ? LANE_H : ROW_H);
 
-/** A clip the timeline made, to pick (and open) once the graph shows the write that made it. */
+/** A clip the timeline made, to select (and open) once the graph shows the write that made it. */
 interface Made { revision: number; clip: ClipRef }
 
-/** Editing notes clips in place: pick one (and drag it along the beats), or make one. Stable across renders. */
+/** Editing notes clips in place: select one (and drag it along the beats), or make one. Stable across renders. */
 interface ClipEdits {
   down: (clip: ClipRef, e: React.PointerEvent<HTMLElement>) => void;
   /** A double-click on empty space in a notes lane (module and lane keys), at `beat`. */
   create: (module: string, lane: string, beat: number) => void;
-  unpick: () => void;
-  /** Delete the picked clip. */
+  unpick: (module: string) => void;
+  /** Delete the selected clip. */
   remove: () => void;
 }
 
@@ -114,11 +90,48 @@ function room(meter: Meter[], end: number, beat: number) {
 }
 
 /**
- * The song as the accepted revision plays it: a row per lane, grouped by track, under a ruler that
- * seeks. Tracks, lanes and clips are named by their keys and ids, never by their place (ID-11, FMT-12).
+ * A track's rows (taste.md §3.4): its own row draws its primary lane, the first notes or audio
+ * lane in code order; its other notes and audio lanes are full rows under it, always shown; its
+ * automation lanes are 32px rows under those, folded until asked for (A).
+ */
+function rowsOf(track: TimelineTrack) {
+  const primary = track.lanes.find((l) => l.kind !== "control") ?? null;
+  return {
+    primary,
+    others: track.lanes.filter((l) => l !== primary && l.kind !== "control"),
+    controls: track.lanes.filter((l) => l.kind === "control"),
+  };
+}
+
+/** Draws the playhead on every frame from the transport clock: never eased between polls (TL-9). */
+function usePlayhead(ref: React.RefObject<HTMLElement | null>, attr = false) {
+  useEffect(
+    () =>
+      onFrame((beat) => {
+        const el = ref.current;
+        if (!el) return;
+        el.style.transform = `translateX(${beat * PPB}px)`;
+        if (attr) el.dataset.beat = String(beats(beat));
+      }),
+    [ref, attr],
+  );
+}
+
+function PlayLine({ testid, className, style }: { testid?: string; className: string; style: React.CSSProperties }) {
+  const ref = useRef<HTMLDivElement>(null);
+  usePlayhead(ref, !!testid);
+  return <div ref={ref} data-testid={testid} aria-hidden className={className} style={style} />;
+}
+
+/**
+ * The song as the accepted revision plays it: a row per track, its lanes under it, under a ruler
+ * that seeks; the Song's row pinned at the foot. Tracks, lanes and clips are named by their keys and
+ * ids, never by their place (ID-11, FMT-12). What is selected is the shell's (§3.7).
  */
 export default function SongTimeline({
   timeline,
+  rows,
+  song,
   revision,
   beat,
   playing,
@@ -126,14 +139,18 @@ export default function SongTimeline({
   loopEnd,
   looping,
   onLoop,
-  selected,
-  open,
   issues,
-  onSelect,
+  locked,
+  waiting,
+  headerW,
   onOpenClip,
   onSeek,
 }: {
   timeline: TimelineView;
+  /** The tracks, in order, and every other module with no lanes. */
+  rows: TimelineTrack[];
+  /** The Song's own row: the root module's lanes. */
+  song: TimelineTrack;
   /** The revision `timeline` is from: what a lane write rewritten from it is based on. */
   revision: number;
   beat: number;
@@ -144,14 +161,14 @@ export default function SongTimeline({
   looping: boolean;
   /** A range dragged across the ruler, in whole beats: loop there. */
   onLoop: (start: number, end: number) => void;
-  /** The selected module's key. */
-  selected: string | undefined;
-  /** The notes clip open for editing, outlined. */
-  open: ClipRef | null;
   /** What needs attention, by module key: marked on the track. */
   issues: ReadonlyMap<string, Diagnostic[]>;
-  onSelect: (module: string) => void;
-  /** Double-clicking a notes clip opens it. */
+  /** Why clips can't be edited now, if they can't. */
+  locked: string | null;
+  /** The code has never compiled (WRITE-20): the tracks and clips are what `data/` holds, greyed. */
+  waiting: boolean;
+  headerW: number;
+  /** Double-clicking a notes clip opens it in Notes. */
   onOpenClip: (clip: ClipRef) => void;
   onSeek: (beat: number) => void;
 }) {
@@ -159,10 +176,10 @@ export default function SongTimeline({
   const [visible, setVisible] = useState(0);
   useEffect(() => {
     const el = scroller.current!;
-    const observer = new ResizeObserver(() => setVisible(Math.floor(el.clientWidth - HEADER_W)));
+    const observer = new ResizeObserver(() => setVisible(Math.floor(el.clientWidth - headerW)));
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [headerW]);
   // A bar of room after the last clip and after the playhead, which plays on past the
   // song's end; never narrower than the window. Grown a bar at a time, the rows redraw
   // once a bar rather than on every poll.
@@ -173,27 +190,23 @@ export default function SongTimeline({
   useEffect(() => {
     const el = scroller.current;
     if (!el || !playing) return;
-    if (x < el.scrollLeft || x > el.scrollLeft + el.clientWidth - HEADER_W - 40) el.scrollLeft = Math.max(0, x - 80);
-  }, [x, playing]);
+    if (x < el.scrollLeft || x > el.scrollLeft + el.clientWidth - headerW - 40) el.scrollLeft = Math.max(0, x - 80);
+  }, [x, playing, headerW]);
 
-  // The picked notes clip (Delete removes it), and one being dragged to a new start. Both are
-  // named by id, so an edit that reorders the lane (a move, an undo, an edit elsewhere) keeps
-  // them; one that is gone is unpicked here, and closed by the canvas if it was open.
-  const [picked, setPicked] = useState<ClipRef | null>(null);
+  // The selected notes clip (Delete removes it), and one being dragged to a new start. Both are
+  // named by id, so an edit that reorders the lane (a move, an undo, an edit elsewhere) keeps them.
   const [moving, setMoving] = useState<{ clip: ClipRef; start: number } | null>(null);
-  if (picked && !findNoteClip(timeline, picked)) setPicked(null);
-  const latest = useRef({ timeline, revision, open, onOpenClip, picked });
-  latest.current = { timeline, revision, open, onOpenClip, picked };
+  const latest = useRef({ timeline, revision, onOpenClip, locked });
+  latest.current = { timeline, revision, onOpenClip, locked };
   const made = useRef<Made | null>(null);
 
-  /** Once the graph shows the write that made a clip, pick it and open it. */
+  /** Once the graph shows the write that made a clip, select it and open it. */
   const settle = () => {
     const m = made.current;
     const graph = useStore.getState().graph;
     if (!m || !graph || graph.view.revision < m.revision) return;
     made.current = null;
     if (!findNoteClip(graph.timeline, m.clip)) return;
-    setPicked(m.clip);
     latest.current.onOpenClip(m.clip);
   };
   useEffect(settle, [timeline]);
@@ -203,23 +216,25 @@ export default function SongTimeline({
       const l = findLane(latest.current.timeline, module, lane);
       return l?.kind === "notes" ? l : null;
     };
-    /** One lane write: every clip the lane is to have. */
-    const write = (module: string, lane: string, clips: NoteClip[]) => {
+    /** What a track is called, for the words of an edit to its clips ("moving a Hook clip"). */
+    const named = (module: string) => moduleName({ key: module, label: latest.current.timeline.tracks.find((t) => t.module === module)?.label });
+    /** One lane write: every clip the lane is to have; `doing` names its undo step. */
+    const write = (module: string, lane: string, clips: NoteClip[], doing: string) => {
       const graph = useStore.getState().graph;
       // Clips are rewritten from the timeline shown, so wait until it shows the last write.
-      if (!graph || laneWriting(graph)) return null;
-      const w = writeLane(graph, module, lane, clips, latest.current.revision);
+      if (!graph || laneWriting(graph) || latest.current.locked) return null;
+      const w = writeLane(graph, module, lane, clips, latest.current.revision, { name: `${doing} ${named(module)} clip` });
       w.catch((error) => useStore.getState().toast(error instanceof Error ? error.message : String(error)));
       return w;
     };
     return {
       down(clip, e) {
         if (e.button !== 0) return;
-        setPicked(clip);
+        useShell.getState().select(clip.module, clip);
         scroller.current?.focus({ preventScroll: true });
         const lane = laneOf(clip.module, clip.lane);
         const c = lane?.clips[clipIndex(lane.clips, clip)];
-        if (!c) return;
+        if (!c || latest.current.locked) return;
         const el = e.currentTarget, pointer = e.pointerId, x0 = e.clientX;
         el.setPointerCapture(pointer);
         let to: number | null = null;
@@ -237,14 +252,14 @@ export default function SongTimeline({
           const i = lane ? clipIndex(lane.clips, clip) : -1;
           if (ev.type !== "pointerup" || to === null || to === c.start || !lane || i < 0) return;
           // Moved, the clip keeps its id; an anonymous one gets the id its reference names.
-          write(clip.module, clip.lane, lane.clips.map((x, k) => (k === i ? { ...x, id: clip.id, start: to! } : x)));
+          write(clip.module, clip.lane, lane.clips.map((x, k) => (k === i ? { ...x, id: clip.id, start: to! } : x)), "moving a");
         };
         const listeners = [["pointermove", move], ["pointerup", end], ["pointercancel", end], ["lostpointercapture", end]] as const;
         for (const [type, f] of listeners) el.addEventListener(type, f as EventListener);
       },
       create(module, key, beat) {
         const lane = laneOf(module, key);
-        if (!lane) return;
+        if (!lane || latest.current.locked) return;
         // The bar clicked, after any clip before it and up to the next; one bar at most.
         const bar = barAt(latest.current.timeline.meter, beat);
         const before = Math.max(0, ...lane.clips.filter((c) => c.start + c.length <= beat).map((c) => c.start + c.length));
@@ -256,7 +271,7 @@ export default function SongTimeline({
         const id = newClipId(lane.clips.map((c) => c.id));
         const m: Made = { revision: Infinity, clip: { module, lane: key, id } };
         made.current = m;
-        write(module, key, [...lane.clips, { id, start, length, notes: [] }])?.then(
+        write(module, key, [...lane.clips, { id, start, length, notes: [] }], "adding a")?.then(
           (r) => {
             m.revision = r.revision;
             settle();
@@ -264,18 +279,22 @@ export default function SongTimeline({
           () => made.current === m && (made.current = null),
         );
       },
-      unpick: () => setPicked(null),
+      unpick: (module) => useShell.getState().setClip(module, null),
       remove() {
-        const p = latest.current.picked, lane = p && laneOf(p.module, p.lane);
+        const s = useShell.getState();
+        const p = s.selected ? s.clips[s.selected] : undefined;
+        const lane = p && laneOf(p.module, p.lane);
         const i = lane ? clipIndex(lane.clips, p!) : -1;
         if (!p || !lane || i < 0) return;
-        if (write(p.module, p.lane, lane.clips.filter((_, k) => k !== i))) setPicked(null);
+        if (write(p.module, p.lane, lane.clips.filter((_, k) => k !== i), "deleting a")) s.setClip(p.module, null);
       },
     };
     // `latest` carries everything that changes; the edits themselves never do.
   }, []);
 
-  // A lane just made from the canvas (automate): scrolled to and lit once the timeline shows it.
+  // A lane just made from the canvas (automate): its track unfolds, and the lane is scrolled to
+  // and lit once the timeline shows it.
+  const open = useShell((s) => s.open);
   const [lit, setLit] = useState<string | null>(null);
   const wanted = useRef<string | null>(null);
   const reveal = () => {
@@ -283,90 +302,175 @@ export default function SongTimeline({
     const row = id && scroller.current?.querySelector<HTMLElement>(`[data-lane="${CSS.escape(id)}"]`);
     if (!id || !row) return;
     wanted.current = null;
+    // `nearest`, inside the scroll padding the ruler and the Song row take: nothing lands under them (D12).
     row.scrollIntoView({ block: "nearest" });
     setLit(id);
     setTimeout(() => setLit((l) => (l === id ? null : l)), 1800);
   };
-  useEffect(reveal, [timeline]);
+  useEffect(reveal, [timeline, open]);
   useEffect(() => {
     const made = (e: Event) => {
+      const id = (e as CustomEvent<string>).detail;
+      wanted.current = id;
+      useShell.getState().unfold(id.slice(0, id.indexOf(".")));
+      reveal();
+    };
+    // A new track: lit where it is, its automation still folded (taste.md §3.4).
+    const track = (e: Event) => {
       wanted.current = (e as CustomEvent<string>).detail;
       reveal();
     };
     window.addEventListener(LANE_MADE, made);
-    return () => window.removeEventListener(LANE_MADE, made);
+    window.addEventListener(TRACK_MADE, track);
+    return () => {
+      window.removeEventListener(LANE_MADE, made);
+      window.removeEventListener(TRACK_MADE, track);
+    };
   }, []);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    const s = useShell.getState();
+    const picked = s.selected ? s.clips[s.selected] : undefined;
     if (!picked) return;
     if (e.key === "Delete" || e.key === "Backspace") edits.remove();
-    else if (e.key === "Escape") setPicked(null);
+    else if (e.key === "Escape") s.deselect();
     else return;
     e.preventDefault();
     e.stopPropagation();
   };
 
-  // The time signature at the start (an empty list is 4/4).
-  const sig = timeline.meter[0] ?? { beats: 4, unit: 4 };
-  // Polls arrive every 200ms; easing between them keeps the playhead moving smoothly. A jump (a
-  // seek, or a loop going round) moves it at once rather than sliding it back across the song.
-  const last = useRef(beat);
-  const jumped = beat < last.current - 1e-6 || beat > last.current + 4;
-  last.current = beat;
-  const glide = { transform: `translateX(${x}px)`, transitionDuration: jumped ? "0ms" : undefined };
+  const songRows = rowsOf(song);
+  const songH = ROW_H + 1 + songRows.others.length * ROW_H + (open.has(song.module) ? songRows.controls.length * LANE_H : 0);
+  const all = [...rows, song].filter((t) => t.lanes.some((l) => l.kind === "control")).map((t) => t.module);
+  const anyOpen = all.some((m) => open.has(m));
   return (
-    <div ref={scroller} data-testid="timeline" tabIndex={-1} onKeyDown={onKeyDown} className="flex-1 min-h-0 overflow-auto relative bg-ink-950 outline-none">
-      <div className="relative flex flex-col" style={{ width: HEADER_W + width, minHeight: "100%" }}>
+    <div
+      ref={scroller}
+      data-testid="timeline"
+      tabIndex={-1}
+      onKeyDown={onKeyDown}
+      className="flex-1 min-h-0 overflow-auto relative bg-canvas outline-none"
+      // Revealing a row never tucks it under the ruler, the headers or the Song row (TL-16).
+      style={{ scrollPaddingTop: RULER_H, scrollPaddingLeft: headerW, scrollPaddingBottom: songH }}
+    >
+      <div className="relative flex flex-col" style={{ width: headerW + width, minHeight: "100%" }}>
         <div className="sticky top-0 z-30 shrink-0 flex" style={{ height: RULER_H }}>
-          <div
-            className="sticky left-0 z-40 shrink-0 bg-ink-900 border-b border-r border-black/[0.06] flex items-center justify-between px-4 text-[11px] font-semibold tracking-wider text-ink-400"
-            style={{ width: HEADER_W }}
-          >
-            TRACKS
-            <span className="font-mono font-medium tracking-normal tabular-nums">
-              <span title="Time signature">{`${sig.beats}/${sig.unit}`}</span>
-              {" · "}
-              {timeline.tempo[0] && `${beats(timeline.tempo[0].bpm)} BPM`}
-            </span>
+          {/* The corner (taste.md §3.4): + Track (⌘T); on the right, every track's automation (A). */}
+          <div className="sticky left-0 z-40 shrink-0 bg-chrome border-b border-r border-line flex items-center justify-between px-1.5" style={{ width: headerW }}>
+            <Button
+              size="sm"
+              data-testid="add-track"
+              disabled={!!locked}
+              title={locked ? `${locked}.` : `Add a track (${kbd("T")})`}
+              onMouseDown={keepFocus}
+              onClick={(e) => {
+                const s = useShell.getState();
+                openInstruments(e.currentTarget, s.selected && s.selected !== "song" ? s.selected : null);
+              }}
+              className="!px-1.5"
+            >
+              <Plus size={14} />
+              Track
+            </Button>
+            {all.length > 0 && (
+              <button
+                data-testid="fold-all"
+                aria-label={anyOpen ? "Hide all automation" : "Show all automation"}
+                aria-expanded={anyOpen}
+                title={`${anyOpen ? "Hide" : "Show"} every track's automation (A)`}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => useShell.getState().toggleLanes(null, all)}
+                className="size-ctl-xs grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover cursor-pointer transition-colors duration-80 ease-linear"
+              >
+                <ChevronRight size={12} className={clsx("transition-transform duration-140 ease-out", anyOpen && "rotate-90")} />
+              </button>
+            )}
           </div>
           <Ruler timeline={timeline} width={width} loopStart={loopStart} loopEnd={loopEnd} looping={looping} onSeek={onSeek} onLoop={onLoop} />
-          <div className="absolute bottom-0 z-[35] pointer-events-none transition-transform duration-200 ease-linear" style={{ left: HEADER_W, ...glide }}>
-            <div className="w-0 h-0 -translate-x-1/2 border-x-[6px] border-x-transparent border-t-[8px] border-t-sun" />
-          </div>
+          <PlayCap headerW={headerW} />
         </div>
-        <Tracks timeline={timeline} width={width} selected={selected} open={open} picked={picked} moving={moving} lit={lit} issues={issues} edits={edits} onSelect={onSelect} onOpenClip={onOpenClip} />
+        {/* Over the clips, multiplied in: lanes full of clips still show where the loop is (TL-10).
+            Under the headers and the playhead. */}
         {looping && loopStart !== null && loopEnd !== null && (
           <div
             data-testid="loop-shade"
             aria-hidden
-            className="absolute bottom-0 z-[14] pointer-events-none bg-sun/[0.07] border-x border-sun/50"
-            style={{ top: RULER_H, left: HEADER_W + loopStart * PPB, width: (loopEnd - loopStart) * PPB }}
+            className="absolute bottom-0 z-[14] pointer-events-none bg-accent/8 mix-blend-multiply"
+            style={{ top: RULER_H, left: headerW + loopStart * PPB, width: (loopEnd - loopStart) * PPB }}
           />
         )}
-        <div
-          data-testid="playhead"
-          data-beat={beat}
-          className="absolute bottom-0 z-[15] w-px bg-sun shadow-[0_0_8px_rgba(201,165,78,0.35)] pointer-events-none transition-transform duration-200 ease-linear"
-          style={{ top: RULER_H, left: HEADER_W, ...glide }}
+        <Tracks
+          timeline={timeline}
+          rows={rows}
+          width={width}
+          visible={visible}
+          headerW={headerW}
+          moving={moving}
+          lit={lit}
+          issues={issues}
+          edits={edits}
+          locked={locked}
+          waiting={waiting}
+          onOpenClip={onOpenClip}
         />
+        <PlayLine
+          testid="playhead"
+          className="absolute bottom-0 z-[15] w-px bg-fg-strong pointer-events-none"
+          style={{ top: RULER_H, left: headerW }}
+        />
+        {/* The Song's row, Live's Main track: pinned at the foot of the track list, with its own playhead and loop wash. */}
+        <div className="sticky bottom-0 z-[26] shrink-0 border-t border-line bg-canvas" data-song-row>
+          {looping && loopStart !== null && loopEnd !== null && (
+            <div aria-hidden className="absolute inset-y-0 z-[14] pointer-events-none bg-accent/8 mix-blend-multiply" style={{ left: headerW + loopStart * PPB, width: (loopEnd - loopStart) * PPB }} />
+          )}
+          <TrackRows
+            track={song}
+            color={GRAPHITE}
+            width={width}
+            headerW={headerW}
+            grid={<Grid meter={timeline.meter} width={width} />}
+            moving={null}
+            lit={lit?.startsWith(`${song.module}.`) ? lit.slice(song.module.length + 1) : null}
+            issues={issues.get(song.module)}
+            edits={edits}
+            locked={locked}
+            waiting={waiting}
+            last
+            onOpenClip={onOpenClip}
+          />
+          <PlayLine className="absolute top-0 bottom-0 z-[15] w-px bg-fg-strong pointer-events-none" style={{ left: headerW }} />
+        </div>
       </div>
     </div>
   );
 }
 
-/** Bar and beat lines from beat 0 to `width`: one stretch per time signature, each with its own bar length. */
-const Grid = memo(function Grid({ meter, width, bar, beat }: { meter: Meter[]; width: number; bar: string; beat: string }) {
+/** The playhead's mark in the ruler: an 8×6 triangle (taste.md §2.8). */
+function PlayCap({ headerW }: { headerW: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  usePlayhead(ref);
+  return (
+    <div ref={ref} className="absolute bottom-0 z-[35] pointer-events-none" style={{ left: headerW }}>
+      <div className="w-0 h-0 -translate-x-1/2 border-x-[4px] border-x-transparent border-t-[6px] border-t-fg-strong" />
+    </div>
+  );
+}
+
+/**
+ * Bar and beat lines from beat 0 to `width`: one stretch per time signature, each with its own bar
+ * length. Sixteenths only when they are at least 12px apart.
+ */
+const Grid = memo(function Grid({ meter, width }: { meter: Meter[]; width: number }) {
   return meterSpans(meter, 0, width / PPB).map((s) => (
-    <div
+    <VLines
       key={s.start}
-      aria-hidden
-      className="absolute inset-y-0 pointer-events-none"
-      style={{
-        left: s.start * PPB,
-        width: (s.end - s.start) * PPB,
-        backgroundImage: `linear-gradient(to right, ${bar} 1px, transparent 1px), linear-gradient(to right, ${beat} 1px, transparent 1px)`,
-        backgroundSize: `${s.bar * PPB}px 100%, ${PPB}px 100%`,
-      }}
+      className="inset-y-0"
+      style={{ left: s.start * PPB, width: (s.end - s.start) * PPB }}
+      layers={[
+        ...(PPB / 4 >= 12 ? [{ every: PPB / 4, color: "var(--color-hover)" }] : []),
+        { every: PPB, color: "var(--color-line)" },
+        { every: s.bar * PPB, color: "var(--color-line-strong)" },
+      ]}
     />
   ));
 });
@@ -399,7 +503,7 @@ const Ruler = memo(function Ruler({
   return (
     <div
       data-testid="ruler"
-      className="relative overflow-hidden bg-ink-900/95 backdrop-blur border-b border-black/[0.06] cursor-pointer touch-none"
+      className="relative overflow-hidden bg-chrome border-b border-line cursor-pointer touch-none"
       style={{ width }}
       title="Click to move the playhead · drag across to loop"
       onPointerDown={(e) => {
@@ -434,34 +538,23 @@ const Ruler = memo(function Ruler({
           data-end={shown.end}
           data-on={on}
           aria-hidden
-          className={clsx(
-            "absolute inset-y-0 pointer-events-none",
-            on ? "bg-sun/25 border-x-2 border-sun" : "bg-black/[0.05] border-x border-dashed border-ink-500/50",
-          )}
+          // A brace along the ruler's foot: lit while it loops, a grey bar while it is only set.
+          className={clsx("absolute bottom-0 h-1.5 z-[1] pointer-events-none", on ? "bg-accent-range border-x border-accent" : "bg-line-strong")}
           style={{ left: shown.start * PPB, width: (shown.end - shown.start) * PPB }}
         />
       )}
       {/* Bar lines down the ruler, and a tick at each beat along its foot. */}
       {meterSpans(timeline.meter, 0, width / PPB).map((s) => (
-        <div
-          key={s.start}
-          aria-hidden
-          className="absolute inset-y-0 pointer-events-none"
-          style={{
-            left: s.start * PPB,
-            width: (s.end - s.start) * PPB,
-            backgroundImage: "linear-gradient(to right, rgba(0,0,0,0.1) 1px, transparent 1px), linear-gradient(to right, rgba(0,0,0,0.12) 1px, transparent 1px)",
-            backgroundSize: `${s.bar * PPB}px 100%, ${PPB}px 5px`,
-            backgroundPosition: "0 0, 0 100%",
-            backgroundRepeat: "repeat-x",
-          }}
-        />
+        <div key={s.start} aria-hidden className="absolute inset-y-0 pointer-events-none" style={{ left: s.start * PPB, width: (s.end - s.start) * PPB }}>
+          <VLines layers={[{ every: s.bar * PPB, color: "var(--color-line-strong)" }]} />
+          <VLines className="inset-x-0 bottom-0 h-[5px]" layers={[{ every: PPB, color: "var(--color-line-strong)" }]} />
+        </div>
       ))}
       {bars(timeline.meter, width / PPB).map((b) => {
         // Narrow bars are numbered every second or fourth.
         const w = b.length * PPB;
         return w > 36 || b.bar % (w > 18 ? 2 : 4) === 0 ? (
-          <span key={b.bar} className="absolute top-2 text-[11px] font-medium text-ink-400 tabular-nums pointer-events-none" style={{ left: b.start * PPB + 6 }}>
+          <span key={b.bar} className="absolute top-1 text-xs font-medium text-fg-faint pointer-events-none" style={{ left: b.start * PPB + 6 }}>
             {b.bar + 1}
           </span>
         ) : null;
@@ -470,7 +563,7 @@ const Ruler = memo(function Ruler({
       {changes(timeline).map((c) => (
         <span
           key={c.beat}
-          className="absolute bottom-1 text-[9px] font-mono text-ink-500 pointer-events-none whitespace-nowrap"
+          className="absolute bottom-2 text-xs leading-none text-fg-faint pointer-events-none whitespace-nowrap"
           style={{ left: c.beat * PPB + 3 }}
           title={[c.meter && `${c.meter} from bar ${barAt(timeline.meter, c.beat).bar + 1}`, c.bpm && `${c.bpm} BPM from beat ${beats(c.beat)}`].filter(Boolean).join("\n")}
         >
@@ -481,172 +574,294 @@ const Ruler = memo(function Ruler({
   );
 });
 
-/** Every track's rows, then empty grid to the bottom. Memoized: the playhead moves without redrawing clips. */
+/** Every track's rows, then empty grid to the foot. Memoized: the playhead moves without redrawing clips. */
 const Tracks = memo(function Tracks({
   timeline,
+  rows,
   width,
-  selected,
-  open,
-  picked,
+  visible,
+  headerW,
   moving,
   lit,
   issues,
   edits,
-  onSelect,
+  locked,
+  waiting,
   onOpenClip,
 }: {
   timeline: TimelineView;
+  rows: TimelineTrack[];
   width: number;
-  selected: string | undefined;
-  open: ClipRef | null;
-  picked: ClipRef | null;
+  /** The lanes' width on screen, to centre a line in. */
+  visible: number;
+  headerW: number;
   moving: { clip: ClipRef; start: number } | null;
   /** A lane just made, lit for a moment: `module.lane`. */
   lit: string | null;
   issues: ReadonlyMap<string, Diagnostic[]>;
   edits: ClipEdits;
-  onSelect: (module: string) => void;
+  locked: string | null;
+  waiting: boolean;
   onOpenClip: (clip: ClipRef) => void;
 }) {
-  const grid = <Grid meter={timeline.meter} width={width} bar="rgba(0,0,0,0.056)" beat="rgba(0,0,0,0.025)" />;
+  const grid = <Grid meter={timeline.meter} width={width} />;
+  const said = waiting || rows.length === 0;
   return (
-    <>
-      {timeline.tracks.map((t, i) => (
+    <div role="tablist" aria-label="Tracks" aria-orientation="vertical" className="contents">
+      {rows.map((t) => (
         <TrackRows
           key={t.module}
           track={t}
-          index={i}
-          color={colorOf(timeline, t.module)!}
-          selected={t.module === selected}
-          open={open?.module === t.module ? open : null}
-          picked={picked?.module === t.module ? picked : null}
+          color={trackColors(timeline, t.module) ?? GRAPHITE}
+          width={width}
+          headerW={headerW}
+          grid={grid}
           moving={moving?.clip.module === t.module ? moving : null}
           lit={lit?.startsWith(`${t.module}.`) ? lit.slice(t.module.length + 1) : null}
           issues={issues.get(t.module)}
           edits={edits}
-          width={width}
-          grid={grid}
-          onSelect={onSelect}
+          locked={locked}
+          waiting={waiting}
           onOpenClip={onOpenClip}
         />
       ))}
-      <div className="flex-1 flex min-h-6">
-        <div className="sticky left-0 z-20 shrink-0 bg-ink-900 border-r border-black/[0.06]" style={{ width: HEADER_W }} />
+      <div
+        className={clsx("relative flex-1 flex", said ? "min-h-24" : "min-h-6")}
+        // An instrument dragged from the browser onto the space below the tracks adds a track there (BR-1).
+        onDragOver={(e) => {
+          if (!e.dataTransfer.types.includes(INSTRUMENT_DRAG) || locked) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+        }}
+        onDrop={(e) => {
+          const component = e.dataTransfer.getData(INSTRUMENT_DRAG);
+          const instrument = useStore.getState().graph?.instruments?.find((i) => i.component === component);
+          if (!instrument) return;
+          e.preventDefault();
+          void addTrack(instrument, rows.filter((r) => r.track).at(-1)?.module ?? null);
+        }}
+      >
+        <DropLine before={END} />
+        <div className="sticky left-0 z-20 shrink-0 bg-chrome border-r border-line" style={{ width: headerW }} />
         <div className="relative" style={{ width }}>
           {grid}
-          {timeline.tracks.length === 0 && (
-            <div className="absolute left-12 top-8 max-w-md space-y-1 text-ink-400">
-              <div className="text-base font-semibold text-ink-200">No tracks yet</div>
-              <div className="text-sm">Tracks, and the lanes the code declares, show up here.</div>
+          {/* Under the last track, in the lanes' visible middle: a line here never pushes a row down (principle 8). */}
+          {said && (
+            <div className="sticky h-full grid place-items-center pointer-events-none" style={{ left: headerW, width: visible }}>
+              {waiting ? (
+                <EmptyState data-testid="waiting">Waiting for the code to compile.</EmptyState>
+              ) : (
+                <EmptyState className="pointer-events-auto" data-testid="no-tracks">
+                  <Button
+                    variant="primary"
+                    data-testid="add-first-track"
+                    disabled={!!locked}
+                    title={locked ? `${locked}.` : `Add a track (${kbd("T")})`}
+                    onMouseDown={keepFocus}
+                    onClick={(e) => openInstruments(e.currentTarget, null)}
+                  >
+                    <Plus size={14} />
+                    Add a track
+                  </Button>
+                  <button
+                    className="block mx-auto text-sm text-fg-muted hover:text-fg cursor-pointer"
+                    onMouseDown={keepFocus}
+                    onClick={() => useShell.getState().setView("code")}
+                  >
+                    or write one in code <span className="text-fg-faint">⌥4</span>
+                  </button>
+                </EmptyState>
+              )}
             </div>
           )}
         </div>
       </div>
-    </>
+    </div>
   );
 });
 
 const TrackRows = memo(function TrackRows({
   track,
-  index,
   color,
-  selected,
-  open,
-  picked,
+  width,
+  headerW,
+  grid,
   moving,
   lit,
   issues,
   edits,
-  width,
-  grid,
-  onSelect,
+  locked,
+  waiting,
+  last,
   onOpenClip,
 }: {
   track: TimelineTrack;
-  index: number;
-  color: Rgb;
-  selected: boolean;
-  /** The clip open for editing, if it is one of this track's; likewise the picked one and one being moved. */
-  open: ClipRef | null;
-  picked: ClipRef | null;
+  color: TrackColor;
+  width: number;
+  headerW: number;
+  grid: ReactNode;
+  /** A clip of this track's being moved. */
   moving: { clip: ClipRef; start: number } | null;
   /** The key of a lane of this track just made, lit for a moment. */
   lit: string | null;
   /** What needs attention in this track. */
   issues: Diagnostic[] | undefined;
   edits: ClipEdits;
-  width: number;
-  grid: ReactNode;
-  onSelect: (module: string) => void;
+  locked: string | null;
+  waiting: boolean;
+  /** The Song's row: no border under it, it sits at the foot. */
+  last?: boolean;
   onOpenClip: (clip: ClipRef) => void;
 }) {
-  const name = moduleName({ key: track.module, label: track.label });
-  // A track without lanes still gets a row, for its name.
-  const rows = track.lanes.length ? track.lanes : [null];
+  const module = track.module;
+  const selected = useShell((s) => s.selected === module);
+  // The selected clip is the selected track's; Notes outlines the one it shows.
+  const picked = useShell((s) => (s.selected === module ? (s.clips[module] ?? null) : null));
+  const shown = useShell((s) => (s.view === "notes" && s.module === module ? (s.clips[module] ?? null) : null));
+  const open = useShell((s) => s.open.has(module));
+  const { primary, others, controls } = rowsOf(track);
   /** Where a reference's clip is in `lane`, if it is one of its clips. */
   const at = (ref: ClipRef | null, lane: TimelineLane) => (ref?.lane === lane.key ? clipIndex(lane.clips, ref) : -1);
+  const select = () => useShell.getState().select(module);
+
+  /** A row: its header (sticky at the left) and its lane. */
+  const row = (lane: TimelineLane | null, header: ReactNode, opts: { first?: boolean; height: number; movable?: boolean }) => (
+    <div
+      key={lane?.key ?? ""}
+      data-lane={lane ? `${module}.${lane.key}` : undefined}
+      className={clsx("flex", lane && lane.key === lit && "lit")}
+      style={{ height: opts.height }}
+    >
+      <div
+        {...(opts.first
+          ? // The track's header selects it, as the module tabs did: what the dock shows follows it (§3.7).
+            { "data-module-tab": module, role: "tab", "aria-selected": selected, "aria-controls": "dock" }
+          : {})}
+        className={clsx(
+          "group/head sticky left-0 z-20 shrink-0 flex items-center border-r border-line transition-colors duration-80 ease-linear",
+          selected ? "bg-accent-soft" : clsx("bg-chrome", !locked && "group-hover:bg-hover"),
+        )}
+        style={{ width: headerW }}
+        // A track's own header: drag it to move the track, right-click it for its menu.
+        onPointerDown={opts.movable ? (e) => startReorder(e, module) : undefined}
+        onContextMenu={
+          opts.movable
+            ? (e) => {
+                e.preventDefault();
+                const dots = e.currentTarget.querySelector<HTMLElement>("[data-track-menu]");
+                if (dots) openTrackMenu(module, dots);
+              }
+            : undefined
+        }
+      >
+        {/* The colour bar runs down every row of the track, at 40% beside its lanes. */}
+        <div className="absolute left-0 inset-y-0 w-1" style={{ background: color.bar, opacity: opts.first ? 1 : 0.4 }} />
+        {/* The selected track's edge where it meets its lanes. */}
+        {selected && <div className="absolute -right-px inset-y-0 w-0.5 bg-accent" />}
+        {header}
+      </div>
+      <div
+        className={clsx("relative overflow-hidden", !opts.first && "border-t border-hover", selected && "bg-accent-wash")}
+        style={{ width }}
+        title={lane?.kind === "notes" && !locked ? "Double-click to add a one-bar clip" : undefined}
+        onPointerDown={(e) => !(e.target as HTMLElement).closest("[data-clip]") && edits.unpick(module)}
+        onDoubleClick={(e) => {
+          if (lane?.kind !== "notes" || (e.target as HTMLElement).closest("[data-clip]")) return;
+          edits.create(module, lane.key, (e.clientX - e.currentTarget.getBoundingClientRect().left) / PPB);
+        }}
+      >
+        {grid}
+        {lane && (
+          <div className={clsx("absolute inset-0", waiting && "opacity-50 grayscale")}>
+            <LaneClips
+              lane={lane}
+              color={color}
+              shown={at(shown, lane)}
+              picked={at(picked, lane)}
+              moving={moving && at(moving.clip, lane) >= 0 ? { index: at(moving.clip, lane), start: moving.start } : null}
+              editable={!locked}
+              onOpen={(k) => onOpenClip(clipRef(module, lane.key, lane.clips, k))}
+              onDown={(k, e) => edits.down(clipRef(module, lane.key, lane.clips, k), e)}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  // Dragged to a new place: it follows the pointer, lifted (taste.md §3.4).
+  const dy = useReorder((s) => (s.module === module ? s.dy : null));
+  const movable = track.track && !last;
   return (
-    <div data-track={track.module} data-selected={selected || undefined} className="group border-b border-black/[0.07]" onPointerDown={() => onSelect(track.module)}>
-      {rows.map((lane, i) => (
-        <div
-          key={lane?.key ?? ""}
-          data-lane={lane ? `${track.module}.${lane.key}` : undefined}
-          className={clsx("flex", lane && lane.key === lit && "lit")}
-          style={{ height: lane ? LANE_H[lane.kind] : 44 }}
-        >
-          <div
-            className={clsx(
-              "sticky left-0 z-20 shrink-0 flex items-center gap-2 pl-4 pr-3 border-r border-black/[0.06] transition-colors",
-              selected ? "bg-ink-800" : "bg-ink-900 group-hover:bg-ink-850",
-            )}
-            style={{ width: HEADER_W }}
-          >
-            <div className="absolute left-0 inset-y-0 w-1" style={{ background: rgb(color, selected ? 1 : 0.6) }} />
-            <div className="flex-1 min-w-0">
-              {i === 0 && (
-                <>
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <TrackName module={track.module} label={track.label} track={track.track} testid="track-label" className="text-sm font-semibold text-ink-100" />
-                    {issues && <Issues issues={issues} />}
-                  </div>
-                  <div className="text-xs text-ink-400 truncate">
-                    {track.track ? "track" : "mix"}
-                    {/* The key the code and the data files use, when the label doesn't say it. */}
-                    {keyNote(name, track.module) && <span className="font-mono text-[11px] text-ink-500"> · {track.module}</span>}
-                  </div>
-                </>
-              )}
+    <div
+      data-track={module}
+      data-selected={selected || undefined}
+      className={clsx("group relative", !last && "border-b border-line", dy !== null && "z-30 shadow-lift")}
+      style={dy !== null ? { transform: `translateY(${dy}px)` } : undefined}
+      onPointerDown={select}
+      // An effect dragged from the browser goes at the end of this track's sound.
+      onDragOver={(e) => {
+        if (!dragsEffect(e) || locked) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      }}
+      onDrop={(e) => {
+        const component = e.dataTransfer.getData(EFFECT_DRAG);
+        if (!component) return;
+        e.preventDefault();
+        select();
+        addEffectTo(module, component);
+      }}
+    >
+      {movable && <DropLine before={module} />}
+      {row(
+        primary,
+        <>
+          {controls.length > 0 && (
+            <button
+              data-fold={module}
+              aria-label={open ? `Hide ${track.label || module}'s automation` : `Show ${track.label || module}'s automation`}
+              aria-expanded={open}
+              title={`${open ? "Hide" : "Show"} automation (A)`}
+              onMouseDown={(e) => e.preventDefault()}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => useShell.getState().toggleLanes(module, [])}
+              className="absolute left-2 size-ctl-xs grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover cursor-pointer transition-colors duration-80 ease-linear"
+            >
+              <ChevronRight size={12} className={clsx("transition-transform duration-140 ease-out", open && "rotate-90")} />
+            </button>
+          )}
+          {/* From x = 28 to the header's padding: M, S and the meter take 60px of it with the mixer (8b), the name 140. */}
+          <div className={clsx("absolute left-7 flex items-center gap-1.5 min-w-0", movable ? "right-9" : "right-3")}>
+            <TrackName
+              module={module}
+              label={track.label}
+              track={track.track}
+              testid="track-label"
+              listen
+              className={clsx("text-base", selected ? "font-semibold text-fg-strong" : "font-medium text-fg")}
+            />
+            {issues && <Issues issues={issues} />}
+          </div>
+          {movable && (
+            <div className="absolute right-2">
+              <TrackMenuButton module={module} name={track.label || module} />
             </div>
-            {lane && <LaneLabel lane={lane} />}
-          </div>
-          <div
-            className={clsx("relative overflow-hidden", i > 0 && "border-t border-black/[0.04]", selected ? "bg-ink-800/80" : index % 2 ? "bg-ink-900/40" : "bg-ink-900/70")}
-            style={{ width }}
-            title={lane?.kind === "notes" ? "Double-click to add a one-bar clip" : undefined}
-            onPointerDown={(e) => !(e.target as HTMLElement).closest("[data-clip]") && edits.unpick()}
-            onDoubleClick={(e) => {
-              if (lane?.kind !== "notes" || (e.target as HTMLElement).closest("[data-clip]")) return;
-              edits.create(track.module, lane.key, (e.clientX - e.currentTarget.getBoundingClientRect().left) / PPB);
-            }}
-          >
-            {grid}
-            {lane && (
-              <LaneClips
-                lane={lane}
-                color={color}
-                open={at(open, lane)}
-                picked={at(picked, lane)}
-                moving={moving && at(moving.clip, lane) >= 0 ? { index: at(moving.clip, lane), start: moving.start } : null}
-                onOpen={(k) => onOpenClip(clipRef(track.module, lane.key, lane.clips, k))}
-                onDown={(k, e) => edits.down(clipRef(track.module, lane.key, lane.clips, k), e)}
-              />
-            )}
-          </div>
-        </div>
-      ))}
+          )}
+        </>,
+        { first: true, height: ROW_H, movable },
+      )}
+      {others.map((l) => row(l, <LaneLabel lane={l} />, { height: rowHeight(l) }))}
+      {open && controls.map((l) => row(l, <LaneLabel lane={l} />, { height: LANE_H }))}
     </div>
   );
 });
+
+/** Where a dragged header would land: a 2px accent line on the top edge of the track it goes before. */
+function DropLine({ before }: { before: string }) {
+  const here = useReorder((s) => s.module !== null && s.before === before);
+  return here ? <div aria-hidden data-testid="drop-line" className="absolute -top-px inset-x-0 h-0.5 z-40 bg-accent pointer-events-none" /> : null;
+}
 
 /** A mark on a track that something in it needs attention: the worst of it, and every message on hover. */
 function Issues({ issues }: { issues: Diagnostic[] }) {
@@ -657,55 +872,80 @@ function Issues({ issues }: { issues: Diagnostic[] }) {
     <span
       data-testid="track-issues"
       data-severity={error ? "error" : warning ? "warning" : "notice"}
-      className={clsx("shrink-0 inline-flex", error ? "text-red-600" : warning ? "text-amber-600" : "text-ink-400")}
+      className={clsx("shrink-0 inline-flex", error ? "text-danger" : warning ? "text-warn" : "text-fg-faint")}
       title={issues.map((d) => d.message).join("\n\n")}
     >
-      <Icon className="size-3.5" />
+      <Icon size={14} />
     </span>
   );
 }
 
+/**
+ * A lane's header (taste.md §3.4): its control's label at x = 28; for automation, the value at the
+ * playhead on the right in `fg-faint`, with the lane's marker while a clip is what sets it.
+ */
 function LaneLabel({ lane }: { lane: TimelineLane }) {
-  const detail =
-    lane.kind === "notes"
-      ? `${lane.clips.reduce((n, c) => n + audible(c).length, 0)} notes`
-      : lane.kind === "control"
-        ? lane.unit ? UNITS[lane.unit] ?? lane.unit : "control"
-        : lane.channels === 1 ? "mono audio" : "stereo audio";
-  const name = labelOf(lane);
-  const named = name === lane.key ? lane.key : `${name} (${lane.key})`;
-  const title = lane.kind === "control" && lane.default != null ? `${named}: ${beats(lane.default)} outside clips` : named;
+  const name = laneTitle(lane);
   return (
-    <div className="shrink-0 max-w-[104px] text-right leading-tight" title={title}>
-      {/* A key reads as code; a label the code gave reads as a name. */}
-      <div className={clsx("text-ink-200 truncate", name === lane.key ? "font-mono text-[11px]" : "text-[12px] font-medium")}>{name}</div>
-      <div className="text-[10px] text-ink-400 truncate">{detail}</div>
-    </div>
+    <>
+      <span className="absolute left-7 right-[64px] text-sm text-fg-muted truncate" title={name === lane.key ? lane.key : `${name} (${lane.key})`}>
+        {name}
+      </span>
+      {lane.kind === "control" && <LaneValue lane={lane} name={name} />}
+    </>
+  );
+}
+
+/** The value a control lane plays at the playhead, redrawn each frame it changes. */
+function LaneValue({ lane, name }: { lane: Extract<TimelineLane, { kind: "control" }>; name: string }) {
+  const text = useRef<HTMLSpanElement>(null);
+  const dot = useRef<HTMLSpanElement>(null);
+  useEffect(
+    () =>
+      onFrame((beat) => {
+        const { value, follows } = laneValue(lane, beat);
+        const t = text.current, d = dot.current;
+        if (!t || !d) return;
+        const shown = value === null ? "" : formatValue(lane.unit, value, lane.key);
+        if (t.textContent !== shown) t.textContent = shown;
+        d.style.visibility = follows ? "visible" : "hidden";
+      }),
+    [lane],
+  );
+  return (
+    <>
+      <span ref={text} className="absolute right-[18px] text-xs text-fg-faint" title={`${name} at the playhead`} />
+      {/* Its home is the lane while a clip sets it (HOME-1); between clips it plays the fallback. */}
+      <span ref={dot} className="absolute right-2 size-[5px] rounded-full bg-accent" title={`Follows the ${name} lane.`} />
+    </>
   );
 }
 
 function LaneClips({
   lane,
   color,
-  open,
+  shown,
   picked,
   moving,
+  editable,
   onOpen,
   onDown,
 }: {
   lane: TimelineLane;
-  color: Rgb;
-  /** Where the open clip is in the lane's clips, or -1; likewise the picked one (notes clips only). */
-  open: number;
+  color: TrackColor;
+  /** Where the clip Notes shows is in the lane's clips, or -1; likewise the selected one (notes clips only). */
+  shown: number;
   picked: number;
   /** A notes clip being dragged to a new start. */
   moving: { index: number; start: number } | null;
+  editable: boolean;
   onOpen: (index: number) => void;
   onDown: (index: number, e: React.PointerEvent<HTMLElement>) => void;
 }) {
   // A clip is named by its id; one without its own (FMT-12) only by where it is.
   const id = (i: number) => (hasOwnId(lane.clips, i) ? lane.clips[i].id! : "");
   const key = (i: number) => id(i) || `#${i}`;
+  const height = rowHeight(lane);
   switch (lane.kind) {
     case "notes":
       return lane.clips.map((c, i) => {
@@ -717,10 +957,11 @@ function LaneClips({
             id={id(i)}
             clip={dragged ? { start: moving.start, length: c.length } : c}
             color={color}
-            title={`${notes.length} notes, ${span(c)}\nDouble-click to edit the notes · drag to move · Delete removes`}
-            open={i === open}
+            title={`${notes.length} notes, ${span(c)}\nDouble-click to edit the notes${editable ? " · drag to move · Delete removes" : ""}`}
+            open={i === shown}
             picked={i === picked}
             dragged={dragged}
+            editable={editable}
             onDoubleClick={() => onOpen(i)}
             onPointerDown={(e) => onDown(i, e)}
           >
@@ -732,16 +973,10 @@ function LaneClips({
       const range = lane.max - lane.min || 1;
       // 0 at the bottom of a clip's drawing, 1 at its top.
       const level = (v: number) => (v - lane.min) / range;
-      const body = LANE_H.control - 2 * CLIP_INSET - BODY_TOP - BODY_BOTTOM;
+      const body = height - 2 * (CLIP_INSET + BORDER) - BODY_TOP - BODY_BOTTOM;
       return (
         <>
-          {lane.default != null && (
-            <div
-              className="absolute inset-x-0 border-t border-dashed pointer-events-none"
-              style={{ top: CLIP_INSET + BODY_TOP + (1 - level(lane.default)) * body, borderColor: rgb(color, 0.7) }}
-              title={`${beats(lane.default)} outside clips`}
-            />
-          )}
+          {lane.default != null && <Fallback clips={lane.clips} y={CLIP_INSET + BORDER + BODY_TOP + (1 - level(lane.default)) * body} />}
           {lane.clips.map((c, i) => (
             <Clip key={key(i)} id={id(i)} clip={c} color={color} title={span(c)}>
               <Curve clip={c} level={level} color={color} />
@@ -753,8 +988,8 @@ function LaneClips({
     case "audio":
       return lane.clips.map((c, i) => (
         <Clip key={key(i)} id={id(i)} clip={c} color={color} title={`${c.asset}, ${span(c)}`}>
-          <div className="absolute inset-x-0 bottom-0 flex items-center gap-1.5 px-2 text-[11px] font-medium text-black/70" style={{ top: BODY_TOP }}>
-            <AudioWaveform className="size-3.5 shrink-0" style={{ color: dark(color) }} />
+          <div className="absolute inset-x-0 bottom-0 flex items-center gap-1.5 px-2 text-xs font-medium" style={{ top: BODY_TOP, color: color.ink }}>
+            <AudioWaveform size={14} className="shrink-0" />
             <span className="truncate">{c.asset}</span>
           </div>
         </Clip>
@@ -770,6 +1005,7 @@ function Clip({
   open,
   picked,
   dragged,
+  editable,
   onDoubleClick,
   onPointerDown,
   children,
@@ -777,14 +1013,16 @@ function Clip({
   /** Its id, or "" for a clip without one of its own. */
   id: string;
   clip: { start: number; length: number };
-  color: Rgb;
+  color: TrackColor;
   title: string;
+  /** The clip Notes shows. */
   open?: boolean;
-  /** Picked by a click: Delete removes it. */
+  /** Selected by a click: Delete removes it. */
   picked?: boolean;
   dragged?: boolean;
+  editable?: boolean;
   onDoubleClick?: () => void;
-  /** Given, the clip can be picked and dragged. */
+  /** Given, the clip can be selected (and, editable, dragged). */
   onPointerDown?: (e: React.PointerEvent<HTMLElement>) => void;
   children: ReactNode;
 }) {
@@ -795,22 +1033,26 @@ function Clip({
       data-open={open || undefined}
       data-picked={picked || undefined}
       title={title}
+      // Its body is the tint, its border the bar; the selected clip is the strongest outline on screen.
       className={clsx(
-        "absolute rounded-lg overflow-hidden touch-none",
-        picked ? "ring-2 ring-pop-500 shadow-md" : open ? "ring-2 ring-ink-100/70 shadow-md" : "ring-1 ring-black/15",
-        onPointerDown && (dragged ? "cursor-grabbing z-10 shadow-lg opacity-90" : "cursor-grab"),
+        "absolute rounded-sm overflow-hidden touch-none border border-(--clip-bar)",
+        picked && "outline-2 outline-fg-strong",
+        onPointerDown && editable && (dragged ? "cursor-grabbing z-10 shadow-lift opacity-90" : "cursor-grab hover:border-(--clip-ink)"),
       )}
       onDoubleClick={onDoubleClick}
       onPointerDown={onPointerDown}
-      style={{
-        top: CLIP_INSET,
-        bottom: CLIP_INSET,
-        left: clip.start * PPB + 1,
-        width: Math.max(clip.length * PPB - 2, 4),
-        background: `linear-gradient(180deg, ${rgb(color, 0.42)}, ${rgb(color, 0.22)})`,
-      }}
+      style={
+        {
+          top: CLIP_INSET,
+          bottom: CLIP_INSET,
+          left: clip.start * PPB + 1,
+          width: Math.max(clip.length * PPB - 2, 4),
+          background: picked ? `color-mix(in oklab, ${color.bar} 35%, ${color.tint})` : color.tint,
+          "--clip-bar": color.bar,
+          "--clip-ink": color.ink,
+        } as React.CSSProperties
+      }
     >
-      <div className="h-[3px]" style={{ background: rgb(color) }} />
       {children}
     </div>
   );
@@ -831,7 +1073,7 @@ function Body({ length, children }: { length: number; children: ReactNode }) {
 }
 
 /** A mini piano roll of a clip's audible notes, over their own pitch range. */
-function Notes({ notes, length, color }: { notes: NoteClip["notes"]; length: number; color: Rgb }) {
+function Notes({ notes, length, color }: { notes: NoteClip["notes"]; length: number; color: TrackColor }) {
   if (notes.length === 0) return null;
   const lo = Math.min(...notes.map((n) => n.pitch));
   const hi = Math.max(...notes.map((n) => n.pitch));
@@ -848,7 +1090,7 @@ function Notes({ notes, length, color }: { notes: NoteClip["notes"]; length: num
           width={Math.max(n.length, 2 / PPB)}
           y={top + (hi - n.pitch) * h + h * 0.1}
           height={h * 0.8}
-          fill={dark(color)}
+          fill={color.ink}
           fillOpacity={0.35 + 0.65 * n.velocity}
         />
       ))}
@@ -856,17 +1098,44 @@ function Notes({ notes, length, color }: { notes: NoteClip["notes"]; length: num
   );
 }
 
-/** The automation curve; values hold before the first point and after the last. */
-function Curve({ clip, level, color }: { clip: ControlClip; level: (v: number) => number; color: Rgb }) {
+/** The automation curve, its points marked; values hold before the first point and after the last. */
+function Curve({ clip, level, color }: { clip: ControlClip; level: (v: number) => number; color: TrackColor }) {
   const { points } = clip;
   if (points.length === 0) return null;
   const first = points[0], last = points[points.length - 1];
   const line = [...(first[0] > 0 ? [[0, first[1]]] : []), ...points, ...(last[0] < clip.length ? [[clip.length, last[1]]] : [])];
   const xy = line.map(([b, v]) => `${b},${(1 - level(v)) * 100}`).join(" ");
   return (
-    <Body length={clip.length}>
-      <polygon points={`${xy} ${line[line.length - 1][0]},100 ${line[0][0]},100`} fill={rgb(color, 0.35)} />
-      <polyline points={xy} fill="none" stroke={dark(color)} strokeWidth={1.5} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-    </Body>
+    <>
+      <Body length={clip.length}>
+        <polygon points={`${xy} ${line[line.length - 1][0]},100 ${line[0][0]},100`} fill={color.ink} fillOpacity={0.1} />
+        <polyline points={xy} fill="none" stroke={color.ink} strokeWidth={1.5} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+      </Body>
+      {/* Circles stay round: drawn over the stretched drawing, not in it. */}
+      <div aria-hidden className="absolute left-0 w-full pointer-events-none" style={{ top: BODY_TOP, height: `calc(100% - ${BODY_TOP + BODY_BOTTOM}px)` }}>
+        {points.map(([b, v], i) => (
+          <span key={i} className="absolute size-1.5 -ml-[3px] -mt-[3px] rounded-full" style={{ left: `${(b / clip.length) * 100}%`, top: `${(1 - level(v)) * 100}%`, background: color.ink }} />
+        ))}
+      </div>
+    </>
+  );
+}
+
+/** A control lane's value outside its clips: a dashed line where no clip is, at `y` in the lane. */
+function Fallback({ clips, y }: { clips: ControlClip[]; y: number }) {
+  const gaps: [number, number][] = [];
+  let at = 0;
+  for (const c of [...clips].sort((a, b) => a.start - b.start)) {
+    if (c.start > at) gaps.push([at, c.start]);
+    at = Math.max(at, c.start + c.length);
+  }
+  gaps.push([at, Infinity]);
+  const top = Math.round(y) + 0.5;
+  return (
+    <svg aria-hidden className="absolute inset-0 pointer-events-none" width="100%" height="100%">
+      {gaps.map(([a, b]) => (
+        <line key={a} x1={a * PPB} x2={b === Infinity ? "100%" : b * PPB} y1={top} y2={top} stroke="var(--color-line-strong)" strokeDasharray="4 4" />
+      ))}
+    </svg>
   );
 }

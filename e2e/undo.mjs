@@ -30,10 +30,12 @@ await sleep(1200);
 ok(fs.readFileSync(song, "utf8") === wired, "connected");
 ok(!(await disabled("Undo")), "undo is available");
 
+const named = await page.$eval('button[aria-label="Undo"]', (b) => b.title);
 await page.click('button[aria-label="Undo"]');
 await sleep(1200);
 ok(fs.readFileSync(song, "utf8") === original, "the Undo button put the value back");
-ok((await page.content()).includes("Undid: song.ts wobble → hz(1000)"), "toast says what was undone");
+// In words, in Undo's tooltip; the cable's undo shows on the canvas, so no toast, and never a file or a diff (taste.md ST-5, ST-6).
+ok(named === "Undo connecting wobble (⌘Z)" && !(await page.$$eval("[data-testid=toast]", (els) => els.map((e) => e.textContent))).some((t) => t.includes(".ts")), `Undo's tooltip said what it would undo (${named}), and no toast names a file`);
 ok(!!(await page.$('[data-knob="cutoff"]')) && await disabled("Undo") && !(await disabled("Redo")), "the knob is back; only redo is available");
 
 await page.keyboard.down("Meta"); await page.keyboard.down("Shift"); await page.keyboard.press("z");
