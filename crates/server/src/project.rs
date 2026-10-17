@@ -97,6 +97,10 @@ pub struct NewSong {
 /// state. An example needing a plugin that isn't installed says so before anything is made.
 /// A song that can't be opened isn't kept, and the project open before stays open.
 pub fn new_song(graph: &Graph, req: &NewSong) -> Result<Value> {
+    if let Some(bpm) = req.tempo {
+        // Refused before anything is made, the songs folder included.
+        tempo_of(&m2_song::Arrangement::default(), bpm)?;
+    }
     let (source, name) = match (&req.example, &req.template) {
         (Some(id), _) => {
             let shown = examples().into_iter().find(|e| &e.id == id).map(|e| e.name);
@@ -117,10 +121,6 @@ pub fn new_song(graph: &Graph, req: &NewSong) -> Result<Value> {
         Some(dir) => dir.clone(),
         None => make_songs_dir()?,
     };
-    if let Some(bpm) = req.tempo {
-        // Refused before anything is made.
-        tempo_of(&m2_song::Arrangement::default(), bpm)?;
-    }
     open_new(graph, &parent, &name, &from, req.tempo)
 }
 
@@ -693,7 +693,7 @@ mod tests {
 
     // NS-3, FMT-13: New Song's Tempo is written into the new song's arrangement, the rest of it as
     // the template has it; the catalog says each template's tempo, which the field starts at. One
-    // FMT-13 refuses is refused before anything is made.
+    // FMT-13 refuses is refused before anything is made, the songs folder included.
     #[test]
     fn a_new_songs_tempo_is_written_into_its_arrangement() {
         let t = Temp::new();
@@ -704,6 +704,18 @@ mod tests {
         assert_eq!(tempos, vec![("starter".into(), 116.0), ("empty".into(), 120.0)]);
         let e = tempo_of(&m2_song::Arrangement::default(), 1000.0).unwrap_err().to_string();
         assert_eq!(e, "the tempo: 1000 bpm is outside 20 to 999");
+        // Through New Song, in the songs folder or another: refused first, so no folder is made,
+        // the songs folder included.
+        let had = songs_dir().unwrap().exists();
+        let graph = Graph::silent();
+        let bad = NewSong { name: "Faster".into(), tempo: Some(1000.0), ..NewSong::default() };
+        assert_eq!(new_song(&graph, &bad).unwrap_err().to_string(), e);
+        assert_eq!(songs_dir().unwrap().exists(), had, "the songs folder is made only for a song");
+        let bad = NewSong { dir: Some(t.0.clone()), ..bad };
+        assert_eq!(new_song(&graph, &bad).unwrap_err().to_string(), e);
+        let made: Vec<_> = std::fs::read_dir(&t.0).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(made, ["Fast"]);
+        assert!(graph.dir().is_none(), "nothing opened");
     }
 
     // FMT-4: a new song's manifest is the template's, format 1, with only its name changed.
