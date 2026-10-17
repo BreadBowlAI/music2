@@ -270,6 +270,36 @@ is tested in `menu.rs`, and the End's pictures take it.
 **Contract:** FMT-20's homes: `view.json` gains `guide: {open, folded, done}`. taste.md §5.3: the Help menu lists Make
 Your First Song first, then Keyboard Shortcuts.
 
+### D4. Music basics, up to date
+
+**In short**
+
+| Where | Now it says |
+|---|---|
+| The top | Help ▸ Make Your First Song, the start screen's link, and that every button says what it does |
+| Notes | Double-click (or B) adds a note; play with ⌘K or a MIDI keyboard; Record (R) with a bar of clicks first |
+| Notes or recordings | File ▸ Import Audio… (⇧⌘I) or a drag; the waveform; move, trim, fade, volume, backwards |
+| Time | The tempo and time signature in the top bar; triplets (⌘3); Quantize, Humanize, Swing; the metronome (K) |
+| Key | The Key field, and Notes shading the rows not in it |
+| The parts of a song | + Track's sounds by their names; Change instrument… |
+| Effects, mixing | The browser's drag and the ⋯ menu; M and S, Mute in song, the meters; Automate and drawing points |
+| Stems | File ▸ Export… ▸ Stems |
+
+**What changed.** `docs/music-basics.md` only: every "In music2" line says what the app does now, in the file's own
+plain style; the lines that said "not in the app yet" for the key, mute and solo, drawing automation, triplets,
+quantize and humanize, the tempo and the meters are gone. Code names stay, after the app's words.
+
+**Tests.** None (a doc). Its links checked by hand: `gaps.md#recording-and-midi`, `#notes`, `#automation`,
+`#mixing`, `#effects-and-plugins`.
+
+**Left.** It describes lanes A, B and C's recording, audio import and stems as the plan's Decisions have them
+(Q17 to Q19, Q7 to Q12, Q39 and Q42, D20, D34). The End checks those lines against what landed and trims any that
+didn't (each lane's "If late").
+
+**For gaps.md:** #11: [Music basics](music-basics.md) is up to date, and points at the guide.
+
+**Contract:** none.
+
 ## Merge
 
 The lead joins the lanes.
