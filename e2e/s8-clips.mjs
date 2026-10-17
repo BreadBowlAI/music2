@@ -360,7 +360,7 @@ const kickMenu = await menuRows();
 await page.screenshot({ path: `${ROOT}/s8-clips-menu.png`, clip: { x: 0, y: 0, width: 720, height: 560 }, captureBeyondViewport: false });
 check(
   // Part 1 left the roll's grid at 1/32: Quantize says so.
-  kickMenu.join(" | ") === "Cut⌘X | Copy⌘C | Paste⌘V(off) | Duplicate⌘D | Repeat… | Split at playhead⌘E(off) | Quantize to 1/32Q | Delete⌫ | Loop this clip⌘L | Open in Notes",
+  kickMenu.join(" | ") === "Cut⌘X | Copy⌘C | Paste⌘V(off) | Duplicate⌘D | Repeat… | Export as MIDI… | Split at playhead⌘E(off) | Quantize to 1/32Q | Delete⌫ | Loop this clip⌘L | Open in Notes",
   `a right-click on a clip opens its menu, each row with its key; Paste waits for a copy, Split for the playhead inside: ${kickMenu.join(" | ")}`,
 );
 check((await pickedIn("kick.hits")).join() === K, "and the clip is the selection");

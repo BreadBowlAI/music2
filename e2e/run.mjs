@@ -88,6 +88,7 @@ export const SUITES = [
   ["nx-settings", "none", { expect: 42 }],
   ["nx-nodevice", "none", { expect: 11 }],
   ["export", "export", { expect: 37 }],
+  ["st-midi", "fix", { expect: 14 }],
   ["fx-fixes", "none", { expect: 75 }],
   ["s4-clips", "fix", { expect: 28 }],
   ["s8-clips", "fix", { expect: 94 }],

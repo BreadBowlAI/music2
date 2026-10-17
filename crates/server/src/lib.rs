@@ -19,6 +19,7 @@ mod routes_fx;
 mod routes_settings;
 pub mod settings;
 mod routes_leases;
+mod routes_exchange;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};

@@ -39,6 +39,8 @@ pub mod clips;
 pub mod swap;
 pub mod note_names;
 pub mod rekey;
+pub mod smf;
+pub mod midifile;
 
 use std::collections::HashMap;
 use std::path::Path;
