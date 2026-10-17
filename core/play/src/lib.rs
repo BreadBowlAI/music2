@@ -22,6 +22,7 @@
 
 pub mod alloc;
 mod cells;
+pub mod outputs;
 mod resample;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -30,12 +31,13 @@ use std::sync::{Arc, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, StreamTrait};
 pub use cpal::{Error as DeviceError, ErrorKind as DeviceErrorKind};
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use m2_runtime::engine::{APPLIED, Msg as EngineMsg};
 pub use m2_runtime::engine::{Applied, CallbackStamp, Engine, Envelope, Heard, Retired};
 use m2_runtime::{CellTarget, Cmd, LaneSwap, LiveEv, Renderer, Transport};
+pub use outputs::{Choice, Output, default_output, output_ready, outputs};
 pub use resample::Resampler;
 
 use crate::cells::{CELL_SEQ, Writer};
@@ -231,6 +233,10 @@ struct Shared {
     // Written outside the seqlock.
     clock: AtomicU64,
     last_callback_ns: AtomicU64,
+    /// The last callback's device buffer, in frames: 0 before the first (Settings' Now row).
+    frames: AtomicU32,
+    /// The output chosen is gone, so this plays on the default ([`Player::start_on`]).
+    fell_back: AtomicBool,
     /// The engine rate of the project last sent: what positions count in.
     rate: AtomicU32,
     crashed: AtomicBool,
@@ -398,6 +404,7 @@ impl Callback {
     fn fill_in(&mut self, data: &mut [f32], channels: usize) {
         let ns = now_ns();
         self.shared.last_callback_ns.store(ns, Ordering::Relaxed);
+        self.shared.frames.store((data.len() / channels.max(1)) as u32, Ordering::Relaxed);
         for i in 0..GONE {
             if let Some(g) = self.gone[i].take()
                 && let Err(e) = self.retired.try_send(g)
@@ -773,17 +780,40 @@ impl Player {
     /// Open the default output device. With `M2_AUDIO=none`, run silently on a clock
     /// instead (for automated tests).
     pub fn start() -> Result<Player> {
-        if std::env::var("M2_AUDIO").as_deref() == Ok("none") {
-            return Player::silent();
+        Player::start_on(&Choice::default())
+    }
+
+    /// Open the output `choice` names at its buffer size: the default when it names none or one
+    /// that is gone (then [`Player::fell_back`]), and the device's own buffer size when it can't
+    /// take that one. With `M2_AUDIO=none`, a silent player named after the choice
+    /// ([`outputs::outputs`]); with `M2_AUDIO=fail`, no output starts (a test seam).
+    pub fn start_on(choice: &Choice) -> Result<Player> {
+        Player::start_in(outputs::Audio::from_env(), choice)
+    }
+
+    fn start_in(audio: outputs::Audio, choice: &Choice) -> Result<Player> {
+        match audio {
+            outputs::Audio::Silent(names) => {
+                let (name, fell_back, frames) = outputs::Audio::silent_pick(&names, choice);
+                let player = Player::silent_as(&name, frames)?;
+                player.shared.fell_back.store(fell_back, Ordering::Relaxed);
+                return Ok(player);
+            }
+            outputs::Audio::Fail => return Err(anyhow!(outputs::NO_OUTPUT)),
+            outputs::Audio::Device => {}
         }
+        let choice = choice.clone();
         let (ready_tx, ready) = bounded::<Result<Player>>(1);
         std::thread::Builder::new().name("m2-play".into()).spawn(move || {
             let open = || -> Result<(cpal::Stream, Player, Receiver<Gone>)> {
-                let device = cpal::default_host().default_output_device().ok_or_else(|| anyhow!("no audio output device"))?;
-                let name = device.description().map(|d| d.name().to_string()).unwrap_or_else(|_| "output".into());
-                let config = device.default_output_config()?.config();
+                let (device, fell_back) = outputs::pick(&choice).ok_or_else(|| anyhow!(outputs::NO_OUTPUT))?;
+                let name = outputs::name_of(&device).unwrap_or_else(|| "output".into());
+                let supported = device.default_output_config()?;
+                let mut config = supported.config();
+                config.buffer_size = outputs::buffer(choice.frames, supported.buffer_size());
                 let channels = config.channels as usize;
                 let (player, mut cb, retired) = Player::parts(config.sample_rate, &name);
+                player.shared.fell_back.store(fell_back, Ordering::Relaxed);
                 let shared = player.shared.clone();
                 let stream = device.build_output_stream::<f32, _, _>(
                     config,
@@ -813,9 +843,17 @@ impl Player {
     /// The same player, rendering into nothing in real time: no device, no sound. Device
     /// buffers are `M2_AUDIO_FRAMES` frames (480 unless set) at 48 kHz.
     pub fn silent() -> Result<Player> {
-        const SR: u32 = 48_000;
-        let frames: usize = std::env::var("M2_AUDIO_FRAMES").ok().and_then(|v| v.parse().ok()).filter(|&n| n > 0).unwrap_or(480);
-        let (player, mut cb, retired) = Player::parts(SR, "none");
+        Player::silent_as("none", None)
+    }
+
+    /// [`Player::silent`], named `name`, its buffers `frames` frames when given.
+    fn silent_as(name: &str, frames: Option<u32>) -> Result<Player> {
+        const SR: u32 = outputs::SILENT_RATE;
+        let frames: usize = match frames {
+            Some(n) => n as usize,
+            None => std::env::var("M2_AUDIO_FRAMES").ok().and_then(|v| v.parse().ok()).filter(|&n| n > 0).unwrap_or(480),
+        };
+        let (player, mut cb, retired) = Player::parts(SR, name);
         player.shared.device.store(true, Ordering::Relaxed);
         let alive = Arc::downgrade(&player.alive);
         std::thread::Builder::new().name("m2-play-silent".into()).spawn(move || {
@@ -1150,6 +1188,16 @@ impl Player {
     /// Nanoseconds of [`Applied::callback_ns`]'s clock, now.
     pub fn now_ns(&self) -> u64 {
         now_ns()
+    }
+
+    /// The device's buffer, in frames, as its last callback asked: None before the first.
+    pub fn frames(&self) -> Option<u32> {
+        Some(self.shared.frames.load(Ordering::Relaxed)).filter(|&n| n > 0)
+    }
+
+    /// Whether the output chosen is gone, so this plays on the default ([`Player::start_on`]).
+    pub fn fell_back(&self) -> bool {
+        self.shared.fell_back.load(Ordering::Relaxed)
     }
 
     /// Whether the audio thread stopped taking messages: a sender timed out, the device is gone

@@ -192,8 +192,8 @@ const TELL_EVERY: Duration = Duration::from_millis(300);
 ///   busy for seconds: a compile, or a commit the disk is slow to make durable.
 /// - `music2-tell` every 300 ms ends the knob drags nobody moves any more (C6) and says what
 ///   ended or was saved on its own, and a commit heard as its preview that isn't saved yet
-///   (PLANE-5); and lets go of the notes of a window that went quiet (MON-7). It never waits for
-///   the actor.
+///   (PLANE-5); and lets go of the notes of a window that went quiet (MON-7). Every 2 s, while
+///   no sound output plays, it looks for one (gaps #13). It never waits for the actor.
 ///
 /// Both end once the state is dropped.
 fn spawn_graph_watch(state: &Arc<AppState>) {
@@ -219,9 +219,15 @@ fn spawn_graph_watch(state: &Arc<AppState>) {
     std::thread::Builder::new()
         .name("music2-tell".into())
         .spawn(move || {
+            let mut looked = std::time::Instant::now();
             loop {
                 std::thread::sleep(TELL_EVERY);
                 let Some(state) = weak.upgrade() else { return };
+                // While no sound output plays, look for one (gaps #13).
+                if looked.elapsed() >= graph::output::LOOK_EVERY {
+                    looked = std::time::Instant::now();
+                    state.graph.look_for_output();
+                }
                 let said = state.graph.expire();
                 state.graph.save_overlays();
                 state.graph.expire_auditions();

@@ -1,14 +1,15 @@
 import clsx from "clsx";
-import { CircleAlert, CodeXml, Gauge, Hourglass, Info, Lock, Pause, TriangleAlert, WifiOff } from "lucide-react";
+import { CircleAlert, CodeXml, Gauge, Hourglass, Info, Lock, Pause, TriangleAlert, VolumeX, WifiOff } from "lucide-react";
 import { useRef, useState, type ReactNode } from "react";
 import { attention, graphApi, lockReason, type GraphState, type GraphStatus, type Problem, type ReadOnly } from "../lib/graph";
 import { usePill } from "../lib/overlays";
+import "../lib/settings";
 import { useStore } from "../lib/store";
 import Attention from "./Attention";
 import { Button, Details, keepFocus, Popover } from "./ui";
 
 type Tone = "danger" | "warn" | "neutral";
-interface State { id: "offline" | "compile" | "problems" | "dropout" | "load" | "read-only" | "paused" | "loading"; tone: Tone; label: string; Icon: typeof Lock }
+interface State { id: "offline" | "compile" | "problems" | "no-output" | "dropout" | "load" | "read-only" | "paused" | "loading"; tone: Tone; label: string; Icon: typeof Lock }
 
 // Hover darkens every tone, as it does a ghost button: the soft fill mixed toward its strong colour.
 const TONE: Record<Tone, string> = {
@@ -53,6 +54,8 @@ function states(graph: GraphState, status: GraphStatus | undefined, connected: b
       Icon: worst === "error" ? CircleAlert : worst === "warning" ? TriangleAlert : Info,
     });
   }
+  // No sound device started: the song plays silently until one does (gaps #13).
+  if (status?.no_output) out.push({ id: "no-output", tone: "warn", label: "No sound output", Icon: VolumeX });
   if (status?.playing && dropouts.recent) out.push({ id: "dropout", tone: "warn", label: "Sound dropped out", Icon: TriangleAlert });
   if (status?.playing && (status.load ?? 0) >= HEAVY) out.push({ id: "load", tone: "warn", label: "Heavy load", Icon: Gauge });
   if (graph.read_only) out.push({ id: "read-only", tone: "neutral", label: "Read only", Icon: Lock });
@@ -144,6 +147,11 @@ export default function Status({ graph, status, onShowCode }: { graph: GraphStat
                     </Item>
                     <Attention graph={graph} locked={lockReason(graph, connected)} />
                   </div>
+                )}
+                {s.id === "no-output" && (
+                  <Item state={s} title="No sound output">
+                    No sound device was found, so the song plays silently. Plug one in: it's used from your next action.
+                  </Item>
                 )}
                 {s.id === "dropout" && (
                   <Item state={s} title="Sound dropped out">
