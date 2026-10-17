@@ -357,3 +357,104 @@ Pictures: `~/m2-runs/tn-scratch/a3/` (`01-file.png` the File menu, `03-help.png`
 
 Not run here: `--gates` (the timing gates). The task named the plain check for step A's end; the
 gates run with the final phase.
+
+## B1: the merge of `4804247`, the WIP song bar
+
+**In short**
+- Taste's unfinished song bar is merged: the tempo and time signature fields, the song's name to
+  rename in place, the ruler's marks, Stop back where play started, Shift+Space to continue, loop
+  the selection, Stop All Sound, and New Song's Tempo.
+- 4 conflicts, each where step A changed the same lines. The lock file merged on its own.
+- The plan's fixes, one commit each: the timeline says where tempo and meter live (`home`); Play has
+  a test id; New Song checks the tempo first; Stop All Sound opens no audio device; the contract.
+- The song bar's own words spell Shift per OS, and the name field keeps the Mac app's clearance.
+- Checks: every crate touched passes, clippy is clean, all 33 browser suites pass (1,252 checks,
+  live3b with the test plugins), and 10 of 10 renders match. No render record moved.
+
+### What was built
+
+| Commit | What |
+|---|---|
+| `13643f1` | The merge. Only the 4 resolutions (below). `Cargo.lock` merged on its own: one new edge, `m2-editor` to `toml` (break 20); `cargo check --locked` passes. |
+| `c9b6f99` | Break 7. The actor published only `tempo`, `meter` and `end`, so `home` never reached the page. It now takes every field of the view by name, so a new field can't be left out again. The page's type has `home` always (no older servers). |
+| `3745436` | Breaks 6, 15, 24. `data-testid="play"` on Play; graph, layout, live3a and live3b use it. Play's title and the tempo's tooltip say "Shift+Space" and "Shift for fine" off the Mac. |
+| `9d03b71` | Break 11 (below). |
+| `90c1b63` | Break 12. New Song checks the tempo before anything else, so a bad one makes no folder, `~/Music/music2` included. The test fails with the old order (tried). |
+| `fcb22b1` | Break 22. Stop All Sound with no player does nothing; before, it started one, opening the audio device. Tested. |
+| `5fe4987` | Break 21. Contract: the HOME table's `data/arrangement.json` row; HOME-1's list gains `arrangement`, with its *Today*; WRITE-18 lists `tempo`, `meter` and `title`. |
+| `7ce07f4` | Attack C. The name's field, once double-clicked, now stops at the Mac app's clearance (548 px once the time shows), as the name does. |
+| `7659b49` | layout read the playhead just after Stop, which now goes back where play started: it passed only by a race. It now judges the last beat it saw while playing, and checks that Stop goes back. 39 checks. |
+
+### The conflicts
+
+| File | Resolved |
+|---|---|
+| `apps/music2-desktop/src/menu.rs` | A3's menu per OS, with the WIP's items: Rename Song… in File; Continue, Loop Selection (Ctrl+L) and Stop All Sound (Ctrl+.) in Transport, on both OSes. |
+| `web/src/components/TopBar.tsx` | A1's bar (the Mac app's 80 px, the time hidden sooner there, the name's 548 px) and A3's labels, with the WIP's fields and its `SongTitle`. |
+| `web/src/components/Shortcuts.tsx` | A3's helper, with the WIP's rows: "Shift+Space" off the Mac. |
+| `web/src/components/CodeView.tsx` | A3's word delete off the Mac, with the WIP's Monaco ⌘L (select the line) and ⌘. (quick fix). |
+
+### Decisions made in the slice
+
+| What | Decided | Why |
+|---|---|---|
+| The two test manifests (break 11) | Taken from the fixture's own `music2.toml`, with a comment or a literal name added, not written "0.2" | Here std is still 0.1 (the `sounds` merge's slice 3 isn't in), so "0.2" would fail now. From the fixture, they pass now and after the bump, with no edit. |
+| The published timeline | Destructure `TimelineView` by name | The fault was a list of keys. Now a new field won't compile until it is published. |
+| Stop All Sound with no player | Do nothing | There is no sound to stop. The engine's panic is tested in Rust; the route still answers `{}`. |
+| WIP review (attack: "review it before B2 builds on it") | Read `view_file.rs`, the transport's `to`, the routes and `set_loop` against step 7. Nothing more to fix in B1. | `.music2/view.json` is written whole by rename, never a Tx; the watcher skips dot folders; a read-only window keeps the loop in memory; `/api/graph/panic` isn't a write, so a read-only window has it. Break 23 ("Loop turned off" during an export hold) is B2's. |
+
+### The app on Linux (Xvfb)
+
+A3 left Ctrl+Period for B1. The worktree's debug `music2-desktop` on first-song, on an invisible Xvfb
+screen, a scratch HOME, `M2_AUDIO=none`, keys sent with `~/m2-runs/tools/xkey`:
+
+| Check | Result |
+|---|---|
+| The Transport menu | Play / Stop, Continue, Go to Start, Loop, Loop Selection Ctrl+L, Stop All Sound Ctrl+. |
+| Ctrl+L with a clip selected | loops it: bars 1 to 9, lit, and kept in `.music2/view.json` |
+| Ctrl+L in the code editor | selects the line; the loop stays off |
+| Ctrl+. in the code editor | Monaco's quick fix ("No code actions available") |
+| Ctrl+. outside it | no error. What it does is not visible without sound. |
+| Space, Space, Shift+Space | plays; stops back at 1.1.1; continues from where it stopped (3.2.2 after 1.2 s) |
+
+Pictures: `~/m2-runs/tn-scratch/b1/` (`01-transport.png`, `02-loop-selection.png`,
+`05-code-ctrl-l.png`, `06-code-ctrl-period.png`, `08-playing.png` to `11-stopped2.png`).
+
+### Checks
+
+| Check | Result |
+|---|---|
+| `cargo test -p m2-session`, `-p m2-editor`, `-p m2-server`, `-p m2`, `-p music2-desktop`, after the merge | all pass but the one the plan named: `the_published_timeline_is_the_sessions_and_shares_what_didnt_change` (no `home`) |
+| The same at the slice's end | all pass: 151; 190 (the WIP's 7 song tests); 176 (the WIP's 4); m2's 13 (`apps/m2/tests/song.rs`); 7 |
+| `cargo clippy --workspace --all-targets -D warnings` | clean |
+| The web build | passes |
+| Every browser suite (`run.mjs all`, with the test plugins) | 33 of 33, 1,252 of 1,252 checks, at `7ce07f4`. Then layout alone: 39 of 39. |
+| The renders (`e2e/baseline.sh --tree .`, debug `m2`) | 10 of 10 match `e2e/renders.sha256` |
+| `renders.sha256`, `renders.json`, `std.wasm`, `std/m2pkg.toml` | unchanged since `09b2dfd`. `Cargo.lock`: the one edge. |
+
+### Numbers (Linux, information only)
+
+fx-fixes measures the top bar with the WIP's fields, in a page and laid out as the Mac app's:
+
+| Width | Left side ends (page) | Name starts | Left side ends (Mac app) | Name starts |
+|---|---|---|---|---|
+| 1100 | 391 | 480 | 459 | 480 |
+| 1180 | 455 | 480 | 459 | 480 |
+| 1280 | 455 | 480 | 523 | 548 |
+| 1440 | 455 | 480 | 523 | 548 |
+
+The attack's estimate for the Mac app was 523 px: that is what it measures. At least 21 px clear
+everywhere. The fields have fixed widths, so the font changes little.
+
+### Left
+
+| What | Where |
+|---|---|
+| `s8-songbar`; newsong's Tempo check; pc-keys' song-bar tooltip | B2 |
+| s8-songbar should also check the name's field in the Mac app's bar (1100, 1180, 1280 px, T8), and that a two-decimal tempo ("128.55 BPM") fits its 76 px field | B2 |
+| Stop with `to` in one call: the route stops, then seeks. A status read in between could see it stopped where it was. B2's server test of Stop with `to` should say whether it matters. | B2 |
+| Break 23: "Loop turned off" during an export hold | B2 |
+| Empty lane space moves the start point (design §4.3) | B2 |
+| WRITE-10's rows, `docs/gaps.md`, README (the song bar, the CLI's three commands) | B2 |
+| When the `sounds` merge's slice 3 lands: the WIP added no manifest that names std's version | — |
+| Scratch: `~/m2-runs/tn-scratch/b1/` (the app run), `renders-b1/`, `e2e-all-051142/`. Logs: `~/m2-runs/logs/tn-b1-*`. | — |
