@@ -35,6 +35,12 @@ pub(crate) fn c_numbers() {
     }
 }
 
+pub(crate) fn load_average() -> Option<[f64; 3]> {
+    let mut l = [0.0f64; 3];
+    // SAFETY: getloadavg writes at most 3 numbers into `l`.
+    (unsafe { libc::getloadavg(l.as_mut_ptr(), 3) } == 3).then_some(l)
+}
+
 /// A path for a C call.
 pub(crate) fn cpath(p: &Path) -> io::Result<CString> {
     CString::new(p.as_os_str().as_bytes()).map_err(|_| io::Error::new(ErrorKind::InvalidInput, "a NUL in a path"))

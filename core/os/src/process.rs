@@ -1,5 +1,8 @@
 //! What this process holds, and which machine it runs on: for the gates (step 7's G7f) and their
-//! records, which name the machine that made them (PLAT-1).
+//! records, which name the machine that made them (PLAT-1); and how many cores a render may use
+//! (8a).
+
+use std::time::Duration;
 
 use crate::os;
 
@@ -32,6 +35,38 @@ pub fn machine() -> String {
     [model, system, cpu, std::env::consts::ARCH.to_string(), format!("{threads} threads")].map(|part| part.replace(", ", " ")).join(", ")
 }
 
+/// The cores this process may use, by kind (8a). A render's thread count is chosen from them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Cores {
+    /// Physical performance cores: on a Mac its P-cores, elsewhere every physical core inside the
+    /// process's affinity mask and CPU quota. One at least.
+    pub fast: usize,
+    /// Efficiency cores (a Mac's E-cores); 0 where every core is alike.
+    pub slow: usize,
+    /// The most fast cores that share one cache: an L2 cluster on a Mac, a last-level cache
+    /// elsewhere (one die of a two-die CPU). One at least, `fast` at most.
+    pub per_cache: usize,
+}
+
+/// The cores this process may use. macOS: `hw.perflevel0` and `hw.perflevel1` (or
+/// `hw.physicalcpu` on a Mac with one kind of core). Linux: physical cores from sysfs inside
+/// `sched_getaffinity`, cut to the cgroup v2 `cpu.max` quota, and the most sharing one
+/// last-level cache.
+pub fn cores() -> Cores {
+    os::cores()
+}
+
+/// The 1, 5 and 15 minute load averages (`getloadavg`): what the gates print before they time.
+pub fn load_average() -> Option<[f64; 3]> {
+    os::load_average()
+}
+
+/// How long this process's threads have waited for a CPU, summed over the threads alive now:
+/// Linux's `/proc/self/task/*/schedstat`. macOS doesn't say: None.
+pub fn waited() -> Option<Duration> {
+    os::waited()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -48,5 +83,12 @@ mod tests {
         assert_eq!(parts[3], std::env::consts::ARCH);
         assert!(parts[4].strip_suffix(" threads").and_then(|n| n.parse::<usize>().ok()).is_some_and(|n| n > 0), "{m}");
         assert_eq!(machine(), m);
+    }
+
+    // 8a: the load average is three numbers, none negative.
+    #[test]
+    fn the_load_average_is_three_numbers() {
+        let l = load_average().expect("both OSes say");
+        assert!(l.iter().all(|x| x.is_finite() && *x >= 0.0), "{l:?}");
     }
 }

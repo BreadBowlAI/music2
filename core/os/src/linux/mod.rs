@@ -1,6 +1,7 @@
 //! Linux: thread identity, the disk, this machine and this process, and the folders. The main loop
 //! and file-system events are in `main_loop.rs` and `watch.rs`.
 
+mod cores;
 pub(crate) mod main_loop;
 pub(crate) mod watch;
 
@@ -14,9 +15,10 @@ use crate::process::Memory;
 #[cfg(test)]
 pub(crate) use crate::unix::sync_refused;
 pub(crate) use crate::unix::{
-    c_numbers, change_and_inode, cpu_time, file_id, file_id_of, host_name, local_time, make_writable, push, sync_dir, token,
+    c_numbers, change_and_inode, cpu_time, file_id, file_id_of, host_name, load_average, local_time, make_writable, push, sync_dir, token,
 };
 use crate::unix::{check, cpath};
+pub(crate) use cores::cores;
 
 /// The main thread's id is the process id: two system calls, no allocation, no lock.
 #[inline]
@@ -106,6 +108,36 @@ pub(crate) fn machine_id() -> Option<String> {
 /// `RLIMIT_RTPRIO` or rtkit) that this server doesn't grant and 8a's realtime threads will ask for.
 pub(crate) fn interactive() -> io::Result<()> {
     Err(crate::unsupported("Linux has no QoS class: the thread keeps its priority"))
+}
+
+/// A nice of 10 for the calling thread (on Linux nice is per thread), or the one it has when that
+/// is higher: raising nice is always allowed, lowering it needs rights.
+pub(crate) fn background() -> io::Result<()> {
+    // SAFETY: plain system calls on the calling thread's own id. getpriority may return -1 as a
+    // nice, so errno is cleared first and read after.
+    unsafe {
+        let tid = libc::gettid() as libc::id_t;
+        *libc::__errno_location() = 0;
+        let nice = libc::getpriority(libc::PRIO_PROCESS, tid);
+        if nice == -1 && *libc::__errno_location() != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if nice >= 10 {
+            return Ok(());
+        }
+        check(libc::setpriority(libc::PRIO_PROCESS, tid, 10))
+    }
+}
+
+/// The second field of each thread's `/proc/self/task/<tid>/schedstat`: nanoseconds it waited on
+/// a run queue.
+pub(crate) fn waited() -> Option<std::time::Duration> {
+    let mut ns = 0u64;
+    for t in std::fs::read_dir("/proc/self/task").ok()?.flatten() {
+        let Ok(text) = std::fs::read_to_string(t.path().join("schedstat")) else { continue };
+        ns += text.split_whitespace().nth(1).and_then(|w| w.parse::<u64>().ok()).unwrap_or(0);
+    }
+    Some(std::time::Duration::from_nanos(ns))
 }
 
 /// `/proc/self/status` for the footprint and what is mapped; the CPU's virtual-address bits, or
@@ -232,6 +264,30 @@ mod tests {
         assert_eq!(super::cpu_name(cpuinfo).as_deref(), Some("AMD Ryzen 9 7950X3D 16-Core Processor"));
         let (model, system, cpu) = super::machine();
         assert!(![&model, &system, &cpu].iter().any(|p| p.is_empty()), "{model}, {system}, {cpu}");
+    }
+
+    // 8a (§5.2): a background thread runs at nice 10 or more, and its nice never goes down (a
+    // test run under `nice -n 15` keeps 15).
+    #[test]
+    fn a_background_thread_is_nice_10() {
+        let (before, after) = std::thread::spawn(|| {
+            // SAFETY: reads the calling thread's own nice.
+            let nice = || unsafe { libc::getpriority(libc::PRIO_PROCESS, libc::gettid() as libc::id_t) };
+            let before = nice();
+            crate::thread::background().unwrap();
+            (before, nice())
+        })
+        .join()
+        .unwrap();
+        assert!(after >= 10 && after >= before, "nice {before} → {after}");
+    }
+
+    // 8a: the threads' waits for a CPU are read, and only grow.
+    #[test]
+    fn waits_for_a_cpu_are_read() {
+        let a = crate::process::waited().expect("Linux says");
+        let b = crate::process::waited().expect("Linux says");
+        assert!(b >= a || a - b < std::time::Duration::from_millis(10), "{a:?} then {b:?}: a thread may have ended between");
     }
 
     // OS-83: Linux gives a thread no QoS class, and says so; nothing fails.
