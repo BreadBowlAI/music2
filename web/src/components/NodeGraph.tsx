@@ -1321,7 +1321,7 @@ function KnobControl({
   const written = knob.written ? `written as ${knob.literal}` : "the default: not written in the code yet, turning it writes it in";
   const title = !editable
     ? `${why ?? "It can't be edited right now"}.`
-    : `${shared}${knob.file}:${knob.line}  (${written})\nDrag (${mod.shift} for fine) · double-click to type a value · ${mod.alt}-click to reset · right-click to automate it`;
+    : `${shared}Drag (${mod.shift} for fine) · double-click to type a value · ${mod.alt}-click to reset · right-click to automate it\nIn your code: ${knob.file}, line ${knob.line} (${written})`;
   const unit = Math.min(1, Math.max(0, toUnit(descriptor, value)));
   const reset = descriptor.default != null ? Math.min(1, Math.max(0, toUnit(descriptor, descriptor.default))) : undefined;
   // The whole row drags it, its label and value too, not only the 28px circle (taste.md §2.2).

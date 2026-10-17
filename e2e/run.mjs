@@ -106,6 +106,7 @@ export const SUITES = [
   ["s6-write", "fix", { expect: 36 }],
   ["s6-fixes", "fix", { expect: 19 }],
   ["taste", "fix", { expect: 39 }],
+  ["st-tips", "fix", { expect: 44 }],
   ["gestures", "fix", { expect: 30 }],
   ["g11-play", "fix", { expect: 24 }],
   ["s8-tracks", "fix", { expect: 75 }],

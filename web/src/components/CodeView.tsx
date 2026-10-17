@@ -499,7 +499,15 @@ function FileList({
           e.preventDefault();
           onMenu(path, e.currentTarget);
         }}
-        title={path}
+        title={
+          path === "song.ts"
+            ? "song.ts: the song's main file. It brings the tracks together"
+            : path === "music2.toml"
+              ? "music2.toml: the song's name and the packages it uses"
+              : tracks.includes(path)
+                ? `${path}: one track's sound · right-click to change its track ID`
+                : `${path}: code of your own, for the tracks to use`
+        }
         className={clsx(
           "w-full h-ctl-sm flex items-center gap-2 pr-2 rounded-sm text-sm text-left cursor-pointer transition-colors duration-80 ease-linear",
           indent ? "pl-6" : "pl-2",
