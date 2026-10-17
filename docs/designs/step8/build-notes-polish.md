@@ -139,10 +139,17 @@ swap against a stub that refuses:  test result: FAILED. 0 passed; 7 failed
 FAIL  the Hats menu has Change instrument…, after Rename (Rename⌘R | Duplicate⌘D | Delete⌘⌫ | Colour› | Mute in song… | Edit in code…)
 ```
 
+**Track ▸ Change Instrument… (a later commit).** There was no P0a, so lane A added its own row: `menu.rs`
+`change_instrument` ("Change Instrument…", no chord) right after Rename in Track on both menu bars, with the test
+`change_instrument_follows_rename_in_track` (red: `left: None, right: Some(("Change Instrument…", None))`);
+`appCommand`'s `change_instrument` sends the selected track (never the Song row) to `canvas.changeInstrument`, which
+`Tracks.tsx` fills: the list at that track's header. A browser page has no menu bar, so the page side is checked in
+the desktop app at the End (Xvfb). `cargo test -p music2-desktop`: 9 ok; its clippy clean. The same commit makes
+change instrument safe in a file with no imports (the import edit then goes at the top).
+
 **What's left**
 
-- Track ▸ Change Instrument… in the menu bar: P0a's `appCommand` row calls `canvas.changeInstrument`, which lane A
-  fills once P0a lands.
+- The menu bar's row in the running desktop app: the End's Linux run.
 - The plan's "Hi-hat ticked" for first-song's Hats can't be: Hats plays std/instruments' `hat`, which the list
   doesn't offer, so nothing is ticked. After a change, the new one is ticked.
 

@@ -120,10 +120,11 @@ fn computed(text: &str, arg: &Arg, name: &str, units: &[m2_script::UnitCtor]) ->
 /// node's name moves. None when they don't change.
 fn import_edits(text: &str, from: &str, binding: &str, gone: &[(u32, u32)]) -> Option<(u32, u32, String)> {
     let imports: Vec<(u32, u32)> = statements(text).into_iter().filter(|s| s.2).map(|s| (s.0, s.1)).collect();
-    // The imports' bytes, through the end of the last one's line.
-    let start = imports.first().map_or(0, |i| i.0) as usize;
-    let last = imports.last().map_or(0, |i| i.1) as usize;
-    let end = text[last..].find('\n').map_or(text.len(), |i| last + i + 1);
+    // The imports' bytes, through the end of the last one's line; none: the top of the file.
+    let (start, end) = match (imports.first(), imports.last()) {
+        (Some(first), Some(last)) => (first.0 as usize, text[last.1 as usize..].find('\n').map_or(text.len(), |i| last.1 as usize + i + 1)),
+        _ => (0, 0),
+    };
     // Out first; then the import goes in where the file's imports are now.
     let mut out: Vec<(u32, u32)> = unused_imports(text, gone).into_iter().filter(|(a, _)| (*a as usize) < end).collect();
     out.sort();

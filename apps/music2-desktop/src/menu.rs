@@ -64,6 +64,8 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     // In a field, the field's own: to the line's start on a Mac, the word before elsewhere.
     ("delete_track", "Delete Track", Some("CmdOrCtrl+Backspace")),
     ("rename", "Rename", Some("CmdOrCtrl+R")),
+    // The selected track's instrument, from + Track's list (polish A3). No chord.
+    ("change_instrument", "Change Instrument…", None),
     // While listening, on the selected track (not undo steps); M and S are the page's keys.
     ("mute", "Mute", MUTE_KEY),
     ("solo", "Solo", SOLO_KEY),
@@ -135,7 +137,16 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
     ];
     // What is selected: the roll's notes, the timeline's clips, the track.
     let selected = [Item("duplicate"), Item("split"), Item("join"), Item("quantize")];
-    let track = vec![Item("new_track"), Item("delete_track"), Item("rename"), Line, Item("mute"), Item("solo"), Item("mute_in_song")];
+    let track = vec![
+        Item("new_track"),
+        Item("delete_track"),
+        Item("rename"),
+        Item("change_instrument"),
+        Line,
+        Item("mute"),
+        Item("solo"),
+        Item("mute_in_song"),
+    ];
     let views = [
         Item("view_device"),
         Item("view_notes"),
@@ -331,6 +342,18 @@ mod tests {
             for r in rows {
                 assert!(matches!(r, Row::Item(_) | Row::Line | Row::About), "{menu}: {r:?}");
             }
+        }
+    }
+
+    /// Polish A3: Track ▸ Change Instrument… comes right after Rename, on both menu bars, with no chord.
+    #[test]
+    fn change_instrument_follows_rename_in_track() {
+        assert_eq!(ITEMS.iter().find(|i| i.0 == "change_instrument").map(|i| (i.1, i.2)), Some(("Change Instrument…", None)));
+        for mac in [true, false] {
+            let bar = layout(mac);
+            let track = &bar.iter().find(|m| m.0 == "Track").expect("Track").1;
+            let at = track.iter().position(|r| *r == Row::Item("rename")).expect("Rename");
+            assert_eq!(track[at + 1], Row::Item("change_instrument"), "mac: {mac}");
         }
     }
 

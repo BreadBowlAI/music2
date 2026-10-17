@@ -188,6 +188,8 @@ export const canvas: {
   solo?: (module: string) => void;
   /** Track ▸ Mute in Song: one undo step. */
   muteInSong?: (module: string) => void;
+  /** Track ▸ Change Instrument…: the instrument list for track `module` (polish A3). */
+  changeInstrument?: (module: string) => void;
   grid?: (op: GridOp) => void;
   /** ⌘D on the selected clips, after the roll's notes: false when none is selected. */
   duplicate?: () => boolean;

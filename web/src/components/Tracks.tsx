@@ -8,7 +8,7 @@ import { changeInstrument, currentInstrument, notesLane } from "../lib/instrumen
 import { chord, opt } from "../lib/native";
 import { muteInSongCall } from "../lib/overlays";
 import { DEFAULT_ORDER, TRACK_COLORS, type TrackColorName } from "../lib/palette";
-import { useShell } from "../lib/shell";
+import { canvas, useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { undoAction } from "./GraphCanvas";
 import { Button, MenuRow, Popover } from "./ui";
@@ -97,6 +97,12 @@ export function openChangeInstrument(module: string, anchor: HTMLElement) {
   if (!graph || module === "song") return;
   useTracksUi.setState({ picker: { anchor, after: null, swap: module }, menu: null });
 }
+
+// Track ▸ Change Instrument… (App sends it here): the list at the selected track's header.
+canvas.changeInstrument = (module) => {
+  const anchor = document.querySelector<HTMLElement>(`[data-track-menu="${module}"]`) ?? document.querySelector<HTMLElement>(`[data-module-tab="${module}"]`);
+  if (anchor) openChangeInstrument(module, anchor);
+};
 
 /** ⌘T: the list, at + Track, for a track below the selected one. */
 export function newTrack() {
