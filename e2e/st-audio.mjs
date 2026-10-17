@@ -7,6 +7,11 @@
 // the selected audio track at the playhead's bar, selected, as one undo step ("Undo importing
 // …"); a file that isn't a WAV is refused in Q1's words and adds nothing; `assets/` holds exactly
 // the files; the lane file is canonical.
+// Part 3 (A3): an audio clip moves, copies, splits, duplicates and deletes as one undo step each;
+// its left edge moves where it starts in its file; its right edge stops at the file's end ("End
+// of tone.wav"); a fade handle dragged in writes a fade ("Fade in 0.40 s", "Undo Tone fade in");
+// Volume… −6 writes −6 dB and the waveform halves; Reverse writes it, checked, and mirrors the
+// waveform; Remove fades; a reversed clip trims; each new state linted.
 //
 //   node e2e/st-audio.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -34,7 +39,7 @@ function wav(dir, name, seconds, f, rate = 48000) {
   fs.writeFileSync(`${dir}/${name}`, b);
 }
 
-const { page, errors, key, api, show, toasts } = await open(1440, 900);
+const { page, errors, key, api, show, toasts, box, drag } = await open(1440, 900);
 const peaksAsked = [];
 page.on("request", (r) => r.url().includes("/api/graph/audio/peaks") && peaksAsked.push(decodeURIComponent(r.url().replace(/^.*asset=/, ""))));
 
@@ -177,7 +182,7 @@ check(picked, `the new clips are selected: ${await page.$$eval(`${lane} [data-cl
 check(await until(async () => (await undoTitle()) === "Undo importing 2 files (⌘Z)"), `one undo step, named: ${await undoTitle()}`);
 const assetsNow = fs.readdirSync(`${PROJ}/assets`).sort();
 check(JSON.stringify(assetsNow) === JSON.stringify([...assetsWere, "Lead Vox.wav", "hit.wav"].sort()), `assets/ holds exactly the files: ${assetsNow}`);
-check(fs.readFileSync(`${PROJ}/assets/Lead Vox.wav`).equals(fs.readFileSync(`${files}/Lead Vox.WAV`)), "a copy, byte for byte");
+check(fs.existsSync(`${PROJ}/assets/Lead Vox.wav`) && fs.readFileSync(`${PROJ}/assets/Lead Vox.wav`).equals(fs.readFileSync(`${files}/Lead Vox.WAV`)), "a copy, byte for byte");
 const text = read("data/tone/clips.json");
 check(text.startsWith('{"clips": [\n  {"id": ') && text.endsWith("]}\n"), `the lane file is canonical: ${text.slice(0, 40)}…`);
 check(await until(() => page.$$eval(`${lane} [data-clip] canvas`, (cs) => cs.length >= 7)), "their waveforms draw");
@@ -204,4 +209,138 @@ const [pcChooser] = await Promise.all([pc.page.waitForFileChooser({ timeout: 500
 await pcChooser?.accept([`${files}/hit.wav`]);
 check(await until(() => laneClips().some((c) => c.asset === "hit.wav")), "a PC page's Ctrl+Shift+I imports too");
 await pc.browser.close();
+
+// ---------------------------------------------------------------- part 3: editing audio clips
+
+await page.keyboard.press("Escape");
+write("data/tone/clips.json", JSON.stringify({ clips: [
+  { id: "p3", start: 32, length: 3, asset: "tone.wav" },
+  { id: "sw", start: 36, length: 6, asset: "swell.wav" },
+] }, null, 2));
+const p3 = clip("p3"), sw = clip("sw");
+check(await until(() => page.$(`${p3} canvas`).then((x) => !!x) && page.$(`${sw} canvas`).then((x) => !!x), 8000), "two clips for part 3");
+await page.$eval(p3, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
+await sleep(300);
+const one = (id) => laneClips().find((c) => c.id === id);
+const stepIs = async (want) => until(async () => (await undoTitle()) === `Undo ${want} (⌘Z)`);
+const bubble = () => page.$eval("[data-testid=clip-bubble], [data-testid=fade-bubble]", (e) => e.textContent).catch(() => null);
+const ppb = 24;
+
+// The right edge past the file's end stops there: tone.wav is 2 s, 4.13 beats at 124 BPM.
+let b = await box(p3);
+await page.mouse.move(b.x + b.width - 2, b.y + b.height / 2 + 6);
+await page.mouse.down();
+await page.mouse.move(b.x + b.width + 3 * ppb, b.y + b.height / 2 + 6, { steps: 8 });
+const endWords = await bubble();
+await page.mouse.up();
+check(endWords === "End of tone.wav", `the bubble says where the file ends: ${endWords}`);
+check(await until(() => close(one("p3").length, beats(2))), `the right edge stops at the file's end: ${one("p3").length}`);
+check(await stepIs("resizing a Tone clip"), `one undo step: ${await undoTitle()}`);
+
+// The left edge in by a beat: the clip starts a beat later in its file.
+b = await box(p3);
+await page.mouse.move(b.x + 2, b.y + b.height / 2 + 6);
+await page.mouse.down();
+await page.mouse.move(b.x + 2 + ppb, b.y + b.height / 2 + 6, { steps: 8 });
+await page.mouse.up();
+check(await until(() => one("p3").start === 33 && close(one("p3").offset, 60 / 124)), `a left trim moves where it starts in the file: ${JSON.stringify(one("p3"))}`);
+
+// A fade handle dragged in: a fade in, in seconds.
+b = await box(p3);
+await page.click(p3, { offset: { x: b.width / 2, y: b.height - 6 } });
+const handle = (await box(`${p3} [data-fade=in]`)) ?? { x: b.x + 1, y: b.y + 1, width: 0, height: 0 };
+check(Math.round(handle.width) === 7 && Math.round(handle.height) === 7, `the selected clip shows its 7 px fade handles: ${handle.width}`);
+await page.mouse.move(handle.x + 3, handle.y + 3);
+await page.mouse.down();
+await page.mouse.move(handle.x + 3 + 20, handle.y + 3, { steps: 6 });
+const fadeWords = await bubble();
+await page.mouse.up();
+check(/^Fade in 0\.\d\d s$/.test(fadeWords ?? ""), `the bubble says the fade: ${fadeWords}`);
+check(await until(() => one("p3").fade_in > 0.3 && one("p3").fade_in < 0.6), `the fade is written in seconds: ${one("p3").fade_in}`);
+check(await stepIs("Tone fade in"), `named "Tone fade in": ${await undoTitle()}`);
+await linted(p3, "a clip with its fade handles");
+
+/** Open the clip menu on `sel`, then pick row `id`. */
+async function menu(sel, id) {
+  const r = await box(sel);
+  await page.mouse.click(r.x + r.width / 2, r.y + r.height - 6, { button: "right" });
+  await page.waitForSelector(`[data-testid=clip-menu] [data-menu-item=${id}]`, { timeout: 3000 }).catch(() => null);
+  return page.$(`[data-testid=clip-menu] [data-menu-item=${id}]`);
+}
+const rows = async () => {
+  await menu(p3, "volume");
+  const r = await page.$$eval("[data-testid=clip-menu] [data-menu-item]", (els) => els.map((e) => [e.dataset.menuItem, e.getAttribute("aria-checked"), e.disabled]));
+  await linted("[data-testid=clip-menu]", "the audio clip's menu");
+  await page.keyboard.press("Escape");
+  return r;
+};
+const listed = await rows();
+const at = (id) => listed.findIndex((r) => r[0] === id);
+check(at("volume") === at("split") + 1 && at("reverse") === at("volume") + 1 && at("unfade") === at("reverse") + 1, `Volume…, Reverse and Remove fades come after Split: ${listed.map((r) => r[0])}`);
+check(listed[at("reverse")][1] === "false" && listed[at("unfade")][2] === false, `Reverse unchecked, Remove fades on: ${JSON.stringify(listed.slice(at("volume"), at("unfade") + 1))}`);
+
+// Volume… −6: the label says it and the waveform halves.
+const full = mean((await columns("p3")).map((c) => c.ink));
+await (await menu(p3, "volume"))?.click();
+await page.waitForSelector("[data-testid=volume-popover] input", { timeout: 3000 }).catch(() => null);
+const focused = await page.evaluate(() => document.activeElement?.dataset.testid);
+check(focused === "clip-volume", `the field has the focus: ${focused}`);
+await linted("[data-testid=volume-popover]", "the Clip volume popover");
+await page.keyboard.press("ArrowDown");
+await page.keyboard.press("ArrowDown");
+const stepped = await page.$eval("[data-testid=clip-volume]", (e) => e.value).catch(() => null);
+check(stepped === "−1.0", `↓ steps 0.5 dB: ${stepped}`);
+await page.$eval("[data-testid=clip-volume]", (e) => e.select()).catch(() => {});
+await page.keyboard.type("-6");
+await page.keyboard.press("Enter");
+check(await until(() => one("p3").gain_db === -6), `Volume… −6 writes gain_db −6: ${one("p3").gain_db}`);
+check(await stepIs("Tone clip volume"), `named "Tone clip volume": ${await undoTitle()}`);
+check(await until(async () => (await page.$eval(`${p3} [data-clip-name]`, (e) => e.textContent).catch(() => "")) === "tone.wav · −6 dB"), "its label says −6 dB");
+let halved = 0;
+await until(async () => {
+  halved = mean((await columns("p3")).map((c) => c.ink));
+  return Math.abs(halved - full / 2) <= 2;
+});
+check(Math.abs(halved - full / 2) <= 2, `and its waveform is half as tall: ${full.toFixed(1)} → ${halved.toFixed(1)}`);
+
+// Remove fades.
+await (await menu(p3, "unfade"))?.click();
+check(await until(() => one("p3").fade_in === 0 && one("p3").fade_out === 0), "Remove fades takes them out");
+check(await stepIs("removing the Tone clip's fades"), `named so: ${await undoTitle()}`);
+
+// Reverse: written, checked, and the waveform mirrored.
+const ahead = (await columns("sw")).map((c) => c.ink);
+await (await menu(sw, "reverse"))?.click();
+check(await until(() => one("sw").reverse === true), "Reverse writes reverse: true");
+check(await stepIs("reversing the Tone clip"), `named so: ${await undoTitle()}`);
+let behind = [];
+await until(async () => {
+  behind = (await columns("sw")).map((c) => c.ink);
+  return behind.length === ahead.length && ahead.every((v, i) => Math.abs(v - behind[behind.length - 1 - i]) <= 2);
+});
+check(ahead.length > 0 && behind.length === ahead.length && ahead.every((v, i) => Math.abs(v - behind[behind.length - 1 - i]) <= 2), "its waveform is mirrored");
+const checkedNow = await (await menu(sw, "reverse"))?.evaluate((e) => e.getAttribute("aria-checked"));
+await page.keyboard.press("Escape");
+check(checkedNow === "true", `the menu's Reverse is checked: ${checkedNow}`);
+// A reversed clip's right edge in by a beat: it starts later in its file.
+b = await box(sw);
+await page.mouse.move(b.x + b.width - 2, b.y + b.height / 2 + 6);
+await page.mouse.down();
+await page.mouse.move(b.x + b.width - 2 - ppb, b.y + b.height / 2 + 6, { steps: 8 });
+await page.mouse.up();
+check(await until(() => one("sw").length === 5 && close(one("sw").offset, 60 / 124)), `a reversed clip trims from its right edge: ${JSON.stringify(one("sw"))}`);
+
+// Move, copy, split, duplicate and delete: one undo step each.
+b = await box(p3);
+await drag({ x: b.x + b.width / 2, y: b.y + b.height - 6 }, { x: b.x + b.width / 2 + 4 * ppb, y: b.y + b.height - 6 });
+check(await until(() => one("p3").start === 37), `a drag moves it: ${one("p3").start}`);
+check(await stepIs("moving a Tone clip"), `"moving a Tone clip": ${await undoTitle()}`);
+await key("Meta+KeyD");
+check(await until(() => laneClips().filter((c) => c.asset === "tone.wav" && c.gain_db === -6).length === 2), "⌘D duplicates it");
+check(await stepIs("duplicating a Tone clip"), `"duplicating a Tone clip": ${await undoTitle()}`);
+await key("Backspace");
+check(await until(() => laneClips().filter((c) => c.asset === "tone.wav" && c.gain_db === -6).length === 1), "⌫ deletes the copy");
+check(await stepIs("deleting a Tone clip"), `"deleting a Tone clip": ${await undoTitle()}`);
+await linted(lane, "the lane after its edits");
+if (process.env.ST_SHOT) await page.screenshot({ path: `${process.env.ST_SHOT}/a3.png` });
 done(errors);

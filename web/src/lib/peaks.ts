@@ -104,3 +104,35 @@ export function beatAt(tempo: Tempo, seconds: number): number {
 
 /** How long a clip plays, in seconds, under the tempo map. */
 export const clipSeconds = (tempo: Tempo, c: { start: number; length: number }) => secondsAt(tempo, c.start + c.length) - secondsAt(tempo, c.start);
+
+/** The length in seconds of the file clip `c` plays, once its peaks are here (null before, or missing). */
+export function fileSeconds(session: number, c: Pick<AudioClip, "asset" | "hash">): number | null {
+  const p = got.get(`${session}\n${c.asset}\n${c.hash ?? ""}`);
+  return p && p !== MISSING ? p.frames / p.rate : null;
+}
+
+/**
+ * How far audio clip `c`'s edges may go (Q13, D3), in beats: forwards, the left edge to the file's
+ * start and the right edge to its end; backwards (a reversed clip plays its span from its end), the
+ * left edge to the file's end and the right edge to its start. `start` and `end` say which end of
+ * the file stops each edge. Null where nothing stops it (a pitched or warped clip, a file not read).
+ */
+export function edgeLimits(c: AudioClip, tempo: Tempo, file: number | null) {
+  const free = { left: null as number | null, right: null as number | null, leftWord: "", rightWord: "" };
+  if ((c.pitch ?? 0) !== 0 || file === null) return free;
+  const offset = c.offset ?? 0;
+  const t0 = secondsAt(tempo, c.start), t1 = secondsAt(tempo, c.start + c.length);
+  const name = c.asset.split("/").pop() ?? c.asset;
+  return c.reverse
+    ? { left: beatAt(tempo, t1 - (file - offset)), right: beatAt(tempo, t1 + offset), leftWord: `End of ${name}`, rightWord: `Start of ${name}` }
+    : { left: beatAt(tempo, t0 - offset), right: beatAt(tempo, t0 + file - offset), leftWord: `Start of ${name}`, rightWord: `End of ${name}` };
+}
+
+/** Audio clip `c` given a new span, what plays inside staying where it plays: its offset moves as the server moves it (A3). */
+export function respanned(c: AudioClip, tempo: Tempo, start: number, length: number): AudioClip {
+  const offset = c.offset ?? 0;
+  const moved = c.reverse
+    ? offset + secondsAt(tempo, c.start + c.length) - secondsAt(tempo, start + length)
+    : offset + secondsAt(tempo, start) - secondsAt(tempo, c.start);
+  return { ...c, start, length, offset: Math.max(0, moved) };
+}

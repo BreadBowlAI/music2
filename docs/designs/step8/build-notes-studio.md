@@ -177,6 +177,81 @@ used again, a taken name numbered); one undo takes an import back and the file s
 is named, a taken name numbered (compared in any capitals), the same bytes used again. WRITE-1 *Today*: an imported
 file is pushed and its folder synced, then taken into the session, before the Tx that names it. WRITE-10: import audio
 (one `Gesture::Set`, named "importing …").
+### A3. Edit audio clips
+
+**In short**
+
+| What | Now |
+|---|---|
+| Move, copy, split, duplicate, delete | As with notes clips. Each is one Undo. You hear the change when you let go |
+| Trim the left edge | The clip starts later in its file. What is left plays where it did |
+| Trim the right edge | It stops where the file ends. The bubble says "End of tone.wav" |
+| Fades | Two small squares at the clip's top corners (on hover, or when it is selected). Drag one in for a fade. The bubble says "Fade in 0.40 s". Double-click a square: no fade |
+| Volume… | In the clip's menu. Type a number of dB, or use ↑ ↓ (0.5 dB) and Shift with them (3 dB). Return sets it. The label says "tone.wav · −6 dB" and the waveform gets smaller |
+| Reverse | In the clip's menu, with a check while it is on. The waveform turns round. A reversed clip can be trimmed and split too now |
+| Remove fades | In the clip's menu. Greyed when the clip has none |
+| Undo names | "Tone fade in", "Tone clip volume", "reversing the Tone clip", "removing the Tone clip's fades" |
+
+**What changed**
+
+- `crates/editor/src/clips.rs`: `Gesture::Audio { clip, gain_db?, fade_in?, fade_out?, reverse? }` (tag `audio`):
+  only an audio clip; volume −48 to +12 dB; fades 0 or more and together at most the clip's seconds under the tempo
+  map; one Tx, `Confined { lanes }`, as every gesture. Resize of an audio clip goes through `audio_span`: forwards the
+  left edge moves the offset, backwards the right edge does (a reversed clip plays its span from its end); the file
+  stops each edge (D3: forwards the left edge at its start and the right edge at its end; backwards the right edge at
+  its start and the left edge at its end; 1 ms of slack, the length from the header by `asset_seconds`, no decode);
+  only the edge that moves a limit is held to it. A reversed clip splits: the first part starts later in the asset,
+  the second keeps the offset. `audio_edge` now refuses only a pitched clip's offset edge (as before) and a reversed
+  clip with warp markers. `pinned` names the audio gesture's clip.
+- `crates/server/src/graph/lanes.rs`: `named` gives the audio gesture's lane (one pattern, so a lease names it).
+- `web/src/lib/clips.ts`: the `audio` gesture. `web/src/lib/peaks.ts`: `fileSeconds`, `edgeLimits` (each edge's limit
+  in beats and its words), `respanned` (an audio clip's offset as the server moves it).
+- `web/src/components/Wave.tsx`: the fade handles (7 px, top corners, shown on hover or when selected, on clips 24 px
+  wide or more: D33; their own drag, never the clip's; the fade drawn as it is dragged; one gesture on release; Esc
+  puts it back; a double-click takes it out), the bubble, `sendAudio`, `audioRows` (Volume…, Reverse with its check,
+  Remove fades) and `VolumePopover` ("Clip volume", D20).
+- `web/src/components/ClipMenu.tsx`: `MenuItem.checked`: a row that is on or off (`menuitemcheckbox`), and every row
+  of such a menu gets the check's room so the words line up.
+- `web/src/components/SongTimeline.tsx` (A's blocks): `reshaped` moves an audio clip's offset as the server will (its
+  waveform stays put while an edge is dragged); an audio clip's edges stop at its file with the bubble's words; the
+  audio rows after Split; `<VolumePopover />` beside Repeat's; the clip's tooltip names the fade corners and says its
+  volume; `inside()` gives `Wave` what it needs to edit.
+
+**Tests**
+
+- `clips_tests.rs`: `fades_gain_and_reverse_are_one_tx_each` (one revision each, nothing else changes, four undos take
+  them back, Remove fades), `fades_never_pass_the_clip`, `gain_stays_in_its_range`, `only_an_audio_clip_takes_audio_settings`,
+  `a_reversed_clip_trims_from_either_edge_and_plays_the_same_samples` (the render's frames where both play are equal,
+  to the bit, each way and back), `a_reversed_clip_splits_into_the_same_samples`, `the_edges_stop_at_the_file_both_ways`
+  (four cases, the slack, a pitched clip's left edge). Changed: `an_audio_left_trim_moves_its_offset` and
+  `a_split_audio_clip_plays_the_same_samples` no longer expect a reversed clip to refuse.
+- `e2e/st-audio.mjs` part 3 (67 checks in all now): the right edge stops at the file's end ("End of tone.wav"), one
+  undo step; a left trim moves the offset by a beat's seconds; the selected clip's 7 px fade handles; a fade dragged
+  ("Fade in 0.50 s", written in seconds, "Undo Tone fade in"); the menu's rows after Split, Reverse unchecked, Remove
+  fades on; Volume… (the field has the focus, ↓ steps 0.5 dB, −6 writes it, "Undo Tone clip volume", the label, the
+  waveform half as tall); Remove fades; Reverse (written, named, the waveform mirrored, checked in the menu); a reversed
+  clip's right edge trims; move, ⌘D, ⌫ each named; lint of the handles, the menu, the popover and the lane.
+
+**Red first**
+
+- The old rule (a reversed clip's edges and splits refused, no file limit): `a_reversed_clip_splits_into_the_same_samples`:
+  `The audio clip's split can't move here: it is reversed.`; `a_reversed_clip_trims_from_either_edge…`: `…right edge
+  can't move here: it is reversed`; `the_edges_stop_at_the_file_both_ways`: `Resize { … length: 8.01 } was accepted`.
+- `st-audio` on `a-dist-before`: `FAIL the bubble says where the file ends: 10.3.1`, `FAIL the right edge stops at
+  the file's end: 6`, `FAIL the selected clip shows its 7 px fade handles: 0`, `FAIL Volume…, Reverse and Remove fades
+  come after Split: cut,copy,paste,duplicate,repeat,split,delete,loop`.
+
+**Checks**: clippy and the mac lint (`m2-editor`, `m2-server`); their tests (322 + 319); the web build; `st-audio`
+67/67, `taste` 39/39, `s8-clips` 94/94, `s8-leases` 55/55, `pc-keys` 37/37.
+
+**Left**: the fades of several selected clips at once; Volume… on several clips; a pitched clip's left edge (pitch
+isn't in the app); joining audio clips (Q15).
+
+**For gaps.md**: #18: audio clips are edited in the app: trims (both ways, reversed too, stopping at the file),
+fades, volume, reverse, remove fades.
+
+**Contract**: WRITE-10 rows: audio clip settings (`Gesture::Audio`: volume, fades, direction), one Tx each. TL rows:
+an audio clip's edges stop at its file, mirrored for a reversed clip.
 
 ## Lane B
 

@@ -4,13 +4,22 @@
 // scaled by its volume (clipped at the body's edge), tapered by its fades, each fade a thin
 // `fg-muted` curve. Drawn on canvas tiles of 1,024 px, each only while it is on screen.
 
+import clsx from "clsx";
 import { AudioWaveform } from "lucide-react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
-import type { AudioClip } from "../lib/graph";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { create } from "zustand";
+import { send, serverRef, type Gesture } from "../lib/clips";
+import { clipIndex, findLane, moduleName, type AudioClip, type ClipRef, type TimelineLane } from "../lib/graph";
 import type { TrackColor } from "../lib/palette";
-import { clipSeconds, MISSING, secondsAt, usePeaks, type Peaks, type Tempo } from "../lib/peaks";
+import { beatAt, clipSeconds, MISSING, secondsAt, usePeaks, type Peaks, type Tempo } from "../lib/peaks";
 import { useStore } from "../lib/store";
 import { useZoom } from "../lib/zoom";
+import type { MenuItem } from "./ClipMenu";
+import { Popover } from "./ui";
+
+/** A clip's volume, in dB (Q11): as the server takes it. */
+const GAIN = [-48, 12] as const;
 
 const TILE = 1024;
 /** From a clip's left edge to its inside: the 1 px gap before it and its 1 px border. */
@@ -128,7 +137,7 @@ function drawFades(canvas: HTMLCanvasElement, shape: Shape, fadeIn: number, fade
 }
 
 /** One tile: drawn once it is on screen, and again when what it shows changes. */
-function Tile({ x0, width, height, peaks, shape, clip, ink }: { x0: number; width: number; height: number; peaks: Peaks; shape: Shape; clip: AudioClip; ink: string }) {
+function Tile({ x0, width, height, peaks, shape, fades, ink }: { x0: number; width: number; height: number; peaks: Peaks; shape: Shape; fades: [number, number]; ink: string }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const [seen, setSeen] = useState(false);
   useEffect(() => {
@@ -143,24 +152,66 @@ function Tile({ x0, width, height, peaks, shape, clip, ink }: { x0: number; widt
     if (!el || !seen || height <= 0) return;
     draw(el, peaks, shape, x0, width, height, ink);
     const muted = getComputedStyle(el).getPropertyValue("--color-fg-muted").trim() || "#6b7076";
-    drawFades(el, shape, clip.fade_in ?? 0, clip.fade_out ?? 0, x0, muted);
-  }, [seen, peaks, shape, x0, width, height, ink, clip.fade_in, clip.fade_out]);
+    drawFades(el, shape, fades[0], fades[1], x0, muted);
+  }, [seen, peaks, shape, x0, width, height, ink, fades]);
   return <canvas ref={ref} data-wave-tile={x0 / TILE} className="absolute top-0 h-full" style={{ left: x0, width }} />;
 }
 
-/** The inside of audio clip `clip`: its name, then its waveform. */
-export const Wave = memo(function Wave({ clip, color }: { clip: AudioClip; color: TrackColor }) {
+/** What lets a clip's waveform be edited in place: its lane, how a gesture names it, and its track's name. */
+export interface WaveEdit {
+  ref: ClipRef;
+  lane: TimelineLane;
+  editable: boolean;
+  picked: boolean;
+}
+
+/** "Vox": a track's name, as undo steps say it. */
+function trackName(module: string) {
+  const t = useStore.getState().graph?.timeline.tracks.find((x) => x.module === module);
+  return moduleName({ key: module, label: t?.label });
+}
+
+/** The narrowest clip that shows its fade handles (D33). */
+const HANDLES_FROM = 24;
+/** A fade handle: 7 px, its top 8 px of the clip's corner (D33). */
+const HANDLE = 7;
+
+/** "0.40 s". */
+const secondsWords = (s: number) => `${s.toFixed(2)} s`;
+
+/** Send an audio gesture on `ref` (one undo step, named by `name` from its track's name), saying a refusal in a toast. */
+export function sendAudio(lane: TimelineLane, ref: ClipRef, set: Omit<Extract<Gesture, { op: "audio" }>, "op" | "clip">, name: (track: string) => string) {
+  const { graph, toast } = useStore.getState();
+  const clip = serverRef(lane, ref);
+  if (!graph || !clip) return Promise.resolve(null);
+  return send(graph, { op: "audio", clip, ...set }, { name: name(trackName(ref.module)) }).catch((error) => {
+    toast(error instanceof Error ? error.message.replace(/^edit rejected: /, "") : String(error));
+    return null;
+  });
+}
+
+/** The inside of audio clip `clip`: its name, then its waveform, and (`edit`) its fade handles. */
+export const Wave = memo(function Wave({ clip, color, edit }: { clip: AudioClip; color: TrackColor; edit?: WaveEdit }) {
   const peaks = usePeaks(clip);
   const ppb = useZoom();
   const tempo = useStore((s) => s.graph?.timeline.tempo) ?? NO_TEMPO;
   const box = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(0);
-  const { start, length, offset, reverse, pitch, gain_db, fade_in, fade_out } = clip;
+  // A fade being dragged, or just let go of: drawn so until the clip says it.
+  const [fading, setFading] = useState<{ which: "in" | "out"; seconds: number; at: { x: number; y: number } | null } | null>(null);
+  const fadeIn = fading?.which === "in" ? fading.seconds : (clip.fade_in ?? 0);
+  const fadeOut = fading?.which === "out" ? fading.seconds : (clip.fade_out ?? 0);
+  const { start, length, offset, reverse, pitch, gain_db } = clip;
   // Made again only when what it shows changes, so a tile redraws only then.
   const shape = useMemo(
-    () => shapeOf({ asset: "", start, length, offset, reverse, pitch, gain_db, fade_in, fade_out }, tempo, ppb),
-    [start, length, offset, reverse, pitch, gain_db, fade_in, fade_out, tempo, ppb],
+    () => shapeOf({ asset: "", start, length, offset, reverse, pitch, gain_db, fade_in: fadeIn, fade_out: fadeOut }, tempo, ppb),
+    [start, length, offset, reverse, pitch, gain_db, fadeIn, fadeOut, tempo, ppb],
   );
+  const fades = useMemo<[number, number]>(() => [fadeIn, fadeOut], [fadeIn, fadeOut]);
+  // A fade let go of shows as written once the clip says it.
+  useEffect(() => {
+    if (fading && !fading.at && (fading.which === "in" ? clip.fade_in ?? 0 : clip.fade_out ?? 0) === fading.seconds) setFading(null);
+  }, [clip.fade_in, clip.fade_out, fading]);
   useEffect(() => {
     const el = box.current;
     if (!el) return;
@@ -178,14 +229,227 @@ export const Wave = memo(function Wave({ clip, color }: { clip: AudioClip; color
     );
   const width = Math.max(0, clip.length * ppb - 2 * INSET);
   const tiles = Array.from({ length: Math.ceil(width / TILE) }, (_, i) => i * TILE);
+  /** Where `seconds` into the clip is, in px from its inside's left. */
+  const xOf = (seconds: number) => Math.max(0, (beatAt(tempo, secondsAt(tempo, clip.start) + seconds) - clip.start) * ppb - INSET);
+
+  /** A press on a fade handle: drag it in for a fade (Q10), one Tx when let go; Esc puts it back. */
+  const down = (which: "in" | "out", e: React.PointerEvent<HTMLElement>) => {
+    if (e.button !== 0 || !edit?.editable) return;
+    // The handle's own drag: never the clip's move.
+    e.stopPropagation();
+    e.preventDefault();
+    const el = e.currentTarget;
+    const inside = el.parentElement!.getBoundingClientRect();
+    const pointer = e.pointerId;
+    el.setPointerCapture(pointer);
+    const was = which === "in" ? (clip.fade_in ?? 0) : (clip.fade_out ?? 0);
+    const other = which === "in" ? (clip.fade_out ?? 0) : (clip.fade_in ?? 0);
+    let now = was;
+    let moved = false;
+    const at = (ev: PointerEvent) => {
+      const s = shape.at(ev.clientX - inside.left);
+      const seconds = which === "in" ? s : shape.seconds - s;
+      return Math.round(Math.min(Math.max(0, seconds), Math.max(0, shape.seconds - other)) * 1000) / 1000;
+    };
+    const move = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointer) return;
+      moved = true;
+      now = at(ev);
+      setFading({ which, seconds: now, at: { x: ev.clientX, y: ev.clientY } });
+    };
+    const off = () => {
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      el.removeEventListener("pointercancel", up);
+      window.removeEventListener("keydown", esc, true);
+    };
+    const up = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointer) return;
+      off();
+      if (!moved || now === was || ev.type !== "pointerup") return setFading(null);
+      setFading({ which, seconds: now, at: null });
+      void sendAudio(edit.lane, edit.ref, which === "in" ? { fade_in: now } : { fade_out: now }, (t) => `${t} fade ${which}`).then((done) => {
+        if (!done) setFading(null);
+      });
+    };
+    const esc = (ev: KeyboardEvent) => {
+      if (ev.key !== "Escape") return;
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+      off();
+      if (el.hasPointerCapture(pointer)) el.releasePointerCapture(pointer);
+      setFading(null);
+    };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+    el.addEventListener("pointercancel", up);
+    window.addEventListener("keydown", esc, true);
+  };
+  /** A double-click on a fade handle: no fade. */
+  const none = (which: "in" | "out", e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!edit?.editable || (which === "in" ? !clip.fade_in : !clip.fade_out)) return;
+    void sendAudio(edit.lane, edit.ref, which === "in" ? { fade_in: 0 } : { fade_out: 0 }, (t) => `${t} fade ${which}`);
+  };
+  const handles = !!edit?.editable && width + 2 * INSET >= HANDLES_FROM;
+  const handle = (which: "in" | "out") => {
+    const seconds = which === "in" ? fadeIn : fadeOut;
+    const x = which === "in" ? Math.min(xOf(seconds), width - HANDLE) : Math.max(0, xOf(shape.seconds - seconds) - HANDLE);
+    return (
+      <span
+        key={which}
+        data-fade={which}
+        title={`Fade ${which}: drag ${which === "in" ? "right" : "left"} · double-click for none`}
+        onPointerDown={(e) => down(which, e)}
+        onDoubleClick={(e) => none(which, e)}
+        className={clsx(
+          "absolute top-0 z-10 rounded-[2px] border bg-raised cursor-ew-resize touch-none",
+          // Shown on hover or while the clip is selected (Q10), and while dragged.
+          edit?.picked || fading?.which === which ? "opacity-100" : "opacity-0 in-[[data-clip]:hover]:opacity-100",
+        )}
+        style={{ left: x, width: HANDLE, height: HANDLE, borderColor: color.ink }}
+      />
+    );
+  };
   return (
     <>
       <div data-clip-name className="absolute inset-x-0 top-0 px-1.5 text-xs leading-[14px] truncate pointer-events-none" style={{ height: STRIP, color: color.ink }}>
         {audioLabel(clip)}
       </div>
       <div ref={box} data-wave={peaks ? "" : "loading"} aria-hidden className="absolute inset-x-0 bottom-0.5 pointer-events-none" style={{ top: STRIP }}>
-        {peaks && tiles.map((x0) => <Tile key={x0} x0={x0} width={Math.min(TILE, width - x0)} height={height} peaks={peaks} shape={shape} clip={clip} ink={color.ink} />)}
+        {peaks && tiles.map((x0) => <Tile key={x0} x0={x0} width={Math.min(TILE, width - x0)} height={height} peaks={peaks} shape={shape} fades={fades} ink={color.ink} />)}
       </div>
+      {handles && (
+        <div className="absolute inset-x-0 top-0 h-0">
+          {handle("in")}
+          {handle("out")}
+        </div>
+      )}
+      {fading?.at && <Bubble at={fading.at}>{`Fade ${fading.which} ${secondsWords(fading.seconds)}`}</Bubble>}
     </>
   );
 });
+
+/** The value bubble at the pointer while a fade is dragged (taste.md §2.14), as the timeline's. */
+function Bubble({ at, children }: { at: { x: number; y: number }; children: ReactNode }) {
+  return createPortal(
+    <div
+      aria-hidden
+      data-testid="fade-bubble"
+      className="fixed z-50 pointer-events-none -translate-x-1/2 -translate-y-full px-1.5 py-0.5 rounded-sm bg-fg-strong/92 text-white text-xs tabular-nums whitespace-nowrap"
+      style={{ left: at.x, top: at.y - 12 }}
+    >
+      {children}
+    </div>,
+    document.body,
+  );
+}
+
+// ---------------------------------------------------------------- the clip menu's rows and Volume…
+
+/** Volume… open: where, and on which clip. */
+const useVolume = create<{ at: { x: number; y: number }; lane: TimelineLane; ref: ClipRef } | null>(() => null);
+
+/**
+ * The clip menu's rows for one audio clip (Q11, Q12, A3), after Split: Volume…, Reverse (checked
+ * while on) and Remove fades (greyed with none). `off`: why nothing can be edited now.
+ */
+export function audioRows(picked: { ref: ClipRef; lane: TimelineLane; clip: unknown }[], at: { x: number; y: number }, off: string | null): (MenuItem | null)[] {
+  if (picked.length !== 1 || picked[0].lane.kind !== "audio") return [];
+  const { ref, lane } = picked[0];
+  const c = picked[0].clip as AudioClip;
+  return [
+    { id: "volume", label: "Volume…", off, run: () => useVolume.setState({ at, lane, ref }) },
+    {
+      id: "reverse",
+      label: "Reverse",
+      checked: !!c.reverse,
+      off,
+      run: () => void sendAudio(lane, ref, { reverse: !c.reverse }, (t) => (c.reverse ? `playing the ${t} clip forwards` : `reversing the ${t} clip`)),
+    },
+    {
+      id: "unfade",
+      label: "Remove fades",
+      off: off ?? (c.fade_in || c.fade_out ? null : "This clip has no fades."),
+      run: () => void sendAudio(lane, ref, { fade_in: 0, fade_out: 0 }, (t) => `removing the ${t} clip's fades`),
+    },
+  ];
+}
+
+/** dB as the field shows it: "−3.0". */
+const dbField = (db: number) => `${db < 0 ? "−" : ""}${Math.abs(db).toFixed(1)}`;
+
+/**
+ * Volume… (Q11, D20): "Clip volume" and one field, in dB, which has the focus. ↑ ↓ step 0.5 dB,
+ * ⇧↑ ⇧↓ 3 dB; Return sets it (one undo step, "Vox clip volume"); Esc closes. −48 to +12 dB.
+ */
+export function VolumePopover() {
+  const open = useVolume();
+  const graph = useStore((s) => s.graph);
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const [draft, setDraft] = useState("0.0");
+  const input = useRef<HTMLInputElement>(null);
+  // The clip as the timeline draws it now.
+  const lane = open && graph ? (findLane(graph.timeline, open.ref.module, open.ref.lane) ?? open.lane) : open?.lane;
+  const i = lane && open ? clipIndex(lane.clips, open.ref) : -1;
+  const clip = lane && i >= 0 ? (lane.clips[i] as AudioClip) : undefined;
+  useEffect(() => {
+    if (open) setDraft(dbField(clip?.gain_db ?? 0));
+    // Only when it opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  useEffect(() => input.current?.select(), [anchor]);
+  if (!open) return null;
+  const close = () => useVolume.setState(null, true);
+  const n = Number(draft.trim().replace("−", "-").replace(/\s*db$/i, ""));
+  const ok = draft.trim() !== "" && Number.isFinite(n) && n >= GAIN[0] && n <= GAIN[1];
+  const go = () => {
+    if (!ok) return;
+    close();
+    const db = Math.round(n * 10) / 10;
+    if (lane && db !== (clip?.gain_db ?? 0)) void sendAudio(lane, open.ref, { gain_db: db }, (t) => `${t} clip volume`);
+  };
+  const step = (by: number) => {
+    const base = Number.isFinite(n) ? n : (clip?.gain_db ?? 0);
+    setDraft(dbField(Math.min(GAIN[1], Math.max(GAIN[0], Math.round((base + by) * 10) / 10))));
+  };
+  return (
+    <>
+      {createPortal(<span ref={setAnchor} aria-hidden className="fixed size-px pointer-events-none" style={{ left: open.at.x, top: open.at.y - 4 }} />, document.body)}
+      {anchor && (
+        <Popover anchor={anchor} onClose={close} data-testid="volume-popover" aria-label="Clip volume" className="w-[220px]">
+          <div className="px-2 py-1.5 flex items-center gap-2 text-sm text-fg">
+            <label htmlFor="clip-volume" className="flex-1">
+              Clip volume
+            </label>
+            <input
+              ref={input}
+              id="clip-volume"
+              data-testid="clip-volume"
+              type="text"
+              inputMode="decimal"
+              value={draft}
+              autoFocus
+              aria-invalid={!ok}
+              title="↑ ↓ 0.5 dB · Shift with them 3 dB · Return sets it"
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                // Its keys are its own: never the timeline's.
+                e.stopPropagation();
+                if (e.key === "Enter") go();
+                else if (e.key === "Escape") close();
+                else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                  e.preventDefault();
+                  step((e.key === "ArrowUp" ? 1 : -1) * (e.shiftKey ? 3 : 0.5));
+                }
+              }}
+              className={clsx("w-16 h-ctl px-2 rounded-sm bg-raised border text-sm text-fg text-right tabular-nums outline-none", ok ? "border-line-strong focus:border-accent" : "border-danger")}
+            />
+            <span className="text-fg-muted">dB</span>
+          </div>
+          {!ok && <div role="alert" className="px-2 pb-1.5 text-xs text-danger">From −48 to +12 dB</div>}
+        </Popover>
+      )}
+    </>
+  );
+}

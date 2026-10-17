@@ -148,7 +148,8 @@ fn a_left_trim_keeps_notes_in_place_and_trimming_back_brings_them_back() {
 }
 
 // An audio clip's left edge moves its offset into the asset by the seconds the edge moved, and
-// stops at the asset's start. A pitched or reversed clip's left edge doesn't move (A8).
+// stops at the asset's start. A pitched clip's left edge doesn't move (A8); a reversed clip's left
+// edge keeps its offset (A3).
 #[test]
 fn an_audio_left_trim_moves_its_offset() {
     let f = fixture("examples/resample");
@@ -163,10 +164,8 @@ fn an_audio_left_trim_moves_its_offset() {
     go(&mut s, Gesture::Resize { clip: by_id("chops/clips", "84f0shn6"), start: 8.5, length: 1.75 });
     let past = refused(&mut s, Gesture::Resize { clip: by_id("chops/clips", "84f0shn6"), start: 8.0, length: 2.25 });
     assert!(past.contains("start of its audio"), "{past}");
-    for (id, start, says) in [("x5175mvv", 4.5, "pitch"), ("j6xncyg7", 1.5, "reversed")] {
-        let why = refused(&mut s, Gesture::Resize { clip: by_id("chops/clips", id), start, length: 1.0 });
-        assert!(why.contains(says), "{id}: {why}");
-    }
+    let why = refused(&mut s, Gesture::Resize { clip: by_id("chops/clips", "x5175mvv"), start: 4.5, length: 1.0 });
+    assert!(why.contains("pitch"), "{why}");
 }
 
 // A new clip is a bar long at the meter there: empty notes, or automation holding what the lane
@@ -492,10 +491,8 @@ fn a_split_audio_clip_plays_the_same_samples() {
     let second = c.iter().find(|c| c.id.as_deref() == Some(done.made[0].1.as_str())).unwrap();
     assert_eq!((second.start, second.length, second.offset), (1.0, 1.0, 0.5));
     assert_eq!(render(&s), sound, "the same samples");
-    for (id, at, says) in [("x5175mvv", 5.5, "pitch"), ("j6xncyg7", 3.0, "reversed")] {
-        let why = refused(&mut s, Gesture::Split { clips: vec![by_id("chops/clips", id)], at });
-        assert!(why.contains(says), "{id}: {why}");
-    }
+    let why = refused(&mut s, Gesture::Split { clips: vec![by_id("chops/clips", "x5175mvv")], at: 5.5 });
+    assert!(why.contains("pitch"), "{why}");
 }
 
 // Join makes one clip of a lane's notes clips, from the earliest start to the latest end, with the
@@ -699,4 +696,180 @@ fn pinned_gives_each_named_clip_its_hash() {
     assert!(s.refresh());
     assert!(matches!(apply_as(s.accepted(), &pin, "tx-x"), Err(EditError::Changed(_))));
     assert!(apply_as(s.accepted(), &drag, "tx-x").is_ok(), "unpinned, the changed clip moves");
+}
+
+// ---------------------------------------------------------------- audio clips (lane A's A3)
+
+/// The resample example's audio clip `id`.
+fn audio(s: &Session, id: &str) -> m2_song::AudioClip {
+    let Some(LaneData::Audio(c)) = data(s, "chops/clips") else { panic!("an audio lane") };
+    c.into_iter().find(|c| c.id.as_deref() == Some(id)).unwrap_or_else(|| panic!("no clip {id}"))
+}
+
+/// What an audio gesture sets.
+#[derive(Default)]
+struct Settings {
+    gain_db: Option<f64>,
+    fade_in: Option<f64>,
+    fade_out: Option<f64>,
+    reverse: Option<bool>,
+}
+
+fn set(id: &str, o: Settings) -> Gesture {
+    Gesture::Audio { clip: by_id("chops/clips", id), gain_db: o.gain_db, fade_in: o.fade_in, fade_out: o.fade_out, reverse: o.reverse }
+}
+
+/// The resample example's whole song, 3 s of it, at 48 kHz.
+fn rendered(s: &Session) -> Vec<[f32; 2]> {
+    let rev = s.accepted();
+    m2_runtime::Renderer::new(&rev.compiled.flat, &rev.compiled.data, &s.packages, 48_000).unwrap().render(3.0).unwrap()
+}
+
+/// keys-bounce.wav's length, in seconds.
+fn keys_seconds(f: &Fixture) -> f64 {
+    asset_seconds(&f.0.join("assets/keys-bounce.wav")).unwrap()
+}
+
+// Q10, Q11, Q12: a clip's fades, its volume and its direction are each one Tx, one undo step, and
+// each changes only that.
+#[test]
+fn fades_gain_and_reverse_are_one_tx_each() {
+    let f = fixture("examples/resample");
+    let mut s = f.open();
+    let was = audio(&s, "a3s9vpxb");
+    let steps = [
+        set("a3s9vpxb", Settings { fade_in: Some(0.25), ..Settings::default() }),
+        set("a3s9vpxb", Settings { fade_out: Some(0.4), ..Settings::default() }),
+        set("a3s9vpxb", Settings { gain_db: Some(-6.0), ..Settings::default() }),
+        set("a3s9vpxb", Settings { reverse: Some(true), ..Settings::default() }),
+    ];
+    for g in &steps {
+        let before = s.accepted().number;
+        go(&mut s, g.clone());
+        assert_eq!(s.accepted().number, before + 1, "one revision: {g:?}");
+    }
+    let now = audio(&s, "a3s9vpxb");
+    assert_eq!((now.fade_in, now.fade_out, now.gain_db, now.reverse), (0.25, 0.4, -6.0, true));
+    assert_eq!((now.start, now.length, now.offset, &now.asset), (was.start, was.length, was.offset, &was.asset), "nothing else");
+    let line = f.read("data/chops/clips.json");
+    assert!(line.contains(r#""gain_db": -6, "fade_in": 0.25, "fade_out": 0.4, "reverse": true"#), "{line}");
+    for _ in &steps {
+        crate::undo(&mut s).unwrap();
+    }
+    assert_eq!(audio(&s, "a3s9vpxb"), was, "four undos take the four back");
+    // Remove fades: both at once, one step.
+    go(&mut s, set("a3s9vpxb", Settings { fade_in: Some(0.1), fade_out: Some(0.1), ..Settings::default() }));
+    go(&mut s, set("a3s9vpxb", Settings { fade_in: Some(0.0), fade_out: Some(0.0), ..Settings::default() }));
+    assert_eq!((audio(&s, "a3s9vpxb").fade_in, audio(&s, "a3s9vpxb").fade_out), (0.0, 0.0));
+}
+
+// Q10: fades are seconds, 0 or more, and together at most the clip (1 s here: 2 beats at 120 BPM).
+#[test]
+fn fades_never_pass_the_clip() {
+    let f = fixture("examples/resample");
+    let mut s = f.open();
+    go(&mut s, set("a3s9vpxb", Settings { fade_in: Some(0.6), ..Settings::default() }));
+    let why = refused(&mut s, set("a3s9vpxb", Settings { fade_out: Some(0.5), ..Settings::default() }));
+    assert!(why.contains("at most the clip: 1 seconds"), "{why}");
+    go(&mut s, set("a3s9vpxb", Settings { fade_out: Some(0.4), ..Settings::default() }));
+    for bad in [-0.1, f64::NAN, f64::INFINITY] {
+        let why = refused(&mut s, set("a3s9vpxb", Settings { fade_in: Some(bad), ..Settings::default() }));
+        assert!(why.contains("0 or more"), "{bad}: {why}");
+    }
+    assert_eq!((audio(&s, "a3s9vpxb").fade_in, audio(&s, "a3s9vpxb").fade_out), (0.6, 0.4));
+}
+
+// Q11: a clip's volume is −48 to +12 dB.
+#[test]
+fn gain_stays_in_its_range() {
+    let f = fixture("examples/resample");
+    let mut s = f.open();
+    for ok in [-48.0, 12.0, -3.5, 0.0] {
+        go(&mut s, set("a3s9vpxb", Settings { gain_db: Some(ok), ..Settings::default() }));
+        assert_eq!(audio(&s, "a3s9vpxb").gain_db, ok);
+    }
+    for bad in [-48.5, 12.1, f64::NAN] {
+        let why = refused(&mut s, set("a3s9vpxb", Settings { gain_db: Some(bad), ..Settings::default() }));
+        assert_eq!(why, "edit rejected: A clip's volume goes from −48 to +12 dB.", "{bad}");
+    }
+}
+
+// Notes and automation clips have no volume, fades or direction to set.
+#[test]
+fn only_an_audio_clip_takes_audio_settings() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let why = refused(&mut s, Gesture::Audio { clip: by_id("bass/notes", "db9f9t5s"), gain_db: Some(-6.0), fade_in: None, fade_out: None, reverse: None });
+    assert!(why.contains("Only an audio clip"), "{why}");
+}
+
+/// Frames `a..b` (in seconds) of a render.
+fn frames(r: &[[f32; 2]], a: f64, b: f64) -> Vec<[f32; 2]> {
+    r[(a * 48_000.0).round() as usize..(b * 48_000.0).round() as usize].to_vec()
+}
+
+// Q12, D3: a reversed clip trims from either edge, what is left playing where it did, to the bit:
+// its left edge keeps the offset, its right edge moves it. Clip j6xncyg7: beats 2 to 4 (1 to 2 s),
+// reversed, a 0.02 s fade in.
+#[test]
+fn a_reversed_clip_trims_from_either_edge_and_plays_the_same_samples() {
+    let f = fixture("examples/resample");
+    let mut s = f.open();
+    let lane = f.read("data/chops/clips.json");
+    let whole = rendered(&s);
+    go(&mut s, Gesture::Resize { clip: by_id("chops/clips", "j6xncyg7"), start: 2.5, length: 1.5 });
+    let c = audio(&s, "j6xncyg7");
+    assert_eq!((c.start, c.length, c.offset), (2.5, 1.5, 0.0), "the left edge keeps the offset");
+    assert_eq!(frames(&rendered(&s), 1.25 + 0.02, 2.0), frames(&whole, 1.25 + 0.02, 2.0), "what is left plays as it did");
+    go(&mut s, Gesture::Resize { clip: by_id("chops/clips", "j6xncyg7"), start: 2.0, length: 2.0 });
+    assert_eq!(f.read("data/chops/clips.json"), lane, "and back");
+    go(&mut s, Gesture::Resize { clip: by_id("chops/clips", "j6xncyg7"), start: 2.0, length: 1.0 });
+    let c = audio(&s, "j6xncyg7");
+    assert_eq!((c.start, c.length, c.offset), (2.0, 1.0, 0.5), "the right edge moves it: what played last is cut");
+    assert_eq!(frames(&rendered(&s), 1.0 + 0.02, 1.5), frames(&whole, 1.0 + 0.02, 1.5), "what is left plays as it did");
+    go(&mut s, Gesture::Resize { clip: by_id("chops/clips", "j6xncyg7"), start: 2.0, length: 2.0 });
+    assert_eq!(f.read("data/chops/clips.json"), lane, "and back");
+}
+
+// Q12: a reversed clip splits into two that play what it played: the first part starts later in
+// the asset, the second keeps the offset.
+#[test]
+fn a_reversed_clip_splits_into_the_same_samples() {
+    let f = fixture("examples/resample");
+    let mut s = f.open();
+    let whole = rendered(&s);
+    let done = go(&mut s, Gesture::Split { clips: vec![by_id("chops/clips", "j6xncyg7")], at: 3.0 });
+    let (first, second) = (audio(&s, "j6xncyg7"), audio(&s, &done.made[0].1));
+    assert_eq!((first.start, first.length, first.offset, first.reverse), (2.0, 1.0, 0.5, true));
+    assert_eq!((second.start, second.length, second.offset, second.reverse), (3.0, 1.0, 0.0, true));
+    assert_eq!(frames(&rendered(&s), 1.02, 2.0), frames(&whole, 1.02, 2.0), "the same samples");
+}
+
+// Q13, D3: the edges stop at the file, both ways: forwards, the left edge at its start and the
+// right edge at its end; backwards, the right edge at its start and the left edge at its end. With
+// 1 ms of slack, and a clip already past its end keeps its other edge free.
+#[test]
+fn the_edges_stop_at_the_file_both_ways() {
+    let f = fixture("examples/resample");
+    let mut s = f.open();
+    let file = keys_seconds(&f);
+    let beats = |secs: f64| secs * 2.0;
+    // Forwards, a3s9vpxb from 0 with offset 0: its right edge reaches the file's end, and no further.
+    go(&mut s, Gesture::Resize { clip: by_id("chops/clips", "a3s9vpxb"), start: 0.0, length: beats(file) });
+    let why = refused(&mut s, Gesture::Resize { clip: by_id("chops/clips", "a3s9vpxb"), start: 0.0, length: beats(file) + 0.01 });
+    assert!(why.contains("ends where keys-bounce.wav ends"), "{why}");
+    go(&mut s, Gesture::Resize { clip: by_id("chops/clips", "a3s9vpxb"), start: 0.0, length: beats(file) + 0.0015 });
+    assert!((audio(&s, "a3s9vpxb").length - beats(file)).abs() < 0.002, "1 ms of slack");
+    // Backwards, j6xncyg7 (offset 0), moved to beats 18 to 20: its right edge can't go on (the
+    // file's start)…
+    go(&mut s, Gesture::Move { clips: vec![by_id("chops/clips", "j6xncyg7")], by: 16.0, to: None, copy: false });
+    let why = refused(&mut s, Gesture::Resize { clip: by_id("chops/clips", "j6xncyg7"), start: 18.0, length: 2.5 });
+    assert!(why.contains("ends where keys-bounce.wav starts"), "{why}");
+    // …its left edge reaches back to the file's end, and no further.
+    go(&mut s, Gesture::Resize { clip: by_id("chops/clips", "j6xncyg7"), start: 20.0 - beats(file), length: beats(file) });
+    let why = refused(&mut s, Gesture::Resize { clip: by_id("chops/clips", "j6xncyg7"), start: 20.0 - beats(file) - 0.01, length: beats(file) + 0.01 });
+    assert!(why.contains("starts where keys-bounce.wav ends"), "{why}");
+    // Forwards, the left edge stops at the file's start (the old words).
+    let why = refused(&mut s, Gesture::Resize { clip: by_id("chops/clips", "nwskkw0g"), start: 3.9, length: 1.1 });
+    assert!(why.contains("pitch"), "a pitched clip's left edge, as before: {why}");
 }
