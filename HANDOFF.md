@@ -13,7 +13,7 @@ Read this first, then `docs/architecture.md` (the contract) and the design for
 whatever you pick up.
 
 **In short**
-- **8a's live half is done on `8a`** (2026-10-17): Linux green at `c924e0b`; macOS owed. Not on `main` yet: the
+- **8a's live half is done on `8a`** (2026-10-17): Linux green at `21a7a1b`; macOS owed. Not on `main` yet: the
   lead merges it (a merge; `8a` already has `main` at `1cc7382`, `macfix` included). It adds:
 
   | What changed | What you notice |
@@ -25,10 +25,11 @@ whatever you pick up.
   | Gate G12 plays p50 live and judges every callback | the Mac's check plays it for a minute, muted |
 
   An export with a broken sound still fails and names it. No render changed: 10 of 10. A review found 6 things:
-  all fixed, each with a test; so was one flaky server test. Then `ci/check.sh --gates` passed: every row, nothing
-  passed only on a retry (1,404 Rust tests, 59/59 browser suites, 10 of 10 renders, the 7 gate runs; 41
-  minutes). Its first run failed the gates row under load from other jobs (G5 and G7a through the server, which then
-  passed alone 3 times of 3), so it ran again. Owed: the owner's Mac sweep, one paste (Mac runs owed, below): it
+  all fixed, each with a test; so was one flaky server test. Then `ci/check.sh --gates` passed at `21a7a1b`, with
+  `main` at `1cc7382` merged in: every row, nothing passed only on a retry (1,404 Rust tests, 59/59 browser
+  suites, 10 of 10 renders, the 7 gate runs; 35 minutes). Its first run failed the gates row under load from
+  other jobs (G5 and G7a through the server, which then passed alone 3 times of 3); the second passed, before `main`
+  moved. Owed: the owner's Mac sweep, one paste (Mac runs owed, below): it
   picks the live thread count and park or spin. Build notes `docs/designs/step8/build-notes-8a.md` and
   `build-notes-8a-gaps.md`; plans `8a-plan.md` and `8a-live-plan.md` beside them.
 - **`macfix`** (2026-10-17, branch `macfix`, not on `main` yet): the owner's `ci/check.sh` on the Mac at `85b069a`
@@ -177,7 +178,7 @@ whatever you pick up.
 | `sounds-merge` | `e1003ba` | All on `main` (a fast-forward, 2026-10-17). Linux green at `e108e46` (reviewed; `ci/check.sh --gates` and the recorded tests), macOS owed. Branch and worktree deleted. |
 | `8b-backend` | `c9cc6ad` | All on `main` (a fast-forward, 2026-10-17). Linux green at `a8199ff`, macOS owed. Branch and worktree deleted. |
 | `taste-next` | `22bea45`, then docs | All on `main` (a fast-forward, 2026-10-17). Linux green (reviewed; `ci/check.sh` and `--gates`), macOS owed. Branch and worktree deleted. |
-| `8a` | `c924e0b`, then docs only | The offline half is on `main` (a fast-forward, 2026-10-17, Linux green at `bc41693`): the pool (`m2-pool`) and the executor, so exports use several cores with the same bits. **The live half is ready for `main`** (a merge; `main` at `1cc7382` is in it): R1 (a mixer strip runs with its track), live playback on engine threads (real time, the Mac's workgroup), G12 live (`ci/gates.txt`, `ci/sweep.sh`), and the gaps lane (a sound that breaks goes silent alone and is told; out of memory says so). Reviewed (6 findings, all fixed with tests). Linux green at `c924e0b` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Worktree `~/m2-runs/wt/8a` and its `target/` stay until the lead merges. Plans `docs/designs/step8/8a-plan.md` and `8a-live-plan.md`; build notes `build-notes-8a.md` and `build-notes-8a-gaps.md`. |
+| `8a` | `21a7a1b`, then docs only | The offline half is on `main` (a fast-forward, 2026-10-17, Linux green at `bc41693`): the pool (`m2-pool`) and the executor, so exports use several cores with the same bits. **The live half is ready for `main`** (a merge; `main` at `1cc7382` is in it): R1 (a mixer strip runs with its track), live playback on engine threads (real time, the Mac's workgroup), G12 live (`ci/gates.txt`, `ci/sweep.sh`), and the gaps lane (a sound that breaks goes silent alone and is told; out of memory says so). Reviewed (6 findings, all fixed with tests). Linux green at `21a7a1b` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Worktree `~/m2-runs/wt/8a` and its `target/` stay until the lead merges. Plans `docs/designs/step8/8a-plan.md` and `8a-live-plan.md`; build notes `build-notes-8a.md` and `build-notes-8a-gaps.md`. |
 | `polish` | `65f59f1`, then docs only | All on `main` (a fast-forward, 2026-10-17): the rest of the top ten, built in four lanes. Linux green at `65f59f1` (reviewed; `ci/check.sh`), macOS owed. Branch and worktree deleted. Plan `docs/designs/step8/polish-plan.md`; build notes `build-notes-polish.md`. |
 | `8b-ui` | `92317ad`, then docs only | All on `main` (a fast-forward, 2026-10-17). 8b's screens: mute and solo, clips and automation, audition, meters. Linux green at `92317ad` (reviewed; `ci/check.sh`), macOS owed. Branch and worktree deleted. |
 | `origin/taste` | `4804247` | All on `main` now (`a0d5f91` and `4804247`, both merged into `taste-next`). Its worktree is deleted. |
@@ -506,7 +507,7 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
 | 8a's offline half (all CPU cores, offline) | `bc41693` (Linux checks), then docs only | its Mac tests ran at `85b069a` (pool models 23 passed); the offline sweep: done (2026-10-17, at `8a6d9e1`: go) |
 | `next`: 8b.7, 8b.10, Settings, no sound device, undo names, effect comforts | `1560a19` (Linux checks), then docs only | ran at `85b069a`; owed: the same one more run, then the by-ear steps 51 to 60 (a real MIDI keyboard, the metronome against the beat, switching the output) |
 | `macfix`: G7f store (the gain's fast path) and the songs folder by its real path | `ac5d8c0` (Linux checks), then docs only | owed once it is on `main`: one more `ci/check.sh`, then G7f store once more on the old gain (below) |
-| 8a's live half (live on several cores, a sound that breaks, G12) | `c924e0b` (Linux checks), then docs only; on `main` once merged | owed: 8a's Mac sweep below, one paste, about 40 minutes. The same `ci/check.sh` covers its Mac tests and G12's minute |
+| 8a's live half (live on several cores, a sound that breaks, G12) | `21a7a1b` (Linux checks), then docs only; on `main` once merged | owed: 8a's Mac sweep below, one paste, about 40 minutes. The same `ci/check.sh` covers its Mac tests and G12's minute |
 
 **8a's Mac sweep (for the owner): offline and live, one paste.** Once the lead has merged `8a` into `main`.
 
@@ -568,7 +569,7 @@ blocks through partitions and its floating-point mode): `build-notes-macfix.md`,
    Lead's default, the owner may change it: in the export question, Return presses the focused button (at first the
    main one), not always the main one as a Mac alert does.
 5. **`polish` is on `main`.** What it left is in `docs/gaps.md` and its build notes' End.
-6. **8a is done on Linux:** its offline half on `main` (`bc41693`), its live half on `8a` (`c924e0b`, item 2).
+6. **8a is done on Linux:** its offline half on `main` (`bc41693`), its live half on `8a` (`21a7a1b`, item 2).
    What it left is in Left for later ("8a's live half") and the build notes' "For the lead" sections.
 7. **8b.7 and 8b.10 are on `main`** (`next`, Linux green at `1560a19`). What it left is in `docs/gaps.md` and its build notes' End. Then **step 9**
    (8b.9's Change track ID… came in `polish`, without the engine's pass). Before
@@ -751,6 +752,6 @@ From the platform step:
 | The desktop app | Only on an invisible Xvfb screen, as the check's app row opens it. Never on a real screen. |
 | Scratch `HOME` | Anything that runs music2 gets a scratch `HOME` and `M2_AUDIO=none`, and then `CARGO_HOME=/home/jerry/.cargo RUSTUP_HOME=/home/jerry/.rustup`. Never the real `~/.music2` or `~/Music`. `ci/check.sh` does this itself. |
 | Scratch copies | `git worktree add --detach ~/m2-runs/scratch-<label>`, with its own `target/`; delete it when done (they once filled 390 GB). The repo's own `target/` is about 140 GB. |
-| Logs | Each check's folder in `~/m2-runs/check-*` (8a's live half's final: `check-8a-live`, with the gates, at `c924e0b`; 8a's offline final: `check-8a-fg`, with the gates, at `bc41693`; the `sounds` merge's: `check-sm1c` and `-sm2b` with the gates, `-sm3`, `-sm4`, and the final `-sm-fg` with the gates, at `e108e46`; step 7's last: `check-s7-rv1`, and `-rvg` with the gates; before them `-sp1`, `-sp2` and `-spg`); the `sounds` merge's plan in `~/m2-runs/sounds/plan.md`; the step 7 gate runs in `~/m2-runs/gates-fix/` and `~/m2-runs/xc/g7f/`; the review in `~/m2-runs/review-b1/`. |
+| Logs | Each check's folder in `~/m2-runs/check-*` (8a's live half's final: `check-8a-live-3`, with the gates, at `21a7a1b`; `-2` passed at `c924e0b` before `main` moved, and `check-8a-live`, its first, failed under load; 8a's offline final: `check-8a-fg`, with the gates, at `bc41693`; the `sounds` merge's: `check-sm1c` and `-sm2b` with the gates, `-sm3`, `-sm4`, and the final `-sm-fg` with the gates, at `e108e46`; step 7's last: `check-s7-rv1`, and `-rvg` with the gates; before them `-sp1`, `-sp2` and `-spg`); the `sounds` merge's plan in `~/m2-runs/sounds/plan.md`; the step 7 gate runs in `~/m2-runs/gates-fix/` and `~/m2-runs/xc/g7f/`; the review in `~/m2-runs/review-b1/`. |
 | Tools | Rust 1.99.0 (`rust-toolchain.toml`), Node 24, chrome-headless-shell 133.0.6943.141 (the check installs Rust and Chrome when missing), Xvfb. |
 | MIDI | `/dev/snd/seq` gives `EACCES` here: tests inject notes and never open a device. |
