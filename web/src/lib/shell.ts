@@ -55,12 +55,12 @@ interface Shell {
   open: ReadonlySet<string>;
   /** The keyboard shortcuts sheet (⌥K). */
   sheet: boolean;
-  /** A rename asked for from the keyboard (⌘R): the track whose name turns into a field. */
-  renaming: string | null;
+  /** A rename asked for (⌘R, a menu's Rename): the track whose name turns into a field, in its header or its Mix strip. */
+  renaming: { module: string; at: "header" | "strip" } | null;
   /** The roll's Draw mode (B): a click adds a note and a drag paints; else a click selects (D4). */
   draw: boolean;
-  /** A component (`std:mixer`) the Device view shows at full size, scrolled to, once it is on screen. */
-  reveal: string | null;
+  /** A place the Code view opens at, once it can: a file and a line (a Mix strip's Edit in code). */
+  codeAt: { file: string; line: number } | null;
 
   setView: (view: DockView) => void;
   setDock: (open: boolean) => void;
@@ -104,7 +104,7 @@ export const useShell = create<Shell>((set, get) => ({
   sheet: false,
   renaming: null,
   draw: false,
-  reveal: null,
+  codeAt: null,
 
   setView: (view) => {
     save(VIEW_KEY, view);

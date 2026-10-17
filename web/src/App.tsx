@@ -270,7 +270,7 @@ export function appCommand(id: string) {
       return closeSong();
     case "rename":
       // The selected track's name turns into a field; typing in a field already, the chord is the field's.
-      if (!editing() && shell.selected) shell.set({ renaming: shell.selected });
+      if (!editing() && shell.selected) shell.set({ renaming: { module: shell.selected, at: "header" } });
       return;
     case "lanes": {
       // The selected track's automation, or every track's with none selected.

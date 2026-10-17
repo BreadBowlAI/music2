@@ -7,6 +7,7 @@ import { Workspace, type Doc } from "../lib/codeWorkspace";
 import { editorHooks, graphApi, moduleName, type GraphState, type Problem } from "../lib/graph";
 import { chord, isMac } from "../lib/native";
 import { trackColors } from "../lib/palette";
+import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { Button } from "./ui";
 
@@ -195,6 +196,15 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
     const path = problem ?? moduleFile(paths, ws.modules, module);
     if (path && open(path)) followed.current = none ? NO_MODULES : module;
   }, [ws, module, open, version, diagnostics]);
+
+  // A place asked for (a Mix strip's Edit in code): opened at its line, once its file is listed.
+  const codeAt = useShell((s) => s.codeAt);
+  useEffect(() => {
+    if (!codeAt || !ws?.docs.has(codeAt.file)) return;
+    if (!open(codeAt.file, { lineNumber: codeAt.line, column: 1 })) return;
+    useShell.getState().set({ codeAt: null });
+    editor.current?.focus();
+  }, [codeAt, ws, open, version]);
 
   // The accepted revision or the draft changed (a knob, a cable, a save elsewhere): take in the files.
   const fetched = useRef(0);

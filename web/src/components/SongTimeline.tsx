@@ -931,7 +931,7 @@ const TrackRows = memo(function TrackRows({
               label={track.label}
               track={track.track}
               testid="track-label"
-              listen
+              listen="header"
               className={clsx("text-base", selected ? "font-semibold text-fg-strong" : "font-medium text-fg")}
             />
             {issues && <Issues issues={issues} />}

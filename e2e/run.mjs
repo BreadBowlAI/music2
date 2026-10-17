@@ -93,6 +93,7 @@ export const SUITES = [
   ["g11-play", "fix", { expect: 24 }],
   ["s8-tracks", "fix", { expect: 75 }],
   ["s8-songbar", "fix", { expect: 68 }],
+  ["s8-mix", "fix", { expect: 63 }],
   ["pc-keys", "fix", { expect: 37 }],
 ];
 const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export"];

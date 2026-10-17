@@ -329,6 +329,43 @@ export function position(meter: readonly Meter[], beat: number) {
   return `${b.bar + 1}.${q + 1}.${Math.min(3, Math.floor((into - q) * 4)) + 1}`;
 }
 
+/**
+ * A strip of the Mix view (design-8b §5.4): a mixer channel and the tracks it plays, or a track
+ * with no channel of its own. Its fader and pan are knobs of the graph view, by id, so they drag,
+ * lease and write as every knob does.
+ */
+export interface MixStrip {
+  /** The tracks it plays, by key, in the order its channel reads them; none for a channel no track reaches. */
+  modules: string[];
+  /** Its channel's key in the mixer, when it has one. */
+  channel: string | null;
+  /** Its tracks' names ("Kick + Snare"), else its channel's key. */
+  label: string;
+  /** Its first track's colour by name, else graphite. */
+  colour: string;
+  /** The fader's knob id; null when code sets the level (a signal), or the track has no channel. */
+  db: string | null;
+  /** The pan's knob id, when the channel writes a number there. */
+  pan: string | null;
+  /** The channel writes no pan, and its first pan can write one (`graphApi.mixInsert`). */
+  pan_insert: boolean;
+  /** Why a track has no fader: "Not in the mixer", or "In 2 channels: set its level in code". */
+  why: string | null;
+}
+
+/**
+ * The Mix view of the accepted revision: a strip per track in the track order, then one per channel
+ * no track reaches, and std's master. When `mixer` isn't `ok` (no std mixer, several, or channels
+ * not written as an object), `message` says why the levels are in code.
+ */
+export interface MixView {
+  mixer: "ok" | "none" | "several" | "unwritten";
+  message: string | null;
+  strips: MixStrip[];
+  /** std's master: its fader's and its ceiling's knob ids. Null without exactly one master. */
+  master: { db: string | null; ceiling: string | null } | null;
+}
+
 /** A loop between two beats; its range is kept while it is off. */
 export interface Loop { start: number; end: number; on: boolean }
 
@@ -358,6 +395,8 @@ export interface GraphState extends GraphStatus {
   dir: string;
   view: GraphView;
   timeline: TimelineView;
+  /** The Mix view's strips and master (design-8b §5.4). */
+  mix: MixView;
   /** Whether an edit made here can be undone or redone. */
   can_undo: boolean;
   can_redo: boolean;
@@ -615,6 +654,13 @@ export const graphApi = {
       (r) => ({ name: `adding ${r.label}`, structural: true }),
       call<Edit & { module: string; label: string }>("/track/add", { session, component: instrument.component, label: opts.label, after: opts.after ?? undefined }),
     ),
+  /**
+   * A mixer channel's first pan (design-8b §5.3): optional control `control` (`pan`) of channel
+   * `channel` written into its entry as `value`. One undoable edit; the answer names the new knob
+   * (`control`) in the revision it made, which the drag then leases.
+   */
+  mixInsert: (session: number, channel: string, control: string, value: number, step: Step) =>
+    edit(session, step, call<Edit & { control: string }>("/mix/insert", { session, channel, control, value })),
   /** Duplicate a track: its code, clips (with new ids) and channel, below it in its colour. */
   duplicateTrack: (session: number, module: string, name: string) =>
     edit(

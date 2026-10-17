@@ -697,3 +697,71 @@ The name's field, open with a long name, in a page laid out as the Mac app's bar
 | The timed gates with the new state field (`mix` adds a view's walk to each state) | final phase |
 | When the `sounds` merge's slice 3 lands: rebuild `std.wasm` (`std/build.sh`, then `--check`), never take a side; `forms.ts` may need recording again | the merge |
 | Scratch: `~/m2-runs/tn-scratch/b4/`. Logs: `~/m2-runs/logs/tn-b4-*`. | — |
+
+## B5a: 8b.3c, the Mix view
+
+**In short**
+- The Mix view (⌥3, or X) has a strip for each track, in track order, and Master pinned on the right.
+  Each strip has its colour, name, pan, an empty row for mute and solo (8b.4), and a fader with its
+  level under it.
+- A fader is heard while it moves and written once when let go, one undo step, with no toast. 0 dB is
+  at 75% of the travel; the 4 px foot is silence (−96 dB, "−∞"). ⇧ for fine, ⌥-click for 0 dB, a
+  double-click on the level to type, ↑ ↓, and the wheel: only up and down moves a fader, 0.1 dB a
+  notch, one edit per scroll; a sideways scroll moves the strips (lead decision T6).
+- A level or a pan the code leaves out reads in grey. A fader's first move writes `db` into the
+  channel's entry; a pan's first drag writes `pan: 0` once it passes 4 px, then goes on as a lease, and
+  two undos put the entry back.
+- The knob's gesture (the lease) is now one hook, shared by the Device view's knobs and the Mix view.
+- The Device view still shows the mixer's knobs; B5b makes it one compact card.
+- Checks: the new suite `s8-mix` (63 checks) and the 17 suites the slice can touch pass; no render
+  record moved.
+
+### What was built
+
+| Commit | What |
+|---|---|
+| `de85438` | `web/src/components/Knob.tsx`: KnobControl's gesture as a hook (`useKnobGesture`: preview, lease keepalive, commit, cancel, steps), the knob's drag, the small knob (now any size, and with `vertical`, deaf to a sideways scroll), its menu, the home marker, and one value bubble for the knobs and the song bar. No behaviour change. |
+| this commit | `Mix.tsx` (strips, faders, pans, Master, the strip's menu, a strip with no fader); `mix` in the page's state and `graphApi.mixInsert`; the `MixSoon` placeholder and the shell's `reveal` go; the shell's `codeAt` (Edit in code at a line) and `renaming` that says where (a header or a strip). `e2e/s8-mix.mjs` in `run.mjs` and `e2e/README.md`; views and taste read the Mix view. README's Mix, gaps #4, design-8b §5.5 and §5.7. These notes. |
+
+### Decisions made in the slice
+
+| What | Decided | Why |
+|---|---|---|
+| A fader's values | To a tenth of a dB | What the level shows; pro faders step so. ⇧ still gets there: 0.02 dB a pixel near 0 dB. |
+| A press on a fader | Starts a drag from where the thumb is, anywhere on its column; never jumps | Taste principle 5: every drag is precise. The knob's row works the same way. |
+| The level's text | "−6.0", no unit (taste's wireframe); the bubble and tooltip say "−6.0 dB" | The column is all dB; 76 px is narrow. |
+| A strip's pan | 24 px, written to 3 significant figures as every knob is | One rule for knobs. "R 13" reads the same as 0.133. |
+| The first pan's undo names | Both steps "Kick pan", not structural | The strip shows each undo; nothing off screen changes, so no toast. |
+| Scrolling a strip's pan | Up and down only, as a fader (T6) | Otherwise a sideways scroll across the strips turns pans. |
+| Pressing a strip | Selects its track; the dock stays on Mix | taste.md §3.7. The selected strip is `accent-wash`, its name 600. |
+| The strip's menu | Rename (the strip's own name turns into a field), Colour ▸, Edit in code; Master has only Edit in code | taste.md §3.5. Mute in song waits for 8b.4. Rename in place, as TrackName does everywhere. |
+| Edit in code | Selects the Song and opens `song.ts` at the channel's line | The channel lives in the mixer's call. The track header's own Edit in code still opens the track's file. |
+| A strip whose level is a signal | "Its level is set in code", with Edit in code | B4 left its words to B5. |
+| Where the fader sits | Its track at 40% of the strip's width | 8b.8's meter goes beside it, so nothing moves when meters come (taste §1.8). |
+| A track whose strip a `why` explains, and a song whose mixer isn't `ok` | The strip (or the whole view) says the server's words, with Edit in code | The server already says it plainly (B4). |
+
+### Checks
+
+| Check | Result |
+|---|---|
+| Web build (`tsc` with the SDK and `forms.ts` projects, then Vite) | passes |
+| After the refactor (`de85438`): s5-knobs, gestures, live3b (with the test plugins), taste, s8-songbar, cables, s6-builders, graph, undo | 9 of 9 ok: 120, 30, 60, 39, 68, 12, 55, 19, 10 |
+| After the Mix view: s8-mix, views, taste, s6-builders, pc-keys, s8-tracks, code, layout, notes | 9 of 9 ok: 63, 30, 39, 55, 37, 75, 58, 39, 52. The taste lint passes on the Mix view. |
+| Rust | not touched in B5a |
+| `renders.sha256`, `renders.json` | unchanged (no engine, std or song file changed) |
+
+### Numbers (Linux, information only)
+
+| What | Value |
+|---|---|
+| `s8-mix` alone | about 20 s |
+| first-song's fader travel at the dock's first height (300 px) | 173 px: 0 dB to −6 dB is 24 px |
+
+### Left
+
+| What | Where |
+|---|---|
+| The Song's Device view as one compact mixer card; the 9 suites that drag or read the mixer's knobs there move to the Mix view | B5b |
+| A first options object in a call written over several lines lands on the last argument's line: the master's first fader move writes `}), { db: -4.8 },`. Right, but not how a person would lay it out. | B-end review (B4's `Insertion::plan`) |
+| A meter beside each fader, M and S, mute in song, the sidechain row | 8b.8, 8b.4 |
+| Scratch: `~/m2-runs/tn-scratch/b5/`. Logs: `~/m2-runs/logs/tn-b5-*`, `tn-b5a-*`. | — |
