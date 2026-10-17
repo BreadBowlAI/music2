@@ -47,7 +47,8 @@ const x0 = await switcherX();
 await page.click('[data-view-tab="code"]');
 check(await until(async () => json(await body()) === json(["code"])), "the code tab shows the code view, not the graph");
 check(json(await selectedView()) === json(["code"]), "and is selected");
-check((await text("[data-testid=code]")).includes("bass.ts"), "for the selected module (Bass)");
+// A window starts on the top track, which is the mixer's first since 8b.1 (D8): Kick.
+check(await until(async () => (await text("[data-testid=code]")).includes("kick.ts")), `for the selected module, the top track (Kick): selected ${await selectedTab()}`);
 await page.click('[data-module-tab="keys"]');
 check(await until(async () => (await text("[data-testid=code]")).includes("keys.ts")), "selecting Keys keeps the code view, now on Keys");
 check(json(await selectedView()) === json(["code"]), "still the code view");
