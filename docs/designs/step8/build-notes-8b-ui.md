@@ -981,3 +981,20 @@ It copies the page and the suites first, so nothing changes under a running suit
 | B2 | ⌘1 to ⌘4 kept acting on the roll's grid after Notes had gone (E hid the dock, or Mix took its place). The timeline's grid, the only one on screen, didn't change, and the roll came back with its grid changed | `grid.ts` `gridTarget()`: Notes' grid only while Notes is on screen, else the timeline's. `SongTimeline.tsx`'s ⌘1 to ⌘4 use it. (Not a reset in NoteView's unmount: the roll unmounts and mounts again when another clip opens, and the keys should stay with it) | s8-clips, 4 new checks (two ways for Notes to go). Before: `FAIL then E hides the dock: ⌘4 turns the timeline's snap off, and the roll's stays as it was (0.125)`, and the same for Mix. After: 94 of 94; notes and taste ok |
 | B3 | The Notes hint named every solo in `overlays.solo`, even one whose track was taken out of the song (MON-4 keeps that entry; the server and the pill leave it out). It said "Silenced by the Bass and hats solos", with the raw key, while the pill said "1 solo" | `AuditionTools.tsx`: only the solos still in the song, named as the pill names them (`inSong`, `trackName` from `lib/overlays`) | s8-audition, 2 new checks. Before: `FAIL the Keys roll still names only Bass's solo, as the pill counts one: Silenced by the Bass and hats solos · audition is silent`. After: 51 of 51; taste ok |
 | T5 | The e2e docs said pc-keys is the only suite with a PC page (README, `chrome.mjs`, `pc-keys.mjs`), but s8-mute, s8-audition, s8-clips and s8-automation each open one. notes' header said every edit is one lane write; the timeline's clip edits are `clips` gestures now (U5) | Docs and comments only: pc-keys is the one suite that runs entirely on a PC page, and the four s8 suites each open one for their words. notes: the roll's edits are one lane write, the timeline's clip edits one `clips` gesture | A docs fix: no behaviour to test |
+
+### The first full check, and two flakes in it
+
+The first `ci/check.sh` at `641da77` failed three rows. Each is found and fixed here.
+
+| Row | Why | Fix |
+|---|---|---|
+| rust tests | `mix_tests.rs` still named the lane `bass-db` after taste-next's `b3237a6` renamed it `bass-volume`. Its next commit fixed it | Merge taste-next at `4f5c582` (`6c86115`) |
+| repo unchanged | `docs/gaps.md` was edited in the worktree while the check ran (by this track's lead) | Nothing to fix in the code. No edits while a check runs |
+| browser suites (taste passed only on a retry) | Two races, below, both from before this track. Run 28 at once, the taste suite failed 2 to 5 times in 28 | Below |
+
+**A click on a track could be undone.** The selection effect in `GraphCanvas.tsx` works out what
+should be selected while it renders, then sets it in an effect. React can run that effect after a
+click has chosen another track (the click's own render runs the waiting effect first). The effect
+then puts the old track back. Seen with a recorder on the page: `kick → song` by the click at
+694 ms, then `song → kick` by the effect 1 ms later. The effect now works out the selection from
+the store as it is when it runs.

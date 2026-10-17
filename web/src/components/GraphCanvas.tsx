@@ -111,12 +111,16 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
   const chosen = useShell((s) => s.module);
   const shown = useRef<{ key: string; file: string | null; keys: string[] } | null>(null);
   const first = timeline.tracks.find((t) => t.track && t.module !== "song")?.module ?? modules.find((m) => m.track)?.key ?? "song";
-  let found = chosen && (modules.some((m) => m.key === chosen) || timeline.tracks.some((t) => t.module === chosen)) ? chosen : null;
-  if (!found && chosen && shown.current?.key === chosen && shown.current.file) {
-    const was = shown.current;
-    found = modules.find((m) => !was.keys.includes(m.key) && fileOf(m) === was.file)?.key ?? null;
-  }
-  const module: string = found ?? first;
+  /** What shows for the module `chosen`: itself while the song has it, else the one now built from its file, else the first track. */
+  const showing = (chosen: string | null): string => {
+    let found = chosen && (modules.some((m) => m.key === chosen) || timeline.tracks.some((t) => t.module === chosen)) ? chosen : null;
+    if (!found && chosen && shown.current?.key === chosen && shown.current.file) {
+      const was = shown.current;
+      found = modules.find((m) => !was.keys.includes(m.key) && fileOf(m) === was.file)?.key ?? null;
+    }
+    return found ?? first;
+  };
+  const module = showing(chosen);
   useEffect(() => {
     const s = useShell.getState();
     // Nothing chosen yet: the first track, as soon as there is one (a song that gets its first track
@@ -125,10 +129,13 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
       if (s.module !== first || s.selected !== first) s.set({ selected: first, module: first });
       return;
     }
-    if (s.module === module) return;
-    // Renamed or gone: select what shows instead.
-    if (s.selected === s.module) s.select(module);
-    else s.set({ module });
+    // Renamed or gone: select what shows instead. Worked out from the choice as it is now, not as
+    // this render saw it: React can run this effect after a click has chosen another track (the
+    // click's own render flushes it), and that click stands.
+    const now = showing(s.module);
+    if (s.module === now) return;
+    if (s.selected === s.module) s.select(now);
+    else s.set({ module: now });
   });
   useEffect(() => {
     const m = modules.find((x) => x.key === module);
