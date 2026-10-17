@@ -352,7 +352,9 @@ export default function SongTimeline({
   const reach = playing && follow ? beat + visible / ppb : beat;
   // What a zoom scrolled to keeps its room: the beat it kept in place stays there.
   const [spare, setSpare] = useState(0);
-  const width = Math.max(room(timeline.meter, timeline.end, reach) * ppb, visible, spare);
+  // The ruler's tools sit over its end: the song's room has their width more, so its last bar
+  // number scrolls clear of them (next D4b).
+  const width = Math.max(room(timeline.meter, timeline.end, reach) * ppb + TOOLS_W, visible, spare);
 
   // Where the timeline scrolled itself last (a page, a zoom): any other scroll across is by hand.
   const ours = useRef<number | null>(null);
@@ -1473,6 +1475,36 @@ const Ruler = memo(function Ruler({
   const marks = changes(timeline);
   // A change undone or removed elsewhere closes its popover.
   const open = mark && marks.some((c) => c.beat === mark.beat) ? mark : null;
+  const ruled = bars(timeline.meter, width / ppb);
+  // Where the tempo or the time signature changes: both at one beat share a mark, which opens them.
+  const chip = (c: (typeof marks)[number]) => (
+    <span
+      ref={open?.beat === c.beat ? setMarkAt : undefined}
+      role="button"
+      data-mark={c.beat}
+      aria-label={`Changes from ${placeOf(timeline.meter, c.beat)}`}
+      aria-expanded={open?.beat === c.beat}
+      className={clsx(
+        "pointer-events-auto cursor-pointer px-0.5 -mx-0.5 rounded-xs text-xs leading-none whitespace-nowrap transition-colors duration-80 ease-linear",
+        open?.beat === c.beat ? "text-fg bg-hover" : "text-fg-muted hover:text-fg hover:bg-hover",
+      )}
+      title={[
+        c.meter && `${c.meter} from ${placeOf(timeline.meter, c.beat)}`,
+        c.bpm && `${c.bpm} BPM from ${placeOf(timeline.meter, c.beat)}`,
+        locked ?? "Click to change or remove",
+      ]
+        .filter(Boolean)
+        .join("\n")}
+      // Not a seek or a loop: the ruler's own drag starts under it.
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation();
+        setMark(open?.beat === c.beat ? null : { beat: c.beat, typing: false });
+      }}
+    >
+      {[c.meter, c.bpm && `♩${c.bpm}`].filter(Boolean).join(" ")}
+    </span>
+  );
   return (
     <div
       data-testid="ruler"
@@ -1530,48 +1562,37 @@ const Ruler = memo(function Ruler({
           {ppb >= BEAT_LINES && <VLines className="inset-x-0 bottom-0 h-[5px]" layers={[{ every: ppb, color: "var(--color-line-strong)" }]} />}
         </div>
       ))}
-      {bars(timeline.meter, width / ppb).map((b) => {
-        // Bars under 40 px are numbered every second, fourth or eighth (taste.md §3.2).
+      {/*
+        The bar numbers on the line under the markers' band (next D4a), and each tempo or time
+        signature change on that line: after its bar's number when it is at a bar line, 6 px on,
+        else 3 px after its beat. Bars under 40 px are numbered every second, fourth or eighth
+        (taste.md §3.2).
+      */}
+      {ruled.map((b) => {
         const w = b.length * ppb;
         const every = w >= 40 ? 1 : w >= 20 ? 2 : w >= 10 ? 4 : 8;
-        return b.bar % every === 0 ? (
-          <span key={b.bar} data-bar={b.bar + 1} className="absolute top-1 text-xs font-medium text-fg-faint pointer-events-none" style={{ left: b.start * ppb + 6 }}>
-            {b.bar + 1}
-          </span>
+        // None under the ruler's tools at its very end, where no scroll can bring it out.
+        const numbered = b.bar % every === 0 && b.start * ppb + 6 < width - TOOLS_W - 16;
+        const change = marks.find((c) => Math.abs(c.beat - b.start) < 1e-6);
+        return numbered || change ? (
+          <div key={b.bar} className="absolute top-[17px] flex items-center gap-1.5 pointer-events-none" style={{ left: b.start * ppb + 6 }}>
+            {numbered && (
+              <span data-bar={b.bar + 1} className="text-xs leading-none font-medium text-fg-faint">
+                {b.bar + 1}
+              </span>
+            )}
+            {change && chip(change)}
+          </div>
         ) : null;
       })}
       <RulerMarkers timeline={timeline} ppb={ppb} width={width} locked={locked} onSeek={onSeek} onLoop={onLoop} />
-      {/* Where the tempo or the time signature changes: both at one beat share a mark, which opens them. */}
-      {marks.map((c) => (
-        <span
-          key={c.beat}
-          ref={open?.beat === c.beat ? setMarkAt : undefined}
-          role="button"
-          data-mark={c.beat}
-          aria-label={`Changes from ${placeOf(timeline.meter, c.beat)}`}
-          aria-expanded={open?.beat === c.beat}
-          className={clsx(
-            "absolute bottom-1.5 px-0.5 -mx-0.5 rounded-xs text-xs leading-none whitespace-nowrap transition-colors duration-80 ease-linear",
-            open?.beat === c.beat ? "text-fg bg-hover" : "text-fg-muted hover:text-fg hover:bg-hover",
-          )}
-          style={{ left: c.beat * ppb + 3 }}
-          title={[
-            c.meter && `${c.meter} from ${placeOf(timeline.meter, c.beat)}`,
-            c.bpm && `${c.bpm} BPM from ${placeOf(timeline.meter, c.beat)}`,
-            locked ?? "Click to change or remove",
-          ]
-            .filter(Boolean)
-            .join("\n")}
-          // Not a seek or a loop: the ruler's own drag starts under it.
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation();
-            setMark(open?.beat === c.beat ? null : { beat: c.beat, typing: false });
-          }}
-        >
-          {[c.meter, c.bpm && `♩${c.bpm}`].filter(Boolean).join(" ")}
-        </span>
-      ))}
+      {marks
+        .filter((c) => !ruled.some((b) => Math.abs(c.beat - b.start) < 1e-6))
+        .map((c) => (
+          <div key={c.beat} className="absolute top-[17px] flex pointer-events-none" style={{ left: c.beat * ppb + 3 }}>
+            {chip(c)}
+          </div>
+        ))}
       {/* Placed once, at its own mark: never at the one open before. */}
       {open && markAt?.dataset.mark === String(open.beat) && session !== undefined && (
         <MarkPopover

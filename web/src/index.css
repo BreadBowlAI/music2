@@ -38,7 +38,7 @@
   /* Layout and control sizes (taste.md §3.2); the shell slice mirrors them in web/src/lib/layout.ts.
      The 4px scale is Tailwind's default. */
   --spacing-bar: 44px;      /* top bar */
-  --spacing-ruler: 28px;
+  --spacing-ruler: 36px;
   --spacing-row: 44px;      /* track row, medium */
   --spacing-lane: 32px;     /* automation lane */
   --spacing-dockbar: 32px;  /* dock header */

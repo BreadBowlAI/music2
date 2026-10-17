@@ -25,7 +25,7 @@ import {
 } from "../lib/graph";
 import { attach, KEY_VELOCITY, PAINT_MS, pulse, release, retune, strike, useAudition } from "../lib/audition";
 import { onFrame } from "../lib/clock";
-import { RULER_H } from "../lib/layout";
+import { ROLL_RULER_H } from "../lib/layout";
 import { chord, isMac, keyName, mod, native } from "../lib/native";
 import { humanize, legato, quantize, swing, SWINGS, swingUnit, targets, transpose } from "../lib/noteTools";
 import { inKey } from "../lib/songKey";
@@ -197,7 +197,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     // 14px rows for an octave in the 300px dock), and on whole rows: no key cut under the ruler.
     const pitches = server.notes.map((n) => n.pitch);
     const mid = pitches.length ? (Math.min(...pitches) + Math.max(...pitches)) / 2 : 60;
-    const centred = RULER_H + (TOP - mid) * ROW_H + ROW_H / 2 - (RULER_H + el.clientHeight) / 2;
+    const centred = ROLL_RULER_H + (TOP - mid) * ROW_H + ROW_H / 2 - (ROLL_RULER_H + el.clientHeight) / 2;
     el.scrollTop = Math.round(centred / ROW_H) * ROW_H;
     root.current?.focus({ preventScroll: true });
     // Only on opening: later edits keep the view where the user put it.
@@ -692,7 +692,8 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   // lane whose rows are named drums is never shaded by the key: a kit has no key (X26).
   const drums = Object.keys((declared as { names?: Record<string, string> } | null)?.names ?? {}).length > 0;
   const keyed = timeline.key && !drums ? inKey(timeline.key) : null;
-  const shaded = (keyed ? Array.from({ length: 12 }, (_, pc) => pc).filter((pc) => !keyed.has(pc)) : BLACK).join(",");
+  // A kit's rows are drums, not keys: none shaded (next D4c).
+  const shaded = (keyed ? Array.from({ length: 12 }, (_, pc) => pc).filter((pc) => !keyed.has(pc)) : drums ? [] : BLACK).join(",");
 
   return (
     <div
@@ -771,8 +772,8 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
           className="absolute inset-0 overflow-auto"
           onScroll={(e) => strip.current && (strip.current.style.transform = `translateX(${-e.currentTarget.scrollLeft}px)`)}
         >
-          <div className="relative" style={{ width: keysW + width, height: RULER_H + height }}>
-            <div className="sticky top-0 z-30 flex" style={{ height: RULER_H }}>
+          <div className="relative" style={{ width: keysW + width, height: ROLL_RULER_H + height }}>
+            <div className="sticky top-0 z-30 flex" style={{ height: ROLL_RULER_H }}>
               <div className="sticky left-0 z-40 shrink-0 bg-chrome border-r border-b border-line" style={{ width: keysW }} />
               <Ruler width={width} ppb={ppb} meter={timeline.meter} start={start} length={clip.length} tone={tone} />
             </div>
@@ -885,6 +886,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
           all={!picked.length}
           grid={pickName(gridPick, gridTriplet)}
           off={locked ? lockedTitle : null}
+          named={drums}
           onRun={runTool}
           onClose={() => setMenu(null)}
         />
@@ -1007,7 +1009,7 @@ function LengthField({
 /**
  * The piano keys, one row per pitch, C's named; keys of selected notes lit in the track's colour. On
  * a lane whose notes have names (a drum kit, polish A4), each named row says its name and no C
- * does, and the black keys are narrower, so a name on one is on the white of its key.
+ * does, and every row is drawn alike, a line under each: no black keys (next D4c).
  * The keyboard is an instrument (NT-3): a key sounds on lane `module.lane` while held, at
  * `KEY_VELOCITY`, and a drag along it plays each key it reaches. A key that sounds, from a key or
  * a note held anywhere in the roll, is drawn in `press`, never like a selected note's.
@@ -1066,7 +1068,7 @@ const Keys = memo(
       >
         {Array.from({ length: TOP + 1 }, (_, k) => {
           const p = TOP - k;
-          const black = BLACK.includes(p % 12);
+          const black = !drums && BLACK.includes(p % 12);
           const on = sounding.has(p);
           const lit = !on && selected.has(p);
           return (
@@ -1074,7 +1076,10 @@ const Keys = memo(
               key={p}
               data-key={p}
               data-sounding={on || undefined}
-              className={clsx("relative", p % 12 === 0 ? "border-b border-line-strong" : !black && !BLACK.includes((p + 11) % 12) && "border-b border-line")}
+              className={clsx(
+                "relative",
+                drums ? "border-b border-line" : p % 12 === 0 ? "border-b border-line-strong" : !black && !BLACK.includes((p + 11) % 12) && "border-b border-line",
+              )}
               style={{ height: ROW_H }}
             >
               {on ? <div className="absolute inset-0 bg-press" /> : lit && <div className="absolute inset-0" style={{ background: tone.bar }} />}
@@ -1083,7 +1088,7 @@ const Keys = memo(
               {black && (
                 <div
                   data-black
-                  className={clsx("absolute left-0 inset-y-[1px] rounded-r-xs", drums ? "w-4" : "w-[60%]")}
+                  className="absolute left-0 inset-y-[1px] rounded-r-xs w-[60%]"
                   style={{ background: on ? "var(--color-press)" : lit ? tone.ink : "var(--color-gray-700)" }}
                 />
               )}
@@ -1121,7 +1126,7 @@ const Keys = memo(
  * signatures count them.
  */
 const Lanes = memo(function Lanes({ width, ppb, meter, start, step, shaded }: { width: number; ppb: number; meter: Meter[]; start: number; step: number; shaded: string }) {
-  const dark = new Set(shaded.split(",").map(Number));
+  const dark = new Set(shaded ? shaded.split(",").map(Number) : []);
   // From the top: pitch 127 (G9) down, twelve rows a period: the shaded rows darker, a line under each.
   const bands = Array.from({ length: 12 }, (_, k) => {
     const pc = (TOP - k) % 12;

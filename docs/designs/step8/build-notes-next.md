@@ -203,6 +203,67 @@ right). Effects not written one inside the other, or in two files, are refused (
 
 **Contract:** Route `POST /api/graph/effect/move`; one Tx that swaps two nested effect calls, each keeping its text.
 
+### D4. Small fixes: a, b, c, f, g (Q28 to Q33, X12)
+
+**In short**
+
+| Fix | Before | Now |
+|---|---|---|
+| a. The ruler | A marker hid its bar's number. A tempo change touched its bar's number | The ruler is a little taller. Markers on top, bar numbers under them. A change sits on the numbers' line, after its bar's number |
+| b. The ruler's end | The last bar number could hide under Follow and zoom | It scrolls clear of them |
+| c. A drum lane | Its note menu said "Up a semitone" and offered octaves; black keys behind the drum names | "Up a row", "Down a row", no octaves; every row alike |
+| f. Shift + wheel over a fader | On Linux it moved the fader | It scrolls the strips, on every OS |
+| g. `s8-mute`'s lint | Its own weaker copy | The shared one (`e2e/lintlib.mjs`) |
+
+**What changed**
+
+- a (X12): `layout.ts`: `RULER_H` 28 → 36, the timeline's; `ROLL_RULER_H = 28` serves NoteView's three uses (its
+  import line and the three uses only). `index.css` `--spacing-ruler: 36px`. `dockMax` follows. `SongTimeline.tsx`
+  `Ruler`: the markers keep their 14 px band at the top; the bar numbers sit at 17 px (`leading-none`), each in a
+  row with the change at its bar line, 6 px after the number; a change off a bar line sits 3 px after its beat on
+  the same line. Beat ticks and the loop brace stay at the foot. `Markers.tsx`: its header comment only.
+- b (Q29): the timeline's width is the song's room plus `TOOLS_W`; and no bar number is drawn where it would start
+  under the tools at the ruler's very end.
+- c (Q30): `NoteMenu.tsx` takes `named`: "Up a row" ↑, "Down a row" ↓, no octave rows. `NoteView.tsx`: `Keys` draws
+  every row of a named lane alike, a line under each, no black keys; the kit's grid shades no rows (`shaded` is
+  empty; `Lanes` reads an empty list as none). `pl-sounds` followed: the kit's rows are unshaded, by a key or as
+  black keys.
+- f (Q32): `Mix.tsx`, the fader's wheel: with Shift it never steps; deltaY with Shift scrolls the strips
+  (`[data-testid=mix-strips]`) itself; deltaX was the browser's already.
+- g (Q33): `s8-mute` lints with `lintlib.mjs`; its count stays 152.
+- Suites that followed the ruler: `pl-zoom` (the tools are 36 px tall), `s8-songbar` (a bar number's place is its
+  row's `left`).
+
+**Tests**
+
+- Suite `nx-nits` (new, `fix`, 26): a marker at bar 5 and its number apart, the point at the number's middle is the
+  ruler and no marker; the ruler 36 px, the markers' band 14 px at its top; a tempo change at bar 9 says ♩140, 4 px
+  after "9" (boxes; its text 6 px), on one line; one off a bar line 3 px after its beat; lint of the ruler; zoomed out
+  to 64 px bars and scrolled to the end, the last number (18) ends left of the tools; a Drum kit's note menu, its
+  keys 60 and 61 alike, its grid unshaded, both linted; on a PC page Shift+wheel up and down over Hats' fader leaves
+  it and scrolls the strips; a Mac page's sideways the same; lint of the Mix view; the wheel wrote nothing.
+- Moves, all pass: `pl-zoom` 62, `pl-arrange` 57, `s8-clips` 94, `s8-automation` 45, `s8-songbar` 82, `pl-notes`
+  102, `pl-mix` 47, `s8-mix` 80, `s8-mute` 152, `taste` 39, `fx-fixes` 75, `pl-sounds` 45.
+- The narrow strips: Shift+wheel is checked at 380 px wide (as `s8-mix`'s sideways check), where first-song's strips
+  overflow; at 1100 px its five strips fit and nothing can scroll.
+
+**Red first**
+
+- `nx-nits` on the page and server from before: 13 of 26 fail, among them `FAIL  nothing of the marker is at the
+  middle of "5": marker Chorus`, `FAIL  "9" and "♩140" are at least 4 px apart: -12`, `FAIL  scrolled to the end,
+  the last bar number (19) ends left of Follow and zoom: 1412 < 1355`, `FAIL  its note menu moves a row up or down:
+  up:Up a semitone↑ | …`, `FAIL  row 61's key looks as row 60's: {… "61":{"black":true,"hit":"black",…}}`, `FAIL  a
+  PC page: Shift+wheel up and down leaves Hats' fader: -6 → -6.3`.
+- g: the old copy and lintlib on one page with a 14 px text field and a `::before` gradient: `old inline lint: []`,
+  `lintlib: ["font-size 14px at <input>","gradient ::before…"]`.
+
+**Left:** nothing of D4 (d is in a).
+
+**For gaps.md:** none (fixes). taste.md §3.2 at the End: the ruler is 36 px, its rows (markers 14 px band; numbers
+and changes at 17 px; ticks and loop at the foot).
+
+**Contract:** `RULER_H` 36 (timeline), `ROLL_RULER_H` 28 (roll).
+
 ## Merge
 
 ## End

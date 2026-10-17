@@ -38,6 +38,7 @@ export default function NoteMenu({
   all,
   grid,
   off,
+  named,
   onRun,
   onClose,
 }: {
@@ -51,6 +52,8 @@ export default function NoteMenu({
   grid: string;
   /** Why the tools can't run now (read only), or null. */
   off: string | null;
+  /** The lane's rows are named drums (next D4c): a row up or down, and no octaves. */
+  named?: boolean;
   onRun: (tool: NoteTool) => void;
   onClose: () => void;
 }) {
@@ -85,10 +88,10 @@ export default function NoteMenu({
           <div data-testid="note-menu-heading" className="px-2 pt-1 pb-1.5 text-xs font-medium text-fg-muted">
             {heading}
           </div>
-          {row("up", "Up a semitone", { kind: "transpose", by: 1 }, keys ? "↑" : undefined)}
-          {row("down", "Down a semitone", { kind: "transpose", by: -1 }, keys ? "↓" : undefined)}
-          {row("octave_up", "Up an octave", { kind: "transpose", by: 12 }, keys ? shifted("↑") : undefined)}
-          {row("octave_down", "Down an octave", { kind: "transpose", by: -12 }, keys ? shifted("↓") : undefined)}
+          {row("up", named ? "Up a row" : "Up a semitone", { kind: "transpose", by: 1 }, keys ? "↑" : undefined)}
+          {row("down", named ? "Down a row" : "Down a semitone", { kind: "transpose", by: -1 }, keys ? "↓" : undefined)}
+          {!named && row("octave_up", "Up an octave", { kind: "transpose", by: 12 }, keys ? shifted("↑") : undefined)}
+          {!named && row("octave_down", "Down an octave", { kind: "transpose", by: -12 }, keys ? shifted("↓") : undefined)}
           {line("l1")}
           {row("quantize", `Quantize to ${grid}`, { kind: "quantize" }, "Q", TOOL_HELP.quantize)}
           {row("legato", "Legato", { kind: "legato" }, undefined, TOOL_HELP.legato)}

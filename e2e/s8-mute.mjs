@@ -17,6 +17,7 @@ import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { HOME, PROJ, ROOT, check, done, open, read, sess, sleep, until, write } from "./fixlib.mjs";
+import { lint as lintlib } from "./lintlib.mjs";
 
 const { browser, page, errors, api, state, toasts, key, box } = await open(1440, 900);
 const post = (p, body) => api(p, { method: "POST", body: JSON.stringify(body) });
@@ -75,26 +76,8 @@ const select = async (m) => {
 };
 const mid = (b) => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
 
-/** The taste lint (e2e/taste.mjs) over what is inside `sel`: font sizes, radii, gradients, backdrop filters, mono text. */
-const lint = (sel) =>
-  page.evaluate((sel) => {
-    const bad = [];
-    for (const root of document.querySelectorAll(sel))
-      for (const e of [root, ...root.querySelectorAll("*")]) {
-        if (!e.getClientRects().length) continue;
-        const s = getComputedStyle(e);
-        const texty = [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
-        if (texty && e.namespaceURI === "http://www.w3.org/1999/xhtml" && ![11, 12, 13, 15].includes(parseFloat(s.fontSize))) bad.push(`font-size ${s.fontSize}`);
-        if (texty && /mono|menlo|courier/i.test(s.fontFamily) && !e.closest("[data-code]")) bad.push("mono font");
-        for (const c of ["borderTopLeftRadius", "borderTopRightRadius", "borderBottomRightRadius", "borderBottomLeftRadius"]) {
-          const r = parseFloat(s[c]);
-          if (![0, 2, 4, 8].includes(r) && r < 9999) bad.push(`radius ${s[c]}`);
-        }
-        if (/gradient/.test(s.backgroundImage)) bad.push("gradient");
-        if (s.backdropFilter && s.backdropFilter !== "none") bad.push("backdrop-filter");
-      }
-    return [...new Set(bad)];
-  }, sel);
+/** The taste lint (e2e/lintlib.mjs, as taste.mjs runs it) over what is inside `sel`. */
+const lint = (sel) => page.evaluate(lintlib, sel);
 
 await page.waitForSelector('[data-track="kick"] [data-testid=track-label]');
 const orig = files();
