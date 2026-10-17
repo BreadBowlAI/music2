@@ -273,8 +273,10 @@ fn an_activation_against_another_plan_is_refused() {
 
 /// A package `t` of hand-written kernels: `t:latch` (its output turns NaN for good once its input
 /// goes over 0.5, until a reset), `t:spike` (infinite while its input is over 0.5, else 1; no
-/// state), `t:denan` (NaN and infinities to 0) and `t:trap` (traps while its input is over 0.5,
-/// else outputs 1).
+/// state), `t:denan` (NaN and infinities to 0), `t:trap` (traps while its input is over 0.5,
+/// else outputs 1) and `t:tiny` (its init and reset keep 1e-30 × 1e-10, a subnormal, which it
+/// outputs times 1e40: 1 where subnormals are kept, 0 where they were flushed; active while that
+/// product isn't 0).
 fn t_kernels() -> PathBuf {
     let dir = project(&[]).join("t");
     std::fs::create_dir_all(&dir).unwrap();
@@ -311,21 +313,33 @@ fn t_kernels() -> PathBuf {
     let spike = out("(select (f32.const inf) (f32.const 1) (f32.gt (local.get $x) (f32.const 0.5)))");
     let denan = out("(select (local.get $x) (f32.const 0) (f32.lt (f32.abs (local.get $x)) (f32.const inf)))");
     let trap = format!("(if (f32.gt (local.get $x) (f32.const 0.5)) (then (unreachable))) {}", out("(f32.const 1)"));
+    // The factors are loaded from memory, so no compiler multiplies them ahead of time.
+    let product = "(f32.mul (f32.load (i32.const 4100)) (f32.load (i32.const 4104)))";
+    let tiny = format!(
+        r#"(func (export "tiny_init") (param f32 i32 i32)
+             (f32.store (i32.const 4100) (f32.const 1e-30)) (f32.store (i32.const 4104) (f32.const 1e-10)) (call $tiny_reset))
+           (func (export "tiny_ports") (result i32) (i32.const 257)) {}
+           (func $tiny_reset (export "tiny_reset") (f32.store (i32.const 4096) {product}))
+           (func (export "tiny_active") (result i32) (f32.ne {product} (f32.const 0)))"#,
+        port("tiny")
+    ) + &each("tiny", &out("(f32.mul (f32.mul (f32.load (i32.const 4096)) (f32.const 1e30)) (f32.const 1e10))"));
     let wat = format!(
-        r#"(module (memory (export "memory") 1) (func (export "m2_abi") (result i32) (i32.const 0)) {} {} {} {})"#,
+        r#"(module (memory (export "memory") 1) (func (export "m2_abi") (result i32) (i32.const 0)) {} {} {} {} {})"#,
         common("latch") + &each("latch", &latch),
         common("spike") + &each("spike", &spike),
         common("denan") + &each("denan", &denan),
         common("trap") + &each("trap", &trap),
+        tiny,
     );
     std::fs::write(dir.join("k.wasm"), wat).unwrap();
     let kernel = |k: &str, input: &str| format!("[[kernel]]\nname = \"{k}\"\ninputs = [\"in: {input}\"]\noutputs = [\"out: audio<1>\"]\n");
     let manifest = format!(
-        "[package]\nname = \"t\"\nversion = \"0.1.0\"\nwasm = \"k.wasm\"\n\n{}{}{}{}",
+        "[package]\nname = \"t\"\nversion = \"0.1.0\"\nwasm = \"k.wasm\"\n\n{}{}{}{}{}",
         kernel("latch", "control<*>"),
         kernel("spike", "control<*>"),
         kernel("denan", "audio<1>"),
-        kernel("trap", "control<*>")
+        kernel("trap", "control<*>"),
+        kernel("tiny", "control<*>")
     );
     std::fs::write(dir.join("m2pkg.toml"), manifest).unwrap();
     dir
@@ -457,6 +471,53 @@ fn panic_clears_every_flag() {
     let cur = rig.e.current().unwrap();
     assert_eq!(cur.stats().resets, 0);
     assert!(cur.output_of(node(&b, "lat")).iter().all(|&x| x == 1.0), "the panic reset it");
+}
+
+// RENDER-2a: what runs a kernel or a plugin outside a block computes in the one mode too, and
+// leaves the thread as it found it: a build, an activation that resets a poisoned kernel and
+// plugin, the idle check and a seek, all on a thread that flushes subnormals to zero (an audio
+// device's may). `t:tiny` outputs 0 where its state was computed flushing.
+#[test]
+fn between_blocks_kernels_and_plugins_compute_in_the_one_mode() {
+    std::thread::spawn(|| {
+        let mut pk = probe_packages();
+        pk.load(&t_kernels()).unwrap();
+        let tiny = [
+            json!({"id": "c", "op": "const", "value": 0.0}),
+            json!({"id": "tiny", "op": "kernel", "kernel": "t:tiny", "inputs": {"in": "c"}}),
+        ];
+        let with_probe = |pk: &mut PackageSet, gain: f64| {
+            let mut more = tiny.to_vec();
+            more.push(json!({"id": "tp", "op": "kernel", "kernel": "std:pan", "inputs": {"in": "tiny"}}));
+            more.push(json!({"id": "x", "op": "kernel", "kernel": "std:add", "inputs": {"a": "p", "b": "tp"}}));
+            probe_song(pk, gain, None, Value::Array(more), "x")
+        };
+        let (a, b) = (with_probe(&mut pk, 1.0), with_probe(&mut pk, 0.5));
+        let alone = check(&song(Value::Array(tiny.to_vec()), "tiny", json!([])), &pk).unwrap();
+        let ones = |r: &Renderer, flat: &Flat| r.output_of(node(flat, "tiny")).iter().all(|&x| x > 0.5);
+        crate::fpenv::flush_to_zero();
+        let mut rig = playing(&a, &DataSet::empty(), &pk, BLOCK);
+        assert!(ones(rig.e.current().unwrap(), &a), "built in the one mode");
+        assert!(crate::fpenv::flushes(), "a build leaves the thread flushing");
+        for id in ["p", "tiny"] {
+            rig.e.current_mut().unwrap().plan.graph.poisoned[node(&a, id)] = true;
+        }
+        let r = rig.prepare(&b, &DataSet::empty(), &pk);
+        rig.send(Msg::Activate { renderer: Box::new(r) });
+        rig.run(BLOCK);
+        let cur = rig.e.current().unwrap();
+        assert_eq!(cur.stats().resets, 2, "the probe and the kernel were reset as they moved");
+        assert!(ones(cur, &b), "the kernel was reset in the one mode");
+        assert!(crate::fpenv::flushes(), "the plugin's reset left the thread as it found it");
+        // A plan with no plugin: a probe that plays never lets the engine idle.
+        let mut r = Renderer::new(&alone, &DataSet::empty(), &pk, SR).unwrap();
+        assert!(!r.can_idle(), "the kernel says it is active, in the one mode");
+        r.seek(BLOCK as u64).unwrap();
+        assert!(ones(&r, &alone), "a seek resets in the one mode");
+        assert!(crate::fpenv::flushes(), "and leaves the thread flushing");
+    })
+    .join()
+    .unwrap();
 }
 
 // RENDER-25: a prepare that fails (here a kernel that isn't loaded, after a plugin instance was

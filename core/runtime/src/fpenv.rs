@@ -6,7 +6,9 @@
 //! partition. A plugin may leave flush-to-zero set behind it, and a thread music2 didn't start
 //! (an audio device's, a host's) keeps whatever mode its owner gave it. So the engine sets the
 //! mode at the start of each block it renders, before each partition and after each plugin call,
-//! and puts the calling thread's own mode back at the block's end ([`Canon`]).
+//! and puts the calling thread's own mode back at the block's end ([`Canon`]). What runs a kernel
+//! or a plugin outside a block does the same: a build, a seek, a panic, an activation's resets and
+//! the idle check.
 //!
 //! The block path: nothing here allocates, locks or waits.
 

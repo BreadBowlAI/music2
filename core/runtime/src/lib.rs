@@ -1855,6 +1855,8 @@ impl Renderer {
         basis: Basis,
         mode: m2_plugins::RenderMode,
     ) -> Result<Renderer> {
+        // Each kernel's first state is computed here, by `k_init` and a reset (RENDER-2a).
+        let _mode = fpenv::Canon::enter();
         let tempo = data.tempo().clone();
         let rate = sample_rate as f64;
         let keep = match &basis {
@@ -2323,6 +2325,8 @@ impl Renderer {
 
     /// [`Renderer::seek`], replaying on `runner`'s threads: the same bits.
     pub fn seek_on(&mut self, to: u64, runner: &mut Runner) -> Result<()> {
+        // The reset runs every kernel and plugin, before any block's mode (RENDER-2a).
+        let _mode = fpenv::Canon::enter();
         self.reset()?;
         self.transport = Transport::new(0, true);
         self.clock = 0;
@@ -2554,6 +2558,8 @@ impl Renderer {
     /// top said it sleeps, or that it may stop once quiet and its output is (a plugin's tail is its
     /// own to report).
     pub fn can_idle(&mut self) -> bool {
+        // `k_active` runs a kernel, after the block's mode is gone (RENDER-2a).
+        let _mode = fpenv::Canon::enter();
         !self.in_window()
             && self.active_voices() == 0
             && self.live_notes() == 0

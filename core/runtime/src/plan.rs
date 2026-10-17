@@ -24,7 +24,7 @@ use crate::cells::{CellId, CellMap, CellSlots, Cells};
 use crate::event::Event;
 use crate::sched::{Caps, LaneSwap, NoteScheduler};
 use crate::taps::{TapSlots, Taps};
-use crate::{Exec, Graph, LaneRef, PackageSet, PluginInstance, Renderer, lane_slots, notes_data};
+use crate::{Exec, Graph, LaneRef, PackageSet, PluginInstance, Renderer, fpenv, lane_slots, notes_data};
 
 /// What a box must be to move into a node (RENDER-25): an instance is kept only for a node of the
 /// same shape. Compared whole when a plan is prepared; its [`Shape::hash64`] is stored in the box,
@@ -601,6 +601,8 @@ impl Renderer {
     /// or freed here and whatever a move displaces leaves with `old`. Returns false, with nothing
     /// changed, when this plan wasn't prepared against `old` or a box isn't what it was prepared for.
     pub(crate) fn take_over(&mut self, old: &mut Renderer, clock: u64) -> bool {
+        // A reset below runs a kernel or a plugin, between blocks (RENDER-2a).
+        let _mode = fpenv::Canon::enter();
         if !self.verify(old) {
             return false;
         }
