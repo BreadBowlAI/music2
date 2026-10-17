@@ -1,12 +1,7 @@
 import { useEffect } from "react";
-import { isMac, native } from "../lib/native";
+import { chord, keyName, mod, native, opt, shifted } from "../lib/native";
 import { useShell } from "../lib/shell";
 import { Button } from "./ui";
-
-/** A chord as this platform writes it: `⇧⌘E` on a Mac, `Ctrl+Shift+E` elsewhere. */
-const chord = (key: string, { shift = false, alt = false } = {}) =>
-  isMac ? `${alt ? "⌥" : ""}${shift ? "⇧" : ""}⌘${key}` : `Ctrl+${alt ? "Alt+" : ""}${shift ? "Shift+" : ""}${key}`;
-const opt = (key: string) => (isMac ? `⌥${key}` : `Alt+${key}`);
 
 /**
  * The keys that work now, grouped as taste.md §5.1 groups them. Only these: a key that does
@@ -17,7 +12,7 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
     name: "Transport",
     keys: [
       ["Play / stop", "Space"],
-      ["Go to start", "Return"],
+      ["Go to start", keyName("Enter")],
       ["Loop on / off", "C"],
     ],
   },
@@ -25,21 +20,21 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
     name: "Edit",
     keys: [
       ["Undo / redo", `${chord("Z")} / ${chord("Z", { shift: true })}`],
-      ["Delete the selected clip or notes", "⌫"],
+      ["Delete the selected clip or notes", keyName("Backspace")],
       ["Duplicate the selected notes or track", chord("D")],
       ["Select all notes", chord("A")],
       ["Deselect", "Esc"],
       ["Draw mode in Notes", "B"],
-      ["Move notes by the grid / by a bar", "← → / ⇧← ⇧→"],
-      ["Transpose a semitone / an octave", "↑ ↓ / ⇧↑ ⇧↓"],
+      ["Move notes by the grid / by a bar", `← → / ${shifted("←")} ${shifted("→")}`],
+      ["Transpose a semitone / an octave", `↑ ↓ / ${shifted("↑")} ${shifted("↓")}`],
     ],
   },
   {
     name: "Tracks",
     keys: [
       ["New track", chord("T")],
-      ["Delete the selected track", chord(isMac ? "⌫" : "Backspace")],
-      ["Rename the selected track", `${chord("R")} / ⇧Return`],
+      ["Delete the selected track", chord("Backspace")],
+      ["Rename the selected track", `${chord("R")} / ${shifted("Enter")}`],
       ["Show / hide automation", "A"],
     ],
   },
@@ -47,10 +42,10 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
     // A focused knob's keys; the wheel steps it too.
     name: "Knobs",
     keys: [
-      ["Fine adjust", "⇧-drag"],
-      ["Type a value", "Double-click / Return"],
-      ["Step / ten steps", "↑ ↓ / ⇧↑ ⇧↓"],
-      ["Reset to its default", `${isMac ? "⌥" : "Alt+"}click / ⌫`],
+      ["Fine adjust", `${mod.shift}-drag`],
+      ["Type a value", `Double-click / ${keyName("Enter")}`],
+      ["Step / ten steps", `↑ ↓ / ${shifted("↑")} ${shifted("↓")}`],
+      ["Reset to its default", `${mod.alt}-click / ${keyName("Backspace")}`],
     ],
   },
   {
@@ -93,7 +88,7 @@ export default function Shortcuts() {
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-[70] grid place-items-center p-4 bg-fg-strong/20" onPointerDown={(e) => e.target === e.currentTarget && close()}>
-      <div role="dialog" aria-modal aria-label="Keyboard shortcuts" data-testid="shortcuts" className="w-[720px] max-w-full max-h-[85vh] flex flex-col rounded-md bg-raised shadow-pop animate-dialog cursor-default">
+      <div role="dialog" aria-modal aria-label="Keyboard shortcuts" data-testid="shortcuts" className="w-[800px] max-w-full max-h-[85vh] flex flex-col rounded-md bg-raised shadow-pop animate-dialog cursor-default">
         <div className="px-6 pt-6 pb-3 text-lg font-semibold text-fg-strong">Keyboard shortcuts</div>
         {/* Two columns that each group flows down, so a short group never leaves a hole beside a long one. */}
         <div className="flex-1 min-h-0 overflow-y-auto px-6 columns-2 gap-x-8">

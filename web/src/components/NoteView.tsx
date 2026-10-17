@@ -25,7 +25,7 @@ import {
 } from "../lib/graph";
 import { onFrame } from "../lib/clock";
 import { RULER_H } from "../lib/layout";
-import { kbd, native } from "../lib/native";
+import { chord, keyName, mod, native } from "../lib/native";
 import { GRAPHITE, trackColors, type TrackColor } from "../lib/palette";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
@@ -663,10 +663,10 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
         />
         <Divider />
         <div className="shrink-0 flex items-center">
-          <Button size="sm" onMouseDown={keepFocus} onClick={() => zoom(0.8)} title="Zoom out (⌘ + scroll)" aria-label="Zoom out" className="w-ctl-sm !px-0">
+          <Button size="sm" onMouseDown={keepFocus} onClick={() => zoom(0.8)} title={`Zoom out (${mod.cmd} + scroll)`} aria-label="Zoom out" className="w-ctl-sm !px-0">
             <ZoomOut size={16} />
           </Button>
-          <Button size="sm" onMouseDown={keepFocus} onClick={() => zoom(1.25)} title="Zoom in (⌘ + scroll)" aria-label="Zoom in" className="w-ctl-sm !px-0">
+          <Button size="sm" onMouseDown={keepFocus} onClick={() => zoom(1.25)} title={`Zoom in (${mod.cmd} + scroll)`} aria-label="Zoom in" className="w-ctl-sm !px-0">
             <ZoomIn size={16} />
           </Button>
         </div>
@@ -698,7 +698,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
                       : "Read only until the code compiles"
                     : draw
                       ? "Draw: click to add a note · drag to paint notes · B to select"
-                      : `Double-click to add a note · drag a note to move it · drag its right edge to resize · drag across empty space to select · ⌫ deletes · ${kbd("D")} duplicates · arrows move · B to draw`
+                      : `Double-click to add a note · drag a note to move it · drag its right edge to resize · drag across empty space to select · ${keyName("Backspace")} deletes · ${chord("D")} duplicates · arrows move · B to draw`
                 }
                 onDoubleClick={(e) => {
                   // Select mode adds notes with a double-click; Draw mode added one on the first click.

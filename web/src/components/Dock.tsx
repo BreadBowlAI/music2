@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, CodeXml, Piano, SlidersHorizontal, SlidersVerti
 import { createContext, memo, useContext, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { findNoteClip, moduleName, type GraphState } from "../lib/graph";
+import { opt } from "../lib/native";
 import { GRAPHITE, trackColors } from "../lib/palette";
 import { clampDock, useShell, VIEWS, type DockView } from "../lib/shell";
 import { addEffectTo, dragsEffect, EFFECT_DRAG } from "./Browser";
@@ -74,7 +75,7 @@ export default function Dock({ graph, module }: { graph: GraphState; module: str
                 aria-controls="dock-body"
                 data-view-tab={tab}
                 on={view === v}
-                title={`${label} (⌥${i + 1})`}
+                title={`${label} (${opt(String(i + 1))})`}
                 onClick={() => useShell.getState().setView(v)}
               >
                 <Icon size={14} />

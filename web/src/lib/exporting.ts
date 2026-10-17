@@ -4,7 +4,7 @@
 
 import { create } from "zustand";
 import { graphApi, projectApi, tilde } from "./graph";
-import { isMac, native, nativeAction } from "./native";
+import { native, nativeAction, revealLabel } from "./native";
 import { useStore } from "./store";
 
 /** How far along the export is (0..1), or null when none is running, and the song it is of. */
@@ -94,6 +94,6 @@ export async function onExportEvent(msg: {
   // would replace the first, and its Show action with it (one toast at a time, taste.md §2.14).
   const notes = exportNotes(msg.problems ?? []);
   const after = `${loud}${notes ? ` ${notes}` : ""}`;
-  if (native) toast(`${text}.${after}`, { label: isMac ? "Show in Finder" : "Show in Folder", run: reveal });
+  if (native) toast(`${text}.${after}`, { label: revealLabel, run: reveal });
   else toast(`${text} to ${folder}.${after}`);
 }

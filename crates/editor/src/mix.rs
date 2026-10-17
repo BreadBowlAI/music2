@@ -74,10 +74,10 @@ impl Mixing {
         match self {
             Mixing::One(_) => None,
             Mixing::Several(n) => {
-                Some(format!("This song has {n} mixers, so a new track would have no one place to go. Add it in code (⌥4)."))
+                Some(format!("This song has {n} mixers, so a new track would have no one place to go. Add it in the Code view."))
             }
             Mixing::None | Mixing::Unwritten => {
-                Some("This song mixes its tracks its own way, so a new track would have nowhere to go. Add it in code (⌥4).".into())
+                Some("This song mixes its tracks its own way, so a new track would have nowhere to go. Add it in the Code view.".into())
             }
         }
     }

@@ -31,7 +31,7 @@ import { LANE_MADE, TRACK_MADE } from "../lib/events";
 import { LANE_H, ROW_H, RULER_H } from "../lib/layout";
 import { GRAPHITE, trackColors, type TrackColor } from "../lib/palette";
 import { useShell } from "../lib/shell";
-import { kbd } from "../lib/native";
+import { chord, opt } from "../lib/native";
 import { useStore } from "../lib/store";
 import { addEffectTo, dragsEffect, EFFECT_DRAG } from "./Browser";
 import { addTrack, END, INSTRUMENT_DRAG, openInstruments, openTrackMenu, startReorder, TrackMenuButton, useReorder } from "./Tracks";
@@ -361,7 +361,7 @@ export default function SongTimeline({
               size="sm"
               data-testid="add-track"
               disabled={!!locked}
-              title={locked ? `${locked}.` : `Add a track (${kbd("T")})`}
+              title={locked ? `${locked}.` : `Add a track (${chord("T")})`}
               onMouseDown={keepFocus}
               onClick={(e) => {
                 const s = useShell.getState();
@@ -656,7 +656,7 @@ const Tracks = memo(function Tracks({
                     variant="primary"
                     data-testid="add-first-track"
                     disabled={!!locked}
-                    title={locked ? `${locked}.` : `Add a track (${kbd("T")})`}
+                    title={locked ? `${locked}.` : `Add a track (${chord("T")})`}
                     onMouseDown={keepFocus}
                     onClick={(e) => openInstruments(e.currentTarget, null)}
                   >
@@ -668,7 +668,7 @@ const Tracks = memo(function Tracks({
                     onMouseDown={keepFocus}
                     onClick={() => useShell.getState().setView("code")}
                   >
-                    or write one in code <span className="text-fg-faint">⌥4</span>
+                    or write one in code <span className="text-fg-faint">{opt("4")}</span>
                   </button>
                 </EmptyState>
               )}

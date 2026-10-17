@@ -3,7 +3,7 @@ import { Download, PanelLeft, Play, Redo2, Repeat, SkipBack, Square, Undo2 } fro
 import { barAt, barsToBeats, graphApi, position, type GraphState, type GraphStatus, type Loop, type Meter, type Problem } from "../lib/graph";
 import { exportSong, useExport } from "../lib/exporting";
 import { next } from "../lib/history";
-import { isMac, kbd } from "../lib/native";
+import { chord, keyName } from "../lib/native";
 import { useShell } from "../lib/shell";
 import { graphUndo } from "./GraphCanvas";
 import Status from "./Status";
@@ -76,14 +76,14 @@ export default function TopBar({
         active={browser}
         aria-pressed={browser}
         onClick={() => useShell.getState().setBrowser(!browser)}
-        title={`Browser (${isMac ? "⌥⌘B" : "Ctrl+Alt+B"})`}
+        title={`Browser (${chord("B", { alt: true })})`}
         aria-label="Browser"
         className="w-ctl !px-0"
       >
         <PanelLeft size={16} />
       </BarButton>
       <Divider />
-      <BarButton onClick={() => onSeek(0)} title="Go to start (Return)" aria-label="Back to start" className="w-ctl !px-0">
+      <BarButton onClick={() => onSeek(0)} title={`Go to start (${keyName("Enter")})`} aria-label="Back to start" className="w-ctl !px-0">
         <SkipBack size={16} fill="currentColor" />
       </BarButton>
       {/* Playing is the lit state; it stops (there is no pause), so the glyph is a square. */}
@@ -149,7 +149,7 @@ export default function TopBar({
       <BarButton
         onClick={() => void graphUndo(graph.session, "undo")}
         disabled={!graph.can_undo}
-        title={`Undo${undoing ? ` ${undoing.name}` : ""} (${isMac ? "⌘Z" : "Ctrl+Z"})`}
+        title={`Undo${undoing ? ` ${undoing.name}` : ""} (${chord("Z")})`}
         aria-label="Undo"
         className="w-ctl !px-0"
       >
@@ -158,7 +158,7 @@ export default function TopBar({
       <BarButton
         onClick={() => void graphUndo(graph.session, "redo")}
         disabled={!graph.can_redo}
-        title={`Redo${redoing ? ` ${redoing.name}` : ""} (${isMac ? "⇧⌘Z" : "Ctrl+Shift+Z"})`}
+        title={`Redo${redoing ? ` ${redoing.name}` : ""} (${chord("Z", { shift: true })})`}
         aria-label="Redo"
         className="w-ctl !px-0"
       >
@@ -176,7 +176,7 @@ function ExportButton({ dir }: { dir: string }) {
   // One width, idle or rendering: Undo and Redo beside it never move while it renders (principle 8).
   if (progress === null) {
     return (
-      <BarButton data-testid="export" onClick={() => void exportSong()} title={`Export the song as a WAV audio file (${kbd("E", true)})`} className="ml-1 w-21">
+      <BarButton data-testid="export" onClick={() => void exportSong()} title={`Export the song as a WAV audio file (${chord("E", { shift: true })})`} className="ml-1 w-21">
         <Download size={14} />
         Export
       </BarButton>

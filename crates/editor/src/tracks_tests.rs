@@ -490,10 +490,12 @@ fn the_instruments_are_stds_sounds_in_order() {
 fn the_empty_templates_comment_reads_true_after_add() {
     let f = fixture("templates/empty");
     let song = f.read("song.ts");
-    assert!(song.contains("Add a track with + Track (⌘T), or write one in code"), "{song}");
+    assert!(song.contains("Add a track with + Track, or write one in code"), "{song}");
     assert!(!song.contains("no tracks yet"));
     let mut s = f.open();
     assert!(render(&s, 0.5).iter().all(|x| x[0] == 0.0 && x[1] == 0.0));
     s.add_track("std:drum-kick", None, None, None).unwrap();
-    assert!(f.read("song.ts").contains("Add a track with + Track (⌘T), or write one in code"));
+    assert!(f.read("song.ts").contains("Add a track with + Track, or write one in code"));
+    // The same words on every OS: no key in them, which would be ⌘T on a Mac and Ctrl+T elsewhere.
+    assert!(!song.contains('⌘'));
 }

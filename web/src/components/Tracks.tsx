@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
 import { graphApi, lockReason, moduleName, type Dependent, type GraphState, type Instrument } from "../lib/graph";
 import { trackMade } from "../lib/events";
-import { isMac, kbd } from "../lib/native";
+import { chord, opt } from "../lib/native";
 import { DEFAULT_ORDER, TRACK_COLORS, type TrackColorName } from "../lib/palette";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
@@ -20,7 +20,7 @@ import { Button, MenuRow, Popover } from "./ui";
 export const INSTRUMENT_DRAG = "application/x-m2-instrument";
 
 /** ⌘⌫ as this platform writes it. */
-const DELETE_KEY = isMac ? "⌘⌫" : "Ctrl+Backspace";
+const DELETE_KEY = chord("Backspace");
 
 /** The instrument this window added last: the list opens on it, so ⌘T then Enter adds it again (Live's speed). */
 let lastAdded: string | null = null;
@@ -384,7 +384,7 @@ function TrackMenu({ graph, module, anchor, onClose }: { graph: GraphState; modu
     <Popover anchor={anchor} onClose={onClose} role="menu" aria-label={`${nameOf(graph, module)} menu`} data-testid="track-menu" className="w-[240px]">
       <MenuRow
         icon={<Pencil size={14} />}
-        shortcut={kbd("R")}
+        shortcut={chord("R")}
         disabled={!!locked}
         title={locked ?? undefined}
         onClick={run(() => {
@@ -394,7 +394,7 @@ function TrackMenu({ graph, module, anchor, onClose }: { graph: GraphState; modu
       >
         Rename
       </MenuRow>
-      <MenuRow icon={<Copy size={14} />} shortcut={kbd("D")} disabled={!!locked} onClick={run(() => void duplicateTrack(module))}>
+      <MenuRow icon={<Copy size={14} />} shortcut={chord("D")} disabled={!!locked} onClick={run(() => void duplicateTrack(module))}>
         Duplicate
       </MenuRow>
       <MenuRow icon={<Trash2 size={14} />} shortcut={DELETE_KEY} disabled={!!locked} onClick={run(() => void deleteTrack(module))}>
@@ -420,7 +420,7 @@ function TrackMenu({ graph, module, anchor, onClose }: { graph: GraphState; modu
       {sep}
       <MenuRow
         icon={<CodeXml size={14} />}
-        shortcut={isMac ? "⌥4" : "Alt+4"}
+        shortcut={opt("4")}
         detail={file ? <span data-code className="font-mono">{file}</span> : undefined}
         onClick={run(() => {
           useShell.getState().select(module);

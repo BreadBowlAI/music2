@@ -3,7 +3,7 @@ import { Check, CircleAlert, CornerDownLeft, FolderOpen, LoaderCircle, Music, Pl
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { create } from "zustand";
 import { editorHooks, projectApi, tilde, type Catalog, type GraphState, type Starter } from "../lib/graph";
-import { isMac, native, nativeAction } from "../lib/native";
+import { native, nativeAction, revealLabel } from "../lib/native";
 import { DEFAULT_ORDER, TRACK_COLORS } from "../lib/palette";
 import { useStore } from "../lib/store";
 import { Button } from "./ui";
@@ -26,7 +26,7 @@ function opened(graph: GraphState, home: string | null) {
   const playable = graph.timeline.tracks.some((t) => t.track);
   toast(
     `Made “${graph.name}” in ${where}.${playable ? " Press Space to play it." : ""}`,
-    native ? { label: isMac ? "Show in Finder" : "Show Folder", run: () => void nativeAction("reveal") } : undefined,
+    native ? { label: revealLabel, run: () => void nativeAction("reveal") } : undefined,
   );
 }
 

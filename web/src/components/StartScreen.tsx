@@ -2,7 +2,7 @@ import clsx from "clsx";
 import { BookOpen, ChevronDown, FolderOpen, LoaderCircle, Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { projectApi, tilde, type Catalog, type Starter } from "../lib/graph";
-import { kbd, native, nativeAction } from "../lib/native";
+import { chord, native, nativeAction } from "../lib/native";
 import { useStore } from "../lib/store";
 import { openExample, openNewSong } from "./NewSongDialog";
 import { Button } from "./ui";
@@ -29,14 +29,14 @@ export default function StartScreen() {
             <Button variant="primary" size="lg" data-testid="new-song" onClick={openNewSong}>
               <Plus size={14} />
               New Song…
-              {native && <Key>{kbd("N")}</Key>}
+              {native && <Key>{chord("N")}</Key>}
             </Button>
             {native && (
               // The same native action as the menu item: the folder dialog, then the open.
               <Button variant="secondary" size="lg" data-testid="open-project" onClick={() => void nativeAction("open_project")}>
                 <FolderOpen size={14} />
                 Open Project Folder…
-                <Key>{kbd("O")}</Key>
+                <Key>{chord("O")}</Key>
               </Button>
             )}
             <Examples catalog={catalog} />

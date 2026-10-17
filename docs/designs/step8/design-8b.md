@@ -402,7 +402,7 @@ and an audio output: std's five instruments, and a project's own instruments. Co
 1. `ready(s)`.
 2. **The mixer.** Find the song's mixer (§2.3). Refuse when there isn't exactly one, or when its channels argument isn't
    an object literal in a project file: "This song mixes its tracks its own way, so a new track would have nowhere to
-   go. Add it in code (⌥4)." A track that nothing reads would build, show and be silent, and the builder must never leave
+   go. Add it in the Code view." A track that nothing reads would build, show and be silent, and the builder must never leave
    one like that (survey §2.2).
 3. **The label:** the request's label, else the component's label ("Pluck"), made unique among track labels ("Pluck 2").
 4. **The key:** the request's, checked by ID-1, else `keys::propose(label, taken)`. `taken` is every module key, `song`,

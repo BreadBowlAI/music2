@@ -42,6 +42,7 @@ import {
   type ViewNode,
 } from "../lib/graph";
 import { laneMade } from "../lib/events";
+import { mod } from "../lib/native";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { Dots } from "./draw";
@@ -187,13 +188,13 @@ function ZoomBar({ zoom, fitted, onZoom }: { zoom: number; fitted: boolean; onZo
   return (
     // It floats over the canvas: the one thing here with a shadow.
     <div className="absolute right-8 bottom-8 z-20 flex items-center gap-0.5 p-0.5 rounded-md bg-raised shadow-pop text-xs" data-zoom={zoom.toFixed(2)}>
-      <button className={clsx(button, "w-ctl-sm")} onClick={() => onZoom(zoom / 1.2)} title="Zoom out (⌘ scroll)" aria-label="Zoom out">
+      <button className={clsx(button, "w-ctl-sm")} onClick={() => onZoom(zoom / 1.2)} title={`Zoom out (${mod.cmd} + scroll)`} aria-label="Zoom out">
         <ZoomOut size={14} />
       </button>
       <button className={clsx(button, "w-11 font-medium")} onClick={() => onZoom(1)} title="Actual size" aria-label="Actual size">
         {Math.round(zoom * 100)}%
       </button>
-      <button className={clsx(button, "w-ctl-sm")} onClick={() => onZoom(zoom * 1.2)} title="Zoom in (⌘ scroll)" aria-label="Zoom in">
+      <button className={clsx(button, "w-ctl-sm")} onClick={() => onZoom(zoom * 1.2)} title={`Zoom in (${mod.cmd} + scroll)`} aria-label="Zoom in">
         <ZoomIn size={14} />
       </button>
       <span className="w-px h-4 mx-0.5 bg-line" />
@@ -1285,7 +1286,7 @@ function KnobControl({
   const written = knob.written ? `written as ${knob.literal}` : "the default: not written in the code yet, turning it writes it in";
   const title = !editable
     ? `${why ?? "It can't be edited right now"}.`
-    : `${shared}${knob.file}:${knob.line}  (${written})\nDrag (⇧ for fine) · double-click to type a value · ⌥-click to reset · right-click to automate it`;
+    : `${shared}${knob.file}:${knob.line}  (${written})\nDrag (${mod.shift} for fine) · double-click to type a value · ${mod.alt}-click to reset · right-click to automate it`;
   const unit = Math.min(1, Math.max(0, toUnit(descriptor, value)));
   const reset = descriptor.default != null ? Math.min(1, Math.max(0, toUnit(descriptor, descriptor.default))) : undefined;
   /** A drag let go of without its pointer (lost, or cancelled): the knob goes back to where it was. */

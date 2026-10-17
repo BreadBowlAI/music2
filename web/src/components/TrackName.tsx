@@ -1,7 +1,7 @@
 import clsx from "clsx";
 import { useEffect, useRef, useState } from "react";
 import { graphApi, lockReason, moduleName } from "../lib/graph";
-import { kbd } from "../lib/native";
+import { chord } from "../lib/native";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 
@@ -93,7 +93,7 @@ export default function TrackName({
     );
   }
   const shown = pending ?? name;
-  const why = !renamable ? undefined : locked ? `${locked}, so it can't be renamed` : `Double-click to rename (${kbd("R")})`;
+  const why = !renamable ? undefined : locked ? `${locked}, so it can't be renamed` : `Double-click to rename (${chord("R")})`;
   return (
     <span
       data-testid={testid}

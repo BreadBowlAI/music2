@@ -5,7 +5,7 @@ import type * as Monaco from "monaco-editor/esm/vs/editor/editor.api";
 import { codeApi, fileOrder, moduleFile } from "../lib/code";
 import { Workspace, type Doc } from "../lib/codeWorkspace";
 import { editorHooks, graphApi, moduleName, type GraphState, type Problem } from "../lib/graph";
-import { kbd } from "../lib/native";
+import { chord, isMac } from "../lib/native";
 import { trackColors } from "../lib/palette";
 import { useStore } from "../lib/store";
 import { Button } from "./ui";
@@ -16,8 +16,15 @@ type Kit = typeof import("../lib/codeMonaco");
 interface TypeProblem { path: string; line: number; col: number; message: string }
 
 const isLib = (path: string) => path.startsWith("node_modules/");
-/** The app's menu commands whose chords the editor binds, and its action for each (⌘D: the next match). */
-const MONACO_CHORDS: Record<string, string> = { duplicate: "editor.action.addSelectionToNextFindMatch", delete_track: "deleteAllLeft" };
+/**
+ * The app's menu commands whose chords the editor binds, and its action for each (⌘D: the next match).
+ * ⌘⌫ deletes to the line's start on a Mac; Ctrl+Backspace deletes the word before elsewhere, as
+ * Monaco binds them on each.
+ */
+const MONACO_CHORDS: Record<string, string> = {
+  duplicate: "editor.action.addSelectionToNextFindMatch",
+  delete_track: isMac ? "deleteAllLeft" : "deleteWordLeft",
+};
 
 /** What the editor followed while the project had no module (its code never compiled). */
 const NO_MODULES = "\0none";
@@ -373,12 +380,12 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
             variant={dirtyCount ? "primary" : "ghost"}
             disabled={!dirtyCount || saving}
             onClick={() => void saveAll()}
-            title={`Save ${dirtyCount > 1 ? "every edited file" : "the file"} (${kbd("S")}). Code that doesn't compile is saved too; the last version that did keeps playing.`}
+            title={`Save ${dirtyCount > 1 ? "every edited file" : "the file"} (${chord("S")}). Code that doesn't compile is saved too; the last version that did keeps playing.`}
             aria-label="Save"
           >
             {saving ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />}
             {dirtyCount > 1 ? `Save ${dirtyCount} files` : "Save"}
-            <span className="opacity-60 font-normal">{kbd("S")}</span>
+            <span className="opacity-60 font-normal">{chord("S")}</span>
           </Button>
         </div>
         {doc && doc.theirs !== undefined && ws && (

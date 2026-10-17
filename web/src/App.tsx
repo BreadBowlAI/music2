@@ -102,11 +102,22 @@ export default function App() {
       if (id === "play" || id.startsWith("view_") || id === "shortcuts") e.preventDefault();
       appCommand(id);
     };
+    // Off the Mac, Ctrl+Backspace in a field deletes the word before, by the code the app's menu
+    // runs (`deleteBack`), whatever the browser's own editing keys are. Before the field sees it:
+    // fields keep their keys from the window. The code editor has its own.
+    const onFieldKey = (e: KeyboardEvent) => {
+      if (isMac || native || e.key !== "Backspace" || !e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) return;
+      const t = e.target;
+      if (!textField(t) || t.closest(".monaco-editor")) return;
+      e.preventDefault();
+      deleteBack(t);
+    };
     // Right-click: nothing (rather than the browser's Reload/Inspect menu), except in text fields.
     const onContext = (e: MouseEvent) => {
       if (!(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onFieldKey, true);
     window.addEventListener("contextmenu", onContext);
     const offMenu = onMenu(appCommand);
     if (native) nativeAction("ready");
@@ -114,6 +125,7 @@ export default function App() {
     document.documentElement.classList.toggle("mac", isMac);
     return () => {
       window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onFieldKey, true);
       window.removeEventListener("contextmenu", onContext);
       offMenu();
     };
@@ -149,6 +161,38 @@ function editing() {
 
 function field(a: EventTarget | null) {
   return a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || (a instanceof HTMLElement && a.isContentEditable);
+}
+
+/** A field whose text can be selected (not a number, a checkbox or a slider). */
+function textField(a: EventTarget | null): a is HTMLInputElement | HTMLTextAreaElement {
+  return (a instanceof HTMLInputElement && a.selectionStart !== null) || a instanceof HTMLTextAreaElement;
+}
+
+/**
+ * ⌘⌫ in a text field, as each OS's fields do it: the selection, or else up to the line's start on
+ * a Mac and the word before elsewhere (Ctrl+Backspace). As one typing step, so the field's own undo
+ * puts it back.
+ */
+function deleteBack(el: HTMLInputElement | HTMLTextAreaElement) {
+  const end = el.selectionEnd ?? 0;
+  const at = el.selectionStart ?? end;
+  const from = at !== end ? at : isMac ? el.value.lastIndexOf("\n", at - 1) + 1 : wordStart(el.value, at);
+  if (from === end) return;
+  el.setSelectionRange(from, end);
+  if (document.execCommand("delete")) return;
+  el.setRangeText("", from, end, "start");
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+/** Where the word before `at` starts: back over spaces, then over letters and digits, or else over other marks. */
+function wordStart(text: string, at: number) {
+  const word = (c: string) => /[\p{L}\p{N}_]/u.test(c);
+  const space = (c: string) => /\s/.test(c);
+  let i = at;
+  while (i > 0 && space(text[i - 1])) i--;
+  const kind = i > 0 && word(text[i - 1]);
+  while (i > 0 && !space(text[i - 1]) && word(text[i - 1]) === kind) i--;
+  return i;
 }
 
 /** Every app-level command, from the keyboard or the menu bar (desktop): the command ids are the menu items'. */
@@ -190,16 +234,11 @@ export function appCommand(id: string) {
     case "new_track":
       return newTrack();
     case "delete_track": {
-      // In the code editor, its own ⌘⌫ (delete to the line's start); in a field, the field's.
+      // In the code editor, its own ⌘⌫; in a field, the field's (`deleteBack`). On a Mac, both delete
+      // to the line's start; elsewhere, the word before.
       if (editorHooks.chord?.("delete_track")) return;
       const el = document.activeElement;
-      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-        const at = el.selectionStart ?? 0;
-        if (el.selectionEnd !== at) el.setRangeText("", at, el.selectionEnd ?? at, "start");
-        else el.setRangeText("", el.value.lastIndexOf("\n", at - 1) + 1, at, "start");
-        el.dispatchEvent(new Event("input", { bubbles: true }));
-        return;
-      }
+      if (textField(el)) return deleteBack(el);
       // In the dock (the roll's notes, a knob), the chord is the dock's, never the track's.
       if (editing() || document.activeElement?.closest("#dock")) return;
       if (shell.selected && shell.selected !== "song") void deleteTrack(shell.selected);
