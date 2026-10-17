@@ -8,6 +8,8 @@ license.workspace = true
 [dependencies]
 m2-ir.workspace = true
 m2-runtime.workspace = true
+# The engine threads' set-up (RENDER-28a), and the process's cores for their count.
+m2-os.workspace = true
 anyhow.workspace = true
 cpal.workspace = true
 crossbeam-channel.workspace = true
@@ -19,6 +21,4 @@ m2-song.workspace = true
 m2-plugins.workspace = true
 # Compiles the fixtures for the bit-identity test; it doesn't depend on m2-play.
 m2-session.workspace = true
-# The process's footprint, for the churn test's recorded p16 run.
-m2-os.workspace = true
 serde_json.workspace = true

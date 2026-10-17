@@ -42,7 +42,7 @@ pub mod data;
 pub mod engine;
 pub mod event;
 mod fade;
-mod fpenv;
+pub mod fpenv;
 #[doc(hidden)]
 pub mod gauge;
 mod keep;
@@ -72,7 +72,7 @@ pub use cells::{CellAt, CellId, CellInfo, CellMap, CellSlots, CellTarget};
 pub use data::{decls, lane_kind};
 pub use engine::{Applied, CallbackStamp, Engine, Envelope, Heard, Msg, Retired};
 pub use event::{Event, Events};
-pub use m2_pool::{Pool, Runner, Setup};
+pub use m2_pool::{Counters, Pool, Runner, Setup, Trip};
 pub use packages::{Package, PackageSet};
 pub use plan::{Basis, Continues, Count, Keep, LaneInfo, Leftovers, PlanInfo, PluginAt, Shape, Stats};
 pub use plugins::PluginInstance;

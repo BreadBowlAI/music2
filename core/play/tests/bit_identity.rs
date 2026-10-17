@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use common::*;
 use m2_play::Player;
-use m2_runtime::{BLOCK, Cmd, Continues, LaneSwap, PlanInfo, Pool, Renderer, Runner, notes_data};
+use m2_runtime::{BLOCK, Cmd, Continues, LaneSwap, PlanInfo, Pool, Renderer, Runner, Stats, notes_data};
 use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
 
@@ -479,4 +479,137 @@ fn the_song_tail_is_the_sum_and_the_master() {
     let faders: Vec<usize> = (0..f.nodes.len()).filter(|&i| f.nodes[i].module == "song" && kernel(i) == "std:gain").collect();
     assert_eq!(faders.len(), tracks + 1);
     assert_eq!(faders.iter().filter(|&&i| label(i) == "song").count(), 1, "each channel's fader runs with its track");
+}
+
+/// A live player's engine threads for tests: `n` threads set up as a player's (plain threads, as
+/// no device plays here), in spread mode: every worker woken each block and the device's thread
+/// kept off the roots, so tasks surely run on workers.
+fn engine_threads(n: usize) -> (Pool, Runner) {
+    let group = Arc::new(m2_os::rt::Group::none(Some(std::time::Duration::from_micros(2667))));
+    let (pool, mut runner) = Pool::new(n, m2_runtime::threads::live(group, false, None).0).unwrap();
+    runner.spread(true);
+    (pool, runner)
+}
+
+/// What a player driven on its engine threads heard, and what its workers did: tasks they ran and
+/// reads across threads, summed over the run; and its activation's stats, if it had one.
+struct Heard {
+    out: Vec<[f32; 2]>,
+    on_workers: u64,
+    across: u64,
+    stats: Option<Stats>,
+}
+
+/// A plan to activate at a frame, made against the one that plays.
+type At<'a> = (usize, &'a dyn Fn(&PlanInfo) -> Renderer);
+
+/// `song` live on `runner` at `rate`, from 0 for `frames`, with `at`'s plan activated when given.
+fn live_on(song: &Song, rate: u32, frames: usize, runner: Runner, at: Option<At>) -> Heard {
+    let r = song.renderer();
+    let info = r.info();
+    let (player, mut d) = Player::driven_on(rate, runner);
+    player.open(r).unwrap();
+    player.play();
+    let mut sent = None;
+    let out = hear(&mut d, frames, &mut |_, done| {
+        if let Some((frame, next)) = &at
+            && done >= *frame
+            && sent.is_none()
+        {
+            let r = next(&info);
+            sent = Some(r.generation());
+            player.activate(r).unwrap();
+        }
+    });
+    let stats = sent.map(|id| {
+        let cur = d.engine().and_then(|e| e.current()).filter(|c| c.generation() == id).expect("the activation plays");
+        cur.stats().clone()
+    });
+    let s = d.runner().spread_report();
+    Heard { out, on_workers: s.tasks_on_workers, across: s.edges_across, stats }
+}
+
+// RENDER-33, RENDER-2 (8a's live half): live playback on the player's engine threads is the
+// export on one thread, bit for bit: every pure fixture, its whole song and a second, on 2, 4 and
+// 7 threads, in device buffers of mixed sizes. Each fixture of two partitions or more ran tasks on
+// workers; over all of them, some reads crossed threads.
+#[test]
+fn live_on_n_threads_is_the_export_on_1() {
+    let _one_at_a_time = POOLS.lock().unwrap_or_else(|e| e.into_inner());
+    let t = std::time::Instant::now();
+    let mut across = 0;
+    for name in ["examples/first-song", "examples/resample", "examples/sounds", "templates/starter", "templates/empty"] {
+        let song = fixture(name);
+        let frames = (song.seconds() * song.rate as f64) as usize;
+        let export = offline(&song, frames);
+        let parts = song.renderer().parts().len();
+        for n in [2, 4, 7] {
+            let (_pool, runner) = engine_threads(n);
+            let heard = live_on(&song, song.rate, frames, runner, None);
+            assert_eq!(first_diff(&heard.out, &export), None, "{name} live on {n} threads: the export's bits");
+            assert!(parts < 2 || heard.on_workers > 0, "{name} on {n} threads: tasks ran on workers");
+            across += heard.across;
+        }
+    }
+    assert!(across > 0, "some reads crossed threads");
+    eprintln!("every pure fixture live on 2, 4 and 7 threads: {:.1} s", t.elapsed().as_secs_f64());
+}
+
+// RENDER-25, RENDER-2 (8a's live half): activations on the engine threads give one thread's bits:
+// G7c's three no-op activations on first-song and p16 (the export's bits), and an edit with a ghost
+// and fades on first-song (4 threads against 1, sample for sample, through the window).
+#[test]
+fn edits_on_engine_threads_match_one_thread() {
+    let _one_at_a_time = POOLS.lock().unwrap_or_else(|e| e.into_inner());
+    for (name, song) in [("first-song".to_string(), fixture("examples/first-song")), ("p16".into(), p16())] {
+        let frames = 10 * SR as usize;
+        let export = offline(&song, frames);
+        let (_pool, runner) = engine_threads(4);
+        let (player, mut d) = Player::driven_on(song.rate, runner);
+        let r = song.renderer();
+        let mut info = r.info();
+        player.open(r).unwrap();
+        player.play();
+        let at = points(&song);
+        let mut sent = 0;
+        let heard = hear(&mut d, frames, &mut |_, done| {
+            if at.get(sent).is_some_and(|&a| done >= a) {
+                let r = song.against(&song, &info, &Continues::identity(&song.flat));
+                info = r.info();
+                player.activate(r).unwrap();
+                sent += 1;
+            }
+        });
+        assert_eq!(sent, at.len());
+        assert_eq!(first_diff(&heard, &export), None, "{name}: no-op activations on 4 threads changed the output");
+        assert!(d.runner().spread_report().tasks_on_workers > 0, "{name}: tasks ran on workers");
+    }
+    let (song, edited) = (fixture("examples/first-song"), first_song_edited());
+    let cont = continues(&song, &edited);
+    let next = |info: &PlanInfo| edited.against(&song, info, &cont);
+    let frames = 8 * SR as usize;
+    let one = live_on(&song, song.rate, frames, Runner::one(), Some((3 * SR as usize, &next)));
+    let (_pool, runner) = engine_threads(4);
+    let four = live_on(&song, song.rate, frames, runner, Some((3 * SR as usize, &next)));
+    let s = four.stats.as_ref().expect("an activation");
+    assert!(s.ghosts >= 1 && s.fades >= 2, "a ghost, and fades: {s:?}");
+    assert_eq!(one.stats.as_ref().map(|o| o.kept.total()), Some(s.kept.total()));
+    assert!(peak(&four.out[3 * SR as usize..]) > 0.05, "the edit plays");
+    assert_eq!(first_diff(&four.out, &one.out), None, "the edit on 4 threads: one thread's bits");
+    assert!(four.on_workers > 0 && four.across > 0, "tasks on workers ({}), reads across threads ({})", four.on_workers, four.across);
+}
+
+// RENDER-31, RENDER-2 (8a's live half): a song at 48 kHz on a 44.1 kHz device (the resampler pulls
+// engine frames in pieces, so some callbacks render two blocks) plays the same on 4 threads as on 1.
+#[test]
+fn a_resampled_song_on_n_threads_matches_one_thread() {
+    let _one_at_a_time = POOLS.lock().unwrap_or_else(|e| e.into_inner());
+    let song = fixture("examples/first-song");
+    let frames = 6 * 44_100;
+    let one = live_on(&song, 44_100, frames, Runner::one(), None);
+    let (_pool, runner) = engine_threads(4);
+    let four = live_on(&song, 44_100, frames, runner, None);
+    assert!(peak(&one.out) > 0.1);
+    assert_eq!(first_diff(&four.out, &one.out), None, "resampled on 4 threads: one thread's bits");
+    assert!(four.on_workers > 0);
 }

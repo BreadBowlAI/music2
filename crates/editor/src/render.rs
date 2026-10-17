@@ -69,19 +69,12 @@ pub enum Threads {
 impl Threads {
     /// What `M2_THREADS` says, if it is set.
     pub fn from_env() -> Result<Option<Threads>> {
-        match std::env::var("M2_THREADS") {
-            Ok(v) => Threads::parse(&v).map(Some).with_context(|| format!("M2_THREADS={v}")),
-            Err(std::env::VarError::NotPresent) => Ok(None),
-            Err(e) => Err(anyhow!("M2_THREADS: {e}")),
-        }
+        Ok(m2_runtime::threads::from_env()?.map(Threads::Exactly))
     }
 
     /// A count of threads, 1 to 64, as `--threads` and `M2_THREADS` give it.
     pub fn parse(text: &str) -> Result<Threads> {
-        match text.trim().parse::<usize>() {
-            Ok(n @ 1..=Pool::MAX_THREADS) => Ok(Threads::Exactly(n)),
-            _ => bail!("say how many threads a render may use: a number from 1 to 64, not `{}`", text.trim()),
-        }
+        m2_runtime::threads::parse(text).map(Threads::Exactly)
     }
 
     /// How many threads this is on a machine with `cores`: never more than a pool has.

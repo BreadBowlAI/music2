@@ -124,6 +124,34 @@ pub fn project(what: &str, files: &[(&str, &str)]) -> Song {
     compile(dir)
 }
 
+/// What `new` continues of `old`, as the session names it: both compiled from their folders.
+pub fn continues(old: &Song, new: &Song) -> Continues {
+    let read = |s: &Song| {
+        let snapshot = m2_song::Snapshot::read(&s.dir).unwrap();
+        let project = Project::from_snapshot(&snapshot).unwrap_or_else(|d| panic!("{d:?}"));
+        (m2_session::compile(&project, &mut std_packages()).unwrap_or_else(|d| panic!("{d:?}")), snapshot)
+    };
+    let ((a, sa), (b, sb)) = (read(old), read(new));
+    m2_session::tx::continues::between((&a, &sa), (&b, &sb))
+}
+
+/// first-song edited while it plays (8a's live half): the bass's duck becomes a drive (the duck
+/// plays out the window as a ghost, the bass fader's input fades to the drive), and the keys'
+/// channel plays the hats through a new delay (a fade-in), so the keys track plays out the window
+/// as ghosts, which the song reads only through a fade's old side.
+pub fn first_song_edited() -> Song {
+    let mut song = std::fs::read_to_string(repo().join("examples/first-song/song.ts")).unwrap();
+    for (from, to) in [
+        ("import { duck } from \"std/fx\";", "import { delay, drive } from \"std/fx\";"),
+        ("bass: duck(bass.out, kick.env, { depth: db(-9) }),", "bass: drive(bass.out, db(6)),"),
+        ("keys: { in: keys.out,", "keys: { in: delay(hats.out),"),
+    ] {
+        assert!(song.contains(from), "first-song's song.ts has `{from}`");
+        song = song.replace(from, to);
+    }
+    fixture_with("examples/first-song", &[("song.ts", &song)])
+}
+
 /// A copy of the repo's fixture `rel`, compiled.
 pub fn fixture(rel: &str) -> Song {
     fixture_with(rel, &[])

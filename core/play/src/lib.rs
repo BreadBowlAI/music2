@@ -22,6 +22,7 @@
 
 pub mod alloc;
 mod cells;
+mod engines;
 pub mod outputs;
 mod resample;
 
@@ -34,9 +35,10 @@ use anyhow::{Result, anyhow};
 use cpal::traits::{DeviceTrait, StreamTrait};
 pub use cpal::{Error as DeviceError, ErrorKind as DeviceErrorKind};
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
+pub use engines::{BETWEEN, Between, EngineThreads, Handover, LiveThreads, live_count};
 use m2_runtime::engine::{APPLIED, Msg as EngineMsg};
 pub use m2_runtime::engine::{Applied, CallbackStamp, Engine, Envelope, Heard, Retired};
-use m2_runtime::{CellTarget, Cmd, LaneSwap, LiveEv, Renderer, Transport};
+use m2_runtime::{CellTarget, Cmd, LaneSwap, LiveEv, Renderer, Runner, Transport, fpenv};
 pub use outputs::{Choice, Freed, Output, default_output, output_ready, outputs};
 pub use resample::Resampler;
 
@@ -78,23 +80,24 @@ impl Live {
         &self.engine
     }
 
-    /// Fill `out` at the device's rate.
+    /// Fill `out` at the device's rate, each block rendered on `runner`'s threads.
     fn fill(
         &mut self,
         out: &mut [[f32; 2]],
         inbox: &mut dyn FnMut() -> Option<Envelope>,
         retire: &mut dyn FnMut(Retired) -> Result<(), Retired>,
         stamp: CallbackStamp,
+        runner: &mut Runner,
     ) {
         let Live { engine, resampler } = self;
         match resampler {
             Some(rs) => {
                 let _ = rs.fill(out, &mut |buf| {
-                    engine.process(buf, inbox, retire, stamp);
+                    engine.process_on(buf, inbox, retire, stamp, runner);
                     Ok(())
                 });
             }
-            None => engine.process(out, inbox, retire, stamp),
+            None => engine.process_on(out, inbox, retire, stamp, runner),
         }
     }
 }
@@ -112,12 +115,16 @@ enum Msg {
     Engine(Envelope),
     Replace { live: Box<Live>, keep: Keep },
     Unload,
+    /// The player's engine threads (8a's live half), handed over once they are made.
+    Threads(Box<Handover>),
 }
 
 /// What leaves the audio thread, to be dropped elsewhere.
 pub enum Gone {
     Engine(Retired),
     Live(Box<Live>),
+    /// The handover, holding the runner the callback had before.
+    Runner(Box<Handover>),
 }
 
 /// An error a sender returns when the audio thread hasn't taken a message for [`STALL`]: the
@@ -282,6 +289,8 @@ struct Shared {
     /// Where a load not yet taken starts: its beat (f64 bits), and whether it plays.
     load_beat: AtomicU64,
     load_playing: AtomicBool,
+    /// Its engine threads, as made and as the callback found them (8a's live half).
+    engines: engines::Report,
 }
 
 impl Shared {
@@ -355,6 +364,10 @@ struct Callback {
     seeks: u64,
     plays: u64,
     loads: u64,
+    /// Where each block renders: the player's engine threads once handed over, this thread alone
+    /// before (8a's live half).
+    runner: Runner,
+    between: Between,
 }
 
 impl Callback {
@@ -376,6 +389,8 @@ impl Callback {
             seeks: 0,
             plays: 0,
             loads: 0,
+            runner: Runner::one(),
+            between: BETWEEN,
         }
     }
 
@@ -397,11 +412,16 @@ impl Callback {
 
     /// The audio callback: fill `data`, interleaved with `channels` channels.
     fn fill(&mut self, data: &mut [f32], channels: usize) {
+        // The device thread's own floating-point mode, as found; then the one mode for all the
+        // callback mixes (the resampler, the fades, the click), its own back at the end (RENDER-2a).
+        self.shared.engines.found(fpenv::mode());
+        let _mode = fpenv::Canon::enter();
         // Marked for the allocation counter in debug builds only, the only ones that install it:
         // a release callback touches no thread-local, whose first touch may allocate (macOS).
         #[cfg(debug_assertions)]
         alloc::set_in_callback(true);
         self.fill_in(data, channels);
+        engines::after_callback(&mut self.runner, self.between);
         #[cfg(debug_assertions)]
         alloc::set_in_callback(false);
     }
@@ -481,6 +501,14 @@ impl Callback {
                         self.fade_out(old);
                     }
                 }
+                // Between runs, like a replace: from now on blocks render on the engine threads.
+                // This thread's own set-up comes once, here.
+                Msg::Threads(mut h) => {
+                    std::mem::swap(&mut h.runner, &mut self.runner);
+                    self.between = h.between;
+                    self.shared.engines.device(m2_os::rt::on_device_thread(&h.group));
+                    self.retire(Gone::Runner(h));
+                }
                 Msg::Engine(env) => {
                     // Nothing plays: what the message carries is retired unapplied.
                     match env.msg {
@@ -505,7 +533,7 @@ impl Callback {
     }
 
     fn render(&mut self, n: usize, stamp: CallbackStamp) {
-        let Callback { live, fade, held, rx, retired, a, b, seeks, plays, shared, .. } = self;
+        let Callback { live, fade, held, rx, retired, a, b, seeks, plays, shared, runner, .. } = self;
         let mut retire = |r: Retired| match retired.try_send(Gone::Engine(r)) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(Gone::Engine(r)) | TrySendError::Disconnected(Gone::Engine(r))) => Err(r),
@@ -535,12 +563,12 @@ impl Callback {
                     }
                 };
                 l.engine.set_click(shared.click.load(Ordering::Relaxed));
-                l.fill(&mut a[..n], &mut inbox, &mut retire, stamp);
+                l.fill(&mut a[..n], &mut inbox, &mut retire, stamp, runner);
             }
             None => a[..n].fill([0.0; 2]),
         }
         if let Some(f) = fade {
-            f.old.fill(&mut b[..n], &mut || None, &mut retire, stamp);
+            f.old.fill(&mut b[..n], &mut || None, &mut retire, stamp, runner);
             for (k, (x, o)) in a[..n].iter_mut().zip(&b[..n]).enumerate() {
                 let i = f.done + k as u32;
                 let g = if i < f.len { (i + 1) as f32 / f.len as f32 } else { 1.0 };
@@ -560,6 +588,7 @@ impl Callback {
             Msg::Replace { live, .. } => Some(Gone::Live(live)),
             Msg::Engine(Envelope { msg: EngineMsg::Activate { renderer }, .. }) => Some(Gone::Engine(Retired::Renderer(renderer))),
             Msg::Engine(Envelope { msg: EngineMsg::SwapLane { data, .. }, .. }) => Some(Gone::Engine(Retired::Lane(data))),
+            Msg::Threads(h) => Some(Gone::Runner(h)),
             Msg::Engine(_) | Msg::Unload => None,
         }
     }
@@ -704,6 +733,12 @@ impl Driver {
     pub fn error(&self, e: DeviceError) {
         self.cb.shared.device_error(e);
     }
+
+    /// The runner the callback renders on: its counters, spread and trip (tests).
+    #[doc(hidden)]
+    pub fn runner(&mut self) -> &mut Runner {
+        &mut self.cb.runner
+    }
 }
 
 /// How often a device's thread looks whether its player was let go.
@@ -802,7 +837,7 @@ impl Player {
         match audio {
             outputs::Audio::Silent(names) => {
                 let (name, fell_back, frames) = outputs::Audio::silent_pick(&names, choice);
-                let player = Player::silent_as(&name, frames)?;
+                let player = Player::silent_as(&name, frames, LiveThreads::from_env()?)?;
                 player.shared.fell_back.store(fell_back, Ordering::Relaxed);
                 return Ok(player);
             }
@@ -860,17 +895,29 @@ impl Player {
     /// The same player, rendering into nothing in real time: no device, no sound. Device
     /// buffers are `M2_AUDIO_FRAMES` frames (480 unless set) at 48 kHz.
     pub fn silent() -> Result<Player> {
-        Player::silent_as("none", None)
+        Player::silent_as("none", None, LiveThreads::from_env()?)
     }
 
-    /// [`Player::silent`], named `name`, its buffers `frames` frames when given.
-    fn silent_as(name: &str, frames: Option<u32>) -> Result<Player> {
+    /// [`Player::silent`] with its buffers `frames` frames, on the engine threads `live` asks for
+    /// (tests, and G12 on a machine with no device).
+    #[doc(hidden)]
+    pub fn silent_with(frames: u32, live: LiveThreads) -> Result<Player> {
+        Player::silent_as("none", Some(frames), live)
+    }
+
+    /// [`Player::silent`], named `name`, its buffers `frames` frames when given, rendering on the
+    /// engine threads `live` asks for: plain threads, one unless it says more.
+    fn silent_as(name: &str, frames: Option<u32>, live: LiveThreads) -> Result<Player> {
         const SR: u32 = outputs::SILENT_RATE;
         let frames: usize = match frames {
             Some(n) => n as usize,
             None => std::env::var("M2_AUDIO_FRAMES").ok().and_then(|v| v.parse().ok()).filter(|&n| n > 0).unwrap_or(480),
         };
         let (player, mut cb, retired) = Player::parts(SR, name);
+        // Handed over as a device's are: the first message, taken at the first callback.
+        let engines = engines::for_clock(frames, SR, live, &player.shared.engines);
+        player.send(Msg::Threads(engines.handover))?;
+        let pool = engines.pool;
         player.shared.device.store(true, Ordering::Relaxed);
         let alive = Arc::downgrade(&player.alive);
         let shared = player.shared.clone();
@@ -886,7 +933,9 @@ impl Player {
                 next = next.max(Instant::now().checked_sub(period).unwrap_or(next));
                 std::thread::sleep(next.saturating_duration_since(Instant::now()));
             }
+            // The callback first, then its engine threads, each worker leaving as it ends.
             drop(cb);
+            drop(pool);
             shared.freed.store(true, Ordering::Release);
         })?;
         drop_retired(retired);
@@ -899,6 +948,19 @@ impl Player {
         // No device of its own: free at once.
         player.shared.freed.store(true, Ordering::Relaxed);
         (player, Driver { cb, retired })
+    }
+
+    /// [`Player::driven`], each block rendered on `runner`'s threads: tests keep their own pool.
+    pub fn driven_on(device_rate: u32, runner: Runner) -> (Player, Driver) {
+        let (player, mut d) = Player::driven(device_rate);
+        player.shared.engines.made(runner.threads(), None, BETWEEN, None);
+        d.cb.runner = runner;
+        (player, d)
+    }
+
+    /// What its engine threads are and did (G12's set-up line).
+    pub fn engine_threads(&self) -> EngineThreads {
+        self.shared.engines.read()
     }
 
     /// Send `msg`, waiting for room at most [`STALL`]; then the player is stalled and the
