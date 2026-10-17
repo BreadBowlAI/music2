@@ -14,9 +14,8 @@ Read this first, then `docs/architecture.md` (the contract) and the design for
 whatever you pick up.
 
 **In short**
-- **`studio` is ready to land** (2026-10-18): Linux green at `ad5f111`; macOS owed. It is on branch `studio`, from
-  `main` at `85b069a`, with `main` at `44b104a` (8a's live half and `macfix`) merged in. Not on `main` yet: the
-  lead lands it. It added:
+- **`studio` is on `main`** (2026-10-18): Linux green at `ad5f111`; macOS owed. `main` fast-forwarded to it
+  (`02ba4d3`). From `main` at `85b069a`, with `main` at `44b104a` (8a's live half and `macfix`) merged in. It added:
 
   | You can now | Where |
   |---|---|
@@ -39,8 +38,8 @@ whatever you pick up.
   `~/m2-runs/app-shots/studio-ee2012c/`. What was built and checked: `docs/designs/step8/build-notes-studio.md`; the
   plan: `studio-plan.md` beside it. Owed: the Mac by-ear steps 61 to 72 (the Finder, a real MIDI keyboard, stems in
   another app).
-- **8a's live half is done on `8a`** (2026-10-17): Linux green at `21a7a1b`; macOS owed. Not on `main` yet: the
-  lead merges it (a merge; `8a` already has `main` at `1cc7382`, `macfix` included). It adds:
+- **8a's live half is on `main`** (2026-10-18): Linux green at `21a7a1b`; macOS owed. `main` fast-forwarded to it
+  (`44b104a`; `8a` already had `main` at `1cc7382`, `macfix` included). It adds:
 
   | What changed | What you notice |
   |---|---|
@@ -58,13 +57,13 @@ whatever you pick up.
   moved. Owed: the owner's Mac sweep, one paste (Mac runs owed, below): it
   picks the live thread count and park or spin. Build notes `docs/designs/step8/build-notes-8a.md` and
   `build-notes-8a-gaps.md`; plans `8a-plan.md` and `8a-live-plan.md` beside them.
-- **`macfix`** (2026-10-17, branch `macfix`, not on `main` yet): the owner's `ci/check.sh` on the Mac at `85b069a`
+- **`macfix` is on `main`** (2026-10-17, a fast-forward to `1cc7382`): the owner's `ci/check.sh` on the Mac at `85b069a`
   passed 11 of 13 rows. It failed G7f store (+135 µs a block over S; bound 80) and one test
   (`new_songs_go_where_settings_say`: a Mac's temporary folder is a link). macfix fixes both. `std:gain` skips its
   `powf` while its dB holds still, with the same bits. The songs folder is named by its real path, as songs are. A
   review found 2 things: both fixed (a test, and the docs). Then `ci/check.sh --gates` passed at `ac5d8c0`: every
   row, nothing passed only on a retry (1,353 Rust tests, 58/58 browser suites, 10 of 10 renders, the 6 gate runs;
-  45 minutes). No render changed; std stays 0.2. Owed once it is on `main`: one more `ci/check.sh` on the Mac, then
+  45 minutes). No render changed; std stays 0.2. Owed: one more `ci/check.sh` on the Mac, then
   G7f store once more on the old gain (Mac runs owed). Build notes: `docs/designs/step8/build-notes-macfix.md`.
 - **`next` is on `main`** (2026-10-17): Linux green at `1560a19`; macOS owed. `main` fast-forwarded to it.
   It added:
@@ -204,15 +203,15 @@ whatever you pick up.
 | `sounds-merge` | `e1003ba` | All on `main` (a fast-forward, 2026-10-17). Linux green at `e108e46` (reviewed; `ci/check.sh --gates` and the recorded tests), macOS owed. Branch and worktree deleted. |
 | `8b-backend` | `c9cc6ad` | All on `main` (a fast-forward, 2026-10-17). Linux green at `a8199ff`, macOS owed. Branch and worktree deleted. |
 | `taste-next` | `22bea45`, then docs | All on `main` (a fast-forward, 2026-10-17). Linux green (reviewed; `ci/check.sh` and `--gates`), macOS owed. Branch and worktree deleted. |
-| `8a` | `21a7a1b`, then docs only | The offline half is on `main` (a fast-forward, 2026-10-17, Linux green at `bc41693`): the pool (`m2-pool`) and the executor, so exports use several cores with the same bits. **The live half is ready for `main`** (a merge; `main` at `1cc7382` is in it): R1 (a mixer strip runs with its track), live playback on engine threads (real time, the Mac's workgroup), G12 live (`ci/gates.txt`, `ci/sweep.sh`), and the gaps lane (a sound that breaks goes silent alone and is told; out of memory says so). Reviewed (6 findings, all fixed with tests). Linux green at `21a7a1b` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Worktree `~/m2-runs/wt/8a` and its `target/` stay until the lead merges. Plans `docs/designs/step8/8a-plan.md` and `8a-live-plan.md`; build notes `build-notes-8a.md` and `build-notes-8a-gaps.md`. |
+| `8a` | `21a7a1b`, then docs only | The offline half is on `main` (a fast-forward, 2026-10-17, Linux green at `bc41693`): the pool (`m2-pool`) and the executor, so exports use several cores with the same bits. **The live half is on `main` too** (a fast-forward to `44b104a`, 2026-10-18): R1 (a mixer strip runs with its track), live playback on engine threads (real time, the Mac's workgroup), G12 live (`ci/gates.txt`, `ci/sweep.sh`), and the gaps lane (a sound that breaks goes silent alone and is told; out of memory says so). Reviewed (6 findings, all fixed with tests). Linux green at `21a7a1b` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Branch and worktree deleted. Plans `docs/designs/step8/8a-plan.md` and `8a-live-plan.md`; build notes `build-notes-8a.md` and `build-notes-8a-gaps.md`. |
 | `polish` | `65f59f1`, then docs only | All on `main` (a fast-forward, 2026-10-17): the rest of the top ten, built in four lanes. Linux green at `65f59f1` (reviewed; `ci/check.sh`), macOS owed. Branch and worktree deleted. Plan `docs/designs/step8/polish-plan.md`; build notes `build-notes-polish.md`. |
 | `8b-ui` | `92317ad`, then docs only | All on `main` (a fast-forward, 2026-10-17). 8b's screens: mute and solo, clips and automation, audition, meters. Linux green at `92317ad` (reviewed; `ci/check.sh`), macOS owed. Branch and worktree deleted. |
 | `origin/taste` | `4804247` | All on `main` now (`a0d5f91` and `4804247`, both merged into `taste-next`). Its worktree is deleted. |
 | `origin/sounds` | `916127d` | 22 new std sounds (8 on the polysynth, 4 FM, 10 drums), merged; on `main` since 2026-10-17. |
 | `next` | `1560a19`, then docs only | All on `main` (a fast-forward, 2026-10-17). From `main` at `70f9b61`, with `main` at `8a6d9e1` (8a's offline half) merged in. 8b.7 (heard while dragging: lanes and the tempo), 8b.10 (the metronome, the keyboard piano, a MIDI keyboard through `midir`), no sound device, Settings, undo names, effect bypass, order and the Duck picker, small fixes. Built in four lanes, joined as merge commits. Reviewed (12 findings, all fixed with tests). Linux green at `1560a19` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Branch and worktree deleted. Plan `docs/designs/step8/next-plan.md`; build notes `build-notes-next.md`. |
-| `macfix` | `ac5d8c0`, then docs only | From `main` at `85b069a`. Fixes the two rows the Mac's run at `85b069a` failed: G7f store (`std:gain` skips its `powf` while its dB holds still, the same bits) and `new_songs_go_where_settings_say` (the songs folder by its real path). Reviewed (2 findings, both fixed). Linux green at `ac5d8c0` (`ci/check.sh --gates`, nothing passed only on a retry); macOS owed. Worktree `~/m2-runs/wt/mf` and its `target/` stay until it lands. Build notes `docs/designs/step8/build-notes-macfix.md`. |
-| `studio` | `ad5f111`, then docs only | Not on `main` yet: the lead lands it (`main` at `44b104a` is in it, so `main` can fast-forward to it if it hasn't moved). From `main` at `85b069a`. Audio in the app (#18), recording notes (#24) with the count-in (#19) and the MIDI keyboards setting (#31), MIDI files and stems (#36), help in plain words (#11), `m2 import` (#37). Built in four lanes, joined as merge commits. Reviewed (12 findings, all fixed with tests). Linux green at `ad5f111` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Worktree `~/m2-runs/wt/st` and its `target/` stay until it lands. Plan `docs/designs/step8/studio-plan.md`; build notes `build-notes-studio.md`. |
-| Mac runs owed | — | `ci/check.sh` ran on `main` at `85b069a`: 11 of 13 rows (`macfix` fixes the two). One more on `main` once `macfix` is on it covers every branch above; then G7f store on the old gain. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 60, and 61 to 72 once `studio` is on `main`. Once `8a` is merged: 8a's Mac sweep, one paste (What to do next). |
+| `macfix` | `ac5d8c0`, then docs only | From `main` at `85b069a`. Fixes the two rows the Mac's run at `85b069a` failed: G7f store (`std:gain` skips its `powf` while its dB holds still, the same bits) and `new_songs_go_where_settings_say` (the songs folder by its real path). Reviewed (2 findings, both fixed). Linux green at `ac5d8c0` (`ci/check.sh --gates`, nothing passed only on a retry); macOS owed. All on `main` (a fast-forward to `1cc7382`, 2026-10-17). Branch and worktree deleted. Build notes `docs/designs/step8/build-notes-macfix.md`. |
+| `studio` | `ad5f111`, then docs only | All on `main` (a fast-forward to `02ba4d3`, 2026-10-18). From `main` at `85b069a`. Audio in the app (#18), recording notes (#24) with the count-in (#19) and the MIDI keyboards setting (#31), MIDI files and stems (#36), help in plain words (#11), `m2 import` (#37). Built in four lanes, joined as merge commits. Reviewed (12 findings, all fixed with tests). Linux green at `ad5f111` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Branch and worktree deleted. Plan `docs/designs/step8/studio-plan.md`; build notes `build-notes-studio.md`. |
+| Mac runs owed | — | `ci/check.sh` ran on `main` at `85b069a`: 11 of 13 rows (`macfix` fixes the two). One more on `main` at `02ba4d3` covers every branch above; then G7f store on the old gain, and 8a's Mac sweep (`ci/sweep.sh`), one paste. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 72. |
 
 `taste` and `sounds` start at `8aa301e`, before the platform step. Each has a detached worktree in `~/m2-runs/wt/`
 (`taste`, `sounds`); `sounds`' can go once the tracks in flight land. `origin/wip/step7` (the Mac's half-done step 7,
@@ -549,11 +548,11 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
 | `polish`: the rest of the top ten | `65f59f1` (Linux checks), then docs only | ran at `85b069a`; owed: the same one more run, then the by-ear steps 39 to 50 |
 | 8a's offline half (all CPU cores, offline) | `bc41693` (Linux checks), then docs only | its Mac tests ran at `85b069a` (pool models 23 passed); the offline sweep: done (2026-10-17, at `8a6d9e1`: go) |
 | `next`: 8b.7, 8b.10, Settings, no sound device, undo names, effect comforts | `1560a19` (Linux checks), then docs only | ran at `85b069a`; owed: the same one more run, then the by-ear steps 51 to 60 (a real MIDI keyboard, the metronome against the beat, switching the output) |
-| `macfix`: G7f store (the gain's fast path) and the songs folder by its real path | `ac5d8c0` (Linux checks), then docs only | owed once it is on `main`: one more `ci/check.sh`, then G7f store once more on the old gain (below) |
-| 8a's live half (live on several cores, a sound that breaks, G12) | `21a7a1b` (Linux checks), then docs only; on `main` once merged | owed: 8a's Mac sweep below, one paste, about 40 minutes. The same `ci/check.sh` covers its Mac tests and G12's minute |
-| `studio`: audio in the app, recording notes, MIDI files and stems, help in plain words | `ad5f111` (Linux checks), then docs only; on `main` once landed | owed: the same one more `ci/check.sh`, then the by-ear steps 61 to 72 (the Finder, a real MIDI keyboard, stems in another app) |
+| `macfix`: G7f store (the gain's fast path) and the songs folder by its real path | `ac5d8c0` (Linux checks), then docs only | owed: one more `ci/check.sh`, then G7f store once more on the old gain (below) |
+| 8a's live half (live on several cores, a sound that breaks, G12) | `21a7a1b` (Linux checks), then docs only; on `main` at `44b104a` | owed: 8a's Mac sweep below, one paste, about 40 minutes. The same `ci/check.sh` covers its Mac tests and G12's minute |
+| `studio`: audio in the app, recording notes, MIDI files and stems, help in plain words | `ad5f111` (Linux checks), then docs only; on `main` at `02ba4d3` | owed: the same one more `ci/check.sh`, then the by-ear steps 61 to 72 (the Finder, a real MIDI keyboard, stems in another app) |
 
-**8a's Mac sweep (for the owner): offline and live, one paste.** Once the lead has merged `8a` into `main`.
+**8a's Mac sweep (for the owner): offline and live, one paste.** `8a` is on `main`.
 
 **In short:** about 40 minutes. It plays nothing aloud. Paste one line, wait, then paste back what is in
 `~/m2-8a.txt`.
