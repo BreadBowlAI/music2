@@ -480,7 +480,7 @@ fn shuffle_and_cut(r: &mut Renderer, seed: u64) -> usize {
     }
     let cuts: Vec<usize> = (1..order.len()).filter(|_| next(&mut s).is_multiple_of(3)).collect();
     g.order = order;
-    r.plan.schedule = Schedule::from_cuts(&r.plan.graph.order, &r.plan.graph.exec, &cuts).unwrap();
+    r.plan.schedule = Schedule::cut(&r.plan.graph.order, &r.plan.graph.exec, &cuts).unwrap();
     cuts.len() + 1
 }
 

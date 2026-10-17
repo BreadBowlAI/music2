@@ -42,6 +42,8 @@ pub mod engine;
 pub mod event;
 mod fade;
 mod fpenv;
+#[doc(hidden)]
+pub mod gauge;
 mod keep;
 mod overlay;
 pub mod packages;
@@ -1296,6 +1298,41 @@ fn step<R: Reads>(
     done
 }
 
+/// Block `b`'s graph: each partition of `sched` a task on `runner`, its nodes in plan order. The
+/// error first in plan order, if a node failed: what reads a failed node is skipped, the rest runs.
+/// A panic in a task is raised again here, once the block is done.
+fn run_graph(graph: &mut Graph, sched: &mut Schedule, lanes: &[LaneSlot], b: &Block, runner: &mut Runner) -> Option<anyhow::Error> {
+    let Schedule { tasks, parts } = sched;
+    let view = GraphView::new(graph);
+    let shared = &*parts;
+    let task = |p: u32| run_part(&view, shared, p, b, lanes);
+    if let Err(payload) = runner.run(tasks, &task) {
+        std::panic::resume_unwind(payload);
+    }
+    parts.take_error()
+}
+
+/// Partition `p`'s task: its nodes in plan order, in the one floating-point mode. False when a
+/// node failed, its error kept in `parts`.
+fn run_part(view: &GraphView, parts: &parts::Parts, p: u32, b: &Block, lanes: &[LaneSlot]) -> bool {
+    // Whatever ran on this thread before, this partition computes in the one mode.
+    fpenv::canon();
+    for &i in parts.nodes(p) {
+        let i = i as usize;
+        // SAFETY: partition p's task alone runs its nodes this block, and every node it reads
+        // finished before: earlier in p, or in a partition p waits for (the pool runs a task after
+        // its inputs complete, with Acquire).
+        let own = unsafe { view.own(i) };
+        if let Err(e) = step(own, &view.reader(parts, p, i), b, Seg::WHOLE, None, None, lanes) {
+            // SAFETY: this is partition p's task.
+            unsafe { parts.fail(p, i, e) };
+            return false;
+        }
+    }
+    debug_assert!(fpenv::is_canon(), "partition {p} left the thread in another floating-point mode");
+    true
+}
+
 impl Graph {
     /// Append node `e`, with outputs of `outputs`' kinds.
     fn push(&mut self, e: Exec, outputs: &[Kind]) {
@@ -1769,6 +1806,8 @@ pub struct Renderer {
     broken: bool,
     trace: Option<Trace>,
     dropped: u32,
+    /// The whole order as one partition, made when a gate first asks ([`gauge`]).
+    whole: Option<Box<Schedule>>,
 }
 
 impl Renderer {
@@ -2030,6 +2069,7 @@ impl Renderer {
             broken: false,
             trace: None,
             dropped: 0,
+            whole: None,
         })
     }
 
@@ -2136,6 +2176,17 @@ impl Renderer {
     pub fn render_block_on(&mut self, clock: u64, runner: &mut Runner) -> Result<&[[f32; 2]; BLOCK]> {
         // One floating-point mode for the block, and the caller's back after it (RENDER-2a).
         let _mode = fpenv::Canon::enter();
+        let alone = &mut Runner::one();
+        let runner = if self.plan.plugins { alone } else { runner };
+        let Some(b) = self.pre(clock, runner) else { return Ok(&self.frames) };
+        let failed = run_graph(&mut self.plan.graph, &mut self.plan.schedule, &self.lanes.slots, &b, runner);
+        self.post(&b, failed)?;
+        Ok(&self.frames)
+    }
+
+    /// A block's pre-pass, on this thread: the transport, cell values, lanes, the trace and the
+    /// block's times. None when the renderer is broken: the block is silence.
+    fn pre(&mut self, clock: u64, runner: &mut Runner) -> Option<Block> {
         self.runs = self.transport.advance();
         self.clock = clock + BLOCK as u64;
         // Cell values written since the last block line (RENDER-22, RENDER-28); offline renders
@@ -2143,10 +2194,8 @@ impl Renderer {
         self.plan.cells.apply(&mut self.plan.graph);
         if self.broken {
             self.frames = [[0.0; 2]; BLOCK];
-            return Ok(&self.frames);
+            return None;
         }
-        let alone = &mut Runner::one();
-        let runner = if self.plan.plugins { alone } else { runner };
         // Workers wake while the pre-pass runs.
         runner.wake(self.plan.schedule.tasks.width());
         // Lanes play before the graph, once per block: schedulers fill their events, in slot
@@ -2162,13 +2211,18 @@ impl Renderer {
         if self.trace.is_some() {
             self.record(clock);
         }
-        let b = self.block(clock);
-        if let Some(e) = self.graph(&b, runner) {
-            // As the old loop did: nothing more is written for this block.
+        Some(self.block(clock))
+    }
+
+    /// A block's post-pass, on this thread, once the graph ran: feedback rings, the output, the
+    /// meters. When a node `failed`, its error, and nothing more is written for the block, as
+    /// step 7's loop did.
+    fn post(&mut self, b: &Block, failed: Option<anyhow::Error>) -> Result<()> {
+        if let Some(e) = failed {
             self.broken = !self.strict;
             return Err(e);
         }
-        self.plan.graph.feedback(&b, Seg::WHOLE);
+        self.plan.graph.feedback(b, Seg::WHOLE);
         let o = &self.plan.graph.bufs[self.plan.out.node][self.plan.out.port];
         let stereo = o.len() >= 2 * BLOCK;
         for f in 0..BLOCK {
@@ -2188,38 +2242,7 @@ impl Renderer {
         if let Some(t) = &self.plan.taps {
             t.write(&self.plan.graph.bufs, &self.frames);
         }
-        Ok(&self.frames)
-    }
-
-    /// Block `b`'s graph: each partition a task on `runner`, its nodes in plan order. The error
-    /// first in plan order, if a node failed: what reads a failed node is skipped, the rest runs.
-    fn graph(&mut self, b: &Block, runner: &mut Runner) -> Option<anyhow::Error> {
-        let Schedule { tasks, parts } = &mut self.plan.schedule;
-        let view = GraphView::new(&mut self.plan.graph);
-        let lanes = &self.lanes.slots[..];
-        let parts_ = &*parts;
-        let task = |p: u32| -> bool {
-            // Whatever ran on this thread before, this partition computes in the one mode.
-            fpenv::canon();
-            for &i in parts_.nodes(p) {
-                let i = i as usize;
-                // SAFETY: partition p's task alone runs its nodes this block, and every node it
-                // reads finished before: earlier in p, or in a partition p waits for (the pool runs
-                // a task after its inputs complete, with Acquire).
-                let own = unsafe { view.own(i) };
-                if let Err(e) = step(own, &view.reader(parts_, p, i), b, Seg::WHOLE, None, None, lanes) {
-                    // SAFETY: this is partition p's task.
-                    unsafe { parts_.fail(p, i, e) };
-                    return false;
-                }
-            }
-            debug_assert!(fpenv::is_canon(), "partition {p} left the thread in another floating-point mode");
-            true
-        };
-        if let Err(payload) = runner.run(tasks, &task) {
-            std::panic::resume_unwind(payload);
-        }
-        parts.take_error()
+        Ok(())
     }
 
     /// Put this block's jumps and notes in the trace.

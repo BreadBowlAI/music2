@@ -35,6 +35,7 @@ pub(crate) struct Parts {
     nodes: Box<[u32]>,
     starts: Box<[u32]>,
     /// By exec index: its partition, or [`NONE`] outside the order.
+    #[cfg(any(debug_assertions, test))]
     part_of: Box<[u32]>,
     /// By exec index: its place in plan order, or [`NONE`]: which error is reported.
     pos: Box<[u32]>,
@@ -42,7 +43,6 @@ pub(crate) struct Parts {
     producers: Box<[u32]>,
     pstarts: Box<[u32]>,
     /// By partition: its label and depth (tests, gates).
-    #[cfg_attr(not(test), expect(dead_code, reason = "read by tests now, by the gates later in 8a"))]
     labels: Box<[(Box<str>, u16)]>,
     /// By partition: the first error its task met this block, with the node's place in the order.
     errors: Box<[ErrorSlot]>,
@@ -115,9 +115,9 @@ impl Schedule {
         Schedule::of(order, exec, part_of, pos, labels)
     }
 
-    /// For tests: the order cut into runs at `cuts` (places in the order), each a partition.
-    #[cfg(test)]
-    pub(crate) fn from_cuts(order: &[usize], exec: &[Exec], cuts: &[usize]) -> Result<Schedule> {
+    /// The order cut into runs at `cuts` (places in the order), each a partition: for tests, and
+    /// for the gates' one partition (no cuts).
+    pub(crate) fn cut(order: &[usize], exec: &[Exec], cuts: &[usize]) -> Result<Schedule> {
         let pos = positions(order, exec.len());
         let mut part_of = vec![NONE; exec.len()];
         let mut p = 0;
@@ -171,6 +171,7 @@ impl Schedule {
         let parts = Parts {
             nodes: nodes.into(),
             starts: starts.into(),
+            #[cfg(any(debug_assertions, test))]
             part_of: part_of.into(),
             pos: pos.into(),
             producers: producers.into(),
@@ -248,7 +249,6 @@ fn strongly_connected(succ: &[Vec<u32>]) -> Vec<u32> {
     group
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "read by tests now, by the gates later in 8a"))]
 impl Parts {
     /// How many partitions.
     pub(crate) fn len(&self) -> usize {
@@ -267,6 +267,7 @@ impl Parts {
     }
 
     /// The partition of exec node `i`, or [`NONE`].
+    #[cfg(any(debug_assertions, test))]
     pub(crate) fn part_of(&self, i: usize) -> u32 {
         self.part_of.get(i).copied().unwrap_or(NONE)
     }
@@ -277,7 +278,9 @@ impl Parts {
     }
 
     /// Whether node `i`, running in partition `p`, may read node `j` now: `j` is outside the order
-    /// (frozen this block), earlier in `p`, or in a partition `p` reads directly.
+    /// (frozen this block), earlier in `p`, or in a partition `p` reads directly. Debug builds check
+    /// every read with it.
+    #[cfg(any(debug_assertions, test))]
     pub(crate) fn may_read(&self, p: u32, i: usize, j: usize) -> bool {
         match self.part_of(j) {
             NONE => true,
