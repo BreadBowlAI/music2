@@ -403,7 +403,7 @@ each track's peak, the song's output, and the DSP load. Nothing is sent while th
 | `muting_the_kick_floors_its_meter_and_the_bass_still_ducks` (`env` fixture) | same | — (the runtime's muted-tap test was red) |
 | `meters_reach_every_window_and_the_status_has_the_load` (two windows, the token, `load` and `late` in the status) | `crates/server/src/routes_8b_tests.rs` | red with `ws_loop` not reading the channel |
 
-The tests were written after the code; each was made red by breaking the code it checks.
+The tests were written after the code. Three were made red by breaking the code they check, as the column says.
 
 **Choices made here:**
 - **`out` has its own field,** not a key in `tracks`: a track may be called `out` (ID-1 allows it).
