@@ -3434,11 +3434,10 @@ fn adding_and_deleting_a_track_keeps_a_ringing_tail() {
     let (mut dc, token) = ringing();
     let mut heard: Vec<f32> = vec![];
     let mut checked: Vec<(&str, std::ops::Range<usize>)> = vec![];
-    let edits: [(&str, &dyn Fn(&Graph)); 2] = [
-        ("adding a track", &|g| drop(g.add_track(token, "std:synth-pluck", None, None, None).unwrap())),
-        ("deleting the first channel's track", &|g| assert_eq!(g.delete_track(token, "keys", false).unwrap().0, 200)),
-    ];
-    for (what, edit) in edits {
+    let add = |g: &Graph| drop(g.add_track(token, "std:synth-pluck", None, None, None).unwrap());
+    let delete = |g: &Graph| assert_eq!(g.delete_track(token, "keys", false).unwrap().0, 200);
+    let edits: [&dyn Fn(&Graph); 2] = [&add, &delete];
+    for (what, edit) in ["adding a track", "deleting the first channel's track"].into_iter().zip(edits) {
         let before = dc.frames(19);
         let own = max_step(&before);
         heard.extend(&before);
