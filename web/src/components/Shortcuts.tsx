@@ -39,6 +39,8 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
       ["Delete the selected track", chord("Backspace")],
       ["Rename the selected track", `${chord("R")} / ${shifted("Enter")}`],
       ["Show / hide automation", "A"],
+      ["Mute / solo the selected track", "M / S"],
+      ["Solo only this track", `${mod.alt}-click S`],
     ],
   },
   {

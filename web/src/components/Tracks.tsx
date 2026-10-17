@@ -1,10 +1,11 @@
 import clsx from "clsx";
-import { Check, CodeXml, Copy, Ellipsis, Pencil, Search, SlidersHorizontal, Trash2 } from "lucide-react";
+import { Check, CodeXml, Copy, Ellipsis, Pencil, Search, SlidersHorizontal, Trash2, Volume2, VolumeX } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
 import { graphApi, lockReason, moduleName, type Dependent, type GraphState, type Instrument } from "../lib/graph";
 import { trackMade } from "../lib/events";
 import { chord, opt } from "../lib/native";
+import { muteInSongCall } from "../lib/overlays";
 import { DEFAULT_ORDER, TRACK_COLORS, type TrackColorName } from "../lib/palette";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
@@ -145,6 +146,24 @@ export async function deleteTrack(module: string, cascade = false) {
     if (r.asks) return void useTracksUi.setState({ asking: { module, name, ...r.asks }, menu: null });
     const taken = r.done.excised ?? [];
     toast(taken.length ? `Deleted ${name} and ${what(taken)}` : `Deleted ${name}`, undoAction(graph.session, r.done.revision));
+  } catch (error) {
+    toast(message(error));
+  }
+}
+
+/**
+ * Mute `module` in the song, or unmute it (MON-5, design-8b §2.4): its `muted` option in its code,
+ * so the export leaves it out too. One undo step, said in a toast, since it lasts: "Kick muted in
+ * the song", with Undo.
+ */
+export async function muteInSong(module: string, muted: boolean) {
+  const graph = writable();
+  if (!graph || module === "song") return;
+  const name = nameOf(graph, module);
+  const toast = useStore.getState().toast;
+  try {
+    const r = await muteInSongCall(graph.session, [module], muted);
+    if (r.before !== r.after) toast(`${name} ${muted ? "muted" : "unmuted"} in the song`, undoAction(graph.session, r.revision));
   } catch (error) {
     toast(message(error));
   }
@@ -367,7 +386,11 @@ function Colours({ module, current, anchor, onClose }: { module: string; current
   );
 }
 
-/** A track's header menu (taste.md §3.4): Rename, Duplicate, Delete; Colour ▸; automation; Edit in code. */
+/**
+ * A track's header menu (taste.md §3.4): Rename, Duplicate, Delete; Colour ▸, automation, Mute in
+ * song; Edit in code. On a track muted in the song, Unmute in song comes first: a click on its M
+ * opens this menu for it (taste.md §2.9).
+ */
 function TrackMenu({ graph, module, anchor, onClose }: { graph: GraphState; module: string; anchor: HTMLElement; onClose: () => void }) {
   const [colours, setColours] = useState<HTMLElement | null>(null);
   const locked = lockReason(graph, useStore.getState().connected);
@@ -380,8 +403,27 @@ function TrackMenu({ graph, module, anchor, onClose }: { graph: GraphState; modu
     f();
   };
   const sep = <div role="separator" className="my-1 h-px bg-line" />;
+  const inSong = graph.overlays?.heard[module] === "muted-in-song";
+  const songMute = (
+    <MenuRow
+      icon={inSong ? <Volume2 size={14} /> : <VolumeX size={14} />}
+      disabled={!!locked}
+      title={locked ?? undefined}
+      data-testid="mute-in-song"
+      detail={inSong ? undefined : "Saved in its code: the export leaves it out too"}
+      onClick={run(() => void muteInSong(module, !inSong))}
+    >
+      {inSong ? "Unmute in song" : "Mute in song"}
+    </MenuRow>
+  );
   return (
     <Popover anchor={anchor} onClose={onClose} role="menu" aria-label={`${nameOf(graph, module)} menu`} data-testid="track-menu" className="w-[240px]">
+      {inSong && (
+        <>
+          {songMute}
+          {sep}
+        </>
+      )}
       <MenuRow
         icon={<Pencil size={14} />}
         shortcut={chord("R")}
@@ -417,6 +459,7 @@ function TrackMenu({ graph, module, anchor, onClose }: { graph: GraphState; modu
           {open ? "Hide automation" : "Show automation"}
         </MenuRow>
       )}
+      {!inSong && songMute}
       {sep}
       <MenuRow
         icon={<CodeXml size={14} />}
