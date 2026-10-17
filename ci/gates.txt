@@ -13,3 +13,9 @@
 --server export
 store --reference 50
 arena --reference 50 --at 180
+# 8a's live half (design-8a §9.2): G12, p50 live on the player's engine threads at 128 frames for one
+# minute, muted, on the Mac's output device: about 70 s with the song's build, the device and a
+# 10-second back-to-back pass (64 s on Linux). Elsewhere it plays the silent clock, never a device:
+# its timings are recorded (PLAT-1); crashes, non-finite samples and frames are judged everywhere.
+# The owner's live sweep and 10-minute run are ci/sweep.sh.
+realtime --reference 50 --minutes 1

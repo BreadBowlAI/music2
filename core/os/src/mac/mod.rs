@@ -1,7 +1,10 @@
 //! macOS: thread identity, the disk, this machine and this process, and the folders. The main loop
 //! and file-system events are in `main_loop.rs` and `watch.rs`.
 
+mod cf;
 pub(crate) mod main_loop;
+pub(crate) mod rt;
+pub(crate) mod wake;
 pub(crate) mod watch;
 
 use std::ffi::{CStr, OsString};
@@ -16,7 +19,8 @@ use crate::process::Memory;
 #[cfg(test)]
 pub(crate) use crate::unix::sync_refused;
 pub(crate) use crate::unix::{
-    c_numbers, change_and_inode, cpu_time, file_id, file_id_of, host_name, load_average, local_time, make_writable, push, sync_dir, token,
+    c_numbers, change_and_inode, cpu_time, file_id, file_id_of, foreign, host_name, load_average, local_time, make_writable, push,
+    sync_dir, token,
 };
 use crate::unix::{check, cpath};
 
@@ -164,7 +168,8 @@ pub(crate) fn cores() -> crate::process::Cores {
     let fast = sysctl_int(c"hw.perflevel0.physicalcpu").or_else(|| sysctl_int(c"hw.physicalcpu")).unwrap_or(1).max(1);
     let slow = sysctl_int(c"hw.perflevel1.physicalcpu").unwrap_or(0);
     let per_cache = sysctl_int(c"hw.perflevel0.cpusperl2").unwrap_or(fast).clamp(1, fast);
-    crate::process::Cores { fast, slow, per_cache }
+    // One system-level cache serves every cluster: a render alone spreads over them all.
+    crate::process::Cores { fast, slow, per_cache, per_last_cache: fast }
 }
 
 /// macOS doesn't say how long threads waited for a CPU.
@@ -282,6 +287,7 @@ mod tests {
         let c = crate::process::cores();
         let threads = std::thread::available_parallelism().unwrap().get();
         assert!(c.fast >= 1 && (1..=c.fast).contains(&c.per_cache) && c.fast + c.slow <= threads, "{c:?}, {threads} threads");
+        assert_eq!(c.per_last_cache, c.fast, "one system-level cache serves every cluster");
     }
 
     // OS-84: the model is `hw.model` ("MacBookPro18,1"), the OS has its version, the CPU its name.

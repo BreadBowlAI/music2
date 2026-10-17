@@ -49,6 +49,7 @@ pub mod overlay;
 mod preview;
 mod projects;
 mod songkey;
+mod stopped;
 mod view_file;
 mod watcher;
 mod fx;
@@ -452,9 +453,10 @@ pub struct Teardown {
 }
 
 /// Whether `e` says the computer ran out of memory, or of address space: wasmtime's "mmap failed to
-/// reserve …" when a kernel instance's memory can't be reserved.
+/// reserve …" when a kernel instance's memory can't be reserved. Not a sound over its own 32 MB
+/// ([`m2_runtime::OutOfMemory`]): that one says so itself, and closing other apps won't help.
 pub(crate) fn out_of_memory(e: &anyhow::Error) -> bool {
-    e.chain().any(|c| {
+    e.downcast_ref::<m2_runtime::OutOfMemory>().is_none() && e.chain().any(|c| {
         let t = c.to_string();
         ["mmap failed", "Cannot allocate memory", "out of memory"].iter().any(|s| t.contains(s))
     })

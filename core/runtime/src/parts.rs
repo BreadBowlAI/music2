@@ -1,8 +1,11 @@
 //! A plan's partitions and their schedule (8a, RENDER-2): what runs as one task per block, and
 //! which tasks wait for which.
 //!
-//! - Each node of the order goes into one partition, by its label: its module (a track, or the
-//!   song). Where modules read each other both ways (a strongly connected group of modules), their
+//! - Each node of the order that runs goes into one partition, by its label: its module (a track, or
+//!   the song), or the one other module all its inputs come from (`labels`: a mixer strip runs with
+//!   its track). A constant or a notes lane does nothing in a block ([`Exec::idle`]): it is written
+//!   before the graph, so it joins no partition and reading it waits for nothing, like a node
+//!   outside the order. Where modules read each other both ways (a strongly connected group of modules), their
 //!   nodes are split further by depth: the most module crossings on a path that leads to the node
 //!   inside the group. So no path leaves a partition and comes back, and the partitions make a graph
 //!   with no cycle.
@@ -19,7 +22,7 @@ use m2_pool::Tasks;
 
 use crate::Exec;
 
-/// Not a partition: a node outside the order.
+/// Not a partition: a node outside the order, or one that does nothing in a block.
 pub(crate) const NONE: u32 = u32::MAX;
 
 /// A plan's partitions and the task graph that runs them.
@@ -34,7 +37,7 @@ pub(crate) struct Parts {
     /// `nodes[starts[p]..starts[p + 1]]`.
     nodes: Box<[u32]>,
     starts: Box<[u32]>,
-    /// By exec index: its partition, or [`NONE`] outside the order.
+    /// By exec index: its partition, or [`NONE`] outside the order or idle.
     #[cfg(any(debug_assertions, test))]
     part_of: Box<[u32]>,
     /// By exec index: its place in plan order, or [`NONE`]: which error is reported.
@@ -78,17 +81,18 @@ impl Schedule {
         let n = exec.len();
         let pos = positions(order, n);
         // Labels by name, so numbering is the same each time.
-        let mut names: BTreeMap<&str, u32> = order.iter().map(|&i| (&*label[i], 0)).collect();
+        let mut names: BTreeMap<&str, u32> = order.iter().filter(|&&i| !exec[i].idle()).map(|&i| (&*label[i], 0)).collect();
         for (k, v) in names.values_mut().enumerate() {
             *v = k as u32;
         }
-        let module: Vec<u32> = (0..n).map(|i| if pos[i] == NONE { NONE } else { names[&*label[i]] }).collect();
+        // Idle nodes are set aside, like those outside the order: no partition, no crossing.
+        let module: Vec<u32> = (0..n).map(|i| if pos[i] == NONE || exec[i].idle() { NONE } else { names[&*label[i]] }).collect();
         let m = names.len();
         // Which labels read each other: the groups of labels on a cycle.
         let mut reads_of: Vec<Vec<u32>> = vec![vec![]; m];
         for &i in order {
             exec[i].reads(|j| {
-                if j < n && pos[j] != NONE && module[j] != module[i] {
+                if j < n && module[j] != NONE && module[j] != module[i] {
                     reads_of[module[j] as usize].push(module[i]);
                 }
             });
@@ -99,18 +103,20 @@ impl Schedule {
         for &i in order {
             let mut d = 0;
             exec[i].reads(|j| {
-                if j < n && pos[j] != NONE && pos[j] < pos[i] && group[module[j] as usize] == group[module[i] as usize] {
+                if j < n && module[j] != NONE && pos[j] < pos[i] && group[module[j] as usize] == group[module[i] as usize] {
                     d = d.max(depth[j] + u16::from(module[j] != module[i]));
                 }
             });
             depth[i] = d;
         }
         let names: Vec<&str> = names.keys().copied().collect();
-        let mut keys: BTreeMap<(u32, u16), u32> = order.iter().map(|&i| ((module[i], depth[i]), 0)).collect();
+        // Partitions only of nodes that run: a label holding only constants makes no empty task.
+        let mut keys: BTreeMap<(u32, u16), u32> =
+            order.iter().filter(|&&i| module[i] != NONE).map(|&i| ((module[i], depth[i]), 0)).collect();
         for (k, v) in keys.values_mut().enumerate() {
             *v = k as u32;
         }
-        let part_of: Vec<u32> = (0..n).map(|i| if pos[i] == NONE { NONE } else { keys[&(module[i], depth[i])] }).collect();
+        let part_of: Vec<u32> = (0..n).map(|i| if module[i] == NONE { NONE } else { keys[&(module[i], depth[i])] }).collect();
         let labels = keys.keys().map(|&(m, d)| (Box::from(names[m as usize]), d)).collect();
         Schedule::of(order, exec, part_of, pos, labels)
     }
@@ -132,20 +138,28 @@ impl Schedule {
         Schedule::of(order, exec, part_of, pos, labels)
     }
 
-    /// The schedule of these partitions.
-    fn of(order: &[usize], exec: &[Exec], part_of: Vec<u32>, pos: Vec<u32>, labels: Vec<(Box<str>, u16)>) -> Result<Schedule> {
+    /// The schedule of these partitions. Whatever partition it is given, an idle node runs in none.
+    fn of(order: &[usize], exec: &[Exec], mut part_of: Vec<u32>, pos: Vec<u32>, labels: Vec<(Box<str>, u16)>) -> Result<Schedule> {
         let n = exec.len();
         let parts = labels.len();
         let mut groups: Vec<Vec<u32>> = vec![vec![]; parts];
         let mut costs = vec![0u32; parts];
         let mut edges = vec![];
         for &i in order {
+            if exec[i].idle() {
+                part_of[i] = NONE;
+            }
+        }
+        for &i in order {
             let p = part_of[i];
+            if p == NONE {
+                continue;
+            }
             groups[p as usize].push(i as u32);
             costs[p as usize] += cost(&exec[i]);
             exec[i].reads(|j| {
                 debug_assert!(j < n, "node {i} reads node {j}, past the last ({n})");
-                // A node outside the order is frozen this block: no edge.
+                // A node outside the order, or idle, is frozen this block: no edge.
                 if j < n && part_of[j] != NONE && part_of[j] != p {
                     edges.push((part_of[j], p));
                 }
@@ -277,8 +291,8 @@ impl Parts {
         self.producers[self.pstarts[q as usize] as usize..self.pstarts[q as usize + 1] as usize].binary_search(&p).is_ok()
     }
 
-    /// Whether node `i`, running in partition `p`, may read node `j` now: `j` is outside the order
-    /// (frozen this block), earlier in `p`, or in a partition `p` reads directly. Debug builds check
+    /// Whether node `i`, running in partition `p`, may read node `j` now: `j` is outside the order or
+    /// idle (frozen this block), earlier in `p`, or in a partition `p` reads directly. Debug builds check
     /// every read with it.
     #[cfg(any(debug_assertions, test))]
     pub(crate) fn may_read(&self, p: u32, i: usize, j: usize) -> bool {
@@ -319,6 +333,8 @@ impl Parts {
         for &i in order {
             exec[i].reads(|j| {
                 assert!(self.pos[j] == NONE || self.pos[j] < self.pos[i], "node {i} reads node {j}, which runs after it");
+                // An idle node reads nothing; one that runs is in a partition.
+                assert!(self.part_of[i] != NONE, "node {i} reads node {j} but runs in no partition");
                 assert!(self.may_read(self.part_of[i], i, j), "node {i} reads node {j} across partitions with no edge");
             });
         }

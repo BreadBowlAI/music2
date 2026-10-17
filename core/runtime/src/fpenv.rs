@@ -24,7 +24,6 @@ mod cpu {
     /// The control bits: the low six are exception flags, which arithmetic sets as it goes.
     const CONTROL: u32 = 0xFFC0;
     /// Flush-to-zero (bit 15) and denormals-are-zero (bit 6).
-    #[cfg(test)]
     pub(super) const FLUSH: u32 = 0x8040;
 
     pub(super) type Mode = u32;
@@ -57,7 +56,6 @@ mod cpu {
     /// FPCR: round to nearest, no flush-to-zero, no default NaN, no exception traps.
     pub(super) const CANON: u64 = 0;
     /// Flush-to-zero (bit 24).
-    #[cfg(test)]
     pub(super) const FLUSH: u64 = 1 << 24;
 
     pub(super) type Mode = u64;
@@ -85,7 +83,7 @@ mod cpu {
 /// Put the calling thread in the one mode, if it isn't: before each partition, after each plugin
 /// call, and on each worker as it starts.
 #[inline]
-pub(crate) fn canon() {
+pub fn canon() {
     if !cpu::is_canon(cpu::get()) {
         cpu::set(cpu::CANON);
     }
@@ -93,19 +91,19 @@ pub(crate) fn canon() {
 
 /// Whether the calling thread computes in the one mode.
 #[inline]
-pub(crate) fn is_canon() -> bool {
+pub fn is_canon() -> bool {
     cpu::is_canon(cpu::get())
 }
 
 /// The one mode while it lives, and the calling thread's own mode back when it drops, unwinding
 /// too: a block rendered on a thread music2 didn't start leaves that thread as it found it.
-pub(crate) struct Canon {
+pub struct Canon {
     was: cpu::Mode,
 }
 
 impl Canon {
     #[inline]
-    pub(crate) fn enter() -> Canon {
+    pub fn enter() -> Canon {
         let was = cpu::get();
         if !cpu::is_canon(was) {
             cpu::set(cpu::CANON);
@@ -121,6 +119,22 @@ impl Drop for Canon {
             cpu::set(self.was);
         }
     }
+}
+
+/// The calling thread's floating-point register as it is: MXCSR on x86-64, FPCR on arm64 (G12
+/// prints the device thread's as found).
+#[inline]
+#[allow(clippy::useless_conversion)] // a u32 on x86-64, a u64 on arm64
+pub fn mode() -> u64 {
+    u64::from(cpu::get())
+}
+
+/// For tests in other crates: the calling thread flushes subnormals to zero (FZ and DAZ on x86-64,
+/// FZ on arm64), as a host's thread might, or no longer does.
+#[doc(hidden)]
+pub fn flush_for_tests(on: bool) {
+    let m = cpu::get();
+    cpu::set(if on { m | cpu::FLUSH } else { m & !cpu::FLUSH });
 }
 
 /// For tests: the calling thread flushes subnormals to zero, as a plugin or a host might leave it.

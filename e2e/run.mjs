@@ -90,6 +90,7 @@ export const SUITES = [
   ["pl-projects", "none", { expect: 66 }],
   ["nx-settings", "none", { expect: 42 }],
   ["nx-nodevice", "none", { expect: 11 }],
+  ["sound-stops", "none", { expect: 12 }],
   ["export", "export", { expect: 37 }],
   ["st-midi", "fix", { expect: 19 }],
   ["st-stems", "export", { expect: 49 }],
@@ -174,8 +175,11 @@ if (which === "all") {
   else runs = [known.find(([, k]) => k === kindArg) ?? [which, kindArg, { ...known[0][2], expect: undefined }]];
 }
 
-const root = opts.out ?? fs.mkdtempSync(path.join(os.tmpdir(), "m2-e2e-"));
-fs.mkdirSync(root, { recursive: true });
+const made = opts.out ?? fs.mkdtempSync(path.join(os.tmpdir(), "m2-e2e-"));
+fs.mkdirSync(made, { recursive: true });
+// By its real path: the app names folders by theirs (a Mac's temporary folder is a link, /var to
+// /private/var), so the suites' paths, HOME's among them, say the same.
+const root = fs.realpathSync(made);
 
 // The server serves web/dist, std, templates/ and the examples behind "Open an Example" from the
 // tree it was compiled in (concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/dist") and the like),

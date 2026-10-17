@@ -11,13 +11,15 @@
 //!   and the workers. It returns when all are done and no worker can touch the run any more.
 //! - A failed task (it returned `false`, or panicked) skips everything that reads it; the rest
 //!   still runs. A task's panic is raised again by the caller, after the run.
-//! - The caller never parks: it spins while tasks keep finishing, and sleeps in short steps only
-//!   when one is stuck. Workers spin for a moment (`patience`) when they have nothing to do, then
-//!   park until [`Runner::wake`] or the next run signals them.
+//! - The caller spins while tasks keep finishing. When none has finished for `stuck`, it dozes on
+//!   a [`m2_os::rt::Wake`] until the task it waits for ends and rings it. Workers spin for a moment
+//!   (`patience`) when they have nothing to do, then park (std's `park`) until [`Runner::wake`] or
+//!   the next run signals them.
 //! - [`Runner::one`] has no workers and no heap: the audio thread can make one per call.
 //!
-//! The pool knows nothing of audio: no wasmtime, no floating-point mode, no OS calls. Its user
-//! (m2-runtime) decides what each task does, and sets each worker up through [`Setup::start`].
+//! The pool knows nothing of audio: no wasmtime, no floating-point mode, and no OS calls of its
+//! own: the caller's one sleep goes through `m2-os`'s `Wake`. Its user (m2-runtime) decides what
+//! each task does, and sets each worker up through [`Setup::start`] and [`Setup::stop`].
 //! The protocol is checked by models that yield and spin at random before every atomic step
 //! (`--features models`, tests/models.rs).
 
@@ -34,6 +36,7 @@ use std::time::Duration;
 
 use run::Shared;
 use sync::Ordering::{Relaxed, SeqCst};
+use sync::{AtomicBool, AtomicU8};
 pub use tasks::{Cycle, Outcome, Tasks};
 
 /// How a pool's workers start and wait.
@@ -42,18 +45,29 @@ pub struct Setup {
     /// Called on each worker first, with its number (1 to threads − 1), before it takes any task:
     /// a user's per-thread set-up. A panic here aborts the process.
     pub start: Option<Arc<dyn Fn(usize) + Send + Sync>>,
+    /// Called on each worker last, with its number, once the pool is dropped and before the
+    /// thread exits (macOS: it leaves the audio workgroup). A panic here aborts the process.
+    pub stop: Option<Arc<dyn Fn(usize) + Send + Sync>>,
     /// How long a worker with nothing to take spins before it parks, and how long it stays in a
     /// run with no task finishing before it leaves.
     pub patience: Duration,
-    /// How long the caller of a run spins with no task finishing before it sleeps in steps of a
-    /// quarter of this.
+    /// How long the caller of a run spins with nothing finishing before it dozes.
     pub stuck: Duration,
+    /// The longest one doze lasts: the ring of the task that ends ends it sooner.
+    pub doze: Duration,
 }
 
 impl Setup {
-    /// No hook; workers spin 50 µs, the caller 1 ms: for offline renders and tests.
+    /// No hooks; workers spin 50 µs, the caller 1 ms before it dozes for at most 1 ms: for
+    /// offline renders and tests.
     pub fn plain() -> Setup {
-        Setup { start: None, patience: Duration::from_micros(50), stuck: Duration::from_millis(1) }
+        Setup {
+            start: None,
+            stop: None,
+            patience: Duration::from_micros(50),
+            stuck: Duration::from_millis(1),
+            doze: Duration::from_millis(1),
+        }
     }
 }
 
@@ -69,31 +83,48 @@ impl Pool {
 
     /// A pool for `threads` threads in all, the caller of each run included: `threads − 1`
     /// workers, named `m2-pool-<k>`, with 2 MiB stacks. `threads` is 1 to [`Pool::MAX_THREADS`].
-    /// Fails if the OS won't start a thread; then none is left running.
+    /// Fails if the OS won't start a thread or make the caller's wake; then none is left running.
     pub fn new(threads: usize, setup: Setup) -> io::Result<(Pool, Runner)> {
         if !(1..=Pool::MAX_THREADS).contains(&threads) {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("a pool has 1 to 64 threads, not {threads}")));
         }
         let workers = (1..threads).map(|_| run::Worker::new()).collect();
-        let shared = Arc::new(Shared::new(workers, setup.patience, setup.stuck));
+        let doze = run::Doze::new(sync::Bell::new()?, setup.doze);
+        let shared = Arc::new(Shared::new(workers, setup.patience, setup.stuck, doze));
         let mut pool = Pool { shared: shared.clone(), handles: Vec::with_capacity(threads - 1) };
         for k in 1..threads {
-            let (shared, start) = (shared.clone(), setup.start.clone());
+            let (shared, start, stop) = (shared.clone(), setup.start.clone(), setup.stop.clone());
             let me = k as u8;
             let handle = std::thread::Builder::new()
                 .name(format!("m2-pool-{k}"))
                 .stack_size(2 << 20)
-                .spawn(move || run::worker(shared, me, start))?;
+                .spawn(move || run::worker(shared, me, start, stop))?;
             pool.handles.push(handle);
         }
         let threads = pool.handles.iter().map(|h| h.thread().clone()).collect();
-        let runner = Runner { shared: Some(shared), threads, runs: 0, spread: false, report: Spread::default(), alone: 0 };
+        let runner = Runner { shared: Some(shared), threads, ..Runner::one() };
         Ok((pool, runner))
     }
 
     /// Per thread: the caller of runs first, then each worker. Safe to read during a run.
     pub fn counters(&self) -> Vec<Counters> {
         counters(&self.shared)
+    }
+
+    /// What reads its counters from another thread, while it lives and after.
+    pub fn meter(&self) -> Meter {
+        Meter(self.shared.clone())
+    }
+}
+
+/// Reads a pool's counters ([`Pool::meter`]): the gates' view of a player's engine threads.
+#[derive(Clone)]
+pub struct Meter(Arc<Shared>);
+
+impl Meter {
+    /// Per thread: the caller of runs first, then each worker.
+    pub fn counters(&self) -> Vec<Counters> {
+        counters(&self.0)
     }
 }
 
@@ -122,13 +153,23 @@ pub struct Runner {
     report: Spread,
     /// Tasks run by a runner with no pool.
     alone: u64,
+    /// Tests: the run a task trips in, and how.
+    tripwire: Tripwire,
 }
 
 impl Runner {
     /// A runner with no workers: every task runs on the caller, in queue order. It holds no heap
     /// memory, so the audio thread may make one per call.
     pub fn one() -> Runner {
-        Runner { shared: None, threads: Box::new([]), runs: 0, spread: false, report: Spread::default(), alone: 0 }
+        Runner {
+            shared: None,
+            threads: Box::new([]),
+            runs: 0,
+            spread: false,
+            report: Spread::default(),
+            alone: 0,
+            tripwire: Tripwire { at: None, taken: AtomicBool::new(false), on: AtomicU8::new(0) },
+        }
     }
 
     /// The threads a run uses now, the caller included: 1 once the pool is dropped.
@@ -143,8 +184,28 @@ impl Runner {
     pub fn counters(&self) -> Vec<Counters> {
         match &self.shared {
             Some(shared) => counters(shared),
-            None => vec![Counters { tasks: self.alone, parks: 0, signals: 0 }],
+            None => vec![Counters { tasks: self.alone, ..Counters::default() }],
         }
+    }
+
+    /// How many runs this runner has started.
+    #[doc(hidden)]
+    pub fn runs(&self) -> u64 {
+        self.runs
+    }
+
+    /// For tests: in run number `run` (counted as [`Runner::runs`] will count it), the first task a
+    /// worker takes trips: it panics, as a task's own panic would, or holds until its flag is set.
+    /// With no worker in that run, the caller's first task trips.
+    #[doc(hidden)]
+    pub fn trip(&mut self, run: u64, what: Trip) {
+        self.tripwire = Tripwire { at: Some((run, what)), taken: AtomicBool::new(false), on: AtomicU8::new(0) };
+    }
+
+    /// The thread whose task tripped (0 is the caller), once one has.
+    #[doc(hidden)]
+    pub fn tripped_on(&self) -> Option<usize> {
+        self.tripwire.on.load(SeqCst).checked_sub(1).map(usize::from)
     }
 
     /// For tests and gates: every run wakes every worker, whatever its width; the caller takes no
@@ -171,6 +232,41 @@ pub struct Counters {
     pub parks: u64,
     /// Signals sent to wake it (workers only).
     pub signals: u64,
+    /// Times it slept on its wake, a task it waited for stuck (the caller only).
+    pub dozes: u64,
+    /// Dozes a ring ended: the task ended, or a worker left the run.
+    pub rung: u64,
+    /// Dozes that lasted their whole time. `rung + timeouts == dozes`.
+    pub timeouts: u64,
+    /// How long after a run started this worker entered it, counted by [`entry_bucket`]: how late
+    /// workers come, parked or spinning (workers only).
+    pub entry: [u64; ENTRY_BUCKETS],
+}
+
+/// The buckets of [`Counters::entry`]: powers of two of microseconds.
+pub const ENTRY_BUCKETS: usize = 16;
+
+/// The bucket of a worker's entry `ns` after its run started: 0 under 1 µs; k from 2^(k−1) to
+/// 2^k µs; the last 16 ms or more.
+pub fn entry_bucket(ns: u64) -> usize {
+    ((u64::BITS - (ns / 1000).leading_zeros()) as usize).min(ENTRY_BUCKETS - 1)
+}
+
+/// What a tripped task does (tests, [`Runner::trip`]).
+#[doc(hidden)]
+#[derive(Clone)]
+pub enum Trip {
+    /// It panics, before its work.
+    Panic,
+    /// It sleeps in 1 ms steps until the flag is set, then does its work.
+    Hold(Arc<std::sync::atomic::AtomicBool>),
+}
+
+/// A runner's trip: the run and what, whether a task took it, and on which thread (+1).
+pub(crate) struct Tripwire {
+    pub(crate) at: Option<(u64, Trip)>,
+    pub(crate) taken: AtomicBool,
+    pub(crate) on: AtomicU8,
 }
 
 /// What spread runs did: whether work really crossed threads.
@@ -183,11 +279,20 @@ pub struct Spread {
 }
 
 fn counters(shared: &Shared) -> Vec<Counters> {
-    let caller = Counters { tasks: shared.caller_tasks.load(Relaxed), parks: 0, signals: 0 };
+    let d = &shared.doze;
+    let caller = Counters {
+        tasks: shared.caller_tasks.load(Relaxed),
+        dozes: d.dozes.load(Relaxed),
+        rung: d.rung.load(Relaxed),
+        timeouts: d.timeouts.load(Relaxed),
+        ..Counters::default()
+    };
     let workers = shared.workers.iter().map(|w| Counters {
         tasks: w.tasks.load(Relaxed),
         parks: w.parks.load(Relaxed),
         signals: w.signals.load(Relaxed),
+        entry: std::array::from_fn(|k| w.entry[k].load(Relaxed)),
+        ..Counters::default()
     });
     std::iter::once(caller).chain(workers).collect()
 }

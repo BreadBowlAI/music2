@@ -35,6 +35,44 @@ pub(crate) fn c_numbers() {
     }
 }
 
+pub(crate) fn foreign(f: &mut (dyn FnMut() + Send)) -> io::Result<()> {
+    struct Call<'a> {
+        f: &'a mut (dyn FnMut() + Send),
+        panic: Option<Box<dyn std::any::Any + Send>>,
+    }
+    extern "C" fn start(arg: *mut libc::c_void) -> *mut libc::c_void {
+        // SAFETY: `arg` is the `Call` below, which outlives this thread: it is joined first.
+        let call = unsafe { &mut *arg.cast::<Call>() };
+        // Never unwind across the C start routine: keep the panic for the joining thread.
+        if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (call.f)())) {
+            call.panic = Some(p);
+        }
+        std::ptr::null_mut()
+    }
+    let mut call = Call { f, panic: None };
+    // SAFETY: a thread with an 8 MiB stack (macOS gives 512 KiB by default), running `start` on
+    // `call`, joined before `call` goes.
+    unsafe {
+        let mut attr: libc::pthread_attr_t = std::mem::zeroed();
+        let inited = libc::pthread_attr_init(&mut attr);
+        if inited != 0 {
+            return Err(io::Error::from_raw_os_error(inited));
+        }
+        libc::pthread_attr_setstacksize(&mut attr, 8 << 20);
+        let mut t: libc::pthread_t = std::mem::zeroed();
+        let made = libc::pthread_create(&mut t, &attr, start, (&mut call as *mut Call).cast());
+        libc::pthread_attr_destroy(&mut attr);
+        if made != 0 {
+            return Err(io::Error::from_raw_os_error(made));
+        }
+        libc::pthread_join(t, std::ptr::null_mut());
+    }
+    if let Some(p) = call.panic {
+        std::panic::resume_unwind(p);
+    }
+    Ok(())
+}
+
 pub(crate) fn load_average() -> Option<[f64; 3]> {
     let mut l = [0.0f64; 3];
     // SAFETY: getloadavg writes at most 3 numbers into `l`.

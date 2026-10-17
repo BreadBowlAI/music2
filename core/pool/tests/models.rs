@@ -1,6 +1,7 @@
 //! The pool's models: its protocol run many times over, built with `--features models`, so a
 //! chaos point (a random yield or short spin) comes before every atomic step and every park
-//! (`src/sync.rs`). Each model runs 4,000 to 10,000 small cases on 2 to 4 threads, 34,000 in all. A hang is caught
+//! (`src/sync.rs`) and before every ring and wait of the caller's wake. Each model runs 4,000 to 10,000 small
+//! cases on 2 to 4 threads, 39,000 in all. A hang is caught
 //! by a watchdog: no case finishing for 60 s stops the binary with "<model>: hung in case N".
 //!
 //! loom would try every interleaving; it isn't in the offline registry, so these try many at
@@ -69,6 +70,8 @@ struct Case {
     edges: Vec<(u32, u32)>,
     from: Vec<Vec<u32>>,
     fails: Vec<bool>,
+    /// How long each task spins first, in spin-loop steps.
+    spins: Vec<u32>,
 }
 
 impl Case {
@@ -93,7 +96,7 @@ impl Case {
         }
         let costs = (0..n).map(|_| 1 + rng.below(4) as u32).collect();
         let fails = (0..n).map(|_| failing && rng.chance(16)).collect();
-        Case { costs, edges, from, fails }
+        Case { costs, edges, from, fails, spins: vec![0; n] }
     }
 
     /// What each task's outcome must be: skipped when anything it reads failed or was skipped.
@@ -137,6 +140,9 @@ impl Case {
             .run(tasks, &|t| {
                 if sealed.load(SeqCst) {
                     late.fetch_add(1, SeqCst);
+                }
+                for _ in 0..self.spins[t as usize] {
+                    std::hint::spin_loop();
                 }
                 if self.from[t as usize].iter().any(|&p| !done[p as usize].load(SeqCst)) {
                     early.fetch_add(1, SeqCst);
@@ -299,5 +305,44 @@ fn skips_are_exactly_the_descendants() {
             }
             progress.fetch_add(1, SeqCst);
         }
+    });
+}
+
+// 8a's live half: a caller that dozes while a task is stuck is always woken by the ring of what it
+// waits for, never by its time running out. Tasks spin up to about 20 µs; the caller dozes after
+// 0 to 20 µs with nothing finishing, for 10 s at most: a lost ring would make a case 10 s long and
+// count a timeout. Every doze is either rung or timed out.
+#[test]
+fn the_caller_is_woken() {
+    watched("the_caller_is_woken", |progress| {
+        models::seed(6);
+        let mut rng = Rng(6);
+        let mut dozes = 0;
+        for round in 0..20 {
+            let setup = Setup { stuck: Duration::from_micros(rng.below(21)), doze: Duration::from_secs(10), ..Setup::plain() };
+            let (pool, mut runner) = Pool::new(2 + rng.below(3) as usize, setup).unwrap();
+            for case in 0..250 {
+                runner.spread(rng.chance(50));
+                let failing = rng.chance(20);
+                let mut c = Case::new(&mut rng, failing);
+                c.spins = (0..c.costs.len()).map(|_| rng.below(20_000) as u32).collect();
+                let before = pool.counters()[0];
+                if let Err(e) = c.run(&mut runner, &mut c.tasks()) {
+                    panic!("round {round}, case {case}: {e}");
+                }
+                let after = pool.counters()[0];
+                let (d, r, t) = (after.dozes - before.dozes, after.rung - before.rung, after.timeouts - before.timeouts);
+                assert_eq!(t, 0, "round {round}, case {case}: a doze timed out: a ring was lost ({d} dozes, {r} rung)");
+                assert_eq!(r + t, d, "round {round}, case {case}: every doze is rung or timed out");
+                dozes += d;
+                if rng.chance(30) {
+                    runner.rest();
+                }
+                progress.fetch_add(1, SeqCst);
+            }
+            drop(pool);
+        }
+        assert!(dozes > 0, "the caller never dozed");
+        eprintln!("the_caller_is_woken: {dozes} dozes, every one rung");
     });
 }

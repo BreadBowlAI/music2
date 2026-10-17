@@ -42,7 +42,7 @@ pub mod data;
 pub mod engine;
 pub mod event;
 mod fade;
-mod fpenv;
+pub mod fpenv;
 #[doc(hidden)]
 pub mod gauge;
 mod keep;
@@ -52,6 +52,7 @@ mod parts;
 mod plan;
 pub mod plugins;
 pub mod sched;
+mod stopped;
 mod taps;
 pub mod threads;
 pub mod trace;
@@ -66,17 +67,18 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use anyhow::{Context, Result, bail};
 use m2_ir::{FNode, FOp, Flat, Input, Kind, NoteField, PortRef, TimeOf};
 use m2_song::{Arrangement, DataSet, LaneData, TempoMap};
-use wasmtime::{Instance, Memory, Store, StoreLimits, StoreLimitsBuilder, TypedFunc};
+use wasmtime::{Instance, Memory, ResourceLimiter, Store, TypedFunc};
 
 pub use cells::{CellAt, CellId, CellInfo, CellMap, CellSlots, CellTarget};
 pub use data::{decls, lane_kind};
 pub use engine::{Applied, CallbackStamp, Engine, Envelope, Heard, Msg, Retired};
 pub use event::{Event, Events};
-pub use m2_pool::{Pool, Runner, Setup};
+pub use m2_pool::{Counters, ENTRY_BUCKETS, Meter, Pool, Runner, Setup, Trip};
 pub use packages::{Package, PackageSet};
 pub use plan::{Basis, Continues, Count, Keep, LaneInfo, Leftovers, PlanInfo, PluginAt, Shape, Stats};
 pub use plugins::PluginInstance;
 pub use sched::{Caps, LaneSwap, LiveEv, NotesData};
+pub use stopped::{OutOfMemory, Stopped, Why};
 pub use taps::{Peaks, TapSlots};
 pub use trace::{TraceEntry, TraceKind};
 pub use transport::{Cmd, Jump, Loop, MAX_RUNS, Run, Runs, Transport};
@@ -129,6 +131,8 @@ struct Block {
     beats64: [f64; BLOCK],
     sample_rate: f64,
     strict: bool,
+    /// Played by the live [`Engine`]: a node that fails stops alone (RENDER-25).
+    live: bool,
     /// An activation's fade window while it runs: the engine clock it began at, and its frames.
     window: Option<(u64, u32)>,
 }
@@ -160,12 +164,61 @@ impl Seg {
 /// the block.
 type Buf = Vec<f32>;
 
+/// What a kernel's store may hold (RENDER-32): one instance, one memory of at most
+/// [`KERNEL_MEMORY`], one table. A grow past the memory's cap traps at once, so a kernel never runs
+/// on without what it asked for, and `refused` says why it stopped: [`OutOfMemory`], until that
+/// error is made.
+#[derive(Default)]
+struct Cap {
+    refused: bool,
+}
+
+impl ResourceLimiter for Cap {
+    fn memory_growing(&mut self, _current: usize, desired: usize, _maximum: Option<usize>) -> wasmtime::Result<bool> {
+        if desired > KERNEL_MEMORY {
+            self.refused = true;
+            wasmtime::bail!("a kernel asked for {desired} bytes of memory, past its {KERNEL_MEMORY}");
+        }
+        // A module's own maximum is wasmtime's to keep.
+        Ok(true)
+    }
+
+    fn table_growing(&mut self, _current: usize, _desired: usize, _maximum: Option<usize>) -> wasmtime::Result<bool> {
+        Ok(true)
+    }
+
+    fn instances(&self) -> usize {
+        1
+    }
+
+    fn tables(&self) -> usize {
+        1
+    }
+
+    fn memories(&self) -> usize {
+        1
+    }
+}
+
+/// `e`, from a call into kernel instance `name` in `store`: [`OutOfMemory`] when the call asked for
+/// more memory than a sound may use, else `e` itself. The refusal is taken: a later error of the
+/// same instance, once a panic or an activation made it play again, is its own.
+fn ran_out(store: &mut Store<Cap>, name: &str, e: impl Into<anyhow::Error>) -> anyhow::Error {
+    match std::mem::take(&mut store.data_mut().refused) {
+        true => OutOfMemory { node: name.to_string() }.into(),
+        false => e.into(),
+    }
+}
+
 /// One kernel instance, in a wasmtime `Store` of its own (RENDER-32): a box a plan activation can
 /// move into the next plan, whose memory goes when it drops.
 struct KernelInst {
-    store: Store<StoreLimits>,
+    store: Store<Cap>,
     /// The hash of the shape it was made for: what an activation checks before moving it.
     shape: u64,
+    /// Live, it failed (RENDER-25): it plays silence and isn't called again until it is reset, as
+    /// an activation moves it on or a panic.
+    stopped: bool,
     name: String,
     memory: Memory,
     /// Where `memory` is, so a call needn't ask the store, one of thousands and cold (RENDER-32).
@@ -237,10 +290,10 @@ impl KernelInst {
     /// constant inputs are written into its memory once.
     fn new(packages: &PackageSet, n: &FNode, id: &str, channels: u8, inputs: &[Input], sample_rate: f64, shape: u64) -> Result<KernelInst> {
         let (module, prefix) = packages.module_for(id).with_context(|| format!("{}: kernel `{id}` is not loaded", n.name))?;
-        let limits = StoreLimitsBuilder::new().memory_size(KERNEL_MEMORY).instances(1).memories(1).tables(1).build();
-        let mut store = Store::new(&packages.engine, limits);
-        store.limiter(|l| l);
-        let instance = Instance::new(&mut store, module, &[]).wctx(|| format!("{}: instantiating `{id}`", n.name))?;
+        let mut store = Store::new(&packages.engine, Cap::default());
+        store.limiter(|c| c);
+        let failed = |store: &mut Store<Cap>, e: anyhow::Error| ran_out(store, &n.name, e);
+        let instance = Instance::new(&mut store, module, &[]).wctx(|| format!("{}: instantiating `{id}`", n.name)).map_err(|e| failed(&mut store, e))?;
         let f = |name: &str| format!("{prefix}_{name}");
         let init = instance.get_typed_func::<(f32, u32, u32), ()>(&mut store, &f("init"))?;
         let ports = instance.get_typed_func::<(), u32>(&mut store, &f("ports"))?;
@@ -249,10 +302,10 @@ impl KernelInst {
         let process = instance.get_typed_func::<u32, ()>(&mut store, &f("process"))?;
         let active = instance.get_typed_func::<(), u32>(&mut store, &f("active"))?;
         let memory = instance.get_memory(&mut store, "memory").context("kernel has no memory")?;
-        init.call(&mut store, (sample_rate as f32, BLOCK as u32, channels as u32))?;
+        init.call(&mut store, (sample_rate as f32, BLOCK as u32, channels as u32)).map_err(|e| failed(&mut store, e.into()))?;
 
         let (n_in, n_out) = (inputs.len(), n.outputs.len());
-        let declared = ports.call(&mut store, ())?;
+        let declared = ports.call(&mut store, ()).map_err(|e| failed(&mut store, e.into()))?;
         if declared != ((n_in as u32) << 8 | n_out as u32) {
             bail!(
                 "{}: `{id}` has {} inputs and {} outputs, but its manifest declares {n_in} and {n_out}",
@@ -263,7 +316,7 @@ impl KernelInst {
         }
         let mut ptrs = vec![];
         for i in 0..(n_in + n_out) as u32 {
-            let p = port.call(&mut store, i)? as usize;
+            let p = port.call(&mut store, i).map_err(|e| failed(&mut store, e.into()))? as usize;
             if p == 0 || !p.is_multiple_of(4) || p + PORT_BYTES > memory.data_size(&store) {
                 bail!("{}: `{id}` returned a bad buffer for port {i}", n.name);
             }
@@ -298,6 +351,7 @@ impl KernelInst {
         Ok(KernelInst {
             store,
             shape,
+            stopped: false,
             name: n.name.clone(),
             memory,
             view,
@@ -320,7 +374,7 @@ impl KernelInst {
     fn process(&mut self, frames: usize) -> Result<()> {
         #[cfg(debug_assertions)]
         self.keep_inputs();
-        self.process.call(&mut self.store, frames as u32).wctx(|| format!("{} crashed", self.name))?;
+        self.process.call(&mut self.store, frames as u32).wctx(|| format!("{} crashed", self.name)).map_err(|e| self.ran_out(e))?;
         #[cfg(debug_assertions)]
         self.check_inputs(false)?;
         Ok(())
@@ -330,7 +384,7 @@ impl KernelInst {
     fn reset(&mut self) -> Result<()> {
         #[cfg(debug_assertions)]
         self.keep_inputs();
-        self.reset.call(&mut self.store, ())?;
+        self.reset.call(&mut self.store, ()).map_err(|e| self.ran_out(e))?;
         #[cfg(debug_assertions)]
         self.check_inputs(true)?;
         Ok(())
@@ -338,7 +392,12 @@ impl KernelInst {
 
     /// Whether it still holds sound that will come out later.
     fn active(&mut self) -> Result<bool> {
-        Ok(self.active.call(&mut self.store, ())? != 0)
+        Ok(self.active.call(&mut self.store, ()).map_err(|e| self.ran_out(e))? != 0)
+    }
+
+    /// `e`, from a call into it: [`OutOfMemory`] when the call asked for more than a sound may use.
+    fn ran_out(&mut self, e: impl Into<anyhow::Error>) -> anyhow::Error {
+        ran_out(&mut self.store, &self.name, e)
     }
 
     /// Its first reset, while it is built: a reset may grow the memory (a kernel builds its new
@@ -397,7 +456,7 @@ impl KernelNode {
     /// its outputs copied out. Never allocates.
     fn process(&mut self, b: &Block, seg: Seg, r: &impl Reads, out: &mut [Buf]) -> Result<()> {
         let n = seg.n;
-        let Some(k) = &mut self.inst else {
+        let Some(k) = self.inst.as_deref_mut().filter(|k| !k.stopped) else {
             for o in out.iter_mut() {
                 for c in 0..o.len() / BLOCK {
                     o[seg.range(c)].fill(0.0);
@@ -478,6 +537,9 @@ struct VoicePool {
     voices: Vec<VoiceSlot>,
     born: u64,
     shape: u64,
+    /// Live, a voice failed: the pool plays silence and calls no voice, as a stopped kernel
+    /// ([`KernelInst::stopped`]).
+    stopped: bool,
 }
 
 struct PolyNode {
@@ -862,6 +924,23 @@ enum Exec {
 }
 
 impl Exec {
+    /// Whether its box stopped live (RENDER-25): only a kernel's or a `poly`'s can.
+    fn stopped(&self) -> bool {
+        match self {
+            Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.stopped,
+            Exec::Poly(p) => p.pool.as_ref().is_some_and(|p| p.stopped),
+            _ => false,
+        }
+    }
+
+    fn set_stopped(&mut self, stopped: bool) {
+        match self {
+            Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.stopped = stopped,
+            Exec::Poly(p) => p.pool.iter_mut().for_each(|p| p.stopped = stopped),
+            _ => {}
+        }
+    }
+
     /// Each node whose output this node reads during a block (8a): what the schedule orders a
     /// partition after. Lanes, time and constants read only what the pre-pass froze; a feedback
     /// reads its input after the graph, into next block's ring. A node may be named more than once.
@@ -893,6 +972,13 @@ impl Exec {
             | Exec::NoteField(_)
             | Exec::Capture(_) => {}
         }
+    }
+
+    /// Whether this node does nothing in a block: a constant, written only by its cells before the
+    /// graph, or a notes lane, whose scheduler runs before the graph. It runs in no partition, and
+    /// reading it waits for nothing (8a, R1).
+    fn idle(&self) -> bool {
+        matches!(self, Exec::Const(_) | Exec::Notes)
     }
 }
 
@@ -1010,7 +1096,7 @@ impl Builder<'_> {
                             let graph = self.graph(&voice.nodes, &voice.order, true, &|_| Make::New(0), &HashMap::new()).with_context(|| format!("{}: voice", n.name))?;
                             slots.push(VoiceSlot { graph, note: None, born: 0, dirty: false, last_peak: 0.0, taken: false });
                         }
-                        Some(Box::new(VoicePool { voices: slots, born: 0, shape }))
+                        Some(Box::new(VoicePool { voices: slots, born: 0, shape, stopped: false }))
                     }
                     _ => None,
                 };
@@ -1291,31 +1377,42 @@ fn step<R: Reads>(
             Ok(())
         }
     };
-    // RENDER-25: live, a box whose output went non-finite, or that trapped, is marked; an
-    // activation resets it as it moves it. A finite block clears the mark.
-    if outer.is_none() && !b.strict && matches!(exec, Exec::Kernel(_) | Exec::Poly(_) | Exec::Plugin(_) | Exec::Feedback { .. }) {
-        *poisoned = done.is_err() || out.iter().any(|o| o.iter().fold(false, |a, x| a | !x.is_finite()));
+    // RENDER-25: live, a box whose output went non-finite, or that trapped or stopped, is marked;
+    // an activation resets it as it moves it. A finite block clears the mark.
+    if outer.is_none() && b.live && matches!(exec, Exec::Kernel(_) | Exec::Poly(_) | Exec::Plugin(_) | Exec::Feedback { .. }) {
+        *poisoned = done.is_err() || exec.stopped() || out.iter().any(|o| o.iter().fold(false, |a, x| a | !x.is_finite()));
     }
     done
 }
 
-/// Block `b`'s graph: each partition of `sched` a task on `runner`, its nodes in plan order. The
-/// error first in plan order, if a node failed: what reads a failed node is skipped, the rest runs.
-/// A panic in a task is raised again here, once the block is done.
-fn run_graph(graph: &mut Graph, sched: &mut Schedule, lanes: &[LaneSlot], b: &Block, runner: &mut Runner) -> Option<anyhow::Error> {
+/// Block `b`'s graph: each partition of `sched` a task on `runner`, its nodes in plan order.
+/// Offline, the error first in plan order, if a node failed: what reads a failed node is skipped, the
+/// rest runs. Live, a node that fails stops alone, marked in `stopped`. A panic in a task is raised
+/// again here, once the block is done.
+fn run_graph(
+    graph: &mut Graph,
+    sched: &mut Schedule,
+    lanes: &[LaneSlot],
+    b: &Block,
+    runner: &mut Runner,
+    stopped: &Stopped,
+) -> Option<anyhow::Error> {
     let Schedule { tasks, parts } = sched;
     let view = GraphView::new(graph);
     let shared = &*parts;
-    let task = |p: u32| run_part(&view, shared, p, b, lanes);
+    let task = |p: u32| run_part(&view, shared, p, b, lanes, stopped);
     if let Err(payload) = runner.run(tasks, &task) {
         std::panic::resume_unwind(payload);
     }
     parts.take_error()
 }
 
-/// Partition `p`'s task: its nodes in plan order, in the one floating-point mode. False when a
-/// node failed, its error kept in `parts`.
-fn run_part(view: &GraphView, parts: &parts::Parts, p: u32, b: &Block, lanes: &[LaneSlot]) -> bool {
+/// Partition `p`'s task: its nodes in plan order, in the one floating-point mode. Offline (an
+/// export too, strict or not), false when a node failed, its error kept in `parts`. Live, played by
+/// the [`Engine`], a node that fails stops alone (RENDER-25):
+/// it is silent from then on, what reads it reads silence, its mark in `stopped` tells the session,
+/// and the partition goes on.
+fn run_part(view: &GraphView, parts: &parts::Parts, p: u32, b: &Block, lanes: &[LaneSlot], stopped: &Stopped) -> bool {
     // Whatever ran on this thread before, this partition computes in the one mode.
     fpenv::canon();
     for &i in parts.nodes(p) {
@@ -1325,13 +1422,27 @@ fn run_part(view: &GraphView, parts: &parts::Parts, p: u32, b: &Block, lanes: &[
         // its inputs complete, with Acquire).
         let own = unsafe { view.own(i) };
         if let Err(e) = step(own, &view.reader(parts, p, i), b, Seg::WHOLE, None, None, lanes) {
-            // SAFETY: this is partition p's task.
-            unsafe { parts.fail(p, i, e) };
-            return false;
+            if !b.live {
+                // SAFETY: this is partition p's task.
+                unsafe { parts.fail(p, i, e) };
+                return false;
+            }
+            // Its error allocated, and is dropped here: this path only.
+            stopped.stop(i, Why::of(&e));
+            // SAFETY: as above; the step's own ended with it.
+            let own = unsafe { view.own(i) };
+            silence(own.exec, own.out);
         }
     }
     debug_assert!(fpenv::is_canon(), "partition {p} left the thread in another floating-point mode");
     true
+}
+
+/// A node that failed live stops (RENDER-25): a kernel or a `poly` plays silence from now on and
+/// calls nothing; its outputs are silence at once. Never allocates.
+fn silence(exec: &mut Exec, out: &mut [Buf]) {
+    exec.set_stopped(true);
+    out.iter_mut().for_each(|o| o.fill(0.0));
 }
 
 impl Graph {
@@ -1402,29 +1513,55 @@ impl Graph {
         Ok(())
     }
 
-    /// Node `i`'s box back to the state right after building, as a panic resets it: a kernel's
-    /// `k_reset`, a pool's voices with their notes dropped, a plugin's `reset` with its notes to
-    /// end, a ring zeroed. Never allocates.
-    fn reset_node(&mut self, i: usize) -> Result<()> {
-        match &mut self.exec[i] {
-            Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.reset()?,
-            Exec::Plugin(p) => p.reset()?,
-            Exec::Feedback { ring, .. } => ring.fill(0.0),
-            Exec::Poly(p) => {
-                p.plan.clear();
-                if let Some(pool) = &mut p.pool {
-                    pool.born = 0;
-                    for v in &mut pool.voices {
-                        if v.dirty {
-                            v.graph.reset()?;
-                        }
-                        (v.note, v.born, v.dirty, v.last_peak, v.taken) = (None, 0, false, 0.0, false);
-                    }
+    /// [`Graph::reset`] for a panic (RENDER-10, RENDER-25): a node whose reset fails stops alone,
+    /// marked in `stopped`, and the rest is reset all the same. A node that plays again loses its
+    /// mark. Never allocates while every reset succeeds.
+    fn panic(&mut self, stopped: &Stopped) {
+        self.resets += 1;
+        self.poisoned.iter_mut().for_each(|p| *p = false);
+        for i in 0..self.exec.len() {
+            match self.reset_node(i) {
+                Ok(()) if !self.exec[i].stopped() => stopped.clear(i),
+                Ok(()) => {}
+                // Its error allocated: this path only.
+                Err(e) => {
+                    self.stop(i);
+                    stopped.stop(i, Why::of(&e));
                 }
             }
-            _ => {}
         }
-        Ok(())
+    }
+
+    /// Node `i`'s box back to the state right after building, as a panic resets it: a kernel's
+    /// `k_reset`, a pool's voices with their notes dropped, a plugin's `reset` with its notes to
+    /// end, a ring zeroed. A node that stopped plays again once reset; one whose reset fails again
+    /// stays stopped, and the rest goes on (RENDER-25). Never allocates while it succeeds.
+    fn reset_node(&mut self, i: usize) -> Result<()> {
+        let stopped = self.exec[i].stopped();
+        let done = match &mut self.exec[i] {
+            Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.reset(),
+            Exec::Plugin(p) => p.reset(),
+            Exec::Feedback { ring, .. } => {
+                ring.fill(0.0);
+                Ok(())
+            }
+            Exec::Poly(p) => p.reset(),
+            _ => Ok(()),
+        };
+        match done {
+            Ok(()) => {
+                self.exec[i].set_stopped(false);
+                Ok(())
+            }
+            // Its error allocated: this path only.
+            Err(_) if stopped => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Node `i` stops (RENDER-25): it plays silence from now on, and calls nothing.
+    fn stop(&mut self, i: usize) {
+        silence(&mut self.exec[i], &mut self.bufs[i]);
     }
 
     /// The notes sounding into node `i` end now, at engine sample `clock`: a poly's voices go into
@@ -1563,7 +1700,8 @@ impl Graph {
     fn active(&mut self) -> Result<bool> {
         for e in &mut self.exec {
             let active = match e {
-                Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.active()?,
+                // One that stopped is never called again, and holds nothing that will sound.
+                Exec::Kernel(KernelNode { inst: Some(k), .. }) if !k.stopped => k.active()?,
                 Exec::Feedback { ring, .. } => ring.iter().any(|x| x.abs() > QUIET),
                 _ => false,
             };
@@ -1576,17 +1714,32 @@ impl Graph {
 }
 
 impl PolyNode {
+    /// Its voices back to the state right after building, their notes dropped.
+    fn reset(&mut self) -> Result<()> {
+        self.plan.clear();
+        if let Some(pool) = &mut self.pool {
+            pool.born = 0;
+            for v in &mut pool.voices {
+                if v.dirty {
+                    v.graph.reset()?;
+                }
+                (v.note, v.born, v.dirty, v.last_peak, v.taken) = (None, 0, false, 0.0, false);
+            }
+        }
+        Ok(())
+    }
+
     /// One block. The lane's events say which notes start and end; voices are given notes in
     /// event order, and a voice's graph is split where its note changes. Never allocates.
     fn process(&mut self, b: &Block, outer: &dyn Reads, out: &mut Buf, lanes: &[LaneSlot]) -> Result<()> {
         let (start, end) = (b.engine, b.engine + BLOCK as u64);
         let events = if self.ghost { &[] } else { lanes[self.slot].events() };
         let PolyNode { out: voice_out, captures, plan, pool, .. } = self;
-        let Some(pool) = pool else {
+        let Some(pool) = pool.as_deref_mut().filter(|p| !p.stopped) else {
             out.fill(0.0);
             return Ok(());
         };
-        let VoicePool { voices, born, .. } = &mut **pool;
+        let VoicePool { voices, born, .. } = pool;
         // Offs for notes already in voices. A stolen note's Off finds nothing.
         for e in events {
             if let Event::Off { frame, id, .. } = *e
@@ -1751,7 +1904,19 @@ static GENERATION: AtomicU64 = AtomicU64::new(1);
 /// the track); a fade the node that reads it (a feedback's ring reads it after the graph, so a
 /// fade only a feedback reads, and the output's fade, take their new side's, else their old
 /// side's). One left without (nothing to follow) is labelled "".
-fn labels(flat: &Flat, w: &Wiring, exec: &[Exec], fades: std::ops::Range<usize>, placed: &overlay::Placed) -> Vec<Box<str>> {
+///
+/// Then, in `order`, a plan node whose inputs all come from one other label, idle nodes and those
+/// outside the order aside, takes that label, and an overlay follows its source again (R1): a
+/// mixer strip (a channel's pan and fader) runs with its track, not in the song's serial tail. A
+/// node that reads a fade never moves: the fade took its label.
+fn labels(
+    flat: &Flat,
+    w: &Wiring,
+    exec: &[Exec],
+    order: &[usize],
+    fades: std::ops::Range<usize>,
+    placed: &overlay::Placed,
+) -> Vec<Box<str>> {
     let n = flat.nodes.len();
     let mut label: Vec<Option<&str>> = vec![None; exec.len()];
     for (i, node) in flat.nodes.iter().enumerate() {
@@ -1780,6 +1945,40 @@ fn labels(flat: &Flat, w: &Wiring, exec: &[Exec], fades: std::ops::Range<usize>,
             }
         }
     }
+    let mut runs = vec![false; exec.len()];
+    for &i in order {
+        runs[i] = !exec[i].idle();
+    }
+    for &i in order {
+        if overlays.contains(&i) {
+            label[i] = label[placed.nodes[i - overlays.start].src.node];
+            continue;
+        }
+        if i >= n {
+            continue;
+        }
+        // The one label all its running inputs have, if there is one.
+        let (mut from, mut one) = (None, true);
+        exec[i].reads(|j| {
+            if runs[j] {
+                one &= from.is_none_or(|l| l == label[j]);
+                from = Some(label[j]);
+            }
+        });
+        if let Some(Some(l)) = from.filter(|_| one)
+            && Some(l) != label[i]
+        {
+            debug_assert!(
+                {
+                    let mut fade = false;
+                    exec[i].reads(|j| fade |= fades.contains(&j));
+                    !fade
+                },
+                "node {i} reads a fade, so it can't move"
+            );
+            label[i] = Some(l);
+        }
+    }
     label.into_iter().map(|l| Box::from(l.unwrap_or(""))).collect()
 }
 
@@ -1802,9 +2001,10 @@ pub struct Renderer {
     pending: Pending,
     delivered: u64,
     strict: bool,
+    /// Played by the live [`Engine`], which marks every renderer it plays: a node that fails stops
+    /// alone (RENDER-25). Offline, every render fails, naming the node.
+    live: bool,
     non_finite: u64,
-    /// A kernel crashed live: it renders silence from then on.
-    broken: bool,
     trace: Option<Trace>,
     dropped: u32,
     /// The whole order as one partition, made when a gate first asks ([`gauge`]).
@@ -1909,7 +2109,7 @@ impl Renderer {
         // Window-only overlays run while the ghosts and old sides they carry do.
         let windowed = base + placed.sites..base + placed.nodes.len();
         graph.order = w.order.clone();
-        let labels = labels(flat, &w, &graph.exec, fades..base, &placed);
+        let labels = labels(flat, &w, &graph.exec, &graph.order, fades..base, &placed);
         let schedule = Schedule::build(&graph.order, &graph.exec, &labels)?;
         let window_overlays: Vec<(usize, usize)> =
             placed.nodes.iter().enumerate().skip(placed.sites).filter_map(|(j, o)| Some((base + j, o.follows?))).collect();
@@ -2022,6 +2222,7 @@ impl Renderer {
                 flat.overlays.iter().enumerate().map(|(k, s)| (base + k, s.module.as_str(), placed.nodes[k].channels)).collect();
             Taps::new(&sites)
         });
+        let stopped = Arc::new(Stopped::new(n));
         let info = Arc::new(PlanInfo {
             id,
             rate: sample_rate,
@@ -2032,6 +2233,7 @@ impl Renderer {
             cell_map: cells.map().clone(),
             overlays,
             taps: taps.as_ref().map(|t| t.slots().clone()),
+            stopped: stopped.clone(),
         });
         let plan = Plan {
             id,
@@ -2053,6 +2255,7 @@ impl Renderer {
             window_overlays,
             window_held,
             taps,
+            stopped,
         };
         Ok(Renderer {
             plan,
@@ -2068,8 +2271,8 @@ impl Renderer {
             pending: Pending::EMPTY,
             delivered: 0,
             strict: true,
+            live: false,
             non_finite: 0,
-            broken: false,
             trace: None,
             dropped: 0,
             whole: None,
@@ -2114,7 +2317,8 @@ impl Renderer {
     }
 
     /// Strict (the default): a NaN or infinity from any kernel is an error naming it.
-    /// Live: such samples are silenced at the output and counted in [`Self::non_finite`].
+    /// Not strict (live, and an export): such samples are silenced at the output and counted in
+    /// [`Self::non_finite`].
     pub fn set_strict(&mut self, strict: bool) {
         self.strict = strict;
     }
@@ -2131,6 +2335,7 @@ impl Renderer {
             beats64: [0.0; BLOCK],
             sample_rate: self.sample_rate,
             strict: self.strict,
+            live: self.live,
             window: self.plan.faded_from.map(|f| (f, self.plan.fade)),
         };
         for r in runs.as_slice() {
@@ -2181,24 +2386,20 @@ impl Renderer {
         let _mode = fpenv::Canon::enter();
         let alone = &mut Runner::one();
         let runner = if self.plan.plugins { alone } else { runner };
-        let Some(b) = self.pre(clock, runner) else { return Ok(&self.frames) };
-        let failed = run_graph(&mut self.plan.graph, &mut self.plan.schedule, &self.lanes.slots, &b, runner);
+        let b = self.pre(clock, runner);
+        let failed = run_graph(&mut self.plan.graph, &mut self.plan.schedule, &self.lanes.slots, &b, runner, &self.plan.stopped);
         self.post(&b, failed)?;
         Ok(&self.frames)
     }
 
     /// A block's pre-pass, on this thread: the transport, cell values, lanes, the trace and the
-    /// block's times. None when the renderer is broken: the block is silence.
-    fn pre(&mut self, clock: u64, runner: &mut Runner) -> Option<Block> {
+    /// block's times.
+    fn pre(&mut self, clock: u64, runner: &mut Runner) -> Block {
         self.runs = self.transport.advance();
         self.clock = clock + BLOCK as u64;
         // Cell values written since the last block line (RENDER-22, RENDER-28); offline renders
         // never get any.
         self.plan.cells.apply(&mut self.plan.graph);
-        if self.broken {
-            self.frames = [[0.0; 2]; BLOCK];
-            return None;
-        }
         // Workers wake while the pre-pass runs.
         runner.wake(self.plan.schedule.tasks.width());
         // Lanes play before the graph, once per block: schedulers fill their events, in slot
@@ -2214,15 +2415,14 @@ impl Renderer {
         if self.trace.is_some() {
             self.record(clock);
         }
-        Some(self.block(clock))
+        self.block(clock)
     }
 
     /// A block's post-pass, on this thread, once the graph ran: feedback rings, the output, the
-    /// meters. When a node `failed`, its error, and nothing more is written for the block, as
-    /// step 7's loop did.
+    /// meters. When a node `failed` (offline only: live, it stopped alone), its error, and nothing
+    /// more is written for the block, as step 7's loop did.
     fn post(&mut self, b: &Block, failed: Option<anyhow::Error>) -> Result<()> {
         if let Some(e) = failed {
-            self.broken = !self.strict;
             return Err(e);
         }
         self.plan.graph.feedback(b, Seg::WHOLE);
@@ -2308,6 +2508,12 @@ impl Renderer {
     /// Back to the state right after building, transport aside.
     fn reset(&mut self) -> Result<()> {
         self.plan.graph.reset()?;
+        self.reset_lanes();
+        Ok(())
+    }
+
+    /// Every lane back to its start.
+    fn reset_lanes(&mut self) {
         for l in &mut self.lanes.slots {
             match l {
                 LaneSlot::Notes(Some(s)) => s.reset(),
@@ -2315,7 +2521,6 @@ impl Renderer {
                 _ => {}
             }
         }
-        Ok(())
     }
 
     /// Continue from sample `to`, exactly as if everything before it had been rendered.
@@ -2537,13 +2742,14 @@ impl Renderer {
     }
 
     /// Panic (RENDER-10): every note off, every instance reset. The next block seeks without
-    /// chasing.
-    pub fn panic(&mut self) -> Result<()> {
+    /// chasing. A node that stopped plays again, reset; one whose reset fails stops alone, marked,
+    /// and the rest is reset all the same (RENDER-25): Stop All Sound always works.
+    pub fn panic(&mut self) {
         // Plugins are reset here, between blocks (RENDER-2a).
         let _mode = fpenv::Canon::enter();
-        self.reset()?;
+        self.plan.graph.panic(&self.plan.stopped);
+        self.reset_lanes();
         self.transport.enter();
-        Ok(())
     }
 
     /// The engine resumes after a hold (RENDER-1): each plugin node whose instance an export
@@ -2675,14 +2881,14 @@ impl Renderer {
         self.non_finite
     }
 
+    /// Its nodes' stops live (RENDER-25): G12 counts each as a crash.
+    pub fn stops(&self) -> u64 {
+        u64::from(self.plan.stopped.count())
+    }
+
     /// The last block's runs.
     pub fn last_runs(&self) -> &Runs {
         &self.runs
-    }
-
-    /// Whether a kernel crashed live, so it renders silence.
-    pub fn broken(&self) -> bool {
-        self.broken
     }
 }
 

@@ -398,10 +398,16 @@ fn a_kernel_that_writes_its_input_fails() {
     let (pk, dir) = with_kernel(OWN_PORTS, "", "(f32.store (i32.const 1024) (f32.const 12345))");
     let e = through_k(&pk).unwrap().render(0.01).unwrap_err();
     assert!(format!("{e:#}").contains("song/k: `t:k` wrote its input `in` (ABI-1: kernel input memory is read-only)"), "{e:#}");
-    // Live, the renderer goes silent, as a crashed kernel's does.
+    // An export (not strict) fails the same way (RENDER-25).
     let mut r = through_k(&pk).unwrap();
     r.set_strict(false);
-    assert!(r.render(0.01).is_err() && r.broken());
+    assert!(r.render(0.01).is_err(), "an export fails");
+    // Live, it stops alone, as a crashed kernel does (RENDER-25): `song/k`, node 1, the output.
+    let mut r = through_k(&pk).unwrap();
+    r.set_strict(false);
+    let mut rig = Rig::new(r);
+    let out = rig.run(4 * BLOCK);
+    assert!(peak(&out) == 0.0 && rig.e.current().unwrap().info().stopped.why(1) == Some(Why::Crashed));
     std::fs::remove_dir_all(dir).ok();
 }
 
@@ -544,6 +550,6 @@ fn every_std_kernel_keeps_its_inputs() {
     }
     r.render(0.3).unwrap();
     assert!(cells.iter().enumerate().all(|(i, c)| r.cell_value(CellId(i as u32)) == Some((c.value * 0.9) as f32)));
-    r.panic().unwrap();
+    r.panic();
     r.render(0.6).unwrap();
 }

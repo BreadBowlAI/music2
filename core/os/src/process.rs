@@ -46,6 +46,10 @@ pub struct Cores {
     /// The most fast cores that share one cache: an L2 cluster on a Mac, a last-level cache
     /// elsewhere (one die of a two-die CPU). One at least, `fast` at most.
     pub per_cache: usize,
+    /// The most fast cores that share the last cache before memory: every fast core on a Mac (its
+    /// L2 clusters share one system-level cache), `per_cache` elsewhere. `per_cache` at least,
+    /// `fast` at most.
+    pub per_last_cache: usize,
 }
 
 /// The cores this process may use. macOS: `hw.perflevel0` and `hw.perflevel1` (or

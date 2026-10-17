@@ -88,9 +88,9 @@ fn an_export_borrows_only_an_instance_that_holds_its_blob() {
 }
 
 // HOST-5, RENDER-25: live, a plugin that fails (here it reports a processing error: it was made
-// inactive under the plan) goes silent alone, and is never called again: the song plays on, the
-// renderer isn't broken, no crash is counted, and the instance is marked for the session to replace.
-// A panic's reset doesn't call it either. Offline, the same failure fails the render.
+// inactive under the plan) goes silent alone, and is never called again: the song plays on, no
+// crash is counted, and the instance is marked for the session to replace. A panic's reset doesn't
+// call it either. Offline, the same failure fails the render.
 #[test]
 fn a_plugin_that_fails_live_goes_silent_alone() {
     let mut pk = probe_packages();
@@ -117,7 +117,7 @@ fn a_plugin_that_fails_live_goes_silent_alone() {
     m2_plugins::host().deactivate(h);
     let out = rig.run(4 * BLOCK);
     let cur = rig.e.current().unwrap();
-    assert!(inst.dead() && !cur.broken() && rig.e.crashes() == 0 && cur.transport().playing(), "only the plugin failed");
+    assert!(inst.dead() && rig.e.crashes() == 0 && cur.transport().playing(), "only the plugin failed");
     assert!(cur.output_of(q).iter().all(|x| *x == 0.0), "it is silent");
     assert!(out[BLOCK..].iter().any(|f| f[0] != 0.0), "the song plays on");
     let (calls, resets) = (n(&stats.process), n(&stats.resets));

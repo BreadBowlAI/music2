@@ -1,5 +1,5 @@
 //! G12's offline part (8a): how a song renders on more threads, measured on the runtime itself,
-//! with no device and no server. Live runs on engine threads come with 8a's next track.
+//! with no device and no server. Its live part is [`live`].
 //!
 //! - **Set-up**: this machine's cores, its load, and whether workers got the background priority.
 //! - **Sweep**: each thread count in the list renders the same 20 s of the reference project from
@@ -33,6 +33,8 @@ use crate::gates::Opts;
 use crate::paired::{Diffs, Side, in_turns, median, rank};
 use crate::report::Outcome;
 use crate::{Lab, Song, songs};
+
+pub mod live;
 
 /// Where every timed run starts: 3:00, as G7f's.
 const FROM_SECONDS: f64 = 180.0;
@@ -226,7 +228,10 @@ impl Side for Gauged {
 pub fn realtime(lab: &mut Lab, o: &Opts, sweep: &Sweep) -> Result<Outcome> {
     let mut out = Outcome::new("G12 offline", "RENDER-2, RENDER-2a", &format!("the runtime on {}", o.reference.name()));
     let cores = m2_os::process::cores();
-    out.info("cores", format!("{} fast ({} per cache), {} slow", cores.fast, cores.per_cache, cores.slow));
+    out.info(
+        "cores",
+        format!("{} fast ({} per cache, {} per last cache), {} slow", cores.fast, cores.per_cache, cores.per_last_cache, cores.slow),
+    );
     out.info("load", load());
     let dir = lab.reference(&o.reference)?;
     let song = lab.compile(&dir)?;
@@ -376,7 +381,7 @@ fn partitions(lab: &Lab, song: &Song, out: &mut Outcome) -> Result<()> {
         "the song's tail",
         format!(
             "{tail_us:.0} µs a block ({} nodes): {:.0}% of the work",
-            tail.iter().map(|&q| parts[q].nodes).sum::<usize>(),
+            tail.iter().map(|&q| parts[q].nodes.len()).sum::<usize>(),
             100.0 * tail_us / work.max(1.0)
         ),
     );

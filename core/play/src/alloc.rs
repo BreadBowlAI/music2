@@ -32,6 +32,12 @@ pub fn here() -> u64 {
     HERE.try_with(Cell::get).unwrap_or(0)
 }
 
+/// What every thread under the trap allocated, freed or reallocated so far: the device's and
+/// its engine threads' (tests read workers' counts with it).
+pub fn all() -> u64 {
+    ALL.load(Ordering::Relaxed)
+}
+
 /// Print each one counted from now on, with a backtrace (tests, `M2_TRAP_TRACE`).
 pub fn trace(on: bool) {
     TRACE.store(on, Ordering::Relaxed);

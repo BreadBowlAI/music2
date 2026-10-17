@@ -14,7 +14,23 @@
 > | 6 | plugins on worker threads | a song with plugins renders on one thread for now; plugins on workers come with live playback on all cores |
 >
 > Also from the spike: FIFO placement (sticky was within 2%), and an export alone uses one cache's fast cores
-> (`Cores.per_cache`).
+> (`Cores.per_cache`; the live half changed this on a Mac, row 9 below).
+>
+> **As built (live half, branch `8a`).** Live playback renders on a pool of engine threads with the same bits as one
+> thread, and G12's live run is built. What differs from this design (the plan is `~/m2-runs/s8a/plan-live.md`):
+>
+> | # | This design | As built |
+> |---|---|---|
+> | 1 | the device thread and the workers park on a `Wake` | only the device's thread sleeps on a `Wake` (`m2-os`: a futex on Linux, a Mach semaphore on a Mac), and only while a task is stuck; workers park with std's `park` |
+> | 2 | plugins on worker threads | a song with plugins renders on the device's thread alone; HOST-2's words stay |
+> | 3 | `Player::start_with(Options)` makes the pool with the player | the pool is made after the stream starts (the first callback gives the period; on a Mac the IO thread's workgroup exists then) and handed to the callback as a message. Until then the callback renders alone |
+> | 4 | `again` across the layers | `rest()` once after each callback (`Park`), or not (`Spin`): one constant, `BETWEEN` |
+> | 5 | `Player::close()` | not needed: the player's thread stops the stream, then drops the pool, which joins its workers, then says the device is free |
+> | 6 | the pool kept whatever its workers got | kept only when every worker runs as real time; else one thread, and the player says why (this server: no real time, one thread) |
+> | 7 | §9.1: CPU time per task | the callback's time histogram, gaps and frames (`core/play/src/timing.rs`), and the pool's counts: tasks, parks, signals, how late each worker came into a block. No clock read per task |
+> | 8 | §9.2's runs | built: the engine alone (`realtime`), with `--frames`, `--threads`, `--sweep`, `--between`, `--song`, `--audible`. Left: `--server`, `--export`, `--capture resample`, `--like-m1` |
+> | 9 | an export alone on one cache's fast cores | every fast core on a Mac (the owner's sweep: 8 threads 22% faster than 4 by the mean), one die elsewhere (`Cores.per_last_cache`) |
+> | 10 | the spike's R1, a mixer strip joins its track | built: p50's song partition fell from 154 nodes to 52 |
 
 Revision 2. This design is checked against `docs/architecture.md` (normative) at HEAD `cbf5eb9`. It sits on top of the
 step 7 design (`.git/m2-step7/design-7.md`, revision 2), which is built first. It uses the survey `understand-8a.md` in

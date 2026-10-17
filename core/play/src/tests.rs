@@ -529,10 +529,16 @@ fn a_player_let_go_stops_its_stream_after_its_fade_out() {
 // go, with the project it sent never taken). Before, the thread parked for good, holding the stream.
 #[test]
 fn a_device_player_let_go_stops_its_stream_and_frees_its_engine_elsewhere() {
+    let before = m2_runtime::threads::live_workers();
     for calls_back in [true, false] {
         let (player, cb, retired) = Player::parts(48_000, "test");
         let (shared, alive) = (player.shared.clone(), Arc::downgrade(&player.alive));
-        let device = std::thread::spawn(move || serve(Stream::new(cb, calls_back), shared, alive));
+        // Its engine threads, as a device's: they go with the stream (8a's live half).
+        let report = crate::engines::Report::default();
+        let live = crate::LiveThreads { count: Some(3), between: crate::Between::Park };
+        let engines = crate::engines::for_clock(480, 48_000, live, &report);
+        assert!(eventually(|| m2_runtime::threads::live_workers() == before + 2), "its workers started");
+        let device = std::thread::spawn(move || serve((Stream::new(cb, calls_back), engines.pool), shared, alive));
         let r = sine(48_000);
         let plan = Arc::downgrade(&r.info());
         player.open(r).unwrap();
@@ -548,5 +554,6 @@ fn a_device_player_let_go_stops_its_stream_and_frees_its_engine_elsewhere() {
         assert_eq!(plan.strong_count(), 1);
         drop(gone);
         assert_eq!(plan.strong_count(), 0, "freed there");
+        assert_eq!(m2_runtime::threads::live_workers(), before, "its workers joined (calls back: {calls_back})");
     }
 }

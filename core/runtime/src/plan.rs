@@ -23,6 +23,7 @@ use crate::audio::{self, AudioLane, AudioPlayer};
 use crate::cells::{CellId, CellMap, CellSlots, Cells};
 use crate::event::Event;
 use crate::sched::{Caps, LaneSwap, NoteScheduler};
+use crate::stopped::{Stopped, Why};
 use crate::taps::{TapSlots, Taps};
 use crate::{Exec, Graph, LaneRef, PackageSet, PluginInstance, Renderer, fpenv, lane_slots, notes_data};
 
@@ -154,6 +155,8 @@ pub struct PlanInfo {
     /// What its meters read (8b.8): the song's output and each track, after its mute. Only a live
     /// plan has them.
     pub taps: Option<Arc<TapSlots>>,
+    /// Its nodes that stopped while it played (RENDER-25), for the session to tell.
+    pub stopped: Arc<Stopped>,
 }
 
 /// One plugin node of a plan, as the next plan prepared against it, and an export, see it.
@@ -370,6 +373,8 @@ pub(crate) struct Plan {
     pub(crate) window_held: Vec<(usize, usize)>,
     /// Its taps, written after each block: a live plan's only.
     pub(crate) taps: Option<Taps>,
+    /// Its top-level nodes that stopped live (RENDER-25), shared with [`PlanInfo::stopped`].
+    pub(crate) stopped: Arc<Stopped>,
 }
 
 /// A lane a plan's nodes read. Empty only while it moves between plans: it plays nothing then.
@@ -613,13 +618,16 @@ impl Renderer {
         for m in &e.moves {
             take_from(&mut self.plan.graph, m.to as usize, &mut old.plan.graph, m.from as usize);
         }
-        // A box whose output went non-finite, or that trapped, starts again (RENDER-25, RENDER-10).
+        // A box whose output went non-finite, or that trapped or stopped, starts again (RENDER-25,
+        // RENDER-10). One whose reset fails stops at once, alone (its error allocated: this path
+        // only).
         for m in &e.moves {
             let to = m.to as usize;
             if std::mem::take(&mut self.plan.graph.poisoned[to]) {
                 self.plan.stats.resets += 1;
-                if self.plan.graph.reset_node(to).is_err() {
-                    self.broken = true;
+                if let Err(e) = self.plan.graph.reset_node(to) {
+                    self.plan.graph.stop(to);
+                    self.plan.stopped.stop(to, Why::of(&e));
                 }
             }
         }

@@ -4,7 +4,7 @@
 use super::live::{Rig, flat, live};
 use super::*;
 use crate::engine::Msg;
-use crate::parts::{Parts, Schedule};
+use crate::parts::{NONE, Parts, Schedule};
 
 /// A module `key` that is a track: `nodes`, exporting `out`.
 fn module(key: &str, nodes: Value, out: &str) -> Value {
@@ -65,7 +65,8 @@ fn shape(r: &Renderer) -> Vec<(String, u16, Vec<u32>, Vec<u32>)> {
         .collect()
 }
 
-/// Every node of the order is in one partition, in plan order there, and may read all it reads.
+/// Every node of the order that runs is in one partition, in plan order there, and may read all it
+/// reads. Idle nodes (constants, notes lanes) and nodes outside the order are in none (R1).
 fn whole(order: &[usize], exec: &[Exec], p: &Parts) {
     let mut seen = vec![0; exec.len()];
     for q in 0..p.len() as u32 {
@@ -79,7 +80,34 @@ fn whole(order: &[usize], exec: &[Exec], p: &Parts) {
         }
     }
     for (i, n) in seen.iter().enumerate() {
-        assert_eq!(*n, usize::from(order.contains(&i)), "node {i} is in one partition, or none outside the order");
+        let runs = order.contains(&i) && !exec[i].idle();
+        assert_eq!(*n, usize::from(runs), "node {i} is in one partition if it runs, else in none");
+        if !runs {
+            assert_eq!(p.part_of(i), NONE, "node {i} runs in no partition");
+        }
+    }
+}
+
+/// The one label every running node `i` reads has, if they all have one: where R1 moves a node.
+fn strip_of(r: &Renderer, i: usize) -> Option<String> {
+    let (g, p) = (&r.plan.graph, &schedule(r).parts);
+    let mut from: Vec<&str> = vec![];
+    g.exec[i].reads(|j| {
+        if p.part_of(j) != NONE {
+            from.push(p.label(p.part_of(j)).0);
+        }
+    });
+    from.dedup();
+    (from.len() == 1).then(|| from[0].to_string())
+}
+
+/// What partition the node named `name` runs in: its label, or "none".
+fn label_of(f: &Flat, r: &Renderer, name: &str) -> String {
+    let i = f.nodes.iter().position(|n| n.name == name).unwrap_or_else(|| panic!("no node {name}"));
+    let p = &schedule(r).parts;
+    match p.part_of(i) {
+        NONE => "none".into(),
+        q => p.label(q).0.to_string(),
     }
 }
 
@@ -116,7 +144,8 @@ fn a_track_is_one_partition() {
                     _ => panic!("node {i} isn't a plan node or an overlay"),
                 },
             };
-            assert_eq!(module, label, "node {i} of partition {q}");
+            // Its module, or the one other module all its inputs come from (R1).
+            assert!(module == label || strip_of(&r, i as usize).as_deref() == Some(label), "node {i} of partition {q}: {module}");
         }
         let want: Vec<u32> = if label == "song" { vec![0, 1, 2] } else { vec![] };
         assert_eq!(*reads, want, "{label} reads");
@@ -160,7 +189,7 @@ fn next(seed: &mut u64) -> u64 {
 }
 
 // RENDER-2 (8a): over random graphs with random labels, cycles between labels included, every
-// node is in one partition, every read is earlier in its partition or in one it waits for, and the
+// node that runs is in one partition, every read is earlier in its partition or in one it waits for, and the
 // partitions have no cycle.
 #[test]
 fn every_edge_goes_forward() {
@@ -172,7 +201,8 @@ fn every_edge_goes_forward() {
         let mut labels = vec![];
         for i in 0..n {
             let reads: Vec<usize> = (0..i).filter(|_| next(&mut s).is_multiple_of(4)).collect();
-            exec.push(reader(&reads));
+            // Some constants, which run in no partition (R1).
+            exec.push(if next(&mut s).is_multiple_of(6) { Exec::Const(0.5) } else { reader(&reads) });
             labels.push(format!("m{}", next(&mut s) as usize % labels_n));
         }
         // Some nodes left out of the order: what reads them reads a frozen buffer.
@@ -239,8 +269,12 @@ fn rules_hold(r: &Renderer, old: &Flat, new: &Flat) {
     let moves = &r.plan.entry.as_ref().expect("an activation").moves;
     let mut checked = [0; 4];
     for &i in &g.order {
+        if g.exec[i].idle() {
+            continue;
+        }
         let (want, kind) = match &g.exec[i] {
-            _ if i < r.plan.nodes => (new.nodes[i].module.clone(), 0),
+            // Its module, or the one other module all its inputs come from (R1).
+            _ if i < r.plan.nodes => (strip_of(r, i).filter(|l| *l == label(i)).unwrap_or_else(|| new.nodes[i].module.clone()), 0),
             _ if r.plan.ghosts.contains(&i) => {
                 let from = moves.iter().find(|m| m.to as usize == i).expect("a ghost's box moves in").from;
                 (old.nodes[from as usize].module.clone(), 1)
@@ -304,18 +338,22 @@ fn ghosts_fades_and_overlays_take_their_labels() {
     assert!(!rig.e.in_window(), "the window is over");
 }
 
-/// Every kind of read across tracks: a voice capturing the kick (a poly's capture), a missing
-/// plugin passing the kick through, and kernels reading tracks (the song's mix).
+/// Every kind of read across tracks: a voice capturing the kick (a poly's capture; it captures
+/// its own track's tremolo too, so it stays in its track), a missing plugin passing the kick
+/// through, and kernels reading tracks (the song's mix).
 fn every_read() -> (Ir, DataSet) {
     let (k, _) = sine_track(55.0, 0);
     let pad = json!([
         {"id": "k", "op": "import", "module": "kick", "export": "out"},
         {"id": "n", "op": "lane", "lane": "notes"},
-        {"id": "v", "op": "poly", "events": "n", "voices": 2, "body": {"out": "x", "nodes": [
+        {"id": "lf", "op": "const", "value": 2.0, "unit": "hz"},
+        {"id": "trem", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "lf"}},
+        {"id": "v", "op": "poly", "events": "n", "voices": 2, "body": {"out": "y", "nodes": [
             {"id": "p", "op": "lane", "lane": "pitch"},
             {"id": "hz", "op": "kernel", "kernel": "std:mtof", "inputs": {"pitch": "p"}},
             {"id": "o", "op": "kernel", "kernel": "std:saw", "inputs": {"freq": "hz"}},
-            {"id": "x", "op": "kernel", "kernel": "std:add", "inputs": {"a": "o", "b": "k"}}]}}]);
+            {"id": "x", "op": "kernel", "kernel": "std:add", "inputs": {"a": "o", "b": "k"}},
+            {"id": "y", "op": "kernel", "kernel": "std:add", "inputs": {"a": "x", "b": "trem"}}]}}]);
     let gone = json!([
         {"id": "k", "op": "import", "module": "kick", "export": "out"},
         {"id": "g", "op": "plugin", "plugin": "clap:org.example.gone-fx", "inputs": {"in": "k"}}]);
@@ -351,7 +389,10 @@ fn reads_lists_every_read() {
     let f = check(&ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Renderer::new(&f, &data, &pk, SR).unwrap();
     let p = &r.plan.schedule.parts;
-    assert!(p.len() >= 4, "the kick, the pad, the plugin's track and the song");
+    assert!(p.len() >= 3, "the kick (with the missing plugin, which reads only the kick: R1), the pad and the song");
+    let pad = (0..p.len() as u32).find(|&q| p.label(q).0 == "pad").expect("the pad's own partition");
+    let kick = (0..p.len() as u32).find(|&q| p.label(q).0 == "kick").expect("the kick's");
+    assert!(p.reads(pad, kick), "the pad's voices read the kick across partitions");
     let out = r.render(0.5).unwrap();
     assert!(out.iter().any(|f| f[0] != 0.0));
 }
@@ -605,4 +646,107 @@ fn a_song_with_a_plugin_runs_no_task_on_a_worker() {
     r.render_on(0.25, &mut t.runner).unwrap();
     let workers: u64 = t.runner.counters()[1..].iter().map(|c| c.tasks).sum();
     assert_eq!((t.runner.spread_report().tasks_on_workers, workers), (0, 0), "every task ran on the caller");
+}
+
+/// first-song's mixer as std's `mixer` and `master` compile it, on four plain tracks: a fader
+/// (`std:gain` of a constant dB) on each channel, a pan on hats and keys, the bass ducked under a
+/// follower of the kick (in the song, reading only the kick), the three adds of the sum, then the
+/// master's stereo, gain and limiter.
+fn first_song_mix() -> Ir {
+    let track = |hz: f64| sine_track(hz, 1);
+    let ((k, _), (h, _), (b, _), (y, _)) = (track(55.0), track(880.0), track(110.0), track(440.0));
+    // Written constants keep their nodes (their cells can change them while the song plays).
+    let written = |id: &str, v: f64, unit: &str| json!({"id": id, "op": "const", "value": v, "unit": unit, "origin": {"site": id.len() * 1000 + id.bytes().map(u32::from).sum::<u32>() as usize, "arg": ["0"]}});
+    let db = |id: &str, v: f64| written(id, v, "db");
+    let pan = |id: &str, v: f64| written(id, v, "bipolar");
+    let kernel = |id: &str, k: &str, inputs: Value| json!({"id": id, "op": "kernel", "kernel": k, "inputs": inputs});
+    tracks(
+        &[("kick", k, "out"), ("hats", h, "out"), ("bass", b, "out"), ("keys", y, "out")],
+        json!([
+            kernel("kf", "std:follow", json!({"in": "kick"})),
+            db("dd", -9.0),
+            kernel("duck", "std:duck", json!({"in": "bass", "side": "kf", "depth": "dd"})),
+            db("kdb", 0.0),
+            db("hdb", -6.0),
+            pan("hpan", 0.3),
+            db("bdb", 0.0),
+            db("ydb", -5.0),
+            pan("ypan", -0.25),
+            kernel("kg", "std:gain", json!({"in": "kick", "db": "kdb"})),
+            kernel("hp", "std:pan", json!({"in": "hats", "pan": "hpan"})),
+            kernel("hg", "std:gain", json!({"in": "hp", "db": "hdb"})),
+            kernel("bg", "std:gain", json!({"in": "duck", "db": "bdb"})),
+            kernel("yp", "std:pan", json!({"in": "keys", "pan": "ypan"})),
+            kernel("yg", "std:gain", json!({"in": "yp", "db": "ydb"})),
+            kernel("s1", "std:add", json!({"a": "kg", "b": "hg"})),
+            kernel("s2", "std:add", json!({"a": "s1", "b": "bg"})),
+            kernel("s3", "std:add", json!({"a": "s2", "b": "yg"})),
+            db("mdb", 0.0),
+            db("ceil", -1.0),
+            kernel("st", "std:stereo", json!({"in": "s3"})),
+            kernel("mg", "std:gain", json!({"in": "st", "db": "mdb"})),
+            kernel("lim", "std:limit", json!({"in": "mg", "ceiling": "ceil"})),
+        ]),
+        "lim",
+    )
+}
+
+// RENDER-2 (8a, R1): a node whose inputs all come from one other module runs with it: each
+// channel's pan and fader with its track, and a follower of the kick with the kick. What reads
+// two tracks (the ducker, and the bass's fader after it), the sum and the master stay in the song.
+// Constants run in no partition. The same bits on 1 and 4 threads.
+#[test]
+fn a_mixer_strip_runs_with_its_track() {
+    let pk = std_packages();
+    let f = flat(&first_song_mix());
+    let r = Renderer::new(&f, &DataSet::empty(), &pk, SR).unwrap();
+    let g = &r.plan.graph;
+    whole(&g.order, &g.exec, &schedule(&r).parts);
+    let want = [
+        ("kick", &["kg", "kf"][..]),
+        ("hats", &["hp", "hg"]),
+        ("keys", &["yp", "yg"]),
+        ("song", &["duck", "bg", "s1", "s2", "s3", "st", "mg", "lim"]),
+        ("none", &["kdb", "hdb", "hpan", "dd", "mdb", "ceil"]),
+    ];
+    for (label, names) in want {
+        for name in names {
+            assert_eq!(label_of(&f, &r, &format!("song/{name}")), label, "song/{name}");
+        }
+    }
+    let one = Renderer::new(&f, &DataSet::empty(), &pk, SR).unwrap().render(1.0).unwrap();
+    assert!(peak(&one) > 0.1);
+    let mut t = spread(4);
+    let four = Renderer::new(&f, &DataSet::empty(), &pk, SR).unwrap().render_on(1.0, &mut t.runner).unwrap();
+    assert!(four == one, "the same bits on 4 threads");
+    assert!(t.runner.spread_report().tasks_on_workers > 0);
+}
+
+// RENDER-2 (8a, R1): a constant or a notes lane does nothing in a block (its cells and its
+// scheduler run before the graph), so it runs in no partition and reading it waits for nothing: a
+// constant of the song read by a track makes no edge, and so no circle between the two.
+#[test]
+fn constants_run_in_no_partition() {
+    // 0: the song's constant; 1: a track reads it; 2: the song reads the track.
+    let exec = vec![Exec::Const(0.5), reader(&[0]), reader(&[1])];
+    let s = Schedule::build(&[0, 1, 2], &exec, &boxed(&["song", "a", "song"])).unwrap();
+    let p = &s.parts;
+    let parts: Vec<((&str, u16), Vec<u32>)> = (0..p.len() as u32).map(|q| (p.label(q), p.nodes(q).to_vec())).collect();
+    assert_eq!(parts, [(("a", 0), vec![1]), (("song", 0), vec![2])], "no depth split: the constant reads nothing");
+    assert_eq!(p.part_of(0), NONE);
+    assert!(p.reads(1, 0) && !p.reads(0, 1), "the song waits for the track, and the track for nothing");
+    // A song's written constants, and a notes lane.
+    let pk = std_packages();
+    let r = Renderer::new(&flat(&first_song_mix()), &DataSet::empty(), &pk, SR).unwrap();
+    let g = &r.plan.graph;
+    assert_eq!(g.order.iter().filter(|&&i| matches!(g.exec[i], Exec::Const(_))).count(), 9, "the mix's written constants");
+    whole(&g.order, &g.exec, &schedule(&r).parts);
+    let (ir, data) = every_read();
+    let mut pk = std_packages();
+    let mut ir = ir;
+    pk.bind_plugins(&mut ir);
+    let r = Renderer::new(&check(&ir, &pk).unwrap_or_else(|e| panic!("{e:?}")), &data, &pk, SR).unwrap();
+    let g = &r.plan.graph;
+    assert!(g.order.iter().any(|&i| matches!(g.exec[i], Exec::Notes)), "a notes lane");
+    whole(&g.order, &g.exec, &schedule(&r).parts);
 }

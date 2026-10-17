@@ -15,6 +15,7 @@ pub mod main_loop;
 #[cfg(feature = "midi")]
 pub mod midi;
 pub mod process;
+pub mod rt;
 pub mod thread;
 pub mod watch;
 

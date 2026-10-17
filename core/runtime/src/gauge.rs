@@ -36,7 +36,8 @@ pub struct Part {
     /// Its module, and the module crossings before it where modules read each other.
     pub label: String,
     pub depth: u16,
-    pub nodes: usize,
+    /// Its nodes, in plan order: exec indices (a plan node's is its index in the flat graph).
+    pub nodes: Vec<usize>,
     /// The partitions it waits for.
     pub reads: Vec<usize>,
 }
@@ -50,16 +51,16 @@ impl Renderer {
         let alone = &mut Runner::one();
         let runner = if self.plan.plugins || how != How::Parts { alone } else { runner };
         let t0 = Instant::now();
-        let Some(b) = self.pre(clock, runner) else { return Ok(Phases::default()) };
+        let b = self.pre(clock, runner);
         let t1 = Instant::now();
         let failed = match how {
-            How::Parts => run_graph(&mut self.plan.graph, &mut self.plan.schedule, &self.lanes.slots, &b, runner),
+            How::Parts => run_graph(&mut self.plan.graph, &mut self.plan.schedule, &self.lanes.slots, &b, runner, &self.plan.stopped),
             How::One => {
                 if self.whole.is_none() {
                     self.whole = Some(Box::new(Schedule::cut(&self.plan.graph.order, &self.plan.graph.exec, &[])?));
                 }
                 let whole = self.whole.as_deref_mut().expect("made above");
-                run_graph(&mut self.plan.graph, whole, &self.lanes.slots, &b, runner)
+                run_graph(&mut self.plan.graph, whole, &self.lanes.slots, &b, runner, &self.plan.stopped)
             }
             How::Old => self.plan.graph.process(&b, Seg::WHOLE, None, None, &self.lanes.slots).err(),
         };
@@ -75,14 +76,14 @@ impl Renderer {
     pub fn profile_block(&mut self, clock: u64) -> Result<Vec<u64>> {
         let _mode = fpenv::Canon::enter();
         let order = topological(&self.parts());
-        let Some(b) = self.pre(clock, &mut Runner::one()) else { return Ok(vec![0; order.len()]) };
+        let b = self.pre(clock, &mut Runner::one());
         let mut ns = vec![0; order.len()];
         {
             let view = GraphView::new(&mut self.plan.graph);
             let parts = &self.plan.schedule.parts;
             for p in order {
                 let t = Instant::now();
-                let ok = run_part(&view, parts, p as u32, &b, &self.lanes.slots);
+                let ok = run_part(&view, parts, p as u32, &b, &self.lanes.slots, &self.plan.stopped);
                 ns[p] = t.elapsed().as_nanos() as u64;
                 if !ok {
                     break;
@@ -108,7 +109,7 @@ impl Renderer {
             .map(|q| {
                 let (label, depth) = p.label(q);
                 let reads = (0..p.len() as u32).filter(|&o| p.reads(q, o)).map(|o| o as usize).collect();
-                Part { label: label.to_string(), depth, nodes: p.nodes(q).len(), reads }
+                Part { label: label.to_string(), depth, nodes: p.nodes(q).iter().map(|&i| i as usize).collect(), reads }
             })
             .collect()
     }

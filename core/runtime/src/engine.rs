@@ -223,10 +223,12 @@ impl Engine {
 
     /// An engine playing `renderer`, at its rate, from its transport. The engine clock goes on
     /// from the renderer's, so a renderer that already ran keeps its voices' timing.
-    pub fn with(renderer: Box<Renderer>) -> Engine {
+    pub fn with(mut renderer: Box<Renderer>) -> Engine {
         let mut e = Engine::new(renderer.sample_rate());
         e.clock = renderer.clock();
         e.pos = renderer.transport().pos();
+        // What an engine plays is live: a node that fails stops alone (RENDER-25).
+        renderer.live = true;
         e.current = Some(renderer);
         e
     }
@@ -450,10 +452,8 @@ impl Engine {
 
     fn panic(&mut self) {
         // Ghosts too: the window goes on, and ends on time.
-        if let Some(r) = &mut self.current
-            && r.panic().is_err()
-        {
-            r.transport_cmd(Cmd::Stop);
+        if let Some(r) = &mut self.current {
+            r.panic();
         }
     }
 
@@ -481,6 +481,7 @@ impl Engine {
                     self.retire_renderer(renderer, retire);
                     return Ok(false);
                 }
+                renderer.live = true;
                 let took = match self.current.as_deref_mut() {
                     None => !renderer.has_entry(),
                     Some(old) => renderer.take_over(old, self.clock),
@@ -637,11 +638,10 @@ impl Engine {
         let mut frames = match cur.render_block_on(clock, runner) {
             Ok(f) => *f,
             Err(e) => {
-                // A kernel trapped: silence it and stop, as an error can't play (the error
-                // allocated; this path only).
+                // Live, a node that fails stops alone (RENDER-25), so no error comes here: one that
+                // does is counted, and its block is silence (it allocated; this path only).
                 drop(e);
                 self.crashes += 1;
-                cur.transport_cmd(Cmd::Stop);
                 [[0.0; 2]; BLOCK]
             }
         };
