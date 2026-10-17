@@ -1218,6 +1218,14 @@ section above is its own branch's, word for word.
   twice: `FAIL Undo says so: Undo Marker 1 at bar 3 (⌘Z)` (the step before); alone, once. Timed alone four times,
   the tooltip was right at the first look (1 to 3 ms), so nothing in the app is slow: it is the suite's race. A
   guard, not red first. After: 57 of 57.
+- `s8-clips` waits to hear of a request before it counts it (`sentBy`, three checks). The browser tells the suite
+  of a request on its own channel, and under load that can come after the server has written the file. Red, under
+  load (four copies at once, three runs each): 4 of 12 runs gave `FAIL in one gesture: []`; with a 1.5 s wait
+  before the look, the same request was there (`at once [], then [{"url":"/api/graph/clips",…}]`). The app sent
+  one gesture each time. After: 12 of 12 under the same load. In the first joined run, under heavier load, `⌫
+  deletes both` also took over 8 s once; it passed in every later run.
+- `s8-tracks` stopped once at its `synth-pad` tab (`dragFrom` undefined) in the first joined run, under that load. It
+  passed 4 of 4 runs since, 3 of them under load. Left as it is.
 
 ## End
 
