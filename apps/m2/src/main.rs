@@ -20,7 +20,7 @@ USAGE:
                                          make a new song in <folder> from a template (starter, empty;
                                          starter if none is given) or a copy of an example
   m2 check <project> [--json]            run the TypeScript, check the graph and the data, print a summary (or the IR)
-  m2 render <project> <out.wav> [--from S | --from-bar N] [--seconds N] [--preroll P]
+  m2 render <project> <out.wav> [--from S | --from-bar N] [--seconds N] [--preroll P] [--threads N]
                                          render to a 24-bit WAV, as the app's Export Audio does: to the
                                          last clip's end and on until it falls silent (10 s more at most),
                                          at the project's sample_rate; --from starts S seconds in, or
@@ -29,10 +29,11 @@ USAGE:
                                          P seconds earlier instead of replaying: fast for listening late in
                                          a long song, but approximate (notes held from before then, and
                                          the tails of what played earlier, are missing), so it is never
-                                         written into assets/
+                                         written into assets/. --threads renders on N threads (1 to 64,
+                                         or M2_THREADS), the same file on any number
   m2 kernels [--json]                    list every kernel and its typed ports
   m2 bounce <project> <asset-name> [--track KEY] [--export out] [--from S] [--seconds N]
-            [--place track.lane@beat]
+            [--place track.lane@beat] [--threads N]
                                          render a track, named by its key (or the whole song), to a new
                                          assets/<asset-name>.wav (never over one that exists), optionally
                                          placing it as a clip on an audio lane (both by key)
@@ -141,6 +142,20 @@ fn main() -> ExitCode {
 
 fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
+}
+
+/// How many threads `m2 render` and `m2 bounce` use on the project in `dir` (8a): `--threads`, else
+/// `M2_THREADS`; else the slow cores for a range render (an agent's listen, maybe while the app
+/// plays) or while the app holds the project, and one cache's fast cores when nothing else plays.
+fn threads(args: &[String], dir: &Path, range: bool) -> Result<render::Threads> {
+    if let Some(n) = flag(args, "--threads") {
+        return render::Threads::parse(&n).context("--threads");
+    }
+    Ok(match render::Threads::from_env()? {
+        Some(t) => t,
+        None if range || m2_session::lock::taken(dir) => render::Threads::Beside,
+        None => render::Threads::Alone,
+    })
 }
 
 /// The rate an offline render runs at: the project's, always (RENDER-31a). Running the DSP and
@@ -380,12 +395,13 @@ fn run() -> Result<()> {
                 None => render::Length::Song,
             };
             let preroll: Option<f64> = flag(&args, "--preroll").map(|v| v.parse()).transpose().context("--preroll")?;
+            let threads = threads(&args, &dir, preroll.is_some())?;
             let t = Instant::now();
             let r = match preroll {
                 // The range render agents listen with (RENDER-4).
-                Some(p) => render::Render::range(&c.flat, &c.data, &pk, sr, from, p, length)?,
+                Some(p) => render::Render::range(&c.flat, &c.data, &pk, sr, from, p, length, threads)?,
                 // The same render as the app's Export Audio, so both write the same file.
-                None => render::Render::new(&c.flat, &c.data, &pk, sr, from, length)?,
+                None => render::Render::new(&c.flat, &c.data, &pk, sr, from, length, threads)?,
             };
             // Into the project's assets/ only exactly, and only as a new file (RENDER-5, WRITE-1).
             let r = r.write_for(&dir, &out, |_| {})?;
@@ -394,12 +410,17 @@ fn run() -> Result<()> {
                 eprintln!("warning: {} samples were not numbers (NaN or infinite) and were silenced, as the app plays them", r.non_finite);
             }
             println!(
-                "rendered {:.1}s to {} in {took:.2}s ({:.0}× real time), peak {:.1} dBFS",
+                "rendered {:.1}s to {} in {took:.2}s ({:.0}× real time) on {} thread{}, peak {:.1} dBFS",
                 r.seconds(),
                 out.display(),
                 r.seconds() / took,
+                r.threads,
+                if r.threads == 1 { "" } else { "s" },
                 r.peak_db
             );
+            if r.hosts_plugins {
+                println!("on 1 thread: songs with plugins render on one for now");
+            }
             // RENDER-5: say when it isn't what the export holds, and when it won't be the same again.
             if !r.exact {
                 println!(
@@ -490,8 +511,9 @@ fn run() -> Result<()> {
                 }
             }
             let mut r = Renderer::new(&flat, &data, &pk, sr)?;
-            r.seek((from * sr as f64).round() as u64)?;
-            let frames = r.render(seconds)?;
+            let (mut runner, _pool) = render::threads_for(&r, threads(&args, &project.dir, false)?);
+            r.seek_on((from * sr as f64).round() as u64, &mut runner)?;
+            let frames = r.render_on(seconds, &mut runner)?;
             let folder = path.parent().expect("inside assets/");
             // `assets/`, and `vox/` in it for `vox/keys`, each synced in the one above as it is made.
             m2_os::fs::make_dirs(folder)?;

@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use m2_editor::render::{Length, Render};
+use m2_editor::render::{Length, Render, Threads};
 use m2_play::Player;
 use m2_plugins::{Blob, Found, RenderMode};
 use m2_runtime::{BLOCK, PluginInstance};
@@ -445,6 +445,19 @@ fn with(about: &serde_json::Value, more: serde_json::Value) -> serde_json::Value
     ev
 }
 
+/// How many threads an export renders on (8a): `M2_THREADS` when set (`env`); one when it borrows
+/// the live plugin instances (it holds playback, and plugins render on one thread for now); the
+/// slow cores while the player plays or rings (not `idle`), so playback keeps its cores; else one
+/// cache's fast cores. Chosen as it starts: a Play pressed during the export leaves it as it is.
+pub fn export_threads(env: Option<Threads>, idle: bool, lending: bool) -> Threads {
+    match (env, idle, lending) {
+        (_, _, true) => Threads::Exactly(1),
+        (Some(t), ..) => t,
+        (None, true, false) => Threads::Alone,
+        (None, false, false) => Threads::Beside,
+    }
+}
+
 /// A file the user picked: a full path, in a folder that is there, ending in `.wav`.
 fn picked(path: PathBuf) -> Result<PathBuf> {
     if !path.is_absolute() {
@@ -546,6 +559,20 @@ pub(crate) mod tests {
             }
         }
         panic!("the export didn't finish: {seen:?}");
+    }
+
+    // 8a (§5.3): an export borrowing plugins renders on one thread; `M2_THREADS` wins otherwise;
+    // beside playback it keeps to the slow cores, and alone it takes one cache's fast cores.
+    #[test]
+    fn an_export_picks_its_threads() {
+        let three = Some(Threads::Exactly(3));
+        assert_eq!(export_threads(None, true, false), Threads::Alone);
+        assert_eq!(export_threads(None, false, false), Threads::Beside);
+        assert_eq!(export_threads(three, false, false), Threads::Exactly(3));
+        assert_eq!(export_threads(three, true, false), Threads::Exactly(3));
+        for (env, idle) in [(None, true), (None, false), (three, true)] {
+            assert_eq!(export_threads(env, idle, true), Threads::Exactly(1), "lending: {env:?} {idle}");
+        }
     }
 
     #[test]

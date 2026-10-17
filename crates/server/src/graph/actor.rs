@@ -16,7 +16,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use m2_editor::render::{Length, Render};
+use m2_editor::render::{Length, Render, Threads};
 use m2_editor::{Control, EditError, Edited, Gestures};
 use m2_ir::{FOp, Flat, Kind, Origin};
 use m2_plugins::{Handle, HostEvent, HostEvents};
@@ -1233,7 +1233,8 @@ impl Actor {
         let o = self.open.as_ref().context("no project is open")?;
         let rev = o.session.accepted();
         // Offline renders run at the project's rate (RENDER-31a).
-        let r = Render::new(&rev.compiled.flat, &rev.compiled.data, &o.session.packages, rev.project.sample_rate(), 0.0, length)?;
+        let r =
+            Render::new(&rev.compiled.flat, &rev.compiled.data, &o.session.packages, rev.project.sample_rate(), 0.0, length, Threads::Alone)?;
         let carried = rev.compiled.problems.iter().filter(|d| d.code == "plugin.missing").cloned().collect();
         Ok((rev.project.manifest.project.name.clone(), rev.project.dir.clone(), r, carried))
     }
@@ -1260,13 +1261,16 @@ impl Actor {
             }
             _ => HashMap::new(),
         };
+        let (idle, env) = (device.as_ref().is_none_or(|d| d.player.idle()), Threads::from_env()?);
         // Running out of memory says so plainly, with wasmtime's words as the detail.
         let Some(d) = device.filter(|_| !lend.is_empty()) else {
             // Offline renders run at the project's rate (RENDER-31a).
-            let render = Render::new(flat, data, packages, rate, 0.0, length).map_err(super::plainly)?;
+            let threads = crate::export::export_threads(env, idle, false);
+            let render = Render::new(flat, data, packages, rate, 0.0, length, threads).map_err(super::plainly)?;
             return Ok(super::Export { song, dir, render, problems, lent: None });
         };
-        let render = Render::lending(flat, data, packages, rate, length, &lend).map_err(super::plainly)?;
+        let threads = crate::export::export_threads(env, idle, true);
+        let render = Render::lending(flat, data, packages, rate, length, &lend, threads).map_err(super::plainly)?;
         let mut borrows = vec![];
         for (&node, inst) in &lend {
             let n = &flat.nodes[node];
