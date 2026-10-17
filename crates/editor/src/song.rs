@@ -6,8 +6,9 @@
 //!   the arrangement it writes, and nothing else may change.
 //! - **Time signature** sets the meter in effect at a beat, keeping its beat, adds a change on the
 //!   bar line at or before a beat, or removes one. A change elsewhere moves the bar lines after it,
-//!   so every later change is put back on the bar line at or before where it was (FMT-13's rule);
-//!   one that would land on the change before it is refused in words.
+//!   so every later change keeps its bar: it goes to where that bar now starts, on a bar line
+//!   (FMT-13's rule). So an edit and its inverse give back the same file, and nothing is refused
+//!   for landing on the change before it.
 //! - **Title** is a `TextEdit` of `[project] name`, written as a TOML basic string: `Identical`,
 //!   since no graph names the song. The folder keeps its name (gaps #28).
 //!
@@ -74,28 +75,29 @@ fn finite(beat: f64) -> Result<f64, EditError> {
     }
 }
 
-/// Put every meter change after the first back on the bar line, of the meter before it, at or
-/// before where it was: a change earlier moved the bar lines (FMT-13).
-fn on_bar_lines(a: &mut Arrangement) -> Result<(), EditError> {
-    for i in 1..a.meter.len() {
-        let prev = a.meter[i - 1];
-        let bar = prev.bar();
-        // Bars of `n/2^k` are exact binary fractions, so this is exact.
-        let beat = prev.beat + ((a.meter[i].beat - prev.beat) / bar).floor() * bar;
-        if beat <= prev.beat {
-            let m = a.meter[i];
-            return Err(EditError::Rejected(format!(
-                "the {}/{} at beat {} would land on the {}/{} before it: remove that change first",
-                m.beats,
-                m.unit,
-                m2_song::lane::number(m.beat),
-                prev.beats,
-                prev.unit
-            )));
-        }
-        a.meter[i].beat = beat;
+/// Each meter's bar, counted from the song's first (0): what a change keeps when one before it
+/// changes. Every change of an accepted arrangement is on a bar line (FMT-13).
+fn bars(meter: &[Meter]) -> Vec<u64> {
+    let mut out: Vec<u64> = Vec::with_capacity(meter.len());
+    for (i, m) in meter.iter().enumerate() {
+        let bar = match i.checked_sub(1) {
+            None => 0,
+            Some(p) => out[p] + ((m.beat - meter[p].beat) / meter[p].bar()).round() as u64,
+        };
+        out.push(bar);
     }
-    Ok(())
+    out
+}
+
+/// Put every meter change after the one at `from` at its bar, `bars[j]`, in the meters before it
+/// now: a change at or before `from` moved the bar lines (FMT-13). A change keeps its bar, not its
+/// beat, and stays at least a bar after the one before it.
+fn keep_bars(a: &mut Arrangement, bars: &[u64], from: usize) {
+    for j in from + 1..a.meter.len() {
+        let prev = a.meter[j - 1];
+        // Bars of `n/2^k` are exact binary fractions, so this is exact.
+        a.meter[j].beat = prev.beat + bars[j].saturating_sub(bars[j - 1]).max(1) as f64 * prev.bar();
+    }
 }
 
 /// Whether two arrangements count bars and beats the same: no meter written is 4/4 from the start.
@@ -196,11 +198,12 @@ pub fn meter(s: &mut Session, at: f64, beats: u32, unit: u32) -> Result<Edited, 
     let at = finite(at)?;
     let mut a = accepted(s);
     meters(&mut a);
+    let bars = bars(&a.meter);
     let i = in_effect(&a.meter, at, |m| m.beat);
     let before = meter_words(&a, &a.meter[i]);
     a.meter[i] = meter_of(a.meter[i].beat, beats, unit)?;
     let after = meter_words(&a, &a.meter[i]);
-    on_bar_lines(&mut a)?;
+    keep_bars(&mut a, &bars, i);
     write(s, a, (before, after))
 }
 
@@ -210,17 +213,26 @@ pub fn meter_change(s: &mut Session, at: f64, beats: u32, unit: u32) -> Result<E
     let at = finite(at)?;
     let mut a = accepted(s);
     meters(&mut a);
+    let mut bars = bars(&a.meter);
     let i = in_effect(&a.meter, at, |m| m.beat);
     let prev = a.meter[i];
-    let beat = prev.beat + ((at - prev.beat) / prev.bar()).floor() * prev.bar();
+    let n = ((at - prev.beat) / prev.bar()).floor();
+    let beat = prev.beat + n * prev.bar();
     let before = meter_words(&a, &prev);
     let m = meter_of(beat, beats, unit)?;
-    match prev.beat == beat {
-        true => a.meter[i] = m,
-        false => a.meter.insert(i + 1, m),
-    }
+    let from = match prev.beat == beat {
+        true => {
+            a.meter[i] = m;
+            i
+        }
+        false => {
+            a.meter.insert(i + 1, m);
+            bars.insert(i + 1, bars[i] + n as u64);
+            i + 1
+        }
+    };
     let after = meter_words(&a, &m);
-    on_bar_lines(&mut a)?;
+    keep_bars(&mut a, &bars, from);
     write(s, a, (before, after))
 }
 
@@ -233,10 +245,12 @@ pub fn remove_meter(s: &mut Session, beat: f64) -> Result<Edited, EditError> {
     if i == 0 {
         return Err(EditError::Rejected("the song's own time signature can't be removed: change it instead".into()));
     }
+    let mut bars = bars(&a.meter);
     let before = meter_words(&a, &a.meter[i]);
     a.meter.remove(i);
+    bars.remove(i);
     let after = meter_words(&a, &a.meter[i - 1]);
-    on_bar_lines(&mut a)?;
+    keep_bars(&mut a, &bars, i - 1);
     write(s, a, (before, after))
 }
 

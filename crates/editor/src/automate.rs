@@ -3,7 +3,8 @@
 //! so it plays the fallback and the song sounds the same; the timeline shows a lane to draw on.
 //!
 //! One Tx, confined to the value's expression, the function's parameter list and the new lane
-//! (WRITE-3's example): `pan: 0.3` becomes `pan: lane.control("hats-pan", "bipolar", 0.3)`, and
+//! (WRITE-3's example): `pan: 0.3` becomes `pan: lane.control("hats-pan", "bipolar", 0.3)` (the lane
+//! Hats pan), and
 //! `() =>` becomes `({ lane }) =>` when the function didn't take its lanes yet. Undo takes the
 //! lane file away and writes the value back, in one step.
 
@@ -18,12 +19,13 @@ use m2_song::{DataPath, Key, LaneAddr, LaneData, ROOT};
 
 use crate::cable::{consts_of, descriptor_default, spelled};
 use crate::controls::{Control, resolve};
+use crate::mix::{self, Mixing};
 use crate::plan::{self, path};
 use crate::rename::track_call;
 use crate::sites::{FnParams, Lane, Params, fn_params, import_insertion, imported_names};
 use crate::{EditError, Edited, keys, ready};
 
-/// An automated knob: the lane its value now comes from, and what the knob is called (`hats
+/// An automated knob: the lane its value now comes from, and what the knob is called (`Hats
 /// pan`), as the app says it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Automated {
@@ -34,10 +36,12 @@ pub struct Automated {
 
 /// What `c`, a value of module `m`, is called, in words, and what goes in front of that when its
 /// lane's key clashes (D6, M7): a declared control by its label (`decay`), in front of which goes
-/// the call's binding, else its component (`pad decay`); a dictionary entry's control by its entry
-/// and control (`channels.hats.pan` is `hats pan`). A value no control declares is named by its
-/// call's binding (or callee) and its argument.
-fn name_of(c: &Control, m: &Module, sites: &[Site]) -> (String, Option<String>) {
+/// the call's binding, else its component (`pad decay`); a channel of the song's mixer by its
+/// tracks and the control's word, as the Mix view says it (`channels.hats.db` is `Hats volume`,
+/// `channels.hats.pan` is `Hats pan`; taste.md's words); another dictionary entry's control by its
+/// entry and control. A value no control declares is named by its call's binding (or callee) and
+/// its argument.
+fn name_of(c: &Control, m: &Module, sites: &[Site], channel: &dyn Fn(u32, &str) -> Option<String>) -> (String, Option<String>) {
     let site_of = |id: u32| sites.iter().find(|s| s.id == id);
     let Some(slot) = c.origin.control.as_ref() else {
         let call = site_of(c.origin.site);
@@ -46,7 +50,11 @@ fn name_of(c: &Control, m: &Module, sites: &[Site]) -> (String, Option<String>) 
         return ([Some(by), last.cloned()].into_iter().flatten().collect::<Vec<_>>().join(" "), None);
     };
     if let [_, entry, control] = slot.slot.split('.').collect::<Vec<_>>()[..] {
-        return (format!("{entry} {control}"), None);
+        return match channel(slot.frame, entry) {
+            // A level is Volume, never "db", which reads as a note (graph.ts' `controlLabel`).
+            Some(tracks) => (format!("{tracks} {}", if control == "db" { "volume" } else { control }), None),
+            None => (format!("{entry} {control}"), None),
+        };
     }
     let frame = m.frames.get(slot.frame as usize);
     let binding = frame.and_then(|f| site_of(f.site)).and_then(|s| s.binding.clone());
@@ -136,7 +144,18 @@ pub fn automate(s: &mut Session, at: u64, id: &str) -> Result<Automated, EditErr
 
     // The lane's key: from the knob's name, free among the module's lanes and its files in any
     // capitals (ID-2). On a clash, the call's binding goes in front, then a number (D6).
-    let (mut name, prefix) = name_of(&c, m, &rev.compiled.sites);
+    // The song's mixer's channels, by the tracks they play: what the Mix view calls each strip.
+    let mixer = match (m.key == ROOT).then(|| mix::mixer(rev)) {
+        Some(Mixing::One(mx)) => Some(mx),
+        _ => None,
+    };
+    let channel = |frame: u32, entry: &str| {
+        let mx = mixer.as_ref().filter(|mx| mx.frame == frame)?;
+        let ch = mx.channels.iter().find(|ch| ch.key == entry && !ch.tracks.is_empty())?;
+        let label = |t: &String| rev.compiled.ir.modules.iter().find(|x| &x.key == t).map_or(t.as_str(), |x| x.label()).to_string();
+        Some(ch.tracks.iter().map(label).collect::<Vec<_>>().join(" + "))
+    };
+    let (mut name, prefix) = name_of(&c, m, &rev.compiled.sites, &channel);
     let module = Key::new(&m.key).map_err(EditError::Rejected)?;
     let taken = |k: &str| {
         let Ok(lane) = Key::new(k) else { return true };

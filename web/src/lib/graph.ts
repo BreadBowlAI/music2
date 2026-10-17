@@ -104,8 +104,8 @@ export interface GraphView { revision: number; modules: ModuleView[]; draft_erro
 export const labelOf = (x: { key: string; label?: string | null }) => x.label || x.key;
 /** A word as a label starts: `cutoff` → Cutoff. */
 const sentence = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-/** A lane's name on screen: its label, else its key in sentence case (`cutoff` → Cutoff, taste.md §3.4). */
-export const laneTitle = (lane: { key: string; label?: string | null }) => (lane.label && lane.label !== lane.key ? lane.label : sentence(lane.key));
+/** A lane's name on screen: its label, else its key as words in sentence case (`cutoff` → Cutoff, `hats-volume` → Hats volume; taste.md §3.4). */
+export const laneTitle = (lane: { key: string; label?: string | null }) => (lane.label && lane.label !== lane.key ? lane.label : sentence(lane.key.replace(/-/g, " ")));
 /** What a mixer channel's control is called (taste.md's words: `channels.hats.db` is "Hats volume"); its input is the channel itself. */
 const CHANNEL: Record<string, string> = { db: "volume", pan: "pan", in: "" };
 /**

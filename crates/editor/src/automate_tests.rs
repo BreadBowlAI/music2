@@ -47,10 +47,10 @@ fn a_literal_in_the_song_becomes_an_empty_lane_and_sounds_the_same() {
     let song = f.read("song.ts");
 
     let a = s.automate(s.accepted().number, "song.ts#2/0.hats.pan").unwrap();
-    assert_eq!((a.lane.to_string(), a.name.as_str()), ("song/hats-pan".to_string(), "hats pan"));
+    assert_eq!((a.lane.to_string(), a.name.as_str()), ("song/hats-pan".to_string(), "Hats pan"));
     assert_eq!(
         (a.edited.file.as_str(), a.edited.before.as_str(), a.edited.after.as_str()),
-        ("song.ts", "hats pan 0.3", "hats pan automated")
+        ("song.ts", "Hats pan 0.3", "Hats pan automated")
     );
     let want = song.replace("song(() =>", "song(({ lane }) =>").replace("pan: 0.3", "pan: lane.control(\"hats-pan\", \"bipolar\", 0.3)");
     assert_eq!(f.read("song.ts"), want);
@@ -63,7 +63,7 @@ fn a_literal_in_the_song_becomes_an_empty_lane_and_sounds_the_same() {
     assert!(!s.refresh(), "the session took in its own write");
 
     let undone = s.undo().unwrap();
-    assert_eq!((undone.before.as_str(), undone.after.as_str()), ("hats pan automated", "hats pan 0.3"));
+    assert_eq!((undone.before.as_str(), undone.after.as_str()), ("Hats pan automated", "Hats pan 0.3"));
     assert_eq!(tree(&f), files, "the lane file is gone and the literal is back");
     assert_eq!(render(&s), sound);
     s.redo().unwrap();
@@ -71,7 +71,8 @@ fn a_literal_in_the_song_becomes_an_empty_lane_and_sounds_the_same() {
 }
 
 // HOME-2: a quantity is kept as written (`lane.control`'s fallback takes it); a track that reads
-// its lanes already gives `lane` to it; a dictionary entry's control is named by its entry.
+// its lanes already gives `lane` to it; a mixer channel's control is named by its track and the
+// control's word, as the Mix view says it (`channels.hats.db` is Hats volume, never "hats db").
 #[test]
 fn a_quantity_is_the_fallback_as_written() {
     let f = fixture("examples/first-song");
@@ -80,8 +81,8 @@ fn a_quantity_is_the_fallback_as_written() {
     let (song, bass) = (f.read("song.ts"), f.read("tracks/bass.ts"));
 
     let a = s.automate(s.accepted().number, "song.ts#3/0").unwrap();
-    assert_eq!((a.lane.to_string(), a.edited.before.as_str()), ("song/hats-db".to_string(), "hats db db(-6)"));
-    assert!(f.read("song.ts").contains("db: lane.control(\"hats-db\", \"db\", db(-6))"), "{}", f.read("song.ts"));
+    assert_eq!((a.lane.to_string(), a.edited.before.as_str()), ("song/hats-volume".to_string(), "Hats volume db(-6)"));
+    assert!(f.read("song.ts").contains("db: lane.control(\"hats-volume\", \"db\", db(-6))"), "{}", f.read("song.ts"));
     assert_eq!(render(&s), sound);
 
     // `({ lane, time })` already: only the value changes in the track's file.

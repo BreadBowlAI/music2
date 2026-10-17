@@ -177,7 +177,8 @@ fn last_known(rev: &Revision) -> TimelineView {
 
 /// `kick` → `Kick`.
 fn sentence(key: &str) -> String {
-    let mut c = key.chars();
+    let words = key.replace('-', " ");
+    let mut c = words.chars();
     c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
 }
 

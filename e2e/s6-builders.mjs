@@ -150,8 +150,9 @@ const automated = orig.song.replace("song(() =>", "song(({ lane }) =>").replace(
 check(await until(() => read("song.ts") === automated), "Automate writes the value as a lane's fallback, and the song takes its lanes");
 check(read("data/song/hats-pan.json") === '{"unit": "bipolar", "clips": []}\n', "with an empty lane file beside the song's data");
 // In words: never the lane's key (taste.md §6.22).
-check(await toasted("Automating hats pan in a new lane"), "a toast says so, with Undo");
+check(await toasted("Automating Hats pan in a new lane"), "a toast says so, with Undo");
 check(await until(async () => !!(await page.$('[data-lane="song.hats-pan"]'))), "the timeline shows the lane");
+check(await until(async () => (await page.$eval('[data-lane="song.hats-pan"] span.truncate', (e) => e.textContent).catch(() => null)) === "Hats pan"), "its header says Hats pan, as the Mix view does, never the key");
 const lane = (await graph()).timeline.tracks.find((t) => t.module === "song")?.lanes.find((l) => l.key === "hats-pan");
 check(lane?.kind === "control" && lane.default === 0.3 && lane.clips.length === 0 && lane.unit === "bipolar", "empty, drawing the fallback (0.3)");
 check((await revision()) === revA + 1, "one revision");
@@ -159,7 +160,7 @@ check(await until(async () => !(await page.$(panKnob)) && !!(await page.$('[data
 check((await barColor("bass")) === bassColor, "a lane on the song recolours no track");
 await page.screenshot({ path: `${S}/s6-automated.png` });
 
-check(await undoToast("Automating hats pan"), "the toast's Undo");
+check(await undoToast("Automating Hats pan"), "the toast's Undo");
 check(await until(() => read("song.ts") === orig.song && read("data/song/hats-pan.json") === null), "puts the literal back and takes the lane file away, in one step");
 check(await until(async () => !!(await page.$(panKnob)) && !(await page.$('[data-lane="song.hats-pan"]'))), "and the knob is back");
 await key("z", ["Meta", "Shift"]);

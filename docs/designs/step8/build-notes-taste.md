@@ -833,3 +833,31 @@ The name's field, open with a long name, in a page laid out as the Mac app's bar
 A last commit after these notes: a first pan refused in the middle of a drag asks no more until the
 next press (one toast, not one a move). s8-mix, gestures, taste and live3b (with the test plugins)
 pass again: 67, 30, 39, 60.
+
+## Final phase: main merged, the review's fixes, the final checks
+
+**In short**
+- `main` had moved on past `cbac57c`: the `sounds` merge's last slices (std 0.2, its docs and review
+  fixes) and 8b's back ends (mute and solo, clips by id, audition, meters, Remove automation). It is
+  merged first, so each fix lands on what goes to `main`.
+- The review confirmed 17 findings (16 problems: UI-6 and W5 are the same). Each is fixed below, with a
+  test that failed before, or in the docs.
+
+### The merge of `main` (`143f63d`)
+
+| What | Result |
+|---|---|
+| `sounds-merge` | already in `main` (`e1003ba`): merging `main` brings it |
+| Conflicts | 3 files: `core/play/src/lib.rs` (the player's message counts: both kept, by `git rerere`'s recorded resolution, read again), `docs/gaps.md` #4, #8, #20 (both said), `docs/architecture.md` RENDER-29, WRITE-10, WRITE-18 and PKG-13 (both said) |
+| `std.wasm` | `std/build.sh`, then `std/build.sh --check`: the same bytes |
+| Rust | the whole workspace builds; every test passes; clippy is clean |
+| Browser suites | 35 of 35 runs pass (live3b with the test plugins), 1,414 checks |
+| Render records | unchanged since `09b2dfd` |
+
+### The review's fixes
+
+| Finding | Commit | What changed | The test that failed before |
+|---|---|---|---|
+| meter-drift | `db70c95` | A later time signature change keeps its bar, not its beat: an edit and its inverse give back the same file, and a meter before a change at bar 2 is never refused. The song.rs header, WRITE-10's *Today* and design-8b §4.1 say so. | `a_later_meter_change_keeps_its_bar` (the 3/4 went 32 → 20), `a_meter_before_a_change_at_bar_2_is_accepted`; `a_meter_change_lands_on_a_bar_line` updated |
+| add-track-channel-key-collision | `115584e` | A new track's key (and so its channel's) skips every channel key the mixer has, in any capitals: + Track offers `lead-2` when a channel is called `lead`, and Duplicate skips them too. A key asked for that a channel has is refused in words: "The mixer already has a channel called lead: pick another ID". ID-18 says so. | `a_new_key_skips_the_mixers_channel_keys` (the add was refused: "would not reach the mixer through its own channel") |
+| W6 | this commit | Automate on a channel of the song's mixer names it as the Mix view does: "Hats volume" (lane `hats-volume`), "Hats pan", never "hats db". A lane's key shows as words in its header (`hats-volume` is Hats volume), so `lane.control` needs no `{ name }` there. The contract's automate line says so. | `a_quantity_is_the_fallback_as_written` (was `hats-db`, "hats db db(-6)"), `a_literal_in_the_song_…` ("hats pan"); s6-builders: the lane's header reads Hats pan (56 checks) |
