@@ -345,14 +345,19 @@ the song's output and of each track. Nothing it plays changes.
 | `Taps` | The audio thread's side. After each block, each channel's largest `\|x\|` is raised into its slot with `fetch_max` (a non-negative `f32` orders as its bits do). No lock, no allocation. | same |
 | What is tapped | The output, and every overlay node with a cell, by its track (S4: fixed when the plan is built, no `set_taps`). A track read in two places is one meter, the larger. | `Renderer::build` |
 | `PlanInfo.taps` | The slots, for the server. Only a live plan (`Renderer::prepare`) has them; `new`, `lending` and `starting_at` don't. | `core/runtime/src/plan.rs` |
+| `Player::load()` | The DSP load (Q3, C2): the callback times itself with the clock alone. `longest` is the longest callback since the last read, as a share of its period; `late` counts callbacks longer than their period. Reading it starts `longest` again, so the meters thread alone reads it (M3). | `core/play/src/lib.rs` |
+| `Player::idle()` | Whether the engine renders nothing: idle (RENDER-6a), or no project plays. Published after each callback. | same |
 
-**Tests** (`core/runtime/src/tests/taps.rs`, new):
+**Tests** (`core/runtime/src/tests/taps.rs`, `core/play/src/load_tests.rs`, new; `core/play/tests/no_alloc.rs`):
 
 | Test | Red first? |
 |---|---|
 | `taps_change_no_bit` (a live plan against an offline render, to the bit) | — |
 | `a_tap_reports_its_blocks_peak` (over 1, 3 and 7 blocks; taken, then 0) | red before the block wrote them |
 | `a_muted_tracks_tap_reads_silence` (muted in the song, and while listening) | red before the block wrote them |
+| `the_load_is_the_longest_callback` (a 1 GHz device makes every callback late; at 48 kHz never more than the test's own clock saw) | red before the callback timed itself |
+| `the_engine_says_when_it_idles` (no project, stopped and silent, playing silence, a sine ringing on stopped, unloaded) | red before it was published |
+| `taps_and_the_load_never_allocate` (another thread reads and resets the taps and the load meanwhile) | — |
 
 **Choices made here:**
 - **Where a track is tapped:** at its overlay, after its mute (Q2). So a muted track's meter
@@ -360,4 +365,13 @@ the song's output and of each track. Nothing it plays changes.
 - **A sample that isn't finite:** a NaN is passed over; an infinity reads as the largest `f32`.
   So a meter never holds a value JSON can't carry.
 - **A mono node in a stereo track** gives its one channel to both.
+- **`late` counts for good,** from the player's start, like `xruns`. A window that missed a
+  meters message still sees a dropout as a larger count.
+- **The callback is timed from its first line to its last,** after it published, so the time
+  includes everything it did.
+
+**Checks:** `cargo check --workspace --all-targets`; clippy on `m2-runtime` and `m2-play`; tests
+of `m2-runtime`, `m2-play`, `m2-session` (`renders.json` unchanged: offline renders have no taps).
+
+**Contract:** the Engine shape (`taps`), RENDER-28 *Today* (the timer, `idle`).
 

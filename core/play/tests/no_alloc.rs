@@ -5,7 +5,7 @@
 //! ghost lane while its edges fade, a panic in that window, the window's end and its leftovers, a
 //! stale activation refused, stop, idle, play, panic, and a full retire channel; and, from step 5,
 //! cell writes from another thread all along (a step, a ramp and a cell in voices), with no
-//! rebuild; from 8b, overlay cell writes and live notes. Kernel memory never grows either: a reset on the audio thread would grow a delay's
+//! rebuild; from 8b, overlay cell writes, live notes, and the meters' taps and the callback's timer. Kernel memory never grows either: a reset on the audio thread would grow a delay's
 //! (§1.5 of the step 3a design).
 //!
 //! Everything is built and sent on the test's thread; only the callback runs under the trap.
@@ -425,6 +425,58 @@ fn live_notes_never_allocate() {
         assert_eq!(allocs, 0, "the callback allocated or freed");
         assert!(!player.crashed());
     }
+}
+
+// RENDER-28, 8b.8: a live plan's taps and the callback's timer allocate and free nothing, while
+// another thread reads and resets them as the server's meters do.
+#[test]
+fn taps_and_the_load_never_allocate() {
+    let song = project(
+        "trap-taps",
+        &[(
+            "song.ts",
+            "import { song, track } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { mixer } from \"std/mix\";\n\
+             const kick = track(\"kick\", () => osc.sine(55));\nconst bass = track(\"bass\", () => osc.saw(110));\n\
+             export default song(() => mixer({ kick: kick.out, bass: bass.out }));\n",
+        )],
+    );
+    let owner = m2_plugins::Owner::discard();
+    let mut cache = m2_runtime::audio::Cache::default();
+    let r = Renderer::prepare(&song.flat, &song.data, &song.packages, SR, &mut cache, &owner, m2_runtime::Basis::Fresh).unwrap();
+    let taps = r.info().taps.clone().expect("a live plan has taps");
+    let (player, mut d) = Player::driven(SR);
+    player.open(r).unwrap();
+    player.play();
+    let reading = Arc::new(AtomicBool::new(true));
+    let reader = {
+        let (player, reading) = (player.clone(), reading.clone());
+        std::thread::spawn(move || {
+            let (mut seen, mut longest) = (vec![0.0f32; 3], 0.0f32);
+            // Once more after the last fill: what it left is read too.
+            loop {
+                let last = !reading.load(Ordering::Relaxed);
+                let p = taps.take();
+                for (s, x) in seen.iter_mut().zip([p.out[0], p.track("kick").unwrap()[0], p.track("bass").unwrap()[0]]) {
+                    *s = s.max(x);
+                }
+                longest = longest.max(player.load().longest);
+                if last {
+                    return (seen, longest);
+                }
+                std::thread::yield_now();
+            }
+        })
+    };
+    let mut data = vec![0.0f32; 2 * 4096];
+    let mut allocs = 0;
+    for n in SIZES.iter().cycle().take(40) {
+        allocs += trapped(|| d.fill(&mut data[..2 * n], 2));
+    }
+    reading.store(false, Ordering::Relaxed);
+    let (seen, longest) = reader.join().unwrap();
+    assert_eq!(allocs, 0, "the callback allocated or freed");
+    assert!(seen.iter().all(|&x| x > 0.1), "the output, the kick and the bass were read: {seen:?}");
+    assert!(longest > 0.0);
 }
 
 /// A probe instrument on 64 notes into a probe effect (step 3b, §6.5), `gain` on the instrument,
