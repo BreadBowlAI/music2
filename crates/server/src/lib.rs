@@ -7,14 +7,15 @@ pub mod export;
 mod files;
 pub mod graph;
 pub mod project;
+pub mod recent;
 pub mod resources;
 mod routes;
 mod routes_8b;
 mod routes_project;
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -43,6 +44,9 @@ pub struct AppState {
     /// The latest meters message (8b.8), for every window: only the latest is kept, so a window
     /// that falls behind skips to it (empty until the first).
     pub meters: watch::Sender<String>,
+    /// The recent songs list (polish C2), when this server keeps one ([`AppState::keep_recent`]):
+    /// the app and the headless server do; tests don't, so none writes the real `~/.music2`.
+    recent: OnceLock<recent::Recent>,
 }
 
 impl AppState {
@@ -55,6 +59,42 @@ impl AppState {
             exports: Default::default(),
             unheard: Mutex::default(),
             meters: watch::channel(String::new()).0,
+            recent: OnceLock::new(),
+        }
+    }
+
+    /// Keep the recent songs list in `file` (`~/.music2/recent.json`) from now on. Once.
+    pub fn keep_recent(&self, file: PathBuf) {
+        let _ = self.recent.set(recent::Recent::new(file));
+    }
+
+    /// The recent songs list, if this server keeps one.
+    pub fn recent(&self) -> Option<&recent::Recent> {
+        self.recent.get()
+    }
+
+    /// Open the song in `dir` and put it first in the recent list. Every way a song opens comes
+    /// here, or to [`AppState::opened`] after it (plan X29): Open, New Song, an example, Open
+    /// Recent, the start screen, Save As and Rename.
+    pub fn open_song(&self, dir: &Path) -> Result<serde_json::Value> {
+        let state = self.graph.open(dir)?;
+        self.opened();
+        Ok(state)
+    }
+
+    /// The open song was just opened: it goes first in the recent list.
+    pub fn opened(&self) {
+        if let (Some(r), Some(dir)) = (self.recent(), self.graph.dir())
+            && let Err(e) = r.opened(&dir)
+        {
+            eprintln!("music2: couldn't keep the recent songs list: {e:#}");
+        }
+    }
+
+    /// The song was closed (Close Song): the next launch doesn't open it again.
+    pub fn closed(&self) {
+        if let Some(Err(e)) = self.recent().map(recent::Recent::closed) {
+            eprintln!("music2: couldn't keep the recent songs list: {e:#}");
         }
     }
 

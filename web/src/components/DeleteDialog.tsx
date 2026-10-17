@@ -44,7 +44,14 @@ export default function DeleteDialog({ asking, onClose }: { asking: Asking; onCl
   useModalKeys(box, { onEscape: onClose, onDefault: blocked ? onClose : confirm });
   return (
     <div className="fixed inset-0 z-[70] grid place-items-center p-4 bg-fg-strong/20" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={box} role="alertdialog" aria-modal aria-labelledby="delete-title" data-testid="delete-dialog" className="w-[440px] max-w-full p-6 rounded-md bg-raised shadow-pop animate-dialog cursor-default">
+      <div
+        ref={box}
+        role="alertdialog"
+        aria-modal
+        aria-labelledby="delete-title"
+        data-testid="delete-dialog"
+        className="w-[440px] max-w-full p-6 rounded-md bg-raised shadow-pop animate-dialog cursor-default"
+      >
         <h2 id="delete-title" className="text-lg font-semibold text-fg-strong">
           {blocked ? `${name} can't be deleted from here` : `Delete ${name}?`}
         </h2>

@@ -1,4 +1,4 @@
-//! Native actions: the Open Project Folder dialog, Show in Finder, the UI's "ready"
+//! Native actions: the Open Project Folder dialog, Open Recent, Show in Finder, the UI's "ready"
 //! handshake, and the prompts about unsaved code and a running export. They block on dialogs, so each runs on its
 //! own thread; the UI updates itself through the server's WebSocket like after any other edit.
 //! A few answer the UI instead: the Export Audio save dialog returns the file picked.
@@ -117,6 +117,21 @@ fn perform(app: &AppHandle, id: &str) -> anyhow::Result<()> {
                 && keep_code(app)?
             {
                 plugin_host::open_project(&server, &dir)?;
+            }
+        }
+        // File ▸ Open Recent ▸ a song: unsaved code is asked about first, as Open does.
+        id if id.starts_with(crate::menu::OPEN_RECENT) => {
+            let dir = PathBuf::from(&id[crate::menu::OPEN_RECENT.len()..]);
+            if !dir.join("song.ts").is_file() {
+                anyhow::bail!("{} isn't there any more: it was moved or deleted.", dir.display());
+            }
+            if keep_code(app)? {
+                plugin_host::open_project(&server, &dir)?;
+            }
+        }
+        "clear_recent" => {
+            if let Some(recent) = server.recent() {
+                recent.clear()?;
             }
         }
         "reveal" => {

@@ -4,6 +4,10 @@
 //       toggle are as left after the server stops and another starts (another port, another
 //       browser context: nothing in the browser's storage), and `.music2/view.json` holds them; a
 //       new song starts with the defaults.
+//   C2  recent songs (Q17, taste.md SS-2): songs made with New Song are listed newest first on the
+//       start screen with their tempo and "opened today"; a click opens one, Return opens the
+//       newest; a folder that is gone says "Moved or deleted" and its × forgets it; Close Song
+//       keeps the newest from opening at the next launch; `~/.music2/recent.json` holds the list.
 //
 //   node e2e/pl-projects.mjs <root> <home>     (the `none` kind: no project open)
 import puppeteer from "puppeteer-core";
@@ -87,6 +91,27 @@ async function pageOn(s, { pc = false } = {}) {
   return page;
 }
 
+/** The taste lint (e2e/taste.mjs) over what is inside `sel`: font sizes, radii, gradients, backdrop filters, mono text. */
+const lint = (page, sel) =>
+  page.evaluate((sel) => {
+    const bad = [];
+    for (const root of document.querySelectorAll(sel))
+      for (const e of [root, ...root.querySelectorAll("*")]) {
+        if (!e.getClientRects().length) continue;
+        const s = getComputedStyle(e);
+        const texty = [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+        if (texty && e.namespaceURI === "http://www.w3.org/1999/xhtml" && ![11, 12, 13, 15].includes(parseFloat(s.fontSize))) bad.push(`font-size ${s.fontSize}`);
+        if (texty && /mono|menlo|courier/i.test(s.fontFamily) && !e.closest("[data-code]")) bad.push("mono font");
+        for (const c of ["borderTopLeftRadius", "borderTopRightRadius", "borderBottomRightRadius", "borderBottomLeftRadius"]) {
+          const r = parseFloat(s[c]);
+          if (![0, 2, 4, 8].includes(r) && r < 9999) bad.push(`radius ${s[c]}`);
+        }
+        if (/gradient/.test(s.backgroundImage)) bad.push("gradient");
+        if (s.backdropFilter && s.backdropFilter !== "none") bad.push("backdrop-filter");
+      }
+    return [...new Set(bad)];
+  }, sel);
+
 /** What the grid chips and the audition toggle show. */
 const shown = (page) =>
   page.evaluate(() => {
@@ -150,6 +175,76 @@ async function openBass(page) {
   check(!fs.existsSync(`${other}/.music2/view.json`) || !readJson(`${other}/.music2/view.json`)?.grid, "and nothing was kept for the other song");
   await p2.browserContext().close();
   await s2.stop();
+}
+
+// ---------------------------------------------------------------- C2: recent songs
+
+// The run's own server: no song open, songs made in HOME's ~/Music/music2.
+const sess = JSON.parse(fs.readFileSync(`${HOME}/.music2/session.json`, "utf8"));
+const run = { ...sess, api: null };
+run.api = async (path, body) => {
+  const r = await fetch(`${sess.url}/api/${path}`, body === undefined ? { headers: { "x-m2-token": sess.token } } : { method: "POST", headers: { "x-m2-token": sess.token, "content-type": "application/json" }, body: JSON.stringify(body) });
+  return { status: r.status, json: await r.json().catch(() => null) };
+};
+const recentFile = `${HOME}/.music2/recent.json`;
+const songs = `${HOME}/Music/music2`;
+const openName = async () => (await run.api("graph")).json?.name ?? null;
+/** The start screen's recent rows: name and the line under it, top to bottom. */
+const rows = (page) =>
+  page.$$eval("[data-testid=recent] [data-recent]", (els) => els.map((e) => [...e.querySelectorAll("span")].map((s) => s.textContent).join(" | ")));
+{
+  // Only what this part makes (C1's servers kept the HOME's list too).
+  fs.rmSync(recentFile, { force: true });
+  for (const [name, tempo] of [["Alpha", 120], ["Beta", 96], ["Gamma", undefined]]) await run.api("project/new", { name, tempo });
+  await run.api("graph/close", {});
+  const page = await pageOn(run);
+  const listed = await page.waitForSelector("[data-testid=recent] [data-recent]", { timeout: 5000 }).catch(() => null);
+  check(!!listed, "the start screen lists recent songs");
+  check(
+    same(await rows(page), ["Gamma | 116 BPM · opened today", "Beta | 96 BPM · opened today", "Alpha | 120 BPM · opened today"]),
+    `newest first, each with its tempo and when it was opened: ${JSON.stringify(await rows(page))}`,
+  );
+  const title = await page.$eval("[data-testid=recent] [data-recent]", (e) => e.title);
+  check(title === "~/Music/music2/Gamma", `its folder is in the tooltip: ${title}`);
+  const box = await (await page.$("[data-testid=recent]")).boundingBox();
+  const row = await (await page.$("[data-testid=recent] [data-recent]")).boundingBox();
+  check(Math.round(box.width) === 560 && Math.round(row.height) === 44, `a 560 px column of 44 px rows: ${Math.round(box.width)}, ${Math.round(row.height)}`);
+  const bad = await lint(page, "[data-testid=start]");
+  check(bad.length === 0, `the start screen with the list keeps to the design system: ${bad.slice(0, 4).join(", ")}`);
+  await page.screenshot({ path: `${ROOT}/pl-recent.png` });
+  const kept = readJson(recentFile);
+  check(same(kept?.songs?.map((s) => s.path), [`${songs}/Gamma`, `${songs}/Beta`, `${songs}/Alpha`]) && kept?.open === false, `recent.json holds them, and Close Song marked the newest closed: ${JSON.stringify(kept)}`);
+
+  // Return, with no button focused, opens the newest.
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.keyboard.press("Enter");
+  check(await until(async () => (await openName()) === "Gamma" && !!(await page.$("[data-testid=timeline]"))), `Return opens the newest: ${await openName()}`);
+  check(readJson(recentFile)?.open === true, "recent.json says it is open (so a launch now would open it again)");
+  await run.api("graph/close", {});
+  await page.waitForSelector("[data-testid=recent] [data-recent]", { timeout: 5000 });
+
+  // A click opens one, which goes first.
+  await page.click(`[data-recent="${songs}/Alpha"]`);
+  check(await until(async () => (await openName()) === "Alpha"), `a click on Alpha opens it: ${await openName()}`);
+  await run.api("graph/close", {});
+  await page.waitForSelector("[data-testid=recent] [data-recent]", { timeout: 5000 });
+  check(same((await rows(page)).map((r) => r.split(" | ")[0]), ["Alpha", "Gamma", "Beta"]), `and goes first: ${JSON.stringify(await rows(page))}`);
+
+  // A folder that is gone: "Moved or deleted", and its × takes it off.
+  fs.rmSync(`${songs}/Beta`, { recursive: true, force: true });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForSelector("[data-testid=recent] [data-missing]", { timeout: 5000 }).catch(() => {});
+  check((await rows(page))[2] === "Beta | Moved or deleted", `Beta's folder is gone: ${(await rows(page))[2]}`);
+  const faint = await page.$eval(`[data-recent="${songs}/Beta"] span`, (e) => getComputedStyle(e).color).catch(() => null);
+  const plain = await page.$eval(`[data-recent="${songs}/Alpha"] span`, (e) => getComputedStyle(e).color).catch(() => null);
+  check(!!faint && faint !== plain, `its name is fainter: ${faint} (Alpha's ${plain})`);
+  await page.click(`[data-recent="${songs}/Beta"]`);
+  await sleep(400);
+  check((await openName()) === null, "a click on it opens nothing");
+  await page.click(`[data-forget="${songs}/Beta"]`);
+  check(await until(async () => same((await rows(page)).map((r) => r.split(" | ")[0]), ["Alpha", "Gamma"])), `its × takes it off the list: ${JSON.stringify(await rows(page))}`);
+  check(same(readJson(recentFile)?.songs?.map((s) => s.path), [`${songs}/Alpha`, `${songs}/Gamma`]), "and off recent.json");
+  await page.browserContext().close();
 }
 
 // ---------------------------------------------------------------- the end

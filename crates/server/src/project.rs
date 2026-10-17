@@ -185,7 +185,7 @@ fn list(dir: &Path, about: &str, required: bool) -> Vec<Starter> {
 }
 
 /// A song folder's arrangement as it reads (FMT-13); 120 BPM in 4/4 without one.
-fn arrangement(dir: &Path) -> m2_song::Arrangement {
+pub(crate) fn arrangement(dir: &Path) -> m2_song::Arrangement {
     let text = std::fs::read_to_string(dir.join(m2_song::DataPath::Arrangement.path()));
     text.ok().and_then(|t| m2_song::Arrangement::read(&t).ok()).unwrap_or_default()
 }

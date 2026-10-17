@@ -135,6 +135,93 @@ can use the same store: `useLocal("zoom", 24)` and `setLocal("zoom", 36)`.
 settings `zoom`, `follow`, `heights`, `hidden`, `grid`, `audition`, written by
 `POST /api/graph/view`.
 
+### C2. Recent songs
+
+**In short.** The start screen lists the songs you opened lately, newest first. Click one to open
+it. The app opens your last song when it starts, if it was still open when you quit. The File menu
+has Open Recent.
+
+| Where | What you see |
+|---|---|
+| Start screen | "Recent": up to 20 songs. Each row: the name, and "124 BPM · opened yesterday". Return opens the newest |
+| A song whose folder is gone | its name in grey, "Moved or deleted", and an × to take it off |
+| File ▸ Open Recent ▸ | the 10 newest songs, a line, Clear Menu |
+| Starting the app | the song that was open when you quit opens again |
+| If the app closed while opening it | it starts on the start screen and says: "music2 closed while opening Night Drive last time, so it didn't open it again." |
+
+**What changed**
+- `crates/server/src/recent.rs` (new): `Recent` over `~/.music2/recent.json`
+  (`{"songs": [{"path", "opened"}], "open", "reopening"}`): `list()` (name from `music2.toml`,
+  first tempo from `data/arrangement.json`, `missing` when `song.ts` is gone), `paths()`,
+  `opened(dir)` (first, once, 20 at most, `open` true), `closed()`, `forget(dir)`, `clear()`,
+  `moved(old, new)` (for Rename, C3), `to_reopen()` → `Song`, `Crashed` or `Nothing`, and the
+  crash guard `reopening(dir)` / `reopened()`. Written whole through a temporary file; one change
+  at a time. Folders are kept canonical, so `a/../b` and `b` are one song. Times are UTC RFC 3339,
+  without a new dependency (a days-to-date function).
+- `AppState` (lib.rs): the list is kept only when asked, `keep_recent(file)` (a `OnceLock`, not a
+  `ServeOptions` field: no struct literal in another crate changes, `apps/m2/tests/render.rs`
+  among them, which is 8a's). `open_song(dir)` opens and records; `opened()` records the song open
+  now; `closed()` marks it closed (X29: one way in for every open). `graph_open` uses `open_song`,
+  `project_new` calls `opened()`, `graph_close` calls `closed()` (X22).
+- Routes (`routes_project.rs`): `GET /api/project/recent`, `POST /api/project/recent/forget {path}`.
+- `examples/headless.rs`: keeps the list in `$HOME/.music2/recent.json` (the suites' scratch HOME)
+  and opens its song through `open_song`.
+- Desktop: `main.rs` keeps the list in `~/.music2/recent.json`; with no folder given it reopens
+  `to_reopen()`'s song off the main thread with the guard, or toasts why not; the title thread also
+  watches `recent.json`'s time and builds the menu again when it moves. `menu.rs`: File ▸ Open
+  Recent ▸ after Open Project Folder…, built by `recent_rows` (a pure function, tested); item ids
+  `open_recent:<folder>` (the folder, not an index, so a list that changed since can't open the
+  wrong song) and `clear_recent`. `actions.rs`: Open Recent asks about unsaved code first
+  (`keep_code`), as Open does; a folder that is gone says so. `plugin_host::open_project` records
+  the open.
+- Page: `web/src/lib/projects.ts` (new: `recentApi`, `openedWords`, `bpmWords`, its own `request`);
+  `StartScreen.tsx`'s `Recent`: a 560 px column of 44 px rows under the folder hint, the folder in
+  each row's tooltip, the page scrolls when the list is long. Return opens the newest only while no
+  button or field has the focus and no dialog is open (X43).
+
+**Tests**
+- Rust `crates/server/src/recent_tests.rs` (temporary folders): `opened_puts_it_first_once`,
+  `the_list_keeps_twenty`, `a_crash_while_reopening_is_not_tried_again`,
+  `a_song_closed_before_quitting_doesnt_reopen` (X22), `forget_and_clear` (with `moved`),
+  `a_list_that_doesnt_read_is_empty`, `times_are_written_in_utc`. `menu.rs`:
+  `open_recent_lists_ten_and_clear_menu`.
+- `pl-projects` (now 30 checks): three songs made with New Song (120, 96 and the starter's 116 BPM)
+  are listed newest first with "… BPM · opened today"; the folder is in the tooltip; a 560 px
+  column of 44 px rows; the lint; `recent.json` holds them, and Close Song set `open` false;
+  Return opens the newest and `open` is true again; a click opens Alpha, which goes first; a folder
+  removed by the suite says "Moved or deleted" in a fainter grey, opens nothing, and its × takes it
+  off the list and the file.
+- Moved and green: `start` 24 (and 14 on `empty`), `newsong` 71, `fx-fixes` 75, `taste` 39.
+- `cargo test -p m2-server` 226 passed; `cargo test -p music2-desktop` (9, and `app_main_thread`
+  ok); clippy of both with `-D warnings` clean.
+
+**Red first**
+- Rust, with every change of `Recent` a stub that keeps nothing and `to_reopen` always `Nothing`:
+  ```
+  recent::tests::opened_puts_it_first_once panicked at recent_tests.rs:53:5
+    left: []
+   right: ["Night Drive", "Chorus Idea", "Sunday"]
+  recent::tests::a_crash_while_reopening_is_not_tried_again panicked at recent_tests.rs:84:5
+    left: Nothing
+   right: Song("/tmp/m2-recent-2458152-0/Night Drive")
+  ```
+  and `recent_rows` stubbed empty: `open_recent_lists_ten_and_clear_menu`: `left: 0, right: 12`.
+- `pl-projects` on the page and server at `29430e8`:
+  ```
+  FAIL  the start screen lists recent songs
+  FAIL  newest first, each with its tempo and when it was opened: []
+  ```
+
+**Left.** No picture of each song in the list (taste SS-2's thumbnail; plan §10). The desktop's
+reopen at launch and Open Recent are not run here: the End's Linux run on `:96` (two launches with
+the same HOME) and the Mac run check them, and whether the menu can be built again while it is
+open (plan §11).
+
+**For gaps.md.** Recent songs, Open Recent and reopen at launch are done (#28's "the last song
+opens at launch"); the thumbnail is left.
+**Contract.** `docs/architecture.md`'s HOME table: `~/.music2/recent.json` (the recent list, the
+`open` flag, the crash guard), written by the app and the headless server only.
+
 ## Lane D
 
 Notes and automation.
