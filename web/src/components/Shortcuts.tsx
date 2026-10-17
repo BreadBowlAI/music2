@@ -93,6 +93,7 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
       ["Save (in Code)", chord("S")],
       ["Export audio", chord("E", { shift: true })],
       ["Save a copy (Save As)", chord("S", { shift: true })],
+      ["Settings", chord(",")],
     ],
   },
 ];

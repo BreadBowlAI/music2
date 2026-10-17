@@ -36,10 +36,11 @@ fn serve() -> anyhow::Result<()> {
         Some(file) => m2_server::start_with(opts, m2_server::graph::Graph::with_player(capture(file.into())?))?,
         None => m2_server::start(opts)?,
     };
-    // The recent songs list in this HOME's `.music2` (the suites' scratch HOME), as the app keeps it.
-    // HOME through m2-os, as every OS name outside it must be (PLAT-2).
+    // The recent songs list and the settings in this HOME's `.music2` (the suites' scratch HOME), as
+    // the app keeps them. HOME through m2-os, as every OS name outside it must be (PLAT-2).
     if let Some(home) = m2_os::dirs::home() {
         running.state.keep_recent(home.join(".music2/recent.json"));
+        running.state.keep_settings(home.join(".music2/settings.json"));
     }
     if project != "-" {
         running.state.open_song(std::path::Path::new(project))?;

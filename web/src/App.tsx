@@ -9,7 +9,9 @@ import StartScreen from "./components/StartScreen";
 import NewSongDialog, { openNewSong } from "./components/NewSongDialog";
 import RenameSongDialog, { openRenameSong } from "./components/RenameSongDialog";
 import SaveAsDialog, { openSaveAs } from "./components/SaveAsDialog";
+import SettingsDialog from "./components/SettingsDialog";
 import { exportSong, onExportEvent } from "./lib/exporting";
+import { openSettings } from "./lib/settings";
 import { CutOff, editorHooks, graphApi } from "./lib/graph";
 import { isMac, native, nativeAction, onMenu } from "./lib/native";
 import { followGridView } from "./lib/grid";
@@ -97,6 +99,8 @@ function chord(e: KeyboardEvent): { id: string; always?: boolean; page?: boolean
   if (e.key === "-" && !e.altKey && !e.shiftKey) return { id: "zoom_out" };
   if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.altKey && !e.shiftKey) return { id: e.key === "ArrowUp" ? "shorter" : "taller" };
   if (k === "f" && e.shiftKey && !e.altKey) return { id: "follow" };
+  // Settings (⌘, and Ctrl+,), from anywhere: the start screen, a field, the code editor.
+  if (e.key === "," && !e.shiftKey && !e.altKey) return { id: "settings", always: true };
   return null;
 }
 
@@ -188,6 +192,7 @@ export default function App() {
         <SaveAsDialog />
         <RenameSongDialog />
         <Shortcuts />
+        <SettingsDialog />
         <Toasts />
         {/* With a song open, the top bar's status pill says it; on the start screen, this one does. */}
         {!connected && !graph && (
@@ -250,6 +255,7 @@ export function appCommand(id: string) {
   // With a song open or not: making one opens it in place of the open one.
   if (id === "new_song") return openNewSong();
   if (id === "shortcuts") return shell.set({ sheet: !shell.sheet });
+  if (id === "settings") return openSettings();
   const graph = st.graph;
   if (!graph) return;
   if (id.startsWith("view_")) {

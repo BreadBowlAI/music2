@@ -976,3 +976,57 @@ fn naming_an_asset_or_no_longer_is_the_lanes_change() {
     s.undo().unwrap();
     assert_eq!(d.read(file), text);
 }
+
+// WRITE-21's names (gaps #29): the tops of undo and redo are the steps the next undo and redo
+// take, each by the revision it made. A window's name goes on the step its revision made and
+// follows it through undo, redo and undo again; an unnamed step is shown by its file.
+#[test]
+fn tops_are_the_steps_undo_and_redo_take() {
+    let d = Dir::first_song();
+    let mut s = d.open();
+    assert_eq!(s.step_names(), (None, None));
+    let first = s.commit(pan(&d, 0.5)).unwrap().number;
+    let second = s.commit(pan(&d, 0.6)).unwrap().number;
+    assert!(s.name_step(first, "Hats pan", false), "a step below the top is named too");
+    assert!(!s.name_step(second + 7, "nothing", false), "no step made that revision");
+    let unnamed = crate::StepName { name: None, structural: false, file: "song.ts".into() };
+    assert_eq!(s.step_names(), (Some(unnamed.clone()), None));
+    assert!(s.name_step(second, "adding Reverb", true));
+    let reverb = crate::StepName { name: Some("adding Reverb".into()), structural: true, file: "song.ts".into() };
+    let hats = crate::StepName { name: Some("Hats pan".into()), ..unnamed.clone() };
+    assert_eq!(s.step_names(), (Some(reverb.clone()), None));
+    s.undo().unwrap();
+    assert_eq!(s.step_names(), (Some(hats.clone()), Some(reverb.clone())), "the undone step is redo's, with its name");
+    s.undo().unwrap();
+    assert_eq!(s.step_names(), (None, Some(hats.clone())));
+    s.redo().unwrap();
+    assert_eq!(s.step_names(), (Some(hats.clone()), Some(reverb.clone())));
+    s.undo().unwrap();
+    assert_eq!(s.step_names(), (None, Some(hats)), "undo, redo, undo: the same name");
+    // A new change ends redo; its step has no name until its window gives one.
+    let third = s.commit(pan(&d, 0.7)).unwrap().number;
+    assert_eq!(s.step_names(), (Some(unnamed), None));
+    assert!(s.name_step(third, "Hats pan", false));
+}
+
+// X7: a save's inverse always has the id "undo-save", and an undo's inverse a new one each time:
+// two saves on the stack keep their own names, as names go by the revision each made.
+#[test]
+fn two_saves_keep_their_own_names() {
+    let d = Dir::first_song();
+    let mut s = d.open();
+    let song = d.read("song.ts");
+    let one = song.replacen("pan: 0.3", "pan: 0.5", 1);
+    assert_ne!(one, song);
+    s.save(Path::new("song.ts"), Base::text(&song), &one).unwrap();
+    let a = s.accepted().number;
+    let two = one.replacen("pan: 0.5", "pan: 0.55", 1);
+    s.save(Path::new("song.ts"), Base::text(&one), &two).unwrap();
+    let b = s.accepted().number;
+    assert!(s.name_step(a, "the first save", false) && s.name_step(b, "the second save", false));
+    let name = |s: &Session| s.step_names().0.and_then(|n| n.name);
+    assert_eq!(name(&s).as_deref(), Some("the second save"));
+    s.undo().unwrap();
+    assert_eq!(name(&s).as_deref(), Some("the first save"));
+    assert_eq!(s.step_names().1.and_then(|n| n.name).as_deref(), Some("the second save"));
+}

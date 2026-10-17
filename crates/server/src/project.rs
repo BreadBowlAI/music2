@@ -23,10 +23,43 @@ pub const DEFAULT_TEMPLATE: &str = "starter";
 /// Longest song name, in characters: folder names stay readable in Finder.
 const MAX_NAME: usize = 80;
 
-/// Where songs are made: `$HOME/Music/music2` (`m2_os::dirs::songs`). From `$HOME`, so tests can
-/// point it elsewhere. It is created when a song is first made there ([`make_songs_dir`]).
+/// Where songs are made: the folder Settings chose ([`set_songs_dir`], gaps #31), else
+/// `$HOME/Music/music2` ([`default_songs_dir`]). Exports go in its `Exports`. It is created when a
+/// song is first made there ([`make_songs_dir`]).
 pub fn songs_dir() -> Result<PathBuf> {
+    match SONGS.read().clone() {
+        Some(dir) => Ok(dir),
+        None => default_songs_dir(),
+    }
+}
+
+/// The songs folder Settings chose: process-wide, set by `AppState::keep_settings` and Settings'
+/// route, never by a unit test (plan X20: they read [`songs_dir`] in parallel).
+static SONGS: parking_lot::RwLock<Option<PathBuf>> = parking_lot::RwLock::new(None);
+
+/// New songs go in `dir` from now on; None: the default again.
+pub fn set_songs_dir(dir: Option<PathBuf>) {
+    *SONGS.write() = dir;
+}
+
+/// The default songs folder: `$HOME/Music/music2` (`m2_os::dirs::songs`). From `$HOME`, so tests
+/// can point it elsewhere.
+pub fn default_songs_dir() -> Result<PathBuf> {
     m2_os::dirs::songs().ok_or_else(|| anyhow!("can't find your home folder ($HOME isn't set)"))
+}
+
+/// A folder new songs may go in, as Settings takes it (plan X38): a full path, not inside a song
+/// (no `song.ts` in it or in a folder above it). It needn't be there yet: the first song makes it.
+pub fn songs_folder(dir: &Path) -> Result<PathBuf> {
+    if !dir.is_absolute() {
+        bail!("Type a full path, starting with /.");
+    }
+    let dir: PathBuf = dir.components().collect();
+    if let Some(song) = dir.ancestors().find(|d| d.join("song.ts").is_file()) {
+        let name = song.file_name().map_or_else(|| song.display().to_string(), |n| n.to_string_lossy().into_owned());
+        bail!("That folder is inside the song {name}. Pick a folder outside any song.");
+    }
+    Ok(dir)
 }
 
 /// [`songs_dir`], made if it isn't there, each folder made synced in the one above it, as every

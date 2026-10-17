@@ -1,11 +1,14 @@
 // What Undo and Redo would take back, in words (taste.md §2.14, TB-12): "Undo Reverb size".
 //
-// The server keeps the undo steps but no names for them yet (gaps #29), so this window names the
-// steps it makes, as it makes them, and follows them as its own Undo and Redo move them. The names
-// are trusted only while nothing else has changed the song: revisions are numbered one by one, so
-// when every revision since the names began is one this window made, its stacks are the server's
-// tops. Any other (a save in another editor, an agent's Tx) and Undo goes unnamed until this window
-// edits again: an unnamed Undo is honest, a wrongly named one isn't (principle 7).
+// The names are the server's (gaps #29): each lives on its undo step, by the revision the change
+// made, and follows it through undo and redo, for every window and after a reload. The window that
+// makes an edit names it as it records it (`POST /api/graph/step`); a step made elsewhere (an
+// agent's Tx, a save in another editor) has a plain name from what it changed ("Bass notes"). The
+// state says the two tops as `undo_name` and `redo_name`.
+
+import { useStore } from "./store";
+import { request } from "./projects";
+import type { GraphState } from "./graph";
 
 export interface Step {
   /** What it changed, to follow "Undo" or "Undid": "Reverb size", "adding Reverb". */
@@ -14,39 +17,61 @@ export interface Step {
   structural?: boolean;
 }
 
-let h = { session: -1, base: 0, undo: [] as Step[], redo: [] as Step[], own: new Set<number>() };
-
-/** Whether every revision after `base` up to `revision` is one this window made. */
-const ours = (revision: number) => {
-  for (let r = h.base + 1; r <= revision; r++) if (!h.own.has(r)) return false;
-  return true;
-};
-
-/** Start the names over at `revision`: what came before it is unknown. */
-const restart = (session: number, revision: number) => (h = { session, base: revision, undo: [], redo: [], own: new Set() });
-
-/** An edit this window made has committed `revision`, as `step`: it is Undo's now, and redo is gone. */
-export function recorded(session: number, revision: number, step: Step) {
-  if (h.session !== session || !ours(revision - 1)) restart(session, revision - 1);
-  h.undo.push(step);
-  h.redo = [];
-  h.own.add(revision);
+/** A step's name as the server says it; `given`: a window named it, else it is the plain name of what it changed. */
+export interface StepName {
+  name: string;
+  structural: boolean;
+  given: boolean;
 }
 
-/** This window's Undo (or Redo) committed `revision`: the step moves to the other stack. Returns it, if it was known. */
-export function stepped(session: number, redo: boolean, revision: number): Step | null {
-  if (h.session !== session || !ours(revision - 1)) {
-    restart(session, revision);
-    return null;
+declare module "./graph" {
+  interface GraphState {
+    /** What Undo would take back, and Redo; null with nothing to undo or redo. */
+    undo_name?: StepName | null;
+    redo_name?: StepName | null;
   }
-  const step = (redo ? h.redo : h.undo).pop() ?? null;
-  if (step) (redo ? h.undo : h.redo).push(step);
-  h.own.add(revision);
-  return step;
 }
 
-/** The step Undo (or Redo) would take back in the song showing `revision`, if this window knows it. */
-export function next(session: number, revision: number, redo: boolean): Step | null {
-  if (h.session !== session || !ours(revision)) return null;
-  return (redo ? h.redo : h.undo).at(-1) ?? null;
+/** What naming a step answers: the names after it, and the revision they are the tops of. */
+interface Named {
+  named: boolean;
+  revision: number;
+  undo_name: StepName | null;
+  redo_name: StepName | null;
+}
+
+/**
+ * The names this window's last step got, by the revision they describe. A state read before the
+ * name reached the server (the edit's own refresh, still on its way) is that revision too, but
+ * names its step plainly: these win over it.
+ */
+let answered: { session: number; revision: number; undo: StepName | null; redo: StepName | null } | null = null;
+
+/** An edit this window made has committed `revision`, as `step`: the server names its undo step so. */
+export function recorded(session: number, revision: number, step: Step) {
+  // Said at once, before the server has it: the edit's own refresh names the step plainly.
+  answered = { session, revision, undo: { name: step.name, structural: !!step.structural, given: true }, redo: null };
+  request<Named>("/api/graph/step", { session, revision, name: step.name, structural: !!step.structural })
+    .then((r) => {
+      answered = { session, revision: r.revision, undo: r.undo_name, redo: r.redo_name };
+      // Shown at once, by a state that is still that revision.
+      const { graph, set } = useStore.getState();
+      if (graph && graph.session === session && graph.view.revision === r.revision) set({ graph: { ...graph, undo_name: r.undo_name, redo_name: r.redo_name } });
+    })
+    // A window that can't name it (the song closed meanwhile) leaves it named plainly.
+    .catch(() => {});
+}
+
+/** The step Undo (or Redo) would take back in `graph`. */
+export function next(graph: GraphState, redo: boolean): StepName | null {
+  const named = (redo ? graph.redo_name : graph.undo_name) ?? null;
+  if (named?.given) return named;
+  if (answered && answered.session === graph.session && answered.revision === graph.view.revision) return (redo ? answered.redo : answered.undo) ?? named;
+  return named;
+}
+
+/** What an Undo (or Redo) took back, as its answer names it: `name` and `structural`. */
+export function tookBack(answer: object): Step | null {
+  const a = answer as { name?: string | null; structural?: boolean };
+  return a.name ? { name: a.name, structural: !!a.structural } : null;
 }

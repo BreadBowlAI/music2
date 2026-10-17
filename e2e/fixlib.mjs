@@ -37,8 +37,9 @@ export async function open(width = 1440, height = 900, { browser: side = false, 
   const errors = [];
   page.on("console", (m) => m.type() === "error" && !/Failed to load resource/.test(m.text()) && errors.push(m.text()));
   page.on("pageerror", (e) => errors.push(String(e)));
+  // The page's writes. Naming an undo step (`/api/graph/step`, gaps #29) writes nothing: not one of them.
   const posts = [];
-  page.on("request", (r) => r.method() !== "GET" && posts.push({ url: r.url().replace(/^.*\/api/, "/api"), body: r.postData() ?? "" }));
+  page.on("request", (r) => r.method() !== "GET" && !r.url().endsWith("/api/graph/step") && posts.push({ url: r.url().replace(/^.*\/api/, "/api"), body: r.postData() ?? "" }));
   await page.evaluateOnNewDocument((token, side, platform) => {
     window.__M2__ = { native: false, token, platform };
     try {

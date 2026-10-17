@@ -61,6 +61,8 @@ fn main() {
             })?;
             let server = running.state.clone();
             server.keep_recent(home().join(".music2").join("recent.json"));
+            // The sound output and where new songs go (gaps #31), before anything plays.
+            server.keep_settings(home().join(".music2").join("settings.json"));
             publish_session(&running.url, &server.token);
             // No window is connected yet: the server keeps these toasts for the first one.
             // They name the folder, not its whole path, so the reason fits. Opened off the main
@@ -193,8 +195,8 @@ fn token() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Window title follows the open project, and File ▸ Open Recent ▸ the recent songs list: the
-/// menu is built again when its file changes.
+/// Window title follows the open project, File ▸ Open Recent ▸ the recent songs list (the menu is
+/// built again when its file changes), and Edit ▸ Undo and Redo the names of what they take back.
 fn keep_title_in_sync(window: tauri::WebviewWindow, server: Arc<AppState>) {
     let app = window.app_handle().clone();
     std::thread::spawn(move || {
@@ -209,6 +211,9 @@ fn keep_title_in_sync(window: tauri::WebviewWindow, server: Arc<AppState>) {
                     eprintln!("music2: couldn't show the recent songs in the menu: {e}");
                 }
             }
+            // Edit ▸ Undo and Redo say what they would take back (gaps #29, plan X8).
+            let (undo, redo) = server.graph.undo_names();
+            menu::set_undo_names(undo, redo);
             // No "— Edited": edits are written to the project's files at once (the code editor
             // asks before unsaved code is lost).
             let title = server.graph.name().unwrap_or_else(|| "music2".into());

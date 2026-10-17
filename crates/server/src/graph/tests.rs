@@ -1372,7 +1372,7 @@ fn a_device_change_or_loss_makes_a_new_player_where_it_was() {
         assert_eq!(dc.graph.inspect(|a| a.open.as_ref().unwrap().plays.as_ref().unwrap().epoch), 1, "{kind:?}");
         eventually("where it was", || dc.graph.status().beat == 3.0);
         assert_eq!(player(&dc.graph).device, "none", "{kind:?}: a new player (silent in tests)");
-        assert_eq!(dc.graph.activity(), Activity::default(), "{kind:?}");
+        assert_eq!(dc.graph.activity(), Activity { output: Some("none".into()), ..Activity::default() }, "{kind:?}");
         dc.graph.transport("play").unwrap();
     }
 }
