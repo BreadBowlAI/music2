@@ -1182,7 +1182,7 @@ const HELD: &str = "import { song, track } from '@m2/core';\nimport { bass } fro
 // RENDER-10, design-8b §4.3: Stop all sound ends a note held in the middle of its clip and resets
 // every instance, and nothing plays the note again (the next block seeks without chasing,
 // RENDER-11); the transport plays on. It answers while the session is busy, and changes nothing
-// in it.
+// in it. With no player it opens none.
 #[test]
 fn panic_ends_every_note_and_never_touches_the_session() {
     let fixture = Fixture::new();
@@ -1216,6 +1216,10 @@ fn panic_ends_every_note_and_never_touches_the_session() {
     let after = graph.state().unwrap();
     assert_eq!((&after["view"]["revision"], &after["can_undo"]), (&before.0["view"]["revision"], &json!(false)));
     assert_eq!((fixture.read("song.ts"), fixture.read("data/bass/notes.json")), (before.1, before.2));
+    // With no player (nothing played yet, or a device let go), it does nothing and opens none.
+    let idle = Graph::default();
+    idle.panic().unwrap();
+    assert!(idle.inner.current_device().is_none(), "no audio device opened to stop nothing");
 }
 
 // RENDER-29: seek, the loop and play never wait for the session, which an edit holds while it

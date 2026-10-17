@@ -1437,9 +1437,12 @@ impl Graph {
     }
 
     /// Stop all sound (⌘., RENDER-10): every note off and every instance reset, at the next block.
-    /// It never waits for the session, and changes nothing in it.
+    /// It never waits for the session, and changes nothing in it. With no player there is no
+    /// sound, so it does nothing: it never opens the audio device.
     pub fn panic(&self) -> Result<()> {
-        self.inner.device()?.player.panic()?;
+        if let Some(d) = self.inner.current_device() {
+            d.player.panic()?;
+        }
         Ok(())
     }
 
