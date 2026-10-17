@@ -31,16 +31,23 @@ await page.reload({ waitUntil: "domcontentloaded" });
 await page.waitForSelector("[data-testid=timeline] [data-track]", { timeout: 8000 });
 await page.waitForSelector("[data-testid=graph] [data-module]");
 
-// The timeline: every track, its lanes in order, and as many clips as the server says.
+// The timeline: every track, its lanes in order, and as many clips as the server says; the
+// Song's own row is pinned at the foot (taste.md §3.1).
 const { timeline } = await api("graph");
 const tracks = await page.$$eval("[data-testid=timeline] [data-track]", (els) => els.map((e) => e.dataset.track));
-check(JSON.stringify(tracks) === JSON.stringify(["bass", "hats", "keys", "kick"]), `timeline tracks: ${tracks}`);
-check(JSON.stringify(timeline.tracks.map((t) => t.module)) === JSON.stringify(tracks), "in the server's order");
+// In the mixer's order (D8: never alphabetical, nor the order song.ts imports them).
+check(JSON.stringify(tracks) === JSON.stringify(["kick", "hats", "bass", "keys", "song"]), `timeline tracks, then the Song: ${tracks}`);
+check(JSON.stringify(timeline.tracks.map((t) => t.module).filter((m) => m !== "song")) === JSON.stringify(tracks.slice(0, -1)), "in the server's order");
+// Automation folds under its track, folded at first (taste.md §3.4): unfold the bass's.
+const bassFolded = await page.$$eval('[data-track="bass"] [data-lane]', (els) => els.map((e) => e.dataset.lane));
+await page.click('[data-fold="bass"]');
+await page.waitForSelector('[data-lane="bass.cutoff"]');
 const bassLanes = await page.$$eval('[data-track="bass"] [data-lane]', (els) => els.map((e) => e.dataset.lane));
-// Lanes come in the order the code declares them (bass.ts declares cutoff and drop before notes).
+// The track's row draws its notes; its automation follows in the order the code declares it
+// (bass.ts declares cutoff and drop before notes).
 const serverLanes = timeline.tracks.find((t) => t.module === "bass").lanes.map((l) => `bass.${l.key}`);
-check(JSON.stringify([...bassLanes].sort()) === JSON.stringify(["bass.cutoff", "bass.drop", "bass.notes"]), `Bass has notes, cutoff and drop lanes: ${bassLanes}`);
-check(JSON.stringify(bassLanes) === JSON.stringify(serverLanes), `in the server's (declaration) order: ${serverLanes}`);
+check(JSON.stringify(bassFolded) === JSON.stringify(["bass.notes"]) && JSON.stringify([...bassLanes].sort()) === JSON.stringify(["bass.cutoff", "bass.drop", "bass.notes"]), `Bass has notes, and cutoff and drop folded under them: ${bassFolded} → ${bassLanes}`);
+check(JSON.stringify(bassLanes) === JSON.stringify(["bass.notes", ...serverLanes.filter((l) => l !== "bass.notes")]), `the notes in the track's row, its automation in the server's (declaration) order: ${serverLanes}`);
 const counts = [];
 let allMatch = true, total = 0;
 for (const t of timeline.tracks)
@@ -53,9 +60,9 @@ for (const t of timeline.tracks)
 check(allMatch && total > 0, `clips per lane match GET /api/graph (${counts.join(", ")})`);
 check(!!(await page.$('[data-lane="bass.notes"] [data-clip] rect')) && !!(await page.$('[data-lane="bass.cutoff"] [data-clip] polyline')), "notes and the cutoff curve are drawn");
 
-// One module in the panel, the first track by default.
-check(JSON.stringify(await shown()) === JSON.stringify(["bass"]), `the panel shows only Bass at first: ${await shown()}`);
-check(JSON.stringify(await selectedTab()) === JSON.stringify(["bass"]) && JSON.stringify(await highlighted()) === JSON.stringify(["bass"]), "Bass's tab and rows are selected");
+// One module in the panel, the first track by default (the kick, first in the mixer).
+check(JSON.stringify(await shown()) === JSON.stringify(["kick"]), `the panel shows only Kick at first: ${await shown()}`);
+check(JSON.stringify(await selectedTab()) === JSON.stringify(["kick"]) && JSON.stringify(await highlighted()) === JSON.stringify(["kick"]), "Kick's tab and rows are selected");
 
 // Timeline → panel: clicking Keys' header selects it.
 await page.click('[data-track="keys"] [data-lane] > div:first-child');
@@ -66,7 +73,7 @@ await page.click('[data-module-tab="hats"]');
 check(await until(async () => JSON.stringify(await highlighted()) === JSON.stringify(["hats"])), "the Hats tab highlights Hats in the timeline");
 check(JSON.stringify(await shown()) === JSON.stringify(["hats"]), "and shows Hats' graph");
 await page.click('[data-module-tab="song"]');
-check(await until(async () => JSON.stringify(await shown()) === JSON.stringify(["song"])) && (await highlighted()).length === 0, "the Song tab shows the song graph, no track highlighted");
+check(await until(async () => JSON.stringify(await shown()) === JSON.stringify(["song"])) && JSON.stringify(await highlighted()) === JSON.stringify(["song"]), "the Song's row shows the song graph, and only it is highlighted");
 await page.click('[data-module-tab="bass"]');
 await page.waitForSelector('[data-module="bass"]');
 
@@ -85,7 +92,7 @@ await drag(-150);
 const h1 = await panelH(), t1 = await timelineH();
 check(Math.abs(h1 - h0 - 150) < 2 && Math.abs(t0 - t1 - 150) < 2, `dragging the split up 150px grows the panel (${h0} → ${h1}) and shrinks the timeline (${t0} → ${t1})`);
 await drag(2000);
-check(Math.abs((await panelH()) - 120) < 1, `it stops at 120px (${await panelH()})`);
+check(Math.abs((await panelH()) - 180) < 1, `it stops at 180px (${await panelH()})`);
 await drag(-200);
 const kept = await panelH();
 await page.reload({ waitUntil: "domcontentloaded" });
@@ -99,23 +106,26 @@ const bar5 = await page.$$eval("[data-testid=ruler] span", (els) => { const r = 
 await page.mouse.click(bar5.x - 4, bar5.y + 4);
 check(await until(async () => Math.abs((await api("graph/status")).beat - 16) < 1), `clicking the ruler at bar 5 seeks to beat 16 (status beat ${(await api("graph/status")).beat})`);
 check(await until(async () => Math.abs((await playheadBeat()) - 16) < 1), `the playhead follows (data-beat ${await playheadBeat()})`);
-check(await until(async () => (await page.$eval('[title="Bar and beat"]', (e) => e.textContent)) === "5.1"), "the bar shows 5.1");
+check(await until(async () => (await page.$eval("[data-testid=position]", (e) => e.textContent)) === "5.1.1"), "the bar shows 5.1.1");
 check((await api("graph/status")).playing === false, "seeking while stopped stays stopped");
 
 // Playing moves the playhead on, on screen too.
 await sleep(300);
 const x0 = (await (await page.$("[data-testid=playhead]")).boundingBox()).x;
-await page.click('button[title="Play / stop (Space)"]');
+await page.click('[data-testid=play]');
 check(await until(async () => (await playheadBeat()) > 17), `playing advances the playhead (data-beat ${await playheadBeat()})`);
 await sleep(300);
 const x1 = (await (await page.$("[data-testid=playhead]")).boundingBox()).x;
 check(x1 > x0 + 20, `and it moves right on screen (${x0.toFixed(0)} → ${x1.toFixed(0)}px)`);
-await page.click('button[title="Play / stop (Space)"]');
+await page.click('[data-testid=play]');
 check(await until(async () => !(await api("graph/status")).playing), "stopped");
-await page.click('button[title="Back to start"]');
+await page.click('button[aria-label="Back to start"]');
 check(await until(async () => (await playheadBeat()) === 0), "back to start puts the playhead at 0");
 
-// A knob drag in the panel still writes the code, and the selection stays.
+// A knob drag in the panel still writes the code, and the selection stays. The reload above
+// selected the first track again (the kick), so the bass is picked first.
+await page.click('[data-module-tab="bass"]');
+await page.waitForSelector('[data-module="bass"]');
 const bassTs = () => fs.readFileSync(`${proj}/tracks/bass.ts`, "utf8");
 const before = bassTs();
 const rev0 = (await api("graph")).view.revision;
@@ -138,9 +148,11 @@ const post = async (path, body) =>
 // Playing on past the song's end (and past the drawn width): the ruler and rows run on under the playhead.
 await page.$eval("[data-testid=timeline]", (e) => { e.scrollLeft = 0; });
 const drawnBeats = (await page.$eval("[data-testid=ruler]", (e) => e.getBoundingClientRect().width)) / 24;
-await post("graph/seek", { beat: Math.floor(drawnBeats) - 2 });
-await page.click('button[title="Play / stop (Space)"]');
+const from = Math.floor(drawnBeats) - 2;
+await post("graph/seek", { beat: from });
+await page.click('[data-testid=play]');
 let inside = true;
+let last = 0;
 const samples = [];
 for (let i = 0; i < 8; i++) {
   await sleep(500);
@@ -150,19 +162,23 @@ for (let i = 0; i < 8; i++) {
     const ruler = document.querySelector("[data-testid=ruler]").getBoundingClientRect();
     const ph = document.querySelector("[data-testid=playhead]");
     const header = document.querySelector('[data-track="bass"] [data-lane] > div:first-child').getBoundingClientRect();
-    return { beat: Number(ph.dataset.beat), x: ph.getBoundingClientRect().left, rulerRight: ruler.right, right: box.right, header: header.left - box.left, overflow: tl.scrollWidth - (236 + ruler.width) };
+    return { beat: Number(ph.dataset.beat), x: ph.getBoundingClientRect().left, rulerRight: ruler.right, right: box.right, header: header.left - box.left, overflow: tl.scrollWidth - (header.width + ruler.width) };
   });
   inside &&= m.x < m.rulerRight - 24 && m.x < m.right && Math.abs(m.header) < 1 && m.overflow <= 1;
+  last = m.beat;
   samples.push(`${m.beat.toFixed(1)}: x ${m.x.toFixed(0)}, ruler to ${m.rulerRight.toFixed(0)}`);
 }
-await page.click('button[title="Play / stop (Space)"]');
-check((await playheadBeat()) > drawnBeats + 2 && inside, `past the drawn width (${drawnBeats.toFixed(1)} beats) the playhead stays over the ruler and rows, headers in place (${samples.join("; ")})`);
+check(last > drawnBeats + 2 && inside, `past the drawn width (${drawnBeats.toFixed(1)} beats) the playhead stays over the ruler and rows, headers in place (${samples.join("; ")})`);
+// Stop goes back to where play started (taste.md §5.1).
+await page.click('[data-testid=play]');
 check(await until(async () => !(await api("graph/status")).playing), "stopped again");
+check(await until(async () => Math.abs((await playheadBeat()) - from) < 0.01), `and back where play started (beat ${from}; the playhead at ${await playheadBeat()})`);
 
 // Notes that never play (before their clip, or of no length) are neither drawn nor counted, and don't stretch the clip's pitch range.
 const notesFile = `${proj}/data/bass/notes.json`;
 const rects = () => page.$$eval('[data-lane="bass.notes"] [data-clip]:nth-child(1 of [data-clip]) rect', (els) => els.map((e) => Number(e.getAttribute("height"))));
-const label = () => page.$eval('[data-lane="bass.notes"]', (e) => e.textContent.match(/(\d+) notes/)[1]);
+// Clips show no note count (taste.md §2.8): the clip's tooltip counts them.
+const label = () => page.$eval('[data-lane="bass.notes"] [data-clip]', (e) => e.title.match(/(\d+) notes/)[1]);
 const [r0, l0] = [await rects(), await label()];
 const notesJson = JSON.parse(fs.readFileSync(notesFile, "utf8"));
 const written = notesJson.clips[0].notes.length + 2;

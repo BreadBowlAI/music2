@@ -47,7 +47,8 @@ const newPage = async (s = sess) => {
   page.on("pageerror", (e) => consoleErrors.push(String(e)));
   await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; }, s.token);
   await page.goto(s.url, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector("[data-testid=graph]", { timeout: 8000 });
+  // The dock opens on the view this browser chose last: Device, or Mix.
+  await page.waitForSelector("[data-testid=graph], [data-testid=mix]", { timeout: 8000 });
   return page;
 };
 const apiOf = (s) => async (path, opts = {}) =>
@@ -74,17 +75,23 @@ const show = async (p, name) => {
   await p.click(`[data-module-tab="${name}"]`);
   await p.waitForSelector(`[data-module="${name}"]`);
 };
-// A knob's centre, scrolled into the panel's view.
+// A knob's centre (a fader's thumb), scrolled into the panel's view.
 const knobAt = async (p, sel) => {
-  await p.$eval(`${sel} svg`, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
-  const b = await (await p.$(`${sel} svg`)).boundingBox();
+  const grip = `${sel} svg, ${sel} [data-testid=fader-thumb]`;
+  await p.$eval(grip, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
+  const b = await (await p.$(grip)).boundingBox();
   return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
 };
 const value = (p, sel) => p.$eval(sel, (e) => e.dataset.value);
-const hats = '[data-module="song"] [data-knob="hats.pan"]';
-const keys = '[data-module="song"] [data-knob="keys.pan"]';
-const keysDb = '[data-module="song"] [data-knob="keys.db"]';
-await show(page, "song");
+/** The Mix view: levels and pans are its strips' (MX-6). */
+const mix = async (p) => {
+  await p.click('[data-view-tab="mix"]');
+  await p.waitForSelector("[data-testid=mix] [data-strip]");
+};
+const hats = '[data-testid=mix] [data-knob="hats.pan"]';
+const keys = '[data-testid=mix] [data-knob="keys.pan"]';
+const keysDb = '[data-testid=mix] [data-knob="keys.db"]';
+await mix(page);
 
 // ---- slow: a drag while the code editor's save compiles for over a second.
 // Each preview is timed from its request to its answer.
@@ -133,7 +140,8 @@ check((await putFile(sess, "tracks/bass.ts", slowly(bass), bass)).status === 200
 at = await knobAt(page, hats);
 await page.mouse.move(at.x, at.y);
 await page.mouse.down();
-for (let i = 1; i <= 4; i++) await page.mouse.move(at.x, at.y - i * 4);
+// 60px in all, of a knob's 300 (taste.md KN-1): 0.3 → 0.7 on the pan's -1..1.
+for (let i = 1; i <= 4; i++) await page.mouse.move(at.x, at.y - i * 7.5);
 check(await until(async () => (await leases()).length === 1), "dragging a knob holds a lease on the server");
 const own = (await leases())[0];
 check(own?.client?.length > 0 && own?.file === "song.ts", `the lease is the window's, on song.ts (${JSON.stringify(own)})`);
@@ -141,7 +149,7 @@ const before = (await api("graph")).view.revision;
 fs.writeFileSync(`${proj}/tracks/bass.ts`, bass.replace("khz(2.5)", "khz(3)"));
 check(await until(async () => (await api("graph")).view.revision > before), "the outside save to tracks/bass.ts is taken in");
 check((await leases()).length === 1 && (await leases())[0].lease === own.lease, "the drag goes on through it, on the same lease");
-for (let i = 5; i <= 8; i++) await page.mouse.move(at.x, at.y - i * 4);
+for (let i = 5; i <= 8; i++) await page.mouse.move(at.x, at.y - i * 7.5);
 await page.mouse.up();
 check(await until(() => songTs().includes("pan: 0.7 }")), "releasing wrote `pan: 0.7` into song.ts");
 check(bassTs().includes("khz(3)"), "and the outside edit to bass.ts stays");
@@ -162,7 +170,7 @@ check(await until(() => songTs().includes(`pan: ${shown} }`)), `and its release 
 
 // ---- closed: a second window drags, then closes; its drag ends, and nothing is written.
 const other = await newPage();
-await show(other, "song");
+await mix(other);
 const kept = songTs();
 at = await knobAt(other, hats);
 await other.mouse.move(at.x, at.y);
@@ -289,7 +297,7 @@ async function withPlugins() {
     const fmt = (v) => v.map((d) => d.toFixed(0)).join(" ");
 
     const p2 = await newPage(s2);
-    await p2.click('button[title="Play / stop (Space)"]');
+    await p2.click('[data-testid=play]');
     check(await until(async () => (await api2("graph/status")).playing, 4000), "with-plugins plays");
     await sleep(1500);
     const sounding = levels(frames() - RATE, frames());
@@ -328,8 +336,8 @@ async function withPlugins() {
     check(median(levels(frames() - RATE / 2, frames())) > loud - 6, "from the start, the chord sounds again");
 
     // The lead's level dragged down while a save of tracks/kick.ts compiles: heard before it returns.
-    await show(p2, "song");
-    const lead = '[data-module="song"] [data-knob="lead.db"]';
+    await mix(p2);
+    const lead = '[data-testid=mix] [data-knob="lead.db"]';
     const song0 = fs.readFileSync(`${dir}/song.ts`, "utf8");
     const kick = kickTs();
     at = await knobAt(p2, lead);
@@ -341,8 +349,9 @@ async function withPlugins() {
     const t1 = Date.now();
     const compiling = putFile(s2, "tracks/kick.ts", kick, slowly(kick)).then((r) => { back = { status: r.status, at: Date.now(), frame: frames() }; });
     await sleep(150);
+    // Down the fader into its foot, and no further than the window's edge.
     for (let i = 1; i <= 20 && back === null; i++) {
-      await p2.mouse.move(at.x, at.y + 2 + i * 8);
+      await p2.mouse.move(at.x, Math.min(at.y + 2 + i * 8, 990));
       await sleep(20);
     }
     const draggedTo = Number(await value(p2, lead));
@@ -364,8 +373,9 @@ async function withPlugins() {
     // fades out, holds, and resumes where it was), the top bar says so, and the file is written.
     // The export resets the plugins' voices, its stated cost: from the start the chord sounds again.
     const exports = `${root}/home/Music/music2/Exports`;
-    const note = () => p2.evaluate(() => document.querySelector('[data-testid="engine-note"]')?.textContent ?? null);
-    // The lead back at its own level (the drag above left it near -60 dB), so the checks below hear
+    // What the engine is busy with is a state of the top bar's status pill (taste ST-1): its title lists every state.
+    const note = () => p2.evaluate(() => document.querySelector("[data-status]")?.title ?? null);
+    // The lead back at its own level (the drag above left it at the fader's foot), so the checks below hear
     // the chord well above silence.
     const dragged = fs.readFileSync(`${dir}/song.ts`, "utf8");
     await putFile(s2, "song.ts", dragged, song0);
@@ -383,10 +393,10 @@ async function withPlugins() {
       const status = await api2("graph/status");
       if (status.paused !== "exporting") break;
       seen.push({ frame, beat: status.beat });
-      noted ||= (await note()) === "Paused for export";
+      noted ||= ((await note()) ?? "").split(" · ").includes("Paused for export");
       await sleep(20);
     }
-    check(noted, "the top bar says Paused for export");
+    check(noted, "the top bar's status pill says Paused for export");
     // In 25 ms windows, from 50 ms in (the 5 ms fade out, and the hold's callback) to 50 ms short of
     // the last frame seen holding, so a short pause is judged too.
     const held = levels(heldFrom + 2400, (seen.at(-1)?.frame ?? heldFrom) - 2400, 1200);

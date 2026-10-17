@@ -44,6 +44,7 @@ pub mod lease;
 pub mod meters;
 pub mod overlay;
 mod preview;
+mod view_file;
 mod watcher;
 
 use std::collections::{HashMap, VecDeque};
@@ -126,12 +127,17 @@ struct Device {
 }
 
 /// Whether the player is playing, and where: in seconds, and in beats (0 with no project open);
-/// and the loop.
+/// the tempo it plays there; and the loop.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub struct Status {
     pub playing: bool,
     pub seconds: f64,
     pub beat: f64,
+    /// The tempo at `beat` of the revision the engine plays, which the page's playhead moves at.
+    /// A tempo edit reaches it at the switch (RENDER-27), not when it is accepted: the timeline
+    /// says the new tempo before then, and during an export's hold until it ends. None with no
+    /// player.
+    pub bpm: Option<f64>,
     /// None until a loop is set; its range is kept while it is off.
     #[serde(rename = "loop")]
     pub looping: Option<Loop>,
@@ -224,7 +230,7 @@ struct Shown {
 /// note of the song's (the G11 fix's A.8).
 #[derive(Default)]
 pub(crate) struct Timeline {
-    /// `tempo`, `meter` and `end`.
+    /// `tempo`, `meter`, `home` and `end`.
     head: serde_json::Map<String, Value>,
     tracks: Vec<TimelineRow>,
 }
@@ -380,6 +386,22 @@ struct Inner {
     /// Tests: what an export of this project does inside its window, and whether it holds.
     #[cfg(test)]
     export_hooks: Arc<crate::export::Hooks>,
+    /// `layout.json`'s stamp as the watcher last saw it, by project token, and whether a change
+    /// waits to be published: no snapshot holds it (PLANE-3), so it is watched on its own.
+    layout: Mutex<LayoutSeen>,
+}
+
+/// A delete that waits: whether it is blocked, and the code that reads the track.
+type Waits = (bool, Vec<m2_editor::Dependent>);
+
+/// What the watcher last saw of `layout.json`.
+#[derive(Default)]
+struct LayoutSeen {
+    token: u64,
+    stamp: Option<(u64, std::time::SystemTime)>,
+    changed: bool,
+    /// How many times it was stat'd, for tests.
+    looks: u64,
 }
 
 /// How long closing waits for the session's plugin instances to be destroyed.
@@ -438,11 +460,16 @@ fn retire(player: Player) {
 /// Refuse a loop the engine couldn't play: one that isn't from a beat to a later one, at or after
 /// 0, or is shorter than two blocks or 5 ms at the project's rate (RENDER-9a).
 fn check_loop(t: &Timing, start: f64, end: f64) -> Result<()> {
+    loop_fits(&t.tempo, t.rate, start, end)
+}
+
+/// [`check_loop`] in the tempo map `tempo`, at `rate`.
+fn loop_fits(tempo: &TempoMap, rate: u32, start: f64, end: f64) -> Result<()> {
     if !(start.is_finite() && end.is_finite() && 0.0 <= start && start < end) {
         bail!("a loop goes from a beat to a later one, from beat 0 on (not {start} to {end})");
     }
-    let rate = t.rate as f64;
-    let frames = frame_of(&t.tempo, end, rate).saturating_sub(frame_of(&t.tempo, start, rate));
+    let rate = rate as f64;
+    let frames = frame_of(tempo, end, rate).saturating_sub(frame_of(tempo, start, rate));
     let least = Transport::min_loop(rate);
     if frames < least {
         bail!(
@@ -494,14 +521,24 @@ impl Inner {
             walk_only: AtomicBool::default(),
             #[cfg(test)]
             export_hooks: Arc::default(),
+            layout: Mutex::default(),
         }
     }
 
     /// One tick of the watcher, up to the batch that settled in it, if one did, for the actor to
-    /// take in.
-    fn tick(&self) -> Option<(u64, watcher::Ready)> {
+    /// take in; and whether to look at `layout.json` (FMT-19).
+    fn tick(&self) -> (Option<(u64, watcher::Ready)>, bool) {
         let _one = self.ticking.lock();
-        let plan = self.watch.lock().as_mut().and_then(|w| w.plan(Instant::now()))?;
+        let (plan, layout) = match self.watch.lock().as_mut() {
+            Some(w) => (w.plan(Instant::now()), w.look_at_layout()),
+            None => (None, false),
+        };
+        let Some(plan) = plan else { return (None, layout) };
+        (self.looked(plan), layout)
+    }
+
+    /// Look at what a tick planned, with no lock held, and apply it.
+    fn looked(&self, plan: watcher::Plan) -> Option<(u64, watcher::Ready)> {
         // With no lock held: the actor tells the watcher what the session wrote after every job,
         // and must never wait for a walk.
         let looked = plan.look();
@@ -558,7 +595,7 @@ impl Inner {
         };
         // A tempo change that makes the loop too short turns it off (RENDER-9a).
         let looping = t.range.map(|(start, end)| Loop { start, end, on: t.on && !d.player.loop_refused() });
-        Status { playing: s.playing, seconds, beat, looping }
+        Status { playing: s.playing, seconds, beat, bpm: Some(t.tempo.bpm_at(beat)), looping }
     }
 
     fn activity(&self) -> Activity {
@@ -600,6 +637,7 @@ impl Inner {
         state["playing"] = json!(status.playing);
         state["seconds"] = json!(status.seconds);
         state["beat"] = json!(status.beat);
+        state["bpm"] = json!(status.bpm);
         state["loop"] = json!(status.looping);
         self.activity().put(&mut state);
         state["leases"] = json!(leases);
@@ -740,7 +778,13 @@ impl Graph {
 
     pub fn open(&self, dir: &Path) -> Result<Value> {
         let dir = dir.to_path_buf();
-        self.call(move |a| a.open(&dir))
+        let opened = self.call(move |a| a.open(&dir))?;
+        // The loop it had when it was last open here (design-8b §2.2), set before anything plays.
+        // One the song's tempo makes too short now is left off.
+        match self.dir().and_then(|d| view_file::looped(&d)) {
+            Some((range, on)) if self.set_loop(Some(range), Some(on)).is_ok() => self.inner.state().context("no project is open"),
+            _ => Ok(opened),
+        }
     }
 
     /// Close the project. Returns once its plugin instances are destroyed, or after 2 s.
@@ -922,6 +966,13 @@ impl Graph {
         player.transport(Cmd::Loop(range.filter(|_| on)))?;
         if let Some(t) = self.inner.timing.lock().as_mut() {
             (t.range, t.on) = (range, on);
+        }
+        // Kept for the next time the song opens, in this machine's `.music2/view.json`: never a Tx
+        // (design-8b §2.2). A read-only window keeps it in memory only.
+        if let (Some((start, end)), Some(dir), None) = (range, self.dir(), self.read_only())
+            && let Err(e) = view_file::write(&dir, "loop", json!({"start": start, "end": end, "on": on}))
+        {
+            eprintln!("music2: couldn't keep the loop in .music2/view.json: {e:#}");
         }
         Ok(self.status())
     }
@@ -1317,6 +1368,161 @@ impl Graph {
         })
     }
 
+    /// Add a track playing instrument `component` (`std:synth-pluck`), named `label` (else the
+    /// instrument's), keyed `key` (else proposed from the label), below track `after` (WRITE-10).
+    /// The answer names the track: `module` and `label`.
+    pub fn add_track(&self, token: u64, component: &str, label: Option<String>, key: Option<String>, after: Option<String>) -> Result<Value> {
+        let component = component.to_string();
+        let added = self.call(move |a| {
+            a.edit_and(token, |s| {
+                let made = s.add_track(&component, label.as_deref(), key.as_deref(), after.as_deref())?;
+                Ok((made.edited, json!({"module": made.module, "label": made.label})))
+            })
+        })?;
+        self.forget_made(&added);
+        Ok(added)
+    }
+
+    /// A track just made under a key a gone track's mute or solo was kept for starts heard (Q7).
+    fn forget_made(&self, made: &Value) {
+        if let Some(k) = made["module"].as_str() {
+            self.forget_overlays(&[k.to_string()]);
+        }
+    }
+
+    /// A mixer channel's first pan (design-8b §5.3): write optional control `control` (`pan`) of
+    /// channel `channel` as `value` into its entry. The answer names the new knob: `control`, its id
+    /// in the revision the answer gives, which the drag's lease then names.
+    pub fn mix_insert(&self, token: u64, channel: &str, control: &str, value: f64) -> Result<Value> {
+        let (channel, control) = (channel.to_string(), control.to_string());
+        self.call(move |a| {
+            a.edit_and(token, |s| {
+                let done = s.mix_insert(&channel, &control, value)?;
+                Ok((done.edited, json!({"control": done.control})))
+            })
+        })
+    }
+
+    /// Duplicate track `module`: its code, data and channel, below it in its colour.
+    pub fn duplicate_track(&self, token: u64, module: &str) -> Result<Value> {
+        let module = module.to_string();
+        let copy = self.call(move |a| {
+            a.edit_and(token, |s| {
+                let made = s.duplicate_track(&module)?;
+                Ok((made.edited, json!({"module": made.module, "label": made.label, "new_channel": made.new_channel})))
+            })
+        })?;
+        self.forget_made(&copy);
+        Ok(copy)
+    }
+
+    /// Delete track `module`. The status the route answers: 200 when done (with the calls taken
+    /// out with it), or 409 with the dependents when other code reads it: `blocked` when that can't
+    /// be taken out from here, else they go with `cascade`.
+    pub fn delete_track(&self, token: u64, module: &str, cascade: bool) -> Result<(u16, Value)> {
+        let gone = module.to_string();
+        let module = module.to_string();
+        // What a delete that waits found, kept beside the edit, which wrote nothing.
+        let waits: Arc<Mutex<Option<Waits>>> = Arc::default();
+        let found = waits.clone();
+        let done = self.call(move |a| {
+            a.edit_and(token, |s| match s.delete_track(&module, cascade)? {
+                m2_editor::Deleted::Done { edited, excised } => Ok((edited, json!({"excised": excised}))),
+                m2_editor::Deleted::Asks(d) => {
+                    *found.lock() = Some((false, d));
+                    Err(m2_editor::EditError::Rejected("other tracks read it".into()))
+                }
+                m2_editor::Deleted::Blocked(d) => {
+                    *found.lock() = Some((true, d));
+                    Err(m2_editor::EditError::Rejected("other code reads it".into()))
+                }
+            })
+        });
+        if let Some((blocked, deps)) = waits.lock().take() {
+            let error = match blocked {
+                true => "other code reads this track in a way that can't be taken out from here: change it in code",
+                false => "other tracks read this track: delete again with cascade to take those reads out too",
+            };
+            return Ok((409, json!({"error": error, "blocked": blocked, "dependents": deps})));
+        }
+        let done = done?;
+        // Its mute and solo go with it (Q7): undone, it comes back heard.
+        self.forget_overlays(&[gone]);
+        Ok((200, done))
+    }
+
+    /// A layout write (FMT-19): the tracks' new `order`, one track's `colour`, or with `reset` the
+    /// defaults over a file that doesn't read. No revision (PLANE-3); one undo step.
+    pub fn layout(&self, token: u64, order: Option<Vec<String>>, colour: Option<(String, String)>, reset: bool) -> Result<Value> {
+        self.edit(token, move |s| match (order, colour, reset) {
+            (_, _, true) => m2_editor::layout::reset(s),
+            (Some(order), None, false) => s.reorder(&order),
+            (None, Some((module, colour)), false) => s.recolour(&module, &colour),
+            _ => Err(m2_editor::EditError::Rejected("a layout write is an order, a colour or a reset".into())),
+        })
+    }
+
+    /// The song bar's tempo (design-8b §4.1): the tempo in effect at beat `at` (the playhead's) set
+    /// to `bpm`; with `add`, a change at `at`; with `remove`, the change at `at` taken out, and with
+    /// `meter` too the time signature change there, in the same step. One undo step. When the loop was on and the new tempo makes it too short to play, the engine turns it
+    /// off (RENDER-9a) and the answer says `loop_off`.
+    pub fn tempo(&self, token: u64, at: f64, bpm: Option<f64>, add: bool, remove: bool, meter: bool) -> Result<Value> {
+        let looped = self.inner.timing.lock().as_ref().and_then(|t| t.range.filter(|_| t.on));
+        // The tempo map the edit made, to judge the loop in: the engine plays it from the switch,
+        // which an export's hold puts off, so the timing's map may still be the one before.
+        let made: Arc<Mutex<Option<(TempoMap, u32)>>> = Arc::default();
+        let kept = made.clone();
+        let mut v = self.edit(token, move |s| {
+            let edited = match (bpm, add, remove) {
+                (_, _, true) if meter => m2_editor::song::remove_changes(s, at),
+                (_, _, true) => m2_editor::song::remove_tempo(s, at),
+                (Some(bpm), true, false) => m2_editor::song::tempo_change(s, at, bpm),
+                (Some(bpm), false, false) => m2_editor::song::tempo(s, at, bpm),
+                (None, _, false) => Err(m2_editor::EditError::Rejected("a tempo needs its BPM".into())),
+            }?;
+            let rev = s.accepted();
+            *kept.lock() = Some((rev.tempo(), rev.project.sample_rate()));
+            Ok(edited)
+        })?;
+        if let (Some((start, end)), Some((tempo, rate))) = (looped, made.lock().take()) {
+            let short = loop_fits(&tempo, rate, start, end).is_err();
+            let mut timing = self.inner.timing.lock();
+            if let Some(t) = timing.as_mut().filter(|_| short) {
+                // Off here too, as the engine has it: C turns it on again, if it can play.
+                t.on = false;
+            }
+            v["loop_off"] = json!(short);
+        }
+        Ok(v)
+    }
+
+    /// The song bar's time signature: the one in effect at beat `at` set to `beats`/`unit`; with
+    /// `add`, a change on the bar line at or before `at`; with `remove`, the change at `at` taken out.
+    pub fn meter(&self, token: u64, at: f64, beats: Option<u32>, unit: Option<u32>, add: bool, remove: bool) -> Result<Value> {
+        self.edit(token, move |s| match (beats.zip(unit), add, remove) {
+            (_, _, true) => m2_editor::song::remove_meter(s, at),
+            (Some((beats, unit)), true, false) => m2_editor::song::meter_change(s, at, beats, unit),
+            (Some((beats, unit)), false, false) => m2_editor::song::meter(s, at, beats, unit),
+            (None, _, false) => Err(m2_editor::EditError::Rejected("a time signature needs its beats and unit".into())),
+        })
+    }
+
+    /// Call the song `name`: its manifest's `[project] name`, verified to change nothing that plays.
+    pub fn title(&self, token: u64, name: &str) -> Result<Value> {
+        let name = name.to_string();
+        self.edit(token, move |s| m2_editor::song::title(s, &name))
+    }
+
+    /// Stop all sound (⌘., RENDER-10): every note off and every instance reset, at the next block.
+    /// It never waits for the session, and changes nothing in it. With no player there is no
+    /// sound, so it does nothing: it never opens the audio device.
+    pub fn panic(&self) -> Result<()> {
+        if let Some(d) = self.inner.current_device() {
+            d.player.panic()?;
+        }
+        Ok(())
+    }
+
     /// Apply a fix a problem offers, as the problem carried it (`{code, title, likely, tx}`):
     /// committing its Tx (DIAG-1), which its bases guard. Undo takes it back.
     pub fn fix(&self, token: u64, fix: &Value) -> Result<Value> {
@@ -1377,16 +1583,66 @@ impl Graph {
         Ok(())
     }
 
+    /// Stop, and go back to `to`, where play started (taste.md §5.1): the stop, then a seek, sent
+    /// together, so the status says it stopped there at once ([`Player::status`] reports both as
+    /// done until the audio thread takes them). Answers where it stopped, for ⇧Space to continue
+    /// from: where playback was as the stop was sent, a block before it took it at most. Never
+    /// waits for an edit (RENDER-29).
+    pub fn stop_to(&self, to: f64) -> Result<f64> {
+        if !to.is_finite() {
+            bail!("can't go back to beat {to}");
+        }
+        let at = self.status().beat;
+        self.transport("stop")?;
+        self.seek(to)?;
+        Ok(at)
+    }
+
     /// One tick of the watcher (WRITE-19): what file system events named, or a stat walk of the
     /// open project (see [`watcher`]), fed to the settle rule. A batch that settled (no tracked file
     /// changed for 150 ms, each the same on two polls, git not writing) is read once and taken in
     /// whole. Returns whether clients should refresh. The server's watcher calls it every 50 ms.
     pub fn watch(&self) -> bool {
-        let Some((token, ready)) = self.inner.tick() else { return false };
-        self.call(move |a| Ok(a.settled(token, ready))).unwrap_or_else(|e| {
+        let (ticked, layout) = self.inner.tick();
+        let relayout = self.layout_moved(layout);
+        let Some((token, ready)) = ticked else { return relayout && self.republish() };
+        let settled = self.call(move |a| Ok(a.settled(token, ready))).unwrap_or_else(|e| {
             eprintln!("music2: {e:#}");
             false
-        })
+        });
+        settled || (relayout && self.republish())
+    }
+
+    /// Whether `layout.json` changed and has held still since the last look (FMT-19): its size and
+    /// time, compared when the tick says to `look` (every tick of a walk; with events, when one named
+    /// it or the tick walked everything) and on every tick while a change waits to hold still, so an
+    /// outside edit (an agent, git) shows within two ticks of its event, and an idle project is
+    /// watched with no stat (WRITE-19).
+    fn layout_moved(&self, look: bool) -> bool {
+        let Some((token, dir)) = self.inner.control.lock().open.as_ref().map(|p| (p.engine.token, p.shown.dir.clone())) else { return false };
+        {
+            let seen = self.inner.layout.lock();
+            if seen.token == token && !look && !seen.changed {
+                return false;
+            }
+        }
+        let stamp = std::fs::metadata(dir.join(m2_song::path::LAYOUT)).ok().map(|m| (m.len(), m.modified().unwrap_or(std::time::UNIX_EPOCH)));
+        let mut seen = self.inner.layout.lock();
+        seen.looks += 1;
+        if seen.token != token {
+            *seen = LayoutSeen { token, stamp, changed: false, looks: seen.looks };
+            return false;
+        }
+        if seen.stamp != stamp {
+            (seen.stamp, seen.changed) = (stamp, true);
+            return false;
+        }
+        std::mem::take(&mut seen.changed)
+    }
+
+    /// Publish the view again with no revision: the layout changed (PLANE-3).
+    fn republish(&self) -> bool {
+        self.call(|a| Ok(a.republish())).unwrap_or(false)
     }
 
     /// Wait for the watcher's next tick: `most` at most, less when an event names a path while no
@@ -1495,6 +1751,8 @@ impl Graph {
     }
 }
 
+#[cfg(test)]
+mod forget_tests;
 #[cfg(test)]
 mod preview_tests;
 #[cfg(test)]

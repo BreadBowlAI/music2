@@ -642,13 +642,13 @@ fn seeking_keeps_playing_or_stopped_and_status_counts_beats_in_the_tempo() {
     assert_eq!(state["timeline"]["tempo"], json!([{"beat": 0.0, "bpm": 120.0}, {"beat": 4.0, "bpm": 60.0}]));
     assert_eq!((&state["timeline"]["end"], &state["beat"]), (&json!(4.0), &json!(0.0)));
 
-    // Stopped, the position moves at once and stays there.
-    let stopped = |seconds, beat| Status { playing: false, seconds, beat, looping: None };
+    // Stopped, the position moves at once and stays there, with the tempo there.
+    let stopped = |seconds, beat, bpm| Status { playing: false, seconds, beat, bpm: Some(bpm), looping: None };
     graph.seek(2.0).unwrap();
-    assert_eq!(graph.status(), stopped(1.0, 2.0), "at 120 bpm, 1 second is 2 beats");
+    assert_eq!(graph.status(), stopped(1.0, 2.0, 120.0), "at 120 bpm, 1 second is 2 beats");
     graph.seek(8.0).unwrap();
     std::thread::sleep(Duration::from_millis(30));
-    assert_eq!(graph.status(), stopped(6.0, 8.0), "then 4 beats at 60 bpm");
+    assert_eq!(graph.status(), stopped(6.0, 8.0, 60.0), "then 4 beats at 60 bpm");
     graph.seek(-3.0).unwrap();
     assert_eq!(graph.status().beat, 0.0);
     assert!(graph.seek(f64::NAN).is_err());
@@ -663,12 +663,12 @@ fn seeking_keeps_playing_or_stopped_and_status_counts_beats_in_the_tempo() {
     eventually("it stops", || !graph.status().playing);
     graph.seek(1.0).unwrap();
     std::thread::sleep(Duration::from_millis(30));
-    assert_eq!(graph.status(), stopped(0.5, 1.0));
+    assert_eq!(graph.status(), stopped(0.5, 1.0, 120.0));
 
     // RENDER-8: a seek replays nothing, so one far past the song lands there at once.
     let t = Instant::now();
     graph.seek(4.0 + 2000.0).unwrap();
-    eventually("it lands far past the song", || graph.status() == stopped(2002.0, 2004.0));
+    eventually("it lands far past the song", || graph.status() == stopped(2002.0, 2004.0, 60.0));
     assert!(t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
 
     let closed = Graph::silent();
@@ -690,7 +690,7 @@ fn the_engine_runs_at_the_projects_rate() {
     let p = player(&graph);
     eventually("the seek lands", || p.status().pending.is_none());
     assert_eq!((p.device_rate, p.rate(), p.status().pos), (48_000, 44_100, 44_100));
-    let at = Status { playing: false, seconds: 1.0, beat: 2.0, looping: None };
+    let at = Status { playing: false, seconds: 1.0, beat: 2.0, bpm: Some(120.0), looping: None };
     assert_eq!(graph.status(), at, "at 120 bpm, 2 beats are 1 second");
     // A manifest edit to the rate plays on from the same beat, in a fresh engine at the new rate.
     std::fs::write(fixture.0.join("music2.toml"), MANIFEST.replace("48000", "96000")).unwrap();
@@ -1084,7 +1084,13 @@ fn stopping_freezes_the_transport_and_the_engine_runs_on() {
     graph.transport("play").unwrap();
     eventually("it plays", || graph.status().beat > 0.5);
     graph.transport("toggle").unwrap();
-    eventually("it stops", || !graph.status().playing);
+    // Stopped at once in the status; the engine takes it at its next block, and stays there.
+    assert!(!graph.status().playing, "a stop sent is what the status says");
+    eventually("the engine takes it", || {
+        let beat = graph.status().beat;
+        std::thread::sleep(Duration::from_millis(20));
+        graph.status().beat == beat
+    });
     let (beat, p) = (graph.status().beat, player(&graph));
     let clock = p.clock();
     std::thread::sleep(Duration::from_millis(100));
@@ -1094,7 +1100,8 @@ fn stopping_freezes_the_transport_and_the_engine_runs_on() {
 }
 
 // RENDER-9a: a loop is beats of the accepted revision, refused when the engine couldn't play it;
-// its range is kept while it is off, and playback wraps inside it. A project opened anew has none.
+// its range is kept while it is off, and playback wraps inside it. A project opened for the first
+// time has none; opened again, it has the one it had (design-8b §2.2).
 #[test]
 fn the_loop_is_checked_kept_while_off_and_played() {
     let fixture = Fixture::new();
@@ -1125,7 +1132,134 @@ fn the_loop_is_checked_kept_while_off_and_played() {
     }
     assert!(wrapped, "it went round");
     graph.open(&fixture.0).unwrap();
-    assert_eq!(graph.status().looping, None);
+    assert_eq!(graph.status().looping, on(4.0, 5.0, true));
+}
+
+// design-8b §2.2, §4.3: the loop is kept in `.music2/view.json`, local and never a Tx or an undo
+// step: opened again, by this server or the next, it is where it was, on or off. Entries the file
+// has that this version doesn't know are kept; a read-only window keeps its loop in memory only.
+#[test]
+fn the_loop_range_survives_reopening() {
+    let fixture = Fixture::new();
+    let graph = fixture.open();
+    graph.set_loop(Some((8.0, 16.0)), Some(false)).unwrap();
+    let file = fixture.0.join(".music2/view.json");
+    let read = || serde_json::from_str::<Value>(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    let mut kept = read();
+    assert_eq!(kept["loop"], json!({"start": 8.0, "end": 16.0, "on": false}));
+    assert_eq!(graph.state().unwrap()["can_undo"], json!(false), "not an undo step");
+    kept["zoom"] = json!(24);
+    std::fs::write(&file, kept.to_string()).unwrap();
+    graph.close();
+    drop(graph);
+    let graph = fixture.open();
+    assert_eq!(graph.status().looping, Some(Loop { start: 8.0, end: 16.0, on: false }));
+    assert_eq!(graph.state().unwrap()["loop"], json!({"start": 8.0, "end": 16.0, "on": false}));
+    graph.set_loop(None, Some(true)).unwrap();
+    assert_eq!((&read()["loop"]["on"], &read()["zoom"]), (&json!(true), &json!(24)));
+    // Another window, read-only while this one writes: its loop isn't kept.
+    let other = Graph::silent();
+    assert!(!other.open(&fixture.0).unwrap()["read_only"].is_null());
+    assert_eq!(other.status().looping, Some(Loop { start: 8.0, end: 16.0, on: true }), "it opens with the loop kept");
+    other.set_loop(Some((1.0, 2.0)), None).unwrap();
+    assert_eq!(read()["loop"], json!({"start": 8.0, "end": 16.0, "on": true}));
+}
+
+// RENDER-9a, design-8b §4.1: a tempo change that makes the loop too short to play turns it off,
+// and the answer says so (the toast's "Loop turned off"); its range is kept. One that leaves it
+// long enough doesn't, and with the loop off nothing is said of it.
+#[test]
+fn a_tempo_too_fast_for_the_loop_turns_it_off() {
+    let fixture = Fixture::new();
+    let graph = fixture.open();
+    let token = graph.state().unwrap()["session"].as_u64().unwrap();
+    // 0.012 beats: 6 ms at 120 BPM, just over the shortest loop at 48 kHz (two blocks, 256 frames).
+    graph.set_loop(Some((0.0, 0.012)), None).unwrap();
+    let v = graph.tempo(token, 0.0, Some(121.0), false, false, false).unwrap();
+    assert_eq!((&v["loop_off"], &v["before"], &v["after"]), (&json!(false), &json!("120 BPM"), &json!("121 BPM")));
+    assert_eq!(graph.status().looping, Some(Loop { start: 0.0, end: 0.012, on: true }));
+    let v = graph.tempo(token, 0.0, Some(240.0), false, false, false).unwrap();
+    assert_eq!(v["loop_off"], json!(true));
+    assert_eq!(graph.status().looping, Some(Loop { start: 0.0, end: 0.012, on: false }));
+    let v = graph.tempo(token, 0.0, Some(250.0), false, false, false).unwrap();
+    assert!(v.get("loop_off").is_none(), "{v}");
+    assert!(graph.set_loop(None, Some(true)).is_err(), "too short to turn on again at 250 BPM");
+}
+
+// taste.md §5.1, design-8b §4.3: Stop with `to` (the song bar's Space) stops and goes back to where
+// play started, and answers where it stopped, for ⇧Space to continue from. The status says it
+// stopped there at once, so no read after it sees it play on from there, or still where it
+// stopped: the stop and the seek are both reported as done until the engine takes them. The beat
+// it answers is where playback was as the stop was sent, a block before the engine took it at most.
+#[test]
+fn stop_with_to_goes_back_and_answers_where_it_stopped() {
+    let fixture = Fixture::new();
+    let graph = fixture.open();
+    graph.seek(2.0).unwrap();
+    graph.transport("play").unwrap();
+    eventually("it plays past beat 3", || graph.status().beat > 3.0);
+    let before = graph.status().beat;
+    let at = graph.stop_to(2.0).unwrap();
+    let s = graph.status();
+    assert_eq!((s.playing, s.beat), (false, 2.0), "stopped back where play started, at once");
+    // A block of 256 frames at 120 BPM and 48 kHz is 0.011 beats.
+    assert!(at >= before && at < before + 0.25, "where it stopped: {at} (it was at {before})");
+    eventually("the engine took both", || player(&graph).status().pending.is_none());
+    std::thread::sleep(Duration::from_millis(50));
+    let s = graph.status();
+    assert!(!s.playing && (s.beat - 2.0).abs() < 1e-6, "and stays there: {s:?}");
+    // ⇧Space: on from where it stopped.
+    graph.seek(at).unwrap();
+    graph.transport("play").unwrap();
+    eventually("it plays on from there", || graph.status().beat > at + 0.1);
+    assert!(graph.stop_to(f64::NAN).is_err());
+}
+
+/// A bass holding one note for 16 bars.
+const HELD: &str = "import { song, track } from '@m2/core';\nimport { bass } from 'std/instruments';\n\
+                    const b = track('bass', ({ lane }) => bass(lane.notes('notes')));\nexport default song(() => b.out);\n";
+
+// RENDER-10, design-8b §4.3: Stop all sound ends a note held in the middle of its clip and resets
+// every instance, and nothing plays the note again (the next block seeks without chasing,
+// RENDER-11); the transport plays on. It answers while the session is busy, and changes nothing
+// in it. With no player it opens none.
+#[test]
+fn panic_ends_every_note_and_never_touches_the_session() {
+    let fixture = Fixture::new();
+    fixture.put("song.ts", HELD);
+    let clips: Vec<NoteClip> =
+        serde_json::from_value(json!([{"id": "a", "start": 0, "length": 64, "notes": [{"pitch": "C2", "start": 0, "length": 64}]}])).unwrap();
+    fixture.put("data/bass/notes.json", &m2_song::canonical(&m2_song::LaneData::Notes(clips)));
+    let (p, mut driver) = Player::driven(48_000);
+    let graph = Graph::with_player(p);
+    graph.open(&fixture.0).unwrap();
+    graph.transport("play").unwrap();
+    // The loudest sample of `n` blocks.
+    let mut loudest = |n: usize| {
+        let mut most = 0f32;
+        for _ in 0..n {
+            let mut buf = [0.0f32; 256];
+            driver.fill(&mut buf, 2);
+            drop(driver.drain_retired());
+            most = buf.iter().fold(most, |m, x| m.max(x.abs()));
+        }
+        most
+    };
+    assert!(loudest(40) > 0.01, "the note sounds");
+    let before = (graph.state().unwrap(), fixture.read("song.ts"), fixture.read("data/bass/notes.json"));
+    let held = graph.hold();
+    graph.panic().unwrap();
+    drop(held);
+    loudest(8);
+    assert!(loudest(40) < 1e-4, "silent: the note ended, and nothing played it again");
+    assert!(graph.status().playing, "the transport plays on");
+    let after = graph.state().unwrap();
+    assert_eq!((&after["view"]["revision"], &after["can_undo"]), (&before.0["view"]["revision"], &json!(false)));
+    assert_eq!((fixture.read("song.ts"), fixture.read("data/bass/notes.json")), (before.1, before.2));
+    // With no player (nothing played yet, or a device let go), it does nothing and opens none.
+    let idle = Graph::default();
+    idle.panic().unwrap();
+    assert!(idle.inner.current_device().is_none(), "no audio device opened to stop nothing");
 }
 
 // RENDER-29: seek, the loop and play never wait for the session, which an edit holds while it
@@ -1188,7 +1322,7 @@ fn a_stalled_player_is_replaced_and_the_project_plays_on_where_it_was() {
     assert!(t.elapsed() < Duration::from_secs(5), "a send gives up: {:?}", t.elapsed());
     assert!(graph.transport("play").is_err(), "the stalled player is let go");
     assert!(graph.poll(), "a new one plays the project");
-    eventually("where it was", || graph.status() == Status { playing: false, seconds: 1.5, beat: 3.0, looping: None });
+    eventually("where it was", || graph.status() == Status { playing: false, seconds: 1.5, beat: 3.0, bpm: Some(120.0), looping: None });
     assert_eq!(player(&graph).device, "none");
     drop(driver);
 }
@@ -3161,6 +3295,77 @@ fn a_note_held_across_an_export_that_fails_at_once_plays_again() {
     assert!(ex.state.graph.status().playing && ex.engine().crashes() == 0, "playback goes on");
 }
 
+/// The loudest sample of the next `n` blocks the device takes.
+fn loudest(ex: &mut Ex, n: usize) -> f32 {
+    let mut most = 0f32;
+    for _ in 0..n {
+        let mut buf = [0.0f32; 256];
+        ex.driver.fill(&mut buf, 2);
+        drop(ex.driver.drain_retired());
+        most = buf.iter().fold(most, |m, x| m.max(x.abs()));
+    }
+    most
+}
+
+// RENDER-10, RENDER-1 (the plan's risk 16, design-8b §4.3): Stop All Sound (⌘.) while an export
+// holds playback waits for the resume, and applies after the plugins the export lent are told to
+// start again the notes the song holds (O4): it wins, so nothing sounds after the export, and
+// playback goes on. The negative control: an export with no Stop All Sound gives the notes back.
+#[test]
+fn stop_all_sound_during_an_export_stays_silent_after_it() {
+    let mut ex = Ex::tagged("panicked");
+    ex.fill(4);
+    let stats = m2_plugins::probe::stats(ex.handles()[0]).unwrap();
+    assert_eq!(stats.sounding.load(Ordering::Relaxed), 2, "its two long notes sound");
+    assert!(loudest(&mut ex, 8) > 0.1, "and are heard");
+    crate::export::start(&ex.state, Some(ex.fixture.0.join("one.wav"))).unwrap();
+    ex.fill_until("the first export is done", |ex| !ex.state.exports.running());
+    ex.fill(4);
+    assert_eq!(stats.sounding.load(Ordering::Relaxed), 2, "with no Stop All Sound, they play again after an export");
+
+    let (go, there) = ex.stop_inside();
+    crate::export::start(&ex.state, Some(ex.fixture.0.join("two.wav"))).unwrap();
+    ex.fill_until("the export took the instance", |_| there.try_recv().is_ok());
+    ex.state.graph.panic().unwrap();
+    ex.fill(4);
+    go.send(()).unwrap();
+    ex.fill_until("the second export is done", |ex| !ex.state.exports.running());
+    ex.fill(4);
+    assert_eq!(stats.sounding.load(Ordering::Relaxed), 0, "Stop All Sound wins: no note plays again");
+    assert!(loudest(&mut ex, 40) < 1e-4, "silent after the export");
+    assert!(ex.state.graph.status().playing && ex.engine().crashes() == 0, "playback goes on");
+}
+
+// The playhead's tempo (the attack's "the playhead after a tempo edit"): the status says the tempo
+// the engine plays, which a tempo edit reaches at its switch. While an export holds playback the
+// edit is accepted and the timeline says it, but the engine plays the tempo before until the export
+// is done: a playhead moved at the timeline's would run ahead, then jump back at every poll.
+// RENDER-9a, design-8b §4.1 (the attack's break 23): the loop is judged in the tempo the edit made,
+// so the answer says "loop turned off" during the hold too, though the engine turns it off only at
+// the switch. Before, it was judged in the tempo the engine played then, and nothing was said.
+#[test]
+fn during_an_export_a_tempo_edit_turns_the_loop_off_and_the_playhead_keeps_the_tempo_heard() {
+    let mut ex = Ex::new();
+    let token = ex.state.graph.state().unwrap()["session"].as_u64().unwrap();
+    assert_eq!(ex.state.graph.status().bpm, Some(120.0));
+    // 0.012 beats: 6 ms at 120 BPM, just over the shortest loop at 48 kHz.
+    ex.state.graph.set_loop(Some((32.0, 32.012)), None).unwrap();
+    let (go, there) = ex.stop_inside();
+    crate::export::start(&ex.state, Some(ex.fixture.0.join("out.wav"))).unwrap();
+    ex.fill_until("the export took the instance", |_| there.try_recv().is_ok());
+    let graph = &ex.state.graph;
+    let v = graph.tempo(token, 0.0, Some(240.0), false, false, false).unwrap();
+    assert_eq!((&v["loop_off"], &v["after"]), (&json!(true), &json!("240 BPM")), "{v}");
+    assert_eq!(graph.status().looping, Some(Loop { start: 32.0, end: 32.012, on: false }));
+    assert_eq!(graph.state().unwrap()["timeline"]["tempo"], json!([{"beat": 0.0, "bpm": 240.0}]), "accepted");
+    assert_eq!(graph.status().bpm, Some(120.0), "the engine plays the tempo before until the export is done");
+    go.send(()).unwrap();
+    ex.fill_until("the export is done", |ex| !ex.state.exports.running());
+    ex.fill_until("the tempo edit plays", |ex| ex.state.graph.status().bpm == Some(240.0));
+    ex.fill(4);
+    assert_eq!(ex.state.graph.status().looping, Some(Loop { start: 32.0, end: 32.012, on: false }), "off, as it was said");
+}
+
 // HOST-5: a plugin that fails at every call is started again from its saved settings once. When
 // the new instance fails too, soon after, it is left silent and the user is told once; the song
 // plays on, and no new instance is made for it every 300 ms. One whose new instance failed long
@@ -3322,4 +3527,441 @@ fn playback_the_device_stopped_is_said() {
         }
         assert_eq!(dc.graph.inspect(|a| a.open.as_ref().unwrap().plays.as_ref().unwrap().epoch), 1, "{kind:?}");
     }
+}
+
+/// first-song, mixed, as a project to add and delete tracks in.
+fn mixed(fixture: &Fixture) {
+    let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song");
+    let mut stack = vec![from.clone()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else {
+                fixture.put(p.strip_prefix(&from).unwrap().to_str().unwrap(), &std::fs::read_to_string(&p).unwrap());
+            }
+        }
+    }
+}
+
+/// The timeline's tracks, top to bottom, with their colours.
+fn rows(graph: &Graph) -> Vec<(String, String)> {
+    let state = graph.state().unwrap();
+    state["timeline"]["tracks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["track"] == json!(true))
+        .map(|t| (t["module"].as_str().unwrap().to_string(), t["colour"].as_str().unwrap().to_string()))
+        .collect()
+}
+
+// WRITE-10, ID-18: a track added, duplicated and deleted through the server plays each revision;
+// deleting the kick waits (409) with the duck that reads it, until the cascade.
+#[test]
+fn tracks_are_added_duplicated_and_deleted_and_the_player_follows() {
+    let fixture = Fixture::new();
+    mixed(&fixture);
+    let graph = fixture.open();
+    let token = graph.state().unwrap()["session"].as_u64().unwrap();
+    let names: Vec<String> = graph.state().unwrap()["instruments"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap().into()).collect();
+    // std's ready-made sounds (T3): drums, instruments, then the two with every knob.
+    assert_eq!(names.len(), 22, "{names:?}");
+    assert_eq!((names[0].as_str(), names[10].as_str(), names[11].as_str(), names[21].as_str()), ("Drum kit", "FM metal", "FM keys", "Polysynth"));
+    assert_eq!(graph.state().unwrap()["palette"][0], "rose");
+    let added = graph.add_track(token, "std:synth-pluck", None, None, Some("kick".into())).unwrap();
+    assert_eq!(
+        (&added["module"], &added["label"], &added["file"]),
+        (&json!("synth-pluck"), &json!("Synth pluck"), &json!("tracks/synth-pluck.ts"))
+    );
+    assert_eq!(rows(&graph)[1], ("synth-pluck".into(), "green".into()), "below the kick, in the first colour no track uses");
+    assert!(synced(&graph));
+    let copy = graph.duplicate_track(token, "synth-pluck").unwrap();
+    assert_eq!((&copy["module"], &copy["new_channel"]), (&json!("synth-pluck-2"), &json!(false)));
+    assert_eq!(rows(&graph)[2], ("synth-pluck-2".into(), "green".into()), "in its original's colour");
+    let (status, asks) = graph.delete_track(token, "kick", false).unwrap();
+    assert_eq!((status, &asks["blocked"], &asks["dependents"][0]["component"]), (409, &json!(false), &json!("Duck")), "{asks}");
+    assert!(fixture.0.join("tracks/kick.ts").exists());
+    let (status, done) = graph.delete_track(token, "kick", true).unwrap();
+    assert_eq!((status, &done["before"]), (200, &json!("Kick")), "{done}");
+    assert!(synced(&graph));
+    assert_eq!(rows(&graph).iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), ["synth-pluck", "synth-pluck-2", "hats", "bass", "keys"]);
+    graph.undo(token).unwrap();
+    assert!(fixture.0.join("tracks/kick.ts").exists() && synced(&graph));
+}
+
+/// The largest step from one sample to the next.
+fn max_step(x: &[f32]) -> f32 {
+    x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max)
+}
+
+fn rms(x: &[f32]) -> f32 {
+    (x.iter().map(|v| v * v).sum::<f32>() / x.len().max(1) as f32).sqrt()
+}
+
+// 8b.1 on step 7's engine (break 10 of the taste merge): adding a track while a pad's tail rings,
+// then deleting another, are activations that keep it ringing. Before step 7 each made a new
+// renderer and cut every tail. The delete takes out the first channel, so the pad's gain after it
+// is renumbered (ID-14) and made new: allowed, as a crossfade between equal signals (design-7 Q9).
+// Each shows no step in the output bigger than twice the tail's own, and the tail after it is as
+// loud as the same song's with no edit, within 1 dB.
+#[test]
+fn adding_and_deleting_a_track_keeps_a_ringing_tail() {
+    /// The song, open in a driven player and playing, 1.2 s in: the chord has ended and rings.
+    fn ringing() -> (Dc, u64) {
+        let fixture = Fixture::new();
+        fixture.put(
+            "song.ts",
+            "import { song } from '@m2/core';\nimport { master, mixer } from 'std/mix';\nimport keys from './tracks/keys';\n\
+             import pad from './tracks/pad';\n\
+             export default song(() => master(mixer({ keys: { in: keys.out, db: -6 }, pad: { in: pad.out, db: -3 } })));\n",
+        );
+        fixture.put(
+            "tracks/keys.ts",
+            "import { track } from '@m2/core';\nimport { fm } from 'std/fm';\n\
+             export default track('keys', { name: 'Keys' }, ({ lane }) => fm.keys(lane.notes('notes')));\n",
+        );
+        fixture.put(
+            "tracks/pad.ts",
+            "import { track } from '@m2/core';\nimport { synth } from 'std/synth';\n\
+             export default track('pad', { name: 'Pad' }, ({ lane }) => synth.pad(lane.notes('notes')));\n",
+        );
+        fixture.put("data/keys/notes.json", "{\"clips\": []}\n");
+        // A chord for the first 2 beats (1 s at 120 BPM); its release rings on for 1.6 s.
+        let notes: Vec<String> =
+            ["C4", "E4", "G4"].iter().map(|p| format!("{{\"pitch\": \"{p}\", \"start\": 0, \"length\": 2, \"velocity\": 0.8}}")).collect();
+        fixture.put("data/pad/notes.json", &format!("{{\"clips\": [{{\"id\": \"chord\", \"start\": 0, \"length\": 8, \"notes\": [{}]}}]}}\n", notes.join(", ")));
+        let (p, driver) = Player::driven(48_000);
+        let graph = Graph::with_player(p);
+        graph.open(&fixture.0).unwrap();
+        let token = graph.state().unwrap()["session"].as_u64().unwrap();
+        let mut dc = Dc { fixture, graph, driver };
+        dc.graph.transport("play").unwrap();
+        dc.frames(450);
+        (dc, token)
+    }
+    let (mut dc, token) = ringing();
+    let mut heard: Vec<f32> = vec![];
+    let mut checked: Vec<(&str, std::ops::Range<usize>)> = vec![];
+    let add = |g: &Graph| drop(g.add_track(token, "std:synth-pluck", None, None, None).unwrap());
+    let delete = |g: &Graph| assert_eq!(g.delete_track(token, "keys", false).unwrap().0, 200);
+    let edits: [&dyn Fn(&Graph); 2] = [&add, &delete];
+    for (what, edit) in ["adding a track", "deleting the first channel's track"].into_iter().zip(edits) {
+        let before = dc.frames(19);
+        let own = max_step(&before);
+        heard.extend(&before);
+        let (from, generation) = (heard.len() - 1, dc.generation());
+        edit(&dc.graph);
+        // Until the activation lands, then the 100 ms after it, its crossfade included.
+        for _ in 0..400 {
+            heard.extend(dc.frames(1));
+            if dc.generation() != generation {
+                break;
+            }
+        }
+        assert_ne!(dc.generation(), generation, "{what}: an activation");
+        heard.extend(dc.frames(38));
+        let step = max_step(&heard[from..]);
+        assert!(step <= 2.0 * own, "{what}: a step of {step} against the tail's own {own}");
+        checked.push((what, heard.len() - 19 * 128..heard.len()));
+    }
+    // The same song with no edit, for as long.
+    let (mut plain, _) = ringing();
+    let alone = plain.frames(heard.len() / 128);
+    for (what, at) in checked {
+        let (edited, unedited) = (rms(&heard[at.clone()]), rms(&alone[at]));
+        assert!(unedited > 1e-3, "{what}: the tail still rings ({unedited})");
+        assert!((20.0 * (edited / unedited).log10()).abs() < 1.0, "{what}: the tail rings on: {edited} against {unedited} with no edit");
+    }
+}
+
+// design-8b §5.1, lead decision T5: in a mix that is mono all the way, the first pan on a channel
+// turns the sum stereo. std's master is stereo from its input on, so its gain and its limiter keep
+// their instances, and the limiter its envelope; before 8b.3 the limiter started again. Here the
+// mix is loud enough that the limiter works all the time, and the edit is a hand-written `pan: 0`,
+// as 8b.3's first pan writes it.
+#[test]
+fn a_first_pan_in_a_mono_mix_keeps_the_masters_gain_and_limiter() {
+    let fixture = Fixture::new();
+    fixture.put(
+        "song.ts",
+        "import { song } from '@m2/core';\nimport { master, mixer } from 'std/mix';\nimport { a } from './tracks/a';\n\
+         import { b } from './tracks/b';\nexport default song(() => master(mixer({ a: a.out, b: b.out })));\n",
+    );
+    // A constant 2 (a square at 0 Hz is 1): over the limiter's −1 dB ceiling all the time.
+    fixture.put("tracks/a.ts", &A_DC.replace("0.5)", "2)"));
+    fixture.put("tracks/b.ts", B_SILENT);
+    let (p, driver) = Player::driven(48_000);
+    let graph = Graph::with_player(p);
+    graph.open(&fixture.0).unwrap();
+    let mut dc = Dc { fixture, graph, driver };
+    dc.graph.transport("play").unwrap();
+    let ceiling = 10f32.powf(-1.0 / 20.0);
+    let before = dc.frames(20);
+    assert!(before[128..].iter().all(|x| (x - ceiling).abs() < 1e-6), "the limiter holds the mix at its ceiling: {:?}", &before[128..132]);
+    let generation = dc.generation();
+    dc.fixture.put("song.ts", &dc.fixture.read("song.ts").replace("a: a.out", "a: { in: a.out, pan: 0 }"));
+    assert!(dc.graph.poll());
+    let mut after = vec![];
+    for _ in 0..400 {
+        after.extend(dc.frames(1));
+        if dc.generation() != generation {
+            break;
+        }
+    }
+    assert_ne!(dc.generation(), generation, "an activation");
+    after.extend(dc.frames(20));
+    // What the playing plan made new, by kernel.
+    let fresh = dc.stats().fresh_nodes;
+    let made: Vec<String> = dc.graph.inspect(move |a| {
+        let flat = &a.open.as_ref().unwrap().plays.as_ref().unwrap().revision.compiled.flat;
+        fresh
+            .iter()
+            .map(|&i| match &flat.nodes[i].op {
+                m2_ir::FOp::Kernel { kernel, .. } => kernel.clone(),
+                _ => flat.nodes[i].name.clone(),
+            })
+            .collect()
+    });
+    assert!(made.iter().any(|k| k == "std:pan"), "the new panner is new: {made:?}");
+    for k in ["std:stereo", "std:limit"] {
+        assert!(!made.iter().any(|m| m == k), "the master's {k} is kept: {made:?}");
+    }
+    // The master's gain is the one gain that isn't on a channel's strip, which turns stereo.
+    assert_eq!(made.iter().filter(|m| *m == "std:gain").count(), 1, "only channel a's gain is new: {made:?}");
+    assert!(after.iter().all(|x| (x - ceiling).abs() < 1e-5), "the mix stays at the ceiling throughout: {:?}", max_step(&after));
+}
+
+// FMT-19, PLANE-3: an edit of layout.json from outside (an agent, git) is published with no
+// revision once it holds still; a layout write planned before it conflicts rather than writing
+// over it, since its base was read from the disk.
+#[test]
+fn an_outside_layout_edit_is_published_with_no_revision() {
+    let fixture = Fixture::new();
+    mixed(&fixture);
+    let graph = fixture.open();
+    let token = graph.state().unwrap()["session"].as_u64().unwrap();
+    let revision = graph.state().unwrap()["view"]["revision"].clone();
+    graph.watch();
+    fixture.put("layout.json", "{\"order\": [\"keys\", \"bass\"], \"tracks\": {\"keys\": {\"colour\": \"lime\"}}}");
+    eventually("the watcher publishes the new order", || {
+        graph.watch();
+        rows(&graph).first() == Some(&("keys".into(), "lime".into()))
+    });
+    assert_eq!(graph.state().unwrap()["view"]["revision"], revision, "no revision");
+    assert_eq!(rows(&graph).iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), ["keys", "bass", "kick", "hats"]);
+    // A file that doesn't read: the defaults show, and the problem offers Reset layout.
+    fixture.put("layout.json", "{ oops");
+    eventually("the unreadable layout is a problem", || {
+        graph.watch();
+        graph.state().unwrap()["problems"].as_array().unwrap().iter().any(|p| p["code"] == "layout.invalid")
+    });
+    assert!(graph.layout(token, None, Some(("kick".into(), "teal".into())), false).is_err());
+    let reset = graph.layout(token, None, None, true).unwrap();
+    assert_eq!(reset["file"], "layout.json");
+    assert!(!graph.state().unwrap()["problems"].as_array().unwrap().iter().any(|p| p["code"] == "layout.invalid"));
+}
+
+// WRITE-12: a layout write's base is what the disk said when it was planned; an outside write
+// after that is a conflict, never overwritten.
+#[test]
+fn a_layout_write_after_an_outside_edit_conflicts() {
+    let fixture = Fixture::new();
+    mixed(&fixture);
+    let graph = fixture.open();
+    graph.inspect(|a| {
+        let s = &mut a.open.as_mut().unwrap().session;
+        let read = m2_editor::layout::read_disk(&s.accepted().project.dir);
+        let view = m2_editor::layout::effective(&m2_editor::layout::default_order(s), &read);
+        let text = m2_editor::layout::text_after(&read, &m2_editor::layout::Change { order: view.order.clone(), colours: &view.colours, gone: None })
+            .unwrap();
+        let (op, file, base) = m2_editor::layout::write_op(s, text);
+        let mut tx = m2_editor::plan::planned(s, ("a".into(), "b".into()), vec![op], m2_song::tx::Expect::Identical);
+        tx.base.insert(file, base);
+        std::fs::write(s.accepted().project.dir.join("layout.json"), "{\"order\": [\"bass\"]}").unwrap();
+        assert!(matches!(s.commit(tx), Err(m2_session::Refusal::Conflict { .. })), "a conflict");
+        assert_eq!(std::fs::read_to_string(s.accepted().project.dir.join("layout.json")).unwrap(), "{\"order\": [\"bass\"]}");
+    });
+}
+
+// design-8b §5.4: the state carries the Mix view beside the view and the timeline: a strip for each
+// track by the view's knob ids, and the master. A channel's first pan writes `pan: 0` into its
+// entry and names the new knob, which the next state's strip has; undo takes it out. A window open
+// read-only writes nothing.
+#[test]
+fn the_state_carries_the_mix_and_a_first_pan_names_its_knob() {
+    let fixture = Fixture::new();
+    mixed(&fixture);
+    let graph = fixture.open();
+    let state = graph.state().unwrap();
+    let token = state["session"].as_u64().unwrap();
+    let mix = &state["mix"];
+    assert_eq!(mix["mixer"], "ok");
+    let strips: Vec<(&str, &str)> =
+        mix["strips"].as_array().unwrap().iter().map(|x| (x["channel"].as_str().unwrap(), x["label"].as_str().unwrap())).collect();
+    assert_eq!(strips, [("kick", "Kick"), ("hats", "Hats"), ("bass", "Bass"), ("keys", "Keys")]);
+    let kick = &mix["strips"][0];
+    assert_eq!((&kick["pan"], &kick["pan_insert"]), (&Value::Null, &json!(true)));
+    let knobs: Vec<Value> = state["view"]["modules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|m| m["nodes"].as_array().unwrap())
+        .flat_map(|n| n["knobs"].as_array().unwrap().iter().map(|k| k["id"].clone()))
+        .collect();
+    for id in [&kick["db"], &mix["master"]["db"], &mix["master"]["ceiling"]] {
+        assert!(knobs.contains(id), "{id} is a knob");
+    }
+    let song = fixture.read("song.ts");
+    let done = graph.mix_insert(token, "kick", "pan", 0.0).unwrap();
+    assert_eq!((&done["before"], &done["after"]), (&json!("kick: kick.out"), &json!("kick: { in: kick.out, pan: 0 }")), "{done}");
+    assert_eq!(fixture.read("song.ts"), song.replacen("kick: kick.out", "kick: { in: kick.out, pan: 0 }", 1));
+    let now = graph.state().unwrap();
+    assert_eq!((&now["mix"]["strips"][0]["pan"], &now["mix"]["strips"][0]["pan_insert"]), (&done["control"], &json!(false)));
+    assert_eq!(now["view"]["revision"], done["revision"]);
+    assert!(synced(&graph));
+    graph.undo(token).unwrap();
+    assert_eq!(fixture.read("song.ts"), song);
+    graph.close();
+
+    let held = m2_session::lock::acquire(&fixture.0, "m2", m2_session::lock::RETRY).unwrap();
+    let graph = fixture.open();
+    let token = graph.state().unwrap()["session"].as_u64().unwrap();
+    let e = graph.mix_insert(token, "kick", "pan", 0.0).unwrap_err().to_string();
+    assert!(e.contains("nothing was changed"), "{e}");
+    assert_eq!(fixture.read("song.ts"), song);
+    drop(held);
+}
+
+/// `n` blocks of 128 frames, both channels, interleaved.
+fn stereo(dc: &mut Dc, n: usize) -> Vec<f32> {
+    let mut out = vec![];
+    for _ in 0..n {
+        let mut buf = [0.0f32; 256];
+        dc.driver.fill(&mut buf, 2);
+        drop(dc.driver.drain_retired());
+        out.extend(buf);
+    }
+    out
+}
+
+/// Play `dc` on through `edit` until the activation it sends lands, then `after` blocks: what was
+/// heard from the edit on.
+fn through(dc: &mut Dc, edit: impl FnOnce(&Graph), after: usize) -> Vec<f32> {
+    let generation = dc.generation();
+    edit(&dc.graph);
+    let mut heard = vec![];
+    for _ in 0..400 {
+        heard.extend(stereo(dc, 1));
+        if dc.generation() != generation {
+            break;
+        }
+    }
+    assert_ne!(dc.generation(), generation, "an activation");
+    heard.extend(stereo(dc, after));
+    heard
+}
+
+/// The largest difference between two takes, sample for sample.
+fn apart(a: &[f32], b: &[f32]) -> f32 {
+    assert_eq!(a.len(), b.len());
+    a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0, f32::max)
+}
+
+// design-8b §5.3, plan B4, lead decision T4: the first pan on first-song's Kick while it plays. Kick
+// is the first channel, so the panners of Hats and Keys are renamed and made new (ID-14); the kick's
+// strip turns stereo. It is heard as nothing: from the edit on, through the activation and its
+// crossfades, the song plays as it does with no edit, within 1e-5 (−100 dBFS), so no step and
+// every other track goes on unbroken.
+#[test]
+fn a_first_pan_while_playing_is_inaudible() {
+    fn playing() -> (Dc, u64) {
+        let mut dc = example("examples/first-song");
+        let token = dc.graph.state().unwrap()["session"].as_u64().unwrap();
+        // Into the song: a kick hit at beat 1.
+        drop(stereo(&mut dc, 160));
+        (dc, token)
+    }
+    let (mut dc, token) = playing();
+    let heard = through(&mut dc, |g| drop(g.mix_insert(token, "kick", "pan", 0.0).unwrap()), 400);
+    assert!(dc.fixture.read("song.ts").contains("kick: { in: kick.out, pan: 0 }"));
+    let (mut plain, _) = playing();
+    let alone = stereo(&mut plain, heard.len() / 256);
+    assert!(rms(&alone) > 1e-2, "the song plays ({})", rms(&alone));
+    let differs = apart(&heard, &alone);
+    assert!(differs <= 1e-5, "the first pan is heard: {differs} from the song with no edit");
+}
+
+// design-8b §5.3, lead decision T5 (the attack's claim 6): in a mix that is mono all the way, the
+// first pan turns the mix stereo: the sum's adds are made new, and std's master keeps its gain and
+// limiter. Every instrument + Track offers is stereo since T3, so the two mono tracks are written in
+// code, std's first bass and kick; their faders go up 12 dB through the Mix view's ids, written into
+// their bare entries, so the limiter works. The first pan is heard as nothing: the song plays as it
+// does with no edit, within 1e-5.
+#[test]
+fn a_first_pan_in_a_mono_mix_while_playing_is_inaudible() {
+    fn playing() -> (Dc, u64) {
+        let fixture = Fixture::new();
+        fixture.put(
+            "song.ts",
+            "import { song } from '@m2/core';\nimport { master, mixer } from 'std/mix';\nimport low from './tracks/low';\n\
+             import thump from './tracks/thump';\nexport default song(() => master(mixer({ low: low.out, thump: thump.out })));\n",
+        );
+        fixture.put(
+            "tracks/low.ts",
+            "import { track } from '@m2/core';\nimport { bass } from 'std/instruments';\n\
+             export default track('low', { name: 'Low' }, ({ lane }) => bass(lane.notes('notes')));\n",
+        );
+        fixture.put(
+            "tracks/thump.ts",
+            "import { track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+             export default track('thump', { name: 'Thump' }, ({ lane }) => kick(lane.notes('hits')));\n",
+        );
+        fixture.put("data/low/notes.json", "{\"clips\": []}\n");
+        fixture.put("data/thump/hits.json", "{\"clips\": []}\n");
+        let (p, driver) = Player::driven(48_000);
+        let graph = Graph::with_player(p);
+        graph.open(&fixture.0).unwrap();
+        let mut dc = Dc { fixture, graph, driver };
+        let token = dc.graph.state().unwrap()["session"].as_u64().unwrap();
+        for (module, lane, pitches) in [("low", "notes", ["C2", "G2", "C2", "G2"]), ("thump", "hits", ["C1", "C1", "C1", "C1"])] {
+            let revision = dc.graph.state().unwrap()["view"]["revision"].as_u64().unwrap();
+            dc.graph.write_notes(token, revision, module, lane, &kick_clips(&pitches)).unwrap();
+            let state = dc.graph.state().unwrap();
+            let strip = state["mix"]["strips"].as_array().unwrap().iter().find(|x| x["channel"] == json!(module)).unwrap().clone();
+            let revision = state["view"]["revision"].as_u64().unwrap();
+            dc.graph.set(token, revision, strip["db"].as_str().unwrap(), "fader", 12.0, None).unwrap();
+        }
+        let song = dc.fixture.read("song.ts");
+        assert!(song.contains("mixer({ low: { in: low.out, db: 12 }, thump: { in: thump.out, db: 12 } })"), "{song}");
+        dc.graph.transport("play").unwrap();
+        drop(stereo(&mut dc, 200));
+        (dc, token)
+    }
+    // Mono all the way to the master: every add of the mix has one channel.
+    let adds = |dc: &Dc| -> Vec<u8> {
+        dc.graph.inspect(|a| {
+            let flat = &a.open.as_ref().unwrap().plays.as_ref().unwrap().revision.compiled.flat;
+            flat.nodes
+                .iter()
+                .filter_map(|n| match &n.op {
+                    m2_ir::FOp::Kernel { kernel, channels, .. } if n.module == "song" && kernel == "std:add" => Some(*channels),
+                    _ => None,
+                })
+                .collect()
+        })
+    };
+    let (mut dc, token) = playing();
+    assert!(!adds(&dc).is_empty() && adds(&dc).iter().all(|c| *c == 1), "a mono mix: {:?}", adds(&dc));
+    let heard = through(&mut dc, |g| drop(g.mix_insert(token, "low", "pan", 0.0).unwrap()), 400);
+    assert!(dc.fixture.read("song.ts").contains("low: { in: low.out, db: 12, pan: 0 }"));
+    assert!(adds(&dc).iter().all(|c| *c == 2), "a stereo mix now: {:?}", adds(&dc));
+    let (mut plain, _) = playing();
+    let alone = stereo(&mut plain, heard.len() / 256);
+    let ceiling = 10f32.powf(-1.0 / 20.0);
+    let peak = alone.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    assert!((peak - ceiling).abs() < 1e-3, "the limiter works: a peak of {peak}");
+    let differs = apart(&heard, &alone);
+    assert!(differs <= 1e-5, "the first pan is heard: {differs} from the song with no edit");
 }

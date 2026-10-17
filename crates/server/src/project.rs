@@ -41,6 +41,8 @@ pub struct Starter {
     pub id: String,
     pub name: String,
     pub description: String,
+    /// Its tempo (the first of its arrangement), which the New Song dialog's Tempo starts at (NS-3).
+    pub tempo: f64,
 }
 
 /// `template.toml` (or `example.toml`): how the folder is listed. Not copied into the song.
@@ -83,6 +85,9 @@ pub struct NewSong {
     /// Copy this example instead of a template.
     #[serde(default)]
     pub example: Option<String>,
+    /// Its tempo, in BPM, in place of the template's (NS-3).
+    #[serde(default)]
+    pub tempo: Option<f64>,
     /// The folder to make it in (a full path); the songs folder if not given.
     #[serde(default)]
     pub dir: Option<PathBuf>,
@@ -92,6 +97,10 @@ pub struct NewSong {
 /// state. An example needing a plugin that isn't installed says so before anything is made.
 /// A song that can't be opened isn't kept, and the project open before stays open.
 pub fn new_song(graph: &Graph, req: &NewSong) -> Result<Value> {
+    if let Some(bpm) = req.tempo {
+        // Refused before anything is made, the songs folder included.
+        tempo_of(&m2_song::Arrangement::default(), bpm)?;
+    }
     let (source, name) = match (&req.example, &req.template) {
         (Some(id), _) => {
             let shown = examples().into_iter().find(|e| &e.id == id).map(|e| e.name);
@@ -112,13 +121,14 @@ pub fn new_song(graph: &Graph, req: &NewSong) -> Result<Value> {
         Some(dir) => dir.clone(),
         None => make_songs_dir()?,
     };
-    open_new(graph, &parent, &name, &from)
+    open_new(graph, &parent, &name, &from, req.tempo)
 }
 
-/// [`create`] the song and open it. One that doesn't open isn't kept: its folder only holds the copy.
-fn open_new(graph: &Graph, parent: &Path, name: &str, from: &Path) -> Result<Value> {
+/// [`create`] the song, with its tempo, and open it. One that doesn't open isn't kept: its folder
+/// only holds the copy.
+fn open_new(graph: &Graph, parent: &Path, name: &str, from: &Path, tempo: Option<f64>) -> Result<Value> {
     let dir = create(parent, name, from)?;
-    graph.open(&dir).inspect_err(|_| {
+    tempo.map_or(Ok(()), |bpm| set_tempo(&dir, bpm)).and_then(|()| graph.open(&dir)).inspect_err(|_| {
         let _ = std::fs::remove_dir_all(&dir);
     })
 }
@@ -166,11 +176,37 @@ fn list(dir: &Path, about: &str, required: bool) -> Vec<Starter> {
                 Err(_) => return None,
             };
             let name = info.name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| title(&id));
-            Some((info.order, Starter { id, name, description: info.description }))
+            let tempo = arrangement(&path).tempo[0].bpm;
+            Some((info.order, Starter { id, name, description: info.description, tempo }))
         })
         .collect();
     found.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.name.to_lowercase().cmp(&b.1.name.to_lowercase())));
     found.into_iter().map(|(_, s)| s).collect()
+}
+
+/// A song folder's arrangement as it reads (FMT-13); 120 BPM in 4/4 without one.
+fn arrangement(dir: &Path) -> m2_song::Arrangement {
+    let text = std::fs::read_to_string(dir.join(m2_song::DataPath::Arrangement.path()));
+    text.ok().and_then(|t| m2_song::Arrangement::read(&t).ok()).unwrap_or_default()
+}
+
+/// Write the new song's tempo (NS-3): its arrangement as the template has it, the first tempo
+/// `bpm`. Creating a project, not a Tx: nothing was there before. The reader refuses what FMT-13
+/// refuses, in its words.
+fn set_tempo(dir: &Path, bpm: f64) -> Result<()> {
+    let text = tempo_of(&arrangement(dir), bpm)?;
+    let path = dir.join(m2_song::DataPath::Arrangement.path());
+    std::fs::create_dir_all(path.parent().expect("in data/"))?;
+    std::fs::write(&path, text).context("writing data/arrangement.json")
+}
+
+/// `a` with its first tempo `bpm`, in its canonical form, when FMT-13 allows it.
+fn tempo_of(a: &m2_song::Arrangement, bpm: f64) -> Result<String> {
+    let mut a = a.clone();
+    a.tempo[0].bpm = bpm;
+    let text = a.canonical();
+    m2_song::Arrangement::read(&text).map_err(|d| anyhow!("{}", d.message.replace("data/arrangement.json: tempo entry 1 (beat 0): ", "the tempo: ")))?;
+    Ok(text)
 }
 
 /// `first-song` → "First song".
@@ -655,6 +691,33 @@ mod tests {
         assert_eq!(project.manifest.project.entry, "song.ts");
     }
 
+    // NS-3, FMT-13: New Song's Tempo is written into the new song's arrangement, the rest of it as
+    // the template has it; the catalog says each template's tempo, which the field starts at. One
+    // FMT-13 refuses is refused before anything is made, the songs folder included.
+    #[test]
+    fn a_new_songs_tempo_is_written_into_its_arrangement() {
+        let t = Temp::new();
+        let dir = create(&t.0, "Fast", &template("starter")).unwrap();
+        set_tempo(&dir, 140.0).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("data/arrangement.json")).unwrap(), "{\n  \"tempo\": [\n    {\"beat\": 0, \"bpm\": 140}\n  ],\n  \"meter\": []\n}\n");
+        let tempos: Vec<(String, f64)> = templates().into_iter().map(|s| (s.id, s.tempo)).collect();
+        assert_eq!(tempos, vec![("starter".into(), 116.0), ("empty".into(), 120.0)]);
+        let e = tempo_of(&m2_song::Arrangement::default(), 1000.0).unwrap_err().to_string();
+        assert_eq!(e, "the tempo: 1000 bpm is outside 20 to 999");
+        // Through New Song, in the songs folder or another: refused first, so no folder is made,
+        // the songs folder included.
+        let had = songs_dir().unwrap().exists();
+        let graph = Graph::silent();
+        let bad = NewSong { name: "Faster".into(), tempo: Some(1000.0), ..NewSong::default() };
+        assert_eq!(new_song(&graph, &bad).unwrap_err().to_string(), e);
+        assert_eq!(songs_dir().unwrap().exists(), had, "the songs folder is made only for a song");
+        let bad = NewSong { dir: Some(t.0.clone()), ..bad };
+        assert_eq!(new_song(&graph, &bad).unwrap_err().to_string(), e);
+        let made: Vec<_> = std::fs::read_dir(&t.0).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(made, ["Fast"]);
+        assert!(graph.dir().is_none(), "nothing opened");
+    }
+
     // FMT-4: a new song's manifest is the template's, format 1, with only its name changed.
     #[test]
     fn naming_a_song_changes_only_the_name_line_of_its_manifest() {
@@ -851,14 +914,14 @@ mod tests {
 
         // A song that doesn't open (FMT-3: a newer format): the folder made for it is removed
         // again, and the song open before stays open.
-        let opened = open_new(&graph, &t.0, "Fine", &template("empty")).unwrap();
+        let opened = open_new(&graph, &t.0, "Fine", &template("empty"), None).unwrap();
         let templates = Temp::new();
         let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.2\"\n";
         let newer = templates.0.join("newer");
         std::fs::create_dir_all(&newer).unwrap();
         std::fs::write(newer.join("music2.toml"), manifest.replace("format = 1", "format = 2")).unwrap();
         std::fs::write(newer.join("song.ts"), "export default song(() => 0);\n").unwrap();
-        let e = format!("{:#}", open_new(&graph, &t.0, "Newer", &newer).unwrap_err());
+        let e = format!("{:#}", open_new(&graph, &t.0, "Newer", &newer, None).unwrap_err());
         assert!(e.contains("format"), "{e}");
         assert!(!t.0.join("Newer").exists());
         assert_eq!(graph.state().unwrap()["session"], opened["session"]);
@@ -867,7 +930,7 @@ mod tests {
         std::fs::create_dir_all(&broken).unwrap();
         std::fs::write(broken.join("music2.toml"), manifest).unwrap();
         std::fs::write(broken.join("song.ts"), "export default song(() => oops);\n").unwrap();
-        let state = open_new(&graph, &t.0, "Broken", &broken).unwrap();
+        let state = open_new(&graph, &t.0, "Broken", &broken, None).unwrap();
         assert_eq!((&state["diagnostics"][0]["file"], &state["diagnostics"][0]["line"]), (&json!("song.ts"), &json!(1)), "{state:#}");
         assert!(t.0.join("Broken/song.ts").exists());
     }

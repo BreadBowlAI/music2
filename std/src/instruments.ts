@@ -1,7 +1,9 @@
 // std/instruments: playable instruments, built only from std kernels.
 //
 // Each one takes a notes lane and returns audio. They are ordinary components, so
-// copy one into your project and change it if you want something different.
+// copy one into your project and change it if you want something different. They have no
+// `editor.category`, so the + Track list leaves them out (PKG-7): std/drums and std/synth
+// have fuller ones of each. Code plays them as before.
 
 import { component, control, hz, ms, poly, port, secs, setting, signature, type Audio, type Events, type Params } from "@m2/core";
 import { adsr, noise, osc, svf, vca } from "./dsp";

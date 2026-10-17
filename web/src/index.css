@@ -1,60 +1,148 @@
 @import "tailwindcss";
 
-@theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
-  /* Light, muted palette. Surfaces: 950 app background, 900/850 panels, 800 cards (lightest),
-     700/600 raised controls. Text: 100 strongest … 500 faintest. */
-  --color-ink-950: #e8e9eb;
-  --color-ink-900: #eff0f1;
-  --color-ink-850: #f4f4f5;
-  --color-ink-800: #f8f8f9;
-  --color-ink-700: #e1e3e6;
-  --color-ink-600: #d0d3d7;
-  --color-ink-500: #9b9ea5;
-  --color-ink-400: #7b7f87;
-  --color-ink-300: #5e6169;
-  --color-ink-200: #45484f;
-  --color-ink-100: #2b2d32;
-  --color-pop-400: #a07484;
-  --color-pop-500: #8f6574;
-  --color-pop-600: #7c5563;
-  --color-violet-glow: #7f7a92;
-  --color-sun: #c9a54e;
+/* The UI's font off the Mac: Inter 4.1 (rsms/inter's release, web/InterVariable.woff2, unchanged;
+   sha256 693b77d4f32ee9b8bfc995589b5fad5e99adf2832738661f5402f9978429a8e3), under the SIL Open
+   Font License: web/public/fonts/OFL.txt, beside it. The Mac keeps its own font (below). */
+@font-face {
+  font-family: "Inter Variable";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: block;
+  src: url("/fonts/InterVariable.woff2") format("woff2");
 }
+
+/* The design tokens (taste.md §2.15). Track colours live in lib/palette.ts: they are applied through
+   `style` on clips and notes. */
+@theme {
+  /* Only these tokens exist: Tailwind's defaults are cleared first. */
+  --color-*: initial;
+  --font-*: initial;
+  --font-weight-*: initial;
+  --text-*: initial;
+  --radius-*: initial;
+  --shadow-*: initial;
+  --ease-*: initial;
+  --animate-*: initial;
+
+  --font-sans: "Inter Variable", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+
+  --text-xs: 11px;   --text-xs--line-height: 14px;
+  --text-sm: 12px;   --text-sm--line-height: 16px;
+  --text-base: 13px; --text-base--line-height: 18px;
+  --text-lg: 15px;   --text-lg--line-height: 20px;
+
+  /* Layout and control sizes (taste.md §3.2); the shell slice mirrors them in web/src/lib/layout.ts.
+     The 4px scale is Tailwind's default. */
+  --spacing-bar: 44px;      /* top bar */
+  --spacing-ruler: 28px;
+  --spacing-row: 44px;      /* track row, medium */
+  --spacing-lane: 32px;     /* automation lane */
+  --spacing-dockbar: 32px;  /* dock header */
+  --spacing-side: 240px;    /* browser */
+  --spacing-heads: 240px;   /* track headers */
+  --spacing-ctl: 28px;
+  --spacing-ctl-sm: 24px;
+  --spacing-ctl-xs: 20px;
+
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+
+  --color-white: #ffffff;
+  --color-gray-0: #fcfdfe;
+  --color-gray-50: #f5f7f9;
+  --color-gray-100: #edeff2;
+  --color-gray-150: #e6e8eb;
+  --color-gray-200: #dcdfe3;
+  --color-gray-300: #cbced2;
+  --color-gray-400: #a5aaaf;
+  --color-gray-500: #7c8186;
+  --color-gray-600: #65696f;
+  --color-gray-700: #4c5056;
+  --color-gray-800: #33373c;
+  --color-gray-900: #202327;
+  --color-gray-950: #141619;
+
+  /* Roles. Components use these; the ramp is for drawn graphics. */
+  --color-raised: var(--color-gray-0);
+  --color-canvas: var(--color-gray-50);
+  --color-chrome: var(--color-gray-100);
+  --color-hover: var(--color-gray-150);
+  --color-press: var(--color-gray-200);
+  --color-line: var(--color-gray-200);
+  --color-line-strong: var(--color-gray-300);
+  --color-fg-off: var(--color-gray-400);
+  --color-fg-faint: var(--color-gray-500);
+  --color-fg-muted: var(--color-gray-600);
+  --color-fg: var(--color-gray-800);
+  --color-fg-strong: var(--color-gray-900);
+
+  --color-accent: #3862a7;
+  --color-accent-hover: #4974ba;
+  --color-accent-strong: #294e8b;
+  --color-accent-soft: #e0eafb;
+  --color-accent-range: #c8daf8;
+  --color-accent-wash: #eff4fc;
+
+  --color-danger: #af3d36;
+  --color-danger-strong: #90302b;
+  --color-danger-soft: #ffe9e6;
+  --color-warn: #b07a20;
+  --color-warn-strong: #7e541b;
+  --color-warn-soft: #fbefd6;
+
+  --shadow-pop: 0 0 0 1px rgb(20 22 25 / 0.07), 0 10px 28px -8px rgb(20 22 25 / 0.2);
+  --shadow-chip: 0 0 0 1px rgb(20 22 25 / 0.08), 0 1px 1px rgb(20 22 25 / 0.05);
+  --shadow-lift: 0 4px 12px -4px rgb(20 22 25 / 0.18);
+
+  /* Motion (taste.md §2.13): fast 80ms linear for hover and press, base 140ms, slow 220ms, exit
+     100ms; the playhead, meters and drags never ease. */
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --animate-rise: rise 140ms var(--ease-out) both;
+  --animate-lit: lit 1200ms var(--ease-out) both;
+  /* Not in taste.md's block, from its motion table: a dialog opening (slow), and the loading spinners. */
+  --animate-dialog: dialog 220ms var(--ease-out) both;
+  --animate-spin: spin 1s linear infinite;
+}
+
+/* The Mac's own font (SF), in the app and in a browser: main.tsx sets `data-os` before the first
+   render. Off the Mac, system-ui is another font (DejaVu Sans on Linux), so Inter comes first there. */
+:root[data-os="mac"] { --font-sans: system-ui, -apple-system, "Helvetica Neue", sans-serif; }
 
 html { color-scheme: light; }
 html, body, #root { height: 100%; }
 body {
-  @apply bg-ink-950 text-ink-100 font-sans antialiased select-none overflow-hidden;
-  font-feature-settings: "cv11", "ss01";
+  @apply bg-chrome text-fg font-sans text-sm antialiased select-none overflow-hidden;
+  font-variant-numeric: tabular-nums;
 }
-
-::selection { background: color-mix(in oklab, var(--color-pop-500) 40%, transparent); }
-
-/* Slim scrollbars */
-* { scrollbar-width: thin; scrollbar-color: var(--color-ink-600) transparent; }
+::selection { background: var(--color-accent-range); }
+* { scrollbar-width: thin; scrollbar-color: var(--color-gray-300) transparent; }
+/* One focus ring (taste.md §2.11). In the base layer, so a canvas that is its own selection (the
+   timeline, the roll, a menu) turns it off with `outline-none`. */
+@layer base {
+  :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+  :focus:not(:focus-visible) { outline: none; }
+}
+@keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes lit { 0%, 35% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes dialog { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0s !important; transition-duration: 0s !important; } }
 
 input, textarea { @apply select-text; }
 
-.glass {
-  background: color-mix(in oklab, var(--color-ink-850) 82%, transparent);
-  backdrop-filter: blur(18px) saturate(140%);
-}
-
-.pop-gradient { background-image: linear-gradient(135deg, var(--color-pop-500), var(--color-violet-glow)); }
-.pop-text { background-image: linear-gradient(135deg, var(--color-pop-500), var(--color-violet-glow)); -webkit-background-clip: text; background-clip: text; color: transparent; }
-
-@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-.rise { animation: rise 0.22s ease-out both; }
 /* A lane just made: lit once, then as the others. */
-@keyframes lit { 0%, 35% { opacity: 1; } 100% { opacity: 0; } }
 .lit { position: relative; }
 .lit::after {
   content: ""; position: absolute; inset: 0; z-index: 25; pointer-events: none;
-  background: color-mix(in oklab, var(--color-pop-500) 18%, transparent);
-  box-shadow: inset 3px 0 0 var(--color-pop-500);
-  animation: lit 1.8s ease-out both;
+  background: color-mix(in oklab, var(--color-accent) 18%, transparent);
+  box-shadow: inset 3px 0 0 var(--color-accent);
+  animation: var(--animate-lit);
 }
 
 /* Desktop app: native controls use the arrow cursor, not the web's pointing hand. */
@@ -65,7 +153,7 @@ html.native .cursor-pointer { cursor: default; }
 .monaco-editor .suggest-details,
 .monaco-editor .monaco-hover,
 .monaco-editor .parameter-hints-widget {
-  border-radius: 10px;
+  border-radius: 8px;
   overflow: hidden;
-  box-shadow: 0 12px 32px -14px rgb(0 0 0 / 0.28);
+  box-shadow: var(--shadow-pop);
 }

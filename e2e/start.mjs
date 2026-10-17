@@ -40,24 +40,29 @@ if (!empty) {
   await page.keyboard.press("Enter");
   check(await until(async () => (await api("graph/status")).json.beat === 0), "Enter goes back to the start");
 
-  // A knob drag, then ⌘Z undoes it, with a toast.
-  await page.click('[data-module-tab="song"]');
-  await page.waitForSelector('[data-module="song"]');
+  // A knob drag (a pan, on the Mix view's strip), then ⌘Z undoes it, with no toast.
+  await page.click('[data-view-tab="mix"]');
+  await page.waitForSelector('[data-testid=mix] [data-knob="hats.pan"]');
   const songTs = () => fs.readFileSync(`${proj}/song.ts`, "utf8");
   const before = songTs();
-  const knob = '[data-module="song"] [data-knob="hats.pan"] svg';
+  const knob = '[data-testid=mix] [data-knob="hats.pan"] svg';
   await page.$eval(knob, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
   const box = await (await page.$(knob)).boundingBox();
   const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
   await page.mouse.move(cx, cy);
   await page.mouse.down();
-  for (let i = 1; i <= 8; i++) await page.mouse.move(cx, cy - i * 4);
+  // 60px of a knob's 300 (taste.md KN-1): 0.3 → 0.7 on a -1..1 range.
+  for (let i = 1; i <= 8; i++) await page.mouse.move(cx, cy - i * 7.5);
   await page.mouse.up();
   check(await until(() => songTs().includes("pan: 0.7 }")), "a knob drag writes song.ts");
-  check(await until(async () => (await text()).includes("song.ts: 0.3 → 0.7")), "and a toast shows the edit");
+  // The knob shows it: a knob change makes no toast (taste.md §2.14).
+  check(await until(async () => (await page.$eval('[data-testid=mix] [data-knob="hats.pan"]', (e) => e.dataset.value)) === "0.7") && !(await page.$("[data-testid=toast]")), "and the knob shows the edit, with no toast");
+  const named = await page.$eval('button[aria-label="Undo"]', (b) => b.title);
   await page.keyboard.down("Meta"); await page.keyboard.press("z"); await page.keyboard.up("Meta");
   check(await until(() => songTs() === before), "⌘Z undoes it");
-  check(await until(async () => (await text()).includes("Undid: song.ts 0.7 → 0.3")), "with a toast saying what was undone");
+  // Its words are Undo's tooltip ("Undo Hats pan"); its result is on screen, so no toast (taste.md ST-5).
+  await new Promise((r) => setTimeout(r, 400));
+  check(named === "Undo Hats pan (⌘Z)" && !(await page.$("[data-testid=toast]")), `Undo named it in words (${named}), and made no toast`);
 
   // ⌘S with no code editor open: nothing to save, and it says so.
   await page.keyboard.down("Meta"); await page.keyboard.press("s"); await page.keyboard.up("Meta");

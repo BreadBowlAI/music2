@@ -1,25 +1,39 @@
 import clsx from "clsx";
-import { AudioWaveform, CornerDownLeft, Flame, Gauge, Orbit, Search, SlidersHorizontal, SlidersVertical, Sparkles, Waves } from "lucide-react";
+import { AudioWaveform, ChartSpline, CornerDownLeft, Flame, Gauge, Orbit, Search, Sparkles, Waves, Wrench } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Effect } from "../lib/graph";
+import { EmptyState } from "./ui";
 
 /**
- * The categories the browser knows, in the order it lists them, with an icon and a colour each. A
- * category is a free string a package's descriptor gives (PKG-7): any other is a group of its own
- * after these, with a plain icon.
+ * The categories the browser knows, in the order it lists them, with an icon each, shown once in
+ * the category's header (never on each item). A category is a free string a package's descriptor
+ * gives (PKG-7): any other is a group of its own after these, with a plain icon.
  */
-const CATEGORIES: { name: string; Icon: typeof Waves; color: string }[] = [
-  { name: "Filter", Icon: AudioWaveform, color: "#4a8cc4" },
-  { name: "EQ", Icon: SlidersVertical, color: "#3e9b9b" },
-  { name: "Dynamics", Icon: Gauge, color: "#c08a2e" },
-  { name: "Distortion", Icon: Flame, color: "#cf6a4c" },
-  { name: "Delay & Reverb", Icon: Waves, color: "#8a6fc4" },
-  { name: "Modulation", Icon: Orbit, color: "#c45c9a" },
-  { name: "Utility", Icon: SlidersHorizontal, color: "#7b7f87" },
+// No dock view's icon (Device's sliders, Mix's faders): one icon, one meaning (taste.md §2.12).
+export const CATEGORIES: { name: string; Icon: typeof Waves }[] = [
+  { name: "Filter", Icon: AudioWaveform },
+  { name: "EQ", Icon: ChartSpline },
+  { name: "Dynamics", Icon: Gauge },
+  { name: "Distortion", Icon: Flame },
+  { name: "Delay & Reverb", Icon: Waves },
+  { name: "Modulation", Icon: Orbit },
+  { name: "Utility", Icon: Wrench },
 ];
-const category = (name: string) => CATEGORIES.find((c) => c.name === name) ?? { name, Icon: Sparkles, color: "#7b7f87" };
+export const category = (name: string) => CATEGORIES.find((c) => c.name === name) ?? { name, Icon: Sparkles };
 
-interface Match { effect: Effect; score: number; hits: number[] }
+export interface Match { effect: Effect; score: number }
+
+/** What a search that finds nothing says, in the side browser and the + picker alike. */
+export function NoMatch({ query, className }: { query: string; className?: string }) {
+  return (
+    <EmptyState bare className={className}>
+      <div>
+        <p>No effects match “{query}”</p>
+        <p className="mt-1 text-xs">Try a word like “filter”, “echo” or “louder”.</p>
+      </div>
+    </EmptyState>
+  );
+}
 
 /**
  * How well `query` finds `effect`, or null. Every word must match: in the name as letters in
@@ -27,7 +41,6 @@ interface Match { effect: Effect; score: number; hits: number[] }
  */
 function match(effect: Effect, query: string): Match | null {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  const hits = new Set<number>();
   let score = 0;
   const name = effect.name.toLowerCase();
   const starts = (text: string, w: string) => text.toLowerCase().split(/[^a-z0-9]+/).some((t) => t.startsWith(w));
@@ -36,15 +49,11 @@ function match(effect: Effect, query: string): Match | null {
     const at = name.indexOf(w);
     if (at >= 0) {
       best = (at === 0 ? 100 : 70) + w.length;
-      for (let i = at; i < at + w.length; i++) hits.add(i);
     } else {
       // Letters in order: tighter is better.
       const found: number[] = [];
       for (let i = 0, j = 0; i < name.length && j < w.length; i++) if (name[i] === w[j]) (found.push(i), j++);
-      if (found.length === w.length) {
-        best = Math.max(1, 40 - (found[found.length - 1] - found[0] - w.length + 1) * 3);
-        found.forEach((i) => hits.add(i));
-      }
+      if (found.length === w.length) best = Math.max(1, 40 - (found[found.length - 1] - found[0] - w.length + 1) * 3);
     }
     // Its label is what it is called ("Limiter" for `limit`).
     if (starts(effect.label, w)) best = Math.max(best, 60);
@@ -53,11 +62,11 @@ function match(effect: Effect, query: string): Match | null {
     if (!best) return null;
     score += best;
   }
-  return { effect, score, hits: [...hits] };
+  return { effect, score };
 }
 
 /** The effects `query` finds, grouped by category: best group first, best effect first in it. */
-function search(effects: Effect[], query: string) {
+export function search(effects: Effect[], query: string) {
   const found = effects.map((e) => match(e, query)).filter((m): m is Match => m !== null);
   const groups = new Map<string, Match[]>();
   for (const c of CATEGORIES) groups.set(c.name, []);
@@ -69,28 +78,37 @@ function search(effects: Effect[], query: string) {
   return listed;
 }
 
-/** Where the panel goes: under the anchor, right edges aligned, or above it if there's no room below. */
+const WIDTH = 320;
+
+/**
+ * Where the panel goes: under the anchor, right edges aligned, or above it if there's no room below.
+ * Its height is set where it opens, so it stays put while the list filters.
+ */
 function place(anchor: HTMLElement) {
   const r = anchor.getBoundingClientRect();
-  const width = 380;
-  const left = Math.min(Math.max(8, r.right - width), window.innerWidth - width - 8);
+  const left = Math.min(Math.max(8, r.right - WIDTH), window.innerWidth - WIDTH - 8);
   const below = window.innerHeight - r.bottom - 12;
   const above = r.top - 12;
-  return below >= 300 || below >= above
-    ? { left, top: r.bottom + 6, maxHeight: Math.min(460, below) }
-    : { left, bottom: window.innerHeight - r.top + 6, maxHeight: Math.min(460, above) };
+  if (below >= 300 || below >= above) return { left, top: r.bottom + 6, height: Math.min(460, below) };
+  const height = Math.min(460, above);
+  return { left, top: r.top - 6 - height, height };
 }
 
-/** A searchable list of the effects that can go after `after`: type to filter, arrows to move, Enter to add. */
+/**
+ * A searchable list of the effects that can go after `after` (the code's name for it, as the preview
+ * writes it; `named`: what the screen calls it): type to filter, arrows to move, Enter to add.
+ */
 export default function EffectBrowser({
   effects,
   after,
+  named = after,
   anchor,
   onPick,
   onClose,
 }: {
   effects: Effect[];
   after: string;
+  named?: string;
   anchor: HTMLElement;
   onPick: (effect: Effect) => void;
   onClose: () => void;
@@ -138,22 +156,22 @@ export default function EffectBrowser({
       role="dialog"
       aria-label={`Add an effect after ${after}`}
       data-effect-browser
-      className="fixed z-50 w-[380px] flex flex-col rounded-2xl bg-ink-850 ring-1 ring-black/10 shadow-2xl shadow-black/20 overflow-hidden rise cursor-default"
-      style={pos}
+      className="fixed z-50 flex flex-col rounded-md bg-raised shadow-pop overflow-hidden animate-rise cursor-default"
+      style={{ ...pos, width: WIDTH }}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <div className="h-12 shrink-0 flex items-center gap-2.5 px-4 border-b border-black/[0.06] bg-ink-800">
-        <Search className="size-4 text-ink-400 shrink-0" />
+      <div className="h-10 shrink-0 flex items-center gap-2 px-3 border-b border-line">
+        <Search size={14} className="text-fg-faint shrink-0" />
         <input
           autoFocus
           value={query}
-          placeholder={`Add after ${after}…`}
+          placeholder={`Add after ${named}…`}
           aria-label="Search effects"
           role="combobox"
           aria-expanded
           aria-controls="effect-list"
           aria-activedescendant={current ? `effect-${current.effect.component}` : undefined}
-          className="flex-1 min-w-0 bg-transparent outline-none text-[14px] text-ink-100 placeholder:text-ink-400"
+          className="flex-1 min-w-0 bg-transparent outline-none text-base text-fg placeholder:text-fg-off"
           onChange={(e) => {
             setQuery(e.target.value);
             setActive(0);
@@ -175,20 +193,17 @@ export default function EffectBrowser({
             }
           }}
         />
-        <kbd className="shrink-0 h-5 px-1.5 rounded-md bg-ink-700 text-[10px] font-sans text-ink-400 grid place-items-center">esc</kbd>
       </div>
-      <div ref={list} id="effect-list" role="listbox" aria-label="Effects" className="flex-1 min-h-0 overflow-y-auto py-1.5">
-        {flat.length === 0 && (
-          <div className="px-6 py-10 text-center">
-            <div className="text-[13px] text-ink-200">No effects match “{query}”</div>
-            <div className="mt-1 text-xs text-ink-400">Try a word like “filter”, “echo” or “louder”.</div>
-          </div>
-        )}
+      <div ref={list} id="effect-list" role="listbox" aria-label="Effects" className="flex-1 min-h-0 overflow-y-auto p-1">
+        {flat.length === 0 && <NoMatch query={query} className="mx-auto my-6" />}
         {groups.map((g) => {
-          const { Icon, color } = category(g.name);
+          const { Icon } = category(g.name);
           return (
             <div key={g.name} role="group" aria-label={g.name} data-category={g.name}>
-              <div className="px-4 pt-2.5 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-400">{g.name}</div>
+              <div className="h-ctl-sm px-2 flex items-center gap-1.5 text-sm font-semibold text-fg-muted">
+                <Icon size={14} className="text-fg-faint" />
+                {g.name}
+              </div>
               {g.items.map((m) => {
                 const i = index++;
                 const on = m === current;
@@ -201,22 +216,17 @@ export default function EffectBrowser({
                     data-effect={m.effect.name}
                     data-component={m.effect.component}
                     data-active={on || undefined}
-                    className={clsx("mx-1.5 px-2.5 py-2 rounded-xl flex items-center gap-3 cursor-pointer transition-colors", on ? "bg-ink-700/70" : "hover:bg-ink-700/40")}
+                    // Named by its label ("Lowpass"); the code's name is in the tooltip and the footer.
+                    className={clsx("px-2 py-1.5 rounded-sm flex items-center gap-2 cursor-pointer transition-colors duration-80 ease-linear", on && "bg-accent-soft")}
+                    title={m.effect.name}
                     onPointerMove={() => i !== active && setActive(i)}
                     onClick={() => choose(m)}
                   >
-                    <span className="size-8 shrink-0 rounded-[10px] grid place-items-center" style={{ background: `color-mix(in oklab, ${color} 14%, var(--color-ink-800))`, color }}>
-                      <Icon className="size-4" />
-                    </span>
                     <span className="flex-1 min-w-0">
-                      <span className="block text-[13px] font-medium text-ink-100 leading-5">
-                        {[...m.effect.name].map((ch, k) => (
-                          <span key={k} className={m.hits.includes(k) ? "text-pop-500 font-semibold" : undefined}>{ch}</span>
-                        ))}
-                      </span>
-                      <span className="block text-xs text-ink-400 truncate leading-4" title={m.effect.label}>{m.effect.description}</span>
+                      <span className="block text-sm font-medium text-fg">{m.effect.label}</span>
+                      <span className="block text-xs text-fg-muted truncate">{m.effect.description}</span>
                     </span>
-                    {on && <CornerDownLeft className="size-3.5 shrink-0 text-ink-400" />}
+                    {on && <CornerDownLeft size={14} className="shrink-0 text-fg-faint" />}
                   </div>
                 );
               })}
@@ -224,12 +234,14 @@ export default function EffectBrowser({
           );
         })}
       </div>
-      <div className="h-9 shrink-0 flex items-center gap-3 px-4 border-t border-black/[0.06] bg-ink-800 text-[11px] text-ink-400">
-        <span className="flex-1 min-w-0 truncate font-mono" title="What adding it writes in your code">
-          {current ? `${current.effect.name}(${after}(…)${current.effect.insert})` : ""}
-        </span>
-        <span className="shrink-0">↑↓ to move · ↵ to add</span>
-      </div>
+      {/* Literally code: what adding it writes. Nothing listed, nothing to write: no empty band. */}
+      {current && (
+        <div className="h-ctl shrink-0 flex items-center px-3 border-t border-line bg-chrome text-xs text-fg-muted">
+          <span data-code className="flex-1 min-w-0 truncate font-mono" title="What adding it writes in your code">
+            {`${current.effect.name}(${after}(…)${current.effect.insert})`}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

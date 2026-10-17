@@ -1,6 +1,6 @@
-// Monaco, set up for a song project's TypeScript: its workers, a theme in the app's light
-// palette, and the compiler options songs are written for. Loaded on first use of the code
-// view, so the editor (a few MB) stays out of the app's first load.
+// Monaco, set up for a song project's TypeScript: its workers, a theme in the app's tokens, and
+// the compiler options songs are written for. Loaded on first use of the code view, so the editor
+// (a few MB) stays out of the app's first load.
 
 import "monaco-editor/esm/vs/editor/edcore.main";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
@@ -18,98 +18,101 @@ self.MonacoEnvironment = {
 
 export const THEME = "m2-light";
 
-// The app's ink and pop colors (index.css). Numbers stand out in gold: they are the knobs.
+// The app's tokens (index.css, taste.md §2.15): the canvas, the grey ramp, the accent for the
+// cursor and selection, warn-soft for find matches. Syntax takes the track palette's inks, so code
+// is as muted as the rest; numbers stand out in amber: they are the knobs.
 monaco.editor.defineTheme(THEME, {
   base: "vs",
   inherit: true,
   rules: [
-    { token: "", foreground: "2b2d32" },
-    { token: "keyword", foreground: "7c5563" },
-    { token: "identifier", foreground: "2b2d32" },
-    { token: "type.identifier", foreground: "5b6b8c" },
-    { token: "number", foreground: "a1701f" },
-    { token: "string", foreground: "4f7a5c" },
-    { token: "string.escape", foreground: "4f7a5c", fontStyle: "bold" },
-    { token: "regexp", foreground: "8a5a7a" },
-    { token: "comment", foreground: "9b9ea5", fontStyle: "italic" },
-    { token: "comment.doc", foreground: "8b8e96", fontStyle: "italic" },
-    { token: "delimiter", foreground: "7b7f87" },
+    { token: "", foreground: "33373c" },
+    { token: "keyword", foreground: "4e5482" },
+    { token: "identifier", foreground: "33373c" },
+    { token: "type.identifier", foreground: "146272" },
+    { token: "number", foreground: "725124" },
+    { token: "string", foreground: "356443" },
+    { token: "string.escape", foreground: "14655d" },
+    { token: "regexp", foreground: "744765" },
+    { token: "comment", foreground: "7c8186" },
+    { token: "comment.doc", foreground: "7c8186" },
+    { token: "delimiter", foreground: "65696f" },
   ],
   colors: {
-    "editor.background": "#f8f8f9",
-    "editor.foreground": "#2b2d32",
-    "editor.lineHighlightBackground": "#efeff1",
+    "editor.background": "#f5f7f9",
+    "editor.foreground": "#33373c",
+    "editor.lineHighlightBackground": "#edeff2",
     "editor.lineHighlightBorder": "#00000000",
-    "editor.selectionBackground": "#8f657430",
-    "editor.inactiveSelectionBackground": "#8f65741c",
-    "editor.selectionHighlightBackground": "#8f657418",
-    "editor.wordHighlightBackground": "#7f7a9218",
-    "editor.wordHighlightStrongBackground": "#7f7a9226",
-    "editor.findMatchBackground": "#c9a54e66",
-    "editor.findMatchHighlightBackground": "#c9a54e33",
-    "editorCursor.foreground": "#8f6574",
-    "editorLineNumber.foreground": "#b4b7bd",
-    "editorLineNumber.activeForeground": "#5e6169",
-    "editorIndentGuide.background1": "#e4e5e8",
-    "editorIndentGuide.activeBackground1": "#d0d3d7",
-    "editorWhitespace.foreground": "#d0d3d7",
-    "editorBracketMatch.background": "#8f657418",
-    "editorBracketMatch.border": "#8f657455",
-    "editorBracketHighlight.foreground1": "#7b7f87",
-    "editorBracketHighlight.foreground2": "#8f6574",
-    "editorBracketHighlight.foreground3": "#5b6b8c",
-    "editorGutter.background": "#f8f8f9",
-    "editorError.foreground": "#c0392b",
-    "editorWarning.foreground": "#c9a54e",
+    "editor.selectionBackground": "#c8daf8",
+    "editor.inactiveSelectionBackground": "#c8daf899",
+    "editor.selectionHighlightBackground": "#eff4fc",
+    "editor.wordHighlightBackground": "#eff4fc",
+    "editor.wordHighlightStrongBackground": "#e0eafb",
+    "editor.findMatchBackground": "#fbefd6",
+    "editor.findMatchBorder": "#b07a20",
+    "editor.findMatchHighlightBackground": "#fbefd6b3",
+    "editorCursor.foreground": "#3862a7",
+    "editorLineNumber.foreground": "#a5aaaf",
+    "editorLineNumber.activeForeground": "#65696f",
+    "editorIndentGuide.background1": "#e6e8eb",
+    "editorIndentGuide.activeBackground1": "#cbced2",
+    "editorWhitespace.foreground": "#cbced2",
+    "editorBracketMatch.background": "#eff4fc",
+    "editorBracketMatch.border": "#c8daf8",
+    "editorBracketHighlight.foreground1": "#65696f",
+    "editorBracketHighlight.foreground2": "#4e5482",
+    "editorBracketHighlight.foreground3": "#146272",
+    "editorGutter.background": "#f5f7f9",
+    "editorError.foreground": "#af3d36",
+    "editorWarning.foreground": "#b07a20",
     "editorOverviewRuler.border": "#00000000",
-    "editorWidget.background": "#fbfbfc",
-    "editorWidget.border": "#d0d3d7",
-    "editorHoverWidget.background": "#fbfbfc",
-    "editorHoverWidget.border": "#d0d3d7",
-    "editorSuggestWidget.background": "#fbfbfc",
-    "editorSuggestWidget.border": "#d0d3d7",
-    "editorSuggestWidget.selectedBackground": "#8f657424",
-    "editorSuggestWidget.highlightForeground": "#7c5563",
-    "editorSuggestWidget.focusHighlightForeground": "#7c5563",
-    "list.hoverBackground": "#e8e9eb",
-    "list.activeSelectionBackground": "#8f657424",
-    "list.activeSelectionForeground": "#2b2d32",
-    "list.activeSelectionIconForeground": "#7c5563",
-    "list.inactiveSelectionBackground": "#e8e9eb",
-    "list.highlightForeground": "#7c5563",
-    "list.focusHighlightForeground": "#7c5563",
-    "editorSuggestWidget.foreground": "#2b2d32",
-    "editorSuggestWidget.selectedForeground": "#2b2d32",
-    "editorSuggestWidget.selectedIconForeground": "#7c5563",
-    "symbolIcon.functionForeground": "#8f6574",
-    "symbolIcon.methodForeground": "#8f6574",
-    "symbolIcon.propertyForeground": "#8f6574",
-    "symbolIcon.fieldForeground": "#8f6574",
-    "symbolIcon.variableForeground": "#5b6b8c",
-    "symbolIcon.constantForeground": "#5b6b8c",
-    "symbolIcon.classForeground": "#a1701f",
-    "symbolIcon.interfaceForeground": "#5b6b8c",
-    "symbolIcon.typeParameterForeground": "#5b6b8c",
-    "symbolIcon.moduleForeground": "#7b7f87",
-    "symbolIcon.keywordForeground": "#7b7f87",
-    "symbolIcon.textForeground": "#7b7f87",
-    "peekView.border": "#8f657466",
-    "peekViewTitle.background": "#efeff1",
-    "peekViewTitleLabel.foreground": "#2b2d32",
-    "peekViewTitleDescription.foreground": "#7b7f87",
-    "peekViewEditor.background": "#f4f4f5",
-    "peekViewEditorGutter.background": "#f4f4f5",
-    "peekViewEditor.matchHighlightBackground": "#c9a54e44",
-    "peekViewResult.background": "#efeff1",
-    "peekViewResult.fileForeground": "#2b2d32",
-    "peekViewResult.lineForeground": "#5e6169",
-    "peekViewResult.selectionBackground": "#8f657424",
-    "peekViewResult.selectionForeground": "#2b2d32",
-    "peekViewResult.matchHighlightBackground": "#c9a54e44",
-    "focusBorder": "#8f657466",
-    "scrollbarSlider.background": "#d0d3d799",
-    "scrollbarSlider.hoverBackground": "#b4b7bdcc",
-    "scrollbarSlider.activeBackground": "#9b9ea5cc",
+    "editorWidget.background": "#fcfdfe",
+    "editorWidget.border": "#dcdfe3",
+    "editorHoverWidget.background": "#fcfdfe",
+    "editorHoverWidget.border": "#dcdfe3",
+    "editorSuggestWidget.background": "#fcfdfe",
+    "editorSuggestWidget.border": "#dcdfe3",
+    "editorSuggestWidget.selectedBackground": "#e0eafb",
+    "editorSuggestWidget.highlightForeground": "#294e8b",
+    "editorSuggestWidget.focusHighlightForeground": "#294e8b",
+    "list.hoverBackground": "#e6e8eb",
+    "list.activeSelectionBackground": "#e0eafb",
+    "list.activeSelectionForeground": "#33373c",
+    "list.activeSelectionIconForeground": "#294e8b",
+    "list.inactiveSelectionBackground": "#e6e8eb",
+    "list.highlightForeground": "#294e8b",
+    "list.focusHighlightForeground": "#294e8b",
+    "editorSuggestWidget.foreground": "#33373c",
+    "editorSuggestWidget.selectedForeground": "#33373c",
+    "editorSuggestWidget.selectedIconForeground": "#294e8b",
+    "symbolIcon.functionForeground": "#4e5482",
+    "symbolIcon.methodForeground": "#4e5482",
+    "symbolIcon.propertyForeground": "#4e5482",
+    "symbolIcon.fieldForeground": "#4e5482",
+    "symbolIcon.variableForeground": "#146272",
+    "symbolIcon.constantForeground": "#146272",
+    "symbolIcon.classForeground": "#725124",
+    "symbolIcon.interfaceForeground": "#146272",
+    "symbolIcon.typeParameterForeground": "#146272",
+    "symbolIcon.moduleForeground": "#65696f",
+    "symbolIcon.keywordForeground": "#65696f",
+    "symbolIcon.textForeground": "#65696f",
+    "peekView.border": "#c8daf8",
+    "peekViewTitle.background": "#edeff2",
+    "peekViewTitleLabel.foreground": "#33373c",
+    "peekViewTitleDescription.foreground": "#65696f",
+    "peekViewEditor.background": "#fcfdfe",
+    "peekViewEditorGutter.background": "#fcfdfe",
+    "peekViewEditor.matchHighlightBackground": "#fbefd6",
+    "peekViewResult.background": "#edeff2",
+    "peekViewResult.fileForeground": "#33373c",
+    "peekViewResult.lineForeground": "#65696f",
+    "peekViewResult.selectionBackground": "#e0eafb",
+    "peekViewResult.selectionForeground": "#33373c",
+    "peekViewResult.matchHighlightBackground": "#fbefd6",
+    "focusBorder": "#3862a7",
+    "scrollbarSlider.background": "#cbced299",
+    "scrollbarSlider.hoverBackground": "#a5aaafcc",
+    "scrollbarSlider.activeBackground": "#7c8186cc",
     "scrollbar.shadow": "#00000000",
   },
 });
@@ -141,6 +144,24 @@ export function projectPath(uri: monaco.Uri): string | null {
 
 let libs: monaco.IDisposable[] = [];
 
+/** The song the editor's models and markers are of. */
+let project: number | null = null;
+
+/**
+ * A new song in the editor (taste.md CD-1, D1): no model, marker or type-checker state of the one
+ * before is left. Models are global by path, and the checker keeps a file's text by its version,
+ * so the next song's song.ts at the same version would be checked as the old one's.
+ */
+export function startProject(session: number) {
+  if (project === session) return;
+  project = session;
+  for (const m of monaco.editor.getModels()) m.dispose();
+  monaco.editor.removeAllMarkers("music2");
+  monaco.editor.removeAllMarkers("typescript");
+  // Setting the options again restarts the checker's worker, empty.
+  ts.typescriptDefaults.setCompilerOptions(ts.typescriptDefaults.getCompilerOptions());
+}
+
 /** Resolve `@m2/core` and package imports to these sources, as if under `node_modules`. */
 export function setTypes(files: TypeFile[]) {
   libs.forEach((d) => d.dispose());
@@ -157,6 +178,3 @@ export function libText(uri: monaco.Uri): string | undefined {
 window.addEventListener("unhandledrejection", (e) => {
   if (e.reason instanceof Error && e.reason.name === "Canceled" && e.reason.message === "Canceled") e.preventDefault();
 });
-
-// Measure the editor's font again once the web font has loaded.
-void document.fonts?.ready.then(() => monaco.editor.remeasureFonts());

@@ -4,7 +4,7 @@ import fs from "node:fs";
 
 export const [ROOT, HOME, PROJ] = process.argv.slice(2);
 export const sess = JSON.parse(fs.readFileSync(`${HOME}/.music2/session.json`, "utf8"));
-import { exe } from "./chrome.mjs";
+import { exe, pc as pcAgent, real } from "./chrome.mjs";
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const until = async (f, ms = 8000) => {
@@ -24,18 +24,27 @@ export const check = (ok, what) => {
   ok ? pass++ : fail++;
 };
 
-export async function open(width = 1440, height = 900) {
-  const browser = await puppeteer.launch({ executablePath: exe, args: ["--no-sandbox"] });
+/**
+ * The app at `width`×`height`. The side browser starts hidden: these suites are about the timeline
+ * and the dock, and place their clicks in the timeline's width (`browser: true` keeps it). The page
+ * is a Mac's, unless `pc`: then a PC's (Linux), whatever the OS the suite runs on (pc-keys).
+ */
+export async function open(width = 1440, height = 900, { browser: side = false, pc = false } = {}) {
+  const browser = await puppeteer.launch({ executablePath: pc ? real : exe, args: ["--no-sandbox"] });
   const page = await browser.newPage();
+  if (pc) await page.setUserAgent(pcAgent);
   await page.setViewport({ width, height });
   const errors = [];
   page.on("console", (m) => m.type() === "error" && !/Failed to load resource/.test(m.text()) && errors.push(m.text()));
   page.on("pageerror", (e) => errors.push(String(e)));
   const posts = [];
   page.on("request", (r) => r.method() !== "GET" && posts.push({ url: r.url().replace(/^.*\/api/, "/api"), body: r.postData() ?? "" }));
-  await page.evaluateOnNewDocument((token) => {
-    window.__M2__ = { native: false, token, platform: "macos" };
-  }, sess.token);
+  await page.evaluateOnNewDocument((token, side, platform) => {
+    window.__M2__ = { native: false, token, platform };
+    try {
+      if (!localStorage.getItem("m2.browser.open")) localStorage.setItem("m2.browser.open", String(side));
+    } catch {}
+  }, sess.token, side, pc ? "linux" : "macos");
   await page.goto(sess.url, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("[data-testid=graph] [data-module]", { timeout: 10000 });
   const api = (path, opts = {}) =>
@@ -49,7 +58,7 @@ export async function open(width = 1440, height = 900) {
       opts,
     );
   const state = async () => (await api("")).body;
-  const toasts = () => page.$$eval(".glass", (els) => els.map((e) => e.textContent ?? ""));
+  const toasts = () => page.$$eval("[data-testid=toast]", (els) => els.map((e) => e.textContent ?? ""));
   const show = async (module) => {
     await page.click(`[data-module-tab="${module}"]`);
     await page.waitForSelector(`[data-module-tab="${module}"][aria-selected=true]`);
@@ -65,13 +74,17 @@ export async function open(width = 1440, height = 900) {
     for (const k of keys.slice(0, -1).reverse()) await page.keyboard.up(k);
   };
   const box = async (sel) => (await page.$(sel))?.boundingBox();
+  /** Open the status pill's popover, if there is a pill and it isn't open: what needs attention is in it (taste.md ST-1). */
+  const status = async () => {
+    if ((await page.$("[data-status]")) && !(await page.$("[data-testid=status-popover]"))) await page.click("[data-status]").catch(() => {});
+  };
   const drag = async (from, to, steps = 12) => {
     await page.mouse.move(from.x, from.y);
     await page.mouse.down();
     await page.mouse.move(to.x, to.y, { steps });
     await page.mouse.up();
   };
-  return { browser, page, errors, posts, api, state, toasts, show, view, key, box, drag };
+  return { browser, page, errors, posts, api, state, toasts, show, view, key, box, drag, status };
 }
 
 export function done(errors) {

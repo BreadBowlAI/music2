@@ -46,6 +46,25 @@ USAGE:
   m2 label <project> <track> <name>      show a track, named by its key, as <name>: its track() call's
                                          name, verified to change nothing that plays (its key as <name>
                                          takes the name out)
+  m2 add-track <project> <instrument> [--name N] [--key ID] [--after ID]
+                                         add a track playing an instrument (std:synth-pluck, or synth.pluck): its file in
+                                         tracks/, its import and mixer channel in song.ts, an empty notes lane,
+                                         and its place and colour in layout.json, verified
+  m2 duplicate-track <project> <track>   copy a track, named by its ID: its code, its clips (with new ids), its
+                                         plugin states and its mixer channel, verified
+  m2 delete-track <project> <track> [--cascade]
+                                         take a track out: its file, its imports, its channel, its data and its
+                                         layout; --cascade also takes it out of effects that read it (a duck's
+                                         sidechain), which are otherwise listed and nothing is changed
+  m2 layout <project> order <IDs…> | colour <ID> <colour> | reset
+                                         reorder or recolour tracks in layout.json (no revision), or write the
+                                         default layout over one that doesn't read; the colours are rose, teal,
+                                         amber, indigo, green, plum, olive, blue, coral, cyan, violet and lime
+  m2 tempo <project> <bpm> [--at <bar>]  set the song's tempo (20 to 999 BPM) in data/arrangement.json, or with
+                                         --at a tempo change from bar N (counted from 1), verified
+  m2 meter <project> <n/d> [--at <bar>]  set the song's time signature (7/8: 1 to 64 beats of a 1, 2, 4, 8, 16
+                                         or 32 note), or with --at a change from bar N, verified
+  m2 title <project> <name>              call the song <name>: its name in music2.toml (the folder keeps its own)
   m2 cables <project>                    named signals a cable can start from, and the inputs cables reach
   m2 connect <project> <signal> <control>
                                          write a signal's name in place of a control's value, verified
@@ -592,6 +611,108 @@ fn run() -> Result<()> {
             match e.before == e.after {
                 true => println!("{}: already shown as {}; nothing to write", arg(2)?, e.after),
                 false => println!("{}: {} → {} (revision {}, verified in {ms:.0} ms)", e.file, e.before, e.after, e.revision),
+            }
+        }
+        Some("add-track") => {
+            let mut s = session(Path::new(&arg(1)?))?;
+            let wanted = arg(2)?;
+            // By ComponentId (`std:synth-pluck`) or by its export (`synth.pluck`, `std/synth.synth.pluck`).
+            let list = s.instruments();
+            let inst = list
+                .iter()
+                .find(|i| i.component == wanted || i.name == wanted || format!("{}.{}", i.module, i.name) == wanted)
+                .ok_or_else(|| {
+                    let names: Vec<String> = list.iter().map(|i| format!("{} ({})", i.component, i.label)).collect();
+                    anyhow!("no instrument `{wanted}`: the instruments are {}", names.join(", "))
+                })?;
+            let (name, key, after) = (flag(&args, "--name"), flag(&args, "--key"), flag(&args, "--after"));
+            let made = s.add_track(&inst.component, name.as_deref(), key.as_deref(), after.as_deref()).map_err(|e| anyhow!("{e}"))?;
+            println!("added {} ({}), ID {}, in {} (revision {})", made.label, inst.label, made.module, made.edited.file, made.edited.revision);
+        }
+        Some("duplicate-track") => {
+            let mut s = session(Path::new(&arg(1)?))?;
+            let made = s.duplicate_track(&arg(2)?).map_err(|e| anyhow!("{e}"))?;
+            println!("duplicated {} as {}, ID {}, in {} (revision {})", arg(2)?, made.label, made.module, made.edited.file, made.edited.revision);
+        }
+        Some("delete-track") => {
+            let mut s = session(Path::new(&arg(1)?))?;
+            let track = arg(2)?;
+            let cascade = args.iter().any(|a| a == "--cascade");
+            let shown = |d: &m2_editor::Dependent| format!("  {} in {} ({}, line {})", d.component, d.label, d.file, d.line);
+            match s.delete_track(&track, cascade).map_err(|e| anyhow!("{e}"))? {
+                m2_editor::Deleted::Done { edited, excised } => {
+                    println!("deleted {} (revision {})", edited.before, edited.revision);
+                    for d in &excised {
+                        println!("  and took {track} out of {}'s {} ({}, line {})", d.label, d.component, d.file, d.line);
+                    }
+                }
+                m2_editor::Deleted::Asks(deps) => {
+                    let list: Vec<String> = deps.iter().map(shown).collect();
+                    bail!("other tracks read {track}:
+{}
+run again with --cascade to take {track} out of them too", list.join("
+"));
+                }
+                m2_editor::Deleted::Blocked(deps) => {
+                    let list: Vec<String> = deps.iter().map(shown).collect();
+                    bail!("{track} can't be deleted from here, since other code reads it:
+{}
+change that code first", list.join("
+"));
+                }
+            }
+        }
+        Some("layout") => {
+            let mut s = session(Path::new(&arg(1)?))?;
+            let e = match arg(2)?.as_str() {
+                "order" => s.reorder(&args[3..]),
+                "colour" | "color" => s.recolour(&arg(3)?, &arg(4)?),
+                "reset" => m2_editor::layout::reset(&mut s),
+                other => bail!("m2 layout <project> order <IDs…> | colour <ID> <colour> | reset, not `{other}`"),
+            }
+            .map_err(|e| anyhow!("{e}"))?;
+            println!("layout.json: {} → {} (no revision: the layout isn't part of the song)", e.before, e.after);
+        }
+        Some(command @ ("tempo" | "meter")) => {
+            let mut s = session(Path::new(&arg(1)?))?;
+            let value = arg(2)?;
+            // From bar N (counted from 1): a change there; else the song's own.
+            let bar = match flag(&args, "--at") {
+                Some(n) => Some(n.parse::<u64>().ok().filter(|n| *n >= 1).ok_or_else(|| anyhow!("--at takes a bar, counted from 1, not `{n}`"))?),
+                None => None,
+            };
+            let at = bar.map(|n| bar_start(&s.accepted().project.arrangement, n - 1));
+            let e = match command {
+                "tempo" => {
+                    let bpm: f64 = value.trim_end_matches("bpm").trim().parse().map_err(|_| anyhow!("a tempo is a number of BPM, such as 128, not `{value}`"))?;
+                    match at {
+                        Some(at) => m2_editor::song::tempo_change(&mut s, at, bpm),
+                        None => m2_editor::song::tempo(&mut s, 0.0, bpm),
+                    }
+                }
+                _ => {
+                    let (beats, unit) = value
+                        .split_once('/')
+                        .and_then(|(b, u)| Some((b.trim().parse::<u32>().ok()?, u.trim().parse::<u32>().ok()?)))
+                        .ok_or_else(|| anyhow!("a time signature is written n/d, such as 7/8, not `{value}`"))?;
+                    match at {
+                        Some(at) => m2_editor::song::meter_change(&mut s, at, beats, unit),
+                        None => m2_editor::song::meter(&mut s, 0.0, beats, unit),
+                    }
+                }
+            }
+            .map_err(|e| anyhow!("{e}"))?;
+            match e.before == e.after {
+                true => println!("{}: already {}; nothing to write", e.file, e.after),
+                false => println!("{}: {} → {} (revision {})", e.file, e.before, e.after, e.revision),
+            }
+        }
+        Some("title") => {
+            let mut s = session(Path::new(&arg(1)?))?;
+            let e = m2_editor::song::title(&mut s, &arg(2)?).map_err(|e| anyhow!("{e}"))?;
+            match e.before == e.after {
+                true => println!("{}: already called {}; nothing to write", e.file, e.after),
+                false => println!("{}: {} → {} (revision {})", e.file, e.before, e.after, e.revision),
             }
         }
         Some("cables") => {

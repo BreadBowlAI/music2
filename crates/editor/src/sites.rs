@@ -1,6 +1,8 @@
 //! The source helpers the planners use (WRITE-10): what a file imports, where to import a name,
 //! and how a track's function reaches its lanes. Read with oxc, as the build reads the source.
 
+use std::path::Path;
+
 use oxc::allocator::Allocator;
 use oxc::ast::ast::{
     ArrowFunctionExpression, BindingIdentifier, BindingPattern, FormalParameters, Function, IdentifierReference,
@@ -60,6 +62,251 @@ pub fn import_insertion(source: &str, module: &str, name: &str) -> Option<(u32, 
         Some(end) => (end, format!("\n{line}")),
         None => (0, format!("{line}\n")),
     })
+}
+
+/// Words a binding can never be: JavaScript's and TypeScript's reserved words, and the names a
+/// module's code always has in scope.
+const RESERVED: &[&str] = &[
+    "arguments", "as", "async", "await", "break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete",
+    "do", "else", "enum", "eval", "export", "extends", "false", "finally", "for", "from", "function", "if", "implements", "import",
+    "in", "instanceof", "interface", "let", "new", "null", "of", "package", "private", "protected", "public", "return", "static",
+    "super", "switch", "this", "throw", "true", "try", "type", "typeof", "undefined", "var", "void", "while", "with", "yield",
+];
+
+/// Every name `source` binds anywhere (declarations, parameters, imports): what a new binding
+/// must not be.
+pub fn bound_names(source: &str) -> std::collections::BTreeSet<String> {
+    struct Names(std::collections::BTreeSet<String>);
+    impl<'a> Visit<'a> for Names {
+        fn visit_binding_identifier(&mut self, it: &BindingIdentifier<'a>) {
+            self.0.insert(it.name.to_string());
+        }
+        fn visit_identifier_reference(&mut self, it: &IdentifierReference<'a>) {
+            // A global it reads (`Math`) is in scope too.
+            self.0.insert(it.name.to_string());
+        }
+    }
+    let allocator = Allocator::default();
+    let ret = Parser::new(&allocator, source, SourceType::ts()).parse();
+    let mut names = Names(Default::default());
+    names.visit_program(&ret.program);
+    names.0
+}
+
+/// A key as a binding (ID-1 keys are lowercase letters, digits and hyphens): `lead-vox` →
+/// `leadVox`, `808` → `t808`.
+pub fn camel(key: &str) -> String {
+    let mut out = String::new();
+    for (i, part) in key.split('-').filter(|p| !p.is_empty()).enumerate() {
+        let mut c = part.chars();
+        match (i, c.next()) {
+            (0, Some(f)) => out.extend(std::iter::once(f).chain(c)),
+            (_, Some(f)) => out.extend(f.to_uppercase().chain(c)),
+            _ => {}
+        }
+    }
+    if out.is_empty() || out.starts_with(|c: char| c.is_ascii_digit()) {
+        out.insert(0, 't');
+    }
+    out
+}
+
+/// A name for a new binding in `source`, from `wanted`: it, unless the file binds or reads it or
+/// it is a reserved word; then `<wanted>Track`, `<wanted>Track2`, and so on.
+pub fn free_binding(source: &str, wanted: &str) -> String {
+    let taken = bound_names(source);
+    let free = |n: &str| !taken.contains(n) && !RESERVED.contains(&n);
+    if free(wanted) {
+        return wanted.to_string();
+    }
+    (1..).map(|n| if n == 1 { format!("{wanted}Track") } else { format!("{wanted}Track{n}") }).find(|n| free(n)).expect("some name is free")
+}
+
+/// Whether `key` can be written as a property name without quotes.
+pub fn identifier(key: &str) -> bool {
+    key.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
+        && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+}
+
+/// A top-level import of a project file: its statement's bytes, and how it binds it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FileImport {
+    pub start: u32,
+    pub end: u32,
+    /// `import kick from "./tracks/kick"`'s `kick`.
+    pub default: Option<String>,
+    /// It binds named exports too (`import k, { env } from …`).
+    pub named: bool,
+    /// The specifier as written.
+    pub specifier: String,
+}
+
+/// The project path a relative specifier written in `from` names, `.ts` added when it has no
+/// extension: `./tracks/kick` in `song.ts` is `tracks/kick.ts`. None for a package's.
+pub fn resolve(from: &str, specifier: &str) -> Option<String> {
+    if !(specifier.starts_with("./") || specifier.starts_with("../")) {
+        return None;
+    }
+    let mut parts: Vec<&str> = from.split('/').collect();
+    parts.pop();
+    for seg in specifier.split('/') {
+        match seg {
+            "." | "" => {}
+            ".." => {
+                parts.pop()?;
+            }
+            s => parts.push(s),
+        }
+    }
+    let joined = parts.join("/");
+    Some(match Path::new(&joined).extension() {
+        Some(_) => joined,
+        None => format!("{joined}.ts"),
+    })
+}
+
+/// How `from` imports project file `target`: `./tracks/pluck` from `song.ts`.
+pub fn specifier(from: &str, target: &str) -> String {
+    let from_dir: Vec<&str> = from.split('/').collect::<Vec<_>>().split_last().map(|(_, d)| d.to_vec()).unwrap_or_default();
+    let to: Vec<&str> = target.trim_end_matches(".ts").split('/').collect();
+    let common = from_dir.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    let ups = from_dir.len() - common;
+    let rest = to[common..].join("/");
+    if ups == 0 { format!("./{rest}") } else { format!("{}{rest}", "../".repeat(ups)) }
+}
+
+/// The top-level imports in `source` (written in file `file`) of project file `target`.
+pub fn imports_of(source: &str, file: &str, target: &str) -> Vec<FileImport> {
+    let allocator = Allocator::default();
+    let ret = Parser::new(&allocator, source, SourceType::ts()).parse();
+    let mut out = vec![];
+    for statement in &ret.program.body {
+        let Statement::ImportDeclaration(import) = statement else { continue };
+        if resolve(file, &import.source.value).as_deref() != Some(target) {
+            continue;
+        }
+        let mut default = None;
+        let mut named = false;
+        for s in import.specifiers.iter().flatten() {
+            match s {
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(d) => default = Some(d.local.name.to_string()),
+                _ => named = true,
+            }
+        }
+        out.push(FileImport { start: import.span.start, end: import.span.end, default, named, specifier: import.source.value.to_string() });
+    }
+    out
+}
+
+/// Where a new default import of a project file goes in `source`: after the last default import
+/// of a file in the same folder as `beside` (`./tracks/…`), else after the last import, else at
+/// the top. The byte offset, and whether it is at the top (so the line ends rather than starts
+/// with a newline).
+pub fn import_place(source: &str, file: &str, beside: &str) -> (u32, bool) {
+    let allocator = Allocator::default();
+    let ret = Parser::new(&allocator, source, SourceType::ts()).parse();
+    let folder = |p: &str| p.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
+    let (mut last, mut sibling) = (None, None);
+    for statement in &ret.program.body {
+        let Statement::ImportDeclaration(import) = statement else { continue };
+        last = Some(import.span.end);
+        let default = import.specifiers.iter().flatten().any(|s| matches!(s, ImportDeclarationSpecifier::ImportDefaultSpecifier(_)));
+        if default && resolve(file, &import.source.value).is_some_and(|t| folder(&t) == folder(beside)) {
+            sibling = Some(import.span.end);
+        }
+    }
+    match sibling.or(last) {
+        Some(at) => (at, false),
+        None => (0, true),
+    }
+}
+
+/// The top-level statements of `source`, each as its bytes and whether it is an import.
+pub fn statements(source: &str) -> Vec<(u32, u32, bool)> {
+    let allocator = Allocator::default();
+    let ret = Parser::new(&allocator, source, SourceType::ts()).parse();
+    ret.program.body.iter().map(|s| (s.span().start, s.span().end, matches!(s, Statement::ImportDeclaration(_)))).collect()
+}
+
+/// Bytes `start..end` of `source` widened to whole lines when nothing else is on them (a trailing
+/// comment on the last line goes too), so removing them leaves no blank line; else as they are.
+pub fn whole_lines(source: &str, start: u32, end: u32) -> (u32, u32) {
+    let (s, e) = (start as usize, end as usize);
+    let line_start = source[..s].rfind('\n').map_or(0, |i| i + 1);
+    let before = &source[line_start..s];
+    let line_end = source[e..].find('\n').map_or(source.len(), |i| e + i);
+    let after = source[e..line_end].trim();
+    if !before.trim().is_empty() || !(after.is_empty() || after.starts_with("//")) {
+        return (start, end);
+    }
+    let end = if line_end < source.len() { line_end + 1 } else { line_end };
+    (line_start as u32, end as u32)
+}
+
+/// Where `source` reads the name `name`: the start of each reference to it, in order.
+pub fn references(source: &str, name: &str) -> Vec<u32> {
+    struct Refs<'n>(&'n str, Vec<u32>);
+    impl<'a> Visit<'a> for Refs<'_> {
+        fn visit_identifier_reference(&mut self, it: &IdentifierReference<'a>) {
+            if it.name == self.0 {
+                self.1.push(it.span.start);
+            }
+        }
+    }
+    let allocator = Allocator::default();
+    let ret = Parser::new(&allocator, source, SourceType::ts()).parse();
+    let mut refs = Refs(name, vec![]);
+    refs.visit_program(&ret.program);
+    refs.1
+}
+
+/// The edits that take out of `source`'s imports every name that nothing outside `removed` (byte
+/// ranges about to go) reads any more: `duck` once the last duck is excised. A statement that
+/// imports nothing then goes with its line.
+pub fn unused_imports(source: &str, removed: &[(u32, u32)]) -> Vec<(u32, u32)> {
+    let allocator = Allocator::default();
+    let ret = Parser::new(&allocator, source, SourceType::ts()).parse();
+    let gone = |at: u32| removed.iter().any(|(a, b)| *a <= at && at < *b);
+    let mut out = vec![];
+    for statement in &ret.program.body {
+        let Statement::ImportDeclaration(import) = statement else { continue };
+        if gone(import.span.start) {
+            continue;
+        }
+        let Some(specs) = import.specifiers.as_ref().filter(|s| !s.is_empty()) else { continue };
+        let unused: Vec<bool> = specs
+            .iter()
+            .map(|sp| {
+                let refs = references(source, &sp.local().name);
+                !refs.is_empty() && refs.iter().all(|r| gone(*r))
+            })
+            .collect();
+        if !unused.iter().any(|u| *u) {
+            continue;
+        }
+        if unused.iter().all(|u| *u) {
+            out.push(whole_lines(source, import.span.start, import.span.end));
+            continue;
+        }
+        // One name of several: it and the comma that joins it to the next (or to the one before).
+        for (i, sp) in specs.iter().enumerate().filter(|(i, _)| unused[*i]) {
+            let span = sp.span();
+            match specs.get(i + 1) {
+                Some(next) => out.push((span.start, next.span().start)),
+                None => out.push((specs[i - 1].span().end, span.end)),
+            }
+        }
+    }
+    // Two names side by side at the end overlap where they join: one range.
+    out.sort();
+    let mut merged: Vec<(u32, u32)> = vec![];
+    for (a, b) in out {
+        match merged.last_mut() {
+            Some(last) if a <= last.1 => last.1 = last.1.max(b),
+            _ => merged.push((a, b)),
+        }
+    }
+    merged
 }
 
 /// What reading a function's parameters gives: how it reaches `lane`, or why that isn't certain.
@@ -146,7 +393,8 @@ pub struct Property {
 }
 
 /// The properties of the object literal written exactly at `span` of `source`, in order; None
-/// when there is none there, or it has a spread, a computed key, a method or a shorthand.
+/// when there is none there, or it has a spread, a computed key or a method. A shorthand (`saws`)
+/// is a property whose value is its key's bytes.
 pub fn properties(source: &str, span: (u32, u32)) -> Option<Vec<Property>> {
     use oxc::ast::ast::{Expression, ObjectExpression, ObjectPropertyKind, PropertyKind};
     struct Find {
@@ -157,7 +405,7 @@ pub fn properties(source: &str, span: (u32, u32)) -> Option<Vec<Property>> {
         fn visit_object_expression(&mut self, it: &ObjectExpression<'a>) {
             if self.found.is_none() && (it.span.start, it.span.end) == self.span {
                 let plain = |p: &ObjectPropertyKind<'a>| match p {
-                    ObjectPropertyKind::ObjectProperty(p) if p.kind == PropertyKind::Init && !p.computed && !p.method && !p.shorthand => {
+                    ObjectPropertyKind::ObjectProperty(p) if p.kind == PropertyKind::Init && !p.computed && !p.method => {
                         let v = p.value.span();
                         Some(Property {
                             key: p.key.static_name()?.to_string(),

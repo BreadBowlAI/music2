@@ -621,6 +621,8 @@ impl Open {
         let rev = s.accepted();
         let diagnostics = files::diagnostics(s);
         let read_only = read_only(s.access());
+        // A `layout.json` that doesn't read is a problem of its own, with Reset layout (FMT-19).
+        let problems = [s.problems(), &m2_editor::layout::problems(s)[..]].concat();
         Shown {
             revision: rev.number,
             timeline: self.timeline.clone(),
@@ -629,11 +631,15 @@ impl Open {
                 "name": rev.project.manifest.project.name,
                 "dir": rev.project.dir,
                 "view": s.view(),
+                // The Mix view's strips and master, by the view's knob ids (design-8b §5.4).
+                "mix": s.mix(),
                 "can_undo": s.can_undo(),
                 "can_redo": s.can_redo(),
                 "effects": s.effects(),
+                "instruments": s.instruments(),
+                "palette": m2_editor::layout::DEFAULT_ORDER,
                 "diagnostics": diagnostics,
-                "problems": s.problems(),
+                "problems": problems,
                 "sample_rate": rev.project.sample_rate(),
                 // WRITE-20: opened with code that doesn't compile, nothing plays until it does.
                 "has_code": rev.has_code(),
@@ -643,7 +649,7 @@ impl Open {
             news: json!({
                 "session": self.token,
                 "revision": rev.number,
-                "problems": s.problems(),
+                "problems": problems,
                 "diagnostics": diagnostics,
             }),
             files: files::accepted(s),
@@ -660,12 +666,14 @@ impl Open {
     fn timeline(&self) -> super::Timeline {
         use m2_editor::{TimelineLane, TimelineTrack};
         let data = &self.session.accepted().compiled.data;
-        let view = self.session.timeline();
+        // Every field but the tracks, each named: a field the view gains can't be left out of
+        // what is published (as `home` once was), since this no longer compiles.
+        let m2_editor::TimelineView { tempo, meter, home, end, tracks } = self.session.timeline();
         let mut head = serde_json::Map::new();
-        for (k, v) in [("tempo", value(&view.tempo)), ("meter", value(&view.meter)), ("end", value(&view.end))] {
+        for (k, v) in [("tempo", value(&tempo)), ("meter", value(&meter)), ("home", value(&home)), ("end", value(&end))] {
             head.insert(k.into(), v);
         }
-        let tracks = view.tracks.into_iter().map(|TimelineTrack { module, label, track, lanes }| {
+        let tracks = tracks.into_iter().map(|TimelineTrack { module, label, track, colour, lanes }| {
             let lanes = lanes.into_iter().map(|mut lane| {
                 let key = lane.key().to_string();
                 let shown = data.lane(&module, &key).cloned();
@@ -698,7 +706,7 @@ impl Open {
                 super::TimelineLaneJson { key, data: shown, head: rest, json }
             });
             let lanes = lanes.collect();
-            let mut head = match value(&TimelineTrack { module: module.clone(), label, track, lanes: vec![] }) {
+            let mut head = match value(&TimelineTrack { module: module.clone(), label, track, colour, lanes: vec![] }) {
                 Value::Object(m) => m,
                 _ => unreachable!("a track is an object"),
             };
@@ -1543,6 +1551,16 @@ impl Actor {
         let (sent_ns, published_ns) = (s.sent_ns, s.published_ns);
         let timing = EditTiming { requested_ns, ready_ns: compiled_ns, compiled_ns, sent_ns, published_ns, seq, ..EditTiming::default() };
         *self.inner.last_taken_in.lock() = Some(timing);
+        true
+    }
+
+    /// Publish the view again, with no revision and nothing new for the engine: `layout.json`
+    /// changed on disk (PLANE-3). Returns whether clients should refresh.
+    pub(super) fn republish(&mut self) -> bool {
+        if self.open.is_none() {
+            return false;
+        }
+        self.settle(None);
         true
     }
 

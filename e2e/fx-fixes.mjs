@@ -1,6 +1,6 @@
 // The review fixes, end to end: export progress stays with its song, a new export name is
 // settled when it's done, stale part files are swept, "Exports" is reserved, nameless names,
-// long names in the top bar, the engine's note under them, an export's problems said plainly,
+// long names in the top bar, the engine's states in the status pill, an export's problems said plainly,
 // the plugins example's message, the Empty template's steps and the Starter's bass knob.
 // Started with no project and a scratch HOME.
 // node run.mjs fx-fixes, without CLAP_PATH   (node fx-fixes.mjs <root> <home>)
@@ -43,7 +43,7 @@ function longSong(dir, name, minutes) {
   );
   fs.writeFileSync(`${dir}/song.ts`, "import { song, track } from '@m2/core';\nimport { pad } from 'std/instruments';\nconst p = track('pad', { name: 'Pad' }, ({ lane }) => pad(lane.notes('chords')));\nexport default song(() => p.out);\n");
   const beats = minutes * 120;
-  fs.writeFileSync(`${dir}/data/pad/chords.json`, JSON.stringify({ clips: [{ start: 0, length: beats, notes: [45, 52, 57, 60, 64].map((pitch) => ({ pitch, start: 0, length: beats })) }] }));
+  fs.writeFileSync(`${dir}/data/pad/chords.json`, JSON.stringify({ clips: [{ id: "chords1", start: 0, length: beats, notes: [45, 52, 57, 60, 64].map((pitch) => ({ pitch, start: 0, length: beats })) }] }));
   fs.writeFileSync(`${dir}/data/arrangement.json`, JSON.stringify({ tempo: [{ beat: 0, bpm: 120 }] }));
 }
 
@@ -77,7 +77,7 @@ check(dots2.json?.name === "My song 2" && dots2.json?.dir.endsWith("/My song 2")
 // ---------------------------------------------------------------- the Empty template's steps work in the app
 const empty = dots2.json.dir;
 const code = fs.readFileSync(`${empty}/song.ts`, "utf8");
-check(code.includes("Delete the // at the start of the two lines") && !code.includes("Make a file"), "song.ts says to delete two //s, not to make a file");
+check(code.includes("delete the // in front of the two") && !code.includes("Make a file"), "song.ts says to delete two //s, not to make a file");
 fs.writeFileSync(`${empty}/song.ts`, code.replace("// const drums", "const drums").replace("// drums: drums.out", "drums: drums.out"));
 check(await until(async () => (await api("graph")).json?.timeline?.tracks?.some((t) => t.track && t.module === "drums")), "with those two lines on, a Drums track shows");
 check(await until(async () => (await page.$$eval("[data-track]", (els) => els.map((e) => e.dataset.track))).includes("drums")), "in the timeline");
@@ -148,20 +148,36 @@ const bar = async () =>
     const box = name.parentElement;
     const time = document.querySelector("span[title=Time]");
     const exp = document.querySelector("[data-testid=export]");
-    return { box: [r(box).left, r(box).right, r(box).height], time: r(time).right, exp: r(exp).left, cut: name.scrollWidth > name.clientWidth, title: name.title, lines: Math.round(r(name).height / 18) };
+    // The left side ends at the tempo and meter, after the time (which a small window drops).
+    const tempo = document.querySelector("[data-testid=tempo]");
+    return { box: [r(box).left, r(box).right, r(box).height], time: Math.max(r(time).right, r(tempo).right), exp: r(exp).left, cut: name.scrollWidth > name.clientWidth, title: name.title, lines: Math.round(r(name).height / 18) };
   });
-for (const [w, h] of [[960, 620], [1200, 800], [1440, 900]]) {
-  await page.setViewport({ width: w, height: h, deviceScaleFactor: 2 });
-  await sleep(300);
-  const b = await bar();
-  check(b.box[0] >= b.time + 4 && b.box[1] <= b.exp - 4 && b.lines === 1, `${w}px: the name (${b.box[0].toFixed(0)}–${b.box[1].toFixed(0)}) clears the time (…${b.time.toFixed(0)}) and Export (${b.exp.toFixed(0)}…), on one line, cut short: ${b.cut}`);
+// The window's smallest is 1100×700 (taste.md §3.2); from 1180px the time readout shows (§3.8).
+// The Mac app's bar has 80px on its left for the window's buttons, which a page in a browser
+// doesn't: each width is checked both ways, the Mac app's by laying the page out as the app's
+// (the `data-app` the app sets on its root, which gives the bar that padding).
+const macBar = (on) =>
+  page.evaluate((on) => {
+    if (on) document.documentElement.dataset.app = "mac";
+    else delete document.documentElement.dataset.app;
+  }, on);
+for (const mac of [false, true]) {
+  await macBar(mac);
+  for (const [w, h] of [[1100, 700], [1180, 800], [1280, 800], [1440, 900]]) {
+    await page.setViewport({ width: w, height: h, deviceScaleFactor: 2 });
+    await sleep(300);
+    const b = await bar();
+    check(b.box[0] >= b.time + 4 && b.box[1] <= b.exp - 4 && b.lines === 1, `${w}px${mac ? " in the Mac app" : ""}: the name (${b.box[0].toFixed(0)}–${b.box[1].toFixed(0)}) clears the time and tempo (…${b.time.toFixed(0)}) and Export (${b.exp.toFixed(0)}…), on one line, cut short: ${b.cut}`);
+  }
 }
+await macBar(false);
 check((await bar()).title.startsWith(longName), "its tooltip has the whole name");
 
-// RENDER-1, RENDER-25 (fit-4 of the step 7 review): what the engine is busy with ("Paused for
-// export", "Loading <plugins>…") shows under the song's name, in the same room, so it never covers
-// the name, the time or Export, at the app's smallest window (960) and at 1280. Without plugins
-// here, the status the page reads is made to say so.
+// RENDER-1, RENDER-25 (fit-4 of the step 7 review), taste ST-1: what the engine is busy with
+// ("Paused for export", "Loading <plugins>…") is a neutral state of the top bar's one status pill,
+// ranked below every problem. It stays on one line, clear of the name, at the app's smallest
+// window (1100), at 1180 (where the time shows) and at 1280, in the browser's bar and the Mac
+// app's. Without plugins here, the status the page reads is made to say so.
 await page.evaluate(() => {
   const real = window.fetch.bind(window);
   window.__status = null;
@@ -171,41 +187,69 @@ await page.evaluate(() => {
     return new Response(JSON.stringify({ ...(await r.json()), ...window.__status }), { status: r.status, headers: r.headers });
   };
 });
+const statusPill = () =>
+  page.evaluate(() => {
+    const p = document.querySelector("[data-status]");
+    if (!p) return null;
+    const rect = (el) => { const b = el.getBoundingClientRect(); return { l: b.left, r: b.right, t: b.top, b: b.bottom }; };
+    const name = document.querySelector("[data-testid=bar-song-name]").parentElement;
+    return { ids: p.dataset.status.split(" "), text: p.textContent, title: p.title, pill: rect(p), name: rect(name), undo: rect(document.querySelector("button[aria-label=Undo]")) };
+  });
 const busy = [
-  [{ paused: "exporting" }, "Paused for export"],
-  [{ paused: null, loading: ["Surge XT", "Airwindows Consolidated"] }, "Loading Surge XT, Airwindows Consolidated…"],
+  [{ paused: "exporting" }, "paused", "Paused for export"],
+  [{ paused: null, loading: ["Surge XT", "Airwindows Consolidated"] }, "loading", "Loading Surge XT, Airwindows Consolidated…"],
 ];
-for (const [status, said] of busy) {
+for (const [status, id, said] of busy) {
   await page.evaluate((s) => { window.__status = s; }, status);
-  for (const w of [960, 1280]) {
-    await page.setViewport({ width: w, height: 800, deviceScaleFactor: 2 });
-    const shown = await until(async () => (await page.$eval("[data-testid=engine-note]", (e) => e.textContent).catch(() => null)) === said, 3000);
-    const r = await page.evaluate(() => {
-      const rect = (el) => { const b = el.getBoundingClientRect(); return { l: b.left, r: b.right, t: b.top, b: b.bottom }; };
-      const name = document.querySelector("[data-testid=bar-song-name]");
-      return { note: rect(document.querySelector("[data-testid=engine-note]")), name: rect(name), rev: rect(name.nextElementSibling), time: rect(document.querySelector("span[title=Time]")), exp: rect(document.querySelector("[data-testid=export]")) };
-    });
-    const apart = (a, b) => a.r <= b.l || b.r <= a.l || a.b <= b.t || b.b <= a.t;
-    const clear = apart(r.note, r.name) && apart(r.note, r.rev) && r.note.l >= r.time.r && r.note.r <= r.exp.l && r.note.r > r.note.l;
-    check(shown && clear, `${w}px: “${said}” shows under the name (${r.note.l.toFixed(0)}–${r.note.r.toFixed(0)}, ${r.note.t.toFixed(0)}–${r.note.b.toFixed(0)}), clear of it (${r.name.t.toFixed(0)}–${r.name.b.toFixed(0)}), the time and Export`);
-    await page.screenshot({ path: `${S}/fx-note-${w}-${status.paused ? "paused" : "loading"}.png`, clip: { x: 0, y: 0, width: w, height: 64 } });
+  for (const mac of [false, true]) {
+    await macBar(mac);
+    for (const w of [1100, 1180, 1280]) {
+      await page.setViewport({ width: w, height: 800, deviceScaleFactor: 2 });
+      const shown = await until(async () => (await statusPill())?.ids.includes(id), 3000);
+      await sleep(100);
+      const r = await statusPill();
+      const shows = r && r.name.r > r.name.l;
+      const clear = r && r.pill.b - r.pill.t <= 28 && r.pill.r <= r.undo.l && (!shows || r.name.r + 4 <= r.pill.l);
+      check(
+        shown && r.title === said && r.ids.join(" ") === id && r.text === said && clear,
+        `${w}px${mac ? " in the Mac app" : ""}: the pill says “${r?.text}” (${r?.pill.l.toFixed(0)}–${r?.pill.r.toFixed(0)}), on one line, clear of the name (…${r?.name.r.toFixed(0)}) and Undo`,
+      );
+      await page.screenshot({ path: `${S}/fx-pill-${w}${mac ? "-mac" : ""}-${id}.png`, clip: { x: 0, y: 0, width: w, height: 44 } });
+    }
   }
+  await macBar(false);
+  const p = await page.$("[data-status]");
+  await p.click();
+  const told = await until(async () => (await page.$eval("[data-testid=status-popover]", (e) => e.innerText).catch(() => "")).includes(id === "paused" ? "plays on from here" : "The song plays on meanwhile"), 3000);
+  check(told, `its popover says what it means: ${(await page.$eval("[data-testid=status-popover]", (e) => e.innerText).catch(() => "")).replace(/\n+/g, " | ")}`);
+  await page.keyboard.press("Escape");
 }
+// A problem shows over it: the code broken while paused.
+await page.evaluate(() => { window.__status = { paused: "exporting" }; });
+const goodSong = fs.readFileSync(`${named}/song.ts`, "utf8");
+fs.writeFileSync(`${named}/song.ts`, goodSong.replace("export default", "export default )"));
+const ranked = await until(async () => (await statusPill())?.ids.join(" ") === "compile paused", 8000);
+const rp = await statusPill();
+check(ranked && rp.text.startsWith("Code doesn't compile") && rp.text.endsWith("+1") && rp.title.includes("Paused for export"), `a problem shows over it, which counts it: “${rp?.text}”, “${rp?.title}”`);
+fs.writeFileSync(`${named}/song.ts`, goodSong);
+check(await until(async () => (await statusPill())?.ids.join(" ") === "paused", 8000), "and it is back once the code compiles");
 await page.evaluate(() => { window.__status = null; });
-await page.setViewport({ width: 960, height: 620, deviceScaleFactor: 2 });
+check(await until(async () => !(await statusPill()), 3000), "the pill goes when the engine is done");
+await page.setViewport({ width: 1100, height: 700, deviceScaleFactor: 2 });
 await page.click("[data-testid=export]");
 check(await until(async () => Number(await page.$eval("[data-testid=export-progress]", (e) => e.getAttribute("aria-valuenow")).catch(() => 0)) >= 10, 20000), "exporting it at the smallest window");
 const b = await bar();
 check(b.box[0] >= b.time + 4 && b.box[1] <= b.exp - 4, `the name still clears the wider “Exporting” button (${b.box[1].toFixed(0)} < ${b.exp.toFixed(0)})`);
-await page.screenshot({ path: `${S}/fx-longname-960-exporting.png` });
-await page.screenshot({ path: `${S}/fx-longname-960-bar.png`, clip: { x: 0, y: 0, width: 960, height: 64 } });
+await page.screenshot({ path: `${S}/fx-longname-1100-exporting.png` });
+await page.screenshot({ path: `${S}/fx-longname-1100-bar.png`, clip: { x: 0, y: 0, width: 1100, height: 44 } });
 check(await until(async () => (await text()).includes("Exported My very first summer song"), 60000), "and it finishes");
 await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 2 });
 await idle();
 
 // ---------------------------------------------------------------- an export's problems are said plainly
 // FMT-18a, RENDER-1 (fit-5 of the step 7 review): a song whose plugin isn't installed exports, and
-// after the done toast the app says plainly that the file plays without it.
+// the done toast says plainly, after the file, that it plays without it: in that one toast, since
+// a second would replace it (one at a time).
 const nop = `${S}/no-plugin`;
 fs.rmSync(nop, { recursive: true, force: true });
 fs.mkdirSync(nop, { recursive: true });
@@ -217,7 +261,8 @@ await until(async () => (await page.$eval("[data-testid=bar-song-name]", (e) => 
 await sleep(300);
 await page.click("[data-testid=export]");
 const without = "A plugin isn't installed, so the export plays without it (the problems list says which).";
-check(await until(async () => { const t = await text(); return t.includes("Exported No plugin.wav") && t.includes(without); }, 30000), `its export's toasts say: ${without}`);
+const toasts = () => page.$$eval("[data-testid=toast]", (els) => els.map((e) => e.innerText.replace(/\s+/g, " ").trim()));
+check(await until(async () => { const t = await toasts(); return t.length === 1 && t[0].includes("Exported No plugin.wav") && t[0].includes(without); }, 30000), `its one export toast says it after the file: ${(await toasts()).join(" | ")}`);
 await idle();
 
 // ---------------------------------------------------------------- a song too long for a WAV file is refused plainly

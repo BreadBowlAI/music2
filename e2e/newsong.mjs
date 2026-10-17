@@ -145,6 +145,27 @@ await page.keyboard.press("Enter");
 check(await until(async () => (await graphName()) === "Sunday 2"), `a second “Sunday” is “Sunday 2” (${await graphName()})`);
 check(fs.readFileSync(`${songs}/Sunday/song.ts`, "utf8") === before, "the first Sunday is untouched");
 
+// NS-3: the Tempo field beside the name, the template's until typed; Tab moves to it.
+await page.keyboard.down("Meta"); await page.keyboard.press("n"); await page.keyboard.up("Meta");
+await page.waitForSelector("[data-testid=template-starter]");
+check((await page.$eval("[data-testid=song-tempo]", (e) => e.value)) === "116", "the Tempo field shows Starter beat's 116");
+await page.click("[data-testid=template-empty]");
+check(await until(async () => (await page.$eval("[data-testid=song-tempo]", (e) => e.value)) === "120"), "and Empty's 120 when it is picked");
+await page.click("[data-testid=song-name]", { clickCount: 3 });
+await page.keyboard.type("Fast");
+await page.keyboard.press("Tab");
+check(await page.$eval("[data-testid=song-tempo]", (e) => document.activeElement === e && e.selectionStart === 0 && e.selectionEnd === e.value.length), "Tab moves from the name to the tempo, selected");
+const made = folders().length;
+await page.keyboard.type("5");
+await page.keyboard.press("Enter");
+const tooSlow = await page.$eval("[data-testid=song-tempo] ~ [role=alert]", (e) => e.textContent).catch(() => null);
+check(tooSlow === "20 to 999 BPM" && folders().length === made && !!(await page.$("[data-testid=new-song-dialog]")), `5 BPM is refused in words, and nothing is made: ${tooSlow}`);
+await page.click("[data-testid=song-tempo]", { clickCount: 3 });
+await page.keyboard.type("140");
+await page.keyboard.press("Enter");
+check(await until(async () => (await graphName()) === "Fast"), `with 140 it is made and opens (${await graphName()})`);
+check(JSON.stringify(JSON.parse(fs.readFileSync(`${songs}/Fast/data/arrangement.json`, "utf8")).tempo) === '[{"beat":0,"bpm":140}]' && (await api("graph")).json.timeline.tempo[0].bpm === 140, "its data/arrangement.json says 140");
+
 // Cancel makes nothing.
 await page.keyboard.down("Meta"); await page.keyboard.press("n"); await page.keyboard.up("Meta");
 await page.waitForSelector("[data-testid=new-song-dialog]");
@@ -154,7 +175,12 @@ check(await until(async () => !(await page.$("[data-testid=new-song-dialog]"))),
 check(folders().length === n, "and makes nothing");
 
 // ---------------------------------------------------------------- Open an example
-await page.click('[aria-label="Close the project"]');
+// The close button is gone from the top bar (taste.md TB-11): ⌘W closes the song.
+const closeSong = async () => {
+  await page.click("[data-testid=timeline]");
+  await page.keyboard.down("Meta"); await page.keyboard.press("w"); await page.keyboard.up("Meta");
+};
+await closeSong();
 await page.waitForSelector("[data-testid=start]");
 await page.waitForSelector("[data-testid=open-example]:not([disabled])");
 await page.click("[data-testid=open-example]");
@@ -169,7 +195,7 @@ await page.waitForSelector("[data-testid=timeline]");
 const exTracks = await page.$$eval("[data-track]", (els) => els.map((e) => e.dataset.track));
 check(["bass", "hats", "keys", "kick"].every((t) => exTracks.includes(t)), `its tracks are in the timeline: ${exTracks.join(", ")}`);
 // Again: another copy.
-await page.click('[aria-label="Close the project"]');
+await closeSong();
 await page.waitForSelector("[data-testid=open-example]:not([disabled])");
 await page.click("[data-testid=open-example]");
 await page.waitForSelector('[data-example="first-song"]');
@@ -177,7 +203,7 @@ await page.click('[data-example="first-song"]');
 check(await until(async () => (await graphName()) === "First song 2"), `a second copy is “First song 2” (${await graphName()})`);
 
 const all = folders();
-check(JSON.stringify(all) === JSON.stringify(["First song", "First song 2", "My song", "Sunday", "Sunday 2"]), `folders in ~/Music/music2: ${all.join(" | ")}`);
+check(JSON.stringify(all) === JSON.stringify(["Fast", "First song", "First song 2", "My song", "Sunday", "Sunday 2"]), `folders in ~/Music/music2: ${all.join(" | ")}`);
 
 // ---------------------------------------------------------------- the API refuses what it should
 const bad = async (body, what) => {

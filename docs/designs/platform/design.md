@@ -612,8 +612,8 @@ Not an OS piece, found by `design-shaped`: QuickJS's `Math` and `**` call the OS
 | OS-51 | `gen/schemas/<os>-schema.json` | Built (S1): commit `linux-schema.json`, so a Linux build leaves the tree clean. It is byte-identical to `macOS-schema.json` (checked). | — | `windows-schema.json` then |
 | OS-52 | traffic lights, `pl-[88px]` | No change: `taste` owns the window builder | native title bar above the top bar: fine | same |
 | OS-53 | `__M2__.platform` | No change | `"linux"` | `"windows"` |
-| OS-54 | menus (`menu.rs`) | Deferred to the key table on `taste` (8b): a menu per OS. Don't touch `menu.rs` on `main`. | GTK greys out Services, Hide, Hide Others, Show All, Full Screen (muda source) | the same items; Redo is Ctrl+Y |
-| OS-55 | `reveal_file`; "Show in Finder" labels | No change in code: Linux opens the folder (`xdg-open` is missing here, `gio` is the fallback). One label per OS with the key table on `taste`. | `FileManager1.ShowItems` over D-Bus would select the file: designed | `explorer /select,` |
+| OS-54 | menus (`menu.rs`) | Built (taste's next part, A3): one menu bar per OS (`layout(mac)`, tested for both on any OS). The Mac's as before. Elsewhere no app menu: Quit (Ctrl+Q) ends File, About (GTK's dialog, with the version and icon) ends Help; no Services, Hide, Full Screen or Window menu, and no Cut, Copy, Paste or Select All rows (muda's GTK rows need libxdo; the web view has the keys). Labels per OS through `native.ts`'s `chord`, `opt`, `shifted`, `keyName` and `mod`; Ctrl+Backspace in a field deletes the word before. | GTK greys out Services, Hide, Hide Others, Show All, Full Screen (muda source) | the same items; Redo is Ctrl+Y |
+| OS-55 | `reveal_file`; "Show in Finder" labels | Built (taste's next part, A3): "Show in Finder" on a Mac, "Show in Folder" elsewhere, in the File menu and both toasts (`revealLabel`). Linux opens the folder (`xdg-open` is missing here, `gio` is the fallback). | `FileManager1.ShowItems` over D-Bus would select the file: designed | `explorer /select,` |
 | OS-56 | file dialogs (rfd) | No change | GTK chooser; needs a display | `IFileDialog` |
 | OS-57 | `windows_subsystem` | No change | — | already there |
 | OS-58 | JIT and the hardened runtime | No change | SELinux `execmem` only in confined domains | — |
@@ -648,8 +648,8 @@ Not an OS piece, found by `design-shaped`: QuickJS's `Math` and `**` call the OS
 | OS-72 | core dumps from the kill tests | Built (S6): the test children that abort on purpose (`kill_tests::child`, `hook_tests::hook_child`) call `prctl(PR_SET_DUMPABLE, 0)` under `cfg(target_os = "linux")`, a test fixture. macOS: nothing, as today. | apport takes about 1.1 s per dump even with `ulimit -c 0`; the kill test drops from 473 s to 104 s (measured). `RLIMIT_CORE` 0 alone is not enough. | crash reports off for the child |
 | OS-73 | Chrome path (`chrome.mjs`, `run.mjs`) | Built (S2): per OS in `chrome.mjs`; `run.mjs` takes it from there | `linux64` 133.0.6943.141 here; no linux-arm64 build of 133 exists | `win64` |
 | OS-74 | `isMac` off the app | Built (S2): `isMac` follows `__M2__.platform` when a page is given one (`native.ts`, one line) | — | — |
-| OS-75 | `Meta` chords inside Monaco | Built (S2): off the Mac, Chrome runs through `e2e/chrome-as-mac.sh`, which gives pages a Mac user agent. A PC-keys pass comes with the key table on `taste` (Q2). | Monaco takes its key map from the user agent | same, through a `.cmd` twin |
-| OS-76 | fonts from Google Fonts | No change on `main`: `taste` removes them (a conflict otherwise). Until then the suites need the network, which this server has. | — | — |
+| OS-75 | `Meta` chords inside Monaco | Built (S2): off the Mac, Chrome runs through `e2e/chrome-as-mac.sh`, which gives pages a Mac user agent. The PC-keys pass is built (taste's next part, A3): `e2e/pc-keys.mjs` gives its page a PC user agent and `platform: "linux"` on every OS. In the app, a menu chord the editor binds runs its own action per OS (Ctrl+Backspace: `deleteWordLeft`). | Monaco takes its key map from the user agent | same, through a `.cmd` twin |
+| OS-76 | fonts from Google Fonts | Built (taste's next part, A2): `taste` removed Google Fonts. The Mac keeps its system font; elsewhere the UI is in Inter, from `web/public/fonts` (OFL). `e2e/taste.mjs` checks the font each page draws in. | Inter | Inter |
 | OS-77 | `shasum` in `baseline.sh` | No change: both OSes have it | — | Git Bash |
 | OS-78 | `SIGTERM`/`SIGKILL` in `run.mjs` | No change | — | `taskkill /T` |
 | OS-79 | Chrome's libraries | No change: present here | — | — |
@@ -777,8 +777,8 @@ whose `to_lowercase()` equals the candidate's, the rule `reserved()` already use
 | fonts load from Google Fonts | not on `main`: `taste` removes them (OS-76) |
 
 **Not fixed, on purpose (Q2):** on Linux the suites test the Mac's keys and labels, because Chrome says it is a Mac and
-the suites inject `platform: "macos"`. Ctrl, the key Linux users press, gets its own small suite with the key table on
-`taste`. This keeps every suite file but two lines untouched on `main`. A trial merge showed `notes.mjs`,
+the suites inject `platform: "macos"`. Ctrl, the key Linux users press, gets its own suite, `pc-keys` (built in taste's next part,
+A3). This keeps every suite file but two lines untouched on `main`. A trial merge showed `notes.mjs`,
 `s6-fixes.mjs` and `native.ts` with these changes merge cleanly into `taste`, `wip/step7` and `sounds` (§11).
 
 ### 4.5 Offline renders

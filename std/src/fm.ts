@@ -32,7 +32,7 @@ export const fm = {
   custom: component(
     {
       id: "fm-custom",
-      label: "FM",
+      label: "FM synth",
       signature: signature<(notes: Events) => Audio>(),
       inputs: { notes: port.notes() },
       controls: {
@@ -66,7 +66,8 @@ export const fm = {
       },
       settings: { voices: setting.int(12) },
       output: port.audio(),
-      editor: { description: "The FM synth with every knob: two operator pairs, feedback, envelopes" },
+      // The + Track list (PKG-7) puts the ready-made sounds first, and this, with every knob, last.
+      editor: { category: "Sound design", description: "The FM synth with every knob: two operator pairs, feedback, envelopes" },
     },
     (notes: Events, p: Params): Audio =>
       play(notes, p.voices, (n) =>
@@ -113,7 +114,7 @@ export const fm = {
       },
       settings: { voices: setting.int(12) },
       output: port.audio(),
-      editor: { description: "An electric piano: a warm body and a tine that barks when played hard" },
+      editor: { category: "Instruments", description: "An electric piano: a warm body and a tine that barks when played hard" },
     },
     (notes: Events, { tone, tine, decay, release, velSens, voices }: Params): Audio =>
       play(notes, voices, (n) =>
@@ -149,7 +150,7 @@ export const fm = {
       },
       settings: { voices: setting.int(12) },
       output: port.audio(),
-      editor: { description: "A glassy bell: bright, shimmering and long" },
+      editor: { category: "Instruments", description: "A glassy bell: bright, shimmering and long" },
     },
     (notes: Events, { tone, decay, velSens, voices }: Params): Audio =>
       play(notes, voices, (n) =>
@@ -191,7 +192,8 @@ export const fm = {
       },
       settings: { voices: setting.int(8) },
       output: port.audio(),
-      editor: { description: "Metallic FM percussion: a clangy, inharmonic hit with a zap" },
+      // Percussion, so it plays from a drum lane and is listed with the drums.
+      editor: { category: "Drums", description: "Metallic FM percussion: a clangy, inharmonic hit with a zap" },
     },
     (notes: Events, { tone, decay, feedback, drop, velSens, voices }: Params): Audio =>
       play(notes, voices, (n) =>

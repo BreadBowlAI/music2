@@ -5,9 +5,10 @@ import type * as Monaco from "monaco-editor/esm/vs/editor/editor.api";
 import { codeApi, fileOrder, moduleFile } from "../lib/code";
 import { Workspace, type Doc } from "../lib/codeWorkspace";
 import { editorHooks, graphApi, moduleName, type GraphState, type Problem } from "../lib/graph";
-import { kbd } from "../lib/native";
+import { chord, isMac } from "../lib/native";
+import { trackColors } from "../lib/palette";
+import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
-import { trackColor } from "./SongTimeline";
 import { Button } from "./ui";
 
 type Kit = typeof import("../lib/codeMonaco");
@@ -16,6 +17,21 @@ type Kit = typeof import("../lib/codeMonaco");
 interface TypeProblem { path: string; line: number; col: number; message: string }
 
 const isLib = (path: string) => path.startsWith("node_modules/");
+/**
+ * The app's menu commands whose chords the editor binds, and its action for each (⌘D: the next match,
+ * ⌘L the line, ⌘. a quick fix). ⌘⌫ deletes to the line's start on a Mac; Ctrl+Backspace deletes the
+ * word before elsewhere, as Monaco binds them on each.
+ */
+const MONACO_CHORDS: Record<string, string> = {
+  duplicate: "editor.action.addSelectionToNextFindMatch",
+  delete_track: isMac ? "deleteAllLeft" : "deleteWordLeft",
+  loop_selection: "expandLineSelection",
+  panic: "editor.action.quickFix",
+  // ⌘E and ⌘J split and join clips; in the editor, its find-with-selection and join lines.
+  split: "actions.findWithSelection",
+  join: "editor.action.joinLines",
+};
+
 /** What the editor followed while the project had no module (its code never compiled). */
 const NO_MODULES = "\0none";
 /** `node_modules/std/dsp.ts` → `std/dsp.ts`: how its imports name it. */
@@ -51,6 +67,7 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
   useEffect(() => {
     if (!kit) return;
     let live = true;
+    kit.startProject(graph.session);
     const w = new Workspace(kit.monaco, graph.session, kit.fileUri);
     Promise.all([codeApi.types(), codeApi.files()]).then(
       ([types, files]) => {
@@ -79,9 +96,10 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
       model: null,
       theme: kit.THEME,
       automaticLayout: true,
-      fontFamily: '"JetBrains Mono", ui-monospace, Menlo, monospace',
+      // The system's own mono (taste.md §2.1): nothing is fetched.
+      fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
       fontSize: 13,
-      lineHeight: 21,
+      lineHeight: 20,
       fontLigatures: false,
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
@@ -182,6 +200,15 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
     if (path && open(path)) followed.current = none ? NO_MODULES : module;
   }, [ws, module, open, version, diagnostics]);
 
+  // A place asked for (a Mix strip's Edit in code): opened at its line, once its file is listed.
+  const codeAt = useShell((s) => s.codeAt);
+  useEffect(() => {
+    if (!codeAt || !ws?.docs.has(codeAt.file)) return;
+    if (!open(codeAt.file, { lineNumber: codeAt.line, column: 1 })) return;
+    useShell.getState().set({ codeAt: null });
+    editor.current?.focus();
+  }, [codeAt, ws, open, version]);
+
   // The accepted revision or the draft changed (a knob, a cable, a save elsewhere): take in the files.
   const fetched = useRef(0);
   useEffect(() => {
@@ -248,13 +275,22 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
       ed.trigger("menu", redo ? "redo" : "undo", null);
       return true;
     };
+    // A menu chord the editor binds runs the editor's own action while it has the keyboard (taste.md §5.3).
+    const chord = (id: string) => {
+      const ed = editor.current, action = MONACO_CHORDS[id];
+      if (!ed?.hasTextFocus() || !action) return false;
+      ed.trigger("menu", action, null);
+      return true;
+    };
     editorHooks.save = save;
     editorHooks.saveAll = saveEvery;
     editorHooks.undo = undo;
+    editorHooks.chord = chord;
     return () => {
       if (editorHooks.save === save) delete editorHooks.save;
       if (editorHooks.saveAll === saveEvery) delete editorHooks.saveAll;
       if (editorHooks.undo === undo) delete editorHooks.undo;
+      if (editorHooks.chord === chord) delete editorHooks.chord;
     };
   }, []);
 
@@ -303,13 +339,11 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
   const dirtyCount = ws ? [...ws.docs.values()].filter((d) => ws.dirty(d) && d.theirs === undefined).length : 0;
   const saving = ws ? [...ws.docs.values()].some((d) => d.saving !== undefined) : false;
   const moduleOf = (path: string) => ws?.modules.find((m) => m.file === path)?.key;
-  const shownModule = active ? (isLib(active) ? undefined : moduleOf(active)) : module;
-  const shownColor = shownModule ? trackColor(graph.timeline, shownModule) : null;
   const name = (key: string) => moduleName(graph.view.modules.find((m) => m.key === key) ?? { key });
   const problems = graph.diagnostics ?? [];
 
   return (
-    <div data-testid="code" className="flex-1 min-h-0 flex bg-ink-950">
+    <div data-testid="code" className="flex-1 min-h-0 flex bg-canvas">
       <FileList
         paths={paths}
         active={active}
@@ -317,7 +351,7 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
         broken={(p) => problems.some((x) => x.file === p)}
         color={(p) => {
           const m = moduleOf(p);
-          return m ? trackColor(graph.timeline, m) : null;
+          return m ? (trackColors(graph.timeline, m)?.bar ?? null) : null;
         }}
         onOpen={(p) => {
           open(p);
@@ -325,7 +359,7 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
         }}
       />
       <div className="flex-1 min-w-0 flex flex-col">
-        <div className="h-10 shrink-0 flex items-center gap-2 pl-3 pr-2 border-b border-black/[0.06] bg-ink-850">
+        <div className="h-8 shrink-0 flex items-center gap-2 pl-3 pr-1.5 border-b border-line bg-chrome">
           {active && isLib(active) ? (
             <>
               {back && (
@@ -333,46 +367,40 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
                   onClick={() => open(back)}
                   title={`Back to ${back}`}
                   aria-label="Back"
-                  className="size-6 grid place-items-center rounded-md text-ink-400 hover:text-ink-100 hover:bg-ink-700 cursor-pointer"
+                  className="size-ctl-sm grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover cursor-pointer transition-colors duration-80 ease-linear"
                 >
-                  <ArrowLeft className="size-3.5" />
+                  <ArrowLeft size={14} />
                 </button>
               )}
-              <FileCode2 className="size-3.5 text-ink-400 shrink-0" />
-              <span className="text-[13px] font-mono text-ink-200 truncate">{libName(active)}</span>
-              <span className="inline-flex items-center gap-1 h-5 px-1.5 rounded-md bg-ink-700 text-[11px] text-ink-300" title="A package's source: read it here, change it in your own files">
-                <Lock className="size-3" />
+              <FileCode2 size={14} className="text-fg-faint shrink-0" />
+              <span data-code className="text-sm font-mono text-fg truncate">{libName(active)}</span>
+              <span className="inline-flex items-center gap-1 h-ctl-xs px-1.5 rounded-sm bg-hover text-xs text-fg" title="A package's source: read it here, change it in your own files">
+                <Lock size={12} className="text-fg-muted" />
                 Read only
               </span>
             </>
           ) : (
             <>
-              <FileCode2 className="size-3.5 text-ink-400 shrink-0" />
-              <span className="text-[13px] font-mono truncate" data-testid="code-path">
-                {active?.includes("/") && <span className="text-ink-400">{active.slice(0, active.lastIndexOf("/") + 1)}</span>}
-                <span className="text-ink-100">{active ? active.slice(active.lastIndexOf("/") + 1) : ""}</span>
+              <FileCode2 size={14} className="text-fg-faint shrink-0" />
+              <span data-code className="text-sm font-mono truncate" data-testid="code-path">
+                {active?.includes("/") && <span className="text-fg-muted">{active.slice(0, active.lastIndexOf("/") + 1)}</span>}
+                <span className="text-fg">{active ? active.slice(active.lastIndexOf("/") + 1) : ""}</span>
               </span>
-              {shownModule && (
-                <span className="inline-flex items-center gap-1.5 h-5 px-2 rounded-full bg-ink-800 ring-1 ring-black/[0.05] text-[11px] font-medium text-ink-300 shrink-0">
-                  {shownColor && <span className="size-1.5 rounded-full" style={{ background: shownColor }} />}
-                  {name(shownModule)}
-                </span>
-              )}
-              {doc && ws?.dirty(doc) && <span className="text-[11px] text-ink-400 shrink-0">Edited</span>}
+              {doc && ws?.dirty(doc) && <span className="text-xs text-fg-muted shrink-0">Edited</span>}
             </>
           )}
           <div className="flex-1" />
           <Button
             size="sm"
-            variant={dirtyCount ? "pop" : "ghost"}
+            variant={dirtyCount ? "primary" : "ghost"}
             disabled={!dirtyCount || saving}
             onClick={() => void saveAll()}
-            title={`Save ${dirtyCount > 1 ? "every edited file" : "the file"} (${kbd("S")}). Code that doesn't compile is saved too; the last version that did keeps playing.`}
+            title={`Save ${dirtyCount > 1 ? "every edited file" : "the file"} (${chord("S")}). Code that doesn't compile is saved too; the last version that did keeps playing.`}
             aria-label="Save"
           >
-            {saving ? <LoaderCircle className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
+            {saving ? <LoaderCircle size={14} className="animate-spin" /> : <Save size={14} />}
             {dirtyCount > 1 ? `Save ${dirtyCount} files` : "Save"}
-            <span className="opacity-60 font-normal">{kbd("S")}</span>
+            <span className="opacity-60 font-normal">{chord("S")}</span>
           </Button>
         </div>
         {doc && doc.theirs !== undefined && ws && (
@@ -383,12 +411,13 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
           />
         )}
         <div className="relative flex-1 min-h-0">
-          <div ref={host} className="absolute inset-0" />
+          {/* Literally code: the one place the whole text is mono. */}
+          <div ref={host} data-code className="absolute inset-0" />
           {(!ws || failed) && (
-            <div className="absolute inset-0 grid place-items-center bg-ink-800 text-sm text-ink-400">
+            <div className="absolute inset-0 grid place-items-center bg-raised text-sm text-fg-muted">
               {failed ? `The editor couldn't load: ${failed}` : (
                 <span className="inline-flex items-center gap-2">
-                  <LoaderCircle className="size-4 animate-spin" />
+                  <LoaderCircle size={16} className="animate-spin" />
                   Opening {module === "song" ? "the song's" : `${name(module)}'s`} code…
                 </span>
               )}
@@ -439,26 +468,27 @@ function FileList({
         onClick={() => onOpen(path)}
         title={path}
         className={clsx(
-          "w-full h-7 flex items-center gap-2 pr-2 rounded-md text-[12.5px] font-mono text-left cursor-pointer transition-colors",
+          "w-full h-ctl-sm flex items-center gap-2 pr-2 rounded-sm text-sm text-left cursor-pointer transition-colors duration-80 ease-linear",
           indent ? "pl-6" : "pl-2",
-          active === path ? "bg-ink-700 text-ink-100" : "text-ink-300 hover:bg-ink-850 hover:text-ink-100",
+          active === path ? "bg-accent-soft text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
         )}
       >
-        {c ? <span className="size-2 rounded-full shrink-0" style={{ background: c }} /> : <FileCode2 className="size-3.5 shrink-0 text-ink-400" />}
-        <span className="truncate flex-1">{name}</span>
-        {broken(path) && <span className="size-1.5 rounded-full bg-red-500 shrink-0" title="Doesn't compile" />}
-        {dirty(path) && <span className="size-2 rounded-full bg-pop-500 shrink-0" title="Unsaved edits" />}
+        {c ? <span className="size-2 rounded-full shrink-0" style={{ background: c }} /> : <FileCode2 size={14} className="shrink-0 text-fg-faint" />}
+        {/* Filenames are literal: mono. */}
+        <span data-code className="truncate flex-1 font-mono">{name}</span>
+        {broken(path) && <span className="size-1.5 rounded-full bg-danger shrink-0" title="Doesn't compile" />}
+        {dirty(path) && <span className="size-2 rounded-full bg-fg-muted shrink-0" title="Unsaved edits" />}
       </button>
     );
   };
   return (
-    <nav aria-label="Files" className="w-48 shrink-0 overflow-y-auto border-r border-black/[0.06] bg-ink-900 px-2 py-2.5">
-      <div className="px-2 pb-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-ink-400">Files</div>
+    <nav aria-label="Files" className="w-[200px] shrink-0 overflow-y-auto border-r border-line bg-chrome px-2 py-2">
+      <div className="px-2 pb-1.5 text-sm font-semibold text-fg-muted">Files</div>
       {top.map((p) => row(p, p, false))}
       {tracks.length > 0 && (
         <>
-          <div className="h-7 flex items-center gap-2 pl-2 text-[12.5px] font-mono text-ink-400">
-            <Folder className="size-3.5" />
+          <div data-code className="h-ctl-sm flex items-center gap-2 pl-2 text-sm font-mono text-fg-faint">
+            <Folder size={14} />
             tracks
           </div>
           {tracks.map((p) => row(p, p.slice(7), true))}
@@ -479,14 +509,14 @@ function Changed({ doc, onTheirs, onMine }: { doc: Doc; onTheirs: () => void; on
         ? `${name} changed since you opened it (a knob, a cable or another editor), so your save didn't overwrite it.`
         : `${name} changed outside the editor (a knob, a cable or another editor) while you had unsaved edits.`;
   return (
-    <div role="alert" data-testid="code-changed" className="shrink-0 flex items-center gap-3 px-3 py-2 bg-amber-500/10 border-b border-amber-600/20 text-[13px] text-amber-900">
-      <TriangleAlert className="size-4 shrink-0" />
+    <div role="alert" data-testid="code-changed" className="shrink-0 flex items-center gap-3 px-3 py-2 bg-warn-soft border-b border-line text-base text-warn-strong">
+      <TriangleAlert size={16} className="shrink-0 text-warn" />
       <span className="flex-1 min-w-0">{text}</span>
-      <Button size="sm" variant="outline" onClick={onTheirs}>
+      <Button size="sm" variant="secondary" onClick={onTheirs}>
         {doc.theirs === null ? "Close it" : "Use the new version"}
       </Button>
       {doc.theirs !== null && (
-        <Button size="sm" variant="solid" onClick={onMine}>
+        <Button size="sm" variant="primary" onClick={onMine}>
           {doc.conflict ? "Save mine over it" : "Keep my edits"}
         </Button>
       )}
@@ -516,10 +546,17 @@ function Problems({
 }) {
   const where = (file: string | null, line: number | null) => (file ? `${file}${line ? `:${line}` : ""}` : null);
   if (problems.length) {
+    // The pill's tone (ST-1): a warning while the last version that compiled plays, danger only when nothing does.
+    const Icon = silent ? CircleAlert : TriangleAlert;
     return (
-      <div data-testid="problems" data-state="error" className="shrink-0 max-h-28 overflow-y-auto border-t border-red-600/15 bg-red-500/[0.06] py-1">
-        <div className="px-3 h-6 flex items-center gap-2 text-[12px] font-medium text-red-800">
-          <CircleAlert className="size-3.5" />
+      <div
+        data-testid="problems"
+        data-state="error"
+        data-tone={silent ? "danger" : "warn"}
+        className={clsx("shrink-0 max-h-28 overflow-y-auto border-t border-line py-1", silent ? "bg-danger-soft text-danger-strong" : "bg-warn-soft text-warn-strong")}
+      >
+        <div className="px-3 h-6 flex items-center gap-2 text-sm font-medium">
+          <Icon size={14} className={silent ? "text-danger" : "text-warn"} />
           {silent ? "The code doesn't compile: nothing plays until it does." : "The code doesn't compile: playing the last version that did."}
         </div>
         {problems.map((p, i) => {
@@ -530,13 +567,13 @@ function Problems({
               key={i}
               disabled={!local}
               onClick={() => local && onReveal(p.file!, p.line, p.col)}
-              className="w-full px-3 pl-8 min-h-6 py-0.5 flex items-baseline gap-2.5 text-left text-[12px] enabled:hover:bg-red-500/[0.06] enabled:cursor-pointer"
+              className={clsx("w-full px-3 pl-8 min-h-6 py-0.5 flex items-baseline gap-2 text-left text-sm enabled:cursor-pointer", silent ? "enabled:hover:bg-danger/10" : "enabled:hover:bg-warn/10")}
             >
-              {at && <span className="font-mono text-red-900/70 shrink-0">{at}</span>}
-              {p.module && !local && <span className="text-red-900/70 shrink-0">in {name(p.module)}</span>}
-              <span className="text-red-950 break-words min-w-0">{p.message}</span>
+              {at && <span data-code className="font-mono shrink-0">{at}</span>}
+              {p.module && !local && <span className="shrink-0">in {name(p.module)}</span>}
+              <span className="break-words min-w-0">{p.message}</span>
               {p.code !== "code.build" && (
-                <span className="ml-auto pl-2 shrink-0 font-mono text-[10.5px] text-red-900/50" title="The problem's code">{p.code}</span>
+                <span data-code className="ml-auto pl-2 shrink-0 font-mono text-xs opacity-70" title="The problem's code">{p.code}</span>
               )}
             </button>
           );
@@ -546,23 +583,27 @@ function Problems({
   }
   const first = types[0];
   return (
-    <div data-testid="problems" data-state={first ? "types" : "ok"} className="shrink-0 h-8 flex items-center gap-2 px-3 border-t border-black/[0.06] bg-ink-850 text-[12px] text-ink-400">
+    // The one place the revision shows (taste.md CD-2). Fine is quiet: no colour.
+    <div data-testid="problems" data-state={first ? "types" : "ok"} className="shrink-0 h-6 flex items-center gap-2 px-3 border-t border-line bg-chrome text-sm text-fg-muted">
       {first ? (
-        <button onClick={() => onReveal(first.path, first.line, first.col)} className="min-w-0 flex items-center gap-2 cursor-pointer hover:text-ink-100" title={first.message}>
-          <TriangleAlert className="size-3.5 text-amber-600 shrink-0" />
-          <span className="shrink-0 text-ink-300">
-            {types.length} type {types.length === 1 ? "problem" : "problems"}
-          </span>
-          <span className="font-mono shrink-0">{first.path}:{first.line}</span>
-          <span className="truncate">{first.message.split("\n")[0]}</span>
-        </button>
+        <>
+          <button onClick={() => onReveal(first.path, first.line, first.col)} className="min-w-0 flex items-center gap-2 cursor-pointer hover:text-fg" title={first.message}>
+            <TriangleAlert size={14} className="text-warn shrink-0" />
+            <span className="shrink-0 text-fg">
+              {types.length} type {types.length === 1 ? "problem" : "problems"}
+            </span>
+            <span data-code className="font-mono shrink-0">{first.path}:{first.line}</span>
+            <span className="truncate">{first.message.split("\n")[0]}</span>
+          </button>
+        </>
       ) : (
         <span className="flex items-center gap-2">
-          <Check className="size-3.5 text-emerald-600" />
+          <Check size={14} />
           Compiles
         </span>
       )}
-      <span className="ml-auto font-mono shrink-0" title="Every accepted change to the code is a new revision">
+      {/* The revision in one place, whatever the line says before it. */}
+      <span className="ml-auto shrink-0 text-xs text-fg-faint" title="Every accepted change to the code is a new revision">
         playing rev {revision}
       </span>
     </div>

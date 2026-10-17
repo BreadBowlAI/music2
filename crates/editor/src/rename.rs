@@ -34,6 +34,42 @@ pub(crate) fn track_call<'a>(sites: &'a [Site], files: &BTreeMap<PathBuf, std::s
     calls.next().is_none().then_some(call)
 }
 
+/// The edit that shows the track whose `track()` call is `site` (in `text`, keyed `key`) as
+/// `label`: its `name` written, replaced, or, when the label is its key, taken out (the label
+/// defaults to the key). `Some(None)`: nothing to change; None: the call isn't written so that its
+/// name can be.
+pub(crate) fn name_edit(text: &str, site: &Site, key: &str, label: &str) -> Option<Option<(u32, u32, String)>> {
+    // What `name` is written as: a JSON string is a TypeScript string.
+    let name = serde_json::to_string(label).expect("a string serialises");
+    let at = site.args.first()?.span();
+    Some(Some(match &site.args[..] {
+        // `track("kick", fn)`: options after the key, so the call's first and last characters stay
+        // and every node keeps its name (5.2).
+        [_, _] if label == key => return Some(None),
+        [_, _] => (at.1, at.1, format!(", {{ name: {name} }}")),
+        [_, Arg::Object { start, end, .. }, _] => {
+            let props = properties(text, (*start, *end))?;
+            match props.iter().position(|p| p.key == "name") {
+                Some(i) if !props[i].string => return None,
+                // Back to the key: the property goes, and the object too when it held nothing else.
+                Some(_) if label == key && props.len() == 1 => (at.1, *end, String::new()),
+                Some(i) if label == key => match (i.checked_sub(1).map(|j| &props[j]), props.get(i + 1)) {
+                    (Some(prev), _) => (prev.end, props[i].end, String::new()),
+                    (None, Some(next)) => (props[i].start, next.start, String::new()),
+                    (None, None) => unreachable!("more than one property"),
+                },
+                Some(i) => (props[i].value.0, props[i].value.1, name),
+                None if label == key => return Some(None),
+                None => match props.first() {
+                    Some(first) => (first.start, first.start, format!("name: {name}, ")),
+                    None => (*start, *end, format!("{{ name: {name} }}")),
+                },
+            }
+        }
+        _ => return None,
+    }))
+}
+
 /// Show `module` as `label`: the `name` of its `track()` call written, replaced, or, when the
 /// label is its key, taken out (the label defaults to the key). One `Identical` Tx; undo puts the
 /// old name back.
@@ -64,35 +100,8 @@ pub fn rename_label(s: &mut Session, module: &str, label: &str) -> Result<Edited
     if label == before {
         return Ok(unchanged);
     }
-    // What `name` is written as: a JSON string is a TypeScript string.
-    let name = serde_json::to_string(label).expect("a string serialises");
-    let key = site.args[0].span();
-    let edit: (u32, u32, String) = match &site.args[..] {
-        // `track("kick", fn)`: options after the key, so the call's first and last characters stay
-        // and every node keeps its name (5.2).
-        [_, _] if label == key_of => return Ok(unchanged),
-        [_, _] => (key.1, key.1, format!(", {{ name: {name} }}")),
-        [_, Arg::Object { start, end, .. }, _] => {
-            let props = properties(&text, (*start, *end)).ok_or_else(in_code)?;
-            match props.iter().position(|p| p.key == "name") {
-                Some(i) if !props[i].string => return Err(in_code()),
-                // Back to the key: the property goes, and the object too when it held nothing else.
-                Some(_) if label == key_of && props.len() == 1 => (key.1, *end, String::new()),
-                Some(i) if label == key_of => match (i.checked_sub(1).map(|j| &props[j]), props.get(i + 1)) {
-                    (Some(prev), _) => (prev.end, props[i].end, String::new()),
-                    (None, Some(next)) => (props[i].start, next.start, String::new()),
-                    (None, None) => unreachable!("more than one property"),
-                },
-                Some(i) => (props[i].value.0, props[i].value.1, name),
-                None if label == key_of => return Ok(unchanged),
-                None => match props.first() {
-                    Some(first) => (first.start, first.start, format!("name: {name}, ")),
-                    None => (*start, *end, format!("{{ name: {name} }}")),
-                },
-            }
-        }
-        _ => return Err(in_code()),
-    };
+    let edit = name_edit(&text, &site, &key_of, label).ok_or_else(in_code)?;
+    let Some(edit) = edit else { return Ok(unchanged) };
     let file = path(&site.file)?;
     let op = plan::text_edit(&file, &text, &[edit]);
     let label_now = label.to_string();

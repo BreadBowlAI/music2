@@ -27,12 +27,12 @@ const write = (f, text) => fs.writeFileSync(`${proj}/${f}`, text);
 const orig = { song: read("song.ts"), kick: read("tracks/kick.ts"), bass: read("tracks/bass.ts"), keys: read("tracks/keys.ts"), hits: read("data/kick/hits.json") };
 const graph = () => api("graph");
 const revision = async () => (await graph()).view.revision;
-const toasts = () => page.$$eval(".rise", (els) => els.map((e) => e.textContent));
+const toasts = () => page.$$eval("[data-testid=toast]", (els) => els.map((e) => e.textContent));
 const toasted = (text) => until(async () => (await toasts()).some((t) => t.includes(text)), 4000);
 /** Click the Undo of the toast that says `text`. */
 const undoToast = (text) =>
   page.evaluate((text) => {
-    const t = [...document.querySelectorAll(".rise")].find((e) => e.textContent.includes(text));
+    const t = [...document.querySelectorAll("[data-testid=toast]")].find((e) => e.textContent.includes(text));
     const b = t && [...t.querySelectorAll("button")].find((b) => b.textContent === "Undo");
     b?.click();
     return !!b;
@@ -45,6 +45,15 @@ const key = async (k, mods = []) => {
 const show = async (name) => {
   await page.click(`[data-module-tab="${name}"]`);
   await page.waitForSelector(`[data-module="${name}"]`);
+};
+/** The dock's view: `graph` (Device), `notes`, `mix` or `code`. */
+const view = async (id) => {
+  await page.click(`[data-view-tab="${id}"]`);
+  await page.waitForSelector(`[data-view-tab="${id}"][aria-selected="true"]`);
+};
+// What needs attention is in the status pill's popover (taste.md ST-1): open it to read it.
+const status = async () => {
+  if ((await page.$("[data-status]")) && !(await page.$("[data-testid=status-popover]"))) await page.click("[data-status]").catch(() => {});
 };
 const label = (module) => page.$eval(`[data-track="${module}"] [data-testid=track-label]`, (e) => e.textContent).catch(() => null);
 /** A track's colour, as its row's bar draws it. */
@@ -73,20 +82,21 @@ await page.screenshot({ path: `${S}/s6-renaming.png` });
 await key("Enter");
 check(await until(() => read("tracks/kick.ts") === orig.kick.replace('{ name: "Kick" }', '{ name: "Kick Drum" }')), "Enter writes the name into kick.ts, and nothing else");
 check(await until(async () => (await label("kick")) === "Kick Drum"), "the timeline shows it");
-check(await until(async () => (await page.$eval('[data-module-tab="kick"]', (e) => e.textContent)) === "Kick Drum"), "so does the module's tab");
-check(await toasted("Renamed Kick to Kick Drum"), "a toast says so, with Undo");
+check(await until(async () => (await page.$eval('[data-module-tab="kick"] [data-testid=track-label]', (e) => e.textContent)) === "Kick Drum"), "so does the module's tab");
+// The name on screen says it: a rename makes no toast; its Undo is the top bar's (taste.md ST-5).
+check(!(await toasts()).some((t) => t.includes("Renamed")) && (await page.$eval('button[aria-label="Undo"]', (b) => !b.disabled)), "no toast says so: the name does, and Undo is offered");
 const t = (await graph()).timeline.tracks.find((t) => t.module === "kick");
 check(t?.label === "Kick Drum" && t.lanes[0].clips.length > 0, "the key stays: its notes still play");
 
-// On the canvas too; back to the first name, the file is as it was.
+// In the dock's header too (the canvas's title row is gone, taste.md DK-3); back to the first name, the file is as it was.
 await show("kick");
-await page.click('[data-module="kick"] [data-testid=module-title]', { count: 2 });
+await page.click('[data-testid=dock] [data-testid=module-title]', { count: 2 });
 const canvasInput = await page.waitForSelector("[data-testid=track-rename]", { timeout: 2000 }).catch(() => null);
-check(!!canvasInput, "double-clicking the canvas's title edits it too");
+check(!!canvasInput, "double-clicking the dock's title edits it too");
 await page.keyboard.type("Kick");
 await key("Enter");
 check(await until(() => read("tracks/kick.ts") === orig.kick), "renamed back: kick.ts is byte for byte as it was");
-check(await until(async () => (await page.$eval('[data-module="kick"] [data-testid=module-title]', (e) => e.textContent)) === "Kick"), "the title shows it");
+check(await until(async () => (await page.$eval('[data-testid=dock] [data-testid=module-title]', (e) => e.textContent)) === "Kick"), "the title shows it");
 
 // Clicking away writes it too; each rename is one undo step.
 await page.click('[data-track="hats"] [data-testid=track-label]', { count: 2 });
@@ -104,16 +114,21 @@ check(await until(async () => (await label("kick")) === "Kick" && read("tracks/k
 
 // The song has no name to change.
 await show("song");
-await page.click('[data-module="song"] [data-testid=module-title]', { count: 2 });
+await page.click('[data-testid=dock] [data-testid=module-title]', { count: 2 });
 await sleep(300);
 check(!(await page.$("[data-testid=track-rename]")), "the song's title isn't renamed");
 
 // ---------------------------------------------------------------- automate a knob (HOME-2)
 
 const bassColor = await barColor("bass");
-const panKnob = '[data-module="song"] [data-knob="hats.pan"]';
+// Hats' pan, on its Mix strip (MX-6).
+await view("mix");
+const panKnob = '[data-testid=mix] [data-knob="hats.pan"]';
+await page.waitForSelector(panKnob);
 await page.$eval(panKnob, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
 const openMenu = async (sel) => {
+  // The scroll that brought it into view lands first: the menu closes on a scroll under it.
+  await sleep(150);
   const b = await (await page.$(sel)).boundingBox();
   await page.mouse.click(b.x + 30, b.y + b.height / 2, { button: "right" });
   return page.waitForSelector("[data-testid=knob-menu]", { timeout: 2000 }).catch(() => null);
@@ -122,7 +137,8 @@ check(!!(await openMenu(panKnob)), "right-clicking a knob opens its menu");
 const item = (id) => page.$eval(`[data-testid=knob-menu] [data-menu-item="${id}"]`, (e) => ({ disabled: e.getAttribute("aria-disabled") === "true", detail: e.querySelector("[data-detail]").textContent })).catch(() => null);
 const automateItem = await item("automate");
 check(automateItem && !automateItem.disabled && automateItem.detail.includes("new lane"), `it offers Automate (${automateItem?.detail})`);
-check((await item("reset"))?.detail === "0", "and Reset to its default, 0");
+// A pan reads "C" at the centre (taste.md, Words and numbers).
+check((await item("reset"))?.detail === "C", "and Reset to its default, C");
 await page.screenshot({ path: `${S}/s6-menu.png` });
 await key("Escape");
 check(await until(async () => !(await page.$("[data-testid=knob-menu]"))), "Escape closes it");
@@ -133,16 +149,18 @@ await page.click('[data-testid=knob-menu] [data-menu-item="automate"]');
 const automated = orig.song.replace("song(() =>", "song(({ lane }) =>").replace("pan: 0.3", 'pan: lane.control("hats-pan", "bipolar", 0.3)');
 check(await until(() => read("song.ts") === automated), "Automate writes the value as a lane's fallback, and the song takes its lanes");
 check(read("data/song/hats-pan.json") === '{"unit": "bipolar", "clips": []}\n', "with an empty lane file beside the song's data");
-check(await toasted("Automating hats pan in a new lane, hats-pan"), "a toast names the new lane, with Undo");
+// In words: never the lane's key (taste.md §6.22).
+check(await toasted("Automating Hats pan in a new lane"), "a toast says so, with Undo");
 check(await until(async () => !!(await page.$('[data-lane="song.hats-pan"]'))), "the timeline shows the lane");
+check(await until(async () => (await page.$eval('[data-lane="song.hats-pan"] span.truncate', (e) => e.textContent).catch(() => null)) === "Hats pan"), "its header says Hats pan, as the Mix view does, never the key");
 const lane = (await graph()).timeline.tracks.find((t) => t.module === "song")?.lanes.find((l) => l.key === "hats-pan");
 check(lane?.kind === "control" && lane.default === 0.3 && lane.clips.length === 0 && lane.unit === "bipolar", "empty, drawing the fallback (0.3)");
 check((await revision()) === revA + 1, "one revision");
-check(await until(async () => !(await page.$(panKnob)) && !!(await page.$('[data-module="song"] [data-node="hats-pan"]'))), "on the canvas the knob is a lane now");
+check(await until(async () => !(await page.$(panKnob)) && !!(await page.$('[data-testid=mix] [data-strip="hats"] [data-testid=pan-in-code]'))), "on its strip the knob is gone: a lane sets it now");
 check((await barColor("bass")) === bassColor, "a lane on the song recolours no track");
 await page.screenshot({ path: `${S}/s6-automated.png` });
 
-check(await undoToast("Automating hats pan"), "the toast's Undo");
+check(await undoToast("Automating Hats pan"), "the toast's Undo");
 check(await until(() => read("song.ts") === orig.song && read("data/song/hats-pan.json") === null), "puts the literal back and takes the lane file away, in one step");
 check(await until(async () => !!(await page.$(panKnob)) && !(await page.$('[data-lane="song.hats-pan"]'))), "and the knob is back");
 await key("z", ["Meta", "Shift"]);
@@ -151,6 +169,7 @@ await key("z", ["Meta"]);
 check(await until(() => read("song.ts") === orig.song), "undone again");
 
 // From the keyboard, in a track that takes its lanes already: only the value changes there.
+await view("graph");
 await show("bass");
 const hi = '[data-module="bass"] [data-node="xrange"] [data-knob="hi"]';
 await page.$eval(hi, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
@@ -184,7 +203,7 @@ check(await until(async () => (await brightness()) === "5000"), "the edit taken 
 
 write("tracks/kick.ts", orig.kick.replace('track("kick"', 'track("kicks"'));
 const row = '[data-testid=attention] [data-problem="data.unclaimed"][data-src="data/kick"]';
-check(await until(async () => !!(await page.$(row))), "a track key renamed by hand: Needs attention names its folder");
+check(await until(async () => (await status(), !!(await page.$(row)))), "a track key renamed by hand: Needs attention names its folder");
 const likely = await page.$eval(`${row} [data-fix="relink"][data-likely]`, (e) => ({ text: e.textContent, to: e.dataset.to })).catch(() => null);
 check(likely?.text === "Move all to Kick (kicks)" && likely.to === "data/kicks", `its one-click fix moves the whole folder (${likely?.text} → ${likely?.to})`);
 const notes = async (module) => (await graph()).timeline.tracks.find((t) => t.module === module)?.lanes[0]?.clips.length ?? -1;
@@ -198,7 +217,7 @@ check((await revision()) === revF + 1, "one revision");
 check(await toasted("Moved data/kick to data/kicks."), "a toast says so, with Undo");
 check(await undoToast("Moved data/kick"), "its Undo");
 check(await until(() => read("data/kick/hits.json") === orig.hits && !fs.existsSync(`${proj}/data/kicks`)), "moves the folder back");
-check(await until(async () => !!(await page.$(row))), "and the strip names it again");
+check(await until(async () => (await status(), !!(await page.$(row)))), "and the strip names it again");
 write("tracks/kick.ts", orig.kick);
 check(await until(async () => !(await page.$("[data-testid=attention]")) && (await notes("kick")) > 0), "the key put back by hand: nothing needs attention");
 

@@ -165,12 +165,15 @@ fn a_shared_literal_is_one_control() {
 }
 
 // HOME-1 (a CI gate from step 5): every value `controls()` and the view return names its home. The
-// view is checked as it is sent, so a value without the field fails.
+// view is checked as it is sent, so a value without the field fails; so is the timeline, whose tempo
+// and time signatures live in `data/arrangement.json` (8b.2).
 #[test]
 fn every_value_names_its_home() {
     for (name, f) in FIXTURES.iter().map(|n| (*n, fixture(n))).chain([("every-component", every_component())]) {
         let s = f.open();
         assert!(s.controls().iter().all(|c| c.home == Home::Code), "{name}");
+        let timeline = serde_json::to_value(s.timeline()).unwrap();
+        assert_eq!((&timeline["home"], timeline["tempo"].as_array().map(Vec::len)), (&serde_json::json!("arrangement"), Some(1)), "{name}");
         let view = serde_json::to_value(s.view()).unwrap();
         let mut values = 0;
         for n in view["modules"].as_array().unwrap().iter().flat_map(|m| m["nodes"].as_array().unwrap()) {
@@ -258,12 +261,30 @@ fn the_deleted_items_are_gone() {
     assert!(!read("crates/editor/src/view.rs").contains(&["unit", "_range"].concat()), "view.rs guesses ranges from units");
 }
 
+/// Call `call` of `source` with `edits` (positions in `source`, in order) made in it.
+fn edited(source: &str, call: &Site, edits: &[(u32, u32, String)]) -> String {
+    let (mut out, mut at) = (String::new(), call.start as usize);
+    for (start, end, text) in edits {
+        out += &source[at..*start as usize];
+        out += text;
+        at = *end as usize;
+    }
+    out + &source[at..call.end as usize]
+}
+
+/// Every-component with its mixer's `fx` channel written as `db(-4)`, which the file imports.
+const SPELLED: [(&str, &str); 2] =
+    [("import { semis, song } from \"@m2/core\";", "import { db, semis, song } from \"@m2/core\";"), ("db: -4 }", "db: db(-4) }")];
+
 // Critique 1 of the step 5 design, D5, D11, PKG-1: every call the planners write type-checks as
 // the code editor checks songs (strict, against the SDK and std sources). On every-component,
 // each control a call leaves out is written in (a number as a value edit writes it, and a signal's
-// name as `connect` does) and each effect is added; every call so written is listed in
-// tests/forms/forms.ts, which must be as recorded here. `tsc -p crates/editor/tests/forms` type-checks
-// it with web's tsc, in web's `npm run typecheck` and so in `npm run build`.
+// name as `connect` does), each effect is added, and each instrument + Track lists is added as a
+// new track's `track(…)` call (8b.1); each mixer channel with no pan gets its first pan, and each
+// that leaves out its fader gets one in the style of a mixer whose other entries write `db(…)`
+// (8b.3b); every call so written is listed in tests/forms/forms.ts, which must be as recorded
+// here. `tsc -p crates/editor/tests/forms` type-checks it with web's tsc, in web's
+// `npm run typecheck` and so in `npm run build`.
 #[test]
 fn planned_call_forms_are_current() {
     let f = every_component();
@@ -280,27 +301,62 @@ fn planned_call_forms_are_current() {
     for c in &inherited {
         let call = site(c.origin.site);
         let slot = c.origin.slot().unwrap();
-        let value = if c.value == 0.0 { "0".to_string() } else { c.value.to_string() };
-        for (what, number) in [("a value", value.as_str()), ("a cable", "wobble")] {
-            let Some((start, end, text)) = c.planned(number) else { continue };
-            if number == "wobble" && start < wobble_end {
+        let value = c.number(&if c.value == 0.0 { "0".to_string() } else { c.value.to_string() });
+        for (what, written) in [("a value", value.as_str()), ("a cable", "wobble")] {
+            let Some(edits) = c.planned(written) else { continue };
+            if written == "wobble" && edits[0].0 < wobble_end {
                 continue;
             }
-            let edited = format!("{}{text}{}", &source[call.start as usize..start as usize], &source[end as usize..call.end as usize]);
+            let edited = edited(&source, call, &edits);
             forms.push(format!("    // song.ts:{} `{}` leaves out {slot}: {what} written in\n    {edited},\n", call.line, call.callee));
         }
+    }
+    // A channel's first pan (8b.3b).
+    let crate::mix::Mixing::One(m) = crate::mix::mixer(s.accepted()) else { panic!("every-component has one mixer") };
+    let call = site(m.site);
+    for c in &m.channels {
+        let Ok(i) = crate::mix::planned(s.accepted(), &m, &c.key, "pan") else { continue };
+        let edited = edited(&source, call, &i.edits(&i.number("0")));
+        forms.push(format!("    // song.ts:{} `mixer`: the first pan of channel {}\n    {edited},\n", call.line, c.key));
+    }
+    // A fader written into a mixer whose other entries write `db(…)`.
+    let spelled = SPELLED.iter().fold(source.clone(), |t, (from, to)| t.replacen(from, to, 1));
+    f.write("song.ts", &spelled);
+    let s2 = f.open();
+    let sites2 = &s2.accepted().compiled.sites;
+    for c in s2.controls().into_iter().filter(|c| !c.written && c.origin.slot().is_some_and(|x| x.starts_with("channels."))) {
+        let call = sites2.iter().find(|x| x.id == c.origin.site).unwrap();
+        let edits = c.planned(&c.number("0")).expect("insertable");
+        let edited = edited(&spelled, call, &edits);
+        assert!(edited.contains("db: db(0)"), "{edited}");
+        forms.push(format!("    // song.ts:{} `mixer` writes db(…): {} written in\n    {edited},\n", call.line, c.origin.slot().unwrap()));
     }
     for e in s.effects() {
         forms.push(format!("    // {} added after a sound\n    {}(osc.saw(semis(60)){}),\n", e.component, e.name, e.insert));
     }
     let (head, rest) = source.split_once("export default song(({ lane, time }) => {\n").expect("every-component's song");
+    // A new track's file (8b.1): its `track(…)` call, for every instrument + Track lists, under the
+    // key and name it proposes. Every-component imports what each plays (`synth` for `synth.pad`).
+    let imported: BTreeSet<&str> = head
+        .lines()
+        .filter_map(|l| l.strip_prefix("import {")?.split_once('}'))
+        .flat_map(|(names, _)| names.split(',').map(str::trim))
+        .collect();
+    for i in s.instruments() {
+        let binding = crate::tracks::instrument_binding(&i);
+        assert!(imported.contains(binding), "every-component doesn't import {binding}, which a track playing {} imports", i.component);
+        let key = crate::keys::propose(&i.label, |_| false);
+        forms.push(format!("    // {} added as a track\n    {},\n", i.component, crate::tracks::track_call_text(&i, &key, &i.label)));
+    }
     let (body, ret) = rest.split_once("  return ").expect("its return");
     let text = format!(
         "// Generated by `planned_call_forms_are_current` (crates/editor/src/gate5_tests.rs) from\n\
          // core/session/tests/fixtures/every-component/song.ts: every call the editor's planners write\n\
          // there, which `tsc -p crates/editor/tests/forms` checks as the code editor checks songs.\n{}\
+         import {{ track }} from \"@m2/core\";\n\
          export default song(({{ lane, time }}) => {{\n{body}  const planned = [\n{}  ];\n  void planned;\n  return {ret}",
-        head.lines().filter(|l| l.starts_with("import")).map(|l| format!("{l}\n")).collect::<String>(),
+        // The spelled song's imports: every-component's, and `db`.
+        spelled.lines().filter(|l| l.starts_with("import")).map(|l| format!("{l}\n")).collect::<String>(),
         forms.concat(),
     );
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/forms/forms.ts");

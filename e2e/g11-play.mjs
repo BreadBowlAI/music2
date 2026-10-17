@@ -21,7 +21,8 @@ const consoleErrors = [];
 // The refused writes answer 400 (the lane route) and 500 (the agent's Tx): expected here.
 page.on("console", (m) => m.type() === "error" && !/400 \(Bad Request\)/.test(m.text()) && consoleErrors.push(m.text()));
 page.on("pageerror", (e) => consoleErrors.push(String(e)));
-await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; }, sess.token);
+// The dock as tall as in the notes suite, so the roll shows the rows clicked here.
+await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; try { localStorage.setItem("m2.graph.panel", "450"); } catch {} }, sess.token);
 const headers = { "x-m2-token": sess.token, "content-type": "application/json" };
 const api = async (path) => (await fetch(`${sess.url}/api/${path}`, { headers })).json();
 const post = async (path, body) => {
@@ -38,7 +39,10 @@ const FILE = `${proj}/data/bass/notes.json`;
 const TX = `${proj}/.music2/tx`;
 const original = fs.readFileSync(FILE, "utf8");
 const graph = () => api("graph");
-const toasts = () => page.$$eval(".rise", (els) => els.map((e) => e.textContent));
+const toasts = () => page.$$eval("[data-testid=toast]", (els) => els.map((e) => e.textContent));
+// One toast shows at a time (taste.md §2.14), so a second showing of the same words would only
+// replace the first: count the toasts that appeared, not the ones in view.
+const appeared = () => page.evaluate(() => window.__appeared ?? []);
 const toasted = (text) => until(async () => (await toasts()).some((t) => t.includes(text)), 4000);
 const notes = () => page.$$eval("[data-testid=notes] [data-note]", (els) => els.map((e) => Number(e.dataset.pitch)));
 const box = async (sel) => { const el = await page.$(sel); return el && el.boundingBox(); };
@@ -47,27 +51,40 @@ const bassNotes = (g) => g.timeline.tracks.find((t) => t.module === "bass").lane
 
 await page.goto(sess.url, { waitUntil: "domcontentloaded" });
 await page.waitForSelector("[data-testid=graph] [data-module]", { timeout: 8000 });
+await page.evaluate(() => {
+  window.__appeared = [];
+  new MutationObserver((records) => {
+    for (const r of records) for (const n of r.addedNodes) {
+      if (!(n instanceof HTMLElement)) continue;
+      for (const t of [n, ...n.querySelectorAll("[data-testid=toast]")]) if (t.dataset.testid === "toast") window.__appeared.push(t.textContent);
+    }
+  }).observe(document.body, { childList: true, subtree: true });
+});
 await post("graph/transport", { action: "play" });
 
 // The Bass clip in the piano roll, middle C in view (the clip has nothing there).
 const clipBox = await box('[data-lane="bass.notes"] :nth-child(1 of [data-clip])');
 await page.mouse.click(clipBox.x + 60, clipBox.y + clipBox.height / 2, { count: 2 });
 check(await until(async () => (await notes()).length === 48), "the Bass clip opens in the piano roll with its 48 notes");
-await page.$eval("[data-testid=roll-scroller]", (el) => { el.scrollTop = 26 + (127 - 60) * 16 - el.clientHeight / 2; });
+// The roll's rows and its ruler (taste.md §3.5: 14px rows, the arrangement's 28px ruler).
+const ROW = 14, RULER = 28;
+await page.$eval("[data-testid=roll-scroller]", (el, row, ruler) => { el.scrollTop = ruler + (127 - 60) * row - el.clientHeight / 2; }, ROW, RULER);
 await sleep(100);
 const grid = await box("[data-testid=roll-grid]");
 const ppb = await page.evaluate(() => {
   const n = [...document.querySelectorAll("[data-testid=notes] [data-note]")].find((e) => Number(e.dataset.start) > 0);
   return (n.getBoundingClientRect().left - document.querySelector("[data-testid=roll-grid]").getBoundingClientRect().left) / Number(n.dataset.start);
 });
-const cell = (pitch, beat) => ({ x: grid.x + beat * ppb, y: grid.y + (127 - pitch) * 16 + 8 });
+const cell = (pitch, beat) => ({ x: grid.x + beat * ppb, y: grid.y + (127 - pitch) * ROW + ROW / 2 });
+// A double-click on empty grid adds a note; a single click selects nothing (D4).
+const add = (at) => page.mouse.click(at.x, at.y, { count: 2 });
 
 // ---------------------------------------------------------------- written, as always
 
 const g0 = await graph();
 let at = cell(60, 1.1);
-await page.mouse.click(at.x, at.y);
-check(await until(() => fs.readFileSync(FILE, "utf8").includes('"pitch": "C4"')), "a click adds C4, written to data/bass/notes.json");
+await add(at);
+check(await until(() => fs.readFileSync(FILE, "utf8").includes('"pitch": "C4"')), "a double-click adds C4, written to data/bass/notes.json");
 check(await until(async () => (await graph()).view.revision === g0.view.revision + 1), "as one revision");
 check((await toasts()).length === 0, "no message");
 const saved = fs.readFileSync(FILE, "utf8");
@@ -87,12 +104,12 @@ if (root) {
   console.log("SKIP  .music2/tx/ stays writable when read-only (run as root): the refused write isn't tested");
 } else {
   at = cell(64, 3.1);
-  await page.mouse.click(at.x, at.y);
-  check(await toasted("taken back"), "a click the disk refuses: a message says it was taken back");
+  await add(at);
+  check(await toasted("taken back"), "a double-click the disk refuses: a message says it was taken back");
   const said = (await toasts()).find((t) => t.includes("taken back")) ?? "";
   check(said.startsWith("data/bass/notes.json couldn't be saved") && said.endsWith("It played for a moment and was taken back."), `and what wasn't saved: “${said}”`);
   await sleep(700); // the message's rise, and the server's word to every window (every 300 ms)
-  const once = (await toasts()).filter((t) => t.includes("taken back")).length;
+  const once = (await appeared()).filter((t) => t.includes("taken back")).length;
   check(once === 1, `said once, though the server tells every window too (${once})`);
   await page.screenshot({ path: `${S}/g11-taken-back.png` });
   check(await until(async () => (await notes()).length === 49 && !(await notes()).includes(64)), "the piano roll shows the clip as it was: 49 notes, no E4");
@@ -118,8 +135,8 @@ if (root) {
   await until(async () => !(await api("graph/status")).playing);
   await until(async () => (await toasts()).length === 0, 8000); // the messages fade
   at = cell(64, 3.1);
-  await page.mouse.click(at.x, at.y);
-  check(await toasted("couldn't be saved"), "stopped, a click the disk refuses: a message says what wasn't saved");
+  await add(at);
+  check(await toasted("couldn't be saved"), "stopped, a double-click the disk refuses: a message says what wasn't saved");
   const stopped = (await toasts()).find((t) => t.includes("couldn't be saved")) ?? "";
   check(stopped.startsWith("data/bass/notes.json couldn't be saved") && !/played|plays/.test(stopped), `and not that it played: “${stopped}”`);
   check(await until(async () => (await notes()).length === 49 && !(await notes()).includes(64)), "the piano roll shows the clip as it was");
@@ -132,8 +149,8 @@ if (root) {
 
 await until(async () => (await toasts()).length === 0, 8000); // the messages fade
 at = cell(67, 5.1);
-await page.mouse.click(at.x, at.y);
-check(await until(() => fs.readFileSync(FILE, "utf8").includes('"pitch": "G4"')), "once the disk takes writes again, the next click is saved");
+await add(at);
+check(await until(() => fs.readFileSync(FILE, "utf8").includes('"pitch": "G4"')), "once the disk takes writes again, the next double-click is saved");
 check(await until(async () => (await notes()).length === 50), "and shows: 50 notes");
 check(!(await toasts()).some((t) => t.includes("taken back")), "with no message");
 await page.screenshot({ path: `${S}/g11-saved.png` });

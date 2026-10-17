@@ -37,6 +37,9 @@ T (tokens), then S (shell), then each 8b item with its own UI. §8 lists them.
   - a `background-image` that contains `gradient`;
   - a `backdrop-filter`;
   - `font-family` mono outside `[data-code]` elements.
+
+  It also checks the font itself (§2.1): a Mac page draws its text in the system font and never
+  loads Inter; a Linux page loads Inter and draws its text in it, with tabular figures.
 - The e2e suites select by `data-testid`. Keep every testid on the element that replaces the old one.
   The status popover's items keep `attention` and `compile-banner`, and the pill keeps
   `read-only-banner`. Update the suites in the same PR that moves an element.
@@ -144,11 +147,20 @@ meters move at audio rate through `requestAnimationFrame` and are never eased.
 
 ### 2.1 Font and type scale
 
-**Font: the system face**: `system-ui` resolves to SF Pro on macOS in both Tauri's WebKit and
-headless Chrome. **Code uses `ui-monospace`** (SF Mono in WebKit, Menlo in Chrome). No font file is
-shipped and none is fetched, which fixes D10: the app looks the same offline. The app runs only on
-macOS (CoreAudio), the menu bar and file dialogs are already SF, and a pro tool doesn't need a
-typeface of its own. Its identity is the work on screen.
+**Font: the system face on the Mac, Inter elsewhere.** On the Mac, `system-ui` resolves to SF Pro
+in both Tauri's WebKit and headless Chrome. The menu bar and file dialogs are already SF, and a pro
+tool doesn't need a typeface of its own: its identity is the work on screen. Off the Mac,
+`system-ui` is some other face (DejaVu Sans on Linux, wide and plain), so the app ships one font
+file: Inter 4.1's variable font, `web/public/fonts/InterVariable.woff2`, under the SIL Open Font
+License (`OFL.txt` beside it). `main.tsx` sets `data-os="mac"` on the root on a Mac, before the
+first render, and `index.css` picks the font by it, not by a font list (`system-ui` exists
+everywhere). **Code uses `ui-monospace`** (SF Mono in WebKit, Menlo in Chrome). Nothing is fetched
+from the network, which fixes D10: the app looks the same offline.
+
+| | Mac | Linux, Windows |
+|---|---|---|
+| UI | `system-ui` (SF Pro) | Inter, from the app's own file |
+| Code | `ui-monospace` | the system's monospace |
 
 **Numbers are tabular everywhere.** Set `font-variant-numeric: tabular-nums` on `body` and never
 opt out, so values don't jiggle as they change. Use no other `font-feature-settings`: today's
@@ -509,7 +521,7 @@ This goes in `web/src/index.css`. It replaces the current `@theme` block and the
   --ease-*: initial;
   --animate-*: initial;
 
-  --font-sans: system-ui, -apple-system, "Helvetica Neue", sans-serif;
+  --font-sans: "Inter Variable", sans-serif;  /* the Mac's own font under :root[data-os="mac"], §2.1 */
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
   --font-weight-normal: 400;
   --font-weight-medium: 500;
@@ -939,6 +951,14 @@ view at first launch.
 - At 1100 px wide the browser starts hidden and the headers shrink to 200 px.
 - The top bar drops items in this order: the time readout, the DSP percentage text (the bar stays),
   then the song name.
+- In the Mac app the bar starts 80 px in, for the window's buttons, and the browser's toggle sits
+  before Go to start, so the left side ends about 500 px in once the time shows. There the time
+  shows from 1280 px (not 1180), and from 1280 px the name keeps 548 px clear on each side (the
+  480 plus the 68 px the window's buttons add). `fx-fixes` checks both bars at 1100, 1180, 1280
+  and 1440 px (the taste plan's attack, item C).
+- What the engine is busy with ("Paused for export", "Loading Surge XT…") is a neutral state of
+  the status pill, ranked below every problem (ST-1): nothing sits under the song's name (lead
+  decision T2).
 - The dock body is never shorter than 180 px, and the lanes are never shorter than 3 rows.
 - Nothing scrolls horizontally except the arrangement, the roll, the Device chain and the Mix
   strips.
@@ -1156,8 +1176,8 @@ keys, Space, Return, ⌫, arrows, ⌥ chords) is handled by the page, with no na
 | **Tracks** | | | | |
 | New track | ⌘T | — | ⌥⌘N | ⌘T (audio), ⇧⌘T (MIDI) |
 | Delete track | ⌘⌫ | — | ⌘⌫ | ⌫ |
-| Mute the selected track | M (also ⌃M) | — | ⌃M | — |
-| Solo the selected track | S (also ⌃S) | — | ⌃S | — |
+| Mute the selected track | M (also ⌃M, Mac only) | — | ⌃M | — |
+| Solo the selected track | S (also ⌃S, Mac only) | — | ⌃S | — |
 | Show / hide automation | A | — | A | A |
 | Track height | ⌘↑ / ⌘↓ | — | ⌘↑ / ⌘↓ | — |
 | **View** | | | | |
@@ -1194,9 +1214,10 @@ keys, Space, Return, ⌫, arrows, ⌥ chords) is handled by the page, with no na
 - **⌘K stays free for musical typing,** as in Logic. The command palette takes ⇧⌘P, the code
   editor convention, which fits a code-first app.
 - **M and S mute and solo the selected track.** This is fast and one-handed. ⌃M and ⌃S also work for
-  Logic hands. Live's M (computer keyboard) is covered by ⌘K.
+  Logic hands, on a Mac only: elsewhere Ctrl stands for ⌘, and Ctrl+S saves. Live's M (computer keyboard) is covered by ⌘K.
 - **Stop returns to where play started (Live).** ⇧Space continues from where it stopped. A click in
-  the ruler or on empty lane space moves the start point.
+  the ruler moves the start point; so does a click on empty lane space, while stopped only (8b.2): a
+  click to deselect while playing never makes the song jump, and no start point moves unseen.
 - **No ⇧Tab:** it moves keyboard focus backwards, and focus traversal must keep working.
 
 ### 5.2 Gestures
@@ -1218,13 +1239,19 @@ keys, Space, Return, ⌫, arrows, ⌥ chords) is handled by the page, with no na
 | Clip | drag the body / either edge | move / resize |
 | | ⌥-drag | copy |
 | | double-click | open in Notes (notes clips) |
-| Lane (empty) | double-click | a new 1-bar clip (keep) |
+| Lane (empty) | click | while stopped: move the playhead there, as the ruler does; while playing: nothing |
+| | double-click | a new 1-bar clip (keep) |
 | Automation clip | click or drag within 6 px of the curve / click or drag elsewhere on the clip | add a point and move it / select or move the clip, as for notes clips |
 | Ruler | click / drag | set the start point / set the loop |
 | Notes grid | the click rules in §3.5 | |
 
 ### 5.3 Rules
 
+- **Keys per OS (OS-54).** The map writes the Mac's keys. Elsewhere ⌘ is Ctrl, ⌥ is Alt, ⇧ is Shift,
+  ⌫ is Backspace and Return is Enter, and every label spells them in words: "Ctrl+Shift+E",
+  "Shift-drag", "Alt-click". `web/src/lib/native.ts` spells them all (`chord`, `opt`, `shifted`,
+  `keyName`, `mod`); no label writes a key by hand. ⌃ chords are Mac only. In a text field,
+  Ctrl+Backspace deletes the word before, as PC fields do (⌘⌫ deletes to the line's start on a Mac).
 - **Native menu accelerators are only ⌘ and ⌃ chords.** A native accelerator fires even while the
   producer types in the code editor or a rename field, which is why `menu.rs` already leaves Space
   out. So single keys, Space, Return, ⌫, arrows and ⌥ chords are the page's, and are ignored while
@@ -1236,10 +1263,12 @@ keys, Space, Return, ⌫, arrows, ⌥ chords) is handled by the page, with no na
   and in the ⌥K sheet, grouped as in §5.1.
 - The Transport menu lists Play, Continue, Go to Start, Loop, Loop Selection, Metronome and Follow.
 - The View menu lists Zoom In, Zoom Out, Zoom to Selection, Track Height, Show Automation, the four
-  dock views, Show Dock, Show Browser, Command Palette and Full Screen.
-- The Track menu (new) lists New Track, Delete, Rename, Mute (⌃M), Solo (⌃S) and Mute in Song.
+  dock views, Show Dock, Show Browser, Command Palette and, on a Mac, Full Screen.
+- The Track menu (new) lists New Track, Delete, Rename, Mute (⌃M on a Mac), Solo (⌃S on a Mac) and Mute
+  in Song.
   Duplicate is one item, in Edit, and acts on whatever is selected (§5.1).
-- The Help menu lists Keyboard Shortcuts.
+- The Help menu lists Keyboard Shortcuts. Off the Mac there is no app menu: About ends Help, and Quit
+  (Ctrl+Q) ends File. Only the Mac has a Window menu.
 
 ---
 

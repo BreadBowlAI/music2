@@ -118,7 +118,8 @@ pub enum SettingKind {
     Choice,
 }
 
-/// What an editor offers. A component with a category is an effect, added after any audio.
+/// What an editor offers. A component with a category is an effect, added after any audio, when
+/// it takes audio first, and an instrument a new track plays when it takes notes first.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Editor {
     /// A free string the UI groups (PKG-7).
@@ -170,9 +171,18 @@ impl Descriptor {
         a.range.map(|r| (r, a.log))
     }
 
-    /// Whether editors offer it as an effect.
+    /// Whether editors offer it as an effect: a category, and audio first.
     pub fn is_effect(&self) -> bool {
-        self.editor.category.is_some()
+        self.editor.category.is_some() && self.inputs.first().is_some_and(|i| i.kind == PortKind::Audio)
+    }
+
+    /// Whether a new track can play it (PKG-7): notes first, its only input, and audio out. The
+    /// + Track list offers it only when it has a category, which groups it.
+    pub fn is_instrument(&self) -> bool {
+        matches!(&self.inputs[..], [i] if i.kind == PortKind::Notes)
+            && self.output.as_ref().is_some_and(|o| o.kind == PortKind::Audio)
+            && self.controls.iter().all(|c| c.each.is_none() && (c.optional || c.default.is_some()))
+            && self.settings.iter().all(|s| s.default.is_some())
     }
 }
 
@@ -200,5 +210,10 @@ impl Catalog {
     /// The components editors offer as effects.
     pub fn effects(&self) -> impl Iterator<Item = &Arc<Descriptor>> {
         self.components.values().filter(|d| d.is_effect())
+    }
+
+    /// The components a new track can play.
+    pub fn instruments(&self) -> impl Iterator<Item = &Arc<Descriptor>> {
+        self.components.values().filter(|d| d.is_instrument())
     }
 }
