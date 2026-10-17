@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { Check, CodeXml, Copy, Ellipsis, Pencil, Search, SlidersHorizontal, Trash2, Volume2, VolumeX } from "lucide-react";
+import { Check, CodeXml, Copy, Ellipsis, Pencil, Search, SlidersHorizontal, Trash2, VolumeX } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
 import { graphApi, lockReason, moduleName, type Dependent, type GraphState, type Instrument } from "../lib/graph";
@@ -406,7 +406,8 @@ function TrackMenu({ graph, module, anchor, onClose }: { graph: GraphState; modu
   const inSong = graph.overlays?.heard[module] === "muted-in-song";
   const songMute = (
     <MenuRow
-      icon={inSong ? <Volume2 size={14} /> : <VolumeX size={14} />}
+      // One icon either way: the row is about the song's mute, and its words say which way.
+      icon={<VolumeX size={14} />}
       disabled={!!locked}
       title={locked ?? undefined}
       data-testid="mute-in-song"

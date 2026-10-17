@@ -296,6 +296,9 @@ await page.click('[data-mute="kick"]');
 const menu1 = await page.waitForSelector("[data-testid=track-menu]", { timeout: 2000 }).catch(() => null);
 check(!!menu1 && (await menuRows())[0] === "Unmute in song", `a click on its M opens its menu with Unmute in song first: ${JSON.stringify(await menuRows())}`);
 check(same((await overlays()).mute, []), "and mutes nothing while listening");
+// One icon per meaning (taste.md §2.12): the speaker with a cross, as Mute in song has; Volume2 is audition's.
+const unmuteIcon = await page.$eval("[data-testid=mute-in-song] svg", (e) => e.getAttribute("class")).catch(() => "");
+check(unmuteIcon.includes("lucide-volume-x") && !unmuteIcon.includes("lucide-volume-2"), `Unmute in song keeps Mute in song's icon, not audition's: ${unmuteIcon}`);
 await page.keyboard.press("Escape");
 await select("kick");
 await key("m");
