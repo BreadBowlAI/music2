@@ -13,6 +13,13 @@ whatever you pick up.
   passed at `e108e46`: every row, nothing passed only on a retry (922 Rust tests, 29/29 browser suites, 10 of 10
   renders, the 6 gate runs). So did the recorded tests, 5 of 5. Its Mac run is owed (below); one run covers step 7
   too.
+- **The back ends of 8b.4, 8b.5, 8b.6 and 8b.8 are on `main`** (2026-10-17; branch `8b-backend`): mute, solo and
+  mute in song; clips by id (move, resize, split, join, quantize, paste) and Remove automation; audition (notes
+  played from a window); meters and the DSP load. No screens yet: those are on `8b-ui` (in progress). Reviewed (6
+  findings, all fixed with tests); `ci/check.sh --gates` passed at `a8199ff`, every row, nothing passed only on a
+  retry (1039 Rust tests, 29/29 browser suites, 10 of 10 renders, the 6 gate runs). macOS owed. Plan:
+  `docs/designs/step8/backend-plan.md`; what was built and what the UI uses:
+  `docs/designs/step8/build-notes-8b-backend.md`.
 - **One new question for the owner:** after Stop and back to bar 1, should the wobble start again as in the
   export? For now it carries on (Open owner decisions).
 - **Your own songs** (for the owner): a song made before std 0.2 must change one line to build (below).
@@ -31,7 +38,7 @@ whatever you pick up.
 - **A layout to decide before step 9:** idea 3, one sandbox per box (`docs/designs/kernel-layout/report.md`).
   Research only; it is in Open owner decisions.
 - The owner decided O1 to O5 on 2026-10-15 (below), and std's bump to 0.2 with O3's fix. That question is closed.
-- Next: `taste`, then 8b's back ends and screens, then 8a and step 9. The Mac runs are owed and listed below.
+- Next: `taste`, then 8b's screens (`8b-ui`), then 8a and step 9. The Mac runs are owed and listed below.
 
 ## Your own songs (for the owner)
 
@@ -50,6 +57,7 @@ whatever you pick up.
 |---|---|---|
 | `main` | the tip | Steps 1–7, the fast note edits, and the platform layer. Green on Linux and macOS at `1750322` (the platform step). Step 7: green on Linux at `ffc36aa`, macOS owed. |
 | `sounds-merge` | `e1003ba` | All on `main` now (a fast-forward, 2026-10-17). Linux green at `e108e46` (reviewed; `ci/check.sh --gates` and the recorded tests), macOS owed. Worktree `~/m2-runs/wt/sm` (its `target/`, about 40 GB). Delete the branch and the worktree once the tracks in flight have landed. |
+| `8b-backend` | `c9cc6ad` | All on `main` now (a fast-forward, 2026-10-17). Linux green at `a8199ff`, macOS owed. Worktree `~/m2-runs/wt/be`. Delete the branch and the worktree once `8b-ui` has landed. |
 | `step7` | `95c8a73` | Step 7's commits, all on `main` now. No worktree now: `~/m2-runs/wt/s7` moved to `~/m2-runs/wt/sm` for the `sounds` merge. Delete the branch and `origin/step7` once the Mac run passes. |
 | `origin/taste` | `4804247` | The new look (T and S); 8b.1 Tracks done (`a0d5f91`); 8b.2 song bar unfinished. |
 | `origin/sounds` | `916127d` | 22 new std sounds (8 on the polysynth, 4 FM, 10 drums), merged; on `main` since 2026-10-17. |
@@ -294,6 +302,7 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
 |---|---|---|
 | Step 7 and its speed work | `ffc36aa` (Linux checks), then docs only | owed: the run above, then the by-ear steps 7 to 17 |
 | The `sounds` merge (22 sounds, O3, std 0.2) | `e108e46` (Linux checks), then docs only | owed: the same run (one run covers step 7 too), then the by-ear steps 18 to 21 |
+| The back ends of 8b.4, 8b.5, 8b.6, 8b.8 | `a8199ff` (Linux checks), then docs only | owed: the same run covers it; by-ear steps come with its screens (`8b-ui`) |
 
 1. **The Mac runs** (above), when the owner has time. Fix what they find on Linux, then ask for one more run. When
    step 7's passes, write "macOS: green at …" here and in the contract's gates row 7, with G7f's Mac numbers in
@@ -305,8 +314,10 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
    tracks in flight have landed.
 4. **Merge `taste`**: finish 8b.2 (song bar) and build 8b.3 (Mix faders) per design-8b, then merge (notes below):
    bundle Inter for Linux, D7's attention fix, re-run s8-tracks. Mac run before it lands.
-5. Then **8a** (all CPU cores), **8b.4–8b.10**, and **step 9**. Before step 9 freezes kernel ABI v1, the owner
-   decides the kernel layout (Open owner decisions). Each adds its OS pieces to `m2-os` as platform design
+5. **8b's screens** (`8b-ui`, `~/m2-runs/s8ui/plan.md`) on top of `taste` and the back ends now on `main`. Left on
+   the back end: W1 (the keyed compressor, a std change) and `forget_overlays` on taste's track delete (Q7).
+6. Then **8a** (all CPU cores), **8b.7, 8b.9, 8b.10**, and **step 9**. Before step 9 freezes kernel ABI v1, the
+   owner decides the kernel layout (Open owner decisions). Each adds its OS pieces to `m2-os` as platform design
    §8 says (8a's `rt.rs` becomes `mac/rt.rs` and `linux/rt.rs`; 8b.10's MIDI uses `midir`). Mac run at the end of each.
 
 ## Merge notes

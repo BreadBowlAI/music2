@@ -2,7 +2,8 @@
 
 The `8b-backend` track builds the back ends of 8b.4 (mute, solo, mute in song), 8b.5 (clips), 8b.6 (audition) and
 8b.8 (meters): engine, IR, session, Tx builders, routes, CLI and contract. No UI. The plan is
-`~/m2-runs/s8b/refresh.md` (its Attack and Decisions win) on top of `design-8b.md`.
+`backend-plan.md` beside this file (written as `~/m2-runs/s8b/refresh.md`; its Attack and Decisions win) on top
+of `design-8b.md`.
 
 ## In short
 
