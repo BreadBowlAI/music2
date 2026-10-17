@@ -116,7 +116,7 @@ export function TempoField({
   const title = locked
     ? `Tempo: ${bpmText(shown)} BPM\n${locked}`
     : [
-        many ? `Tempo from ${placeOf(timeline.meter, entry.beat).replace("bar 1", "the start")}: ${bpmText(shown)} BPM` : "Tempo",
+        many ? `Tempo from ${entry.beat === 0 ? "the start" : placeOf(timeline.meter, entry.beat)}: ${bpmText(shown)} BPM` : "Tempo",
         `Drag up or down (${mod.shift} for fine), or double-click to type. Heard when you let go`,
         HOME,
       ].join("\n");
@@ -327,7 +327,7 @@ export function MeterField({ session, timeline, at, locked }: { session: number;
         aria-disabled={!!locked}
         onMouseDown={(e) => e.preventDefault()}
         onClick={(e) => !locked && setAnchor(anchor ? null : e.currentTarget)}
-        title={[many ? `Time signature from ${placeOf(timeline.meter, m.beat).replace("bar 1", "the start")}: ${m.beats}/${m.unit}` : "Time signature", locked ?? "Click to change it", HOME].join("\n")}
+        title={[many ? `Time signature from ${m.beat === 0 ? "the start" : placeOf(timeline.meter, m.beat)}: ${m.beats}/${m.unit}` : "Time signature", locked ?? "Click to change it", HOME].join("\n")}
         className={clsx(
           "w-10 h-ctl rounded-sm text-base text-fg tabular-nums transition-colors duration-80 ease-linear",
           locked ? "cursor-default" : "cursor-pointer hover:bg-hover",

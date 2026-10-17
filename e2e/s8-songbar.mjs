@@ -171,6 +171,20 @@ await undo();
 await undo();
 check(await until(() => read("data/arrangement.json") === orig.arrangement), "and the song is as it was");
 
+// A change from bar 12: the tooltips say bar 12, not "the start2".
+await post("/tempo", { session, at: 44, bpm: 140, add: true });
+await post("/meter", { session, at: 44, beats: 3, unit: 4, add: true });
+// By the route: a click at bar 12 on the ruler would land on its mark.
+await post("/seek", { beat: 46 });
+await until(async () => at((await status()).beat, 46));
+check(await until(async () => (await field()).title.startsWith("Tempo from bar 12: 140 BPM")), `the tempo's tooltip: ${(await field()).title.split("\n")[0]}`);
+check(await until(async () => (await page.$eval("[data-testid=meter-field]", (e) => e.title)).startsWith("Time signature from bar 12: 3/4")), `the time signature's: ${(await page.$eval("[data-testid=meter-field]", (e) => e.title)).split("\n")[0]}`);
+await post("/seek", { beat: 4 });
+check(await until(async () => (await field()).title.startsWith("Tempo from the start: 124 BPM")), "and before it, the start");
+await undo();
+await undo();
+check(await until(() => read("data/arrangement.json") === orig.arrangement), "two undos take them out");
+
 // ---------------------------------------------------------------- the song's name (design-8b §4.4)
 
 const name = await box("[data-testid=bar-song-name]");
