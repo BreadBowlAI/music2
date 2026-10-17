@@ -1002,8 +1002,12 @@ impl Actor {
         }
         if let Some(p) = cp.open.as_mut().filter(|p| p.engine.token == token) {
             p.revs.push(number, o.code_rev);
-            p.engine = Arc::new(EngineView { token, revision: number, code_rev: o.code_rev, controls: o.controls.clone(), plays });
+            let accepted = o.session.accepted_arc();
+            p.engine = Arc::new(EngineView { token, revision: number, code_rev: o.code_rev, controls: o.controls.clone(), plays, accepted });
         }
+        // Lane leases (WRITE-22a): a new plan, or new data for a lane a drag plays, hears the drag
+        // again, after this settle's own sends; a change to a dragged clip ends it.
+        super::lanes::settled(&mut cp, token, dev);
         drop(cp);
         let sent_ns = inner.now_ns();
         #[cfg(test)]
@@ -1097,7 +1101,8 @@ impl Actor {
             let mut cp = self.inner.control.lock();
             self.inner.end_all(&mut cp);
             if let Some(p) = cp.open.as_mut() {
-                p.engine = Arc::new(EngineView { plays: None, controls: p.engine.controls.clone(), ..*p.engine });
+                let (controls, accepted) = (p.engine.controls.clone(), p.engine.accepted.clone());
+                p.engine = Arc::new(EngineView { plays: None, controls, accepted, ..*p.engine });
             }
         }
         let view = match built {
@@ -1129,7 +1134,7 @@ impl Actor {
             self.inner.end_all(&mut cp);
             let mut revs = Revs::default();
             revs.push(number, code_rev);
-            let engine = Arc::new(EngineView { token, revision: number, code_rev, controls, plays: view });
+            let engine = Arc::new(EngineView { token, revision: number, code_rev, controls, plays: view, accepted: o.session.accepted_arc() });
             let aliases = Arc::new(super::Aliases { to: code_rev, ids: HashMap::new() });
             let local = super::view_file::local(&shown.dir);
             cp.open.replace(Published { engine, shown, revs, aliases, overlays: monitor, local }).and_then(|p| p.owed())

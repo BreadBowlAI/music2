@@ -51,6 +51,7 @@ mod projects;
 mod songkey;
 mod view_file;
 mod watcher;
+mod lanes;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -210,6 +211,9 @@ struct EngineView {
     controls: Arc<HashMap<String, Control>>,
     /// None only while no player holds the project.
     plays: Option<PlaysView>,
+    /// The accepted revision: what lane leases apply their gestures on, never waiting for the
+    /// session (WRITE-22a, RENDER-29).
+    accepted: Arc<m2_session::Revision>,
 }
 
 /// What reads return: published by the actor's second phase.
@@ -304,6 +308,8 @@ struct ControlPlane {
     audition: audition::Sources,
     /// The DSP load of the last second, read by the meters (8b.8).
     meters: meters::Meters,
+    /// Drags on clips heard while they last (WRITE-22a).
+    lanes: lanes::LaneLeases,
 }
 
 /// How a control named at a revision is found without the session.
@@ -662,6 +668,7 @@ impl Inner {
             let l = cp.leases.end(0, why);
             self.notices.lock().extend(l.unsaved(why));
         }
+        lanes::end_all(cp);
     }
 
     /// Register a lease on `control`, read in the published accepted revision, which the request
@@ -1154,6 +1161,7 @@ impl Graph {
                 None => i += 1,
             }
         }
+        lanes::expire(&mut cp, device.as_ref(), now);
         drop(cp);
         if let Some(s) = self.inner.saving.lock().as_mut() {
             let playing = device.as_ref().is_some_and(|d| d.player.status().playing);
@@ -1188,6 +1196,7 @@ impl Graph {
                 i += 1;
             }
         }
+        lanes::gone(&mut cp, client, device.as_ref());
     }
 
     /// The gestures in progress.

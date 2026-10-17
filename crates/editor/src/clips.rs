@@ -919,15 +919,53 @@ fn rounded_up(span: f64, bar: f64, grid: Option<f64>) -> f64 {
 /// can't all be named by id), `Expect::Confined { lanes }`, and the assertion that each lane reads
 /// every clip written as written and none deleted.
 pub fn edit(s: &mut Session, g: &Gesture) -> Result<ClipsEdited, EditError> {
-    ready(s)?;
-    let tx_id = m2_song::tx::random_id();
+    edit_as(s, g, &m2_song::tx::random_id())
+}
+
+/// [`apply`] as [`edit_as`] with Tx id `tx_id` applies it: the ids it mints are the ones that Tx
+/// writes. A lane lease previews with it, so a copied clip has the same id in the preview and in
+/// the commit, and a note sounding in it isn't cut at release (WRITE-22a, RENDER-26a).
+pub fn apply_as(rev: &Revision, g: &Gesture, tx_id: &str) -> Result<Vec<LaneEdit>, EditError> {
     let mut n = 0;
     let mut mint = |lane: &LaneAddr| {
         n += 1;
-        ClipId::derive(&tx_id, lane, n - 1)
+        ClipId::derive(tx_id, lane, n - 1)
     };
+    apply(rev, g, &mut mint)
+}
+
+/// `g` with each clip it names pinned to its hash in `rev`, where the gesture carries none: what a
+/// lane lease saw, so an outside change to a clip it drags ends the lease (WRITE-22a).
+pub fn pinned(rev: &Revision, g: &Gesture) -> Result<Gesture, EditError> {
+    let mut w = Work { rev, lanes: BTreeMap::new() };
+    let mut g = g.clone();
+    let mut pin = |r: &mut ClipRef| -> Result<(), EditError> {
+        if r.sha.is_none() {
+            let (lane, i) = w.resolve(r)?;
+            let l = &w.lanes[&lane];
+            r.sha = Some(sha(&l.was[i].line(&l.kind)));
+        }
+        Ok(())
+    };
+    match &mut g {
+        Gesture::Move { clips, .. }
+        | Gesture::Split { clips, .. }
+        | Gesture::Join { clips }
+        | Gesture::Duplicate { clips, .. }
+        | Gesture::Delete { clips }
+        | Gesture::Quantize { clips, .. } => clips.iter_mut().try_for_each(&mut pin)?,
+        Gesture::Resize { clip, .. } | Gesture::Notes { clip, .. } | Gesture::Points { clip, .. } => pin(clip)?,
+        Gesture::Create { .. } | Gesture::Paste { .. } | Gesture::Set { .. } => {}
+    }
+    Ok(g)
+}
+
+/// [`edit`] as the Tx with id `tx_id`: the clips it makes get the ids [`apply_as`] gives them.
+pub fn edit_as(s: &mut Session, g: &Gesture, tx_id: &str) -> Result<ClipsEdited, EditError> {
+    ready(s)?;
+    let tx_id = tx_id.to_string();
     let rev = s.accepted();
-    let edits = apply(rev, g, &mut mint)?;
+    let edits = apply_as(rev, g, &tx_id)?;
     let made: Vec<(LaneAddr, String)> = edits.iter().flat_map(|e| e.made.iter().map(|id| (e.lane.clone(), id.clone()))).collect();
     let mut ops = vec![];
     // Per lane: each clip put, by id, with its line; and the ids gone.

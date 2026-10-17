@@ -23,10 +23,17 @@ pub enum Answer {
 impl Graph {
     /// Apply a clip gesture ([`m2_editor::clips::edit`]): one Tx, one undo step.
     pub fn clips(&self, token: u64, gesture: Gesture) -> Result<Answer> {
+        self.clips_as(token, gesture, None)
+    }
+
+    /// [`Graph::clips`] as the Tx with id `tx_id` when given: a lane lease's commit, whose new
+    /// clips have the ids its previews played (WRITE-22a, Q21).
+    pub(super) fn clips_as(&self, token: u64, gesture: Gesture, tx_id: Option<String>) -> Result<Answer> {
         let changed = Arc::new(AtomicBool::new(false));
         let saw = changed.clone();
+        let tx_id = tx_id.unwrap_or_else(m2_song::tx::random_id);
         let done = self.call(move |a| {
-            a.edit_and(token, |s| match m2_editor::clips::edit(s, &gesture) {
+            a.edit_and(token, |s| match m2_editor::clips::edit_as(s, &gesture, &tx_id) {
                 Ok(done) => {
                     let made: Vec<Value> =
                         done.made.iter().map(|(l, id)| json!({"module": l.module.as_str(), "lane": l.lane.as_str(), "id": id})).collect();
