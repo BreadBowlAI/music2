@@ -9,7 +9,42 @@ The lead's ground: written by the lead.
 
 ## Lane A
 
-Audio in the app: import, audio tracks, waveforms, and editing audio clips. Branch `studio-a`.
+Audio in the app: import, audio tracks, waveforms, and editing audio clips. Branch `studio-a`: A1 `b7cd94a`, A2
+`56b064d` (the menu), A3 `0d3a991`, A4 `b15f974`, A2's drops and audio tracks `d4b88ab`, the app's open dialog
+`f620cd0`, the review's fixes `6bf0b1c`; each green.
+
+**In short, for the owner**
+
+| You can | How |
+|---|---|
+| Bring in a WAV file | File ▸ Import Audio… (⇧⌘I), or drag it from the Finder onto a track, or below the tracks |
+| Make an audio track | + Track ▸ Audio track (type "audio") |
+| See the sound | Every audio clip shows its waveform |
+| Shape a clip | Trim either edge (it stops where the file ends), drag the top corners for fades, Volume… and Reverse in its menu |
+| Take it back | One Undo for each step: "Undo importing vox.wav", "Undo Vox fade in" |
+| From the terminal | `m2 import <song> <file.wav>… [--track ID] [--at BAR]` |
+
+**For the merge with P0 and the other lanes:** P0 never reached `studio` while lane A ran, so lane A made its own
+seams, and built the P0 pieces it needed to the plan's spec (each listed in its slice):
+
+| Where | Lane A's | At the merge |
+|---|---|---|
+| `crates/server/src/lib.rs` | `mod routes_audio;` and `mod peaks;` after `mod routes_leases;` | Beside P0's and lane B's lines; take lane A's whole files over P0's empty stubs |
+| `crates/server/src/routes.rs` | `.merge(crate::routes_audio::router(…))` after `routes_leases`' | Beside the others |
+| `crates/server/src/graph.rs` | `mod import;` after `mod tempo_lease;` | Beside lane B's `pub mod record;` and lane C's |
+| `crates/editor/src/lib.rs` | `pub mod import;` after `pub mod rekey;` | Beside lane C's and D's |
+| `crates/editor/src/render.rs` | `part_path`, `sweep`, `name_new` `pub(crate)` | The same three words as P0's (lane C owns the file) |
+| `crates/editor/src/tracks.rs` | P0.3: `add_tracks`, `Play`, `NewTrack` | Keep one; lane C's C2b can use it |
+| `web/src/lib/drop.ts`, `components/DropLayer.tsx`, `App.tsx`' `<DropLayer />` | P0.4 | Keep one; lane C registers `.mid` with `onFiles` |
+| `apps/music2-desktop/src/actions.rs` | P0.5: `open_file` | Keep one |
+| `web/src/components/ClipMenu.tsx` | `MenuItem.checked` (a check, and every row its room) | Lane B's Record menu may add checks too: keep one field |
+| `web/src/App.tsx` | `import_audio` in `chord()` and its `case`, `DropLayer` and `importAudio` imports | Join with B, C and D's cases |
+| `apps/music2-desktop/src/menu.rs` | `import_audio` after `save_as`; File: Save As, a line, Import Audio…, a line, Export | Lane C's Import MIDI… goes after Import Audio…, before the line |
+| `crates/server/src/graph/lanes.rs` | `Gesture::Audio` in `named`'s pattern | — |
+| `e2e/run.mjs`, `e2e/README.md` | `st-audio` after `s8-leases`, 90 checks | `tips()` once `tiplib.mjs` (lane D) is there |
+| `e2e/s8-tracks.mjs` | the list's groups and rows end with Audio (values only) | — |
+
+**For 8a's merge:** nothing: lane A changed nothing in `core/runtime`, `core/play`, `core/os` or `crates/gates`.
 
 ### A1. Waveforms
 
