@@ -103,7 +103,7 @@ fn every_copy_mints() {
     let f = fixture("examples/first-song");
     let mut s = f.open();
     let copied = go(&mut s, Gesture::Move { clips: vec![by_id("kick/hits", "my53vvkc")], by: 64.0, to: None, copy: true });
-    let duplicated = go(&mut s, Gesture::Duplicate { clips: vec![by_id("kick/hits", "my53vvkc")], range: None, grid: None });
+    let duplicated = go(&mut s, Gesture::Duplicate { clips: vec![by_id("kick/hits", "my53vvkc")], range: None, grid: None, times: None });
     let clip = data(&s, "kick/hits").unwrap().clip_value("my53vvkc").unwrap();
     let pasted = go(&mut s, Gesture::Paste { clips: vec![Copied { from: addr("kick/hits"), clip }], to: None, at: 128.0 });
     let ids: Vec<String> = clips(&s, "kick/hits").into_iter().map(|c| c.0.unwrap()).collect();
@@ -202,19 +202,19 @@ fn a_duplicated_section_lands_on_the_next_bar() {
     let mut s = f.open();
     let kick = || by_id("kick/hits", "my53vvkc");
     let starts = |s: &Session| clips(s, "kick/hits").into_iter().map(|c| c.1).collect::<Vec<_>>();
-    go(&mut s, Gesture::Duplicate { clips: vec![kick()], range: None, grid: None });
+    go(&mut s, Gesture::Duplicate { clips: vec![kick()], range: None, grid: None, times: None });
     assert_eq!(starts(&s), [0.0, 32.0], "8 bars after 8 bars");
     s.undo().unwrap();
     for (length, grid, lands) in [(31.0, None, 32.0), (33.0, None, 36.0), (1.3, Some(0.25), 1.5), (1.3, None, 1.3)] {
         go(&mut s, Gesture::Resize { clip: kick(), start: 0.0, length });
-        go(&mut s, Gesture::Duplicate { clips: vec![kick()], range: None, grid });
+        go(&mut s, Gesture::Duplicate { clips: vec![kick()], range: None, grid, times: None });
         assert_eq!(starts(&s), [0.0, lands], "{length} beats, grid {grid:?}");
         s.undo().unwrap();
         s.undo().unwrap();
     }
     // Two lanes at once: one span, so they stay together.
     go(&mut s, Gesture::Resize { clip: by_id("hats/hits", "92gr2959"), start: 4.0, length: 4.0 });
-    go(&mut s, Gesture::Duplicate { clips: vec![kick(), by_id("hats/hits", "92gr2959")], range: None, grid: None });
+    go(&mut s, Gesture::Duplicate { clips: vec![kick(), by_id("hats/hits", "92gr2959")], range: None, grid: None, times: None });
     assert_eq!(starts(&s), [0.0, 32.0]);
     assert_eq!(clips(&s, "hats/hits").into_iter().map(|c| c.1).collect::<Vec<_>>(), [4.0, 36.0]);
 }
@@ -224,8 +224,55 @@ fn a_duplicated_section_lands_on_the_next_bar() {
 fn a_marquee_duplicate_keeps_its_empty_bars() {
     let f = fixture("examples/first-song");
     let mut s = f.open();
-    go(&mut s, Gesture::Duplicate { clips: vec![by_id("kick/hits", "my53vvkc")], range: Some((0.0, 64.0)), grid: None });
+    go(&mut s, Gesture::Duplicate { clips: vec![by_id("kick/hits", "my53vvkc")], range: Some((0.0, 64.0)), grid: None, times: None });
     assert_eq!(clips(&s, "kick/hits").into_iter().map(|c| c.1).collect::<Vec<_>>(), [0.0, 64.0]);
+}
+
+// Repeat… (Q12): three copies, one after another, each with a fresh id, as one undo step.
+#[test]
+fn duplicate_three_times_puts_three_copies_after() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let bass = by_id("bass/notes", "db9f9t5s");
+    go(&mut s, Gesture::Resize { clip: bass.clone(), start: 0.0, length: 4.0 });
+    let done = go(&mut s, Gesture::Duplicate { clips: vec![bass], range: None, grid: None, times: Some(3) });
+    let now = clips(&s, "bass/notes");
+    assert_eq!(now.iter().map(|c| (c.1, c.2)).collect::<Vec<_>>(), [(0.0, 4.0), (4.0, 4.0), (8.0, 4.0), (12.0, 4.0)]);
+    let ids: std::collections::BTreeSet<_> = now.iter().map(|c| c.0.clone().unwrap()).collect();
+    assert_eq!(ids.len(), 4, "each copy has an id of its own: {now:?}");
+    assert_eq!(done.made.len(), 3);
+    // The copies play the first one's notes.
+    let n = notes(&s, "bass/notes");
+    let first: Vec<_> = n.iter().filter(|x| x.start < 4.0).map(|x| (x.start, x.pitch)).collect();
+    let third: Vec<_> = n.iter().filter(|x| (8.0..12.0).contains(&x.start)).map(|x| (x.start - 8.0, x.pitch)).collect();
+    assert_eq!(first, third);
+    s.undo().unwrap();
+    assert_eq!(clips(&s, "bass/notes").len(), 1, "one undo step takes all three back");
+}
+
+// A marquee's bars repeat as a block, its empty bars kept.
+#[test]
+fn repeat_of_a_marquee_range_keeps_its_bars() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let kick = by_id("kick/hits", "my53vvkc");
+    go(&mut s, Gesture::Resize { clip: kick.clone(), start: 0.0, length: 4.0 });
+    go(&mut s, Gesture::Duplicate { clips: vec![kick], range: Some((0.0, 8.0)), grid: None, times: Some(2) });
+    assert_eq!(clips(&s, "kick/hits").into_iter().map(|c| c.1).collect::<Vec<_>>(), [0.0, 8.0, 16.0]);
+}
+
+#[test]
+fn sixty_five_times_is_refused() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let kick = || by_id("kick/hits", "my53vvkc");
+    for times in [0, 65] {
+        let e = refused(&mut s, Gesture::Duplicate { clips: vec![kick()], range: None, grid: None, times: Some(times) });
+        assert!(e.contains("Repeat 1 to 64 times"), "{e}");
+    }
+    go(&mut s, Gesture::Resize { clip: kick(), start: 0.0, length: 1.0 });
+    go(&mut s, Gesture::Duplicate { clips: vec![kick()], range: None, grid: None, times: Some(64) });
+    assert_eq!(clips(&s, "kick/hits").len(), 65);
 }
 
 // Pasted clips keep their offsets from the earliest, each with a fresh id: on the lane named when

@@ -32,6 +32,10 @@ const MONACO_CHORDS: Record<string, string> = {
   // ⌘E and ⌘J split and join clips; in the editor, its find-with-selection and join lines.
   split: "actions.findWithSelection",
   join: "editor.action.joinLines",
+  // ⌘↑ and ⌘↓ are Shorter and Taller Tracks; in the editor, to its top and foot on a Mac, and a
+  // line's scroll elsewhere, as Monaco binds Ctrl+↑ and Ctrl+↓ there.
+  shorter: isMac ? "cursorTop" : "scrollLineUp",
+  taller: isMac ? "cursorBottom" : "scrollLineDown",
 };
 
 /** What the editor followed while the project had no module (its code never compiled). */

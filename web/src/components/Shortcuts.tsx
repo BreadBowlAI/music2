@@ -17,6 +17,8 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
       ["Loop on / off", "C"],
       ["Loop the selected clips, or the bar", chord("L")],
       ["Stop all sound", chord(".")],
+      ["Follow the playhead on / off", chord("F", { shift: true })],
+      ["Go to the marker before / after", `${opt("←")} / ${opt("→")}`],
     ],
   },
   {
@@ -76,6 +78,10 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
       ["Show / hide the dock", "E"],
       ["Show / hide the browser", chord("B", { alt: true })],
       ["Keyboard shortcuts", opt("K")],
+      ["Zoom in / out", `${chord("=")} / ${chord("−")}`],
+      ["Zoom around the pointer", `${mod.cmd}-scroll, or pinch`],
+      ["Zoom to the selected clips or the song; again: back", "Z"],
+      ["Taller / shorter tracks", `${chord("↓")} / ${chord("↑")}`],
     ],
   },
   {

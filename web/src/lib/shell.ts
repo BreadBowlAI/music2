@@ -200,4 +200,14 @@ export const canvas: {
   /** Whether ⌘C, ⌘X and ⌘V are the timeline's now (clips are selected), not the page's. */
   takesClipboard?: () => boolean;
   clipboard?: (op: "copy" | "cut" | "paste") => void;
+  /** View ▸ Zoom In (1) and Zoom Out (-1): the timeline's, around the playhead or the view's middle. */
+  zoom?: (dir: 1 | -1) => void;
+  /** Z, View ▸ Zoom to Fit: the selected clips, or the whole song; again, back. */
+  zoomFit?: () => void;
+  /** Transport ▸ Follow Playhead: on or off. */
+  follow?: () => void;
+  /** View ▸ Taller (1) and Shorter (-1) Tracks: the selected track, or every track. */
+  height?: (dir: 1 | -1) => void;
+  /** Transport ▸ Add Marker (at the playhead's bar), Previous and Next Marker. */
+  marker?: (op: "add" | "prev" | "next") => void;
 } = {};

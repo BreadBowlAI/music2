@@ -43,6 +43,7 @@ mod instrument;
 mod rekey;
 mod events;
 pub mod lease;
+mod markers;
 pub mod meters;
 pub mod overlay;
 mod preview;
