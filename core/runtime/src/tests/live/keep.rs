@@ -275,10 +275,11 @@ fn an_activation_against_another_plan_is_refused() {
 /// goes over 0.5, until a reset), `t:spike` (infinite while its input is over 0.5, else 1; no
 /// state), `t:denan` (NaN and infinities to 0), `t:trap` (traps while its input is over 0.5,
 /// else outputs 1), `t:hog` (grows its memory by 600 pages, 37.5 MiB, while its input is over 0.5,
-/// trapping when the grow fails, else outputs 1), `t:fat` (its reset grows its memory by 600 pages;
-/// outputs 1), `t:sore` (outputs 1; its reset traps once its input went over 0.5) and `t:tiny` (its init and reset keep 1e-30 × 1e-10, a subnormal, which it
-/// outputs times 1e40: 1 where subnormals are kept, 0 where they were flushed; active while that
-/// product isn't 0).
+/// trapping when the grow fails; traps plainly while its input is over 1.5; else outputs 1),
+/// `t:fat` (its reset grows its memory by 600 pages; outputs 1), `t:sore` (outputs 1; its reset
+/// traps once its input went over 0.5) and `t:tiny` (its init and reset keep 1e-30 × 1e-10, a
+/// subnormal, which it outputs times 1e40: 1 where subnormals are kept, 0 where they were flushed;
+/// active while that product isn't 0).
 fn t_kernels() -> PathBuf {
     let dir = project(&[]).join("t");
     std::fs::create_dir_all(&dir).unwrap();
@@ -316,7 +317,10 @@ fn t_kernels() -> PathBuf {
     let denan = out("(select (local.get $x) (f32.const 0) (f32.lt (f32.abs (local.get $x)) (f32.const inf)))");
     let trap = format!("(if (f32.gt (local.get $x) (f32.const 0.5)) (then (unreachable))) {}", out("(f32.const 1)"));
     let grow = "(if (i32.eq (memory.grow (i32.const 600)) (i32.const -1)) (then (unreachable)))";
-    let hog = format!("(if (f32.gt (local.get $x) (f32.const 0.5)) (then {grow})) {}", out("(f32.const 1)"));
+    let hog = format!(
+        "(if (f32.gt (local.get $x) (f32.const 1.5)) (then (unreachable))) (if (f32.gt (local.get $x) (f32.const 0.5)) (then {grow})) {}",
+        out("(f32.const 1)")
+    );
     let fat = format!(
         r#"(func (export "fat_init") (param f32 i32 i32))
            (func (export "fat_ports") (result i32) (i32.const 257)) {}
@@ -646,6 +650,22 @@ fn a_kernel_over_its_memory_says_it_ran_out() {
     let (_, _, clean_b, _) = failing("hog", &pk, false, 6, None);
     assert!(a.iter().all(|&x| x == 0.0) && b == clean_b, "it alone goes silent");
     assert_eq!(rig.e.current().unwrap().info().stopped.why(lat), Some(Why::OutOfMemory));
+}
+
+// RENDER-32, RENDER-25: a kernel that ran out of memory once, then played again after Stop All
+// Sound, says what its next failure is: a plain trap is a crash, not memory.
+#[test]
+fn a_crash_after_running_out_of_memory_is_told_as_a_crash() {
+    let pk = t_packages();
+    let lat = named(&check(&two_tracks("hog", false), &pk).unwrap(), "a/lat");
+    let (_, _, _, mut rig) = failing("hog", &pk, true, 4, None);
+    let stopped = rig.e.current().unwrap().info().stopped.clone();
+    assert_eq!(stopped.news(), [(lat, Why::OutOfMemory)]);
+    rig.send(Msg::Panic);
+    rig.run(BLOCK);
+    cue(&rig, 2.0, 3);
+    rig.run(BLOCK);
+    assert_eq!(stopped.news(), [(lat, Why::Crashed)], "a plain trap is a crash");
 }
 
 // RENDER-32: a kernel that asks for more than its 32 MiB in its first reset, while it is built,

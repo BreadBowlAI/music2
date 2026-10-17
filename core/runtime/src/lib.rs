@@ -166,7 +166,8 @@ type Buf = Vec<f32>;
 
 /// What a kernel's store may hold (RENDER-32): one instance, one memory of at most
 /// [`KERNEL_MEMORY`], one table. A grow past the memory's cap traps at once, so a kernel never runs
-/// on without what it asked for, and `refused` says why it stopped: [`OutOfMemory`].
+/// on without what it asked for, and `refused` says why it stopped: [`OutOfMemory`], until that
+/// error is made.
 #[derive(Default)]
 struct Cap {
     refused: bool,
@@ -200,9 +201,10 @@ impl ResourceLimiter for Cap {
 }
 
 /// `e`, from a call into kernel instance `name` in `store`: [`OutOfMemory`] when the call asked for
-/// more memory than a sound may use, else `e` itself.
-fn ran_out(store: &Store<Cap>, name: &str, e: impl Into<anyhow::Error>) -> anyhow::Error {
-    match store.data().refused {
+/// more memory than a sound may use, else `e` itself. The refusal is taken: a later error of the
+/// same instance, once a panic or an activation made it play again, is its own.
+fn ran_out(store: &mut Store<Cap>, name: &str, e: impl Into<anyhow::Error>) -> anyhow::Error {
+    match std::mem::take(&mut store.data_mut().refused) {
         true => OutOfMemory { node: name.to_string() }.into(),
         false => e.into(),
     }
@@ -290,8 +292,8 @@ impl KernelInst {
         let (module, prefix) = packages.module_for(id).with_context(|| format!("{}: kernel `{id}` is not loaded", n.name))?;
         let mut store = Store::new(&packages.engine, Cap::default());
         store.limiter(|c| c);
-        let failed = |store: &Store<Cap>, e: anyhow::Error| ran_out(store, &n.name, e);
-        let instance = Instance::new(&mut store, module, &[]).wctx(|| format!("{}: instantiating `{id}`", n.name)).map_err(|e| failed(&store, e))?;
+        let failed = |store: &mut Store<Cap>, e: anyhow::Error| ran_out(store, &n.name, e);
+        let instance = Instance::new(&mut store, module, &[]).wctx(|| format!("{}: instantiating `{id}`", n.name)).map_err(|e| failed(&mut store, e))?;
         let f = |name: &str| format!("{prefix}_{name}");
         let init = instance.get_typed_func::<(f32, u32, u32), ()>(&mut store, &f("init"))?;
         let ports = instance.get_typed_func::<(), u32>(&mut store, &f("ports"))?;
@@ -300,10 +302,10 @@ impl KernelInst {
         let process = instance.get_typed_func::<u32, ()>(&mut store, &f("process"))?;
         let active = instance.get_typed_func::<(), u32>(&mut store, &f("active"))?;
         let memory = instance.get_memory(&mut store, "memory").context("kernel has no memory")?;
-        init.call(&mut store, (sample_rate as f32, BLOCK as u32, channels as u32)).map_err(|e| failed(&store, e.into()))?;
+        init.call(&mut store, (sample_rate as f32, BLOCK as u32, channels as u32)).map_err(|e| failed(&mut store, e.into()))?;
 
         let (n_in, n_out) = (inputs.len(), n.outputs.len());
-        let declared = ports.call(&mut store, ()).map_err(|e| failed(&store, e.into()))?;
+        let declared = ports.call(&mut store, ()).map_err(|e| failed(&mut store, e.into()))?;
         if declared != ((n_in as u32) << 8 | n_out as u32) {
             bail!(
                 "{}: `{id}` has {} inputs and {} outputs, but its manifest declares {n_in} and {n_out}",
@@ -314,7 +316,7 @@ impl KernelInst {
         }
         let mut ptrs = vec![];
         for i in 0..(n_in + n_out) as u32 {
-            let p = port.call(&mut store, i).map_err(|e| failed(&store, e.into()))? as usize;
+            let p = port.call(&mut store, i).map_err(|e| failed(&mut store, e.into()))? as usize;
             if p == 0 || !p.is_multiple_of(4) || p + PORT_BYTES > memory.data_size(&store) {
                 bail!("{}: `{id}` returned a bad buffer for port {i}", n.name);
             }
@@ -394,8 +396,8 @@ impl KernelInst {
     }
 
     /// `e`, from a call into it: [`OutOfMemory`] when the call asked for more than a sound may use.
-    fn ran_out(&self, e: impl Into<anyhow::Error>) -> anyhow::Error {
-        ran_out(&self.store, &self.name, e)
+    fn ran_out(&mut self, e: impl Into<anyhow::Error>) -> anyhow::Error {
+        ran_out(&mut self.store, &self.name, e)
     }
 
     /// Its first reset, while it is built: a reset may grow the memory (a kernel builds its new
