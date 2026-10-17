@@ -129,7 +129,7 @@ pub enum Deleted {
 /// capitals: what a new key must not be (ID-2). A new track's key is its new channel's (ID-18), and
 /// a channel's key may differ from its track's. An unclaimed `data/<k>/` folder counts, so a new
 /// track never takes over a deleted one's data.
-fn taken(rev: &Revision) -> impl Fn(&str) -> bool + '_ {
+pub(crate) fn taken(rev: &Revision) -> impl Fn(&str) -> bool + '_ {
     let channels = channel_keys(rev);
     move |k: &str| {
         let Ok(key) = Key::new(k) else { return true };
@@ -142,7 +142,7 @@ fn taken(rev: &Revision) -> impl Fn(&str) -> bool + '_ {
 }
 
 /// The keys of the song's mixer's channels.
-fn channel_keys(rev: &Revision) -> Vec<String> {
+pub(crate) fn channel_keys(rev: &Revision) -> Vec<String> {
     match mix::mixer(rev) {
         Mixing::One(m) => m.channels.into_iter().map(|c| c.key).collect(),
         _ => vec![],
@@ -170,12 +170,12 @@ fn track_file(rev: &Revision, key: &str) -> String {
 }
 
 /// `s` as a TypeScript string.
-fn quoted(s: &str) -> String {
+pub(crate) fn quoted(s: &str) -> String {
     serde_json::to_string(s).expect("a string serialises")
 }
 
 /// A channel key as a property name: quoted when it isn't an identifier (`"lead-vox"`).
-fn prop_key(key: &str) -> String {
+pub(crate) fn prop_key(key: &str) -> String {
     if identifier(key) { key.to_string() } else { quoted(key) }
 }
 

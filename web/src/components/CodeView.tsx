@@ -7,9 +7,11 @@ import { Workspace, type Doc } from "../lib/codeWorkspace";
 import { editorHooks, graphApi, moduleName, type GraphState, type Problem } from "../lib/graph";
 import { chord, isMac } from "../lib/native";
 import { trackColors } from "../lib/palette";
+import { openTrackId, tracksIn } from "../lib/rekey";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
-import { Button } from "./ui";
+import TrackIdDialog from "./TrackIdDialog";
+import { Button, MenuRow, Popover } from "./ui";
 
 type Kit = typeof import("../lib/codeMonaco");
 
@@ -56,6 +58,8 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
   const [back, setBack] = useState<string | null>(null);
   const views = useRef(new Map<string, Monaco.editor.ICodeEditorViewState | null>());
   const [typeProblems, setTypeProblems] = useState<TypeProblem[]>([]);
+  /** A file's menu (right-click in the file list): Change track ID… for each track written there. */
+  const [fileMenu, setFileMenu] = useState<{ path: string; anchor: HTMLElement } | null>(null);
 
   // The editor is loaded on first use (it is a few MB), then the libraries and files.
   useEffect(() => {
@@ -357,7 +361,25 @@ export default function CodeView({ graph, module }: { graph: GraphState; module:
           open(p);
           editor.current?.focus();
         }}
+        onMenu={(path, anchor) => tracksIn(graph, path).length > 0 && setFileMenu({ path, anchor })}
       />
+      {fileMenu && (
+        <Popover anchor={fileMenu.anchor} onClose={() => setFileMenu(null)} side="right" role="menu" aria-label={`${fileMenu.path} menu`} data-testid="file-menu" className="w-[240px]">
+          {tracksIn(graph, fileMenu.path).map((t) => (
+            <MenuRow
+              key={t.module}
+              data-testid="change-track-id"
+              onClick={() => {
+                setFileMenu(null);
+                openTrackId(t.module);
+              }}
+            >
+              {`Change ${t.name}'s track ID…`}
+            </MenuRow>
+          ))}
+        </Popover>
+      )}
+      <TrackIdDialog />
       <div className="flex-1 min-w-0 flex flex-col">
         <div className="h-8 shrink-0 flex items-center gap-2 pl-3 pr-1.5 border-b border-line bg-chrome">
           {active && isLib(active) ? (
@@ -446,6 +468,7 @@ function FileList({
   broken,
   color,
   onOpen,
+  onMenu,
 }: {
   paths: string[];
   active: string | null;
@@ -453,6 +476,8 @@ function FileList({
   broken: (path: string) => boolean;
   color: (path: string) => string | null;
   onOpen: (path: string) => void;
+  /** A right-click on a file: its menu, when it has one. */
+  onMenu: (path: string, anchor: HTMLElement) => void;
 }) {
   const tracks = paths.filter((p) => p.startsWith("tracks/") && !p.slice(7).includes("/"));
   const top = paths.filter((p) => !tracks.includes(p) && !p.includes("/"));
@@ -466,6 +491,10 @@ function FileList({
         aria-current={active === path ? "true" : undefined}
         data-dirty={dirty(path) || undefined}
         onClick={() => onOpen(path)}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onMenu(path, e.currentTarget);
+        }}
         title={path}
         className={clsx(
           "w-full h-ctl-sm flex items-center gap-2 pr-2 rounded-sm text-sm text-left cursor-pointer transition-colors duration-80 ease-linear",

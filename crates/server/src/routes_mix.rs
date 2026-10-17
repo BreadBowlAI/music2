@@ -1,6 +1,6 @@
-//! Lane A's routes (polish): change a track's instrument. In a router of its own, merged into the
-//! API's, as `routes_8b.rs` is; a route here that writes the project is in [`WRITES_MIX`], and a
-//! read-only window answers it 423 with WRITE-18's message.
+//! Lane A's routes (polish): change a track's instrument, and its ID. In a router of its own,
+//! merged into the API's, as `routes_8b.rs` is; a route here that writes the project is in
+//! [`WRITES_MIX`], and a read-only window answers it 423 with WRITE-18's message.
 
 use std::sync::Arc;
 
@@ -19,11 +19,13 @@ type S = State<Arc<AppState>>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
 /// The routes here that write the open project.
-pub const WRITES_MIX: &[&str] = &["/api/graph/track/instrument"];
+pub const WRITES_MIX: &[&str] = &["/api/graph/track/instrument", "/api/graph/track/rekey"];
 
 pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/graph/track/instrument", post(track_instrument))
+        .route("/api/graph/track/rekey", post(track_rekey))
+        .route("/api/graph/track/rekey/check", post(track_rekey_check))
         .route_layer(axum::middleware::from_fn_with_state(state, writes))
 }
 
@@ -58,4 +60,29 @@ async fn track_instrument(State(s): S, Json(r): Json<InstrumentReq>) -> ApiResul
     let result = blocking(move || state.graph.swap_instrument(r.session, &r.module, &r.component)).await;
     s.graph_changed();
     Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct RekeyReq {
+    session: u64,
+    /// The track, by its key now.
+    module: String,
+    /// Its new key: what the UI calls its ID.
+    key: String,
+}
+
+/// Change a track's ID (polish A5, design-8b §11.1): `{session, module, key}`, one Tx and one undo
+/// step. A write. Answers `{file, before, after, revision}`; a refusal says why in ID words.
+async fn track_rekey(State(s): S, Json(r): Json<RekeyReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.rekey(r.session, &r.module, &r.key)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+/// Whether `key` can be the track's new ID, as the dialog checks while you type: `{ok}`, or `{ok:
+/// false, error}`. Reads only, so a read-only window may ask.
+async fn track_rekey_check(State(s): S, Json(r): Json<RekeyReq>) -> ApiResult {
+    let state = s.clone();
+    Ok(Json(blocking(move || state.graph.rekey_check(r.session, &r.module, &r.key)).await?))
 }

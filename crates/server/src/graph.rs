@@ -40,6 +40,7 @@ mod actor;
 pub mod audition;
 pub mod clips;
 mod instrument;
+mod rekey;
 mod events;
 pub mod lease;
 pub mod meters;

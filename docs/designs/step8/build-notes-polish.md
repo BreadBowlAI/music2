@@ -190,6 +190,68 @@ the_drum_kit_names_its_notes:      left: []  right: [(36, "Kick"), (37, "Rim"), 
 a_drum_kit_lane_names_its_notes:   assertion `left == right` failed: []  left: 0  right: 20
 ```
 
+### A5, part 1: change a track's ID
+
+**In short**
+
+| What | Now |
+|---|---|
+| Where | In the Code view, right-click a track's file in the file list: "Change Bass's track ID…". Not in the track's menu: a beginner never needs it there |
+| The dialog | The ID in a code font. It is checked as you type ("lead vox isn't an ID…", "low is taken…"). [Cancel] [Change ID] |
+| What it does | The track's ID changes in its code, in its mixer channel when that has the same name, its data folder moves, and layout.json follows. One undo step. A toast says "Bass's ID is low now", with Undo |
+| What stays | Its name, colour, mute and solo, and it stays selected. Its sounds restart |
+
+**What changed**
+
+- `crates/editor/src/rekey.rs`: `check(s, module, key)` (the words the dialog shows as you type) and `rekey(s, module,
+  key)`. Ops: the key string in the `track()` call (in its own quotes); the channel's key when it equals the track's
+  (ID-18), and the label then says "(and its mixer channel)"; `Rename data/<old>/ → data/<new>/` when the folder
+  exists; `layout.json` with the key renamed in `order` and `tracks` when it reads (R15). The file and the binding keep
+  their names (design-8b §11.1 step 3). Refused in ID words: not an ID (with one like it), taken by a track or a data
+  folder, a channel of that name, `song`, the same ID.
+- **Its expectation differs from design-8b §11.1 step 4.** A rename moves every node of the track, so the track's
+  file is declared whole, and each read of the track in another file (its innermost call, `duck(…, kick.env)`), since
+  an import of a module is named by its key. Core only takes ranges in a file the Tx edits ("ranges are declared in
+  song.ts, which the Tx doesn't touch"): so when a reading file isn't edited (a channel with a name of its own), the
+  builder checks the Tx first (`Expect::Seen` probe, R26), asserts on that delta, and commits it as seen (WRITE-11).
+  Both ways run the same assertion: the modules are exactly `[Rekeyed]`; every node that changes is the track's, an
+  import of it, or its followed channel's; no value changes; every lane plays the same clips under the new key.
+- `crates/server/src/graph/rekey.rs`: `Graph::rekey` and `Graph::rekey_check` (reads only). `routes_mix.rs`: `POST
+  /api/graph/track/rekey {session, module, key}` (a write) and `POST /api/graph/track/rekey/check` (not a write).
+- `web/src/lib/rekey.ts`: the dialog's store, `checkId`, `changeId` (undo step "changing Bass's ID", toast with
+  Undo), `tracksIn(graph, path)`. The window follows a track whose ID changed (the change, its undo, a rename by hand):
+  when one track ID goes and one comes in the same song, `selected`, `module`, `clips` and `open` move to the new one
+  (X20). Not before the graph has the new ID, or the timeline picks another track.
+- `web/src/components/TrackIdDialog.tsx`: the dialog, with its own modal keys for now (Return in the field presses
+  Change ID, Tab and ⇧Tab go round every control, Esc cancels, no key reaches the page). It moves onto P0b-1's
+  `useModalKeys` once that lands.
+- `CodeView.tsx`: the file list's right-click menu, and the dialog mounted.
+
+**Tests**
+
+| Test | Result |
+|---|---|
+| Rust `rekey_tests.rs`: `rekey_moves_code_data_and_layout`, `the_channel_key_follows_only_when_it_equals`, `a_taken_key_is_refused`, `an_invalid_key_says_what_an_id_is`, `undoing_a_rekey_puts_every_byte_back` | 5 ok |
+| `cargo test -p m2-editor -p m2-server`; clippy of both | ok |
+| `pl-ids` (new, after `pl-sounds`) | 35 ok |
+| `code` 58, `s8-tracks` 75, `s8-mute` 152, `attention` 57, `taste` 39 | ok |
+
+**Red first**
+
+```
+rekey against a stub that refuses:  test result: FAILED. 0 passed; 5 failed
+FAIL  a right-click on tracks/bass.ts offers Change Bass's track ID… ()
+```
+
+**What's left (part 2, after P0b-2):** the track's height and hidden lanes in `.music2/view.json` follow its new ID
+(the server, on any `Rekeyed` delta, X20), and the dialog on `useModalKeys`.
+
+**For gaps.md:** #10's rest is done: a track's ID can be changed from the Code view, one undo step. Left: Restore
+(DIAG-6), and keeping a re-keyed track's sounds playing (design-8b §11.3).
+
+**Contract:** ID-17's Today: the key rename is built (Code view, "Change track ID…"). WRITE-10: a row for it, with
+the expectation above (Confined, or checked and committed as seen when a file reading it isn't edited).
+
 ## Lane B
 
 Timeline.
