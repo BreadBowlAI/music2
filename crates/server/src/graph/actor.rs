@@ -993,6 +993,7 @@ impl Actor {
                 // A send that failed (the player stopped responding): rare enough to carry here.
                 o.origins()
             },
+            tempo: p.tempo.as_ref().map(|a| Arc::new(a.tempo_map())),
         });
         let dev = device.as_ref().ok().filter(|d| plays.as_ref().is_some_and(|p| p.epoch == d.epoch));
         for (id, kept) in decisions {
@@ -1161,6 +1162,7 @@ impl Actor {
                     muted: plays.revision.compiled.flat.muted.clone(),
                     tracks: super::overlay::tracks(&plays.revision),
                     origins: None,
+                    tempo: None,
                 };
                 o.load(&device, r, plays, 0.0, None)?;
                 Some(view)

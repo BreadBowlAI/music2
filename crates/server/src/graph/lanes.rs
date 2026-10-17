@@ -178,13 +178,15 @@ fn unpreviewable(rev: &Revision, g: &Gesture) -> Option<&'static str> {
 }
 
 /// What `plays` hears of lane `lane` holding `data`: its slot and the swap, when it reads it and
-/// the data fits its room (a notes lane that needs more is heard once a commit grows it).
+/// the data fits its room (a notes lane that needs more is heard once a commit grows it). Notes are
+/// timed in the tempo map that plays: a tempo drag's, while one plays (NX-S4).
 fn swap_of(plays: &PlaysView, rev: &Revision, lane: &LaneAddr, data: &LaneData) -> Option<(u32, LaneSwap)> {
     let (module, key) = (lane.module.as_str(), lane.lane.as_str());
     let slot = plays.info.lanes.iter().position(|s| s.lane.module == module && s.lane.lane == key)?;
     let swap = match data {
         LaneData::Notes(clips) => {
-            let notes = NotesData::build(clips, rev.compiled.data.tempo(), rev.project.sample_rate() as f64);
+            let tempo = plays.tempo.as_deref().unwrap_or(rev.compiled.data.tempo());
+            let notes = NotesData::build(clips, tempo, rev.project.sample_rate() as f64);
             if !plays.info.lanes[slot].caps?.fits(notes.needs()) {
                 return None;
             }

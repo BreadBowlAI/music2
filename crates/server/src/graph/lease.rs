@@ -381,6 +381,9 @@ pub struct PlaysView {
     /// Set only while what plays is built from older code than the accepted revision's (its
     /// build failed): the accepted control id → its constant's origin in what plays.
     pub origins: Option<Arc<HashMap<String, Origin>>>,
+    /// The tempo map of a tempo drag it plays in place of the accepted one's (RENDER-27a): lane
+    /// data sent to it is timed in this map (NX-S4). None: the accepted revision's.
+    pub tempo: Option<Arc<m2_song::TempoMap>>,
 }
 
 impl PlaysView {

@@ -338,6 +338,44 @@ fn a_seek_during_a_tempo_lease_lands_on_its_beat() {
     assert!((8.0..8.03).contains(&d.graph.status().beat), "a block past beat 8: {}", d.graph.status().beat);
 }
 
+/// Clip `a` with its first E2 at `e` (beats into the clip), the second at 12: a drag of a note.
+fn e_at(e: f64) -> m2_editor::clips::Gesture {
+    let clip = m2_editor::clips::ClipRef { lane: m2_song::LaneAddr::new("bass", "notes").unwrap(), id: Some("a".into()), at: None, sha: None };
+    let note = |start: f64| m2_song::Note { pitch: 40.0, start, length: 1.0, velocity: 0.8 };
+    m2_editor::clips::Gesture::Notes { clip, notes: vec![note(e), note(12.0)], length: None }
+}
+
+// RENDER-27a, WRITE-22a: a note dragged while a tempo drag plays is heard in the dragged map:
+// beat 5 at 240 BPM is frame 60000, not 120000 (NX-S4).
+#[test]
+fn a_note_dragged_during_a_tempo_drag_plays_in_its_map() {
+    let mut d = Drag::new();
+    let lease = d.begin().lease;
+    d.graph.tempo_update(lease, Some(1), 240.0).unwrap();
+    d.heard(240.0);
+    let begun = d.graph.lane_begin(d.token, e_at(5.0), Some("w2".into()), None).unwrap().unwrap();
+    assert!(begun.previewable && begun.heard, "{begun:?}");
+    d.fill(2);
+    d.trace();
+    d.until(6.0);
+    assert_eq!(d.ons(), vec![60_000], "struck at beat 5 in the dragged map");
+}
+
+// RENDER-27a, WRITE-22a: the tempo dragged while a note drag plays: the tempo's plan carries the
+// note drag, timed in its own map (NX-S4).
+#[test]
+fn a_tempo_drag_carries_a_note_drag_in_its_map() {
+    let mut d = Drag::new();
+    let note = d.graph.lane_begin(d.token, e_at(5.0), Some("w2".into()), None).unwrap().unwrap();
+    assert!(note.previewable && note.heard, "{note:?}");
+    let lease = d.begin().lease;
+    d.graph.tempo_update(lease, Some(1), 240.0).unwrap();
+    d.heard(240.0);
+    d.trace();
+    d.until(6.0);
+    assert_eq!(d.ons(), vec![60_000], "struck at beat 5 in the dragged map");
+}
+
 // RENDER-1, RENDER-3: an export renders the accepted tempo: a drag in progress never reaches it.
 #[test]
 fn an_export_during_a_tempo_lease_has_the_accepted_tempo() {
