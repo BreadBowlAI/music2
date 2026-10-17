@@ -1209,7 +1209,8 @@ pub fn tail_stop(lab: &mut Lab, kind: Kind, o: &Opts) -> Result<Outcome> {
 // ---------------------------------------------------------------- G10
 
 /// G10: a range render from bar 64 takes no longer than one of the same length from bar 1 (within
-/// 10%), is the same bits every time, and says whether it is exact (RENDER-4, RENDER-5).
+/// 10%, on a CPU, the best of three of each), is the same bits every time, and says whether it is
+/// exact (RENDER-4, RENDER-5).
 pub fn range(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     use m2_editor::render::{Length, Render, Threads};
     let song = lab.reference(&o.reference).and_then(|d| lab.compile(&d))?;
@@ -1242,11 +1243,12 @@ fn range_engine(_: &Lab, _: &Song, out: &mut Outcome) -> Result<()> {
 }
 
 /// The runtime's range render (`Renderer::starting_at`): `preroll` beats before `from`, then
-/// `beats` of range, in frames, timed.
+/// `beats` of range, in frames, timed on a CPU: the wall clock less the time this process's threads
+/// waited for one, where the OS says (Linux; a Mac's runs are quiet).
 #[cfg(feature = "engine")]
 fn range_engine(lab: &Lab, song: &Song, out: &mut Outcome) -> Result<()> {
     let render = |from: f64, preroll: f64, beats: f64| -> Result<(f64, Vec<[f32; 2]>)> {
-        let t = Instant::now();
+        let (t, waited) = (Instant::now(), m2_os::process::waited());
         let t0 = song.frame((from - preroll).max(0.0));
         let mut r = Renderer::starting_at(&song.flat, &song.data, &lab.packages, song.rate, t0)?;
         r.set_strict(false);
@@ -1254,14 +1256,21 @@ fn range_engine(lab: &Lab, song: &Song, out: &mut Outcome) -> Result<()> {
         r.process(&mut pre)?;
         let mut range = vec![[0.0; 2]; (song.frame(from + beats) - song.frame(from)) as usize];
         r.process(&mut range)?;
-        Ok((t.elapsed().as_secs_f64(), range))
+        let waited = waited.zip(m2_os::process::waited()).map_or(std::time::Duration::ZERO, |(a, b)| b.saturating_sub(a));
+        Ok((t.elapsed().saturating_sub(waited).as_secs_f64(), range))
     };
-    let (late, a) = render(BAR_64, 8.0, 32.0)?;
+    // The best of three of each, in turns: load from elsewhere only ever slows a render. One
+    // wall-clock timing of each, on a busy server, made bar 64 look up to 1.8 times slower.
+    let (mut late, mut whole, mut a) = (f64::INFINITY, f64::INFINITY, vec![]);
+    for _ in 0..3 {
+        let (t, range) = render(BAR_64, 8.0, 32.0)?;
+        (late, a) = (late.min(t), range);
+        whole = whole.min(render(0.0, 0.0, 40.0)?.0);
+    }
     let (early, _) = render(0.0, 8.0, 32.0)?;
-    let (whole, _) = render(0.0, 0.0, 40.0)?;
-    out.info("range from bar 64, 8 bars, 2 bars preroll", format!("{late:.2} s"));
-    out.info("range from bar 1, 8 bars, 2 bars preroll", format!("{early:.2} s"));
-    out.info("range from bar 1, 10 bars, no preroll", format!("{whole:.2} s"));
+    out.info("range from bar 64, 8 bars, 2 bars preroll", format!("{late:.2} s on a CPU, the best of 3"));
+    out.info("range from bar 1, 8 bars, 2 bars preroll", format!("{early:.2} s on a CPU"));
+    out.info("range from bar 1, 10 bars, no preroll", format!("{whole:.2} s on a CPU, the best of 3"));
     out.check(
         "bar 64 takes no longer than the same rendered length from bar 1",
         late <= 1.1 * whole,
