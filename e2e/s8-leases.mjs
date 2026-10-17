@@ -4,7 +4,9 @@
 // the server lists the lease and nothing is written. Esc puts it back (a cancel, no write, and the
 // selection stays). A window that closes mid-drag ends its lease. A clip changed elsewhere mid-drag
 // ends it, and the window says why. Stopped, a drag writes on release as before, with no lease. The
-// timeline mid-drag passes the taste lint. And a PC page: Esc puts a drag back there too.
+// timeline mid-drag passes the taste lint. The tempo field dragged (RENDER-27a): accent while held,
+// heard as it goes (the status's tempo follows), written once by the lease's commit when let go,
+// one undo step; Esc puts it back. And a PC page: Esc puts a drag back there too.
 //
 //   node e2e/s8-leases.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import { check, done, open, read, sleep, until, write } from "./fixlib.mjs";
@@ -180,6 +182,72 @@ check(count(roll2, "commit") === 1 && roll2.find((s) => s.what === "commit")?.bo
 check(!posts.slice(n).some((p) => p.url === "/api/graph/lane"), "not by the roll's lane write");
 check(await until(async () => (await revision()) === rev3 + 1), "one revision");
 check(await until(async () => (await undoNow()).startsWith("Undo Bass notes")), `the undo step is "Bass notes": ${await undoNow()}`);
+await transport("stop");
+
+// ---------------------------------------------------------------- the tempo field dragged (RENDER-27a)
+const tempoOf = () => JSON.parse(read("data/arrangement.json")).tempo[0].bpm;
+const tempo0 = tempoOf();
+const number = "[data-testid=tempo-field] span.tabular-nums";
+/** The number's colour, and the accent's, as the page computes them. */
+const colours = () =>
+  page.evaluate((sel) => {
+    const probe = document.createElement("span");
+    probe.style.color = "var(--color-accent)";
+    document.body.append(probe);
+    const accent = getComputedStyle(probe).color;
+    probe.remove();
+    return { number: getComputedStyle(document.querySelector(sel)).color, accent };
+  }, number);
+const idle = await colours();
+check(idle.number !== idle.accent, `the tempo isn't accent while not held: ${idle.number}`);
+check((await page.$eval("[data-testid=tempo-field]", (e) => e.title)).includes("Heard as you drag"), "its tooltip says it is heard as you drag");
+// Stopped: the time readout follows, so it is heard as it goes, playing or not.
+await until(async () => !(await status()).playing);
+n = posts.length;
+const rev4 = await revision();
+const tf = await box("[data-testid=tempo-field]");
+const bpms = new Set();
+await page.mouse.move(tf.x + tf.width / 2, tf.y + tf.height / 2);
+await page.mouse.down();
+for (let i = 1; i <= 12; i++) {
+  await page.mouse.move(tf.x + tf.width / 2, tf.y + tf.height / 2 - i * 6);
+  await sleep(60);
+  bpms.add((await status()).bpm);
+}
+const held = await colours();
+check(held.number === held.accent, `held, the number is accent: ${held.number}`);
+check(bpms.size >= 3, `mid-drag the status's tempo follows: ${[...bpms].join(", ")}`);
+check(read("data/arrangement.json").includes(String(tempo0)) && tempoOf() === tempo0 && (await revision()) === rev4, "nothing written mid-drag");
+check((await leases()).some((l) => l.kind === "tempo"), "the server lists a tempo lease");
+const songbar = await page.evaluate(lint, "[data-testid=tempo]");
+check(songbar.length === 0, `the song bar mid-drag passes the taste lint ${songbar.slice(0, 3).join(" | ")}`);
+await page.mouse.up();
+check(await until(() => tempoOf() === tempo0 + 18), `let go, written: ${tempoOf()} (was ${tempo0})`);
+await until(() => posts.slice(n).some((p) => p.url === "/api/graph/tempo/lease/commit"), 3000);
+const tposts = posts.slice(n).map((p) => p.url);
+check(tposts.filter((u) => u === "/api/graph/tempo/lease/commit").length === 1 && !tposts.includes("/api/graph/tempo"), `once, by the lease's commit (${tposts.filter((u) => !u.endsWith("/update")).join(" ")})`);
+check(await until(async () => (await revision()) === rev4 + 1) && (await until(async () => (await undoNow()).startsWith("Undo Tempo"))), `one revision, one undo step: ${await undoNow()}`);
+check(await until(async () => (await status()).bpm === tempo0 + 18 && (await leases()).length === 0), "the lease ended; the written tempo plays");
+check(await until(async () => (await colours()).number !== idle.accent), "the number isn't accent once let go");
+// Esc puts it back (playing).
+await play();
+n = posts.length;
+const tf2 = await box("[data-testid=tempo-field]");
+await page.mouse.move(tf2.x + tf2.width / 2, tf2.y + tf2.height / 2);
+await page.mouse.down();
+for (let i = 1; i <= 8; i++) {
+  await page.mouse.move(tf2.x + tf2.width / 2, tf2.y + tf2.height / 2 + i * 6);
+  await sleep(50);
+}
+check(await until(async () => (await status()).bpm < tempo0 + 18, 3000), `dragged down, heard: ${(await status()).bpm}`);
+await key("Escape");
+await sleep(100);
+await page.mouse.up();
+await until(() => posts.slice(n).some((p) => p.url === "/api/graph/tempo/lease/cancel"), 3000);
+const escPosts = posts.slice(n).map((p) => p.url);
+check(escPosts.includes("/api/graph/tempo/lease/cancel") && !escPosts.includes("/api/graph/tempo/lease/commit"), `Esc: a cancel, no write (${escPosts.filter((u) => !u.endsWith("/update")).join(" ")})`);
+check(await until(async () => (await status()).bpm === tempo0 + 18), `the written tempo plays again: ${(await status()).bpm}`);
+check(Number(await page.$eval("[data-testid=tempo-field]", (e) => e.dataset.bpm)) === tempo0 + 18 && tempoOf() === tempo0 + 18, "the field and the file say it");
 await transport("stop");
 
 // ---------------------------------------------------------------- a PC page: Esc puts a drag back there too

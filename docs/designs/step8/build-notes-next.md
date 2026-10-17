@@ -177,6 +177,109 @@ playing (clips, edges, automation points, notes in Notes); a nudge still on land
 **Contract:** WRITE-22a *Today*: the page's drags while playing lease (taste: nothing on screen is new); Esc during
 a drag cancels it and is the drag's alone (X34).
 
+### A3. The tempo lease (with Q23's fallback; A4 not built, X3)
+
+**In short**
+
+| You do this | You hear and see |
+|---|---|
+| Drag the tempo up or down, playing or not | The song plays at the new tempo as you drag. The number turns blue while you hold it. The time follows |
+| Let go | It is saved once. One Undo step: "Undo Tempo" |
+| Press Esc before you let go | The tempo goes back. Nothing is saved |
+| A song with an audio clip (like Resample) | The new tempo is heard when you let go, as before. Its tooltip says so |
+| Someone else changes the tempo while you drag | Your drag stops, and nothing is saved |
+
+**What changed**
+
+- `core/song/src/data.rs`: `DataSet::with_arrangement(arr)`: the same lanes, states and assets (each shared), with
+  `arr` and its tempo map.
+- `crates/server/src/graph/tempo_lease.rs` (new): `tempo_begin`, `tempo_update`, `tempo_keepalive`, `tempo_cancel`,
+  `tempo_commit`, `tempo_leases`; `tempo_expire` and `tempo_gone` (called by `expire` and `client_gone`); for the
+  actor, `wanted` and `heard`. One drag at a time: the window that holds it may begin again; another is refused
+  ("The tempo is being dragged in another window.").
+  - An update keeps the newest value and queues one actor job unless one is queued (Q22). The job settles; when
+    its plan was sent and a newer value waits, it queues itself again, behind whatever else was asked. So one
+    prepare is in flight, the newest value next, and a drag held during a compile is heard after it.
+  - The commit marks the lease closing and runs `Graph::tempo` (8b.2's builder): one Tx writing
+    `data/arrangement.json`; its settle plays the accepted arrangement. 409 when the accepted arrangement isn't the
+    one the drag began on (X24): "The tempo changed elsewhere: your drag was dropped."
+  - Cancel, the TTL (10 s) and the window closing end it and queue the job, whose settle goes back.
+- `graph/actor.rs` (lane A's blocks): `Plays.tempo: Option<Arc<Arrangement>>` (the arrangement a drag plays);
+  `way()` takes the drag's arrangement: it isn't `Same` while what plays has another, and it activates (never
+  reaches) while either side has one; the plan is prepared with `with_arrangement` against what plays' own data
+  (its leased map when it has one); `build()` takes the data to play. `settle` reads `tempo_lease::wanted` first
+  (none while a lane of what plays is audio: Q23's fallback), sets `Timing.tempo` to the map that plays, and marks the
+  value heard after a plan is sent. `settle_as(install, view)`: the tempo job's settle doesn't publish the view again
+  when it shows the accepted revision. `Actor::tempo_preview(token)` is the job.
+- `graph/preview.rs`: no PLANE-5 preview while what plays is a drag's tempo map (its lane swaps would be timed in the
+  accepted map); the settle activates instead. One line in `lend`.
+- `graph.rs`: `ControlPlane.tempo` at its end; `mod tempo_lease;`; `pub use tempo_lease::TempoCommitted`; one line each
+  in `end_all`, `expire` and `client_gone`.
+- `routes_leases.rs`: `POST /api/graph/tempo/lease/{begin,update,keepalive,commit,cancel}`; begin `{session, at}` →
+  `{lease, at, bpm, heard}`; update `{lease, seq, bpm}` → `{seq}`; commit `{lease, bpm}` → `/api/graph/tempo`'s answer,
+  409 `changed`. Begin and commit are writes (423 read-only). `routes.rs`: `GET /api/graph/leases` lists it with
+  `kind: "tempo"`.
+- `web/src/lib/tempoLease.ts` (new): `begin(session, at, ended)`, `update` once a frame, a 2 s keepalive, `finish`
+  (the lease's commit, or `/api/graph/tempo` when the lease couldn't begin; records the "Tempo" undo step), `abort`.
+- `SongBar.tsx` (`TempoField`'s drag only): a lease from the drag's first step, playing or not; the number `accent`
+  while held (taste §3.3); Esc (capture phase) and a lost pointer cancel; the tooltip says "Heard as you drag", or
+  "Heard when you let go" in a song with an audio lane.
+- `e2e/s8-leases.mjs`: the tempo half (16 checks, 55 in all); `e2e/s8-songbar.mjs`: two checks follow (the tooltip's
+  words; a drag is written by the lease's commit, not `/api/graph/tempo`).
+
+**Tests** (`graph/tempo_lease_tests.rs`, a driven player): `the_tempo_is_heard_at_the_first_block_after_its_prepare`
+(the status's 240 BPM; an E2 at beat 4 struck at frame 48000, not 96000), `one_tempo_prepare_in_flight` (50 updates
+while the session is busy: one activation, carrying the 50th value), `the_tempo_prepare_is_measured`,
+`a_stale_tempo_prepare_is_done_again` (an edit's new plan plays at the dragged tempo; the drag goes on),
+`a_tempo_commit_is_one_tx`, `a_tempo_cancel_goes_back`, `a_closed_window_ends_its_tempo_lease`,
+`an_idle_tempo_lease_expires`, `a_seek_during_a_tempo_lease_lands_on_its_beat` (beat 8 at 240 BPM: frame 96000),
+`an_export_during_a_tempo_lease_has_the_accepted_tempo`, `a_tempo_commit_after_another_change_is_refused`,
+`a_song_with_audio_hears_the_tempo_on_release`. `routes_leases_tests.rs`: `a_tempo_lease_through_the_routes`, and
+the read-only test covers the tempo routes. `core/song`: `with_arrangement_keeps_every_lane`.
+m2-server 264, m2-editor 283, m2-song pass; clippy `-D warnings` clean on the three; the renders 10 of 10. `s8-leases` 55 of 55; moved and
+green: `s8-songbar` 82, `fx-fixes` 75, `taste` 39, `pc-keys` 37. The web build type-checks. Server copy
+`bin/a-a3wip`.
+
+**Measured** (design-8b §9.5, information only, Linux under other tracks' load): a tempo preview's prepare, p50 of
+21, on the test's one-track song: 0.08 ms.
+
+**Seen, not ours:** in full `m2-server` runs on this busy machine (load average about 17),
+`audition_never_waits_for_a_compile` (its compile span not found among the last 16) and
+`loading_is_published_while_a_plugin_is_created` (known: 8b's and polish's notes) each failed once; each passes alone
+(3 and 6 runs), and the next full run passed whole.
+
+**Red first**
+
+- The server tests with `tempo_update` a stub that keeps nothing and queues nothing: 11 of 13 fail
+  (`timed out waiting until the value is heard`), and `a_tempo_lease_through_the_routes` (the status never says 130).
+  Guards (pass either way): `a_song_with_audio_hears_the_tempo_on_release`, `an_idle_tempo_lease_expires`.
+- `with_arrangement` a stub returning the data as it is: `left: Arrangement { tempo: [.. bpm: 120.0 ..] }`,
+  `right: .. bpm: 150.0 ..`.
+- `s8-leases` on the page from before: 29 FAIL, for example
+  ```
+  FAIL  held, the number is accent: rgb(51, 55, 60)
+  FAIL  mid-drag the status's tempo follows: 124
+  FAIL  once, by the lease's commit (/api/graph/tempo)
+  FAIL  Esc: a cancel, no write (/api/graph/tempo)
+  ```
+
+**Left**
+
+- A4, audio that drifts during a tempo drag (X3): a song whose plan reads an audio lane hears the tempo on release,
+  as before. To build on 8a's live slice: `AudioPlayer.lease`, `Keep.audio_as_is`, the crossfade back (design-8b
+  §9.2).
+- Tempo prepares on a control-plane thread (Q22): the actor's job prepares; a drag held during a long compile is
+  heard after it.
+- A drag of a later tempo change keeps the bars after it where they are in beats (as 8b.2's edit does).
+- A lane drag and a tempo drag at once (two windows): the lane's preview is timed in the accepted map until the next
+  settle.
+
+**For gaps.md:** "Audio drifts during a tempo drag" left (X3, after 8a). The tempo is heard as it is dragged.
+
+**Contract:** RENDER-27a *Today*: "at the first block after its plan is prepared", one prepare in flight (the actor's
+coalescing job, Q22), the leased map in `Timing` and in every plan prepared while it lives; a song with audio hears it on
+release (Q23). The planes table's control row names the tempo lease.
+
 ## Lane B
 
 ## Lane C

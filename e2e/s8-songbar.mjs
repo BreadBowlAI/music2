@@ -56,14 +56,15 @@ await page.waitForSelector("[data-testid=tempo-field]");
 
 const f0 = await field();
 check(f0.bpm === 124 && f0.text === "124BPM" && (await meterText()) === "4/4", `the bar shows the song's tempo and time signature: ${f0.text}, ${await meterText()}`);
-check(f0.title.includes("Heard when you let go") && f0.title.includes("Saved in data/arrangement.json") && f0.title.includes("⇧ for fine"), `its tooltip says how, and where it is kept: ${f0.title.replace(/\n/g, " | ")}`);
+check(f0.title.includes("Heard as you drag") && f0.title.includes("Saved in data/arrangement.json") && f0.title.includes("⇧ for fine"), `its tooltip says how, and where it is kept: ${f0.title.replace(/\n/g, " | ")}`);
 const during = await dragTempo(40, {
   during: async () => ({ bubble: await page.$eval("[data-testid=value-bubble]", (e) => e.textContent).catch(() => null), file: read("data/arrangement.json") }),
 });
 check(during.bubble === "134 BPM" && during.file === orig.arrangement, `a drag shows the value as it goes (${during.bubble}) and writes nothing yet`);
 check(await until(() => same(tempos(), [[0, 134]])), `let go, 40 px up is 10 BPM more: ${JSON.stringify(tempos())}`);
 await sleep(400);
-check(sent("tempo") === 1 && (await toasts()).length === 0, `written once, with no toast (${sent("tempo")} writes, toasts: ${await toasts()})`);
+// A drag is the tempo lease's (8b.7): written by its commit, once.
+check(sent("tempo/lease/commit") === 1 && sent("tempo") === 0 && (await toasts()).length === 0, `written once, with no toast (${sent("tempo/lease/commit")} writes, toasts: ${await toasts()})`);
 check((await field()).bpm === 134, "the field shows it");
 check(await page.$eval('button[aria-label="Undo"]', (e) => e.title === "Undo Tempo (⌘Z)"), `Undo names it: ${await page.$eval('button[aria-label="Undo"]', (e) => e.title)}`);
 await dragTempo(-40, { fine: true });

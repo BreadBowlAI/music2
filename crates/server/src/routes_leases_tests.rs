@@ -79,8 +79,38 @@ fn lane_leases_through_the_routes() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// RENDER-27a: the tempo field's drag through the routes: begin names the entry and its tempo,
+// an update is heard (the status follows), the listing says `kind: "tempo"`, and the commit
+// answers as `/api/graph/tempo` does, writing data/arrangement.json once.
+#[test]
+fn a_tempo_lease_through_the_routes() {
+    let dir = project("tempo");
+    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
+    let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+    let url = &running.url;
+    let (status, begun) = call(url, "POST", "/api/graph/tempo/lease/begin", &json!({"session": session, "at": 3.5, "client": "w1"}));
+    assert_eq!((status, &begun["at"], &begun["bpm"], &begun["heard"]), (200, &json!(0.0), &json!(120.0), &json!(true)), "{begun:#}");
+    let lease = begun["lease"].clone();
+    assert_eq!(call(url, "POST", "/api/graph/tempo/lease/update", &json!({"lease": lease, "seq": 1, "bpm": 130})).1, json!({"seq": 1}));
+    let t = std::time::Instant::now();
+    while running.state.graph.status().bpm != Some(130.0) {
+        assert!(t.elapsed() < std::time::Duration::from_secs(5), "the status never said 130");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let (_, listed) = call(url, "GET", "/api/graph/leases", &Value::Null);
+    assert_eq!((&listed[0]["kind"], &listed[0]["bpm"]), (&json!("tempo"), &json!(130.0)), "{listed:#}");
+    let (status, bad) = call(url, "POST", "/api/graph/tempo/lease/update", &json!({"lease": lease, "seq": 2, "bpm": 5000}));
+    assert!(status == 400 && bad["error"].as_str().unwrap().contains("20 to 999"), "{bad:#}");
+    let (status, done) = call(url, "POST", "/api/graph/tempo/lease/commit", &json!({"lease": lease, "bpm": 130}));
+    assert_eq!(status, 200, "{done:#}");
+    assert!(done["revision"].is_u64() && done["after"] == json!("130 BPM"), "{done:#}");
+    assert!(std::fs::read_to_string(dir.join("data/arrangement.json")).unwrap().contains("130"));
+    assert_eq!(call(url, "GET", "/api/graph/leases", &Value::Null).1, json!([]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // WRITE-17: in a window open read-only, a drag's begin and commit answer 423 with WRITE-18's
-// message, and nothing begins.
+// message, the tempo's too, and nothing begins.
 #[test]
 fn a_read_only_window_begins_no_lane_lease() {
     let dir = project("ro");
@@ -91,7 +121,9 @@ fn a_read_only_window_begins_no_lane_lease() {
     assert_eq!(status, 423, "{answer:#}");
     assert!(answer["error"].as_str().unwrap().contains("nothing was changed"), "{answer:#}");
     assert_eq!(call(&running.url, "POST", "/api/graph/lane/lease/commit", &json!({"lease": 1, "gesture": moved(1.0, None)})).0, 423);
-    assert!(running.state.graph.lane_leases().is_empty());
+    assert_eq!(call(&running.url, "POST", "/api/graph/tempo/lease/begin", &json!({"session": session, "at": 0})).0, 423);
+    assert_eq!(call(&running.url, "POST", "/api/graph/tempo/lease/commit", &json!({"lease": 1, "bpm": 130})).0, 423);
+    assert!(running.state.graph.lane_leases().is_empty() && running.state.graph.tempo_leases().is_empty());
     drop(held);
     let _ = std::fs::remove_dir_all(&dir);
 }

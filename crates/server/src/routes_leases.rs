@@ -1,7 +1,7 @@
 //! The routes of 8b.7's leases, in a router of their own, merged into the API's: drags on clips
-//! heard while they last (WRITE-22a). A route here that writes the project, or begins a gesture
-//! whose commit would, is in [`WRITES_LEASES`], and a read-only window answers it 423 with
-//! WRITE-18's message, as `routes.rs` answers its own.
+//! (WRITE-22a) and the tempo field's drag (RENDER-27a), heard while they last. A route here that
+//! writes the project, or begins a gesture whose commit would, is in [`WRITES_LEASES`], and a
+//! read-only window answers it 423 with WRITE-18's message, as `routes.rs` answers its own.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,7 +23,8 @@ type S = State<Arc<AppState>>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
 /// The routes here that write the open project, or begin a gesture whose commit would.
-pub const WRITES_LEASES: &[&str] = &["/api/graph/lane/lease/begin", "/api/graph/lane/lease/commit"];
+pub const WRITES_LEASES: &[&str] =
+    &["/api/graph/lane/lease/begin", "/api/graph/lane/lease/commit", "/api/graph/tempo/lease/begin", "/api/graph/tempo/lease/commit"];
 
 pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
@@ -32,6 +33,11 @@ pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/api/graph/lane/lease/keepalive", post(lane_keepalive))
         .route("/api/graph/lane/lease/commit", post(lane_commit))
         .route("/api/graph/lane/lease/cancel", post(lane_cancel))
+        .route("/api/graph/tempo/lease/begin", post(tempo_begin))
+        .route("/api/graph/tempo/lease/update", post(tempo_update))
+        .route("/api/graph/tempo/lease/keepalive", post(tempo_keepalive))
+        .route("/api/graph/tempo/lease/commit", post(tempo_commit))
+        .route("/api/graph/tempo/lease/cancel", post(tempo_cancel))
         .route_layer(axum::middleware::from_fn_with_state(state, writes))
 }
 
@@ -125,6 +131,69 @@ async fn lane_commit(State(s): S, Json(r): Json<CommitReq>) -> Result<Response, 
     Ok(match done? {
         Answer::Done(v) => Json(v).into_response(),
         Answer::Changed(why) => changed(why),
+    })
+}
+
+#[derive(Deserialize)]
+struct TempoBeginReq {
+    session: u64,
+    /// A beat: the tempo entry in effect there is dragged (the playhead's).
+    at: f64,
+    #[serde(default)]
+    client: Option<String>,
+    #[serde(default)]
+    ttl_ms: Option<u64>,
+}
+
+/// Begin a drag of the tempo field: `{session, at, client?, ttl_ms?}` answers `{lease, at, bpm,
+/// heard}`: the entry dragged, and whether it is heard as it goes (not in a song with audio).
+async fn tempo_begin(State(s): S, Json(r): Json<TempoBeginReq>) -> ApiResult {
+    let ttl = r.ttl_ms.map(Duration::from_millis);
+    let begun = blocking(move || s.graph.tempo_begin(r.session, r.at, r.client, ttl)).await?;
+    Ok(Json(json!(begun)))
+}
+
+#[derive(Deserialize)]
+struct TempoUpdateReq {
+    lease: u64,
+    #[serde(default)]
+    seq: Option<u64>,
+    bpm: f64,
+}
+
+/// A tempo drag's newest value, heard at the first block after its plan is prepared. Answers
+/// `{seq}`: null when the update was older than one taken.
+async fn tempo_update(State(s): S, Json(r): Json<TempoUpdateReq>) -> ApiResult {
+    let seq = blocking(move || s.graph.tempo_update(r.lease, r.seq, r.bpm)).await?;
+    Ok(Json(json!({"seq": seq})))
+}
+
+async fn tempo_keepalive(State(s): S, Json(r): Json<LeaseReq>) -> ApiResult {
+    s.graph.tempo_keepalive(r.lease)?;
+    Ok(Json(json!({})))
+}
+
+/// End a tempo drag without a write: the accepted tempo plays again.
+async fn tempo_cancel(State(s): S, Json(r): Json<LeaseReq>) -> ApiResult {
+    blocking(move || s.graph.tempo_cancel(r.lease)).await?;
+    Ok(Json(json!({})))
+}
+
+#[derive(Deserialize)]
+struct TempoCommitReq {
+    lease: u64,
+    bpm: f64,
+}
+
+/// Write a tempo drag: one Tx, one undo step, answered as `POST /api/graph/tempo` answers; 409
+/// `{error, changed: true}` when the tempo changed elsewhere since it began.
+async fn tempo_commit(State(s): S, Json(r): Json<TempoCommitReq>) -> Result<Response, ApiError> {
+    let state = s.clone();
+    let done = blocking(move || state.graph.tempo_commit(r.lease, r.bpm)).await;
+    s.graph_changed();
+    Ok(match done? {
+        crate::graph::TempoCommitted::Done(v) => Json(v).into_response(),
+        crate::graph::TempoCommitted::Changed(why) => changed(why),
     })
 }
 

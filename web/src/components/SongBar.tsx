@@ -5,6 +5,7 @@ import { barAt, graphApi, type Meter, type TimelineView } from "../lib/graph";
 import { mod } from "../lib/native";
 import { useStore } from "../lib/store";
 import { Bubble } from "./Knob";
+import { begin as dragTempo, type TempoLease } from "../lib/tempoLease";
 import { Button, MenuRow, Popover, Segment } from "./ui";
 
 // The song bar (design-8b §4, taste.md §3.3, TB-5): the tempo and the time signature in effect at
@@ -51,8 +52,9 @@ function typedBpm(text: string) {
 /**
  * The tempo field (taste.md §3.3): "124" and "BPM". Drag up or down, 1 BPM per 4px (⇧: 0.1);
  * double-click or Return to type "128", "128.5" or "128 bpm". It edits the tempo in effect at
- * `at`. Until the tempo lease (8b.7) a drag is heard when it is let go. No ⌥-click reset: a
- * stray click would reset the song's tempo (taste.md §5.2).
+ * `at`. A drag is heard as it goes, playing or not (the tempo lease, 8b.7), and written when let
+ * go; the number is `accent` while it is held; Esc puts it back. In a song with an audio clip it
+ * is heard when let go. No ⌥-click reset: a stray click would reset the song's tempo (taste.md §5.2).
  */
 export function TempoField({
   session,
@@ -81,6 +83,9 @@ export function TempoField({
   // by the time it ends.
   const target = useRef<{ beat: number; bpm: number }>(entry);
   const held = useRef<{ pointer: number; y: number; tenths: number; start: number; at: number; value: number } | null>(null);
+  // The drag's lease: what is dragged is heard as it goes (8b.7).
+  const lease = useRef<TempoLease | null>(null);
+  const spin = useRef<HTMLSpanElement>(null);
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (pending === null) return;
@@ -98,11 +103,11 @@ export function TempoField({
     setDraft(bpmText(shown));
   };
 
-  const commit = (bpm: number, to: { beat: number; bpm: number }) => {
-    if (Math.abs(bpm - to.bpm) < 1e-9) return;
+  /** Write `bpm` to the entry `to`, through the drag's lease `drag` when one lives. */
+  const commit = (bpm: number, to: { beat: number; bpm: number }, drag: TempoLease | null = null) => {
+    if (Math.abs(bpm - to.bpm) < 1e-9) return drag?.abort();
     setPending({ beat: to.beat, bpm });
-    graphApi
-      .tempo(session, { at: to.beat, bpm }, { name: "Tempo" })
+    (drag ? drag.finish(bpm, { name: "Tempo" }) : graphApi.tempo(session, { at: to.beat, bpm }, { name: "Tempo" }))
       .then((r) => r.loop_off && toast(`Loop turned off: it's too short to play at ${bpmText(bpm)} BPM`))
       .catch((e) => {
         setPending(null);
@@ -122,12 +127,37 @@ export function TempoField({
     commit(bpm, target.current);
   };
 
+  /** A drag put back: Esc, a lost pointer, or the server ended it (another window wrote the tempo). */
+  const cancelDrag = () => {
+    const h = held.current;
+    lease.current?.abort();
+    lease.current = null;
+    held.current = null;
+    setDrag(null);
+    if (h && spin.current?.hasPointerCapture(h.pointer)) spin.current.releasePointerCapture(h.pointer);
+  };
+  // Esc while the tempo is dragged puts it back, and is the drag's alone.
+  const dragging = drag !== null;
+  useEffect(() => {
+    if (!dragging) return;
+    const esc = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      cancelDrag();
+    };
+    window.addEventListener("keydown", esc, true);
+    return () => window.removeEventListener("keydown", esc, true);
+  }, [dragging]);
+  // A song with an audio clip hears a drag when it is let go (its renders keep their tempo).
+  const audio = timeline.tracks.some((t) => t.lanes.some((l) => l.kind === "audio"));
+
   const many = timeline.tempo.length > 1;
   const title = locked
     ? `Tempo: ${bpmText(shown)} BPM\n${locked}`
     : [
         many ? `Tempo from ${entry.beat === 0 ? "the start" : placeOf(timeline.meter, entry.beat)}: ${bpmText(shown)} BPM` : "Tempo",
-        `Drag up or down (${mod.shift} for fine), or double-click to type. Heard when you let go`,
+        `Drag up or down (${mod.shift} for fine), or double-click to type. ${audio ? "Heard when you let go" : "Heard as you drag"}`,
         HOME,
       ].join("\n");
 
@@ -170,6 +200,7 @@ export function TempoField({
   }
   return (
     <span
+      ref={spin}
       role="spinbutton"
       tabIndex={locked ? -1 : 0}
       data-testid={testid}
@@ -201,19 +232,27 @@ export function TempoField({
         h.tenths += ((h.y - e.clientY) * (e.shiftKey ? 1 : 10)) / 4;
         h.y = e.clientY;
         h.value = Math.min(999, Math.max(20, Number((h.start + Math.trunc(h.tenths) / 10).toFixed(1))));
-        if (drag || Math.abs(h.tenths) >= 10 || (e.shiftKey && Math.abs(h.tenths) >= 1)) setDrag({ value: h.value, x: e.clientX, y: e.clientY });
+        if (lease.current || Math.abs(h.tenths) >= 10 || (e.shiftKey && Math.abs(h.tenths) >= 1)) {
+          setDrag({ value: h.value, x: e.clientX, y: e.clientY });
+          // Heard as it goes, from the drag's first step (8b.7).
+          lease.current ??= dragTempo(session, h.at, (why) => {
+            toast(why);
+            cancelDrag();
+          });
+          lease.current.update(h.value);
+        }
       }}
       onPointerUp={(e) => {
         const h = held.current;
         if (!h || h.pointer !== e.pointerId) return;
+        const l = lease.current;
+        lease.current = null;
         held.current = null;
         setDrag(null);
-        if (h.value !== h.start) commit(h.value, { beat: h.at, bpm: h.start });
+        if (h.value !== h.start) commit(h.value, { beat: h.at, bpm: h.start }, l);
+        else l?.abort();
       }}
-      onPointerCancel={() => {
-        held.current = null;
-        setDrag(null);
-      }}
+      onPointerCancel={cancelDrag}
       onDoubleClick={() => !locked && openDraft()}
       onKeyDown={(e) => {
         if (e.key !== "Enter" || locked) return;
@@ -223,7 +262,7 @@ export function TempoField({
       }}
     >
       <span className="inline-flex items-baseline gap-1">
-        <span className="text-base font-medium text-fg tabular-nums">{bpmText(shown)}</span>
+        <span className={clsx("text-base font-medium tabular-nums", drag ? "text-accent" : "text-fg")}>{bpmText(shown)}</span>
         <span className="text-xs text-fg-faint">BPM</span>
       </span>
       {drag && <Bubble at={drag}>{bpmText(drag.value)} BPM</Bubble>}
