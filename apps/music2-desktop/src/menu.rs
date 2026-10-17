@@ -118,6 +118,8 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     ("next_marker", "Next Marker", None),
     // Panic (RENDER-10): every note off, every instance reset.
     ("panic", "Stop All Sound", Some("CmdOrCtrl+Period")),
+    // The metronome (gaps #19): a click on each beat while the song plays. K is the page's key.
+    ("metronome", "Metronome", None),
     ("shortcuts", "Keyboard Shortcuts", None),
 ];
 
@@ -203,6 +205,7 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
         Line,
         Item("loop"),
         Item("loop_selection"),
+        Item("metronome"),
         Item("follow"),
         Line,
         Item("add_marker"),
@@ -498,9 +501,22 @@ mod tests {
             assert_eq!(view[..6], [Row::Item("zoom_in"), Row::Item("zoom_out"), Row::Item("zoom_fit"), Row::Item("taller"), Row::Item("shorter"), Row::Line]);
             let transport = menu("Transport");
             let at = transport.iter().position(|r| *r == Row::Item("loop_selection")).expect("Loop Selection");
-            assert_eq!(transport[at + 1], Row::Item("follow"), "mac: {mac}");
+            assert_eq!(transport[at + 1..at + 3], [Row::Item("metronome"), Row::Item("follow")], "mac: {mac}");
             let at = transport.iter().position(|r| *r == Row::Item("add_marker")).expect("Add Marker");
             assert_eq!(transport[at - 1..at + 4], [Row::Line, Row::Item("add_marker"), Row::Item("prev_marker"), Row::Item("next_marker"), Row::Line]);
+        }
+    }
+
+    /// The next track's lane B: Transport ▸ Metronome, after Loop Selection and before Follow
+    /// Playhead (taste.md's order), on both menu bars, with no chord: K is the page's key.
+    #[test]
+    fn the_metronome_has_its_row_in_transport() {
+        assert_eq!(ITEMS.iter().find(|i| i.0 == "metronome").map(|i| (i.1, i.2)), Some(("Metronome", None)));
+        for mac in [true, false] {
+            let bar = layout(mac);
+            let transport = &bar.iter().find(|m| m.0 == "Transport").expect("Transport").1;
+            let at = transport.iter().position(|r| *r == Row::Item("loop")).expect("Loop");
+            assert_eq!(transport[at..at + 4], [Row::Item("loop"), Row::Item("loop_selection"), Row::Item("metronome"), Row::Item("follow")], "mac: {mac}");
         }
     }
 

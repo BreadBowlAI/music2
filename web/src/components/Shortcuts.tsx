@@ -19,6 +19,7 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
       ["Stop all sound", chord(".")],
       ["Follow the playhead on / off", chord("F", { shift: true })],
       ["Go to the marker before / after", `${opt("←")} / ${opt("→")}`],
+      ["Metronome on / off", "K"],
     ],
   },
   {

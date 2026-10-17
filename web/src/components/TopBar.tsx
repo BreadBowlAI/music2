@@ -1,9 +1,10 @@
 import clsx from "clsx";
-import { Download, PanelLeft, Play, Redo2, Repeat, SkipBack, Square, Undo2 } from "lucide-react";
+import { Download, Metronome, PanelLeft, Play, Redo2, Repeat, SkipBack, Square, Undo2 } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { barAt, barsToBeats, lockReason, position, type GraphState, type GraphStatus, type Loop, type Meter, type Problem } from "../lib/graph";
 import { exportSong, useExport } from "../lib/exporting";
 import { next } from "../lib/history";
+import { useMetronome, toggleMetronome } from "../lib/metronome";
 import { chord, keyName, shifted } from "../lib/native";
 import { canvas, useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
@@ -93,6 +94,7 @@ export default function TopBar({
   // Playback sits on whole frames, so a seek to a beat can land a hair before it.
   const at = position(meter, Math.round(status.beat * 1000) / 1000);
   const l = status.loop;
+  const metronome = useMetronome();
   // What they would take back, when this window knows (lib/history): "Undo Reverb size (⌘Z)".
   const undoing = next(graph.session, graph.view.revision, false);
   const redoing = next(graph.session, graph.view.revision, true);
@@ -149,6 +151,18 @@ export default function TopBar({
         className="ml-1 w-ctl !px-0"
       >
         <Repeat size={16} />
+      </BarButton>
+      {/* The metronome (gaps #19), after Loop (taste.md §3.3). */}
+      <BarButton
+        data-testid="metronome-toggle"
+        aria-label="Metronome"
+        aria-pressed={metronome}
+        active={metronome}
+        onClick={toggleMetronome}
+        title="Metronome: a click on each beat (K)"
+        className="ml-1 w-ctl !px-0"
+      >
+        <Metronome size={16} />
       </BarButton>
       <Divider />
       {/* Where playback is, on one baseline. The position is right-aligned in its 72px, so its last

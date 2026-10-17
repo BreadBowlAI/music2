@@ -242,6 +242,8 @@ struct Shared {
     live: AtomicU32,
     /// The engine renders: a project plays, and it doesn't idle (RENDER-6a).
     running: AtomicBool,
+    /// The metronome is on: each callback tells the engine (gaps #19).
+    click: AtomicBool,
     /// The longest callback since [`Player::load`] last read it, as a share of its period (the
     /// bits of a non-negative `f32`), and the callbacks longer than their period so far (8b.8).
     longest: AtomicU32,
@@ -493,7 +495,7 @@ impl Callback {
     }
 
     fn render(&mut self, n: usize, stamp: CallbackStamp) {
-        let Callback { live, fade, held, rx, retired, a, b, seeks, plays, .. } = self;
+        let Callback { live, fade, held, rx, retired, a, b, seeks, plays, shared, .. } = self;
         let mut retire = |r: Retired| match retired.try_send(Gone::Engine(r)) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(Gone::Engine(r)) | TrySendError::Disconnected(Gone::Engine(r))) => Err(r),
@@ -522,6 +524,7 @@ impl Callback {
                         Err(_) => None,
                     }
                 };
+                l.engine.set_click(shared.click.load(Ordering::Relaxed));
                 l.fill(&mut a[..n], &mut inbox, &mut retire, stamp);
             }
             None => a[..n].fill([0.0; 2]),
@@ -993,6 +996,17 @@ impl Player {
     /// this is true no plugin of what it plays is called until it resumes (RENDER-1).
     pub fn held(&self) -> bool {
         self.shared.held.load(Ordering::Acquire)
+    }
+
+    /// The metronome on or off: a click on each beat while the song plays, from the next callback,
+    /// whatever plays then (a project opened later too). Never in an export: exports never make an
+    /// engine (RENDER-1).
+    pub fn set_click(&self, on: bool) {
+        self.shared.click.store(on, Ordering::Relaxed);
+    }
+
+    pub fn click(&self) -> bool {
+        self.shared.click.load(Ordering::Relaxed)
     }
 
     /// Start playing, for tests and tools; [`Player::transport`] says whether it was sent.

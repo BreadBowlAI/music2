@@ -914,6 +914,8 @@ impl Actor {
                 Way::Load(r, plays) => {
                     let d = device.as_ref().map_err(|e| anyhow!("{e:#}"))?;
                     let looping = inner.timing.lock().as_ref().and_then(|t| t.range.filter(|_| t.on));
+                    // A new player clicks as the song's window says, a read-only one's included.
+                    d.player.set_click(cp.open.as_ref().filter(|p| p.engine.token == token).is_some_and(|p| super::view_file::metronome(&p.local)));
                     o.load(d, *r, plays, d.resume, looping)?;
                     o.restarts.clear();
                     Ok(Sent::Renderer)
@@ -1132,6 +1134,8 @@ impl Actor {
             let engine = Arc::new(EngineView { token, revision: number, code_rev, controls, plays: view });
             let aliases = Arc::new(super::Aliases { to: code_rev, ids: HashMap::new() });
             let local = super::view_file::local(&shown.dir);
+            // The metronome as this song had it here: off for one that never had it on.
+            device.player.set_click(super::view_file::metronome(&local));
             cp.open.replace(Published { engine, shown, revs, aliases, overlays: monitor, local }).and_then(|p| p.owed())
         };
         self.inner.save_owed(owed);

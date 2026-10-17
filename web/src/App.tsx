@@ -15,6 +15,7 @@ import { isMac, native, nativeAction, onMenu } from "./lib/native";
 import { followGridView } from "./lib/grid";
 import { canvas, useShell, VIEWS, type GridOp } from "./lib/shell";
 import { deleteTrack, duplicateTrack, newTrack } from "./components/Tracks";
+import { toggleMetronome } from "./lib/metronome";
 
 /** Fetch the open project. An error means none is open: the start screen shows. */
 const refreshGraph = () =>
@@ -52,7 +53,7 @@ function key(e: KeyboardEvent): string | null {
   if (e.key === "Enter" || e.key === "Home") return "home";
   if (e.key === "Escape") return "deselect";
   if (e.shiftKey) return null;
-  return ({ c: "loop", a: "lanes", e: "dock", x: "view_mix", b: "draw", m: "mute", s: "solo", z: "zoom_fit" } as Record<string, string>)[e.key.toLowerCase()] ?? null;
+  return ({ c: "loop", a: "lanes", e: "dock", x: "view_mix", b: "draw", m: "mute", s: "solo", z: "zoom_fit", k: "metronome" } as Record<string, string>)[e.key.toLowerCase()] ?? null;
 }
 
 /** ⌘1 to ⌘4, View's grid rows: the command ids, in order. */
@@ -393,5 +394,7 @@ export function appCommand(id: string) {
     case "prev_marker":
     case "next_marker":
       return canvas.marker?.(id === "add_marker" ? "add" : id === "prev_marker" ? "prev" : "next");
+    case "metronome":
+      return toggleMetronome();
   }
 }
