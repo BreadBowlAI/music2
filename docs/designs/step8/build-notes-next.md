@@ -22,7 +22,13 @@ Settings and safety.
 ## Lane D
 
 Effects and small fixes. Branch `next-d`, worktree `wt/nx-d`. Built in the order X29 sets: D4e, D1, D2, the rest of
-D4, then D3.
+D4, then D3. All five built; nothing of the lane is left unbuilt.
+
+**For 8a's merge:** none. Lane D touches nothing in `core/runtime`, `core/play`, `core/os`, `crates/gates` or
+`apps/`, and `Cargo.lock` is unchanged. In shared files it adds only: `crates/server/src/lib.rs` `mod routes_fx;`
+(after `mod routes_view;`), `routes.rs` one `.merge(crate::routes_fx::router(…))` (after `routes_view`'s),
+`graph.rs` `mod fx;` (after `mod watcher;`); `e2e/run.mjs` rows `nx-effects` (after `effects`) and `nx-nits` (after
+`pl-arrange`), and their `e2e/README.md` rows.
 
 ### D4e. A first options object on its own line (Q31)
 
