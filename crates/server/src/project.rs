@@ -25,10 +25,12 @@ const MAX_NAME: usize = 80;
 
 /// Where songs are made: the folder Settings chose ([`set_songs_dir`], gaps #31), else
 /// `$HOME/Music/music2` ([`default_songs_dir`]). Exports go in its `Exports`. It is created when a
-/// song is first made there ([`make_songs_dir`]).
+/// song is first made there ([`make_songs_dir`]). It is named by its real path, links resolved
+/// as far as it is there ([`real`]), as a song made in it is once open: so Settings, the New Song
+/// dialog and the new song all name one folder alike (a Mac's `/var` is `/private/var`).
 pub fn songs_dir() -> Result<PathBuf> {
     match SONGS.read().clone() {
-        Some(dir) => Ok(dir),
+        Some(dir) => Ok(real(dir)),
         None => default_songs_dir(),
     }
 }
@@ -42,10 +44,20 @@ pub fn set_songs_dir(dir: Option<PathBuf>) {
     *SONGS.write() = dir;
 }
 
-/// The default songs folder: `$HOME/Music/music2` (`m2_os::dirs::songs`). From `$HOME`, so tests
-/// can point it elsewhere.
+/// The default songs folder: `$HOME/Music/music2` (`m2_os::dirs::songs`), by its real path. From
+/// `$HOME`, so tests can point it elsewhere.
 pub fn default_songs_dir() -> Result<PathBuf> {
-    m2_os::dirs::songs().ok_or_else(|| anyhow!("can't find your home folder ($HOME isn't set)"))
+    m2_os::dirs::songs().map(real).ok_or_else(|| anyhow!("can't find your home folder ($HOME isn't set)"))
+}
+
+/// The home folder by its real path, as songs are named: the window writes paths in it as `~/…`.
+pub fn home() -> Option<PathBuf> {
+    m2_os::dirs::home().map(real)
+}
+
+/// `dir` by its real path, as far as it is there ([`resolved`]); as it is when that can't be told.
+fn real(dir: PathBuf) -> PathBuf {
+    resolved(&dir).unwrap_or(dir)
 }
 
 /// A folder new songs may go in, as Settings takes it (plan X38): a full path, not inside a song
@@ -105,7 +117,7 @@ const EXAMPLE_TOML: &str = "example.toml";
 /// What a new song can start from, and where it goes by default (`GET /api/project/templates`).
 /// `home` lets the UI write the songs folder as `~/Music/music2`.
 pub fn catalog() -> Value {
-    json!({"templates": templates(), "examples": examples(), "songs": songs_dir().ok(), "home": m2_os::dirs::home()})
+    json!({"templates": templates(), "examples": examples(), "songs": songs_dir().ok(), "home": home()})
 }
 
 /// A New Song request (`POST /api/project/new`).
@@ -552,7 +564,7 @@ pub fn save_as_start(graph: &Graph) -> Result<Value> {
         .map(|n| format!("{base} {n}"))
         .find(|n| !taken.contains(&folder_name(n).to_lowercase()) && !reserved(songs.as_deref(), &parent, &folder_name(n)))
         .unwrap_or_else(|| format!("{base} copy"));
-    Ok(json!({"name": free, "dir": parent, "home": m2_os::dirs::home()}))
+    Ok(json!({"name": free, "dir": parent, "home": home()}))
 }
 
 /// Save a copy of the open song as `name` and open the copy (Q19). The song itself stays as it
@@ -1141,7 +1153,7 @@ mod tests {
     fn the_songs_folder_is_under_home() {
         let songs = songs_dir().unwrap();
         assert!(songs.ends_with("Music/music2"), "{}", songs.display());
-        assert!(songs.starts_with(std::env::var("HOME").unwrap()));
+        assert!(songs.starts_with(home().unwrap()), "under the home folder, by its real path as the songs folder is");
     }
 
     #[test]
