@@ -1272,3 +1272,23 @@ can drop it.
 ## End
 
 The lead's last check, docs and pictures.
+
+### Review fixes
+
+The End's review read the tip with two lenses: how it behaves, and its tests, docs and taste. It
+found nine things. PL-T2 is the same bug as PL-R4, so they are fixed once. Each fix is its own
+commit, with a test that failed first.
+
+#### PL-R2. Save As into the song's own folder
+
+Save As took any folder, even the song's own folder or its `data/`. The copy then copied itself,
+one level deeper each time, until the path was too long (about 285 levels) and the copy failed with
+a cryptic error. Now Save As refuses a folder inside the song's own before it makes anything:
+"Pick a folder outside Night Drive's own folder." Both paths are resolved first, so `./` or a link
+doesn't get round it. A folder beside it whose name starts the same ("Night Drive B") is fine.
+
+| | |
+|---|---|
+| Test | `project_tests::save_as_refuses_a_folder_inside_the_song`: the song's folder, its `data/`, and a path with `./` in it are refused in words, nothing is made, the song stays open; "Night Drive B" beside it works |
+| Red first | `left: "making /tmp/m2-save-as-3218415-0/songs/Night Drive/Copy"`, `right: "Pick a folder outside Night Drive's own folder."` |
+| Green | `m2-server` `project::` 30/30 |

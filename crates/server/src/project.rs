@@ -525,8 +525,9 @@ pub fn save_as_start(graph: &Graph) -> Result<Value> {
 /// Save a copy of the open song as `name` and open the copy (Q19). The song itself stays as it
 /// was. The copy has the song's files as they are on disk, without `.music2/` (its mutes, view and
 /// undo journal) or anything else hidden; its name is in its `music2.toml`. A folder of that name
-/// already there, in any capitals, is refused before anything is made. Works in a read-only window:
-/// it only reads the song. Answers with the copy's state.
+/// already there, in any capitals, is refused before anything is made, and so is a folder inside
+/// the song's own (the copy would copy itself, deeper each time). Works in a read-only window: it
+/// only reads the song. Answers with the copy's state.
 pub fn save_as(state: &AppState, req: &SaveAs) -> Result<Value> {
     let from = state.graph.dir_of(req.session)?;
     let parent = match &req.dir {
@@ -536,6 +537,11 @@ pub fn save_as(state: &AppState, req: &SaveAs) -> Result<Value> {
     };
     if !parent.is_dir() {
         bail!("{} isn't a folder", parent.display());
+    }
+    let real = |p: &Path| p.canonicalize().with_context(|| format!("reading {}", p.display()));
+    if real(&parent)?.starts_with(real(&from)?) {
+        let song = state.graph.name().unwrap_or_else(|| clean_name(&from.file_name().unwrap_or_default().to_string_lossy()));
+        bail!("Pick a folder outside {song}'s own folder.");
     }
     let (name, folder) = (clean_name(&req.name), folder_name(&req.name));
     free(&parent, &folder, None)?;

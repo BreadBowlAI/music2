@@ -105,6 +105,26 @@ fn save_as_opens_the_copy_and_leaves_the_original() {
     assert!(!other.join("Winter").exists());
 }
 
+// The copy can't go inside the song's own folder: it would copy itself, deeper each time, until
+// the path got too long (review PL-R2). Refused before anything is made.
+#[test]
+fn save_as_refuses_a_folder_inside_the_song() {
+    let songs = Songs::new();
+    let state = songs.open();
+    let song = songs.song();
+    for dir in [song.clone(), song.join("data"), songs.0.join("songs/./Night Drive/data")] {
+        let e = save_as(&state, &SaveAs { session: token(&state), name: "Copy".into(), dir: Some(dir.clone()) }).unwrap_err().to_string();
+        assert_eq!(e, "Pick a folder outside Night Drive's own folder.", "{}", dir.display());
+    }
+    assert!(!song.join("Copy").exists() && !song.join("data/Copy").exists(), "nothing was made");
+    assert_eq!(state.graph.dir(), Some(song.clone()), "the song stays open");
+    // A folder beside it whose name starts the same is fine.
+    let beside = songs.0.join("songs/Night Drive B");
+    std::fs::create_dir_all(&beside).unwrap();
+    save_as(&state, &SaveAs { session: token(&state), name: "Copy".into(), dir: Some(beside.clone()) }).unwrap();
+    assert_eq!(state.graph.dir(), Some(beside.join("Copy")));
+}
+
 #[test]
 fn rename_moves_the_folder_and_the_name() {
     let songs = Songs::new();
