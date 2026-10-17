@@ -1231,7 +1231,33 @@ section above is its own branch's, word for word.
   `M2_MIDI unset: 404`; after: `M2_MIDI inject: 200` (it passes both ways by design: a guard). Run after: nx-midi
   24, s8-audition 51, pl-projects 66, taste 39, nx-piano 39, live3b PART 40 of 60 (no `CLAP_PATH` here, as always).
 - `s8-tracks` stopped once at its `synth-pad` tab (`dragFrom` undefined) in the first joined run, under that load. It
-  passed 4 of 4 runs since, 3 of them under load. Left as it is.
+  passed 5 of 5 runs since, 3 of them under load. Left as it is.
+
+**Tools** (`~/m2-runs/s8n/tools`, not in the repo): `app-shot.sh` takes `scratch/x97.lock` itself (`flock -w 1200`),
+so two runs never share `:97`; never wrap it in `flock` too, or it waits on itself. It gives the app `M2_MIDI=inject`,
+so the End's `HOOK` can post a keyboard to `/api/graph/midi/inject`. Tried once with a stand-in binary on `:97`.
+`lane-suites.sh` already had lane D's `nx` mapping.
+
+**Checks on the joined `next`** (logs in `~/m2-runs/logs/`; `main` hasn't moved from `70f9b61`, so nothing to merge)
+
+| Check | Result | Log |
+|---|---|---|
+| `cargo build --locked` (server, `m2`) | ok; `Cargo.lock` is lane B's | `nx-merge-build-*`, `nx-merge-build-m2-*` |
+| Web build (type-checks) | ok | run by hand in `web/` |
+| Rust tests: m2-os, m2-runtime, m2-play, m2-song, m2-session, m2-script, m2-ir, m2-editor, m2-server, music2-desktop, m2 | 1,223 passed, 1 failed (`host_math`, fixed above; then 1 passed) | `nx-merge-rust-tests-*`, `nx-merge-hostmath-*` |
+| Clippy, the whole workspace, `-D warnings` | clean; again on m2-play and m2-runtime after the move | `nx-merge-clippy-*`, `nx-merge-clippy2-*` |
+| Mac lint: m2-os, m2-runtime, m2-play, m2-session, m2-server, music2-desktop | clean | `nx-merge-maclint-*` |
+| Renders | 10 of 10 match `e2e/renders.sha256` | `nx-merge-renders-*` |
+| Browser suites, first run | 52 of 56 ok; `s4-meter`, `pl-arrange`, `s8-clips`, `s8-tracks` failed (above) | `nx-merge-suites1-*`, `nx-merge-suites2-*` |
+| Browser suites on the tip | 56 of 56 ok, 2,478 of 2,478 checks; `start empty` 14 of 14; `live3b` PART 40 of 60 (no `CLAP_PATH`) | `nx-merge-final1-*`, `nx-merge-final2-*`, `nx-merge-midienv-*` |
+
+The suites on the tip: taste, every `s8-*`, `pl-*` and `nx-*`, and the rest but `live3b`: notes, gestures, g11-play,
+fx-fixes, pc-keys, start, newsong, export, undo, attention, effects, s6-builders, s5-knobs, graph, ports, fixes-graph,
+fixes-notes, cables, layout, views, code, dsp, s4-clips, s4-attn, s4-problems, s4-meter, live3a, s6-write, s6-fixes.
+The full `ci/check.sh` is the End's.
+
+**Cleaned up:** the four lane worktrees (`git worktree remove`) and their branches (`git branch -d`: all merged). The
+lanes had deleted their own targets and server copies. `target-nx` and `bin/nx-b7a96c6` stay for the End.
 
 ## End
 
