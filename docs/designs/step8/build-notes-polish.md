@@ -276,6 +276,25 @@ name as the graph's). The buttons got their own names; `ports` 46 and `pl-zoom` 
 Rust: `m2-editor` 260, `m2-server` 220, `m2`, `music2-desktop`'s menu tests; clippy of all four
 clean. The full `ci/check.sh` is the End's.
 
+**For the merge: the shared files lane B touched** (each in a small block of its own):
+
+| File | What |
+|---|---|
+| `web/src/App.tsx` | `chord()`: =, +, −, ↑, ↓, ⇧F (and `page` for ⇧⌘=); `key()`: Z, ⌥←, ⌥→; `appCommand` cases for lane B's nine ids |
+| `web/src/lib/shell.ts`, `web/src/lib/graph.ts` | `canvas.zoom`, `zoomFit`, `follow`, `height`, `marker`; `editorHooks.zoom` (lane D fills it) |
+| `web/src/components/CodeView.tsx` | Two `MONACO_CHORDS` names, `shorter` and `taller` (X5) |
+| `web/src/components/GraphCanvas.tsx` | `closeSong` sends waiting view settings first |
+| `web/src/components/SongBar.tsx` | `RulerMenu` only: `onMarker` and its row |
+| `web/src/components/Shortcuts.tsx` | Rows at the ends of Transport and View |
+| `apps/music2-desktop/src/menu.rs` | Lane B's nine rows and their test |
+| `crates/server/src/graph.rs`, `graph/actor.rs` | `Published.local`, the state's `local`; `mod markers`; the timeline's `markers` |
+| `crates/server/src/lib.rs`, `routes.rs` | `mod routes_view`; its router merged |
+| `crates/editor/src/lib.rs`, `layout.rs`, `timeline.rs` | `mod markers`; `layout_tx`, `commit`, `unreadable` made `pub(crate)`; `TimelineView.markers` |
+| `apps/m2/src/edits.rs` | `times: None` in the duplicate gesture |
+| `e2e/run.mjs`, `e2e/README.md` | `pl-zoom` and `pl-arrange` after `s8-automation` |
+| `e2e/s8-songbar.mjs`, `e2e/s8-clips.mjs` | One check each names the new menu row |
+| `e2e/lintlib.mjs` | The taste lint as a function (P0b-1's; lane A has the same) |
+
 ## Lane C
 
 Songs and tracks.
