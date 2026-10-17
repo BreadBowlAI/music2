@@ -44,6 +44,7 @@ pub mod lease;
 pub mod meters;
 pub mod overlay;
 mod preview;
+mod songkey;
 mod view_file;
 mod watcher;
 

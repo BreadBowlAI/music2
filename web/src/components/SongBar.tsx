@@ -368,7 +368,22 @@ export function MeterField({ session, timeline, at, locked }: { session: number;
  * place. Enter writes it into music2.toml, Esc puts it back; an empty one is refused in the
  * field's error style (taste.md §2.9). The folder keeps its own name.
  */
-export function SongTitle({ session, name, dir, rate, locked }: { session: number; name: string; dir: string; rate?: number; locked: string | null }) {
+export function SongTitle({
+  session,
+  name,
+  dir,
+  rate,
+  locked,
+  room,
+}: {
+  session: number;
+  name: string;
+  dir: string;
+  rate?: number;
+  locked: string | null;
+  /** How wide the name may be in the bar, as measured there (Q23): the field keeps to it too. */
+  room: number;
+}) {
   const toast = useStore((s) => s.toast);
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -430,11 +445,10 @@ export function SongTitle({ session, name, dir, rate, locked }: { session: numbe
             }
           }}
           onBlur={() => commit(draft, true)}
-          style={{ width: `${Math.max(12, draft.length + 2)}ch` }}
+          // As wide as the name's place in the bar may be (TopBar), 160 to 480 px when there is room.
+          style={{ width: `${Math.max(12, draft.length + 2)}ch`, minWidth: Math.min(160, room), maxWidth: Math.min(480, room) }}
           className={clsx(
-            // As wide as the name's place in the bar may be (TopBar): in the Mac app, once the time shows, narrower.
-            "max-w-[min(480px,calc(100vw-960px))] [:root[data-app=mac]_&]:min-[1280px]:max-w-[min(480px,calc(100vw-1096px))]",
-            "min-w-40 h-ctl px-2 rounded-sm bg-raised border text-center text-base font-semibold text-fg-strong outline-none",
+            "h-ctl px-2 rounded-sm bg-raised border text-center text-base font-semibold text-fg-strong outline-none",
             error ? "border-danger" : "border-accent",
           )}
         />

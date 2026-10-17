@@ -5,7 +5,8 @@
 // words, and the taste lint over the menu and the key picker.
 //
 //   node e2e/pl-notes.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
-import { check, done, open, read, sleep, until, write } from "./fixlib.mjs";
+import fs from "node:fs";
+import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 
 const { browser, page, errors, api, state, box, key } = await open(1440, 900);
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
@@ -155,6 +156,8 @@ check(
     tips.swing === "Push every second note a little later, for a bouncy feel",
   `each tool's tooltip says what it does in plain words: ${JSON.stringify([tips.quantize, tips.legato, tips.humanize, tips.swing])}`,
 );
+await sleep(400);
+await page.screenshot({ path: `${ROOT}/pl-notes-menu.png` });
 const bad = await lint("[data-testid=note-menu]");
 check(bad.length === 0, `the menu passes the taste lint${bad.length ? `: ${[...new Set(bad)].slice(0, 5).join("; ")}` : ""}`);
 
@@ -370,6 +373,137 @@ await page.keyboard.press("Escape");
 write("tracks/bass.ts", bassTs);
 check(await until(async () => !(await page.$("[data-testid=notes-locked]"))), "once it compiles, the roll is editable again");
 
+// ---------------------------------------------------------------- the song's key (D2)
+
+const LAYOUT = "layout.json";
+const layoutKey = () => {
+  try {
+    return JSON.parse(read(LAYOUT)).key ?? null;
+  } catch {
+    return null;
+  }
+};
+const field = () => page.$eval("[data-testid=key-field]", (e) => ({ text: e.textContent, title: e.title, color: getComputedStyle(e).color })).catch(() => null);
+const picker = () => page.$("[data-testid=key-picker]");
+const shading = () => page.$eval("[data-testid=roll-grid]", (e) => e.dataset.shaded).catch(() => null);
+/** Whether the roll draws row `pitch` shaded: its band in the grid's twelve-row pattern. */
+const drawnShaded = (pitch) =>
+  page.$eval(
+    "[data-testid=roll-grid] svg pattern",
+    (pat, pitch, ROW) => {
+      const k = (127 - pitch) % 12;
+      return [...pat.querySelectorAll("rect")].some((r) => Number(r.getAttribute("y")) === k * ROW && Number(r.getAttribute("height")) === ROW);
+    },
+    pitch,
+    ROW,
+  );
+
+const f0 = await field();
+check(!!f0, "the top bar has a Key field");
+check(f0?.text === "Key" && f0.title.startsWith("The song's key. In Notes, rows not in the key are shaded. Saved in layout.json."), `it says "Key" while none is set, its tooltip what it does: ${f0?.text} · ${f0?.title.split("\n")[0]}`);
+const order = await page.evaluate(() => {
+  const r = (s) => document.querySelector(s)?.getBoundingClientRect();
+  return { meter: r("[data-testid=meter-field]")?.right, key: r("[data-testid=key-field]")?.left };
+});
+check(order.key > order.meter && order.key - order.meter < 12, `it sits right after the time signature (${order.meter?.toFixed(0)} → ${order.key?.toFixed(0)})`);
+check(read(FILE) === base && (await shading()) === "1,3,6,8,10" && (await drawnShaded(66)) && !(await drawnShaded(65)), "with no key, the roll shades the black keys' rows: F♯ (66) shaded, F (65) plain");
+
+await page.click("[data-testid=key-field]");
+check(await until(() => picker().then(Boolean), 2000), "a click opens the key picker");
+const roots = await page.$$eval("[data-testid=key-picker] [data-root]", (els) => els.map((e) => e.textContent));
+check(roots.join(" ") === "C C♯ D E♭ E F F♯ G A♭ A B♭ B", `the twelve roots, spelled with ♯ and ♭: ${roots.join(" ")}`);
+const rows2 = await page.$eval("[data-testid=key-picker] [data-root=C]", (c) => {
+  const f = document.querySelector("[data-testid=key-picker] [data-root=\"F#\"]");
+  return { top: c.getBoundingClientRect().top, ftop: f.getBoundingClientRect().top };
+});
+check(rows2.ftop > rows2.top, "in two rows of six: F♯ starts the second");
+const scales = await page.$$eval("[data-testid=key-picker] [data-scale]", (els) => els.map((e) => `${e.textContent}:${e.getAttribute("aria-checked")}`));
+check(scales.join() === "Major:true,Minor:false" && (await page.$("[data-testid=no-key][disabled]")) !== null, `Major · Minor (Major first), and No key, off while there is none: ${scales}`);
+await sleep(400);
+await page.screenshot({ path: `${ROOT}/pl-notes-key-picker.png` });
+const badKey = await lint("[data-testid=key-picker]");
+check(badKey.length === 0, `the picker passes the taste lint${badKey.length ? `: ${[...new Set(badKey)].slice(0, 5).join("; ")}` : ""}`);
+await page.keyboard.press("Escape");
+check(await until(async () => !(await picker()), 2000), "Esc closes it");
+check(await page.evaluate(() => document.activeElement?.dataset.testid === "notes"), "and the keyboard is where it was: the roll");
+
+// E minor: F♯ is in it, F isn't, the other way round from the black keys.
+await page.click("[data-testid=key-field]");
+await until(() => picker().then(Boolean), 2000);
+await page.click('[data-testid=key-picker] [data-scale="minor"]');
+check(!(await layoutKey()), "Minor alone writes nothing while no key is set");
+rev = await revision();
+await page.click('[data-testid=key-picker] [data-root="E"]');
+check(await until(() => JSON.stringify(layoutKey()) === JSON.stringify({ root: "E", scale: "minor" })), `E minor is written into layout.json: ${read(LAYOUT).replace(/\s+/g, " ")}`);
+check(await until(async () => !(await picker()), 2000), "a root closes the picker");
+check(await until(async () => (await field())?.text === "E minor"), `the field says "${(await field())?.text}"`);
+check((await revision()) === rev && read(FILE) === base, "nothing that plays changed: no revision, the notes as they were");
+check(await until(async () => (await shading()) === "1,3,5,8,10" && (await drawnShaded(65)) && !(await drawnShaded(66))), `the roll shades the rows out of E minor: F (65) shaded, F♯ (66) plain (${await shading()})`);
+check(await until(async () => (await undoTitle()).startsWith("Undo key E minor")), `Undo names it: ${await undoTitle()}`);
+await page.screenshot({ path: `${ROOT}/pl-notes-e-minor.png` });
+
+// With a key set, the scale changes at once, and the picker stays open for a root.
+await page.click("[data-testid=key-field]");
+await until(() => picker().then(Boolean), 2000);
+await page.click('[data-testid=key-picker] [data-scale="major"]');
+check(await until(() => layoutKey()?.scale === "major" && layoutKey()?.root === "E"), "Major with E minor set writes E major");
+check(!!(await picker()), "and leaves the picker open");
+await page.click('[data-testid=key-picker] [data-root="Bb"]');
+check(await until(async () => (await field())?.text === "B♭ major" && layoutKey()?.root === "Bb"), `B♭ major: the file says Bb, the field ${(await field())?.text}`);
+
+// No key: the black keys' shading again, and the file without it.
+await page.click("[data-testid=key-field]");
+await until(() => picker().then(Boolean), 2000);
+await page.click("[data-testid=no-key]");
+check(await until(() => !("key" in JSON.parse(read(LAYOUT)))), "No key takes it out of layout.json");
+check(await until(async () => (await shading()) === "1,3,6,8,10" && (await field())?.text === "Key"), "the roll shades the black keys again; the field says Key");
+await key("Meta+z");
+check(await until(() => layoutKey()?.root === "Bb"), "⌘Z puts B♭ major back");
+await key("Meta+z");
+await key("Meta+z");
+check(await until(() => JSON.stringify(layoutKey()) === JSON.stringify({ root: "E", scale: "minor" })), "two more: E minor");
+await key("Meta+z");
+check(await until(async () => !layoutKey() && (await field())?.text === "Key"), "and one more, no key");
+
+// A key written into layout.json by hand (a merge, an agent) shows too.
+write(LAYOUT, JSON.stringify({ order: [], tracks: {}, key: { root: "C", scale: "major" } }));
+check(await until(async () => (await field())?.text === "C major" && (await shading()) === "1,3,6,8,10"), "a key written into layout.json by hand shows: C major, whose rows out of it are the black keys'");
+
+// The name keeps clear of the bar's groups as measured (Q23): a long name, with a key set, at the
+// app's smallest window, laid out as the Mac app's.
+const st0 = await state();
+const longName = "A very long song name that cannot fit in the top bar at all";
+check((await post("/title", { session: st0.session, name: longName })).status === 200, "a long name");
+write(LAYOUT, JSON.stringify({ order: [], tracks: {}, key: { root: "F#", scale: "minor" } }));
+await until(async () => (await field())?.text === "F♯ minor");
+const room = async () =>
+  page.evaluate(() => {
+    const r = (s) => document.querySelector(s)?.getBoundingClientRect();
+    const name = document.querySelector("[data-testid=bar-song-name]");
+    const box = name?.parentElement?.getBoundingClientRect();
+    const time = r("span[title=Time]");
+    const left = Math.max(r("[data-testid=tempo]").right, time?.width ? time.right : 0);
+    const right = Math.min(r("[data-testid=export]").left, r('button[aria-label="Undo"]').left);
+    return { box: box && [box.left, box.right], left, right, shown: !!box && box.width > 0, cut: name.scrollWidth > name.clientWidth };
+  });
+for (const mac of [false, true]) {
+  await page.evaluate((on) => (on ? (document.documentElement.dataset.app = "mac") : delete document.documentElement.dataset.app), mac);
+  for (const w of [1100, 1280, 1440]) {
+    await page.setViewport({ width: w, height: 900 });
+    await sleep(300);
+    const b = await room();
+    check(!b.shown || (b.box[0] >= b.left + 4 && b.box[1] <= b.right - 4), `${w}px${mac ? " in the Mac app" : ""}: the name (${b.box?.map((x) => x.toFixed(0)).join("–")}) clears the key (…${b.left.toFixed(0)}) and Undo (${b.right.toFixed(0)}…)${b.shown ? ", cut short" : ", or goes"}`);
+  }
+}
+await page.evaluate(() => delete document.documentElement.dataset.app);
+await page.setViewport({ width: 1440, height: 900 });
+const wide = await room();
+check(wide.shown && wide.cut, "at 1440 it shows, cut short");
+await key("Meta+z");
+await until(async () => (await page.$eval("[data-testid=bar-song-name]", (e) => e.textContent).catch(() => "")) !== longName);
+fs.rmSync(`${PROJ}/${LAYOUT}`);
+check(await until(async () => (await field())?.text === "Key"), "layout.json gone: no key");
+
 // ---------------------------------------------------------------- a PC page
 
 {
@@ -382,6 +516,11 @@ check(await until(async () => !(await page.$("[data-testid=notes-locked]"))), "o
   await until(() => pc.page.$("[data-testid=note-menu]").then(Boolean), 2000);
   const keys = Object.fromEntries((await rows(pc.page)).map((r) => [r.id, r.shortcut]));
   check(keys.octave_up === "Shift+↑" && keys.octave_down === "Shift+↓" && keys.duplicate === "Ctrl+D" && keys.delete === "Backspace", `a PC page spells the keys: ${JSON.stringify(keys)}`);
+  await pc.page.keyboard.press("Escape");
+  await pc.page.click("[data-testid=key-field]");
+  const opened = await until(() => pc.page.$("[data-testid=key-picker]").then(Boolean), 2000);
+  const mac = await pc.page.evaluate(() => /[⌘⌥⇧⌫]/.test(document.querySelector("[data-testid=key-picker]")?.innerText + document.querySelector("[data-testid=key-field]").title));
+  check(opened && !mac, "on a PC page the key picker opens, with no Mac key symbol in it or the field's tooltip");
   check(pc.errors.length === 0, `no console errors on the PC page ${pc.errors.slice(0, 2).join(" | ")}`);
   await pc.browser.close();
 }

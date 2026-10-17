@@ -102,6 +102,68 @@ FAIL  Undo names it: Undo (⌘Z)
 humanize and swing. Left: swing amounts other than three, groove templates.
 **Contract.** None.
 
+### D2. The song's key
+
+**In short.** The top bar has a Key field after the time signature. Click it and pick a key, like
+"A minor". Notes then shades the rows that are not in the key. Nothing is locked. The key is saved
+in `layout.json`, so it goes with the song.
+
+| What | How |
+|---|---|
+| Pick a key | Click "Key", choose Major or Minor, then a root (C, C♯, D, E♭, E, F, F♯, G, A♭, A, B♭, B) |
+| Change Major / Minor | With a key set, Major or Minor changes it at once |
+| Take it out | No key |
+| Undo | ⌘Z: "Undo key A minor" |
+
+**What changed**
+- `crates/editor/src/songkey.rs` (new): `SongKey { root, scale }`, `read(&Layout)`, `of(dir)`,
+  `set(s, Option<SongKey>)`. One Tx of `layout.json` alone (no revision, one undo step), as
+  reorder is: `Expect::Identical`, based on the file on disk. Roots read by any name (`C#`, `C♯`,
+  `Db`, `D♭`) and are written in ASCII (`C#`, `Eb`, …) so a hand or a script can write them; the
+  label uses ♯ and ♭ ("E♭ major"). Scales: major and minor. The key is kept in `Layout.other`, so
+  `layout.rs` didn't change: a new key goes right after `markers`, and an old one stays in its
+  place. Refused while `layout.json` doesn't read (R15). Setting the key it has writes nothing.
+- `TimelineView.key` (`timeline.rs`, its three places), published in the timeline's head
+  (`graph/actor.rs`). The watcher already republishes when `layout.json` changes, so a key written
+  by hand shows.
+- `crates/server/src/graph/songkey.rs`: `Graph::song_key`. `crates/server/src/routes_notes.rs`
+  (new router, merged in `routes.rs`): `POST /api/graph/song-key {session, key: {root, scale} |
+  null}`, a write (423 read only). Named `song-key`, apart from a track's ID (X42).
+- Web: `lib/songKey.ts` (the call, the undo name, the pitch classes in a key, `TimelineView.key`
+  by `declare module`); `KeyField.tsx` (the field and its picker); `TopBar.tsx` mounts it in the
+  tempo group and **measures** the name's room (Q23): twice the distance from the bar's middle to
+  the nearer group, less 8 px a side, from the free space between the groups (a `ResizeObserver`).
+  Under 56 px the name goes. `SongBar.tsx`: `SongTitle`'s field keeps to that room (160 to 480 px
+  when there is room). `NoteView.tsx`: `Lanes` shades the pitch classes out of the key (the grid
+  says which in `data-shaded`); a lane that names its drums (lane A's `names`) is never shaded by
+  the key (X26).
+
+**Tests**
+- Rust `crates/editor/src/songkey_tests.rs`: `a_key_is_written_into_layout_json`,
+  `no_key_removes_it`, `markers_and_unknown_keys_stay`, `a_scale_that_isnt_major_or_minor_is_refused`,
+  `undo_puts_it_back`, `an_unreadable_layout_refuses`.
+- `pl-notes` grows to 98 checks (see `e2e/README.md`). The test key is E minor (X32): F♯'s row
+  plain, F's shaded, the other way round from the black keys.
+- Moved and green: `s8-songbar` 82, `fx-fixes` 75, `taste` 39, `layout` 39, `notes` 52. `m2-editor`
+  257 and `m2-server` 218 tests, clippy on both.
+
+**Red first** (the tests against a stub `set` that refuses; the suite on D1's page):
+```
+test songkey::tests::a_key_is_written_into_layout_json ... FAILED
+test songkey::tests::undo_puts_it_back ... FAILED
+FAIL  the top bar has a Key field
+FAIL  with no key, the roll shades the black keys' rows: F♯ (66) shaded, F (65) plain
+```
+
+**Left.**
+- More scales, scale lock, chords (scale help, gaps #16).
+- X26 is in the code but untested here: no lane names its drums until lane A lands.
+
+**For gaps.md.** #6 (key and scale): the song's key is done, major and minor, in the top bar and
+`layout.json`; Notes shades the rows out of it. Left: other scales and scale help (#16).
+**Contract.** FMT-19: `layout.json` gains `key: {"root": "A", "scale": "minor"}` (ASCII roots),
+written by `POST /api/graph/song-key`, not by `/api/graph/layout`. The timeline view gains `key`.
+
 ## Merge
 
 The lead's merges of the four lanes.

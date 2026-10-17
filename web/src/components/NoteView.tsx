@@ -28,6 +28,7 @@ import { onFrame } from "../lib/clock";
 import { RULER_H } from "../lib/layout";
 import { chord, isMac, keyName, mod, native } from "../lib/native";
 import { humanize, legato, quantize, swing, SWINGS, swingUnit, targets, transpose } from "../lib/noteTools";
+import { inKey } from "../lib/songKey";
 import { GRAPHITE, trackColors, type TrackColor } from "../lib/palette";
 import { pickName, useGrid } from "../lib/grid";
 import { useShell } from "../lib/shell";
@@ -685,6 +686,11 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   const lastBar = barAt(timeline.meter, start + clip.length - 1e-6).bar + 1;
   // Notes being dragged lift off the grid.
   const lifting = gesture.current?.kind === "move" && !!gesture.current.result;
+  // The rows shaded: those out of the song's key while one is set (Q24), else the black keys'. A
+  // lane whose rows are named drums is never shaded by the key: a kit has no key (X26).
+  const drums = Object.keys((declared as { names?: Record<string, string> } | null)?.names ?? {}).length > 0;
+  const keyed = timeline.key && !drums ? inKey(timeline.key) : null;
+  const shaded = (keyed ? Array.from({ length: 12 }, (_, pc) => pc).filter((pc) => !keyed.has(pc)) : BLACK).join(",");
 
   return (
     <div
@@ -773,6 +779,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
               <div
                 ref={grid}
                 data-testid="roll-grid"
+                data-shaded={shaded}
                 className={clsx("relative touch-none", locked ? "cursor-default" : draw ? "cursor-crosshair" : "cursor-default")}
                 style={{ width, height }}
                 title={
@@ -796,7 +803,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
                 onPointerCancel={onGridCancel}
                 onLostPointerCapture={onGridCancel}
               >
-                <Lanes width={width} ppb={ppb} meter={timeline.meter} start={start} step={gridStep} />
+                <Lanes width={width} ppb={ppb} meter={timeline.meter} start={start} step={gridStep} shaded={shaded} />
                 {/* Past the clip's end: hatched, behind its edge in the track's colour. */}
                 <div className="absolute top-0 bottom-0 right-0 pointer-events-none border-l-2 bg-chrome/70" style={{ left: clip.length * ppb, borderColor: tone.bar }}>
                   <Hatch />
@@ -1073,13 +1080,18 @@ const Keys = memo(
   (a, b) => a.tone === b.tone && a.module === b.module && a.lane === b.lane && a.selected.size === b.selected.size && [...a.selected].every((p) => b.selected.has(p)),
 );
 
-/** Row shading (black keys darker, a line under each C) and the bar, beat and snap lines, bars as the song's time signatures count them. */
-const Lanes = memo(function Lanes({ width, ppb, meter, start, step }: { width: number; ppb: number; meter: Meter[]; start: number; step: number }) {
-  // From the top: pitch 127 (G9) down, twelve rows a period: black keys' rows shaded, a line under each.
+/**
+ * Row shading (`shaded`: the pitch classes darker, "1,3,6,8,10" for the black keys, or those out of
+ * the song's key), a line under each C, and the bar, beat and snap lines, bars as the song's time
+ * signatures count them.
+ */
+const Lanes = memo(function Lanes({ width, ppb, meter, start, step, shaded }: { width: number; ppb: number; meter: Meter[]; start: number; step: number; shaded: string }) {
+  const dark = new Set(shaded.split(",").map(Number));
+  // From the top: pitch 127 (G9) down, twelve rows a period: the shaded rows darker, a line under each.
   const bands = Array.from({ length: 12 }, (_, k) => {
     const pc = (TOP - k) % 12;
     return [
-      ...(BLACK.includes(pc) ? [{ y: k * ROW_H, h: ROW_H, color: "var(--color-hover)" }] : []),
+      ...(dark.has(pc) ? [{ y: k * ROW_H, h: ROW_H, color: "var(--color-hover)" }] : []),
       { y: (k + 1) * ROW_H - 1, h: 1, color: pc === 0 ? "var(--color-line)" : "var(--color-hover)" },
     ];
   }).flat();
