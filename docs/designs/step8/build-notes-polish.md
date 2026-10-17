@@ -211,6 +211,21 @@ FAIL  with no key, the roll shades the black keys' rows: F♯ (66) shaded, F (65
 **Contract.** FMT-19: `layout.json` gains `key: {"root": "A", "scale": "minor"}` (ASCII roots),
 written by `POST /api/graph/song-key`, not by `/api/graph/layout`. The timeline view gains `key`.
 
+### For the merge (lane D's blocks in files others touch)
+
+| File | Lane D's block | Meets |
+|---|---|---|
+| `web/src/App.tsx` | `quantize` asks `editorHooks.quantize` first (X2) | P0a's keys, B's zoom ids: add `editorHooks.zoom?.(dir)` first there (X3) |
+| `web/src/lib/graph.ts` | `editorHooks.quantize`, `editorHooks.zoom` | — |
+| `web/src/components/Shortcuts.tsx` | two rows at the end of Edit | — |
+| `web/src/components/SongTimeline.tsx` | `laneScale` in `pointsFrom`, the hit test, `LaneClips`, `Curve`; hidden lanes in `TrackRows`, `songH`, the reveal effect, the header menu's row | lane B's zoom (`PPB`) and heights (`rowHeight`, `songH`): keep both; hidden lanes count in B's sums |
+| `web/src/components/TopBar.tsx`, `SongBar.tsx` (`SongTitle`) | the Key field; the name's measured room | lane C's Save As / Rename (if they touch the title) |
+| `web/src/components/NoteView.tsx` | the menu, Q, X1, X7, the key's shading in `Lanes` | lane A's `RollKeys` / `rowNames` (drum names): `Lanes` reads the lane's `names` for X26 |
+| `crates/editor/src/timeline.rs`, `graph/actor.rs` | `TimelineView.key` and its head field | lane B's `markers`: both fields |
+| `crates/server/src/lib.rs`, `routes.rs`, `graph.rs` | `mod routes_notes`, its merge line, `mod songkey` | every lane's own lines |
+| `web/src/lib/local.ts`, `routes_view.rs`, `view_file.rs` | lane B's commit, as it is | lane C's own store: keep one |
+| `e2e/s8-automation.mjs` | the header menu's rows include Hide this lane | — |
+
 ### The view store, taken from lane B
 
 D4 keeps hidden lanes in the song's `view.json`, through the view store. There was no P0b-2, and
