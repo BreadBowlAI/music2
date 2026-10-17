@@ -180,6 +180,8 @@ songs go; kept in `~/.music2/settings.json`. Left: an input device, view setting
 no undo, applied at once. RENDER-31 unchanged: the engine runs at the song's rate whatever the device's. A change of
 output or buffer makes a new player where the song was, stopped.
 
+**For 8a's merge:** nothing more in `core/runtime` or `core/play` (C1's blocks are the lane's only ones there).
+
 ### C3. Undo says what it undoes
 
 **In short**
@@ -243,6 +245,13 @@ output or buffer makes a new player where the song was, stopped.
 | `undo` 10, `s8-tracks` 75, `s8-mix` 80, `taste` 39, `start` 24, `pl-arrange` 57, `pl-notes` 102, `effects` 12 | ok, unchanged |
 | `attention` 57 | ok after two of its checks follow the change. They said "Undo names nothing" after an outside edit, since the page couldn't be sure. The server is sure now: an outside edit is no undo step, so Undo still names the step it takes back ("Undo “Move all to Kick (kicks)”", "Undo Xrange hi"). The first check now waits for the page's own read of the new revision instead of the unnamed tooltip |
 
+**Every browser suite** on the lane's build (`lane-suites.sh c … all`, after C3): 50 of 52 ok at first; `live3b` PART
+(no `CLAP_PATH`, as always here); `s8-clips` failed twice: `FAIL  as one move gesture, and nothing else sent:
+/api/graph/clips …,/api/graph/step {…"name":"moving a Hats clip"…}` and `FAIL  in one gesture`. The page's step
+naming is a request beside each write, and `fixlib.mjs` counted every request but a GET as a write. Fixed there, once
+for every suite: `/api/graph/step` writes nothing, so it isn't one of `posts`. Then `s8-clips` 94, `s8-automation` 45,
+`s8-songbar` 82, `s8-mix` 80, `fixes-graph` 42, `fixes-notes` 37 and `nx-undo` 18: ok.
+
 **Left**
 
 - While the code editor has focus, Edit ▸ Undo undoes typing, though its title names the song's step (X8).
@@ -254,6 +263,13 @@ menu, plain words for steps made elsewhere. Left: undo that survives closing the
 
 **Contract:** WRITE-21: each undo step keeps the revision it made and an optional name (`Session::name_step`,
 `step_names`); the name follows the step through undo and redo. Tx, its ops and expectations are unchanged.
+
+**For 8a's merge:** nothing in `core/runtime` or `core/play`. In `core/session` this touches `session.rs`,
+`tx/mod.rs` (`TxStep`'s two fields) and `tx/tests.rs`; 8a's `lock.rs` block is elsewhere.
+
+**Checked in the app** (once, on the invisible screen `:97`, `tools/app-shot.sh` under the `x97.lock` flock): Ctrl+,
+opens Settings; File ▸ Settings… Ctrl+, sits above Quit; after an agent's Tx, Edit ▸ "Undo Bass notes". GTK's
+`set_text` works with the menu closed; it was not tried while a menu is open.
 
 ## Lane D
 
