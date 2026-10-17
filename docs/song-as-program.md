@@ -740,7 +740,7 @@ Agents may keep writing files directly: that is the save path, and every problem
 - `std` is **one package** whose modules are imported as `std/dsp`, `std/math`, `std/control`, `std/filter`, `std/fx`, `std/mix`, `std/instruments`, `std/synth`, `std/fm` and `std/drums`. Kernel ids are `package:kernel`, e.g. `std:svf`.
 - Units in TypeScript are functions (`hz(800)`), and plain numbers are untyped literals.
 - `feedback()` declares its kind up front (`feedback("audio<1>")`), and its input is given later with `.set()`.
-- Inside `poly`, a voice can read any signal from its module. Lanes and imports are always created at module level, so voices never contain them. So is `time` read in a track's own code; read inside a component call, it is made in that call's frame, one node per call, and a voice has its own (since the `sounds` merge: [WRITE-8](architecture.md#expectations-and-the-delta)).
+- Inside `poly`, a voice can read any signal from its module. Lanes and imports are always created at module level, so voices never contain them. So is `time` read in a track's own code outside any `key()` frame. Read inside a component call or a `key()` frame, it is made in that frame, one node per frame, and a voice has its own (since the `sounds` merge: [WRITE-8](architecture.md#expectations-and-the-delta)).
 - The sandbox deletes `Date`, `performance`, `WeakRef` and `FinalizationRegistry`, makes `Math.random`, `eval` and the `Function` constructors throw, can only import project files, `@m2/core` and installed packages, and stops a build after 10 s or 256 MB.
 
 **Experiment: hosted plugins (CLAP), done.** `core/plugins` (`m2-plugins`) hosts CLAP plugins, tested with Surge XT, Surge XT Effects and Airwindows Consolidated:
