@@ -128,14 +128,14 @@ function Pair({ modules, name, strip = false, onSongMenu }: { modules: string[];
         ? "Some of these tracks are muted. Click to mute them all"
         : muted
           ? `Muted${still ? ` · still drives ${still}` : ""}. Unmute${mKey}`
-          : `Mute${mKey}`);
+          : `Mute while you listen${mKey}`);
   const soloTitle =
     off ??
     (inSong
       ? `Muted in the song: unmute ${one ? "it" : "them"} to hear ${one ? "it" : "them"}`
       : soloed === "mixed"
         ? `Some of these tracks are soloed. Click to solo them all · ${mod.alt}-click: solo only ${them}`
-        : `${soloed ? "Unsolo" : "Solo"}${sKey} · ${mod.alt}-click: solo only ${them}`);
+        : `${soloed ? "Unsolo" : "Solo: hear only the soloed tracks"}${sKey} · ${mod.alt}-click: solo only ${them}`);
   const keys = modules.join(" ");
   return (
     <div className="flex gap-0.5">

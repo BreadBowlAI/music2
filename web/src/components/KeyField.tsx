@@ -63,6 +63,7 @@ function KeyPicker({ session, songKey, anchor, onClose }: { session: number; son
               aria-checked={scale === s}
               data-scale={s}
               on={scale === s}
+              title={s === "major" ? "Major: a bright, happy sound" : "Minor: a darker, sadder sound"}
               className="flex-1 justify-center"
               // With a key set, its scale changes at once; the picker stays open for a root.
               onClick={() => {

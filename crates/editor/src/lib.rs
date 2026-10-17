@@ -42,6 +42,7 @@ pub mod rekey;
 pub mod import;
 pub mod smf;
 pub mod midifile;
+pub mod explain;
 
 use std::collections::HashMap;
 use std::path::Path;

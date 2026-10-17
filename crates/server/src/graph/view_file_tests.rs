@@ -150,3 +150,18 @@ fn an_export_never_has_the_click() {
     assert!(plain == clicked, "the same bytes");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// The studio plan's Q47: the first-song guide's state is a view setting, kept per song, read when
+// the song opens again.
+#[test]
+fn the_guide_is_kept_per_song() {
+    let dir = song("guide", &json!({}));
+    let graph = Graph::silent();
+    let session = graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+    let guide = json!({"open": true, "folded": false, "done": ["drums", "listen"]});
+    graph.set_view(session, set(json!({ "guide": guide }))).unwrap();
+    assert_eq!(file(&dir), json!({ "guide": guide }));
+    graph.close();
+    assert_eq!(graph.open(&dir).unwrap()["local"], json!({ "guide": guide }));
+    let _ = std::fs::remove_dir_all(&dir);
+}

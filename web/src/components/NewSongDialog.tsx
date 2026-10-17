@@ -8,11 +8,15 @@ import { DEFAULT_ORDER, TRACK_COLORS } from "../lib/palette";
 import { useStore } from "../lib/store";
 import { Button } from "./ui";
 
-/** Whether the New Song dialog is showing. */
-const useNewSong = create<{ open: boolean }>(() => ({ open: false }));
+/** Whether the New Song dialog is showing; the template it starts on, and what follows the new song's opening. */
+const useNewSong = create<{ open: boolean; template?: string; after?: () => void }>(() => ({ open: false }));
 
-/** Show the New Song dialog: the start screen's button, File → New Song… and ⌘N. */
-export const openNewSong = () => useNewSong.setState({ open: true });
+/**
+ * Show the New Song dialog: the start screen's button, File → New Song… and ⌘N. Make Your First
+ * Song's link starts it on Empty and opens the guide in the new song (`after`, the studio plan's Q47).
+ */
+export const openNewSong = (opts?: { template?: string; after?: () => void }) =>
+  useNewSong.setState({ open: true, template: typeof opts?.template === "string" ? opts.template : undefined, after: typeof opts?.after === "function" ? opts.after : undefined });
 
 const DEFAULT_NAME = "My song";
 
@@ -44,7 +48,7 @@ export default function NewSongDialog() {
 function Dialog({ onClose }: { onClose: () => void }) {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [name, setName] = useState(DEFAULT_NAME);
-  const [template, setTemplate] = useState("starter");
+  const [template, setTemplate] = useState(() => useNewSong.getState().template ?? "starter");
   // The folder picked with Choose Folder…; otherwise the songs folder.
   const [dir, setDir] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -63,7 +67,7 @@ function Dialog({ onClose }: { onClose: () => void }) {
       .catalog()
       .then((c) => {
         setCatalog(c);
-        if (!c.templates.some((t) => t.id === "starter") && c.templates[0]) setTemplate(c.templates[0].id);
+        setTemplate((t) => (c.templates.some((x) => x.id === t) ? t : (c.templates[0]?.id ?? t)));
       })
       .catch((e) => setError(message(e)));
   }, []);
@@ -92,8 +96,10 @@ function Dialog({ onClose }: { onClose: () => void }) {
         dir: dir ?? undefined,
         tempo: tempo !== null && bpm !== templateTempo ? Number(bpm.toFixed(2)) : undefined,
       });
+      const after = useNewSong.getState().after;
       onClose();
       opened(graph, catalog.home);
+      after?.();
     } catch (e) {
       setError(message(e));
       setBusy(false);

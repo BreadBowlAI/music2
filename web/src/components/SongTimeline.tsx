@@ -1886,7 +1886,15 @@ const TrackRows = memo(function TrackRows({
       <div
         {...(opts.first
           ? // The track's header selects it, as the module tabs did: what the dock shows follows it (§3.7).
-            { "data-module-tab": module, role: "tab", "aria-selected": selected, "aria-controls": "dock" }
+            {
+                "data-module-tab": module,
+                role: "tab",
+                "aria-selected": selected,
+                "aria-controls": "dock",
+                title: opts.movable
+                  ? `${moduleName({ key: module, label: track.label })}: click to show it in the dock below · drag to move it · right-click for more`
+                  : "Song: click to show what the whole song plays through",
+              }
           : {})}
         className={clsx(
           "group/head sticky left-0 z-20 shrink-0 flex items-center border-r border-line transition-colors duration-80 ease-linear",

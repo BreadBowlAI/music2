@@ -199,7 +199,8 @@ export class Workspace {
           const word = d.model.getWordAtPosition({ lineNumber: line, column: col });
           return {
             severity: this.monaco.MarkerSeverity.Error,
-            message: p.message,
+            // In plain words where a rule knows it (the studio plan's D2), the problem's own after.
+            message: p.plain ? `${p.plain}${p.fix ? ` ${p.fix}` : ""}\n\n${p.message}` : p.message,
             source: "music2",
             startLineNumber: line,
             startColumn: word?.startColumn ?? col,

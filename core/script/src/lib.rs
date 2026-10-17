@@ -863,6 +863,8 @@ struct DescribedExport {
 type DescribeCache = HashMap<(Vec<(String, PathBuf)>, String), (Vec<(PathBuf, String)>, Result<Described, Diagnostic>)>;
 
 /// Describe the package module `spec` (`std/fx`), or take a cached run whose files are unchanged.
+// A diagnostic is 128 bytes since it carries `inner` (the studio plan's Q46); this runs once a module.
+#[allow(clippy::result_large_err)]
 fn described(packages: &[(String, PathBuf)], spec: &str) -> Result<Described, Diagnostic> {
     static CACHE: std::sync::OnceLock<std::sync::Mutex<DescribeCache>> = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
@@ -884,6 +886,7 @@ fn describe_run(packages: &[(String, PathBuf)], spec: &str) -> (Vec<(PathBuf, St
 }
 
 /// [`describe_run`], on this thread.
+#[allow(clippy::result_large_err)]
 fn describe_here(packages: &[(String, PathBuf)], spec: &str) -> (Vec<(PathBuf, String)>, Result<Described, Diagnostic>) {
     let state = Rc::new(RefCell::new(State {
         packages: packages.to_vec(),

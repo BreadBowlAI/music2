@@ -1075,7 +1075,7 @@ function LengthField({
     <div className="shrink-0 flex items-center gap-1.5" title="How long the clip is, in bars. Notes past its end don't play.">
       <span className="text-xs text-fg-muted @max-[900px]/dock:hidden">Length</span>
       <div className="h-ctl-sm flex items-center rounded-sm bg-raised border border-line-strong hover:not-focus-within:border-fg-off focus-within:border-accent has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent has-[:focus-visible]:outline-offset-1 transition-colors duration-80 ease-linear">
-        <button aria-label="One bar shorter" disabled={disabled || value <= 1} onClick={() => onChange(toBeats(Math.ceil(value - 1 - 1e-9) || 1))} className="h-full w-6 grid place-items-center text-fg-muted enabled:hover:text-fg disabled:text-fg-off cursor-pointer">
+        <button aria-label="One bar shorter" title="One bar shorter" disabled={disabled || value <= 1} onClick={() => onChange(toBeats(Math.ceil(value - 1 - 1e-9) || 1))} className="h-full w-6 grid place-items-center text-fg-muted enabled:hover:text-fg disabled:text-fg-off cursor-pointer">
           <Minus size={12} />
         </button>
         <input
@@ -1095,7 +1095,7 @@ function LengthField({
           }}
           className="w-9 h-full bg-transparent text-center text-sm font-medium text-fg disabled:text-fg-off outline-none"
         />
-        <button aria-label="One bar longer" disabled={disabled} onClick={() => onChange(toBeats(Math.floor(value + 1 + 1e-9)))} className="h-full w-6 grid place-items-center text-fg-muted enabled:hover:text-fg disabled:text-fg-off cursor-pointer">
+        <button aria-label="One bar longer" title="One bar longer" disabled={disabled} onClick={() => onChange(toBeats(Math.floor(value + 1 + 1e-9)))} className="h-full w-6 grid place-items-center text-fg-muted enabled:hover:text-fg disabled:text-fg-off cursor-pointer">
           <Plus size={12} />
         </button>
       </div>

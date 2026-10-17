@@ -26,6 +26,7 @@ import { importAudio } from "./lib/audioImport";
 import DropLayer from "./components/DropLayer";
 import { stopThen, toggleRecord } from "./lib/record";
 import ExportDialog from "./components/ExportDialog";
+import { openGuide } from "./lib/guide";
 
 /** Fetch the open project. An error means none is open: the start screen shows. */
 const refreshGraph = () =>
@@ -424,5 +425,8 @@ export function appCommand(id: string) {
     case "record":
       // R, Transport ▸ Record (lane B): start, stop, or cancel the count.
       return toggleRecord();
+    case "guide":
+      // Help ▸ Make Your First Song (the studio plan's Q47).
+      return openGuide();
   }
 }

@@ -5,6 +5,7 @@ import { graphApi, projectApi, tilde, type Catalog, type Starter } from "../lib/
 import { chord, native, nativeAction } from "../lib/native";
 import { bpmWords, openedWords, recentApi, type RecentSong } from "../lib/projects";
 import { useStore } from "../lib/store";
+import { openGuide } from "../lib/guide";
 import { openExample, openNewSong } from "./NewSongDialog";
 import { Button } from "./ui";
 
@@ -28,7 +29,7 @@ export default function StartScreen() {
             <h1 className="text-lg font-semibold text-fg-strong">Make a song, or open one you’ve made.</h1>
 
             <div className="mt-6 flex items-start gap-2">
-              <Button variant="primary" size="lg" data-testid="new-song" onClick={openNewSong}>
+              <Button variant="primary" size="lg" data-testid="new-song" onClick={() => openNewSong()}>
                 <Plus size={14} />
                 New Song…
                 {native && <Key>{chord("N")}</Key>}
@@ -43,6 +44,14 @@ export default function StartScreen() {
               )}
               <Examples catalog={catalog} />
             </div>
+            {/* Make Your First Song (the studio plan's Q47): New Song on Empty, then the guide. */}
+            <button
+              data-testid="first-song"
+              onClick={() => openNewSong({ template: "empty", after: openGuide })}
+              className="mt-4 text-sm font-medium text-accent hover:text-accent-strong cursor-pointer"
+            >
+              New to making music? Make your first song
+            </button>
 
             <p className="mt-4 text-xs text-fg-faint">
               {catalog?.songs ? (
