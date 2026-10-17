@@ -2,7 +2,8 @@
 
 Written 2026-10-16, at the end of step 7 (the engine), updated after its speed work the same day, again on
 2026-10-17, when step 7 landed on `main`, and again the same day for the `sounds` merge, after its review and final
-check, and when it landed on `main`. Read this first, then `docs/architecture.md` (the contract) and the design for
+check, and when it landed on `main`; and once more for 8b's screens (`8b-ui`), after their review
+and final check. Read this first, then `docs/architecture.md` (the contract) and the design for
 whatever you pick up.
 
 **In short**
@@ -15,11 +16,22 @@ whatever you pick up.
   too.
 - **The back ends of 8b.4, 8b.5, 8b.6 and 8b.8 are on `main`** (2026-10-17; branch `8b-backend`): mute, solo and
   mute in song; clips by id (move, resize, split, join, quantize, paste) and Remove automation; audition (notes
-  played from a window); meters and the DSP load. No screens yet: those are on `8b-ui` (in progress). Reviewed (6
+  played from a window); meters and the DSP load. Their screens are on `8b-ui` (below). Reviewed (6
   findings, all fixed with tests); `ci/check.sh --gates` passed at `a8199ff`, every row, nothing passed only on a
   retry (1039 Rust tests, 29/29 browser suites, 10 of 10 renders, the 6 gate runs). macOS owed. Plan:
   `docs/designs/step8/backend-plan.md`; what was built and what the UI uses:
   `docs/designs/step8/build-notes-8b-backend.md`.
+- **8b's screens (`8b-ui`): Linux green at `92317ad`; not on `main` yet; macOS owed.** What you can do now:
+  - mute and solo tracks (M and S on each track, and a pill at the top that counts them);
+  - mute a track in the song; Export asks first while a mute or solo changes what you hear;
+  - see how loud each track and the song are (meters); the status pill says "Heavy load" and
+    "Sound dropped out";
+  - edit clips on the timeline (move, copy, resize, split, join, paste, quantize), with a grid;
+  - draw automation on the timeline, and hear notes as you click them in Notes.
+  A review found 9 things (one twice). All 8 are fixed, each with a test. The full check found
+  two old races in the page; both are fixed too. Then `ci/check.sh` passed: every row, nothing
+  passed only on a retry (1132 Rust tests, 40/40 browser suites, 10 of 10 renders). Pictures:
+  `~/m2-runs/app-shots/8b-ui-92317ad/`. What was built and checked: `docs/designs/step8/build-notes-8b-ui.md`.
 - **One new question for the owner:** after Stop and back to bar 1, should the wobble start again as in the
   export? For now it carries on (Open owner decisions).
 - **Your own songs** (for the owner): a song made before std 0.2 must change one line to build (below).
@@ -41,7 +53,7 @@ whatever you pick up.
 - **A layout to decide before step 9:** idea 3, one sandbox per box (`docs/designs/kernel-layout/report.md`).
   Research only; it is in Open owner decisions.
 - The owner decided O1 to O5 on 2026-10-15 (below), and std's bump to 0.2 with O3's fix. That question is closed.
-- Next: `taste`, then 8b's screens (`8b-ui`), then 8a and step 9. The Mac runs are owed and listed below.
+- Next: land `taste-next`, then `8b-ui`; then 8a and step 9. The Mac runs are owed and listed below.
 
 ## Your own songs (for the owner)
 
@@ -61,6 +73,8 @@ whatever you pick up.
 | `main` | the tip | Steps 1–7, the fast note edits, and the platform layer. Green on Linux and macOS at `1750322` (the platform step). Step 7: green on Linux at `ffc36aa` and on macOS at `cbac57c`. |
 | `sounds-merge` | `e1003ba` | All on `main` now (a fast-forward, 2026-10-17). Linux green at `e108e46` (reviewed; `ci/check.sh --gates` and the recorded tests), macOS owed. Worktree `~/m2-runs/wt/sm` (its `target/`, about 40 GB). Delete the branch and the worktree once the tracks in flight have landed. |
 | `8b-backend` | `c9cc6ad` | All on `main` now (a fast-forward, 2026-10-17). Linux green at `a8199ff`, macOS owed. Worktree `~/m2-runs/wt/be`. Delete the branch and the worktree once `8b-ui` has landed. |
+| `8b-ui` | `92317ad`, then docs only | 8b's screens: mute and solo, clips and automation, audition, meters. It has `taste-next` (to `22bea45`) and all of `8b-backend` merged in. Linux green at `92317ad` (reviewed; `ci/check.sh`), macOS owed. Not on `main` yet: it lands after `taste-next`, by merge commits (`rerere` has its resolutions). Worktree `~/m2-runs/wt/ui` (its `target/`, about 50 GB). |
+| `8b-ui-a`, `8b-ui-b`, `8b-ui-c` | `a61d6d9`, `b5e289c`, `ca75898` | 8b-ui's three lanes (A: mute, solo and the top bar; B: clips and automation; C: audition and meters). All merged into `8b-ui`. Worktrees `~/m2-runs/wt/ui-a`, `ui-b` and `ui-c` (no `target/`). Delete them and the branches once `8b-ui` has landed. |
 | `origin/taste` | `4804247` | The new look (T and S); 8b.1 Tracks done (`a0d5f91`); 8b.2 song bar unfinished. |
 | `origin/sounds` | `916127d` | 22 new std sounds (8 on the polysynth, 4 FM, 10 drums), merged; on `main` since 2026-10-17. |
 
@@ -252,6 +266,18 @@ with nothing "passed only on a retry". In the gates part:
 | 20 | Press Space, then Return, then Space. | It stops, goes back to bar 1, and plays from there, with no click. The wobble and the drums' noise carry on from where they were, so this play may differ a tiny bit from the export. That is expected for now: it is the open question in Open owner decisions. |
 | 21 | Tell the lead what you heard at 18 to 20, and whether 20 sounded right to you. | |
 
+**A check by ear of 8b's screens** (about 10 minutes, once `8b-ui` is on `main`):
+
+| # | Do this | You should hear or see |
+|---|---|---|
+| 22 | Quit the app. Type `cargo run --release -p music2-desktop`. Click **Open an Example**, then **First song**. Press Space. | Kick, hats, bass and keys play. |
+| 23 | While it plays, click **M** on Kick's row (right of its name). Then click it again. | The kick goes quiet at once, and a pill at the top says "1 muted". The second click brings it back. |
+| 24 | Click **S** on Bass's row. Then click it again. | Only the bass plays. The second click brings the others back. |
+| 25 | Press Space to stop. Click Kick's **⋯** (or right-click its name), then **Mute in song**. Click **Export**, then **Save**, then **Show in Finder** in the message, and play the file. Then press ⌘Z. | Kick's name is crossed out. The file has no kick. ⌘Z brings Kick back. |
+| 26 | Double-click Bass's clip. Notes opens. Click a note, then click a key on the piano at the left. | You hear each one while you hold it. |
+| 27 | Press Space. Watch the thin bars at the right edge of each track's name, and the Song row's. Press Space again. | They move with the sound, and fall to nothing within about a second after Stop. |
+| 28 | Tell the lead what you heard at 23 to 27. | |
+
 After a green run the lead writes here: "macOS: green at <commit> (ci/check.sh on <model>, <date>)", with G7f's
 numbers. If a row fails, the lead fixes it on Linux, checks the mac lint, and asks for one more run. The logs are in
 `~/m2-check/<commit>.tgz` on the Mac if needed.
@@ -295,6 +321,7 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
 | Step 7 and its speed work | `ffc36aa` (Linux checks), then docs only | `ci/check.sh` passed at `cbac57c` (2026-10-17); owed: the by-ear steps 7 to 17 |
 | The `sounds` merge (22 sounds, O3, std 0.2) | `e108e46` (Linux checks), then docs only | owed: `ci/check.sh` on `main` (one run covers the back ends below too), then the by-ear steps 18 to 21 |
 | The back ends of 8b.4, 8b.5, 8b.6, 8b.8 | `a8199ff` (Linux checks), then docs only | owed: the same run covers it; by-ear steps come with its screens (`8b-ui`) |
+| 8b's screens (`8b-ui`) | not yet: Linux green at `92317ad` | owed once it lands: `ci/check.sh` on `main`, then the by-ear steps 22 to 28 |
 
 1. **The Mac runs** (above), when the owner has time: `ci/check.sh` on `main` for the `sounds` merge and 8b's back
    ends, and the by-ear steps. Fix what they find on Linux, then ask for one more run.
@@ -305,8 +332,11 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
    tracks in flight have landed.
 4. **Merge `taste`**: finish 8b.2 (song bar) and build 8b.3 (Mix faders) per design-8b, then merge (notes below):
    bundle Inter for Linux, D7's attention fix, re-run s8-tracks. Mac run before it lands.
-5. **8b's screens** (`8b-ui`, `~/m2-runs/s8ui/plan.md`) on top of `taste` and the back ends now on `main`. Left on
-   the back end: W1 (the keyed compressor, a std change) and `forget_overlays` on taste's track delete (Q7).
+5. **Land `8b-ui`** after `taste-next`, by merge commits (`rerere` has the resolutions). Its plan:
+   `~/m2-runs/s8ui/plan.md`; its report: `docs/designs/step8/build-notes-8b-ui.md` (End). Later: M, S and
+   meters on the Mix strips (U12), zoom and track heights (U13), markers (U14, no back end yet). taste-next's
+   delete dialog still runs Delete on any Return (the export question's fix is the pattern). Left on the back
+   end: W1 (the keyed compressor, a std change).
 6. Then **8a** (all CPU cores), **8b.7, 8b.9, 8b.10**, and **step 9**. Before step 9 freezes kernel ABI v1, the
    owner decides the kernel layout (Open owner decisions). Each adds its OS pieces to `m2-os` as platform design
    §8 says (8a's `rt.rs` becomes `mac/rt.rs` and `linux/rt.rs`; 8b.10's MIDI uses `midir`). Mac run at the end of each.

@@ -26,6 +26,7 @@ adds its own section here, in the same commit.
 | U9 (lane C) | You hear notes as you click, drag or draw them in Notes. The piano keys play. A toggle turns it off. A hint says when you won't hear anything | done |
 | U10 (lane C) | A level meter in every track header and on the Song row. It shows how loud each track is, and the whole song, while it plays | done |
 | Merge | Nothing new beyond the lanes and taste-next's Mix view. All three lanes are in one branch, with main (8b-backend's last fixes, std 0.2) and taste-next's newest work | done |
+| End | A review's 9 findings fixed (8 fixes), two old races the full check found fixed, taste-next merged again, the full check green, pictures for you, `docs/gaps.md` brought up to date | done |
 
 ## Setup: the merges
 
@@ -964,13 +965,19 @@ It copies the page and the suites first, so nothing changes under a running suit
   after the file changes). It passed here. A wait there would settle it.
 - Delete `~/m2-runs/s8ui/bin/` and this worktree's `target/` when the track ends.
 
-## Review fixes
+## End: the review, the final check, the pictures
 
 **In short**
 - A review with two lenses (how it behaves; tests, docs and taste) found 9 things. Two were the
   same bug, so 8 fixes.
-- Each fix is its own commit, with a check that fails on the page before it and passes after.
-- Names below: B1 to B3 are the behaviour lens's, T1 to T6 the other lens's.
+- Each fix is its own commit, with a check that fails on the page before it and passes after
+  (T4 and T5 are docs).
+- The first full check found two old races in the page. Both are fixed, with a check each.
+- The full check then passed at `92317ad`: every row, nothing passed only on a retry.
+- Four pictures for you: `~/m2-runs/app-shots/8b-ui-92317ad/`.
+- Names below: B1 to B3 are the behaviour lens's findings, T1 to T6 the other lens's.
+
+### The review
 
 | Finding | What was wrong | Fix | Check (red first, then green) |
 |---|---|---|---|
@@ -981,8 +988,9 @@ It copies the page and the suites first, so nothing changes under a running suit
 | B2 | ⌘1 to ⌘4 kept acting on the roll's grid after Notes had gone (E hid the dock, or Mix took its place). The timeline's grid, the only one on screen, didn't change, and the roll came back with its grid changed | `grid.ts` `gridTarget()`: Notes' grid only while Notes is on screen, else the timeline's. `SongTimeline.tsx`'s ⌘1 to ⌘4 use it. (Not a reset in NoteView's unmount: the roll unmounts and mounts again when another clip opens, and the keys should stay with it) | s8-clips, 4 new checks (two ways for Notes to go). Before: `FAIL then E hides the dock: ⌘4 turns the timeline's snap off, and the roll's stays as it was (0.125)`, and the same for Mix. After: 94 of 94; notes and taste ok |
 | B3 | The Notes hint named every solo in `overlays.solo`, even one whose track was taken out of the song (MON-4 keeps that entry; the server and the pill leave it out). It said "Silenced by the Bass and hats solos", with the raw key, while the pill said "1 solo" | `AuditionTools.tsx`: only the solos still in the song, named as the pill names them (`inSong`, `trackName` from `lib/overlays`) | s8-audition, 2 new checks. Before: `FAIL the Keys roll still names only Bass's solo, as the pill counts one: Silenced by the Bass and hats solos · audition is silent`. After: 51 of 51; taste ok |
 | T5 | The e2e docs said pc-keys is the only suite with a PC page (README, `chrome.mjs`, `pc-keys.mjs`), but s8-mute, s8-audition, s8-clips and s8-automation each open one. notes' header said every edit is one lane write; the timeline's clip edits are `clips` gestures now (U5) | Docs and comments only: pc-keys is the one suite that runs entirely on a PC page, and the four s8 suites each open one for their words. notes: the roll's edits are one lane write, the timeline's clip edits one `clips` gesture | A docs fix: no behaviour to test |
+| T4 | `docs/gaps.md` still said the UI was missing for things this track built: #15 (triplets, quantize), top ten 8 and 9, four rows of "Removed with the old version", and "What works today" had no line for them. The End's list named only #8, #9, #14 and #17 | `docs/gaps.md`, in the End's docs commit: What works today has mute and solo, the meters and the load, audition, clip editing and the grid, and drawing automation. Top ten 4, 8 and 9 are updated. #9, #14, #15 and #17 say only what is left. #8's row is gone (done). The Removed rows point at what is back. Loose ends: view settings reset at each launch (Q7), and a dragged clip is heard only once it lands (Q10) | A docs fix |
 
-### The first full check, and two flakes in it
+### The first full check, and two races in it
 
 The first `ci/check.sh` at `641da77` failed three rows. Each is found and fixed here.
 
@@ -990,7 +998,7 @@ The first `ci/check.sh` at `641da77` failed three rows. Each is found and fixed 
 |---|---|---|
 | rust tests | `mix_tests.rs` still named the lane `bass-db` after taste-next's `b3237a6` renamed it `bass-volume`. Its next commit fixed it | Merge taste-next at `4f5c582` (`6c86115`) |
 | repo unchanged | `docs/gaps.md` was edited in the worktree while the check ran (by this track's lead) | Nothing to fix in the code. No edits while a check runs |
-| browser suites (taste passed only on a retry) | Two races, below, both from before this track. Run 28 at once, the taste suite failed 2 to 5 times in 28 | Below |
+| browser suites (taste passed only on a retry) | Two races, below, both from before this track. Run 28 at once, the taste suite failed 2 to 4 times in 28 | Below |
 
 **A click on a track could be undone.** The selection effect in `GraphCanvas.tsx` works out what
 should be selected while it renders, then sets it in an effect. React can run that effect after a
@@ -1010,4 +1018,76 @@ Now an OK answer cut off on its way throws `CutOff` (`readJson`, also used by `l
 | Check | Before | After |
 |---|---|---|
 | s8-meters, 2 new checks: a cut-off answer, then "the window stays as it was" | `FAIL the window stays as it was: … TypeError: Cannot read properties of undefined (reading 'tempo')` | 24 of 24; taste, start, s6-write and s8-automation ok |
-| The taste suite 28 times at once (a stress run, `~/m2-runs/logs/8b-ui-review/flake-*`) | 25, 26, 26 and 23 of 28 ok in four runs: the two races above | 28 of 28, twice |
+| The taste suite 28 times at once (a stress run, `~/m2-runs/logs/8b-ui-review/flake-*`) | 25, 26, 26 and 24 of 28 ok in four runs: the two races above (in the last run one more failed, from the recorder itself) | 28 of 28, twice |
+
+### The last merges
+
+| Commit | What came in | Conflicts |
+|---|---|---|
+| `641da77` | `taste-next` at `b3237a6`: a later time signature change keeps its bar, a new track's key skips the mixer's channel keys, "Hats volume" | `docs/architecture.md` (taste-next's newer words), `docs/gaps.md` #4 and #20 (8b-ui's rows) |
+| `6c86115` | `taste-next` at `4f5c582`: a fader an automation lane sets follows it, ⌘L loops the clip shown, tempo and ruler fixes; it fixes `mix_tests`' lane name | `e2e/run.mjs` and README (both sides' rows); `GraphCanvas.tsx` `loopSelection`: 8b-ui's marquee and picked clips first, then taste-next's clip shown, then the bar |
+| `92317ad` | `taste-next` at `22bea45`: docs, the strip menu's Edit in code, `gestures` waits for a knob | `e2e/README.md`: both sides' rows |
+
+`main`, `sounds-merge` and `8b-backend` had nothing new. `rerere` was on for each merge.
+
+### The final check
+
+`TW_WAIT=3600 ~/m2-runs/tw check-8b-ui-2 'cd ~/m2-runs/wt/ui && M2_CHECK_OUT=$HOME/m2-runs/check-8b-ui-2 ci/check.sh'`,
+at `92317ad`, on Linux (no gates: they are the Mac's to judge). Every row PASS, and nothing passed only
+on a retry. Its summary, verbatim:
+
+```
+music2 check: PASS
+commit   92317ad5bc0d on 8b-ui (clean)
+machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
+tools    rustc 1.99.0, node v24.21.0, 13 min
+plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+
+toolchain        PASS  rustc 1.99.0
+web build        PASS  
+build            PASS  
+app              PASS  the UI connected: first-song in 1 s, with-plugins in 1 s
+rust tests       PASS  1132 passed, 0 failed
+clippy           PASS  
+std kernels      PASS  tests and clippy
+std.wasm         PASS  rebuilt to the same bytes in another folder
+mac lint         PASS  the macOS code type-checks and lints
+browser suites   PASS  40/40 suites ok
+renders          PASS  10 of 10 match e2e/renders.sha256
+repo unchanged   PASS  
+
+logs     /home/jerry/m2-runs/check-8b-ui-2.tgz
+```
+
+Logs: `~/m2-runs/check-8b-ui-2.tgz`. The first run's (at `641da77`, the three rows above):
+`~/m2-runs/check-8b-ui.tgz`.
+
+### The owner's pictures
+
+From the desktop app built by that check, on the invisible Xvfb screen `:98`, with
+`~/m2-runs/s8ui/tools/app-shot.sh`. Each state was written into a copy of the song first, not
+clicked: `.music2/overlays.json` for the mutes, `m2 mute-in-song` for Hats. Only the meters (Space)
+and Notes (a double-click and a key held down) needed input. In `~/m2-runs/app-shots/8b-ui-92317ad/`,
+each with one line in `captions.txt`:
+
+| Picture | What it shows |
+|---|---|
+| `1-mute-and-solo.png` | Kick muted, Bass soloed, Hats and Keys pale; the pill says "1 muted · 1 solo" |
+| `2-muted-in-song.png` | Hats muted in the song: its name crossed out, its clip pale and striped |
+| `3-meters-playing.png` | Playing at bar 4: the meters at the right edge of each track's name and the Song row |
+| `4-notes-keys.png` | Bass's clip in Notes, the key C2 held down and lit; Bass's meter moving |
+
+"Heavy load" didn't show: this server keeps up with first-song. s8-mute checks those words.
+
+### Left
+
+- U12 (M, S and meters on the Mix strips), U13 (zoom, track heights, follow the playhead) and U14
+  (markers: no back end yet) are later. `docs/gaps.md` #4, #17, #20 and #23 say so.
+- taste-next's delete dialog (`Tracks.tsx`, `DeleteDialog`) still runs Delete on any Return,
+  whatever has the focus, and lets Space reach the page. The export question's fix (B1) is the
+  pattern. It is taste-next's file, so it is left to taste-next.
+- On a Mac, a Return in the export question presses the focused button, not always the default one
+  as a Mac alert does (B1's choice: here the main button writes code). Say if the Mac's way is wanted.
+- The two races fixed here were in code from before this track. Others like them may wait in other
+  effects that read a render's values after a click; none is known.
+- The Mac run: `ci/check.sh` once `8b-ui` is on `main`, then the by-ear steps 22 to 28 in HANDOFF.
