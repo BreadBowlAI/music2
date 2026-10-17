@@ -1,7 +1,8 @@
-import { useEffect } from "react";
+import { useRef } from "react";
 import { lockReason } from "../lib/graph";
 import { exportNow, muteThenExport, useExportAsk } from "../lib/exporting";
 import { is, listed } from "../lib/overlays";
+import { useModalKeys } from "../lib/modal";
 import { useStore } from "../lib/store";
 import { Button } from "./ui";
 
@@ -17,8 +18,9 @@ import { Button } from "./ui";
  * focus ring, wherever Tab moved it. That holds on a Mac too, where an alert's Return is always its
  * default button: here the main button writes the song's code, so it runs only when it is the one
  * shown focused. Tab goes round the buttons, and no key reaches the page behind (Space would play,
- * M would mute). Esc cancels. There is no "Don't ask again": it shows only while a mute or solo
- * changes what you hear, and a setting wouldn't outlive the app's launch (Q7).
+ * M would mute). Esc cancels. The keys are every dialog's (`useModalKeys`). There is no "Don't ask
+ * again": it shows only while a mute or solo changes what you hear, and a setting wouldn't outlive
+ * the app's launch (Q7).
  */
 export default function ExportAsk() {
   const ask = useExportAsk((s) => s.ask);
@@ -38,24 +40,8 @@ export default function ExportAsk() {
     close();
     void muteThenExport(ask.muted, ask.mutedNames);
   };
-  useEffect(() => {
-    if (!ask) return;
-    const key = (e: KeyboardEvent) => {
-      // The question is modal: no key reaches the page behind it.
-      e.stopPropagation();
-      const buttons = [...document.querySelectorAll<HTMLButtonElement>("[data-testid=export-ask] button")];
-      const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
-      const n = buttons.length;
-      if (e.key === "Escape") close();
-      else if (e.key === "Enter") at >= 0 ? buttons[at].click() : (mute ? muting : anyway)();
-      else if (e.key === "Tab") buttons[at < 0 ? (e.shiftKey ? n - 1 : 0) : (at + (e.shiftKey ? n - 1 : 1)) % n]?.focus();
-      // Space on a button: the browser presses it. Anywhere else it does nothing.
-      else if (e.key !== " " || at >= 0) return;
-      e.preventDefault();
-    };
-    window.addEventListener("keydown", key, true);
-    return () => window.removeEventListener("keydown", key, true);
-  });
+  const box = useRef<HTMLDivElement>(null);
+  useModalKeys(box, { onEscape: close, onDefault: () => (mute ? muting : anyway)(), active: !!ask });
   if (!ask) return null;
   const { mutedNames: m, soloedNames: s } = ask;
   const title = solo ? (m.length ? `${listed(m)} ${is(m)} muted and only ${listed(s)} ${is(s)} soloed` : `Only ${listed(s)} ${is(s)} soloed`) : `${listed(m)} ${is(m)} muted only while you listen`;
@@ -63,7 +49,7 @@ export default function ExportAsk() {
   const muteLabel = `Mute ${m.length > 1 ? `${m.length} tracks` : m[0]} in the song, then export`;
   return (
     <div className="fixed inset-0 z-[70] grid place-items-center p-4 bg-fg-strong/20" onPointerDown={(e) => e.target === e.currentTarget && close()}>
-      <div role="alertdialog" aria-modal aria-labelledby="export-ask-title" data-testid="export-ask" className="w-[440px] max-w-full p-6 rounded-md bg-raised shadow-pop animate-dialog cursor-default">
+      <div ref={box} role="alertdialog" aria-modal aria-labelledby="export-ask-title" data-testid="export-ask" className="w-[440px] max-w-full p-6 rounded-md bg-raised shadow-pop animate-dialog cursor-default">
         <h2 id="export-ask-title" className="text-lg font-semibold text-fg-strong">
           {title}
         </h2>

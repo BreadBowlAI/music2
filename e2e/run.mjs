@@ -96,6 +96,7 @@ export const SUITES = [
   ["gestures", "fix", { expect: 30 }],
   ["g11-play", "fix", { expect: 24 }],
   ["s8-tracks", "fix", { expect: 75 }],
+  ["pl-tracks", "fix", { expect: 20 }],
   ["s8-mute", "export", { expect: 152 }],
   ["s8-songbar", "fix", { expect: 82 }],
   ["s8-mix", "fix", { expect: 80 }],
