@@ -10,13 +10,15 @@ use m2_ir::{Kind, LaneDecl, Unit};
 use m2_song::{AudioClip, ControlClip, DataSet, LaneData, LaneKind, Meter, NoteClip, Project, Tempo};
 use serde::Serialize;
 
-use m2_session::{Revision, Session};
+use m2_session::{Home, Revision, Session};
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct TimelineView {
     pub tempo: Vec<Tempo>,
     /// The time signatures (FMT-13); empty is 4/4 throughout.
     pub meter: Vec<Meter>,
+    /// Where the tempo and the time signatures live (HOME-1): `data/arrangement.json`.
+    pub home: Home,
     /// Where the last clip ends, in beats; at least one bar.
     pub end: f64,
     /// Modules with rows: tracks, and any other module that declares a lane.
@@ -111,7 +113,7 @@ pub fn timeline(s: &Session) -> TimelineView {
     in_order(&mut tracks, &layout);
     let a = &rev.project.arrangement;
     let bar = a.meter_at(0.0).bar();
-    TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), end: data.end().max(bar), tracks }
+    TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), home: Home::Arrangement, end: data.end().max(bar), tracks }
 }
 
 /// A module's colour by name: a track's from the layout, else graphite.
@@ -136,7 +138,7 @@ fn in_order(tracks: &mut [TimelineTrack], layout: &crate::layout::LayoutView) {
 fn last_known(rev: &Revision) -> TimelineView {
     let Ok(project) = Project::from_snapshot(&rev.snapshot) else {
         let a = &rev.project.arrangement;
-        return TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), end: a.meter_at(0.0).bar(), tracks: vec![] };
+        return TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), home: Home::Arrangement, end: a.meter_at(0.0).bar(), tracks: vec![] };
     };
     let mut modules: BTreeMap<String, Vec<TimelineLane>> = BTreeMap::new();
     let mut end: f64 = 0.0;
@@ -170,7 +172,7 @@ fn last_known(rev: &Revision) -> TimelineView {
         .collect();
     in_order(&mut tracks, &layout);
     let a = &project.arrangement;
-    TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), end: end.max(a.meter_at(0.0).bar()), tracks }
+    TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), home: Home::Arrangement, end: end.max(a.meter_at(0.0).bar()), tracks }
 }
 
 /// `kick` → `Kick`.

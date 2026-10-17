@@ -35,6 +35,7 @@ import { chord, opt } from "../lib/native";
 import { useStore } from "../lib/store";
 import { addEffectTo, dragsEffect, EFFECT_DRAG } from "./Browser";
 import { addTrack, END, INSTRUMENT_DRAG, openInstruments, openTrackMenu, startReorder, TrackMenuButton, useReorder } from "./Tracks";
+import { MarkPopover, placeOf, RulerMenu } from "./SongBar";
 import { VLines } from "./draw";
 import TrackName from "./TrackName";
 import { Button, EmptyState, keepFocus } from "./ui";
@@ -386,7 +387,7 @@ export default function SongTimeline({
               </button>
             )}
           </div>
-          <Ruler timeline={timeline} width={width} loopStart={loopStart} loopEnd={loopEnd} looping={looping} onSeek={onSeek} onLoop={onLoop} />
+          <Ruler timeline={timeline} width={width} loopStart={loopStart} loopEnd={loopEnd} looping={looping} locked={locked} onSeek={onSeek} onLoop={onLoop} />
           <PlayCap headerW={headerW} />
         </div>
         {/* Over the clips, multiplied in: lanes full of clips still show where the loop is (TL-10).
@@ -477,7 +478,8 @@ const Grid = memo(function Grid({ meter, width }: { meter: Meter[]; width: numbe
 
 /**
  * Bars and beats along the top. A click moves the playhead there; a drag across it sets a loop over
- * the beats it covered, and turns looping on.
+ * the beats it covered, and turns looping on. Its tempo and time signature marks open their change
+ * in a popover; a right-click adds one (design-8b §4.4).
  */
 const Ruler = memo(function Ruler({
   timeline,
@@ -485,6 +487,7 @@ const Ruler = memo(function Ruler({
   loopStart,
   loopEnd,
   looping,
+  locked,
   onSeek,
   onLoop,
 }: {
@@ -493,6 +496,7 @@ const Ruler = memo(function Ruler({
   loopStart: number | null;
   loopEnd: number | null;
   looping: boolean;
+  locked: string | null;
   onSeek: (beat: number) => void;
   onLoop: (start: number, end: number) => void;
 }) {
@@ -500,14 +504,30 @@ const Ruler = memo(function Ruler({
   const [drag, setDrag] = useState<{ start: number; end: number } | null>(null);
   const shown = drag ?? (loopStart !== null && loopEnd !== null ? { start: loopStart, end: loopEnd } : null);
   const on = drag ? true : looping;
+  const session = useStore((s) => s.graph?.session);
+  // The change whose popover is open (by its beat; `typing` when just made), and the right-click menu.
+  const [mark, setMark] = useState<{ beat: number; typing: boolean } | null>(null);
+  const [menu, setMenu] = useState<{ beat: number; x: number } | null>(null);
+  const [menuAt, setMenuAt] = useState<HTMLElement | null>(null);
+  const [markAt, setMarkAt] = useState<HTMLElement | null>(null);
+  const marks = changes(timeline);
+  // A change undone or removed elsewhere closes its popover.
+  const open = mark && marks.some((c) => c.beat === mark.beat) ? mark : null;
   return (
     <div
       data-testid="ruler"
       className="relative overflow-hidden bg-chrome border-b border-line cursor-pointer touch-none"
       style={{ width }}
-      title="Click to move the playhead · drag across to loop"
+      title={`Click to move the playhead · drag across to loop${locked ? "" : " · right-click to change the tempo or time signature here"}`}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        // Its popovers are portals, whose events reach the ruler through React: only its own.
+        if (locked || session === undefined || !e.currentTarget.contains(e.target as Node)) return;
+        const x = e.clientX - e.currentTarget.getBoundingClientRect().left;
+        setMenu({ beat: Math.max(0, Math.round(x / PPB)), x });
+      }}
       onPointerDown={(e) => {
-        if (e.button !== 0) return;
+        if (e.button !== 0 || !e.currentTarget.contains(e.target as Node)) return;
         const el = e.currentTarget, pointer = e.pointerId, x0 = e.clientX;
         const left = el.getBoundingClientRect().left;
         const beatAt = (x: number) => Math.max(0, Math.round((x - left) / PPB));
@@ -559,17 +579,65 @@ const Ruler = memo(function Ruler({
           </span>
         ) : null;
       })}
-      {/* Where the tempo or the time signature changes: both at one beat share a mark. */}
-      {changes(timeline).map((c) => (
+      {/* Where the tempo or the time signature changes: both at one beat share a mark, which opens them. */}
+      {marks.map((c) => (
         <span
           key={c.beat}
-          className="absolute bottom-2 text-xs leading-none text-fg-faint pointer-events-none whitespace-nowrap"
+          ref={open?.beat === c.beat ? setMarkAt : undefined}
+          role="button"
+          data-mark={c.beat}
+          aria-label={`Changes from ${placeOf(timeline.meter, c.beat)}`}
+          aria-expanded={open?.beat === c.beat}
+          className={clsx(
+            "absolute bottom-1.5 px-0.5 -mx-0.5 rounded-xs text-xs leading-none whitespace-nowrap transition-colors duration-80 ease-linear",
+            open?.beat === c.beat ? "text-fg bg-hover" : "text-fg-muted hover:text-fg hover:bg-hover",
+          )}
           style={{ left: c.beat * PPB + 3 }}
-          title={[c.meter && `${c.meter} from bar ${barAt(timeline.meter, c.beat).bar + 1}`, c.bpm && `${c.bpm} BPM from beat ${beats(c.beat)}`].filter(Boolean).join("\n")}
+          title={[
+            c.meter && `${c.meter} from ${placeOf(timeline.meter, c.beat)}`,
+            c.bpm && `${c.bpm} BPM from ${placeOf(timeline.meter, c.beat)}`,
+            locked ?? "Click to change or remove",
+          ]
+            .filter(Boolean)
+            .join("\n")}
+          // Not a seek or a loop: the ruler's own drag starts under it.
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            setMark(open?.beat === c.beat ? null : { beat: c.beat, typing: false });
+          }}
         >
           {[c.meter, c.bpm && `♩${c.bpm}`].filter(Boolean).join(" ")}
         </span>
       ))}
+      {/* Placed once, at its own mark: never at the one open before. */}
+      {open && markAt?.dataset.mark === String(open.beat) && session !== undefined && (
+        <MarkPopover
+          key={open.beat}
+          session={session}
+          timeline={timeline}
+          beat={open.beat}
+          anchor={markAt}
+          locked={locked}
+          typing={open.typing}
+          onClose={() => setMark(null)}
+        />
+      )}
+      {menu && <span ref={setMenuAt} aria-hidden className="absolute bottom-0 w-px h-px pointer-events-none" style={{ left: menu.x }} />}
+      {menu && menuAt && session !== undefined && (
+        <RulerMenu
+          session={session}
+          timeline={timeline}
+          beat={menu.beat}
+          anchor={menuAt}
+          locked={locked}
+          onClose={() => {
+            setMenu(null);
+            setMenuAt(null);
+          }}
+          onMade={(beat) => setMark({ beat, typing: true })}
+        />
+      )}
     </div>
   );
 });

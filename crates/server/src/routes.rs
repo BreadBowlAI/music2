@@ -70,6 +70,10 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .route("/api/graph/track/duplicate", post(track_duplicate))
         .route("/api/graph/track/delete", post(track_delete))
         .route("/api/graph/layout", post(graph_layout))
+        .route("/api/graph/tempo", post(graph_tempo))
+        .route("/api/graph/meter", post(graph_meter))
+        .route("/api/graph/title", post(graph_title))
+        .route("/api/graph/panic", post(graph_panic))
         .route("/api/graph/lock/retry", post(graph_lock_retry))
         .route("/api/tx/check", post(tx_check))
         .route("/api/tx/commit", post(tx_commit))
@@ -108,7 +112,7 @@ async fn auth(State(s): S, req: axum::extract::Request, next: axum::middleware::
 }
 
 /// The routes that write the open project, or begin a gesture whose commit would.
-const WRITES: [&str; 22] = [
+const WRITES: [&str; 25] = [
     "/api/graph/preview",
     "/api/graph/set",
     "/api/graph/lease/begin",
@@ -127,6 +131,9 @@ const WRITES: [&str; 22] = [
     "/api/graph/track/duplicate",
     "/api/graph/track/delete",
     "/api/graph/layout",
+    "/api/graph/tempo",
+    "/api/graph/meter",
+    "/api/graph/title",
     "/api/graph/undo",
     "/api/graph/redo",
     "/api/graph/file",
@@ -605,6 +612,74 @@ async fn graph_layout(State(s): S, Json(r): Json<LayoutReq>) -> ApiResult {
     Ok(Json(result?))
 }
 
+#[derive(Deserialize)]
+struct TempoReq {
+    session: u64,
+    /// The beat: whose tempo is set (the playhead's), where a change goes, or which is removed.
+    #[serde(default)]
+    at: f64,
+    #[serde(default)]
+    bpm: Option<f64>,
+    /// A new tempo change at `at`, rather than the one in effect there.
+    #[serde(default)]
+    add: bool,
+    #[serde(default)]
+    remove: bool,
+}
+
+/// The song bar's tempo field and the ruler's tempo marks (design-8b §4): one undo step each.
+async fn graph_tempo(State(s): S, Json(r): Json<TempoReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.tempo(r.session, r.at, r.bpm, r.add, r.remove)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct MeterReq {
+    session: u64,
+    #[serde(default)]
+    at: f64,
+    #[serde(default)]
+    beats: Option<u32>,
+    #[serde(default)]
+    unit: Option<u32>,
+    /// A new time signature change on the bar line at or before `at`.
+    #[serde(default)]
+    add: bool,
+    #[serde(default)]
+    remove: bool,
+}
+
+/// The song bar's time signature and the ruler's marks.
+async fn graph_meter(State(s): S, Json(r): Json<MeterReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.meter(r.session, r.at, r.beats, r.unit, r.add, r.remove)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct TitleReq {
+    session: u64,
+    name: String,
+}
+
+/// The song's name, double-clicked in the top bar: its manifest's `[project] name`.
+async fn graph_title(State(s): S, Json(r): Json<TitleReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.title(r.session, &r.name)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+/// Stop all sound (⌘.): not a write, so a read-only window has it too.
+async fn graph_panic(State(s): S) -> ApiResult {
+    let state = s.clone();
+    blocking(move || state.graph.panic()).await?;
+    Ok(Json(json!({})))
+}
+
 /// Try the project's lock again (WRITE-17): the read-only banner's Retry.
 async fn graph_lock_retry(State(s): S, Json(r): Json<SessionReq>) -> ApiResult {
     let state = s.clone();
@@ -698,12 +773,25 @@ async fn graph_disconnect(State(s): S, Json(r): Json<DisconnectReq>) -> ApiResul
 #[derive(Deserialize)]
 struct GraphTransportReq {
     action: String,
+    /// With `stop`: the beat to go back to, where play started (taste.md §5.1). Sent with the stop,
+    /// so nothing in between sees it stopped where it was.
+    #[serde(default)]
+    to: Option<f64>,
 }
 
+/// The answer says where a stop with `to` stopped (`at`), for ⇧Space to continue from.
 async fn graph_transport(State(s): S, Json(r): Json<GraphTransportReq>) -> ApiResult {
     let state = s.clone();
-    blocking(move || state.graph.transport(&r.action)).await?;
-    Ok(Json(json!({})))
+    let at = blocking(move || {
+        let at = state.graph.status().beat;
+        state.graph.transport(&r.action)?;
+        match (r.action.as_str(), r.to) {
+            ("stop", Some(to)) => state.graph.seek(to).map(|()| Some(at)),
+            _ => Ok(None),
+        }
+    })
+    .await?;
+    Ok(Json(json!({"at": at})))
 }
 
 #[derive(Deserialize)]

@@ -43,6 +43,8 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     // Split, which comes with clip editing.
     ("export", "Export Audio…", Some("CmdOrCtrl+Shift+E")),
     ("reveal", REVEAL, None),
+    // The song's name in the top bar turns into a field (a double-click there does the same).
+    ("rename_song", "Rename Song…", None),
     ("undo", "Undo", Some("CmdOrCtrl+Z")),
     ("redo", "Redo", Some("CmdOrCtrl+Shift+Z")),
     // One item for whatever is selected (the roll's notes today), or the code editor's own ⌘D.
@@ -62,8 +64,14 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     ("browser", "Show Browser", Some("Alt+CmdOrCtrl+B")),
     // No Space accelerator: the menu would steal it from text fields. The UI handles Space, Return and C.
     ("play", "Play / Stop", None),
+    // ⇧Space, the page's: from where it stopped, not where play started.
+    ("continue", "Continue", None),
     ("home", "Go to Start", None),
     ("loop", "Loop", None),
+    // The selected clip's span, else the bar at the playhead.
+    ("loop_selection", "Loop Selection", Some("CmdOrCtrl+L")),
+    // Panic (RENDER-10): every note off, every instance reset.
+    ("panic", "Stop All Sound", Some("CmdOrCtrl+Period")),
     ("shortcuts", "Keyboard Shortcuts", None),
 ];
 
@@ -93,11 +101,22 @@ enum Row {
 /// The menu bar, as (menu, rows): the Mac's when `mac`, else the one for GTK (and Windows later).
 fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
     use Row::*;
-    let file = [Item("new_song"), Item("open_project"), Line, Item("close_song"), Item("save"), Line, Item("export"), Line, Item("reveal")];
+    let file = [
+        Item("new_song"),
+        Item("open_project"),
+        Line,
+        Item("close_song"),
+        Item("save"),
+        Line,
+        Item("export"),
+        Line,
+        Item("reveal"),
+        Item("rename_song"),
+    ];
     let track = vec![Item("new_track"), Item("delete_track"), Item("rename")];
     let views =
         [Item("view_device"), Item("view_notes"), Item("view_mix"), Item("view_code"), Line, Item("lanes"), Item("dock"), Item("browser")];
-    let transport = vec![Item("play"), Item("home"), Item("loop")];
+    let transport = vec![Item("play"), Item("continue"), Item("home"), Line, Item("loop"), Item("loop_selection"), Line, Item("panic")];
     if mac {
         vec![
             ("music2", vec![About, Line, Services, Line, Hide, HideOthers, ShowAll, Line, Item("quit")]),

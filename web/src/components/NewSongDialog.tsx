@@ -49,6 +49,10 @@ function Dialog({ onClose }: { onClose: () => void }) {
   const [dir, setDir] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The template's tempo until one is typed (NS-3).
+  const [tempo, setTempo] = useState<string | null>(null);
+  const [tempoError, setTempoError] = useState(false);
+  const bpmField = useRef<HTMLInputElement>(null);
   // Making a song closes the open one: unsaved code in its editor would be lost.
   const [unsaved] = useState(() => (useStore.getState().graph ? (editorHooks.unsaved?.() ?? 0) : 0));
   const input = useRef<HTMLInputElement>(null);
@@ -66,13 +70,28 @@ function Dialog({ onClose }: { onClose: () => void }) {
 
   const folder = dir ?? catalog?.songs ?? null;
   const templates = catalog?.templates ?? [];
+  const templateTempo = templates.find((t) => t.id === template)?.tempo ?? null;
+  const bpmText = tempo ?? (templateTempo === null ? "" : String(Number(templateTempo.toFixed(2))));
 
   const make = async () => {
     if (busy || !catalog) return;
+    // "128", "128.5" or "128 bpm", 20 to 999 (FMT-13); the template's when left as it was.
+    const typed = /^\s*(\d+(?:\.\d+)?)\s*(?:bpm)?\s*$/i.exec(bpmText);
+    const bpm = typed ? Number(typed[1]) : NaN;
+    if (tempo !== null && !(bpm >= 20 && bpm <= 999)) {
+      setTempoError(true);
+      bpmField.current?.focus();
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      const graph = await projectApi.create({ name: name.trim() || DEFAULT_NAME, template, dir: dir ?? undefined });
+      const graph = await projectApi.create({
+        name: name.trim() || DEFAULT_NAME,
+        template,
+        dir: dir ?? undefined,
+        tempo: tempo !== null && bpm !== templateTempo ? Number(bpm.toFixed(2)) : undefined,
+      });
       onClose();
       opened(graph, catalog.home);
     } catch (e) {
@@ -97,7 +116,7 @@ function Dialog({ onClose }: { onClose: () => void }) {
     if (e.key === "Escape") {
       e.preventDefault();
       if (!busy) onClose();
-    } else if (e.key === "Enter" && (target === input.current || target.dataset.template)) {
+    } else if (e.key === "Enter" && (target === input.current || target === bpmField.current || target.dataset.template)) {
       // Other buttons (Cancel, Choose Folder…) do what they say.
       e.preventDefault();
       void make();
@@ -129,21 +148,46 @@ function Dialog({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="px-6 pt-4 space-y-4">
-          <label className="block">
-            <span className="text-sm font-medium text-fg-muted">Name</span>
-            <input
-              ref={input}
-              autoFocus
-              value={name}
-              placeholder={DEFAULT_NAME}
-              maxLength={80}
-              spellCheck={false}
-              aria-label="Song name"
-              data-testid="song-name"
-              onChange={(e) => setName(e.target.value)}
-              className="mt-1.5 w-full h-8 px-3 rounded-sm bg-raised border border-line-strong hover:border-fg-off focus:border-accent text-base text-fg placeholder:text-fg-off transition-colors duration-80 ease-linear"
-            />
-          </label>
+          <div className="flex items-start gap-3">
+            <label className="block flex-1 min-w-0">
+              <span className="text-sm font-medium text-fg-muted">Name</span>
+              <input
+                ref={input}
+                autoFocus
+                value={name}
+                placeholder={DEFAULT_NAME}
+                maxLength={80}
+                spellCheck={false}
+                aria-label="Song name"
+                data-testid="song-name"
+                onChange={(e) => setName(e.target.value)}
+                className="mt-1.5 w-full h-8 px-3 rounded-sm bg-raised border border-line-strong hover:border-fg-off focus:border-accent text-base text-fg placeholder:text-fg-off transition-colors duration-80 ease-linear"
+              />
+            </label>
+            {/* NS-3: the tempo it starts at, the template's unless typed; Tab moves here from the name. */}
+            <label className="block shrink-0 relative" title="Beats per minute, 20 to 999. You can change it later in the top bar">
+              <span className="block text-sm font-medium text-fg-muted">Tempo</span>
+              <input
+                ref={bpmField}
+                value={bpmText}
+                inputMode="decimal"
+                spellCheck={false}
+                aria-label="Tempo in BPM"
+                aria-invalid={tempoError}
+                data-testid="song-tempo"
+                onChange={(e) => {
+                  setTempo(e.target.value);
+                  setTempoError(false);
+                }}
+                onFocus={(e) => e.target.select()}
+                className={clsx(
+                  "mt-1.5 w-16 h-8 px-3 rounded-sm bg-raised border text-base text-fg tabular-nums transition-colors duration-80 ease-linear",
+                  tempoError ? "border-danger" : "border-line-strong hover:border-fg-off focus:border-accent",
+                )}
+              />
+              {tempoError && <span role="alert" className="absolute left-0 top-full mt-0.5 text-xs text-danger whitespace-nowrap">20 to 999 BPM</span>}
+            </label>
+          </div>
 
           <div>
             <span id="new-song-start" className="text-sm font-medium text-fg-muted">Start from</span>

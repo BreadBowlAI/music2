@@ -166,5 +166,15 @@ export const useShell = create<Shell>((set, get) => ({
   resetSelection: () => set({ selected: null, module: null, auto: true, clips: {}, open: new Set(), renaming: null }),
 }));
 
-/** What the open song's canvas does for a command it alone can (the loop toggle needs where playback is). */
-export const canvas: { loop?: () => void } = {};
+/**
+ * What the open song's canvas does for a command it alone can: the transport (it knows where
+ * playback is and refreshes it), the loop and the song bar's name field.
+ */
+export const canvas: {
+  loop?: () => void;
+  loopSelection?: () => void;
+  play?: () => void;
+  continue?: () => void;
+  home?: () => void;
+  renameSong?: () => void;
+} = {};

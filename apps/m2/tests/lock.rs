@@ -92,6 +92,10 @@ fn a_write_while_another_process_holds_the_lock_fails_and_changes_nothing() {
         vec!["delete-track", dir, "keys"],
         vec!["layout", dir, "order", "chops", "kick", "keys"],
         vec!["layout", dir, "colour", "kick", "teal"],
+        // The song bar's builders (8b.2).
+        vec!["tempo", dir, "128"],
+        vec!["meter", dir, "7/8", "--at", "9"],
+        vec!["title", dir, "Night Drive"],
     ];
     for args in &writes {
         let out = m2(args);
