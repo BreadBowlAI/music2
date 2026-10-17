@@ -7,8 +7,9 @@
 // M opens the menu, the M key and drags skip it, S lights but mute wins); a reload keeps them; a
 // read-only window keeps them in memory and can't mute in the song; a PC page's words. The export's
 // question while mutes or solos change what you hear (U3): Mute Kick in the song, then export (its
-// WAV equals `m2 render`'s), Export anyway (the toast names Kick), the solo's form, and only Cancel
-// and Export anyway while the code doesn't compile. "Heavy load" and "Sound dropped out" in the
+// WAV equals `m2 render`'s), Export anyway (the toast names Kick), the keyboard in it (Tab goes
+// round, Return and Space press the focused button, no key reaches the page), the solo's form, and
+// only Cancel and Export anyway while the code doesn't compile. "Heavy load" and "Sound dropped out" in the
 // status pill while playing (U11), through the page's own fetch wrapper.
 //
 //   node e2e/s8-mute.mjs <root> <home> <project> <m2>     (the `export` kind: examples/first-song open, and the m2 CLI)
@@ -379,6 +380,45 @@ check(t2.endsWith("Kick was muted only while you listened, so it's in the file."
 check(read("tracks/kick.ts") === kickTs && same((await overlays()).mute, ["kick"]), "Kick stays muted only while listening");
 await idle();
 
+// From the keyboard: Return and Space press the button with the focus ring, Tab stays in the
+// question, and no key reaches the page behind it (Space would play, M would unmute Kick, Return
+// would send the start point home).
+const beatNow = async () => (await api("/status")).body.beat;
+await post("/seek", { beat: 8 });
+await until(async () => Math.abs((await beatNow()) - 8) < 0.01);
+await key("Meta+Shift+e");
+await page.waitForSelector("[data-testid=export-ask]", { timeout: 3000 });
+await page.keyboard.press("m");
+await sleep(400);
+check(same((await overlays()).mute, ["kick"]) && !!(await ask()), "with the question open, M mutes nothing behind it");
+const focusedId = () => page.evaluate(() => document.activeElement?.dataset?.testid ?? document.activeElement?.tagName);
+const tabs = [];
+for (const back of [true, true, false, false]) {
+  if (back) await page.keyboard.down("Shift");
+  await page.keyboard.press("Tab");
+  if (back) await page.keyboard.up("Shift");
+  tabs.push(await focusedId());
+}
+check(same(tabs, ["export-anyway", "export-mute", "export-anyway", "export-mute"]), `Tab and Shift+Tab go round the two buttons, never behind the question: ${tabs.join(" → ")}`);
+await page.keyboard.down("Shift");
+await page.keyboard.press("Tab");
+await page.keyboard.up("Shift");
+await page.keyboard.press("Enter");
+check(await exported("first-song 3"), "Shift+Tab, then Return on Export anyway: it exports");
+check(read("tracks/kick.ts") === kickTs && same((await overlays()).mute, ["kick"]), "Kick's code is untouched and it stays muted only while listening");
+check(Math.abs((await beatNow()) - 8) < 0.01, `and the start point stays at beat 8: ${await beatNow()}`);
+await idle();
+await key("Meta+Shift+e");
+await page.waitForSelector("[data-testid=export-ask]", { timeout: 3000 });
+await page.keyboard.down("Shift");
+await page.keyboard.press("Tab");
+await page.keyboard.up("Shift");
+await page.keyboard.press("Space");
+check(await exported("first-song 4"), "Shift+Tab, then Space on Export anyway: it exports too");
+check(!(await api("/status")).body.playing && read("tracks/kick.ts") === kickTs, "and nothing plays; Kick's code is untouched");
+await idle();
+await post("/seek", { beat: 0 });
+
 await page.click('[data-mute="kick"]');
 await page.click('[data-solo="bass"]');
 await settled([], ["bass"]);
@@ -389,8 +429,8 @@ check(
   `with Bass soloed: “Only Bass is soloed”, [Cancel] [Export anyway]: ${JSON.stringify(await askText())}`,
 );
 await page.keyboard.press("Enter");
-check(await exported("first-song 3"), "Return exports anyway");
-const t3 = await doneToast("first-song 3");
+check(await exported("first-song 5"), "Return exports anyway");
+const t3 = await doneToast("first-song 5");
 check(t3.endsWith("Only Bass was soloed while you listened, so the file has every track."), `its toast says so: “${t3}”`);
 await idle();
 await page.click('[data-mute="kick"]');

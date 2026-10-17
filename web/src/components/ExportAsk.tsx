@@ -13,8 +13,12 @@ import { Button } from "./ui";
  *   code doesn't compile), [Cancel] and [Export anyway], and the reason in one line (M8).
  * - A solo (with mutes or not): [Cancel] and [Export anyway]: muting every other track in the song
  *   would be a strange thing to offer.
- * Return is the main button, Esc cancels. There is no "Don't ask again": it shows only while a mute
- * or solo changes what you hear, and a setting wouldn't outlive the app's launch (Q7).
+ * The main button has the focus, so Return presses it. Return and Space press the button with the
+ * focus ring, wherever Tab moved it. That holds on a Mac too, where an alert's Return is always its
+ * default button: here the main button writes the song's code, so it runs only when it is the one
+ * shown focused. Tab goes round the buttons, and no key reaches the page behind (Space would play,
+ * M would mute). Esc cancels. There is no "Don't ask again": it shows only while a mute or solo
+ * changes what you hear, and a setting wouldn't outlive the app's launch (Q7).
  */
 export default function ExportAsk() {
   const ask = useExportAsk((s) => s.ask);
@@ -37,11 +41,17 @@ export default function ExportAsk() {
   useEffect(() => {
     if (!ask) return;
     const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") close();
-      else if (e.key === "Enter") (mute ? muting : anyway)();
-      else return;
-      e.preventDefault();
+      // The question is modal: no key reaches the page behind it.
       e.stopPropagation();
+      const buttons = [...document.querySelectorAll<HTMLButtonElement>("[data-testid=export-ask] button")];
+      const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+      const n = buttons.length;
+      if (e.key === "Escape") close();
+      else if (e.key === "Enter") at >= 0 ? buttons[at].click() : (mute ? muting : anyway)();
+      else if (e.key === "Tab") buttons[at < 0 ? (e.shiftKey ? n - 1 : 0) : (at + (e.shiftKey ? n - 1 : 1)) % n]?.focus();
+      // Space on a button: the browser presses it. Anywhere else it does nothing.
+      else if (e.key !== " " || at >= 0) return;
+      e.preventDefault();
     };
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
