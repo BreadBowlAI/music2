@@ -77,7 +77,9 @@ TAB=$(printf '\t')
 # Whatever music2 starts gets a scratch HOME (tests, suites, renders, gates, the app); cargo and
 # rustup keep yours.
 export CARGO_HOME=${CARGO_HOME:-$HOME/.cargo} RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}
-export M2_AUDIO=none CARGO_TERM_COLOR=never
+# No audio device, and no MIDI keyboard: nothing the check starts opens one (the suites' servers
+# get M2_MIDI=inject from run.mjs).
+export M2_AUDIO=none M2_MIDI=none CARGO_TERM_COLOR=never
 TARGET=${CARGO_TARGET_DIR:-$ROOT/target}
 CHROME=${E2E_CHROME:-$HOME/.cache/puppeteer/chrome-headless-shell/$CHROME_DIR/chrome-headless-shell}
 if [ -z "${CLAP_PATH:-}" ] && [ -e "$PLUGINS/Surge XT.clap" ] && [ -e "$PLUGINS/Airwindows Consolidated.clap" ]; then
@@ -316,7 +318,7 @@ app() {
   fi
   shift 2
   log=$OUT/app-$name.log
-  env -i PATH=/usr/bin:/bin HOME="$dir/home" DISPLAY=":$DISPLAYN" XDG_RUNTIME_DIR="$dir/run" M2_AUDIO=none \
+  env -i PATH=/usr/bin:/bin HOME="$dir/home" DISPLAY=":$DISPLAYN" XDG_RUNTIME_DIR="$dir/run" M2_AUDIO=none M2_MIDI=none \
     WEBKIT_DISABLE_DMABUF_RENDERER=1 LIBGL_ALWAYS_SOFTWARE=1 "$@" "$TARGET/debug/music2-desktop" "$dir/song" \
     > "$log" 2>&1 < /dev/null &
   APP=$!

@@ -283,10 +283,12 @@ fn copy(from: &Path, to: &Path) {
 fn main() {
     let dir = std::env::temp_dir().join(format!("m2-app-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    // Before any thread starts: the silent player, and a HOME of its own (never the user's).
+    // Before any thread starts: the silent player, no MIDI keyboard, and a HOME of its own (never
+    // the user's).
     // SAFETY: nothing else runs yet.
     unsafe {
         std::env::set_var("M2_AUDIO", "none");
+        std::env::set_var("M2_MIDI", "none");
         std::env::set_var("HOME", dir.join("home"));
     }
     project(&dir.join("song"));

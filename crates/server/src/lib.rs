@@ -316,11 +316,10 @@ fn spawn_meters(state: &Arc<AppState>) {
         .expect("spawn the meters");
 }
 
-/// Listen to every MIDI keyboard (`m2_os::midi`), unless `M2_MIDI` is `none` (a test that must
-/// never open MIDI) or `inject` (the suites: they post what a keyboard would send to
-/// `POST /api/graph/midi/inject` instead). Stops once the state is dropped.
+/// Listen to every MIDI keyboard (`m2_os::midi`), unless [`listens_to_midi`] says not to. Stops
+/// once the state is dropped.
 fn spawn_midi(state: &Arc<AppState>) {
-    if matches!(std::env::var("M2_MIDI").as_deref(), Ok("none" | "inject")) {
+    if !listens_to_midi(std::env::var("M2_MIDI").ok().as_deref()) {
         return;
     }
     let weak = Arc::downgrade(state);
@@ -332,6 +331,14 @@ fn spawn_midi(state: &Arc<AppState>) {
     let _ = state.midi.set(listening);
 }
 
+/// Whether a server listens to MIDI keyboards, as `M2_MIDI` (`midi`) says: not with `none` (a
+/// test or a check that must never open MIDI) or `inject` (the suites: they post what a keyboard
+/// would send to `POST /api/graph/midi/inject` instead), and never in this crate's own tests,
+/// which start servers of their own (R3).
+fn listens_to_midi(midi: Option<&str>) -> bool {
+    !cfg!(test) && !matches!(midi, Some("none" | "inject"))
+}
+
 /// Whether `POST /api/graph/midi/inject` answers: only with `M2_MIDI=inject`.
 pub(crate) fn midi_injects() -> bool {
     std::env::var("M2_MIDI").as_deref() == Ok("inject")
@@ -340,6 +347,15 @@ pub(crate) fn midi_injects() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // R3: a server this crate's tests start never opens a MIDI device, whatever `M2_MIDI` says,
+    // so a keyboard plugged in never plays into a test.
+    #[test]
+    fn a_test_server_never_listens_to_midi() {
+        for midi in [None, Some(""), Some("none"), Some("inject")] {
+            assert!(!listens_to_midi(midi), "M2_MIDI {midi:?}");
+        }
+    }
 
     fn state() -> AppState {
         AppState::new(String::new(), graph::Graph::default())

@@ -22,9 +22,13 @@ impl Drop for Temp {
 
 #[test]
 fn the_cli_and_the_apps_export_write_the_same_file() {
-    // The app's player plays into nothing: tests have no audio device.
+    // The app's player plays into nothing, and it listens to no MIDI keyboard: tests have no
+    // audio device and open no MIDI one.
     // SAFETY: the only test in this binary, before it starts any thread of its own.
-    unsafe { std::env::set_var("M2_AUDIO", "none") };
+    unsafe {
+        std::env::set_var("M2_AUDIO", "none");
+        std::env::set_var("M2_MIDI", "none");
+    }
     let temp = Temp(std::env::temp_dir().join(format!("m2-render-cli-{}", std::process::id())));
     let song = temp.0.join("first-song");
     copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song"), &song);
