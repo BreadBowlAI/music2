@@ -281,11 +281,12 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     const clips = b.clips.map((c, i) => (i === at ? { id: ref.id, start: c.start, length: shape.length, notes: shape.notes } : c));
     const step = { name: name ?? `${trackName()} notes` };
     const gesture = lease && notesGesture(shape);
+    if (lease && !gesture) lease.abort();
     // A drag heard as it went (8b.7) is written by its lease: one notes gesture, in the lane writes' queue.
     const write =
       lease && gesture
         ? afterLaneWrites(latest.current, () => lease.finish(gesture, step)).then((r) => ({ revision: r.revision, clips }))
-        : (lease?.abort(), writeLane(latest.current, module, lane, clips, b.revision, step));
+        : writeLane(latest.current, module, lane, clips, b.revision, step);
     write
       .then((r) => void (written.current = { revision: r.revision, clips: r.clips }))
       .catch((error) => {
