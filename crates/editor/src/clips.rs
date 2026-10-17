@@ -688,7 +688,7 @@ pub fn edit(s: &mut Session, g: &Gesture) -> Result<ClipsEdited, EditError> {
     let edits = apply(rev, g, &mut mint)?;
     let made: Vec<(LaneAddr, String)> = edits.iter().flat_map(|e| e.made.iter().map(|id| (e.lane.clone(), id.clone()))).collect();
     let mut ops = vec![];
-    // Per lane: each clip written, by id, with its line; and the ids gone.
+    // Per lane: each clip put, by id, with its line; and the ids gone.
     let mut wrote: Vec<(LaneAddr, BTreeMap<String, String>, Vec<String>)> = vec![];
     for e in &edits {
         let file = DataPath::lane(&e.lane).path();
@@ -717,7 +717,8 @@ pub fn edit(s: &mut Session, g: &Gesture) -> Result<ClipsEdited, EditError> {
             },
             false => Op::Write { file: TxPath::lane(&e.lane), bytes: Payload::Text(canonical(&e.data).into()) },
         });
-        wrote.push((e.lane.clone(), new, gone));
+        let put = put.into_iter().map(|id| (id.clone(), new[id].clone())).collect();
+        wrote.push((e.lane.clone(), put, gone));
     }
     let shown = edits.first().map(|e| DataPath::lane(&e.lane).to_string()).unwrap_or_default();
     if ops.is_empty() {
@@ -730,13 +731,14 @@ pub fn edit(s: &mut Session, g: &Gesture) -> Result<ClipsEdited, EditError> {
     let mut tx = plan::planned(s, label.clone(), ops, Expect::Confined(Confined { lanes, ..Confined::default() }));
     tx.id = tx_id.clone();
     let done = plan::run(s, tx, |_, checked| {
-        // The planner's assertion: each lane reads every clip written as written, and none
-        // deleted; the rest of each lane is as the file has it (`Confined`).
+        // The planner's assertion: each lane reads every clip put as written, and none deleted;
+        // the rest of each lane is as the file has it, an outside edit to another clip merged
+        // (WRITE-3), and nothing else changes (`Confined`).
         let data = &checked.candidate().compiled.data;
-        for (lane, new, gone) in &wrote {
+        for (lane, put, gone) in &wrote {
             let read = data.lane(lane.module.as_str(), lane.lane.as_str());
             let line = |id: &str| read.map(|d| d.lines_of(id)).unwrap_or_default();
-            let kept = new.iter().all(|(id, l)| line(id) == [l.clone()]) && gone.iter().all(|id| line(id).is_empty());
+            let kept = put.iter().all(|(id, l)| line(id) == [l.clone()]) && gone.iter().all(|id| line(id).is_empty());
             if !kept {
                 return Err(EditError::Rejected(format!("writing {} would change more than its clips", DataPath::lane(lane))));
             }

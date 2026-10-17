@@ -363,3 +363,18 @@ fn places_are_bar_beat_and_sixteenth() {
         assert!(why.contains(bad) || why.contains("bar.beat"), "{bad}: {why}");
     }
 }
+
+// WRITE-3: a gesture is planned on the accepted lane; an outside edit to another clip of the lane,
+// not taken in yet, merges with it.
+#[test]
+fn an_outside_edit_to_another_clip_merges() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let other = serde_json::json!({"id": "other", "start": 64, "length": 4, "notes": [{"pitch": 36, "start": 0, "length": 1, "velocity": 0.8}]});
+    go(&mut s, Gesture::Set { lane: addr("kick/hits"), put: vec![other], delete: vec![] });
+    let outside = f.read("data/kick/hits.json").replacen("\"start\": 64", "\"start\": 72", 1);
+    f.write("data/kick/hits.json", &outside);
+    go(&mut s, Gesture::Move { clips: vec![by_id("kick/hits", "my53vvkc")], by: 4.0, to: None, copy: false });
+    let now = f.read("data/kick/hits.json");
+    assert!(now.contains("\"id\": \"my53vvkc\", \"start\": 4") && now.contains("\"id\": \"other\", \"start\": 72"), "{now}");
+}
