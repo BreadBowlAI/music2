@@ -54,6 +54,7 @@ mod watcher;
 mod fx;
 pub mod output;
 mod steps;
+pub mod midi;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -311,6 +312,8 @@ struct ControlPlane {
     audition: audition::Sources,
     /// The DSP load of the last second, read by the meters (8b.8).
     meters: meters::Meters,
+    /// The MIDI keyboards plugged in, and what they play (8b.10).
+    midi: midi::Midi,
 }
 
 /// How a control named at a revision is found without the session.
@@ -675,6 +678,7 @@ impl Inner {
         state["leases"] = json!(leases);
         state["overlays"] = overlays;
         state["local"] = local;
+        state["midi"] = self.midi_state();
         Some(state)
     }
 

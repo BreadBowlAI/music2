@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 m2-ir.workspace = true
-m2-os.workspace = true
+m2-os = { workspace = true, features = ["midi"] }
 m2-runtime.workspace = true
 m2-session.workspace = true
 m2-editor.workspace = true

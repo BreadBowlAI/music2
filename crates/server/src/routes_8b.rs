@@ -32,6 +32,7 @@ pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/api/graph/clips", post(graph_clips))
         .route("/api/graph/automate/remove", post(automate_remove))
         .route("/api/graph/audition", post(graph_audition))
+        .route("/api/graph/midi/inject", post(midi_inject))
         .route_layer(axum::middleware::from_fn_with_state(state, writes))
 }
 
@@ -149,11 +150,58 @@ async fn graph_audition(State(s): S, Json(r): Json<AuditionReq>) -> ApiResult {
     Ok(Json(answer.unwrap_or_else(|| json!({}))))
 }
 
+#[derive(Deserialize)]
+struct InjectReq {
+    /// The keyboard's name.
+    device: String,
+    /// Plugged in (true) or out (false).
+    #[serde(default)]
+    plugged: Option<bool>,
+    /// One MIDI message: a status byte and its data bytes.
+    #[serde(default)]
+    bytes: Option<Vec<u8>>,
+}
+
+/// What a MIDI keyboard would send, posted (8b.10): `{device, plugged?, bytes?}`, heard as the
+/// listener hears it (plugged first, then the message). Only with `M2_MIDI=inject`, the suites' way
+/// in where no keyboard can be opened; otherwise there is no such API (404).
+async fn midi_inject(State(s): S, Json(r): Json<InjectReq>) -> Result<Response, ApiError> {
+    if !crate::midi_injects() {
+        return Ok((StatusCode::NOT_FOUND, Json(json!({"error": "no such API"}))).into_response());
+    }
+    blocking(move || {
+        use m2_os::midi::Event;
+        match r.plugged {
+            Some(true) => s.midi(Event::Plugged(&r.device)),
+            Some(false) => s.midi(Event::Unplugged(&r.device)),
+            None => {}
+        }
+        if let Some(b) = &r.bytes {
+            s.midi(Event::Bytes(&r.device, b));
+        }
+        Ok(())
+    })
+    .await?;
+    Ok(Json(json!({})).into_response())
+}
+
 /// A message a window sent on its WebSocket: `{"t": "audition", …}` from the window `client` plays
 /// notes as [`graph_audition`] does. What it answers goes to that window only, as text; an error
-/// is `{"t": "audition", "error": …}`. Other messages are ignored.
+/// is `{"t": "audition", "error": …}`. `{"t": "midi", "module", "lane"}` says what MIDI keyboards
+/// play (`module: null`: nothing), and every window hears it. Other messages are ignored.
 pub(crate) async fn ws_text(state: &Arc<AppState>, client: Option<&str>, text: &str) -> Option<String> {
     let v: Value = serde_json::from_str(text).ok()?;
+    if v["t"] == "midi" {
+        let target = match (v["module"].as_str(), v["lane"].as_str()) {
+            (Some(m), Some(l)) => Some((m.to_string(), l.to_string())),
+            _ => None,
+        };
+        let st = state.clone();
+        if let Ok(Ok(())) = tokio::task::spawn_blocking(move || st.graph.midi_target(target)).await {
+            state.midi_changed();
+        }
+        return None;
+    }
     if v["t"] != "audition" {
         return None;
     }

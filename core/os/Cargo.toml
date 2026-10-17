@@ -7,3 +7,9 @@ license.workspace = true
 
 [dependencies]
 libc.workspace = true
+midir = { workspace = true, optional = true }
+
+[features]
+# The MIDI keyboard listener (`m2_os::midi`). Only the server turns it on, so no other crate builds
+# midir and the OS MIDI libraries.
+midi = ["dep:midir"]

@@ -120,6 +120,11 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     ("next_marker", "Next Marker", None),
     // Panic (RENDER-10): every note off, every instance reset.
     ("panic", "Stop All Sound", Some("CmdOrCtrl+Period")),
+    // The metronome (gaps #19): a click on each beat while the song plays. K is the page's key.
+    ("metronome", "Metronome", None),
+    // The keyboard piano (Q8): the letter keys play the selected track. ⌘K from anywhere, typing
+    // included: the code editor's own ⌘K chords give way to it (X15).
+    ("piano", "Keyboard Piano", Some("CmdOrCtrl+K")),
     ("shortcuts", "Keyboard Shortcuts", None),
     // This machine's settings (gaps #31): the sound output, the buffer size, where new songs go.
     // In the app menu on a Mac, after About; in File elsewhere, above Quit.
@@ -237,6 +242,7 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
         Item("lanes"),
         Item("dock"),
         Item("browser"),
+        Item("piano"),
         Line,
         Item("grid_narrower"),
         Item("grid_wider"),
@@ -250,6 +256,7 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
         Line,
         Item("loop"),
         Item("loop_selection"),
+        Item("metronome"),
         Item("follow"),
         Line,
         Item("add_marker"),
@@ -555,7 +562,7 @@ mod tests {
             assert_eq!(view[..6], [Row::Item("zoom_in"), Row::Item("zoom_out"), Row::Item("zoom_fit"), Row::Item("taller"), Row::Item("shorter"), Row::Line]);
             let transport = menu("Transport");
             let at = transport.iter().position(|r| *r == Row::Item("loop_selection")).expect("Loop Selection");
-            assert_eq!(transport[at + 1], Row::Item("follow"), "mac: {mac}");
+            assert_eq!(transport[at + 1..at + 3], [Row::Item("metronome"), Row::Item("follow")], "mac: {mac}");
             let at = transport.iter().position(|r| *r == Row::Item("add_marker")).expect("Add Marker");
             assert_eq!(transport[at - 1..at + 4], [Row::Line, Row::Item("add_marker"), Row::Item("prev_marker"), Row::Item("next_marker"), Row::Line]);
         }
@@ -586,6 +593,32 @@ mod tests {
         set_undo_names(None, Some("Bass notes".into()));
         assert_eq!((title("undo", "Undo"), title("redo", "Redo")), ("Undo".to_string(), "Redo Bass notes".to_string()));
         set_undo_names(None, None);
+    }
+
+    /// The next track's lane B: Transport ▸ Metronome, after Loop Selection and before Follow
+    /// Playhead (taste.md's order), on both menu bars, with no chord: K is the page's key.
+    #[test]
+    fn the_metronome_has_its_row_in_transport() {
+        assert_eq!(ITEMS.iter().find(|i| i.0 == "metronome").map(|i| (i.1, i.2)), Some(("Metronome", None)));
+        for mac in [true, false] {
+            let bar = layout(mac);
+            let transport = &bar.iter().find(|m| m.0 == "Transport").expect("Transport").1;
+            let at = transport.iter().position(|r| *r == Row::Item("loop")).expect("Loop");
+            assert_eq!(transport[at..at + 4], [Row::Item("loop"), Row::Item("loop_selection"), Row::Item("metronome"), Row::Item("follow")], "mac: {mac}");
+        }
+    }
+
+    /// The next track's lane B: View ▸ Keyboard Piano, ⌘K (Ctrl+K), right after Show Browser on both
+    /// menu bars.
+    #[test]
+    fn the_keyboard_piano_is_command_k_in_view() {
+        assert_eq!(ITEMS.iter().find(|i| i.0 == "piano").map(|i| (i.1, i.2)), Some(("Keyboard Piano", Some("CmdOrCtrl+K"))));
+        for mac in [true, false] {
+            let bar = layout(mac);
+            let view = &bar.iter().find(|m| m.0 == "View").expect("View").1;
+            let at = view.iter().position(|r| *r == Row::Item("browser")).expect("Show Browser");
+            assert_eq!(view[at + 1], Row::Item("piano"), "mac: {mac}");
+        }
     }
 
     /// OS-55: the reveal item names the Mac's Finder only on a Mac.

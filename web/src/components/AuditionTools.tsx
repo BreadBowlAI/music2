@@ -1,9 +1,10 @@
-import { Volume2 } from "lucide-react";
+import { Keyboard, Volume2 } from "lucide-react";
 import type { GraphState } from "../lib/graph";
 import { useHeard, type Heard } from "../lib/graph8b";
 import { setAudition, useAudition, useSilent } from "../lib/audition";
 import { inSong, trackName } from "../lib/overlays";
 import { chord } from "../lib/native";
+import { togglePiano, usePiano } from "../lib/piano";
 import { useStore } from "../lib/store";
 import { Button, keepFocus } from "./ui";
 
@@ -24,11 +25,12 @@ export function auditionHint(heard: Heard, silent: boolean, soloed: string[]): s
 
 /**
  * The Notes header's audition: the hint, when the notes you play can't be heard, then the toggle
- * (NT-2: `Volume2`, `accent-soft` while on). The toggle never takes focus, so Space stays the
- * transport.
+ * (NT-2: `Volume2`, `accent-soft` while on), then the keyboard piano's. The toggles never take
+ * focus, so Space stays the transport.
  */
 export default function AuditionTools({ graph, module, lane }: { graph: GraphState; module: string; lane: string }) {
   const on = useAudition((s) => s.on);
+  const piano = usePiano((s) => s.on);
   const heard = useHeard(module);
   const silent = useSilent(module, lane);
   const solo = useStore((s) => s.graph?.overlays?.solo) ?? [];
@@ -54,6 +56,20 @@ export default function AuditionTools({ graph, module, lane }: { graph: GraphSta
         className="w-ctl-sm !px-0 shrink-0"
       >
         <Volume2 size={16} />
+      </Button>
+      {/* The keyboard piano (the next track's B2): your letter keys play the selected track. */}
+      <Button
+        size="sm"
+        data-testid="piano-toggle"
+        active={piano}
+        aria-pressed={piano}
+        aria-label="Keyboard piano"
+        onMouseDown={keepFocus}
+        onClick={togglePiano}
+        title={`Keyboard piano: play notes with your letter keys (${chord("K")})`}
+        className="w-ctl-sm !px-0 shrink-0"
+      >
+        <Keyboard size={16} />
       </Button>
     </>
   );

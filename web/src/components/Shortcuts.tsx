@@ -19,6 +19,7 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
       ["Stop all sound", chord(".")],
       ["Follow the playhead on / off", chord("F", { shift: true })],
       ["Go to the marker before / after", `${opt("←")} / ${opt("→")}`],
+      ["Metronome on / off", "K"],
     ],
   },
   {
@@ -82,6 +83,7 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
       ["Zoom around the pointer", `${mod.cmd}-scroll, or pinch`],
       ["Zoom to the selected clips or the song; again: back", "Z"],
       ["Taller / shorter tracks", `${chord("↓")} / ${chord("↑")}`],
+      ["Keyboard piano on / off", chord("K")],
     ],
   },
   {
@@ -94,6 +96,14 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
       ["Export audio", chord("E", { shift: true })],
       ["Save a copy (Save As)", chord("S", { shift: true })],
       ["Settings", chord(",")],
+    ],
+  },
+  {
+    // While it is on (lib/piano.ts): the selected track plays.
+    name: "Keyboard piano",
+    keys: [
+      ["Play notes", "A to ' and W to P"],
+      ["Octave down / up", "Z / X"],
     ],
   },
 ];

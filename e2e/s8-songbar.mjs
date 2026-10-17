@@ -239,12 +239,17 @@ check(await until(() => read("music2.toml") === orig.manifest), "undo puts the n
 
 // In the Mac app the bar starts 80 px in (taste.md §3.8): the field keeps clear of the tempo and the
 // buttons, as the name does. Laid out as the app's (`data-app`), at its smallest window and around
-// where the time shows.
+// where the time shows. At its smallest, with the metronome's 32 px (the next track), the name has
+// under 56 px and goes (§3.8's order: the time, then the name), so there is nothing to type in.
 await page.evaluate(() => (document.documentElement.dataset.app = "mac"));
 for (const [w, h] of [[1100, 700], [1180, 800], [1280, 800]]) {
   await page.setViewport({ width: w, height: h });
   await sleep(300);
   const n = await box("[data-testid=bar-song-name]");
+  if (w === 1100) {
+    check(!n, `${w}px in the Mac app: the name goes, with too little room beside the tempo`);
+    continue;
+  }
   await page.mouse.click(n.x + n.width / 2, n.y + n.height / 2, { count: 2 });
   await page.waitForSelector("[data-testid=song-title-input]", { timeout: 2000 }).catch(() => null);
   await page.keyboard.type(" and a much longer name than fits");
@@ -257,7 +262,6 @@ for (const [w, h] of [[1100, 700], [1180, 800], [1280, 800]]) {
     return { field: r("[data-testid=song-title-input]"), left: Math.max(r("[data-testid=tempo]").right, time?.width ? time.right : 0), right: r('button[aria-label="Undo"]').left };
   });
   check(!!b.field && b.field.left >= b.left + 4 && b.field.right <= b.right - 4, `${w}px in the Mac app: the name's field (${b.field?.left.toFixed(0)}–${b.field?.right.toFixed(0)}) clears the tempo (…${b.left.toFixed(0)}) and Undo (${b.right.toFixed(0)}…)`);
-  if (w === 1100) await page.screenshot({ path: `${ROOT}/s8-songbar-name-1100-mac.png`, clip: { x: 0, y: 0, width: w, height: 44 } });
   await page.keyboard.press("Escape");
   await until(async () => !(await page.$("[data-testid=song-title-input]")));
 }

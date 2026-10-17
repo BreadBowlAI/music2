@@ -11,6 +11,8 @@
 //! - **What ends a window's notes:** their Offs (a handle struck again is let go first); its
 //!   WebSocket closing; or the watchdog, when it said nothing for [`QUIET`] (the window sends a
 //!   keepalive every 2 s while a key is held). The last two let go of all its notes at once.
+//! - **A MIDI keyboard** is a source too (`midi:<name>`, `graph/midi.rs`). It sends no keepalive:
+//!   a key held down says nothing, so the watchdog never lets it go (Q6).
 
 use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
@@ -69,6 +71,8 @@ pub(super) struct Sources {
 
 struct Source {
     id: u32,
+    /// A MIDI keyboard's: never let go by the watchdog.
+    keyboard: bool,
     /// Each handle held, and the lane it sounds on, found again in each new plan.
     held: BTreeMap<u32, (String, String)>,
     /// When the window last said anything.
@@ -125,7 +129,7 @@ impl Graph {
         let next = &mut audition.next;
         let source = audition.by_client.entry(client.to_string()).or_insert_with(|| {
             *next += 1;
-            Source { id: *next, held: BTreeMap::new(), heard: Instant::now() }
+            Source { id: *next, keyboard: super::midi::is_keyboard(client), held: BTreeMap::new(), heard: Instant::now() }
         });
         source.heard = Instant::now();
         let id = source.id;
@@ -162,14 +166,19 @@ impl Graph {
 
     /// The watchdog: let go of the notes of each window that held some and said nothing for
     /// [`QUIET`]; then it is forgotten. The server's `music2-tell` thread calls it every 300 ms.
+    /// A MIDI keyboard is never let go here (Q6).
     pub fn expire_auditions(&self) {
+        self.expire_auditions_at(Instant::now());
+    }
+
+    /// [`Graph::expire_auditions`] as if it were `now` (tests).
+    pub fn expire_auditions_at(&self, now: Instant) {
         let device = self.inner.current_device();
         let mut cp = self.inner.control.lock();
         let ControlPlane { open, audition, .. } = &mut *cp;
         let plays = open.as_ref().and_then(|o| o.engine.plays.as_ref());
-        let now = Instant::now();
         audition.by_client.retain(|_, s| {
-            let quiet = now.duration_since(s.heard) > QUIET;
+            let quiet = !s.keyboard && now.saturating_duration_since(s.heard) > QUIET;
             if quiet {
                 release(plays, device.as_ref(), s);
             }

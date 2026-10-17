@@ -30,6 +30,8 @@ parking_lot = "0.12"
 crossbeam-channel = "0.5"
 hound = "3.5"
 cpal = "0.18"
+# MIDI input (8b.10), only through m2-os's `midi` feature, which only m2-server turns on.
+midir = "=0.11.0"
 dirs = "7"
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }

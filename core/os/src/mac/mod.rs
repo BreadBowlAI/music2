@@ -32,6 +32,12 @@ pub(crate) fn clap(home: Option<&Path>) -> Vec<PathBuf> {
     v
 }
 
+/// CoreMIDI is always there to ask; a Mac with no keyboard lists none.
+#[cfg(feature = "midi")]
+pub(crate) fn midi_allowed() -> bool {
+    true
+}
+
 pub(crate) fn cache(home: &Path) -> PathBuf {
     home.join("Library/Caches/music2")
 }

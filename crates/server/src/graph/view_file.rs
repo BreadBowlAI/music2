@@ -20,8 +20,9 @@ use super::Graph;
 
 /// The page's view settings, the keys `POST /api/graph/view` takes (Q16): the timeline's zoom
 /// (px a beat), whether it follows the playhead, track and lane heights by key, the automation
-/// lanes hidden, each view's grid and snap, and the audition toggle. `loop` has its own route.
-pub const KEYS: [&str; 6] = ["zoom", "follow", "heights", "hidden", "grid", "audition"];
+/// lanes hidden, each view's grid and snap, the audition toggle, and the metronome (gaps #19),
+/// which the player follows ([`metronome`]). `loop` has its own route.
+pub const KEYS: [&str; 7] = ["zoom", "follow", "heights", "hidden", "grid", "audition", "metronome"];
 
 /// Held over each write's read, change and rename.
 static WRITING: Mutex<()> = parking_lot::const_mutex(());
@@ -75,6 +76,12 @@ pub(super) fn local(dir: &Path) -> Map<String, Value> {
     read(dir).into_iter().filter(|(k, _)| KEYS.contains(&k.as_str())).collect()
 }
 
+/// Whether the metronome clicks, as view settings `local` say: off unless `true` (a new song's).
+/// The player is told at each open, when a new player takes the song, and when the page sets it.
+pub(super) fn metronome(local: &Map<String, Value>) -> bool {
+    local.get("metronome").and_then(Value::as_bool).unwrap_or(false)
+}
+
 /// The loop it had: its range in beats, and whether it was on.
 pub(super) fn looped(dir: &Path) -> Option<((f64, f64), bool)> {
     let l = read(dir).remove("loop")?;
@@ -86,7 +93,8 @@ impl Graph {
     /// Set the page's view settings (Q16): `changes` merged into what the open song's `local`
     /// holds, a null taking its key out, and kept in `.music2/view.json`. Never a Tx, never an
     /// undo step. A read-only window keeps them in memory only, as the loop (design-8b §2.2).
-    /// Only [`KEYS`]. Answers `{local}`.
+    /// Only [`KEYS`]. The metronome reaches the player at once, never an export (it has no
+    /// engine). Answers `{local}`.
     pub fn set_view(&self, token: u64, changes: Map<String, Value>) -> Result<Value> {
         if let Some(k) = changes.keys().find(|k| !KEYS.contains(&k.as_str())) {
             bail!("{k} isn't a view setting: {}", KEYS.join(", "));
@@ -97,6 +105,11 @@ impl Graph {
             merge(&mut p.local, &changes);
             (p.shown.dir.clone(), p.shown.read_only.is_none(), p.local.clone())
         };
+        if changes.contains_key("metronome")
+            && let Some(d) = self.inner.current_device()
+        {
+            d.player.set_click(metronome(&local));
+        }
         if keep {
             set(&dir, &changes)?;
         }
