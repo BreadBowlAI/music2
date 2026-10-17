@@ -10,3 +10,11 @@ Keep these inputs stable when adjusting the example song. The complete project,
 including its `data/` folder, is stored here so demo edits cannot silently change
 the test's starting state. Update the fixture only when intentionally changing the
 behavior covered by its assertions.
+
+`sidechain/env` and `sidechain/follow` are gate 8's ducking fixtures (8b.4): a kick
+on every beat, a bass drone ducked to it, and std's mixer. In `env` the duck reads
+the kick's envelope, a control export the kick track makes (`kick.env`); in `follow`
+it reads `follow(kick.out)`, written in `song.ts`, whose input is a sidechain input.
+`core/play/tests/mute.rs` edits their `song.ts` by exact text: keep the
+`track("kick", { name: "Kick" }`, `mixer({ kick: kick.out, bass:` and sidechain
+expressions as written, or update the test with them.

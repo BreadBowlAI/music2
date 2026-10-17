@@ -12,6 +12,8 @@ The `8b-backend` track builds the back ends of 8b.4 (mute, solo, mute in song), 
 | B2 | The overlay op in every plan; overlay cells; the `muted` track option; the delta's `Muted` | built |
 | B3 | Server mute and solo: the path rule, `.music2/overlays.json`, `POST /api/graph/overlay`, new plans' values, mute in song as cell writes, renames, the export's warning | built |
 | B4 | Mute in song as a builder: `mute_in_song`, `feeds`, `POST /api/graph/track/mute`, `m2 mute-in-song` | built |
+| B5 | Gate 8's ducking clauses on `env` and `follow`; live equals offline on them | built |
+| W1 | The keyed compressor and the gate's third clause | waits for std 0.2 on main |
 
 ---
 
@@ -184,3 +186,32 @@ Written with the code; each passed on its first run. The server's red checks wer
 
 **Contract:** WRITE-10 and WRITE-18 (a bullet each, "From 8b.4", not inside the shared table or list), MON-2
 *Today* (`feeds`), `docs/gaps.md` #4.
+
+---
+
+## B5. The ducking gate
+
+**In short:** muting the kick keeps the bass ducked, whether the duck reads `kick.env` or `follow(kick.out)` in the
+song. Proven sample for sample on two new fixtures.
+
+| Piece | Where |
+|---|---|
+| Fixtures `env` and `follow`: a kick on every beat, a bass drone ducked to it, std's mixer | `core/session/tests/fixtures/sidechain/` (README updated) |
+| The gate and its control | `core/play/tests/mute.rs` (G3: no `crates/gates` change) |
+
+**Tests:**
+
+| Test | What it compares | Red first? |
+|---|---|---|
+| `muting_the_kick_keeps_the_bass_ducked` | the kick muted in the song = the kick taken out of the mix with its sidechain kept, as `f32`s (A9) | red on `follow` with the checker's sidechain rule turned off |
+| `without_the_sidechain_the_bass_changes` | the control: muted, and the duck reading 0 instead, differs | — |
+| `a_monitoring_mute_of_the_kick_live_is_its_mute_in_song` | the kick muted while listening, live through the driven player = muted in the song, offline | — |
+
+**A change from the plan:** the plan's reference was "the kick's channel at −96 dB". std's `gain` doesn't
+treat −96 dB as silence (10^(−96/20) is about 1.6e-5), so that render can't equal a muted kick. The reference
+here is the song with the kick's channel taken out of the mixer, its sidechain still read. That is exactly what
+MON-2 promises.
+
+**Checks:** `m2-play` tests; clippy on `m2-play`.
+
+**Contract:** gate 8's row says which of 8b's clauses pass. The keyed compressor (W1) waits for std 0.2.

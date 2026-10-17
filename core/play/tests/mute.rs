@@ -109,3 +109,74 @@ fn a_monitoring_mute_live_equals_mute_in_song_offline() {
     heard.renderer().process(&mut unmuted).unwrap();
     assert!(unmuted.iter().zip(&offline).any(|(a, b)| a[0] != b[0]), "the control: the kick is in the song unmuted");
 }
+
+/// The sidechain fixture `name` (`core/session/tests/fixtures/sidechain/`), its `song.ts` with each
+/// `(from, to)` replaced.
+fn sidechain(name: &str, edits: &[(&str, &str)]) -> Song {
+    let rel = format!("core/session/tests/fixtures/sidechain/{name}");
+    let mut song = std::fs::read_to_string(repo().join(&rel).join("song.ts")).unwrap();
+    for (from, to) in edits {
+        assert!(song.contains(from), "{name}: no `{from}`");
+        song = song.replace(from, to);
+    }
+    fixture_with(&rel, &[("song.ts", &song)])
+}
+
+fn offline_render(song: &Song, frames: usize) -> Vec<[f32; 2]> {
+    let mut out = vec![[0.0; 2]; frames];
+    song.renderer().process(&mut out).unwrap();
+    out
+}
+
+/// Equal as numbers, sample by sample (A9: a zero's sign may differ).
+fn same(a: &[[f32; 2]], b: &[[f32; 2]]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x[0] == y[0] && x[1] == y[1])
+}
+
+const MUTED: (&str, &str) = ("track(\"kick\", { name: \"Kick\" }", "track(\"kick\", { name: \"Kick\", muted: true }");
+const OUT_OF_THE_MIX: (&str, &str) = ("mixer({ kick: kick.out, bass:", "mixer({ bass:");
+
+/// Each fixture, and the sidechain its duck reads.
+const SIDECHAINS: [(&str, &str); 2] = [("env", "kick.env"), ("follow", "follow(kick.out, { release: ms(150) })")];
+
+// Gate 8, MON-2: muting the kick in the song keeps the bass ducked, whether the duck reads the
+// kick's envelope (`kick.env`) or `follow(kick.out)` written in the song: the song is the one with
+// the kick taken out of the mix and its sidechain kept, sample for sample.
+#[test]
+fn muting_the_kick_keeps_the_bass_ducked() {
+    let frames = 3 * SR as usize;
+    for (name, _) in SIDECHAINS {
+        let muted = offline_render(&sidechain(name, &[MUTED]), frames);
+        let out = offline_render(&sidechain(name, &[OUT_OF_THE_MIX]), frames);
+        assert!(peak(&muted) > 0.1, "{name}: the bass plays");
+        assert!(same(&muted, &out), "{name}: the kick muted is the kick out of the mix, its sidechain kept");
+    }
+}
+
+// The gate's negative control: with the sidechain gone too, the bass changes, so the gate above
+// would see a mute that reached the sidechain.
+#[test]
+fn without_the_sidechain_the_bass_changes() {
+    let frames = 3 * SR as usize;
+    for (name, side) in SIDECHAINS {
+        let muted = offline_render(&sidechain(name, &[MUTED]), frames);
+        let undocked = offline_render(&sidechain(name, &[MUTED, (side, "0")]), frames);
+        assert!(!same(&muted, &undocked), "{name}: the duck follows the kick");
+    }
+}
+
+// MON-4, MON-5 on the gate's fixtures: the kick muted while listening, live, is the kick muted in
+// the song, offline.
+#[test]
+fn a_monitoring_mute_of_the_kick_live_is_its_mute_in_song() {
+    let frames = 3 * SR as usize;
+    for (name, _) in SIDECHAINS {
+        let heard = sidechain(name, &[]);
+        let mut r = heard.renderer();
+        let values: Vec<f32> = r.info().overlays.iter().map(|o| if o.0 == "kick" { 0.0 } else { 1.0 }).collect();
+        r.set_overlays(&values);
+        let (_player, mut d) = playing(r, SR);
+        let live = hear(&mut d, frames, &mut |_, _| {});
+        assert!(same(&live, &offline_render(&sidechain(name, &[MUTED]), frames)), "{name}");
+    }
+}
