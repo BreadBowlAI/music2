@@ -26,14 +26,16 @@ import {
 import { attach, KEY_VELOCITY, PAINT_MS, pulse, release, retune, strike, useAudition } from "../lib/audition";
 import { onFrame } from "../lib/clock";
 import { RULER_H } from "../lib/layout";
-import { chord, keyName, mod, native } from "../lib/native";
+import { chord, isMac, keyName, mod, native } from "../lib/native";
+import { humanize, legato, quantize, swing, SWINGS, swingUnit, targets, transpose } from "../lib/noteTools";
 import { GRAPHITE, trackColors, type TrackColor } from "../lib/palette";
-import { useGrid } from "../lib/grid";
+import { pickName, useGrid } from "../lib/grid";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import AuditionTools from "./AuditionTools";
 import { DockSlot } from "./Dock";
 import GridChip from "./GridChip";
+import NoteMenu, { type NoteTool } from "./NoteMenu";
 import { Hatch, HBands, VLines } from "./draw";
 import { Button, EmptyState, keepFocus, Segment } from "./ui";
 
@@ -119,13 +121,15 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   // clip as edited here. The selection is indices into the notes shown.
   const [draft, setDraft] = useState<Shape | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<number>>(() => new Set());
-  const { step: gridStep, on: snapOn } = useGrid((s) => s.notes);
+  const { step: gridStep, on: snapOn, pick: gridPick, triplet: gridTriplet } = useGrid((s) => s.notes);
   // Where a note lands: on the grid while snap is on, anywhere (0) while it is off.
   const snap = snapOn ? gridStep : 0;
   const draw = useShell((s) => s.draw);
   const [ppb, setPpb] = useState(48);
   const [visible, setVisible] = useState(0);
   const [marquee, setMarquee] = useState<Box | null>(null);
+  /** The right-click menu (D1), where it opened. */
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [, setWrites] = useState(0);
 
   const root = useRef<HTMLDivElement>(null);
@@ -137,7 +141,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   const hold = useRef<{ pointer: number; h: number | null } | null>(null);
   /** The last press on empty grid: a second one close by is a double-click's. */
   const lastEmpty = useRef<{ t: number; x: number; y: number } | null>(null);
-  const sending = useRef<{ busy: boolean; next: Shape | null }>({ busy: false, next: null });
+  const sending = useRef<{ busy: boolean; next: { shape: Shape; name?: string } | null }>({ busy: false, next: null });
   /** The lane as this view's last write made it, while the roll shows that write. */
   const written = useRef<{ revision: number; clips: NoteClip[] } | null>(null);
   const latest = useRef(graph);
@@ -248,12 +252,13 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   /**
    * Send a shape of this clip, made from `from`, as one lane write. While one is on its way, the
    * newest shape waits for it and goes next, made from what it wrote; if it is refused, so are
-   * the shapes made on top of it.
+   * the shapes made on top of it. `name` is the undo step's ("transposing Bass notes"); without
+   * one it is "Bass notes".
    */
-  const send = (shape: Shape, from: Basis) => {
+  const send = (shape: Shape, from: Basis, name?: string) => {
     const s = sending.current;
     if (s.busy) {
-      s.next = shape;
+      s.next = { shape, name };
       return;
     }
     const b = from === "pending" ? written.current : from;
@@ -262,7 +267,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     s.busy = true;
     // The clip keeps its id; an anonymous one gets the one its reference names.
     const clips = b.clips.map((c, i) => (i === at ? { id: ref.id, start: c.start, length: shape.length, notes: shape.notes } : c));
-    writeLane(latest.current, module, lane, clips, b.revision, { name: `${trackName()} notes` })
+    writeLane(latest.current, module, lane, clips, b.revision, { name: name ?? `${trackName()} notes` })
       .then((r) => void (written.current = { revision: r.revision, clips: r.clips }))
       .catch((error) => {
         toast(error instanceof Error ? error.message : String(error));
@@ -273,7 +278,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
         s.busy = false;
         const next = s.next;
         s.next = null;
-        if (next) send(next, "pending");
+        if (next) send(next.shape, "pending", next.name);
         else setWrites((n) => n + 1);
       });
   };
@@ -295,14 +300,14 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     );
   };
 
-  /** Show and write a changed shape of the clip, made from `from`, selecting `sel` (indices into `shape.notes`). */
-  const commit = (shape: Shape, sel: ReadonlySet<number>, from: Basis = basis()) => {
+  /** Show and write a changed shape of the clip, made from `from`, selecting `sel` (indices into `shape.notes`); `name` names its undo step. */
+  const commit = (shape: Shape, sel: ReadonlySet<number>, from: Basis = basis(), name?: string) => {
     if (locked) return;
     const [notes, s] = tidy(shape.notes, sel);
     const next = { length: clean(shape.length), notes };
     setDraft(next);
     setSelected(s);
-    send(next, from);
+    send(next, from, name);
   };
 
   /** Beat `b` of the clip on the snap grid, which follows the song's bars. */
@@ -320,21 +325,61 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
 
   const picked = clip ? [...selected].filter((i) => i < clip.notes.length) : [];
 
-  const remove = () => {
-    if (!clip || !picked.length) return;
-    commit({ length: clip.length, notes: clip.notes.filter((_, i) => !selected.has(i)) }, new Set());
+  /** Delete the notes at `which` (the selected ones). */
+  const remove = (which: readonly number[] = picked, name?: string) => {
+    if (!clip || !which.length) return;
+    const gone = new Set(which);
+    commit({ length: clip.length, notes: clip.notes.filter((_, i) => !gone.has(i)) }, new Set(), basis(), name);
   };
 
-  /** Copies of the selected notes right after them; the copies are selected. */
-  const duplicate = () => {
-    if (!clip || !picked.length) return false;
-    const notes = picked.map((i) => clip.notes[i]);
+  /** Copies of the notes at `which` (the selected ones) right after them; the copies are selected. */
+  const duplicate = (which: readonly number[] = picked, name?: string) => {
+    if (!clip || !which.length) return false;
+    const notes = which.map((i) => clip.notes[i]);
     const from = Math.min(...notes.map((n) => n.start));
     const span = Math.max(...notes.map((n) => n.start + n.length)) - from;
     const by = snap ? Math.max(1, Math.ceil(span / snap - 1e-9)) * snap : span;
     const copies = notes.map((n) => ({ ...n, start: clean(n.start + by) }));
-    commit({ length: clip.length, notes: [...clip.notes, ...copies] }, new Set(copies.map((_, k) => clip.notes.length + k)));
+    commit({ length: clip.length, notes: [...clip.notes, ...copies] }, new Set(copies.map((_, k) => clip.notes.length + k)), basis(), name);
     return true;
+  };
+
+  /**
+   * A note tool (D1) on the selected notes, or on every note when none is selected (Q25): one
+   * lane write, one undo step named for it. The selection stays as it was.
+   */
+  const runTool = (t: NoteTool) => {
+    if (!clip || locked) return;
+    const who = `${trackName()} notes`;
+    const all = targets(clip.notes, picked);
+    const keep = new Set(picked);
+    if (t.kind === "delete") return remove(all, `deleting ${who}`);
+    if (t.kind === "duplicate") return void duplicate(all, `duplicating ${who}`);
+    let notes: Note[] | null = null;
+    let name = who;
+    switch (t.kind) {
+      case "transpose":
+        notes = transpose(clip.notes, picked, t.by);
+        name = `transposing ${who}`;
+        break;
+      case "quantize":
+        notes = quantize(clip.notes, picked, gridStep, start, timeline.meter);
+        name = `quantizing ${who} to ${pickName(gridPick, gridTriplet)}`;
+        break;
+      case "legato":
+        notes = legato(clip.notes, picked);
+        name = `making ${who} legato`;
+        break;
+      case "humanize":
+        notes = humanize(clip.notes, picked, (b) => 1 / msOf(1, b));
+        name = `humanizing ${who}`;
+        break;
+      case "swing":
+        notes = swing(clip.notes, picked, SWINGS[t.amount], swingUnit(gridStep), start);
+        name = `swinging ${who}`;
+        break;
+    }
+    if (notes) commit({ length: clip.length, notes }, keep, basis(), name);
   };
 
   /** Move the selected notes by `dp` semitones and `dt` beats, staying on the keyboard and in the clip. */
@@ -352,19 +397,34 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     commit({ length: beats, notes: clip.notes }, selected);
   };
 
-  // In the desktop app ⌘D comes from the menu bar, through App's "duplicate" command.
+  // In the desktop app ⌘D comes from the menu bar, through App's "duplicate" command; so does
+  // Edit ▸ Quantize, through "quantize" (X2): each is the roll's while it has the keyboard.
   const duplicateRef = useRef(duplicate);
   duplicateRef.current = duplicate;
+  const toolRef = useRef(runTool);
+  toolRef.current = runTool;
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
   useEffect(() => {
-    const hook = () => !!root.current?.contains(document.activeElement) && duplicateRef.current();
+    const focused = () => !!root.current?.contains(document.activeElement);
+    const hook = () => focused() && duplicateRef.current();
+    const quantizeHook = () => focused() && (toolRef.current({ kind: "quantize" }), true);
+    // View ▸ Zoom In and Zoom Out zoom the roll while it has the keyboard (X3).
+    const zoomHook = (dir: 1 | -1) => focused() && (zoomRef.current(dir > 0 ? 1.5 : 1 / 1.5), true);
     editorHooks.duplicate = hook;
+    editorHooks.quantize = quantizeHook;
+    editorHooks.zoom = zoomHook;
     return () => {
       if (editorHooks.duplicate === hook) delete editorHooks.duplicate;
+      if (editorHooks.quantize === quantizeHook) delete editorHooks.quantize;
+      if (editorHooks.zoom === zoomHook) delete editorHooks.zoom;
     };
   }, []);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (!clip || e.target instanceof HTMLInputElement) return;
+    // A key in the roll closes its menu: what the menu counted may change.
+    if (menu) setMenu(null);
     const cmd = e.metaKey || e.ctrlKey;
     const key = e.key.toLowerCase();
     const arrows: Record<string, [number, number]> = {
@@ -375,11 +435,14 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     };
     let handled = true;
     if ((e.key === "Delete" || e.key === "Backspace") && picked.length) remove();
+    // Q quantizes the selected notes, or every note with none selected (X28).
+    else if (key === "q" && !cmd && !e.altKey && !e.shiftKey) runTool({ kind: "quantize" });
     else if ((e.key === "Delete" || e.key === "Backspace") && !clip.notes.length && !draft) removeClip();
     else if (cmd && key === "d" && !native) duplicate();
     else if (cmd && key === "a") setSelected(new Set(clip.notes.map((_, i) => i)));
     else if (e.key === "Escape" && picked.length) setSelected(new Set());
-    else if (arrows[e.key] && picked.length && !cmd) nudge(...arrows[e.key]);
+    // ⌥← and ⌥→ are never the roll's (X1): they go to the page.
+    else if (arrows[e.key] && picked.length && !cmd && !e.altKey) nudge(...arrows[e.key]);
     else handled = false;
     if (handled) {
       e.preventDefault();
@@ -408,7 +471,8 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   };
 
   const onGridDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0 || !clip || gesture.current) return;
+    // A Ctrl-click on a Mac is a right-click: the menu opens on the contextmenu that follows (X7).
+    if (e.button !== 0 || (isMac && e.ctrlKey) || !clip || gesture.current) return;
     root.current?.focus({ preventScroll: true });
     e.currentTarget.setPointerCapture(e.pointerId);
     const p = at(e);
@@ -543,6 +607,22 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     setDraft(g.result);
     // Each painted note sounds for its length, or a moment if that is shorter.
     pulse(module, lane, note.pitch, note.velocity, Math.min(msOf(note.length, note.start), PAINT_MS));
+  };
+
+  /**
+   * A right-click on the grid (D1): on a note, that note is selected if it wasn't (alone); on
+   * empty grid the selection stays. The menu acts on the selection, or on every note.
+   */
+  const onGridMenu = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    if (!clip || gesture.current) return;
+    root.current?.focus({ preventScroll: true });
+    const target = (e.target as HTMLElement).closest<HTMLElement>("[data-note]");
+    if (target) {
+      const i = Number(target.dataset.note);
+      if (!selected.has(i)) setSelected(new Set([i]));
+    }
+    setMenu({ x: e.clientX, y: e.clientY });
   };
 
   // ---------------------------------------------------------------- the velocity strip
@@ -702,8 +782,9 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
                       : "Read only until the code compiles"
                     : draw
                       ? "Draw: click to add a note · drag to paint notes · B to select"
-                      : `Double-click to add a note · drag a note to move it · drag its right edge to resize · drag across empty space to select · ${keyName("Backspace")} deletes · ${chord("D")} duplicates · arrows move · B to draw`
+                      : `Double-click to add a note · drag a note to move it · drag its right edge to resize · drag across empty space to select · ${keyName("Backspace")} deletes · ${chord("D")} duplicates · arrows move · B to draw · right-click for note tools`
                 }
+                onContextMenu={onGridMenu}
                 onDoubleClick={(e) => {
                   // Select mode adds notes with a double-click; Draw mode added one on the first click.
                   if (locked || draw || (e.target as HTMLElement).closest("[data-note]")) return;
@@ -786,6 +867,18 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
           </EmptyState>
         )}
       </div>
+
+      {menu && (
+        <NoteMenu
+          at={menu}
+          count={picked.length || clip.notes.length}
+          all={!picked.length}
+          grid={pickName(gridPick, gridTriplet)}
+          off={locked ? lockedTitle : null}
+          onRun={runTool}
+          onClose={() => setMenu(null)}
+        />
+      )}
 
       <div data-testid="velocity" className="shrink-0 flex border-t border-line bg-chrome" style={{ height: VEL_H }}>
         <div className="shrink-0 flex flex-col justify-center pl-2 border-r border-line text-xs font-medium text-fg-muted" style={{ width: KEYS_W }}>

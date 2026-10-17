@@ -332,7 +332,8 @@ export function appCommand(id: string) {
       if (editorHooks.chord?.(id) || editing()) return;
       return id === "split" ? canvas.split?.() : canvas.join?.();
     case "quantize":
-      if (editing()) return;
+      // The roll's notes while it has the keyboard (X2); else the timeline's selected clips.
+      if (editing() || editorHooks.quantize?.()) return;
       return canvas.quantize?.();
     case "copy":
     case "cut":
