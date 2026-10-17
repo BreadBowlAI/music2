@@ -4,6 +4,8 @@
 //! exports keep to their maps; a song with audio hears it on release (Q23's fallback).
 
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use m2_play::{Driver, Player};
@@ -111,10 +113,43 @@ fn the_tempo_is_heard_at_the_first_block_after_its_prepare() {
     assert_eq!((d.revision(), d.fixture.0.join("data/arrangement.json").exists()), (revision, file), "nothing written");
 }
 
-// RENDER-27a, Q22: one prepare in flight. Fifty updates while the session is busy queue one job,
-// which plays the newest value, once; the values between are skipped.
+// RENDER-27a, Q22, X24: one prepare in flight. Fifty updates over 100 ms while each prepare takes
+// 50 ms more: an update that finds the drag's job queued or running queues none, and the job runs
+// again while a newer value waits. So a few jobs run, not fifty, and the last plays the 50th value.
 #[test]
 fn one_tempo_prepare_in_flight() {
+    let mut d = Drag::new();
+    let lease = d.begin().lease;
+    let jobs = Arc::new(AtomicU32::new(0));
+    let ran = jobs.clone();
+    d.graph.inspect(move |a| {
+        a.between_phases = Some(Box::new(move |_| {
+            ran.fetch_add(1, Ordering::Relaxed);
+            std::thread::sleep(Duration::from_millis(50));
+        }))
+    });
+    let graph = &d.graph;
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            for i in 1..=50 {
+                graph.tempo_update(lease, Some(i), 120.0 + i as f64).unwrap();
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        });
+    });
+    d.heard(170.0);
+    std::thread::sleep(Duration::from_millis(200));
+    let l = &d.graph.tempo_leases()[0];
+    let ran = jobs.load(Ordering::Relaxed);
+    assert!(ran <= 4 && l.previews <= 4, "{ran} jobs ran and {} plans played: one prepare in flight, the values between skipped", l.previews);
+    assert_eq!(l.heard, Some(170.0), "the last plan plays the 50th value");
+    assert_eq!(d.graph.status().bpm, Some(170.0));
+}
+
+// RENDER-27a, Q22: fifty updates while the session is busy queue one job, which plays the newest
+// value once.
+#[test]
+fn updates_while_the_session_is_busy_play_the_newest_once() {
     let mut d = Drag::new();
     let lease = d.begin().lease;
     let held = d.graph.hold();

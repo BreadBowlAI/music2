@@ -1259,6 +1259,16 @@ The full `ci/check.sh` is the End's.
 **Cleaned up:** the four lane worktrees (`git worktree remove`) and their branches (`git branch -d`: all merged). The
 lanes had deleted their own targets and server copies. `target-nx` and `bin/nx-b7a96c6` stay for the End.
 
+## Review
+
+One review round with a skeptic, two lenses: how it behaves (engine), and tests, docs and taste. Every finding was
+confirmed. Each fix is its own commit, with a test that fails before it and passes after, or a doc fix. Rows are added
+here as the fixes land; the final check is in the End.
+
+| Finding | What was wrong | Fix | Test | Red first | After |
+|---|---|---|---|---|---|
+| R2 | `one_tempo_prepare_in_flight` passed with every update queuing its own job: all 50 came while the session was held, so later jobs found the same tempo and sent nothing. No test sent an update while a prepare ran, so the job's "again" never ran | X24's test, as the plan says: each prepare 50 ms longer (`between_phases`), 50 updates over 100 ms from another thread; at most 4 jobs and 4 plans, the last playing the 50th value. The old test stays, renamed `updates_while_the_session_is_busy_play_the_newest_once` | `tempo_lease::tests::one_tempo_prepare_in_flight` | With `again` forced false: `timed out waiting until the value is heard`. With `l.queued` taken out of `tempo_update`: `8 jobs ran and 4 plans played` | 13 of 13 `tempo_lease` tests, 3 runs |
+
 ## End
 
 The lead's End.
