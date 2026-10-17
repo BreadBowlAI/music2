@@ -664,3 +664,52 @@ fn a_take_that_ends_while_the_code_is_broken_waits_for_the_code() {
     assert_eq!(c["notes"].as_array().unwrap().len(), 1, "{c}");
     assert!(on.has(note(c, 0).1), "heard at {on:?}: {c}");
 }
+
+// The review's R2: the loop turned on while a take records. The first pass ends at the loop's end,
+// and a note after the wrap is never put past it.
+#[test]
+fn a_loop_turned_on_during_a_take_ends_it_at_the_loops_end() {
+    let mut r = Rig::new();
+    r.graph.set_loop(Some((0.0, 4.0)), Some(false)).unwrap();
+    r.anchored(0, 0.0);
+    let shown = r.start(false, None);
+    assert_eq!(shown["until"], Value::Null, "no loop yet");
+    r.to(1.0);
+    r.graph.set_loop(None, Some(true)).unwrap();
+    r.to(2.0);
+    r.key(&[0x90, 60, 100]);
+    r.key(&[0x80, 60, 100]);
+    // By the clock, beat 4.5: the song is half a beat into its second pass.
+    r.to(4.5);
+    assert!(r.graph.status().beat < 1.0, "round the loop");
+    r.key(&[0x90, 72, 100]);
+    r.key(&[0x80, 72, 100]);
+    let said = r.written();
+    assert!(said["written"].is_object(), "{said}");
+    let c = &r.clips()[0];
+    assert_eq!((c["start"].as_f64(), c["length"].as_f64()), (Some(0.0), Some(4.0)), "the first pass: {c}");
+    assert_eq!(c["notes"].as_array().unwrap().len(), 1, "the note after the wrap isn't kept: {c}");
+    assert!(r.graph.status().playing, "the loop plays on");
+}
+
+// The review's R2: the loop turned off while a take records. The take goes on past the old end.
+#[test]
+fn a_loop_turned_off_during_a_take_lets_it_go_on() {
+    let mut r = Rig::new();
+    r.graph.set_loop(Some((0.0, 4.0)), Some(true)).unwrap();
+    r.anchored(0, 0.0);
+    assert_eq!(r.start(false, None)["until"], json!(4.0));
+    r.to(1.0);
+    r.graph.set_loop(None, Some(false)).unwrap();
+    r.to(4.5);
+    let said = r.graph.record_tick();
+    assert!(r.graph.recording() && said.iter().all(|v| v.get("written").is_none() && v.get("empty").is_none()), "still recording past the old end: {said:?}");
+    let on = r.key(&[0x90, 60, 100]);
+    r.to(5.0);
+    r.key(&[0x80, 60, 100]);
+    r.graph.transport("stop").unwrap();
+    r.written();
+    let c = &r.clips()[0];
+    assert_eq!((c["start"].as_f64(), c["length"].as_f64()), (Some(0.0), Some(8.0)), "{c}");
+    assert!(on.has(note(c, 0).1), "heard at {on:?}: {c}");
+}

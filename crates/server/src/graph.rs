@@ -1027,6 +1027,8 @@ impl Graph {
         if let Some(t) = self.inner.timing.lock().as_mut() {
             (t.range, t.on) = (range, on);
         }
+        // B's line: a take's first pass ends at the loop's end, as it is now (the review's R2).
+        self.record_loop(range.filter(|_| on));
         // Kept for the next time the song opens, in this machine's `.music2/view.json`: never a Tx
         // (design-8b §2.2). A read-only window keeps it in memory only.
         if let (Some((start, end)), Some(dir), None) = (range, self.dir(), self.read_only())

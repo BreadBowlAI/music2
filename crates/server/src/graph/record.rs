@@ -11,7 +11,8 @@
 //!   take's start. A note at least 1/64 beat long. A note struck in the count's last beat lands on
 //!   the take's first beat; earlier ones are heard, not kept (D27).
 //! - **First pass only** (Q27, D5): a note heard past the loop's end isn't kept, and the take ends
-//!   there. A Stop, R, a jump, or a new player ends it where it is heard.
+//!   there. A loop turned on, moved or turned off while it records moves that end (the review's
+//!   R2). A Stop, R, a jump, or a new player ends it where it is heard.
 //! - **Ending never waits** (D7): held notes end and the end bar is fixed under the control plane's
 //!   lock, and the take waits in a queue. The take thread ([`Graph::record_tick`]) writes it: one
 //!   `Clips` Tx on the lane (`Gesture::Set`), one undo step, "recording on Bass".
@@ -482,6 +483,21 @@ impl Graph {
             cp.record.end_now(device.as_ref());
         }
         None
+    }
+
+    /// The loop changed (B's line in [`Graph::set_loop`], the review's R2): the take's first pass
+    /// ends at the new loop's end, while the song is still before it (a song past it plays on); with
+    /// no loop, it goes on.
+    pub(super) fn record_loop(&self, looped: Option<(f64, f64)>) {
+        let device = self.inner.current_device();
+        let mut cp = self.inner.control.lock();
+        let Some(t) = cp.record.take.as_mut() else { return };
+        let now = device.filter(|d| d.epoch == t.epoch).map_or(t.from, |d| d.player.status().beats);
+        let until = looped.filter(|&(_, end)| t.from < end && now < end).map(|(_, end)| end);
+        if until != t.until {
+            t.until = until;
+            cp.record.changed = true;
+        }
     }
 
     /// A jump (B's line in [`Graph::seek`]): it ends the take where it is heard (D5).

@@ -1557,7 +1557,7 @@ The lead's last checks, docs and pictures.
 
 ### The review's fixes
 
-The End's review found 13 things (R1 to R9, F1 to F6; R3 and F2 are one). Each is fixed in a commit of its own, with
+The End's review confirmed 12 findings (R1 to R7, R9, F1 to F3, F6; R3 and F2 are one). Each is fixed in a commit of its own, with
 a test that failed first. Red runs: the Rust tests in `~/m2-runs/logs/st-end-red1-*`, the browser checks on the
 page and server from `37a6936` (`bin/st-67b2197`, the same Rust) in `st-end-e2e-red-*`.
 
@@ -1577,3 +1577,13 @@ that ended then was thrown away with "Bass is gone".
 - Red: `called Result::unwrap_err() on an Ok value: … "phase": String("count")`; `[… {"error": String("The recording
   couldn't be kept: Bass is gone.")}]`; `FAIL  with the code broken, R says to fix it first ([])`.
 - Left: closing the song while a take waits for the code loses it (said: "its song was closed").
+
+#### R2. The loop changed while a take records
+
+The take's loop end was read once, at R. A loop turned on mid-take put notes after the wrap past the loop's end; one
+turned off still ended the take at the old end.
+
+- `record.rs`' `record_loop`, called by one line in `Graph::set_loop`: the take's end becomes the new loop's end
+  while the song is still before it (a song past it plays on, as the engine does), or none with no loop.
+- Tests: `a_loop_turned_on_during_a_take_ends_it_at_the_loops_end`, `a_loop_turned_off_during_a_take_lets_it_go_on`.
+- Red: both `no take was written` (the first never ended; the second ended empty at the old end, before the note).
