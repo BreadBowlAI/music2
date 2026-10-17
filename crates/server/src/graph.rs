@@ -38,6 +38,7 @@
 
 mod actor;
 pub mod audition;
+pub mod clips;
 mod events;
 pub mod lease;
 pub mod meters;

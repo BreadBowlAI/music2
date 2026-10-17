@@ -1,5 +1,5 @@
 //! The routes of 8b's back ends, in a router of their own, merged into the API's (G5): mute and
-//! solo, and audition, also read off the WebSocket ([`ws_text`]). A route here that writes the
+//! solo, clip gestures, and audition, also read off the WebSocket ([`ws_text`]). A route here that writes the
 //! project is in [`WRITES_8B`], and a read-only window answers it 423 with WRITE-18's message, as
 //! `routes.rs` answers its own.
 
@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 
 use crate::AppState;
 use crate::graph::audition::Audition;
+use crate::graph::clips::Answer;
 use crate::graph::overlay::Change;
 use crate::routes::ApiError;
 
@@ -22,12 +23,13 @@ type S = State<Arc<AppState>>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
 /// The routes here that write the open project.
-pub const WRITES_8B: &[&str] = &["/api/graph/track/mute"];
+pub const WRITES_8B: &[&str] = &["/api/graph/track/mute", "/api/graph/clips"];
 
 pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/graph/overlay", post(graph_overlay))
         .route("/api/graph/track/mute", post(track_mute))
+        .route("/api/graph/clips", post(graph_clips))
         .route("/api/graph/audition", post(graph_audition))
         .route_layer(axum::middleware::from_fn_with_state(state, writes))
 }
@@ -77,6 +79,25 @@ async fn track_mute(State(s): S, Json(r): Json<MuteReq>) -> ApiResult {
     let result = blocking(move || state.graph.mute_in_song(r.session, r.modules, r.muted)).await;
     s.graph_changed();
     Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct ClipsReq {
+    session: u64,
+    gesture: m2_editor::clips::Gesture,
+}
+
+/// A clip gesture (8b.5): `{session, gesture: {op, …}}`, one Tx and one undo step. A write.
+/// Answers `{file, before, after, revision, made: [{module, lane, id}]}`; 409 `{error, changed:
+/// true}` when a clip it names by its `sha` changed since the window drew it (WRITE-12).
+async fn graph_clips(State(s): S, Json(r): Json<ClipsReq>) -> Result<Response, ApiError> {
+    let state = s.clone();
+    let result = blocking(move || state.graph.clips(r.session, r.gesture)).await;
+    s.graph_changed();
+    Ok(match result? {
+        Answer::Done(v) => Json(v).into_response(),
+        Answer::Changed(why) => (StatusCode::CONFLICT, Json(json!({"error": why, "changed": true}))).into_response(),
+    })
 }
 
 #[derive(Deserialize)]

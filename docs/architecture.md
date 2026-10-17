@@ -580,7 +580,9 @@ Notes, control (masks are control lanes in `unit01`) and audio lanes, in that or
 - An id that breaks the rule, including one that isn't a string, is read as anonymous and kept as written, and raises the Notice `clip.invalid-id` with the same fix. "Kept as written" keeps the JSON value; the canonical writer may re-space it (`{"a": 1}` becomes `{"a":1}`).
 - A duplicate id raises the Warning `clip.duplicate-id` with a RenumberClips fix, never a parse failure.
 - Ids are never assigned on read. Note ids come later.
+- A builder that writes a lane gives every clip of it without a usable id (none, one that breaks the rule, or one an earlier clip of the lane has) a fresh one, so `clip.anonymous` clears where the producer edits.
 - *Why:* one hand edit must never make a lane unreadable.
+- *Today:* matches since 8b.5 for clip gestures (`crates/editor/src/clips.rs`; `touching_a_lane_gives_its_anonymous_clips_ids`, `a_move_onto_a_taken_id_mints_one`, `every_copy_mints`). A gesture names an anonymous clip by where it starts and its rank there (`at`). The piano roll's whole-lane write (`notes.rs`) gives ids only to the clips it was sent without one.
 
 ### Arrangement
 
@@ -752,6 +754,7 @@ Anchor = Written { file, range }                    // a value written in the co
 | code editor save | `save()` |
 
 - From 8b.4: mute in song is built (`crates/editor/src/mute.rs`): one `Confined` Tx for one or several tracks, each declared by the range it edits in its `track()` call's options (or the point after the key, for a call with none) and its `ModuleChange::Muted`; the planner asserts that each named track is as asked in the candidate. Its history label is "Kick → Kick, muted in song". It is reached by `POST /api/graph/track/mute` and `m2 mute-in-song`.
+- From 8b.5: clip gestures are built (`crates/editor/src/clips.rs`): create, move (to another lane, a copy), resize (either edge), duplicate, paste, delete, and the general put-and-delete for agents. Each is one `Confined { the lanes it touches }` Tx: a `Clips` op per lane, or the whole lane when its clips can't all be named by id (a move across lanes has two). The planner asserts each lane reads every clip written as written and none deleted. A gesture is pure first (`clips::apply`, what it makes of the lanes, from the accepted revision), so the lane lease can preview the commit exactly. Notes, automation and audio clips never cross, and automation crosses only within its unit. It is reached by `POST /api/graph/clips` (`{session, gesture}`) and `m2 clips`. Labels say what changed: "clip at bar 1 (8 bars) → clip at bar 9 (8 bars)".
 
 Core keeps `save`, `Tx`, `GraphDelta` and its checkers, undo, the journal, the raw site, origin and control tables, and diagnostics. `crates/editor` gets `view.rs`, `timeline.rs`, `lens.rs` (with unit spelling generated from `core.ts`), the cable and effect planners, labels, the helpers at `core/script/src/sites.rs:268-317`, and `render.rs` (export at host level).
 
@@ -814,6 +817,7 @@ The CLI's commands sort like this:
 - `bounce` without `--place` only creates a new asset and its provenance, with create-only semantics ([FMT-14](#assets-and-hashes)). That can't race, so it needs no lock and works while the app is open.
 - Every other command that changes a project takes the lock: `set`, `connect`, `disconnect`, `add-effect`, `remove-effect`, `bounce --place`, `plugin-state`, `relink`, `delete-data` and `tx`. The message for `bounce --place` also names the lane file, and says the clip can be added by writing that file directly.
 - From 8b.4: `mute-in-song` takes the lock too (`apps/m2/tests/mute.rs`).
+- From 8b.5: `clips` takes the lock too (`apps/m2/tests/clips.rs`).
 
 Forwarding writes to the holder is [deferred](#deferred-with-triggers).
 - *Why:* owner decision 10: the lock now, forwarding when a workflow needs it. While raw file writes are allowed (owner decision 5), the safest writer must not be the one blocked.

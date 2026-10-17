@@ -13,6 +13,7 @@ The `8b-backend` track builds the back ends of 8b.4 (mute, solo, mute in song), 
 | B3 | Server mute and solo: the path rule, `.music2/overlays.json`, `POST /api/graph/overlay`, new plans' values, mute in song as cell writes, renames, the export's warning | built |
 | B4 | Mute in song as a builder: `mute_in_song`, `feeds`, `POST /api/graph/track/mute`, `m2 mute-in-song` | built |
 | B5 | Gate 8's ducking clauses on `env` and `follow`; live equals offline on them | built |
+| B6 | Clip gestures by id: create, move, resize, duplicate, paste, delete, set; `POST /api/graph/clips`, `m2 clips` | built |
 | B9 | Audition in the engine: live notes on a lane (`Msg::Live`), `Player::live`, how many are held | built |
 | B10 | Audition on the server: the WebSocket and `POST /api/graph/audition`, sources, the watchdog, `live` in the status | built |
 | B11 | Meters in the engine: taps on the output and each track; the callback's time; whether the engine idles | built |
@@ -221,6 +222,72 @@ MON-2 promises.
 **Checks:** `m2-play` tests; clippy on `m2-play`.
 
 **Contract:** gate 8's row says which of 8b's clauses pass. The keyed compressor (W1) waits for std 0.2.
+
+---
+
+## B6. Clip gestures by id
+
+**In short:** clips can now be made, moved (to another lane too), copied, resized from either
+edge, duplicated, pasted and deleted, each as one edit that undo takes back. One request type
+does it all, for the app, the CLI and agents.
+
+| Piece | What it does | Where |
+|---|---|---|
+| `Gesture` | `create`, `move` (by beats; onto lane `to`; `copy`), `resize` (start and length), `duplicate`, `paste`, `delete`, `set` (whole clips put and ids deleted, for agents). JSON tagged by `op`. | `crates/editor/src/clips.rs` (new) |
+| `ClipRef` | A clip by `{module, lane, id}`, or by `at: [start, rank]` for a clip with no usable id. With `sha`, a clip changed since is refused (the timeline gives each clip's `sha` in B7). | same |
+| `apply(rev, g, mint)` | Pure: what the gesture makes of each lane it touches, from the accepted revision. The lane lease can call it to preview. | same |
+| `edit(s, g)` | One Tx: a `Clips` op per lane (the whole lane when its clips can't all be named by id), `Confined { lanes }`, the planner's assertion. Answers the clips it made, to select. | same |
+| `position(arr, "9.3.1")` | bar.beat.sixteenth to beats, by the song's meter. | same |
+| `Graph::clips` | Through `Actor::edit_and`: the data path, heard before durable. 409 when a clip named by its `sha` changed. | `crates/server/src/graph/clips.rs` (new) |
+| `POST /api/graph/clips` | `{session, gesture}` → `{file, before, after, revision, made: [{module, lane, id}]}`. In `WRITES_8B`. | `crates/server/src/routes_8b.rs` |
+| `m2 clips` | `create`, `move`, `resize`, `duplicate`, `delete`, and `json` for any gesture. Clips as `track/lane:id` or `track/lane@9.3.1`. Takes the lock. | `apps/m2/src/edits.rs` |
+
+**The rules, as built:**
+
+| Rule | How |
+|---|---|
+| ids | A move keeps the id; onto a lane that has it, a fresh one. Copies, duplicates, pastes and new clips get fresh ones. Every clip of a lane written gets an id (FMT-12). |
+| kinds | Notes, automation and audio never cross. Automation crosses only within its unit: "Bass's cutoff lane (hz) and Bass's drop lane (unit01) can't share clips". |
+| create | One bar at the meter there. Automation holds the lane's value at its start (the clip there, else the fallback). Audio refuses: there's no empty sound. |
+| left edge | Notes and points shift the other way, so they play where they did; notes before the edge stay in the file, silent. Trimming back gives the same bytes. An audio clip's offset moves by the seconds the edge moved, and stops at the asset's start. A pitched or reversed audio clip refuses (A8); a warped one shifts its markers. |
+| duplicate | Lands after the selection: a span of a bar or more rounds up to whole bars (31 beats lands on bar 9, 33 on bar 10); shorter rounds up to `grid`, or not at all. A marquee's `range` is the span. |
+| paste | Offsets from the earliest copied clip kept. Onto lane `to` when the clips are of one kind; else each onto its own lane. |
+
+**Tests** (`crates/editor/src/clips_tests.rs`, `crates/server/src/graph/clips_tests.rs`, `apps/m2/tests/clips.rs`, all new; one in `crates/server/src/routes_8b_tests.rs`):
+
+| Test | Red first? |
+|---|---|
+| `a_move_keeps_its_id` (one line changes; onto another lane; undo to the byte) | red against the stub (all 14 editor tests were) |
+| `a_move_onto_a_taken_id_mints_one`, `every_copy_mints` (copies play what the original plays) | red against the stub |
+| `a_left_trim_keeps_notes_in_place_and_trimming_back_brings_them_back` | red against the stub |
+| `an_audio_left_trim_moves_its_offset` (`examples/resample`; the asset's start; pitch and reverse refused) | red against the stub |
+| `a_new_clip_is_a_bar_long_and_automation_holds_the_lanes_value` | red against the stub |
+| `a_duplicated_section_lands_on_the_next_bar`, `a_marquee_duplicate_keeps_its_empty_bars` | red against the stub |
+| `a_paste_mints_and_keeps_offsets`, `kinds_and_units_never_mix` | red against the stub |
+| `touching_a_lane_gives_its_anonymous_clips_ids`, `delete_and_set`, `apply_is_pure`, `a_first_clip_makes_the_lane_file` | red against the stub |
+| `places_are_bar_beat_and_sixteenth` | — |
+| `a_clip_gesture_takes_the_data_path` (no QuickJS run, the same renderer) | — (written after the code) |
+| `clip_gestures_over_http` (the token, words, 422, 423 read-only) | — (written after the code) |
+| `clip_gestures_from_the_terminal` (by id and by place, refusals, the lock) | — (written after the code) |
+
+**Choices made here:**
+- **`sha` rides in each `ClipRef`**, not in a separate `seen` map: ids repeat across lanes once a
+  move keeps one, so a map by id can't say which clip it means.
+- **`made` lists clips put on a lane they weren't on:** new ones, copies, and moves to another
+  lane. A move along its lane keeps its id, so the app knows it already.
+- **A lane only loaded to check** (a move's target that ends up unchanged) is not written, so its
+  anonymous clips keep no new ids.
+- **Positions in the CLI** are bar.beat.sixteenth with quarter-note beats, as the timeline counts.
+  `--by`, `--length` and `--grid` are beats.
+- **Labels** reuse the piano roll's words for notes lanes ("clip at bar 1 (8 bars)"). Several lanes
+  are named in turn: "Kick hits: …; Hats hits: …".
+- **Errors** are 400 like every edit route, except a stale `sha`, which is 409 with `changed: true`.
+
+**Checks:** `cargo check --workspace --all-targets`; clippy on `m2-editor`, `m2-server`, `m2`; tests
+of `m2-editor`, `m2-server`, `m2`.
+
+**Contract:** WRITE-10 and WRITE-18 (a bullet each, "From 8b.5"), FMT-12 (ids for the lanes a builder
+writes, and its *Today*).
 
 ---
 
