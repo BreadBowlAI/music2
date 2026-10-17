@@ -5,7 +5,8 @@
 // writes one clip over whole bars, selected, "Undo recording on Bass", ⌘Z takes it back; the
 // keyboard piano records, Notes' own clicks don't; snapped to the grid; while looping the first pass
 // is written at the wrap and play goes on; R while playing records from now; Esc and Space while
-// counting cancel and nothing plays; nothing played says so; a PC page's R; Settings' MIDI keyboards
+// counting cancel and nothing plays; nothing played says so; a PC page's R; with the code broken R
+// says so and starts nothing (the review's R1); Settings' MIDI keyboards
 // (one turned off plays and records nothing, the mark says so, one unplugged says "(not connected)");
 // the lint; and on a server of the suite's own that plays into a file, the count's four clicks a beat
 // apart, the first louder, and the song's first beat a bar after the first click.
@@ -19,7 +20,7 @@ import fs from "node:fs";
 import { HEADLESS, REPO } from "./env.mjs";
 import { exe } from "./chrome.mjs";
 import { lint } from "./lintlib.mjs";
-import { HOME, PROJ, ROOT, check, done, open, sleep, until } from "./fixlib.mjs";
+import { HOME, PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 
 const { page, errors, api, state, box, key } = await open(1440, 900);
 const DANGER = "rgb(175, 61, 54)";
@@ -255,6 +256,23 @@ await pc.page.keyboard.press("Escape");
 await until(async () => (await record()) === null, 2000);
 await pc.browser.close();
 errors.push(...pc.errors);
+
+// ---------------------------------------------------------------- the code broken: R says so (the review's R1)
+
+await settled();
+const code = read("song.ts");
+write("song.ts", `${code}\n(\n`);
+await until(async () => (await state()).view.draft_errors.length > 0, 5000);
+await press("r");
+check(
+  await until(async () => (await toasts()).some((t) => t.includes("Fix the code first: it doesn't compile right now.")), 2000),
+  `with the code broken, R says to fix it first (${JSON.stringify(await toasts())})`,
+);
+await sleep(300);
+check((await record()) === null && !(await status()).playing, "and nothing counts in or plays");
+if (await record()) await press("Escape");
+write("song.ts", code);
+await until(async () => (await state()).view.draft_errors.length === 0, 5000);
 
 // ---------------------------------------------------------------- Settings' MIDI keyboards (Q28)
 

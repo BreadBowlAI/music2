@@ -3,9 +3,9 @@
 //! before it is durable (PLANE-5). And Remove automation, which writes code.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
+use parking_lot::Mutex;
 use m2_editor::EditError;
 use m2_editor::clips::Gesture;
 use serde_json::{Value, json};
@@ -29,8 +29,18 @@ impl Graph {
     /// [`Graph::clips`] as the Tx with id `tx_id` when given: a lane lease's commit, whose new
     /// clips have the ids its previews played (WRITE-22a, Q21).
     pub(super) fn clips_as(&self, token: u64, gesture: Gesture, tx_id: Option<String>) -> Result<Answer> {
-        let changed = Arc::new(AtomicBool::new(false));
-        let saw = changed.clone();
+        match self.clips_why(token, gesture, tx_id) {
+            (Ok(v), _) => Ok(Answer::Done(v)),
+            (Err(e), Some(Refused::Changed)) => Ok(Answer::Changed(format!("{e:#}"))),
+            (Err(e), _) => Err(e),
+        }
+    }
+
+    /// [`Graph::clips_as`]'s Tx, and why the editor refused it when it did: a take says each kind
+    /// in its own words (the review's R1).
+    pub(super) fn clips_why(&self, token: u64, gesture: Gesture, tx_id: Option<String>) -> (Result<Value>, Option<Refused>) {
+        let why = Arc::new(Mutex::new(None));
+        let saw = why.clone();
         let tx_id = tx_id.unwrap_or_else(m2_song::tx::random_id);
         let done = self.call(move |a| {
             a.edit_and(token, |s| match m2_editor::clips::edit_as(s, &gesture, &tx_id) {
@@ -40,15 +50,38 @@ impl Graph {
                     Ok((done.edited, json!({"made": made})))
                 }
                 Err(e) => {
-                    saw.store(matches!(e, EditError::Changed(_)), Ordering::Relaxed);
+                    *saw.lock() = Some(Refused::of(&e));
                     Err(e)
                 }
             })
         });
-        match done {
-            Ok(v) => Ok(Answer::Done(v)),
-            Err(e) if changed.load(Ordering::Relaxed) => Ok(Answer::Changed(format!("{e:#}"))),
-            Err(e) => Err(e),
+        let why = *why.lock();
+        (done, why)
+    }
+}
+
+/// Why the editor refused a clip gesture.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Refused {
+    /// A clip it names changed since (WRITE-12).
+    Changed,
+    /// Its track or lane isn't there.
+    Missing,
+    /// The code doesn't compile.
+    Draft,
+    /// The song is open read-only here (WRITE-17).
+    ReadOnly,
+    Other,
+}
+
+impl Refused {
+    fn of(e: &EditError) -> Refused {
+        match e {
+            EditError::Changed(_) => Refused::Changed,
+            EditError::Missing(_) => Refused::Missing,
+            EditError::DraftInvalid(_) => Refused::Draft,
+            EditError::ReadOnly(_) => Refused::ReadOnly,
+            _ => Refused::Other,
         }
     }
 }

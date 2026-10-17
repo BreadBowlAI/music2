@@ -1554,3 +1554,26 @@ each section's For gaps.md and Contract lines; `music-basics.md` names no MIDI i
 ## End
 
 The lead's last checks, docs and pictures.
+
+### The review's fixes
+
+The End's review found 13 things (R1 to R9, F1 to F6; R3 and F2 are one). Each is fixed in a commit of its own, with
+a test that failed first. Red runs: the Rust tests in `~/m2-runs/logs/st-end-red1-*`, the browser checks on the
+page and server from `37a6936` (`bin/st-67b2197`, the same Rust) in `st-end-e2e-red-*`.
+
+#### R1. Recording while the code doesn't compile
+
+A take is written as an edit, and no edit can be made while the code doesn't compile. Record never checked, and a take
+that ended then was thrown away with "Bass is gone".
+
+- `record.rs`: `record_start` refuses with lockReason's words, "Fix the code first: it doesn't compile right now."
+  A take that ends while the code is broken waits in the queue: the windows hear once "The recording waits for the
+  code. Fix the code, and it goes on Bass.", and the take thread writes it once the code compiles. "Bass is gone"
+  is said only when the lane is gone; read-only and a closed song say so.
+- `clips.rs`: `clips_why` says why the editor refused (`Refused`); `clips_as` is built on it, as before.
+- `lib/record.ts`: R, the button and the menu say lockReason's words and start nothing; `waiting` is a toast.
+- Tests: `record_is_refused_while_the_code_doesnt_compile`,
+  `a_take_that_ends_while_the_code_is_broken_waits_for_the_code`; `st-record` gains 2 checks (61 to 63).
+- Red: `called Result::unwrap_err() on an Ok value: … "phase": String("count")`; `[… {"error": String("The recording
+  couldn't be kept: Bass is gone.")}]`; `FAIL  with the code broken, R says to fix it first ([])`.
+- Left: closing the song while a take waits for the code loses it (said: "its song was closed").

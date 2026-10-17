@@ -624,3 +624,43 @@ fn r_right_after_a_jump_asks_again() {
     let shown = r.start(false, None);
     assert_eq!(shown["start"], json!(8.0), "taken: from bar 3");
 }
+
+// The review's R1: with the code broken, R is refused in the page's words, before anything plays.
+#[test]
+fn record_is_refused_while_the_code_doesnt_compile() {
+    let r = Rig::new();
+    r.fixture.put("song.ts", "(");
+    assert!(r.graph.poll());
+    let e = r.graph.record_start(r.token, "bass", "notes", Options { count_in: true, quantize: None }).unwrap_err();
+    assert_eq!(e.to_string(), "Fix the code first: it doesn't compile right now.");
+    assert!(!r.graph.recording() && !r.graph.status().playing, "nothing counts in, nothing plays");
+}
+
+// The review's R1: the code broken while a take records. The take waits, said in words (never "Bass
+// is gone"), and is written once the code compiles again.
+#[test]
+fn a_take_that_ends_while_the_code_is_broken_waits_for_the_code() {
+    let mut r = Rig::new();
+    r.anchored(0, 0.0);
+    r.start(false, None);
+    r.to(1.0);
+    let on = r.key(&[0x90, 60, 100]);
+    r.to(1.5);
+    r.key(&[0x80, 60, 0]);
+    r.fixture.put("song.ts", "(");
+    assert!(r.graph.poll());
+    r.graph.transport("stop").unwrap();
+    let said = r.graph.record_tick();
+    assert!(said.iter().all(|v| v.get("error").is_none() && v.get("written").is_none()), "{said:?}");
+    let waits: Vec<&str> = said.iter().filter_map(|v| v["waiting"].as_str()).collect();
+    assert_eq!(waits, ["The recording waits for the code. Fix the code, and it goes on Bass."], "{said:?}");
+    assert!(r.graph.record_tick().iter().all(|v| v.get("waiting").is_none()), "said once");
+    assert!(r.clips().is_empty());
+    r.fixture.put("song.ts", SONG);
+    assert!(r.graph.poll());
+    let said = r.written();
+    assert!(said["written"].is_object(), "{said}");
+    let c = &r.clips()[0];
+    assert_eq!(c["notes"].as_array().unwrap().len(), 1, "{c}");
+    assert!(on.has(note(c, 0).1), "heard at {on:?}: {c}");
+}

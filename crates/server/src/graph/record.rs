@@ -15,6 +15,8 @@
 //! - **Ending never waits** (D7): held notes end and the end bar is fixed under the control plane's
 //!   lock, and the take waits in a queue. The take thread ([`Graph::record_tick`]) writes it: one
 //!   `Clips` Tx on the lane (`Gesture::Set`), one undo step, "recording on Bass".
+//! - **The code must compile** (the review's R1): R is refused while it doesn't, as every edit is. A
+//!   take that ends while it doesn't waits in the queue, said once, and is written once it does.
 //! - **The windows hear** `{"t": "take", …}`: the take's phase and notes when they change, then
 //!   `written`, `empty`, or `error`.
 
@@ -27,7 +29,7 @@ use m2_play::Player;
 use m2_song::{Arrangement, LaneAddr, TempoMap};
 use serde_json::{Value, json};
 
-use super::clips::Answer;
+use super::clips::Refused;
 use super::lease::PlaysView;
 use super::{ControlPlane, Device, Graph, Inner};
 
@@ -52,6 +54,8 @@ pub(super) struct Recorder {
     ended: Vec<Ended>,
     /// The windows haven't heard the take as it is now.
     changed: bool,
+    /// The windows were told the takes ended wait for the code to compile.
+    waiting: bool,
 }
 
 /// A note kept, in song beats.
@@ -354,6 +358,10 @@ impl Graph {
         if cp.record.take.is_some() {
             bail!("A take is recording already.");
         }
+        // A take is written as an edit, which needs the code to compile (the review's R1).
+        if p.shown.state["view"]["draft_errors"].as_array().is_some_and(|d| !d.is_empty()) {
+            bail!("Fix the code first: it doesn't compile right now.");
+        }
         let plays = p.engine.plays.as_ref().filter(|pl| pl.epoch == device.epoch);
         if !plays.is_some_and(|pl| plays_notes(pl, module, lane)) {
             bail!("Select a track with notes to record on it.");
@@ -556,32 +564,71 @@ impl Graph {
                     None => json!({"t": "take", "phase": null}),
                 });
             }
-            let ended = std::mem::take(&mut cp.record.ended);
+            // While the code doesn't compile, the takes that ended wait for it (the review's R1).
+            let compiles = cp.open.as_ref().is_none_or(|p| p.shown.state["view"]["draft_errors"].as_array().is_none_or(Vec::is_empty));
+            let ended = match compiles {
+                true => std::mem::take(&mut cp.record.ended),
+                false => vec![],
+            };
+            cp.record.waiting &= !compiles;
+            if let Some(said_now) = waits(&mut cp) {
+                said.push(said_now);
+            }
             let labels: Vec<String> = ended.iter().map(|e| label_of(&cp, &e.module)).collect();
             (ended, labels)
         };
         for (e, label) in ended.into_iter().zip(labels) {
-            said.push(self.write_take(e, &label));
+            match self.write_take(e, &label) {
+                Ok(v) => said.push(v),
+                // The code stopped compiling as it was written: it waits.
+                Err(e) => {
+                    let mut cp = self.inner.control.lock();
+                    cp.record.ended.push(e);
+                    if let Some(said_now) = waits(&mut cp) {
+                        said.push(said_now);
+                    }
+                }
+            }
         }
         said
     }
 
-    /// Write a take that ended: one `Clips` Tx, its undo step named "recording on Bass".
-    fn write_take(&self, e: Ended, label: &str) -> Value {
-        let Some(clip) = e.clip else { return json!({"t": "take", "empty": true}) };
-        let gone = || json!({"t": "take", "error": format!("The recording couldn't be kept: {label} is gone.")});
-        let Ok(lane) = LaneAddr::new(&e.module, &e.lane) else { return gone() };
-        match self.clips_as(e.token, Gesture::Set { lane, put: vec![clip], delete: vec![] }, None) {
-            Ok(Answer::Done(v)) => {
+    /// Write a take that ended: one `Clips` Tx, its undo step named "recording on Bass". Answers what
+    /// the windows hear, or the take again when the code doesn't compile, to wait for it.
+    fn write_take(&self, e: Ended, label: &str) -> Result<Value, Ended> {
+        let Some(clip) = e.clip.clone() else { return Ok(json!({"t": "take", "empty": true})) };
+        let lost = |why: &str| json!({"t": "take", "error": format!("The recording couldn't be kept: {why}")});
+        let open = self.inner.control.lock().open.as_ref().map(|p| p.engine.token);
+        if open != Some(e.token) {
+            return Ok(lost("its song was closed."));
+        }
+        let Ok(lane) = LaneAddr::new(&e.module, &e.lane) else { return Ok(lost(&format!("{label} is gone."))) };
+        match self.clips_why(e.token, Gesture::Set { lane, put: vec![clip], delete: vec![] }, None) {
+            (Ok(v), _) => {
                 let revision = v["revision"].as_u64().unwrap_or(0);
                 if let Err(err) = self.name_step(e.token, revision, format!("recording on {label}"), false) {
                     eprintln!("music2: couldn't name the recording's undo step: {err:#}");
                 }
-                json!({"t": "take", "written": {"revision": revision, "made": v["made"], "module": e.module, "lane": e.lane}})
+                Ok(json!({"t": "take", "written": {"revision": revision, "made": v["made"], "module": e.module, "lane": e.lane}}))
             }
-            Ok(Answer::Changed(_)) | Err(_) => gone(),
+            (Err(_), Some(Refused::Draft)) => Err(e),
+            (Err(_), Some(Refused::Missing)) => Ok(lost(&format!("{label} is gone."))),
+            (Err(_), Some(Refused::ReadOnly)) => Ok(lost("this song is open for writing somewhere else.")),
+            (Err(err), _) => Ok(lost(&format!("{err:#}"))),
         }
     }
+}
+
+/// What the windows hear when takes wait for the code to compile, once: "The recording waits for the
+/// code. Fix the code, and it goes on Bass."
+fn waits(cp: &mut ControlPlane) -> Option<Value> {
+    let first = cp.record.ended.first()?;
+    if cp.record.waiting {
+        return None;
+    }
+    let label = label_of(cp, &first.module);
+    cp.record.waiting = true;
+    Some(json!({"t": "take", "waiting": format!("The recording waits for the code. Fix the code, and it goes on {label}.")}))
 }
 
 impl Inner {

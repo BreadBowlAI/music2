@@ -6,14 +6,15 @@
 //
 // The server keeps the take (graph/record.rs); this window shows it: the state's `record` when the
 // song loads, then each `{"t": "take", …}` as its phase or notes change, and the outcome:
-// `written` (select the clip), `empty` or `error` (a toast). The count's beats left are this
-// window's own, from the answer's `{beats, ms}` and its clock. While counting, Space, Return, Esc
-// and R cancel it, and nothing plays (D6).
+// `written` (select the clip), `empty`, `waiting` (the code doesn't compile: it is written once it
+// does) or `error` (a toast). The count's beats left are this window's own, from the answer's
+// `{beats, ms}` and its clock. While counting, Space, Return, Esc and R cancel it, and nothing plays
+// (D6). While the code doesn't compile, R says so and starts nothing (the review's R1).
 
 import { create } from "zustand";
 import { on } from "./events";
 import { useClipSelection } from "./clips";
-import { findLane, clipIndex, type GraphState } from "./graph";
+import { findLane, clipIndex, lockReason, type GraphState } from "./graph";
 import { useGrid } from "./grid";
 import { holdTarget, currentTarget } from "./playTarget";
 import { request } from "./projects";
@@ -130,8 +131,10 @@ export function toggleRecord() {
 
 /** Start a take on the lane keys play (Q21). */
 export async function startRecording() {
-  const { graph, toast } = useStore.getState();
+  const { graph, toast, connected } = useStore.getState();
   if (!graph) return;
+  const why = lockReason(graph, connected);
+  if (why) return toast(`${why}.`);
   const t = currentTarget();
   if (!t) return toast("Select a track with notes to record on it.");
   useRecord.setState({ asking: true });
@@ -186,8 +189,8 @@ function ended(ms: number): Promise<void> {
       clearTimeout(timer);
       resolve();
     };
-    const off = on<{ written?: unknown; empty?: boolean; error?: string; phase?: unknown }>("take", (m) => {
-      if (m.written || m.empty || m.error) done();
+    const off = on<{ written?: unknown; empty?: boolean; waiting?: string; error?: string; phase?: unknown }>("take", (m) => {
+      if (m.written || m.empty || m.waiting || m.error) done();
     });
     const timer = setTimeout(done, ms);
   });
@@ -241,6 +244,8 @@ function selectWritten(graph: GraphState | null) {
 interface TakeMsg extends Partial<Take> {
   written?: { revision: number; made: { module: string; lane: string; id: string }[]; module: string; lane: string };
   empty?: boolean;
+  /** The code doesn't compile: the take is written once it does. */
+  waiting?: string;
   error?: string;
 }
 
@@ -252,6 +257,7 @@ on<TakeMsg>("take", (m) => {
     return;
   }
   if (m.empty) return toast("Nothing was played, so nothing was recorded.");
+  if (m.waiting) return toast(m.waiting);
   if (m.error) return toast(m.error);
   if (m.phase === undefined) return;
   show(m.phase === null ? null : (m as Take));
