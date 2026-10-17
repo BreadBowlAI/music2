@@ -90,7 +90,9 @@ pub struct Timing {
     pub hist: Vec<u64>,
     pub over: u64,
     /// The longest callback, in ns: since the player started, or in a window to within a bucket.
-    pub max_ns: u64,
+    /// None in a window that had one past the histogram while the longest since the start came
+    /// before it: the window's own is then only known to be past the histogram.
+    pub max_ns: Option<u64>,
     /// Callbacks longer than their period (8b.8's count): each a dropout.
     pub late: u64,
     /// Callbacks that started over 1.5 periods after the one before: the device came late.
@@ -115,11 +117,12 @@ impl Timing {
     pub fn since(&self, before: &Timing) -> Timing {
         let hist: Vec<u64> = self.hist.iter().zip(&before.hist).map(|(a, b)| a.saturating_sub(*b)).collect();
         let over = self.over.saturating_sub(before.over);
-        // The longest since the player started, when it came in this window; else the top bucket.
+        // The longest since the player started, when it came in this window; else the top bucket,
+        // or unknown past the histogram.
         let max_ns = match self.max_ns > before.max_ns {
             true => self.max_ns,
-            false if over > 0 => before.max_ns,
-            false => hist.iter().rposition(|&n| n > 0).map_or(0, |k| (k as u64 + 1) * BUCKET_NS),
+            false if over > 0 => None,
+            false => Some(hist.iter().rposition(|&n| n > 0).map_or(0, |k| (k as u64 + 1) * BUCKET_NS)),
         };
         let threads = match self.threads.len() == before.threads.len() {
             true => self.threads.iter().zip(&before.threads).map(|(a, b)| minus(a, b)).collect(),
@@ -143,8 +146,9 @@ impl Timing {
         }
     }
 
-    /// The callback time below which a share `q` of callbacks took (the top of its bucket; the
-    /// longest when it is past the histogram). None with no callback.
+    /// The callback time below which a share `q` of callbacks took (the top of its bucket; past the
+    /// histogram, the longest, or 1 ns past the histogram when that isn't known). None with no
+    /// callback.
     pub fn quantile(&self, q: f64) -> Option<Duration> {
         let n = self.hist.iter().sum::<u64>() + self.over;
         if n == 0 {
@@ -158,7 +162,7 @@ impl Timing {
                 return Some(Duration::from_nanos((k as u64 + 1) * BUCKET_NS));
             }
         }
-        Some(Duration::from_nanos(self.max_ns))
+        Some(Duration::from_nanos(self.max_ns.unwrap_or(self.hist.len() as u64 * BUCKET_NS + 1)))
     }
 
     /// Dropouts: the device's, late callbacks, and gaps.
@@ -188,7 +192,7 @@ impl Player {
             callbacks: r.callbacks.load(Relaxed),
             hist: r.hist.iter().map(|n| u64::from(n.load(Relaxed))).collect(),
             over: r.over.load(Relaxed),
-            max_ns: r.max_ns.load(Relaxed),
+            max_ns: Some(r.max_ns.load(Relaxed)),
             late: s.late.load(Relaxed),
             gaps: r.gaps.load(Relaxed),
             xruns: s.device_errors().xruns,
@@ -247,7 +251,7 @@ mod tests {
         let t = player.timing().since(&before);
         assert_eq!(d.runner().tripped_on(), Some(0), "the held block ran here");
         assert!(t.late >= 1 && t.gaps >= 1 && t.dropouts() >= 2, "{t:?}");
-        assert!(t.max_ns >= 40_000_000 && t.quantile(1.0) >= Some(Duration::from_millis(40)), "{t:?}");
+        assert!(t.max_ns >= Some(40_000_000) && t.quantile(1.0) >= Some(Duration::from_millis(40)), "{t:?}");
     }
 
     // G12 (8a's live half): each callback counts once in the histogram, with its frames; a copy
@@ -265,11 +269,35 @@ mod tests {
         assert_eq!((t.callbacks, t.hist.iter().sum::<u64>() + t.over), (7, 7), "{t:?}");
         assert_eq!(t.frames, sizes.iter().sum::<usize>() as u64);
         assert!(t.clock >= t.frames && t.clock < t.frames + m2_runtime::BLOCK as u64, "the engine renders ahead by a block at most");
-        assert_eq!(t.since(&t), Timing { hist: vec![0; BUCKETS], max_ns: 0, crashed: t.crashed, ..Timing::default() });
+        assert_eq!(t.since(&t), Timing { hist: vec![0; BUCKETS], max_ns: Some(0), crashed: t.crashed, ..Timing::default() });
         let (p50, top) = (t.quantile(0.5).unwrap(), t.quantile(1.0).unwrap());
-        assert!(p50 <= top && top.as_nanos() as u64 >= t.max_ns.min(BUCKETS as u64 * BUCKET_NS), "{p50:?} {top:?} {}", t.max_ns);
+        let longest = t.max_ns.unwrap();
+        assert!(p50 <= top && top.as_nanos() as u64 >= longest.min(BUCKETS as u64 * BUCKET_NS), "{p50:?} {top:?} {longest}");
         assert_eq!(Timing::default().quantile(0.99), None);
         assert!(!t.crashed && t.crashes == 0 && t.non_finite == 0 && t.threads.is_empty());
+    }
+
+    // G12 (8a's live half): a window's longest callback is its own. One of 20 ms at the open, then a
+    // window with one of 9 ms (past the histogram) and one of 1 ms: the window's longest is only
+    // known to be past the histogram, never the 20 ms before it.
+    #[test]
+    fn a_windows_longest_is_its_own() {
+        let at = |k: usize| {
+            let mut h = vec![0; BUCKETS];
+            h[k] = 1;
+            h
+        };
+        let open = Timing { callbacks: 1, hist: vec![0; BUCKETS], over: 1, max_ns: Some(20_000_000), ..Timing::default() };
+        let then = Timing { callbacks: 3, hist: at(250), over: 2, max_ns: Some(20_000_000), ..Timing::default() };
+        let w = then.since(&open);
+        assert_eq!(w.max_ns, None, "the 20 ms came before the window");
+        let past = Duration::from_nanos(BUCKETS as u64 * BUCKET_NS);
+        assert!(w.quantile(1.0).is_some_and(|d| d > past && d < Duration::from_millis(9)), "only past the histogram");
+        // Nothing past it: the top bucket. A new longest: that one.
+        let small = Timing { callbacks: 2, hist: at(250), over: 1, max_ns: Some(20_000_000), ..Timing::default() };
+        assert_eq!(small.since(&open).max_ns, Some(251 * BUCKET_NS));
+        let longer = Timing { callbacks: 2, hist: vec![0; BUCKETS], over: 2, max_ns: Some(30_000_000), ..Timing::default() };
+        assert_eq!(longer.since(&open).max_ns, Some(30_000_000));
     }
 
     // G12 (8a's live half), RENDER-25: live, a node that fails stops alone and the song plays on;

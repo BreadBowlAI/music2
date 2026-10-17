@@ -209,18 +209,18 @@ pub fn verdict(f: &Found, asked: u32, judged: bool) -> Vec<Check> {
     let us = |q: f64| s.quantile(q).map_or(f64::NAN, |d| d.as_secs_f64() * 1e6);
     let (p99, bound) = (us(0.99), P99_SHARE * period);
     let share = |x: f64| 100.0 * x / period;
-    let top = past(s);
+    let (top, max) = (past(s), longest(s));
     timed(
         "callback",
         s.callbacks > 0 && p99 <= bound,
         format!(
-            "p50 {} µs, p99 {} ({}% of the period), p99.9 {}, max {:.0} ({:.0}%) in {} callbacks from 5 s on; bound p99 {bound:.0} µs (70% of {period:.0})",
+            "p50 {} µs, p99 {} ({}% of the period), p99.9 {}, max {} ({}%) in {} callbacks from 5 s on; bound p99 {bound:.0} µs (70% of {period:.0})",
             shown(us(0.5), top),
             shown(p99, top),
             shown(share(p99), share(top)),
             shown(us(0.999), top),
-            s.max_ns as f64 / 1e3,
-            share(s.max_ns as f64 / 1e3),
+            known(max, top),
+            known(max.map(share), share(top)),
             s.callbacks
         ),
     );
@@ -271,6 +271,16 @@ pub fn verdict(f: &Found, asked: u32, judged: bool) -> Vec<Check> {
 /// Where a window's histogram ends, in µs: a quantile past it is only known to be over it.
 fn past(t: &Timing) -> f64 {
     (t.hist.len() as u64 * BUCKET_NS) as f64 / 1e3
+}
+
+/// A window's longest callback in µs: None when it is only known to be past the histogram.
+fn longest(t: &Timing) -> Option<f64> {
+    t.max_ns.map(|ns| ns as f64 / 1e3)
+}
+
+/// `x` as printed, or "over `top`" when it isn't known.
+fn known(x: Option<f64>, top: f64) -> String {
+    x.map_or_else(|| format!("over {top:.0}"), |x| format!("{x:.0}"))
 }
 
 /// `x` as printed, or "over `top`" when it is past the histogram.
@@ -456,10 +466,10 @@ pub fn live(lab: &mut Lab, o: &Opts, asked: &Asked) -> Result<Outcome> {
             let p99 = shown(s.quantile(0.99).map_or(f64::NAN, |d| d.as_secs_f64() * 1e6), past(s));
             let back = b2b.iter().find(|(n, _)| *n == f.threads.count).map_or(f64::NAN, |(_, p)| *p);
             format!(
-                "{} {}: p99 {p99} µs (back to back {back:.0}), max {:.0}, dropouts {}, workers came p99 {}",
+                "{} {}: p99 {p99} µs (back to back {back:.0}), max {}, dropouts {}, workers came p99 {}",
                 f.threads.count,
                 way(f.threads.between),
-                s.max_ns as f64 / 1e3,
+                known(longest(s), past(s)),
                 f.whole.dropouts(),
                 entry(&s.threads, 0.99).unwrap_or_else(|| "-".into())
             )
@@ -495,7 +505,7 @@ mod tests {
         };
         let mut hist = vec![0; 2048];
         hist[200] = 22_000;
-        let t = Timing { callbacks: 22_000, hist, max_ns: 804_000, frames: 22_000 * 128, clock: 22_000 * 128, ..Timing::default() };
+        let t = Timing { callbacks: 22_000, hist, max_ns: Some(804_000), frames: 22_000 * 128, clock: 22_000 * 128, ..Timing::default() };
         Found { threads, rate: 48_000, frames: 128, song_rate: 48_000, whole: t.clone(), before: Timing::default(), steady: t }
     }
 
@@ -539,8 +549,11 @@ mod tests {
             ("non-finite samples 3", with(&|f| f.whole.non_finite = 3), true),
             ("frames: the device took 2815600", with(&|f| f.whole.frames -= 400), true),
         ];
-        let past = with(&|f| (f.steady.over, f.steady.max_ns) = (std::mem::take(&mut f.steady.hist[200]), 9_000_000));
-        assert!(failed(&past, true)[0].contains("p99 over 8192 (over 307% of the period)"), "{:?}", failed(&past, true));
+        let past = with(&|f| (f.steady.over, f.steady.max_ns) = (std::mem::take(&mut f.steady.hist[200]), Some(9_000_000)));
+        assert!(failed(&past, true)[0].contains("p99 over 8192 (over 307% of the period), p99.9 over 8192, max 9000 (337%)"), "{:?}", failed(&past, true));
+        // The longest before the window: the window's own is only known to be past the histogram.
+        let before = with(&|f| (f.steady.over, f.steady.max_ns) = (std::mem::take(&mut f.steady.hist[200]), None));
+        assert!(failed(&before, true)[0].contains("max over 8192 (over 307%)"), "{:?}", failed(&before, true));
         for (named, f, everywhere) in causes {
             let judged = failed(&f, true);
             assert!(judged.len() == 1 && judged[0].contains(named), "{named}: {judged:#?}");
