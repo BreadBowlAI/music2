@@ -565,7 +565,7 @@ curl -s -H "$H" -H 'content-type: application/json' $URL/api/tx/commit -d "{\"tx
 
 | Route | What it does |
 |---|---|
-| `GET /api/graph` | The open song: name, folder, `session`, the graph view (with `revision` and every knob's id), the timeline, the effects, problems, where playback is, and the knob drags in progress (`leases`, each with its knob's id in that view). `has_code` is false while the song opened with code that doesn't compile; `read_only` is null, or `{why, message, holder}` when another program holds the song |
+| `GET /api/graph` | The open song: name, folder, `session`, the graph view (with `revision` and every knob's id), the timeline, the Mix view (`mix`: a strip per track with its fader's and pan's knob ids, `pan_insert` when its first pan can be written, and the lane a level follows), the effects, the instruments + Track offers (`instruments`), what is muted or soloed while listening (`overlays`), problems, where playback is, and the knob drags in progress (`leases`, each with its knob's id in that view). `has_code` is false while the song opened with code that doesn't compile; `read_only` is null, or `{why, message, holder}` when another program holds the song |
 | `POST /api/graph/open` `{path}` | Open a song folder |
 | `POST /api/graph/close` | Close it |
 | `GET /api/graph/status` | Playing or not, seconds and beat, the tempo playing there (`bpm`), and the loop (`{start, end, on}` in beats, or null). A play, a stop or a seek just sent reads as done |
@@ -582,6 +582,16 @@ curl -s -H "$H" -H 'content-type: application/json' $URL/api/tx/commit -d "{\"tx
 | `POST /api/graph/data/delete` `{session, revision, file}` | Delete data no lane or plugin reads |
 | `POST /api/graph/label` `{session, module, label}` | Rename a track's label (its key stays) |
 | `POST /api/graph/automate` `{session, revision, id}` | Give a knob an automation lane; answers with the `lane` it made |
+| `POST /api/graph/automate/remove` `{session, module, lane, beat?}` | Remove automation: the lane's value at `beat` (the playhead; else its fallback) goes back into the code where it was read, and the lane's file goes |
+| `POST /api/graph/track/add` `{session, component, label?, key?, after?}` | Add a track playing an instrument from `instruments` (`std:synth-pluck`): its file, its import and mixer channel, its lane, and its place below `after` (else last). Answers with the new track's `module` and `label` |
+| `POST /api/graph/track/duplicate` `{session, module}` | Duplicate a track: its code, clips (with new ids), plugin settings and channel, below it in its colour |
+| `POST /api/graph/track/delete` `{session, module, cascade?}` | Delete a track: its file, import, channel, data and layout. When other code reads it, nothing is written and the answer is 409 with the reads (`dependents`, and `blocked` when they can't be taken out from here); with `cascade`, an effect that only listens to it (a duck) goes too |
+| `POST /api/graph/track/mute` `{session, modules, muted}` | Mute tracks in the song, written in their code (or unmute them) |
+| `POST /api/graph/overlay` `{session, mute?, solo?, exclusive?, clear?}` | Mute or solo tracks while listening (`{kick: true}`). Not a write: it changes nothing in the song, and works read-only |
+| `POST /api/graph/layout` `{session, order? \| colour? \| reset?}` | Reorder the tracks (`order`: every track, top to bottom), recolour one (`colour: {module, colour}`), or write the defaults over a `layout.json` that doesn't read. Writes `layout.json` only, with no revision |
+| `POST /api/graph/mix/insert` `{session, channel, control, value}` | Write a mixer channel's first pan (`control: "pan"`) into its entry; answers with the new knob's id (`control`) |
+| `POST /api/graph/clips` `{session, gesture}` | A clip gesture (create, move, resize, split, join, duplicate, paste, delete, quantize), by clip id; 409 when a clip it names changed since |
+| `POST /api/graph/audition` `{client, module, lane, on?, off?, keep?}` | Play or let go of notes on a lane, as a window does. Not a write |
 | `POST /api/tx/check` `{session?, tx}` | Check a Tx: `{checked: {delta, hash, diagnostics}}`, writing nothing (409 when a file it's based on changed, 422 when it would do something else) |
 | `POST /api/tx/commit` `{session?, tx}` | Write a Tx: `{committed: {revision, delta, hash, …}}`, or `{conflict}`, `{rejected}` or `{io}`. With `"expect": {"seen": hash}` it is written only while it makes the change its check showed |
 | `POST /api/graph/lock/retry` `{session}` | Try again to take a song that opened read-only; answers like `GET /api/graph` |
