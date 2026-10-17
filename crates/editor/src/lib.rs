@@ -32,6 +32,8 @@ pub mod timeline;
 pub mod tracks;
 pub mod value;
 pub mod view;
+pub mod mute;
+pub mod clips;
 
 use std::collections::HashMap;
 use std::path::Path;

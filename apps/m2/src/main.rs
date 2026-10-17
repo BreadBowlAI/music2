@@ -11,6 +11,8 @@ use m2_editor::{Gestures, render};
 use m2_session::{Compiled, Session};
 use m2_song::{AudioClip, DataPath, Key, LaneAddr, LaneData, LaneKind, Project, TxOp};
 
+mod edits;
+
 const USAGE: &str = "m2: build, check and render music2 projects
 
 USAGE:
@@ -88,6 +90,21 @@ USAGE:
                                          save a plugin's default state to data/<track>/<key>.state, with the
                                          .state.json sidecar that says which plugin wrote it, as one edit
                                          (replacing a state that is there, which undo puts back)
+  m2 mute-in-song <project> <track>… on|off
+                                         mute tracks, named by their keys, in the song (every render and
+                                         export), or unmute them: their track() calls' `muted` option, as
+                                         one edit that undo takes back
+  m2 clips <project> <gesture> <clip>… [--beats]
+                                         one clip gesture, as one edit that undo takes back. A clip is
+                                         track/lane:id (bass/notes:k3f9q2zt), or track/lane@place for the
+                                         clip that starts there. Places are bar.beat.sixteenth (9.3.1), or
+                                         beats with --beats; --by, --length and --grid are beats. Gestures:
+                                           create <track>/<lane> --at <place> [--length B]
+                                           move <clip>… --by B [--to <track>/<lane>] [--copy]
+                                           resize <clip> --start <place> --length B
+                                           duplicate <clip>… [--grid B]
+                                           delete <clip>…
+                                           json <gesture.json | ->   (any gesture, as the app sends it)
 
 Every command that reads a project prints what needs attention in it, such as data no lane reads,
 with the commands that fix it.
@@ -837,6 +854,7 @@ change that code first", list.join("
             attention(&dir, s.problems());
         }
         Some("tx") => tx(&args)?,
+        Some(cmd) if edits::handles(cmd) => edits::run(cmd, &args)?,
         _ => print!("{USAGE}"),
     }
     Ok(())

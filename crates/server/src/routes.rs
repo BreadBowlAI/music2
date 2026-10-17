@@ -88,6 +88,7 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .route("/api/graph/types", get(graph_types))
         .route("/api/graph/unsaved", post(graph_unsaved))
         .route("/api/graph/export", post(graph_export))
+        .merge(crate::routes_8b::router(state.clone()))
         .route("/api/project/templates", get(project_templates))
         .route("/api/project/new", post(project_new))
         // An unknown API path is a clear error, not the UI's index.html.
@@ -168,7 +169,7 @@ struct WsQuery {
 
 async fn ws(State(s): S, Query(q): Query<WsQuery>, upgrade: WebSocketUpgrade) -> Response {
     upgrade.on_upgrade(move |socket| async move {
-        ws_loop(s.clone(), socket).await;
+        ws_loop(s.clone(), socket, q.client.clone()).await;
         if let Some(client) = q.client {
             // Off the async threads: putting values back may wait for room in the player's queue.
             let state = s.clone();
@@ -178,9 +179,11 @@ async fn ws(State(s): S, Query(q): Query<WsQuery>, upgrade: WebSocketUpgrade) ->
     })
 }
 
-/// Forward every event (toasts, `graph`) to one client until it goes away.
-async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket) {
+/// Forward every event (toasts, `graph`) and the latest meters to one client until it goes away,
+/// and take what it sends: audition, whose answers go to this socket only (`routes_8b::ws_text`).
+async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket, client: Option<String>) {
     let (unheard, mut events) = state.subscribe();
+    let mut meters = state.meters.subscribe();
     for text in unheard {
         if socket.send(Message::Text(text.into())).await.is_err() {
             return;
@@ -188,6 +191,12 @@ async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket) {
     }
     loop {
         tokio::select! {
+            Ok(()) = meters.changed() => {
+                let text = meters.borrow_and_update().clone();
+                if socket.send(Message::Text(text.into())).await.is_err() {
+                    break;
+                }
+            }
             ev = events.recv() => {
                 if let Ok(text) = ev
                     && socket.send(Message::Text(text.into())).await.is_err()
@@ -198,6 +207,13 @@ async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket) {
             incoming = socket.recv() => {
                 match incoming {
                     Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                    Some(Ok(Message::Text(text))) => {
+                        if let Some(reply) = crate::routes_8b::ws_text(&state, client.as_deref(), &text).await
+                            && socket.send(Message::Text(reply.into())).await.is_err()
+                        {
+                            break;
+                        }
+                    }
                     _ => {}
                 }
             }

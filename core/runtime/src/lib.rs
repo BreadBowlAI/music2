@@ -42,10 +42,12 @@ pub mod engine;
 pub mod event;
 mod fade;
 mod keep;
+mod overlay;
 pub mod packages;
 mod plan;
 pub mod plugins;
 pub mod sched;
+mod taps;
 pub mod trace;
 pub mod transport;
 
@@ -66,7 +68,8 @@ pub use event::{Event, Events};
 pub use packages::{Package, PackageSet};
 pub use plan::{Basis, Continues, Count, Keep, LaneInfo, Leftovers, PlanInfo, PluginAt, Shape, Stats};
 pub use plugins::PluginInstance;
-pub use sched::{Caps, LaneSwap, NotesData};
+pub use sched::{Caps, LaneSwap, LiveEv, NotesData};
+pub use taps::{Peaks, TapSlots};
 pub use trace::{TraceEntry, TraceKind};
 pub use transport::{Cmd, Jump, Loop, MAX_RUNS, Run, Runs, Transport};
 
@@ -74,6 +77,7 @@ use crate::cells::{Cells, Write};
 use crate::fade::xfade;
 use crate::keep::{Edge, Wiring, used};
 use crate::plan::{Entry, LanePlan, LaneSlot, Lanes, Plan};
+use crate::taps::Taps;
 use crate::trace::Trace;
 
 pub const BLOCK: usize = 128;
@@ -832,6 +836,14 @@ enum Exec {
         new: Input,
         wait: u32,
     },
+    /// A monitoring overlay (MON-1): `src` times a gain that moves toward `target` by `step` a
+    /// frame, from `cur` ([`overlay::process`]). Its cell sets `target` (RENDER-22a).
+    Overlay {
+        src: PortRef,
+        target: f32,
+        cur: f32,
+        step: f32,
+    },
 }
 
 #[derive(Default)]
@@ -953,7 +965,7 @@ impl Builder<'_> {
                     _ => None,
                 };
                 let captures = voice.nodes.iter().filter_map(|n| if let FOp::Capture(p) = n.op { Some(p) } else { None }).collect();
-                let plan = Vec::with_capacity(if ghost { 0 } else { 2 * self.caps(slot).ons });
+                let plan = Vec::with_capacity(if ghost { 0 } else { 2 * self.caps(slot).ons + sched::LIVE_ROOM });
                 Exec::Poly(Box::new(PolyNode { slot, out: voice.out, captures, plan, pool, ghost }))
             }
             FOp::Feedback { input, channels } => Exec::Feedback { input: *input, ring: vec![0.0; *channels as usize * BLOCK] },
@@ -1011,10 +1023,11 @@ impl Builder<'_> {
         // a NoteOff for every note it holds, a NoteOff for every note it lets go, and a NoteOn and
         // a Tuning for every note it starts again after an export, as many as its lane's room holds
         // or the node it took its instance from held.
+        // Live notes too (MON-7): as many more held, and a NoteOn and a Tuning for each struck.
         let caps = notes.map_or(Caps::default(), |s| self.caps(s));
-        let held = |c: Caps| c.sounding + 2 * c.ons + 8;
+        let held = |c: Caps| c.sounding + 2 * c.ons + 8 + sched::LIVE_ROOM;
         let held = held(caps).max(room.map_or(0, held));
-        let events = caps.events() + caps.ons + (BLOCK / PARAM_STEP) * params.len() + 8 + 5 * held;
+        let events = caps.events() + caps.ons + 2 * sched::LIVE_ROOM + (BLOCK / PARAM_STEP) * params.len() + 8 + 5 * held;
         Ok(PluginNode {
             name: n.name.clone(),
             inst,
@@ -1238,6 +1251,10 @@ impl Graph {
                     version = Some(fade(b, (old, new, *wait), bufs, versions, versions[i], &mut out[0]));
                     Ok(())
                 }
+                Exec::Overlay { src, target, cur, step } => {
+                    overlay::process(&bufs[src.node][src.port], &mut out[0], *target, cur, *step);
+                    Ok(())
+                }
             };
             // RENDER-25: live, a box whose output went non-finite, or that trapped, is marked; an
             // activation resets it as it moves it. A finite block clears the mark.
@@ -1404,6 +1421,19 @@ impl Graph {
             }
             Write::Ramp(..) => COPY,
         };
+    }
+
+    /// Overlay `node`'s gain moves to `value`: glides there (RENDER-22a), or with `now` is there at
+    /// once, for a plan not yet sent. Never allocates.
+    fn set_overlay(&mut self, node: usize, value: f32, now: bool) {
+        let Some(Exec::Overlay { target, cur, .. }) = self.exec.get_mut(node) else {
+            debug_assert!(false, "{node} isn't an overlay");
+            return;
+        };
+        *target = value;
+        if now {
+            *cur = value;
+        }
     }
 
     /// Whether any kernel still holds sound that will come out later.
@@ -1694,18 +1724,32 @@ impl Renderer {
             let e = b.node(&flat.nodes, node, false, Make::Moved, true, w.room.get(&(n + g)).copied(), 0)?;
             graph.push(e, &node.outputs);
         }
+        // Overlays after the fades (MON-1): wired first, as they read and feed fades' sides.
+        let mut w = w;
+        let (fades, base) = (n + w.ghosts.len(), n + w.ghosts.len() + w.fades.len());
+        let placed = overlay::place(flat, keep.map(|k| k.old), &mut w, fades, base);
         let len = (0.005 * rate).round().max(1.0) as u32;
         for f in &w.fades {
             let wait = if f.waits { len } else { 0 };
             graph.push(Exec::Fade { old: f.old.clone(), new: f.new.clone(), wait }, &[Kind::Audio(f.channels)]);
         }
+        debug_assert_eq!(graph.exec.len(), base);
+        let step = overlay::step(rate);
+        for o in &placed.nodes {
+            graph.push(Exec::Overlay { src: o.src, target: o.value, cur: o.value, step }, &[Kind::Audio(o.channels)]);
+        }
         for &(i, edge, f) in &w.rewire {
             graph.rewire(i, edge, f);
         }
         let ghosts = n..n + w.ghosts.len();
-        let order_after: Vec<usize> = w.order.iter().copied().filter(|i| !ghosts.contains(i)).collect();
+        // Window-only overlays run while the ghosts and old sides they carry do.
+        let windowed_overlays = base + placed.sites..base + placed.nodes.len();
+        let order_after: Vec<usize> = w.order.iter().copied().filter(|i| !ghosts.contains(i) && !windowed_overlays.contains(i)).collect();
         graph.order = w.order.clone();
-        let mut cells = Cells::new(&cells::cells(flat));
+        let window_overlays: Vec<(usize, usize)> =
+            placed.nodes.iter().enumerate().skip(placed.sites).filter_map(|(j, o)| Some((base + j, o.follows?))).collect();
+        let sites: Vec<(usize, f32)> = placed.nodes[..placed.sites].iter().enumerate().map(|(j, o)| (base + j, o.value)).collect();
+        let mut cells = Cells::new(&cells::cells(flat), &sites);
         // What moves in, and what it keeps and makes.
         let mut stats = Stats { ghosts: w.ghosts.len(), fades: w.fades.len(), ..Stats::default() };
         for (i, s) in shapes.iter().enumerate() {
@@ -1804,6 +1848,13 @@ impl Renderer {
             Box::new(Entry { after: k.info.id, moves: w.moves, lanes: lanes.moves, cells: pairs, voice_cells, release: w.release })
         });
         let id = GENERATION.fetch_add(1, Ordering::Relaxed);
+        let overlays = flat.overlays.iter().enumerate().map(|(k, s)| (s.module.clone(), s.into.clone(), cells.overlay(k))).collect();
+        // A live plan's meters (8b.8): its output, and each celled overlay by its track.
+        let taps = (mode == m2_plugins::RenderMode::Realtime).then(|| {
+            let sites: Vec<(usize, &str, u8)> =
+                flat.overlays.iter().enumerate().map(|(k, s)| (base + k, s.module.as_str(), placed.nodes[k].channels)).collect();
+            Taps::new(&sites)
+        });
         let info = Arc::new(PlanInfo {
             id,
             rate: sample_rate,
@@ -1812,6 +1863,8 @@ impl Renderer {
             lanes: lane_info,
             cell_slots: cells.slots().clone(),
             cell_map: cells.map().clone(),
+            overlays,
+            taps: taps.as_ref().map(|t| t.slots().clone()),
         });
         let plan = Plan {
             id,
@@ -1829,6 +1882,8 @@ impl Renderer {
             faded_from: None,
             stats,
             info,
+            window_overlays,
+            taps,
         };
         Ok(Renderer {
             plan,
@@ -1981,6 +2036,10 @@ impl Renderer {
                 }
             }
             self.frames[f] = frame;
+        }
+        // The meters (8b.8): read after the graph ran, so they change no bit.
+        if let Some(t) = &self.plan.taps {
+            t.write(&self.plan.graph.bufs, &self.frames);
         }
         Ok(&self.frames)
     }
@@ -2150,6 +2209,19 @@ impl Renderer {
         self.plan.cells.set_now(&mut self.plan.graph, cells, value as f32);
     }
 
+    /// Its overlays' values, one per site of its graph in order ([`PlanInfo::overlays`]), set at once
+    /// off the audio thread: a renderer not yet sent starts where the plan before it was, with no
+    /// glide at entry (MON-1). The window's own overlays take their site's value. Writes no slot,
+    /// so what it reports as heard is unchanged.
+    pub fn set_overlays(&mut self, values: &[f32]) {
+        self.plan.cells.set_overlays(&mut self.plan.graph, values);
+        for &(node, site) in &self.plan.window_overlays {
+            if let Some(&v) = values.get(site) {
+                self.plan.graph.set_overlay(node, v, true);
+            }
+        }
+    }
+
     /// Every cell write up to `seq` is in this renderer already (it was built with the values, or
     /// they were set before it was sent): what it reports as heard starts there.
     pub fn hear_from(&mut self, seq: u64) {
@@ -2182,6 +2254,37 @@ impl Renderer {
     /// Notes the schedulers hold: turned on and not yet off.
     pub fn sounding_notes(&self) -> usize {
         self.lanes.slots.iter().map(|l| if let LaneSlot::Notes(Some(s)) = l { s.held() } else { 0 }).sum()
+    }
+
+    /// A live note's On or Off, or its source's release (MON-7), for lane `slot`: its consumers get
+    /// it at the next block's first frame. A release reaches every lane, whatever its slot. False,
+    /// and nothing taken, for a slot that isn't one of its notes lanes, or a pitch outside 0 to 127
+    /// or a velocity outside 0 to 1 (R2). Never allocates.
+    pub fn live(&mut self, slot: usize, ev: LiveEv) -> bool {
+        let (lanes, next) = (&mut self.lanes.slots[..self.lanes.live], &mut self.next_note);
+        match ev {
+            LiveEv::Release { .. } => {
+                for l in lanes {
+                    if let LaneSlot::Notes(Some(s)) = l {
+                        s.live(ev, next);
+                    }
+                }
+                true
+            }
+            LiveEv::On { pitch, velocity, .. } if !(0.0..=127.0).contains(&pitch) || !(0.0..=1.0).contains(&velocity) => false,
+            _ => match lanes.get_mut(slot) {
+                Some(LaneSlot::Notes(Some(s))) => {
+                    s.live(ev, next);
+                    true
+                }
+                _ => false,
+            },
+        }
+    }
+
+    /// Live notes held, across every lane (MON-7).
+    pub fn live_notes(&self) -> usize {
+        self.lanes.slots.iter().map(|l| if let LaneSlot::Notes(Some(s)) = l { s.live_held() } else { 0 }).sum()
     }
 
     /// Whether every voice with an open gate plays a note its scheduler holds: a gated voice
@@ -2233,7 +2336,11 @@ impl Renderer {
     /// top said it sleeps, or that it may stop once quiet and its output is (a plugin's tail is its
     /// own to report).
     pub fn can_idle(&mut self) -> bool {
-        !self.in_window() && self.active_voices() == 0 && self.plugins_sleep() && !self.plan.graph.active().unwrap_or(true)
+        !self.in_window()
+            && self.active_voices() == 0
+            && self.live_notes() == 0
+            && self.plugins_sleep()
+            && !self.plan.graph.active().unwrap_or(true)
     }
 
     fn plugins_sleep(&self) -> bool {

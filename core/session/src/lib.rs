@@ -94,6 +94,8 @@ impl Code {
             out: m2_ir::PortRef { node: 0, port: 0 },
             out_kind: m2_ir::Kind::Audio(2),
             sidechain: vec![],
+            overlays: vec![],
+            muted: vec![],
         };
         Code {
             ir: Ir { ir: m2_ir::IR_VERSION, modules: vec![], root },

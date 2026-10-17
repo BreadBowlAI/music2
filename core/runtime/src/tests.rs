@@ -6,8 +6,11 @@ use serde_json::{Value, json};
 
 use super::*;
 
+mod audition;
 mod cell;
 mod live;
+mod overlay;
+mod taps;
 
 const SR: u32 = 48_000;
 

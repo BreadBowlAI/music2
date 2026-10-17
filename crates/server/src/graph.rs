@@ -37,8 +37,12 @@
 //! counts at that rate.
 
 mod actor;
+pub mod audition;
+pub mod clips;
 mod events;
 pub mod lease;
+pub mod meters;
+pub mod overlay;
 mod preview;
 mod view_file;
 mod watcher;
@@ -173,6 +177,13 @@ pub struct Activity {
     /// The device's other errors since the player started. A change of output device, or a
     /// device that is gone, lets the player go; the rest are only counted.
     pub device_errors: u64,
+    /// Live notes sounding: audition's (MON-7).
+    pub live: u32,
+    /// The DSP load: the longest audio callback of the last second, as a share of the device's
+    /// period, while the meters read it (8b.8).
+    pub load: f32,
+    /// Audio callbacks that took longer than their period since the player started: dropouts too.
+    pub late: u64,
 }
 
 impl Activity {
@@ -269,6 +280,8 @@ struct Published {
     shown: Arc<Shown>,
     revs: Revs,
     aliases: Arc<Aliases>,
+    /// Monitoring mute and solo (MON-4): made new at each open.
+    overlays: overlay::Monitor,
 }
 
 /// What `begin`, `update`, `cancel` and every read use, behind one short lock. The actor holds it
@@ -279,6 +292,10 @@ struct Published {
 struct ControlPlane {
     open: Option<Published>,
     leases: Leases,
+    /// The windows that play notes live (MON-7).
+    audition: audition::Sources,
+    /// The DSP load of the last second, read by the meters (8b.8).
+    meters: meters::Meters,
 }
 
 /// How a control named at a revision is found without the session.
@@ -584,12 +601,19 @@ impl Inner {
     fn activity(&self) -> Activity {
         let device = self.current_device();
         let held = device.as_ref().is_some_and(|d| d.player.held());
-        let e = device.map(|d| d.player.device_errors()).unwrap_or_default();
+        let e = device.as_ref().map(|d| d.player.device_errors()).unwrap_or_default();
+        let (load, late) = {
+            let cp = self.control.lock();
+            (cp.meters.load(), cp.meters.late())
+        };
         Activity {
             paused: held.then_some("exporting"),
             loading: self.owner.loading(),
             xruns: e.xruns,
             device_errors: e.changes + e.gone + e.other,
+            live: device.as_ref().map_or(0, |d| d.player.live_notes()),
+            load,
+            late,
         }
     }
 
@@ -598,14 +622,14 @@ impl Inner {
     /// above a dragged knob gives it a new id, and the page finds its drag's knob by its lease
     /// (WRITE-22).
     fn state(&self) -> Option<Value> {
-        let (shown, leases) = {
+        let (shown, leases, overlays) = {
             let cp = self.control.lock();
             let p = cp.open.as_ref()?;
             let now = Instant::now();
             let token = p.engine.token;
             let leases: Vec<LeaseInfo> =
                 cp.leases.live.iter().filter(|l| l.token == token).filter_map(|l| l.seen_at(p.shown.revision, now)).collect();
-            (p.shown.clone(), leases)
+            (p.shown.clone(), leases, p.overlays.state())
         };
         let status = self.status();
         let mut state = shown.state.clone();
@@ -617,6 +641,7 @@ impl Inner {
         state["loop"] = json!(status.looping);
         self.activity().put(&mut state);
         state["leases"] = json!(leases);
+        state["overlays"] = overlays;
         Some(state)
     }
 
@@ -811,7 +836,9 @@ impl Graph {
         // What tells the session the export is over: given to the export on the actor, so a job
         // that fails after it still tells (the export's guard drops then).
         let jobs = self.jobs.clone();
-        self.call(move |a| a.export(length, jobs))
+        let mut export = self.call(move |a| a.export(length, jobs))?;
+        export.problems.extend(self.overlays_warning());
+        Ok(export)
     }
 
     /// What the engine is busy with besides playing: paused for an export, and the plugins being
@@ -1139,6 +1166,7 @@ impl Graph {
     /// The window `client` closed (its WebSocket went away): its live leases end, and their code
     /// values play again. Its pending commits stay: it let go, so it meant to save.
     pub fn client_gone(&self, client: &str) {
+        self.audition_gone(client);
         let device = self.inner.current_device();
         let mut cp = self.inner.control.lock();
         let mut i = 0;

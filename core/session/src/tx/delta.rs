@@ -214,6 +214,8 @@ pub struct Graph {
     pub exports: BTreeMap<(String, String), Ref>,
     pub root: (String, String),
     pub modules: BTreeSet<String>,
+    /// The modules muted in the song (MON-5).
+    pub muted: BTreeSet<String>,
 }
 
 /// A revision as a delta reads it.
@@ -477,6 +479,9 @@ impl Side<'_> {
         let ir = &self.compiled.ir;
         for m in &ir.modules {
             g.modules.insert(m.key.clone());
+            if m.muted {
+                g.muted.insert(m.key.clone());
+            }
             let mut runs = HashMap::new();
             for f in &m.frames {
                 *runs.entry((f.parent, f.site)).or_default() += 1;
@@ -564,7 +569,8 @@ pub fn compare(old: &Side, new: &Side) -> (GraphDelta, Graph, Graph) {
 }
 
 /// Modules added and removed; a removed and an added one whose graphs are the same but for the
-/// key are one re-keyed.
+/// key are one re-keyed. A module in both, or re-keyed, whose `muted` differs is muted or unmuted
+/// in the song (MON-5).
 fn modules(a: &Graph, b: &Graph) -> Vec<ModuleChange> {
     let key = |k: &str| Key::new(k).ok();
     let mut added: Vec<&String> = b.modules.difference(&a.modules).collect();
@@ -585,11 +591,17 @@ fn modules(a: &Graph, b: &Graph) -> Vec<ModuleChange> {
             Some(i) => {
                 let to = added.remove(i);
                 out.extend(key(r).zip(key(to)).map(|(from, to)| ModuleChange::Rekeyed { from, to }));
+                if a.muted.contains(*r) != b.muted.contains(to) {
+                    out.extend(key(to).map(|module| ModuleChange::Muted { module, muted: b.muted.contains(to) }));
+                }
                 false
             }
             None => true,
         }
     });
+    for m in a.modules.intersection(&b.modules).filter(|m| a.muted.contains(*m) != b.muted.contains(*m)) {
+        out.extend(key(m).map(|module| ModuleChange::Muted { module, muted: b.muted.contains(m) }));
+    }
     out.extend(added.into_iter().filter_map(|k| key(k).map(ModuleChange::Added)));
     out.extend(removed.into_iter().filter_map(|k| key(k).map(ModuleChange::Removed)));
     out.sort();

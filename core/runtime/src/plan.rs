@@ -23,6 +23,7 @@ use crate::audio::{self, AudioLane, AudioPlayer};
 use crate::cells::{CellId, CellMap, CellSlots, Cells};
 use crate::event::Event;
 use crate::sched::{Caps, LaneSwap, NoteScheduler};
+use crate::taps::{TapSlots, Taps};
 use crate::{Exec, Graph, LaneRef, PackageSet, PluginInstance, Renderer, lane_slots, notes_data};
 
 /// What a box must be to move into a node (RENDER-25): an instance is kept only for a node of the
@@ -146,6 +147,13 @@ pub struct PlanInfo {
     pub lanes: Vec<LaneInfo>,
     pub cell_slots: Arc<CellSlots>,
     pub cell_map: Arc<CellMap>,
+    /// Its overlays' cells, one per site of its graph in order (`Flat.overlays`): the track whose
+    /// audio it carries, the module that reads it, and the cell (MON-1, RENDER-23). Their ids come
+    /// after every value cell's.
+    pub overlays: Vec<(String, String, CellId)>,
+    /// What its meters read (8b.8): the song's output and each track, after its mute. Only a live
+    /// plan has them.
+    pub taps: Option<Arc<TapSlots>>,
 }
 
 /// One plugin node of a plan, as the next plan prepared against it, and an export, see it.
@@ -351,6 +359,10 @@ pub(crate) struct Plan {
     pub(crate) leftovers: Option<Box<Leftovers>>,
     pub(crate) stats: Stats,
     pub(crate) info: Arc<PlanInfo>,
+    /// The window's own overlays (no cell), each with the site whose value it takes.
+    pub(crate) window_overlays: Vec<(usize, usize)>,
+    /// Its taps, written after each block: a live plan's only.
+    pub(crate) taps: Option<Taps>,
 }
 
 /// A lane a plan's nodes read. Empty only while it moves between plans: it plays nothing then.

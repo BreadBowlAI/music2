@@ -35,7 +35,7 @@ pub use cpal::{Error as DeviceError, ErrorKind as DeviceErrorKind};
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use m2_runtime::engine::{APPLIED, Msg as EngineMsg};
 pub use m2_runtime::engine::{Applied, CallbackStamp, Engine, Envelope, Heard, Retired};
-use m2_runtime::{CellTarget, Cmd, LaneSwap, Renderer, Transport};
+use m2_runtime::{CellTarget, Cmd, LaneSwap, LiveEv, Renderer, Transport};
 pub use resample::Resampler;
 
 use crate::cells::{CELL_SEQ, Writer};
@@ -238,6 +238,14 @@ struct Shared {
     refused: AtomicU64,
     loop_refused: AtomicBool,
     dropped_ons: AtomicU64,
+    /// Live notes held in the renderer playing (MON-7).
+    live: AtomicU32,
+    /// The engine renders: a project plays, and it doesn't idle (RENDER-6a).
+    running: AtomicBool,
+    /// The longest callback since [`Player::load`] last read it, as a share of its period (the
+    /// bits of a non-negative `f32`), and the callbacks longer than their period so far (8b.8).
+    longest: AtomicU32,
+    late: AtomicU64,
     /// The device's errors so far, one count per [`DeviceEvent`].
     device_errors: [AtomicU64; 4],
     stalled: AtomicBool,
@@ -283,6 +291,16 @@ impl Shared {
             other: n(DeviceEvent::Other),
         }
     }
+}
+
+/// The DSP load (8b.8): how long the audio callback takes, against how long it may. Measured with
+/// the clock alone, around the whole callback.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Load {
+    /// The longest callback since the last read, as a share of its period: over 1 was late.
+    pub longest: f32,
+    /// Callbacks that took longer than their period since the player started: each one a dropout.
+    pub late: u64,
 }
 
 /// Where playback is, as the audio thread last published it.
@@ -409,6 +427,15 @@ impl Callback {
             done += n;
         }
         self.publish();
+        // The DSP load (8b.8): this callback's time against its period, by the clock alone.
+        let took = now_ns().saturating_sub(ns);
+        let period = frames as u64 * 1_000_000_000 / self.device_rate.max(1) as u64;
+        if period > 0 {
+            self.shared.longest.fetch_max((took as f32 / period as f32).to_bits(), Ordering::Relaxed);
+            if took > period {
+                self.shared.late.fetch_add(1, Ordering::Relaxed);
+            }
+        }
     }
 
     /// Apply a held replace or unload; with nothing playing, take messages until one arrives.
@@ -449,7 +476,7 @@ impl Callback {
                         EngineMsg::SwapLane { data, .. } => self.retire(Gone::Engine(Retired::Lane(data))),
                         EngineMsg::Transport(Cmd::Seek(_)) => self.seeks += 1,
                         EngineMsg::Transport(Cmd::Play | Cmd::Stop) => self.plays += 1,
-                        EngineMsg::Transport(_) | EngineMsg::Panic | EngineMsg::Hold(_) => {}
+                        EngineMsg::Transport(_) | EngineMsg::Panic | EngineMsg::Hold(_) | EngineMsg::Live { .. } => {}
                     }
                 }
             }
@@ -591,6 +618,8 @@ impl Callback {
         }
         s.loop_refused.store(st.loop_refused, Ordering::Relaxed);
         s.dropped_ons.store(st.dropped_ons as u64, Ordering::Relaxed);
+        s.live.store(st.live, Ordering::Relaxed);
+        s.running.store(self.live.as_ref().is_some_and(|l| !l.engine.is_idle()), Ordering::Relaxed);
         // After the position: a reader that sees a seek, a play or a stop, or a load taken sees
         // where it went.
         s.seeks_applied.store(self.seeks, Ordering::Release);
@@ -940,6 +969,13 @@ impl Player {
         self.transport(Cmd::Loop(beats))
     }
 
+    /// A live note's On or Off, or its source's release, for lane `slot` of the renderer
+    /// `generation` (MON-7): in order behind the activations sent before it, so it reaches the plan
+    /// it names. Never refused here: the engine refuses what doesn't fit, and counts it.
+    pub fn live(&self, generation: u64, slot: u32, ev: LiveEv) -> Result<u64> {
+        self.envelope(EngineMsg::Live { generation, slot, ev })
+    }
+
     /// Every note off and every instance reset (RENDER-10).
     pub fn panic(&self) -> Result<u64> {
         self.envelope(EngineMsg::Panic)
@@ -1159,7 +1195,27 @@ impl Player {
     pub fn dropped_ons(&self) -> u64 {
         self.shared.dropped_ons.load(Ordering::Relaxed)
     }
+
+    /// Live notes held in the renderer playing, after the last callback (MON-7).
+    pub fn live_notes(&self) -> u32 {
+        self.shared.live.load(Ordering::Relaxed)
+    }
+
+    /// The DSP load since the last call (8b.8): reading it starts the longest callback again, so
+    /// one reader only (the server's meters).
+    pub fn load(&self) -> Load {
+        Load { longest: f32::from_bits(self.shared.longest.swap(0, Ordering::Relaxed)), late: self.shared.late.load(Ordering::Relaxed) }
+    }
+
+    /// Whether the engine renders nothing: it idles once stopped and silent (RENDER-6a), or no
+    /// project plays. As of the last callback.
+    pub fn idle(&self) -> bool {
+        !self.shared.running.load(Ordering::Relaxed)
+    }
 }
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+#[path = "load_tests.rs"]
+mod load_tests;

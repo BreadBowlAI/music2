@@ -1650,10 +1650,12 @@ type Handle<E extends Exports> = E extends Signal ? { out: E } : { [K in keyof E
 export type TrackOptions = {
   /** Display text, such as "Lead Vox": what the app shows. Never an address, and code can't read it (ID-10). */
   name?: string;
+  /** Mute in song (MON-5): silent in every render, export included. Its sidechain uses still hear it (MON-2). */
+  muted?: boolean;
 };
 
 /** Registered tracks by key. Private: it holds labels, which song code must never see. */
-const tracks = new Map<string, { fn: TrackFn<any>; label?: string; src?: string; at: Place }>();
+const tracks = new Map<string, { fn: TrackFn<any>; label?: string; muted: boolean; src?: string; at: Place }>();
 const TRACK = Symbol("m2.track");
 
 /**
@@ -1671,13 +1673,13 @@ export function track<E extends Exports>(key: string, a: TrackOptions | TrackFn<
   if (key === "song") throw new BuildError("key.invalid", `"song" is reserved for the root module; give the track another key`);
   const [opts, fn]: [unknown, unknown] = typeof a === "function" ? [undefined, a] : [a, b];
   if (typeof fn !== "function") throw new Error(`track("${key}"): write track("${key}", fn), or track("${key}", { name: "…" }, fn)`);
-  const o = options(`track("${key}")`, opts, { name: "string" }) as TrackOptions;
+  const o = options(`track("${key}")`, opts, { name: "string", muted: "boolean" }) as TrackOptions;
   const here = place(site);
   const first = tracks.get(key);
   if (first) {
     throw new BuildError("key.duplicate", `two tracks have the key "${key}": one at ${describe(first.at)}, another at ${describe(here)}. Track keys are unique in the project; rename one`, key);
   }
-  tracks.set(key, { fn: fn as TrackFn<E>, label: o.name, src: callsite(), at: here });
+  tracks.set(key, { fn: fn as TrackFn<E>, label: o.name, muted: o.muted === true, src: callsite(), at: here });
   return new Proxy({} as Handle<E>, {
     get(_, prop) {
       if (prop === TRACK) return key;
@@ -1746,10 +1748,12 @@ export function __build(root: unknown): string {
     ir: 2,
     root: { module: "song", export: "out" },
     modules: modules.map((m) => {
-      const label = tracks.get(m.key)?.label;
+      const t = tracks.get(m.key);
       const lanes = [...infoOf(m).lanes].map(([key, l]) => ({ key, kind: l.kind, default: l.default, label: l.label }));
       const frames = infoOf(m).table;
-      return { key: m.key, label: m.track ? label : undefined, track: m.track, lanes, nodes: m.root.nodes, exports: m.exports, src: m.src, frames: frames.length ? frames : undefined };
+      // `muted` only when true: every other IR keeps its bytes (ID-11).
+      const muted = m.track && t?.muted ? true : undefined;
+      return { key: m.key, label: m.track ? t?.label : undefined, track: m.track, muted, lanes, nodes: m.root.nodes, exports: m.exports, src: m.src, frames: frames.length ? frames : undefined };
     }),
   });
 }
