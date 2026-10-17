@@ -394,6 +394,7 @@ key("chain-l", () => vocalChain(x))                          // a frame: compose
 - *Today:* matches: the context exposes `key`, labels live only in the IR, and no handle returns one (tested in `core/script/src/tests.rs`). A label change changes no data file, graph or sound (`core/session/src/gate_tests.rs`). Since step 6 renaming a label in the app, `m2 label` or `POST /api/graph/label` is an `Identical` Tx on the `track()` call's name (`crates/editor/src/rename.rs`).
 
 **ID-11.** The IR module is `Module { key, label, muted }` (`muted` is "mute in song", [MON-5](#monitoring-overlays-and-mute-in-song)). The key is used by the import op, flat node names, lane addresses, `m2 bounce --track` and `--place`, bounce provenance, `TimelineTrack.module` and UI selection. `slug()` is deleted.
+- *Today:* since 8b.4 `Module.muted` is in the IR, written only when true, so an IR without it keeps its JSON and its hash (`a_song_without_muted_has_the_same_ir_hash`). The checker refuses it on `song` and on a module that isn't a track, and lists the muted tracks in `Flat.muted` (`core/ir/src/check.rs`).
 
 ### Derived identity
 
@@ -1017,7 +1018,7 @@ export const delay = component({
 
 **PKG-13.** An audio input that only listens (a detector or key input, such as `follow`'s `in` or a compressor's side input) MUST be declared `port.audio({ sidechain: true })`. A hosted plugin's audio inputs other than its main one are sidechain ports. Monitoring mute and solo never act on a sidechain port ([MON-2](#monitoring-overlays-and-mute-in-song)).
 - *Why:* muting the kick must not un-duck a bass whose compressor is keyed from the kick's audio.
-- *Today:* since step 5 a frame records the signal each of its sidechain inputs received (`Frame.sidechain`), a dictionary entry's by its path (`others.hats.side`, `an_entry_sidechain_input_is_recorded`), whatever order the calls ran in, and the checker carries each as a port into `Flat.sidechain`, or a voice's `Voice.sidechain` when a voice made it (`core/ir/src/check.rs`). Nothing reads them until mute and solo (step 8). std declares `follow`'s `in` and `duck`'s `side` as sidechain inputs (`std/src/dsp.ts`, `std/src/fx.ts`).
+- *Today:* since step 5 a frame records the signal each of its sidechain inputs received (`Frame.sidechain`), a dictionary entry's by its path (`others.hats.side`, `an_entry_sidechain_input_is_recorded`), whatever order the calls ran in, and the checker carries each as a port into `Flat.sidechain`, or a voice's `Voice.sidechain` when a voice made it (`core/ir/src/check.rs`). std declares `follow`'s `in` and `duck`'s `side` as sidechain inputs (`std/src/dsp.ts`, `std/src/fx.ts`). Since 8b.4 the checker also lists where overlays go (`Flat.overlays`, [MON-1](#monitoring-overlays-and-mute-in-song)) and leaves out every sidechain input: an input made inside a frame that recorded a sidechain, which reads the signal that frame received; a plugin's audio inputs other than `in`; and a voice's capture that such an input reads (`core/ir/src/overlay_tests.rs`).
 
 **PKG-14.** A control MAY be declared `.smooth()`: a gain, a mix or anything else that clicks when it steps. Its cell then ramps over one block on every change ([RENDER-22a](#cells)).
 - *Why:* the descriptor knows which controls click; the engine doesn't.
