@@ -14,7 +14,15 @@ Audio in the app: written by lane A.
 ## Lane B
 
 Record what you play: the count-in, the recorder, the Record button, and which MIDI keyboard plays. Branch
-`studio-b`.
+`studio-b`: B1 `5c8de3b`, B2 `4b2ae9f`, B3 `3ba146d`, B4 `62039fc`, each green.
+
+**For the merge with P0:** P0 wasn't on `studio` while lane B ran, so lane B made its own seams:
+`crates/server/src/routes_record.rs` and `graph/record.rs` (whole files: take lane B's over P0's empty stubs),
+`mod routes_record;` after `mod routes_leases;` (`lib.rs`), its `.merge` line after `routes_leases`' (`routes.rs`),
+and `pub mod record;` after `mod tempo_lease;` (`graph.rs`: `pub`, as `routes_record.rs` names
+`graph::record::Options`). Keep P0's other lines beside them. The take's messages go on the events channel
+(`spawn_takes` in `lib.rs`); P0's `AppState.takes` (D9) is unused by lane B and may carry the progress messages
+later. `st-record` has no `tips()` yet (P0's `tiplib.mjs`).
 
 ### B1. The count-in, in the engine
 
