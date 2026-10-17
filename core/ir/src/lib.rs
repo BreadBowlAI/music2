@@ -125,6 +125,11 @@ pub struct Frame {
     /// solo must not reach (MON-2).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sidechain: Vec<Sidechain>,
+    /// Turned off with `bypass: true` in its options (Next D1): its body ran, so its nodes and
+    /// knobs are here, and the call gave its audio input on, so nothing reads them. Written only
+    /// when true, so every other IR keeps its bytes (ID-11).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bypass: bool,
 }
 
 /// A sidechain input of a component call, and the signal it received.

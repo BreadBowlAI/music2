@@ -594,3 +594,197 @@ fn a_delay_added_inside_a_ringing_delay_changes_no_bit_of_its_echoes() {
     let first = alone.iter().zip(&edited).position(|(x, y)| x.map(f32::to_bits) != y.map(f32::to_bits));
     assert_eq!(first, None, "the first frame that differs from no edit (the edit is at {at})");
 }
+
+// ---------------------------------------------------------------- turned off (Next D1)
+
+/// The song with `body` as its function's result, the saw and std's effects imported.
+fn fx_song(body: &str) -> String {
+    format!(
+        "{HEAD}import {{ delay, reverb }} from \"std/fx\";\nimport {{ lowpass }} from \"std/filter\";\nimport {{ master, mixer }} from \"std/mix\";\n\
+         export default song(() => {body});\n"
+    )
+}
+
+/// Turn `callee`'s call off (`on`) or on.
+fn switch(s: &mut Session, callee: &str, on: bool) -> Result<Edited, EditError> {
+    let (at, id) = (rev(s), call(s, callee));
+    bypass(s, at, &id, on)
+}
+
+/// Turn `callee`'s call off (`on`) or on, and say what the file says now.
+fn turned(f: &Fixture, s: &mut Session, callee: &str, on: bool) -> String {
+    switch(s, callee, on).unwrap_or_else(|e| panic!("{callee} {on}: {e}"));
+    f.source()
+}
+
+/// The kernels the engine runs: the checked graph's order.
+fn running(s: &Session) -> Vec<String> {
+    let flat = &s.accepted().compiled.flat;
+    flat.order
+        .iter()
+        .filter_map(|&i| match &flat.nodes[i].op {
+            m2_ir::FOp::Kernel { kernel, .. } => Some(kernel.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+// Next D1 (Q24): turning an effect off writes `bypass: true` after its options' last property; its
+// call still makes its nodes and knobs, and gives its input on, so the engine runs none of it.
+// Undo puts the code back.
+#[test]
+fn bypass_writes_bypass_true_into_the_options() {
+    let original = fx_song("reverb(osc.saw(hz(110)), { size: 0.8 })");
+    let f = Fixture::new(&original);
+    let mut s = f.open();
+    let knobs = s.controls().len();
+    assert!(running(&s).contains(&"std:reverb".to_string()));
+    let done = switch(&mut s, "reverb", true).unwrap();
+    assert_eq!(f.source(), original.replace("{ size: 0.8 }", "{ size: 0.8, bypass: true }"));
+    assert_eq!(
+        (done.before.as_str(), done.after.as_str()),
+        ("reverb(osc.saw(hz(110)), { size: 0.8 })", "reverb(osc.saw(hz(110)), { size: 0.8, bypass: true })")
+    );
+    let site = s.accepted().compiled.sites.iter().find(|x| x.callee == "reverb").unwrap().id;
+    assert!(is_bypassed(&s.accepted().compiled, site));
+    assert_eq!(running(&s), ["std:saw"], "the reverb runs nothing");
+    assert_eq!(s.controls().len(), knobs, "its knobs stay to set");
+    s.undo().unwrap();
+    assert_eq!(f.source(), original);
+    assert!(running(&s).contains(&"std:reverb".to_string()));
+}
+
+// Next D1: a call with no options object gets a new one, after its last argument; one written
+// over lines gets it on a line of its own (D4e); `bypass: false` becomes true.
+#[test]
+fn bypass_into_a_call_with_no_options() {
+    let cases = [
+        ("reverb(osc.saw(hz(110)))", "reverb", "reverb(osc.saw(hz(110)), { bypass: true })"),
+        ("lowpass(osc.saw(hz(110)), 800)", "lowpass", "lowpass(osc.saw(hz(110)), 800, { bypass: true })"),
+        ("delay(osc.saw(hz(110)), {})", "delay", "delay(osc.saw(hz(110)), { bypass: true })"),
+        ("delay(osc.saw(hz(110)), { bypass: false })", "delay", "delay(osc.saw(hz(110)), { bypass: true })"),
+        (
+            "master(\n    reverb(\n      osc.saw(hz(110)),\n    ),\n  )",
+            "reverb",
+            "master(\n    reverb(\n      osc.saw(hz(110)),\n      { bypass: true },\n    ),\n  )",
+        ),
+    ];
+    for (call_text, callee, after) in cases {
+        let original = fx_song(call_text);
+        let f = Fixture::new(&original);
+        let mut s = f.open();
+        let before = running(&s);
+        assert_eq!(turned(&f, &mut s, callee, true), fx_song(after), "{call_text}");
+        let site = s.accepted().compiled.sites.iter().find(|x| x.callee == callee).unwrap().id;
+        assert!(is_bypassed(&s.accepted().compiled, site), "{call_text}");
+        assert!(running(&s).len() < before.len(), "{call_text}: the effect's kernels don't run");
+    }
+}
+
+// Next D1: turning it on again takes the property out with its comma, and the options object
+// when it was alone.
+#[test]
+fn bypass_off_takes_it_out_and_its_braces() {
+    let cases = [
+        ("reverb(osc.saw(hz(110)), { size: 0.8, bypass: true })", "reverb(osc.saw(hz(110)), { size: 0.8 })"),
+        ("reverb(osc.saw(hz(110)), { bypass: true, size: 0.8 })", "reverb(osc.saw(hz(110)), { size: 0.8 })"),
+        ("reverb(osc.saw(hz(110)), { size: 0.8, bypass: true, mix: 0.2 })", "reverb(osc.saw(hz(110)), { size: 0.8, mix: 0.2 })"),
+        ("reverb(osc.saw(hz(110)), { bypass: true })", "reverb(osc.saw(hz(110)))"),
+        ("reverb(osc.saw(hz(110)), {\n    size: 0.8,\n    bypass: true,\n  })", "reverb(osc.saw(hz(110)), {\n    size: 0.8,\n  })"),
+    ];
+    for (call_text, after) in cases {
+        let original = fx_song(call_text);
+        let f = Fixture::new(&original);
+        let mut s = f.open();
+        assert_eq!(running(&s), ["std:saw"], "{call_text}: off at first");
+        assert_eq!(turned(&f, &mut s, "reverb", false), fx_song(after), "{call_text}");
+        assert!(running(&s).contains(&"std:reverb".to_string()), "{call_text}");
+    }
+}
+
+// Next D1: off then on is the code it was, in each place an options object can go.
+#[test]
+fn bypass_then_unbypass_is_the_same_code() {
+    for body in [
+        "reverb(osc.saw(hz(110)))",
+        "reverb(osc.saw(hz(110)), { size: 0.8 })",
+        "lowpass(osc.saw(hz(110)), 800)",
+        "master(\n    reverb(osc.saw(hz(110))),\n  )",
+        "master(\n    reverb(\n      osc.saw(hz(110)),\n    ),\n  )",
+        "master(\n    reverb(\n      osc.saw(hz(110))\n    ),\n  )",
+    ] {
+        let original = fx_song(body);
+        let f = Fixture::new(&original);
+        let mut s = f.open();
+        let callee = if body.contains("lowpass") { "lowpass" } else { "reverb" };
+        assert_ne!(turned(&f, &mut s, callee, true), original, "{body}");
+        assert_eq!(turned(&f, &mut s, callee, false), original, "{body}");
+    }
+}
+
+// Next D1: a bypassed effect is in the graph but nothing reads it, so the song sounds exactly as
+// it does with the effect removed; and remove still takes it out.
+#[test]
+fn a_bypassed_effect_runs_nothing() {
+    let f = Fixture::new(&fx_song("delay(reverb(osc.saw(hz(110)), { bypass: true }), { time: 0.1 })"));
+    let mut s = f.open();
+    assert_eq!(running(&s), ["std:saw", "std:delay"]);
+    let off = s.accepted_arc();
+    let removed = s.remove_effect(rev(&s), &call(&s, "reverb")).unwrap();
+    assert_eq!(removed.after, "osc.saw(hz(110))");
+    let without = s.accepted_arc();
+    let (a, b) = (played(&off, &s.packages, 4800, None), played(&without, &s.packages, 4800, None));
+    assert!(a.iter().any(|x| x[0] != 0.0));
+    assert!(a.iter().zip(&b).all(|(x, y)| x.map(f32::to_bits) == y.map(f32::to_bits)), "the same to the bit");
+}
+
+// Next D1: what can't be turned off here says why in words.
+#[test]
+fn bypass_refuses_a_call_that_spreads_its_arguments() {
+    let f = Fixture::new(&fx_song("reverb(...([osc.saw(hz(110)), { size: 0.8 }] as const))"));
+    let mut s = f.open();
+    let e = switch(&mut s, "reverb", true).unwrap_err().to_string();
+    assert!(e.contains("Reverb can't be turned off here: its call spreads its arguments. Turn it off in code."), "{e}");
+    // On again when it is on already, and off when it is off.
+    let f = Fixture::new(&fx_song("reverb(osc.saw(hz(110)))"));
+    let mut s = f.open();
+    let e = switch(&mut s, "reverb", false).unwrap_err().to_string();
+    assert!(e.contains("Reverb is on already."), "{e}");
+    // A component with a bypass of its own keeps it.
+    let own = "import { component, control, kernel, port, song, type Audio, type Params } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\n\
+               const fuzz = component(\n  { id: \"fuzz\", label: \"Fuzz\", inputs: { in: port.audio() }, controls: { bypass: control.db(0) }, output: port.audio(), editor: { category: \"Drive\" } },\n  \
+               (x: Audio, { bypass }: Params) => kernel(\"std:gain\", { in: x, db: bypass }),\n);\nexport default song(() => fuzz(osc.saw(110)));\n";
+    let f = Fixture::new(own);
+    let mut s = f.open();
+    let e = switch(&mut s, "fuzz", true).unwrap_err().to_string();
+    assert!(e.contains("It has its own Bypass knob."), "{e}");
+    let view = crate::view::view(&s);
+    let card = view.modules[0].nodes.iter().find(|n| n.label == "fuzz").unwrap();
+    assert_eq!(card.menu.as_ref().and_then(|m| m.bypass.as_deref()), Some("It has its own Bypass knob."));
+}
+
+// Next D1 (X10): the Device view keeps a turned-off card where it was: what reads the call is
+// drawn from the card, dashed, not from the effect's input.
+#[test]
+fn a_bypassed_effect_keeps_its_place_in_the_chain() {
+    let f = Fixture::new(&fx_song("master(reverb(osc.saw(hz(110)), { size: 0.8 }))"));
+    let mut s = f.open();
+    let shape = |s: &Session| {
+        let v = crate::view::view(s);
+        let m = &v.modules[0];
+        let name = |id: &str| m.nodes.iter().find(|n| n.id == id).map_or(id.to_string(), |n| n.label.clone());
+        let mut e: Vec<(String, String, bool)> = m.port_edges.iter().map(|e| (name(&e.from), name(&e.to), e.bypassed)).collect();
+        e.sort();
+        let card = m.nodes.iter().find(|n| n.label == "reverb").unwrap();
+        (e, card.bypassed, card.menu.clone().unwrap().bypass)
+    };
+    let on = shape(&s);
+    let edge = |a: &str, b: &str, dashed: bool| (a.to_string(), b.to_string(), dashed);
+    assert!(on.0.contains(&edge("osc.saw", "reverb", false)) && on.0.contains(&edge("reverb", "master", false)), "{on:?}");
+    assert_eq!((on.1, on.2), (false, None));
+    switch(&mut s, "reverb", true).unwrap();
+    let off = shape(&s);
+    let edges: Vec<(String, String, bool)> = on.0.iter().map(|(a, b, _)| (a.clone(), b.clone(), a == "reverb")).collect();
+    assert_eq!(off.0, edges, "the same edges; the one out of the card is dashed");
+    assert_eq!((off.1, off.2), (true, None), "off, and Turn on can run");
+}

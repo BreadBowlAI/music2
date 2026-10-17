@@ -1299,6 +1299,98 @@ export default song(() => [440].map(sine)[0]);
     assert!(b.ir.modules[0].nodes.iter().all(|n| n.frame.is_none() && n.origin.as_ref().is_none_or(|o| o.arg.is_empty())));
 }
 
+/// What the song's root export reads: a node of the song module, and its port.
+fn song_out(b: &Build) -> &str {
+    let m = b.ir.modules.iter().find(|m| m.key == b.ir.root.module).expect("the root module");
+    &m.exports[&b.ir.root.export]
+}
+
+/// The one node of the song module running `kernel`.
+fn kernel_node<'a>(b: &'a Build, kernel: &str) -> &'a m2_ir::Node {
+    let found: Vec<_> = song_nodes(b).into_iter().filter(|n| matches!(&n.op, Op::Kernel { kernel: k, .. } if k == kernel)).collect();
+    assert_eq!(found.len(), 1, "{kernel}");
+    found[0]
+}
+
+// Next D1 (Q24): `bypass: true` runs the effect's body as always and records it on its frame, and
+// the call gives its audio input on: the song reads the saw, and nothing reads the delay. The
+// call's own output is still what it made (the editor finds the call by it). `bypass: false` is
+// a call left on.
+#[test]
+fn bypass_returns_the_audio_input() {
+    let b = described_ok(r#"return delay(kernel("std:saw", { freq: 110 }), { time: 300, bypass: true });"#);
+    let saw = kernel_node(&b, "std:saw");
+    assert_eq!(m2_ir::split_ref(song_out(&b)).0, saw.id, "the song reads the saw");
+    let delay = kernel_node(&b, "std:delay");
+    let (_, f) = frames_of(&b, "delay")[0];
+    assert!(f.bypass);
+    assert_eq!(f.options, Some(1));
+    let out = b.outputs.iter().find(|o| o.site == f.site).expect("the call's own output");
+    assert_eq!(m2_ir::split_ref(&out.port).0, delay.id);
+    let on = described_ok(r#"return delay(kernel("std:saw", { freq: 110 }), { time: 300, bypass: false });"#);
+    assert!(!frames_of(&on, "delay")[0].1.bypass);
+    assert_eq!(m2_ir::split_ref(song_out(&on)).0, kernel_node(&on, "std:delay").id, "on: the song reads the delay");
+    // Written only when true: a frame left on has no `bypass` in the IR (ID-11).
+    assert!(!serde_json::to_string(&on.ir).unwrap().contains("bypass"));
+    assert!(serde_json::to_string(&b.ir).unwrap().contains("\"bypass\":true"));
+}
+
+// Next D1 (Q24): a bypassed call keeps its frame and its knobs: the same constants, in the same
+// frame, as the call left on. Positional and options-only calls alike; a call with no options
+// object takes `{ bypass: true }` as its options.
+#[test]
+fn bypass_keeps_the_frame_and_its_knobs() {
+    for (on, off) in [
+        ("delay(x, { time: 300, mix: 0.5 })", "delay(x, { time: 300, mix: 0.5, bypass: true })"),
+        ("lowpass(x, 800)", "lowpass(x, 800, { bypass: true })"),
+        ("gain(x)", "gain(x, { bypass: true })"),
+    ] {
+        let body = |call: &str| format!("const x = kernel(\"std:saw\", {{ freq: 110 }});\nreturn {call};");
+        let (a, b) = (described_ok(&body(on)), described_ok(&body(off)));
+        let shape = |b: &Build| controls_of(b).into_iter().map(|(f, slot, v, unit, o)| (f, slot, v, unit, o.arg)).collect::<Vec<_>>();
+        assert_eq!(shape(&a), shape(&b), "{off}");
+        assert!(!shape(&a).is_empty());
+        let frames = |b: &Build| b.ir.modules[0].frames.iter().map(|f| (f.site, f.component.clone(), f.bypass)).collect::<Vec<_>>();
+        let plain = |b: &Build| frames(b).into_iter().map(|f| f.1).collect::<Vec<_>>();
+        assert_eq!(plain(&a), plain(&b), "{off}: the same frames");
+        assert!(frames(&a).iter().all(|f| !f.2));
+        assert!(frames(&b).iter().any(|f| f.2));
+    }
+}
+
+// Next D1 (Q25): only a call that takes audio first and gives audio can be bypassed: an
+// instrument (notes in), a source, a control's call and a mixer refuse it in words, as an unknown
+// option is refused. `bypass` must be true or false. A component with a `bypass` of its own keeps
+// it as its own control.
+#[test]
+fn bypass_is_refused_on_an_instrument() {
+    let refused = |body: &str| described_err(body);
+    assert!(refused(r#"return follow(kernel("std:saw"), { bypass: true }) as any;"#).contains("follow(): can't be bypassed"));
+    assert!(refused(r#"return noise(1, { bypass: true });"#).contains("noise(): can't be bypassed"));
+    assert!(refused(r#"return square({ bypass: true });"#).contains("square(): can't be bypassed"));
+    assert!(refused(r#"return mix({ a: kernel("std:saw") }, { bypass: true });"#).contains("mix(): can't be bypassed"));
+    let e = refused(r#"return delay(kernel("std:saw"), { bypass: "yes" } as any);"#);
+    assert!(e.contains("delay(): bypass must be true or false, not \"yes\""), "{e}");
+    let song = r#"import { component, control, kernel, port, song, type Audio, type Events, type Params } from "@m2/core";
+const inst = component(
+  { id: "inst", inputs: { notes: port.notes() }, output: port.audio(), editor: { category: "Synth" } },
+  (n: Events) => kernel("std:saw"),
+);
+const fuzz = component(
+  { id: "fuzz", inputs: { in: port.audio() }, controls: { bypass: control.db(0) }, output: port.audio() },
+  (x: Audio, { bypass }: Params) => kernel("std:gain", { in: x, db: bypass }),
+);
+export default song(({ lane }) => BODY);
+"#;
+    let built = |body: &str| build_full(&options(&[("song.ts", &song.replace("BODY", body))]));
+    let e = built(r#"inst(lane.notes("n"), { bypass: true } as any)"#).err().expect("refused");
+    assert!(e[0].message.contains("inst(): can't be bypassed"), "{e:?}");
+    // Its own `bypass`: a knob of its own, set to -6 dB, and the call left on.
+    let b = built("fuzz(kernel(\"std:saw\"), { bypass: -6 })").unwrap_or_else(|e| panic!("{e:?}"));
+    assert!(!b.ir.modules[0].frames.iter().any(|f| f.bypass));
+    assert!(controls_of(&b).iter().any(|(_, slot, v, ..)| slot == "bypass" && *v == -6.0));
+}
+
 // PKG-13: what a sidechain input received is recorded on its frame, whatever was called first.
 #[test]
 fn sidechain_inputs_are_recorded() {

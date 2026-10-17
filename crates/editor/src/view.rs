@@ -27,7 +27,7 @@ use m2_session::{Home, Session};
 
 use crate::cable::{Inlet, Outlet, inlets, outlets};
 use crate::controls::{Control, Declared, controls, declared, not_insertable};
-use crate::effect::{calls_of, effect_at};
+use crate::effect::{bypass_refused, calls_of, effect_at, is_bypassed};
 use crate::sites::{Params, fn_params};
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -66,6 +66,10 @@ pub struct PortEdge {
     /// Read one block late, by a `feedback()`: the edge that closes a loop.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub late: bool,
+    /// From an effect turned off (Next D1): what reads the call reads the effect's input, and is
+    /// drawn from the effect's card, so the card keeps its place in the chain.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub bypassed: bool,
 }
 
 /// Where a signal or value comes into a node.
@@ -147,6 +151,20 @@ pub struct ViewNode {
     pub inputs: Vec<InputPort>,
     /// Its outputs, its own result first.
     pub outputs: Vec<OutputPort>,
+    /// An effect turned off (Next D1): `bypass: true` in its call.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub bypassed: bool,
+    /// What an effect's ⋯ menu offers, and why a row can't run here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub menu: Option<EffectMenu>,
+}
+
+/// An effect card's ⋯ menu (Next D1, D2): each row's words when it can't run here.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct EffectMenu {
+    /// Why Turn off (Turn on, when it is off) can't run here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bypass: Option<String>,
 }
 
 /// An input connected by a cable, as the canvas shows it.
@@ -701,6 +719,11 @@ pub fn view(session: &Session) -> GraphView {
                 Some(c) if kind == "call" => rev.compiled.components.get(c.as_str()).map(|d| d.label.clone()),
                 _ => None,
             };
+            let bypassed = matches!(g, Group::Site(s) if effect.is_some() && is_bypassed(&rev.compiled, *s));
+            let menu = match g {
+                Group::Site(s) if effect.is_some() => Some(EffectMenu { bypass: bypass_refused(session, sites[s], !bypassed) }),
+                _ => None,
+            };
             nodes.push(ViewNode {
                 id: id.clone(),
                 label,
@@ -717,6 +740,8 @@ pub fn view(session: &Session) -> GraphView {
                 title,
                 inputs: vec![],
                 outputs: vec![],
+                bypassed,
+                menu,
             });
             id
         };
@@ -774,6 +799,30 @@ pub fn view(session: &Session) -> GraphView {
                 }
             }
         }
+        // An effect turned off gives its audio input on (Next D1), so the call written around it
+        // reads that input: drawn from the effect's card instead, so the card keeps its place.
+        let mut through: HashSet<(Group, &str)> = HashSet::new();
+        // Each effect turned off: its group, its own output, and the audio it reads.
+        let mut off: Vec<(Group, &str, HashSet<&str>)> = vec![];
+        for g in &groups {
+            let Group::Site(e) = g else { continue };
+            let Some(effect) = sites.get(e).filter(|_| is_bypassed(&rev.compiled, *e)) else { continue };
+            let Some((_, out)) = call_output(session, *e).filter(|(module, _)| *module == m.key) else { continue };
+            let audio = |r: &str| matches!(kind_of(session, &m.key, r), Some(Kind::Audio(_)));
+            let input: HashSet<&str> = reads.iter().filter(|(to, _, r, _)| to == g && audio(r)).map(|x| x.2).collect();
+            let around = |to: &Group| match to {
+                Group::Site(t) => sites.get(t).is_some_and(|x| {
+                    x.id != effect.id && x.file == effect.file && x.start <= effect.start && effect.end <= x.end
+                }),
+                _ => false,
+            };
+            for read in reads.iter_mut().filter(|(to, _, r, _)| to != g && input.contains(r) && around(to)) {
+                link(Some(g.clone()), Some(read.0.clone()), &mut edges);
+                (read.2, read.3) = (out, g.clone());
+                through.insert((read.0.clone(), out));
+            }
+            off.push((g.clone(), out, input));
+        }
         let mut exported: Vec<(String, &str, Group)> = vec![];
         for (name, r) in &m.exports {
             let id = format!("export:{name}");
@@ -793,8 +842,15 @@ pub fn view(session: &Session) -> GraphView {
                 title: None,
                 inputs: vec![],
                 outputs: vec![],
+                bypassed: false,
+                menu: None,
             });
-            if let Some(g) = source(r).and_then(group_of)
+            // A track's output that an effect turned off gives on comes from its card.
+            let (r, g) = match off.iter().find(|(_, _, input)| input.contains(r.as_str())) {
+                Some((e, out, _)) => (*out, Some(e.clone())),
+                None => (r.as_str(), source(r).and_then(group_of)),
+            };
+            if let Some(g) = g
                 && let Some(from) = ids.get(&g)
             {
                 edges.push((from.clone(), id.clone()));
@@ -939,13 +995,16 @@ pub fn view(session: &Session) -> GraphView {
                 driven.insert((to_id.clone(), to_port.clone()), LaneRef { module: m.key.clone(), lane: lane.clone() });
             }
             let late = late.contains(&(to.clone(), *r));
-            wire(PortEdge { from: from_id.clone(), from_port, to: to_id.clone(), to_port, kind: kind(r), late });
+            let bypassed = through.contains(&(to.clone(), *r));
+            wire(PortEdge { from: from_id.clone(), from_port, to: to_id.clone(), to_port, kind: kind(r), late, bypassed });
         }
         for (to_id, r, from) in &exported {
             let from_port = give(&ids[from], r);
             let port = InputPort::new("in".into(), kind(r), kind(r));
             inputs.entry(to_id.clone()).or_default().push((port, None));
-            wire(PortEdge { from: ids[from].clone(), from_port, to: to_id.clone(), to_port: "in".into(), kind: kind(r), late: false });
+            let bypassed = off.iter().any(|(_, out, _)| out == r);
+            let to_port = "in".to_string();
+            wire(PortEdge { from: ids[from].clone(), from_port, to: to_id.clone(), to_port, kind: kind(r), late: false, bypassed });
         }
         // Inputs in the order they are written in the call; signals from elsewhere first.
         let files: HashMap<&String, &str> = ordered

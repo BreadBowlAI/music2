@@ -458,6 +458,8 @@ type IrFrame = {
   parent?: number;
   options?: number;
   sidechain?: { input: string; ref: string }[];
+  /** Turned off with `bypass: true` (Next D1): the call gives its audio input on. */
+  bypass?: boolean;
 };
 
 /**
@@ -814,7 +816,9 @@ type Req<D, K> = K extends keyof Ins<D>
  * editor's signature help and hover list the options in the order declared (`{ time?: Value;
  * mix?: Value }`) instead of naming this type with the whole descriptor as its argument.
  */
-export type CallOptions<D> = { [K in keyof Ctls<D>]?: ArgOf<D, K> } & { [K in keyof Sets<D>]?: ArgOf<D, K> } extends infer O
+export type CallOptions<D> = { [K in keyof Ctls<D>]?: ArgOf<D, K> } & { [K in keyof Sets<D>]?: ArgOf<D, K> } & (Bypassable<D> extends true
+  ? { bypass?: boolean }
+  : {}) extends infer O
   ? { -readonly [K in keyof O]: O[K] }
   : never;
 
@@ -823,8 +827,15 @@ type NotPositional<D> = Exclude<keyof Ctls<D> | keyof Sets<D>, Pos<D>[number]>;
 // Mapped over a type parameter, so a tuple maps to a tuple and `[number]` reads its elements.
 type OptionalIn<D, P> = { [I in keyof P]: Req<D, P[I]> extends true ? never : P[I] }[number & keyof P];
 type OptionalPositional<D> = OptionalIn<D, Pos<D>>;
-/** Whether a call needs the options form: some control or setting isn't positional, or two positional slots may be left out. */
-type NeedsOptions<D> = [NotPositional<D>] extends [never] ? (true extends IsUnion<OptionalPositional<D>> ? true : false) : true;
+/**
+ * Whether a call needs the options form: it can be bypassed, or some control or setting isn't
+ * positional, or two positional slots may be left out.
+ */
+type NeedsOptions<D> = Bypassable<D> extends true
+  ? true
+  : [NotPositional<D>] extends [never]
+    ? (true extends IsUnion<OptionalPositional<D>> ? true : false)
+    : true;
 
 /** Every prefix of a parameter list that still gives each required parameter; a left-out one may be `undefined`. */
 type Prefixes<A extends unknown[]> = A extends [] ? [] : A extends [...infer H, unknown] ? A | Prefixes<H> : A;
@@ -845,6 +856,22 @@ type Positional<D, P extends readonly string[]> = P extends readonly [infer H, .
   : [];
 type Derived<D> = [...LeadTuple<D>, ...Positional<D, Pos<D>>];
 type Out<D> = D extends { output: PortDecl<infer S, any> } ? S : Signal;
+
+/** A call's first argument: its signature's, else the descriptor's. */
+type FirstArg<D> = D extends { signature: Signature<infer F extends (...args: any[]) => any> }
+  ? Required<Parameters<F>> extends [infer H, ...any[]] ? H : never
+  : Derived<D> extends [infer H, ...any[]] ? H : never;
+/**
+ * Whether a call can be turned off with `bypass: true` (Next D1, Q25): it takes audio first and
+ * gives audio, and declares no `bypass` of its own.
+ */
+type Bypassable<D> = "bypass" extends keyof Ctls<D> | keyof Sets<D>
+  ? false
+  : [FirstArg<D>] extends [never]
+    ? false
+    : [FirstArg<D>] extends [Audio]
+      ? [Out<D>] extends [Audio] ? true : false
+      : false;
 
 /**
  * The type of a component's calls: its signature at each length the required slots allow, each
@@ -951,6 +978,11 @@ type Component = {
   controls: Ctl[];
   settings: Set_[];
   params: Param[];
+  /**
+   * Whether a call may be turned off with `bypass: true` (Next D1, Q25): its first argument is an
+   * audio input and its output is audio, and it declares no `bypass` of its own.
+   */
+  bypassable: boolean;
   /** Where `component()` was called, as `file:line:col`. */
   at: string;
   json: string;
@@ -1188,7 +1220,9 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     positional: [...positional],
     editor: { category: editor.category ?? null, description: editor.description ?? "", insert, notes },
   });
-  return { id: desc.id, cid, inputs, controls, settings, params, at, json };
+  const first = lead[0] === inputs[0] ? lead[0] : undefined;
+  const bypassable = first?.spec.kind === "audio" && !first.spec.many && output?.kind === "audio" && !names.has("bypass");
+  return { id: desc.id, cid, inputs, controls, settings, params, bypassable, at, json };
 }
 
 /** A number written in a control's spelling, as the JSON carries it: its value in base units too. */
@@ -1249,7 +1283,7 @@ function instance(c: Component, body: (...args: any[]) => unknown, args: unknown
   const m = scope.module;
   const frame = openFrame(m, site, { component: c.cid });
   try {
-    const { inputs, given, options } = parse(c, args, site === undefined);
+    const { inputs, given, options, bypass } = parse(c, args, site === undefined);
     const made: Made = { site, frame, scope, id: c.id };
     const params: Record<string, unknown> = {};
     for (const ctl of c.controls) {
@@ -1267,6 +1301,7 @@ function instance(c: Component, body: (...args: any[]) => unknown, args: unknown
       // Which argument held the options: only the call knows whether `lowpass(x, opts)` gave a
       // cutoff or options, and an editor writes a control the call leaves out there (PKG-3).
       if (options !== undefined) record.options = options;
+      if (bypass) record.bypass = true;
       // What each sidechain input received: where monitoring mute and solo must not reach (PKG-13).
       const listens = (input: string, v: unknown) => {
         for (const x of Array.isArray(v) ? v : [v]) {
@@ -1283,7 +1318,10 @@ function instance(c: Component, body: (...args: any[]) => unknown, args: unknown
         }
       }
     }
-    return produced(site, body(...c.inputs.map((i) => inputs.get(i.name)), params));
+    const out = produced(site, body(...c.inputs.map((i) => inputs.get(i.name)), params));
+    // Turned off (Next D1, Q24): the body ran as always, so its frame and knobs are there to set,
+    // and the call gives its audio input on. Nothing reads its output, so nothing of it is made.
+    return bypass ? inputs.get(c.inputs[0].name) : out;
   } finally {
     closeFrame(m, frame);
   }
@@ -1298,7 +1336,11 @@ function fail(id: string, message: string): never {
  * convention above), and say which argument held the options, if one did. `native`: the call
  * has no site, so native code may have made it.
  */
-function parse(c: Component, args: unknown[], native: boolean): { inputs: Map<string, unknown>; given: Map<string, Given>; options?: number } {
+function parse(
+  c: Component,
+  args: unknown[],
+  native: boolean,
+): { inputs: Map<string, unknown>; given: Map<string, Given>; options?: number; bypass: boolean } {
   // `xs.map(component)` passes each element, then its index and the array (D1).
   const n = args.length;
   if (native && n >= 3 && typeof args[n - 2] === "number" && Array.isArray(args[n - 1]) && (args[n - 1] as unknown[]).includes(args[0])) {
@@ -1307,8 +1349,19 @@ function parse(c: Component, args: unknown[], native: boolean): { inputs: Map<st
   const inputs = new Map<string, unknown>();
   const given = new Map<string, Given>();
   const names = () => [...c.controls.map((x) => x.name), ...c.settings.map((x) => x.name)].join(", ") || "none";
+  let bypass = false;
   const options = (o: Record<string, unknown>, at: number) => {
     for (const k of Object.keys(o)) {
+      // Any effect can be turned off (Next D1, Q25); a call of anything else can't.
+      if (k === "bypass" && c.bypassable) {
+        const v = o[k];
+        if (v !== undefined && typeof v !== "boolean") fail(c.id, `bypass must be true or false, not ${shown(v)}`);
+        bypass = v === true;
+        continue;
+      }
+      if (k === "bypass" && !c.controls.some((x) => x.name === k) && !c.settings.some((x) => x.name === k)) {
+        fail(c.id, `can't be bypassed: only a call that takes audio first and gives audio can be (options: ${names()})`);
+      }
       const isSlot = c.controls.some((x) => x.name === k) || c.settings.some((x) => x.name === k);
       if (!isSlot) {
         const input = c.inputs.some((x) => x.name === k) ? `; "${k}" is an input, given as an argument` : "";
@@ -1322,7 +1375,7 @@ function parse(c: Component, args: unknown[], native: boolean): { inputs: Map<st
   };
   // The call type's options are `options?`, so a helper may forward ones it wasn't given
   // (`delay(x, echo)` with `echo` left out): `undefined` where the options go is no options.
-  const hasOptions = c.controls.length + c.settings.length > 0;
+  const hasOptions = c.controls.length + c.settings.length > 0 || c.bypassable;
   let at: number | undefined;
   let p = 0;
   for (let i = 0; i < args.length; i++) {
@@ -1363,7 +1416,7 @@ function parse(c: Component, args: unknown[], native: boolean): { inputs: Map<st
     if (i.spec.many) inputs.set(i.name, inputs.get(i.name) ?? []);
     else if (!inputs.has(i.name)) fail(c.id, `the input ${i.name} is missing`);
   }
-  return { inputs, given, options: at };
+  return { inputs, given, options: at, bypass };
 }
 
 function notTrack(id: string, slot: string, v: unknown): unknown {

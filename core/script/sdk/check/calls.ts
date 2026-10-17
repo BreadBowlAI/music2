@@ -80,6 +80,12 @@ export const duck = component(
   (x: Audio) => x,
 );
 
+/** One positional control after the audio: the options form only for `bypass` (Next D1). */
+export const gain = component(
+  { id: "gain", inputs: { in: port.audio() }, controls: { db: control.db(0) }, output: port.audio(), positional: ["db"] },
+  (x: Audio, { db }: Params) => kernel("std:gain", { in: x, db }),
+);
+
 export const mtof = component({ id: "mtof", controls: { pitch: control.semis() }, positional: ["pitch"], output: port.control("hz") }, ({ pitch }: Params) => kernel("std:mtof", { pitch }));
 
 declare const x: Audio, wobble: Signal, beats: Control<"beats">, side: Control<"unit01">;
@@ -119,6 +125,14 @@ export const ok = [
   scale(x, 0.5),
   osc.saw(110),
   mixer({ kick: x }),
+  // Turned off (Next D1): any call that takes audio first and gives audio.
+  delay(x, { bypass: true }),
+  delay(x, { time: 0.25, bypass: true }),
+  lowpass(x, 1000, { bypass: true }),
+  gain(x),
+  gain(x, -3),
+  gain(x, -3, { bypass: true }),
+  gain(x, { bypass: false }),
 ];
 
 // The generic helpers' results keep their kind.
@@ -152,6 +166,14 @@ lowpass(x, "1000");
 mtof();
 // @ts-expect-error the input left out
 delay();
+// @ts-expect-error bypass is true or false
+delay(x, { bypass: 1 });
+// @ts-expect-error a control's call can't be bypassed
+mtof(60, { bypass: true });
+// @ts-expect-error a source can't be bypassed
+square(440, { bypass: true });
+// @ts-expect-error a control's call can't be bypassed, though its input is a signal
+lfo(beats, { bypass: true });
 // @ts-expect-error a dictionary entry with a field it doesn't have
 mix({ hats: { in: x, gain: 1 } });
 

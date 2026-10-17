@@ -18,6 +18,13 @@
 //! effect call's own nodes (the numbers written in its arguments and the controls it leaves out
 //! included: they are made in its frame) out of the graph that has it, and make whatever read its
 //! output read its input instead: that must be exactly the graph without it.
+//!
+//! Turning an effect off (Next D1) writes `bypass: true` into its options: its call still runs
+//! and makes its nodes, so its knobs stay to set, and gives its audio input on, so nothing reads
+//! them and the engine never makes them (Q24). Turning it on takes the property out. Each is one
+//! `TextEdit` confined to the call, asserted against the graph as removing is: with the effect's
+//! own nodes taken out of the graph that has it turned off, that graph must be exactly the one
+//! without it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -25,14 +32,16 @@ use std::sync::Arc;
 
 use m2_ir::{Ir, Module, Node, Op, split_ref};
 use m2_script::Descriptor;
-use m2_script::component::Spelled;
-use m2_script::sites::Site;
-use m2_session::{Compiled, Session};
+use m2_script::component::{PortKind, Spelled};
+use m2_script::sites::{Arg, Site};
+use m2_session::{Checked, Compiled, Session};
 use m2_song::tx::{Confined, Declared as Ranges, Expect, Range};
 use serde::Serialize;
 
 use crate::cable::{canonical, current_site, excise, refs};
-use crate::controls::walk;
+use crate::controls::{options_of, walk};
+use crate::label::shown_call;
+use crate::lens::Insertion;
 use crate::plan::{self, path, unmoved};
 use crate::sites::{import_insertion, imported_names};
 use crate::{EditError, Edited, ready};
@@ -286,6 +295,150 @@ pub fn remove_effect(s: &mut Session, at: u64, call: &str) -> Result<Edited, Edi
         }
     })?;
     Ok(Edited { revision: done.number, file: site.file, before: written, after: inner })
+}
+
+/// Whether call `site` is turned off: `bypass: true` in its options when it ran (Next D1).
+pub fn is_bypassed(compiled: &Compiled, site: u32) -> bool {
+    compiled.ir.modules.iter().flat_map(|m| &m.frames).any(|f| f.site == site && f.component.is_some() && f.bypass)
+}
+
+/// Why calls of effect `d` can't be turned off at all, if they can't: the SDK's rule (Q25), its
+/// first input and its output audio; and a component with a `bypass` of its own keeps it.
+fn unbypassable(d: &Descriptor) -> Option<String> {
+    if d.controls.iter().any(|c| c.name == "bypass") || d.settings.iter().any(|x| x.name == "bypass") {
+        return Some("It has its own Bypass knob.".into());
+    }
+    let first = d.inputs.first().filter(|i| i.kind == PortKind::Audio && !i.many && !d.positional.contains(&i.name));
+    match (first, &d.output) {
+        (Some(_), Some(o)) if o.kind == PortKind::Audio => None,
+        _ => Some(format!("{} can't be turned off: only an effect that takes audio and gives audio can.", d.label)),
+    }
+}
+
+/// Where the property whose value is `value` starts: its key, before the `:`; the value itself
+/// for a shorthand (`{ bypass }`).
+fn prop_start(text: &str, value: (u32, u32), key: &str) -> Option<u32> {
+    let before = text.get(..value.0 as usize)?.trim_end();
+    let Some(head) = before.strip_suffix(':') else {
+        return (text.get(value.0 as usize..value.1 as usize)? == key).then_some(value.0);
+    };
+    let head = head.trim_end();
+    [key.to_string(), format!("\"{key}\""), format!("'{key}'")].iter().find_map(|k| head.strip_suffix(k.as_str())).map(|h| h.len() as u32)
+}
+
+/// The edit that turns call `site` of `text` off (`on`: `bypass: true` written into its options,
+/// by [`Insertion::plan`]'s rule) or on again (the property taken out, with its comma, and the
+/// options object when it was alone): one edit inside the call. Why not, in words.
+fn bypass_edit(s: &Session, site: &Site, d: &Descriptor, text: &str, on: bool) -> Result<(u32, u32, String), String> {
+    if let Some(why) = unbypassable(d) {
+        return Err(why);
+    }
+    let what = if on { "off" } else { "on" };
+    let in_code = |why: &str| format!("{} can't be turned {what} here: {why}. Turn it {what} in code.", d.label);
+    let compiled = &s.accepted().compiled;
+    if is_bypassed(compiled, site.id) == on {
+        return Err(format!("{} is {what} already.", d.label));
+    }
+    let arg = |a: &Arg| text.get(a.span().0 as usize..a.span().1 as usize).unwrap_or("");
+    if site.args.iter().any(|a| arg(a).trim_start().starts_with("...")) {
+        return Err(in_code("its call spreads its arguments"));
+    }
+    let module = compiled.ir.modules.iter().find(|m| m.frames.iter().any(|f| f.site == site.id));
+    let module = module.ok_or_else(|| in_code("it doesn't run"))?;
+    let options = options_of(module, site.id).map_err(in_code)?;
+    let object = options.and_then(|i| match &site.args.get(i) {
+        Some(Arg::Object { props, end, .. }) => Some((i, props, *end)),
+        _ => None,
+    });
+    let written = object.and_then(|(_, props, _)| props.iter().position(|(k, _)| k == "bypass"));
+    if on {
+        // `bypass: false` written already: it says true now.
+        if let (Some((_, props, _)), Some(k)) = (object, written) {
+            let (a, b) = props[k].1.span();
+            return Ok((a, b, "true".into()));
+        }
+        let insertion = Insertion::plan(site, d, "bypass", text, options, &compiled.units).map_err(in_code)?;
+        return match insertion.edits("true").as_slice() {
+            [(a, b, edit)] => Ok((*a, *b, edit.clone())),
+            _ => Err(in_code("its options can't take it")),
+        };
+    }
+    let ((i, props, end), k) = object.zip(written).ok_or_else(|| in_code("its call doesn't say `bypass: true` itself"))?;
+    let value = props[k].1.span();
+    let start = |k: usize| prop_start(text, props[k].1.span(), &props[k].0);
+    let range = match (props.len(), k) {
+        // Alone: the options object goes, from the argument before it.
+        (1, _) => (site.args.get(i.wrapping_sub(1)).map(|a| a.span().1), Some(end)),
+        // Last: from the property before it.
+        (n, k) if k + 1 == n => (Some(props[k - 1].1.span().1), Some(value.1)),
+        // Else up to the next property.
+        _ => (start(k), start(k + 1)),
+    };
+    let (Some(a), Some(b)) = range else { return Err(in_code("its options are written in a way it can't read")) };
+    let cut = text.get(a as usize..b as usize).unwrap_or("");
+    if cut.contains("//") || cut.contains("/*") {
+        return Err(in_code("a comment is written beside `bypass`"));
+    }
+    Ok((a, b, String::new()))
+}
+
+/// The graph of `c` without call `site`'s own nodes, when nothing reads them: a call turned off.
+fn stripped(c: &Compiled, site: u32) -> Option<Ir> {
+    let (module, ids) = made_by(c, site)?;
+    let ids: BTreeSet<&str> = ids.iter().map(String::as_str).collect();
+    excise(&c.ir, &module, &ids, &|_| false, "")
+}
+
+/// Why effect call `site` can't be turned off (`on`) or on here, in words; none when it can.
+pub(crate) fn bypass_refused(s: &Session, site: &Site, on: bool) -> Option<String> {
+    let d = effect_at(s, site)?;
+    let text = s.accepted().snapshot.files.get(Path::new(&site.file))?;
+    bypass_edit(s, site, &d, text, on).err()
+}
+
+/// Turn effect call `call` off (`on`: `bypass: true` written into its options) or on again (it
+/// taken out). One `TextEdit` inside the call. The planner asserts that, with the effect's own
+/// nodes taken out of the graph where it is off, that graph is exactly the one where it is on
+/// with the effect removed (as [`remove_effect`] asserts), and that its frame says so.
+///
+/// Its expectation is the delta it was checked as (`Seen`, R26), as a rekey's is: the call
+/// written around the effect reads the effect's input instead of its output while the effect's
+/// nodes stay as they were, which no `Confined` range can say, and the assertion is exact.
+pub fn bypass(s: &mut Session, at: u64, call: &str, on: bool) -> Result<Edited, EditError> {
+    ready(s)?;
+    let site = current_site(s, at, call)?.clone();
+    let what = if on { "off" } else { "on" };
+    let effect = effect_at(s, &site)
+        .ok_or_else(|| EditError::Rejected(format!("`{}` is not an effect that can be turned {what} here", site.callee)))?;
+    let text = s.accepted().snapshot.files.get(Path::new(&site.file)).ok_or_else(|| EditError::NotFound(site.file.clone()))?.clone();
+    let edit = bypass_edit(s, &site, &effect, &text, on).map_err(EditError::Rejected)?;
+    let file = path(&site.file)?;
+    let label = shown_call(&site, &text, edit.0, edit.1, &edit.2);
+    let op = plan::text_edit(&file, &text, std::slice::from_ref(&edit));
+    let planned = |s: &Session, expect| plan::planned(s, label.clone(), vec![op.clone()], expect);
+    let refused = || EditError::Rejected(format!("turning {} {what} would change more than that", effect.label));
+    let said = |why: &str| EditError::Rejected(format!("turning {} {what} would change more than that ({why})", effect.label));
+    let assert = |checked: &Checked| {
+        let (baseline, candidate) = (&checked.baseline().compiled, &checked.candidate().compiled);
+        let new = candidate.sites.iter().find(|x| x.file == site.file && x.start == site.start && x.callee == site.callee);
+        let new = new.ok_or_else(refused)?.id;
+        let fits = is_bypassed(candidate, new) == on
+            && match on {
+                true => stripped(candidate, new).is_some_and(|ir| wraps(baseline, &ir, site.id)),
+                false => stripped(baseline, site.id).is_some_and(|ir| wraps(candidate, &ir, new)),
+            };
+        fits.then_some(()).ok_or_else(refused)
+    };
+    let probe = planned(s, Expect::Seen(m2_song::Sha::of(b"probe")));
+    let checked = s.check(&probe).map_err(|r| crate::refused(s, r))?;
+    unmoved(s, &checked)?;
+    assert(&checked)?;
+    let tx = planned(s, Expect::Seen(checked.hash));
+    let done = plan::run_as(s, tx, said, |s, checked| {
+        unmoved(s, checked)?;
+        assert(checked)
+    })?;
+    Ok(Edited { revision: done.number, file: site.file, before: label.0, after: label.1 })
 }
 
 #[cfg(test)]

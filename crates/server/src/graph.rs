@@ -51,6 +51,7 @@ mod projects;
 mod songkey;
 mod view_file;
 mod watcher;
+mod fx;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
