@@ -462,3 +462,22 @@ changed render.
 - `song-as-program.md` still said `time` nodes are always made at module level, so a voice never
   holds one. Untrue since slice 2's fix A. Fixed.
 - HANDOFF said `delay` needs about 1.6 MiB. Slice 1's test measured 11.88 MiB at 384 kHz.
+
+### The check
+
+| Run | Result |
+|---|---|
+| `ci/check.sh` at `f1fa181`, the slice's tip but these lines (`~/m2-runs/check-sm4`, 10 min) | **PASS**, every row: 922 Rust tests, 0 failed (as at slice 3); clippy; std kernels; std.wasm; mac lint; 29/29 browser suites; 10 of 10 renders; repo unchanged. Nothing passed only on a retry (`failed` and `flaky` empty). No gates: no code changed but one test's module doc. The commit after `f1fa181` changes these notes and HANDOFF's "In short" only. |
+| Besides the run | `cargo test --locked -p m2-play --test bit_identity --no-run` built the test whose module doc `056223c` changed (the run's "rust tests" row builds and runs it too); the names script and the std grep (Checks, above). |
+
+### Left, and why
+
+- Plan section 5, after the slices: a review with several lenses, the skeptic, fixes, and a final
+  `ci/check.sh --gates`. That run times G7f with S on its own std (slice 3's `a3214f6`; information
+  on Linux, PLAT-1) and runs the other gates on the moved manifests. Then HANDOFF says "Linux green at …; macOS owed".
+- The recorded tests (`--ignored`) last ran at slice 2 (`09b2dfd`). Slice 3 moved the std line in
+  their shared `core/play/tests/common/mod.rs`, and `ci/check.sh` doesn't run them. Run them once
+  more before the merge lands.
+- For the owner: L2 (Space, Enter, Space). It is in HANDOFF's open owner decisions, with its default:
+  the wobble carries on.
+- The Mac run, with the by-ear steps 18 to 21: owed, by hand, after the merge lands.

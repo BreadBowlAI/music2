@@ -8,9 +8,9 @@ Written 2026-10-16, at the end of step 7 (the engine), updated after its speed w
 - **The `sounds` merge is built on `sounds-merge`** (2026-10-17), not on `main` yet. It brings 22 new std sounds
   (a polysynth, FM keys and bells, a drum machine), fixes O3 (std's chorus, phaser and tremolo wobble only while
   the song plays), and moves std to 0.2. No existing render changed. Each of its 4 slices passed `ci/check.sh` on
-  Linux (922 Rust tests, 29/29 browser suites, 10 of 10 renders), with nothing passed only on a retry. Next for
-  it: a review, the skeptic, fixes, and a final `ci/check.sh --gates`. Then it lands on `main`, and its Mac run is
-  owed (below).
+  Linux, with nothing passed only on a retry. At the tip: 922 Rust tests, 29/29 browser suites, 10 of 10 renders
+  (slices 1 and 2 had 915 and 921 tests). Next for it: a review, the skeptic, fixes, and a final
+  `ci/check.sh --gates`. Then it lands on `main`, and its Mac run is owed (below).
 - **One new question for the owner:** after Stop and back to bar 1, should the wobble start again as in the
   export? For now it carries on (Open owner decisions).
 - **Your own songs** (for the owner): a song made before std 0.2 must change one line to build (below).
