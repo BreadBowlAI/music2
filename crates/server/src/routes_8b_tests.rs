@@ -59,5 +59,38 @@ fn mute_and_solo_answer_with_the_overlay_state() {
     }
     let saved: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
     assert_eq!(saved, json!({"mute": ["kick"], "solo": []}));
+
+    // MON-5: mute in song, a write: the option in the code, and the state says so.
+    let (status, done) = post(url, "/api/graph/track/mute", Some("t0k"), &json!({"session": session, "modules": ["kick"], "muted": true}));
+    assert_eq!((status, &done["before"], &done["after"]), (200, &json!("kick"), &json!("kick, muted in song")), "{done:#}");
+    assert!(std::fs::read_to_string(dir.join("song.ts")).unwrap().contains("track('kick', { muted: true },"));
+    let state = running.state.graph.state().unwrap();
+    assert_eq!((&state["overlays"]["muted_in_song"], &state["overlays"]["heard"]["kick"]), (&json!(["kick"]), &json!("muted-in-song")));
+    let (status, _) = post(url, "/api/graph/track/mute", Some("t0k"), &json!({"session": session, "modules": ["song"], "muted": true}));
+    assert_eq!(status, 400);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// WRITE-17, G5: a window open read-only answers mute in song 423 with WRITE-18's message, and
+// writes nothing; mute while listening still works there.
+#[test]
+fn mute_in_song_is_refused_read_only() {
+    let dir = std::env::temp_dir().join(format!("m2-routes-8b-ro-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n";
+    std::fs::write(dir.join("music2.toml"), manifest).unwrap();
+    let song = "import { song, track } from '@m2/core';\nimport { osc } from 'std/dsp';\n\
+                const kick = track('kick', () => osc.sine(55));\nexport default song(() => kick.out);\n";
+    std::fs::write(dir.join("song.ts"), song).unwrap();
+    let held = m2_session::lock::acquire(&dir, "m2", m2_session::lock::RETRY).unwrap();
+    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
+    let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+    let (status, answer) = post(&running.url, "/api/graph/track/mute", Some("t0k"), &json!({"session": session, "modules": ["kick"], "muted": true}));
+    assert_eq!(status, 423, "{answer:#}");
+    assert!(answer["error"].as_str().unwrap().contains("nothing was changed"), "{answer:#}");
+    assert_eq!(std::fs::read_to_string(dir.join("song.ts")).unwrap(), song);
+    assert_eq!(post(&running.url, "/api/graph/overlay", Some("t0k"), &json!({"session": session, "mute": {"kick": true}})).0, 200);
+    drop(held);
     let _ = std::fs::remove_dir_all(&dir);
 }

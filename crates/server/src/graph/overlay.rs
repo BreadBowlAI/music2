@@ -125,13 +125,14 @@ fn write_plays(plays: &PlaysView, device: &Device, before: &Overlays, after: &Ov
     write_cells(&plays.info, plays.epoch, device, (before, &plays.muted), (after, &plays.muted));
 }
 
-/// The accepted revision as the overlay state reads it: its tracks, its sites and its tracks
-/// muted in the song.
+/// The accepted revision as the overlay state reads it: its tracks, its sites, its tracks muted
+/// in the song, and what each track drives besides its sound (MON-2).
 #[derive(Clone, Debug, Default)]
 pub struct Song {
     pub tracks: Vec<String>,
     pub sites: Vec<Site>,
     pub muted: Vec<String>,
+    pub feeds: BTreeMap<String, Vec<m2_editor::mute::Feed>>,
 }
 
 impl Song {
@@ -141,6 +142,7 @@ impl Song {
             tracks: c.ir.modules.iter().filter(|m| m.track).map(|m| m.key.clone()).collect(),
             sites: c.flat.overlays.iter().map(|s| (s.module.clone(), s.into.clone())).collect(),
             muted: c.flat.muted.clone(),
+            feeds: m2_editor::mute::feeds(rev),
         }
     }
 }
@@ -197,6 +199,7 @@ impl Monitor {
             "solo": self.set.solo,
             "muted_in_song": s.muted,
             "heard": heard,
+            "feeds": s.feeds,
             "saved": self.writer,
         })
     }
@@ -288,6 +291,12 @@ impl Graph {
             write_plays(plays, d, &before, &p.overlays.set);
         }
         Ok(p.overlays.state())
+    }
+
+    /// Mute `modules` in the song, or unmute them (MON-5): one `Confined` Tx on their `track()`
+    /// calls' options, one undo step. What plays takes it as overlay cell writes.
+    pub fn mute_in_song(&self, token: u64, modules: Vec<String>, muted: bool) -> Result<Value> {
+        self.edit(token, move |s| m2_editor::mute::mute_in_song(s, &modules, muted))
     }
 
     /// Drop every mute and solo of `keys` (a track deleted with a builder, or added with a key one

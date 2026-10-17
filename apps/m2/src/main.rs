@@ -11,6 +11,8 @@ use m2_editor::{Gestures, render};
 use m2_session::{Compiled, Session};
 use m2_song::{AudioClip, DataPath, Key, LaneAddr, LaneData, LaneKind, Project, TxOp};
 
+mod edits;
+
 const USAGE: &str = "m2: build, check and render music2 projects
 
 USAGE:
@@ -69,6 +71,10 @@ USAGE:
                                          save a plugin's default state to data/<track>/<key>.state, with the
                                          .state.json sidecar that says which plugin wrote it, as one edit
                                          (replacing a state that is there, which undo puts back)
+  m2 mute-in-song <project> <track>… on|off
+                                         mute tracks, named by their keys, in the song (every render and
+                                         export), or unmute them: their track() calls' `muted` option, as
+                                         one edit that undo takes back
 
 Every command that reads a project prints what needs attention in it, such as data no lane reads,
 with the commands that fix it.
@@ -716,6 +722,7 @@ fn run() -> Result<()> {
             attention(&dir, s.problems());
         }
         Some("tx") => tx(&args)?,
+        Some(cmd) if edits::handles(cmd) => edits::run(cmd, &args)?,
         _ => print!("{USAGE}"),
     }
     Ok(())

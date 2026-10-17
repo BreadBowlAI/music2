@@ -45,7 +45,7 @@ fn mute_wins_over_solo() {
 fn a_track_muted_in_song_stays_silent_when_soloed() {
     let muted = ["vox".to_string()];
     assert_eq!(values(&bus(), &set(&[], &["vox"]), &muted), [0.0, 0.0, 1.0, 0.0, 0.0]);
-    let song = Song { tracks: ["vox", "backing", "bus", "lead"].map(String::from).to_vec(), sites: bus(), muted: muted.to_vec() };
+    let song = Song { tracks: ["vox", "backing", "bus", "lead"].map(String::from).to_vec(), sites: bus(), muted: muted.to_vec(), ..Song::default() };
     let m = Monitor { set: set(&["lead"], &["vox"]), version: 0, written: 0, dir: PathBuf::new(), writer: true, song: Arc::new(song) };
     let s = m.state();
     assert_eq!(s["heard"], json!({"vox": "muted-in-song", "backing": "silenced", "bus": "heard", "lead": "muted"}), "{s:#}");

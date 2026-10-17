@@ -20,10 +20,13 @@ type S = State<Arc<AppState>>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
 /// The routes here that write the open project.
-pub const WRITES_8B: &[&str] = &[];
+pub const WRITES_8B: &[&str] = &["/api/graph/track/mute"];
 
 pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
-    Router::new().route("/api/graph/overlay", post(graph_overlay)).route_layer(axum::middleware::from_fn_with_state(state, writes))
+    Router::new()
+        .route("/api/graph/overlay", post(graph_overlay))
+        .route("/api/graph/track/mute", post(track_mute))
+        .route_layer(axum::middleware::from_fn_with_state(state, writes))
 }
 
 /// A write to a project open read-only answers 423 (WRITE-17), as in `routes.rs`.
@@ -53,6 +56,22 @@ struct OverlayReq {
 async fn graph_overlay(State(s): S, Json(r): Json<OverlayReq>) -> ApiResult {
     let state = s.clone();
     let result = blocking(move || state.graph.overlay(r.session, r.change)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct MuteReq {
+    session: u64,
+    modules: Vec<String>,
+    muted: bool,
+}
+
+/// Mute tracks in the song, or unmute them (MON-5): `{session, modules: [key], muted}`, one Tx and
+/// one undo step. A write. Answers `{file, before, after, revision}`.
+async fn track_mute(State(s): S, Json(r): Json<MuteReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.mute_in_song(r.session, r.modules, r.muted)).await;
     s.graph_changed();
     Ok(Json(result?))
 }

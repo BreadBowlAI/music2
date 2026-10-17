@@ -28,6 +28,7 @@ pub mod sites;
 pub mod timeline;
 pub mod value;
 pub mod view;
+pub mod mute;
 
 use std::collections::HashMap;
 use std::path::Path;

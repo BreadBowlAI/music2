@@ -747,6 +747,8 @@ Anchor = Written { file, range }                    // a value written in the co
 | mute in song | `Confined { the track call's options, modules: that module's muted }` |
 | code editor save | `save()` |
 
+- From 8b.4: mute in song is built (`crates/editor/src/mute.rs`): one `Confined` Tx for one or several tracks, each declared by the range it edits in its `track()` call's options (or the point after the key, for a call with none) and its `ModuleChange::Muted`; the planner asserts that each named track is as asked in the candidate. Its history label is "Kick → Kick, muted in song". It is reached by `POST /api/graph/track/mute` and `m2 mute-in-song`.
+
 Core keeps `save`, `Tx`, `GraphDelta` and its checkers, undo, the journal, the raw site, origin and control tables, and diagnostics. `crates/editor` gets `view.rs`, `timeline.rs`, `lens.rs` (with unit spelling generated from `core.ts`), the cable and effect planners, labels, the helpers at `core/script/src/sites.rs:268-317`, and `render.rs` (export at host level).
 
 **WRITE-11.** Agents opt in to verification by calling `check`, showing the delta, and committing with `Seen(hash)`.
@@ -807,6 +809,7 @@ The CLI's commands sort like this:
 - `kernels` and `plugins` open no project, and `new` creates a new folder. None needs the lock.
 - `bounce` without `--place` only creates a new asset and its provenance, with create-only semantics ([FMT-14](#assets-and-hashes)). That can't race, so it needs no lock and works while the app is open.
 - Every other command that changes a project takes the lock: `set`, `connect`, `disconnect`, `add-effect`, `remove-effect`, `bounce --place`, `plugin-state`, `relink`, `delete-data` and `tx`. The message for `bounce --place` also names the lane file, and says the clip can be added by writing that file directly.
+- From 8b.4: `mute-in-song` takes the lock too (`apps/m2/tests/mute.rs`).
 
 Forwarding writes to the holder is [deferred](#deferred-with-triggers).
 - *Why:* owner decision 10: the lock now, forwarding when a workflow needs it. While raw file writes are allowed (owner decision 5), the safest writer must not be the one blocked.
@@ -1073,6 +1076,7 @@ export const delay = component({
 
 **MON-2.** Mute MUST silence its module's audio export at every consumer port except sidechain ports ([PKG-13](#component-descriptors)), which always get the unmuted signal. Control exports such as `kick.env` keep flowing. So muting the kick still ducks the bass, whether the ducking reads `kick.env`, `follow(kick.out)` written in `song.ts`, or a compressor keyed from `kick.out`. The mixer shows this.
 - *Why:* muting the kick must not suddenly un-duck the bass, and a refactor that keeps the sound must not change what mute does.
+- *Today:* the engine half is built in 8b.4: sidechain inputs and control exports are never overlay sites ([MON-1](#monitoring-overlays-and-mute-in-song)). What the mixer shows comes from `feeds` (`crates/editor/src/mute.rs`), in the graph state's `overlays.feeds`: for each track, each module and component that reads it through a sidechain input or a control export, such as first-song's kick, read by `song`'s Duck (`feeds_name_the_duck`). A node written in `song.ts` is named as `song` until the mixer's channel lookup can name its channel's track.
 
 **MON-3.** Solo MUST keep every audio export on a path through a soloed module, and mute the others, with the same exception for sidechain ports.
 - The paths are over the sites: a site `m → c` (track `m`'s audio read in module `c`) is heard when no track is soloed, or when some soloed `s` is `m` or feeds `m`, or is `c` or is fed by `c`. Sidechain inputs aren't sites, so they are no edges here. Each site has its own cell, so soloing a bus keeps a vocal's way into it and mutes the same vocal's direct way to the song.

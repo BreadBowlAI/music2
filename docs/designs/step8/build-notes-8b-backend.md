@@ -11,6 +11,7 @@ The `8b-backend` track builds the back ends of 8b.4 (mute, solo, mute in song), 
 | B1 | The IR's `muted`, and where overlays go (`Flat.overlays`, `Flat.muted`) | built |
 | B2 | The overlay op in every plan; overlay cells; the `muted` track option; the delta's `Muted` | built |
 | B3 | Server mute and solo: the path rule, `.music2/overlays.json`, `POST /api/graph/overlay`, new plans' values, mute in song as cell writes, renames, the export's warning | built |
+| B4 | Mute in song as a builder: `mute_in_song`, `feeds`, `POST /api/graph/track/mute`, `m2 mute-in-song` | built |
 
 ---
 
@@ -147,3 +148,39 @@ track's export changes.
 **Contract:** MON-3 (the path rule, mute wins) and its *Today*, MON-4 (the file, renames, read-only) and its
 *Today*, MON-5 *Today*, RENDER-26 *Today* (`Muted` is no structure). The DIAG row `overlays.active` was already
 in the table (M8).
+
+---
+
+## B4. Mute in song as a gesture
+
+**In short:** one call mutes tracks in the song, or unmutes them: it writes `muted: true` into each `track()` call's
+options, as one undo step. The state also says what each track still drives when muted (the Duck on the bass).
+
+| Piece | What it does | Where |
+|---|---|---|
+| `mute_in_song(s, modules, muted)` | One `Confined` Tx: each edited range (or the point after the key), each module's `Muted`. The planner asserts each track is as asked. "Kick → Kick, muted in song"; "Kick and Bass". A track already so is skipped; with none left, nothing is written. | `crates/editor/src/mute.rs` |
+| The option edit | Its own small edit over `sites::properties` (G7): append `muted: true`, replace its value, or take it out (and the object when it held nothing else). `track(k, fn)` gets `, { muted: true }` after the key. | same |
+| `feeds(rev)` | For each track: each module and component that reads it through a sidechain input or a control export. A node in `song` is named `song` (Q6). | same |
+| `state.overlays.feeds` | The feeds, for the strip's "Still drives Duck on Bass". | `crates/server/src/graph/overlay.rs` |
+| `POST /api/graph/track/mute` | `{session, modules, muted}` → `{file, before, after, revision}`. In `WRITES_8B`: 423 in a read-only window. | `crates/server/src/routes_8b.rs` |
+| `m2 mute-in-song <project> <track>… on\|off` | Takes the lock. | `apps/m2/src/edits.rs` (new), one arm and the usage lines in `main.rs` |
+
+**Tests:**
+
+| Test | Where |
+|---|---|
+| `mute_in_song_inserts_and_removes_the_option` (to the byte; the render changes and comes back to the bit) | `crates/editor/src/mute_tests.rs` |
+| `every_way_a_track_call_is_written` (no options; `muted: false` replaced) | same |
+| `several_tracks_mute_in_one_tx_and_undo_puts_the_options_back` | same |
+| `the_song_and_missing_tracks_are_refused` | same |
+| `feeds_name_the_duck` (first-song: the kick feeds `song`'s Duck) | same |
+| `mute_and_solo_answer_with_the_overlay_state` (now also mute in song over HTTP) | `crates/server/src/routes_8b_tests.rs` |
+| `mute_in_song_is_refused_read_only` (423, nothing written; mute while listening still works) | same |
+| `mute_in_song_writes_the_option_and_takes_the_lock` | `apps/m2/tests/mute.rs` (new; `lock.rs` untouched) |
+
+Written with the code; each passed on its first run. The server's red checks were in B3.
+
+**Checks:** `cargo check --workspace --all-targets`; clippy on `m2-editor`, `m2-server`, `m2`; their tests.
+
+**Contract:** WRITE-10 and WRITE-18 (a bullet each, "From 8b.4", not inside the shared table or list), MON-2
+*Today* (`feeds`), `docs/gaps.md` #4.
