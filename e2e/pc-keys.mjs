@@ -1,6 +1,7 @@
 // The keys and labels on a PC (OS-54, OS-55, OS-75; plan A3): a page given a PC's user agent and
 // `platform: "linux"`, on every OS, as Linux (and later Windows) users get it. Every other suite
-// tests the Mac's keys. Checks:
+// tests the Mac's keys (s8-mute, s8-audition, s8-clips and s8-automation also open one PC page
+// each, for their words). Checks:
 //   labels   the tooltips, the dock's tabs, a knob's, the track menu and the ⌥K sheet say Ctrl,
 //            Alt, Shift, Enter and Backspace; no Mac key symbol shows anywhere
 //   keys     Ctrl+T opens + Track; Ctrl+R renames; Ctrl+Z and Ctrl+Shift+Z undo and redo;

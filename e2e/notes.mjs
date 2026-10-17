@@ -1,4 +1,5 @@
-// The piano roll and notes clips in the timeline: every edit is one lane write, checked on disk.
+// The piano roll and notes clips in the timeline: the roll's edits are one lane write, the
+// timeline's clip edits one `clips` gesture, each checked on disk.
 // Runs with `node run.mjs notes` (kind proj: a private HOME and project).
 import puppeteer from "puppeteer-core";
 import fs from "node:fs";
