@@ -211,6 +211,54 @@ FAIL  with no key, the roll shades the black keys' rows: F♯ (66) shaded, F (65
 **Contract.** FMT-19: `layout.json` gains `key: {"root": "A", "scale": "minor"}` (ASCII roots),
 written by `POST /api/graph/song-key`, not by `/api/graph/layout`. The timeline view gains `key`.
 
+### The view store, taken from lane B
+
+D4 keeps hidden lanes in the song's `view.json`, through the view store. There was no P0b-2, and
+lane B had built it (`2a6d3c1`), so this lane took that commit as it is (`git cherry-pick -x`,
+`74fd748`): the same files and lines, so merging both lanes meets no new conflict there. Lane C
+built a store of its own with the same calls (`useLocal`, `getLocal`, `setLocal`, `flushLocal`,
+`POST /api/graph/view`): the lead keeps one.
+
+### D3. Automation on the control's own scale
+
+**In short.** An automation lane for a frequency (a filter's cutoff) now draws like the knob turns:
+low notes get as much room as high ones. The middle of the lane is about 632 Hz, not half of
+20 kHz. Other lanes look as before.
+
+| Lane's unit | Scale | Lines between points |
+|---|---|---|
+| Hz | log, 20 Hz to 20 kHz, wider if a point is outside | curved, as they play (straight in Hz) |
+| any other | linear, as before (the server's range) | straight |
+
+**What changed**
+- `web/src/lib/laneScale.ts` (new): `laneScale(lane)` → `{log, level, value, round, path}`. By the
+  lane's unit only (X17: an input a lane drives has no knob, and first-song's cutoff feeds a
+  `blend`, so the knob's range was never there to use). On the log scale a value is rounded to 3
+  figures (632, 1.99 kHz); on a linear one as before. `path` cuts each sloped piece into 16.
+- `SongTimeline.tsx` (P0b-1's extraction, done here): the curve, the hit test, a click, a drag
+  and Draw mode's paint go through the lane's scale. Draw mode fills in between pointer moves
+  along the drawing, so along the scale.
+- `lib/points.ts`: `hit` takes the drawn path, so a press finds the curved line where it is drawn.
+
+**Tests** — new suite `pl-lanes` (kind `fix`, 11 checks), after `pl-notes`: see `e2e/README.md`.
+Moved and green: `s8-automation` 45, `s8-mix` 80, `taste` 39.
+
+**Red first** (D2's page):
+```
+FAIL  1 kHz is drawn where a log scale over 20 Hz to 20 kHz puts it: 228.2 (log 221.6, linear over the points 228.2)
+FAIL  the line between them curves, as it plays straight in value: 3 vertices (3 straight)
+FAIL  at half height it writes about 632 Hz: 7520 (the log scale at that pixel: 632; linear would be about 7515)
+```
+
+**Left.**
+- Automation lanes are 32 px tall, so a pixel is a big step on a 20 Hz to 20 kHz scale. Lane B's
+  taller lanes help. Typing a point's value is not there yet.
+- Seconds (an attack, a delay time) still draw linear: the plan's X17 keeps them as they were.
+
+**For gaps.md.** Automation of a frequency draws on a log scale. Left: other log units (times),
+typing a point's value, curves between points (Q28).
+**Contract.** None.
+
 ## Merge
 
 The lead's merges of the four lanes.
