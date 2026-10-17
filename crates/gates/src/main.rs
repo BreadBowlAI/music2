@@ -9,6 +9,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use m2_gates::gates::{self, GATES, Opts};
+use m2_gates::realtime::live;
 use m2_gates::report::{self, Outcome, Verdict};
 use m2_gates::rig::Kind;
 use m2_gates::{Lab, server};
@@ -58,12 +59,20 @@ GATES (default: all):
   store       G7f part 1 (named only) what one wasmtime Store per kernel instance costs: build,
                   memory, address space, block time and drop; the block time (by the mean) and the
                   build against S measured in the same run (RENDER-32). Needs $M2_GATES_S too
-  realtime    G12 (named only; --offline: live runs come with 8a's next track) a song rendered on
-                  more threads, on the runtime alone: each count of --sweep twice, back to back,
-                  against one thread (mean, p99, speed-up); the same bits on every count and the
-                  pure fixtures matching e2e/renders.sha256 (judged); paced blocks on 1 and 4
-                  threads; each partition timed alone; the executor's own cost against step 7's
-                  loop; long tails 1 s and 5 min after their note (OS-49). p50 unless --reference
+  realtime    G12 (named only) live: a song (p50 unless --reference or --song) plays on the
+                  player's engine threads for --minutes, muted unless --audible: on a Mac on its
+                  output device whatever M2_AUDIO says, elsewhere on the silent clock. Judged on a
+                  Mac (elsewhere information, PLAT-1): no dropout from the first callback after
+                  Play (the device's, late callbacks, gaps), the callback's p99 at most 70% of its
+                  period from 5 s on, every engine thread real time and in the output's workgroup
+                  at 48 kHz and --frames. Judged everywhere: no crash or non-finite sample, and
+                  the engine as far as the device. Then each count's live p99 beside its back-to-
+                  back p99, and how late workers came into a block.
+                  --offline: a song rendered on more threads, on the runtime alone: each count of
+                  --sweep twice, back to back, against one thread (mean, p99, speed-up); the same
+                  bits on every count and the pure fixtures matching e2e/renders.sha256 (judged);
+                  paced blocks on 1 and 4 threads; each partition timed alone; the executor's own
+                  cost against step 7's loop; long tails 1 s and 5 min after their note (OS-49)
 
 OPTIONS:
   --rig R          engine: step 3a's live engine (needs --features engine); replay: HEAD's
@@ -77,16 +86,24 @@ OPTIONS:
   --quick          CI sizes: a 3-track reference project, 1 minute of loop, 8 seeks
   --reference N    the reference project the timed gates play: 16 (p16, the default) or 50 (p50)
   --stems N        add N one-minute stems on audio lanes (the audio-heavy variant)
-  --minutes M      how long the loop gate loops (default 10)
+  --minutes M      how long the loop gate loops, and each live realtime run plays (default 10)
   --seeks N        seeks for G1 (default 50; 5 on the replay rig, where each one replays)
   --activations N  activations per song for G6 (default 50)
   --edits N        edits G3 and G5 time through the server (default 10)
   --at S           where G5, G7a and G7b edit, in seconds of the song (default 60; 180 for step 7's
                    recorded runs on p50)
   --seed N         for the random seeks and clocks (default 3)
-  --offline        realtime: render offline (the only mode built)
-  --sweep LIST     realtime: the thread counts, like 1,2,3,4,6,8 (the default; 1 is always in)
-  --seconds S      realtime: seconds timed for each count, each pass (default 20)
+  --offline        realtime: render offline instead of playing live
+  --sweep LIST     realtime: the thread counts, like 1,2,3,4,6,8 (offline's default; 1 is always
+                   in); live, each plays --minutes (default: one run at the live rule's count)
+  --seconds S      realtime --offline: seconds timed for each count, each pass (default 20)
+  --frames F       realtime live: the device's buffer, 16 to 4096 frames (default 128)
+  --threads N      realtime live: one count of engine threads, 1 to 64 (default: the live rule's)
+  --between W      realtime live: how workers wait between callbacks: park, spin, or park,spin
+                   to play each (default: the build's, BETWEEN)
+  --audible        realtime live: play it aloud (default: rendered, and zeros to the device)
+  --song DIR       realtime live: another song than the reference project (one with plugins
+                   renders on the device's thread alone, HOST-2)
   --work DIR       where projects are generated (default: a new folder under the temp dir)
   --keep           keep the work folder afterwards
 ";
@@ -120,6 +137,7 @@ fn run() -> Result<bool> {
     let mut kind = if cfg!(feature = "engine") { Kind::Engine } else { Kind::Replay };
     let (mut via_server, mut keep, mut work, mut seeks, mut arena) = (false, false, None, None, true);
     let (mut offline, mut sweep, mut reference_given) = (false, m2_gates::realtime::Sweep::default(), false);
+    let (mut asked, mut swept, mut threads) = (live::Asked::default(), false, None);
     let mut names = vec![];
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -148,13 +166,21 @@ fn run() -> Result<bool> {
                 reference_given = true;
             }
             "--offline" => offline = true,
-            "--sweep" => sweep.counts = m2_gates::realtime::counts(value()?)?,
+            "--sweep" => {
+                sweep.counts = m2_gates::realtime::counts(value()?)?;
+                swept = true;
+            }
+            "--frames" => asked.frames = live::frames(value()?)?,
+            "--threads" => threads = Some(live::threads(value()?)?),
+            "--between" => asked.between = live::between(value()?)?,
+            "--audible" => asked.audible = true,
+            "--song" => asked.song = Some(PathBuf::from(value()?)),
             "--seconds" => {
                 sweep.seconds =
                     value()?.parse().ok().filter(|s: &f64| *s > 0.0 && s.is_finite()).context("--seconds takes a number of seconds")?
             }
             "--stems" => o.reference.stems = value()?.parse().context("--stems")?,
-            "--minutes" => o.loop_minutes = value()?.parse().context("--minutes")?,
+            "--minutes" => o.loop_minutes = live::minutes(value()?)?,
             "--seeks" => seeks = Some(value()?.parse().context("--seeks")?),
             "--activations" => o.activations = value()?.parse().context("--activations")?,
             "--edits" => o.edits = value()?.parse::<usize>().context("--edits")?.max(1),
@@ -165,6 +191,14 @@ fn run() -> Result<bool> {
             g if !g.starts_with("--") => names.push(g.to_string()),
             other => bail!("unknown option {other}\n\n{USAGE}"),
         }
+    }
+    asked.counts = match (swept, threads) {
+        (true, Some(_)) => bail!("--threads plays one count and --sweep several: give one of them"),
+        (true, None) => Some(sweep.counts.clone()),
+        (false, n) => n.map(|n| vec![n]),
+    };
+    if offline && asked.song.is_some() {
+        bail!("--song is for live runs: realtime --offline plays the reference project");
     }
     // HEAD replays the song for every seek: a few make the point.
     o.seeks = seeks.unwrap_or(if kind == Kind::Replay && !via_server { 5.min(o.seeks) } else { o.seeks });
@@ -207,10 +241,12 @@ fn run() -> Result<bool> {
             (true, "export") => server::export(&mut lab, &o),
             (false, "store") => m2_gates::store::store(&mut lab, &o),
             (false, "arena") => m2_gates::arena::arena(&mut lab, &o),
-            (false, "realtime") if !offline => Err(anyhow::anyhow!("realtime runs --offline only: live runs come with 8a's next track")),
             (false, "realtime") => {
                 let o = if reference_given { o.clone() } else { Opts { reference: Reference::P50, ..o.clone() } };
-                m2_gates::realtime::realtime(&mut lab, &o, &sweep)
+                match offline {
+                    true => m2_gates::realtime::realtime(&mut lab, &o, &sweep),
+                    false => live::live(&mut lab, &o, &asked),
+                }
             }
             _ => gates::run(name, &mut lab, kind, &o),
         };
@@ -252,6 +288,30 @@ mod tests {
             assert!(entry.contains(says), "{says}: {entry}");
         }
         assert!(USAGE.contains("--sweep LIST") && USAGE.contains("--seconds S"));
+    }
+
+    // G12 (8a's live half): --help says what realtime measures live, where it plays, and what it
+    // judges where.
+    #[test]
+    fn the_help_says_what_realtime_measures_live() {
+        let mut lines = USAGE.lines().skip_while(|l| !l.starts_with("  realtime "));
+        let first = lines.next().unwrap();
+        let rest = lines.take_while(|l| l.starts_with(&" ".repeat(18)));
+        let entry = std::iter::once(first).chain(rest).flat_map(str::split_whitespace).collect::<Vec<_>>().join(" ");
+        for says in [
+            "muted unless --audible",
+            "on a Mac on its output device whatever M2_AUDIO says, elsewhere on the silent clock",
+            "Judged on a Mac (elsewhere information, PLAT-1)",
+            "no dropout from the first callback after Play",
+            "p99 at most 70% of its period",
+            "real time and in the output's workgroup",
+            "Judged everywhere: no crash or non-finite sample",
+        ] {
+            assert!(entry.contains(says), "{says}: {entry}");
+        }
+        for option in ["--frames F", "--threads N", "--between W", "--audible", "--song DIR"] {
+            assert!(USAGE.contains(option), "{option}");
+        }
     }
 
     // RENDER-32: --help says what G7f judges, against S measured in the same run, and that both

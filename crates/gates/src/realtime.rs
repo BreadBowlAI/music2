@@ -1,5 +1,5 @@
 //! G12's offline part (8a): how a song renders on more threads, measured on the runtime itself,
-//! with no device and no server. Live runs on engine threads come with 8a's next track.
+//! with no device and no server. Its live part is [`live`].
 //!
 //! - **Set-up**: this machine's cores, its load, and whether workers got the background priority.
 //! - **Sweep**: each thread count in the list renders the same 20 s of the reference project from
@@ -33,6 +33,8 @@ use crate::gates::Opts;
 use crate::paired::{Diffs, Side, in_turns, median, rank};
 use crate::report::Outcome;
 use crate::{Lab, Song, songs};
+
+pub mod live;
 
 /// Where every timed run starts: 3:00, as G7f's.
 const FROM_SECONDS: f64 = 180.0;
