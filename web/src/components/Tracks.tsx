@@ -1,9 +1,10 @@
 import clsx from "clsx";
-import { Check, CodeXml, Copy, Ellipsis, Pencil, Search, SlidersHorizontal, Trash2, VolumeX } from "lucide-react";
+import { ArrowLeftRight, Check, CodeXml, Copy, Ellipsis, Pencil, Search, SlidersHorizontal, Trash2, VolumeX } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
 import { graphApi, lockReason, moduleName, type Dependent, type GraphState, type Instrument } from "../lib/graph";
 import { trackMade } from "../lib/events";
+import { changeInstrument, currentInstrument, notesLane } from "../lib/instrument";
 import { chord, opt } from "../lib/native";
 import { muteInSongCall } from "../lib/overlays";
 import { DEFAULT_ORDER, TRACK_COLORS, type TrackColorName } from "../lib/palette";
@@ -35,8 +36,11 @@ interface Asking {
 }
 
 interface TracksUi {
-  /** The instrument list, anchored to what opened it, and the track the new one goes below. */
-  picker: { anchor: HTMLElement; after: string | null } | null;
+  /**
+   * The instrument list, anchored to what opened it, and the track the new one goes below; or, to
+   * change a track's instrument (`swap`), that track.
+   */
+  picker: { anchor: HTMLElement; after: string | null; swap?: string } | null;
   /** A track's header menu, anchored to its ⋯. */
   menu: { module: string; anchor: HTMLElement } | null;
   asking: Asking | null;
@@ -85,6 +89,13 @@ function arrived(module: string, lane: string | undefined) {
 /** Open the instrument list at `anchor`; the new track goes below `after`. */
 export function openInstruments(anchor: HTMLElement, after: string | null) {
   useTracksUi.setState({ picker: { anchor, after }, menu: null });
+}
+
+/** Change instrument…: the list, at `anchor`, to change `module`'s instrument (polish A3). */
+export function openChangeInstrument(module: string, anchor: HTMLElement) {
+  const graph = writable();
+  if (!graph || module === "song") return;
+  useTracksUi.setState({ picker: { anchor, after: null, swap: module }, menu: null });
 }
 
 /** ⌘T: the list, at + Track, for a track below the selected one. */
@@ -267,13 +278,29 @@ export function instrumentGroups(list: Instrument[], query: string) {
  * The instrument list (TL-3, BR-1, taste.md §3.6): the browser's Instruments as a popover at + Track.
  * Typing filters, ↑↓ move, Enter adds the keyboard-active row: the instrument added last in this
  * window, else the first. The foot shows the code it writes.
+ *
+ * To change a track's instrument (`swap`, polish A3): titled for the track, the instrument it plays
+ * ticked and active, and Enter changes it.
  */
-function InstrumentPicker({ graph, anchor, after, onClose }: { graph: GraphState; anchor: HTMLElement; after: string | null; onClose: () => void }) {
+function InstrumentPicker({
+  graph,
+  anchor,
+  after,
+  swap,
+  onClose,
+}: {
+  graph: GraphState;
+  anchor: HTMLElement;
+  after: string | null;
+  swap?: string;
+  onClose: () => void;
+}) {
   const [query, setQuery] = useState("");
   const all = graph.instruments ?? [];
   const groups = useMemo(() => instrumentGroups(all, query), [all, query]);
   const flat = groups.flatMap((g) => g.items);
-  const [active, setActive] = useState(() => Math.max(0, all.findIndex((i) => i.component === lastAdded)));
+  const playing = swap ? currentInstrument(graph, swap) : undefined;
+  const [active, setActive] = useState(() => Math.max(0, all.findIndex((i) => i.component === (swap ? playing?.component : lastAdded))));
   const current = flat[Math.min(active, flat.length - 1)];
   const list = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLInputElement>(null);
@@ -283,21 +310,37 @@ function InstrumentPicker({ graph, anchor, after, onClose }: { graph: GraphState
   // Typing filters at once, and Enter adds, however soon after it opens.
   useLayoutEffect(() => field.current?.focus(), []);
   const taken = new Set(graph.view.modules.map((m) => m.key));
+  const name = swap ? nameOf(graph, swap) : "";
   const pick = (i: Instrument | undefined) => {
     if (!i) return;
     onClose();
-    void addTrack(i, after);
+    if (!swap) return void addTrack(i, after);
+    // The one it plays: nothing to change.
+    if (i.component !== playing?.component) void changeInstrument(swap, i);
   };
   const step = (by: number) => setActive((a) => (flat.length ? (Math.min(a, flat.length - 1) + by + flat.length) % flat.length : 0));
   let index = 0;
   return (
-    <Popover anchor={anchor} onClose={onClose} role="dialog" aria-label="Add a track" data-testid="instrument-list" className="w-[280px] !p-0 flex flex-col">
+    <Popover
+      anchor={anchor}
+      onClose={onClose}
+      role="dialog"
+      aria-label={swap ? `Change ${name}'s instrument` : "Add a track"}
+      data-testid="instrument-list"
+      data-swap={swap}
+      className="w-[280px] !p-0 flex flex-col"
+    >
+      {swap && (
+        <div data-testid="instrument-list-title" className="h-8 shrink-0 flex items-center px-3 border-b border-line text-sm font-semibold text-fg-strong truncate">
+          {`Change ${name}'s instrument`}
+        </div>
+      )}
       <div className="h-10 shrink-0 flex items-center gap-2 px-3 border-b border-line">
         <Search size={14} className="shrink-0 text-fg-faint" />
         <input
           ref={field}
           value={query}
-          placeholder="Add a track…"
+          placeholder={swap ? "Find an instrument…" : "Add a track…"}
           aria-label="Search instruments"
           role="combobox"
           aria-expanded
@@ -327,20 +370,26 @@ function InstrumentPicker({ graph, anchor, after, onClose }: { graph: GraphState
             {g.items.map((i) => {
               const k = index++;
               const on = i === current;
+              const ticked = !!swap && i.component === playing?.component;
               return (
                 <div
                   key={i.component}
                   id={`instrument-${i.component}`}
                   role="option"
                   aria-selected={on}
+                  aria-checked={swap ? ticked : undefined}
                   data-instrument={i.component}
                   data-active={on || undefined}
-                  className={clsx("min-h-ctl px-2 py-1 rounded-sm cursor-pointer transition-colors duration-80 ease-linear", on && "bg-accent-soft")}
+                  className={clsx("min-h-ctl px-2 py-1 rounded-sm cursor-pointer transition-colors duration-80 ease-linear flex gap-2", on && "bg-accent-soft")}
                   onPointerMove={() => k !== active && setActive(k)}
                   onClick={() => pick(i)}
                 >
-                  <span className="block text-sm text-fg">{i.label}</span>
-                  {i.description && <span className="block text-xs text-fg-muted truncate">{i.description}</span>}
+                  {/* What it plays now: a check at the left, as a menu's chosen row (taste.md §2.9). */}
+                  {swap && <span className="w-3.5 shrink-0 mt-[3px] text-fg">{ticked && <Check size={14} strokeWidth={1.5} absoluteStrokeWidth />}</span>}
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-sm text-fg">{i.label}</span>
+                    {i.description && <span className="block text-xs text-fg-muted truncate">{i.description}</span>}
+                  </span>
                 </div>
               );
             })}
@@ -350,8 +399,10 @@ function InstrumentPicker({ graph, anchor, after, onClose }: { graph: GraphState
       {/* Literally code: what adding it writes (BR-5). */}
       {current && (
         <div className="h-ctl shrink-0 flex items-center px-3 border-t border-line bg-chrome rounded-b-md text-xs text-fg-muted">
-          <span data-code className="flex-1 min-w-0 truncate font-mono" title="What adding it writes in your code">
-            {`tracks/${proposed(current.label, taken)}.ts · ${current.name}(lane.notes("${current.lane}"))`}
+          <span data-code data-testid="instrument-code" className="flex-1 min-w-0 truncate font-mono" title={swap ? "What changing it writes in your code" : "What adding it writes in your code"}>
+            {swap
+              ? `${fileOf(graph, swap) ?? "its code"} · ${current.name}(lane.notes("${notesLane(graph, swap)}"))`
+              : `tracks/${proposed(current.label, taken)}.ts · ${current.name}(lane.notes("${current.lane}"))`}
           </span>
         </div>
       )}
@@ -436,6 +487,15 @@ function TrackMenu({ graph, module, anchor, onClose }: { graph: GraphState; modu
         })}
       >
         Rename
+      </MenuRow>
+      <MenuRow
+        icon={<ArrowLeftRight size={14} />}
+        disabled={!!locked}
+        title={locked ?? undefined}
+        data-testid="change-instrument"
+        onClick={() => openChangeInstrument(module, anchor)}
+      >
+        Change instrument…
       </MenuRow>
       <MenuRow icon={<Copy size={14} />} shortcut={chord("D")} disabled={!!locked} onClick={run(() => void duplicateTrack(module))}>
         Duplicate
@@ -562,7 +622,7 @@ export function TracksUi({ graph }: { graph: GraphState }) {
   useEffect(() => () => useTracksUi.setState({ picker: null, menu: null, asking: null }), [graph.session]);
   return (
     <>
-      {picker && <InstrumentPicker graph={graph} anchor={picker.anchor} after={picker.after} onClose={close} />}
+      {picker && <InstrumentPicker graph={graph} anchor={picker.anchor} after={picker.after} swap={picker.swap} onClose={close} />}
       {menu && <TrackMenu graph={graph} module={menu.module} anchor={menu.anchor} onClose={close} />}
       {asking && <DeleteDialog asking={asking} onClose={() => useTracksUi.setState({ asking: null })} />}
     </>

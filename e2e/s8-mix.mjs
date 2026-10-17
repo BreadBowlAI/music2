@@ -293,7 +293,10 @@ check(await until(async () => !!(await page.$(`${strip("bass")}[data-selected]`)
 check(!!(await page.$('[data-view-tab="mix"][aria-selected="true"]')), "and the dock stays on Mix");
 await page.click(`${strip("keys")} [data-testid=strip-name]`, { button: "right" });
 const items = await page.waitForSelector("[data-testid=strip-menu]", { timeout: 2000 }).then(() => page.$$eval("[data-testid=strip-menu] [role=menuitem]", (els) => els.map((e) => e.textContent))).catch(() => []);
-check(items.length === 4 && items[0] === "Rename" && items[1].startsWith("Colour") && items[2].startsWith("Mute in song") && items[3].startsWith("Edit in code"), `a right-click opens its menu: ${items}`);
+check(
+  items.length === 5 && items[0] === "Rename" && items[1] === "Change instrument…" && items[2].startsWith("Colour") && items[3].startsWith("Mute in song") && items[4].startsWith("Edit in code"),
+  `a right-click opens its menu: ${items}`,
+);
 // Its Edit in code opens song.ts at the channel, which ⌥4 doesn't: the row names no key.
 check(items.at(-1) === "Edit in codesong.ts:18", `Edit in code shows where, and no key that does something else: ${items.at(-1)}`);
 await page.click("[data-testid=strip-menu] [data-testid=colour-row]");

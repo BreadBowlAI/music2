@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { CodeXml, Pencil, VolumeX } from "lucide-react";
+import { ArrowLeftRight, CodeXml, Pencil, VolumeX } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { beatNow, onFrame } from "../lib/clock";
 import {
@@ -30,7 +30,7 @@ import { undoAction } from "./GraphCanvas";
 import { Bubble, FINE, focusNext, KnobMenu, MiniKnob, NOTCH, useKnobDrag, useKnobGesture } from "./Knob";
 import Meter, { ClipDot } from "./Meter";
 import { StripMuteSolo } from "./MuteSolo";
-import { Colours } from "./Tracks";
+import { Colours, openChangeInstrument } from "./Tracks";
 import TrackName from "./TrackName";
 import { Button, EmptyState, MenuRow, Popover } from "./ui";
 
@@ -493,8 +493,9 @@ async function muteStripInSong(name: string, modules: string[], muted: boolean) 
 }
 
 /**
- * A strip's menu (right-click; taste.md §3.5): Rename and Colour for one track's strip; Mute in song
- * for a strip of tracks (Unmute in song first when they all are); and Edit in code.
+ * A strip's menu (right-click; taste.md §3.5): Rename, Change instrument… and Colour for one track's
+ * strip; Mute in song for a strip of tracks (Unmute in song first when they all are); and Edit in
+ * code.
  */
 function StripMenu({
   name,
@@ -547,6 +548,15 @@ function StripMenu({
         <>
           <MenuRow icon={<Pencil size={14} />} disabled={!!locked} title={locked ?? undefined} onClick={run(() => useShell.getState().set({ renaming: { module, at: "strip" } }))}>
             Rename
+          </MenuRow>
+          <MenuRow
+            icon={<ArrowLeftRight size={14} />}
+            disabled={!!locked}
+            title={locked ?? undefined}
+            data-testid="change-instrument"
+            onClick={run(() => openChangeInstrument(module, anchor))}
+          >
+            Change instrument…
           </MenuRow>
           <MenuRow
             icon={<span className="block size-3.5 rounded-xs" style={{ background: tones(current).bar }} />}

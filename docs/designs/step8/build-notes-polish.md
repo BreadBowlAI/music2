@@ -80,6 +80,74 @@ FAIL  the Hats strip's two bars both read above the floor
 
 **Contract:** none.
 
+### A3: change a track's instrument
+
+**In short**
+
+| What | Now |
+|---|---|
+| Where | Change instrument… in a track's menu (after Rename) and in a track strip's menu in Mix |
+| What opens | The + Track list, titled "Change Bass's instrument". What the track plays now has a tick. Type to find one, ↑ ↓ to move, Return to pick, Esc to close |
+| What it does | The track's instrument call becomes the new one, reading the same notes. One undo step. A toast says "Bass plays Synth pad now", with Undo |
+| What stays | The track's name, colour, notes, mixer channel, effects and mute |
+| Its old settings | They go: the new instrument starts at its own sound, as a new track's does |
+| When it says no | When a setting comes from other code (a lane, an LFO), when the sound is built from parts, when there are two instruments, or a plugin. The toast says why and has Show code |
+
+**What changed**
+
+- `crates/editor/src/swap.rs`: `swap(s, module, component)`. It finds the track's instrument calls: the outermost
+  frames of a component that takes notes first and makes audio (with or without a category: std/instruments' `hat`
+  has none), and plugins given notes. Exactly one, in the track's own file, or it refuses in words. Each setting
+  after the notes must be a plain value (a number, a unit of one such as `hz(420)`, a string or a boolean). The Tx is
+  one `TextEdit` of that file, `Confined` to the call and the imports: two edits around the notes argument (so its
+  bytes and the lane node keep their names), and one edit of the import lines (trimmed to what differs, so no node
+  moves). The imports: names only the dropped text read go (`sites::unused_imports`, X18), keeping the callee's
+  binding when the new one shares it (`drums.kit` → `drums.hats`); then the new binding is imported
+  (`import_insertion`: joins an import from its module, else a line after the last import). The planner's
+  assertion: every added, removed, rewired or changed node is the track's; no module comes or goes; the track's
+  lanes are the same. Labels `("Bass", "Bass plays Synth pad")`.
+- `crates/server/src/graph/instrument.rs`: `Graph::swap_instrument(token, module, component)`.
+- `crates/server/src/routes_mix.rs` (new, lane A's router): `POST /api/graph/track/instrument {session, module,
+  component}`, a write (423 read only). No `revision`: the module key and the ComponentId name what to change.
+- Wiring, the P0a lines lane A needed before P0a landed: `pub mod swap;` (editor `lib.rs`), `mod instrument;`
+  (`graph.rs`), `mod routes_mix;` (server `lib.rs`), its `.merge(…)` in `routes.rs`.
+- `web/src/lib/instrument.ts`: `changeInstrument` (the call, the undo step's name, the toast with Undo; a refusal
+  ending "in code." or "in the Code view." gets Show code), `currentInstrument` (what the list ticks), `notesLane`.
+- `Tracks.tsx`: `InstrumentPicker` gets a change mode (`swap`): a title row, "Find an instrument…", a 14 px check on
+  what the track plays, the foot `tracks/bass.ts · synth.pad(lane.notes("notes"))`. `TrackMenu` gets the row
+  (`ArrowLeftRight` icon). `openChangeInstrument(module, anchor)`.
+- `Mix.tsx`: the strip menu's row, on one-track strips.
+
+**Tests**
+
+| Test | Result |
+|---|---|
+| Rust `swap_tests.rs`: `swap_replaces_the_call_and_its_import`, `swap_keeps_a_used_import`, `swap_refuses_a_setting_that_follows_code`, `swap_refuses_two_instruments`, `swap_drops_plain_settings`, `undo_puts_every_byte_back`, `the_change_stays_in_the_track` | 7 ok |
+| `cargo test -p m2-editor -p m2-server`; clippy of `m2-editor`, `m2-server`, `m2-script` | ok |
+| `pl-sounds` (new, after `pl-mix`) | 27 ok |
+| `s8-tracks` 75, `s6-builders` 56, `taste` 39 | ok |
+| `s8-mix` | 80 ok. Its strip-menu check now has 5 rows |
+
+**Red first**
+
+```
+swap against a stub that refuses:  test result: FAILED. 0 passed; 7 failed
+FAIL  the Hats menu has Change instrument…, after Rename (Rename⌘R | Duplicate⌘D | Delete⌘⌫ | Colour› | Mute in song… | Edit in code…)
+```
+
+**What's left**
+
+- Track ▸ Change Instrument… in the menu bar: P0a's `appCommand` row calls `canvas.changeInstrument`, which lane A
+  fills once P0a lands.
+- The plan's "Hi-hat ticked" for first-song's Hats can't be: Hats plays std/instruments' `hat`, which the list
+  doesn't offer, so nothing is ticked. After a change, the new one is ticked.
+
+**For gaps.md:** a track's instrument can be changed from its menu or its strip (one undo step); refused in words
+when code computes a setting, for sounds built from parts, two instruments or a plugin.
+
+**Contract:** WRITE-10's builder list gains change instrument (`m2_editor::swap`, `POST /api/graph/track/instrument`).
+taste.md §2.12 gains `ArrowLeftRight` for change instrument.
+
 ## Lane B
 
 Timeline.
