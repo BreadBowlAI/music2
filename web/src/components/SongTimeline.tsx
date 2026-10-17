@@ -70,6 +70,7 @@ import PointMenu, { unautomate, type MenuItem } from "./ClipMenu";
 import TrackHeader from "./TrackHeader";
 import { Button, EmptyState, keepFocus, Popover } from "./ui";
 import Take from "./Take";
+import { exportMidi } from "../lib/midiFiles";
 
 /** A clip sits this far inside its row, inside its 1px border; its drawing this far inside that. */
 const CLIP_INSET = 4;
@@ -2128,6 +2129,7 @@ function TimelineMenu({
       { id: "paste", label: "Paste", shortcut: chord("V"), off: none, run: () => edits.paste() },
       { id: "duplicate", label: "Duplicate", shortcut: chord("D"), off, run: () => void edits.duplicate() },
       { id: "repeat", label: "Repeat…", off, run: () => onRepeat({ x: at.x, y: at.y }) },
+      picked.length === 1 && picked[0].lane.kind === "notes" ? { id: "export-midi", label: "Export as MIDI…", run: () => void exportMidi(picked[0].ref) } : null,
       "line",
       { id: "split", label: "Split at playhead", shortcut: chord("E"), off: off ?? (inside ? null : `The playhead (${position(timeline.meter, beat)}) isn't inside ${these}.`), run: edits.split },
       notes.length > 1 ? { id: "join", label: "Join", shortcut: chord("J"), off: off ?? (oneLane && notes.length === picked.length ? null : "Only notes clips of one lane join."), run: edits.join } : null,

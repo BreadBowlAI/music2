@@ -98,6 +98,7 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .merge(crate::routes_settings::router(state.clone()))
         .merge(crate::routes_leases::router(state.clone()))
         .merge(crate::routes_record::router(state.clone()))
+        .merge(crate::routes_exchange::router(state.clone()))
         .route("/api/project/templates", get(project_templates))
         .route("/api/project/new", post(project_new))
         // An unknown API path is a clear error, not the UI's index.html.

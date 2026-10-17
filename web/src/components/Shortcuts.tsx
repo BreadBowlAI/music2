@@ -94,7 +94,7 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
       ...(native ? ([["Open a song folder", chord("O")]] as [string, string][]) : []),
       ["Close the song", chord("W")],
       ["Save (in Code)", chord("S")],
-      ["Export audio", chord("E", { shift: true })],
+      ["Export", chord("E", { shift: true })],
       ["Save a copy (Save As)", chord("S", { shift: true })],
       ["Settings", chord(",")],
     ],

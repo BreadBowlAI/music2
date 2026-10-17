@@ -1,21 +1,35 @@
-// Export Audio: the app renders the open song to a WAV file on its own thread, and says
-// how it's going with `export` events (see crates/server/src/export.rs). Each names the song
-// and its folder: the export runs on when another song is opened, and stays that song's.
+// Export (⇧⌘E): a dialog of three choices (studio C3, Q42). Song: the app renders the open song to
+// a WAV file on its own thread, and says how it's going with `export` events (see
+// crates/server/src/export.rs). Stems: each track to a WAV file of its own, the same events with
+// `stems` (crates/server/src/stems.rs). MIDI: the notes, as a MIDI file (lib/midiFiles). Each event
+// names the song and its folder: an export runs on when another song is opened, and stays that
+// song's.
 
 import { create } from "zustand";
-import { graphApi, projectApi, tilde, type GraphState } from "./graph";
-import { native, nativeAction, revealLabel } from "./native";
+import { graphApi, projectApi, readJson, tilde, type GraphState } from "./graph";
+import { exportMidi } from "./midiFiles";
+import { native, nativeAction, revealLabel, token } from "./native";
 import { listed, listenedWords, listening, muteInSongCall, setMute, type Listening } from "./overlays";
 import { useStore } from "./store";
 
-/** How far along the export is (0..1), or null when none is running, and the song it is of. */
-export const useExport = create<{ progress: number | null; song: string | null; dir: string | null }>(() => ({
+/** A stems export's stem being rendered: its track's name, its number and how many there are. */
+export type Stem = { name: string; n: number; of: number };
+
+/** How far along the export is (0..1), or null when none is running, the song it is of, and the stem it renders (stems only). */
+export const useExport = create<{ progress: number | null; song: string | null; dir: string | null; stem: Stem | null }>(() => ({
   progress: null,
   song: null,
   dir: null,
+  stem: null,
 }));
 
-const idle = { progress: null, song: null, dir: null };
+const idle = { progress: null, song: null, dir: null, stem: null };
+
+/** The Export dialog's three choices (Q42). */
+export type ExportChoice = "song" | "stems" | "midi";
+
+/** Whether the Export dialog shows. */
+export const useExportDialog = create<{ open: boolean }>(() => ({ open: false }));
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -32,16 +46,62 @@ export const useExportAsk = create<{ ask: Listening | null }>(() => ({ ask: null
 const notes = new Map<string, { listened: string | null; kept: string | null }>();
 
 /**
- * Export the open song. While mutes or solos change what you hear, ask first (ExportAsk); else go
- * on: in the app, a save dialog picks the file first (it starts in the songs folder's Exports); in a
- * browser it goes straight there.
+ * ⇧⌘E, the Export button and File ▸ Export…: the Export dialog (Q42), unless an export runs (then
+ * a toast says so, as before).
  */
-export async function exportSong() {
+export function exportSong() {
+  const graph = useStore.getState().graph;
+  if (!graph || busy(graph)) return;
+  useExportDialog.setState({ open: true });
+}
+
+/** The dialog's Export…: what was chosen. Only Song asks ExportAsk's question (D23): stems leave muted tracks out anyway, and MIDI isn't sound. */
+export async function exportChosen(choice: ExportChoice) {
+  useExportDialog.setState({ open: false });
+  if (choice === "stems") return exportStems();
+  if (choice === "midi") return void (await exportMidi());
+  await exportAudio();
+}
+
+/**
+ * Export the open song as one WAV file. While mutes or solos change what you hear, ask first
+ * (ExportAsk); else go on: in the app, a save dialog picks the file first (it starts in the songs
+ * folder's Exports); in a browser it goes straight there.
+ */
+export async function exportAudio() {
   const graph = useStore.getState().graph;
   if (!graph || busy(graph)) return;
   const ask = listening(graph);
   if (ask) return useExportAsk.setState({ ask });
   await exportNow();
+}
+
+const auth: Record<string, string> = token ? { "x-m2-token": token } : {};
+
+/** POST `body` to the stems route `path`, answering its JSON; an error answer throws with the server's words. */
+async function stemsCall<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`/api/graph/stems${path}`, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
+  const data = await readJson(res);
+  if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+  return data as T;
+}
+
+/** Why the open song's stems can't be made now (Q40: a song that plays plugins), in words, or null. */
+export async function stemsRefused(session: number): Promise<string | null> {
+  return (await stemsCall<{ why: string | null }>("/check", { session })).why;
+}
+
+/** Export each track as its own WAV file into a new folder in Exports (Q39): no save dialog, no question. */
+export async function exportStems() {
+  const { toast, graph } = useStore.getState();
+  if (!graph || busy(graph)) return;
+  try {
+    useExport.setState({ progress: 0, song: graph.name, dir: graph.dir, stem: null });
+    await stemsCall("", { session: graph.session });
+  } catch (error) {
+    useExport.setState(idle);
+    toast(`Couldn't export the stems: ${message(error)}`);
+  }
 }
 
 /** An export already running: say so, and start none. */
@@ -96,7 +156,7 @@ export async function muteThenExport(keys: string[], names: string[]) {
 
 /** Start the export of `graph`'s song to `path` (undefined: the songs folder's Exports), keeping what its done toast adds. */
 async function start(graph: GraphState, path: string | undefined, note: { listened: string | null; kept: string | null }) {
-  useExport.setState({ progress: 0, song: graph.name, dir: graph.dir });
+  useExport.setState({ progress: 0, song: graph.name, dir: graph.dir, stem: null });
   notes.set(graph.dir, note);
   await graphApi.export(path);
 }
@@ -138,21 +198,36 @@ export async function onExportEvent(msg: {
   peak_db?: number;
   error?: string;
   problems?: Problem[];
+  /** A stems export's events (crates/server/src/stems.rs): the stem it renders, its number, how many, and how many were written. */
+  stems?: boolean;
+  stem?: string;
+  n?: number;
+  of?: number;
+  count?: number;
 }) {
   const toast = useStore.getState().toast;
-  if (typeof msg.progress === "number") return useExport.setState({ progress: msg.progress, song: msg.song ?? null, dir: msg.dir ?? null });
+  if (typeof msg.progress === "number") {
+    const stem = msg.stems && msg.stem ? { name: msg.stem, n: msg.n ?? 1, of: msg.of ?? 1 } : null;
+    return useExport.setState({ progress: msg.progress, song: msg.song ?? null, dir: msg.dir ?? null, stem });
+  }
   useExport.setState(idle);
   const note = (msg.dir && notes.get(msg.dir)) || { listened: null, kept: null };
   if (msg.dir) notes.delete(msg.dir);
-  if (msg.error) return toast(`Couldn't export “${msg.song ?? "the song"}”: ${msg.error}`);
+  if (msg.error) return toast(`Couldn't export ${msg.stems ? "the stems of " : ""}“${msg.song ?? "the song"}”: ${msg.error}`);
   if (!msg.done || !msg.path) return;
   const slash = msg.path.lastIndexOf("/");
   const [folder, file] = [tilde(msg.path.slice(0, slash), native ? null : await homeDir()), msg.path.slice(slash + 1)];
+  const reveal = () => void nativeAction("reveal_file", msg.path).catch((error) => toast(message(error)));
+  if (msg.stems) {
+    // "Exported 4 stems to first-song stems": the folder they are in, shown in Finder in the app.
+    const n = msg.count ?? 0;
+    const text = `Exported ${n} ${n === 1 ? "stem" : "stems"} to ${file}`;
+    return native ? toast(`${text}.`, { label: revealLabel, run: reveal }) : toast(`${text}, in ${folder}.`);
+  }
   const s = Math.round(msg.seconds ?? 0);
   // Above 0 dB a WAV file can't hold it: the loudest moments are cut flat.
   const loud = (msg.peak_db ?? 0) > 0.05 ? " It's louder than a file can hold, so the loudest moments are clipped." : "";
   const text = `Exported ${file} (${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")})`;
-  const reveal = () => void nativeAction("reveal_file", msg.path).catch((error) => toast(message(error)));
   // What the file carries that the user should know goes in the same toast, after it: a second
   // would replace the first, and its Show action with it (one toast at a time, taste.md §2.14).
   const said = exportNotes(msg.problems ?? [], note.listened);

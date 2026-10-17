@@ -93,7 +93,7 @@ const want = {
   "Device / Notes / Mix / Code": "Alt+1 / Alt+2 / Alt+3 / Alt+4",
   "Show / hide the browser": "Ctrl+Alt+B",
   "Keyboard shortcuts": "Alt+K",
-  "Export audio": "Ctrl+Shift+E",
+  "Export": "Ctrl+Shift+E",
   "Go to start": "Enter",
   "Continue from where it stopped": "Shift+Space",
   "Loop the selected clips, or the bar": "Ctrl+L",

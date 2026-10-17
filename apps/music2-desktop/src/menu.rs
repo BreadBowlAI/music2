@@ -56,8 +56,8 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     ("save", "Save", Some("CmdOrCtrl+S")),
     // A copy under a new name, which opens (polish C3); the song stays as it was.
     ("save_as", "Save As…", Some("CmdOrCtrl+Shift+S")),
-    // The UI asks for the file (actions.rs `export_path`), then shows the progress. ⌘E is Split.
-    ("export", "Export Audio…", Some("CmdOrCtrl+Shift+E")),
+    // The Export dialog (studio C3): the song, its stems or its notes. ⌘E is Split.
+    ("export", "Export…", Some("CmdOrCtrl+Shift+E")),
     ("reveal", REVEAL, None),
     // The name, and its folder too (polish C3); the top bar's double-click renames the name only.
     ("rename_song", "Rename Song…", None),
@@ -641,6 +641,18 @@ mod tests {
             let transport = &bar.iter().find(|m| m.0 == "Transport").expect("Transport").1;
             let at = transport.iter().position(|r| *r == Row::Item("home")).expect("Go to Start");
             assert_eq!(transport[at + 1..at + 3], [Row::Item("record"), Row::Line], "mac: {mac}");
+        }
+    }
+
+    /// Studio C3: File ▸ Export… opens the Export dialog (the song, its stems or its notes), at
+    /// ⇧⌘E (Ctrl+Shift+E), in File on both menu bars.
+    #[test]
+    fn file_export_opens_the_export_dialog() {
+        assert_eq!(ITEMS.iter().find(|i| i.0 == "export").map(|i| (i.1, i.2)), Some(("Export…", Some("CmdOrCtrl+Shift+E"))));
+        for mac in [true, false] {
+            let bar = layout(mac);
+            let file = &bar.iter().find(|m| m.0 == "File").expect("File").1;
+            assert!(file.contains(&Row::Item("export")), "mac: {mac}");
         }
     }
 }

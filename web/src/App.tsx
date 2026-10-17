@@ -23,6 +23,7 @@ import { togglePiano } from "./lib/piano";
 import "./lib/midi";
 import KeyboardPiano from "./components/KeyboardPiano";
 import { stopThen, toggleRecord } from "./lib/record";
+import ExportDialog from "./components/ExportDialog";
 
 /** Fetch the open project. An error means none is open: the start screen shows. */
 const refreshGraph = () =>
@@ -197,6 +198,7 @@ export default function App() {
         <NewSongDialog />
         <SaveAsDialog />
         <RenameSongDialog />
+        <ExportDialog />
         <Shortcuts />
         <SettingsDialog />
         <Toasts />
