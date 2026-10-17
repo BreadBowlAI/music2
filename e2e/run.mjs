@@ -100,7 +100,7 @@ export const SUITES = [
   ["s8-songbar", "fix", { expect: 82 }],
   ["s8-mix", "fix", { expect: 80 }],
   ["pl-mix", "fix", { expect: 47 }],
-  ["pl-sounds", "fix", { expect: 27 }],
+  ["pl-sounds", "fix", { expect: 41 }],
   ["pl-ids", "fix", { expect: 35 }],
   ["pc-keys", "fix", { expect: 37 }],
 ];

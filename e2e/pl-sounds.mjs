@@ -4,12 +4,15 @@
 // whose Undo puts the file back byte for byte; the list ticks what a track plays; Bass's cutoff,
 // set by code, is refused in words with Show code; the strip menu's row does the same; while the
 // code doesn't compile the row is off and says why; a PC page's keys; the lint with the list open.
+// Then drum names: a Drum kit track's clip in Notes names its rows (Kick, Snare, Closed hat) in an
+// 88 px key column, its notes say their drum, and Keys' roll still says C3 in 56 px.
 //
 //   node e2e/pl-sounds.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import { check, done, open, read, ROOT, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
-const { browser, page, errors, state, toasts, key } = await open(1440, 900);
+const { browser, page, errors, api, state, toasts, key } = await open(1440, 900);
+const post = (p, body) => api(p, { method: "POST", body: JSON.stringify(body) });
 const orig = { hats: read("tracks/hats.ts"), bass: read("tracks/bass.ts"), keys: read("tracks/keys.ts"), song: read("song.ts") };
 const LIST = "[data-testid=instrument-list]";
 
@@ -124,6 +127,52 @@ check(!!off?.disabled && off.title.length > 0, `while the code doesn't compile t
 await key("Escape");
 write("song.ts", orig.song);
 await until(async () => ((await state()).view.draft_errors ?? []).length === 0, 10000);
+
+// ---------------------------------------------------------------- drum names in Notes (A4)
+
+/** Open the first clip of lane `lane` (`bass.notes`) in Notes. */
+async function openClip(lane) {
+  const b = await page.$(`[data-lane="${lane}"] :nth-child(1 of [data-clip])`).then((e) => e?.boundingBox());
+  if (!b) return false;
+  await page.mouse.click(b.x + Math.min(40, b.width / 2), b.y + b.height / 2, { count: 2 });
+  return until(async () => (await page.$$("[data-testid=notes] [data-note]")).length > 0, 5000);
+}
+const keyLabel = (pitch) => page.$eval(`[data-testid=roll-keys] [data-key="${pitch}"]`, (e) => e.querySelector("span")?.textContent ?? "").catch(() => null);
+const keysWidth = () => page.$eval("[data-testid=roll-keys]", (e) => Math.round(e.getBoundingClientRect().width)).catch(() => null);
+const s0 = await state();
+const added = await post("/track/add", { session: s0.session, component: "std:drum-kit" });
+check(added.status === 200 && added.body.module === "drum-kit", `a Drum kit track is added (${JSON.stringify(added.body).slice(0, 80)})`);
+await until(async () => (await state()).timeline.tracks.some((t) => t.module === "drum-kit"));
+const s1 = await state();
+const beat = [36, 42, 38, 42].map((pitch, i) => ({ pitch, start: i, length: 0.5, velocity: 0.8 }));
+const wrote = await post("/lane", { session: s1.session, revision: s1.view.revision, module: "drum-kit", lane: "hits", clips: [{ id: "kitbeat1", start: 0, length: 4, notes: beat }] });
+check(wrote.status === 200, "a beat is written in its lane");
+const lanes = (await state()).timeline.tracks.find((t) => t.module === "drum-kit").lanes;
+check(lanes[0].names?.["36"] === "Kick" && lanes[0].names?.["42"] === "Closed hat", "the timeline names its notes");
+await until(async () => !!(await page.$('[data-lane="drum-kit.hits"] [data-clip]')), 5000);
+check(await openClip("drum-kit.hits"), "its clip opens in Notes");
+check((await keyLabel(36)) === "Kick", `key 36 says Kick: ${await keyLabel(36)}`);
+check((await keyLabel(38)) === "Snare" && (await keyLabel(42)) === "Closed hat" && (await keyLabel(46)) === "Open hat", "38 says Snare, 42 Closed hat, 46 Open hat");
+check((await keyLabel(60)) === "" && (await keyLabel(40)) === "", "a row with no name has no label, not even a C");
+check((await keysWidth()) === 88, `the key column is 88 px (${await keysWidth()})`);
+const hat = await page.$eval('[data-testid=notes] [data-note][data-pitch="42"]', (e) => ({ title: e.title, label: e.querySelector("span")?.textContent })).catch(() => null);
+check(hat?.title.startsWith("Closed hat · beat 2") && hat.label === "Closed hat", `a note on 42 says Closed hat (${JSON.stringify(hat)})`);
+const bar = await page.$eval('[data-velocity="0"]', (e) => e.title).catch(() => "");
+check(bar.startsWith("Kick: velocity 80%"), `its velocity bar says the drum too (${bar})`);
+const misfits = await page.evaluate(() =>
+  [...document.querySelectorAll("[data-testid=roll-keys] [data-name]")]
+    .filter((e) => {
+      const s = e.getBoundingClientRect(), k = e.parentElement.getBoundingClientRect();
+      const black = e.parentElement.querySelector("[data-black]")?.getBoundingClientRect();
+      return s.left < (black ? black.right + 2 : k.left) || s.right > k.right;
+    })
+    .map((e) => e.textContent),
+);
+check(misfits.length === 0, `every name fits on the white of its key (${misfits})`);
+await linted("[data-testid=notes]", "Notes with drum names");
+await page.screenshot({ path: `${ROOT}/pl-sounds-drums.png` });
+check(await openClip("keys.chords"), "Keys' clip opens in Notes");
+check((await keyLabel(48)) === "C3" && (await keyLabel(36)) === "C2" && (await keysWidth()) === 56, `Keys' roll still says C3, in 56 px (${await keyLabel(48)}, ${await keysWidth()})`);
 
 // ---------------------------------------------------------------- a PC page's keys
 

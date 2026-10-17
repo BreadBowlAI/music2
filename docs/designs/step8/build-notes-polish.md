@@ -201,6 +201,49 @@ the_drum_kit_names_its_notes:      left: []  right: [(36, "Kick"), (37, "Rim"), 
 a_drum_kit_lane_names_its_notes:   assertion `left == right` failed: []  left: 0  right: 20
 ```
 
+### A4, part 2: drum names in Notes
+
+**In short**
+
+| What | Now |
+|---|---|
+| A drum kit's notes | Each key says its drum: Kick, Snare, Closed hat. The key column is wider (88 px) |
+| A note | Its label and tooltip say the drum: "Closed hat · beat 2 · 1/8 · velocity 80%" |
+| Other rows | Keep the piano look, with no label |
+| Other instruments | Unchanged: C1, C2… in 56 px |
+
+**What changed**
+
+- `web/src/lib/rowNames.ts` (new): `pitchName`, `namesOf(lane)`, `rowName(lane, pitch)` (the lane's name for the
+  note, else the pitch's), `keysWidth(lane)` (88 or 56).
+- `NoteView.tsx` (no P0b-1, so in place, in small blocks): `KEYS_W` becomes `keysW` from the lane, read through a
+  ref in the effects (X12); the note labels, note tooltips and velocity tooltips say `rowName`; `Keys` takes `names`
+  and `width`: on a named lane each named row says its name (`text-xs`, `fg-muted`), no C does, and black keys are
+  16 px wide so every name sits on the white of its key. Its memo compares the two new props (an empty lane's names
+  are one shared object, so it holds).
+
+**Tests**
+
+| Test | Result |
+|---|---|
+| `pl-sounds`, 14 more checks: a Drum kit track added and a beat written; the timeline names its notes; its clip in Notes says Kick on 36, Snare, Closed hat, Open hat; unnamed rows say nothing, not even C4; the column is 88 px; a note on 42 says Closed hat (label and tooltip), a velocity bar says Kick; every name fits on the white of its key; the lint; Keys' roll still says C2 and C3 in 56 px | 41 ok |
+| `notes` 52, `s8-audition` 51, `fixes-notes` 37, `taste` 39 | ok |
+
+**Red first** (the drum part alone, on the page from before and the server with the names):
+
+```
+FAIL  key 36 says Kick: C2
+FAIL  the key column is 88 px (56)
+FAIL  a note on 42 says Closed hat ({"title":"F#2 · beat 2 · 1/8 · velocity 80%","label":"F#2"})
+```
+
+**What's left:** folding the rows to the drums used (taste NT-5).
+
+**For gaps.md:** Notes names a drum kit's rows (Kick, Snare…), from the kit's own descriptor; any instrument can name
+its notes (`editor.notes`). Left: folding to the drums used.
+
+**Contract:** PKG-9's descriptor gains `editor.notes`. The timeline's notes lane gains `names`.
+
 ### A5, part 1: change a track's ID
 
 **In short**

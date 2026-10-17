@@ -29,6 +29,7 @@ import { RULER_H } from "../lib/layout";
 import { chord, keyName, mod, native } from "../lib/native";
 import { GRAPHITE, trackColors, type TrackColor } from "../lib/palette";
 import { useGrid } from "../lib/grid";
+import { keysWidth, namesOf, pitchName, rowName } from "../lib/rowNames";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import AuditionTools from "./AuditionTools";
@@ -37,10 +38,8 @@ import GridChip from "./GridChip";
 import { Hatch, HBands, VLines } from "./draw";
 import { Button, EmptyState, keepFocus, Segment } from "./ui";
 
-const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-
-// The roll's sizes (taste.md §3.5); its ruler is the arrangement's, 28px.
-const KEYS_W = 56;
+// The roll's sizes (taste.md §3.5); its ruler is the arrangement's, 28px. The key column is 56 px,
+// or 88 where its keys say drum names (`keysWidth`, polish A4).
 const ROW_H = 14;
 const VEL_H = 64;
 /** The velocity strip's bars stop this far from its edges. */
@@ -74,7 +73,6 @@ type Gesture =
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
 /** Beats and lengths as written: to a millionth of a beat, never -0. */
 const clean = (x: number) => Math.round(x * 1e6) / 1e6 + 0;
-const pitchName = (p: number) => `${NOTE_NAMES[((p % 12) + 12) % 12]}${Math.floor(p / 12) - 1}`;
 
 /** A length in beats as a note value: 1 → 1/4, 0.75 → 3/16. */
 function noteValue(beats: number) {
@@ -114,6 +112,10 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   // A bar as long as the time signature where the clip starts says (FMT-13).
   const bpb = barAt(timeline.meter, server?.start ?? 0).length;
   const tone = trackColors(timeline, module) ?? GRAPHITE;
+  // The key column: wider where its keys say drum names. Effects read it through a ref.
+  const keysW = keysWidth(findLane(timeline, module, lane));
+  const keysWRef = useRef(keysW);
+  keysWRef.current = keysW;
 
   // What the roll shows while a gesture is under way or its write hasn't come back: the
   // clip as edited here. The selection is indices into the notes shown.
@@ -185,7 +187,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   useLayoutEffect(() => {
     const el = scroller.current;
     if (!el || !server) return;
-    setPpb(clamp(Math.floor((el.clientWidth - KEYS_W - 32) / server.length), 12, 160));
+    setPpb(clamp(Math.floor((el.clientWidth - keysWRef.current - 32) / server.length), 12, 160));
     // Centred on the clip's pitches, so its whole range shows when it fits (a row to spare at
     // 14px rows for an octave in the 300px dock), and on whole rows: no key cut under the ruler.
     const pitches = server.notes.map((n) => n.pitch);
@@ -198,13 +200,13 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
 
   useEffect(() => {
     const el = scroller.current!;
-    const observer = new ResizeObserver(() => setVisible(el.clientWidth - KEYS_W));
+    const observer = new ResizeObserver(() => setVisible(el.clientWidth - keysWRef.current));
     observer.observe(el);
     // ⌘/Ctrl + wheel zooms time around the pointer; plain wheels scroll.
     const wheel = (e: WheelEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return;
       e.preventDefault();
-      const x = e.clientX - el.getBoundingClientRect().left - KEYS_W;
+      const x = e.clientX - el.getBoundingClientRect().left - keysWRef.current;
       setPpb((p) => {
         anchor.current = { beat: (el.scrollLeft + x) / p, x };
         return clamp(p * Math.exp(-e.deltaY * 0.004), 8, 400);
@@ -223,7 +225,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   }, [ppb]);
   const zoom = (by: number) => {
     const el = scroller.current;
-    if (el) anchor.current = { beat: (el.scrollLeft + el.clientWidth / 2 - KEYS_W) / ppb, x: el.clientWidth / 2 - KEYS_W };
+    if (el) anchor.current = { beat: (el.scrollLeft + el.clientWidth / 2 - keysW) / ppb, x: el.clientWidth / 2 - keysW };
     setPpb((p) => clamp(p * by, 8, 400));
   };
 
@@ -683,13 +685,13 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
           className="absolute inset-0 overflow-auto"
           onScroll={(e) => strip.current && (strip.current.style.transform = `translateX(${-e.currentTarget.scrollLeft}px)`)}
         >
-          <div className="relative" style={{ width: KEYS_W + width, height: RULER_H + height }}>
+          <div className="relative" style={{ width: keysW + width, height: RULER_H + height }}>
             <div className="sticky top-0 z-30 flex" style={{ height: RULER_H }}>
-              <div className="sticky left-0 z-40 shrink-0 bg-chrome border-r border-b border-line" style={{ width: KEYS_W }} />
+              <div className="sticky left-0 z-40 shrink-0 bg-chrome border-r border-b border-line" style={{ width: keysW }} />
               <Ruler width={width} ppb={ppb} meter={timeline.meter} start={start} length={clip.length} tone={tone} />
             </div>
             <div className="flex">
-              <Keys selected={new Set(picked.map((i) => clip.notes[i].pitch))} tone={tone} module={module} lane={lane} />
+              <Keys selected={new Set(picked.map((i) => clip.notes[i].pitch))} tone={tone} module={module} lane={lane} names={namesOf(declared)} width={keysW} />
               <div
                 ref={grid}
                 data-testid="roll-grid"
@@ -733,7 +735,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
                       data-length={n.length}
                       data-velocity={n.velocity}
                       data-selected={shown.has(i) || undefined}
-                      title={`${pitchName(n.pitch)} · beat ${Number((n.start + 1).toFixed(3))} · ${noteValue(n.length)} · velocity ${Math.round(n.velocity * 100)}%`}
+                      title={`${rowName(declared, n.pitch)} · beat ${Number((n.start + 1).toFixed(3))} · ${noteValue(n.length)} · velocity ${Math.round(n.velocity * 100)}%`}
                       className={clsx(
                         "absolute rounded-xs cursor-grab active:cursor-grabbing",
                         on
@@ -761,7 +763,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
                     >
                       {w > 26 && (
                         <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-xs font-medium leading-none pointer-events-none">
-                          {pitchName(n.pitch)}
+                          {rowName(declared, n.pitch)}
                         </span>
                       )}
                       {/* The edge to resize by: never more than half a short note, which must stay draggable. */}
@@ -781,14 +783,14 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
           </div>
         </div>
         {clip.notes.length === 0 && (
-          <EmptyState className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none whitespace-nowrap" style={{ left: KEYS_W + Math.min(clip.length * ppb, visible) / 2 }}>
+          <EmptyState className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none whitespace-nowrap" style={{ left: keysW + Math.min(clip.length * ppb, visible) / 2 }}>
             {draw ? "Click in the grid to add a note" : "Double-click in the grid to add a note"}
           </EmptyState>
         )}
       </div>
 
       <div data-testid="velocity" className="shrink-0 flex border-t border-line bg-chrome" style={{ height: VEL_H }}>
-        <div className="shrink-0 flex flex-col justify-center pl-2 border-r border-line text-xs font-medium text-fg-muted" style={{ width: KEYS_W }}>
+        <div className="shrink-0 flex flex-col justify-center pl-2 border-r border-line text-xs font-medium text-fg-muted" style={{ width: keysW }}>
           Velocity
         </div>
         <div className="relative flex-1 min-w-0 overflow-hidden">
@@ -815,7 +817,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
                   <div
                     key={i}
                     data-velocity={i}
-                    title={`${pitchName(n.pitch)}: velocity ${Math.round(n.velocity * 100)}% (drag up or down)`}
+                    title={`${rowName(declared, n.pitch)}: velocity ${Math.round(n.velocity * 100)}% (drag up or down)`}
                     className={clsx("absolute inset-y-0 w-3 -ml-[5px] group", !locked && "cursor-ns-resize")}
                     style={{ left: n.start * ppb }}
                   >
@@ -902,13 +904,31 @@ function LengthField({
 }
 
 /**
- * The piano keys, one row per pitch, C's named; keys of selected notes lit in the track's colour.
+ * The piano keys, one row per pitch, C's named; keys of selected notes lit in the track's colour. On
+ * a lane whose notes have names (a drum kit, polish A4), each named row says its name and no C
+ * does, and the black keys are narrower, so a name on one is on the white of its key.
  * The keyboard is an instrument (NT-3): a key sounds on lane `module.lane` while held, at
  * `KEY_VELOCITY`, and a drag along it plays each key it reaches. A key that sounds, from a key or
  * a note held anywhere in the roll, is drawn in `press`, never like a selected note's.
  */
 const Keys = memo(
-  function Keys({ selected, tone, module, lane }: { selected: Set<number>; tone: TrackColor; module: string; lane: string }) {
+  function Keys({
+    selected,
+    tone,
+    module,
+    lane,
+    names,
+    width,
+  }: {
+    selected: Set<number>;
+    tone: TrackColor;
+    module: string;
+    lane: string;
+    /** The lane's note names, by MIDI note. */
+    names: Record<string, string>;
+    width: number;
+  }) {
+    const drums = Object.keys(names).length > 0;
     const held = useAudition((s) => s.held);
     const sounding = new Set([...held.values()].filter((n) => n.module === module && n.lane === lane).map((n) => n.pitch));
     const press = useRef<{ pointer: number; h: number | null; pitch: number } | null>(null);
@@ -922,7 +942,7 @@ const Keys = memo(
       <div
         data-testid="roll-keys"
         className="sticky left-0 z-20 shrink-0 bg-raised border-r border-line touch-none select-none cursor-pointer"
-        style={{ width: KEYS_W }}
+        style={{ width }}
         title="Click or drag along the keys to hear them"
         onPointerDown={(e) => {
           if (e.button !== 0 || press.current) return;
@@ -961,23 +981,37 @@ const Keys = memo(
               {black && <div className="absolute inset-x-0 top-1/2 h-px bg-line" />}
               {black && (
                 <div
-                  className="absolute left-0 inset-y-[1px] w-[60%] rounded-r-xs"
+                  data-black
+                  className={clsx("absolute left-0 inset-y-[1px] rounded-r-xs", drums ? "w-4" : "w-[60%]")}
                   style={{ background: on ? "var(--color-press)" : lit ? tone.ink : "var(--color-gray-700)" }}
                 />
               )}
-              {p % 12 === 0 && (
-                // On a lit key, the strongest grey: the bar tones are light, so it reads.
-                <span className={clsx("absolute right-1.5 top-1/2 -translate-y-1/2 text-xs leading-none", lit || on ? "font-medium text-fg-strong" : p === 60 ? "font-medium text-fg-muted" : "text-fg-faint")}>
-                  {pitchName(p)}
-                </span>
-              )}
+              {drums
+                ? names[p] && (
+                    <span data-name className={clsx("absolute right-1 top-1/2 -translate-y-1/2 text-xs leading-none whitespace-nowrap", lit || on ? "font-medium text-fg-strong" : "text-fg-muted")}>
+                      {names[p]}
+                    </span>
+                  )
+                : p % 12 === 0 && (
+                    // On a lit key, the strongest grey: the bar tones are light, so it reads.
+                    <span className={clsx("absolute right-1.5 top-1/2 -translate-y-1/2 text-xs leading-none", lit || on ? "font-medium text-fg-strong" : p === 60 ? "font-medium text-fg-muted" : "text-fg-faint")}>
+                      {pitchName(p)}
+                    </span>
+                  )}
             </div>
           );
         })}
       </div>
     );
   },
-  (a, b) => a.tone === b.tone && a.module === b.module && a.lane === b.lane && a.selected.size === b.selected.size && [...a.selected].every((p) => b.selected.has(p)),
+  (a, b) =>
+    a.tone === b.tone &&
+    a.module === b.module &&
+    a.lane === b.lane &&
+    a.width === b.width &&
+    a.names === b.names &&
+    a.selected.size === b.selected.size &&
+    [...a.selected].every((p) => b.selected.has(p)),
 );
 
 /** Row shading (black keys darker, a line under each C) and the bar, beat and snap lines, bars as the song's time signatures count them. */
