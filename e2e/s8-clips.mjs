@@ -1,7 +1,7 @@
 // 8b.5 The timeline as an editor (design-8b §7, taste.md §3.4, §5).
 // Part 1, its grid and snap (U4): the grid chip in the corner (Auto, the menu, triplets), a drag
 // that lands on the grid, ⌘ held to place a clip freely, ⌘1 to ⌘4 on the view last pointed at (the
-// timeline or Notes), the choice kept over a reload, a click on empty lane space that moves where
+// timeline or Notes; the timeline once Notes has gone), the choice kept over a reload, a click on empty lane space that moves where
 // play starts and writes nothing.
 // Part 2, clip gestures (U5): each edit one `clips` gesture and one undo step, nothing else on
 // disk, no toast; either edge resized with the notes kept in time; ⌥-drag copies; a clip dragged
@@ -105,6 +105,25 @@ await key("Meta+1");
 // The kick's lane selects the kick, so the roll has gone: its grid is read where it is kept.
 const rollGrid = () => page.evaluate(() => localStorage.getItem("m2.notes.grid"));
 check(await until(async () => (await chip())?.grid === "1/2") && (await rollGrid()) === "0.125", `after a click in the timeline, ⌘1 is the timeline's again: ${(await chip())?.grid}, the roll's ${await rollGrid()}`);
+
+// Notes gone from the screen, its grid isn't the keys' any more: the timeline's is the only one shown.
+const rollSnap = () => page.evaluate(() => localStorage.getItem("m2.notes.snap"));
+const tabWas = await page.$eval("[role=tablist][aria-label=Views] [aria-selected=true]", (e) => e.dataset.viewTab).catch(() => null);
+for (const [how, away] of [["E hides the dock", "e"], ["⌥3 shows Mix there", "Alt+3"]]) {
+  const bc = await box('[data-lane="bass.notes"] [data-clip]');
+  await page.mouse.click(bc.x + 20, bc.y + bc.height / 2, { clickCount: 2 });
+  await page.waitForSelector("[data-testid=roll-grid]");
+  check(await until(() => page.evaluate(() => !!document.activeElement?.closest("[data-grid-view=notes]")), 3000), `a double-click opens Bass's clip in Notes, which takes the keys (${how})`);
+  const was = await rollSnap();
+  await key(away);
+  await until(async () => !(await page.$("[data-testid=roll-grid]")), 3000);
+  await key("Meta+4");
+  check(await until(async () => (await chip()).snap === false, 2000) && (await rollSnap()) === was, `then ${how}: ⌘4 turns the timeline's snap off, and the roll's stays as it was (${was})`);
+  await key("Meta+4");
+  await until(async () => (await chip()).snap === true);
+}
+await clickLane(45);
+if (tabWas) await page.click(`[data-view-tab="${tabWas}"]`).catch(() => {});
 
 // ---------------------------------------------------------------- kept over a reload (in a browser; the app starts over)
 await page.reload({ waitUntil: "domcontentloaded" });

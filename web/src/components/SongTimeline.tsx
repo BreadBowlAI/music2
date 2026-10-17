@@ -49,7 +49,7 @@ import {
   type LaneAddr,
   type ServerRef,
 } from "../lib/clips";
-import { clean, gridOp, pickName, skipsSnap, snapSong, stepOf, useGrid, type Grid as GridSetting } from "../lib/grid";
+import { clean, gridOp, gridTarget, pickName, skipsSnap, snapSong, stepOf, useGrid, type Grid as GridSetting } from "../lib/grid";
 import { added, bounded, hit, line, moved, painted, pickedIn as pointIn, rounded, usePoints, type Point } from "../lib/points";
 import { chord, keyName, mod, opt } from "../lib/native";
 import { useStore } from "../lib/store";
@@ -910,10 +910,10 @@ export default function SongTimeline({
     // `latest` carries everything that changes; the edits themselves never do.
   }, []);
 
-  // ⌘1 to ⌘4 (View's grid rows) change the grid of the view last pointed at or focused: this
-  // one's or the roll's. The timeline's zoom says what Auto is.
+  // ⌘1 to ⌘4 (View's grid rows) change the grid of the view last pointed at or focused, while it
+  // is on screen: this one's or the roll's. The timeline's zoom says what Auto is.
   useEffect(() => {
-    canvas.grid = (op) => gridOp(useGrid.getState().last, op, PPB);
+    canvas.grid = (op) => gridOp(gridTarget(), op, PPB);
     return () => void delete canvas.grid;
   }, []);
 

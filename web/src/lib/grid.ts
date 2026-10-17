@@ -163,6 +163,16 @@ export function gridOp(view: GridView, op: GridOp, ppb: number) {
 export const GRID_VIEW = "data-grid-view";
 
 /**
+ * The view ⌘1 to ⌘4 act on: the one last pointed at or focused, while it is still on screen. Once
+ * Notes has gone (the dock hidden, or another view in it), the timeline's grid is the only one
+ * shown, so it is the timeline's.
+ */
+export function gridTarget(): GridView {
+  const { last } = useGrid.getState();
+  return last === "notes" && !document.querySelector(`[${GRID_VIEW}="notes"]`) ? "song" : last;
+}
+
+/**
  * Follow the view the pointer or the keyboard was last in, for ⌘1 to ⌘4 (taste.md §5.1): a press
  * or a focus inside an element marked `data-grid-view`. Returns how to stop.
  */
