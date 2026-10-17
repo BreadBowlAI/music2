@@ -16,6 +16,7 @@ adds its own section here, in the same commit.
 | Setup | Nothing new to see. The back ends of 8b-backend are merged in. A deleted track no longer leaves its mute behind | done |
 | U0 | Nothing new to see, except the roll's grid control now comes from a shared file. The places the lanes fill are ready | done |
 | U9 (lane C) | You hear notes as you click, drag or draw them in Notes. The piano keys play. A toggle turns it off. A hint says when you won't hear anything | done |
+| U10 (lane C) | A level meter in every track header and on the Song row. It shows how loud each track is, and the whole song, while it plays | done |
 
 ## Setup: the merges
 
@@ -229,3 +230,76 @@ tooltip says Ctrl+.; on a server of its own that plays into a file, a key held w
 - The ⌥K sheet has no row for audition: it has no key of its own. ⌘. is already there.
 - The toggle resets at each app launch (the page's address changes): the line for `docs/gaps.md` at the End.
 - A key's velocity is always 0.8 (Q17). The design's "velocity by where you click the key" is not built.
+
+## U10: meters (lane C)
+
+**In short**
+- Every track header now has a thin level meter at its right edge. The Song row has one too: it shows
+  the whole song.
+- The bar is grey while quiet, amber when loud (from −6 dB), red at 0 dB or more.
+- A small dark tick shows the loudest moment. It stays 1.5 seconds, then slides down.
+- When the song stops, the meters drop to empty within a second.
+- A muted track's meter stays empty.
+- Checks: a new suite (22 checks, red before the change) and twelve suites that read the headers or
+  Notes, all green.
+
+### What changed
+
+| File | What |
+|---|---|
+| `web/src/lib/meters.ts` (new) | The latest peak and the peak hold of every meter, outside React and the store. Listens to `meters` while a meter is shown; floors every meter when the socket closes. One `requestAnimationFrame` loop draws every meter, and only redraws one whose picture changed. Sizes come from a ResizeObserver, so the loop never reads layout |
+| `web/src/components/Meter.tsx` (new) | One canvas, `role="meter"`, `aria-label` ("Kick level"), `aria-valuemin` −60, `aria-valuemax` 6. The loop sets `aria-valuenow` (dB, rounded) and `aria-valuetext` at most 10 times a second |
+| `web/src/components/TrackMeter.tsx` | Fills U0's slot: the track's meter, or the output's on the Song row |
+| `e2e/s8-meters.mjs` (new), `e2e/run.mjs`, `e2e/README.md` | The suite and its rows, after `ports` |
+
+### How a meter is drawn
+
+| Part | Look |
+|---|---|
+| Trough | `line`, the whole 3 × 28 px |
+| Fill | from the bottom to the level: `fg-muted` up to −6 dB, `warn` from −6 to 0, `danger` above 0 |
+| Peak hold | a 1 px `fg-strong` tick; held 1.5 s, then falls 12 dB a second; never below the level |
+| Scale | −60 to +6 dBFS, linear in dB. Silence and anything under −60 is empty |
+| A track with no tap (nothing reads it, Q21) | the trough only |
+| Stereo | one bar, the louder side (Q22). A mono track sends one peak; that is used |
+
+- The level is the latest message's peak, never eased (taste.md §1.8). Messages come about 30 a second
+  and the loop runs at the screen's rate, so a level shows for two frames.
+- The server sends its last messages as the engine idles (the tail of the sound, then silence), so the
+  meters fall on their own. No timer (M1).
+
+### Checks
+
+| Check | Result |
+|---|---|
+| `cd web && npm run build` (type-checks) | ok |
+| `s8-meters` (new) | 22 of 22 |
+| `s8-audition` (U9) | 49 of 49 |
+| `taste` | 39 of 39 |
+| `s8-tracks`, `layout`, `views`, `gestures`, `s4-clips`, `pc-keys` | 75, 39, 30, 30, 28, 37 |
+| `notes`, `fixes-notes`, `live3a` | 52, 37, 49 |
+| Server | `bin/fba5147` (U0's); no Rust changed |
+| Logs | `~/m2-runs/s8ui/scratch/e2e/c/u10` (the suite), `…/u10-moves` (the twelve), `~/m2-runs/logs/c-u10-*.log` |
+
+**Red first:** the suite on U0's web fails 16 of its 22 checks (`~/m2-runs/s8ui/scratch/e2e/c/u10-red`).
+The 6 that pass there check the server's messages (their rate, shape and the silence at the end),
+which U10 doesn't change, and that the page has no console errors.
+
+**The load, for U11 (information only):** on this server (debug build, `M2_AUDIO=none`), first-song
+playing showed a load of 6 to 11% and 0 late callbacks, 0 xruns. So a real "Heavy load" (70%) won't
+show in the suites by accident.
+
+What the suite checks, in short: five meters, named, where taste.md puts them, at 1440 and 1100 px;
+all at the floor at rest; 30 messages a second while playing (20 to 40 allowed); Kick, Bass and the
+Song move; the Song meter's canvas has grey and amber rows (it sits near the −1 dB ceiling of
+`master()`); Kick muted stays at the floor while Bass moves; a second after the stop all five read the
+floor and the server has gone quiet; the hold tick stays, then falls; closing the socket floors all
+five at once, and they move again once it reopens.
+
+### Left
+
+- No PC page in this suite: meters have no words or keys.
+- Shot `ui-u10-meters.png`: from the desktop app on Xvfb `:98` after the merge into `8b-ui`.
+- Meters read before the fader (Q6): a fader move doesn't move its track's meter. Bass's pre-fader peak
+  passes 0 dB in first-song, so its meter shows red now and then. The master never does (−1 dB limiter).
+- No clip dots (Q9), no strip meters (U12, with the Mix view).
