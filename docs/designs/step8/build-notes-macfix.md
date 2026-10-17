@@ -87,6 +87,7 @@ The line on Linux, from earlier `ci/check.sh --gates` runs (one run each):
 | `a8199ff` (8b's back ends) | -33 |
 | `22bea45` (taste-next, 8b.3) | **+61** |
 | `bc41693` (8a), `1560a19` (next) | +47, +46 |
+| `ac5d8c0` (macfix, with the gain's fast path: S lacks it) | -488 |
 
 Between `a8199ff` and `22bea45`, `core/runtime`, `crates/gates` and p50's code didn't change. `core/play` (not used
 by G7f store), `core/script` (editor labels) and `core/session` (an enum) did. And std: the master's gain and
@@ -186,6 +187,7 @@ track's binary with `85b069a`'s std and with the fast path's std (`M2_STD`).
 | `22bea45` | 21:50, 3 | -20 (-86 to +211) | +49 | -59 |
 | new | 22:00, 8 | **-360** (-705 to +12) | -284 | -9 |
 | old | 22:09, 13 | +22 (-316 to +188) | -10 | -22 |
+| the final check, `ac5d8c0` (new) | in its gates, 23:26 to 23:52; load 17 at the check's start, 3 at its end | **-488** (-693 to -417) | -280 | -208 |
 
 Every run: "the same music", hash `22cd1b3810530499` (2,880,000 samples), the app's layout, P1 and S in every round:
 the Mac's own hash. New against old: -267 and -382 µs, about the 50 gains' old cost (50 × 5.3 µs).
@@ -295,6 +297,102 @@ All on Linux, in `~/m2-runs/smf/target` (and `target-kernels`, `target-wasm`), H
   block path (partitions, the FP mode) are untested candidates.
 - std's other per-sample `powf`s: `std:drive` (17 in p50, 137 µs a block in the 8a spike) runs `db_to_gain` and
   two `tanh`s per sample on a dB that mostly holds still. The same kind of fast path would apply. Not done here: it
-  isn't what failed, and S pays it too.
+  isn't what failed, and S pays it too. Like the gain's, it would add to what G7f's line can't see.
 - Copying at exactly 0 dB instead of multiplying by 1.0 was left out on purpose: the two differ only in a NaN's
   bits, and a multiply costs what `std:scale` costs (0.4 µs).
+
+## End
+
+**In short**
+
+| What | Now |
+|---|---|
+| The review | 2 findings, both confirmed (one medium, one low). Both fixed: one test made right, shown red then green; one in the docs (below) |
+| `main` | Still at `85b069a`: nothing to merge |
+| The full check | `ci/check.sh --gates` at `ac5d8c0`: every row PASS, nothing passed only on a retry: 1,353 Rust tests, 58/58 browser suites, 10 of 10 renders, the 6 gate runs, 45 minutes |
+| G7f store on Linux (information) | -488 µs a block over S in the check (5 pairs, -693 to -417), with the gain's fast path S lacks. Beside the earlier lines in "The G7f sweep" and the line's history (above) |
+| Owed | Once macfix is on `main`: one more `ci/check.sh` on the Mac, then G7f store once more on the old gain ("The Mac's next run") |
+
+### The review
+
+One round, two findings. Each fix is its own commit.
+
+| Finding | What was wrong | Fix | Red first | After |
+|---|---|---|---|---|
+| G7F-CONFOUND (medium) | The notes called the gain's fast path the G7f row's fix. But S plays its own std, with the old gain, so the fast path speeds up the app's layout and P1 alike, by about 250 µs a p50 block on Linux. The line would then pass on the gains and no longer show the Mac's +154 since step 7. And "what is left of it follows std's rebuild" wasn't shown: `22bea45` has `85b069a`'s `std.wasm` yet read -20 in the sweep | Docs (`ac5d8c0`). The notes say "not pinned", and name std's rebuilds and 8a's block path (partitions `0fd1b20`, the FP mode `2dc89ce` and `7a1d527`) as untested candidates. The owner's next Mac run also plays G7f store with `85b069a`'s std on the app's side (HANDOFF and "The Mac's next run", with what each result says). RENDER-32's Today line says the app's gain has a fast path S's lacks | The commands tried on Linux: the archive's std is the sweep's "old", the same music, -59 µs over S (`mf-g7f-archive-1017-225523-*.log`) | The final check, every row PASS |
+| SONGS-REAL-PATH-SHOWN (low) | `the_songs_folder_is_under_home` asked for the songs folder to start with the real home. With `~/Music` a link out of the home folder it failed, though nothing was wrong. Showing the real place is the documented choice; whether a linked `~/Music` should read `~/Music/music2` is the owner's | The test asks for `$HOME/Music/music2` by its real path (`899a53e`). The display question is in HANDOFF's Open owner decisions | HOME with `Music` a link out of it: **FAIL** at `project.rs:1156`, "under the home folder, by its real path as the songs folder is" (`mf-songs-red-1017-225111-*.log`); a plain HOME: pass | Both HOMEs pass (`mf-songs-green-1017-225242-*.log`); clippy clean |
+
+### The final check
+
+`TW_WAIT=5400 ~/m2-runs/tw check-macfix2 'cd ~/m2-runs/wt/mf && M2_CHECK_OUT=$HOME/m2-runs/check-macfix2 ci/check.sh
+--gates'` (`check-macfix` was taken by an old run); log `~/m2-runs/logs/check-macfix2-1017-230738-3955074.log`,
+out `~/m2-runs/check-macfix2`. Load 17 at the start, 3 at the end. Verbatim:
+
+```
+
+music2 check: PASS
+commit   ac5d8c0325c3 on macfix (clean)
+machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
+tools    rustc 1.99.0, node v24.21.0, 45 min
+plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+
+toolchain        PASS  rustc 1.99.0
+web build        PASS  
+build            PASS  
+app              PASS  the UI connected: first-song in 1 s, with-plugins in 1 s
+rust tests       PASS  1353 passed, 0 failed
+clippy           PASS  
+pool models      PASS  23 passed, 0 failed
+std kernels      PASS  tests and clippy
+std.wasm         PASS  rebuilt to the same bytes in another folder
+mac lint         PASS  the macOS code type-checks and lints
+browser suites   PASS  58/58 suites ok
+renders          PASS  10 of 10 match e2e/renders.sha256
+old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
+gates            PASS  the 6 runs ci/gates.txt names
+repo unchanged   PASS  
+
+gates:
+  machine: ASRockRack B665D4U-1L, Ubuntu 24.04.3 LTS, AMD Ryzen 9 7950X3D 16-Core Processor, x86_64, 32 threads
+  === m2-gates --server tx-data watcher
+  PASS  G11 tx-data (PLANE-5, PLANE-1, WRITE-15) on server on p16
+        ok    idle disk: the session's part before the preview (plan, check, pre-check), under 5 ms at p95: p50 1.0 ms, p95 1.4 ms, max 1.6 ms (n=200)
+        ok    idle disk: from the request to the first block that plays it (its preview), under 20 ms at p95: p50 5.2 ms, p95 8.8 ms, max 10.5 ms (n=200)
+        ok    with another writer syncing 4 MB chunks: the session's part before the preview (plan, check, pre-check), under 5 ms at p95: p50 1.2 ms, p95 1.7 ms, max 1.9 ms (n=200)
+        ok    with another writer syncing 4 MB chunks: from the request to the first block that plays it (its preview), under 20 ms at p95: p50 4.8 ms, p95 8.4 ms, max 10.1 ms (n=200)
+        ok    idle disk, 5,000 files in assets/: the session's part before the preview (plan, check, pre-check), under 5 ms at p95: p50 1.2 ms, p95 1.6 ms, max 3.3 ms (n=200)
+        ok    idle disk, 5,000 files in assets/: from the request to the first block that plays it (its preview), under 20 ms at p95: p50 5.0 ms, p95 9.5 ms, max 10.4 ms (n=200)
+  PASS  G11 watcher (WRITE-19) on server on p16 with 5,000 files in assets/
+        ok    idle: the CPU its ticks used over 10 s, under 1% of a core: 0.10% of a core (199 ticks in 10 s)
+  === m2-gates --server --reference 50 --at 180 add-effect
+  PASS  G5 and G7a add effect, through the server (RENDER-8, RENDER-25, RENDER-25a) on server on p50 from 180 s
+        ok    audible within compile + 100 ms: past the session's work: p50 47.4 ms, p95 50.2 ms, max 50.2 ms (n=10)
+        ok    G7a: heard within 200 ms of the request, its compile included: p50 114.0 ms, p95 120.2 ms, max 120.2 ms (n=10)
+        ok    with-plugins: audible within compile + 100 ms: past the session's work: p50 14.1 ms, p95 20.0 ms, max 20.0 ms (n=2)
+  === m2-gates --reference 50 --at 180 add-effect tails
+  PASS  G5 add effect (RENDER-25, 25a, 8) on engine (step 7) on p50
+  PASS  G7b tails of untouched tracks (RENDER-25, 25a) on engine (step 7) on p50
+  === m2-gates --server export
+  PASS  G7e export (RENDER-1, RENDER-6a, HOME-4, HOME-6) on server on examples/with-plugins, real time
+  === m2-gates store --reference 50
+  PASS  G7f store (RENDER-32) on the runtime on p50
+        ok    the same music: every renderer's timed blocks the same bits: the same 2880000 samples (hash 22cd1b3810530499) from the app's layout, P1 and S in every round, peak -1.0 dB
+        info  block, P1 against S (step 7 with wasmtime's default layout): mean -280 µs (5 pairs, -449 to -194); p99 -159 µs (5 pairs, -428 to -28)
+        info  block, the app's layout against P1 (the owner's layout alone): mean -208 µs (5 pairs, -294 to -142); p99 -785 µs (5 pairs, -850 to -525)
+        info  block, starting a turn: of the judged ones, each turn's first half over its second, against S's: +9 µs (the app's layout), -4 (P1); each turn's first block over the mean: +1730 µs, +1960, +1913 (S); 188 a t
+        info  machines: S's record is from MacBookPro18,1, macOS 26.6.2, Apple M1 Pro, aarch64, 10 threads; this run is on ASRockRack B665D4U-1L, Ubuntu 24.04.3 LTS, AMD Ryzen 9 7950X3D 16-Core Processor, x86_64, 32 thread
+        skip  block within S + 80 µs, by the mean: would pass: -488 µs (5 pairs, -693 to -417) over S, measured here (bound 80). p99, not judged: -943 µs (5 pairs, -968 to -832); not judged off the reference Mac (PLAT-1
+        skip  footprint within S + 64 MB: recorded, not judged: S's record is from another machine (PLAT-1)
+        skip  full build within 1.5 × S: would pass: 248 ms against S's 190 ms, each its process's first, measured here; not judged off the reference Mac (PLAT-1)
+  === m2-gates arena --reference 50 --at 180
+  PASS  G7f the arena's callback (RENDER-32, RENDER-25) on the player on p50 from 180 s
+        ok    the same music: every player's timed callbacks the same bits: the same 2856960 samples (hash cdb85ca0bbb29381) from the app's layout, P1 and S in every round, peak -1.0 dB
+        info  callback, P1 against S (step 7 with wasmtime's default layout): mean -1126 µs (5 pairs, -1439 to -736); p99 -421 µs (5 pairs, -570 to +40)
+        info  callback, the app's layout against P1 (the owner's layout alone): mean -837 µs (5 pairs, -1181 to -742); p99 -3010 µs (5 pairs, -3654 to -2552)
+        info  callback, starting a turn: of the judged ones, each turn's first half over its second, against S's: -192 µs (the app's layout), +273 (P1); each turn's first callback over the mean: +5564 µs, +6505, +5411 (S
+        info  machines: S's record is from MacBookPro18,1, macOS 26.6.2, Apple M1 Pro, aarch64, 10 threads; this run is on ASRockRack B665D4U-1L, Ubuntu 24.04.3 LTS, AMD Ryzen 9 7950X3D 16-Core Processor, x86_64, 32 thread
+        skip  callback within S's + 320 µs, by the mean: would pass: -1994 µs (5 pairs, -2181 to -1917) over S, measured here (bound 320). p99, not judged: -3348 µs (5 pairs, -3614 to -3122); not judged off the referenc
+        ok    the slowest activation block under half the device buffer's period: 4217 µs, p50 2480; the block before it p50 3028, max 4392 (bound 5333 µs; the run's p99 callback 18621)
+
+logs     /home/jerry/m2-runs/check-macfix2.tgz
+```

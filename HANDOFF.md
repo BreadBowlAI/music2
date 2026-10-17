@@ -6,11 +6,20 @@ check, and when it landed on `main`; again for `taste-next` (taste's look, the s
 after its review and final checks; for 8b's screens (`8b-ui`), after their review and final check; and once more
 for `polish` (the rest of the top ten), after its review and final check, and when it landed on `main`; and for
 8a's offline half, after its review and final check, and when it landed on `main`; and for `next` (8b.7,
-8b.10 and the settings work), after its review and final check, and when it landed on `main`.
+8b.10 and the settings work), after its review and final check, and when it landed on `main`; and for `macfix`
+(the two rows the Mac's run at `85b069a` failed), after its review and final check.
 Read this first, then `docs/architecture.md` (the contract) and the design for
 whatever you pick up.
 
 **In short**
+- **`macfix`** (2026-10-17, branch `macfix`, not on `main` yet): the owner's `ci/check.sh` on the Mac at `85b069a`
+  passed 11 of 13 rows. It failed G7f store (+135 µs a block over S; bound 80) and one test
+  (`new_songs_go_where_settings_say`: a Mac's temporary folder is a link). macfix fixes both. `std:gain` skips its
+  `powf` while its dB holds still, with the same bits. The songs folder is named by its real path, as songs are. A
+  review found 2 things: both fixed (a test, and the docs). Then `ci/check.sh --gates` passed at `ac5d8c0`: every
+  row, nothing passed only on a retry (1,353 Rust tests, 58/58 browser suites, 10 of 10 renders, the 6 gate runs;
+  45 minutes). No render changed; std stays 0.2. Owed once it is on `main`: one more `ci/check.sh` on the Mac, then
+  G7f store once more on the old gain (Mac runs owed). Build notes: `docs/designs/step8/build-notes-macfix.md`.
 - **`next` is on `main`** (2026-10-17): Linux green at `1560a19`; macOS owed. `main` fast-forwarded to it.
   It added:
 
@@ -102,6 +111,20 @@ whatever you pick up.
   about 90 µs of that leans the app's way: still about 400 µs inside the bound. S measured 14% slower than its
   record of 2026-10-14 (10,169 µs a callback against 8,936). Why is not known; the paired turns judge both sides
   under the same conditions, and the verdict is far from its bound, so no second run was asked for.
+- **macOS at `85b069a`: 11 of 13 rows** (ci/check.sh on MacBookPro18,1, macOS 26.6.2, 2026-10-17;
+  `~/m2-runs/mac-runs/check-85b069a.txt`). 1,338 Rust tests passed and one failed (`new_songs_go_where_settings_say`,
+  `songs_folder.rs:38`); 58/58 browser suites; 10 of 10 renders. Gates:
+
+  | Gate | The Mac at `85b069a` | Bound |
+  |---|---|---|
+  | G11 tx-data, p95: before the preview / to the first block | idle 2.7 / 8.0 ms; with a syncing writer 2.1 / 8.3; 5,000 assets 3.2 / 8.9 | 5 / 20 ms |
+  | G11 watcher | 0.21% of a core | 1% |
+  | G7f store: a block over S, by the mean | **+135 µs** (5 pairs, −65 to +160): FAIL. P1 +177 over S, the app's layout −46 over P1; footprint 581 MB against S's 554; build 126 ms against 122 | 80 µs |
+  | G7f arena: a callback over S, by the mean | −69 µs (5 pairs, −154 to +253); the slowest activation block 3,999 µs | 320 µs; 5,333 µs |
+
+  The same music in both. S measured 10,589 µs a callback, 18% over its record (14% at `cbac57c`). G7f store read
+  −19 at `cbac57c`: the +154 since is in what the app and P1 share, not the layout. What it is made of is not
+  pinned (`build-notes-macfix.md`). `macfix` fixes both rows.
 - `main` has step 7: it fast-forwarded from `0ebc6e6` (the platform step, macOS green at `1750322`).
 - **Two gaps found on 2026-10-16** (Left for later): a kernel that crashes while the song plays stops the whole
   song with no message; and a kernel that runs out of its 32 MiB fails with a message that never says "memory".
@@ -134,7 +157,7 @@ whatever you pick up.
 
 | Branch | Commit | State |
 |---|---|---|
-| `main` | the tip | Steps 1–7, the fast note edits, the platform layer, the `sounds` merge, taste's look with 8b.1 to 8b.3, 8b.4 to 8b.6 and 8b.8 with their screens, and `polish` (the rest of the top ten). Green on Linux and macOS at `1750322` (the platform step). Step 7: green on Linux at `ffc36aa` and on macOS at `cbac57c`. |
+| `main` | the tip | Steps 1–7, the fast note edits, the platform layer, the `sounds` merge, taste's look with 8b.1 to 8b.3, 8b.4 to 8b.6 and 8b.8 with their screens, and `polish` (the rest of the top ten). Green on Linux and macOS at `1750322` (the platform step). Step 7: green on Linux at `ffc36aa` and on macOS at `cbac57c`. macOS at `85b069a`: 11 of 13 rows (G7f store and one songs-folder test failed; `macfix` fixes both). |
 | `sounds-merge` | `e1003ba` | All on `main` (a fast-forward, 2026-10-17). Linux green at `e108e46` (reviewed; `ci/check.sh --gates` and the recorded tests), macOS owed. Branch and worktree deleted. |
 | `8b-backend` | `c9cc6ad` | All on `main` (a fast-forward, 2026-10-17). Linux green at `a8199ff`, macOS owed. Branch and worktree deleted. |
 | `taste-next` | `22bea45`, then docs | All on `main` (a fast-forward, 2026-10-17). Linux green (reviewed; `ci/check.sh` and `--gates`), macOS owed. Branch and worktree deleted. |
@@ -144,7 +167,8 @@ whatever you pick up.
 | `origin/taste` | `4804247` | All on `main` now (`a0d5f91` and `4804247`, both merged into `taste-next`). Its worktree is deleted. |
 | `origin/sounds` | `916127d` | 22 new std sounds (8 on the polysynth, 4 FM, 10 drums), merged; on `main` since 2026-10-17. |
 | `next` | `1560a19`, then docs only | All on `main` (a fast-forward, 2026-10-17). From `main` at `70f9b61`, with `main` at `8a6d9e1` (8a's offline half) merged in. 8b.7 (heard while dragging: lanes and the tempo), 8b.10 (the metronome, the keyboard piano, a MIDI keyboard through `midir`), no sound device, Settings, undo names, effect bypass, order and the Duck picker, small fixes. Built in four lanes, joined as merge commits. Reviewed (12 findings, all fixed with tests). Linux green at `1560a19` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Branch and worktree deleted. Plan `docs/designs/step8/next-plan.md`; build notes `build-notes-next.md`. |
-| Mac runs owed | — | One `ci/check.sh` on `main` covers every branch above. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 60. |
+| `macfix` | `ac5d8c0`, then docs only | From `main` at `85b069a`. Fixes the two rows the Mac's run at `85b069a` failed: G7f store (`std:gain` skips its `powf` while its dB holds still, the same bits) and `new_songs_go_where_settings_say` (the songs folder by its real path). Reviewed (2 findings, both fixed). Linux green at `ac5d8c0` (`ci/check.sh --gates`, nothing passed only on a retry); macOS owed. Worktree `~/m2-runs/wt/mf` and its `target/` stay until it lands. Build notes `docs/designs/step8/build-notes-macfix.md`. |
+| Mac runs owed | — | `ci/check.sh` ran on `main` at `85b069a`: 11 of 13 rows (`macfix` fixes the two). One more on `main` once `macfix` is on it covers every branch above; then G7f store on the old gain. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 60. |
 
 `taste` and `sounds` start at `8aa301e`, before the platform step. Each has a detached worktree in `~/m2-runs/wt/`
 (`taste`, `sounds`); `sounds`' can go once the tracks in flight land. `origin/wip/step7` (the Mac's half-done step 7,
@@ -180,7 +204,7 @@ Step 7, 2026-10-15:
 
 | # | Decision | Where |
 |---|---|---|
-| O1 | The Store layout: each kernel memory reserves 32 MiB, with a 64 KiB guard, no room to grow, and never moves. Cranelift's Spectre guard is off: kernels import nothing, so they have no clock. Revisit before kernels from other people's packages run. The Mac run at `cbac57c` passed G7f with it. | [RENDER-32](docs/architecture.md#engine-shape-step-7); `Layout::P2` in `core/runtime/src/packages.rs` |
+| O1 | The Store layout: each kernel memory reserves 32 MiB, with a 64 KiB guard, no room to grow, and never moves. Cranelift's Spectre guard is off: kernels import nothing, so they have no clock. Revisit before kernels from other people's packages run. The Mac run at `cbac57c` passed G7f with it. At `85b069a` G7f store failed, +135 µs a block against 80, but not in the layout: P1 read +177 over S, the app's layout −46 over P1. | [RENDER-32](docs/architecture.md#engine-shape-step-7); `Layout::P2` in `core/runtime/src/packages.rs` |
 | O2 | G7f part 2's bound is 3% of a callback: 320 µs at 512 frames. Part 1's stays 80 µs a block (3% of a 2.67 ms block). | RENDER-32. G7f judges the **mean** of 5 pairs, not the p99: see "Open owner decisions". |
 | O3 | std's chorus, phaser and tremolo LFOs run on engine time, so after a stop they differ from the export. Fixed at the `sounds` merge, not in step 7, with std's version bumped. | Fixed on `main` (the `sounds` merge): [RENDER-6](docs/architecture.md#live-engine-and-its-two-clocks), `docs/designs/sounds/design.md` |
 | O4 | A note held across an export plays again after the resume: a note-on at the resume, under the 5 ms fade in. | [RENDER-1](docs/architecture.md#offline) |
@@ -214,6 +238,7 @@ Decided earlier, and still in force:
 | A plugin that keeps failing. | It is started again once. If the new one fails within 10 s, it stays silent until the song is opened again, and the user is told once. | Keep 10 s. |
 | The output device changes while playing (headphones in or out). | Playback stops, and a message says why: "Press Play to go on". | Keep it: music shouldn't jump to the speakers on its own. |
 | The kernel layout (idea 3): one sandbox per box, with wasmtime's own 4 GiB layout. It undoes the 32 MiB layout of O1 (2026-10-15). | Nothing: research only (`docs/designs/kernel-layout/report.md`). | Decide before kernel ABI v1 freezes in step 9. If yes, build it after 8a, after a short test build that measures it. |
+| A songs folder reached through a link (`~/Music` moved to another disk, or a folder in `~/Dropbox`). | Settings, the start screen and New Song show it at its real place (say `/Volumes/Big/Music/music2`), as songs made there are named: one folder, one name everywhere (`macfix`). `settings.json` keeps it as chosen. | Keep it. If you'd rather read `~/Music/music2`, the folder can be resolved only to compare. |
 | Space, Return, Space: stop, back to bar 1, play. Should the wobble and the drums' noise start again as in the export? | Not now: they carry on from where they stopped, as at any jump. So that play may differ a little from the export (RENDER-6 allows it). Stop, then Space, carries on smoothly either way. | Keep it (the lead's default, 2026-10-16). Ask once, in these words: "After you stop and go back to bar 1, the wobble carries on from where it was; should it start again as in the export?" Changing it changes no export. |
 
 ## The check: `ci/check.sh`
@@ -438,6 +463,9 @@ numbers. If a row fails, the lead fixes it on Linux, checks the mac lint, and as
   If a G7f bound fails, check this first (`docs/designs/sounds/build-notes.md`, slice 1, risk 17).
 - G7e compares the export with `m2 render`, which now runs plugins in offline mode (K4): its pass on the Mac
   confirms Surge XT renders the same there.
+- With `macfix`, the app's `std:gain` skips its `powf` while its dB holds still; S's doesn't. So G7f store's line
+  favours the app by about 250 µs a p50 block, and a pass there says little about the layout. Read the second G7f
+  store run, on the old gain (Mac runs owed): about +135 means the Mac's shift since step 7 is still there.
 
 ## What to do next, in order
 
@@ -447,13 +475,14 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
 | Step | On `main` at | Mac run |
 |---|---|---|
 | Step 7 and its speed work | `ffc36aa` (Linux checks), then docs only | `ci/check.sh` passed at `cbac57c` (2026-10-17); owed: the by-ear steps 7 to 17 |
-| The `sounds` merge (22 sounds, O3, std 0.2) | `e108e46` (Linux checks), then docs only | owed: one `ci/check.sh` on `main` covers this and every row below; then the by-ear steps 18 to 21 |
-| The back ends of 8b.4, 8b.5, 8b.6, 8b.8 | `a8199ff` (Linux checks), then docs only | owed: the same run covers it; by-ear steps come with its screens (`8b-ui`) |
-| `taste-next`: the look, 8b.1, 8b.2, 8b.3 | `22bea45` (Linux checks), then docs only | owed: the same `ci/check.sh`, then the look-and-listen steps 22 to 31 |
-| 8b's screens (`8b-ui`) | `92317ad` (Linux checks), then docs only | owed: the same `ci/check.sh`, then the by-ear steps 32 to 38 |
-| `polish`: the rest of the top ten | `65f59f1` (Linux checks), then docs only | owed: the same `ci/check.sh`, then the by-ear steps 39 to 50 |
-| 8a's offline half (all CPU cores, offline) | `bc41693` (Linux checks), then docs only | owed: the offline sweep below (about 10 minutes); the same `ci/check.sh` covers its Mac tests |
-| `next`: 8b.7, 8b.10, Settings, no sound device, undo names, effect comforts | `1560a19` (Linux checks), then docs only | owed: the same `ci/check.sh`, then the by-ear steps 51 to 60 (a real MIDI keyboard, the metronome against the beat, switching the output) |
+| The `sounds` merge (22 sounds, O3, std 0.2) | `e108e46` (Linux checks), then docs only | `ci/check.sh` on `main` at `85b069a` (2026-10-17) covered this and every row below: 11 of 13 rows. It failed G7f store (+135 µs a block, bound 80) and `new_songs_go_where_settings_say`; `macfix` fixes both. Owed: one more `ci/check.sh` once `macfix` is on `main`; then the by-ear steps 18 to 21 |
+| The back ends of 8b.4, 8b.5, 8b.6, 8b.8 | `a8199ff` (Linux checks), then docs only | ran at `85b069a` (above); owed: the same one more run; by-ear steps come with its screens (`8b-ui`) |
+| `taste-next`: the look, 8b.1, 8b.2, 8b.3 | `22bea45` (Linux checks), then docs only | ran at `85b069a`; owed: the same one more run, then the look-and-listen steps 22 to 31 |
+| 8b's screens (`8b-ui`) | `92317ad` (Linux checks), then docs only | ran at `85b069a`; owed: the same one more run, then the by-ear steps 32 to 38 |
+| `polish`: the rest of the top ten | `65f59f1` (Linux checks), then docs only | ran at `85b069a`; owed: the same one more run, then the by-ear steps 39 to 50 |
+| 8a's offline half (all CPU cores, offline) | `bc41693` (Linux checks), then docs only | its Mac tests ran at `85b069a` (pool models 23 passed); owed: the offline sweep below (about 10 minutes) |
+| `next`: 8b.7, 8b.10, Settings, no sound device, undo names, effect comforts | `1560a19` (Linux checks), then docs only | ran at `85b069a`; owed: the same one more run, then the by-ear steps 51 to 60 (a real MIDI keyboard, the metronome against the beat, switching the output) |
+| `macfix`: G7f store (the gain's fast path) and the songs folder by its real path | `ac5d8c0` (Linux checks), then docs only | owed once it is on `main`: one more `ci/check.sh`, then G7f store once more on the old gain (below) |
 
 **8a's offline sweep (for the owner).** Plugged in, lid open, other apps closed, in
 Terminal on the Mac itself. Type each line and press Return. Then paste back what is in `~/m2-8a-offline.txt`.
@@ -494,8 +523,9 @@ Paste back `~/m2-g7f-old-gain.txt`. Its "block within S + 80 µs" line: about +1
 there, unexplained; near step 7's −19 means it is gone. What each says, and the candidates (std's rebuilds; 8a's
 blocks through partitions and its floating-point mode): `build-notes-macfix.md`, "The Mac's next run".
 
-1. **The Mac runs** (above), when the owner has time: `ci/check.sh` on `main` for the `sounds` merge and 8b's back
-   ends, and the by-ear steps. Fix what they find on Linux, then ask for one more run.
+1. **The Mac runs** (above), when the owner has time. The check at `85b069a` failed two rows; `macfix` fixes them.
+   Once it is on `main`: one more `ci/check.sh`, G7f store on the old gain, then the by-ear steps. Fix what they
+   find on Linux, then ask for one more run.
 2. **The two gaps found on 2026-10-16** (Left for later): fix them before step 9, or with idea 3 if the owner
    says yes to it.
 3. **The `sounds` merge is on `main`** (`docs/designs/sounds/`). Ask the owner the Space, Return, Space question
