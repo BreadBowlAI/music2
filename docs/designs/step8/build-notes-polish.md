@@ -1430,3 +1430,14 @@ column still says the whole name.
 `pl-notes` failed `the file has it an octave up` once in the End's sweep. The roll draws a move at
 once, so the check before it passed on the page, and this one then read the server's state a moment
 too early. It now waits for the state to say so. Green twice at once after (102/102 each).
+
+#### Also: the headless server read HOME itself (PLAT-2)
+
+The full check at `c3dd95a` failed one Rust test, `m2-os`'s `os_code_lives_in_m2_os`: lane C's recent list made
+`crates/server/examples/headless.rs` read `HOME` with `std::env::var_os`. PLAT-2 keeps every OS name in `m2-os`, so
+it now asks `m2_os::dirs::home()`. The merge's Rust runs had left out `m2-os`; the full check caught it.
+
+| | |
+|---|---|
+| Red (the full check at `c3dd95a`, `~/m2-runs/check-polish-2`) | `rust tests FAIL 1183 passed, 1 failed` with `crates/server/examples/headless.rs:40: var_os("HOME"): if let Some(home) = std::env::var_os("HOME") {` |
+| Green | `cargo test -p m2-os --test one_place`: 3 passed; clippy of the example clean. Every other row of that check passed: 49/49 browser suites, 10 of 10 renders |

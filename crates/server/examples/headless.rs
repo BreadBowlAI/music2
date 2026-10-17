@@ -37,8 +37,9 @@ fn serve() -> anyhow::Result<()> {
         None => m2_server::start(opts)?,
     };
     // The recent songs list in this HOME's `.music2` (the suites' scratch HOME), as the app keeps it.
-    if let Some(home) = std::env::var_os("HOME") {
-        running.state.keep_recent(PathBuf::from(home).join(".music2/recent.json"));
+    // HOME through m2-os, as every OS name outside it must be (PLAT-2).
+    if let Some(home) = m2_os::dirs::home() {
+        running.state.keep_recent(home.join(".music2/recent.json"));
     }
     if project != "-" {
         running.state.open_song(std::path::Path::new(project))?;
