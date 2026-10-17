@@ -6,8 +6,9 @@ import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 
 /**
- * A track's name, renamed where it is shown (the timeline's header, the dock's chip): double-click
- * it, or ⌘R on the selected track, type, and Enter (or click away) writes it as the track's `name`
+ * A track's name, renamed where it is shown (the timeline's header, the dock's chip, a Mix strip):
+ * double-click it, or ⌘R on the selected track (its header), or a menu's Rename, type, and Enter
+ * (or click away) writes it as the track's `name`
  * in its code; Escape keeps the old one. Only the label changes (ID-10): the key, its data files
  * and the sound stay, and Undo takes it back. The name on screen says it is done, so no toast
  * does (taste.md ST-5). The song itself has no name to change.
@@ -26,14 +27,14 @@ export default function TrackName({
   track: boolean;
   className: string;
   testid?: string;
-  /** This is the name ⌘R renames (the timeline header's). */
-  listen?: boolean;
+  /** This is the name a rename asked for opens: the timeline header's (⌘R), or a Mix strip's. */
+  listen?: "header" | "strip";
 }) {
   const name = moduleName({ key: module, label });
   const session = useStore((s) => s.graph?.session);
   const locked = useStore((s) => (s.graph ? lockReason(s.graph, s.connected) : null));
   const toast = useStore((s) => s.toast);
-  const asked = useShell((s) => (listen && s.renaming === module ? s.renaming : null));
+  const asked = useShell((s) => (listen && s.renaming?.module === module && s.renaming.at === listen ? s.renaming : null));
   const [draft, setDraft] = useState<string | null>(null);
   // The name being written, shown until the graph says it (no flicker back to the old one).
   const [pending, setPending] = useState<string | null>(null);
@@ -48,7 +49,7 @@ export default function TrackName({
   useEffect(() => {
     if (editing) input.current?.select();
   }, [editing]);
-  // ⌘R: the selected track's name turns into a field.
+  // ⌘R or a menu's Rename: this name turns into a field.
   useEffect(() => {
     if (!asked) return;
     useShell.getState().set({ renaming: null });

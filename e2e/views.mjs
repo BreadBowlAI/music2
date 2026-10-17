@@ -105,9 +105,10 @@ fs.writeFileSync(notesFile, JSON.stringify({ ...lane, clips: [] }));
 check(await until(async () => !!(await page.$("[data-testid=notes][data-empty]")), 8000), "removing the clip on disk lets it go: Notes shows its empty state");
 check(json(await selectedView()) === json(["notes"]), "and the view stays Notes");
 
-// Mix, until the mixer, says what it will hold and where levels are meanwhile.
+// Mix shows the mixer's strips, in track order, and Master.
 await page.click('[data-view-tab="mix"]');
-check(await until(async () => (await text("[data-testid=mix]")).includes("Song")), "Mix says where levels and pans are until the mixer");
+const strips = () => page.$$eval("[data-testid=mix] [data-strip]", (els) => els.map((e) => e.dataset.strip));
+check(await until(async () => json(await strips()) === json(["kick", "hats", "bass", "keys", "master"])), `Mix shows a strip per track and Master: ${await strips()}`);
 
 await page.click('[data-view-tab="code"]');
 await page.screenshot({ path: `${S}/views-code.png` });

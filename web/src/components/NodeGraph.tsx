@@ -43,7 +43,6 @@ import {
 } from "../lib/graph";
 import { laneMade } from "../lib/events";
 import { mod } from "../lib/native";
-import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { Dots } from "./draw";
 import EffectBrowser from "./EffectBrowser";
@@ -91,25 +90,6 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
       }),
     [module],
   );
-  // A part asked for by name (the Mix view's "Show the Song's mixer"): at full size, scrolled to its top left.
-  const reveal = useShell((s) => s.reveal);
-  useEffect(() => {
-    const node = reveal ? shown?.nodes.find((n) => n.component === reveal) : undefined;
-    if (!node) return;
-    useShell.getState().set({ reveal: null });
-    setZooms((zs) => ({ ...zs, [module]: 1 }));
-    // Once the zoom has drawn: scrolled in the graph alone, never the window.
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() => {
-        const el = scroller.current, card = el?.querySelector(`[data-node-id="${CSS.escape(node.id)}"]`);
-        if (!el || !card) return;
-        const r = card.getBoundingClientRect(), b = el.getBoundingClientRect();
-        el.scrollLeft += r.left - b.left - 16;
-        el.scrollTop += r.top - b.top - 16;
-      }),
-    );
-  }, [reveal, shown, module]);
-
   // ⌘/Ctrl + wheel zooms, and so does a trackpad pinch (Chrome sends it as Ctrl + wheel,
   // WebKit, the desktop app's web view, as gesture events).
   const zoomRef = useRef(zoom);

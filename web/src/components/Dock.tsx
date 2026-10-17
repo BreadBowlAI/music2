@@ -8,6 +8,7 @@ import { GRAPHITE, trackColors } from "../lib/palette";
 import { clampDock, useShell, VIEWS, type DockView } from "../lib/shell";
 import { addEffectTo, dragsEffect, EFFECT_DRAG } from "./Browser";
 import CodeView from "./CodeView";
+import Mix from "./Mix";
 import { NodeGraph } from "./NodeGraph";
 import NoteView from "./NoteView";
 import TrackName from "./TrackName";
@@ -143,7 +144,7 @@ const Body = memo(function Body({ graph, module, view, open }: { graph: GraphSta
         ) : (
           <Empty testid="notes">Select a clip, or double-click in the timeline to make one.</Empty>
         ))}
-      {open && view === "mix" && <MixSoon />}
+      {open && view === "mix" && <Mix graph={graph} />}
       {/* No module before the code first compiles (WRITE-20): the editor opens on the song's files. */}
       {coded && (
         <div className={clsx("flex-1 min-h-0 flex-col", view === "code" && open ? "flex" : "hidden")}>
@@ -159,27 +160,5 @@ function Empty({ testid, children }: { testid?: string; children: React.ReactNod
     <div data-testid={testid} data-empty className="flex-1 min-h-0 grid place-items-center px-6">
       <EmptyState>{children}</EmptyState>
     </div>
-  );
-}
-
-/** Mix, until the mixer (8b): where levels and pans are now, and the way there. */
-function MixSoon() {
-  return (
-    <Empty testid="mix">
-      <p>Levels and pans are on the Song’s mixer for now.</p>
-      <Button
-        variant="secondary"
-        size="sm"
-        onClick={() => {
-          // The Song's Device view, at full size on its mixer: readable, not fitted small.
-          const s = useShell.getState();
-          s.select("song");
-          s.set({ reveal: "std:mixer" });
-          s.setView("device");
-        }}
-      >
-        Show the Song’s mixer
-      </Button>
-    </Empty>
   );
 }

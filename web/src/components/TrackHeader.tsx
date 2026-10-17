@@ -69,7 +69,7 @@ export default function TrackHeader({
           label={track.label}
           track={track.track}
           testid="track-label"
-          listen
+          listen="header"
           className={clsx("text-base", selected ? "font-semibold" : "font-medium", tone)}
         />
         {issues && <Issues issues={issues} />}

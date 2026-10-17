@@ -360,7 +360,7 @@ function InstrumentPicker({ graph, anchor, after, onClose }: { graph: GraphState
 }
 
 /** Colour ▸: a 6×2 grid of the palette's swatches, a check on the current one (taste.md §2.7 rule 6). */
-function Colours({ module, current, anchor, onClose }: { module: string; current: string | undefined; anchor: HTMLElement; onClose: () => void }) {
+export function Colours({ module, current, anchor, onClose }: { module: string; current: string | undefined; anchor: HTMLElement; onClose: () => void }) {
   return (
     <Popover anchor={anchor} onClose={onClose} side="right" role="menu" aria-label="Colour" data-testid="colours" className="grid grid-cols-6 gap-1.5 !p-2">
       {DEFAULT_ORDER.map((name) => (
@@ -431,7 +431,7 @@ function TrackMenu({ graph, module, anchor, onClose }: { graph: GraphState; modu
         title={locked ?? undefined}
         onClick={run(() => {
           useShell.getState().select(module);
-          useShell.getState().set({ renaming: module });
+          useShell.getState().set({ renaming: { module, at: "header" } });
         })}
       >
         Rename

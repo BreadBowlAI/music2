@@ -988,6 +988,23 @@ M, S and the meter, and the name gets 140 px. The level is the strip's fader, on
 **The Song Device view** (MX-6): the mixer becomes one compact card, "Mixer · 6 channels · open Mix ⌥3", instead of the
 16-row node (`f03`).
 
+**Built (B5a):** `web/src/components/Mix.tsx`, as above, with these choices:
+- A fader and a pan share the Device view's knob gesture (`useKnobGesture` in `Knob.tsx`): heard while held, written
+  once on release, one undo step ("Kick volume", "Kick pan"), no toast.
+- A fader writes to a tenth of a dB. A press anywhere on it starts a drag from where its thumb is (no jump), along the
+  travel. Its level reads without the unit ("−6.0"); the bubble says "−6.0 dB".
+- Scrolling (lead decision T6): only an up-and-down scroll moves a fader or a strip's pan; a sideways one scrolls the
+  strips. A run of notches is one lease and one undo step, written half a second after the last.
+- The first pan: the drag shows its value from the press; past 4 px it calls `mix/insert`, then goes on as a lease on
+  the knob the answer names, in the revision it made, and the release writes the value. Both undo steps are named "Kick
+  pan". A step or a typed value on an unwritten pan writes it the same way.
+- A strip whose level is a signal says "Its level is set in code", with Edit in code. A strip's Edit in code opens the
+  song's code at its channel's line (the shell's `codeAt`); Rename turns the strip's own name into a field.
+- Pressing a strip selects its track; the dock stays on Mix (taste.md §3.7). The selected strip is `accent-wash`.
+- The fader's track sits at 40% of the strip, so 8b.8's meter fits beside it with nothing moving. Marks at +6, 0
+  (longer), −6, −12, −24 and −48 dB.
+- The Device view keeps the mixer's knobs until B5b.
+
 ### 5.6 Tests
 
 - **std:** `the_mixer_and_master_gains_change_no_bit`, which is `renders.json` unchanged plus a direct render of every
@@ -1017,6 +1034,11 @@ M, S and the meter, and the name gets 140 px. The level is the strip's fader, on
 - The master fader writes `master(…, { db: … })`.
 - The Song Device view shows the compact mixer card.
 - A read-only window's faders don't drag.
+
+**Built (B5a):** 63 checks, all of the above but the compact card (B5b), plus: the strips' widths, colours and Master's
+place; a default level in grey; −6 dB at 61% of the travel; the lease and bubble while held; the wheel as one write, and
+a sideways scroll that moves the strips, not a fader; a notch below −60 dB; Tab from a pan to its fader; the strip's menu
+(Colour, Rename in place, Edit in code at the channel's line); selection; a track in no channel.
 
 ### 5.8 Contract edits and green
 
