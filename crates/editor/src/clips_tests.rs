@@ -265,8 +265,15 @@ fn kinds_and_units_never_mix() {
     assert!(why.contains("An automation clip can't go on a notes lane"), "{why}");
     let why = refused(&mut s, Gesture::Move { clips: kick(), by: -1.0, to: None, copy: false });
     assert!(why.contains("before the song starts"), "{why}");
-    let why = refused(&mut s, Gesture::Move { clips: vec![by_id("kick/hits", "nothere")], by: 1.0, to: None, copy: false });
-    assert!(why.contains("nothere"), "{why}");
+    // What isn't there is said whole, as the user reads it.
+    for (clip, says) in [
+        ("kick/hits:nothere", "Kick's hits lane has no clip `nothere` now."),
+        ("nosuch/notes:abc", "There's no track `nosuch`."),
+        ("bass/nolane:abc", "Bass has no lane `nolane`."),
+    ] {
+        let (lane, id) = clip.split_once(':').unwrap();
+        assert_eq!(refused(&mut s, Gesture::Move { clips: vec![by_id(lane, id)], by: 1.0, to: None, copy: false }), says);
+    }
     assert_eq!((s.accepted().number, s.can_undo()), (1, false), "nothing was written");
 }
 
@@ -508,6 +515,7 @@ fn quantize_to_sixteenths_and_triplets() {
     assert_eq!(notes_by_id(&s, "keys/chords")[0].3, [(60.0, 0.1, 0.3), (62.0, 0.3, 0.2), (64.0, 7.0 * third, 0.5)]);
     let why = refused(&mut s, Gesture::Quantize { clips: vec![by_id("bass/cutoff", "adp0sw76")], notes: None, grid: 0.25, ends: false });
     assert!(why.contains("notes"), "{why}");
+    assert_eq!(refused(&mut s, q(Some(vec![3]), 0.25, false)), "The clip has 3 notes, so it has no note 4.");
 }
 
 // The piano roll edits one clip's notes, and automation is drawn as one clip's points.

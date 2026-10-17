@@ -8,8 +8,10 @@
 //! - a fade on a site's input (a changed edge, or a new node's fade-in) has the site's node on its
 //!   new side;
 //! - a fade's old side, and a ghost's input, that the old plan read through an overlay get a node of
-//!   their own for the window, with no cell, at the new plan's value for the same track and consumer
-//!   (or its mute in song). So an edit while a track is muted never lets it through for 5 ms.
+//!   their own for the window, with no cell, at the new plan's value for the same track and consumer.
+//!   When the new plan has no such site (the track deleted, or read by another module now), the
+//!   node keeps the value the old plan's site had, taken at the block line. So an edit while a track
+//!   is muted never lets it through for 5 ms.
 //!
 //! Each node runs right after its source, so a feedback consumer (which runs before its source)
 //! still reads this block's. Nodes hold no box: nothing moves between plans.
@@ -27,6 +29,8 @@ pub(crate) struct Node {
     /// The site of the new graph whose value it takes: its own, or for a window-only node the one
     /// with the same track and consumer, if any.
     pub(crate) follows: Option<usize>,
+    /// For a window-only node, the old graph's site it stands in for.
+    pub(crate) was: Option<usize>,
 }
 
 /// A plan's overlay nodes, at exec nodes `base..base + nodes.len()`: the new graph's sites first, in
@@ -96,7 +100,7 @@ pub(crate) fn place(flat: &Flat, old: Option<&Flat>, w: &mut Wiring, fades: usiz
     // The new graph's sites: the consumer reads its node, or a fade on that input reads it new.
     for (k, s) in flat.overlays.iter().enumerate() {
         let ov = base + nodes.len();
-        nodes.push(Node { src: s.src, channels: s.channels, value: init(&s.module), follows: Some(k) });
+        nodes.push(Node { src: s.src, channels: s.channels, value: init(&s.module), follows: Some(k), was: None });
         let to = PortRef { node: ov, port: 0 };
         match (edge(s.consumer), out_fade) {
             (None, None) => w.out = to,
@@ -117,11 +121,14 @@ pub(crate) fn place(flat: &Flat, old: Option<&Flat>, w: &mut Wiring, fades: usiz
     // The window: what the old plan read through an overlay, the fades' old sides and the ghosts'
     // inputs, reads through one until it ends.
     if let Some(old) = old.filter(|_| !w.fades.is_empty() || !w.ghosts.is_empty()) {
-        let was = |c: Consumer| old.overlays.iter().find(|s| s.consumer == c);
-        let window = |nodes: &mut Vec<Node>, module: &str, into: &str, src: PortRef, channels: u8| {
-            let follows = flat.overlays.iter().position(|t| t.module == module && t.into == into);
-            let value = follows.map_or(init(module), |t| nodes[t].value);
-            nodes.push(Node { src, channels, value, follows });
+        let was = |c: Consumer| old.overlays.iter().position(|s| s.consumer == c);
+        // A node for old site `k`, reading `src`. With no new site to follow, its value until the
+        // block line is a placeholder: `take_over` sets it from the old plan's node.
+        let window = |nodes: &mut Vec<Node>, k: usize, src: PortRef| {
+            let s = &old.overlays[k];
+            let follows = flat.overlays.iter().position(|t| t.module == s.module && t.into == s.into);
+            let value = follows.map_or(init(&s.module), |t| nodes[t].value);
+            nodes.push(Node { src, channels: s.channels, value, follows, was: Some(k) });
             PortRef { node: base + nodes.len() - 1, port: 0 }
         };
         // Fades of changed edges, on continuing nodes and on the output.
@@ -131,9 +138,9 @@ pub(crate) fn place(flat: &Flat, old: Option<&Flat>, w: &mut Wiring, fades: usiz
             changed.push((Consumer::Out, f));
         }
         for (c, f) in changed {
-            let Some(s) = was(c) else { continue };
+            let Some(k) = was(c) else { continue };
             let Input::Port { src, .. } = w.fades[f - fades].old else { continue };
-            let to = window(&mut nodes, &s.module, &s.into, src, s.channels);
+            let to = window(&mut nodes, k, src);
             let fade = &mut w.fades[f - fades];
             fade.old = reading(&fade.old, to);
         }
@@ -141,11 +148,15 @@ pub(crate) fn place(flat: &Flat, old: Option<&Flat>, w: &mut Wiring, fades: usiz
         let n = flat.nodes.len();
         for g in 0..w.ghosts.len() {
             let j = w.ghosts[g].0;
-            let at: Vec<(Edge, &m2_ir::OverlaySite)> =
-                old.overlays.iter().filter_map(|s| edge(s.consumer).filter(|(c, _)| *c == j).map(|(_, e)| (e, s))).collect();
-            for (e, s) in at {
+            let at: Vec<(Edge, usize)> = old
+                .overlays
+                .iter()
+                .enumerate()
+                .filter_map(|(k, s)| edge(s.consumer).filter(|(c, _)| *c == j).map(|(_, e)| (e, k)))
+                .collect();
+            for (e, k) in at {
                 let Some(src) = ghost_reads(&w.ghosts[g].1.op, e) else { continue };
-                let to = window(&mut nodes, &s.module, &s.into, src, s.channels);
+                let to = window(&mut nodes, k, src);
                 w.rewire.push((n + g, e, to.node));
             }
         }

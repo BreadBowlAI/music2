@@ -6,7 +6,7 @@ S's code can't be built into today's m2-gates. So this folder holds a small prog
 
 | File | What it is |
 |---|---|
-| `main.rs` | The runner. Written against S's API only, so it builds in a copy of S. It plays a player (G7f part 2) or a renderer (part 1) and times each callback or block. |
+| `main.rs` | The runner. Written against S's API only, so it builds in a copy of S. It plays a player (G7f part 2) or a renderer (part 1) and times each callback or block. It plays S's own std. So it compiles a copy of each project, with the manifest asking for S's std: the app's projects ask for its newer std, which S would refuse. |
 | `wire.rs` | What m2-gates and the runner say to each other: one line a command, one line an answer, over the runner's stdin and stdout. m2-gates compiles the same file (`baseline::wire`). |
 | `build.sh` | Builds the runner (below). |
 

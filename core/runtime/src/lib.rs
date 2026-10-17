@@ -1423,6 +1423,22 @@ impl Graph {
         };
     }
 
+    /// Overlay `node`'s gain: where it is going, and where it is.
+    fn overlay_gain(&self, node: usize) -> Option<(f32, f32)> {
+        match self.exec.get(node) {
+            Some(Exec::Overlay { target, cur, .. }) => Some((*target, *cur)),
+            _ => None,
+        }
+    }
+
+    /// Overlay `node`'s gain set to `gain` (going to, at), as [`Graph::overlay_gain`] gives it: it
+    /// carries on as it was there. Never allocates.
+    fn hold_overlay(&mut self, node: usize, gain: (f32, f32)) {
+        if let Some(Exec::Overlay { target, cur, .. }) = self.exec.get_mut(node) {
+            (*target, *cur) = gain;
+        }
+    }
+
     /// Overlay `node`'s gain moves to `value`: glides there (RENDER-22a), or with `now` is there at
     /// once, for a plan not yet sent. Never allocates.
     fn set_overlay(&mut self, node: usize, value: f32, now: bool) {
@@ -1748,6 +1764,8 @@ impl Renderer {
         graph.order = w.order.clone();
         let window_overlays: Vec<(usize, usize)> =
             placed.nodes.iter().enumerate().skip(placed.sites).filter_map(|(j, o)| Some((base + j, o.follows?))).collect();
+        let window_held: Vec<(usize, usize)> =
+            placed.nodes.iter().enumerate().skip(placed.sites).filter(|(_, o)| o.follows.is_none()).filter_map(|(j, o)| Some((base + j, o.was?))).collect();
         let sites: Vec<(usize, f32)> = placed.nodes[..placed.sites].iter().enumerate().map(|(j, o)| (base + j, o.value)).collect();
         let mut cells = Cells::new(&cells::cells(flat), &sites);
         // What moves in, and what it keeps and makes.
@@ -1883,6 +1901,7 @@ impl Renderer {
             stats,
             info,
             window_overlays,
+            window_held,
             taps,
         };
         Ok(Renderer {

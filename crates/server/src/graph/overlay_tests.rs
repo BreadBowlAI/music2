@@ -22,29 +22,41 @@ fn bus() -> Vec<Site> {
     vec![site("vox", "bus"), site("backing", "bus"), site("bus", "song"), site("lead", "song"), site("vox", "song")]
 }
 
+/// The tracks of [`bus`].
+fn four() -> Vec<String> {
+    ["vox", "backing", "bus", "lead"].map(String::from).to_vec()
+}
+
 // MON-3: soloing a vocal keeps its path to the song (into the bus, the bus out) and mutes the
 // backing vocal's way into the same bus; soloing the bus keeps what feeds it and mutes the vocal's
 // direct way past it, which one value per track couldn't tell apart.
 #[test]
 fn solo_keeps_a_bus_fed_and_its_sources() {
-    assert_eq!(values(&bus(), &set(&[], &[]), &[]), [1.0; 5]);
-    assert_eq!(values(&bus(), &set(&[], &["vox"]), &[]), [1.0, 0.0, 1.0, 0.0, 1.0]);
-    assert_eq!(values(&bus(), &set(&[], &["bus"]), &[]), [1.0, 1.0, 1.0, 0.0, 0.0]);
-    assert_eq!(values(&bus(), &set(&[], &["vox", "lead"]), &[]), [1.0, 0.0, 1.0, 1.0, 1.0]);
+    assert_eq!(values(&bus(), &set(&[], &[]), &[], &four()), [1.0; 5]);
+    assert_eq!(values(&bus(), &set(&[], &["vox"]), &[], &four()), [1.0, 0.0, 1.0, 0.0, 1.0]);
+    assert_eq!(values(&bus(), &set(&[], &["bus"]), &[], &four()), [1.0, 1.0, 1.0, 0.0, 0.0]);
+    assert_eq!(values(&bus(), &set(&[], &["vox", "lead"]), &[], &four()), [1.0, 0.0, 1.0, 1.0, 1.0]);
+}
+
+// MON-4: a solo of a track that is gone is ignored, alone or beside one that is there.
+#[test]
+fn a_solo_of_a_track_that_is_gone_is_ignored() {
+    assert_eq!(values(&bus(), &set(&[], &["gone"]), &[], &four()), [1.0; 5]);
+    assert_eq!(values(&bus(), &set(&[], &["gone", "vox"]), &[], &four()), values(&bus(), &set(&[], &["vox"]), &[], &four()));
 }
 
 // MON-3: mute wins over solo on the same track, and a mute upstream silences only that track.
 #[test]
 fn mute_wins_over_solo() {
-    assert_eq!(values(&bus(), &set(&["vox"], &["vox"]), &[]), [0.0, 0.0, 1.0, 0.0, 0.0]);
-    assert_eq!(values(&bus(), &set(&["backing"], &["bus"]), &[]), [1.0, 0.0, 1.0, 0.0, 0.0]);
+    assert_eq!(values(&bus(), &set(&["vox"], &["vox"]), &[], &four()), [0.0, 0.0, 1.0, 0.0, 0.0]);
+    assert_eq!(values(&bus(), &set(&["backing"], &["bus"]), &[], &four()), [1.0, 0.0, 1.0, 0.0, 0.0]);
 }
 
 // MON-3, MON-5: a track muted in the song stays silent when soloed, and says so.
 #[test]
 fn a_track_muted_in_song_stays_silent_when_soloed() {
     let muted = ["vox".to_string()];
-    assert_eq!(values(&bus(), &set(&[], &["vox"]), &muted), [0.0, 0.0, 1.0, 0.0, 0.0]);
+    assert_eq!(values(&bus(), &set(&[], &["vox"]), &muted, &four()), [0.0, 0.0, 1.0, 0.0, 0.0]);
     let song = Song { tracks: ["vox", "backing", "bus", "lead"].map(String::from).to_vec(), sites: bus(), muted: muted.to_vec(), ..Song::default() };
     let m = Monitor { set: set(&["lead"], &["vox"]), version: 0, written: 0, dir: PathBuf::new(), writer: true, song: Arc::new(song) };
     let s = m.state();
@@ -154,6 +166,25 @@ fn overlays_persist_in_music2() {
     assert_eq!((again.cells("kick"), again.cells("bass")), (vec![0.0], vec![1.0]));
 }
 
+// MON-4: a mute made just before the project closes, or opens again, is saved all the same: the
+// file is written before the project goes, not only by the server's thread.
+#[test]
+fn a_mute_just_before_a_close_or_a_reopen_is_kept() {
+    let mut rig = Rig::new();
+    rig.mute("kick", true).unwrap();
+    rig.graph.close();
+    let saved: Value = serde_json::from_str(&std::fs::read_to_string(rig.fixture.0.join(".music2/overlays.json")).unwrap_or_default()).unwrap_or_default();
+    assert_eq!(saved, json!({"mute": ["kick"], "solo": []}), "written at the close");
+    rig.graph.open(&rig.fixture.0).unwrap();
+    rig.fill(1);
+    assert_eq!(rig.graph.state().unwrap()["overlays"]["mute"], json!(["kick"]));
+    rig.mute("bass", true).unwrap();
+    rig.graph.open(&rig.fixture.0).unwrap();
+    rig.fill(1);
+    assert_eq!(rig.graph.state().unwrap()["overlays"]["mute"], json!(["bass", "kick"]), "opened again at once");
+    assert_eq!((rig.cells("kick"), rig.cells("bass")), (vec![0.0], vec![0.0]));
+}
+
 // MON-4, WRITE-17: in a window open read-only, mute and solo still work, in memory: nothing is
 // written, and the state says they aren't saved.
 #[test]
@@ -227,6 +258,29 @@ fn a_mute_in_song_toggle_is_a_cell_write() {
     rig.graph.undo(rig.token()).unwrap();
     rig.fill(16);
     assert_eq!((rig.renderer().generation(), rig.cells("kick")), (first, vec![1.0]));
+}
+
+// MON-4: a soloed track taken out of the code leaves the rest heard, with no export warning. Its
+// solo stays in the file, so the track comes back soloed.
+#[test]
+fn a_soloed_track_taken_out_of_the_code_silences_nothing() {
+    let mut rig = Rig::new();
+    rig.graph.overlay(rig.token(), Change { solo: [("kick".to_string(), true)].into(), ..Change::default() }).unwrap();
+    rig.fill(8);
+    assert_eq!(rig.cells("bass"), [0.0], "soloed away");
+    let text = rig.fixture.read("song.ts");
+    let without = text.replace("const kick = track('kick', { name: 'Kick' }, () => osc.sine(55));\n", "").replace("kick: kick.out, ", "");
+    rig.graph.write_file(Some(rig.token()), "song.ts", &text, &without).unwrap();
+    rig.fill(8);
+    assert_eq!(rig.cells("bass"), [1.0], "heard again");
+    let s = rig.graph.state().unwrap();
+    assert_eq!((&s["overlays"]["solo"], &s["overlays"]["heard"]), (&json!(["kick"]), &json!({"bass": "heard"})), "{s:#}");
+    let e = rig.graph.export(Length::Seconds(0.1)).unwrap();
+    assert!(!e.problems.iter().any(|d| d.code == "overlays.active"), "{:?}", e.problems);
+    rig.graph.save_overlays();
+    rig.graph.write_file(Some(rig.token()), "song.ts", &without, &text).unwrap();
+    rig.fill(8);
+    assert_eq!((rig.cells("kick"), rig.cells("bass")), (vec![1.0], vec![0.0]), "back, soloed");
 }
 
 // MON-4: a track renamed in code keeps its mute.

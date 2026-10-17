@@ -372,8 +372,15 @@ fn permuting_any_array_in_a_fixture_renders_the_same_bits() {
 fn fixture_renders_change_only_with_stds_version() {
     let recorded: serde_json::Value = serde_json::from_str(include_str!("../tests/renders.json")).unwrap();
     let version = std_packages().get("std").unwrap().version.clone();
-    let renders: serde_json::Map<String, serde_json::Value> =
-        PURE.iter().map(|n| (n.to_string(), bits(&render_song(&fixture(n).open())).into())).collect();
+    let render = |n: &str| {
+        // A fixture that doesn't build (a manifest left behind at a bump) would render nothing. The
+        // copy stays until the render is done: the render reads its audio files.
+        let f = fixture(n);
+        let s = f.open();
+        assert!(s.draft_errors.is_empty(), "{n} doesn't build with std {version}: {:?}", s.draft_errors);
+        bits(&render_song(&s))
+    };
+    let renders: serde_json::Map<String, serde_json::Value> = PURE.iter().map(|n| (n.to_string(), render(n).into())).collect();
     let now = serde_json::json!({"std": version, "renders": renders});
     let record = format!("core/session/tests/renders.json:\n{}", serde_json::to_string_pretty(&now).unwrap());
     assert!(

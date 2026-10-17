@@ -2,8 +2,13 @@
 //! overlays, driven with arbitrary device buffer sizes, gives the same `f32` bits as the offline
 //! render. Step 3's gate, run on every pure fixture from step 3 on.
 //!
-//! "Fresh" matters: an engine that sat stopped has run its free-running sources on (RENDER-6a),
-//! so it plays them from another phase than the export.
+//! "Fresh" matters less since the sounds merge (std 0.2). Stopped, the engine runs its kernels on
+//! (RENDER-6a), but std's chorus, phaser and tremolo wait while the song is stopped
+//! (`time.playing`), the bitcrusher's clock is put back at Play, and a drum's seed is its lane's
+//! hit count: so every pure fixture plays the export after the engine sat stopped too
+//! (`std_plays_the_export_after_the_engine_sat_stopped`). It still matters to free-running sources
+//! at the top level (std's oscillators and `noise`), which an engine that sat stopped plays from
+//! another phase, and to a smoother that sets itself from its first input while stopped.
 
 mod common;
 
@@ -182,10 +187,11 @@ fn after_idle_songs() -> Vec<(String, Song)> {
 
 // RENDER-33 after the engine sat stopped: a song opened and played a few seconds later (or a few
 // blocks), from 0, is the export bit for bit. Stopped, the engine runs its kernels on so tails
-// decay (RENDER-6a), so nothing of std's may follow how long the engine has run. A drum's hits take
-// their seed from how many hits its lane has played (std:hitcount), never from the samples
-// processed. Chorus, phaser and tremolo step their LFOs, and the bitcrusher its clock, only while
-// the song plays (`time.playing`). Every song is judged, and every difference named.
+// decay (RENDER-6a), so nothing of std's effects or drums may follow how long the engine has run.
+// A drum's hits take their seed from how many hits its lane has played (std:hitcount), never from
+// the samples processed. Chorus, phaser and tremolo step their LFOs, and the bitcrusher its clock,
+// only while the song plays (`time.playing`). Every song is judged, and every difference named.
+// None of these songs has a free-running source at its top level (the module doc).
 #[test]
 fn std_plays_the_export_after_the_engine_sat_stopped() {
     let mut differs = vec![];

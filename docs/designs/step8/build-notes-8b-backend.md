@@ -2,7 +2,8 @@
 
 The `8b-backend` track builds the back ends of 8b.4 (mute, solo, mute in song), 8b.5 (clips), 8b.6 (audition) and
 8b.8 (meters): engine, IR, session, Tx builders, routes, CLI and contract. No UI. The plan is
-`~/m2-runs/s8b/refresh.md` (its Attack and Decisions win) on top of `design-8b.md`.
+`backend-plan.md` beside this file (written as `~/m2-runs/s8b/refresh.md`; its Attack and Decisions win) on top
+of `design-8b.md`.
 
 ## In short
 
@@ -21,7 +22,10 @@ The `8b-backend` track builds the back ends of 8b.4 (mute, solo, mute in song), 
 | B10 | Audition on the server: the WebSocket and `POST /api/graph/audition`, sources, the watchdog, `live` in the status | built |
 | B11 | Meters in the engine: taps on the output and each track; the callback's time; whether the engine idles | built |
 | B12 | Meters on the server: the 30 Hz thread, the `meters` message on its own channel, `load` in the status | built |
-| W1 | The keyed compressor and the gate's third clause | waits for std 0.2 on main |
+| W1 | The keyed compressor and the gate's third clause | waits: std 0.2 has no keyed compressor |
+| M1 | Main's sounds merge (std 0.2) merged in | merged |
+| Review | Six findings: five fixed, one a wrong doc line | fixed, each with a test |
+| Check | `ci/check.sh --gates` at the tip | see "The final check" |
 
 ---
 
@@ -67,7 +71,7 @@ glides over 10 ms. An edit while a track is muted never lets it through.
 |---|---|---|
 | `Exec::Overlay` | `x × gain`. At 1 it copies (no bit changes). At 0 it writes +0.0 (R1). Otherwise the gain moves 1/480 a frame at 48 kHz. | `core/runtime/src/overlay.rs` |
 | `overlay::place` | Puts one node per site into every plan, offline too. Wires the consumer, or the fade on that input, to it. | `core/runtime/src/overlay.rs` |
-| Window overlays | A fade's old side, and a ghost's input, that read an overlay before read one for the window (A3). No cell; the new plan's value for the same track and consumer. | `core/runtime/src/overlay.rs` |
+| Window overlays | A fade's old side, and a ghost's input, that read an overlay before read one for the window (A3). No cell; the new plan's value for the same track and consumer, or with none, the old plan's gain there (review R1). | `core/runtime/src/overlay.rs` |
 | Order | Each overlay runs right after its source (A4). Window ones leave with the window. | `core/runtime/src/overlay.rs` |
 | Overlay cells | Their own table in `Cells`, ids after every value cell (A2). A write sets the node's target; the node glides. | `core/runtime/src/cells.rs` |
 | `PlanInfo.overlays` | Per site: the track, the module that reads it, the cell. | `core/runtime/src/plan.rs` |
@@ -170,7 +174,7 @@ options, as one undo step. The state also says what each track still drives when
 
 | Piece | What it does | Where |
 |---|---|---|
-| `mute_in_song(s, modules, muted)` | One `Confined` Tx: each edited range (or the point after the key), each module's `Muted`. The planner asserts each track is as asked. "Kick → Kick, muted in song"; "Kick and Bass". A track already so is skipped; with none left, nothing is written. | `crates/editor/src/mute.rs` |
+| `mute_in_song(s, modules, muted)` | One `Confined` Tx: each edited range (or the point after the key), each module's `Muted`. The planner asserts each track is as asked. "Kick → Kick, muted in song"; "Kick and Bass". A track already so in the graph (however its options say it) is skipped; with none left, nothing is written. | `crates/editor/src/mute.rs` |
 | The option edit | Its own small edit over `sites::properties` (G7): append `muted: true`, replace its value, or take it out (and the object when it held nothing else). `track(k, fn)` gets `, { muted: true }` after the key. | same |
 | `feeds(rev)` | For each track: each module and component that reads it through a sidechain input or a control export. A node in `song` is named `song` (Q6). | same |
 | `state.overlays.feeds` | The feeds, for the strip's "Still drives Duck on Bass". | `crates/server/src/graph/overlay.rs` |
@@ -607,3 +611,283 @@ The tests were written after the code. Three were made red by breaking the code 
 **Contract:** the Engine shape (the server's half), the Deferred table (taps and meters built;
 freezing and bounce as a Tx stay), `docs/gaps.md` #20.
 
+---
+
+## M1. Main's sounds merge
+
+**In short:** main (`1e5afe3`) is merged in. It brings std 0.2. Every test project here now asks for
+std 0.2.
+
+| What | How |
+|---|---|
+| `docs/architecture.md` | The one conflict: gate 7's row is main's (passed again with the sounds merge); gate 8's row keeps 8b's clauses. W1 now says what it waits for: std 0.2 has no keyed compressor. |
+| Test manifests | `routes_8b_tests.rs` (7) and the `sidechain` fixtures asked for std 0.1. Main's `every_shipped_manifest_is_met` would fail on the fixtures. All now say `0.2`. |
+| `std.wasm` | Unchanged on both sides: nothing to rebuild. |
+
+**Checks:** tests of `m2-session`, `m2-play`, `m2-server`.
+
+---
+
+## Review fixes
+
+**In short:** a review of the track found six things. Five are fixed here, each in its own commit
+with a test that failed before it. One (R2) was a wrong doc line.
+
+| ID | What | How bad | Done | Commit |
+|---|---|---|---|---|
+| R1 | A muted track was heard for 5 to 10 ms when an edit deleted it or moved it into a bus | medium | fixed | `ca51150` |
+| R2 | The meters' doc said a NaN reads as the largest `f32`; it reads 0 | low | doc fixed, test pins it | `a8199ff` |
+| S1 | Clips, Remove automation and mute in song said "no control `There's no track …`" | medium | fixed | `799ab24` |
+| S2 | Mute in song refused a track already as asked, with debug text | low | fixed | `f3a1085` |
+| S3 | A solo of a track that is gone silenced the whole song | medium | fixed | `6e388a4` |
+| S4 | A mute made just before a close, an open or a quit was lost | low | fixed | `fdf261f` |
+
+### R1. A window overlay with no new site keeps the old gain
+
+**What was wrong:** in an activation's window, a fade's old side or a ghost's input gets its own
+overlay. It took the new plan's value for the same track and consumer. When the new plan had no
+such site, it started at 1. So a muted kick was heard for 5 to 10 ms when the edit deleted it, or
+made a new bus track read it instead of the song. A kick muted in the song did the same once
+deleted, as the new graph no longer says it was muted.
+
+**The fix:** each window node remembers the old site it stands in for. At the block line,
+`take_over` copies that site's gain (where it goes, and where it is) from the old plan's node. Two
+`f32` copies; no allocation (`window_held` in the plan).
+
+| Test | Red first? |
+|---|---|
+| `an_edit_while_muted_keeps_the_track_silent`: three new cases, the kick deleted (muted while listening, and in the song) and rerouted into a bus | red: peaks 0.325, 0.325 and 0.5 |
+
+**Checks:** `m2-runtime` and `m2-play` tests; clippy on `m2-runtime`.
+
+**Contract:** MON-1's window rule.
+
+
+### S1. What isn't there is said as it is
+
+**What was wrong:** the 8b builders put whole sentences into `EditError::NotFound`, which shows
+as "no control `…` in that revision". So `m2 clips p delete nosuch/notes:abc` said "no control
+`There's no track `nosuch`.` in that revision", and mute in song called a missing track a
+control. The tests checked only part of the text, so they passed anyway.
+
+**The fix:** a new `EditError::Missing(sentence)`, shown as it is. Clips (a missing track, lane,
+clip or note), Remove automation and mute in song use it. Mute in song says "There's no track
+`kik`.". `NotFound` stays for controls.
+
+| Test | Red first? |
+|---|---|
+| `the_song_and_missing_tracks_are_refused`, `remove_automation_refuses_what_it_cant_take_out`, `kinds_and_units_never_mix` (a missing clip, track and lane), `quantize_to_sixteenths_and_triplets` (a missing note): the whole message | red: "no control `…` in that revision" |
+| `remove_automation_over_http`, `clip_gestures_over_http`: the route's whole `error` | red |
+| `clip_gestures_from_the_terminal`, `unautomate_from_the_terminal`, `mute_in_song_writes_the_option_and_takes_the_lock`: the whole `error:` line | red |
+
+**Checks:** tests of `m2-editor`, `m2-server`, `m2`; clippy on them.
+
+### S2. Mute in song leaves a track alone when it is already as asked
+
+**What was wrong:** mute in song read the code's text, not the graph, to tell whether a track was
+already as asked. With `{ muted: false }` written, asking "off" took the option out and declared a
+`Muted` change the graph never made. `Confined` then refused the edit, with Rust debug text as
+the reason. A const (`muted: quiet`) asked for the state it already gives did the same.
+
+**The fix:** a track whose graph already has the state asked is skipped: nothing written, nothing
+declared.
+
+| Test | Red first? |
+|---|---|
+| `a_track_already_as_asked_is_left_alone` (`muted: false` asked off; a const that is true asked on; then both on, which writes only the first) | red: "its modules change as {}, not as declared" |
+
+**Checks:** tests of `m2-editor`, `m2-server`, `m2`; clippy on them.
+
+### S3. A solo of a track that is gone silences nothing
+
+**What was wrong:** MON-4 keeps the entries of a track that is gone, so it comes back as it was. But
+the path rule still counted its solo. A key with no sites reaches nothing, so every site went to 0:
+solo `lead`, comment it out in code, and the whole song went silent, even after a reopen. The
+export warning then came out with empty lists.
+
+**The fix:** the path rule counts only solos of the revision's tracks (`values(…, tracks)`). The
+entry stays in the set and the file. The state, the export's warning and every plan's values use
+the same rule: `PlaysView` gains `tracks`, the tracks of what plays.
+
+| Test | Red first? |
+|---|---|
+| `a_solo_of_a_track_that_is_gone_is_ignored` (alone, and beside one that is there) | red with the filter off |
+| `a_soloed_track_taken_out_of_the_code_silences_nothing` (the bass heard again, `heard` and the solo in the state, no export warning; put back, the kick is soloed again) | red with the filter off |
+
+**Checks:** tests of `m2-editor`, `m2-server`, `m2`; clippy on them.
+
+**Contract:** MON-4 (an entry of a track that is gone is ignored).
+
+### S4. A mute just before a close is saved
+
+**What was wrong:** only the 300 ms `music2-tell` tick wrote `.music2/overlays.json`. Closing, opening
+another project, opening this one again or quitting dropped the overlays without a write. A mute
+made in the last 300 ms was lost, and the track came back unmuted.
+
+**The fix:** what the file still owes (`Published::owed`) is written off the control lock
+(`Inner::save_owed`, which the tick uses too) when the project closes (quitting closes it), before
+a project opens (its file may be the one read next), and for the one it replaces.
+
+| Test | Red first? |
+|---|---|
+| `a_mute_just_before_a_close_or_a_reopen_is_kept` (mute, close at once, the file; reopen; mute, open again at once) | red with the writes at close and open taken out |
+
+**Checks:** tests of `m2-server`; clippy on it.
+
+**Contract:** MON-4 *Today* (when the file is written).
+
+### R2. The meters' doc says what a NaN reads
+
+**What was wrong:** the `Peaks` doc said a sample that isn't finite reads as `f32::MAX`. The code
+passes a NaN over (it reads 0) and reads an infinity as `f32::MAX`, as B11 chose: so a meter never
+holds a value JSON can't carry. The song's output is tapped after its non-finite samples are set
+to 0, so `out` never reads `f32::MAX`. The design and the contract promise nothing here.
+
+**The fix:** the doc says what the code does. A test pins it.
+
+| Test | Red first? |
+|---|---|
+| `a_nan_is_passed_over_and_an_infinity_reads_as_max` (`core/runtime/src/taps.rs`) | — (green before: only the doc was wrong) |
+
+**Checks:** `m2-runtime` tests; clippy on it.
+
+---
+
+## The final check
+
+**In short:** `ci/check.sh --gates` at `a8199ff`, once, in tmux (`M2_CHECK_OUT=~/m2-runs/check-be-fg`).
+Linux timings are information only (PLAT-1).
+
+```
+music2 check: PASS
+commit   a8199fff7fa6 on 8b-backend (clean)
+machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
+tools    rustc 1.99.0, node v24.21.0, 33 min
+plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+
+toolchain        PASS  rustc 1.99.0
+web build        PASS  
+build            PASS  
+app              PASS  the UI connected: first-song in 1 s, with-plugins in 1 s
+rust tests       PASS  1039 passed, 0 failed
+clippy           PASS  
+std kernels      PASS  tests and clippy
+std.wasm         PASS  rebuilt to the same bytes in another folder
+mac lint         PASS  the macOS code type-checks and lints
+browser suites   PASS  29/29 suites ok
+renders          PASS  10 of 10 match e2e/renders.sha256
+old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
+gates            PASS  the 6 runs ci/gates.txt names
+repo unchanged   PASS  
+
+gates:
+  machine: ASRockRack B665D4U-1L, Ubuntu 24.04.3 LTS, AMD Ryzen 9 7950X3D 16-Core Processor, x86_64, 32 threads
+  === m2-gates --server tx-data watcher
+  PASS  G11 tx-data (PLANE-5, PLANE-1, WRITE-15) on server on p16
+        ok    idle disk: the session's part before the preview (plan, check, pre-check), under 5 ms at p95: p50 0.9 ms, p95 1.3 ms, max 2.7 ms (n=200)
+        ok    idle disk: from the request to the first block that plays it (its preview), under 20 ms at p95: p50 5.1 ms, p95 9.2 ms, max 10.4 ms (n=200)
+        ok    with another writer syncing 4 MB chunks: the session's part before the preview (plan, check, pre-check), under 5 ms at p95: p50 1.0 ms, p95 1.3 ms, max 3.1 ms (n=200)
+        ok    with another writer syncing 4 MB chunks: from the request to the first block that plays it (its preview), under 20 ms at p95: p50 4.9 ms, p95 9.0 ms, max 10.3 ms (n=200)
+        ok    idle disk, 5,000 files in assets/: the session's part before the preview (plan, check, pre-check), under 5 ms at p95: p50 1.1 ms, p95 2.1 ms, max 3.4 ms (n=200)
+        ok    idle disk, 5,000 files in assets/: from the request to the first block that plays it (its preview), under 20 ms at p95: p50 5.0 ms, p95 8.9 ms, max 9.9 ms (n=200)
+  PASS  G11 watcher (WRITE-19) on server on p16 with 5,000 files in assets/
+        ok    idle: the CPU its ticks used over 10 s, under 1% of a core: 0.10% of a core (199 ticks in 10 s)
+  === m2-gates --server --reference 50 --at 180 add-effect
+  PASS  G5 and G7a add effect, through the server (RENDER-8, RENDER-25, RENDER-25a) on server on p50 from 180 s
+        ok    audible within compile + 100 ms: past the session's work: p50 41.5 ms, p95 46.1 ms, max 46.1 ms (n=10)
+        ok    G7a: heard within 200 ms of the request, its compile included: p50 101.0 ms, p95 116.5 ms, max 116.5 ms (n=10)
+        ok    with-plugins: audible within compile + 100 ms: past the session's work: p50 14.5 ms, p95 21.7 ms, max 21.7 ms (n=2)
+  === m2-gates --reference 50 --at 180 add-effect tails
+  PASS  G5 add effect (RENDER-25, 25a, 8) on engine (step 7) on p50
+  PASS  G7b tails of untouched tracks (RENDER-25, 25a) on engine (step 7) on p50
+  === m2-gates --server export
+  PASS  G7e export (RENDER-1, RENDER-6a, HOME-4, HOME-6) on server on examples/with-plugins, real time
+  === m2-gates store --reference 50
+  PASS  G7f store (RENDER-32) on the runtime on p50
+        ok    the same music: every renderer's timed blocks the same bits: the same 2880000 samples (hash 22cd1b3810530499) from the app's layout, P1 and S in every round, peak -1.0 dB
+        info  block, P1 against S (step 7 with wasmtime's default layout): mean +11 µs (5 pairs, -111 to +371); p99 -286 µs (5 pairs, -1944 to +3051)
+        info  block, the app's layout against P1 (the owner's layout alone): mean -62 µs (5 pairs, -294 to +119); p99 +426 µs (5 pairs, -2232 to +1712)
+        info  block, starting a turn: of the judged ones, each turn's first half over its second, against S's: -169 µs (the app's layout), -94 (P1); each turn's first block over the mean: +1934 µs, +2486, +2556 (S); 188 
+        info  machines: S's record is from MacBookPro18,1, macOS 26.6.2, Apple M1 Pro, aarch64, 10 threads; this run is on ASRockRack B665D4U-1L, Ubuntu 24.04.3 LTS, AMD Ryzen 9 7950X3D 16-Core Processor, x86_64, 32 thread
+        skip  block within S + 80 µs, by the mean: would pass: -33 µs (5 pairs, -96 to +112) over S, measured here (bound 80). p99, not judged: +455 µs (5 pairs, -1368 to +819); not judged off the reference Mac (PLAT-1)
+        skip  footprint within S + 64 MB: recorded, not judged: S's record is from another machine (PLAT-1)
+        skip  full build within 1.5 × S: would pass: 240 ms against S's 185 ms, each its process's first, measured here; not judged off the reference Mac (PLAT-1)
+  === m2-gates arena --reference 50 --at 180
+  PASS  G7f the arena's callback (RENDER-32, RENDER-25) on the player on p50 from 180 s
+        ok    the same music: every player's timed callbacks the same bits: the same 2856960 samples (hash cdb85ca0bbb29381) from the app's layout, P1 and S in every round, peak -1.0 dB
+        info  callback, P1 against S (step 7 with wasmtime's default layout): mean -562 µs (5 pairs, -957 to +98); p99 -3942 µs (5 pairs, -9606 to +1879)
+        info  callback, the app's layout against P1 (the owner's layout alone): mean +178 µs (5 pairs, -480 to +842); p99 +6477 µs (5 pairs, -4612 to +9814)
+        info  callback, starting a turn: of the judged ones, each turn's first half over its second, against S's: +267 µs (the app's layout), +559 (P1); each turn's first callback over the mean: +5789 µs, +6713, +6016 (S
+        info  machines: S's record is from MacBookPro18,1, macOS 26.6.2, Apple M1 Pro, aarch64, 10 threads; this run is on ASRockRack B665D4U-1L, Ubuntu 24.04.3 LTS, AMD Ryzen 9 7950X3D 16-Core Processor, x86_64, 32 thread
+        skip  callback within S's + 320 µs, by the mean: would pass: -115 µs (5 pairs, -384 to +202) over S, measured here (bound 320). p99, not judged: -229 µs (5 pairs, -2733 to +3478); not judged off the reference Ma
+        ok    the slowest activation block under half the device buffer's period: 3054 µs, p50 1908; the block before it p50 2641, max 3973 (bound 5333 µs; the run's p99 callback 27372)
+
+logs     /home/jerry/m2-runs/check-be-fg.tgz
+```
+
+---
+
+## For the UI
+
+**In short:** what taste-next's UI sends and reads, per feature. Every route here is behind the API
+token and takes `session` from the graph state. A write is answered 423 in a read-only window, with
+WRITE-18's words in `error`. Other refusals are 400 `{error}`: a whole sentence, ready for a toast.
+After a change every window gets a `graph` event; the state is `GET /api/graph`.
+
+### 8b.4 Mute and solo
+
+| What the UI does | Route, event or state | Shape |
+|---|---|---|
+| M or S on a strip; solo one alone (exclusive); clear all | `POST /api/graph/overlay` | `{session, mute?: {key: bool}, solo?: {key: bool}, exclusive?: key, clear?: true}` → the state's `overlays`. Not a write: works read-only, never waits for a compile. Refuses `song` and a missing track. |
+| Mute in song (the strip's menu) | `POST /api/graph/track/mute` | `{session, modules: [key], muted}` → `{file, before, after, revision}`. One undo step; a write. A track already so is left alone. |
+| Each strip's look | `overlays` in the state | `mute`, `solo` (keys), `muted_in_song` (keys), `heard` (per track: `heard`, `muted`, `muted-in-song` or `silenced`), `saved` (false read-only: the pill's tooltip). |
+| "Still drives Duck on Bass" | `overlays.feeds` | per track: `[{module, label}]`. |
+| The "2 muted · 1 solo" pill | `overlays` | Count only keys that are in `heard`: entries of a track that is gone stay in `mute` and `solo` (MON-4), and are ignored. |
+| The export's warning | the export's problems | `overlays.active` (a Warning) when a mute or solo changes what is heard. |
+| A track deleted by a builder | none in the UI | The server's delete calls `Graph::forget_overlays(keys)` (Q7) when taste-next's delete lands. |
+
+### 8b.5 Clips
+
+| What the UI does | Route, event or state | Shape |
+|---|---|---|
+| Every clip gesture | `POST /api/graph/clips` | `{session, gesture: {op, …}}`, times in beats: `create {module, lane, start, length?}`; `move {clips, by, to?: {module, lane}, copy?}`; `resize {clip, start, length}`; `split {clips, at}`; `join {clips}`; `duplicate {clips, range?: [start, end], grid?}`; `paste {clips: [{module, lane, clip}], to?, at}`; `delete {clips}`; `notes {clip, notes, length?}` (the roll); `points {clip, points: [[beat, value]]}`; `quantize {clips, notes?: [index], grid, ends?}`; `set {module, lane, put, delete}` (agents). One undo step each; a write. |
+| Name a clip | in `clips` and `clip` | `{module, lane, id, sha}`, or for a clip with no id `{module, lane, at: [start, rank], sha}`. Send the `sha` the timeline drew it with. |
+| Select what a gesture made | the answer | `{file, before, after, revision, made: [{module, lane, id}]}`. |
+| A clip changed in another window | the answer | 409 `{error, changed: true}`: say it, and redraw from the next `graph` event. 422: a gesture that doesn't read. |
+| Each clip's hash | `timeline` in the state | every clip has `sha` (16 hex). |
+| The roll's whole-lane write | `POST /api/graph/lane` | still takes clips as the timeline shows them, `sha` and all (Q9), until the roll sends `notes`. |
+| Remove automation | `POST /api/graph/automate/remove` | `{session, module, lane, beat?}` (the playhead; none: the fallback) → `{file, before, after, revision}`. A write. |
+| A knob a lane drives | the view's input ports | `lane: {module, lane}` on each input an automation lane drives: "Follows the Cutoff lane", Show lane. Left out where none does. |
+| Automate's new lane | the automate answer | The lane is named after the control (`decay`); `name` stays the knob's words, for the toast. |
+
+### 8b.6 Audition
+
+| What the UI does | Route, event or state | Shape |
+|---|---|---|
+| Open the WebSocket with the window's id | `GET /api/ws?client=<id>` | One id per page load. Closing the socket lets go of that window's notes. |
+| Strike, let go, keep held | WebSocket text `{"t": "audition", module, lane, on: [{h, pitch, velocity?}], off: [h], keep: [h]}` | Offs first, then Ons. `h` is the window's own handle; `pitch` 0 to 127 (fractions tune it); `velocity` 0 to 1 (0.8 when left out). Works read-only; never waits for a compile. |
+| Keep held notes alive | `keep: [h]` | A window quiet for 10 s is let go. Send `keep` every few seconds while keys are held. |
+| "Nothing plays this lane" | WebSocket answer, to that window only | `{"t": "audition", module, lane, silent: "Nothing plays this lane"}`; an error is `{"t": "audition", error}`. |
+| Agents | `POST /api/graph/audition` | `{client, module, lane, on, off, keep}` → `{}` or the silent answer. |
+| How many notes sound | `live` in `GET /api/graph/status` and the state | a count. |
+
+### 8b.8 Meters
+
+| What the UI does | Route, event or state | Shape |
+|---|---|---|
+| Track and output meters | WebSocket `{"t": "meters", tracks: {key: [l, r]}, out: [l, r], dsp: {load, dropouts}}` | About 30 a second while the engine runs; one last as it starts to idle; none while idle or while a new plan waits (keep the last). Peaks are linear (1.0 is 0 dBFS). `out` has its own field: a track may be called `out`. A track nothing reads has no meter. |
+| A track's meter | `tracks[key]` | Read at the track's overlay: after mute and solo, before what it feeds. A muted track falls to 0. A NaN reads 0; an infinity reads the largest `f32`. |
+| The DSP load and dropouts | `dsp`, and `load` and `late` in `GET /api/graph/status` | `load`: the longest callback of the last second as a share of its period. `dropouts`: xruns plus late callbacks since the player started; light the warning when it grows. |
+
+
+---
+
+## Left
+
+| What | Why it waits |
+|---|---|
+| W1: the keyed compressor (`std:compress_keyed`) and gate 8's third clause | std 0.2 has no keyed compressor. It needs a new std kernel, a `std.wasm` rebuild and a std version. |
+| `Graph::forget_overlays` called by a track delete | taste-next builds the delete; wire it at that merge (Q7). |
+| The UI for all four features | on top of taste-next, from "For the UI" above. |
+| The owner's Mac run | `ci/check.sh` on the Mac judges the timings (PLAT-1). |
+| Older builders still say "no control `…`" for things that aren't controls | the notes write (a missing track or lane), rename, effect and cable. Not 8b's; `EditError::Missing` is there for them. |

@@ -1,10 +1,28 @@
 # Handoff
 
-Written 2026-10-16, at the end of step 7 (the engine), updated after its speed work the same day, and again on
-2026-10-17, when step 7 landed on `main`. Read this first, then `docs/architecture.md` (the contract) and the
-design for whatever you pick up.
+Written 2026-10-16, at the end of step 7 (the engine), updated after its speed work the same day, again on
+2026-10-17, when step 7 landed on `main`, and again the same day for the `sounds` merge, after its review and final
+check, and when it landed on `main`. Read this first, then `docs/architecture.md` (the contract) and the design for
+whatever you pick up.
 
 **In short**
+- **The `sounds` merge: Linux green at `e108e46`; macOS owed.** It is on `main` (2026-10-17). It brings 22 new std
+  sounds (a polysynth, FM keys and bells, a drum machine), fixes O3 (std's chorus, phaser and tremolo wobble only
+  while the song plays), and moves std to 0.2. No existing render changed. A review's 12 confirmed findings (8
+  problems) are all fixed: one test, one hint moved first in its message, the rest docs. Then `ci/check.sh --gates`
+  passed at `e108e46`: every row, nothing passed only on a retry (922 Rust tests, 29/29 browser suites, 10 of 10
+  renders, the 6 gate runs). So did the recorded tests, 5 of 5. Its Mac run is owed (below); one run covers step 7
+  too.
+- **The back ends of 8b.4, 8b.5, 8b.6 and 8b.8 are on `main`** (2026-10-17; branch `8b-backend`): mute, solo and
+  mute in song; clips by id (move, resize, split, join, quantize, paste) and Remove automation; audition (notes
+  played from a window); meters and the DSP load. No screens yet: those are on `8b-ui` (in progress). Reviewed (6
+  findings, all fixed with tests); `ci/check.sh --gates` passed at `a8199ff`, every row, nothing passed only on a
+  retry (1039 Rust tests, 29/29 browser suites, 10 of 10 renders, the 6 gate runs). macOS owed. Plan:
+  `docs/designs/step8/backend-plan.md`; what was built and what the UI uses:
+  `docs/designs/step8/build-notes-8b-backend.md`.
+- **One new question for the owner:** after Stop and back to bar 1, should the wobble start again as in the
+  export? For now it carries on (Open owner decisions).
+- **Your own songs** (for the owner): a song made before std 0.2 must change one line to build (below).
 - **Step 7 is on `main`** (2026-10-17): Linux green, macOS owed. With its speed work it is done on Linux at
   `ffc36aa`, after a review of the speed work's fixes: `ci/check.sh` passes there, every row, with nothing passed
   only on a retry, once without the gates and once with them (912 Rust tests, 29/29 browser suites, 8 of 8
@@ -19,21 +37,34 @@ design for whatever you pick up.
   song with no message; and a kernel that runs out of its 32 MiB fails with a message that never says "memory".
 - **A layout to decide before step 9:** idea 3, one sandbox per box (`docs/designs/kernel-layout/report.md`).
   Research only; it is in Open owner decisions.
-- The owner decided O1 to O5 on 2026-10-15 (below).
-- Next: merge `sounds`, then `taste`; then 8a, 8b and step 9. The Mac runs are owed and listed below.
+- The owner decided O1 to O5 on 2026-10-15 (below), and std's bump to 0.2 with O3's fix. That question is closed.
+- Next: `taste`, then 8b's screens (`8b-ui`), then 8a and step 9. The Mac runs are owed and listed below.
+
+## Your own songs (for the owner)
+
+**In short:** a song you made before std 0.2 needs one line changed. Then it plays as before.
+
+| | |
+|---|---|
+| Which songs | Songs in `~/Music/music2` that you made before the `sounds` merge lands on `main`. |
+| What you see | The song opens but stays silent. The yellow bar at the top says the code doesn't compile. Its error starts: "This app has std 0.2. To use it, change the std line in music2.toml to std = "0.2". The song may sound a little different." To read all of it, hold the mouse over it. |
+| What to do | Open the song's `music2.toml` in a text editor. Change the std line to `std = "0.2"`. Save. The app takes the change in, as with any file. |
+| The sound | It doesn't change: std 0.2 changed no sound a song already had. The message says "may" because later std versions might. |
 
 ## Where everything is
 
 | Branch | Commit | State |
 |---|---|---|
 | `main` | the tip | Steps 1–7, the fast note edits, and the platform layer. Green on Linux and macOS at `1750322` (the platform step). Step 7: green on Linux at `ffc36aa`, macOS owed. |
-| `step7` | `95c8a73` | Step 7's commits, all on `main` now. Worktree `~/m2-runs/wt/s7` (its `target/` is about 70 GB). Delete the branch and the worktree once the Mac run passes. |
+| `sounds-merge` | `e1003ba` | All on `main` now (a fast-forward, 2026-10-17). Linux green at `e108e46` (reviewed; `ci/check.sh --gates` and the recorded tests), macOS owed. Worktree `~/m2-runs/wt/sm` (its `target/`, about 40 GB). Delete the branch and the worktree once the tracks in flight have landed. |
+| `8b-backend` | `c9cc6ad` | All on `main` now (a fast-forward, 2026-10-17). Linux green at `a8199ff`, macOS owed. Worktree `~/m2-runs/wt/be`. Delete the branch and the worktree once `8b-ui` has landed. |
+| `step7` | `95c8a73` | Step 7's commits, all on `main` now. No worktree now: `~/m2-runs/wt/s7` moved to `~/m2-runs/wt/sm` for the `sounds` merge. Delete the branch and `origin/step7` once the Mac run passes. |
 | `origin/taste` | `4804247` | The new look (T and S); 8b.1 Tracks done (`a0d5f91`); 8b.2 song bar unfinished. |
-| `origin/sounds` | `916127d` | 20 new std sounds (polysynth, FM, drum kit). Its last independent check was cut short. |
+| `origin/sounds` | `916127d` | 22 new std sounds (8 on the polysynth, 4 FM, 10 drums), merged; on `main` since 2026-10-17. |
 
 `taste` and `sounds` start at `8aa301e`, before the platform step. Each has a detached worktree in `~/m2-runs/wt/`
-(`taste`, `sounds`). `origin/wip/step7` (the Mac's half-done step 7, all of it in `step7` as `c8117c3`) and its
-worktree were deleted when step 7 landed.
+(`taste`, `sounds`); `sounds`' can go once `sounds-merge` lands. `origin/wip/step7` (the Mac's half-done step 7,
+all of it in `step7` as `c8117c3`) and its worktree were deleted when step 7 landed.
 
 Designs, all in `docs/designs/`:
 - `step7/design-7.md` (revision 2, with dated notes from the review; §18 the slices, §19 the owner's questions).
@@ -42,6 +73,8 @@ Designs, all in `docs/designs/`:
   the fixes, Finish, Speed (2026-10-16: the fresh comparison with S, the profile, the cut, the review, the checks,
   the Mac estimate).
 - `step7/g7f-linux.md`: the study behind the owner's Store layout (O1).
+- `sounds/design.md`: the `sounds` merge, O3's fix and std 0.2, as built, and why. `sounds/build-notes.md`: each
+  slice, its checks, the red-first runs, and the records.
 - `kernel-layout/report.md`: idea 3, one sandbox per box (2026-10-16). Research only, for the owner to decide
   before step 9. Its notes and sources sit beside it.
 - `platform/design.md` (§8: how later steps add to `m2-os`; §13.3: the merges) and `platform/build-notes.md`.
@@ -62,9 +95,15 @@ Step 7, 2026-10-15:
 |---|---|---|
 | O1 | The Store layout: each kernel memory reserves 32 MiB, with a 64 KiB guard, no room to grow, and never moves. Cranelift's Spectre guard is off: kernels import nothing, so they have no clock. Revisit before kernels from other people's packages run. The Mac run must confirm its cost. | [RENDER-32](docs/architecture.md#engine-shape-step-7); `Layout::P2` in `core/runtime/src/packages.rs` |
 | O2 | G7f part 2's bound is 3% of a callback: 320 µs at 512 frames. Part 1's stays 80 µs a block (3% of a 2.67 ms block). | RENDER-32. G7f judges the **mean** of 5 pairs, not the p99: see "Open owner decisions". |
-| O3 | std's chorus, phaser and tremolo LFOs run on engine time, so after a stop they differ from the export. Fixed at the `sounds` merge, not in step 7. | "What to do next", 3 |
+| O3 | std's chorus, phaser and tremolo LFOs run on engine time, so after a stop they differ from the export. Fixed at the `sounds` merge, not in step 7, with std's version bumped. | Fixed on `main` (the `sounds` merge): [RENDER-6](docs/architecture.md#live-engine-and-its-two-clocks), `docs/designs/sounds/design.md` |
 | O4 | A note held across an export plays again after the resume: a note-on at the resume, under the 5 ms fade in. | [RENDER-1](docs/architecture.md#offline) |
 | O5 | Slice 3's two additions beyond the design stay: a new node's inputs fade in over 5 ms, and `text::slide`. | RENDER-25a, ID-13 |
+
+std 0.2 and the lockfile's trigger, 2026-10-15/16 (moved here from Open owner decisions): O3's fix comes with
+std 0.2, as the owner chose. Every fixture and template moves with it (no backwards compatibility), and one std
+stays bundled. The lockfile and several bundled std versions wait for "the first std release, after people have
+songs, that changes existing renders" (the lead's words, 2026-10-16; [FMT-3](docs/architecture.md#manifest-and-versions)
+and the contract's Deferred list). Done in the `sounds` merge: std 0.2 changed no existing render.
 
 Step 7, 2026-10-16, after the Mac run at `ed7fc8e`: speed the engine up first, with no change to any sound; make
 G7f measure the whole cost fresh, against S in the same run; then one more Mac run (about 45 minutes at most). O1
@@ -88,7 +127,7 @@ Decided earlier, and still in force:
 | A plugin that keeps failing. | It is started again once. If the new one fails within 10 s, it stays silent until the song is opened again, and the user is told once. | Keep 10 s. |
 | The output device changes while playing (headphones in or out). | Playback stops, and a message says why: "Press Play to go on". | Keep it: music shouldn't jump to the speakers on its own. |
 | The kernel layout (idea 3): one sandbox per box, with wasmtime's own 4 GiB layout. It undoes the 32 MiB layout of O1 (2026-10-15). | Nothing: research only (`docs/designs/kernel-layout/report.md`). | Decide before kernel ABI v1 freezes in step 9. If yes, build it after 8a, after a short test build that measures it. |
-| O3's fix needs std's version bumped (0.1 to 0.2). FMT-3 makes that release the trigger for a lockfile and several bundled std versions (the contract's Deferred list). | Nothing yet. | Bump to 0.2 and move the fixtures and templates with it (no backwards compatibility); move the lockfile's trigger to "the first std release after people have songs". |
+| Space, Return, Space: stop, back to bar 1, play. Should the wobble and the drums' noise start again as in the export? | Not now: they carry on from where they stopped, as at any jump. So that play may differ a little from the export (RENDER-6 allows it). Stop, then Space, carries on smoothly either way. | Keep it (the lead's default, 2026-10-16). Ask once, in these words: "After you stop and go back to bar 1, the wobble carries on from where it was; should it start again as in the export?" Changing it changes no export. |
 
 ## The check: `ci/check.sh`
 
@@ -100,12 +139,12 @@ couldn't judge G7f: the Mac isn't the one S's records name. Only PASS is a pass.
 |---|---|
 | toolchain, web build, build | Rust 1.99.0 (pinned), the web UI, every binary |
 | app | Linux only: the desktop app on an invisible screen (Xvfb), with `first-song` and `with-plugins`, a screenshot of each |
-| rust tests | every Rust test, with a scratch `HOME` (912 at `ffc36aa`); G7c and G7d are tests here |
+| rust tests | every Rust test, with a scratch `HOME` (922 at the `sounds` merge's `e108e46`; 912 at step 7's `ffc36aa`); G7c and G7d are tests here |
 | clippy | the whole workspace; a warning is an error |
 | std kernels, std.wasm | the kernels' tests and lints; `std.wasm` rebuilt to the same bytes in another folder |
 | mac lint | Linux only: the Mac-only code, type-checked and linted |
 | browser suites | 29 suites (1,049 checks), each on a fresh headless server |
-| renders | 8 offline renders against `e2e/renders.sha256`, one record for every OS |
+| renders | 10 offline renders against `e2e/renders.sha256`, one record for every OS (8 before the `sounds` merge added `examples/sounds`) |
 | old engine (S) | with the gates: builds S's runner, the old engine G7f measures beside the app (`crates/gates/s/build.sh`, outside the repo); about 3 minutes the first time, seconds after |
 | gates | on the Mac always; on Linux only with `--gates` (information only, PLAT-1): the 6 runs `ci/gates.txt` names (below) |
 | repo unchanged | the check changed nothing in the repo |
@@ -129,9 +168,10 @@ The gates (`ci/gates.txt`, one `m2-gates` run a line, all in release):
 Recorded tests, too long for the check (`#[ignore]`): G7c on all of p16 and of p50, p16 looping ten minutes, and the
 churn test's 200 edits on p16 (within +20 MB). Run them with `cargo test -p m2-play --release --test bit_identity
 --test live --test churn -- --ignored --nocapture` (about 10 minutes; all 5 passed at `18966cd`, after the kept
-memory address).
+memory address, and at `e108e46`, the `sounds` merge's tip).
 
-**On the server** (8 to 9 minutes with a warm `target/` on a quiet server; 25 with `--gates`):
+**On the server** (about 10 minutes with a warm `target/` on a quiet server; about 30 with `--gates`, since the
+`sounds` merge):
 
 ```sh
 cd ~/dev/suite2/music2
@@ -140,7 +180,8 @@ TW_WAIT=3500 ~/m2-runs/tw check-<label> 'M2_CHECK_OUT=$HOME/m2-runs/check-<label
 
 `M2_CHECK_OUT` must be a new folder. It gets `summary.txt`, every log, and the app's two screenshots
 (`app-first-song.png`, `app-with-plugins.png`); all logs are also packed in `<folder>.tgz`. Send the owner the
-screenshots once per step (this step's: `~/m2-runs/app-shots/step7-6297c9a/`).
+screenshots once per step (step 7's: `~/m2-runs/app-shots/step7-6297c9a/`; the `sounds` merge's: Pop sounds in
+`~/m2-runs/app-shots/sounds-e108e46/pop-sounds.png`, and the check's two in `~/m2-runs/check-sm-fg/`).
 
 ## The Mac run (for the owner)
 
@@ -151,12 +192,14 @@ S, about 3 minutes the first time, and G7f plays longer, about 8 minutes a part)
 |---|---|---|
 | 1 | Plug the Mac in, keep the lid open, and quit other apps. | The speed tests need a quiet Mac. |
 | 2 | Open Terminal on the Mac itself, not over ssh. | One test needs your login session. |
-| 3 | Type `cd ~/dev/suite2/music2`, then `git fetch`, then `git switch main`, then `git pull`. | This gets step 7. |
+| 3 | Type `cd ~/dev/suite2/music2`, then `git fetch`, then `git switch main`, then `git pull`. | This gets step 7 (and the `sounds` merge, once it is on `main`). |
 | 4 | Type `ci/check.sh` and press Return. | It runs every check and the speed tests. |
 | 5 | If one line says `running` for more than 30 minutes, press Ctrl-C once. | It stops that check and still prints the summary. |
 | 6 | Copy the last lines, from `music2 check:` to the `logs` line, and paste them back. | That is all the lead needs. |
 
 **What changed since the last run (`ed7fc8e`, 2026-10-16):**
+- Once the `sounds` merge is on `main`: 22 new std sounds, and std 0.2. Two more renders (10). `std.wasm` is half
+  as big again, so each load of std takes a little longer (+70 ms on Linux) and the check a few minutes more.
 - The engine is faster. Each kernel call now reads its memory straight away, instead of asking its
   store for it (`444fc66`). No sound changed.
 - G7f measures S, the commit before step 7, in the same run, beside the app. S plays in a small program
@@ -208,6 +251,15 @@ with nothing "passed only on a retry". In the gates part:
 | 16 | Quit. Type `cargo run -p music2-desktop` (a slower test build), and play With plugins for a minute. | The Terminal never says "the audio thread allocated". |
 | 17 | Tell the lead what you saw and heard at 9 to 16. | |
 
+**Once the `sounds` merge is on `main`, a check by ear of the new sounds** (about 5 minutes):
+
+| # | Do this | You should hear or see |
+|---|---|---|
+| 18 | Quit the app. Type `cargo run --release -p music2-desktop`. Click **Open an Example**, then **Pop sounds**. Press Space. | A short pop song: supersaws, an 808, FM keys, bells and drums. It sounds full, with no clicks. |
+| 19 | While it still plays (in its first 20 seconds), press Space to stop. Wait about 10 seconds. Press Space again. | It plays on from where it stopped. The wobble on the keys and the strings (their chorus) carries on smoothly, with no jump. |
+| 20 | Press Space, then Return, then Space. | It stops, goes back to bar 1, and plays from there, with no click. The wobble and the drums' noise carry on from where they were, so this play may differ a tiny bit from the export. That is expected for now: it is the open question in Open owner decisions. |
+| 21 | Tell the lead what you heard at 18 to 20, and whether 20 sounded right to you. | |
+
 After a green run the lead writes here: "macOS: green at <commit> (ci/check.sh on <model>, <date>)", with G7f's
 numbers. If a row fails, the lead fixes it on Linux, checks the mac lint, and asks for one more run. The logs are in
 `~/m2-check/<commit>.tgz` on the Mac if needed.
@@ -233,7 +285,11 @@ numbers. If a row fails, the lead fixes it on Linux, checks the mac lint, and as
   `app_main_thread` (a state load on AppKit's main thread), `no_alloc.rs`, and the server's export, hold and device
   tests. The footprint test now maps and unmaps its own pages, so macOS's malloc cache can't hide them (unverified there).
 - "browser suites" 29/29, with `live3b` at 60 checks: it exports with-plugins from the UI on real Surge XT.
-- "renders" 8 of 8: the owner's layout changes no bit (checked on Linux).
+- "renders" 8 of 8: the owner's layout changes no bit (checked on Linux). With the `sounds` merge, 10 of 10: the
+  first Mac run of `examples/sounds`' two records, and of the rebuilt `std.wasm`'s bytes.
+- With the `sounds` merge, G7f's S still plays its own std (S's runner sets each project's std line to S's version,
+  `a3214f6`), while the app plays the larger std. p50 uses none of the new kernels, so they play the same music.
+  If a G7f bound fails, check this first (`docs/designs/sounds/build-notes.md`, slice 1, risk 17).
 - G7e compares the export with `m2 render`, which now runs plugins in offline mode (K4): its pass on the Mac
   confirms Surge XT renders the same there.
 
@@ -244,22 +300,24 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
 
 | Step | On `main` at | Mac run |
 |---|---|---|
-| Step 7 and its speed work | `ffc36aa` (Linux checks), then docs only | owed: the run above, then the by-ear steps |
+| Step 7 and its speed work | `ffc36aa` (Linux checks), then docs only | owed: the run above, then the by-ear steps 7 to 17 |
+| The `sounds` merge (22 sounds, O3, std 0.2) | `e108e46` (Linux checks), then docs only | owed: the same run (one run covers step 7 too), then the by-ear steps 18 to 21 |
+| The back ends of 8b.4, 8b.5, 8b.6, 8b.8 | `a8199ff` (Linux checks), then docs only | owed: the same run covers it; by-ear steps come with its screens (`8b-ui`) |
 
 1. **The Mac runs** (above), when the owner has time. Fix what they find on Linux, then ask for one more run. When
    step 7's passes, write "macOS: green at …" here and in the contract's gates row 7, with G7f's Mac numbers in
-   RENDER-32's *Today*. Then delete the `step7` branch, `origin/step7` and the worktree `~/m2-runs/wt/s7`.
+   RENDER-32's *Today*. Then delete the `step7` branch and `origin/step7` (it has no worktree now).
 2. **The two gaps found on 2026-10-16** (Left for later): fix them before step 9, or with idea 3 if the owner
    says yes to it.
-3. **Merge `sounds`**: re-run its full checks first (its commit says why), then merge it (notes below). Never take a
-   side on `std.wasm` or `Cargo.lock`: rebuild `std.wasm` (`std/build.sh`, then `std/build.sh --check`), check the
-   renders, commit once. Fix O3 there: chorus, phaser and tremolo follow the song's time, not engine time. It changes
-   `templates/starter`'s render, so it comes with std's one version bump and both render records (ask the owner the
-   lockfile question above first). Mac run before it lands.
+3. **The `sounds` merge is on `main`** (`docs/designs/sounds/`). Ask the owner the Space, Return, Space question
+   (Open owner decisions). Delete the worktree `~/m2-runs/wt/sm` and the detached `~/m2-runs/wt/sounds` once the
+   tracks in flight have landed.
 4. **Merge `taste`**: finish 8b.2 (song bar) and build 8b.3 (Mix faders) per design-8b, then merge (notes below):
    bundle Inter for Linux, D7's attention fix, re-run s8-tracks. Mac run before it lands.
-5. Then **8a** (all CPU cores), **8b.4–8b.10**, and **step 9**. Before step 9 freezes kernel ABI v1, the owner
-   decides the kernel layout (Open owner decisions). Each adds its OS pieces to `m2-os` as platform design
+5. **8b's screens** (`8b-ui`, `~/m2-runs/s8ui/plan.md`) on top of `taste` and the back ends now on `main`. Left on
+   the back end: W1 (the keyed compressor, a std change) and `forget_overlays` on taste's track delete (Q7).
+6. Then **8a** (all CPU cores), **8b.7, 8b.9, 8b.10**, and **step 9**. Before step 9 freezes kernel ABI v1, the
+   owner decides the kernel layout (Open owner decisions). Each adds its OS pieces to `m2-os` as platform design
    §8 says (8a's `rt.rs` becomes `mac/rt.rs` and `linux/rt.rs`; 8b.10's MIDI uses `midir`). Mac run at the end of each.
 
 ## Merge notes
@@ -272,14 +330,15 @@ Platform design §13.3, updated by what step 7 learned. Never take a side on `Ca
 | any | `core/kernel/` is now `std/kernels-src/kernel/`; the app test is `app_main_thread.rs` | git follows these renames |
 | any | OS code outside `core/os` | `core/os/tests/one_place.rs` fails on it (PLAT-2): move it into `m2-os` |
 | any | `Cargo.lock` | take `main`'s, then `cargo build` adds the branch's edges; never `cargo update` |
-| `sounds` | `std/kernels/std.wasm` | `std/build.sh`, then `std/build.sh --check`, check the renders, commit once |
-| | `core/play/tests/bit_identity.rs`, `core/play/tests/common/mod.rs` | both sides add tests: keep both. `sounds`' `live_after_idle` uses the player's API from before step 7 (`Player::driven`, `open`, `applied`): make it build against `step7`'s |
-| | each kernel's memory | is capped at 32 MiB (O1's layout and the Store's limit): check the six new kernels fit |
-| | after the merge | add `examples/sounds` to `PURE`, `e2e/baseline.sh` and both records, recorded on Linux; the next Mac run confirms them. The check's std kernels row runs the kernels' clippy, which the six new kernels have not met. |
+| `sounds` | done | merged, now on `main`, as these notes said (`docs/designs/sounds/build-notes.md`, slice 1) |
 | `taste` | `docs/architecture.md`: WRITE-17's *Today* | keep `taste`'s text, then apply the platform step's network-volume edit (platform design §6.1) |
 | | `e2e/attention.mjs` (the review's D7) | `taste` rewrites the toast-Undo lines; there, wait for the page's revision before clicking the toast's Undo, as `notes.mjs` does |
 | | the font | `taste`'s `--font-sans` falls back to DejaVu Sans on Linux. Keep the Mac's system font; bundle Inter (OFL) for Linux and Windows. |
 | | `web/src/components/GraphCanvas.tsx` | step 7 put the top bar's "Paused for export" and "Loading …" note under the song's name (`EngineNote`); `taste` redraws the top bar: keep the note, and `fx-fixes`' checks at 960 and 1280 px |
+| | `docs/gaps.md`, `std/src/instruments.ts` | conflict with the `sounds` merge. In `instruments.ts` both sides add an `editor` to the five first instruments: keep `taste`'s `category` and `sounds`' `description` |
+| | the "+ Track" list | `instruments` (`crates/editor/src/tracks.rs` on `taste`) takes a component only through an export whose name has no dot, and groups by `editor.category` (`Drums` gets a `hits` lane). The 22 new instruments are exported only as members (`synth.lead`, `drums.kick`) and have no category, so none would be listed. Let the list take a member export, and give each a category (the drums `Drums`). |
+| | std 0.2 | `taste` adds 2 manifests in code with the old std line (`crates/editor/src/song_tests.rs`): make them `std = "0.2"`. Then `git grep -nE 'std = \\?"0\.1'` must find nothing. |
+| | `core/session/src/tx/delta.rs` | conflicts with step 7 already. Keep the `sounds` merge's `Op::Time` arm (a `time` node made in a call is named under its frame chain, WRITE-8): `a_call_reading_time_added_or_removed_beside_another_renames_nothing` and `the_starters_add_reverb_keeps_the_hooks_reverb` must pass |
 | | after the merge | re-run s8-tracks' "layout.json within a second" on the inotify watcher. Before the platform step, 14 of `taste`'s 32 suites failed on Linux (Ctrl labels, and others to re-check alone): run them all. README's "You need a Mac" gains Linux. The key table, a menu per OS (GTK), the reveal label and a PC-keys suite are `taste`/8b work. |
 
 ## Known flakes
@@ -309,7 +368,31 @@ Fixed in step 7 (of these, only `a_plugin_that_keeps_failing_is_started_again_on
 
 ## Left for later
 
-One line each; the details are in `step7/build-notes.md` and `platform/build-notes.md`.
+One line each; the details are in `sounds/build-notes.md`, `step7/build-notes.md` and `platform/build-notes.md`.
+
+The `sounds` merge:
+- **Stop, back to bar 1, Play is a seek** (its plan's risk 2): std's LFO phases and the drums' hit counts carry on,
+  so that play differs from the export (RENDER-6 allows it). If the owner wants it (Open owner decisions): played
+  from bar 1, std's song-time state (LFO phases, hit counts) could start again. That changes no export.
+- **Stopped, std's effects are still** (risk 3): a tail after Stop goes through a chorus that no longer moves, and a
+  tremolo held at its level. Nothing clicks. When live input and audition arrive (8b.10), keys played while stopped
+  would hear a still chorus. Decide then, by ear. The likely answer, "run free while stopped, and Play puts the LFO
+  back where the song left it", changes no offline render, so it needs no std bump.
+- std's free-running sources (oscillators and `noise` at a song's top level) still run on while stopped, so for them
+  RENDER-33 still needs a fresh engine. One that waited would hold a constant value (a DC offset).
+- A smoother that sets itself from its first input (`Gain`, `Duck`, `Glide`) does that while stopped, from the input
+  it has then. It matches the export only when that input at frame 0 is the same. Every fixture meets this today.
+- A direct `kernel("std:chorus", …)` call (or phaser, tremolo, bitcrush) that leaves `playing` out always moves:
+  the input's default is 1. std/fx connects it.
+- G7f's S plays its own std (`a3214f6`): S's runner sets each project's std line to S's version. S can't play the
+  app's std, whose std/fx reads `time.playing`.
+- Every load of std compiles `std.wasm`, now half as big again: +70 ms a load, and the "rust tests" row +59 s on
+  Linux. A compiled-module cache would win it back.
+- A `target/` moved between worktrees keeps paths to the old one, and some tests then look for the repo there. If
+  one moves, `cargo clean` it first. Tests that find the repo's files from where they were built were not all read;
+  only the fixtures test passed quietly, and it now fails instead.
+- The app's yellow compile bar shows each message on one line, cut at the window's edge. The std hint now comes
+  first in its message (the review's D3); other long messages are still cut. Wrapping them is a choice for `taste`.
 
 Step 7:
 - **Gap: a kernel crash stops the song, with no message.** If a kernel traps while the song plays,
@@ -319,8 +402,9 @@ Step 7:
 - **Gap: a kernel out of memory doesn't say so.** A kernel whose memory would pass 32 MiB gets a refused grow,
   and its Rust code then most likely aborts (unverified): "wasm trap: wasm `unreachable` instruction executed".
   `out_of_memory` (`crates/server/src/graph.rs:382-387`) doesn't match that, so the user isn't told it is memory.
-  No std kernel comes near (the largest, `delay`, is about 1.6 MiB); other people's kernels could (step 9). The
-  full path is in `kernel-layout/code-map.md` §3.7.
+  No std kernel comes near: at 384 kHz, the highest rate, the largest, `delay`, holds 11.88 MiB, and
+  `every_std_kernel_fits_its_memory_at_the_highest_rate` checks every one (since the `sounds` merge). Other people's
+  kernels could (step 9). The full path is in `kernel-layout/code-map.md` §3.7.
 - **K13:** a note that starts in the very block after a state change doesn't sound in Surge XT (Surge ends its voices when it applies a state).
 - **K14:** a plugin that applies a loaded state later than its next call could still win over the code's values (HOME-5a's revert, with plugin windows, is the real fix).
 - A new plugin instance whose saved state adds latency plays uncompensated, and nothing says so (RENDER-17; found in the finish).
@@ -393,7 +477,7 @@ From the platform step:
 | Test plugins | `ci/plugins.sh` (once): Surge XT 1.3.4 and Airwindows Consolidated into `~/.local/share/m2-test-plugins/clap`, from the archives in `~/.local/share/m2-test-plugins/dl` (Airwindows' zip is gone upstream: keep that copy). Never into `~/.clap` or `/usr/lib/clap`. |
 | The desktop app | Only on an invisible Xvfb screen, as the check's app row opens it. Never on a real screen. |
 | Scratch `HOME` | Anything that runs music2 gets a scratch `HOME` and `M2_AUDIO=none`, and then `CARGO_HOME=/home/jerry/.cargo RUSTUP_HOME=/home/jerry/.rustup`. Never the real `~/.music2` or `~/Music`. `ci/check.sh` does this itself. |
-| Scratch copies | `git worktree add --detach ~/m2-runs/scratch-<label>`, with its own `target/`; delete it when done (they once filled 390 GB). The repo's own `target/` is about 140 GB, `~/m2-runs/wt/s7`'s about 70 GB. |
-| Logs | Each check's folder in `~/m2-runs/check-*` (step 7's last: `check-s7-rv1`, and `-rvg` with the gates; before them `-sp1`, `-sp2` and `-spg`); the step 7 gate runs in `~/m2-runs/gates-fix/` and `~/m2-runs/xc/g7f/`; the review in `~/m2-runs/review-b1/`. |
+| Scratch copies | `git worktree add --detach ~/m2-runs/scratch-<label>`, with its own `target/`; delete it when done (they once filled 390 GB). The repo's own `target/` is about 140 GB, `~/m2-runs/wt/sm`'s about 40 GB (step 7's, moved from `~/m2-runs/wt/s7`, then cleaned and rebuilt). |
+| Logs | Each check's folder in `~/m2-runs/check-*` (the `sounds` merge's: `check-sm1c` and `-sm2b` with the gates, `-sm3`, `-sm4`, and the final `-sm-fg` with the gates, at `e108e46`; step 7's last: `check-s7-rv1`, and `-rvg` with the gates; before them `-sp1`, `-sp2` and `-spg`); the `sounds` merge's plan in `~/m2-runs/sounds/plan.md`; the step 7 gate runs in `~/m2-runs/gates-fix/` and `~/m2-runs/xc/g7f/`; the review in `~/m2-runs/review-b1/`. |
 | Tools | Rust 1.99.0 (`rust-toolchain.toml`), Node 24, chrome-headless-shell 133.0.6943.141 (the check installs Rust and Chrome when missing), Xvfb. |
 | MIDI | `/dev/snd/seq` gives `EACCES` here: tests inject notes and never open a device. |

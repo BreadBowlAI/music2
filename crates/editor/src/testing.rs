@@ -6,7 +6,7 @@ use m2_runtime::PackageSet;
 use m2_session::Session;
 
 pub(crate) const MANIFEST: &str =
-    "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n";
+    "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.2\"\n";
 
 pub(crate) fn std_packages() -> PackageSet {
     let mut p = PackageSet::default();

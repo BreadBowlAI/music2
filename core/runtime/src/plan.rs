@@ -361,6 +361,9 @@ pub(crate) struct Plan {
     pub(crate) info: Arc<PlanInfo>,
     /// The window's own overlays (no cell), each with the site whose value it takes.
     pub(crate) window_overlays: Vec<(usize, usize)>,
+    /// The window's own overlays with no site to follow, each with the old plan's site whose gain
+    /// it keeps from the block line on (MON-1).
+    pub(crate) window_held: Vec<(usize, usize)>,
     /// Its taps, written after each block: a live plan's only.
     pub(crate) taps: Option<Taps>,
 }
@@ -641,6 +644,13 @@ impl Renderer {
             }
         }
         self.plan.cells.carry(&self.plan.graph, &old.plan.cells, &e.cells, &e.voice_cells);
+        // A window overlay with no new site keeps its old site's gain: a track muted, then deleted
+        // or read elsewhere, stays silent through the window.
+        for &(node, k) in &self.plan.window_held {
+            if let Some(gain) = old.plan.cells.overlay_node(k).and_then(|n| old.plan.graph.overlay_gain(n)) {
+                self.plan.graph.hold_overlay(node, gain);
+            }
+        }
         for &r in &e.release {
             self.plan.graph.release(r as usize, self.clock);
         }

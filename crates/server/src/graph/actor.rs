@@ -856,7 +856,7 @@ impl Actor {
             }
             // Its overlays where the plan before had them: no glide at entry (MON-1, A7).
             if let Some(p) = cp.open.as_ref().filter(|p| p.engine.token == token) {
-                r.set_overlays(&super::overlay::plan_values(&r.info(), &p.overlays.set, &o.session.accepted().compiled.flat.muted));
+                r.set_overlays(&super::overlay::plan_values(&r.info(), &p.overlays.set, o.session.accepted()));
             }
         }
         let sent = (|| -> Result<Sent> {
@@ -870,7 +870,7 @@ impl Actor {
                     if was != now
                         && let Some(set) = cp.open.as_ref().filter(|q| q.engine.token == token).map(|q| &q.overlays.set)
                     {
-                        super::overlay::write_cells(&p.info, p.epoch, d, (set, was), (set, now));
+                        super::overlay::write_cells(&p.info, p.epoch, d, &super::overlay::tracks(&p.revision), (set, was), (set, now));
                     }
                     let mut written = vec![];
                     for (cell, value) in reach.cells {
@@ -939,6 +939,7 @@ impl Actor {
             cells: p.cells.clone(),
             info: p.info.clone(),
             muted: p.revision.compiled.flat.muted.clone(),
+            tracks: super::overlay::tracks(&p.revision),
             origins: if o.playing == Some(number) {
                 None
             } else if failed {
@@ -1043,6 +1044,10 @@ impl Actor {
     /// nothing until its code does (WRITE-20), and is shown with its problems meanwhile.
     fn play(&mut self, session: Session, before: watcher::Before) -> Result<Value> {
         let device = self.inner.device()?;
+        // The mutes and solos the project before still owes its file, first: it may be this one,
+        // opened again, whose file is read below (MON-4).
+        let owed = self.inner.control.lock().open.as_ref().and_then(|p| p.owed());
+        self.inner.save_owed(owed);
         let token = self.inner.next_session.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         let (number, code_rev) = (session.accepted().number, session.accepted().code_rev);
         let controls = Arc::new(session.controls_by_id());
@@ -1071,7 +1076,7 @@ impl Actor {
         let built = match o.session.accepted().has_code() {
             true => {
                 let mut r = build(&o.session, &mut o.audio, &self.inner.owner, Basis::Fresh)?;
-                r.set_overlays(&super::overlay::plan_values(&r.info(), &monitor.set, &o.session.accepted().compiled.flat.muted));
+                r.set_overlays(&super::overlay::plan_values(&r.info(), &monitor.set, o.session.accepted()));
                 let plays = o.describe(&r, &device);
                 Some((r, plays))
             }
@@ -1095,6 +1100,7 @@ impl Actor {
                     cells: plays.cells.clone(),
                     info: plays.info.clone(),
                     muted: plays.revision.compiled.flat.muted.clone(),
+                    tracks: super::overlay::tracks(&plays.revision),
                     origins: None,
                 };
                 o.load(&device, r, plays, 0.0, None)?;
@@ -1108,7 +1114,7 @@ impl Actor {
         let rev = o.session.accepted();
         *self.inner.timing.lock() = Some(Timing { tempo: rev.tempo(), rate: rev.project.sample_rate(), range: None, on: false });
         let shown = Arc::new(o.shown());
-        {
+        let owed = {
             let mut cp = self.inner.control.lock();
             // Every gesture of the project before ends: a fresh engine plays this one's code.
             self.inner.end_all(&mut cp);
@@ -1116,8 +1122,9 @@ impl Actor {
             revs.push(number, code_rev);
             let engine = Arc::new(EngineView { token, revision: number, code_rev, controls, plays: view });
             let aliases = Arc::new(super::Aliases { to: code_rev, ids: HashMap::new() });
-            cp.open = Some(Published { engine, shown, revs, aliases, overlays: monitor });
-        }
+            cp.open.replace(Published { engine, shown, revs, aliases, overlays: monitor }).and_then(|p| p.owed())
+        };
+        self.inner.save_owed(owed);
         *self.inner.watch.lock() = Some(watcher::Watch::new(token, o.session.accepted(), before));
         self.open = Some(o);
         self.inner.state().context("no project is open")
@@ -1151,11 +1158,13 @@ impl Actor {
     /// instances are destroyed on the plugin main thread before this returns, or 2 s pass (a device
     /// thread that hangs still holds a renderer).
     pub(super) fn close(&mut self) -> super::Teardown {
-        {
+        let owed = {
             let mut cp = self.inner.control.lock();
             self.inner.end_all(&mut cp);
-            cp.open = None;
-        }
+            cp.open.take().and_then(|p| p.owed())
+        };
+        // A mute or solo made since the file was last written is saved before the project goes.
+        self.inner.save_owed(owed);
         if let Some(d) = self.inner.current_device() {
             let _ = d.player.unload();
         }

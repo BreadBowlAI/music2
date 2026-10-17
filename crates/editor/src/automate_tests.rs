@@ -256,9 +256,11 @@ fn remove_automation_puts_the_heard_value_back() {
 fn remove_automation_refuses_what_it_cant_take_out() {
     let f = fixture("examples/first-song");
     let mut s = f.open();
-    for (module, key, says) in [("bass", "notes", "isn't an automation lane"), ("bass", "nope", "no lane"), ("nobody", "x", "no track")] {
-        let why = remove(&mut s, module, key, None).unwrap_err().to_string();
-        assert!(why.contains(says), "{module}/{key}: {why}");
+    let why = remove(&mut s, "bass", "notes", None).unwrap_err().to_string();
+    assert!(why.contains("isn't an automation lane"), "{why}");
+    // Said whole, as the user reads it.
+    for (module, key, says) in [("bass", "nope", "Bass has no lane `nope`."), ("nobody", "x", "There's no track `nobody`.")] {
+        assert_eq!(remove(&mut s, module, key, None).unwrap_err().to_string(), says);
     }
     let why = remove(&mut s, "bass", "cutoff", Some(f64::NAN)).unwrap_err().to_string();
     assert!(why.contains("beat"), "{why}");

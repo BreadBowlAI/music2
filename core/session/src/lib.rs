@@ -29,7 +29,7 @@ use std::sync::Arc;
 use m2_ir::{Diagnostic, Flat, Ir, Severity};
 use m2_runtime::PackageSet;
 use m2_script::{Descriptor, UnitCtor};
-use m2_song::{DataSet, Project, Version};
+use m2_song::{DataSet, Manifest, Project, Version};
 use serde::Serialize;
 
 pub use session::{Past, Revision, Session, StepError, Stepped, journal_problems};
@@ -171,7 +171,7 @@ pub fn compile_sources(
 /// Build a project's code: check its dependencies, run the TypeScript (QuickJS), bind the hosted
 /// plugins and check the graph. What only the code decides; the data is [`read_data`]'s.
 pub fn build_code(project: &Project, packages: &mut PackageSet) -> Result<Arc<Code>, Vec<Diagnostic>> {
-    let unmet = dependencies(project, packages);
+    let unmet = dependencies(&project.manifest, packages);
     if !unmet.is_empty() {
         return Err(unmet);
     }
@@ -216,12 +216,12 @@ pub fn catalog(packages: &PackageSet) -> m2_script::Catalog {
 
 /// Every `[dependencies]` entry against what is installed (FMT-3): the SDK this build runs, and
 /// each package's own version.
-fn dependencies(project: &Project, packages: &PackageSet) -> Vec<Diagnostic> {
+fn dependencies(manifest: &Manifest, packages: &PackageSet) -> Vec<Diagnostic> {
     let installed = |name: &str| match name {
         m2_song::SDK => Version::parse(m2_script::SDK_VERSION),
         _ => packages.packages().find(|p| p.name == name).and_then(|p| Version::parse(&p.version)),
     };
-    project.manifest.check_dependencies(installed).into_iter().map(diagnostic).collect()
+    manifest.check_dependencies(installed).into_iter().map(diagnostic).collect()
 }
 
 /// A project diagnostic from `core/song` as the build's diagnostics are shaped (no fixes).
@@ -265,7 +265,7 @@ mod tests {
     }
 
     pub(crate) const MANIFEST: &str =
-        "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n";
+        "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.2\"\n";
 
     fn project(files: &[(&str, &str)]) -> PathBuf {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -330,17 +330,65 @@ export default song(() => v.out);
         std::fs::remove_dir_all(dir).ok();
     }
 
-    // FMT-3: an unmet dependency is refused before any code runs.
+    /// [`MANIFEST`], asking for std `req`.
+    fn asking_for_std(req: &str) -> String {
+        MANIFEST.lines().map(|l| if l.starts_with("std = ") { format!("std = \"{req}\"\n") } else { format!("{l}\n") }).collect()
+    }
+
+    // FMT-3: an unmet dependency is refused before any code runs. A song asking for an older std
+    // is told how to move to the one bundled (L7); one asking for a newer std is not.
     #[test]
     fn unmet_dependencies_block() {
         let dir = project(&[("song.ts", SONG)]);
-        std::fs::write(dir.join("music2.toml"), MANIFEST.replace("std = \"0.1\"", "std = \"9\"")).unwrap();
+        std::fs::write(dir.join("music2.toml"), asking_for_std("9")).unwrap();
         let e = compile_dir(&dir).err().unwrap();
         assert_eq!(e.iter().map(|d| d.code).collect::<Vec<_>>(), ["pkg.unsatisfied"]);
+        assert!(!e[0].message.contains("This app has"), "{}", e[0].message);
+        std::fs::write(dir.join("music2.toml"), asking_for_std("0.0")).unwrap();
+        let e = compile_dir(&dir).err().unwrap();
+        assert_eq!(e.iter().map(|d| d.code).collect::<Vec<_>>(), ["pkg.unsatisfied"]);
+        // std is 0.x, so a song asks for it by its first two numbers.
+        let Version(major, minor, _) = Version::parse(&std_packages().get("std").unwrap().version).unwrap();
+        let hint = format!(
+            "This app has std {major}.{minor}. To use it, change the std line in music2.toml to std = \"{major}.{minor}\". The song"
+        );
+        assert!(e[0].message.starts_with(&hint), "{}", e[0].message);
         std::fs::write(dir.join("music2.toml"), MANIFEST.replace("\"@m2/core\" = \"1\"", "\"@m2/core\" = \"2\"")).unwrap();
         let e = compile_dir(&dir).err().unwrap();
         assert_eq!(e.iter().map(|d| d.code).collect::<Vec<_>>(), ["sdk.unsatisfied"]);
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    // FMT-3: every project the repo ships asks for what this build has: the SDK and the bundled
+    // std. So a std bump that leaves a manifest behind fails here, with no grep needed.
+    #[test]
+    fn every_shipped_manifest_is_met() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let packages = std_packages();
+        let mut unmet = vec![];
+        for root in ["examples", "templates", "core/session/tests/fixtures", "e2e/fixtures"] {
+            let mut found = 0;
+            let mut stack = vec![repo.join(root)];
+            while let Some(d) = stack.pop() {
+                let file = d.join("music2.toml");
+                if file.exists() {
+                    found += 1;
+                    let name = file.strip_prefix(&repo).unwrap().display().to_string();
+                    let manifest = Manifest::read(&std::fs::read_to_string(&file).unwrap()).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+                    unmet.extend(dependencies(&manifest, &packages).into_iter().map(|d| format!("{name}: {}", d.message)));
+                    continue;
+                }
+                for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                    if e.file_type().is_ok_and(|t| t.is_dir()) {
+                        stack.push(e.path());
+                    }
+                }
+            }
+            // Finding none fails: a test built in a folder that has since moved would pass having
+            // checked nothing.
+            assert!(found > 0, "no music2.toml under {}", repo.join(root).display());
+        }
+        assert!(unmet.is_empty(), "shipped projects this build can't build:\n{}", unmet.join("\n"));
     }
 
     // DIAG-1: data no lane reads is a Warning among the revision's problems.
