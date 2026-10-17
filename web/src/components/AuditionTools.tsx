@@ -1,7 +1,8 @@
 import { Volume2 } from "lucide-react";
-import { moduleName, type GraphState } from "../lib/graph";
+import type { GraphState } from "../lib/graph";
 import { useHeard, type Heard } from "../lib/graph8b";
 import { setAudition, useAudition, useSilent } from "../lib/audition";
+import { inSong, trackName } from "../lib/overlays";
 import { chord } from "../lib/native";
 import { useStore } from "../lib/store";
 import { Button, keepFocus } from "./ui";
@@ -31,9 +32,9 @@ export default function AuditionTools({ graph, module, lane }: { graph: GraphSta
   const heard = useHeard(module);
   const silent = useSilent(module, lane);
   const solo = useStore((s) => s.graph?.overlays?.solo) ?? [];
-  const label = (key: string) =>
-    moduleName(graph.view.modules.find((m) => m.key === key) ?? { key, label: graph.timeline.tracks.find((t) => t.module === key)?.label });
-  const hint = on ? auditionHint(heard, silent, solo.map(label)) : null;
+  // Only the solos that count. A soloed track taken out of the song keeps its entry (MON-4), but
+  // it silences nothing, so the mutes pill leaves it out too.
+  const hint = on ? auditionHint(heard, silent, solo.filter((k) => inSong(graph.overlays, k)).map((k) => trackName(graph, k))) : null;
   return (
     <>
       {hint && (

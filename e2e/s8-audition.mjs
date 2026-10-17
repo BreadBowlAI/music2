@@ -1,8 +1,8 @@
 // 8b.6 Audition in Notes (design-8b §8.4, taste.md NT-2, NT-3; the 8b-ui plan's U9): a note sounds
 // while it is pressed, a drag plays each pitch it crosses, the keyboard's keys are playable, the
 // toggle, every way a held note is let go (pointer up, the toggle, ⌘., Space with no pointer down,
-// the page closing), the header's hints (muted, muted in the song, silenced by a solo, a lane
-// nothing plays), a read-only roll that still sounds, a PC page's words, and a note heard while
+// the page closing), the header's hints (muted, muted in the song, silenced by a solo, naming only
+// the solos still in the song, a lane nothing plays), a read-only roll that still sounds, a PC page's words, and a note heard while
 // stopped on a server of the suite's own that plays into a file (M2_AUDIO_CAPTURE).
 //
 // M2_AUDIO=none plays in real time with no device, so the server's `live` (notes sounding, in
@@ -214,6 +214,20 @@ check(await openClip(page, "keys.chords"), "the Keys clip opens in Notes");
 check(await until(async () => (await hint()) === "Silenced by the Bass solo · audition is silent"), `with Bass soloed, the Keys roll says: ${await hint()}`);
 const hintStyle = await page.$eval("[data-testid=audition-hint]", (e) => { const s = getComputedStyle(e); return `${s.fontSize} ${s.color}`; }).catch(() => "no hint");
 check(hintStyle === "11px rgb(101, 105, 111)", `in text-xs fg-muted (${hintStyle})`);
+// Hats soloed too, then taken out of the song: its solo stays in the file (MON-4) but no longer
+// counts, so the hint names only Bass's, as the mutes pill counts one solo.
+await post("/overlay", { session, solo: { hats: true } });
+const songTs = read("song.ts");
+const noHats = songTs.replace('import hats from "./tracks/hats";\n', "").replace("      hats: { in: hats.out, db: db(-6), pan: 0.3 },\n", "");
+write("song.ts", noHats);
+check(noHats !== songTs && (await until(async () => !(await state()).timeline.tracks.some((t) => t.module === "hats"), 10000)), "Hats, soloed, is taken out of song.ts");
+check(
+  (await until(async () => (await hint()) === "Silenced by the Bass solo · audition is silent", 3000)) && (await page.$eval("[data-testid=overlay-pill]", (e) => e.textContent).catch(() => null)) === "1 solo",
+  `the Keys roll still names only Bass's solo, as the pill counts one: ${await hint()}`,
+);
+write("song.ts", songTs);
+await until(async () => (await state()).timeline.tracks.some((t) => t.module === "hats"), 10000);
+await post("/overlay", { session, solo: { hats: false } });
 await post("/overlay", { session, mute: { keys: true } });
 check(await until(async () => (await hint()) === "Muted · audition is silent"), `Keys muted: ${await hint()}`);
 await post("/overlay", { session, clear: true });
