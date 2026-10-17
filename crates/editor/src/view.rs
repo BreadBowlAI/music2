@@ -27,7 +27,7 @@ use m2_session::{Home, Session};
 
 use crate::cable::{Inlet, Outlet, inlets, outlets};
 use crate::controls::{Control, Declared, controls, declared, not_insertable};
-use crate::effect::{bypass_refused, calls_of, effect_at, is_bypassed};
+use crate::effect::{bypass_refused, calls_of, effect_at, is_bypassed, move_row};
 use crate::sites::{Params, fn_params};
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -165,6 +165,28 @@ pub struct EffectMenu {
     /// Why Turn off (Turn on, when it is off) can't run here.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bypass: Option<String>,
+    /// Move left: before the effect it is written around (D2).
+    pub left: MoveRow,
+    /// Move right: after the effect written around it.
+    pub right: MoveRow,
+}
+
+/// A Move row of an effect's ⋯ menu: the effect it swaps with, or why it can't.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct MoveRow {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub with: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refused: Option<String>,
+}
+
+impl MoveRow {
+    fn of(row: Result<String, String>) -> MoveRow {
+        match row {
+            Ok(with) => MoveRow { with: Some(with), refused: None },
+            Err(why) => MoveRow { with: None, refused: Some(why) },
+        }
+    }
 }
 
 /// An input connected by a cable, as the canvas shows it.
@@ -721,7 +743,11 @@ pub fn view(session: &Session) -> GraphView {
             };
             let bypassed = matches!(g, Group::Site(s) if effect.is_some() && is_bypassed(&rev.compiled, *s));
             let menu = match g {
-                Group::Site(s) if effect.is_some() => Some(EffectMenu { bypass: bypass_refused(session, sites[s], !bypassed) }),
+                Group::Site(s) if effect.is_some() => Some(EffectMenu {
+                    bypass: bypass_refused(session, sites[s], !bypassed),
+                    left: MoveRow::of(move_row(session, sites[s], true)),
+                    right: MoveRow::of(move_row(session, sites[s], false)),
+                }),
                 _ => None,
             };
             nodes.push(ViewNode {

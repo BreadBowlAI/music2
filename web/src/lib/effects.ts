@@ -1,6 +1,7 @@
-// An effect card's ⋯ menu (lane D of next): turn an effect off and on again (D1). Each is one undo
-// step on the server, a `TextEdit` of the effect's own call; a refusal says why in words. What the
-// view says of an effect card is added to graph.ts's types from here, as graph8b.ts adds its own.
+// An effect card's ⋯ menu (lane D of next): turn an effect off and on again (D1), move it before
+// or after the effect written next to it (D2). Each is one undo step on the server, a `TextEdit`
+// of the effects' own calls; a refusal says why in words. What the view says of an effect card is
+// added to graph.ts's types from here, as graph8b.ts adds its own.
 
 import { lockReason, readJson, type ViewNode } from "./graph";
 import { recorded, type Step } from "./history";
@@ -11,6 +12,16 @@ import { useStore } from "./store";
 export interface EffectMenu {
   /** Why Turn off (or Turn on, when it is off) can't run here. */
   bypass?: string;
+  /** Move left: before the effect it is written around. */
+  left: MoveRow;
+  /** Move right: after the effect written around it. */
+  right: MoveRow;
+}
+
+/** A Move row: the effect it swaps with ("Reverb"), or why it can't, in words. */
+export interface MoveRow {
+  with?: string;
+  refused?: string;
 }
 
 declare module "./graph" {
@@ -66,4 +77,12 @@ async function edit(path: string, body: Record<string, unknown>, step: Step) {
  */
 export function turnEffect(node: ViewNode, title: string, off: boolean) {
   return edit("/api/graph/effect/bypass", { node: node.id, on: off }, { name: `turning ${title} ${off ? "off" : "on"}` });
+}
+
+/**
+ * Move effect card `node` (called `title`) left, before `other` (`earlier`), or right, after it.
+ * The cards swap on screen, so there is no toast: one undo step, "moving Delay before Reverb".
+ */
+export function moveEffect(node: ViewNode, title: string, other: string, earlier: boolean) {
+  return edit("/api/graph/effect/move", { node: node.id, earlier }, { name: `moving ${title} ${earlier ? "before" : "after"} ${other}` });
 }

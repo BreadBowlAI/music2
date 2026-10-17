@@ -788,3 +788,94 @@ fn a_bypassed_effect_keeps_its_place_in_the_chain() {
     assert_eq!(off.0, edges, "the same edges; the one out of the card is dashed");
     assert_eq!((off.1, off.2), (true, None), "off, and Turn on can run");
 }
+
+// ---------------------------------------------------------------- moved (Next D2)
+
+/// Move `callee`'s effect before the one it is written around (`earlier`) or after the one around it.
+fn moved(s: &mut Session, callee: &str, earlier: bool) -> Result<Edited, EditError> {
+    let (at, id) = (rev(s), call(s, callee));
+    reorder(s, at, &id, earlier)
+}
+
+// Next D2 (Q26): two effects written one inside the other swap: each keeps its own options, the
+// sound they work on stays where it is, and the chain plays them the other way round. Either
+// effect's row does it; undo puts the code back.
+#[test]
+fn two_nested_effects_swap() {
+    let original = fx_song("delay(reverb(osc.saw(hz(110)), { size: 0.8 }), { time: 0.1 })");
+    let swapped = fx_song("reverb(delay(osc.saw(hz(110)), { time: 0.1 }), { size: 0.8 })");
+    let f = Fixture::new(&original);
+    let mut s = f.open();
+    assert_eq!(running(&s), ["std:saw", "std:reverb", "std:delay"]);
+    let done = moved(&mut s, "delay", true).unwrap();
+    assert_eq!(f.source(), swapped);
+    assert_eq!((done.before.as_str(), done.after.as_str()), ("delay(reverb(…))", "reverb(delay(…))"));
+    assert_eq!(running(&s), ["std:saw", "std:delay", "std:reverb"]);
+    s.undo().unwrap();
+    assert_eq!(f.source(), original);
+    moved(&mut s, "reverb", false).unwrap();
+    assert_eq!(f.source(), swapped, "Move right on the inner one is the same swap");
+}
+
+// Next D2: the options go with their effect, positional or in an object, or none; a call over
+// lines keeps its line breaks where they were.
+#[test]
+fn the_options_go_with_their_effect() {
+    for (body, callee, earlier, after) in [
+        ("lowpass(delay(osc.saw(hz(110)), { time: 0.1 }), 800)", "lowpass", true, "delay(lowpass(osc.saw(hz(110)), 800), { time: 0.1 })"),
+        ("delay(reverb(osc.saw(hz(110))))", "reverb", false, "reverb(delay(osc.saw(hz(110))))"),
+        ("delay(reverb(osc.saw(hz(110)), { size: 0.8, bypass: true }))", "delay", true, "reverb(delay(osc.saw(hz(110))), { size: 0.8, bypass: true })"),
+        (
+            "master(\n    delay(\n      reverb(osc.saw(hz(110)), { size: 0.8 }),\n      { time: 0.1 },\n    ),\n  )",
+            "delay",
+            true,
+            "master(\n    reverb(\n      delay(osc.saw(hz(110)),\n      { time: 0.1 },\n    ), { size: 0.8 }),\n  )",
+        ),
+    ] {
+        let original = fx_song(body);
+        let f = Fixture::new(&original);
+        let mut s = f.open();
+        moved(&mut s, callee, earlier).unwrap_or_else(|e| panic!("{body}: {e}"));
+        assert_eq!(f.source(), fx_song(after), "{body}");
+        s.undo().unwrap();
+        assert_eq!(f.source(), original, "{body}: undone");
+    }
+}
+
+// Next D2 (Q26): effects next to each other in the sound but not written one inside the other
+// can't swap here, and say so in words; so does the first effect's Move left and the last one's
+// Move right. The menu's rows say the same.
+#[test]
+fn an_effect_not_next_to_another_is_refused_in_words() {
+    let f = Fixture::new(&fx_song("{\n  const wet = reverb(osc.saw(hz(110)));\n  return delay(wet, { time: 0.1 });\n}"));
+    let mut s = f.open();
+    let words = |r: Result<Edited, EditError>| r.unwrap_err().to_string();
+    let apart = "Reverb and Delay aren't next to each other in the code, so they can't swap here. Change their order in code.";
+    assert!(words(moved(&mut s, "delay", true)).contains(apart));
+    assert!(words(moved(&mut s, "reverb", false)).contains(apart));
+    assert!(words(moved(&mut s, "reverb", true)).contains("Reverb is the first effect here."));
+    assert!(words(moved(&mut s, "delay", false)).contains("Delay is the last effect here."));
+    let view = crate::view::view(&s);
+    let menu = |label: &str| view.modules[0].nodes.iter().find(|n| n.label == label).and_then(|n| n.menu.clone()).unwrap();
+    assert_eq!(menu("delay").left.refused.as_deref(), Some(apart));
+    assert_eq!(menu("reverb").right.refused.as_deref(), Some(apart));
+    // Written one inside the other, the rows name the effect they swap with.
+    let f = Fixture::new(&fx_song("delay(reverb(osc.saw(hz(110))))"));
+    let s = f.open();
+    let view = crate::view::view(&s);
+    let menu = |label: &str| view.modules[0].nodes.iter().find(|n| n.label == label).and_then(|n| n.menu.clone()).unwrap();
+    assert_eq!((menu("delay").left.with.as_deref(), menu("reverb").right.with.as_deref()), (Some("Reverb"), Some("Delay")));
+    assert_eq!(menu("reverb").left.refused.as_deref(), Some("Reverb is the first effect here."));
+}
+
+// Next D2: moving one way and back is the code it was.
+#[test]
+fn moving_twice_is_the_same_code() {
+    let original = fx_song("delay(reverb(osc.saw(hz(110)), { size: 0.8 }), { time: 0.1 })");
+    let f = Fixture::new(&original);
+    let mut s = f.open();
+    moved(&mut s, "delay", true).unwrap();
+    assert_ne!(f.source(), original);
+    moved(&mut s, "delay", false).unwrap();
+    assert_eq!(f.source(), original);
+}

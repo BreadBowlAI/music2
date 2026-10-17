@@ -83,20 +83,19 @@ fn made_by(compiled: &Compiled, site: u32) -> Option<(String, BTreeSet<String>)>
     Some((output.module.clone(), ids))
 }
 
-/// Whether `with` is `without` plus effect call `site`: removing the call's nodes and
-/// reading what they read in place of their output gives exactly `without`.
-fn wraps(with: &Compiled, without: &Ir, site: u32) -> bool {
-    let mut outputs = with.outputs.iter().filter(|o| o.site == site);
-    let (Some(output), None) = (outputs.next(), outputs.next()) else { return false };
-    let Some((module, ids)) = made_by(with, site) else { return false };
-    let ids: BTreeSet<&str> = ids.iter().map(String::as_str).collect();
+/// What call `site` of `c` reads from outside itself (one of these is its input), its own
+/// output, its nodes and their module: `None` unless it gave exactly one output it made.
+fn reads_of(c: &Compiled, site: u32) -> Option<(String, BTreeSet<String>, String, BTreeSet<String>)> {
+    let mut outputs = c.outputs.iter().filter(|o| o.site == site);
+    let (Some(output), None) = (outputs.next(), outputs.next()) else { return None };
+    let (module, ids) = made_by(c, site)?;
     if !ids.contains(split_ref(&output.port).0) {
-        return false;
+        return None;
     }
-    // What the effect reads from outside itself: one of these is its input. Its nodes may be
-    // in a voice (an effect inside `poly`), so every node list is searched, voices included.
+    // Its nodes may be in a voice (an effect inside `poly`), so every node list is searched,
+    // voices included.
     let inputs = std::cell::RefCell::new(BTreeSet::new());
-    let m = with.ir.modules.iter().find(|m| m.key == module).expect("the output's module");
+    let m = c.ir.modules.iter().find(|m| m.key == module).expect("the output's module");
     walk(&m.nodes, &mut |n| {
         if !ids.contains(n.id.as_str()) {
             return;
@@ -112,9 +111,22 @@ fn wraps(with: &Compiled, without: &Ir, site: u32) -> bool {
             }
         });
     });
-    let inputs = inputs.into_inner();
+    Some((module, ids, output.port.clone(), inputs.into_inner()))
+}
+
+/// `ir` (a graph with call `site` of `c` in it, as `c` made it) without that call: its nodes
+/// out, and what read its output reading one of what it read instead; one graph for each.
+fn unwrapped(c: &Compiled, ir: &Ir, site: u32) -> Vec<Ir> {
+    let Some((module, ids, output, inputs)) = reads_of(c, site) else { return vec![] };
+    let ids: BTreeSet<&str> = ids.iter().map(String::as_str).collect();
+    inputs.iter().filter_map(|input| excise(ir, &module, &ids, &|r| r == output, input)).collect()
+}
+
+/// Whether `with` is `without` plus effect call `site`: removing the call's nodes and
+/// reading what they read in place of their output gives exactly `without`.
+fn wraps(with: &Compiled, without: &Ir, site: u32) -> bool {
     let without = canonical(without);
-    inputs.iter().any(|input| excise(&with.ir, &module, &ids, &|r| r == output.port, input).is_some_and(|ir| canonical(&ir) == without))
+    unwrapped(with, &with.ir, site).iter().any(|ir| canonical(ir) == without)
 }
 
 /// How an effect's insert value is written (D11): a number in a spelling of scale 1 (all of
@@ -437,6 +449,139 @@ pub fn bypass(s: &mut Session, at: u64, call: &str, on: bool) -> Result<Edited, 
     let done = plan::run_as(s, tx, said, |s, checked| {
         unmoved(s, checked)?;
         assert(checked)
+    })?;
+    Ok(Edited { revision: done.number, file: site.file, before: label.0, after: label.1 })
+}
+
+/// An effect call and what it is.
+type Effect = (Site, Arc<Descriptor>);
+
+/// The effect calls written next to effect call `site` (Next D2): the one written as its first
+/// argument (before it in the sound), and the one it is the first argument of (after it).
+fn written_next(s: &Session, site: &Site) -> (Option<Effect>, Option<Effect>) {
+    let sites = &s.accepted().compiled.sites;
+    let effect = |x: &Site| Some((x.clone(), effect_at(s, x)?));
+    let span = site.args.first().map(Arg::span);
+    let inner = sites.iter().find(|x| x.file == site.file && Some((x.start, x.end)) == span).and_then(effect);
+    let outer = sites.iter().find(|x| x.file == site.file && x.args.first().is_some_and(|a| a.span() == (site.start, site.end)));
+    (inner, outer.and_then(effect))
+}
+
+/// The effects next to effect call `site` in the sound, however the code is written: the call
+/// whose output it reads, and the call that reads its output, when each is an effect.
+fn chained_next(s: &Session, site: u32) -> (Option<Arc<Descriptor>>, Option<Arc<Descriptor>>) {
+    let compiled = &s.accepted().compiled;
+    let Some((module, ids, output, inputs)) = reads_of(compiled, site) else { return (None, None) };
+    let Some(m) = compiled.ir.modules.iter().find(|m| m.key == module) else { return (None, None) };
+    let sites: BTreeMap<u32, &Site> = compiled.sites.iter().map(|x| (x.id, x)).collect();
+    // The project's call a node is part of: its outermost one.
+    let call = |n: &Node| {
+        let site = calls_of(m, n).find(|f| sites.get(f).is_some_and(|x| x.in_project)).or(n.origin.as_ref().map(|o| o.site))?;
+        effect_at(s, sites.get(&site)?)
+    };
+    let mut before = None;
+    let mut after = None;
+    walk(&m.nodes, &mut |n| {
+        if ids.contains(&n.id) {
+            return;
+        }
+        if inputs.iter().any(|r| split_ref(r).0 == n.id) && before.is_none() {
+            before = call(n);
+        }
+        let mut node = vec![n.clone()];
+        if let Op::Poly { body, .. } = &mut node[0].op {
+            body.nodes.clear();
+        }
+        let reads = std::cell::Cell::new(false);
+        refs(&mut node, &mut BTreeMap::new(), &|_| {}, &|r: &mut String| reads.set(reads.get() || *r == output));
+        if reads.get() && after.is_none() {
+            after = call(n);
+        }
+    });
+    (before, after)
+}
+
+/// Why effect call `site` (`d`) can't swap with the effect before it (`earlier`) or after it
+/// here, in words; and the effect it would swap with, when it can.
+fn move_plan(s: &Session, site: &Site, d: &Descriptor, earlier: bool) -> Result<Effect, String> {
+    let (inner, outer) = written_next(s, site);
+    let written = if earlier { inner } else { outer };
+    if let Some(other) = written {
+        let (outer, inner) = if earlier { (site, &other.0) } else { (&other.0, site) };
+        let text = |a: &Arg| s.accepted().snapshot.files.get(Path::new(&site.file)).and_then(|t| t.get(a.span().0 as usize..a.span().1 as usize).map(str::to_string));
+        let spread = outer.args.iter().chain(&inner.args).any(|a| text(a).is_some_and(|t| t.trim_start().starts_with("...")));
+        if spread || inner.args.is_empty() || !(outer.start < outer.open && inner.start < inner.open) {
+            let what = if spread { "one of them spreads its arguments" } else { "they aren't written as plain calls" };
+            return Err(format!("{} and {} can't swap here: {what}. Change their order in code.", other.1.label, d.label));
+        }
+        return Ok(other);
+    }
+    let (before, after) = chained_next(s, site.id);
+    match (earlier, before, after) {
+        (true, Some(b), _) => Err(format!("{} and {} aren't next to each other in the code, so they can't swap here. Change their order in code.", b.label, d.label)),
+        (false, _, Some(a)) => Err(format!("{} and {} aren't next to each other in the code, so they can't swap here. Change their order in code.", d.label, a.label)),
+        (true, ..) => Err(format!("{} is the first effect here.", d.label)),
+        (false, ..) => Err(format!("{} is the last effect here.", d.label)),
+    }
+}
+
+/// What the ⋯ menu's Move left (`earlier`) or Move right row of effect call `site` says: the
+/// effect it swaps with, or why it can't.
+pub(crate) fn move_row(s: &Session, site: &Site, earlier: bool) -> Result<String, String> {
+    let d = effect_at(s, site).ok_or_else(|| format!("`{}` is not an effect", site.callee))?;
+    move_plan(s, site, &d, earlier).map(|(_, other)| other.label.clone())
+}
+
+/// Move effect call `call` before the effect it is written around (`earlier`), or after the one
+/// written around it (Next D2): `outer(inner(x, I), O)` becomes `inner(outer(x, O), I)`, each
+/// effect keeping its own text. Two edits: the callees' heads swapped, and their tails. Confined
+/// to the outer call. The planner asserts that the two now read each other the other way round,
+/// and that with both taken out the graph is the same as before. Effects not written one inside
+/// the other are refused in words (Q26).
+pub fn reorder(s: &mut Session, at: u64, call: &str, earlier: bool) -> Result<Edited, EditError> {
+    ready(s)?;
+    let site = current_site(s, at, call)?.clone();
+    let effect = effect_at(s, &site).ok_or_else(|| EditError::Rejected(format!("`{}` is not an effect that can be moved here", site.callee)))?;
+    let (other, d) = move_plan(s, &site, &effect, earlier).map_err(EditError::Rejected)?;
+    let ((outer, od), (inner, id)) = if earlier { ((site.clone(), effect.clone()), (other, d)) } else { ((other, d), (site.clone(), effect.clone())) };
+    let text = s.accepted().snapshot.files.get(Path::new(&site.file)).ok_or_else(|| EditError::NotFound(site.file.clone()))?.clone();
+    let t = |a: u32, b: u32| text[a as usize..b as usize].to_string();
+    let x = inner.args[0].span();
+    // outer( gap inner( gap x itail otail  →  inner( gap outer( gap x otail itail
+    let head = format!("{}{}{}{}", t(inner.start, inner.open + 1), t(outer.open + 1, inner.start), t(outer.start, outer.open + 1), t(inner.open + 1, x.0));
+    let tail = format!("{}{}", t(inner.end, outer.end), t(x.1, inner.end));
+    let edits = [(outer.start, x.0, head), (x.1, outer.end, tail)];
+    // Where the outer call starts now: after the inner one's head and the gap.
+    let shift = inner.open - outer.open;
+    let file = path(&site.file)?;
+    let ranges = Ranges::Ranges(vec![Range::bytes(outer.start, outer.end)]);
+    let expect = Expect::Confined(Confined { ranges: [(file.clone(), ranges)].into(), ..Confined::default() });
+    let label = (format!("{}({}(…))", outer.callee, inner.callee), format!("{}({}(…))", inner.callee, outer.callee));
+    let tx = plan::planned(s, label.clone(), vec![plan::text_edit(&file, &text, &edits)], expect);
+    let refused = || EditError::Rejected(format!("swapping {} and {} would change more than their order", id.label, od.label));
+    let said = |why: &str| EditError::Rejected(format!("swapping {} and {} would change more than their order ({why})", id.label, od.label));
+    let done = plan::run_as(s, tx, said, |s, checked| {
+        unmoved(s, checked)?;
+        let (b, c) = (&checked.baseline().compiled, &checked.candidate().compiled);
+        let find = |start: u32, callee: &str| c.sites.iter().find(|x| x.file == outer.file && x.start == start && x.callee == callee).map(|x| x.id);
+        let (Some(now_outer), Some(now_inner)) = (find(outer.start, &inner.callee), find(outer.start + shift, &outer.callee)) else { return Err(refused()) };
+        // The other way round: the outer call reads the inner one's output, in each (or the
+        // inner one is turned off, and gives its input on).
+        let reads = |c: &Compiled, reader: u32, read: u32| {
+            is_bypassed(c, read) || reads_of(c, reader).zip(reads_of(c, read)).is_some_and(|(r, o)| r.3.contains(&o.2))
+        };
+        if !reads(b, outer.id, inner.id) || !reads(c, now_outer, now_inner) {
+            return Err(refused());
+        }
+        // With both taken out, the same graph.
+        let bare = |c: &Compiled, first: u32, then: u32| -> Vec<Ir> {
+            unwrapped(c, &c.ir, first).iter().flat_map(|ir| unwrapped(c, ir, then)).map(|ir| canonical(&ir)).collect()
+        };
+        let was = bare(b, outer.id, inner.id);
+        match bare(c, now_outer, now_inner).iter().any(|ir| was.contains(ir)) {
+            true => Ok(()),
+            false => Err(refused()),
+        }
     })?;
     Ok(Edited { revision: done.number, file: site.file, before: label.0, after: label.1 })
 }

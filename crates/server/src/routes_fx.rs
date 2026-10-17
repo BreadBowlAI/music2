@@ -1,4 +1,4 @@
-//! Lane D's routes (next): turn an effect off and on. In a router of its own, merged into the
+//! Lane D's routes (next): turn an effect off and on, and move it before or after another. In a router of its own, merged into the
 //! API's, as `routes_mix.rs` is; a route here that writes the project is in [`WRITES_FX`], and a
 //! read-only window answers it 423 with WRITE-18's message.
 
@@ -19,10 +19,13 @@ type S = State<Arc<AppState>>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
 /// The routes here that write the open project.
-pub const WRITES_FX: &[&str] = &["/api/graph/effect/bypass"];
+pub const WRITES_FX: &[&str] = &["/api/graph/effect/bypass", "/api/graph/effect/move"];
 
 pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
-    Router::new().route("/api/graph/effect/bypass", post(effect_bypass)).route_layer(axum::middleware::from_fn_with_state(state, writes))
+    Router::new()
+        .route("/api/graph/effect/bypass", post(effect_bypass))
+        .route("/api/graph/effect/move", post(effect_move))
+        .route_layer(axum::middleware::from_fn_with_state(state, writes))
 }
 
 /// A write to a project open read-only answers 423 (WRITE-17), as in `routes.rs`.
@@ -54,6 +57,26 @@ struct BypassReq {
 async fn effect_bypass(State(s): S, Json(r): Json<BypassReq>) -> ApiResult {
     let state = s.clone();
     let result = blocking(move || state.graph.bypass(r.session, r.revision, &r.node, r.on)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct MoveReq {
+    session: u64,
+    revision: u64,
+    /// The effect's card: its call, `file#ordinal`.
+    node: String,
+    /// Before the effect it is written around (Move left), or after the one around it.
+    earlier: bool,
+}
+
+/// Move an effect before or after the one written next to it (Next D2): `{session, revision, node,
+/// earlier}`, one Tx and one undo step. A write. Answers `{file, before, after, revision}`; effects
+/// not written one inside the other are refused in words.
+async fn effect_move(State(s): S, Json(r): Json<MoveReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.move_effect(r.session, r.revision, &r.node, r.earlier)).await;
     s.graph_changed();
     Ok(Json(result?))
 }

@@ -1,5 +1,7 @@
 import clsx from "clsx";
 import {
+  ArrowLeft,
+  ArrowRight,
   AudioLines,
   Clock,
   Ellipsis,
@@ -44,7 +46,7 @@ import {
   type PortKind,
   type ViewNode,
 } from "../lib/graph";
-import { turnEffect } from "../lib/effects";
+import { moveEffect, turnEffect } from "../lib/effects";
 import { laneMade } from "../lib/events";
 import { mod, opt } from "../lib/native";
 import { useShell } from "../lib/shell";
@@ -750,8 +752,11 @@ function NodeCard({
   const toast = useStore((s) => s.toast);
   const [picking, setPicking] = useState<HTMLElement | null>(null);
   const closePicker = useCallback(() => setPicking(null), []);
-  // The effect card's ⋯ menu, open from this button.
+  // The effect card's ⋯ menu, open from this button. A card kept across an edit may show
+  // another call now: its menu closes then.
   const [menu, setMenu] = useState<HTMLElement | null>(null);
+  const call = `${node.id} ${node.label}`;
+  useEffect(() => setMenu(null), [call]);
   const why = useContext(Locked);
   /** A structural edit: said in words, with its Undo (taste.md §2.14, ST-5); a refusal says why. */
   const edited = (p: Promise<{ revision: number }>, words: string) =>
@@ -925,8 +930,8 @@ function NodeCard({
 }
 
 /**
- * An effect card's ⋯ menu (taste.md §3.5, next X11): Turn off or Turn on. A row that can't run
- * here is greyed, with why in its tooltip.
+ * An effect card's ⋯ menu (taste.md §3.5, next X11): Turn off or Turn on, Move left and Move
+ * right. A row that can't run here is greyed, with why in its tooltip.
  */
 function EffectMenuPopover({ node, title, anchor, locked, onClose }: { node: ViewNode; title: string; anchor: HTMLElement; locked: string | null; onClose: () => void }) {
   const off = !!node.bypassed;
@@ -945,6 +950,26 @@ function EffectMenuPopover({ node, title, anchor, locked, onClose }: { node: Vie
       >
         {off ? "Turn on" : "Turn off"}
       </MenuRow>
+      {([true, false] as const).map((earlier) => {
+        const row = earlier ? node.menu?.left : node.menu?.right;
+        const why = locked ?? row?.refused ?? null;
+        const other = row?.with;
+        return (
+          <MenuRow
+            key={String(earlier)}
+            icon={earlier ? <ArrowLeft size={14} /> : <ArrowRight size={14} />}
+            disabled={!!why || !other}
+            title={why ?? `Move ${title} ${earlier ? "before" : "after"} ${other}`}
+            data-testid={earlier ? "effect-left" : "effect-right"}
+            onClick={() => {
+              onClose();
+              if (other) void moveEffect(node, title, other, earlier);
+            }}
+          >
+            {earlier ? "Move left" : "Move right"}
+          </MenuRow>
+        );
+      })}
     </Popover>
   );
 }

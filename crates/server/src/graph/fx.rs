@@ -1,5 +1,5 @@
-//! Lane D (next): turn an effect off and on, through `m2_editor::effect` on the actor, as every
-//! builder runs.
+//! Lane D (next): turn an effect off and on, and move it, through `m2_editor::effect` on the
+//! actor, as every builder runs.
 
 use anyhow::Result;
 use serde_json::Value;
@@ -12,5 +12,13 @@ impl Graph {
     pub fn bypass(&self, token: u64, revision: u64, call: &str, on: bool) -> Result<Value> {
         let call = call.to_string();
         self.edit(token, move |s| m2_editor::effect::bypass(s, revision, &call, on))
+    }
+
+    /// Move effect call `call` before the effect it is written around (`earlier`) or after the
+    /// one written around it. One Tx and one undo step; refused in words when the two aren't
+    /// written one inside the other.
+    pub fn move_effect(&self, token: u64, revision: u64, call: &str, earlier: bool) -> Result<Value> {
+        let call = call.to_string();
+        self.edit(token, move |s| m2_editor::effect::reorder(s, revision, &call, earlier))
     }
 }

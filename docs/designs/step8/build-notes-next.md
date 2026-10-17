@@ -148,6 +148,61 @@ the ⋯ menu (the card's own buttons stay).
 **Contract:** `bypass: true` in any audio-to-audio component call's options gives its audio input on; its frame
 records `bypass` (IR, written only when true); the engine never runs it. Route `POST /api/graph/effect/bypass`.
 
+### D2. Move an effect before or after another (Q26, X11)
+
+**In short**
+
+| What | Now |
+|---|---|
+| The ⋯ menu | Also has **Move left** and **Move right** |
+| Move left on Delay, after Reverb | Delay goes before Reverb. Each keeps its own settings. The cards swap |
+| When it can't | The row is grey. Its tooltip says why: "Reverb and Delay aren't next to each other in the code, so they can't swap here. Change their order in code.", or "Delay is the last effect here." |
+| Undo | One step: "Undo moving Delay before Reverb" |
+
+**What changed**
+
+- `crates/editor/src/effect.rs`: `reorder(s, at, call, earlier)`. Only two effects written one directly inside the
+  other: `outer(inner(x, I), O)` becomes `inner(outer(x, O), I)`. Two edits: the heads (`outer(` and `inner(` swapped,
+  the gaps after each `(` kept where they were) and the tails (`, O)` and `, I)` swapped). The sound they work on (`x`)
+  isn't touched, so its nodes keep their names. Confined to the outer call. The planner asserts that the outer call
+  reads the inner one's output in each graph (or the inner one is turned off), and that with both effects taken out
+  the two graphs are the same. `wraps` is now built on `reads_of` and `unwrapped` (the graph without a call, one per
+  input it could stand for), which the assertion uses twice.
+- Words (Q26): effects next to each other in the sound but not in the code; "Delay is the first effect here." and
+  "… the last effect here." for a row with no effect on that side; calls that spread their arguments.
+- `view.rs`: `EffectMenu.left`, `.right`: `MoveRow { with, refused }` (the effect it swaps with, or why not).
+- Server: `POST /api/graph/effect/move {session, revision, node, earlier}` (`routes_fx.rs`, in `WRITES_FX`;
+  `graph/fx.rs` `move_effect`).
+- Web: `moveEffect` in `effects.ts`; the menu's two rows (`ArrowLeft`, `ArrowRight`), greyed with the words in the
+  tooltip, "Move Delay before Reverb" when they run. No toast: the cards swap on screen. A card kept across an edit
+  that now shows another call closes its menu.
+
+**Tests**
+
+- `crates/editor`: `two_nested_effects_swap` (the code, the label `delay(reverb(…))` → `reverb(delay(…))`, the order
+  the engine runs them, undo, and Move right on the inner one), `the_options_go_with_their_effect` (positional, none, a
+  turned-off one, over lines), `an_effect_not_next_to_another_is_refused_in_words` (and the menu's rows, and the
+  first and last), `moving_twice_is_the_same_code`. 293 of 293; clippy clean on `m2-editor`, `m2-server`.
+- `nx-effects` gains 14 (39): Delay added after Reverb; its rows and Reverb's, greyed with why; lint of the menu;
+  Move left writes the swap; the cards swap; no toast; "Undo moving Delay before Reverb"; ⌘Z; after an outside save
+  that binds Reverb to a name, Delay's Move left is greyed with Q26's words. Moves: `effects`, `s6-builders`,
+  `graph`, `taste`: all pass.
+
+**Red first**
+
+- `crates/editor` with `reorder` a stub: 4 of 4 fail (`Rejected("stub")`; `assertion failed: words(moved(&mut s,
+  "delay", true)).contains(apart)`).
+- `nx-effects` on D1's server (`bin/d-d1a`) with this page: `FAIL  Delay's Move left: Move left (off): Move Delay
+  before undefined`, `FAIL  Move left: Delay goes before Reverb, each with its own settings`, `FAIL  the cards swap
+  places`.
+
+**Left:** a call written over lines keeps its gaps where they were, so its lines read oddly after a swap (it is still
+right). Effects not written one inside the other, or in two files, are refused (Q26).
+
+**For gaps.md:** #21: an effect moves before or after the effect written next to it.
+
+**Contract:** Route `POST /api/graph/effect/move`; one Tx that swaps two nested effect calls, each keeping its text.
+
 ## Merge
 
 ## End
