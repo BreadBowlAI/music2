@@ -291,6 +291,13 @@ into the mixer", and doesn't say how. This is how:
 The lookup reads the accepted revision's IR (frames, origins, edges) and runs once per revision, in microseconds at p50
 *estimate*.
 
+**Built (B3, lead decision T7):** steps 2 and 3 as above, in `mix::mixer` (`crates/editor/src/mix.rs`), with three
+details. Only the song's own nodes are walked, so a track that another track reads (a bus) reaches the mixer as that
+track. A panner whose `pan` is a signal passes the walk on to the gain after it. A strip whose `db` is a signal and that
+has no panner reads none of its channel's controls; there the read's place in the channel's property says which. The
+track builders edit a channel's property, so Duplicate refuses a channel that doesn't name its track (`kick: k`), and
+Delete lists the binding as code it can't take out.
+
 ### 2.4 Words
 
 Each builder writes its own label pair for history, in words from labels and descriptors (taste §1.3, ST-5, gaps #29).
@@ -309,7 +316,7 @@ toast prints a diff, a key or a path.
 | delete | "Kick" → "" | "Deleted Kick" (with dependents: "Deleted Kick and 2 Ducks") | "Undid deleting Kick" |
 | reorder | "Kick" → "Kick" | — | — |
 | recolour | "rose" → "teal" | — | — |
-| tempo | "124 BPM" → "128 BPM" ("… from bar 9" when not the first entry) | — (except "Loop turned off: it's shorter than a beat at 128 BPM", §4.1) | — |
+| tempo | "124 BPM" → "128 BPM" ("… from bar 9" when not the first entry) | — (except "Loop turned off: it's too short to play at 128 BPM", §4.1) | — |
 | meter | "4/4" → "7/8 from bar 9" | — | — |
 | title | "first-song" → "Night Drive" | — | — |
 | fader | "−6.0 dB" → "−3.0 dB", named "Hats volume" | — | — |
@@ -731,7 +738,8 @@ keys. It is small, needs no engine work, and the lease comes in 8b.7.
   covers that).
 
 Labels and toasts are in §2.4. A tempo change that makes the loop too short turns the loop off, as today (`Timing`), and
-the toast says "Loop turned off: it's shorter than a beat at 128 BPM".
+the toast says "Loop turned off: it's too short to play at 128 BPM" (built in 8b.2: the limit is two blocks
+or 5 ms, not a beat, so the words don't name a beat).
 
 **New Song** (NS-3): `POST /api/project/new` takes `tempo?`, and writes it into the new folder's `data/arrangement.json`
 when it creates the project. That is creation, not a Tx.
@@ -837,6 +845,12 @@ smoother primes to its target, and `x * 1.0 == x`.
   `db` at the drag's threshold, and the drag continues as a lease once that revision plays. That is the first pan's path
   (§5.3), so it needs no new decision.
 
+**Built (B3):** as above, and the master's input goes through a new kernel, `std:stereo`, which copies a mono signal
+into both channels, sample for sample. So what follows it is stereo from the start: when a mix that is mono all the way
+gets its first pan (§5.3), the master's gain and limiter keep their instances, and the limiter its envelope (lead
+decision T5). A mono mix renders the same bits: the limiter sees the same peak in both channels, and the output was a
+mono signal copied into both before. The renders and `the_mixer_and_master_gains_change_no_bit` prove it.
+
 **The cost:** one more `gain` kernel instance per channel that didn't write `db` (two in first-song, one in the Starter),
 and one more `Store` each after step 7 (RENDER-32). Adding a channel already resets every strip inside the mixer's `map`
 (design-7 Q9), and that stays inaudible, since `gain` primes to its target and `pan` holds no state.
@@ -864,6 +878,11 @@ Its first move must write it:
   gets a property. The anchor is `Anchor::Slot { site: the mixer call, slot: "channels.kick.db" }`, which already names
   an inherited control (WRITE-6).
 
+**Built (B4):** as above, in `Insertion::plan` (`crates/editor/src/lens.rs`). A shorthand entry (`{ saws }`) is
+written in full (`saws: { in: saws, db: -3 }`), and `mix::mixer` now reads an object with shorthands. The style rule
+holds for dictionary entries only: an options object's insertion stays a plain number. History shows the entry, not the
+call (`kick: kick.out` → `kick: { in: kick.out, db: db(-3) }`); past 60 characters its old value is `…`.
+
 ### 5.3 The first pan on a channel
 
 `pan` is optional, so an unpanned channel has no panner node and no knob: first-song's Kick and Bass, and every track
@@ -879,6 +898,16 @@ it is.
 - **Inaudible insertion.** At C the panner is exactly unity for a stereo input, and about 1e-7 from it for a
   mono one (`cos(π/4)·√2`, `std/kernels-src/src/lib.rs:414-419`), so the revision that adds it changes nothing anyone
   hears. Making `pan` non-optional instead would change renders (`renders.json`) for every mono channel.
+
+**Built (B4):** `mix::insert(s, channel, control, value)` and `POST /api/graph/mix/insert`
+`{session, channel, control, value}`. The channel is named by its key, so the builder plans on the accepted revision and
+takes no revision. The answer names the new knob (`control`), which the drag then leases. The planner's assertion is by
+channel (lead decision T4): keying each strip by its channel would make two mixers in one module with a channel key in
+common `key.duplicate`, since `key()`'s keys are unique per key frame, not per component call (tried). Measured
+inaudible: offline, first-song renders within 1.1e-6 of before (the limiter carries the panner's 1e-7 on); live, through
+the activation, within about 1e-6 (−120 dBFS) of the same song with no edit, on first-song and in a mix that is mono
+all the way. Every
+instrument + Track offers is stereo since T3, so that mix's two tracks are written in code.
 
 ### 5.4 The view: `mix` in the graph state
 
@@ -901,6 +930,15 @@ it is.
 - Strips come in the effective track order (§2.1). `feeds` drives MON-2's row (§6.7), and `muted_in_song` the struck
   name (8b.4).
 - `every_value_names_its_home` covers the strip: faders `code`, colours `layout`.
+
+**Built (B4):** `mix::view` (`crates/editor/src/mix.rs`), sent as the state's `mix`, with these changes to the JSON above:
+- `modules` (a list) instead of `module`: a strip shared by tracks names each, in the order its channel reads them.
+- A channel no track reaches gets a strip after the tracks', named by its key, in graphite.
+- `mixer` is `ok`, `none`, `several` or `unwritten` (its channels aren't an object in the code), and `message` says, in
+  words, why the levels are in code when it isn't `ok`.
+- `db` is null when code sets the level (a signal); `why` says "Not in the mixer" or "In 2 channels: set its level in
+  code".
+- `feeds` and `muted_in_song` come with 8b.4, which uses them.
 
 ### 5.5 UI (taste §3.5 Mix, MX-1, MX-2, MX-5, MX-6, TL-1, §5.2)
 

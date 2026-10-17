@@ -46,6 +46,7 @@ pub use automate::Automated;
 pub use cable::{Inlet, Outlet};
 pub use controls::{Audition, Control, Declared};
 pub use effect::EffectInfo;
+pub use mix::{Inserted, MasterStrip, MixView, Strip};
 pub use timeline::{TimelineLane, TimelineTrack, TimelineView};
 pub use tracks::{Deleted, Dependent, Instrument, Made};
 pub use view::{GraphView, Knob, ModuleView, ReadOnly, ViewNode};
@@ -223,6 +224,11 @@ pub trait Gestures {
     fn recolour(&mut self, module: &str, colour: &str) -> Result<Edited, EditError>;
     fn view(&self) -> GraphView;
     fn timeline(&self) -> TimelineView;
+    /// The Mix view: a strip for each track in the layout's order, and the master (design-8b §5.4).
+    fn mix(&self) -> MixView;
+    /// A channel's first pan: write optional control `control` of mixer channel `channel` as
+    /// `value` (see [`mix::insert`]).
+    fn mix_insert(&mut self, channel: &str, control: &str, value: f64) -> Result<Inserted, EditError>;
 }
 
 impl Gestures for Session {
@@ -328,6 +334,14 @@ impl Gestures for Session {
 
     fn timeline(&self) -> TimelineView {
         timeline::timeline(self)
+    }
+
+    fn mix(&self) -> MixView {
+        mix::view(self, &layout::view(self))
+    }
+
+    fn mix_insert(&mut self, channel: &str, control: &str, value: f64) -> Result<Inserted, EditError> {
+        mix::insert(self, channel, control, value)
     }
 }
 

@@ -7,6 +7,9 @@ use std::path::Path;
 use m2_script::sites::{Arg, Site};
 use m2_session::Session;
 
+use crate::Control;
+use crate::lens::Entry;
+
 /// What a whole-file change did, to show it and its undo: the one line it changed, or how
 /// many. `pan: 0.3,` → `pan: 0.45,`; `3 lines` → `5 lines`.
 pub fn summarize(old: &str, new: &str) -> (String, String) {
@@ -111,6 +114,49 @@ pub fn fold(code: &str) -> String {
         out = out.replace(from, to);
     }
     out
+}
+
+/// How writing an inherited control into its call with `edits` (as [`Control::planned`] makes
+/// them) is shown: the call before and after (see [`shown`]); for a dictionary entry's control,
+/// the entry: `kick: kick.out` → `kick: { in: kick.out, db: db(-3) }` (design-8b §5.2).
+pub fn inserted(s: &Session, c: &Control, edits: &[(u32, u32, String)]) -> (String, String) {
+    let source = s.accepted().snapshot.files.get(Path::new(&c.file));
+    match (c.entry(), source, edits) {
+        (Some(e), Some(old), _) => shown_entry(old, e, edits),
+        (_, _, [(start, end, text)]) => shown(s, c.origin.site, *start, *end, text),
+        _ => (String::new(), edits.iter().map(|e| e.2.as_str()).collect()),
+    }
+}
+
+/// Dictionary entry `e` of `old` before and after `edits` (each at or inside its value), on one
+/// line; past 60 characters, with the value it had cut to `…`.
+pub(crate) fn shown_entry(old: &str, e: &Entry, edits: &[(u32, u32, String)]) -> (String, String) {
+    let (start, end) = (e.value.0 as usize, e.value.1 as usize);
+    let value = &old[start..end];
+    let (mut after, mut at) = (String::new(), start);
+    for (a, b, text) in edits {
+        after += &old[at..*a as usize];
+        after += text;
+        at = *b as usize;
+    }
+    after += &old[at..end];
+    let plain = e.key.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
+        && e.key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+    let key = if plain { e.key.clone() } else { serde_json::to_string(&e.key).expect("a string") };
+    let line = |before: &str, after: &str| match e.shorthand {
+        true => (key.clone(), fold(after)),
+        false => (fold(&format!("{key}: {before}")), fold(&format!("{key}: {after}"))),
+    };
+    let whole = line(value, &after);
+    if whole.1.chars().count() <= 60 {
+        return whole;
+    }
+    // The new property (`, db: db(-3)`, and ` }` for a wrap), with what was there as `…`.
+    let added = edits.last().map_or("", |x| x.2.as_str());
+    match edits {
+        [(_, _, open), _] => line("…", &format!("{open}…{added}")),
+        _ => line("{ … }", &format!("{{ …{added} }}")),
+    }
 }
 
 /// How writing `text` over bytes `start..end` inside call `site` of the accepted revision is

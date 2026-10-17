@@ -11,10 +11,13 @@
 //            positionally: lowpass(x, 1000, q) (PKG-2, PKG-7). Screenshot: <root>/s5-browser.png.
 //   alias    `import { delay as echo }`, saved by another editor, is the Delay effect with delay's three
 //            knobs, and removing it unwraps the call (PKG-9).
+//   mix      the kick's fader, left out of its bare mixer entry, is written into it on its first turn,
+//            in the style of the mixer's other entries; a channel's first pan through the route writes
+//            `pan: 0` into its entry and names the new knob (design-8b §5.2, §5.3).
 //   node run.mjs s5-knobs fix
 import { ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 
-const { browser, page, errors, state, toasts, show, box } = await open(1440, 900);
+const { browser, page, errors, api, state, toasts, show, box } = await open(1440, 900);
 
 /** The view's knobs, each with its module and node: `{ module, node, k }`. */
 const knobs = async () =>
@@ -26,14 +29,20 @@ const sameRange = (a, b) => (a === null && b === null) || (a !== null && b !== n
 // ------------------------------------------------------------------ knobs
 // Every declared control the song's calls reach, as [module, component, slot, written, range, log]: written
 // in the code, or left out and playing the descriptor's default. The bass's cutoff is connected to a
-// signal (`blend(...)`), and the mixer's kick channel leaves out its optional db and pan (PKG-5), so
-// neither is a knob. xrange's lo and hi declare no range (`control.any()`), so the page picks one.
+// signal (`blend(...)`), so it is no knob, and the mixer's kick and bass channels leave out their
+// optional pan (PKG-5), which makes no knob either. Every channel has a gain, its fader, since 8b.3, and
+// so does the master: the master's db and the kick's and the bass's, left out, are knobs at 0 dB, whose
+// first turn writes them in (8b.3b). xrange's lo and hi declare no range (`control.any()`), so the page
+// picks one.
 const EXPECTED = [
   ["song", "std:duck", "depth", true, [-60, 0], false],
+  ["song", "std:mixer", "channels.kick.db", false, [-60, 12], false],
+  ["song", "std:mixer", "channels.bass.db", false, [-60, 12], false],
   ["song", "std:mixer", "channels.hats.db", true, [-60, 12], false],
   ["song", "std:mixer", "channels.hats.pan", true, [-1, 1], false],
   ["song", "std:mixer", "channels.keys.db", true, [-60, 12], false],
   ["song", "std:mixer", "channels.keys.pan", true, [-1, 1], false],
+  ["song", "std:master", "db", false, [-60, 12], false],
   ["song", "std:master", "ceiling", false, [-24, 0], false],
   ["bass", "std:lfo", "period", true, [1 / 16, 16], true],
   ["bass", "std:lfo", "phase", false, [0, 1], false],
@@ -48,6 +57,8 @@ const EXPECTED = [
   ["kick", "std:follow", "release", true, [0.001, 5], true],
 ];
 const all = await knobs();
+const mixerNode = (await state()).view.modules.find((m) => m.key === "song").nodes.find((n) => n.component === "std:mixer");
+check(mixerNode.readonly.length === 0, `the mixer's box holds no value only the code can change (${JSON.stringify(mixerNode.readonly)})`);
 check(all.length === EXPECTED.length, `the song has ${EXPECTED.length} knobs: ${all.map((x) => `${x.module}:${x.k.component}.${x.k.slot}`).join(", ")}`);
 for (const [module, component, slot, written, range, log] of EXPECTED) {
   const x = all.find((x) => x.module === module && x.k.component === component && x.k.slot === slot);
@@ -202,6 +213,29 @@ await undo();
 check(await until(() => read("tracks/keys.ts") === added), "undo takes out the q");
 await undo();
 check(await until(() => read("tracks/keys.ts") === keys), "and undo again takes out the lowpass, import and all");
+
+// ------------------------------------------------------------------ mix
+// The kick's fader, left out of `kick: kick.out`: its first turn wraps the entry, written as db(…) like
+// the mixer's other entries, and nothing else in the file changes.
+const songFile = read("song.ts");
+await show("song");
+const kickDb = '[data-module="song"] [data-node="mixer"] [data-knob="kick.db"]';
+await turn(kickDb, -24);
+const wrapped = /kick: \{ in: kick\.out, db: db\((-?[0-9.e-]+)\) \},/;
+check(await until(() => wrapped.test(read("song.ts"))), `turning the kick's fader writes it into its entry (${read("song.ts").match(/kick: .*,/)?.[0]})`);
+const level = Number(read("song.ts").match(wrapped)?.[1]);
+check(level < 0 && read("song.ts").replace(wrapped, "kick: kick.out,") === songFile, `down from 0 dB to ${level}, and nothing else changed`);
+await undo();
+check(await until(() => read("song.ts") === songFile), "undo puts the bare entry back");
+// The first pan, as the Mix view's drag asks for it.
+const session = (await state()).session;
+const panned = await api("/mix/insert", { method: "POST", body: JSON.stringify({ session, channel: "bass", control: "pan", value: 0 }) });
+const bassPanned = "bass: { in: duck(bass.out, kick.env, { depth: db(-9) }), pan: 0 },";
+check(panned.status === 200 && read("song.ts") === songFile.replace("bass: duck(bass.out, kick.env, { depth: db(-9) }),", bassPanned), `POST /mix/insert writes the bass's first pan (${panned.status}: ${read("song.ts").match(/bass: .*,/)?.[0]})`);
+const bassStrip = (await state()).mix.strips.find((x) => x.channel === "bass");
+check(bassStrip?.pan === panned.body.control && !bassStrip.pan_insert, `and names the new knob, which the Mix view's strip has (${panned.body.control})`);
+await undo();
+check(await until(() => read("song.ts") === songFile), "undo takes the pan out");
 
 // ------------------------------------------------------------------ alias
 const echo = `import { track } from "@m2/core";\nimport { delay as echo } from "std/fx";\nimport { pluck } from "std/instruments";\n\nexport default track("keys", { name: "Keys" }, ({ lane }) => echo(pluck(lane.notes("chords"))));\n`;

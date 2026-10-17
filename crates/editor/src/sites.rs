@@ -393,7 +393,8 @@ pub struct Property {
 }
 
 /// The properties of the object literal written exactly at `span` of `source`, in order; None
-/// when there is none there, or it has a spread, a computed key, a method or a shorthand.
+/// when there is none there, or it has a spread, a computed key or a method. A shorthand (`saws`)
+/// is a property whose value is its key's bytes.
 pub fn properties(source: &str, span: (u32, u32)) -> Option<Vec<Property>> {
     use oxc::ast::ast::{Expression, ObjectExpression, ObjectPropertyKind, PropertyKind};
     struct Find {
@@ -404,7 +405,7 @@ pub fn properties(source: &str, span: (u32, u32)) -> Option<Vec<Property>> {
         fn visit_object_expression(&mut self, it: &ObjectExpression<'a>) {
             if self.found.is_none() && (it.span.start, it.span.end) == self.span {
                 let plain = |p: &ObjectPropertyKind<'a>| match p {
-                    ObjectPropertyKind::ObjectProperty(p) if p.kind == PropertyKind::Init && !p.computed && !p.method && !p.shorthand => {
+                    ObjectPropertyKind::ObjectProperty(p) if p.kind == PropertyKind::Init && !p.computed && !p.method => {
                         let v = p.value.span();
                         Some(Property {
                             key: p.key.static_name()?.to_string(),

@@ -136,6 +136,12 @@ description = "Equal-power pan of a mono signal into stereo; a stereo signal is 
 inputs = ["in: audio<*>", "pan: control<bipolar> = 0"]
 outputs = ["out: audio<2>"]
 
+[[kernel]]
+name = "stereo"
+description = "The signal as stereo, sample for sample: a mono one in both channels, a stereo one as it is"
+inputs = ["in: audio<2>"]
+outputs = ["out: audio<2>"]
+
 # ---------------------------------------------------------------- filters
 
 [[kernel]]

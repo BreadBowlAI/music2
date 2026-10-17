@@ -357,6 +357,10 @@ export default song(({ lane, time }) => {
             assert!(checked.contains(&format!("{}.{}", d.id, c.name)), "{}.{} was not compared", d.id, c.name);
         }
     }
+    // The faders 8b.3 gave every mixer channel and the master: 0 dB, a gain's own default.
+    for c in ["std:mixer.channels.a.db", "std:mixer.channels.b.db", "std:master.db"] {
+        assert!(checked.contains(c), "{c} was not compared");
+    }
     // Settings: voices as before, and the seed and shape the kernels defaulted to, as plain numbers.
     let voices: BTreeMap<&str, u32> = ns
         .iter()
@@ -524,9 +528,18 @@ export default song(() => {
     // A pitch stays a pitch: the oscillator converts it, and its knob is in semitones (D4).
     assert_eq!(s[&frame("std:saw", 0)], [("freq".into(), 60.0, Some(Unit::Semitones), false, path(&["0"]))]);
     assert!(m.frames.iter().any(|f| f.component.as_deref() == Some("std:mtof") && f.parent == Some(frame("std:saw", 0))));
-    // The mixer: each entry's controls by the caller's key; left-out ones make nothing (PKG-5, PKG-6).
+    // The mixer: each entry's controls by the caller's key. Every entry has its `db`, inherited
+    // when left out (8b.3); a left-out `pan` makes nothing (PKG-5, PKG-6).
     let mix = &s[&frame("std:mixer", 0)];
-    assert_eq!(mix.iter().map(|c| (c.0.as_str(), c.1)).collect::<Vec<_>>(), [("channels.wet.db", -6.0), ("channels.mid.pan", 0.3)]);
+    assert_eq!(
+        mix.iter().map(|c| (c.0.as_str(), c.1, c.3)).collect::<Vec<_>>(),
+        [
+            ("channels.dry.db", 0.0, true),
+            ("channels.wet.db", -6.0, false),
+            ("channels.mid.db", 0.0, true),
+            ("channels.mid.pan", 0.3, false)
+        ]
+    );
     // Sidechain inputs record what they received (PKG-13).
     let sidechain = |id: &str| m.frames[frame(id, 0) as usize].sidechain.iter().map(|x| x.input.clone()).collect::<Vec<_>>();
     assert_eq!((sidechain("std:follow"), sidechain("std:duck")), (vec!["in".to_string()], vec!["side".to_string()]));

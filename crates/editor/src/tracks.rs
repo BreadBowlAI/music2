@@ -837,6 +837,11 @@ pub fn duplicate(s: &mut Session, module: &str) -> Result<Made, EditError> {
     // The channel, copied with the copy's reads in place of the track's; a plain one when the
     // track reaches none.
     let (entry, plain) = match mixer.channel_of(module) {
+        // Found by the graph, through a name bound elsewhere (`kick: k`): a copy of its text
+        // would play the track, not the copy.
+        Some(c) if !c.reads.iter().any(|r| r.module == module) => {
+            return Err(EditError::Rejected(format!("{label0}'s mixer channel doesn't name it, so duplicate it in code.")));
+        }
         Some(c) if c.tracks.len() == 1 => {
             let p = &c.property;
             let mut e: Vec<(u32, u32, String)> = c

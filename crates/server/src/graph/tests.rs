@@ -3676,6 +3676,63 @@ fn adding_and_deleting_a_track_keeps_a_ringing_tail() {
     }
 }
 
+// design-8b §5.1, lead decision T5: in a mix that is mono all the way, the first pan on a channel
+// turns the sum stereo. std's master is stereo from its input on, so its gain and its limiter keep
+// their instances, and the limiter its envelope; before 8b.3 the limiter started again. Here the
+// mix is loud enough that the limiter works all the time, and the edit is a hand-written `pan: 0`,
+// as 8b.3's first pan writes it.
+#[test]
+fn a_first_pan_in_a_mono_mix_keeps_the_masters_gain_and_limiter() {
+    let fixture = Fixture::new();
+    fixture.put(
+        "song.ts",
+        "import { song } from '@m2/core';\nimport { master, mixer } from 'std/mix';\nimport { a } from './tracks/a';\n\
+         import { b } from './tracks/b';\nexport default song(() => master(mixer({ a: a.out, b: b.out })));\n",
+    );
+    // A constant 2 (a square at 0 Hz is 1): over the limiter's −1 dB ceiling all the time.
+    fixture.put("tracks/a.ts", &A_DC.replace("0.5)", "2)"));
+    fixture.put("tracks/b.ts", B_SILENT);
+    let (p, driver) = Player::driven(48_000);
+    let graph = Graph::with_player(p);
+    graph.open(&fixture.0).unwrap();
+    let mut dc = Dc { fixture, graph, driver };
+    dc.graph.transport("play").unwrap();
+    let ceiling = 10f32.powf(-1.0 / 20.0);
+    let before = dc.frames(20);
+    assert!(before[128..].iter().all(|x| (x - ceiling).abs() < 1e-6), "the limiter holds the mix at its ceiling: {:?}", &before[128..132]);
+    let generation = dc.generation();
+    dc.fixture.put("song.ts", &dc.fixture.read("song.ts").replace("a: a.out", "a: { in: a.out, pan: 0 }"));
+    assert!(dc.graph.poll());
+    let mut after = vec![];
+    for _ in 0..400 {
+        after.extend(dc.frames(1));
+        if dc.generation() != generation {
+            break;
+        }
+    }
+    assert_ne!(dc.generation(), generation, "an activation");
+    after.extend(dc.frames(20));
+    // What the playing plan made new, by kernel.
+    let fresh = dc.stats().fresh_nodes;
+    let made: Vec<String> = dc.graph.inspect(move |a| {
+        let flat = &a.open.as_ref().unwrap().plays.as_ref().unwrap().revision.compiled.flat;
+        fresh
+            .iter()
+            .map(|&i| match &flat.nodes[i].op {
+                m2_ir::FOp::Kernel { kernel, .. } => kernel.clone(),
+                _ => flat.nodes[i].name.clone(),
+            })
+            .collect()
+    });
+    assert!(made.iter().any(|k| k == "std:pan"), "the new panner is new: {made:?}");
+    for k in ["std:stereo", "std:limit"] {
+        assert!(!made.iter().any(|m| m == k), "the master's {k} is kept: {made:?}");
+    }
+    // The master's gain is the one gain that isn't on a channel's strip, which turns stereo.
+    assert_eq!(made.iter().filter(|m| *m == "std:gain").count(), 1, "only channel a's gain is new: {made:?}");
+    assert!(after.iter().all(|x| (x - ceiling).abs() < 1e-5), "the mix stays at the ceiling throughout: {:?}", max_step(&after));
+}
+
 // FMT-19, PLANE-3: an edit of layout.json from outside (an agent, git) is published with no
 // revision once it holds still; a layout write planned before it conflicts rather than writing
 // over it, since its base was read from the disk.
@@ -3726,4 +3783,185 @@ fn a_layout_write_after_an_outside_edit_conflicts() {
         assert!(matches!(s.commit(tx), Err(m2_session::Refusal::Conflict { .. })), "a conflict");
         assert_eq!(std::fs::read_to_string(s.accepted().project.dir.join("layout.json")).unwrap(), "{\"order\": [\"bass\"]}");
     });
+}
+
+// design-8b §5.4: the state carries the Mix view beside the view and the timeline: a strip for each
+// track by the view's knob ids, and the master. A channel's first pan writes `pan: 0` into its
+// entry and names the new knob, which the next state's strip has; undo takes it out. A window open
+// read-only writes nothing.
+#[test]
+fn the_state_carries_the_mix_and_a_first_pan_names_its_knob() {
+    let fixture = Fixture::new();
+    mixed(&fixture);
+    let graph = fixture.open();
+    let state = graph.state().unwrap();
+    let token = state["session"].as_u64().unwrap();
+    let mix = &state["mix"];
+    assert_eq!(mix["mixer"], "ok");
+    let strips: Vec<(&str, &str)> =
+        mix["strips"].as_array().unwrap().iter().map(|x| (x["channel"].as_str().unwrap(), x["label"].as_str().unwrap())).collect();
+    assert_eq!(strips, [("kick", "Kick"), ("hats", "Hats"), ("bass", "Bass"), ("keys", "Keys")]);
+    let kick = &mix["strips"][0];
+    assert_eq!((&kick["pan"], &kick["pan_insert"]), (&Value::Null, &json!(true)));
+    let knobs: Vec<Value> = state["view"]["modules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|m| m["nodes"].as_array().unwrap())
+        .flat_map(|n| n["knobs"].as_array().unwrap().iter().map(|k| k["id"].clone()))
+        .collect();
+    for id in [&kick["db"], &mix["master"]["db"], &mix["master"]["ceiling"]] {
+        assert!(knobs.contains(id), "{id} is a knob");
+    }
+    let song = fixture.read("song.ts");
+    let done = graph.mix_insert(token, "kick", "pan", 0.0).unwrap();
+    assert_eq!((&done["before"], &done["after"]), (&json!("kick: kick.out"), &json!("kick: { in: kick.out, pan: 0 }")), "{done}");
+    assert_eq!(fixture.read("song.ts"), song.replacen("kick: kick.out", "kick: { in: kick.out, pan: 0 }", 1));
+    let now = graph.state().unwrap();
+    assert_eq!((&now["mix"]["strips"][0]["pan"], &now["mix"]["strips"][0]["pan_insert"]), (&done["control"], &json!(false)));
+    assert_eq!(now["view"]["revision"], done["revision"]);
+    assert!(synced(&graph));
+    graph.undo(token).unwrap();
+    assert_eq!(fixture.read("song.ts"), song);
+    graph.close();
+
+    let held = m2_session::lock::acquire(&fixture.0, "m2", m2_session::lock::RETRY).unwrap();
+    let graph = fixture.open();
+    let token = graph.state().unwrap()["session"].as_u64().unwrap();
+    let e = graph.mix_insert(token, "kick", "pan", 0.0).unwrap_err().to_string();
+    assert!(e.contains("nothing was changed"), "{e}");
+    assert_eq!(fixture.read("song.ts"), song);
+    drop(held);
+}
+
+/// `n` blocks of 128 frames, both channels, interleaved.
+fn stereo(dc: &mut Dc, n: usize) -> Vec<f32> {
+    let mut out = vec![];
+    for _ in 0..n {
+        let mut buf = [0.0f32; 256];
+        dc.driver.fill(&mut buf, 2);
+        drop(dc.driver.drain_retired());
+        out.extend(buf);
+    }
+    out
+}
+
+/// Play `dc` on through `edit` until the activation it sends lands, then `after` blocks: what was
+/// heard from the edit on.
+fn through(dc: &mut Dc, edit: impl FnOnce(&Graph), after: usize) -> Vec<f32> {
+    let generation = dc.generation();
+    edit(&dc.graph);
+    let mut heard = vec![];
+    for _ in 0..400 {
+        heard.extend(stereo(dc, 1));
+        if dc.generation() != generation {
+            break;
+        }
+    }
+    assert_ne!(dc.generation(), generation, "an activation");
+    heard.extend(stereo(dc, after));
+    heard
+}
+
+/// The largest difference between two takes, sample for sample.
+fn apart(a: &[f32], b: &[f32]) -> f32 {
+    assert_eq!(a.len(), b.len());
+    a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0, f32::max)
+}
+
+// design-8b §5.3, plan B4, lead decision T4: the first pan on first-song's Kick while it plays. Kick
+// is the first channel, so the panners of Hats and Keys are renamed and made new (ID-14); the kick's
+// strip turns stereo. It is heard as nothing: from the edit on, through the activation and its
+// crossfades, the song plays as it does with no edit, within 1e-5 (−100 dBFS), so no step and
+// every other track goes on unbroken.
+#[test]
+fn a_first_pan_while_playing_is_inaudible() {
+    fn playing() -> (Dc, u64) {
+        let mut dc = example("examples/first-song");
+        let token = dc.graph.state().unwrap()["session"].as_u64().unwrap();
+        // Into the song: a kick hit at beat 1.
+        drop(stereo(&mut dc, 160));
+        (dc, token)
+    }
+    let (mut dc, token) = playing();
+    let heard = through(&mut dc, |g| drop(g.mix_insert(token, "kick", "pan", 0.0).unwrap()), 400);
+    assert!(dc.fixture.read("song.ts").contains("kick: { in: kick.out, pan: 0 }"));
+    let (mut plain, _) = playing();
+    let alone = stereo(&mut plain, heard.len() / 256);
+    assert!(rms(&alone) > 1e-2, "the song plays ({})", rms(&alone));
+    let differs = apart(&heard, &alone);
+    assert!(differs <= 1e-5, "the first pan is heard: {differs} from the song with no edit");
+}
+
+// design-8b §5.3, lead decision T5 (the attack's claim 6): in a mix that is mono all the way, the
+// first pan turns the mix stereo: the sum's adds are made new, and std's master keeps its gain and
+// limiter. Every instrument + Track offers is stereo since T3, so the two mono tracks are written in
+// code, std's first bass and kick; their faders go up 12 dB through the Mix view's ids, written into
+// their bare entries, so the limiter works. The first pan is heard as nothing: the song plays as it
+// does with no edit, within 1e-5.
+#[test]
+fn a_first_pan_in_a_mono_mix_while_playing_is_inaudible() {
+    fn playing() -> (Dc, u64) {
+        let fixture = Fixture::new();
+        fixture.put(
+            "song.ts",
+            "import { song } from '@m2/core';\nimport { master, mixer } from 'std/mix';\nimport low from './tracks/low';\n\
+             import thump from './tracks/thump';\nexport default song(() => master(mixer({ low: low.out, thump: thump.out })));\n",
+        );
+        fixture.put(
+            "tracks/low.ts",
+            "import { track } from '@m2/core';\nimport { bass } from 'std/instruments';\n\
+             export default track('low', { name: 'Low' }, ({ lane }) => bass(lane.notes('notes')));\n",
+        );
+        fixture.put(
+            "tracks/thump.ts",
+            "import { track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
+             export default track('thump', { name: 'Thump' }, ({ lane }) => kick(lane.notes('hits')));\n",
+        );
+        fixture.put("data/low/notes.json", "{\"clips\": []}\n");
+        fixture.put("data/thump/hits.json", "{\"clips\": []}\n");
+        let (p, driver) = Player::driven(48_000);
+        let graph = Graph::with_player(p);
+        graph.open(&fixture.0).unwrap();
+        let mut dc = Dc { fixture, graph, driver };
+        let token = dc.graph.state().unwrap()["session"].as_u64().unwrap();
+        for (module, lane, pitches) in [("low", "notes", ["C2", "G2", "C2", "G2"]), ("thump", "hits", ["C1", "C1", "C1", "C1"])] {
+            let revision = dc.graph.state().unwrap()["view"]["revision"].as_u64().unwrap();
+            dc.graph.write_notes(token, revision, module, lane, &kick_clips(&pitches)).unwrap();
+            let state = dc.graph.state().unwrap();
+            let strip = state["mix"]["strips"].as_array().unwrap().iter().find(|x| x["channel"] == json!(module)).unwrap().clone();
+            let revision = state["view"]["revision"].as_u64().unwrap();
+            dc.graph.set(token, revision, strip["db"].as_str().unwrap(), "fader", 12.0, None).unwrap();
+        }
+        let song = dc.fixture.read("song.ts");
+        assert!(song.contains("mixer({ low: { in: low.out, db: 12 }, thump: { in: thump.out, db: 12 } })"), "{song}");
+        dc.graph.transport("play").unwrap();
+        drop(stereo(&mut dc, 200));
+        (dc, token)
+    }
+    // Mono all the way to the master: every add of the mix has one channel.
+    let adds = |dc: &Dc| -> Vec<u8> {
+        dc.graph.inspect(|a| {
+            let flat = &a.open.as_ref().unwrap().plays.as_ref().unwrap().revision.compiled.flat;
+            flat.nodes
+                .iter()
+                .filter_map(|n| match &n.op {
+                    m2_ir::FOp::Kernel { kernel, channels, .. } if n.module == "song" && kernel == "std:add" => Some(*channels),
+                    _ => None,
+                })
+                .collect()
+        })
+    };
+    let (mut dc, token) = playing();
+    assert!(!adds(&dc).is_empty() && adds(&dc).iter().all(|c| *c == 1), "a mono mix: {:?}", adds(&dc));
+    let heard = through(&mut dc, |g| drop(g.mix_insert(token, "low", "pan", 0.0).unwrap()), 400);
+    assert!(dc.fixture.read("song.ts").contains("low: { in: low.out, db: 12, pan: 0 }"));
+    assert!(adds(&dc).iter().all(|c| *c == 2), "a stereo mix now: {:?}", adds(&dc));
+    let (mut plain, _) = playing();
+    let alone = stereo(&mut plain, heard.len() / 256);
+    let ceiling = 10f32.powf(-1.0 / 20.0);
+    let peak = alone.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    assert!((peak - ceiling).abs() < 1e-3, "the limiter works: a peak of {peak}");
+    let differs = apart(&heard, &alone);
+    assert!(differs <= 1e-5, "the first pan is heard: {differs} from the song with no edit");
 }

@@ -69,6 +69,7 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .route("/api/graph/track/add", post(track_add))
         .route("/api/graph/track/duplicate", post(track_duplicate))
         .route("/api/graph/track/delete", post(track_delete))
+        .route("/api/graph/mix/insert", post(mix_insert))
         .route("/api/graph/layout", post(graph_layout))
         .route("/api/graph/tempo", post(graph_tempo))
         .route("/api/graph/meter", post(graph_meter))
@@ -113,7 +114,7 @@ async fn auth(State(s): S, req: axum::extract::Request, next: axum::middleware::
 }
 
 /// The routes that write the open project, or begin a gesture whose commit would.
-const WRITES: [&str; 25] = [
+const WRITES: [&str; 26] = [
     "/api/graph/preview",
     "/api/graph/set",
     "/api/graph/lease/begin",
@@ -131,6 +132,7 @@ const WRITES: [&str; 25] = [
     "/api/graph/track/add",
     "/api/graph/track/duplicate",
     "/api/graph/track/delete",
+    "/api/graph/mix/insert",
     "/api/graph/layout",
     "/api/graph/tempo",
     "/api/graph/meter",
@@ -598,6 +600,27 @@ async fn track_delete(State(s): S, Json(r): Json<TrackReq>) -> Response {
     let result = tokio::task::spawn_blocking(move || state.graph.delete_track(r.session, &r.module, r.cascade)).await;
     s.graph_changed();
     tx_answer(result)
+}
+
+#[derive(Deserialize)]
+struct MixInsertReq {
+    /// The open project. A `revision` sent with it is ignored: the channel is named by its key,
+    /// and the builder plans on the accepted revision.
+    session: u64,
+    /// The mixer channel, by its key.
+    channel: String,
+    /// The control the channel leaves out: `pan`.
+    control: String,
+    value: f64,
+}
+
+/// A mixer channel's first pan (the Mix view, as the drag passes its threshold): `pan` written
+/// into the channel's entry. The answer names the new knob (`control`), which the drag then leases.
+async fn mix_insert(State(s): S, Json(r): Json<MixInsertReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.mix_insert(r.session, &r.channel, &r.control, r.value)).await;
+    s.graph_changed();
+    Ok(Json(result?))
 }
 
 #[derive(Deserialize)]

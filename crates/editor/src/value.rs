@@ -8,6 +8,7 @@
 
 use std::path::Path;
 
+use m2_ir::{Op, Origin};
 use m2_session::Session;
 use m2_song::tx::{Anchor, Expect, Range, Spot};
 
@@ -59,10 +60,11 @@ pub fn set(s: &mut Session, at: u64, id: &str, value: f64, expect: Option<f64>) 
 }
 
 /// Write inherited control `c` into its call as `value` (its first edit, D5): a plain number in
-/// base units where `insertion` says, anchored by the call and the slot: the constants of every
-/// evaluation of the call change to the value, are written at the insertion's path, and nothing
-/// else changes. Releasing at the default writes nothing. Undo takes the argument out again
-/// wherever later edits carry it (WRITE-21).
+/// base units where `insertion` says (or its dictionary's unit call, `db(-3)`; a bare dictionary
+/// entry wrapped as `{ in: kick.out, db: … }`, design-8b §5.2), anchored by the call and the slot:
+/// the constants of every evaluation of the call change to the value, are written at the
+/// insertion's path, and nothing else changes. Releasing at the default writes nothing. Undo puts
+/// the old text back wherever later edits carry it (WRITE-21).
 fn insert(s: &mut Session, c: &Control, insertion: &Insertion, value: f64) -> Result<Committed, EditError> {
     let edit = lens::propose(value, 1.0)?;
     if edit.value == c.value {
@@ -75,24 +77,45 @@ fn insert(s: &mut Session, c: &Control, insertion: &Insertion, value: f64) -> Re
             value: c.value,
         });
     }
-    let text = insertion.text(&edit.text);
+    let edits = insertion.edits(&insertion.number(&edit.text));
     let file = path(&c.file)?;
     let site = s.accepted().compiled.sites.iter().find(|x| x.id == c.origin.site).cloned();
     let site = site.ok_or_else(|| EditError::Rejected("the control is no longer in the graph".into()))?;
     let old = s.accepted().snapshot.files[Path::new(&c.file)].clone();
-    let op = plan::text_edit(&file, &old, &[(insertion.start, insertion.end, text.clone())]);
+    let op = plan::text_edit(&file, &old, &edits);
     let slot = c.origin.slot().unwrap_or_default().to_string();
     let anchor = Anchor::Slot { site: Spot { file, range: Range::bytes(site.start, site.end) }, slot };
-    let (before, after) = crate::label::shown(s, c.origin.site, insertion.start, insertion.end, &text);
+    let (before, after) = crate::label::inserted(s, c, &edits);
     let tx = plan::planned(s, (before.clone(), after.clone()), vec![op], Expect::Values(vec![(anchor, edit.value)]));
     let said = |why: &str| EditError::Rejected(format!("writing this value into the call would change more than this value ({why})"));
     let done = plan::run_as(s, tx, said, |_, _| Ok(()))?;
-    let mut origin = c.origin.clone();
-    origin.arg.clone_from(&insertion.path);
-    if let Some(slot) = &mut origin.control {
-        slot.inherited = false;
-    }
+    let origin = written(s, &c.origin).unwrap_or_else(|| {
+        let mut origin = c.origin.clone();
+        origin.arg.clone_from(&insertion.path);
+        if let Some(slot) = &mut origin.control {
+            slot.inherited = false;
+        }
+        origin
+    });
     Ok(Committed { revision: done.number, file: c.file.clone(), before, after, origin, value: edit.value })
+}
+
+/// The origin of the constant now written in the accepted revision for `inherited`, a control
+/// its call left out: the same call's slot, written (a `db(-3)` written for it is its own call).
+fn written(s: &Session, inherited: &Origin) -> Option<Origin> {
+    let slot = inherited.control.as_ref()?;
+    let mut found = None;
+    for m in &s.accepted().compiled.ir.modules {
+        crate::controls::walk(&m.nodes, &mut |n| {
+            if let (None, Op::Const { .. }, Some(o)) = (&found, &n.op, &n.origin)
+                && let Some(c) = o.control.as_ref().filter(|c| !c.inherited && c.slot == slot.slot)
+                && m.frames.get(c.frame as usize).is_some_and(|f| f.site == inherited.site)
+            {
+                found = Some(o.clone());
+            }
+        });
+    }
+    found
 }
 
 /// Resolve a live edit using exactly the same literal lens as a saved edit. Preview never

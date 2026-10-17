@@ -423,25 +423,26 @@ pub fn connect(s: &mut Session, at: u64, from: &str, to: &str) -> Result<Edited,
     }
     // The whole written value (the `hz(500)` call for a quantity, else the number); or where
     // the name is inserted.
-    let (start, end, text, inserted) = match control.planned(&outlet.name) {
-        Some((start, end, text)) => (start, end, text, true),
+    let (edits, inserted) = match control.planned(&outlet.name) {
+        Some(edits) => (edits, true),
         None => {
             let (start, end) = control.expression().ok_or_else(|| EditError::NotFound(to.to_string()))?;
-            (start, end, outlet.name.clone(), false)
+            (vec![(start, end, outlet.name.clone())], false)
         }
     };
+    let (start, end) = (edits[0].0, edits[edits.len() - 1].1);
     if start < outlet.end {
         return Err(EditError::Rejected(format!("`{}` is declared after this value; move it above to connect it", outlet.name)));
     }
     let old = s.accepted().snapshot.files[Path::new(&control.file)].clone();
-    // Written into the call, the name is shown with its call, as a value written there is: the
-    // bytes alone (`, phase: drop`) say nothing.
+    // Written into the call, the name is shown with its call (or its dictionary entry), as a value
+    // written there is: the bytes alone (`, phase: drop`) say nothing.
     let label = match inserted {
-        true => crate::label::shown(s, control.origin.site, start, end, &text),
-        false => (old[start as usize..end as usize].to_string(), text.clone()),
+        true => crate::label::inserted(s, &control, &edits),
+        false => (old[start as usize..end as usize].to_string(), outlet.name.clone()),
     };
     let file = path(&control.file)?;
-    let op = plan::text_edit(&file, &old, &[(start, end, text)]);
+    let op = plan::text_edit(&file, &old, &edits);
     // A control the call leaves out is made by the call itself (PKG-3): the call's range is what
     // changes, the name written inside it.
     let site = s.accepted().compiled.sites.iter().find(|x| x.id == control.origin.site).map(|x| (x.start, x.end));

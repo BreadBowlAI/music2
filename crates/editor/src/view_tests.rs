@@ -176,8 +176,13 @@ fn the_mixers_inputs_follow_the_code_and_imports_land_where_they_are_written() {
     consistent(song);
     let mixer = node(song, "mixer");
     let labels: Vec<&str> = mixer.inputs.iter().map(|p| p.label.as_str()).collect();
-    assert_eq!(labels, ["kick", "hats.in", "hats.db", "hats.pan", "bass", "keys.in", "keys.db", "keys.pan"]);
-    assert!(mixer.inputs.iter().filter(|p| p.label.ends_with("db") || p.label.ends_with("pan")).all(|p| p.knob.is_some()));
+    // The values written in the order the call writes them, then the ones it leaves out: the kick's
+    // and the bass's faders (every channel has one since 8b.3), knobs whose first turn writes them
+    // into their entries (8b.3b).
+    assert_eq!(labels, ["kick", "hats.in", "hats.db", "hats.pan", "bass", "keys.in", "keys.db", "keys.pan", "kick.db", "bass.db"]);
+    let (written, left_out) = mixer.inputs.split_at(8);
+    assert!(written.iter().filter(|p| p.label.ends_with("db") || p.label.ends_with("pan")).all(|p| p.knob.is_some()));
+    assert!(left_out.iter().all(|p| p.knob.is_some() && p.readonly.is_none()), "{left_out:?}");
     // Imports are shown by their track's label (ID-10).
     assert_eq!(wire(song, "Hats.out", "mixer"), ("audio".into(), "hats.in".into(), "audio"));
     assert_eq!(wire(song, "duck", "mixer"), ("audio".into(), "bass".into(), "audio"));
