@@ -19,12 +19,8 @@ PLAT-1 to 6, the diagnostics table, Order of work 9, Deferred), `HANDOFF.md`, `d
 - **One plugin path.** The app, `m2`, the gates and the headless server all use the host process. The in-process
   host stays only inside that process (HOST-2 says the host process keeps its rule), and in tests that read the
   probe's own records.
-- **macOS:** its code (shared memory, the wake, AppKit windows) passes the Mac lint only. The owner's Mac checks it.
-  Windows is designed for in each piece, not built.
-- **Slice 3 may run beside slice 2**, in a second worktree from `ph` after slice 1 (it touches the planner, not
-  windows). Merged back into `ph`, never rebased.
-
----
+- **macOS:** its code (shared memory, the wake, AppKit windows) is lint-checked only. Windows: designed for, not built.
+- **Slice 3 may run beside slice 2**, in a second worktree from `ph` after slice 1, merged back (never rebased).
 
 ## 0. Before anything
 
@@ -38,8 +34,7 @@ PLAT-1 to 6, the diagnostics table, Order of work 9, Deferred), `HANDOFF.md`, `d
 | Screens | the app and every window test only on Xvfb `:96` (`~/m2-runs/sph/tools/app-shot.sh`, scratch paths under `sph`) |
 | Disk | `df -h /` at each slice's end; delete the second worktree's `target/` when it is merged |
 | Never | touch `main`'s checkout or other worktrees; push; rebase; `cargo update`; delete under `~/m2-runs/plugins` |
-
-Build notes go to `docs/designs/step9/build-notes-ph.md` as the slices land.
+| Notes | `docs/designs/step9/build-notes-ph.md`, written as the slices land |
 
 ---
 
@@ -70,8 +65,7 @@ Offline renders give the same bits.
   process; the same path follows. Offline calls wait with no limit but end on a crash, which fails the render.
 - Finding plugins moves behind the host: the trait gains `scan()`, and `describe_plugin` and `m2 plugins` use it.
   The app never loads plugin code.
-- The probe learns tags `crash-at-<n>` (aborts its process at its n-th call) and `hang-at-<n>`. Tags travel in its
-  state, so they work across the process boundary.
+- The probe learns tags `crash-at-<n>` (aborts its process at its n-th call) and `hang-at-<n>`, sent in its state.
 
 | Crate | Files |
 |---|---|
@@ -166,8 +160,7 @@ passes; `ci/check.sh` passes.
 The probe proves it. Songs with no latency keep their bits.
 
 **How it works.**
-- Each instance has a latency: a plugin's measured at activation and after each state load
-  (`PluginInstance::latency`); a kernel's from its declaration (`KernelSig.latency`).
+- Each instance has a latency: a plugin's measured at activation and after each load; a kernel's declared (`KernelSig`).
 - New `core/runtime/src/latency.rs`: from the flat graph, each node's offset is the latest arrival over its inputs;
   each input is delayed by the difference. Lanes, notes and time are inputs like any other, so they arrive late by
   the same amount (RENDER-18); a plugin's transport is its node's offset earlier (HOST-6). The song's latency `L`
