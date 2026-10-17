@@ -67,3 +67,14 @@ fn a_fixed_buffer_is_used_when_in_range() {
     assert_eq!(buffer(None, &range), BufferSize::Default);
     assert_eq!(buffer(Some(128), &SupportedBufferSize::Unknown), BufferSize::Default);
 }
+
+#[test]
+fn a_player_let_go_frees_its_device() {
+    let p = Player::start_in(silent(&["Speakers"]), &Choice::default()).unwrap();
+    let freed = p.freed();
+    assert!(!freed.wait(Duration::from_millis(50)), "held while the player lives");
+    drop(p);
+    assert!(freed.wait(Duration::from_secs(1)), "free once it is let go");
+    let (driven, _driver) = Player::driven(48_000);
+    assert!(driven.freed().is_free(), "a driven player has no device");
+}

@@ -179,5 +179,37 @@ pub(crate) fn buffer(frames: Option<u32>, supported: &SupportedBufferSize) -> Bu
     }
 }
 
+/// When a player let go has freed its device ([`Player::freed`](crate::Player::freed)).
+pub struct Freed(std::sync::Arc<crate::Shared>);
+
+impl Freed {
+    /// Whether the device is free now.
+    pub fn is_free(&self) -> bool {
+        self.0.freed.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Wait until the device is free, at most `up_to`: whether it is.
+    pub fn wait(&self, up_to: std::time::Duration) -> bool {
+        let t = std::time::Instant::now();
+        while !self.is_free() {
+            if t.elapsed() >= up_to {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        true
+    }
+}
+
+impl crate::Player {
+    /// What says when this player's device is free to open again (NX-S5): once every clone is let
+    /// go, its stream stops after playing the unload's fade out. An output only one stream may
+    /// hold at once (an ALSA `hw:` device) refuses a new one until then. A silent player's clock
+    /// stops as soon as it is let go; a driven one has no device.
+    pub fn freed(&self) -> Freed {
+        Freed(self.shared.clone())
+    }
+}
+
 #[cfg(test)]
 mod tests;

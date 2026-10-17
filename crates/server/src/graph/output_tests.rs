@@ -198,3 +198,33 @@ fn an_output_change_keeps_the_beat_beside_another_action() {
     let st = graph.status();
     assert!(!st.playing && st.beat > 0.5, "where it was, stopped: {st:?}");
 }
+
+// gaps #31: an output only one stream may hold at once (an ALSA `hw:` device): a change of buffer
+// size opens the new stream once the old one has stopped, so the device doesn't refuse it and the
+// song isn't left silent (NX-S5).
+#[test]
+fn a_change_of_output_opens_once_the_old_stream_stopped() {
+    let last: Arc<parking_lot::Mutex<Option<m2_play::Freed>>> = Arc::default();
+    let held = last.clone();
+    let graph = Graph::starting(
+        Box::new(move |_| {
+            let mut last = held.lock();
+            if last.as_ref().is_some_and(|f| !f.is_free()) {
+                anyhow::bail!("the device is busy");
+            }
+            let p = Player::silent()?;
+            *last = Some(p.freed());
+            Ok(p)
+        }),
+        Box::new(|| Some("Speakers".into())),
+    );
+    let fixture = Fixture::new();
+    graph.open(&fixture.0).unwrap();
+    graph.transport("play").unwrap();
+    eventually("the playhead moves", || graph.status().beat > 0.5);
+    assert!(graph.set_output(Choice { device: None, frames: Some(256) }).unwrap(), "it was playing");
+    assert!(!graph.no_output(), "the new stream opened: no silent stand-in");
+    let now = graph.output_now().unwrap();
+    assert_eq!((now.no_output, now.fell_back), (false, false));
+    assert!(graph.status().beat > 0.5, "where it was");
+}

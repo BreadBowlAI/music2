@@ -37,7 +37,7 @@ use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use m2_runtime::engine::{APPLIED, Msg as EngineMsg};
 pub use m2_runtime::engine::{Applied, CallbackStamp, Engine, Envelope, Heard, Retired};
 use m2_runtime::{CellTarget, Cmd, LaneSwap, LiveEv, Renderer, Transport};
-pub use outputs::{Choice, Output, default_output, output_ready, outputs};
+pub use outputs::{Choice, Freed, Output, default_output, output_ready, outputs};
 pub use resample::Resampler;
 
 use crate::cells::{CELL_SEQ, Writer};
@@ -263,6 +263,9 @@ struct Shared {
     device: AtomicBool,
     /// The last callback played no engine and faded none out: an unload's fade out is done.
     quiet: AtomicBool,
+    /// Its device is free again: the stream stopped, or the silent clock ended (next track, NX-S5:
+    /// [`Player::freed`]).
+    freed: AtomicBool,
     /// Seeks and loads sent, and taken by the audio thread, and the last target: until the
     /// audio thread takes them, they are where playback is.
     seeks_sent: AtomicU64,
@@ -739,6 +742,7 @@ fn serve<S>(stream: S, shared: Arc<Shared>, alive: Weak<()>) {
         std::thread::sleep(PLAYED);
     }
     drop(stream);
+    shared.freed.store(true, Ordering::Release);
 }
 
 /// Drop what the audio thread retires, polling: no thread ever blocks on the channel. Ends once
@@ -859,6 +863,7 @@ impl Player {
         let (player, mut cb, retired) = Player::parts(SR, name);
         player.shared.device.store(true, Ordering::Relaxed);
         let alive = Arc::downgrade(&player.alive);
+        let shared = player.shared.clone();
         std::thread::Builder::new().name("m2-play-silent".into()).spawn(move || {
             let mut buf = vec![0.0f32; frames * 2];
             let period = Duration::from_secs_f64(frames as f64 / SR as f64);
@@ -871,6 +876,8 @@ impl Player {
                 next = next.max(Instant::now().checked_sub(period).unwrap_or(next));
                 std::thread::sleep(next.saturating_duration_since(Instant::now()));
             }
+            drop(cb);
+            shared.freed.store(true, Ordering::Release);
         })?;
         drop_retired(retired);
         Ok(player)
@@ -879,6 +886,8 @@ impl Player {
     /// A player whose callback the caller runs ([`Driver::fill`]), at `device_rate`.
     pub fn driven(device_rate: u32) -> (Player, Driver) {
         let (player, cb, retired) = Player::parts(device_rate, "driven");
+        // No device of its own: free at once.
+        player.shared.freed.store(true, Ordering::Relaxed);
         (player, Driver { cb, retired })
     }
 

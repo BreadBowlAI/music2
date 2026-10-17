@@ -9,7 +9,7 @@
 //! the OS lists that won't open would otherwise be tried, and fail, at every action (plan X23).
 //!
 //! Settings chooses the output and its buffer size (gaps #31, [`Graph::set_output`]): the player
-//! is let go, and a new one starts there at once, where it was, stopped.
+//! is let go, and once its stream has stopped a new one starts there, where it was, stopped.
 //!
 //! Only [`Inner::device`](super::Inner) starts players: it asks [`Outputs::start`] for one, and
 //! [`Outputs::came_back`] whether a real one may take over from the stand-in.
@@ -47,6 +47,8 @@ pub(super) type Ready = Box<dyn Fn() -> Option<String> + Send + Sync>;
 pub(super) const RETRY: Duration = Duration::from_secs(30);
 /// How often the server looks for an output while the silent player stands in.
 pub const LOOK_EVERY: Duration = Duration::from_secs(2);
+/// How long a change of output waits for the old stream to stop before it opens the new one.
+const FREE: Duration = Duration::from_secs(1);
 /// What the user is told once an output plays again.
 pub(super) const BACK: &str = "Sound output is back. Press Play to go on.";
 
@@ -204,12 +206,13 @@ impl Graph {
     }
 
     /// Play on the output `choice` names, at its buffer size (Settings, gaps #31). A player that
-    /// plays is let go, as after a device change, and a new one starts there at once, with the song
+    /// plays is let go, as after a device change, and once its stream stopped (at most a second)
+    /// a new one starts there, with the song
     /// loaded into it where it was, stopped (unless the session is busy: then the next catch-up). Returns whether it was playing (the
     /// window says "Playback stopped. Press Play to go on."). With no player yet, the next song's
     /// opens there. Refused while an export holds the player (plan X22).
     pub fn set_output(&self, choice: Choice) -> Result<bool> {
-        let (old, st) = {
+        let st = {
             let mut d = self.inner.player.lock();
             if d.as_ref().is_some_and(|d| d.player.held()) {
                 bail!("Wait for the export to finish.");
@@ -222,13 +225,19 @@ impl Graph {
             // the moment it is, and loads the song where it was (NX-S6).
             let st = old.player.status();
             *self.inner.resume.lock() = st.pending.unwrap_or(st.beats);
-            (old, st)
+            // Its stream stops before the new one opens, the slot locked meanwhile so no other
+            // action opens one: an output only one stream may hold at once (an ALSA `hw:` device)
+            // would refuse it (NX-S5). It first plays the unload's fade out; one stuck isn't
+            // waited for past `FREE`.
+            let freed = old.player.freed();
+            retire(old.player);
+            freed.wait(FREE);
+            st
         };
         #[cfg(test)]
         if let Some(f) = self.inner.output.changing.lock().as_mut() {
             f();
         }
-        retire(old.player);
         self.inner.device()?;
         // The song goes into it now, not at the server's next catch-up: Play pressed at once plays.
         self.catch_up();
