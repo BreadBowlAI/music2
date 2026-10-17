@@ -284,7 +284,7 @@ A number in the code can carry a unit, written as a function. Plugging a value w
 | `song(fn)` | the root module in `song.ts`, with the key `song`: whatever it returns is what you hear |
 | `lane.notes(key)`, `lane.control(key, unit, fallback)`, `lane.mask(key)`, `lane.audio(key)` | the timeline lanes, each with an optional last argument `{ name, shared }` |
 | `key(k, fn)` | runs `fn` in a frame named `k`, which files the saved settings of the plugins built inside it under `k` |
-| `time.beats`, `time.seconds` | the song's position |
+| `time.beats`, `time.seconds`, `time.playing` | the song's position, and 1 while it plays (0 while stopped). A track gets `time` in its `fn`; a component's body imports it from `@m2/core` |
 | `poly(notes, voice, { voices })` | plays a voice for each note at once |
 | `feedback(kind)` | a loop with a short delay; give its input later with `.set()` |
 | `kernel(id, inputs)` | one kernel, such as `kernel("std:svf", { … })` |
@@ -399,6 +399,8 @@ std is an ordinary package in `std/`: TypeScript in `std/src`, kernels in `std/k
 | Delay & Reverb | `delay`, `reverb` |
 | Modulation | `chorus`, `phaser`, `tremolo` |
 | Utility | `gain`, `pan`, `widen` |
+
+Chorus, phaser and tremolo move only while the song plays. Stopped, they wait, and Play carries them on from there. So a song you open sounds like its export when you press Play, however long you wait first. Going back to bar 1 after playing is a jump: the wobble carries on from where it stopped, so that play may differ a little from the export. The bitcrusher keeps crushing a tail after Stop, and at Play it picks up where it stopped.
 
 **`duck`** (`std/fx`) is the sidechain: `duck(bass.out, kick.env)` turns the bass down while the kick plays. It needs a second signal, so it's written in code rather than added from the browser.
 
