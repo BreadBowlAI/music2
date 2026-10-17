@@ -1,5 +1,6 @@
 import clsx from "clsx";
 import { useEffect, useRef, useState } from "react";
+import { useModalKeys } from "../lib/modal";
 import { changeId, checkId, useTrackId } from "../lib/rekey";
 import { Button } from "./ui";
 
@@ -51,27 +52,8 @@ function Dialog({ module, name }: { module: string; name: string }) {
     field.current?.focus();
     field.current?.select();
   }, []);
-  // The dialog's keys: modal, so none reaches the page.
-  useEffect(() => {
-    const key = (e: KeyboardEvent) => {
-      const root = box.current;
-      if (!root) return;
-      e.stopPropagation();
-      const controls = [...root.querySelectorAll<HTMLElement>("input, button:not([disabled])")];
-      const at = controls.indexOf(document.activeElement as HTMLElement);
-      const inField = document.activeElement === field.current;
-      if (e.key === "Escape") close();
-      else if (e.key === "Tab") {
-        const n = controls.length;
-        controls[at < 0 ? 0 : (at + (e.shiftKey ? n - 1 : 1)) % n]?.focus();
-      } else if (e.key === "Enter" && (inField || at < 0)) void submitting.current();
-      // In the field, keys are the field's; on a button, Return and Space press it.
-      else return;
-      e.preventDefault();
-    };
-    window.addEventListener("keydown", key, true);
-    return () => window.removeEventListener("keydown", key, true);
-  }, []);
+  // The keys of every dialog (lib/modal): Return in the field presses Change ID.
+  useModalKeys(box, { onEscape: close, onDefault: () => void submitting.current() });
   return (
     <div className="fixed inset-0 z-[70] grid place-items-center p-4 bg-fg-strong/20" onPointerDown={(e) => e.target === e.currentTarget && close()}>
       <div ref={box} role="dialog" aria-modal aria-labelledby="track-id-title" data-testid="track-id-dialog" className="w-[440px] max-w-full p-6 rounded-md bg-raised shadow-pop animate-dialog cursor-default">
