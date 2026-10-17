@@ -550,7 +550,11 @@ mod tests {
             ("frames: the device took 2815600", with(&|f| f.whole.frames -= 400), true),
         ];
         let past = with(&|f| (f.steady.over, f.steady.max_ns) = (std::mem::take(&mut f.steady.hist[200]), Some(9_000_000)));
-        assert!(failed(&past, true)[0].contains("p99 over 8192 (over 307% of the period), p99.9 over 8192, max 9000 (337%)"), "{:?}", failed(&past, true));
+        assert!(
+            failed(&past, true)[0].contains("p99 over 8192 (over 307% of the period), p99.9 over 8192, max 9000 (337%)"),
+            "{:?}",
+            failed(&past, true)
+        );
         // The longest before the window: the window's own is only known to be past the histogram.
         let before = with(&|f| (f.steady.over, f.steady.max_ns) = (std::mem::take(&mut f.steady.hist[200]), None));
         assert!(failed(&before, true)[0].contains("max over 8192 (over 307%)"), "{:?}", failed(&before, true));

@@ -114,9 +114,10 @@ pub fn engine_thread(g: &Group) -> Joined {
     }
 }
 
-/// Before an engine thread exits: it leaves the workgroup it joined (macOS).
-pub fn end_engine_thread() {
-    os::rt::end_engine_thread()
+/// Before an engine thread exits: it leaves `g`'s workgroup, which it joined (macOS). The caller
+/// holds `g` until then: the leave needs the workgroup, which `g` keeps.
+pub fn end_engine_thread(g: &Group) {
+    os::rt::end_engine_thread(&g.workgroup)
 }
 
 /// Once, on the device's own callback thread. macOS: nothing to do, CoreAudio made its IO thread
@@ -225,7 +226,7 @@ mod tests {
         assert!(g.missing().is_some_and(|m| m.contains("no audio device")), "{:?}", g.missing());
         let joined = std::thread::spawn(move || {
             let j = engine_thread(&g);
-            end_engine_thread();
+            end_engine_thread(&g);
             j
         });
         assert_eq!(joined.join().unwrap(), Joined::default());

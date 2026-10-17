@@ -48,13 +48,24 @@ pub struct Joins {
 /// A live player's workers (8a's live half, RENDER-28a): each makes wasmtime's per-thread state,
 /// enters the one floating-point mode and becomes an engine thread of `group` (real time at its
 /// period, in its workgroup), counted in the [`Joins`]; then `mark(true)` (tests: the allocation
-/// trap) until `mark(false)` before it leaves the workgroup and exits. With nothing to do a worker
+/// trap) until `mark(false)` before it leaves the workgroup and exits. Each holds `group` until it
+/// has left it: the player lets its own go while the workers play on. With nothing to do a worker
 /// spins half a period (1.25 periods with `spin`, so the next callback finds it awake) before it
 /// parks; the device's thread spins a period with nothing finishing before it dozes, a period at
 /// most each time.
 pub fn live(group: Arc<Group>, spin: bool, mark: Option<fn(bool)>) -> (m2_pool::Setup, Arc<Joins>) {
     let period = group.period().unwrap_or(Duration::from_millis(10));
     let joins = Arc::new(Joins::default());
+    let stop = {
+        let group = group.clone();
+        move |_worker: usize| {
+            if let Some(mark) = mark {
+                mark(false);
+            }
+            m2_os::rt::end_engine_thread(&group);
+            LIVE.fetch_sub(1, Ordering::SeqCst);
+        }
+    };
     let start = {
         let joins = joins.clone();
         move |_worker: usize| {
@@ -70,13 +81,6 @@ pub fn live(group: Arc<Group>, spin: bool, mark: Option<fn(bool)>) -> (m2_pool::
                 mark(true);
             }
         }
-    };
-    let stop = move |_worker: usize| {
-        if let Some(mark) = mark {
-            mark(false);
-        }
-        m2_os::rt::end_engine_thread();
-        LIVE.fetch_sub(1, Ordering::SeqCst);
     };
     let setup = m2_pool::Setup {
         start: Some(Arc::new(start)),
@@ -107,5 +111,35 @@ pub fn from_env() -> Result<Option<usize>> {
         Ok(v) => parse(&v).map(Some).with_context(|| format!("M2_THREADS={v}")),
         Err(std::env::VarError::NotPresent) => Ok(None),
         Err(e) => Err(anyhow!("M2_THREADS: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+
+    use m2_os::rt::Group;
+
+    // RENDER-28a: a live pool's workers hold their group (on a Mac, the output's workgroup, which
+    // each leaves as it stops) until the last has left it, whoever else lets it go first: the
+    // player retires its handover, the last other holder, while the workers play on.
+    #[test]
+    fn live_workers_hold_their_group_until_they_leave() {
+        let group = Arc::new(Group::none(Some(Duration::from_millis(3))));
+        let held = Arc::downgrade(&group);
+        let (setup, joins) = super::live(group, false, None);
+        let (pool, runner) = m2_pool::Pool::new(4, setup).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while joins.started.load(Ordering::SeqCst) < 3 {
+            assert!(Instant::now() < deadline, "3 workers start");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // Each worker lets its start hook go right after it ran.
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(held.upgrade().is_some(), "the workers hold their group while they are in it");
+        drop((pool, runner));
+        assert!(held.upgrade().is_none(), "let go once the last has left");
     }
 }

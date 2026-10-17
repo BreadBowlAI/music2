@@ -387,8 +387,9 @@ mod tests {
         let live = LiveThreads { count: Some(4), between: Between::Park };
         let e = for_device(None, 48_000, live, &|| 128, &report);
         let probe = std::thread::spawn(|| {
-            let j = m2_os::rt::engine_thread(&Group::of_output(None, Duration::from_millis(3)));
-            m2_os::rt::end_engine_thread();
+            let g = Group::of_output(None, Duration::from_millis(3));
+            let j = m2_os::rt::engine_thread(&g);
+            m2_os::rt::end_engine_thread(&g);
             j.real_time
         });
         let granted = probe.join().unwrap();

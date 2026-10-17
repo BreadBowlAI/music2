@@ -176,12 +176,13 @@ pub(crate) fn engine_thread(period: Option<Duration>, w: &Workgroup) -> Joined {
     Joined { real_time, workgroup, cancelled }
 }
 
-pub(crate) fn end_engine_thread() {
+pub(crate) fn end_engine_thread(w: &Workgroup) {
     JOINING.with(|j| {
         let wg = j.workgroup.replace(std::ptr::null_mut());
         if !wg.is_null() {
-            // SAFETY: the workgroup this thread joined, with the token the join wrote. The group
-            // outlives every engine thread (the pool's hooks hold it).
+            debug_assert_eq!(wg, w.0, "an engine thread leaves the workgroup it joined");
+            // SAFETY: the workgroup this thread joined, with the token the join wrote; `w`, which
+            // the caller holds, keeps its reference until the leave returns.
             unsafe { os_workgroup_leave(wg, j.token.get()) };
         }
     })
@@ -245,7 +246,7 @@ mod tests {
                     &mut default,
                 )
             };
-            end_engine_thread();
+            end_engine_thread(&g);
             (j, (kr, p.period, p.computation, p.constraint, default))
         })
         .join()
@@ -269,7 +270,7 @@ mod tests {
                 let j = engine_thread(&g);
                 // A second call keeps the one join.
                 assert!(engine_thread(&g).workgroup);
-                end_engine_thread();
+                end_engine_thread(&g);
                 j
             })
             .join()

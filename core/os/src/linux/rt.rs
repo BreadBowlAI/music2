@@ -31,7 +31,7 @@ pub(crate) fn engine_thread(_period: Option<Duration>, _w: &Workgroup) -> Joined
     Joined { real_time: fifo(false), ..Joined::default() }
 }
 
-pub(crate) fn end_engine_thread() {}
+pub(crate) fn end_engine_thread(_w: &Workgroup) {}
 
 pub(crate) fn on_device_thread() -> Joined {
     Joined { real_time: fifo(true), ..Joined::default() }
@@ -78,7 +78,7 @@ mod tests {
             let d = on_device_thread(&g);
             // SAFETY: plain system call on this thread.
             let policy = unsafe { libc::sched_getscheduler(0) };
-            end_engine_thread();
+            end_engine_thread(&g);
             (w, d, policy)
         })
         .join()

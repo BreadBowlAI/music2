@@ -336,7 +336,10 @@ fn t_kernels() -> PathBuf {
              (f32.store (i32.const 4096) (f32.const 0)))
            (func (export "sore_active") (result i32) (i32.const 0))"#,
         port("sore")
-    ) + &each("sore", &format!("(if (f32.gt (local.get $x) (f32.const 0.5)) (then (f32.store (i32.const 4096) (f32.const 1)))) {}", out("(f32.const 1)")));
+    ) + &each(
+        "sore",
+        &format!("(if (f32.gt (local.get $x) (f32.const 0.5)) (then (f32.store (i32.const 4096) (f32.const 1)))) {}", out("(f32.const 1)")),
+    );
     // The factors are loaded from memory, so no compiler multiplies them ahead of time.
     let product = "(f32.mul (f32.load (i32.const 4100)) (f32.load (i32.const 4104)))";
     let tiny = format!(
