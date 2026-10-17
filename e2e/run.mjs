@@ -87,6 +87,7 @@ export const SUITES = [
   ["pl-projects", "none", { expect: 66 }],
   ["nx-settings", "none", { expect: 42 }],
   ["nx-nodevice", "none", { expect: 11 }],
+  ["sound-stops", "none", { expect: 12 }],
   ["export", "export", { expect: 37 }],
   ["fx-fixes", "none", { expect: 75 }],
   ["s4-clips", "fix", { expect: 28 }],

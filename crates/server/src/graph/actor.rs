@@ -92,6 +92,7 @@ pub(super) fn run(inner: Arc<Inner>, jobs: mpsc::Receiver<Job>, events: HostEven
         let start = actor.inner.now_ns();
         actor.inner.busy.lock().since = start.max(1);
         actor.heard_plugins();
+        super::stopped::heard(&actor.inner, actor.open.as_ref());
         // A request that panics answers with an error (its reply is dropped unsent), and the
         // actor serves the next.
         if catch_unwind(AssertUnwindSafe(|| job(&mut actor))).is_err() {

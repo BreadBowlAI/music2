@@ -572,7 +572,8 @@ fn packages_must_be_sandboxed_and_speak_our_abi() {
 // RENDER-32: a kernel memory never moves, in either layout, however it grows, so the address each
 // instance keeps from its build stays its memory's (`KernelInst::ports`). This kernel grows its
 // memory by a page at every call, up to the 32 MiB cap, and copies its input to its output: it plays
-// the sine it is given, bit for bit, every block, and its memory stays where it was built.
+// the sine it is given, bit for bit, every block, and its memory stays where it was built. It stops
+// growing at the cap: a grow past it traps (`a_kernel_over_its_memory_says_it_ran_out`).
 #[test]
 fn a_kernel_memory_never_moves() {
     let wat = r#"(module
@@ -583,7 +584,7 @@ fn a_kernel_memory_never_moves() {
       (func (export "k_port") (param i32) (result i32) (select (i32.const 1024) (i32.const 4096) (i32.eqz (local.get 0))))
       (func (export "k_reset"))
       (func (export "k_process") (param i32)
-        (drop (memory.grow (i32.const 1)))
+        (if (i32.lt_u (memory.size) (i32.const 512)) (then (drop (memory.grow (i32.const 1)))))
         (memory.copy (i32.const 4096) (i32.const 1024) (i32.shl (local.get 0) (i32.const 2))))
       (func (export "k_active") (result i32) (i32.const 0)))"#;
     let dir = package_with(wat, "inputs = [\"in: audio<1>\"]\noutputs = [\"out: audio<1>\"]");

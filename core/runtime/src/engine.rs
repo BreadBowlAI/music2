@@ -622,11 +622,10 @@ impl Engine {
         let mut frames = match cur.render_block_on(clock, runner) {
             Ok(f) => *f,
             Err(e) => {
-                // A kernel trapped: silence it and stop, as an error can't play (the error
-                // allocated; this path only).
+                // Live, a node that fails stops alone (RENDER-25), so no error comes here: one that
+                // does is counted, and its block is silence (it allocated; this path only).
                 drop(e);
                 self.crashes += 1;
-                cur.transport_cmd(Cmd::Stop);
                 [[0.0; 2]; BLOCK]
             }
         };

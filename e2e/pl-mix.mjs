@@ -173,14 +173,22 @@ const pair = () =>
     const read = (sel) => Number(document.querySelector(sel)?.getAttribute("aria-valuenow"));
     return { strip: read('[data-strip="hats"] [role=meter]'), head: read('[data-testid=timeline] [data-track="hats"] [role=meter]') };
   });
-const samples = async (n) => {
+/**
+ * Pairs read 50 ms apart: 10, then on until one is `loud`, for 12 s at most. first-song's hats are
+ * 45 ms hits, which the meter shows for a frame or two: ten reads can all land between them, and
+ * reads 150 ms apart once took 37 to find one over −24 dB.
+ */
+const samples = async (loud) => {
   const out = [];
-  for (let i = 0; i < n; i++) {
+  const t = Date.now();
+  while (out.length < 10 || (Date.now() - t < 12000 && !out.some(loud))) {
     out.push(await pair());
-    await sleep(150);
+    await sleep(50);
   }
   return out;
 };
+/** Reads for a check's words: how many, the first ten, and the loud ones. */
+const told = (reads, loud) => `${reads.length} reads: ${reads.slice(0, 10).map((s) => `${s.strip}/${s.head}`).join(" ")}; loud: ${reads.filter(loud).map((s) => `${s.strip}/${s.head}`).join(" ") || "none"}`;
 check(await playSong(), "first-song plays");
 const sides = await until(async () => {
   const s = await page.$eval(meterOf("hats"), (e) => [Number(e.dataset.left), Number(e.dataset.right)]).catch(() => [FLOOR, FLOOR]);
@@ -188,16 +196,18 @@ const sides = await until(async () => {
 }, 4000);
 check(sides, "the Hats strip's two bars both read above the floor");
 check(await until(async () => Number(await page.$eval(meterOf("master"), (e) => e.getAttribute("aria-valuenow")).catch(() => FLOOR)) > FLOOR, 3000), "Master's meter moves with the song's output");
-const before = await samples(10);
-check(before.every((s) => Math.abs(s.strip - s.head) <= 1.5) && before.some((s) => s.strip > FLOOR), `the Hats strip's meter reads as its header's, 10 times (${before.map((s) => `${s.strip}/${s.head}`).join(" ")})`);
+const heard = (s) => s.strip > FLOOR;
+const before = await samples(heard);
+check(before.every((s) => Math.abs(s.strip - s.head) <= 1.5) && before.some(heard), `the Hats strip's meter reads as its header's, at every read (${told(before, heard)})`);
 await page.click(`${strip("hats")} [data-testid=fader-level]`, { count: 2 });
 await page.waitForSelector(`${strip("hats")} [data-testid=knob-type-in]`);
 await page.keyboard.type("-30");
 await page.keyboard.press("Enter");
 check(await until(() => read("song.ts").includes("hats: { in: hats.out, db: db(-30), pan: 0.3 },")), "Hats' fader goes to −30 dB");
 await sleep(600);
-const after = await samples(10);
-check(after.every((s) => Math.abs(s.strip - s.head) <= 1.5) && after.some((s) => s.strip > -24), `and its strip meter still reads as the header's: before the fader (${after.map((s) => `${s.strip}/${s.head}`).join(" ")})`);
+const loud = (s) => s.strip > -24;
+const after = await samples(loud);
+check(after.every((s) => Math.abs(s.strip - s.head) <= 1.5) && after.some(loud), `and its strip meter still reads as the header's: before the fader (${told(after, loud)})`);
 await linted("[data-testid=mix]", "the Mix view playing");
 await page.screenshot({ path: `${ROOT}/pl-mix-playing.png` });
 check(await stopSong(), "Space stops");
