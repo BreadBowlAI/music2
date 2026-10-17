@@ -46,11 +46,12 @@ export function RulerMarkers({
   const [drag, setDrag] = useState<{ from: Marker; to: number } | null>(null);
   const [menu, setMenu] = useState<{ marker: Marker; x: number; y: number } | null>(null);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  // While a new one is named, it shows where it goes.
-  const drawn = [
-    ...list.map((m) => (drag && m === drag.from ? { ...m, beat: drag.to } : m)),
-    ...(editing && !editing.from && !markerAt(list, editing.beat) ? [{ beat: editing.beat, name: nextName(list) }] : []),
-  ].sort((a, b) => a.beat - b.beat);
+  // Each as drawn, with the marker of the list it is (`own`): one being dragged where it goes, and
+  // while a new one is named, it too where it goes (no `own` yet).
+  const drawn: { m: Marker; own: Marker | null }[] = [
+    ...list.map((m) => ({ m: drag && m === drag.from ? { ...m, beat: drag.to } : m, own: m })),
+    ...(editing && !editing.from && !markerAt(list, editing.beat) ? [{ m: { beat: editing.beat, name: nextName(list) }, own: null }] : []),
+  ].sort((a, b) => a.m.beat - b.m.beat);
   const write = (next: Marker[], step: string) => void writeMarkers(next, { name: step });
   const keep = (name: string) => {
     if (!editing) return;
@@ -71,10 +72,9 @@ export function RulerMarkers({
   };
   return (
     <>
-      {drawn.map((m, i) => {
-        const next = drawn[i + 1];
+      {drawn.map(({ m, own }, i) => {
+        const next = drawn[i + 1]?.m;
         const span = ((next?.beat ?? width / ppb) - m.beat) * ppb;
-        const own = list.find((x) => x === m || (drag?.from === x && drag.to === m.beat));
         const isNew = !own;
         return (
           <div
