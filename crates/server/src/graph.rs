@@ -52,6 +52,7 @@ mod songkey;
 mod view_file;
 mod watcher;
 pub mod output;
+mod steps;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -1585,13 +1586,14 @@ impl Graph {
         }
     }
 
-    /// Undo the last edit made through this session: its stored inverse (WRITE-21).
+    /// Undo the last edit made through this session: its stored inverse (WRITE-21). The answer
+    /// names what it took back (`name`, `structural`; see `steps`).
     pub fn undo(&self, token: u64) -> Result<Value> {
-        self.edit(token, m2_editor::undo)
+        self.step(token, false)
     }
 
     pub fn redo(&self, token: u64) -> Result<Value> {
-        self.edit(token, m2_editor::redo)
+        self.step(token, true)
     }
 
     fn edit(

@@ -635,6 +635,9 @@ impl Open {
                 "mix": s.mix(),
                 "can_undo": s.can_undo(),
                 "can_redo": s.can_redo(),
+                // What they would take back, in words (gaps #29, `steps`).
+                "undo_name": super::steps::named(s.step_names().0.as_ref(), &self.timeline),
+                "redo_name": super::steps::named(s.step_names().1.as_ref(), &self.timeline),
                 "effects": s.effects(),
                 "instruments": s.instruments(),
                 "palette": m2_editor::layout::DEFAULT_ORDER,

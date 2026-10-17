@@ -290,12 +290,17 @@ pub(crate) struct TxStep {
     /// The bytes of text and data it keeps alive, counted once, when it is made: undo's bound is
     /// checked at every step, over every step (WRITE-21).
     size: usize,
+    /// The revision the change it undoes made (set as it is recorded): what a window names it by.
+    pub made: u64,
+    /// What it is called, as the window that made it says ("Hats pan"), and whether it adds or
+    /// removes a part (WRITE-21's names; gaps #29). None: named from its file.
+    pub name: Option<(String, bool)>,
 }
 
 impl TxStep {
     pub fn new(inverse: Tx, raw: bool, data_only: bool, file: String) -> TxStep {
         let size = retained(&inverse);
-        TxStep { inverse, raw, data_only, file, size }
+        TxStep { inverse, raw, data_only, file, size, made: 0, name: None }
     }
 
     /// The before-images in `blobs/` it needs.

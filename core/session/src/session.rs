@@ -92,6 +92,16 @@ pub struct Stepped {
     pub committed: crate::tx::Committed,
 }
 
+/// The step on top of undo or of redo, as the app names it (WRITE-21, gaps #29): the name the
+/// window that made it gave, whether it adds or removes a part, and the file it is shown as (what
+/// a step nobody named is called by).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StepName {
+    pub name: Option<String>,
+    pub structural: bool,
+    pub file: String,
+}
+
 /// Why an undo or a redo didn't go ahead.
 #[derive(Debug)]
 pub enum StepError {
@@ -514,10 +524,35 @@ impl Session {
         }
     }
 
-    /// A new Tx's undo step: remembered, ending any redo.
-    pub(crate) fn record_tx(&mut self, step: TxStep) {
+    /// A new Tx's undo step: remembered, ending any redo. It is named by the revision it made: the
+    /// accepted one now.
+    pub(crate) fn record_tx(&mut self, mut step: TxStep) {
+        step.made = self.accepted.number;
         self.push_history(step);
         self.redo.clear();
+    }
+
+    /// Name the undo step of the change that made revision `made` (gaps #29): "Hats pan", and
+    /// whether it adds or removes a part. Any depth of undo or redo. False when no step has it:
+    /// it is gone, or nothing changed. The name follows the step through undo and redo.
+    pub fn name_step(&mut self, made: u64, name: &str, structural: bool) -> bool {
+        match self.history.iter_mut().chain(self.redo.iter_mut()).rev().find(|t| t.made == made) {
+            Some(t) => {
+                t.name = Some((name.to_string(), structural));
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The steps on top of undo and of redo, as the app names them (read only).
+    pub fn step_names(&self) -> (Option<StepName>, Option<StepName>) {
+        let named = |t: &TxStep| StepName {
+            name: t.name.as_ref().map(|n| n.0.clone()),
+            structural: t.name.as_ref().is_some_and(|n| n.1),
+            file: t.file.clone(),
+        };
+        (self.history.last().map(named), self.redo.last().map(named))
     }
 
     fn push_history(&mut self, step: TxStep) {
@@ -571,7 +606,9 @@ impl Session {
         };
         match result {
             Ok((done, inverse)) => {
-                if let Some(inverse) = inverse {
+                if let Some(mut inverse) = inverse {
+                    // The step it pushes is the same change: it keeps its name.
+                    (inverse.made, inverse.name) = (done.number, step.name.clone());
                     if redo { &mut self.history } else { &mut self.redo }.push(inverse);
                 }
                 let (before, after) = tx.label.clone();

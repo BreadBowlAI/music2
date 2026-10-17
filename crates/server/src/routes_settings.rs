@@ -1,12 +1,12 @@
 //! Lane C's routes, in a router of their own, merged into the API's: this machine's settings (gaps
-//! #31). Settings aren't a project write: no session, no undo; they work with no song open and in
-//! a read-only window.
+//! #31), and undo's names (gaps #29). Settings aren't a project write: no session, no undo; they
+//! work with no song open and in a read-only window. Naming an undo step writes nothing either.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::State;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
@@ -19,7 +19,7 @@ type S = State<Arc<AppState>>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
 pub fn router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
-    Router::new().route("/api/settings", get(settings_get).post(settings_set))
+    Router::new().route("/api/settings", get(settings_get).post(settings_set)).route("/api/graph/step", post(graph_step))
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {
@@ -100,4 +100,20 @@ async fn settings_set(State(s): S, Json(r): Json<SettingsReq>) -> ApiResult {
     // A new player: the windows fetch the status again.
     s.graph_changed();
     Ok(Json(answer?))
+}
+
+#[derive(Deserialize)]
+struct StepReq {
+    session: u64,
+    revision: u64,
+    name: String,
+    #[serde(default)]
+    structural: bool,
+}
+
+/// `POST /api/graph/step {session, revision, name, structural}`: name the undo step of the edit this
+/// window made as `revision` ("Hats pan"; gaps #29). Answers `{named, revision, undo_name, redo_name}`.
+async fn graph_step(State(s): S, Json(r): Json<StepReq>) -> ApiResult {
+    let state = s.clone();
+    Ok(Json(blocking(move || state.graph.name_step(r.session, r.revision, r.name, r.structural)).await?))
 }

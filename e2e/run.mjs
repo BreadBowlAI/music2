@@ -63,6 +63,7 @@ export const SUITES = [
   ["graph", "proj", { expect: 19 }],
   ["cables", "cables", { expect: 12 }],
   ["undo", "cables", { expect: 10 }],
+  ["nx-undo", "fix", { expect: 18 }],
   ["effects", "proj", { expect: 12 }],
   ["layout", "proj", { expect: 39 }],
   ["views", "proj", { expect: 30 }],

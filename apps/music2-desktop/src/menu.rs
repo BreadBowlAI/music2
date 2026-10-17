@@ -14,7 +14,9 @@
 //! Quit (Ctrl+Q) ends File, About ends Help, and no Window menu. `CmdOrCtrl` is ⌘ on a Mac and
 //! Ctrl elsewhere.
 
-use tauri::menu::{AboutMetadata, Menu, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
+use std::sync::Mutex;
+
+use tauri::menu::{AboutMetadata, Menu, MenuBuilder, MenuItem, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Manager, Wry};
 
 use crate::{Native, actions};
@@ -123,6 +125,48 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     // In the app menu on a Mac, after About; in File elsewhere, above Quit.
     ("settings", "Settings…", Some("CmdOrCtrl+Comma")),
 ];
+
+/// Undo's and Redo's names as the Edit menu says them (gaps #29), and the two items of the menu bar
+/// built last: a menu built again (the recent songs changed) is titled from the names.
+struct Undo {
+    names: (Option<String>, Option<String>),
+    items: Option<(MenuItem<Wry>, MenuItem<Wry>)>,
+}
+
+static UNDO: Mutex<Undo> = Mutex::new(Undo { names: (None, None), items: None });
+
+/// An item's title: Undo's and Redo's with the name of what they take back ("Undo Hats pan"), or
+/// their word alone; any other item's as `ITEMS` has it.
+fn title(id: &str, text: &str) -> String {
+    let names = UNDO.lock().map(|u| u.names.clone()).unwrap_or_default();
+    let name = match id {
+        "undo" => names.0,
+        "redo" => names.1,
+        _ => None,
+    };
+    match name {
+        Some(name) => format!("{text} {name}"),
+        None => text.to_string(),
+    }
+}
+
+/// Edit ▸ Undo and Redo say what they would take back (gaps #29): the app's title loop gives the
+/// names the server publishes, and the items change only when they do.
+pub fn set_undo_names(undo: Option<String>, redo: Option<String>) {
+    let items = {
+        let Ok(mut u) = UNDO.lock() else { return };
+        if u.names == (undo.clone(), redo.clone()) {
+            return;
+        }
+        u.names = (undo, redo);
+        u.items.clone()
+    };
+    // Off the lock: a title is set on the main thread, which may be building the menu.
+    if let Some((undo, redo)) = items {
+        let _ = undo.set_text(title("undo", "Undo"));
+        let _ = redo.set_text(title("redo", "Redo"));
+    }
+}
 
 /// Window → Close Window, which quits (as the window's close button does): ⌘W is Close Song.
 const CLOSE_WINDOW: &str = "Shift+CmdOrCtrl+W";
@@ -272,17 +316,24 @@ fn recent_songs(app: &AppHandle) -> Vec<(std::path::PathBuf, String)> {
 
 pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let mut bar = MenuBuilder::new(app);
+    let (mut undo, mut redo) = (None, None);
     for (name, rows) in layout(MAC) {
         let mut menu = SubmenuBuilder::new(app, name);
         for row in rows {
             menu = match row {
                 Row::Item(id) => {
                     let &(id, text, accel) = ITEMS.iter().find(|i| i.0 == id).expect("a menu item");
-                    let b = MenuItemBuilder::with_id(id, text);
-                    menu.item(&match accel {
+                    let b = MenuItemBuilder::with_id(id, title(id, text));
+                    let item = match accel {
                         Some(a) => b.accelerator(a).build(app)?,
                         None => b.build(app)?,
-                    })
+                    };
+                    match id {
+                        "undo" => undo = Some(item.clone()),
+                        "redo" => redo = Some(item.clone()),
+                        _ => {}
+                    }
+                    menu.item(&item)
                 }
                 Row::Line => menu.separator(),
                 Row::Recent => {
@@ -316,6 +367,9 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             };
         }
         bar = bar.item(&menu.build()?);
+    }
+    if let Ok(mut u) = UNDO.lock() {
+        u.items = undo.zip(redo);
     }
     bar.build()
 }
@@ -518,6 +572,20 @@ mod tests {
         let file = &gtk.iter().find(|m| m.0 == "File").expect("a File menu").1;
         assert_eq!(file[file.len() - 4..], [Row::Line, Row::Item("settings"), Row::Line, Row::Item("quit")]);
         assert!(!mac.iter().find(|m| m.0 == "File").expect("File").1.contains(&Row::Item("settings")), "once on a Mac");
+    }
+
+    /// Gaps #29 (plan X8): Edit ▸ Undo and Redo take the names the server gives, and say their word
+    /// alone with none; a menu built again is titled from them.
+    #[test]
+    fn the_undo_items_take_a_name() {
+        assert_eq!((title("undo", "Undo"), title("redo", "Redo")), ("Undo".to_string(), "Redo".to_string()));
+        set_undo_names(Some("Hats pan".into()), Some("adding Reverb".into()));
+        assert_eq!(title("undo", "Undo"), "Undo Hats pan");
+        assert_eq!(title("redo", "Redo"), "Redo adding Reverb");
+        assert_eq!(title("save", "Save"), "Save", "no other item");
+        set_undo_names(None, Some("Bass notes".into()));
+        assert_eq!((title("undo", "Undo"), title("redo", "Redo")), ("Undo".to_string(), "Redo Bass notes".to_string()));
+        set_undo_names(None, None);
     }
 
     /// OS-55: the reveal item names the Mac's Finder only on a Mac.

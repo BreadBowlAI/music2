@@ -177,12 +177,16 @@ check(await until(() => exists(NEW) && !exists(OLD)), "moved again");
 // One toast shows at a time, so the other change is one made outside the app, which makes none.
 const songBefore = read("song.ts");
 const revBefore = (await state()).view.revision;
+// The page too (D7): a toast's Undo judges by the revision the page shows, so the page must have the
+// outside edit's before the click: the page's own read of the song at that revision.
+const fresh = page
+  .waitForResponse(async (r) => r.request().method() === "GET" && new URL(r.url()).pathname === "/api/graph" && ((await r.json().catch(() => null))?.view?.revision ?? 0) > revBefore, { timeout: 8000 })
+  .catch(() => null);
 write("song.ts", `${songBefore}// an edit made outside the app\n`);
 await until(async () => (await state()).view.revision > revBefore);
-// The page too (D7): a toast's Undo judges by the revision the page shows, so the page must have the
-// outside edit's before the click. Then the top bar's Undo names nothing, since the step isn't its own.
+// The outside edit is no undo step (gaps #29: the server names the steps): Undo still takes back the move, and says so.
 const undoTitle = () => page.$eval('button[aria-label="Undo"]', (b) => b.title);
-check(await until(async () => (await undoTitle()) === "Undo (⌘Z)"), `the page has the outside edit: its Undo names nothing (${await undoTitle()})`);
+check(!!(await fresh) && (await undoTitle()) === "Undo “Move all to Kick (kicks)” (⌘Z)", `the page has the outside edit; its Undo still names the move (${await undoTitle()})`);
 const clicked = await page.evaluate(() => {
   const moved = [...document.querySelectorAll("[data-testid=toast]")].filter((t) => t.textContent.startsWith("Moved data/kick to data/kicks."));
   moved.at(-1)?.querySelector("button")?.click();
@@ -221,13 +225,13 @@ const song = read("song.ts");
 write("song.ts", song.replace("export default", "Math.max(1, 2);\n\nexport default"));
 check(await until(async () => (await state()).view.revision > before), "the outside edit is taken in");
 check(await until(async () => (await state()).can_undo), "undo is offered");
-// The outside edit came between: Undo can't be sure what it takes back now, so its tooltip names nothing.
+// The outside edit came between, and is no undo step: Undo takes back the knob, and its tooltip says so (gaps #29).
 const unnamed = await page.$eval('button[aria-label="Undo"]', (b) => b.title);
 await page.click('button[aria-label="Undo"]');
 check(await until(() => read("tracks/bass.ts") === bass), "and works: the knob's value is back");
 check(read("song.ts").includes("Math.max(1, 2);"), "the outside edit stays");
 await sleep(400);
-check(unnamed === "Undo (⌘Z)" && !(await toasts()).some((t) => t.includes("tracks/")), `Undo claims no name it can't be sure of (${unnamed}), and no toast names a file`);
+check(unnamed === "Undo Xrange hi (⌘Z)" && !(await toasts()).some((t) => t.includes("tracks/")), `Undo names the knob it takes back (${unnamed}), and no toast names a file`);
 check(!(await toasts()).some((t) => t.includes("rejected")), "no refusal");
 
 await browser.close();

@@ -180,6 +180,81 @@ songs go; kept in `~/.music2/settings.json`. Left: an input device, view setting
 no undo, applied at once. RENDER-31 unchanged: the engine runs at the song's rate whatever the device's. A change of
 output or buffer makes a new player where the song was, stopped.
 
+### C3. Undo says what it undoes
+
+**In short**
+
+| What | Now |
+|---|---|
+| Undo's and Redo's tooltips | Say what they would take back: "Undo Hats volume (⌘Z)", for every step, made in this window or elsewhere, and after a reload |
+| A step an agent or another editor made | A plain name from what it changed: "Undo Bass notes", "Undo the tempo or time signature", "Undo the code in tracks/bass.ts" |
+| The app's Edit menu | "Undo Hats volume" and "Redo …" ("Undo" alone with nothing to undo) |
+| Undoing a part added or removed | A toast says so: "Undid adding Delay" (as before) |
+| Another window | Sees the names too |
+| Closing the song | The names go with the undo steps (left: gaps #29's second half) |
+
+**What changed**
+
+- `core/session` (X7): `TxStep` gains `made` (the revision its change made, set by `record_tx`) and `name`
+  (`(words, structural)`). `Session::name_step(made, name, structural)` names a step at any depth of undo or redo;
+  `Session::step_names()` gives both tops as `StepName {name, structural, file}`; `step()` carries the name to the
+  step it pushes on the other stack. Tx, its ops and expectations are unchanged (`the_write_api_is_step_6s` passes).
+- `crates/server/src/graph/steps.rs` (new): `named` (`{name, structural, given}` or null) and the plain names by file;
+  `Graph::name_step` (an actor job, then a republish, so every read and the menu have it), `Graph::undo_names` (the
+  menu's), and `Graph::step`: `undo` and `redo` answer with the name of what they took back, read in the same turn.
+- `graph/actor.rs`: two lines in the state after `can_redo`: `undo_name`, `redo_name`. `graph.rs`: `mod steps;`,
+  `undo` and `redo` call `step`.
+- `routes_settings.rs`: `POST /api/graph/step {session, revision, name, structural}` → `{named, revision, undo_name,
+  redo_name}`. Not a write.
+- Desktop (X8): the title loop gives `graph.undo_names()` to `menu::set_undo_names`, which sets the items' text when it
+  changes; `menu::build` titles them from the last names, so a menu built again keeps them. No `undo_names` action.
+- Web: `history.ts` (rewritten): `recorded()` names the step on the server, and says it at once meanwhile; `next(graph,
+  redo)` reads `undo_name` and `redo_name` (the window's own answer wins over a state read before the name reached
+  the server); `tookBack(answer)`. `TopBar.tsx`: the tooltips' two lines. `GraphCanvas.tsx`'s `graphUndo`: two lines,
+  the toast from the answer (`tookBack`) instead of the window's own stacks.
+
+**Tests**
+
+| Test | Result |
+|---|---|
+| `m2-session` `tops_are_the_steps_undo_and_redo_take`, `two_saves_keep_their_own_names` | ok |
+| `m2-server` `graph/steps_tests.rs`: `undo_names_follow_undo_and_redo`, `a_named_step_keeps_its_name_through_undo_redo_undo`, `a_step_made_elsewhere_gets_a_plain_name`, `a_refused_undo_keeps_the_names` | ok |
+| `music2-desktop` `the_undo_items_take_a_name` | ok |
+| `nx-undo` (new, kind `fix`, 18 checks) | ok |
+
+**Red first**
+
+- `tops_are_the_steps_undo_and_redo_take` with `step()` not carrying the name: `tests.rs:999`: "the undone step is
+  redo's, with its name": redo's top `name: None` against `Some("adding Reverb")`.
+- `two_saves_keep_their_own_names` with `name_step` naming nothing: `tests.rs:1026`: `assertion failed:
+  s.name_step(a, "the first save", false) && …`.
+- `graph/steps_tests.rs` with no plain names: `undo_names_follow_undo_and_redo`: `left: ("-", "-"), right: ("the code
+  in song.ts", "-")`; `a_step_made_elsewhere_gets_a_plain_name`: `left: "-", right: "Bass notes"`.
+- `the_undo_items_take_a_name` with `set_undo_names` doing nothing: `menu.rs:584`: `left: "Undo", right: "Undo Hats
+  pan"`.
+- `nx-undo` on the new server with `DIST=` the page before: 11 of 18 passed, 7 failed. `FAIL  the server keeps the
+  name: {"given":false,"name":"the code in song.ts",…}`; `FAIL  Undo names it plainly: Undo (⌘Z)`; `FAIL  a reload
+  keeps the names: Redo (⇧⌘Z)`.
+
+**Moved suites**
+
+| Suite | Result |
+|---|---|
+| `undo` 10, `s8-tracks` 75, `s8-mix` 80, `taste` 39, `start` 24, `pl-arrange` 57, `pl-notes` 102, `effects` 12 | ok, unchanged |
+| `attention` 57 | ok after two of its checks follow the change. They said "Undo names nothing" after an outside edit, since the page couldn't be sure. The server is sure now: an outside edit is no undo step, so Undo still names the step it takes back ("Undo “Move all to Kick (kicks)”", "Undo Xrange hi"). The first check now waits for the page's own read of the new revision instead of the unnamed tooltip |
+
+**Left**
+
+- While the code editor has focus, Edit ▸ Undo undoes typing, though its title names the song's step (X8).
+- Names are lost when the song closes (gaps #29's second half).
+- A window that didn't make a step sees its name at its next refresh (the namer's own answer isn't broadcast).
+
+**For gaps.md:** #29: names done: every undo step has a name, kept on the server, shown in the tooltips and the Edit
+menu, plain words for steps made elsewhere. Left: undo that survives closing the song.
+
+**Contract:** WRITE-21: each undo step keeps the revision it made and an optional name (`Session::name_step`,
+`step_names`); the name follows the step through undo and redo. Tx, its ops and expectations are unchanged.
+
 ## Lane D
 
 Effects and small fixes.
