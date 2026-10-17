@@ -18,6 +18,7 @@ adds its own section here, in the same commit.
 | U1 (lane A) | M and S on every track. A pill at the top says "2 muted · 1 solo"; click it for the list and Clear all | done |
 | U2 (lane A) | "Mute in song" in a track's menu: saved in its code, so the export leaves it out too. One undo step | done |
 | U3 (lane A) | Export asks first while a mute or solo changes what you hear | done |
+| U11 (lane A) | While playing, the status pill says "Heavy load" or "Sound dropped out" | done |
 
 ## Setup: the merges
 
@@ -337,4 +338,67 @@ presses "Mute Kick in the song, then export" (`~/m2-runs/s8ui/scratch/e2e/lane-a
   asked for at once. The suite clicks the buttons as themselves for that reason.
 - The question doesn't show for a solo that leaves no track out (every track soloed): nothing
   changes then.
+
+## U11: load and dropouts in the status pill (lane A)
+
+**In short**
+- While the song plays, the status pill can now say two more things, both in `warn` (amber):
+  - **"Heavy load"** when the sound takes 70% or more of the time the computer has for it;
+  - **"Sound dropped out"** for 10 seconds after the sound drops out.
+- Click the pill to read what each means, in plain words.
+- When the song is stopped, neither shows.
+- A problem in the song (the code doesn't compile, say) still shows first.
+- No DSP pill and no master meter in the top bar (the lead's Q15).
+- Checks: `s8-mute` grew to 141 checks. The suites that read the status pill pass, and so does
+  every other suite (one known-flaky check aside, see Checks).
+
+### What the popover says
+
+| State | Title | Words |
+|---|---|---|
+| Heavy load | "Heavy load" | "At its busiest moment in the last second, the sound took 75% of the time the computer has for it. At 100% it drops out." Then, small: "Sample rate 48 kHz" |
+| Sound dropped out | "Sound dropped out" | "The sound dropped out once since play started. Closing other apps or removing a plugin helps." ("3 times" for three) |
+
+### How it decides
+
+| Thing | Rule |
+|---|---|
+| Heavy load | the status's `load` is 0.7 or more, while playing. `load` is already the busiest callback of the last second, so it doesn't flicker |
+| A dropout | the status's `xruns + late` grew while playing. Both are sound lost: a dropout the device reported, or a callback that took longer than its time |
+| How long it stays | 10 s after the last dropout (Q24) |
+| "since play started" | counted from the status when play started; a player that starts again (a new device) resets its counts, which isn't a dropout |
+| Order in the pill | offline, the code, the song's problems, **Sound dropped out**, **Heavy load**, read only, paused for export, loading plugins |
+
+It reads the status the page already polls 5 times a second. The real load of the debug headless
+server while a suite plays first-song was 9% to 22%, with no late callbacks (printed by `s8-mute`).
+
+### What changed
+
+| File | What |
+|---|---|
+| `web/src/components/Status.tsx` | The two states, `useDropouts`, the popover rows |
+| `e2e/s8-mute.mjs`, `e2e/run.mjs`, `e2e/README.md` | Part 4 (15 checks), through the page's own fetch wrapper, as `fx-fixes` does |
+| `e2e/graph.mjs`, `e2e/s6-builders.mjs`, `e2e/s4-attn.mjs` | Fallout of U1, found here: each read a track's name as the whole header's text, which has M and S in it now. They read the name itself (`[data-testid=track-label]`) |
+
+### Checks
+
+| Check | Result |
+|---|---|
+| `cd web && npm run build` (type-checks) | ok |
+| `s8-mute` | 141 of 141 |
+| The suites that read the status pill: `taste`, `attention`, `code`, `fx-fixes`, `live3b` (with the plugins), `s6-fixes`, `s6-write`, `s8-tracks` | 39, 57, 58, 75, 60, 19, 36, 75: all pass |
+| `graph`, `s6-builders` | failed one check each: U1's fallout above. Fixed, and green in the full run below |
+| Every suite (`run.mjs all`, with the plugins), on this page | 34 of 35 ok, 1468 of 1469 checks. The one: `s8-songbar`'s "7/8" check read the field once, just after the file changed. It passed twice on its own, unchanged (it doesn't touch what lane A changed) |
+| Logs | `~/m2-runs/logs/ui-a-u11-1017-064421-611952.log` and `~/m2-runs/logs/ui-a-all-1017-064802-654005.log`; suite logs in `~/m2-runs/s8ui/scratch/e2e/lane-a/u11`, `…/all`, `…/songbar-1`, `…/songbar-2` |
+
+**Red first:** on U3's page, a load of 75% while playing shows nothing, and the suite stops
+there (`~/m2-runs/s8ui/scratch/e2e/lane-a/u11-red`).
+
+### Left
+
+- `s8-songbar` (taste-next's) reads the time signature field once right after the file changes
+  (`e2e/s8-songbar.mjs:115`): it failed once in 3 runs here. A wait there would settle it.
+- The owner's pictures (`ui-u1-headers.png` to `ui-u11-load.png`) need the desktop app with this
+  lane's page: after the merge into `8b-ui`, in `wt/ui`. `ui-u11-load.png` only if a real load
+  shows.
 

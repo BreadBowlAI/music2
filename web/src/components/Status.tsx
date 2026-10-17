@@ -1,6 +1,6 @@
 import clsx from "clsx";
-import { CircleAlert, CodeXml, Hourglass, Info, Lock, Pause, TriangleAlert, WifiOff } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { CircleAlert, CodeXml, Gauge, Hourglass, Info, Lock, Pause, TriangleAlert, WifiOff } from "lucide-react";
+import { useRef, useState, type ReactNode } from "react";
 import { attention, graphApi, lockReason, type GraphState, type GraphStatus, type Problem, type ReadOnly } from "../lib/graph";
 import { usePill } from "../lib/overlays";
 import { useStore } from "../lib/store";
@@ -8,7 +8,7 @@ import Attention from "./Attention";
 import { Button, Details, keepFocus, Popover } from "./ui";
 
 type Tone = "danger" | "warn" | "neutral";
-interface State { id: "offline" | "compile" | "problems" | "read-only" | "paused" | "loading"; tone: Tone; label: string; Icon: typeof Lock }
+interface State { id: "offline" | "compile" | "problems" | "dropout" | "load" | "read-only" | "paused" | "loading"; tone: Tone; label: string; Icon: typeof Lock }
 
 // Hover darkens every tone, as it does a ghost button: the soft fill mixed toward its strong colour.
 const TONE: Record<Tone, string> = {
@@ -21,9 +21,23 @@ const ICON: Record<Tone, string> = { danger: "text-danger", warn: "text-warn", n
 /** The plugins loading, as the pill says it: "Loading Surge XT…". */
 const loadingLabel = (names: string[]) => `Loading ${names.join(", ")}…`;
 
-/** What the pill can say, the most severe first (taste.md ST-1). What the engine is busy with
- * (RENDER-1, RENDER-25) comes last: it is no problem, so any problem shows over it. */
-function states(graph: GraphState, status: GraphStatus | undefined, connected: boolean): State[] {
+/** "Heavy load" from this share of the time the sound has (8b.8; taste.md's DSP turned `warn` here too). */
+const HEAVY = 0.7;
+/** How long "Sound dropped out" stays after a dropout (Q24): long enough to read. */
+const DROPPED_MS = 10_000;
+
+/** The dropouts since play started, and whether one came in the last 10 s. */
+interface Dropouts {
+  since: number;
+  recent: boolean;
+}
+
+/**
+ * What the pill can say, the most severe first (taste.md ST-1). While playing, a dropout in the last
+ * 10 s and a heavy load (8b.8) come after the song's problems. What the engine is busy with
+ * (RENDER-1, RENDER-25) comes last: it is no problem, so any problem shows over it.
+ */
+function states(graph: GraphState, status: GraphStatus | undefined, connected: boolean, dropouts: Dropouts): State[] {
   const out: State[] = [];
   if (!connected) out.push({ id: "offline", tone: "danger", label: "Reconnecting…", Icon: WifiOff });
   // Danger when nothing plays at all (WRITE-20); otherwise the last version that compiled plays on.
@@ -39,10 +53,31 @@ function states(graph: GraphState, status: GraphStatus | undefined, connected: b
       Icon: worst === "error" ? CircleAlert : worst === "warning" ? TriangleAlert : Info,
     });
   }
+  if (status?.playing && dropouts.recent) out.push({ id: "dropout", tone: "warn", label: "Sound dropped out", Icon: TriangleAlert });
+  if (status?.playing && (status.load ?? 0) >= HEAVY) out.push({ id: "load", tone: "warn", label: "Heavy load", Icon: Gauge });
   if (graph.read_only) out.push({ id: "read-only", tone: "neutral", label: "Read only", Icon: Lock });
   if (status?.paused === "exporting") out.push({ id: "paused", tone: "neutral", label: "Paused for export", Icon: Pause });
   if (status?.loading?.length) out.push({ id: "loading", tone: "neutral", label: loadingLabel(status.loading), Icon: Hourglass });
   return out;
+}
+
+/**
+ * Dropouts as the status counts them (`xruns` the device reported, and `late` callbacks: both are
+ * sound lost), from when play started, and whether one came in the last 10 s (Q24). Counted while
+ * playing only: a stopped song has nothing to drop.
+ */
+function useDropouts(status: GraphStatus | undefined): Dropouts {
+  const playing = !!status?.playing;
+  const count = (status?.xruns ?? 0) + (status?.late ?? 0);
+  const seen = useRef({ playing: false, base: 0, last: 0, at: 0 });
+  const s = seen.current;
+  const now = Date.now();
+  if (playing && !s.playing) Object.assign(s, { base: count, last: count, at: 0 });
+  else if (playing && count > s.last) Object.assign(s, { last: count, at: now });
+  // Stopped, or the player started again (a new device) and its counts with it: no dropout.
+  else if (count !== s.last) Object.assign(s, { base: s.base + count - s.last, last: count });
+  s.playing = playing;
+  return { since: s.last - s.base, recent: playing && s.at > 0 && now - s.at < DROPPED_MS };
 }
 
 /**
@@ -55,7 +90,8 @@ export default function Status({ graph, status, onShowCode }: { graph: GraphStat
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   // The mutes pill beside it takes room the song's name keeps clear (taste.md §3.3, Q23).
   const pill = usePill();
-  const all = states(graph, status, connected);
+  const dropouts = useDropouts(status);
+  const all = states(graph, status, connected, dropouts);
   if (!all.length) return null;
   const [main, ...rest] = all;
   const readOnly = all.some((s) => s.id === "read-only");
@@ -108,6 +144,17 @@ export default function Status({ graph, status, onShowCode }: { graph: GraphStat
                     </Item>
                     <Attention graph={graph} locked={lockReason(graph, connected)} />
                   </div>
+                )}
+                {s.id === "dropout" && (
+                  <Item state={s} title="Sound dropped out">
+                    {`The sound dropped out ${dropouts.since === 1 ? "once" : `${dropouts.since} times`} since play started. Closing other apps or removing a plugin helps.`}
+                  </Item>
+                )}
+                {s.id === "load" && (
+                  <Item state={s} title="Heavy load">
+                    {`At its busiest moment in the last second, the sound took ${Math.round((status?.load ?? 0) * 100)}% of the time the computer has for it. At 100% it drops out.`}
+                    <span className="block mt-1 text-xs text-fg-faint">{`Sample rate ${(graph.sample_rate / 1000).toLocaleString("en", { maximumFractionDigits: 1 })} kHz`}</span>
+                  </Item>
                 )}
                 {s.id === "read-only" && graph.read_only && <ReadOnlyItem graph={graph} state={s} readOnly={graph.read_only} />}
                 {s.id === "paused" && (

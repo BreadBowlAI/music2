@@ -1,5 +1,5 @@
-// 8b.4 Mute and solo in the app (design-8b §6.6, §6.7, taste.md §2.9, §3.3, §3.4; the 8b-ui plan's
-// U1 to U3): M and S in every track header, placed from its right edge; a click, ⌥-click on S, a
+// 8b.4 Mute and solo in the app, and 8b.8's load (design-8b §6.6, §6.7, taste.md §2.9, §3.3, §3.4;
+// the 8b-ui plan's U1, U2, U3 and U11): M and S in every track header, placed from its right edge; a click, ⌥-click on S, a
 // drag across several, three quick clicks; the M and S keys; the mutes pill "2 muted · 1 solo" and
 // its list, with each track's ×, "Still drives Duck" and Clear all; the pill clear of the song's
 // name and the status pill at 1100 to 1280 px; nothing written but .music2/overlays.json; mute in
@@ -8,7 +8,8 @@
 // read-only window keeps them in memory and can't mute in the song; a PC page's words. The export's
 // question while mutes or solos change what you hear (U3): Mute Kick in the song, then export (its
 // WAV equals `m2 render`'s), Export anyway (the toast names Kick), the solo's form, and only Cancel
-// and Export anyway while the code doesn't compile.
+// and Export anyway while the code doesn't compile. "Heavy load" and "Sound dropped out" in the
+// status pill while playing (U11), through the page's own fetch wrapper.
 //
 //   node e2e/s8-mute.mjs <root> <home> <project> <m2>     (the `export` kind: examples/first-song open, and the m2 CLI)
 import { execFileSync, spawn } from "node:child_process";
@@ -483,6 +484,69 @@ await page.evaluate(() => {
   window.__status = null;
 });
 await page.setViewport({ width: 1440, height: 900 });
+
+// ---------------------------------------------------------------- load and dropouts in the status pill (8b.8; U11)
+
+const pillState = () =>
+  page.evaluate(() => {
+    const p = document.querySelector("[data-status]");
+    return p && { ids: p.dataset.status, text: p.textContent, title: p.title, bg: getComputedStyle(p).backgroundColor };
+  });
+const popoverText = async () => {
+  if (!(await page.$("[data-testid=status-popover]"))) await page.click("[data-status]").catch(() => {});
+  const t = await page.$eval("[data-testid=status-popover]", (e) => e.innerText.replace(/\s+/g, " ")).catch(() => "");
+  await page.keyboard.press("Escape");
+  return t;
+};
+const WARN_SOFT = rgb("#fbefd6");
+await post("/transport", { action: "play" });
+check(await until(async () => (await api("/status")).body.playing, 3000), "the song plays");
+await sleep(1500);
+const real = (await api("/status")).body;
+console.log(`INFO  the server's own load while playing: ${real.load}, late ${real.late}, xruns ${real.xruns}`);
+// The page's own fetch wrapper (above) says what the status would: a quiet engine first.
+await page.evaluate(() => (window.__status = { load: 0.2, late: 0, xruns: 0 }));
+await sleep(600);
+check(!(await pillState()), "a load of 20% says nothing");
+await page.evaluate(() => (window.__status = { load: 0.75, late: 0, xruns: 0 }));
+check(await until(async () => (await pillState())?.ids === "load", 3000), "75% while playing: the status pill says “Heavy load”");
+const heavy = await pillState();
+check(heavy.text === "Heavy load" && heavy.bg === WARN_SOFT, `in warn: “${heavy.text}”`);
+const heavyWords = await popoverText();
+check(
+  heavyWords.includes("Heavy load At its busiest moment in the last second, the sound took 75% of the time the computer has for it. At 100% it drops out. Sample rate 48 kHz"),
+  `its popover says what it means, in plain words: “${heavyWords}”`,
+);
+await page.evaluate(() => (window.__status = { load: 0.75, late: 0, xruns: 1 }));
+check(await until(async () => (await pillState())?.ids === "dropout load", 3000), `a dropout: “Sound dropped out” comes first: ${(await pillState())?.ids}`);
+check((await pillState()).text === "Sound dropped out+1", `the pill says “${(await pillState()).text}”`);
+const dropWords = await popoverText();
+check(dropWords.includes("Sound dropped out The sound dropped out once since play started. Closing other apps or removing a plugin helps."), `its popover: “${dropWords}”`);
+await page.evaluate(() => (window.__status = { load: 0.2, late: 2, xruns: 1 }));
+check(await until(async () => (await pillState())?.ids === "dropout", 3000), "two late callbacks are dropouts too, and the load is back down");
+check((await popoverText()).includes("dropped out 3 times since play started"), "three since play started");
+const lastDrop = Date.now();
+await sleep(8000);
+check((await pillState())?.ids === "dropout", "it is still there 8 s after the last one");
+check(await until(async () => !(await pillState()), 4000) && (await api("/status")).body.playing, `and gone 10 s after it, still playing (${((Date.now() - lastDrop) / 1000).toFixed(1)} s)`);
+await page.evaluate(() => (window.__status = { load: 0.9, late: 3, xruns: 1 }));
+await post("/transport", { action: "stop" });
+check(await until(async () => !(await api("/status")).body.playing, 3000), "the song stops");
+await sleep(600);
+check(!(await pillState()), "stopped, neither shows, whatever the numbers say");
+await post("/transport", { action: "play" });
+await until(async () => (await api("/status")).body.playing, 3000);
+// The page has seen play start (its counts from here), then one more late callback.
+await sleep(800);
+await page.evaluate(() => (window.__status = { load: 0.9, late: 4, xruns: 1 }));
+const songTs4 = read("song.ts");
+write("song.ts", songTs4.replace("export default", "export default )"));
+check(await until(async () => (await pillState())?.ids === "compile dropout load", 10000), `a problem still ranks above both: ${(await pillState())?.ids}`);
+write("song.ts", songTs4);
+await until(async () => (await state()).view.draft_errors.length === 0, 10000);
+await page.evaluate(() => (window.__status = null));
+await post("/transport", { action: "stop" });
+await until(async () => !(await api("/status")).body.playing, 3000);
 
 // ---------------------------------------------------------------- a reload, and a read-only window (MON-4)
 
