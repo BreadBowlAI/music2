@@ -96,6 +96,8 @@ fn a_write_while_another_process_holds_the_lock_fails_and_changes_nothing() {
         vec!["tempo", dir, "128"],
         vec!["meter", dir, "7/8", "--at", "9"],
         vec!["title", dir, "Night Drive"],
+        // Studio lane A's A4.
+        vec!["import", dir, "assets/keys-bounce.wav", "--track", "chops"],
     ];
     for args in &writes {
         let out = m2(args);

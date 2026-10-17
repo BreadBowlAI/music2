@@ -577,7 +577,7 @@ fn file_id(p: &Path) -> Option<m2_os::fs::FileId> {
 }
 
 /// Where a render is written until it's complete: hidden, beside the file it becomes.
-fn part_path(path: &Path) -> Result<PathBuf> {
+pub(crate) fn part_path(path: &Path) -> Result<PathBuf> {
     let name = path.file_name().with_context(|| format!("{} is not a file name", path.display()))?;
     Ok(path.with_file_name(format!(".{}.{}.part", name.to_string_lossy(), std::process::id())))
 }
@@ -591,7 +591,7 @@ fn is_part(name: &str) -> bool {
 
 /// Remove the part files in `dir` left by renders that never finished: a render holds its
 /// part's lock until the part is named, and a killed program's locks are let go.
-fn sweep(dir: &Path) {
+pub(crate) fn sweep(dir: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for e in entries.flatten() {
         if !e.file_type().is_ok_and(|t| t.is_file()) || !e.file_name().to_str().is_some_and(is_part) {
@@ -605,7 +605,7 @@ fn sweep(dir: &Path) {
 
 /// Give the finished `part` the name `path` only if nothing has it: a create-only rename fails if
 /// something does, even a file made a moment ago (OS-07).
-fn name_new(part: &Path, path: &Path) -> std::io::Result<()> {
+pub(crate) fn name_new(part: &Path, path: &Path) -> std::io::Result<()> {
     match m2_os::fs::rename(part, path, m2_os::fs::Rename::Excl) {
         // A volume that can't rename that way: look, then rename.
         Err(e) if e.kind() == ErrorKind::Unsupported && path.symlink_metadata().is_err() => std::fs::rename(part, path),

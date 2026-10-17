@@ -21,6 +21,7 @@ static BUSY: AtomicBool = AtomicBool::new(false);
 /// "reveal_file" shows `arg`, an exported file, in Finder. "song_folder" returns the folder
 /// picked for a new song (the New Song dialog's Choose Folder…), starting at `arg`: a folder, or
 /// `{"start": folder, "title": words}` (Settings' "Choose Where New Songs Go", plan X38).
+/// "open_file" returns the files picked in an open dialog, as a JSON list (File ▸ Import Audio…).
 #[tauri::command]
 pub async fn action(app: AppHandle, id: String, arg: Option<String>) -> Result<Option<String>, String> {
     let answer = match id.as_str() {
@@ -42,12 +43,59 @@ pub async fn action(app: AppHandle, id: String, arg: Option<String>) -> Result<O
             BUSY.store(false, Ordering::SeqCst);
             picked
         }),
+        "open_file" => tauri::async_runtime::spawn_blocking(move || {
+            if BUSY.swap(true, Ordering::SeqCst) {
+                return Ok(None);
+            }
+            let picked = open_file(&app, arg);
+            BUSY.store(false, Ordering::SeqCst);
+            picked
+        }),
         _ => {
             run(&app, &id);
             return Ok(None);
         }
     };
     answer.await.map_err(|e| e.to_string())?.map_err(|e| format!("{e:#}"))
+}
+
+/// What the page asks of the open dialog (P0.5, built in studio lane A): `{"title", "filters":
+/// [{"name", "extensions"}], "multiple"}`. Read by hand, as `folder_ask` reads its ask.
+#[derive(Debug, Default, PartialEq)]
+struct OpenAsk {
+    title: String,
+    /// Each filter's name and extensions.
+    filters: Vec<(String, Vec<String>)>,
+    multiple: bool,
+}
+
+fn open_ask(arg: Option<&str>) -> OpenAsk {
+    let v: serde_json::Value = arg.and_then(|a| serde_json::from_str(a).ok()).unwrap_or_default();
+    let text = |v: &serde_json::Value| v.as_str().unwrap_or_default().to_string();
+    let filters = v["filters"]
+        .as_array()
+        .map(|fs| fs.iter().map(|f| (text(&f["name"]), f["extensions"].as_array().map(|e| e.iter().map(text).collect()).unwrap_or_default())).collect())
+        .unwrap_or_default();
+    OpenAsk { title: text(&v["title"]), filters, multiple: v["multiple"].as_bool().unwrap_or(false) }
+}
+
+/// Files picked in the open dialog (File ▸ Import Audio…): a JSON list of their paths, or None
+/// when cancelled.
+fn open_file(app: &AppHandle, arg: Option<String>) -> anyhow::Result<Option<String>> {
+    let ask = open_ask(arg.as_deref());
+    let mut dialog = app.dialog().file().set_title(if ask.title.is_empty() { "Open" } else { &ask.title });
+    for (name, extensions) in &ask.filters {
+        let exts: Vec<&str> = extensions.iter().map(String::as_str).collect();
+        dialog = dialog.add_filter(name, &exts);
+    }
+    if let Some(w) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&w);
+    }
+    let paths: Option<Vec<String>> = match ask.multiple {
+        true => dialog.blocking_pick_files().map(|ps| ps.into_iter().filter_map(|p| p.into_path().ok()).map(|p| p.display().to_string()).collect()),
+        false => dialog.blocking_pick_file().and_then(|p| p.into_path().ok()).map(|p| vec![p.display().to_string()]),
+    };
+    Ok(paths.map(|p| serde_json::to_string(&p).expect("paths serialise")))
 }
 
 /// The Export Audio save dialog, starting at the song's new file in the songs folder's Exports.
@@ -263,5 +311,18 @@ mod tests {
         assert_eq!(folder_ask(None), (None, song));
         let settings = r#"{"start": "/Users/me/Songs", "title": "Choose Where New Songs Go"}"#;
         assert_eq!(folder_ask(Some(settings.into())), (Some("/Users/me/Songs".into()), "Choose Where New Songs Go".into()));
+    }
+
+    /// P0.5 (studio lane A): the open dialog takes its title, filters and whether it picks several
+    /// from the page.
+    #[test]
+    fn the_open_dialog_takes_its_ask_from_the_page() {
+        let arg = r#"{"title": "Import Audio", "filters": [{"name": "WAV files", "extensions": ["wav", "wave"]}], "multiple": true}"#;
+        let ask = open_ask(Some(arg));
+        assert_eq!(ask.title, "Import Audio");
+        assert!(ask.multiple);
+        assert_eq!(ask.filters, [("WAV files".to_string(), vec!["wav".to_string(), "wave".to_string()])]);
+        assert_eq!(open_ask(Some("{}")), OpenAsk::default());
+        assert_eq!(open_ask(None), OpenAsk::default());
     }
 }

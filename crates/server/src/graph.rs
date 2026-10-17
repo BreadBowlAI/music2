@@ -57,6 +57,7 @@ mod steps;
 pub mod midi;
 mod lanes;
 mod tempo_lease;
+mod import;
 pub mod record;
 pub(crate) mod exchange;
 

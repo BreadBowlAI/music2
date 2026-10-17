@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { ArrowRightFromLine, AudioWaveform, ChevronRight, Plus, ZoomIn, ZoomOut } from "lucide-react";
+import { ArrowRightFromLine, ChevronRight, Plus, ZoomIn, ZoomOut } from "lucide-react";
 import { createContext, memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal, flushSync } from "react-dom";
 import {
@@ -69,6 +69,8 @@ import GridChip from "./GridChip";
 import PointMenu, { unautomate, type MenuItem } from "./ClipMenu";
 import TrackHeader from "./TrackHeader";
 import { Button, EmptyState, keepFocus, Popover } from "./ui";
+import { audioLabel, audioRows, VolumePopover, Wave, type WaveEdit } from "./Wave";
+import { edgeLimits, fileSeconds, respanned } from "../lib/peaks";
 import Take from "./Take";
 import { exportMidi } from "../lib/midiFiles";
 
@@ -211,7 +213,8 @@ function reshaped<C extends AnyClip>(c: C, start: number, length: number): C {
   const d = start - c.start;
   if ("notes" in c) return { ...c, start, length, notes: c.notes.map((n) => ({ ...n, start: n.start - d })) };
   if ("points" in c) return { ...c, start, length, points: c.points.map(([b, v]) => [b - d, v] as [number, number]) };
-  return { ...c, start, length };
+  // An audio clip's offset moves as the server moves it, so its waveform stays where it plays (A3).
+  return respanned(c, useStore.getState().graph?.timeline.tempo ?? [], start, length) as C;
 }
 
 /** The value bubble at the pointer while clips are dragged (taste.md §2.14), as the song bar's. */
@@ -931,14 +934,20 @@ export default function SongTimeline({
           const raw = (ev.clientX - x0) / zoomNow();
           const at = { x: ev.clientX, y: ev.clientY };
           const base = { clips: group, by: 0, to: null, copy: false, refused: null, start: c.start, length: c.length, at };
+          // An audio clip's edges stop at its file (Q13, D3): the bubble says which end.
+          const file = lane.kind === "audio" ? edgeLimits(c as AudioClip, latest.current.timeline.tempo, fileSeconds(useStore.getState().graph?.session ?? 0, c as AudioClip)) : null;
           if (edge === "left") {
             // The left edge on the grid; what is inside stays where it plays (the server shifts it).
             const end = c.start + c.length;
-            const start = Math.max(0, Math.min(snapSong(meter, c.start + raw, zoomNow(), free), end - SHORTEST));
-            now = { ...base, kind: "left", start, length: clean(end - start), text: position(meter, start), guide: start };
+            const wanted = Math.max(0, Math.min(snapSong(meter, c.start + raw, zoomNow(), free), end - SHORTEST));
+            const start = file?.left != null ? Math.max(wanted, clean(file.left)) : wanted;
+            const text = start > wanted && file ? file.leftWord : position(meter, start);
+            now = { ...base, kind: "left", start, length: clean(end - start), text, guide: start };
           } else if (edge === "right") {
-            const end = Math.max(snapSong(meter, c.start + c.length + raw, zoomNow(), free), c.start + SHORTEST);
-            now = { ...base, kind: "right", length: clean(end - c.start), text: position(meter, end), guide: end };
+            const wanted = Math.max(snapSong(meter, c.start + c.length + raw, zoomNow(), free), c.start + SHORTEST);
+            const end = file?.right != null ? Math.min(wanted, Math.max(clean(file.right), c.start + SHORTEST)) : wanted;
+            const text = end < wanted && file ? file.rightWord : position(meter, end);
+            now = { ...base, kind: "right", length: clean(end - c.start), text, guide: end };
           } else {
             // The grabbed clip's start lands on the grid; the others keep their distance from it.
             const lo = Math.min(...group.map((g) => g.clip.start));
@@ -1384,6 +1393,7 @@ export default function SongTimeline({
         {bubble && <DragBubble at={bubble.at}>{bubble.text}</DragBubble>}
         {menu && <TimelineMenu at={menu} timeline={timeline} edits={edits} locked={locked} onOpenClip={onOpenClip} onRepeat={setRepeating} onClose={() => setMenu(null)} />}
         {repeating && <RepeatPopover at={repeating} onRepeat={(n) => edits.repeat(n)} onClose={() => setRepeating(null)} />}
+        <VolumePopover />
         {/* The Song's row, Live's Main track: pinned at the foot of the track list, with its own playhead and loop wash. */}
         <div className="sticky bottom-0 z-[26] shrink-0 border-t border-line bg-canvas" data-song-row>
           {looping && loopStart !== null && loopEnd !== null && (
@@ -1909,7 +1919,7 @@ const TrackRows = memo(function TrackRows({
         // The lane dragged clips would land on is lit; one that can't take them isn't (design-8b §7.5).
         className={clsx("relative overflow-hidden", !opts.first && "border-t border-hover", (selected || (lane && drag?.to?.module === module && drag.to.lane === lane.key)) && "bg-accent-wash")}
         style={{ width }}
-        title={lane && lane.kind !== "audio" && !locked ? "Double-click to add a one-bar clip" : undefined}
+        title={!lane || locked ? undefined : lane.kind === "audio" ? `Drop WAV files here, or use File ▸ Import Audio (${chord("I", { shift: true })})` : "Double-click to add a one-bar clip"}
         onPointerDown={(e) => {
           const empty = !(e.target as HTMLElement).closest("[data-clip]");
           if (empty) edits.unpick(module);
@@ -2132,6 +2142,7 @@ function TimelineMenu({
       picked.length === 1 && picked[0].lane.kind === "notes" ? { id: "export-midi", label: "Export as MIDI…", run: () => void exportMidi(picked[0].ref) } : null,
       "line",
       { id: "split", label: "Split at playhead", shortcut: chord("E"), off: off ?? (inside ? null : `The playhead (${position(timeline.meter, beat)}) isn't inside ${these}.`), run: edits.split },
+      ...audioRows(picked, { x: at.x, y: at.y }, off),
       notes.length > 1 ? { id: "join", label: "Join", shortcut: chord("J"), off: off ?? (oneLane && notes.length === picked.length ? null : "Only notes clips of one lane join."), run: edits.join } : null,
       notes.length ? { id: "quantize", label: `Quantize to ${pickName(grid.pick, grid.triplet)}`, shortcut: "Q", off, run: edits.quantize } : null,
       { id: "delete", label: "Delete", shortcut: keyName("Backspace"), off, run: edits.remove },
@@ -2252,22 +2263,19 @@ function LaneClips({
   // 0 at the bottom of a clip's drawing, 1 at its top, on the lane's scale (D3).
   const scale = lane.kind === "control" ? laneScale(lane) : null;
   const level = (v: number) => scale?.level(v) ?? 0;
-  const inside = (c: AnyClip, tone: TrackColor, pickedPoint = -1) =>
+  const inside = (c: AnyClip, tone: TrackColor, pickedPoint = -1, wave?: WaveEdit) =>
     "notes" in c ? (
       <Notes notes={audible(c)} length={c.length} color={tone} />
     ) : "points" in c ? (
       <Curve clip={c} level={level} path={scale?.path ?? line} color={tone} picked={pickedPoint} />
     ) : (
-      <div className="absolute inset-x-0 bottom-0 flex items-center gap-1.5 px-2 text-xs font-medium" style={{ top: BODY_TOP, color: tone.ink }}>
-        <AudioWaveform size={14} className="shrink-0" />
-        <span className="truncate">{c.asset}</span>
-      </div>
+      <Wave clip={c} color={tone} edit={wave} />
     );
   const words = (c: AnyClip) => {
     const how = editable ? `drag to move · ${mod.alt}-drag to copy · drag an edge to resize · Delete removes` : "";
     if ("notes" in c) return `${audible(c).length} notes, ${span(c)}\nDouble-click to edit the notes${how ? ` · ${how}` : ""}`;
     if ("points" in c) return `${span(c)}${editable ? `\nClick the line to add a point · drag a point to move it · B to draw · drag elsewhere to move the clip · ${mod.alt}-drag to copy` : ""}`;
-    return `${c.asset}, ${span(c)}${how ? `\n${how[0].toUpperCase()}${how.slice(1)}` : ""}`;
+    return `${audioLabel(c)}, ${span(c)}${how ? `\n${how[0].toUpperCase()}${how.slice(1)} · drag the top corners to fade` : ""}`;
   };
 
   // The lane's own clips: one being moved away (not copied) isn't drawn here; one moved along this
@@ -2305,7 +2313,12 @@ function LaneClips({
         onPointerDown={(e) => onDown(ref, e)}
         onContextMenu={(e) => onMenu(ref, e)}
       >
-        {inside(drawn, color, point && sameClip(point.clip, ref) && "points" in drawn ? pointIn(point, drawn.points, !!editing && sameClip(editing.clip, ref)) : -1)}
+        {inside(
+          drawn,
+          color,
+          point && sameClip(point.clip, ref) && "points" in drawn ? pointIn(point, drawn.points, !!editing && sameClip(editing.clip, ref)) : -1,
+          lane.kind === "audio" ? { ref, lane, editable, picked: isPicked(picked, ref) } : undefined,
+        )}
       </Clip>
     );
   });

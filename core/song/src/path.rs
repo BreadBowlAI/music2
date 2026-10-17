@@ -258,7 +258,38 @@ impl AssetName {
     pub(crate) fn folded(s: &str) -> String {
         icu_normalizer::ComposingNormalizerBorrowed::new_nfc().normalize(s).to_lowercase()
     }
+
+    /// The name an imported file gets in `assets/` from its own file name (FMT-14, lane A's Q2):
+    /// in NFC, control characters dropped, `/`, `\` and `:` made `-`, leading dots and spaces
+    /// dropped, the extension lowercased, at most [`IMPORT_BYTES`] bytes (the stem cut, never the
+    /// extension). One with nothing left is `audio.wav`.
+    pub fn for_import(file_name: &str) -> AssetName {
+        let nfc = icu_normalizer::ComposingNormalizerBorrowed::new_nfc().normalize(file_name);
+        let clean: String = nfc.chars().filter(|c| !c.is_control()).map(|c| if matches!(c, '/' | '\\' | ':') { '-' } else { c }).collect();
+        let clean = clean.trim().trim_start_matches(['.', ' ']).trim_end();
+        let (stem, ext) = match clean.rfind('.') {
+            Some(i) if i > 0 => (&clean[..i], clean[i..].to_lowercase()),
+            _ => (clean, String::new()),
+        };
+        let room = IMPORT_BYTES.saturating_sub(ext.len());
+        let cut = (0..=stem.len().min(room)).rev().find(|&i| stem.is_char_boundary(i)).unwrap_or(0);
+        let stem = stem[..cut].trim_end();
+        match AssetName::new(&format!("{stem}{ext}")) {
+            Ok(name) if !stem.is_empty() => name,
+            _ => AssetName("audio.wav".into()),
+        }
+    }
+
+    /// [`AssetName::untaken`] where a name is taken by any of `names` in any capitals or Unicode
+    /// form: a song copied to a disk that ignores them never holds two that differ only so (D2).
+    pub fn untaken_folded<'a>(&self, names: impl IntoIterator<Item = &'a str>) -> AssetName {
+        let taken: std::collections::BTreeSet<String> = names.into_iter().map(AssetName::folded).collect();
+        self.untaken(|n| taken.contains(&AssetName::folded(n)))
+    }
 }
+
+/// The longest name an import gives a file, in bytes.
+pub const IMPORT_BYTES: usize = 120;
 
 impl fmt::Display for AssetName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -421,5 +452,42 @@ mod tests {
         }
         assert_eq!(AssetName::folded("Drums/KICK.wav"), AssetName::folded("drums/kick.wav"));
         assert_eq!(AssetName::folded(nfd), AssetName::folded("café.wav"));
+    }
+
+    // FMT-14, lane A's Q2: an imported file's own name made an asset's name.
+    #[test]
+    fn for_import_names_are_asset_names() {
+        let rows = [
+            ("vox.wav", "vox.wav"),
+            ("Lead Vox.WAV", "Lead Vox.wav"),
+            ("cafe\u{301}.wav", "café.wav"),
+            ("a/b\\c:d.wav", "a-b-c-d.wav"),
+            (".hidden.wav", "hidden.wav"),
+            ("...wav", "wav"),
+            ("  spaced .wav", "spaced.wav"),
+            ("tab\there\n.wav", "tabhere.wav"),
+            ("", "audio.wav"),
+            (".", "audio.wav"),
+            ("noext", "noext"),
+            ("ベース.Wave", "ベース.wave"),
+        ];
+        for (from, want) in rows {
+            let got = AssetName::for_import(from);
+            assert_eq!(got.as_str(), want, "{from:?}");
+            assert!(AssetName::new(got.as_str()).is_ok(), "{from:?}");
+        }
+        // Cut to whole characters: 58 two-byte é and `.wav`.
+        let cut = AssetName::for_import(&format!("{}.WAV", "é".repeat(100)));
+        assert_eq!(cut.as_str(), format!("{}.wav", "é".repeat(58)));
+        assert!(cut.as_str().len() <= IMPORT_BYTES);
+    }
+
+    // D2: a taken name is compared in any capitals and Unicode form.
+    #[test]
+    fn an_import_name_is_free_in_any_capitals() {
+        let name = AssetName::for_import("Vox.wav");
+        assert_eq!(name.untaken_folded(["vox.WAV", "VOX 2.wav"]).as_str(), "Vox 3.wav");
+        assert_eq!(name.untaken_folded(["kick.wav"]).as_str(), "Vox.wav");
+        assert_eq!(AssetName::for_import("café.wav").untaken_folded(["CAFE\u{301}.WAV"]).as_str(), "café 2.wav");
     }
 }

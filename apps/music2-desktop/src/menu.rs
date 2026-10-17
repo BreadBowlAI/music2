@@ -56,6 +56,9 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     ("save", "Save", Some("CmdOrCtrl+S")),
     // A copy under a new name, which opens (polish C3); the song stays as it was.
     ("save_as", "Save As…", Some("CmdOrCtrl+Shift+S")),
+    // WAV files onto the selected audio track at the playhead's bar, else a new audio track (lane
+    // A's Q7). Logic's key.
+    ("import_audio", "Import Audio…", Some("CmdOrCtrl+Shift+I")),
     // The Export dialog (studio C3): the song, its stems or its notes. ⌘E is Split.
     ("export", "Export…", Some("CmdOrCtrl+Shift+E")),
     ("reveal", REVEAL, None),
@@ -211,6 +214,8 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
         Item("close_song"),
         Item("save"),
         Item("save_as"),
+        Line,
+        Item("import_audio"),
         Line,
         Item("export"),
         Line,
@@ -621,6 +626,19 @@ mod tests {
             let view = &bar.iter().find(|m| m.0 == "View").expect("View").1;
             let at = view.iter().position(|r| *r == Row::Item("browser")).expect("Show Browser");
             assert_eq!(view[at + 1], Row::Item("piano"), "mac: {mac}");
+        }
+    }
+
+    /// Studio lane A (Q7): File ▸ Import Audio… is ⇧⌘I (Ctrl+Shift+I), after Save As and a line, on
+    /// both menu bars.
+    #[test]
+    fn import_audio_is_shift_command_i_in_file() {
+        assert_eq!(ITEMS.iter().find(|i| i.0 == "import_audio").map(|i| (i.1, i.2)), Some(("Import Audio…", Some("CmdOrCtrl+Shift+I"))));
+        for mac in [true, false] {
+            let bar = layout(mac);
+            let file = &bar.iter().find(|m| m.0 == "File").expect("a File menu").1;
+            let at = file.iter().position(|r| *r == Row::Item("save_as")).expect("Save As");
+            assert_eq!(file[at + 1..at + 3], [Row::Line, Row::Item("import_audio")], "mac: {mac}");
         }
     }
 

@@ -148,7 +148,7 @@ fn named(g: &Gesture) -> Vec<LaneAddr> {
             clips.iter().for_each(|c| add(&c.lane));
             to.iter().for_each(&mut add);
         }
-        Gesture::Resize { clip, .. } | Gesture::Notes { clip, .. } | Gesture::Points { clip, .. } => add(&clip.lane),
+        Gesture::Resize { clip, .. } | Gesture::Notes { clip, .. } | Gesture::Points { clip, .. } | Gesture::Audio { clip, .. } => add(&clip.lane),
         Gesture::Split { clips, .. }
         | Gesture::Join { clips }
         | Gesture::Duplicate { clips, .. }

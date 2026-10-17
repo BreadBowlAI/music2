@@ -120,6 +120,19 @@ pub enum Gesture {
         #[serde(default)]
         ends: bool,
     },
+    /// An audio clip's settings (lane A's A3): its volume (−48 to +12 dB), its fades (seconds, at
+    /// most the clip together) and its direction. Those not given stay.
+    Audio {
+        clip: ClipRef,
+        #[serde(default)]
+        gain_db: Option<f64>,
+        #[serde(default)]
+        fade_in: Option<f64>,
+        #[serde(default)]
+        fade_out: Option<f64>,
+        #[serde(default)]
+        reverse: Option<bool>,
+    },
     /// The general form, for agents: whole clips put (each replacing the clip with its id, or
     /// added) and clips deleted by id.
     Set {
@@ -172,7 +185,7 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
                 }
                 LaneKind::Audio => {
                     return Err(EditError::Rejected(
-                        "An audio clip plays a sound, so an empty one can't be made: bounce a track with `m2 bounce --place`".into(),
+                        "An audio clip plays a sound file. Drop a WAV file here, or use File ▸ Import Audio…".into(),
                     ));
                 }
             };
@@ -211,10 +224,15 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
             let (lane, i) = w.resolve(clip)?;
             let l = w.lanes.get_mut(&lane).expect("resolved");
             let mut c = l.was[i].clone();
-            if *start != c.start() {
-                c.move_left_edge(*start, rev.compiled.data.tempo())?;
+            if let Clip::Audio(a) = &mut c {
+                let file = rev.compiled.data.asset_path(&a.asset).and_then(|p| asset_seconds(&p));
+                audio_span(a, *start, *length, rev.compiled.data.tempo(), file)?;
+            } else {
+                if *start != c.start() {
+                    c.move_left_edge(*start, rev.compiled.data.tempo())?;
+                }
+                c.set_length(*length);
             }
-            c.set_length(*length);
             l.keep[i] = Some(c);
         }
         Gesture::Delete { clips } => {
@@ -268,6 +286,37 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
                 clip.set_id(None);
                 w.lanes.get_mut(&target).expect("loaded").added.push((clip, true));
             }
+        }
+        Gesture::Audio { clip, gain_db, fade_in, fade_out, reverse } => {
+            let (lane, i) = w.resolve(clip)?;
+            let l = w.lanes.get_mut(&lane).expect("resolved");
+            let Clip::Audio(mut c) = l.was[i].clone() else {
+                return Err(EditError::Rejected("Only an audio clip has a volume, fades or a direction.".into()));
+            };
+            if let Some(g) = gain_db {
+                if !(g.is_finite() && (GAIN.0..=GAIN.1).contains(g)) {
+                    return Err(EditError::Rejected("A clip's volume goes from −48 to +12 dB.".into()));
+                }
+                c.gain_db = *g;
+            }
+            for (to, given) in [(&mut c.fade_in, fade_in), (&mut c.fade_out, fade_out)] {
+                if let Some(f) = given {
+                    if !(f.is_finite() && *f >= 0.0) {
+                        return Err(EditError::Rejected("A fade is a number of seconds, 0 or more.".into()));
+                    }
+                    *to = *f;
+                }
+            }
+            let tempo = rev.compiled.data.tempo();
+            let seconds = tempo.seconds_at(c.start + c.length) - tempo.seconds_at(c.start);
+            // Only fades it sets are held to the clip: a volume or a direction never fails on them.
+            if (fade_in.is_some() || fade_out.is_some()) && c.fade_in + c.fade_out > seconds + SLACK {
+                return Err(EditError::Rejected(format!("The fades together are at most the clip: {} seconds.", (seconds * 100.0).round() / 100.0)));
+            }
+            if let Some(r) = reverse {
+                c.reverse = *r;
+            }
+            l.keep[i] = Some(Clip::Audio(c));
         }
         Gesture::Set { lane, put, delete } => {
             let l = w.lane(lane)?;
@@ -583,13 +632,19 @@ impl Clip {
             }
             (Clip::Audio(a), Clip::Audio(b)) => {
                 audio_edge(a, "split")?;
-                if a.warp.is_empty() {
+                if a.warp.is_empty() && a.reverse {
+                    // Backwards, the first part plays the later part of the span: it ends at the
+                    // cut, so it starts later in the asset; the second keeps the offset (A3).
+                    a.offset += tempo.seconds_at(self.end()) - tempo.seconds_at(at);
+                } else if a.warp.is_empty() {
                     b.offset = a.offset + tempo.seconds_at(at) - tempo.seconds_at(a.start);
                 } else {
                     b.warp.iter_mut().for_each(|m| m.1 -= cut);
                 }
                 a.fade_out = 0.0;
                 b.fade_in = 0.0;
+                fit_fades(a, tempo);
+                fit_fades(b, tempo);
             }
             _ => unreachable!("both parts are this clip"),
         }
@@ -630,15 +685,102 @@ fn value_before(points: &[(f64, f64)], t: f64) -> Option<f64> {
     }
 }
 
-/// An audio clip whose `what` moves inside it: refused for a reversed or pitched clip, whose
-/// audio isn't read at its own speed from its offset (A8).
+/// An audio clip whose `what` moves inside it: refused for a pitched clip, whose audio isn't read
+/// at its own speed from its offset (A8), and a reversed one with warp markers. A reversed clip's
+/// edges and splits mirror the offset (A3).
 fn audio_edge(c: &AudioClip, what: &str) -> Result<(), EditError> {
     let why = match () {
-        _ if c.reverse => "it is reversed",
         _ if c.pitch != 0.0 => "its pitch is changed",
+        _ if c.reverse && !c.warp.is_empty() => "it is reversed and warped",
         _ => return Ok(()),
     };
     Err(EditError::Rejected(format!("The audio clip's {what} can't move here: {why}. Change that in its lane file.")))
+}
+
+/// How far a clip's audio may reach past its file and still be taken: 1 ms, for the page's beats.
+const SLACK: f64 = 0.001;
+/// A clip's volume, in dB (Q11).
+pub const GAIN: (f64, f64) = (-48.0, 12.0);
+
+/// A WAV file's length in seconds, from its header alone (`hound`, no decode): what an audio clip's
+/// edges stop at (Q13).
+pub fn asset_seconds(path: &std::path::Path) -> Option<f64> {
+    let r = hound::WavReader::open(path).ok()?;
+    Some(r.duration() as f64 / r.spec().sample_rate as f64)
+}
+
+/// Give audio clip `c` the span `start` for `length` beats, what plays inside staying where it
+/// plays (A3, D3): forwards, the left edge moves the offset and the right edge doesn't; backwards
+/// (a reversed clip plays `offset..offset + seconds` from its end), the right edge moves it and the
+/// left doesn't. The audio stops at its file: never before its start, nor past its end (`file`
+/// seconds, from the header), with 1 ms of slack. Warp markers move with the left edge, as before.
+fn audio_span(c: &mut AudioClip, start: f64, length: f64, tempo: &m2_song::TempoMap, file: Option<f64>) -> Result<(), EditError> {
+    let (left, right) = (start != c.start, start + length != c.start + c.length);
+    if !(left || right) {
+        return Ok(());
+    }
+    if !c.warp.is_empty() {
+        // As before: a warped clip's left edge refuses a pitched clip; reversed, neither edge moves.
+        if left || c.reverse {
+            audio_edge(c, if left { "left edge" } else { "right edge" })?;
+        }
+        if left {
+            let by = c.start - start;
+            c.warp.iter_mut().for_each(|m| m.1 += by);
+        }
+        (c.start, c.length) = (start, length);
+        fit_fades(c, tempo);
+        return Ok(());
+    }
+    // The edge that moves the offset (forwards the left, backwards the right) is refused for a
+    // pitched clip, as before.
+    let moves = left && !c.reverse || right && c.reverse;
+    if moves {
+        audio_edge(c, if c.reverse { "right edge" } else { "left edge" })?;
+    }
+    let secs = |b: f64| tempo.seconds_at(b);
+    let offset = match c.reverse {
+        true => c.offset + secs(c.start + c.length) - secs(start + length),
+        false => c.offset + secs(start) - secs(c.start),
+    };
+    let rate = 2f64.powf(c.pitch / 12.0);
+    let reach = offset + (secs(start + length) - secs(start)) * rate;
+    let name = &c.asset;
+    // Only the edge that moves a limit is held to it: a clip already past its file's end keeps
+    // its other edge free.
+    let reaches = right && !c.reverse || left && c.reverse;
+    if moves && offset < -SLACK {
+        return Err(EditError::Rejected(match c.reverse {
+            false => "The clip starts at the start of its audio already.".into(),
+            true => format!("The clip ends where {name} starts: it plays backwards."),
+        }));
+    }
+    if let Some(f) = file
+        && reaches
+        && reach > f + SLACK
+    {
+        return Err(EditError::Rejected(match c.reverse {
+            false => format!("The clip ends where {name} ends."),
+            true => format!("The clip starts where {name} ends: it plays backwards."),
+        }));
+    }
+    // Unchanged where the edge that moves it stayed, to the bit.
+    if moves {
+        c.offset = offset.max(0.0);
+    }
+    (c.start, c.length) = (start, length);
+    fit_fades(c, tempo);
+    Ok(())
+}
+
+/// Fades that no longer fit a clip made shorter, made to: the fade in first, then what is left
+/// for the fade out. Ones that fit stay as they are, to the bit.
+fn fit_fades(c: &mut AudioClip, tempo: &m2_song::TempoMap) {
+    let seconds = tempo.seconds_at(c.start + c.length) - tempo.seconds_at(c.start);
+    if c.fade_in + c.fade_out > seconds + SLACK {
+        c.fade_in = c.fade_in.min(seconds);
+        c.fade_out = c.fade_out.min(seconds - c.fade_in);
+    }
 }
 
 /// A lane's clips, one by one.
@@ -954,7 +1096,7 @@ pub fn pinned(rev: &Revision, g: &Gesture) -> Result<Gesture, EditError> {
         | Gesture::Duplicate { clips, .. }
         | Gesture::Delete { clips }
         | Gesture::Quantize { clips, .. } => clips.iter_mut().try_for_each(&mut pin)?,
-        Gesture::Resize { clip, .. } | Gesture::Notes { clip, .. } | Gesture::Points { clip, .. } => pin(clip)?,
+        Gesture::Resize { clip, .. } | Gesture::Notes { clip, .. } | Gesture::Points { clip, .. } | Gesture::Audio { clip, .. } => pin(clip)?,
         Gesture::Create { .. } | Gesture::Paste { .. } | Gesture::Set { .. } => {}
     }
     Ok(g)

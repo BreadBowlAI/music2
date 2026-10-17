@@ -2,6 +2,7 @@
 // One popover style (taste.md §2.14), opened where the pointer is, its rows the commands with
 // their keys. A row that can't run now is greyed, its tooltip saying why.
 
+import { Check } from "lucide-react";
 import { useState } from "react";
 import { createPortal } from "react-dom";
 import { playhead, removeAutomation, type LaneAddr } from "../lib/clips";
@@ -29,6 +30,8 @@ export function unautomate(addr: LaneAddr) {
 export interface MenuItem {
   id: string;
   label: string;
+  /** A row that is on or off (Reverse): a check while on. */
+  checked?: boolean;
   shortcut?: string;
   /** Why it can't run now: the row is greyed and its tooltip says this. */
   off?: string | null;
@@ -51,6 +54,8 @@ export default function PointMenu({
   // No line first or last, nor two in a row, when rows are left out.
   const kept = items.filter((it) => it !== null);
   const rows = kept.filter((it, i) => it !== "line" || (i > 0 && kept[i - 1] !== "line" && kept.slice(i + 1).some((x) => x !== "line")));
+  // A menu with a row that can be checked gives every row the check's room, so the words line up.
+  const checks = rows.some((it) => it !== "line" && it.checked !== undefined);
   return (
     <>
       {createPortal(<span ref={setAnchor} aria-hidden className="fixed size-px pointer-events-none" style={{ left: at.x, top: at.y - 4 }} />, document.body)}
@@ -61,6 +66,8 @@ export default function PointMenu({
               <MenuRow
                 key={it.id}
                 data-menu-item={it.id}
+                {...(it.checked !== undefined ? { role: "menuitemcheckbox", "aria-checked": it.checked } : {})}
+                icon={checks ? <Check size={14} className={it.checked ? undefined : "invisible"} /> : undefined}
                 shortcut={it.shortcut}
                 disabled={!!it.off}
                 title={it.off ?? undefined}

@@ -62,7 +62,9 @@ export type Gesture =
   /** An automation clip's points, `[beat in the clip, value]`, all of them. */
   | { op: "points"; clip: ServerRef; points: [number, number][] }
   /** The roll's edit of one notes clip: all its notes, and its length. */
-  | { op: "notes"; clip: ServerRef; notes: { pitch: number; start: number; length: number; velocity: number }[]; length?: number };
+  | { op: "notes"; clip: ServerRef; notes: { pitch: number; start: number; length: number; velocity: number }[]; length?: number }
+  /** An audio clip's volume (dB), fades (seconds) and direction: those given (lane A's A3). */
+  | { op: "audio"; clip: ServerRef; gain_db?: number; fade_in?: number; fade_out?: number; reverse?: boolean };
 
 /** The server's answer to a gesture: the edit, and the clips it put on a lane they weren't on. */
 export interface Done {
