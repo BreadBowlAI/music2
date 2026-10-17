@@ -1,15 +1,17 @@
-// 8b.4 Mute and solo in the app (design-8b §6.7, taste.md §2.9, §3.3, §3.4; the 8b-ui plan's U1):
-// M and S in every track header, placed from its right edge; a click, ⌥-click on S, a drag across
-// several, three quick clicks; the M and S keys; the mutes pill "2 muted · 1 solo" and its list,
-// with each track's ×, "Still drives Duck" and Clear all; the pill clear of the song's name and the
-// status pill at 1100 to 1280 px; nothing written but .music2/overlays.json; a reload keeps them; a
-// read-only window keeps them in memory; a PC page's words.
+// 8b.4 Mute and solo in the app (design-8b §6.7, taste.md §2.9, §3.3, §3.4; the 8b-ui plan's U1
+// and U2): M and S in every track header, placed from its right edge; a click, ⌥-click on S, a
+// drag across several, three quick clicks; the M and S keys; the mutes pill "2 muted · 1 solo" and
+// its list, with each track's ×, "Still drives Duck" and Clear all; the pill clear of the song's
+// name and the status pill at 1100 to 1280 px; nothing written but .music2/overlays.json; mute in
+// the song from the header menu (the option written, struck through and hatched, one undo step,
+// M opens the menu, the M key and drags skip it, S lights but mute wins); a reload keeps them; a
+// read-only window keeps them in memory and can't mute in the song; a PC page's words.
 //
 //   node e2e/s8-mute.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { PROJ, ROOT, check, done, open, sess, sleep, until } from "./fixlib.mjs";
+import { PROJ, ROOT, check, done, open, read, sess, sleep, until } from "./fixlib.mjs";
 
 const { browser, page, errors, api, state, toasts, key, box } = await open(1440, 900);
 const post = (p, body) => api(p, { method: "POST", body: JSON.stringify(body) });
@@ -233,6 +235,81 @@ check(await until(async () => !(await page.$("[data-testid=overlay-pill]")) && !
 check(await until(() => same(saved(), { mute: [], solo: [] }), 1500), "overlays.json says so");
 check(same(files(), orig) && (await state()).view.revision === rev0 && !(await state()).can_undo, "none of it wrote the project, made a revision or an undo step");
 
+// ---------------------------------------------------------------- mute in the song (MON-5; U2)
+
+const kickTs = orig["tracks/kick.ts"];
+const openMenu = async (m) => {
+  await page.hover(`[data-module-tab="${m}"]`);
+  await page.click(`[data-track-menu="${m}"]`);
+  return !!(await page.waitForSelector("[data-testid=track-menu]", { timeout: 2000 }).catch(() => null));
+};
+const menuRows = () => page.$$eval("[data-testid=track-menu] [role=menuitem]", (els) => els.map((e) => e.textContent));
+const struck = (m) => page.$eval(`[data-track="${m}"] [data-testid=track-label]`, (e) => getComputedStyle(e).textDecorationLine).catch(() => null);
+const hatched = (m) => page.$$eval(`[data-track="${m}"] [data-clip] pattern[patternTransform="rotate(45)"]`, (els) => els.length).catch(() => 0);
+const toasted = (text) => until(async () => (await toasts()).some((t) => t.includes(text)), 5000);
+
+check(await openMenu("kick"), "Kick's header menu opens");
+const rows0 = await menuRows();
+check(
+  rows0.some((r) => r.startsWith("Mute in songSaved in its code: the export leaves it out too")) && !rows0[0].startsWith("Mute in song"),
+  `it has Mute in song, saying what it does, below the first rows: ${JSON.stringify(rows0)}`,
+);
+await sleep(200);
+await page.screenshot({ path: `${ROOT}/s8-mute-menu.png` });
+await page.click("[data-testid=mute-in-song]");
+check(await until(() => read("tracks/kick.ts") === kickTs.replace('{ name: "Kick" }', '{ name: "Kick", muted: true }')), "Mute in song writes { name: \"Kick\", muted: true } in tracks/kick.ts, and nothing else there");
+const rev1 = (await state()).view.revision;
+check(rev1 === rev0 + 1 && same(Object.keys(files()).filter((f) => files()[f] !== orig[f]), ["tracks/kick.ts"]), "one revision, and only that file changed");
+check(await toasted("Kick muted in the song"), `the toast says “Kick muted in the song”: ${JSON.stringify(await toasts())}`);
+check(
+  await page.evaluate(() => [...document.querySelectorAll("[data-testid=toast]")].some((t) => t.textContent.includes("Kick muted in the song") && [...t.querySelectorAll("button")].some((b) => b.textContent === "Undo"))),
+  "with Undo",
+);
+await page.mouse.move(700, 600);
+check(await until(async () => (await overlays()).heard.kick === "muted-in-song" && same((await overlays()).muted_in_song, ["kick"])), "the state says Kick is muted in the song");
+check(await until(async () => (await struck("kick")) === "line-through" && (await nameColour("kick")) === FG_MUTED), "its name is struck through, fg-muted");
+check(await until(async () => (await pressed("mute", "kick")) && (await fill("mute", "kick")) === GRAY_700, 1000), `its M is lit gray-700 (M5): ${await fill("mute", "kick")}`);
+check((await hatched("kick")) > 0 && (await clipOpacity("kick")) === 0.4 && (await hatched("hats")) === 0, "its clips draw at 40%, hatched; Hats' aren't");
+check(!(await page.$("[data-testid=overlay-pill]")), "no mutes pill: that mute is the song's, not listening's");
+await page.screenshot({ path: `${ROOT}/s8-mute-in-song.png` });
+
+await page.click('[data-mute="kick"]');
+const menu1 = await page.waitForSelector("[data-testid=track-menu]", { timeout: 2000 }).catch(() => null);
+check(!!menu1 && (await menuRows())[0] === "Unmute in song", `a click on its M opens its menu with Unmute in song first: ${JSON.stringify(await menuRows())}`);
+check(same((await overlays()).mute, []), "and mutes nothing while listening");
+await page.keyboard.press("Escape");
+await select("kick");
+await key("m");
+check(await toasted("Kick is muted in the song. Unmute in song is in its menu."), "the M key skips it, and says where its unmute is");
+await sleep(300);
+check(same((await overlays()).mute, []), "it muted nothing");
+const hm = mid(await box('[data-mute="hats"]')), km = mid(await box('[data-mute="kick"]'));
+await page.mouse.move(hm.x, hm.y);
+await page.mouse.down();
+await page.mouse.move(km.x, km.y, { steps: 10 });
+await page.mouse.up();
+check(await settled(["hats"], []), "a drag from Hats' M across Kick's mutes Hats only");
+await page.click('[data-mute="hats"]');
+await page.click('[data-solo="kick"]');
+check(await settled([], ["kick"]), "S on Kick lights");
+check((await overlays()).heard.kick === "muted-in-song", "but mute wins: Kick is still muted in the song");
+check((await title("solo", "kick")) === "Muted in the song: unmute it to hear it", `S's tooltip says why: “${await title("solo", "kick")}”`);
+await page.click('[data-solo="kick"]');
+await settled([], []);
+
+check((await page.$eval("button[aria-label=Undo]", (e) => e.title)) === "Undo mute in song (⌘Z)", `Undo names it: “${await page.$eval("button[aria-label=Undo]", (e) => e.title)}”`);
+await key("Meta+z");
+check(await until(() => read("tracks/kick.ts") === kickTs), "⌘Z puts tracks/kick.ts back byte for byte");
+check(await toasted("Undid mute in song"), "and says “Undid mute in song”");
+check(await until(async () => (await overlays()).heard.kick === "heard" && (await struck("kick")) === "none" && !(await pressed("mute", "kick"))), "Kick is heard again: no strike, M off");
+await key("Meta+Shift+z");
+check(await until(() => read("tracks/kick.ts").includes("muted: true")), "redo mutes it in the song again");
+check(await openMenu("kick"), "its menu opens");
+await page.click("[data-testid=mute-in-song]");
+check(await until(() => read("tracks/kick.ts") === kickTs), "Unmute in song takes the option out");
+check(await toasted("Kick unmuted in the song"), "the toast says “Kick unmuted in the song”");
+check(same(files(), orig), "every project file is as it was");
+
 // ---------------------------------------------------------------- a small window: 200 px headers (W10)
 
 await page.click('[data-mute="kick"]');
@@ -333,6 +410,12 @@ await page.click("[data-testid=overlay-pill]");
 await page.waitForSelector("[data-testid=overlay-popover]", { timeout: 2000 }).catch(() => {});
 check((await page.$eval("[data-testid=overlay-popover]", (e) => e.innerText).catch(() => "")).includes("Not saved: this song is open in another window."), "and so does its list");
 await page.keyboard.press("Escape");
+check(await openMenu("kick"), "Kick's menu opens read-only");
+check(await page.$eval("[data-testid=mute-in-song]", (e) => e.disabled && e.title.startsWith("Read only")), "Mute in song is off there, saying why");
+await page.keyboard.press("Escape");
+const kickRo = read("tracks/kick.ts");
+const roMute = await post("/track/mute", { session: (await state()).session, modules: ["kick"], muted: true });
+check(roMute.status === 423 && read("tracks/kick.ts") === kickRo, `the route refuses it, 423, and writes nothing: ${roMute.body.error?.slice(0, 60)}`);
 holder.stdin.end();
 await new Promise((r) => holder.once("exit", r));
 

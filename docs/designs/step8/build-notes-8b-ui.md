@@ -16,6 +16,7 @@ adds its own section here, in the same commit.
 | Setup | Nothing new to see. The back ends of 8b-backend are merged in. A deleted track no longer leaves its mute behind | done |
 | U0 | Nothing new to see, except the roll's grid control now comes from a shared file. The places the lanes fill are ready | done |
 | U1 (lane A) | M and S on every track. A pill at the top says "2 muted · 1 solo"; click it for the list and Clear all | done |
+| U2 (lane A) | "Mute in song" in a track's menu: saved in its code, so the export leaves it out too. One undo step | done |
 
 ## Setup: the merges
 
@@ -228,4 +229,46 @@ at the first click on M (`~/m2-runs/s8ui/scratch/e2e/lane-a/u1-red`).
 
 - Mute in the song, from the header menu, comes in U2.
 - U12 (later): M and S on Mix strips.
+
+## U2: mute in the song (lane A)
+
+**In short**
+- A track's menu (⋯, or right-click its header) has **Mute in song**. It writes `muted: true` in
+  the track's code. So the song, and the export, leave the track out.
+- It is one undo step. A toast says "Kick muted in the song", with Undo.
+- A track muted in the song looks it: its name is **struck through**, its clips are **hatched**,
+  and its M is lit.
+- A click on that M opens the menu, with **Unmute in song** first. The M key and a drag across M
+  buttons leave it alone, because unmuting it is an edit to the code.
+- Checks: `s8-mute` grew to 99 checks; `taste`, `s8-tracks` and `pc-keys` pass.
+
+### What changed
+
+| File | What |
+|---|---|
+| `web/src/lib/overlays.ts` | `muteInSongCall`: `POST /api/graph/track/mute`, recorded as the undo step "mute in song" (or "unmute in song"), so Undo says "Undo mute in song (⌘Z)" and then "Undid mute in song" |
+| `web/src/components/Tracks.tsx` | `muteInSong(module, muted)`: refused in words while the song can't be edited; the toast "Kick muted in the song" (or "unmuted") with Undo. The menu row "Mute in song", with the line "Saved in its code: the export leaves it out too", below Colour and automation. On a track muted in the song, "Unmute in song" is the first row. Off (with the reason as its tooltip) in a read-only window, while the code doesn't compile, or offline |
+| `web/src/components/MuteSolo.tsx` | Fills `canvas.muteInSong`: Track ▸ Mute in Song on the selected track, either way |
+| `e2e/s8-mute.mjs`, `e2e/run.mjs`, `e2e/README.md` | Part 2 (31 checks), and the read-only part's two more |
+
+What U1 already did for this state: M lit `gray-700` (M5); a click on it opens the menu; the M key
+says "Kick is muted in the song. Unmute in song is in its menu." and changes nothing; a drag across
+M skips it; S lights but the state stays "muted-in-song", and S's tooltip says "Muted in the song:
+unmute it to hear it".
+
+### Checks
+
+| Check | Result |
+|---|---|
+| `cd web && npm run build` (type-checks) | ok |
+| `s8-mute` | 99 of 99 |
+| `taste`, `s8-tracks`, `pc-keys` (the suites that open the header menu) | 39, 75, 37: all pass |
+| Log | `~/m2-runs/logs/ui-a-u2-1017-063221-505368.log`; suite logs in `~/m2-runs/s8ui/scratch/e2e/lane-a/u2` |
+
+**Red first:** the suite on U1's page stops where it clicks the menu's Mute in song: there is no
+such row (`~/m2-runs/s8ui/scratch/e2e/lane-a/u2-red`).
+
+### Left
+
+- Nothing for U2. The export's question comes in U3.
 

@@ -8,6 +8,7 @@
 import { create } from "zustand";
 import { moduleName, type GraphState } from "./graph";
 import type { Heard, OverlayState } from "./graph8b";
+import { recorded } from "./history";
 import { token } from "./native";
 import { useStore } from "./store";
 
@@ -166,4 +167,23 @@ export function usePill() {
 export function trackName(graph: GraphState, module: string) {
   const t = graph.timeline.tracks.find((x) => x.module === module);
   return moduleName({ key: module, label: t?.label ?? graph.view.modules.find((m) => m.key === module)?.label });
+}
+
+/** An edit's answer: the revision it made, and what it changed, in words. */
+export interface Edited {
+  file: string;
+  before: string;
+  after: string;
+  revision: number;
+}
+
+/**
+ * Mute `modules` in the song, or unmute them (MON-5): the `muted` option in their code, one Tx and
+ * one undo step, which Undo names "mute in song" ("Undid mute in song"). A write: refused in a
+ * read-only window (423) and while the code doesn't compile, in words.
+ */
+export async function muteInSongCall(session: number, modules: string[], muted: boolean) {
+  const r = await post<Edited>("/track/mute", { session, modules, muted });
+  if (r.before !== r.after) recorded(session, r.revision, { name: muted ? "mute in song" : "unmute in song", structural: true });
+  return r;
 }

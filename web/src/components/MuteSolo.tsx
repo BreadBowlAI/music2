@@ -5,11 +5,11 @@ import { mod } from "../lib/native";
 import { drives, isMuted, isSoloed, setMute, setSolo, soloOnly, toggleMute, toggleSolo, useSets } from "../lib/overlays";
 import { canvas } from "../lib/shell";
 import { useStore } from "../lib/store";
-import { openTrackMenu } from "./Tracks";
+import { muteInSong, openTrackMenu } from "./Tracks";
 import { keepFocus } from "./ui";
 
-// The M and S keys and Track ▸ Mute and Solo (⌃M, ⌃S on a Mac) act on the selected track: App
-// sends them here. Never the Song row (MON-1).
+// The M and S keys, and Track ▸ Mute, Solo (⌃M, ⌃S on a Mac) and Mute in Song, act on the
+// selected track: App sends them here. Never the Song row (MON-1).
 const track = (module: string) => useStore.getState().graph?.timeline.tracks.find((t) => t.module === module && t.track && t.module !== "song");
 canvas.mute = (module) => {
   const t = track(module);
@@ -17,6 +17,9 @@ canvas.mute = (module) => {
 };
 canvas.solo = (module) => {
   if (track(module)) toggleSolo(module);
+};
+canvas.muteInSong = (module) => {
+  if (track(module)) void muteInSong(module, useStore.getState().graph?.overlays?.heard[module] !== "muted-in-song");
 };
 
 type Kind = "mute" | "solo";
