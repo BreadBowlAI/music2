@@ -1,5 +1,6 @@
 // The knob gestures of taste.md §5.2 (KN-1) and the way values read, on a fresh copy of
-// examples/first-song: the Song's mixer (hats −6 dB and R 30, keys −5 dB and L 25) and the Bass.
+// examples/first-song: the Mix view's strips (hats −6 dB and R 30, keys −5 dB and L 25: a pan is a
+// knob, a level a fader, and both take the same keys and type-in) and the Bass.
 //   words    values read as taste.md's words and numbers: "−6.0 dB", "R 30", "L 25", "2.5 kHz"
 //   drag     300px is a knob's whole range; ⇧ makes a drag a tenth as coarse, and ⇧ pressed mid-drag
 //            goes on from where the knob is, without a jump
@@ -7,22 +8,25 @@
 //   type     a double-click (or Return on a focused knob) turns the readout into a field of its size:
 //            "-3" writes −3 dB, "L20" a pan of −0.2, "2k" 2 kHz on a Hz knob; text that isn't a value
 //            marks the field and writes nothing; Escape writes nothing; Tab writes and moves to the next
-//            knob
+//            knob or fader
 //   step     ↑ on a focused knob is 0.1 dB, ⇧↑ 1 dB, the wheel a step a notch; a run of steps is one edit
 //   node run.mjs gestures fix
 import { check, done, open, read, sleep, until } from "./fixlib.mjs";
 
-const { browser, page, errors, state, show, box } = await open(1440, 900);
+const { browser, page, errors, state, show, view, box } = await open(1440, 900);
 
 const revision = async () => (await state()).view.revision;
 const knobIn = (module, label) => `[data-module="${module}"] [data-knob="${label}"]`;
+/** A level or a pan on a Mix strip. */
+const onStrip = (label) => `[data-testid=mix] [data-knob="${label}"]`;
 /** What a knob reads, and the value it holds. */
 const reads = (sel) => page.$eval(sel, (e) => e.querySelector(".tabular-nums")?.textContent ?? null);
 const valueOf = async (sel) => Number(await page.$eval(sel, (e) => e.dataset.value));
-/** A knob's circle, scrolled into view: its centre. */
+/** A knob's circle (a fader's thumb), scrolled into view: its centre. */
+const grip = (sel) => `${sel} svg, ${sel} [data-testid=fader-thumb]`;
 const centre = async (sel) => {
-  await page.$eval(`${sel} svg`, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
-  const b = await box(`${sel} svg`);
+  await page.$eval(grip(sel), (e) => e.scrollIntoView({ block: "center", inline: "center" }));
+  const b = await box(grip(sel));
   return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
 };
 /** Drag a knob up by `dy` pixels (down if negative), holding ⇧ from `fineFrom` pixels on. */
@@ -47,9 +51,10 @@ const song = () => read("song.ts");
 const hatsLine = () => /hats: \{ in: hats\.out, db: db\((-?[\d.]+)\), pan: (-?[\d.]+) \}/.exec(song());
 const keysLine = () => /keys: \{ in: keys\.out, db: db\((-?[\d.]+)\), pan: (-?[\d.]+) \}/.exec(song());
 
-await show("song");
-const hatsDb = knobIn("song", "hats.db"), hatsPan = knobIn("song", "hats.pan");
-const keysDb = knobIn("song", "keys.db"), keysPan = knobIn("song", "keys.pan");
+await view("mix");
+const hatsDb = onStrip("hats.db"), hatsPan = onStrip("hats.pan");
+const keysDb = onStrip("keys.db"), keysPan = onStrip("keys.pan");
+await page.waitForSelector(hatsPan);
 
 // ---------------------------------------------------------------- words
 const words = [await reads(hatsDb), await reads(hatsPan), await reads(keysDb), await reads(keysPan)];
@@ -66,13 +71,13 @@ check(await until(() => hatsLine()?.[2] === "0.52"), `with ⇧, the same 30px mo
 await drag(hatsPan, -45, { fineFrom: 15 });
 // 15px coarse (−0.1), then ⇧ for 30px more (−0.02), from where the knob was when ⇧ went down.
 check(await until(() => hatsLine()?.[2] === "0.4"), `⇧ pressed mid-drag goes on finely from there, with no jump: 0.52 → 0.4 (${hatsLine()?.[2]})`);
-// The knob's whole row drags it, its name too, not only the 28px circle (taste.md §2.2).
-const name = await page.$eval(`${hatsPan} .truncate`, (e) => { const r = e.getBoundingClientRect(); return { x: r.left + 4, y: r.top + r.height / 2 }; });
+// The knob's whole place drags it, its value too, not only the circle (taste.md §2.2).
+const name = await page.$eval(`${hatsPan} .tabular-nums`, (e) => { const r = e.getBoundingClientRect(); return { x: r.left + 4, y: r.top + r.height / 2 }; });
 await page.mouse.move(name.x, name.y);
 await page.mouse.down();
 for (let i = 1; i <= 6; i++) await page.mouse.move(name.x, name.y + i * 2.5);
 await page.mouse.up();
-check(await until(() => hatsLine()?.[2] === "0.3"), `a drag on its name turns it too: 15px down, 0.4 → 0.3 (${hatsLine()?.[2]})`);
+check(await until(() => hatsLine()?.[2] === "0.3"), `a drag on its value turns it too: 15px down, 0.4 → 0.3 (${hatsLine()?.[2]})`);
 
 // ---------------------------------------------------------------- reset
 rev = await revision();
@@ -88,7 +93,7 @@ rev = await revision();
 c = await centre(keysDb);
 await page.mouse.click(c.x, c.y, { count: 2 });
 const field = await page.waitForSelector(`${keysDb} [data-testid=knob-type-in]`, { timeout: 2000 }).catch(() => null);
-check(!!field, "a double-click on a knob turns its readout into a field");
+check(!!field, "a double-click on a fader turns its level into a field");
 const selected = field && (await field.evaluate((e) => e.value.slice(e.selectionStart, e.selectionEnd)));
 check(selected === "−5.0 dB", `its text, selected (${selected})`);
 await page.keyboard.type("-3");
@@ -125,12 +130,14 @@ await page.waitForSelector(`${hatsDb} [data-testid=knob-type-in]`, { timeout: 20
 await page.keyboard.type("-9db");
 await page.keyboard.press("Tab");
 check(await until(() => hatsLine()?.[1] === "-9"), `"-9db" and Tab writes db(-9) (${hatsLine()?.[1]})`);
+// Hats' pan comes before its fader; the next control is the next strip's pan.
 check(
-  await until(async () => (await page.evaluate(() => document.activeElement?.closest("[data-knob]")?.dataset.knob)) === "hats.pan"),
-  `and the next knob, hats.pan, has the focus (${await page.evaluate(() => document.activeElement?.closest("[data-knob]")?.dataset.knob)})`,
+  await until(async () => (await page.evaluate(() => document.activeElement?.closest("[data-knob]")?.dataset.knob)) === "bass.pan"),
+  `and the next control, bass.pan, has the focus (${await page.evaluate(() => document.activeElement?.closest("[data-knob]")?.dataset.knob)})`,
 );
 
 // Return on a focused knob types too: "2k" on a Hz knob.
+await view("graph");
 await show("bass");
 const hi = knobIn("bass", "hi");
 check((await reads(hi)) === "2.5 kHz", `the bass's xrange hi reads 2.5 kHz (${await reads(hi)})`);
@@ -145,11 +152,12 @@ check(await until(async () => (await reads(hi)) === "2.0 kHz"), `and it reads 2.
 await until(async () => (await state()).view.modules.find((m) => m.key === "bass").nodes.some((n) => n.knobs.some((k) => k.label === "hi" && k.value === 2000)));
 
 // ---------------------------------------------------------------- step
-await show("song");
+await view("mix");
+await page.waitForSelector(keysDb);
 rev = await revision();
-await page.$eval(`${keysDb} svg`, (e) => e.focus());
+await page.$eval(grip(keysDb), (e) => e.focus());
 for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowUp");
-check(await until(() => keysLine()?.[1] === "-2.7"), `↑ three times on a focused knob: −3 → −2.7 dB (${keysLine()?.[1]})`);
+check(await until(() => keysLine()?.[1] === "-2.7"), `↑ three times on a focused fader: −3 → −2.7 dB (${keysLine()?.[1]})`);
 await sleep(800);
 check((await revision()) === rev + 1, "written once, when the steps stop");
 await page.keyboard.down("Shift");
@@ -159,7 +167,7 @@ check(await until(() => keysLine()?.[1] === "-1.7"), `⇧↑ is ten steps: 1 dB 
 await sleep(800);
 rev = await revision();
 await page.keyboard.press("Backspace");
-check(await until(() => keysLine()?.[1] === "0"), `⌫ on a focused knob resets it to its default, 0 dB (${keysLine()?.[1]})`);
+check(await until(() => keysLine()?.[1] === "0"), `⌫ on a focused fader resets it to its default, 0 dB (${keysLine()?.[1]})`);
 check((await revision()) === rev + 1, "as one edit");
 
 rev = await revision();

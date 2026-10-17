@@ -47,7 +47,8 @@ const newPage = async (s = sess) => {
   page.on("pageerror", (e) => consoleErrors.push(String(e)));
   await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; }, s.token);
   await page.goto(s.url, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector("[data-testid=graph]", { timeout: 8000 });
+  // The dock opens on the view this browser chose last: Device, or Mix.
+  await page.waitForSelector("[data-testid=graph], [data-testid=mix]", { timeout: 8000 });
   return page;
 };
 const apiOf = (s) => async (path, opts = {}) =>
@@ -74,17 +75,23 @@ const show = async (p, name) => {
   await p.click(`[data-module-tab="${name}"]`);
   await p.waitForSelector(`[data-module="${name}"]`);
 };
-// A knob's centre, scrolled into the panel's view.
+// A knob's centre (a fader's thumb), scrolled into the panel's view.
 const knobAt = async (p, sel) => {
-  await p.$eval(`${sel} svg`, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
-  const b = await (await p.$(`${sel} svg`)).boundingBox();
+  const grip = `${sel} svg, ${sel} [data-testid=fader-thumb]`;
+  await p.$eval(grip, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
+  const b = await (await p.$(grip)).boundingBox();
   return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
 };
 const value = (p, sel) => p.$eval(sel, (e) => e.dataset.value);
-const hats = '[data-module="song"] [data-knob="hats.pan"]';
-const keys = '[data-module="song"] [data-knob="keys.pan"]';
-const keysDb = '[data-module="song"] [data-knob="keys.db"]';
-await show(page, "song");
+/** The Mix view: levels and pans are its strips' (MX-6). */
+const mix = async (p) => {
+  await p.click('[data-view-tab="mix"]');
+  await p.waitForSelector("[data-testid=mix] [data-strip]");
+};
+const hats = '[data-testid=mix] [data-knob="hats.pan"]';
+const keys = '[data-testid=mix] [data-knob="keys.pan"]';
+const keysDb = '[data-testid=mix] [data-knob="keys.db"]';
+await mix(page);
 
 // ---- slow: a drag while the code editor's save compiles for over a second.
 // Each preview is timed from its request to its answer.
@@ -163,7 +170,7 @@ check(await until(() => songTs().includes(`pan: ${shown} }`)), `and its release 
 
 // ---- closed: a second window drags, then closes; its drag ends, and nothing is written.
 const other = await newPage();
-await show(other, "song");
+await mix(other);
 const kept = songTs();
 at = await knobAt(other, hats);
 await other.mouse.move(at.x, at.y);
@@ -329,8 +336,8 @@ async function withPlugins() {
     check(median(levels(frames() - RATE / 2, frames())) > loud - 6, "from the start, the chord sounds again");
 
     // The lead's level dragged down while a save of tracks/kick.ts compiles: heard before it returns.
-    await show(p2, "song");
-    const lead = '[data-module="song"] [data-knob="lead.db"]';
+    await mix(p2);
+    const lead = '[data-testid=mix] [data-knob="lead.db"]';
     const song0 = fs.readFileSync(`${dir}/song.ts`, "utf8");
     const kick = kickTs();
     at = await knobAt(p2, lead);
@@ -342,8 +349,9 @@ async function withPlugins() {
     const t1 = Date.now();
     const compiling = putFile(s2, "tracks/kick.ts", kick, slowly(kick)).then((r) => { back = { status: r.status, at: Date.now(), frame: frames() }; });
     await sleep(150);
+    // Down the fader into its foot, and no further than the window's edge.
     for (let i = 1; i <= 20 && back === null; i++) {
-      await p2.mouse.move(at.x, at.y + 2 + i * 8);
+      await p2.mouse.move(at.x, Math.min(at.y + 2 + i * 8, 990));
       await sleep(20);
     }
     const draggedTo = Number(await value(p2, lead));
@@ -367,7 +375,7 @@ async function withPlugins() {
     const exports = `${root}/home/Music/music2/Exports`;
     // What the engine is busy with is a state of the top bar's status pill (taste ST-1): its title lists every state.
     const note = () => p2.evaluate(() => document.querySelector("[data-status]")?.title ?? null);
-    // The lead back at its own level (the drag above left it near -60 dB), so the checks below hear
+    // The lead back at its own level (the drag above left it at the fader's foot), so the checks below hear
     // the chord well above silence.
     const dragged = fs.readFileSync(`${dir}/song.ts`, "utf8");
     await putFile(s2, "song.ts", dragged, song0);

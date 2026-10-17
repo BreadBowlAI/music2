@@ -46,6 +46,11 @@ const show = async (name) => {
   await page.click(`[data-module-tab="${name}"]`);
   await page.waitForSelector(`[data-module="${name}"]`);
 };
+/** The dock's view: `graph` (Device), `notes`, `mix` or `code`. */
+const view = async (id) => {
+  await page.click(`[data-view-tab="${id}"]`);
+  await page.waitForSelector(`[data-view-tab="${id}"][aria-selected="true"]`);
+};
 // What needs attention is in the status pill's popover (taste.md ST-1): open it to read it.
 const status = async () => {
   if ((await page.$("[data-status]")) && !(await page.$("[data-testid=status-popover]"))) await page.click("[data-status]").catch(() => {});
@@ -116,7 +121,10 @@ check(!(await page.$("[data-testid=track-rename]")), "the song's title isn't ren
 // ---------------------------------------------------------------- automate a knob (HOME-2)
 
 const bassColor = await barColor("bass");
-const panKnob = '[data-module="song"] [data-knob="hats.pan"]';
+// Hats' pan, on its Mix strip (MX-6).
+await view("mix");
+const panKnob = '[data-testid=mix] [data-knob="hats.pan"]';
+await page.waitForSelector(panKnob);
 await page.$eval(panKnob, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
 const openMenu = async (sel) => {
   // The scroll that brought it into view lands first: the menu closes on a scroll under it.
@@ -147,7 +155,7 @@ check(await until(async () => !!(await page.$('[data-lane="song.hats-pan"]'))), 
 const lane = (await graph()).timeline.tracks.find((t) => t.module === "song")?.lanes.find((l) => l.key === "hats-pan");
 check(lane?.kind === "control" && lane.default === 0.3 && lane.clips.length === 0 && lane.unit === "bipolar", "empty, drawing the fallback (0.3)");
 check((await revision()) === revA + 1, "one revision");
-check(await until(async () => !(await page.$(panKnob)) && !!(await page.$('[data-module="song"] [data-node="hats-pan"]'))), "on the canvas the knob is a lane now");
+check(await until(async () => !(await page.$(panKnob)) && !!(await page.$('[data-testid=mix] [data-strip="hats"] [data-testid=pan-in-code]'))), "on its strip the knob is gone: a lane sets it now");
 check((await barColor("bass")) === bassColor, "a lane on the song recolours no track");
 await page.screenshot({ path: `${S}/s6-automated.png` });
 
@@ -160,6 +168,7 @@ await key("z", ["Meta"]);
 check(await until(() => read("song.ts") === orig.song), "undone again");
 
 // From the keyboard, in a track that takes its lanes already: only the value changes there.
+await view("graph");
 await show("bass");
 const hi = '[data-module="bass"] [data-node="xrange"] [data-knob="hi"]';
 await page.$eval(hi, (e) => e.scrollIntoView({ block: "center", inline: "center" }));

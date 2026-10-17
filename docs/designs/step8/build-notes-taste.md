@@ -713,7 +713,7 @@ The name's field, open with a long name, in a page laid out as the Mac app's bar
   two undos put the entry back.
 - The knob's gesture (the lease) is now one hook, shared by the Device view's knobs and the Mix view.
 - The Device view still shows the mixer's knobs; B5b makes it one compact card.
-- Checks: the new suite `s8-mix` (63 checks) and the 17 suites the slice can touch pass; no render
+- Checks: the new suite `s8-mix` (63 checks) and the 16 suites the slice can touch pass; no render
   record moved.
 
 ### What was built
@@ -765,3 +765,71 @@ The name's field, open with a long name, in a page laid out as the Mac app's bar
 | A first options object in a call written over several lines lands on the last argument's line: the master's first fader move writes `}), { db: -4.8 },`. Right, but not how a person would lay it out. | B-end review (B4's `Insertion::plan`) |
 | A meter beside each fader, M and S, mute in song, the sidechain row | 8b.8, 8b.4 |
 | Scratch: `~/m2-runs/tn-scratch/b5/`. Logs: `~/m2-runs/logs/tn-b5-*`, `tn-b5a-*`. | — |
+
+## B5b: 8b.3c, the compact mixer card and the suites that follow
+
+**In short**
+- Select the Song, and the Device view shows its mixer as one small card, "Mixer · 4 channels · Open
+  Mix ⌥3", not a row for every channel (MX-6). Each channel's signal is one cable into it. The
+  master's volume and ceiling stay knobs on its own card.
+- The 8 suites that dragged or read the mixer's knobs in the Device view now do it on the Mix strips:
+  gestures, graph, live3b, s5-knobs, s6-builders, s6-fixes, start and taste. Their counts are
+  unchanged. `s8-mix` checks the card too: 67 checks.
+- A fader and a strip's pan now behave exactly as a knob does when typing: Tab moves on, text that
+  isn't a value gets its line, and a double-click anywhere on a fader types.
+- A level reads "−6.0 dB" on its strip, as taste's words table says (B5a showed "−6.0").
+- A control called just `db` (the master's, a gain's) is labelled **Volume**, not "Db", which reads
+  like a note name.
+- Checks: 22 browser suites (23 runs, live3b with the test plugins) pass; no render record moved.
+
+### What was built
+
+| Commit | What |
+|---|---|
+| this commit | `compactMixer` and the card's row in `NodeGraph.tsx`; `focusNext` in `Knob.tsx`, shared by every type-in; the Mix's type-ins (`knob-type-in`, Tab, the error line), a fader's double-click, levels with their unit; `controlLabel`'s Volume. The 8 suites; `s8-mix`'s card checks and its screenshot of the Song's Device view; `run.mjs` and `e2e/README.md`. README (the Song's mixer card), design-8b §5.5 and §5.7. These notes. |
+
+### Decisions made in the slice
+
+| What | Decided | Why |
+|---|---|---|
+| Which mixer is a card | Only the song's own, when the Mix view has it (`mix.mixer` is `ok`) | The attack's note on claim 7: a track's own mixer (fixes-graph puts one in Keys) is an effect like any other, and keeps its box. |
+| The card's inputs | One port, "channels", that each channel's signal is drawn into once; a control cable into the mixer (an LFO on a pan) keeps its own line style | One cable per track says what goes in, and the card stays one row. Nothing is hidden: a signal still shows where it goes. |
+| The card's words | Title "Mixer"; its row "4 channels" and **Open Mix ⌥3**, a link in the accent | Design-8b §5.5's "Mixer · 6 channels · open Mix ⌥3", in sentence case. ⌥3 is spelled per OS (`opt`). |
+| A level's text on its strip | "−6.0 dB", with the unit (B5a had "−6.0") | taste.md's words table writes dB so, and the owner is new to music: the unit says what the number is. It fits a 76 px strip. |
+| The Mix's type-ins | The knob's: one test id (`knob-type-in`), Tab writes and moves to the next knob or fader, unreadable text gets a line ("Type a level, like −6 or −inf", "Type a pan, like L20, C or R35") | taste.md §2.14 has one type-in. gestures checks them all alike. |
+| A double-click on a fader | Anywhere on it types, as on a knob's row | taste.md §5.2's gesture table: "double-click, or Return when focused". |
+| "Db" | A control named `db` is Volume | std's gain says so itself ("Volume: louder or quieter, in dB"); "Db" reads as D flat. |
+| gestures' "its name drags it too" | Its value drags it: a strip's pan has no name of its own | The check is that the whole control drags, not only the circle (taste.md §2.2). |
+| gestures' Tab check | From Hats' fader to Bass's pan, the next control | A strip's pan comes before its fader (the attack's note on B5). |
+| live3b's lead drag | Down into the fader's foot, kept inside the window | A fader's travel is shorter than a knob's 300 px; the check is still a drop of 10 dB heard while the save compiles. |
+| s6-builders' "the knob is a lane now" | The strip's pan reads "—", "Its pan follows a lane or a signal in the code" | The lane node is the Device view's; the Mix view shows the knob is gone. |
+
+### Checks
+
+| Check | Result |
+|---|---|
+| Web build (`tsc` with the SDK and `forms.ts` projects, then Vite) | passes |
+| s8-mix, gestures, graph, live3b (with the test plugins), s5-knobs, s6-builders, s6-fixes, start, start (empty), taste, views, fixes-graph, effects, ports, dsp, cables, undo, pc-keys, s8-tracks, code, layout, notes, s8-songbar | 23 of 23 ok: 67, 30, 19, 60, 120, 55, 19, 24, 14, 39, 30, 42, 12, 46, 33, 12, 10, 37, 75, 58, 39, 52, 68 |
+| Rust | not touched in B5 |
+| `renders.sha256`, `renders.json` | unchanged since `09b2dfd` (no engine, std, kernel or example file changed in B5) |
+
+### Numbers (Linux, information only)
+
+| What | Value |
+|---|---|
+| The 23 runs, four at a time | about 2 min 50 s after the build |
+| first-song's Song graph in the Device view | the compact card is 80 px tall where the mixer was 16 rows; the whole graph fits the dock at 75% |
+
+### Left
+
+| What | Where |
+|---|---|
+| A first options object in a call written over several lines lands on the last argument's line (`}), { db: -4.8 },`) | B-end review (B4's `Insertion::plan`) |
+| Off the Mac, a mouse scrolls sideways with Shift+wheel. Not checked: whether WebKitGTK and Chrome send that to a fader as a sideways scroll (the strips move) or as up and down (the fader moves) | B-end review, with T6 |
+| M and S, mute in song, a meter per strip, the sidechain row | 8b.4, 8b.8 |
+| The full `ci/check.sh` | the final phase |
+| Scratch: `~/m2-runs/tn-scratch/b5/`. Logs: `~/m2-runs/logs/tn-b5b-*`. | — |
+
+A last commit after these notes: a first pan refused in the middle of a drag asks no more until the
+next press (one toast, not one a move). s8-mix, gestures, taste and live3b (with the test plugins)
+pass again: 67, 30, 39, 60.

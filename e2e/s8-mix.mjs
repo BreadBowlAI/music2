@@ -4,7 +4,8 @@
 // Shift for fine; a typed level; Alt-click for 0 dB; the foot for silence; the wheel (one edit, and
 // a sideways scroll moves the strips, not the fader); the keys; a channel's first pan, written as
 // the drag passes 4 px and undone in two steps; the master's fader; no level slider in the track
-// headers; selection and the strip's menu; a track in no channel; and a read-only window.
+// headers; selection and the strip's menu; a track in no channel; the Song's Device view, where the
+// mixer is one compact card (MX-6); and a read-only window.
 //
 //   node e2e/s8-mix.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import { spawn } from "node:child_process";
@@ -86,8 +87,8 @@ check(master.bar === "rgb(154, 159, 166)" && new Set(strips.slice(0, -1).map((s)
 await page.screenshot({ path: `${ROOT}/s8-mix.png` });
 
 const kick0 = await faderOf("kick"), hats0 = await faderOf("hats");
-check(kick0.value === 0 && kick0.dflt && kick0.level === "0.0" && kick0.muted && kick0.title.includes("Not written in your code yet"), `Kick's level, left out of its entry, reads 0.0 in grey and says why (${JSON.stringify(kick0)})`);
-check(hats0.value === -6 && !hats0.dflt && hats0.level === "−6.0" && !hats0.muted, `Hats' reads −6.0, as written (${hats0.level})`);
+check(kick0.value === 0 && kick0.dflt && kick0.level === "0.0 dB" && kick0.muted && kick0.title.includes("Not written in your code yet"), `Kick's level, left out of its entry, reads 0.0 dB in grey and says why (${JSON.stringify(kick0)})`);
+check(hats0.value === -6 && !hats0.dflt && hats0.level === "−6.0 dB" && !hats0.muted, `Hats' reads −6.0 dB, as written (${hats0.level})`);
 check(Math.abs(kick0.p - 0.75) < 0.01 && Math.abs(hats0.p - at(-6)) < 0.01, `0 dB sits at 75% of the travel, −6 dB at 61% (${kick0.p.toFixed(3)}, ${hats0.p.toFixed(3)})`);
 const pans = [await panOf("kick"), await panOf("hats"), await panOf("keys")];
 check(same(pans.map((p) => p.text), ["C", "R 30", "L 25"]) && pans[0].dflt && !pans[1].dflt, `pans read C (in grey: not written), R 30 and L 25: ${pans.map((p) => p.text)}`);
@@ -121,8 +122,8 @@ await songIs(orig.song);
 // A typed level: the design's own example (design-8b §5.2).
 const level = `${fader("kick")} [data-testid=fader-level]`;
 await page.click(level, { count: 2 });
-const typeIn = `${fader("kick")} [data-testid=fader-type-in]`;
-check(await until(async () => !!(await page.$(typeIn))) && (await page.$eval(typeIn, (e) => e.value === "0.0" && e.selectionStart === 0 && e.selectionEnd === 3)), "a double-click on the level opens it to type, all selected");
+const typeIn = `${fader("kick")} [data-testid=knob-type-in]`;
+check(await until(async () => !!(await page.$(typeIn))) && (await page.$eval(typeIn, (e) => e.value === "0.0 dB" && e.selectionStart === 0 && e.selectionEnd === 6)), "a double-click on the level opens it to type, all selected");
 await page.keyboard.type("loud");
 await page.keyboard.press("Enter");
 const refused = await page.$eval(`${fader("kick")} [role=alert]`, (e) => e.textContent).catch(() => null);
@@ -307,6 +308,26 @@ check(sb.over && sa > sb.left && sent("set") === sets2 && read("song.ts") === or
 await page.setViewport({ width: 1440, height: 900 });
 await sleep(300);
 
+// ---------------------------------------------------------------- the Song's Device view (MX-6)
+
+await view("graph");
+await page.click('[data-module-tab="song"]');
+await page.waitForSelector('[data-module="song"] [data-testid=open-mix]');
+const mixerId = (await state()).view.modules.find((m) => m.key === "song").nodes.find((n) => n.component === "std:mixer").id;
+const card = await page.$eval(`[data-module="song"] [data-node-id="${mixerId}"]`, (e) => ({
+  text: e.textContent,
+  knobs: e.querySelectorAll("[data-knob]").length,
+  ports: e.querySelectorAll("[data-port=in]").length,
+  h: e.getBoundingClientRect().height,
+}));
+check(card.knobs === 0 && card.ports === 1 && card.h < 100 && card.text.includes("Mixer") && card.text.includes("4 channels") && card.text.includes("Open Mix ⌥3"), `the Song's mixer is one compact card, "Mixer · 4 channels · Open Mix ⌥3", ${Math.round(card.h)} px tall, with no knobs (${card.text})`);
+await page.screenshot({ path: `${ROOT}/s8-mix-song.png` });
+const into = await page.$$eval(`[data-module="song"] path[data-to="${mixerId}"]`, (ps) => ps.map((p) => p.dataset.toPort));
+check(into.length === 4 && into.every((p) => p === "channels"), `each channel's signal is one cable into it: ${into.length}`);
+check(!!(await page.$('[data-module="song"] [data-knob="ceiling"]')) && !(await page.$('[data-module="song"] [data-knob$=".db"], [data-module="song"] [data-knob$=".pan"]')), "the master's ceiling stays a knob there; the channels' levels and pans don't");
+await page.click('[data-module="song"] [data-testid=open-mix]');
+check(await until(async () => !!(await page.$('[data-view-tab="mix"][aria-selected="true"]')) && !!(await page.$(strip("kick")))), "Open Mix opens the Mix view");
+
 // ---------------------------------------------------------------- a read-only window (WRITE-17)
 
 check((await post("/close", {})).status === 200, "the song closes");
@@ -325,7 +346,7 @@ check(opened.status === 200 && opened.body.read_only?.why === "held", "opened wh
 await page.waitForSelector(fader("kick"), { timeout: 8000 }).catch(() => {});
 const ro = await faderOf("kick").catch(() => null);
 const roTitle = await page.$eval(`${fader("kick")} > div`, (e) => e.title).catch(() => "");
-check(!!ro && !ro.editable && ro.level === "0.0" && roTitle.startsWith("Read only"), `the faders show their levels and say why they can't move: ${roTitle}`);
+check(!!ro && !ro.editable && ro.level === "0.0 dB" && roTitle.startsWith("Read only"), `the faders show their levels and say why they can't move: ${roTitle}`);
 const writes = posts.length;
 await dragBy(thumb("kick"), -30);
 await dragBy(`${pan("kick")} svg`, 20);

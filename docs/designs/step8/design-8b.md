@@ -992,7 +992,7 @@ M, S and the meter, and the name gets 140 px. The level is the strip's fader, on
 - A fader and a pan share the Device view's knob gesture (`useKnobGesture` in `Knob.tsx`): heard while held, written
   once on release, one undo step ("Kick volume", "Kick pan"), no toast.
 - A fader writes to a tenth of a dB. A press anywhere on it starts a drag from where its thumb is (no jump), along the
-  travel. Its level reads without the unit ("−6.0"); the bubble says "−6.0 dB".
+  travel.
 - Scrolling (lead decision T6): only an up-and-down scroll moves a fader or a strip's pan; a sideways one scrolls the
   strips. A run of notches is one lease and one undo step, written half a second after the last.
 - The first pan: the drag shows its value from the press; past 4 px it calls `mix/insert`, then goes on as a lease on
@@ -1004,6 +1004,15 @@ M, S and the meter, and the name gets 140 px. The level is the strip's fader, on
 - The fader's track sits at 40% of the strip, so 8b.8's meter fits beside it with nothing moving. Marks at +6, 0
   (longer), −6, −12, −24 and −48 dB.
 - The Device view keeps the mixer's knobs until B5b.
+
+**Built (B5b):** MX-6 in the Device view (`compactMixer` in `NodeGraph.tsx`): the song's own mixer, the one the Mix view
+shows, is a card titled Mixer with one row, "4 channels" and **Open Mix ⌥3**, and one input that every channel's signal
+is drawn into (each signal once). A track's own mixer stays a box like any other. The master's level and ceiling stay
+knobs on its card. A level reads "−6.0 dB" on its strip too (taste's words table), and the fader's and the pan's type-ins
+behave as a knob's: Tab moves on, unreadable text gets its line, a double-click anywhere on a fader types. A control
+called just `db` (the master's, a gain's) is labelled Volume, never "Db". The 8 suites that dragged or read the mixer's
+knobs in the Device view read them on the Mix strips: gestures, graph, live3b, s5-knobs, s6-builders, s6-fixes, start
+and taste (views moved in B5a).
 
 ### 5.6 Tests
 
@@ -1035,7 +1044,7 @@ M, S and the meter, and the name gets 140 px. The level is the strip's fader, on
 - The Song Device view shows the compact mixer card.
 - A read-only window's faders don't drag.
 
-**Built (B5a):** 63 checks, all of the above but the compact card (B5b), plus: the strips' widths, colours and Master's
+**Built (B5a, B5b):** 67 checks, all of the above, plus: the strips' widths, colours and Master's
 place; a default level in grey; −6 dB at 61% of the travel; the lease and bubble while held; the wheel as one write, and
 a sideways scroll that moves the strips, not a fader; a notch below −60 dB; Tab from a pan to its fader; the strip's menu
 (Colour, Rename in place, Edit in code at the channel's line); selection; a track in no channel.

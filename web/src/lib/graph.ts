@@ -110,12 +110,13 @@ export const laneTitle = (lane: { key: string; label?: string | null }) => (lane
 const CHANNEL: Record<string, string> = { db: "volume", pan: "pan", in: "" };
 /**
  * A control's or an input's name on screen, by the one rule lane headers use too (taste.md §3.4):
- * the key in sentence case (`feedback` → Feedback). A mixer channel's (`hats.db`) names its track,
- * by `track` when it is one: Hats volume. Never the slot path.
+ * the key in sentence case (`feedback` → Feedback); a level (`db`: the master's, a gain's) is
+ * Volume, never "Db", which reads as a note. A mixer channel's (`hats.db`) names its track, by
+ * `track` when it is one: Hats volume. Never the slot path.
  */
 export function controlLabel(label: string, track?: (key: string) => string | undefined) {
   const dot = label.indexOf(".");
-  if (dot < 0) return sentence(label);
+  if (dot < 0) return sentence(label === "db" ? "volume" : label);
   const ch = label.slice(0, dot), rest = label.slice(dot + 1);
   const who = track?.(ch) ?? sentence(ch);
   const word = CHANNEL[rest] ?? rest;

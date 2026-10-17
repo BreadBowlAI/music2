@@ -215,18 +215,21 @@ await view("graph");
 
 // ---------------------------------------------------------------- knobs, menus, cables, toasts
 
+// A level on its Mix strip (MX-6), dragged: the fader and the value bubble.
 await show("song");
-const knob = mid(await box('[data-knob="hats.db"] [role=slider]'));
+await view("mix");
+const knob = mid(await box('[data-testid=mix] [data-knob="hats.db"] [role=slider]'));
 await page.mouse.move(knob.x, knob.y);
 await page.mouse.down();
 await page.mouse.move(knob.x, knob.y - 20, { steps: 6 });
-await state("a knob mid-drag, its value at the pointer");
+await state("a fader mid-drag, its value at the pointer");
 await page.mouse.up();
 // A knob makes no toast (taste.md §2.14); its Undo does.
 await until(async () => !(await page.$('button[aria-label="Undo"][disabled]')));
 await page.click('button[aria-label="Undo"]');
 await until(async () => (await page.$$("[data-testid=toast]")).length > 0);
 await state("a toast");
+await view("graph");
 await show("bass");
 const drive = mid(await box('[data-knob="drive"]'));
 await page.mouse.click(drive.x, drive.y, { button: "right" });
