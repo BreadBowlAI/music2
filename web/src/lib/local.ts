@@ -45,9 +45,13 @@ function seed({ graph: g }: { graph: GraphState | null }) {
   }
   const stamp = g.local_stamp ?? 0;
   if (now.session === g.session && now.stamp === stamp) return;
-  // The page's own changes still on their way stay as they are.
-  const own = waiting?.session === g.session ? waiting.set : {};
-  useLocalStore.setState({ session: g.session, stamp, values: { ...(g.local ?? {}), ...own } });
+  // The page's own changes still on their way stay as they are (null: taken out).
+  const values: Record<string, unknown> = { ...(g.local ?? {}) };
+  for (const [k, v] of Object.entries(waiting?.session === g.session ? waiting.set : {})) {
+    if (v === null) delete values[k];
+    else values[k] = v;
+  }
+  useLocalStore.setState({ session: g.session, stamp, values });
 }
 seed(useStore.getState());
 useStore.subscribe(seed);

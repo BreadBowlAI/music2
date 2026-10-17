@@ -598,7 +598,13 @@ pub fn rename(state: &AppState, req: &Rename) -> Result<Value> {
     state.graph.title(req.session, name)?;
     let Some(to) = to else { return Ok(json!({"name": name, "dir": dir, "warning": null})) };
     state.graph.close();
-    let moved = std::fs::rename(&dir, &to);
+    // A folder made there since the check isn't replaced (a rename would replace an empty one).
+    // The song's own folder in other capitals is (on a Mac, where they are one name).
+    let there = to.symlink_metadata().is_ok() && to.canonicalize().ok().as_deref() != Some(dir.as_path());
+    let moved = match there {
+        true => Err(std::io::Error::new(ErrorKind::AlreadyExists, format!("{} is there now", to.display()))),
+        false => std::fs::rename(&dir, &to),
+    };
     let at = match &moved {
         Ok(()) => {
             if let Some(Err(e)) = state.recent().map(|r| r.moved(&dir, &to)) {

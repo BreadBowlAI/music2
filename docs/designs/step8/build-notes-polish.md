@@ -302,6 +302,27 @@ lanes' files). `m2` commands for Save As and Rename (gaps #37, plan Q29).
 opened; allowed read-only) and `POST /api/project/rename` (the title Tx, then the folder; Undo
 starts over after a folder rename) in the routes list.
 
+### Lane C: review and the app on Linux
+
+**Fixes after reading the lane's diff again**
+- Rename Song: a folder that appears between the name check and the rename is not replaced (on
+  Linux and macOS, `rename` replaces an empty folder); the song's own folder in other capitals
+  still is (a Mac's disk counts them as one name). No test: it needs a folder made inside that
+  moment.
+- `local.ts`: when the song's settings are read again while a change is on its way, a setting the
+  page took out (null) stays out, rather than reading as null.
+- After both: `pl-projects` 58, `pl-tracks` 20, `s8-audition` 51, `s8-clips` 94, `taste` 39; the
+  Rust tests of `project_tests.rs` and clippy clean.
+
+**The desktop app on Linux** (the debug build, on the invisible screen `:96`, a scratch HOME,
+`M2_AUDIO=none`; a smoke check, not a suite; the End's run is the full one):
+
+| Launch | What happened |
+|---|---|
+| `recent.json` says the song was open | the song opened by itself; `reopening` was null again after |
+| `reopening` left set, as after a crash | the start screen, the toast "music2 closed while opening first-song last time, so it didn't open it again.", and `open` false |
+| File menu | Open Recent ▸ (first-song, a line, Clear Menu) after Open Project Folder…; Save As… Shift+Ctrl+S after Save; the menu was built again after the reopen wrote the list |
+
 ## Lane D
 
 Notes and automation.
