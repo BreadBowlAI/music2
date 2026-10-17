@@ -1304,7 +1304,7 @@ impl Graph {
         })
     }
 
-    /// Add a track playing instrument `component` (`std:pluck`), named `label` (else the
+    /// Add a track playing instrument `component` (`std:synth-pluck`), named `label` (else the
     /// instrument's), keyed `key` (else proposed from the label), below track `after` (WRITE-10).
     /// The answer names the track: `module` and `label`.
     pub fn add_track(&self, token: u64, component: &str, label: Option<String>, key: Option<String>, after: Option<String>) -> Result<Value> {

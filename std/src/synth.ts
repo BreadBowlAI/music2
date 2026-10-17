@@ -63,7 +63,7 @@ export const synth = {
   custom: component(
     {
       id: "synth-custom",
-      label: "Synth",
+      label: "Polysynth",
       signature: signature<(notes: Events) => Audio>(),
       inputs: { notes: port.notes() },
       controls: {
@@ -104,7 +104,8 @@ export const synth = {
       // the seed of the voices' start phases and noise.
       settings: { voices: setting.int(8), unison: setting.int(1), subOctave: setting.int(-1), seed: setting.number(1) },
       output: port.audio(),
-      editor: { description: "The polysynth with every knob: saws, pulses, a sub, a ladder filter, envelopes" },
+      // The + Track list (PKG-7) puts the ready-made sounds first, and this, with every knob, last.
+      editor: { category: "Sound design", description: "The polysynth with every knob: saws, pulses, a sub, a ladder filter, envelopes" },
     },
     (notes: Events, p: Params): Audio =>
       play(notes, p.voices, p.glide, (n) =>
@@ -157,7 +158,7 @@ export const synth = {
       },
       settings: { voices: setting.int(8) },
       output: port.audio(),
-      editor: { description: "Seven detuned saws, bright and wide: big chords and hooks" },
+      editor: { category: "Instruments", description: "Seven detuned saws, bright and wide: big chords and hooks" },
     },
     (notes: Events, { detune, spread, cutoff, attack, release, velSens, voices }: Params): Audio =>
       play(notes, voices, 0, (n) =>
@@ -198,7 +199,7 @@ export const synth = {
       },
       settings: { voices: setting.int(1) },
       output: port.audio(),
-      editor: { description: "A singing mono lead that slides between overlapping notes" },
+      editor: { category: "Instruments", description: "A singing mono lead that slides between overlapping notes" },
     },
     (notes: Events, { cutoff, glide, vibrato, drive, velSens, voices }: Params): Audio =>
       play(notes, voices, glide, (n) =>
@@ -243,7 +244,7 @@ export const synth = {
       // Enough that chords changing every beat never cut off a tail you can still hear.
       settings: { voices: setting.int(16) },
       output: port.audio(),
-      editor: { description: "A big, slow, wide pad that swells open" },
+      editor: { category: "Instruments", description: "A big, slow, wide pad that swells open" },
     },
     (notes: Events, { cutoff, attack, release, spread, velSens, voices }: Params): Audio =>
       play(notes, voices, 0, (n) =>
@@ -285,7 +286,7 @@ export const synth = {
       },
       settings: { voices: setting.int(12) },
       output: port.audio(),
-      editor: { description: "A bright, wide pluck for arps: a filter that snaps shut" },
+      editor: { category: "Instruments", description: "A bright, wide pluck for arps: a filter that snaps shut" },
     },
     (notes: Events, { brightness, decay, spread, velSens, voices }: Params): Audio => {
       // 3.49 octaves of envelope: from the brightness down to an eleventh of it.
@@ -330,7 +331,7 @@ export const synth = {
       },
       settings: { voices: setting.int(1) },
       output: port.audio(),
-      editor: { description: "An 808 bass: a deep sine with a punchy drop that rings out, sliding between notes" },
+      editor: { category: "Instruments", description: "An 808 bass: a deep sine with a punchy drop that rings out, sliding between notes" },
     },
     (notes: Events, { drop, drive, glide, decay, velSens, voices }: Params): Audio =>
       play(notes, voices, glide, (n) =>
@@ -372,7 +373,7 @@ export const synth = {
       },
       settings: { voices: setting.int(1) },
       output: port.audio(),
-      editor: { description: "A punchy mono synth bass: saw, pulse and sine, a filter that bites, glide" },
+      editor: { category: "Instruments", description: "A punchy mono synth bass: saw, pulse and sine, a filter that bites, glide" },
     },
     (notes: Events, { cutoff, bite, decay, glide, velSens, voices }: Params): Audio =>
       play(notes, voices, glide, (n) =>
@@ -416,7 +417,7 @@ export const synth = {
       },
       settings: { voices: setting.int(16) },
       output: port.audio(),
-      editor: { description: "A string machine: soft saws through a lush ensemble chorus" },
+      editor: { category: "Instruments", description: "A string machine: soft saws through a lush ensemble chorus" },
     },
     (notes: Events, { cutoff, attack, release, ensemble, velSens, voices }: Params): Audio => {
       const v = play(notes, voices, 0, (n) =>

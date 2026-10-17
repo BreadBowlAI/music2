@@ -531,7 +531,7 @@ async fn graph_automate(State(s): S, Json(r): Json<AutomateReq>) -> ApiResult {
 struct TrackAddReq {
     /// The open project. A `revision` sent with it is ignored: the builder plans on the accepted one.
     session: u64,
-    /// The instrument, by ComponentId (`std:pluck`), as the graph state's `instruments` list it.
+    /// The instrument, by ComponentId (`std:synth-pluck`), as the graph state's `instruments` list it.
     component: String,
     #[serde(default)]
     label: Option<String>,

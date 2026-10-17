@@ -3356,22 +3356,27 @@ fn tracks_are_added_duplicated_and_deleted_and_the_player_follows() {
     let graph = fixture.open();
     let token = graph.state().unwrap()["session"].as_u64().unwrap();
     let names: Vec<String> = graph.state().unwrap()["instruments"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap().into()).collect();
-    assert_eq!(names, ["Kick", "Hat", "Bass", "Pluck", "Pad"]);
+    // std's ready-made sounds (T3): drums, instruments, then the two with every knob.
+    assert_eq!(names.len(), 22, "{names:?}");
+    assert_eq!((names[0].as_str(), names[10].as_str(), names[11].as_str(), names[21].as_str()), ("Drum kit", "FM metal", "FM keys", "Polysynth"));
     assert_eq!(graph.state().unwrap()["palette"][0], "rose");
-    let added = graph.add_track(token, "std:pluck", None, None, Some("kick".into())).unwrap();
-    assert_eq!((&added["module"], &added["label"], &added["file"]), (&json!("pluck"), &json!("Pluck"), &json!("tracks/pluck.ts")));
-    assert_eq!(rows(&graph)[1], ("pluck".into(), "green".into()), "below the kick, in the first colour no track uses");
+    let added = graph.add_track(token, "std:synth-pluck", None, None, Some("kick".into())).unwrap();
+    assert_eq!(
+        (&added["module"], &added["label"], &added["file"]),
+        (&json!("synth-pluck"), &json!("Synth pluck"), &json!("tracks/synth-pluck.ts"))
+    );
+    assert_eq!(rows(&graph)[1], ("synth-pluck".into(), "green".into()), "below the kick, in the first colour no track uses");
     assert!(synced(&graph));
-    let copy = graph.duplicate_track(token, "pluck").unwrap();
-    assert_eq!((&copy["module"], &copy["new_channel"]), (&json!("pluck-2"), &json!(false)));
-    assert_eq!(rows(&graph)[2], ("pluck-2".into(), "green".into()), "in its original's colour");
+    let copy = graph.duplicate_track(token, "synth-pluck").unwrap();
+    assert_eq!((&copy["module"], &copy["new_channel"]), (&json!("synth-pluck-2"), &json!(false)));
+    assert_eq!(rows(&graph)[2], ("synth-pluck-2".into(), "green".into()), "in its original's colour");
     let (status, asks) = graph.delete_track(token, "kick", false).unwrap();
     assert_eq!((status, &asks["blocked"], &asks["dependents"][0]["component"]), (409, &json!(false), &json!("Duck")), "{asks}");
     assert!(fixture.0.join("tracks/kick.ts").exists());
     let (status, done) = graph.delete_track(token, "kick", true).unwrap();
     assert_eq!((status, &done["before"]), (200, &json!("Kick")), "{done}");
     assert!(synced(&graph));
-    assert_eq!(rows(&graph).iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), ["pluck", "pluck-2", "hats", "bass", "keys"]);
+    assert_eq!(rows(&graph).iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), ["synth-pluck", "synth-pluck-2", "hats", "bass", "keys"]);
     graph.undo(token).unwrap();
     assert!(fixture.0.join("tracks/kick.ts").exists() && synced(&graph));
 }

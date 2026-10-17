@@ -176,8 +176,8 @@ impl Descriptor {
         self.editor.category.is_some() && self.inputs.first().is_some_and(|i| i.kind == PortKind::Audio)
     }
 
-    /// Whether a new track can play it (PKG-7): notes first, its only input, and audio out. A
-    /// category groups it; one without is still an instrument, in no group.
+    /// Whether a new track can play it (PKG-7): notes first, its only input, and audio out. The
+    /// + Track list offers it only when it has a category, which groups it.
     pub fn is_instrument(&self) -> bool {
         matches!(&self.inputs[..], [i] if i.kind == PortKind::Notes)
             && self.output.as_ref().is_some_and(|o| o.kind == PortKind::Audio)

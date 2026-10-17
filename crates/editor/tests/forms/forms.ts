@@ -12,6 +12,7 @@ import { bass, hat, kick, pad, pluck } from "std/instruments";
 import { add, blend, mtof, range, scale, sum, xrange } from "std/math";
 import { master, mixer } from "std/mix";
 import { mono, synth } from "std/synth";
+import { track } from "@m2/core";
 export default song(({ lane, time }) => {
   const sweep = lfo(time.beats, { period: 2 });
   const wobble = xrange(sweep, 300, 3000);
@@ -735,6 +736,50 @@ export default song(({ lane, time }) => {
     bitcrush(osc.saw(semis(60)), { bits: 8, rate: 12000, mix: 1 }),
     // std:widen added after a sound
     widen(osc.saw(semis(60)), { width: 1.5 }),
+    // std:drum-kit added as a track
+    track("drum-kit", { name: "Drum kit" }, ({ lane }) => drums.kit(lane.notes("hits"))),
+    // std:drum-kick added as a track
+    track("kick-drum", { name: "Kick drum" }, ({ lane }) => drums.kick(lane.notes("hits"))),
+    // std:drum-snare added as a track
+    track("snare", { name: "Snare" }, ({ lane }) => drums.snare(lane.notes("hits"))),
+    // std:drum-clap added as a track
+    track("clap", { name: "Clap" }, ({ lane }) => drums.clap(lane.notes("hits"))),
+    // std:drum-hats added as a track
+    track("hats", { name: "Hats" }, ({ lane }) => drums.hats(lane.notes("hits"))),
+    // std:drum-tom added as a track
+    track("tom", { name: "Tom" }, ({ lane }) => drums.tom(lane.notes("hits"))),
+    // std:drum-rim added as a track
+    track("rim", { name: "Rim" }, ({ lane }) => drums.rim(lane.notes("hits"))),
+    // std:drum-cowbell added as a track
+    track("cowbell", { name: "Cowbell" }, ({ lane }) => drums.cowbell(lane.notes("hits"))),
+    // std:drum-cymbal added as a track
+    track("cymbal", { name: "Cymbal" }, ({ lane }) => drums.cymbal(lane.notes("hits"))),
+    // std:drum-shaker added as a track
+    track("shaker", { name: "Shaker" }, ({ lane }) => drums.shaker(lane.notes("hits"))),
+    // std:fm-metal added as a track
+    track("fm-metal", { name: "FM metal" }, ({ lane }) => fm.metal(lane.notes("hits"))),
+    // std:fm-keys added as a track
+    track("fm-keys", { name: "FM keys" }, ({ lane }) => fm.keys(lane.notes("notes"))),
+    // std:fm-bell added as a track
+    track("fm-bell", { name: "FM bell" }, ({ lane }) => fm.bell(lane.notes("notes"))),
+    // std:synth-supersaw added as a track
+    track("supersaw", { name: "Supersaw" }, ({ lane }) => synth.supersaw(lane.notes("notes"))),
+    // std:synth-lead added as a track
+    track("lead", { name: "Lead" }, ({ lane }) => synth.lead(lane.notes("notes"))),
+    // std:synth-pad added as a track
+    track("synth-pad", { name: "Synth pad" }, ({ lane }) => synth.pad(lane.notes("notes"))),
+    // std:synth-pluck added as a track
+    track("synth-pluck", { name: "Synth pluck" }, ({ lane }) => synth.pluck(lane.notes("notes"))),
+    // std:synth-sub added as a track
+    track("808-sub", { name: "808 sub" }, ({ lane }) => synth.sub(lane.notes("notes"))),
+    // std:synth-bass added as a track
+    track("synth-bass", { name: "Synth bass" }, ({ lane }) => synth.bass(lane.notes("notes"))),
+    // std:synth-strings added as a track
+    track("strings", { name: "Strings" }, ({ lane }) => synth.strings(lane.notes("notes"))),
+    // std:fm-custom added as a track
+    track("fm-synth", { name: "FM synth" }, ({ lane }) => fm.custom(lane.notes("notes"))),
+    // std:synth-custom added as a track
+    track("polysynth", { name: "Polysynth" }, ({ lane }) => synth.custom(lane.notes("notes"))),
   ];
   void planned;
   return master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit }));

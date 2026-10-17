@@ -87,7 +87,7 @@ fn a_write_while_another_process_holds_the_lock_fails_and_changes_nothing() {
         vec!["automate", dir, &id],
         vec!["label", dir, "keys", "Lead Keys"],
         // The track builders and the layout write too (8b.1).
-        vec!["add-track", dir, "std:pluck"],
+        vec!["add-track", dir, "std:synth-pluck"],
         vec!["duplicate-track", dir, "kick"],
         vec!["delete-track", dir, "keys"],
         vec!["layout", dir, "order", "chops", "kick", "keys"],

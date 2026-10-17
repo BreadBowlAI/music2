@@ -45,7 +45,7 @@ USAGE:
                                          name, verified to change nothing that plays (its key as <name>
                                          takes the name out)
   m2 add-track <project> <instrument> [--name N] [--key ID] [--after ID]
-                                         add a track playing an instrument (std:pluck, or pluck): its file in
+                                         add a track playing an instrument (std:synth-pluck, or synth.pluck): its file in
                                          tracks/, its import and mixer channel in song.ts, an empty notes lane,
                                          and its place and colour in layout.json, verified
   m2 duplicate-track <project> <track>   copy a track, named by its ID: its code, its clips (with new ids), its
@@ -587,7 +587,7 @@ fn run() -> Result<()> {
         Some("add-track") => {
             let mut s = session(Path::new(&arg(1)?))?;
             let wanted = arg(2)?;
-            // By ComponentId (`std:pluck`) or by its export (`pluck`, `std/instruments.pluck`).
+            // By ComponentId (`std:synth-pluck`) or by its export (`synth.pluck`, `std/synth.synth.pluck`).
             let list = s.instruments();
             let inst = list
                 .iter()

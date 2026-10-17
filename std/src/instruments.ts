@@ -1,7 +1,9 @@
 // std/instruments: playable instruments, built only from std kernels.
 //
 // Each one takes a notes lane and returns audio. They are ordinary components, so
-// copy one into your project and change it if you want something different.
+// copy one into your project and change it if you want something different. They have no
+// `editor.category`, so the + Track list leaves them out (PKG-7): std/drums and std/synth
+// have fuller ones of each. Code plays them as before.
 
 import { component, control, hz, ms, poly, port, secs, setting, signature, type Audio, type Events, type Params } from "@m2/core";
 import { adsr, noise, osc, svf, vca } from "./dsp";
@@ -22,8 +24,7 @@ export const bass = component(
     },
     settings: { voices: setting.int(4) },
     output: port.audio(),
-    // The + Track list groups instruments by category (PKG-7); it changes no sound.
-    editor: { category: "Instruments", description: "A simple saw bass built from the blocks in std/dsp; synth.bass and synth.sub sound fuller" },
+    editor: { description: "A simple saw bass built from the blocks in std/dsp; synth.bass and synth.sub sound fuller" },
   },
   // `p.drive`, not a destructured `drive`, which would hide the `drive` effect.
   function bass(notes: Events, p: Params): Audio {
@@ -55,7 +56,7 @@ export const kick = component(
       decay: control.secs(0.32).range(0.01, 2).log(),
     },
     output: port.audio(),
-    editor: { category: "Drums", description: "A simple sine kick built from the blocks in std/dsp; drums.kick is the drum machine's" },
+    editor: { description: "A simple sine kick built from the blocks in std/dsp; drums.kick is the drum machine's" },
   },
   function kick(notes: Events, { tune, decay }: Params): Audio {
     return poly(
@@ -80,7 +81,7 @@ export const hat = component(
     inputs: { notes: port.notes() },
     controls: { decay: control.ms(45).range(5, 1000).log() },
     output: port.audio(),
-    editor: { category: "Drums", description: "A simple noise hat built from the blocks in std/dsp; drums.hats is the drum machine's" },
+    editor: { description: "A simple noise hat built from the blocks in std/dsp; drums.hats is the drum machine's" },
   },
   function hat(notes: Events, { decay }: Params): Audio {
     return poly(
@@ -105,7 +106,7 @@ export const pluck = component(
     controls: { brightness: control.hz(5000).range(200, 20000).log().smooth() },
     settings: { voices: setting.int(12) },
     output: port.audio(),
-    editor: { category: "Instruments", description: "A simple pluck built from the blocks in std/dsp; synth.pluck is wider and brighter" },
+    editor: { description: "A simple pluck built from the blocks in std/dsp; synth.pluck is wider and brighter" },
   },
   function pluck(notes: Events, { brightness, voices }: Params): Audio {
     return poly(
@@ -131,7 +132,7 @@ export const pad = component(
     controls: { cutoff: control.hz(1800).range(20, 20000).log().smooth() },
     settings: { voices: setting.int(12) },
     output: port.audio(),
-    editor: { category: "Instruments", description: "A simple two-saw pad built from the blocks in std/dsp; synth.pad is bigger" },
+    editor: { description: "A simple two-saw pad built from the blocks in std/dsp; synth.pad is bigger" },
   },
   function pad(notes: Events, { cutoff, voices }: Params): Audio {
     return poly(

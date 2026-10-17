@@ -39,13 +39,15 @@ fn tracks_are_added_duplicated_deleted_and_laid_out_from_the_terminal() {
     let dir = song.to_str().unwrap();
     let read = |p: &str| std::fs::read_to_string(song.join(p)).unwrap();
 
-    let said = ok(&["add-track", dir, "pluck", "--name", "Lead Vox", "--after", "kick"]);
-    assert!(said.contains("added Lead Vox (Pluck), ID lead-vox, in tracks/lead-vox.ts"), "{said}");
+    let said = ok(&["add-track", dir, "synth.pluck", "--name", "Lead Vox", "--after", "kick"]);
+    assert!(said.contains("added Lead Vox (Synth pluck), ID lead-vox, in tracks/lead-vox.ts"), "{said}");
+    assert!(read("tracks/lead-vox.ts").contains("import { synth } from \"std/synth\";") && read("tracks/lead-vox.ts").contains("synth.pluck(lane.notes(\"notes\"))"));
     assert!(read("song.ts").contains("\"lead-vox\": leadVox.out"));
     assert!(read("layout.json").contains("[\"kick\", \"lead-vox\", \"hats\""), "{}", read("layout.json"));
     // An instrument that isn't one says which there are.
     let out = m2(&["add-track", dir, "std:delay"]);
-    assert!(!out.status.success() && String::from_utf8_lossy(&out.stderr).contains("std:pluck (Pluck)"));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success() && err.contains("std:synth-pluck (Synth pluck)") && !err.contains("std:pluck"), "{err}");
 
     let said = ok(&["duplicate-track", dir, "bass"]);
     assert!(said.contains("as Bass 2, ID bass-2"), "{said}");

@@ -36,10 +36,11 @@ use crate::{EditError, Edited, keys, ready};
 /// An instrument a new track can play (PKG-7): what the + Track list shows.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Instrument {
-    /// The ComponentId (`std:pluck`): what adding names.
+    /// The ComponentId (`std:synth-pluck`): what adding names.
     pub component: String,
     pub label: String,
-    /// Where it is imported from and as what: `pluck` from `std/instruments`.
+    /// Where it is imported from and as what: `pluck` from `std/instruments`, or a member of an
+    /// exported object, `synth.pad` from `std/synth`.
     pub name: String,
     pub module: String,
     pub description: String,
@@ -49,14 +50,18 @@ pub struct Instrument {
     pub lane: String,
 }
 
-/// Every instrument the packages and the project offer, drums first, then by where it is declared.
+/// Every instrument the packages and the project offer: each that a track can play and that has a
+/// category (PKG-7). Drums first, then Instruments, then any other category, each by where it is
+/// declared. One with no category is left out: code can still play it.
 pub fn instruments(s: &Session) -> Vec<Instrument> {
     let catalog = s.catalog();
     let mut found: Vec<(u8, String, u32, Instrument)> = catalog
         .instruments()
         .filter_map(|d| {
-            let export = catalog.exports.get(&d.id)?.iter().find(|e| !e.name.contains('.'))?;
-            let category = d.editor.category.clone().unwrap_or_else(|| "Instruments".into());
+            let category = d.editor.category.clone()?;
+            // A plain export when there is one, else a member of an exported object (`synth.pad`).
+            let exports = catalog.exports.get(&d.id)?;
+            let export = exports.iter().find(|e| !e.name.contains('.')).or_else(|| exports.first())?;
             let lane = if category == "Drums" { "hits" } else { "notes" };
             let line = d.at.rsplit(':').nth(1).and_then(|l| l.parse::<u32>().ok()).unwrap_or(0);
             let group = match category.as_str() {
@@ -231,6 +236,18 @@ fn sorted(mut edits: Vec<(u32, u32, String)>) -> Result<Vec<(u32, u32, String)>,
     Ok(edits)
 }
 
+/// The `track(…)` call a new track file makes, playing `inst` from its lane: also checked as a
+/// call form (PKG-11, `planned_call_forms_are_current`).
+pub(crate) fn track_call_text(inst: &Instrument, key: &str, label: &str) -> String {
+    let options = if label == key { String::new() } else { format!(", {{ name: {} }}", quoted(label)) };
+    format!("track({}{options}, ({{ lane }}) => {}(lane.notes({})))", quoted(key), inst.name, quoted(&inst.lane))
+}
+
+/// What a track file imports to play `inst`: `pluck`, or for `synth.pad` the object, `synth`.
+pub(crate) fn instrument_binding(inst: &Instrument) -> &str {
+    inst.name.split('.').next().unwrap_or(&inst.name)
+}
+
 /// The text of a new track file playing `inst` from lane `lane`.
 fn track_text(inst: &Instrument, key: &str, label: &str, file: &str) -> String {
     // A project's own instrument is imported by its path from the track's folder.
@@ -238,14 +255,11 @@ fn track_text(inst: &Instrument, key: &str, label: &str, file: &str) -> String {
         true => specifier(file, &inst.module),
         false => inst.module.clone(),
     };
-    let options = if label == key { String::new() } else { format!(", {{ name: {} }}", quoted(label)) };
     format!(
-        "import {{ track }} from \"@m2/core\";\nimport {{ {} }} from {};\n\nexport default track({}{options}, ({{ lane }}) => {}(lane.notes({})));\n",
-        inst.name,
+        "import {{ track }} from \"@m2/core\";\nimport {{ {} }} from {};\n\nexport default {};\n",
+        instrument_binding(inst),
         quoted(&from),
-        quoted(key),
-        inst.name,
-        quoted(&inst.lane)
+        track_call_text(inst, key, label)
     )
 }
 
