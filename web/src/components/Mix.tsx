@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { CodeXml, Pencil } from "lucide-react";
+import { CodeXml, Pencil, VolumeX } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { beatNow, onFrame } from "../lib/clock";
 import {
@@ -20,20 +20,24 @@ import {
   type MixStrip,
 } from "../lib/graph";
 import { laneMade } from "../lib/events";
+import { OUT } from "../lib/meters";
 import { mod } from "../lib/native";
+import { muteInSongCall } from "../lib/overlays";
 import { tones } from "../lib/palette";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { undoAction } from "./GraphCanvas";
 import { Bubble, FINE, focusNext, KnobMenu, MiniKnob, NOTCH, useKnobDrag, useKnobGesture } from "./Knob";
+import Meter, { ClipDot } from "./Meter";
+import { StripMuteSolo } from "./MuteSolo";
 import { Colours } from "./Tracks";
 import TrackName from "./TrackName";
 import { Button, EmptyState, MenuRow, Popover } from "./ui";
 
 // The Mix view (taste.md §3.5, design-8b §5.5, MX-1, MX-2, MX-5): a strip per track in track order,
-// each with its colour, name, pan, an M and S row (empty until mute and solo, 8b.4), a fader and its
-// level; Master pinned on the right. A fader and a pan are the graph view's knobs, by id: they are
-// heard while they move and written once when let go, one undo step each, with no toast (§2.14).
+// each with its colour, name, pan, M and S, a fader with its level, and a meter beside the fader;
+// Master pinned on the right. A fader and a pan are the graph view's knobs, by id: they are heard
+// while they move and written once when let go, one undo step each, with no toast (§2.14).
 
 /** Where 0 dB sits on a fader's travel, and its ends: +12 dB at the top, −60 dB just above the foot. */
 const UNITY = 0.75;
@@ -42,8 +46,10 @@ const FLOOR = -60;
 /** The foot: a fader's last 4 px write std's silence, −96 dB, which reads "−∞" (design-8b §5.1). */
 const FOOT = 4;
 const SILENT = -96;
-/** Where a fader's track runs across its strip: left of the middle, so the meter (8b.8) fits beside it. */
+/** Where a fader's track runs across its strip: left of the middle, so the meter fits beside it. */
 const TRACK_X = "40%";
+/** Where a strip's meter starts: 5 px right of the fader's thumb. */
+const METER_X = `calc(${TRACK_X} + 15px)`;
 /** The marks beside the track, in dB; 0 dB's is longer. */
 const MARKS = [6, 0, -6, -12, -24, -48];
 
@@ -152,15 +158,20 @@ interface StripProps {
   mixer: { file: string; line: number } | null;
 }
 
-/** One strip: 76 px, its colour, name, pan, the M and S row, and its fader with its level. */
+/**
+ * One strip: 76 px, its colour, name, pan, M and S, and its fader with its level and its meter. A
+ * channel no track reaches has no M, S or meter.
+ */
 const Strip = memo(function Strip({ strip, selected, knobs, session, revision, locked, mixer }: StripProps & { strip: MixStrip; selected: boolean }) {
   const one = strip.modules.length === 1 ? strip.modules[0] : null;
+  const tracks = strip.modules.length > 0;
   const db = strip.db ? (knobs.get(strip.db) ?? null) : null;
   const pan = strip.pan ? (knobs.get(strip.pan) ?? null) : null;
   const name = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState(false);
   const at = placeOf(db ?? pan) ?? mixer;
   const editable = !locked;
+  const meter = tracks ? <StripMeter channels={strip.modules} name={strip.label} /> : null;
   return (
     <div
       data-strip={strip.channel ?? one ?? ""}
@@ -198,16 +209,19 @@ const Strip = memo(function Strip({ strip, selected, knobs, session, revision, l
           strip.channel && <PanInCode lane={strip.pan_lane} />
         )}
       </div>
-      {/* M and S: mute and solo come here (8b.4), so nothing moves when they do. */}
-      <div className="h-6 shrink-0" />
+      <div data-slot="mute-solo" className="h-6 shrink-0 flex items-center justify-center">
+        {tracks && <StripMuteSolo modules={strip.modules} name={strip.label} onSongMenu={() => setMenu(true)} />}
+      </div>
       {db ? (
-        <Fader knob={db} name={strip.label} session={session} revision={revision} editable={editable} locked={locked} />
+        <Fader knob={db} name={strip.label} session={session} revision={revision} editable={editable} locked={locked} meter={meter} />
       ) : strip.db_lane ? (
-        <LaneFader lane={strip.db_lane} name={strip.label} session={session} locked={locked} at={at} />
+        <LaneFader lane={strip.db_lane} name={strip.label} session={session} locked={locked} at={at} meter={meter} />
       ) : (
-        <NoFader why={strip.why ?? "Its level is set in code"} at={at} />
+        <NoFader why={strip.why ?? "Its level is set in code"} at={at} meter={meter} />
       )}
-      {menu && name.current && <StripMenu name={strip.label} module={one} anchor={name.current} at={at} locked={locked} onClose={() => setMenu(false)} />}
+      {menu && name.current && (
+        <StripMenu name={strip.label} module={one} modules={strip.modules} anchor={name.current} at={at} locked={locked} onClose={() => setMenu(false)} />
+      )}
     </div>
   );
 });
@@ -217,6 +231,7 @@ function MasterStrip({ knob, lane, session, revision, locked, mixer }: StripProp
   const name = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState(false);
   const at = placeOf(knob) ?? mixer;
+  const meter = <StripMeter channels={[OUT]} name="Master" master />;
   return (
     <div
       data-strip="master"
@@ -234,14 +249,43 @@ function MasterStrip({ knob, lane, session, revision, locked, mixer }: StripProp
       <div className="h-[46px] shrink-0" />
       <div className="h-6 shrink-0" />
       {knob ? (
-        <Fader knob={knob} name="Master" session={session} revision={revision} editable={!locked} locked={locked} />
+        <Fader knob={knob} name="Master" session={session} revision={revision} editable={!locked} locked={locked} meter={meter} />
       ) : lane ? (
-        <LaneFader lane={lane} name="Master" session={session} locked={locked} at={at} />
+        <LaneFader lane={lane} name="Master" session={session} locked={locked} at={at} meter={meter} />
       ) : (
-        <NoFader why="Its level is set in code" at={at} />
+        <NoFader why="Its level is set in code" at={at} meter={meter} />
       )}
-      {menu && name.current && <StripMenu name="Master" module={null} anchor={name.current} at={at} locked={locked} onClose={() => setMenu(false)} />}
+      {menu && name.current && <StripMenu name="Master" module={null} modules={[]} anchor={name.current} at={at} locked={locked} onClose={() => setMenu(false)} />}
     </div>
+  );
+}
+
+/**
+ * A strip's meter (taste.md §2.8; Q1 to Q3, X23): two bars, left and right, 3 px each with 1 px
+ * between (Master's 5 px), beside the fader, its travel tall. A track's is read where its sound
+ * enters the mixer, so its fader doesn't move it; a strip of several tracks shows the louder of
+ * them on each side. Above it, a clip dot stays lit until clicked. Master's is the song's output,
+ * with no dot: it ends in a limiter. Placed in the fader's column, so a drag on it moves the fader.
+ */
+function StripMeter({ channels, name, master = false }: { channels: string[]; name: string; master?: boolean }) {
+  const width = master ? 11 : 7;
+  return (
+    <>
+      <div data-slot="strip-meter" className="absolute top-[9px] bottom-[5px]" style={{ left: METER_X, width }}>
+        <Meter
+          channels={channels}
+          bars={2}
+          label={`${name} level`}
+          title={master ? "The song's level" : `${name}'s level. Its fader doesn't change this meter.`}
+          className="w-full h-full"
+        />
+      </div>
+      {!master && (
+        <div className="absolute top-[-1px] h-3 flex justify-center" style={{ left: METER_X, width }}>
+          <ClipDot channels={channels} name={name} className="shrink-0" />
+        </div>
+      )}
+    </>
   );
 }
 
@@ -269,7 +313,22 @@ function PanInCode({ lane }: { lane: LaneRef | null }) {
  * nothing when dragged. Its menu shows the lane, or removes the automation (the value at the playhead
  * goes back into the code), or opens the code.
  */
-function LaneFader({ lane, name, session, locked, at }: { lane: LaneRef; name: string; session: number; locked: string | null; at: { file: string; line: number } | null }) {
+function LaneFader({
+  lane,
+  name,
+  session,
+  locked,
+  at,
+  meter,
+}: {
+  lane: LaneRef;
+  name: string;
+  session: number;
+  locked: string | null;
+  at: { file: string; line: number } | null;
+  /** The strip's meter, drawn in the fader's column. */
+  meter: React.ReactNode;
+}) {
   const toast = useStore((s) => s.toast);
   const shown = useLaneName(lane);
   const found = useStore((s) => (s.graph ? findLane(s.graph.timeline, lane.module, lane.lane) : undefined));
@@ -331,6 +390,7 @@ function LaneFader({ lane, name, session, locked, at }: { lane: LaneRef; name: s
             <span className="absolute inset-x-[3px] top-1/2 h-px -translate-y-1/2 bg-fg-off" />
           </div>
         </div>
+        {meter}
       </div>
       <div className="relative h-5 shrink-0 flex items-center justify-center gap-1">
         <span data-testid="fader-level" className="text-xs tabular-nums text-fg" title={follows}>
@@ -387,25 +447,59 @@ function Rails() {
   );
 }
 
-/** A strip with no fader: why, in words ("Not in the mixer"), and the way to the code. */
-function NoFader({ why, at }: { why: string; at: { file: string; line: number } | null }) {
+/**
+ * A strip with no fader: why, in words ("Not in the mixer"), and the way to the code. With a
+ * meter, the words sit under it, where the level would read.
+ */
+function NoFader({ why, at, meter }: { why: string; at: { file: string; line: number } | null; meter: React.ReactNode }) {
+  const words = (
+    <div data-testid="no-fader" className={clsx("px-1.5 flex flex-col items-center gap-1.5 text-center", meter ? "shrink-0 pt-1.5 pb-2" : "flex-1 min-h-0 justify-center")}>
+      <span className="text-xs text-fg-muted">{why}</span>
+      <button className="text-xs font-medium text-accent hover:text-accent-strong cursor-pointer" onClick={() => editInCode(at)}>
+        Edit in code
+      </button>
+    </div>
+  );
+  if (!meter)
+    return (
+      <>
+        {words}
+        <div className="h-5 shrink-0" />
+      </>
+    );
   return (
     <>
-      <div data-testid="no-fader" className="flex-1 min-h-0 px-1.5 flex flex-col items-center justify-center gap-1.5 text-center">
-        <span className="text-xs text-fg-muted">{why}</span>
-        <button className="text-xs font-medium text-accent hover:text-accent-strong cursor-pointer" onClick={() => editInCode(at)}>
-          Edit in code
-        </button>
-      </div>
-      <div className="h-5 shrink-0" />
+      <div className="relative flex-1 min-h-0">{meter}</div>
+      {words}
     </>
   );
 }
 
-/** A strip's menu (right-click; taste.md §3.5): Rename and Colour for a track's strip, and Edit in code. Mute in song comes with 8b.4. */
+/**
+ * Mute `modules` in the song, or unmute them (MON-5): a strip's tracks, as the header menu's row does
+ * it for one: their `muted` option, one undo step, said in a toast with Undo.
+ */
+async function muteStripInSong(name: string, modules: string[], muted: boolean) {
+  const { graph, connected, toast } = useStore.getState();
+  if (!graph) return;
+  const why = lockReason(graph, connected);
+  if (why) return toast(`${why}.`);
+  try {
+    const r = await muteInSongCall(graph.session, modules, muted);
+    if (r.before !== r.after) toast(`${name} ${muted ? "muted" : "unmuted"} in the song`, undoAction(graph.session, r.revision));
+  } catch (error) {
+    toast(message(error));
+  }
+}
+
+/**
+ * A strip's menu (right-click; taste.md §3.5): Rename and Colour for one track's strip; Mute in song
+ * for a strip of tracks (Unmute in song first when they all are); and Edit in code.
+ */
 function StripMenu({
   name,
   module,
+  modules,
   anchor,
   at,
   locked,
@@ -414,6 +508,8 @@ function StripMenu({
   name: string;
   /** The track it is, when it is one track's. */
   module: string | null;
+  /** The tracks it plays: none for Master and a channel no track reaches. */
+  modules: string[];
   anchor: HTMLElement;
   at: { file: string; line: number } | null;
   locked: string | null;
@@ -421,12 +517,32 @@ function StripMenu({
 }) {
   const [colours, setColours] = useState<HTMLElement | null>(null);
   const current = useStore((s) => s.graph?.timeline.tracks.find((t) => t.module === module)?.colour);
+  const inSong = useStore((s) => modules.length > 0 && modules.every((m) => s.graph?.overlays?.heard[m] === "muted-in-song"));
   const run = (f: () => void) => () => {
     onClose();
     f();
   };
+  const sep = <div role="separator" className="my-1 h-px bg-line" />;
+  const songMute = modules.length > 0 && (
+    <MenuRow
+      icon={<VolumeX size={14} />}
+      disabled={!!locked}
+      title={locked ?? undefined}
+      data-testid="mute-in-song"
+      detail={inSong ? undefined : `Saved in ${modules.length > 1 ? "their" : "its"} code: the export leaves ${modules.length > 1 ? "them" : "it"} out too`}
+      onClick={run(() => void muteStripInSong(name, modules, !inSong))}
+    >
+      {inSong ? "Unmute in song" : "Mute in song"}
+    </MenuRow>
+  );
   return (
     <Popover anchor={anchor} onClose={onClose} role="menu" aria-label={`${name} menu`} data-testid="strip-menu" className="w-[240px]">
+      {inSong && (
+        <>
+          {songMute}
+          {sep}
+        </>
+      )}
       {module && (
         <>
           <MenuRow icon={<Pencil size={14} />} disabled={!!locked} title={locked ?? undefined} onClick={run(() => useShell.getState().set({ renaming: { module, at: "strip" } }))}>
@@ -443,9 +559,10 @@ function StripMenu({
           >
             Colour
           </MenuRow>
-          <div role="separator" className="my-1 h-px bg-line" />
         </>
       )}
+      {!inSong && songMute}
+      {modules.length > 0 && sep}
       {/* No key: ⌥4 opens the selected track's own file, not the channel's line. */}
       <MenuRow
         icon={<CodeXml size={14} />}
@@ -486,6 +603,7 @@ function Fader({
   revision,
   editable,
   locked,
+  meter,
 }: {
   knob: KnobInfo;
   /** The strip's name: "Kick", "Master". */
@@ -494,6 +612,8 @@ function Fader({
   revision: number;
   editable: boolean;
   locked: string | null;
+  /** The strip's meter, drawn in the fader's column. */
+  meter: React.ReactNode;
 }) {
   const label = `${name} volume`;
   const g = useKnobGesture({ session, revision, knob, editable, name: label, label });
@@ -650,6 +770,7 @@ function Fader({
             <span className={clsx("absolute inset-x-[3px] top-1/2 h-px -translate-y-1/2", disabled ? "bg-fg-off" : "bg-fg-strong")} />
           </div>
         </div>
+        {meter}
       </div>
       <div className="relative h-5 shrink-0 flex items-center justify-center">
         {typing ? (
