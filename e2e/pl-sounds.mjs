@@ -6,7 +6,7 @@
 // code doesn't compile the row is off and says why; a PC page's keys; the lint with the list open.
 // Then drum names: a Drum kit track's clip in Notes names its rows (Kick, Snare, Closed hat) in an
 // 88 px key column, its notes say their drum, a key set for the song never shades its rows (X26),
-// and Keys' roll still says C3 in 56 px.
+// a short note keeps its name on one line inside it, and Keys' roll still says C3 in 56 px.
 //
 //   node e2e/pl-sounds.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -173,6 +173,27 @@ const misfits = await page.evaluate(() =>
 check(misfits.length === 0, `every name fits on the white of its key (${misfits})`);
 await linted("[data-testid=notes]", "Notes with drum names");
 await page.screenshot({ path: `${ROOT}/pl-sounds-drums.png` });
+// Zoomed out until a hat is too short for its name, each name stays on one line inside its note,
+// cut short (seen in the End's pictures: "Closed hat" ran over two rows).
+const hatWidth = () => page.$eval('[data-testid=notes] [data-note][data-pitch="42"]', (e) => e.getBoundingClientRect().width);
+await page.focus("[data-testid=notes]");
+let outs = 0;
+while (outs < 5 && (await hatWidth()) > 60) {
+  await key("Meta+Minus");
+  outs++;
+  await new Promise((r) => setTimeout(r, 300));
+}
+const spill = await page.$$eval("[data-testid=notes] [data-note]", (els) =>
+  els.flatMap((e) => {
+    const label = e.querySelector("span");
+    if (!label) return [];
+    const n = e.getBoundingClientRect(), l = label.getBoundingClientRect();
+    return l.height > n.height || l.right > n.right + 0.5 ? [`${label.textContent} ${Math.round(l.width)}×${Math.round(l.height)} in ${Math.round(n.width)}×${Math.round(n.height)}`] : [];
+  }),
+);
+const hatLabel = await page.$eval('[data-testid=notes] [data-note][data-pitch="42"] span', (e) => e.textContent).catch(() => null);
+check(outs > 0 && hatLabel === "Closed hat" && spill.length === 0, `a hat ${Math.round(await hatWidth())} px long keeps its name on one line, inside it: ${spill.join(" | ") || "every name fits"}`);
+for (let i = 0; i < outs; i++) await key("Meta+Equal");
 // A key set for the song never shades a drum kit's rows: a kit has no key (X26, review PL-T3).
 const shading = () => page.$eval("[data-testid=roll-grid]", (e) => e.dataset.shaded).catch(() => null);
 let layoutWas = null;

@@ -1411,3 +1411,16 @@ no ring), as the track name and the top bar's fields had before polish.
 The Merge left `canvas.renameSong` for the End to drop: nothing called it since File ▸ Rename Song…
 opens lane C's dialog. It is gone from `SongBar.tsx` and `shell.ts`. A double-click on the name still
 renames it in place (`s8-songbar`, `pl-notes`).
+
+#### Also: a drum's name ran out of a short note
+
+Found in the End's pictures, not by the review. In Notes, a note's name ("Closed hat") was drawn
+with no width of its own, so on a short note it wrapped onto two lines and spilled over the rows
+above and below. Now the name stays on one line inside the note, cut short with "…". The key
+column still says the whole name.
+
+| | |
+|---|---|
+| Suite | `pl-sounds` (45 now): the roll zoomed out until a hat is about 50 px long; every note's name is one line, inside its note |
+| Red first (this page before the fix) | `FAIL a hat 52 px long keeps its name on one line, inside it: Closed hat 46×22 in 52×12 \| Closed hat 46×22 in 52×12` |
+| Green | `PASS a hat 52 px long keeps its name on one line, inside it: every name fits`; `taste` 39/39 |

@@ -849,8 +849,9 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
                         } as React.CSSProperties
                       }
                     >
+                      {/* One line inside the note, cut short with "…" when the note is short. */}
                       {w > 26 && (
-                        <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-xs font-medium leading-none pointer-events-none">
+                        <span className="absolute left-1.5 right-1 top-1/2 -translate-y-1/2 whitespace-nowrap overflow-x-clip text-ellipsis text-xs font-medium leading-none pointer-events-none">
                           {rowName(declared, n.pitch)}
                         </span>
                       )}
