@@ -186,7 +186,7 @@ export async function addAudioTrack(after: string | null) {
 // ---------------------------------------------------------------- drops (Q6)
 
 /** The WAV types a browser says while it drags a file (no names until the drop). */
-const WAV_TYPES = ["audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave"];
+const WAV_TYPES = ["audio/wav", "audio/x-wav", "audio/wave", "audio/x-wave", "audio/vnd.wave"];
 
 /**
  * Where dropped audio goes (Q6): onto the audio lane under the pointer, or a track's audio lane;

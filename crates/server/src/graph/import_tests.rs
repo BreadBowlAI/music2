@@ -163,3 +163,22 @@ fn one_undo_takes_an_import_back() {
     assert!(dir.join("assets/a.wav").exists() && dir.join("assets/b.wav").exists(), "music2 never deletes an asset");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// Q7 of the 8b back ends: a track an import makes under a key a gone track's mute was kept for
+// starts heard, as + Track's do.
+#[test]
+fn a_track_an_import_makes_starts_heard() {
+    let fixture = crate::graph::tests::Fixture::new();
+    let from = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song");
+    for f in ["music2.toml", "song.ts", "tracks/kick.ts", "tracks/hats.ts", "tracks/bass.ts", "tracks/keys.ts", "data/arrangement.json"] {
+        fixture.put(f, &std::fs::read_to_string(from.join(f)).unwrap());
+    }
+    fixture.put(".music2/overlays.json", r#"{"mute": ["vox"], "solo": []}"#);
+    let graph = fixture.open();
+    let token = graph.state().unwrap()["session"].as_u64().unwrap();
+    let (wav, _) = float_wav(480);
+    let done = graph.import_audio(token, vec![bytes("vox.wav", &wav)], Target::Below { beat: 0.0 }).unwrap();
+    assert_eq!(done["tracks"][0]["module"], "vox", "{done:#}");
+    let o = &graph.state().unwrap()["overlays"];
+    assert_eq!((&o["mute"], &o["heard"]["vox"]), (&serde_json::json!([]), &serde_json::json!("heard")));
+}

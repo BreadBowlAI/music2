@@ -11,7 +11,7 @@
 //! the rate (u32), frames (u64), the bucket (u32), then for each bucket, for each channel, its
 //! lowest and highest sample (i8 each, a sample × 127, rounded).
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
@@ -101,8 +101,8 @@ pub struct Store {
     /// `<cache>/peaks`, or none: kept in memory only.
     dir: Option<PathBuf>,
     kept: Mutex<VecDeque<(Sha, Arc<Peaks>)>>,
-    /// One file decoded at a time: two asks for one file decode it once.
-    making: Mutex<()>,
+    /// Each file being decoded: two asks for one file decode it once; different files at once.
+    making: Mutex<HashMap<Sha, Arc<Mutex<()>>>>,
     decodes: AtomicUsize,
 }
 
@@ -120,7 +120,7 @@ fn folder() -> Option<PathBuf> {
 
 impl Store {
     pub fn new(dir: Option<PathBuf>) -> Store {
-        Store { dir, kept: Mutex::default(), making: Mutex::new(()), decodes: AtomicUsize::new(0) }
+        Store { dir, kept: Mutex::default(), making: Mutex::default(), decodes: AtomicUsize::new(0) }
     }
 
     /// The server's.
@@ -134,13 +134,25 @@ impl Store {
         if let Some(p) = self.find(sha) {
             return Ok(p);
         }
-        let _one = self.making.lock();
-        if let Some(p) = self.find(sha) {
-            return Ok(p);
+        let this = self.making.lock().entry(sha).or_default().clone();
+        let made = {
+            let _one = this.lock();
+            match self.find(sha) {
+                Some(p) => Ok(p),
+                None => {
+                    self.decodes.fetch_add(1, Ordering::Relaxed);
+                    m2_runtime::audio::load_wav(path)
+                        .map(|asset| self.put(sha, &asset))
+                        .map_err(|e| anyhow::anyhow!("{} doesn't read as a WAV file ({})", name(path), e.root_cause()))
+                }
+            }
+        };
+        // The last ask for this file lets its lock go.
+        let mut making = self.making.lock();
+        if making.get(&sha).is_some_and(|m| Arc::ptr_eq(m, &this) && Arc::strong_count(m) == 2) {
+            making.remove(&sha);
         }
-        self.decodes.fetch_add(1, Ordering::Relaxed);
-        let asset = m2_runtime::audio::load_wav(path).map_err(|e| anyhow::anyhow!("{} doesn't read as a WAV file ({})", name(path), e.root_cause()))?;
-        Ok(self.put(sha, &asset))
+        made
     }
 
     /// Keep the peaks of `asset`, a decode of the file whose bytes hash to `sha` (an import

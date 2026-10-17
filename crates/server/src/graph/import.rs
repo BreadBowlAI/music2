@@ -113,6 +113,11 @@ impl Graph {
             let named = self.name_step(token, revision, name.clone(), structural)?;
             done["undo_name"] = named["undo_name"].clone();
         }
+        // A new track under a key a gone track's mute or solo was kept for starts heard (Q7).
+        let keys: Vec<String> = done["tracks"].as_array().into_iter().flatten().filter_map(|t| t["module"].as_str().map(String::from)).collect();
+        if !keys.is_empty() {
+            self.forget_overlays(&keys);
+        }
         done["name"] = json!(name);
         done["notes"] = json!(notes);
         done["assets"] = json!(files.iter().map(|f| f.asset.as_str()).collect::<Vec<_>>());

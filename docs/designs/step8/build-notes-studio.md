@@ -382,6 +382,27 @@ Save As and a line; Ctrl+Shift+I opens the dialog; a file picked lands (pictures
 test), `m2`'s `import` and `lock`.
 
 **For the merge with P0:** P0.5's `open_file` is this one; if P0 made its own, keep one (same arg, same answer).
+### A review of lane A, and its fixes
+
+A code review of `85b069a..f620cd0` (medium) found ten things; each is fixed here, or said why not.
+
+| Found | Now |
+|---|---|
+| A trim or a split never shortened the fades, and `Gesture::Audio` held them to the clip on every change: a volume or a reverse failed on a clip trimmed shorter than its fades | `fit_fades` after every trim and split (the fade in first, then what is left); the gesture holds fades to the clip only when it sets one. Test `a_trim_keeps_the_fades_inside_the_clip` (red without: `A clip's fades together…`, the volume refused) |
+| A warped, pitched clip's left edge moved, where before A3 it refused | Refused again (`audio_edge` for a warped clip's left edge). Test `a_warped_pitched_clips_left_edge_still_refuses` (red without: the resize was accepted) |
+| A track an import made kept a gone track's mute or solo of the same key | `forget_overlays` for each track an import adds, as + Track does. Test `a_track_an_import_makes_starts_heard` |
+| A browser's drag of a WAV whose type it doesn't say (or says another way) was refused while dragging, so it couldn't be dropped | While dragging, only a type that is surely another kind (`audio/mpeg`) is refused; the name decides at the drop. `audio/x-wave` added |
+| The clip's pin was the source's hash, read before the copy | The hash of the part file as written |
+| An upload's sizes could overflow when added up, then slice out of range | A checked sum; one file's bytes are taken as they came, with no copy |
+| One decode at a time for every file | One at a time per file (a lock per hash) |
+| `edgeLimits` said a warped clip has no limits, but limited it | It doesn't limit a warped clip, as the server doesn't |
+| `unique_label` and `unique_label_among` were two copies | One: `unique_label` calls the other |
+| `routes_audio.rs`' 423 middleware copies `routes_view.rs`' | Kept: every route file has its own, by the plan's design |
+
+**Checks**: clippy and the mac lint (`m2-editor`, `m2-server`); tests (331 + 321); the web build; `st-audio` 90/90,
+`s8-clips` 94/94, `taste` 39/39, `s8-tracks` 75/75. Every browser suite at `d4b88ab` (`all`): 57 of 59 ok; `live3b`
+PART (no `CLAP_PATH`, as always here); `attention` failed two toast checks once under the machine's load and passed
+57/57 alone (it touches nothing of lane A's).
 
 ## Lane B
 

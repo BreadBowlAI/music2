@@ -151,11 +151,7 @@ pub(crate) fn channel_keys(rev: &Revision) -> Vec<String> {
 
 /// `label`, or `label 2`, `label 3`… so no track shows the same name.
 fn unique_label(rev: &Revision, label: &str) -> String {
-    let used: Vec<&str> = rev.compiled.ir.modules.iter().filter(|m| m.track).map(|m| m.label()).collect();
-    if !used.contains(&label) {
-        return label.to_string();
-    }
-    (2..).map(|n| format!("{label} {n}")).find(|l| !used.contains(&l.as_str())).expect("a free name")
+    unique_label_among(rev, label, &[])
 }
 
 /// A track file's path for `key`: `tracks/<key>.ts`, or `tracks/<key>-2.ts`… when that name is taken

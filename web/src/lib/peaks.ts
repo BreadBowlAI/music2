@@ -119,7 +119,8 @@ export function fileSeconds(session: number, c: Pick<AudioClip, "asset" | "hash"
  */
 export function edgeLimits(c: AudioClip, tempo: Tempo, file: number | null) {
   const free = { left: null as number | null, right: null as number | null, leftWord: "", rightWord: "" };
-  if ((c.pitch ?? 0) !== 0 || file === null) return free;
+  const warped = ((c as AudioClip & { warp?: unknown[] }).warp?.length ?? 0) > 0;
+  if ((c.pitch ?? 0) !== 0 || warped || file === null) return free;
   const offset = c.offset ?? 0;
   const t0 = secondsAt(tempo, c.start), t1 = secondsAt(tempo, c.start + c.length);
   const name = c.asset.split("/").pop() ?? c.asset;

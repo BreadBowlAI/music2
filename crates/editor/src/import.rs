@@ -186,7 +186,7 @@ pub fn audio(dir: &Path, from: Source) -> Result<(Imported, Option<Asset>), Edit
     if copied.is_err() {
         let _ = std::fs::remove_file(&part);
     }
-    let (asset, decoded) = copied.map_err(|e| match e {
+    let (asset, decoded, hash) = copied.map_err(|e| match e {
         Copy::Io(e) => io(e),
         Copy::Decode(why) => refused(format!("{name} doesn't read as a WAV file ({why})")),
     })?;
@@ -206,7 +206,7 @@ impl From<std::io::Error> for Copy {
 
 /// The copy itself: the part made create-only and locked at once (so no sweep takes it), filled,
 /// pushed, decoded, then named the first free name and its folder synced. The lock goes after.
-fn copy_in<'a>(from: &Source, part: &Path, folder: &Path, wanted: &AssetName, there: impl Iterator<Item = &'a str>) -> Result<(AssetName, Asset), Copy> {
+fn copy_in<'a>(from: &Source, part: &Path, folder: &Path, wanted: &AssetName, there: impl Iterator<Item = &'a str>) -> Result<(AssetName, Asset, Sha), Copy> {
     let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(part)?;
     let _ = m2_os::fs::try_lock(&f);
     match from {
@@ -216,6 +216,9 @@ fn copy_in<'a>(from: &Source, part: &Path, folder: &Path, wanted: &AssetName, th
         Source::Bytes { bytes, .. } => f.write_all(bytes)?,
     }
     m2_os::fs::push(&f)?;
+    // The bytes written, as the clip pins them: a file still being written elsewhere may have
+    // changed since it was first read.
+    let hash = Sha::of_file(part)?;
     #[cfg(test)]
     tests::DURING.with(|d| d.borrow().as_ref().map(|during| during(part)));
     let decoded = m2_runtime::audio::load_wav(part).map_err(|e| Copy::Decode(e.root_cause().to_string()))?;
@@ -234,7 +237,7 @@ fn copy_in<'a>(from: &Source, part: &Path, folder: &Path, wanted: &AssetName, th
     };
     m2_os::fs::sync_dir(folder)?;
     drop(f);
-    Ok((asset, decoded))
+    Ok((asset, decoded, hash))
 }
 
 /// Where imported files go (Q6, Q7), as the drop layer says it: onto an audio lane at a beat; onto

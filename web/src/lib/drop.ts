@@ -50,7 +50,18 @@ export function onFiles(extensions: string[], types: string[], how: Pick<Taker, 
   return () => void takers.splice(takers.indexOf(t), 1);
 }
 
-const takes = (t: Taker, f: DropFile) => (f.name ? t.extensions.some((x) => f.name.toLowerCase().endsWith(x)) : !!f.type && t.types.includes(f.type));
+/**
+ * Whether `t` takes `f`: by its name once it is dropped; while a browser drags it, by its type, and
+ * a file whose type the browser doesn't say (or says another way) may be one: its name decides at
+ * the drop. Only a type that is surely another kind (an MP3's) is refused while dragging.
+ */
+const takes = (t: Taker, f: DropFile) => {
+  if (f.name) return t.extensions.some((x) => f.name.toLowerCase().endsWith(x));
+  return !f.type || t.types.includes(f.type) || !KNOWN.some((k) => f.type!.startsWith(k));
+};
+
+/** Types that surely aren't a file music2 opens unless a kind lists them. */
+const KNOWN = ["audio/", "video/", "image/", "text/", "application/pdf", "application/zip"];
 
 /** The one kind that takes every file, or none. */
 const takerOf = (files: DropFile[]) => (files.length ? takers.find((t) => files.every((f) => takes(t, f))) : undefined);

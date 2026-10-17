@@ -873,3 +873,32 @@ fn the_edges_stop_at_the_file_both_ways() {
     let why = refused(&mut s, Gesture::Resize { clip: by_id("chops/clips", "nwskkw0g"), start: 3.9, length: 1.1 });
     assert!(why.contains("pitch"), "a pitched clip's left edge, as before: {why}");
 }
+
+// A trim or a split that leaves a clip shorter than its fades fits them in (the fade in first), so
+// a volume or a direction never fails on them after.
+#[test]
+fn a_trim_keeps_the_fades_inside_the_clip() {
+    let f = fixture("examples/resample");
+    let mut s = f.open();
+    // a3s9vpxb is 1 s (2 beats at 120 BPM).
+    go(&mut s, set("a3s9vpxb", Settings { fade_in: Some(0.4), fade_out: Some(0.4), ..Settings::default() }));
+    go(&mut s, Gesture::Resize { clip: by_id("chops/clips", "a3s9vpxb"), start: 0.0, length: 0.5 });
+    let c = audio(&s, "a3s9vpxb");
+    assert_eq!((c.fade_in, c.fade_out), (0.25, 0.0), "the fade in fits; nothing is left for the fade out");
+    go(&mut s, set("a3s9vpxb", Settings { gain_db: Some(-3.0), ..Settings::default() }));
+    go(&mut s, Gesture::Resize { clip: by_id("chops/clips", "a3s9vpxb"), start: 0.0, length: 2.0 });
+    go(&mut s, set("a3s9vpxb", Settings { fade_in: Some(0.8), ..Settings::default() }));
+    let done = go(&mut s, Gesture::Split { clips: vec![by_id("chops/clips", "a3s9vpxb")], at: 1.0 });
+    assert_eq!(audio(&s, "a3s9vpxb").fade_in, 0.5, "a split's first part keeps what fits");
+    assert_eq!(audio(&s, &done.made[0].1).fade_in, 0.0);
+}
+
+// As before A3: a warped clip's left edge refuses a pitched clip.
+#[test]
+fn a_warped_pitched_clips_left_edge_still_refuses() {
+    let f = fixture("examples/resample");
+    let mut s = f.open();
+    let why = refused(&mut s, Gesture::Resize { clip: by_id("chops/clips", "cdayrg4g"), start: 13.0, length: 3.0 });
+    assert!(why.contains("pitch"), "{why}");
+    go(&mut s, Gesture::Resize { clip: by_id("chops/clips", "cdayrg4g"), start: 12.0, length: 3.0 });
+}

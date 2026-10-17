@@ -309,7 +309,8 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
             }
             let tempo = rev.compiled.data.tempo();
             let seconds = tempo.seconds_at(c.start + c.length) - tempo.seconds_at(c.start);
-            if c.fade_in + c.fade_out > seconds + SLACK {
+            // Only fades it sets are held to the clip: a volume or a direction never fails on them.
+            if (fade_in.is_some() || fade_out.is_some()) && c.fade_in + c.fade_out > seconds + SLACK {
                 return Err(EditError::Rejected(format!("The fades together are at most the clip: {} seconds.", (seconds * 100.0).round() / 100.0)));
             }
             if let Some(r) = reverse {
@@ -642,6 +643,8 @@ impl Clip {
                 }
                 a.fade_out = 0.0;
                 b.fade_in = 0.0;
+                fit_fades(a, tempo);
+                fit_fades(b, tempo);
             }
             _ => unreachable!("both parts are this clip"),
         }
@@ -717,14 +720,16 @@ fn audio_span(c: &mut AudioClip, start: f64, length: f64, tempo: &m2_song::Tempo
         return Ok(());
     }
     if !c.warp.is_empty() {
-        if c.reverse {
-            audio_edge(c, "edge")?;
+        // As before: a warped clip's left edge refuses a pitched clip; reversed, neither edge moves.
+        if left || c.reverse {
+            audio_edge(c, if left { "left edge" } else { "right edge" })?;
         }
         if left {
             let by = c.start - start;
             c.warp.iter_mut().for_each(|m| m.1 += by);
         }
         (c.start, c.length) = (start, length);
+        fit_fades(c, tempo);
         return Ok(());
     }
     // The edge that moves the offset (forwards the left, backwards the right) is refused for a
@@ -764,7 +769,18 @@ fn audio_span(c: &mut AudioClip, start: f64, length: f64, tempo: &m2_song::Tempo
         c.offset = offset.max(0.0);
     }
     (c.start, c.length) = (start, length);
+    fit_fades(c, tempo);
     Ok(())
+}
+
+/// Fades that no longer fit a clip made shorter, made to: the fade in first, then what is left
+/// for the fade out. Ones that fit stay as they are, to the bit.
+fn fit_fades(c: &mut AudioClip, tempo: &m2_song::TempoMap) {
+    let seconds = tempo.seconds_at(c.start + c.length) - tempo.seconds_at(c.start);
+    if c.fade_in + c.fade_out > seconds + SLACK {
+        c.fade_in = c.fade_in.min(seconds);
+        c.fade_out = c.fade_out.min(seconds - c.fade_in);
+    }
 }
 
 /// A lane's clips, one by one.

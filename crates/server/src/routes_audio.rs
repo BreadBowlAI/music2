@@ -108,17 +108,24 @@ async fn audio_import(State(s): S, Query(q): Query<ImportQuery>, headers: Header
             let files: Vec<Uploaded> =
                 serde_json::from_str(q.files.as_deref().unwrap_or("")).map_err(|e| anyhow::anyhow!("an upload names its files: {e}"))?;
             let to: Target = serde_json::from_str(q.to.as_deref().unwrap_or("")).map_err(|e| anyhow::anyhow!("where the files go doesn't read: {e}"))?;
-            if files.iter().map(|f| f.size).sum::<usize>() != body.len() {
+            let total = files.iter().try_fold(0usize, |sum, f| sum.checked_add(f.size));
+            if total != Some(body.len()) {
                 return Err(anyhow::anyhow!("the upload was cut short: try again").into());
             }
-            let mut at = 0;
-            let sources = files
-                .into_iter()
-                .map(|f| {
-                    at += f.size;
-                    Source::Bytes { name: f.name, bytes: body[at - f.size..at].to_vec() }
-                })
-                .collect();
+            let sources = match <[Uploaded; 1]>::try_from(files) {
+                // One file, the usual upload: its bytes as they came.
+                Ok([one]) => vec![Source::Bytes { name: one.name, bytes: Vec::from(body) }],
+                Err(files) => {
+                    let mut at = 0;
+                    files
+                        .into_iter()
+                        .map(|f| {
+                            at += f.size;
+                            Source::Bytes { name: f.name, bytes: body[at - f.size..at].to_vec() }
+                        })
+                        .collect()
+                }
+            };
             (session, sources, to)
         }
     };
