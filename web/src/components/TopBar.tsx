@@ -170,9 +170,14 @@ export default function TopBar({
       </div>
       <div ref={gap} data-tauri-drag-region className="flex-1 self-stretch" />
       {/* Centred in the window, whatever the transport and buttons beside it take: kept clear of
-          them as measured (Q23), a long name is cut short, and with too little room it goes (§3.8). */}
+          them as measured (Q23), a long name is cut short, and with too little room it goes (§3.8).
+          Not while it is being typed: hidden, the field would lose the keyboard, and with it write
+          what was typed half way. */}
       <div
-        className={clsx("absolute inset-y-0 left-1/2 -translate-x-1/2 flex items-center whitespace-nowrap pointer-events-none", (room ?? 0) < NAME_MIN && "hidden")}
+        className={clsx(
+          "absolute inset-y-0 left-1/2 -translate-x-1/2 flex items-center whitespace-nowrap pointer-events-none",
+          (room ?? 0) < NAME_MIN && "hidden has-[input]:flex",
+        )}
         style={{ maxWidth: room ?? 0 }}
       >
         <SongTitle session={graph.session} name={graph.name} dir={graph.dir} rate={graph.sample_rate} locked={locked} room={room ?? 0} />

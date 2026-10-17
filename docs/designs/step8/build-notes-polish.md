@@ -1236,6 +1236,19 @@ on a busy machine the page heard of the change after the check read it (failed o
 
 **Also.** `TrackIdDialog` uses `useModalKeys` (X14), as every other dialog does now.
 
+**A fix: a name being typed is never written by losing its room.** `s8-songbar` failed "Escape
+wrote nothing" twice in ten runs: the song had the half-typed name. Lane D's measured room (Q23)
+hides the name when the groups beside it leave under 56 px. In the app's smallest window that is
+close (86 px in the Mac app at 1100), so a status pill showing for a moment hid it. Hidden, the field
+lost the keyboard, and losing it writes what is in it. Now the name's box stays while it holds the
+field (`has-[input]:flex`), so only Return writes and Esc never does.
+
+| | |
+|---|---|
+| Test | `pl-notes` (99 now): with the long name at 1440, type "Half typed", take the name's room away (the tempo group made very wide), then Esc: the field kept the keyboard and the name is as it was |
+| Red first | `FAIL a name being typed stays while its room goes, and nothing is written: Half typed` |
+| Green | `pl-notes` 99, `taste` 39, `s8-songbar` 82, `fx-fixes` 75, `s8-mute` 152 |
+
 **Checks** (the server and `m2` built from `98e3b11`, copied to `bin/pl-98e3b11`):
 - Rust: `cargo test --locked --no-fail-fast` of `m2-script` (56, 1, 8), `m2-editor` (280),
   `m2-server` (232), `m2` (its tests), `m2-session` (154), `music2-desktop` (12). Clippy

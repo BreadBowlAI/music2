@@ -499,6 +499,19 @@ await page.evaluate(() => delete document.documentElement.dataset.app);
 await page.setViewport({ width: 1440, height: 900 });
 const wide = await room();
 check(wide.shown && wide.cut, "at 1440 it shows, cut short");
+// While the name is being typed it stays, even when its room goes for a moment (a status pill
+// shows in a small window, say): what was typed half way is never written by it going.
+const nb = await box("[data-testid=bar-song-name]");
+await page.mouse.click(nb.x + nb.width / 2, nb.y + nb.height / 2, { count: 2 });
+await page.waitForSelector("[data-testid=song-title-input]", { timeout: 2000 }).catch(() => null);
+await page.keyboard.type("Half typed");
+await page.evaluate(() => (document.querySelector("[data-testid=tempo]").style.marginRight = "4000px"));
+await sleep(300);
+const typing = await page.evaluate(() => document.activeElement?.dataset.testid === "song-title-input");
+await page.evaluate(() => (document.querySelector("[data-testid=tempo]").style.marginRight = ""));
+await page.keyboard.press("Escape");
+await sleep(300);
+check(typing && (await state()).name === longName, `a name being typed stays while its room goes, and nothing is written: ${(await state()).name}`);
 await key("Meta+z");
 await until(async () => (await page.$eval("[data-testid=bar-song-name]", (e) => e.textContent).catch(() => "")) !== longName);
 fs.rmSync(`${PROJ}/${LAYOUT}`);
