@@ -81,6 +81,7 @@ export const SUITES = [
   ["attention", "attn", { expect: 57 }],
   ["newsong", "none", { expect: 71 }],
   ["pl-projects", "none", { expect: 66 }],
+  ["sound-stops", "none", { expect: 12 }],
   ["export", "export", { expect: 37 }],
   ["fx-fixes", "none", { expect: 75 }],
   ["s4-clips", "fix", { expect: 28 }],

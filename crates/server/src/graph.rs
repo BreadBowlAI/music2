@@ -49,6 +49,7 @@ pub mod overlay;
 mod preview;
 mod projects;
 mod songkey;
+mod stopped;
 mod view_file;
 mod watcher;
 

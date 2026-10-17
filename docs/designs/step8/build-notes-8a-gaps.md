@@ -10,6 +10,7 @@ branch (`8a-gaps`, worktree `~/m2-runs/wt/8a-g`, from `8a` at `98620e7`), with i
 | Gap | State | What it says |
 |---|---|---|
 | G1: a sound that crashes while the song plays | done | **Only that sound goes silent.** The rest plays on, bit for bit. Before, the whole song stopped. |
+| G3: the app says so | done | **A toast names the sound and its track**, says the rest plays on, and says what starts it again (Stop All Sound). Once for each sound. A browser suite plays a real crash in the app. |
 | G2: a sound over its 32 MB | done | **It says "ran out of memory"**, with the sound and the cap. Before: "wasm trap: unreachable". The app no longer tells the user to close other apps for it. |
 
 ## G1: a kernel that crashes while the song plays goes silent alone
@@ -116,3 +117,72 @@ stops at the cap now (`memory.size` < 512), and still proves the memory never mo
 `g-check.sh m2-runtime m2-play m2-server m2-editor`, load 6.6 at the start: renders 10 of 10 OK; tests all pass
 (runtime 176 + 1 ignored, server 236, editor 284, play's suites); clippy clean, Linux and the Mac lint. Log:
 `/home/jerry/m2-runs/logs/g2-check-1017-181854-1584955.log`.
+
+## G3: the app says which sound stopped, on which track, and what brings it back
+
+### In short
+
+- **What the user sees** (a toast, the server's notices, as for a plugin that fails, HOST-5):
+
+  | Why | The words |
+  |---|---|
+  | It crashed | "The instrument on Hats stopped working, so music2 made it silent. The rest of the song plays on. To start it again, choose Transport ▸ Stop All Sound (⌘.)." |
+  | Over its 32 MB | "The delay on Bass ran out of memory (a sound may use up to 32 MB), so music2 made it silent. The rest of the song plays on. To start it again, choose Transport ▸ Stop All Sound (⌘.)." |
+
+- **What it is:** a kernel by its name (`std:delay`: "The delay"), a `poly` as "The instrument", anything else by its
+  id. **Where:** a track by its label ("on Bass"), the song's own module "in the song".
+- **Once for each sound in a plan.** A new plan starts with no marks, so the same sound can be told again. Stop All
+  Sound clears a mark (G1), so a sound that fails again after it is told again.
+- **No automatic restart** (the plan's Q20): a kernel's trap comes from its input, so the same input traps again.
+  The user decides, with Stop All Sound or an edit.
+
+### What was built
+
+| Where | What |
+|---|---|
+| `crates/server/src/graph/stopped.rs` (new) | `heard(inner, open)`: the plan sent last's `Stopped::news()`, each told once, into the notices. `said`, `sound_named` |
+| `crates/server/src/graph/actor.rs` | one line beside `heard_plugins()`: `super::stopped::heard(&actor.inner, actor.open.as_ref())`. It runs before every job; the watcher's catch-up makes one every 300 ms |
+| `crates/server/src/graph.rs` | `mod stopped;` (one line) |
+| `e2e/sound-stops.mjs`, `e2e/trapwasm.mjs` (new) | the browser suite and its wasm patch (below); a row each in `e2e/run.mjs` and `e2e/README.md` |
+
+Left as it is: the notices read the plan **sent** last. In the few milliseconds before the engine takes a new plan, a
+sound that stops in the old one is never told. The old plan leaves at once, so nobody hears it for long.
+
+### A real crash in the app (the browser suite)
+
+std's kernels don't trap. So the suite makes one that does: `trapwasm.mjs` adds a function to a copy of
+`std/kernels/std.wasm` (no locals, `unreachable`) and points the `noise_process` export at it. The suite runs its
+own headless server with `M2_STD` on that copy, on a copy of first-song: only Hats' instrument uses `noise`. So
+the whole chain runs for real: the trap on the audio thread, the mark, the actor's look, the notice, the toast.
+
+| # | Check |
+|---|---|
+| 1 | the copy of std is a valid module whose noise kernel traps at once (node's own `WebAssembly`) |
+| 2, 3, 4 | first-song opens on it; nothing is said before Play; Space plays |
+| 5 | the toast's words, exactly |
+| 6 | all of them on screen, none cut off |
+| 7, 8 | the song plays on; Kick's header meter moves while Hats' stays at the floor (12 reads) |
+| 9 | said once: the toast isn't replaced by another |
+| 10, 11 | after it goes, ⌘. (Stop All Sound): the instrument starts again, stops again, and the toast comes again |
+| 12 | no console errors |
+
+### Tests
+
+| Test | Where | Proves | Red by |
+|---|---|---|---|
+| `a_kernel_that_stops_is_told_once_by_sound_and_track` | `crates/server/src/graph/stopped_tests.rs` (new) | a song of Bass (a saw through a delay), Hats (std's hat) and std's mixer, playing on a driven player; the test marks nodes of the plan sent last, as the audio thread would: "The delay on Bass…", once; "The gain in the song…" and "The instrument on Hats…", in node order; an edit that makes a new plan (another oscillator: a value alone is a cell write) tells the delay again; the song plays on | `g-no-heard` (the actor's line out: nothing told); `g-told-twice` (`news()` never marks a node told: the delay told again with the next) |
+| `out_of_memory_is_told_as_memory` | same | kind 2's words | `g-kind` (kind 2 told as a crash); `g-no-heard` |
+| `sound-stops` (12 checks) | `e2e/sound-stops.mjs` | above | the page and server of `98620e7`, before this lane (below) |
+
+The suite red first, on the server of `98620e7` (before this lane, built in a throwaway worktree, its page the
+same), load 12.5: 6 of 12 fail. Nothing is said, the song stops (`playing` false), and every meter falls to the
+floor: the old "whole song silent" gap. Log: `~/m2-runs/s8a/g-red/sound-stops-base.log`. Then on this lane's
+server, 5 runs of 5 pass (load 8.7 to 4.8; `~/m2-runs/logs/g-stops-5-*.log`), about 7 s each. A picture of the
+toast: `~/m2-runs/s8a/g-red/sound-stops-toast.png`.
+
+### Checks
+
+`g-check.sh m2-runtime m2-server m2-play`, load 14.6 at the start: renders 10 of 10 OK; tests all pass (runtime
+176 + 1 ignored, server 238, play's suites); clippy clean, Linux and the Mac lint; the new files formatted. Log:
+`~/m2-runs/logs/g3-check-1017-183107-1689097.log`. The run before it failed clippy only
+(`cloned_ref_to_slice_refs` in the new test), fixed.
