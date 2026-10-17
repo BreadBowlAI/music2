@@ -57,6 +57,7 @@ mod steps;
 pub mod midi;
 mod lanes;
 mod tempo_lease;
+pub mod record;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -324,6 +325,8 @@ struct ControlPlane {
     lanes: lanes::LaneLeases,
     /// The tempo field's drag, heard while it lasts (RENDER-27a).
     tempo: tempo_lease::TempoLeases,
+    /// The take recording, and the takes waiting to be written (lane B).
+    record: record::Recorder,
 }
 
 /// How a control named at a revision is found without the session.
@@ -689,6 +692,7 @@ impl Inner {
         state["overlays"] = overlays;
         state["local"] = local;
         state["midi"] = self.midi_state();
+        state["record"] = self.record_state();
         Some(state)
     }
 
@@ -930,6 +934,7 @@ impl Graph {
         if !beat.is_finite() {
             bail!("can't seek to beat {beat}");
         }
+        self.record_jump();
         if self.inner.timing.lock().is_none() {
             bail!("no project is open");
         }
@@ -1629,6 +1634,7 @@ impl Graph {
     /// Play, stop, toggle between them, or go back to the start. Stop ends the notes, and the
     /// engine plays on so tails decay (RENDER-6a). Never waits for an edit (RENDER-29).
     pub fn transport(&self, action: &str) -> Result<()> {
+        let action = self.record_transport(action).unwrap_or(action);
         let player = self.inner.device()?.player;
         let cmd = match action {
             "play" => Cmd::Play,

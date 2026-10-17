@@ -23,6 +23,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::lease::PlaysView;
+use super::record::Recorder;
 use super::{ControlPlane, Device, Graph};
 
 /// How long a window may hold notes without a word before they are let go.
@@ -44,6 +45,10 @@ pub struct Audition {
     /// Handles still held: a keepalive.
     #[serde(default)]
     pub keep: Vec<u32>,
+    /// Ons a take records (lane B): the keyboard piano's. Notes' own clicks never do. A MIDI
+    /// keyboard's always do.
+    #[serde(default)]
+    pub record: bool,
 }
 
 /// A key struck: the window's handle for it, its pitch (0 to 127, fractions tune it) and its
@@ -91,11 +96,13 @@ fn playing<'a>(plays: Option<&'a PlaysView>, device: Option<&'a Device>) -> Opti
     (p.epoch == d.epoch).then_some((p, d))
 }
 
-/// Let go of every note `source` holds: one release, which reaches every lane.
-fn release(plays: Option<&PlaysView>, device: Option<&Device>, source: &mut Source) {
+/// Let go of every note `source` holds: one release, which reaches every lane. A take ends them
+/// where they are heard (lane B).
+fn release(plays: Option<&PlaysView>, device: Option<&Device>, source: &mut Source, record: &mut Recorder) {
     if std::mem::take(&mut source.held).is_empty() {
         return;
     }
+    record.release(device, source.id);
     if let Some((p, d)) = playing(plays, device)
         && let Err(e) = d.player.live(p.generation, 0, LiveEv::Release { source: source.id })
     {
@@ -123,9 +130,11 @@ impl Graph {
         };
         let device = self.inner.current_device();
         let mut cp = self.inner.control.lock();
-        let ControlPlane { open, audition, .. } = &mut *cp;
+        let ControlPlane { open, audition, record, .. } = &mut *cp;
         let open = open.as_ref().context("no project is open")?;
         let plays = playing(open.engine.plays.as_ref(), device.as_ref());
+        // What a take records: a keyboard's notes, and a window's marked so (lane B).
+        let records = a.record || super::midi::is_keyboard(client);
         let next = &mut audition.next;
         let source = audition.by_client.entry(client.to_string()).or_insert_with(|| {
             *next += 1;
@@ -140,6 +149,7 @@ impl Graph {
                 && let Some(slot) = slot_of(p, &m, &l)
             {
                 d.player.live(p.generation, slot, LiveEv::Off { source: id, handle: *h })?;
+                record.off(d, (id, *h));
             }
         }
         let Some((m, l)) = lane.filter(|_| !a.on.is_empty()) else { return Ok(None) };
@@ -150,6 +160,9 @@ impl Graph {
             let ev = LiveEv::On { source: id, handle: s.h, pitch: s.pitch as f32, velocity: s.velocity as f32 };
             d.player.live(p.generation, slot, ev)?;
             source.held.insert(s.h, (m.clone(), l.clone()));
+            if records {
+                record.on(d, (&m, &l), (id, s.h), s.pitch, s.velocity);
+            }
         }
         Ok(None)
     }
@@ -158,9 +171,9 @@ impl Graph {
     pub(super) fn audition_gone(&self, client: &str) {
         let device = self.inner.current_device();
         let mut cp = self.inner.control.lock();
-        let ControlPlane { open, audition, .. } = &mut *cp;
+        let ControlPlane { open, audition, record, .. } = &mut *cp;
         if let Some(mut s) = audition.by_client.remove(client) {
-            release(open.as_ref().and_then(|o| o.engine.plays.as_ref()), device.as_ref(), &mut s);
+            release(open.as_ref().and_then(|o| o.engine.plays.as_ref()), device.as_ref(), &mut s, record);
         }
     }
 
@@ -175,12 +188,12 @@ impl Graph {
     pub fn expire_auditions_at(&self, now: Instant) {
         let device = self.inner.current_device();
         let mut cp = self.inner.control.lock();
-        let ControlPlane { open, audition, .. } = &mut *cp;
+        let ControlPlane { open, audition, record, .. } = &mut *cp;
         let plays = open.as_ref().and_then(|o| o.engine.plays.as_ref());
         audition.by_client.retain(|_, s| {
             let quiet = !s.keyboard && now.saturating_duration_since(s.heard) > QUIET;
             if quiet {
-                release(plays, device.as_ref(), s);
+                release(plays, device.as_ref(), s, record);
             }
             !quiet
         });

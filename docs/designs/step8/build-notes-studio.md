@@ -89,6 +89,110 @@ export's bits). `the_count_in_never_allocates` is a guard too: the code it watch
 **Contract:** RENDER-28: the count-in is plain fields in `Click`, no allocation; it never reaches an export
 (RENDER-1, RENDER-3), as the metronome doesn't.
 
+### B2. The recorder, on the server
+
+**In short**
+
+| What | Now |
+|---|---|
+| Record on a track with notes | The server keeps what you play on a MIDI keyboard, or on the keyboard piano |
+| Stopped | One bar of clicks first (or none), then the song plays and recording starts where play started |
+| Playing | Recording starts now, with no clicks |
+| Where each note goes | Where you heard it, between the sound card's buffers, not on them |
+| A very quick tap | Still a note: at least 1/64 of a beat |
+| Stop (Space), R, a click on the ruler | The take ends where you were. Notes you still hold end there |
+| Looping | Only the first time round is kept. At the loop's end the take is written; the loop plays on |
+| What is written | One notes clip over whole bars, at least one. One Undo step: "Undo recording on Bass" |
+| Nothing played | Nothing is written |
+| A MIDI keyboard turned off (Settings) | It plays nothing and records nothing |
+| Clicking another track while recording | The keys stay on the track you record |
+
+Nothing in the app uses it yet: that is B3. Suites can reach it through the routes.
+
+**What changed**
+
+- `core/play/src/lib.rs`: `Player::heard_frame()` (D4): the engine clock and the transport frame the speakers play
+  now, from the last callback, the time since it began, less two device buffers in engine frames.
+  `heard_frame_at(ns)` for tests.
+- `crates/server/src/graph/record.rs` (new): `Recorder` on the control plane (the take, and the takes waiting to be
+  written). `Graph::record_start` (refused with no notes lane, a take already running; stopped: a count-in from the
+  tempo and meter there, or a Play; playing: from now), `record_stop`, `record_cancel`, `recording`,
+  `record_tick` (the take thread's: a count that turned into playing or never did, the loop's end, a new player,
+  then each take written as one `Gesture::Set` Tx and named "recording on Bass"). A note's beat: from the
+  transport's frame (exact) unless it is more than two blocks from the clock's (a wrap or a count), then from the
+  engine clock and the take's anchor (the clock where the transport was at the start: the count's or the Play's
+  `applied` stamp plus the count's length). Quantize uses `Gesture::Quantize`'s own rounding (`ends: false`).
+- `graph.rs` (B's blocks): `pub mod record;`, `ControlPlane.record`, `state["record"]` after `state["midi"]`, one line
+  at the top of `transport` (while counting anything cancels, and a toggle is a Stop; while recording a Stop or a
+  toggle ends the take) and one in `seek` (a jump ends it). `stop_to` calls `transport`, so it is covered.
+- `graph/audition.rs`: `Audition.record` (serde default false); each On sent from a keyboard or a window marked
+  `record`, and each Off, goes to the take; a release ends a source's notes in it.
+- `graph/midi.rs`: `Midi.off` (keyboards turned off: nothing plays or records); while a take runs, keys play its
+  lane (D8); `set_midi_off`; the state's `midi.off` when some are; the toast for one plugged in while off.
+- `settings.rs`: `record: {count_in, quantize}` and `midi: {off}`, left out of the file at their defaults.
+  `routes_settings.rs`: `GET` answers both, `POST` takes both (a `midi` change also tells every window).
+- `routes_record.rs` (new): `POST /api/graph/record/start {session, module, lane, count_in?, quantize?}`, `/stop`,
+  `/cancel`; writes (423 read-only); start refused while an export runs ("Wait for the export to finish.", D26).
+- `lib.rs`: `mod routes_record;`, the `music2-takes` thread (every 100 ms, `record_tick`; what it says goes to every
+  window on the events channel, and a written take is followed by the graph event), and `keep_settings` applies the
+  keyboards turned off. `routes.rs`: its `.merge` line.
+
+**Tests**
+
+- `crates/server/src/graph/record_tests.rs` (a driven player; each note's window is known from the callback before
+  it and the test's own time after): `a_take_records_midi_notes_where_they_were_heard`,
+  `notes_land_between_callbacks`, `a_quick_tap_still_records_a_note`,
+  `piano_notes_marked_record_are_recorded_and_audition_is_not`, `stop_writes_one_tx_named_recording_on_bass`,
+  `held_notes_end_at_the_stop`, `the_take_spans_whole_bars`, `an_empty_take_writes_nothing`,
+  `quantize_puts_starts_on_the_grid` (the same notes as `Gesture::Quantize`), `a_loop_wrap_writes_the_first_pass`,
+  `a_note_after_the_wrap_is_not_put_at_the_start`, `a_note_held_over_the_wrap_ends_at_the_loop_end`,
+  `a_click_on_the_ruler_ends_the_take`, `a_count_in_then_record_starts_at_the_start_point`,
+  `a_note_in_the_counts_last_beat_lands_on_the_first_beat`, `a_keyboard_turned_off_neither_plays_nor_records`,
+  `record_needs_a_notes_lane`, `closing_the_song_drops_the_take`, `the_keys_stay_on_the_takes_lane`,
+  `space_while_counting_cancels_and_nothing_plays`, `r_while_playing_records_from_now`.
+- `crates/server/src/routes_record_tests.rs`: `a_take_through_the_routes` (start, a key, stop over HTTP; the take
+  thread writes it and every window hears `written`, then `graph`), `a_read_only_window_cant_record` (423).
+- `settings.rs`: `record_options_and_keyboards_are_kept`.
+
+**Red first**
+
+```
+heard_frame without the time since the callback (callback steps):
+---- graph::record::tests::notes_land_between_callbacks stdout ----
+panicked at record_tests.rs:196:5: 5 ms after the callback's line 1: written at 1
+beat from the transport's frame only (today's wrapping position):
+---- graph::record::tests::a_note_after_the_wrap_is_not_put_at_the_start stdout ----
+assertion `left == right` failed: {…"notes":[{…"start":0.10004166666666667…},{…"start":2.0000416666666667…}]…}  left: 2
+Recorder::on a no-op:
+---- graph::record::tests::a_take_records_midi_notes_where_they_were_heard stdout ----
+panicked at record_tests.rs:165:5: {"empty":true,"t":"take"}
+```
+
+**Guards:** `stopping_never_waits_for_a_compile` (D7: the actor held by a slow job, a Stop answers within 200 ms).
+
+**Checks:** `cargo test -p m2-server -p m2-play`, clippy of `m2-server`, `m2-play`, `m2-runtime`.
+
+**What's left**
+
+- A note struck while the audio callback runs (a fraction of a millisecond each buffer) is placed up to one buffer
+  early: `heard_frame` reads the callback's start time before its clock is published. Two buffers of output delay
+  is a guess; HANDOFF's Mac step checks it by ear.
+- Progress goes on the events channel (`{"t": "take", …}` when the phase or the notes change). P0's
+  `AppState.takes` channel (D9) wasn't on `studio` yet; the integrator may move it there.
+
+**For gaps.md:** #24: recording notes is built (a take per pass, first pass only; overdub, one clip per pass, pitch
+bend and the mod wheel left). #31: which MIDI keyboards play is a setting.
+
+**Contract:** MON-7: a take reads live notes on the control plane, never through the session; RENDER-29: Record,
+Stop and a jump never wait for a compile, the take thread writes; WRITE-10: a take is one `Clips` Tx; FMT-20's
+`settings.json` gains `record` and `midi`.
+
+**For 8a's merge**
+
+| File | Block |
+|---|---|
+| `core/play/src/lib.rs` | `Player::heard_frame` and `heard_frame_at`, right after `Player::frames` |
+
 ## Lane C
 
 MIDI files and stems: written by lane C.

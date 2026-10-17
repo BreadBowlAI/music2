@@ -9,6 +9,10 @@
 //!   and the size is the system's default. A device that is gone, or won't open, plays on the
 //!   default.
 //! - `songs`: where new songs go (and Exports with them); null is `~/Music/music2`.
+//! - `record` (lane B, Q18): `{"count_in": true, "quantize": false}`: Record counts in one bar first,
+//!   and snaps the take's notes to Notes' grid. Left out while both are the defaults.
+//! - `midi` (lane B, Q28): `{"off": ["Keystation 49"]}`: the MIDI keyboards turned off, by the names
+//!   `m2_os::midi` gives; they neither play nor record. Left out while none is.
 //!
 //! Written whole, through a temporary file renamed over it, one change at a time. A file that
 //! doesn't read is the defaults. The file is given, never found here: tests pass a temporary one,
@@ -30,6 +34,51 @@ pub struct Kept {
     /// Where new songs go; None: the default.
     #[serde(default)]
     pub songs: Option<PathBuf>,
+    /// Record's options (lane B).
+    #[serde(default, skip_serializing_if = "RecordKept::is_default")]
+    pub record: RecordKept,
+    /// The MIDI keyboards turned off (lane B).
+    #[serde(default, skip_serializing_if = "MidiKept::is_default")]
+    pub midi: MidiKept,
+}
+
+/// Record's options: count in one bar first (on by default), and snap the take's notes to the
+/// grid (off by default).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordKept {
+    #[serde(default = "yes")]
+    pub count_in: bool,
+    #[serde(default)]
+    pub quantize: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Default for RecordKept {
+    fn default() -> RecordKept {
+        RecordKept { count_in: true, quantize: false }
+    }
+}
+
+impl RecordKept {
+    fn is_default(&self) -> bool {
+        *self == RecordKept::default()
+    }
+}
+
+/// The MIDI keyboards turned off in Settings, by name.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MidiKept {
+    #[serde(default)]
+    pub off: Vec<String>,
+}
+
+impl MidiKept {
+    fn is_default(&self) -> bool {
+        self.off.is_empty()
+    }
 }
 
 /// The sound output chosen, and its buffer size: None for each is the system's default.
@@ -141,6 +190,32 @@ mod tests {
         assert_eq!(s.read(), Kept::default());
         let names: Vec<_> = std::fs::read_dir(file.parent().unwrap()).unwrap().map(|e| e.unwrap().file_name()).collect();
         assert_eq!(names, ["settings.json"], "no temporary file is left");
+    }
+
+    // Lane B: Record's options and the keyboards turned off are kept with the rest, each change at
+    // once, and left out of the file while they are the defaults.
+    #[test]
+    fn record_options_and_keyboards_are_kept() {
+        let t = Temp::new("record");
+        let file = t.0.join("settings.json");
+        let s = Settings::new(file.clone());
+        assert_eq!(s.read().record, RecordKept { count_in: true, quantize: false }, "counts in, doesn't snap");
+        assert!(s.read().midi.off.is_empty());
+        s.change(|k| k.songs = Some("/x".into())).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(json, serde_json::json!({"output": {"device": null, "frames": null}, "songs": "/x"}), "the defaults aren't written");
+        s.change(|k| (k.record.count_in, k.record.quantize) = (false, true)).unwrap();
+        s.change(|k| k.midi.off = vec!["Keystation 49".into()]).unwrap();
+        let again = Settings::new(file.clone()).read();
+        assert_eq!(again.record, RecordKept { count_in: false, quantize: true });
+        assert_eq!(again.midi.off, ["Keystation 49"]);
+        assert_eq!(again.songs.as_deref(), Some(Path::new("/x")), "the others are kept");
+        let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(json["record"], serde_json::json!({"count_in": false, "quantize": true}));
+        assert_eq!(json["midi"], serde_json::json!({"off": ["Keystation 49"]}));
+        // Half a record object reads with the other half's default.
+        std::fs::write(&file, r#"{"record": {"quantize": true}}"#).unwrap();
+        assert_eq!(s.read().record, RecordKept { count_in: true, quantize: true });
     }
 
     // A file that doesn't read (half written by an older build, or edited by hand) is the
