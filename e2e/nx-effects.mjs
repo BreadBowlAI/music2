@@ -1,6 +1,6 @@
 // An effect card's ⋯ menu (next, lane D): turn an effect off and on again (D1), move it before or
-// after the effect written next to it (D2). Each is one undo step, written in the effects' own
-// calls; the cards say so at once, so no toast does.
+// after the effect written next to it (D2); and what a Duck listens to (D3). Each is one undo step,
+// written in the effects' own calls; the cards say so at once, so no toast does.
 //
 //   node e2e/nx-effects.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import { check, done, open, read, sleep, until, write } from "./fixlib.mjs";
@@ -156,5 +156,29 @@ check(await until(async () => !(await page.$(card("keys", "delay")))), "back to 
   await pc.browser.close();
 }
 
-check(read("song.ts") === orig.song, "song.ts is untouched");
+// ---------------------------------------------------------------- D3: what the Duck listens to
+
+check(read("song.ts") === orig.song, "song.ts is untouched so far");
+await show("song");
+const duck = '[data-module="song"] [data-node="duck"]';
+await until(async () => !!(await page.$(`${duck} [data-testid=listens-to]`)), 5000);
+const listening = () => page.$eval(`${duck} [data-listens]`, (e) => e.textContent).catch(() => null);
+check((await listening()) === "Listens to:Kick", `the Duck's side row says what it listens to: ${await listening()}`);
+await page.click(`${duck} [data-testid=listens-to]`).catch(() => {});
+await until(async () => !!(await page.$("[data-testid=listens-menu]")), 3000);
+const choices = await page.$$eval("[data-testid=listens-menu] [role=menuitem]", (r) => r.map((x) => x.textContent));
+check(choices.join() === "Hats,Keys,Kick", `its list has the song's other tracks, by name: ${choices.join()}`);
+await linted(`${duck} [data-listens], [data-testid=listens-menu]`, "the Listens to row and its list");
+await page.click('[data-testid=listens-menu] [data-track="hats"]').catch(() => {});
+const hats = orig.song
+  .replace('import { duck } from "std/fx";\n', 'import { duck } from "std/fx";\nimport { follow } from "std/dsp";\n')
+  .replace("duck(bass.out, kick.env,", "duck(bass.out, follow(hats.out),");
+check(await until(() => read("song.ts").includes("duck(bass.out, follow(hats.out), { depth: db(-9) })") && read("song.ts").includes('import { follow } from "std/dsp";')), "picking Hats writes follow(hats.out), and imports follow");
+check(read("song.ts").replace(/\nimport \{ follow \} from "std\/dsp";/, "") === hats.replace(/\nimport \{ follow \} from "std\/dsp";/, ""), "and nothing else");
+check(await until(async () => (await listening()) === "Listens to:Hats"), `the row says Hats now: ${await listening()}`);
+check(await until(async () => /^Undo Bass's duck listens to Hats \(/.test(await undoTitle())), `Undo: ${await undoTitle()}`);
+await key("Meta+z");
+check(await until(() => read("song.ts") === orig.song), "⌘Z puts the side and the import back");
+
+// A PC page's menu says the same.
 done(errors);

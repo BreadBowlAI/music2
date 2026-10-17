@@ -879,3 +879,96 @@ fn moving_twice_is_the_same_code() {
     moved(&mut s, "delay", false).unwrap();
     assert_eq!(f.source(), original);
 }
+
+// ---------------------------------------------------------------- what a Duck listens to (Next D3)
+
+/// The Duck call of `s` whose audio is `audio` (`bass.out`), as `file#ordinal`.
+fn duck_on(s: &Session, audio: &str) -> String {
+    let rev = s.accepted();
+    let site = rev.compiled.sites.iter().find(|x| {
+        x.callee == "duck"
+            && x.args.first().is_some_and(|a| {
+                let text = &rev.snapshot.files[Path::new(&x.file)];
+                &text[a.span().0 as usize..a.span().1 as usize] == audio
+            })
+    });
+    let site = site.unwrap_or_else(|| panic!("no duck on {audio}"));
+    format!("{}#{}", site.file, site.ordinal)
+}
+
+fn listen(s: &mut Session, audio: &str, track: &str) -> Result<Edited, EditError> {
+    let (at, id) = (rev(s), duck_on(s, audio));
+    sidechain(s, at, &id, track)
+}
+
+// Next D3 (Q27, X28): a track with no `env` export is heard through `follow(<its>.out)`, and
+// `follow` is imported from std/dsp; undo takes both back. The Duck's card says what it listens
+// to, and offers the song's other tracks.
+#[test]
+fn a_track_with_no_env_gets_follow_of_its_out_and_the_import() {
+    let f = crate::testing::fixture("templates/starter");
+    let mut s = f.open();
+    let original = f.read("song.ts");
+    let card = |s: &Session| {
+        let v = crate::view::view(s);
+        let song = v.modules.iter().find(|m| m.key == "song").unwrap();
+        let id = duck_on(s, "bass.out");
+        song.nodes.iter().find(|n| n.id == id).and_then(|n| n.listens.clone()).expect("the Duck's Listens to row")
+    };
+    let was = card(&s);
+    assert_eq!(was.track.as_deref(), Some("kick"));
+    let keys: Vec<&str> = was.choices.iter().map(|(k, _)| k.as_str()).collect();
+    assert!(keys.contains(&"clap") && keys.contains(&"kick") && !keys.contains(&"bass"), "{keys:?}");
+    assert!(was.port.starts_with("in:"), "{}", was.port);
+    let done = listen(&mut s, "bass.out", "clap").unwrap();
+    assert_eq!((done.before.as_str(), done.after.as_str()), ("kick.env", "follow(clap.out)"));
+    let expected = original
+        .replace("import { compress, duck } from \"std/fx\";\n", "import { compress, duck } from \"std/fx\";\nimport { follow } from \"std/dsp\";\n")
+        .replace("duck(bass.out, kick.env,", "duck(bass.out, follow(clap.out),");
+    let now = f.read("song.ts");
+    assert!(now.contains("duck(bass.out, follow(clap.out), { depth: db(-9) })") && now.contains("import { follow } from \"std/dsp\";"), "{now}");
+    assert_eq!(now.replace("import { follow } from \"std/dsp\";\n", ""), expected.replace("import { follow } from \"std/dsp\";\n", ""));
+    assert_eq!(card(&s).track.as_deref(), Some("clap"));
+    s.undo().unwrap();
+    assert_eq!(f.read("song.ts"), original);
+}
+
+// Next D3 (X28): a track that exports `env` is heard through it, as the starter's kick is.
+#[test]
+fn the_picker_writes_the_tracks_env() {
+    let f = crate::testing::fixture("templates/starter");
+    let mut s = f.open();
+    let original = f.read("song.ts");
+    listen(&mut s, "chords.out", "hats").unwrap();
+    assert!(f.read("song.ts").contains("duck(chords.out, follow(hats.out), { depth: db(-6) })"));
+    let done = listen(&mut s, "chords.out", "kick").unwrap();
+    assert_eq!(done.after, "kick.env");
+    assert!(f.read("song.ts").contains("duck(chords.out, kick.env, { depth: db(-6) })"));
+    let e = listen(&mut s, "chords.out", "kick").unwrap_err().to_string();
+    assert!(e.contains("Duck listens to Kick already."), "{e}");
+    s.undo().unwrap();
+    s.undo().unwrap();
+    assert_eq!(f.read("song.ts"), original);
+}
+
+// Next D3 (Q27): a Duck in a track's file can't hear other tracks: refused in words, and its card
+// says so.
+#[test]
+fn a_duck_in_a_track_file_is_refused_in_words() {
+    let f = crate::testing::fixture("templates/starter");
+    let bass = f.read("tracks/bass.ts");
+    f.write(
+        "tracks/bass.ts",
+        bass.replace("import { bass } from \"std/instruments\";", "import { bass } from \"std/instruments\";\nimport { duck } from \"std/fx\";")
+            .replace("({ lane }) => bass(lane.notes(\"notes\"), { cutoff: hz(420), drive: 3 })", "({ lane }) => duck(bass(lane.notes(\"notes\"), { cutoff: hz(420), drive: 3 }), lane.mask(\"pump\"))"),
+    );
+    let mut s = f.open();
+    let id = s.accepted().compiled.sites.iter().find(|x| x.callee == "duck" && x.file == "tracks/bass.ts").map(|x| format!("{}#{}", x.file, x.ordinal)).unwrap();
+    let words = "Bass's Duck is in tracks/bass.ts, which can't hear other tracks. Change it in code.";
+    let at = rev(&s);
+    let e = sidechain(&mut s, at, &id, "kick").unwrap_err().to_string();
+    assert!(e.contains(words), "{e}");
+    let v = crate::view::view(&s);
+    let card = v.modules.iter().find(|m| m.key == "bass").and_then(|m| m.nodes.iter().find(|n| n.id == id)).unwrap();
+    assert_eq!(card.listens.as_ref().and_then(|l| l.refused.as_deref()), Some(words));
+}

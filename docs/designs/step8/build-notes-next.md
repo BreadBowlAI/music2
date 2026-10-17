@@ -264,6 +264,62 @@ and changes at 17 px; ticks and loop at the foot).
 
 **Contract:** `RULER_H` 36 (timeline), `ROLL_RULER_H` 28 (roll).
 
+### D3. Pick what Duck listens to (Q27, X28)
+
+**In short**
+
+| What | Now |
+|---|---|
+| The Duck card | Its side row says **Listens to: Kick ▾** |
+| Click it | A list of the song's other tracks, by name. Pick one: the duck now dips when that track plays |
+| In the code | `duck(bass.out, kick.env, …)` for a track that has an `env`; `duck(bass.out, follow(hats.out), …)` for any other, and `follow` is imported |
+| Undo | One step: "Undo Bass's duck listens to Hats" |
+| A Duck in a track's own file | Greyed. Its tooltip: "Bass's Duck is in tracks/bass.ts, which can't hear other tracks. Change it in code." |
+
+**What changed**
+
+- `crates/editor/src/effect.rs`: `sidechain(s, at, call, track)`. The Duck (`std:duck`; the effect browser doesn't
+  list it, so it is found by its frame's ComponentId, not `effect_at`) has its side argument (`args[1]`) replaced
+  with `<handle>.env` when the track exports `env` (X28), else `follow(<handle>.out)`, importing `follow` from
+  `std/dsp` when the file doesn't. `<handle>` is the name the Duck's file default-imports the track by
+  (`sites::imports_of`). Refused in words: a Duck in a track's file, a track its file doesn't import, the track it
+  listens to already. `Confined` to the argument and the import line (the new `follow` or import node is inside
+  them, so the Duck's rewired side is allowed). The planner asserts the Duck's side now comes from that track (an
+  import of its export, or a `follow` of one).
+- `listens(s, site)` and `Listens { port, ducks, track, choices, refused }`: what the row shows; the choices are
+  the tracks the file imports, but the one it ducks, sorted by name. `view.rs`: `ViewNode.listens`, its `port`
+  filled with the side input's row.
+- Server: `POST /api/graph/effect/sidechain {session, revision, node, track}` (`routes_fx.rs`, in `WRITES_FX`;
+  `graph/fx.rs` `listen_to`).
+- Web: `listenTo` in `effects.ts`; `NodeGraph.tsx` `ListensRow` in place of the side input's row: "Listens to:",
+  the track's name and `ChevronDown` (a 20 px button), its list a `Popover` of `MenuRow`s with a check on the
+  current one. No toast (the row says it); Undo names it.
+
+**Tests**
+
+- `crates/editor`: `a_track_with_no_env_gets_follow_of_its_out_and_the_import` (the starter's Bass duck: its row
+  says Kick and offers Clap, not Bass; `kick.env` → `follow(clap.out)` and the import; undo puts both back),
+  `the_picker_writes_the_tracks_env` (Chords: Hats, then Kick writes `kick.env`; Kick again is refused),
+  `a_duck_in_a_track_file_is_refused_in_words` (and its row says so). 296 of 296; clippy clean.
+- `nx-effects` gains 8 (47): the row says "Listens to:Kick", its list "Hats,Keys,Kick", lint of the row and list,
+  picking Hats writes `follow(hats.out)` and the import and nothing else, the row says Hats, "Undo Bass's duck listens
+  to Hats", ⌘Z. Moves, all pass: `effects` 12, `s6-builders` 56, `s5-knobs` 120, `graph` 19, `ports` 46,
+  `fixes-graph` 42, `taste` 39, `s8-mix` 80, `pl-ids` 39, `s8-tracks` 75, `pl-tracks` 20. `m2-server` 234 of 234.
+
+**Red first**
+
+- `crates/editor` with `sidechain` a stub: 3 of 3 fail (`Rejected("stub")`).
+- `nx-effects` on D2's server with this page: `FAIL  the Duck's side row says what it listens to: null`, `FAIL  picking
+  Hats writes follow(hats.out), and imports follow`, `FAIL  Undo: Undo (⌘Z)`.
+
+**Left:** a `follow` import left behind when the Duck goes back to a track's `env` (harmless; unused). A track that
+exports another control signal than `env` (an LFO) is still heard through `follow(<its>.out)` (X28). `m2` has no
+command for it (Q35).
+
+**For gaps.md:** #21: a Duck's sidechain is picked from a list of the song's tracks.
+
+**Contract:** Route `POST /api/graph/effect/sidechain`; the view's `listens` on a Duck card.
+
 ## Merge
 
 ## End

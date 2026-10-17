@@ -27,7 +27,7 @@ use m2_session::{Home, Session};
 
 use crate::cable::{Inlet, Outlet, inlets, outlets};
 use crate::controls::{Control, Declared, controls, declared, not_insertable};
-use crate::effect::{bypass_refused, calls_of, effect_at, is_bypassed, move_row};
+use crate::effect::{Listens, bypass_refused, calls_of, effect_at, is_bypassed, listens, move_row};
 use crate::sites::{Params, fn_params};
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -157,6 +157,9 @@ pub struct ViewNode {
     /// What an effect's ⋯ menu offers, and why a row can't run here.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub menu: Option<EffectMenu>,
+    /// A Duck's "Listens to" row (D3): the track its side input hears, and the ones it could.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listens: Option<Listens>,
 }
 
 /// An effect card's ⋯ menu (Next D1, D2): each row's words when it can't run here.
@@ -750,6 +753,10 @@ pub fn view(session: &Session) -> GraphView {
                 }),
                 _ => None,
             };
+            let listens = match g {
+                Group::Site(s) if kind == "call" => listens(session, sites[s]),
+                _ => None,
+            };
             nodes.push(ViewNode {
                 id: id.clone(),
                 label,
@@ -768,6 +775,7 @@ pub fn view(session: &Session) -> GraphView {
                 outputs: vec![],
                 bypassed,
                 menu,
+                listens,
             });
             id
         };
@@ -870,6 +878,7 @@ pub fn view(session: &Session) -> GraphView {
                 outputs: vec![],
                 bypassed: false,
                 menu: None,
+                listens: None,
             });
             // A track's output that an effect turned off gives on comes from its card.
             let (r, g) = match off.iter().find(|(_, _, input)| input.contains(r.as_str())) {
@@ -1048,6 +1057,13 @@ pub fn view(session: &Session) -> GraphView {
                 p.lane = driven.get(&(n.id.clone(), p.id.clone())).cloned();
             }
             n.outputs = outputs.remove(&n.id).unwrap_or_default();
+            // A Duck's "Listens to" is its side input's row.
+            if let Some(l) = &mut n.listens {
+                match n.inputs.iter().find(|p| p.label == "side") {
+                    Some(p) => l.port = p.id.clone(),
+                    None => n.listens = None,
+                }
+            }
             let mut names = HashSet::new();
             if !n.inputs.iter().all(|p| names.insert(p.label.clone())) {
                 for p in &mut n.inputs {

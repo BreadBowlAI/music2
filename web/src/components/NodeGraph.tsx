@@ -3,6 +3,8 @@ import {
   ArrowLeft,
   ArrowRight,
   AudioLines,
+  Check,
+  ChevronDown,
   Clock,
   Ellipsis,
   Hash,
@@ -46,7 +48,7 @@ import {
   type PortKind,
   type ViewNode,
 } from "../lib/graph";
-import { moveEffect, turnEffect } from "../lib/effects";
+import { listenTo, moveEffect, turnEffect } from "../lib/effects";
 import { laneMade } from "../lib/events";
 import { mod, opt } from "../lib/native";
 import { useShell } from "../lib/shell";
@@ -1118,6 +1120,9 @@ function InputRow({
     );
   }
 
+  // A Duck's side input: what it listens to, and a list of the tracks it could (next D3).
+  if (node.listens && node.listens.port === input.id) return <ListensRow node={node} input={input} filled={filled} editable={editable} />;
+
   // Driven by an automation lane: its home is the lane (HOME-1), and its menu shows the lane or
   // takes the automation out (KN-2).
   const driven = input.lane;
@@ -1153,6 +1158,65 @@ function InputRow({
           ]}
           onClose={() => setMenu(null)}
         />
+      )}
+    </div>
+  );
+}
+
+/**
+ * A Duck's side input (next D3, X28): "Listens to: Kick ▾". Its list has the song's other tracks;
+ * one picked is written in the Duck's call. Where it can't change (a Duck in a track's file), the
+ * button is greyed and its tooltip says why.
+ */
+function ListensRow({ node, input, filled, editable }: { node: ViewNode; input: InputPort; filled: boolean; editable: boolean }) {
+  const tracks = useContext(Tracks);
+  const why = useContext(Locked);
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const l = node.listens!;
+  const name = (key: string) => l.choices.find(([k]) => k === key)?.[1] ?? tracks(key) ?? key;
+  const now = l.track ? name(l.track) : "another sound";
+  const off = why ?? (editable ? null : "This song can't be edited here") ?? l.refused ?? null;
+  return (
+    <div className="relative h-[28px] pl-4 pr-3 flex items-center gap-1.5 text-xs min-w-0" data-input={input.label} data-listens>
+      <Dot id={input.id} kind={input.kind} filled={filled} />
+      <span className="shrink-0 text-fg-muted">Listens to:</span>
+      <button
+        data-testid="listens-to"
+        className={clsx(
+          "min-w-0 h-ctl-xs px-1 -mx-1 flex items-center gap-1 rounded-sm text-xs font-medium transition-colors duration-80 ease-linear",
+          off ? "text-fg-muted cursor-default" : "text-fg hover:bg-hover cursor-pointer",
+          anchor && "bg-accent-soft text-accent-strong",
+        )}
+        aria-haspopup="menu"
+        aria-expanded={!!anchor}
+        aria-disabled={!!off || undefined}
+        title={off ?? `It ducks when ${now} plays. Choose another track`}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={(e) => {
+          if (off) return;
+          const b = e.currentTarget;
+          setAnchor((a) => (a ? null : b));
+        }}
+      >
+        <span className="truncate">{now}</span>
+        <ChevronDown size={12} className="shrink-0" />
+      </button>
+      {anchor && (
+        <Popover anchor={anchor} onClose={() => setAnchor(null)} role="menu" aria-label="Listens to" data-testid="listens-menu" className="w-[200px]">
+          {l.choices.map(([key, label]) => (
+            <MenuRow
+              key={key}
+              data-track={key}
+              icon={<Check size={14} className={key === l.track ? undefined : "invisible"} />}
+              onClick={() => {
+                setAnchor(null);
+                if (key !== l.track) void listenTo(node, key, label);
+              }}
+            >
+              {label}
+            </MenuRow>
+          ))}
+        </Popover>
       )}
     </div>
   );

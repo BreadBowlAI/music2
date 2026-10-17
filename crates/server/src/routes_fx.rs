@@ -1,4 +1,5 @@
-//! Lane D's routes (next): turn an effect off and on, and move it before or after another. In a router of its own, merged into the
+//! Lane D's routes (next): turn an effect off and on, move it before or after another, and choose
+//! what a Duck listens to. In a router of its own, merged into the
 //! API's, as `routes_mix.rs` is; a route here that writes the project is in [`WRITES_FX`], and a
 //! read-only window answers it 423 with WRITE-18's message.
 
@@ -19,12 +20,13 @@ type S = State<Arc<AppState>>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
 /// The routes here that write the open project.
-pub const WRITES_FX: &[&str] = &["/api/graph/effect/bypass", "/api/graph/effect/move"];
+pub const WRITES_FX: &[&str] = &["/api/graph/effect/bypass", "/api/graph/effect/move", "/api/graph/effect/sidechain"];
 
 pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/graph/effect/bypass", post(effect_bypass))
         .route("/api/graph/effect/move", post(effect_move))
+        .route("/api/graph/effect/sidechain", post(effect_sidechain))
         .route_layer(axum::middleware::from_fn_with_state(state, writes))
 }
 
@@ -77,6 +79,26 @@ struct MoveReq {
 async fn effect_move(State(s): S, Json(r): Json<MoveReq>) -> ApiResult {
     let state = s.clone();
     let result = blocking(move || state.graph.move_effect(r.session, r.revision, &r.node, r.earlier)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct SidechainReq {
+    session: u64,
+    revision: u64,
+    /// The Duck's card: its call, `file#ordinal`.
+    node: String,
+    /// The track it is to listen to, by key.
+    track: String,
+}
+
+/// Make a Duck listen to another track (Next D3): `{session, revision, node, track}`, one Tx and
+/// one undo step. A write. Answers `{file, before, after, revision}`; refused in words when the
+/// Duck can't hear that track from where it is written.
+async fn effect_sidechain(State(s): S, Json(r): Json<SidechainReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.listen_to(r.session, r.revision, &r.node, &r.track)).await;
     s.graph_changed();
     Ok(Json(result?))
 }
