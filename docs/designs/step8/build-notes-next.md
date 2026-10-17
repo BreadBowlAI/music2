@@ -1212,6 +1212,12 @@ section above is its own branch's, word for word.
   change from its own element (`[data-mark]`), as lane D did for `s8-songbar`. Lane D's 36 px ruler moved them, and
   `s4-meter` wasn't in D4's list of suites to run. Red, on the joined page: `FAIL bar numbers follow the meter:
   [["1",null],["2",null],…,["7/8 ♩100",null],…]`, then `FAIL the 7/8 and the tempo change share a mark`. After: 8 of 8.
+- `pl-arrange` waits up to 2 s for Undo's tooltip to name a step (five checks), as its check after an undo already
+  did. It read the tooltip once, as soon as `layout.json` changed, which can be before the window has the new
+  revision. In the first joined run, under a load near 17 (two suite batches and the Rust tests at once), it failed
+  twice: `FAIL Undo says so: Undo Marker 1 at bar 3 (⌘Z)` (the step before); alone, once. Timed alone four times,
+  the tooltip was right at the first look (1 to 3 ms), so nothing in the app is slow: it is the suite's race. A
+  guard, not red first. After: 57 of 57.
 
 ## End
 
