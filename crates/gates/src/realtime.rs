@@ -376,7 +376,7 @@ fn partitions(lab: &Lab, song: &Song, out: &mut Outcome) -> Result<()> {
         "the song's tail",
         format!(
             "{tail_us:.0} µs a block ({} nodes): {:.0}% of the work",
-            tail.iter().map(|&q| parts[q].nodes).sum::<usize>(),
+            tail.iter().map(|&q| parts[q].nodes.len()).sum::<usize>(),
             100.0 * tail_us / work.max(1.0)
         ),
     );

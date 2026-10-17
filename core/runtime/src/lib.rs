@@ -893,6 +893,13 @@ impl Exec {
             | Exec::Capture(_) => {}
         }
     }
+
+    /// Whether this node does nothing in a block: a constant, written only by its cells before the
+    /// graph, or a notes lane, whose scheduler runs before the graph. It runs in no partition, and
+    /// reading it waits for nothing (8a, R1).
+    fn idle(&self) -> bool {
+        matches!(self, Exec::Const(_) | Exec::Notes)
+    }
 }
 
 #[derive(Default)]
@@ -1750,7 +1757,19 @@ static GENERATION: AtomicU64 = AtomicU64::new(1);
 /// the track); a fade the node that reads it (a feedback's ring reads it after the graph, so a
 /// fade only a feedback reads, and the output's fade, take their new side's, else their old
 /// side's). One left without (nothing to follow) is labelled "".
-fn labels(flat: &Flat, w: &Wiring, exec: &[Exec], fades: std::ops::Range<usize>, placed: &overlay::Placed) -> Vec<Box<str>> {
+///
+/// Then, in `order`, a plan node whose inputs all come from one other label, idle nodes and those
+/// outside the order aside, takes that label, and an overlay follows its source again (R1): a
+/// mixer strip (a channel's pan and fader) runs with its track, not in the song's serial tail. A
+/// node that reads a fade never moves: the fade took its label.
+fn labels(
+    flat: &Flat,
+    w: &Wiring,
+    exec: &[Exec],
+    order: &[usize],
+    fades: std::ops::Range<usize>,
+    placed: &overlay::Placed,
+) -> Vec<Box<str>> {
     let n = flat.nodes.len();
     let mut label: Vec<Option<&str>> = vec![None; exec.len()];
     for (i, node) in flat.nodes.iter().enumerate() {
@@ -1777,6 +1796,40 @@ fn labels(flat: &Flat, w: &Wiring, exec: &[Exec], fades: std::ops::Range<usize>,
             {
                 label[f] = side(new).and_then(|j| label[j]).or_else(|| side(old).and_then(|j| label[j]));
             }
+        }
+    }
+    let mut runs = vec![false; exec.len()];
+    for &i in order {
+        runs[i] = !exec[i].idle();
+    }
+    for &i in order {
+        if overlays.contains(&i) {
+            label[i] = label[placed.nodes[i - overlays.start].src.node];
+            continue;
+        }
+        if i >= n {
+            continue;
+        }
+        // The one label all its running inputs have, if there is one.
+        let (mut from, mut one) = (None, true);
+        exec[i].reads(|j| {
+            if runs[j] {
+                one &= from.is_none_or(|l| l == label[j]);
+                from = Some(label[j]);
+            }
+        });
+        if let Some(Some(l)) = from.filter(|_| one)
+            && Some(l) != label[i]
+        {
+            debug_assert!(
+                {
+                    let mut fade = false;
+                    exec[i].reads(|j| fade |= fades.contains(&j));
+                    !fade
+                },
+                "node {i} reads a fade, so it can't move"
+            );
+            label[i] = Some(l);
         }
     }
     label.into_iter().map(|l| Box::from(l.unwrap_or(""))).collect()
@@ -1908,7 +1961,7 @@ impl Renderer {
         // Window-only overlays run while the ghosts and old sides they carry do.
         let windowed = base + placed.sites..base + placed.nodes.len();
         graph.order = w.order.clone();
-        let labels = labels(flat, &w, &graph.exec, fades..base, &placed);
+        let labels = labels(flat, &w, &graph.exec, &graph.order, fades..base, &placed);
         let schedule = Schedule::build(&graph.order, &graph.exec, &labels)?;
         let window_overlays: Vec<(usize, usize)> =
             placed.nodes.iter().enumerate().skip(placed.sites).filter_map(|(j, o)| Some((base + j, o.follows?))).collect();

@@ -453,3 +453,30 @@ fn p50_renders_the_same_bits_on_1_and_8_threads() {
     assert_eq!(diff, None, "the same bits on 8 threads");
     assert!(on_workers > 0 && crossed > 0, "{on_workers} tasks on workers, {crossed} reads across threads");
 }
+
+// RENDER-2 (8a, R1): p16's song partition holds only the sum (its adds) and the master's stereo,
+// gain and limiter: each channel's fader runs with its track, and constants run nowhere.
+#[test]
+fn the_song_tail_is_the_sum_and_the_master() {
+    let song = p16();
+    let f = &song.flat;
+    let r = song.renderer();
+    let kernel = |i: usize| match f.nodes.get(i).map(|n| &n.op) {
+        Some(m2_ir::FOp::Kernel { kernel, .. }) => kernel.as_str(),
+        _ => "not a kernel",
+    };
+    let parts = r.parts();
+    let tail: Vec<usize> = parts.iter().filter(|p| p.label == "song").flat_map(|p| p.nodes.iter().copied()).collect();
+    let mut kinds: Vec<&str> = tail.iter().map(|&i| kernel(i)).collect();
+    kinds.sort_unstable();
+    let tracks = parts.iter().filter(|p| p.label != "song").count();
+    assert_eq!(tracks, 16, "a partition a track");
+    let mut want = vec!["std:add"; tracks - 1];
+    want.extend(["std:gain", "std:limit", "std:stereo"]);
+    assert_eq!(kinds, want, "the song's tail");
+    // The song's own faders: one a channel, and the master's. Only the master's is in the song.
+    let label = |i: usize| parts.iter().find(|p| p.nodes.contains(&i)).map_or("none", |p| p.label.as_str());
+    let faders: Vec<usize> = (0..f.nodes.len()).filter(|&i| f.nodes[i].module == "song" && kernel(i) == "std:gain").collect();
+    assert_eq!(faders.len(), tracks + 1);
+    assert_eq!(faders.iter().filter(|&&i| label(i) == "song").count(), 1, "each channel's fader runs with its track");
+}

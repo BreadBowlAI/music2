@@ -36,7 +36,8 @@ pub struct Part {
     /// Its module, and the module crossings before it where modules read each other.
     pub label: String,
     pub depth: u16,
-    pub nodes: usize,
+    /// Its nodes, in plan order: exec indices (a plan node's is its index in the flat graph).
+    pub nodes: Vec<usize>,
     /// The partitions it waits for.
     pub reads: Vec<usize>,
 }
@@ -108,7 +109,7 @@ impl Renderer {
             .map(|q| {
                 let (label, depth) = p.label(q);
                 let reads = (0..p.len() as u32).filter(|&o| p.reads(q, o)).map(|o| o as usize).collect();
-                Part { label: label.to_string(), depth, nodes: p.nodes(q).len(), reads }
+                Part { label: label.to_string(), depth, nodes: p.nodes(q).iter().map(|&i| i as usize).collect(), reads }
             })
             .collect()
     }
