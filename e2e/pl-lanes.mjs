@@ -5,7 +5,7 @@
 //   node e2e/pl-lanes.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import { check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 
-const { browser, page, errors, state, key } = await open(1440, 900);
+const { browser, page, errors, api, state, key } = await open(1440, 900);
 
 const CUTOFF = "data/bass/cutoff.json";
 const lane = async (k) => (await state()).timeline.tracks.find((t) => t.module === "bass")?.lanes.find((l) => l.key === k);
@@ -61,6 +61,104 @@ check(await until(() => points() === JSON.stringify(JSON.parse(base).clips[0].po
 
 write(CUTOFF, JSON.stringify(cutoff, null, 0));
 await until(async () => JSON.stringify((await lane("cutoff"))?.clips[0]?.points) === JSON.stringify(cutoff.clips[0].points));
+
+// ---------------------------------------------------------------- D4: hide one automation lane
+
+const VIEW = ".music2/view.json";
+const viewHidden = () => {
+  try {
+    return JSON.parse(read(VIEW)).hidden ?? null;
+  } catch {
+    return null;
+  }
+};
+const rowOf = (addr) => page.$(`[data-lane="${addr}"]`);
+const line = () => page.$eval('[data-testid=hidden-lanes][data-module="bass"]', (e) => e.textContent).catch(() => null);
+const menuRows = () => page.$$eval("[data-testid=clip-menu] [data-menu-item]", (els) => els.map((e) => e.dataset.menuItem));
+
+const head = await (await rowOf("bass.drop")).$("div");
+const hb = await head.boundingBox();
+await page.mouse.click(hb.x + 40, hb.y + hb.height / 2, { button: "right" });
+await until(() => page.$("[data-testid=clip-menu]").then(Boolean), 2000);
+const rows = await menuRows();
+check(rows.join() === "unautomate,hide-lane,hide", `the Drop lane's header menu: Remove automation, Hide this lane, Hide automation (${rows})`);
+await page.click('[data-testid=clip-menu] [data-menu-item="hide-lane"]').catch(() => {});
+check(await until(async () => !(await rowOf("bass.drop")) && !!(await rowOf("bass.cutoff"))), "Hide this lane takes Drop's row away, and only it");
+check(await until(async () => (await line()) === "1 hidden lane · Show"), `a line under Bass's lanes says so: ${await line()}`);
+const lineBox = await page.$eval('[data-testid=hidden-lanes][data-module="bass"]', (e) => {
+  const r = e.getBoundingClientRect();
+  const cut = document.querySelector('[data-lane="bass.cutoff"]').getBoundingClientRect();
+  return { h: r.height, under: Math.abs(r.top - cut.bottom) < 1 };
+});
+check(lineBox.h === 20 && lineBox.under, `20 px tall, right under the Cutoff lane (${JSON.stringify(lineBox)})`);
+check(await until(() => JSON.stringify(viewHidden()) === '["bass.drop"]'), `kept in .music2/view.json: hidden ${JSON.stringify(viewHidden())}`);
+const bad = await page.$eval('[data-testid=hidden-lanes][data-module="bass"]', (root) => {
+  const out = [];
+  for (const e of [root, ...root.querySelectorAll("*")]) {
+    const s = getComputedStyle(e);
+    const texty = [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+    if (texty && ![11, 12, 13, 15].includes(parseFloat(s.fontSize))) out.push(`font-size ${s.fontSize}`);
+    if (/gradient/.test(s.backgroundImage)) out.push("gradient");
+    for (const c of ["borderTopLeftRadius", "borderBottomRightRadius"]) if (![0, 2, 4, 8].includes(parseFloat(s[c])) && parseFloat(s[c]) < 9999) out.push(`radius ${s[c]}`);
+  }
+  return out;
+});
+check(bad.length === 0, `the line passes the taste lint${bad.length ? `: ${bad.join("; ")}` : ""}`);
+
+// Folded, the line goes with the lanes (X44); unfolded (or A), Drop stays hidden.
+await page.click('[data-fold="bass"]');
+check(await until(async () => !(await rowOf("bass.cutoff")) && !(await line())), "folded, the lanes and the line go");
+await page.click('[data-fold="bass"]');
+check(await until(async () => !!(await rowOf("bass.cutoff")) && !(await rowOf("bass.drop")) && (await line()) !== null), "shown again, Drop is still hidden");
+
+// Show brings it back.
+await page.click('[data-testid=hidden-lanes][data-module="bass"] [data-testid=show-hidden]');
+check(await until(async () => !!(await rowOf("bass.drop")) && !(await line())), "Show brings Drop back, and the line goes");
+check(await until(() => viewHidden() === null), "view.json keeps no hidden lane");
+
+// Asked for from the Device view: Automate on Bass's Drive knob makes a lane; hidden, "Show Drive
+// lane" on the input it now drives brings it back (both say a lane is wanted: laneMade).
+await page.click('[data-module-tab="bass"]');
+const knob = '[data-module="bass"] [data-knob="drive"]';
+await page.waitForSelector(knob, { timeout: 5000 });
+await page.$eval(knob, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
+await sleep(150);
+const kb = await page.$(knob).then((e) => e.boundingBox());
+await page.mouse.click(kb.x + Math.min(30, kb.width / 2), kb.y + kb.height / 2, { button: "right" });
+await page.waitForSelector("[data-testid=knob-menu]", { timeout: 3000 });
+await page.click('[data-testid=knob-menu] [data-menu-item="automate"]');
+check(await until(async () => !!(await rowOf("bass.drive")), 8000), "Automate on Bass's Drive makes a Drive lane, shown");
+const hd = await (await (await rowOf("bass.drive")).$("div")).boundingBox();
+await page.mouse.click(hd.x + 40, hd.y + hd.height / 2, { button: "right" });
+await until(() => page.$("[data-testid=clip-menu]").then(Boolean), 2000);
+await page.click('[data-testid=clip-menu] [data-menu-item="hide-lane"]');
+check(await until(async () => !(await rowOf("bass.drive")) && (await line()) === "1 hidden lane · Show"), "hidden, the line says so");
+const input = '[data-module="bass"] [data-lane-input="bass.drive"]';
+await page.waitForSelector(input, { timeout: 5000 }).catch(() => null);
+await page.$eval(input, (e) => e.scrollIntoView({ block: "center", inline: "center" })).catch(() => {});
+await sleep(150);
+const ib = await page.$(input).then((e) => e?.boundingBox());
+if (ib) {
+  await page.mouse.click(ib.x + Math.min(40, ib.width / 2), ib.y + ib.height / 2, { button: "right" });
+  await until(() => page.$("[data-testid=clip-menu]").then(Boolean), 2000);
+  await page.click('[data-testid=clip-menu] [data-menu-item="show"]').catch(() => {});
+}
+check(await until(async () => !!(await rowOf("bass.drive")) && !(await line())), "Show Drive lane, on the input Drive drives in the Device view, shows the hidden lane");
+check(await until(() => viewHidden() === null), "and view.json keeps it hidden no more");
+
+// Kept with the song: hidden, closed and opened again, still hidden.
+const hb3 = await (await (await rowOf("bass.drop")).$("div")).boundingBox();
+await page.mouse.click(hb3.x + 40, hb3.y + hb3.height / 2, { button: "right" });
+await until(() => page.$("[data-testid=clip-menu]").then(Boolean), 2000);
+await page.click('[data-testid=clip-menu] [data-menu-item="hide-lane"]');
+check(await until(() => JSON.stringify(viewHidden()) === '["bass.drop"]'), "hidden again, and kept");
+const proj = (await state()).dir;
+await api("/close", { method: "POST", body: "{}" });
+await sleep(300);
+check((await api("/open", { method: "POST", body: JSON.stringify({ path: proj }) })).status === 200, "the song closes and opens again");
+await page.waitForSelector('[data-fold="bass"]', { timeout: 10000 });
+if (!(await rowOf("bass.cutoff"))) await page.click('[data-fold="bass"]');
+check(await until(async () => !!(await rowOf("bass.cutoff")) && !(await rowOf("bass.drop")) && (await line()) === "1 hidden lane · Show"), "Drop is still hidden, the line says so");
 
 await browser.close();
 done(errors);

@@ -52,6 +52,8 @@ import {
 import { clean, gridOp, gridTarget, pickName, skipsSnap, snapSong, stepOf, useGrid, type Grid as GridSetting } from "../lib/grid";
 import { added, bounded, hit, line, moved, painted, pickedIn as pointIn, usePoints, type Point } from "../lib/points";
 import { laneScale, type LaneScale } from "../lib/laneScale";
+import { hide as hideLane, useAllHidden, useHidden } from "../lib/hiddenLanes";
+import { HIDDEN_ROW_H, HiddenRow } from "./HiddenLanes";
 import { chord, keyName, mod, opt } from "../lib/native";
 import { useStore } from "../lib/store";
 import { addEffectTo, dragsEffect, EFFECT_DRAG } from "./Browser";
@@ -975,7 +977,9 @@ export default function SongTimeline({
     setLit(id);
     setTimeout(() => setLit((l) => (l === id ? null : l)), 1800);
   };
-  useEffect(reveal, [timeline, open]);
+  // A hidden lane asked for (Automate on its control) shows first, then is revealed (D4).
+  const hiddenLanes = useAllHidden();
+  useEffect(reveal, [timeline, open, hiddenLanes]);
   useEffect(() => {
     const made = (e: Event) => {
       const id = (e as CustomEvent<string>).detail;
@@ -1019,7 +1023,11 @@ export default function SongTimeline({
   };
 
   const songRows = rowsOf(song);
-  const songH = ROW_H + 1 + songRows.others.length * ROW_H + (open.has(song.module) ? songRows.controls.length * LANE_H : 0);
+  // The Song's automation lanes, less those hidden, and the line that says so (D4).
+  const songHidden = useHidden(song.module);
+  const songShown = songRows.controls.filter((l) => !songHidden.has(l.key)).length;
+  const songLanesH = songShown * LANE_H + (songShown < songRows.controls.length ? HIDDEN_ROW_H : 0);
+  const songH = ROW_H + 1 + songRows.others.length * ROW_H + (open.has(song.module) ? songLanesH : 0);
   const all = [...rows, song].filter((t) => t.lanes.some((l) => l.kind === "control")).map((t) => t.module);
   const anyOpen = all.some((m) => open.has(m));
   return (
@@ -1505,6 +1513,9 @@ const TrackRows = memo(function TrackRows({
   // A muted track's clips, or one a solo leaves off, draw faint and grey; muted in the song, hatched too.
   const heard = useHeard(module);
   const { primary, others, controls } = rowsOf(track);
+  // Lanes hidden one by one (D4): A never shows them; a line under the others says so.
+  const hidden = useHidden(module);
+  const hiddenHere = controls.filter((l) => hidden.has(l.key)).map((l) => l.key);
   /** Where a reference's clip is in `lane`, if it is one of its clips. */
   const at = (ref: ClipRef | null, lane: TimelineLane) => (ref?.lane === lane.key ? clipIndex(lane.clips, ref) : -1);
   const select = () => useShell.getState().select(module);
@@ -1626,7 +1637,8 @@ const TrackRows = memo(function TrackRows({
         { first: true, height: ROW_H, movable },
       )}
       {others.map((l) => row(l, <LaneLabel lane={l} />, { height: rowHeight(l) }))}
-      {open && controls.map((l) => row(l, <LaneLabel lane={l} />, { height: LANE_H }))}
+      {open && controls.filter((l) => !hidden.has(l.key)).map((l) => row(l, <LaneLabel lane={l} />, { height: LANE_H }))}
+      {open && hiddenHere.length > 0 && <HiddenRow module={module} lanes={hiddenHere} color={color} selected={selected} headerW={headerW} width={width} />}
     </div>
   );
 });
@@ -1709,6 +1721,8 @@ function TimelineMenu({
   if (at.on === "header") {
     items = [
       { id: "unautomate", label: "Remove automation", off: off ?? (lane.kind === "control" ? null : "Only an automation lane can be removed."), run: () => edits.unautomate(at.module, at.lane) },
+      // One lane out of sight, kept so with the song (D4); a line under the track's lanes brings it back.
+      lane.kind === "control" ? { id: "hide-lane", label: "Hide this lane", run: () => hideLane(at.module, at.lane) } : null,
       { id: "hide", label: "Hide automation", shortcut: "A", run: () => useShell.getState().toggleLanes(at.module, []) },
     ];
   } else if (at.on === "clip") {

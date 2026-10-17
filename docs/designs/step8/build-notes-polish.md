@@ -259,6 +259,51 @@ FAIL  at half height it writes about 632 Hz: 7520 (the log scale at that pixel: 
 typing a point's value, curves between points (Q28).
 **Contract.** None.
 
+### D4. Hide one automation lane
+
+**In short.** Right-click an automation lane's name and pick "Hide this lane". The lane goes away.
+A small line under the track says "1 hidden lane · Show". Show brings it back. The song keeps this
+for next time.
+
+| Way | What happens |
+|---|---|
+| Hide this lane (the lane's header menu) | that lane goes; the line shows under the track's lanes |
+| Show (on the line) | every hidden lane of the track comes back |
+| A, or the track's chevron | shows the track's lanes, never a hidden one |
+| Automate, or "Show … lane" on the input a lane drives | that lane comes back |
+| Close and open the song | still hidden: `.music2/view.json` keeps `hidden: ["bass.drop"]` |
+
+**What changed**
+- `web/src/lib/hiddenLanes.ts` (new): `useHidden(module)`, `useAllHidden()`, `hide`, `show`, over
+  the view store's `hidden` key; a lane made or asked for (`laneMade`, `lib/events.ts`) shows.
+- `web/src/components/HiddenLanes.tsx` (new): `HiddenRow`, the 20 px line, Show a link button.
+  Only while the track's lanes show (X44).
+- `SongTimeline.tsx`: the track's rows leave hidden lanes out and end with the line; the Song row's
+  height (`songH`) counts both; a lane asked for is revealed once it shows; the lane header's menu
+  gains "Hide this lane", between Remove automation and Hide automation.
+- `e2e/s8-automation.mjs`: its check of the header menu's rows names the new row (still 45 checks).
+
+**Tests** — `pl-lanes` grows to 28 checks (see `e2e/README.md`). The plan's "Automate on Drop's
+knob" can't be done in first-song (Drop is a lane read through a cable, not a knob), so the suite
+automates Bass's Drive, hides that lane, and brings it back with "Show Drive lane": the same event.
+Moved and green: `s8-automation` 45, `s8-clips` 94, `layout` 39, `views` 30, `s8-tracks` 75,
+`start` 24, `s8-mute` 152, `taste` 39, `pl-notes` 98.
+
+**Red first** (D3's page):
+```
+FAIL  the Drop lane's header menu: Remove automation, Hide this lane, Hide automation (unautomate,hide)
+FAIL  Hide this lane takes Drop's row away, and only it
+FAIL  a line under Bass's lanes says so: null
+```
+
+**Left.**
+- A track's lanes all hidden still shows its chevron and, unfolded, only the line. Fine, but a
+  "show all" for the whole song isn't there.
+- When a track's ID changes, its `hidden` entries don't follow yet (lane A's rekey, X20).
+
+**For gaps.md.** #17's rest: one automation lane can be hidden, kept per song.
+**Contract.** FMT-20: `view.json`'s `hidden` lists hidden lanes as `module.lane`.
+
 ## Merge
 
 The lead's merges of the four lanes.
