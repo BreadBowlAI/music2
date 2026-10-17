@@ -458,6 +458,10 @@ Captions for the owner:
 - The app (not the browser) serves the page copied into `target/debug/web` when it was built. Lane
   B's app checks now set `MUSIC2_WEB_DIR` to the lane's page. U6's menu picture was taken again
   from the final page. At the merge, rebuild the app or set `MUSIC2_WEB_DIR` before the shots.
+- U6 kept text from being selected during a marquee with `user-select: none` on the timeline. In
+  WebKit that can stop typing in a field inside it (the track rename field). The marquee now clears
+  any text selection as it goes instead. `s8-clips`, `s8-tracks`, `taste` and `s8-automation` ran
+  again on this page: 90, 75, 39, 43 (`~/m2-runs/logs/ui-b-u7-suites3-*.log`).
 
 ### Choices
 

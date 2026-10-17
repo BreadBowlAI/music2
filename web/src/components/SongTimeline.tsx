@@ -487,9 +487,11 @@ export default function SongTimeline({
       const move = (ev: PointerEvent) => {
         if (ev.pointerId !== pointer) return;
         if (!on && Math.abs(ev.clientX - x0) < 4 && Math.abs(ev.clientY - y0) < 4) return;
-        // A drag, not a click: play's start stays where it is.
+        // A drag, not a click: play's start stays where it is, and no text is selected as it goes
+        // (not by `user-select` on the timeline: in WebKit that can stop typing in a rename field).
         on = true;
         pressed.current = null;
+        window.getSelection()?.removeAllRanges();
         const { timeline, headerW } = latest.current;
         const c = box.getBoundingClientRect();
         const beatAt = (x: number) => Math.max(0, (x - c.left - headerW) / PPB);
@@ -1022,8 +1024,7 @@ export default function SongTimeline({
       data-grid-view="song"
       tabIndex={-1}
       onKeyDown={onKeyDown}
-      // A marquee or a clip dragged across the headers never selects their names.
-      className="flex-1 min-h-0 overflow-auto relative bg-canvas outline-none select-none"
+      className="flex-1 min-h-0 overflow-auto relative bg-canvas outline-none"
       // Revealing a row never tucks it under the ruler, the headers or the Song row (TL-16).
       style={{ scrollPaddingTop: RULER_H, scrollPaddingLeft: headerW, scrollPaddingBottom: songH }}
     >
