@@ -850,7 +850,7 @@ impl Actor {
             }
             // Its overlays where the plan before had them: no glide at entry (MON-1, A7).
             if let Some(p) = cp.open.as_ref().filter(|p| p.engine.token == token) {
-                r.set_overlays(&super::overlay::plan_values(&r.info(), &p.overlays.set, &o.session.accepted().compiled.flat.muted));
+                r.set_overlays(&super::overlay::plan_values(&r.info(), &p.overlays.set, o.session.accepted()));
             }
         }
         let sent = (|| -> Result<Sent> {
@@ -864,7 +864,7 @@ impl Actor {
                     if was != now
                         && let Some(set) = cp.open.as_ref().filter(|q| q.engine.token == token).map(|q| &q.overlays.set)
                     {
-                        super::overlay::write_cells(&p.info, p.epoch, d, (set, was), (set, now));
+                        super::overlay::write_cells(&p.info, p.epoch, d, &super::overlay::tracks(&p.revision), (set, was), (set, now));
                     }
                     let mut written = vec![];
                     for (cell, value) in reach.cells {
@@ -933,6 +933,7 @@ impl Actor {
             cells: p.cells.clone(),
             info: p.info.clone(),
             muted: p.revision.compiled.flat.muted.clone(),
+            tracks: super::overlay::tracks(&p.revision),
             origins: if o.playing == Some(number) {
                 None
             } else if failed {
@@ -1065,7 +1066,7 @@ impl Actor {
         let built = match o.session.accepted().has_code() {
             true => {
                 let mut r = build(&o.session, &mut o.audio, &self.inner.owner, Basis::Fresh)?;
-                r.set_overlays(&super::overlay::plan_values(&r.info(), &monitor.set, &o.session.accepted().compiled.flat.muted));
+                r.set_overlays(&super::overlay::plan_values(&r.info(), &monitor.set, o.session.accepted()));
                 let plays = o.describe(&r, &device);
                 Some((r, plays))
             }
@@ -1089,6 +1090,7 @@ impl Actor {
                     cells: plays.cells.clone(),
                     info: plays.info.clone(),
                     muted: plays.revision.compiled.flat.muted.clone(),
+                    tracks: super::overlay::tracks(&plays.revision),
                     origins: None,
                 };
                 o.load(&device, r, plays, 0.0, None)?;

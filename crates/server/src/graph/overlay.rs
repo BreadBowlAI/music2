@@ -10,7 +10,8 @@
 //! - **The file (MON-4):** `.music2/overlays.json`, `{"mute": [...], "solo": [...]}`, sorted. Read at
 //!   open; written by the server's `music2-tell` thread after a change (a temp file, then a
 //!   rename), never under the control lock. A read-only window keeps them in memory only. Entries
-//!   of a track that is gone stay, so it comes back as it was.
+//!   of a track that is gone stay, so it comes back as it was; meanwhile they are ignored, so a
+//!   solo of a track that is gone never silences the rest.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -60,8 +61,10 @@ pub struct Change {
 pub type Site = (String, String);
 
 /// Each site's value (MON-3): 0 when its track is muted while listening or in the song, or when a
-/// solo leaves it off every path through a soloed track; else 1.
-pub fn values(sites: &[Site], o: &Overlays, muted: &[String]) -> Vec<f32> {
+/// solo leaves it off every path through a soloed track; else 1. Only solos of `tracks`, the
+/// revision's tracks, count: one of a track that is gone stays in the file and is ignored (MON-4).
+pub fn values(sites: &[Site], o: &Overlays, muted: &[String], tracks: &[String]) -> Vec<f32> {
+    let solo: Vec<&String> = o.solo.iter().filter(|s| tracks.contains(s)).collect();
     // Who feeds whom, over the sites (sidechains aren't sites, so aren't edges).
     let mut feeds: HashMap<&str, Vec<&str>> = HashMap::new();
     for (m, c) in sites {
@@ -79,9 +82,7 @@ pub fn values(sites: &[Site], o: &Overlays, muted: &[String]) -> Vec<f32> {
         }
         false
     };
-    let on_path = |m: &str, c: &str| {
-        o.solo.is_empty() || o.solo.iter().any(|s| reaches(s, m) || reaches(c, s))
-    };
+    let on_path = |m: &str, c: &str| solo.is_empty() || solo.iter().any(|s| reaches(s, m) || reaches(c, s));
     sites
         .iter()
         .map(|(m, c)| {
@@ -96,21 +97,33 @@ fn sites_of(info: &PlanInfo) -> Vec<Site> {
     info.overlays.iter().map(|(m, c, _)| (m.clone(), c.clone())).collect()
 }
 
-/// The values for every site of a plan of a revision whose tracks muted in the song are `muted`:
-/// what a renderer is given before it is sent ([`m2_runtime::Renderer::set_overlays`]).
-pub fn plan_values(info: &PlanInfo, o: &Overlays, muted: &[String]) -> Vec<f32> {
-    values(&sites_of(info), o, muted)
+/// The values for every site of a plan of `rev`: what a renderer is given before it is sent
+/// ([`m2_runtime::Renderer::set_overlays`]).
+pub fn plan_values(info: &PlanInfo, o: &Overlays, rev: &m2_session::Revision) -> Vec<f32> {
+    values(&sites_of(info), o, &rev.compiled.flat.muted, &tracks(rev))
 }
 
-/// Write the cells of the plan `info` describes, in the player of `epoch`, whose value differs
-/// between `before` and `after` (each a set and the tracks muted in the song): two cell writes at
-/// most, which glide there in the engine. Never waits.
-pub(super) fn write_cells(info: &PlanInfo, epoch: u64, device: &Device, before: (&Overlays, &[String]), after: (&Overlays, &[String])) {
+/// The track keys of `rev`.
+pub fn tracks(rev: &m2_session::Revision) -> Vec<String> {
+    rev.compiled.ir.modules.iter().filter(|m| m.track).map(|m| m.key.clone()).collect()
+}
+
+/// Write the cells of the plan `info` describes, of a revision with `tracks`, in the player of
+/// `epoch`, whose value differs between `before` and `after` (each a set and the tracks muted in
+/// the song): two cell writes at most, which glide there in the engine. Never waits.
+pub(super) fn write_cells(
+    info: &PlanInfo,
+    epoch: u64,
+    device: &Device,
+    tracks: &[String],
+    before: (&Overlays, &[String]),
+    after: (&Overlays, &[String]),
+) {
     if epoch != device.epoch {
         return;
     }
     let sites = sites_of(info);
-    let (was, now) = (values(&sites, before.0, before.1), values(&sites, after.0, after.1));
+    let (was, now) = (values(&sites, before.0, before.1, tracks), values(&sites, after.0, after.1, tracks));
     for target in [0.0, 1.0] {
         let cells: Vec<CellId> =
             info.overlays.iter().zip(was.iter().zip(&now)).filter(|(_, (a, b))| a != b && **b == target).map(|(o, _)| o.2).collect();
@@ -122,7 +135,7 @@ pub(super) fn write_cells(info: &PlanInfo, epoch: u64, device: &Device, before: 
 
 /// [`write_cells`] into what plays.
 fn write_plays(plays: &PlaysView, device: &Device, before: &Overlays, after: &Overlays) {
-    write_cells(&plays.info, plays.epoch, device, (before, &plays.muted), (after, &plays.muted));
+    write_cells(&plays.info, plays.epoch, device, &plays.tracks, (before, &plays.muted), (after, &plays.muted));
 }
 
 /// The accepted revision as the overlay state reads it: its tracks, its sites, its tracks muted
@@ -139,7 +152,7 @@ impl Song {
     pub fn of(rev: &m2_session::Revision) -> Song {
         let c = &rev.compiled;
         Song {
-            tracks: c.ir.modules.iter().filter(|m| m.track).map(|m| m.key.clone()).collect(),
+            tracks: tracks(rev),
             sites: c.flat.overlays.iter().map(|s| (s.module.clone(), s.into.clone())).collect(),
             muted: c.flat.muted.clone(),
             feeds: m2_editor::mute::feeds(rev),
@@ -179,7 +192,7 @@ impl Monitor {
     /// and whether they are saved.
     pub(super) fn state(&self) -> Value {
         let s = &self.song;
-        let now = values(&s.sites, &self.set, &s.muted);
+        let now = values(&s.sites, &self.set, &s.muted, &s.tracks);
         let heard: serde_json::Map<String, Value> = s
             .tracks
             .iter()
@@ -210,7 +223,7 @@ impl Monitor {
     /// Whether any monitoring mute or solo changes what is heard (the export's `overlays.active`).
     pub(super) fn active(&self) -> bool {
         let s = &self.song;
-        values(&s.sites, &self.set, &s.muted) != values(&s.sites, &Overlays::default(), &s.muted)
+        values(&s.sites, &self.set, &s.muted, &s.tracks) != values(&s.sites, &Overlays::default(), &s.muted, &s.tracks)
     }
 
     /// Set to `set`: marked to be written.

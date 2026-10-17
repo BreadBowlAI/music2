@@ -685,3 +685,24 @@ declared.
 | `a_track_already_as_asked_is_left_alone` (`muted: false` asked off; a const that is true asked on; then both on, which writes only the first) | red: "its modules change as {}, not as declared" |
 
 **Checks:** tests of `m2-editor`, `m2-server`, `m2`; clippy on them.
+
+### S3. A solo of a track that is gone silences nothing
+
+**What was wrong:** MON-4 keeps the entries of a track that is gone, so it comes back as it was. But
+the path rule still counted its solo. A key with no sites reaches nothing, so every site went to 0:
+solo `lead`, comment it out in code, and the whole song went silent, even after a reopen. The
+export warning then came out with empty lists.
+
+**The fix:** the path rule counts only solos of the revision's tracks (`values(…, tracks)`). The
+entry stays in the set and the file. The state, the export's warning and every plan's values use
+the same rule: `PlaysView` gains `tracks`, the tracks of what plays.
+
+| Test | Red first? |
+|---|---|
+| `a_solo_of_a_track_that_is_gone_is_ignored` (alone, and beside one that is there) | red with the filter off |
+| `a_soloed_track_taken_out_of_the_code_silences_nothing` (the bass heard again, `heard` and the solo in the state, no export warning; put back, the kick is soloed again) | red with the filter off |
+
+**Checks:** tests of `m2-editor`, `m2-server`, `m2`; clippy on them.
+
+**Contract:** MON-4 (an entry of a track that is gone is ignored).
+
