@@ -285,6 +285,28 @@ await page.keyboard.type(songs);
 await page.click("[data-testid=settings-done]");
 check((await until(async () => !(await shown(page)), 3000)) && (await s.api("settings")).json?.songs === songs, "a full path typed, then Done: it is where new songs go, and Done closes the window");
 await s.api("settings", { songs: null });
+
+// While an export runs, the output and buffer lists are greyed and the window says why; once it
+// ends they come back, the window still open (R5). A song of 300 bars, so the export takes a while.
+const kickFile = `${song}/data/kick/hits.json`;
+const kickWas = fs.readFileSync(kickFile, "utf8");
+const long = JSON.parse(kickWas);
+long.clips.push({ id: "setfar01", start: 1196, length: 4, notes: [{ pitch: "C1", start: 0, length: 0.25, velocity: 0.8 }] });
+fs.writeFileSync(kickFile, JSON.stringify(long));
+await until(async () => ((await s.api("graph")).json?.timeline?.end ?? 0) >= 1200, 10000);
+const exported = await s.api("graph/export", {});
+await key(page, "Meta+Comma");
+await until(() => shown(page), 3000);
+const listsOff = () => page.$$eval("[data-testid=settings-output], [data-testid=settings-buffer]", (els) => els.map((e) => e.disabled));
+const waitSaid = async () => /Wait for the export to finish/.test((await text(page, DIALOG)) ?? "");
+const during = (await until(async () => (await listsOff()).every(Boolean) && (await waitSaid()), 3000)) && ((await s.api("settings")).json?.exporting === true);
+check(exported.status === 200 && during, `while an export runs, the output and buffer can't change, and the window says why (${exported.status}, ${JSON.stringify(await listsOff())})`);
+const ended = await until(async () => (await s.api("settings")).json?.exporting === false, 120000);
+const back = await until(async () => !(await listsOff()).some(Boolean) && !(await waitSaid()), 3000);
+check(ended && back && (await shown(page)), `once it ends, they can change again, the window still open: ${JSON.stringify(await listsOff())}`);
+await page.keyboard.press("Escape");
+fs.writeFileSync(kickFile, kickWas);
+await until(async () => ((await s.api("graph")).json?.timeline?.end ?? 0) < 1200, 10000);
 await mac.close();
 await s.stop();
 

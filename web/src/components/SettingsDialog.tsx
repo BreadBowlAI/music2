@@ -1,6 +1,7 @@
 import clsx from "clsx";
 import { Check, ChevronDown, CircleAlert, FolderOpen } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useExport } from "../lib/exporting";
 import { tilde } from "../lib/graph";
 import { useModalKeys } from "../lib/modal";
 import { native, nativeAction } from "../lib/native";
@@ -39,6 +40,20 @@ function Dialog({ onClose }: { onClose: () => void }) {
       .then(setS)
       .catch((e) => setError(message(e)));
   }, []);
+
+  // An export runs: as the page hears it, which follows its end, or as the server said when the
+  // window opened. Once the page hears it end, the settings are read again (R5).
+  const exportRuns = useExport((e) => e.progress !== null);
+  const ranBefore = useRef(exportRuns);
+  useEffect(() => {
+    const ended = ranBefore.current && !exportRuns;
+    ranBefore.current = exportRuns;
+    if (!ended) return;
+    settingsApi
+      .get()
+      .then((next) => setS((was) => (was ? { ...next, stopped: next.stopped || was.stopped } : was)))
+      .catch(() => {});
+  }, [exportRuns]);
 
   // While a menu is open, its keys come first: ↑ ↓ move, Return and Space pick, Esc closes the
   // menu only. Registered once, before the dialog's own keys (`useModalKeys`), which never see them.
@@ -137,7 +152,7 @@ function Dialog({ onClose }: { onClose: () => void }) {
   const range = device?.frames ?? null;
   const buffers = BUFFERS.filter((n) => !range || (n >= range[0] && n <= range[1]));
   const bufferLabel = (frames: number | null) => (frames === null ? "System default" : bufferWords(frames, rate));
-  const exporting = !!s?.exporting;
+  const exporting = exportRuns || !!s?.exporting;
 
   return (
     <div className="fixed inset-0 z-[70] grid place-items-center p-4 bg-fg-strong/20" onPointerDown={(e) => e.target === e.currentTarget && void done()}>
