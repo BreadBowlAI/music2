@@ -38,6 +38,9 @@ const bpmAt = (beat: number) => {
   return bpm;
 };
 
+/** Whether the song plays, as the last poll said: a drag then is heard as it goes (8b.7). */
+export const playingNow = () => clock.playing;
+
 /** Where playback is at this moment. */
 export function beatNow(): number {
   const c = clock;

@@ -663,3 +663,40 @@ fn with_sha_gives_each_clip_its_hash() {
     let odd = with_sha(serde_json::json!({"clips": [{}, {}]}), Some(&d));
     assert!(odd["clips"][0].get("sha").is_none());
 }
+
+// WRITE-22a, RENDER-26a (Q21): a lane lease previews with `apply_as` and commits with `edit_as`
+// under one Tx id, so a copy gets the same id in the preview and in the file, and that Tx id is
+// the commit's. Another Tx id mints another.
+#[test]
+fn edit_as_uses_the_ids_it_is_given() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let copy = Gesture::Move { clips: vec![by_id("kick/hits", "my53vvkc")], by: 64.0, to: None, copy: true };
+    let previewed = apply_as(s.accepted(), &copy, "tx-lease1").unwrap();
+    let [lane] = &previewed[..] else { panic!("{previewed:?}") };
+    let done = edit_as(&mut s, &copy, "tx-lease1").unwrap();
+    let want = ClipId::derive("tx-lease1", &addr("kick/hits"), 0);
+    assert_eq!(done.made, vec![(addr("kick/hits"), want.clone())]);
+    assert_eq!(lane.made, vec![want.clone()], "the preview's copy has the commit's id");
+    assert_eq!(Some(&lane.data), data(&s, "kick/hits").as_ref(), "the preview is what the commit wrote");
+    let other = apply_as(s.accepted(), &copy, "tx-lease2").unwrap();
+    assert_ne!(other[0].made, vec![want]);
+}
+
+// WRITE-22a: a lane lease pins each clip its gesture names to the hash it saw, so an outside
+// change to that clip refuses the gesture as changed; a hash the gesture carries is kept.
+#[test]
+fn pinned_gives_each_named_clip_its_hash() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let drag = Gesture::Move { clips: vec![by_id("kick/hits", "my53vvkc")], by: 4.0, to: None, copy: false };
+    let pin = pinned(s.accepted(), &drag).unwrap();
+    let Gesture::Move { clips, .. } = &pin else { panic!() };
+    assert_eq!(clips[0].sha.as_deref(), Some(sha_of(&s, "kick/hits", "my53vvkc").as_str()));
+    assert_eq!(pinned(s.accepted(), &pin).unwrap(), pin, "a hash it carries stays");
+    let outside = f.read("data/kick/hits.json").replacen("\"velocity\": 0.8", "\"velocity\": 0.5", 1);
+    f.write("data/kick/hits.json", &outside);
+    assert!(s.refresh());
+    assert!(matches!(apply_as(s.accepted(), &pin, "tx-x"), Err(EditError::Changed(_))));
+    assert!(apply_as(s.accepted(), &drag, "tx-x").is_ok(), "unpinned, the changed clip moves");
+}

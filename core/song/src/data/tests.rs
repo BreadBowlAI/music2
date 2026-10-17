@@ -679,3 +679,21 @@ fn the_paths_under_a_path_are_one_run() {
         assert_eq!(crate::under_set(&set, p).collect::<Vec<_>>(), want, "{}", p.display());
     }
 }
+
+// RENDER-27a: a tempo drag's data is the same lanes, each shared, in the new arrangement's tempo
+// map; the data it came from is as it was.
+#[test]
+fn with_arrangement_keeps_every_lane() {
+    let notes = LaneData::Notes(vec![]);
+    let control = LaneData::Control { unit: None, clips: vec![] };
+    let data = DataSet::with_lanes(Arrangement::default(), [(addr("bass", "notes"), notes), (addr("bass", "cutoff"), control)]);
+    let mut faster = Arrangement::default();
+    faster.tempo[0].bpm = 150.0;
+    let dragged = data.with_arrangement(Arc::new(faster.clone()));
+    assert_eq!(*dragged.arrangement, faster);
+    assert_eq!(dragged.tempo().bpm_at(0.0), 150.0);
+    assert_eq!(data.tempo().bpm_at(0.0), 120.0, "the data it came from keeps its tempo");
+    let both: Vec<_> = data.lanes().zip(dragged.lanes()).collect();
+    assert_eq!(both.len(), 2);
+    assert!(both.iter().all(|((a, x), (b, y))| a == b && Arc::ptr_eq(x, y)), "every lane shared");
+}

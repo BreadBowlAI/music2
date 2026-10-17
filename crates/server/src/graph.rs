@@ -55,6 +55,8 @@ mod fx;
 pub mod output;
 mod steps;
 pub mod midi;
+mod lanes;
+mod tempo_lease;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -78,6 +80,7 @@ use crate::files;
 use actor::{Actor, Job};
 use lease::{Aliases, Lease, Leases, PlaysView, Revs, State, TTL};
 pub use lease::{Begun, Committed, LeaseInfo, Owner};
+pub use tempo_lease::TempoCommitted;
 pub use watcher::WatchStats;
 
 /// When the last edit or seek reached the engine, for gate measurements (step 3a's design, §9.2):
@@ -218,6 +221,9 @@ struct EngineView {
     controls: Arc<HashMap<String, Control>>,
     /// None only while no player holds the project.
     plays: Option<PlaysView>,
+    /// The accepted revision: what lane leases apply their gestures on, never waiting for the
+    /// session (WRITE-22a, RENDER-29).
+    accepted: Arc<m2_session::Revision>,
 }
 
 /// What reads return: published by the actor's second phase.
@@ -314,6 +320,10 @@ struct ControlPlane {
     meters: meters::Meters,
     /// The MIDI keyboards plugged in, and what they play (8b.10).
     midi: midi::Midi,
+    /// Drags on clips heard while they last (WRITE-22a).
+    lanes: lanes::LaneLeases,
+    /// The tempo field's drag, heard while it lasts (RENDER-27a).
+    tempo: tempo_lease::TempoLeases,
 }
 
 /// How a control named at a revision is found without the session.
@@ -690,6 +700,8 @@ impl Inner {
             let l = cp.leases.end(0, why);
             self.notices.lock().extend(l.unsaved(why));
         }
+        lanes::end_all(cp);
+        tempo_lease::end_all(cp);
     }
 
     /// Register a lease on `control`, read in the published accepted revision, which the request
@@ -1186,7 +1198,9 @@ impl Graph {
                 None => i += 1,
             }
         }
+        lanes::expire(&mut cp, device.as_ref(), now);
         drop(cp);
+        self.tempo_expire(now);
         if let Some(s) = self.inner.saving.lock().as_mut() {
             let playing = device.as_ref().is_some_and(|d| d.player.status().playing);
             s.played |= playing;
@@ -1220,6 +1234,9 @@ impl Graph {
                 i += 1;
             }
         }
+        lanes::gone(&mut cp, client, device.as_ref());
+        drop(cp);
+        self.tempo_gone(client);
     }
 
     /// The gestures in progress.

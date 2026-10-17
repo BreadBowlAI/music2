@@ -53,6 +53,7 @@ import {
 } from "../lib/clips";
 import { clean, gridOp, gridTarget, pickName, skipsSnap, snapSong, stepOf, useGrid, type Grid as GridSetting } from "../lib/grid";
 import { added, bounded, hit, line, moved, painted, pickedIn as pointIn, usePoints, type Point } from "../lib/points";
+import { begin as leaseDrag, type LaneLease } from "../lib/laneLease";
 import { laneScale, type LaneScale } from "../lib/laneScale";
 import { hide as hideLane, useAllHidden, useHidden } from "../lib/hiddenLanes";
 import { HIDDEN_ROW_H, HiddenRow } from "./HiddenLanes";
@@ -568,24 +569,36 @@ export default function SongTimeline({
       // A gesture names clips as the timeline draws them, so it waits until it shows the last edit.
       return graph && !busy(graph) && !latest.current.locked ? graph : null;
     };
-    /** A dropped drag: one gesture. Drawn where it went until the timeline shows it; refused, it goes back. */
-    const drop = (d: Drag) => {
-      const graph = ready();
+    /**
+     * What a drag writes when let go, and its undo step's name: null when it changes nothing, or
+     * names a clip the timeline doesn't draw now. Over a lane that can't take the clips, the clips
+     * where they were (letting go there writes nothing).
+     */
+    const gestureOf = (d: Drag): { gesture: Gesture; step: string } | null => {
       const refs = d.clips.flatMap((c) => serverRef(c.lane, c.ref) ?? []);
-      if (!graph || refs.length !== d.clips.length) return setDrag(null);
+      if (refs.length !== d.clips.length) return null;
       const first = d.clips[0].ref;
-      let gesture: Gesture, step: string;
-      if (d.kind === "move") {
-        if (d.by === 0 && !d.to && !d.copy) return setDrag(null);
-        gesture = { op: "move", clips: refs, by: d.by, ...(d.to ? { to: d.to } : {}), ...(d.copy ? { copy: true } : {}) };
-        const onto = d.to && d.to.module !== first.module ? ` to ${named(d.to.module)}` : "";
-        step = `${d.copy ? "copying" : "moving"} ${clipsWord(d.clips.map((c) => c.ref))}${onto}`;
-      } else {
-        gesture = { op: "resize", clip: refs[0], start: d.start, length: d.length };
-        step = `resizing ${clipsWord([first])}`;
+      if (d.kind !== "move") return { gesture: { op: "resize", clip: refs[0], start: d.start, length: d.length }, step: `resizing ${clipsWord([first])}` };
+      const [by, to, copy] = d.refused ? [0, null, false] : [d.by, d.to, d.copy];
+      if (by === 0 && !to && !copy) return { gesture: { op: "move", clips: refs, by: 0 }, step: "" };
+      const onto = to && to.module !== first.module ? ` to ${named(to.module)}` : "";
+      const gesture: Gesture = { op: "move", clips: refs, by, ...(to ? { to } : {}), ...(copy ? { copy: true } : {}) };
+      return { gesture, step: `${copy ? "copying" : "moving"} ${clipsWord(d.clips.map((c) => c.ref))}${onto}` };
+    };
+    /**
+     * A dropped drag: one gesture, through its lease when one lives (heard as it went, 8b.7). Drawn
+     * where it went until the timeline shows it; refused, it goes back.
+     */
+    const drop = (d: Drag, lease: LaneLease | null) => {
+      const graph = ready();
+      const made = gestureOf(d);
+      if (!graph || !made || !made.step) {
+        lease?.abort();
+        return setDrag(null);
       }
+      const { gesture, step } = made;
       setDrag({ ...d, landed: Infinity });
-      send(graph, gesture, { name: step }).then(
+      (lease ? lease.finish(gesture, { name: step }) : send(graph, gesture, { name: step })).then(
         (done) => {
           setDrag((now) => (now?.landed === Infinity ? { ...now, landed: done.revision } : now));
           // Copies and clips moved to another lane are new there: they are the selection now.
@@ -722,10 +735,11 @@ export default function SongTimeline({
       window.addEventListener("pointerup", end);
       window.addEventListener("pointercancel", end);
     };
-    /** An automation clip's new points: one gesture, drawn as sent until the timeline shows it. */
-    const sendPoints = (graph: GraphState, clip: ClipRef, server: ServerRef, points: Point[], step: string) => {
+    /** An automation clip's new points: one gesture (through the drag's lease when one lives), drawn as sent until the timeline shows it. */
+    const sendPoints = (graph: GraphState, clip: ClipRef, server: ServerRef, points: Point[], step: string, lease: LaneLease | null = null) => {
       usePoints.setState({ editing: { clip, points, landed: Infinity } });
-      send(graph, { op: "points", clip: server, points }, { name: step }).then(
+      const gesture: Gesture = { op: "points", clip: server, points };
+      (lease ? lease.finish(gesture, { name: step }) : send(graph, gesture, { name: step })).then(
         (done) => usePoints.setState((s) => (s.editing?.clip === clip ? { editing: { ...s.editing, landed: done.revision } } : s)),
         (error) => {
           usePoints.setState((s) => (s.editing?.clip === clip ? { editing: null } : s));
@@ -764,6 +778,18 @@ export default function SongTimeline({
       let index = on ?? -1;
       let step = `moving a ${title} point`;
       let changed = false;
+      // While the song plays, the points are heard as they are drawn (8b.7): a lease from the first change.
+      let lease: LaneLease | null = null;
+      let begun = false;
+      const heard = () => {
+        const gesture: Gesture = { op: "points", clip: server, points };
+        if (begun) return lease?.update(gesture);
+        begun = true;
+        lease = leaseDrag(graph, gesture, (why) => {
+          toast(why);
+          cancel();
+        });
+      };
       // Draw mode: the value painted on each line of the grid, filled in between moves.
       const cells = new Map<number, number>();
       let last: Point | null = null;
@@ -784,6 +810,7 @@ export default function SongTimeline({
         changed = true;
         usePoints.setState({ editing: { clip: ref, points } });
         say(ev, p);
+        heard();
       };
       if (draw) {
         step = `drawing ${title} automation`;
@@ -795,6 +822,7 @@ export default function SongTimeline({
         step = `adding a ${title} point`;
         changed = true;
         usePoints.setState({ editing: { clip: ref, points } });
+        heard();
       }
       if (index >= 0) usePoints.setState({ picked: { clip: ref, index, at: points[index] } });
       let moving = false;
@@ -808,18 +836,38 @@ export default function SongTimeline({
         changed = true;
         usePoints.setState({ editing: { clip: ref, points } });
         say(ev, points[index]);
+        heard();
+      };
+      const off = () => {
+        for (const [type, f] of listeners) el.removeEventListener(type, f as EventListener);
+        window.removeEventListener("keydown", esc, true);
+        setBubble(null);
+      };
+      /** Put the points back as they were: nothing is written, and the lease's preview ends. */
+      const cancel = () => {
+        off();
+        lease?.abort();
+        usePoints.setState({ editing: null });
+        if (el.hasPointerCapture(pointer)) el.releasePointerCapture(pointer);
       };
       const end = (ev: PointerEvent) => {
         if (ev.pointerId !== pointer) return;
-        for (const [type, f] of listeners) el.removeEventListener(type, f as EventListener);
-        setBubble(null);
-        if (ev.type !== "pointerup" || !changed) return usePoints.setState({ editing: null });
+        if (ev.type !== "pointerup" || !changed) return cancel();
+        off();
         // The point picked is where it was let go.
         if (index >= 0 && !draw) usePoints.setState({ picked: { clip: ref, index, at: points[index] } });
-        sendPoints(graph, ref, server, points, step);
+        sendPoints(graph, ref, server, points, step, lease);
+      };
+      // Esc during the drag puts it back, and is the drag's alone (not the page's deselect).
+      const esc = (ev: KeyboardEvent) => {
+        if (ev.key !== "Escape") return;
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
+        cancel();
       };
       const listeners = [["pointermove", move], ["pointerup", end], ["pointercancel", end], ["lostpointercapture", end]] as const;
       for (const [type, f] of listeners) el.addEventListener(type, f as EventListener);
+      window.addEventListener("keydown", esc, true);
     };
     return {
       down(ref, e) {
@@ -869,9 +917,12 @@ export default function SongTimeline({
         el.setPointerCapture(pointer);
         let moved = false;
         let now: Drag | null = null;
+        // While the song plays, the drag is heard where it is (8b.7): a lease from the threshold on.
+        let lease: LaneLease | null = null;
         const move = (ev: PointerEvent) => {
           if (ev.pointerId !== pointer || latest.current.locked) return;
           if (!moved && Math.abs(ev.clientX - x0) < 4 && Math.abs(ev.clientY - y0) < 4) return;
+          const first = !moved;
           moved = true;
           const meter = latest.current.timeline.meter;
           const free = skipsSnap(ev);
@@ -900,10 +951,29 @@ export default function SongTimeline({
             now = { ...base, kind: "move", by, to, copy: ev.altKey, refused, text: refused ?? `${position(meter, c.start + by)}${where}`, guide: c.start + by };
           }
           setDrag(now);
+          const heard = gestureOf(now);
+          const graph = heard && first ? ready() : null;
+          if (graph && heard) {
+            lease = leaseDrag(graph, heard.gesture, (why) => {
+              toast(why);
+              cancel();
+            });
+          } else if (heard) lease?.update(heard.gesture);
+        };
+        const off = () => {
+          for (const [type, f] of listeners) el.removeEventListener(type, f as EventListener);
+          window.removeEventListener("keydown", esc, true);
+        };
+        /** The drag put back: nothing is written, and its lease's preview ends. */
+        const cancel = () => {
+          off();
+          lease?.abort();
+          setDrag(null);
+          if (el.hasPointerCapture(pointer)) el.releasePointerCapture(pointer);
         };
         const end = (ev: PointerEvent) => {
           if (ev.pointerId !== pointer) return;
-          for (const [type, f] of listeners) el.removeEventListener(type, f as EventListener);
+          off();
           if (!moved) {
             // A click: the selection's rules.
             if (ev.type === "pointerup" && toggle) useClipSelection.getState().toggle(ref);
@@ -911,11 +981,19 @@ export default function SongTimeline({
             return;
           }
           // Let go over a lane that can't take the clips, or the drag cancelled: nothing happens.
-          if (ev.type !== "pointerup" || !now || now.refused) return setDrag(null);
-          drop(now);
+          if (ev.type !== "pointerup" || !now || now.refused) return cancel();
+          drop(now, lease);
+        };
+        // Esc during the drag puts it back, and is the drag's alone (not the page's deselect).
+        const esc = (ev: KeyboardEvent) => {
+          if (ev.key !== "Escape" || !moved) return;
+          ev.preventDefault();
+          ev.stopImmediatePropagation();
+          cancel();
         };
         const listeners = [["pointermove", move], ["pointerup", end], ["pointercancel", end], ["lostpointercapture", end]] as const;
         for (const [type, f] of listeners) el.addEventListener(type, f as EventListener);
+        window.addEventListener("keydown", esc, true);
       },
       create(module, key, beat) {
         const lane = findLane(latest.current.timeline, module, key);

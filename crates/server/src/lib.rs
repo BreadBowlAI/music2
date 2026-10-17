@@ -18,6 +18,7 @@ mod routes_view;
 mod routes_fx;
 mod routes_settings;
 pub mod settings;
+mod routes_leases;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};

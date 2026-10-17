@@ -186,6 +186,9 @@ pub(crate) struct Plays {
     /// Which cells hold each value of the revision it plays: what gesture updates and committed
     /// values are written to (RENDER-22, RENDER-23).
     cells: Arc<CellMap>,
+    /// The arrangement a tempo drag plays in place of the accepted one's (RENDER-27a): None when
+    /// it plays the accepted arrangement. While set, every change is an activation.
+    pub(super) tempo: Option<Arc<m2_song::Arrangement>>,
 }
 
 /// Whether two checked graphs number their cells alike (the same constants at the same places),
@@ -434,9 +437,10 @@ pub(super) fn unbuilt(e: &anyhow::Error) -> String {
 /// which then keeps only what this one uses (the plan it replaces holds its own until it is
 /// retired). Against `basis` it keeps every instance that continues; the rest are created,
 /// reporting to `owner`, on the plugin main thread while the old plan plays (RENDER-25).
-fn build(session: &Session, audio: &mut audio::Cache, owner: &m2_plugins::Owner, basis: Basis) -> Result<Renderer> {
+fn build(session: &Session, audio: &mut audio::Cache, owner: &m2_plugins::Owner, basis: Basis, data: Option<&m2_song::DataSet>) -> Result<Renderer> {
     let rev = session.accepted();
-    let (flat, data, rate) = (&rev.compiled.flat, &rev.compiled.data, rev.project.sample_rate());
+    // A tempo drag's arrangement in place of the accepted one (RENDER-27a).
+    let (flat, data, rate) = (&rev.compiled.flat, data.unwrap_or(&rev.compiled.data), rev.project.sample_rate());
     let r = Renderer::prepare(flat, data, &session.packages, rate, audio, owner, basis)?;
     audio.prune();
     Ok(r)
@@ -467,6 +471,7 @@ impl Open {
             cells: info.cell_map.clone(),
             info,
             controls: self.controls.clone(),
+            tempo: None,
         }
     }
 
@@ -522,11 +527,17 @@ impl Open {
 
     /// How the accepted revision reaches `device`'s engine, its plan prepared if it needs one, and
     /// what preparing it took.
-    fn way(&mut self, device: &Device, owner: &m2_plugins::Owner, fail: bool) -> (Way, Prepared) {
+    fn way(&mut self, device: &Device, owner: &m2_plugins::Owner, fail: bool, tempo: Option<&Arc<m2_song::Arrangement>>) -> (Way, Prepared) {
         let rev = self.session.accepted();
         let (number, rate) = (rev.number, rev.project.sample_rate());
         let refused = self.refused(device);
-        if self.loaded(device) && self.playing == Some(number) && self.restarts.is_empty() && !refused {
+        // What a tempo drag plays (RENDER-27a), as what plays has it.
+        let same_tempo = self.plays.as_ref().is_some_and(|p| match (&p.tempo, tempo) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b) || a == b,
+            _ => false,
+        });
+        if self.loaded(device) && self.playing == Some(number) && self.restarts.is_empty() && !refused && same_tempo {
             return (Way::Same, Prepared::default());
         }
         // Opened with code that doesn't compile (WRITE-20): silent until it does, then loaded.
@@ -543,6 +554,8 @@ impl Open {
             Some(p) if p.rate != rate || refused => Kind::Replace,
             // A restart replaces instances: an activation, though nothing else changed.
             Some(_) if !self.restarts.is_empty() => Kind::Activate,
+            // A tempo drag plays, or ends: only a plan carries a tempo map (RENDER-27a).
+            Some(p) if p.tempo.is_some() || tempo.is_some() => Kind::Activate,
             Some(p) => self.reach(p).map_or(Kind::Activate, |r| Kind::Reach(p.generation, r)),
             None => Kind::Load,
         };
@@ -559,6 +572,9 @@ impl Open {
         let mut prepared = Prepared::default();
         let t = std::time::Instant::now();
         let accepted = session.accepted();
+        // A tempo drag's data, and what plays' own when it plays one (RENDER-27a): lanes shared.
+        let leased = tempo.map(|a| accepted.compiled.data.with_arrangement(a.clone()));
+        let played = plays.as_ref().and_then(|p| Some(p.revision.compiled.data.with_arrangement(p.tempo.clone()?)));
         let keep = match (&kind, plays.as_ref()) {
             (Kind::Activate, Some(p)) => {
                 let cont = continuing(&p.revision, accepted);
@@ -569,18 +585,20 @@ impl Open {
         };
         let basis = match &keep {
             Some((p, cont)) => {
-                Basis::Keep(Keep { old: &p.revision.compiled.flat, old_data: &p.revision.compiled.data, info: &p.info, cont, restarts })
+                let old_data = played.as_ref().unwrap_or(&p.revision.compiled.data);
+                Basis::Keep(Keep { old: &p.revision.compiled.flat, old_data, info: &p.info, cont, restarts })
             }
             None => Basis::Fresh,
         };
-        let built = if fail { Err(anyhow!("the renderer failed to build (a test)")) } else { build(session, audio, owner, basis) };
+        let built = if fail { Err(anyhow!("the renderer failed to build (a test)")) } else { build(session, audio, owner, basis, leased.as_ref()) };
         prepared.prepare_ns = t.elapsed().as_nanos() as u64 - prepared.continues_ns;
         let r = match built {
             Ok(r) => Box::new(r),
             Err(e) => return (Way::Unbuilt(e), prepared),
         };
         prepared.fresh = r.stats().fresh;
-        let plays = self.describe(&r, device);
+        let mut plays = self.describe(&r, device);
+        plays.tempo = tempo.cloned();
         let way = match kind {
             Kind::Activate => Way::Activate(r, plays),
             Kind::Replace => Way::Replace(r, plays),
@@ -744,6 +762,12 @@ impl Actor {
     /// publish it, in two phases (see the module). `install` is a value commit the engine must
     /// hear as its gesture ends.
     fn settle(&mut self, install: Option<Install>) -> Settled {
+        self.settle_as(install, true)
+    }
+
+    /// [`Actor::settle`]; with `view` false (a tempo drag's preview) the view isn't published
+    /// again while it shows the accepted revision: only what plays changed.
+    fn settle_as(&mut self, install: Option<Install>, view: bool) -> Settled {
         let inner = self.inner.clone();
         #[cfg(test)]
         let fail = self.fail_builds;
@@ -768,10 +792,15 @@ impl Actor {
             p.controls = o.controls.clone();
         }
 
+        // A tempo drag (RENDER-27a): the arrangement it plays and its value, unless a lane plays
+        // audio (Q23's fallback: heard on release).
+        let audio = o.plays.as_ref().is_some_and(|p| p.info.lanes.iter().any(|l| matches!(l.lane.kind, Kind::Audio(_))));
+        let leased = super::tempo_lease::wanted(&mut inner.control.lock(), token, o.session.accepted(), audio);
+
         // Prepared off every lock: the swaps, or the renderer built.
         let device = inner.device();
         let (mut way, prepared) = match &device {
-            Ok(d) => o.way(d, &inner.owner, fail),
+            Ok(d) => o.way(d, &inner.owner, fail, leased.as_ref().map(|l| &l.0)),
             Err(e) => (Way::Failed(anyhow!("{e:#}")), Prepared::default()),
         };
         o.prepared = prepared;
@@ -933,7 +962,9 @@ impl Actor {
                 o.playing = Some(number);
                 let rev = o.session.accepted();
                 if let Some(t) = inner.timing.lock().as_mut() {
-                    (t.tempo, t.rate) = (rev.tempo(), rev.project.sample_rate());
+                    // A tempo drag's map while it plays (RENDER-27a).
+                    let tempo = o.plays.as_ref().and_then(|p| p.tempo.as_ref()).map_or_else(|| rev.tempo(), |a| a.tempo_map());
+                    (t.tempo, t.rate) = (tempo, rev.project.sample_rate());
                 }
             }
             Err(e) => eprintln!("music2: couldn't play the accepted revision: {e:#}"),
@@ -1007,7 +1038,15 @@ impl Actor {
         }
         if let Some(p) = cp.open.as_mut().filter(|p| p.engine.token == token) {
             p.revs.push(number, o.code_rev);
-            p.engine = Arc::new(EngineView { token, revision: number, code_rev: o.code_rev, controls: o.controls.clone(), plays });
+            let accepted = o.session.accepted_arc();
+            p.engine = Arc::new(EngineView { token, revision: number, code_rev: o.code_rev, controls: o.controls.clone(), plays, accepted });
+        }
+        // Lane leases (WRITE-22a): a new plan, or new data for a lane a drag plays, hears the drag
+        // again, after this settle's own sends; a change to a dragged clip ends it.
+        super::lanes::settled(&mut cp, token, dev);
+        // A tempo drag's value is heard from this plan on (RENDER-27a).
+        if let (true, Some((_, bpm))) = (renderer, &leased) {
+            super::tempo_lease::heard(&mut cp, token, *bpm);
         }
         drop(cp);
         let sent_ns = inner.now_ns();
@@ -1016,7 +1055,12 @@ impl Actor {
             f(&inner);
         }
 
-        // Phase 2, off the lock: the view, the news, and on a code change the aliases.
+        // Phase 2, off the lock: the view, the news, and on a code change the aliases. A tempo
+        // drag's preview leaves the view as it is, when it shows the accepted revision.
+        let current = inner.control.lock().open.as_ref().is_some_and(|p| p.engine.token == token && p.shown.revision == number);
+        if !view && current && !code_changed {
+            return Settled { changed: matches!(sent, Ok(Sent::Reached(_) | Sent::Renderer)), sent_ns, published_ns: inner.now_ns() };
+        }
         let shown = Arc::new(o.shown());
         let aliases = code_changed.then(|| Arc::new(o.aliases()));
         let mut cp = inner.control.lock();
@@ -1089,7 +1133,7 @@ impl Actor {
         let monitor = super::overlay::Monitor::open(&accepted.project.dir, o.session.access().refusal().is_none(), accepted);
         let built = match o.session.accepted().has_code() {
             true => {
-                let mut r = build(&o.session, &mut o.audio, &self.inner.owner, Basis::Fresh)?;
+                let mut r = build(&o.session, &mut o.audio, &self.inner.owner, Basis::Fresh, None)?;
                 r.set_overlays(&super::overlay::plan_values(&r.info(), &monitor.set, o.session.accepted()));
                 let plays = o.describe(&r, &device);
                 Some((r, plays))
@@ -1102,7 +1146,8 @@ impl Actor {
             let mut cp = self.inner.control.lock();
             self.inner.end_all(&mut cp);
             if let Some(p) = cp.open.as_mut() {
-                p.engine = Arc::new(EngineView { plays: None, controls: p.engine.controls.clone(), ..*p.engine });
+                let (controls, accepted) = (p.engine.controls.clone(), p.engine.accepted.clone());
+                p.engine = Arc::new(EngineView { plays: None, controls, accepted, ..*p.engine });
             }
         }
         let view = match built {
@@ -1134,7 +1179,7 @@ impl Actor {
             self.inner.end_all(&mut cp);
             let mut revs = Revs::default();
             revs.push(number, code_rev);
-            let engine = Arc::new(EngineView { token, revision: number, code_rev, controls, plays: view });
+            let engine = Arc::new(EngineView { token, revision: number, code_rev, controls, plays: view, accepted: o.session.accepted_arc() });
             let aliases = Arc::new(super::Aliases { to: code_rev, ids: HashMap::new() });
             let local = super::view_file::local(&shown.dir);
             // The metronome as this song had it here: off for one that never had it on.
@@ -1317,6 +1362,15 @@ impl Actor {
         let Some(o) = self.open.as_mut().filter(|o| o.token == token) else { return };
         o.exporting = false;
         self.settle(None);
+    }
+
+    /// A tempo drag's job (RENDER-27a, Q22): play its newest value, or the accepted arrangement
+    /// once it ended, as an identity activation prepared against the plan sent last, where the
+    /// engine is. The view stays as it is.
+    pub(super) fn tempo_preview(&mut self, token: u64) {
+        if self.open.as_ref().is_some_and(|o| o.token == token) {
+            self.settle_as(None, false);
+        }
     }
 
     /// A gesture named at a revision the control plane no longer knows: the session carries it.

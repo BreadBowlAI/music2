@@ -97,8 +97,9 @@ fn interrupted(s: &Session) -> usize {
 /// What plays, lent to the hook for the edit about to run. Only `Arc`s are copied: the actor's
 /// record stays, so nothing is lost when the edit panics.
 pub(super) fn lend(o: &Open) -> (Arc<Mutex<Lent>>, usize) {
-    let view =
-        o.plays.as_ref().map(|p| View { epoch: p.epoch, generation: p.generation, revision: p.revision.clone(), info: p.info.clone() });
+    // Not while a tempo drag plays another tempo map than the candidate's (RENDER-27a).
+    let plays = o.plays.as_ref().filter(|p| p.tempo.is_none());
+    let view = plays.map(|p| View { epoch: p.epoch, generation: p.generation, revision: p.revision.clone(), info: p.info.clone() });
     (Arc::new(Mutex::new(Lent { view, sent: None, broken: false })), interrupted(&o.session))
 }
 

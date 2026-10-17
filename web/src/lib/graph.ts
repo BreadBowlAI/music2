@@ -801,6 +801,22 @@ export function writeLane(graph: GraphState, module: string, lane: string, clips
   return write;
 }
 
+/**
+ * Run `f` (a write of a notes lane by another route: a drag's lease, 8b.7) after the lane writes on
+ * their way, in their queue, counted as one of them: it never races a roll write still on its way.
+ */
+export function afterLaneWrites<T>(graph: GraphState, f: () => Promise<T & { revision: number }>): Promise<T & { revision: number }> {
+  if (lanes.session !== graph.session) lanes = { session: graph.session, revision: 0, pending: 0, queue: Promise.resolve() };
+  const q = lanes;
+  q.pending++;
+  const write = q.queue
+    .then(f)
+    .then((r) => ((q.revision = Math.max(q.revision, r.revision)), r))
+    .finally(() => q.pending--);
+  q.queue = write.catch(() => {});
+  return write;
+}
+
 /** Whether a lane write is on its way, or made a revision `graph` doesn't show yet. */
 export const laneWriting = (graph: GraphState) => lanes.session === graph.session && (lanes.pending > 0 || graph.view.revision < lanes.revision);
 
