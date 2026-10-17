@@ -166,9 +166,14 @@ export const useShell = create<Shell>((set, get) => ({
   resetSelection: () => set({ selected: null, module: null, auto: true, clips: {}, open: new Set(), renaming: null }),
 }));
 
+/** What ⌘1 to ⌘4 (View ▸ the grid rows) do to the grid of the view last used. */
+export type GridOp = "narrower" | "wider" | "triplet" | "snap";
+
 /**
  * What the open song's canvas does for a command it alone can: the transport (it knows where
- * playback is and refreshes it), the loop and the song bar's name field.
+ * playback is and refreshes it), the loop and the song bar's name field. The keys and the menu
+ * rows of mute and solo, the grid and the clips come here too; each is filled by the view that
+ * does it, and does nothing until then.
  */
 export const canvas: {
   loop?: () => void;
@@ -177,4 +182,18 @@ export const canvas: {
   continue?: () => void;
   home?: () => void;
   renameSong?: () => void;
+  /** M, Track ▸ Mute (⌃M on a Mac): mute or unmute track `module` while listening. */
+  mute?: (module: string) => void;
+  /** S, Track ▸ Solo (⌃S on a Mac). */
+  solo?: (module: string) => void;
+  /** Track ▸ Mute in Song: one undo step. */
+  muteInSong?: (module: string) => void;
+  grid?: (op: GridOp) => void;
+  /** ⌘E, ⌘J, Edit ▸ Quantize: on the selected clips. */
+  split?: () => void;
+  join?: () => void;
+  quantize?: () => void;
+  /** Whether ⌘C, ⌘X and ⌘V are the timeline's now (clips are selected), not the page's. */
+  takesClipboard?: () => boolean;
+  clipboard?: (op: "copy" | "cut" | "paste") => void;
 } = {};

@@ -30,7 +30,7 @@ adds its own section here, in the same commit.
 | Commit | What |
 |---|---|
 | `44091ab` | The merge (`rerere` on, so 8b-backend can replay these resolutions when it lands). `core/play/src/lib.rs`: taste's play and stop count beside 8b's live notes and running flag. `docs/architecture.md`: RENDER-29 keeps taste's words and adds 8b.6's sentence; both sides' bullets kept. `docs/gaps.md` #8: Stop All Sound works (taste), audition's back end is built (8b). |
-| this commit | `forget_overlays` wired in (refresh.md Q7), with its test and these notes |
+| `aa572bc` | `forget_overlays` wired in (refresh.md Q7), with its test and these notes |
 
 ### The `forget_overlays` wiring
 
@@ -62,3 +62,90 @@ wanted (`~/m2-runs/logs/ui-forget-red-*.log`). With the wiring it passes.
 - A track renamed by key keeps its mute (8b-backend's `rekey`). Nothing to wire.
 - The CLI's `m2 add-track` and `m2 delete-track` open their own session: they leave `overlays.json` as
   it was. The app's next add or delete of that key cleans it.
+
+## U0: the seams
+
+**In short**
+- Nothing new to see, but one thing moved: the roll's grid and snap control now comes from a shared
+  file. The timeline gets the same control in U4.
+- The empty places the lanes fill are ready: M and S, the meter, the mutes pill.
+- The new keys, chords and menu rows are in. Each does nothing until its lane fills it.
+- A muted track already looks muted: its name and clips follow the server's state.
+- One change you may spot: a long track name is cut at x = 168, not 204. That leaves room for M, S
+  and the meter. The ⋯ now shows just left of M.
+- Checks: the web build, nine browser suites with their counts unchanged, the menu test, and a probe
+  of the muted looks.
+
+### What changed
+
+| File | What |
+|---|---|
+| `web/src/lib/events.ts` | The socket can send: `send(msg)` (false when it isn't open; nothing is kept). Listeners by message type: `on(type, fn)`. Listeners of `CLOSED` hear the socket close |
+| `web/src/App.tsx` | Toasts, `graph` and `export` come through `on`, as before |
+| `web/src/lib/graph8b.ts` (new) | The 8b types, added to `graph.ts`'s by `declare module`: `OverlayState`, `GraphState.overlays`; `live`, `load`, `late`, `xruns`, `device_errors` on the status; `sha` on clips; the audition and meters messages. `useHeard(module)` reads the state: "heard", "muted", "muted-in-song" or "silenced" |
+| `web/src/components/TrackHeader.tsx` (new) | The header's content, moved from `SongTimeline.tsx`: the fold chevron, the name, the issue mark, the ⋯. Plus the M and S slot and the meter slot (below). The name's look follows `useHeard` |
+| `web/src/components/SongTimeline.tsx` | Uses `TrackHeader`. A muted or silenced track's clips draw at 40% and grey (`grayscale(0.6)`); muted in the song, they are hatched too (`Hatch`, an SVG pattern). The timeline is marked `data-grid-view="song"` |
+| `web/src/lib/grid.ts` (new) | The grid, moved out of the roll: `GRIDS`, each view's grid and snap (`song`, `notes`), kept in `localStorage` under the roll's old keys (`m2.notes.*`) and new ones (`m2.song.*`), and which view ⌘1 to ⌘4 act on (`followGridView`: the last one pressed or focused in) |
+| `web/src/components/GridChip.tsx` (new) | The grid menu and the snap button, moved out of the roll. Test ids `grid` and `snap` in the roll, `song-grid` and `song-snap` on the timeline (U4) |
+| `web/src/components/NoteView.tsx` | Uses `GridChip view="notes"` and the store. Marked `data-grid-view="notes"`. Nothing changes on screen |
+| `web/src/components/TopBar.tsx` | The mutes pill's mount, just right of the status pill |
+| `MuteSolo.tsx`, `TrackMeter.tsx`, `OverlayPill.tsx` (new) | Empty mounts: each renders nothing until its lane fills it |
+| `web/src/lib/shell.ts` | New `canvas` hooks (below) |
+| `web/src/lib/native.ts` | `control(key)`: "⌃M" on a Mac, "" elsewhere |
+| `web/src/components/CodeView.tsx` | In the code editor, ⌘E and ⌘J stay the editor's (find with the selection, join lines) |
+| `apps/music2-desktop/src/menu.rs` | Track: Mute (⌃M, Mac only), Solo (⌃S, Mac only), Mute in Song. View: Narrower Grid ⌘1, Wider Grid ⌘2, Triplet Grid ⌘3, Snap to Grid ⌘4. The tests pass as they were |
+| `crates/server/examples/headless.rs` | `M2_WEB=<folder>` serves that folder's page: one server build serves any lane's `web/dist` |
+
+### Where the header's parts sit
+
+Counted from inside the header's 1 px right border, so at 240 px they land where taste.md §3.4 says.
+Measured by the probe:
+
+| Part | At 240 px | At 200 px (a window under 1280 px) |
+|---|---|---|
+| Name | x = 28 to 168 (to 152 while the ⋯ shows) | x = 28 to 128 |
+| ⋯ (on hover) | x = 156, 20 px | x = 116 |
+| M and S slot | x = 180 to 222 (M 180, S 202, 20 px each) | x = 140 to 182 |
+| Meter slot | x = 231, 3 × 28 px | x = 191 |
+| Song row | the name to x = 219, the meter slot at 231; no M or S | the meter at 191 |
+
+### For the lanes: what to fill
+
+| Lane | Fill | How it is reached |
+|---|---|---|
+| A (U1, U2) | `MuteSolo.tsx` (`{module, name}`) | its slot in every track header |
+| A (U1) | `OverlayPill.tsx` (`{graph}`) | the top bar, after the status pill |
+| A (U1, U2) | `canvas.mute`, `canvas.solo`, `canvas.muteInSong` (each gets the track's key) | the M and S keys; Track ▸ Mute, Solo, Mute in Song; ⌃M and ⌃S on a Mac page. Only for a selected track, never the Song row |
+| B (U4) | `canvas.grid(op)`, op `"narrower"`, `"wider"`, `"triplet"` or `"snap"`; act on `useGrid.getState().last` | ⌘1 to ⌘4; View's grid rows |
+| B (U4) | `<GridChip view="song" />` in the timeline's corner | — |
+| B (U6) | `canvas.split`, `canvas.join` | ⌘E, ⌘J (Edit rows come in U6). In the code editor they stay its own |
+| B (U6) | `canvas.quantize` | `appCommand("quantize")` (the Edit row comes in U6; Q is the timeline's own key) |
+| B (U6) | `canvas.takesClipboard()` and `canvas.clipboard(op)` | in a browser, ⌘C ⌘X ⌘V go to `clipboard` only while `takesClipboard()` says so and no field has focus. In the app, U6's `beforecopy` handlers |
+| C (U10) | `TrackMeter.tsx` (`{module, name}`; `module` is `song` on the Song row: the master) | its slot in every track header and the Song row |
+| C (U9, U10) | `on("audition", …)`, `on("meters", …)`, `on(CLOSED, …)`, `send({t: "audition", …})` | `web/src/lib/events.ts` |
+
+Every lane: `useHeard(module)` is real now, and the types are in `graph8b.ts`.
+
+### Checks
+
+| Check | Result |
+|---|---|
+| `cd web && npm run build` (type-checks) | ok |
+| `taste` (the lint) | 39 of 39 |
+| `pc-keys`, `s8-tracks`, `layout`, `views` | 37, 75, 39, 30: all pass |
+| `notes`, `fixes-notes`, `gestures`, `s4-clips` | 52, 37, 30, 28: all pass |
+| `cargo test --locked -p music2-desktop` | 7 passed (the menu tests unchanged) |
+| A probe, not a suite (first-song with `overlays.json` = Kick muted, Bass soloed, and Hats muted in the song by `m2 mute-in-song`), served with `M2_WEB` | Kick's name `fg-muted`, its clips 0.4 and `grayscale(0.6)`. Hats struck through and hatched. Keys `fg-faint` (silenced by the Bass solo). Bass and the Song row as before. The slots where the table above says, at 1440 and 1100 px. No page errors |
+| Logs | `~/m2-runs/logs/ui-u0-suites2-*.log`; suite logs in `~/m2-runs/s8ui/scratch/e2e/u0` |
+
+**Red first:** no new suite: U0 adds no behaviour a user can reach. The suites ran before and after
+the 1 px fix of the slots (both green); the probe showed the slots 1 px left of taste.md's x before it.
+
+### Left
+
+- The ⌥K sheet's rows: each lane adds its own (Tracks, Edit, View groups).
+- Q and the arrows on clips are the timeline's own keys (lane B, U6), not page keys.
+- The grid's Auto step, triplets and the timeline's chip: U4. Until then the song grid's start is a
+  beat, as the timeline's drag is today.
+- Settings that reset at each app launch (the grid, later the audition toggle): one line in
+  `docs/gaps.md` at the End.

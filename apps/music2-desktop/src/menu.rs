@@ -29,6 +29,11 @@ const MAC: bool = cfg!(target_os = "macos");
 /// toast says it.
 const REVEAL: &str = if MAC { "Show in Finder" } else { "Show in Folder" };
 
+/// Mute's and Solo's keys: ⌃M and ⌃S on a Mac only (taste.md §5.3). Elsewhere Ctrl is ⌘'s, and
+/// Ctrl+S saves; M and S on the selected track are the page's keys everywhere.
+const MUTE_KEY: Option<&str> = if MAC { Some("Ctrl+M") } else { None };
+const SOLO_KEY: Option<&str> = if MAC { Some("Ctrl+S") } else { None };
+
 /// The menu bar's items, as (id, title, accelerator): the ids are the page's command ids.
 /// `None` for a key the page handles, or an item with no key. Where each goes: `layout`.
 const ITEMS: &[(&str, &str, Option<&str>)] = &[
@@ -54,6 +59,11 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     // In a field, the field's own: to the line's start on a Mac, the word before elsewhere.
     ("delete_track", "Delete Track", Some("CmdOrCtrl+Backspace")),
     ("rename", "Rename", Some("CmdOrCtrl+R")),
+    // While listening, on the selected track (not undo steps); M and S are the page's keys.
+    ("mute", "Mute", MUTE_KEY),
+    ("solo", "Solo", SOLO_KEY),
+    // In the track's code: one undo step.
+    ("mute_in_song", "Mute in Song", None),
     // ⌥1 to ⌥4, X, A, E: the page's keys.
     ("view_device", "Device", None),
     ("view_notes", "Notes", None),
@@ -62,6 +72,11 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     ("lanes", "Show Automation", None),
     ("dock", "Show Dock", None),
     ("browser", "Show Browser", Some("Alt+CmdOrCtrl+B")),
+    // The grid of the view the pointer or the keyboard was last in: the timeline's or the roll's.
+    ("grid_narrower", "Narrower Grid", Some("CmdOrCtrl+1")),
+    ("grid_wider", "Wider Grid", Some("CmdOrCtrl+2")),
+    ("grid_triplet", "Triplet Grid", Some("CmdOrCtrl+3")),
+    ("grid_snap", "Snap to Grid", Some("CmdOrCtrl+4")),
     // No Space accelerator: the menu would steal it from text fields. The UI handles Space, Return and C.
     ("play", "Play / Stop", None),
     // ⇧Space, the page's: from where it stopped, not where play started.
@@ -113,9 +128,22 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
         Item("reveal"),
         Item("rename_song"),
     ];
-    let track = vec![Item("new_track"), Item("delete_track"), Item("rename")];
-    let views =
-        [Item("view_device"), Item("view_notes"), Item("view_mix"), Item("view_code"), Line, Item("lanes"), Item("dock"), Item("browser")];
+    let track = vec![Item("new_track"), Item("delete_track"), Item("rename"), Line, Item("mute"), Item("solo"), Item("mute_in_song")];
+    let views = [
+        Item("view_device"),
+        Item("view_notes"),
+        Item("view_mix"),
+        Item("view_code"),
+        Line,
+        Item("lanes"),
+        Item("dock"),
+        Item("browser"),
+        Line,
+        Item("grid_narrower"),
+        Item("grid_wider"),
+        Item("grid_triplet"),
+        Item("grid_snap"),
+    ];
     let transport = vec![Item("play"), Item("continue"), Item("home"), Line, Item("loop"), Item("loop_selection"), Line, Item("panic")];
     if mac {
         vec![

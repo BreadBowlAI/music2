@@ -4,6 +4,10 @@
 //!
 //! Opens the project (`-`: none, for the start screen) and writes `{url, token, pid}` to the session file.
 //!
+//! It serves the `web/dist` of the tree it was built in, or with `M2_WEB=<folder>` that folder: one
+//! server build then serves another checkout's page. std, the templates and the examples still come
+//! from the tree it was built in.
+//!
 //! With `M2_AUDIO_CAPTURE=<file>`, what the app plays goes into that file instead of a device, in
 //! real time, so a test can listen to it: interleaved stereo `f32` at 48 kHz, little-endian,
 //! appended a device buffer at a time (`M2_AUDIO_FRAMES` frames, 512 unless set) as each is played.
@@ -23,7 +27,9 @@ fn serve() -> anyhow::Result<()> {
     let [project, session, token] = &args[..] else { anyhow::bail!("usage: headless <project-folder | -> <session.json> <token>") };
     let opts = m2_server::ServeOptions {
         port: 0,
-        web_dir: PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/dist")),
+        web_dir: std::env::var_os("M2_WEB")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/dist"))),
         token: token.clone(),
     };
     let running = match std::env::var_os("M2_AUDIO_CAPTURE") {

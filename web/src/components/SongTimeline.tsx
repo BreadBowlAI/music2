@@ -1,6 +1,6 @@
 import clsx from "clsx";
-import { AudioWaveform, ChevronRight, CircleAlert, Info, Plus, TriangleAlert } from "lucide-react";
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { AudioWaveform, ChevronRight, Plus } from "lucide-react";
+import { createContext, memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   barAt,
   bars,
@@ -28,16 +28,17 @@ import {
 } from "../lib/graph";
 import { onFrame } from "../lib/clock";
 import { LANE_MADE, TRACK_MADE } from "../lib/events";
+import { useHeard } from "../lib/graph8b";
 import { LANE_H, ROW_H, RULER_H } from "../lib/layout";
 import { GRAPHITE, trackColors, type TrackColor } from "../lib/palette";
 import { useShell } from "../lib/shell";
 import { chord, opt } from "../lib/native";
 import { useStore } from "../lib/store";
 import { addEffectTo, dragsEffect, EFFECT_DRAG } from "./Browser";
-import { addTrack, END, INSTRUMENT_DRAG, openInstruments, openTrackMenu, startReorder, TrackMenuButton, useReorder } from "./Tracks";
+import { addTrack, END, INSTRUMENT_DRAG, openInstruments, openTrackMenu, startReorder, useReorder } from "./Tracks";
 import { MarkPopover, placeOf, RulerMenu } from "./SongBar";
-import { VLines } from "./draw";
-import TrackName from "./TrackName";
+import { Hatch, VLines } from "./draw";
+import TrackHeader from "./TrackHeader";
 import { Button, EmptyState, keepFocus } from "./ui";
 
 /** Pixels per beat. */
@@ -51,6 +52,8 @@ const BODY_BOTTOM = 4;
 const beats = (n: number) => Number(n.toFixed(3));
 const span = (c: { start: number; length: number }) => `beats ${beats(c.start)}–${beats(c.start + c.length)}`;
 const rowHeight = (lane: TimelineLane) => (lane.kind === "control" ? LANE_H : ROW_H);
+/** The clips drawn here are a track's muted in the song: hatched (taste.md §2.9). */
+const Hatched = createContext(false);
 
 /** A clip the timeline made, to select (and open) once the graph shows the write that made it. */
 interface Made { revision: number; clip: ClipRef }
@@ -368,6 +371,7 @@ export default function SongTimeline({
     <div
       ref={scroller}
       data-testid="timeline"
+      data-grid-view="song"
       tabIndex={-1}
       onKeyDown={onKeyDown}
       className="flex-1 min-h-0 overflow-auto relative bg-canvas outline-none"
@@ -807,6 +811,8 @@ const TrackRows = memo(function TrackRows({
   const picked = useShell((s) => (s.selected === module ? (s.clips[module] ?? null) : null));
   const shown = useShell((s) => (s.view === "notes" && s.module === module ? (s.clips[module] ?? null) : null));
   const open = useShell((s) => s.open.has(module));
+  // A muted track's clips, or one a solo leaves off, draw faint and grey; muted in the song, hatched too.
+  const heard = useHeard(module);
   const { primary, others, controls } = rowsOf(track);
   /** Where a reference's clip is in `lane`, if it is one of its clips. */
   const at = (ref: ClipRef | null, lane: TimelineLane) => (ref?.lane === lane.key ? clipIndex(lane.clips, ref) : -1);
@@ -865,17 +871,19 @@ const TrackRows = memo(function TrackRows({
       >
         {grid}
         {lane && (
-          <div className={clsx("absolute inset-0", waiting && "opacity-50 grayscale")}>
-            <LaneClips
-              lane={lane}
-              color={color}
-              shown={at(shown, lane)}
-              picked={at(picked, lane)}
-              moving={moving && at(moving.clip, lane) >= 0 ? { index: at(moving.clip, lane), start: moving.start } : null}
-              editable={!locked}
-              onOpen={(k) => onOpenClip(clipRef(module, lane.key, lane.clips, k))}
-              onDown={(k, e) => edits.down(clipRef(module, lane.key, lane.clips, k), e)}
-            />
+          <div className={clsx("absolute inset-0", waiting ? "opacity-50 grayscale" : heard !== "heard" && "opacity-40 grayscale-60")}>
+            <Hatched.Provider value={heard === "muted-in-song"}>
+              <LaneClips
+                lane={lane}
+                color={color}
+                shown={at(shown, lane)}
+                picked={at(picked, lane)}
+                moving={moving && at(moving.clip, lane) >= 0 ? { index: at(moving.clip, lane), start: moving.start } : null}
+                editable={!locked}
+                onOpen={(k) => onOpenClip(clipRef(module, lane.key, lane.clips, k))}
+                onDown={(k, e) => edits.down(clipRef(module, lane.key, lane.clips, k), e)}
+              />
+            </Hatched.Provider>
           </div>
         )}
       </div>
@@ -909,39 +917,7 @@ const TrackRows = memo(function TrackRows({
       {movable && <DropLine before={module} />}
       {row(
         primary,
-        <>
-          {controls.length > 0 && (
-            <button
-              data-fold={module}
-              aria-label={open ? `Hide ${track.label || module}'s automation` : `Show ${track.label || module}'s automation`}
-              aria-expanded={open}
-              title={`${open ? "Hide" : "Show"} automation (A)`}
-              onMouseDown={(e) => e.preventDefault()}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => useShell.getState().toggleLanes(module, [])}
-              className="absolute left-2 size-ctl-xs grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover cursor-pointer transition-colors duration-80 ease-linear"
-            >
-              <ChevronRight size={12} className={clsx("transition-transform duration-140 ease-out", open && "rotate-90")} />
-            </button>
-          )}
-          {/* From x = 28 to the header's padding: M, S and the meter take 60px of it with the mixer (8b), the name 140. */}
-          <div className={clsx("absolute left-7 flex items-center gap-1.5 min-w-0", movable ? "right-9" : "right-3")}>
-            <TrackName
-              module={module}
-              label={track.label}
-              track={track.track}
-              testid="track-label"
-              listen
-              className={clsx("text-base", selected ? "font-semibold text-fg-strong" : "font-medium text-fg")}
-            />
-            {issues && <Issues issues={issues} />}
-          </div>
-          {movable && (
-            <div className="absolute right-2">
-              <TrackMenuButton module={module} name={track.label || module} />
-            </div>
-          )}
-        </>,
+        <TrackHeader track={track} folds={controls.length > 0} open={open} selected={selected} song={!!last} issues={issues} />,
         { first: true, height: ROW_H, movable },
       )}
       {others.map((l) => row(l, <LaneLabel lane={l} />, { height: rowHeight(l) }))}
@@ -954,23 +930,6 @@ const TrackRows = memo(function TrackRows({
 function DropLine({ before }: { before: string }) {
   const here = useReorder((s) => s.module !== null && s.before === before);
   return here ? <div aria-hidden data-testid="drop-line" className="absolute -top-px inset-x-0 h-0.5 z-40 bg-accent pointer-events-none" /> : null;
-}
-
-/** A mark on a track that something in it needs attention: the worst of it, and every message on hover. */
-function Issues({ issues }: { issues: Diagnostic[] }) {
-  const error = issues.some((d) => d.severity === "error");
-  const warning = !error && issues.some((d) => d.severity === "warning");
-  const Icon = error ? CircleAlert : warning ? TriangleAlert : Info;
-  return (
-    <span
-      data-testid="track-issues"
-      data-severity={error ? "error" : warning ? "warning" : "notice"}
-      className={clsx("shrink-0 inline-flex", error ? "text-danger" : warning ? "text-warn" : "text-fg-faint")}
-      title={issues.map((d) => d.message).join("\n\n")}
-    >
-      <Icon size={14} />
-    </span>
-  );
 }
 
 /**
@@ -1119,6 +1078,7 @@ function Clip({
   onPointerDown?: (e: React.PointerEvent<HTMLElement>) => void;
   children: ReactNode;
 }) {
+  const hatched = useContext(Hatched);
   return (
     <div
       data-clip={id}
@@ -1147,6 +1107,7 @@ function Clip({
       }
     >
       {children}
+      {hatched && <Hatch />}
     </div>
   );
 }

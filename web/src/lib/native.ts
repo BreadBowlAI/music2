@@ -28,6 +28,8 @@ export const chord = (key: string, { shift = false, alt = false } = {}) =>
   isMac
     ? `${alt ? "⌥" : ""}${shift ? "⇧" : ""}⌘${keyName(key)}`
     : `Ctrl+${alt ? "Alt+" : ""}${shift ? "Shift+" : ""}${keyName(key)}`;
+/** A ⌃ chord, the Mac's only (taste.md §5.3): ⌃M on a Mac, "" elsewhere, where Ctrl is ⌘'s. */
+export const control = (key: string) => (isMac ? `⌃${keyName(key)}` : "");
 /** An ⌥ chord: ⌥3 on a Mac, Alt+3 elsewhere. */
 export const opt = (key: string) => (isMac ? `⌥${keyName(key)}` : `Alt+${keyName(key)}`);
 /** A ⇧ chord: ⇧Return on a Mac, Shift+Enter elsewhere. */

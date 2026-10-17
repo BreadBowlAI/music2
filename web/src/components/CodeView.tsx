@@ -26,6 +26,9 @@ const MONACO_CHORDS: Record<string, string> = {
   delete_track: isMac ? "deleteAllLeft" : "deleteWordLeft",
   loop_selection: "expandLineSelection",
   panic: "editor.action.quickFix",
+  // ⌘E and ⌘J split and join clips; in the editor, its find-with-selection and join lines.
+  split: "actions.findWithSelection",
+  join: "editor.action.joinLines",
 };
 
 /** What the editor followed while the project had no module (its code never compiled). */

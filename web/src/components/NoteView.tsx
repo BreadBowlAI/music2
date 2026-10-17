@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { Check, ChevronDown, Lock, Magnet, Minus, MousePointer2, Pencil, Plus, ZoomIn, ZoomOut } from "lucide-react";
+import { Lock, Minus, MousePointer2, Pencil, Plus, ZoomIn, ZoomOut } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   barAt,
@@ -27,11 +27,13 @@ import { onFrame } from "../lib/clock";
 import { RULER_H } from "../lib/layout";
 import { chord, keyName, mod, native } from "../lib/native";
 import { GRAPHITE, trackColors, type TrackColor } from "../lib/palette";
+import { useGrid } from "../lib/grid";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { DockSlot } from "./Dock";
+import GridChip from "./GridChip";
 import { Hatch, HBands, VLines } from "./draw";
-import { Button, EmptyState, keepFocus, MenuRow, Popover, Segment } from "./ui";
+import { Button, EmptyState, keepFocus, Segment } from "./ui";
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
@@ -44,17 +46,6 @@ const VEL_PAD = 8;
 /** The highest pitch, at the top; the lowest is 0. */
 const TOP = 127;
 const BLACK = [1, 3, 6, 8, 10];
-/** The grid's steps, in beats; snap (the magnet) puts notes on it, or lets them go anywhere. */
-const GRIDS = [
-  { label: "1/4", step: 1 },
-  { label: "1/8", step: 0.5 },
-  { label: "1/16", step: 0.25 },
-  { label: "1/32", step: 0.125 },
-];
-/** The snap as it was kept: the grid, or 0 when it was off. */
-const SNAP_KEY = "m2.notes.snap";
-/** The grid, kept apart so that turning snap off and on keeps it. */
-const GRID_KEY = "m2.notes.grid";
 /** What a new note plays at, and what the file leaves unwritten. */
 const VELOCITY = 0.8;
 /** The shortest note, when nothing snaps. */
@@ -100,19 +91,6 @@ function tidy(notes: Note[], sel: ReadonlySet<number>): [Note[], Set<number>] {
 
 const same = (a: Shape, b: Shape) => a.length === b.length && JSON.stringify(a.notes) === JSON.stringify(b.notes);
 
-function readSnap(): { grid: number; on: boolean } {
-  const read = (key: string) => {
-    try {
-      return localStorage.getItem(key);
-    } catch {
-      return null;
-    }
-  };
-  const valid = (x: string | null) => x !== null && GRIDS.some((g) => g.step === Number(x));
-  const snap = read(SNAP_KEY), grid = read(GRID_KEY);
-  return { grid: valid(grid) ? Number(grid) : valid(snap) ? Number(snap) : 0.25, on: snap !== "0" };
-}
-
 /** A note's colour: the track's bar, mixed toward its ink the harder it is played (never so far its name can't be read). */
 function fill(tone: TrackColor, velocity: number) {
   return `color-mix(in oklab, ${tone.ink} ${Math.round(clamp(velocity, 0, 1) * 45)}%, ${tone.bar})`;
@@ -136,7 +114,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   // clip as edited here. The selection is indices into the notes shown.
   const [draft, setDraft] = useState<Shape | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<number>>(() => new Set());
-  const [{ grid: gridStep, on: snapOn }, setSnapState] = useState(readSnap);
+  const { step: gridStep, on: snapOn } = useGrid((s) => s.notes);
   // Where a note lands: on the grid while snap is on, anywhere (0) while it is off.
   const snap = snapOn ? gridStep : 0;
   const draw = useShell((s) => s.draw);
@@ -235,14 +213,6 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     const el = scroller.current;
     if (el) anchor.current = { beat: (el.scrollLeft + el.clientWidth / 2 - KEYS_W) / ppb, x: el.clientWidth / 2 - KEYS_W };
     setPpb((p) => clamp(p * by, 8, 400));
-  };
-
-  const setSnap = (grid: number, on: boolean) => {
-    setSnapState({ grid, on });
-    try {
-      localStorage.setItem(GRID_KEY, String(grid));
-      localStorage.setItem(SNAP_KEY, String(on ? grid : 0));
-    } catch {}
   };
 
   // ---------------------------------------------------------------- writing
@@ -594,6 +564,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     <div
       ref={root}
       data-testid="notes"
+      data-grid-view="notes"
       tabIndex={0}
       onKeyDown={onKeyDown}
       className="flex-1 min-h-0 flex flex-col bg-canvas outline-none"
@@ -636,22 +607,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
             </div>
             <Divider />
             {/* Grid [1/16 ▾] and the snap toggle (taste.md §3.5). */}
-            <div className="shrink-0 flex items-center gap-0.5">
-              <GridMenu step={gridStep} onPick={(g) => setSnap(g, snapOn)} />
-              <Button
-                size="sm"
-                data-testid="snap"
-                active={snapOn}
-                aria-pressed={snapOn}
-                onMouseDown={keepFocus}
-                onClick={() => setSnap(gridStep, !snapOn)}
-                title={snapOn ? "Snap to the grid: on. Notes you add or drag land on it" : "Snap to the grid: off. Notes go where you put them"}
-                aria-label="Snap to the grid"
-                className="w-ctl-sm !px-0"
-              >
-                <Magnet size={16} />
-              </Button>
-            </div>
+            <GridChip view="notes" />
             <Divider />
           </>
         )}
@@ -842,52 +798,6 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
 
 // In a narrow dock (the browser open in a small window) the tools' dividers go before any tool does.
 const Divider = () => <div className="w-px h-5 shrink-0 bg-line @max-[900px]/dock:hidden" />;
-
-/** The grid (taste.md §3.5): `1/16 ▾`, a menu of its steps; the current one checked. */
-function GridMenu({ step, onPick }: { step: number; onPick: (step: number) => void }) {
-  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  const label = GRIDS.find((g) => g.step === step)?.label ?? "1/16";
-  return (
-    <>
-      <Button
-        size="sm"
-        data-testid="grid"
-        data-grid={label}
-        aria-haspopup="menu"
-        aria-expanded={!!anchor}
-        onMouseDown={keepFocus}
-        onClick={(e) => {
-          const b = e.currentTarget;
-          setAnchor((a) => (a ? null : b));
-        }}
-        title="The grid: snapped notes land on it, and new notes are a step long"
-        className={clsx("!px-1.5 !gap-1 text-fg", anchor && "bg-hover")}
-      >
-        {label}
-        <ChevronDown size={12} className="text-fg-muted" />
-      </Button>
-      {anchor && (
-        <Popover anchor={anchor} onClose={() => setAnchor(null)} role="menu" aria-label="Grid" className="w-[220px]">
-          {GRIDS.map((g) => (
-            <MenuRow
-              key={g.label}
-              role="menuitemradio"
-              data-grid={g.label}
-              aria-checked={g.step === step}
-              icon={g.step === step ? <Check size={14} className="text-fg" /> : <span className="block size-3.5" />}
-              onClick={() => {
-                setAnchor(null);
-                onPick(g.step);
-              }}
-            >
-              {g.label}
-            </MenuRow>
-          ))}
-        </Popover>
-      )}
-    </>
-  );
-}
 
 /**
  * The clip's length in bars, typed or stepped a bar at a time. `bars` is how many it spans and

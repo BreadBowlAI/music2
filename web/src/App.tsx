@@ -1,6 +1,6 @@
 import { LucideProvider, WifiOff } from "lucide-react";
 import { useEffect } from "react";
-import { connect } from "./lib/events";
+import { connect, on } from "./lib/events";
 import { useStore } from "./lib/store";
 import Toasts from "./components/Toasts";
 import GraphCanvas, { closeSong, graphUndo } from "./components/GraphCanvas";
@@ -10,7 +10,8 @@ import NewSongDialog, { openNewSong } from "./components/NewSongDialog";
 import { exportSong, onExportEvent } from "./lib/exporting";
 import { editorHooks, graphApi } from "./lib/graph";
 import { isMac, native, nativeAction, onMenu } from "./lib/native";
-import { canvas, useShell, VIEWS } from "./lib/shell";
+import { followGridView } from "./lib/grid";
+import { canvas, useShell, VIEWS, type GridOp } from "./lib/shell";
 import { deleteTrack, duplicateTrack, newTrack } from "./components/Tracks";
 
 /** Fetch the open project. An error means none is open: the start screen shows. */
@@ -44,18 +45,32 @@ function key(e: KeyboardEvent): string | null {
   if (e.key === "Enter" || e.key === "Home") return "home";
   if (e.key === "Escape") return "deselect";
   if (e.shiftKey) return null;
-  return ({ c: "loop", a: "lanes", e: "dock", x: "view_mix", b: "draw" } as Record<string, string>)[e.key.toLowerCase()] ?? null;
+  return ({ c: "loop", a: "lanes", e: "dock", x: "view_mix", b: "draw", m: "mute", s: "solo" } as Record<string, string>)[e.key.toLowerCase()] ?? null;
 }
+
+/** ⌘1 to ⌘4, View's grid rows: the command ids, in order. */
+const GRID_IDS = ["grid_narrower", "grid_wider", "grid_triplet", "grid_snap"];
 
 /** A ⌘ or ⌃ chord as the menu bar would take it, in a browser; `always`: even while typing (⌘S, ⌘N). */
 function chord(e: KeyboardEvent): { id: string; always?: boolean } | null {
   if (!(e.metaKey || e.ctrlKey)) return null;
   const k = e.key.toLowerCase();
+  // ⌃M and ⌃S on a Mac, where ⌘S saves: Track ▸ Mute and Solo. Elsewhere Ctrl is ⌘.
+  if (isMac && e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && (k === "m" || k === "s")) return { id: k === "m" ? "mute" : "solo" };
+  // By the key's place, as ⌥1 to ⌥4 are.
+  const n = /^Digit([1-4])$/.exec(e.code);
+  if (n && !e.shiftKey && !e.altKey) return { id: GRID_IDS[Number(n[1]) - 1] };
+  // Cut, copy and paste are the clips' while the timeline takes them; else the page's own, for text.
+  if ((k === "c" || k === "x" || k === "v") && !e.shiftKey && !e.altKey && !editing() && !field(e.target) && canvas.takesClipboard?.()) {
+    return { id: ({ c: "copy", x: "cut", v: "paste" } as const)[k] };
+  }
   if (k === "s" && !e.shiftKey) return { id: "save", always: true };
   if (k === "n" && !e.shiftKey) return { id: "new_song", always: true };
   if (k === "z") return { id: e.shiftKey ? "redo" : "undo" };
   if (k === "d" && !e.shiftKey) return { id: "duplicate" };
   if (k === "e" && e.shiftKey) return { id: "export" };
+  if (k === "e" && !e.altKey) return { id: "split" };
+  if (k === "j" && !e.shiftKey && !e.altKey) return { id: "join" };
   if (k === "w" && !e.shiftKey) return { id: "close_song" };
   if (k === "r" && !e.shiftKey) return { id: "rename" };
   if (k === "t" && !e.shiftKey) return { id: "new_track" };
@@ -74,17 +89,19 @@ export default function App() {
 
   useEffect(() => {
     const { set, toast } = useStore.getState();
-    return connect(
-      (msg) => {
-        if (msg.t === "toast") toast(msg.text, undefined, true);
-        else if (msg.t === "graph") void refreshGraph();
-        else if (msg.t === "export") void onExportEvent(msg);
-      },
-      (c) => {
-        set({ connected: c });
-        if (c) void refreshGraph();
-      },
-    );
+    const heard = [
+      on("toast", (msg) => toast(msg.text, undefined, true)),
+      on("graph", () => void refreshGraph()),
+      on("export", (msg) => void onExportEvent(msg)),
+    ];
+    const stop = connect((c) => {
+      set({ connected: c });
+      if (c) void refreshGraph();
+    });
+    return () => {
+      stop();
+      heard.forEach((off) => off());
+    };
   }, []);
 
   useEffect(() => {
@@ -123,6 +140,7 @@ export default function App() {
     window.addEventListener("keydown", onFieldKey, true);
     window.addEventListener("contextmenu", onContext);
     const offMenu = onMenu(appCommand);
+    const offGrid = followGridView();
     if (native) nativeAction("ready");
     document.documentElement.classList.toggle("native", native);
     document.documentElement.classList.toggle("mac", isMac);
@@ -131,6 +149,7 @@ export default function App() {
       window.removeEventListener("keydown", onFieldKey, true);
       window.removeEventListener("contextmenu", onContext);
       offMenu();
+      offGrid();
     };
   }, []);
 
@@ -286,5 +305,30 @@ export function appCommand(id: string) {
       return shell.set({ draw: !shell.draw });
     case "deselect":
       return shell.deselect();
+    case "mute":
+    case "solo":
+    case "mute_in_song": {
+      // The selected track's; the Song row has no mute or solo (MON-1).
+      const m = shell.selected;
+      if (!m || m === "song") return;
+      return id === "mute" ? canvas.mute?.(m) : id === "solo" ? canvas.solo?.(m) : canvas.muteInSong?.(m);
+    }
+    case "grid_narrower":
+    case "grid_wider":
+    case "grid_triplet":
+    case "grid_snap":
+      return canvas.grid?.(id.slice("grid_".length) as GridOp);
+    case "split":
+    case "join":
+      // In the code editor, its own ⌘E and ⌘J.
+      if (editorHooks.chord?.(id) || editing()) return;
+      return id === "split" ? canvas.split?.() : canvas.join?.();
+    case "quantize":
+      if (editing()) return;
+      return canvas.quantize?.();
+    case "copy":
+    case "cut":
+    case "paste":
+      return canvas.clipboard?.(id);
   }
 }

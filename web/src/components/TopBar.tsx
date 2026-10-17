@@ -8,6 +8,7 @@ import { canvas, useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { graphUndo } from "./GraphCanvas";
 import { MeterField, SongTitle, TempoField } from "./SongBar";
+import OverlayPill from "./OverlayPill";
 import Status from "./Status";
 import { Button, keepFocus } from "./ui";
 
@@ -138,6 +139,7 @@ export default function TopBar({
         <SongTitle session={graph.session} name={graph.name} dir={graph.dir} rate={graph.sample_rate} locked={locked} />
       </div>
       <Status graph={graph} status={status} onShowCode={onShowCode} />
+      <OverlayPill graph={graph} />
       <Divider />
       <BarButton
         onClick={() => void graphUndo(graph.session, "undo")}
