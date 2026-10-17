@@ -649,7 +649,7 @@ Not an OS piece, found by `design-shaped`: QuickJS's `Math` and `**` call the OS
 | OS-73 | Chrome path (`chrome.mjs`, `run.mjs`) | Built (S2): per OS in `chrome.mjs`; `run.mjs` takes it from there | `linux64` 133.0.6943.141 here; no linux-arm64 build of 133 exists | `win64` |
 | OS-74 | `isMac` off the app | Built (S2): `isMac` follows `__M2__.platform` when a page is given one (`native.ts`, one line) | — | — |
 | OS-75 | `Meta` chords inside Monaco | Built (S2): off the Mac, Chrome runs through `e2e/chrome-as-mac.sh`, which gives pages a Mac user agent. A PC-keys pass comes with the key table on `taste` (Q2). | Monaco takes its key map from the user agent | same, through a `.cmd` twin |
-| OS-76 | fonts from Google Fonts | No change on `main`: `taste` removes them (a conflict otherwise). Until then the suites need the network, which this server has. | — | — |
+| OS-76 | fonts from Google Fonts | Built (taste's next part, A2): `taste` removed Google Fonts. The Mac keeps its system font; elsewhere the UI is in Inter, from `web/public/fonts` (OFL). `e2e/taste.mjs` checks the font each page draws in. | Inter | Inter |
 | OS-77 | `shasum` in `baseline.sh` | No change: both OSes have it | — | Git Bash |
 | OS-78 | `SIGTERM`/`SIGKILL` in `run.mjs` | No change | — | `taskkill /T` |
 | OS-79 | Chrome's libraries | No change: present here | — | — |

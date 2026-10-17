@@ -1,5 +1,16 @@
 @import "tailwindcss";
 
+/* The UI's font off the Mac: Inter 4.1 (rsms/inter's release, web/InterVariable.woff2, unchanged;
+   sha256 693b77d4f32ee9b8bfc995589b5fad5e99adf2832738661f5402f9978429a8e3), under the SIL Open
+   Font License: web/public/fonts/OFL.txt, beside it. The Mac keeps its own font (below). */
+@font-face {
+  font-family: "Inter Variable";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: block;
+  src: url("/fonts/InterVariable.woff2") format("woff2");
+}
+
 /* The design tokens (taste.md §2.15). Track colours live in lib/palette.ts: they are applied through
    `style` on clips and notes. */
 @theme {
@@ -13,7 +24,7 @@
   --ease-*: initial;
   --animate-*: initial;
 
-  --font-sans: system-ui, -apple-system, "Helvetica Neue", sans-serif;
+  --font-sans: "Inter Variable", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
   --font-weight-normal: 400;
   --font-weight-medium: 500;
@@ -98,6 +109,10 @@
   --animate-dialog: dialog 220ms var(--ease-out) both;
   --animate-spin: spin 1s linear infinite;
 }
+
+/* The Mac's own font (SF), in the app and in a browser: main.tsx sets `data-os` before the first
+   render. Off the Mac, system-ui is another font (DejaVu Sans on Linux), so Inter comes first there. */
+:root[data-os="mac"] { --font-sans: system-ui, -apple-system, "Helvetica Neue", sans-serif; }
 
 html { color-scheme: light; }
 html, body, #root { height: 100%; }

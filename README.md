@@ -611,3 +611,9 @@ Or just edit the files: the app takes the change in once it has settled (no file
 - [Architecture contract](docs/architecture.md): the rules every part is built and reviewed against, and the order of work.
 - [What music2 can't do yet](docs/gaps.md): the gap list, most important first.
 - [Music basics](docs/music-basics.md): music for beginners.
+
+## Credits
+
+| What | Where | Licence |
+|---|---|---|
+| [Inter](https://rsms.me/inter/) 4.1, by the Inter Project Authors: the app's font on Linux and Windows (the Mac uses its own) | `web/public/fonts/` | SIL Open Font License 1.1 (`web/public/fonts/OFL.txt`) |

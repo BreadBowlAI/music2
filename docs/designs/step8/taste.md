@@ -37,6 +37,9 @@ T (tokens), then S (shell), then each 8b item with its own UI. §8 lists them.
   - a `background-image` that contains `gradient`;
   - a `backdrop-filter`;
   - `font-family` mono outside `[data-code]` elements.
+
+  It also checks the font itself (§2.1): a Mac page draws its text in the system font and never
+  loads Inter; a Linux page loads Inter and draws its text in it, with tabular figures.
 - The e2e suites select by `data-testid`. Keep every testid on the element that replaces the old one.
   The status popover's items keep `attention` and `compile-banner`, and the pill keeps
   `read-only-banner`. Update the suites in the same PR that moves an element.
@@ -144,11 +147,20 @@ meters move at audio rate through `requestAnimationFrame` and are never eased.
 
 ### 2.1 Font and type scale
 
-**Font: the system face**: `system-ui` resolves to SF Pro on macOS in both Tauri's WebKit and
-headless Chrome. **Code uses `ui-monospace`** (SF Mono in WebKit, Menlo in Chrome). No font file is
-shipped and none is fetched, which fixes D10: the app looks the same offline. The app runs only on
-macOS (CoreAudio), the menu bar and file dialogs are already SF, and a pro tool doesn't need a
-typeface of its own. Its identity is the work on screen.
+**Font: the system face on the Mac, Inter elsewhere.** On the Mac, `system-ui` resolves to SF Pro
+in both Tauri's WebKit and headless Chrome. The menu bar and file dialogs are already SF, and a pro
+tool doesn't need a typeface of its own: its identity is the work on screen. Off the Mac,
+`system-ui` is some other face (DejaVu Sans on Linux, wide and plain), so the app ships one font
+file: Inter 4.1's variable font, `web/public/fonts/InterVariable.woff2`, under the SIL Open Font
+License (`OFL.txt` beside it). `main.tsx` sets `data-os="mac"` on the root on a Mac, before the
+first render, and `index.css` picks the font by it, not by a font list (`system-ui` exists
+everywhere). **Code uses `ui-monospace`** (SF Mono in WebKit, Menlo in Chrome). Nothing is fetched
+from the network, which fixes D10: the app looks the same offline.
+
+| | Mac | Linux, Windows |
+|---|---|---|
+| UI | `system-ui` (SF Pro) | Inter, from the app's own file |
+| Code | `ui-monospace` | the system's monospace |
 
 **Numbers are tabular everywhere.** Set `font-variant-numeric: tabular-nums` on `body` and never
 opt out, so values don't jiggle as they change. Use no other `font-feature-settings`: today's
@@ -509,7 +521,7 @@ This goes in `web/src/index.css`. It replaces the current `@theme` block and the
   --ease-*: initial;
   --animate-*: initial;
 
-  --font-sans: system-ui, -apple-system, "Helvetica Neue", sans-serif;
+  --font-sans: "Inter Variable", sans-serif;  /* the Mac's own font under :root[data-os="mac"], §2.1 */
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
   --font-weight-normal: 400;
   --font-weight-medium: 500;

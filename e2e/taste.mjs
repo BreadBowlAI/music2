@@ -10,7 +10,7 @@
 //   node e2e/taste.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import { PROJ, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
+import { PROJ, check, done, open, read, sess, sleep, until, write } from "./fixlib.mjs";
 
 // With the side browser shown, as a wide window opens.
 const { browser, page, errors, api, show, view, key, box, status } = await open(1440, 900, { browser: true });
@@ -79,6 +79,77 @@ check(
   ["font-size 14px", "border-radius 6px", "gradient", "backdrop-filter", "mono font"].every((w) => planted.some((b) => b.startsWith(w) && b.includes('"planted"'))),
   `the lint finds a planted font size, radius, gradient, backdrop filter and mono font (${planted.filter((b) => b.includes("planted")).length})`,
 );
+
+// ---------------------------------------------------------------- the font
+
+// The Mac keeps its own font; off the Mac the UI is in Inter, served from web/public/fonts
+// (index.css, main.tsx's `data-os`). Every page here is given the Mac, so a second one is given
+// Linux. What the CSS asks for isn't enough: Chrome's DevTools protocol says which font each text
+// was drawn in, and the FontFace says whether Inter's file loaded.
+/** The page's font: `data-os`, the body's font list, Inter's FontFace, and the fonts one line of its text was drawn in. */
+async function font(p) {
+  const seen = await p.evaluate(() => {
+    const face = [...document.fonts].find((f) => f.family.replace(/"/g, "") === "Inter Variable");
+    for (const e of document.querySelectorAll("[data-font-probe]")) delete e.dataset.fontProbe;
+    const e = [...document.body.querySelectorAll("*")].find(
+      (e) => e.getClientRects().length && !e.closest("[data-code]") && [...e.childNodes].some((n) => n.nodeType === 3 && /[A-Za-z]{3}/.test(n.textContent)),
+    );
+    if (e) e.dataset.fontProbe = "";
+    return { os: document.documentElement.dataset.os ?? "", family: getComputedStyle(document.body).fontFamily, face: face?.status ?? "none", text: e?.textContent.trim().slice(0, 24) ?? "" };
+  });
+  const cdp = await p.createCDPSession();
+  await cdp.send("DOM.enable");
+  await cdp.send("CSS.enable");
+  const { root } = await cdp.send("DOM.getDocument", { depth: 0 });
+  const { nodeId } = await cdp.send("DOM.querySelector", { nodeId: root.nodeId, selector: "[data-font-probe]" });
+  const { fonts } = nodeId ? await cdp.send("CSS.getPlatformFontsForNode", { nodeId }) : { fonts: [] };
+  await cdp.detach();
+  // The font that drew most of it (a symbol may come from another).
+  const main = [...fonts].sort((a, b) => b.glyphCount - a.glyphCount)[0];
+  return { ...seen, drawn: main ? `${main.familyName}${main.isCustomFont ? " (the page's own file)" : " (the system's)"}` : "nothing", own: !!main?.isCustomFont, name: main?.familyName ?? "" };
+}
+const mac = await font(page);
+check(
+  mac.os === "mac" && mac.family.startsWith("system-ui") && mac.face !== "loaded" && mac.name && !mac.own,
+  `a Mac page keeps the system font: ${mac.family.split(",")[0]} first, Inter not loaded (${mac.face}), "${mac.text}" drawn in ${mac.drawn}`,
+);
+const linux = await browser.newPage();
+linux.on("console", (m) => m.type() === "error" && !/Failed to load resource/.test(m.text()) && errors.push(`linux page: ${m.text()}`));
+linux.on("pageerror", (e) => errors.push(`linux page: ${e}`));
+await linux.setViewport({ width: 1440, height: 900 });
+await linux.evaluateOnNewDocument((token) => {
+  window.__M2__ = { native: false, token, platform: "linux" };
+}, sess.token);
+await linux.goto(sess.url, { waitUntil: "domcontentloaded" });
+await linux.waitForSelector("[data-testid=graph] [data-module]", { timeout: 10000 });
+// The text asks for Inter as it is laid out; wait until its file has loaded or failed.
+await until(() => linux.evaluate(() => [...document.fonts].some((f) => f.family.replace(/"/g, "") === "Inter Variable" && /loaded|error/.test(f.status))), 5000);
+const pc = await font(linux);
+check(pc.face === "loaded", `a Linux page loads Inter: its FontFace "Inter Variable" is ${pc.face}`);
+check(
+  pc.os === "" && pc.family.startsWith('"Inter Variable"') && pc.own && /^Inter/.test(pc.name),
+  `a Linux page draws its text in Inter: ${pc.family.split(",")[0]} first, "${pc.text}" drawn in ${pc.drawn}`,
+);
+// Inter's figures are tabular with taste's tabular-nums: "0000" and "1111" are as wide. Without it
+// they aren't, so the check can tell.
+const figures = await linux.evaluate(() => {
+  const wide = (text, plain) => {
+    const s = document.createElement("span");
+    s.textContent = text;
+    if (plain) s.style.fontVariantNumeric = "normal";
+    document.body.append(s);
+    const w = s.getBoundingClientRect().width;
+    s.remove();
+    return w;
+  };
+  return { tab: [wide("0000"), wide("1111")], plain: [wide("0000", true), wide("1111", true)] };
+});
+check(
+  figures.tab[0] > 0 && figures.tab[0] === figures.tab[1] && figures.plain[0] !== figures.plain[1],
+  `Inter's figures are tabular: "0000" and "1111" are ${figures.tab.map((w) => w.toFixed(2)).join(" and ")} px wide (${figures.plain.map((w) => w.toFixed(2)).join(" and ")} without tabular-nums)`,
+);
+await linux.close();
+await page.bringToFront();
 
 // ---------------------------------------------------------------- the start screen and New Song
 
