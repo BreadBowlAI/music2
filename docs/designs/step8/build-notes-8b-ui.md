@@ -910,6 +910,8 @@ five at once, and they move again once it reopens.
 | `fffc9fb` | `8b-ui-c` at `ca75898`: U9, U10 | these notes: the same |
 | `a2938da` | `main` at `8519e03`: 8b-backend up to `c9cc6ad` (mute and solo fixes, the review's fixes, docs), the sounds merge, std 0.2 | none |
 | `ed910e5` | `taste-next` at `6c8aeea`: the song bar finished (B2), std's gains (B3), the Mix view in the state and the first pan (B4) | `docs/architecture.md` PKG-13 and `docs/gaps.md` #4 and #20, below |
+| `dc381fd` | `main` at `e571a5f`: step 7's macOS check and its HANDOFF (docs only) | none |
+| `160cbf8` | `taste-next` at `de85438`: the knob's drag and lease moved into `Knob.tsx`, for the Mix view (web only) | none; lane B's lane menu on a driven input stays in `NodeGraph.tsx` |
 
 | File | How it was settled |
 |---|---|
@@ -921,19 +923,22 @@ five at once, and they move again once it reopens.
 
 `rerere` was on for each merge, so these resolutions can replay when 8b-ui lands.
 
+The last two merges changed no Rust, so the Rust checks at `ed910e5` stand for the tip, and so does the
+server copy in `bin/ed910e5`. The desktop app in `wt/ui` was rebuilt after them: it holds the newest page.
+
 ### Checks
 
 | Check | Result |
 |---|---|
 | `cd web && npm run build` (type-checks) | ok |
 | `cargo build --locked --workspace --all-targets` | ok; `Cargo.lock` unchanged. Server and `m2` copied to `~/m2-runs/s8ui/bin/ed910e5/` |
-| Every browser suite (`run.mjs all`, with `CLAP_PATH`) | 39 of 39 ok, 1692 of 1692 checks |
+| Every browser suite (`run.mjs all`, with `CLAP_PATH`), at `ed910e5` and again at `160cbf8` | 39 of 39 ok, 1692 of 1692 checks, both times |
 | The s8 suites in it | s8-mute 141, s8-clips 90, s8-automation 43, s8-audition 49, s8-meters 22, s8-tracks 75, s8-songbar 68 |
 | The suites the slices and merges move | taste 39, s5-knobs 120, fx-fixes 75, export 37, notes 52, s4-clips 28, s6-builders 55, pc-keys 37, live3b 60: all ok |
 | `cargo test --locked --no-fail-fast` on the 10 crates the merges touched | 1037 passed, 0 failed, 6 ignored (`m2`, `music2-desktop` 8, `m2-play`, `m2-runtime`, `m2-script`, `m2-session`, `m2-song`, `m2-editor`, `m2-gates`, `m2-server`) |
 | `cargo clippy --locked` on the same crates, `--all-targets -- -D warnings` | clean |
 | std kernels: tests, clippy, `std/build.sh --check` | 111 passed; clean; the same bytes |
-| Logs | `~/m2-runs/logs/ui-int-build-*.log`, `ui-int-all-*.log`, `ui-int-rust-*.log`; suite logs in `~/m2-runs/s8ui/scratch/e2e/int/all` |
+| Logs | `~/m2-runs/logs/ui-int-build-*.log`, `ui-int-all-*.log`, `ui-int-all2-*.log`, `ui-int-rust-*.log`; suite logs in `~/m2-runs/s8ui/scratch/e2e/int/all` and `…/int/all2` |
 
 The suites ran through `~/m2-runs/s8ui/tools/ui-suites.sh`, a copy of lane A's runner for `wt/ui`.
 It copies the page and the suites first, so nothing changes under a running suite.
