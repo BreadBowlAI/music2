@@ -111,3 +111,27 @@ fn split_join_and_quantize_from_the_terminal() {
     let o = m2(&["clips", dir, "quantize", "bass/notes@1"]);
     assert!(!o.status.success() && said(&o).contains("--grid"), "{}", said(&o));
 }
+
+// HOME-2, G9: `m2 unautomate` puts what the lane plays at a place (else its fallback) back in the
+// code and takes the lane file away; it takes the lock.
+#[test]
+fn unautomate_from_the_terminal() {
+    let temp = Temp(std::env::temp_dir().join(format!("m2-unautomate-cli-{}", std::process::id())));
+    let song = temp.0.join("first-song");
+    copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song"), &song);
+    let dir = song.to_str().unwrap();
+    let bass = std::fs::read_to_string(song.join("tracks/bass.ts")).unwrap();
+    let held = m2_session::lock::acquire(&song, "music2", m2_session::lock::RETRY).unwrap();
+    let refused = m2(&["unautomate", dir, "bass/cutoff"]);
+    assert!(!refused.status.success() && said(&refused).contains("music2"), "{}", said(&refused));
+    drop(held);
+    // Bar 3 is beat 8, half way up the cutoff's rise from 300 to 2200 Hz.
+    let o = m2(&["unautomate", dir, "bass/cutoff", "--at", "3"]);
+    assert!(o.status.success() && said(&o).contains("cutoff automated → cutoff hz(1250)"), "{}", said(&o));
+    assert_eq!(std::fs::read_to_string(song.join("tracks/bass.ts")).unwrap(), bass.replace("lane.control(\"cutoff\", \"hz\", hz(500))", "hz(1250)"));
+    assert!(!song.join("data/bass/cutoff.json").exists());
+    let o = m2(&["unautomate", dir, "bass/drop"]);
+    assert!(o.status.success(), "{}", said(&o));
+    let o = m2(&["unautomate", dir, "bass/notes"]);
+    assert!(!o.status.success() && said(&o).contains("isn't an automation lane"), "{}", said(&o));
+}

@@ -128,7 +128,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 14 | **Draw automation**: click and drag points on automation lanes in the timeline. Its back end is built (8b.5): a clip gesture makes an automation clip holding the lane's value, and draws one clip's points (`points`). "Automate" on a knob's menu already makes the lane and reads the knob from it. The timeline doesn't send them yet. | Filter sweeps, fades and build-ups are everywhere in pop. Today automation lanes can only be looked at in the app, and their points are written by hand in JSON. | Yes | medium |
+| 14 | **Draw automation**: click and drag points on automation lanes in the timeline. Its back end is built (8b.5): a clip gesture makes an automation clip holding the lane's value, and draws one clip's points (`points`). "Automate" on a knob's menu already makes the lane and reads the knob from it, and names it after the control (`decay`); **Remove automation** puts the value back in the code (`POST /api/graph/automate/remove`, `m2 unautomate`); the view says which lane drives an input. The timeline and the knob menu don't use them yet. | Filter sweeps, fades and build-ups are everywhere in pop. Today automation lanes can only be looked at in the app, and their points are written by hand in JSON. | Yes | medium |
 
 ### Audio
 

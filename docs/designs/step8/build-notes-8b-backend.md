@@ -15,6 +15,8 @@ The `8b-backend` track builds the back ends of 8b.4 (mute, solo, mute in song), 
 | B5 | Gate 8's ducking clauses on `env` and `follow`; live equals offline on them | built |
 | B6 | Clip gestures by id: create, move, resize, duplicate, paste, delete, set; `POST /api/graph/clips`, `m2 clips` | built |
 | B7 | Split, join, quantize, a clip's notes and points; each clip's `sha` in the timeline | built |
+| B8 | Automate names lanes after the control; Remove automation (`POST /api/graph/automate/remove`, `m2 unautomate`); lane-driven inputs in the view | built |
+| W2 | Markers | handed to taste-next (S7) |
 | B9 | Audition in the engine: live notes on a lane (`Msg::Live`), `Player::live`, how many are held | built |
 | B10 | Audition on the server: the WebSocket and `POST /api/graph/audition`, sources, the watchdog, `live` in the status | built |
 | B11 | Meters in the engine: taps on the output and each track; the callback's time; whether the engine idles | built |
@@ -348,6 +350,61 @@ of `m2-editor`, `m2-server`, `m2`.
 
 **Contract:** WRITE-10 (the 8b.5 bullet names every gesture), WRITE-12 *Today* (the clip hash; the
 roll's write stays), `docs/gaps.md` #9, #14, #17.
+
+---
+
+## B8. Automation: names, Remove, and what a lane drives
+
+**In short:** Automate now names a lane after its control: `decay`, not `out-decay`. Remove
+automation takes a lane out again and writes back what it played. The canvas data says which lane
+drives an input.
+
+| Piece | What it does | Where |
+|---|---|---|
+| Lane names (D6, M7) | The key is the control's label as a key (`decay`, `detune-cents`); a mixer channel's control stays `hats-pan`. On a clash, the call's binding (else its component) goes in front (`pad-decay`), then a number. `{ name: "Detune (cents)" }` is written only when the key, read as words, isn't the label. | `crates/editor/src/automate.rs` (`name_of`) |
+| `automate::remove(s, module, lane, beat)` | The lane's read becomes what it plays at `beat` (the playhead), in its fallback's spelling (`hz(1250)`), or the fallback as written when `beat` is none; the lane file goes. One `Confined` Tx; undo puts both back. | same |
+| `POST /api/graph/automate/remove` | `{session, module, lane, beat?}` → `{file, before, after, revision}`. In `WRITES_8B`. | `crates/server/src/routes_8b.rs`, `graph/clips.rs` |
+| `m2 unautomate <project> <track>/<lane> [--at <place>]` | G9: its own command, not a flag on `automate`. Takes the lock. | `apps/m2/src/edits.rs` |
+| `InputPort.lane` | `{module, lane}` on every input a control lane drives, cabled or not. Left out where none does. | `crates/editor/src/view.rs` |
+
+**Tests:**
+
+| Test | Where | Red first? |
+|---|---|---|
+| `the_lane_is_named_after_the_control` (the name written only when needed; a clash) | `crates/editor/src/automate_tests.rs` | red before `name_of` changed |
+| `an_inherited_control_is_written_into_its_call_as_a_lane`, `each_way_a_function_takes_its_context_reaches_the_lane` (now `decay`, `cutoff`) | same | red before `name_of` changed |
+| `the_new_lanes_key_is_free` (a clash puts the binding in front) | same | — (passed on the old names too) |
+| `remove_automation_puts_the_heard_value_back` (at a clip, past it, the fallback; undo; automate then remove) | same | red against the stub |
+| `remove_automation_refuses_what_it_cant_take_out` | same | red against the stub |
+| `a_lane_read_by_name_is_taken_out` | same | — (written after the fix the CLI test showed) |
+| `an_input_a_lane_drives_names_the_lane` | `crates/editor/src/view_lane_tests.rs` (new) | red with the field always none |
+| `remove_automation_over_http` (the words; 423 read-only) | `crates/server/src/routes_8b_tests.rs` | red against the stub |
+| `unautomate_from_the_terminal` (`--at`, a mask, a notes lane, the lock) | `apps/m2/tests/clips.rs` | **red: the mask was refused** (below) |
+| `a_track_renamed_and_a_knob_automated_play_and_undo` (now `freq`) | `crates/server/src/graph/tests.rs` | updated |
+
+**What the CLI test found:** removing `const drop = lane.mask("drop")` was refused by `Confined`: the
+plain number written in its place is made where `blend(…, drop)` reads the name, outside the read's
+range (PKG-3). Remove now also declares each place the file reads the binding by name. Nothing is
+written there.
+
+**Choices made here:**
+- **`name` in automate's answer stays the knob's words** (`decay`, `hats pan`), as the toast uses
+  it; the lane shows them as a label, first letter a capital.
+- **The fallback's spelling** is kept: a unit call stays that call (`khz(1.25)`), a plain number
+  stays a number; with no fallback, the unit's own call, imported if needed.
+- **A lane read in several places** (a shared lane), or outside the song's own code, is refused in
+  words: take it out in the code.
+- **`e2e/s6-builders.mjs`** expects `hi`, not `wobble-hi` (M7). Run at the End.
+- **No test of "a lane-driven knob refuses a drag":** the back end has no knob there to drag; the UI
+  reads `InputPort.lane`. Latches stay MON-6's.
+
+**Checks:** `cargo check --workspace --all-targets`; clippy on `m2-editor`, `m2-server`, `m2`; tests
+of `m2-editor`, `m2-server`, `m2`.
+
+**Contract:** HOME-2 (its 8b.5 *Today*), WRITE-10 and WRITE-18 (the 8b.5 bullets), `docs/gaps.md`
+#14. README's automate line.
+
+**Markers (W2):** handed to taste-next, as S7 decides: they live in its `layout.rs`. Nothing here.
 
 ---
 

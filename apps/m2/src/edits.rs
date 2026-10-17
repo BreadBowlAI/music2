@@ -1,5 +1,5 @@
 //! The 8b back ends' commands, each a Tx builder of `crates/editor` taking the project's lock
-//! (WRITE-18): mute in song, and clip gestures.
+//! (WRITE-18): mute in song, clip gestures, and Remove automation.
 
 use std::path::Path;
 use std::time::Instant;
@@ -8,7 +8,7 @@ use anyhow::{Result, anyhow, bail};
 
 /// Whether `cmd` is one of these.
 pub fn handles(cmd: &str) -> bool {
-    matches!(cmd, "mute-in-song" | "clips")
+    matches!(cmd, "mute-in-song" | "clips" | "unautomate")
 }
 
 /// Run `cmd`, with the command line's arguments (`args[0]` is `cmd`).
@@ -16,6 +16,7 @@ pub fn run(cmd: &str, args: &[String]) -> Result<()> {
     match cmd {
         "mute-in-song" => mute_in_song(args),
         "clips" => clips(args),
+        "unautomate" => unautomate(args),
         _ => unreachable!("handled: {cmd}"),
     }
 }
@@ -40,6 +41,30 @@ fn mute_in_song(args: &[String]) -> Result<()> {
         true => println!("{}: nothing to write", e.after),
         false => println!("{}: {} → {} (revision {}, verified in {ms:.0} ms)", e.file, e.before, e.after, e.revision),
     }
+    Ok(())
+}
+
+/// `m2 unautomate <project> <track>/<lane> [--at <place>] [--beats]`: the lane's value at the
+/// place (else its fallback) written back where it is read, and its file removed (HOME-2).
+fn unautomate(args: &[String]) -> Result<()> {
+    let usage = "say which lane: m2 unautomate <project> <track>/<lane> [--at <bar.beat>]";
+    let [_, dir, rest @ ..] = args else { bail!("{usage}") };
+    let mut f = Flags::read(rest)?;
+    let [lane] = &f.words[..] else { bail!("{usage}") };
+    let lane = lane_addr(lane)?;
+    let mut s = super::session(Path::new(dir))?;
+    let arr = s.accepted().project.arrangement.clone();
+    let beats = f.on("--beats");
+    let at = match f.take("--at").flatten() {
+        Some(t) if beats => Some(t.parse::<f64>().map_err(|_| anyhow!("`{t}` isn't a number of beats"))?),
+        Some(t) => Some(m2_editor::clips::position(&arr, &t).map_err(|e| anyhow!("{e}"))?),
+        None => None,
+    };
+    f.done()?;
+    let t = Instant::now();
+    let e = m2_editor::automate::remove(&mut s, lane.module.as_str(), lane.lane.as_str(), at).map_err(|e| anyhow!("{e}"))?;
+    let ms = t.elapsed().as_secs_f64() * 1000.0;
+    println!("{}: {} → {} (revision {}, verified in {ms:.0} ms)", e.file, e.before, e.after, e.revision);
     Ok(())
 }
 

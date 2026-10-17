@@ -224,3 +224,57 @@ fn a_knob_automate_cant_follow_is_refused() {
     assert!(!f.0.join("data").exists() && !s.can_undo(), "nothing was written");
 }
 
+// HOME-2, Q10: Remove automation writes what the lane plays, at the playhead or else its fallback,
+// where the lane was read, in the fallback's spelling, and takes the lane file away: one edit, that
+// undo takes back whole. The track function keeps its `lane`.
+#[test]
+fn remove_automation_puts_the_heard_value_back() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let (bass, cutoff) = (f.read("tracks/bass.ts"), f.read("data/bass/cutoff.json"));
+    // The cutoff's clip rises from 300 to 2200 Hz over beats 0 to 16; the fallback is hz(500).
+    for (beat, written) in [(Some(8.0), "hz(1250)"), (Some(40.0), "hz(500)"), (None, "hz(500)")] {
+        let e = remove(&mut s, "bass", "cutoff", beat).unwrap();
+        assert_eq!((e.file.as_str(), e.before.as_str(), e.after.as_str()), ("tracks/bass.ts", "cutoff automated", &*format!("cutoff {written}")));
+        let now = f.read("tracks/bass.ts");
+        assert_eq!(now, bass.replace("lane.control(\"cutoff\", \"hz\", hz(500))", written), "at {beat:?}");
+        assert!(!f.0.join("data/bass/cutoff.json").exists(), "the lane file is gone");
+        assert!(lane(&s, "bass", "cutoff").is_none(), "and the lane");
+        s.undo().unwrap();
+        assert_eq!((f.read("tracks/bass.ts"), f.read("data/bass/cutoff.json")), (bass.clone(), cutoff.clone()), "undo puts both back");
+    }
+    // Automate, then remove: the value is back as it was written.
+    let song = f.read("song.ts");
+    let a = s.automate(s.accepted().number, "song.ts#2/0.hats.pan").unwrap();
+    remove(&mut s, "song", a.lane.lane.as_str(), None).unwrap();
+    assert_eq!(f.read("song.ts"), song.replace("song(() =>", "song(({ lane }) =>"), "the literal is back; the function keeps its lanes");
+    assert!(!f.0.join("data/song/hats-pan.json").exists());
+}
+
+// What isn't an automation lane read in one place says why, and nothing is written.
+#[test]
+fn remove_automation_refuses_what_it_cant_take_out() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    for (module, key, says) in [("bass", "notes", "isn't an automation lane"), ("bass", "nope", "no lane"), ("nobody", "x", "no track")] {
+        let why = remove(&mut s, module, key, None).unwrap_err().to_string();
+        assert!(why.contains(says), "{module}/{key}: {why}");
+    }
+    let why = remove(&mut s, "bass", "cutoff", Some(f64::NAN)).unwrap_err().to_string();
+    assert!(why.contains("beat"), "{why}");
+    assert!(!s.can_undo());
+}
+
+// A mask read into a `const` and used by name: the number written in its place is made where the
+// name is read (`blend(…, drop)`), which the Tx declares, and the song plays what the lane played
+// there.
+#[test]
+fn a_lane_read_by_name_is_taken_out() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let bass = f.read("tracks/bass.ts");
+    // The drop's clip is 1 from half a beat in until half a beat before its end (beats 16 to 32).
+    remove(&mut s, "bass", "drop", Some(20.0)).unwrap();
+    assert_eq!(f.read("tracks/bass.ts"), bass.replace("lane.mask(\"drop\")", "1"));
+    assert!(!f.0.join("data/bass/drop.json").exists());
+}
