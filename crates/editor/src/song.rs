@@ -175,6 +175,36 @@ pub fn remove_tempo(s: &mut Session, beat: f64) -> Result<Edited, EditError> {
     write(s, a, (before, after))
 }
 
+/// Remove the tempo change and the time signature change at `beat`, whichever are there, in one
+/// step: a ruler mark's Remove these changes. The song's own stay.
+pub fn remove_changes(s: &mut Session, beat: f64) -> Result<Edited, EditError> {
+    let mut a = accepted(s);
+    let t = a.tempo.iter().position(|t| t.beat == beat).filter(|&i| i > 0);
+    let m = a.meter.iter().position(|m| m.beat == beat).filter(|&i| i > 0);
+    let words = |a: &Arrangement, t: Option<&Tempo>, m: Option<&Meter>| match (t, m) {
+        (Some(t), Some(m)) if m.beat > 0.0 && t.beat == m.beat => format!("{} and {}/{} from {}", bpm_words(t.bpm), m.beats, m.unit, at_words(a, m.beat)),
+        (Some(t), Some(m)) => format!("{} and {}", tempo_words(a, t), meter_words(a, m)),
+        (Some(t), None) => tempo_words(a, t),
+        (None, Some(m)) => meter_words(a, m),
+        (None, None) => String::new(),
+    };
+    let before = words(&a, t.map(|i| &a.tempo[i]), m.map(|i| &a.meter[i]));
+    if before.is_empty() {
+        return Err(EditError::NotFound(format!("a tempo or time signature change at beat {}", m2_song::lane::number(beat))));
+    }
+    if let Some(i) = t {
+        a.tempo.remove(i);
+    }
+    if let Some(i) = m {
+        let mut bars = bars(&a.meter);
+        a.meter.remove(i);
+        bars.remove(i);
+        keep_bars(&mut a, &bars, i - 1);
+    }
+    let after = words(&a, t.map(|i| &a.tempo[i - 1]), m.map(|i| &a.meter[i - 1]));
+    write(s, a, (before, after))
+}
+
 /// A time signature FMT-13 allows: 1 to 64 beats of a whole, half, quarter, … or 32nd note.
 fn meter_of(beat: f64, beats: u32, unit: u32) -> Result<Meter, EditError> {
     if !(1..=64).contains(&beats) {

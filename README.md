@@ -588,8 +588,8 @@ curl -s -H "$H" -H 'content-type: application/json' $URL/api/tx/commit -d "{\"tx
 | `POST /api/graph/undo`, `/api/graph/redo` `{session}` | Undo or redo |
 | `POST /api/graph/transport` `{action, to?}` | `play`, `stop`, `toggle` or `restart`. `stop` with `to` goes back there (where play started), and answers where it stopped (`at`) |
 | `POST /api/graph/panic` | Stop all sound: every note off, at once. It changes nothing in the song |
-| `POST /api/graph/tempo` `{session, at, bpm?, add?, remove?}` | Set the tempo in effect at beat `at`; with `add`, a tempo change there; with `remove`, take out the change there. `loop_off` says when it turned the loop off |
-| `POST /api/graph/meter` `{session, at, beats?, unit?, add?, remove?}` | The same for the time signature; a new change lands on the bar line at or before `at` |
+| `POST /api/graph/tempo` `{session, at, bpm?, add?, remove?, meter?}` | Set the tempo in effect at beat `at`; with `add`, a tempo change there; with `remove`, take out the change there, and with `meter` too the time signature change there, in one step. `loop_off` says when it turned the loop off |
+| `POST /api/graph/meter` `{session, at, beats?, unit?, add?, remove?}` | The same for the time signature; a new change lands on the bar line at or before `at`, and later changes keep their bar |
 | `POST /api/graph/title` `{session, name}` | Rename the song (`[project] name` in `music2.toml`) |
 | `POST /api/graph/seek` `{beat}` | Move the playhead: a jump at the next block, playing or not; nothing is rebuilt |
 | `POST /api/graph/loop` `{start?, end?, on?}` | Set the loop's range in beats (it turns the loop on unless `on` says otherwise), or turn it on or off over the range set. Answers like `/status` |

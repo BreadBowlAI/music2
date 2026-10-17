@@ -172,6 +172,29 @@ fn a_meter_before_a_change_at_bar_2_is_accepted() {
     assert_eq!(meters(&s), vec![(0.0, 4, 1), (16.0, 3, 4)]);
 }
 
+// WRITE-21: a ruler mark with a tempo and a time signature change is removed in one step, and one
+// undo brings both back; with one change there, that one goes.
+#[test]
+fn removing_both_changes_at_a_mark_is_one_step() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    tempo_change(&mut s, 16.0, 140.0).unwrap();
+    meter_change(&mut s, 16.0, 3, 4).unwrap();
+    let both = f.read(FILE);
+    let e = remove_changes(&mut s, 16.0).unwrap();
+    assert_eq!((e.before.as_str(), e.after.as_str()), ("140 BPM and 3/4 from bar 5", "124 BPM and 4/4"));
+    let a = s.accepted().project.arrangement.clone();
+    assert_eq!((a.tempo.len(), a.meter.len()), (1, 1));
+    crate::undo(&mut s).unwrap();
+    assert_eq!(f.read(FILE), both, "one undo brings both back");
+    meter(&mut s, 20.0, 5, 4).unwrap();
+    remove_tempo(&mut s, 16.0).unwrap();
+    let e = remove_changes(&mut s, 16.0).unwrap();
+    assert_eq!((e.before.as_str(), e.after.as_str()), ("5/4 from bar 5", "4/4"));
+    assert!(matches!(remove_changes(&mut s, 16.0), Err(EditError::NotFound(_))));
+    assert!(matches!(remove_changes(&mut s, 0.0), Err(EditError::NotFound(_))), "the song's own stay");
+}
+
 // The first tempo and the first time signature are the song's own: changed, never removed.
 #[test]
 fn the_first_tempo_entry_stays() {

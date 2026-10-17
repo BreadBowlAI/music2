@@ -698,10 +698,11 @@ export const graphApi = {
   transport: (action: "play" | "stop" | "toggle" | "restart", to?: number) => call<{ at: number | null }>("/transport", { action, to }),
   /**
    * The song bar's tempo (design-8b §4): the tempo in effect at beat `at` set to `bpm`; with `add`, a
-   * change at `at`; with `remove`, the change at `at` taken out. One undo step, and no toast: what it
-   * did shows where it was done. `loop_off`: the new tempo made the loop too short, so it is off.
+   * change at `at`; with `remove`, the change at `at` taken out, and with `meter` too the time
+   * signature change there. One undo step, and no toast: what it did shows where it was done.
+   * `loop_off`: the new tempo made the loop too short, so it is off.
    */
-  tempo: (session: number, change: { at: number; bpm?: number; add?: boolean; remove?: boolean }, step: Step) =>
+  tempo: (session: number, change: { at: number; bpm?: number; add?: boolean; remove?: boolean; meter?: boolean }, step: Step) =>
     edit(session, step, call<Edit & { loop_off?: boolean }>("/tempo", { session, ...change })),
   /** The time signature in effect at `at`; with `add`, a change on the bar line at or before it; with `remove`, the change at `at` taken out. */
   meter: (session: number, change: { at: number; beats?: number; unit?: number; add?: boolean; remove?: boolean }, step: Step) =>

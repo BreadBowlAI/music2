@@ -469,8 +469,10 @@ export function MarkPopover({
   const remove = async () => {
     onClose();
     try {
-      if (tempo) await graphApi.tempo(session, { at: beat, remove: true }, { name: "removing a tempo change" });
-      if (meter) await graphApi.meter(session, { at: beat, remove: true }, { name: "removing a time signature change" });
+      // Both at once are one step: one undo brings both back.
+      if (tempo && meter) await graphApi.tempo(session, { at: beat, remove: true, meter: true }, { name: `removing the changes at ${placeOf(timeline.meter, beat)}` });
+      else if (tempo) await graphApi.tempo(session, { at: beat, remove: true }, { name: "removing a tempo change" });
+      else if (meter) await graphApi.meter(session, { at: beat, remove: true }, { name: "removing a time signature change" });
     } catch (e) {
       toast(message(e));
     }

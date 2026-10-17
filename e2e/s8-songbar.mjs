@@ -153,6 +153,24 @@ await undo();
 await undo();
 check(await until(() => read("data/arrangement.json") === orig.arrangement), "undo takes the three back");
 
+// A mark with a tempo and a time signature change: Remove these changes is one step (WRITE-21).
+const session = (await state()).session;
+await post("/tempo", { session, at: 16, bpm: 140, add: true });
+await post("/meter", { session, at: 16, beats: 3, unit: 4, add: true });
+const both = read("data/arrangement.json");
+await until(async () => !!(await page.$('[data-testid=ruler] [data-mark="16"]')));
+await page.click('[data-testid=ruler] [data-mark="16"]');
+await page.waitForSelector("[data-testid=mark-remove]", { timeout: 2000 }).catch(() => null);
+const removeBoth = await page.$eval("[data-testid=mark-remove]", (e) => e.textContent).catch(() => null);
+await page.click("[data-testid=mark-remove]").catch(() => {});
+check(removeBoth === "Remove these changes" && (await until(() => same(tempos(), [[0, 124]]) && arrangement().meter.every((m) => m.beat === 0))), `"${removeBoth}" takes both out`);
+check(await until(async () => (await page.$eval('button[aria-label="Undo"]', (e) => e.title)) === "Undo removing the changes at bar 5 (⌘Z)"), `as one step: ${await page.$eval('button[aria-label="Undo"]', (e) => e.title)}`);
+await undo();
+check(await until(() => read("data/arrangement.json") === both), "one undo brings both back");
+await undo();
+await undo();
+check(await until(() => read("data/arrangement.json") === orig.arrangement), "and the song is as it was");
+
 // ---------------------------------------------------------------- the song's name (design-8b §4.4)
 
 const name = await box("[data-testid=bar-song-name]");

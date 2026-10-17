@@ -1448,10 +1448,10 @@ impl Graph {
     }
 
     /// The song bar's tempo (design-8b §4.1): the tempo in effect at beat `at` (the playhead's) set
-    /// to `bpm`; with `add`, a change at `at`; with `remove`, the change at `at` taken out. One undo
-    /// step. When the loop was on and the new tempo makes it too short to play, the engine turns it
+    /// to `bpm`; with `add`, a change at `at`; with `remove`, the change at `at` taken out, and with
+    /// `meter` too the time signature change there, in the same step. One undo step. When the loop was on and the new tempo makes it too short to play, the engine turns it
     /// off (RENDER-9a) and the answer says `loop_off`.
-    pub fn tempo(&self, token: u64, at: f64, bpm: Option<f64>, add: bool, remove: bool) -> Result<Value> {
+    pub fn tempo(&self, token: u64, at: f64, bpm: Option<f64>, add: bool, remove: bool, meter: bool) -> Result<Value> {
         let looped = self.inner.timing.lock().as_ref().and_then(|t| t.range.filter(|_| t.on));
         // The tempo map the edit made, to judge the loop in: the engine plays it from the switch,
         // which an export's hold puts off, so the timing's map may still be the one before.
@@ -1459,6 +1459,7 @@ impl Graph {
         let kept = made.clone();
         let mut v = self.edit(token, move |s| {
             let edited = match (bpm, add, remove) {
+                (_, _, true) if meter => m2_editor::song::remove_changes(s, at),
                 (_, _, true) => m2_editor::song::remove_tempo(s, at),
                 (Some(bpm), true, false) => m2_editor::song::tempo_change(s, at, bpm),
                 (Some(bpm), false, false) => m2_editor::song::tempo(s, at, bpm),
