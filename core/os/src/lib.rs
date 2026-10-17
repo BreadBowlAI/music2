@@ -13,6 +13,7 @@ pub mod fs;
 pub mod host;
 pub mod main_loop;
 pub mod process;
+pub mod rt;
 pub mod thread;
 pub mod watch;
 

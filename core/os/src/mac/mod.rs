@@ -1,7 +1,10 @@
 //! macOS: thread identity, the disk, this machine and this process, and the folders. The main loop
 //! and file-system events are in `main_loop.rs` and `watch.rs`.
 
+mod cf;
 pub(crate) mod main_loop;
+pub(crate) mod rt;
+pub(crate) mod wake;
 pub(crate) mod watch;
 
 use std::ffi::{CStr, OsString};
@@ -16,7 +19,8 @@ use crate::process::Memory;
 #[cfg(test)]
 pub(crate) use crate::unix::sync_refused;
 pub(crate) use crate::unix::{
-    c_numbers, change_and_inode, cpu_time, file_id, file_id_of, host_name, load_average, local_time, make_writable, push, sync_dir, token,
+    c_numbers, change_and_inode, cpu_time, file_id, file_id_of, foreign, host_name, load_average, local_time, make_writable, push,
+    sync_dir, token,
 };
 use crate::unix::{check, cpath};
 

@@ -8,6 +8,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::sync::Arc;
 
+use super::cf::{CFArrayCreate, CFIndex, CFRef, CFRelease, CFStringCreateWithBytes, UTF8, kCFTypeArrayCallBacks};
 use crate::watch::{Hear, Heard};
 
 const MUST_SCAN_SUB_DIRS: u32 = 0x0000_0001;
@@ -38,18 +39,7 @@ impl Shared {
     }
 }
 
-type CFIndex = isize;
-type CFRef = *const c_void;
 type Queue = *mut c_void;
-
-#[repr(C)]
-struct CFArrayCallBacks {
-    version: CFIndex,
-    retain: *const c_void,
-    release: *const c_void,
-    copy_description: *const c_void,
-    equal: *const c_void,
-}
 
 #[repr(C)]
 struct StreamContext {
@@ -61,14 +51,6 @@ struct StreamContext {
 }
 
 type Callback = extern "C" fn(CFRef, *mut c_void, usize, *mut c_void, *const u32, *const u64);
-
-#[link(name = "CoreFoundation", kind = "framework")]
-unsafe extern "C" {
-    static kCFTypeArrayCallBacks: CFArrayCallBacks;
-    fn CFStringCreateWithBytes(alloc: CFRef, bytes: *const u8, len: CFIndex, encoding: u32, external: u8) -> CFRef;
-    fn CFArrayCreate(alloc: CFRef, values: *const CFRef, n: CFIndex, callbacks: *const CFArrayCallBacks) -> CFRef;
-    fn CFRelease(cf: CFRef);
-}
 
 #[link(name = "CoreServices", kind = "framework")]
 unsafe extern "C" {
@@ -96,7 +78,6 @@ unsafe extern "C" {
     fn dispatch_release(object: Queue);
 }
 
-const UTF8: u32 = 0x0800_0100;
 const SINCE_NOW: u64 = u64::MAX;
 const NO_DEFER: u32 = 0x02;
 const WATCH_ROOT: u32 = 0x04;

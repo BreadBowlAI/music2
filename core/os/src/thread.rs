@@ -40,6 +40,14 @@ pub fn background() -> io::Result<()> {
     os::background()
 }
 
+/// Run `f` on a thread std didn't start (`pthread_create`), as an OS's audio thread is, and wait
+/// for it. A panic in `f` is raised again here. For tests that drive the player as CoreAudio does
+/// (8a): such a thread has no std handle, and its first `thread::current` would allocate.
+#[doc(hidden)]
+pub fn foreign(f: &mut (dyn FnMut() + Send)) -> io::Result<()> {
+    os::foreign(f)
+}
+
 /// From now on the calling thread reads and writes numbers as C does, with a `.`, whatever locale
 /// the process has. A GTK app takes the user's (`setlocale(LC_ALL, "")`), whose decimal comma
 /// makes the C library's `strtod` read "0.5" as 0, and QuickJS's `JSON.parse` uses it. For a
