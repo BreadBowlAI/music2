@@ -61,7 +61,7 @@ Things to try:
 4. **Draw notes.** Double-click the grid to add a note (or press B for Draw mode, where a click adds one and a drag paints), drag a note to move it, and drag its right edge to make it longer.
 5. **Add an effect.** Press ⌥1 (or click **Device**), then click **+** on a box that makes sound and pick an effect such as reverb, or drag one from the browser on the left onto a track.
 6. **Undo.** Press ⌘Z to take these back, one at a time.
-7. **Export it.** Click **Export** in the top bar (or File → Export Audio…, ⇧⌘E). The song is written to a WAV file you can play anywhere or share; click **Show in Finder** when it's done.
+7. **Export it.** Click **Export** in the top bar (or File → Export Audio…, ⇧⌘E). The song is written to a WAV file you can play anywhere or share; click **Show in Finder** when it's done (**Show in Folder** on Linux).
 
 ## The window
 
@@ -125,7 +125,7 @@ It shows the selected track (or the Song) in one of four views, picked with the 
   - A song with plugins pauses while it exports, as a tape would: the export borrows the plugins that play, so they don't need a second copy. The top bar says **Paused for export**. Afterwards play goes on where it paused, and a note held across the pause starts again. Edits made meanwhile are heard once the export is done.
   - Quitting while a song is being exported asks first: quitting stops the export, and no file is saved.
   - The file is written under a hidden name and renamed when it's complete. A hidden file left by an export that was cut off (the app was killed) is removed by the next export into that folder.
-  - When it's done, a message gives the file's name and length, with **Show in Finder** (in a browser, it says which folder).
+  - When it's done, a message gives the file's name and length, with **Show in Finder** (**Show in Folder** on Linux; in a browser, it says which folder).
   - `m2 render` writes the same file.
 
 ## Saving and undo
@@ -142,35 +142,36 @@ It shows the selected track (or the Song) in one of four views, picked with the 
 
 ## Shortcuts
 
-Every key is listed in the app too: Help → Keyboard Shortcuts, or ⌥K. Single keys work when you aren't typing in a field or the code editor.
+Every key is listed in the app too: Help → Keyboard Shortcuts (⌥K on a Mac, Alt+K on Linux). Single keys work when you aren't typing in a field or the code editor. On Linux, Ctrl does what ⌘ does on a Mac, Alt what ⌥ does, Shift what ⇧ does, and the app's labels spell them that way.
 
-| Key | What it does |
-|---|---|
-| Space | Play or stop |
-| Return or Home | Back to the start |
-| C | Loop on or off |
-| ⌘Z / ⇧⌘Z | Undo / redo |
-| ⌘N | New song |
-| ⌘O | Open a song folder |
-| ⌘W | Close the song |
-| ⌘S | Save the code editor's files |
-| ⇧⌘E | Export the song as a WAV file |
-| ⌘T | New track |
-| ⌘⌫ | Delete the selected track (in the code editor or a field, its own ⌘⌫) |
-| ⌘R or ⇧Return | Rename the selected track |
-| ⌘D | Duplicate the selected notes, or with none, the selected track (in the code editor, its own ⌘D) |
-| ⌘A | Select all notes in the open clip |
-| Arrow keys | Move the selected notes (⇧: by an octave or a bar) |
-| Delete | Remove the selected clip or notes |
-| Escape | Deselect |
-| B | Draw mode in Notes |
-| A | Show or hide the selected track's automation (every track's, with none selected) |
-| ⌥1 / ⌥2 / ⌥3 / ⌥4 | Device / Notes / Mix / Code (X: Mix) |
-| E | Show or hide the dock |
-| ⌥⌘B | Show or hide the browser |
-| ⌥K | Keyboard shortcuts |
-| ⇧-drag, ⌥-click, double-click | On a knob: fine-tune, reset to its default, type a value |
-| ↑ ↓, Return, Delete | On a focused knob: step it (⇧: ten steps), type a value, reset it |
+| Mac | Linux | What it does |
+|---|---|---|
+| Space | Space | Play or stop |
+| Return or Home | Enter or Home | Back to the start |
+| C | C | Loop on or off |
+| ⌘Z / ⇧⌘Z | Ctrl+Z / Ctrl+Shift+Z | Undo / redo |
+| ⌘N | Ctrl+N | New song |
+| ⌘O | Ctrl+O | Open a song folder |
+| ⌘W | Ctrl+W | Close the song |
+| ⌘S | Ctrl+S | Save the code editor's files |
+| ⇧⌘E | Ctrl+Shift+E | Export the song as a WAV file |
+| ⌘Q | Ctrl+Q | Quit (on Linux, File → Quit) |
+| ⌘T | Ctrl+T | New track |
+| ⌘⌫ | Ctrl+Backspace | Delete the selected track. In a field or the code editor it edits the text instead: on a Mac up to the line's start, on Linux the word before |
+| ⌘R or ⇧Return | Ctrl+R or Shift+Enter | Rename the selected track |
+| ⌘D | Ctrl+D | Duplicate the selected notes, or with none, the selected track (in the code editor, its own: the next match) |
+| ⌘A | Ctrl+A | Select all notes in the open clip |
+| Arrow keys (⇧: further) | Arrow keys (Shift: further) | Move the selected notes (further: by an octave or a bar) |
+| Delete | Backspace | Remove the selected clip or notes |
+| Escape | Escape | Deselect |
+| B | B | Draw mode in Notes |
+| A | A | Show or hide the selected track's automation (every track's, with none selected) |
+| ⌥1 / ⌥2 / ⌥3 / ⌥4 | Alt+1 / Alt+2 / Alt+3 / Alt+4 | Device / Notes / Mix / Code (X: Mix) |
+| E | E | Show or hide the dock |
+| ⌥⌘B | Ctrl+Alt+B | Show or hide the browser |
+| ⌥K | Alt+K | Keyboard shortcuts |
+| ⇧-drag, ⌥-click, double-click | Shift-drag, Alt-click, double-click | On a knob: fine-tune, reset to its default, type a value |
+| ↑ ↓, Return, Delete | ↑ ↓, Enter, Backspace | On a focused knob: step it (⇧ or Shift: ten steps), type a value, reset it |
 
 ## Words you'll see
 

@@ -235,3 +235,102 @@ this slice changes nothing they see.
   `data-os="mac"`.
 - Code (Monaco, `[data-code]`) on Linux stays in the system's monospace (DejaVu Sans Mono). The plan
   keeps mono as it is.
+
+## A3: keys per OS
+
+**In short**
+- Off the Mac, every label now says the keys a PC has: Ctrl, Alt, Shift, Enter, Backspace. Before,
+  Linux showed ⌥, ⇧ and ⌫ in many places (the ⌥K sheet, tooltips, menus).
+- One helper spells every key (`web/src/lib/native.ts`). No label writes a key by hand any more.
+- The menu bar is one per OS. On Linux: no app menu, Quit in File, About in Help, "Show in Folder".
+  The Mac's is as it was.
+- On Linux, Ctrl+Backspace in a text field deletes the word before, and keeps the track. Before, in
+  the app, it deleted to the line's start (the Mac's ⌘⌫).
+- A new browser suite, `pc-keys` (36 checks), runs as a PC on every OS, the Mac included (T8).
+- The app on an invisible screen (Xvfb) passed the four key checks T8 adds: pictures below.
+- Checks: the crates touched pass, clippy is clean, pc-keys 36/36, and the four suites nearest the
+  change pass. No render record moved.
+
+### What was built
+
+| Where | What |
+|---|---|
+| `web/src/lib/native.ts` | `chord(key, { shift, alt })` (⇧⌘E or Ctrl+Shift+E), `opt` (⌥3 or Alt+3), `shifted` (⇧Return or Shift+Enter), `keyName` (⌫ or Backspace, Return or Enter), `mod` (⌘ ⇧ ⌥ or Ctrl Shift Alt, for "Shift-drag" and "Ctrl + scroll") and `revealLabel` (Show in Finder or Show in Folder). `kbd` and the sheet's own `chord` are gone. |
+| Every label | The top bar, the dock's tabs, + Track, the track menu, a track's name, the start screen, the code view's Save, the roll, the graph's zoom, a knob's tooltip and the ⌥K sheet use the helper. |
+| `App.tsx` | `deleteBack`: ⌘⌫ in a text field deletes to the line's start on a Mac and the word before elsewhere, as one typing step the field's undo takes back. The menu's Delete Track runs it in a field. Off the Mac the page also runs it for Ctrl+Backspace in a field, before the field sees the key (below). |
+| `CodeView.tsx` | The menu's Ctrl+Backspace in the code editor runs Monaco's `deleteWordLeft` off the Mac (`deleteAllLeft` on a Mac, as before). |
+| `apps/music2-desktop/src/menu.rs` | `layout(mac)`: the menu bar as data, one per OS, built by one loop. Tests check both layouts on any OS: every item once in each; the Mac's app menu and Window menu; off the Mac Quit ends File, About ends Help, and no row the system greys out or that does nothing. About off the Mac shows the version and the app's icon. |
+| `e2e/pc-keys.mjs` | The new suite (below). `fixlib.mjs` `open(…, { pc: true })`: the real Chrome, a PC's user agent and platform (`chrome.mjs` `pc`), and `platform: "linux"`. `run.mjs` and `e2e/README.md` list it. |
+| `templates/empty/song.ts`, `mix.rs` | Words every OS shares lose their Mac keys: the Empty template's comment says "+ Track" and "save" with no ⌘T and ⌘S; + Track's refusal says "Add it in the Code view." (it said ⌥4). A test holds the template to no ⌘. Same line count, so no code line moves. |
+| Docs | README: the key table has a Linux column; Show in Folder named. taste.md §5.1 and §5.3: keys per OS, ⌃M and ⌃S Mac only, the menus per OS. PLAT-2 names the helper and the menus. Platform design: OS-54, OS-55 and OS-75 are Built. design-8b: the refusal's words. |
+
+### The new suite: `pc-keys`
+
+Its page has a PC's user agent and platform (set with `page.setUserAgent` before the page loads)
+and `platform: "linux"`, on every OS. So Monaco takes a PC's keys even on the owner's Mac (the
+attack's point G). 36 checks:
+
+| Part | Checks |
+|---|---|
+| The page | Chrome says Linux; the page has no Mac class |
+| Labels | the top bar's tooltips (Ctrl+Z, Ctrl+Shift+Z, Ctrl+Shift+E, Ctrl+Alt+B, Enter); the dock's tabs (Alt+1 to Alt+4); a knob's ("Shift for fine", "Alt-click"); the track menu (Ctrl+R, Ctrl+D, Ctrl+Backspace, Alt+4); the roll's ("Backspace deletes · Ctrl+D duplicates"); 12 rows of the sheet; no sheet row cut short |
+| No Mac symbol | in text, titles, labels and placeholders (outside code): the window, the sheet, + Track's list, the track menu, Notes, Code |
+| Keys | Alt+K, Escape; Ctrl+T; Ctrl+R; Ctrl+Backspace twice in the rename field (a word each, the track kept); Enter; Ctrl+Z; Ctrl+Shift+Z; Ctrl+Backspace on Hats deletes it, Ctrl+Z brings it back; Alt+3, Alt+1, Alt+2, Alt+4 |
+| Code editor | Ctrl+Backspace deletes a word; Ctrl+Z undoes it; Ctrl+D adds the next match (typing changes both); Ctrl+S saves the file |
+
+Tried against the sheet before this slice: 3 checks fail (its Mac symbols, and a row cut short).
+
+### The app on Linux (Xvfb): the GTK path
+
+On Linux, GTK runs a menu's shortcut before the focused field sees the key, so in the app the page
+gets Ctrl+Z, Ctrl+D and Ctrl+Backspace as menu commands even while typing. No browser has that
+path. Checked by hand: the worktree's debug `music2-desktop` on first-song, on an invisible Xvfb
+screen, a scratch HOME, `M2_AUDIO=none`; keys and clicks sent with XTest by `~/m2-runs/tools/xkey`
+(new, outside the repo, as plan §4.5 says).
+
+| Check (T8) | Result |
+|---|---|
+| Ctrl+Backspace in a rename field deletes a word and keeps the track | "Kick big drum" became "Kick big "; `tracks/kick.ts` and every other file unchanged |
+| Ctrl+Z works in a type-in field | typing then Ctrl+Z put the field back ("Kick big drum"); nothing written |
+| Ctrl+D in Monaco adds the next match | "// abc abc", the last abc selected, Ctrl+D, typing "xyz": "// xyz xyz" |
+| Alt+3 shows Mix | yes (with the focus outside the code editor: see below) |
+| Also | Ctrl+Backspace in Monaco deleted one word ("end"), not the line; Ctrl+S saved "// xyz xyz" to `tracks/kick.ts`; Alt+4 showed Code; Ctrl+Backspace on Hats deleted it and Ctrl+Z brought it back; Alt+K showed the sheet with every row whole; the menus as designed; About opens GTK's dialog with the version and icon |
+
+Pictures: `~/m2-runs/tn-scratch/a3/` (`01-file.png` the File menu, `03-help.png` Help, `05-rename.png`,
+`06-field-undo.png`, `08-code-word.png`, `09-code-ctrl-d.png`, `10-mix.png`, `12-sheet.png`,
+`13-about.png`). The script is `a3/app.sh` and `a3/do.sh`.
+
+### Decisions made in the slice
+
+| What | Decided | Why |
+|---|---|---|
+| Who deletes the word on Ctrl+Backspace in a field | The page (`deleteBack`), on every PC path: from GTK's menu in the app, and from the key in a browser, before the field sees it | In the app GTK takes the key first. In a browser, Chrome built for the Mac doesn't delete a word on Ctrl+Backspace, so pc-keys would fail on the owner's Mac. One function, tested by pc-keys on both. |
+| Edit menu off the Mac | No Cut, Copy, Paste or Select All rows | muda's GTK rows only work with libxdo, which isn't built in: they did nothing. The web view has the keys itself (Ctrl+C, Ctrl+V). Nothing in a menu that does nothing. |
+| Window menu off the Mac | None, so no Shift+Ctrl+W | GTK greys out Minimize and Maximize. The window's close button and Ctrl+Q quit. |
+| The reveal label | "Show in Folder" in the menu and both toasts | The New Song toast said "Show Folder"; the plan names one label, as the export toast had it. |
+| The sheet's width | 800 px, on every OS | At 720 px a PC's longer keys cut three names short in WebKitGTK ("Move notes by the grid / by …"). pc-keys now checks no row is cut. |
+| Ctrl+Shift+E, not Shift+Ctrl+E | Our labels say Ctrl first | It is Windows' order and most apps'. GTK writes "Shift+Ctrl+E" in its own menu rows; that order is GTK's, not ours. |
+| Small Mac changes | The sheet's "⌥click / ⌫" is "⌥-click / ⌫", as a knob's tooltip says; the graph's zoom tooltip "⌘ scroll" is "⌘ + scroll", as the roll's says | One spelling each. No suite reads them. |
+| Words every OS shares | No key in them | The Empty template is the same file on a Mac and on Linux. |
+| ⌥3 while typing in the code editor | Nothing happens, on every OS | Taste §5.3: the page's own keys never fire in a field. Not a Linux fault. |
+
+### Checks
+
+| Check | Result |
+|---|---|
+| `cargo test -p music2-desktop --bin music2-desktop` | 7 passed (4 new) |
+| `cargo test -p m2-editor` | 183 passed |
+| `cargo clippy -p music2-desktop -p m2-editor --all-targets -D warnings` | clean |
+| The web build | passes |
+| `pc-keys` | 36 of 36 |
+| `taste`, `s8-tracks`, `newsong`, `code` (the sheet, the template, the toasts, Monaco) | 39, 75, 65 and 58: all pass |
+| `renders.sha256`, `renders.json`, `std.wasm`, `Cargo.lock` | unchanged (no std or engine code changed) |
+
+### Left
+
+- Ctrl+Period (⌘. panic) comes with the WIP song bar (B1); check it on Linux then.
+- B1 moves the WIP's own Mac strings to the helper (break 24: "(⇧ for fine)", the Play title's
+  "(⇧Space)", the sheet's "⇧Space"); B2's pc-keys gains a song-bar tooltip.
+- Windows (later): Redo is Ctrl+Y there (OS-54); the layout's "elsewhere" branch is GTK's today.
+- The Mac run: the menu bar as before (the app menu, Window, Full Screen), and pc-keys passing on the
+  Mac (its Chrome built for the Mac, with a PC's user agent).

@@ -1176,8 +1176,8 @@ keys, Space, Return, ⌫, arrows, ⌥ chords) is handled by the page, with no na
 | **Tracks** | | | | |
 | New track | ⌘T | — | ⌥⌘N | ⌘T (audio), ⇧⌘T (MIDI) |
 | Delete track | ⌘⌫ | — | ⌘⌫ | ⌫ |
-| Mute the selected track | M (also ⌃M) | — | ⌃M | — |
-| Solo the selected track | S (also ⌃S) | — | ⌃S | — |
+| Mute the selected track | M (also ⌃M, Mac only) | — | ⌃M | — |
+| Solo the selected track | S (also ⌃S, Mac only) | — | ⌃S | — |
 | Show / hide automation | A | — | A | A |
 | Track height | ⌘↑ / ⌘↓ | — | ⌘↑ / ⌘↓ | — |
 | **View** | | | | |
@@ -1214,7 +1214,7 @@ keys, Space, Return, ⌫, arrows, ⌥ chords) is handled by the page, with no na
 - **⌘K stays free for musical typing,** as in Logic. The command palette takes ⇧⌘P, the code
   editor convention, which fits a code-first app.
 - **M and S mute and solo the selected track.** This is fast and one-handed. ⌃M and ⌃S also work for
-  Logic hands. Live's M (computer keyboard) is covered by ⌘K.
+  Logic hands, on a Mac only: elsewhere Ctrl stands for ⌘, and Ctrl+S saves. Live's M (computer keyboard) is covered by ⌘K.
 - **Stop returns to where play started (Live).** ⇧Space continues from where it stopped. A click in
   the ruler or on empty lane space moves the start point.
 - **No ⇧Tab:** it moves keyboard focus backwards, and focus traversal must keep working.
@@ -1245,6 +1245,11 @@ keys, Space, Return, ⌫, arrows, ⌥ chords) is handled by the page, with no na
 
 ### 5.3 Rules
 
+- **Keys per OS (OS-54).** The map writes the Mac's keys. Elsewhere ⌘ is Ctrl, ⌥ is Alt, ⇧ is Shift,
+  ⌫ is Backspace and Return is Enter, and every label spells them in words: "Ctrl+Shift+E",
+  "Shift-drag", "Alt-click". `web/src/lib/native.ts` spells them all (`chord`, `opt`, `shifted`,
+  `keyName`, `mod`); no label writes a key by hand. ⌃ chords are Mac only. In a text field,
+  Ctrl+Backspace deletes the word before, as PC fields do (⌘⌫ deletes to the line's start on a Mac).
 - **Native menu accelerators are only ⌘ and ⌃ chords.** A native accelerator fires even while the
   producer types in the code editor or a rename field, which is why `menu.rs` already leaves Space
   out. So single keys, Space, Return, ⌫, arrows and ⌥ chords are the page's, and are ignored while
@@ -1256,10 +1261,12 @@ keys, Space, Return, ⌫, arrows, ⌥ chords) is handled by the page, with no na
   and in the ⌥K sheet, grouped as in §5.1.
 - The Transport menu lists Play, Continue, Go to Start, Loop, Loop Selection, Metronome and Follow.
 - The View menu lists Zoom In, Zoom Out, Zoom to Selection, Track Height, Show Automation, the four
-  dock views, Show Dock, Show Browser, Command Palette and Full Screen.
-- The Track menu (new) lists New Track, Delete, Rename, Mute (⌃M), Solo (⌃S) and Mute in Song.
+  dock views, Show Dock, Show Browser, Command Palette and, on a Mac, Full Screen.
+- The Track menu (new) lists New Track, Delete, Rename, Mute (⌃M on a Mac), Solo (⌃S on a Mac) and Mute
+  in Song.
   Duplicate is one item, in Edit, and acts on whatever is selected (§5.1).
-- The Help menu lists Keyboard Shortcuts.
+- The Help menu lists Keyboard Shortcuts. Off the Mac there is no app menu: About ends Help, and Quit
+  (Ctrl+Q) ends File. Only the Mac has a Window menu.
 
 ---
 
