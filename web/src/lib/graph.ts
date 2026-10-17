@@ -352,7 +352,14 @@ export interface MixStrip {
   pan_insert: boolean;
   /** Why a track has no fader: "Not in the mixer", or "In 2 channels: set its level in code". */
   why: string | null;
+  /** The automation lane its level follows: the fader shows it, read only (taste.md §2.10). */
+  db_lane: LaneRef | null;
+  /** The automation lane its pan follows. */
+  pan_lane: LaneRef | null;
 }
+
+/** A lane, by its module's key and its own. */
+export interface LaneRef { module: string; lane: string }
 
 /**
  * The Mix view of the accepted revision: a strip per track in the track order, then one per channel
@@ -363,8 +370,8 @@ export interface MixView {
   mixer: "ok" | "none" | "several" | "unwritten";
   message: string | null;
   strips: MixStrip[];
-  /** std's master: its fader's and its ceiling's knob ids. Null without exactly one master. */
-  master: { db: string | null; ceiling: string | null } | null;
+  /** std's master: its fader's and its ceiling's knob ids, and the lane its level follows. Null without exactly one master. */
+  master: { db: string | null; ceiling: string | null; db_lane: LaneRef | null } | null;
 }
 
 /** A loop between two beats; its range is kept while it is off. */
@@ -699,6 +706,12 @@ export const graphApi = {
   /** The time signature in effect at `at`; with `add`, a change on the bar line at or before it; with `remove`, the change at `at` taken out. */
   meter: (session: number, change: { at: number; beats?: number; unit?: number; add?: boolean; remove?: boolean }, step: Step) =>
     edit(session, step, call<Edit>("/meter", { session, ...change })),
+  /**
+   * Remove automation (KN-2): the lane's value at `beat` (the playhead's) is written back where the
+   * code reads the lane, and the lane's file goes. One undoable edit.
+   */
+  removeAutomation: (session: number, lane: LaneRef, beat: number, step: Step) =>
+    edit(session, step, call<Edit>("/automate/remove", { session, module: lane.module, lane: lane.lane, beat })),
   /** Call the song `name`: its manifest's name. The folder keeps its own. */
   title: (session: number, name: string, step: Step) => edit(session, step, call<Edit>("/title", { session, name })),
   /** Stop all sound (⌘.): every note off, every instance reset. Not a write. */

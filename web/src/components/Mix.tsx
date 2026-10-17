@@ -1,17 +1,22 @@
 import clsx from "clsx";
 import { CodeXml, Pencil } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { beatNow, onFrame } from "../lib/clock";
 import {
   display,
+  findLane,
   formatValue,
   fromUnit,
   graphApi,
+  laneTitle,
+  laneValue,
   lockReason,
   parseValue,
   stepValue,
   toUnit,
   type GraphState,
   type Knob as KnobInfo,
+  type LaneRef,
   type MixStrip,
 } from "../lib/graph";
 import { laneMade } from "../lib/events";
@@ -132,7 +137,7 @@ export default function Mix({ graph }: { graph: GraphState }) {
           <Strip key={s.channel ? `channel:${s.channel}` : `track:${s.modules[0]}`} strip={s} selected={!!selected && s.modules.includes(selected)} {...props} />
         ))}
       </div>
-      {mix.master && <MasterStrip knob={master} {...props} />}
+      {mix.master && <MasterStrip knob={master} lane={mix.master.db_lane} {...props} />}
     </div>
   );
 }
@@ -190,13 +195,15 @@ const Strip = memo(function Strip({ strip, selected, knobs, session, revision, l
         {strip.channel && (pan || strip.pan_insert) ? (
           <Pan channel={strip.channel} name={strip.label} knob={pan} session={session} revision={revision} editable={editable} locked={locked} />
         ) : (
-          strip.channel && <div data-testid="pan-in-code" className="h-full grid place-items-center text-xs text-fg-faint" title="Its pan follows a lane or a signal in the code">—</div>
+          strip.channel && <PanInCode lane={strip.pan_lane} />
         )}
       </div>
       {/* M and S: mute and solo come here (8b.4), so nothing moves when they do. */}
       <div className="h-6 shrink-0" />
       {db ? (
         <Fader knob={db} name={strip.label} session={session} revision={revision} editable={editable} locked={locked} />
+      ) : strip.db_lane ? (
+        <LaneFader lane={strip.db_lane} name={strip.label} session={session} locked={locked} at={at} />
       ) : (
         <NoFader why={strip.why ?? "Its level is set in code"} at={at} />
       )}
@@ -206,7 +213,7 @@ const Strip = memo(function Strip({ strip, selected, knobs, session, revision, l
 });
 
 /** Master (MX-5): 96 px, graphite, pinned right after a 12 px gap; no pan, M or S (MON-1). */
-function MasterStrip({ knob, session, revision, locked, mixer }: StripProps & { knob: KnobInfo | undefined }) {
+function MasterStrip({ knob, lane, session, revision, locked, mixer }: StripProps & { knob: KnobInfo | undefined; lane: LaneRef | null }) {
   const name = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState(false);
   const at = placeOf(knob) ?? mixer;
@@ -226,9 +233,157 @@ function MasterStrip({ knob, session, revision, locked, mixer }: StripProps & { 
       </div>
       <div className="h-[46px] shrink-0" />
       <div className="h-6 shrink-0" />
-      {knob ? <Fader knob={knob} name="Master" session={session} revision={revision} editable={!locked} locked={locked} /> : <NoFader why="Its level is set in code" at={at} />}
+      {knob ? (
+        <Fader knob={knob} name="Master" session={session} revision={revision} editable={!locked} locked={locked} />
+      ) : lane ? (
+        <LaneFader lane={lane} name="Master" session={session} locked={locked} at={at} />
+      ) : (
+        <NoFader why="Its level is set in code" at={at} />
+      )}
       {menu && name.current && <StripMenu name="Master" module={null} anchor={name.current} at={at} locked={locked} onClose={() => setMenu(false)} />}
     </div>
+  );
+}
+
+/** What a lane is called on screen ("Hats volume"), as its header in the timeline says it. */
+function useLaneName(lane: LaneRef | null) {
+  return useStore((s) => {
+    const found = lane && s.graph ? findLane(s.graph.timeline, lane.module, lane.lane) : undefined;
+    return found ? laneTitle(found) : (lane?.lane ?? "");
+  });
+}
+
+/** A pan the code doesn't write as a number: "—", and what sets it. */
+function PanInCode({ lane }: { lane: LaneRef | null }) {
+  const name = useLaneName(lane);
+  return (
+    <div data-testid="pan-in-code" className="h-full grid place-items-center text-xs text-fg-faint" title={lane ? `Follows the ${name} lane.` : "Its pan follows a signal in the code"}>
+      —
+    </div>
+  );
+}
+
+/**
+ * A level an automation lane sets (taste.md §2.10, KN-2): the fader shows the lane's value at the
+ * playhead, read only, with the lane's marker; it says "Follows the Hats volume lane" and changes
+ * nothing when dragged. Its menu shows the lane, or removes the automation (the value at the playhead
+ * goes back into the code), or opens the code.
+ */
+function LaneFader({ lane, name, session, locked, at }: { lane: LaneRef; name: string; session: number; locked: string | null; at: { file: string; line: number } | null }) {
+  const toast = useStore((s) => s.toast);
+  const shown = useLaneName(lane);
+  const found = useStore((s) => (s.graph ? findLane(s.graph.timeline, lane.module, lane.lane) : undefined));
+  const control = found?.kind === "control" ? found : undefined;
+  const [value, setValue] = useState<number | null>(null);
+  useEffect(() => {
+    if (!control) return setValue(null);
+    return onFrame((beat) => {
+      const v = laneValue(control, beat).value;
+      setValue((was) => (was === v ? was : v));
+    });
+  }, [control]);
+  const column = useRef<HTMLDivElement>(null);
+  const [menu, setMenu] = useState(false);
+  const [held, setHeld] = useState<{ x: number; y: number } | null>(null);
+  const follows = `Follows the ${shown} lane.`;
+  const v = value ?? 0;
+  const top = v <= SILENT ? `calc(100% - ${FOOT / 2}px)` : `calc((100% - ${FOOT}px) * ${1 - faderAt(v)})`;
+  const remove = () => {
+    setMenu(false);
+    graphApi.removeAutomation(session, lane, beatNow(), { name: `removing ${shown}'s automation`, structural: true }).catch((e) => toast(message(e)));
+  };
+  return (
+    <div
+      className="flex-1 min-h-0 flex flex-col"
+      data-fader={name}
+      data-lane-fader={`${lane.module}.${lane.lane}`}
+      data-value={value ?? undefined}
+      aria-disabled
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setMenu(true);
+      }}
+    >
+      <div
+        ref={column}
+        title={follows}
+        className="relative flex-1 min-h-0 py-[5px] touch-none"
+        onPointerDown={(e) => e.button === 0 && (e.currentTarget.setPointerCapture(e.pointerId), setHeld({ x: e.clientX, y: e.clientY }))}
+        onPointerMove={(e) => held && setHeld({ x: e.clientX, y: e.clientY })}
+        onPointerUp={() => setHeld(null)}
+        onPointerCancel={() => setHeld(null)}
+      >
+        <div data-testid="fader-travel" className="relative h-full">
+          <Rails />
+          <div
+            role="slider"
+            aria-label={`${name} volume`}
+            aria-readonly
+            aria-valuemin={SILENT}
+            aria-valuemax={TOP}
+            aria-valuenow={v}
+            aria-valuetext={`${level(v)}, ${follows}`}
+            data-testid="fader-thumb"
+            className="absolute w-5 h-2.5 -translate-x-1/2 -translate-y-1/2 rounded-xs border border-line bg-raised shadow-chip"
+            style={{ left: TRACK_X, top }}
+          >
+            <span className="absolute inset-x-[3px] top-1/2 h-px -translate-y-1/2 bg-fg-off" />
+          </div>
+        </div>
+      </div>
+      <div className="relative h-5 shrink-0 flex items-center justify-center gap-1">
+        <span data-testid="fader-level" className="text-xs tabular-nums text-fg" title={follows}>
+          {value === null ? "—" : level(v)}
+        </span>
+        <span data-testid="lane-marker" className="shrink-0 size-[5px] rounded-full bg-accent" title={follows} />
+      </div>
+      {held && <Bubble at={held}>{follows}</Bubble>}
+      {menu && column.current && (
+        <Popover anchor={column.current} onClose={() => setMenu(false)} role="menu" aria-label={`${name} volume menu`} data-testid="lane-fader-menu" className="w-[240px]">
+          <MenuRow
+            onClick={() => {
+              setMenu(false);
+              laneMade(lane.module, lane.lane);
+            }}
+          >
+            Show {shown} lane
+          </MenuRow>
+          <MenuRow disabled={!!locked} title={locked ?? undefined} onClick={remove}>
+            Remove automation
+          </MenuRow>
+          <div role="separator" className="my-1 h-px bg-line" />
+          <MenuRow
+            icon={<CodeXml size={14} />}
+            detail={at ? <span data-code className="font-mono">{at.file}:{at.line}</span> : undefined}
+            onClick={() => {
+              setMenu(false);
+              editInCode(at);
+            }}
+          >
+            Edit in code
+          </MenuRow>
+        </Popover>
+      )}
+    </div>
+  );
+}
+
+/** A fader's track, its foot and its marks: +12 dB at the top to −60 dB above the foot, which is darker: silence. */
+function Rails() {
+  return (
+    <>
+      <div className="absolute top-0 w-1 -translate-x-1/2 rounded-t-full bg-line-strong" style={{ left: TRACK_X, bottom: FOOT }} />
+      <div className="absolute bottom-0 w-1 -translate-x-1/2 rounded-b-full bg-fg-off" style={{ left: TRACK_X, height: FOOT }} />
+      {MARKS.map((m) => (
+        <div
+          key={m}
+          aria-hidden
+          className={clsx("absolute h-px", m === 0 ? "w-2 bg-fg-off" : "w-1 bg-line-strong")}
+          style={{ left: `calc(${TRACK_X} - ${m === 0 ? 14 : 10}px)`, top: `calc((100% - ${FOOT}px) * ${1 - faderAt(m)})` }}
+        />
+      ))}
+    </>
   );
 }
 
@@ -465,17 +620,7 @@ function Fader({
     >
       <div ref={column} title={title} {...handlers} className={clsx("relative flex-1 min-h-0 py-[5px] touch-none", !disabled && "cursor-ns-resize")}>
         <div ref={travel} data-testid="fader-travel" className="relative h-full">
-          {/* The track: 4 px, +12 dB at the top to −60 dB above the foot, which is darker: silence. */}
-          <div className="absolute top-0 w-1 -translate-x-1/2 rounded-t-full bg-line-strong" style={{ left: TRACK_X, bottom: FOOT }} />
-          <div className="absolute bottom-0 w-1 -translate-x-1/2 rounded-b-full bg-fg-off" style={{ left: TRACK_X, height: FOOT }} />
-          {MARKS.map((m) => (
-            <div
-              key={m}
-              aria-hidden
-              className={clsx("absolute h-px", m === 0 ? "w-2 bg-fg-off" : "w-1 bg-line-strong")}
-              style={{ left: `calc(${TRACK_X} - ${m === 0 ? 14 : 10}px)`, top: `calc((100% - ${FOOT}px) * ${1 - faderAt(m)})` }}
-            />
-          ))}
+          <Rails />
           <div
             ref={thumb}
             role="slider"
