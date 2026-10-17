@@ -377,6 +377,8 @@ struct LayoutSeen {
     token: u64,
     stamp: Option<(u64, std::time::SystemTime)>,
     changed: bool,
+    /// How many times it was stat'd, for tests.
+    looks: u64,
 }
 
 /// How long closing waits for the session's plugin instances to be destroyed.
@@ -496,10 +498,19 @@ impl Inner {
     }
 
     /// One tick of the watcher, up to the batch that settled in it, if one did, for the actor to
-    /// take in.
-    fn tick(&self) -> Option<(u64, watcher::Ready)> {
+    /// take in; and whether to look at `layout.json` (FMT-19).
+    fn tick(&self) -> (Option<(u64, watcher::Ready)>, bool) {
         let _one = self.ticking.lock();
-        let plan = self.watch.lock().as_mut().and_then(|w| w.plan(Instant::now()))?;
+        let (plan, layout) = match self.watch.lock().as_mut() {
+            Some(w) => (w.plan(Instant::now()), w.look_at_layout()),
+            None => (None, false),
+        };
+        let Some(plan) = plan else { return (None, layout) };
+        (self.looked(plan), layout)
+    }
+
+    /// Look at what a tick planned, with no lock held, and apply it.
+    fn looked(&self, plan: watcher::Plan) -> Option<(u64, watcher::Ready)> {
         // With no lock held: the actor tells the watcher what the session wrote after every job,
         // and must never wait for a walk.
         let looked = plan.look();
@@ -1435,8 +1446,9 @@ impl Graph {
     /// changed for 150 ms, each the same on two polls, git not writing) is read once and taken in
     /// whole. Returns whether clients should refresh. The server's watcher calls it every 50 ms.
     pub fn watch(&self) -> bool {
-        let relayout = self.layout_moved();
-        let Some((token, ready)) = self.inner.tick() else { return relayout && self.republish() };
+        let (ticked, layout) = self.inner.tick();
+        let relayout = self.layout_moved(layout);
+        let Some((token, ready)) = ticked else { return relayout && self.republish() };
         let settled = self.call(move |a| Ok(a.settled(token, ready))).unwrap_or_else(|e| {
             eprintln!("music2: {e:#}");
             false
@@ -1445,13 +1457,23 @@ impl Graph {
     }
 
     /// Whether `layout.json` changed and has held still since the last look (FMT-19): its size and
-    /// time, compared on every tick, so an outside edit (an agent, git) shows within two ticks.
-    fn layout_moved(&self) -> bool {
+    /// time, compared when the tick says to `look` (every tick of a walk; with events, when one named
+    /// it or the tick walked everything) and on every tick while a change waits to hold still, so an
+    /// outside edit (an agent, git) shows within two ticks of its event, and an idle project is
+    /// watched with no stat (WRITE-19).
+    fn layout_moved(&self, look: bool) -> bool {
         let Some((token, dir)) = self.inner.control.lock().open.as_ref().map(|p| (p.engine.token, p.shown.dir.clone())) else { return false };
+        {
+            let seen = self.inner.layout.lock();
+            if seen.token == token && !look && !seen.changed {
+                return false;
+            }
+        }
         let stamp = std::fs::metadata(dir.join(m2_song::path::LAYOUT)).ok().map(|m| (m.len(), m.modified().unwrap_or(std::time::UNIX_EPOCH)));
         let mut seen = self.inner.layout.lock();
+        seen.looks += 1;
         if seen.token != token {
-            *seen = LayoutSeen { token, stamp, changed: false };
+            *seen = LayoutSeen { token, stamp, changed: false, looks: seen.looks };
             return false;
         }
         if seen.stamp != stamp {

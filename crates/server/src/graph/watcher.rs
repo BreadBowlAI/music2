@@ -130,6 +130,10 @@ pub(crate) struct Watch {
     /// When events missed a change, within the last 10 minutes.
     missed: VecDeque<Instant>,
     pub stats: WatchStats,
+    /// Whether the tick that planned last should look at `layout.json` (FMT-19), which no snapshot
+    /// holds, so the settle rule never sees it: every tick of a walk, else when an event named it or
+    /// the tick walks everything.
+    layout: bool,
     /// `BACKSTOP` and `GRACE`, shorter in tests.
     pub(crate) backstop: Duration,
     pub(crate) grace: Duration,
@@ -307,6 +311,7 @@ impl Watch {
             unnamed: vec![],
             missed: VecDeque::new(),
             stats: WatchStats { events, ..WatchStats::default() },
+            layout: true,
             backstop: BACKSTOP,
             grace: GRACE,
             #[cfg(test)]
@@ -356,6 +361,10 @@ impl Watch {
             // path WRITE-19's quiet is judged over.
             Source::Walk => plan.all |= settling,
         }
+        self.layout = match self.source {
+            Source::Walk => true,
+            Source::Events(_) => plan.all || covered(m2_song::path::LAYOUT, &plan.named_by_events),
+        };
         if !plan.all && !plan.due && !settling && plan.named_by_events.is_empty() && self.queued.is_empty() {
             self.stats.idle += 1;
             self.count_misses(now);
@@ -466,6 +475,11 @@ impl Watch {
         if let Source::Events(s) = &self.source {
             s.flush();
         }
+    }
+
+    /// Whether the tick that planned last should look at `layout.json`.
+    pub fn look_at_layout(&self) -> bool {
+        self.layout
     }
 
     /// Look at `paths` again at the next tick, whether events name them or not.

@@ -29,8 +29,10 @@ fn walked_once(graph: &Graph) {
     assert!(stats(graph).walks > 0, "{:?}", stats(graph));
 }
 
-// WRITE-19, the step 6 design's 24: with events, a project nobody writes to is watched with no stat
-// at all between the walks of everything, which come every 5 s.
+// WRITE-19, the step 6 design's 24, FMT-19: with events, a project nobody writes to is watched with
+// no stat at all between the walks of everything, which come every 5 s: `layout.json` included,
+// which is looked at when an event names it (and then until it holds still), so an outside edit of
+// it still shows.
 #[test]
 fn an_idle_project_is_watched_without_a_stat() {
     let fixture = Fixture::new();
@@ -38,13 +40,23 @@ fn an_idle_project_is_watched_without_a_stat() {
     let graph = fixture.open();
     assert!(stats(&graph).events, "a temp folder is on a local volume");
     walked_once(&graph);
+    graph.watch();
     let before = stats(&graph);
+    let looks = || graph.inner.layout.lock().looks;
+    let layout_before = looks();
     for _ in 0..20 {
         graph.watch();
         std::thread::sleep(Duration::from_millis(20));
     }
     let after = stats(&graph);
     assert_eq!((after.walks, after.scoped, after.idle), (before.walks, before.scoped, before.idle + 20), "{after:?}");
+    assert_eq!(looks(), layout_before, "layout.json isn't stat'd either");
+    let token = graph.state().unwrap()["session"].as_u64().unwrap();
+    std::fs::write(fixture.0.join("layout.json"), "{\"order\": [\"kick\"], \"tracks\": {\"kick\": {\"colour\": \"lime\"}}}").unwrap();
+    watching(&graph, 1000, |g| g.state().unwrap()["timeline"]["tracks"].as_array().unwrap().iter().any(|t| t["colour"] == "lime"));
+    let lime = graph.state().unwrap()["timeline"]["tracks"].as_array().unwrap().iter().any(|t| t["colour"] == "lime");
+    assert!(lime && stats(&graph).walks == after.walks, "an outside edit shows by its event, before the next walk: {:?}", stats(&graph));
+    assert_eq!(graph.state().unwrap()["session"].as_u64().unwrap(), token);
 }
 
 // R12, WRITE-19: the session's own commits make no batch with events either: their events name the
@@ -89,7 +101,7 @@ fn an_outside_replace_right_after_an_own_write_is_taken_in() {
                 std::fs::write(dir.join(".fmt.tmp"), &replace).unwrap();
                 std::fs::rename(dir.join(".fmt.tmp"), dir.join("data/kick/hits.json")).unwrap();
                 std::thread::sleep(Duration::from_millis(100));
-                assert!(inner.tick().is_none(), "the replace opens a batch");
+                assert!(inner.tick().0.is_none(), "the replace opens a batch");
                 assert!(inner.watch.lock().as_ref().unwrap().settle.settling());
             }
         }));
