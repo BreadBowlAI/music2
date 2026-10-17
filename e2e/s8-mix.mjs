@@ -218,6 +218,20 @@ check(await songIs(entry("kick: kick.out,", "kick: { in: kick.out, pan: 0 },")),
 await undo();
 check(await songIs(orig.song), "a second ⌘Z takes `pan: 0` out: `kick: kick.out` again");
 check(await until(async () => (await panOf("kick")).dflt), "and the pan reads C in grey again");
+// The wheel on a pan the code doesn't write yet (T6): `pan: 0`, then the notches as one gesture,
+// however long they last: two undos put the entry back.
+const kw = await box(`${pan("kick")} svg`);
+await page.mouse.move(kw.x + kw.width / 2, kw.y + kw.height / 2);
+for (let i = 0; i < 8; i++) {
+  await page.mouse.wheel({ deltaY: -40 });
+  await sleep(90);
+}
+check(await until(() => /kick: \{ in: kick\.out, pan: 0\.16 \},/.test(read("song.ts"))), `eight notches up write R 16: ${read("song.ts").match(/kick: .*,/)?.[0]}`);
+await sleep(700);
+await undo();
+check(await songIs(entry("kick: kick.out,", "kick: { in: kick.out, pan: 0 },")), "one undo puts the pan back at the centre");
+await undo();
+check(await songIs(orig.song), "a second takes `pan: 0` out");
 
 // ---------------------------------------------------------------- Master (MX-5)
 

@@ -759,8 +759,8 @@ function Pan({
   const live = knob ? { knob, revision } : (made ?? { knob: blank, revision });
   const first = !knob && !made;
   const g = useKnobGesture({ session, revision: live.revision, knob: live.knob, editable, name: label, label });
-  // The first pan being written: the value to go on with, and whether the drag was let go (or lost) meanwhile.
-  const writing = useRef<{ value: number; released: boolean; cancelled: boolean } | null>(null);
+  // The first pan being written: the value to go on with, how it goes on, and whether the drag was let go (or lost) meanwhile.
+  const writing = useRef<{ value: number; how: "drag" | "step" | "value"; released: boolean; cancelled: boolean } | null>(null);
   // The first pan was refused during this press: the rest of it asks no more (one toast, not one a move).
   const refused = useRef(false);
   const svg = useRef<SVGSVGElement>(null);
@@ -770,13 +770,17 @@ function Pan({
   const k = g.descriptor;
   const value = g.value;
 
-  /** Write `pan: 0`, then go on: a drag (`drag`) holds on as a lease on the new knob; else `v` is written as one more step. */
-  const writeFirst = (v: number, drag: boolean) => {
+  /**
+   * Write `pan: 0`, then go on: a drag holds on as a lease on the new knob; a run of steps (the
+   * wheel, ↑ ↓) goes on as one gesture, written half a second after the last, so its notches are
+   * one undo step however long they last (T6); a typed value is written as one more step.
+   */
+  const writeFirst = (v: number, how: "drag" | "step" | "value") => {
     if (writing.current) {
       writing.current.value = v;
       return;
     }
-    const now = { value: v, released: !drag, cancelled: false };
+    const now = { value: v, how, released: how !== "drag", cancelled: false };
     writing.current = now;
     graphApi
       .mixInsert(session, channel, "pan", 0, { name: label })
@@ -785,6 +789,8 @@ function Pan({
         setMade(m);
         if (now.cancelled) return g.show(0);
         g.start(m);
+        // The notches that came meanwhile, and the ones after: one gesture, which the idle timer ends.
+        if (now.how === "step") return g.step(() => now.value);
         g.change(now.value);
         if (now.released) g.end();
       })
@@ -799,12 +805,12 @@ function Pan({
   };
 
   /** A move to `v`: the first one writes the pan first (`drag` past 4 px, or a step or a typed value). */
-  const change = (v: number) => (first ? writeFirst(v, false) : g.change(v));
+  const change = (v: number) => (first ? writeFirst(v, "value") : g.change(v));
   const step = (n: number) => {
     if (!first) return g.step((v, k) => fromUnit(k, Math.min(1, Math.max(0, toUnit(k, stepValue(k, v, n))))));
     const v = stepValue(blank, writing.current?.value ?? 0, n);
     g.show(v);
-    writeFirst(v, false);
+    writeFirst(v, "step");
   };
   const type = () => {
     g.settle();
@@ -841,7 +847,7 @@ function Pan({
       // Not written yet: shown as it goes, and written once the drag passes 4 px.
       g.show(v);
       if (writing.current) writing.current.value = v;
-      else if (moved >= 4) writeFirst(v, true);
+      else if (moved >= 4) writeFirst(v, "drag");
     },
     onEnd: () => {
       if (g.dragging()) return g.end();
