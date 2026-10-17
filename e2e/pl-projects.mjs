@@ -50,6 +50,8 @@ const readJson = (f) => {
 const browser = await puppeteer.launch({ executablePath: exe, args: ["--no-sandbox"] });
 const errors = [];
 const servers = [];
+// The servers this suite started end with it, also when a check throws.
+process.on("exit", () => servers.forEach((s) => s.exitCode === null && s.signalCode === null && s.kill("SIGKILL")));
 
 /** A headless server of this suite's own on `dir` (or none: "-"), with the run's HOME. */
 async function serve(name, dir = "-") {

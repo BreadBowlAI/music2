@@ -311,8 +311,10 @@ starts over after a folder rename) in the routes list.
   moment.
 - `local.ts`: when the song's settings are read again while a change is on its way, a setting the
   page took out (null) stays out, rather than reading as null.
-- After both: `pl-projects` 58, `pl-tracks` 20, `s8-audition` 51, `s8-clips` 94, `taste` 39; the
-  Rust tests of `project_tests.rs` and clippy clean.
+- `pl-projects` stops the servers it started also when a check throws (a red run left five
+  running before). Checked: a run on an empty page throws, and no server is left.
+- After these: `pl-projects` 58, `pl-tracks` 20, `s8-audition` 51, `s8-clips` 94, `taste` 39;
+  `cargo test -p m2-server` 231 and `-p music2-desktop` 10 (and `app_main_thread`); clippy clean.
 
 **The desktop app on Linux** (the debug build, on the invisible screen `:96`, a scratch HOME,
 `M2_AUDIO=none`; a smoke check, not a suite; the End's run is the full one):
