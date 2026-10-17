@@ -14,7 +14,9 @@
 //! Quit (Ctrl+Q) ends File, About ends Help, and no Window menu. `CmdOrCtrl` is ⌘ on a Mac and
 //! Ctrl elsewhere.
 
-use tauri::menu::{AboutMetadata, Menu, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
+use std::sync::Mutex;
+
+use tauri::menu::{AboutMetadata, Menu, MenuBuilder, MenuItem, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Manager, Wry};
 
 use crate::{Native, actions};
@@ -118,8 +120,58 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     ("next_marker", "Next Marker", None),
     // Panic (RENDER-10): every note off, every instance reset.
     ("panic", "Stop All Sound", Some("CmdOrCtrl+Period")),
+    // The metronome (gaps #19): a click on each beat while the song plays. K is the page's key.
+    ("metronome", "Metronome", None),
+    // The keyboard piano (Q8): the letter keys play the selected track. ⌘K from anywhere, typing
+    // included: the code editor's own ⌘K chords give way to it (X15).
+    ("piano", "Keyboard Piano", Some("CmdOrCtrl+K")),
     ("shortcuts", "Keyboard Shortcuts", None),
+    // This machine's settings (gaps #31): the sound output, the buffer size, where new songs go.
+    // In the app menu on a Mac, after About; in File elsewhere, above Quit.
+    ("settings", "Settings…", Some("CmdOrCtrl+Comma")),
 ];
+
+/// Undo's and Redo's names as the Edit menu says them (gaps #29), and the two items of the menu bar
+/// built last: a menu built again (the recent songs changed) is titled from the names.
+struct Undo {
+    names: (Option<String>, Option<String>),
+    items: Option<(MenuItem<Wry>, MenuItem<Wry>)>,
+}
+
+static UNDO: Mutex<Undo> = Mutex::new(Undo { names: (None, None), items: None });
+
+/// An item's title: Undo's and Redo's with the name of what they take back ("Undo Hats pan"), or
+/// their word alone; any other item's as `ITEMS` has it.
+fn title(id: &str, text: &str) -> String {
+    let names = UNDO.lock().map(|u| u.names.clone()).unwrap_or_default();
+    let name = match id {
+        "undo" => names.0,
+        "redo" => names.1,
+        _ => None,
+    };
+    match name {
+        Some(name) => format!("{text} {name}"),
+        None => text.to_string(),
+    }
+}
+
+/// Edit ▸ Undo and Redo say what they would take back (gaps #29): the app's title loop gives the
+/// names the server publishes, and the items change only when they do.
+pub fn set_undo_names(undo: Option<String>, redo: Option<String>) {
+    let items = {
+        let Ok(mut u) = UNDO.lock() else { return };
+        if u.names == (undo.clone(), redo.clone()) {
+            return;
+        }
+        u.names = (undo, redo);
+        u.items.clone()
+    };
+    // Off the lock: a title is set on the main thread, which may be building the menu.
+    if let Some((undo, redo)) = items {
+        let _ = undo.set_text(title("undo", "Undo"));
+        let _ = redo.set_text(title("redo", "Redo"));
+    }
+}
 
 /// Window → Close Window, which quits (as the window's close button does): ⌘W is Close Song.
 const CLOSE_WINDOW: &str = "Shift+CmdOrCtrl+W";
@@ -190,6 +242,7 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
         Item("lanes"),
         Item("dock"),
         Item("browser"),
+        Item("piano"),
         Line,
         Item("grid_narrower"),
         Item("grid_wider"),
@@ -203,6 +256,7 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
         Line,
         Item("loop"),
         Item("loop_selection"),
+        Item("metronome"),
         Item("follow"),
         Line,
         Item("add_marker"),
@@ -213,7 +267,7 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
     ];
     if mac {
         vec![
-            ("music2", vec![About, Line, Services, Line, Hide, HideOthers, ShowAll, Line, Item("quit")]),
+            ("music2", vec![About, Line, Item("settings"), Line, Services, Line, Hide, HideOthers, ShowAll, Line, Item("quit")]),
             ("File", file.to_vec()),
             // The system's cut, copy and paste, so text fields get them.
             ("Edit", [&[Item("undo"), Item("redo"), Line, Cut, Copy, Paste, SelectAll, Line][..], &selected].concat()),
@@ -229,7 +283,7 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
         // Copy and Paste rows do nothing here (muda needs libxdo for them): the web view has
         // those keys itself, so they aren't rows.
         vec![
-            ("File", [&file[..], &[Line, Item("quit")]].concat()),
+            ("File", [&file[..], &[Line, Item("settings"), Line, Item("quit")]].concat()),
             ("Edit", [&[Item("undo"), Item("redo"), Line][..], &selected].concat()),
             ("Track", track),
             ("View", views.to_vec()),
@@ -269,17 +323,24 @@ fn recent_songs(app: &AppHandle) -> Vec<(std::path::PathBuf, String)> {
 
 pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let mut bar = MenuBuilder::new(app);
+    let (mut undo, mut redo) = (None, None);
     for (name, rows) in layout(MAC) {
         let mut menu = SubmenuBuilder::new(app, name);
         for row in rows {
             menu = match row {
                 Row::Item(id) => {
                     let &(id, text, accel) = ITEMS.iter().find(|i| i.0 == id).expect("a menu item");
-                    let b = MenuItemBuilder::with_id(id, text);
-                    menu.item(&match accel {
+                    let b = MenuItemBuilder::with_id(id, title(id, text));
+                    let item = match accel {
                         Some(a) => b.accelerator(a).build(app)?,
                         None => b.build(app)?,
-                    })
+                    };
+                    match id {
+                        "undo" => undo = Some(item.clone()),
+                        "redo" => redo = Some(item.clone()),
+                        _ => {}
+                    }
+                    menu.item(&item)
                 }
                 Row::Line => menu.separator(),
                 Row::Recent => {
@@ -313,6 +374,9 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             };
         }
         bar = bar.item(&menu.build()?);
+    }
+    if let Ok(mut u) = UNDO.lock() {
+        u.items = undo.zip(redo);
     }
     bar.build()
 }
@@ -498,9 +562,62 @@ mod tests {
             assert_eq!(view[..6], [Row::Item("zoom_in"), Row::Item("zoom_out"), Row::Item("zoom_fit"), Row::Item("taller"), Row::Item("shorter"), Row::Line]);
             let transport = menu("Transport");
             let at = transport.iter().position(|r| *r == Row::Item("loop_selection")).expect("Loop Selection");
-            assert_eq!(transport[at + 1], Row::Item("follow"), "mac: {mac}");
+            assert_eq!(transport[at + 1..at + 3], [Row::Item("metronome"), Row::Item("follow")], "mac: {mac}");
             let at = transport.iter().position(|r| *r == Row::Item("add_marker")).expect("Add Marker");
             assert_eq!(transport[at - 1..at + 4], [Row::Line, Row::Item("add_marker"), Row::Item("prev_marker"), Row::Item("next_marker"), Row::Line]);
+        }
+    }
+
+    /// Next lane C2 (plan Q18): Settings… is ⌘, (Ctrl+, off the Mac): in the app menu after About on
+    /// a Mac, and in File above Quit's line elsewhere.
+    #[test]
+    fn settings_is_command_comma_in_the_app_menu_on_a_mac_and_in_file_elsewhere() {
+        assert_eq!(ITEMS.iter().find(|i| i.0 == "settings").map(|i| (i.1, i.2)), Some(("Settings…", Some("CmdOrCtrl+Comma"))));
+        let mac = layout(true);
+        assert_eq!(mac[0].1[..4], [Row::About, Row::Line, Row::Item("settings"), Row::Line]);
+        let gtk = layout(false);
+        let file = &gtk.iter().find(|m| m.0 == "File").expect("a File menu").1;
+        assert_eq!(file[file.len() - 4..], [Row::Line, Row::Item("settings"), Row::Line, Row::Item("quit")]);
+        assert!(!mac.iter().find(|m| m.0 == "File").expect("File").1.contains(&Row::Item("settings")), "once on a Mac");
+    }
+
+    /// Gaps #29 (plan X8): Edit ▸ Undo and Redo take the names the server gives, and say their word
+    /// alone with none; a menu built again is titled from them.
+    #[test]
+    fn the_undo_items_take_a_name() {
+        assert_eq!((title("undo", "Undo"), title("redo", "Redo")), ("Undo".to_string(), "Redo".to_string()));
+        set_undo_names(Some("Hats pan".into()), Some("adding Reverb".into()));
+        assert_eq!(title("undo", "Undo"), "Undo Hats pan");
+        assert_eq!(title("redo", "Redo"), "Redo adding Reverb");
+        assert_eq!(title("save", "Save"), "Save", "no other item");
+        set_undo_names(None, Some("Bass notes".into()));
+        assert_eq!((title("undo", "Undo"), title("redo", "Redo")), ("Undo".to_string(), "Redo Bass notes".to_string()));
+        set_undo_names(None, None);
+    }
+
+    /// The next track's lane B: Transport ▸ Metronome, after Loop Selection and before Follow
+    /// Playhead (taste.md's order), on both menu bars, with no chord: K is the page's key.
+    #[test]
+    fn the_metronome_has_its_row_in_transport() {
+        assert_eq!(ITEMS.iter().find(|i| i.0 == "metronome").map(|i| (i.1, i.2)), Some(("Metronome", None)));
+        for mac in [true, false] {
+            let bar = layout(mac);
+            let transport = &bar.iter().find(|m| m.0 == "Transport").expect("Transport").1;
+            let at = transport.iter().position(|r| *r == Row::Item("loop")).expect("Loop");
+            assert_eq!(transport[at..at + 4], [Row::Item("loop"), Row::Item("loop_selection"), Row::Item("metronome"), Row::Item("follow")], "mac: {mac}");
+        }
+    }
+
+    /// The next track's lane B: View ▸ Keyboard Piano, ⌘K (Ctrl+K), right after Show Browser on both
+    /// menu bars.
+    #[test]
+    fn the_keyboard_piano_is_command_k_in_view() {
+        assert_eq!(ITEMS.iter().find(|i| i.0 == "piano").map(|i| (i.1, i.2)), Some(("Keyboard Piano", Some("CmdOrCtrl+K"))));
+        for mac in [true, false] {
+            let bar = layout(mac);
+            let view = &bar.iter().find(|m| m.0 == "View").expect("View").1;
+            let at = view.iter().position(|r| *r == Row::Item("browser")).expect("Show Browser");
+            assert_eq!(view[at + 1], Row::Item("piano"), "mac: {mac}");
         }
     }
 

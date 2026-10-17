@@ -107,6 +107,12 @@ impl DataSet {
         &self.tempo
     }
 
+    /// The same lanes, states and assets with arrangement `arrangement` and its tempo map: what
+    /// a tempo drag plays before it is written (RENDER-27a). Every lane is shared, not copied.
+    pub fn with_arrangement(&self, arrangement: Arc<Arrangement>) -> DataSet {
+        DataSet { tempo: Arc::new(arrangement.tempo_map()), arrangement, ..self.clone() }
+    }
+
     pub fn lane(&self, module: &str, lane: &str) -> Option<&Arc<LaneData>> {
         self.lanes.get(&LaneAddr::new(module, lane).ok()?)
     }

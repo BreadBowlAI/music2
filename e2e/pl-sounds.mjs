@@ -203,7 +203,7 @@ try {
 write("layout.json", JSON.stringify({ ...(layoutWas ? JSON.parse(layoutWas) : { order: [], tracks: {} }), key: { root: "E", scale: "minor" } }, null, 2));
 check(await until(async () => (await page.$eval("[data-testid=key-field]", (e) => e.textContent).catch(() => null)) === "E minor"), "E minor is set in layout.json");
 await new Promise((r) => setTimeout(r, 300));
-check((await shading()) === "1,3,6,8,10", `the Drum kit's rows stay shaded as the black keys', not by E minor: ${await shading()}`);
+check((await shading()) === "", `the Drum kit's rows stay unshaded, not by E minor nor as black keys: a kit has rows, not keys (next D4c): ${await shading()}`);
 check(await openClip("keys.chords"), "Keys' clip opens in Notes");
 check(await until(async () => (await shading()) === "1,3,5,8,10"), `Keys' roll is shaded by E minor: ${await shading()}`);
 if (layoutWas === null) fs.rmSync(`${PROJ}/layout.json`);

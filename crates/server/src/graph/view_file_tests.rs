@@ -1,6 +1,9 @@
 //! The page's view settings (Q16): merged into `.music2/view.json` beside the loop, a null taking
-//! a key out, only the known keys, in memory only in a read-only window.
+//! a key out, only the known keys, in memory only in a read-only window. The metronome (gaps #19)
+//! is one, and the player follows it.
 
+use m2_editor::render::Length;
+use m2_play::{DeviceErrorKind, Player};
 use serde_json::{Map, Value, json};
 
 use crate::graph::Graph;
@@ -72,10 +75,78 @@ fn a_read_only_window_keeps_view_settings_in_memory() {
     let graph = Graph::silent();
     let session = graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     assert!(graph.read_only().is_some());
-    let answer = graph.set_view(session, set(json!({"zoom": 81.0, "follow": false}))).unwrap();
-    assert_eq!(answer["local"], json!({"zoom": 81.0, "follow": false}));
+    let answer = graph.set_view(session, set(json!({"zoom": 81.0, "follow": false, "metronome": true}))).unwrap();
+    assert_eq!(answer["local"], json!({"zoom": 81.0, "follow": false, "metronome": true}));
     assert_eq!(graph.state().unwrap()["local"], answer["local"]);
+    assert!(clicks(&graph), "a read-only window's metronome clicks too");
     assert_eq!(file(&dir), json!({"zoom": 36.0}), "the file is the writer's");
     drop(held);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Whether the player clicks.
+fn clicks(graph: &Graph) -> bool {
+    graph.inner.current_device().expect("a player").player.click()
+}
+
+// gaps #19: the metronome is kept per song in `view.json`, off for a song that never had it on,
+// and the player follows it: when the page sets it, at each open, and in a new player that takes
+// the song after a device change.
+#[test]
+fn the_metronome_is_kept_per_song() {
+    let a = song("click-a", &json!({}));
+    let b = song("click-b", &json!({"zoom": 36.0}));
+    let (p, driver) = Player::driven(48_000);
+    let graph = Graph::with_player(p);
+    let session = graph.open(&a).unwrap()["session"].as_u64().unwrap();
+    assert!(!clicks(&graph), "off for a new song");
+    let answer = graph.set_view(session, set(json!({"metronome": true}))).unwrap();
+    assert_eq!(answer["local"], json!({"metronome": true}));
+    assert!(clicks(&graph), "on at once");
+    assert_eq!(file(&a), json!({"metronome": true}));
+    // Another song has its own: off.
+    graph.close();
+    graph.open(&b).unwrap();
+    assert!(!clicks(&graph), "another song's");
+    // The first again: on, from its file.
+    graph.close();
+    let state = graph.open(&a).unwrap();
+    assert_eq!(state["local"], json!({"metronome": true}));
+    assert!(clicks(&graph), "kept");
+    // A device change: the new player clicks too.
+    driver.error(DeviceErrorKind::DeviceChanged.into());
+    assert!(graph.transport("play").is_err());
+    assert!(graph.poll(), "a new player plays the song");
+    assert_eq!(graph.inner.current_device().unwrap().player.device, "none", "a new player");
+    assert!(clicks(&graph), "the new player clicks");
+    // Off again.
+    let session = graph.state().unwrap()["session"].as_u64().unwrap();
+    graph.set_view(session, set(json!({"metronome": false}))).unwrap();
+    assert!(!clicks(&graph));
+    for d in [a, b] {
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+// RENDER-1, RENDER-3 (a guard): an export with the metronome on has the bytes of one with it off,
+// playing or not: exports never make an engine, and only an engine clicks.
+#[test]
+fn an_export_never_has_the_click() {
+    let dir = song("click-export", &json!({}));
+    let graph = Graph::silent();
+    let session = graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+    let export = |name: &str| {
+        let e = graph.export(Length::Seconds(1.0)).unwrap();
+        let path = dir.join(name);
+        e.render.write(&path, |_| {}).unwrap();
+        std::fs::read(&path).unwrap()
+    };
+    let plain = export("a.wav");
+    graph.set_view(session, set(json!({"metronome": true}))).unwrap();
+    graph.transport("play").unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let clicked = export("b.wav");
+    assert!(clicks(&graph));
+    assert!(plain == clicked, "the same bytes");
     let _ = std::fs::remove_dir_all(&dir);
 }

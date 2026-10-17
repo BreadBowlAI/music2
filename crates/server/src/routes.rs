@@ -94,6 +94,9 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .merge(crate::routes_notes::router(state.clone()))
         .merge(crate::routes_project::router(state.clone()))
         .merge(crate::routes_view::router(state.clone()))
+        .merge(crate::routes_fx::router(state.clone()))
+        .merge(crate::routes_settings::router(state.clone()))
+        .merge(crate::routes_leases::router(state.clone()))
         .route("/api/project/templates", get(project_templates))
         .route("/api/project/new", post(project_new))
         // An unknown API path is a clear error, not the UI's index.html.
@@ -340,9 +343,15 @@ async fn graph_set(State(s): S, Json(r): Json<SetReq>) -> ApiResult {
 
 // ---------------------------------------------------------------- gesture leases (WRITE-22)
 
-/// The knob drags in progress, as the news lists them: an agent can cancel one it finds here.
+/// The knob drags in progress, as the news lists them: an agent can cancel one it finds here. And
+/// the drags on clips (WRITE-22a) and the tempo's (RENDER-27a), with `kind: "lane"` or `"tempo"`.
 async fn graph_leases(State(s): S) -> Json<Value> {
-    Json(json!(s.graph.leases()))
+    let mut all = json!(s.graph.leases());
+    if let Value::Array(a) = &mut all {
+        a.extend(s.graph.lane_leases().iter().map(|l| json!(l)));
+        a.extend(s.graph.tempo_leases().iter().map(|l| json!(l)));
+    }
+    Json(all)
 }
 
 #[derive(Deserialize)]

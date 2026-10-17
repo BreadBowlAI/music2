@@ -37,6 +37,7 @@
 
 pub mod audio;
 pub mod cells;
+pub mod click;
 pub mod data;
 pub mod engine;
 pub mod event;
@@ -2423,6 +2424,11 @@ impl Renderer {
 
     pub fn tempo(&self) -> &TempoMap {
         &self.tempo
+    }
+
+    /// The tempo and meters it plays in.
+    pub fn arrangement(&self) -> &Arrangement {
+        &self.arrangement
     }
 
     /// Take over from `old`, which may play in its own tempo map and at its own rate: the same

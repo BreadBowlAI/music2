@@ -289,7 +289,7 @@ async function heardWhileStopped() {
   fs.cpSync(`${REPO}/examples/first-song`, `${root}/proj`, { recursive: true });
   const capture = `${root}/played.f32`;
   const sessFile = `${root}/home/.music2/session.json`;
-  const env = { ...process.env, M2_AUDIO: "none", M2_AUDIO_CAPTURE: capture, HOME: `${root}/home` };
+  const env = { ...process.env, M2_AUDIO: "none", M2_MIDI: "none", M2_AUDIO_CAPTURE: capture, HOME: `${root}/home` };
   const server = spawn(HEADLESS, [`${root}/proj`, sessFile, `a${Date.now()}`], { env, stdio: ["ignore", "ignore", fs.openSync(`${root}/headless.log`, "w")] });
   const browser = await puppeteer.launch({ executablePath: exe, args: ["--no-sandbox"] });
   try {

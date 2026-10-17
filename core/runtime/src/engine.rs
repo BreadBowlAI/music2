@@ -30,6 +30,7 @@
 //! Cell values are never messages (RENDER-28): each renderer reads its own cells' slots as it
 //! renders a block, after the block line's messages, and the engine stamps when it heard them.
 
+use crate::click::Click;
 use crate::{BLOCK, Cmd, LaneSwap, Leftovers, LiveEv, Pending, Renderer, Runner};
 
 /// A message and its sequence number, which [`Applied`] stamps report.
@@ -172,6 +173,8 @@ pub struct Engine {
     fade: u32,
     /// A panic read while held or holding: applied at the resume, so no plugin is touched.
     panic_held: bool,
+    /// The metronome, mixed after the plan renders (gaps #19).
+    click: Click,
 }
 
 impl Engine {
@@ -204,7 +207,14 @@ impl Engine {
             level: fade_len(rate),
             fade: fade_len(rate),
             panic_held: false,
+            click: Click::default(),
         }
+    }
+
+    /// The metronome on or off, from the next block: a click on each beat while the transport
+    /// moves. Only the live engine has one: exports never make an engine (RENDER-1).
+    pub fn set_click(&mut self, on: bool) {
+        self.click.set(on);
     }
 
     /// An engine playing `renderer`, at its rate, from its transport. The engine clock goes on
@@ -621,6 +631,7 @@ impl Engine {
             }
         };
         let runs = *cur.last_runs();
+        self.click.mix(&mut frames, &runs, cur);
         if let Some(h) = cur.take_heard() {
             self.stamp_heard(h, clock, stamp, frame);
         }

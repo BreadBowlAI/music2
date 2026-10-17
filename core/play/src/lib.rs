@@ -22,6 +22,7 @@
 
 pub mod alloc;
 mod cells;
+pub mod outputs;
 mod resample;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -30,12 +31,13 @@ use std::sync::{Arc, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, StreamTrait};
 pub use cpal::{Error as DeviceError, ErrorKind as DeviceErrorKind};
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use m2_runtime::engine::{APPLIED, Msg as EngineMsg};
 pub use m2_runtime::engine::{Applied, CallbackStamp, Engine, Envelope, Heard, Retired};
 use m2_runtime::{CellTarget, Cmd, LaneSwap, LiveEv, Renderer, Transport};
+pub use outputs::{Choice, Freed, Output, default_output, output_ready, outputs};
 pub use resample::Resampler;
 
 use crate::cells::{CELL_SEQ, Writer};
@@ -231,6 +233,10 @@ struct Shared {
     // Written outside the seqlock.
     clock: AtomicU64,
     last_callback_ns: AtomicU64,
+    /// The last callback's device buffer, in frames: 0 before the first (Settings' Now row).
+    frames: AtomicU32,
+    /// The output chosen is gone, so this plays on the default ([`Player::start_on`]).
+    fell_back: AtomicBool,
     /// The engine rate of the project last sent: what positions count in.
     rate: AtomicU32,
     crashed: AtomicBool,
@@ -242,6 +248,8 @@ struct Shared {
     live: AtomicU32,
     /// The engine renders: a project plays, and it doesn't idle (RENDER-6a).
     running: AtomicBool,
+    /// The metronome is on: each callback tells the engine (gaps #19).
+    click: AtomicBool,
     /// The longest callback since [`Player::load`] last read it, as a share of its period (the
     /// bits of a non-negative `f32`), and the callbacks longer than their period so far (8b.8).
     longest: AtomicU32,
@@ -255,6 +263,9 @@ struct Shared {
     device: AtomicBool,
     /// The last callback played no engine and faded none out: an unload's fade out is done.
     quiet: AtomicBool,
+    /// Its device is free again: the stream stopped, or the silent clock ended (next track, NX-S5:
+    /// [`Player::freed`]).
+    freed: AtomicBool,
     /// Seeks and loads sent, and taken by the audio thread, and the last target: until the
     /// audio thread takes them, they are where playback is.
     seeks_sent: AtomicU64,
@@ -398,6 +409,7 @@ impl Callback {
     fn fill_in(&mut self, data: &mut [f32], channels: usize) {
         let ns = now_ns();
         self.shared.last_callback_ns.store(ns, Ordering::Relaxed);
+        self.shared.frames.store((data.len() / channels.max(1)) as u32, Ordering::Relaxed);
         for i in 0..GONE {
             if let Some(g) = self.gone[i].take()
                 && let Err(e) = self.retired.try_send(g)
@@ -493,7 +505,7 @@ impl Callback {
     }
 
     fn render(&mut self, n: usize, stamp: CallbackStamp) {
-        let Callback { live, fade, held, rx, retired, a, b, seeks, plays, .. } = self;
+        let Callback { live, fade, held, rx, retired, a, b, seeks, plays, shared, .. } = self;
         let mut retire = |r: Retired| match retired.try_send(Gone::Engine(r)) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(Gone::Engine(r)) | TrySendError::Disconnected(Gone::Engine(r))) => Err(r),
@@ -522,6 +534,7 @@ impl Callback {
                         Err(_) => None,
                     }
                 };
+                l.engine.set_click(shared.click.load(Ordering::Relaxed));
                 l.fill(&mut a[..n], &mut inbox, &mut retire, stamp);
             }
             None => a[..n].fill([0.0; 2]),
@@ -729,6 +742,7 @@ fn serve<S>(stream: S, shared: Arc<Shared>, alive: Weak<()>) {
         std::thread::sleep(PLAYED);
     }
     drop(stream);
+    shared.freed.store(true, Ordering::Release);
 }
 
 /// Drop what the audio thread retires, polling: no thread ever blocks on the channel. Ends once
@@ -773,17 +787,39 @@ impl Player {
     /// Open the default output device. With `M2_AUDIO=none`, run silently on a clock
     /// instead (for automated tests).
     pub fn start() -> Result<Player> {
-        if std::env::var("M2_AUDIO").as_deref() == Ok("none") {
-            return Player::silent();
+        Player::start_on(&Choice::default())
+    }
+
+    /// Open the output `choice` names at its buffer size: the default when it names none or one
+    /// that is gone (then [`Player::fell_back`]), and the device's own buffer size when it can't
+    /// take that one. With `M2_AUDIO=none`, a silent player named after the choice
+    /// ([`outputs::outputs`]); with `M2_AUDIO=fail`, no output starts (a test seam).
+    pub fn start_on(choice: &Choice) -> Result<Player> {
+        Player::start_in(outputs::Audio::from_env(), choice)
+    }
+
+    fn start_in(audio: outputs::Audio, choice: &Choice) -> Result<Player> {
+        match audio {
+            outputs::Audio::Silent(names) => {
+                let (name, fell_back, frames) = outputs::Audio::silent_pick(&names, choice);
+                let player = Player::silent_as(&name, frames)?;
+                player.shared.fell_back.store(fell_back, Ordering::Relaxed);
+                return Ok(player);
+            }
+            outputs::Audio::Fail => return Err(anyhow!(outputs::NO_OUTPUT)),
+            outputs::Audio::Device => {}
         }
+        let choice = choice.clone();
         let (ready_tx, ready) = bounded::<Result<Player>>(1);
         std::thread::Builder::new().name("m2-play".into()).spawn(move || {
-            let open = || -> Result<(cpal::Stream, Player, Receiver<Gone>)> {
-                let device = cpal::default_host().default_output_device().ok_or_else(|| anyhow!("no audio output device"))?;
-                let name = device.description().map(|d| d.name().to_string()).unwrap_or_else(|_| "output".into());
-                let config = device.default_output_config()?.config();
+            let open_on = |device: cpal::Device, fell_back: bool| -> Result<(cpal::Stream, Player, Receiver<Gone>)> {
+                let name = outputs::name_of(&device).unwrap_or_else(|| "output".into());
+                let supported = device.default_output_config()?;
+                let mut config = supported.config();
+                config.buffer_size = outputs::buffer(choice.frames, supported.buffer_size());
                 let channels = config.channels as usize;
                 let (player, mut cb, retired) = Player::parts(config.sample_rate, &name);
+                player.shared.fell_back.store(fell_back, Ordering::Relaxed);
                 let shared = player.shared.clone();
                 let stream = device.build_output_stream::<f32, _, _>(
                     config,
@@ -794,6 +830,17 @@ impl Player {
                 stream.play()?;
                 player.shared.device.store(true, Ordering::Relaxed);
                 Ok((stream, player, retired))
+            };
+            // The output chosen, else the default when it is gone or won't open (NX-S1).
+            let open = || {
+                let mut failed = anyhow!(outputs::NO_OUTPUT);
+                for (device, fell_back) in outputs::tries(&choice) {
+                    match open_on(device, fell_back) {
+                        Ok(opened) => return Ok(opened),
+                        Err(e) => failed = e,
+                    }
+                }
+                Err(failed)
             };
             match open() {
                 Ok((stream, player, retired)) => {
@@ -813,11 +860,20 @@ impl Player {
     /// The same player, rendering into nothing in real time: no device, no sound. Device
     /// buffers are `M2_AUDIO_FRAMES` frames (480 unless set) at 48 kHz.
     pub fn silent() -> Result<Player> {
-        const SR: u32 = 48_000;
-        let frames: usize = std::env::var("M2_AUDIO_FRAMES").ok().and_then(|v| v.parse().ok()).filter(|&n| n > 0).unwrap_or(480);
-        let (player, mut cb, retired) = Player::parts(SR, "none");
+        Player::silent_as("none", None)
+    }
+
+    /// [`Player::silent`], named `name`, its buffers `frames` frames when given.
+    fn silent_as(name: &str, frames: Option<u32>) -> Result<Player> {
+        const SR: u32 = outputs::SILENT_RATE;
+        let frames: usize = match frames {
+            Some(n) => n as usize,
+            None => std::env::var("M2_AUDIO_FRAMES").ok().and_then(|v| v.parse().ok()).filter(|&n| n > 0).unwrap_or(480),
+        };
+        let (player, mut cb, retired) = Player::parts(SR, name);
         player.shared.device.store(true, Ordering::Relaxed);
         let alive = Arc::downgrade(&player.alive);
+        let shared = player.shared.clone();
         std::thread::Builder::new().name("m2-play-silent".into()).spawn(move || {
             let mut buf = vec![0.0f32; frames * 2];
             let period = Duration::from_secs_f64(frames as f64 / SR as f64);
@@ -830,6 +886,8 @@ impl Player {
                 next = next.max(Instant::now().checked_sub(period).unwrap_or(next));
                 std::thread::sleep(next.saturating_duration_since(Instant::now()));
             }
+            drop(cb);
+            shared.freed.store(true, Ordering::Release);
         })?;
         drop_retired(retired);
         Ok(player)
@@ -838,6 +896,8 @@ impl Player {
     /// A player whose callback the caller runs ([`Driver::fill`]), at `device_rate`.
     pub fn driven(device_rate: u32) -> (Player, Driver) {
         let (player, cb, retired) = Player::parts(device_rate, "driven");
+        // No device of its own: free at once.
+        player.shared.freed.store(true, Ordering::Relaxed);
         (player, Driver { cb, retired })
     }
 
@@ -995,6 +1055,17 @@ impl Player {
         self.shared.held.load(Ordering::Acquire)
     }
 
+    /// The metronome on or off: a click on each beat while the song plays, from the next callback,
+    /// whatever plays then (a project opened later too). Never in an export: exports never make an
+    /// engine (RENDER-1).
+    pub fn set_click(&self, on: bool) {
+        self.shared.click.store(on, Ordering::Relaxed);
+    }
+
+    pub fn click(&self) -> bool {
+        self.shared.click.load(Ordering::Relaxed)
+    }
+
     /// Start playing, for tests and tools; [`Player::transport`] says whether it was sent.
     pub fn play(&self) {
         let _ = self.transport(Cmd::Play);
@@ -1150,6 +1221,16 @@ impl Player {
     /// Nanoseconds of [`Applied::callback_ns`]'s clock, now.
     pub fn now_ns(&self) -> u64 {
         now_ns()
+    }
+
+    /// The device's buffer, in frames, as its last callback asked: None before the first.
+    pub fn frames(&self) -> Option<u32> {
+        Some(self.shared.frames.load(Ordering::Relaxed)).filter(|&n| n > 0)
+    }
+
+    /// Whether the output chosen is gone, so this plays on the default ([`Player::start_on`]).
+    pub fn fell_back(&self) -> bool {
+        self.shared.fell_back.load(Ordering::Relaxed)
     }
 
     /// Whether the audio thread stopped taking messages: a sender timed out, the device is gone

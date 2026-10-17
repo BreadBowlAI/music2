@@ -32,7 +32,7 @@ use m2_script::{Descriptor, UnitCtor};
 use m2_song::{DataSet, Manifest, Project, Version};
 use serde::Serialize;
 
-pub use session::{Past, Revision, Session, StepError, Stepped, journal_problems};
+pub use session::{Past, Revision, Session, StepError, StepName, Stepped, journal_problems};
 pub use tx::{BeforeWrite, Checked, Committed, ConflictFile, Patch, Refusal, Uncommitted, Writing};
 pub use unclaimed::{Seen, SeenLane};
 

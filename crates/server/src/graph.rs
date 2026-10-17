@@ -51,6 +51,12 @@ mod projects;
 mod songkey;
 mod view_file;
 mod watcher;
+mod fx;
+pub mod output;
+mod steps;
+pub mod midi;
+mod lanes;
+mod tempo_lease;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -74,6 +80,7 @@ use crate::files;
 use actor::{Actor, Job};
 use lease::{Aliases, Lease, Leases, PlaysView, Revs, State, TTL};
 pub use lease::{Begun, Committed, LeaseInfo, Owner};
+pub use tempo_lease::TempoCommitted;
 pub use watcher::WatchStats;
 
 /// When the last edit or seek reached the engine, for gate measurements (step 3a's design, §9.2):
@@ -189,6 +196,10 @@ pub struct Activity {
     pub load: f32,
     /// Audio callbacks that took longer than their period since the player started: dropouts too.
     pub late: u64,
+    /// The sound output's name (gaps #31); None with no player, or while none plays.
+    pub output: Option<String>,
+    /// No output started, so the silent player stands in: the song plays silently (gaps #13).
+    pub no_output: bool,
 }
 
 impl Activity {
@@ -210,6 +221,9 @@ struct EngineView {
     controls: Arc<HashMap<String, Control>>,
     /// None only while no player holds the project.
     plays: Option<PlaysView>,
+    /// The accepted revision: what lane leases apply their gestures on, never waiting for the
+    /// session (WRITE-22a, RENDER-29).
+    accepted: Arc<m2_session::Revision>,
 }
 
 /// What reads return: published by the actor's second phase.
@@ -304,6 +318,12 @@ struct ControlPlane {
     audition: audition::Sources,
     /// The DSP load of the last second, read by the meters (8b.8).
     meters: meters::Meters,
+    /// The MIDI keyboards plugged in, and what they play (8b.10).
+    midi: midi::Midi,
+    /// Drags on clips heard while they last (WRITE-22a).
+    lanes: lanes::LaneLeases,
+    /// The tempo field's drag, heard while it lasts (RENDER-27a).
+    tempo: tempo_lease::TempoLeases,
 }
 
 /// How a control named at a revision is found without the session.
@@ -397,6 +417,8 @@ struct Inner {
     /// `layout.json`'s stamp as the watcher last saw it, by project token, and whether a change
     /// waits to be published: no snapshot holds it (PLANE-3), so it is watched on its own.
     layout: Mutex<LayoutSeen>,
+    /// How players start, and what is known of the sound output (gaps #13, #31).
+    output: output::Outputs,
 }
 
 /// A delete that waits: whether it is blocked, and the code that reads the track.
@@ -508,7 +530,7 @@ fn put_back(l: &Lease, device: Option<&Device>) {
 }
 
 impl Inner {
-    fn new(device: Option<Device>, owner: m2_plugins::Owner) -> Inner {
+    fn new(device: Option<Device>, owner: m2_plugins::Owner, output: output::Outputs) -> Inner {
         Inner {
             owner,
             control: Mutex::default(),
@@ -530,6 +552,7 @@ impl Inner {
             #[cfg(test)]
             export_hooks: Arc::default(),
             layout: Mutex::default(),
+            output,
         }
     }
 
@@ -564,6 +587,9 @@ impl Inner {
     /// device is let go: this call fails, the next starts a new one, on the device that is the
     /// default then, and the next settle loads the project into it where it was. An xrun lets
     /// nothing go: the player counts it and plays on (RENDER-28).
+    ///
+    /// When no output starts, the silent player stands in, and an output found since takes over
+    /// from it here, where it was, stopped (gaps #13, `output`).
     fn device(&self) -> Result<Device> {
         let mut d = self.player.lock();
         if let Some(why) = d.as_ref().and_then(|d| let_go(&d.player)) {
@@ -573,10 +599,19 @@ impl Inner {
             retire(old.player);
             bail!("{why}; it starts again with the next action");
         }
-        if d.is_none() {
-            // Unit tests never open an audio device.
-            let player = if cfg!(test) { Player::silent()? } else { Player::start()? };
+        if let Some(old) = d.as_ref()
+            && let Some(player) = self.output.came_back(old.epoch, old.player.held())
+        {
+            let old = d.take().expect("the silent player");
+            let st = old.player.status();
+            retire(old.player);
             let epoch = self.players.fetch_add(1, Ordering::Relaxed) + 1;
+            *d = Some(Device { player, epoch, resume: st.pending.unwrap_or(st.beats) });
+            self.notices.lock().push(output::BACK.into());
+        }
+        if d.is_none() {
+            let epoch = self.players.fetch_add(1, Ordering::Relaxed) + 1;
+            let player = self.output.start(epoch)?;
             *d = Some(Device { player, epoch, resume: std::mem::take(&mut *self.resume.lock()) });
         }
         Ok(d.clone().expect("started"))
@@ -622,6 +657,8 @@ impl Inner {
             live: device.as_ref().map_or(0, |d| d.player.live_notes()),
             load,
             late,
+            output: device.as_ref().filter(|d| !self.output.standing_in(d.epoch)).map(|d| d.player.device.clone()),
+            no_output: device.as_ref().is_some_and(|d| self.output.standing_in(d.epoch)),
         }
     }
 
@@ -651,6 +688,7 @@ impl Inner {
         state["leases"] = json!(leases);
         state["overlays"] = overlays;
         state["local"] = local;
+        state["midi"] = self.midi_state();
         Some(state)
     }
 
@@ -662,6 +700,8 @@ impl Inner {
             let l = cp.leases.end(0, why);
             self.notices.lock().extend(l.unsaved(why));
         }
+        lanes::end_all(cp);
+        tempo_lease::end_all(cp);
     }
 
     /// Register a lease on `control`, read in the published accepted revision, which the request
@@ -736,12 +776,16 @@ impl Default for Graph {
 
 impl Graph {
     fn with(device: Option<Device>) -> Graph {
+        Graph::with_outputs(device, output::Outputs::real())
+    }
+
+    fn with_outputs(device: Option<Device>, outputs: output::Outputs) -> Graph {
         // Tests: plugins' main-thread calls run on a dedicated thread (HOST-2, C1), as libtest
         // owns the process's main thread.
         #[cfg(test)]
         m2_plugins::test_main_thread();
         let (owner, events) = m2_plugins::Owner::new();
-        let inner = Arc::new(Inner::new(device, owner));
+        let inner = Arc::new(Inner::new(device, owner, outputs));
         let (jobs, rx) = mpsc::channel::<Job>();
         let actor_inner = inner.clone();
         // QuickJS gets as much stack as it has on a main thread.
@@ -1154,7 +1198,9 @@ impl Graph {
                 None => i += 1,
             }
         }
+        lanes::expire(&mut cp, device.as_ref(), now);
         drop(cp);
+        self.tempo_expire(now);
         if let Some(s) = self.inner.saving.lock().as_mut() {
             let playing = device.as_ref().is_some_and(|d| d.player.status().playing);
             s.played |= playing;
@@ -1188,6 +1234,9 @@ impl Graph {
                 i += 1;
             }
         }
+        lanes::gone(&mut cp, client, device.as_ref());
+        drop(cp);
+        self.tempo_gone(client);
     }
 
     /// The gestures in progress.
@@ -1559,13 +1608,14 @@ impl Graph {
         }
     }
 
-    /// Undo the last edit made through this session: its stored inverse (WRITE-21).
+    /// Undo the last edit made through this session: its stored inverse (WRITE-21). The answer
+    /// names what it took back (`name`, `structural`; see `steps`).
     pub fn undo(&self, token: u64) -> Result<Value> {
-        self.edit(token, m2_editor::undo)
+        self.step(token, false)
     }
 
     pub fn redo(&self, token: u64) -> Result<Value> {
-        self.edit(token, m2_editor::redo)
+        self.step(token, true)
     }
 
     fn edit(

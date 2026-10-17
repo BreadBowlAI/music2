@@ -18,7 +18,7 @@ import {
 import { setClock } from "../lib/clock";
 import { continuePlay, playStop, resetTransport, startAt } from "../lib/transport";
 import { pickedIn, useClipSelection } from "../lib/clips";
-import { stepped } from "../lib/history";
+import { tookBack } from "../lib/history";
 import { HEADS_W, HEADS_W_SMALL, WIDE } from "../lib/layout";
 import { flushLocal } from "../lib/local";
 import { canvas, useShell } from "../lib/shell";
@@ -321,7 +321,7 @@ export async function graphUndo(session: number, id: "undo" | "redo") {
   const toast = useStore.getState().toast;
   await (id === "redo" ? graphApi.redo(session) : graphApi.undo(session))
     .then((c) => {
-      const step = stepped(session, id === "redo", c.revision);
+      const step = tookBack(c);
       if (step?.structural) toast(`${id === "redo" ? "Redid" : "Undid"} ${step.name}`);
     })
     .catch((error) => toast(error instanceof Error ? error.message : String(error)));

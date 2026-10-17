@@ -60,7 +60,7 @@ process.on("exit", () => servers.forEach((s) => s.exitCode === null && s.signalC
 async function serve(name, dir = "-") {
   const file = `${ROOT}/${name}.json`;
   fs.rmSync(file, { force: true });
-  const env = { ...process.env, HOME, M2_AUDIO: "none" };
+  const env = { ...process.env, HOME, M2_AUDIO: "none", M2_MIDI: "none" };
   delete env.CLAP_PATH;
   const proc = spawn(HEADLESS, [dir, file, `${name}${Date.now()}`], { env, stdio: ["ignore", "ignore", fs.openSync(`${ROOT}/${name}.log`, "w")] });
   let exited = false;

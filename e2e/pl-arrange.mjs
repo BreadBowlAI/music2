@@ -73,7 +73,7 @@ check(await until(async () => !!(await flag("Chorus"))), "the ruler shows Chorus
 const fc = await flag("Chorus");
 const r0 = await ruler();
 check(Math.abs(fc.x - (r0.x + 16 * PPB)) <= 1 && fc.y >= r0.y && fc.y + fc.height <= r0.y + r0.height / 2 + 1, `at bar 5, on the ruler's top half: ${JSON.stringify(fc)}`);
-check((await undoTitle()).includes("Undo Chorus at bar 5"), `Undo says what it takes back: ${await undoTitle()}`);
+check(await until(async () => (await undoTitle()).includes("Undo Chorus at bar 5"), 2000), `Undo says what it takes back: ${await undoTitle()}`);
 await undo();
 check(await until(() => markers().length === 0), `one Undo takes the marker away: ${JSON.stringify(markers())}`);
 await redo();
@@ -103,7 +103,7 @@ const mrows = await page.$$eval("[data-testid=clip-menu] [role=menuitem]", (els)
 check(same(mrows, ["Rename", "Delete", "Loop to next marker"]), `a marker's menu: ${mrows.join(" | ")}`);
 await page.click('[data-testid=clip-menu] [data-menu-item="delete"]');
 check(await until(() => markers().length === 2), "Delete takes it out");
-check((await undoTitle()).includes("Undo deleting Marker 1"), `Undo says so: ${await undoTitle()}`);
+check(await until(async () => (await undoTitle()).includes("Undo deleting Marker 1"), 2000), `Undo says so: ${await undoTitle()}`);
 await undo();
 check(await until(() => markers().length === 3), "Undo brings it back");
 await undo();
@@ -155,7 +155,7 @@ await page.keyboard.press("Escape");
 let f = await flag("Chorus");
 await drag({ x: f.x + 6, y: f.y + f.height / 2 }, { x: f.x + 6 + 16 * PPB + 5, y: f.y + f.height / 2 });
 check(await until(() => same(markers(), [{ beat: 32, name: "Chorus" }, { beat: 40, name: "Verse" }])), `a drag to bar 9 writes beat 32: ${JSON.stringify(markers())}`);
-check((await undoTitle()).includes("Undo moving Chorus"), `Undo says: ${await undoTitle()}`);
+check(await until(async () => (await undoTitle()).includes("Undo moving Chorus"), 2000), `Undo says: ${await undoTitle()}`);
 f = await flag("Chorus");
 await page.keyboard.down("Meta");
 await drag({ x: f.x + 6, y: f.y + f.height / 2 }, { x: f.x + 6 + 1.5 * PPB, y: f.y + f.height / 2 });
@@ -179,7 +179,7 @@ check((await page.$eval("[data-testid=marker-name]", (e) => e.value)) === "Verse
 await page.keyboard.type("Big Verse");
 await page.keyboard.press("Enter");
 check(await until(() => markers()[1]?.name === "Big Verse"), `renamed: ${JSON.stringify(markers())}`);
-check((await undoTitle()).includes("Undo renaming Verse"), `Undo says: ${await undoTitle()}`);
+check(await until(async () => (await undoTitle()).includes("Undo renaming Verse"), 2000), `Undo says: ${await undoTitle()}`);
 
 // Loop to next marker.
 f = await flag("Chorus");
@@ -227,7 +227,7 @@ check(await until(() => same(bassStarts(), [0, 32, 64, 96])), `Return makes thre
 check(await until(async () => (await page.$$('[data-lane="bass.notes"] [data-clip][data-picked]')).length === 3), "the copies are selected");
 const ids3 = JSON.parse(read("data/bass/notes.json")).clips.map((c) => c.id);
 check(new Set(ids3).size === 4, `each with an id of its own: ${ids3.join(", ")}`);
-check((await undoTitle()).includes("Undo repeating a Bass clip"), `Undo says: ${await undoTitle()}`);
+check(await until(async () => (await undoTitle()).includes("Undo repeating a Bass clip"), 2000), `Undo says: ${await undoTitle()}`);
 await undo();
 check(await until(() => same(bassStarts(), [0])), "one Undo takes all three back");
 await repeatFrom();

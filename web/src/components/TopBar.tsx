@@ -1,14 +1,16 @@
 import clsx from "clsx";
-import { Download, PanelLeft, Play, Redo2, Repeat, SkipBack, Square, Undo2 } from "lucide-react";
+import { Download, Metronome, PanelLeft, Play, Redo2, Repeat, SkipBack, Square, Undo2 } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { barAt, barsToBeats, lockReason, position, type GraphState, type GraphStatus, type Loop, type Meter, type Problem } from "../lib/graph";
 import { exportSong, useExport } from "../lib/exporting";
 import { next } from "../lib/history";
+import { useMetronome, toggleMetronome } from "../lib/metronome";
 import { chord, keyName, shifted } from "../lib/native";
 import { canvas, useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { graphUndo } from "./GraphCanvas";
 import KeyField from "./KeyField";
+import MidiStatus from "./MidiStatus";
 import { MeterField, SongTitle, TempoField } from "./SongBar";
 import OverlayPill from "./OverlayPill";
 import Status from "./Status";
@@ -93,9 +95,10 @@ export default function TopBar({
   // Playback sits on whole frames, so a seek to a beat can land a hair before it.
   const at = position(meter, Math.round(status.beat * 1000) / 1000);
   const l = status.loop;
-  // What they would take back, when this window knows (lib/history): "Undo Reverb size (⌘Z)".
-  const undoing = next(graph.session, graph.view.revision, false);
-  const redoing = next(graph.session, graph.view.revision, true);
+  const metronome = useMetronome();
+  // What they would take back, as the server names it (lib/history): "Undo Reverb size (⌘Z)".
+  const undoing = next(graph, false);
+  const redoing = next(graph, true);
   const loopTitle = l
     ? l.on
       ? `Looping ${loopName(meter, l)}: click to play straight on (C)`
@@ -150,6 +153,18 @@ export default function TopBar({
       >
         <Repeat size={16} />
       </BarButton>
+      {/* The metronome (gaps #19), after Loop (taste.md §3.3). */}
+      <BarButton
+        data-testid="metronome-toggle"
+        aria-label="Metronome"
+        aria-pressed={metronome}
+        active={metronome}
+        onClick={toggleMetronome}
+        title="Metronome: a click on each beat (K)"
+        className="ml-1 w-ctl !px-0"
+      >
+        <Metronome size={16} />
+      </BarButton>
       <Divider />
       {/* Where playback is, on one baseline. The position is right-aligned in its 72px, so its last
           digits stay put as it counts (5.3.2 → 10.1.1). */}
@@ -182,6 +197,8 @@ export default function TopBar({
       >
         <SongTitle session={graph.session} name={graph.name} dir={graph.dir} rate={graph.sample_rate} locked={locked} room={room ?? 0} />
       </div>
+      {/* A MIDI keyboard plugged in (8b.10), before the status pill. */}
+      <MidiStatus graph={graph} />
       <Status graph={graph} status={status} onShowCode={onShowCode} />
       <OverlayPill graph={graph} />
       <Divider />

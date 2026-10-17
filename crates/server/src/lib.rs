@@ -15,6 +15,10 @@ mod routes_mix;
 mod routes_notes;
 mod routes_project;
 mod routes_view;
+mod routes_fx;
+mod routes_settings;
+pub mod settings;
+mod routes_leases;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -50,6 +54,11 @@ pub struct AppState {
     /// The recent songs list (polish C2), when this server keeps one ([`AppState::keep_recent`]):
     /// the app and the headless server do; tests don't, so none writes the real `~/.music2`.
     recent: OnceLock<recent::Recent>,
+    /// This machine's settings (gaps #31), when this server keeps them ([`AppState::keep_settings`]):
+    /// the app and the headless server do; tests don't.
+    settings: OnceLock<settings::Settings>,
+    /// Listening to MIDI keyboards (8b.10), unless `M2_MIDI` says not to ([`spawn_midi`]).
+    midi: OnceLock<m2_os::midi::Listening>,
 }
 
 impl AppState {
@@ -63,7 +72,27 @@ impl AppState {
             unheard: Mutex::default(),
             meters: watch::channel(String::new()).0,
             recent: OnceLock::new(),
+            settings: OnceLock::new(),
+            midi: OnceLock::new(),
         }
+    }
+
+    /// Keep this machine's settings in `file` (`~/.music2/settings.json`) from now on, and apply
+    /// them: the sound output a player opens, and where new songs go. Once. A songs folder that
+    /// is no longer one (inside a song now) is the default.
+    pub fn keep_settings(&self, file: PathBuf) {
+        let s = settings::Settings::new(file);
+        let kept = s.read();
+        if let Err(e) = self.graph.set_output(kept.output.choice()) {
+            eprintln!("music2: couldn't use the sound output chosen: {e:#}");
+        }
+        project::set_songs_dir(kept.songs.as_deref().and_then(|d| project::songs_folder(d).ok()));
+        let _ = self.settings.set(s);
+    }
+
+    /// This machine's settings, if this server keeps them.
+    pub fn settings(&self) -> Option<&settings::Settings> {
+        self.settings.get()
     }
 
     /// Keep the recent songs list in `file` (`~/.music2/recent.json`) from now on. Once.
@@ -135,6 +164,25 @@ impl AppState {
     }
 }
 
+/// MIDI keyboards (8b.10): what a listener heard goes to the open song, a keyboard that came or
+/// went is said in a toast, and every window hears the `midi` event.
+impl AppState {
+    pub fn midi(&self, ev: m2_os::midi::Event<'_>) {
+        let plugging = !matches!(ev, m2_os::midi::Event::Bytes(..));
+        if let Some(said) = self.graph.midi(ev) {
+            self.toast(said);
+        }
+        if plugging {
+            self.midi_changed();
+        }
+    }
+
+    /// Tell every window the keyboards plugged in and what they play: `{"t": "midi", "midi": …}`.
+    pub fn midi_changed(&self) {
+        let _ = self.events.send(json!({"t": "midi", "midi": self.graph.midi_state()}).to_string());
+    }
+}
+
 pub struct ServeOptions {
     /// 0 picks a free port.
     pub port: u16,
@@ -163,6 +211,7 @@ pub fn start_with(opts: ServeOptions, graph: graph::Graph) -> Result<Running> {
     let state = Arc::new(AppState::new(opts.token, graph));
     spawn_graph_watch(&state);
     spawn_meters(&state);
+    spawn_midi(&state);
 
     let listener = std::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], opts.port)))?;
     listener.set_nonblocking(true)?;
@@ -192,8 +241,8 @@ const TELL_EVERY: Duration = Duration::from_millis(300);
 ///   busy for seconds: a compile, or a commit the disk is slow to make durable.
 /// - `music2-tell` every 300 ms ends the knob drags nobody moves any more (C6) and says what
 ///   ended or was saved on its own, and a commit heard as its preview that isn't saved yet
-///   (PLANE-5); and lets go of the notes of a window that went quiet (MON-7). It never waits for
-///   the actor.
+///   (PLANE-5); and lets go of the notes of a window that went quiet (MON-7). Every 2 s, while
+///   no sound output plays, it looks for one (gaps #13). It never waits for the actor.
 ///
 /// Both end once the state is dropped.
 fn spawn_graph_watch(state: &Arc<AppState>) {
@@ -219,9 +268,15 @@ fn spawn_graph_watch(state: &Arc<AppState>) {
     std::thread::Builder::new()
         .name("music2-tell".into())
         .spawn(move || {
+            let mut looked = std::time::Instant::now();
             loop {
                 std::thread::sleep(TELL_EVERY);
                 let Some(state) = weak.upgrade() else { return };
+                // While no sound output plays, look for one (gaps #13).
+                if looked.elapsed() >= graph::output::LOOK_EVERY {
+                    looked = std::time::Instant::now();
+                    state.graph.look_for_output();
+                }
                 let said = state.graph.expire();
                 state.graph.save_overlays();
                 state.graph.expire_auditions();
@@ -261,9 +316,97 @@ fn spawn_meters(state: &Arc<AppState>) {
         .expect("spawn the meters");
 }
 
+/// Listen to every MIDI keyboard (`m2_os::midi`), unless [`listens_to_midi`] says not to. Stops
+/// once the state is dropped.
+fn spawn_midi(state: &Arc<AppState>) {
+    if !listens_to_midi(std::env::var("M2_MIDI").ok().as_deref()) {
+        return;
+    }
+    let weak = Arc::downgrade(state);
+    let listening = m2_os::midi::listen(Arc::new(move |ev| {
+        if let Some(state) = weak.upgrade() {
+            state.midi(ev);
+        }
+    }));
+    let _ = state.midi.set(listening);
+}
+
+/// Whether a server listens to MIDI keyboards, as `M2_MIDI` (`midi`) says: not with `none` (a
+/// test or a check that must never open MIDI) or `inject` (the suites: they post what a keyboard
+/// would send to `POST /api/graph/midi/inject` instead), and never in this crate's own tests,
+/// which start servers of their own (R3).
+fn listens_to_midi(midi: Option<&str>) -> bool {
+    !cfg!(test) && !matches!(midi, Some("none" | "inject"))
+}
+
+/// Whether `POST /api/graph/midi/inject` answers: only with `M2_MIDI=inject`.
+pub(crate) fn midi_injects() -> bool {
+    std::env::var("M2_MIDI").as_deref() == Ok("inject")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // gaps #13, R6: with no sound device, one plugged in is used within a few seconds with no
+    // action at all: the server looks for it every 2 s, and its catch-up moves the song there,
+    // stopped, and says so. (The popover says just this.)
+    #[test]
+    fn a_device_plugged_in_is_used_with_no_action() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let there = Arc::new(AtomicBool::new(false));
+        let plugged = there.clone();
+        let listed = there.clone();
+        let graph = graph::Graph::starting(
+            Box::new(move |_| match plugged.load(Ordering::Relaxed) {
+                true => m2_play::Player::silent(),
+                false => Err(anyhow::anyhow!("no audio output device")),
+            }),
+            Box::new(move || listed.load(Ordering::Relaxed).then(|| "Headphones".to_string())),
+        );
+        let dir = std::env::temp_dir().join(format!("m2-plug-{}", std::process::id()));
+        let song = dir.join("song");
+        std::fs::create_dir_all(&song).unwrap();
+        std::fs::write(song.join("music2.toml"), "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.2\"\n").unwrap();
+        std::fs::write(song.join("song.ts"), "import { hz, song } from '@m2/core';\nimport { osc } from 'std/dsp';\nexport default song(() => osc.sine(hz(800)));\n").unwrap();
+        let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t".into() }, graph).unwrap();
+        let state = running.state.clone();
+        state.graph.open(&song).unwrap();
+        assert!(state.graph.no_output());
+        let mut news = state.events.subscribe();
+        there.store(true, Ordering::Relaxed);
+        let t = std::time::Instant::now();
+        while state.graph.no_output() {
+            assert!(t.elapsed() < Duration::from_secs(6), "not used within 6 s");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let took = t.elapsed();
+        assert!(took < Duration::from_secs(4), "used in {took:?}: within a few seconds");
+        eprintln!("a device plugged in was used in {took:?}");
+        // The window is told, as a toast.
+        let mut told = false;
+        while let Ok(m) = news.try_recv() {
+            told |= m.contains("Sound output is back");
+        }
+        let t = std::time::Instant::now();
+        while !told && t.elapsed() < Duration::from_secs(2) {
+            match news.try_recv() {
+                Ok(m) => told |= m.contains("Sound output is back"),
+                Err(_) => std::thread::sleep(Duration::from_millis(20)),
+            }
+        }
+        assert!(told, "the window is told");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // R3: a server this crate's tests start never opens a MIDI device, whatever `M2_MIDI` says,
+    // so a keyboard plugged in never plays into a test.
+    #[test]
+    fn a_test_server_never_listens_to_midi() {
+        for midi in [None, Some(""), Some("none"), Some("inject")] {
+            assert!(!listens_to_midi(midi), "M2_MIDI {midi:?}");
+        }
+    }
 
     fn state() -> AppState {
         AppState::new(String::new(), graph::Graph::default())

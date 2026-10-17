@@ -97,9 +97,13 @@ function recheck(key: string) {
   );
 }
 
-/** Play `pitch` on lane `module.lane` until `release`. The handle, or null when nothing was sent (the toggle is off, or no connection). */
-export function strike(module: string, lane: string, pitch: number, velocity = KEY_VELOCITY): number | null {
-  if (!useAudition.getState().on) return null;
+/**
+ * Play `pitch` on lane `module.lane` until `release`. The handle, or null when nothing was sent (the
+ * toggle is off, or no connection). `always`: whatever the toggle says (the keyboard piano plays an
+ * instrument; the toggle is about hearing the notes you edit).
+ */
+export function strike(module: string, lane: string, pitch: number, velocity = KEY_VELOCITY, { always = false } = {}): number | null {
+  if (!always && !useAudition.getState().on) return null;
   const h = ++nextHandle;
   if (!say({ module, lane, on: [{ h, pitch, velocity: clampVelocity(velocity) }] })) return null;
   recheck(laneKey(module, lane));

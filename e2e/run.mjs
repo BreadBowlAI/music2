@@ -63,12 +63,16 @@ export const SUITES = [
   ["graph", "proj", { expect: 19 }],
   ["cables", "cables", { expect: 12 }],
   ["undo", "cables", { expect: 10 }],
+  ["nx-undo", "fix", { expect: 18 }],
   ["effects", "proj", { expect: 12 }],
+  ["nx-effects", "fix", { expect: 47 }],
   ["layout", "proj", { expect: 39 }],
   ["views", "proj", { expect: 30 }],
   ["code", "proj", { expect: 58 }],
   ["notes", "proj", { expect: 52 }],
   ["s8-audition", "fix", { expect: 51 }],
+  ["nx-piano", "fix", { expect: 39 }],
+  ["nx-midi", "fix", { expect: 24 }],
   ["pl-notes", "fix", { expect: 102 }],
   ["pl-lanes", "fix", { expect: 28 }],
   ["ports", "proj", { expect: 46 }],
@@ -81,13 +85,17 @@ export const SUITES = [
   ["attention", "attn", { expect: 57 }],
   ["newsong", "none", { expect: 71 }],
   ["pl-projects", "none", { expect: 66 }],
+  ["nx-settings", "none", { expect: 42 }],
+  ["nx-nodevice", "none", { expect: 11 }],
   ["export", "export", { expect: 37 }],
   ["fx-fixes", "none", { expect: 75 }],
   ["s4-clips", "fix", { expect: 28 }],
   ["s8-clips", "fix", { expect: 94 }],
   ["s8-automation", "fix", { expect: 45 }],
+  ["s8-leases", "fix", { expect: 55 }],
   ["pl-zoom", "fix", { expect: 62 }],
   ["pl-arrange", "fix", { expect: 57 }],
+  ["nx-nits", "fix", { expect: 27 }],
   ["s4-attn", "fix", { expect: 13 }],
   ["s4-problems", "fix", { expect: 18 }],
   ["s4-meter", "fix", { expect: 8 }],
@@ -104,6 +112,7 @@ export const SUITES = [
   ["pl-tracks", "fix", { expect: 20 }],
   ["s8-mute", "export", { expect: 152 }],
   ["s8-songbar", "fix", { expect: 82 }],
+  ["nx-click", "fix", { expect: 20 }],
   ["s8-mix", "fix", { expect: 80 }],
   ["pl-mix", "fix", { expect: 47 }],
   ["pl-sounds", "fix", { expect: 45 }],
@@ -227,7 +236,7 @@ function prepare(dir, kind) {
 }
 
 function envFor(home, clap) {
-  const env = { ...process.env, HOME: home, M2_AUDIO: "none", E2E_CHROME: chrome, E2E_REPO: opts.repo, E2E_HEADLESS: headless };
+  const env = { ...process.env, HOME: home, M2_AUDIO: "none", M2_MIDI: "inject", E2E_CHROME: chrome, E2E_REPO: opts.repo, E2E_HEADLESS: headless };
   delete env.CLAP_PATH;
   if (clap && clapPath) env.CLAP_PATH = clapPath;
   return env;

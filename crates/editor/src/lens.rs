@@ -69,6 +69,8 @@ pub(crate) struct Insertion {
     pub end: u32,
     /// What goes around the number: `, ` and ``, `, q: ` and ``, `, { q: ` and ` }`, ` q: ` and
     /// ` ` (or `,` before a comment or a line break that stays), `, db: ` and ` }` for a wrap.
+    /// A new options object in a call written over lines goes on a line of its own:
+    /// `\n    { q: ` and ` },` after the last argument's comma, or `,\n    { q: ` and ` }`.
     pub prefix: String,
     pub suffix: String,
     /// A bare dictionary entry is wrapped: this text goes in where the entry's signal starts
@@ -214,7 +216,22 @@ impl Insertion {
                     return Err("an object written there would be read as its dictionary");
                 }
                 let path = vec![given.to_string(), slot.into()];
+                // A call written over lines gets its new options on a line of their own, at its
+                // arguments' indent, with a comma after them when its last argument has one.
+                let first = args.first().map(|a| a.span().0 as usize);
+                let lines = first.is_some_and(|f| site.open >= site.start && source.get(site.open as usize..f).is_some_and(|t| t.contains('\n')));
                 match args.last() {
+                    Some(last) if lines => {
+                        let at = after(last);
+                        let indent = indent_at(source, last.span().0);
+                        let rest = source.get(at as usize..).unwrap_or("");
+                        let comma = rest.find(|c: char| !c.is_whitespace()).filter(|&i| rest[i..].starts_with(','));
+                        let (at, prefix, suffix) = match comma {
+                            Some(i) => (at + i as u32 + 1, format!("\n{indent}{{ {slot}: "), " },"),
+                            None => (at, format!(",\n{indent}{{ {slot}: "), " }"),
+                        };
+                        Ok(Insertion { start: at, end: at, prefix, suffix: suffix.into(), path, ..Insertion::bare() })
+                    }
                     Some(last) => Ok(Insertion {
                         start: after(last),
                         end: after(last),
@@ -260,6 +277,13 @@ impl Insertion {
         let open = self.open.iter().map(|(at, text)| (*at, *at, text.clone()));
         open.chain([(self.start, self.end, format!("{}{written}{}", self.prefix, self.suffix))]).collect()
     }
+}
+
+/// The blanks that start the line byte `at` of `source` is on: its indent.
+fn indent_at(source: &str, at: u32) -> &str {
+    let line = source.get(..at as usize).and_then(|t| t.rfind('\n')).map_or(0, |i| i + 1);
+    let text = source.get(line..).unwrap_or("");
+    &text[..text.len() - text.trim_start_matches([' ', '\t']).len()]
 }
 
 /// Plan writing control `control` into entry `key` of dictionary `dict` of `desc`, written in the

@@ -1,5 +1,6 @@
-// The ruler's markers (Q13, design-8b §7.6): a 1 px tick at each on the ruler's top half, its name
-// beside it on `chrome`, over the bar numbers under it and cut where the next one starts. A click
+// The ruler's markers (Q13, design-8b §7.6): a 1 px tick at each in the ruler's top 14 px band,
+// its name beside it on `chrome`, cut where the next one starts; the bar numbers are on the line
+// under the band (next D4a), so a marker never hides one. A click
 // goes there; a drag moves it on the timeline's grid (⌘ held, Ctrl on a PC: freely); a
 // double-click renames it; its right-click menu renames, deletes or loops to the next one. A new
 // one opens as a field with a short list of names, and is written once its name is kept.

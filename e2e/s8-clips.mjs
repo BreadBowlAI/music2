@@ -157,6 +157,12 @@ await key("Escape");
 // ================================================================ part 2: clip gestures (U5)
 const lanes = (path) => JSON.parse(read(path)).clips;
 const sent = (from) => posts.slice(from);
+/** What was sent since `from`, once this script has heard of it: the browser tells it of a request
+ * on its own channel, which under load can arrive after the server has written the file. */
+const sentBy = async (from) => {
+  await until(() => sent(from).length > 0, 3000);
+  return sent(from);
+};
 const gestureOf = (p) => JSON.parse(p.body).gesture;
 /** Every file of the song but `.music2/`'s, as text. */
 const snapshot = () =>
@@ -197,7 +203,7 @@ const moved = await hold(mid(b), { x: mid(b).x + 4 * PPB, y: mid(b).y }, { durin
 check(await until(() => lanes("data/hats/hits.json")[0].start === 8), `a drag moves the hats clip a bar right: ${lanes("data/hats/hits.json")[0].start}`);
 const lane0 = await rowOf("hats.hits");
 check(moved.bubble === "3.1.1" && Math.abs(moved.guide?.x - (lane0.x + 8 * PPB)) <= 1, `while dragged, the bubble says where it lands and a guide marks it: ${moved.bubble}, ${moved.guide?.x}`);
-const g1 = sent(n);
+const g1 = await sentBy(n);
 const move1 = g1[0] && gestureOf(g1[0]);
 check(g1.length === 1 && g1[0].url === "/api/graph/clips" && move1.op === "move" && move1.by === 4, `as one move gesture, and nothing else sent: ${g1.map((p) => `${p.url} ${p.body.slice(0, 80)}`)}`);
 check(move1?.clips[0].id === hatsId && /^[0-9a-f]{16}$/.test(move1.clips[0].sha ?? ""), `naming the clip by its id, with the hash the window drew: ${JSON.stringify(move1?.clips[0])}`);
@@ -284,12 +290,14 @@ n = posts.length;
 b = await clipBox("hats.hits", hatsId);
 await hold(mid(b), { x: mid(b).x + 2 * PPB, y: mid(b).y });
 check(await until(() => hatsNow().start === 10 && lanes("data/keys/chords.json")[0].start === 2), `a drag moves both by 2 beats: ${hatsNow().start}, ${lanes("data/keys/chords.json")[0].start}`);
-check(sent(n).length === 1 && gestureOf(sent(n)[0]).clips.length === 2, "in one gesture");
+const g2 = await sentBy(n);
+check(g2.length === 1 && gestureOf(g2[0]).clips.length === 2, "in one gesture");
 const kept = { hats: read("data/hats/hits.json"), keys: read("data/keys/chords.json") };
 n = posts.length;
 await key("Backspace");
 check(await until(() => !lanes("data/hats/hits.json").some((c) => c.id === hatsId) && lanes("data/keys/chords.json").length === 0), "⌫ deletes both");
-check(sent(n).length === 1 && gestureOf(sent(n)[0]).op === "delete" && gestureOf(sent(n)[0]).clips.length === 2, "in one gesture");
+const g3 = await sentBy(n);
+check(g3.length === 1 && gestureOf(g3[0]).op === "delete" && gestureOf(g3[0]).clips.length === 2, "in one gesture");
 await key("Meta+z");
 check(await until(() => read("data/hats/hits.json") === kept.hats && read("data/keys/chords.json") === kept.keys), "one undo brings both back");
 

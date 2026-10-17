@@ -241,7 +241,7 @@ pub(crate) fn not_insertable(rev: &Revision, site: &Site, m: &Module, origin: &O
 
 /// Which argument of call `site` held its options when `m` was built (`Frame.options`), if one
 /// did; why not known, when its evaluations disagree.
-fn options_of(m: &Module, site: u32) -> Result<Option<usize>, &'static str> {
+pub(crate) fn options_of(m: &Module, site: u32) -> Result<Option<usize>, &'static str> {
     let mut read = m.frames.iter().filter(|f| f.site == site && f.component.is_some()).map(|f| f.options);
     let first = read.next().flatten();
     match read.all(|o| o == first) {

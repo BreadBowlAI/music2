@@ -9,12 +9,19 @@ import StartScreen from "./components/StartScreen";
 import NewSongDialog, { openNewSong } from "./components/NewSongDialog";
 import RenameSongDialog, { openRenameSong } from "./components/RenameSongDialog";
 import SaveAsDialog, { openSaveAs } from "./components/SaveAsDialog";
+import SettingsDialog from "./components/SettingsDialog";
 import { exportSong, onExportEvent } from "./lib/exporting";
+import { openSettings } from "./lib/settings";
 import { CutOff, editorHooks, graphApi } from "./lib/graph";
 import { isMac, native, nativeAction, onMenu } from "./lib/native";
 import { followGridView } from "./lib/grid";
 import { canvas, useShell, VIEWS, type GridOp } from "./lib/shell";
 import { deleteTrack, duplicateTrack, newTrack } from "./components/Tracks";
+import { toggleMetronome } from "./lib/metronome";
+import { togglePiano } from "./lib/piano";
+// MIDI keyboards: the window tells the server what they play.
+import "./lib/midi";
+import KeyboardPiano from "./components/KeyboardPiano";
 
 /** Fetch the open project. An error means none is open: the start screen shows. */
 const refreshGraph = () =>
@@ -52,7 +59,7 @@ function key(e: KeyboardEvent): string | null {
   if (e.key === "Enter" || e.key === "Home") return "home";
   if (e.key === "Escape") return "deselect";
   if (e.shiftKey) return null;
-  return ({ c: "loop", a: "lanes", e: "dock", x: "view_mix", b: "draw", m: "mute", s: "solo", z: "zoom_fit" } as Record<string, string>)[e.key.toLowerCase()] ?? null;
+  return ({ c: "loop", a: "lanes", e: "dock", x: "view_mix", b: "draw", m: "mute", s: "solo", z: "zoom_fit", k: "metronome" } as Record<string, string>)[e.key.toLowerCase()] ?? null;
 }
 
 /** ⌘1 to ⌘4, View's grid rows: the command ids, in order. */
@@ -97,6 +104,8 @@ function chord(e: KeyboardEvent): { id: string; always?: boolean; page?: boolean
   if (e.key === "-" && !e.altKey && !e.shiftKey) return { id: "zoom_out" };
   if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.altKey && !e.shiftKey) return { id: e.key === "ArrowUp" ? "shorter" : "taller" };
   if (k === "f" && e.shiftKey && !e.altKey) return { id: "follow" };
+  // Settings (⌘, and Ctrl+,), from anywhere: the start screen, a field, the code editor.
+  if (e.key === "," && !e.shiftKey && !e.altKey) return { id: "settings", always: true };
   return null;
 }
 
@@ -188,7 +197,9 @@ export default function App() {
         <SaveAsDialog />
         <RenameSongDialog />
         <Shortcuts />
+        <SettingsDialog />
         <Toasts />
+        <KeyboardPiano />
         {/* With a song open, the top bar's status pill says it; on the start screen, this one does. */}
         {!connected && !graph && (
           <div className="fixed top-3 right-3 z-50 h-ctl-sm px-2 inline-flex items-center gap-1.5 rounded-sm bg-danger-soft text-danger-strong text-sm font-medium">
@@ -250,6 +261,7 @@ export function appCommand(id: string) {
   // With a song open or not: making one opens it in place of the open one.
   if (id === "new_song") return openNewSong();
   if (id === "shortcuts") return shell.set({ sheet: !shell.sheet });
+  if (id === "settings") return openSettings();
   const graph = st.graph;
   if (!graph) return;
   if (id.startsWith("view_")) {
@@ -393,5 +405,11 @@ export function appCommand(id: string) {
     case "prev_marker":
     case "next_marker":
       return canvas.marker?.(id === "add_marker" ? "add" : id === "prev_marker" ? "prev" : "next");
+    case "metronome":
+      return toggleMetronome();
+    case "piano":
+      // View ▸ Keyboard Piano, the desktop app's ⌘K. In a browser lib/piano.ts takes ⌘K itself, before
+      // a field or the code editor can.
+      return togglePiano();
   }
 }

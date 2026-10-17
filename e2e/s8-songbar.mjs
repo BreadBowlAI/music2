@@ -56,14 +56,15 @@ await page.waitForSelector("[data-testid=tempo-field]");
 
 const f0 = await field();
 check(f0.bpm === 124 && f0.text === "124BPM" && (await meterText()) === "4/4", `the bar shows the song's tempo and time signature: ${f0.text}, ${await meterText()}`);
-check(f0.title.includes("Heard when you let go") && f0.title.includes("Saved in data/arrangement.json") && f0.title.includes("⇧ for fine"), `its tooltip says how, and where it is kept: ${f0.title.replace(/\n/g, " | ")}`);
+check(f0.title.includes("Heard as you drag") && f0.title.includes("Saved in data/arrangement.json") && f0.title.includes("⇧ for fine"), `its tooltip says how, and where it is kept: ${f0.title.replace(/\n/g, " | ")}`);
 const during = await dragTempo(40, {
   during: async () => ({ bubble: await page.$eval("[data-testid=value-bubble]", (e) => e.textContent).catch(() => null), file: read("data/arrangement.json") }),
 });
 check(during.bubble === "134 BPM" && during.file === orig.arrangement, `a drag shows the value as it goes (${during.bubble}) and writes nothing yet`);
 check(await until(() => same(tempos(), [[0, 134]])), `let go, 40 px up is 10 BPM more: ${JSON.stringify(tempos())}`);
 await sleep(400);
-check(sent("tempo") === 1 && (await toasts()).length === 0, `written once, with no toast (${sent("tempo")} writes, toasts: ${await toasts()})`);
+// A drag is the tempo lease's (8b.7): written by its commit, once.
+check(sent("tempo/lease/commit") === 1 && sent("tempo") === 0 && (await toasts()).length === 0, `written once, with no toast (${sent("tempo/lease/commit")} writes, toasts: ${await toasts()})`);
 check((await field()).bpm === 134, "the field shows it");
 check(await page.$eval('button[aria-label="Undo"]', (e) => e.title === "Undo Tempo (⌘Z)"), `Undo names it: ${await page.$eval('button[aria-label="Undo"]', (e) => e.title)}`);
 await dragTempo(-40, { fine: true });
@@ -113,7 +114,8 @@ await page.keyboard.press("Enter");
 await until(() => same(arrangement().meter, [{ beat: 0, beats: 7, unit: 4 }]));
 await page.click('[data-testid=meter-picker] [data-unit="8"]');
 check(await until(async () => same(arrangement().meter, [{ beat: 0, beats: 7, unit: 8 }]) && (await meterText()) === "7/8"), `7 beats, each an eighth: 7/8 (${JSON.stringify(arrangement().meter)}, ${await meterText()})`);
-const bars = await page.$$eval("[data-testid=ruler] > span", (els) => els.map((e) => [e.textContent, Math.round(parseFloat(e.style.left))]));
+// Each number sits in its bar's row, placed by its left (next D4a).
+const bars = await page.$$eval("[data-testid=ruler] [data-bar]", (els) => els.map((e) => [e.textContent, Math.round(parseFloat(e.parentElement.style.left))]));
 // A 7/8 bar is 3.5 beats, 84 px: bar 2 starts at 84 (its number 6 px in).
 check(same(bars.slice(0, 3), [["1", 6], ["2", 90], ["3", 174]]), `the ruler is re-barred: ${JSON.stringify(bars.slice(0, 4))}`);
 await page.screenshot({ path: `${ROOT}/s8-songbar-meter.png` });
@@ -238,12 +240,17 @@ check(await until(() => read("music2.toml") === orig.manifest), "undo puts the n
 
 // In the Mac app the bar starts 80 px in (taste.md §3.8): the field keeps clear of the tempo and the
 // buttons, as the name does. Laid out as the app's (`data-app`), at its smallest window and around
-// where the time shows.
+// where the time shows. At its smallest, with the metronome's 32 px (the next track), the name has
+// under 56 px and goes (§3.8's order: the time, then the name), so there is nothing to type in.
 await page.evaluate(() => (document.documentElement.dataset.app = "mac"));
 for (const [w, h] of [[1100, 700], [1180, 800], [1280, 800]]) {
   await page.setViewport({ width: w, height: h });
   await sleep(300);
   const n = await box("[data-testid=bar-song-name]");
+  if (w === 1100) {
+    check(!n, `${w}px in the Mac app: the name goes, with too little room beside the tempo`);
+    continue;
+  }
   await page.mouse.click(n.x + n.width / 2, n.y + n.height / 2, { count: 2 });
   await page.waitForSelector("[data-testid=song-title-input]", { timeout: 2000 }).catch(() => null);
   await page.keyboard.type(" and a much longer name than fits");
@@ -256,7 +263,6 @@ for (const [w, h] of [[1100, 700], [1180, 800], [1280, 800]]) {
     return { field: r("[data-testid=song-title-input]"), left: Math.max(r("[data-testid=tempo]").right, time?.width ? time.right : 0), right: r('button[aria-label="Undo"]').left };
   });
   check(!!b.field && b.field.left >= b.left + 4 && b.field.right <= b.right - 4, `${w}px in the Mac app: the name's field (${b.field?.left.toFixed(0)}–${b.field?.right.toFixed(0)}) clears the tempo (…${b.left.toFixed(0)}) and Undo (${b.right.toFixed(0)}…)`);
-  if (w === 1100) await page.screenshot({ path: `${ROOT}/s8-songbar-name-1100-mac.png`, clip: { x: 0, y: 0, width: w, height: 44 } });
   await page.keyboard.press("Escape");
   await until(async () => !(await page.$("[data-testid=song-title-input]")));
 }

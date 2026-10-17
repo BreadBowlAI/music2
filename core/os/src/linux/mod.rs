@@ -36,6 +36,14 @@ pub(crate) fn clap(home: Option<&Path>) -> Vec<PathBuf> {
     v
 }
 
+/// Whether ALSA's sequencer, where MIDI keyboards are, may be opened. Opening it where it can't be
+/// (no `snd-seq`, or no right to `/dev/snd/seq`) makes alsa-lib write to stderr, each try.
+#[cfg(feature = "midi")]
+pub(crate) fn midi_allowed() -> bool {
+    // SAFETY: a NUL-terminated path that outlives the call.
+    unsafe { libc::access(c"/dev/snd/seq".as_ptr(), libc::R_OK | libc::W_OK) == 0 }
+}
+
 /// From `HOME` alone, never `XDG_CACHE_HOME`, so a test's scratch `HOME` holds it (PLAT-7).
 pub(crate) fn cache(home: &Path) -> PathBuf {
     home.join(".cache/music2")
