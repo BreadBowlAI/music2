@@ -202,9 +202,9 @@ poly(notes, voice, { voices: 16, mode: "poly", retrigger: true, steal: "oldest",
 //                               "poly" | "mono" | "legato"   "oldest" | "quietest" | "none"   seconds
 ```
 
-The default MUST reproduce today's output bit for bit. A `poly` is kept or replaced whole; a kept pool's voices keep their slots, which are their RuntimeIds. The op shape is fixed now; mono, legato and glide are built later ([Deferred](#deferred-with-triggers)).
-- *Why:* a fixed reset-on-reuse policy rules out mono, legato and 808 slides. Voices are most of a song's instances; moving each pool as one box keeps an activation's work in proportion to the top-level graph.
-- *Today:* one policy: the first free slot, else the oldest (`PolyNode::process` in `core/runtime/src/lib.rs`). A reused voice is reset. The only option is `voices` (`core/script/sdk/core.ts`). Since step 7 a poly's voices are one box (`VoicePool`), which an activation moves whole into a poly of the same shape: its voices, channels and voice graph, without its cells' values, origins and names (a plain number written inside the voice is part of it); any other poly is new.
+The default MUST reproduce today's output bit for bit. A `poly` is kept or replaced whole; a kept pool's voices keep their slots, which are their RuntimeIds. The op shape is fixed now; its `mode`, `retrigger`, `steal` and `glide` options are built later ([Deferred](#deferred-with-triggers)).
+- *Why:* with one fixed reset-on-reuse policy, a song can't choose how a voice is stolen or started again, and mono, legato and glide need a kernel made for them (std's `mono()`, below) instead of working on any voice graph. Voices are most of a song's instances; moving each pool as one box keeps an activation's work in proportion to the top-level graph.
+- *Today:* one policy: the first free slot, else the oldest (`PolyNode::process` in `core/runtime/src/lib.rs`). A reused voice is reset. The only option is `voices` (`core/script/sdk/core.ts`). Since step 7 a poly's voices are one box (`VoicePool`), which an activation moves whole into a poly of the same shape: its voices, channels and voice graph, without its cells' values, origins and names (a plain number written inside the voice is part of it); any other poly is new. Since the `sounds` merge, std gives one note at a time, legato, glide and the 808's slide up and back at package level, on this same op: `mono()` (`std/src/synth.ts`) feeds two polys of `std:notecv` (1 voice and 8) into the top-level `std:mono` kernel, which plays the voice with the latest note's pitch, gate and velocity. `synth.lead`, `synth.sub` and `synth.bass` start that way, and so does any std synth or FM sound given `voices: 1`.
 
 ### Latency
 
@@ -1236,7 +1236,7 @@ Each item below is decided where this page says so, and built when its trigger a
 | The plugin host process ([HOST-3](#pluginhost)) | The first synth turn after the core, or the first plugin crash report, whichever comes first; always before plugin windows. |
 | Plugin windows, state autosave, plugin output events as automation, VST3 and AU. An export then first commits a pending autosave ([RENDER-1](#offline)) | The host process exists. |
 | Latency compensation ([RENDER-17](#latency)–[RENDER-21](#latency)) | Before the first producer session with third-party plugins, or the first latent plugin a song needs. The arena it needs is built (step 7). |
-| Mono, legato and glide ([RENDER-16](#voices)) | In the synth turns after the core ([order of work](#order-of-work), 9), on the arena's voice pools (built in step 7); or earlier if a song needs 808 slides or portamento. |
+| The `poly` op's `mode`, `retrigger`, `steal` and `glide` options: mono, legato and glide on any voice graph ([RENDER-16](#voices)) | In the synth turns after the core ([order of work](#order-of-work), 9), on the arena's voice pools (built in step 7). The early trigger, a song that needs 808 slides or portamento, was met in std instead: its `mono()`, since the `sounds` merge. |
 | MIDI and computer-keyboard input, audio input with monitoring, recording takes as data Tx | After audition (step 8). |
 | Note expression, controller, parameter and raw MIDI events ([RENDER-14](#events)) beyond note on and off | MPE editing, MIDI input with controllers, or sample-accurate plugin automation. |
 | Chasing notes already sounding at a seek, and preroll | The first producer complaint about missing held notes after a seek or loop. |
@@ -1301,7 +1301,7 @@ Steps 3 and 4 may run in parallel; everything else is in order.
    - **8a:** parallel partitions on a thread pool, right after the arena, with renders that don't depend on the thread count.
    - **8b:** each a Tx builder or an engine feature on this base: add, duplicate, delete and rename track; the mixer with monitoring mute and solo plus the `muted` track option; automate a knob; the tempo bar, with its lease; clip editing by id, with lane leases; audition.
 9. **After the core,** synth and plugin turns alternate with audio and sample turns:
-   - synth and plugin: the plugin host process, then plugin windows (with state autosave and output events), then latency compensation, then mono, legato and glide, then MIDI input;
+   - synth and plugin: the plugin host process, then plugin windows (with state autosave and output events), then latency compensation, then the `poly` op's mono, legato, glide and steal options (std's `mono()` gives its own instruments the first three since the `sounds` merge), then MIDI input;
    - audio and sample: disk streaming, then kernel ABI v1 and the sampler, then stretching as an offline kernel, then recording.
 
    TypeScript package tools and the other deferred items come in when their triggers arrive.
