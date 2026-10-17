@@ -397,9 +397,17 @@ export function SongTitle({
     return () => void delete canvas.renameSong;
   }, [name, pending, locked]);
   const editing = draft !== null;
+  // The room when typing began. The field keeps at least that width while it is typed in, also
+  // when the room goes for a moment (a status pill shows in a small window): it is drawn over its
+  // neighbours then, so what is typed stays in sight (review PL-T1).
+  const [began, setBegan] = useState(room);
   useLayoutEffect(() => {
-    if (editing) input.current?.select();
+    if (!editing) return;
+    setBegan(room);
+    input.current?.select();
+    // Only when typing begins: later changes of the room are what the field must outlast.
   }, [editing]);
+  const wide = Math.max(room, began);
   const commit = (value: string, leaving: boolean) => {
     const next = value.trim();
     if (!next) {
@@ -445,8 +453,9 @@ export function SongTitle({
             }
           }}
           onBlur={() => commit(draft, true)}
-          // As wide as the name's place in the bar may be (TopBar), 160 to 480 px when there is room.
-          style={{ width: `${Math.max(12, draft.length + 2)}ch`, minWidth: Math.min(160, room), maxWidth: Math.min(480, room) }}
+          // As wide as the name's place in the bar may be (TopBar), 160 to 480 px when there is room;
+          // never narrower than when typing began.
+          style={{ width: `${Math.max(12, draft.length + 2)}ch`, minWidth: Math.min(160, wide), maxWidth: Math.min(480, wide) }}
           className={clsx(
             "h-ctl px-2 rounded-sm bg-raised border text-center text-base font-semibold text-fg-strong outline-none",
             error ? "border-danger" : "border-accent",

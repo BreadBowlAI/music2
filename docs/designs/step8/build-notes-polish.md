@@ -1342,3 +1342,18 @@ places a marker off the grid (X8).
 | Red first (the page and server of `5e74f50`) | `FAIL a Ctrl-click on a marker on a Mac opens its menu (true) and leaves the playhead where it was: beat 39.999988888888886` and `FAIL and a Ctrl-drag on a Mac moves no marker: [{"beat":16,"name":"Chorus"},{"beat":44,"name":"Verse"}]` |
 | Green | this page with the old server: both pass (the run that showed PL-R3 red); `pl-arrange` (see the last run below) |
 | Not checked | A real Mac. Linux Chromium doesn't turn a Ctrl-click into a right-click, so the suite sends the menu's event itself. On the Mac's list |
+
+#### PL-T1. The song's name field shrank to 18 px while it was typed in
+
+The Merge's fix kept the name's field when its room went, but the field still shrank to that room:
+you typed into a box 18 px wide and couldn't see the name. Now the field keeps the width it had
+when typing began (it may still grow), drawn over the groups beside it until the room comes back.
+The bar's box holds the room in a CSS variable (`max-w-(--room)`), and drops it while it holds the
+field (`has-[input]:max-w-none`, `z-10`). The narrower name in the Mac app at 1100 px (86 px) is by
+design (Q23), so it stays.
+
+| | |
+|---|---|
+| Suite | `pl-notes` (100 now): the field's width after the room goes is at least its width when typing began (at least 120 px), and it is the topmost thing at its own middle |
+| Red first (the page and server of `5e74f50`) | `FAIL the field keeps its width, on top of its neighbours: {"w":160,"top":true} then {"w":18,"top":true}` |
+| Green | this page: `{"w":160,"top":true} then {"w":160,"top":true}`; `pl-notes`, `s8-songbar`, `fx-fixes` (see the last run below) |

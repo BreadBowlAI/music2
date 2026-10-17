@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import { Download, PanelLeft, Play, Redo2, Repeat, SkipBack, Square, Undo2 } from "lucide-react";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { barAt, barsToBeats, lockReason, position, type GraphState, type GraphStatus, type Loop, type Meter, type Problem } from "../lib/graph";
 import { exportSong, useExport } from "../lib/exporting";
 import { next } from "../lib/history";
@@ -172,13 +172,13 @@ export default function TopBar({
       {/* Centred in the window, whatever the transport and buttons beside it take: kept clear of
           them as measured (Q23), a long name is cut short, and with too little room it goes (§3.8).
           Not while it is being typed: hidden, the field would lose the keyboard, and with it write
-          what was typed half way. */}
+          what was typed half way. The field keeps its width then, over its neighbours (PL-T1). */}
       <div
         className={clsx(
-          "absolute inset-y-0 left-1/2 -translate-x-1/2 flex items-center whitespace-nowrap pointer-events-none",
+          "absolute inset-y-0 left-1/2 -translate-x-1/2 flex items-center whitespace-nowrap pointer-events-none max-w-(--room) has-[input]:max-w-none has-[input]:z-10",
           (room ?? 0) < NAME_MIN && "hidden has-[input]:flex",
         )}
-        style={{ maxWidth: room ?? 0 }}
+        style={{ "--room": `${room ?? 0}px` } as CSSProperties}
       >
         <SongTitle session={graph.session} name={graph.name} dir={graph.dir} rate={graph.sample_rate} locked={locked} room={room ?? 0} />
       </div>
