@@ -20,7 +20,7 @@ import {
   type MixStrip,
 } from "../lib/graph";
 import { laneMade } from "../lib/events";
-import { mod, opt } from "../lib/native";
+import { mod } from "../lib/native";
 import { tones } from "../lib/palette";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
@@ -446,9 +446,9 @@ function StripMenu({
           <div role="separator" className="my-1 h-px bg-line" />
         </>
       )}
+      {/* No key: ⌥4 opens the selected track's own file, not the channel's line. */}
       <MenuRow
         icon={<CodeXml size={14} />}
-        shortcut={opt("4")}
         detail={at ? <span data-code className="font-mono">{at.file}:{at.line}</span> : undefined}
         onClick={run(() => editInCode(at))}
       >
