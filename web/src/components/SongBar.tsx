@@ -437,7 +437,9 @@ export function SongTitle({ session, name, dir, rate, locked }: { session: numbe
           onBlur={() => commit(draft, true)}
           style={{ width: `${Math.max(12, draft.length + 2)}ch` }}
           className={clsx(
-            "max-w-[min(480px,calc(100vw-960px))] min-w-40 h-ctl px-2 rounded-sm bg-raised border text-center text-base font-semibold text-fg-strong outline-none",
+            // As wide as the name's place in the bar may be (TopBar): in the Mac app, once the time shows, narrower.
+            "max-w-[min(480px,calc(100vw-960px))] [:root[data-app=mac]_&]:min-[1280px]:max-w-[min(480px,calc(100vw-1096px))]",
+            "min-w-40 h-ctl px-2 rounded-sm bg-raised border text-center text-base font-semibold text-fg-strong outline-none",
             error ? "border-danger" : "border-accent",
           )}
         />
