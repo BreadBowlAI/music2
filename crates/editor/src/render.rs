@@ -123,6 +123,8 @@ pub struct Render {
     stop: Arc<AtomicBool>,
     exact: bool,
     reproducible: bool,
+    /// Written as `m2 bounce` writes: 32-bit float, nothing clipped ([`Render::write_float`]).
+    float: bool,
 }
 
 /// What a render wrote.
@@ -221,7 +223,7 @@ impl Render {
         exact: bool,
         reproducible: bool,
     ) -> Render {
-        Render { renderer, runner, _pool: pool, sample_rate, first, end, length, stop: Arc::default(), exact, reproducible }
+        Render { renderer, runner, _pool: pool, sample_rate, first, end, length, stop: Arc::default(), exact, reproducible, float: false }
     }
 
     /// An export from the song's start, as [`Render::new`] makes one, that plays the live engine's
@@ -338,6 +340,16 @@ impl Render {
         }
     }
 
+    /// Render to `path` as `m2 bounce` writes its file: 32-bit float, two channels, every sample
+    /// as rendered, nothing clipped (D15), and only as a new file. Written beside it and named
+    /// create-only when complete, as [`Render::write_new`] does. A stem is `m2 bounce --track`'s
+    /// bits (C3): [`rooted`], from 0 for [`bounce_seconds`].
+    pub fn write_float(mut self, path: &Path, progress: impl FnMut(f64)) -> Result<Rendered> {
+        self.float = true;
+        let r = self.write_as(path, progress, |part| name_new(part, path).map(|()| path.to_path_buf()))?;
+        Ok(r.1)
+    }
+
     /// Render like [`Render::write`] to the first of `paths` that is free when the render is
     /// done. It never replaces a file, not even one that appeared while it rendered. Returns
     /// the file written.
@@ -383,14 +395,16 @@ impl Render {
 
     /// Write the WAV to `part`. Returns the part's lock, held until it is named.
     fn write_to(&mut self, part: &Path, progress: &mut dyn FnMut(f64)) -> Result<(File, Rendered)> {
-        let spec =
-            hound::WavSpec { channels: 2, sample_rate: self.sample_rate, bits_per_sample: 24, sample_format: hound::SampleFormat::Int };
+        let spec = match self.float {
+            true => hound::WavSpec { channels: 2, sample_rate: self.sample_rate, bits_per_sample: 32, sample_format: hound::SampleFormat::Float },
+            false => hound::WavSpec { channels: 2, sample_rate: self.sample_rate, bits_per_sample: 24, sample_format: hound::SampleFormat::Int },
+        };
         let file = File::create(part)?;
         // A second handle on the same open file keeps the lock after the writer closes its own.
         // A disk that can't lock just goes unswept.
         let lock = file.try_clone()?;
         let _ = m2_os::fs::try_lock(&lock);
-        let mut out = Out { wav: hound::WavWriter::new(BufWriter::new(file), spec)?, frames: 0, peak: 0.0 };
+        let mut out = Out { wav: hound::WavWriter::new(BufWriter::new(file), spec)?, frames: 0, peak: 0.0, float: self.float };
         let mut chunk = vec![[0.0f32; 2]; CHUNK];
         let start = self.first;
         match self.length {
@@ -421,7 +435,7 @@ impl Render {
         }
         // No block follows soon: the workers sleep now.
         self.runner.rest();
-        let Out { wav, frames, peak } = out;
+        let Out { wav, frames, peak, .. } = out;
         wav.finalize()?;
         progress(1.0);
         let rendered = Rendered {
@@ -463,6 +477,8 @@ struct Out {
     wav: hound::WavWriter<BufWriter<File>>,
     frames: u64,
     peak: f32,
+    /// 32-bit float as rendered; else 24-bit, clipped at 0 dBFS.
+    float: bool,
 }
 
 impl Out {
@@ -470,12 +486,38 @@ impl Out {
         for f in frames {
             for &s in f {
                 self.peak = self.peak.max(s.abs());
-                self.wav.write_sample((s.clamp(-1.0, 1.0) * 8_388_607.0).round() as i32)?;
+                match self.float {
+                    true => self.wav.write_sample(s)?,
+                    false => self.wav.write_sample((s.clamp(-1.0, 1.0) * 8_388_607.0).round() as i32)?,
+                }
             }
         }
         self.frames += frames.len() as u64;
         Ok(())
     }
+}
+
+/// The song `ir` heard through export `export` of track `track` alone: what `m2 bounce --track`
+/// renders, and a stem (C3). The root module stays `song` (ID-3) and plays the track's export
+/// through a node of its own. Refused when there is no such track.
+pub fn rooted(ir: &m2_ir::Ir, track: &str, export: &str) -> Result<m2_ir::Ir> {
+    if !ir.modules.iter().any(|m| m.key == track) {
+        bail!("there's no track `{track}`");
+    }
+    let mut ir = ir.clone();
+    let root = ir.modules.iter_mut().find(|m| m.key == m2_song::ROOT).context("the song has no root module")?;
+    // A reference is `node.port`, so the node's id has no dot.
+    let id = "m2-bounce".to_string();
+    let op = m2_ir::Op::Import { module: track.to_string(), export: export.to_string() };
+    root.nodes.push(m2_ir::Node { id: id.clone(), op, src: None, origin: None, frame: None });
+    root.exports.insert(id.clone(), id.clone());
+    ir.root.export = id;
+    Ok(ir)
+}
+
+/// How long `m2 bounce` renders a song by default, and a stem: to 2 s past where its last clip ends.
+pub fn bounce_seconds(data: &DataSet) -> f64 {
+    data.tempo().seconds_at(data.end()) + 2.0
 }
 
 /// Refuse to write a render that isn't exact into the project at `project`'s `assets/`
@@ -960,6 +1002,62 @@ mod tests {
         let r = Render::new(&c.flat, &c.data, &packages, SAMPLE_RATE, 0.0, Length::Seconds(0.1), Threads::Exactly(4)).unwrap();
         let r = r.write(&dir.0.join("out.wav"), |_| {}).unwrap();
         assert_eq!((r.threads, r.hosts_plugins), (1, true));
+    }
+
+    // C3, RENDER-3: a stem is `m2 bounce --track`'s file, bit for bit: each of first-song's four
+    // tracks rendered by `Render` through `rooted` and written by `write_float` equals what bounce's
+    // own loop writes (`Renderer::new`, `seek_on`, `render_on`, `write_new_wav`).
+    #[test]
+    fn a_stem_renders_what_m2_bounce_renders() {
+        let (c, packages) = first_song();
+        let dir = Dir::new(&[]);
+        let seconds = bounce_seconds(&c.data);
+        assert!((seconds - (32.0 * 60.0 / 124.0 + 2.0)).abs() < 1e-9, "{seconds}");
+        for track in ["kick", "hats", "bass", "keys"] {
+            let flat = m2_ir::check(&rooted(&c.ir, track, "out").unwrap(), &packages).unwrap();
+            let stem = dir.0.join(format!("{track}.wav"));
+            let r = Render::new(&flat, &c.data, &packages, SAMPLE_RATE, 0.0, Length::Seconds(seconds), Threads::Exactly(2))
+                .unwrap()
+                .write_float(&stem, |_| {})
+                .unwrap();
+            assert_eq!(r.frames, (seconds * SAMPLE_RATE as f64).round() as u64);
+            // `m2 bounce`'s loop.
+            let mut renderer = Renderer::new(&flat, &c.data, &packages, SAMPLE_RATE).unwrap();
+            let (mut runner, _pool) = threads_for(&renderer, Threads::Exactly(1));
+            renderer.seek_on(0, &mut runner).unwrap();
+            let frames = renderer.render_on(seconds, &mut runner).unwrap();
+            let bounce = dir.0.join(format!("{track}-bounce.wav"));
+            let channels = vec![frames.iter().map(|f| f[0]).collect::<Vec<f32>>(), frames.iter().map(|f| f[1]).collect()];
+            m2_runtime::audio::write_new_wav(&bounce, &channels, SAMPLE_RATE).unwrap();
+            let (a, b) = (std::fs::read(&stem).unwrap(), std::fs::read(&bounce).unwrap());
+            assert!(a == b, "{track}: the stem and the bounce differ ({} and {} bytes)", a.len(), b.len());
+            assert!(frames.iter().any(|f| f[0] != 0.0), "{track} makes a sound");
+        }
+        // Another track's sound isn't in it: the kick's stem isn't the song.
+        assert!(rooted(&c.ir, "nobody", "out").unwrap_err().to_string().contains("there's no track `nobody`"));
+    }
+
+    // D15: a float render keeps what is over 0 dBFS, as `m2 bounce` does, and is made only as a new file.
+    #[test]
+    fn a_float_render_is_never_clipped_and_never_replaces_a_file() {
+        let dir = Dir::new(&[(
+            "song.ts",
+            "import { hz, song } from '@m2/core';\nimport { osc } from 'std/dsp';\nimport { scale } from 'std/math';\n\
+             export default song(() => scale(osc.sine(hz(440)), 3));\n",
+        )]);
+        let (c, packages) = compiled(&dir);
+        let render = || Render::new(&c.flat, &c.data, &packages, SAMPLE_RATE, 0.0, Length::Seconds(0.1), Threads::Exactly(1)).unwrap();
+        let out = dir.0.join("loud.wav");
+        let r = render().write_float(&out, |_| {}).unwrap();
+        assert!(r.peak_db > 9.0, "{}", r.peak_db);
+        let mut wav = hound::WavReader::open(&out).unwrap();
+        assert_eq!((wav.spec().bits_per_sample, wav.spec().sample_format), (32, hound::SampleFormat::Float));
+        let peak = wav.samples::<f32>().map(|s| s.unwrap().abs()).fold(0.0f32, f32::max);
+        assert!(peak > 2.9, "{peak}");
+        let before = std::fs::read(&out).unwrap();
+        assert!(render().write_float(&out, |_| {}).is_err());
+        assert_eq!(std::fs::read(&out).unwrap(), before);
+        assert!(parts(&dir.0).is_empty());
     }
 
     // 8a: `M2_THREADS` and `--threads` take 1 to 64, and refuse anything else in plain words; the

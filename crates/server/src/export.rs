@@ -92,6 +92,35 @@ impl Exports {
     }
 }
 
+/// The one export slot, taken by a job of another kind: stems (studio C3). An export and stems
+/// never run together, and quitting stops either. Free again when it drops.
+pub(crate) struct Slot {
+    state: Arc<AppState>,
+}
+
+impl Slot {
+    /// Take the slot for `song`: None while an export or stems run.
+    pub(crate) fn take(state: &Arc<AppState>, song: &str) -> Option<Slot> {
+        if state.exports.running.swap(true, Ordering::SeqCst) {
+            return None;
+        }
+        state.exports.stop.store(false, Ordering::SeqCst);
+        *state.exports.song.lock() = Some(song.to_string());
+        Some(Slot { state: state.clone() })
+    }
+
+    /// Set when the app quits: the job stops, and leaves nothing behind.
+    pub(crate) fn stop(&self) -> Arc<AtomicBool> {
+        self.state.exports.stop.clone()
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.state.exports.running.store(false, Ordering::SeqCst);
+    }
+}
+
 /// Where exports go unless the user picks a file: the songs folder's `Exports`.
 pub fn exports_dir() -> Result<PathBuf> {
     Ok(crate::project::songs_dir()?.join(EXPORTS))

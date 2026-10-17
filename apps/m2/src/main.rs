@@ -486,14 +486,8 @@ fn run() -> Result<()> {
                 }
                 let export = flag(&args, "--export").unwrap_or_else(|| "out".into());
                 bounced = m2_ir::Root { module: track.clone(), export: export.clone() };
-                // Played through an export of the root module, which stays `song` (ID-3).
-                let root = ir.modules.iter_mut().find(|m| m.key == m2_song::ROOT).context("the song has no root module")?;
-                // A reference is `node.port`, so the node's id has no dot.
-                let id = "m2-bounce".to_string();
-                let op = m2_ir::Op::Import { module: track, export };
-                root.nodes.push(m2_ir::Node { id: id.clone(), op, src: None, origin: None, frame: None });
-                root.exports.insert(id.clone(), id.clone());
-                ir.root.export = id;
+                // Played through an export of the root module, which stays `song` (ID-3): as a stem is.
+                ir = render::rooted(&ir, &track, &export)?;
             }
             let flat = m2_ir::check(&ir, &pk).map_err(report)?;
             let impure = flat.order.iter().any(|&i| matches!(flat.nodes[i].op, FOp::Plugin { .. }));
@@ -502,7 +496,7 @@ fn run() -> Result<()> {
             let from: f64 = flag(&args, "--from").map(|v| v.parse()).transpose().context("--from")?.unwrap_or(0.0);
             let seconds: f64 = match flag(&args, "--seconds") {
                 Some(v) => v.parse().context("--seconds")?,
-                None => tempo.seconds_at(data.end()) + 2.0 - from,
+                None => render::bounce_seconds(&data) - from,
             };
             let path = project.dir.join(DataPath::Asset(asset.clone()).path());
             let record = project.dir.join(DataPath::Asset(record).path());

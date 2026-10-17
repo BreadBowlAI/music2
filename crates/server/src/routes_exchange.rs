@@ -1,5 +1,5 @@
 //! Swapping files with other music apps (studio lane C), in a router of its own merged into the
-//! API's: the song or a clip written as a MIDI file. A route here that writes the open project is
+//! API's: the song or a clip written as a MIDI file, and the song's stems (`crate::stems`). A route here that writes the open project is
 //! in [`WRITES_EXCHANGE`], and a read-only window answers it 423 with WRITE-18's message, as
 //! `routes.rs` answers its own. A MIDI file goes to the songs folder's Exports (a new name), or to
 //! a file the user picked (replaced, as Export Audio replaces one), never into the project.
@@ -31,6 +31,8 @@ pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/graph/midifile/where", post(midifile_where))
         .route("/api/graph/midifile/export", post(midifile_export))
+        .route("/api/graph/stems", post(stems_start))
+        .route("/api/graph/stems/check", post(stems_check))
         .route_layer(axum::middleware::from_fn_with_state(state, writes))
 }
 
@@ -171,6 +173,26 @@ async fn midifile_export(State(s): S, Json(r): Json<ExportReq>) -> ApiResult {
     })
     .await?;
     Ok(Json(json!({"path": path})))
+}
+
+#[derive(Deserialize)]
+struct StemsReq {
+    session: u64,
+}
+
+/// Export the open song's stems (Q39): `{session}`. Answers `{path}`, the new folder they go in;
+/// `export` events with `stems: true` follow (see `crate::stems`). Writes no part of the project.
+async fn stems_start(State(s): S, Json(r): Json<StemsReq>) -> ApiResult {
+    let state = s.clone();
+    let path = blocking(move || crate::stems::start(&state, r.session)).await?;
+    Ok(Json(json!({"path": path})))
+}
+
+/// Whether the open song's stems can be made now: `{why}`, words when they can't (Q40), else null.
+async fn stems_check(State(s): S, Json(r): Json<StemsReq>) -> ApiResult {
+    let state = s.clone();
+    let why = blocking(move || state.graph.stems_refused(r.session)).await?;
+    Ok(Json(json!({"why": why})))
 }
 
 #[cfg(test)]

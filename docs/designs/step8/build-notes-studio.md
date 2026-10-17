@@ -78,13 +78,13 @@ the merge joins them).
 
 **Tests**
 
-- `smf_tests.rs` (13): `reads_the_spec_example` (SMF 1.0's own example, as format 0 and as format 1: its programs,
+- `smf_tests.rs` (12): `reads_the_spec_example` (SMF 1.0's own example, as format 0 and as format 1: its programs,
   tempo, meter and four notes), `reads_format_0_and_1`, `running_status_and_sysex`, `velocity_0_ends_a_note`,
   `a_note_without_an_off_ends_at_the_next_on`, `tempo_and_meter_events`, `an_smpte_division_is_refused_in_words`,
   `format_2_is_refused`, `a_cut_short_file_says_where`, `too_big_or_too_many_notes_is_refused_in_words`,
   `writes_what_it_reads` (both spec files, and the bytes of a written track), `a_mangled_file_never_panics`
   (every prefix of the spec file, then 2,000 seeded files with bytes flipped).
-- `midifile_tests.rs` (8): `the_song_has_a_tempo_track_and_a_track_per_lane` (first-song: Kick and Hats on channel
+- `midifile_tests.rs` (9): `the_song_has_a_tempo_track_and_a_track_per_lane` (first-song: Kick and Hats on channel
   10, Bass and Keys on 1 and 2 with programs 38 and 25, every note of the song), `a_second_lane_is_named_by_its_track_and_lane`,
   `a_drum_kit_lane_is_channel_10`, `notes_are_cut_at_their_clips_edges` (and two clips laid over each other),
   `muted_in_song_tracks_are_left_out`, `velocity_and_pitch_are_rounded_into_midi`, `a_clip_round_trips`,
@@ -124,6 +124,105 @@ drums on channel 10.
 
 **Contract:** `smf.rs` reads SMF formats 0 and 1 in ticks a beat and refuses the rest in words; music2 writes format 1
 at 960 ticks a beat. A MIDI file is written outside the song only (Exports, or a picked file).
+
+### C3a. Stems
+
+**In short**
+
+| What | Now |
+|---|---|
+| Stems | Each track of the song becomes its own WAV file, for another music app |
+| Where | A new folder in the songs folder's Exports: `first-song stems`, then `first-song stems 2` |
+| Names | `1 Kick.wav`, `2 Hats.wav`… in the tracks' order |
+| What is in each | The track alone, before its mixer channel: no fader, no pan, no master. 32-bit float, to 2 s past the last clip |
+| Muted in the song | Left out |
+| A song that plays plugins | Not yet: "Not yet for a song that plays plugins (Surge XT)." |
+| While a song exports | Stems wait their turn: one export at a time, of either kind |
+
+The Export dialog that offers them is C3b. Until then they are reached through the API only.
+
+**What changed**
+
+- `crates/editor/src/render.rs` (lane C's this track): `rooted(ir, track, export)` (moved out of `m2 bounce`'s arm:
+  the song played through a node of the root that imports the track's export, ID-3), `bounce_seconds(data)` (to 2 s
+  past the last clip, `m2 bounce`'s default), and `Render::write_float(path, progress)`: 32-bit float, two channels,
+  every sample as rendered, nothing clipped (D15), through a part file, named create-only. `Render` gains one field,
+  `float`; `Out::push` writes floats when it is set. Nothing 8a changed there (`Threads::from_env`, `parse`) is
+  touched.
+- `apps/m2/src/main.rs` (the bounce arm): calls `render::rooted` and `render::bounce_seconds`. Its files keep every
+  byte: `m2 bounce first-song stem-<key> --track <key>` for kick, hats, bass and keys, before (the `85b069a` code)
+  and after, both `sha256sum -c` OK:
+
+  | File | SHA-256 |
+  |---|---|
+  | `stem-kick.wav` | `5d13254850824725bb41953825bd171f8a5651fd201738b45594093819facec6` |
+  | `stem-hats.wav` | `156c8ea54b845a213b64682f32c3b81e115e0b35ad29f2d2c14d016e473997e3` |
+  | `stem-bass.wav` | `c09c2e6797f2fe6a7e9bb0134c8976fb7c67d227086c81c0e61cbfcbfef81f14` |
+  | `stem-keys.wav` | `a36080c08101e33f0065c2ca3b3cd3695134c8f14052fb10eba34b416c37d841` |
+
+  (and their `.wav.json` provenances, the same too.)
+- `crates/server/src/graph/exchange.rs`: `Graph::stems(token)` plans on the accepted revision (the tracks in the
+  timeline's order, muted ones and ones with no `out` left out, each `rooted` and `m2_ir::check`ed); refused in words
+  for a song with a plugin node (Q40: the plugins' names, an uninstalled one by its id) or with no track left.
+  `Graph::stem_render(plan, i)` builds stem `i`'s `Render` on the actor from the planned revision, on an export's
+  threads (`export_threads`), from 0 for `bounce_seconds`. `Graph::stems_refused(token)`: the words, or none.
+- `crates/server/src/stems.rs` (new): `stems::start(state, token)`: the export's slot, the plan, a new folder
+  (`<song> stems`, `… stems 2`, made create-only and synced), then a thread that renders the stems one after another
+  with `write_float` into `<n> <Label>.wav`. Events as an export's, with `stems: true`: `progress` (0..1 for all)
+  with `stem`, `n` and `of`; `done` with the folder's `path`, `count` and `seconds`; or `error`, after which the
+  stems it wrote and the folder are gone. Quitting stops it (the slot's `stop`).
+- `crates/server/src/export.rs` (C's block, after `Exports`' impl): `Slot`, the one export slot taken by another
+  kind of job: `Slot::take(state, song)`, `stop()`, and its `Drop` frees it. An export and stems refuse each other
+  with the export's own words.
+- `crates/server/src/routes_exchange.rs`: `POST /api/graph/stems {session}` → `{path}` and `POST
+  /api/graph/stems/check {session}` → `{why}`. `crates/server/src/lib.rs`: `pub mod stems;`.
+
+**Tests**
+
+- `render.rs`: `a_stem_renders_what_m2_bounce_renders` (each of first-song's four tracks: `Render` with `rooted` and
+  `write_float` gives the same file as bounce's own loop: `Renderer::new`, `seek_on`, `render_on`, `write_new_wav`),
+  `a_float_render_is_never_clipped_and_never_replaces_a_file` (a sine at 3× full scale keeps its peak; a second write
+  to the name is refused and changes nothing).
+- `apps/m2/tests/bounce.rs` (new, its own binary: `render.rs`' test sets the environment as the only test there):
+  `bounce_of_a_track_still_writes_its_file` (`m2 bounce --track bass`: 32-bit float, 2 s past the last clip, the same
+  bytes as the stem).
+- `stems_tests.rs`: `stems_write_one_file_per_track_in_a_folder` (four files in order, 32-bit float, the right
+  length, progress in order with each stem's name, a second folder), `stems_leave_out_tracks_muted_in_the_song`,
+  `stems_of_a_song_with_plugins_are_refused_in_words` (the probe plugin; nothing made; the check's words the same),
+  `one_export_at_a_time` (stems while exporting and the reverse; quitting stops stems and leaves no folder;
+  another session's window refused with the slot left free).
+- Suite `st-stems` (kind `export`, 25 checks, the API only for now): the check says none, the folder, an export
+  refused meanwhile, the four names in order, each stem the same file `m2 bounce --track` writes on a copy of the
+  song (the `fmt ` and `data` chunks, then every byte); Hats muted in the song leaves three, in `first-song stems 2`;
+  Keys playing a plugin: the check's words, the refusal in the same words, no folder.
+- The renders: 10 of 10 (`e2e/baseline.sh --tree`, then `shasum -a 256 -c e2e/renders.sha256`).
+
+**Red first**
+
+- `render.rs` with `write_float` writing 24-bit as before: both new tests fail (`render.rs:1033`: "kick: the stem
+  and the bounce differ"; `render.rs:1054`: the peak).
+- `stems.rs` rendering no stem, and no plugin refusal: all four fail, e.g. `stems_tests.rs:67`: `left: (Bool(true),
+  Number(0), Bool(true)), right: (Bool(true), Number(4), Bool(true))`.
+- `bounce.rs` against the 24-bit `write_float`: `bounce.rs:56`, "the stem and the bounce differ".
+- `st-stems` on the before page and server: `FAIL  first-song's stems can be made: {"error":"no such API"}`,
+  `FAIL  they go in a new folder in Exports: {"error":"no such API"}`.
+
+**Guards**
+
+- None: each new test fails against its stub.
+
+**What's left**
+
+- The Export dialog (C3b). Until it lands, a stems `done` event shows the old export toast.
+- Stems of a song that plays plugins (Q40: its render would need the live instances lent to each track's graph).
+- A song whose render makes a NaN: the stems carry the silenced samples, where `m2 bounce` stops with an error (D15).
+  No fixture does.
+
+**For gaps.md:** #36: stems: each track as its own WAV file (32-bit float, `m2 bounce --track`'s bits), into a new
+folder in Exports; not yet for a song that plays plugins.
+
+**Contract:** a stem is the track's own output before its mixer channel, rendered as `m2 bounce <song> x --track <key>`
+renders it, the same bytes (RENDER-3). Stems and Export Audio share one slot: one at a time.
 
 ## Lane D
 
