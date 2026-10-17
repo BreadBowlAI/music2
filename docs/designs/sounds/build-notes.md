@@ -165,3 +165,138 @@ For the lead: a `target/` should not move between worktrees. If one does, `cargo
   `unwrap`); only the fixtures test passed quietly. They were not all read.
 - Scratch: `~/m2-runs/sm-scratch` (renders, the std load timing). The check logs are in
   `~/m2-runs/check-sm1`, `-sm1b` and `-sm1c`.
+
+## Slice 2: O3, std's effects follow the song
+
+**In short**
+- std's chorus, phaser and tremolo now wobble only while the song plays. Stopped, they wait.
+  Press Play and they carry on. The bitcrusher's sample clock is put back at Play to where it was
+  at Stop.
+- So a song played after the engine sat stopped sounds exactly like its export. A test plays a
+  held chord through each effect, alone, after 2 s and after 5 blocks stopped. Each one failed
+  before the last commit and passes after it.
+- How: a new signal, `time.playing` (1 while the song plays, else 0), in the IR, the engine and
+  the SDK. Each of the four kernels has a last input, `playing`. std/fx connects it.
+- The attack's fix A landed first: a component call that reads song time gets its own `time`
+  node, named under its call. Without it, Add Chorus on the starter's chords was refused.
+- **No render record changed**: 10 of 10 e2e renders, and the 5 hashes in `renders.json`.
+  Offline the song plays on every frame, so the effects do the same sums as before.
+- `ci/check.sh --gates` passes at `09b2dfd`: every row, nothing passed only on a retry. So do the
+  recorded tests (`--ignored`, 5 of 5). G7f moved less than one run's noise.
+- Found on the way: the first full check failed one row, "repo unchanged", because I wrote these
+  notes while it ran. The second, on a tree left alone, passed.
+
+### What was built
+
+| Commit | What |
+|---|---|
+| `8b7b7e9` | `TimeOf::Playing` in the IR (serialised `"playing"`, unit `unit01`; `TimeOf::unit`). The engine fills it from the block's runs: 1 where `moving`, else 0, as plugins are told (HOST-6). No new `Block` buffer: nothing is filled unless a node reads it (the attack's "smaller change"). Nothing reads it yet. |
+| `02aab27` | Fix A (L3). `@m2/core` exports `time` (`beats`, `seconds`, `playing`), the same object as `ctx.time`. Read outside any call: the module's one node, as before. Read inside a component call or a `key()` frame: one node per call, cached by frame and scope (a voice has its own). `delta.rs` names such a node under its frame chain. WRITE-8's bullet says so. |
+| `ed2e9ec` | The `playing: control<unit01> = 1` input, last, on `chorus`, `phaser`, `tremolo` and `bitcrush` (`fx.rs`, `m2pkg.toml` with descriptions that say "left out, always"). `std.wasm` rebuilt: 215,070 → 217,359 bytes; `std/build.sh --check` gives the same bytes. Nothing connects it yet. |
+| `09b2dfd` | std/fx passes `playing: time.playing` in the four bodies. The after-idle test is renamed and widened; the tremolo stop, seek and wrap test; the graph view test. |
+
+The rules, in the kernels:
+
+| Effect | Stopped (`playing` 0, or NaN) | At Play |
+|---|---|---|
+| chorus, phaser, tremolo | the LFO phase stays where it is | it steps again from there |
+| bitcrush | its clock runs on, so a tail is still crushed (a held sample would freeze into DC) | the clock is put back to its value at Stop; never played: 1.0, its start |
+
+While `playing` is 1 the arithmetic is exactly the old one. On the audio thread, per effect call:
+one 128-float fill of its `time` node a block, one more input copy, one compare a sample. Nothing
+allocates.
+
+### Tests
+
+| Test | Where | Proves |
+|---|---|---|
+| `time_reads_in_its_own_unit` | `core/ir/src/check.rs` | `playing` is `unit01`, at the top level and in a voice; beats and seconds don't fit a `unit01` port |
+| `time_playing_follows_the_transport` | `core/runtime/src/tests/live.rs` | 0 stopped; 1 from the block line Play lands on, through a seek and a loop wrap 96 frames into a block; 0 from the stop |
+| `time_is_one_node_per_call` | `core/script/src/tests.rs` | a call reading twice has one node in its frame; two calls, two nodes; a voice in the call its own; at the top `time` and `ctx.time` are one node |
+| `a_call_reading_time_added_or_removed_beside_another_renames_nothing` | `core/session/src/tx/delta_tests.rs` | adding a call before another of its kind (built first) and removing it are both confined to the call |
+| SDK types | `core/script/sdk/check/calls.ts` | `time.playing` is `Control<"unit01">`, not beats; `time` can't be written |
+| `playing_the_lfo_steps_as_it_always_did` | `std/kernels-src/src/fx/tests.rs` | against an oracle copy of the old `Phase`, bit for bit: 400,000 samples, 10 rates (absurd ones too) changing every 9,000, at 4 sample rates and limits |
+| `playing_the_bitcrusher_crushes_as_it_always_did` | same | against an oracle copy of the old bitcrusher, bit for bit, over every torture setting |
+| `stopped_the_effects_wait_and_play_on_where_they_were` | same | each of the four, stopped 20,003 samples with `playing` 0 or NaN, then played: bit for bit the run with no stop; and a fresh one that sat stopped plays as one made at Play |
+| `std_plays_the_export_after_the_engine_sat_stopped` (was `drums_play_…`) | `core/play/tests/bit_identity.rs` | after 2 s and after 5 blocks stopped, live is the export: the drum beat; a held chord through chorus, phaser, tremolo and bitcrush, one song each; first-song, resample, sounds (whole), starter, empty. It lists every song that differs, not only the first |
+| `tremolo_holds_while_stopped_and_never_jumps` | `core/play/tests/live.rs` | on a steady level: stopped, the level holds at the export's level there; Play goes on bit for bit as the export from that frame; through 3 or more mid-block loop wraps and a seek, no step bigger than twice the wobble's own |
+| `effects_that_follow_the_song_show_no_time_node` | `crates/editor/src/view_tests.rs` | a chain of all four (two choruses) shows one node per call, 6 edges, only the declared knobs |
+
+`the_starters_add_reverb_keeps_the_hooks_reverb` (Add Chorus on the starter's chords) passes
+unchanged. In `ed2e9ec` its labels showed the folded default (`std:chorus[0.6,0.4,0.4,1]`); from
+`09b2dfd` `playing` is a cable, and the labels are as before.
+
+`common/mod.rs` gains `project(what, files)`: a temp project with std's manifest. The drum beat,
+the effect songs and the tremolo song use it, so slice 3 changes `std = "0.1"` in one place there.
+
+### Red first
+
+| Test | Run without the change | Result |
+|---|---|---|
+| after idle | on `ed2e9ec` (the port, not yet connected) | failed, every difference listed below |
+| `tremolo_holds_…` | std/fx of `ed2e9ec` | "stopped, the level holds at [0.72498727, 0.72498727]": the level moved on 1 frame after the stop landed |
+| the delta test | `delta.rs` of `8b7b7e9` | "the edit was refused: song/time:beats/#1 is added outside the ranges it may change" |
+| the kernel test | `Phase` stepping and the clock never put back | failed on chorus first; with only the bitcrusher's put-back removed, on bitcrush from sample 0 |
+| the view test, and the starter's Add Chorus | the SDK making one `time` node per module | 9 edges: a cable from one shared time node into every effect; Add Chorus refused ("chords/std:chorus@…/time:playing/#0 is removed outside the ranges it may change") |
+
+The after-idle failures on `ed2e9ec` (frame: the first that differs from the export):
+
+| Song | After 96,000 frames (2 s) | After 640 frames (5 blocks) |
+|---|---|---|
+| a held chord through chorus | 480 | 492 |
+| … through phaser | 1 | 1 |
+| … through tremolo | 1 | 1 |
+| … through bitcrush | 5 | 5 |
+| examples/sounds (chorus on keys and strings) | 435 | 436 |
+| templates/starter (chorus on chords) | 386 | 387 |
+| the drum beat, first-song, resample, empty | the same | the same |
+
+On `09b2dfd` all pass. Risk 9: the whole of `examples/sounds` (its master limiter, compressor,
+`duck` and `delay`) plays the export after idle. No other defect was found, so nothing was
+narrowed.
+
+### The records
+
+| Record | Result |
+|---|---|
+| `e2e/renders.sha256` | 10 of 10 the same, at `ed2e9ec` and at `09b2dfd` |
+| `core/session/tests/renders.json` | unchanged (its test passes; `"std"` stays `"0.1.0"`) |
+| G7c on every pure fixture and p16 | no bit changes |
+
+### The check
+
+| Run | Result |
+|---|---|
+| `ci/check.sh --gates` at `09b2dfd` (`~/m2-runs/check-sm2b`, 27 min) | **PASS**, every row: 921 Rust tests, 0 failed (915 at slice 1, and 6 new); clippy; std kernels (110 tests, 107 at slice 1); std.wasm; mac lint; 29/29 browser suites (`e2e/dsp.mjs` among them: a chorus added after the Keys from the browser, its settings as knobs); 10 of 10 renders; old engine (S); the gates, all 6 runs; repo unchanged. Nothing passed only on a retry. G11 p95 8.3 to 9.1 ms; G7a heard at p95 113 ms. |
+| The run before it (`~/m2-runs/check-sm2`, the same commit) | FAIL on "repo unchanged" only: I edited these notes in the worktree while it ran, and that row saw it. Every other row passed, the gates too. Not counted. Nothing is written in the worktree during a check now. |
+| The recorded tests, `cargo test --locked -p m2-play --release --test bit_identity --test live --test churn -- --ignored --nocapture` (`~/m2-runs/logs/sm-recorded-1017-032326-3122353.log`, 11 min) | **PASS**, 5 of 5: `live_is_the_export_on_all_of_p16`, `live_is_the_export_on_p50` and `a_no_op_activation_on_p50` (422 s together); `p16_churns_200_edits_within_20_mb` (183.0 MB after 70 edits, then 177.5 MB); `p16_loops_ten_minutes_without_drift` (79 laps, 504 Ons each, 116 s). |
+| Each commit, before it was made | `8b7b7e9`: the `m2-ir` and `m2-runtime` tests, clippy. `02aab27`: `cargo test --locked --workspace`, 919 passed, 0 failed; the SDK's `tsc` check. `ed2e9ec`: the workspace run failed one test, the starter's Add Chorus labels (see Tests); after its fix the editor's 150 passed; `std/kernels-src` tests, clippy and `cargo fmt --check` clean; the 10 renders made and matched. `09b2dfd`: the workspace, 921 passed, 0 failed; the 10 renders matched. Clippy clean at each. |
+
+G7f beside slice 1's, for information (PLAT-1; p50 uses none of the four effects, so all three
+sides play the same graph as before):
+
+| | Slice 1, `e8bba0e` | Slice 2, `09b2dfd` |
+|---|---|---|
+| A block, the app's layout against S (bound 80) | +10 µs (−8 to +15) | +2 µs (−9 to +8) |
+| A callback (bound 320) | −18 µs (−89 to +67) | +52 µs (+29 to +87) |
+| P1 against S: block, callback | −17, −48 | −2, +26 |
+| The app's layout against P1: block, callback | +27, +67 | +3, +25 |
+| The full build (S's) | 221 ms (182) | 217 ms (185) |
+| The slowest activation block (bound 5,333) | 2,797 µs | 3,060 µs |
+| Footprint of one renderer of p50 | 203 MB | 203 MB |
+| The same music | blocks `22cd1b3810530499`, callbacks `cdb85ca0bbb29381` | the same hashes |
+
+Every change is inside one run's noise (about ±30 µs a block, ±150 µs a callback).
+
+### Left, and why
+
+- Docs (slice 4): RENDER-6, RENDER-7 and RENDER-33's *Today*, WRITE-8's *Today*, README's
+  `time` row and std's effects line, `song-as-program.md`'s three time inputs, the module doc of
+  `bit_identity.rs` (std's effects and drums no longer need a fresh engine; top-level oscillators
+  and noise still do), HANDOFF (L2: Space, Enter, Space carries the wobble on; the Mac by-ear
+  check).
+- What still differs from the export, on purpose (L2): Stop, back to bar 1, Play is a seek. The
+  wobble and the drums' hit counts carry on. "Stop, then Play in place" carries on the wobble
+  only: the chorus's delay lines and the phaser's filters hold the tail, the bitcrusher a sample of
+  it.
+- The std bump to 0.2 (slice 3).
