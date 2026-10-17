@@ -5,9 +5,10 @@
 // writes one clip over whole bars, selected, "Undo recording on Bass", ⌘Z takes it back; the
 // keyboard piano records, Notes' own clicks don't; snapped to the grid; while looping the first pass
 // is written at the wrap and play goes on; R while playing records from now; Esc and Space while
-// counting cancel and nothing plays; nothing played says so; a PC page's R; the lint; and on a
-// server of the suite's own that plays into a file, the count's four clicks a beat apart, the first
-// louder, and the song's first beat a bar after the first click.
+// counting cancel and nothing plays; nothing played says so; a PC page's R; Settings' MIDI keyboards
+// (one turned off plays and records nothing, the mark says so, one unplugged says "(not connected)");
+// the lint; and on a server of the suite's own that plays into a file, the count's four clicks a beat
+// apart, the first louder, and the song's first beat a bar after the first click.
 //
 // Keys come as a MIDI keyboard's: `/api/graph/midi/inject` (run.mjs gives the server M2_MIDI=inject).
 //
@@ -254,6 +255,60 @@ await pc.page.keyboard.press("Escape");
 await until(async () => (await record()) === null, 2000);
 await pc.browser.close();
 errors.push(...pc.errors);
+
+// ---------------------------------------------------------------- Settings' MIDI keyboards (Q28)
+
+const settingsOpen = async () => {
+  await blur();
+  await key("Meta+,");
+  return until(() => page.$("[data-testid=settings-dialog]"), 3000);
+};
+const settingsClose = async () => {
+  await page.keyboard.press("Escape");
+  await until(async () => !(await page.$("[data-testid=settings-dialog]")), 2000);
+};
+const kbRows = () => page.$$eval("[data-keyboard]", (els) => els.map((e) => `${e.textContent}${e.querySelector("input")?.checked ? " ✓" : ""}`));
+const live = async () => (await status()).live;
+const mark = () => page.$eval("[data-testid=midi-status]", (e) => e.title).catch(() => null);
+await settled();
+check(await settingsOpen(), "⌘, opens Settings");
+check((await kbRows()).join("|") === "Test KeysPlays ✓", `a row for the keyboard plugged in, Plays ticked (${(await kbRows()).join(" | ")})`);
+await page.click("[data-keyboard='Test Keys'] input");
+check(await until(() => JSON.stringify(settings().midi?.off) === '["Test Keys"]', 3000), `unticked: kept in settings.json (${JSON.stringify(settings().midi)})`);
+const bad2 = await page.evaluate(lint, "[data-testid=settings-dialog]");
+check(bad2.length === 0, `the lint finds nothing in Settings${bad2.length ? `: ${bad2.slice(0, 6).join(" | ")}` : ""}`);
+await settingsClose();
+check(await until(async () => (await mark()) === "Test Keys is turned off in Settings", 3000), `the top bar's mark says it is off: ${await mark()}`);
+await midi([0x90, 60, 100]);
+await sleep(400);
+check((await live()) === 0, "turned off, a key plays nothing");
+await midi([0x80, 60, 0]);
+await until(async () => !(await toasts()).some((t) => t.includes("Nothing was played")), 10000);
+await press("Space");
+await until(async () => (await status()).playing, 3000);
+await press("r");
+await until(async () => (await record())?.phase === "take", 2000);
+await midi([0x90, 60, 100]);
+await sleep(300);
+await midi([0x80, 60, 0]);
+await press("r");
+check(await until(async () => (await toasts()).filter((t) => t.includes("Nothing was played")).length > 0 && takes().length === 0, 3000), "and records nothing");
+await press("Space");
+await inject({ device: "Test Keys", plugged: false });
+await settingsOpen();
+check(await until(async () => (await kbRows()).join("|") === "Test Keys (not connected)Plays", 3000), `unplugged, its row says so (${(await kbRows()).join(" | ")})`);
+await inject({ device: "Test Keys", plugged: true });
+await until(async () => (await kbRows()).join("|") === "Test KeysPlays", 3000);
+await page.click("[data-keyboard='Test Keys'] input");
+check(await until(() => settings().midi === undefined, 3000), `ticked again: left out of the file (${JSON.stringify(settings())})`);
+await settingsClose();
+await midi([0x90, 60, 100]);
+check(await until(async () => (await live()) === 1, 3000), "on again, a key plays");
+await midi([0x80, 60, 0]);
+await inject({ device: "Test Keys", plugged: false });
+await settingsOpen();
+check(await until(() => page.$("[data-testid=settings-midi-none]"), 3000), "none plugged in and none off: “No MIDI keyboard is plugged in.”");
+await settingsClose();
 
 await heard();
 done(errors);

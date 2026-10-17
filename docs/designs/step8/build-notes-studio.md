@@ -281,6 +281,51 @@ assertion `left == right` failed  left: None  right: Some(("Record", None))
 recording, D18), §3.8 (the time shows from 1212 px, 1312 in the Mac app; there the name goes up to about 1200
 px), §5.1 (R is Record), §5.3 (Transport ▸ Record).
 
+### B4. Which MIDI keyboard plays
+
+**In short**
+
+| What | Now |
+|---|---|
+| Settings (⌘,) | A new row, MIDI keyboards, after Buffer size |
+| Each keyboard | Its name and a "Plays" box, ticked at first |
+| Untick it | That keyboard plays nothing and records nothing. The top bar's mark says it is off |
+| A keyboard turned off and unplugged | Its row stays: "Keys (not connected)" |
+| None | "No MIDI keyboard is plugged in." |
+
+**What changed**
+
+- `components/SettingsDialog.tsx`: the MIDI keyboards row (`Keyboards`): one row per keyboard plugged in or turned
+  off, its name, "(not connected)" for one gone, and a "Plays" check box as Rename Song's (D22); a change posts
+  `{midi: {off}}` at once. The server's B2 side keeps it and tells every window (`midi` event).
+- `lib/midi.ts`: the `midi` state keeps `off` (from the state's `midi` and the `midi` event).
+- `components/MidiStatus.tsx`: the mark's tooltip names only the keyboards that play, and then "Pads is turned off
+  in Settings".
+- `e2e/st-record.mjs`: 11 more checks (61 in all); its rows in `run.mjs` and `e2e/README.md` follow.
+
+**Tests**
+
+- `st-record`'s Settings part: ⌘, opens Settings; a row for "Test Keys", Plays ticked; unticked, kept in
+  `settings.json`; the lint of the dialog; the mark says it is off; a key plays nothing (`live` 0) and a take
+  records nothing (the toast); unplugged, "Test Keys (not connected)"; ticked again, left out of the file, and a key
+  plays (`live` 1); none plugged in and none off, "No MIDI keyboard is plugged in."
+- Moved and green: `nx-settings` (42), `nx-midi` (24), `taste`.
+
+**Red first** (st-record on B3's page):
+
+```
+FAIL  a row for the keyboard plugged in, Plays ticked ()
+Error: No element found for selector: [data-keyboard='Test Keys'] input
+```
+
+**What's left:** nothing of B4.
+
+**For gaps.md:** #31: MIDI keyboards in Settings: which ones play (an input device for recording audio is left,
+with #25).
+
+**Contract:** FMT-20: `settings.json` `midi: {off: [names]}` (by the names `m2_os::midi` gives); taste.md §3.9:
+Settings' MIDI keyboards row.
+
 ## Lane C
 
 MIDI files and stems: written by lane C.
