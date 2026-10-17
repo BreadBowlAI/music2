@@ -48,7 +48,7 @@ Written 2026-10-16, at the end of step 7 (the engine), updated after its speed w
 | Branch | Commit | State |
 |---|---|---|
 | `main` | the tip | Steps 1–7, the fast note edits, and the platform layer. Green on Linux and macOS at `1750322` (the platform step). Step 7: green on Linux at `ffc36aa`, macOS owed. |
-| `sounds-merge` | the tip | `sounds` merged onto `main` at `cbac57c`, O3 fixed, std 0.2, and the docs. Worktree `~/m2-runs/wt/sm` (its `target/`, about 70 GB, is the one step 7 built). Not pushed yet. It lands on `main` as a fast-forward, after the review and the final check. |
+| `sounds-merge` | the tip | `sounds` merged onto `main` at `cbac57c`, O3 fixed, std 0.2, and the docs. Worktree `~/m2-runs/wt/sm` (its `target/`, about 40 GB: step 7's was moved here, then cleaned and rebuilt in slice 1). Not pushed yet. It lands on `main` as a fast-forward, after the review and the final check. |
 | `step7` | `95c8a73` | Step 7's commits, all on `main` now. No worktree now: `~/m2-runs/wt/s7` moved to `~/m2-runs/wt/sm` for the `sounds` merge. Delete the branch and `origin/step7` once the Mac run passes. |
 | `origin/taste` | `4804247` | The new look (T and S); 8b.1 Tracks done (`a0d5f91`); 8b.2 song bar unfinished. |
 | `origin/sounds` | `916127d` | 22 new std sounds (8 on the polysynth, 4 FM, 10 drums), merged on `sounds-merge`. |
@@ -118,7 +118,7 @@ Decided earlier, and still in force:
 | A plugin that keeps failing. | It is started again once. If the new one fails within 10 s, it stays silent until the song is opened again, and the user is told once. | Keep 10 s. |
 | The output device changes while playing (headphones in or out). | Playback stops, and a message says why: "Press Play to go on". | Keep it: music shouldn't jump to the speakers on its own. |
 | The kernel layout (idea 3): one sandbox per box, with wasmtime's own 4 GiB layout. It undoes the 32 MiB layout of O1 (2026-10-15). | Nothing: research only (`docs/designs/kernel-layout/report.md`). | Decide before kernel ABI v1 freezes in step 9. If yes, build it after 8a, after a short test build that measures it. |
-| Space, Enter, Space: stop, back to bar 1, play. Should the wobble and the drums' noise start again as in the export? | Not now: they carry on from where they stopped, as at any jump. So that play may differ a little from the export (RENDER-6 allows it). Stop, then Space, carries on smoothly either way. | Keep it (the lead's default, 2026-10-16). Ask once, in these words: "After you stop and go back to bar 1, the wobble carries on from where it was; should it start again as in the export?" Changing it changes no export. |
+| Space, Return, Space: stop, back to bar 1, play. Should the wobble and the drums' noise start again as in the export? | Not now: they carry on from where they stopped, as at any jump. So that play may differ a little from the export (RENDER-6 allows it). Stop, then Space, carries on smoothly either way. | Keep it (the lead's default, 2026-10-16). Ask once, in these words: "After you stop and go back to bar 1, the wobble carries on from where it was; should it start again as in the export?" Changing it changes no export. |
 
 ## The check: `ci/check.sh`
 
@@ -245,9 +245,9 @@ with nothing "passed only on a retry". In the gates part:
 
 | # | Do this | You should hear or see |
 |---|---|---|
-| 18 | Type `cargo run --release -p music2-desktop`. Click **Open an Example**, then **Pop sounds**. Press Space. | A short pop song: supersaws, an 808, FM keys, bells and drums. It sounds full, with no clicks. |
-| 19 | Press Space to stop. Wait about 10 seconds. Press Space again. | It plays on from where it stopped. The wobble on the keys and the strings (their chorus) carries on smoothly, with no jump. |
-| 20 | Press Space, then Enter, then Space. | It stops, goes back to bar 1, and plays from there, with no click. The wobble and the drums' noise carry on from where they were, so this play may differ a tiny bit from the export. That is expected for now: it is the open question in Open owner decisions. |
+| 18 | Quit the app. Type `cargo run --release -p music2-desktop`. Click **Open an Example**, then **Pop sounds**. Press Space. | A short pop song: supersaws, an 808, FM keys, bells and drums. It sounds full, with no clicks. |
+| 19 | While it still plays (in its first 20 seconds), press Space to stop. Wait about 10 seconds. Press Space again. | It plays on from where it stopped. The wobble on the keys and the strings (their chorus) carries on smoothly, with no jump. |
+| 20 | Press Space, then Return, then Space. | It stops, goes back to bar 1, and plays from there, with no click. The wobble and the drums' noise carry on from where they were, so this play may differ a tiny bit from the export. That is expected for now: it is the open question in Open owner decisions. |
 | 21 | Tell the lead what you heard at 18 to 20, and whether 20 sounded right to you. | |
 
 After a green run the lead writes here: "macOS: green at <commit> (ci/check.sh on <model>, <date>)", with G7f's
@@ -303,7 +303,7 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
    skeptic, fixes with their checks, then a final `ci/check.sh --gates` at the tip with nothing passed only on a
    retry. Write "Linux green at …; macOS owed" here, push the branch, and fast-forward `main`. Then delete the
    worktree `~/m2-runs/wt/sm` with its `target/`, and the detached `~/m2-runs/wt/sounds`. Ask the owner the
-   Space, Enter, Space question (Open owner decisions).
+   Space, Return, Space question (Open owner decisions).
 4. **Merge `taste`**: finish 8b.2 (song bar) and build 8b.3 (Mix faders) per design-8b, then merge (notes below):
    bundle Inter for Linux, D7's attention fix, re-run s8-tracks. Mac run before it lands.
 5. Then **8a** (all CPU cores), **8b.4–8b.10**, and **step 9**. Before step 9 freezes kernel ABI v1, the owner
@@ -465,7 +465,7 @@ From the platform step:
 | Test plugins | `ci/plugins.sh` (once): Surge XT 1.3.4 and Airwindows Consolidated into `~/.local/share/m2-test-plugins/clap`, from the archives in `~/.local/share/m2-test-plugins/dl` (Airwindows' zip is gone upstream: keep that copy). Never into `~/.clap` or `/usr/lib/clap`. |
 | The desktop app | Only on an invisible Xvfb screen, as the check's app row opens it. Never on a real screen. |
 | Scratch `HOME` | Anything that runs music2 gets a scratch `HOME` and `M2_AUDIO=none`, and then `CARGO_HOME=/home/jerry/.cargo RUSTUP_HOME=/home/jerry/.rustup`. Never the real `~/.music2` or `~/Music`. `ci/check.sh` does this itself. |
-| Scratch copies | `git worktree add --detach ~/m2-runs/scratch-<label>`, with its own `target/`; delete it when done (they once filled 390 GB). The repo's own `target/` is about 140 GB, `~/m2-runs/wt/sm`'s about 70 GB (step 7's, moved from `~/m2-runs/wt/s7`). |
+| Scratch copies | `git worktree add --detach ~/m2-runs/scratch-<label>`, with its own `target/`; delete it when done (they once filled 390 GB). The repo's own `target/` is about 140 GB, `~/m2-runs/wt/sm`'s about 40 GB (step 7's, moved from `~/m2-runs/wt/s7`, then cleaned and rebuilt). |
 | Logs | Each check's folder in `~/m2-runs/check-*` (the `sounds` merge's: `check-sm1c` and `-sm2b` with the gates, `-sm3`, `-sm4`; step 7's last: `check-s7-rv1`, and `-rvg` with the gates; before them `-sp1`, `-sp2` and `-spg`); the `sounds` merge's plan in `~/m2-runs/sounds/plan.md`; the step 7 gate runs in `~/m2-runs/gates-fix/` and `~/m2-runs/xc/g7f/`; the review in `~/m2-runs/review-b1/`. |
 | Tools | Rust 1.99.0 (`rust-toolchain.toml`), Node 24, chrome-headless-shell 133.0.6943.141 (the check installs Rust and Chrome when missing), Xvfb. |
 | MIDI | `/dev/snd/seq` gives `EACCES` here: tests inject notes and never open a device. |
