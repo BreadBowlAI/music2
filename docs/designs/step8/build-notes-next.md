@@ -1263,24 +1263,36 @@ The full `ci/check.sh` is the End's.
 **Cleaned up:** the four lane worktrees (`git worktree remove`) and their branches (`git branch -d`: all merged). The
 lanes had deleted their own targets and server copies. `target-nx` and `bin/nx-b7a96c6` stay for the End.
 
-## Review
+## End
+
+**In short**
+
+| What | Now |
+|---|---|
+| The review | 12 findings (6 on how it behaves, 6 on tests, docs and words). All are fixed, each in its own commit, with a test that failed first (below). One more came up while fixing them (NX-S5, after): fixed the same way |
+| `main` | Merged in at `8a6d9e1` (8a's offline half), as a merge commit. One line clashed (`engine.rs`'s imports): both sides kept |
+| The full check | `ci/check.sh --gates` at `1560a19`: every row PASS, nothing passed only on a retry: 1,353 Rust tests, 58/58 browser suites, 10 of 10 renders, the 6 gate runs, 44 minutes |
+| Pictures | `~/m2-runs/app-shots/next-1560a19/`, with `captions.txt` |
+| Owed | The Mac run: `ci/check.sh`, then the by-ear steps 51 to 60 in HANDOFF (a real MIDI keyboard, the metronome against the beat, switching the output) |
+
+### The review
 
 One review round with a skeptic, two lenses: how it behaves (engine), and tests, docs and taste. Every finding was
-confirmed. Each fix is its own commit, with a test that fails before it and passes after, or a doc fix. Rows are added
-here as the fixes land; the final check is in the End.
+confirmed. Each fix is its own commit, with a test that fails before it and passes after (or, for R6, the words and
+the suite that reads them), red first against the code or page before it.
 
 | Finding | What was wrong | Fix | Test | Red first | After |
 |---|---|---|---|---|---|
-| R2 | `one_tempo_prepare_in_flight` passed with every update queuing its own job: all 50 came while the session was held, so later jobs found the same tempo and sent nothing. No test sent an update while a prepare ran, so the job's "again" never ran | X24's test, as the plan says: each prepare 50 ms longer (`between_phases`), 50 updates over 100 ms from another thread; at most 4 jobs and 4 plans, the last playing the 50th value. The old test stays, renamed `updates_while_the_session_is_busy_play_the_newest_once` | `tempo_lease::tests::one_tempo_prepare_in_flight` | With `again` forced false: `timed out waiting until the value is heard`. With `l.queued` taken out of `tempo_update`: `8 jobs ran and 4 plans played` | 13 of 13 `tempo_lease` tests, 3 runs |
-| NX-S3 | Let go while another job waited on the actor, a settle in between played the old tempo (and, with a fresh engine, the old note) until the commit landed | Tempo: the commit keeps the value let go in the lease (`bpm`), and `wanted()` plays it while the lease is closing; the commit's own settle finds the accepted arrangement holds it and plays nothing in its place. A commit that fails queues the job that plays the accepted tempo again. Lanes: `settled()` carries a closing lease into a new plan with its last preview, unless its lanes changed meanwhile (then the commit decides). An activation keeps the swapped lane already; a fresh engine (a new player, another rate, a refused activation) didn't | `a_settle_before_the_commit_plays_the_value_let_go`, `a_tempo_commit_that_fails_goes_back` (tempo); `a_fresh_engine_before_the_commit_plays_what_was_let_go` (lanes) | `each settle played the value let go: [Some(120.0), Some(160.0)]`; lanes `left: [4.0] right: [5.0]`; without the failed commit's job: `timed out waiting until the accepted tempo plays` | 294 of 294 `m2-server` lib tests; clippy clean |
-| NX-S4 | A note dragged while a tempo drag played was timed in the accepted map, so it played out of time with the rest (and `put_back` the same) | `PlaysView` carries the tempo map of a tempo drag that plays (`tempo`), and `swap_of` times notes in it. Both orders: a note drag during a tempo drag, and a tempo plan carrying a note drag | `a_note_dragged_during_a_tempo_drag_plays_in_its_map`, `a_tempo_drag_carries_a_note_drag_in_its_map` | Timed in the accepted map, both: `left: [] right: [60000]` (struck at frame 120000, past beat 6 at 240 BPM) | 296 of 296 `m2-server` lib tests; clippy clean |
-| NX-S6 | `set_output` let go of the player's lock before it kept where the song was, so another action in that gap started the new player at beat 0 (the stale value was always overwritten later, so nothing worse) | Where the song was is read and kept inside the locked block, as `Inner::device()`'s let-go does. A test-only seam (`Outputs::changing`) runs another action the moment the old player is out of its slot | `an_output_change_keeps_the_beat_beside_another_action` | `where it was, stopped: Status { playing: false, … beat: 0.0 … }` | 297 of 297 `m2-server` lib tests; clippy clean |
-| NX-S5 | `set_output` opened the new stream while the old one still held the device (it stops 100 to 600 ms after it is let go). An output only one stream may hold (an ALSA `hw:` device) refused it, and the song fell to the silent player for 30 s | `Player::freed()` says when a player let go has stopped its stream. `set_output` waits for it (at most 1 s), the player's slot locked meanwhile so no other action opens one, then starts the new player | `a_change_of_output_opens_once_the_old_stream_stopped` (server: a start closure that refuses while the last player isn't free); `a_player_let_go_frees_its_device` (`m2-play`) | `the new stream opened: no silent stand-in` | 298 `m2-server` lib tests and every `m2-play` test pass (364 in all); `host_math` 1 passed; clippy clean |
-| NX-S5, after | NX-S5's wait made a gap easy to land in: a reader blocked on the player's slot got it the moment it was let go, before the new player was in (`nx-settings`: `FAIL Headphones chosen: the server plays there (undefined)`). The gap was there before, only shorter | `set_output` starts the new player inside the slot's lock, as `Inner::device` starts one, then lets go | `a_change_of_output_never_shows_no_player` (a reader of `output_now()` beside five changes) | `a reader found no player`, `left: 2561` | 299 of 299 `m2-server` lib tests; clippy clean |
 | NX-S1 | An output's name is not its identity: ALSA lists many PCMs under one card's name. The list showed a name from one PCM, and a start opened the first PCM of that name (often the raw `hw:`, busy or held alone), so the song could play silently while "No sound device was found" showed | Outputs carry cpal's id (`Output::id`); a choice keeps the id (and the name, for while it isn't connected: `settings.json`'s `output.name`), and a start opens that very device. Each name is listed once, from the device a person means (`rank`: the default and sound servers' PCMs, then the card's shared `sysdefault:`, its other plugins, last `plughw:` and `hw:`), opening only the best way in to read its config. A chosen output that won't open falls back to the default (`fell_back`), as a gone one does; the Now row says "(the output chosen can't be used now)". The window keys its rows by id | `an_output_is_listed_from_the_device_a_person_means`, `a_start_tries_the_output_chosen_then_the_default` (`m2-play`); `settings_are_kept_in_their_file` (the id and the name); `nx-settings` (each output's id, the name kept) | Against the old rules: `only the best ways in are opened: left: ["alsa:pipewire", "alsa:hw:CARD=PCH,DEV=0", "alsa:plughw:CARD=PCH,DEV=0", "alsa:sysdefault:CARD=PCH", …]`; `left: [("USB", false)] right: [("USB", false), ("Speakers", true)]` | 366 `m2-server` and `m2-play` tests; clippy clean; `nx-settings` 39 of 39, `nx-nodevice` 11 of 11, `taste` 39 of 39 |
 | NX-S2 | On every Linux, Settings listed ALSA's `null` PCM ("Discard all samples (playback) or generate zero samples (capture)"). It opens, so choosing it played nothing with no warning; on a computer with no sound card it was the only output | `rank` leaves out `null` (and `usbstream`, not for playing): they are never listed | `the_null_output_is_never_listed` | `left: ["Discard all samples …", "Scarlett 2i2 USB", "PipeWire Sound Server"] right: ["PipeWire Sound Server"]` | 7 of 7 `outputs` tests; clippy clean |
-| R3 | Rust tests and `ci/check.sh` started servers that listen to real MIDI devices: nothing set `M2_MIDI` but the suites. On the Mac (CoreMIDI needs no permission) a keyboard plugged in reached the test servers | `listens_to_midi()`: never in `m2-server`'s own tests, whatever `M2_MIDI` says. `apps/m2/tests/render.rs` and `apps/music2-desktop/tests/app_main_thread.rs` set `M2_MIDI=none` beside `M2_AUDIO`. `ci/check.sh` exports `M2_MIDI=none`, and gives it to the app on Xvfb (the suites' servers still get `inject` from `run.mjs`) | `tests::a_test_server_never_listens_to_midi` | Without the `cfg!(test)` rule: `M2_MIDI None` | 300 of 300 `m2-server` lib tests with `M2_MIDI` unset; `render` 1 of 1; `app_main_thread` ok; clippy clean |
+| NX-S3 | Let go while another job waited on the actor, a settle in between played the old tempo (and, with a fresh engine, the old note) until the commit landed | Tempo: the commit keeps the value let go in the lease (`bpm`), and `wanted()` plays it while the lease is closing; the commit's own settle finds the accepted arrangement holds it and plays nothing in its place. A commit that fails queues the job that plays the accepted tempo again. Lanes: `settled()` carries a closing lease into a new plan with its last preview, unless its lanes changed meanwhile (then the commit decides). An activation keeps the swapped lane already; a fresh engine (a new player, another rate, a refused activation) didn't | `a_settle_before_the_commit_plays_the_value_let_go`, `a_tempo_commit_that_fails_goes_back` (tempo); `a_fresh_engine_before_the_commit_plays_what_was_let_go` (lanes) | `each settle played the value let go: [Some(120.0), Some(160.0)]`; lanes `left: [4.0] right: [5.0]`; without the failed commit's job: `timed out waiting until the accepted tempo plays` | 294 of 294 `m2-server` lib tests; clippy clean |
+| NX-S4 | A note dragged while a tempo drag played was timed in the accepted map, so it played out of time with the rest (and `put_back` the same) | `PlaysView` carries the tempo map of a tempo drag that plays (`tempo`), and `swap_of` times notes in it. Both orders: a note drag during a tempo drag, and a tempo plan carrying a note drag | `a_note_dragged_during_a_tempo_drag_plays_in_its_map`, `a_tempo_drag_carries_a_note_drag_in_its_map` | Timed in the accepted map, both: `left: [] right: [60000]` (struck at frame 120000, past beat 6 at 240 BPM) | 296 of 296 `m2-server` lib tests; clippy clean |
+| NX-S5 | `set_output` opened the new stream while the old one still held the device (it stops 100 to 600 ms after it is let go). An output only one stream may hold (an ALSA `hw:` device) refused it, and the song fell to the silent player for 30 s | `Player::freed()` says when a player let go has stopped its stream. `set_output` waits for it (at most 1 s), the player's slot locked meanwhile so no other action opens one, then starts the new player | `a_change_of_output_opens_once_the_old_stream_stopped` (server: a start closure that refuses while the last player isn't free); `a_player_let_go_frees_its_device` (`m2-play`) | `the new stream opened: no silent stand-in` | 298 `m2-server` lib tests and every `m2-play` test pass (364 in all); `host_math` 1 passed; clippy clean |
+| NX-S5, after | NX-S5's wait made a gap easy to land in: a reader blocked on the player's slot got it the moment it was let go, before the new player was in (`nx-settings`: `FAIL Headphones chosen: the server plays there (undefined)`). The gap was there before, only shorter | `set_output` starts the new player inside the slot's lock, as `Inner::device` starts one, then lets go | `a_change_of_output_never_shows_no_player` (a reader of `output_now()` beside five changes) | `a reader found no player`, `left: 2561` | 299 of 299 `m2-server` lib tests; clippy clean |
+| NX-S6 | `set_output` let go of the player's lock before it kept where the song was, so another action in that gap started the new player at beat 0 (the stale value was always overwritten later, so nothing worse) | Where the song was is read and kept inside the locked block, as `Inner::device()`'s let-go does. A test-only seam (`Outputs::changing`) runs another action the moment the old player is out of its slot | `an_output_change_keeps_the_beat_beside_another_action` | `where it was, stopped: Status { playing: false, … beat: 0.0 … }` | 297 of 297 `m2-server` lib tests; clippy clean |
 | R1 | `nx-nits`' check of the ruler's end never scrolled (first-song is 8 bars, the window shows 18) and passed by the number filter alone; taking `+ TOOLS_W` out of the timeline's width left it green | The check runs on a song longer than the window (a kick clip in bar 39), zoomed to bars of about 43 px: it asserts the timeline scrolls, and that scrolled to the end, bar 39's number (the song's last) and bar 40's (its spare) are drawn and end left of Follow and zoom. 27 checks now | `nx-nits` b | On the page with only `+ TOOLS_W` taken out: `FAIL scrolled to the end, bar 39's number … and bar 40's … : ["none","none"] < 1355` (also in D4's red-first list) | `nx-nits` 27 of 27: `[1289,1332] < 1355` |
+| R2 | `one_tempo_prepare_in_flight` passed with every update queuing its own job: all 50 came while the session was held, so later jobs found the same tempo and sent nothing. No test sent an update while a prepare ran, so the job's "again" never ran | X24's test, as the plan says: each prepare 50 ms longer (`between_phases`), 50 updates over 100 ms from another thread; at most 4 jobs and 4 plans, the last playing the 50th value. The old test stays, renamed `updates_while_the_session_is_busy_play_the_newest_once` | `tempo_lease::tests::one_tempo_prepare_in_flight` | With `again` forced false: `timed out waiting until the value is heard`. With `l.queued` taken out of `tempo_update`: `8 jobs ran and 4 plans played` | 13 of 13 `tempo_lease` tests, 3 runs |
+| R3 | Rust tests and `ci/check.sh` started servers that listen to real MIDI devices: nothing set `M2_MIDI` but the suites. On the Mac (CoreMIDI needs no permission) a keyboard plugged in reached the test servers | `listens_to_midi()`: never in `m2-server`'s own tests, whatever `M2_MIDI` says. `apps/m2/tests/render.rs` and `apps/music2-desktop/tests/app_main_thread.rs` set `M2_MIDI=none` beside `M2_AUDIO`. `ci/check.sh` exports `M2_MIDI=none`, and gives it to the app on Xvfb (the suites' servers still get `inject` from `run.mjs`) | `tests::a_test_server_never_listens_to_midi` | Without the `cfg!(test)` rule: `M2_MIDI None` | 300 of 300 `m2-server` lib tests with `M2_MIDI` unset; `render` 1 of 1; `app_main_thread` ok; clippy clean |
 | R4 | In a browser, a songs folder typed and then left with Done was dropped without a word when the server refused it: Done closed the window while the field's change was on its way | `applyTyped` returns whether the folder was taken, and the change in flight is shared (the field's blur starts it, Done waits for it). Done, Return outside the field and a click outside the window apply a typed folder first and close only if it was taken. Esc still closes without it | `nx-settings`: "a relative folder typed, then Done: the window stays open and says why"; "a full path typed, then Done: … Done closes the window" (40 checks) | On the page before: `FAIL a relative folder typed, then Done: the window stays open and says why: null` (and the suite stops there: 32 of 40) | `nx-settings` 40 of 40; `taste` 39 of 39 |
 | R5 | Settings read "an export runs" once, when it opened: once the export ended, both lists stayed greyed and the window still said "Wait for the export to finish." until it was opened again | The window greys the lists while the page hears an export run (`useExport`) or the server said one ran, and reads the settings again when the page hears it end | `nx-settings`: an export of a 300-bar song started while Settings opens: greyed and said; "once it ends, they can change again, the window still open" (42 checks) | On the page before: `FAIL once it ends, they can change again, the window still open: [true,true]` | `nx-settings` 42 of 42 |
 | R6 | The "No sound output" popover said a device plugged in is "used from your next action". The server takes it on its own: it looks every 2 s, and its catch-up (every 300 ms) moves the song there, stopped, and toasts "Sound output is back. Press Play to go on." | The popover says "Plug one in: within a few seconds the song moves to it, and stops." `output.rs`'s comments, C1's In short, its gaps.md and contract lines say the same | `nx-nodevice`'s words; `a_device_plugged_in_is_used_with_no_action` (a server of its own: no request after the plug, used in 1.9 s, and the toast sent) | On the page before: `FAIL the popover says why and what to do: "No sound output…it's used from your next action."` | `nx-nodevice` 11 of 11; the server test ok |
@@ -1296,6 +1308,119 @@ gains `Freed`. `Freed` and `Player::freed()` live in `core/play/src/outputs.rs`.
 `outputs::tries(&choice)` in order (the device chosen, then the default), keeping the last error. Nothing else there
 changed. Everything else is in `core/play/src/outputs.rs`.
 
-## End
+**The merge of `main` (`1560a19`).** `main` moved to `8a6d9e1` (8a's offline half: the pool, the executor, exports on
+several cores). git joined every file but one: `core/runtime/src/engine.rs`'s `use` lines, where B1 added
+`crate::click::Click` and 8a added `Runner`; both are kept. `Cargo.lock` joined by itself (8a's `m2-pool`, lane B's
+`midir`); `cargo build --locked` took it unchanged. After the merge: the workspace builds; `m2-runtime`, `m2-play`,
+`m2-server`, `m2-editor`, `m2-pool`, `m2-os` and `m2` tests pass; then the next track's 18 suites, `taste`, `export`,
+`s4-meter` and `pl-arrange` pass on the merged page and server (the first run of `export` and `s8-mute` stopped
+because the server copy had no `m2` beside it; with it, 37 of 37 and 152 of 152).
 
-The lead's End.
+**The final check** (`TW_WAIT=5400 ~/m2-runs/tw check-next 'cd ~/m2-runs/wt/nx && M2_CHECK_OUT=$HOME/m2-runs/check-next
+ci/check.sh --gates'`; log `~/m2-runs/logs/check-next-1017-173215-1239717.log`, out `~/m2-runs/check-next`), verbatim:
+
+```
+music2 check: PASS
+commit   1560a198bbed on next (clean)
+machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
+tools    rustc 1.99.0, node v24.21.0, 44 min
+plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+
+toolchain        PASS  rustc 1.99.0
+web build        PASS  
+build            PASS  
+app              PASS  the UI connected: first-song in 1 s, with-plugins in 1 s
+rust tests       PASS  1353 passed, 0 failed
+clippy           PASS  
+pool models      PASS  23 passed, 0 failed
+std kernels      PASS  tests and clippy
+std.wasm         PASS  rebuilt to the same bytes in another folder
+mac lint         PASS  the macOS code type-checks and lints
+browser suites   PASS  58/58 suites ok
+renders          PASS  10 of 10 match e2e/renders.sha256
+old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
+gates            PASS  the 6 runs ci/gates.txt names
+repo unchanged   PASS  
+
+gates:
+  machine: ASRockRack B665D4U-1L, Ubuntu 24.04.3 LTS, AMD Ryzen 9 7950X3D 16-Core Processor, x86_64, 32 threads
+  === m2-gates --server tx-data watcher
+  PASS  G11 tx-data (PLANE-5, PLANE-1, WRITE-15) on server on p16
+        ok    idle disk: the session's part before the preview (plan, check, pre-check), under 5 ms at p95: p50 1.0 ms, p95 1.4 ms, max 1.5 ms (n=200)
+        ok    idle disk: from the request to the first block that plays it (its preview), under 20 ms at p95: p50 5.1 ms, p95 9.1 ms, max 10.3 ms (n=200)
+        ok    with another writer syncing 4 MB chunks: the session's part before the preview (plan, check, pre-check), under 5 ms at p95: p50 1.1 ms, p95 1.5 ms, max 1.9 ms (n=200)
+        ok    with another writer syncing 4 MB chunks: from the request to the first block that plays it (its preview), under 20 ms at p95: p50 4.7 ms, p95 8.9 ms, max 10.0 ms (n=200)
+        ok    idle disk, 5,000 files in assets/: the session's part before the preview (plan, check, pre-check), under 5 ms at p95: p50 1.1 ms, p95 1.5 ms, max 3.0 ms (n=200)
+        ok    idle disk, 5,000 files in assets/: from the request to the first block that plays it (its preview), under 20 ms at p95: p50 5.2 ms, p95 9.0 ms, max 10.5 ms (n=200)
+  PASS  G11 watcher (WRITE-19) on server on p16 with 5,000 files in assets/
+        ok    idle: the CPU its ticks used over 10 s, under 1% of a core: 0.10% of a core (199 ticks in 10 s)
+  === m2-gates --server --reference 50 --at 180 add-effect
+  PASS  G5 and G7a add effect, through the server (RENDER-8, RENDER-25, RENDER-25a) on server on p50 from 180 s
+        ok    audible within compile + 100 ms: past the session's work: p50 44.3 ms, p95 52.6 ms, max 52.6 ms (n=10)
+        ok    G7a: heard within 200 ms of the request, its compile included: p50 108.4 ms, p95 117.2 ms, max 117.2 ms (n=10)
+        ok    with-plugins: audible within compile + 100 ms: past the session's work: p50 13.9 ms, p95 21.9 ms, max 21.9 ms (n=2)
+  === m2-gates --reference 50 --at 180 add-effect tails
+  PASS  G5 add effect (RENDER-25, 25a, 8) on engine (step 7) on p50
+  PASS  G7b tails of untouched tracks (RENDER-25, 25a) on engine (step 7) on p50
+  === m2-gates --server export
+  PASS  G7e export (RENDER-1, RENDER-6a, HOME-4, HOME-6) on server on examples/with-plugins, real time
+  === m2-gates store --reference 50
+  PASS  G7f store (RENDER-32) on the runtime on p50
+        ok    the same music: every renderer's timed blocks the same bits: the same 2880000 samples (hash 22cd1b3810530499) from the app's layout, P1 and S in every round, peak -1.0 dB
+        info  block, P1 against S (step 7 with wasmtime's default layout): mean +134 µs (5 pairs, -221 to +266); p99 +26 µs (5 pairs, -804 to +3511)
+        info  block, the app's layout against P1 (the owner's layout alone): mean -88 µs (5 pairs, -510 to +221); p99 -537 µs (5 pairs, -4735 to +2846)
+        info  block, starting a turn: of the judged ones, each turn's first half over its second, against S's: +2 µs (the app's layout), +37 (P1); each turn's first block over the mean: +1766 µs, +2111, +2500 (S); 188 a 
+        info  machines: S's record is from MacBookPro18,1, macOS 26.6.2, Apple M1 Pro, aarch64, 10 threads; this run is on ASRockRack B665D4U-1L, Ubuntu 24.04.3 LTS, AMD Ryzen 9 7950X3D 16-Core Processor, x86_64, 32 thread
+        skip  block within S + 80 µs, by the mean: would pass: +46 µs (5 pairs, -244 to +92) over S, measured here (bound 80). p99, not judged: -155 µs (5 pairs, -1224 to +2042); not judged off the reference Mac (PLAT-1
+        skip  footprint within S + 64 MB: recorded, not judged: S's record is from another machine (PLAT-1)
+        skip  full build within 1.5 × S: would pass: 221 ms against S's 185 ms, each its process's first, measured here; not judged off the reference Mac (PLAT-1)
+  === m2-gates arena --reference 50 --at 180
+  PASS  G7f the arena's callback (RENDER-32, RENDER-25) on the player on p50 from 180 s
+        ok    the same music: every player's timed callbacks the same bits: the same 2856960 samples (hash cdb85ca0bbb29381) from the app's layout, P1 and S in every round, peak -1.0 dB
+        info  callback, P1 against S (step 7 with wasmtime's default layout): mean +310 µs (5 pairs, -854 to +1552); p99 -5770 µs (5 pairs, -9750 to +4529)
+        info  callback, the app's layout against P1 (the owner's layout alone): mean +500 µs (5 pairs, -1251 to +834); p99 -368 µs (5 pairs, -10245 to +12384)
+        info  callback, starting a turn: of the judged ones, each turn's first half over its second, against S's: -153 µs (the app's layout), -279 (P1); each turn's first callback over the mean: +4365 µs, +6349, +6003 (S
+        info  machines: S's record is from MacBookPro18,1, macOS 26.6.2, Apple M1 Pro, aarch64, 10 threads; this run is on ASRockRack B665D4U-1L, Ubuntu 24.04.3 LTS, AMD Ryzen 9 7950X3D 16-Core Processor, x86_64, 32 thread
+        skip  callback within S's + 320 µs, by the mean: would pass: +300 µs (5 pairs, -424 to +2040) over S, measured here (bound 320). p99, not judged: -5716 µs (5 pairs, -10118 to +10881); not judged off the referenc
+        ok    the slowest activation block under half the device buffer's period: 4562 µs, p50 2049; the block before it p50 2819, max 4840 (bound 5333 µs; the run's p99 callback 32431)
+
+logs     /home/jerry/m2-runs/check-next.tgz
+```
+
+**Pictures** (`~/m2-runs/app-shots/next-1560a19/`, the Linux app on Xvfb `:97`, `captions.txt` beside them):
+
+| Picture | Shows |
+|---|---|
+| `1-settings.png` | The Settings window: Sound output, Buffer size, Now, New songs go in, Done |
+| `2-settings-outputs.png` | The Sound output list open: System default (Speakers) first, then each output (`M2_AUDIO_OUTPUTS`, via `app-shot.sh`'s new `OUTPUTS=`) |
+| `3-metronome-midi-piano.png` | The metronome on; the MIDI keyboard mark (a keyboard posted to `/api/graph/midi/inject` by a `HOOK`); the keyboard piano card, "Plays Bass" |
+| `4-effect-off-duck-picker.png` | The Song's Device view: a Chorus turned off ("Chorus · Off", dimmed) before the Duck, whose "Listens to" list is open (Hats, Keys, ✓ Kick) |
+| `5-ruler-markers.png` | The ruler: Intro, Verse and Chorus in its top band, each bar's number under its marker |
+
+The song for them is a copy of first-song with markers in `layout.json`, the metronome on in `.music2/view.json`, and
+`chorus(bass.out, { mix: 0.4, bypass: true })` before the Duck in `song.ts`. A tooltip doesn't show on Xvfb's
+WebKitGTK, so the MIDI mark's words aren't in a picture (`nx-midi` checks them).
+
+**Left** (each also in `docs/gaps.md` or HANDOFF):
+- A chosen output that comes back after it was unplugged isn't taken again by itself, and choosing it again while
+  the default plays for it does nothing (the choice didn't change): choose another, then it. Found writing the Mac
+  steps; small (`Outputs::choose` would count a fallen-back player as a change).
+- Audio clips dragged, and nudged clips, are heard when they land; a tempo drag in a song with audio, on release
+  (Q23's fallback; A4 not built).
+- Recording, a count-in, quantize on input, a MIDI input picker, pitch bend and the mod wheel (gaps #24); the
+  keyboard piano's velocity is a fixed 0.8.
+- The metronome's level and sound; Settings' input device and view settings for every song (#19, #31).
+- Undo that survives closing the song (#29's second half); effect presets and the old Pump (#21).
+- `m2-gates lane-drag` and `tempo-drag` (Q34): `crates/gates` was 8a's this round.
+- The Mac run.
+
+**Docs in this commit:** `docs/gaps.md` (#13 done; #19, #21, #24, #29, #31 down to what's left; the loose ends; What
+works today), `docs/architecture.md` (RENDER-27a and WRITE-22a *Today*; RENDER-28's click, `freed` and outputs by id;
+WRITE-21's names; MON-7's sources; PKG-3's `bypass`; PLAT-2's `m2_os::midi`; FMT-20's homes: `settings.json`, the
+metronome in `view.json`), `README.md` (the top bar, playing live, drags heard, effect cards, Settings, undo names),
+`taste.md` (§3.2's 36 px ruler, §3.3's metronome and MIDI mark, the effect card's menu, §3.9 the piano card and
+Settings), `docs/designs/platform/design.md` (§2.4 and §8: `midir` lives in `m2-os`, Q1), the plan as
+`docs/designs/step8/next-plan.md`, and HANDOFF.
+
+**Cleaned up:** `~/m2-runs/s8n/scratch/`, `~/m2-runs/s8n/bin/` and `~/m2-runs/s8n/target-nx` are deleted. `wt/nx` and
+its `target/` stay: the lead lands `next` and removes them.

@@ -707,7 +707,7 @@ Keep these rules that already follow the block in `index.css`, with these change
 | Top bar | 44 px tall | fixed | The left 80 px are kept for the traffic lights (native only; 12 px in browser mode). Today it is 64 px with an 88 px inset. |
 | Browser | 240 px wide | 200–360, or hidden (⌥⌘B) | Shown by default. Its width is per window (local). |
 | Track headers | 240 px wide | 200–320 | Today 236. |
-| Ruler | 28 px | fixed | Today 34. |
+| Ruler | 36 px | fixed | As `next` built it (D4a): markers in a 14 px band at the top; bar numbers, and each tempo or time signature change after its bar's number, on one line at 17 px; ticks and the loop brace at the foot. The timeline is the song's room plus the tools' width, so the last bar numbers scroll clear of Follow and zoom. Notes' ruler stays 28 px. |
 | Track row | 44 px (medium) | small 28, medium 44, large 72 (⌘↑ and ⌘↓) | The track's primary lane is the row itself (§3.4). Today notes lanes are 64 px. |
 | Automation lane | 32 px | fixed | Today 48. Folded by default. |
 | Audio lane | the track row's height | | Today 52. |
@@ -723,7 +723,7 @@ Keep these rules that already follow the block in `index.css`, with these change
 | 80 | Go to start | 28 px ghost, `SkipBack`. Return. |
 | 112 | Play / Stop | 28 px. Stopped: ghost with a `Play` glyph in `gray-700`. Playing: `accent` fill with a white `Square`. It stops (and Space stops); there is no pause glyph. |
 | 144 | Loop | 28 px ghost toggle, `Repeat`; `accent-soft` while on. C. |
-| (176) | Metronome | 28 px ghost toggle (K), `Metronome`. It appears when the metronome exists (gaps #19), not before; everything to its right then moves 32 px right. |
+| 176 | Metronome | 28 px ghost toggle (K), `Metronome`; `accent-soft` while on. Built by `next` (B1): Transport ▸ Metronome too, kept per song (`.music2/view.json`), off in a new song. Everything to its right moves 32 px right. At the Mac app's narrowest (1100 px) the song's name goes (§3.8). |
 | 188 | Divider | 1 px `line`, 20 px tall, with 12 px on each side |
 | 200 | Position | "5.3.2" in `text-lg` 500 `fg`, 72 px wide. "0:09.4" in `text-sm` `fg-muted`, 52 px wide. Both tabular, neither mono. |
 | 336 | Divider | |
@@ -731,7 +731,8 @@ Keep these rules that already follow the block in `index.css`, with these change
 | 428 | Meter (time signature) | A field 40 px wide, "4/4". Click opens a picker (beats 1–16, unit 2/4/8/16). Lands with the tempo bar. |
 | 472 | Key | Built by polish (D2), right after the time signature: a 28 px ghost field in `text-base`, "Key" in `fg-faint` while none is set, else "A minor" in `fg`. A click opens a picker: twelve roots in two rows of six (C, C♯, D, E♭, E, F, F♯, G, A♭, A, B♭, B), Major · Minor, and No key. It is kept in `layout.json` (`key`). In Notes, rows not in the key are shaded instead of the black keys' (never on a drum kit's lane). |
 | centre | Song name | `text-base` 600 `fg-strong`, centred in the window. As polish built it (Q23), it keeps clear of the measured groups on either side (not a fixed 480 px), is cut with an ellipsis, and goes when under 56 px are left. While it is being typed in it keeps its width and stays, over its neighbours. Its tooltip has the folder and sample rate (keep). |
-| right − 520 | Status pill | One pill, and only when something needs saying (§4 ST-1). |
+| right − 544 | MIDI keyboard | A 14 px `Keyboard` mark in `fg-muted`, only while a MIDI keyboard is plugged in (`next`, B3). Its tooltip: "MIDI keyboard: Keystation 49 · plays Bass", or "Select a track with notes to play it". |
+| right − 520 | Status pill | One pill, and only when something needs saying (§4 ST-1). "No sound output" (`warn`, `VolumeX`) has **Settings…** in its popover; **Heavy load** has **Audio settings…**. |
 | | Overlay pill | "2 muted · 1 solo", while any monitoring overlay or latch is on. `accent-soft` fill, `accent-strong` text. A click opens its popover: each muted or soloed track with its own ×, and Clear all at the foot. The pill has no × of its own, since overlays aren't undoable and one stray click mustn't wipe a mute and solo set. Lands with 8b's mixer. |
 | right − 300 | DSP | "DSP 23%" in `text-xs` plus a 24×4 px bar. It shows the highest callback load in the last second. It turns `warn` at 70% or more (gate 8's budget) and shows a `danger` dot for 3 s after a dropout. Clicking opens Audio settings (gaps #31). Lands with 8a. |
 | right − 228 | Master meter | 64×12 px stereo peak bars plus a clip dot. Lands with 8b's meters (design-8b §10, the `out` tap). |
@@ -812,8 +813,11 @@ This replaces "TRACKS" and "4/4 · 124 BPM".
   - `raised`, 1 px `line`, `rounded-md`, 12 px padding, at least 128 px wide;
   - the instrument card has a 3 px colour bar along its top;
   - header (24 px): the label in `text-sm` 600 ("Reverb", from `descriptor.label`) and ⋯ on hover;
-  - the menu holds Bypass (later, gaps #21), Move left and right, Delete ⌫, —, Edit in code (with
-    the file:line as the detail).
+  - the menu holds Turn off (or Turn on), Move left and right, Delete ⌫, —, Edit in code (with
+    the file:line as the detail). As `next` built it (D1, D2): a card turned off stays where it was,
+    dimmed, its title "Reverb · Off", its knobs still there to set; a move that can't be done is a
+    grey row whose tooltip says why. A Duck's side row says "Listens to: Kick ▾" and lists the
+    song's other tracks (D3).
 - **Controls** sit in 56 px columns: the knob (28 px), the label (`text-xs` `fg-muted`) and the
   value (`text-xs` `fg`, with its home marker).
 - **When the sound isn't a chain:** if the audio path from the track's lanes to `out` isn't a line
@@ -964,6 +968,28 @@ view at first launch.
 - The dock body is never shorter than 180 px, and the lanes are never shorter than 3 rows.
 - Nothing scrolls horizontally except the arrangement, the roll, the Device chain and the Mix
   strips.
+
+### 3.9 The keyboard piano and Settings (as `next` built them)
+
+**The keyboard piano** (⌘K from anywhere, View ▸ Keyboard Piano, or the `Keyboard` toggle in Notes'
+tools after Hear notes, 24 px like every Notes tool):
+- A card 16 px in from the timeline's lower right: `raised`, 1 px `line`, `rounded-md`, `shadow-lift`.
+- Its caps are 22×20 px in `text-xs`: A S D F G H J K L ; ' the white keys (`canvas`, `line-strong`),
+  W E T Y U O P the black ones (`gray-700`) over them. A held cap is in the track's `tint`, `bar` and
+  `ink`. The white keys' notes sit under them (C's with their octave).
+- Under the caps: "Z  C4–F5  X" (Z and X change the octave), then "Plays Bass", or "Select a track
+  with notes to play it". A × at the top right: "Keyboard piano off (⌘K)".
+- While it is on, its 20 keys only play notes; Space, C, M and the rest work as always; typing in a
+  field or the code editor never plays. It is off when the app starts.
+
+**Settings** (⌘,; the Mac's app menu, File elsewhere; from the start screen too):
+- A 560 px dialog: "Settings", then "For this computer, in every song. Changes apply at once."
+- Rows with a 128 px label: Sound output, Buffer size (with the hint "Smaller is quicker to respond.
+  Larger is safer if the sound drops out."), Now ("Headphones · 48 kHz · 256 samples (5.3 ms)"),
+  New songs go in (Change… in the app, a field in a browser, and "Use the default").
+- Each list is a button that opens a menu (ST-4: no native select). A device that isn't connected
+  says "(not connected)". While an export runs both lists are grey: "Wait for the export to finish."
+- One primary button, Done, in a `chrome` footer. Esc closes; Tab goes round.
 
 ---
 

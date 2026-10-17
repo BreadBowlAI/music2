@@ -5,11 +5,32 @@ Written 2026-10-16, at the end of step 7 (the engine), updated after its speed w
 check, and when it landed on `main`; again for `taste-next` (taste's look, the song bar and the Mix faders),
 after its review and final checks; for 8b's screens (`8b-ui`), after their review and final check; and once more
 for `polish` (the rest of the top ten), after its review and final check, and when it landed on `main`; and for
-8a's offline half, after its review and final check, and when it landed on `main`.
+8a's offline half, after its review and final check, and when it landed on `main`; and for `next` (8b.7,
+8b.10 and the settings work), after its review and final check.
 Read this first, then `docs/architecture.md` (the contract) and the design for
 whatever you pick up.
 
 **In short**
+- **`next` is done on its branch** (2026-10-17): Linux green at `1560a19`; macOS owed. The lead lands it on `main`.
+  It added:
+
+  | You can now | Where |
+  |---|---|
+  | Hear a clip, a note or an automation point where you drag it, while the song plays | drag it; Esc puts it back |
+  | Hear the tempo as you drag it, playing or not | the tempo in the top bar |
+  | Turn on a click on each beat | the Metronome button after Loop, or K |
+  | Play the selected track with the computer's keys | ⌘K: A is middle C, Z and X change the octave |
+  | Play it with a MIDI keyboard, as hard as you press, with the pedal | plug one in; a mark shows in the top bar |
+  | Open a song with no sound device | it plays silently; plug one in and it moves there |
+  | Choose the sound output, its buffer size and where new songs go | Settings (⌘,) |
+  | See what Undo will take back | Undo's tooltip and the Edit menu: "Undo Hats volume" |
+  | Turn an effect off, move it, pick what a Duck listens to | the effect card's ⋯ menu |
+
+  Nothing you hear in an export changed: every render is the same, and the click and live notes never reach a file.
+  A review found 12 things. All are fixed, each with a test (one more came up while fixing them, also fixed). Then
+  `ci/check.sh --gates` passed: every row, nothing passed only on a retry (1,353 Rust tests, 58/58 browser suites, 10 of 10 renders, the 6 gate runs; 44 minutes). Pictures:
+  `~/m2-runs/app-shots/next-1560a19/`. What was built and checked: `docs/designs/step8/build-notes-next.md`; the plan:
+  `next-plan.md` beside it. Owed: the Mac by-ear steps 51 to 60 (a real MIDI keyboard, the metronome, the outputs).
 - **`polish` is on `main`** (2026-10-17): Linux green at `65f59f1`; macOS owed. `main` fast-forwarded to it. It
   added:
 
@@ -96,9 +117,7 @@ whatever you pick up.
   10 of 10 renders, the 6 gate runs). No render changed. Owed: the owner's short offline sweep on the Mac (Mac runs
   owed, below). Next: 8a's live half. Build notes `docs/designs/step8/build-notes-8a.md`; the plan
   `8a-plan.md` beside it.
-- **In flight** (2026-10-17): `next` (`~/m2-runs/wt/nx`, from `main` at `70f9b61`): 8b.7 (heard while dragging),
-  8b.10 (a MIDI keyboard; the computer keyboard as a piano; a metronome), no audio device, a Settings window, plain
-  undo words, effect bypass and order, and the small flaws the pictures showed. And 8a's live half, on `8a`.
+- **In flight** (2026-10-17): 8a's live half, on `8a`. `next` is done (above) and waits to land.
 
 ## Your own songs (for the owner)
 
@@ -124,7 +143,8 @@ whatever you pick up.
 | `8b-ui` | `92317ad`, then docs only | All on `main` (a fast-forward, 2026-10-17). 8b's screens: mute and solo, clips and automation, audition, meters. Linux green at `92317ad` (reviewed; `ci/check.sh`), macOS owed. Branch and worktree deleted. |
 | `origin/taste` | `4804247` | All on `main` now (`a0d5f91` and `4804247`, both merged into `taste-next`). Its worktree is deleted. |
 | `origin/sounds` | `916127d` | 22 new std sounds (8 on the polysynth, 4 FM, 10 drums), merged; on `main` since 2026-10-17. |
-| Mac runs owed | — | One `ci/check.sh` on `main` covers every branch above. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 50. |
+| `next` | `1560a19`, then docs only | Done, to land on `main` (the lead). From `main` at `70f9b61`, with `main` at `8a6d9e1` (8a's offline half) merged in. 8b.7 (heard while dragging: lanes and the tempo), 8b.10 (the metronome, the keyboard piano, a MIDI keyboard through `midir`), no sound device, Settings, undo names, effect bypass, order and the Duck picker, small fixes. Built in four lanes, joined as merge commits. Reviewed (12 findings, all fixed with tests). Linux green at `1560a19` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Worktree `~/m2-runs/wt/nx` and its `target/` stay until it lands. Plan `docs/designs/step8/next-plan.md`; build notes `build-notes-next.md`. |
+| Mac runs owed | — | One `ci/check.sh` on `main` covers every branch above. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 60. |
 
 `taste` and `sounds` start at `8aa301e`, before the platform step. Each has a detached worktree in `~/m2-runs/wt/`
 (`taste`, `sounds`); `sounds`' can go once the tracks in flight land. `origin/wip/step7` (the Mac's half-done step 7,
@@ -278,6 +298,10 @@ S, about 3 minutes the first time, and G7f plays longer, about 8 minutes a part)
 - `polish`: the rest of the top ten, with 52 more Rust tests (1,184 on Linux) and 9 more browser suites
   (49): `pl-mix`, `pl-sounds`, `pl-ids`, `pl-zoom`, `pl-arrange`, `pl-tracks`, `pl-projects`, `pl-notes` and
   `pl-lanes`. No render moved.
+- `next` (once on `main`), with 8a's offline half: 1,353 Rust tests on Linux and 9 more browser suites (58):
+  `nx-undo`, `nx-effects`, `nx-piano`, `nx-midi`, `nx-settings`, `nx-nodevice`, `s8-leases`, `nx-nits` and
+  `nx-click`. The suites post MIDI as a keyboard would (`M2_MIDI=inject`), and the check opens no MIDI device
+  (`M2_MIDI=none`), so a keyboard plugged into the Mac never plays into it. No render moved.
 
 **What must pass:** the first line says `music2 check: PASS`. Every row says PASS (the gates row too, not PART),
 with nothing "passed only on a retry". In the gates part:
@@ -369,6 +393,17 @@ bar, its Ctrl-click, and the sound.
 | 48 | Open the **File** menu, then **Open Recent**. | Both songs are listed, the copy first. |
 | 49 | Quit the app (⌘Q) and start it again with step 39's command. | The song you had open opens again by itself. |
 | 50 | Tell the lead what you saw and heard at 39 to 49. | |
+| | **`next`** (once it is on `main`): what only a Mac with real devices can show. Start the app with step 39's command. | |
+| 51 | Press Space. While the song plays, plug in a MIDI keyboard. | A message says the keyboard is connected. A small keyboard mark shows in the top bar. |
+| 52 | Click Bass's name. Play some keys, soft, then hard. Hold the sustain pedal while you play. | Bass plays what you press, at once. Soft keys are quiet, hard keys loud. The pedal holds the notes. |
+| 53 | Hold a key down and unplug the keyboard. | The note stops. The mark goes, and a message says the keyboard was unplugged. |
+| 54 | Press K, then Space. Then press C to loop. | A click on each beat, a higher one on the first beat of each bar. It stays with the drums, also each time the loop jumps back. |
+| 55 | Press ⇧⌘E to export. Play the file in the Finder (select it, press Space). | No click in the file. |
+| 56 | Press ⌘K. Press A, S, D, F. Then Z, then X. Press ⌘K again. | Bass plays: A is middle C. Z goes an octave down, X back up. A card shows the keys. ⌘K again hides it. |
+| 57 | While the song plays, drag a note in Notes, then a point of an automation line. Then drag the tempo number up and down. | You hear each where it is while you drag. The song speeds up and slows down with the tempo. Let go: it stays. ⌘Z goes back. |
+| 58 | Press ⌘, for Settings. Plug in headphones. Under Sound output, pick them. Then under Buffer size, pick 128. | The sound moves to the headphones and stops: press Space to go on. The Now row says the headphones and 128 samples (2.7 ms). No crackles. |
+| 59 | Unplug the headphones while the song plays. Press Space. Look at Settings. | It plays on the Mac's speakers. Sound output says the headphones "(not connected)". The Now row says "(the output chosen can't be used now)". |
+| 60 | Tell the lead what you saw, heard and felt at 51 to 59. | |
 
 After a green run the lead writes here: "macOS: green at <commit> (ci/check.sh on <model>, <date>)", with G7f's
 numbers. If a row fails, the lead fixes it on Linux, checks the mac lint, and asks for one more run. The logs are in
@@ -418,6 +453,7 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
 | 8b's screens (`8b-ui`) | `92317ad` (Linux checks), then docs only | owed: the same `ci/check.sh`, then the by-ear steps 32 to 38 |
 | `polish`: the rest of the top ten | `65f59f1` (Linux checks), then docs only | owed: the same `ci/check.sh`, then the by-ear steps 39 to 50 |
 | 8a's offline half (all CPU cores, offline) | `bc41693` (Linux checks), then docs only | owed: the offline sweep below (about 10 minutes); the same `ci/check.sh` covers its Mac tests |
+| `next`: 8b.7, 8b.10, Settings, no sound device, undo names, effect comforts | `1560a19` (Linux checks), then docs only; lands next | owed: the same `ci/check.sh`, then the by-ear steps 51 to 60 (a real MIDI keyboard, the metronome against the beat, switching the output) |
 
 **8a's offline sweep (for the owner).** Plugged in, lid open, other apps closed, in
 Terminal on the Mac itself. Type each line and press Return. Then paste back what is in `~/m2-8a-offline.txt`.
@@ -458,7 +494,9 @@ times faster 4 threads render a p50 block than 1, by the p99:
    engine threads, with the OS's audio workgroups on a Mac; gate 8's live runs), as the sweep decides, with the two
    gaps above. Where to start: `design-8a.md` §6 and §16 (its slice 2 is the live half), what `8a-plan.md` leaves
    for slices 3 and 4, and the build notes' "For the lead".
-7. Then **8b.7, 8b.10**, and **step 9** (8b.9's Change track ID… came in `polish`, without the engine's pass). Before
+7. **8b.7 and 8b.10 are done on `next`** (Linux green at `1560a19`): the lead lands it on `main`, then removes
+   `~/m2-runs/wt/nx` and its `target/`. What it left is in `docs/gaps.md` and its build notes' End. Then **step 9**
+   (8b.9's Change track ID… came in `polish`, without the engine's pass). Before
    step 9 freezes kernel ABI v1, the owner decides the kernel layout (Open owner decisions). Each adds its OS pieces
    to `m2-os` as platform design §8 says (8a's offline half put cores and priorities in `process` and `thread`,
    Linux's in `linux/cores.rs`; 8b.10's MIDI uses `midir`). Mac run at the end of each.
@@ -475,6 +513,7 @@ Platform design §13.3, updated by what step 7 learned. Never take a side on `Ca
 | any | `Cargo.lock` | take `main`'s, then `cargo build` adds the branch's edges; never `cargo update` |
 | `sounds` | done | merged, now on `main`, as these notes said (`docs/designs/sounds/build-notes.md`, slice 1) |
 | `taste` | done | merged as `taste-next`, as these notes said (`docs/designs/step8/build-notes-taste.md`, each slice's conflicts and breaks): WRITE-17 is taste's text with the network-volume words; attention waits for the page before a toast's Undo (D7, `cf3115b`); Inter off the Mac (A2); the engine note became neutral states of the status pill (lead decision T2), and fx-fixes checks them at 1100 and 1280 px, not 960 (no app window is narrower than 1100); `instruments.ts` has taste's `category` and `sounds`' `description`; + Track lists the 22 sounds (T3); std 0.2; `delta.rs` keeps the `sounds` merge's `Op::Time` arm; s8-tracks hears `layout.json` within a second on inotify; README supports Linux |
+| `8a` (live half) | `next` on `main` | `next` added small, separate blocks to `core/play/src/lib.rs` and `core/runtime`: the click (B1), the device's buffer and `fell_back` (C1), `Player::freed` and the stream's end (review NX-S5), and the device thread's `open_on` loop, trying the output chosen then the default (NX-S1). Each is listed in `build-notes-next.md` ("For 8a's merge", by lane and in the review). `Choice` folds into 8a's `Options`; 8a's `Player::close()` can replace `set_output`'s wait for `freed`. `next` already merged `main` at `8a6d9e1` (one import line in `engine.rs`: both kept) |
 | `8b-ui` | onto `taste-next` | it was planned on `taste`'s screens: rebase or merge onto `taste-next`. Taste's files it will meet: `Mix.tsx` (strips, the lane fader), `SongBar.tsx`, `TopBar.tsx`, `Tracks.tsx`, `SongTimeline.tsx`, `Knob.tsx` (the gesture hook). The browser suites read the Mix strips by `data-knob` ids |
 
 ## Known flakes
