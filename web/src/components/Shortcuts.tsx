@@ -55,6 +55,11 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
     name: "View",
     keys: [
       ["Device / Notes / Mix / Code", [1, 2, 3, 4].map((n) => opt(String(n))).join(" / ")],
+      // The grid of the timeline or of Notes: whichever was last pointed at.
+      ["Narrower / wider grid", `${chord("1")} / ${chord("2")}`],
+      ["Triplet grid", chord("3")],
+      ["Snap to the grid on / off", chord("4")],
+      ["Place a clip off the grid", `hold ${mod.cmd} while dragging`],
       ["Mix", "X"],
       ["Show / hide the dock", "E"],
       ["Show / hide the browser", chord("B", { alt: true })],

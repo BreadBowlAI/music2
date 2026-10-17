@@ -15,6 +15,7 @@ adds its own section here, in the same commit.
 |---|---|---|
 | Setup | Nothing new to see. The back ends of 8b-backend are merged in. A deleted track no longer leaves its mute behind | done |
 | U0 | Nothing new to see, except the roll's grid control now comes from a shared file. The places the lanes fill are ready | done |
+| U4 (lane B) | The timeline has a grid and snap: a chip in its corner, Auto by default. Dragged clips land on it; hold ⌘ to place one freely. ⌘1 to ⌘4 change the grid of the view you last used | done |
 
 ## Setup: the merges
 
@@ -149,3 +150,62 @@ the 1 px fix of the slots (both green); the probe showed the slots 1 px left of 
   beat, as the timeline's drag is today.
 - Settings that reset at each app launch (the grid, later the audition toggle): one line in
   `docs/gaps.md` at the End.
+
+## U4: the grid and snap on the timeline (lane B)
+
+**In short**
+- The timeline has its own grid now, like Notes has. A small chip sits in its top-left corner,
+  between **+ Track** and the fold arrow. It says **Auto** at first.
+- Auto picks the finest grid whose lines are at least 12 px apart. At today's zoom that is 1/8: a
+  clip you drag lands on an eighth note.
+- Hold ⌘ (Ctrl on Linux) while you drag to put a clip anywhere. The magnet button, or ⌘4, turns
+  snap off.
+- ⌘1 makes the grid finer, ⌘2 coarser, ⌘3 turns triplets on or off. They change the grid of the
+  view you last clicked in: the timeline or Notes.
+- A click on empty lane space still moves where play starts, now on the grid too. It writes nothing.
+- Checks: the web build, the new `s8-clips` suite (22 checks), and 9 suites it could move.
+
+**The lane's merge.** Before U4, lane B merged `8b-backend` at `bc761ef` (B7, B8) into `8b-ui-b`
+(`5a34189`), with no conflict, for U5. Its server is built in `wt/ui-b` and copied to
+`~/m2-runs/s8ui/bin/ui-b-5a34189/`. Cargo.lock didn't change.
+
+### What changed
+
+| File | What |
+|---|---|
+| `web/src/lib/grid.ts` | A grid is now a choice (`pick`: a step, `bar` or `auto`), triplets and snap. The timeline's choices: Auto, Bar, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64; the roll's: 1/4 to 1/64 (taste.md §3.5). `stepOf` works out Auto from the zoom (finest of bar, beat, 1/8, 1/16, 1/32 with lines 12 px apart, design-8b §7.3). `snapTo` lands on the nearest line, counted from each bar line, so a triplet grid in 3/4 still meets every bar. `snapSong` is the timeline's: anywhere while snap is off or ⌘ is held. `gridOp`: ⌘1 to ⌘4. The roll's `step` is still a plain number of beats, so `NoteView.tsx` (lane C's) didn't change |
+| `web/src/components/GridChip.tsx` | The menu lists the view's choices, then **Triplets ⌘3**. The label says "1/8T" in triplets. The tooltips say what Auto is now and the four keys, in the platform's words |
+| `web/src/components/SongTimeline.tsx` | The chip in the corner (`song-grid`, `song-snap`). A dragged clip's start lands on the grid (it was whole beats). A click on empty lane space lands on the grid too (it was whole beats). `canvas.grid` acts on the view last used. The lanes draw the grid's own lines in `hover` where it is finer than a beat and its lines are at least 12 px apart |
+| `web/src/components/Shortcuts.tsx` | View: Narrower / wider grid ⌘1 / ⌘2, Triplet grid ⌘3, Snap on / off ⌘4, "hold ⌘ while dragging" |
+| `e2e/s8-clips.mjs` (new), `e2e/run.mjs`, `e2e/README.md` | The suite, its row after `s4-clips` |
+
+### Checks
+
+| Check | Result |
+|---|---|
+| `cd web && npm run build` (type-checks) | ok |
+| `s8-clips` (new) | 22 of 22 |
+| `taste`, `notes`, `s4-clips`, `s8-songbar` | 39, 52, 28, 68: all pass |
+| `layout`, `views`, `pc-keys`, `s8-tracks`, `gestures` | 39, 30, 37, 75, 30: all pass |
+| Server | `~/m2-runs/s8ui/bin/ui-b-5a34189` (lane B's build, with B7 and B8), serving `web/dist` through `M2_WEB` |
+| Logs | `~/m2-runs/logs/ui-b-u4-suites-*.log`; suite logs in `~/m2-runs/s8ui/scratch/e2e/ui-b-u4` |
+
+**Red first:** `s8-clips` on U0's page (the same server): no chip, no eighth lines, a drag of 32 px
+landed on beat 1 (whole beats), and holding ⌘ still snapped (beat 2). 1 check passed and 6 failed
+before it stopped at the missing chip (`~/m2-runs/s8ui/scratch/e2e/ui-b-u4-red/s8-clips-fix.log`).
+
+### Choices
+
+| Choice | Why |
+|---|---|
+| Triplets are a row in the grid menu, not a third button | The corner is 200 px wide in a small window. The label shows it: "1/8T" |
+| ⌘1 or ⌘2 from Auto gives the fixed step next to what Auto is now | Auto at 1/8: ⌘1 gives 1/16, ⌘2 gives 1/4. The menu brings Auto back |
+| The ruler's click and loop drag stay in whole beats | taste-next built them; s8-songbar checks them |
+
+### Left
+
+- Notes doesn't skip the snap with ⌘ held: that is `NoteView.tsx`, lane C's file. The roll does
+  get Triplets and 1/64 from the shared menu, and ⌘3 works there.
+- The grid resets at each app launch (Q7): the line in `docs/gaps.md` comes at the End.
+- The drag's value bubble and guide line come with U5.
+

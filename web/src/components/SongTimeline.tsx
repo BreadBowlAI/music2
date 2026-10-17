@@ -31,13 +31,15 @@ import { LANE_MADE, TRACK_MADE } from "../lib/events";
 import { useHeard } from "../lib/graph8b";
 import { LANE_H, ROW_H, RULER_H } from "../lib/layout";
 import { GRAPHITE, trackColors, type TrackColor } from "../lib/palette";
-import { useShell } from "../lib/shell";
+import { canvas, useShell } from "../lib/shell";
+import { gridOp, skipsSnap, snapSong, stepOf, useGrid, type Grid as GridSetting } from "../lib/grid";
 import { chord, opt } from "../lib/native";
 import { useStore } from "../lib/store";
 import { addEffectTo, dragsEffect, EFFECT_DRAG } from "./Browser";
 import { addTrack, END, INSTRUMENT_DRAG, openInstruments, openTrackMenu, startReorder, useReorder } from "./Tracks";
 import { MarkPopover, placeOf, RulerMenu } from "./SongBar";
 import { Hatch, VLines } from "./draw";
+import GridChip from "./GridChip";
 import TrackHeader from "./TrackHeader";
 import { Button, EmptyState, keepFocus } from "./ui";
 
@@ -256,8 +258,8 @@ export default function SongTimeline({
         let to: number | null = null;
         const move = (ev: PointerEvent) => {
           if (ev.pointerId !== pointer || (to === null && Math.abs(ev.clientX - x0) < 4)) return;
-          // Whole beats: a clip moves along the beat grid.
-          to = Math.max(0, Math.round(c.start + (ev.clientX - x0) / PPB));
+          // Its start lands on the grid, unless snap is off or ⌘ is held (design-8b §7.3).
+          to = snapSong(latest.current.timeline.meter, c.start + (ev.clientX - x0) / PPB, PPB, skipsSnap(ev));
           setMoving({ clip, start: to });
         };
         const end = (ev: PointerEvent) => {
@@ -301,8 +303,8 @@ export default function SongTimeline({
         const p = pressed.current;
         pressed.current = null;
         if (!p || p.pointer !== e.pointerId || Math.abs(e.clientX - p.x) >= 4 || latest.current.playing) return;
-        // Whole beats, as the ruler's click.
-        latest.current.onSeek(Math.max(0, Math.round(beat)));
+        // On the grid, as a dragged clip lands (anywhere while snap is off).
+        latest.current.onSeek(snapSong(latest.current.timeline.meter, beat, PPB));
       },
       remove() {
         const s = useShell.getState();
@@ -314,6 +316,13 @@ export default function SongTimeline({
       },
     };
     // `latest` carries everything that changes; the edits themselves never do.
+  }, []);
+
+  // ⌘1 to ⌘4 (View's grid rows) change the grid of the view last pointed at or focused: this
+  // one's or the roll's. The timeline's zoom says what Auto is.
+  useEffect(() => {
+    canvas.grid = (op) => gridOp(useGrid.getState().last, op, PPB);
+    return () => void delete canvas.grid;
   }, []);
 
   // A lane just made from the canvas (automate): its track unfolds, and the lane is scrolled to
@@ -397,19 +406,23 @@ export default function SongTimeline({
               <Plus size={14} />
               Track
             </Button>
-            {all.length > 0 && (
-              <button
-                data-testid="fold-all"
-                aria-label={anyOpen ? "Hide all automation" : "Show all automation"}
-                aria-expanded={anyOpen}
-                title={`${anyOpen ? "Hide" : "Show"} every track's automation (A)`}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => useShell.getState().toggleLanes(null, all)}
-                className="size-ctl-xs grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover cursor-pointer transition-colors duration-80 ease-linear"
-              >
-                <ChevronRight size={12} className={clsx("transition-transform duration-140 ease-out", anyOpen && "rotate-90")} />
-              </button>
-            )}
+            <div className="flex items-center gap-0.5">
+              {/* The timeline's grid and snap (design-8b §7.5): between + Track and the fold-all chevron. */}
+              <GridChip view="song" ppb={PPB} />
+              {all.length > 0 && (
+                <button
+                  data-testid="fold-all"
+                  aria-label={anyOpen ? "Hide all automation" : "Show all automation"}
+                  aria-expanded={anyOpen}
+                  title={`${anyOpen ? "Hide" : "Show"} every track's automation (A)`}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => useShell.getState().toggleLanes(null, all)}
+                  className="size-ctl-xs grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover cursor-pointer transition-colors duration-80 ease-linear"
+                >
+                  <ChevronRight size={12} className={clsx("transition-transform duration-140 ease-out", anyOpen && "rotate-90")} />
+                </button>
+              )}
+            </div>
           </div>
           <Ruler timeline={timeline} width={width} loopStart={loopStart} loopEnd={loopEnd} looping={looping} locked={locked} onSeek={onSeek} onLoop={onLoop} />
           <PlayCap headerW={headerW} />
@@ -483,22 +496,34 @@ function PlayCap({ headerW }: { headerW: number }) {
 
 /**
  * Bar and beat lines from beat 0 to `width`: one stretch per time signature, each with its own bar
- * length. Sixteenths only when they are at least 12px apart.
+ * length. Under them the snap grid's own lines, where it is finer than a beat, its lines are at
+ * least 12px apart and they meet every bar line (a triplet grid in 3/4 doesn't: none then).
  */
 const Grid = memo(function Grid({ meter, width }: { meter: Meter[]; width: number }) {
-  return meterSpans(meter, 0, width / PPB).map((s) => (
-    <VLines
-      key={s.start}
-      className="inset-y-0"
-      style={{ left: s.start * PPB, width: (s.end - s.start) * PPB }}
-      layers={[
-        ...(PPB / 4 >= 12 ? [{ every: PPB / 4, color: "var(--color-hover)" }] : []),
-        { every: PPB, color: "var(--color-line)" },
-        { every: s.bar * PPB, color: "var(--color-line-strong)" },
-      ]}
-    />
-  ));
+  const grid = useGrid((s) => s.song);
+  return meterSpans(meter, 0, width / PPB).map((s) => {
+    const step = fineStep(grid, s.bar);
+    return (
+      <VLines
+        key={s.start}
+        className="inset-y-0"
+        style={{ left: s.start * PPB, width: (s.end - s.start) * PPB }}
+        layers={[
+          ...(step ? [{ every: step * PPB, color: "var(--color-hover)" }] : []),
+          { every: PPB, color: "var(--color-line)" },
+          { every: s.bar * PPB, color: "var(--color-line-strong)" },
+        ]}
+      />
+    );
+  });
 });
+
+/** The grid's step where the timeline draws its lines, in a bar of `bar` beats; null where it doesn't. */
+function fineStep(grid: GridSetting, bar: number) {
+  const step = stepOf(grid, PPB, bar);
+  const fits = Math.abs(bar / step - Math.round(bar / step)) < 1e-6;
+  return step < 1 && step * PPB >= 12 && fits ? step : null;
+}
 
 /**
  * Bars and beats along the top. A click moves the playhead there; a drag across it sets a loop over

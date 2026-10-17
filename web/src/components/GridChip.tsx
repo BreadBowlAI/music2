@@ -1,7 +1,8 @@
 import clsx from "clsx";
 import { Check, ChevronDown, Magnet } from "lucide-react";
 import { useState } from "react";
-import { GRIDS, useGrid, type GridView } from "../lib/grid";
+import { autoName, PICKS, pickName, useGrid, type Grid, type GridView } from "../lib/grid";
+import { chord, mod } from "../lib/native";
 import { Button, keepFocus, MenuRow, Popover } from "./ui";
 
 /** Each view's words and test ids: the roll's are the ones it had. */
@@ -17,22 +18,30 @@ const VIEWS: Record<GridView, { grid: string; snap: string; about: string; on: s
     grid: "song-grid",
     snap: "song-snap",
     about: "The grid: clips you drag land on it",
-    on: "Snap to the grid: on. Clips you drag land on it",
+    on: `Snap to the grid: on. Clips you drag land on it; hold ${mod.cmd} while you drag to place one freely`,
     off: "Snap to the grid: off. Clips go where you put them",
   },
 };
 
 /**
- * A view's grid (taste.md §3.5): `1/16 ▾`, a menu of its steps with the current one checked, and
- * the snap toggle (the magnet). Neither takes focus from a click, so the keys stay the view's.
+ * A view's grid (taste.md §3.5, design-8b §7.3): `Auto ▾` or `1/16 ▾`, a menu of its choices with
+ * the current one checked and Triplets, and the snap toggle (the magnet). Neither takes focus from
+ * a click, so the keys stay the view's. `ppb`: the view's zoom, which says what Auto is now.
  */
-export default function GridChip({ view }: { view: GridView }) {
+export default function GridChip({ view, ppb }: { view: GridView; ppb?: number }) {
   const grid = useGrid((s) => s[view]);
   const words = VIEWS[view];
-  const set = (g: Partial<typeof grid>) => useGrid.getState().set(view, { ...grid, ...g });
+  const set = (g: Partial<Grid>) => useGrid.getState().set(view, { ...grid, ...g });
+  const auto = grid.pick === "auto" && ppb ? ` Auto is ${autoName(grid, ppb)} at this zoom.` : "";
   return (
     <div className="shrink-0 flex items-center gap-0.5">
-      <GridMenu step={grid.step} testid={words.grid} title={words.about} onPick={(step) => set({ step })} />
+      <GridMenu
+        view={view}
+        grid={grid}
+        testid={words.grid}
+        title={`${words.about}.${auto}\nNarrower ${chord("1")} · wider ${chord("2")} · triplets ${chord("3")}`}
+        onPick={(g) => set(g)}
+      />
       <Button
         size="sm"
         data-testid={words.snap}
@@ -40,7 +49,7 @@ export default function GridChip({ view }: { view: GridView }) {
         aria-pressed={grid.on}
         onMouseDown={keepFocus}
         onClick={() => set({ on: !grid.on })}
-        title={grid.on ? words.on : words.off}
+        title={`${grid.on ? words.on : words.off} (${chord("4")})`}
         aria-label="Snap to the grid"
         className="w-ctl-sm !px-0"
       >
@@ -50,9 +59,14 @@ export default function GridChip({ view }: { view: GridView }) {
   );
 }
 
-function GridMenu({ step, testid, title, onPick }: { step: number; testid: string; title: string; onPick: (step: number) => void }) {
+function GridMenu({ view, grid, testid, title, onPick }: { view: GridView; grid: Grid; testid: string; title: string; onPick: (g: Partial<Grid>) => void }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  const label = GRIDS.find((g) => g.step === step)?.label ?? "1/16";
+  const label = pickName(grid.pick, grid.triplet);
+  const tick = (on: boolean) => (on ? <Check size={14} className="text-fg" /> : <span className="block size-3.5" />);
+  const pick = (g: Partial<Grid>) => {
+    setAnchor(null);
+    onPick(g);
+  };
   return (
     <>
       <Button
@@ -74,21 +88,22 @@ function GridMenu({ step, testid, title, onPick }: { step: number; testid: strin
       </Button>
       {anchor && (
         <Popover anchor={anchor} onClose={() => setAnchor(null)} role="menu" aria-label="Grid" className="w-[220px]">
-          {GRIDS.map((g) => (
-            <MenuRow
-              key={g.label}
-              role="menuitemradio"
-              data-grid={g.label}
-              aria-checked={g.step === step}
-              icon={g.step === step ? <Check size={14} className="text-fg" /> : <span className="block size-3.5" />}
-              onClick={() => {
-                setAnchor(null);
-                onPick(g.step);
-              }}
-            >
-              {g.label}
+          {PICKS[view].map((p) => (
+            <MenuRow key={p} role="menuitemradio" data-grid={pickName(p)} aria-checked={p === grid.pick} icon={tick(p === grid.pick)} onClick={() => pick({ pick: p })}>
+              {pickName(p)}
             </MenuRow>
           ))}
+          <div role="separator" className="my-1 h-px bg-line" />
+          <MenuRow
+            role="menuitemcheckbox"
+            data-grid="triplet"
+            aria-checked={grid.triplet}
+            icon={tick(grid.triplet)}
+            shortcut={chord("3")}
+            onClick={() => pick({ triplet: !grid.triplet })}
+          >
+            Triplets
+          </MenuRow>
         </Popover>
       )}
     </>
