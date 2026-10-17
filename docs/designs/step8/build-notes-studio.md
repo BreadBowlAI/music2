@@ -1692,3 +1692,20 @@ And the Export dialog's MIDI choice never ticked "Export it."
   and reads the done line (36 to 38). Green with `st-midi` (19).
 - Red: `FAIL  7. exported as a MIDI file: Export it ticks`, `FAIL  in the app, saved to the Desktop: the done line
   names the file (You made a song. It is in your Exports folder.Show in Finder)`.
+
+#### Two flaky tests the first full check found
+
+The first full check, at `ee2012c` (`~/m2-runs/check-studio`), passed every row, but two only on a retry. Both read a
+result before the app had made it, under the check's load. Neither is new in `studio`.
+
+| Test | What it read too soon | Fix |
+|---|---|---|
+| `graph::midi::tests::midi_never_waits_for_a_compile` (from `next`): "the compile's span" not found | The actor answers a request from inside it, then keeps the request's span (its start and end). The test read the spans as soon as the answer came | It waits for the span. So do the same two reads in `graph::tests`' `previews_never_wait_for_a_compile` (G8) |
+| `s8-clips`: "the left edge dragged a bar right: 8+28" | A clip gesture names the clip by the hash the window drew. The suite saw the right-edge trim on disk and dragged the left edge before the window had drawn the trim, so the drag named the old clip and was refused (409, WRITE-12) | It waits until the window draws the trimmed clip |
+
+- No product code changed.
+- Red: with a 50 ms pause added in the actor before it keeps the span of a request over 500 ms (not committed),
+  `midi_never_waits_for_a_compile` failed 3 of 3 with "the compile's span" (`st-end-flaky-red2-*`), and
+  `previews_never_wait_for_a_compile` too (`st-end-flaky-g8-*`). With the fix both passed with the pause
+  (`st-end-flaky-green-*`, `-g8-*`). `s8-clips`' race needs the check's load: with the fix, three runs at once, each
+  beside `pl-notes` and `st-record`, passed 94 of 94 (`st-end-s8clips-*`).

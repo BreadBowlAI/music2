@@ -224,6 +224,9 @@ const right = { x: b.x + b.width - 3, y: b.y + b.height / 2 };
 const r = await hold(right, { x: right.x - 4 * PPB, y: right.y }, { during: () => looks() });
 check(await until(() => hatsNow().length === 28) && hatsNow().start === 8, `the right edge dragged a bar left: ${hatsNow().start}+${hatsNow().length}; the bubble said ${r.bubble}`);
 check(heardAt() === times && r.bubble === "10.1.1", "every note stays where it plays");
+// The window draws the trimmed clip once it has heard of it: the next drag names the clip as it is
+// now (its hash), not as it was.
+await until(async () => (await clipBox("hats.hits", hatsId)).width < 31 * PPB);
 b = await clipBox("hats.hits", hatsId);
 const trimmed = read("data/hats/hits.json");
 const left = { x: b.x + 3, y: b.y + b.height / 2 };

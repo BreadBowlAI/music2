@@ -238,6 +238,8 @@ fn midi_never_waits_for_a_compile() {
     eventually("the key sounds", || live(&graph) == 1);
     let heard = graph.now_ns();
     assert!(saver.join().unwrap(), "the slow save was taken in");
+    // The actor keeps a request's span once its answer is sent: wait for it.
+    eventually("the compile's span is kept", || graph.busy_spans().iter().any(|s| s.0 == busy_from));
     let (start, end) = *graph.busy_spans().iter().rev().find(|s| s.0 == busy_from).expect("the compile's span");
     let compile_ms = (end - start) as f64 / 1e6;
     if compile_ms < 500.0 {

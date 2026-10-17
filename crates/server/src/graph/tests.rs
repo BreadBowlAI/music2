@@ -1950,6 +1950,8 @@ fn previews_never_wait_for_a_compile() {
         std::thread::sleep(Duration::from_millis(5).saturating_sub(tick.elapsed()));
     }
     assert!(saver.join().unwrap(), "the slow save was taken in");
+    // The actor keeps a request's span once its answer is sent: wait for it.
+    eventually("the compile's span is kept", || graph.busy_spans().iter().any(|s| s.0 == busy_from));
     let (start, end) = *graph.busy_spans().iter().rev().find(|s| s.0 == busy_from).expect("the compile's span");
     let compile_ms = (end - start) as f64 / 1e6;
     if compile_ms < 500.0 {
@@ -1974,6 +1976,8 @@ fn previews_never_wait_for_a_compile() {
     let asked = graph.now_ns();
     let (ms, begun) = timed(|| graph.begin_via_actor(token, r3, &tri, Owner::default()));
     assert!(saver.join().unwrap());
+    // The compile's span is kept once the actor is idle again.
+    eventually("the compile's span is kept", || graph.busy().is_none());
     let end = graph.busy_spans().iter().rev().find(|s| s.0 <= asked).map(|s| s.1).unwrap();
     let left = end.saturating_sub(asked) as f64 / 1e6;
     eprintln!("G8 negative control: a begin through the session took {ms:.0} ms, with {left:.0} ms of the compile left");
