@@ -239,8 +239,9 @@ check(await songIs(orig.song), "a second takes `pan: 0` out");
 // ---------------------------------------------------------------- Master (MX-5)
 
 await dragBy(thumb("master"), -20);
-const mastered = /\{ db: (-[\d.]+) \}/;
-check(await until(() => mastered.test(read("song.ts"))), `the master's fader writes master(…, { db: … }): ${read("song.ts").split("\n").slice(-6).join(" ")}`);
+// On a line of its own, after the mixer's (next D4e).
+const mastered = /\}\),\n {4}\{ db: (-[\d.]+) \},\n {2}\),/;
+check(await until(() => mastered.test(read("song.ts"))), `the master's fader writes master(…, { db: … }) on its own line: ${JSON.stringify(read("song.ts").split("\n").slice(-6).join("\n"))}`);
 const masterDb = Number(read("song.ts").match(mastered)?.[1]);
 check(masterDb === dbAt(0.75 - 20 / room), `as a plain number, on the fader's law: ${masterDb}`);
 await undo();
