@@ -4,7 +4,7 @@ import fs from "node:fs";
 
 export const [ROOT, HOME, PROJ] = process.argv.slice(2);
 export const sess = JSON.parse(fs.readFileSync(`${HOME}/.music2/session.json`, "utf8"));
-import { exe } from "./chrome.mjs";
+import { exe, pc as pcAgent, real } from "./chrome.mjs";
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const until = async (f, ms = 8000) => {
@@ -26,23 +26,25 @@ export const check = (ok, what) => {
 
 /**
  * The app at `width`×`height`. The side browser starts hidden: these suites are about the timeline
- * and the dock, and place their clicks in the timeline's width (`browser: true` keeps it).
+ * and the dock, and place their clicks in the timeline's width (`browser: true` keeps it). The page
+ * is a Mac's, unless `pc`: then a PC's (Linux), whatever the OS the suite runs on (pc-keys).
  */
-export async function open(width = 1440, height = 900, { browser: side = false } = {}) {
-  const browser = await puppeteer.launch({ executablePath: exe, args: ["--no-sandbox"] });
+export async function open(width = 1440, height = 900, { browser: side = false, pc = false } = {}) {
+  const browser = await puppeteer.launch({ executablePath: pc ? real : exe, args: ["--no-sandbox"] });
   const page = await browser.newPage();
+  if (pc) await page.setUserAgent(pcAgent);
   await page.setViewport({ width, height });
   const errors = [];
   page.on("console", (m) => m.type() === "error" && !/Failed to load resource/.test(m.text()) && errors.push(m.text()));
   page.on("pageerror", (e) => errors.push(String(e)));
   const posts = [];
   page.on("request", (r) => r.method() !== "GET" && posts.push({ url: r.url().replace(/^.*\/api/, "/api"), body: r.postData() ?? "" }));
-  await page.evaluateOnNewDocument((token, side) => {
-    window.__M2__ = { native: false, token, platform: "macos" };
+  await page.evaluateOnNewDocument((token, side, platform) => {
+    window.__M2__ = { native: false, token, platform };
     try {
       if (!localStorage.getItem("m2.browser.open")) localStorage.setItem("m2.browser.open", String(side));
     } catch {}
-  }, sess.token, side);
+  }, sess.token, side, pc ? "linux" : "macos");
   await page.goto(sess.url, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("[data-testid=graph] [data-module]", { timeout: 10000 });
   const api = (path, opts = {}) =>
