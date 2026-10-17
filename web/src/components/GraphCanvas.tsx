@@ -48,7 +48,7 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
   const toast = useStore((s) => s.toast);
   const connected = useStore((s) => s.connected);
 
-  const [status, setStatus] = useState<GraphStatus>({ playing: graph.playing, seconds: graph.seconds, beat: graph.beat, loop: graph.loop });
+  const [status, setStatus] = useState<GraphStatus>({ playing: graph.playing, seconds: graph.seconds, beat: graph.beat, bpm: graph.bpm, loop: graph.loop });
   const tempo = useRef(timeline.tempo);
   tempo.current = timeline.tempo;
   const show = useCallback((s: GraphStatus) => {

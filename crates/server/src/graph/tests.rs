@@ -637,13 +637,13 @@ fn seeking_keeps_playing_or_stopped_and_status_counts_beats_in_the_tempo() {
     assert_eq!(state["timeline"]["tempo"], json!([{"beat": 0.0, "bpm": 120.0}, {"beat": 4.0, "bpm": 60.0}]));
     assert_eq!((&state["timeline"]["end"], &state["beat"]), (&json!(4.0), &json!(0.0)));
 
-    // Stopped, the position moves at once and stays there.
-    let stopped = |seconds, beat| Status { playing: false, seconds, beat, looping: None };
+    // Stopped, the position moves at once and stays there, with the tempo there.
+    let stopped = |seconds, beat, bpm| Status { playing: false, seconds, beat, bpm: Some(bpm), looping: None };
     graph.seek(2.0).unwrap();
-    assert_eq!(graph.status(), stopped(1.0, 2.0), "at 120 bpm, 1 second is 2 beats");
+    assert_eq!(graph.status(), stopped(1.0, 2.0, 120.0), "at 120 bpm, 1 second is 2 beats");
     graph.seek(8.0).unwrap();
     std::thread::sleep(Duration::from_millis(30));
-    assert_eq!(graph.status(), stopped(6.0, 8.0), "then 4 beats at 60 bpm");
+    assert_eq!(graph.status(), stopped(6.0, 8.0, 60.0), "then 4 beats at 60 bpm");
     graph.seek(-3.0).unwrap();
     assert_eq!(graph.status().beat, 0.0);
     assert!(graph.seek(f64::NAN).is_err());
@@ -658,12 +658,12 @@ fn seeking_keeps_playing_or_stopped_and_status_counts_beats_in_the_tempo() {
     eventually("it stops", || !graph.status().playing);
     graph.seek(1.0).unwrap();
     std::thread::sleep(Duration::from_millis(30));
-    assert_eq!(graph.status(), stopped(0.5, 1.0));
+    assert_eq!(graph.status(), stopped(0.5, 1.0, 120.0));
 
     // RENDER-8: a seek replays nothing, so one far past the song lands there at once.
     let t = Instant::now();
     graph.seek(4.0 + 2000.0).unwrap();
-    eventually("it lands far past the song", || graph.status() == stopped(2002.0, 2004.0));
+    eventually("it lands far past the song", || graph.status() == stopped(2002.0, 2004.0, 60.0));
     assert!(t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
 
     let closed = Graph::silent();
@@ -685,7 +685,7 @@ fn the_engine_runs_at_the_projects_rate() {
     let p = player(&graph);
     eventually("the seek lands", || p.status().pending.is_none());
     assert_eq!((p.device_rate, p.rate(), p.status().pos), (48_000, 44_100, 44_100));
-    let at = Status { playing: false, seconds: 1.0, beat: 2.0, looping: None };
+    let at = Status { playing: false, seconds: 1.0, beat: 2.0, bpm: Some(120.0), looping: None };
     assert_eq!(graph.status(), at, "at 120 bpm, 2 beats are 1 second");
     // A manifest edit to the rate plays on from the same beat, in a fresh engine at the new rate.
     std::fs::write(fixture.0.join("music2.toml"), MANIFEST.replace("48000", "96000")).unwrap();
@@ -1317,7 +1317,7 @@ fn a_stalled_player_is_replaced_and_the_project_plays_on_where_it_was() {
     assert!(t.elapsed() < Duration::from_secs(5), "a send gives up: {:?}", t.elapsed());
     assert!(graph.transport("play").is_err(), "the stalled player is let go");
     assert!(graph.poll(), "a new one plays the project");
-    eventually("where it was", || graph.status() == Status { playing: false, seconds: 1.5, beat: 3.0, looping: None });
+    eventually("where it was", || graph.status() == Status { playing: false, seconds: 1.5, beat: 3.0, bpm: Some(120.0), looping: None });
     assert_eq!(player(&graph).device, "none");
     drop(driver);
 }
@@ -3329,6 +3329,36 @@ fn stop_all_sound_during_an_export_stays_silent_after_it() {
     assert_eq!(stats.sounding.load(Ordering::Relaxed), 0, "Stop All Sound wins: no note plays again");
     assert!(loudest(&mut ex, 40) < 1e-4, "silent after the export");
     assert!(ex.state.graph.status().playing && ex.engine().crashes() == 0, "playback goes on");
+}
+
+// The playhead's tempo (the attack's "the playhead after a tempo edit"): the status says the tempo
+// the engine plays, which a tempo edit reaches at its switch. While an export holds playback the
+// edit is accepted and the timeline says it, but the engine plays the tempo before until the export
+// is done: a playhead moved at the timeline's would run ahead, then jump back at every poll.
+// RENDER-9a, design-8b §4.1 (the attack's break 23): the loop is judged in the tempo the edit made,
+// so the answer says "loop turned off" during the hold too, though the engine turns it off only at
+// the switch. Before, it was judged in the tempo the engine played then, and nothing was said.
+#[test]
+fn during_an_export_a_tempo_edit_turns_the_loop_off_and_the_playhead_keeps_the_tempo_heard() {
+    let mut ex = Ex::new();
+    let token = ex.state.graph.state().unwrap()["session"].as_u64().unwrap();
+    assert_eq!(ex.state.graph.status().bpm, Some(120.0));
+    // 0.012 beats: 6 ms at 120 BPM, just over the shortest loop at 48 kHz.
+    ex.state.graph.set_loop(Some((32.0, 32.012)), None).unwrap();
+    let (go, there) = ex.stop_inside();
+    crate::export::start(&ex.state, Some(ex.fixture.0.join("out.wav"))).unwrap();
+    ex.fill_until("the export took the instance", |_| there.try_recv().is_ok());
+    let graph = &ex.state.graph;
+    let v = graph.tempo(token, 0.0, Some(240.0), false, false).unwrap();
+    assert_eq!((&v["loop_off"], &v["after"]), (&json!(true), &json!("240 BPM")), "{v}");
+    assert_eq!(graph.status().looping, Some(Loop { start: 32.0, end: 32.012, on: false }));
+    assert_eq!(graph.state().unwrap()["timeline"]["tempo"], json!([{"beat": 0.0, "bpm": 240.0}]), "accepted");
+    assert_eq!(graph.status().bpm, Some(120.0), "the engine plays the tempo before until the export is done");
+    go.send(()).unwrap();
+    ex.fill_until("the export is done", |ex| !ex.state.exports.running());
+    ex.fill_until("the tempo edit plays", |ex| ex.state.graph.status().bpm == Some(240.0));
+    ex.fill(4);
+    assert_eq!(ex.state.graph.status().looping, Some(Loop { start: 32.0, end: 32.012, on: false }), "off, as it was said");
 }
 
 // HOST-5: a plugin that fails at every call is started again from its saved settings once. When

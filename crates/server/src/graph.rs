@@ -123,12 +123,17 @@ struct Device {
 }
 
 /// Whether the player is playing, and where: in seconds, and in beats (0 with no project open);
-/// and the loop.
+/// the tempo it plays there; and the loop.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub struct Status {
     pub playing: bool,
     pub seconds: f64,
     pub beat: f64,
+    /// The tempo at `beat` of the revision the engine plays, which the page's playhead moves at.
+    /// A tempo edit reaches it at the switch (RENDER-27), not when it is accepted: the timeline
+    /// says the new tempo before then, and during an export's hold until it ends. None with no
+    /// player.
+    pub bpm: Option<f64>,
     /// None until a loop is set; its range is kept while it is off.
     #[serde(rename = "loop")]
     pub looping: Option<Loop>,
@@ -438,11 +443,16 @@ fn retire(player: Player) {
 /// Refuse a loop the engine couldn't play: one that isn't from a beat to a later one, at or after
 /// 0, or is shorter than two blocks or 5 ms at the project's rate (RENDER-9a).
 fn check_loop(t: &Timing, start: f64, end: f64) -> Result<()> {
+    loop_fits(&t.tempo, t.rate, start, end)
+}
+
+/// [`check_loop`] in the tempo map `tempo`, at `rate`.
+fn loop_fits(tempo: &TempoMap, rate: u32, start: f64, end: f64) -> Result<()> {
     if !(start.is_finite() && end.is_finite() && 0.0 <= start && start < end) {
         bail!("a loop goes from a beat to a later one, from beat 0 on (not {start} to {end})");
     }
-    let rate = t.rate as f64;
-    let frames = frame_of(&t.tempo, end, rate).saturating_sub(frame_of(&t.tempo, start, rate));
+    let rate = rate as f64;
+    let frames = frame_of(tempo, end, rate).saturating_sub(frame_of(tempo, start, rate));
     let least = Transport::min_loop(rate);
     if frames < least {
         bail!(
@@ -568,7 +578,7 @@ impl Inner {
         };
         // A tempo change that makes the loop too short turns it off (RENDER-9a).
         let looping = t.range.map(|(start, end)| Loop { start, end, on: t.on && !d.player.loop_refused() });
-        Status { playing: s.playing, seconds, beat, looping }
+        Status { playing: s.playing, seconds, beat, bpm: Some(t.tempo.bpm_at(beat)), looping }
     }
 
     fn activity(&self) -> Activity {
@@ -603,6 +613,7 @@ impl Inner {
         state["playing"] = json!(status.playing);
         state["seconds"] = json!(status.seconds);
         state["beat"] = json!(status.beat);
+        state["bpm"] = json!(status.bpm);
         state["loop"] = json!(status.looping);
         self.activity().put(&mut state);
         state["leases"] = json!(leases);
@@ -1401,15 +1412,24 @@ impl Graph {
     /// off (RENDER-9a) and the answer says `loop_off`.
     pub fn tempo(&self, token: u64, at: f64, bpm: Option<f64>, add: bool, remove: bool) -> Result<Value> {
         let looped = self.inner.timing.lock().as_ref().and_then(|t| t.range.filter(|_| t.on));
-        let mut v = self.edit(token, move |s| match (bpm, add, remove) {
-            (_, _, true) => m2_editor::song::remove_tempo(s, at),
-            (Some(bpm), true, false) => m2_editor::song::tempo_change(s, at, bpm),
-            (Some(bpm), false, false) => m2_editor::song::tempo(s, at, bpm),
-            (None, _, false) => Err(m2_editor::EditError::Rejected("a tempo needs its BPM".into())),
+        // The tempo map the edit made, to judge the loop in: the engine plays it from the switch,
+        // which an export's hold puts off, so the timing's map may still be the one before.
+        let made: Arc<Mutex<Option<(TempoMap, u32)>>> = Arc::default();
+        let kept = made.clone();
+        let mut v = self.edit(token, move |s| {
+            let edited = match (bpm, add, remove) {
+                (_, _, true) => m2_editor::song::remove_tempo(s, at),
+                (Some(bpm), true, false) => m2_editor::song::tempo_change(s, at, bpm),
+                (Some(bpm), false, false) => m2_editor::song::tempo(s, at, bpm),
+                (None, _, false) => Err(m2_editor::EditError::Rejected("a tempo needs its BPM".into())),
+            }?;
+            let rev = s.accepted();
+            *kept.lock() = Some((rev.tempo(), rev.project.sample_rate()));
+            Ok(edited)
         })?;
-        if let Some((start, end)) = looped {
+        if let (Some((start, end)), Some((tempo, rate))) = (looped, made.lock().take()) {
+            let short = loop_fits(&tempo, rate, start, end).is_err();
             let mut timing = self.inner.timing.lock();
-            let short = timing.as_ref().is_some_and(|t| check_loop(t, start, end).is_err());
             if let Some(t) = timing.as_mut().filter(|_| short) {
                 // Off here too, as the engine has it: C turns it on again, if it can play.
                 t.on = false;

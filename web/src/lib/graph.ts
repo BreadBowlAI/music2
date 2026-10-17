@@ -337,7 +337,19 @@ export interface Loop { start: number; end: number; on: boolean }
  * `paused` is "exporting" while an export borrows the plugins that play, and `loading` names the plugins
  * being loaded for an edit (RENDER-1, RENDER-25).
  */
-export interface GraphStatus { playing: boolean; seconds: number; beat: number; loop: Loop | null; paused?: string | null; loading?: string[] }
+export interface GraphStatus {
+  playing: boolean;
+  seconds: number;
+  beat: number;
+  /**
+   * The tempo the engine plays at `beat`: a tempo edit reaches it at its switch, after the
+   * timeline says it (and after an export's hold). Null with no player.
+   */
+  bpm?: number | null;
+  loop: Loop | null;
+  paused?: string | null;
+  loading?: string[];
+}
 
 /** The open project, and where playback was when it was read. */
 export interface GraphState extends GraphStatus {

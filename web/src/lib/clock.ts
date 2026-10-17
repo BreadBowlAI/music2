@@ -1,6 +1,7 @@
 // The transport clock the playheads are drawn from (taste.md §2.8, TL-9): the last status's beat,
-// plus the time since it came at the tempo there, so a playhead moves every frame and never eases
-// between the 200ms polls. One requestAnimationFrame loop runs while anything draws from it.
+// plus the time since it came at the tempo the engine plays there, so a playhead moves every frame
+// and never eases between the 200ms polls. One requestAnimationFrame loop runs while anything draws
+// from it.
 
 import type { GraphStatus, Loop } from "./graph";
 
@@ -18,11 +19,17 @@ const listeners = new Set<(beat: number) => void>();
 let frame = 0;
 let shown = NaN;
 
-/** A poll's answer: where playback is now. */
+/**
+ * A poll's answer: where playback is now. `tempo` is the timeline's, for a server that doesn't say
+ * the tempo it plays.
+ */
 export function setClock(status: GraphStatus, tempo: { beat: number; bpm: number }[]) {
   // While an export holds playback (RENDER-6a) the transport plays but the engine processes
   // nothing, so the beat stands still: the playhead waits with it rather than run ahead and jump back.
-  clock = { beat: status.beat, playing: status.playing && !status.paused, at: performance.now(), tempo, loop: status.loop };
+  // A tempo edit plays from its switch, after the timeline says it (RENDER-27): until then the
+  // engine plays the tempo before, which the status says, and the playhead keeps to that.
+  const playing = status.bpm ? [{ beat: 0, bpm: status.bpm }] : tempo;
+  clock = { beat: status.beat, playing: status.playing && !status.paused, at: performance.now(), tempo: playing, loop: status.loop };
 }
 
 const bpmAt = (beat: number) => {
