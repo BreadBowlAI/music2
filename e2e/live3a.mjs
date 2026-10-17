@@ -17,7 +17,7 @@ const { browser, page, errors, api, state, show, view, box, drag } = await open(
 const ROW = 14, RULER = 28;
 const status = async () => (await api("/status")).body;
 const playing = async () => (await status()).playing;
-const playButton = 'button[title="Play / stop (Space)"]';
+const playButton = '[data-testid=play]';
 const play = async () => (await playing()) || (await page.click(playButton), until(playing, 4000));
 const stop = async () => (!(await playing())) || (await page.click(playButton), until(async () => !(await playing()), 4000));
 const revision = async () => (await state()).view.revision;

@@ -3,6 +3,7 @@ import { Minus, Plus } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { barAt, graphApi, type Meter, type TimelineView } from "../lib/graph";
+import { mod } from "../lib/native";
 import { canvas } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { Button, MenuRow, Popover, Segment } from "./ui";
@@ -138,7 +139,7 @@ export function TempoField({
     ? `Tempo: ${bpmText(shown)} BPM\n${locked}`
     : [
         many ? `Tempo from ${placeOf(timeline.meter, entry.beat).replace("bar 1", "the start")}: ${bpmText(shown)} BPM` : "Tempo",
-        "Drag up or down (⇧ for fine), or double-click to type. Heard when you let go",
+        `Drag up or down (${mod.shift} for fine), or double-click to type. Heard when you let go`,
         HOME,
       ].join("\n");
 

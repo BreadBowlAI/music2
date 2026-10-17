@@ -290,7 +290,7 @@ async function withPlugins() {
     const fmt = (v) => v.map((d) => d.toFixed(0)).join(" ");
 
     const p2 = await newPage(s2);
-    await p2.click('button[title="Play / stop (Space)"]');
+    await p2.click('[data-testid=play]');
     check(await until(async () => (await api2("graph/status")).playing, 4000), "with-plugins plays");
     await sleep(1500);
     const sounding = levels(frames() - RATE, frames());

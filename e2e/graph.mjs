@@ -103,11 +103,11 @@ fs.writeFileSync(`${proj}/song.ts`, good);
 check(await until(async () => !(await page.$("[data-status]"))), "fixing it clears the pill");
 
 // Transport.
-await page.click('button[title="Play / stop (Space)"]');
+await page.click('[data-testid=play]');
 await new Promise((r) => setTimeout(r, 700));
 const st = await api("graph/status");
 check(st.playing && st.seconds > 0.3, `playing (${st.seconds.toFixed(2)} s in)`);
-await page.click('button[title="Play / stop (Space)"]');
+await page.click('[data-testid=play]');
 check(await until(async () => !(await api("graph/status")).playing), "stopped");
 
 await page.screenshot({ path: `${S}/graph.png` });

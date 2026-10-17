@@ -3,7 +3,7 @@ import { Download, PanelLeft, Play, Redo2, Repeat, SkipBack, Square, Undo2 } fro
 import { barAt, barsToBeats, lockReason, position, type GraphState, type GraphStatus, type Loop, type Meter, type Problem } from "../lib/graph";
 import { exportSong, useExport } from "../lib/exporting";
 import { next } from "../lib/history";
-import { chord, keyName } from "../lib/native";
+import { chord, keyName, shifted } from "../lib/native";
 import { canvas, useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { graphUndo } from "./GraphCanvas";
@@ -91,9 +91,10 @@ export default function TopBar({
       </BarButton>
       {/* Playing is the lit state; it stops (there is no pause), so the glyph is a square. */}
       <button
+        data-testid="play"
         onMouseDown={keepFocus}
         onClick={() => canvas.play?.()}
-        title={status.playing ? "Stop, back to where play started (Space)" : "Play (Space) · continue from where it stopped (⇧Space)"}
+        title={status.playing ? "Stop, back to where play started (Space)" : `Play (Space) · continue from where it stopped (${shifted("Space")})`}
         aria-label={status.playing ? "Stop" : "Play"}
         className={clsx(
           "ml-1 size-ctl rounded-sm grid place-items-center cursor-pointer transition-colors duration-80 ease-linear",

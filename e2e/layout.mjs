@@ -112,12 +112,12 @@ check((await api("graph/status")).playing === false, "seeking while stopped stay
 // Playing moves the playhead on, on screen too.
 await sleep(300);
 const x0 = (await (await page.$("[data-testid=playhead]")).boundingBox()).x;
-await page.click('button[title="Play / stop (Space)"]');
+await page.click('[data-testid=play]');
 check(await until(async () => (await playheadBeat()) > 17), `playing advances the playhead (data-beat ${await playheadBeat()})`);
 await sleep(300);
 const x1 = (await (await page.$("[data-testid=playhead]")).boundingBox()).x;
 check(x1 > x0 + 20, `and it moves right on screen (${x0.toFixed(0)} → ${x1.toFixed(0)}px)`);
-await page.click('button[title="Play / stop (Space)"]');
+await page.click('[data-testid=play]');
 check(await until(async () => !(await api("graph/status")).playing), "stopped");
 await page.click('button[aria-label="Back to start"]');
 check(await until(async () => (await playheadBeat()) === 0), "back to start puts the playhead at 0");
@@ -149,7 +149,7 @@ const post = async (path, body) =>
 await page.$eval("[data-testid=timeline]", (e) => { e.scrollLeft = 0; });
 const drawnBeats = (await page.$eval("[data-testid=ruler]", (e) => e.getBoundingClientRect().width)) / 24;
 await post("graph/seek", { beat: Math.floor(drawnBeats) - 2 });
-await page.click('button[title="Play / stop (Space)"]');
+await page.click('[data-testid=play]');
 let inside = true;
 const samples = [];
 for (let i = 0; i < 8; i++) {
@@ -165,7 +165,7 @@ for (let i = 0; i < 8; i++) {
   inside &&= m.x < m.rulerRight - 24 && m.x < m.right && Math.abs(m.header) < 1 && m.overflow <= 1;
   samples.push(`${m.beat.toFixed(1)}: x ${m.x.toFixed(0)}, ruler to ${m.rulerRight.toFixed(0)}`);
 }
-await page.click('button[title="Play / stop (Space)"]');
+await page.click('[data-testid=play]');
 check((await playheadBeat()) > drawnBeats + 2 && inside, `past the drawn width (${drawnBeats.toFixed(1)} beats) the playhead stays over the ruler and rows, headers in place (${samples.join("; ")})`);
 check(await until(async () => !(await api("graph/status")).playing), "stopped again");
 
