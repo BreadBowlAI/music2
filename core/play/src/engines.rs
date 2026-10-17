@@ -93,6 +93,8 @@ pub struct EngineThreads {
     pub device_mode: u64,
     /// The callback took them: blocks render on them from now on.
     pub taken: bool,
+    /// How many threads the output's workgroup advises (macOS), the device's own included.
+    pub advice: Option<usize>,
 }
 
 /// What a player's callback is handed: the runner of its pool, the output's group and how its
@@ -143,6 +145,8 @@ pub(crate) struct Report {
     missing: OnceLock<String>,
     /// Reads the pool's counters (G12).
     meter: OnceLock<Meter>,
+    /// The workgroup's advice: 0 for none.
+    advice: AtomicUsize,
 }
 
 impl Report {
@@ -160,6 +164,11 @@ impl Report {
         if let Some(m) = missing {
             let _ = self.missing.set(m);
         }
+    }
+
+    /// What the output's workgroup advises, as its group was read.
+    pub(crate) fn advise(&self, threads: Option<usize>) {
+        self.advice.store(threads.unwrap_or(0), Ordering::Relaxed);
     }
 
     /// The device's thread took its engine threads. On the audio thread: atomics only.
@@ -183,6 +192,7 @@ impl Report {
             between: if self.spin.load(Ordering::Relaxed) == 1 { Between::Spin } else { Between::Park },
             device_mode: self.device_mode.load(Ordering::Relaxed),
             taken: d & 8 != 0,
+            advice: Some(self.advice.load(Ordering::Relaxed)).filter(|&n| n > 0),
         }
     }
 
@@ -241,6 +251,7 @@ pub(crate) fn for_device(uid: Option<&str>, rate: u32, live: LiveThreads, first:
         }
     };
     let group = Arc::new(Group::of_output(uid, Duration::from_secs_f64(f64::from(frames) / f64::from(rate.max(1)))));
+    report.advise(group.recommends());
     let count = live_count(live.count, &m2_os::process::cores(), group.recommends(), true);
     if count <= 1 {
         report.made(1, None, None, live.between, group.missing().map(str::to_string));
@@ -391,5 +402,9 @@ mod tests {
         }
         let no_callback = for_device(None, 48_000, live, &|| 0, &Report::default());
         assert!(no_callback.pool.is_none());
+        // The workgroup's advice, as read (none here), reaches G12's set-up line.
+        assert_eq!(said.advice, Group::of_output(None, Duration::from_millis(3)).recommends());
+        report.advise(Some(3));
+        assert_eq!(report.read().advice, Some(3));
     }
 }

@@ -178,9 +178,10 @@ pub fn verdict(f: &Found, asked: u32, judged: bool) -> Vec<Check> {
         wrong.push(m.clone());
     }
     let setup = format!(
-        "{} thread{}, {}; workers real time {}/{workers}, in the workgroup {}/{workers}; the device's thread {}; {} Hz, {} frames; its FP register {:#x}",
+        "{} thread{} ({}), {}; workers real time {}/{workers}, in the workgroup {}/{workers}; the device's thread {}; {} Hz, {} frames; its FP register {:#x}",
         t.count,
         if t.count == 1 { "" } else { "s" },
+        t.advice.map_or_else(|| "no workgroup's advice".into(), |n| format!("the workgroup advises {n}")),
         way(t.between),
         t.real_time,
         t.joined,
@@ -490,6 +491,7 @@ mod tests {
             between: Between::Park,
             device_mode: 0,
             taken: true,
+            advice: Some(4),
         };
         let mut hist = vec![0; 2048];
         hist[200] = 22_000;
@@ -505,7 +507,9 @@ mod tests {
     #[test]
     fn a_clean_record_passes() {
         assert!(failed(&clean(), true).is_empty(), "{:?}", failed(&clean(), true));
-        assert!(verdict(&clean(), 128, true).iter().all(|c| c.verdict == Verdict::Pass));
+        let judged = verdict(&clean(), 128, true);
+        assert!(judged.iter().all(|c| c.verdict == Verdict::Pass));
+        assert!(judged[0].detail.starts_with("4 threads (the workgroup advises 4), park; workers real time 3/3"), "{}", judged[0].detail);
         let linux = verdict(&clean(), 128, false);
         assert!(linux.iter().filter(|c| c.verdict == Verdict::Info).all(|c| c.detail.ends_with("not judged on Linux (PLAT-1)")));
         assert_eq!(linux.iter().filter(|c| c.verdict == Verdict::Pass).count(), 2, "crashes and frames, judged everywhere");
