@@ -18,6 +18,7 @@ owner's Mac judges timings (PLAT-1).
 | R1: a mixer strip runs with its track | done | **Built and green, the same bits.** p50's song partition went from 154 nodes to 52, its time from about 300 to about 50 µs a block, the critical path from about 400 to about 160 µs; 4 threads about 15% faster (Linux, a busy server). |
 | 3: live playback on engine threads | done | **Built and green.** Live playback renders on a pool of engine threads with the same bits as one thread: every pure fixture on 2, 4 and 7 threads, edits and a resampled song. Real time and the Mac's workgroup are asked for; this server refuses real time, so a device here plays on one thread. Nothing allocates. Every test shown red. |
 | 4: gate G12 live | done | **Built and green.** `m2-gates realtime` plays p50 live and judges every callback: on a Mac on its device (the bounds of gate 8), here on the silent clock (information). One minute of it is in the Mac's check (about 70 s more). Every new test shown red. |
+| Integration: the gaps lane | done | **Merged and green.** `8a-gaps` is in `8a`: a sound that breaks while the song plays goes silent alone. One fix: G12 counts such a sound as a crash. The live tests ran 10 times over, 0 failed. |
 | The Mac command, live | owed | one script, `ci/sweep.sh`, about 40 minutes (below). |
 
 ## Slice 0: the spike
@@ -1134,9 +1135,8 @@ Disk at the slice's end: `df -h /` 2.3 TB free; this worktree's `target/` 114 GB
   workgroup's advice, the rate and frames, the FP register).
 - **The Mac's check now plays the output device, muted.** `ci/check.sh` says to set the built-in speakers at
   48 kHz first: at another rate or buffer, G12 fails as "not the designed set-up" and says what to set (D19).
-- **Merge `8a-gaps`** (the gaps lane, done at `8a3d70a` in its own worktree): not merged here. The plan's §5.7
-  merges it before the final check; then `ci/check.sh --gates`, HANDOFF, and delete `~/m2-runs/wt/8a-g` and its
-  target.
+- **Merge `8a-gaps`**: merged since (Integration, below), its worktree and branch deleted. Left: `ci/check.sh
+  --gates` and HANDOFF.
 - **Left, in the plan's cut order:** `--capture resample` (the callback FZ test and the FP register line stand in),
   then `--server`, `--export` and `--like-m1`, as gate 8's row says.
 - **The live default count and `BETWEEN`** wait for `ci/sweep.sh`'s step 5. Each is one line
@@ -1201,3 +1201,80 @@ What `ci/sweep.sh` runs, and what each step decides:
 The Mac's full `ci/check.sh` is owed as well (about 50 minutes, a separate run). It now also runs G12's one minute
 (the gates row grows by about 70 s) and the Mac's new tests (`m2-os`'s real-time code, `cores_on_this_mac_are_sane`
 with the new count).
+
+## Integration: the gaps lane
+
+### In short
+
+- **`8a-gaps` is merged into `8a`** (`54d1b93`). A sound that breaks while the song plays now goes silent alone,
+  on any number of engine threads, and the app says which one. Its notes: `build-notes-8a-gaps.md`.
+- **Main had not moved** (still `85b069a`, already in `8a`), so there was nothing else to merge.
+- **One fix** (`c3f5d2d`): G12 counts a sound that stops alone as a crash. Without it, a kernel that failed during
+  G12 would no longer fail the gate.
+- **Every check is green.** No render changed. The live tests ran 10 times over: 280 runs, 0 failed.
+- **`wt/8a-g` and the branch `8a-gaps` are deleted.** The lane had already deleted its target.
+
+### What merged
+
+| Commit | What |
+|---|---|
+| `54d1b93` | the merge: the gaps lane's 5 commits (`9ebc8d4` to `8a3d70a`) |
+| `c3f5d2d` | G12 counts a sound that stops alone as a crash |
+
+Two conflicts, both rows added on both sides: `e2e/run.mjs` and `e2e/README.md` (next's `nx-settings` and
+`nx-nodevice`, and the lane's `sound-stops`). Both sides' rows are kept. Everything else merged by itself:
+`render_block_on`'s `let b = self.pre(clock, runner);` sits after slice 3's runner lines, as the lane said, and
+`gauge.rs` took the lane's two arguments next to slice 4's code.
+
+### The fix: a stopped sound is a crash to G12
+
+Slice 4's record read the engine's `crashes()`. Since the gaps lane, a kernel that fails live stops alone, and the
+engine counts no crash. So G12's "no crash" check could no longer see one.
+
+| | |
+|---|---|
+| Built | `Stopped::count()` (stops so far), `Renderer::stops()`; the player's `publish` adds them to the engine's crashes in the record. Atomics only: nothing allocates or locks |
+| Test | `a_sound_that_stops_counts_as_a_crash` (`core/play/src/timing.rs`): a node marked stopped as the audio thread would; the record must say 1 crash |
+| Red first | the test alone, before the fix: `crashes: 0` (`~/m2-runs/s8a/int-red/g12-stops-red.log`); after: green (`g12-stops-green.log`) |
+| Docs | `crates/gates/README.md`'s G12 row: a sound that stops alone counts as a crash |
+
+Limit, as for non-finite samples: the count is the playing plan's. A plan swapped in during a run starts again
+at 0. G12 makes no edits.
+
+### Checks
+
+| Check | Result | Log (`~/m2-runs/logs/`) |
+|---|---|---|
+| The merge, before its commit: `cargo check` of the workspace, every target | green | `8a-int-check0-1017-205238-2876880.log` |
+| The merge: `s2-check.sh` with m2-os, m2-pool, m2-runtime, m2-play, m2-editor, m2-server, m2-gates, m2 (debug m2, 10 of 10 renders, the tests, clippy `-D warnings`, the Mac lint, fmt) | green: 1,030 tests passed, 0 failed, 7 ignored | `8a-int-merge-check-1017-205303-2879751.log` |
+| The fix: `s2-check.sh` with m2-runtime, m2-play, m2-gates | green: 10 of 10 renders, 321 tests | `8a-int-g12stops-check-1017-210212-2954826.log` |
+| Browser: `sound-stops` 5 times, `pl-mix` 5 times (web rebuilt, debug headless at `c3f5d2d`) | 5 of 5 each: 12 of 12 and 47 of 47 checks. pl-mix's first loud hat came at read 10 to 38 | `8a-int-e2e-1017-210818-3002215.log`; each run's log in `~/m2-runs/s8a/int/e2e/` |
+| The live tests, 10 rounds (script `~/m2-runs/s8a/int/repeat/run.sh`, copies of the debug binaries at `c3f5d2d`) | 280 test runs, 0 failed | `8a-int-repeat-1017-211123-3048181.log` |
+| G12 as `ci/check.sh` runs it (release, 1 minute) | PASS: crashes 0, non-finite 0, frames +0; 66.2 s | `8a-int-g12-1017-212419-3151599.log` |
+
+Each round of the live tests: the three live 1-vs-N bit tests, the two offline ones, the 5 engine-thread tests, the
+workers' allocation test, the runtime's 15 partition tests, and the lane's two thread tests (a trap on 1 and 4
+threads; an edit window on 1 and N). The 1-minute load went from 53 (other tracks building) to 4.2. The bit tests
+took 64 to 85 s a round.
+
+### Numbers (Linux, information only: PLAT-1)
+
+G12 live on CCD1 (`taskset -c 8-15 ... --sweep 1,4 --between park`), load 12.2 at the start and 3.6 at the end
+(`8a-int-g12-ccd1-1017-212618-3172711.log`). Beside slice 4's run (load 6 to 8):
+
+| 4 threads, park | p50 | p99 | Back-to-back p99 | Dropouts | Workers joined, p99 |
+|---|---|---|---|---|---|
+| Slice 4 (`566c014`) | 788 µs | 4,256 | 1,000 | 1,315 | under 512 µs |
+| After the merge (`c3f5d2d`) | 620 µs | 2,196 | 840 | 91 | under 16 µs |
+
+No sign that the merge slowed a block: the lane adds a flag read or two per kernel a block. The tails follow
+the server's load. The ci line's run (all 32 cores, load 6 rising to 15) had p99 over 8,192 µs: the same load.
+
+### For the lead
+
+- **Left:** `ci/check.sh --gates`, then HANDOFF. HANDOFF should then drop "The two gaps found on 2026-10-16":
+  both are fixed (its two "Left for later" lines).
+- **From the gaps lane, still open** (its "For the lead"): a toast lasts 4 s, short for the three-line stop
+  message (an owner or polish decision, in `web/`); a sound that stops in the few milliseconds before a new plan is
+  taken isn't told; the macOS runs of `sound-stops` and `pl-mix` come with the Mac's check.
+- **`Engine::crashes()`** now counts only an error that reaches the engine live. G12 still reads it, so it stays.
