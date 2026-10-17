@@ -111,6 +111,9 @@ suites, all green with their counts: `taste` 39, `s8-clips` 94, `s4-clips` 28, `
 `FAIL the ruler has Zoom in and Zoom out`, `FAIL ⌘= zooms in: clip width 766 → 766`, then
 `No element found for selector: [data-testid=zoom-in]`.
 
+The buttons are named "Zoom the timeline in" and "Zoom the timeline out" for screen readers: the
+Device view's graph has its own Zoom in and Zoom out (`ports` clicks those by name).
+
 **Left.** A trackpad pinch is checked only as Chrome's Ctrl-wheel; the Mac's `gesture*` events
 need the Mac run. Follow is a plain menu row, not a ticked one.
 
@@ -264,6 +267,14 @@ quantize, delete, loop, open`.
 **For gaps.md.** Repeat a clip (#23's loop-a-clip-n-times) is done.
 
 **Contract.** The clips route's `duplicate` gesture takes `times` (1 to 64).
+
+### Lane B: the last run
+
+Every browser suite but `live3b` (it needs plugins) ran on lane B's tip, in three batches: all
+green with their counts, but `ports` (2 failed: it clicked the timeline's new Zoom in, by the same
+name as the graph's). The buttons got their own names; `ports` 46 and `pl-zoom` 62 then passed.
+Rust: `m2-editor` 260, `m2-server` 220, `m2`, `music2-desktop`'s menu tests; clippy of all four
+clean. The full `ci/check.sh` is the End's.
 
 ## Lane C
 

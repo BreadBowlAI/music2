@@ -1349,7 +1349,8 @@ function ViewTools({ ppb, follow, onZoom }: { ppb: number; follow: boolean; onZo
       <Button
         size="sm"
         data-testid="zoom-out"
-        aria-label="Zoom out"
+        // Not just "Zoom out": the Device view's graph has its own.
+        aria-label="Zoom the timeline out"
         disabled={ppb <= ZOOM.min}
         title={ppb <= ZOOM.min ? "Zoomed out all the way" : `Zoom out (${zoomOut})`}
         onMouseDown={keepFocus}
@@ -1361,7 +1362,7 @@ function ViewTools({ ppb, follow, onZoom }: { ppb: number; follow: boolean; onZo
       <Button
         size="sm"
         data-testid="zoom-in"
-        aria-label="Zoom in"
+        aria-label="Zoom the timeline in"
         disabled={ppb >= ZOOM.max}
         title={ppb >= ZOOM.max ? "Zoomed in all the way" : `Zoom in (${zoomIn})`}
         onMouseDown={keepFocus}
