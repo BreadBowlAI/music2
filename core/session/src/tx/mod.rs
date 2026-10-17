@@ -29,6 +29,8 @@ mod hook_tests;
 #[cfg(test)]
 mod kill_tests;
 #[cfg(test)]
+mod muted_tests;
+#[cfg(test)]
 mod props;
 #[cfg(test)]
 mod share_tests;

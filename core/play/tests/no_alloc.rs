@@ -328,6 +328,43 @@ fn the_audio_thread_never_allocates_through_the_resampler() {
     trap_run(44_100);
 }
 
+// RENDER-28, MON-1: overlay cells written while a song plays (mutes, unmutes, a glide cut short),
+// and an activation whose overlays were set before it was sent, allocate and free nothing.
+#[test]
+fn overlay_writes_never_allocate() {
+    let song = project(
+        "trap-overlays",
+        &[(
+            "song.ts",
+            "import { song, track } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { mixer } from \"std/mix\";\n\
+             const kick = track(\"kick\", () => osc.sine(55));\nconst bass = track(\"bass\", () => osc.saw(110));\n\
+             export default song(() => mixer({ kick: kick.out, bass: bass.out }));\n",
+        )],
+    );
+    let r = song.renderer();
+    let info = r.info();
+    assert_eq!(info.overlays.len(), 2);
+    let kick = CellTarget { slots: info.cell_slots.clone(), cells: info.overlays.iter().filter(|o| o.0 == "kick").map(|o| o.2).collect() };
+    let (player, mut d) = Player::driven(SR);
+    player.open(r).unwrap();
+    player.play();
+    let mut data = vec![0.0f32; 2 * 4096];
+    let mut allocs = 0;
+    for (k, n) in [64usize, 37, 128, 1000, 3, 512, 4096, 77].iter().cycle().take(64).enumerate() {
+        if k % 3 == 0 {
+            player.set_cells(&kick, if k % 2 == 0 { 0.0 } else { 1.0 });
+        }
+        if k == 32 {
+            let mut next = song.after(&song, &info);
+            next.set_overlays(&[0.0, 1.0]);
+            player.activate(next).unwrap();
+        }
+        allocs += trapped(|| d.fill(&mut data[..2 * n], 2));
+        drop(d.drain_retired());
+    }
+    assert_eq!(allocs, 0, "the callback allocated or freed");
+}
+
 /// A probe instrument on 64 notes into a probe effect (step 3b, §6.5), `gain` on the instrument,
 /// a cell (written at [`cells`]'s first site).
 fn probes(gain: f64) -> Song {

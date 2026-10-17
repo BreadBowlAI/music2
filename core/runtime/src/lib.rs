@@ -42,6 +42,7 @@ pub mod engine;
 pub mod event;
 mod fade;
 mod keep;
+mod overlay;
 pub mod packages;
 mod plan;
 pub mod plugins;
@@ -832,6 +833,14 @@ enum Exec {
         new: Input,
         wait: u32,
     },
+    /// A monitoring overlay (MON-1): `src` times a gain that moves toward `target` by `step` a
+    /// frame, from `cur` ([`overlay::process`]). Its cell sets `target` (RENDER-22a).
+    Overlay {
+        src: PortRef,
+        target: f32,
+        cur: f32,
+        step: f32,
+    },
 }
 
 #[derive(Default)]
@@ -1238,6 +1247,10 @@ impl Graph {
                     version = Some(fade(b, (old, new, *wait), bufs, versions, versions[i], &mut out[0]));
                     Ok(())
                 }
+                Exec::Overlay { src, target, cur, step } => {
+                    overlay::process(&bufs[src.node][src.port], &mut out[0], *target, cur, *step);
+                    Ok(())
+                }
             };
             // RENDER-25: live, a box whose output went non-finite, or that trapped, is marked; an
             // activation resets it as it moves it. A finite block clears the mark.
@@ -1404,6 +1417,19 @@ impl Graph {
             }
             Write::Ramp(..) => COPY,
         };
+    }
+
+    /// Overlay `node`'s gain moves to `value`: glides there (RENDER-22a), or with `now` is there at
+    /// once, for a plan not yet sent. Never allocates.
+    fn set_overlay(&mut self, node: usize, value: f32, now: bool) {
+        let Some(Exec::Overlay { target, cur, .. }) = self.exec.get_mut(node) else {
+            debug_assert!(false, "{node} isn't an overlay");
+            return;
+        };
+        *target = value;
+        if now {
+            *cur = value;
+        }
     }
 
     /// Whether any kernel still holds sound that will come out later.
@@ -1694,18 +1720,32 @@ impl Renderer {
             let e = b.node(&flat.nodes, node, false, Make::Moved, true, w.room.get(&(n + g)).copied(), 0)?;
             graph.push(e, &node.outputs);
         }
+        // Overlays after the fades (MON-1): wired first, as they read and feed fades' sides.
+        let mut w = w;
+        let (fades, base) = (n + w.ghosts.len(), n + w.ghosts.len() + w.fades.len());
+        let placed = overlay::place(flat, keep.map(|k| k.old), &mut w, fades, base);
         let len = (0.005 * rate).round().max(1.0) as u32;
         for f in &w.fades {
             let wait = if f.waits { len } else { 0 };
             graph.push(Exec::Fade { old: f.old.clone(), new: f.new.clone(), wait }, &[Kind::Audio(f.channels)]);
         }
+        debug_assert_eq!(graph.exec.len(), base);
+        let step = overlay::step(rate);
+        for o in &placed.nodes {
+            graph.push(Exec::Overlay { src: o.src, target: o.value, cur: o.value, step }, &[Kind::Audio(o.channels)]);
+        }
         for &(i, edge, f) in &w.rewire {
             graph.rewire(i, edge, f);
         }
         let ghosts = n..n + w.ghosts.len();
-        let order_after: Vec<usize> = w.order.iter().copied().filter(|i| !ghosts.contains(i)).collect();
+        // Window-only overlays run while the ghosts and old sides they carry do.
+        let windowed_overlays = base + placed.sites..base + placed.nodes.len();
+        let order_after: Vec<usize> = w.order.iter().copied().filter(|i| !ghosts.contains(i) && !windowed_overlays.contains(i)).collect();
         graph.order = w.order.clone();
-        let mut cells = Cells::new(&cells::cells(flat));
+        let window_overlays: Vec<(usize, usize)> =
+            placed.nodes.iter().enumerate().skip(placed.sites).filter_map(|(j, o)| Some((base + j, o.follows?))).collect();
+        let sites: Vec<(usize, f32)> = placed.nodes[..placed.sites].iter().enumerate().map(|(j, o)| (base + j, o.value)).collect();
+        let mut cells = Cells::new(&cells::cells(flat), &sites);
         // What moves in, and what it keeps and makes.
         let mut stats = Stats { ghosts: w.ghosts.len(), fades: w.fades.len(), ..Stats::default() };
         for (i, s) in shapes.iter().enumerate() {
@@ -1804,6 +1844,7 @@ impl Renderer {
             Box::new(Entry { after: k.info.id, moves: w.moves, lanes: lanes.moves, cells: pairs, voice_cells, release: w.release })
         });
         let id = GENERATION.fetch_add(1, Ordering::Relaxed);
+        let overlays = flat.overlays.iter().enumerate().map(|(k, s)| (s.module.clone(), s.into.clone(), cells.overlay(k))).collect();
         let info = Arc::new(PlanInfo {
             id,
             rate: sample_rate,
@@ -1812,6 +1853,7 @@ impl Renderer {
             lanes: lane_info,
             cell_slots: cells.slots().clone(),
             cell_map: cells.map().clone(),
+            overlays,
         });
         let plan = Plan {
             id,
@@ -1829,6 +1871,7 @@ impl Renderer {
             faded_from: None,
             stats,
             info,
+            window_overlays,
         };
         Ok(Renderer {
             plan,
@@ -2148,6 +2191,19 @@ impl Renderer {
     /// (the source number times its scale).
     pub fn set_cells(&mut self, cells: &[CellId], value: f64) {
         self.plan.cells.set_now(&mut self.plan.graph, cells, value as f32);
+    }
+
+    /// Its overlays' values, one per site of its graph in order ([`PlanInfo::overlays`]), set at once
+    /// off the audio thread: a renderer not yet sent starts where the plan before it was, with no
+    /// glide at entry (MON-1). The window's own overlays take their site's value. Writes no slot,
+    /// so what it reports as heard is unchanged.
+    pub fn set_overlays(&mut self, values: &[f32]) {
+        self.plan.cells.set_overlays(&mut self.plan.graph, values);
+        for &(node, site) in &self.plan.window_overlays {
+            if let Some(&v) = values.get(site) {
+                self.plan.graph.set_overlay(node, v, true);
+            }
+        }
     }
 
     /// Every cell write up to `seq` is in this renderer already (it was built with the values, or

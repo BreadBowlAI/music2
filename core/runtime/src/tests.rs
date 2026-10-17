@@ -8,6 +8,7 @@ use super::*;
 
 mod cell;
 mod live;
+mod overlay;
 
 const SR: u32 = 48_000;
 

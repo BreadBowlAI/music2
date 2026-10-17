@@ -146,6 +146,10 @@ pub struct PlanInfo {
     pub lanes: Vec<LaneInfo>,
     pub cell_slots: Arc<CellSlots>,
     pub cell_map: Arc<CellMap>,
+    /// Its overlays' cells, one per site of its graph in order (`Flat.overlays`): the track whose
+    /// audio it carries, the module that reads it, and the cell (MON-1, RENDER-23). Their ids come
+    /// after every value cell's.
+    pub overlays: Vec<(String, String, CellId)>,
 }
 
 /// One plugin node of a plan, as the next plan prepared against it, and an export, see it.
@@ -351,6 +355,8 @@ pub(crate) struct Plan {
     pub(crate) leftovers: Option<Box<Leftovers>>,
     pub(crate) stats: Stats,
     pub(crate) info: Arc<PlanInfo>,
+    /// The window's own overlays (no cell), each with the site whose value it takes.
+    pub(crate) window_overlays: Vec<(usize, usize)>,
 }
 
 /// A lane a plan's nodes read. Empty only while it moves between plans: it plays nothing then.

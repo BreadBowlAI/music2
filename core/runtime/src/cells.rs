@@ -243,6 +243,9 @@ impl Write {
 /// A renderer's cells: what each holds, its slots, and how far writes were heard.
 pub(crate) struct Cells {
     table: Vec<Cell>,
+    /// Overlay cells (MON-1), after the value cells: each overlay node's exec index, and its value.
+    /// A value goes to the node's target, and the node glides there itself (RENDER-22a).
+    overlays: Vec<(usize, f32)>,
     slots: Arc<CellSlots>,
     map: Arc<CellMap>,
     /// Smooth cells ramping this block, which end on their value at the next block line. Room
@@ -258,10 +261,12 @@ pub(crate) struct Cells {
 }
 
 impl Cells {
-    pub(crate) fn new(info: &[CellInfo]) -> Cells {
+    /// The cells of `info`, then one for each overlay node of `overlays` (its node, its value).
+    pub(crate) fn new(info: &[CellInfo], overlays: &[(usize, f32)]) -> Cells {
         Cells {
             table: info.iter().map(|c| Cell { at: c.at, smooth: c.smooth, value: c.value as f32 }).collect(),
-            slots: Arc::new(CellSlots::new(info.len())),
+            overlays: overlays.to_vec(),
+            slots: Arc::new(CellSlots::new(info.len() + overlays.len())),
             map: Arc::new(CellMap::of(info)),
             ramping: Vec::with_capacity(info.iter().filter(|c| c.smooth).count()),
             carried: vec![],
@@ -279,7 +284,25 @@ impl Cells {
     }
 
     pub(crate) fn value(&self, id: CellId) -> Option<f32> {
-        self.table.get(id.0 as usize).map(|c| c.value)
+        let i = id.0 as usize;
+        match self.table.get(i) {
+            Some(c) => Some(c.value),
+            None => self.overlays.get(i - self.table.len()).map(|o| o.1),
+        }
+    }
+
+    /// The cell of overlay `k`, the `k`th site of its graph.
+    pub(crate) fn overlay(&self, k: usize) -> CellId {
+        CellId((self.table.len() + k) as u32)
+    }
+
+    /// Set every overlay at once, by site, off the audio thread: a plan not yet sent (MON-1). Its
+    /// slots are left alone, so what it reports as heard is unchanged.
+    pub(crate) fn set_overlays(&mut self, graph: &mut Graph, values: &[f32]) {
+        for (o, &v) in self.overlays.iter_mut().zip(values) {
+            o.1 = v;
+            graph.set_overlay(o.0, v, true);
+        }
     }
 
     /// At a block line, before the graph runs: ramps from the last block end on their value, then
@@ -287,9 +310,18 @@ impl Cells {
     /// Never allocates.
     pub(crate) fn apply(&mut self, graph: &mut Graph) {
         self.end_ramps(graph);
-        let Cells { table, slots, ramping, carried, heard, .. } = self;
+        let Cells { table, overlays, slots, ramping, carried, heard, .. } = self;
         let mut set = |id: u32, v: f32| {
-            let Some(c) = table.get_mut(id as usize) else { return };
+            let Some(c) = table.get_mut(id as usize) else {
+                // An overlay's node glides to its value itself: no host ramp (RENDER-22a).
+                if let Some(o) = overlays.get_mut(id as usize - table.len())
+                    && o.1.to_bits() != v.to_bits()
+                {
+                    o.1 = v;
+                    graph.set_overlay(o.0, v, false);
+                }
+                return;
+            };
             if c.value.to_bits() == v.to_bits() {
                 return;
             }
