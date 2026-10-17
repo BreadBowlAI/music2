@@ -228,3 +228,30 @@ fn a_change_of_output_opens_once_the_old_stream_stopped() {
     assert_eq!((now.no_output, now.fell_back), (false, false));
     assert!(graph.status().beat > 0.5, "where it was");
 }
+
+// gaps #31: while the output changes, Settings and the status always find a player: the new one
+// is in its slot before the slot is let go (NX-S5's wait made a reader land in that gap).
+#[test]
+fn a_change_of_output_never_shows_no_player() {
+    let graph = Graph::starting(Box::new(|_| Player::silent()), Box::new(|| Some("Speakers".into())));
+    let fixture = Fixture::new();
+    graph.open(&fixture.0).unwrap();
+    graph.transport("play").unwrap();
+    eventually("the playhead moves", || graph.status().beat > 0.5);
+    let done = AtomicBool::new(false);
+    let gaps = std::thread::scope(|s| {
+        let reader = s.spawn(|| {
+            let mut gaps = 0;
+            while !done.load(Ordering::Relaxed) {
+                gaps += graph.output_now().is_none() as u32;
+            }
+            gaps
+        });
+        for i in 0..5 {
+            graph.set_output(Choice { device: None, frames: Some(if i % 2 == 0 { 128 } else { 256 }) }).unwrap();
+        }
+        done.store(true, Ordering::Relaxed);
+        reader.join().unwrap()
+    });
+    assert_eq!(gaps, 0, "a reader found no player");
+}

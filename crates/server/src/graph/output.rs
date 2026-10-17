@@ -11,9 +11,11 @@
 //! Settings chooses the output and its buffer size (gaps #31, [`Graph::set_output`]): the player
 //! is let go, and once its stream has stopped a new one starts there, where it was, stopped.
 //!
-//! Only [`Inner::device`](super::Inner) starts players: it asks [`Outputs::start`] for one, and
-//! [`Outputs::came_back`] whether a real one may take over from the stand-in.
+//! [`Inner::device`](super::Inner) starts players: it asks [`Outputs::start`] for one, and
+//! [`Outputs::came_back`] whether a real one may take over from the stand-in. A change of output
+//! starts its new one itself, in the slot it let go of.
 
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
@@ -21,7 +23,7 @@ use m2_play::{Choice, Player};
 use parking_lot::Mutex;
 use serde::Serialize;
 
-use super::{Graph, retire};
+use super::{Device, Graph, retire};
 
 /// What plays now, as Settings' Now row says it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -232,13 +234,17 @@ impl Graph {
             let freed = old.player.freed();
             retire(old.player);
             freed.wait(FREE);
+            // The new player is in its slot before the slot is let go, as `Inner::device` starts
+            // one: Settings and the status never find none meanwhile.
+            let epoch = self.inner.players.fetch_add(1, Ordering::Relaxed) + 1;
+            let player = self.inner.output.start(epoch)?;
+            *d = Some(Device { player, epoch, resume: std::mem::take(&mut *self.inner.resume.lock()) });
             st
         };
         #[cfg(test)]
         if let Some(f) = self.inner.output.changing.lock().as_mut() {
             f();
         }
-        self.inner.device()?;
         // The song goes into it now, not at the server's next catch-up: Play pressed at once plays.
         self.catch_up();
         Ok(st.playing)
