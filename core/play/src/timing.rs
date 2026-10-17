@@ -74,7 +74,8 @@ impl Record {
         self.callbacks.fetch_add(1, Relaxed);
     }
 
-    /// The engine playing, after a callback: its crashes, and its renderer's non-finite samples.
+    /// The engine playing, after a callback: its crashes and its renderer's stopped sounds, and the
+    /// renderer's non-finite samples.
     pub(crate) fn engine(&self, crashes: u64, non_finite: u64) {
         self.crashes.store(crashes, Relaxed);
         self.non_finite.store(non_finite, Relaxed);
@@ -99,8 +100,9 @@ pub struct Timing {
     /// Device frames filled; engine frames rendered (the engine clock).
     pub frames: u64,
     pub clock: u64,
-    /// The player crashed (a panic: for good); the engine's crashes (a kernel's error); the playing
-    /// renderer's non-finite samples, silenced.
+    /// The player crashed (a panic: for good); the engine's crashes (a sound that stopped, as a
+    /// kernel failed (RENDER-25), or an error that reached the engine); the playing renderer's
+    /// non-finite samples, silenced.
     pub crashed: bool,
     pub crashes: u64,
     pub non_finite: u64,
@@ -268,6 +270,24 @@ mod tests {
         assert!(p50 <= top && top.as_nanos() as u64 >= t.max_ns.min(BUCKETS as u64 * BUCKET_NS), "{p50:?} {top:?} {}", t.max_ns);
         assert_eq!(Timing::default().quantile(0.99), None);
         assert!(!t.crashed && t.crashes == 0 && t.non_finite == 0 && t.threads.is_empty());
+    }
+
+    // G12 (8a's live half), RENDER-25: live, a node that fails stops alone and the song plays on;
+    // the record counts it as a crash, so G12 fails on it.
+    #[test]
+    fn a_sound_that_stops_counts_as_a_crash() {
+        let (player, mut d) = Player::driven(48_000);
+        let r = crate::tests::sine(48_000);
+        let info = r.info();
+        player.open(r).unwrap();
+        player.play();
+        fill(&mut d, 128);
+        let before = player.timing();
+        // The node fails as the audio thread would mark it.
+        info.stopped.stop(1, m2_runtime::Why::Crashed);
+        fill(&mut d, 128);
+        let t = player.timing().since(&before);
+        assert_eq!((t.crashed, t.crashes), (false, 1), "the sound's stop is counted");
     }
 
     // G12 (8a's live half): a muted player renders as ever, and the device hears zeros.

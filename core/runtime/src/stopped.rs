@@ -63,6 +63,11 @@ impl Stopped {
         }
     }
 
+    /// Stops so far, told or not: a node that plays again and stops again counts twice.
+    pub fn count(&self) -> u32 {
+        self.stops.load(Ordering::Relaxed)
+    }
+
     /// Node `node` plays again (a panic reset it): a later stop is told again.
     pub(crate) fn clear(&self, node: usize) {
         if let Some(n) = self.nodes.get(node) {

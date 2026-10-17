@@ -667,7 +667,8 @@ impl Callback {
         s.seq.store(seq + 2, Ordering::Release);
         if let Some(l) = &self.live {
             s.clock.store(l.engine.clock(), Ordering::Relaxed);
-            s.timing.engine(l.engine.crashes(), l.engine.current().map_or(0, Renderer::non_finite));
+            let cur = l.engine.current();
+            s.timing.engine(l.engine.crashes() + cur.map_or(0, Renderer::stops), cur.map_or(0, Renderer::non_finite));
         }
         s.loop_refused.store(st.loop_refused, Ordering::Relaxed);
         s.dropped_ons.store(st.dropped_ons as u64, Ordering::Relaxed);

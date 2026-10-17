@@ -2851,6 +2851,11 @@ impl Renderer {
         self.non_finite
     }
 
+    /// Its nodes' stops live (RENDER-25): G12 counts each as a crash.
+    pub fn stops(&self) -> u64 {
+        u64::from(self.plan.stopped.count())
+    }
+
     /// The last block's runs.
     pub fn last_runs(&self) -> &Runs {
         &self.runs

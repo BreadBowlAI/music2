@@ -1031,7 +1031,7 @@ How a live run goes:
 | G12 on Linux at the live rule's count (1 off a device) | the count a device would get (`live_count(None, cores, None, true)`: one cache's cores, 8 here) | so the check's run here exercises the engine threads; the silent clock's workers are plain threads, and it is information anyway |
 | `late` and `gaps` in the record | `late` is 8b.8's count (D13); the record calls from the same place in `fill_in`, with the same clock reads | one measurement, two readers |
 | `Timing.max` | the longest since the start; a window's is the top bucket (to 4 µs) unless the longest came in it | a window max needs no reset, so `timing()` has no side effect |
-| `non_finite` from `publish` | the same, with the engine's `crashes` beside it | a kernel's error stops the song (until the gaps lane lands): G12 judges it |
+| `non_finite` from `publish` | the same, with the engine's `crashes` beside it | a kernel's error stops the song (until the gaps lane lands): G12 judges it. Since the gaps lane, a sound that stops alone counts too (Integration) |
 | `start_in(Device, &Choice)` changed to take the threads | `start_in` keeps its shape and calls `start_live(audio, choice, live)` | `next`'s tests call `start_in`; nothing of theirs changes |
 | `--sweep` live without 1 | the same parse as offline: 1 is always in | one rule for one option; a count of 1 plays once whatever `--between` says (D26) |
 | the frames line "within one block" | within one block, one callback's frames and 8 (D18) | two atomics read while the callback runs can be a callback apart |
