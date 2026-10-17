@@ -1,8 +1,9 @@
-# 8a's offline half: build notes
+# 8a: build notes
 
-What each slice of 8a's offline half did, what it measured, and where the logs are. The plan is `8a-plan.md`
-beside this file (written as `~/m2-runs/s8a/plan.md`; its Attack and Decisions win). The design is `design-8a.md`.
-Linux timings here are information only: only the owner's Mac judges timings (PLAT-1).
+What each slice of 8a did, what it measured, and where the logs are. The offline half's plan is `8a-plan.md`
+beside this file (written as `~/m2-runs/s8a/plan.md`); the live half's is `~/m2-runs/s8a/plan-live.md`. Each
+plan's Attack and Decisions win. The design is `design-8a.md`. Linux timings here are information only: only the
+owner's Mac judges timings (PLAT-1).
 
 ## In short
 
@@ -14,6 +15,8 @@ Linux timings here are information only: only the owner's Mac judges timings (PL
 | The review | done | **4 findings, all fixed**, each with a test shown red before its fix. The last check found a fifth: gate G10's timing passed only on its retry. Fixed too. No render changed. |
 | The final check | passed | `ci/check.sh --gates` at `bc41693`: **every row, nothing passed only on a retry** (1,241 Rust tests, 49/49 browser suites, 10 of 10 renders, the 6 gate runs). |
 | The Mac sweep | owed | four lines for the owner, once `8a` is on `main` (below). |
+| R1: a mixer strip runs with its track | done | **Built and green, the same bits.** p50's song partition went from 154 nodes to 52, its time from about 300 to about 50 µs a block, the critical path from about 400 to about 160 µs; 4 threads about 15% faster (Linux, a busy server). |
+| 3: live playback on engine threads | done | **Built and green.** Live playback renders on a pool of engine threads with the same bits as one thread: every pure fixture on 2, 4 and 7 threads, edits and a resampled song. Real time and the Mac's workgroup are asked for; this server refuses real time, so a device here plays on one thread. Nothing allocates. Every test shown red. |
 
 ## Slice 0: the spike
 
@@ -694,6 +697,271 @@ length from bar 1: 1.19 s against 0.85 s". That is the fifth fix above (`bc41693
 | The final check | `~/m2-runs/logs/check-8a-fg-1017-161554-749344.log`; its logs `~/m2-runs/check-8a-fg/` (`check-8a-fg.tgz` beside it) |
 | The first one | `~/m2-runs/logs/check-8a-fg-1017-151507-229683.log`; its logs `~/m2-runs/check-8a-fg-run1.tgz` |
 | The check before the review, at `33885a6` (every row; polish's `pl-mix` passed on its retry) | `~/m2-runs/logs/check-8a-1017-134212-3696229.log`; its logs `~/m2-runs/check-8a-33885a6.tgz` |
+
+## R1: a mixer strip runs with its track
+
+### In short
+
+- **The song's serial tail is now the sum and the master.** Each channel's pan and fader runs in its track's
+  partition. On p50 the song partition went from 154 nodes to 52 (49 adds, the master's stereo, gain and
+  limiter), and its time from 253 to 335 µs a block to 34 to 59. The critical path fell from 327 to 456 µs to
+  133 to 196, and 4 threads got about 15% faster by the mean (Linux, a busy server: information).
+- **Two small rules, no bit changed.** A node whose inputs all come from one other module, constants aside,
+  runs with that module. A constant or a notes lane does nothing in a block, so it joins no partition, and
+  reading it waits for nothing. 10 of 10 renders match; every 1-vs-N test passes.
+- **Shown red:** the four new checks, each by a small deliberate bug.
+
+### What was built (`c8ce2bc`)
+
+| File | What |
+|---|---|
+| `core/runtime/src/lib.rs` | `Exec::idle()` (a `Const` or `Notes` node); `labels()` takes the order and walks it: a plan node whose running inputs all have one other label takes it; an overlay follows its source again. A debug assert: no node that reads a fade moves (Decision D3) |
+| `core/runtime/src/parts.rs` | rule A in `Schedule::of` and `build` (D1): idle nodes get `NONE`, join no group, make no edge, and a label holding only constants makes no partition. The debug check names a running node with no partition |
+| `core/runtime/src/gauge.rs` | `Part.nodes` is the list of nodes, not their count (tests read which nodes the song keeps) |
+| `docs/architecture.md` | RENDER-2's words, and its *Today* |
+
+What stays in `song`: each `std:add` of the sum (it reads two tracks), the master's chain, a ducker that reads
+two tracks and what reads it (first-song's bass channel), and, in an edit's window, a strip that reads a fade.
+
+One behaviour to know: a node that reads only another track moves whole, an instrument included. A pad whose
+voices only capture the kick would run in the kick's partition. That is speed only, and no reference song does
+it; `every_read`'s pad now also captures a tremolo of its own, so its voices still read the kick across
+partitions (`reads_lists_every_read`).
+
+### Tests
+
+| Test | Where | Proves | Red by |
+|---|---|---|---|
+| `a_mixer_strip_runs_with_its_track` | `core/runtime/src/tests/parts.rs` | first-song's mixer, written as the compiler writes it: each fader and pan with its track, a follower of the kick with the kick, the ducker and the master in the song, constants in none; the same bits on 4 threads as 1 | `r1-no-strips` (rule B out: `song/kg` in `song`), `r1-const-parts` |
+| `constants_run_in_no_partition` | same | a song's constant read by a track makes no edge, so no depth split; written constants and a notes lane in no partition | `r1-const-parts` (rule A out: three partitions, not two) |
+| `the_song_tail_is_the_sum_and_the_master` | `core/play/tests/bit_identity.rs` | p16's song partition holds exactly 15 adds, the master's gain, limiter and stereo; only the master's fader is in the song | `r1-no-strips-p16` (17 faders in the song) |
+| `whole()`, the shared check | `core/runtime/src/tests/parts.rs` | every running node of the order in one partition, idle ones in none (D2) | `r1-whole` (source kernels left out: "node 1 is in one partition if it runs") |
+| `every_edge_goes_forward` | same | now with constants among 500 random graphs | — |
+
+Every existing test passes, the 1-vs-N ones included. `a_track_is_one_partition` and the window's label check
+accept "its module, or the one other module all its inputs come from".
+
+### Numbers (Linux, information only: PLAT-1)
+
+`m2-gates realtime --offline --reference 50 --sweep 1,4,8`, release, held on CCD1 (`taskset -c 8-15`). The
+server was busy: other tracks' builds and tests. The base alone first, then two pairs back to back: the base then
+R1, and R1 then the base. µs a block; the load is the 1-minute one as each run started.
+
+| | Base, alone (load 1.2) | Pair 1: base (10.5) | Pair 1: R1 (11.8) | Pair 2: R1 (15.4) | Pair 2: base (5.9) |
+|---|---|---|---|---|---|
+| The song's tail | 253 (154 nodes) | 297 (154 nodes) | **59 (52 nodes)** | **34 (52 nodes)** | 335 (154 nodes) |
+| Critical path (partitions alone) | 327 | 407 | **196** | **133** | 456 |
+| 1 thread, mean / p99 | 2,336 / 4,085 | 2,420 / 5,385 | 3,177 / 7,632 | 3,635 / 15,015 | 3,305 / 9,056 |
+| 4 threads, mean / p99 | 640 / 1,015 | 628 / 1,017 | **524** / 1,018 | **547** / 2,258 | 629 / 975 |
+| 8 threads, mean / p99 | 498 / 801 | 712 / 2,416 * | **294 / 509** | **285 / 557** | 659 / 2,546 * |
+| Bits | `81dd175f739e5d71`, 10 of 10 fixtures | the same | the same | the same | the same |
+
+\* waited for a CPU over 1,000 µs a block: other work on the same cores.
+
+- **What R1 changes changed, in both orders:** the song's tail fell from 253 to 335 µs to 34 to 59, the critical
+  path from 327 to 456 µs to 133 to 196. The spike estimated a tail of about 20 µs.
+- **4 threads: 524 to 547 µs against 628 to 640** by the mean (about 15% faster); **8 threads: 285 to 294 against
+  498 to 712.** The p99s moved with the load more than with R1.
+- The 1-thread lines moved with the load alone (the same base read 2,336 at load 1.2 and 3,305 at 5.9). Judge
+  nothing here: the owner's Mac does (PLAT-1).
+
+| Log | |
+|---|---|
+| Base alone | `~/m2-runs/logs/8a-r1-before-1017-175736-1430602.log` |
+| Pair 1 | `~/m2-runs/logs/8a-r1-pair-1017-180852-1511403.log` |
+| Pair 2 | `~/m2-runs/logs/8a-r1-pair2-1017-194502-2191968.log` |
+| The commit's check | `~/m2-runs/logs/8a-s3-r1-check-1017-180442-1482167.log` |
+| Red runs | `~/m2-runs/s8a/s3-red/r1-*.diff`, `.log` |
+
+## Slice 3: live playback on engine threads
+
+### In short
+
+- **Live playback renders on several cores now, with the same bits.** The device's own thread runs each block
+  on a pool, as exports do. Every pure fixture plays live on 2, 4 and 7 threads bit for bit as its export on
+  one; so do edits (a ghost and fades) and a resampled song.
+- **Workers are engine threads.** On a device they ask for real time at the device's period: on a Mac the
+  time-constraint policy and the output's audio workgroup; on Linux `SCHED_FIFO` within `RLIMIT_RTPRIO`. A pool
+  whose workers aren't all real time is dropped: one thread, and the player says why. This server refuses real
+  time, so a device here would play on one thread.
+- **When something goes wrong:** a task that panics on a worker crashes the player, as before. A worker that
+  never comes costs only speed. A stuck task puts the device's thread to sleep on a `Wake` (no CPU), and the
+  task's end wakes it.
+- **Nothing allocates.** Every worker is under the allocation trap from its start to its stop, through play, a
+  seek, an edit with a ghost and fades, Panic, stop and play: 0.
+- **Park by default.** Workers sleep after each callback (`BETWEEN`, one line to switch to `Spin`).
+- **Shown red: 20 bugs, each caught** by the test it was made for (a small deliberate bug each). Five small
+  tests have no red run (smoke tests and arithmetic), the two Mac tests wait for the owner's Mac, and one model
+  mutant (M7) can't fail by design.
+- **Run 20 times on this busy server** (load 2.3 to 52): 520 test runs, none failed.
+- **Main was merged twice:** at the start (`98620e7`), and once `next` landed (`739cfc6`): no conflict. The
+  player's hooks are on `next`'s shape (`start_in`, `silent_as`, `Shared.frames`, `freed`).
+
+### Commits
+
+| Commit | What |
+|---|---|
+| `98620e7` | Merge `main` (`8a6d9e1`, the HANDOFF) |
+| `c8ce2bc` | R1 (above) |
+| `b64aefe` | m2-os: a `Wake`, and engine threads that run as audio threads |
+| `6185578` | The pool's caller sleeps on a `Wake` while a task is stuck |
+| `739cfc6` | Merge `main` (`85b069a`): `next` is on main |
+| `5c449b6` | The player renders on engine threads: driven and silent |
+| `ab41e57` | On a device, engine threads are real time, in the device's workgroup on a Mac |
+| `2589c3c` | Debug builds run a player's workers under the allocation trap (as RENDER-28's new words say) |
+| this one | Contract: engine threads; build notes: R1 and slice 3 |
+
+### What was built
+
+| Where | What |
+|---|---|
+| `core/os/src/rt.rs` | `Wake` (ring, wait), `Group` (`of_output`, `none`, `period`, `recommends`, `missing`), `Joined`, `engine_thread`, `end_engine_thread`, `on_device_thread`; the time-constraint policy in Mach ticks, tested on Linux (D22) |
+| `core/os/src/linux/wake.rs`, `mac/wake.rs` | the wake: a futex on one word; a Mach semaphore. Each a file of its own, which a grep test reads whole (D20). A wait ended early waits again for what is left (D5) |
+| `core/os/src/linux/rt.rs` | `SCHED_FIFO`: the device's thread at `min(RLIMIT_RTPRIO, 10)`, workers one lower when the limit is 2 or more (D7); the soft limit raised to the hard one first; with a limit of 0 it still asks (root may) |
+| `core/os/src/mac/rt.rs` | the workgroup by the device's UID (`'uidd'`, then `'oswg'`; the default output's `'dOut'` when no UID), `os_workgroup_join` and `leave` with the token kept in the thread's own storage, `os_workgroup_max_parallel_threads`, `os_release`; `thread_policy_set` on `pthread_mach_thread_np(pthread_self())` (D11) |
+| `core/os/src/mac/cf.rs` | the CoreFoundation calls, declared once for the watcher and the workgroup (D22) |
+| `core/os/src/thread.rs`, `unix.rs` | `thread::foreign`: a closure on a thread made with `pthread_create`, an 8 MiB stack, its panic raised on the joiner (D20) |
+| `core/pool` | the caller dozes on a `Wake` (`Doze`: a flag, one more look, then the wait; a task's end and a worker leaving ring it); `Setup.doze` and `Setup.stop`; the caller's `dozes`, `rung`, `timeouts`; `Runner::trip` (`Panic`, `Hold`), `runs`, `tripped_on` (D15). The pool now depends on `m2-os`: `Cargo.lock` gained that one line |
+| `core/runtime/src/threads.rs` | `live(group, spin, mark)`: a live pool's `Setup` (wasmtime's thread state, the one mode, `engine_thread`, counted in `Joins`; `mark` for the trap); patience half a period (1.25 with spin), stuck and doze one period. `live_workers()`; `parse` and `from_env`, the one `M2_THREADS` parse (the editor's `Threads` uses it) |
+| `core/runtime/src/fpenv.rs` | public: `Canon`, `canon`, `is_canon`, `mode()`, and `flush_for_tests` (hidden) |
+| `core/play/src/engines.rs` | `LiveThreads`, `Between`, `BETWEEN`, `live_count` (D4's pure rule), `EngineThreads`, `Handover`, the report, `for_clock`, `for_device` (the first callback's period, D8; the workers' own reports decide, D4), `judged`, `after_callback`; in debug builds every worker under the allocation trap (`TRAP`) |
+| `core/play/src/lib.rs` | short hooks: `Msg::Threads`, `Gone::Runner`, the callback's `runner` and `between`, `take_held`'s handover, `fill` (the mode as found, `Canon`, `after_callback`), `Live::fill` on the runner, `silent_with`, `driven_on`, `Driver::runner`, `engine_threads()`; on a device, the pool after the stream plays, and `serve((stream, pool))` so the stream stops before the pool joins (D9) |
+| `core/play/src/alloc.rs` | `alloc::all()`: the process's count, for the workers' test |
+
+How a live block runs now:
+
+1. The callback enters the one mode, and keeps the device thread's own to put back at the end.
+2. A held handover (`Msg::Threads`) is taken between runs, like a replace: the runner swaps in, and the device's
+   thread sets itself up once (`on_device_thread`).
+3. Each block renders on the runner, as an export's does. A song with plugins renders on the device's thread.
+4. After the callback, `rest()` sends the workers to sleep (`Park`).
+
+### Where it differs from the plan
+
+| Plan | Built | Why |
+|---|---|---|
+| R1's rule B, then fades labelled again | rule B alone, and overlays follow their source again in the same walk | D3. An overlay of a node that moved would otherwise stay in a partition of its own |
+| `Group::real_time()`, the count rule in `m2-play` knowing real time | no `real_time()`; the workers report, `judged` keeps the pool or drops it | D4 |
+| The period from `'fsiz'` or the frames | the first callback's frames, which `next` already records (`Shared.frames`) | D8; so the record (slice 4) needn't move before the device commit |
+| `the_live_count_follows_the_rule`, red by "real time refused ignored" | the count is pure (D4), red by the workgroup's advice ignored (`s3-count-rec`); real time refused is `judged`'s test, red by `s3-rt-ignored` | D4 moved the check |
+| The silent player's runner put straight into the callback | handed over as a device's is, the first message on its queue | one path, so every silent player tests the handover |
+| A ring "after `left − 1` in `complete`" | right after `complete` returns, in `run_one` | the same order; `complete` stays the run state's own step |
+| `a_stuck_task_…`: rung ≥ 1 after the latch | its doze lasts an hour, so only a ring can end it; every doze was rung | a worker leaving the run rings it too; the unit test pins the task's own ring |
+| `a_stuck_caller_dozes_until_the_task_ends` on 4 threads | on 2 (one worker) | with idle workers, their leaving rings the caller and hides a missing ring at the task's end |
+| The edit for `edits_on_engine_threads_match_one_thread` | first-song with the duck made a drive, and the keys' channel playing the hats through a new delay | the first edit (a delay on the keys) never read a fade's old side across partitions, so `rt-fade-reads` passed it. Now the keys track plays out the window as ghosts that the song reads only through a fade |
+| `Gone::Runner(Box<Handover>)` with `Handover` private | `Handover` public, hidden, its fields private | D14 |
+
+### Tests
+
+Each shown red once by a small deliberate bug (`~/m2-runs/s8a/s3-red/<name>.diff` and `.log`, made by
+`mutate.py`, which puts the file back). No test has a time bound: each waits on counters under a 60 s watchdog.
+
+| Test | Where | Proves | Red by |
+|---|---|---|---|
+| `a_wake_rung_before_its_wait_returns_at_once` | `core/os/src/rt.rs` | a ring before an hour's wait: it returns at once | `os-wake-late` (the take looks for the wrong value: hangs, 60 s) |
+| `a_ring_from_another_thread_ends_the_wait` | same | an hour's wait ends at another thread's ring | `os-wake-nowake` (no `FUTEX_WAKE`: hangs) |
+| `an_unrung_wait_times_out` | same | false after its time; one ring is taken once | — |
+| `a_wake_works_on_threads_std_did_not_start` | same | both sides through `thread::foreign` | — (a smoke test) |
+| `a_group_without_a_device_has_no_workgroup_and_says_so` | same | `Group::none`: no advice, plain words, nothing asked | — (a smoke test) |
+| `the_time_constraint_policy_is_in_ticks` | same | 2,666,667 ns is 64,000 ticks at 125/3 | — |
+| `an_engine_thread_gets_fifo_or_says_why` | `core/os/src/linux/rt.rs` | refused here (`RLIMIT_RTPRIO` 0, not root): `real_time` false, not FIFO; the granted branch is a desktop's | `os-fifo-claims` |
+| `the_wake_never_blocks` | `core/os/tests/no_blocking.rs` | grep: no allocation, lock, thread-local, `park` or I/O in either wake file | `os-wake-alloc` (a `vec!` in `ring`) |
+| `an_engine_thread_has_the_time_constraint_policy`, `a_worker_joins_and_leaves_the_default_outputs_workgroup` | `core/os/src/mac/rt.rs` | read back with `thread_policy_get`; the default output's workgroup, advice ≥ 1, join and leave | the owner's check runs them |
+| `a_stuck_caller_dozes_until_the_task_ends` | `core/pool/src/tests.rs` | the caller dozes (an hour at most), the task's end rings it | `pool-no-ring` (hangs) |
+| `a_worker_that_never_comes_is_not_waited_for` | same | 1,000 random runs while worker 3 never starts | `pool-wait-woken` (hangs) |
+| `stop_runs_on_each_worker_before_it_exits` | same | each start has its stop after the drop | `pool-no-stop` |
+| `a_tripped_task_panics_on_a_worker_and_is_raised` | same | run 3's payload names a worker; the pool runs on | `pool-trip-outside` (the binary aborts) |
+| model `the_caller_is_woken` | `core/pool/tests/models.rs` | 5,000 cases, 2,243 dozes, every one rung, none timed out (10 s each) | M6 (`asleep` set after the second look: a doze timed out); M7 below |
+| `live_on_n_threads_is_the_export_on_1` | `core/play/tests/bit_identity.rs` | every pure fixture, whole and a second, live on 2, 4 and 7 threads: the export's bits; tasks on workers; reads across threads | `s3-live-one` (`Live::fill` ignores the runner) |
+| `edits_on_engine_threads_match_one_thread` | same | G7c's three no-op activations on first-song and p16 on 4 threads: the export's bits; an edit with ghosts and fades: 4 threads equal 1 | `rt-fade-reads` (a fade's old side out of `reads()`: the debug read check fires, the player crashes) |
+| `a_resampled_song_on_n_threads_matches_one_thread` | same | first-song on a 44.1 kHz device: 4 threads equal 1 | — |
+| `the_callback_mixes_in_the_one_mode` | `core/play/tests/engine_threads.rs` | a subnormal song through the resampler and a replace's fade, on a thread that flushes: the same bits; the thread's mode back after | `s3-no-canon` |
+| `a_panic_on_a_worker_crashes_the_player` | same | a worker's panic at block 50: crashed, silence after | `s3-drop-payload` |
+| `a_worker_that_never_comes_costs_only_speed` | same | 2 s of first-song while worker 3 never starts: the export's bits | `pool-wait-woken-live` (hangs: the timeout ends it) |
+| `a_stuck_task_puts_the_device_thread_to_sleep_on_its_wake` | same | the callback on a `pthread_create` thread; a held task: the device thread dozes (an hour at most), a ring ends it; one thread's bits | `pool-no-rings` (no ring at all: the watchdog) |
+| `a_player_let_go_joins_its_workers` | same | the silent player on 4 threads: 3 plain workers start, and are joined when it is let go | `s3-forget-pool` |
+| `engine_threads_never_allocate` | `core/play/tests/no_alloc_workers.rs` | 4 engine threads under the trap from their start: play, seek, an edit with a ghost and fades, `Player::panic()`, stop, play: 0 | `s3-alloc-task` (a `Vec` in each partition) |
+| `the_live_count_follows_the_rule` | `core/play/src/engines.rs` | asked; off a device 1; one L2, no more than the advice; this server 8 | `s3-count-rec` (the advice ignored) |
+| `a_device_pool_is_kept_only_when_every_worker_is_real_time` | same | `judged`: not started, cancelled, refused real time: one thread, said; outside the workgroup: kept, said | `s3-rt-ignored` |
+| `a_device_without_real_time_plays_on_one_thread` | same | `for_device` here: workers refused real time, so one thread, "refused real time"; no callback in a second: one thread | `s3-rt-ignored` |
+| `a_device_player_let_go_stops_its_stream_and_frees_its_engine_elsewhere` (extended) | `core/play/src/tests.rs` | with a pool beside the fake stream: the workers are joined after the let go | `s3-serve-forget` |
+
+**M7 survives, by design.** M7 rings before `left − 1`. The caller can then miss that ring, but the same
+worker rings again when it leaves the run, after the caller set its flag: a late wake, never a lost one. The
+model can't see lateness without a clock. The unit test catches a missing ring.
+
+Times (debug, Linux): the three live bit tests 31 s together (load 1.3; the fixtures alone 24 s), within the
+plan's 60 s; `engine_threads` 2 s; `no_alloc_workers` 1 s; the pool's models 6 s in release (2.3 s before; the new
+model 3.5 s), still under the check row's "10 s".
+
+### The live tests, run many times
+
+**20 rounds, none failed**, 19:18 to 19:45, while other tracks built and tested: the 1-minute load went from
+2.3 to 52 (round 11) and back to 4.7. Copies of the debug test binaries at `ab41e57`, so the worktree could
+build meanwhile (`~/m2-runs/s8a/s3-repeat/run.sh`; the copies, 1.7 GB, deleted after). Each round ran 26 tests:
+
+| Binary | Tests each round | Time each round |
+|---|---|---|
+| `bit_identity` | `live_on_n_threads_is_the_export_on_1`, `edits_on_engine_threads_match_one_thread`, `a_resampled_song_on_n_threads_matches_one_thread`, and the offline `every_pure_fixture_renders_the_same_bits_on_1_and_n_threads`, `p16_renders_the_same_bits_on_1_and_4_threads` | 62 to 138 s |
+| `engine_threads` | all 5 | about 2 s |
+| `no_alloc_workers` | `engine_threads_never_allocate` | about 1 s |
+| the runtime's `tests::parts` | all 15 (R1's among them) | about 2.4 s |
+
+That is 520 test runs, each comparing bits on 1 and N threads, or checking a worker, with no failure. Log:
+`~/m2-runs/logs/8a-s3-repeat-1017-191814-1978988.log`.
+
+### Checks
+
+- Each commit's check (`~/m2-runs/s8a/s2-check.sh`): the debug `m2`, 10 of 10 renders against
+  `e2e/renders.sha256`, the touched crates' tests, workspace clippy and the Mac lint (`--target
+  aarch64-apple-darwin`), rustfmt on new files. All green.
+- The merge of `next` checked alone (`m2-os`, `m2-pool`, `m2-runtime`, `m2-play`): green.
+- `Cargo.lock`: one build without `--locked` (`cargo check --offline -p m2-pool`) added only `m2-os` to
+  `m2-pool`'s entry. Every other build `--locked`.
+- Disk at the slice's end: `df -h /` 2.3 TB free; this worktree's `target/` 104 GB (kept for slice 4).
+
+| What | Log |
+|---|---|
+| R1 | `~/m2-runs/logs/8a-s3-r1-check-1017-180442-1482167.log` |
+| m2-os | `8a-s3-c3-check-1017-182007-1597241.log` |
+| the pool (and its models) | `8a-s3-c4-check-1017-182818-1663680.log` |
+| the merge of `next` | `8a-s3-merge-check2-1017-183509-1723714.log` (the first, `8a-s3-merge-check-…`, failed on a draft file of mine left beside it, not on the merge) |
+| the player | `8a-s3-c5-check2-1017-190806-1915032.log` (its Mac lint failed on `u64::from` of a `u64`; fixed, both lints and fmt run again green) |
+| the device | `8a-s3-c6-check-1017-191420-1955995.log` |
+| the trap on workers | `8a-s3-trap-check-1017-195235-2246146.log` |
+| the red runs | `~/m2-runs/s8a/s3-red/`; commit 5's in one run: `8a-s3-red5-1017-185720-1842344.log` |
+
+### For the lead
+
+- **The Mac code first runs on the owner's Mac** (risk L1): the Mach semaphore, the workgroup by UID, the
+  time-constraint policy. The Mac lint type-checks it; its two tests and G12's set-up line will say what failed.
+- **This server refuses real time.** So the device path's kept-pool branch, and a granted `SCHED_FIFO`, never
+  ran here; the refused branch did, end to end (`a_device_without_real_time_plays_on_one_thread`).
+- **Slice 4 next:** the record (`timing.rs`), G12 live, `ci/gates.txt`, and the owner's Mac script (D23). The
+  player already has what G12's set-up line needs: `Player::engine_threads()` (count, workers real time and
+  joined, the device thread's own report, what is missing, `between`, the device thread's FP register as found).
+- **The offline Mac sweep owed above** stays owed; D23 folds it into slice 4's `ci/sweep.sh`.
+
+### For the owner's Mac (what slice 3 needs)
+
+**In short:** once the lead has merged `8a` into `main`. About 15 minutes. Plugged in, lid open, other apps
+closed, in Terminal on the Mac itself. It plays nothing aloud. Paste back `~/m2-8a.txt`. Slice 4 adds the live
+run (G12) and puts every line into one script (`ci/sweep.sh`, D23); until then these lines stand alone.
+
+```sh
+cd ~/dev/suite2/music2 && git fetch && git switch main && git pull
+cargo test --locked --release -p m2-pool --features models 2>&1 | tail -5 | tee ~/m2-8a.txt
+cargo test --locked -p m2-os rt 2>&1 | grep -E '^test |test result' | tee -a ~/m2-8a.txt
+sysctl hw.model hw.perflevel0 hw.perflevel1 | tee -a ~/m2-8a.txt
+cargo run --locked --release -p m2-gates -- realtime --offline --reference 50 2>&1 | tee -a ~/m2-8a.txt
+```
+
+| Line | About | What it decides |
+|---|---|---|
+| models | 1 min | the pool's orderings and the caller's `Wake` on arm64 (M5 can only fail there). A FAIL: stop; the bug is fixed on Linux first |
+| `m2-os rt` | 2 min with the build | the Mac's own code, run for the first time: the Mach semaphore wake, the time-constraint policy read back, the default output's workgroup joined and left. A FAIL: that code is fixed before anything live is judged; until then a Mac's workers run outside the workgroup, and G12 will say "not the designed set-up" |
+| `sysctl` | seconds | `hw.perflevel0.cpusperl2` caps the live count: the P-cores of one L2 (4 on the M1 Pro, *estimate*) |
+| offline sweep | 13 min with the build | S = 1-thread p99 ÷ 4-thread p99 (D23): S under 2.5 is a note to the owner that the base M1 is at risk; 8 threads 10% or more faster than 4 means an export alone uses every P-core; a partition's p99 over 667 µs is the trigger for voices across threads; the executor's own cost over 40 µs a block is trimmed before G7f's next run. The live count comes from slice 4's live sweep, not from this |
 
 ## The Mac sweep (owed)
 
