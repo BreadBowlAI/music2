@@ -812,8 +812,7 @@ impl Player {
         let choice = choice.clone();
         let (ready_tx, ready) = bounded::<Result<Player>>(1);
         std::thread::Builder::new().name("m2-play".into()).spawn(move || {
-            let open = || -> Result<(cpal::Stream, Player, Receiver<Gone>)> {
-                let (device, fell_back) = outputs::pick(&choice).ok_or_else(|| anyhow!(outputs::NO_OUTPUT))?;
+            let open_on = |device: cpal::Device, fell_back: bool| -> Result<(cpal::Stream, Player, Receiver<Gone>)> {
                 let name = outputs::name_of(&device).unwrap_or_else(|| "output".into());
                 let supported = device.default_output_config()?;
                 let mut config = supported.config();
@@ -831,6 +830,17 @@ impl Player {
                 stream.play()?;
                 player.shared.device.store(true, Ordering::Relaxed);
                 Ok((stream, player, retired))
+            };
+            // The output chosen, else the default when it is gone or won't open (NX-S1).
+            let open = || {
+                let mut failed = anyhow!(outputs::NO_OUTPUT);
+                for (device, fell_back) in outputs::tries(&choice) {
+                    match open_on(device, fell_back) {
+                        Ok(opened) => return Ok(opened),
+                        Err(e) => failed = e,
+                    }
+                }
+                Err(failed)
             };
             match open() {
                 Ok((stream, player, retired)) => {

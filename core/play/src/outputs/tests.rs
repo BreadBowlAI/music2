@@ -10,7 +10,28 @@ fn silent(names: &[&str]) -> Audio {
 }
 
 fn output(name: &str, default: bool) -> Output {
-    Output { name: name.into(), default, rate: 48_000, frames: Some((64, 2048)) }
+    Output { id: format!("coreaudio:{name}"), name: name.into(), default, rate: 48_000, frames: Some((64, 2048)) }
+}
+
+/// One card as ALSA lists it, in its order: the raw `hw:` and `plughw:` first, then the card's
+/// shared PCM (`sysdefault:`), its other plugins, an HDMI device, and cpal's numbered `hw:` again.
+fn alsa_card() -> Vec<(String, String)> {
+    let analog = "HDA Intel PCH, ALC897 Analog";
+    let hdmi = "HDA Intel PCH, HDMI 0";
+    [
+        ("alsa:pipewire", "PipeWire Sound Server"),
+        ("alsa:hw:CARD=PCH,DEV=0", analog),
+        ("alsa:plughw:CARD=PCH,DEV=0", analog),
+        ("alsa:sysdefault:CARD=PCH", analog),
+        ("alsa:front:CARD=PCH,DEV=0", analog),
+        ("alsa:dmix:CARD=PCH,DEV=0", analog),
+        ("alsa:hw:CARD=PCH,DEV=3", hdmi),
+        ("alsa:hdmi:CARD=PCH,DEV=0", hdmi),
+        ("alsa:hw:CARD=0,DEV=0", analog),
+    ]
+    .into_iter()
+    .map(|(id, name)| (id.to_string(), name.to_string()))
+    .collect()
 }
 
 /// The player's buffer once its clock called back: None if it never did within a second.
@@ -77,4 +98,51 @@ fn a_player_let_go_frees_its_device() {
     assert!(freed.wait(Duration::from_secs(1)), "free once it is let go");
     let (driven, _driver) = Player::driven(48_000);
     assert!(driven.freed().is_free(), "a driven player has no device");
+}
+
+// NX-S1: a name is listed once, from the device a person means by it: on ALSA the card's shared
+// PCM, never its raw `hw:` (which one stream holds alone), whether that is busy or idle. Only the
+// best way in is opened to read its config, and the next only if it won't open. The default is
+// known by its id.
+#[test]
+fn an_output_is_listed_from_the_device_a_person_means() {
+    let seen = alsa_card();
+    for busy in [true, false] {
+        let mut opened = vec![];
+        let rows = listed(&seen, Some("alsa:pipewire"), |i| {
+            opened.push(seen[i].0.clone());
+            let raw = seen[i].0.starts_with("alsa:hw:") || seen[i].0.starts_with("alsa:plughw:");
+            (!(busy && raw)).then_some((48_000, Some((64, 4096))))
+        });
+        let ids: Vec<(&str, &str, bool)> = rows.iter().map(|o| (o.id.as_str(), o.name.as_str(), o.default)).collect();
+        assert_eq!(
+            ids,
+            [
+                ("alsa:pipewire", "PipeWire Sound Server", true),
+                ("alsa:sysdefault:CARD=PCH", "HDA Intel PCH, ALC897 Analog", false),
+                ("alsa:hdmi:CARD=PCH,DEV=0", "HDA Intel PCH, HDMI 0", false),
+            ],
+            "the card's raw hw: {}",
+            if busy { "busy" } else { "idle" }
+        );
+        assert_eq!(opened, ["alsa:pipewire", "alsa:sysdefault:CARD=PCH", "alsa:hdmi:CARD=PCH,DEV=0"], "only the best ways in are opened");
+    }
+    // A shared PCM that won't open: the next way in, by rank, never the raw one while another opens.
+    let rows = listed(&seen, None, |i| (!seen[i].0.contains("sysdefault")).then_some((44_100, None)));
+    assert_eq!(rows[1].id, "alsa:front:CARD=PCH,DEV=0");
+    // Elsewhere (CoreAudio, WASAPI) each device is its own name: every one listed, as it is.
+    let mac = vec![("coreaudio:BuiltIn".to_string(), "MacBook Pro Speakers".to_string()), ("coreaudio:USB".to_string(), "Scarlett 2i2".to_string())];
+    let rows = listed(&mac, Some("coreaudio:USB"), |_| Some((48_000, None)));
+    let ids: Vec<(&str, bool)> = rows.iter().map(|o| (o.id.as_str(), o.default)).collect();
+    assert_eq!(ids, [("coreaudio:USB", true), ("coreaudio:BuiltIn", false)]);
+}
+
+// NX-S1: a start opens the output chosen, by its id; the default when it is gone or won't open,
+// saying so (fell back); only the default when none is chosen.
+#[test]
+fn a_start_tries_the_output_chosen_then_the_default() {
+    assert_eq!(in_order(true, Some("USB"), Some("Speakers")), [("USB", false), ("Speakers", true)], "chosen, then the default if it won't open");
+    assert_eq!(in_order(true, None, Some("Speakers")), [("Speakers", true)], "chosen and gone");
+    assert_eq!(in_order(false, None, Some("Speakers")), [("Speakers", false)], "none chosen");
+    assert_eq!(in_order::<&str>(true, None, None), [], "no output at all");
 }

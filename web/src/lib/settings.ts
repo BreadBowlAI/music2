@@ -15,8 +15,9 @@ declare module "./graph" {
   }
 }
 
-/** A sound output there is: its own rate, and the buffer sizes it takes, when it says. */
+/** A sound output there is: its id (what a choice names), its name, its own rate, and the buffer sizes it takes, when it says. */
 export interface Output {
+  id: string;
   name: string;
   default: boolean;
   rate: number;
@@ -28,7 +29,7 @@ export interface OutputNow {
   device: string;
   rate: number;
   frames: number | null;
-  /** The output chosen is gone, so this is the default. */
+  /** The output chosen is gone or won't open, so this is the default. */
   fell_back: boolean;
   /** No output started: the song plays silently. */
   no_output: boolean;
@@ -36,8 +37,8 @@ export interface OutputNow {
 
 /** The settings as the server answers them (`GET /api/settings`). */
 export interface Settings {
-  /** What is chosen: null is the system's default. */
-  output: { device: string | null; frames: number | null };
+  /** What is chosen: an output's id and its name (null: the system's default), and a buffer size (null: the device's). */
+  output: { device: string | null; name?: string | null; frames: number | null };
   outputs: Output[];
   /** Null while no song has started a player. */
   now: OutputNow | null;
@@ -53,7 +54,7 @@ export interface Settings {
 }
 
 export interface SettingsChange {
-  output?: { device: string | null; frames: number | null };
+  output?: { device: string | null; name?: string | null; frames: number | null };
   songs?: string | null;
 }
 

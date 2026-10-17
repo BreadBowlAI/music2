@@ -1,9 +1,15 @@
 //! The sound outputs there are, and which one a player opens (Settings, gaps #31; lane C of the
 //! next track).
 //!
-//! A [`Choice`] names an output and a buffer size; [`Player::start_on`](crate::Player::start_on)
-//! opens it. A chosen output that is gone plays on the system's default instead, and says so
-//! ([`Player::fell_back`](crate::Player::fell_back)). A buffer size the device can't take is its default.
+//! A [`Choice`] names an output by its id and a buffer size; [`Player::start_on`](crate::Player::start_on)
+//! opens that very device. A chosen output that is gone, or won't open, plays on the system's
+//! default instead, and says so ([`Player::fell_back`](crate::Player::fell_back)). A buffer size
+//! the device can't take is its default.
+//!
+//! An output's name is for people, never an identity: ALSA lists many PCMs under one card's name
+//! (`hw:`, `plughw:`, `sysdefault:`, `front:`, `dmix:` …). Each name is listed once, from the PCM a
+//! person means by it: the default or a sound server's, else the card's shared one, never its raw
+//! `hw:` while another opens (NX-S1).
 //!
 //! `M2_AUDIO` picks how this process meets the sound hardware ([`Audio`]): the devices (unset);
 //! none (`none`, the tests' and suites' seam: a silent player on a clock, which lists the outputs
@@ -13,17 +19,19 @@
 use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::{BufferSize, SupportedBufferSize};
 
-/// An output device: its name, whether it is the system's default now, its own rate, and the
-/// buffer sizes it takes, in frames, when it says.
+/// An output device: its id (what a [`Choice`] names), its name as people know it, whether it is
+/// the system's default now, its own rate, and the buffer sizes it takes, in frames, when it says.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Output {
+    pub id: String,
     pub name: String,
     pub default: bool,
     pub rate: u32,
     pub frames: Option<(u32, u32)>,
 }
 
-/// The output a player opens and its buffer size, in frames: None is the system's default.
+/// The output a player opens, by its id ([`Output::id`]), and its buffer size, in frames: None is
+/// the system's default.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Choice {
     pub device: Option<String>,
@@ -35,7 +43,8 @@ pub struct Choice {
 pub(crate) enum Audio {
     /// The OS's devices.
     Device,
-    /// No device: a silent player, and these outputs listed (the first is the default).
+    /// No device: a silent player, and these outputs listed (the first is the default), each
+    /// its name its id.
     Silent(Vec<String>),
     /// No device starts (a test seam).
     Fail,
@@ -68,16 +77,16 @@ impl Audio {
             Audio::Silent(names) => names
                 .iter()
                 .enumerate()
-                .map(|(i, name)| Output { name: name.clone(), default: i == 0, rate: SILENT_RATE, frames: Some(SILENT_FRAMES) })
+                .map(|(i, name)| Output { id: name.clone(), name: name.clone(), default: i == 0, rate: SILENT_RATE, frames: Some(SILENT_FRAMES) })
                 .collect(),
             Audio::Fail => vec![],
         }
     }
 
-    /// The default output's name, if there is one now.
+    /// The default output's id, if there is one now.
     pub(crate) fn default_output(&self) -> Option<String> {
         match self {
-            Audio::Device => cpal::default_host().default_output_device().and_then(|d| name_of(&d)),
+            Audio::Device => cpal::default_host().default_output_device().and_then(|d| id_of(&d)),
             Audio::Silent(names) => names.first().cloned(),
             Audio::Fail => None,
         }
@@ -102,7 +111,7 @@ pub fn outputs() -> Vec<Output> {
     Audio::from_env().outputs()
 }
 
-/// The default output's name, if there is one now: what the server watches while no output
+/// The default output's id, if there is one now: what the server watches while no output
 /// would start (gaps #13).
 pub fn default_output() -> Option<String> {
     Audio::from_env().default_output()
@@ -118,24 +127,66 @@ pub(crate) fn name_of(device: &cpal::Device) -> Option<String> {
     device.description().ok().map(|d| d.name().to_string())
 }
 
-/// The device's output devices, each once, the default first.
+/// A device's id, as a [`Choice`] keeps it: `alsa:sysdefault:CARD=PCH`, `coreaudio:<its UID>`.
+pub(crate) fn id_of(device: &cpal::Device) -> Option<String> {
+    device.id().ok().map(|id| id.to_string())
+}
+
+/// What a device that opens says of itself: its rate, and the buffer sizes it takes.
+type Opens = (u32, Option<(u32, u32)>);
+
+/// The device's output devices, each name once, the default first.
 fn device_outputs() -> Vec<Output> {
     let host = cpal::default_host();
-    let default = host.default_output_device().and_then(|d| name_of(&d));
-    let mut out: Vec<Output> = vec![];
-    for device in host.output_devices().into_iter().flatten() {
-        let Some(name) = name_of(&device) else { continue };
-        if out.iter().any(|o| o.name == name) {
-            continue;
-        }
-        let Ok(config) = device.default_output_config() else { continue };
+    let default = host.default_output_device().and_then(|d| id_of(&d));
+    let devices: Vec<(String, String, cpal::Device)> =
+        host.output_devices().into_iter().flatten().filter_map(|d| Some((id_of(&d)?, name_of(&d)?, d))).collect();
+    let seen: Vec<(String, String)> = devices.iter().map(|(id, name, _)| (id.clone(), name.clone())).collect();
+    listed(&seen, default.as_deref(), |i| {
+        let config = devices[i].2.default_output_config().ok()?;
         let frames = match *config.buffer_size() {
             SupportedBufferSize::Range { min, max } => Some((min, max)),
             SupportedBufferSize::Unknown => None,
         };
-        out.push(Output { default: default.as_ref() == Some(&name), name, rate: config.sample_rate(), frames });
+        Some((config.sample_rate(), frames))
+    })
+}
+
+/// The outputs of the devices `seen` (each `(id, name)`, as the OS lists them), each name once,
+/// the default (`default`, an id) first: of the devices a name has, the one a person means
+/// ([`rank`]) whose config reads (`opens`, which opens the device: tried best first, and no
+/// further than the first that opens). Devices nobody means as an output aren't listed.
+fn listed(seen: &[(String, String)], default: Option<&str>, mut opens: impl FnMut(usize) -> Option<Opens>) -> Vec<Output> {
+    let mut names: Vec<&str> = vec![];
+    for (id, name) in seen {
+        if rank(id).is_some() && !names.contains(&name.as_str()) {
+            names.push(name);
+        }
+    }
+    let mut out = vec![];
+    for name in names {
+        let mut ways: Vec<(u8, usize)> = seen.iter().enumerate().filter(|(_, (_, n))| n == name).filter_map(|(i, (id, _))| Some((rank(id)?, i))).collect();
+        ways.sort_by_key(|&(r, _)| r);
+        if let Some((i, (rate, frames))) = ways.into_iter().find_map(|(_, i)| Some((i, opens(i)?))) {
+            let id = seen[i].0.clone();
+            out.push(Output { default: default == Some(id.as_str()), id, name: name.to_string(), rate, frames });
+        }
     }
     default_first(out)
+}
+
+/// How much a device is what a person means by its name, best first; None: not an output a person
+/// means. Only ALSA lists more than one device a name: its default and sound servers' PCMs, then
+/// a card's shared ones, its other plugins, and last its raw `plughw:` and `hw:` (which one stream
+/// holds alone).
+fn rank(id: &str) -> Option<u8> {
+    let Some(pcm) = id.strip_prefix("alsa:") else { return Some(0) };
+    match pcm.split(':').next().unwrap_or(pcm) {
+        "default" | "sysdefault" | "pipewire" | "pulse" | "jack" => Some(0),
+        "plughw" => Some(2),
+        "hw" => Some(3),
+        _ => Some(1),
+    }
 }
 
 /// The default first; the rest as the OS lists them.
@@ -144,17 +195,18 @@ fn default_first(mut out: Vec<Output>) -> Vec<Output> {
     out
 }
 
-/// The device `choice` names, or the default when it is gone (true: it fell back), or none.
-pub(crate) fn pick(choice: &Choice) -> Option<(cpal::Device, bool)> {
+/// The devices a start tries, in order, each with whether it falls back: the one `choice` names
+/// (found by its id), then the default, when that one is gone or won't open; only the default
+/// when it names none.
+pub(crate) fn tries(choice: &Choice) -> Vec<(cpal::Device, bool)> {
     let host = cpal::default_host();
-    if let Some(want) = &choice.device {
-        let found = host.output_devices().into_iter().flatten().find(|d| name_of(d).as_deref() == Some(want.as_str()));
-        if let Some(d) = found {
-            return Some((d, false));
-        }
-        return host.default_output_device().map(|d| (d, true));
-    }
-    host.default_output_device().map(|d| (d, false))
+    let chosen = choice.device.as_deref().and_then(|id| host.device_by_id(&id.parse().ok()?));
+    in_order(choice.device.is_some(), chosen, host.default_output_device())
+}
+
+/// [`tries`]' order: `chosen` (when one is `named`), then `default`, falling back.
+fn in_order<D>(named: bool, chosen: Option<D>, default: Option<D>) -> Vec<(D, bool)> {
+    chosen.map(|d| (d, false)).into_iter().chain(default.map(|d| (d, named))).collect()
 }
 
 /// `frames` when the device takes it (`range`, when it says), else its default.

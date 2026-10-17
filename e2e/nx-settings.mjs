@@ -181,6 +181,10 @@ check(menuBad.length === 0, `the open menu passes the taste lint: ${menuBad.slic
 await pick(page, "settings-output", "Headphones");
 const after = (await s.api("settings")).json;
 check(after?.output?.device === "Headphones" && after?.now?.device === "Headphones", `Headphones chosen: the server plays there (${after?.now?.device}), and keeps it (${after?.output?.device})`);
+check(
+  JSON.stringify(after?.outputs?.map((o) => [o.id, o.name])) === JSON.stringify([["Speakers", "Speakers"], ["Headphones", "Headphones"]]) && after?.output?.name === "Headphones",
+  `each output has an id, which the choice keeps, with its name (NX-S1): ${JSON.stringify(after?.output)}`,
+);
 check(await until(async () => /^Headphones · 48 kHz/.test((await text(page, "[data-testid=settings-now]")) ?? "")), `the Now row says so: ${await text(page, "[data-testid=settings-now]")}`);
 check((await text(page, "[data-testid=settings-output]")) === "Headphones", `the output button says Headphones: ${await text(page, "[data-testid=settings-output]")}`);
 check((await toasts(page)).length === 0, `no toast: a direct change (X21): ${JSON.stringify(await toasts(page))}`);
@@ -257,7 +261,7 @@ await page.keyboard.press("Escape");
 
 // Kept in the HOME's settings file, and by a reload.
 const kept = readJson(`${HOME}/.music2/settings.json`);
-check(kept?.output?.device === "Headphones" && kept?.output?.frames === 512 && kept?.songs === songs, `.music2/settings.json has all three: ${JSON.stringify(kept)}`);
+check(kept?.output?.device === "Headphones" && kept?.output?.name === "Headphones" && kept?.output?.frames === 512 && kept?.songs === songs, `.music2/settings.json has all three: ${JSON.stringify(kept)}`);
 await page.reload({ waitUntil: "domcontentloaded" });
 await page.waitForSelector("[data-testid=timeline]", { timeout: 10000 });
 await key(page, "Meta+Comma");

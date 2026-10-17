@@ -111,14 +111,14 @@ function Dialog({ onClose }: { onClose: () => void }) {
     onDefault: () => (document.activeElement === folderField.current && typed !== null ? void applyTyped() : onClose()),
   });
 
-  const output = s?.output ?? { device: null, frames: null };
+  const output = s?.output ?? { device: null, name: null, frames: null };
   const outputs = s?.outputs ?? [];
   const def = outputs.find((o) => o.default) ?? null;
-  // The device chosen as listed now; a name not listed is gone.
-  const chosen = output.device === null ? def : (outputs.find((o) => o.name === output.device) ?? null);
+  // The device chosen as listed now, by its id (a name can be many devices'); one not listed is gone.
+  const chosen = output.device === null ? def : (outputs.find((o) => o.id === output.device) ?? null);
   const gone = output.device !== null && !chosen;
-  const deviceLabel = (name: string | null) =>
-    name === null ? `System default${def ? ` (${def.name})` : ""}` : `${name}${outputs.some((o) => o.name === name) ? "" : " (not connected)"}`;
+  const deviceLabel = (id: string | null) =>
+    id === null ? `System default${def ? ` (${def.name})` : ""}` : (outputs.find((o) => o.id === id)?.name ?? `${output.name ?? id} (not connected)`);
   // The buffers the device takes, at its rate; a gone one plays on the default.
   const device = chosen ?? def;
   const rate = device?.rate || s?.now?.rate || 48_000;
@@ -154,9 +154,9 @@ function Dialog({ onClose }: { onClose: () => void }) {
               label={deviceLabel(output.device)}
               disabled={!s || exporting || busy}
               rows={[
-                { key: "default", label: deviceLabel(null), on: output.device === null, pick: () => void change({ output: { ...output, device: null } }) },
+                { key: "default", label: deviceLabel(null), on: output.device === null, pick: () => void change({ output: { ...output, device: null, name: null } }) },
                 ...(gone ? [{ key: output.device!, label: deviceLabel(output.device), on: true, pick: () => {} }] : []),
-                ...outputs.map((o) => ({ key: o.name, label: o.name, on: output.device === o.name, pick: () => void change({ output: { ...output, device: o.name } }) })),
+                ...outputs.map((o) => ({ key: o.id, label: o.name, on: output.device === o.id, pick: () => void change({ output: { ...output, device: o.id, name: o.name } }) })),
               ]}
             />
           </Row>
@@ -266,7 +266,7 @@ function nowWords(s: Settings | null) {
   if (!now) return "Nothing plays yet: it starts when a song opens.";
   if (now.no_output) return "No sound output: the song plays silently.";
   const parts = [now.device, rateWords(now.rate), ...(now.frames ? [bufferWords(now.frames, now.rate)] : [])];
-  return `${parts.join(" · ")}${now.fell_back ? " (the output chosen isn't connected)" : ""}`;
+  return `${parts.join(" · ")}${now.fell_back ? " (the output chosen can't be used now)" : ""}`;
 }
 
 /** A row of the window: its label on the left, what it sets on the right. */

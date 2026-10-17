@@ -2,10 +2,12 @@
 //! with no undo. The Settings window changes them, and each change applies at once.
 //!
 //! ```json
-//! {"output": {"device": "Headphones", "frames": 256}, "songs": "/Users/me/Songs"}
+//! {"output": {"device": "coreaudio:AppleUSBAudioEngine:…", "name": "Scarlett 2i2", "frames": 256}, "songs": "/Users/me/Songs"}
 //! ```
-//! - `output`: the sound output by name and its buffer size in samples; null for each is the
-//!   system's default. A device that is gone plays on the default.
+//! - `output`: the sound output by its id (`m2_play::Output::id`), its name as it was listed when
+//!   chosen (shown while it isn't connected), and its buffer size in samples; null for the device
+//!   and the size is the system's default. A device that is gone, or won't open, plays on the
+//!   default.
 //! - `songs`: where new songs go (and Exports with them); null is `~/Music/music2`.
 //!
 //! Written whole, through a temporary file renamed over it, one change at a time. A file that
@@ -33,8 +35,12 @@ pub struct Kept {
 /// The sound output chosen, and its buffer size: None for each is the system's default.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutputKept {
+    /// Its id: what opens it, never its name (NX-S1).
     #[serde(default)]
     pub device: Option<String>,
+    /// Its name as it was listed when chosen: what Settings says of it while it isn't connected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(default)]
     pub frames: Option<u32>,
 }
@@ -122,14 +128,14 @@ mod tests {
         let file = t.0.join(".music2/settings.json");
         let s = Settings::new(file.clone());
         assert_eq!(s.read(), Kept::default(), "no file: the defaults");
-        s.change(|k| k.output.device = Some("Headphones".into())).unwrap();
+        s.change(|k| (k.output.device, k.output.name) = (Some("coreaudio:USB".into()), Some("Headphones".into()))).unwrap();
         s.change(|k| k.output.frames = Some(256)).unwrap();
         s.change(|k| k.songs = Some("/Users/me/Songs".into())).unwrap();
         let again = Settings::new(file.clone()).read();
-        assert_eq!(again.output.choice(), Choice { device: Some("Headphones".into()), frames: Some(256) });
+        assert_eq!(again.output.choice(), Choice { device: Some("coreaudio:USB".into()), frames: Some(256) }, "opened by its id");
         assert_eq!(again.songs.as_deref(), Some(Path::new("/Users/me/Songs")));
         let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-        assert_eq!(json, serde_json::json!({"output": {"device": "Headphones", "frames": 256}, "songs": "/Users/me/Songs"}));
+        assert_eq!(json, serde_json::json!({"output": {"device": "coreaudio:USB", "name": "Headphones", "frames": 256}, "songs": "/Users/me/Songs"}));
         // Back to the defaults: nulls, and nothing else is left in the folder.
         s.change(|k| *k = Kept::default()).unwrap();
         assert_eq!(s.read(), Kept::default());
