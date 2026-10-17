@@ -14,7 +14,9 @@
 //!   meanwhile plays at the dragged tempo, and nothing reaches the engine but an activation.
 //!   `Timing` (seek, the loop, the status's beat and `bpm`) follows the map that plays.
 //! - **commit** is one Tx writing `data/arrangement.json` (8b.2's builder, as `Graph::tempo` runs
-//!   it); refused, 409, when the arrangement changed since the drag began (X24).
+//!   it); refused, 409, when the arrangement changed since the drag began (X24). Until it lands,
+//!   every settle plays the value let go, so a job ahead of it never plays the old tempo; once it
+//!   lands, the accepted arrangement is that value.
 //! - **cancel**, an idle TTL (10 s; the page sends a keepalive every 2 s) and the window closing
 //!   end it: the next settle plays the accepted arrangement again.
 //! - **A song with an audio lane** previews nothing (Q23's fallback, X3): its renders are timed in
@@ -61,7 +63,7 @@ pub(super) struct TempoLease {
     previews: u64,
     /// An actor job is queued or running for it.
     queued: bool,
-    /// Its commit is on the actor: settles play the accepted arrangement.
+    /// Its commit is on the actor: settles play the value let go (`bpm`) until it lands.
     closing: bool,
     /// A lane of what plays is audio: nothing is previewed (Q23).
     silent: bool,
@@ -141,10 +143,11 @@ fn retempo(a: &Arrangement, at: f64, bpm: f64) -> Arrangement {
 }
 
 /// What a settle of project `token` plays in place of the accepted arrangement, and the value it
-/// carries: the live drag's, unless it is being written, plays nothing new, or a lane plays
-/// `audio` (Q23's fallback: heard on release).
+/// carries: the drag's, unless it plays nothing new or a lane plays `audio` (Q23's fallback: heard
+/// on release). A drag being written plays the value let go until its commit lands; then the
+/// accepted arrangement is that value, so nothing is played in its place.
 pub(super) fn wanted(cp: &mut ControlPlane, token: u64, accepted: &Revision, audio: bool) -> Option<(Arc<Arrangement>, f64)> {
-    let l = cp.tempo.live.as_mut().filter(|l| l.token == token && !l.closing)?;
+    let l = cp.tempo.live.as_mut().filter(|l| l.token == token)?;
     l.silent = audio;
     let a = retempo(&accepted.project.arrangement, l.at, l.bpm);
     (!audio && a != accepted.project.arrangement).then(|| (Arc::new(a), l.bpm))
@@ -298,7 +301,8 @@ impl Graph {
             if l.closing {
                 bail!("this tempo drag is being written");
             }
-            l.closing = true;
+            // What was let go plays on until the commit lands.
+            (l.closing, l.bpm) = (true, bpm);
             (l.token, l.at, accepted.project.arrangement != *l.began_on)
         };
         if changed {
@@ -307,7 +311,7 @@ impl Graph {
             self.tempo_job(token);
             return Ok(TempoCommitted::Changed(why.into()));
         }
-        // Its settle plays the accepted arrangement: the lease is closing.
+        // Its settle finds the accepted arrangement holds the value let go: nothing in its place.
         let done = self.tempo(token, at, Some(bpm), false, false, false);
         let mut cp = self.inner.control.lock();
         if cp.tempo.live.as_ref().is_some_and(|l| l.id == lease) {
@@ -315,6 +319,11 @@ impl Graph {
                 Ok(_) => "This tempo drag was written.".to_string(),
                 Err(e) => format!("{e:#}"),
             });
+        }
+        drop(cp);
+        // Not written: the accepted tempo plays again.
+        if done.is_err() {
+            self.tempo_job(token);
         }
         done.map(TempoCommitted::Done)
     }

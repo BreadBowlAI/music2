@@ -270,6 +270,62 @@ fn a_new_plan_carries_the_preview() {
     assert_eq!(d.graph.lane_leases().len(), 1);
 }
 
+// WRITE-22a: let go while a change elsewhere waits on the actor: a fresh engine it makes (another
+// sample rate, as a new player or a refused activation does: nothing is kept from what played)
+// plays the note where it was let go, not where it was, until the commit lands (NX-S3).
+#[test]
+fn a_fresh_engine_before_the_commit_plays_what_was_let_go() {
+    let mut d = Drag::new();
+    let lease = d.begin(e_at(5.0)).lease.unwrap();
+    d.fill(2);
+    // The actor pauses after the first settle's sends (the rate change's), before the commit's Tx.
+    let (paused_tx, paused) = std::sync::mpsc::channel::<()>();
+    let (go, go_rx) = std::sync::mpsc::channel::<()>();
+    let mut once = true;
+    d.graph.inspect(move |a| {
+        a.between_phases = Some(Box::new(move |_| {
+            if std::mem::take(&mut once) {
+                paused_tx.send(()).unwrap();
+                let _ = go_rx.recv();
+            }
+        }))
+    });
+    let held = d.graph.hold();
+    d.fixture.put("music2.toml", &std::fs::read_to_string(d.fixture.0.join("music2.toml")).unwrap().replace("48000", "44100"));
+    let (graph, driver) = (&d.graph, &mut d.driver);
+    let fill = |driver: &mut Driver| {
+        let mut buf = [0.0f32; 256];
+        driver.fill(&mut buf, 2);
+        drop(driver.drain_retired());
+    };
+    let ons = std::thread::scope(|s| {
+        let polled = s.spawn(|| graph.poll());
+        std::thread::sleep(Duration::from_millis(100));
+        let commit = s.spawn(|| graph.lane_commit(lease, e_at(5.0)));
+        eventually("the commit is on its way", || graph.lane_leases().first().is_some_and(|l| l.state == "committing"));
+        std::thread::sleep(Duration::from_millis(50));
+        drop(held);
+        paused.recv().unwrap();
+        // The fresh engine was sent, and the commit waits: what plays now?
+        fill(driver);
+        fill(driver);
+        assert_eq!(driver.engine().unwrap().rate(), 44_100, "the fresh engine plays");
+        driver.engine().unwrap().current_mut().unwrap().trace(4096);
+        while graph.status().beat < 6.0 {
+            fill(driver);
+        }
+        let entries = driver.engine().unwrap().current().unwrap().trace_entries();
+        // At 44.1 kHz, 22050 frames a beat.
+        let ons: Vec<f64> = entries.iter().filter(|e| e.kind == TraceKind::On { pitch: E2 }).map(|e| e.transport as f64 / 22_050.0).collect();
+        go.send(()).unwrap();
+        assert!(polled.join().unwrap());
+        assert!(matches!(commit.join().unwrap().unwrap(), Answer::Done(_)));
+        ons
+    });
+    assert_eq!(ons, vec![5.0], "the fresh engine plays the note where it was let go");
+    assert!(d.fixture.read("data/bass/notes.json").contains("\"start\": 5"));
+}
+
 // WRITE-22a: a preview that needs more room than its lane's scheduler has isn't heard until the
 // commit, whose new plan grows the lane.
 #[test]

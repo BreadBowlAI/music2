@@ -225,6 +225,58 @@ fn a_tempo_commit_is_one_tx() {
     assert_eq!(d.graph.status().bpm, Some(120.0), "one undo step back");
 }
 
+// RENDER-27a: let go while another job waits on the actor: every settle until the commit lands
+// plays the value let go, never the old tempo, and the commit's own plays it too (NX-S3).
+#[test]
+fn a_settle_before_the_commit_plays_the_value_let_go() {
+    let mut d = Drag::new();
+    let lease = d.begin().lease;
+    d.graph.tempo_update(lease, Some(1), 150.0).unwrap();
+    d.heard(150.0);
+    let played: Arc<parking_lot::Mutex<Vec<Option<f64>>>> = Arc::default();
+    let seen = played.clone();
+    d.graph.inspect(move |a| a.between_phases = Some(Box::new(move |inner: &Inner| seen.lock().push(inner.status().bpm))));
+    let held = d.graph.hold();
+    // Dragged on to 160: its job waits behind the busy session.
+    d.graph.tempo_update(lease, Some(2), 160.0).unwrap();
+    let graph = &d.graph;
+    std::thread::scope(|s| {
+        // Let go: the commit's Tx waits behind the drag's job.
+        let commit = s.spawn(|| graph.tempo_commit(lease, 160.0));
+        eventually("the commit is on its way", || graph.tempo_leases().first().is_some_and(|l| l.state == "committing"));
+        std::thread::sleep(Duration::from_millis(50));
+        drop(held);
+        assert!(matches!(commit.join().unwrap().unwrap(), TempoCommitted::Done(_)));
+    });
+    let played = played.lock().clone();
+    assert!(played.len() >= 2 && played.iter().all(|b| *b == Some(160.0)), "each settle played the value let go: {played:?}");
+    assert!(d.fixture.read("data/arrangement.json").contains("160"));
+}
+
+// RENDER-27a: a commit the disk refuses ends the drag, and the accepted tempo plays again.
+#[test]
+fn a_tempo_commit_that_fails_goes_back() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut d = Drag::new();
+    let lease = d.begin().lease;
+    d.graph.tempo_update(lease, Some(1), 150.0).unwrap();
+    d.heard(150.0);
+    // `.music2/tx/` read-only, as a full or failing disk refuses a commit's journal.
+    let tx = d.fixture.0.join(".music2/tx");
+    std::fs::create_dir_all(&tx).unwrap();
+    std::fs::set_permissions(&tx, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let failed = d.graph.tempo_commit(lease, 150.0).is_err();
+    std::fs::set_permissions(&tx, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if !failed {
+        eprintln!("skipped: .music2/tx/ is writable read-only (root)");
+        return;
+    }
+    assert!(d.graph.tempo_leases().is_empty());
+    eventually("the accepted tempo plays", || d.graph.status().bpm == Some(120.0));
+    d.fill(2);
+    assert_eq!(d.leased(), None);
+}
+
 // RENDER-27a: cancelled, the accepted tempo plays again, and nothing is written.
 #[test]
 fn a_tempo_cancel_goes_back() {

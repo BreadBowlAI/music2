@@ -12,7 +12,8 @@
 //!   this one doesn't gets its accepted data back. Updates older than one taken are dropped.
 //! - **commit** is one `Clips` Tx under the lease's Tx id (`clips::edit_as`), through the session
 //!   as any clip gesture is: its PLANE-5 preview is what the lease played, so nothing heard
-//!   changes. A refused commit puts the accepted data back and says why.
+//!   changes. Until it lands, a new plan plays what was let go. A refused commit puts the accepted
+//!   data back and says why.
 //! - **cancel**, an idle TTL (10 s; the page sends a keepalive every 2 s) and the window closing
 //!   put the accepted data back.
 //! - **Each settle** (`settled`) carries the live leases to what it accepted: a new plan, or new
@@ -272,14 +273,15 @@ fn dropped(rev: &Revision, g: &Gesture) -> String {
 /// phase, under the control plane's lock, after its own sends): a new plan, or new data for a lane
 /// a lease names, gets the preview again, applied on the new accepted revision, so it plays from
 /// the new plan's first block or the one after (the queue is FIFO); a change to a clip a lease
-/// drags ends it, the accepted data playing.
+/// drags ends it, the accepted data playing. A lease whose commit is on the actor plays what was
+/// let go in a new plan, until the commit lands; if its lanes changed meanwhile, the commit decides.
 pub(super) fn settled(cp: &mut ControlPlane, token: u64, device: Option<&Device>) {
     let Some(engine) = cp.open.as_ref().filter(|p| p.engine.token == token).map(|p| p.engine.clone()) else { return };
     let at = playing(engine.plays.as_ref(), device);
     let mut i = 0;
     while i < cp.lanes.live.len() {
         let l = &mut cp.lanes.live[i];
-        if l.token != token || l.closing {
+        if l.token != token {
             i += 1;
             continue;
         }
@@ -294,6 +296,24 @@ pub(super) fn settled(cp: &mut ControlPlane, token: u64, device: Option<&Device>
             }
         });
         let fresh = at.is_some_and(|(p, _)| l.sent.iter().any(|s| (s.epoch, s.generation) != (p.epoch, p.generation)));
+        if l.closing {
+            // Its lanes as the lease saw them (the same data, though perhaps read again).
+            let kept = named(&l.gesture).iter().chain(l.sent.iter().map(|s| &s.lane)).all(|a| {
+                let (m, k) = (a.module.as_str(), a.lane.as_str());
+                match (l.basis.compiled.data.lane(m, k), accepted.compiled.data.lane(m, k)) {
+                    (Some(x), Some(y)) => Arc::ptr_eq(x, y) || x == y,
+                    (x, y) => x.is_none() && y.is_none(),
+                }
+            });
+            if fresh && kept {
+                let lanes: Vec<(LaneAddr, Arc<LaneData>)> = l.sent.iter().map(|s| (s.lane.clone(), s.data.clone())).collect();
+                if let Err(e) = send(l, &lanes, accepted, at) {
+                    eprintln!("music2: couldn't carry a drag being written to the new plan: {e:#}");
+                }
+            }
+            i += 1;
+            continue;
+        }
         if !moved && !fresh {
             l.basis = accepted.clone();
             i += 1;
