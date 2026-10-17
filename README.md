@@ -69,6 +69,16 @@ Things to try:
 
 From left to right: back to the start, play/stop, loop, where the song is (bar.beat.sixteenth, then minutes and seconds), the tempo and time signature, the song's name, the status pill (only when something needs saying: see [Saving and undo](#saving-and-undo)), undo, redo, and **Export** (it shows how far along an export is). File → Close Song (⌘W) goes back to the start screen.
 
+| To | Do this |
+|---|---|
+| Change the tempo | Drag it up or down: 1 BPM for every 4 pixels, a tenth with ⇧. Or double-click it and type `128`, `128.5` or `128 bpm` (20 to 999). You hear the new tempo when you let go. |
+| Change the time signature | Click it, then pick the beats in a bar (1 to 16 with the buttons, up to 64 typed) and the note a beat is (2, 4, 8 or 16). |
+| Rename the song | Double-click its name (or File → Rename Song…), type, then Enter. Escape cancels. The folder keeps its name. |
+
+Both fields change the tempo or time signature in effect where the playhead is. Each change is one Undo step, written in `data/arrangement.json` (the song's name in `music2.toml`). There is no Alt-click reset on the tempo: one stray click shouldn't change the song.
+
+Play and stop work as in Live: Space plays from the playhead, and Space again stops and goes back to where play started. ⇧Space plays on from where it stopped. Transport → Stop All Sound (⌘.) stops every note at once.
+
 Stop ends the notes, and echoes and reverb ring out as they would on a real instrument. Moving the playhead, looping, editing notes and adding an effect all happen while the song plays, without it starting over or jumping back. Notes already sounding where the playhead lands aren't picked up: playback starts with the next note.
 
 ### The timeline
@@ -78,11 +88,13 @@ Stop ends the notes, and echoes and reverb ring out as they would on a real inst
 - Click a track's row to select it: the dock below shows that track. Selecting never changes which view the dock is in.
 - **+ Track** (⌘T) adds a track playing one of std's sounds: the drums first (the whole kit, then each drum), then the instruments, then the two synths with every knob, under Sound design. Typing filters the list, ↑↓ move, Enter adds; the list opens on the instrument you added last, so ⌘T then Enter adds another of the same. The new track goes below the selected one, in the first colour no other track has. It writes `tracks/<its key>.ts`, an empty notes lane in `data/`, and two lines in `song.ts`: its import, and its channel at the end of the mixer. One Undo takes it all back.
 - Right-click a track's name (or click ⋯ beside it) for its menu: Rename, Duplicate (⌘D), Delete (⌘⌫), Colour, its automation, and Edit in code. Duplicate copies the track's code, its clips, its plugins' saved settings and its mixer channel (a duck stays a duck), below it in its colour. Delete takes out its file, its import, its channel and its data. When another track's effect listens to it (the bass ducking to the kick), it asks first, and takes that effect off with it.
-- Click the ruler to move the playhead there. Drag across the ruler to loop those beats: playback goes round them until you turn the loop off with the loop button (it keeps the range for next time). With no loop set, the loop button loops the 4 bars from the playhead.
+- Click the ruler to move the playhead there. Drag across the ruler to loop those beats: playback goes round them until you turn the loop off with the loop button or C (it keeps the range, also when the song is opened again). With no loop set, the loop button loops the 4 bars from the playhead. ⌘L loops the selected clips (with none, the bar the playhead is in).
+- While stopped, a click on an empty spot in a lane moves the playhead there too. While playing it doesn't, so a click to deselect never makes the song jump.
+- The tempo and time signature changes are marks on the ruler. Click one to change it or remove it. Right-click the ruler to add a tempo change, or a time signature change at the start of that bar.
 - Double-click an empty spot in a notes lane to add a one-bar clip. Drag a clip to move it along its lane. Click a clip and press Delete to remove it.
 - Click a notes clip to select it (Notes shows it); double-click it to open it in Notes.
 - Double-click a track's name (or press ⌘R) to rename it: type, then press Enter (or click away) to save, or Escape to cancel. This changes only the name the app shows (the track's label, written in its `track()` call); its key, its data and its sound stay as they are, and Undo takes it back.
-- Automation and audio clips are shown, but they can't be edited in the app yet. Tempo and time-signature changes appear on the ruler.
+- Automation and audio clips are shown, but they can't be edited in the app yet.
 
 ### The browser
 
@@ -114,7 +126,7 @@ It shows the selected track (or the Song) in one of four views, picked with the 
 
 ## New songs, the songs folder and export
 
-- **New Song…** (the start screen, or File → New Song…, ⌘N, even while a song is open) asks for a name and how the song starts:
+- **New Song…** (the start screen, or File → New Song…, ⌘N, even while a song is open) asks for a name, a tempo (the template's until you type one; Tab moves to it) and how the song starts:
   - **Starter beat**: six tracks (kick, clap, hats, bass, chords and a hook), 8 bars at 116 BPM, ready to play and change.
   - **Empty**: no tracks yet, so it plays silence. Its timeline offers **Add a track**. `song.ts` also has a drum track ready, switched off: delete the `//` in front of its two lines and save, and a Drums lane appears.
 - New songs go in the **songs folder**, `~/Music/music2`, each in a folder named after the song. If the name is taken, the new one gets a number ("My song 2"): nothing is ever replaced. `Exports` there is taken by exports, so a song called "Exports" becomes "Exports 2". In the app, **Choose Folder…** in the New Song dialog saves it somewhere else.
@@ -146,9 +158,12 @@ Every key is listed in the app too: Help → Keyboard Shortcuts (⌥K on a Mac, 
 
 | Mac | Linux | What it does |
 |---|---|---|
-| Space | Space | Play or stop |
+| Space | Space | Play, or stop and go back to where play started |
+| ⇧Space | Shift+Space | Play on from where it stopped |
 | Return or Home | Enter or Home | Back to the start |
 | C | C | Loop on or off |
+| ⌘L | Ctrl+L | Loop the selected clips, or the bar the playhead is in (in the code editor, its own: select the line) |
+| ⌘. | Ctrl+. | Stop all sound (in the code editor, its own: quick fix) |
 | ⌘Z / ⇧⌘Z | Ctrl+Z / Ctrl+Shift+Z | Undo / redo |
 | ⌘N | Ctrl+N | New song |
 | ⌘O | Ctrl+O | Open a song folder |
@@ -480,6 +495,9 @@ const synth = plugin("clap:org.surge-synth-team.surge-xt", { notes: lane.notes("
 | `m2 duplicate-track <song> <track>` | Copies a track, named by its key: its code, its clips (with new ids), its plugins' saved settings and its mixer channel. |
 | `m2 delete-track <song> <track> [--cascade]` | Takes a track out: its file, its imports, its channel, its data and its place in `layout.json`. When an effect elsewhere listens to it (a duck), it lists them and changes nothing; `--cascade` takes the track out of them too. |
 | `m2 layout <song> order <keys…>` / `colour <key> <colour>` / `reset` | Reorders or recolours tracks in `layout.json` (rose, teal, amber, indigo, green, plum, olive, blue, coral, cyan, violet, lime), or writes the default layout over one that doesn't read. No revision: the layout never changes the sound. |
+| `m2 tempo <song> <bpm> [--at <bar>]` | Sets the song's tempo (20 to 999 BPM) in `data/arrangement.json`, or with `--at 9` a tempo change from bar 9. |
+| `m2 meter <song> <n/d> [--at <bar>]` | Sets the song's time signature (`7/8`: 1 to 64 beats of a 1, 2, 4, 8, 16 or 32 note), or with `--at 9` a change from bar 9. |
+| `m2 title <song> <name>` | Renames the song: its name in `music2.toml`. The folder keeps its own. |
 | `m2 cables <song>` | The named signals a cable can start from, and the inputs that cables reach. |
 | `m2 connect <song> <signal> <control>` | Writes a signal's name in place of a number. |
 | `m2 disconnect <song> <input>` | Writes the input's default back in place of the name. |
@@ -493,7 +511,7 @@ const synth = plugin("clap:org.surge-synth-team.surge-xt", { notes: lane.notes("
 | `m2 fix <song> <path> <fix>` | Applies a fix a problem offers, such as `assign-clip-ids` or `repin-asset`, or `finish-tx` and `discard-tx` for an edit that was cut off (its path is `.music2/tx/<id>.json`). Every command prints the problems it finds with the commands that fix them. |
 | `m2 tx <song> <tx.json \| -> [--check] [--seen HASH]` | A checked edit written as Tx JSON (see [Scripts and agents](#scripts-and-agents)). `--check` prints what it would change and that change's hash, writing nothing; without it, it is written, and `--seen HASH` writes it only while it still makes the change with that hash. The answer is JSON; the exit status is 1 when nothing was written. |
 
-While the app has a song open, the commands that write it (`set`, `automate`, `label`, `add-track`, `duplicate-track`, `delete-track`, `layout`, `connect`, `disconnect`, `add-effect`, `remove-effect`, `relink`, `delete-data`, `fix`, `tx`, `plugin-state` and `bounce --place`) stop at once, change nothing, and say which program has it. Make the edit in the app, or close the song there first. The other commands, and `bounce` without `--place` (it only makes a new file), work while it's open.
+While the app has a song open, the commands that write it (`set`, `automate`, `label`, `add-track`, `duplicate-track`, `delete-track`, `layout`, `tempo`, `meter`, `title`, `connect`, `disconnect`, `add-effect`, `remove-effect`, `relink`, `delete-data`, `fix`, `tx`, `plugin-state` and `bounce --place`) stop at once, change nothing, and say which program has it. Make the edit in the app, or close the song there first. The other commands, and `bounce` without `--place` (it only makes a new file), work while it's open.
 
 Commands that change a song write into its folder, so try them on a copy, not on the examples:
 
@@ -540,7 +558,7 @@ curl -s -H "$H" -H 'content-type: application/json' $URL/api/tx/commit -d "{\"tx
 | `GET /api/graph` | The open song: name, folder, `session`, the graph view (with `revision` and every knob's id), the timeline, the effects, problems, where playback is, and the knob drags in progress (`leases`, each with its knob's id in that view). `has_code` is false while the song opened with code that doesn't compile; `read_only` is null, or `{why, message, holder}` when another program holds the song |
 | `POST /api/graph/open` `{path}` | Open a song folder |
 | `POST /api/graph/close` | Close it |
-| `GET /api/graph/status` | Playing or not, seconds and beat, and the loop (`{start, end, on}` in beats, or null) |
+| `GET /api/graph/status` | Playing or not, seconds and beat, the tempo playing there (`bpm`), and the loop (`{start, end, on}` in beats, or null). A play, a stop or a seek just sent reads as done |
 | `POST /api/graph/preview` `{session, revision, id, gesture, value}` | Change a knob in the sound only, while dragging |
 | `POST /api/graph/preview/cancel` `{session, id, gesture}` | Drop a preview |
 | `POST /api/graph/set` `{session, revision, id, gesture, value, expect?}` | Write a knob's value into the code |
@@ -558,7 +576,11 @@ curl -s -H "$H" -H 'content-type: application/json' $URL/api/tx/commit -d "{\"tx
 | `POST /api/tx/commit` `{session?, tx}` | Write a Tx: `{committed: {revision, delta, hash, …}}`, or `{conflict}`, `{rejected}` or `{io}`. With `"expect": {"seen": hash}` it is written only while it makes the change its check showed |
 | `POST /api/graph/lock/retry` `{session}` | Try again to take a song that opened read-only; answers like `GET /api/graph` |
 | `POST /api/graph/undo`, `/api/graph/redo` `{session}` | Undo or redo |
-| `POST /api/graph/transport` `{action}` | `play`, `stop`, `toggle` or `restart` |
+| `POST /api/graph/transport` `{action, to?}` | `play`, `stop`, `toggle` or `restart`. `stop` with `to` goes back there (where play started), and answers where it stopped (`at`) |
+| `POST /api/graph/panic` | Stop all sound: every note off, at once. It changes nothing in the song |
+| `POST /api/graph/tempo` `{session, at, bpm?, add?, remove?}` | Set the tempo in effect at beat `at`; with `add`, a tempo change there; with `remove`, take out the change there. `loop_off` says when it turned the loop off |
+| `POST /api/graph/meter` `{session, at, beats?, unit?, add?, remove?}` | The same for the time signature; a new change lands on the bar line at or before `at` |
+| `POST /api/graph/title` `{session, name}` | Rename the song (`[project] name` in `music2.toml`) |
 | `POST /api/graph/seek` `{beat}` | Move the playhead: a jump at the next block, playing or not; nothing is rebuilt |
 | `POST /api/graph/loop` `{start?, end?, on?}` | Set the loop's range in beats (it turns the loop on unless `on` says otherwise), or turn it on or off over the range set. Answers like `/status` |
 | `GET /api/graph/files` | The song's TypeScript files |
@@ -567,7 +589,7 @@ curl -s -H "$H" -H 'content-type: application/json' $URL/api/tx/commit -d "{\"tx
 | `POST /api/graph/unsaved` `{session, files}` | Tell the app which files have unsaved edits in an editor |
 | `POST /api/graph/export` `{path?}` | Export Audio: render the song to a WAV file on a thread of its own, to `path` or to a new file in `~/Music/music2/Exports`. Answers `{path}` at once; one export at a time |
 | `GET /api/project/templates` | What a new song can start from: `{templates, examples}` (each `{id, name, description}`), the songs folder (`songs`) and `home` |
-| `POST /api/project/new` `{name, template?, example?, dir?}` | Make a song from a template (`starter` if neither is given) or a copy of an example, in a new folder named after it in `dir` (a full path; default `~/Music/music2`), and open it. A taken name gets " 2", " 3"…, and so does `Exports` in the songs folder. An example whose `example.toml` lists `[plugins]` that aren't installed is refused, naming them. Answers like `GET /api/graph`, for the song it made |
+| `POST /api/project/new` `{name, template?, example?, dir?, tempo?}` | Make a song from a template (`starter` if neither is given) or a copy of an example, in a new folder named after it in `dir` (a full path; default `~/Music/music2`), and open it. A taken name gets " 2", " 3"…, and so does `Exports` in the songs folder. An example whose `example.toml` lists `[plugins]` that aren't installed is refused, naming them. Answers like `GET /api/graph`, for the song it made |
 
 `/api/ws` is a WebSocket with three events: `{"t":"toast","text":…}` for messages, `{"t":"graph"}` when the song changed and should be fetched again, and `{"t":"export",…}` while a song is exported, each with the `song`'s name and its folder (`dir`): `progress` (0 to 1, at most ten a second), then `done` with `path`, `seconds` and `peak_db`, or `error`. Toasts sent while nothing was connected, such as why the folder given at launch didn't open, go to the next client that connects.
 

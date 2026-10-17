@@ -31,6 +31,8 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 - See what needs attention. When a track's or a lane's key is renamed in code, its notes or automation stop playing; the status pill in the top bar says so, and its popover says it in plain words and offers to move the data where it belongs now (a renamed track's whole folder in one click), or to delete it. Undo takes either back. It also lists a data file that doesn't read (its lane keeps playing what it had), clips without ids, and a missing sample or plugin, each with its code and fixes. Every `m2` command that opens the song prints the same, with the commands that fix it (`m2 relink`, `m2 delete-data`, `m2 fix`).
 - Edit the files in any other editor, from a script or with git. The app takes a change in once it has settled (no file changed for 150 ms), so a file caught half-written never plays and a lane never plays empty. Agents can also send checked edits (Tx) over HTTP or with `m2 tx`, written as one undo step.
 - One program writes a song at a time: `m2` commands that write a song the app has open stop without changing anything, and a second window opens it read-only, with Retry. An edit cut off by a crash is offered back as Finish or Discard when the song opens next.
+- Set the tempo and the time signature in the top bar. Drag the tempo up or down (⇧ for fine) or double-click it and type; click the time signature to pick it. Each changes the one in effect where the playhead is, and you hear a new tempo when you let go. Right-click the ruler to add a tempo or time signature change there, and click its mark to change or remove it. Double-click the song's name to rename it. New Song asks for the tempo too. Each is one edit Undo takes back; the same from `m2 tempo`, `meter` and `title`.
+- Play and stop like Live: Space stops back where play started, and ⇧Space goes on from where it stopped. Click the ruler, or an empty spot in a lane while stopped, to start somewhere else. Loop with the loop button or C, a drag across the ruler, or ⌘L for the selected clips; the loop is kept for next time. ⌘. (Transport → Stop All Sound) stops every note at once.
 - Export the song as a WAV file (the Export button, or File → Export Audio…, ⇧⌘E), then Show in Finder. Files go in `~/Music/music2/Exports` unless you pick another place. It's the same file `m2 render` writes. Quitting during an export asks first.
 - From the command line (`m2`): make a new song, render a WAV, bounce a track to audio, and make the same edits as the app.
 - Build `music2.app` and move it anywhere: std, the templates and the examples are inside it, so it no longer needs the source folder it was built from. It's signed ad hoc but not notarized, so on another Mac it opens only after **Open Anyway** in System Settings → Privacy & Security (and only on Apple silicon).
@@ -45,9 +47,9 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 3. **Drum names in the piano roll** for the drum kit, the part of it that's left. (medium)
 4. **A mixer panel**: volume, pan, mute and solo for each track. (medium)
 5. **Fast seeking and fast edits** in a full-length song. (large)
-6. **Tempo, time signature and key** in the top bar. (small)
-7. **Loop** the song or a range of bars. (medium)
-8. **Hear notes** as you draw them in the piano roll. (medium)
+6. **Key and scale** in the top bar (the tempo, the time signature and the song's name work now). (small)
+7. ~~Loop~~: done (see What works today).
+8. **Hear notes** as you draw them in the piano roll (Stop All Sound works now). (medium)
 9. **Clip editing**: duplicate, copy and paste, resize, split and move clips on the timeline. (medium)
 10. **Rename a track's key** from the app (delete, duplicate, reorder and recolour work now). (small)
 
@@ -99,14 +101,13 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 6 | **Change the tempo (BPM), time signature, key and scale, and the song's title** in the top bar. The session needs a write for `data/arrangement.json` (like its notes write), and the top bar needs the fields. The timeline already counts bars by the time signatures written there. | Setting the tempo is step one of every song. Today it means editing `data/arrangement.json` by hand, and the code editor only opens `.ts` files. | Yes | small |
+| 6 | **Key and scale** in the top bar. (The tempo, the time signature and the song's name work: see [What works today](#what-works-today).) A key and scale have no home in the song's files yet; the field comes when they do, and scale help (#16) builds on it. | A key tells you which notes fit. | Yes | small |
 
 ### Playback
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
 | 5 | **Fast seeking and fast edits** in a full-length song. A persistent live engine where a seek is a transport event, never a replay, and a notes edit swaps only that lane's data (step 3 of the [order of work](architecture.md#order-of-work); [RENDER-8](architecture.md#live-engine-and-its-two-clocks), [RENDER-9](architecture.md#seek-and-loop)). | Today a seek replays the song from 0, and every notes, cable, effect or code edit rebuilds the player at the playhead the same way. The example renders about 30 times faster than real time, so late in a busy 3-minute song each seek or edit could stall for several seconds. | Yes | large |
-| 7 | **Loop** the whole song, then a loop range dragged on the ruler (⌘L). | Producers loop 4 to 8 bars while building a part. The player (`core/play`) can only swap, play, stop and set a value. With the persistent engine of #5 a loop wrap is a transport event, so tails ring through the wrap ([RENDER-9](architecture.md#seek-and-loop)). | Partly (the whole song) | medium |
 | 19 | **A metronome**: a click with an on/off button in the top bar. The player makes it from the tempo; it isn't part of the song. A count-in can come with recording. | It helps you keep time and check a beat. | No | small |
 
 ### Timeline and clips
@@ -121,7 +122,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 8 | **Hear notes** when you click, draw or move them in the piano roll (audition), and an all-notes-off button (panic). | You can't write a melody without hearing it. The new player has no way to play live notes; MIDI input will need the same path. | Yes | medium |
+| 8 | **Hear notes** when you click, draw or move them in the piano roll (audition). (Stop All Sound, ⌘., works: see [What works today](#what-works-today).) | You can't write a melody without hearing it. The new player has no way to play live notes; MIDI input will need the same path. | Yes | medium |
 | 15 | **Note tools**: triplet snap (1/8T and 1/16T, three notes in the space of two), quantize, transpose a clip, humanize, swing, legato, and copy/paste notes between clips. | These clean up a drawn or played part, and triplets are common in pop hats and rolls. The piano roll snaps only to 1/4, 1/8, 1/16 and 1/32, and has only nudging with the arrow keys and ⌘D. | Partly (triplet snap, quantize, humanize, and octave up and down) | small |
 | 16 | **Scale help**: choose a key and scale, highlight or lock the notes in the key, chord stamps and an arpeggiator. `std/theory` and `std/gen` are designed but not built. | Beginners write better melodies and chords with a scale guide. | Partly (a key and scale, and showing only in-key notes) | medium |
 
@@ -188,12 +189,12 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 37 | **CLI basics**: `m2 import <wav>`, `m2 tempo` and `m2 add-track`. | Scripts and agents need the same basics as the app. Each is small once the matching session edit exists. | Yes (in `music2-cli`) | small |
+| 37 | **CLI basics**: `m2 import <wav>`. (`m2 tempo`, `meter`, `title` and `add-track` work.) | Scripts and agents need the same basics as the app. Each is small once the matching session edit exists. | Yes (in `music2-cli`) | small |
 | 38 | **A self-describing API**: every `/api/graph` operation listed with a JSON Schema, a short summary of the song, and MCP. (Export over HTTP is there: `POST /api/graph/export`; so are checked edits of any files as one undo step: `POST /api/tx/check` and `/api/tx/commit`.) | The old command API let Claude Code drive the app. The new routes work, but an agent has to read the README or the source code to learn them, and a Tx's JSON by the [architecture contract](architecture.md#the-two-write-primitives). | Yes | medium |
 
 ## Never in either version
 
-Every row marked **No** above was missing from the old app too. Of the rows marked **Partly** or **Yes, except**, the old app also lacked: a loop range (#7), splitting clips (#9), swing, legato and copying notes between clips (#15), chord stamps and an arpeggiator (#16), a master meter and loudness (#20), undo that survives closing (#29) and choosing the audio device (#31).
+Every row marked **No** above was missing from the old app too. Of the rows marked **Partly** or **Yes, except**, the old app also lacked: splitting clips (#9), swing, legato and copying notes between clips (#15), chord stamps and an arpeggiator (#16), a master meter and loudness (#20), undo that survives closing (#29) and choosing the audio device (#31).
 
 ## Loose ends
 
@@ -205,6 +206,7 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **A missing plugin reads technically**: ``no CLAP plugin `org.surge-synth-team.surge-xt` is installed (looked in [...])``. It no longer silences the song: only that plugin's node is silent, or passes its audio through ([FMT-18a](architecture.md#plugin-state-and-parameters)). Open an Example still names missing plugins plainly, from the example's `example.toml`, and refuses to copy the example (#11).
 - **An error in the browser console with no project open.** `GET /api/graph` answers 400 when nothing is open, which is how the window knows to show the start screen. The browser logs that request as an error even though nothing is wrong. Answering "no project" without an error status would be quieter.
 - **The browser suites** live in `e2e/` (puppeteer, with its own `package.json`), rebuilt after a reboot wiped their old scratch folder.
+- **Space, then Space again, jumps back** to where play started. std's chorus, phaser and tremolo, and the drums' noise, then carry on from where they were rather than starting over, so that second play may differ a little from the export. The export is always right.
 
 ## Removed with the old version
 
@@ -219,7 +221,7 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 | A level meter on each track | Level meters (#20) |
 | The Sounds panel | Audio in the app (#18), the sampler (#22) |
 | Drawing automation | Draw automation (#14) |
-| Loop | Loop (#7) |
+| Loop | Back: the loop button or C, a drag across the ruler, or ⌘L for the selected clips |
 | Hearing notes as you draw them | Audition (#8) |
 | Triplet snap (1/8T, 1/16T), quantize, humanize, and octave up and down in the piano roll | Note tools (#15) |
 | The key and scale picker, and showing only in-key notes | Scale help (#16) |
