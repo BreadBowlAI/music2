@@ -338,14 +338,16 @@ export default song(() => v.out);
         std::fs::write(dir.join("music2.toml"), asking_for_std("9")).unwrap();
         let e = compile_dir(&dir).err().unwrap();
         assert_eq!(e.iter().map(|d| d.code).collect::<Vec<_>>(), ["pkg.unsatisfied"]);
-        assert!(!e[0].message.contains("change this line"), "{}", e[0].message);
+        assert!(!e[0].message.contains("This app has"), "{}", e[0].message);
         std::fs::write(dir.join("music2.toml"), asking_for_std("0.0")).unwrap();
         let e = compile_dir(&dir).err().unwrap();
         assert_eq!(e.iter().map(|d| d.code).collect::<Vec<_>>(), ["pkg.unsatisfied"]);
         // std is 0.x, so a song asks for it by its first two numbers.
         let Version(major, minor, _) = Version::parse(&std_packages().get("std").unwrap().version).unwrap();
-        let hint = format!("This app has std {major}.{minor}. To use it, change this line to std = \"{major}.{minor}\". The song");
-        assert!(e[0].message.contains(&hint), "{}", e[0].message);
+        let hint = format!(
+            "This app has std {major}.{minor}. To use it, change the std line in music2.toml to std = \"{major}.{minor}\". The song"
+        );
+        assert!(e[0].message.starts_with(&hint), "{}", e[0].message);
         std::fs::write(dir.join("music2.toml"), MANIFEST.replace("\"@m2/core\" = \"1\"", "\"@m2/core\" = \"2\"")).unwrap();
         let e = compile_dir(&dir).err().unwrap();
         assert_eq!(e.iter().map(|d| d.code).collect::<Vec<_>>(), ["sdk.unsatisfied"]);

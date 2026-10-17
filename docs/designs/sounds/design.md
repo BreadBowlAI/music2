@@ -179,9 +179,10 @@ Added, from the attack and L4:
 - `unmet_dependencies` moved to 0.2.4 (met) and 0.3.0 (not met); without that, slice 3 was red (attack B).
 
 The `pkg.unsatisfied` hint (L7, risk 21): only for std, only when the bundled std is newer than the song admits.
-It ends: "This app has std 0.2. To use it, change this line to std = "0.2". The song may sound a little
-different." It stays true when a later std does change renders. `Requirement::admitting` names the shortest
-requirement that admits the app's std.
+It starts with: "This app has std 0.2. To use it, change the std line in music2.toml to std = "0.2". The song
+may sound a little different." The hint comes first, as the app shows a message on one line, cut at the
+window's edge (the review's D3). It stays true when a later std does change renders. `Requirement::admitting`
+names the shortest requirement that admits the app's std.
 
 FMT-3's trigger (L6), the same words everywhere: the lockfile and several bundled std versions wait for "the
 first std release, after people have songs, that changes existing renders". std 0.2 changed none, and no one

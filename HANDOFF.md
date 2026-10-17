@@ -39,7 +39,7 @@ Written 2026-10-16, at the end of step 7 (the engine), updated after its speed w
 | | |
 |---|---|
 | Which songs | Songs in `~/Music/music2` that you made before the `sounds` merge lands on `main`. |
-| What you see | The song opens but stays silent. Its error ends: "This app has std 0.2. To use it, change this line to std = "0.2". The song may sound a little different." |
+| What you see | The song opens but stays silent. The yellow bar at the top says the code doesn't compile. Its error starts: "This app has std 0.2. To use it, change the std line in music2.toml to std = "0.2". The song may sound a little different." To read all of it, hold the mouse over it. |
 | What to do | Open the song's `music2.toml` in a text editor. Change the std line to `std = "0.2"`. Save. The app takes the change in, as with any file. |
 | The sound | It doesn't change: std 0.2 changed no sound a song already had. The message says "may" because later std versions might. |
 

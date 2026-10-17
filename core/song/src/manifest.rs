@@ -100,11 +100,12 @@ impl Manifest {
                 continue;
             }
             let message = match have {
+                // What to do comes first: the app shows a message on one line, cut at the window's edge.
                 Some(v) if name == STD && v >= req.upper() => {
                     let now = Requirement::admitting(v);
                     format!(
-                        "{MANIFEST} asks for {name} \"{req}\" (at least {}, below {}), but {v} is installed. This app has std {now}. \
-                         To use it, change this line to std = \"{now}\". The song may sound a little different",
+                        "This app has std {now}. To use it, change the std line in {MANIFEST} to std = \"{now}\". The song may sound a \
+                         little different. {MANIFEST} asks for {name} \"{req}\" (at least {}, below {}), but {v} is installed",
                         req.0,
                         req.upper()
                     )
@@ -379,24 +380,25 @@ mod tests {
         assert_eq!(d.iter().map(|d| d.code).collect::<Vec<_>>(), ["sdk.unsatisfied", "pkg.unsatisfied"]);
         assert!(d[0].message.contains("\"1\"") && d[0].message.contains("2.0.0"), "names both versions: {}", d[0].message);
         assert!(d[1].message.contains("\"0.2\"") && d[1].message.contains("0.3.0"), "{}", d[1].message);
-        // A song for an older std is told how to move (L7); a newer SDK says nothing of the kind.
+        // A song for an older std is told how to move (L7), first, so a line cut short at the
+        // window's edge still shows it (review finding D3); a newer SDK says nothing of the kind.
         assert!(
-            d[1].message.ends_with(
-                "but 0.3.0 is installed. This app has std 0.3. To use it, change this line to std = \"0.3\". The song may sound a little different"
+            d[1].message.starts_with(
+                "This app has std 0.3. To use it, change the std line in music2.toml to std = \"0.3\". The song may sound a little different. "
             ),
             "{}",
             d[1].message
         );
-        assert!(!d[0].message.contains("change this line"), "{}", d[0].message);
+        assert!(!d[0].message.contains("This app has"), "{}", d[0].message);
         // A std older than the song asks for needs a newer music2, so no such hint.
         let d = m.check_dependencies(installed("1.0.0", Some("0.1.9")));
         assert_eq!(d.iter().map(|d| d.code).collect::<Vec<_>>(), ["pkg.unsatisfied"]);
-        assert!(!d[0].message.contains("change this line"), "{}", d[0].message);
+        assert!(!d[0].message.contains("This app has"), "{}", d[0].message);
         // Only std: another package asked for at an older version gets none.
         let drums = Manifest::read(&GOOD.replace("[dependencies]", "[dependencies]\ndrums = \"1\"")).unwrap();
         let d = drums.check_dependencies(|name: &str| Version::parse(if name == SDK { "1.0.0" } else if name == STD { "0.2.0" } else { "2.0.0" }));
         assert_eq!(d.iter().map(|d| d.code).collect::<Vec<_>>(), ["pkg.unsatisfied"]);
-        assert!(d[0].message.contains("drums") && !d[0].message.contains("change this line"), "{}", d[0].message);
+        assert!(d[0].message.contains("drums") && !d[0].message.contains("This app has"), "{}", d[0].message);
         let d = m.check_dependencies(installed("1.0.0", None));
         assert_eq!(d.iter().map(|d| d.code).collect::<Vec<_>>(), ["pkg.unsatisfied"]);
         assert!(d[0].message.contains("isn't installed"));
