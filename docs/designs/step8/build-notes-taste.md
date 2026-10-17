@@ -550,3 +550,81 @@ The name's field, open with a long name, in a page laid out as the Mac app's bar
 | When `sounds`' slice 4 lands: join its "Going back to bar 1 … is a jump" line with B2's Space, Space loose end in `docs/gaps.md` | the merge |
 | Setting a loop during an export's hold is judged in the tempo the engine plays, not the edit's | later, if it matters |
 | Scratch: `~/m2-runs/tn-scratch/e2e-all-055337/`, `renders-b2/`. Logs: `~/m2-runs/logs/tn-b2-*`. | — |
+
+## B3: 8b.3a, std's gains
+
+**In short**
+- Every mixer channel now has a gain, its fader: `db`, 0 dB when left out. The master has one
+  too, before its limiter. At 0 dB a gain is `x × 1.0`, so no render moved: 10 of 10 match, and
+  `renders.json` is unchanged.
+- The master's input now goes through a new std kernel, `std:stereo`. It copies a mono signal
+  into both channels, so the master is stereo from the start. When a mix that is mono all the
+  way gets its first pan, the master's gain and limiter keep going instead of starting again
+  (lead decision T5). No record moved, so T5's fallback (measure and accept) wasn't needed.
+- A track's mixer channel is now found by following the graph, not by where its name is written
+  (lead decision T7). So `kick: k`, with `const k = kick.out` above the mixer, is found too.
+- Checks: the crates touched pass, clippy is clean, all 34 browser suites pass (1,333 checks,
+  live3b with the test plugins), the recorded tests pass, and 10 of 10 renders match.
+
+### What was built
+
+| Commit | What |
+|---|---|
+| `9ae5521` | `std/src/mix.ts`: the mixer's `db` isn't optional, the master gets `db`, both doc comments say "−96 dB or lower is silence". `std:stereo` (kernel, `m2pkg.toml`, `std.wasm` rebuilt; `std/build.sh --check` gives the same bytes). Tests: `the_mixer_and_master_gains_change_no_bit`, `a_first_pan_in_a_mono_mix_keeps_the_masters_gain_and_limiter`; `std_defaults_are_todays` checks the three new faders; `std_calls_keep_their_forms`, the mixer's view and the gate-5 knob test follow; `forms.ts` has the master's two new forms (tsc passes). s5-knobs (101 to 106). Contract PKG-5. README's std line, gaps #4, design-8b §5.1. |
+| `57050c3` | `mix::mixer` follows the graph (ID-18). `mix_tests.rs`, 6 tests. Duplicate refuses a channel that doesn't name its track. Contract ID-18 and PKG-13's *Today*; design-8b §2.3. |
+| this commit | These notes. |
+
+### How the tests know
+
+| Test | What it shows |
+|---|---|
+| `the_mixer_and_master_gains_change_no_bit` | Each of the 5 pure fixtures, rendered whole through today's mixer and master, and through a copy of the old ones in the project (`old-mix.ts`). Every frame is the same, bit for bit. Today's graph has more gains and one `std:stereo`. Tried with the master's default at 0.0001 dB: it fails at frame 1. |
+| `a_first_pan_in_a_mono_mix_keeps_the_masters_gain_and_limiter` | Two mono tracks, loud enough that the limiter always works. `pan: 0` written by hand, as 8b.3b's first pan will. Only the new panner, channel a's gain and the sum are new instances; `std:stereo`, the master's gain and the limiter are kept. Tried without `std:stereo`: the limiter and the master's gain are new. |
+| `mix_tests.rs` | first-song as it is; a channel given a binding; two tracks in one channel; one track in two (no channel); an audio sidechain into a project's own component (tried without the sidechain rule: fails); a strip driven by signals; a bus track. |
+
+### Decisions made in the slice
+
+| What | Decided | Why |
+|---|---|---|
+| How to make the master stereo from the start (T5) | A new kernel, `std:stereo` (`in: audio<2>`, a copy), first in `master` | Every existing way is off by a little: a centred panner on mono is `x × 0.99999994`; `widen` turns −0.0 into +0.0. The runtime already copies a mono signal into both channels of a stereo port, so the copy is exact. A kernel isn't engine work. |
+| Where `std:stereo` sits | At the master's input, not the mixer's output | Only std's own master changes channels. A user's effect between the mixer and the master (a plugin, a compressor) gets what the mixer makes, as before: a mono-input plugin given stereo could sound different. |
+| A channel's left-out `db` in B3 | A read-only value on the mixer's box: "Plays its default: it is a dictionary entry's, which is written with its entry." | Writing it into its entry is 8b.3b (`Insertion::plan`). The master's `db` is a knob now: it goes into the options object, as any left-out control does. |
+| s5-knobs | +1 knob (the master's db), +1 check that the two read-only faders play 0 dB and say why: 106 | The attack expected 3 new knobs. Two of them are read only until B4. |
+| How the graph names a channel (T7) | The first node inside the mixer reads its channel's `pan` or `db` constant (`channels.kick.db`). A panner whose `pan` is a signal passes the walk on to the gain after it. | Design §14's ID-18 row. It needs no new data: the flat graph has the edges and kinds, the song's IR the frames and sidechains. |
+| A strip whose `db` is a signal, with no panner | The read's place in the property says the channel | It reads no channel constant. Rare (a fader driven by an LFO), and the old rule found it. |
+| A bus track (`drums` reads kick and hats) | Only the song's own nodes are walked: the bus reaches the mixer as itself; kick and hats have no channel | Otherwise one strip would read "Drums + Kick + Snare", and deleting Kick would say it shares a channel. Same as the old rule. |
+| Builders and a channel that doesn't name its track (`kick: k`) | Duplicate refuses: "Kick's mixer channel doesn't name it, so duplicate it in code." Delete lists `const k = kick.out` as code it can't take out. | The builders edit the channel's text. A copy of `kick: k` would play the kick, not the copy. Nothing is written in either case (tested). |
+| A std version bump | None | No render changed, and 0.2 isn't released (plan §5.7). The `sounds` merge's slice 3 bumps std to 0.2. |
+
+### Checks
+
+| Check | Result |
+|---|---|
+| `cargo test` of `m2-session`, `-editor`, `-server`, `-script`, `m2`, `-play`, `-gates`, `-runtime`; std's kernels | all pass: session 152, editor 196 (6 new), server 180 (1 new), script std 7, runtime 130, play's unrecorded tests, gates 33 + harness 6, kernels 110 |
+| Commit `9ae5521` alone (the graph rule stashed) | editor 190, server 180, m2, script, session's gate tests: all pass; clippy clean |
+| The recorded tests (`m2-play --release`, `bit_identity`, `live`, `churn`, `--ignored`) | 5 of 5 pass, in tmux: `live_is_the_export_on_all_of_p16`, `…_on_p50`, `a_no_op_activation_on_p50`, `p16_churns_200_edits_within_20_mb`, `p16_loops_ten_minutes_without_drift` |
+| `cargo clippy --workspace --all-targets -D warnings`; std's kernels | clean |
+| Every browser suite (`run.mjs all`, with the test plugins) | 34 of 34, 1,333 of 1,333 checks |
+| The renders (`e2e/baseline.sh --tree .`, debug `m2`) | 10 of 10 match `e2e/renders.sha256` |
+| `renders.sha256`, `renders.json` | unchanged. `std.wasm` changed (the new kernel); `std/build.sh --check` rebuilds it to the same bytes. |
+
+### Numbers (Linux, information only)
+
+| What | Value |
+|---|---|
+| Kernels each fixture gains | first-song 4 (Kick's and Bass's gains, the master's, `std:stereo`); resample 3; Starter 3; Empty 2; `examples/sounds` 2 (its channels all write `db`) |
+| p16 churn | 283 activations: 184.3 MB after 70 edits, then 178.1 MB |
+| p16, ten minutes of a loop | 79 laps, 504 Ons each, rendered in 122.3 s (release) |
+| `bit_identity`'s three | 417.7 s together, under other load |
+
+### Left
+
+| What | Where |
+|---|---|
+| A channel's left-out `db` becomes a knob: `Insertion::plan` writes into dictionary entries; the read-only words go | B4 |
+| Key each strip by its channel (ID-14's std follow-up, T4) | B4 |
+| The first pan in an all-mono mix still makes the sum's adds new: stateless, so a crossfade of equal signals. B4's live test should hear it. | B4 |
+| A user's own stateful effect between the mixer and the master (`master(compress(mixer(…)))`) in a mix that is mono all the way still starts again on the first pan | later, if it matters |
+| The timed gates with the new nodes (p16 and p50 gain the master's gain and `std:stereo`) | final phase |
+| When the `sounds` merge's slice 3 lands: rebuild `std.wasm` (`std/build.sh`, then `--check`), never take a side | the merge |
+| Scratch: `~/m2-runs/tn-scratch/e2e-all-062703/`, `renders-b3/`. Logs: `~/m2-runs/logs/tn-b3-*`. | — |
