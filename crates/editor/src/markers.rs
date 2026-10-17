@@ -4,6 +4,7 @@
 //! them, and a write is a layout-only Tx, one undo step with no revision (PLANE-3).
 
 use m2_session::Session;
+use m2_song::Arrangement;
 use serde::{Deserialize, Serialize};
 
 use crate::layout::{self, J, Layout, Read};
@@ -97,7 +98,7 @@ pub fn set(s: &mut Session, mut markers: Vec<Marker>) -> Result<Edited, EditErro
         return no(format!("A marker is at bar {} already", bar(w[1].beat)));
     }
     let before = self::read(&l);
-    let label = label(&before, &markers, &bar);
+    let label = label(&before, &markers, &arrangement);
     if before == markers {
         return Ok(Edited { revision: s.accepted().number, file: layout::FILE.into(), before: label.0, after: label.1 });
     }
@@ -110,15 +111,20 @@ pub fn set(s: &mut Session, mut markers: Vec<Marker>) -> Result<Edited, EditErro
 
 /// What a change to the list did, in words, as (before, after): one marker added ("", "Chorus at
 /// bar 17"), deleted ("Chorus", ""), renamed ("Chorus", "Big Chorus") or moved ("Chorus at bar
-/// 17", "Chorus at bar 25"); any other change ("markers", "markers").
-fn label(before: &[Marker], after: &[Marker], bar: &dyn Fn(f64) -> u64) -> (String, String) {
+/// 17", "Chorus at bar 25"; inside one bar with the beats, "Chorus at bar 9 beat 1", "Chorus at
+/// bar 9 beat 2.5", so the two sides differ: the page names an undo step only when they do); any
+/// other change ("markers", "markers").
+fn label(before: &[Marker], after: &[Marker], arrangement: &Arrangement) -> (String, String) {
     let gone: Vec<&Marker> = before.iter().filter(|m| !after.contains(m)).collect();
     let new: Vec<&Marker> = after.iter().filter(|m| !before.contains(m)).collect();
-    let at = |m: &Marker| format!("{} at bar {}", m.name, bar(m.beat));
+    let bar = |m: &Marker| arrangement.bar_at(m.beat).0;
+    let at = |m: &Marker| format!("{} at bar {}", m.name, bar(m) + 1);
+    let place = |m: &Marker| format!("{} at {}", m.name, crate::notes::place(arrangement, m.beat));
     match (gone.as_slice(), new.as_slice()) {
         ([], [m]) => (String::new(), at(m)),
         ([m], []) => (m.name.clone(), String::new()),
         ([a], [b]) if same_beat(a.beat, b.beat) => (a.name.clone(), b.name.clone()),
+        ([a], [b]) if bar(a) == bar(b) => (place(a), place(b)),
         ([a], [b]) => (at(a), at(b)),
         _ => ("markers".into(), "markers".into()),
     }

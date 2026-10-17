@@ -1311,3 +1311,19 @@ song closes asks first. Now:
 | Suite | `pl-projects` C3, in the app: an unsaved edit in the code editor, then Rename Song…: the warning and Rename Anyway; box off, no warning; Esc changes nothing; the route refuses without `anyway`; Rename Anyway renames |
 | Suite red first (the page and server of `5e74f50`) | `FAIL with unsaved code it says the edits would be lost, and the button says Rename Anyway: null \| Rename` and `FAIL the server refuses it too, unless asked to go ahead: 200 undefined` |
 | Green | `m2-server` `project::` 31/31; `pl-projects` (see the last run below) |
+
+#### PL-R3. A marker moved inside one bar had no Undo name
+
+A marker moved to another beat of the same bar ("Chorus at bar 9" to "Chorus at bar 9") had the
+same words on both sides. The page names an undo step only when the two sides differ, so the move
+got no name. Undo then showed the step before it, and every name after was one step off. Now a
+move inside one bar says the beats: "Chorus at bar 9 beat 1" to "Chorus at bar 9 beat 2.5" (as
+notes say their place). A move to another bar still says the bars.
+
+| | |
+|---|---|
+| Rust test | `markers_tests::a_move_inside_one_bar_says_the_beats` |
+| Rust red first | `left: ("Chorus at bar 9", "Chorus at bar 9")`, `right: ("Chorus at bar 9 beat 1", "Chorus at bar 9 beat 2.5")` |
+| Suite | `pl-arrange` (55 now): after the ⌘-held move inside bar 9 and its Undo, Undo names the drag before it, "Undo moving Chorus" |
+| Suite red first (this page, the server of `5e74f50`) | `FAIL then Undo names the drag to bar 9: Undo Verse at bar 11 (⌘Z)` |
+| Green | `m2-editor` `markers::` 7/7, clippy clean; `pl-arrange` (see the last run below) |

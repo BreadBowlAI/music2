@@ -2,8 +2,8 @@
 // menu at a bar line, named in a field with a short list (written once, when the name is kept),
 // moved by a drag on the grid (⌘ held: freely), renamed by a double-click, deleted and looped to
 // from their menu; ⌥← and ⌥→ go from one to the next; a click goes there; each change one undo
-// step named for Undo; a hand-written layout.json shows its markers, an unreadable one refuses in
-// words. Repeat… on a clip makes copies one after another, as one undo step.
+// step named for Undo, a move inside one bar too (review PL-R3); a hand-written layout.json shows
+// its markers, an unreadable one refuses in words. Repeat… on a clip makes copies one after another, as one undo step.
 //
 //   node e2e/pl-arrange.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import { PROJ, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
@@ -137,6 +137,9 @@ await page.keyboard.up("Meta");
 check(await until(() => markers()[0]?.beat === 33.5), `with ⌘ held it lands off the grid: beat ${markers()[0]?.beat}`);
 await undo();
 check(await until(() => markers()[0]?.beat === 32), "Undo puts it back on bar 9");
+// That move stayed in bar 9, and was still named as a step of its own: Undo now names the drag
+// before it, not the step before that (review PL-R3).
+check(await until(async () => (await undoTitle()).includes("Undo moving Chorus"), 2000), `then Undo names the drag to bar 9: ${await undoTitle()}`);
 f = await flag("Verse");
 await drag({ x: f.x + 6, y: f.y + f.height / 2 }, { x: f.x + 6 - 8 * PPB, y: f.y + f.height / 2 });
 await sleep(500);

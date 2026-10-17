@@ -44,6 +44,19 @@ fn markers_are_written_sorted_into_layout_json() {
     assert!(!f.read("layout.json").contains("markers"));
 }
 
+// A move inside one bar names the beat too, so its two sides differ: the page names an undo step
+// only when they do (review PL-R3). A move to another bar still says the bars.
+#[test]
+fn a_move_inside_one_bar_says_the_beats() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    set(&mut s, vec![m(32.0, "Chorus")]).unwrap();
+    let d = set(&mut s, vec![m(33.5, "Chorus")]).unwrap();
+    assert_eq!((d.before.as_str(), d.after.as_str()), ("Chorus at bar 9 beat 1", "Chorus at bar 9 beat 2.5"));
+    let d = set(&mut s, vec![m(40.0, "Chorus")]).unwrap();
+    assert_eq!((d.before.as_str(), d.after.as_str()), ("Chorus at bar 9", "Chorus at bar 11"));
+}
+
 #[test]
 fn a_second_marker_on_a_beat_is_refused() {
     let f = fixture("examples/first-song");
