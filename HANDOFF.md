@@ -5,7 +5,7 @@ Written 2026-10-16, at the end of step 7 (the engine), updated after its speed w
 check, and when it landed on `main`; again for `taste-next` (taste's look, the song bar and the Mix faders),
 after its review and final checks; for 8b's screens (`8b-ui`), after their review and final check; and once more
 for `polish` (the rest of the top ten), after its review and final check, and when it landed on `main`; and for
-8a's offline half, after its review and final check.
+8a's offline half, after its review and final check, and when it landed on `main`.
 Read this first, then `docs/architecture.md` (the contract) and the design for
 whatever you pick up.
 
@@ -87,15 +87,18 @@ whatever you pick up.
 - **A layout to decide before step 9:** idea 3, one sandbox per box (`docs/designs/kernel-layout/report.md`).
   Research only; it is in Open owner decisions.
 - The owner decided O1 to O5 on 2026-10-15 (below), and std's bump to 0.2 with O3's fix. That question is closed.
-- **8a's offline half: Linux green at `bc41693`, not on `main` yet** (2026-10-17; branch `8a`, `main` at `70f9b61`
-  merged in). Exports, `m2 render` and `m2 bounce` use several cores, with the same bits on any number
+- **8a's offline half is on `main`** (2026-10-17): Linux green at `bc41693`; macOS owed. `main` fast-forwarded to
+  it. Exports, `m2 render` and `m2 bounce` use several cores, with the same bits on any number
   (`--threads N` or `M2_THREADS` to choose). On this server p50 renders about 2.9 times faster on 4 threads.
   Live playback still uses one thread; a song with plugins renders on one thread for now. A review found 4 things:
   all fixed, each with a test. The last check found a fifth (gate G10's timing): fixed too. Then
   `ci/check.sh --gates` passed: every row, nothing passed only on a retry (1,241 Rust tests, 49/49 browser suites,
-  10 of 10 renders, the 6 gate runs). No render changed. Owed once it lands: the owner's short offline sweep on the
-  Mac (Mac runs owed, below). Next: 8a's live half. Build notes `docs/designs/step8/build-notes-8a.md`; the plan
+  10 of 10 renders, the 6 gate runs). No render changed. Owed: the owner's short offline sweep on the Mac (Mac runs
+  owed, below). Next: 8a's live half. Build notes `docs/designs/step8/build-notes-8a.md`; the plan
   `8a-plan.md` beside it.
+- **In flight** (2026-10-17): `next` (`~/m2-runs/wt/nx`, from `main` at `70f9b61`): 8b.7 (heard while dragging),
+  8b.10 (a MIDI keyboard; the computer keyboard as a piano; a metronome), no audio device, a Settings window, plain
+  undo words, effect bypass and order, and the small flaws the pictures showed. And 8a's live half, on `8a`.
 
 ## Your own songs (for the owner)
 
@@ -116,7 +119,7 @@ whatever you pick up.
 | `sounds-merge` | `e1003ba` | All on `main` (a fast-forward, 2026-10-17). Linux green at `e108e46` (reviewed; `ci/check.sh --gates` and the recorded tests), macOS owed. Branch and worktree deleted. |
 | `8b-backend` | `c9cc6ad` | All on `main` (a fast-forward, 2026-10-17). Linux green at `a8199ff`, macOS owed. Branch and worktree deleted. |
 | `taste-next` | `22bea45`, then docs | All on `main` (a fast-forward, 2026-10-17). Linux green (reviewed; `ci/check.sh` and `--gates`), macOS owed. Branch and worktree deleted. |
-| `8a` | `bc41693`, then docs only | Ready to land: 8a's offline half, from `main` at `e571a5f` with `main` at `70f9b61` merged in: the pool (`m2-pool`) and the executor, so exports use several cores with the same bits. Live playback stays on one thread until 8a's live half. Reviewed (4 findings, all fixed with tests). Linux green at `bc41693` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Worktree `~/m2-runs/wt/8a` (its `target/` stays for the live half); plan `docs/designs/step8/8a-plan.md`; build notes `docs/designs/step8/build-notes-8a.md`. |
+| `8a` | `bc41693`, then docs only | All on `main` (a fast-forward, 2026-10-17): 8a's offline half, from `main` at `e571a5f` with `main` at `70f9b61` merged in: the pool (`m2-pool`) and the executor, so exports use several cores with the same bits. Live playback stays on one thread until 8a's live half. Reviewed (4 findings, all fixed with tests). Linux green at `bc41693` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Worktree `~/m2-runs/wt/8a` and its `target/` stay for the live half, on the same branch; plan `docs/designs/step8/8a-plan.md`; build notes `docs/designs/step8/build-notes-8a.md`. |
 | `polish` | `65f59f1`, then docs only | All on `main` (a fast-forward, 2026-10-17): the rest of the top ten, built in four lanes. Linux green at `65f59f1` (reviewed; `ci/check.sh`), macOS owed. Branch and worktree deleted. Plan `docs/designs/step8/polish-plan.md`; build notes `build-notes-polish.md`. |
 | `8b-ui` | `92317ad`, then docs only | All on `main` (a fast-forward, 2026-10-17). 8b's screens: mute and solo, clips and automation, audition, meters. Linux green at `92317ad` (reviewed; `ci/check.sh`), macOS owed. Branch and worktree deleted. |
 | `origin/taste` | `4804247` | All on `main` now (`a0d5f91` and `4804247`, both merged into `taste-next`). Its worktree is deleted. |
@@ -414,9 +417,9 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
 | `taste-next`: the look, 8b.1, 8b.2, 8b.3 | `22bea45` (Linux checks), then docs only | owed: the same `ci/check.sh`, then the look-and-listen steps 22 to 31 |
 | 8b's screens (`8b-ui`) | `92317ad` (Linux checks), then docs only | owed: the same `ci/check.sh`, then the by-ear steps 32 to 38 |
 | `polish`: the rest of the top ten | `65f59f1` (Linux checks), then docs only | owed: the same `ci/check.sh`, then the by-ear steps 39 to 50 |
-| 8a's offline half (all CPU cores, offline) | not yet: `8a` at `bc41693` (Linux checks), then docs only | owed once it lands: the offline sweep below (about 10 minutes); the same `ci/check.sh` covers its Mac tests |
+| 8a's offline half (all CPU cores, offline) | `bc41693` (Linux checks), then docs only | owed: the offline sweep below (about 10 minutes); the same `ci/check.sh` covers its Mac tests |
 
-**8a's offline sweep (for the owner).** Once `8a` is on `main`. Plugged in, lid open, other apps closed, in
+**8a's offline sweep (for the owner).** Plugged in, lid open, other apps closed, in
 Terminal on the Mac itself. Type each line and press Return. Then paste back what is in `~/m2-8a-offline.txt`.
 
 ```sh
@@ -450,7 +453,7 @@ times faster 4 threads render a p50 block than 1, by the p99:
    Lead's default, the owner may change it: in the export question, Return presses the focused button (at first the
    main one), not always the main one as a Mac alert does.
 5. **`polish` is on `main`.** What it left is in `docs/gaps.md` and its build notes' End.
-6. **`8a` is ready to land** (8a's offline half, Linux green at `bc41693`): merge it into `main`, then the owner's
+6. **8a's offline half is on `main`** (Linux green at `bc41693`). Next, the owner's
    short offline sweep on the Mac (Mac runs owed, above). Then **8a's live half** (slice 3: live playback on
    engine threads, with the OS's audio workgroups on a Mac; gate 8's live runs), as the sweep decides, with the two
    gaps above. Where to start: `design-8a.md` §6 and §16 (its slice 2 is the live half), what `8a-plan.md` leaves
