@@ -154,7 +154,7 @@ struct WsQuery {
 
 async fn ws(State(s): S, Query(q): Query<WsQuery>, upgrade: WebSocketUpgrade) -> Response {
     upgrade.on_upgrade(move |socket| async move {
-        ws_loop(s.clone(), socket).await;
+        ws_loop(s.clone(), socket, q.client.clone()).await;
         if let Some(client) = q.client {
             // Off the async threads: putting values back may wait for room in the player's queue.
             let state = s.clone();
@@ -164,8 +164,9 @@ async fn ws(State(s): S, Query(q): Query<WsQuery>, upgrade: WebSocketUpgrade) ->
     })
 }
 
-/// Forward every event (toasts, `graph`) to one client until it goes away.
-async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket) {
+/// Forward every event (toasts, `graph`) to one client until it goes away, and take what it sends:
+/// audition, whose answers go to this socket only (`routes_8b::ws_text`).
+async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket, client: Option<String>) {
     let (unheard, mut events) = state.subscribe();
     for text in unheard {
         if socket.send(Message::Text(text.into())).await.is_err() {
@@ -184,6 +185,13 @@ async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket) {
             incoming = socket.recv() => {
                 match incoming {
                     Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                    Some(Ok(Message::Text(text))) => {
+                        if let Some(reply) = crate::routes_8b::ws_text(&state, client.as_deref(), &text).await
+                            && socket.send(Message::Text(reply.into())).await.is_err()
+                        {
+                            break;
+                        }
+                    }
                     _ => {}
                 }
             }

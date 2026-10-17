@@ -14,6 +14,7 @@ The `8b-backend` track builds the back ends of 8b.4 (mute, solo, mute in song), 
 | B4 | Mute in song as a builder: `mute_in_song`, `feeds`, `POST /api/graph/track/mute`, `m2 mute-in-song` | built |
 | B5 | Gate 8's ducking clauses on `env` and `follow`; live equals offline on them | built |
 | B9 | Audition in the engine: live notes on a lane (`Msg::Live`), `Player::live`, how many are held | built |
+| B10 | Audition on the server: the WebSocket and `POST /api/graph/audition`, sources, the watchdog, `live` in the status | built |
 | W1 | The keyed compressor and the gate's third clause | waits for std 0.2 on main |
 
 ---
@@ -274,3 +275,58 @@ note).
 **Contract:** MON-7 (the live note, its source, room, ids, what ends it) and its *Today*, RENDER-9
 (item 1: notes a lane scheduled), RENDER-14 (merging at frame 0, and its *Today*), RENDER-26a,
 RENDER-28 (the message list, and its *Today*), the Engine shape.
+
+---
+
+## B10. Audition on the server
+
+**In short:** a window can now play notes. It sends them on its WebSocket; an agent sends them to
+`POST /api/graph/audition`. They never wait for the session, and work in a read-only window.
+They end when let go, when the window closes, or when it goes quiet for 10 s.
+
+| Piece | What it does | Where |
+|---|---|---|
+| `Graph::audition(client, msg)` | `{module, lane, on: [{h, pitch, velocity}], off: [h], keep: [h]}`. Offs first, then Ons. Finds the lane in the plan last sent and sends `Live` under the control lock, so it queues behind that plan's activation. Refuses a pitch outside 0 to 127, a velocity outside 0 to 1, and notes with no lane, in words (R2). | `crates/server/src/graph/audition.rs` (new) |
+| Sources | Each window (`client`) is a source, numbered on first use. Each held handle remembers its lane by name, so an Off after an edit finds it in the new plan. A handle struck again is let go first, on whatever lane it sounds. | `Sources` in one `ControlPlane` field |
+| A lane nothing plays | Answers `{"t": "audition", "module", "lane", "silent": "Nothing plays this lane"}`, to that window only. | same |
+| The window closes | `client_gone` lets go of its notes (one release). | one line in `Graph::client_gone` |
+| The watchdog | A window quiet for 10 s is let go and forgotten. Run by `music2-tell` every 300 ms. | `Graph::expire_auditions`; one line in `crates/server/src/lib.rs` |
+| `POST /api/graph/audition` | `{client, …}`, not in `WRITES_8B`. Answers `{}` or the silent answer. | `crates/server/src/routes_8b.rs` |
+| The WebSocket | `ws_loop` reads text now. `{"t": "audition", …}` goes to `routes_8b::ws_text`; its answer, or `{"t": "audition", "error": …}`, goes to that socket only. | `crates/server/src/routes.rs` (a few lines) |
+| `live` | Live notes sounding, in `/api/graph/status` and the graph state. | `Activity.live` |
+
+**Tests** (`crates/server/src/graph/audition_tests.rs`, new; `crates/server/src/routes_8b_tests.rs`):
+
+| Test | Red first? |
+|---|---|
+| `a_note_sounds_until_it_is_let_go` (a pitch drag in one message) | — |
+| `a_handle_struck_again_elsewhere_lets_go_first` | red without it: two notes left on |
+| `a_lane_nothing_reads_says_so` (an unread lane, and a missing one) | — |
+| `bad_notes_are_refused_in_words` | — |
+| `a_closed_window_releases_its_notes` (only its own) | red without the hook in `client_gone` |
+| `the_watchdog_releases_a_quiet_window` (a keepalive keeps the other) | red with the wrong quiet time |
+| `audition_works_read_only` | — |
+| `an_off_after_an_edit_finds_its_lane` (the lane's slot moves) | red with the Off sent to the old slot |
+| `audition_never_waits_for_a_compile`: sent in 0.01 ms, heard 1247 ms before a 1262 ms compile ended (Linux, information only) | — |
+| `audition_over_http_and_the_websocket` (the token; a window's answers reach only it; its close lets go) | red with `ws_loop` ignoring text |
+
+The tests were written after the code here, so most were made red by breaking the code they
+check, as the column says.
+
+**Choices made here:**
+- **A WebSocket test without a new crate:** a small client written by hand in the test (the
+  RFC's framing). Adding `tokio-tungstenite` would change `Cargo.lock`.
+- **A window without a `client` id** can't audition; it is told so. The web always sends one.
+- **`silent` names the lane** too, so the roll can tell which lane it was about.
+- **`velocity` is 0.8 when left out**, for agents.
+- The answer to "a lane nothing reads" comes for every message with Ons. The roll shows it once.
+
+**Seen once, not ours:** in one full `m2-server` run, `loading_is_published_while_a_plugin_is_created`
+failed, and passed in the next run and 5 runs alone. It reads the loading list twice, from the
+activity and then from the state, and the load can end between the two reads while the machine
+is busy. Step 7's test; left as it is.
+
+**Checks:** `cargo check --workspace --all-targets`; clippy on `m2-server`; `m2-server` tests.
+
+**Contract:** MON-7 *Today* (the server half), RENDER-29 *Today*, `docs/gaps.md` #8. The Planes
+table already lists audition in the control row.

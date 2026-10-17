@@ -1,6 +1,7 @@
 //! The routes of 8b's back ends, in a router of their own, merged into the API's (G5): mute and
-//! solo, and audition. A route here that writes the project is in [`WRITES_8B`], and a read-only
-//! window answers it 423 with WRITE-18's message, as `routes.rs` answers its own.
+//! solo, and audition, also read off the WebSocket ([`ws_text`]). A route here that writes the
+//! project is in [`WRITES_8B`], and a read-only window answers it 423 with WRITE-18's message, as
+//! `routes.rs` answers its own.
 
 use std::sync::Arc;
 
@@ -87,11 +88,36 @@ struct AuditionReq {
 }
 
 /// Play or let go of notes on a lane (MON-7): `{client, module, lane, on: [{h, pitch, velocity}],
-/// off: [h], keep: [h]}`. Not a write: it works read-only, and never waits for the session.
-/// Answers `{}`, or `{"t": "audition", "silent": …}` when nothing plays the lane.
+/// off: [h], keep: [h]}`, as a window sends on its WebSocket. Not a write: it works read-only, and
+/// never waits for the session. Answers `{}`, or `{"t": "audition", "silent": …}` when nothing
+/// plays the lane.
 async fn graph_audition(State(s): S, Json(r): Json<AuditionReq>) -> ApiResult {
     let answer = blocking(move || s.graph.audition(&r.client, r.audition)).await?;
     Ok(Json(answer.unwrap_or_else(|| json!({}))))
+}
+
+/// A message a window sent on its WebSocket: `{"t": "audition", …}` from the window `client` plays
+/// notes as [`graph_audition`] does. What it answers goes to that window only, as text; an error
+/// is `{"t": "audition", "error": …}`. Other messages are ignored.
+pub(crate) async fn ws_text(state: &Arc<AppState>, client: Option<&str>, text: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(text).ok()?;
+    if v["t"] != "audition" {
+        return None;
+    }
+    let said = |e: String| Some(json!({"t": "audition", "error": e}).to_string());
+    let Some(client) = client.map(str::to_string) else {
+        return said("This window has no client id, which audition needs.".into());
+    };
+    let a: Audition = match serde_json::from_value(v) {
+        Ok(a) => a,
+        Err(e) => return said(format!("This audition message doesn't read: {e}")),
+    };
+    let state = state.clone();
+    match tokio::task::spawn_blocking(move || state.graph.audition(&client, a)).await {
+        Ok(Ok(answer)) => answer.map(|v| v.to_string()),
+        Ok(Err(e)) => said(format!("{e:#}")),
+        Err(e) => said(e.to_string()),
+    }
 }
 
 #[cfg(test)]

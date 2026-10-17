@@ -120,7 +120,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 8 | **Hear notes** when you click, draw or move them in the piano roll (audition), and an all-notes-off button (panic). | You can't write a melody without hearing it. The new player has no way to play live notes; MIDI input will need the same path. | Yes | medium |
+| 8 | **Hear notes** when you click, draw or move them in the piano roll (audition), and an all-notes-off button (panic). The engine and server half is built (8b.6): a window plays live notes on a lane over its WebSocket or `POST /api/graph/audition`, and they keep sounding through edits, stop and loops until let go ([MON-7](architecture.md#monitoring-overlays-and-mute-in-song)). The piano roll doesn't send them yet. | You can't write a melody without hearing it. MIDI input will take the same path. | Yes | medium |
 | 15 | **Note tools**: triplet snap (1/8T and 1/16T, three notes in the space of two), quantize, transpose a clip, humanize, swing, legato, and copy/paste notes between clips. | These clean up a drawn or played part, and triplets are common in pop hats and rolls. The piano roll snaps only to 1/4, 1/8, 1/16 and 1/32, and has only nudging with the arrow keys and ⌘D. | Partly (triplet snap, quantize, humanize, and octave up and down) | small |
 | 16 | **Scale help**: choose a key and scale, highlight or lock the notes in the key, chord stamps and an arpeggiator. `std/theory` and `std/gen` are designed but not built. | Beginners write better melodies and chords with a scale guide. | Partly (a key and scale, and showing only in-key notes) | medium |
 
