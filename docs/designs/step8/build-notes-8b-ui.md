@@ -25,7 +25,7 @@ adds its own section here, in the same commit.
 | U7 (lane B) | Automation drawn on the timeline: make a clip, add, move and delete points, paint with B; Remove automation from the lane or from the Device view | done |
 | U9 (lane C) | You hear notes as you click, drag or draw them in Notes. The piano keys play. A toggle turns it off. A hint says when you won't hear anything | done |
 | U10 (lane C) | A level meter in every track header and on the Song row. It shows how loud each track is, and the whole song, while it plays | done |
-| Merge | Nothing new to see beyond the lanes. All three lanes are in one branch, with main (8b-backend's last fixes, std 0.2) and taste-next's newest work | done |
+| Merge | Nothing new beyond the lanes and taste-next's Mix view. All three lanes are in one branch, with main (8b-backend's last fixes, std 0.2) and taste-next's newest work | done |
 
 ## Setup: the merges
 
@@ -897,9 +897,10 @@ five at once, and they move again once it reopens.
 - All three lanes are in `8b-ui` now: lane A (U1, U2, U3, U11), lane B (U4 to U7) and lane C (U9, U10).
   Every slice was green in its lane, so all of them were merged.
 - `main` was merged too. It holds all of 8b-backend (up to `c9cc6ad`) and the sounds merge (std 0.2).
-- taste-next's newest work was merged: the song bar finished, std's gains, the Mix view in the state.
-- Only the docs conflicted. Both sides were kept each time.
-- Nothing broke. All 39 browser suites pass (1692 checks), and all Rust tests pass.
+- taste-next's newest work was merged: the song bar finished, std's gains, and the Mix view with its
+  strips, faders and pans.
+- Only the docs and one line of the timeline conflicted. Both sides were kept each time.
+- Nothing broke. All 40 browser suites pass (1759 checks), and all Rust tests pass.
 
 ### What merged
 
@@ -912,19 +913,22 @@ five at once, and they move again once it reopens.
 | `ed910e5` | `taste-next` at `6c8aeea`: the song bar finished (B2), std's gains (B3), the Mix view in the state and the first pan (B4) | `docs/architecture.md` PKG-13 and `docs/gaps.md` #4 and #20, below |
 | `dc381fd` | `main` at `e571a5f`: step 7's macOS check and its HANDOFF (docs only) | none |
 | `160cbf8` | `taste-next` at `de85438`: the knob's drag and lease moved into `Knob.tsx`, for the Mix view (web only) | none; lane B's lane menu on a driven input stays in `NodeGraph.tsx` |
+| `83c3ae0` | `taste-next` at `e0f0039`: the Mix view's strips, faders and pans, Master on the right, suite `s8-mix` (web only) | `SongTimeline.tsx`: the header stays U0's `TrackHeader`, whose name now listens as `"header"`; `docs/gaps.md` #4, below |
+| `3da9b2c` | `taste-next` at `f98c9d8`: the Song's mixer as one compact card, the suites read the Mix strips, a refused first pan (web and suites only) | none |
 
 | File | How it was settled |
 |---|---|
 | `docs/architecture.md` PKG-13 | Both sentences kept: taste's (finding a track's channel reads the sidechain inputs) and 8b.4's (the checker leaves every sidechain input out of the overlays) |
-| `docs/gaps.md` #4 | taste's mixer facts kept. Mute and solo now say they are built: M and S, the pill, Mute in song |
+| `docs/gaps.md` #4 | Now "Mute and solo in the Mix view": the strips have faders and pans (taste) but no M and S yet (U12). It also says what 8b.4 built: M and S on the headers, the pill, Mute in song |
 | `docs/gaps.md` #20 | Now says the meters are built (every track header and the Song row). Still missing: loudness for export, meters after the fader |
 | `e2e/run.mjs`, `e2e/README.md` | No conflict: each lane's rows sit at their own place |
 | std | Only taste-next changed a kernel. `std/build.sh --check` rebuilds std.wasm to the same bytes |
 
 `rerere` was on for each merge, so these resolutions can replay when 8b-ui lands.
 
-The last two merges changed no Rust, so the Rust checks at `ed910e5` stand for the tip, and so does the
-server copy in `bin/ed910e5`. The desktop app in `wt/ui` was rebuilt after them: it holds the newest page.
+The merges after `ed910e5` changed no Rust (web, suites and docs only), so the Rust checks at `ed910e5`
+stand for the tip, and so does the server copy in `bin/ed910e5`. The desktop app in `wt/ui` was rebuilt
+after them: it holds the newest page.
 
 ### Checks
 
@@ -932,13 +936,14 @@ server copy in `bin/ed910e5`. The desktop app in `wt/ui` was rebuilt after them:
 |---|---|
 | `cd web && npm run build` (type-checks) | ok |
 | `cargo build --locked --workspace --all-targets` | ok; `Cargo.lock` unchanged. Server and `m2` copied to `~/m2-runs/s8ui/bin/ed910e5/` |
-| Every browser suite (`run.mjs all`, with `CLAP_PATH`), at `ed910e5` and again at `160cbf8` | 39 of 39 ok, 1692 of 1692 checks, both times |
-| The s8 suites in it | s8-mute 141, s8-clips 90, s8-automation 43, s8-audition 49, s8-meters 22, s8-tracks 75, s8-songbar 68 |
+| Every browser suite (`run.mjs all`, with `CLAP_PATH`), at `ed910e5` and `160cbf8` | 39 of 39 ok, 1692 of 1692 checks, both times |
+| The same at `83c3ae0` and at `3da9b2c` (taste's `s8-mix` added) | 40 of 40 ok: 1755 of 1755, then 1759 of 1759 checks |
+| The s8 suites in it | s8-mute 141, s8-clips 90, s8-automation 43, s8-audition 49, s8-meters 22, s8-tracks 75, s8-songbar 68, s8-mix 67 (63 at `83c3ae0`) |
 | The suites the slices and merges move | taste 39, s5-knobs 120, fx-fixes 75, export 37, notes 52, s4-clips 28, s6-builders 55, pc-keys 37, live3b 60: all ok |
 | `cargo test --locked --no-fail-fast` on the 10 crates the merges touched | 1037 passed, 0 failed, 6 ignored (`m2`, `music2-desktop` 8, `m2-play`, `m2-runtime`, `m2-script`, `m2-session`, `m2-song`, `m2-editor`, `m2-gates`, `m2-server`) |
 | `cargo clippy --locked` on the same crates, `--all-targets -- -D warnings` | clean |
 | std kernels: tests, clippy, `std/build.sh --check` | 111 passed; clean; the same bytes |
-| Logs | `~/m2-runs/logs/ui-int-build-*.log`, `ui-int-all-*.log`, `ui-int-all2-*.log`, `ui-int-rust-*.log`; suite logs in `~/m2-runs/s8ui/scratch/e2e/int/all` and `…/int/all2` |
+| Logs | `~/m2-runs/logs/ui-int-build-*.log`, `ui-int-all-*.log`, `ui-int-all2-*.log`, `ui-int-all3-*.log`, `ui-int-all4-*.log`, `ui-int-rust-*.log`; suite logs in `~/m2-runs/s8ui/scratch/e2e/int/all` to `…/int/all4` |
 
 The suites ran through `~/m2-runs/s8ui/tools/ui-suites.sh`, a copy of lane A's runner for `wt/ui`.
 It copies the page and the suites first, so nothing changes under a running suite.
@@ -950,6 +955,7 @@ It copies the page and the suites first, so nothing changes under a running suit
 - The owner's pictures from the desktop app on Xvfb `:98` (U1, U2, U3, U4, U5, U9, U10, and U11 if a
   real load shows). The app in `wt/ui` is built with this page. Lane B's U6 and U7 pictures are in
   `~/m2-runs/s8ui/shots/lane-b/`.
+- U12 (M, S and meters on the Mix strips) can start: taste-next's Mix view is in.
 - `docs/gaps.md` #8, #9, #14 and #17 still say the UI is to come; the End rewrites them, with the line
   that view settings (the grid, the audition toggle) reset at each app launch (Q7).
 - taste.md §3.3 and the TB-8 and TB-13 rows should say Q15's choice (no DSP pill, no top-bar master
