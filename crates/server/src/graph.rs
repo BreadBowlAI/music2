@@ -40,6 +40,7 @@ mod actor;
 pub mod audition;
 mod events;
 pub mod lease;
+pub mod meters;
 pub mod overlay;
 mod preview;
 mod watcher;
@@ -171,6 +172,11 @@ pub struct Activity {
     pub device_errors: u64,
     /// Live notes sounding: audition's (MON-7).
     pub live: u32,
+    /// The DSP load: the longest audio callback of the last second, as a share of the device's
+    /// period, while the meters read it (8b.8).
+    pub load: f32,
+    /// Audio callbacks that took longer than their period since the player started: dropouts too.
+    pub late: u64,
 }
 
 impl Activity {
@@ -281,6 +287,8 @@ struct ControlPlane {
     leases: Leases,
     /// The windows that play notes live (MON-7).
     audition: audition::Sources,
+    /// The DSP load of the last second, read by the meters (8b.8).
+    meters: meters::Meters,
 }
 
 /// How a control named at a revision is found without the session.
@@ -556,12 +564,18 @@ impl Inner {
         let device = self.current_device();
         let held = device.as_ref().is_some_and(|d| d.player.held());
         let e = device.as_ref().map(|d| d.player.device_errors()).unwrap_or_default();
+        let (load, late) = {
+            let cp = self.control.lock();
+            (cp.meters.load(), cp.meters.late())
+        };
         Activity {
             paused: held.then_some("exporting"),
             loading: self.owner.loading(),
             xruns: e.xruns,
             device_errors: e.changes + e.gone + e.other,
             live: device.as_ref().map_or(0, |d| d.player.live_notes()),
+            load,
+            late,
         }
     }
 
