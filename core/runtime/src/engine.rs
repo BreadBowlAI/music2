@@ -219,10 +219,12 @@ impl Engine {
 
     /// An engine playing `renderer`, at its rate, from its transport. The engine clock goes on
     /// from the renderer's, so a renderer that already ran keeps its voices' timing.
-    pub fn with(renderer: Box<Renderer>) -> Engine {
+    pub fn with(mut renderer: Box<Renderer>) -> Engine {
         let mut e = Engine::new(renderer.sample_rate());
         e.clock = renderer.clock();
         e.pos = renderer.transport().pos();
+        // What an engine plays is live: a node that fails stops alone (RENDER-25).
+        renderer.live = true;
         e.current = Some(renderer);
         e
     }
@@ -470,6 +472,7 @@ impl Engine {
                     self.retire_renderer(renderer, retire);
                     return Ok(false);
                 }
+                renderer.live = true;
                 let took = match self.current.as_deref_mut() {
                     None => !renderer.has_entry(),
                     Some(old) => renderer.take_over(old, self.clock),

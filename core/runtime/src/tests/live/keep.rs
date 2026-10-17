@@ -567,15 +567,24 @@ fn a_trap_on_any_thread_count_gives_the_same_bits() {
     assert_eq!(rig.e.current().unwrap().info().stopped.why(lat), Some(Why::Crashed));
 }
 
-// RENDER-25: offline a trap still fails the render, naming the node: an export never leaves a sound
-// out.
+/// [`two_tracks`] with `t:<kind>` failing from the first block, rendered offline as an export
+/// renders it (`m2_editor::Render::new`: not strict): what it says.
+fn exported(kind: &str, pk: &PackageSet) -> anyhow::Error {
+    let mut ir = two_tracks(kind, false);
+    ir.modules[0].nodes[0] = serde_json::from_value(json!({"id": "cue", "op": "const", "value": 1})).unwrap();
+    let mut r = Renderer::new(&check(&ir, pk).unwrap(), &DataSet::empty(), pk, SR).unwrap();
+    r.set_strict(false);
+    match r.render(0.01) {
+        Err(e) => e,
+        Ok(_) => anyhow::anyhow!("the export finished, with {:?} stopped", r.info().stopped.news()),
+    }
+}
+
+// RENDER-25: offline a trap still fails the render, naming the node, strict or not (an export isn't
+// strict): an export never leaves a sound out.
 #[test]
 fn a_trap_still_fails_an_export_and_names_the_node() {
-    let pk = t_packages();
-    let mut ir = two_tracks("trap", false);
-    ir.modules[0].nodes[0] = serde_json::from_value(json!({"id": "cue", "op": "const", "value": 1})).unwrap();
-    let f = check(&ir, &pk).unwrap();
-    let e = Renderer::new(&f, &DataSet::empty(), &pk, SR).unwrap().render(0.01).map(drop).unwrap_err();
+    let e = exported("trap", &t_packages());
     assert!(format!("{e:#}").contains("a/lat crashed"), "{e:#}");
 }
 
@@ -590,6 +599,8 @@ fn a_kernel_over_its_memory_says_it_ran_out() {
     let e = Renderer::new(&check(&ir, &pk).unwrap(), &DataSet::empty(), &pk, SR).unwrap().render(0.01).map(drop).unwrap_err();
     assert_eq!(format!("{e:#}"), "a/lat ran out of memory: a sound may use up to 32 MB");
     assert!(e.downcast_ref::<OutOfMemory>().is_some());
+    let e = exported("hog", &pk);
+    assert_eq!(format!("{e:#}"), "a/lat ran out of memory: a sound may use up to 32 MB", "an export");
     let lat = named(&check(&two_tracks("hog", false), &pk).unwrap(), "a/lat");
     let (_, a, b, rig) = failing("hog", &pk, true, 6, None);
     let (_, _, clean_b, _) = failing("hog", &pk, false, 6, None);

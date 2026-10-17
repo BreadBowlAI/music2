@@ -131,6 +131,8 @@ struct Block {
     beats64: [f64; BLOCK],
     sample_rate: f64,
     strict: bool,
+    /// Played by the live [`Engine`]: a node that fails stops alone (RENDER-25).
+    live: bool,
     /// An activation's fade window while it runs: the engine clock it began at, and its frames.
     window: Option<(u64, u32)>,
 }
@@ -1375,16 +1377,16 @@ fn step<R: Reads>(
     };
     // RENDER-25: live, a box whose output went non-finite, or that trapped or stopped, is marked;
     // an activation resets it as it moves it. A finite block clears the mark.
-    if outer.is_none() && !b.strict && matches!(exec, Exec::Kernel(_) | Exec::Poly(_) | Exec::Plugin(_) | Exec::Feedback { .. }) {
+    if outer.is_none() && b.live && matches!(exec, Exec::Kernel(_) | Exec::Poly(_) | Exec::Plugin(_) | Exec::Feedback { .. }) {
         *poisoned = done.is_err() || exec.stopped() || out.iter().any(|o| o.iter().fold(false, |a, x| a | !x.is_finite()));
     }
     done
 }
 
-/// Block `b`'s graph: each partition of `sched` a task on `runner`, its nodes in plan order. Strict,
-/// the error first in plan order, if a node failed: what reads a failed node is skipped, the rest
-/// runs. Live, a node that fails stops alone, marked in `stopped`. A panic in a task is raised again
-/// here, once the block is done.
+/// Block `b`'s graph: each partition of `sched` a task on `runner`, its nodes in plan order.
+/// Offline, the error first in plan order, if a node failed: what reads a failed node is skipped, the
+/// rest runs. Live, a node that fails stops alone, marked in `stopped`. A panic in a task is raised
+/// again here, once the block is done.
 fn run_graph(
     graph: &mut Graph,
     sched: &mut Schedule,
@@ -1403,8 +1405,9 @@ fn run_graph(
     parts.take_error()
 }
 
-/// Partition `p`'s task: its nodes in plan order, in the one floating-point mode. Strict, false
-/// when a node failed, its error kept in `parts`. Live, a node that fails stops alone (RENDER-25):
+/// Partition `p`'s task: its nodes in plan order, in the one floating-point mode. Offline (an
+/// export too, strict or not), false when a node failed, its error kept in `parts`. Live, played by
+/// the [`Engine`], a node that fails stops alone (RENDER-25):
 /// it is silent from then on, what reads it reads silence, its mark in `stopped` tells the session,
 /// and the partition goes on.
 fn run_part(view: &GraphView, parts: &parts::Parts, p: u32, b: &Block, lanes: &[LaneSlot], stopped: &Stopped) -> bool {
@@ -1417,7 +1420,7 @@ fn run_part(view: &GraphView, parts: &parts::Parts, p: u32, b: &Block, lanes: &[
         // its inputs complete, with Acquire).
         let own = unsafe { view.own(i) };
         if let Err(e) = step(own, &view.reader(parts, p, i), b, Seg::WHOLE, None, None, lanes) {
-            if b.strict {
+            if !b.live {
                 // SAFETY: this is partition p's task.
                 unsafe { parts.fail(p, i, e) };
                 return false;
@@ -1977,6 +1980,9 @@ pub struct Renderer {
     pending: Pending,
     delivered: u64,
     strict: bool,
+    /// Played by the live [`Engine`], which marks every renderer it plays: a node that fails stops
+    /// alone (RENDER-25). Offline, every render fails, naming the node.
+    live: bool,
     non_finite: u64,
     trace: Option<Trace>,
     dropped: u32,
@@ -2244,6 +2250,7 @@ impl Renderer {
             pending: Pending::EMPTY,
             delivered: 0,
             strict: true,
+            live: false,
             non_finite: 0,
             trace: None,
             dropped: 0,
@@ -2289,7 +2296,8 @@ impl Renderer {
     }
 
     /// Strict (the default): a NaN or infinity from any kernel is an error naming it.
-    /// Live: such samples are silenced at the output and counted in [`Self::non_finite`].
+    /// Not strict (live, and an export): such samples are silenced at the output and counted in
+    /// [`Self::non_finite`].
     pub fn set_strict(&mut self, strict: bool) {
         self.strict = strict;
     }
@@ -2306,6 +2314,7 @@ impl Renderer {
             beats64: [0.0; BLOCK],
             sample_rate: self.sample_rate,
             strict: self.strict,
+            live: self.live,
             window: self.plan.faded_from.map(|f| (f, self.plan.fade)),
         };
         for r in runs.as_slice() {
@@ -2389,7 +2398,7 @@ impl Renderer {
     }
 
     /// A block's post-pass, on this thread, once the graph ran: feedback rings, the output, the
-    /// meters. When a node `failed` (strict only: live, it stopped alone), its error, and nothing
+    /// meters. When a node `failed` (offline only: live, it stopped alone), its error, and nothing
     /// more is written for the block, as step 7's loop did.
     fn post(&mut self, b: &Block, failed: Option<anyhow::Error>) -> Result<()> {
         if let Some(e) = failed {
