@@ -1,0 +1,169 @@
+// Mute and solo while listening (8b.4, MON-1 to MON-4) and mute in the song (MON-5): the calls,
+// what this window shows while they are on their way, and the words for them.
+//
+// Muting while listening is no edit: no undo step, no revision, no project file. The server keeps
+// the sets in memory and in `.music2/overlays.json`, and answers each change with the state's
+// `overlays`. Mute in the song is an edit: one undo step, the `muted` option in the track's code.
+
+import { create } from "zustand";
+import { moduleName, type GraphState } from "./graph";
+import type { Heard, OverlayState } from "./graph8b";
+import { token } from "./native";
+import { useStore } from "./store";
+
+/** The tracks muted and soloed while listening, by key. */
+export interface Sets {
+  mute: string[];
+  solo: string[];
+}
+
+/**
+ * What this window asked for and the server hasn't answered yet, or null. The buttons and the pill
+ * show it at once, and a state the page fetched meanwhile (older) doesn't flicker them back.
+ */
+const useAsked = create<{ asked: Sets | null }>(() => ({ asked: null }));
+
+const NONE: string[] = [];
+
+/** The sets as this window shows them: what it asked for, else the state's. */
+export function useSets(): Sets {
+  const asked = useAsked((s) => s.asked);
+  const mute = useStore((s) => s.graph?.overlays?.mute ?? NONE);
+  const solo = useStore((s) => s.graph?.overlays?.solo ?? NONE);
+  return asked ?? { mute, solo };
+}
+
+function sets(): Sets {
+  const asked = useAsked.getState().asked;
+  if (asked) return asked;
+  const o = useStore.getState().graph?.overlays;
+  return { mute: o?.mute ?? [], solo: o?.solo ?? [] };
+}
+
+/** How `module` is heard, as the state says now. */
+const heardOf = (module: string): Heard => useStore.getState().graph?.overlays?.heard[module] ?? "heard";
+
+/** Whether `module` is a track of the song playing: the pill counts only those (an entry of a track that is gone stays, MON-4). */
+export const inSong = (o: OverlayState | undefined, module: string) => !o || module in o.heard;
+
+const auth: Record<string, string> = token ? { "x-m2-token": token } : {};
+
+/** POST `body` to a graph route; an error answer throws with the server's words. */
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`/api/graph${path}`, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+  return data as T;
+}
+
+const message = (error: unknown) => (error instanceof Error ? error.message : String(error)).replace(/^edit rejected: /, "");
+
+/** A change as the overlay route takes it: `clear` first, then `exclusive`, then each mute and solo. */
+interface Change {
+  mute?: Record<string, boolean>;
+  solo?: Record<string, boolean>;
+  exclusive?: string;
+  clear?: boolean;
+}
+
+/** Requests sent; only the newest one's answer is shown (M6). */
+let sent = 0;
+/** One request at a time, in the order asked: two quick clicks on M land in that order. */
+let queue: Promise<unknown> = Promise.resolve();
+
+/** Ask for `change`, showing `next` until the server answers. A refusal puts the screen back and says why. */
+function ask(change: Change, next: Sets) {
+  const { graph, toast } = useStore.getState();
+  if (!graph) return;
+  const session = graph.session;
+  useAsked.setState({ asked: next });
+  const n = ++sent;
+  queue = queue
+    .then(() => post<OverlayState>("/overlay", { session, ...change }))
+    .then(
+      (overlays) => {
+        if (n !== sent) return;
+        useAsked.setState({ asked: null });
+        const g = useStore.getState().graph;
+        if (g?.session === session) useStore.getState().set({ graph: { ...g, overlays } });
+      },
+      (error) => {
+        if (n === sent) useAsked.setState({ asked: null });
+        toast(message(error));
+      },
+    );
+}
+
+const put = (list: string[], keys: string[], on: boolean) => (on ? [...new Set([...list, ...keys])].sort() : list.filter((k) => !keys.includes(k)));
+const each = (keys: string[], on: boolean) => Object.fromEntries(keys.map((k) => [k, on]));
+
+/** Mute (or unmute) `keys` while listening. */
+export function setMute(keys: string[], on: boolean) {
+  const s = sets();
+  ask({ mute: each(keys, on) }, { ...s, mute: put(s.mute, keys, on) });
+}
+
+/** Solo (or unsolo) `keys`: a solo adds to the others. */
+export function setSolo(keys: string[], on: boolean) {
+  const s = sets();
+  ask({ solo: each(keys, on) }, { ...s, solo: put(s.solo, keys, on) });
+}
+
+export const isMuted = (module: string) => sets().mute.includes(module);
+export const isSoloed = (module: string) => sets().solo.includes(module);
+
+/**
+ * The M key and Track ▸ Mute: toggle the track's mute. A track muted in the song is skipped (its
+ * mute is an edit, in its menu): the toast says where.
+ */
+export function toggleMute(module: string, name: string) {
+  if (heardOf(module) === "muted-in-song") return useStore.getState().toast(`${name} is muted in the song. Unmute in song is in its menu.`);
+  setMute([module], !isMuted(module));
+}
+
+export const toggleSolo = (module: string) => setSolo([module], !isSoloed(module));
+
+/** ⌥-click on S: only this track soloed; on the only solo, no solo at all. */
+export function soloOnly(module: string) {
+  const s = sets();
+  if (s.solo.length === 1 && s.solo[0] === module) return setSolo([module], false);
+  ask({ exclusive: module }, { ...s, solo: [module] });
+}
+
+/** The pill's ×: the track's mute and solo both off. */
+export function release(module: string) {
+  const s = sets();
+  ask({ mute: { [module]: false }, solo: { [module]: false } }, { mute: put(s.mute, [module], false), solo: put(s.solo, [module], false) });
+}
+
+/** The pill's Clear all: every mute and solo off. */
+export const clearAll = () => ask({ clear: true }, { mute: [], solo: [] });
+
+/** "Duck", "Duck and Filter": what a track drives besides its sound (MON-2), which a mute leaves on. Null when nothing. */
+export function drives(o: OverlayState | undefined, module: string): string | null {
+  const names = [...new Set((o?.feeds[module] ?? []).map((f) => f.label))];
+  return names.length ? listed(names) : null;
+}
+
+/** "Kick", "Kick and Hats", "Kick, Hats and Bass". */
+export const listed = (names: string[]) => (names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : (names[0] ?? ""));
+
+/** What the mutes pill says: "1 muted", "2 muted · 1 solo", "1 solo"; empty when nothing is on. Tracks no longer in the song aren't counted. */
+export function pillWords(o: OverlayState | undefined, s: Sets) {
+  const m = s.mute.filter((k) => inSong(o, k)).length;
+  const n = s.solo.filter((k) => inSong(o, k)).length;
+  return [m ? `${m} muted` : "", n ? `${n} ${n === 1 ? "solo" : "solos"}` : ""].filter(Boolean).join(" · ");
+}
+
+/** Whether the mutes pill shows now. */
+export function usePill() {
+  const s = useSets();
+  const o = useStore((st) => st.graph?.overlays);
+  return pillWords(o, s) !== "";
+}
+
+/** A track's name on screen, by its key. */
+export function trackName(graph: GraphState, module: string) {
+  const t = graph.timeline.tracks.find((x) => x.module === module);
+  return moduleName({ key: module, label: t?.label ?? graph.view.modules.find((m) => m.key === module)?.label });
+}

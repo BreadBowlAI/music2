@@ -15,6 +15,7 @@ adds its own section here, in the same commit.
 |---|---|---|
 | Setup | Nothing new to see. The back ends of 8b-backend are merged in. A deleted track no longer leaves its mute behind | done |
 | U0 | Nothing new to see, except the roll's grid control now comes from a shared file. The places the lanes fill are ready | done |
+| U1 (lane A) | M and S on every track. A pill at the top says "2 muted · 1 solo"; click it for the list and Clear all | done |
 
 ## Setup: the merges
 
@@ -149,3 +150,82 @@ the 1 px fix of the slots (both green); the probe showed the slots 1 px left of 
   beat, as the timeline's drag is today.
 - Settings that reset at each app launch (the grid, later the audition toggle): one line in
   `docs/gaps.md` at the End.
+
+## U1: M, S and the mutes pill (lane A)
+
+**In short**
+- Every track header has **M** (mute) and **S** (solo). Click to turn one on or off.
+- **⌥-click S** (Alt-click on a PC) plays only that track.
+- **Drag** across several M (or S) buttons to set them all the same way.
+- The **M** and **S** keys work on the selected track. ⌃M and ⌃S do too, on a Mac.
+- While anything is muted or soloed, a blue **pill** at the top says so: "2 muted · 1 solo".
+  Click it to see each track, with its own × and **Clear all**.
+- These mutes are only for listening. They don't change the song's code or the export, and they are
+  no undo step. They are kept when the song closes, so the pill tells you when a song opens muted.
+- Checks: the new `s8-mute` suite (68 checks), and 10 suites that cover the header and the top bar.
+
+### What the user sees
+
+| Thing | Looks like |
+|---|---|
+| M, off | a 20 px square, 1 px `line-strong` border, "M" in `fg-muted` |
+| M, on | `gray-700` fill, white "M" |
+| S, on | `accent` fill, white "S" |
+| Hover | a step darker (`press` when off), as the header is `hover` already |
+| A muted track | name `fg-muted`, clips at 40% and grey (U0's look) |
+| A track a solo leaves out | name `fg-faint`, clips at 40% and grey |
+| Mutes pill | `accent-soft` fill, `accent-strong` words, just right of the status pill |
+| Its list (360 px) | each track: colour, name, "Muted" or "Soloed", its ×. Kick's row adds "Still drives Duck". A foot line, "Only while you listen: the export has every track.", and Clear all |
+| The pill's tooltip | "Mutes and solos while you listen. The export has every track." In a read-only window it starts "Not saved: this song is open in another window." |
+| M's tooltip on muted Kick | "Muted · still drives Duck. Unmute (M)" |
+| S's tooltip | "Solo (S) · ⌥-click: solo only this track" ("Alt-click" on a PC) |
+
+### What changed
+
+| File | What |
+|---|---|
+| `web/src/lib/overlays.ts` (new) | The overlay route's calls. The screen changes at once; requests go one at a time, in order; only the newest answer is shown (M6); a refusal puts the screen back and says the server's words in a toast. The pill's words, "Still drives …", and the track names |
+| `web/src/components/MuteSolo.tsx` (U0's mount) | M and S: click, ⌥-click, drag across, keyboard Space or Return on a focused button. They never take focus (M2). Off only while the connection is gone. Fills `canvas.mute` and `canvas.solo` |
+| `web/src/components/OverlayPill.tsx` (U0's mount) | The pill and its list |
+| `web/src/components/Status.tsx` | While the mutes pill shows, the status pill's words are cut at 100 px (Q23). Its tooltip keeps all of them |
+| `web/src/components/Shortcuts.tsx` | Tracks: "Mute / solo the selected track: M / S" and "Solo only this track: ⌥-click S" |
+| `e2e/s8-mute.mjs` (new), `e2e/run.mjs`, `e2e/README.md` | The suite and its rows, after `s8-tracks` |
+
+The pill counts only tracks of the song now (Q2). A track that is gone but still in
+`overlays.json` is listed greyed, "Not in the song now", with its ×.
+
+### The top bar at small widths (Q23)
+
+A 77-letter song name, "Loading Surge XT, Airwindows Consolidated…" and "2 muted · 1 solo",
+measured by `s8-mute`:
+
+| Width | Name ends | Status pill | Mutes pill | Undo starts |
+|---|---|---|---|---|
+| 1100 | 620 | 661–797 | 805–919 | 944 |
+| 1180 | 700 | 741–877 | 885–999 | 1024 |
+| 1280 | 800 (732 in the Mac app) | 841–977 | 985–1099 | 1124 |
+
+So 100 px for the status words leaves at least 41 px between the name and the status pill.
+
+### Checks
+
+| Check | Result |
+|---|---|
+| `cd web && npm run build` (type-checks) | ok |
+| `s8-mute` (new) | 68 of 68 |
+| `taste` | 39 of 39 |
+| `fx-fixes` (the top bar at 1100 to 1280 px) | 75 of 75 |
+| `s8-tracks`, `layout`, `views`, `pc-keys` | 75, 39, 30, 37: all pass |
+| `notes`, `s4-clips`, `gestures`, `fixes-notes` | 52, 28, 30, 37: all pass |
+| Log | `~/m2-runs/logs/ui-a-u1-1017-062905-464483.log`; suite logs in `~/m2-runs/s8ui/scratch/e2e/lane-a/u1` |
+
+All against the U0 server (`~/m2-runs/s8ui/bin/fba5147`) serving this lane's page through `M2_WEB`.
+
+**Red first:** `s8-mute` on U0's page fails at its first check (no M or S in the header) and stops
+at the first click on M (`~/m2-runs/s8ui/scratch/e2e/lane-a/u1-red`).
+
+### Left
+
+- Mute in the song, from the header menu, comes in U2.
+- U12 (later): M and S on Mix strips.
+

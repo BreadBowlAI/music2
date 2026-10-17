@@ -1,0 +1,349 @@
+// 8b.4 Mute and solo in the app (design-8b §6.7, taste.md §2.9, §3.3, §3.4; the 8b-ui plan's U1):
+// M and S in every track header, placed from its right edge; a click, ⌥-click on S, a drag across
+// several, three quick clicks; the M and S keys; the mutes pill "2 muted · 1 solo" and its list,
+// with each track's ×, "Still drives Duck" and Clear all; the pill clear of the song's name and the
+// status pill at 1100 to 1280 px; nothing written but .music2/overlays.json; a reload keeps them; a
+// read-only window keeps them in memory; a PC page's words.
+//
+//   node e2e/s8-mute.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { PROJ, ROOT, check, done, open, sess, sleep, until } from "./fixlib.mjs";
+
+const { browser, page, errors, api, state, toasts, key, box } = await open(1440, 900);
+const post = (p, body) => api(p, { method: "POST", body: JSON.stringify(body) });
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const rgb = (hex) => `rgb(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(", ")})`;
+const GRAY_700 = rgb("#4c5056"), ACCENT = rgb("#3862a7"), FG_FAINT = rgb("#7c8186"), FG_MUTED = rgb("#65696f");
+
+/** Every project file but .music2's, by path: what an edit would change. */
+function files(dir = PROJ, rel = "") {
+  const out = {};
+  for (const e of fs.readdirSync(path.join(dir, rel), { withFileTypes: true })) {
+    const r = path.join(rel, e.name);
+    if (r === ".music2") continue;
+    if (e.isDirectory()) Object.assign(out, files(dir, r));
+    else out[r] = fs.readFileSync(path.join(dir, r), "utf8");
+  }
+  return out;
+}
+const overlaysFile = `${PROJ}/.music2/overlays.json`;
+const saved = () => {
+  try {
+    return JSON.parse(fs.readFileSync(overlaysFile, "utf8"));
+  } catch {
+    return null;
+  }
+};
+const overlays = async () => (await state()).overlays;
+const pill = () => page.$eval("[data-testid=overlay-pill]", (e) => e.textContent).catch(() => null);
+const pressed = (kind, m) => page.$eval(`[data-${kind}="${m}"]`, (e) => e.getAttribute("aria-pressed") === "true").catch(() => null);
+const fill = (kind, m) => page.$eval(`[data-${kind}="${m}"]`, (e) => getComputedStyle(e).backgroundColor).catch(() => null);
+const nameColour = (m) => page.$eval(`[data-track="${m}"] [data-testid=track-label]`, (e) => getComputedStyle(e).color).catch(() => null);
+const title = (kind, m) => page.$eval(`[data-${kind}="${m}"]`, (e) => e.title).catch(() => "");
+/** How faint a track's clips draw: the opacity of everything between its first clip and its lane. */
+const clipOpacity = (m) =>
+  page
+    .$eval(`[data-track="${m}"] [data-clip]`, (e) => {
+      let o = 1;
+      for (let x = e; x && !x.dataset.lane; x = x.parentElement) o *= Number(getComputedStyle(x).opacity);
+      return Math.round(o * 100) / 100;
+    })
+    .catch(() => null);
+/** Wait for the server's state to be `mute` and `solo` (sorted), and the page to show it. */
+const settled = (mute, solo) =>
+  until(async () => {
+    const o = await overlays();
+    if (!same(o.mute, mute) || !same(o.solo, solo)) return false;
+    for (const m of ["kick", "hats", "bass", "keys"]) {
+      if ((await pressed("mute", m)) !== mute.includes(m) && (await page.$eval(`[data-mute="${m}"]`, (e) => !e.dataset.inSong))) return false;
+      if ((await pressed("solo", m)) !== solo.includes(m)) return false;
+    }
+    return true;
+  }, 5000);
+const select = async (m) => {
+  await page.click(`[data-module-tab="${m}"] [data-testid=track-label]`);
+  await until(() => page.$eval(`[data-track="${m}"]`, (e) => e.dataset.selected === "true").catch(() => false));
+};
+const mid = (b) => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
+
+/** The taste lint (e2e/taste.mjs) over what is inside `sel`: font sizes, radii, gradients, backdrop filters, mono text. */
+const lint = (sel) =>
+  page.evaluate((sel) => {
+    const bad = [];
+    for (const root of document.querySelectorAll(sel))
+      for (const e of [root, ...root.querySelectorAll("*")]) {
+        if (!e.getClientRects().length) continue;
+        const s = getComputedStyle(e);
+        const texty = [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+        if (texty && e.namespaceURI === "http://www.w3.org/1999/xhtml" && ![11, 12, 13, 15].includes(parseFloat(s.fontSize))) bad.push(`font-size ${s.fontSize}`);
+        if (texty && /mono|menlo|courier/i.test(s.fontFamily) && !e.closest("[data-code]")) bad.push("mono font");
+        for (const c of ["borderTopLeftRadius", "borderTopRightRadius", "borderBottomRightRadius", "borderBottomLeftRadius"]) {
+          const r = parseFloat(s[c]);
+          if (![0, 2, 4, 8].includes(r) && r < 9999) bad.push(`radius ${s[c]}`);
+        }
+        if (/gradient/.test(s.backgroundImage)) bad.push("gradient");
+        if (s.backdropFilter && s.backdropFilter !== "none") bad.push("backdrop-filter");
+      }
+    return [...new Set(bad)];
+  }, sel);
+
+await page.waitForSelector('[data-track="kick"] [data-testid=track-label]');
+const orig = files();
+const rev0 = (await state()).view.revision;
+
+// ---------------------------------------------------------------- the buttons, placed from the header's right edge
+
+const places = async () =>
+  page.evaluate(() => {
+    const out = {};
+    for (const t of document.querySelectorAll("[data-testid=timeline] [data-module-tab]")) {
+      const h = t.getBoundingClientRect();
+      const at = (sel) => {
+        const e = t.querySelector(sel);
+        if (!e) return null;
+        const b = e.getBoundingClientRect();
+        return [Math.round(b.left - h.left), Math.round(b.width)];
+      };
+      const name = t.querySelector("[data-testid=track-label]").parentElement.getBoundingClientRect();
+      out[t.dataset.moduleTab] = { w: Math.round(h.width), m: at("[data-mute]"), s: at("[data-solo]"), meter: at("[data-slot=meter]"), name: Math.round(name.right - h.left) };
+    }
+    return out;
+  });
+const p1440 = await places();
+check(
+  ["kick", "hats", "bass", "keys"].every((m) => p1440[m].w === 240 && same(p1440[m].m, [180, 20]) && same(p1440[m].s, [202, 20]) && same(p1440[m].meter, [231, 3])),
+  `M at x = 180, S at 202, 20 px each, and the meter's spot at 231 in every 240 px header: ${JSON.stringify(p1440.kick)}`,
+);
+check(!p1440.song?.m && !p1440.song?.s, "the Song row has no M or S (MON-1)");
+check(!(await page.$("[data-testid=overlay-pill]")), "with nothing muted or soloed there is no mutes pill");
+check(
+  (await fill("mute", "kick")) === "rgba(0, 0, 0, 0)" && (await page.$eval('[data-mute="kick"]', (e) => getComputedStyle(e).color)) === FG_MUTED,
+  "M at rest: no fill, its letter fg-muted",
+);
+
+// ---------------------------------------------------------------- M on Kick
+
+await page.click('[data-mute="kick"]');
+check(await until(async () => (await pill()) === "1 muted", 3000), `M on Kick: the pill says “${await pill()}”`);
+await page.mouse.move(700, 600);
+check(await until(async () => (await pressed("mute", "kick")) && (await fill("mute", "kick")) === GRAY_700, 1000), "M lights gray-700");
+check(await until(() => same(saved()?.mute, ["kick"]), 1500), `.music2/overlays.json says ["kick"] within a second: ${JSON.stringify(saved())}`);
+check(same(files(), orig) && (await state()).view.revision === rev0, "no project file changed and no revision was made");
+check(!(await state()).can_undo, "and it is no undo step");
+check((await clipOpacity("kick")) === 0.4 && (await clipOpacity("bass")) === 1, `Kick's clips draw at 40% (${await clipOpacity("kick")}), Bass's as before`);
+check((await nameColour("kick")) === FG_MUTED, "Kick's name is fg-muted");
+check(await page.evaluate(() => document.activeElement === document.body), "the click left the focus where it was");
+await key(" ");
+check(await until(async () => (await api("/status")).body.playing, 3000), "so Space plays at once (M2)");
+check(same((await overlays()).mute, ["kick"]), "and Kick stays muted");
+await key(" ");
+await until(async () => !(await api("/status")).body.playing);
+const feeds = (await overlays()).feeds.kick ?? [];
+check(feeds.some((f) => f.label === "Duck"), `the state says Kick feeds the Duck: ${JSON.stringify(feeds)}`);
+check((await title("mute", "kick")).startsWith("Muted · still drives Duck"), `M's tooltip says so: “${await title("mute", "kick")}” (M3)`);
+
+// ---------------------------------------------------------------- S on Bass, ⌥-click
+
+await page.click('[data-solo="bass"]');
+check(await settled(["kick"], ["bass"]), "S on Bass solos it");
+const heard = (await overlays()).heard;
+check(heard.hats === "silenced" && heard.keys === "silenced" && heard.kick === "muted" && heard.bass === "heard", `Hats and Keys are silenced, Kick still muted: ${JSON.stringify(heard)}`);
+await page.mouse.move(700, 600);
+check(await until(async () => (await fill("solo", "bass")) === ACCENT, 1000), "S lights accent");
+check(await until(async () => (await nameColour("hats")) === FG_FAINT && (await nameColour("keys")) === FG_FAINT), "the silenced names are fg-faint");
+check((await nameColour("kick")) === FG_MUTED && (await clipOpacity("hats")) === 0.4, "Kick still shows muted, and the silenced clips draw at 40%");
+check((await pill()) === "1 muted · 1 solo", `the pill says “${await pill()}”`);
+check((await title("solo", "keys")).includes("⌥-click: solo only this track"), `S's tooltip says ⌥-click: “${await title("solo", "keys")}”`);
+await page.keyboard.down("Alt");
+await page.click('[data-solo="keys"]');
+await page.keyboard.up("Alt");
+check(await settled(["kick"], ["keys"]), "⌥-click on S solos only Keys");
+await page.click('[data-solo="keys"]');
+check(await settled(["kick"], []), "a click on its S unsolos it");
+
+// ---------------------------------------------------------------- a drag across M, quick clicks (M6)
+
+const from = mid(await box('[data-mute="hats"]')), to = mid(await box('[data-mute="keys"]'));
+await page.mouse.move(from.x, from.y);
+await page.mouse.down();
+await page.mouse.move(to.x, to.y, { steps: 16 });
+await page.mouse.up();
+check(await settled(["bass", "hats", "keys", "kick"], []), "a drag from Hats' M across Bass' to Keys' mutes all three");
+check(same(files(), orig) && (await state()).view.revision === rev0, "still nothing written but overlays.json");
+for (let i = 0; i < 3; i++) await page.click('[data-mute="hats"]');
+check(await settled(["bass", "keys", "kick"], []), "three quick clicks on Hats' M end unmuted, on screen and on the server");
+await page.click('[data-mute="kick"]');
+await page.click('[data-mute="bass"]');
+await page.click('[data-mute="keys"]');
+await page.click('[data-solo="hats"]');
+check(await settled([], ["hats"]), "quick clicks on three Ms and an S land as clicked");
+check((await pill()) === "1 solo", `the pill says “${await pill()}”`);
+
+// ---------------------------------------------------------------- the keys
+
+await select("bass");
+await key("m");
+check(await settled(["bass"], ["hats"]), "M mutes the selected track");
+await key("s");
+check(await settled(["bass"], ["bass", "hats"]), "S solos it");
+await key("Control+m");
+check(await settled([], ["bass", "hats"]), "⌃M (the Mac's Track ▸ Mute) unmutes it");
+await key("Control+s");
+check(await settled([], ["hats"]), "and ⌃S unsolos it");
+await page.click('[data-module-tab="song"] [data-testid=track-label]');
+await until(() => page.$eval('[data-track="song"]', (e) => e.dataset.selected === "true").catch(() => false));
+await key("m");
+await key("s");
+await sleep(400);
+check(same((await overlays()).mute, []) && same((await overlays()).solo, ["hats"]), "on the Song row, M and S do nothing");
+
+// ---------------------------------------------------------------- the pill's list, Clear all
+
+await page.click('[data-mute="kick"]');
+await page.click('[data-solo="bass"]');
+check(await settled(["kick"], ["bass", "hats"]), "Kick muted, Bass and Hats soloed");
+check((await pill()) === "1 muted · 2 solos", `the pill counts them: “${await pill()}”`);
+const pillEl = await page.$("[data-testid=overlay-pill]");
+check((await pillEl.$$("button, svg")).length === 0, "the pill has no × of its own");
+check((await pillEl.evaluate((e) => e.title)).startsWith("Mutes and solos while you listen. The export has every track."), "its tooltip says what they are");
+const pb = await box("[data-testid=overlay-pill]"), ub = await box("button[aria-label=Undo]");
+check(pb.x + pb.width <= ub.x && pb.height <= 24, "it sits left of Undo, one line high");
+await pillEl.click();
+const pop = await page.waitForSelector("[data-testid=overlay-popover]", { timeout: 2000 }).catch(() => null);
+const rows = await page.$$eval("[data-overlay-row]", (els) => els.map((e) => [e.dataset.overlayRow, e.innerText.replace(/\s+/g, " ").trim()]));
+check(
+  !!pop && same(rows.map((r) => r[0]), ["kick", "hats", "bass"]) && rows[0][1] === "Kick Muted Still drives Duck" && rows[1][1] === "Hats Soloed" && rows[2][1] === "Bass Soloed",
+  `its list has each track in order, Kick's row saying it still drives the Duck: ${JSON.stringify(rows)}`,
+);
+check((await page.$$("[data-overlay-clear]")).length === 3 && !!(await page.$("[data-testid=overlay-clear-all]")), "each row has its ×, and Clear all sits at the foot");
+const bad = await lint("[data-testid=overlay-popover], [data-testid=overlay-pill], [data-slot=mute-solo]");
+check(bad.length === 0, `the pill, its list, M and S keep to the design system${bad.length ? `: ${bad.join("; ")}` : ""}`);
+await sleep(300);
+await page.screenshot({ path: `${ROOT}/s8-mute-pill.png` });
+await page.click('[data-overlay-clear="hats"]');
+check(await settled(["kick"], ["bass"]), "Hats' × unsolos it, and the list stays open");
+check(!!(await page.$("[data-testid=overlay-popover]")) && (await page.$$("[data-overlay-row]")).length === 2, "with two rows now");
+const focused = await page.evaluate(() => (document.activeElement?.closest("button, [data-testid=overlay-popover]") ? document.activeElement.outerHTML.slice(0, 120) : ""));
+check(focused === "", `no button took the focus ${focused}`);
+await page.click("[data-testid=overlay-clear-all]");
+check(await settled([], []), "Clear all clears every mute and solo");
+check(await until(async () => !(await page.$("[data-testid=overlay-pill]")) && !(await page.$("[data-testid=overlay-popover]")), 2000), "and the pill and its list go");
+check(await until(() => same(saved(), { mute: [], solo: [] }), 1500), "overlays.json says so");
+check(same(files(), orig) && (await state()).view.revision === rev0 && !(await state()).can_undo, "none of it wrote the project, made a revision or an undo step");
+
+// ---------------------------------------------------------------- a small window: 200 px headers (W10)
+
+await page.click('[data-mute="kick"]');
+await page.click('[data-solo="bass"]');
+await page.click('[data-mute="hats"]');
+await settled(["hats", "kick"], ["bass"]);
+await page.setViewport({ width: 1100, height: 700 });
+await sleep(300);
+const p1100 = await places();
+check(
+  ["kick", "hats", "bass", "keys"].every((m) => p1100[m].w === 200 && same(p1100[m].m, [140, 20]) && same(p1100[m].s, [162, 20]) && same(p1100[m].meter, [191, 3]) && p1100[m].name <= 140),
+  `at 1100 px the headers are 200 px: M at 140, S at 162, the meter at 191, the name ending before M: ${JSON.stringify(p1100.kick)}`,
+);
+
+// ---------------------------------------------------------------- the top bar: a long name, a loading state and the pill
+
+const longName = "My very first summer song with friends and a much longer name than fits here";
+check((await post("/title", { session: (await state()).session, name: longName })).status === 200, "the song gets a 77-character name");
+await page.evaluate(() => {
+  const real = window.fetch.bind(window);
+  window.__status = { loading: ["Surge XT", "Airwindows Consolidated"] };
+  window.fetch = async (url, init) => {
+    const r = await real(url, init);
+    if (!window.__status || !String(url).includes("/api/graph/status")) return r;
+    return new Response(JSON.stringify({ ...(await r.json()), ...window.__status }), { status: r.status, headers: r.headers });
+  };
+});
+const bar = () =>
+  page.evaluate(() => {
+    const rect = (el) => {
+      const b = el.getBoundingClientRect();
+      return { l: b.left, r: b.right, h: b.height };
+    };
+    const status = document.querySelector("[data-status]");
+    const p = document.querySelector("[data-testid=overlay-pill]");
+    const name = document.querySelector("[data-testid=bar-song-name]").parentElement;
+    return status && p && { status: rect(status), statusText: status.textContent, statusTitle: status.title, pill: rect(p), pillText: p.textContent, name: rect(name), undo: rect(document.querySelector("button[aria-label=Undo]")) };
+  });
+for (const mac of [false, true]) {
+  await page.evaluate((on) => (on ? (document.documentElement.dataset.app = "mac") : delete document.documentElement.dataset.app), mac);
+  for (const w of [1100, 1180, 1280]) {
+    await page.setViewport({ width: w, height: 800 });
+    await until(async () => (await bar())?.statusTitle.startsWith("Loading"), 3000);
+    await sleep(150);
+    const b = await bar();
+    const shows = b && b.name.r > b.name.l;
+    const clear = b && b.status.h <= 24 && b.pill.h <= 24 && b.status.r + 4 <= b.pill.l && b.pill.r <= b.undo.l && (!shows || b.name.r + 4 <= b.status.l);
+    check(
+      clear && b.pillText === "2 muted · 1 solo" && b.statusTitle === "Loading Surge XT, Airwindows Consolidated…",
+      `${w} px${mac ? " in the Mac app" : ""}: the name (…${b?.name.r.toFixed(0)}), “${b?.statusText}” (${b?.status.l.toFixed(0)}–${b?.status.r.toFixed(0)}) and “${b?.pillText}” (${b?.pill.l.toFixed(0)}–${b?.pill.r.toFixed(0)}) don't overlap, each on one line`,
+    );
+    await page.screenshot({ path: `${ROOT}/s8-mute-bar-${w}${mac ? "-mac" : ""}.png`, clip: { x: 0, y: 0, width: w, height: 44 } });
+  }
+}
+await page.evaluate(() => {
+  delete document.documentElement.dataset.app;
+  window.__status = null;
+});
+await page.setViewport({ width: 1440, height: 900 });
+
+// ---------------------------------------------------------------- a reload, and a read-only window (MON-4)
+
+await page.reload({ waitUntil: "domcontentloaded" });
+await page.waitForSelector('[data-track="kick"] [data-testid=track-label]');
+check(await until(async () => (await pill()) === "2 muted · 1 solo" && (await pressed("mute", "kick")) && (await pressed("solo", "bass"))), "a reload keeps the mutes and the solo");
+
+check((await post("/close", {})).status === 200, "the song closes");
+const holder = spawn(
+  "python3",
+  [
+    "-c",
+    `
+import fcntl, os, sys
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT)
+fcntl.flock(fd, fcntl.LOCK_EX)
+os.ftruncate(fd, 0)
+os.write(fd, sys.argv[2].replace("PID", str(os.getpid())).encode())
+print("ready", flush=True)
+sys.stdin.read()
+`,
+    `${PROJ}/.music2/lock`,
+    JSON.stringify({ pid: 0, program: "agent", host: "here", host_id: "x", token: "0", since: Math.floor(Date.now() / 1000) }).replace('"pid":0', '"pid":PID'),
+  ],
+  { stdio: ["pipe", "pipe", "inherit"] },
+);
+await new Promise((r) => holder.stdout.once("data", r));
+const opened = await post("/open", { path: PROJ });
+check(opened.status === 200 && opened.body.read_only?.why === "held", "opened again while another program holds it: read-only");
+await page.waitForSelector("[data-testid=read-only-banner]", { timeout: 6000 }).catch(() => {});
+check(await until(async () => (await pill()) === "2 muted · 1 solo"), "the mutes come back from the file");
+const before = fs.readFileSync(overlaysFile, "utf8");
+await page.click('[data-mute="keys"]');
+check(await settled(["hats", "keys", "kick"], ["bass"]), "M works in a read-only window");
+await sleep(800);
+check(fs.readFileSync(overlaysFile, "utf8") === before, "but nothing is written: overlays.json is as it was");
+check((await page.$eval("[data-testid=overlay-pill]", (e) => e.title)).startsWith("Not saved: this song is open in another window."), "the pill's tooltip says they aren't saved");
+await page.click("[data-testid=overlay-pill]");
+await page.waitForSelector("[data-testid=overlay-popover]", { timeout: 2000 }).catch(() => {});
+check((await page.$eval("[data-testid=overlay-popover]", (e) => e.innerText).catch(() => "")).includes("Not saved: this song is open in another window."), "and so does its list");
+await page.keyboard.press("Escape");
+holder.stdin.end();
+await new Promise((r) => holder.once("exit", r));
+
+// ---------------------------------------------------------------- a PC page
+
+const pc = await open(1440, 900, { pc: true });
+await pc.page.waitForSelector('[data-solo="keys"]');
+const pcTitle = await pc.page.$eval('[data-solo="keys"]', (e) => e.title);
+check(pcTitle.includes("Alt-click: solo only this track") && !pcTitle.includes("⌥"), `on a PC, S's tooltip says Alt-click: “${pcTitle}”`);
+errors.push(...pc.errors);
+await pc.browser.close();
+
+await browser.close();
+done(errors);

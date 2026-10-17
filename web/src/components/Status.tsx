@@ -2,6 +2,7 @@ import clsx from "clsx";
 import { CircleAlert, CodeXml, Hourglass, Info, Lock, Pause, TriangleAlert, WifiOff } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { attention, graphApi, lockReason, type GraphState, type GraphStatus, type Problem, type ReadOnly } from "../lib/graph";
+import { usePill } from "../lib/overlays";
 import { useStore } from "../lib/store";
 import Attention from "./Attention";
 import { Button, Details, keepFocus, Popover } from "./ui";
@@ -52,6 +53,8 @@ function states(graph: GraphState, status: GraphStatus | undefined, connected: b
 export default function Status({ graph, status, onShowCode }: { graph: GraphState; status?: GraphStatus; onShowCode: (p: Problem) => void }) {
   const connected = useStore((s) => s.connected);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  // The mutes pill beside it takes room the song's name keeps clear (taste.md §3.3, Q23).
+  const pill = usePill();
   const all = states(graph, status, connected);
   if (!all.length) return null;
   const [main, ...rest] = all;
@@ -73,8 +76,8 @@ export default function Status({ graph, status, onShowCode }: { graph: GraphStat
         className={clsx("h-ctl-sm px-2 shrink-0 rounded-sm inline-flex items-center gap-1.5 text-sm font-medium cursor-pointer transition-colors duration-80 ease-linear", TONE[main.tone])}
       >
         <main.Icon size={14} className={clsx("shrink-0", ICON[main.tone])} />
-        {/* A long list of plugins loading is cut short; the title has it whole. */}
-        <span className="max-w-60 truncate">{main.label}</span>
+        {/* A long list of plugins loading is cut short, shorter while the mutes pill shows; the title has it whole. */}
+        <span className={clsx("truncate", pill ? "max-w-[100px]" : "max-w-60")}>{main.label}</span>
         {rest.length > 0 && <span className="opacity-70">+{rest.length}</span>}
       </button>
       {anchor && (
