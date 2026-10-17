@@ -417,3 +417,48 @@ changed render.
   `time.playing`, which S's IR doesn't have.
 - Scratch: `~/m2-runs/sm-scratch/s-cache` (S's runner, about 1 GB) is deleted. The checks' logs are
   in `~/m2-runs/check-sm3` and `-sm3b`.
+
+## Slice 4: docs
+
+**In short**
+- The docs now say what the merge built. Nothing in the code changed but one test's module doc.
+- The contract: RENDER-6, RENDER-6a, RENDER-7 and RENDER-33's *Today*; FMT-3 in L6's words; the
+  `pkg.unsatisfied` row; WRITE-8's *Today*; the Deferred row of the lockfile.
+- HANDOFF: the merge in "In short" and the branch table; the Mac run's new row and its by-ear steps
+  (L2's Space, Enter, Space among them); L2 as an open owner decision; the FMT-3 row moved to the
+  decisions; Left for later; a note for the owner about old songs; merge notes for `taste`.
+- `design.md` beside these notes: the plan, trimmed to what was built and why, with the attack and
+  L1 to L7 folded in.
+- Every code name the changed docs cite exists: a script checked the 308 names they cite.
+
+### What changed
+
+| File | What |
+|---|---|
+| `docs/architecture.md` | RENDER-6: the transport clock drives `time.playing`; *Today* says what is built (the LFOs, the bitcrusher's clock, the drums' hit count), what still differs (Space, Enter, Space: L2's default; free-running sources). RENDER-6a: `time.playing` is 0 at Stop. RENDER-7: the rule names `time.playing`; *Today* says how it is filled, as plugins are told (HOST-6's twin for kernels, in one line). RENDER-33's *Today*: five pure fixtures, the after-idle test, and what "fresh" still matters to. FMT-3: the hint, L6's trigger, and a *Today* for std 0.2. The diagnostics table's `pkg.unsatisfied`. WRITE-8's *Today*: the `Op::Time` arm and its test. The Deferred row: L6's words. |
+| `README.md` | the SDK table's `time` row gains `time.playing`, and says a component's body imports `time`; one plain paragraph under std's effects |
+| `docs/song-as-program.md` | three time inputs; the IR's `time` op reads `playing` too; std is 36 kernels; `std/synth`, `std/fm` and `std/drums` in the table and the module list; "`time` is always created at module level" was no longer true since slice 2: now it says where a call's `time` node is made |
+| `docs/gaps.md` | "What works today" gains one line: a song you open sounds like its export, and what Space, Enter, Space does |
+| `e2e/README.md` | ten renders, `examples/sounds` among them; the skip of a fixture an older commit lacks |
+| `core/play/tests/bit_identity.rs` | the module doc: std's effects and drums no longer need a fresh engine; top-level oscillators, `noise` and smoothers still do |
+| `HANDOFF.md` | as in "In short". Also: the check table's counts (922 Rust tests, 10 renders, about 10 and 30 minutes); the out-of-memory gap's numbers (`delay` at 384 kHz, from slice 1's test); the logs and scratch rows |
+| `docs/designs/sounds/design.md` | new |
+
+### Checks
+
+| Check | Result |
+|---|---|
+| Every backticked name on the added lines, against the repo outside the changed files (a script: `git grep -F` for each name, or each part of a qualified one, or the path) | 308 names; 43 not found that way, and each checked by hand: 14 commit hashes (`git cat-file`) and the branches; check folders (`check-sm4` is this slice's); paths written from `docs/designs/` or short (`sounds/design.md`, `testkit.rs`, `sdk/check/std.ts`); commands; TOML (`[package] version`, `@m2/core = "1"`); `music2.lock`, a deferred file; `Run.moving`, a field of `Run` (`core/runtime/src/transport.rs`); and `std_plays_the_export_after_the_engine_sat_stopped`, which lives in `bit_identity.rs`, one of the changed files. One was the doc's own notation, not the SDK's (`Control<Beats>`): `song-as-program.md` now writes the SDK's types (`Control<"unit01">`). |
+| The test and code names the docs cite, by hand | each found: `time_reads_in_its_own_unit`, `time_playing_follows_the_transport`, `time_is_one_node_per_call`, the delta test, the three kernel tests, `std_plays_the_export_after_the_engine_sat_stopped`, `tremolo_holds_while_stopped_and_never_jumps`, `effects_that_follow_the_song_show_no_time_node`, `the_starters_add_reverb_keeps_the_hooks_reverb`, `every_shipped_manifest_is_met`, `unmet_dependencies`, `unmet_dependencies_block`, `fixture_renders_change_only_with_stds_version`, `every_std_kernel_fits_its_memory_at_the_highest_rate`, `Requirement::admitting`, `Transport::starting`, `PURE`, `g7c()` |
+| `git grep -nE 'std = \\?"0\.1'` | nothing (the owner's note says "the std line", never the old line itself) |
+| The `taste` merge notes | `git merge-tree --write-tree sounds-merge origin/taste`: conflicts in `docs/gaps.md` and `std/src/instruments.ts` that `main` doesn't have, as the plan found; the rest (`delta.rs`, `delta_tests.rs`, `e2e/README.md`, `e2e/fx-fixes.mjs`, the server's graph, `GraphCanvas.tsx`, `architecture.md`) conflict with `main` already |
+
+### Found
+
+- The plan said `taste`'s "+ Track" list would leave out the 22 new instruments because they have
+  no category. Read in `taste`'s code: a missing category falls back to "Instruments". They are left
+  out because the list takes a component only through an export with no dot in its name, and the
+  new ones are exported only as members (`synth.lead`). The merge note says both.
+- `song-as-program.md` still said `time` nodes are always made at module level, so a voice never
+  holds one. Untrue since slice 2's fix A. Fixed.
+- HANDOFF said `delay` needs about 1.6 MiB. Slice 1's test measured 11.88 MiB at 384 kHz.
