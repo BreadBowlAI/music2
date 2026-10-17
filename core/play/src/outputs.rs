@@ -178,10 +178,12 @@ fn listed(seen: &[(String, String)], default: Option<&str>, mut opens: impl FnMu
 /// How much a device is what a person means by its name, best first; None: not an output a person
 /// means. Only ALSA lists more than one device a name: its default and sound servers' PCMs, then
 /// a card's shared ones, its other plugins, and last its raw `plughw:` and `hw:` (which one stream
-/// holds alone).
+/// holds alone). Its `null` opens and discards all it is sent, and `usbstream` isn't for playing:
+/// neither is listed (NX-S2).
 fn rank(id: &str) -> Option<u8> {
     let Some(pcm) = id.strip_prefix("alsa:") else { return Some(0) };
     match pcm.split(':').next().unwrap_or(pcm) {
+        "null" | "usbstream" => None,
         "default" | "sysdefault" | "pipewire" | "pulse" | "jack" => Some(0),
         "plughw" => Some(2),
         "hw" => Some(3),

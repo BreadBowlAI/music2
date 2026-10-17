@@ -146,3 +146,17 @@ fn a_start_tries_the_output_chosen_then_the_default() {
     assert_eq!(in_order(false, None, Some("Speakers")), [("Speakers", false)], "none chosen");
     assert_eq!(in_order::<&str>(true, None, None), [], "no output at all");
 }
+
+// NX-S2: ALSA's `null` PCM opens and discards all it is sent, so it is never listed: a computer
+// with no sound card lists no output, rather than one that plays nothing. Nor is `usbstream`.
+#[test]
+fn the_null_output_is_never_listed() {
+    let discard = "Discard all samples (playback) or generate zero samples (capture)";
+    let seen: Vec<(String, String)> = [("alsa:null", discard), ("alsa:usbstream:CARD=USB", "Scarlett 2i2 USB"), ("alsa:pipewire", "PipeWire Sound Server")]
+        .into_iter()
+        .map(|(id, name)| (id.to_string(), name.to_string()))
+        .collect();
+    let rows = listed(&seen, None, |_| Some((48_000, None)));
+    assert_eq!(rows.iter().map(|o| o.name.as_str()).collect::<Vec<_>>(), ["PipeWire Sound Server"]);
+    assert!(listed(&seen[..1], None, |_| Some((48_000, None))).is_empty(), "no sound card: no output listed");
+}
