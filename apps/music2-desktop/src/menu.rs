@@ -120,6 +120,9 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     ("panic", "Stop All Sound", Some("CmdOrCtrl+Period")),
     // The metronome (gaps #19): a click on each beat while the song plays. K is the page's key.
     ("metronome", "Metronome", None),
+    // The keyboard piano (Q8): the letter keys play the selected track. ⌘K from anywhere, typing
+    // included: the code editor's own ⌘K chords give way to it (X15).
+    ("piano", "Keyboard Piano", Some("CmdOrCtrl+K")),
     ("shortcuts", "Keyboard Shortcuts", None),
 ];
 
@@ -192,6 +195,7 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
         Item("lanes"),
         Item("dock"),
         Item("browser"),
+        Item("piano"),
         Line,
         Item("grid_narrower"),
         Item("grid_wider"),
@@ -517,6 +521,19 @@ mod tests {
             let transport = &bar.iter().find(|m| m.0 == "Transport").expect("Transport").1;
             let at = transport.iter().position(|r| *r == Row::Item("loop")).expect("Loop");
             assert_eq!(transport[at..at + 4], [Row::Item("loop"), Row::Item("loop_selection"), Row::Item("metronome"), Row::Item("follow")], "mac: {mac}");
+        }
+    }
+
+    /// The next track's lane B: View ▸ Keyboard Piano, ⌘K (Ctrl+K), right after Show Browser on both
+    /// menu bars.
+    #[test]
+    fn the_keyboard_piano_is_command_k_in_view() {
+        assert_eq!(ITEMS.iter().find(|i| i.0 == "piano").map(|i| (i.1, i.2)), Some(("Keyboard Piano", Some("CmdOrCtrl+K"))));
+        for mac in [true, false] {
+            let bar = layout(mac);
+            let view = &bar.iter().find(|m| m.0 == "View").expect("View").1;
+            let at = view.iter().position(|r| *r == Row::Item("browser")).expect("Show Browser");
+            assert_eq!(view[at + 1], Row::Item("piano"), "mac: {mac}");
         }
     }
 

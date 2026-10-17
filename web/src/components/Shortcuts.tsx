@@ -83,6 +83,7 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
       ["Zoom around the pointer", `${mod.cmd}-scroll, or pinch`],
       ["Zoom to the selected clips or the song; again: back", "Z"],
       ["Taller / shorter tracks", `${chord("↓")} / ${chord("↑")}`],
+      ["Keyboard piano on / off", chord("K")],
     ],
   },
   {
@@ -94,6 +95,14 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
       ["Save (in Code)", chord("S")],
       ["Export audio", chord("E", { shift: true })],
       ["Save a copy (Save As)", chord("S", { shift: true })],
+    ],
+  },
+  {
+    // While it is on (lib/piano.ts): the selected track plays.
+    name: "Keyboard piano",
+    keys: [
+      ["Play notes", "A to ' and W to P"],
+      ["Octave down / up", "Z / X"],
     ],
   },
 ];

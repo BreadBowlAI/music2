@@ -163,6 +163,76 @@ setting); taste §3.3 (the metronome exists, x 176) and §3.8 (the name goes at 
   `l.engine.set_click(shared.click.load(Ordering::Relaxed));` before `l.fill(…)`.
 - `core/play/tests/no_alloc_click.rs`: new file.
 
+### B2. The keyboard piano
+
+**In short**
+
+| What | Now |
+|---|---|
+| Turn it on | ⌘K (Ctrl+K on Linux), from anywhere, even while typing. Or View ▸ Keyboard Piano, or the keyboard button in Notes, beside Hear notes |
+| Play | A S D F G H J K L ; ' are the white keys, W E T Y U O P the black ones. A is middle C (C4) at first |
+| Octave | Z goes down an octave, X goes up |
+| What plays | The selected track. A card at the timeline's lower right shows the keys, their notes, the octave, and "Plays Bass" |
+| Its keys | While it is on, those 20 keys only play notes. Their shortcuts (A, S, E, X, Z, K) wait until it is off. Space, C, M and the rest work as always |
+| Typing | Typing in a field or the code editor never plays notes. A dialog takes the keys too |
+| Off | ⌘K again, the card's ×, or the button. It is always off when the app starts |
+
+**What changed** (web only, and one menu row)
+
+- `lib/playTarget.ts` (new): `playTarget(graph, selected, clips)`: the selected track's notes lane, the lane of
+  the clip Notes shows when it is that track's, else the first; null for the Song row, nothing selected, or no
+  notes lane (Q4). `usePlayTarget`, `currentTarget`. B3 shares it.
+- `lib/piano.ts` (new): `usePiano` `{on, octave, held}`; `NOTE_KEYS` by `e.code` (Q7); `setPiano`,
+  `togglePiano`, `letGo`. While on, capture-phase `keydown` and `keyup` on `window`: a piano key with no ⌘ ⌃ ⌥,
+  outside a field, the code editor (`.monaco-editor`) and an open `[aria-modal="true"]` is
+  `preventDefault` + `stopImmediatePropagation` (so no shortcut runs) and `strike(…, {always: true})` on the
+  target; its key up releases that note. A repeat strikes nothing. Z and X clamp the octave to C1–C7. `blur`,
+  `visibilitychange`, and a Meta key down or up let every note go (X16). With no target, a key is still the
+  piano's and plays nothing. While on it holds an `attach()` of audition's, so the server's answers and a closed
+  socket are heard.
+- ⌘K (X15): a capture-phase listener of `piano.ts`'s own, in a browser only, before anything else sees it, so
+  it works from fields and from Monaco (whose ⌘K chords give way). In the desktop app the menu's
+  `CmdOrCtrl+K` sends `piano`, as every ⌘ chord does there. So `App.tsx`'s `chord()` has no ⌘K line: the
+  capture listener takes the key first in a browser, and the menu does in the app.
+- `lib/audition.ts`: `strike(…, {always})`: the piano plays whatever Notes' Hear notes toggle says.
+- `components/KeyboardPiano.tsx` (new), mounted after `<Toasts />` (X30): a portal, 16 px in from
+  `[data-testid=timeline]`'s lower right (a `ResizeObserver`). `raised`, 1 px `line`, `rounded-md`,
+  `shadow-lift`; caps 22×20 px in `text-xs`, the black ones `gray-700` over the white ones (`canvas`,
+  `line-strong`); a held cap in the track's `tint`, `bar` and `ink` (X31); the white keys' notes under them
+  (`pitchName`, C's with their octave); "Z  C4–F5  X"; "Plays Bass" or "Select a track with notes to play it";
+  a × "Keyboard piano off (⌘K)".
+- `components/AuditionTools.tsx`: the `Keyboard` toggle after Hear notes (X13). It is the header's other
+  toggles' size, 24 px (`sm`), not 28: every Notes tool is 24.
+- `App.tsx`: `<KeyboardPiano />`; `case "piano"`. `Shortcuts.tsx` (X32): View "Keyboard piano on / off: ⌘K", and
+  a last group "Keyboard piano": "Play notes: A to ' and W to P", "Octave down / up: Z / X".
+- Desktop `menu.rs`: `ITEMS` `piano` ("Keyboard Piano", `CmdOrCtrl+K`) after `metronome`; View: after Show
+  Browser; a test `the_keyboard_piano_is_command_k_in_view`.
+
+**Tests**
+
+| Test | Where | Result |
+|---|---|---|
+| `nx-piano` (new, after `s8-audition`) | 39 checks: off at first (A shows automation); ⌘K; the card's words and place; A is 60 at 0.8 on `bass.notes`, lit in Bass's colour, its Off; W 61, K 72 (the metronome left off); X then A 72 (C5–F6); Z Z then A 48; S, E, Z and A run no shortcut; C, M and Space still do; "asdf" in the song's name and in the code editor plays nothing; the ⌥K sheet takes the keys and lists the rows; repeats send one On; blur and ⌘ let go; Keys and the Song row as targets; the lint of the card; ⌘K from a field; the toggle; the ×; a PC page's Ctrl+K | ok |
+| `the_keyboard_piano_is_command_k_in_view` | `music2-desktop` | ok |
+| `s8-audition` 51, `pc-keys` 37, `taste` 39, `pl-notes` 102, `nx-click` 20 | moves | ok |
+
+The web build; `music2-desktop`'s tests, clippy and Mac lint.
+
+**Red first** (`nx-piano` on `dist-before`):
+`FAIL  off at first: the toggle in Notes' tools is off and there is no card (null)`,
+`FAIL  ⌘K turns it on: the toggle is lit and the card shows`,
+`FAIL  the card says what plays and the octave: null`.
+
+**What's left**
+
+- Velocity keys and a sustain key (Q7: kept small).
+- The desktop app's ⌘K and View ▸ Keyboard Piano are checked on `:97` once, after B3.
+
+**For gaps.md:** #24 (playing live): the computer's keys play the selected track (the keyboard piano).
+
+**Contract:** taste §3.5 (Notes' tools: the keyboard piano toggle after Hear notes), §5 (⌘K is the keyboard
+piano, from anywhere; the piano owns its 20 keys while on), the piano card (as built above).
+
 ## Lane C
 
 Settings and safety.

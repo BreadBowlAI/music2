@@ -16,6 +16,8 @@ import { followGridView } from "./lib/grid";
 import { canvas, useShell, VIEWS, type GridOp } from "./lib/shell";
 import { deleteTrack, duplicateTrack, newTrack } from "./components/Tracks";
 import { toggleMetronome } from "./lib/metronome";
+import { togglePiano } from "./lib/piano";
+import KeyboardPiano from "./components/KeyboardPiano";
 
 /** Fetch the open project. An error means none is open: the start screen shows. */
 const refreshGraph = () =>
@@ -190,6 +192,7 @@ export default function App() {
         <RenameSongDialog />
         <Shortcuts />
         <Toasts />
+        <KeyboardPiano />
         {/* With a song open, the top bar's status pill says it; on the start screen, this one does. */}
         {!connected && !graph && (
           <div className="fixed top-3 right-3 z-50 h-ctl-sm px-2 inline-flex items-center gap-1.5 rounded-sm bg-danger-soft text-danger-strong text-sm font-medium">
@@ -396,5 +399,9 @@ export function appCommand(id: string) {
       return canvas.marker?.(id === "add_marker" ? "add" : id === "prev_marker" ? "prev" : "next");
     case "metronome":
       return toggleMetronome();
+    case "piano":
+      // View ▸ Keyboard Piano, the desktop app's ⌘K. In a browser lib/piano.ts takes ⌘K itself, before
+      // a field or the code editor can.
+      return togglePiano();
   }
 }

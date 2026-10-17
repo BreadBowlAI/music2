@@ -69,6 +69,7 @@ export const SUITES = [
   ["code", "proj", { expect: 58 }],
   ["notes", "proj", { expect: 52 }],
   ["s8-audition", "fix", { expect: 51 }],
+  ["nx-piano", "fix", { expect: 39 }],
   ["pl-notes", "fix", { expect: 102 }],
   ["pl-lanes", "fix", { expect: 28 }],
   ["ports", "proj", { expect: 46 }],
