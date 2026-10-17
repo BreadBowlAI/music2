@@ -3,15 +3,17 @@
 //!
 //! The mixer is the `song` module's frame whose ComponentId is `std:mixer`, whatever it is
 //! imported as (PKG-9). Its channels are the properties of the object its call is given, in the
-//! project's code. A track is in a channel when an audio export of it is read inside that
-//! channel's property: the build's import nodes say where each read is, and a read a frame records
-//! as a sidechain input (the duck's `kick.env`, PKG-13) only listens, so it isn't the track's way
-//! into the mix. Following the graph alone can't tell a bare `kick: kick.out` from its neighbours
-//! until every channel has a gain (design-8b §5.1), so the read's place says which channel it is.
+//! project's code. A track is in the channel its audio reaches, by the graph (design-8b §2.3): from
+//! each of its audio exports the song reads, downstream over audio edges, through nodes outside the
+//! mixer (a duck, a compress), to the first node inside it. That node is the channel's panner or
+//! its gain, and reads the channel's `pan` or `db` (`channels.kick.db`). Since 8b.3 every channel
+//! has a gain (design-8b §5.1), so each has such a node. An edge into a sidechain input (the
+//! duck's `kick.env`, PKG-13) only listens, so the walk doesn't take it.
 
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::Path;
 
-use m2_ir::{FNode, FOp, Kind, Module, Op, split_ref};
+use m2_ir::{FNode, FOp, Input, Kind, Module, Op, split_ref};
 use m2_script::sites::{Arg, Site};
 use m2_session::Revision;
 use m2_song::ROOT;
@@ -40,7 +42,8 @@ pub struct Channel {
     pub property: Property,
     /// Every read of another module's export inside the property.
     pub reads: Vec<ExportRead>,
-    /// The tracks whose audio goes in here.
+    /// The tracks whose audio goes in here, by the graph: in the order the property reads them,
+    /// then any it doesn't read by name (`const k = kick.out` above the mixer), in build order.
     pub tracks: Vec<String>,
 }
 
@@ -138,25 +141,165 @@ pub fn mixer(rev: &Revision) -> Mixing {
     if song.frames.iter().filter(|f| f.site == site).count() != 1 {
         return Mixing::Several(song.frames.iter().filter(|f| f.site == site).count());
     }
+    let frame = song.frames.iter().position(|f| f.site == site).expect("its frame") as u32;
     let Some(call) = rev.compiled.sites.iter().find(|s| s.id == site && s.in_project) else { return Mixing::Unwritten };
     let Some(text) = rev.snapshot.files.get(Path::new(&call.file)) else { return Mixing::Unwritten };
     let Some(Arg::Object { start, end, .. }) = call.args.first() else { return Mixing::Unwritten };
     let Some(props) = properties(text, (*start, *end)) else { return Mixing::Unwritten };
     let all = reads(rev, song, &call.file);
+    let Reached { mut channels, unnamed } = reached(rev, song, frame);
+    let built: Vec<&str> = rev.compiled.ir.modules.iter().filter(|m| m.track).map(|m| m.key.as_str()).collect();
     let channels = props
         .into_iter()
         .map(|p| {
             let reads: Vec<ExportRead> = all.iter().filter(|r| p.value.0 <= r.at && r.at < p.value.1).cloned().collect();
+            let mut found = channels.remove(&p.key).unwrap_or_default();
+            // A strip that reads none of its channel's controls (its `db` a signal, no `pan`): the
+            // read's place says the channel.
+            for r in reads.iter().filter(|r| r.audio && !r.sidechain && unnamed.contains(&r.module)) {
+                found.insert(r.module.clone());
+            }
+            // In the order the property reads them, then the build's.
             let mut tracks: Vec<String> = vec![];
-            for r in reads.iter().filter(|r| r.audio && !r.sidechain) {
-                if !tracks.contains(&r.module) {
-                    tracks.push(r.module.clone());
+            for t in reads.iter().map(|r| r.module.as_str()).chain(built.iter().copied()) {
+                if found.contains(t) && !tracks.iter().any(|x| x == t) {
+                    tracks.push(t.to_string());
                 }
             }
             Channel { key: p.key.clone(), property: p, reads, tracks }
         })
         .collect();
     Mixing::One(Mixer { file: call.file.clone(), site, call: (call.start, call.end), object: (*start, *end), channels })
+}
+
+/// Where the tracks' audio reaches the mixer.
+struct Reached {
+    /// By channel key, the tracks that reach it.
+    channels: BTreeMap<String, BTreeSet<String>>,
+    /// Tracks that reach a strip which reads none of its channel's controls.
+    unnamed: BTreeSet<String>,
+}
+
+/// Follow each track's audio through the song to the mixer at `frame` of `song` (ID-18): from each
+/// node of the track that the song reads, over edges whose output is audio and that don't go into
+/// a sidechain input, through song nodes outside the mixer, to the first nodes inside it. A node
+/// there names its channel by the channel control it reads: `channels.<key>.pan` on a panner,
+/// `channels.<key>.db` on a gain. One that reads neither (a panner whose `pan` is a signal) passes
+/// the walk on, inside the mixer, to the gain after it. Only the song's own nodes are walked: a
+/// track read by another (a bus) reaches the mixer as that one.
+fn reached(rev: &Revision, song: &Module, frame: u32) -> Reached {
+    let flat = &rev.compiled.flat;
+    let at: HashMap<&str, usize> = flat.nodes.iter().enumerate().map(|(i, n)| (n.name.as_str(), i)).collect();
+    let ir: HashMap<&str, &m2_ir::Node> = song.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    // Whether the frame chain from `f` up holds `target`.
+    let within = |mut f: Option<u32>, target: u32| {
+        while let Some(x) = f {
+            if x == target {
+                return true;
+            }
+            f = song.frames.get(x as usize).and_then(|fr| fr.parent).filter(|p| *p < x);
+        }
+        false
+    };
+    let frame_of = |i: usize| -> Option<Option<u32>> {
+        let n = &flat.nodes[i];
+        let id = n.name.strip_prefix(ROOT).and_then(|x| x.strip_prefix('/'));
+        (n.module == ROOT).then(|| id.and_then(|id| ir.get(id)).and_then(|n| n.frame))
+    };
+    let inside = |i: usize| frame_of(i).is_some_and(|f| within(f, frame));
+    // The flat node an import of `module`'s `export` reads, through re-exports.
+    let export = |module: &str, export: &str| -> Option<usize> {
+        let (mut module, mut export) = (module.to_string(), export.to_string());
+        for _ in 0..32 {
+            let m = rev.compiled.ir.modules.iter().find(|m| m.key == module)?;
+            let (id, _) = split_ref(m.exports.get(&export)?);
+            match &m.nodes.iter().find(|n| n.id == id)?.op {
+                Op::Import { module: to, export: e } => (module, export) = (to.clone(), e.clone()),
+                _ => return at.get(format!("{module}/{id}").as_str()).copied(),
+            }
+        }
+        None
+    };
+    // A song ref's flat node: an import's source, or the node itself.
+    let source = |r: &str| -> Option<usize> {
+        let (id, _) = split_ref(r);
+        match &ir.get(id)?.op {
+            Op::Import { module, export: e } => export(module, e),
+            _ => at.get(format!("{ROOT}/{id}").as_str()).copied(),
+        }
+    };
+    // What each frame's sidechain inputs received.
+    let side: Vec<(u32, usize)> = song
+        .frames
+        .iter()
+        .enumerate()
+        .flat_map(|(f, fr)| fr.sidechain.iter().map(move |s| (f as u32, s.source.as_str())))
+        .filter_map(|(f, r)| Some((f, source(r)?)))
+        .collect();
+    // The song's nodes that read each node, over edges from an audio output that aren't sidechains.
+    let mut readers: Vec<Vec<usize>> = vec![vec![]; flat.nodes.len()];
+    for (j, n) in flat.nodes.iter().enumerate() {
+        let Some(f) = frame_of(j) else { continue };
+        let srcs: Vec<m2_ir::PortRef> = match &n.op {
+            FOp::Kernel { inputs, .. } | FOp::Plugin { inputs, .. } => inputs
+                .iter()
+                .filter_map(|i| match i {
+                    Input::Port { src, .. } => Some(*src),
+                    _ => None,
+                })
+                .collect(),
+            FOp::Feedback { input, .. } => vec![*input],
+            _ => vec![],
+        };
+        for src in srcs {
+            let audio = matches!(flat.nodes[src.node].outputs.get(src.port), Some(Kind::Audio(_)));
+            let sidechain = side.iter().any(|(sf, s)| *s == src.node && within(f, *sf));
+            if audio && !sidechain && !readers[src.node].contains(&j) {
+                readers[src.node].push(j);
+            }
+        }
+    }
+    // The channel a node inside the mixer names by the channel control it reads.
+    let names = |i: usize| -> Option<String> {
+        let (FOp::Kernel { inputs, .. } | FOp::Plugin { inputs, .. }) = &flat.nodes[i].op else { return None };
+        inputs.iter().find_map(|x| {
+            let Input::Port { src, .. } = x else { return None };
+            let c = &flat.nodes[src.node];
+            let slot = c.origin.as_ref()?.control.as_ref().filter(|s| c.module == ROOT && s.frame == frame)?;
+            let (key, control) = slot.slot.strip_prefix("channels.")?.rsplit_once('.')?;
+            (matches!(c.op, FOp::Const(_)) && (control == "db" || control == "pan")).then(|| key.to_string())
+        })
+    };
+    let mut out = Reached { channels: BTreeMap::new(), unnamed: BTreeSet::new() };
+    for n in song.nodes.iter() {
+        let Op::Import { module, export: e } = &n.op else { continue };
+        if !rev.compiled.ir.modules.iter().any(|m| m.key == *module && m.track) {
+            continue;
+        }
+        let Some(from) = export(module, e) else { continue };
+        let mut seen: BTreeSet<usize> = BTreeSet::new();
+        let mut queue: VecDeque<usize> = readers[from].iter().copied().collect();
+        while let Some(i) = queue.pop_front() {
+            if !seen.insert(i) {
+                continue;
+            }
+            if !inside(i) {
+                queue.extend(&readers[i]);
+                continue;
+            }
+            match names(i) {
+                Some(key) => drop(out.channels.entry(key).or_default().insert(module.clone())),
+                None => {
+                    let next: Vec<usize> = readers[i].iter().copied().filter(|&j| inside(j)).collect();
+                    if next.is_empty() {
+                        out.unnamed.insert(module.clone());
+                    }
+                    queue.extend(next);
+                }
+            }
+        }
+    }
+    out
 }
 
 impl Mixer {
@@ -172,3 +315,7 @@ impl Mixer {
         rev.compiled.sites.iter().find(|s| s.id == self.site)
     }
 }
+
+#[cfg(test)]
+#[path = "mix_tests.rs"]
+mod tests;

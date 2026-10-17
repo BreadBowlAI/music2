@@ -291,6 +291,13 @@ into the mixer", and doesn't say how. This is how:
 The lookup reads the accepted revision's IR (frames, origins, edges) and runs once per revision, in microseconds at p50
 *estimate*.
 
+**Built (B3, lead decision T7):** steps 2 and 3 as above, in `mix::mixer` (`crates/editor/src/mix.rs`), with three
+details. Only the song's own nodes are walked, so a track that another track reads (a bus) reaches the mixer as that
+track. A panner whose `pan` is a signal passes the walk on to the gain after it. A strip whose `db` is a signal and that
+has no panner reads none of its channel's controls; there the read's place in the channel's property says which. The
+track builders edit a channel's property, so Duplicate refuses a channel that doesn't name its track (`kick: k`), and
+Delete lists the binding as code it can't take out.
+
 ### 2.4 Words
 
 Each builder writes its own label pair for history, in words from labels and descriptors (taste §1.3, ST-5, gaps #29).
