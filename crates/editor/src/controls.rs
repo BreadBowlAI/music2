@@ -93,11 +93,30 @@ impl Control {
         })
     }
 
-    /// For a control its call leaves out: the bytes writing `number` (a value, or a signal's name)
-    /// into the call replaces, and the text, as `set` and `connect` write it.
-    pub fn planned(&self, number: &str) -> Option<(u32, u32, String)> {
+    /// For a control its call leaves out: the edits writing `written` (a signal's name, or a
+    /// number as [`Control::number`] spells it) into the call, each `(start, end, text)` in the
+    /// file's order, as `set` and `connect` write it. One edit, or two when a bare dictionary
+    /// entry is wrapped (`{ in: ` before it).
+    pub fn planned(&self, written: &str) -> Option<Vec<(u32, u32, String)>> {
         match &self.edit {
-            Edit::Insert(i) => Some((i.start, i.end, i.text(number))),
+            Edit::Insert(i) => Some(i.edits(written)),
+            Edit::Literal { .. } => None,
+        }
+    }
+
+    /// How a number in base units is written into the call by a value edit: as it is, or in the
+    /// unit call its dictionary's other entries use (`db(-3)`, design-8b §5.2).
+    pub fn number(&self, number: &str) -> String {
+        match &self.edit {
+            Edit::Insert(i) => i.number(number),
+            Edit::Literal { .. } => number.to_string(),
+        }
+    }
+
+    /// The dictionary entry an inherited control is written into, if it is one's.
+    pub(crate) fn entry(&self) -> Option<&lens::Entry> {
+        match &self.edit {
+            Edit::Insert(i) => i.entry.as_ref(),
             Edit::Literal { .. } => None,
         }
     }
@@ -176,7 +195,7 @@ fn control(rev: &Revision, sites: &HashMap<u32, &Site>, m: &Module, origin: &Ori
     let (id, literal, scale, edit) = if origin.arg.is_empty() {
         let slot = origin.control.as_ref().filter(|c| c.inherited)?;
         let desc = component_of(&rev.compiled, m, slot.frame)?;
-        let insertion = Insertion::plan(site, desc, &slot.slot, text, options_of(m, site.id).ok()?).ok()?;
+        let insertion = Insertion::plan(site, desc, &slot.slot, text, options_of(m, site.id).ok()?, &rev.compiled.units).ok()?;
         (format!("{}#{}/@{}", site.file, site.ordinal, slot.slot), String::new(), 1.0, Edit::Insert(insertion))
     } else {
         let lens = LiteralLens::read(site, origin, text, value)?;
@@ -215,7 +234,7 @@ pub(crate) fn not_insertable(rev: &Revision, site: &Site, m: &Module, origin: &O
     let desc = component_of(&rev.compiled, m, slot.frame)?;
     let text = rev.snapshot.files.get(Path::new(&site.file))?;
     match options_of(m, site.id) {
-        Ok(options) => Insertion::plan(site, desc, &slot.slot, text, options).err(),
+        Ok(options) => Insertion::plan(site, desc, &slot.slot, text, options, &rev.compiled.units).err(),
         Err(why) => Some(why),
     }
 }

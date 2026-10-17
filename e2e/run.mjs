@@ -84,7 +84,7 @@ export const SUITES = [
   ["s4-meter", "fix", { expect: 8 }],
   ["live3a", "fix", { expect: 49 }],
   ["live3b", "proj", { clap: true, expect: 60 }],
-  ["s5-knobs", "fix", { expect: 106 }],
+  ["s5-knobs", "fix", { expect: 117 }],
   ["s6-builders", "fix", { expect: 55 }],
   ["s6-write", "fix", { expect: 36 }],
   ["s6-fixes", "fix", { expect: 19 }],

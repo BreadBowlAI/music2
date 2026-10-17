@@ -162,8 +162,7 @@ pub fn automate(s: &mut Session, at: u64, id: &str) -> Result<Automated, EditErr
                 Some(d) => spelled(&d, &imported_names(&text, "@m2/core"), &rev.compiled.units),
                 None => (number(c.value), None),
             };
-            let (start, end, insert) = c.planned(&read(&written)).ok_or_else(|| EditError::NotFound(id.to_string()))?;
-            edits.push((start, end, insert));
+            edits.extend(c.planned(&read(&written)).ok_or_else(|| EditError::NotFound(id.to_string()))?);
             // The call makes an inherited control (PKG-3): its range is what changes.
             ranges.push((site.start, site.end));
             if let Some((at, line)) = import.and_then(|name| import_insertion(&text, "@m2/core", &name)) {

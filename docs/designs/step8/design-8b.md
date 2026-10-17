@@ -878,6 +878,11 @@ Its first move must write it:
   gets a property. The anchor is `Anchor::Slot { site: the mixer call, slot: "channels.kick.db" }`, which already names
   an inherited control (WRITE-6).
 
+**Built (B4):** as above, in `Insertion::plan` (`crates/editor/src/lens.rs`). A shorthand entry (`{ saws }`) is
+written in full (`saws: { in: saws, db: -3 }`), and `mix::mixer` now reads an object with shorthands. The style rule
+holds for dictionary entries only: an options object's insertion stays a plain number. History shows the entry, not the
+call (`kick: kick.out` → `kick: { in: kick.out, db: db(-3) }`); past 60 characters its old value is `…`.
+
 ### 5.3 The first pan on a channel
 
 `pan` is optional, so an unpanned channel has no panner node and no knob: first-song's Kick and Bass, and every track

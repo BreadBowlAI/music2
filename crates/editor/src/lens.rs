@@ -4,8 +4,8 @@
 //! graph verification belong to the session.
 
 use m2_ir::Origin;
-use m2_script::Descriptor;
 use m2_script::sites::{Arg, Site};
+use m2_script::{Descriptor, UnitCtor};
 
 use super::EditError;
 
@@ -56,21 +56,40 @@ impl LiteralLens {
 
 /// Where a declared control that a call leaves out (inherited, PKG-3) is written when it is first
 /// edited (the step 5 design's D5): positionally when that is the next argument, else in the
-/// call's options object, else in a new one. The value is a plain number in base units, so the
-/// insertion adds no call and renumbers no site.
+/// call's options object, else in a new one. A dictionary entry's control (`channels.kick.db`) is
+/// written into its entry: an object gets a property, and a bare signal is wrapped as
+/// `{ in: <signal>, db: … }` (design-8b §5.2). The value is a plain number in base units, or, in
+/// a dictionary whose other entries write the control with a unit call (`db(-6)`), that call.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Insertion {
     /// Bytes `start..end` of the file are replaced: an empty range after the last argument (or
-    /// inside empty parentheses, or just inside an options object with no properties), or the
-    /// blank inside of `{}` or `{ }`.
+    /// inside empty parentheses, or just inside an options object with no properties, or after a
+    /// dictionary entry or its last property), or the blank inside of `{}` or `{ }`.
     pub start: u32,
     pub end: u32,
     /// What goes around the number: `, ` and ``, `, q: ` and ``, `, { q: ` and ` }`, ` q: ` and
-    /// ` ` (or `,` before a comment or a line break that stays).
+    /// ` ` (or `,` before a comment or a line break that stays), `, db: ` and ` }` for a wrap.
     pub prefix: String,
     pub suffix: String,
+    /// A bare dictionary entry is wrapped: this text goes in where the entry's signal starts
+    /// (`{ in: `, or `saws: { in: ` for the shorthand `saws`), which the suffix closes. The
+    /// signal's own text stays as it is, so every call in it keeps its place (ID-13).
+    pub open: Option<(u32, String)>,
+    /// The dictionary entry it goes into, if it does: what history shows.
+    pub entry: Option<Entry>,
+    /// The unit call a number is written in (`db` for `db(-3)`), to follow the dictionary's style.
+    pub spelling: Option<String>,
     /// The argument path the value is written at: its origin's `arg` once written.
     pub path: Vec<String>,
+}
+
+/// A dictionary entry as written: its key, its value's bytes, and whether it is a shorthand
+/// (`saws` for `saws: saws`).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Entry {
+    pub key: String,
+    pub value: (u32, u32),
+    pub shorthand: bool,
 }
 
 impl Insertion {
@@ -78,11 +97,16 @@ impl Insertion {
     /// argument `options` held its options when it ran (`Frame.options`): only the run can tell
     /// `lowpass(x, opts)`'s options from a cutoff. Why not, when the call holds an argument at
     /// that place already (one that was `undefined`), its options aren't a plain object written
-    /// in the call, it spreads its arguments, or the slot is a dictionary entry's.
-    pub fn plan(site: &Site, desc: &Descriptor, slot: &str, source: &str, options: Option<usize>) -> Result<Insertion, &'static str> {
-        if slot.contains('.') {
-            return Err("it is a dictionary entry's, which is written with its entry");
-        }
+    /// in the call, it spreads its arguments, or, for a dictionary entry's, the entry isn't written
+    /// in the call as a plain property. `units` are the build's unit constructors (PKG-11).
+    pub fn plan(
+        site: &Site,
+        desc: &Descriptor,
+        slot: &str,
+        source: &str,
+        options: Option<usize>,
+        units: &[UnitCtor],
+    ) -> Result<Insertion, &'static str> {
         let text = |a: &Arg| {
             let (s, e) = a.span();
             source.get(s as usize..e as usize).unwrap_or("")
@@ -101,6 +125,22 @@ impl Insertion {
             return Err("its arguments aren't where its run read them");
         }
         let given = options.unwrap_or(n);
+        if let Some((dict, rest)) = slot.split_once('.') {
+            // The dictionary: at its place among the arguments, else in the options object.
+            let (written, mut path) = match params.iter().position(|x| *x == dict) {
+                Some(p) if p < given => (&args[p], vec![p.to_string()]),
+                _ => match options.map(|i| (i, &args[i])) {
+                    Some((i, Arg::Object { props, .. })) => match props.iter().find(|(k, _)| k == dict) {
+                        Some((_, a)) => (a, vec![i.to_string(), dict.to_string()]),
+                        None => return Err("its dictionary isn't written in the call"),
+                    },
+                    _ => return Err("its dictionary isn't written in the call"),
+                },
+            };
+            let (key, control) = rest.rsplit_once('.').ok_or("it isn't a control of a dictionary entry")?;
+            path.extend([key.to_string(), control.to_string()]);
+            return entry(desc, dict, key, control, written, source, units, path);
+        }
         let after = |a: &Arg| a.span().1;
         if let Some(p) = params.iter().position(|x| *x == slot) {
             if p < given {
@@ -114,11 +154,12 @@ impl Insertion {
                         prefix: ", ".into(),
                         suffix: String::new(),
                         path: vec![p.to_string()],
+                        ..Insertion::bare()
                     }),
                     None => {
                         let close = site.end.checked_sub(1).filter(|&c| source.as_bytes().get(c as usize) == Some(&b')'));
                         let close = close.ok_or("the call's parentheses aren't where it ends")?;
-                        Ok(Insertion { start: close, end: close, prefix: String::new(), suffix: String::new(), path: vec![p.to_string()] })
+                        Ok(Insertion { start: close, end: close, path: vec![p.to_string()], ..Insertion::bare() })
                     }
                 };
             }
@@ -132,9 +173,23 @@ impl Insertion {
                     // Inside the braces: only blanks on one line are replaced, and anything else in
                     // them (a comment, a line break) stays after the new property.
                     Ok(if inside.trim().is_empty() && !inside.contains('\n') {
-                        Insertion { start: start + 1, end: end - 1, prefix: format!(" {slot}: "), suffix: " ".into(), path }
+                        Insertion {
+                            start: start + 1,
+                            end: end - 1,
+                            prefix: format!(" {slot}: "),
+                            suffix: " ".into(),
+                            path,
+                            ..Insertion::bare()
+                        }
                     } else {
-                        Insertion { start: start + 1, end: start + 1, prefix: format!(" {slot}: "), suffix: ",".into(), path }
+                        Insertion {
+                            start: start + 1,
+                            end: start + 1,
+                            prefix: format!(" {slot}: "),
+                            suffix: ",".into(),
+                            path,
+                            ..Insertion::bare()
+                        }
                     })
                 }
                 Arg::Object { props, .. } => {
@@ -148,6 +203,7 @@ impl Insertion {
                         prefix: format!(", {slot}: "),
                         suffix: String::new(),
                         path: vec![i.to_string(), slot.into()],
+                        ..Insertion::bare()
                     })
                 }
                 _ => Err("the call's options aren't an object written in the call"),
@@ -159,21 +215,118 @@ impl Insertion {
                 }
                 let path = vec![given.to_string(), slot.into()];
                 match args.last() {
-                    Some(last) => {
-                        Ok(Insertion { start: after(last), end: after(last), prefix: format!(", {{ {slot}: "), suffix: " }".into(), path })
-                    }
+                    Some(last) => Ok(Insertion {
+                        start: after(last),
+                        end: after(last),
+                        prefix: format!(", {{ {slot}: "),
+                        suffix: " }".into(),
+                        path,
+                        ..Insertion::bare()
+                    }),
                     None => {
                         let close = site.end.checked_sub(1).filter(|&c| source.as_bytes().get(c as usize) == Some(&b')'));
                         let close = close.ok_or("the call's parentheses aren't where it ends")?;
-                        Ok(Insertion { start: close, end: close, prefix: format!("{{ {slot}: "), suffix: " }".into(), path })
+                        Ok(Insertion {
+                            start: close,
+                            end: close,
+                            prefix: format!("{{ {slot}: "),
+                            suffix: " }".into(),
+                            path,
+                            ..Insertion::bare()
+                        })
                     }
                 }
             }
         }
     }
 
-    /// The text that replaces `start..end`, with the number written as `number`.
-    pub fn text(&self, number: &str) -> String {
-        format!("{}{number}{}", self.prefix, self.suffix)
+    /// An insertion with nothing in it yet, to fill in.
+    fn bare() -> Insertion {
+        Insertion { start: 0, end: 0, prefix: String::new(), suffix: String::new(), open: None, entry: None, spelling: None, path: vec![] }
     }
+
+    /// How a number in base units (as [`propose`] writes it) is written here: in the unit call the
+    /// dictionary's other entries use (`db(-3)`), else as it is.
+    pub fn number(&self, number: &str) -> String {
+        match &self.spelling {
+            Some(call) => format!("{call}({number})"),
+            None => number.to_string(),
+        }
+    }
+
+    /// The edits that write `written` (a number as [`Insertion::number`] spells it, or a signal's
+    /// name), in the file's order: each `(start, end, text)`.
+    pub fn edits(&self, written: &str) -> Vec<(u32, u32, String)> {
+        let open = self.open.iter().map(|(at, text)| (*at, *at, text.clone()));
+        open.chain([(self.start, self.end, format!("{}{written}{}", self.prefix, self.suffix))]).collect()
+    }
+}
+
+/// Plan writing control `control` into entry `key` of dictionary `dict` of `desc`, written in the
+/// call as `written` at argument path `path` (design-8b §5.2): into an object entry as one more
+/// property, or around a bare signal as `{ in: <signal>, <control>: … }`. Why not, when the
+/// dictionary isn't an object written in the call, the entry isn't in it, or names the control.
+#[allow(clippy::too_many_arguments)]
+fn entry(
+    desc: &Descriptor,
+    dict: &str,
+    key: &str,
+    control: &str,
+    written: &Arg,
+    source: &str,
+    units: &[UnitCtor],
+    path: Vec<String>,
+) -> Result<Insertion, &'static str> {
+    let each = desc.controls.iter().find(|c| c.name == dict).and_then(|c| c.each.as_deref()).ok_or("its dictionary isn't declared")?;
+    let declared = each.controls.iter().find(|c| c.name == control).ok_or("its entry declares no such control")?;
+    let Arg::Object { props, .. } = written else { return Err("its dictionary isn't an object written in the call") };
+    let (_, value) = props.iter().find(|(k, _)| k == key).ok_or("its entry isn't written in the call")?;
+    let (start, end) = value.span();
+    let text = source.get(start as usize..end as usize).unwrap_or("");
+    let shorthand = matches!(value, Arg::Other { .. }) && text == key;
+    let spelling = style(props, key, control, declared.unit, source, units);
+    let entry = Some(Entry { key: key.to_string(), value: (start, end), shorthand });
+    match value {
+        Arg::Object { props: fields, .. } => {
+            if fields.iter().any(|(k, _)| k == control) {
+                return Err("its entry names it already");
+            }
+            let (_, last) = fields.last().ok_or("its entry is an empty object")?;
+            let at = last.span().1;
+            Ok(Insertion { start: at, end: at, prefix: format!(", {control}: "), suffix: String::new(), open: None, entry, spelling, path })
+        }
+        _ => {
+            // A bare entry is its one input's signal (`kick: kick.out` is `{ in: kick.out }`).
+            let [input] = each.inputs.as_slice() else { return Err("its entry is a bare signal, which this dictionary doesn't take") };
+            let open = match shorthand {
+                true => format!("{key}: {{ {}: ", input.name),
+                false => format!("{{ {}: ", input.name),
+            };
+            Ok(Insertion {
+                start: end,
+                end,
+                prefix: format!(", {control}: "),
+                suffix: " }".into(),
+                open: Some((start, open)),
+                entry,
+                spelling,
+                path,
+            })
+        }
+    }
+}
+
+/// The unit call another entry of the dictionary writes `control` with (`db` in
+/// `hats: { in: hats.out, db: db(-6) }`), when it is a spelling in base units of the control's
+/// unit and the file imports it from `@m2/core` under its own name: so an insertion never mixes
+/// two spellings in one object (design-8b §5.2).
+fn style(props: &[(String, Arg)], key: &str, control: &str, unit: Option<m2_ir::Unit>, source: &str, units: &[UnitCtor]) -> Option<String> {
+    let unit = unit?;
+    let called = props.iter().filter(|(k, _)| k != key).find_map(|(_, v)| {
+        let Arg::Object { props: fields, .. } = v else { return None };
+        let (start, end) = fields.iter().find(|(k, _)| k == control)?.1.span();
+        let (name, _) = source.get(start as usize..end as usize)?.split_once('(')?;
+        units.iter().find(|u| u.name == name.trim() && u.unit == unit && u.scale == 1.0)
+    })?;
+    crate::sites::imported_names(source, "@m2/core").contains(&called.name).then(|| called.name.clone())
 }
