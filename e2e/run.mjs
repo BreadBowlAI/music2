@@ -68,6 +68,7 @@ export const SUITES = [
   ["views", "proj", { expect: 30 }],
   ["code", "proj", { expect: 58 }],
   ["notes", "proj", { expect: 52 }],
+  ["s8-audition", "fix", { expect: 49 }],
   ["ports", "proj", { expect: 46 }],
   ["dsp", "proj", { expect: 33 }],
   ["start", "proj", { expect: 24 }],

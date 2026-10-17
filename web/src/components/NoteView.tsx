@@ -23,6 +23,7 @@ import {
   type Note,
   type NoteClip,
 } from "../lib/graph";
+import { attach, KEY_VELOCITY, PAINT_MS, pulse, release, retune, strike, useAudition } from "../lib/audition";
 import { onFrame } from "../lib/clock";
 import { RULER_H } from "../lib/layout";
 import { chord, keyName, mod, native } from "../lib/native";
@@ -30,6 +31,7 @@ import { GRAPHITE, trackColors, type TrackColor } from "../lib/palette";
 import { useGrid } from "../lib/grid";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
+import AuditionTools from "./AuditionTools";
 import { DockSlot } from "./Dock";
 import GridChip from "./GridChip";
 import { Hatch, HBands, VLines } from "./draw";
@@ -50,6 +52,9 @@ const BLACK = [1, 3, 6, 8, 10];
 const VELOCITY = 0.8;
 /** The shortest note, when nothing snaps. */
 const MIN_LEN = 1 / 64;
+/** Two presses on empty grid this close in time (ms) and place (px) are a double-click's: the second sounds the note it adds. */
+const DOUBLE_MS = 500;
+const DOUBLE_PX = 5;
 
 /** The part of a clip the piano roll edits: its length and its notes. */
 interface Shape { length: number; notes: Note[] }
@@ -128,6 +133,10 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   const grid = useRef<HTMLDivElement>(null);
   const strip = useRef<HTMLDivElement>(null);
   const gesture = useRef<Gesture | null>(null);
+  /** The note a pointer holds down on the grid, sounding (audition): its handle, null when nothing sounds. */
+  const hold = useRef<{ pointer: number; h: number | null } | null>(null);
+  /** The last press on empty grid: a second one close by is a double-click's. */
+  const lastEmpty = useRef<{ t: number; x: number; y: number } | null>(null);
   const sending = useRef<{ busy: boolean; next: Shape | null }>({ busy: false, next: null });
   /** The lane as this view's last write made it, while the roll shows that write. */
   const written = useRef<{ revision: number; clips: NoteClip[] } | null>(null);
@@ -168,6 +177,9 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     } else if (n !== seen.current) setSelected(new Set());
     seen.current = n;
   });
+
+  // Audition listens while the roll is open; closing it (another clip, another view) lets go of every note.
+  useEffect(() => attach(), []);
 
   // Open fitted to the clip's length, centred on its notes.
   useLayoutEffect(() => {
@@ -377,6 +389,24 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
 
   // ---------------------------------------------------------------- the grid's gestures
 
+  /** Sound `pitch` while pointer `pointer` stays down. */
+  const sound = (pointer: number, pitch: number, velocity: number) => {
+    release(hold.current?.h ?? null);
+    hold.current = { pointer, h: strike(module, lane, pitch, velocity) };
+  };
+  /** Pointer `pointer` let go: so does the note it held. */
+  const letGo = (pointer: number) => {
+    if (hold.current?.pointer !== pointer) return;
+    release(hold.current.h);
+    hold.current = null;
+  };
+  /** How long `beats` from beat `from` of the clip last, in ms, at the song's tempo there. */
+  const msOf = (beats: number, from: number) => {
+    const at = start + from;
+    const bpm = timeline.tempo.filter((t) => t.beat <= at + 1e-9).at(-1)?.bpm ?? timeline.tempo[0]?.bpm ?? 120;
+    return (beats * 60000) / bpm;
+  };
+
   const onGridDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 || !clip || gesture.current) return;
     root.current?.focus({ preventScroll: true });
@@ -384,6 +414,14 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     const p = at(e);
     const target = (e.target as HTMLElement).closest<HTMLElement>("[data-note]");
     if (!target) {
+      // A double-click's second press sounds the note it is about to add, while it is held.
+      const last = lastEmpty.current;
+      const now = performance.now();
+      lastEmpty.current = { t: now, x: p.x, y: p.y };
+      if (!draw && !locked && last && now - last.t < DOUBLE_MS && Math.hypot(p.x - last.x, p.y - last.y) < DOUBLE_PX && noteAt(p, clip.length)) {
+        lastEmpty.current = null;
+        sound(e.pointerId, p.pitch, VELOCITY);
+      }
       // Draw mode (B): a click adds a note, and a drag paints one in each cell it crosses.
       if (draw && !locked) {
         const g: Gesture = { kind: "paint", pointer: e.pointerId, base: clip, from: basis(), cells: new Set(), result: clip };
@@ -395,6 +433,8 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
       return;
     }
     const i = Number(target.dataset.note);
+    // The note sounds while it is held, at its own velocity: read only too.
+    sound(e.pointerId, clip.notes[i].pitch, clip.notes[i].velocity);
     const was = selected.has(i);
     const sel = e.shiftKey ? (was ? selected : new Set([...selected, i])) : was ? selected : new Set([i]);
     setSelected(sel);
@@ -431,6 +471,8 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
       const dt = Math.max(snapBeat(n0.start + raw) - n0.start, -Math.min(...moving.map((n) => n.start)));
       const dp = clamp(Math.round((g.y0 - p.y) / ROW_H), -Math.min(...moving.map((n) => n.pitch)), TOP - Math.max(...moving.map((n) => n.pitch)));
       notes = base.map((n, i) => (g.sel.has(i) ? { ...n, start: clean(n.start + dt), pitch: n.pitch + dp } : n));
+      // The held note plays each pitch it crosses: an Off for the old, an On for the new.
+      if (hold.current?.pointer === e.pointerId) hold.current.h = retune(hold.current.h, n0.pitch + dp, n0.velocity);
     } else {
       const min = snap || MIN_LEN;
       const dl = Math.max(snapBeat(n0.start + n0.length + raw) - n0.start, min) - n0.length;
@@ -441,6 +483,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   };
 
   const onGridUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    letGo(e.pointerId);
     const g = gesture.current;
     if (!g || g.pointer !== e.pointerId || g.kind === "velocity" || !clip) return;
     gesture.current = null;
@@ -467,6 +510,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
 
   /** A pointer lost mid-gesture puts the clip back as it was. */
   const onGridCancel = (e: React.PointerEvent<HTMLDivElement>) => {
+    letGo(e.pointerId);
     const g = gesture.current;
     if (!g || g.pointer !== e.pointerId || g.kind === "velocity") return;
     gesture.current = null;
@@ -497,6 +541,8 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     g.cells.add(cell);
     g.result = { length: g.base.length, notes: [...g.result.notes, note] };
     setDraft(g.result);
+    // Each painted note sounds for its length, or a moment if that is shorter.
+    pulse(module, lane, note.pitch, note.velocity, Math.min(msOf(note.length, note.start), PAINT_MS));
   };
 
   // ---------------------------------------------------------------- the velocity strip
@@ -618,6 +664,8 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
           onChange={setLength}
         />
         <Divider />
+        <AuditionTools graph={graph} module={module} lane={lane} />
+        <Divider />
         <div className="shrink-0 flex items-center">
           <Button size="sm" onMouseDown={keepFocus} onClick={() => zoom(0.8)} title={`Zoom out (${mod.cmd} + scroll)`} aria-label="Zoom out" className="w-ctl-sm !px-0">
             <ZoomOut size={16} />
@@ -641,7 +689,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
               <Ruler width={width} ppb={ppb} meter={timeline.meter} start={start} length={clip.length} tone={tone} />
             </div>
             <div className="flex">
-              <Keys selected={new Set(picked.map((i) => clip.notes[i].pitch))} tone={tone} />
+              <Keys selected={new Set(picked.map((i) => clip.notes[i].pitch))} tone={tone} module={module} lane={lane} />
               <div
                 ref={grid}
                 data-testid="roll-grid"
@@ -853,29 +901,73 @@ function LengthField({
   );
 }
 
-/** The piano keys, one row per pitch, C's named; keys of selected notes lit in the track's colour. */
+/**
+ * The piano keys, one row per pitch, C's named; keys of selected notes lit in the track's colour.
+ * The keyboard is an instrument (NT-3): a key sounds on lane `module.lane` while held, at
+ * `KEY_VELOCITY`, and a drag along it plays each key it reaches. A key that sounds, from a key or
+ * a note held anywhere in the roll, is drawn in `press`, never like a selected note's.
+ */
 const Keys = memo(
-  function Keys({ selected, tone }: { selected: Set<number>; tone: TrackColor }) {
+  function Keys({ selected, tone, module, lane }: { selected: Set<number>; tone: TrackColor; module: string; lane: string }) {
+    const held = useAudition((s) => s.held);
+    const sounding = new Set([...held.values()].filter((n) => n.module === module && n.lane === lane).map((n) => n.pitch));
+    const press = useRef<{ pointer: number; h: number | null; pitch: number } | null>(null);
+    const pitchAt = (e: React.PointerEvent<HTMLDivElement>) => clamp(TOP - Math.floor((e.clientY - e.currentTarget.getBoundingClientRect().top) / ROW_H), 0, TOP);
+    const up = (e: React.PointerEvent<HTMLDivElement>) => {
+      if (press.current?.pointer !== e.pointerId) return;
+      release(press.current.h);
+      press.current = null;
+    };
     return (
-      <div className="sticky left-0 z-20 shrink-0 bg-raised border-r border-line" style={{ width: KEYS_W }}>
+      <div
+        data-testid="roll-keys"
+        className="sticky left-0 z-20 shrink-0 bg-raised border-r border-line touch-none select-none cursor-pointer"
+        style={{ width: KEYS_W }}
+        title="Click or drag along the keys to hear them"
+        onPointerDown={(e) => {
+          if (e.button !== 0 || press.current) return;
+          e.currentTarget.setPointerCapture(e.pointerId);
+          const pitch = pitchAt(e);
+          press.current = { pointer: e.pointerId, h: strike(module, lane, pitch, KEY_VELOCITY), pitch };
+        }}
+        onPointerMove={(e) => {
+          const p = press.current;
+          if (p?.pointer !== e.pointerId || p.h === null) return;
+          const pitch = pitchAt(e);
+          if (pitch === p.pitch) return;
+          p.pitch = pitch;
+          // Let go elsewhere (⌘., a blur): the drag plays no more until the next press.
+          p.h = retune(p.h, pitch, KEY_VELOCITY);
+        }}
+        onPointerUp={up}
+        onPointerCancel={up}
+        onLostPointerCapture={up}
+      >
         {Array.from({ length: TOP + 1 }, (_, k) => {
           const p = TOP - k;
           const black = BLACK.includes(p % 12);
-          const lit = selected.has(p);
+          const on = sounding.has(p);
+          const lit = !on && selected.has(p);
           return (
             <div
               key={p}
               data-key={p}
+              data-sounding={on || undefined}
               className={clsx("relative", p % 12 === 0 ? "border-b border-line-strong" : !black && !BLACK.includes((p + 11) % 12) && "border-b border-line")}
               style={{ height: ROW_H }}
             >
-              {lit && <div className="absolute inset-0" style={{ background: tone.bar }} />}
+              {on ? <div className="absolute inset-0 bg-press" /> : lit && <div className="absolute inset-0" style={{ background: tone.bar }} />}
               {/* The edge between the two white keys either side of a black one, under it: every white key is a key. */}
               {black && <div className="absolute inset-x-0 top-1/2 h-px bg-line" />}
-              {black && <div className="absolute left-0 inset-y-[1px] w-[60%] rounded-r-xs" style={{ background: lit ? tone.ink : "var(--color-gray-700)" }} />}
+              {black && (
+                <div
+                  className="absolute left-0 inset-y-[1px] w-[60%] rounded-r-xs"
+                  style={{ background: on ? "var(--color-press)" : lit ? tone.ink : "var(--color-gray-700)" }}
+                />
+              )}
               {p % 12 === 0 && (
                 // On a lit key, the strongest grey: the bar tones are light, so it reads.
-                <span className={clsx("absolute right-1.5 top-1/2 -translate-y-1/2 text-xs leading-none", lit ? "font-medium text-fg-strong" : p === 60 ? "font-medium text-fg-muted" : "text-fg-faint")}>
+                <span className={clsx("absolute right-1.5 top-1/2 -translate-y-1/2 text-xs leading-none", lit || on ? "font-medium text-fg-strong" : p === 60 ? "font-medium text-fg-muted" : "text-fg-faint")}>
                   {pitchName(p)}
                 </span>
               )}
@@ -885,7 +977,7 @@ const Keys = memo(
       </div>
     );
   },
-  (a, b) => a.tone === b.tone && a.selected.size === b.selected.size && [...a.selected].every((p) => b.selected.has(p)),
+  (a, b) => a.tone === b.tone && a.module === b.module && a.lane === b.lane && a.selected.size === b.selected.size && [...a.selected].every((p) => b.selected.has(p)),
 );
 
 /** Row shading (black keys darker, a line under each C) and the bar, beat and snap lines, bars as the song's time signatures count them. */
