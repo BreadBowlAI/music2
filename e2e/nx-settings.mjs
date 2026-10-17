@@ -271,8 +271,20 @@ const reloaded = [await text(page, "[data-testid=settings-output]"), await text(
 check(JSON.stringify(reloaded) === JSON.stringify(["Headphones", "512 samples (10.7 ms)", songs]), `a reload shows them: ${JSON.stringify(reloaded)}`);
 await page.click("[data-testid=settings-songs-default]");
 check(await until(async () => (await s.api("settings")).json?.songs_chosen === false), "\"Use the default\" goes back to the default folder");
+// A folder typed, then Done at once: a refusal keeps the window open and says why; a folder taken
+// closes it (R4).
+await page.click(field, { clickCount: 3 });
+await page.keyboard.type("Songs");
 await page.click("[data-testid=settings-done]");
-check(await until(async () => !(await shown(page)), 2000), "Done closes it");
+check(
+  (await until(async () => /Type a full path/.test((await text(page, "[data-testid=settings-songs-error]")) ?? ""))) && (await shown(page)),
+  `a relative folder typed, then Done: the window stays open and says why: ${await text(page, "[data-testid=settings-songs-error]")}`,
+);
+await page.click(field, { clickCount: 3 });
+await page.keyboard.type(songs);
+await page.click("[data-testid=settings-done]");
+check((await until(async () => !(await shown(page)), 3000)) && (await s.api("settings")).json?.songs === songs, "a full path typed, then Done: it is where new songs go, and Done closes the window");
+await s.api("settings", { songs: null });
 await mac.close();
 await s.stop();
 

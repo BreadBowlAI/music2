@@ -87,12 +87,24 @@ function Dialog({ onClose }: { onClose: () => void }) {
     }
   };
 
-  const applyTyped = async () => {
-    if (typed === null) return;
-    if (await change({ songs: typed.trim() })) {
-      setTyped(null);
-      setFolderError(null);
-    }
+  // The typed folder's change in flight: the field's blur starts it, and Done waits for it.
+  const applying = useRef<Promise<boolean> | null>(null);
+  /** Apply the folder typed, if any: whether it was taken (true when none is typed). */
+  const applyTyped = (): Promise<boolean> => {
+    if (typed === null) return Promise.resolve(true);
+    applying.current ??= change({ songs: typed.trim() }).then((ok) => {
+      applying.current = null;
+      if (ok) {
+        setTyped(null);
+        setFolderError(null);
+      }
+      return ok;
+    });
+    return applying.current;
+  };
+  /** Done: a folder typed is applied first. Refused, the window stays open and says why. */
+  const done = async () => {
+    if (await applyTyped()) onClose();
   };
 
   const choose = async () => {
@@ -108,7 +120,7 @@ function Dialog({ onClose }: { onClose: () => void }) {
   useModalKeys(box, {
     onEscape: onClose,
     // Return in the folder field applies what was typed; anywhere else it is Done.
-    onDefault: () => (document.activeElement === folderField.current && typed !== null ? void applyTyped() : onClose()),
+    onDefault: () => void (document.activeElement === folderField.current && typed !== null ? applyTyped() : done()),
   });
 
   const output = s?.output ?? { device: null, name: null, frames: null };
@@ -128,7 +140,7 @@ function Dialog({ onClose }: { onClose: () => void }) {
   const exporting = !!s?.exporting;
 
   return (
-    <div className="fixed inset-0 z-[70] grid place-items-center p-4 bg-fg-strong/20" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="fixed inset-0 z-[70] grid place-items-center p-4 bg-fg-strong/20" onPointerDown={(e) => e.target === e.currentTarget && void done()}>
       <div
         ref={box}
         role="dialog"
@@ -250,7 +262,7 @@ function Dialog({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="mt-6 px-6 py-3 flex items-center justify-end gap-2 border-t border-line bg-chrome">
-          <Button autoFocus size="lg" variant="primary" data-testid="settings-done" onClick={onClose} className="min-w-[104px]">
+          <Button autoFocus size="lg" variant="primary" data-testid="settings-done" onClick={() => void done()} className="min-w-[104px]">
             Done
           </Button>
         </div>
