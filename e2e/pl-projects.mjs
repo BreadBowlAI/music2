@@ -11,7 +11,8 @@
 //   C3  Save As (⇧⌘S, Q19): a copy under a new name, byte for byte without `.music2/`, which
 //       opens, the song kept as it was, both in Recent; and Rename Song… from the menu (Q20): the
 //       name and the folder, the name only, a taken folder refused in words. Neither dialog lets
-//       a key reach the song behind it. A PC page's keys; the app's Choose Folder….
+//       a key reach the song behind it. A PC page's keys; the app's Choose Folder…. With unsaved
+//       code, Rename with the folder says the edits would be lost first (review PL-R1).
 //
 //   node e2e/pl-projects.mjs <root> <home>     (the `none` kind: no project open)
 //   PL_ONLY=c3 runs one part alone (a red run on an older build, where an earlier part stops it).
@@ -431,6 +432,47 @@ if (part("c3")) {
   check(await until(async () => (await app.$eval("[data-testid=save-as-folder]", (e) => e.textContent)) === "~/Elsewhere"), "in the app, Choose Folder… picks where the copy goes");
   await app.click("[data-testid=save-as-save]");
   check(await until(async () => (await run.api("graph")).json?.dir === `${elsewhere}/Night Ride 2`), `the copy is made there and opens: ${(await run.api("graph")).json?.dir}`);
+
+  // Unsaved code: renaming the folder closes the song, which would lose it. The dialog says so and
+  // its button says Rename Anyway; the server refuses unless asked to go ahead (review PL-R1).
+  const ride = `${elsewhere}/Night Ride 2`;
+  const marked = (d) => fs.readdirSync(d, { withFileTypes: true }).some((e) => (e.isDirectory() ? marked(`${d}/${e.name}`) : e.name.endsWith(".ts") && fs.readFileSync(`${d}/${e.name}`, "utf8").includes("not saved yet")));
+  await app.waitForSelector("[data-testid=timeline]", { timeout: 10000 });
+  await app.click('[data-view-tab="code"]');
+  check(await until(async () => !!(await app.$("[data-testid=code] .monaco-editor .view-lines"))), "the code editor opens");
+  await sleep(500);
+  await app.click("[data-testid=code] .view-lines");
+  await app.keyboard.down("Meta");
+  await app.keyboard.press("ArrowDown");
+  await app.keyboard.up("Meta");
+  await app.keyboard.type("\n// not saved yet");
+  await sleep(500);
+  await app.evaluate(() => window.__menu("rename_song"));
+  await app.waitForSelector("[data-testid=rename-song-dialog]", { timeout: 3000 });
+  const okWords = () => app.$eval("[data-testid=rename-song-ok]", (e) => e.textContent.trim());
+  const warned = await app.$eval("[data-testid=rename-song-unsaved]", (e) => e.textContent).catch(() => null);
+  check(
+    warned === "A file has unsaved edits in the code editor. Renaming the folder closes the song without saving them." && (await okWords()) === "Rename Anyway",
+    `with unsaved code it says the edits would be lost, and the button says Rename Anyway: ${warned} | ${await okWords()}`,
+  );
+  await app.click("[data-testid=rename-song-folder]");
+  check(!(await app.$("[data-testid=rename-song-unsaved]")) && (await okWords()) === "Rename", "with the box off nothing closes: no warning, and the button says Rename");
+  await app.click("[data-testid=rename-song-folder]");
+  const badUnsaved = await lint(app, "[data-testid=rename-song-dialog]");
+  check(badUnsaved.length === 0, `the warning keeps to the design system: ${badUnsaved.slice(0, 4).join(", ")}`);
+  await app.keyboard.press("Escape");
+  check(await until(async () => !(await app.$("[data-testid=rename-song-dialog]"))) && (await run.api("graph")).json?.dir === ride && !marked(ride), "Esc changes nothing, and the edit is still only in the editor");
+  const refusedUnsaved = await run.api("project/rename", { session: (await run.api("graph")).json.session, name: "Night Ride 3", folder: true });
+  check(
+    refusedUnsaved.status === 400 && / has unsaved edits in the code editor\. Renaming the folder closes the song without saving them\. Save first, or rename anyway\.$/.test(refusedUnsaved.json?.error ?? "") && (await run.api("graph")).json?.dir === ride,
+    `the server refuses it too, unless asked to go ahead: ${refusedUnsaved.status} ${refusedUnsaved.json?.error}`,
+  );
+  await app.evaluate(() => window.__menu("rename_song"));
+  await app.waitForSelector("[data-testid=rename-song-dialog]", { timeout: 3000 });
+  await app.click("[data-testid=rename-song-name]", { clickCount: 3 });
+  await app.keyboard.type("Late Ride");
+  await app.keyboard.press("Enter");
+  check(await until(async () => (await run.api("graph")).json?.dir === `${elsewhere}/Late Ride`, 10000), `Rename Anyway renames it, as the dialog said: ${(await run.api("graph")).json?.dir}`);
   await app.browserContext().close();
 }
 

@@ -1292,3 +1292,22 @@ doesn't get round it. A folder beside it whose name starts the same ("Night Driv
 | Test | `project_tests::save_as_refuses_a_folder_inside_the_song`: the song's folder, its `data/`, and a path with `./` in it are refused in words, nothing is made, the song stays open; "Night Drive B" beside it works |
 | Red first | `left: "making /tmp/m2-save-as-3218415-0/songs/Night Drive/Copy"`, `right: "Pick a folder outside Night Drive's own folder."` |
 | Green | `m2-server` `project::` 30/30 |
+
+#### PL-R1. Rename Song with its folder threw away unsaved code
+
+With "Also rename its folder" on (the default), Rename Song closes the song and opens it again.
+That ends the code editor, so any edit not yet saved was lost without a word. Every other way a
+song closes asks first. Now:
+
+| Where | What |
+|---|---|
+| The dialog | While the box is on and the code editor has unsaved edits, it says so, as Save As does: "A file has unsaved edits in the code editor. Renaming the folder closes the song without saving them." The button says **Rename Anyway**. With the box off nothing closes, so no warning |
+| The server | `POST /api/project/rename` with `folder` refuses while the code editor has unsaved edits, before anything is written: "song.ts has unsaved edits in the code editor. Renaming the folder closes the song without saving them. Save first, or rename anyway." The request's `anyway: true` goes ahead (the dialog sends it after its warning) |
+
+| | |
+|---|---|
+| Rust test | `project_tests::rename_with_its_folder_asks_about_unsaved_code`: refused with one file and with two, nothing written; the name alone works; `anyway` renames the folder |
+| Rust red first | ``called `Result::unwrap_err()` on an `Ok` value: Object {"dir": String("/tmp/m2-save-as-3233989-0/songs/Summer"), "name": String("Summer"), "warning": Null}`` |
+| Suite | `pl-projects` C3, in the app: an unsaved edit in the code editor, then Rename Song…: the warning and Rename Anyway; box off, no warning; Esc changes nothing; the route refuses without `anyway`; Rename Anyway renames |
+| Suite red first (the page and server of `5e74f50`) | `FAIL with unsaved code it says the edits would be lost, and the button says Rename Anyway: null \| Rename` and `FAIL the server refuses it too, unless asked to go ahead: 200 undefined` |
+| Green | `m2-server` `project::` 31/31; `pl-projects` (see the last run below) |

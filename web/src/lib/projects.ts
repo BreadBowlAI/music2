@@ -64,7 +64,10 @@ export const songApi = {
   saveAsStart: () => request<SaveAsStart>("/api/project/save-as"),
   /** Save a copy of the open song as `name` in `dir` (default: the folder it is in) and open the copy. Answers with its state. */
   saveAs: (session: number, name: string, dir?: string) => request<GraphState>("/api/project/save-as", { session, name, dir }),
-  /** Rename the open song, and its folder too with `folder`. `warning`: the name changed but the folder couldn't be. */
-  rename: (session: number, name: string, folder: boolean) =>
-    request<{ name: string; dir: string; warning: string | null }>("/api/project/rename", { session, name, folder }),
+  /**
+   * Rename the open song, and its folder too with `folder`. Renaming the folder is refused while the
+   * code editor has unsaved edits, unless `anyway`. `warning`: the name changed but the folder couldn't be.
+   */
+  rename: (session: number, name: string, folder: boolean, anyway = false) =>
+    request<{ name: string; dir: string; warning: string | null }>("/api/project/rename", { session, name, folder, anyway }),
 };

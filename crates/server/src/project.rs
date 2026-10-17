@@ -573,14 +573,19 @@ pub struct Rename {
     /// Rename its folder too.
     #[serde(default)]
     pub folder: bool,
+    /// Rename the folder even though the code editor has unsaved edits, which are then lost.
+    #[serde(default)]
+    pub anyway: bool,
 }
 
 /// Rename the open song (Q20): its name, as one undo step (the title builder), and with `folder`
 /// its folder too, to the name made safe. The folder's new name is checked before anything is
 /// written: one there already (in any capitals) is refused. Then the name is written, the song
 /// closes, its folder is renamed in the same parent (with `.music2/` in it), and the song opens
-/// again from there, so Undo starts over. If the folder can't be renamed then, the name stays
-/// changed, the song opens again where it was, and the answer's `warning` says why (X21).
+/// again from there, so Undo starts over. While the code editor has unsaved edits, a rename that
+/// closes the song is refused unless `anyway` says so (they would be lost). If the folder can't be
+/// renamed then, the name stays changed, the song opens again where it was, and the answer's
+/// `warning` says why (X21).
 /// Answers `{name, dir, warning}`.
 pub fn rename(state: &AppState, req: &Rename) -> Result<Value> {
     let dir = state.graph.dir_of(req.session)?;
@@ -601,6 +606,15 @@ pub fn rename(state: &AppState, req: &Rename) -> Result<Value> {
         }
         false => None,
     };
+    // Closing the song ends its code editor: unsaved edits there would be lost without a word.
+    let unsaved = state.graph.unsaved();
+    if to.is_some() && !req.anyway && !unsaved.is_empty() {
+        let files = match unsaved.as_slice() {
+            [one] => format!("{one} has"),
+            many => format!("{} files have", many.len()),
+        };
+        bail!("{files} unsaved edits in the code editor. Renaming the folder closes the song without saving them. Save first, or rename anyway.");
+    }
     state.graph.title(req.session, name)?;
     let Some(to) = to else { return Ok(json!({"name": name, "dir": dir, "warning": null})) };
     state.graph.close();

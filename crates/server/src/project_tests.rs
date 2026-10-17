@@ -130,12 +130,12 @@ fn rename_moves_the_folder_and_the_name() {
     let songs = Songs::new();
     let state = songs.open();
     // The name only: one undo step, the folder stays.
-    let r = rename(&state, &Rename { session: token(&state), name: "Night Ride".into(), folder: false }).unwrap();
+    let r = rename(&state, &Rename { session: token(&state), name: "Night Ride".into(), folder: false, anyway: false }).unwrap();
     assert_eq!((&r["name"], &r["dir"]), (&json!("Night Ride"), &json!(songs.song())));
     assert_eq!(manifest_name(&songs.song()), "Night Ride");
     assert_eq!(state.graph.state().unwrap()["can_undo"], json!(true));
     // With the folder: the song opens again from the new one, its .music2/ with it.
-    let r = rename(&state, &Rename { session: token(&state), name: "Summer".into(), folder: true }).unwrap();
+    let r = rename(&state, &Rename { session: token(&state), name: "Summer".into(), folder: true, anyway: false }).unwrap();
     let to = songs.0.join("songs/Summer");
     assert_eq!((&r["dir"], &r["warning"]), (&json!(to), &Value::Null));
     assert!(!songs.song().exists());
@@ -145,7 +145,7 @@ fn rename_moves_the_folder_and_the_name() {
     assert_eq!(state.graph.name().as_deref(), Some("Summer"));
     assert_eq!(state.recent().unwrap().paths(), std::slice::from_ref(&to), "the recent list follows");
     // Only its capitals.
-    rename(&state, &Rename { session: token(&state), name: "SUMMER".into(), folder: true }).unwrap();
+    rename(&state, &Rename { session: token(&state), name: "SUMMER".into(), folder: true, anyway: false }).unwrap();
     assert_eq!(state.graph.dir(), Some(songs.0.join("songs/SUMMER")));
 }
 
@@ -154,12 +154,36 @@ fn rename_refuses_a_taken_folder() {
     let songs = Songs::new();
     std::fs::create_dir_all(songs.0.join("songs/summer")).unwrap();
     let state = songs.open();
-    let e = rename(&state, &Rename { session: token(&state), name: "Summer".into(), folder: true }).unwrap_err().to_string();
+    let e = rename(&state, &Rename { session: token(&state), name: "Summer".into(), folder: true, anyway: false }).unwrap_err().to_string();
     assert_eq!(e, "A folder called Summer is already there. Pick another name.");
     assert_eq!(manifest_name(&songs.song()), "Night Drive", "nothing was written");
     assert_eq!(state.graph.dir(), Some(songs.song()));
-    let e = rename(&state, &Rename { session: token(&state), name: " ".into(), folder: true }).unwrap_err().to_string();
+    let e = rename(&state, &Rename { session: token(&state), name: " ".into(), folder: true, anyway: false }).unwrap_err().to_string();
     assert_eq!(e, "A song needs a name");
+}
+
+// Renaming the folder closes the song, and with it the code editor's unsaved edits: refused while
+// there are any, unless the request says to go ahead (review PL-R1). The name alone closes nothing.
+#[test]
+fn rename_with_its_folder_asks_about_unsaved_code() {
+    let songs = Songs::new();
+    let state = songs.open();
+    state.graph.set_unsaved(token(&state), vec!["song.ts".into()]).unwrap();
+    let e = rename(&state, &Rename { session: token(&state), name: "Summer".into(), folder: true, anyway: false }).unwrap_err().to_string();
+    assert_eq!(e, "song.ts has unsaved edits in the code editor. Renaming the folder closes the song without saving them. Save first, or rename anyway.");
+    assert_eq!(manifest_name(&songs.song()), "Night Drive", "nothing was written");
+    assert_eq!(state.graph.dir(), Some(songs.song()));
+    state.graph.set_unsaved(token(&state), vec!["song.ts".into(), "tracks/bass.ts".into()]).unwrap();
+    let e = rename(&state, &Rename { session: token(&state), name: "Summer".into(), folder: true, anyway: false }).unwrap_err().to_string();
+    assert!(e.starts_with("2 files have unsaved edits in the code editor."), "{e}");
+    // The name only: nothing closes, so nothing is lost.
+    rename(&state, &Rename { session: token(&state), name: "Night Ride".into(), folder: true, anyway: false }).unwrap_err();
+    rename(&state, &Rename { session: token(&state), name: "Night Ride".into(), folder: false, anyway: false }).unwrap();
+    assert_eq!(manifest_name(&songs.song()), "Night Ride");
+    // Asked to go ahead: it does.
+    rename(&state, &Rename { session: token(&state), name: "Summer".into(), folder: true, anyway: true }).unwrap();
+    assert_eq!(state.graph.dir(), Some(songs.0.join("songs/Summer")));
+    assert!(state.graph.unsaved().is_empty(), "the song opened again: a new editor");
 }
 
 #[test]
@@ -168,7 +192,7 @@ fn rename_in_a_read_only_window_is_refused() {
     let held = m2_session::lock::acquire(&songs.song(), "m2", m2_session::lock::RETRY).unwrap();
     let state = songs.open();
     assert!(state.graph.read_only().is_some());
-    let e = rename(&state, &Rename { session: token(&state), name: "Summer".into(), folder: true }).unwrap_err().to_string();
+    let e = rename(&state, &Rename { session: token(&state), name: "Summer".into(), folder: true, anyway: false }).unwrap_err().to_string();
     assert!(e.contains("open for writing"), "{e}");
     assert_eq!(manifest_name(&songs.song()), "Night Drive");
     assert!(!songs.0.join("songs/Summer").exists());

@@ -1,7 +1,7 @@
-import { CircleAlert, LoaderCircle } from "lucide-react";
+import { CircleAlert, LoaderCircle, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { create } from "zustand";
-import { lockReason } from "../lib/graph";
+import { editorHooks, lockReason } from "../lib/graph";
 import { flushLocal } from "../lib/local";
 import { useModalKeys } from "../lib/modal";
 import { songApi } from "../lib/projects";
@@ -37,8 +37,10 @@ export default function RenameSongDialog() {
  * Rename the open song (Q20): "Rename Night Drive", the name (selected), and "Also rename its
  * folder" (on). The name is one undo step. With the folder, the song closes and opens again from
  * the renamed folder, so Undo can't go back past it: the dialog says so while the box is on. A
- * folder name that is taken is refused in words, and nothing is changed. The keys are every
- * dialog's (`useModalKeys`): Return renames from the field or the box.
+ * folder name that is taken is refused in words, and nothing is changed. Unsaved code in the editor
+ * is said first while the box is on, as Save As says it: closing the song loses it, so the button
+ * says Rename Anyway (review PL-R1). The keys are every dialog's (`useModalKeys`): Return renames
+ * from the field or the box.
  */
 function Dialog({ onClose }: { onClose: () => void }) {
   const graph = useStore((s) => s.graph)!;
@@ -46,6 +48,8 @@ function Dialog({ onClose }: { onClose: () => void }) {
   const [folder, setFolder] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [unsaved] = useState(() => editorHooks.unsaved?.() ?? 0);
+  const losing = folder && unsaved > 0;
   const input = useRef<HTMLInputElement>(null);
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => input.current?.select(), []);
@@ -64,7 +68,7 @@ function Dialog({ onClose }: { onClose: () => void }) {
     try {
       // The view settings of this song, written before it closes (plan X37).
       if (folder) await flushLocal();
-      const r = await songApi.rename(graph.session, wanted, folder);
+      const r = await songApi.rename(graph.session, wanted, folder, losing);
       onClose();
       const { toast } = useStore.getState();
       if (r.warning) toast(r.warning);
@@ -120,6 +124,15 @@ function Dialog({ onClose }: { onClose: () => void }) {
             The song closes and opens again. After that, Undo can't go back past this.
           </p>
         )}
+        {losing && (
+          <div data-testid="rename-song-unsaved" className="mt-3 flex items-start gap-2 px-3 py-2 rounded-sm bg-warn-soft text-sm text-warn-strong">
+            <TriangleAlert size={14} className="shrink-0 text-warn mt-px" />
+            <span>
+              {unsaved === 1 ? "A file has" : `${unsaved} files have`} unsaved edits in the code editor. Renaming the folder closes the song without
+              saving them.
+            </span>
+          </div>
+        )}
         {error && (
           <div role="alert" data-testid="rename-song-error" className="mt-3 flex items-start gap-2 px-3 py-2 rounded-sm bg-danger-soft text-sm text-danger-strong">
             <CircleAlert size={14} className="shrink-0 text-danger mt-px" />
@@ -132,7 +145,7 @@ function Dialog({ onClose }: { onClose: () => void }) {
           </Button>
           <Button variant="primary" size="lg" data-testid="rename-song-ok" onClick={() => void rename()} disabled={busy} className="min-w-[88px]">
             {busy && <LoaderCircle size={14} className="animate-spin" />}
-            Rename
+            {losing ? "Rename Anyway" : "Rename"}
           </Button>
         </div>
       </div>
