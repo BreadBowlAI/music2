@@ -57,6 +57,7 @@ mod steps;
 pub mod midi;
 mod lanes;
 mod tempo_lease;
+mod import;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};

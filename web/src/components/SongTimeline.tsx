@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { ArrowRightFromLine, AudioWaveform, ChevronRight, Plus, ZoomIn, ZoomOut } from "lucide-react";
+import { ArrowRightFromLine, ChevronRight, Plus, ZoomIn, ZoomOut } from "lucide-react";
 import { createContext, memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal, flushSync } from "react-dom";
 import {
@@ -69,6 +69,7 @@ import GridChip from "./GridChip";
 import PointMenu, { unautomate, type MenuItem } from "./ClipMenu";
 import TrackHeader from "./TrackHeader";
 import { Button, EmptyState, keepFocus, Popover } from "./ui";
+import { Wave } from "./Wave";
 
 /** A clip sits this far inside its row, inside its 1px border; its drawing this far inside that. */
 const CLIP_INSET = 4;
@@ -2255,10 +2256,7 @@ function LaneClips({
     ) : "points" in c ? (
       <Curve clip={c} level={level} path={scale?.path ?? line} color={tone} picked={pickedPoint} />
     ) : (
-      <div className="absolute inset-x-0 bottom-0 flex items-center gap-1.5 px-2 text-xs font-medium" style={{ top: BODY_TOP, color: tone.ink }}>
-        <AudioWaveform size={14} className="shrink-0" />
-        <span className="truncate">{c.asset}</span>
-      </div>
+      <Wave clip={c} color={tone} />
     );
   const words = (c: AnyClip) => {
     const how = editable ? `drag to move · ${mod.alt}-drag to copy · drag an edge to resize · Delete removes` : "";
