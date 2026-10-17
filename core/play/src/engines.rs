@@ -23,7 +23,7 @@ use anyhow::Result;
 use m2_os::process::Cores;
 use m2_os::rt::{Group, Joined};
 use m2_runtime::threads::Joins;
-use m2_runtime::{Pool, Runner};
+use m2_runtime::{Counters, Meter, Pool, Runner};
 
 /// How a player's engine threads run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -91,6 +91,8 @@ pub struct EngineThreads {
     /// The device thread's floating-point register as its last callback found it (RENDER-2a:
     /// the callback renders in the one mode, and puts this back after).
     pub device_mode: u64,
+    /// The callback took them: blocks render on them from now on.
+    pub taken: bool,
 }
 
 /// What a player's callback is handed: the runner of its pool, the output's group and how its
@@ -133,17 +135,23 @@ pub(crate) struct Report {
     count: AtomicUsize,
     real_time: AtomicUsize,
     joined: AtomicUsize,
-    /// The device thread's [`Joined`]: 1 real time, 2 in the workgroup, 4 cancelled.
+    /// The device thread's [`Joined`]: 1 real time, 2 in the workgroup, 4 cancelled; 8 once the
+    /// callback took its engine threads.
     device: AtomicU8,
     spin: AtomicU8,
     device_mode: AtomicU64,
     missing: OnceLock<String>,
+    /// Reads the pool's counters (G12).
+    meter: OnceLock<Meter>,
 }
 
 impl Report {
     /// Engine threads as made: `count` threads, their workers' reports.
-    pub(crate) fn made(&self, count: usize, joins: Option<&Joins>, between: Between, missing: Option<String>) {
+    pub(crate) fn made(&self, count: usize, joins: Option<&Joins>, meter: Option<Meter>, between: Between, missing: Option<String>) {
         self.count.store(count, Ordering::Relaxed);
+        if let Some(m) = meter {
+            let _ = self.meter.set(m);
+        }
         if let Some(j) = joins {
             self.real_time.store(j.real_time.load(Ordering::Relaxed), Ordering::Relaxed);
             self.joined.store(j.joined.load(Ordering::Relaxed), Ordering::Relaxed);
@@ -156,7 +164,7 @@ impl Report {
 
     /// The device's thread took its engine threads. On the audio thread: atomics only.
     pub(crate) fn device(&self, j: Joined) {
-        self.device.store(u8::from(j.real_time) | u8::from(j.workgroup) << 1 | u8::from(j.cancelled) << 2, Ordering::Relaxed);
+        self.device.store(u8::from(j.real_time) | u8::from(j.workgroup) << 1 | u8::from(j.cancelled) << 2 | 8, Ordering::Relaxed);
     }
 
     /// The device thread's floating-point register as a callback found it.
@@ -174,7 +182,13 @@ impl Report {
             missing: self.missing.get().cloned(),
             between: if self.spin.load(Ordering::Relaxed) == 1 { Between::Spin } else { Between::Park },
             device_mode: self.device_mode.load(Ordering::Relaxed),
+            taken: d & 8 != 0,
         }
+    }
+
+    /// The pool's counters, the device's thread first: empty on one thread.
+    pub(crate) fn counters(&self) -> Vec<Counters> {
+        self.meter.get().map(Meter::counters).unwrap_or_default()
     }
 }
 
@@ -191,7 +205,7 @@ pub(crate) fn for_clock(frames: usize, rate: u32, live: LiveThreads, report: &Re
 /// OS won't start them. Reported in `report`.
 fn made(count: usize, group: Arc<Group>, between: Between, report: &Report) -> Engines {
     let one = |group: Arc<Group>, missing: Option<String>| {
-        report.made(1, None, between, missing);
+        report.made(1, None, None, between, missing);
         Engines::alone(group, between)
     };
     if count <= 1 {
@@ -200,7 +214,7 @@ fn made(count: usize, group: Arc<Group>, between: Between, report: &Report) -> E
     let (setup, joins) = m2_runtime::threads::live(group.clone(), between == Between::Spin, TRAP);
     match Pool::new(count, setup) {
         Ok((pool, runner)) => {
-            report.made(count, Some(&joins), between, None);
+            report.made(count, Some(&joins), Some(pool.meter()), between, None);
             Engines { pool: Some(pool), handover: Box::new(Handover { runner, group, between }), cancelled: false }
         }
         Err(e) => one(group, Some(format!("one thread: the OS wouldn't start {} more ({e})", count - 1))),
@@ -215,7 +229,7 @@ fn made(count: usize, group: Arc<Group>, between: Between, report: &Report) -> E
 /// ([`judged`]); else one thread, and [`EngineThreads::missing`] says why.
 pub(crate) fn for_device(uid: Option<&str>, rate: u32, live: LiveThreads, first: &dyn Fn() -> u32, report: &Report) -> Engines {
     let one = |missing: String| {
-        report.made(1, None, live.between, Some(missing));
+        report.made(1, None, None, live.between, Some(missing));
         Engines::alone(Arc::new(Group::none(None)), live.between)
     };
     let start = Instant::now();
@@ -229,7 +243,7 @@ pub(crate) fn for_device(uid: Option<&str>, rate: u32, live: LiveThreads, first:
     let group = Arc::new(Group::of_output(uid, Duration::from_secs_f64(f64::from(frames) / f64::from(rate.max(1)))));
     let count = live_count(live.count, &m2_os::process::cores(), group.recommends(), true);
     if count <= 1 {
-        report.made(1, None, live.between, group.missing().map(str::to_string));
+        report.made(1, None, None, live.between, group.missing().map(str::to_string));
         return Engines::alone(group, live.between);
     }
     let (setup, joins) = m2_runtime::threads::live(group.clone(), live.between == Between::Spin, TRAP);
@@ -259,7 +273,7 @@ pub(crate) fn for_device(uid: Option<&str>, rate: u32, live: LiveThreads, first:
         e.cancelled = said.cancelled > 0;
         return e;
     }
-    report.made(count, Some(&joins), live.between, missing);
+    report.made(count, Some(&joins), Some(pool.meter()), live.between, missing);
     Engines { pool: Some(pool), handover: Box::new(Handover { runner, group, between: live.between }), cancelled: false }
 }
 

@@ -25,6 +25,7 @@ mod cells;
 mod engines;
 pub mod outputs;
 mod resample;
+mod timing;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering, fence};
@@ -41,6 +42,7 @@ pub use m2_runtime::engine::{Applied, CallbackStamp, Engine, Envelope, Heard, Re
 use m2_runtime::{CellTarget, Cmd, LaneSwap, LiveEv, Renderer, Runner, Transport, fpenv};
 pub use outputs::{Choice, Freed, Output, default_output, output_ready, outputs};
 pub use resample::Resampler;
+pub use timing::{BUCKET_NS, Timing};
 
 use crate::cells::{CELL_SEQ, Writer};
 
@@ -291,6 +293,10 @@ struct Shared {
     load_playing: AtomicBool,
     /// Its engine threads, as made and as the callback found them (8a's live half).
     engines: engines::Report,
+    /// The device hears zeros: G12 plays muted ([`Player::mute_output`]).
+    muted: AtomicBool,
+    /// Every callback's time, for G12 (`timing.rs`).
+    timing: timing::Record,
 }
 
 impl Shared {
@@ -421,6 +427,9 @@ impl Callback {
         #[cfg(debug_assertions)]
         alloc::set_in_callback(true);
         self.fill_in(data, channels);
+        if self.shared.muted.load(Ordering::Relaxed) {
+            data.fill(0.0);
+        }
         engines::after_callback(&mut self.runner, self.between);
         #[cfg(debug_assertions)]
         alloc::set_in_callback(false);
@@ -468,6 +477,7 @@ impl Callback {
                 self.shared.late.fetch_add(1, Ordering::Relaxed);
             }
         }
+        self.shared.timing.callback(ns, took, frames, period);
     }
 
     /// Apply a held replace or unload; with nothing playing, take messages until one arrives.
@@ -657,6 +667,7 @@ impl Callback {
         s.seq.store(seq + 2, Ordering::Release);
         if let Some(l) = &self.live {
             s.clock.store(l.engine.clock(), Ordering::Relaxed);
+            s.timing.engine(l.engine.crashes(), l.engine.current().map_or(0, Renderer::non_finite));
         }
         s.loop_refused.store(st.loop_refused, Ordering::Relaxed);
         s.dropped_ons.store(st.dropped_ons as u64, Ordering::Relaxed);
@@ -833,11 +844,22 @@ impl Player {
         Player::start_in(outputs::Audio::from_env(), choice)
     }
 
+    /// The default output device whatever `M2_AUDIO` says, its buffers `frames` frames (when it
+    /// takes them), on the engine threads `live` asks for: G12's live run on a Mac.
+    #[doc(hidden)]
+    pub fn start_device(frames: u32, live: LiveThreads) -> Result<Player> {
+        Player::start_live(outputs::Audio::Device, &Choice { device: None, frames: Some(frames) }, live)
+    }
+
     fn start_in(audio: outputs::Audio, choice: &Choice) -> Result<Player> {
+        Player::start_live(audio, choice, LiveThreads::from_env()?)
+    }
+
+    fn start_live(audio: outputs::Audio, choice: &Choice, live: LiveThreads) -> Result<Player> {
         match audio {
             outputs::Audio::Silent(names) => {
                 let (name, fell_back, frames) = outputs::Audio::silent_pick(&names, choice);
-                let player = Player::silent_as(&name, frames, LiveThreads::from_env()?)?;
+                let player = Player::silent_as(&name, frames, live)?;
                 player.shared.fell_back.store(fell_back, Ordering::Relaxed);
                 return Ok(player);
             }
@@ -845,7 +867,6 @@ impl Player {
             outputs::Audio::Device => {}
         }
         let choice = choice.clone();
-        let live = LiveThreads::from_env()?;
         let (ready_tx, ready) = bounded::<Result<Player>>(1);
         std::thread::Builder::new().name("m2-play".into()).spawn(move || {
             type Opened = (cpal::Stream, Player, Receiver<Gone>, Option<String>);
@@ -966,7 +987,7 @@ impl Player {
     /// [`Player::driven`], each block rendered on `runner`'s threads: tests keep their own pool.
     pub fn driven_on(device_rate: u32, runner: Runner) -> (Player, Driver) {
         let (player, mut d) = Player::driven(device_rate);
-        player.shared.engines.made(runner.threads(), None, BETWEEN, None);
+        player.shared.engines.made(runner.threads(), None, None, BETWEEN, None);
         d.cb.runner = runner;
         (player, d)
     }

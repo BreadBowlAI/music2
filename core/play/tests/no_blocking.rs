@@ -13,7 +13,7 @@ fn the_player_never_blocks_on_its_channels() {
     let blocking = [".send(", ".recv(", "recv_timeout(", "send_timeout(", ".lock(", "recv_deadline(", "send_deadline("];
     let allowed = ["ready_tx.send(", "ready.recv(", "self.send(", "player.send(Msg::Threads(", "self.state.lock("];
     let mut found = vec![];
-    for file in ["lib.rs", "resample.rs", "cells.rs", "engines.rs"] {
+    for file in ["lib.rs", "resample.rs", "cells.rs", "engines.rs", "timing.rs"] {
         let text = std::fs::read_to_string(dir.join(file)).unwrap();
         for (i, line) in text.lines().enumerate() {
             let code = line.trim_start();

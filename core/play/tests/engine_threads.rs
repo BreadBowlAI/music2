@@ -210,7 +210,10 @@ fn a_player_let_go_joins_its_workers() {
     player.play();
     until("it plays", || player.position() > 48_000);
     let e = player.engine_threads();
-    assert_eq!((e.count, e.real_time, e.joined, e.between), (4, 0, 0, Between::Park), "plain threads: {e:?}");
+    assert_eq!((e.count, e.real_time, e.joined, e.between, e.taken), (4, 0, 0, Between::Park, true), "plain threads: {e:?}");
+    // G12 reads the pool's counters through the player: its blocks ran on its workers.
+    let t = player.timing();
+    assert!(t.threads.len() == 4 && t.threads[1..].iter().map(|c| c.tasks).sum::<u64>() > 0, "{:?}", t.threads);
     player.unload().unwrap();
     drop(player);
     until("its workers are joined", || threads::live_workers() == before);
