@@ -9,7 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import { barAt, type TimelineView } from "../lib/graph";
 import { skipsSnap, snapSong } from "../lib/grid";
 import { barOf, markerAt, markersOf, NAME_MAX, nextName, PICKS, useMarkerEdit, usePendingMarkers, writeMarkers, type Marker } from "../lib/markers";
-import { mod, opt } from "../lib/native";
+import { isMac, mod, opt } from "../lib/native";
 import { useStore } from "../lib/store";
 import PointMenu from "./ClipMenu";
 import { MenuRow, Popover } from "./ui";
@@ -88,7 +88,9 @@ export function RulerMarkers({
             title={`${at(timeline, m)}\nClick to go here · ${locked ? "" : `drag to move (hold ${mod.cmd} to place it off the grid) · double-click to rename · `}${opt("←")} and ${opt("→")} go to the one before or after`}
             onPointerDown={(e) => {
               e.stopPropagation();
-              if (e.button !== 0 || !own) return;
+              // A Ctrl-click on a Mac is a right-click: WebKit sends it as button 0 with Ctrl, then
+              // the menu's event. It opens the menu only, as in the roll (X7).
+              if (e.button !== 0 || (isMac && e.ctrlKey) || !own) return;
               const el = e.currentTarget, pointer = e.pointerId, x0 = e.clientX;
               el.setPointerCapture(pointer);
               let to: number | null = null;

@@ -1,9 +1,10 @@
 // Polish B5 and B4, arranging (Q12 to Q14, X19): markers on the ruler, added from its right-click
 // menu at a bar line, named in a field with a short list (written once, when the name is kept),
 // moved by a drag on the grid (⌘ held: freely), renamed by a double-click, deleted and looped to
-// from their menu; ⌥← and ⌥→ go from one to the next; a click goes there; each change one undo
-// step named for Undo, a move inside one bar too (review PL-R3); a hand-written layout.json shows
-// its markers, an unreadable one refuses in words. Repeat… on a clip makes copies one after another, as one undo step.
+// from their menu; ⌥← and ⌥→ go from one to the next; a click goes there (a Ctrl-click on a Mac
+// is a right-click, review PL-R4); each change one undo step named for Undo, a move inside one bar
+// too (review PL-R3); a hand-written layout.json shows its markers, an unreadable one refuses in
+// words. Repeat… on a clip makes copies one after another, as one undo step.
 //
 //   node e2e/pl-arrange.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import { PROJ, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
@@ -124,6 +125,31 @@ check(await until(async () => at((await status()).beat, 40)), `again, to the one
 await key("Alt+ArrowLeft");
 check(await until(async () => at((await status()).beat, 16)), `⌥← goes back: ${(await status()).beat}`);
 check(await page.evaluate(() => history.length) <= 2, "and the page doesn't go back");
+
+// A Ctrl-click on a Mac is a right-click (X7): the menu opens and the playhead stays. WebKit sends
+// the press with Ctrl, then the menu's event, then the release. A Ctrl-drag moves nothing (review PL-R4).
+await post("/seek", { beat: 0 });
+await until(async () => at((await status()).beat, 0));
+const fx = await flag("Verse");
+const [cx, cy] = [fx.x + 6, fx.y + fx.height / 2];
+await page.keyboard.down("Control");
+await page.mouse.move(cx, cy);
+await page.mouse.down();
+await page.$eval('[data-marker-name="Verse"]', (e, x, y) => e.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: x, clientY: y, ctrlKey: true })), cx, cy);
+await page.mouse.up();
+await page.keyboard.up("Control");
+await sleep(500);
+const ctrlMenu = !!(await page.$("[data-testid=clip-menu]"));
+check(ctrlMenu && at((await status()).beat, 0), `a Ctrl-click on a marker on a Mac opens its menu (${ctrlMenu}) and leaves the playhead where it was: beat ${(await status()).beat}`);
+await page.keyboard.press("Escape");
+await until(async () => !(await page.$("[data-testid=clip-menu]")), 2000);
+const ctrlBefore = JSON.stringify(markers());
+await page.keyboard.down("Control");
+await drag({ x: cx, y: cy }, { x: cx + 4 * PPB, y: cy });
+await page.keyboard.up("Control");
+await sleep(600);
+check(JSON.stringify(markers()) === ctrlBefore && at((await status()).beat, 0), `and a Ctrl-drag on a Mac moves no marker: ${JSON.stringify(markers())}`);
+await page.keyboard.press("Escape");
 
 // A drag moves it on the grid; ⌘ held, freely.
 let f = await flag("Chorus");

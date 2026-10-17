@@ -1327,3 +1327,18 @@ notes say their place). A move to another bar still says the bars.
 | Suite | `pl-arrange` (55 now): after the ⌘-held move inside bar 9 and its Undo, Undo names the drag before it, "Undo moving Chorus" |
 | Suite red first (this page, the server of `5e74f50`) | `FAIL then Undo names the drag to bar 9: Undo Verse at bar 11 (⌘Z)` |
 | Green | `m2-editor` `markers::` 7/7, clippy clean; `pl-arrange` (see the last run below) |
+
+#### PL-R4 (and PL-T2). A Ctrl-click on a marker on a Mac moved the playhead
+
+On a Mac a Ctrl-click is a right-click. WebKit sends it as a press with button 0 and Ctrl, then the
+menu's event (X7). The marker flag took the press as a click: the menu opened, and the playhead
+also jumped to the marker. A Ctrl-drag moved the marker. The roll had the guard (X7); the new flags
+didn't. Now the flag ignores a press with Ctrl on a Mac, as the roll does. On Linux, Ctrl-drag still
+places a marker off the grid (X8).
+
+| | |
+|---|---|
+| Suite | `pl-arrange` (57 now), on its Mac page: a Ctrl-press, the menu's event, the release: the menu opens and the playhead stays at 0; a Ctrl-drag moves no marker |
+| Red first (the page and server of `5e74f50`) | `FAIL a Ctrl-click on a marker on a Mac opens its menu (true) and leaves the playhead where it was: beat 39.999988888888886` and `FAIL and a Ctrl-drag on a Mac moves no marker: [{"beat":16,"name":"Chorus"},{"beat":44,"name":"Verse"}]` |
+| Green | this page with the old server: both pass (the run that showed PL-R3 red); `pl-arrange` (see the last run below) |
+| Not checked | A real Mac. Linux Chromium doesn't turn a Ctrl-click into a right-click, so the suite sends the menu's event itself. On the Mac's list |
