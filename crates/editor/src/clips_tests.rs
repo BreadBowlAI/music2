@@ -364,17 +364,247 @@ fn places_are_bar_beat_and_sixteenth() {
     }
 }
 
+/// A notes clip `id` from `start` for `length`, with notes `(pitch, start, length)`.
+fn notes_clip(id: &str, start: f64, length: f64, notes: &[(f64, f64, f64)]) -> serde_json::Value {
+    let notes: Vec<_> = notes.iter().map(|(p, s, l)| serde_json::json!({"pitch": p, "start": s, "length": l, "velocity": 0.8})).collect();
+    serde_json::json!({"id": id, "start": start, "length": length, "notes": notes})
+}
+
+/// A notes clip as the tests compare it: its id, start and length, and its notes `(pitch, start,
+/// length)`.
+type Shown = (String, f64, f64, Vec<(f64, f64, f64)>);
+
+/// The notes clips of `lane`, in order.
+fn notes_by_id(s: &Session, lane: &str) -> Vec<Shown> {
+    let Some(LaneData::Notes(c)) = data(s, lane) else { panic!("{lane} isn't a notes lane") };
+    c.into_iter().map(|c| (c.id.unwrap(), c.start, c.length, c.notes.iter().map(|n| (n.pitch, n.start, n.length)).collect())).collect()
+}
+
+// A split ends the clip at the split and shortens the notes that cross it, as Live does; the notes
+// after it go to a new clip, in place.
+#[test]
+fn a_split_shortens_the_crossing_notes() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let clip = notes_clip("a", 0.0, 8.0, &[(60.0, 0.0, 3.0), (62.0, 3.0, 2.0), (64.0, 4.0, 2.0), (65.0, 7.0, 1.0)]);
+    go(&mut s, Gesture::Set { lane: addr("keys/chords"), put: vec![clip], delete: vec!["6ryexzev".into()] });
+    let done = go(&mut s, Gesture::Split { clips: vec![by_id("keys/chords", "a")], at: 4.0 });
+    let [(_, second)] = &done.made[..] else { panic!("{:?}", done.made) };
+    assert_eq!(
+        notes_by_id(&s, "keys/chords"),
+        [
+            ("a".to_string(), 0.0, 4.0, vec![(60.0, 0.0, 3.0), (62.0, 3.0, 1.0)]),
+            (second.clone(), 4.0, 4.0, vec![(64.0, 0.0, 2.0), (65.0, 3.0, 1.0)]),
+        ]
+    );
+    // Only clips the split crosses; when none does, it says so.
+    let why = refused(&mut s, Gesture::Split { clips: vec![by_id("keys/chords", "a")], at: 6.0 });
+    assert!(why.contains("bar 2"), "{why}");
+}
+
+// A split automation clip plays the same curve: the value at the split ends the first and starts
+// the second.
+#[test]
+fn a_split_control_clip_stays_continuous() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let lane = |s: &Session| s.accepted().compiled.data.control("bass", "cutoff");
+    let before = lane(&s);
+    go(&mut s, Gesture::Split { clips: vec![by_id("bass/cutoff", "adp0sw76")], at: 4.0 });
+    let LaneData::Control { clips, .. } = data(&s, "bass/cutoff").unwrap() else { unreachable!() };
+    let points: Vec<_> = clips.iter().map(|c| (c.start, c.length, c.points.clone())).collect();
+    assert_eq!(points, [(0.0, 4.0, vec![(0.0, 300.0), (4.0, 775.0)]), (4.0, 12.0, vec![(0.0, 775.0), (12.0, 2200.0)])]);
+    let after = lane(&s);
+    for i in 0..80 {
+        let beat = f64::from(i) * 0.25;
+        assert_eq!(after.value_at(beat, 500.0), before.value_at(beat, 500.0), "at beat {beat}");
+    }
+}
+
+// A split audio clip plays the same samples: the second half starts later in the asset. On a
+// sample line, at the asset's own rate, the render is the same to the bit (A8).
+#[test]
+fn a_split_audio_clip_plays_the_same_samples() {
+    let f = fixture("examples/resample");
+    let mut s = f.open();
+    let render = |s: &Session| {
+        let rev = s.accepted();
+        m2_runtime::Renderer::new(&rev.compiled.flat, &rev.compiled.data, &s.packages, 48_000).unwrap().render(2.5).unwrap()
+    };
+    let sound = render(&s);
+    assert!(sound.iter().any(|x| x[0] != 0.0));
+    let done = go(&mut s, Gesture::Split { clips: vec![by_id("chops/clips", "a3s9vpxb")], at: 1.0 });
+    let LaneData::Audio(c) = data(&s, "chops/clips").unwrap() else { unreachable!() };
+    let second = c.iter().find(|c| c.id.as_deref() == Some(done.made[0].1.as_str())).unwrap();
+    assert_eq!((second.start, second.length, second.offset), (1.0, 1.0, 0.5));
+    assert_eq!(render(&s), sound, "the same samples");
+    for (id, at, says) in [("x5175mvv", 5.5, "pitch"), ("j6xncyg7", 3.0, "reversed")] {
+        let why = refused(&mut s, Gesture::Split { clips: vec![by_id("chops/clips", id)], at });
+        assert!(why.contains(says), "{id}: {why}");
+    }
+}
+
+// Join makes one clip of a lane's notes clips, from the earliest start to the latest end, with the
+// earliest's id; every note plays where it did, gaps stay empty, and a note a clip's edge hid
+// stays silent.
+#[test]
+fn join_makes_one_clip_and_keeps_every_note_in_time() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let heard = notes(&s, "bass/notes");
+    let done = go(&mut s, Gesture::Split { clips: vec![by_id("bass/notes", "db9f9t5s")], at: 16.0 });
+    let second = done.made[0].1.clone();
+    go(&mut s, Gesture::Join { clips: vec![by_id("bass/notes", &second), by_id("bass/notes", "db9f9t5s")] });
+    assert_eq!(clips(&s, "bass/notes"), [(Some("db9f9t5s".into()), 0.0, 32.0)]);
+    assert_eq!(notes(&s, "bass/notes"), heard, "the split and the join play what played");
+
+    // Two clips with a gap, one hiding a note past its end that the joined clip would reach.
+    let a = notes_clip("a", 0.0, 4.0, &[(60.0, 0.0, 1.0), (61.0, 3.5, 1.0), (62.0, 5.0, 1.0)]);
+    let b = notes_clip("b", 8.0, 4.0, &[(64.0, -1.0, 2.0), (65.0, 2.0, 1.0)]);
+    go(&mut s, Gesture::Set { lane: addr("keys/chords"), put: vec![a, b], delete: vec!["6ryexzev".into()] });
+    let heard = notes(&s, "keys/chords");
+    go(&mut s, Gesture::Join { clips: vec![by_id("keys/chords", "a"), by_id("keys/chords", "b")] });
+    assert_eq!(notes(&s, "keys/chords"), heard, "every note where it played, and the hidden ones silent");
+    assert_eq!(notes_by_id(&s, "keys/chords"), [("a".to_string(), 0.0, 12.0, vec![(60.0, 0.0, 1.0), (61.0, 3.5, 0.5), (64.0, 8.0, 1.0), (65.0, 10.0, 1.0)])]);
+    let one = refused(&mut s, Gesture::Join { clips: vec![by_id("keys/chords", "a")] });
+    assert!(one.contains("two"), "{one}");
+}
+
+// Automation clips don't join (the fallback would stop playing in their gaps), nor do audio clips,
+// nor clips of two lanes.
+#[test]
+fn control_and_audio_clips_dont_join() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    go(&mut s, Gesture::Split { clips: vec![by_id("bass/cutoff", "adp0sw76")], at: 4.0 });
+    let ids: Vec<ClipRef> = clips(&s, "bass/cutoff").into_iter().map(|c| by_id("bass/cutoff", &c.0.unwrap())).collect();
+    let why = refused(&mut s, Gesture::Join { clips: ids });
+    assert!(why.contains("Automation clips can't be joined"), "{why}");
+    let why = refused(&mut s, Gesture::Join { clips: vec![by_id("kick/hits", "my53vvkc"), by_id("hats/hits", "92gr2959")] });
+    assert!(why.contains("one lane"), "{why}");
+    let audio = fixture("examples/resample");
+    let mut a = audio.open();
+    let why = refused(&mut a, Gesture::Join { clips: vec![by_id("chops/clips", "a3s9vpxb"), by_id("chops/clips", "j6xncyg7")] });
+    assert!(why.contains("Audio clips can't be joined"), "{why}");
+}
+
+// Quantize moves note starts to the nearest grid line, and ends too when asked: sixteenths, and
+// triplets at two thirds of that; only the notes picked, when some are.
+#[test]
+fn quantize_to_sixteenths_and_triplets() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let clip = notes_clip("a", 4.0, 4.0, &[(60.0, 0.1, 0.3), (62.0, 0.3, 0.2), (64.0, 1.13, 0.5)]);
+    go(&mut s, Gesture::Set { lane: addr("keys/chords"), put: vec![clip], delete: vec!["6ryexzev".into()] });
+    let q = |notes: Option<Vec<u32>>, grid: f64, ends: bool| Gesture::Quantize { clips: vec![by_id("keys/chords", "a")], notes, grid, ends };
+    go(&mut s, q(None, 0.25, false));
+    assert_eq!(notes_by_id(&s, "keys/chords")[0].3, [(60.0, 0.0, 0.3), (62.0, 0.25, 0.2), (64.0, 1.25, 0.5)]);
+    s.undo().unwrap();
+    go(&mut s, q(None, 0.25, true));
+    assert_eq!(notes_by_id(&s, "keys/chords")[0].3, [(60.0, 0.0, 0.5), (62.0, 0.25, 0.25), (64.0, 1.25, 0.5)]);
+    s.undo().unwrap();
+    go(&mut s, q(Some(vec![2]), 1.0 / 6.0, false));
+    let third = 1.0 / 6.0;
+    assert_eq!(notes_by_id(&s, "keys/chords")[0].3, [(60.0, 0.1, 0.3), (62.0, 0.3, 0.2), (64.0, 7.0 * third, 0.5)]);
+    let why = refused(&mut s, Gesture::Quantize { clips: vec![by_id("bass/cutoff", "adp0sw76")], notes: None, grid: 0.25, ends: false });
+    assert!(why.contains("notes"), "{why}");
+}
+
+// The piano roll edits one clip's notes, and automation is drawn as one clip's points.
+#[test]
+fn notes_and_points_edit_one_clip() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let n = |pitch: f64, start: f64| Note { pitch, start, length: 0.5, velocity: 0.8 };
+    let done = go(&mut s, Gesture::Notes { clip: by_id("kick/hits", "my53vvkc"), notes: vec![n(36.0, 1.0), n(36.0, 0.0)], length: Some(8.0) });
+    assert_eq!(notes_by_id(&s, "kick/hits"), [("my53vvkc".into(), 0.0, 8.0, vec![(36.0, 0.0, 0.5), (36.0, 1.0, 0.5)])]);
+    assert!(done.edited.after.contains("bar 1"), "{:?}", done.edited);
+    go(&mut s, Gesture::Points { clip: by_id("bass/cutoff", "adp0sw76"), points: vec![(8.0, 1000.0), (0.0, 200.0)] });
+    let LaneData::Control { clips, .. } = data(&s, "bass/cutoff").unwrap() else { unreachable!() };
+    assert_eq!(clips[0].points, [(0.0, 200.0), (8.0, 1000.0)]);
+    let why = refused(&mut s, Gesture::Points { clip: by_id("kick/hits", "my53vvkc"), points: vec![(0.0, 1.0)] });
+    assert!(why.contains("automation"), "{why}");
+    let why = refused(&mut s, Gesture::Notes { clip: by_id("bass/cutoff", "adp0sw76"), notes: vec![n(36.0, 0.0)], length: None });
+    assert!(why.contains("notes"), "{why}");
+    let bad = Note { pitch: f64::NAN, start: 0.0, length: 1.0, velocity: 0.8 };
+    assert!(edit(&mut s, &Gesture::Notes { clip: by_id("kick/hits", "my53vvkc"), notes: vec![bad], length: None }).is_err());
+}
+
+/// The `sha` the timeline shows for clip `id` of `lane`.
+fn sha_of(s: &Session, lane: &str, id: &str) -> String {
+    sha(&data(s, lane).unwrap().lines_of(id)[0])
+}
+
+// WRITE-12: a gesture names each clip with the hash the window drew it with. A clip changed since,
+// on disk or in another window, is refused in words naming it, and nothing is written; with the
+// hash it has now, the gesture goes ahead.
+#[test]
+fn a_gesture_on_a_changed_clip_is_changed() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let seen = sha_of(&s, "kick/hits", "my53vvkc");
+    let kick = |sha: &str| ClipRef { sha: Some(sha.to_string()), ..by_id("kick/hits", "my53vvkc") };
+    let changed = f.read("data/kick/hits.json").replacen("\"velocity\": 0.8", "\"velocity\": 0.5", 1);
+    f.write("data/kick/hits.json", &changed);
+    assert!(s.refresh());
+    match edit(&mut s, &Gesture::Move { clips: vec![kick(&seen)], by: 4.0, to: None, copy: false }) {
+        Err(EditError::Changed(files)) => {
+            let said = EditError::Changed(files.clone()).to_string();
+            assert_eq!((files[0].file.as_str(), files[0].clip.as_deref()), ("data/kick/hits.json", Some("my53vvkc")));
+            assert!(said.contains("the Kick clip at bar 1") && said.contains("changed in another window or by an agent"), "{said}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(f.read("data/kick/hits.json"), changed, "nothing written");
+    let now = sha_of(&s, "kick/hits", "my53vvkc");
+    assert_ne!(now, seen);
+    go(&mut s, Gesture::Move { clips: vec![kick(&now)], by: 4.0, to: None, copy: false });
+    // A clip that is gone since is changed too.
+    let gone = ClipRef { sha: Some(now), ..by_id("kick/hits", "nothere") };
+    assert!(matches!(edit(&mut s, &Gesture::Delete { clips: vec![gone] }), Err(EditError::Changed(_))));
+}
+
 // WRITE-3: a gesture is planned on the accepted lane; an outside edit to another clip of the lane,
 // not taken in yet, merges with it.
 #[test]
 fn an_outside_edit_to_another_clip_merges() {
     let f = fixture("examples/first-song");
     let mut s = f.open();
-    let other = serde_json::json!({"id": "other", "start": 64, "length": 4, "notes": [{"pitch": 36, "start": 0, "length": 1, "velocity": 0.8}]});
-    go(&mut s, Gesture::Set { lane: addr("kick/hits"), put: vec![other], delete: vec![] });
+    go(&mut s, Gesture::Set { lane: addr("kick/hits"), put: vec![notes_clip("other", 64.0, 4.0, &[(36.0, 0.0, 1.0)])], delete: vec![] });
     let outside = f.read("data/kick/hits.json").replacen("\"start\": 64", "\"start\": 72", 1);
     f.write("data/kick/hits.json", &outside);
     go(&mut s, Gesture::Move { clips: vec![by_id("kick/hits", "my53vvkc")], by: 4.0, to: None, copy: false });
     let now = f.read("data/kick/hits.json");
     assert!(now.contains("\"id\": \"my53vvkc\", \"start\": 4") && now.contains("\"id\": \"other\", \"start\": 72"), "{now}");
+}
+
+// WRITE-21: undoing a gesture after an outside change to its clip is a conflict naming the clip.
+#[test]
+fn undoing_after_an_outside_change_to_the_clip_conflicts() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    go(&mut s, Gesture::Move { clips: vec![by_id("kick/hits", "my53vvkc")], by: 4.0, to: None, copy: false });
+    let outside = f.read("data/kick/hits.json").replacen("\"velocity\": 0.8", "\"velocity\": 0.5", 1);
+    f.write("data/kick/hits.json", &outside);
+    assert!(s.refresh());
+    match crate::undo(&mut s) {
+        Err(EditError::Changed(files)) => assert_eq!(files[0].clip.as_deref(), Some("my53vvkc")),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(f.read("data/kick/hits.json"), outside);
+}
+
+// The timeline's clips, each with its `sha`, as the server sends them.
+#[test]
+fn with_sha_gives_each_clip_its_hash() {
+    let f = fixture("examples/first-song");
+    let s = f.open();
+    let d = data(&s, "bass/notes").unwrap();
+    let shown = serde_json::json!({"kind": "notes", "key": "notes", "clips": [{"id": "db9f9t5s"}]});
+    let with = with_sha(shown, Some(&d));
+    assert_eq!(with["clips"][0]["sha"], serde_json::json!(sha_of(&s, "bass/notes", "db9f9t5s")));
+    assert_eq!(with["clips"][0]["sha"].as_str().unwrap().len(), 16);
+    // Clips that don't match the data, one for one, get none.
+    let odd = with_sha(serde_json::json!({"clips": [{}, {}]}), Some(&d));
+    assert!(odd["clips"][0].get("sha").is_none());
 }

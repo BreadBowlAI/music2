@@ -112,8 +112,8 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 9 | **Clip editing on the timeline**: duplicate (⌘D) and copy/paste; drag the right edge to resize; split at the playhead; move a clip to another track; repeat a clip N times; add clips on automation and audio lanes. | Pop songs are built by copying parts. Today notes clips only move along their own lane, and ⌘D only works on notes inside the piano roll. | Yes, except split | medium |
-| 17 | **Timeline zoom** (⌘= and ⌘−, pinch), and **right-click menus** on clips, lanes, tracks and notes. The old UI's native menu code can come back from git history. | At a fixed 24 pixels per beat, a 3-minute song takes a lot of scrolling. Right-click menus are how beginners find options. | Yes | small |
+| 9 | **Clip editing on the timeline**: duplicate (⌘D) and copy/paste; drag the right edge to resize; split at the playhead; move a clip to another track; repeat a clip N times; add clips on automation and audio lanes. Their back end is built (8b.5): one clip gesture each, by clip id, for notes, automation and audio clips (create, move, copy, resize either edge, split, join, duplicate, paste, delete, quantize), each one undo step, through `POST /api/graph/clips` and `m2 clips`. The timeline doesn't send them yet. | Pop songs are built by copying parts. Today notes clips only move along their own lane, and ⌘D only works on notes inside the piano roll. | Yes, except split | medium |
+| 17 | **Timeline zoom** (⌘= and ⌘−, pinch), and **right-click menus** on clips, lanes, tracks and notes. The old UI's native menu code can come back from git history. What a clip's menu does (cut, copy, paste, duplicate, split, join, quantize, delete) is built as clip gestures (8b.5, #9). | At a fixed 24 pixels per beat, a 3-minute song takes a lot of scrolling. Right-click menus are how beginners find options. | Yes | small |
 | 23 | **Sections**: name the parts (intro, verse, chorus), show markers on the ruler, copy or move a whole section across all tracks, and insert or delete bars. | Pop songs are arranged in sections, and copying a chorus is one gesture in other DAWs. Sections are designed but not built, and inserting bars touches every lane and the tempo. | No | large |
 
 ### Notes
@@ -128,7 +128,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 14 | **Draw automation**: click and drag points on automation lanes in the timeline. The editor's lane writer (`crates/editor/src/notes.rs`) takes only notes lanes today, so it needs a write for automation lanes (a `Clips` Tx on a control lane needs nothing new in core). "Automate" on a knob's menu already makes the lane and reads the knob from it. | Filter sweeps, fades and build-ups are everywhere in pop. Today automation lanes can only be looked at in the app, and their points are written by hand in JSON. | Yes | medium |
+| 14 | **Draw automation**: click and drag points on automation lanes in the timeline. Its back end is built (8b.5): a clip gesture makes an automation clip holding the lane's value, and draws one clip's points (`points`). "Automate" on a knob's menu already makes the lane and reads the knob from it. The timeline doesn't send them yet. | Filter sweeps, fades and build-ups are everywhere in pop. Today automation lanes can only be looked at in the app, and their points are written by hand in JSON. | Yes | medium |
 
 ### Audio
 

@@ -83,7 +83,10 @@ USAGE:
                                            create <track>/<lane> --at <place> [--length B]
                                            move <clip>… --by B [--to <track>/<lane>] [--copy]
                                            resize <clip> --start <place> --length B
+                                           split <clip>… --at <place>
+                                           join <clip>…
                                            duplicate <clip>… [--grid B]
+                                           quantize <clip>… --grid B [--ends]
                                            delete <clip>…
                                            json <gesture.json | ->   (any gesture, as the app sends it)
 

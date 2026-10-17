@@ -100,6 +100,18 @@ async fn graph_clips(State(s): S, Json(r): Json<ClipsReq>) -> Result<Response, A
     })
 }
 
+/// Notes clips as the timeline shows them, each with its `sha` (8b.5), read as clips: what the
+/// piano roll's whole-lane write sends back until it sends `notes` gestures (Q9).
+pub(crate) fn shown_clips<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<m2_song::NoteClip>, D::Error> {
+    let mut clips = Vec::<Value>::deserialize(d)?;
+    for c in &mut clips {
+        if let Some(c) = c.as_object_mut() {
+            c.remove("sha");
+        }
+    }
+    clips.into_iter().map(|c| serde_json::from_value(c).map_err(serde::de::Error::custom)).collect()
+}
+
 #[derive(Deserialize)]
 struct AuditionReq {
     /// The window, or the agent, playing: its notes are its own.

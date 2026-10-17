@@ -404,7 +404,12 @@ fn the_published_timeline_is_the_sessions_and_shares_what_didnt_change() {
     let graph = fixture.open();
     let same = |graph: &Graph| {
         let session = graph.inspect(|a| serde_json::to_value(a.open.as_ref().unwrap().session.timeline()).unwrap());
-        assert_eq!(graph.state().unwrap()["timeline"], session, "the published timeline is the session's");
+        // The published one also gives each clip its hash (8b.5).
+        let mut published = graph.state().unwrap()["timeline"].clone();
+        for c in published["tracks"].as_array_mut().unwrap().iter_mut().flat_map(|t| t["lanes"].as_array_mut().unwrap()) {
+            c["clips"].as_array_mut().unwrap().iter_mut().for_each(|c| drop(c.as_object_mut().unwrap().remove("sha")));
+        }
+        assert_eq!(published, session, "the published timeline is the session's");
     };
     let lane = |graph: &Graph, module: &str| {
         let cp = graph.inner.control.lock();

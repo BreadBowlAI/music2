@@ -14,6 +14,7 @@ The `8b-backend` track builds the back ends of 8b.4 (mute, solo, mute in song), 
 | B4 | Mute in song as a builder: `mute_in_song`, `feeds`, `POST /api/graph/track/mute`, `m2 mute-in-song` | built |
 | B5 | Gate 8's ducking clauses on `env` and `follow`; live equals offline on them | built |
 | B6 | Clip gestures by id: create, move, resize, duplicate, paste, delete, set; `POST /api/graph/clips`, `m2 clips` | built |
+| B7 | Split, join, quantize, a clip's notes and points; each clip's `sha` in the timeline | built |
 | B9 | Audition in the engine: live notes on a lane (`Msg::Live`), `Player::live`, how many are held | built |
 | B10 | Audition on the server: the WebSocket and `POST /api/graph/audition`, sources, the watchdog, `live` in the status | built |
 | B11 | Meters in the engine: taps on the output and each track; the callback's time; whether the engine idles | built |
@@ -288,6 +289,65 @@ of `m2-editor`, `m2-server`, `m2`.
 
 **Contract:** WRITE-10 and WRITE-18 (a bullet each, "From 8b.5"), FMT-12 (ids for the lanes a builder
 writes, and its *Today*).
+
+---
+
+## B7. Split, join, quantize, notes and points; the clip's hash
+
+**In short:** a clip can now be split and joined back, its notes quantized, its notes or its
+points drawn. Each clip in the timeline carries a hash, so a gesture on a clip that changed since
+the window drew it is refused, naming the clip.
+
+| Piece | What it does | Where |
+|---|---|---|
+| `split` | At a beat, every picked clip it crosses. Notes that cross are shortened; the rest go to a new clip, in place. Automation ends and starts at the value at the split. An audio clip's second half starts later in its asset (A8: not when pitched or reversed). | `crates/editor/src/clips.rs` |
+| `join` | Notes clips of one lane, as one: earliest start to latest end, the earliest's id. Every note plays as it did (below). Automation and audio refuse, in words. | same |
+| `quantize` | Note starts to the nearest grid line, ends too with `ends`; `notes` picks notes of one clip. | same |
+| `notes`, `points` | One clip's notes (and length), one clip's points: the piano roll's edit and automation drawn in place. | same |
+| `sha` per clip | The first 16 hex of the SHA-256 of the clip's canonical line, added to each clip of a rebuilt lane's JSON (G6, one call). | `clips::with_sha`; one call in `actor.rs`'s `timeline()` |
+| Seen | A `ClipRef` with a `sha` the clip no longer has is `Changed`: "data/kick/hits.json (clip `a`) is the Kick clip at bar 1, which was changed in another window or by an agent. It shows as it is now; try again". 409 at the route. | `clips.rs`, `graph/clips.rs` |
+| The roll's lane write | Reads clips as the timeline shows them, `sha` and all (Q9: it stays until the roll sends `notes`). | `routes_8b::shown_clips`; one attribute in `routes.rs` |
+| `m2 clips split\|join\|quantize` | `--at <place>`; `--grid B [--ends]`. | `apps/m2/src/edits.rs` |
+
+**Join keeps every note in time.** A note keeps its place. One a clip's edge hid only partly, and
+that the joined clip would now let through, is cut to what played; one hidden whole that would now
+play is dropped. A note that played whole, or stays as hidden as it was, is kept whole. So a split
+and a join play exactly what played (`join_makes_one_clip_and_keeps_every_note_in_time`).
+
+**Tests:**
+
+| Test | Where | Red first? |
+|---|---|---|
+| `a_split_shortens_the_crossing_notes`, `a_split_control_clip_stays_continuous` (every quarter beat the same) | `crates/editor/src/clips_tests.rs` | red against the stub |
+| `a_split_audio_clip_plays_the_same_samples` (the resample song, to the bit; pitch and reverse refused) | same | red against the stub |
+| `join_makes_one_clip_and_keeps_every_note_in_time`, `control_and_audio_clips_dont_join` | same | red against the stub |
+| `quantize_to_sixteenths_and_triplets`, `notes_and_points_edit_one_clip` | same | red against the stub |
+| `with_sha_gives_each_clip_its_hash` | same | red against the stub |
+| `a_gesture_on_a_changed_clip_is_changed`, `undoing_after_an_outside_change_to_the_clip_conflicts` | same | — (the check came with B6's `resolve`) |
+| `an_outside_edit_to_another_clip_merges` | same | **red: a B6 bug** (below) |
+| `the_timeline_carries_each_clips_sha_and_a_stale_one_is_refused` (not taken in: the commit's conflict; taken in: the stale `sha`) | `crates/server/src/graph/clips_tests.rs` | red before `timeline()` added it |
+| `the_rolls_lane_write_takes_clips_as_the_timeline_shows_them` | `crates/server/src/routes_8b_tests.rs` | red: 422, `sha` an unknown field |
+| `split_join_and_quantize_from_the_terminal` | `apps/m2/tests/clips.rs` | — (written with the code) |
+
+**A B6 bug B7's tests found** (fixed in its own commit, `dd3e44c`): the planner's assertion checked every clip of a lane, so an outside
+edit to another clip, which WRITE-3 merges, made the gesture refuse ("would change more than its
+clips"). It now checks the clips put and deleted only, as the notes write does.
+
+**Choices made here:**
+- **A split with no picked clip crossing it** says so; picked clips it doesn't cross are left.
+- **Quantize from the song's start:** grid lines are multiples of `grid` beats from beat 0. A clip
+  that starts on the grid gets exact multiples, so sixteenths stay short numbers in the file.
+- **A warped audio clip** splits and trims by moving its markers, which keeps its timing exact;
+  `offset` isn't read with warp.
+- **`sha` in the timeline only:** `m2_editor::timeline()` is unchanged (taste-next edits it); the
+  server adds it where it rebuilds a lane's JSON, so an unchanged lane costs nothing. The test that
+  compares the published timeline with the session's leaves `sha` out.
+
+**Checks:** `cargo check --workspace --all-targets`; clippy on `m2-editor`, `m2-server`, `m2`; tests
+of `m2-editor`, `m2-server`, `m2`.
+
+**Contract:** WRITE-10 (the 8b.5 bullet names every gesture), WRITE-12 *Today* (the clip hash; the
+roll's write stays), `docs/gaps.md` #9, #14, #17.
 
 ---
 

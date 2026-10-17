@@ -692,7 +692,7 @@ impl Open {
                             (TimelineLane::Audio { clips, .. }, Clips::Audio(c)) => *clips = c,
                             _ => unreachable!("taken from this lane"),
                         }
-                        Arc::new(value(&lane))
+                        Arc::new(m2_editor::clips::with_sha(value(&lane), shown.as_deref()))
                     }
                 };
                 super::TimelineLaneJson { key, data: shown, head: rest, json }

@@ -43,7 +43,7 @@ fn mute_in_song(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-const CLIPS: &str = "m2 clips <project> create|move|resize|duplicate|delete|json …; see m2 --help";
+const CLIPS: &str = "m2 clips <project> create|move|resize|split|join|duplicate|quantize|delete|json …; see m2 --help";
 
 /// `m2 clips <project> <gesture> …`: one clip gesture, one Tx, one undo step (8b.5). Clips are
 /// `track/lane:id`, or `track/lane@place` for the first clip that starts there. Places are
@@ -72,6 +72,12 @@ fn clips(args: &[String]) -> Result<()> {
             Gesture::Resize { clip: clip.clone(), start: place(&f.need("--start")?)?, length }
         }
         "duplicate" => Gesture::Duplicate { clips: refs(&f)?, range: None, grid: f.number("--grid")? },
+        "split" => Gesture::Split { clips: refs(&f)?, at: place(&f.need("--at")?)? },
+        "join" => Gesture::Join { clips: refs(&f)? },
+        "quantize" => {
+            let grid = f.number("--grid")?.ok_or_else(|| anyhow!("say the grid, in beats: --grid 0.25 for sixteenths"))?;
+            Gesture::Quantize { clips: refs(&f)?, notes: None, grid, ends: f.on("--ends") }
+        }
         "delete" => Gesture::Delete { clips: refs(&f)? },
         "json" => {
             let [file] = &f.words[..] else { bail!("give the gesture as JSON: m2 clips <project> json <gesture.json | ->") };

@@ -76,7 +76,7 @@ fn clip_gestures_from_the_terminal() {
         (&["move", "kick/hits@9.3.2", "--by", "1", "--to", "bass/cutoff"][..], "A notes clip can't go on an automation lane"),
         (&["create", "kick/hits", "--at", "9.5"][..], "bar 9 has 4 beats"),
         (&["delete", "kick/hits"][..], "isn't a clip"),
-        (&["fold", "kick/hits:x"][..], "create|move"),
+        (&["fold", "kick/hits:x"][..], "create|move|resize|split"),
         (&["delete", "kick/hits@9.3.2", "--copy"][..], "--copy isn't something"),
     ] {
         let o = m2(&[&["clips", dir][..], args].concat());
@@ -90,4 +90,24 @@ fn clip_gestures_from_the_terminal() {
     assert!(!refused.status.success() && said(&refused).contains("music2"), "{}", said(&refused));
     assert_eq!(read(), now);
     drop(held);
+}
+
+// Split at a place, join back, quantize: each one edit, from the terminal.
+#[test]
+fn split_join_and_quantize_from_the_terminal() {
+    let temp = Temp(std::env::temp_dir().join(format!("m2-clips-cli-sjq-{}", std::process::id())));
+    let song = temp.0.join("first-song");
+    copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song"), &song);
+    let (dir, notes) = (song.to_str().unwrap(), song.join("data/bass/notes.json"));
+    let read = || std::fs::read_to_string(&notes).unwrap();
+    let before = read();
+    let out = ok(dir, &["split", "bass/notes:db9f9t5s", "--at", "5"]);
+    let second = out.lines().find_map(|l| l.trim().strip_prefix("made bass/notes:")).unwrap_or_else(|| panic!("{out}")).to_string();
+    assert!(read().contains("{\"id\": \"db9f9t5s\", \"start\": 0, \"length\": 16") && read().contains(&format!("{{\"id\": \"{second}\", \"start\": 16")));
+    ok(dir, &["join", "bass/notes:db9f9t5s", &format!("bass/notes:{second}")]);
+    assert_eq!(read(), before, "joined back, as it was");
+    ok(dir, &["quantize", "bass/notes@1", "--grid", "1"]);
+    assert!(!read().contains("\"start\": 0.75"), "on the beat now");
+    let o = m2(&["clips", dir, "quantize", "bass/notes@1"]);
+    assert!(!o.status.success() && said(&o).contains("--grid"), "{}", said(&o));
 }
