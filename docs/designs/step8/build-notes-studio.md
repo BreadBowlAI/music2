@@ -263,8 +263,12 @@ Item("guide")] right: [Item("guide"), Item("shortcuts")]`. `the_guide_is_kept_pe
 
 **Left.** Show in Finder on the done line only for an export made while this window was open (after a reload the
 line has no button). The guide's steps don't follow a song whose drums or bass are written in code by other names
-(a custom component). The desktop app on `:97` (Help ▸ Make Your First Song) isn't checked by eye here: the menu row
-is tested in `menu.rs`, and the End's pictures take it.
+(a custom component). first-song's own drums (`std/instruments`' kick and hat, not in + Track's Drums group) don't tick
+Add drums: the guide is made for an empty song.
+
+**The app on `:97`** (`tools/app-shot.sh`, the Linux build at `b5beccc`'s web): Help lists Make Your First Song,
+Keyboard Shortcuts, then About music2; picking the first shows the card at the top of the side browser, "1 Add
+drums. Press Ctrl+T and pick Drum kit." (shots in `~/m2-runs/sst/scratch/shots/d2/`, for the End's pictures).
 
 **For gaps.md:** #11: Help ▸ Make Your First Song, seven steps that tick themselves, in the side browser.
 
