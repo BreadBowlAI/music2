@@ -2869,8 +2869,11 @@ fn loading_is_published_while_a_plugin_is_created() {
         while !poll.is_finished() {
             let a = graph.activity();
             if !a.loading.is_empty() {
-                seen = a.loading;
-                viewed = graph.state().unwrap()["loading"].clone();
+                // The load can end between the two reads: a pair is kept while both show it.
+                let shown = graph.state().unwrap()["loading"].clone();
+                if shown != json!([]) {
+                    (seen, viewed) = (a.loading, shown);
+                }
                 // The device plays on meanwhile.
                 let mut buf = [0.0f32; 256];
                 driver.fill(&mut buf, 2);
