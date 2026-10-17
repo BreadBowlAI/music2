@@ -309,7 +309,7 @@ toast prints a diff, a key or a path.
 | delete | "Kick" → "" | "Deleted Kick" (with dependents: "Deleted Kick and 2 Ducks") | "Undid deleting Kick" |
 | reorder | "Kick" → "Kick" | — | — |
 | recolour | "rose" → "teal" | — | — |
-| tempo | "124 BPM" → "128 BPM" ("… from bar 9" when not the first entry) | — (except "Loop turned off: it's shorter than a beat at 128 BPM", §4.1) | — |
+| tempo | "124 BPM" → "128 BPM" ("… from bar 9" when not the first entry) | — (except "Loop turned off: it's too short to play at 128 BPM", §4.1) | — |
 | meter | "4/4" → "7/8 from bar 9" | — | — |
 | title | "first-song" → "Night Drive" | — | — |
 | fader | "−6.0 dB" → "−3.0 dB", named "Hats volume" | — | — |
@@ -731,7 +731,8 @@ keys. It is small, needs no engine work, and the lease comes in 8b.7.
   covers that).
 
 Labels and toasts are in §2.4. A tempo change that makes the loop too short turns the loop off, as today (`Timing`), and
-the toast says "Loop turned off: it's shorter than a beat at 128 BPM".
+the toast says "Loop turned off: it's too short to play at 128 BPM" (built in 8b.2: the limit is two blocks
+or 5 ms, not a beat, so the words don't name a beat).
 
 **New Song** (NS-3): `POST /api/project/new` takes `tempo?`, and writes it into the new folder's `data/arrangement.json`
 when it creates the project. That is creation, not a Tx.

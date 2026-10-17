@@ -458,3 +458,95 @@ everywhere. The fields have fixed widths, so the font changes little.
 | WRITE-10's rows, `docs/gaps.md`, README (the song bar, the CLI's three commands) | B2 |
 | When the `sounds` merge's slice 3 lands: the WIP added no manifest that names std's version | — |
 | Scratch: `~/m2-runs/tn-scratch/b1/` (the app run), `renders-b1/`, `e2e-all-051142/`. Logs: `~/m2-runs/logs/tn-b1-*`. | — |
+
+## B2: finish 8b.2, the song bar
+
+**In short**
+- The song bar is finished: a browser suite for it (`s8-songbar`, 68 checks), New Song's Tempo
+  checked, the server tests the plan asked for, the contract, gaps and README.
+- Space now stops back where play started at once. Before, the playhead ran on from the start
+  point for up to 200 ms after a stop, then jumped back. The fix is in the player's status, not
+  the engine.
+- The playhead moves at the tempo the engine plays, so it no longer runs ahead and jumps back
+  after a tempo edit, or while an export holds playback.
+- "Loop turned off" is said during an export's hold too (attack break 23).
+- Stop All Sound during an export stays silent after it: tested, and no engine change was needed.
+- A click on empty lane space moves where play starts, while stopped.
+- Checks: the crates touched pass, clippy is clean, the web builds, all 34 browser suites pass
+  (1,328 checks, live3b with the test plugins), 10 of 10 renders match. No render record moved.
+
+### What was built
+
+| Commit | What |
+|---|---|
+| `355842a` | The player's status says a play or a stop just sent, as it says a seek, until the audio thread takes it (`core/play`). Stop with `to` is one server call, `Graph::stop_to`, which the route uses; it answers where it stopped. Tests: `a_play_or_stop_reports_its_state_until_taken`, `stop_with_to_goes_back_and_answers_where_it_stopped`. RENDER-29's *Today*. |
+| `dd89cae` | `stop_all_sound_during_an_export_stays_silent_after_it`, with its control (an export with no panic gives the notes back). RENDER-10's *Today*. |
+| `d7e2602` | The status (and the state) carry `bpm`, the tempo the engine plays at its beat; the page's clock moves the playhead at it. The tempo route judges the loop in the tempo map the edit made. Test: `during_an_export_a_tempo_edit_turns_the_loop_off_and_the_playhead_keeps_the_tempo_heard`. RENDER-9a's and RENDER-29's *Today*. |
+| `1d87d7e` | A click on empty lane space, while stopped, moves the playhead there (below). taste §5.1 and §5.2, design-8b §4.3. |
+| `149fdd1` | `e2e/s8-songbar.mjs` (68), in `run.mjs` and `e2e/README.md`. newsong's Tempo (65 to 71). pc-keys: the song bar's tooltips and the sheet's transport rows (36 to 37). |
+| `c988572` | Contract: WRITE-10's rows and 8b.2's *Today*; RENDER-1's *Today* said the pause shows under the name (it is the pill since A1); `d7e2602` had doubled a sentence of RENDER-29's *Today*. `docs/gaps.md`: #6, #7, #8, #37, the loop lines, What works today, and the Space, Space loose end (T8). README: the song bar, the transport keys, `m2 tempo`, `meter`, `title`, the routes. |
+| this commit | design-8b's "Loop turned off" words as built; these notes. |
+
+### The new suite: `s8-songbar`
+
+| Part | Checks |
+|---|---|
+| Tempo | the field and its tooltip (how, and "Saved in data/arrangement.json"); a drag shows its value and writes nothing until let go, then `arrangement.json` once, with no toast; Undo names it; Shift-drag is a tenth; a double-click types, 1000 is refused in words, Escape puts it back, "128.55 bpm" writes 128.55 and fits the 76 px field; no Alt-click reset; three undos give back the bytes |
+| Time signature | the picker; 7 beats, each an eighth, is 7/8 and re-bars the ruler (bar 2 at 84 px); two undos |
+| Ruler | right-click at bar 5 offers both changes; Add tempo change writes beat 16 and opens it to type; 140 typed; its mark; the field edits the change at the playhead ("Tempo from bar 5: 140 BPM"); the popover removes it; three undos |
+| Title | a double-click opens it; an empty name is refused in words; Enter writes only `name` in `music2.toml`; the bar and the window's title follow, with no toast; undo; the field clear of the tempo and Undo in the Mac app's bar at 1100, 1180 and 1280 px |
+| Transport | Space plays from where the ruler put the playhead; Space stops back there, the playhead sampled every frame for 300 ms never running on; Shift+Space continues; Space then stops back at the same start; a click on empty lane space moves the playhead while stopped, not while playing; ⌘. calls panic and playback goes on; C loops 4 bars and turns it off; ⌘L loops the selected clip; `.music2/view.json`; reopening keeps the loop |
+| Loop off | a 0.012-beat loop, then a drag to 144 BPM: the toast says "Loop turned off: it's too short to play at 144 BPM", and the loop is off with its range kept |
+| Read only | the tempo shows its value and why; a drag, a double-click, the picker, the name and the ruler's menu edit nothing |
+
+Tried without the status fix: the run-on check fails (the playhead went 4.00, 4.04 … 4.35 in one
+run, 4.02 then 4.00 in another), and so does the lane click right after a stop (the page still
+thought it played). With it: 4.00 only, in every run.
+
+### Decisions made in the slice
+
+| What | Decided | Why |
+|---|---|---|
+| The playhead ran on after Space (B1's "a status read in between") | Fix it in the player's status: a play or a stop sent reads as done until the audio thread takes it, as a seek already did | It mattered: a poll right after the stop saw "playing" at the start point, so the playhead ran on for up to 200 ms and the Play button stayed lit. Waiting in the route for the engine would have fixed only Stop with `to`. Play now lights at once too. This is the player's status (`core/play`), not engine work: the engine is unchanged. |
+| Code that waited for "not playing" as a sign the engine stopped | One server test (`stopping_freezes_the_transport_and_the_engine_runs_on`) now waits for the beat to hold still | Nothing else read it that way: the other readers (a slow save's message, the toggle, a replaced engine) want what the user asked for, which is now what they get. |
+| The tempo the playhead moves at | The status carries `bpm`, the tempo the engine plays at its beat (the server's timing map, updated when a send reaches the engine) | The attack's fix: a tempo edit plays from its switch, after the timeline says it, and only after an export's hold. One number per poll, as the clock used before. |
+| "Loop turned off" during a hold | Judged in the tempo map the edit made | The engine plays that map from the switch. Setting a loop during a hold is still judged in the tempo the engine plays (written in RENDER-9a): rare, and the engine refuses it at the switch. |
+| A click on empty lane space (plan 5.6.3) | Built while stopped: the playhead goes there, as a ruler click does. While playing, nothing. | Taste §5.1 says it moves the start point. While playing that would be a start point nobody sees (nothing marks one), or, as a jump, a click to deselect would make the song jump. Live does the same with its insert marker. A drag, a double-click's second click, or a press that began on a clip isn't it. |
+| Stop All Sound during an export | No engine change | The test was green at once: `resume()` marks the lent plugins to play their held notes again, then the held panic clears those notes, so nothing restarts. |
+| "Loop turned off" words | The WIP's, as the plan says; design-8b now says them too | The limit is two blocks or 5 ms, not a beat. |
+| The Space, Space line in gaps.md (T8) | A loose end of its own | `sounds`' slice 4 adds its own line in What works today; a separate place keeps that merge free of conflicts. Join them when it lands. |
+
+### Checks
+
+| Check | Result |
+|---|---|
+| `cargo test -p m2-play` | all pass: 17 unit (1 new), and the integration tests that aren't recorded |
+| `cargo test -p m2-server` | 179 passed (3 new; 1 changed to wait for the engine) |
+| `cargo test -p m2-gates` | all pass (the gates read the player's status) |
+| `cargo clippy --workspace --all-targets -D warnings` | clean |
+| The web build | passes |
+| Every browser suite (`run.mjs all`, with the test plugins) | 34 of 34, 1,328 of 1,328 checks, at `c988572` |
+| `s8-songbar` alone | 68 of 68, five runs; newsong 71 of 71; pc-keys 37 of 37 |
+| The renders (`e2e/baseline.sh --tree .`, debug `m2`) | 10 of 10 match `e2e/renders.sha256` |
+| `renders.sha256`, `renders.json`, `std.wasm`, `std/m2pkg.toml` | unchanged since `09b2dfd`. `Cargo.lock`: B1's one edge. |
+
+### Numbers (Linux, information only)
+
+The name's field, open with a long name, in a page laid out as the Mac app's bar:
+
+| Width | Left side ends | Field | Undo starts |
+|---|---|---|---|
+| 1100 | 459 | 480–640 | 944 |
+| 1180 | 459 | 480–700 | 1024 |
+| 1280 | 523 | 548–732 | 1124 |
+
+### Left
+
+| What | Where |
+|---|---|
+| The full `ci/check.sh` with `--gates`: the gates read the player's status, which now says a play or a stop at once. Their tests pass; the timed gates run in the final phase. | final phase |
+| A review of 8b.2 (the WIP and this slice): the builders, the routes, read-only windows, the words | B-end |
+| Screenshots of the top bar and the New Song dialog from the app on Xvfb | B-end |
+| When `sounds`' slice 4 lands: join its "Going back to bar 1 … is a jump" line with B2's Space, Space loose end in `docs/gaps.md` | the merge |
+| Setting a loop during an export's hold is judged in the tempo the engine plays, not the edit's | later, if it matters |
+| Scratch: `~/m2-runs/tn-scratch/e2e-all-055337/`, `renders-b2/`. Logs: `~/m2-runs/logs/tn-b2-*`. | — |
