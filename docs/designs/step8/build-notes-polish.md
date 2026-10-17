@@ -1357,3 +1357,17 @@ design (Q23), so it stays.
 | Suite | `pl-notes` (100 now): the field's width after the room goes is at least its width when typing began (at least 120 px), and it is the topmost thing at its own middle |
 | Red first (the page and server of `5e74f50`) | `FAIL the field keeps its width, on top of its neighbours: {"w":160,"top":true} then {"w":18,"top":true}` |
 | Green | this page: `{"w":160,"top":true} then {"w":160,"top":true}`; `pl-notes`, `s8-songbar`, `fx-fixes` (see the last run below) |
+
+#### PL-T3. Two decisions had no test: X3 and X26
+
+Two plan decisions were in the code with nothing to catch them going: X3 (⌘= and ⌘− zoom the roll
+while it has the keyboard) and X26 (a drum lane is never shaded by the song's key). Lane D had left
+X26's test until lane A's drum names landed, and the Merge's list didn't carry it on. Both have
+checks now. No code changed: each check was shown red on a page built with its line taken out.
+
+| | |
+|---|---|
+| `pl-notes` (102 now) | With the roll focused, ⌘= makes its notes 1.5 times longer (a note is drawn 1 px short, so its length is its width + 1) and leaves the timeline's clip as wide; ⌘− puts them back |
+| `pl-sounds` (44 now) | With the Drum kit's clip in Notes and E minor written into layout.json: its rows stay shaded as the black keys' (`1,3,6,8,10`); Keys' roll is shaded by E minor (`1,3,5,8,10`), so the key did land |
+| Red first (a page with `editorHooks.zoom?.(dir) \|\|` and `!drums` taken out) | `FAIL with the roll focused, ⌘= makes its notes 1.5 times wider and leaves the timeline: note 9.5 → 9.5 px, clip 766 → 1150 px` and `FAIL the Drum kit's rows stay shaded as the black keys', not by E minor: 1,3,5,8,10` |
+| Green | `pl-notes`, `pl-sounds` (see the last run below) |

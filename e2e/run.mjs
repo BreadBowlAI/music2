@@ -69,7 +69,7 @@ export const SUITES = [
   ["code", "proj", { expect: 58 }],
   ["notes", "proj", { expect: 52 }],
   ["s8-audition", "fix", { expect: 51 }],
-  ["pl-notes", "fix", { expect: 100 }],
+  ["pl-notes", "fix", { expect: 102 }],
   ["pl-lanes", "fix", { expect: 28 }],
   ["ports", "proj", { expect: 46 }],
   ["s8-meters", "fix", { expect: 24 }],
@@ -106,7 +106,7 @@ export const SUITES = [
   ["s8-songbar", "fix", { expect: 82 }],
   ["s8-mix", "fix", { expect: 80 }],
   ["pl-mix", "fix", { expect: 47 }],
-  ["pl-sounds", "fix", { expect: 41 }],
+  ["pl-sounds", "fix", { expect: 44 }],
   ["pl-ids", "fix", { expect: 38 }],
   ["pc-keys", "fix", { expect: 37 }],
 ];

@@ -1,6 +1,7 @@
 // Polish lane D, D1 and D2 (the polish plan §6): the roll's right-click menu and its note tools
 // (transpose, quantize, legato, humanize, swing, duplicate, delete), Q in the roll, ⌥← and ⌥→
-// left to the page, a Ctrl-click on a Mac that opens the menu and moves nothing; the song's key
+// left to the page, a Ctrl-click on a Mac that opens the menu and moves nothing, ⌘= and ⌘− zoom
+// the roll while it has the keyboard (X3); the song's key
 // in the top bar, written into layout.json, and the roll's rows out of the key shaded. A PC page's
 // words, and the taste lint over the menu and the key picker.
 //
@@ -357,6 +358,23 @@ await page.mouse.up();
 await page.keyboard.up("Control");
 await sleep(600);
 check(read(FILE) === base && (await revision()) === rev, "a Ctrl-drag on a note on a Mac moves nothing: Ctrl-click is a right-click there");
+
+// ⌘= and ⌘− zoom the roll while it has the keyboard, and leave the timeline (X3, review PL-T3).
+await page.focus("[data-testid=notes]");
+const widths = async () => ({
+  note: await page.$eval('[data-testid=notes] [data-note="0"]', (e) => e.getBoundingClientRect().width),
+  clip: await page.$eval('[data-lane="bass.notes"] [data-clip]', (e) => e.getBoundingClientRect().width),
+});
+const z0 = await widths();
+await key("Meta+Equal");
+await sleep(400);
+const z1 = await widths();
+await key("Meta+Minus");
+await sleep(400);
+const z2 = await widths();
+// A note is drawn 1 px short of its length, so its length is its width + 1.
+check(Math.abs((z1.note + 1) / (z0.note + 1) - 1.5) < 0.02 && Math.abs(z1.clip - z0.clip) < 0.5, `with the roll focused, ⌘= makes its notes 1.5 times longer and leaves the timeline: note ${z0.note} → ${z1.note} px, clip ${z0.clip} → ${z1.clip} px`);
+check(Math.abs(z2.note - z0.note) < 0.5 && Math.abs(z2.clip - z0.clip) < 0.5, `and ⌘− puts it back: note ${z2.note} px, clip ${z2.clip} px`);
 
 // ---------------------------------------------------------------- read only
 

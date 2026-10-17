@@ -5,10 +5,12 @@
 // set by code, is refused in words with Show code; the strip menu's row does the same; while the
 // code doesn't compile the row is off and says why; a PC page's keys; the lint with the list open.
 // Then drum names: a Drum kit track's clip in Notes names its rows (Kick, Snare, Closed hat) in an
-// 88 px key column, its notes say their drum, and Keys' roll still says C3 in 56 px.
+// 88 px key column, its notes say their drum, a key set for the song never shades its rows (X26),
+// and Keys' roll still says C3 in 56 px.
 //
 //   node e2e/pl-sounds.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
-import { check, done, open, read, ROOT, until, write } from "./fixlib.mjs";
+import fs from "node:fs";
+import { PROJ, check, done, open, read, ROOT, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
 const { browser, page, errors, api, state, toasts, key } = await open(1440, 900);
@@ -171,7 +173,20 @@ const misfits = await page.evaluate(() =>
 check(misfits.length === 0, `every name fits on the white of its key (${misfits})`);
 await linted("[data-testid=notes]", "Notes with drum names");
 await page.screenshot({ path: `${ROOT}/pl-sounds-drums.png` });
+// A key set for the song never shades a drum kit's rows: a kit has no key (X26, review PL-T3).
+const shading = () => page.$eval("[data-testid=roll-grid]", (e) => e.dataset.shaded).catch(() => null);
+let layoutWas = null;
+try {
+  layoutWas = read("layout.json");
+} catch {}
+write("layout.json", JSON.stringify({ ...(layoutWas ? JSON.parse(layoutWas) : { order: [], tracks: {} }), key: { root: "E", scale: "minor" } }, null, 2));
+check(await until(async () => (await page.$eval("[data-testid=key-field]", (e) => e.textContent).catch(() => null)) === "E minor"), "E minor is set in layout.json");
+await new Promise((r) => setTimeout(r, 300));
+check((await shading()) === "1,3,6,8,10", `the Drum kit's rows stay shaded as the black keys', not by E minor: ${await shading()}`);
 check(await openClip("keys.chords"), "Keys' clip opens in Notes");
+check(await until(async () => (await shading()) === "1,3,5,8,10"), `Keys' roll is shaded by E minor: ${await shading()}`);
+if (layoutWas === null) fs.rmSync(`${PROJ}/layout.json`);
+else write("layout.json", layoutWas);
 check((await keyLabel(48)) === "C3" && (await keyLabel(36)) === "C2" && (await keysWidth()) === 56, `Keys' roll still says C3, in 56 px (${await keyLabel(48)}, ${await keysWidth()})`);
 
 // ---------------------------------------------------------------- a PC page's keys
