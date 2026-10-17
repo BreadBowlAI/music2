@@ -117,17 +117,24 @@ impl Case {
         want.into_iter().map(Option::unwrap).collect()
     }
 
-    /// Run it, and check every task that ran was called once, after its inputs, and every outcome.
-    /// `sealed` is set once the run returned: a task called then is a breach.
-    fn run(&self, runner: &mut Runner, sealed: &AtomicBool) -> Result<Tasks, String> {
+    /// Its tasks, for [`Case::run`].
+    fn tasks(&self) -> Tasks {
+        Tasks::new(&self.costs, &self.edges).unwrap()
+    }
+
+    /// Run it on `tasks` (its own), and check every task that ran was called once, after its
+    /// inputs, and every outcome. The moment the run returns, `tasks` is sealed where the run used
+    /// it: the caller owns it, so it never moves. From then on a touch of it by the pool is a breach
+    /// ([`models::breaches`]), and a task called is an error.
+    fn run(&self, runner: &mut Runner, tasks: &mut Tasks) -> Result<(), String> {
         let n = self.costs.len();
-        let mut tasks = Tasks::new(&self.costs, &self.edges).unwrap();
+        let sealed = AtomicBool::new(false);
         let done: Vec<AtomicBool> = (0..n).map(|_| AtomicBool::new(false)).collect();
         let calls: Vec<AtomicU32> = (0..n).map(|_| AtomicU32::new(0)).collect();
         let early = AtomicU32::new(0);
         let late = AtomicU32::new(0);
         runner
-            .run(&mut tasks, &|t| {
+            .run(tasks, &|t| {
                 if sealed.load(SeqCst) {
                     late.fetch_add(1, SeqCst);
                 }
@@ -139,6 +146,7 @@ impl Case {
                 !self.fails[t as usize]
             })
             .map_err(|_| "a task panicked".to_string())?;
+        tasks.seal(true);
         sealed.store(true, SeqCst);
         let want = self.want();
         for t in 0..n {
@@ -157,7 +165,7 @@ impl Case {
         if late.load(SeqCst) > 0 {
             return Err("a task ran after the run returned".into());
         }
-        Ok(tasks)
+        Ok(())
     }
 }
 
@@ -181,7 +189,7 @@ fn each_task_once_after_its_inputs() {
             runner.spread(rng.chance(50));
             let before = runner.spread_report().tasks_on_workers;
             let c = Case::new(&mut rng, false);
-            if let Err(e) = c.run(runner, &AtomicBool::new(false)) {
+            if let Err(e) = c.run(runner, &mut c.tasks()) {
                 panic!("case {case}: {e}");
             }
             on_workers += runner.spread_report().tasks_on_workers - before;
@@ -201,22 +209,19 @@ fn nothing_touches_a_job_after_run_returns() {
         for case in 0..5000 {
             let (_, runner) = &mut pools[rng.below(3) as usize];
             runner.spread(rng.chance(50));
-            let sealed = AtomicBool::new(false);
             let failing = rng.chance(30);
             let c = Case::new(&mut rng, failing);
-            let tasks = match c.run(runner, &sealed) {
-                Ok(tasks) => tasks,
-                Err(e) => panic!("case {case}: {e}"),
-            };
-            // A worker still in the run would touch it now.
-            tasks.seal(true);
+            let mut tasks = c.tasks();
+            if let Err(e) = c.run(runner, &mut tasks) {
+                panic!("case {case}: {e}");
+            }
+            // A worker still in the run would touch it now, sealed where the run left it.
             for _ in 0..1 + rng.below(20) {
                 std::thread::yield_now();
             }
-            tasks.seal(false);
+            assert_eq!(models::breaches() - breaches, 0, "case {case}: the pool touched a run after it returned");
             progress.fetch_add(1, SeqCst);
         }
-        assert_eq!(models::breaches() - breaches, 0, "the pool touched a run after it returned");
     });
 }
 
@@ -231,10 +236,11 @@ fn back_to_back_runs_with_rest_between() {
             for case in 0..250 {
                 let failing = rng.chance(20);
                 let c = Case::new(&mut rng, failing);
+                let mut tasks = c.tasks();
                 if rng.chance(50) {
-                    runner.wake(Tasks::new(&c.costs, &c.edges).unwrap().width());
+                    runner.wake(tasks.width());
                 }
-                if let Err(e) = c.run(&mut runner, &AtomicBool::new(false)) {
+                if let Err(e) = c.run(&mut runner, &mut tasks) {
                     panic!("round {round}, case {case}: {e}");
                 }
                 if rng.chance(30) {
@@ -267,8 +273,9 @@ fn no_lost_wake() {
                     std::thread::yield_now();
                 }
                 let c = Case::new(&mut rng, false);
-                runner.wake(Tasks::new(&c.costs, &c.edges).unwrap().width());
-                if let Err(e) = c.run(&mut runner, &AtomicBool::new(false)) {
+                let mut tasks = c.tasks();
+                runner.wake(tasks.width());
+                if let Err(e) = c.run(&mut runner, &mut tasks) {
                     panic!("{threads} threads, case {case}: {e}");
                 }
                 progress.fetch_add(1, SeqCst);
@@ -287,7 +294,7 @@ fn skips_are_exactly_the_descendants() {
             let (_, runner) = &mut pools[rng.below(3) as usize];
             runner.spread(rng.chance(50));
             let c = Case::new(&mut rng, true);
-            if let Err(e) = c.run(runner, &AtomicBool::new(false)) {
+            if let Err(e) = c.run(runner, &mut c.tasks()) {
                 panic!("case {case}: {e}");
             }
             progress.fetch_add(1, SeqCst);
