@@ -104,6 +104,79 @@ writes, under the commit's Tx id (Q21); an outside write to a dragged lane re-ap
 clip ends the lease; a new plan carries the preview; audio lanes are applied on release. RENDER-29: lane leases read
 `EngineView.accepted`. The planes table's control row names lane leases.
 
+### A2. Lane leases on the page
+
+**In short**
+
+| You do this while the song plays | You hear |
+|---|---|
+| Drag a clip, or its edge | It plays where it is now, before you let go |
+| Drag an automation point, or draw with Draw (B) | The new curve, as you draw |
+| Drag, stretch or paint notes in Notes | The notes where they are now |
+| Let go | Nothing changes. It is saved once, one Undo step, as before |
+| Press Esc before you let go | It goes back. Nothing is saved |
+
+Stopped, a drag works as before. Nothing on screen is new: the sound is the feedback.
+
+**What changed**
+
+- `web/src/lib/laneLease.ts` (new): `begin(graph, gesture, ended)` gives a lease while the song plays
+  (`playingNow()`), else null. `update` sends the newest gesture at most once an animation frame, numbered; a
+  keepalive every 2 s; `finish(gesture, step)` writes through `send` (one undo step, the same answer and 409 as
+  `POST /api/graph/clips`), by the lease's commit, or by `/api/graph/clips` when the server didn't preview it (an
+  audio clip); `abort()` cancels. `ended(why)` hears a lease the server ended (a clip changed elsewhere): the caller
+  toasts why and puts the drag back.
+- `SongTimeline.tsx` (lane A's drag code only): the clip drag (`down`: move and either edge) begins a lease at its
+  4 px threshold and updates it on each move; `drop` writes through `finish` when one lives. `gestureOf(drag)` is
+  what both send. The point drag and Draw's paint (`pointsFrom`) begin one at the first change; `sendPoints` takes
+  it. Each drag adds a capture-phase Esc listener on the window while it lives (X34): Esc cancels the drag and its
+  lease, and stops the event, so the page's deselect doesn't run.
+- `NoteView.tsx` (A's imports after its last import, the drag, paint and `send`/`commit` path): a note move,
+  resize or paint calls `hear(g, shape)` on each change, which begins a lease at the first, sending
+  `{op: "notes", clip, notes, length}`. Let go, `commit` hands the lease to `send`, which writes through
+  `afterLaneWrites(…, lease.finish(…))` instead of `writeLane`, so it queues behind a roll write still on its way
+  (X17). No lease while a write of the roll is on its way or shown before the graph has it, or on a lane with a
+  clip without its own id. Esc (capture phase), a lost pointer and the view unmounting cancel it. Menu tools, keys,
+  typed edits and the velocity strip are as before.
+- `web/src/lib/graph.ts`: `afterLaneWrites(graph, f)`, X17's function (P0 didn't run, so lane A added it): `f`
+  chained on the lane writes' queue and counted in `pending`, its revision in `laneWriting`'s.
+- `web/src/lib/clips.ts`: `send` takes `via` (another route that answers as `/api/graph/clips` does); the
+  `Gesture` type gains `notes`.
+- `web/src/lib/clock.ts`: `playingNow()`.
+- `e2e/s8-leases.mjs` (new, kind `fix`, 39 checks), its row in `run.mjs` and `README.md` after `s8-automation`.
+
+**Tests.** `s8-leases` 39 of 39: a Bass clip dragged a bar while playing (one begin, 9 updates, one commit; the
+lease listed mid-drag; no revision or file change mid-drag; one revision after, the id kept, "Undo moving a Bass
+clip"); Esc mid-drag (a cancel, no write, drawn where it was, still selected); a clip changed elsewhere mid-drag
+(the toast "Bass changed elsewhere: your drag was dropped.", nothing written on release); a second window closing
+mid-drag (its lease gone in a few ms); stopped (no begin, one `clips` write); a Cutoff point dragged while playing
+(begin, updates, commit, "Undo moving a Cutoff point"); a note dragged in Notes while playing (a commit with
+`op: "notes"`, no `/api/graph/lane`, "Undo Bass notes"); the taste lint of the timeline mid-drag; a PC page's Esc.
+The suites it moves, all green: `taste` 39, `s8-clips` 94, `s8-automation` 45, `pl-notes` 102, `notes` 52,
+`gestures` 30, `g11-play` 24. The web build type-checks. Server copy `bin/a-d5083a1` (A1's), page this commit's.
+
+**Red first.** `s8-leases` on the page from before (`DIST=scratch/a-dist-before`, the same server): 20 FAIL, 19
+pass, for example:
+```
+FAIL  mid-drag the server lists a lane lease on Bass's notes: []
+FAIL  one begin, an update a frame (0 begin, 0 updates)
+FAIL  Esc mid-drag: a cancel, no write (clips)
+FAIL  a clip changed elsewhere mid-drag: the window says why ()
+```
+
+**Left**
+
+- A nudge (← →) and the menu's tools are still heard once they land (no drag to hear).
+- The velocity strip isn't leased: a velocity is heard at the next note's On anyway.
+- A drag that begins while a write is on its way, or on a lane with an anonymous clip, is heard on release, as
+  before.
+
+**For gaps.md:** the loose end "A dragged or nudged clip is heard only once it lands": a drag is heard while
+playing (clips, edges, automation points, notes in Notes); a nudge still on landing.
+
+**Contract:** WRITE-22a *Today*: the page's drags while playing lease (taste: nothing on screen is new); Esc during
+a drag cancels it and is the drag's alone (X34).
+
 ## Lane B
 
 ## Lane C

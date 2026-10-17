@@ -60,7 +60,9 @@ export type Gesture =
   /** Every note's start onto the nearest line of `grid` beats. */
   | { op: "quantize"; clips: ServerRef[]; grid: number; ends?: boolean }
   /** An automation clip's points, `[beat in the clip, value]`, all of them. */
-  | { op: "points"; clip: ServerRef; points: [number, number][] };
+  | { op: "points"; clip: ServerRef; points: [number, number][] }
+  /** The roll's edit of one notes clip: all its notes, and its length. */
+  | { op: "notes"; clip: ServerRef; notes: { pitch: number; start: number; length: number; velocity: number }[]; length?: number };
 
 /** The server's answer to a gesture: the edit, and the clips it put on a lane they weren't on. */
 export interface Done {
@@ -120,17 +122,18 @@ export class Refused extends Error {
 
 /**
  * Send one gesture: one Tx, one undo step named `step` (no toast: what it did shows where it was
- * done). Refused, it throws `Refused` with the server's words.
+ * done). Refused, it throws `Refused` with the server's words. `via`: another route that writes it
+ * and answers as `/api/graph/clips` does (a drag's lease, 8b.7).
  */
-export async function send(graph: GraphState, gesture: Gesture, step: Step): Promise<Done> {
+export async function send(graph: GraphState, gesture: Gesture, step: Step, via?: { path: string; body: unknown }): Promise<Done> {
   if (sent.session !== graph.session) sent = { session: graph.session, revision: 0, pending: 0 };
   const q = sent;
   q.pending++;
   try {
-    const res = await fetch("/api/graph/clips", {
+    const res = await fetch(via?.path ?? "/api/graph/clips", {
       method: "POST",
       headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) },
-      body: JSON.stringify({ session: graph.session, gesture }),
+      body: JSON.stringify(via?.body ?? { session: graph.session, gesture }),
     });
     const json = await readJson(res);
     if (!res.ok) throw new Refused(json.error ?? `HTTP ${res.status}`, res.status === 409);
