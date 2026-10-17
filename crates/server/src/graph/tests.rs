@@ -3671,6 +3671,63 @@ fn adding_and_deleting_a_track_keeps_a_ringing_tail() {
     }
 }
 
+// design-8b §5.1, lead decision T5: in a mix that is mono all the way, the first pan on a channel
+// turns the sum stereo. std's master is stereo from its input on, so its gain and its limiter keep
+// their instances, and the limiter its envelope; before 8b.3 the limiter started again. Here the
+// mix is loud enough that the limiter works all the time, and the edit is a hand-written `pan: 0`,
+// as 8b.3's first pan writes it.
+#[test]
+fn a_first_pan_in_a_mono_mix_keeps_the_masters_gain_and_limiter() {
+    let fixture = Fixture::new();
+    fixture.put(
+        "song.ts",
+        "import { song } from '@m2/core';\nimport { master, mixer } from 'std/mix';\nimport { a } from './tracks/a';\n\
+         import { b } from './tracks/b';\nexport default song(() => master(mixer({ a: a.out, b: b.out })));\n",
+    );
+    // A constant 2 (a square at 0 Hz is 1): over the limiter's −1 dB ceiling all the time.
+    fixture.put("tracks/a.ts", &A_DC.replace("0.5)", "2)"));
+    fixture.put("tracks/b.ts", B_SILENT);
+    let (p, driver) = Player::driven(48_000);
+    let graph = Graph::with_player(p);
+    graph.open(&fixture.0).unwrap();
+    let mut dc = Dc { fixture, graph, driver };
+    dc.graph.transport("play").unwrap();
+    let ceiling = 10f32.powf(-1.0 / 20.0);
+    let before = dc.frames(20);
+    assert!(before[128..].iter().all(|x| (x - ceiling).abs() < 1e-6), "the limiter holds the mix at its ceiling: {:?}", &before[128..132]);
+    let generation = dc.generation();
+    dc.fixture.put("song.ts", &dc.fixture.read("song.ts").replace("a: a.out", "a: { in: a.out, pan: 0 }"));
+    assert!(dc.graph.poll());
+    let mut after = vec![];
+    for _ in 0..400 {
+        after.extend(dc.frames(1));
+        if dc.generation() != generation {
+            break;
+        }
+    }
+    assert_ne!(dc.generation(), generation, "an activation");
+    after.extend(dc.frames(20));
+    // What the playing plan made new, by kernel.
+    let fresh = dc.stats().fresh_nodes;
+    let made: Vec<String> = dc.graph.inspect(move |a| {
+        let flat = &a.open.as_ref().unwrap().plays.as_ref().unwrap().revision.compiled.flat;
+        fresh
+            .iter()
+            .map(|&i| match &flat.nodes[i].op {
+                m2_ir::FOp::Kernel { kernel, .. } => kernel.clone(),
+                _ => flat.nodes[i].name.clone(),
+            })
+            .collect()
+    });
+    assert!(made.iter().any(|k| k == "std:pan"), "the new panner is new: {made:?}");
+    for k in ["std:stereo", "std:limit"] {
+        assert!(!made.iter().any(|m| m == k), "the master's {k} is kept: {made:?}");
+    }
+    // The master's gain is the one gain that isn't on a channel's strip, which turns stereo.
+    assert_eq!(made.iter().filter(|m| *m == "std:gain").count(), 1, "only channel a's gain is new: {made:?}");
+    assert!(after.iter().all(|x| (x - ceiling).abs() < 1e-5), "the mix stays at the ceiling throughout: {:?}", max_step(&after));
+}
+
 // FMT-19, PLANE-3: an edit of layout.json from outside (an agent, git) is published with no
 // revision once it holds still; a layout write planned before it conflicts rather than writing
 // over it, since its base was read from the disk.

@@ -702,6 +702,10 @@ export default song(({ lane, time }) => {
     master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit }), { ceiling: -1 }),
     // song.ts:61 `master` leaves out ceiling: a cable written in
     master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit }), { ceiling: wobble }),
+    // song.ts:61 `master` leaves out db: a value written in
+    master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit }), { db: 0 }),
+    // song.ts:61 `master` leaves out db: a cable written in
+    master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit }), { db: wobble }),
     // std:gain added after a sound
     gain(osc.saw(semis(60)), 0),
     // std:pan added after a sound

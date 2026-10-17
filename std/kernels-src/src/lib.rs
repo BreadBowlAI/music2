@@ -430,6 +430,28 @@ impl Kernel for Pan {
 
 export!(pan, Pan);
 
+/// Stereo out, unchanged. Input: in, a stereo port, so a mono signal arrives in both channels.
+/// What follows it is stereo from the start: std's master puts it first, so a mono mix that
+/// turns stereo (its first pan) keeps the master's gain and limiter (design-8b §5.1).
+pub struct Stereo;
+
+impl Kernel for Stereo {
+    const INPUTS: usize = 1;
+    const OUTPUTS: usize = 1;
+
+    fn new(_: f32, _: usize) -> Self {
+        Stereo
+    }
+
+    fn process(&mut self, io: &mut Io) {
+        let ([l, r], [ol, or]) = io.ports([(0, 0), (0, 1)], [(0, 0), (0, 1)]);
+        ol.copy_from_slice(l);
+        or.copy_from_slice(r);
+    }
+}
+
+export!(stereo, Stereo);
+
 // ---------------------------------------------------------------- filters
 
 /// TPT state-variable filter (Cytomic). Inputs: in, cutoff, q. Outputs: lp, bp, hp.

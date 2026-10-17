@@ -838,6 +838,12 @@ smoother primes to its target, and `x * 1.0 == x`.
   `db` at the drag's threshold, and the drag continues as a lease once that revision plays. That is the first pan's path
   (§5.3), so it needs no new decision.
 
+**Built (B3):** as above, and the master's input goes through a new kernel, `std:stereo`, which copies a mono signal
+into both channels, sample for sample. So what follows it is stereo from the start: when a mix that is mono all the way
+gets its first pan (§5.3), the master's gain and limiter keep their instances, and the limiter its envelope (lead
+decision T5). A mono mix renders the same bits: the limiter sees the same peak in both channels, and the output was a
+mono signal copied into both before. The renders and `the_mixer_and_master_gains_change_no_bit` prove it.
+
 **The cost:** one more `gain` kernel instance per channel that didn't write `db` (two in first-song, one in the Starter),
 and one more `Store` each after step 7 (RENDER-32). Adding a channel already resets every strip inside the mixer's `map`
 (design-7 Q9), and that stays inaudible, since `gain` primes to its target and `pan` holds no state.

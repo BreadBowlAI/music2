@@ -87,6 +87,16 @@ fn every_declared_control_is_a_knob() {
                     let o = list[0];
                     let at = format!("{name}: {}:{} {cid} {slot}", site.file, site.line);
                     let found: Vec<&(&str, &Knob)> = knobs.iter().filter(|(_, k)| k.origin.same_value(o)).collect();
+                    // A dictionary entry's control left out (a mixer channel's `db`, since 8b.3)
+                    // can't be written into its entry yet (8b.3b): until then it is a read-only
+                    // value on its call that says why.
+                    if slot.matches('.').count() == 2 && o.arg.is_empty() {
+                        assert!(found.is_empty(), "{at}: no knob until it can be written");
+                        let label = &slot[slot.find('.').unwrap() + 1..];
+                        let ro = mv.nodes.iter().flat_map(|n| &n.readonly).find(|r| r.label == label);
+                        assert!(ro.is_some_and(|r| r.reason.contains("dictionary entry's")), "{at}: {ro:?}");
+                        continue;
+                    }
                     let [(node, k)] = found.as_slice() else { panic!("{at}: {} knobs", found.len()) };
                     assert_eq!(k.written, !o.arg.is_empty(), "{at}");
                     assert_eq!(k.home, Home::Code, "{at}");

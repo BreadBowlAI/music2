@@ -388,6 +388,87 @@ fn fixture_renders_change_only_with_stds_version() {
     );
 }
 
+/// std's mixer and master before every channel and the master had a gain (8b.3), as a project's
+/// own file: a channel's `db` optional, no master `db`, nothing to make the master stereo.
+const OLD_MIX: &str = r#"import { component, control, each, kernel, port, signature, type Audio, type Params, type Signal, type Value } from "@m2/core";
+import { gain, pan } from "std/dsp";
+import { limit } from "std/fx";
+import { sum } from "std/math";
+
+export type Channel = Audio | { in: Audio; db?: Value; pan?: Value };
+
+export const mixer = component(
+  {
+    id: "mixer",
+    label: "Mixer",
+    signature: signature<(channels: Record<string, Channel>) => Audio>(),
+    controls: {
+      channels: each({
+        in: port.audio(),
+        db: control.db(0).range(-60, 12).optional(),
+        pan: control.bipolar(0).range(-1, 1).optional().smooth(),
+      }),
+    },
+    output: port.audio(),
+    positional: ["channels"],
+  },
+  function mixer({ channels }: Params): Audio {
+    const strips = Object.values(channels as Record<string, { in: Audio; db?: Signal; pan?: Signal }>).map((c) => {
+      let x = c.in;
+      if (c.pan !== undefined) x = pan(x, c.pan);
+      if (c.db !== undefined) x = gain(x, c.db);
+      return x;
+    });
+    if (strips.length === 0) return kernel("std:scale", { in: kernel("std:sine", { freq: 0 }), by: 0 });
+    return sum(...strips);
+  },
+);
+
+export const master = component(
+  {
+    id: "master",
+    label: "Master",
+    signature: signature<(x: Audio) => Audio>(),
+    inputs: { in: port.audio() },
+    controls: { ceiling: control.db(-1).range(-24, 0) },
+    output: port.audio(),
+  },
+  (x: Audio, { ceiling }: Params) => limit(x, ceiling),
+);
+"#;
+
+// PKG-5, design-8b §5.1, RENDER-2: every mixer channel and the master have a gain, and the master
+// is stereo from its input on, and no pure fixture renders one bit otherwise: each, played through
+// a copy of std's mixer and master from before, against the same song through today's. Both are
+// rendered here, so this holds whatever `renders.json` records. A gain at 0 dB is `x × 1.0`; a
+// mono mix copied into both channels limits as it did in one.
+#[test]
+fn the_mixer_and_master_gains_change_no_bit() {
+    let kernels = |s: &Session, id: &str| {
+        s.accepted().compiled.flat.nodes.iter().filter(|n| matches!(&n.op, FOp::Kernel { kernel, .. } if kernel == id)).count()
+    };
+    // Its gains and stereos, and its sound.
+    let heard = |s: Session| ((kernels(&s, "std:gain"), kernels(&s, "std:stereo")), render_song(&s));
+    for name in PURE {
+        let f = fixture(name);
+        let ((gains, stereo), now) = heard(f.open());
+        let song = f.read("song.ts");
+        assert!(song.contains("from \"std/mix\""), "{name}: its song uses std's mixer");
+        f.write("old-mix.ts", OLD_MIX);
+        f.write("song.ts", song.replace("from \"std/mix\"", "from \"./old-mix\""));
+        let before = f.open();
+        assert!(before.problems().is_empty(), "{name}: {:?}", before.problems());
+        let ((gains_before, stereo_before), then) = heard(before);
+        // Today's graph has more: a gain for each channel that didn't write one, the master's, and its stereo.
+        assert!(gains > gains_before, "{name}: {gains} gains today against {gains_before} before");
+        assert_eq!((stereo, stereo_before), (1, 0), "{name}");
+        assert_eq!(now.len(), then.len(), "{name}");
+        let moved = now.iter().zip(&then).position(|(a, b)| a.map(f32::to_bits) != b.map(f32::to_bits));
+        assert!(moved.is_none(), "{name}: frame {moved:?} differs: {:?} today, {:?} before", moved.map(|i| now[i]), moved.map(|i| then[i]));
+        assert!(name == "templates/empty" || now.iter().any(|f| f[0] != 0.0), "{name}: it plays something");
+    }
+}
+
 // FMT-6, FMT-16: compile never opens an asset (it reads the hashes the snapshot recorded), so
 // its time doesn't depend on how big the assets are.
 #[test]

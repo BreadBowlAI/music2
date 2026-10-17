@@ -26,14 +26,18 @@ const sameRange = (a, b) => (a === null && b === null) || (a !== null && b !== n
 // ------------------------------------------------------------------ knobs
 // Every declared control the song's calls reach, as [module, component, slot, written, range, log]: written
 // in the code, or left out and playing the descriptor's default. The bass's cutoff is connected to a
-// signal (`blend(...)`), and the mixer's kick channel leaves out its optional db and pan (PKG-5), so
-// neither is a knob. xrange's lo and hi declare no range (`control.any()`), so the page picks one.
+// signal (`blend(...)`), so it is no knob, and the mixer's kick and bass channels leave out their
+// optional pan (PKG-5), which makes no knob either. Every channel has a gain, its fader, since 8b.3, and
+// so does the master: the master's db, left out, is a knob at 0 dB; the kick's and the bass's are values
+// that only the code can change until 8b.3b writes them into their entries. xrange's lo and hi declare
+// no range (`control.any()`), so the page picks one.
 const EXPECTED = [
   ["song", "std:duck", "depth", true, [-60, 0], false],
   ["song", "std:mixer", "channels.hats.db", true, [-60, 12], false],
   ["song", "std:mixer", "channels.hats.pan", true, [-1, 1], false],
   ["song", "std:mixer", "channels.keys.db", true, [-60, 12], false],
   ["song", "std:mixer", "channels.keys.pan", true, [-1, 1], false],
+  ["song", "std:master", "db", false, [-60, 12], false],
   ["song", "std:master", "ceiling", false, [-24, 0], false],
   ["bass", "std:lfo", "period", true, [1 / 16, 16], true],
   ["bass", "std:lfo", "phase", false, [0, 1], false],
@@ -48,6 +52,12 @@ const EXPECTED = [
   ["kick", "std:follow", "release", true, [0.001, 5], true],
 ];
 const all = await knobs();
+const mixerNode = (await state()).view.modules.find((m) => m.key === "song").nodes.find((n) => n.component === "std:mixer");
+const fixed = mixerNode.readonly.filter((r) => r.label === "kick.db" || r.label === "bass.db");
+check(
+  fixed.length === 2 && fixed.every((r) => r.expression === "0" && /dictionary entry's/.test(r.reason)),
+  `the kick's and the bass's faders, left out, play 0 dB and say why they can't be turned yet (${JSON.stringify(fixed)})`,
+);
 check(all.length === EXPECTED.length, `the song has ${EXPECTED.length} knobs: ${all.map((x) => `${x.module}:${x.k.component}.${x.k.slot}`).join(", ")}`);
 for (const [module, component, slot, written, range, log] of EXPECTED) {
   const x = all.find((x) => x.module === module && x.k.component === component && x.k.slot === slot);
