@@ -10,6 +10,7 @@ mod audition;
 mod cell;
 mod live;
 mod overlay;
+mod parts;
 mod taps;
 
 const SR: u32 = 48_000;

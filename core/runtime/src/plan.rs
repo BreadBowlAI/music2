@@ -348,8 +348,12 @@ pub(crate) struct Plan {
     pub(crate) entry: Option<Box<Entry>>,
     /// The exec nodes of its ghosts: replaced nodes playing out the fade window.
     pub(crate) ghosts: Range<usize>,
-    /// The order once the window ends: the ghosts left out.
-    pub(crate) order_after: Vec<usize>,
+    /// The exec nodes of the window's own overlays, which run while the ghosts and old sides they
+    /// carry do.
+    pub(crate) windowed: Range<usize>,
+    /// Its partitions and the tasks that run them (8a): one schedule for the plan's whole life, the
+    /// window's nodes included.
+    pub(crate) schedule: crate::parts::Schedule,
     /// The fade window, in frames: 5 ms when anything fades, else 0.
     pub(crate) fade: u32,
     /// Frames its crossfades wait for new nodes' inputs to fade in: one fade when any do, else 0.
@@ -662,13 +666,18 @@ impl Renderer {
     }
 
     /// At a block line once the window is over: its ghosts, ghost lanes and replaced renders go
-    /// into the leftovers, to leave the audio thread, and the order without ghosts plays on. None
-    /// when it has nothing to retire. Never allocates or frees.
+    /// into the leftovers, to leave the audio thread, and the window's own overlays are dropped (they
+    /// hold no memory). Each slot left is a constant 0 that nothing reads, so the one schedule plays
+    /// on. None when it has nothing to retire. Never allocates or frees.
     pub(crate) fn end_fade(&mut self) -> Option<Box<Leftovers>> {
         self.plan.faded_from = None;
         let l = self.plan.leftovers.as_mut()?;
         for g in self.plan.ghosts.clone() {
             l.exec.push(std::mem::replace(&mut self.plan.graph.exec[g], Exec::Const(0.0)));
+        }
+        for o in self.plan.windowed.clone() {
+            let gone = std::mem::replace(&mut self.plan.graph.exec[o], Exec::Const(0.0));
+            debug_assert!(matches!(gone, Exec::Overlay { .. }), "{o} is a window's overlay");
         }
         let live = self.lanes.live;
         for s in &mut self.lanes.slots[live..] {
@@ -686,7 +695,6 @@ impl Renderer {
                 l.renders.push(r);
             }
         }
-        std::mem::swap(&mut self.plan.graph.order, &mut self.plan.order_after);
         self.plan.leftovers.take()
     }
 

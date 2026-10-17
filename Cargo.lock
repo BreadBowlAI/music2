@@ -2483,6 +2483,7 @@ dependencies = [
  "m2-kernel",
  "m2-os",
  "m2-plugins",
+ "m2-pool",
  "m2-song",
  "m2-std-kernels",
  "serde",
