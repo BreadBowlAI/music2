@@ -186,3 +186,27 @@ toast: `~/m2-runs/s8a/g-red/sound-stops-toast.png`.
 176 + 1 ignored, server 238, play's suites); clippy clean, Linux and the Mac lint; the new files formatted. Log:
 `~/m2-runs/logs/g3-check-1017-183107-1689097.log`. The run before it failed clippy only
 (`cloned_ref_to_slice_refs` in the new test), fixed.
+
+## G4: pl-mix waits for a hat before it reads the meter past the fader
+
+### In short
+
+- **The flake:** `pl-mix` read Hats' strip meter and header meter 10 times, 150 ms apart, and needed one read over
+  −24 dB with the fader at −30 dB. first-song's hats are 45 ms hits, which the meter shows for a frame or two.
+  So all ten reads could land between hits.
+- **Measured:** with the plan's fix (150 ms apart, on until one is loud, 40 at most), 10 runs of 10 passed, but the
+  first loud read came at read 10, 10, 10, 12, 12, 12, 12, 15, 25 and **37**. So the old 10 reads would have
+  failed in 7 of 10 runs, and 40 was too close. Log: `~/m2-runs/logs/g-mix-10-1017-183443-1721006.log`.
+- **Built:** reads 50 ms apart, at least 10, on until one is loud, 12 s at most. Every read must still match the
+  header's within 1.5 dB. The same for the check before the fader. The words print how many reads, the first ten
+  and the loud ones.
+- **10 runs of 10 pass**, load 2.7 at the start: the first loud read at read 10 to 33 (1.7 s at most). Log:
+  `~/m2-runs/logs/g-mix-10b-1017-183830-1746598.log` (the red run, then the 10).
+
+### Tests
+
+| Test | Where | Proves | Red by |
+|---|---|---|---|
+| `pl-mix` (47 checks, as before) | `e2e/pl-mix.mjs` | above | `g-meter-post`: the strip meter reads the song's output (`channels={[OUT]}` in `Mix.tsx`'s `Strip`, past every fader): both meter checks fail, every read a mismatch ("-2/-60 … -1/-60"); the clip dot checks too. The page rebuilt after |
+
+`e2e/README.md`'s `pl-mix` row says the new reads.
