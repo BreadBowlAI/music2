@@ -53,6 +53,8 @@ pub(crate) struct Shared {
     pub(crate) stuck: Duration,
     /// The caller's sleep while a task is stuck.
     pub(crate) doze: Doze,
+    /// What a run's start and a worker's entry are timed from.
+    epoch: Instant,
 }
 
 /// The caller's sleep while a task it waits for is stuck. It sets `asleep`, looks once more at
@@ -117,6 +119,8 @@ pub(crate) struct Worker {
     pub(crate) tasks: AtomicU64,
     pub(crate) parks: AtomicU64,
     pub(crate) signals: AtomicU64,
+    /// How long after a run started it entered the run, by [`crate::entry_bucket`].
+    pub(crate) entry: [AtomicU64; crate::ENTRY_BUCKETS],
 }
 
 impl Shared {
@@ -132,7 +136,13 @@ impl Shared {
             patience,
             stuck,
             doze,
+            epoch: Instant::now(),
         }
+    }
+
+    /// Nanoseconds since the pool started.
+    fn now(&self) -> u64 {
+        self.epoch.elapsed().as_nanos() as u64
     }
 }
 
@@ -143,6 +153,7 @@ impl Worker {
             tasks: AtomicU64::new(0),
             parks: AtomicU64::new(0),
             signals: AtomicU64::new(0),
+            entry: std::array::from_fn(|_| AtomicU64::new(0)),
         }
     }
 }
@@ -159,6 +170,8 @@ struct Job<'a> {
     /// Tests: this run's tripwire, and whether the caller works alone (then it trips).
     trip: Option<&'a Tripwire>,
     alone: bool,
+    /// When it started, in the pool's nanoseconds: a worker's entry is timed from it.
+    started: u64,
 }
 
 /// Turns a panic in the pool's own code into an abort: a worker must never unwind out of its
@@ -221,7 +234,8 @@ impl Runner {
         let together_ = self.live().filter(|_| width > 1 || spread);
         let trip = self.tripwire.at.as_ref().filter(|(run, _)| *run == self.runs).map(|_| &self.tripwire);
         let doze = together_.map(|s| &s.doze);
-        let job = Job { id: self.runs, tasks: &*tasks, task, spread, doze, trip, alone: together_.is_none() };
+        let started = together_.map_or(0, |s| s.now());
+        let job = Job { id: self.runs, tasks: &*tasks, task, spread, doze, trip, alone: together_.is_none(), started };
         let ran = match together_ {
             Some(shared) => together(shared, &self.threads, self.wanted(width), &job),
             None => help(&job, 0, Role::Caller(self.stuck())),
@@ -553,6 +567,7 @@ pub(crate) fn worker(shared: Arc<Shared>, me: u8, start: Option<Hook>, stop: Opt
             let job = unsafe { *job };
             if job.id > last {
                 last = job.id;
+                w.entry[crate::entry_bucket(shared.now().saturating_sub(job.started))].fetch_add(1, Relaxed);
                 let ran = help(&job, me, Role::Worker(shared.patience));
                 w.tasks.fetch_add(ran, Relaxed);
             }

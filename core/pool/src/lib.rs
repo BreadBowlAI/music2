@@ -110,6 +110,22 @@ impl Pool {
     pub fn counters(&self) -> Vec<Counters> {
         counters(&self.shared)
     }
+
+    /// What reads its counters from another thread, while it lives and after.
+    pub fn meter(&self) -> Meter {
+        Meter(self.shared.clone())
+    }
+}
+
+/// Reads a pool's counters ([`Pool::meter`]): the gates' view of a player's engine threads.
+#[derive(Clone)]
+pub struct Meter(Arc<Shared>);
+
+impl Meter {
+    /// Per thread: the caller of runs first, then each worker.
+    pub fn counters(&self) -> Vec<Counters> {
+        counters(&self.0)
+    }
 }
 
 impl Drop for Pool {
@@ -222,6 +238,18 @@ pub struct Counters {
     pub rung: u64,
     /// Dozes that lasted their whole time. `rung + timeouts == dozes`.
     pub timeouts: u64,
+    /// How long after a run started this worker entered it, counted by [`entry_bucket`]: how late
+    /// workers come, parked or spinning (workers only).
+    pub entry: [u64; ENTRY_BUCKETS],
+}
+
+/// The buckets of [`Counters::entry`]: powers of two of microseconds.
+pub const ENTRY_BUCKETS: usize = 16;
+
+/// The bucket of a worker's entry `ns` after its run started: 0 under 1 µs; k from 2^(k−1) to
+/// 2^k µs; the last 16 ms or more.
+pub fn entry_bucket(ns: u64) -> usize {
+    ((u64::BITS - (ns / 1000).leading_zeros()) as usize).min(ENTRY_BUCKETS - 1)
 }
 
 /// What a tripped task does (tests, [`Runner::trip`]).
@@ -263,6 +291,7 @@ fn counters(shared: &Shared) -> Vec<Counters> {
         tasks: w.tasks.load(Relaxed),
         parks: w.parks.load(Relaxed),
         signals: w.signals.load(Relaxed),
+        entry: std::array::from_fn(|k| w.entry[k].load(Relaxed)),
         ..Counters::default()
     });
     std::iter::once(caller).chain(workers).collect()

@@ -674,3 +674,46 @@ fn a_tripped_task_panics_on_a_worker_and_is_raised() {
         }
     });
 }
+
+// 8a's live half (G12): a worker's entry is timed from its run's start, so a worker that comes late
+// shows. Worker 1 can't start until the caller's task, 20 ms into the run, lets it; the task then
+// waits until it entered: its one entry is in the last bucket (16 ms or more). The meter reads the
+// pool's own counters.
+#[test]
+fn a_workers_entry_is_timed_from_its_runs_start() {
+    let _one = one_pool();
+    within(|| {
+        let latch = Arc::new(AtomicBool::new(false));
+        let hold = latch.clone();
+        let setup = Setup {
+            start: Some(Arc::new(move |_| {
+                while !hold.load(SeqCst) {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            })),
+            ..Setup::plain()
+        };
+        let (pool, mut runner) = Pool::new(2, setup).unwrap();
+        let meter = pool.meter();
+        let mut tasks = Tasks::new(&[1, 1], &[]).unwrap();
+        runner
+            .run(&mut tasks, &|_| {
+                if !latch.load(SeqCst) {
+                    std::thread::sleep(Duration::from_millis(20));
+                    latch.store(true, SeqCst);
+                }
+                while meter.counters()[1].entry.iter().sum::<u64>() == 0 {
+                    std::hint::spin_loop();
+                }
+                true
+            })
+            .unwrap();
+        let entry = pool.meter().counters()[1].entry;
+        assert_eq!((entry.iter().sum::<u64>(), entry[crate::ENTRY_BUCKETS - 1]), (1, 1), "{entry:?}");
+        assert_eq!(pool.counters(), pool.meter().counters());
+        assert_eq!(
+            [0, 999, 1_000, 1_999, 2_000, 8_191_999, 8_192_000, 16_384_000, u64::MAX].map(crate::entry_bucket),
+            [0, 0, 1, 1, 2, 13, 14, 15, 15]
+        );
+    });
+}
