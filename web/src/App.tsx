@@ -22,6 +22,7 @@ import { togglePiano } from "./lib/piano";
 // MIDI keyboards: the window tells the server what they play.
 import "./lib/midi";
 import KeyboardPiano from "./components/KeyboardPiano";
+import { stopThen, toggleRecord } from "./lib/record";
 
 /** Fetch the open project. An error means none is open: the start screen shows. */
 const refreshGraph = () =>
@@ -59,7 +60,7 @@ function key(e: KeyboardEvent): string | null {
   if (e.key === "Enter" || e.key === "Home") return "home";
   if (e.key === "Escape") return "deselect";
   if (e.shiftKey) return null;
-  return ({ c: "loop", a: "lanes", e: "dock", x: "view_mix", b: "draw", m: "mute", s: "solo", z: "zoom_fit", k: "metronome" } as Record<string, string>)[e.key.toLowerCase()] ?? null;
+  return ({ c: "loop", a: "lanes", e: "dock", x: "view_mix", b: "draw", m: "mute", s: "solo", z: "zoom_fit", k: "metronome", r: "record" } as Record<string, string>)[e.key.toLowerCase()] ?? null;
 }
 
 /** ⌘1 to ⌘4, View's grid rows: the command ids, in order. */
@@ -326,7 +327,8 @@ export function appCommand(id: string) {
     case "export":
       return void exportSong();
     case "close_song":
-      return closeSong();
+      // A take recording is written first (lane B, D35).
+      return void stopThen(closeSong);
     case "rename":
       // The selected track's name turns into a field; typing in a field already, the chord is the field's.
       if (!editing() && shell.selected) shell.set({ renaming: { module: shell.selected, at: "header" } });
@@ -411,5 +413,8 @@ export function appCommand(id: string) {
       // View ▸ Keyboard Piano, the desktop app's ⌘K. In a browser lib/piano.ts takes ⌘K itself, before
       // a field or the code editor can.
       return togglePiano();
+    case "record":
+      // R, Transport ▸ Record (lane B): start, stop, or cancel the count.
+      return toggleRecord();
   }
 }

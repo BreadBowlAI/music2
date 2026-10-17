@@ -63,11 +63,15 @@ pub enum Msg {
         slot: u32,
         ev: LiveEv,
     },
+    /// Count in one bar, then play (lane B): `beats` clicks `frames_per_beat` apart, the song
+    /// silent meanwhile; the transport plays from the block after the bar. Applied at once, as a
+    /// transport command is; a Play, a Stop, a seek or a hold cancels it.
+    CountIn { beats: u32, frames_per_beat: f64 },
 }
 
 impl Msg {
     fn structural(&self) -> bool {
-        !matches!(self, Msg::Transport(_) | Msg::Panic)
+        !matches!(self, Msg::Transport(_) | Msg::Panic | Msg::CountIn { .. })
     }
 }
 
@@ -412,6 +416,10 @@ impl Engine {
                 if matches!(cmd, Cmd::Seek(_)) {
                     self.seeks += 1;
                 }
+                // A count-in waits for nothing else: a Play, a Stop or a seek ends it (lane B).
+                if !matches!(cmd, Cmd::Loop(_)) {
+                    self.click.cancel_count();
+                }
                 if let Some(r) = &mut self.current {
                     r.transport_cmd(cmd);
                 }
@@ -420,6 +428,9 @@ impl Engine {
             Msg::Panic if self.hold => self.panic_held = true,
             Msg::Panic => self.panic(),
             Msg::Hold(false) => self.resume(),
+            // Held for an export, nothing would click: no count (lane B).
+            Msg::CountIn { beats, frames_per_beat } if !self.hold => self.click.count_in(beats, frames_per_beat),
+            Msg::CountIn { .. } => {}
             _ => unreachable!("structural messages wait their turn"),
         }
     }
@@ -512,9 +523,13 @@ impl Engine {
                 };
                 self.refused_live += u64::from(!took);
             }
-            Msg::Hold(true) => self.hold = true,
+            Msg::Hold(true) => {
+                self.hold = true;
+                // An export's hold ends a count-in: nothing clicks while held (lane B).
+                self.click.cancel_count();
+            }
             Msg::Hold(false) => self.resume(),
-            Msg::Transport(_) | Msg::Panic => unreachable!("applied at once"),
+            Msg::Transport(_) | Msg::Panic | Msg::CountIn { .. } => unreachable!("applied at once"),
         }
         Ok(refused)
     }
@@ -606,7 +621,7 @@ impl Engine {
             self.out.silence(self.pos);
             return;
         };
-        if self.idle {
+        if self.idle && !self.click.counting() {
             // A plugin that slept may ask to run again (CLAP's request_process): it wakes the
             // engine here, at the block line, as a message does.
             if cur.woken() {
@@ -632,6 +647,10 @@ impl Engine {
         };
         let runs = *cur.last_runs();
         self.click.mix(&mut frames, &runs, cur);
+        // A count-in's bar ended with this block: the song plays from the next (lane B).
+        if self.click.count_ended() {
+            cur.transport_cmd(Cmd::Play);
+        }
         if let Some(h) = cur.take_heard() {
             self.stamp_heard(h, clock, stamp, frame);
         }
@@ -648,7 +667,7 @@ impl Engine {
         // RENDER-6a: idle only stopped, after 8 silent blocks, when nothing can sound later.
         let silent = frames.iter().all(|f| f[0].abs() < SILENT && f[1].abs() < SILENT);
         self.silent_blocks = if silent && !cur.transport().playing() { self.silent_blocks + 1 } else { 0 };
-        if self.silent_blocks >= IDLE_AFTER && cur.can_idle() {
+        if self.silent_blocks >= IDLE_AFTER && cur.can_idle() && !self.click.counting() {
             self.idle = true;
         }
     }

@@ -17,6 +17,8 @@ import { useStore } from "./store";
 export interface MidiState {
   devices: string[];
   target: { module: string; lane: string } | null;
+  /** Keyboards turned off in Settings (studio lane B): they neither play nor record. */
+  off?: string[];
 }
 
 declare module "./graph" {
@@ -26,7 +28,7 @@ declare module "./graph" {
   }
 }
 
-export const useMidi = create<MidiState>(() => ({ devices: [], target: null }));
+export const useMidi = create<MidiState>(() => ({ devices: [], target: null, off: [] }));
 
 /** What this window last told the server on this connection, with the song it was for. */
 let told: string | null = null;
@@ -49,12 +51,12 @@ useStore.subscribe((s) => {
   const m = s.graph?.midi;
   if (m && m !== seen) {
     seen = m;
-    useMidi.setState({ devices: m.devices, target: m.target });
+    useMidi.setState({ devices: m.devices, target: m.target, off: m.off ?? [] });
   }
   tell();
 });
 useShell.subscribe(tell);
-on<{ midi: MidiState }>("midi", (msg) => useMidi.setState({ devices: msg.midi.devices, target: msg.midi.target }));
+on<{ midi: MidiState }>("midi", (msg) => useMidi.setState({ devices: msg.midi.devices, target: msg.midi.target, off: msg.midi.off ?? [] }));
 // A socket that closed forgets what it was told: the next one is told again.
 on(CLOSED, () => {
   told = null;

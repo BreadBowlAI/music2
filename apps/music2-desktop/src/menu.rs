@@ -122,6 +122,8 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     ("panic", "Stop All Sound", Some("CmdOrCtrl+Period")),
     // The metronome (gaps #19): a click on each beat while the song plays. K is the page's key.
     ("metronome", "Metronome", None),
+    // Record (lane B): count in, then record what you play. R is the page's key.
+    ("record", "Record", None),
     // The keyboard piano (Q8): the letter keys play the selected track. ⌘K from anywhere, typing
     // included: the code editor's own ⌘K chords give way to it (X15).
     ("piano", "Keyboard Piano", Some("CmdOrCtrl+K")),
@@ -253,6 +255,7 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
         Item("play"),
         Item("continue"),
         Item("home"),
+        Item("record"),
         Line,
         Item("loop"),
         Item("loop_selection"),
@@ -626,5 +629,18 @@ mod tests {
     fn the_reveal_item_says_finder_only_on_a_mac() {
         let title = ITEMS.iter().find(|i| i.0 == "reveal").map(|i| i.1);
         assert_eq!(title, Some(if cfg!(target_os = "macos") { "Show in Finder" } else { "Show in Folder" }));
+    }
+
+    /// Studio's lane B: Transport ▸ Record, right after Go to Start, on both menu bars, with no chord:
+    /// R is the page's key.
+    #[test]
+    fn record_is_in_transport() {
+        assert_eq!(ITEMS.iter().find(|i| i.0 == "record").map(|i| (i.1, i.2)), Some(("Record", None)));
+        for mac in [true, false] {
+            let bar = layout(mac);
+            let transport = &bar.iter().find(|m| m.0 == "Transport").expect("Transport").1;
+            let at = transport.iter().position(|r| *r == Row::Item("home")).expect("Go to Start");
+            assert_eq!(transport[at + 1..at + 3], [Row::Item("record"), Row::Line], "mac: {mac}");
+        }
     }
 }

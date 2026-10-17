@@ -7,6 +7,7 @@ import { useModalKeys } from "../lib/modal";
 import { native, nativeAction } from "../lib/native";
 import { BUFFERS, bufferWords, rateWords, settingsApi, useSettings, type Settings, type SettingsChange } from "../lib/settings";
 import { Button, MenuRow, Popover } from "./ui";
+import { useMidi } from "../lib/midi";
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -205,6 +206,11 @@ function Dialog({ onClose }: { onClose: () => void }) {
             {exporting && <p className="mt-1 text-sm text-fg-muted">Wait for the export to finish.</p>}
           </Row>
 
+          {/* Which MIDI keyboards play (studio lane B, Q28): each one plugged in, or turned off before. */}
+          <Row label="MIDI keyboards">
+            <Keyboards off={s?.midi?.off ?? []} disabled={!s || busy} onChange={(off) => void change({ midi: { off } })} />
+          </Row>
+
           <Row label="Now">
             <div className="min-h-8 flex flex-col justify-center text-base text-fg" data-testid="settings-now">
               <span>{nowWords(s)}</span>
@@ -282,6 +288,49 @@ function Dialog({ onClose }: { onClose: () => void }) {
           </Button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The MIDI keyboards (studio lane B, Q28): a row for each one plugged in or turned off before, its
+ * name and a "Plays" check box, on by default; one gone says "(not connected)". One turned off
+ * neither plays nor records. With none: "No MIDI keyboard is plugged in."
+ */
+function Keyboards({ off, disabled, onChange }: { off: string[]; disabled: boolean; onChange: (off: string[]) => void }) {
+  const devices = useMidi((m) => m.devices);
+  const names = [...devices, ...off.filter((n) => !devices.includes(n))];
+  if (!names.length) {
+    return (
+      <p data-testid="settings-midi-none" className="min-h-8 flex items-center text-base text-fg-muted">
+        No MIDI keyboard is plugged in.
+      </p>
+    );
+  }
+  return (
+    <div data-testid="settings-midi">
+      {names.map((n) => {
+        const plays = !off.includes(n);
+        return (
+          <div key={n} data-keyboard={n} className="min-h-8 flex items-center gap-3">
+            <span className="flex-1 min-w-0 truncate text-base text-fg" title={n}>
+              {n}
+              {!devices.includes(n) && <span className="text-fg-muted"> (not connected)</span>}
+            </span>
+            <label className="shrink-0 flex items-center gap-2 text-base text-fg cursor-pointer select-none" title={plays ? `${n} plays the selected track, and Record records it` : `${n} plays nothing and records nothing`}>
+              <input
+                type="checkbox"
+                checked={plays}
+                disabled={disabled}
+                data-testid="settings-midi-plays"
+                onChange={(e) => onChange(e.target.checked ? off.filter((x) => x !== n) : [...off, n])}
+                className="size-3.5 accent-accent cursor-pointer"
+              />
+              Plays
+            </label>
+          </div>
+        );
+      })}
     </div>
   );
 }

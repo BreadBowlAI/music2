@@ -1,5 +1,6 @@
 //! MIDI keyboards (8b.10): a keyboard plugged in plays the selected track live, as audition's
-//! notes do (MON-7). Nothing is recorded or written.
+//! notes do (MON-7). A take records what it plays (lane B, `graph/record.rs`); nothing else is
+//! written. One turned off in Settings plays and records nothing.
 //!
 //! - **The way in:** [`Graph::midi`] hears what `m2_os::midi` hears (or what a suite posts, with
 //!   `M2_MIDI=inject`): a keyboard plugged in or out, and each message. Every input, every channel.
@@ -30,6 +31,8 @@ pub(super) struct Midi {
     /// The keyboards plugged in, in the order they came.
     keyboards: Vec<Keyboard>,
     target: Option<Target>,
+    /// Keyboards turned off in Settings, by name (lane B, Q28): they neither play nor record.
+    off: BTreeSet<String>,
 }
 
 struct Keyboard {
@@ -92,6 +95,9 @@ impl Graph {
                     return None;
                 }
                 cp.midi.keyboards.push(Keyboard { name: name.into(), pedal: false, held_back: BTreeSet::new() });
+                if cp.midi.off.contains(name) {
+                    return Some(format!("{name} is connected. It is turned off in Settings."));
+                }
                 Some(format!("{name} is connected. It plays the selected track."))
             }
             Event::Unplugged(name) => {
@@ -122,7 +128,16 @@ impl Graph {
         let a = {
             let mut cp = self.inner.control.lock();
             let token = cp.open.as_ref().map(|p| p.engine.token);
+            // Turned off in Settings: it plays and records nothing (lane B).
+            if cp.midi.off.contains(name) {
+                return;
+            }
             let target = cp.midi.target.clone().filter(|t| Some(t.token) == token);
+            // While a take records, keys play its lane, whatever a window selects (lane B, D8).
+            let target = match cp.record.lane(token) {
+                Some((module, lane)) => Some(Target { token: token.unwrap_or_default(), module, lane }),
+                None => target,
+            };
             let Some(k) = cp.midi.keyboards.iter_mut().find(|k| k.name == name) else { return };
             match said {
                 Said::On { h, pitch, velocity } => {
@@ -169,6 +184,21 @@ impl Graph {
     pub fn midi_state(&self) -> Value {
         self.inner.midi_state()
     }
+
+    /// The keyboards turned off in Settings, by name (lane B, Q28): from now on they neither play
+    /// nor record, and what one holds is let go.
+    pub fn set_midi_off(&self, names: &[String]) {
+        let now: BTreeSet<String> = names.iter().cloned().collect();
+        let newly: Vec<String> = {
+            let mut cp = self.inner.control.lock();
+            let newly = now.difference(&cp.midi.off).cloned().collect();
+            cp.midi.off = now;
+            newly
+        };
+        for name in newly {
+            self.audition_gone(&client(&name));
+        }
+    }
 }
 
 impl Inner {
@@ -177,7 +207,12 @@ impl Inner {
         let cp = self.control.lock();
         let token = cp.open.as_ref().map(|p| p.engine.token);
         let target = cp.midi.target.as_ref().filter(|t| Some(t.token) == token).map(|t| json!({"module": t.module, "lane": t.lane}));
-        json!({"devices": cp.midi.keyboards.iter().map(|k| k.name.as_str()).collect::<Vec<_>>(), "target": target})
+        let mut v = json!({"devices": cp.midi.keyboards.iter().map(|k| k.name.as_str()).collect::<Vec<_>>(), "target": target});
+        // Turned off in Settings (lane B): named only when some are.
+        if !cp.midi.off.is_empty() {
+            v["off"] = json!(cp.midi.off);
+        }
+        v
     }
 }
 

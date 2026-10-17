@@ -51,11 +51,17 @@ export interface Settings {
   exporting: boolean;
   /** The change just made stopped playback. */
   stopped: boolean;
+  /** Record's options (lane B): count in first, snap the take to Notes' grid. */
+  record?: { count_in: boolean; quantize: boolean };
+  /** The MIDI keyboards turned off, by name (lane B): they neither play nor record. */
+  midi?: { off: string[] };
 }
 
 export interface SettingsChange {
   output?: { device: string | null; name?: string | null; frames: number | null };
   songs?: string | null;
+  record?: { count_in: boolean; quantize: boolean };
+  midi?: { off: string[] };
 }
 
 export const settingsApi = {

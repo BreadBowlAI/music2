@@ -19,6 +19,7 @@ mod routes_fx;
 mod routes_settings;
 pub mod settings;
 mod routes_leases;
+mod routes_record;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -87,6 +88,8 @@ impl AppState {
             eprintln!("music2: couldn't use the sound output chosen: {e:#}");
         }
         project::set_songs_dir(kept.songs.as_deref().and_then(|d| project::songs_folder(d).ok()));
+        // Lane B: the MIDI keyboards turned off play nothing.
+        self.graph.set_midi_off(&kept.midi.off);
         let _ = self.settings.set(s);
     }
 
@@ -212,6 +215,7 @@ pub fn start_with(opts: ServeOptions, graph: graph::Graph) -> Result<Running> {
     spawn_graph_watch(&state);
     spawn_meters(&state);
     spawn_midi(&state);
+    spawn_takes(&state);
 
     let listener = std::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], opts.port)))?;
     listener.set_nonblocking(true)?;
@@ -314,6 +318,33 @@ fn spawn_meters(state: &Arc<AppState>) {
             }
         })
         .expect("spawn the meters");
+}
+
+/// How often a take is looked at (lane B): its count, its loop's end, and a take to write.
+const TAKES_EVERY: Duration = Duration::from_millis(100);
+
+/// `music2-takes` (lane B): every 100 ms, what a take does that no note or key says (a count that
+/// turned into playing, a loop's end, a player gone), and each take that ended, written; every
+/// window hears it (`{"t": "take", …}`). Writing waits for the session, on this thread only: the
+/// transport never does (D7). Ends once the state is dropped.
+fn spawn_takes(state: &Arc<AppState>) {
+    let weak = Arc::downgrade(state);
+    std::thread::Builder::new()
+        .name("music2-takes".into())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(TAKES_EVERY);
+                let Some(state) = weak.upgrade() else { return };
+                for said in state.graph.record_tick() {
+                    let written = said.get("written").is_some();
+                    let _ = state.events.send(said.to_string());
+                    if written {
+                        state.graph_changed();
+                    }
+                }
+            }
+        })
+        .expect("spawn the takes");
 }
 
 /// Listen to every MIDI keyboard (`m2_os::midi`), unless [`listens_to_midi`] says not to. Stops

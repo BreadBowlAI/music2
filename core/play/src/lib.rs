@@ -489,6 +489,8 @@ impl Callback {
                         EngineMsg::Transport(Cmd::Seek(_)) => self.seeks += 1,
                         EngineMsg::Transport(Cmd::Play | Cmd::Stop) => self.plays += 1,
                         EngineMsg::Transport(_) | EngineMsg::Panic | EngineMsg::Hold(_) | EngineMsg::Live { .. } => {}
+                        // Nothing plays, so nothing counts in (lane B).
+                        EngineMsg::CountIn { .. } => {}
                     }
                 }
             }
@@ -1066,6 +1068,17 @@ impl Player {
         self.shared.click.load(Ordering::Relaxed)
     }
 
+    /// Count in one bar, then play (lane B): `beats` clicks `frames_per_beat` engine frames apart,
+    /// the first accented, whether the metronome is on or not; the song is silent meanwhile and
+    /// plays from where it stands at the block after the bar. Applied as soon as the engine reads
+    /// it ([`Player::applied`] says at which block); a Play, a Stop, a seek or a hold cancels it.
+    pub fn count_in(&self, beats: u32, frames_per_beat: f64) -> Result<u64> {
+        if beats == 0 || !(frames_per_beat.is_finite() && frames_per_beat > 0.0) {
+            return Err(anyhow!("can't count in {beats} beats of {frames_per_beat} frames"));
+        }
+        self.envelope(EngineMsg::CountIn { beats, frames_per_beat })
+    }
+
     /// Start playing, for tests and tools; [`Player::transport`] says whether it was sent.
     pub fn play(&self) {
         let _ = self.transport(Cmd::Play);
@@ -1226,6 +1239,28 @@ impl Player {
     /// The device's buffer, in frames, as its last callback asked: None before the first.
     pub fn frames(&self) -> Option<u32> {
         Some(self.shared.frames.load(Ordering::Relaxed)).filter(|&n| n > 0)
+    }
+
+    /// What the speakers play now (lane B, D4): the engine clock and the transport frame, as the
+    /// last callback left them, plus the time since it began, less two device buffers (the one it
+    /// filled, and the one the device plays out before it), each in engine frames. The clock never
+    /// wraps, so a take places notes from it. None before the first callback. Read from atomics:
+    /// it never waits. Read while a callback runs, it is up to one buffer early.
+    pub fn heard_frame(&self) -> Option<(u64, u64)> {
+        self.heard_frame_at(now_ns())
+    }
+
+    /// [`Player::heard_frame`] as of `ns`, on [`now_ns`]'s clock (tests: a driven player's time).
+    #[doc(hidden)]
+    pub fn heard_frame_at(&self, ns: u64) -> Option<(u64, u64)> {
+        let s = &self.shared;
+        let buffer = self.frames()? as f64;
+        let rate = self.rate() as f64;
+        let since = ns.saturating_sub(s.last_callback_ns.load(Ordering::Relaxed)) as f64 * rate / 1e9;
+        let d = since - 2.0 * buffer * rate / self.device_rate.max(1) as f64;
+        let st = self.published();
+        let at = |x: u64| (x as f64 + d).round().max(0.0) as u64;
+        Some((at(s.clock.load(Ordering::Relaxed)), if st.playing { at(st.pos) } else { st.pos }))
     }
 
     /// Whether the output chosen is gone, so this plays on the default ([`Player::start_on`]).

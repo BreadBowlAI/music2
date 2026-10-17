@@ -9,6 +9,7 @@ import { usePlayTarget } from "../lib/playTarget";
 import { pitchName } from "../lib/rowNames";
 import { useStore } from "../lib/store";
 import { Button } from "./ui";
+import { useRecord } from "../lib/record";
 
 /** A cap's width and height, and the step from one white cap to the next. */
 const CAP_W = 22;
@@ -53,6 +54,8 @@ function Card() {
   const octave = usePiano((s) => s.octave);
   const held = usePiano((s) => s.held);
   const target = usePlayTarget();
+  // While a take records, what the keys play is kept (lane B).
+  const recording = useRecord((r) => r.take?.phase === "take");
   const at = useCorner();
   const tone = tones(target?.colour);
   const lit = (code: string): CSSProperties | undefined => (held.has(code) && target ? { background: tone.tint, borderColor: tone.bar, color: tone.ink } : undefined);
@@ -70,7 +73,7 @@ function Card() {
         <Keyboard size={14} className="shrink-0 text-fg-muted" />
         <span className="shrink-0 text-sm font-medium text-fg">Keyboard piano</span>
         <span data-testid="piano-plays" className="flex-1 min-w-0 truncate text-xs text-fg-muted" title={target ? `Your keys play ${target.label}` : undefined}>
-          {target ? `Plays ${target.label}` : "Select a track with notes to play it"}
+          {target ? `Plays ${target.label}${recording ? " · recording" : ""}` : "Select a track with notes to play it"}
         </span>
         <Button size="sm" aria-label="Keyboard piano off" title={`Keyboard piano off (${chord("K")})`} onClick={() => setPiano(false)} className="-mr-1 w-ctl-xs !h-ctl-xs !px-0 shrink-0">
           <X size={14} />

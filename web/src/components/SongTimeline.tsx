@@ -69,6 +69,7 @@ import GridChip from "./GridChip";
 import PointMenu, { unautomate, type MenuItem } from "./ClipMenu";
 import TrackHeader from "./TrackHeader";
 import { Button, EmptyState, keepFocus, Popover } from "./ui";
+import Take from "./Take";
 
 /** A clip sits this far inside its row, inside its 1px border; its drawing this far inside that. */
 const CLIP_INSET = 4;
@@ -2327,6 +2328,7 @@ function LaneClips({
       )}
       {own}
       {ghosts}
+      {lane.kind === "notes" && <Take module={module} lane={lane.key} color={color} />}
     </>
   );
 }
@@ -2436,7 +2438,7 @@ function Body({ length, curve, children }: { length: number; curve?: boolean; ch
 }
 
 /** A mini piano roll of a clip's audible notes, over their own pitch range. */
-function Notes({ notes, length, color }: { notes: NoteClip["notes"]; length: number; color: TrackColor }) {
+export function Notes({ notes, length, color }: { notes: NoteClip["notes"]; length: number; color: TrackColor }) {
   const ppb = useZoom();
   if (notes.length === 0) return null;
   const lo = Math.min(...notes.map((n) => n.pitch));

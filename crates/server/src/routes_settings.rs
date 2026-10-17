@@ -12,7 +12,7 @@ use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
 
 use crate::routes::ApiError;
-use crate::settings::OutputKept;
+use crate::settings::{MidiKept, OutputKept, RecordKept};
 use crate::{AppState, project};
 
 type S = State<Arc<AppState>>;
@@ -43,7 +43,9 @@ fn shown(s: &AppState, stopped: bool) -> Value {
         let now = listed.iter().find(|o| o.id == *id).map(|o| o.name.clone());
         now.or_else(|| kept.as_ref().filter(|k| k.output.device.as_ref() == Some(id)).and_then(|k| k.output.name.clone()))
     });
-    let chosen = kept.is_some_and(|k| k.songs.is_some());
+    let chosen = kept.as_ref().is_some_and(|k| k.songs.is_some());
+    // Lane B: Record's options, and the MIDI keyboards turned off (the defaults where none are kept).
+    let (record, midi) = kept.map(|k| (k.record, k.midi)).unwrap_or_default();
     json!({
         "output": {"device": choice.device, "name": name, "frames": choice.frames},
         "outputs": outputs,
@@ -54,6 +56,8 @@ fn shown(s: &AppState, stopped: bool) -> Value {
         "home": m2_os::dirs::home(),
         "exporting": s.exports.running(),
         "stopped": stopped,
+        "record": {"count_in": record.count_in, "quantize": record.quantize},
+        "midi": {"off": midi.off},
     })
 }
 
@@ -76,12 +80,19 @@ struct SettingsReq {
     /// Where new songs go: a full path, or null for the default.
     #[serde(default, deserialize_with = "given")]
     songs: Option<Option<PathBuf>>,
+    /// Record's options (lane B): both, as the window shows them.
+    #[serde(default)]
+    record: Option<RecordKept>,
+    /// The MIDI keyboards turned off, by name (lane B).
+    #[serde(default)]
+    midi: Option<MidiKept>,
 }
 
-/// `POST /api/settings {output?: {device, frames}, songs?}` (`device`: an output's id): applied at once and kept in
+/// `POST /api/settings {output?: {device, frames}, songs?, record?: {count_in, quantize}, midi?: {off}}` (`device`: an output's id): applied at once and kept in
 /// `~/.music2/settings.json`. A new output makes a new player where the song was, stopped. A songs
 /// folder must be a full path outside any song. Answers as `GET` does.
 async fn settings_set(State(s): S, Json(r): Json<SettingsReq>) -> ApiResult {
+    let r_midi = r.midi.is_some();
     let state = s.clone();
     let answer = blocking(move || {
         let mut stopped = false;
@@ -108,9 +119,22 @@ async fn settings_set(State(s): S, Json(r): Json<SettingsReq>) -> ApiResult {
                 k.change(|kept| kept.songs = songs)?;
             }
         }
+        // Lane B: kept for the page, which sends them with Record; and which keyboards play.
+        if let (Some(record), Some(k)) = (r.record, state.settings()) {
+            k.change(|kept| kept.record = record)?;
+        }
+        if let Some(midi) = r.midi.clone() {
+            state.graph.set_midi_off(&midi.off);
+            if let Some(k) = state.settings() {
+                k.change(|kept| kept.midi = midi)?;
+            }
+        }
         Ok(shown(&state, stopped))
     })
     .await;
+    if r_midi {
+        s.midi_changed();
+    }
     // A new player: the windows fetch the status again.
     s.graph_changed();
     Ok(Json(answer?))
