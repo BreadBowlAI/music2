@@ -647,7 +647,7 @@ The name's field, open with a long name, in a page laid out as the Mac app's bar
 
 | Commit | What |
 |---|---|
-| `c01b2c9` | `Insertion::plan` learns dictionary entries (`lens.rs`): a property in an object entry, or a wrap of a bare one that keeps its text, in the dictionary's style. Edits are a list now (`Control::planned`), so a cable and an automation lane go into an entry too. History shows the entry. `mix::view` and `mix::insert` with the by-channel assertion (`mix.rs`). A shorthand channel (`{ saws }`) reads as a property. Tests: 12 in `mix_tests.rs`; `forms.ts` gains 42 forms (fader, cable, first pan, and `db(…)` style), and tsc passes. s5-knobs: the two faders are knobs (117). Contract PKG-3, ID-14, WRITE-10's fader row; design-8b §5.2. |
+| `c01b2c9` | `Insertion::plan` learns dictionary entries (`lens.rs`): a property in an object entry, or a wrap of a bare one that keeps its text, in the dictionary's style. Edits are a list now (`Control::planned`), so a cable and an automation lane go into an entry too. History shows the entry. `mix::view` and `mix::insert` with the by-channel assertion (`mix.rs`). A shorthand channel (`{ saws }`) reads as a property. Tests: 13 in `mix_tests.rs`; `forms.ts` gains 28 forms (a fader and a cable into each of 7 entries, a first pan into each, and the `db(…)` style), and tsc passes. s5-knobs: the two faders are knobs (117). Contract PKG-3, ID-14, WRITE-10's fader row; design-8b §5.2. |
 | `8da57a9` | `mix` in the graph state; the route, in `WRITES`. Server tests: the state and the route; a read-only window writes nothing; the two live first-pan tests. s5-knobs: the route (120). Contract WRITE-10; design-8b §5.3, §5.4. |
 | this commit | These notes. |
 
