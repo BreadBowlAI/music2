@@ -441,10 +441,8 @@ impl Engine {
 
     fn panic(&mut self) {
         // Ghosts too: the window goes on, and ends on time.
-        if let Some(r) = &mut self.current
-            && r.panic().is_err()
-        {
-            r.transport_cmd(Cmd::Stop);
+        if let Some(r) = &mut self.current {
+            r.panic();
         }
     }
 

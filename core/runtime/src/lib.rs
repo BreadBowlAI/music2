@@ -1511,6 +1511,25 @@ impl Graph {
         Ok(())
     }
 
+    /// [`Graph::reset`] for a panic (RENDER-10, RENDER-25): a node whose reset fails stops alone,
+    /// marked in `stopped`, and the rest is reset all the same. A node that plays again loses its
+    /// mark. Never allocates while every reset succeeds.
+    fn panic(&mut self, stopped: &Stopped) {
+        self.resets += 1;
+        self.poisoned.iter_mut().for_each(|p| *p = false);
+        for i in 0..self.exec.len() {
+            match self.reset_node(i) {
+                Ok(()) if !self.exec[i].stopped() => stopped.clear(i),
+                Ok(()) => {}
+                // Its error allocated: this path only.
+                Err(e) => {
+                    self.stop(i);
+                    stopped.stop(i, Why::of(&e));
+                }
+            }
+        }
+    }
+
     /// Node `i`'s box back to the state right after building, as a panic resets it: a kernel's
     /// `k_reset`, a pool's voices with their notes dropped, a plugin's `reset` with its notes to
     /// end, a ring zeroed. A node that stopped plays again once reset; one whose reset fails again
@@ -2487,6 +2506,12 @@ impl Renderer {
     /// Back to the state right after building, transport aside.
     fn reset(&mut self) -> Result<()> {
         self.plan.graph.reset()?;
+        self.reset_lanes();
+        Ok(())
+    }
+
+    /// Every lane back to its start.
+    fn reset_lanes(&mut self) {
         for l in &mut self.lanes.slots {
             match l {
                 LaneSlot::Notes(Some(s)) => s.reset(),
@@ -2494,7 +2519,6 @@ impl Renderer {
                 _ => {}
             }
         }
-        Ok(())
     }
 
     /// Continue from sample `to`, exactly as if everything before it had been rendered.
@@ -2716,19 +2740,14 @@ impl Renderer {
     }
 
     /// Panic (RENDER-10): every note off, every instance reset. The next block seeks without
-    /// chasing.
-    pub fn panic(&mut self) -> Result<()> {
+    /// chasing. A node that stopped plays again, reset; one whose reset fails stops alone, marked,
+    /// and the rest is reset all the same (RENDER-25): Stop All Sound always works.
+    pub fn panic(&mut self) {
         // Plugins are reset here, between blocks (RENDER-2a).
         let _mode = fpenv::Canon::enter();
-        self.reset()?;
-        // A node that stopped plays again, reset (RENDER-25).
-        for (i, e) in self.top().iter().enumerate() {
-            if !e.stopped() {
-                self.plan.stopped.clear(i);
-            }
-        }
+        self.plan.graph.panic(&self.plan.stopped);
+        self.reset_lanes();
         self.transport.enter();
-        Ok(())
     }
 
     /// The engine resumes after a hold (RENDER-1): each plugin node whose instance an export

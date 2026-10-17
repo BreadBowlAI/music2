@@ -550,6 +550,6 @@ fn every_std_kernel_keeps_its_inputs() {
     }
     r.render(0.3).unwrap();
     assert!(cells.iter().enumerate().all(|(i, c)| r.cell_value(CellId(i as u32)) == Some((c.value * 0.9) as f32)));
-    r.panic().unwrap();
+    r.panic();
     r.render(0.6).unwrap();
 }

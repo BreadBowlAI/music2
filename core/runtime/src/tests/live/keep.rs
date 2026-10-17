@@ -276,7 +276,7 @@ fn an_activation_against_another_plan_is_refused() {
 /// state), `t:denan` (NaN and infinities to 0), `t:trap` (traps while its input is over 0.5,
 /// else outputs 1), `t:hog` (grows its memory by 600 pages, 37.5 MiB, while its input is over 0.5,
 /// trapping when the grow fails, else outputs 1), `t:fat` (its reset grows its memory by 600 pages;
-/// outputs 1) and `t:tiny` (its init and reset keep 1e-30 × 1e-10, a subnormal, which it
+/// outputs 1), `t:sore` (outputs 1; its reset traps once its input went over 0.5) and `t:tiny` (its init and reset keep 1e-30 × 1e-10, a subnormal, which it
 /// outputs times 1e40: 1 where subnormals are kept, 0 where they were flushed; active while that
 /// product isn't 0).
 fn t_kernels() -> PathBuf {
@@ -324,6 +324,15 @@ fn t_kernels() -> PathBuf {
            (func (export "fat_active") (result i32) (i32.const 0))"#,
         port("fat")
     ) + &each("fat", &out("(f32.const 1)"));
+    let sore = format!(
+        r#"(func (export "sore_init") (param f32 i32 i32) (f32.store (i32.const 4096) (f32.const 0)))
+           (func (export "sore_ports") (result i32) (i32.const 257)) {}
+           (func (export "sore_reset")
+             (if (f32.gt (f32.load (i32.const 4096)) (f32.const 0.5)) (then (unreachable)))
+             (f32.store (i32.const 4096) (f32.const 0)))
+           (func (export "sore_active") (result i32) (i32.const 0))"#,
+        port("sore")
+    ) + &each("sore", &format!("(if (f32.gt (local.get $x) (f32.const 0.5)) (then (f32.store (i32.const 4096) (f32.const 1)))) {}", out("(f32.const 1)")));
     // The factors are loaded from memory, so no compiler multiplies them ahead of time.
     let product = "(f32.mul (f32.load (i32.const 4100)) (f32.load (i32.const 4104)))";
     let tiny = format!(
@@ -335,25 +344,27 @@ fn t_kernels() -> PathBuf {
         port("tiny")
     ) + &each("tiny", &out("(f32.mul (f32.mul (f32.load (i32.const 4096)) (f32.const 1e30)) (f32.const 1e10))"));
     let wat = format!(
-        r#"(module (memory (export "memory") 1) (func (export "m2_abi") (result i32) (i32.const 0)) {} {} {} {} {} {} {})"#,
+        r#"(module (memory (export "memory") 1) (func (export "m2_abi") (result i32) (i32.const 0)) {} {} {} {} {} {} {} {})"#,
         common("latch") + &each("latch", &latch),
         common("spike") + &each("spike", &spike),
         common("denan") + &each("denan", &denan),
         common("trap") + &each("trap", &trap),
         common("hog") + &each("hog", &hog),
         fat,
+        sore,
         tiny,
     );
     std::fs::write(dir.join("k.wasm"), wat).unwrap();
     let kernel = |k: &str, input: &str| format!("[[kernel]]\nname = \"{k}\"\ninputs = [\"in: {input}\"]\noutputs = [\"out: audio<1>\"]\n");
     let manifest = format!(
-        "[package]\nname = \"t\"\nversion = \"0.1.0\"\nwasm = \"k.wasm\"\n\n{}{}{}{}{}{}{}",
+        "[package]\nname = \"t\"\nversion = \"0.1.0\"\nwasm = \"k.wasm\"\n\n{}{}{}{}{}{}{}{}",
         kernel("latch", "control<*>"),
         kernel("spike", "control<*>"),
         kernel("denan", "audio<1>"),
         kernel("trap", "control<*>"),
         kernel("hog", "control<*>"),
         kernel("fat", "control<*>"),
+        kernel("sore", "control<*>"),
         kernel("tiny", "control<*>")
     );
     std::fs::write(dir.join("m2pkg.toml"), manifest).unwrap();
@@ -553,6 +564,35 @@ fn stop_all_sound_starts_a_stopped_kernel_again() {
     rig.run(BLOCK);
     assert_eq!(stopped.news(), [(lat, Why::Crashed)], "stopped again, and told again");
     assert!(stopped.news().is_empty(), "once");
+}
+
+// RENDER-10, RENDER-25: Stop All Sound always works. A kernel whose own reset traps stops alone,
+// marked and told, and every node after it is reset all the same: the song plays on.
+#[test]
+fn a_reset_that_traps_stops_its_sound_alone_and_the_panic_goes_on() {
+    let pk = t_packages();
+    let f = check(&two_tracks("sore", false), &pk).unwrap();
+    let (lat, d) = (named(&f, "a/lat"), named(&f, "b/d"));
+    // `t:sore` on track a, its reset made to trap when `sore`, then a panic: the song's last block,
+    // and `b/d`'s.
+    let panicked = |sore: bool| {
+        let (_, _, _, mut rig) = failing("sore", &pk, sore, 4, None);
+        let stopped = rig.e.current().unwrap().info().stopped.clone();
+        assert!(stopped.news().is_empty(), "nothing stopped before the panic");
+        rig.send(Msg::Panic);
+        let out = rig.run(2 * BLOCK);
+        let last: Vec<f32> = out[out.len() - BLOCK..].iter().map(|f| f[0]).collect();
+        let b = rig.e.current().unwrap().output_of(d).to_vec();
+        (last, b, rig, stopped)
+    };
+    let (last, b, rig, stopped) = panicked(true);
+    let (_, clean_b, ..) = panicked(false);
+    let cur = rig.e.current().unwrap();
+    assert!(cur.transport().playing(), "the song plays on");
+    assert_eq!(stopped.news(), [(lat, Why::Crashed)], "it stopped alone, and is told");
+    assert!(cur.output_of(lat).iter().all(|&x| x == 0.0), "it is silent");
+    assert_eq!(b, clean_b, "the other track was reset as without the trap, and plays on");
+    assert_eq!(last, b, "what plays is the other track, exactly");
 }
 
 // RENDER-2, RENDER-25: a trap stops the same node at the same sample on any number of threads, so
