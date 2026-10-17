@@ -465,6 +465,9 @@ fn run() -> Result<()> {
             // Everything --place needs is checked before anything is written, so a mistake there
             // leaves no asset behind to block the retry (FMT-14: assets are never replaced).
             let place = flag(&args, "--place").map(|p| Place::parse(&p, &ir, &project)).transpose()?;
+            // Its threads are chosen before --place takes the lock: after, `lock::taken` would see
+            // this bounce's own lock as the app's, and render beside it.
+            let threads = threads(&args, &project.dir, false)?;
             // Placing it is a Tx on a lane file, so the lock is taken (a writer session) before
             // anything is rendered (WRITE-18); a bounce alone only creates new assets, and needs
             // none.
@@ -511,7 +514,7 @@ fn run() -> Result<()> {
                 }
             }
             let mut r = Renderer::new(&flat, &data, &pk, sr)?;
-            let (mut runner, _pool) = render::threads_for(&r, threads(&args, &project.dir, false)?);
+            let (mut runner, _pool) = render::threads_for(&r, threads);
             r.seek_on((from * sr as f64).round() as u64, &mut runner)?;
             let frames = r.render_on(seconds, &mut runner)?;
             let folder = path.parent().expect("inside assets/");
@@ -558,7 +561,14 @@ fn run() -> Result<()> {
                 return Err(e.context(format!("writing {}", record.display())));
             }
             let impure = if impure { " (includes plugins: not reproducible)" } else { "" };
-            println!("bounced {}/{} ({seconds:.2}s) to {}{impure}", bounced.module, bounced.export, path.display());
+            let n = runner.threads();
+            println!(
+                "bounced {}/{} ({seconds:.2}s) to {} on {n} thread{}{impure}",
+                bounced.module,
+                bounced.export,
+                path.display(),
+                if n == 1 { "" } else { "s" }
+            );
             if let (Some(place), Some(session)) = (place, placer.as_mut()) {
                 let length = tempo.beat_at(tempo.seconds_at(place.beat) + seconds) - place.beat;
                 let hash = m2_song::Sha::of_file(&path)?.pin();

@@ -1,5 +1,5 @@
 //! `m2 render --threads` and `M2_THREADS` (8a): the same file on any number of threads, and the
-//! output says how many it used.
+//! output says how many it used; `m2 bounce` says so too.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -53,4 +53,24 @@ fn render_takes_threads_and_says_how_many() {
         let e = String::from_utf8_lossy(&o.stderr);
         assert!(!o.status.success() && e.contains("a number from 1 to 64"), "{more:?} {env:?}: {e}");
     }
+}
+
+// 8a: a bounce that places its clip holds the project's lock itself, and still renders on the
+// threads a bounce that doesn't would use: it never takes its own lock for the app's, and renders
+// beside nothing.
+#[test]
+fn a_bounce_that_places_its_clip_isnt_beside_itself() {
+    let temp = Temp(std::env::temp_dir().join(format!("m2-bounce-threads-{}", std::process::id())));
+    let song = temp.0.join("resample");
+    copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/resample"), &song);
+    let bounce = |name: &str, place: &[&str]| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_m2"));
+        c.arg("bounce").arg(&song).arg(name).args(["--track", "keys", "--seconds", "0.5"]).args(place);
+        let out = said(&c.env("M2_AUDIO", "none").env_remove("M2_THREADS").output().unwrap());
+        let line = out.lines().find(|l| l.starts_with("bounced ")).unwrap_or_else(|| panic!("{out}")).to_string();
+        let on = line.rsplit(" on ").next().unwrap();
+        on.split(" thread").next().unwrap().to_string()
+    };
+    let alone = bounce("k-alone", &[]);
+    assert_eq!(bounce("k-placed", &["--place", "chops.clips@16"]), alone, "placed, it renders on as many threads");
 }
