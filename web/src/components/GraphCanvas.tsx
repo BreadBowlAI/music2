@@ -20,6 +20,7 @@ import { continuePlay, playStop, resetTransport, startAt } from "../lib/transpor
 import { pickedIn, useClipSelection } from "../lib/clips";
 import { stepped } from "../lib/history";
 import { HEADS_W, HEADS_W_SMALL, WIDE } from "../lib/layout";
+import { flushLocal } from "../lib/local";
 import { canvas, useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import Browser from "./Browser";
@@ -300,13 +301,15 @@ function fileOf(m: ModuleView): string | null {
   return [...count].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 }
 
-/** Close the song (⌘W): unsaved code would be lost, so say so, and close only when asked again. */
+/**
+ * Close the song (⌘W): unsaved code would be lost, so say so, and close only when asked again. The
+ * view settings still waiting to be kept go first.
+ */
 export function closeSong() {
   const n = editorHooks.unsaved?.() ?? 0;
-  if (!n) return void graphApi.close();
-  useStore
-    .getState()
-    .toast(`${n === 1 ? "A file has" : `${n} files have`} unsaved edits in the code editor.`, { label: "Close anyway", run: () => void graphApi.close() });
+  const close = () => void flushLocal().then(() => graphApi.close());
+  if (!n) return close();
+  useStore.getState().toast(`${n === 1 ? "A file has" : `${n} files have`} unsaved edits in the code editor.`, { label: "Close anyway", run: close });
 }
 
 /**

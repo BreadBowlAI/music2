@@ -11,6 +11,7 @@ pub mod resources;
 mod routes;
 mod routes_8b;
 mod routes_notes;
+mod routes_view;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
