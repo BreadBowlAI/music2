@@ -169,6 +169,49 @@ export function trackName(graph: GraphState, module: string) {
   return moduleName({ key: module, label: t?.label ?? graph.view.modules.find((m) => m.key === module)?.label });
 }
 
+/** The tracks in timeline order, by key. */
+const order = (graph: GraphState) => graph.timeline.tracks.filter((t) => t.track && t.module !== "song").map((t) => t.module);
+
+/** What listening changes in what you hear: the tracks muted only while you listen, and the soloed ones while a solo leaves a track out. */
+export interface Listening {
+  muted: string[];
+  soloed: string[];
+  mutedNames: string[];
+  soloedNames: string[];
+}
+
+/**
+ * What the mutes and solos while listening change in what you hear now (the export's question,
+ * EX-3), or null when nothing: a track muted only while you listen, or one a solo leaves out. A
+ * track muted in the song is the song's, and the export leaves it out too.
+ */
+export function listening(graph: GraphState): Listening | null {
+  const o = graph.overlays;
+  if (!o) return null;
+  const heard = Object.values(o.heard);
+  if (!heard.some((h) => h === "muted" || h === "silenced")) return null;
+  const keys = order(graph);
+  const muted = keys.filter((k) => o.heard[k] === "muted");
+  const soloed = heard.includes("silenced") ? keys.filter((k) => o.solo.includes(k)) : [];
+  const name = (k: string) => trackName(graph, k);
+  return { muted, soloed, mutedNames: muted.map(name), soloedNames: soloed.map(name) };
+}
+
+/** "is" or "are", for `names`. */
+export const is = (names: string[]) => (names.length > 1 ? "are" : "is");
+
+/**
+ * What an export made while listening differed says in its done toast (Q4): the file has every
+ * track. "Kick was muted only while you listened, so it's in the file."
+ */
+export function listenedWords(l: Listening) {
+  const was = (names: string[]) => (names.length > 1 ? "were" : "was");
+  if (!l.soloed.length) return `${listed(l.mutedNames)} ${was(l.mutedNames)} muted only while you listened, so ${l.muted.length > 1 ? "they're" : "it's"} in the file.`;
+  const solo = `only ${listed(l.soloedNames)} ${was(l.soloedNames)} soloed`;
+  const head = l.muted.length ? `${listed(l.mutedNames)} ${was(l.mutedNames)} muted and ${solo}` : solo[0].toUpperCase() + solo.slice(1);
+  return `${head} while you listened, so the file has every track.`;
+}
+
 /** An edit's answer: the revision it made, and what it changed, in words. */
 export interface Edited {
   file: string;

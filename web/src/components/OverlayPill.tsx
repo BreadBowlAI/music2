@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { GraphState } from "../lib/graph";
 import { clearAll, drives, inSong, pillWords, release, trackName, useSets } from "../lib/overlays";
 import { tones } from "../lib/palette";
+import ExportAsk from "./ExportAsk";
 import { Button, keepFocus, Popover } from "./ui";
 
 /** What the pill and its popover say mute and solo are: they never reach the file. */
@@ -26,7 +27,8 @@ export default function OverlayPill({ graph }: { graph: GraphState }) {
   useEffect(() => {
     if (!words) setAnchor(null);
   }, [words]);
-  if (!words) return null;
+  // The export's question is about these same mutes: it lives here, with the song open.
+  if (!words) return <ExportAsk />;
   const saved = o?.saved !== false;
   // In the song first, top to bottom; then any that are gone (commented out), as kept.
   const tracks = graph.timeline.tracks.filter((t) => t.track && t.module !== "song").map((t) => t.module);
@@ -63,6 +65,7 @@ export default function OverlayPill({ graph }: { graph: GraphState }) {
           </div>
         </Popover>
       )}
+      <ExportAsk />
     </>
   );
 }

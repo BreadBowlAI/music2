@@ -17,6 +17,7 @@ adds its own section here, in the same commit.
 | U0 | Nothing new to see, except the roll's grid control now comes from a shared file. The places the lanes fill are ready | done |
 | U1 (lane A) | M and S on every track. A pill at the top says "2 muted · 1 solo"; click it for the list and Clear all | done |
 | U2 (lane A) | "Mute in song" in a track's menu: saved in its code, so the export leaves it out too. One undo step | done |
+| U3 (lane A) | Export asks first while a mute or solo changes what you hear | done |
 
 ## Setup: the merges
 
@@ -249,7 +250,7 @@ at the first click on M (`~/m2-runs/s8ui/scratch/e2e/lane-a/u1-red`).
 | `web/src/lib/overlays.ts` | `muteInSongCall`: `POST /api/graph/track/mute`, recorded as the undo step "mute in song" (or "unmute in song"), so Undo says "Undo mute in song (⌘Z)" and then "Undid mute in song" |
 | `web/src/components/Tracks.tsx` | `muteInSong(module, muted)`: refused in words while the song can't be edited; the toast "Kick muted in the song" (or "unmuted") with Undo. The menu row "Mute in song", with the line "Saved in its code: the export leaves it out too", below Colour and automation. On a track muted in the song, "Unmute in song" is the first row. Off (with the reason as its tooltip) in a read-only window, while the code doesn't compile, or offline |
 | `web/src/components/MuteSolo.tsx` | Fills `canvas.muteInSong`: Track ▸ Mute in Song on the selected track, either way |
-| `e2e/s8-mute.mjs`, `e2e/run.mjs`, `e2e/README.md` | Part 2 (31 checks), and the read-only part's two more |
+| `e2e/s8-mute.mjs`, `e2e/run.mjs`, `e2e/README.md` | Part 2, and two more checks in the read-only part: 31 new checks |
 
 What U1 already did for this state: M lit `gray-700` (M5); a click on it opens the menu; the M key
 says "Kick is muted in the song. Unmute in song is in its menu." and changes nothing; a drag across
@@ -271,4 +272,69 @@ such row (`~/m2-runs/s8ui/scratch/e2e/lane-a/u2-red`).
 ### Left
 
 - Nothing for U2. The export's question comes in U3.
+
+## U3: the export asks first (lane A)
+
+**In short**
+- While a mute or a solo changes what you hear, **Export** asks a question first. The file always
+  has every track the song has.
+- With Kick muted, it asks: "Kick is muted only while you listen. It will be in the file."
+  - **Mute Kick in the song, then export** (the main button) mutes Kick in the code (one undo
+    step), then exports. The toast says "Kick stays muted in the song."
+  - **Export anyway** exports with Kick in it. The toast says "Kick was muted only while you
+    listened, so it's in the file."
+- With a solo on, it asks "Only Bass is soloed. The file will have every track." The buttons are
+  **Cancel** and **Export anyway**.
+- When the code doesn't compile (or the song is read only), it can't mute in the song. Then only
+  Cancel and Export anyway show, with one line saying why.
+- Return presses the main button. Esc cancels.
+- Checks: `s8-mute` grew to 126 checks and now runs as kind `export` (it needs the `m2` CLI).
+  `taste`, `export` and `fx-fixes` pass.
+
+### The question's forms
+
+| What is on | Title | Line | Buttons (main last) |
+|---|---|---|---|
+| Kick muted | "Kick is muted only while you listen" | "It will be in the file." | Export anyway · **Mute Kick in the song, then export** |
+| Kick and Hats muted | "Kick and Hats are muted only while you listen" | "They will be in the file." | Export anyway · **Mute 2 tracks in the song, then export** |
+| Bass soloed | "Only Bass is soloed" | "The file will have every track." | Cancel · **Export anyway** |
+| Kick muted, Bass soloed (Q3) | "Kick is muted and only Bass is soloed" | "The file will have every track." | Cancel · **Export anyway** |
+| Kick muted, the code broken (M8) | "Kick is muted only while you listen" | "It will be in the file." and "Can't mute in the song now: the code doesn't compile." | Cancel · **Export anyway** |
+
+It shows only while a track is heard "muted" or "silenced" (U0's `heard`). A track muted in the
+song is the song's own: the export leaves it out anyway, so it asks nothing. There is no "Don't ask
+again" (S8): it wouldn't outlive the app's launch (Q7).
+
+### What changed
+
+| File | What |
+|---|---|
+| `web/src/lib/exporting.ts` | `exportSong` asks first (`useExportAsk`). `exportNow` is Export anyway. `muteThenExport`: the app's save dialog first (cancel changes nothing), then mute in the song (one undo step), then the listening mutes of those tracks go, then the export. The done toast keeps Show in Finder in the app (W4) and adds "Kick stays muted in the song." `exportNotes` says the server's `overlays.active` warning by the tracks' names (Q4) |
+| `web/src/lib/overlays.ts` | `listening(graph)`: what the mutes and solos change, by key and by name. The words of the done toast |
+| `web/src/components/ExportAsk.tsx` (new) | The question. The same dialog as Delete's (440 px, `animate-dialog`, Return, Esc) |
+| `web/src/components/OverlayPill.tsx` | Hosts the question: it is about the same mutes, and is there while a song is open |
+| `e2e/s8-mute.mjs`, `e2e/run.mjs`, `e2e/README.md` | Part 3 (27 checks); the kind is `export` now |
+
+### Checks
+
+| Check | Result |
+|---|---|
+| `cd web && npm run build` (type-checks) | ok |
+| `s8-mute` | 126 of 126 |
+| `taste`, `export`, `fx-fixes` (export and its toasts) | 39, 37, 75: all pass |
+| Log | `~/m2-runs/logs/ui-a-u3-1017-063851-554489.log`; suite logs in `~/m2-runs/s8ui/scratch/e2e/lane-a/u3` |
+
+Part 3 compares two exports with `m2 render`, byte for byte: after "Mute Kick in the song, then
+export" the WAV equals the render of the song with Kick muted in its code; after Export anyway it
+equals the render of the song as written.
+
+**Red first:** on U2's page, ⇧⌘E with Kick muted asks nothing, and the suite stops where it
+presses "Mute Kick in the song, then export" (`~/m2-runs/s8ui/scratch/e2e/lane-a/u3-red`).
+
+### Left
+
+- A long done toast can lie over the question's buttons for its 4 seconds, if the next export is
+  asked for at once. The suite clicks the buttons as themselves for that reason.
+- The question doesn't show for a solo that leaves no track out (every track soloed): nothing
+  changes then.
 
