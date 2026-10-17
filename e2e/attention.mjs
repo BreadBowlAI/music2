@@ -178,15 +178,17 @@ check(await until(() => exists(NEW) && !exists(OLD)), "moved again");
 const songBefore = read("song.ts");
 const revBefore = (await state()).view.revision;
 // The page too (D7): a toast's Undo judges by the revision the page shows, so the page must have the
-// outside edit's before the click: the page's own read of the song at that revision.
+// outside edit's before the click: the page's own read of the song at that revision, taken in (its
+// `data-revision`), not only received.
 const fresh = page
   .waitForResponse(async (r) => r.request().method() === "GET" && new URL(r.url()).pathname === "/api/graph" && ((await r.json().catch(() => null))?.view?.revision ?? 0) > revBefore, { timeout: 8000 })
   .catch(() => null);
 write("song.ts", `${songBefore}// an edit made outside the app\n`);
 await until(async () => (await state()).view.revision > revBefore);
+const shown = await until(async () => Number(await page.$eval("[data-revision]", (e) => e.dataset.revision).catch(() => 0)) > revBefore);
 // The outside edit is no undo step (gaps #29: the server names the steps): Undo still takes back the move, and says so.
 const undoTitle = () => page.$eval('button[aria-label="Undo"]', (b) => b.title);
-check(!!(await fresh) && (await undoTitle()) === "Undo “Move all to Kick (kicks)” (⌘Z)", `the page has the outside edit; its Undo still names the move (${await undoTitle()})`);
+check(!!(await fresh) && shown && (await undoTitle()) === "Undo “Move all to Kick (kicks)” (⌘Z)", `the page has the outside edit; its Undo still names the move (${await undoTitle()})`);
 const clicked = await page.evaluate(() => {
   const moved = [...document.querySelectorAll("[data-testid=toast]")].filter((t) => t.textContent.startsWith("Moved data/kick to data/kicks."));
   moved.at(-1)?.querySelector("button")?.click();

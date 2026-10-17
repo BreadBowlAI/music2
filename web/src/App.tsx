@@ -197,7 +197,8 @@ export default function App() {
   return (
     // One icon style everywhere (taste.md §2.12): Lucide at 1.5px, whatever the icon's size.
     <LucideProvider strokeWidth={1.5} absoluteStrokeWidth>
-      <div className="h-full">
+      {/* The revision this page shows: what a toast's Undo judges by, for the suites to wait on. */}
+      <div className="h-full" data-revision={graph?.view.revision}>
         {graph ? <GraphCanvas key={graph.session} graph={graph} /> : <StartScreen />}
         <NewSongDialog />
         <SaveAsDialog />

@@ -1709,3 +1709,22 @@ result before the app had made it, under the check's load. Neither is new in `st
   `previews_never_wait_for_a_compile` too (`st-end-flaky-g8-*`). With the fix both passed with the pause
   (`st-end-flaky-green-*`, `-g8-*`). `s8-clips`' race needs the check's load: with the fix, three runs at once, each
   beside `pl-notes` and `st-record`, passed 94 of 94 (`st-end-s8clips-*`).
+
+#### The second full check: one more flaky suite, and a gate run beside another track's
+
+The second full check, at `4fe49f9` (`~/m2-runs/check-studio-2`), passed every row but two:
+
+- `attention` passed only on a retry: "the move's toast Undo says it can't any more", then "and undoes nothing". A
+  toast's Undo judges by the revision the page shows. The suite waited until the page had received its new read of
+  the song, not until it had taken it in, so its click came while the page still showed the revision before the
+  outside edit, and the Undo went through. Lane A's review saw the same failure once.
+  - Fix: the page's root says the revision it shows (`data-revision`, `App.tsx`), and the suite waits for it. The
+    product's Undo is unchanged.
+  - Red: only the check's load shows it (`check-studio-2/e2e/attention-attn.log`). Slowing the page's CPU 40 times
+    from the outside edit to the click didn't bring it back alone (`scratch/attn-red`, 57 of 57): the suite's own
+    reads of the song run on the same page, after the page's. With the fix: 57 of 57, slowed and not.
+- `gates` failed on `arena`'s "the slowest activation block under half the device buffer's period": 5,436 µs
+  against 5,333 (4,751 at the first check). 8a's own `ci/check.sh --gates` (in `wt/8a`) was running its gates at the
+  same time on this machine, the same arena run included, and "the block before it" was also slow (max 5,327 µs):
+  the machine was busy, not the block. Nothing in this track changes a block since the first check. The next check
+  was started once 8a's had ended.
