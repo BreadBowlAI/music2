@@ -333,6 +333,25 @@ lane hidden, from `view.json`; after the change `view.json` has them under `low`
 FAIL  its height, its lane's and its hidden lane follow it in view.json ({"heights":{"bass":72,"bass.cutoff":64,"kick":120},"hidden":["bass.cutoff"]})
 ```
 
+### For the merge (lane A's blocks in files others touch)
+
+| File | Lane A's block | Meets |
+|---|---|---|
+| `crates/editor/src/lib.rs` | `pub mod swap; pub mod note_names; pub mod rekey;` after `pub mod clips;` | every lane's own `mod` lines: keep all |
+| `crates/editor/src/tracks.rs` | `taken`, `channel_keys`, `quoted`, `prop_key` made `pub(crate)` (P0a's X10 would make all of them so) | none |
+| `crates/editor/src/timeline.rs` | `TimelineLane::Notes.names` (left out of the JSON when empty), `lane()` takes the revision | lane B's `markers`, lane D's `key` on `TimelineView`: other lines |
+| `crates/server/src/lib.rs`, `routes.rs`, `graph.rs` | `mod routes_mix;`, its `.merge(…)`, `mod instrument; mod rekey;` | every lane's own lines: keep all |
+| `crates/server/src/graph/view_file.rs`, `routes_view.rs`, `web/src/lib/local.ts`, `GraphCanvas.tsx` | lane B's view store, its commit `2a6d3c1` taken as it is (lane D took it too) | lanes B and D: the same change |
+| `apps/music2-desktop/src/menu.rs` | `change_instrument` in `ITEMS` after `rename`, in Track after Rename; test `change_instrument_follows_rename_in_track` | lane B's View and Transport rows, lane C's File rows: other places |
+| `web/src/App.tsx` | `case "change_instrument"` after the mute group | lane B's zoom and marker ids, lane D's quantize: other cases |
+| `web/src/lib/shell.ts` | `canvas.changeInstrument` after `muteInSong` | lane B's hooks at the end |
+| `web/src/components/NoteView.tsx` | `keysW` (and its ref) for `KEYS_W`; `rowName` in the note label and the two tooltips; `Keys` gets `names` and `width` | lane D's menu, tools, Q and key shading (D reads the lane's `names` for X26: the same field) |
+| `web/src/components/Tracks.tsx` | `InstrumentPicker`'s change mode, `TrackMenu`'s row, `openChangeInstrument`, the `canvas.changeInstrument` hook | lane C's delete question (`DeleteDialog`, its keys): other functions |
+| `web/src/components/CodeView.tsx` | the file list's right-click menu and `<TrackIdDialog />` | lane B's two Monaco chord names (X5): other lines |
+| `e2e/lintlib.mjs` | lane B's file, byte for byte | lane B |
+| `e2e/run.mjs`, `e2e/README.md` | `pl-mix`, `pl-sounds`, `pl-ids` after `s8-mix`; the `s8-mix` row's words | other lanes' rows at their anchors |
+| `e2e/s8-mix.mjs` | the Tab order (pan, M, S, fader) and the strip menu's 5 rows | none |
+
 ## Lane B
 
 Timeline: zoom, follow the playhead, track heights, markers, repeat a clip. Branch `polish-b`,
