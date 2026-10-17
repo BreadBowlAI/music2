@@ -226,7 +226,6 @@ The web build; `music2-desktop`'s tests, clippy and Mac lint.
 **What's left**
 
 - Velocity keys and a sustain key (Q7: kept small).
-- The desktop app's ⌘K and View ▸ Keyboard Piano are checked on `:97` once, after B3.
 
 **For gaps.md:** #24 (playing live): the computer's keys play the selected track (the keyboard piano).
 
@@ -309,6 +308,35 @@ recording, a count-in and quantize left.
 **Contract:** MON-7 (a keyboard is a source, `midi:<name>`, never let go by the watchdog); PLAT-2 (`m2_os::midi`,
 only the server's `midi` feature); the state's `midi` and the `midi` event; `M2_MIDI` (`none`, `inject`) and
 `POST /api/graph/midi/inject`; taste §3.3 (the MIDI mark before the status pill).
+
+### Lane B: checks at its end, and for the merge
+
+**The desktop app on `:97`** (once, `app-shot.sh` under `flock …/x97.lock`, a scratch HOME, `M2_AUDIO=none`,
+the build of `3e65ddd`): Ctrl+K showed the piano card ("Plays Kick", the first track, selected for you); View lists
+"Keyboard Piano  Ctrl+K" right after "Show Browser  Ctrl+Alt+B"; Transport lists Loop, Loop Selection,
+Metronome, Follow Playhead. Pictures: `~/m2-runs/s8n/scratch/b-shots/run1`, `run2`.
+
+**The renders** after B3 (`3e65ddd`'s `m2`): 10 of 10 match `e2e/renders.sha256`.
+
+**`nx-midi` and P0:** its first check follows `M2_MIDI` in its own environment (run.mjs gives the suite and its
+server the same one): 404 without `inject`, 200 with it. So it passes before and after P0's `M2_MIDI=inject`.
+
+**Shared files, lane B's hunks only** (each its own block):
+
+| File | B's lines |
+|---|---|
+| `Cargo.toml`, `Cargo.lock` | `midir = "=0.11.0"` after `cpal`; the lock's new entries (B0). At a merge of `main`: take `main`'s lock, then `cargo build --offline` adds midir back from the cache |
+| `crates/server/Cargo.toml` | `m2-os = { workspace = true, features = ["midi"] }` |
+| `core/runtime`, `core/play` | as B1's **For 8a's merge** says |
+| `crates/server/src/graph.rs` | `pub mod midi;` after `mod watcher;`; `ControlPlane.midi` at its end; `state["midi"]` after `state["local"]` in `Inner::state` |
+| `crates/server/src/graph/actor.rs` | two one-line blocks: in `Actor::open` after `let local = …`, and in `settle`'s `Way::Load` arm before `o.load(…)` |
+| `crates/server/src/lib.rs` | `AppState.midi` at the struct's end (and in `new`); an `impl AppState` block (`midi`, `midi_changed`) before `ServeOptions`; `spawn_midi(&state)` after `spawn_meters`; `spawn_midi` and `midi_injects` before `mod tests` |
+| `web/src/App.tsx` | imports (`toggleMetronome`, `togglePiano`, `KeyboardPiano`, `./lib/midi`); `k: "metronome"` in `key()`; `<KeyboardPiano />` after `<Toasts />`; `case "metronome"` and `case "piano"` at the switch's end. No ⌘K line in `chord()` (B2): C's ⌘, line is simply the last before `return null;` |
+| `web/src/components/TopBar.tsx` | the metronome toggle after Loop (and its import and `useMetronome`); `<MidiStatus />` before `<Status />` |
+| `web/src/components/Shortcuts.tsx` | Transport's last row (Metronome); View's last row (Keyboard piano); the last group (Keyboard piano) |
+| `apps/music2-desktop/src/menu.rs` | `ITEMS` `metronome`, `piano` after `panic`; Transport's Metronome after Loop Selection; View's Keyboard Piano after Show Browser; the assertion at the old `:501` (Metronome, then Follow); two tests at the end |
+| `e2e/run.mjs`, `e2e/README.md` | `nx-piano`, `nx-midi` after `s8-audition`; `nx-click` after `s8-songbar`; the words of the `s8-songbar` and `fx-fixes` rows |
+| `e2e/s8-songbar.mjs`, `e2e/fx-fixes.mjs` | the 1100 px Mac-app case only (B1) |
 
 ## Lane C
 

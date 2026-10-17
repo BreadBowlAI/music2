@@ -6,7 +6,7 @@
 //
 // No keyboard can be opened here (`/dev/snd/seq` is EACCES): the suite starts a server of its own
 // with `M2_MIDI=inject` and posts what a keyboard would send to `/api/graph/midi/inject`. The
-// suite's usual server has no such API.
+// suite's usual server has that API only when run.mjs gives it `M2_MIDI=inject` too.
 //
 //   node e2e/nx-midi.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import puppeteer from "puppeteer-core";
@@ -17,7 +17,7 @@ import { exe, pc as pcAgent, real } from "./chrome.mjs";
 import { lint } from "./lintlib.mjs";
 import { ROOT, check, done, open, sess, sleep, until } from "./fixlib.mjs";
 
-// ---------------------------------------------------------------- the usual server: no way in
+// ---------------------------------------------------------------- the usual server
 
 {
   const { page, browser, errors } = await open(1440, 900);
@@ -25,7 +25,10 @@ import { ROOT, check, done, open, sess, sleep, until } from "./fixlib.mjs";
     const res = await fetch("/api/graph/midi/inject", { method: "POST", headers: { "x-m2-token": token, "content-type": "application/json" }, body: JSON.stringify({ device: "Test Keys", plugged: true }) });
     return res.status;
   }, sess.token);
-  check(r === 404, `without M2_MIDI=inject there is no inject API (${r})`);
+  // run.mjs may give every suite's server M2_MIDI=inject (the next track's P0), and the suite the
+  // same environment: the API answers only then.
+  const injects = process.env.M2_MIDI === "inject";
+  check(r === (injects ? 200 : 404), `the inject API answers only with M2_MIDI=inject (M2_MIDI ${process.env.M2_MIDI ?? "unset"}: ${r})`);
   await browser.close();
   if (errors.length) console.log(`(console: ${errors.join(" | ")})`);
 }
