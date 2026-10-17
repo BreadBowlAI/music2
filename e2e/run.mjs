@@ -236,7 +236,7 @@ function prepare(dir, kind) {
 }
 
 function envFor(home, clap) {
-  const env = { ...process.env, HOME: home, M2_AUDIO: "none", E2E_CHROME: chrome, E2E_REPO: opts.repo, E2E_HEADLESS: headless };
+  const env = { ...process.env, HOME: home, M2_AUDIO: "none", M2_MIDI: "inject", E2E_CHROME: chrome, E2E_REPO: opts.repo, E2E_HEADLESS: headless };
   delete env.CLAP_PATH;
   if (clap && clapPath) env.CLAP_PATH = clapPath;
   return env;

@@ -264,7 +264,7 @@ async function withPlugins() {
   fs.writeFileSync(`${dir}/data/lead/cutoff.json`, JSON.stringify({ unit: "scalar", clips: [{ id: "rt0wbb3b", start: 0, length: 256, points: [[0, 0.6], [256, 0.6]] }] }));
   const capture = `${root}/played.f32`;
   const sessFile = `${root}/home/.music2/session.json`;
-  const env = { ...process.env, M2_AUDIO: "none", M2_AUDIO_CAPTURE: capture, M2_AUDIO_FRAMES: "512", HOME: `${root}/home`, CLAP_PATH: clap };
+  const env = { ...process.env, M2_AUDIO: "none", M2_MIDI: "none", M2_AUDIO_CAPTURE: capture, M2_AUDIO_FRAMES: "512", HOME: `${root}/home`, CLAP_PATH: clap };
   const server = spawn(HEADLESS, [dir, sessFile, `p${Date.now()}`], { env, stdio: ["ignore", "ignore", fs.openSync(`${root}/headless.log`, "w")] });
   try {
     if (!(await until(() => fs.existsSync(sessFile), 20_000))) {

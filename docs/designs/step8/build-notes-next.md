@@ -1224,6 +1224,12 @@ section above is its own branch's, word for word.
   before the look, the same request was there (`at once [], then [{"url":"/api/graph/clips",…}]`). The app sent
   one gesture each time. After: 12 of 12 under the same load. In the first joined run, under heavier load, `⌫
   deletes both` also took over 8 s once; it passed in every later run.
+- P0's MIDI line, which no lane could make: `run.mjs` gives every suite's server, and the suite, `M2_MIDI=inject`
+  (plan §1.3), and the three suites that start a server of their own without it (`s8-audition`, `live3b`,
+  `pl-projects`) give it `M2_MIDI=none` (X35). No suite's server opens a MIDI device, so on a Mac a keyboard
+  plugged in never plays into a suite. One line in `e2e/README.md` says so. Before: `nx-midi`'s first check read
+  `M2_MIDI unset: 404`; after: `M2_MIDI inject: 200` (it passes both ways by design: a guard). Run after: nx-midi
+  24, s8-audition 51, pl-projects 66, taste 39, nx-piano 39, live3b PART 40 of 60 (no `CLAP_PATH` here, as always).
 - `s8-tracks` stopped once at its `synth-pad` tab (`dragFrom` undefined) in the first joined run, under that load. It
   passed 4 of 4 runs since, 3 of them under load. Left as it is.
 

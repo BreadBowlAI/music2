@@ -46,6 +46,9 @@ CLAP_PATH=~/Library/Audio/Plug-Ins/CLAP M2_HEADLESS=target/debug/examples/headle
   them, live3b skips those 20 checks with one `SKIP` line and passes 40 of its 60, and `run.mjs`
   reports it `PART` (with a note at the start when `CLAP_PATH` isn't set). Every other suite runs
   **without** `CLAP_PATH`; `fx-fixes` must.
+- MIDI: every suite's server and the suite itself get `M2_MIDI=inject`, so no server opens a MIDI
+  device, and `POST /api/graph/midi/inject` plays what a keyboard would send. A suite that starts
+  a server of its own gives it `M2_MIDI` too (`none`, or `inject` for `nx-midi`).
 
 Fixture kinds (what `run.mjs` prepares in `<root>`, and the suite's arguments):
 
