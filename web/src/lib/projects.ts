@@ -1,7 +1,7 @@
 // Songs (polish lane C): the recent songs list, and the calls of Save As and Rename Song. The list
 // is the server's (`~/.music2/recent.json`): opening a song any way puts it first.
 
-import { readJson } from "./graph";
+import { readJson, type GraphState } from "./graph";
 import { token } from "./native";
 
 /** A song of the recent list, read from its folder when listed. */
@@ -52,3 +52,19 @@ export function openedWords(iso: string, now = new Date()): string {
 
 /** A tempo as the list says it: "124 BPM", "92.5 BPM". */
 export const bpmWords = (bpm: number) => `${Math.round(bpm * 10) / 10} BPM`;
+
+/** Where Save As starts: the first free "<name> 2" in the folder the song is in. */
+export interface SaveAsStart {
+  name: string;
+  dir: string;
+  home: string | null;
+}
+
+export const songApi = {
+  saveAsStart: () => request<SaveAsStart>("/api/project/save-as"),
+  /** Save a copy of the open song as `name` in `dir` (default: the folder it is in) and open the copy. Answers with its state. */
+  saveAs: (session: number, name: string, dir?: string) => request<GraphState>("/api/project/save-as", { session, name, dir }),
+  /** Rename the open song, and its folder too with `folder`. `warning`: the name changed but the folder couldn't be. */
+  rename: (session: number, name: string, folder: boolean) =>
+    request<{ name: string; dir: string; warning: string | null }>("/api/project/rename", { session, name, folder }),
+};

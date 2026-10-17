@@ -222,6 +222,86 @@ opens at launch"); the thumbnail is left.
 **Contract.** `docs/architecture.md`'s HOME table: `~/.music2/recent.json` (the recent list, the
 `open` flag, the crash guard), written by the app and the headless server only.
 
+### C3. Save As, and Rename Song with its folder
+
+**In short.** File ▸ Save As… (⇧⌘S) saves a copy of the song under a new name and opens the copy.
+The first song stays as it was. File ▸ Rename Song… changes the song's name, and its folder too if
+you tick the box.
+
+| Command | What it does |
+|---|---|
+| Save As… (⇧⌘S, Ctrl+Shift+S) | "Save a copy of Night Drive": the name ("Night Drive 2"), the folder, [Cancel] [Save Copy]. The copy opens. A toast: "Now working on Night Drive 2. Night Drive is kept as it was." |
+| Rename Song… | "Rename Night Drive": the name, and "Also rename its folder" (on). With the box on, the song closes and opens again, so Undo can't go back past it (the dialog says so) |
+| A folder name that is taken | "A folder called Summer is already there. Pick another name." Nothing changes |
+| Read only | Save As works (it only reads the song). Rename Song says why it can't, in a toast (X21) |
+
+**What changed**
+- `project.rs`: `save_as_start(graph)` (the folder the song is in, and the first free "<name> N";
+  "Night Drive 2" suggests "Night Drive 3"), `save_as(state, {session, name, dir?})` (refuses a
+  taken folder in any capitals before anything is made, copies, opens the copy with `open_song`,
+  removes a copy that doesn't open), `copy_into` (the copy: `fill`, as New Song's, so hidden files
+  such as `.music2/` and `.git` stay behind and `.gitignore` and the name are written), and
+  `rename(state, {session, name, folder})`: the folder name is checked first; then the title Tx
+  (one undo step); then, with `folder`, close, `fs::rename` in the same parent, the recent list's
+  `moved`, and `open_song` from the new folder. A folder rename that fails leaves the new name and
+  reopens the song where it was, with a `warning` (X21). A change of capitals only is allowed.
+- `graph/projects.rs` (new, `mod projects;` in `graph.rs`): `Graph::dir_of(session)` and
+  `Graph::copy_song`, which copies on the session's actor, between edits.
+- Routes (`routes_project.rs`): `GET /api/project/save-as` (where it starts), `POST
+  /api/project/save-as {session, name, dir?}` (not a write: read-only windows have it),
+  `POST /api/project/rename {session, name, folder}` (a write: 423 read-only).
+- Page: `SaveAsDialog.tsx` and `RenameSongDialog.tsx` (new), both on `useModalKeys`, mounted in
+  `App.tsx`; `appCommand` `save_as` opens Save As and `rename_song` opens Rename Song (it called
+  the top bar's quick rename before; the double-click on the name stays that). `chord()`: ⇧⌘S is
+  `save_as`, also from a field. `flushLocal()` before each. Save As shows unsaved code as New Song
+  does ("Save Copy Anyway"), and Choose Folder… in the app (the shell's `song_folder`).
+- Desktop `menu.rs`: File ▸ Save As… (`CmdOrCtrl+Shift+S`) after Save; Rename Song…'s comment.
+  `Shortcuts.tsx`: "Save a copy (Save As)" at the end of File.
+
+**Tests**
+- Rust `crates/server/src/project_tests.rs`: `save_as_copies_the_song_without_its_local_folder`,
+  `save_as_opens_the_copy_and_leaves_the_original` (and another folder, a taken name, another
+  session), `rename_moves_the_folder_and_the_name` (the name only, then with the folder, its
+  `.music2/` and the recent list following, then capitals only), `rename_refuses_a_taken_folder`
+  (and an empty name), `rename_in_a_read_only_window_is_refused` (and Save As works there).
+  `menu.rs`: `save_as_is_shift_command_s_after_save`.
+- `pl-projects` (now 58 checks; `PL_ONLY=c1|c2|c3` runs one part, for red runs): ⇧⌘S opens Save As,
+  "Save a copy of First Song", "in ~/Music/music2", "First Song 2" focused and selected, the lint,
+  Space and M reach nothing; Return makes "First Song 2": `song.ts`, `tracks/` and `data/` byte for
+  byte, no view settings, its name in `music2.toml`, open, the song itself as it was, both in Recent,
+  the toast. A PC page: Ctrl+Shift+S opens it and the sheet says "Ctrl+Shift+S". In an app page
+  (the shell's `menu` event faked, as `newsong` fakes its invoke): Rename Song… opens "Rename First
+  Song 2" with the box on and its line, the lint, Space and M reach nothing; a taken folder is
+  refused in words and nothing changes; "Night Drive" moves the folder and the name, the song opens
+  from there, Recent follows; with the box off only the name changes, one undo step; Save As's
+  Choose Folder… puts the copy in the folder picked.
+- Moved and green: `taste` 39, `pc-keys` 37, `s8-songbar` 82, `pl-tracks` 20, `start` 24,
+  `newsong` 71. `cargo test -p m2-server` 231 passed; `-p music2-desktop` 10 and `app_main_thread`
+  ok; clippy of both clean.
+
+**Red first**
+- Rust, with `save_as` and `rename` refusing at once:
+  ```
+  save_as_copies_the_song_without_its_local_folder: called `Result::unwrap()` on an `Err` value: Save As isn't built yet
+  rename_refuses_a_taken_folder: left: "Rename isn't built yet"
+                                 right: "A folder called Summer is already there. Pick another name."
+  ```
+- `PL_ONLY=c3 pl-projects` on the page and server at `29430e8`:
+  ```
+  FAIL  ⇧⌘S opens Save As
+  FAIL  the name “First Song 2”, focused and selected: []
+  FAIL  Space and M reach nothing behind it
+  ```
+
+**Left.** `canvas.renameSong` (`shell.ts`, set in `SongBar.tsx`) is no longer called by
+`appCommand`; the top bar's double-click doesn't use it either way. The End can drop the hook (two
+lanes' files). `m2` commands for Save As and Rename (gaps #37, plan Q29).
+
+**For gaps.md.** Save As and Rename Song (with its folder) are done.
+**Contract.** `docs/architecture.md`: `POST /api/project/save-as` (a copy without `.music2/`,
+opened; allowed read-only) and `POST /api/project/rename` (the title Tx, then the folder; Undo
+starts over after a folder rename) in the routes list.
+
 ## Lane D
 
 Notes and automation.

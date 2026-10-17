@@ -52,10 +52,12 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     // The UI asks about unsaved code first, then the start screen shows.
     ("close_song", "Close Song", Some("CmdOrCtrl+W")),
     ("save", "Save", Some("CmdOrCtrl+S")),
+    // A copy under a new name, which opens (polish C3); the song stays as it was.
+    ("save_as", "Save As…", Some("CmdOrCtrl+Shift+S")),
     // The UI asks for the file (actions.rs `export_path`), then shows the progress. ⌘E is Split.
     ("export", "Export Audio…", Some("CmdOrCtrl+Shift+E")),
     ("reveal", REVEAL, None),
-    // The song's name in the top bar turns into a field (a double-click there does the same).
+    // The name, and its folder too (polish C3); the top bar's double-click renames the name only.
     ("rename_song", "Rename Song…", None),
     ("undo", "Undo", Some("CmdOrCtrl+Z")),
     ("redo", "Redo", Some("CmdOrCtrl+Shift+Z")),
@@ -138,6 +140,7 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
         Line,
         Item("close_song"),
         Item("save"),
+        Item("save_as"),
         Line,
         Item("export"),
         Line,
@@ -383,6 +386,18 @@ mod tests {
             for r in rows {
                 assert!(matches!(r, Row::Item(_) | Row::Line | Row::About | Row::Recent), "{menu}: {r:?}");
             }
+        }
+    }
+
+    /// Polish C3: File ▸ Save As… (⇧⌘S, Ctrl+Shift+S) sits after Save on both menu bars.
+    #[test]
+    fn save_as_is_shift_command_s_after_save() {
+        assert_eq!(ITEMS.iter().find(|i| i.0 == "save_as").map(|i| (i.1, i.2)), Some(("Save As…", Some("CmdOrCtrl+Shift+S"))));
+        for mac in [true, false] {
+            let bar = layout(mac);
+            let file = &bar.iter().find(|m| m.0 == "File").expect("a File menu").1;
+            let at = file.iter().position(|r| *r == Row::Item("save")).expect("Save");
+            assert_eq!(file[at + 1], Row::Item("save_as"), "mac: {mac}");
         }
     }
 

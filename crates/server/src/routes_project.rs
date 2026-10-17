@@ -1,7 +1,7 @@
 //! The routes of polish's lane C, in a router of their own, merged into the API's: the view
-//! settings kept per song (`.music2/view.json`) and the recent songs list. A route here that
-//! writes the open project is in [`WRITES_PROJECT`], and a read-only window answers it 423 with
-//! WRITE-18's message, as `routes.rs` answers its own.
+//! settings kept per song (`.music2/view.json`), the recent songs list, Save As and Rename Song.
+//! A route here that writes the open project is in [`WRITES_PROJECT`], and a read-only window
+//! answers it 423 with WRITE-18's message, as `routes.rs` answers its own.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -20,14 +20,16 @@ use crate::routes::ApiError;
 type S = State<Arc<AppState>>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
-/// The routes here that write the open project.
-pub const WRITES_PROJECT: &[&str] = &[];
+/// The routes here that write the open project. Save As only reads it: a read-only window has it.
+pub const WRITES_PROJECT: &[&str] = &["/api/project/rename"];
 
 pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/graph/view", post(graph_view))
         .route("/api/project/recent", get(recent_list))
         .route("/api/project/recent/forget", post(recent_forget))
+        .route("/api/project/save-as", get(save_as_start).post(save_as))
+        .route("/api/project/rename", post(rename))
         .route_layer(axum::middleware::from_fn_with_state(state, writes))
 }
 
@@ -84,4 +86,28 @@ async fn recent_forget(State(s): S, Json(r): Json<ForgetReq>) -> ApiResult {
         })
         .await?,
     ))
+}
+
+/// Where Save As starts: `{name, dir, home}`, the first free "<name> 2" in the song's folder's folder.
+async fn save_as_start(State(s): S) -> ApiResult {
+    let state = s.clone();
+    Ok(Json(blocking(move || crate::project::save_as_start(&state.graph)).await?))
+}
+
+/// Save a copy of the open song and open the copy (Q19): `{session, name, dir?}`. Answers with the
+/// copy's state; every window hears a `graph` event.
+async fn save_as(State(s): S, Json(r): Json<crate::project::SaveAs>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || crate::project::save_as(&state, &r)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+/// Rename the open song, and its folder too with `folder` (Q20): `{session, name, folder}`. A
+/// write. Answers `{name, dir, warning}`.
+async fn rename(State(s): S, Json(r): Json<crate::project::Rename>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || crate::project::rename(&state, &r)).await;
+    s.graph_changed();
+    Ok(Json(result?))
 }

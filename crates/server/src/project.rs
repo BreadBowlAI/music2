@@ -1,4 +1,5 @@
-//! New song projects: a template, or a copy of an example, in a new folder.
+//! New song projects: a template, or a copy of an example, in a new folder. And the open song's
+//! Save As (a copy under a new name) and Rename (its name, and its folder too).
 //!
 //! Songs go in the songs folder (`~/Music/music2`) unless the user picks another. A new
 //! folder never replaces anything: a name that is taken gets " 2", " 3"… instead.
@@ -11,6 +12,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::AppState;
 use crate::graph::Graph;
 use crate::resources;
 
@@ -489,6 +491,147 @@ fn set_name(dir: &Path, name: &str) -> Result<()> {
     }
     std::fs::write(&path, out).context("writing music2.toml")
 }
+
+/// A Save As request (`POST /api/project/save-as`).
+#[derive(Clone, Debug, Deserialize)]
+pub struct SaveAs {
+    pub session: u64,
+    /// What to call the copy; its folder is called the same, made safe.
+    pub name: String,
+    /// The folder to make it in (a full path); the folder the song is in if not given.
+    #[serde(default)]
+    pub dir: Option<PathBuf>,
+}
+
+/// Where Save As starts (`GET /api/project/save-as`): the folder the open song is in, and the first
+/// name "<its name> 2", "<its name> 3"… whose folder isn't there yet (a name that ends in a number
+/// counts on from it: "Night Drive 2" suggests "Night Drive 3").
+pub fn save_as_start(graph: &Graph) -> Result<Value> {
+    let (dir, name) = (graph.dir().context("no song is open")?, graph.name().unwrap_or_default());
+    let parent = dir.parent().context("the song's folder has no folder above it")?.to_path_buf();
+    let (base, from) = match name.rsplit_once(' ').and_then(|(base, n)| Some((base, n.parse::<u32>().ok()?))) {
+        Some((base, n)) if n >= 1 => (base.to_string(), n + 1),
+        _ => (clean_name(&name), 2),
+    };
+    let taken = taken(&parent)?.unwrap_or_default();
+    let songs = songs_dir().ok();
+    let free = (from..from + 999)
+        .map(|n| format!("{base} {n}"))
+        .find(|n| !taken.contains(&folder_name(n).to_lowercase()) && !reserved(songs.as_deref(), &parent, &folder_name(n)))
+        .unwrap_or_else(|| format!("{base} copy"));
+    Ok(json!({"name": free, "dir": parent, "home": m2_os::dirs::home()}))
+}
+
+/// Save a copy of the open song as `name` and open the copy (Q19). The song itself stays as it
+/// was. The copy has the song's files as they are on disk, without `.music2/` (its mutes, view and
+/// undo journal) or anything else hidden; its name is in its `music2.toml`. A folder of that name
+/// already there, in any capitals, is refused before anything is made. Works in a read-only window:
+/// it only reads the song. Answers with the copy's state.
+pub fn save_as(state: &AppState, req: &SaveAs) -> Result<Value> {
+    let from = state.graph.dir_of(req.session)?;
+    let parent = match &req.dir {
+        Some(dir) if !dir.is_absolute() => bail!("the folder to save the copy in must be a full path, not {}", dir.display()),
+        Some(dir) => dir.clone(),
+        None => from.parent().context("the song's folder has no folder above it")?.to_path_buf(),
+    };
+    if !parent.is_dir() {
+        bail!("{} isn't a folder", parent.display());
+    }
+    let (name, folder) = (clean_name(&req.name), folder_name(&req.name));
+    free(&parent, &folder, None)?;
+    let copy = state.graph.copy_song(req.session, parent, folder, name)?;
+    // A copy that doesn't open isn't kept: it only holds what was copied.
+    state.open_song(&copy).inspect_err(|_| {
+        let _ = std::fs::remove_dir_all(&copy);
+    })
+}
+
+/// Make the folder `folder` in `parent` and copy the song in `from` into it, named `name`: Save
+/// As's copy, on the session's actor ([`Graph::copy_song`]). Refuses a folder that is there.
+pub(crate) fn copy_into(from: &Path, parent: &Path, folder: &str, name: &str) -> Result<PathBuf> {
+    let dir = parent.join(folder);
+    match std::fs::create_dir(&dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => bail!("A folder called {folder} is already there. Pick another name."),
+        Err(e) => return Err(e).with_context(|| format!("making {}", dir.display())),
+    }
+    fill(&dir, name, from)?;
+    Ok(dir)
+}
+
+/// A Rename Song request (`POST /api/project/rename`).
+#[derive(Clone, Debug, Deserialize)]
+pub struct Rename {
+    pub session: u64,
+    pub name: String,
+    /// Rename its folder too.
+    #[serde(default)]
+    pub folder: bool,
+}
+
+/// Rename the open song (Q20): its name, as one undo step (the title builder), and with `folder`
+/// its folder too, to the name made safe. The folder's new name is checked before anything is
+/// written: one there already (in any capitals) is refused. Then the name is written, the song
+/// closes, its folder is renamed in the same parent (with `.music2/` in it), and the song opens
+/// again from there, so Undo starts over. If the folder can't be renamed then, the name stays
+/// changed, the song opens again where it was, and the answer's `warning` says why (X21).
+/// Answers `{name, dir, warning}`.
+pub fn rename(state: &AppState, req: &Rename) -> Result<Value> {
+    let dir = state.graph.dir_of(req.session)?;
+    let dir = dir.canonicalize().unwrap_or(dir);
+    if let Some(why) = state.graph.read_only() {
+        bail!("{why}");
+    }
+    let name = req.name.trim();
+    if name.is_empty() {
+        bail!("A song needs a name");
+    }
+    let to = match req.folder {
+        true => {
+            let parent = dir.parent().context("the song's folder has no folder above it")?;
+            let folder = folder_name(name);
+            free(parent, &folder, Some(&dir))?;
+            Some(parent.join(folder)).filter(|to| *to != dir)
+        }
+        false => None,
+    };
+    state.graph.title(req.session, name)?;
+    let Some(to) = to else { return Ok(json!({"name": name, "dir": dir, "warning": null})) };
+    state.graph.close();
+    let moved = std::fs::rename(&dir, &to);
+    let at = match &moved {
+        Ok(()) => {
+            if let Some(Err(e)) = state.recent().map(|r| r.moved(&dir, &to)) {
+                eprintln!("music2: couldn't keep the recent songs list: {e:#}");
+            }
+            &to
+        }
+        Err(_) => &dir,
+    };
+    state.open_song(at)?;
+    let warning = moved.err().map(|e| format!("The name changed, but the folder couldn't be renamed: {e}"));
+    Ok(json!({"name": name, "dir": at, "warning": warning}))
+}
+
+/// Refuse a folder name in `parent` that is taken in any capitals (or the songs folder's
+/// `Exports`), unless it is the song's own folder (`own`: a rename that changes only capitals).
+fn free(parent: &Path, folder: &str, own: Option<&Path>) -> Result<()> {
+    let mine = own.and_then(|d| d.file_name()).is_some_and(|n| n.to_string_lossy().to_lowercase() == folder.to_lowercase());
+    if mine {
+        return Ok(());
+    }
+    if reserved(songs_dir().ok().as_deref(), parent, folder) {
+        bail!("{folder} is where music2 puts exported audio. Pick another name.");
+    }
+    if taken(parent)?.is_some_and(|t| t.contains(&folder.to_lowercase())) {
+        bail!("A folder called {folder} is already there. Pick another name.");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "project_tests.rs"]
+mod save_as_tests;
 
 #[cfg(test)]
 mod tests {

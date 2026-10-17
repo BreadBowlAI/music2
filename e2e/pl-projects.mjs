@@ -8,8 +8,13 @@
 //       start screen with their tempo and "opened today"; a click opens one, Return opens the
 //       newest; a folder that is gone says "Moved or deleted" and its × forgets it; Close Song
 //       keeps the newest from opening at the next launch; `~/.music2/recent.json` holds the list.
+//   C3  Save As (⇧⌘S, Q19): a copy under a new name, byte for byte without `.music2/`, which
+//       opens, the song kept as it was, both in Recent; and Rename Song… from the menu (Q20): the
+//       name and the folder, the name only, a taken folder refused in words. Neither dialog lets
+//       a key reach the song behind it. A PC page's keys; the app's Choose Folder….
 //
 //   node e2e/pl-projects.mjs <root> <home>     (the `none` kind: no project open)
+//   PL_ONLY=c3 runs one part alone (a red run on an older build, where an earlier part stops it).
 import puppeteer from "puppeteer-core";
 import fs from "node:fs";
 import { spawn } from "node:child_process";
@@ -32,6 +37,8 @@ const check = (ok, what) => {
   ok ? pass++ : fail++;
 };
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+/** Whether part `name` runs: every part, unless PL_ONLY names one. */
+const part = (name) => !process.env.PL_ONLY || process.env.PL_ONLY === name;
 const readJson = (f) => {
   try {
     return JSON.parse(fs.readFileSync(f, "utf8"));
@@ -112,6 +119,45 @@ const lint = (page, sel) =>
     return [...new Set(bad)];
   }, sel);
 
+/**
+ * A page as the desktop app's (`native`), on server `s`: its menu bar's commands are sent with
+ * `window.__menu(id)` as the shell sends them (a `menu` event), and the shell's folder dialog
+ * answers `picked`.
+ */
+async function appPage(s, picked) {
+  const context = await browser.createBrowserContext();
+  const page = await context.newPage();
+  await page.setViewport({ width: 1440, height: 900 });
+  page.on("console", (m) => m.type() === "error" && !/Failed to load resource/.test(m.text()) && errors.push(m.text()));
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.evaluateOnNewDocument(
+    (token, picked) => {
+      window.__M2__ = { native: true, token, platform: "macos" };
+      const callbacks = new Map();
+      const menu = [];
+      let next = 1;
+      window.__TAURI_INTERNALS__ = {
+        invoke: async (cmd, args) => {
+          if (cmd === "plugin:event|listen" && args?.event === "menu") menu.push(args.handler);
+          return cmd === "action" && args?.id === "song_folder" ? picked : null;
+        },
+        transformCallback: (cb) => {
+          callbacks.set(next, cb);
+          return next++;
+        },
+        unregisterCallback: (id) => callbacks.delete(id),
+      };
+      window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
+      window.__menu = (id) => menu.forEach((h) => callbacks.get(h)?.({ event: "menu", id: 0, payload: id }));
+    },
+    s.token,
+    picked,
+  );
+  await page.goto(s.url, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector("[data-testid=start], [data-testid=timeline]", { timeout: 10000 });
+  return page;
+}
+
 /** What the grid chips and the audition toggle show. */
 const shown = (page) =>
   page.evaluate(() => {
@@ -133,7 +179,7 @@ async function openBass(page) {
 
 // ---------------------------------------------------------------- C1: view settings kept per song
 
-{
+if (part("c1")) {
   const song = `${ROOT}/kept/First Song`;
   fs.cpSync(`${REPO}/examples/first-song`, song, { recursive: true });
   const view = () => readJson(`${song}/.music2/view.json`);
@@ -192,7 +238,7 @@ const openName = async () => (await run.api("graph")).json?.name ?? null;
 /** The start screen's recent rows: name and the line under it, top to bottom. */
 const rows = (page) =>
   page.$$eval("[data-testid=recent] [data-recent]", (els) => els.map((e) => [...e.querySelectorAll("span")].map((s) => s.textContent).join(" | ")));
-{
+if (part("c2")) {
   // Only what this part makes (C1's servers kept the HOME's list too).
   fs.rmSync(recentFile, { force: true });
   for (const [name, tempo] of [["Alpha", 120], ["Beta", 96], ["Gamma", undefined]]) await run.api("project/new", { name, tempo });
@@ -245,6 +291,145 @@ const rows = (page) =>
   check(await until(async () => same((await rows(page)).map((r) => r.split(" | ")[0]), ["Alpha", "Gamma"])), `its × takes it off the list: ${JSON.stringify(await rows(page))}`);
   check(same(readJson(recentFile)?.songs?.map((s) => s.path), [`${songs}/Alpha`, `${songs}/Gamma`]), "and off recent.json");
   await page.browserContext().close();
+}
+
+// ---------------------------------------------------------------- C3: Save As, and Rename Song
+
+if (part("c3")) {
+  const song = `${songs}/First Song`;
+  fs.cpSync(`${REPO}/examples/first-song`, song, { recursive: true });
+  fs.writeFileSync(`${song}/music2.toml`, fs.readFileSync(`${song}/music2.toml`, "utf8").replace('name = "first-song"', 'name = "First Song"'));
+  await run.api("graph/open", { path: song });
+  const status = async () => (await run.api("graph/status")).json;
+  const files = (dir) => {
+    const out = {};
+    const walk = (d) => {
+      for (const e of fs.readdirSync(`${dir}/${d}`, { withFileTypes: true })) {
+        const rel = d ? `${d}/${e.name}` : e.name;
+        if (e.isDirectory()) walk(rel);
+        else out[rel] = fs.readFileSync(`${dir}/${rel}`, "utf8");
+      }
+    };
+    for (const d of ["tracks", "data"]) walk(d);
+    out["song.ts"] = fs.readFileSync(`${dir}/song.ts`, "utf8");
+    return out;
+  };
+  const before = files(song);
+  const page = await pageOn(run);
+  await page.waitForSelector("[data-testid=timeline]", { timeout: 10000 });
+  // A view setting of the song's own, which the copy doesn't take.
+  await run.api("graph/view", { session: (await run.api("graph")).json.session, set: { audition: false } });
+
+  await page.keyboard.down("Meta");
+  await page.keyboard.down("Shift");
+  await page.keyboard.press("s");
+  await page.keyboard.up("Shift");
+  await page.keyboard.up("Meta");
+  const dialog = await page.waitForSelector("[data-testid=save-as-dialog]", { timeout: 3000 }).catch(() => null);
+  check(!!dialog, "⇧⌘S opens Save As");
+  const said = dialog ? await dialog.evaluate((e) => e.innerText) : "";
+  check(said.includes("Save a copy of First Song") && said.includes("in ~/Music/music2"), `“Save a copy of First Song”, in ~/Music/music2: ${said.replace(/\n+/g, " | ")}`);
+  const field = await page.$eval("[data-testid=save-as-name]", (e) => [e.value, document.activeElement === e && e.selectionStart === 0 && e.selectionEnd === e.value.length]).catch(() => []);
+  check(same(field, ["First Song 2", true]), `the name “First Song 2”, focused and selected: ${JSON.stringify(field)}`);
+  const bad = await lint(page, "[data-testid=save-as-dialog]");
+  check(bad.length === 0, `the dialog keeps to the design system: ${bad.slice(0, 4).join(", ")}`);
+  await page.screenshot({ path: `${ROOT}/pl-save-as.png` });
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.keyboard.press("Space");
+  await page.keyboard.press("m");
+  await sleep(500);
+  check(!(await status()).playing && same((await run.api("graph")).json.overlays.mute, []) && !!(await page.$("[data-testid=save-as-dialog]")), "Space and M reach nothing behind it");
+
+  await page.click("[data-testid=save-as-name]");
+  await page.keyboard.press("Enter");
+  const copy = `${songs}/First Song 2`;
+  check(await until(async () => (await openName()) === "First Song 2" && (await run.api("graph")).json?.dir === copy), `Return makes “First Song 2” and opens it: ${await openName()}`);
+  check(same(files(copy), before), "its song.ts, tracks/ and data/ are the song's, byte for byte");
+  check(!fs.existsSync(`${copy}/.music2/view.json`) && !fs.existsSync(`${copy}/example.toml`), "without the song's .music2/ view settings");
+  check(/^name = "First Song 2"$/m.test(fs.readFileSync(`${copy}/music2.toml`, "utf8")), "its name is in its music2.toml");
+  check(same(files(song), before) && /^name = "First Song"$/m.test(fs.readFileSync(`${song}/music2.toml`, "utf8")) && readJson(`${song}/.music2/view.json`)?.audition === false, "the song itself is as it was");
+  check(same(readJson(recentFile)?.songs?.slice(0, 2).map((s) => s.path), [copy, song]), "both are in Recent, the copy first");
+  check(await until(async () => (await page.$$eval("[data-testid=toast]", (els) => els.map((e) => e.textContent))).some((t) => t.includes("Now working on First Song 2. First Song is kept as it was."))), "a toast says which one is open now");
+  await page.browserContext().close();
+
+  // A PC page: Ctrl+Shift+S, and the sheet says so.
+  const pc = await pageOn(run, { pc: true });
+  await pc.waitForSelector("[data-testid=timeline]", { timeout: 10000 });
+  await pc.keyboard.down("Control");
+  await pc.keyboard.down("Shift");
+  await pc.keyboard.press("s");
+  await pc.keyboard.up("Shift");
+  await pc.keyboard.up("Control");
+  check(!!(await pc.waitForSelector("[data-testid=save-as-dialog]", { timeout: 3000 }).catch(() => null)), "on a PC page, Ctrl+Shift+S opens it");
+  await pc.keyboard.press("Escape");
+  await pc.keyboard.down("Alt");
+  await pc.keyboard.press("k");
+  await pc.keyboard.up("Alt");
+  await pc.waitForSelector("[data-testid=shortcuts]", { timeout: 3000 }).catch(() => {});
+  const row = await pc.$$eval("[data-testid=shortcuts] dl > div", (els) => els.map((e) => e.innerText.replace(/\s+/g, " ")).find((t) => t.startsWith("Save a copy")) ?? null);
+  check(row === "Save a copy (Save As) Ctrl+Shift+S", `the shortcuts sheet: ${row}`);
+  await pc.browserContext().close();
+
+  // Rename Song…, from the app's menu.
+  const elsewhere = `${HOME}/Elsewhere`;
+  fs.mkdirSync(elsewhere, { recursive: true });
+  const app = await appPage(run, elsewhere);
+  await app.waitForSelector("[data-testid=timeline]", { timeout: 10000 });
+  await app.evaluate(() => window.__menu("rename_song"));
+  const rename = await app.waitForSelector("[data-testid=rename-song-dialog]", { timeout: 3000 }).catch(() => null);
+  check(!!rename, "File ▸ Rename Song… opens its dialog");
+  const words = rename ? await rename.evaluate((e) => e.innerText) : "";
+  const box = await app.$eval("[data-testid=rename-song-folder]", (e) => e.checked).catch(() => null);
+  check(
+    words.includes("Rename First Song 2") && box === true && words.includes("The song closes and opens again. After that, Undo can't go back past this."),
+    `“Rename First Song 2”, Also rename its folder (on), and what that does: ${words.replace(/\n+/g, " | ")}`,
+  );
+  const badRename = await lint(app, "[data-testid=rename-song-dialog]");
+  check(badRename.length === 0, `the dialog keeps to the design system: ${badRename.slice(0, 4).join(", ")}`);
+  await app.screenshot({ path: `${ROOT}/pl-rename.png` });
+  await app.evaluate(() => document.activeElement?.blur());
+  await app.keyboard.press("Space");
+  await app.keyboard.press("m");
+  await sleep(500);
+  check(!(await status()).playing && same((await run.api("graph")).json.overlays.mute, []) && !!(await app.$("[data-testid=rename-song-dialog]")), "Space and M reach nothing behind it");
+
+  // A taken folder: refused in words, and nothing changes.
+  await app.click("[data-testid=rename-song-name]", { clickCount: 3 });
+  await app.keyboard.type("first song");
+  await app.keyboard.press("Enter");
+  const refused = await app.waitForSelector("[data-testid=rename-song-error]", { timeout: 3000 }).then((e) => e.evaluate((e) => e.textContent)).catch(() => null);
+  check(refused === "A folder called first song is already there. Pick another name.", `a folder that is there is refused: ${refused}`);
+  check(fs.existsSync(`${copy}/song.ts`) && /^name = "First Song 2"$/m.test(fs.readFileSync(`${copy}/music2.toml`, "utf8")), "and nothing changed");
+
+  // With the box on: the name and the folder; the song opens again from there.
+  await app.click("[data-testid=rename-song-name]", { clickCount: 3 });
+  await app.keyboard.type("Night Drive");
+  await app.keyboard.press("Enter");
+  const drive = `${songs}/Night Drive`;
+  check(await until(async () => (await run.api("graph")).json?.dir === drive, 10000), `the song is open from its new folder: ${(await run.api("graph")).json?.dir}`);
+  check(!fs.existsSync(copy) && /^name = "Night Drive"$/m.test(fs.readFileSync(`${drive}/music2.toml`, "utf8")), "its folder and its name are Night Drive");
+  check(readJson(recentFile)?.songs?.[0]?.path === drive && !readJson(recentFile)?.songs?.some((s) => s.path === copy), "Recent follows the folder");
+
+  // With the box off: only the name.
+  await app.waitForSelector("[data-testid=timeline]", { timeout: 10000 });
+  await app.evaluate(() => window.__menu("rename_song"));
+  await app.waitForSelector("[data-testid=rename-song-dialog]", { timeout: 3000 });
+  await app.click("[data-testid=rename-song-folder]");
+  check(!(await app.$("[data-testid=rename-song-note]")), "with the box off, the line about closing goes");
+  await app.click("[data-testid=rename-song-name]", { clickCount: 3 });
+  await app.keyboard.type("Night Ride");
+  await app.keyboard.press("Enter");
+  check(await until(async () => /^name = "Night Ride"$/m.test(fs.readFileSync(`${drive}/music2.toml`, "utf8"))), "with it off: only the name changes");
+  check((await run.api("graph")).json?.dir === drive && (await run.api("graph")).json?.can_undo === true, "the folder stays, and it is one undo step");
+
+  // Save As in the app: Choose Folder….
+  await app.evaluate(() => window.__menu("save_as"));
+  await app.waitForSelector("[data-testid=save-as-dialog]", { timeout: 3000 });
+  await app.$$eval("[data-testid=save-as-dialog] button", (bs) => bs.find((b) => b.textContent.trim() === "Choose Folder…")?.click());
+  check(await until(async () => (await app.$eval("[data-testid=save-as-folder]", (e) => e.textContent)) === "~/Elsewhere"), "in the app, Choose Folder… picks where the copy goes");
+  await app.click("[data-testid=save-as-save]");
+  check(await until(async () => (await run.api("graph")).json?.dir === `${elsewhere}/Night Ride 2`), `the copy is made there and opens: ${(await run.api("graph")).json?.dir}`);
+  await app.browserContext().close();
 }
 
 // ---------------------------------------------------------------- the end

@@ -7,6 +7,8 @@ import GraphCanvas, { closeSong, graphUndo } from "./components/GraphCanvas";
 import Shortcuts from "./components/Shortcuts";
 import StartScreen from "./components/StartScreen";
 import NewSongDialog, { openNewSong } from "./components/NewSongDialog";
+import RenameSongDialog, { openRenameSong } from "./components/RenameSongDialog";
+import SaveAsDialog, { openSaveAs } from "./components/SaveAsDialog";
 import { exportSong, onExportEvent } from "./lib/exporting";
 import { CutOff, editorHooks, graphApi } from "./lib/graph";
 import { isMac, native, nativeAction, onMenu } from "./lib/native";
@@ -68,6 +70,7 @@ function chord(e: KeyboardEvent): { id: string; always?: boolean } | null {
     return { id: ({ c: "copy", x: "cut", v: "paste" } as const)[k] };
   }
   if (k === "s" && !e.shiftKey) return { id: "save", always: true };
+  if (k === "s" && e.shiftKey && !e.altKey) return { id: "save_as", always: true };
   if (k === "n" && !e.shiftKey) return { id: "new_song", always: true };
   if (k === "z") return { id: e.shiftKey ? "redo" : "undo" };
   if (k === "d" && !e.shiftKey) return { id: "duplicate" };
@@ -169,6 +172,8 @@ export default function App() {
       <div className="h-full">
         {graph ? <GraphCanvas key={graph.session} graph={graph} /> : <StartScreen />}
         <NewSongDialog />
+        <SaveAsDialog />
+        <RenameSongDialog />
         <Shortcuts />
         <Toasts />
         {/* With a song open, the top bar's status pill says it; on the start screen, this one does. */}
@@ -289,8 +294,10 @@ export function appCommand(id: string) {
     case "panic":
       if (editorHooks.chord?.("panic")) return;
       return void graphApi.panic().catch((error) => st.toast(error instanceof Error ? error.message : String(error)));
+    case "save_as":
+      return void openSaveAs();
     case "rename_song":
-      return canvas.renameSong?.();
+      return openRenameSong();
     case "export":
       return void exportSong();
     case "close_song":
