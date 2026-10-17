@@ -11,13 +11,13 @@
 //            positionally: lowpass(x, 1000, q) (PKG-2, PKG-7). Screenshot: <root>/s5-browser.png.
 //   alias    `import { delay as echo }`, saved by another editor, is the Delay effect with delay's three
 //            knobs, and removing it unwraps the call (PKG-9).
-//   mix      the kick's fader, left out of its bare mixer entry, is written into it on its first turn,
+//   mix      the kick's fader (on its Mix strip), left out of its bare mixer entry, is written into it on its first move,
 //            in the style of the mixer's other entries; a channel's first pan through the route writes
 //            `pan: 0` into its entry and names the new knob (design-8b §5.2, §5.3).
 //   node run.mjs s5-knobs fix
 import { ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 
-const { browser, page, errors, api, state, toasts, show, box } = await open(1440, 900);
+const { browser, page, errors, api, state, toasts, show, view, box } = await open(1440, 900);
 
 /** The view's knobs, each with its module and node: `{ module, node, k }`. */
 const knobs = async () =>
@@ -76,9 +76,11 @@ for (const [module, component, slot, written, range, log] of EXPECTED) {
 }
 
 // On the page: each is a knob on its call's box, a default drawn as one (`data-default`, its value in
-// the muted grey, never italic), turned to where its value sits in the declared range.
+// the muted grey, never italic), turned to where its value sits in the declared range. The song's
+// mixer is one compact card there: its levels and pans are on the Mix view's strips (MX-6), below.
+const onStrip = (x) => x.module === "song" && x.k.component === "std:mixer";
 const LOOK = { song: [], bass: [], hats: [], keys: [], kick: [] };
-for (const x of all) LOOK[x.module].push(x);
+for (const x of all) if (!onStrip(x)) LOOK[x.module].push(x);
 for (const [module, list] of Object.entries(LOOK)) {
   await show(module);
   for (const { node, k } of list) {
@@ -100,6 +102,26 @@ for (const [module, list] of Object.entries(LOOK)) {
     );
   }
 }
+// The mixer's on its strips: a level is a fader at its value, a pan a knob turned to where its value sits.
+await view("mix");
+for (const { k } of all.filter(onStrip)) {
+  const seen = await page.$eval(`[data-testid=mix] [data-knob-id="${k.id}"]`, (e) => ({
+    dflt: e.dataset.default === "true",
+    muted: ((v) => getComputedStyle(v).color === "rgb(101, 105, 111)" && getComputedStyle(v).fontStyle !== "italic")(e.querySelector(".tabular-nums")),
+    at: Number(e.querySelector("[role=slider]").getAttribute("aria-valuenow")),
+  })).catch(() => null);
+  if (!seen) {
+    check(false, `song: the mixer's ${k.label} is on its Mix strip`);
+    continue;
+  }
+  const fader = k.unit === "db";
+  const where = fader ? k.value : (k.value - k.range[0]) / (k.range[1] - k.range[0]);
+  check(
+    seen.dflt === !k.written && seen.muted === !k.written && Math.abs(seen.at - where) < 0.002,
+    `song: the mixer's ${k.label} is drawn on its Mix strip ${k.written ? "as written" : "as its default"}, ${fader ? `a fader at ${k.value} dB` : `turned to ${where.toFixed(3)} of its declared range`} (${JSON.stringify(seen)})`,
+  );
+}
+await view("graph");
 await show("bass");
 check(!(await page.$('[data-module="bass"] [data-node="bass"] [data-knob="cutoff"]')), "the bass's cutoff, connected to a signal, is no knob");
 await page.$eval('[data-module="bass"] [data-node="bass"]', (e) => e.scrollIntoView({ block: "center", inline: "center" }));
@@ -107,10 +129,11 @@ await sleep(300);
 await page.screenshot({ path: `${ROOT}/s5-bass.png` });
 
 // ------------------------------------------------------------------ insert
-/** Drag the knob `sel` up by `dy` pixels and let go. */
+/** Drag the knob `sel` (or a fader, by its thumb) up by `dy` pixels and let go. */
 const turn = async (sel, dy) => {
-  await page.$eval(`${sel} svg`, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
-  const b = await box(`${sel} svg`);
+  const grip = `${sel} svg, ${sel} [data-testid=fader-thumb]`;
+  await page.$eval(grip, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
+  const b = await box(grip);
   const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
   await page.mouse.move(cx, cy);
   await page.mouse.down();
@@ -218,11 +241,11 @@ check(await until(() => read("tracks/keys.ts") === keys), "and undo again takes 
 // The kick's fader, left out of `kick: kick.out`: its first turn wraps the entry, written as db(…) like
 // the mixer's other entries, and nothing else in the file changes.
 const songFile = read("song.ts");
-await show("song");
-const kickDb = '[data-module="song"] [data-node="mixer"] [data-knob="kick.db"]';
+await view("mix");
+const kickDb = '[data-testid=mix] [data-strip="kick"] [data-knob="kick.db"]';
 await turn(kickDb, -24);
 const wrapped = /kick: \{ in: kick\.out, db: db\((-?[0-9.e-]+)\) \},/;
-check(await until(() => wrapped.test(read("song.ts"))), `turning the kick's fader writes it into its entry (${read("song.ts").match(/kick: .*,/)?.[0]})`);
+check(await until(() => wrapped.test(read("song.ts"))), `moving the kick's fader writes it into its entry (${read("song.ts").match(/kick: .*,/)?.[0]})`);
 const level = Number(read("song.ts").match(wrapped)?.[1]);
 check(level < 0 && read("song.ts").replace(wrapped, "kick: kick.out,") === songFile, `down from 0 dB to ${level}, and nothing else changed`);
 await undo();
@@ -236,6 +259,8 @@ const bassStrip = (await state()).mix.strips.find((x) => x.channel === "bass");
 check(bassStrip?.pan === panned.body.control && !bassStrip.pan_insert, `and names the new knob, which the Mix view's strip has (${panned.body.control})`);
 await undo();
 check(await until(() => read("song.ts") === songFile), "undo takes the pan out");
+
+await view("graph");
 
 // ------------------------------------------------------------------ alias
 const echo = `import { track } from "@m2/core";\nimport { delay as echo } from "std/fx";\nimport { pluck } from "std/instruments";\n\nexport default track("keys", { name: "Keys" }, ({ lane }) => echo(pluck(lane.notes("chords"))));\n`;

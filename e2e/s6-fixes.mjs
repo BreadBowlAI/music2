@@ -45,9 +45,10 @@ const key = async (k, mods = []) => {
 
 await page.goto(sess.url, { waitUntil: "domcontentloaded" });
 await page.waitForSelector("[data-testid=graph]", { timeout: 8000 });
-await page.click('[data-module-tab="song"]');
-await page.waitForSelector('[data-module="song"] [data-knob="hats.pan"]');
-const pan = () => page.$eval('[data-module="song"] [data-knob="hats.pan"]', (e) => e.dataset.value).catch(() => null);
+// Hats' pan, on its Mix strip: what the page shows of the song.
+await page.click('[data-view-tab="mix"]');
+await page.waitForSelector('[data-testid=mix] [data-knob="hats.pan"]');
+const pan = () => page.$eval('[data-testid=mix] [data-knob="hats.pan"]', (e) => e.dataset.value).catch(() => null);
 
 // ---------------------------------------------------------------- the watcher (WRITE-19)
 

@@ -46,8 +46,10 @@ check(["lfo", "xrange", "blend", "bass", "notes", "cutoff"].every((l) => bassNod
 const edges = await page.$$eval('[data-module="bass"] svg.absolute > path', (els) => els.length);
 check(edges === 8, `Bass edges drawn: ${edges}`);
 
-await show("song");
-const panKnob = '[data-module="song"] [data-knob="hats.pan"]';
+// Levels and pans are the Mix view's strips (MX-6).
+await page.click('[data-view-tab="mix"]');
+await page.waitForSelector('[data-testid=mix] [data-knob="hats.pan"]');
+const panKnob = '[data-testid=mix] [data-knob="hats.pan"]';
 check((await page.$eval(panKnob, (e) => e.dataset.value)) === "0.3", "hats.pan knob reads 0.3");
 
 // Drag the knob up 60px: on a -1..1 range that is 0.3 → 0.7 (300px is a knob's whole range, taste.md KN-1).
@@ -65,7 +67,7 @@ check(await until(async () => (await page.$eval(panKnob, (e) => e.dataset.value)
 check(await until(async () => (await api("graph")).view.revision === 2), "the revision is now 2");
 
 // A fast drag (one move, immediate release) commits exactly the value shown at release.
-const keysKnob = '[data-module="song"] [data-knob="keys.pan"]';
+const keysKnob = '[data-testid=mix] [data-knob="keys.pan"]';
 const kb = await knobBox(keysKnob);
 await page.mouse.move(kb.x + kb.width / 2, kb.y + kb.height / 2);
 await page.mouse.down();
@@ -75,6 +77,7 @@ const shown = await page.$eval(keysKnob, (e) => e.dataset.value);
 check(await until(() => songTs().includes(`pan: ${shown} }`)), `a fast drag commits the value it shows (${shown})`);
 
 // An edit made elsewhere shows up on the canvas.
+await page.click('[data-view-tab="graph"]');
 await show("bass");
 fs.writeFileSync(`${proj}/tracks/bass.ts`, fs.readFileSync(`${proj}/tracks/bass.ts`, "utf8").replace("khz(2.5)", "khz(3)"));
 const hi = '[data-module="bass"] [data-node="xrange"] [data-knob="hi"]';

@@ -40,12 +40,12 @@ if (!empty) {
   await page.keyboard.press("Enter");
   check(await until(async () => (await api("graph/status")).json.beat === 0), "Enter goes back to the start");
 
-  // A knob drag, then ⌘Z undoes it, with a toast.
-  await page.click('[data-module-tab="song"]');
-  await page.waitForSelector('[data-module="song"]');
+  // A knob drag (a pan, on the Mix view's strip), then ⌘Z undoes it, with no toast.
+  await page.click('[data-view-tab="mix"]');
+  await page.waitForSelector('[data-testid=mix] [data-knob="hats.pan"]');
   const songTs = () => fs.readFileSync(`${proj}/song.ts`, "utf8");
   const before = songTs();
-  const knob = '[data-module="song"] [data-knob="hats.pan"] svg';
+  const knob = '[data-testid=mix] [data-knob="hats.pan"] svg';
   await page.$eval(knob, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
   const box = await (await page.$(knob)).boundingBox();
   const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
@@ -56,7 +56,7 @@ if (!empty) {
   await page.mouse.up();
   check(await until(() => songTs().includes("pan: 0.7 }")), "a knob drag writes song.ts");
   // The knob shows it: a knob change makes no toast (taste.md §2.14).
-  check(await until(async () => (await page.$eval('[data-module="song"] [data-knob="hats.pan"]', (e) => e.dataset.value)) === "0.7") && !(await page.$("[data-testid=toast]")), "and the knob shows the edit, with no toast");
+  check(await until(async () => (await page.$eval('[data-testid=mix] [data-knob="hats.pan"]', (e) => e.dataset.value)) === "0.7") && !(await page.$("[data-testid=toast]")), "and the knob shows the edit, with no toast");
   const named = await page.$eval('button[aria-label="Undo"]', (b) => b.title);
   await page.keyboard.down("Meta"); await page.keyboard.press("z"); await page.keyboard.up("Meta");
   check(await until(() => songTs() === before), "⌘Z undoes it");

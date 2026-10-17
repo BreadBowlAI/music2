@@ -33,6 +33,7 @@ import {
   type GraphState,
   type InputPort,
   type Knob as KnobInfo,
+  type MixView,
   type ModuleView,
   type OutputPort,
   type PortEdge,
@@ -40,21 +41,55 @@ import {
   type ViewNode,
 } from "../lib/graph";
 import { laneMade } from "../lib/events";
-import { mod } from "../lib/native";
+import { mod, opt } from "../lib/native";
+import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { Dots } from "./draw";
 import EffectBrowser from "./EffectBrowser";
-import { HomeMarker, KnobMenu, MiniKnob, useKnobDrag, useKnobGesture } from "./Knob";
+import { focusNext, HomeMarker, KnobMenu, MiniKnob, useKnobDrag, useKnobGesture } from "./Knob";
 import { undoAction } from "./GraphCanvas";
 
 /** Why nothing here can be edited right now (the code doesn't compile, read only, offline), or null. */
 const Locked = createContext<string | null>(null);
 /** A track's name by its key, for the controls that name one (a mixer channel's `hats.db`: Hats volume). */
 const Tracks = createContext<(key: string) => string | undefined>(() => undefined);
+/** The Song's mixer, drawn as one compact card (MX-6): its node and how many channels it has. */
+const MixerCard = createContext<{ id: string; channels: number } | null>(null);
+
+/** The merged input of the compact mixer card: every channel's input, as one port. */
+const CHANNELS = "channels";
+
+/**
+ * The Song's own mixer as one compact card (taste.md §3.5, MX-6), "Mixer · 4 channels · Open Mix
+ * ⌥3", never a row per channel: its channels' inputs drawn as one port, and no knobs, since its
+ * levels and pans are the Mix view's strips. Only the mixer the Mix view shows: a track's own mixer
+ * stays a box like any other. Null when `m` has no such mixer.
+ */
+function compactMixer(m: ModuleView, mix: MixView): { module: ModuleView; card: { id: string; channels: number } } | null {
+  if (m.key !== "song" || mix.mixer !== "ok") return null;
+  const mixers = m.nodes.filter((n) => n.component === "std:mixer");
+  if (mixers.length !== 1) return null;
+  const node = mixers[0];
+  const channels = new Set(mix.strips.flatMap((s) => (s.channel ? [s.channel] : []))).size;
+  const card: ViewNode = { ...node, knobs: [], readonly: [], inlets: [], inputs: [{ id: CHANNELS, label: "Channels", kind: "audio" }] };
+  // Each signal drawn once into the card, whichever channels it feeds.
+  const seen = new Set<string>();
+  const port_edges = m.port_edges.flatMap((e) => {
+    if (e.to !== node.id) return [e];
+    const from = `${e.from}>${e.from_port}`;
+    if (seen.has(from)) return [];
+    seen.add(from);
+    return [{ ...e, to_port: CHANNELS }];
+  });
+  return { module: { ...m, nodes: m.nodes.map((n) => (n === node ? card : n)), port_edges }, card: { id: node.id, channels } };
+}
 
 /** One module's code as a graph to play and tweak: knobs over its values, cables between its signals, effects after its audio. */
 export function NodeGraph({ graph, module }: { graph: GraphState; module: string }) {
-  const shown = graph.view.modules.find((m) => m.key === module);
+  const found = graph.view.modules.find((m) => m.key === module);
+  // The Song's mixer is one compact card; its levels and pans are the Mix view's (MX-6).
+  const compacted = useMemo(() => (found ? compactMixer(found, graph.mix) : null), [found, graph.mix]);
+  const shown = compacted?.module ?? found;
   const laid = useMemo(() => shown && layout(shown), [shown]);
   const locked = useStore((s) => lockReason(graph, s.connected));
   const tracks = useMemo(() => {
@@ -121,6 +156,7 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
   return (
     <Locked.Provider value={locked}>
       <Tracks.Provider value={tracks}>
+      <MixerCard.Provider value={compacted?.card ?? null}>
       <div ref={scroller} className="flex-1 min-h-0 overflow-auto p-4 flex flex-col" data-testid="graph">
         {shown && laid && (
           <ModuleSection
@@ -137,6 +173,7 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
         )}
       </div>
       {shown && <ZoomBar zoom={zoom} fitted={zooms[module] == null} onZoom={setZoom} />}
+      </MixerCard.Provider>
       </Tracks.Provider>
     </Locked.Provider>
   );
@@ -710,6 +747,9 @@ function NodeCard({
     p.then((c) => toast(words, undoAction(session, c.revision))).catch((error) => toast(error instanceof Error ? error.message : String(error)));
   // Just the header, its one circle beside it (see `compact`).
   const small = compact(node);
+  // The Song's mixer, as one compact card (MX-6).
+  const card = useContext(MixerCard);
+  const mixing = card?.id === node.id ? card : null;
   const where = node.file ? `${node.file}:${node.line}` : null;
   // A call by its component's label ("LFO", "Reverb"); a track's signal by the track; a lane or an
   // output by the rule controls follow (`cutoff` → Cutoff). No caption under it: the glyph and the
@@ -778,7 +818,25 @@ function NodeCard({
           picking.closest("section[data-module]") ?? document.body,
         )}
       {small && node.inputs.map((i) => <Dot key={i.id} id={i.id} kind={i.kind} filled={wired.has(`${node.id}<${i.id}`)} />)}
-      {!small && (node.outputs.length > 0 || node.inputs.length > 0) && (
+      {mixing && (
+        <div className="py-1.5">
+          <div className="relative h-7 pl-4 pr-4 flex items-center gap-2 text-xs min-w-0" data-input={CHANNELS}>
+            <Dot id={CHANNELS} kind="audio" filled={wired.has(`${node.id}<${CHANNELS}`)} />
+            <span className="text-fg-muted truncate">
+              {mixing.channels} {mixing.channels === 1 ? "channel" : "channels"}
+            </span>
+            <button
+              data-testid="open-mix"
+              className="ml-auto shrink-0 font-medium text-accent hover:text-accent-strong cursor-pointer"
+              title="Levels and pans are in the Mix view"
+              onClick={() => useShell.getState().setView("mix")}
+            >
+              Open Mix {opt("3")}
+            </button>
+          </div>
+        </div>
+      )}
+      {!small && !mixing && (node.outputs.length > 0 || node.inputs.length > 0) && (
         <div className="py-1.5">
           {node.inputs.map((i) => (
             <InputRow
@@ -805,8 +863,8 @@ function NodeCard({
           node={node}
           output={o}
           y={ports.get(o.id) ?? 0}
-          // Only a signal's row (or an output's own) has room for its label beside it.
-          labelled={!small && (j >= node.inputs.length || (!node.inputs[j].knob && !node.inputs[j].inlet && node.inputs[j].readonly == null))}
+          // Only a signal's row (or an output's own) has room for its label beside it; the mixer card's has its link.
+          labelled={!small && !mixing && (j >= node.inputs.length || (!node.inputs[j].knob && !node.inputs[j].inlet && node.inputs[j].readonly == null))}
           filled={wired.has(`${node.id}>${o.id}`)}
           editable={editable}
           onCable={onCable}
@@ -1126,9 +1184,7 @@ function KnobControl({
                 // On to the next control (or back, with ⇧), as a form's fields go.
                 e.preventDefault();
                 if (!typed(typing.text)) return setTyping({ ...typing, bad: true });
-                const all = [...document.querySelectorAll<SVGElement>("[data-knob] svg[role=slider][tabindex='0']")];
-                const at = svg.current ? all.indexOf(svg.current) : -1;
-                requestAnimationFrame(() => all[at + (e.shiftKey ? -1 : 1)]?.focus());
+                focusNext(svg.current, e.shiftKey);
               }
             }}
             // A click away writes what reads as a value, and drops what doesn't.

@@ -325,6 +325,16 @@ export function useKnobGesture({
   };
 }
 
+/**
+ * Tab in a type-in (taste.md §2.14): on to the next knob or fader (or back, with ⇧), in the page's
+ * order, from the one `from` is in.
+ */
+export function focusNext(from: Element | null, back: boolean) {
+  const all = [...document.querySelectorAll<HTMLElement | SVGElement>("[data-knob] [role=slider][tabindex='0']")];
+  const at = from ? all.findIndex((e) => e === from || from.contains(e)) : -1;
+  requestAnimationFrame(() => all[at + (back ? -1 : 1)]?.focus());
+}
+
 /** Pixels of drag for a knob's whole range (taste.md KN-1), and what ⇧ scales a drag by. */
 export const THROW = 300;
 export const FINE = 0.1;

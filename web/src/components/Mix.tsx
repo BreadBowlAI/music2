@@ -20,7 +20,7 @@ import { tones } from "../lib/palette";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { undoAction } from "./GraphCanvas";
-import { Bubble, FINE, KnobMenu, MiniKnob, NOTCH, useKnobDrag, useKnobGesture } from "./Knob";
+import { Bubble, FINE, focusNext, KnobMenu, MiniKnob, NOTCH, useKnobDrag, useKnobGesture } from "./Knob";
 import { Colours } from "./Tracks";
 import TrackName from "./TrackName";
 import { Button, EmptyState, MenuRow, Popover } from "./ui";
@@ -68,10 +68,8 @@ function faderStep(v: number, n: number) {
   return Math.min(Math.max(TOP, v), next);
 }
 
-/** A level as a strip shows it: "−6.0", "+3.0", "0.0", or "−∞" at the foot. */
-const level = (v: number) => (v <= SILENT ? "−∞" : formatValue("db", v).replace(/ dB$/, ""));
-/** The same with its unit, for the value bubble and a fader's name: "−6.0 dB", "−∞". */
-const levelDb = (v: number) => (v <= SILENT ? "−∞" : formatValue("db", v));
+/** A level as taste.md's words write it: "−6.0 dB", "+3.0 dB", "0.0 dB", or "−∞" at the foot. */
+const level = (v: number) => (v <= SILENT ? "−∞" : formatValue("db", v));
 
 /** A level typed in (taste.md §2.14): "-3", "-3db", "-3 dB", "-inf" or "−∞" (silence); held to −96…+12 dB. Null if it doesn't read. */
 function parseLevel(text: string): number | null {
@@ -192,7 +190,7 @@ const Strip = memo(function Strip({ strip, selected, knobs, session, revision, l
         {strip.channel && (pan || strip.pan_insert) ? (
           <Pan channel={strip.channel} name={strip.label} knob={pan} session={session} revision={revision} editable={editable} locked={locked} />
         ) : (
-          strip.channel && <div className="h-full grid place-items-center text-xs text-fg-faint" title="This pan is set in code">—</div>
+          strip.channel && <div data-testid="pan-in-code" className="h-full grid place-items-center text-xs text-fg-faint" title="Its pan follows a lane or a signal in the code">—</div>
         )}
       </div>
       {/* M and S: mute and solo come here (8b.4), so nothing moves when they do. */}
@@ -445,7 +443,7 @@ function Fader({
   const written = knob.written ? `written as ${knob.literal}` : "not written in your code yet: moving it writes it in";
   const title = !editable
     ? `${locked ?? "It can't be edited right now"}.`
-    : `${label}, ${levelDb(value)}: ${written}\nDrag (${mod.shift} for fine) · scroll · double-click the level to type it · ${mod.alt}-click for 0 dB · the foot is silence`;
+    : `${label}, ${level(value)}: ${written}\nDrag (${mod.shift} for fine) · scroll · double-click to type a level · ${mod.alt}-click for 0 dB · the foot is silence`;
   const top = value <= SILENT ? `calc(100% - ${FOOT / 2}px)` : `calc((100% - ${FOOT}px) * ${1 - faderAt(value)})`;
   return (
     <div
@@ -456,6 +454,8 @@ function Fader({
       data-default={!knob.written || undefined}
       data-fader={name}
       aria-disabled={disabled}
+      // A double-click anywhere on it types a level (taste.md §5.2), but in the field itself.
+      onDoubleClick={(e) => !(e.target as HTMLElement).closest("input") && type()}
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -484,7 +484,7 @@ function Fader({
             aria-valuemin={SILENT}
             aria-valuemax={TOP}
             aria-valuenow={value}
-            aria-valuetext={value <= SILENT ? "−∞, silent" : levelDb(value)}
+            aria-valuetext={value <= SILENT ? "−∞, silent" : level(value)}
             data-testid="fader-thumb"
             onKeyDown={(e) => {
               if (e.metaKey || e.ctrlKey || e.altKey || pointer) return;
@@ -511,7 +511,7 @@ function Fader({
           <>
             <input
               autoFocus
-              data-testid="fader-type-in"
+              data-testid="knob-type-in"
               aria-label={`${label}: type a level`}
               aria-invalid={typing.bad || undefined}
               value={typing.text}
@@ -523,7 +523,13 @@ function Fader({
                 if (e.key === "Enter") {
                   if (!typed(typing.text)) setTyping({ ...typing, bad: true });
                 } else if (e.key === "Escape") closeTyping();
+                else if (e.key === "Tab") {
+                  e.preventDefault();
+                  if (!typed(typing.text)) return setTyping({ ...typing, bad: true });
+                  focusNext(thumb.current, e.shiftKey);
+                }
               }}
+              onPointerDown={(e) => e.stopPropagation()}
               // A click away writes what reads as a level, and drops what doesn't.
               onBlur={() => typingOpen.current && !typed(typing.text) && closeTyping()}
               className={clsx("w-14 h-5 px-1 rounded-sm bg-raised border text-center text-xs text-fg outline-none", typing.bad ? "border-danger" : "border-accent")}
@@ -539,13 +545,12 @@ function Fader({
             data-testid="fader-level"
             className={clsx("text-xs tabular-nums", knob.written ? "text-fg" : "text-fg-muted", editable && "cursor-text")}
             title={knob.written ? `${label}: double-click to type it` : "Default. Not written in your code yet: changing it writes it in"}
-            onDoubleClick={type}
           >
             {level(value)}
           </span>
         )}
       </div>
-      {pointer && <Bubble at={pointer}>{levelDb(value)}</Bubble>}
+      {pointer && <Bubble at={pointer}>{level(value)}</Bubble>}
       {menu && (
         <KnobMenu
           knob={knob}
@@ -742,25 +747,37 @@ function Pan({
         />
       </div>
       {typing ? (
-        <input
-          autoFocus
-          data-testid="knob-type-in"
-          aria-label={`${label}: type a value`}
-          aria-invalid={typing.bad || undefined}
-          value={typing.text}
-          spellCheck={false}
-          onFocus={(e) => e.currentTarget.select()}
-          onChange={(e) => setTyping({ text: e.target.value, bad: false })}
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (e.key === "Enter") {
-              if (!typed(typing.text)) setTyping({ ...typing, bad: true });
-            } else if (e.key === "Escape") closeTyping();
-          }}
-          onBlur={() => typingOpen.current && !typed(typing.text) && closeTyping()}
-          onPointerDown={(e) => e.stopPropagation()}
-          className={clsx("w-14 h-3.5 px-1 rounded-sm bg-raised border text-center text-xs leading-none text-fg outline-none", typing.bad ? "border-danger" : "border-accent")}
-        />
+        <span className="relative">
+          <input
+            autoFocus
+            data-testid="knob-type-in"
+            aria-label={`${label}: type a value`}
+            aria-invalid={typing.bad || undefined}
+            value={typing.text}
+            spellCheck={false}
+            onFocus={(e) => e.currentTarget.select()}
+            onChange={(e) => setTyping({ text: e.target.value, bad: false })}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") {
+                if (!typed(typing.text)) setTyping({ ...typing, bad: true });
+              } else if (e.key === "Escape") closeTyping();
+              else if (e.key === "Tab") {
+                e.preventDefault();
+                if (!typed(typing.text)) return setTyping({ ...typing, bad: true });
+                focusNext(svg.current, e.shiftKey);
+              }
+            }}
+            onBlur={() => typingOpen.current && !typed(typing.text) && closeTyping()}
+            onPointerDown={(e) => e.stopPropagation()}
+            className={clsx("block w-14 h-3.5 px-1 rounded-sm bg-raised border text-center text-xs leading-none text-fg outline-none", typing.bad ? "border-danger" : "border-accent")}
+          />
+          {typing.bad && (
+            <span role="alert" className="absolute left-1/2 -translate-x-1/2 top-full mt-0.5 z-10 whitespace-nowrap px-1 rounded-sm bg-raised text-xs text-danger">
+              Type a pan, like L20, C or R35
+            </span>
+          )}
+        </span>
       ) : (
         <span className={clsx("h-3.5 text-xs leading-[14px] tabular-nums", written ? "text-fg" : "text-fg-muted")}>{display(k, value)}</span>
       )}
