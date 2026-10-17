@@ -215,7 +215,24 @@ The owner's next `ci/check.sh` says.
 | The new test, old code | **FAIL**: "before the settings are read: the default, by its real path": `…/link/home/Music/music2` against `…/real/home/Music/music2` |
 | The new test, the fix | pass; `m2-server`'s 45 `project` unit tests pass (`mf-green-*.log`) |
 
-`the_songs_folder_is_under_home` now compares with `home()`, the real home, not `$HOME` as spelled.
+### The review's fix: a test that holds on any HOME (SONGS-REAL-PATH-SHOWN)
+
+The first fix changed `the_songs_folder_is_under_home` to "starts with `home()`, the real home". That fails when
+`~/Music` is a link out of the home folder (say to a Music folder on another disk). The songs folder then resolves
+to the link's target, and the home folder stays where it is. `ci/check.sh` runs tests with a scratch HOME with no
+link, so it never saw it. `cargo test` in a real HOME would. Now the test says what it means: the songs folder is
+`$HOME/Music/music2`, by its real path.
+
+| Run (`~/m2-runs/smf/songs-test.sh`: HOME with `Music` a link out of it, then a plain HOME) | Linked `Music` | Plain |
+|---|---|---|
+| The first fix's test (`mf-songs-red-1017-225111-*.log`, `mf-songs-red2-1017-225234-*.log`) | **FAIL** at `project.rs:1156`, "under the home folder, by its real path as the songs folder is" | pass |
+| The test now (`mf-songs-green-1017-225242-*.log`) | pass | pass |
+
+`m2-server`'s clippy `--all-targets -D warnings`: clean (`mf-clippy-1017-225256-*.log`).
+
+Left for the owner: with a linked `~/Music`, Settings and New Song show the real place (say
+`/Volumes/Big/Music/music2`), not `~/Music/music2`. That is the decision above: one folder, one name everywhere. If
+the owner wants the folder as spelled instead, it would be resolved only to compare (HANDOFF, Open owner decisions).
 
 ## C. Checks
 

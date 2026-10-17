@@ -1151,9 +1151,11 @@ mod tests {
 
     #[test]
     fn the_songs_folder_is_under_home() {
+        // `$HOME/Music/music2` by its real path. Not "starts with the real home": `~/Music` may be a
+        // link out of the home folder (a Music folder on another disk), and this holds on any HOME.
         let songs = songs_dir().unwrap();
         assert!(songs.ends_with("Music/music2"), "{}", songs.display());
-        assert!(songs.starts_with(home().unwrap()), "under the home folder, by its real path as the songs folder is");
+        assert_eq!(songs, real(Path::new(&std::env::var("HOME").unwrap()).join("Music/music2")), "$HOME/Music/music2, by its real path");
     }
 
     #[test]
