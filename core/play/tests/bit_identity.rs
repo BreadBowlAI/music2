@@ -344,3 +344,39 @@ fn a_no_op_activation_on_p50() {
     let heard = activated(&song, frames, &points(&song), &|info| song.against(&song, info, &Continues::identity(&song.flat)));
     assert_eq!(first_diff(&heard, &export), None, "p50: a no-op activation changed the output");
 }
+
+/// A track `t` playing a 440 Hz sine through `through` (`x` → what plays), then down by 1e-30 and
+/// 1e-10 (about 1e-40: subnormal) and back up by 1e30 and 1e10: near the sine again where
+/// subnormals are kept, silence where they are flushed to zero. Its probe, keyed `fz`, loads a state
+/// tagged `sets-fz` (`m2_plugins::probe`).
+fn subnormal_chain(what: &str, through: &str) -> Song {
+    let track = format!(
+        "import {{ kernel, plugin, track }} from \"@m2/core\";\nimport {{ osc }} from \"std/dsp\";\n\n\
+         const chain = (x: any) => [1e-30, 1e-10, 1e30, 1e10].reduce((y, by) => kernel(\"std:scale\", {{ in: y, by }}), x);\n\
+         const through = (x: any) => {through};\n\n\
+         export default track(\"t\", () => chain(through(osc.sine(440))));\n"
+    );
+    project(
+        what,
+        &[
+            ("song.ts", "import { song } from \"@m2/core\";\nimport t from \"./tracks/t\";\n\nexport default song(() => t.out);\n"),
+            ("tracks/t.ts", &track),
+            ("data/t/fz.state", "sets-fz"),
+            ("data/t/fz.state.json", r#"{"plugin": "clap:m2.probe", "plugin_version": "1.0.0"}"#),
+        ],
+    )
+}
+
+// RENDER-2a: a plugin that leaves its thread flushing subnormals to zero changes no bit of what
+// runs after it on that thread: the engine sets the one mode again after every plugin call. The
+// probe passes the sine through exactly (gain 1), so the song is the chain's without it.
+#[test]
+fn a_flush_to_zero_left_by_a_plugin_changes_no_bit() {
+    let with = subnormal_chain("fz-probe", "plugin(\"clap:m2.probe\", { key: \"fz\", in: x, gain_1: 1 })");
+    let without = subnormal_chain("fz-none", "x");
+    let frames = SR as usize / 10;
+    let (a, b) = (offline(&with, frames), offline(&without, frames));
+    assert!(peak(&b) > 0.5, "the chain gives the sine back: {}", peak(&b));
+    assert!(m2_plugins::probe::tagged("sets-fz").iter().any(|s| s.process.load(std::sync::atomic::Ordering::Relaxed) > 0), "the probe ran");
+    assert_eq!(first_diff(&a, &b), None, "the same bits after a plugin that sets flush-to-zero");
+}

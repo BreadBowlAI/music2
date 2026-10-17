@@ -41,6 +41,7 @@ pub mod data;
 pub mod engine;
 pub mod event;
 mod fade;
+mod fpenv;
 mod keep;
 mod overlay;
 pub mod packages;
@@ -679,6 +680,8 @@ impl PluginNode {
         }
         if std::mem::take(&mut self.reset_first) {
             host.reset(h);
+            // A plugin may leave the thread flushing subnormals (RENDER-2a).
+            fpenv::canon();
             // With the export's call before it, that ended the notes playback left in it: its live
             // node starts the ones the song still holds again at the resume.
             inst.mark_lent();
@@ -732,6 +735,8 @@ impl PluginNode {
             let mut io = m2_plugins::SharedBuffers { inputs: ins, n_in, outputs, n_out: channels.min(2), frames: run.n };
             self.out.clear();
             self.status = host.process(h, &mut io, &self.events, &mut self.out, &transport);
+            // A plugin may leave the thread flushing subnormals (RENDER-2a).
+            fpenv::canon();
             if self.status == m2_plugins::Status::Error {
                 if b.strict {
                     bail!("{} reported a processing error", self.name);
@@ -760,6 +765,7 @@ impl PluginNode {
         let Some(inst) = &self.inst else { return Ok(()) };
         if !inst.dead() {
             inst.host().reset(inst.handle());
+            fpenv::canon();
         }
         // Within its room (`ended` is as big as `keys`): never allocates on the audio thread.
         for k in self.keys.drain(..) {
@@ -2127,6 +2133,8 @@ impl Renderer {
     /// here once the block is done, as a panic in a node always was. Never allocates while it
     /// succeeds (RENDER-28).
     pub fn render_block_on(&mut self, clock: u64, runner: &mut Runner) -> Result<&[[f32; 2]; BLOCK]> {
+        // One floating-point mode for the block, and the caller's back after it (RENDER-2a).
+        let _mode = fpenv::Canon::enter();
         self.runs = self.transport.advance();
         self.clock = clock + BLOCK as u64;
         // Cell values written since the last block line (RENDER-22, RENDER-28); offline renders
@@ -2190,6 +2198,8 @@ impl Renderer {
         let lanes = &self.lanes.slots[..];
         let parts_ = &*parts;
         let task = |p: u32| -> bool {
+            // Whatever ran on this thread before, this partition computes in the one mode.
+            fpenv::canon();
             for &i in parts_.nodes(p) {
                 let i = i as usize;
                 // SAFETY: partition p's task alone runs its nodes this block, and every node it
@@ -2202,6 +2212,7 @@ impl Renderer {
                     return false;
                 }
             }
+            debug_assert!(fpenv::is_canon(), "partition {p} left the thread in another floating-point mode");
             true
         };
         if let Err(payload) = runner.run(tasks, &task) {
@@ -2479,6 +2490,8 @@ impl Renderer {
     /// Panic (RENDER-10): every note off, every instance reset. The next block seeks without
     /// chasing.
     pub fn panic(&mut self) -> Result<()> {
+        // Plugins are reset here, between blocks (RENDER-2a).
+        let _mode = fpenv::Canon::enter();
         self.reset()?;
         self.transport.enter();
         Ok(())

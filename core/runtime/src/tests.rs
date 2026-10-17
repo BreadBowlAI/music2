@@ -8,6 +8,7 @@ use super::*;
 
 mod audition;
 mod cell;
+mod fpenv;
 mod live;
 mod overlay;
 mod parts;
