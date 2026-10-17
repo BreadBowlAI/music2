@@ -489,6 +489,8 @@ impl Callback {
                         EngineMsg::Transport(Cmd::Seek(_)) => self.seeks += 1,
                         EngineMsg::Transport(Cmd::Play | Cmd::Stop) => self.plays += 1,
                         EngineMsg::Transport(_) | EngineMsg::Panic | EngineMsg::Hold(_) | EngineMsg::Live { .. } => {}
+                        // Nothing plays, so nothing counts in (lane B).
+                        EngineMsg::CountIn { .. } => {}
                     }
                 }
             }
@@ -1064,6 +1066,17 @@ impl Player {
 
     pub fn click(&self) -> bool {
         self.shared.click.load(Ordering::Relaxed)
+    }
+
+    /// Count in one bar, then play (lane B): `beats` clicks `frames_per_beat` engine frames apart,
+    /// the first accented, whether the metronome is on or not; the song is silent meanwhile and
+    /// plays from where it stands at the block after the bar. Applied as soon as the engine reads
+    /// it ([`Player::applied`] says at which block); a Play, a Stop, a seek or a hold cancels it.
+    pub fn count_in(&self, beats: u32, frames_per_beat: f64) -> Result<u64> {
+        if beats == 0 || !(frames_per_beat.is_finite() && frames_per_beat > 0.0) {
+            return Err(anyhow!("can't count in {beats} beats of {frames_per_beat} frames"));
+        }
+        self.envelope(EngineMsg::CountIn { beats, frames_per_beat })
     }
 
     /// Start playing, for tests and tools; [`Player::transport`] says whether it was sent.

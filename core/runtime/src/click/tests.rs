@@ -206,3 +206,127 @@ fn the_click_off_changes_no_bit() {
     assert!(same(&out[..BLIP], &export[..BLIP]).is_some(), "on, it clicks");
     assert_eq!(same(&out[24_000 + BLIP..], &export[24_000 + BLIP..]), None, "off again, not a bit changes");
 }
+
+// Lane B: the count-in. One bar of clicks from the engine's own frames, the transport stopped,
+// then the song plays from where it stood, at the block line after the bar.
+
+#[test]
+fn a_count_in_clicks_one_bar_then_plays() {
+    // 120 bpm in 4/4, stopped at bar 3 (beat 8, frame 192,000), the metronome on: four clicks
+    // half a second apart from the first, the first accented; then the song plays from beat 8 at
+    // frame 96,000 (750 blocks: a block line), and its downbeat clicks there, accented.
+    let mut rig = Rig::new(&sine(0.0), &at_bpm(120.0), false, true);
+    rig.send(Msg::Transport(Cmd::Seek(8.0)));
+    rig.send(Msg::CountIn { beats: 4, frames_per_beat: 24_000.0 });
+    let mut out = rig.run(96_000);
+    let st = rig.e.status();
+    assert!(st.playing, "playing once the bar is over");
+    assert_eq!(st.pos, 192_000, "from the start point, not a frame on");
+    out.extend(rig.run(24_000));
+    assert_eq!(onsets(&out), vec![0, 24_000, 48_000, 72_000, 96_000], "four clicks, then the song's first beat a bar after the first");
+    assert_eq!(accents(&out), vec![0, 96_000], "the count's first click, and the song's downbeat");
+    assert_eq!(rig.e.status().pos, 192_000 + 24_000, "the song moves from then on");
+}
+
+#[test]
+fn a_count_in_follows_the_meter() {
+    // 3/4 at 120 bpm: three quarters, 72,000 frames, which is 562.5 blocks; so the first click
+    // comes 64 frames into the first block, and the bar ends on the line at 72,064.
+    let arr = arrangement(json!({"tempo": [{"beat": 0, "bpm": 120}], "meter": [{"beat": 0, "beats": 3, "unit": 4}]}));
+    let mut rig = Rig::new(&sine(0.0), &arr, false, false);
+    rig.send(Msg::CountIn { beats: 3, frames_per_beat: 24_000.0 });
+    let out = rig.run(72_064);
+    assert_eq!(onsets(&out), vec![64, 24_064, 48_064]);
+    assert!(rig.e.status().playing && rig.e.status().pos == 0, "plays from the block line after the bar");
+    // 6/8 counts six eighths: 12,000 frames apart at 120 quarter notes a minute; the same bar.
+    let mut rig = Rig::new(&sine(0.0), &arr, false, false);
+    rig.send(Msg::CountIn { beats: 6, frames_per_beat: 12_000.0 });
+    let out = rig.run(72_064);
+    assert_eq!(onsets(&out), (0..6).map(|k| 64 + k * 12_000).collect::<Vec<_>>());
+    assert!(rig.e.status().playing);
+    // A fraction of a frame between clicks: click k at round(k × step).
+    let mut rig = Rig::new(&sine(0.0), &arr, false, false);
+    rig.send(Msg::CountIn { beats: 4, frames_per_beat: 20_000.4 });
+    let out = rig.run(80_128);
+    let bar = 80_002;
+    let pad = 80_128 - bar;
+    assert_eq!(onsets(&out), vec![pad, pad + 20_000, pad + 40_001, pad + 60_001]);
+}
+
+#[test]
+fn the_count_accents_its_first_click() {
+    let mut rig = Rig::new(&sine(0.0), &at_bpm(120.0), false, false);
+    rig.send(Msg::CountIn { beats: 4, frames_per_beat: 24_000.0 });
+    let out = rig.run(96_000);
+    assert_eq!(onsets(&out).len(), 4);
+    assert_eq!(accents(&out), vec![0], "higher and louder, as a bar's first beat");
+    // The metronome off, the song plays on with no click.
+    assert_eq!(onsets(&rig.run(48_000)), Vec::<usize>::new());
+}
+
+#[test]
+fn stop_cancels_a_count_in() {
+    let mut rig = Rig::new(&sine(0.0), &at_bpm(120.0), false, false);
+    rig.send(Msg::CountIn { beats: 4, frames_per_beat: 24_000.0 });
+    let mut out = rig.run(30_000);
+    rig.send(Msg::Transport(Cmd::Stop));
+    out.extend(rig.run(100_000));
+    assert_eq!(onsets(&out), vec![0, 24_000], "no click after the stop");
+    assert!(!rig.e.status().playing && rig.e.status().pos == 0, "and nothing plays");
+    // A seek cancels it too, and a hold for an export.
+    for cancel in [Msg::Transport(Cmd::Seek(2.0)), Msg::Hold(true)] {
+        let mut rig = Rig::new(&sine(0.0), &at_bpm(120.0), false, false);
+        rig.send(Msg::CountIn { beats: 4, frames_per_beat: 24_000.0 });
+        let mut out = rig.run(30_000);
+        rig.send(cancel);
+        out.extend(rig.run(70_000));
+        rig.send(Msg::Hold(false));
+        out.extend(rig.run(30_000));
+        assert_eq!(onsets(&out), vec![0, 24_000]);
+        assert!(!rig.e.status().playing);
+    }
+}
+
+#[test]
+fn play_while_counting_cancels_the_count() {
+    // Space during the count-in: the song plays at once, the count's clicks stop, and its end
+    // sends no second Play.
+    let mut rig = Rig::new(&sine(0.0), &at_bpm(120.0), false, false);
+    rig.send(Msg::CountIn { beats: 4, frames_per_beat: 24_000.0 });
+    let mut out = rig.run(30_000);
+    rig.send(Msg::Transport(Cmd::Play));
+    out.extend(rig.run(30_000));
+    assert!(rig.e.status().playing);
+    rig.send(Msg::Transport(Cmd::Stop));
+    out.extend(rig.run(70_000));
+    assert_eq!(onsets(&out), vec![0, 24_000], "no click after the Play");
+    assert!(!rig.e.status().playing, "stopped stays stopped: the count's end plays nothing");
+}
+
+#[test]
+fn a_count_in_wakes_an_idle_engine() {
+    let mut rig = Rig::new(&sine(0.0), &at_bpm(120.0), false, false);
+    assert!(rig.run(48_000).iter().all(|f| f[0] == 0.0));
+    assert!(rig.e.is_idle(), "stopped and silent: idle");
+    rig.send(Msg::CountIn { beats: 4, frames_per_beat: 24_000.0 });
+    let out = rig.run(96_000);
+    assert_eq!(onsets(&out), vec![0, 24_000, 48_000, 72_000], "every click, though silence lies between them");
+    assert!(rig.e.status().playing);
+}
+
+// Guard: with no count-in, or one cancelled before its first click, the engine plays the export's
+// bits.
+#[test]
+fn no_count_in_changes_no_bit() {
+    let (ir, arr) = (sine(0.5), at_bpm(120.0));
+    let n = frames(2.0);
+    let export = renderer(&ir, &arr).render(2.0).unwrap();
+    let same = |a: &[[f32; 2]], b: &[[f32; 2]]| a.iter().zip(b).position(|(x, y)| x[0].to_bits() != y[0].to_bits() || x[1].to_bits() != y[1].to_bits());
+    let mut never = Rig::new(&ir, &arr, true, false);
+    assert_eq!(same(&never.run(n), &export), None);
+    // 3/4: the first click would come 64 frames in; a Play read in the same block cancels it.
+    let mut cancelled = Rig::new(&ir, &arr, false, false);
+    cancelled.send(Msg::CountIn { beats: 3, frames_per_beat: 24_000.0 });
+    cancelled.send(Msg::Transport(Cmd::Play));
+    assert_eq!(same(&cancelled.run(n), &export), None);
+}

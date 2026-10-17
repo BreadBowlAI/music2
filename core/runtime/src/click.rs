@@ -34,6 +34,16 @@ pub struct Click {
     /// Its pitch, in radians per frame, and its peak.
     step: f64,
     gain: f64,
+    /// A count-in (lane B): beats left to click, the frames between them, frames into the count
+    /// (its first block's lead-in included), where its first click is, and frames in all (a
+    /// whole number of blocks, so the bar ends on a block line). `count_end` is set for the block
+    /// the bar ends with. Plain fields, as the rest (RENDER-28).
+    count_beats: u32,
+    count_step: f64,
+    count_done: u64,
+    count_pad: u64,
+    count_total: u64,
+    count_end: bool,
 }
 
 impl Click {
@@ -47,16 +57,62 @@ impl Click {
         self.on
     }
 
+    /// Count in one bar (lane B): `beats` clicks `frames_per_beat` apart, the first accented,
+    /// whatever the transport does, from this block on. Click k comes `round(k × frames_per_beat)`
+    /// frames after the first, and the bar is `round(beats × frames_per_beat)` frames, laid so it
+    /// ends on a block line: the first click comes `ceil(bar / BLOCK) × BLOCK − bar` frames into
+    /// this block. A count already running starts again.
+    pub fn count_in(&mut self, beats: u32, frames_per_beat: f64) {
+        let bar = (beats as f64 * frames_per_beat).round().max(1.0) as u64;
+        let total = bar.div_ceil(BLOCK as u64) * BLOCK as u64;
+        (self.count_beats, self.count_step, self.count_done) = (beats, frames_per_beat.max(0.0), 0);
+        (self.count_pad, self.count_total, self.count_end) = (total - bar, total, false);
+    }
+
+    /// Whether a count-in runs: its clicks sound, and the engine never idles.
+    pub fn counting(&self) -> bool {
+        self.count_total > 0
+    }
+
+    /// No count-in any more: a Play, a Stop, a seek or a hold came first. A blip that sounds rings
+    /// out.
+    pub fn cancel_count(&mut self) {
+        (self.count_total, self.count_end) = (0, false);
+    }
+
+    /// True once, after the block the count's bar ends with: the song plays from the next block.
+    pub fn count_ended(&mut self) -> bool {
+        std::mem::take(&mut self.count_end)
+    }
+
     /// Mix this block's clicks into `frames`: a blip at each grid point whose frame is in a
     /// moving run, `[at, at + n)`, so a run that starts on a beat clicks it and one that ends on
     /// it doesn't. Stopped, nothing starts. Never allocates.
     pub fn mix(&mut self, frames: &mut [[f32; 2]; BLOCK], runs: &Runs, r: &Renderer) {
-        if !self.on && self.ringing.is_none() {
+        if !self.on && self.ringing.is_none() && !self.counting() {
             return;
         }
         let rate = r.sample_rate() as f64;
         let mut starts = [(0u32, false); STARTS];
         let mut n = 0;
+        // A count-in's blips come from its own frames: the transport is stopped meanwhile.
+        if self.counting() {
+            let (from, to) = (self.count_done, self.count_done + BLOCK as u64);
+            for k in 0..self.count_beats {
+                let at = self.count_pad + (k as f64 * self.count_step).round() as u64;
+                if at >= to {
+                    break;
+                }
+                if at >= from && n < STARTS {
+                    starts[n] = ((at - from) as u32, k == 0);
+                    n += 1;
+                }
+            }
+            self.count_done = to;
+            if to >= self.count_total {
+                (self.count_total, self.count_end) = (0, true);
+            }
+        }
         if self.on {
             for run in runs.as_slice().iter().filter(|run| run.moving && run.n > 0) {
                 grid(r, rate, run.at, run.at + run.n as u64, &mut |frame, accent| {
