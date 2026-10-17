@@ -1,5 +1,6 @@
 // Small fixes (next, lane D's D4): the ruler shows markers and bar numbers both, and a tempo change
-// never touches its bar's number (a); the last bar number scrolls clear of Follow and zoom (b); a
+// never touches its bar's number (a); scrolled to the end of a song longer than the window, its last
+// bar numbers show clear of Follow and zoom (b); a
 // drum lane's note menu says rows, and its keys are rows alike (c); Shift with the wheel over a
 // fader scrolls the strips, never the fader (f). Each new state linted.
 //
@@ -65,26 +66,34 @@ await until(async () => !(await page.$('[data-testid=ruler] [data-mark="32"]')))
 
 // ---------------------------------------------------------------- b: the end of the ruler (Q29)
 
-// Zoomed out until a bar is narrower than the tools, so the last one's number would be under them.
+// A song longer than the window (a kick clip in bar 39: its room ends with bar 40), zoomed out to
+// bars of about 43 px: the timeline scrolls, and scrolled to the end, the song's last bar number
+// and its spare bar's both show, clear of Follow and zoom (red without the timeline's TOOLS_W).
+const kickWas = read("data/kick/hits.json");
+const kicks = JSON.parse(kickWas);
+kicks.clips.push({ id: "nitsfar1", start: 152, length: 4, notes: [{ pitch: "C1", start: 0, length: 0.25, velocity: 0.8 }] });
+write("data/kick/hits.json", JSON.stringify(kicks));
+await until(async () => (await state()).timeline.end >= 156);
 const barW = () => page.evaluate(() => {
   const a = document.querySelector('[data-testid=ruler] [data-bar="1"]')?.getBoundingClientRect();
   const b = document.querySelector('[data-testid=ruler] [data-bar="2"]')?.getBoundingClientRect();
   return a && b ? b.left - a.left : 0;
 });
-for (let i = 0; i < 8 && (await barW()) > 80; i++) {
+for (let i = 0; i < 8 && (await barW()) > 50; i++) {
   await page.click("[data-testid=zoom-out]");
   await sleep(250);
 }
-check((await barW()) >= 40 && (await barW()) <= 80, `zoomed out to bars of ${Math.round(await barW())} px`);
+check((await barW()) >= 35 && (await barW()) <= 50, `zoomed out to bars of ${Math.round(await barW())} px`);
+const over = await page.$eval("[data-testid=timeline]", (e) => [e.scrollWidth, e.clientWidth]);
+check(over[0] > over[1], `the timeline scrolls: ${over[0]} > ${over[1]}`);
 await page.$eval("[data-testid=timeline]", (e) => (e.scrollLeft = e.scrollWidth));
 await sleep(300);
-const last = await page.evaluate(() => {
-  const nums = [...document.querySelectorAll("[data-testid=ruler] [data-bar]")].map((e) => ({ bar: e.dataset.bar, right: e.getBoundingClientRect().right }));
-  return nums.reduce((a, b) => (b.right > a.right ? b : a), nums[0]);
-});
 const tools = await box("[data-testid=view-tools]");
-check(!!last && !!tools && last.right < tools.x, `scrolled to the end, the last bar number (${last?.bar}) ends left of Follow and zoom: ${last ? Math.round(last.right) : "?"} < ${tools ? Math.round(tools.x) : "?"}`);
+const ends = await page.evaluate(() => ["39", "40"].map((n) => document.querySelector(`[data-testid=ruler] [data-bar="${n}"]`)?.getBoundingClientRect().right ?? null));
+check(ends.every((r) => r !== null) && !!tools && ends.every((r) => r < tools.x), `scrolled to the end, bar 39's number (the song's last) and bar 40's (its spare) end left of Follow and zoom: ${JSON.stringify(ends.map((r) => (r === null ? "none" : Math.round(r))))} < ${tools ? Math.round(tools.x) : "?"}`);
 await page.$eval("[data-testid=timeline]", (e) => (e.scrollLeft = 0));
+write("data/kick/hits.json", kickWas);
+await until(async () => (await state()).timeline.end < 156);
 
 // ---------------------------------------------------------------- c: a drum lane (Q30)
 

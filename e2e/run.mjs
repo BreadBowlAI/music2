@@ -95,7 +95,7 @@ export const SUITES = [
   ["s8-leases", "fix", { expect: 55 }],
   ["pl-zoom", "fix", { expect: 62 }],
   ["pl-arrange", "fix", { expect: 57 }],
-  ["nx-nits", "fix", { expect: 26 }],
+  ["nx-nits", "fix", { expect: 27 }],
   ["s4-attn", "fix", { expect: 13 }],
   ["s4-problems", "fix", { expect: 18 }],
   ["s4-meter", "fix", { expect: 8 }],
