@@ -1535,8 +1535,21 @@ of 102 on lane A's page; with the fix, 102 of 102 (`st-int-plnotes2-*`).
 
 **A flaky suite, not the merge's:** `pl-notes` sometimes stops at a check the merge didn't touch ("the focus is back
 in the roll…", or a note not found right after Esc) when several suites run at once. Run four at a time, the page from
-`85b069a` failed 2 of 4 and the merged page 2 of 4 (`st-int-plnotes-flake-*`); alone, the merged page passed 6 of 7.
-For the End: run `pl-notes` alone.
+`85b069a` failed 2 of 4 and the merged page 2 of 4 (`st-int-plnotes-flake-*`). Alone, with the fix, the merged page
+passed 2 of 3 (`st-int-plnotes2-*`), and 4 of 4 more in a copy that only logged more. For the End: run `pl-notes`
+alone, and again if it stops at one of those two.
+
+**Clean-up:** the lane worktrees `wt/st-a` to `wt/st-d` are removed and their branches deleted (each was merged; its
+commits are in `studio`'s history). The lanes had already deleted their targets and `bin/` copies. Kept for the End:
+`target-st` (36 GB), `bin/st-67b2197`, `scratch/dist-before` (the page at `85b069a`, for red-first runs), and the
+lanes' pictures in `scratch/` (`a-app1` to `a-app8`, `a-shots`, `c-shots`, `shots/d2`).
+
+**Left for the End** (from the lanes' reports): Q30 (no export while recording); `tips()` in `st-audio`,
+`st-record`, `st-midi` and `st-stems`, and `st-tips`' joined places (the Record button and its menu, the take, the
+Export dialog, the volume popover, the drop hint); C2b (a MIDI file as new tracks, Import MIDI…, `.mid` drops,
+the tempo question), which can now use lane A's `tracks::add_tracks` and `drop.ts`; Export as MIDI… in the app needs
+a `save_file` action (it works in a browser page); the docs (gaps.md, README, architecture, taste.md, HANDOFF) from
+each section's For gaps.md and Contract lines; `music-basics.md` names no MIDI import, so it needs no trim.
 
 ## End
 
