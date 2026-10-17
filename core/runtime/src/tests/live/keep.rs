@@ -274,7 +274,9 @@ fn an_activation_against_another_plan_is_refused() {
 /// A package `t` of hand-written kernels: `t:latch` (its output turns NaN for good once its input
 /// goes over 0.5, until a reset), `t:spike` (infinite while its input is over 0.5, else 1; no
 /// state), `t:denan` (NaN and infinities to 0), `t:trap` (traps while its input is over 0.5,
-/// else outputs 1) and `t:tiny` (its init and reset keep 1e-30 × 1e-10, a subnormal, which it
+/// else outputs 1), `t:hog` (grows its memory by 600 pages, 37.5 MiB, while its input is over 0.5,
+/// trapping when the grow fails, else outputs 1), `t:fat` (its reset grows its memory by 600 pages;
+/// outputs 1) and `t:tiny` (its init and reset keep 1e-30 × 1e-10, a subnormal, which it
 /// outputs times 1e40: 1 where subnormals are kept, 0 where they were flushed; active while that
 /// product isn't 0).
 fn t_kernels() -> PathBuf {
@@ -313,6 +315,15 @@ fn t_kernels() -> PathBuf {
     let spike = out("(select (f32.const inf) (f32.const 1) (f32.gt (local.get $x) (f32.const 0.5)))");
     let denan = out("(select (local.get $x) (f32.const 0) (f32.lt (f32.abs (local.get $x)) (f32.const inf)))");
     let trap = format!("(if (f32.gt (local.get $x) (f32.const 0.5)) (then (unreachable))) {}", out("(f32.const 1)"));
+    let grow = "(if (i32.eq (memory.grow (i32.const 600)) (i32.const -1)) (then (unreachable)))";
+    let hog = format!("(if (f32.gt (local.get $x) (f32.const 0.5)) (then {grow})) {}", out("(f32.const 1)"));
+    let fat = format!(
+        r#"(func (export "fat_init") (param f32 i32 i32))
+           (func (export "fat_ports") (result i32) (i32.const 257)) {}
+           (func (export "fat_reset") (drop (memory.grow (i32.const 600))))
+           (func (export "fat_active") (result i32) (i32.const 0))"#,
+        port("fat")
+    ) + &each("fat", &out("(f32.const 1)"));
     // The factors are loaded from memory, so no compiler multiplies them ahead of time.
     let product = "(f32.mul (f32.load (i32.const 4100)) (f32.load (i32.const 4104)))";
     let tiny = format!(
@@ -324,21 +335,25 @@ fn t_kernels() -> PathBuf {
         port("tiny")
     ) + &each("tiny", &out("(f32.mul (f32.mul (f32.load (i32.const 4096)) (f32.const 1e30)) (f32.const 1e10))"));
     let wat = format!(
-        r#"(module (memory (export "memory") 1) (func (export "m2_abi") (result i32) (i32.const 0)) {} {} {} {} {})"#,
+        r#"(module (memory (export "memory") 1) (func (export "m2_abi") (result i32) (i32.const 0)) {} {} {} {} {} {} {})"#,
         common("latch") + &each("latch", &latch),
         common("spike") + &each("spike", &spike),
         common("denan") + &each("denan", &denan),
         common("trap") + &each("trap", &trap),
+        common("hog") + &each("hog", &hog),
+        fat,
         tiny,
     );
     std::fs::write(dir.join("k.wasm"), wat).unwrap();
     let kernel = |k: &str, input: &str| format!("[[kernel]]\nname = \"{k}\"\ninputs = [\"in: {input}\"]\noutputs = [\"out: audio<1>\"]\n");
     let manifest = format!(
-        "[package]\nname = \"t\"\nversion = \"0.1.0\"\nwasm = \"k.wasm\"\n\n{}{}{}{}{}",
+        "[package]\nname = \"t\"\nversion = \"0.1.0\"\nwasm = \"k.wasm\"\n\n{}{}{}{}{}{}{}",
         kernel("latch", "control<*>"),
         kernel("spike", "control<*>"),
         kernel("denan", "audio<1>"),
         kernel("trap", "control<*>"),
+        kernel("hog", "control<*>"),
+        kernel("fat", "control<*>"),
         kernel("tiny", "control<*>")
     );
     std::fs::write(dir.join("m2pkg.toml"), manifest).unwrap();
@@ -460,16 +475,21 @@ fn named(flat: &Flat, name: &str) -> usize {
     flat.nodes.iter().position(|n| n.name == name).unwrap_or_else(|| panic!("no node {name}"))
 }
 
-/// What [`two_tracks`] plays for `blocks` blocks, its kernel on `a` made to trap at the second
+/// What [`two_tracks`] plays for `blocks` blocks with `t:trap` on `a`, made to trap at the second
 /// block when `trap`, on this thread or with `threads` (spread): the output, then `a/lat`'s and
 /// `b/d`'s last block, and the engine.
 fn trapped(pk: &PackageSet, trap: bool, blocks: usize, threads: Option<Spread>) -> (Vec<[f32; 2]>, Vec<f32>, Vec<f32>, Rig) {
-    let f = check(&two_tracks("trap", false), pk).unwrap();
+    failing("trap", pk, trap, blocks, threads)
+}
+
+/// [`trapped`] with `t:<kind>` on `a`, cued to fail at the second block when `fail`.
+fn failing(kind: &str, pk: &PackageSet, fail: bool, blocks: usize, threads: Option<Spread>) -> (Vec<[f32; 2]>, Vec<f32>, Vec<f32>, Rig) {
+    let f = check(&two_tracks(kind, false), pk).unwrap();
     let mut rig = Rig::of(&f, &DataSet::empty(), build(&f, &DataSet::empty(), pk, &Owner::discard()));
     rig.threads = threads;
     rig.cmd(Cmd::Play);
     let mut out = rig.run(BLOCK);
-    cue(&rig, if trap { 1.0 } else { 0.0 }, 1);
+    cue(&rig, if fail { 1.0 } else { 0.0 }, 1);
     out.extend(rig.run(BLOCK));
     cue(&rig, 0.0, 2);
     out.extend(rig.run((blocks - 2) * BLOCK));
@@ -557,6 +577,35 @@ fn a_trap_still_fails_an_export_and_names_the_node() {
     let f = check(&ir, &pk).unwrap();
     let e = Renderer::new(&f, &DataSet::empty(), &pk, SR).unwrap().render(0.01).map(drop).unwrap_err();
     assert!(format!("{e:#}").contains("a/lat crashed"), "{e:#}");
+}
+
+// RENDER-32, RENDER-25: a kernel that asks for more than its 32 MiB traps at once, and says it ran
+// out of memory, naming the node and the cap, never "wasm trap". Offline the render fails so; live
+// the node stops alone, marked as out of memory, and the other track plays on.
+#[test]
+fn a_kernel_over_its_memory_says_it_ran_out() {
+    let pk = t_packages();
+    let mut ir = two_tracks("hog", false);
+    ir.modules[0].nodes[0] = serde_json::from_value(json!({"id": "cue", "op": "const", "value": 1})).unwrap();
+    let e = Renderer::new(&check(&ir, &pk).unwrap(), &DataSet::empty(), &pk, SR).unwrap().render(0.01).map(drop).unwrap_err();
+    assert_eq!(format!("{e:#}"), "a/lat ran out of memory: a sound may use up to 32 MB");
+    assert!(e.downcast_ref::<OutOfMemory>().is_some());
+    let lat = named(&check(&two_tracks("hog", false), &pk).unwrap(), "a/lat");
+    let (_, a, b, rig) = failing("hog", &pk, true, 6, None);
+    let (_, _, clean_b, _) = failing("hog", &pk, false, 6, None);
+    assert!(a.iter().all(|&x| x == 0.0) && b == clean_b, "it alone goes silent");
+    assert_eq!(rig.e.current().unwrap().info().stopped.why(lat), Some(Why::OutOfMemory));
+}
+
+// RENDER-32: a kernel that asks for more than its 32 MiB in its first reset, while it is built,
+// fails the build in the same words.
+#[test]
+fn a_kernel_over_its_memory_at_its_build_says_so() {
+    let pk = t_packages();
+    let mut ir = two_tracks("fat", false);
+    ir.modules[0].nodes[0] = serde_json::from_value(json!({"id": "cue", "op": "const", "value": 1})).unwrap();
+    let e = Renderer::new(&check(&ir, &pk).unwrap(), &DataSet::empty(), &pk, SR).map(drop).unwrap_err();
+    assert_eq!(format!("{e:#}"), "a/lat ran out of memory: a sound may use up to 32 MB");
 }
 
 // RENDER-10: a panic resets every box and clears every mark: the activation after it resets

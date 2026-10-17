@@ -10,6 +10,7 @@ branch (`8a-gaps`, worktree `~/m2-runs/wt/8a-g`, from `8a` at `98620e7`), with i
 | Gap | State | What it says |
 |---|---|---|
 | G1: a sound that crashes while the song plays | done | **Only that sound goes silent.** The rest plays on, bit for bit. Before, the whole song stopped. |
+| G2: a sound over its 32 MB | done | **It says "ran out of memory"**, with the sound and the cap. Before: "wasm trap: unreachable". The app no longer tells the user to close other apps for it. |
 
 ## G1: a kernel that crashes while the song plays goes silent alone
 
@@ -75,3 +76,43 @@ Each new test was shown red once by a small deliberate bug, its change and run k
 clippy clean, Linux and the Mac lint. Log: `~/m2-runs/logs/g1-check-1017-181044-1523245.log`. Its first run
 failed only its rustfmt step, on lines the tree had before (`rustfmt` follows a file's modules, and the tree
 isn't rustfmt-clean). The script now checks only new files, as `s2-check.sh` does.
+
+## G2: a kernel over its 32 MB says it ran out of memory
+
+### In short
+
+- **Before:** a kernel that asked for more than its 32 MiB got -1 from `memory.grow`. Its own code then trapped,
+  and the message said "wasm trap: wasm `unreachable` instruction executed". Nothing said "memory".
+- **Now:** the grow traps at once, and the error is `OutOfMemory`: "bass/delay ran out of memory: a sound may use
+  up to 32 MB". Live, the node stops alone, marked as out of memory (G1's path, `Why::OutOfMemory`). Offline the
+  render fails in those words. At a build (its init or first reset), the build fails in them.
+- **The app's own "out of memory" words don't catch it** (A6, D24). Those say the computer ran out and tell the user
+  to close other apps. A sound over its own cap isn't that. `out_of_memory` in `graph.rs` now passes it by.
+- **No std kernel comes near the cap** (`every_std_kernel_fits_its_memory_at_the_highest_rate`), so no render
+  changes: 10 of 10.
+
+### What was built
+
+| Where | What |
+|---|---|
+| `core/runtime/src/lib.rs` | `Cap`, the store's data: a `ResourceLimiter` (one instance, memory and table; a memory grow past `KERNEL_MEMORY` sets `refused` and traps). `ran_out`: an error from a call into a kernel becomes `OutOfMemory` when `refused` is set. Every call into a kernel goes through it: instantiate, `init`, `ports`, `port`, `process`, `reset`, `active` |
+| `core/runtime/src/stopped.rs` | `OutOfMemory { node }`, its words; `Why::of` reads it (`downcast_ref`, through any context) |
+| `crates/server/src/graph.rs` | `out_of_memory`: false when the chain holds an `OutOfMemory` (one line, D24) |
+
+The test kernel of `a_kernel_memory_never_moves` grew a page at every call, past the cap, and relied on the -1. It
+stops at the cap now (`memory.size` < 512), and still proves the memory never moves while it grows to it.
+
+### Tests
+
+| Test | Where | Proves | Red by |
+|---|---|---|---|
+| `a_kernel_over_its_memory_says_it_ran_out` | `keep.rs` (`t:hog`: grows 600 pages, 37.5 MiB, while its input is over 0.5, and traps on -1) | strict: exactly "a/lat ran out of memory: a sound may use up to 32 MB", an `OutOfMemory`; live: the node is silent, the other track the same bits as with no grow, the mark `OutOfMemory` | `g-oom-today` (the limiter as before: -1, no mark: "a/lat crashed: … wasm trap: wasm `unreachable` instruction executed"); `g-oom-unnamed` (the trap but no mark) |
+| `a_kernel_over_its_memory_at_its_build_says_so` | same (`t:fat`: its reset grows 600 pages) | the build fails in the same words | `g-oom-today` (the build succeeded); `g-oom-unnamed` |
+| `a_sound_over_its_memory_is_not_the_computer_running_out` | `crates/server/src/graph/tests.rs` | `plainly` leaves it in its own words; `unbuilt` says "couldn't get it ready to play", with them as the detail, and never "computer" | `g-oom-computer` (D24's line taken out: "the computer ran out of memory for it. Close other apps…") |
+| `a_kernel_memory_never_moves` (changed) | `core/runtime/src/tests.rs` | as before, up to the cap | — |
+
+### Checks
+
+`g-check.sh m2-runtime m2-play m2-server m2-editor`, load 6.6 at the start: renders 10 of 10 OK; tests all pass
+(runtime 176 + 1 ignored, server 236, editor 284, play's suites); clippy clean, Linux and the Mac lint. Log:
+`/home/jerry/m2-runs/logs/g2-check-1017-181854-1584955.log`.

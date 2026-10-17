@@ -66,7 +66,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use anyhow::{Context, Result, bail};
 use m2_ir::{FNode, FOp, Flat, Input, Kind, NoteField, PortRef, TimeOf};
 use m2_song::{Arrangement, DataSet, LaneData, TempoMap};
-use wasmtime::{Instance, Memory, Store, StoreLimits, StoreLimitsBuilder, TypedFunc};
+use wasmtime::{Instance, Memory, ResourceLimiter, Store, TypedFunc};
 
 pub use cells::{CellAt, CellId, CellInfo, CellMap, CellSlots, CellTarget};
 pub use data::{decls, lane_kind};
@@ -161,10 +161,54 @@ impl Seg {
 /// the block.
 type Buf = Vec<f32>;
 
+/// What a kernel's store may hold (RENDER-32): one instance, one memory of at most
+/// [`KERNEL_MEMORY`], one table. A grow past the memory's cap traps at once, so a kernel never runs
+/// on without what it asked for, and `refused` says why it stopped: [`OutOfMemory`].
+#[derive(Default)]
+struct Cap {
+    refused: bool,
+}
+
+impl ResourceLimiter for Cap {
+    fn memory_growing(&mut self, _current: usize, desired: usize, _maximum: Option<usize>) -> wasmtime::Result<bool> {
+        if desired > KERNEL_MEMORY {
+            self.refused = true;
+            wasmtime::bail!("a kernel asked for {desired} bytes of memory, past its {KERNEL_MEMORY}");
+        }
+        // A module's own maximum is wasmtime's to keep.
+        Ok(true)
+    }
+
+    fn table_growing(&mut self, _current: usize, _desired: usize, _maximum: Option<usize>) -> wasmtime::Result<bool> {
+        Ok(true)
+    }
+
+    fn instances(&self) -> usize {
+        1
+    }
+
+    fn tables(&self) -> usize {
+        1
+    }
+
+    fn memories(&self) -> usize {
+        1
+    }
+}
+
+/// `e`, from a call into kernel instance `name` in `store`: [`OutOfMemory`] when the call asked for
+/// more memory than a sound may use, else `e` itself.
+fn ran_out(store: &Store<Cap>, name: &str, e: impl Into<anyhow::Error>) -> anyhow::Error {
+    match store.data().refused {
+        true => OutOfMemory { node: name.to_string() }.into(),
+        false => e.into(),
+    }
+}
+
 /// One kernel instance, in a wasmtime `Store` of its own (RENDER-32): a box a plan activation can
 /// move into the next plan, whose memory goes when it drops.
 struct KernelInst {
-    store: Store<StoreLimits>,
+    store: Store<Cap>,
     /// The hash of the shape it was made for: what an activation checks before moving it.
     shape: u64,
     /// Live, it failed (RENDER-25): it plays silence and isn't called again until it is reset, as
@@ -241,10 +285,10 @@ impl KernelInst {
     /// constant inputs are written into its memory once.
     fn new(packages: &PackageSet, n: &FNode, id: &str, channels: u8, inputs: &[Input], sample_rate: f64, shape: u64) -> Result<KernelInst> {
         let (module, prefix) = packages.module_for(id).with_context(|| format!("{}: kernel `{id}` is not loaded", n.name))?;
-        let limits = StoreLimitsBuilder::new().memory_size(KERNEL_MEMORY).instances(1).memories(1).tables(1).build();
-        let mut store = Store::new(&packages.engine, limits);
-        store.limiter(|l| l);
-        let instance = Instance::new(&mut store, module, &[]).wctx(|| format!("{}: instantiating `{id}`", n.name))?;
+        let mut store = Store::new(&packages.engine, Cap::default());
+        store.limiter(|c| c);
+        let failed = |store: &Store<Cap>, e: anyhow::Error| ran_out(store, &n.name, e);
+        let instance = Instance::new(&mut store, module, &[]).wctx(|| format!("{}: instantiating `{id}`", n.name)).map_err(|e| failed(&store, e))?;
         let f = |name: &str| format!("{prefix}_{name}");
         let init = instance.get_typed_func::<(f32, u32, u32), ()>(&mut store, &f("init"))?;
         let ports = instance.get_typed_func::<(), u32>(&mut store, &f("ports"))?;
@@ -253,10 +297,10 @@ impl KernelInst {
         let process = instance.get_typed_func::<u32, ()>(&mut store, &f("process"))?;
         let active = instance.get_typed_func::<(), u32>(&mut store, &f("active"))?;
         let memory = instance.get_memory(&mut store, "memory").context("kernel has no memory")?;
-        init.call(&mut store, (sample_rate as f32, BLOCK as u32, channels as u32))?;
+        init.call(&mut store, (sample_rate as f32, BLOCK as u32, channels as u32)).map_err(|e| failed(&store, e.into()))?;
 
         let (n_in, n_out) = (inputs.len(), n.outputs.len());
-        let declared = ports.call(&mut store, ())?;
+        let declared = ports.call(&mut store, ()).map_err(|e| failed(&store, e.into()))?;
         if declared != ((n_in as u32) << 8 | n_out as u32) {
             bail!(
                 "{}: `{id}` has {} inputs and {} outputs, but its manifest declares {n_in} and {n_out}",
@@ -267,7 +311,7 @@ impl KernelInst {
         }
         let mut ptrs = vec![];
         for i in 0..(n_in + n_out) as u32 {
-            let p = port.call(&mut store, i)? as usize;
+            let p = port.call(&mut store, i).map_err(|e| failed(&store, e.into()))? as usize;
             if p == 0 || !p.is_multiple_of(4) || p + PORT_BYTES > memory.data_size(&store) {
                 bail!("{}: `{id}` returned a bad buffer for port {i}", n.name);
             }
@@ -325,7 +369,7 @@ impl KernelInst {
     fn process(&mut self, frames: usize) -> Result<()> {
         #[cfg(debug_assertions)]
         self.keep_inputs();
-        self.process.call(&mut self.store, frames as u32).wctx(|| format!("{} crashed", self.name))?;
+        self.process.call(&mut self.store, frames as u32).wctx(|| format!("{} crashed", self.name)).map_err(|e| self.ran_out(e))?;
         #[cfg(debug_assertions)]
         self.check_inputs(false)?;
         Ok(())
@@ -335,7 +379,7 @@ impl KernelInst {
     fn reset(&mut self) -> Result<()> {
         #[cfg(debug_assertions)]
         self.keep_inputs();
-        self.reset.call(&mut self.store, ())?;
+        self.reset.call(&mut self.store, ()).map_err(|e| self.ran_out(e))?;
         #[cfg(debug_assertions)]
         self.check_inputs(true)?;
         Ok(())
@@ -343,7 +387,12 @@ impl KernelInst {
 
     /// Whether it still holds sound that will come out later.
     fn active(&mut self) -> Result<bool> {
-        Ok(self.active.call(&mut self.store, ())? != 0)
+        Ok(self.active.call(&mut self.store, ()).map_err(|e| self.ran_out(e))? != 0)
+    }
+
+    /// `e`, from a call into it: [`OutOfMemory`] when the call asked for more than a sound may use.
+    fn ran_out(&self, e: impl Into<anyhow::Error>) -> anyhow::Error {
+        ran_out(&self.store, &self.name, e)
     }
 
     /// Its first reset, while it is built: a reset may grow the memory (a kernel builds its new
