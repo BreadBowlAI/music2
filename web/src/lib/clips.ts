@@ -7,7 +7,7 @@
 // can hold several clips, across tracks.
 
 import { create } from "zustand";
-import { clipIndex, findLane, hasOwnId, laneWriting, sameClip, type ClipRef, type GraphState, type TimelineLane, type TimelineView } from "./graph";
+import { clipIndex, findLane, hasOwnId, laneWriting, readJson, sameClip, type ClipRef, type GraphState, type TimelineLane, type TimelineView } from "./graph";
 import { beatNow } from "./clock";
 import { clean } from "./grid";
 import { recorded, type Step } from "./history";
@@ -132,7 +132,7 @@ export async function send(graph: GraphState, gesture: Gesture, step: Step): Pro
       headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) },
       body: JSON.stringify({ session: graph.session, gesture }),
     });
-    const json = await res.json().catch(() => ({}));
+    const json = await readJson(res);
     if (!res.ok) throw new Refused(json.error ?? `HTTP ${res.status}`, res.status === 409);
     const done = json as Done;
     q.revision = Math.max(q.revision, done.revision);
@@ -222,7 +222,7 @@ export async function removeAutomation(graph: GraphState, addr: LaneAddr, beat: 
     headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) },
     body: JSON.stringify({ session: graph.session, module: addr.module, lane: addr.lane, beat }),
   });
-  const json = await res.json().catch(() => ({}));
+  const json = await readJson(res);
   if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
   const done = json as { file: string; before: string; after: string; revision: number };
   if (done.before !== done.after) recorded(graph.session, done.revision, { name: `removing the ${name} automation`, structural: true });

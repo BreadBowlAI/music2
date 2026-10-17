@@ -3,7 +3,8 @@
 // The messages' rate and shape while playing and after a stop; meters that move, read through
 // `role="meter"` and `aria-valuenow`; Kick's at the floor while Kick is muted and Bass's still moving;
 // every meter at the floor a second after the song stops and when the socket closes; the fill's
-// colours and the peak hold's tick, read from the canvas. It also prints the real load and late
+// colours and the peak hold's tick, read from the canvas. And an answer for the song cut off on its
+// way (as when the window reloads) leaves the window as it was. It also prints the real load and late
 // callbacks while playing, for the status pill's states (information only).
 //
 //   node e2e/s8-meters.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
@@ -191,5 +192,30 @@ const closed = await levels();
 check(allFloor(closed), `the socket closing floors every meter at once (${JSON.stringify(closed)})`);
 check(await until(async () => (await levels()).song > -30, 5000), "and once it is open again, the meters move again");
 await stopSong();
+
+// ---------------------------------------------------------------- an answer cut off on its way
+
+// As when the window reloads while it asks for the song: the answer says 200, then its body never
+// arrives. That isn't an empty song: the window stays as it was. The socket reopening asks again.
+await page.evaluate(() => {
+  const real = window.fetch.bind(window);
+  window.__cut = "armed";
+  window.fetch = async (url, init) => {
+    if (window.__cut === "armed" && String(url) === "/api/graph" && (init?.method ?? "GET") === "GET") {
+      window.__cut = "sent";
+      const body = new ReadableStream({ start: (c) => c.error(new TypeError("Failed to fetch")) });
+      return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return real(url, init);
+  };
+});
+await page.evaluate(() => (window.__sockets ?? []).filter((s) => s.readyState === 1).forEach((s) => s.close()));
+check(await until(() => page.evaluate(() => window.__cut === "sent"), 8000), "the socket reopens and the page asks for the song: its answer is cut off");
+await sleep(500);
+const cutErrors = errors.filter((e) => /tempo|timeline|undefined/.test(e));
+check(
+  cutErrors.length === 0 && !!(await page.$('[data-module-tab="kick"]')) && !!(await page.$("[data-testid=timeline]")),
+  `the window stays as it was: the timeline and its tracks are there, with no page error${cutErrors.length ? `: ${cutErrors[0]}` : ""}`,
+);
 
 done(errors);

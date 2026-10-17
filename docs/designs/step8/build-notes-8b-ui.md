@@ -998,3 +998,16 @@ click has chosen another track (the click's own render runs the waiting effect f
 then puts the old track back. Seen with a recorder on the page: `kick → song` by the click at
 694 ms, then `song → kick` by the effect 1 ms later. The effect now works out the selection from
 the store as it is when it runs.
+
+**An answer cut off on its way crashed the window.** When the page asked for the song and the
+answer said 200 but its body never came (the window reloading as it waited, or the server going
+away), `request()` in `lib/graph.ts` read the body as `{}` and handed that on as the song. The
+window then failed on `timeline.tempo` and went blank. Seen with a recorder: `/api/graph`, status
+200, its body "Failed to fetch", then "Cannot read properties of undefined (reading 'tempo')".
+Now an OK answer cut off on its way throws `CutOff` (`readJson`, also used by `lib/overlays.ts` and
+`lib/clips.ts`), and the window keeps what it shows; the next event asks again.
+
+| Check | Before | After |
+|---|---|---|
+| s8-meters, 2 new checks: a cut-off answer, then "the window stays as it was" | `FAIL the window stays as it was: … TypeError: Cannot read properties of undefined (reading 'tempo')` | 24 of 24; taste, start, s6-write and s8-automation ok |
+| The taste suite 28 times at once (a stress run, `~/m2-runs/logs/8b-ui-review/flake-*`) | 25, 26, 26 and 23 of 28 ok in four runs: the two races above | 28 of 28, twice |

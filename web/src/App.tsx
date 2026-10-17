@@ -8,7 +8,7 @@ import Shortcuts from "./components/Shortcuts";
 import StartScreen from "./components/StartScreen";
 import NewSongDialog, { openNewSong } from "./components/NewSongDialog";
 import { exportSong, onExportEvent } from "./lib/exporting";
-import { editorHooks, graphApi } from "./lib/graph";
+import { CutOff, editorHooks, graphApi } from "./lib/graph";
 import { isMac, native, nativeAction, onMenu } from "./lib/native";
 import { followGridView } from "./lib/grid";
 import { canvas, useShell, VIEWS, type GridOp } from "./lib/shell";
@@ -20,6 +20,9 @@ const refreshGraph = () =>
     .get()
     .then((graph) => useStore.getState().set({ graph, ready: true }))
     .catch((error) => {
+      // An answer cut off on its way (the window reloading while it waited): the window stays as
+      // it was, and the next event asks again.
+      if (error instanceof CutOff) return;
       const { set, toast } = useStore.getState();
       set({ graph: null, ready: true });
       // "No project is open" is what the start screen says; anything else is worth saying.

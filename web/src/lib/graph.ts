@@ -553,6 +553,26 @@ const auth: Record<string, string> = token ? { "x-m2-token": token } : {};
  */
 export const clientId: string = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `c${Date.now()}${Math.random()}`;
 
+/**
+ * An answer that said OK but whose body never arrived whole: the window reloading while it waited,
+ * or the server going away. It isn't an empty answer, so the caller keeps what it has.
+ */
+export class CutOff extends Error {
+  constructor() {
+    super("The server's answer was cut off. Try again.");
+  }
+}
+
+/** An answer's JSON. An error answer with none reads as {}; an OK one cut off on its way throws `CutOff`. */
+export async function readJson(res: Response): Promise<any> {
+  try {
+    return await res.json();
+  } catch {
+    if (res.ok) throw new CutOff();
+    return {};
+  }
+}
+
 async function call<T = any>(path: string, body?: unknown): Promise<T> {
   return request<T>(`/api/graph${path}`, body);
 }
@@ -560,7 +580,7 @@ async function call<T = any>(path: string, body?: unknown): Promise<T> {
 /** POST `body`, answering the status with the JSON: for a route whose 409 says something to ask. */
 async function answer<T>(path: string, body: unknown): Promise<{ status: number; json: T & { error?: string } }> {
   const res = await fetch(`/api/graph${path}`, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
-  const json = await res.json().catch(() => ({}));
+  const json = await readJson(res);
   if (!res.ok && res.status !== 409) throw new Error(json.error ?? `HTTP ${res.status}`);
   return { status: res.status, json };
 }
@@ -572,7 +592,7 @@ async function request<T>(url: string, body?: unknown): Promise<T> {
     headers: { "content-type": "application/json", ...auth },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const data = await res.json().catch(() => ({}));
+  const data = await readJson(res);
   if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
   return data as T;
 }

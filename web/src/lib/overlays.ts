@@ -6,7 +6,7 @@
 // `overlays`. Mute in the song is an edit: one undo step, the `muted` option in the track's code.
 
 import { create } from "zustand";
-import { moduleName, type GraphState } from "./graph";
+import { moduleName, readJson, type GraphState } from "./graph";
 import type { Heard, OverlayState } from "./graph8b";
 import { recorded } from "./history";
 import { token } from "./native";
@@ -52,7 +52,7 @@ const auth: Record<string, string> = token ? { "x-m2-token": token } : {};
 /** POST `body` to a graph route; an error answer throws with the server's words. */
 async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`/api/graph${path}`, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
-  const data = await res.json().catch(() => ({}));
+  const data = await readJson(res);
   if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
   return data as T;
 }
