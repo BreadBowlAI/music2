@@ -409,7 +409,256 @@ Songs and tracks.
 
 ## Lane D
 
-Notes and automation.
+Notes and automation: the note menu and tools, the song's key, automation on its own scale, hiding
+one automation lane.
+
+There was no P0 when this lane started: lane D made the seams it needs itself, in its own files
+where it could, and in small blocks of the shared ones (each named below).
+
+### D1. A menu on notes, and note tools
+
+**In short.** Right-click a note in Notes. A menu opens. It can move notes up or down, put them on
+the grid, make them longer, loosen them up, or swing them. Each one is one undo step.
+
+| Row | Key | What it does |
+|---|---|---|
+| Up / Down a semitone | ↑ / ↓ | moves the notes one key |
+| Up / Down an octave | ⇧↑ / ⇧↓ | moves the notes 12 keys |
+| Quantize to 1/16 | Q | puts each note's start on the grid |
+| Legato | — | each note lasts until the next one starts |
+| Humanize | — | moves timing (up to 10 ms) and loudness (up to 8%) a little |
+| Swing: Light · Medium · Heavy | — | every second note a little later (55%, 60%, 66%) |
+| Duplicate | ⌘D | copies the notes after them |
+| Delete | ⌫ | takes the notes out |
+
+- The menu acts on the selected notes. With none selected, it acts on every note: its first line
+  says "All 12 notes". Then it shows no arrow keys, since those move only selected notes (X28).
+- Right-click on a note that isn't selected selects it, alone. On empty grid the selection stays.
+- Read only (the code doesn't compile): the menu opens, every row greyed, its tooltip saying why.
+- Esc closes it. The roll keeps the keyboard all along.
+
+**What changed**
+- `web/src/lib/noteTools.ts` (new, pure): `transpose`, `quantize`, `legato`, `humanize`, `swing`.
+  Each takes the notes and the picked indices and gives the notes after, or null when nothing
+  changes. Swing **sets** each off-beat note to its swung place (X27): twice is the same as once,
+  and Light after Heavy moves them back. A note is off-beat when it starts from a quarter step
+  before its pair's middle to just past Heavy's place (1.35 steps in), so a change of amount finds
+  them. A swung note keeps its end, so it never runs into the next note. Pairs are eighths when the
+  roll's grid is 1/8 or wider, else sixteenths (Q26).
+- `web/src/components/NoteMenu.tsx` (new): the menu, on `Popover` and `MenuRow` (taste.md §2.14),
+  the Swing row a segmented control, the tooltips in X41's words.
+- `web/src/components/NoteView.tsx`: the grid's right-click; Q (the selection, or every note);
+  each tool one lane write with its own undo name ("transposing Bass notes", "quantizing Bass
+  notes to 1/16", "making Bass notes legato", "humanizing Bass notes", "swinging Bass notes": the
+  house's "Undo renaming the song" style, not the plan's "Transpose Bass notes"). The arrow keys
+  ignore ⌥ (X1). A Ctrl-click on a Mac starts no gesture: it is a right-click there (X7). The
+  grid's tooltip ends "right-click for note tools". Hooks: `editorHooks.quantize` (X2) and
+  `editorHooks.zoom` (X3, the roll's own zoom ×1.5) while the roll has the keyboard.
+- Shared blocks: `lib/graph.ts` declares the two hooks; `App.tsx`'s `quantize` asks
+  `editorHooks.quantize` first (X2). `Shortcuts.tsx`: two rows at the end of Edit.
+- `crates/editor/src/notes.rs` (outside the plan's list; no lane owns it): `describe` gave "4 notes
+  → 4 notes" for any edit of as many notes either side. The page names an undo step only when the
+  two sides differ, so every multi-note edit in the roll (a tool, a drag of several notes) had an
+  unnamed Undo. Now it adds what tells them apart: their pitches ("4 notes, A1 to C2 → 4 notes, A2
+  to C3"), where the first plays, their lengths or their velocities; else ", changed".
+
+**Tests**
+- New suite `pl-notes` (kind `fix`, 61 checks with D1), after `s8-audition`: see `e2e/README.md`.
+- Rust: `notes::tests::an_edit_is_described_by_what_it_changed` gains five cases.
+- Moved and green: `notes` 52, `fixes-notes` 37, `s8-audition` 51, `pc-keys` 37, `taste` 39,
+  `s8-clips` 94, `s4-clips` 28, `g11-play` 24, `undo` 10. `m2-editor`: 251 tests and clippy.
+
+**Red first** (the page and server at `29430e8`; then the page without X1 and X7; then the
+server without the label change):
+```
+FAIL  right-click on a note opens its menu
+FAIL  its rows, in order, with their keys: []
+FAIL  ⌥→ and ⌥← with notes selected move no note: they are the markers' keys
+FAIL  a Ctrl-drag on a note on a Mac moves nothing: Ctrl-click is a right-click there
+FAIL  Undo names it: Undo (⌘Z)
+  left: "4 notes → 4 notes"
+ right: "4 notes, A1 to C2 → 4 notes, A2 to C3"
+```
+
+**Left.**
+- `App.tsx`'s `zoom_in` and `zoom_out` (lane B's or the lead's) must ask `editorHooks.zoom?.(dir)`
+  first, so ⌘= and ⌘− zoom the roll while it has the keyboard (X3). The hook is there.
+- Edit ▸ Quantize through the menu bar is checked only in the app (no browser suite has the menu
+  bar): the End's Linux run.
+
+**For gaps.md.** Note tools are done: a right-click menu with transpose, quantize (Q), legato,
+humanize and swing. Left: swing amounts other than three, groove templates.
+**Contract.** None.
+
+### D2. The song's key
+
+**In short.** The top bar has a Key field after the time signature. Click it and pick a key, like
+"A minor". Notes then shades the rows that are not in the key. Nothing is locked. The key is saved
+in `layout.json`, so it goes with the song.
+
+| What | How |
+|---|---|
+| Pick a key | Click "Key", choose Major or Minor, then a root (C, C♯, D, E♭, E, F, F♯, G, A♭, A, B♭, B) |
+| Change Major / Minor | With a key set, Major or Minor changes it at once |
+| Take it out | No key |
+| Undo | ⌘Z: "Undo key A minor" |
+
+**What changed**
+- `crates/editor/src/songkey.rs` (new): `SongKey { root, scale }`, `read(&Layout)`, `of(dir)`,
+  `set(s, Option<SongKey>)`. One Tx of `layout.json` alone (no revision, one undo step), as
+  reorder is: `Expect::Identical`, based on the file on disk. Roots read by any name (`C#`, `C♯`,
+  `Db`, `D♭`) and are written in ASCII (`C#`, `Eb`, …) so a hand or a script can write them; the
+  label uses ♯ and ♭ ("E♭ major"). Scales: major and minor. The key is kept in `Layout.other`, so
+  `layout.rs` didn't change: a new key goes right after `markers`, and an old one stays in its
+  place. Refused while `layout.json` doesn't read (R15). Setting the key it has writes nothing.
+- `TimelineView.key` (`timeline.rs`, its three places), published in the timeline's head
+  (`graph/actor.rs`). The watcher already republishes when `layout.json` changes, so a key written
+  by hand shows.
+- `crates/server/src/graph/songkey.rs`: `Graph::song_key`. `crates/server/src/routes_notes.rs`
+  (new router, merged in `routes.rs`): `POST /api/graph/song-key {session, key: {root, scale} |
+  null}`, a write (423 read only). Named `song-key`, apart from a track's ID (X42).
+- Web: `lib/songKey.ts` (the call, the undo name, the pitch classes in a key, `TimelineView.key`
+  by `declare module`); `KeyField.tsx` (the field and its picker); `TopBar.tsx` mounts it in the
+  tempo group and **measures** the name's room (Q23): twice the distance from the bar's middle to
+  the nearer group, less 8 px a side, from the free space between the groups (a `ResizeObserver`).
+  Under 56 px the name goes. `SongBar.tsx`: `SongTitle`'s field keeps to that room (160 to 480 px
+  when there is room). `NoteView.tsx`: `Lanes` shades the pitch classes out of the key (the grid
+  says which in `data-shaded`); a lane that names its drums (lane A's `names`) is never shaded by
+  the key (X26).
+
+**Tests**
+- Rust `crates/editor/src/songkey_tests.rs`: `a_key_is_written_into_layout_json`,
+  `no_key_removes_it`, `markers_and_unknown_keys_stay`, `a_scale_that_isnt_major_or_minor_is_refused`,
+  `undo_puts_it_back`, `an_unreadable_layout_refuses`.
+- `pl-notes` grows to 98 checks (see `e2e/README.md`). The test key is E minor (X32): F♯'s row
+  plain, F's shaded, the other way round from the black keys.
+- Moved and green: `s8-songbar` 82, `fx-fixes` 75, `taste` 39, `layout` 39, `notes` 52. `m2-editor`
+  257 and `m2-server` 218 tests, clippy on both.
+
+**Red first** (the tests against a stub `set` that refuses; the suite on D1's page):
+```
+test songkey::tests::a_key_is_written_into_layout_json ... FAILED
+test songkey::tests::undo_puts_it_back ... FAILED
+FAIL  the top bar has a Key field
+FAIL  with no key, the roll shades the black keys' rows: F♯ (66) shaded, F (65) plain
+```
+
+**Left.**
+- More scales, scale lock, chords (scale help, gaps #16).
+- X26 is in the code but untested here: no lane names its drums until lane A lands.
+
+**For gaps.md.** #6 (key and scale): the song's key is done, major and minor, in the top bar and
+`layout.json`; Notes shades the rows out of it. Left: other scales and scale help (#16).
+**Contract.** FMT-19: `layout.json` gains `key: {"root": "A", "scale": "minor"}` (ASCII roots),
+written by `POST /api/graph/song-key`, not by `/api/graph/layout`. The timeline view gains `key`.
+
+### For the merge (lane D's blocks in files others touch)
+
+| File | Lane D's block | Meets |
+|---|---|---|
+| `web/src/App.tsx` | `quantize` asks `editorHooks.quantize` first (X2) | P0a's keys, B's zoom ids: add `editorHooks.zoom?.(dir)` first there (X3) |
+| `web/src/lib/graph.ts` | `editorHooks.quantize`, `editorHooks.zoom` | — |
+| `web/src/components/Shortcuts.tsx` | two rows at the end of Edit | — |
+| `web/src/components/SongTimeline.tsx` | `laneScale` in `pointsFrom`, the hit test, `LaneClips`, `Curve`; hidden lanes in `TrackRows`, `songH`, the reveal effect, the header menu's row | lane B's zoom (`PPB`) and heights (`rowHeight`, `songH`): keep both; hidden lanes count in B's sums |
+| `web/src/components/TopBar.tsx`, `SongBar.tsx` (`SongTitle`) | the Key field; the name's measured room | lane C's Save As / Rename (if they touch the title) |
+| `web/src/components/NoteView.tsx` | the menu, Q, X1, X7, the key's shading in `Lanes` | lane A's `RollKeys` / `rowNames` (drum names): `Lanes` reads the lane's `names` for X26 |
+| `crates/editor/src/timeline.rs`, `graph/actor.rs` | `TimelineView.key` and its head field | lane B's `markers`: both fields |
+| `crates/server/src/lib.rs`, `routes.rs`, `graph.rs` | `mod routes_notes`, its merge line, `mod songkey` | every lane's own lines |
+| `web/src/lib/local.ts`, `routes_view.rs`, `view_file.rs` | lane B's commit, as it is | lane C's own store: keep one |
+| `e2e/s8-automation.mjs` | the header menu's rows include Hide this lane | — |
+
+### The view store, taken from lane B
+
+D4 keeps hidden lanes in the song's `view.json`, through the view store. There was no P0b-2, and
+lane B had built it (`2a6d3c1`), so this lane took that commit as it is (`git cherry-pick -x`,
+`74fd748`): the same files and lines, so merging both lanes meets no new conflict there. Lane C
+built a store of its own with the same calls (`useLocal`, `getLocal`, `setLocal`, `flushLocal`,
+`POST /api/graph/view`): the lead keeps one.
+
+### D3. Automation on the control's own scale
+
+**In short.** An automation lane for a frequency (a filter's cutoff) now draws like the knob turns:
+low notes get as much room as high ones. The middle of the lane is about 632 Hz, not half of
+20 kHz. Other lanes look as before.
+
+| Lane's unit | Scale | Lines between points |
+|---|---|---|
+| Hz | log, 20 Hz to 20 kHz, wider if a point is outside | curved, as they play (straight in Hz) |
+| any other | linear, as before (the server's range) | straight |
+
+**What changed**
+- `web/src/lib/laneScale.ts` (new): `laneScale(lane)` → `{log, level, value, round, path}`. By the
+  lane's unit only (X17: an input a lane drives has no knob, and first-song's cutoff feeds a
+  `blend`, so the knob's range was never there to use). On the log scale a value is rounded to 3
+  figures (632, 1.99 kHz); on a linear one as before. `path` cuts each sloped piece into 16.
+- `SongTimeline.tsx` (P0b-1's extraction, done here): the curve, the hit test, a click, a drag
+  and Draw mode's paint go through the lane's scale. Draw mode fills in between pointer moves
+  along the drawing, so along the scale.
+- `lib/points.ts`: `hit` takes the drawn path, so a press finds the curved line where it is drawn.
+
+**Tests** — new suite `pl-lanes` (kind `fix`, 11 checks), after `pl-notes`: see `e2e/README.md`.
+Moved and green: `s8-automation` 45, `s8-mix` 80, `taste` 39.
+
+**Red first** (D2's page):
+```
+FAIL  1 kHz is drawn where a log scale over 20 Hz to 20 kHz puts it: 228.2 (log 221.6, linear over the points 228.2)
+FAIL  the line between them curves, as it plays straight in value: 3 vertices (3 straight)
+FAIL  at half height it writes about 632 Hz: 7520 (the log scale at that pixel: 632; linear would be about 7515)
+```
+
+**Left.**
+- Automation lanes are 32 px tall, so a pixel is a big step on a 20 Hz to 20 kHz scale. Lane B's
+  taller lanes help. Typing a point's value is not there yet.
+- Seconds (an attack, a delay time) still draw linear: the plan's X17 keeps them as they were.
+
+**For gaps.md.** Automation of a frequency draws on a log scale. Left: other log units (times),
+typing a point's value, curves between points (Q28).
+**Contract.** None.
+
+### D4. Hide one automation lane
+
+**In short.** Right-click an automation lane's name and pick "Hide this lane". The lane goes away.
+A small line under the track says "1 hidden lane · Show". Show brings it back. The song keeps this
+for next time.
+
+| Way | What happens |
+|---|---|
+| Hide this lane (the lane's header menu) | that lane goes; the line shows under the track's lanes |
+| Show (on the line) | every hidden lane of the track comes back |
+| A, or the track's chevron | shows the track's lanes, never a hidden one |
+| Automate, or "Show … lane" on the input a lane drives | that lane comes back |
+| Close and open the song | still hidden: `.music2/view.json` keeps `hidden: ["bass.drop"]` |
+
+**What changed**
+- `web/src/lib/hiddenLanes.ts` (new): `useHidden(module)`, `useAllHidden()`, `hide`, `show`, over
+  the view store's `hidden` key; a lane made or asked for (`laneMade`, `lib/events.ts`) shows.
+- `web/src/components/HiddenLanes.tsx` (new): `HiddenRow`, the 20 px line, Show a link button.
+  Only while the track's lanes show (X44).
+- `SongTimeline.tsx`: the track's rows leave hidden lanes out and end with the line; the Song row's
+  height (`songH`) counts both; a lane asked for is revealed once it shows; the lane header's menu
+  gains "Hide this lane", between Remove automation and Hide automation.
+- `e2e/s8-automation.mjs`: its check of the header menu's rows names the new row (still 45 checks).
+
+**Tests** — `pl-lanes` grows to 28 checks (see `e2e/README.md`). The plan's "Automate on Drop's
+knob" can't be done in first-song (Drop is a lane read through a cable, not a knob), so the suite
+automates Bass's Drive, hides that lane, and brings it back with "Show Drive lane": the same event.
+Moved and green: `s8-automation` 45, `s8-clips` 94, `layout` 39, `views` 30, `s8-tracks` 75,
+`start` 24, `s8-mute` 152, `taste` 39, `pl-notes` 98.
+
+**Red first** (D3's page):
+```
+FAIL  the Drop lane's header menu: Remove automation, Hide this lane, Hide automation (unautomate,hide)
+FAIL  Hide this lane takes Drop's row away, and only it
+FAIL  a line under Bass's lanes says so: null
+```
+
+**Left.**
+- A track's lanes all hidden still shows its chevron and, unfolded, only the line. Fine, but a
+  "show all" for the whole song isn't there.
+- When a track's ID changes, its `hidden` entries don't follow yet (lane A's rekey, X20).
+
+**For gaps.md.** #17's rest: one automation lane can be hidden, kept per song.
+**Contract.** FMT-20: `view.json`'s `hidden` lists hidden lanes as `module.lane`.
 
 ## Merge
 

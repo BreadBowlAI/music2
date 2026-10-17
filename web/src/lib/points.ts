@@ -29,9 +29,18 @@ function toSegment(x: number, y: number, [ax, ay]: number[], [bx, by]: number[])
 
 /**
  * What a press at (x, y) in the drawing hits: a point (its index, the nearest within `NEAR` px),
- * else the curve (within `NEAR` px of the line), else nothing: the clip's body.
+ * else the curve (within `NEAR` px of the line, as `path` draws it), else nothing: the clip's body.
  */
-export function hit(points: readonly Point[], length: number, level: (v: number) => number, w: number, h: number, x: number, y: number) {
+export function hit(
+  points: readonly Point[],
+  length: number,
+  level: (v: number) => number,
+  w: number,
+  h: number,
+  x: number,
+  y: number,
+  path: (points: readonly Point[], length: number) => Point[] = line,
+) {
   let best = -1, near: number = NEAR;
   points.forEach((p, i) => {
     const [px, py] = at(p, length, level, w, h);
@@ -39,7 +48,7 @@ export function hit(points: readonly Point[], length: number, level: (v: number)
     if (d <= near) [best, near] = [i, d];
   });
   if (best >= 0) return { point: best };
-  const drawn = line(points, length).map((p) => at(p, length, level, w, h));
+  const drawn = path(points, length).map((p) => at(p, length, level, w, h));
   for (let i = 1; i < drawn.length; i++) if (toSegment(x, y, drawn[i - 1], drawn[i]) <= NEAR) return { curve: true as const };
   return null;
 }

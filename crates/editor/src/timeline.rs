@@ -23,6 +23,8 @@ pub struct TimelineView {
     pub end: f64,
     /// Modules with rows: tracks, and any other module that declares a lane.
     pub tracks: Vec<TimelineTrack>,
+    /// The song's key, from `layout.json` (the polish plan's D2): None when it says none.
+    pub key: Option<crate::songkey::SongKey>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -117,7 +119,8 @@ pub fn timeline(s: &Session) -> TimelineView {
     in_order(&mut tracks, &layout);
     let a = &rev.project.arrangement;
     let bar = a.meter_at(0.0).bar();
-    TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), home: Home::Arrangement, end: data.end().max(bar), tracks }
+    let key = crate::songkey::of(&rev.project.dir);
+    TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), home: Home::Arrangement, end: data.end().max(bar), tracks, key }
 }
 
 /// A module's colour by name: a track's from the layout, else graphite.
@@ -142,7 +145,15 @@ fn in_order(tracks: &mut [TimelineTrack], layout: &crate::layout::LayoutView) {
 fn last_known(rev: &Revision) -> TimelineView {
     let Ok(project) = Project::from_snapshot(&rev.snapshot) else {
         let a = &rev.project.arrangement;
-        return TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), home: Home::Arrangement, end: a.meter_at(0.0).bar(), tracks: vec![] };
+        let key = crate::songkey::of(&rev.project.dir);
+        return TimelineView {
+            tempo: a.tempo.clone(),
+            meter: a.meter.clone(),
+            home: Home::Arrangement,
+            end: a.meter_at(0.0).bar(),
+            tracks: vec![],
+            key,
+        };
     };
     let mut modules: BTreeMap<String, Vec<TimelineLane>> = BTreeMap::new();
     let mut end: f64 = 0.0;
@@ -176,7 +187,15 @@ fn last_known(rev: &Revision) -> TimelineView {
         .collect();
     in_order(&mut tracks, &layout);
     let a = &project.arrangement;
-    TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), home: Home::Arrangement, end: end.max(a.meter_at(0.0).bar()), tracks }
+    let key = crate::songkey::of(&rev.project.dir);
+    TimelineView {
+        tempo: a.tempo.clone(),
+        meter: a.meter.clone(),
+        home: Home::Arrangement,
+        end: end.max(a.meter_at(0.0).bar()),
+        tracks,
+        key,
+    }
 }
 
 /// `kick` → `Kick`.

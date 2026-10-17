@@ -176,7 +176,7 @@ const headerBox = await box('[data-lane="kick.decay"] > div:first-child');
 await page.mouse.click(headerBox.x + 60, headerBox.y + headerBox.height / 2, { button: "right" });
 await page.waitForSelector("[data-testid=clip-menu]");
 const headerMenu = await menuRows();
-check(headerMenu.join(" | ") === "Remove automation | Hide automationA", `the lane's header has its menu: ${headerMenu.join(" | ")}`);
+check(headerMenu.join(" | ") === "Remove automation | Hide this lane | Hide automationA", `the lane's header has its menu: ${headerMenu.join(" | ")}`);
 await page.click('[data-testid=clip-menu] [data-menu-item="unautomate"]');
 check(await until(() => !exists("data/kick/decay.json") && !read("tracks/kick.ts").includes("lane.control")), "Remove automation takes the lane's file away and its read out of the code");
 const w1 = written();

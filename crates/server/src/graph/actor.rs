@@ -668,9 +668,11 @@ impl Open {
         let data = &self.session.accepted().compiled.data;
         // Every field but the tracks, each named: a field the view gains can't be left out of
         // what is published (as `home` once was), since this no longer compiles.
-        let m2_editor::TimelineView { tempo, meter, home, end, tracks } = self.session.timeline();
+        let m2_editor::TimelineView { tempo, meter, home, end, tracks, key } = self.session.timeline();
         let mut head = serde_json::Map::new();
-        for (k, v) in [("tempo", value(&tempo)), ("meter", value(&meter)), ("home", value(&home)), ("end", value(&end))] {
+        for (k, v) in
+            [("tempo", value(&tempo)), ("meter", value(&meter)), ("home", value(&home)), ("end", value(&end)), ("key", value(&key))]
+        {
             head.insert(k.into(), v);
         }
         let tracks = tracks.into_iter().map(|TimelineTrack { module, label, track, colour, lanes }| {

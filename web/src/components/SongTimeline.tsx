@@ -50,7 +50,10 @@ import {
   type ServerRef,
 } from "../lib/clips";
 import { clean, gridOp, gridTarget, pickName, skipsSnap, snapSong, stepOf, useGrid, type Grid as GridSetting } from "../lib/grid";
-import { added, bounded, hit, line, moved, painted, pickedIn as pointIn, rounded, usePoints, type Point } from "../lib/points";
+import { added, bounded, hit, line, moved, painted, pickedIn as pointIn, usePoints, type Point } from "../lib/points";
+import { laneScale, type LaneScale } from "../lib/laneScale";
+import { hide as hideLane, useAllHidden, useHidden } from "../lib/hiddenLanes";
+import { HIDDEN_ROW_H, HiddenRow } from "./HiddenLanes";
 import { chord, keyName, mod, opt } from "../lib/native";
 import { useStore } from "../lib/store";
 import { addEffectTo, dragsEffect, EFFECT_DRAG } from "./Browser";
@@ -558,11 +561,11 @@ export default function SongTimeline({
       const el = e.currentTarget, pointer = e.pointerId, x0 = e.clientX, y0 = e.clientY;
       el.setPointerCapture(pointer);
       const { meter } = latest.current.timeline;
-      const range = lane.max - lane.min || 1;
+      const scale = laneScale(lane);
       const title = laneTitle(lane);
-      // The lane's drawing spans the values it has (the server's range): a point dragged past the
-      // clip's top or bottom goes on past them, as far as the unit allows. The next drawing widens.
-      const valueAt = (y: number) => rounded(bounded(lane.unit, lane.min + (1 - (y - r.top) / r.height) * range), range);
+      // The lane's drawing spans its scale (D3: Hz on a log scale): a point dragged past the clip's
+      // top or bottom goes on past it, as far as the unit allows. The next drawing widens.
+      const valueAt = (y: number) => scale.round(bounded(lane.unit, scale.value(1 - (y - r.top) / r.height)));
       const beatAt = (x: number, free: boolean) => {
         const b = clip.start + ((x - r.left) / r.width) * clip.length;
         return Math.min(clip.length, Math.max(0, clean(snapSong(meter, b, PPB, free) - clip.start)));
@@ -582,7 +585,11 @@ export default function SongTimeline({
         const grid = stepOf(useGrid.getState().song, PPB, barAt(meter, clip.start + p[0]).length);
         if (last && Math.abs(p[0] - last[0]) > grid) {
           const dir = Math.sign(p[0] - last[0]);
-          for (let b = last[0] + dir * grid; dir * (p[0] - b) > 1e-9; b += dir * grid) cells.set(clean(b), rounded(last[1] + ((p[1] - last[1]) * (b - last[0])) / (p[0] - last[0]), range));
+          // Filled in as the pointer went: straight on the drawing, so along the lane's scale.
+          const [l0, l1] = [scale.level(last[1]), scale.level(p[1])];
+          for (let b = last[0] + dir * grid; dir * (p[0] - b) > 1e-9; b += dir * grid) {
+            cells.set(clean(b), scale.round(bounded(lane.unit, scale.value(l0 + ((l1 - l0) * (b - last[0])) / (p[0] - last[0])))));
+          }
         }
         cells.set(p[0], p[1]);
         last = p;
@@ -646,8 +653,8 @@ export default function SongTimeline({
           const box = e.currentTarget.getBoundingClientRect();
           const r = new DOMRect(box.left + BORDER, box.top + BORDER + BODY_TOP, box.width - 2 * BORDER, box.height - 2 * BORDER - BODY_TOP - BODY_BOTTOM);
           if (r.width > 0 && r.height > 0) {
-            const level = (v: number) => (v - lane.min) / (lane.max - lane.min || 1);
-            const at = hit((c as ControlClip).points, c.length, level, r.width, r.height, e.clientX - r.left, e.clientY - r.top);
+            const scale = laneScale(lane);
+            const at = hit((c as ControlClip).points, c.length, scale.level, r.width, r.height, e.clientX - r.left, e.clientY - r.top, scale.path);
             const draw = useShell.getState().draw;
             const point = at?.point ?? null;
             if (draw || point !== null || (at && !onEdge)) return pointsFrom(ref, lane, c as ControlClip, r, e, point);
@@ -970,7 +977,9 @@ export default function SongTimeline({
     setLit(id);
     setTimeout(() => setLit((l) => (l === id ? null : l)), 1800);
   };
-  useEffect(reveal, [timeline, open]);
+  // A hidden lane asked for (Automate on its control) shows first, then is revealed (D4).
+  const hiddenLanes = useAllHidden();
+  useEffect(reveal, [timeline, open, hiddenLanes]);
   useEffect(() => {
     const made = (e: Event) => {
       const id = (e as CustomEvent<string>).detail;
@@ -1014,7 +1023,11 @@ export default function SongTimeline({
   };
 
   const songRows = rowsOf(song);
-  const songH = ROW_H + 1 + songRows.others.length * ROW_H + (open.has(song.module) ? songRows.controls.length * LANE_H : 0);
+  // The Song's automation lanes, less those hidden, and the line that says so (D4).
+  const songHidden = useHidden(song.module);
+  const songShown = songRows.controls.filter((l) => !songHidden.has(l.key)).length;
+  const songLanesH = songShown * LANE_H + (songShown < songRows.controls.length ? HIDDEN_ROW_H : 0);
+  const songH = ROW_H + 1 + songRows.others.length * ROW_H + (open.has(song.module) ? songLanesH : 0);
   const all = [...rows, song].filter((t) => t.lanes.some((l) => l.kind === "control")).map((t) => t.module);
   const anyOpen = all.some((m) => open.has(m));
   return (
@@ -1500,6 +1513,9 @@ const TrackRows = memo(function TrackRows({
   // A muted track's clips, or one a solo leaves off, draw faint and grey; muted in the song, hatched too.
   const heard = useHeard(module);
   const { primary, others, controls } = rowsOf(track);
+  // Lanes hidden one by one (D4): A never shows them; a line under the others says so.
+  const hidden = useHidden(module);
+  const hiddenHere = controls.filter((l) => hidden.has(l.key)).map((l) => l.key);
   /** Where a reference's clip is in `lane`, if it is one of its clips. */
   const at = (ref: ClipRef | null, lane: TimelineLane) => (ref?.lane === lane.key ? clipIndex(lane.clips, ref) : -1);
   const select = () => useShell.getState().select(module);
@@ -1621,7 +1637,8 @@ const TrackRows = memo(function TrackRows({
         { first: true, height: ROW_H, movable },
       )}
       {others.map((l) => row(l, <LaneLabel lane={l} />, { height: rowHeight(l) }))}
-      {open && controls.map((l) => row(l, <LaneLabel lane={l} />, { height: LANE_H }))}
+      {open && controls.filter((l) => !hidden.has(l.key)).map((l) => row(l, <LaneLabel lane={l} />, { height: LANE_H }))}
+      {open && hiddenHere.length > 0 && <HiddenRow module={module} lanes={hiddenHere} color={color} selected={selected} headerW={headerW} width={width} />}
     </div>
   );
 });
@@ -1704,6 +1721,8 @@ function TimelineMenu({
   if (at.on === "header") {
     items = [
       { id: "unautomate", label: "Remove automation", off: off ?? (lane.kind === "control" ? null : "Only an automation lane can be removed."), run: () => edits.unautomate(at.module, at.lane) },
+      // One lane out of sight, kept so with the song (D4); a line under the track's lanes brings it back.
+      lane.kind === "control" ? { id: "hide-lane", label: "Hide this lane", run: () => hideLane(at.module, at.lane) } : null,
       { id: "hide", label: "Hide automation", shortcut: "A", run: () => useShell.getState().toggleLanes(at.module, []) },
     ];
   } else if (at.on === "clip") {
@@ -1776,14 +1795,14 @@ function LaneClips({
   const here = (a: LaneAddr) => a.module === module && a.lane === lane.key;
 
   // What a clip of this lane's kind draws inside it.
-  const range = lane.kind === "control" ? lane.max - lane.min || 1 : 1;
-  // 0 at the bottom of a clip's drawing, 1 at its top.
-  const level = (v: number) => (lane.kind === "control" ? (v - lane.min) / range : 0);
+  // 0 at the bottom of a clip's drawing, 1 at its top, on the lane's scale (D3).
+  const scale = lane.kind === "control" ? laneScale(lane) : null;
+  const level = (v: number) => scale?.level(v) ?? 0;
   const inside = (c: AnyClip, tone: TrackColor, pickedPoint = -1) =>
     "notes" in c ? (
       <Notes notes={audible(c)} length={c.length} color={tone} />
     ) : "points" in c ? (
-      <Curve clip={c} level={level} color={tone} picked={pickedPoint} />
+      <Curve clip={c} level={level} path={scale?.path ?? line} color={tone} picked={pickedPoint} />
     ) : (
       <div className="absolute inset-x-0 bottom-0 flex items-center gap-1.5 px-2 text-xs font-medium" style={{ top: BODY_TOP, color: tone.ink }}>
         <AudioWaveform size={14} className="shrink-0" />
@@ -1994,10 +2013,23 @@ function Notes({ notes, length, color }: { notes: NoteClip["notes"]; length: num
  * The automation curve, its points marked; values hold before the first point and after the last.
  * The point `picked` is `fg-strong` in a 2px white ring (taste.md §2.8).
  */
-function Curve({ clip, level, color, picked }: { clip: ControlClip; level: (v: number) => number; color: TrackColor; picked: number }) {
+function Curve({
+  clip,
+  level,
+  path,
+  color,
+  picked,
+}: {
+  clip: ControlClip;
+  level: (v: number) => number;
+  /** The line through the points, as the lane's scale draws it (D3). */
+  path: LaneScale["path"];
+  color: TrackColor;
+  picked: number;
+}) {
   const { points } = clip;
   if (points.length === 0) return <Body length={clip.length} curve>{null}</Body>;
-  const drawn = line(points, clip.length);
+  const drawn = path(points, clip.length);
   const xy = drawn.map(([b, v]) => `${b},${(1 - level(v)) * 100}`).join(" ");
   return (
     <>

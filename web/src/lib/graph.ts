@@ -610,6 +610,10 @@ export const editorHooks: {
   save?: () => boolean;
   saveAll?: () => void;
   duplicate?: () => boolean;
+  /** Edit ▸ Quantize (Q): the roll's while it has the keyboard (X2). */
+  quantize?: () => boolean;
+  /** View ▸ Zoom In / Zoom Out (`dir` 1 or -1): the roll's own zoom while it has the keyboard (X3). */
+  zoom?: (dir: 1 | -1) => boolean;
   undo?: (redo: boolean) => boolean;
   /** A menu command whose chord the code editor binds (⌘D): its own action while it has the keyboard. */
   chord?: (id: string) => boolean;

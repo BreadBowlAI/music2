@@ -38,6 +38,8 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
       ["Draw mode: notes and automation", "B"],
       ["Move notes by the grid / by a bar", `← → / ${shifted("←")} ${shifted("→")}`],
       ["Transpose a semitone / an octave", `↑ ↓ / ${shifted("↑")} ${shifted("↓")}`],
+      ["Quantize the notes in Notes", "Q"],
+      ["Note tools: swing, legato…", "right-click a note"],
     ],
   },
   {

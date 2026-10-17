@@ -1,5 +1,6 @@
 import clsx from "clsx";
 import { Download, PanelLeft, Play, Redo2, Repeat, SkipBack, Square, Undo2 } from "lucide-react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { barAt, barsToBeats, lockReason, position, type GraphState, type GraphStatus, type Loop, type Meter, type Problem } from "../lib/graph";
 import { exportSong, useExport } from "../lib/exporting";
 import { next } from "../lib/history";
@@ -7,6 +8,7 @@ import { chord, keyName, shifted } from "../lib/native";
 import { canvas, useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { graphUndo } from "./GraphCanvas";
+import KeyField from "./KeyField";
 import { MeterField, SongTitle, TempoField } from "./SongBar";
 import OverlayPill from "./OverlayPill";
 import Status from "./Status";
@@ -29,6 +31,35 @@ export function toggleLoop(meter: Meter[], status: GraphStatus, onLoop: (req: { 
 }
 
 const Divider = () => <div className="w-px h-5 mx-3 shrink-0 self-center bg-line" />;
+
+/** The least room a song's name keeps from the bar's groups either side of it, in px. */
+const NAME_GAP = 8;
+/** Below this much room the name goes (taste.md §3.8): a few letters say nothing. */
+const NAME_MIN = 56;
+
+/**
+ * How wide the song's name may be, centred in the bar: twice the room from the middle to the
+ * nearer of the groups either side (the free space between them is `gap`'s), less a gap each
+ * side (Q23). Measured, so a wider group (the key's name, the time, a status pill) cuts it sooner.
+ */
+function useNameRoom(bar: React.RefObject<HTMLElement | null>, gap: React.RefObject<HTMLElement | null>) {
+  const [room, setRoom] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const b = bar.current, g = gap.current;
+    if (!b || !g) return;
+    const measure = () => {
+      const r = b.getBoundingClientRect(), free = g.getBoundingClientRect();
+      const mid = r.left + r.width / 2;
+      setRoom(Math.max(0, Math.floor(2 * Math.min(mid - free.left, free.right - mid) - 2 * NAME_GAP)));
+    };
+    measure();
+    const seen = new ResizeObserver(measure);
+    seen.observe(b);
+    seen.observe(g);
+    return () => seen.disconnect();
+  }, []);
+  return room;
+}
 
 /** A top-bar button: it doesn't take focus from a click, so Space stays the transport (taste.md §2.11). */
 const BarButton = (props: React.ComponentProps<typeof Button>) => <Button onMouseDown={keepFocus} {...props} />;
@@ -53,6 +84,9 @@ export default function TopBar({
 }) {
   const { meter } = graph.timeline;
   const browser = useShell((s) => s.browser);
+  const bar = useRef<HTMLElement>(null);
+  const gap = useRef<HTMLDivElement>(null);
+  const room = useNameRoom(bar, gap);
   const connected = useStore((s) => s.connected);
   const locked = lockReason(graph, connected);
   const time = `${Math.floor(status.seconds / 60)}:${(status.seconds % 60).toFixed(1).padStart(4, "0")}`;
@@ -69,6 +103,7 @@ export default function TopBar({
     : "Loop 4 bars from the playhead (C), or drag across the ruler to choose where";
   return (
     <header
+      ref={bar}
       data-tauri-drag-region
       // Above the timeline: a field's error shows under it, over the ruler. The Mac app
       // (`data-app="mac"`, main.tsx) starts 80px in, for the window's buttons: 68px more than a page.
@@ -130,13 +165,17 @@ export default function TopBar({
       <div className="flex items-center gap-1 -ml-2" data-testid="tempo">
         <TempoField session={graph.session} timeline={graph.timeline} at={status.beat} locked={locked} />
         <MeterField session={graph.session} timeline={graph.timeline} at={status.beat} locked={locked} />
+        {/* The song's key (D2), after the time signature (taste.md §3.3). */}
+        <KeyField graph={graph} />
       </div>
-      <div data-tauri-drag-region className="flex-1 self-stretch" />
-      {/* Centred in the window, whatever the transport and buttons beside it take: kept clear of them
-          (480px a side; in the Mac app, once the time shows, 548), a long name is cut short, and in a
-          small window it goes (§3.8). */}
-      <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 max-w-[calc(100%-960px)] flex items-center whitespace-nowrap pointer-events-none max-[1040px]:hidden [:root[data-app=mac]_&]:min-[1280px]:max-w-[calc(100%-1096px)]">
-        <SongTitle session={graph.session} name={graph.name} dir={graph.dir} rate={graph.sample_rate} locked={locked} />
+      <div ref={gap} data-tauri-drag-region className="flex-1 self-stretch" />
+      {/* Centred in the window, whatever the transport and buttons beside it take: kept clear of
+          them as measured (Q23), a long name is cut short, and with too little room it goes (§3.8). */}
+      <div
+        className={clsx("absolute inset-y-0 left-1/2 -translate-x-1/2 flex items-center whitespace-nowrap pointer-events-none", (room ?? 0) < NAME_MIN && "hidden")}
+        style={{ maxWidth: room ?? 0 }}
+      >
+        <SongTitle session={graph.session} name={graph.name} dir={graph.dir} rate={graph.sample_rate} locked={locked} room={room ?? 0} />
       </div>
       <Status graph={graph} status={status} onShowCode={onShowCode} />
       <OverlayPill graph={graph} />
