@@ -1,11 +1,11 @@
 import clsx from "clsx";
 import { Minus, Plus } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { barAt, graphApi, type Meter, type TimelineView } from "../lib/graph";
 import { mod } from "../lib/native";
 import { canvas } from "../lib/shell";
 import { useStore } from "../lib/store";
+import { Bubble } from "./Knob";
 import { Button, MenuRow, Popover, Segment } from "./ui";
 
 // The song bar (design-8b §4, taste.md §3.3, TB-5): the tempo and the time signature in effect at
@@ -47,28 +47,6 @@ function typedBpm(text: string) {
   const m = /^\s*(\d+(?:\.\d+)?)\s*(?:bpm)?\s*$/i.exec(text);
   const bpm = m ? Number(m[1]) : NaN;
   return bpm >= 20 && bpm <= 999 ? Number(bpm.toFixed(2)) : null;
-}
-
-/**
- * The value bubble over the pointer while a value is dragged (taste.md §2.14); under it when the
- * pointer is too near the window's top for it to show (the top bar's tempo, dragged up).
- */
-function Bubble({ at, children }: { at: { x: number; y: number }; children: React.ReactNode }) {
-  const under = at.y < 40;
-  return createPortal(
-    <div
-      aria-hidden
-      data-testid="value-bubble"
-      className={clsx(
-        "fixed z-50 pointer-events-none -translate-x-1/2 px-1.5 py-0.5 rounded-sm bg-fg-strong/92 text-white text-xs tabular-nums whitespace-nowrap",
-        !under && "-translate-y-full",
-      )}
-      style={{ left: at.x, top: under ? Math.max(at.y + 20, 48) : at.y - 12 }}
-    >
-      {children}
-    </div>,
-    document.body,
-  );
 }
 
 /**

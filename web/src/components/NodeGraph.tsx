@@ -8,7 +8,6 @@ import {
   Music2,
   Piano,
   Plus,
-  RotateCcw,
   Scan,
   Spline,
   Trash2,
@@ -32,7 +31,6 @@ import {
   type Effect,
   type GraphLease,
   type GraphState,
-  type Home,
   type InputPort,
   type Knob as KnobInfo,
   type ModuleView,
@@ -47,6 +45,7 @@ import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { Dots } from "./draw";
 import EffectBrowser from "./EffectBrowser";
+import { HomeMarker, KnobMenu, MiniKnob, useKnobDrag, useKnobGesture } from "./Knob";
 import { undoAction } from "./GraphCanvas";
 
 /** Why nothing here can be edited right now (the code doesn't compile, read only, offline), or null. */
@@ -988,21 +987,6 @@ function InputRow({
 
 // ---------------------------------------------------------------- knobs
 
-interface Gesture {
-  token: string;
-  session: number;
-  revision: number;
-  knob: KnobInfo;
-  start: number;
-  previews: Promise<void>;
-  previewed: boolean;
-  /** Let go: from here it commits, even if the control unmounts. */
-  released: boolean;
-  cancelled: boolean;
-  submitted: boolean;
-  failed: boolean;
-}
-
 /** A knob over an owned source value, as one input row: drag to hear it, release to write it. */
 function KnobControl({
   mountKey,
@@ -1030,176 +1014,29 @@ function KnobControl({
 }) {
   const toast = useStore((s) => s.toast);
   const why = useContext(Locked);
-  const [value, setValue] = useState(knob.value);
-  const [saving, setSaving] = useState(false);
-  // Each gesture captures its identity, revision and value mapping. A save elsewhere
-  // doesn't end it: the server carries it to the new revision, or refuses it as stale
-  // if the save touched this value. A save that renumbers the knob doesn't remount it
-  // (see `held`); session changes do. Unmounting cancels a drag, but a released knob still
-  // commits: selecting another module right after letting go must not lose the value.
-  const latest = useRef(knob.value);
-  const dragging = useRef<Gesture | null>(null);
-  const active = useRef<Gesture | null>(null);
-  const pending = useRef<{ gesture: Gesture; value: number } | null>(null);
-  const timer = useRef<number | null>(null);
-  // While a knob is held still, its drag is kept alive on the server, which ends drags nobody
-  // moves for 10 s (WRITE-22's leases, C6).
-  const keepalive = useRef<number | null>(null);
-  const mounted = useRef(true);
-  const committing = useRef(false);
+  // Its drag and lease (Knob.tsx). A save that renumbers it mid-drag doesn't remount it (see `held`).
+  const g = useKnobGesture({
+    session,
+    revision,
+    knob,
+    editable,
+    // Its undo step's name: the card and the control ("Delay feedback"), or a channel's own ("Hats volume").
+    name: knob.label.includes(".") ? label : `${owner} ${label.toLowerCase()}`,
+    label,
+    hold: (token, on) => (on ? held.set(token, { knob: mountKey, node: nodeKey }) : held.delete(token)),
+  });
+  const value = g.value;
   // The knob's menu (right-click), anchored to the knob: its left edge, below it (or above it, the room).
   const [menu, setMenu] = useState<{ x: number; y: number; above: number } | null>(null);
   const svg = useRef<SVGSVGElement>(null);
   const readout = useRef<HTMLSpanElement>(null);
-  // A run of steps (the wheel, ↑ ↓) is one gesture, written once they stop for a moment.
-  const idle = useRef<number | null>(null);
   // A value being typed in place of the readout (taste.md §2.14): its text, the readout's width, and
   // whether Enter found it unreadable. The ref says whether it is still open, for a late blur.
   const [typing, setTyping] = useState<{ text: string; width: number; bad: boolean } | null>(null);
   const typingOpen = useRef(false);
 
-  const stopKeepalive = () => {
-    if (keepalive.current != null) clearInterval(keepalive.current);
-    keepalive.current = null;
-  };
-
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-      if (timer.current != null) clearTimeout(timer.current);
-      timer.current = null;
-      if (idle.current != null) clearTimeout(idle.current);
-      idle.current = null;
-      stopKeepalive();
-      pending.current = null;
-      dragging.current = null;
-      if (active.current && !active.current.released) void cancel(active.current);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!dragging.current && !committing.current) {
-      setValue(knob.value);
-      latest.current = knob.value;
-    }
-  }, [knob.value]);
-
-  const refresh = () => {
-    // Never let a late response replace another project's view or a newer revision.
-    void graphApi.get().then((graph) => {
-      const store = useStore.getState();
-      if (store.graph?.session === session && graph.session === session && graph.view.revision >= store.graph.view.revision) {
-        store.set({ graph });
-      }
-    }).catch(() => {});
-  };
-
-  const fail = (gesture: Gesture, error: unknown) => {
-    if (gesture.failed) return;
-    gesture.failed = true;
-    void cancel(gesture);
-    // A released knob reports even from a closed panel: its value didn't save.
-    if (mounted.current || gesture.released) toast(error instanceof Error ? error.message : String(error));
-    if (!mounted.current) return;
-    setValue(knob.value);
-    latest.current = knob.value;
-    refresh();
-  };
-
-  const cancel = (gesture: Gesture): Promise<void> => {
-    // Once a save is sent it owns completion. Cancelling then could race a
-    // successful commit; stale cancellation must never undo a newer gesture.
-    if (gesture.cancelled || gesture.submitted) return Promise.resolve();
-    gesture.cancelled = true;
-    if (active.current === gesture) active.current = null;
-    held.delete(gesture.token);
-    return gesture.previews.then(() => graphApi.cancel(gesture.session, gesture.knob.id, gesture.token)).catch((error) => {
-      if (mounted.current) toast(error instanceof Error ? error.message : String(error));
-    });
-  };
-
-  const begin = (): Gesture => {
-    const gesture: Gesture = {
-      token: crypto.randomUUID(), session, revision, knob, start: knob.value,
-      previews: Promise.resolve(), previewed: false, released: false, cancelled: false, submitted: false, failed: false,
-    };
-    active.current = gesture;
-    held.set(gesture.token, { knob: mountKey, node: nodeKey });
-    return gesture;
-  };
-
-  const preview = (gesture: Gesture, v: number) => {
-    gesture.previewed = true;
-    // Preserve preview order, including the final preview before committing.
-    gesture.previews = gesture.previews.then(async () => {
-      if (!mounted.current || gesture.failed || gesture.cancelled) return;
-      await graphApi.preview(gesture.session, gesture.revision, gesture.knob.id, gesture.token, v);
-    }).catch((error) => fail(gesture, error));
-  };
-
-  const flushPreview = () => {
-    timer.current = null;
-    const next = pending.current;
-    pending.current = null;
-    if (next) preview(next.gesture, next.value);
-  };
-
-  const commit = async (gesture: Gesture, v: number) => {
-    if (!gesture.previewed && v === gesture.start) {
-      if (active.current === gesture) active.current = null;
-      held.delete(gesture.token);
-      return;
-    }
-    gesture.released = true;
-    committing.current = true;
-    setSaving(true);
-    try {
-      await gesture.previews;
-      if (gesture.failed || gesture.cancelled) {
-        void cancel(gesture);
-        return;
-      }
-      // Returning to the starting value still needs a reliable commit: the
-      // final audition message may have been dropped by the audio queue.
-      gesture.submitted = true;
-      // Its undo step's name: the card and the control ("Delay feedback"), or a channel's own ("Hats volume").
-      const name = knob.label.includes(".") ? label : `${owner} ${label.toLowerCase()}`;
-      const change = await graphApi.set(gesture.session, gesture.revision, gesture.knob.id, gesture.token, v, gesture.start, { name });
-      // The code doesn't compile right now: the value plays on, and is saved once it does (C5).
-      // The knob shows the value, so a change makes no toast (taste.md §2.14); one that waits for the code to compile says so.
-      if (change.pending) toast(`${label} is saved once the code compiles again`);
-      refresh();
-    } catch (error) {
-      // Rejections restore audio on the server. An owner-checked cancellation
-      // also covers a lost response without targeting another gesture's preview.
-      gesture.submitted = false;
-      fail(gesture, error);
-    } finally {
-      if (active.current === gesture) active.current = null;
-      held.delete(gesture.token);
-      committing.current = false;
-      if (mounted.current) setSaving(false);
-    }
-  };
-
-  /** A move of the knob to `u` (0..1): previewed while dragged; on its own (a double-click, the menu's reset) one whole gesture. */
-  const change = (u: number) => {
-    if ((!editable && !dragging.current) || committing.current) return;
-    const gesture = dragging.current ?? begin();
-    if (gesture.failed) return;
-    const v = fromUnit(gesture.knob, u);
-    setValue(v);
-    latest.current = v;
-    if (!dragging.current) {
-      // A double-click reset is a complete, revision-bound gesture.
-      preview(gesture, v);
-      void commit(gesture, v);
-      return;
-    }
-    pending.current = { gesture, value: v };
-    if (timer.current == null) timer.current = window.setTimeout(flushPreview, 30);
-  };
+  /** A move of the knob to `u` (0..1): heard while dragged; on its own (a double-click, the menu's reset) one whole gesture. */
+  const change = (u: number) => g.change(fromUnit(g.descriptor, u));
 
   /** Its value becomes a new, empty control lane's fallback (HOME-2): the song sounds the same, and the timeline shows the lane to draw on. */
   const automate = () => {
@@ -1213,52 +1050,13 @@ function KnobControl({
       .catch((error) => toast(error instanceof Error ? error.message : String(error)));
   };
 
-  /** A drag (or a run of steps) begins: one gesture, previewed as it goes and kept alive on the server. */
-  const start = () => {
-    // A run of steps still open goes on as this drag: one gesture, one edit.
-    if (idle.current != null) clearTimeout(idle.current);
-    idle.current = null;
-    if (dragging.current || !editable || committing.current) return;
-    dragging.current = begin();
-    latest.current = knob.value;
-    stopKeepalive();
-    keepalive.current = window.setInterval(() => {
-      const gesture = dragging.current;
-      // Only a drag that began on the server, and has nothing on its way already.
-      if (gesture && gesture.previewed && !gesture.failed && !gesture.cancelled && timer.current == null) preview(gesture, latest.current);
-    }, 2000);
-  };
-  /** Let go: what it shows is written. */
-  const end = () => {
-    stopKeepalive();
-    const gesture = dragging.current;
-    if (!gesture) return;
-    dragging.current = null;
-    if (timer.current != null) clearTimeout(timer.current);
-    flushPreview();
-    void commit(gesture, latest.current);
-  };
   /** `n` steps from where it is (taste.md §5.2), written as one edit half a second after the last. */
-  const step = (n: number) => {
-    if (!dragging.current) start();
-    const gesture = dragging.current;
-    if (!gesture) return;
-    change(Math.min(1, Math.max(0, toUnit(gesture.knob, stepValue(gesture.knob, latest.current, n)))));
-    if (idle.current != null) clearTimeout(idle.current);
-    idle.current = window.setTimeout(() => {
-      idle.current = null;
-      end();
-    }, 500);
-  };
+  const step = (n: number) => g.step((v, k) => fromUnit(k, Math.min(1, Math.max(0, toUnit(k, stepValue(k, v, n))))));
   /** Type a value: the readout turns into a field of its size, its text selected. */
   const type = () => {
     // Steps just made are written first.
-    if (idle.current != null) {
-      clearTimeout(idle.current);
-      idle.current = null;
-      end();
-    }
-    if (!editable || dragging.current) return;
+    g.settle();
+    if (!editable || g.dragging()) return;
     typingOpen.current = true;
     setTyping({ text: display(knob, value), width: Math.max(48, Math.ceil(readout.current?.getBoundingClientRect().width ?? 0) + 8), bad: false });
   };
@@ -1275,9 +1073,9 @@ function KnobControl({
     return true;
   };
 
-  const descriptor = dragging.current?.knob ?? knob;
+  const descriptor = g.descriptor;
   // A drag already in progress goes on when the code breaks under it; only new ones wait.
-  const disabled = (!editable && !dragging.current) || saving;
+  const disabled = (!editable && !g.dragging()) || g.saving;
   // Drawn from the middle when its span is centred on zero (a pan, a bipolar amount).
   const range = span(descriptor);
   const bipolar = range.lo < 0 && range.hi > 0 && Math.abs(range.lo + range.hi) <= 1e-9 * range.hi;
@@ -1289,33 +1087,15 @@ function KnobControl({
     : `${shared}${knob.file}:${knob.line}  (${written})\nDrag (${mod.shift} for fine) · double-click to type a value · ${mod.alt}-click to reset · right-click to automate it`;
   const unit = Math.min(1, Math.max(0, toUnit(descriptor, value)));
   const reset = descriptor.default != null ? Math.min(1, Math.max(0, toUnit(descriptor, descriptor.default))) : undefined;
-  /** A drag let go of without its pointer (lost, or cancelled): the knob goes back to where it was. */
-  const abandon = () => {
-    stopKeepalive();
-    const gesture = dragging.current;
-    if (!gesture) return;
-    dragging.current = null;
-    pending.current = null;
-    if (timer.current != null) clearTimeout(timer.current);
-    timer.current = null;
-    setValue(knob.value);
-    latest.current = knob.value;
-    committing.current = true;
-    setSaving(true);
-    void cancel(gesture).finally(() => {
-      committing.current = false;
-      if (mounted.current) setSaving(false);
-    });
-  };
   // The whole row drags it, its label and value too, not only the 28px circle (taste.md §2.2).
-  const grip = useKnobDrag({ value: unit, reset, disabled, onChange: change, onStart: start, onEnd: end, onCancel: abandon, focus: () => svg.current?.focus({ preventScroll: true }) });
+  const grip = useKnobDrag({ value: unit, reset, disabled, onChange: change, onStart: () => g.start(), onEnd: g.end, onCancel: g.abandon, focus: () => svg.current?.focus({ preventScroll: true }) });
 
   return (
     <div
       onContextMenu={(e) => {
         e.preventDefault();
         const r = e.currentTarget.getBoundingClientRect();
-        if (!dragging.current) setMenu({ x: r.left, y: r.bottom + 4, above: r.top - 4 });
+        if (!g.dragging()) setMenu({ x: r.left, y: r.bottom + 4, above: r.top - 4 });
       }}
       data-knob={knob.label}
       data-knob-id={editable ? knob.id : undefined}
@@ -1396,7 +1176,7 @@ function KnobControl({
       )}
       <HomeMarker home={knob.home} label={label} />
       {/* Inert only while it can't be edited: a save between steps mustn't take the focus from it. */}
-      <div inert={!editable && !dragging.current} className={clsx("shrink-0", disabled && "pointer-events-none")}>
+      <div inert={!editable && !g.dragging()} className={clsx("shrink-0", disabled && "pointer-events-none")}>
         <MiniKnob
           value={unit}
           bipolar={bipolar}
@@ -1417,363 +1197,13 @@ function KnobControl({
           label={label}
           value={value}
           at={menu}
-          editable={editable && !saving}
+          editable={editable && !g.saving}
+          locked={why}
           onAutomate={automate}
           onReset={descriptor.default != null ? () => change(Math.min(1, Math.max(0, toUnit(descriptor, descriptor.default!)))) : undefined}
           onClose={() => setMenu(null)}
         />
       )}
     </div>
-  );
-}
-
-/**
- * A knob's menu (right-click on it): Automate, which turns its value into a lane to draw on, and
- * Reset to its declared default. What can't be done says why in place of what it would do.
- */
-function KnobMenu({
-  knob,
-  label,
-  value,
-  at,
-  editable,
-  onAutomate,
-  onReset,
-  onClose,
-}: {
-  knob: KnobInfo;
-  label: string;
-  value: number;
-  at: { x: number; y: number; above: number };
-  editable: boolean;
-  onAutomate: () => void;
-  onReset?: () => void;
-  onClose: () => void;
-}) {
-  const box = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState({ left: at.x, top: at.y });
-  const locked = useContext(Locked) ?? "It can't be edited right now";
-  const sentence = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-  const items = [
-    {
-      id: "automate",
-      Icon: Spline,
-      title: "Automate",
-      detail: !editable ? locked : knob.automate_refused ? `${sentence(knob.automate_refused)}.` : "Draw it over time in a new lane. It sounds the same until you do.",
-      disabled: !editable || !!knob.automate_refused,
-      run: onAutomate,
-    },
-    ...(onReset && knob.default != null
-      ? [{
-          id: "reset",
-          Icon: RotateCcw,
-          title: "Reset to default",
-          detail: knob.default === value ? `It is at its default, ${display(knob, knob.default)}` : display(knob, knob.default),
-          disabled: !editable || knob.default === value,
-          run: () => {
-            onClose();
-            onReset();
-          },
-        }]
-      : []),
-  ];
-  const [active, setActive] = useState(() => items.findIndex((i) => !i.disabled));
-
-  // Opened at the knob, below it unless there's no room, kept on screen; it stays where it opened.
-  useLayoutEffect(() => {
-    const r = box.current!.getBoundingClientRect();
-    setPos({
-      left: Math.max(8, Math.min(at.x, window.innerWidth - r.width - 8)),
-      top: at.y + r.height + 8 > window.innerHeight ? Math.max(8, at.above - r.height) : at.y,
-    });
-    box.current!.focus({ preventScroll: true });
-  }, [at.x, at.y, at.above]);
-  useEffect(() => {
-    const outside = (e: Event) => !box.current?.contains(e.target as Node) && onClose();
-    document.addEventListener("pointerdown", outside, true);
-    window.addEventListener("blur", onClose);
-    window.addEventListener("resize", onClose);
-    document.addEventListener("scroll", onClose, true);
-    return () => {
-      document.removeEventListener("pointerdown", outside, true);
-      window.removeEventListener("blur", onClose);
-      window.removeEventListener("resize", onClose);
-      document.removeEventListener("scroll", onClose, true);
-    };
-  }, [onClose]);
-
-  const move = (step: number) => {
-    const enabled = items.map((i, k) => (i.disabled ? -1 : k)).filter((k) => k >= 0);
-    if (!enabled.length) return;
-    const at = enabled.indexOf(active);
-    setActive(enabled[(at + step + enabled.length) % enabled.length]);
-  };
-
-  return createPortal(
-    <div
-      ref={box}
-      role="menu"
-      tabIndex={-1}
-      data-testid="knob-menu"
-      aria-label={`${label} knob`}
-      style={pos}
-      className="fixed z-50 w-[272px] p-1 rounded-md bg-raised shadow-pop animate-rise outline-none cursor-default"
-      onContextMenu={(e) => e.preventDefault()}
-      onKeyDown={(e) => {
-        e.stopPropagation();
-        if (e.key === "Escape") onClose();
-        else if (e.key === "ArrowDown") move(1);
-        else if (e.key === "ArrowUp") move(-1);
-        else if ((e.key === "Enter" || e.key === " ") && items[active] && !items[active].disabled) items[active].run();
-        else return;
-        e.preventDefault();
-      }}
-    >
-      <div className="h-ctl px-2 flex items-center gap-2">
-        <span className="text-sm font-semibold text-fg truncate">{label}</span>
-        <span className="ml-auto shrink-0 text-xs text-fg-muted">{display(knob, value)}</span>
-      </div>
-      <div className="h-px my-1 bg-line" />
-      {items.map((item, k) => (
-        <div
-          key={item.id}
-          role="menuitem"
-          data-menu-item={item.id}
-          aria-disabled={item.disabled || undefined}
-          onPointerEnter={() => !item.disabled && setActive(k)}
-          onClick={() => !item.disabled && item.run()}
-          className={clsx(
-            "min-h-ctl px-2 py-1.5 rounded-sm flex items-start gap-2 transition-colors duration-80 ease-linear",
-            item.disabled ? "text-fg-off" : clsx("cursor-pointer text-fg", k === active && "bg-accent-soft"),
-          )}
-        >
-          <item.Icon size={14} className={clsx("mt-px shrink-0", !item.disabled && "text-fg-muted")} />
-          <span className="flex-1 min-w-0">
-            <span className="block text-sm">{item.title}</span>
-            {/* The detail decides the choice: what it will do, or why it can't. */}
-            <span data-detail className="block text-xs text-fg-muted">{item.detail}</span>
-          </span>
-        </div>
-      ))}
-      <div className="h-px my-1 bg-line" />
-      <div className="h-ctl-sm px-2 flex items-center gap-2 text-xs text-fg-faint">
-        <span data-code className="font-mono truncate">{knob.file}:{knob.line}</span>
-        <span className="ml-auto shrink-0 truncate">{knob.written ? <span data-code className="font-mono">{knob.literal}</span> : "its default"}</span>
-      </div>
-    </div>,
-    document.body,
-  );
-}
-
-/**
- * Where a value lives, when that isn't the code (HOME-1, taste.md §2.10): a lane, a filled accent
- * circle; a plugin's state, a small square. Code, written or inherited, has none.
- */
-function HomeMarker({ home, label }: { home: Home; label: string }) {
-  if (home === "lane") return <span className="shrink-0 size-[5px] rounded-full bg-accent" title={`Follows the ${label} lane.`} />;
-  if (home === "state") return <span className="shrink-0 size-1 bg-fg-faint" title="Saved in the plugin's state." />;
-  return null;
-}
-
-/** Pixels of drag for a knob's whole range (taste.md KN-1), and what ⇧ scales a drag by. */
-const THROW = 300;
-const FINE = 0.1;
-/** Wheel travel (pixels) that is one step, as a mouse wheel's notch is. */
-const NOTCH = 40;
-
-/**
- * A knob's drag (taste.md §5.2), on whatever element holds it (its whole row): drag up and down
- * (300px is the whole range, ⇧ for a tenth of that), ⌥-click to reset (its default, else the
- * middle). Not from its input's port, nor from a field typed in. `pointer` is where the pointer is
- * while it drags, for the value bubble.
- */
-function useKnobDrag({
-  value,
-  reset = 0.5,
-  disabled,
-  onChange,
-  onStart,
-  onEnd,
-  onCancel,
-  focus,
-}: {
-  value: number;
-  reset?: number;
-  disabled: boolean;
-  onChange: (v: number) => void;
-  onStart: () => void;
-  onEnd: () => void;
-  onCancel: () => void;
-  /** Give the knob the keyboard, for ↑ ↓ after a drag. */
-  focus: () => void;
-}) {
-  // The drag: where the pointer was last, and where that has turned the knob. Each move turns it by
-  // its own distance, coarse or (⇧) fine, so pressing or letting go of ⇧ never makes it jump.
-  const drag = useRef<{ pointer: number; y: number; u: number } | null>(null);
-  const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null);
-  const finish = (id: number, cancelled: boolean) => {
-    if (drag.current?.pointer !== id) return;
-    drag.current = null;
-    setPointer(null);
-    if (cancelled) onCancel();
-    else onEnd();
-  };
-  const handlers = {
-    onPointerDown: (e: React.PointerEvent<HTMLElement>) => {
-      // Only on the row itself: its menu is a portal, whose events reach the row through React.
-      if (disabled || drag.current || e.button !== 0 || !e.currentTarget.contains(e.target as Node)) return;
-      if ((e.target as HTMLElement).closest("[data-port-dot], input, button")) return;
-      // ⌥-click: back to its default, as one edit (Logic).
-      if (e.altKey) {
-        e.preventDefault();
-        if (Math.abs(reset - value) > 1e-6) onChange(reset);
-        return;
-      }
-      e.currentTarget.setPointerCapture(e.pointerId);
-      drag.current = { pointer: e.pointerId, y: e.clientY, u: value };
-      setPointer({ x: e.clientX, y: e.clientY });
-      focus();
-      onStart();
-    },
-    onPointerMove: (e: React.PointerEvent<HTMLElement>) => {
-      const d = drag.current;
-      if (!d || d.pointer !== e.pointerId) return;
-      setPointer({ x: e.clientX, y: e.clientY });
-      d.u = Math.min(1, Math.max(0, d.u + ((d.y - e.clientY) / THROW) * (e.shiftKey ? FINE : 1)));
-      d.y = e.clientY;
-      if (Math.abs(d.u - value) > (e.shiftKey ? 0.0002 : 0.002)) onChange(d.u);
-    },
-    onPointerUp: (e: React.PointerEvent<HTMLElement>) => finish(e.pointerId, false),
-    onPointerCancel: (e: React.PointerEvent<HTMLElement>) => finish(e.pointerId, true),
-    onLostPointerCapture: (e: React.PointerEvent<HTMLElement>) => finish(e.pointerId, true),
-  };
-  return { pointer, handlers };
-}
-
-/**
- * A small rotary knob, 0..1: drawn, with the keys and the wheel of taste.md §5.2 (its drag is the
- * row's, see `useKnobDrag`): Return to type a value, the wheel or ↑ ↓ (⇧ for ten) to step it, ⌫ to
- * reset. Its arc runs from the minimum, or from 12 o'clock when it is bipolar; while dragged
- * (`pointer`) it is lit and its value shows above the pointer.
- */
-function MiniKnob({
-  value,
-  bipolar,
-  disabled,
-  readout,
-  label,
-  reset = 0.5,
-  svg,
-  pointer,
-  onChange,
-  onStep,
-  onType,
-}: {
-  value: number;
-  bipolar: boolean;
-  disabled: boolean;
-  /** The value as it reads, for the bubble while dragging. */
-  readout: string;
-  label: string;
-  /** Where ⌫ puts it: its declared default, else the middle. */
-  reset?: number;
-  svg?: React.RefObject<SVGSVGElement | null>;
-  /** Where the pointer is while it is dragged. */
-  pointer: { x: number; y: number } | null;
-  onChange: (v: number) => void;
-  /** `n` steps up (negative: down), from the wheel or the arrow keys. */
-  onStep: (n: number) => void;
-  /** Type a value in place of the readout. */
-  onType: () => void;
-}) {
-  const own = useRef<SVGSVGElement>(null);
-  const el = svg ?? own;
-  const wheel = useRef(0);
-  const step = useRef(onStep);
-  step.current = onStep;
-  const dragging = useRef(false);
-  dragging.current = !!pointer;
-  // The wheel steps it (one step a notch); ⌘ or ⌃ with it zooms the canvas instead. Not passive, so
-  // the canvas under it doesn't scroll as well.
-  useEffect(() => {
-    const knob = el.current;
-    if (!knob || disabled) return;
-    const turn = (e: WheelEvent) => {
-      if (e.ctrlKey || e.metaKey || dragging.current) return;
-      e.preventDefault();
-      const d = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
-      wheel.current -= e.deltaMode === 1 ? d * NOTCH : d;
-      const n = Math.trunc(wheel.current / NOTCH);
-      if (n === 0) return;
-      wheel.current -= n * NOTCH;
-      step.current(n);
-    };
-    knob.addEventListener("wheel", turn, { passive: false });
-    return () => knob.removeEventListener("wheel", turn);
-  }, [el, disabled]);
-  const a0 = -135, a1 = 135;
-  const angle = a0 + (a1 - a0) * value;
-  const from = bipolar ? 0 : a0;
-  const r = 11, c = 14;
-  const at = (a: number, radius = r) => [c + radius * Math.sin((a * Math.PI) / 180), c - radius * Math.cos((a * Math.PI) / 180)];
-  const arc = (from: number, to: number) => {
-    const [x0, y0] = at(from), [x1, y1] = at(to);
-    return `M ${x0} ${y0} A ${r} ${r} 0 ${to - from > 180 ? 1 : 0} 1 ${x1} ${y1}`;
-  };
-  const [px, py] = at(angle, 3), [tx, ty] = at(angle, 8.5);
-  return (
-    <svg
-      ref={el}
-      width="28"
-      height="28"
-      role="slider"
-      tabIndex={disabled ? -1 : 0}
-      aria-label={label}
-      aria-valuemin={0}
-      aria-valuemax={1}
-      aria-valuenow={Number(value.toFixed(3))}
-      aria-valuetext={readout}
-      className="block rounded-full"
-      onKeyDown={(e) => {
-        if (e.metaKey || e.ctrlKey || e.altKey || pointer) return;
-        if (e.key === "ArrowUp" || e.key === "ArrowDown") onStep((e.key === "ArrowUp" ? 1 : -1) * (e.shiftKey ? 10 : 1));
-        else if (e.key === "Enter") onType();
-        else if (e.key === "Backspace" || e.key === "Delete") {
-          if (Math.abs(reset - value) > 1e-6) onChange(reset);
-        } else return;
-        e.preventDefault();
-        e.stopPropagation();
-      }}
-    >
-      {/* The track, the value from its start, and the pointer (taste.md §2.8). */}
-      <path
-        d={arc(a0, a1)}
-        className={disabled ? "stroke-line" : clsx("stroke-line-strong", !pointer && "group-hover/knob:stroke-fg-off")}
-        strokeWidth="2"
-        fill="none"
-        strokeLinecap="round"
-      />
-      {Math.abs(angle - from) > 1.5 && (
-        <path
-          d={arc(Math.min(from, angle), Math.max(from, angle))}
-          className={disabled ? "stroke-fg-off" : pointer ? "stroke-accent" : "stroke-fg"}
-          strokeWidth="2"
-          fill="none"
-          strokeLinecap="round"
-        />
-      )}
-      <line x1={px} y1={py} x2={tx} y2={ty} className={disabled ? "stroke-fg-off" : "stroke-fg-strong"} strokeWidth="1.5" strokeLinecap="round" />
-      {pointer &&
-        createPortal(
-          <div
-            aria-hidden
-            className="fixed z-50 pointer-events-none -translate-x-1/2 -translate-y-full px-1.5 py-0.5 rounded-sm bg-fg-strong/92 text-white text-xs whitespace-nowrap"
-            style={{ left: pointer.x, top: pointer.y - 12 }}
-          >
-            {readout}
-          </div>,
-          document.body,
-        )}
-    </svg>
   );
 }
