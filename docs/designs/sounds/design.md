@@ -10,15 +10,16 @@ its numbers are in `build-notes.md` beside this file.
   machine of 10. They run on 7 new kernels, which fit the 32 MiB each kernel may hold (O1) many times over.
 - O3 is fixed. std's chorus, phaser and tremolo wobble only while the song plays. Stopped, they wait. Press
   Play and they go on. The bitcrusher's clock is put back at Play to where it was at Stop.
-- So a song you open sounds like its export when you press Play, however long it sat first. Each of the four
-  effects failed that test before the fix, and passes it now.
+- So std's effects and drums sound as in the export when you press Play, however long the song sat first. Each
+  of the four effects failed that test before the fix, and passes it now.
 - How: a new song-time signal, `time.playing`: 1 while the song plays, 0 while it is stopped. std's effects
   read it. No kernel ABI change.
 - No existing render changed. Offline, the song plays on every frame, so the effects do the same sums.
 - std went from 0.1 to 0.2, with every project the repo ships. A song that asks for the old std is told how to
   move.
-- One thing still differs from the export, on purpose: Stop, back to bar 1, Play. That is a jump, and the
-  wobble carries on. The owner may still change this (HANDOFF's open owner decisions).
+- What still differs from the export, on purpose: Stop, back to bar 1, Play. That is a jump, and the wobble
+  carries on. The owner may still change this (HANDOFF's open owner decisions). And an oscillator or noise at a
+  track's top level runs on while stopped (3.6).
 
 | | Before | After |
 |---|---|---|

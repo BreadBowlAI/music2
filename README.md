@@ -400,7 +400,7 @@ std is an ordinary package in `std/`: TypeScript in `std/src`, kernels in `std/k
 | Modulation | `chorus`, `phaser`, `tremolo` |
 | Utility | `gain`, `pan`, `widen` |
 
-Chorus, phaser and tremolo move only while the song plays. Stopped, they wait, and Play carries them on from there. So a song you open sounds like its export when you press Play, however long you wait first. Going back to bar 1 after playing is a jump: the wobble carries on from where it stopped, so that play may differ a little from the export. The bitcrusher keeps crushing a tail after Stop, and at Play it picks up where it stopped.
+Chorus, phaser and tremolo move only while the song plays. Stopped, they wait, and Play carries them on from there. The bitcrusher keeps crushing a tail after Stop, and at Play it picks up where it stopped. So these effects, and std's drums, sound as in the export when you press Play, however long the song sat first. Going back to bar 1 after playing is a jump: the wobble carries on from where it stopped, so that play may differ a little from the export. An oscillator or `noise` written straight into a track's code, outside a voice, runs on while the song is stopped, so it may start from another place than in the export. A plugin may run on too.
 
 **`duck`** (`std/fx`) is the sidechain: `duck(bass.out, kick.env)` turns the bass down while the kick plays. It needs a second signal, so it's written in code rather than added from the browser.
 

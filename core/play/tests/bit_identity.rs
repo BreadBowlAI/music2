@@ -187,10 +187,11 @@ fn after_idle_songs() -> Vec<(String, Song)> {
 
 // RENDER-33 after the engine sat stopped: a song opened and played a few seconds later (or a few
 // blocks), from 0, is the export bit for bit. Stopped, the engine runs its kernels on so tails
-// decay (RENDER-6a), so nothing of std's may follow how long the engine has run. A drum's hits take
-// their seed from how many hits its lane has played (std:hitcount), never from the samples
-// processed. Chorus, phaser and tremolo step their LFOs, and the bitcrusher its clock, only while
-// the song plays (`time.playing`). Every song is judged, and every difference named.
+// decay (RENDER-6a), so nothing of std's effects or drums may follow how long the engine has run.
+// A drum's hits take their seed from how many hits its lane has played (std:hitcount), never from
+// the samples processed. Chorus, phaser and tremolo step their LFOs, and the bitcrusher its clock,
+// only while the song plays (`time.playing`). Every song is judged, and every difference named.
+// None of these songs has a free-running source at its top level (the module doc).
 #[test]
 fn std_plays_the_export_after_the_engine_sat_stopped() {
     let mut differs = vec![];
