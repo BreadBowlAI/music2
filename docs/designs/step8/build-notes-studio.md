@@ -1525,9 +1525,18 @@ the same tree)
 | Suite | What broke | Why | Fix |
 |---|---|---|---|
 | `st-tips` (D) | "the question before an export with a track muted shows" failed | Lane C's Export dialog now comes before the question | The suite presses Return in the dialog first (Song is chosen), as `fx-fixes` does. Still 45 checks |
+| `pl-notes` | "the field keeps its width" failed: the song name's field was 106 px wide, not at least 120 | Lane B's Record button takes 32 px, so the Mac app's room for the name at 1440 px is now 106 px. The suite leaves the Mac layout and starts typing at once, before the page has measured the browser's room again (242 px). Only the suite does this: the app never changes layout | The suite waits 300 ms after leaving the Mac layout, as it does after each width. Still 102 checks |
 
 Red first: `st-tips` 44 of 45 on the merged tree (`st-int-suites1-*`: `FAIL  the question before an export with a
 track muted shows`); 45 of 45 with the fix (`st-int-plnotes-*`).
+`pl-notes` 101 of 102 on the merged tree and on lane B's page alone (`st-int-plnotes-*`, `st-int-plnotes-lanes-*`:
+`FAIL  the field keeps its width, on top of its neighbours: {"w":106,"top":true} then {"w":106,"top":true}`), and 102
+of 102 on lane A's page; with the fix, 102 of 102 (`st-int-plnotes2-*`).
+
+**A flaky suite, not the merge's:** `pl-notes` sometimes stops at a check the merge didn't touch ("the focus is back
+in the roll…", or a note not found right after Esc) when several suites run at once. Run four at a time, the page from
+`85b069a` failed 2 of 4 and the merged page 2 of 4 (`st-int-plnotes-flake-*`); alone, the merged page passed 6 of 7.
+For the End: run `pl-notes` alone.
 
 ## End
 

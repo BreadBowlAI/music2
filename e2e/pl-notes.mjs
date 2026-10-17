@@ -496,6 +496,9 @@ for (const mac of [false, true]) {
 }
 await page.evaluate(() => delete document.documentElement.dataset.app);
 await page.setViewport({ width: 1440, height: 900 });
+// The name's room is measured again a frame later: typing must not begin in the Mac app's room,
+// which the Record button (studio lane B) makes too small for the field at 1440.
+await sleep(300);
 const wide = await room();
 check(wide.shown && wide.cut, "at 1440 it shows, cut short");
 // While the name is being typed it stays, even when its room goes for a moment (a status pill
