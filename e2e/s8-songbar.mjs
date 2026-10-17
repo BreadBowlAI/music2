@@ -185,6 +185,35 @@ await undo();
 await undo();
 check(await until(() => read("data/arrangement.json") === orig.arrangement), "two undos take them out");
 
+// An edit goes to the tempo it began on, wherever the playhead is when it ends: a drag, and a typed
+// tempo, begun before bar 5's 140 and finished after the playhead crossed it.
+await post("/tempo", { session, at: 16, bpm: 140, add: true });
+await post("/seek", { beat: 14 });
+await until(async () => (await field()).bpm === 124);
+await dragTempo(24, {
+  during: async () => {
+    await post("/seek", { beat: 20 });
+    await until(async () => at((await status()).beat, 20));
+    await sleep(300);
+  },
+});
+check(await until(() => same(tempos(), [[0, 130], [16, 140]])), `a drag sets the tempo it began on: ${JSON.stringify(tempos())}`);
+await post("/seek", { beat: 14 });
+await until(async () => (await field()).bpm === 130);
+const tb = await box("[data-testid=tempo-field]");
+await page.mouse.click(tb.x + tb.width / 2, tb.y + tb.height / 2, { count: 2 });
+await page.waitForSelector("[data-testid=tempo-field-input]", { timeout: 2000 }).catch(() => null);
+await post("/seek", { beat: 20 });
+await until(async () => at((await status()).beat, 20));
+await sleep(300);
+await page.$eval("[data-testid=tempo-field-input]", (e) => e.select()).catch(() => {});
+await page.keyboard.type("128");
+await page.keyboard.press("Enter");
+check(await until(() => same(tempos(), [[0, 128], [16, 140]])), `and so does a typed one: ${JSON.stringify(tempos())}`);
+check(await until(async () => (await field()).bpm === 140), "the field shows the tempo at the playhead again");
+for (let i = 0; i < 3; i++) await undo();
+check(await until(() => read("data/arrangement.json") === orig.arrangement), "three undos put the song back");
+
 // ---------------------------------------------------------------- the song's name (design-8b §4.4)
 
 const name = await box("[data-testid=bar-song-name]");
