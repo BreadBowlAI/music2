@@ -4,9 +4,10 @@ import { ROOT, check, done, open, sleep, until, write } from "./fixlib.mjs";
 const { browser, page, errors, box } = await open();
 write("data/arrangement.json", JSON.stringify({ tempo: [{ beat: 0, bpm: 124 }, { beat: 16, bpm: 100 }], meter: [{ beat: 0, beats: 4, unit: 4 }, { beat: 16, beats: 7, unit: 8 }] }));
 check(await until(async () => (await page.$$eval("[data-testid=ruler] span", (els) => els.map((e) => e.textContent))).includes("7/8 ♩100")), "an arrangement written from outside is taken in");
-const ruler = await page.$$eval("[data-testid=ruler] span", (els) => els.map((e) => [e.textContent, Math.round(parseFloat(e.style.left))]));
+// Each number sits in its bar's row, placed by its left (next D4a).
+const ruler = await page.$$eval("[data-testid=ruler] [data-bar]", (els) => els.map((e) => [e.textContent, Math.round(parseFloat(e.parentElement.style.left))]));
 check(JSON.stringify(ruler.slice(0, 7)) === JSON.stringify([["1", 6], ["2", 102], ["3", 198], ["4", 294], ["5", 390], ["6", 474], ["7", 558]]), `bar numbers follow the meter: ${JSON.stringify(ruler.slice(0, 8))}`);
-check(ruler.some(([t]) => t === "7/8 ♩100"), "the 7/8 and the tempo change share a mark");
+check((await page.$$eval("[data-testid=ruler] [data-mark]", (els) => els.map((e) => e.textContent))).includes("7/8 ♩100"), "the 7/8 and the tempo change share a mark");
 await page.screenshot({ path: `${ROOT}/s4-meter.png` });
 const c = await box('[data-lane="hats.hits"] [data-clip]');
 await page.mouse.click(c.x + 40, c.y + c.height / 2, { count: 2 });

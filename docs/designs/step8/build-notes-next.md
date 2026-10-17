@@ -1208,6 +1208,10 @@ section above is its own branch's, word for word.
   didn't see it. Red: `host_math_goes_through_libm` panicked, `…/play/src/outputs/tests/mod.rs: No such file or
   directory`. After: 1 passed; `m2-play`'s 22 lib tests pass, the three `outputs::tests` among them.
   **For 8a's merge:** only the test file's place and the `mod tests;` line at `outputs.rs`'s end changed.
+- `s4-meter` reads the ruler's bar numbers from their rows (`[data-bar]`, placed by the row's left) and the shared
+  change from its own element (`[data-mark]`), as lane D did for `s8-songbar`. Lane D's 36 px ruler moved them, and
+  `s4-meter` wasn't in D4's list of suites to run. Red, on the joined page: `FAIL bar numbers follow the meter:
+  [["1",null],["2",null],…,["7/8 ♩100",null],…]`, then `FAIL the 7/8 and the tempo change share a mark`. After: 8 of 8.
 
 ## End
 
