@@ -334,3 +334,26 @@ Pictures: `~/m2-runs/tn-scratch/a3/` (`01-file.png` the File menu, `03-help.png`
 - Windows (later): Redo is Ctrl+Y there (OS-54); the layout's "elsewhere" branch is GTK's today.
 - The Mac run: the menu bar as before (the app menu, Window, Full Screen), and pc-keys passing on the
   Mac (its Chrome built for the Mac, with a PC's user agent).
+
+## Step A's full check
+
+**In short**
+- `ci/check.sh` at `22c09cd` (A3's last commit), with the test plugins: **music2 check: PASS**. Every
+  row passed the first time: nothing passed only on a retry, and "what failed" and the retry list are
+  empty.
+- Run in tmux (`~/m2-runs/tw check-tnA`), 12 minutes, on a quiet machine (load under 3 at the start).
+  Logs: `~/m2-runs/check-tnA/` and `check-tnA.tgz`.
+
+| Row | Result |
+|---|---|
+| toolchain, web build, build | PASS (rustc 1.99.0) |
+| app (Xvfb) | PASS: the UI connected, first-song in 1 s, with-plugins in 1 s. `app-first-song.png` shows Inter and the Linux menu bar (File, Edit, Track, View, Transport, Help). |
+| rust tests | PASS: 967 passed, 0 failed |
+| clippy, std kernels, std.wasm | PASS; `std.wasm` rebuilt to the same bytes in another folder |
+| mac lint | PASS: the macOS code (the Mac's menu bar included) type-checks and lints |
+| browser suites | PASS: 33 of 33 runs, 1,252 of 1,252 checks, pc-keys 36 of 36, live3b with the plugins |
+| renders | PASS: 10 of 10 match `e2e/renders.sha256` |
+| repo unchanged | PASS |
+
+Not run here: `--gates` (the timing gates). The task named the plain check for step A's end; the
+gates run with the final phase.
