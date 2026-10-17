@@ -463,17 +463,17 @@ fn a_track_renamed_and_a_knob_automated_play_and_undo() {
 
     let revision = revision + 1;
     let automated = graph.automate(token, revision, &id).unwrap();
-    assert_eq!((&automated["lane"], &automated["name"]), (&json!({"module": "tone", "lane": "sine-freq"}), &json!("sine freq")));
-    let written = "track('tone', { name: \"Lead Tone\" }, ({ lane }) => osc.sine(lane.control(\"sine-freq\", \"hz\", hz(800))))";
+    assert_eq!((&automated["lane"], &automated["name"]), (&json!({"module": "tone", "lane": "freq"}), &json!("freq")));
+    let written = "track('tone', { name: \"Lead Tone\" }, ({ lane }) => osc.sine(lane.control(\"freq\", \"hz\", hz(800))))";
     assert!(fixture.read("song.ts").contains(written));
     let lane = &tracks(&graph)["lanes"][0];
     let shown = (&lane["kind"], &lane["key"], &lane["default"], &lane["clips"]);
-    assert_eq!(shown, (&json!("control"), &json!("sine-freq"), &json!(800.0), &json!([])));
+    assert_eq!(shown, (&json!("control"), &json!("freq"), &json!(800.0), &json!([])));
     assert!(synced(&graph), "the player plays the automated song");
     assert!(graph.automate(token, revision, &id).is_err(), "the knob is a lane now");
 
     graph.undo(token).unwrap();
-    assert!(!fixture.0.join("data/tone/sine-freq.json").exists() && synced(&graph));
+    assert!(!fixture.0.join("data/tone/freq.json").exists() && synced(&graph));
     graph.undo(token).unwrap();
     assert_eq!(tracks(&graph)["label"], "tone");
     assert!(fixture.read("song.ts").contains("track('tone', () => osc.sine(hz(800)))"));

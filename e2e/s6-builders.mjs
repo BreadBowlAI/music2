@@ -156,10 +156,10 @@ const hi = '[data-module="bass"] [data-node="xrange"] [data-knob="hi"]';
 await page.$eval(hi, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
 await openMenu(hi);
 await key("Enter");
-check(await until(() => read("tracks/bass.ts") === orig.bass.replace("khz(2.5)", 'lane.control("wobble-hi", "hz", khz(2.5))')), "Enter in the menu automates; ({ lane, time }) is left as it is");
-check(await until(async () => !!(await page.$('[data-track="bass"] [data-lane="bass.wobble-hi"]'))), "the lane shows under its track");
+check(await until(() => read("tracks/bass.ts") === orig.bass.replace("khz(2.5)", 'lane.control("hi", "hz", khz(2.5))')), "Enter in the menu automates; ({ lane, time }) is left as it is");
+check(await until(async () => !!(await page.$('[data-track="bass"] [data-lane="bass.hi"]'))), "the lane shows under its track");
 await key("z", ["Meta"]);
-check(await until(() => read("tracks/bass.ts") === orig.bass && read("data/bass/wobble-hi.json") === null), "undone");
+check(await until(() => read("tracks/bass.ts") === orig.bass && read("data/bass/hi.json") === null), "undone");
 
 // What can't be automated says why, in place of what it would do.
 write("tracks/keys.ts", orig.keys.replace('export default track("keys", { name: "Keys" }, ({ lane }) => pluck(lane.notes("chords")));',

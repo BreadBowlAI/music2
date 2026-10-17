@@ -32,29 +32,33 @@ pub struct Automated {
     pub edited: Edited,
 }
 
-/// What `c`, a value of module `m`, is called: a dictionary entry's control by its entry and
-/// control (`channels.hats.pan` is `hats pan`), else the call's binding and the control (`lead
-/// cutoff`), else the component and the control (`bass cutoff`). A value no control declares is
-/// named by its call.
-fn name_of(c: &Control, m: &Module, sites: &[Site]) -> String {
+/// What `c`, a value of module `m`, is called, in words, and what goes in front of that when its
+/// lane's key clashes (D6, M7): a declared control by its label (`decay`), in front of which goes
+/// the call's binding, else its component (`pad decay`); a dictionary entry's control by its entry
+/// and control (`channels.hats.pan` is `hats pan`). A value no control declares is named by its
+/// call's binding (or callee) and its argument.
+fn name_of(c: &Control, m: &Module, sites: &[Site]) -> (String, Option<String>) {
     let site_of = |id: u32| sites.iter().find(|s| s.id == id);
     let Some(slot) = c.origin.control.as_ref() else {
         let call = site_of(c.origin.site);
         let by = call.and_then(|s| s.binding.clone()).or_else(|| call.map(|s| s.callee.replace('.', " "))).unwrap_or_default();
         let last = c.origin.arg.last().filter(|a| a.parse::<usize>().is_err());
-        return [Some(by), last.cloned()].into_iter().flatten().collect::<Vec<_>>().join(" ");
+        return ([Some(by), last.cloned()].into_iter().flatten().collect::<Vec<_>>().join(" "), None);
     };
     if let [_, entry, control] = slot.slot.split('.').collect::<Vec<_>>()[..] {
-        return format!("{entry} {control}");
+        return (format!("{entry} {control}"), None);
     }
     let frame = m.frames.get(slot.frame as usize);
     let binding = frame.and_then(|f| site_of(f.site)).and_then(|s| s.binding.clone());
     let component = frame.and_then(|f| f.component.as_deref()).map(|c| c.rsplit(':').next().unwrap_or(c).to_string());
     let label = c.declared.iter().find(|d| d.slot == slot.slot).map_or(slot.slot.as_str(), |d| d.label.as_str());
-    match binding.or(component) {
-        Some(by) => format!("{by} {label}"),
-        None => label.to_string(),
-    }
+    (label.to_string(), binding.or(component))
+}
+
+/// `words` as a lane shows them: the first letter a capital (`Decay`, `Hats pan`).
+fn sentence(words: &str) -> String {
+    let mut chars = words.chars();
+    chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
 }
 
 /// The call that made module `m`: its `track()`, or for the root its `song()`.
@@ -131,23 +135,36 @@ pub fn automate(s: &mut Session, at: u64, id: &str) -> Result<Automated, EditErr
     };
 
     // The lane's key: from the knob's name, free among the module's lanes and its files in any
-    // capitals (ID-2).
-    let name = name_of(&c, m, &rev.compiled.sites);
+    // capitals (ID-2). On a clash, the call's binding goes in front, then a number (D6).
+    let (mut name, prefix) = name_of(&c, m, &rev.compiled.sites);
     let module = Key::new(&m.key).map_err(EditError::Rejected)?;
     let taken = |k: &str| {
         let Ok(lane) = Key::new(k) else { return true };
         m.lanes.iter().any(|l| l.key == k)
             || rev.snapshot.taken(&DataPath::lane(&LaneAddr { module: module.clone(), lane }).path()).is_some()
     };
-    let key = match keys::propose(&name, taken) {
-        k if k.is_empty() => keys::propose("lane", taken),
-        k => k,
+    let own = keys::propose(&name, |_| false);
+    let key = match prefix {
+        _ if !own.is_empty() && !taken(&own) => own,
+        Some(p) => {
+            name = format!("{p} {name}");
+            keys::propose(&name, taken)
+        }
+        None => keys::propose(&name, taken),
     };
+    let key = if key.is_empty() { keys::propose("lane", taken) } else { key };
     let addr = LaneAddr { module: module.clone(), lane: Key::new(&key).map_err(EditError::Rejected)? };
+    // The lane shows its key as words (`decay` as "Decay"): the code names it only when that isn't
+    // what the knob is called.
+    let shown = sentence(&name);
+    let named = match sentence(&key.replace('-', " ")) == shown {
+        true => String::new(),
+        false => format!(", {{ name: {} }}", json(&shown)),
+    };
 
     // The value's expression becomes the lane's fallback, as written; an inherited control's
     // default is written into its call as `disconnect` spells it.
-    let read = |fallback: &str| format!("{lane_of}.control({}, {}, {fallback})", json(&key), json(unit.name()));
+    let read = |fallback: &str| format!("{lane_of}.control({}, {}, {fallback}{named})", json(&key), json(unit.name()));
     let mut edits: Vec<(u32, u32, String)> = vec![];
     let mut ranges: Vec<(u32, u32)> = vec![];
     let expression = match c.expression() {
