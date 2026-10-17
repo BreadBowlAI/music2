@@ -15,6 +15,8 @@ mod routes_mix;
 mod routes_notes;
 mod routes_project;
 mod routes_view;
+mod routes_settings;
+pub mod settings;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -50,6 +52,9 @@ pub struct AppState {
     /// The recent songs list (polish C2), when this server keeps one ([`AppState::keep_recent`]):
     /// the app and the headless server do; tests don't, so none writes the real `~/.music2`.
     recent: OnceLock<recent::Recent>,
+    /// This machine's settings (gaps #31), when this server keeps them ([`AppState::keep_settings`]):
+    /// the app and the headless server do; tests don't.
+    settings: OnceLock<settings::Settings>,
 }
 
 impl AppState {
@@ -63,7 +68,26 @@ impl AppState {
             unheard: Mutex::default(),
             meters: watch::channel(String::new()).0,
             recent: OnceLock::new(),
+            settings: OnceLock::new(),
         }
+    }
+
+    /// Keep this machine's settings in `file` (`~/.music2/settings.json`) from now on, and apply
+    /// them: the sound output a player opens, and where new songs go. Once. A songs folder that
+    /// is no longer one (inside a song now) is the default.
+    pub fn keep_settings(&self, file: PathBuf) {
+        let s = settings::Settings::new(file);
+        let kept = s.read();
+        if let Err(e) = self.graph.set_output(kept.output.choice()) {
+            eprintln!("music2: couldn't use the sound output chosen: {e:#}");
+        }
+        project::set_songs_dir(kept.songs.as_deref().and_then(|d| project::songs_folder(d).ok()));
+        let _ = self.settings.set(s);
+    }
+
+    /// This machine's settings, if this server keeps them.
+    pub fn settings(&self) -> Option<&settings::Settings> {
+        self.settings.get()
     }
 
     /// Keep the recent songs list in `file` (`~/.music2/recent.json`) from now on. Once.

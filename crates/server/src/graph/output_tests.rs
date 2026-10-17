@@ -1,5 +1,6 @@
 //! A song opens with no sound device (gaps #13, plan C1): the silent player stands in and says so,
-//! plays on its clock, and an output that comes back is used from the next action.
+//! plays on its clock, and an output that comes back is used from the next action. Settings'
+//! choice of output (gaps #31, C2) makes a new player where the song was.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -130,4 +131,46 @@ fn a_device_that_comes_back_is_used_from_the_next_action() {
     assert_eq!(plug.starts(), 2);
     std::thread::sleep(Duration::from_millis(20));
     assert!(graph.generation().is_some(), "the song plays in it");
+}
+
+// gaps #31: Settings' output and buffer size make a new player at once, opened with them, and the
+// song plays in it where it was, stopped; the window is told play stopped. The same choice again
+// changes nothing. Before a song opens, the choice waits for its player.
+#[test]
+fn choosing_an_output_makes_a_new_player_where_it_was() {
+    let asked: Arc<parking_lot::Mutex<Vec<Choice>>> = Arc::default();
+    let starts = asked.clone();
+    let graph = Graph::starting(
+        Box::new(move |c| {
+            starts.lock().push(c.clone());
+            Player::silent()
+        }),
+        Box::new(|| Some("Speakers".into())),
+    );
+    let headphones = Choice { device: Some("Headphones".into()), frames: Some(256) };
+    assert!(!graph.set_output(headphones.clone()).unwrap(), "no player yet: nothing stops");
+    assert!(graph.output_now().is_none());
+    let fixture = Fixture::new();
+    graph.open(&fixture.0).unwrap();
+    assert_eq!(asked.lock().as_slice(), std::slice::from_ref(&headphones), "the song's player opens with the choice");
+    graph.transport("play").unwrap();
+    eventually("the playhead moves", || graph.status().beat > 0.5);
+    let before = graph.inner.current_device().unwrap().epoch;
+    let speakers = Choice { device: None, frames: Some(128) };
+    assert!(graph.set_output(speakers.clone()).unwrap(), "it was playing");
+    assert_eq!(asked.lock().last(), Some(&speakers));
+    let epoch = graph.inner.current_device().unwrap().epoch;
+    assert!(epoch > before, "a new player, at once");
+    let loaded = graph.inspect(|a| a.open.as_ref().unwrap().plays.as_ref().map(|p| p.epoch));
+    assert_eq!(loaded, Some(epoch), "the song is loaded into it at once");
+    let st = graph.status();
+    assert!(!st.playing && st.beat > 0.5, "where it was, stopped: {st:?}");
+    eventually("its first callback", || graph.output_now().is_some_and(|n| n.frames.is_some()));
+    let now = graph.output_now().unwrap();
+    assert_eq!((now.device.as_str(), now.rate, now.fell_back, now.no_output), ("none", 48_000, false, false));
+    assert_eq!(graph.output_choice(), speakers);
+    // The same choice again: the same player.
+    let epoch = graph.inner.current_device().unwrap().epoch;
+    assert!(!graph.set_output(speakers).unwrap());
+    assert_eq!(graph.inner.current_device().unwrap().epoch, epoch);
 }

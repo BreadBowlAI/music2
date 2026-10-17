@@ -8,16 +8,35 @@
 //! A start that failed isn't tried again until the default output changes, or for 30 s: a device
 //! the OS lists that won't open would otherwise be tried, and fail, at every action (plan X23).
 //!
+//! Settings chooses the output and its buffer size (gaps #31, [`Graph::set_output`]): the player
+//! is let go, and a new one starts there at once, where it was, stopped.
+//!
 //! Only [`Inner::device`](super::Inner) starts players: it asks [`Outputs::start`] for one, and
 //! [`Outputs::came_back`] whether a real one may take over from the stand-in.
 
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use m2_play::{Choice, Player};
 use parking_lot::Mutex;
+use serde::Serialize;
 
-use super::Graph;
+use super::{Graph, retire};
+
+/// What plays now, as Settings' Now row says it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Now {
+    /// The device's name ("none" for the silent player).
+    pub device: String,
+    /// The device's own rate, in Hz.
+    pub rate: u32,
+    /// Its buffer, in samples, once it has called back.
+    pub frames: Option<u32>,
+    /// The output chosen is gone, so this is the default.
+    pub fell_back: bool,
+    /// No output started: the silent player stands in.
+    pub no_output: bool,
+}
 
 /// Starts a player on an output: the real one opens the device ([`Player::start_on`]).
 pub(super) type Start = Box<dyn Fn(&Choice) -> Result<Player> + Send + Sync>;
@@ -89,6 +108,14 @@ impl Outputs {
         }
     }
 
+    /// Settings' choice, from now on: whether it changed.
+    fn choose(&self, choice: Choice) -> bool {
+        let mut s = self.state.lock();
+        let changed = s.choice != choice;
+        s.choice = choice;
+        changed
+    }
+
     /// Whether the player `epoch` is the silent one standing in for an output.
     pub(super) fn standing_in(&self, epoch: u64) -> bool {
         self.state.lock().stand_in == Some(epoch)
@@ -147,6 +174,50 @@ impl Graph {
     /// Whether no output plays: the silent player stands in for one that didn't start.
     pub fn no_output(&self) -> bool {
         self.inner.current_device().is_some_and(|d| self.inner.output.standing_in(d.epoch))
+    }
+
+    /// The output and buffer size Settings chose.
+    pub fn output_choice(&self) -> Choice {
+        self.inner.output.state.lock().choice.clone()
+    }
+
+    /// What plays now; None while no song has started a player.
+    pub fn output_now(&self) -> Option<Now> {
+        let d = self.inner.current_device()?;
+        let p = &d.player;
+        Some(Now {
+            device: p.device.clone(),
+            rate: p.device_rate,
+            frames: p.frames(),
+            fell_back: p.fell_back(),
+            no_output: self.inner.output.standing_in(d.epoch),
+        })
+    }
+
+    /// Play on the output `choice` names, at its buffer size (Settings, gaps #31). A player that
+    /// plays is let go, as after a device change, and a new one starts there at once, with the song
+    /// loaded into it where it was, stopped (unless the session is busy: then the next catch-up). Returns whether it was playing (the
+    /// window says "Playback stopped. Press Play to go on."). With no player yet, the next song's
+    /// opens there. Refused while an export holds the player (plan X22).
+    pub fn set_output(&self, choice: Choice) -> Result<bool> {
+        let old = {
+            let mut d = self.inner.player.lock();
+            if d.as_ref().is_some_and(|d| d.player.held()) {
+                bail!("Wait for the export to finish.");
+            }
+            if !self.inner.output.choose(choice) {
+                return Ok(false);
+            }
+            d.take()
+        };
+        let Some(old) = old else { return Ok(false) };
+        let st = old.player.status();
+        *self.inner.resume.lock() = st.pending.unwrap_or(st.beats);
+        retire(old.player);
+        self.inner.device()?;
+        // The song goes into it now, not at the server's next catch-up: Play pressed at once plays.
+        self.catch_up();
+        Ok(st.playing)
     }
 }
 

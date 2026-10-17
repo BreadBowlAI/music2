@@ -19,7 +19,8 @@ static BUSY: AtomicBool = AtomicBool::new(false);
 /// screen's button (the same as the menu item). Those that answer wait for it: "export_path"
 /// returns the file picked in the Export Audio save dialog (None if cancelled), and
 /// "reveal_file" shows `arg`, an exported file, in Finder. "song_folder" returns the folder
-/// picked for a new song (the New Song dialog's Choose Folder…), starting at `arg`.
+/// picked for a new song (the New Song dialog's Choose Folder…), starting at `arg`: a folder, or
+/// `{"start": folder, "title": words}` (Settings' "Choose Where New Songs Go", plan X38).
 #[tauri::command]
 pub async fn action(app: AppHandle, id: String, arg: Option<String>) -> Result<Option<String>, String> {
     let answer = match id.as_str() {
@@ -64,17 +65,32 @@ fn export_path(app: &AppHandle) -> anyhow::Result<Option<String>> {
 }
 
 /// Where to make a new song: a folder picked starting at `start` (the one chosen before) or
-/// the songs folder, which is made if it isn't there yet.
-fn song_folder(app: &AppHandle, start: Option<String>) -> anyhow::Result<Option<String>> {
+/// the songs folder, which is made if it isn't there yet. `arg` is the folder, or JSON with the
+/// folder and the dialog's title ([`folder_ask`]).
+fn song_folder(app: &AppHandle, arg: Option<String>) -> anyhow::Result<Option<String>> {
+    let (start, title) = folder_ask(arg);
     let dir = match start.map(PathBuf::from).filter(|d| d.is_dir()) {
         Some(d) => d,
         None => m2_server::project::make_songs_dir()?,
     };
-    let mut dialog = app.dialog().file().set_title("Choose Where to Save the Song").set_directory(dir).set_can_create_directories(true);
+    let mut dialog = app.dialog().file().set_title(title).set_directory(dir).set_can_create_directories(true);
     if let Some(w) = app.get_webview_window("main") {
         dialog = dialog.set_parent(&w);
     }
     Ok(dialog.blocking_pick_folder().and_then(|p| p.into_path().ok()).map(|p| p.display().to_string()))
+}
+
+/// What the page asks of the folder dialog: where it starts, and its title. A plain folder (New
+/// Song, Save As) is titled "Choose Where to Save the Song"; Settings sends
+/// `{"start": …, "title": "Choose Where New Songs Go"}`.
+fn folder_ask(arg: Option<String>) -> (Option<String>, String) {
+    const SONG: &str = "Choose Where to Save the Song";
+    match arg.as_deref().map(serde_json::from_str::<serde_json::Value>) {
+        Some(Ok(serde_json::Value::Object(o))) => {
+            (o.get("start").and_then(|v| v.as_str()).map(String::from), o.get("title").and_then(|v| v.as_str()).unwrap_or(SONG).to_string())
+        }
+        _ => (arg, SONG.to_string()),
+    }
 }
 
 /// Show a file in Finder, selected (elsewhere, open its folder).
@@ -232,4 +248,20 @@ fn error(app: &AppHandle, msg: &str) {
         dialog = dialog.parent(&w);
     }
     dialog.blocking_show();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Plan X38: the folder dialog is titled for what it picks: a song's folder (a plain path, as
+    /// New Song and Save As send it), or where new songs go (Settings sends its title).
+    #[test]
+    fn the_folder_dialog_takes_its_title_from_the_page() {
+        let song = "Choose Where to Save the Song".to_string();
+        assert_eq!(folder_ask(Some("/Users/me/Music".into())), (Some("/Users/me/Music".into()), song.clone()));
+        assert_eq!(folder_ask(None), (None, song));
+        let settings = r#"{"start": "/Users/me/Songs", "title": "Choose Where New Songs Go"}"#;
+        assert_eq!(folder_ask(Some(settings.into())), (Some("/Users/me/Songs".into()), "Choose Where New Songs Go".into()));
+    }
 }

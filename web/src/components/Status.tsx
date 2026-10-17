@@ -3,7 +3,7 @@ import { CircleAlert, CodeXml, Gauge, Hourglass, Info, Lock, Pause, TriangleAler
 import { useRef, useState, type ReactNode } from "react";
 import { attention, graphApi, lockReason, type GraphState, type GraphStatus, type Problem, type ReadOnly } from "../lib/graph";
 import { usePill } from "../lib/overlays";
-import "../lib/settings";
+import { openSettings } from "../lib/settings";
 import { useStore } from "../lib/store";
 import Attention from "./Attention";
 import { Button, Details, keepFocus, Popover } from "./ui";
@@ -149,7 +149,7 @@ export default function Status({ graph, status, onShowCode }: { graph: GraphStat
                   </div>
                 )}
                 {s.id === "no-output" && (
-                  <Item state={s} title="No sound output">
+                  <Item state={s} title="No sound output" action={<SettingsLink onOpen={() => setAnchor(null)}>Settings…</SettingsLink>}>
                     No sound device was found, so the song plays silently. Plug one in: it's used from your next action.
                   </Item>
                 )}
@@ -159,7 +159,7 @@ export default function Status({ graph, status, onShowCode }: { graph: GraphStat
                   </Item>
                 )}
                 {s.id === "load" && (
-                  <Item state={s} title="Heavy load">
+                  <Item state={s} title="Heavy load" action={<SettingsLink onOpen={() => setAnchor(null)}>Audio settings…</SettingsLink>}>
                     {`At its busiest moment in the last second, the sound took ${Math.round((status?.load ?? 0) * 100)}% of the time the computer has for it. At 100% it drops out.`}
                     <span className="block mt-1 text-xs text-fg-faint">{`Sample rate ${(graph.sample_rate / 1000).toLocaleString("en", { maximumFractionDigits: 1 })} kHz`}</span>
                   </Item>
@@ -181,6 +181,24 @@ export default function Status({ graph, status, onShowCode }: { graph: GraphStat
         </Popover>
       )}
     </>
+  );
+}
+
+/** The sound output's settings, from a state about the sound (taste.md §3.3's DSP click). */
+function SettingsLink({ onOpen, children }: { onOpen: () => void; children: ReactNode }) {
+  return (
+    <Button
+      variant="secondary"
+      size="sm"
+      data-testid="status-settings"
+      onClick={() => {
+        onOpen();
+        openSettings();
+      }}
+      className="shrink-0"
+    >
+      {children}
+    </Button>
   );
 }
 

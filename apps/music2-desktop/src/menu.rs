@@ -119,6 +119,9 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     // Panic (RENDER-10): every note off, every instance reset.
     ("panic", "Stop All Sound", Some("CmdOrCtrl+Period")),
     ("shortcuts", "Keyboard Shortcuts", None),
+    // This machine's settings (gaps #31): the sound output, the buffer size, where new songs go.
+    // In the app menu on a Mac, after About; in File elsewhere, above Quit.
+    ("settings", "Settings…", Some("CmdOrCtrl+Comma")),
 ];
 
 /// Window → Close Window, which quits (as the window's close button does): ⌘W is Close Song.
@@ -213,7 +216,7 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
     ];
     if mac {
         vec![
-            ("music2", vec![About, Line, Services, Line, Hide, HideOthers, ShowAll, Line, Item("quit")]),
+            ("music2", vec![About, Line, Item("settings"), Line, Services, Line, Hide, HideOthers, ShowAll, Line, Item("quit")]),
             ("File", file.to_vec()),
             // The system's cut, copy and paste, so text fields get them.
             ("Edit", [&[Item("undo"), Item("redo"), Line, Cut, Copy, Paste, SelectAll, Line][..], &selected].concat()),
@@ -229,7 +232,7 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
         // Copy and Paste rows do nothing here (muda needs libxdo for them): the web view has
         // those keys itself, so they aren't rows.
         vec![
-            ("File", [&file[..], &[Line, Item("quit")]].concat()),
+            ("File", [&file[..], &[Line, Item("settings"), Line, Item("quit")]].concat()),
             ("Edit", [&[Item("undo"), Item("redo"), Line][..], &selected].concat()),
             ("Track", track),
             ("View", views.to_vec()),
@@ -502,6 +505,19 @@ mod tests {
             let at = transport.iter().position(|r| *r == Row::Item("add_marker")).expect("Add Marker");
             assert_eq!(transport[at - 1..at + 4], [Row::Line, Row::Item("add_marker"), Row::Item("prev_marker"), Row::Item("next_marker"), Row::Line]);
         }
+    }
+
+    /// Next lane C2 (plan Q18): Settings… is ⌘, (Ctrl+, off the Mac): in the app menu after About on
+    /// a Mac, and in File above Quit's line elsewhere.
+    #[test]
+    fn settings_is_command_comma_in_the_app_menu_on_a_mac_and_in_file_elsewhere() {
+        assert_eq!(ITEMS.iter().find(|i| i.0 == "settings").map(|i| (i.1, i.2)), Some(("Settings…", Some("CmdOrCtrl+Comma"))));
+        let mac = layout(true);
+        assert_eq!(mac[0].1[..4], [Row::About, Row::Line, Row::Item("settings"), Row::Line]);
+        let gtk = layout(false);
+        let file = &gtk.iter().find(|m| m.0 == "File").expect("a File menu").1;
+        assert_eq!(file[file.len() - 4..], [Row::Line, Row::Item("settings"), Row::Line, Row::Item("quit")]);
+        assert!(!mac.iter().find(|m| m.0 == "File").expect("File").1.contains(&Row::Item("settings")), "once on a Mac");
     }
 
     /// OS-55: the reveal item names the Mac's Finder only on a Mac.

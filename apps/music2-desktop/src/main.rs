@@ -61,6 +61,8 @@ fn main() {
             })?;
             let server = running.state.clone();
             server.keep_recent(home().join(".music2").join("recent.json"));
+            // The sound output and where new songs go (gaps #31), before anything plays.
+            server.keep_settings(home().join(".music2").join("settings.json"));
             publish_session(&running.url, &server.token);
             // No window is connected yet: the server keeps these toasts for the first one.
             // They name the folder, not its whole path, so the reason fits. Opened off the main

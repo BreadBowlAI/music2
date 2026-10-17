@@ -4,7 +4,8 @@
 //   - the song opens, and the status says no output plays (`no_output`, no `output` name);
 //   - the status pill says "No sound output", in `warn`, with VolumeX;
 //   - Play moves the playhead: the song plays silently, on the silent player's clock;
-//   - the popover says why and what to do, in plain words; lint;
+//   - the popover says why and what to do, in plain words; lint; its Settings… opens Settings (C2),
+//     whose Now row says the same;
 //   - a PC page says the same.
 //
 //   node e2e/nx-nodevice.mjs <root> <home>     (the `none` kind)
@@ -109,6 +110,12 @@ check(
 );
 const bad = await page.evaluate(lintIn, "[data-testid=status-popover]");
 check(bad.length === 0, `the popover passes the taste lint: ${bad.slice(0, 4).join(" | ")}`);
+// Its Settings… opens the Settings window, which says the same.
+await page.click("[data-testid=status-settings]").catch(() => {});
+check(!!(await page.waitForSelector("[data-testid=settings-dialog]", { timeout: 3000 }).catch(() => null)), "the popover's Settings… opens the Settings window");
+const nowRow = await page.$eval("[data-testid=settings-now]", (e) => e.textContent ?? "").catch(() => "");
+check(/No sound output: the song plays silently\./.test(nowRow), `its Now row says no output plays: ${JSON.stringify(nowRow)}`);
+await page.keyboard.press("Escape");
 await browser.close();
 
 // A PC's page says the same.
