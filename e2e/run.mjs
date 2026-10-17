@@ -98,7 +98,7 @@ export const SUITES = [
   ["s8-clips", "fix", { expect: 94 }],
   ["s8-automation", "fix", { expect: 45 }],
   ["s8-leases", "fix", { expect: 55 }],
-  ["st-audio", "fix", { expect: 92 }],
+  ["st-audio", "fix", { expect: 94 }],
   ["pl-zoom", "fix", { expect: 62 }],
   ["pl-arrange", "fix", { expect: 57 }],
   ["nx-nits", "fix", { expect: 27 }],

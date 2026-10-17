@@ -24,7 +24,9 @@ type S = State<Arc<AppState>>;
 /// The routes here that write the open project.
 pub const WRITES_AUDIO: &[&str] = &["/api/graph/audio/import", "/api/graph/audio/track"];
 
-/// The most an uploaded file may be: a 15-minute file of 8 channels of 32 bits at 96 kHz is less.
+/// The most one upload may be, all its files together: 1 GiB. A 15-minute stereo file of 32 bits at
+/// 96 kHz is 691 MB; a longer, wider or faster one, or several together, can be more, and the page
+/// says so in words before it sends them (the review's R9). The app sends paths: no limit.
 const UPLOAD: usize = 1 << 30;
 
 pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {

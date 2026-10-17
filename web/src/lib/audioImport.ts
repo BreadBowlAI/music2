@@ -38,6 +38,15 @@ const auth: Record<string, string> = token ? { "x-m2-token": token } : {};
 /** An error in words: the server's refusal, without "edit rejected" in front. */
 const words = (error: unknown) => (error instanceof Error ? error.message : String(error)).replace(/^edit rejected: /, "");
 
+/** The most a browser's upload may be, all its files together: the server's `UPLOAD` (routes_audio.rs). */
+const UPLOAD = 2 ** 30;
+
+/** Why files that big can't be sent from a browser, in words (the review's R9). */
+const tooBig = (files: Incoming[]) =>
+  files.length === 1
+    ? `${files[0].name} is too big to upload from a browser (over 1 GB).`
+    : "these files are too big to upload from a browser together (over 1 GB). Bring in fewer at a time.";
+
 async function post(graph: GraphState, files: Incoming[], to: Target): Promise<Imported> {
   const paths = files.flatMap((f) => ("path" in f ? [f.path] : []));
   let res: Response;
@@ -49,10 +58,12 @@ async function post(graph: GraphState, files: Incoming[], to: Target): Promise<I
     });
   } else {
     const blobs = files.map((f) => ("file" in f ? f.file : new Blob()));
+    if (blobs.reduce((n, b) => n + b.size, 0) > UPLOAD) throw new Error(tooBig(files));
     const list = files.map((f, i) => ({ name: f.name, size: blobs[i].size }));
     const q = `session=${graph.session}&files=${encodeURIComponent(JSON.stringify(list))}&to=${encodeURIComponent(JSON.stringify(to))}`;
     res = await fetch(`/api/graph/audio/import?${q}`, { method: "POST", headers: { "content-type": "application/octet-stream", ...auth }, body: new Blob(blobs) });
   }
+  if (res.status === 413) throw new Error(tooBig(files));
   const json = await readJson(res);
   if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
   return json as Imported;

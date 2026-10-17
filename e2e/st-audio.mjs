@@ -17,7 +17,8 @@
 // make a new audio track at the bar with its waveform, on Kick (notes) one right after it, on an
 // audio lane they land there; the hints say so while dragging, with an outline; an MP3 says what
 // music2 opens and writes nothing; so does a MIDI file, which can't be dropped yet (the review's
-// R3); an instrument's drag shows no file hint; each state linted.
+// R3); an instrument's drag shows no file hint; a browser's file too big to upload says so and sends
+// nothing (the review's R9); each state linted.
 //
 //   node e2e/st-audio.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -373,7 +374,12 @@ async function dropFiles(x, y, files, hold = false) {
   return page.evaluate(
     async (x, y, files, hold) => {
       const dt = new DataTransfer();
-      for (const f of files) dt.items.add(new File([Uint8Array.from(atob(f.b64), (c) => c.charCodeAt(0))], f.name, { type: f.type }));
+      for (const f of files) {
+        const file = new File([Uint8Array.from(atob(f.b64), (c) => c.charCodeAt(0))], f.name, { type: f.type });
+        // A file as big as a long recording, without making one.
+        if (f.size) Object.defineProperty(file, "size", { value: f.size });
+        dt.items.add(file);
+      }
       const at = document.elementFromPoint(x, y) ?? document.body;
       const fire = (type) => at.dispatchEvent(new DragEvent(type, { dataTransfer: dt, clientX: x, clientY: y, bubbles: true, cancelable: true }));
       fire("dragenter");
@@ -387,7 +393,7 @@ async function dropFiles(x, y, files, hold = false) {
     },
     x,
     y,
-    files.map((f) => ({ name: f.name, type: f.type ?? "audio/wav", b64: fs.readFileSync(f.path).toString("base64") })),
+    files.map((f) => ({ name: f.name, type: f.type ?? "audio/wav", size: f.size, b64: fs.readFileSync(f.path).toString("base64") })),
     hold,
   );
 }
@@ -451,5 +457,18 @@ const instrument = await page.evaluate(async (x, y) => {
   return hint;
 }, xAt(9), await yBelow());
 check(!instrument, "an instrument's drag shows no file hint");
+// Too big to upload from a browser: said in words, and nothing is sent.
+const sent = [];
+const watch = (r) => r.url().includes("/api/graph/audio/import") && sent.push(r.url());
+page.on("request", watch);
+const revBig = (await api("")).body.view.revision;
+await dropFiles(xAt(9), await yBelow(), [{ name: "long.wav", path: `${files}/hit.wav`, size: 2 ** 30 + 1 }]);
+check(
+  await until(async () => (await toasts()).includes("Nothing was added to the song: long.wav is too big to upload from a browser (over 1 GB).")),
+  `a file over 1 GB says so: ${await toasts()}`,
+);
+await sleep(300);
+check(sent.length === 0 && (await api("")).body.view.revision === revBig, `and nothing is sent or written (${sent.length})`);
+page.off("request", watch);
 await linted(lane, "the timeline after the drops");
 done(errors);

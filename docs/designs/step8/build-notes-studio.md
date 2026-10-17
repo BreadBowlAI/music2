@@ -1641,3 +1641,17 @@ built), so a dropped `.mid` was refused in words that said it opens.
 - Red: `FAIL  a MIDI file's hint: {"hint":"music2 opens WAV and MIDI files","outline":null}`, `FAIL  its drop's toast
   says the same:`.
 - For gaps.md: dropping a MIDI file waits for C2b (#36).
+
+#### R9. Files too big to upload from a browser
+
+The upload limit's comment was wrong (a 15-minute, 8-channel, 32-bit, 96 kHz WAV is 2.76 GB, not under 1 GiB), and a
+browser's upload over it got axum's 413: "Nothing was added to the song: HTTP 413".
+
+- `routes_audio.rs`: the comment says what 1 GiB holds (a 15-minute stereo 32-bit 96 kHz file is 691 MB) and who
+  checks it. The limit stays the plan's.
+- `audioImport.ts`: before a browser uploads, the files' sizes are added up; over 1 GiB, nothing is sent and the toast
+  says "Nothing was added to the song: long.wav is too big to upload from a browser (over 1 GB)." (several files:
+  "… together … Bring in fewer at a time."). A 413 says the same. The app sends paths: no limit.
+- Test: `st-audio` drops a file whose size reads 1 GiB + 1 (2 checks; 92 to 94). Green with `st-record` (63) on the
+  server and page of this commit (`st-end-e2e-g1-*`).
+- Red: `FAIL  a file over 1 GB says so:`, `FAIL  and nothing is sent or written (1)`.
