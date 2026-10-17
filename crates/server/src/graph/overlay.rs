@@ -8,8 +8,8 @@
 //!   sites, so they are never edges here and never silenced (MON-2).
 //! - **Mute wins:** a track muted while listening or in the song is silent, soloed or not.
 //! - **The file (MON-4):** `.music2/overlays.json`, `{"mute": [...], "solo": [...]}`, sorted. Read at
-//!   open; written by the server's `music2-tell` thread after a change (a temp file, then a
-//!   rename), never under the control lock. A read-only window keeps them in memory only. Entries
+//!   open; written by the server's `music2-tell` thread after a change, and before the project
+//!   closes or opens again (a temp file, then a rename), never under the control lock. A read-only window keeps them in memory only. Entries
 //!   of a track that is gone stay, so it comes back as it was; meanwhile they are ignored, so a
 //!   solo of a track that is gone never silences the rest.
 
@@ -268,7 +268,38 @@ fn write(dir: &Path, o: &Overlays) -> std::io::Result<()> {
     std::fs::rename(&tmp, &to)
 }
 
+/// A write `.music2/overlays.json` still owes: the overlays changed since they were last written,
+/// and the window may write.
+pub(super) struct Owed {
+    token: u64,
+    dir: PathBuf,
+    set: Overlays,
+    version: u64,
+}
+
+impl super::Published {
+    /// What its overlays still owe the file, if anything.
+    pub(super) fn owed(&self) -> Option<Owed> {
+        let m = &self.overlays;
+        (m.writer && m.version != m.written).then(|| Owed { token: self.engine.token, dir: m.dir.clone(), set: m.set.clone(), version: m.version })
+    }
+}
+
 impl Inner {
+    /// Write what `owed` says, off the control lock; then, if its project is still open, mark it
+    /// written.
+    pub(super) fn save_owed(&self, owed: Option<Owed>) {
+        let Some(Owed { token, dir, set, version }) = owed else { return };
+        if let Err(e) = write(&dir, &set) {
+            eprintln!("music2: couldn't save the mutes and solos in .music2/overlays.json: {e}");
+            return;
+        }
+        let mut cp = self.control.lock();
+        if let Some(p) = cp.open.as_mut().filter(|p| p.engine.token == token) {
+            p.overlays.written = p.overlays.written.max(version);
+        }
+    }
+
     /// The overlays of the open project, if `token` names it.
     fn monitor(cp: &mut super::ControlPlane, token: u64) -> Result<&mut super::Published> {
         cp.open.as_mut().filter(|p| p.engine.token == token).context("the open project changed; refresh before muting")
@@ -336,24 +367,8 @@ impl Graph {
     /// Write the overlays to `.music2/overlays.json` if they changed since they were last written
     /// and this window may write: off the control lock, from the server's `music2-tell` thread.
     pub fn save_overlays(&self) {
-        let job = {
-            let cp = self.inner.control.lock();
-            let Some(p) = cp.open.as_ref() else { return };
-            let m = &p.overlays;
-            if !m.writer || m.version == m.written {
-                return;
-            }
-            (p.engine.token, m.dir.clone(), m.set.clone(), m.version)
-        };
-        let (token, dir, set, version) = job;
-        if let Err(e) = write(&dir, &set) {
-            eprintln!("music2: couldn't save the mutes and solos in .music2/overlays.json: {e}");
-            return;
-        }
-        let mut cp = self.inner.control.lock();
-        if let Some(p) = cp.open.as_mut().filter(|p| p.engine.token == token) {
-            p.overlays.written = p.overlays.written.max(version);
-        }
+        let owed = self.inner.control.lock().open.as_ref().and_then(|p| p.owed());
+        self.inner.save_owed(owed);
     }
 
     /// The export's Warning when monitoring mutes or solos change what is heard (MON-4): the file

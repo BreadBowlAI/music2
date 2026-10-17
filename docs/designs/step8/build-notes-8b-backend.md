@@ -706,3 +706,20 @@ the same rule: `PlaysView` gains `tracks`, the tracks of what plays.
 
 **Contract:** MON-4 (an entry of a track that is gone is ignored).
 
+### S4. A mute just before a close is saved
+
+**What was wrong:** only the 300 ms `music2-tell` tick wrote `.music2/overlays.json`. Closing, opening
+another project, opening this one again or quitting dropped the overlays without a write. A mute
+made in the last 300 ms was lost, and the track came back unmuted.
+
+**The fix:** what the file still owes (`Published::owed`) is written off the control lock
+(`Inner::save_owed`, which the tick uses too) when the project closes (quitting closes it), before
+a project opens (its file may be the one read next), and for the one it replaces.
+
+| Test | Red first? |
+|---|---|
+| `a_mute_just_before_a_close_or_a_reopen_is_kept` (mute, close at once, the file; reopen; mute, open again at once) | red with the writes at close and open taken out |
+
+**Checks:** tests of `m2-server`; clippy on it.
+
+**Contract:** MON-4 *Today* (when the file is written).

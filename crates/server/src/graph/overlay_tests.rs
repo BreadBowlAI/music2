@@ -166,6 +166,25 @@ fn overlays_persist_in_music2() {
     assert_eq!((again.cells("kick"), again.cells("bass")), (vec![0.0], vec![1.0]));
 }
 
+// MON-4: a mute made just before the project closes, or opens again, is saved all the same: the
+// file is written before the project goes, not only by the server's thread.
+#[test]
+fn a_mute_just_before_a_close_or_a_reopen_is_kept() {
+    let mut rig = Rig::new();
+    rig.mute("kick", true).unwrap();
+    rig.graph.close();
+    let saved: Value = serde_json::from_str(&std::fs::read_to_string(rig.fixture.0.join(".music2/overlays.json")).unwrap_or_default()).unwrap_or_default();
+    assert_eq!(saved, json!({"mute": ["kick"], "solo": []}), "written at the close");
+    rig.graph.open(&rig.fixture.0).unwrap();
+    rig.fill(1);
+    assert_eq!(rig.graph.state().unwrap()["overlays"]["mute"], json!(["kick"]));
+    rig.mute("bass", true).unwrap();
+    rig.graph.open(&rig.fixture.0).unwrap();
+    rig.fill(1);
+    assert_eq!(rig.graph.state().unwrap()["overlays"]["mute"], json!(["bass", "kick"]), "opened again at once");
+    assert_eq!((rig.cells("kick"), rig.cells("bass")), (vec![0.0], vec![0.0]));
+}
+
 // MON-4, WRITE-17: in a window open read-only, mute and solo still work, in memory: nothing is
 // written, and the state says they aren't saved.
 #[test]
