@@ -10,6 +10,7 @@ The `8b-backend` track builds the back ends of 8b.4 (mute, solo, mute in song), 
 |---|---|---|
 | B1 | The IR's `muted`, and where overlays go (`Flat.overlays`, `Flat.muted`) | built |
 | B2 | The overlay op in every plan; overlay cells; the `muted` track option; the delta's `Muted` | built |
+| B3 | Server mute and solo: the path rule, `.music2/overlays.json`, `POST /api/graph/overlay`, new plans' values, mute in song as cell writes, renames, the export's warning | built |
 
 ---
 
@@ -92,3 +93,57 @@ glides over 10 ms. An edit while a track is muted never lets it through.
 
 **Contract:** MON-1 (sites, the op, the window rule) and its *Today*, MON-5 *Today*, RENDER-22a (the glide, R3, the
 50 Hz arithmetic), RENDER-23 *Today*.
+
+---
+
+## B3. Mute and solo on the server
+
+**In short:** `POST /api/graph/overlay` mutes and solos while you listen. It never waits for the session. The
+choice is saved in `.music2/overlays.json` and comes back when the song opens. Mute in song is now a cell write.
+
+| Piece | What it does | Where |
+|---|---|---|
+| `values` | The path rule (MON-3) over the sites. Mute, and mute in song, win over solo. | `crates/server/src/graph/overlay.rs` |
+| `Monitor` | The overlays of the open project, in `Published` (M6): the sets, the accepted revision's tracks, sites and muted, whether this window may write. | same |
+| `Graph::overlay` | Applies a change, writes the cells of what plays under the control lock (at most two cell writes), answers with the state. Refuses `song`, and a track that isn't there, in words. | same |
+| `Graph::save_overlays` | Writes the file if it changed and the window may write: from the `music2-tell` thread, off the lock (M2). | same; one line in `crates/server/src/lib.rs` |
+| `Graph::forget_overlays` | Drops keys (Q7), for taste-next's track delete and add at the merge. | same |
+| `state.overlays` | `mute`, `solo`, `muted_in_song`, `heard` per track, `saved`. `feeds` comes in B4. | `Inner::state` (one line) |
+| New plans | Every renderer gets `set_overlays` before it is sent: in `settle`, and the first one at open (A6). | `crates/server/src/graph/actor.rs` |
+| Mute in song | `reach_to` treats a delta whose only module changes are `Muted` as reachable (A1: `structural()` unchanged); `value_writes` ignores `Flat.muted`; the `Reach` branch writes the overlay cells that changed. | same |
+| Renames | A `Rekeyed` change renames the entries, and undo renames them back. The delta is only computed while some mute or solo is set. | same |
+| Export | `overlays.active` (a Warning) when any monitoring mute or solo changes what is heard. | `Graph::export`, `overlays_warning` |
+| `PlaysView` | Gains `info` (the plan: its overlay sites and cells) and `muted` (S6, plus one field). | `crates/server/src/graph/lease.rs` |
+| Routes | `crates/server/src/routes_8b.rs`, its own router and read-only layer (G5); one `.merge` line in `routes.rs`. | |
+
+**Tests** (`crates/server/src/graph/overlay_tests.rs`, `crates/server/src/routes_8b_tests.rs`, new files):
+
+| Test | Red first? |
+|---|---|
+| `solo_keeps_a_bus_fed_and_its_sources`, `mute_wins_over_solo`, `a_track_muted_in_song_stays_silent_when_soloed` | — |
+| `overlays_persist_in_music2` (written by the thread, not the request; reopened, the first renderer has them) | red without A6 |
+| `a_read_only_window_keeps_overlays_in_memory` | — |
+| `the_song_module_cant_be_muted` (and a missing track; exclusive; clear) | — |
+| `a_new_plan_takes_the_overlays_before_it_is_sent` | — |
+| `a_mute_in_song_toggle_is_a_cell_write` (no new plan; undo too) | red with `Muted` still structural |
+| `a_rekeyed_track_keeps_its_mute` | — |
+| `an_export_is_byte_identical_with_overlays_active` (only that one warns) | — |
+| `mute_and_solo_answer_with_the_overlay_state` (over HTTP: the token, the words, the file) | — |
+
+**A B2 bug B3's tests found** (fixed in its own commit, `0e39f1b`): when the song's output reads a track and the
+output's edge doesn't change, placing its overlay made `place` think the output had a fade, and an edit with a fade
+elsewhere panicked (`a_track_renamed_and_a_knob_automated_play_and_undo`). Whether the output fades is now decided
+first. `an_edit_while_muted_keeps_the_track_silent` gained that case (red first: the panic) and one where the
+track's export changes.
+
+**Choices made here:**
+- A track that isn't in the song can't be muted or soloed from the route; it can be unmuted, so a stale entry can
+  be cleared.
+- `saved` in the state means "this window saves them" (false when read-only), for the pill's tooltip.
+- `heard` is `silenced` only for a track whose every site is off by a solo. A track with no sites is `heard`.
+
+**Checks:** `cargo check --workspace --all-targets`; clippy on `m2-server`; `m2-server` tests.
+
+**Contract:** MON-3 (the path rule, mute wins) and its *Today*, MON-4 (the file, renames, read-only) and its
+*Today*, MON-5 *Today*, RENDER-26 *Today* (`Muted` is no structure). The DIAG row `overlays.active` was already
+in the table (M8).

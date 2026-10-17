@@ -9,6 +9,7 @@ pub mod graph;
 pub mod project;
 pub mod resources;
 mod routes;
+mod routes_8b;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -166,6 +167,7 @@ fn spawn_graph_watch(state: &Arc<AppState>) {
                 std::thread::sleep(TELL_EVERY);
                 let Some(state) = weak.upgrade() else { return };
                 let said = state.graph.expire();
+                state.graph.save_overlays();
                 for s in &said {
                     state.toast(s.clone());
                 }

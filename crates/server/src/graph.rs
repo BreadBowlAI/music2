@@ -39,6 +39,7 @@
 mod actor;
 mod events;
 pub mod lease;
+pub mod overlay;
 mod preview;
 mod watcher;
 
@@ -263,6 +264,8 @@ struct Published {
     shown: Arc<Shown>,
     revs: Revs,
     aliases: Arc<Aliases>,
+    /// Monitoring mute and solo (MON-4): made new at each open.
+    overlays: overlay::Monitor,
 }
 
 /// What `begin`, `update`, `cancel` and every read use, behind one short lock. The actor holds it
@@ -561,14 +564,14 @@ impl Inner {
     /// above a dragged knob gives it a new id, and the page finds its drag's knob by its lease
     /// (WRITE-22).
     fn state(&self) -> Option<Value> {
-        let (shown, leases) = {
+        let (shown, leases, overlays) = {
             let cp = self.control.lock();
             let p = cp.open.as_ref()?;
             let now = Instant::now();
             let token = p.engine.token;
             let leases: Vec<LeaseInfo> =
                 cp.leases.live.iter().filter(|l| l.token == token).filter_map(|l| l.seen_at(p.shown.revision, now)).collect();
-            (p.shown.clone(), leases)
+            (p.shown.clone(), leases, p.overlays.state())
         };
         let status = self.status();
         let mut state = shown.state.clone();
@@ -579,6 +582,7 @@ impl Inner {
         state["loop"] = json!(status.looping);
         self.activity().put(&mut state);
         state["leases"] = json!(leases);
+        state["overlays"] = overlays;
         Some(state)
     }
 
@@ -767,7 +771,9 @@ impl Graph {
         // What tells the session the export is over: given to the export on the actor, so a job
         // that fails after it still tells (the export's guard drops then).
         let jobs = self.jobs.clone();
-        self.call(move |a| a.export(length, jobs))
+        let mut export = self.call(move |a| a.export(length, jobs))?;
+        export.problems.extend(self.overlays_warning());
+        Ok(export)
     }
 
     /// What the engine is busy with besides playing: paused for an export, and the plugins being
