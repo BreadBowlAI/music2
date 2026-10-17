@@ -1216,7 +1216,8 @@ keys, Space, Return, ⌫, arrows, ⌥ chords) is handled by the page, with no na
 - **M and S mute and solo the selected track.** This is fast and one-handed. ⌃M and ⌃S also work for
   Logic hands, on a Mac only: elsewhere Ctrl stands for ⌘, and Ctrl+S saves. Live's M (computer keyboard) is covered by ⌘K.
 - **Stop returns to where play started (Live).** ⇧Space continues from where it stopped. A click in
-  the ruler or on empty lane space moves the start point.
+  the ruler moves the start point; so does a click on empty lane space, while stopped only (8b.2): a
+  click to deselect while playing never makes the song jump, and no start point moves unseen.
 - **No ⇧Tab:** it moves keyboard focus backwards, and focus traversal must keep working.
 
 ### 5.2 Gestures
@@ -1238,7 +1239,8 @@ keys, Space, Return, ⌫, arrows, ⌥ chords) is handled by the page, with no na
 | Clip | drag the body / either edge | move / resize |
 | | ⌥-drag | copy |
 | | double-click | open in Notes (notes clips) |
-| Lane (empty) | double-click | a new 1-bar clip (keep) |
+| Lane (empty) | click | while stopped: move the playhead there, as the ruler does; while playing: nothing |
+| | double-click | a new 1-bar clip (keep) |
 | Automation clip | click or drag within 6 px of the curve / click or drag elsewhere on the clip | add a point and move it / select or move the clip, as for notes clips |
 | Ruler | click / drag | set the start point / set the loop |
 | Notes grid | the click rules in §3.5 | |

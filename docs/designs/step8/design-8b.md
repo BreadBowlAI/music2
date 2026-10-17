@@ -746,7 +746,7 @@ is a core change outside the write API, so the HOME table and HOME-1 get a row f
 
 | What | How |
 |---|---|
-| **Stop returns to where play started** (taste §5.1) | The page remembers the beat where play started. Stop sends `stop` then `seek(start)`. ⇧Space continues from where it stopped (`seek` to the stopped beat, then `play`). A click in the ruler or on empty lane space moves the start point. |
+| **Stop returns to where play started** (taste §5.1) | The page remembers the beat where play started. Stop sends `stop` then `seek(start)`. ⇧Space continues from where it stopped (`seek` to the stopped beat, then `play`). A click in the ruler moves the start point, and so does a click on empty lane space while stopped (taste §5.2; built in 8b.2). The stop and the seek back go in one call (`transport` with `to`), and the status says both at once. |
 | **C** toggles the loop; **⌘L** loops the selection | ⌘L takes the span of the selected clips, else the bar at the playhead (`POST /api/graph/loop` with `start` and `end`). |
 | **The loop range persists** | in `.music2/view.json` (§2.2), read at open and set on the transport before play. |
 | **Panic, ⌘.** (gaps #8) | `POST /api/graph/panic` → `Player::panic()`, which exists (RENDER-10). It is in the Transport menu as Stop All Sound. |

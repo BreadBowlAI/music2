@@ -61,6 +61,15 @@ interface ClipEdits {
   /** A double-click on empty space in a notes lane (module and lane keys), at `beat`. */
   create: (module: string, lane: string, beat: number) => void;
   unpick: (module: string) => void;
+  /** A press in a lane: on its empty space (not on a clip), the start of a click that may place play's start. */
+  press: (e: React.PointerEvent<HTMLElement> | null) => void;
+  /**
+   * Let go in a lane, at `beat`: after a press on its empty space that didn't move (a click), play
+   * starts there (taste.md §5.1). Only while stopped, as the ruler's click moves it: then the
+   * playhead goes there. While playing it does nothing, so a click to deselect never makes the song
+   * jump, and no start point moves unseen (nothing marks one).
+   */
+  place: (e: React.PointerEvent<HTMLElement>, beat: number) => void;
   /** Delete the selected clip. */
   remove: () => void;
 }
@@ -197,8 +206,10 @@ export default function SongTimeline({
   // The selected notes clip (Delete removes it), and one being dragged to a new start. Both are
   // named by id, so an edit that reorders the lane (a move, an undo, an edit elsewhere) keeps them.
   const [moving, setMoving] = useState<{ clip: ClipRef; start: number } | null>(null);
-  const latest = useRef({ timeline, revision, onOpenClip, locked });
-  latest.current = { timeline, revision, onOpenClip, locked };
+  const latest = useRef({ timeline, revision, onOpenClip, locked, playing, onSeek });
+  latest.current = { timeline, revision, onOpenClip, locked, playing, onSeek };
+  // A press on a lane's empty space, until it is let go.
+  const pressed = useRef<{ pointer: number; x: number } | null>(null);
   const made = useRef<Made | null>(null);
 
   /** Once the graph shows the write that made a clip, select it and open it. */
@@ -231,6 +242,7 @@ export default function SongTimeline({
     return {
       down(clip, e) {
         if (e.button !== 0) return;
+        pressed.current = null;
         useShell.getState().select(clip.module, clip);
         scroller.current?.focus({ preventScroll: true });
         const lane = laneOf(clip.module, clip.lane);
@@ -281,6 +293,14 @@ export default function SongTimeline({
         );
       },
       unpick: (module) => useShell.getState().setClip(module, null),
+      press: (e) => void (pressed.current = e && e.button === 0 ? { pointer: e.pointerId, x: e.clientX } : null),
+      place(e, beat) {
+        const p = pressed.current;
+        pressed.current = null;
+        if (!p || p.pointer !== e.pointerId || Math.abs(e.clientX - p.x) >= 4 || latest.current.playing) return;
+        // Whole beats, as the ruler's click.
+        latest.current.onSeek(Math.max(0, Math.round(beat)));
+      },
       remove() {
         const s = useShell.getState();
         const p = s.selected ? s.clips[s.selected] : undefined;
@@ -832,7 +852,12 @@ const TrackRows = memo(function TrackRows({
         className={clsx("relative overflow-hidden", !opts.first && "border-t border-hover", selected && "bg-accent-wash")}
         style={{ width }}
         title={lane?.kind === "notes" && !locked ? "Double-click to add a one-bar clip" : undefined}
-        onPointerDown={(e) => !(e.target as HTMLElement).closest("[data-clip]") && edits.unpick(module)}
+        onPointerDown={(e) => {
+          const empty = !(e.target as HTMLElement).closest("[data-clip]");
+          if (empty) edits.unpick(module);
+          edits.press(empty ? e : null);
+        }}
+        onPointerUp={(e) => edits.place(e, (e.clientX - e.currentTarget.getBoundingClientRect().left) / PPB)}
         onDoubleClick={(e) => {
           if (lane?.kind !== "notes" || (e.target as HTMLElement).closest("[data-clip]")) return;
           edits.create(module, lane.key, (e.clientX - e.currentTarget.getBoundingClientRect().left) / PPB);
