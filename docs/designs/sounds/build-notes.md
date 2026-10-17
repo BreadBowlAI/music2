@@ -401,6 +401,7 @@ changed render.
 | Run | Result |
 |---|---|
 | `ci/check.sh` at `b790a63`, the slice's code (`~/m2-runs/check-sm3`, 10 min) | **PASS**, every row: 922 Rust tests, 0 failed (921 at slice 2, and the new manifest test); clippy; std kernels; std.wasm; mac lint; 29/29 browser suites; 10 of 10 renders; repo unchanged. Nothing passed only on a retry (`failed` and `flaky` empty). No gates: no kernel changed, and G7f was run by hand above. |
+| `ci/check.sh` at `df017d7`, the slice's tip but this line (`~/m2-runs/check-sm3b`, 10 min) | **PASS**, every row, the same counts: 922 Rust tests, 0 failed; 29/29 browser suites; 10 of 10 renders. Nothing passed only on a retry. The commit after `b790a63` changes these notes only. |
 | Before each commit | `6591ecd`: `cargo test --locked --workspace`, every test passed but the renders test, which my own mistake above broke; after its fix it passed; clippy clean. `b790a63`: `m2-song`'s 76 tests, the session's dependency tests, clippy clean. |
 
 ### Left, and why
@@ -414,5 +415,5 @@ changed render.
 - For the lead: `a3214f6` is a choice the plan didn't name. It keeps S on its own std, as before
   (risk 17, L5). The other way, S playing the app's std, can't work: the app's std/fx reads
   `time.playing`, which S's IR doesn't have.
-- Scratch: `~/m2-runs/sm-scratch/s-cache` (S's runner, about 1 GB) is deleted after this slice. The
-  check's logs are in `~/m2-runs/check-sm3`.
+- Scratch: `~/m2-runs/sm-scratch/s-cache` (S's runner, about 1 GB) is deleted. The checks' logs are
+  in `~/m2-runs/check-sm3` and `-sm3b`.
