@@ -1482,7 +1482,52 @@ didn't (each lane's "If late").
 
 ## Merge
 
-The lead joins the lanes.
+The four lanes joined on `studio`, in the plan's order (B, C, A, D), each as a merge commit with `rerere` on:
+`24033ec` (B), `807386a` (C), `61c6eaf` (A), `67b2197` (D). `main` had not moved (still `85b069a`), so there was
+nothing of it to merge. P0 never landed, so lane A's copies of its pieces are the only ones: nothing to choose.
+
+**In short**
+
+| What | Now |
+|---|---|
+| Lanes merged | All four, every commit of each: each lane's last commit was green |
+| Files both sides changed | Joined by the plan's rules (below). No lane's code was dropped |
+| Rust | Every test of the touched crates passes, clippy and the Mac lint are clean |
+| Browser suites | All 64 ran. Two failed because of the merge, and each has a fix below |
+| Renders | 10 of 10 match `e2e/renders.sha256` |
+
+**How the shared files were joined**
+
+| File | Joined as |
+|---|---|
+| `crates/server/src/lib.rs`, `routes.rs`, `graph.rs` | Every lane's `mod` and `.merge` lines, after `routes_leases` and `tempo_lease`: A's (`routes_audio`, `peaks`, `import`), then B's (`routes_record`, `record`), then C's (`routes_exchange`, `stems`, `exchange`) |
+| `crates/editor/src/lib.rs` | After `pub mod rekey;`: `import` (A), `smf`, `midifile` (C), `explain` (D) |
+| `apps/music2-desktop/src/menu.rs` | `ITEMS`: A's `import_audio` after `save_as`, then C's `export` titled "Export…". Every lane's test kept |
+| `web/src/App.tsx` | Every lane's imports; the cases at the switch's end: `import_audio` (A), `record` (B), `guide` (D); `<ExportDialog />` (C) and `<DropLayer />` (A) where each lane put it |
+| `web/src/components/SongTimeline.tsx` | Every lane's imports; A's audio rows after Split's, C's Export as MIDI… after Repeat… |
+| `docs/designs/step8/build-notes-studio.md` | Each lane's own section, as that lane wrote it |
+| `e2e/run.mjs`, `e2e/README.md` | Git joined every lane's rows by itself |
+
+**Checks at the merge** (the server and `m2` built from `67b2197`, copied to `bin/st-67b2197`; the page from
+the same tree)
+
+| Check | Result | Log (`~/m2-runs/logs/`) |
+|---|---|---|
+| `cargo build --locked` (server, `m2`); `Cargo.lock` unchanged | ok | `st-int-build-*`, `st-int-build2-*` |
+| `cargo test --locked --no-fail-fast` of `m2-song`, `m2-runtime`, `m2-play`, `m2-ir`, `m2-script`, `m2-session`, `m2-editor`, `m2-server`, `music2-desktop`, `m2` | 1,374 passed, 0 failed (editor 378, server 356, desktop 22, and the rest) | `st-int-tests-*` |
+| `cargo clippy --locked --all-targets -- -D warnings` of the same crates, and the Mac lint (`aarch64-apple-darwin`) | clean | `st-int-clippy-*` |
+| The web build (with its type checks) | ok | — |
+| Renders (`baseline.sh --tree`, then `shasum -c e2e/renders.sha256`) | 10 of 10 OK | `st-int-renders-*` |
+| All 64 browser suites, in three batches at once (`CLAP_PATH` set for `live3b`) | 62 ok; `st-tips` 44/45 and `pl-notes` 101/102, fixed below | `st-int-suites1-*`, `-2-*`, `-3-*` |
+
+**Fixes the merge needed**
+
+| Suite | What broke | Why | Fix |
+|---|---|---|---|
+| `st-tips` (D) | "the question before an export with a track muted shows" failed | Lane C's Export dialog now comes before the question | The suite presses Return in the dialog first (Song is chosen), as `fx-fixes` does. Still 45 checks |
+
+Red first: `st-tips` 44 of 45 on the merged tree (`st-int-suites1-*`: `FAIL  the question before an export with a
+track muted shows`); 45 of 45 with the fix (`st-int-plnotes-*`).
 
 ## End
 

@@ -220,6 +220,8 @@ await page.click('[data-module-tab="kick"] [data-mute]');
 // Export with a track muted: the question.
 await page.click('[data-module-tab="kick"] [data-mute]');
 await page.click("[data-testid=export]");
+// The Export dialog (lane C) comes first: Song is chosen and Export… has the focus.
+if (await page.waitForSelector("[data-testid=export-dialog]", { timeout: 3000 }).catch(() => null)) await page.keyboard.press("Enter");
 if (await page.waitForSelector("[data-testid=export-ask]", { timeout: 3000 }).catch(() => null)) await place("[data-testid=export-ask]", "the question before an export with a track muted");
 else check(false, "the question before an export with a track muted shows");
 await key("Escape");
