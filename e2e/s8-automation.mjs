@@ -3,9 +3,10 @@
 // makes a clip holding the lane's value; on the curve a click adds a point and a drag moves it, ⌫
 // deletes it, and Draw mode (B) paints; a click on the clip's body away from the curve picks the
 // clip and adds no point; Remove automation, from the lane's header or from the input it drives in
-// the Device view, puts a value back in the code and takes the lane's file away, with a toast, and
-// ⌘Z brings both back; Show lane unfolds the track on the lane. Each edit is one gesture and one
-// undo step. And a PC page's words.
+// the Device view, puts the value the lane plays at the playhead back in the code (inside the
+// clip: the curve's value there; before it: the fallback) and takes the lane's file away, with a
+// toast, and ⌘Z brings both back; Show lane unfolds the track on the lane. Each edit is one
+// gesture and one undo step. And a PC page's words.
 //
 //   node e2e/s8-automation.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -144,10 +145,31 @@ check(await until(async () => (await undoNow()).startsWith("Undo drawing Decay a
 await page.screenshot({ path: `${ROOT}/s8-automation.png`, clip: { x: 0, y: 0, width: 760, height: 400 }, captureBeyondViewport: false });
 
 // ---------------------------------------------------------------- Remove automation, from the lane's header
-// The playhead before the clip, where the lane plays its fallback: that value goes back.
-const ruler = await box("[data-testid=ruler]");
-await page.mouse.click(ruler.x + 2, ruler.y + ruler.height / 2);
-await until(async () => (await status()).beat === 0);
+// The playhead inside the clip, half a beat in, where the painted curve is high: the value the lane
+// plays there goes back, not its fallback.
+const painted1 = (await clips())[0];
+const at = painted1.start + 0.5;
+/** What `points` play at `t` beats into their clip: linear between points, as the lane reads them. */
+const valueAt = (points, t) => {
+  const i = points.findIndex((p) => p[0] > t);
+  if (i === -1) return points.at(-1)[1];
+  if (i === 0) return points[0][1];
+  const [[b0, v0], [b1, v1]] = [points[i - 1], points[i]];
+  return b1 > b0 ? v0 + ((v1 - v0) * (t - b0)) / (b1 - b0) : v1;
+};
+const playing = valueAt(painted1.points, at - painted1.start);
+/** The value written for `decay` in tracks/kick.ts: `0.87`, or a unit's spelling such as `ms(870)`. */
+const written = () => {
+  const m = /decay:\s*(?:(\w+)\(([-\d.e]+)\)|([-\d.e]+))/.exec(read("tracks/kick.ts"));
+  if (!m) return { text: "none", value: NaN };
+  const scale = { ms: 0.001, s: 1 }[m[1] ?? "s"] ?? NaN;
+  return { text: m[0], value: m[3] !== undefined ? Number(m[3]) : Number(m[2]) * scale };
+};
+// Through the server: a click on the ruler lands on a whole beat. The page learns of the seek
+// within its 200 ms poll.
+await api("/seek", { method: "POST", body: JSON.stringify({ beat: at }) });
+check(await until(async () => Math.abs((await status()).beat - at) < 1e-3), `the playhead goes inside the clip, to beat ${at}: ${(await status()).beat}`);
+await sleep(600);
 const lanefile = read("data/kick/decay.json");
 const rev = (await state()).view.revision;
 const headerBox = await box('[data-lane="kick.decay"] > div:first-child');
@@ -156,10 +178,12 @@ await page.waitForSelector("[data-testid=clip-menu]");
 const headerMenu = await menuRows();
 check(headerMenu.join(" | ") === "Remove automation | Hide automationA", `the lane's header has its menu: ${headerMenu.join(" | ")}`);
 await page.click('[data-testid=clip-menu] [data-menu-item="unautomate"]');
-// The playhead is before the clip: the lane plays its fallback there, and that goes back.
 check(await until(() => !exists("data/kick/decay.json") && !read("tracks/kick.ts").includes("lane.control")), "Remove automation takes the lane's file away and its read out of the code");
-const back = read("tracks/kick.ts");
-check(back.includes("decay: ms(320)") || back.includes("decay: 0.32"), `the value it played at the playhead is written in its place: ${back.match(/decay:[^,}]*/)?.[0]}`);
+const w1 = written();
+check(
+  Math.abs(w1.value - playing) < 0.005 && Math.abs(playing - v0) > 0.05,
+  `the value it played at the playhead (${playing.toFixed(3)} at beat ${at}, not the fallback ${v0}) is written in its place: ${w1.text}`,
+);
 check(await toasted("Removed the Decay automation"), "a toast says so");
 check((await state()).view.revision === rev + 1 && !(await page.$('[data-lane="kick.decay"]')), "one revision; the lane is gone from the timeline");
 await key("Meta+z");
@@ -174,10 +198,16 @@ await page.mouse.click(input2.x + 40, input2.y + input2.height / 2, { button: "r
 await page.waitForSelector("[data-testid=clip-menu]");
 await page.click('[data-testid=clip-menu] [data-menu-item="show"]');
 check(await until(async () => !!(await page.$('[data-lane="kick.decay"].lit'))), "Show Decay lane unfolds Kick and lights the lane");
+// The playhead before the clip this time, where the lane plays its fallback: that value goes back.
+const ruler = await box("[data-testid=ruler]");
+await page.mouse.click(ruler.x + 2, ruler.y + ruler.height / 2);
+await until(async () => (await status()).beat === 0);
 await page.mouse.click(input2.x + 40, input2.y + input2.height / 2, { button: "right" });
 await page.waitForSelector("[data-testid=clip-menu]");
 await page.click('[data-testid=clip-menu] [data-menu-item="unautomate"]');
 check(await until(() => !exists("data/kick/decay.json") && !read("tracks/kick.ts").includes("lane.control")), "Remove automation from the input does the same");
+const w2 = written();
+check(Math.abs(w2.value - v0) < 1e-6, `with the playhead before the clip, the lane's fallback is written: ${w2.text}`);
 check(await until(async () => !!(await page.$('[data-module="kick"] [data-knob="decay"]'))), "and the Decay knob is back in the Device view");
 await key("Meta+z");
 check(await until(() => read("tracks/kick.ts") === automated && exists("data/kick/decay.json")), "⌘Z brings it back again");

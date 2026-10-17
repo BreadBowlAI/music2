@@ -963,3 +963,15 @@ It copies the page and the suites first, so nothing changes under a running suit
 - taste-next's `s8-songbar` failed once in lane A's run (its time signature check reads once, right
   after the file changes). It passed here. A wait there would settle it.
 - Delete `~/m2-runs/s8ui/bin/` and this worktree's `target/` when the track ends.
+
+## Review fixes
+
+**In short**
+- A review with two lenses (how it behaves; tests, docs and taste) found 9 things. Two were the
+  same bug, so 8 fixes.
+- Each fix is its own commit, with a check that fails on the page before it and passes after.
+- Names below: B1 to B3 are the behaviour lens's, T1 to T6 the other lens's.
+
+| Finding | What was wrong | Fix | Check (red first, then green) |
+|---|---|---|---|
+| T3 | s8-automation's "the value it played at the playhead is written" ran with the playhead before the clip, where the lane plays its fallback. A page that ignored the playhead still passed | The suite now seeks to beat 4.5, inside the painted clip, and checks the written value is the curve's there (0.955), not the fallback (0.32). The Device-view removal keeps the fallback case, with the playhead at 0 | On a page that always sends beat 0: `FAIL the value it played at the playhead (0.955 at beat 4.5, not the fallback 0.32) is written in its place: decay: 0.32`. On the real page: 45 of 45 |
