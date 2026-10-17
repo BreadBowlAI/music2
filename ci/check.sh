@@ -2,13 +2,13 @@
 # ci/check.sh: the full check of music2, the same script on macOS and Linux (PLAT-6).
 #
 # In short: run it in the repo with no arguments. It builds everything, runs every Rust test,
-# clippy, the web build, every browser suite, std's checks and the offline renders; on a Mac it
-# also times the gates ci/gates.txt names. First it builds the old engine G7f compares with (S),
-# in a folder of its own: ~/m2-check/s-8aa301e on a Mac, ~/.cache/m2-check/s-8aa301e on Linux.
-# Then it prints a short summary to paste back. It changes nothing in the repo, never opens the
-# app on a screen you can see, never plays sound, and never touches your ~/Music or ~/.music2. If
-# one line says "running" for over 30 minutes, press Ctrl-C once: it stops and prints the summary
-# anyway.
+# clippy, the pool's models, the web build, every browser suite, std's checks and the offline
+# renders; on a Mac it also times the gates ci/gates.txt names. First it builds the old engine
+# G7f compares with (S), in a folder of its own: ~/m2-check/s-8aa301e on a Mac,
+# ~/.cache/m2-check/s-8aa301e on Linux. Then it prints a short summary to paste back. It changes
+# nothing in the repo, never opens the app on a screen you can see, never plays sound, and never
+# touches your ~/Music or ~/.music2. If one line says "running" for over 30 minutes, press Ctrl-C
+# once: it stops and prints the summary anyway.
 #
 #   ci/check.sh             everything (on a Mac, the timing gates too)
 #   ci/check.sh --gates     on Linux, the timing gates too (recorded for information, PLAT-1)
@@ -448,6 +448,22 @@ else
   n=$(grep -E '^(warning|error)(\[[^]]*\])?: ' "$OUT/clippy.log" | grep -cvE '^(error: could not compile|warning: build failed|error: aborting)')
   record clippy FAIL "$n findings: see clippy.log"
   first "$OUT/clippy.log" '^ *--> ' | sed 's/^ *--> /clippy: /' >> "$OUT/failed"
+fi
+
+# 6b. The pool's models: m2-pool's protocol under a sync shim that yields and spins at random before
+#     each atomic step, in release, thousands of times (core/pool/tests/models.rs), with its unit
+#     tests built the same way. The crate has no dependencies, so this builds in seconds. loom isn't
+#     used: it isn't in the offline registry. x86 keeps stores in order, so an ordering too weak
+#     for arm64 may pass on Linux and fail only on a Mac. No retry: a model that fails is a bug.
+begin "pool models" "10 s"
+if quiet pool-models.log cargo test --locked --release -p m2-pool --features models &&
+   quiet pool-lint.log cargo clippy --locked -p m2-pool --features models --all-targets -- -D warnings; then
+  record "pool models" PASS "$(tally "$OUT/pool-models.log" pool-)"
+else
+  record "pool models" FAIL "see pool-models.log and pool-lint.log"
+  tally "$OUT/pool-models.log" pool- > /dev/null
+  failures pool- "$OUT/pool-models.log" >> "$OUT/failed"
+  first "$OUT/pool-lint.log" '^ *--> ' | sed 's/^ *--> /pool lint: /' >> "$OUT/failed"
 fi
 
 # 7. std: the kernels' own workspace (tests and lints), and std.wasm rebuilt to the committed

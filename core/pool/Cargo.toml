@@ -11,3 +11,7 @@ license.workspace = true
 models = []
 
 [dependencies]
+
+[[test]]
+name = "models"
+required-features = ["models"]
