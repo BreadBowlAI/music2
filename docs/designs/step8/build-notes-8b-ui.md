@@ -1090,4 +1090,4 @@ each with one line in `captions.txt`:
   as a Mac alert does (B1's choice: here the main button writes code). Say if the Mac's way is wanted.
 - The two races fixed here were in code from before this track. Others like them may wait in other
   effects that read a render's values after a click; none is known.
-- The Mac run: `ci/check.sh` once `8b-ui` is on `main`, then the by-ear steps 22 to 28 in HANDOFF.
+- The Mac run: `ci/check.sh` once `8b-ui` is on `main`, then the by-ear steps 32 to 38 in HANDOFF (renumbered when it landed after `taste-next`).
