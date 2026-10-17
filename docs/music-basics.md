@@ -82,7 +82,7 @@ A **sampler** is the other kind of instrument: instead of building sound, it pla
 | **Compressor** | Turns loud moments down, so everything is more even and punchy | `compress` |
 | **Limiter** | A very strict compressor at the end that stops anything getting too loud | `limit` |
 
-**In music2:** add an effect with **+** on a box in the Graph view. There are also `phaser`, `tremolo`, `widen`, `gain` and `pan`. If you used the old music2: Space is now `reverb`, Echo is `delay`, Shimmer is `chorus`, Tone is `eq3` and Glue is `compress`. Pump (ducking on every beat) isn't back yet ([gap #21](gaps.md#effects-and-plugins)).
+**In music2:** add an effect with **+** on a box in the Device view (⌥1). There are also `phaser`, `tremolo`, `widen`, `gain` and `pan`. If you used the old music2: Space is now `reverb`, Echo is `delay`, Shimmer is `chorus`, Tone is `eq3` and Glue is `compress`. Pump (ducking on every beat) isn't back yet ([gap #21](gaps.md#effects-and-plugins)).
 
 ## Mixing: making the parts fit together
 
@@ -91,7 +91,7 @@ A **sampler** is the other kind of instrument: instead of building sound, it pla
 - **Mute** silences a track; **solo** plays only that track.
 - The **master** is the last stage everything goes through before your speakers.
 
-**In music2:** each track's level (`db`) and `pan` are knobs on the `mixer` box in the Song tab, written in `song.ts`. The `master` is a limiter, so the song never clips. Mute, solo and a mixer panel aren't in the app yet ([gap #4](gaps.md#mixing)).
+**In music2:** each track's level and pan are a fader and a pan knob in the Mix view (⌥3, or Alt+3 off the Mac), written into the `mixer` in `song.ts`. The `master` has a fader too, then a limiter, so the song never clips. Mute and solo aren't in the app yet ([gap #4](gaps.md#mixing)).
 
 ## More mixing tools
 

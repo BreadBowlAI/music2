@@ -4,7 +4,7 @@ music2 is a music studio for the Mac: a DAW (digital audio workstation), the kin
 
 The app shows that folder as a timeline, a graph of knobs and cables, a piano roll (a grid for drawing notes) and a code editor. Every change you make there is written into the files right away.
 
-There's no AI inside the app. Scripts and AI agents (such as a Claude Code session) use the same files, and a local API (a way for programs on your Mac to talk to the app). music2 is part of **suite2**, alongside film2 and dj2. Status: early. A lot is missing: there's no sampler, and no mixer panel yet. See [What music2 can't do yet](docs/gaps.md).
+There's no AI inside the app. Scripts and AI agents (such as a Claude Code session) use the same files, and a local API (a way for programs on your Mac to talk to the app). music2 is part of **suite2**, alongside film2 and dj2. Status: early. A lot is missing: there's no sampler, and no mute or solo yet. See [What music2 can't do yet](docs/gaps.md).
 
 ## Run the app
 
