@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering::*};
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 use std::time::{Duration, Instant};
 
-use crate::{Cycle, Outcome, Pool, Runner, Setup, Tasks};
+use crate::{Cycle, Outcome, Pool, Runner, Setup, Tasks, Trip};
 
 /// Makes `complete` panic: set only in a child process (`a_panic_in_pool_code_aborts`).
 pub(crate) static PANIC_IN_COMPLETE: AtomicBool = AtomicBool::new(false);
@@ -539,4 +539,138 @@ fn an_empty_graph_runs_at_once() {
     let mut tasks = Tasks::new(&[], &[]).unwrap();
     Runner::one().run(&mut tasks, &|_| unreachable!()).unwrap();
     assert!(tasks.is_empty());
+}
+
+// 8a's live half: a caller whose task is stuck sleeps on its wake (no CPU), and the task's end
+// rings it. Task 0 holds on the one worker; when the caller dozes, 0 is let go and task 1 (which
+// reads it) holds next, on whichever thread takes it: only the ring at task 0's end can wake the
+// caller then, since the worker doesn't leave the run.
+#[test]
+fn a_stuck_caller_dozes_until_the_task_ends() {
+    let _one = one_pool();
+    within(|| {
+        let setup = Setup { stuck: Duration::from_micros(1), doze: Duration::from_secs(3600), ..Setup::plain() };
+        let (pool, mut runner) = Pool::new(2, setup).unwrap();
+        let open: [Arc<AtomicBool>; 2] = Default::default();
+        let run = {
+            let open = open.clone();
+            std::thread::spawn(move || {
+                runner.spread(true);
+                let mut tasks = Tasks::new(&[1, 1], &[(0, 1)]).unwrap();
+                runner.run(&mut tasks, &|t| {
+                    while !open[t as usize].load(SeqCst) {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    true
+                })
+            })
+        };
+        until("the caller dozes", || pool.counters()[0].dozes >= 1);
+        assert_eq!(pool.counters()[0].rung, 0, "nothing ended yet");
+        open[0].store(true, SeqCst);
+        until("task 0's end rings the caller", || pool.counters()[0].rung >= 1);
+        open[1].store(true, SeqCst);
+        run.join().unwrap().unwrap();
+        let c = pool.counters()[0];
+        assert_eq!((c.timeouts, c.rung + c.timeouts), (0, c.dozes), "{c:?}");
+    });
+}
+
+// 8a's live half: a worker that never comes to a run (not scheduled, its start still running)
+// costs only speed: the caller and the other workers take every task, and nobody waits for it.
+#[test]
+fn a_worker_that_never_comes_is_not_waited_for() {
+    let _one = one_pool();
+    within(|| {
+        let latch = Arc::new(AtomicBool::new(false));
+        let hold = latch.clone();
+        let setup = Setup {
+            start: Some(Arc::new(move |k| {
+                while k == 3 && !hold.load(SeqCst) {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            })),
+            ..Setup::plain()
+        };
+        let (pool, mut runner) = Pool::new(4, setup).unwrap();
+        runner.spread(true);
+        let mut rng = Rng(6);
+        for _ in 0..1000 {
+            let n = 1 + rng.below(30) as usize;
+            let (costs, edges) = dag(&mut rng, n);
+            let mut tasks = Tasks::new(&costs, &edges).unwrap();
+            let from = producers(n, &edges);
+            let done: Vec<AtomicBool> = (0..n).map(|_| AtomicBool::new(false)).collect();
+            let runs: Vec<AtomicU32> = (0..n).map(|_| AtomicU32::new(0)).collect();
+            runner
+                .run(&mut tasks, &|t| {
+                    assert!(from[t as usize].iter().all(|&p| done[p as usize].load(Acquire)), "task {t} ran before its inputs");
+                    runs[t as usize].fetch_add(1, SeqCst);
+                    done[t as usize].store(true, Release);
+                    true
+                })
+                .unwrap();
+            assert!(runs.iter().all(|r| r.load(SeqCst) == 1), "each task once");
+        }
+        assert_eq!(pool.counters()[3].tasks, 0, "worker 3 never came");
+        latch.store(true, SeqCst);
+        drop(pool);
+    });
+}
+
+// 8a's live half: each worker runs its stop hook before it exits (macOS leaves the workgroup
+// there), so after the drop every start has its stop.
+#[test]
+fn stop_runs_on_each_worker_before_it_exits() {
+    let _one = one_pool();
+    within(|| {
+        let alive = Arc::new(AtomicUsize::new(0));
+        let (up, down) = (alive.clone(), alive.clone());
+        let setup = Setup {
+            start: Some(Arc::new(move |_| {
+                up.fetch_add(1, SeqCst);
+            })),
+            stop: Some(Arc::new(move |_| {
+                down.fetch_sub(1, SeqCst);
+            })),
+            ..Setup::plain()
+        };
+        let (pool, mut runner) = Pool::new(5, setup).unwrap();
+        until("every worker started", || alive.load(SeqCst) == 4);
+        runner.spread(true);
+        let mut tasks = Tasks::new(&[1; 8], &[]).unwrap();
+        runner.run(&mut tasks, &|_| true).unwrap();
+        drop(pool);
+        assert_eq!(alive.load(SeqCst), 0, "a worker exited without its stop");
+    });
+}
+
+// 8a's live half: a tripped task panics on a worker as a task's own panic does: the run finishes,
+// `run` returns its payload, naming the worker, and the pool runs on.
+#[test]
+fn a_tripped_task_panics_on_a_worker_and_is_raised() {
+    let _one = one_pool();
+    within(|| {
+        let (_pool, mut runner) = Pool::new(4, Setup::plain()).unwrap();
+        runner.spread(true);
+        let mut tasks = Tasks::new(&[1; 6], &[(0, 3), (1, 4), (2, 5)]).unwrap();
+        runner.trip(runner.runs() + 3, Trip::Panic);
+        for k in 1..=5 {
+            let got = runner.run(&mut tasks, &|_| true);
+            match k {
+                3 => {
+                    let payload = got.expect_err("the trip's panic is raised");
+                    let said = payload.downcast_ref::<String>().cloned().unwrap_or_default();
+                    let on = runner.tripped_on().expect("a task tripped");
+                    assert!(on != 0 && said == format!("a tripped task, on thread {on}"), "{said:?} on {on}");
+                    let failed = (0..6).filter(|&t| tasks.outcome(t) != Outcome::Ran).count();
+                    assert_eq!(failed, 2, "the root that tripped and what reads it");
+                }
+                _ => {
+                    got.unwrap();
+                    assert!((0..6).all(|t| tasks.outcome(t) == Outcome::Ran));
+                }
+            }
+        }
+    });
 }

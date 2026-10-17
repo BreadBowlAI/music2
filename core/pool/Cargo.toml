@@ -11,6 +11,8 @@ license.workspace = true
 models = []
 
 [dependencies]
+# The caller's one sleep: a futex or a Mach semaphore any thread may wait on.
+m2-os.workspace = true
 
 [[test]]
 name = "models"

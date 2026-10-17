@@ -1,4 +1,5 @@
-//! The pool's atomics and its one way to sleep, in one place.
+//! The pool's atomics and its two ways to sleep, in one place: a worker's `park`, and the caller's
+//! [`Bell`].
 //!
 //! In a normal build these are std's own. With the `models` feature, each atomic is a thin
 //! wrapper that first passes a chaos point: a random `yield_now`, a short spin of up to 64
@@ -25,6 +26,29 @@ pub(crate) fn unpark(thread: &std::thread::Thread) {
     #[cfg(feature = "models")]
     chaos::point();
     thread.unpark();
+}
+
+/// The caller's sleep, when a task it waits for is stuck: `m2-os`'s wake, which any thread may
+/// wait on (the caller may be a thread std didn't start, CoreAudio's), with no allocation.
+pub(crate) struct Bell(m2_os::rt::Wake);
+
+impl Bell {
+    pub(crate) fn new() -> std::io::Result<Bell> {
+        m2_os::rt::Wake::new().map(Bell)
+    }
+
+    pub(crate) fn ring(&self) {
+        #[cfg(feature = "models")]
+        chaos::point();
+        self.0.ring()
+    }
+
+    /// Whether it was rung before `at_most` passed.
+    pub(crate) fn wait(&self, at_most: std::time::Duration) -> bool {
+        #[cfg(feature = "models")]
+        chaos::point();
+        self.0.wait(at_most)
+    }
 }
 
 #[cfg(feature = "models")]

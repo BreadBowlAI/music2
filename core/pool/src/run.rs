@@ -2,8 +2,9 @@
 //!
 //! Nothing here allocates, locks, uses a channel, a thread-local or I/O (tests/no_blocking.rs),
 //! so it may run on the audio thread. The caller of `run` never parks: it spins while tasks keep
-//! finishing, and sleeps in short steps only when none has finished for `stuck`. Only workers
-//! park, with std's `park`, and only a waker that took their `parked` flag signals them.
+//! finishing, and when none has finished for `stuck` it dozes on its bell (`m2-os`'s wake) until
+//! what it waits for moves. Only workers park, with std's `park`, and only a waker that took their
+//! `parked` flag signals them.
 //!
 //! The orderings, edge by edge (design-8a §5.3 and §5.4):
 //! - The caller's writes before a run come before its `job` store (SeqCst); a worker loads `job`
@@ -14,11 +15,13 @@
 //!   store before a decrement travels the same chain.
 //! - Every task ends with `left` −1 (SeqCst), and the caller sees `left == 0` (Acquire): every
 //!   task's work comes before the end of the run.
-//! - Dekker's pattern twice. A worker adds itself to `inside`, then loads `job`; the caller stores
-//!   a null `job`, then waits for `inside == 0`: so either the caller waits for the worker, or the
-//!   worker sees no job and touches nothing. A sleeper sets its `parked` flag, then looks for a new
-//!   run; a waker publishes the run, then takes the flag: so either the sleeper sees the run, or
-//!   the waker signals it.
+//! - Dekker's pattern three times. A worker adds itself to `inside`, then loads `job`; the caller
+//!   stores a null `job`, then waits for `inside == 0`: so either the caller waits for the worker,
+//!   or the worker sees no job and touches nothing. A sleeper sets its `parked` flag, then looks
+//!   for a new run; a waker publishes the run, then takes the flag: so either the sleeper sees the
+//!   run, or the waker signals it. The caller sets `asleep`, then looks at `left` (or `inside`)
+//!   once more; a task's end moves `left` (a worker's leaving, `inside`), then takes the flag: so
+//!   either the caller sees the move, or the ringer rings it.
 
 use std::any::Any;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -26,9 +29,9 @@ use std::sync::Arc;
 use std::thread::Thread;
 use std::time::{Duration, Instant};
 
-use crate::sync::{self, AtomicBool, AtomicPtr, AtomicU64, Ordering::*};
+use crate::sync::{self, AtomicBool, AtomicPtr, AtomicU64, Bell, Ordering::*};
 use crate::tasks::{EMPTY, FAILED, Padded, RAN, State, Tasks};
-use crate::Runner;
+use crate::{Runner, Trip, Tripwire};
 
 /// What the caller of `run` and the workers share.
 pub(crate) struct Shared {
@@ -48,6 +51,63 @@ pub(crate) struct Shared {
     pub(crate) caller_tasks: Padded<AtomicU64>,
     pub(crate) patience: Duration,
     pub(crate) stuck: Duration,
+    /// The caller's sleep while a task is stuck.
+    pub(crate) doze: Doze,
+}
+
+/// The caller's sleep while a task it waits for is stuck. It sets `asleep`, looks once more at
+/// what it waits for, and waits on its bell; whoever moves that takes the flag and rings. At most
+/// one ring is ever waiting: only a ringer that took the flag rings, and the caller takes every
+/// such ring.
+pub(crate) struct Doze {
+    asleep: Padded<AtomicBool>,
+    bell: Bell,
+    /// The longest one doze lasts.
+    longest: Duration,
+    pub(crate) dozes: AtomicU64,
+    pub(crate) rung: AtomicU64,
+    pub(crate) timeouts: AtomicU64,
+}
+
+impl Doze {
+    pub(crate) fn new(bell: Bell, longest: Duration) -> Doze {
+        Doze {
+            asleep: Padded(AtomicBool::new(false)),
+            bell,
+            longest,
+            dozes: AtomicU64::new(0),
+            rung: AtomicU64::new(0),
+            timeouts: AtomicU64::new(0),
+        }
+    }
+
+    /// After a move the caller may wait for (a task's end, a worker leaving): ring it if it dozes.
+    fn ring(&self) {
+        if self.asleep.load(SeqCst) && self.asleep.swap(false, SeqCst) {
+            self.bell.ring();
+        }
+    }
+
+    /// Sleep until a ring, or `longest`. `moved` looks once more at what the caller waits for,
+    /// after the flag is set: a move then means no sleep.
+    fn doze(&self, moved: impl Fn() -> bool) {
+        self.asleep.store(true, SeqCst);
+        if moved() && self.asleep.swap(false, SeqCst) {
+            return;
+        }
+        // Nothing moved, or something did and its ringer took the flag first: then its ring comes,
+        // and is taken here.
+        self.dozes.fetch_add(1, Relaxed);
+        if self.bell.wait(self.longest) {
+            self.rung.fetch_add(1, Relaxed);
+        } else if self.asleep.swap(false, SeqCst) {
+            self.timeouts.fetch_add(1, Relaxed);
+        } else {
+            // The time ran out as a ringer took the flag: take its ring too.
+            let counter = if self.bell.wait(self.longest) { &self.rung } else { &self.timeouts };
+            counter.fetch_add(1, Relaxed);
+        }
+    }
 }
 
 /// A worker's flag and counters.
@@ -60,7 +120,7 @@ pub(crate) struct Worker {
 }
 
 impl Shared {
-    pub(crate) fn new(workers: Box<[Worker]>, patience: Duration, stuck: Duration) -> Shared {
+    pub(crate) fn new(workers: Box<[Worker]>, patience: Duration, stuck: Duration, doze: Doze) -> Shared {
         Shared {
             job: Padded(AtomicPtr::new(std::ptr::null_mut())),
             seq: Padded(AtomicU64::new(0)),
@@ -71,6 +131,7 @@ impl Shared {
             caller_tasks: Padded(AtomicU64::new(0)),
             patience,
             stuck,
+            doze,
         }
     }
 }
@@ -93,6 +154,11 @@ struct Job<'a> {
     tasks: &'a Tasks,
     task: &'a (dyn Fn(u32) -> bool + Sync),
     spread: bool,
+    /// The caller's doze, with workers: a task's end rings it.
+    doze: Option<&'a Doze>,
+    /// Tests: this run's tripwire, and whether the caller works alone (then it trips).
+    trip: Option<&'a Tripwire>,
+    alone: bool,
 }
 
 /// Turns a panic in the pool's own code into an abort: a worker must never unwind out of its
@@ -136,8 +202,9 @@ impl Runner {
     /// - A panic in the pool's own code aborts the process when the runner has workers; on
     ///   [`Runner::one`] it unwinds, as any panic would.
     /// - The caller never parks. It spins while tasks keep finishing. After `stuck` with none
-    ///   finishing, it sleeps in steps of `stuck / 4` and checks again. It uses no per-thread
-    ///   state, so any thread may call `run`, one std did not start included.
+    ///   finishing, it dozes on its wake until the task it waits for ends (or a worker leaves the
+    ///   run), for `doze` at most, and looks again. It uses no per-thread state, so any thread may
+    ///   call `run`, one std did not start included.
     /// - A worker leaves a run when nothing is queued and every task left is running, or after
     ///   `patience` with nothing finishing, and never enters the same run twice. It then spins
     ///   for `patience` waiting for the next run (or until [`Runner::rest`]), and parks.
@@ -151,10 +218,13 @@ impl Runner {
         self.runs += 1;
         let width = tasks.width();
         let spread = self.spread && self.live().is_some();
-        let job = Job { id: self.runs, tasks: &*tasks, task, spread };
-        let ran = match self.live() {
-            Some(shared) if width > 1 || spread => together(shared, &self.threads, self.wanted(width), &job),
-            _ => help(&job, 0, Role::Caller(self.stuck())),
+        let together_ = self.live().filter(|_| width > 1 || spread);
+        let trip = self.tripwire.at.as_ref().filter(|(run, _)| *run == self.runs).map(|_| &self.tripwire);
+        let doze = together_.map(|s| &s.doze);
+        let job = Job { id: self.runs, tasks: &*tasks, task, spread, doze, trip, alone: together_.is_none() };
+        let ran = match together_ {
+            Some(shared) => together(shared, &self.threads, self.wanted(width), &job),
+            None => help(&job, 0, Role::Caller(self.stuck())),
         };
         match &self.shared {
             Some(shared) => {
@@ -213,7 +283,7 @@ fn together(shared: &Shared, threads: &[Thread], want: usize, job: &Job) -> u64 
             break;
         }
         if wait.idle(inside) {
-            std::thread::sleep(shared.stuck / 4);
+            shared.doze.doze(|| shared.inside.load(SeqCst) != inside);
         }
         std::hint::spin_loop();
     }
@@ -233,8 +303,8 @@ pub(crate) fn signal(shared: &Shared, threads: &[Thread], want: usize) {
 
 #[derive(Clone, Copy)]
 enum Role {
-    /// The caller of `run`: stays until every task is done; sleeps in steps after this long with
-    /// none finishing.
+    /// The caller of `run`: stays until every task is done; dozes after this long with none
+    /// finishing.
     Caller(Duration),
     /// A worker: leaves when nothing is left it could take, or after this long with none finishing.
     Worker(Duration),
@@ -272,9 +342,11 @@ fn help(job: &Job, me: u8, role: Role) -> u64 {
                     return ran;
                 }
             }
-            Role::Caller(stuck) => {
-                if wait.idle(u64::from(left)) {
-                    std::thread::sleep(stuck / 4);
+            Role::Caller(_) => {
+                if let Some(doze) = job.doze
+                    && wait.idle(u64::from(left))
+                {
+                    doze.doze(|| tasks.left.load(SeqCst) != left);
                 }
             }
         }
@@ -308,7 +380,12 @@ fn run_one(job: &Job, t: u32, me: u8) {
     let tasks = job.tasks;
     let skipped = tasks.state[t as usize].skip.load(Relaxed);
     let ok = !skipped
-        && match catch_unwind(AssertUnwindSafe(|| (job.task)(t))) {
+        && match catch_unwind(AssertUnwindSafe(|| {
+            if let Some(wire) = job.trip {
+                trip(wire, job.alone, me);
+            }
+            (job.task)(t)
+        })) {
             Ok(ok) => ok,
             Err(payload) => {
                 // SAFETY: this thread popped t, so it is the only one running it.
@@ -318,6 +395,27 @@ fn run_one(job: &Job, t: u32, me: u8) {
         };
     tasks.finish(t, ok, skipped, me);
     complete(tasks, t, ok);
+    if let Some(doze) = job.doze {
+        doze.ring();
+    }
+}
+
+/// Tests: the first task a worker takes in the tripped run (the caller's, when it works alone)
+/// panics or holds. Inside the task's `catch_unwind`, so a panic is the task's own.
+fn trip(wire: &Tripwire, alone: bool, me: u8) {
+    if (me == 0 && !alone) || wire.taken.swap(true, SeqCst) {
+        return;
+    }
+    wire.on.store(me + 1, SeqCst);
+    match &wire.at {
+        Some((_, Trip::Panic)) => panic!("a tripped task, on thread {me}"),
+        Some((_, Trip::Hold(open))) => {
+            while !open.load(SeqCst) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+        None => {}
+    }
 }
 
 /// Pass task t's result on: its consumers are skipped if it didn't succeed, and each whose last
@@ -415,8 +513,8 @@ impl Tasks {
     }
 }
 
-/// A worker's whole life: its `start` hook, then runs until the pool is dropped.
-pub(crate) fn worker(shared: Arc<Shared>, me: u8, start: Option<Arc<dyn Fn(usize) + Send + Sync>>) {
+/// A worker's whole life: its `start` hook, runs until the pool is dropped, then its `stop` hook.
+pub(crate) fn worker(shared: Arc<Shared>, me: u8, start: Option<Hook>, stop: Option<Hook>) {
     let guard = AbortOnPanic;
     if let Some(start) = start {
         start(usize::from(me));
@@ -429,6 +527,9 @@ pub(crate) fn worker(shared: Arc<Shared>, me: u8, start: Option<Arc<dyn Fn(usize
         let mut wait = Wait::new(shared.patience);
         let seen = loop {
             if shared.stop.load(Acquire) {
+                if let Some(stop) = &stop {
+                    stop(usize::from(me));
+                }
                 std::mem::forget(guard);
                 return;
             }
@@ -457,8 +558,13 @@ pub(crate) fn worker(shared: Arc<Shared>, me: u8, start: Option<Arc<dyn Fn(usize
             }
         }
         shared.inside.fetch_sub(1, SeqCst);
+        // The caller may doze until no worker is inside.
+        shared.doze.ring();
     }
 }
+
+/// A worker's start or stop hook.
+type Hook = Arc<dyn Fn(usize) + Send + Sync>;
 
 /// Park until a waker takes this worker's flag (or the pool stops). Set the flag first, then look
 /// once more for a run published since `last`: either this sees it, or its waker sees the flag.

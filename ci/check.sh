@@ -451,8 +451,9 @@ else
 fi
 
 # 6b. The pool's models: m2-pool's protocol under a sync shim that yields and spins at random before
-#     each atomic step, in release, thousands of times (core/pool/tests/models.rs), with its unit
-#     tests built the same way. The crate has no dependencies, so this builds in seconds. loom isn't
+#     each atomic step and each ring and wait of the caller's wake, in release, thousands of times
+#     (core/pool/tests/models.rs; `the_caller_is_woken` is the wake's), with its unit tests built
+#     the same way. The crate needs only m2-os and libc, so this builds in seconds. loom isn't
 #     used: it isn't in the offline registry. x86 keeps stores in order, so an ordering too weak
 #     for arm64 may pass on Linux and fail only on a Mac. No retry: a model that fails is a bug.
 begin "pool models" "10 s"
