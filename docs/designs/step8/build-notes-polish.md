@@ -1259,6 +1259,10 @@ field (`has-[input]:flex`), so only Return writes and Esc never does.
   `pl-mix` 46/47 once (a meter read silence, −60, while playing, as the Rust tests ran beside it),
   `newsong` once (⌘N right after a new song opened found no dialog in 30 s), and `s8-songbar`.
   Logs `~/m2-runs/logs/pl-suites-*`, `pl-sweep2-*`, `pl-flaky*`.
+- On the tip, after the fixes below: every suite but `live3b` green with its count, in three
+  batches at once (logs `pl-final-a-*`, `pl-final-b-*`, `pl-final-c-*`), and `s8-songbar` six
+  more times and `newsong` three more, all green (`pl-final-sb-*`). `start` with no song open:
+  14/14.
 
 **Left for the End.** `live3b`; the Linux app on `:96`; `ci/check.sh`; the docs each lane listed.
 `canvas.renameSong` (set in `SongBar.tsx`, declared in `shell.ts`) is no longer called: File ▸
