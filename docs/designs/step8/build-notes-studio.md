@@ -328,7 +328,7 @@ names the asset before the session takes it in): one line.
 |---|---|
 | + Track ▸ Audio | The list's last group, "Audio": "Audio track · Plays recordings and loops: drop a WAV file on it". Typing "audio" finds it. "Added Audio", with Undo |
 | Drag WAV files onto the window | Onto an audio track: there, at the bar. Onto another track: a new audio track right after it. Below the tracks: a new audio track for each file, at the end. Each named after its file ("Drum loop") |
-| While dragging | A blue outline where the files land, and words: "Audio · bar 2", "New audio track · bar 3", "3 new audio tracks · bar 5". Another kind of file: "music2 opens WAV and MIDI files" |
+| While dragging | A blue outline where the files land, and words: "Audio · bar 2", "New audio track · bar 3", "3 new audio tracks · bar 5". Another kind of file: "music2 opens WAV files" (MIDI files join with C2b) |
 | File ▸ Import Audio… with no audio track selected | A new audio track after the selected one (at the end with none) |
 | The toast | Only when a track was added: "Added Drum loop, playing drum loop.wav", with Undo |
 
@@ -373,7 +373,7 @@ the integrator keeps one side:
   outline) makes "Drum loop" at bar 3 with its waveform, "Undo importing drum loop.wav"; a drop on Kick ("New audio
   track · bar 2", outlined under Kick) makes an audio track right after Kick; two files onto the Audio lane ("Audio ·
   bar 2", a solid outline, linted) land one after another; the hint goes after a drop; an MP3 says "music2 opens WAV
-  and MIDI files" and writes nothing; an instrument's drag shows no file hint (D12); lint.
+  files" (said "WAV and MIDI files" until the End's R3) and writes nothing; an instrument's drag shows no file hint (D12); lint.
 
 **Red first**
 
@@ -1629,3 +1629,15 @@ take but left the song playing (against D6).
   only while the engine's clock was before the downbeat.
 - Test: `a_cancel_just_after_the_count_still_stops_the_song` (cancelled 0.03 beats after the downbeat).
 - Red: `nothing plays`.
+
+#### R3 and F2. The drop's words promised MIDI files
+
+The drop hint and its toast said "music2 opens WAV and MIDI files", but no drop takes a MIDI file yet (C2b wasn't
+built), so a dropped `.mid` was refused in words that said it opens.
+
+- `drop.ts`: `OPENS` is "music2 opens WAV files" until C2b registers `.mid`. Lane A's notes say so too.
+- Test: `st-audio` drops `riff.mid` (`audio/midi`): its hint and its toast say "music2 opens WAV files"; the MP3's
+  check says the same (90 to 92 checks).
+- Red: `FAIL  a MIDI file's hint: {"hint":"music2 opens WAV and MIDI files","outline":null}`, `FAIL  its drop's toast
+  says the same:`.
+- For gaps.md: dropping a MIDI file waits for C2b (#36).
