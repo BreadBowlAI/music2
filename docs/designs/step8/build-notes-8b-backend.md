@@ -68,7 +68,7 @@ glides over 10 ms. An edit while a track is muted never lets it through.
 |---|---|---|
 | `Exec::Overlay` | `x × gain`. At 1 it copies (no bit changes). At 0 it writes +0.0 (R1). Otherwise the gain moves 1/480 a frame at 48 kHz. | `core/runtime/src/overlay.rs` |
 | `overlay::place` | Puts one node per site into every plan, offline too. Wires the consumer, or the fade on that input, to it. | `core/runtime/src/overlay.rs` |
-| Window overlays | A fade's old side, and a ghost's input, that read an overlay before read one for the window (A3). No cell; the new plan's value for the same track and consumer. | `core/runtime/src/overlay.rs` |
+| Window overlays | A fade's old side, and a ghost's input, that read an overlay before read one for the window (A3). No cell; the new plan's value for the same track and consumer, or with none, the old plan's gain there (review R1). | `core/runtime/src/overlay.rs` |
 | Order | Each overlay runs right after its source (A4). Window ones leave with the window. | `core/runtime/src/overlay.rs` |
 | Overlay cells | Their own table in `Cells`, ids after every value cell (A2). A write sets the node's target; the node glides. | `core/runtime/src/cells.rs` |
 | `PlanInfo.overlays` | Per site: the track, the module that reads it, the cell. | `core/runtime/src/plan.rs` |
@@ -622,3 +622,31 @@ std 0.2.
 | `std.wasm` | Unchanged on both sides: nothing to rebuild. |
 
 **Checks:** tests of `m2-session`, `m2-play`, `m2-server`.
+
+---
+
+## Review fixes
+
+**In short:** a review of the track found six things. Five are fixed here, each in its own commit
+with a test that failed before it. One (R2) was a wrong doc line.
+
+### R1. A window overlay with no new site keeps the old gain
+
+**What was wrong:** in an activation's window, a fade's old side or a ghost's input gets its own
+overlay. It took the new plan's value for the same track and consumer. When the new plan had no
+such site, it started at 1. So a muted kick was heard for 5 to 10 ms when the edit deleted it, or
+made a new bus track read it instead of the song. A kick muted in the song did the same once
+deleted, as the new graph no longer says it was muted.
+
+**The fix:** each window node remembers the old site it stands in for. At the block line,
+`take_over` copies that site's gain (where it goes, and where it is) from the old plan's node. Two
+`f32` copies; no allocation (`window_held` in the plan).
+
+| Test | Red first? |
+|---|---|
+| `an_edit_while_muted_keeps_the_track_silent`: three new cases, the kick deleted (muted while listening, and in the song) and rerouted into a bus | red: peaks 0.325, 0.325 and 0.5 |
+
+**Checks:** `m2-runtime` and `m2-play` tests; clippy on `m2-runtime`.
+
+**Contract:** MON-1's window rule.
+

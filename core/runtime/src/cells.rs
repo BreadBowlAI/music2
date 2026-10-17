@@ -291,6 +291,11 @@ impl Cells {
         }
     }
 
+    /// The exec node of overlay `k`, the `k`th site of its graph.
+    pub(crate) fn overlay_node(&self, k: usize) -> Option<usize> {
+        self.overlays.get(k).map(|o| o.0)
+    }
+
     /// The cell of overlay `k`, the `k`th site of its graph.
     pub(crate) fn overlay(&self, k: usize) -> CellId {
         CellId((self.table.len() + k) as u32)

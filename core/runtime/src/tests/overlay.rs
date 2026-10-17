@@ -148,12 +148,20 @@ fn a_new_plan_starts_at_its_overlay_values() {
 
 // MON-1, A3: an edit while the kick is muted keeps it out through the activation's window: a
 // replaced consumer plays out as a ghost that reads the kick through an overlay, and a changed
-// input's fade reads the kick on its old side through one too.
+// input's fade reads the kick on its old side through one too. Where the new plan has no site for
+// what the old one read (the kick deleted, or read by a bus now), the window keeps the old value.
 #[test]
 fn an_edit_while_muted_keeps_the_track_silent() {
     let pk = std_packages();
     let scale = |id: &str, input: &str, by: &str| json!({"id": id, "op": "kernel", "kernel": "std:scale", "inputs": {"in": input, "by": by}});
     let c = |id: &str, v: f64| json!({"id": id, "op": "const", "value": v});
+    // The song with no kick: a sine at 0, made of new nodes, so it is silent from its first frame.
+    let deleted: Ir = serde_json::from_value(json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"}, "modules": [
+        {"key": "song", "nodes": [
+            {"id": "sf", "op": "const", "value": 110, "unit": "hz"},
+            {"id": "so", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "sf"}}, scale("sg", "so", "sz"), c("sz", 0.0)],
+         "exports": {"out": "sg"}}]}))
+    .unwrap();
     let cases = [
         // The consumer replaced: `g` goes, a new `h` reads the kick instead.
         ("replaced", kicked(json!([scale("g", "k", "x"), c("x", 0.5)]), "g", false), kicked(json!([scale("h", "k", "y"), c("y", 0.25)]), "h", false)),
@@ -178,21 +186,40 @@ fn an_edit_while_muted_keeps_the_track_silent() {
             ir.modules[0].exports.insert("out".into(), "g".into());
             ir
         }),
+        // The kick deleted. No site of the new plan reads it.
+        ("deleted", kicked(json!([scale("g", "k", "x"), c("x", 0.5)]), "g", false), deleted.clone()),
+        // The kick muted in the song, then deleted: the new graph no longer says it was muted.
+        ("deleted while muted in the song", kicked(json!([scale("g", "k", "x"), c("x", 0.5)]), "g", false), deleted),
+        // The kick read by a new bus track, not by the song: its site is (kick, bus) now.
+        ("rerouted", kicked(json!([scale("g", "k", "x"), c("x", 0.5)]), "g", false), {
+            let mut ir = kicked(json!([{"id": "b", "op": "import", "module": "bus", "export": "out"}]), "b", false);
+            let bus = json!({"key": "bus", "track": true, "nodes": [
+                {"id": "k", "op": "import", "module": "kick", "export": "out"}, scale("g", "k", "x"), c("x", 0.5)],
+                "exports": {"out": "g"}});
+            ir.modules.insert(1, serde_json::from_value(bus).unwrap());
+            ir.modules[2].nodes.remove(0);
+            ir
+        }),
     ];
+    let mut leaked = vec![];
     for (what, before, after) in cases {
         for muted in [true, false] {
+            let mut before = before.clone();
+            before.modules[0].muted = muted && what.ends_with("in the song");
             let (mut rig, _) = muted_rig(&before, if muted { 0.0 } else { 1.0 });
             rig.run(4096);
             let f = flat(&after);
             let mut next = rig.prepare(&f, &DataSet::empty(), &pk);
-            next.set_overlays(&vec![if muted { 0.0 } else { 1.0 }; f.overlays.len()]);
+            next.set_overlays(&f.overlays.iter().map(|s| if muted && s.module == "kick" { 0.0 } else { 1.0 }).collect::<Vec<_>>());
             assert!(next.stats().ghosts + next.stats().fades > 0, "{what}: an activation with a window");
             rig.send(Msg::Activate { renderer: Box::new(next) });
             let out = rig.run(4096);
             match muted {
-                true => assert!(silent(&out), "{what}: the kick stays out through the window, peak {}", peak(&out)),
+                true if !silent(&out) => leaked.push(format!("{what}: peak {}", peak(&out))),
+                true => {}
                 false => assert!(peak(&out) > 0.05, "{what}: the control: unmuted, it plays"),
             }
         }
     }
+    assert!(leaked.is_empty(), "the kick stays out through the window: {leaked:?}");
 }
