@@ -180,8 +180,10 @@ fn undo_restores_the_arrangement_bytes() {
 #[test]
 fn a_title_edit_is_identical() {
     let f = fixture("examples/first-song");
-    let manifest = "# The demo.\n[project]\nname = \"first-song\"   # its label\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n";
-    f.write("music2.toml", manifest);
+    // The example's own manifest, with comments: its dependencies as the example writes them.
+    let manifest = format!("# The demo.\n{}", f.read("music2.toml").replace("name = \"first-song\"\n", "name = \"first-song\"   # its label\n"));
+    assert!(manifest.contains("# its label\nformat = 1\n"), "{manifest}");
+    f.write("music2.toml", &manifest);
     let mut s = f.open();
     let before = tree(&f);
     let e = title(&mut s, "  Night \"Drive\" \\ ☕ ").unwrap();
@@ -197,7 +199,9 @@ fn a_title_edit_is_identical() {
     assert_eq!(f.read("music2.toml"), manifest);
     // Written however TOML allows: a literal string is replaced by a basic one.
     let f = fixture("templates/empty");
-    f.write("music2.toml", "[project]\nname = 'Empty'\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n");
+    let literal = f.read("music2.toml").replace("name = \"Empty\"\n", "name = 'Empty'\n");
+    assert!(literal.starts_with("[project]\nname = 'Empty'\n"), "{literal}");
+    f.write("music2.toml", literal);
     let mut s = f.open();
     title(&mut s, "Sketch").unwrap();
     assert!(f.read("music2.toml").starts_with("[project]\nname = \"Sketch\"\n"));
