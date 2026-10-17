@@ -872,4 +872,10 @@ pass again: 67, 30, 39, 60.
 | W3 | `757e519` | README's route table has every write route this branch added (track add, duplicate and delete, layout, the first pan) and the ones `main`'s 8b back ends added (Remove automation, mute in song, the overlay, clips, audition); `GET /api/graph` names `mix`, `instruments` and `overlays`. | doc |
 | W4 | `eefbe63` | PLAT-2 says every way the web UI differs by OS: its keys and labels, Ctrl+Backspace, its font (`data-os`), and in the Mac app (`data-app`) the top bar's inset, the time's breakpoint and the name's clearance. | doc |
 | W7 | `a6d0edd` | README: a pan has Automate once it's written (one in grey has the strip's menu); the browser's three instrument groups; the top bar starts with the browser's toggle; outside changes are heard from the system (FSEvents on a Mac, inotify on Linux). `Browser.tsx`'s comment names the three groups. | doc |
-| W8 | this commit | `gaps.md`: the Track inspector's volume and pan are back in the Mix view. `song-as-program.md` and `e2e/README.md` (s6-builders, s4-attn): Needs attention is in the status pill's popover, not a strip. | doc |
+| W8 | `395fc63` | `gaps.md`: the Track inspector's volume and pan are back in the Mix view. `song-as-program.md` and `e2e/README.md` (s6-builders, s4-attn): Needs attention is in the status pill's popover, not a strip. | doc |
+
+### The final checks
+
+| Run | Commit | Result |
+|---|---|---|
+| `ci/check.sh` (`check-tn-f1`) | `395fc63` | PASS, but `gestures` passed only on a retry: "a drag on its value turns it too" wrote nothing. A knob is disabled while its last value is being written, and under the check's load the press came before the write before it had answered. The suite now waits until a control takes a press again (`aria-disabled`) before each drag. Not a defect of the app: a press during a save is refused by design. |

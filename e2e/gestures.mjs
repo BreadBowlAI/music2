@@ -29,8 +29,11 @@ const centre = async (sel) => {
   const b = await box(grip(sel));
   return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
 };
+/** Until a control takes a press again: while its last value is being written it is disabled. */
+const ready = (sel) => until(async () => (await page.$eval(sel, (e) => e.getAttribute("aria-disabled"))) !== "true");
 /** Drag a knob up by `dy` pixels (down if negative), holding ⇧ from `fineFrom` pixels on. */
 const drag = async (sel, dy, { fineFrom = Infinity } = {}) => {
+  await ready(sel);
   const c = await centre(sel);
   await page.mouse.move(c.x, c.y);
   await page.mouse.down();
@@ -72,6 +75,7 @@ await drag(hatsPan, -45, { fineFrom: 15 });
 // 15px coarse (−0.1), then ⇧ for 30px more (−0.02), from where the knob was when ⇧ went down.
 check(await until(() => hatsLine()?.[2] === "0.4"), `⇧ pressed mid-drag goes on finely from there, with no jump: 0.52 → 0.4 (${hatsLine()?.[2]})`);
 // The knob's whole place drags it, its value too, not only the circle (taste.md §2.2).
+await ready(hatsPan);
 const name = await page.$eval(`${hatsPan} .tabular-nums`, (e) => { const r = e.getBoundingClientRect(); return { x: r.left + 4, y: r.top + r.height / 2 }; });
 await page.mouse.move(name.x, name.y);
 await page.mouse.down();
