@@ -226,7 +226,10 @@ impl Side for Gauged {
 pub fn realtime(lab: &mut Lab, o: &Opts, sweep: &Sweep) -> Result<Outcome> {
     let mut out = Outcome::new("G12 offline", "RENDER-2, RENDER-2a", &format!("the runtime on {}", o.reference.name()));
     let cores = m2_os::process::cores();
-    out.info("cores", format!("{} fast ({} per cache), {} slow", cores.fast, cores.per_cache, cores.slow));
+    out.info(
+        "cores",
+        format!("{} fast ({} per cache, {} per last cache), {} slow", cores.fast, cores.per_cache, cores.per_last_cache, cores.slow),
+    );
     out.info("load", load());
     let dir = lab.reference(&o.reference)?;
     let song = lab.compile(&dir)?;

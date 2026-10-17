@@ -315,8 +315,8 @@ mod tests {
     // a device, the fast cores of one cache, no more than the workgroup advises.
     #[test]
     fn the_live_count_follows_the_rule() {
-        let mac = Cores { fast: 8, slow: 2, per_cache: 4 };
-        let server = Cores { fast: 16, slow: 0, per_cache: 8 };
+        let mac = Cores { fast: 8, slow: 2, per_cache: 4, per_last_cache: 8 };
+        let server = Cores { fast: 16, slow: 0, per_cache: 8, per_last_cache: 8 };
         assert_eq!(live_count(Some(3), &mac, Some(2), true), 3, "asked for");
         assert_eq!((live_count(Some(0), &mac, None, true), live_count(Some(99), &mac, None, true)), (1, 64));
         assert_eq!((live_count(None, &mac, None, false), live_count(None, &server, None, false)), (1, 1), "no device: one");
@@ -324,7 +324,7 @@ mod tests {
         assert_eq!(live_count(None, &mac, Some(2), true), 2, "the workgroup advises fewer");
         assert_eq!(live_count(None, &mac, Some(0), true), 1);
         assert_eq!(live_count(None, &server, None, true), 8, "one die here");
-        let tiny = Cores { fast: 1, slow: 0, per_cache: 1 };
+        let tiny = Cores { fast: 1, slow: 0, per_cache: 1, per_last_cache: 1 };
         assert_eq!(live_count(None, &tiny, Some(4), true), 1);
     }
 

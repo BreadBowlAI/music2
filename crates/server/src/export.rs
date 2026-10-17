@@ -447,8 +447,8 @@ fn with(about: &serde_json::Value, more: serde_json::Value) -> serde_json::Value
 
 /// How many threads an export renders on (8a): `M2_THREADS` when set (`env`); one when it borrows
 /// the live plugin instances (it holds playback, and plugins render on one thread for now); the
-/// slow cores while the player plays or rings (not `idle`), so playback keeps its cores; else one
-/// cache's fast cores. Chosen as it starts: a Play pressed during the export leaves it as it is.
+/// slow cores while the player plays or rings (not `idle`), so playback keeps its cores; else the
+/// fast cores of the last cache (`Threads::Alone`). Chosen as it starts: a Play pressed during the export leaves it as it is.
 pub fn export_threads(env: Option<Threads>, idle: bool, lending: bool) -> Threads {
     match (env, idle, lending) {
         (_, _, true) => Threads::Exactly(1),
@@ -562,7 +562,7 @@ pub(crate) mod tests {
     }
 
     // 8a (§5.3): an export borrowing plugins renders on one thread; `M2_THREADS` wins otherwise;
-    // beside playback it keeps to the slow cores, and alone it takes one cache's fast cores.
+    // beside playback it keeps to the slow cores, and alone it takes the last cache's fast cores.
     #[test]
     fn an_export_picks_its_threads() {
         let three = Some(Threads::Exactly(3));

@@ -44,7 +44,7 @@ pub(crate) fn cores_in(cpu: &Path, mask: &[usize], quota: Option<f64>) -> Cores 
         fast = fast.min((q.floor() as usize).max(1));
     }
     let per_cache = caches.values().map(BTreeSet::len).max().unwrap_or(1).clamp(1, fast);
-    Cores { fast, slow: 0, per_cache }
+    Cores { fast, slow: 0, per_cache, per_last_cache: per_cache }
 }
 
 /// The CPUs this process may run on (`sched_getaffinity`).
@@ -117,7 +117,7 @@ mod tests {
     fn cores_are_read_from_sysfs() {
         let root = fake_sysfs();
         let all: Vec<usize> = (0..32).collect();
-        assert_eq!(cores_in(&root, &all, None), Cores { fast: 16, slow: 0, per_cache: 8 });
+        assert_eq!(cores_in(&root, &all, None), Cores { fast: 16, slow: 0, per_cache: 8, per_last_cache: 8 });
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -127,11 +127,11 @@ mod tests {
     fn the_affinity_mask_and_quota_cut_them() {
         let root = fake_sysfs();
         let one_die: Vec<usize> = (8..16).collect();
-        assert_eq!(cores_in(&root, &one_die, None), Cores { fast: 8, slow: 0, per_cache: 8 });
-        assert_eq!(cores_in(&root, &[8, 24], None), Cores { fast: 1, slow: 0, per_cache: 1 }, "two threads of one core");
+        assert_eq!(cores_in(&root, &one_die, None), Cores { fast: 8, slow: 0, per_cache: 8, per_last_cache: 8 });
+        assert_eq!(cores_in(&root, &[8, 24], None), Cores { fast: 1, slow: 0, per_cache: 1, per_last_cache: 1 }, "two threads of one core");
         let all: Vec<usize> = (0..32).collect();
-        assert_eq!(cores_in(&root, &all, Some(2.5)), Cores { fast: 2, slow: 0, per_cache: 2 });
-        assert_eq!(cores_in(&root, &all, Some(0.5)), Cores { fast: 1, slow: 0, per_cache: 1 });
+        assert_eq!(cores_in(&root, &all, Some(2.5)), Cores { fast: 2, slow: 0, per_cache: 2, per_last_cache: 2 });
+        assert_eq!(cores_in(&root, &all, Some(0.5)), Cores { fast: 1, slow: 0, per_cache: 1, per_last_cache: 1 });
         assert_eq!(cpu_max("max 100000\n"), None);
         assert_eq!(cpu_max("250000 100000\n"), Some(2.5));
         let _ = std::fs::remove_dir_all(&root);
