@@ -389,6 +389,8 @@ struct Inner {
     /// `layout.json`'s stamp as the watcher last saw it, by project token, and whether a change
     /// waits to be published: no snapshot holds it (PLANE-3), so it is watched on its own.
     layout: Mutex<LayoutSeen>,
+    /// The open project's view settings (`.music2/view.json`, polish Q16). A leaf lock.
+    local: Mutex<view_file::Local>,
 }
 
 /// A delete that waits: whether it is blocked, and the code that reads the track.
@@ -522,6 +524,7 @@ impl Inner {
             #[cfg(test)]
             export_hooks: Arc::default(),
             layout: Mutex::default(),
+            local: Mutex::default(),
         }
     }
 
@@ -622,14 +625,14 @@ impl Inner {
     /// above a dragged knob gives it a new id, and the page finds its drag's knob by its lease
     /// (WRITE-22).
     fn state(&self) -> Option<Value> {
-        let (shown, leases, overlays) = {
+        let (shown, leases, overlays, token) = {
             let cp = self.control.lock();
             let p = cp.open.as_ref()?;
             let now = Instant::now();
             let token = p.engine.token;
             let leases: Vec<LeaseInfo> =
                 cp.leases.live.iter().filter(|l| l.token == token).filter_map(|l| l.seen_at(p.shown.revision, now)).collect();
-            (p.shown.clone(), leases, p.overlays.state())
+            (p.shown.clone(), leases, p.overlays.state(), token)
         };
         let status = self.status();
         let mut state = shown.state.clone();
@@ -642,6 +645,9 @@ impl Inner {
         self.activity().put(&mut state);
         state["leases"] = json!(leases);
         state["overlays"] = overlays;
+        let (local, stamp) = self.local(token, &shown.dir);
+        state["local"] = local;
+        state["local_stamp"] = json!(stamp);
         Some(state)
     }
 
