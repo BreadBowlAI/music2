@@ -22,7 +22,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use m2_play::{BETWEEN, Between, EngineThreads, LiveThreads, Player, Timing};
+use m2_play::{BETWEEN, BUCKET_NS, Between, EngineThreads, LiveThreads, Player, Timing};
 use m2_runtime::{BLOCK, Cmd, Counters, Renderer};
 
 use super::{Stats, load, pass};
@@ -208,14 +208,16 @@ pub fn verdict(f: &Found, asked: u32, judged: bool) -> Vec<Check> {
     let us = |q: f64| s.quantile(q).map_or(f64::NAN, |d| d.as_secs_f64() * 1e6);
     let (p99, bound) = (us(0.99), P99_SHARE * period);
     let share = |x: f64| 100.0 * x / period;
+    let top = past(s);
     timed(
         "callback",
         s.callbacks > 0 && p99 <= bound,
         format!(
-            "p50 {:.0} µs, p99 {p99:.0} ({:.0}% of the period), p99.9 {:.0}, max {:.0} ({:.0}%) in {} callbacks from 5 s on; bound p99 {bound:.0} µs (70% of {period:.0})",
-            us(0.5),
-            share(p99),
-            us(0.999),
+            "p50 {} µs, p99 {} ({}% of the period), p99.9 {}, max {:.0} ({:.0}%) in {} callbacks from 5 s on; bound p99 {bound:.0} µs (70% of {period:.0})",
+            shown(us(0.5), top),
+            shown(p99, top),
+            shown(share(p99), share(top)),
+            shown(us(0.999), top),
             s.max_ns as f64 / 1e3,
             share(s.max_ns as f64 / 1e3),
             s.callbacks
@@ -263,6 +265,19 @@ pub fn verdict(f: &Found, asked: u32, judged: bool) -> Vec<Check> {
         ),
     });
     checks
+}
+
+/// Where a window's histogram ends, in µs: a quantile past it is only known to be over it.
+fn past(t: &Timing) -> f64 {
+    (t.hist.len() as u64 * BUCKET_NS) as f64 / 1e3
+}
+
+/// `x` as printed, or "over `top`" when it is past the histogram.
+fn shown(x: f64, top: f64) -> String {
+    match x > top {
+        true => format!("over {top:.0}"),
+        false => format!("{x:.0}"),
+    }
 }
 
 fn way(b: Between) -> &'static str {
@@ -437,10 +452,10 @@ pub fn live(lab: &mut Lab, o: &Opts, asked: &Asked) -> Result<Outcome> {
         .iter()
         .map(|f| {
             let s = &f.steady;
-            let p99 = s.quantile(0.99).map_or(f64::NAN, |d| d.as_secs_f64() * 1e6);
+            let p99 = shown(s.quantile(0.99).map_or(f64::NAN, |d| d.as_secs_f64() * 1e6), past(s));
             let back = b2b.iter().find(|(n, _)| *n == f.threads.count).map_or(f64::NAN, |(_, p)| *p);
             format!(
-                "{} {}: p99 {p99:.0} µs (back to back {back:.0}), max {:.0}, dropouts {}, workers came p99 {}",
+                "{} {}: p99 {p99} µs (back to back {back:.0}), max {:.0}, dropouts {}, workers came p99 {}",
                 f.threads.count,
                 way(f.threads.between),
                 s.max_ns as f64 / 1e3,
@@ -520,6 +535,8 @@ mod tests {
             ("non-finite samples 3", with(&|f| f.whole.non_finite = 3), true),
             ("frames: the device took 2815600", with(&|f| f.whole.frames -= 400), true),
         ];
+        let past = with(&|f| (f.steady.over, f.steady.max_ns) = (std::mem::take(&mut f.steady.hist[200]), 9_000_000));
+        assert!(failed(&past, true)[0].contains("p99 over 8192 (over 307% of the period)"), "{:?}", failed(&past, true));
         for (named, f, everywhere) in causes {
             let judged = failed(&f, true);
             assert!(judged.len() == 1 && judged[0].contains(named), "{named}: {judged:#?}");
