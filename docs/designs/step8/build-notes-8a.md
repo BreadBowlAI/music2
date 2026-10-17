@@ -1,7 +1,8 @@
 # 8a: build notes
 
 What each slice of 8a did, what it measured, and where the logs are. The offline half's plan is `8a-plan.md`
-beside this file (written as `~/m2-runs/s8a/plan.md`); the live half's is `~/m2-runs/s8a/plan-live.md`. Each
+beside this file (written as `~/m2-runs/s8a/plan.md`); the live half's is `8a-live-plan.md` (written as
+`~/m2-runs/s8a/plan-live.md`). Each
 plan's Attack and Decisions win. The design is `design-8a.md`. Linux timings here are information only: only the
 owner's Mac judges timings (PLAT-1).
 
@@ -19,6 +20,8 @@ owner's Mac judges timings (PLAT-1).
 | 3: live playback on engine threads | done | **Built and green.** Live playback renders on a pool of engine threads with the same bits as one thread: every pure fixture on 2, 4 and 7 threads, edits and a resampled song. Real time and the Mac's workgroup are asked for; this server refuses real time, so a device here plays on one thread. Nothing allocates. Every test shown red. |
 | 4: gate G12 live | done | **Built and green.** `m2-gates realtime` plays p50 live and judges every callback: on a Mac on its device (the bounds of gate 8), here on the silent clock (information). One minute of it is in the Mac's check (about 70 s more). Every new test shown red. |
 | Integration: the gaps lane | done | **Merged and green.** `8a-gaps` is in `8a`: a sound that breaks while the song plays goes silent alone. One fix: G12 counts such a sound as a crash. The live tests ran 10 times over, 0 failed. |
+| The review of the live half | done | **6 findings, all fixed**, each with a test shown red before its fix. The worst: an export with a sound that crashed left that sound out, with no word; it fails and names it again. One flaky server test fixed too. No render changed. |
+| The final check of the live half | passed | `ci/check.sh --gates` at `c924e0b`: **every row, nothing passed only on a retry** (1,404 Rust tests, 59/59 browser suites, 10 of 10 renders, the 7 gate runs; 41 minutes). The first run's gates row failed under load (up to 26): G5 and G7a through the server, which then passed alone 3 of 3. |
 | The Mac command, live | owed | one script, `ci/sweep.sh`, about 40 minutes (below). |
 
 ## Slice 0: the spike
@@ -1095,6 +1098,8 @@ judged everywhere (no crash, no non-finite sample, frames exactly as the engine 
   One thread can't play p50 here at all (its back-to-back p99 is 6,425 µs, over twice the period).
 - **The new entry counts work:** spinning workers come into a block within 1 µs; parked ones within 16 µs at
   p99 on 2 threads, and up to 512 µs on 4 under this load. This is the number the Mac's run reads for park or spin.
+- **The max column may hold a callback from before the window** (the review's rt-1, fixed in `3bce010`): read it
+  as information only. Nothing was judged on it.
 - **The first run** (20:22, load 22 while this track's own check built and tested on the same die) printed the
   longest callback as the p99 when over 1% of callbacks passed the histogram's 8.2 ms. Fixed (`566c014`). Its
   4-thread runs, at load about 6 by then: park p99 1,272 µs, spin 1,080, 3 dropouts each, back to back 818.
@@ -1177,13 +1182,11 @@ nothing aloud. Then paste back what is in `~/m2-8a.txt`.
 
 | # | Do this | Why |
 |---|---|---|
-| 1 | Type the first line below and press Return | gets the new code |
-| 2 | Type the second line and press Return | runs every measurement, one after another |
-| 3 | Paste back what is in `~/m2-8a.txt` | that is all the lead needs |
+| 1 | Paste the line below and press Return | gets the new code, then runs every measurement, one after another (the offline sweep and the live run) |
+| 2 | Paste back what is in `~/m2-8a.txt` | that is all the lead needs |
 
 ```sh
-cd ~/dev/suite2/music2 && git fetch && git switch main && git pull
-ci/sweep.sh
+cd ~/dev/suite2/music2 && git fetch && git switch main && git pull && ci/sweep.sh
 ```
 
 What `ci/sweep.sh` runs, and what each step decides:
@@ -1278,3 +1281,171 @@ the server's load. The ci line's run (all 32 cores, load 6 rising to 15) had p99
   message (an owner or polish decision, in `web/`); a sound that stops in the few milliseconds before a new plan is
   taken isn't told; the macOS runs of `sound-stops` and `pl-mix` come with the Mac's check.
 - **`Engine::crashes()`** now counts only an error that reaches the engine live. G12 still reads it, so it stays.
+
+## The review of the live half
+
+### In short
+
+- **A review of the live half confirmed 6 findings.** All 6 are fixed, each in its own commit with a test that
+  failed before the fix and passes after.
+- **The worst one:** an export with a sound that crashed finished without that sound, and said nothing. Now the
+  export fails and names the sound again, as it did before the gaps lane. Live, the sound still stops alone.
+- **One more, from this track's own check:** a server test, `loading_is_published_while_a_plugin_is_created`,
+  failed once and passed when run again (a known flake). Its race is fixed too.
+- **No render changed.** 10 of 10 renders match `e2e/renders.sha256` at every commit.
+
+### The findings
+
+| Finding | Severity | What was wrong | The fix | Commit |
+|---|---|---|---|---|
+| gaps-1 | high | The gaps lane told live from offline by `strict`. Exports aren't strict, so an export (Export Audio, `m2 render`) with a kernel that trapped or ran out of memory finished with that sound missing, and said nothing | `Renderer.live`: the engine marks each renderer it plays (`Engine::with`, an activation). Only there does a failing node stop alone. Every other render fails, naming the node, strict or not | `7d69fd6` |
+| gaps-2 | low | Stop All Sound stopped at the first node whose reset failed: the nodes after it weren't reset, and the engine stopped the song with no word | `Graph::panic`: a node whose reset fails stops alone, marked and told; the rest is reset. `Renderer::panic` can't fail now, so the engine never stops the song for it | `dace958` |
+| gaps-3 | low | A kernel that ran out of memory once had every later error told as "ran out of memory", after Stop All Sound made it play again | the store's `refused` flag is taken when the error is made (`ran_out`) | `e033c32` |
+| gaps-4 | low | The stop message said "(⌘.)" on every computer; off a Mac the key is Ctrl+. (PLAT-2) | the words name no key: "choose Transport ▸ Stop All Sound". The menu row shows each computer's own key | `84651e9` |
+| rt-1 | low | G12's "max" for a window could be a callback from before it: `Timing::since` gave the longest since the player started whenever one in the window ran past the histogram | a window's max is an `Option`: None when only "past 8.192 ms" is known. G12 prints "over 8192" for it | `3bce010` |
+| rt-3 | low | On a Mac the output's workgroup was released while workers were still in it: only the start hook held the group, and the player's handover, its last other holder, goes at once | `m2_os::rt::end_engine_thread(&group)`: leaving takes the group, and each worker's stop hook holds it until it has left | `0d01b44` |
+| the check | — | `loading_is_published_while_a_plugin_is_created` failed in the first pass of `7d69fd6`'s check and passed in the second (known from 8b's, polish's and next's notes). It read the activity, then the state; the plugin's load could end between the two | it keeps a pair only while the state still shows the load | `c924e0b` |
+
+Severity is the confirmed one: gaps-2 was filed as medium and confirmed as low.
+
+### Red before, green after
+
+| Finding | Test | Before the fix | After |
+|---|---|---|---|
+| gaps-1 | `a_trap_still_fails_an_export_and_names_the_node` and `a_kernel_over_its_memory_says_it_ran_out` (`core/runtime/src/tests/live/keep.rs`), `a_kernel_that_writes_its_input_fails` (`tests/cell.rs`): each export now renders as `m2_editor::Render::new` does (not strict); the live halves play in an engine | "the export finished, with [(1, Crashed)] stopped"; "the export finished, with [(1, OutOfMemory)] stopped"; "an export fails" | pass |
+| gaps-2 | `a_reset_that_traps_stops_its_sound_alone_and_the_panic_goes_on` (keep.rs), with a new test kernel `t:sore` whose reset traps once its input went over 0.5 | "the song plays on" failed: the transport had stopped | the song plays on; `a/lat` silent, told once as crashed; `b/d` reset as without the trap, bit for bit |
+| gaps-3 | `a_crash_after_running_out_of_memory_is_told_as_a_crash` (keep.rs); `t:hog` now also traps plainly while its input is over 1.5 | `[(1, OutOfMemory)]` where `[(1, Crashed)]` was expected | pass |
+| gaps-4 | `a_kernel_that_stops_is_told_once_by_sound_and_track` and `out_of_memory_is_told_as_memory` (`crates/server/src/graph/stopped_tests.rs`), with the new words; the browser suite `sound-stops` | both failed: the message still said "(⌘.)" | pass; `sound-stops` 12 of 12 |
+| rt-1 | `a_windows_longest_is_its_own` (`core/play/src/timing.rs`): a callback of 20 ms at the open, then a window with one of 9 ms and one of 1 ms | the window's max read 20,000,000 ns | None; the quantile past the histogram is over 8.192 ms and under 9 ms. G12's verdict test prints "max over 8192 (over 307%)" |
+| rt-3 | `live_workers_hold_their_group_until_they_leave` (`core/runtime/src/threads.rs`): a weak reference to the group, a pool of 4 | "the workers hold their group while they are in it" failed: the group was gone 100 ms after the workers started | held while the workers run, gone once the pool drops |
+| the check | `loading_is_published_while_a_plugin_is_created`, with a deliberate 5 ms between its two reads | 10 of 10 failed | 0 of 10. Without the delay: 0 of 20 |
+
+Each commit's check (`~/m2-runs/s8a/s2-check.sh`: the debug `m2`, 10 of 10 renders, the touched crates' tests,
+clippy on Linux and for the Mac, fmt of new files) passed before the commit was made.
+
+### Where the fixes differ from what the review proposed
+
+| Finding | Proposed | Built | Why |
+|---|---|---|---|
+| gaps-1 | `live` set from `RenderMode::Realtime`, or by the engine | by the engine alone | G12 and many tests open the player with `Renderer::new`, so the mode can't tell. "Exports never make an engine" (RENDER-1) makes the engine exact. The activation's marks (`poisoned`) now follow `live` too: only an engine activates |
+| gaps-2 | `Graph::reset` goes on past a failure | `Graph::panic`, beside `Graph::reset` | an offline seek and a voice's retrigger still use `reset`, and still fail at the first error |
+| rt-1 | a flag, or a value just past the histogram | `Option<u64>` | a max known past the histogram (one that came in the window) is still printed as it is |
+| rt-3 | the stop hook keeps a clone | the same, through the API: `end_engine_thread` takes the group | so no caller can leave a workgroup without holding it |
+
+One number this changes: the "max" column of slice 4's tables (17,010 and 30,134 µs, and others) may hold a
+callback from before the window, as rt-1 says. Read those as information only; nothing was judged on them.
+
+### Logs
+
+| What | Where |
+|---|---|
+| The red and green runs | `~/m2-runs/s8a/review2-red/` (`g1-export-*`, `g2-panic-*`, `g3-refused-*`, `g4-key-*`, `r1-max-*`, `r3-group-*`, `8a-rv-loading-*`, `loading.sh`; `e2e/` and `e2e-one.sh` for `sound-stops`) |
+| Each commit's check (`~/m2-runs/logs/`) | `8a-rv-g1-check-1017-215507-3338673.log` (the loading test's failure is in its first pass), `8a-rv-g2-check-1017-220140-3385717.log`, `8a-rv-g3-check-1017-220736-3435158.log`, `8a-rv-g4-check-1017-221325-3479085.log`, `8a-rv-r1-check-1017-221654-3527766.log`, `8a-rv-r3-check-1017-222316-3597142.log` |
+| `sound-stops` after gaps-4 | `8a-rv-g4-e2e-1017-221257-3475059.log` |
+| The loading test: with the delay, before and after; then 20 runs | `8a-rv-loading-red-1017-222908-3663705.log`, `8a-rv-loading-mutant-1017-222951-3669646.log`, `8a-rv-loading-green-1017-223009-3672697.log` |
+| A check stopped early | `8a-rv-g1-check-1017-215244-3320440.log`: it started while the next fix's test was being written into the tree. Stopped, and run again on the fix alone |
+
+## The final check of the live half
+
+### In short
+
+- **`ci/check.sh --gates` at `c924e0b` passed: every row, nothing passed only on a retry** (1,404 Rust tests,
+  59/59 browser suites, 10 of 10 renders, the 7 gate runs, G12's minute among them). 41 minutes, load 7.9 at the
+  start and 1.2 at the end (10.6 at most). `main` (`85b069a`) was already merged in; it hasn't moved since.
+- **The first run, at the same commit, failed one row: the gates.** G5 and G7a through the server took twice their
+  usual time while other tracks' jobs ran (load up to 26). The session's own compile, which 8a doesn't touch, took
+  twice as long too. Alone, the same gate passed 3 runs of 3 (load 9 to 14), at its usual numbers. Every other row
+  passed. Then the check ran again.
+
+### The summary, word for word
+
+```
+music2 check: PASS
+commit   c924e0b03068 on 8a (clean)
+machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
+tools    rustc 1.99.0, node v24.21.0, 41 min
+plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+
+toolchain        PASS  rustc 1.99.0
+web build        PASS
+build            PASS
+app              PASS  the UI connected: first-song in 1 s, with-plugins in 1 s
+rust tests       PASS  1404 passed, 0 failed
+clippy           PASS
+pool models      PASS  29 passed, 0 failed
+std kernels      PASS  tests and clippy
+std.wasm         PASS  rebuilt to the same bytes in another folder
+mac lint         PASS  the macOS code type-checks and lints
+browser suites   PASS  59/59 suites ok
+renders          PASS  10 of 10 match e2e/renders.sha256
+old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
+gates            PASS  the 7 runs ci/gates.txt names
+repo unchanged   PASS
+
+gates:
+  machine: ASRockRack B665D4U-1L, Ubuntu 24.04.3 LTS, AMD Ryzen 9 7950X3D 16-Core Processor, x86_64, 32 threads
+  === m2-gates --server tx-data watcher
+  PASS  G11 tx-data (PLANE-5, PLANE-1, WRITE-15) on server on p16
+        ok    idle disk: the session's part before the preview (plan, check, pre-check), under 5 ms at p95: p50 1.1 ms, p95 1.5 ms, max 1.7 ms (n=200)
+        ok    idle disk: from the request to the first block that plays it (its preview), under 20 ms at p95: p50 4.7 ms, p95 8.6 ms, max 10.1 ms (n=200)
+        ok    with another writer syncing 4 MB chunks: the session's part before the preview (plan, check, pre-check), under 5 ms at p95: p50 1.2 ms, p95 1.7 ms, max 3.3 ms (n=200)
+        ok    with another writer syncing 4 MB chunks: from the request to the first block that plays it (its preview), under 20 ms at p95: p50 4.7 ms, p95 8.4 ms, max 10.2 ms (n=200)
+        ok    idle disk, 5,000 files in assets/: the session's part before the preview (plan, check, pre-check), under 5 ms at p95: p50 1.2 ms, p95 1.6 ms, max 3.3 ms (n=200)
+        ok    idle disk, 5,000 files in assets/: from the request to the first block that plays it (its preview), under 20 ms at p95: p50 4.7 ms, p95 8.3 ms, max 10.6 ms (n=200)
+  PASS  G11 watcher (WRITE-19) on server on p16 with 5,000 files in assets/
+        ok    idle: the CPU its ticks used over 10 s, under 1% of a core: 0.10% of a core (199 ticks in 10 s)
+  === m2-gates --server --reference 50 --at 180 add-effect
+  PASS  G5 and G7a add effect, through the server (RENDER-8, RENDER-25, RENDER-25a) on server on p50 from 180 s
+        ok    audible within compile + 100 ms: past the session's work: p50 45.8 ms, p95 57.7 ms, max 57.7 ms (n=10)
+        ok    G7a: heard within 200 ms of the request, its compile included: p50 110.8 ms, p95 122.7 ms, max 122.7 ms (n=10)
+        ok    with-plugins: audible within compile + 100 ms: past the session's work: p50 15.0 ms, p95 20.4 ms, max 20.4 ms (n=2)
+  === m2-gates --reference 50 --at 180 add-effect tails
+  PASS  G5 add effect (RENDER-25, 25a, 8) on engine (step 7) on p50
+  PASS  G7b tails of untouched tracks (RENDER-25, 25a) on engine (step 7) on p50
+  === m2-gates --server export
+  PASS  G7e export (RENDER-1, RENDER-6a, HOME-4, HOME-6) on server on examples/with-plugins, real time
+  === m2-gates store --reference 50
+  PASS  G7f store (RENDER-32) on the runtime on p50
+        ok    the same music: every renderer's timed blocks the same bits: the same 2880000 samples (hash 22cd1b3810530499) from the app's layout, P1 and S in every round, peak -1.0 dB
+        info  block, P1 against S (step 7 with wasmtime's default layout): mean +137 µs (5 pairs, +84 to +194); p99 +158 µs (5 pairs, +81 to +287)
+        info  block, the app's layout against P1 (the owner's layout alone): mean -385 µs (5 pairs, -469 to -245); p99 -782 µs (5 pairs, -859 to -605)
+        info  block, starting a turn: of the judged ones, each turn's first half over its second, against S's: -23 µs (the app's layout), -12 (P1); each turn's first block over the mean: +1480 µs, +1681, +1747 (S); 188 a
+        info  machines: S's record is from MacBookPro18,1, macOS 26.6.2, Apple M1 Pro, aarch64, 10 threads; this run is on ASRockRack B665D4U-1L, Ubuntu 24.04.3 LTS, AMD Ryzen 9 7950X3D 16-Core Processor, x86_64, 32 thread
+        skip  block within S + 80 µs, by the mean: would pass: -226 µs (5 pairs, -275 to -161) over S, measured here (bound 80). p99, not judged: -610 µs (5 pairs, -624 to -523); not judged off the reference Mac (PLAT-1
+        skip  footprint within S + 64 MB: recorded, not judged: S's record is from another machine (PLAT-1)
+        skip  full build within 1.5 × S: would pass: 233 ms against S's 194 ms, each its process's first, measured here; not judged off the reference Mac (PLAT-1)
+  === m2-gates arena --reference 50 --at 180
+  PASS  G7f the arena's callback (RENDER-32, RENDER-25) on the player on p50 from 180 s
+        ok    the same music: every player's timed callbacks the same bits: the same 2856960 samples (hash cdb85ca0bbb29381) from the app's layout, P1 and S in every round, peak -1.0 dB
+        info  callback, P1 against S (step 7 with wasmtime's default layout): mean +125 µs (5 pairs, -75 to +378); p99 +750 µs (5 pairs, -786 to +6254)
+        info  callback, the app's layout against P1 (the owner's layout alone): mean -5 µs (5 pairs, -786 to +78); p99 -1322 µs (5 pairs, -5307 to +497)
+        info  callback, starting a turn: of the judged ones, each turn's first half over its second, against S's: +100 µs (the app's layout), +53 (P1); each turn's first callback over the mean: +6213 µs, +7657, +7339 (S)
+        info  machines: S's record is from MacBookPro18,1, macOS 26.6.2, Apple M1 Pro, aarch64, 10 threads; this run is on ASRockRack B665D4U-1L, Ubuntu 24.04.3 LTS, AMD Ryzen 9 7950X3D 16-Core Processor, x86_64, 32 thread
+        skip  callback within S's + 320 µs, by the mean: would pass: +123 µs (5 pairs, -861 to +243) over S, measured here (bound 320). p99, not judged: -158 µs (5 pairs, -3449 to +947); not judged off the reference Mac
+        ok    the slowest activation block under half the device buffer's period: 3999 µs, p50 1996; the block before it p50 2696, max 4730 (bound 5333 µs; the run's p99 callback 13519)
+  === m2-gates realtime --reference 50 --minutes 1
+  PASS  G12 live (RENDER-28, RENDER-28a) on the silent clock on p50, 128 frames
+
+logs     /home/jerry/m2-runs/check-8a-live-2.tgz
+```
+
+### The first run
+
+| Run | Load | The session's own work, compile included: p50 / p95 | Heard within 200 ms of the request (G7a): p50 / p95 |
+|---|---|---|---|
+| The first final check (`check-8a-live`), failed | 5 to 26 while it ran | 138 / 249 ms | 222 / **368** ms |
+| The gate alone, 3 runs | 9 to 14 | 64 to 66 / 68 to 116 ms | 111 to 114 / 116 to 163 ms |
+| `next`'s final check (`check-next`) | — | 63 / 70 ms | 108 / 117 ms |
+| 8a's offline final check (`check-8a-fg`) | — | 61 / 70 ms | 107 / 114 ms |
+
+Linux timings are information only (PLAT-1), but the gates row counts them, so the check ran again. The server's
+silent player renders on one thread (`live_count` off a device), so the live half adds no thread to that run.
+
+### Logs
+
+| What | Where |
+|---|---|
+| The final check | `~/m2-runs/logs/check-8a-live-2-1017-231833-4083659.log`; its logs `~/m2-runs/check-8a-live-2/` (`check-8a-live-2.tgz` beside it) |
+| The load while it ran, every 30 s | `~/m2-runs/s8a/review2-red/load-check2.log` |
+| The first run | `~/m2-runs/logs/check-8a-live-1017-223052-3679399.log`; its logs `~/m2-runs/check-8a-live/` (`check-8a-live.tgz` beside it) |
+| The gate alone, 3 runs | `~/m2-runs/logs/8a-live-g5-again-1017-231751-4078122.log` (a copy in `~/m2-runs/s8a/review2-red/`) |

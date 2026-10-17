@@ -6,11 +6,30 @@ check, and when it landed on `main`; again for `taste-next` (taste's look, the s
 after its review and final checks; for 8b's screens (`8b-ui`), after their review and final check; and once more
 for `polish` (the rest of the top ten), after its review and final check, and when it landed on `main`; and for
 8a's offline half, after its review and final check, and when it landed on `main`; and for `next` (8b.7,
-8b.10 and the settings work), after its review and final check, and when it landed on `main`.
+8b.10 and the settings work), after its review and final check, and when it landed on `main`; and for 8a's
+live half (on `8a`), after its review and final check.
 Read this first, then `docs/architecture.md` (the contract) and the design for
 whatever you pick up.
 
 **In short**
+- **8a's live half is done on `8a`** (2026-10-17): Linux green at `c924e0b`; macOS owed. Not on `main` yet: the
+  lead merges it (a merge; `8a` already has `main` at `85b069a`). It adds:
+
+  | What changed | What you notice |
+  |---|---|
+  | Live playback uses several cores, as exports already did | a big song plays with fewer dropouts; it sounds exactly as on one core |
+  | On a Mac those threads are real-time audio threads, in the output's audio workgroup | macOS treats them as audio work |
+  | A sound that breaks while the song plays goes silent alone | the rest plays on; a message says which sound, on which track, and that Transport ▸ Stop All Sound starts it again |
+  | A sound over its 32 MB says it ran out of memory | the message says "ran out of memory" |
+  | Gate G12 plays p50 live and judges every callback | the Mac's check plays it for a minute, muted |
+
+  An export with a broken sound still fails and names it. No render changed: 10 of 10. A review found 6 things:
+  all fixed, each with a test; so was one flaky server test. Then `ci/check.sh --gates` passed: every row, nothing
+  passed only on a retry (1,404 Rust tests, 59/59 browser suites, 10 of 10 renders, the 7 gate runs; 41
+  minutes). Its first run failed the gates row under load from other jobs (G5 and G7a through the server, which then
+  passed alone 3 times of 3), so it ran again. Owed: the owner's Mac sweep, one paste (Mac runs owed, below): it
+  picks the live thread count and park or spin. Build notes `docs/designs/step8/build-notes-8a.md` and
+  `build-notes-8a-gaps.md`; plans `8a-plan.md` and `8a-live-plan.md` beside them.
 - **`next` is on `main`** (2026-10-17): Linux green at `1560a19`; macOS owed. `main` fast-forwarded to it.
   It added:
 
@@ -103,8 +122,6 @@ whatever you pick up.
   record of 2026-10-14 (10,169 µs a callback against 8,936). Why is not known; the paired turns judge both sides
   under the same conditions, and the verdict is far from its bound, so no second run was asked for.
 - `main` has step 7: it fast-forwarded from `0ebc6e6` (the platform step, macOS green at `1750322`).
-- **Two gaps found on 2026-10-16** (Left for later): a kernel that crashes while the song plays stops the whole
-  song with no message; and a kernel that runs out of its 32 MiB fails with a message that never says "memory".
 - **A layout to decide before step 9:** idea 3, one sandbox per box (`docs/designs/kernel-layout/report.md`).
   Research only; it is in Open owner decisions.
 - The owner decided O1 to O5 on 2026-10-15 (below), and std's bump to 0.2 with O3's fix. That question is closed.
@@ -114,10 +131,9 @@ whatever you pick up.
   Live playback still uses one thread; a song with plugins renders on one thread for now. A review found 4 things:
   all fixed, each with a test. The last check found a fifth (gate G10's timing): fixed too. Then
   `ci/check.sh --gates` passed: every row, nothing passed only on a retry (1,241 Rust tests, 49/49 browser suites,
-  10 of 10 renders, the 6 gate runs). No render changed. Owed: the owner's short offline sweep on the Mac (Mac runs
-  owed, below). Next: 8a's live half. Build notes `docs/designs/step8/build-notes-8a.md`; the plan
-  `8a-plan.md` beside it.
-- **In flight** (2026-10-17): 8a's live half, on `8a`.
+  10 of 10 renders, the 6 gate runs). No render changed. The owner ran its offline sweep on the Mac the same day:
+  go (`build-notes-8a.md`, "The Mac sweep"). Its live half is done on `8a` (above). Build notes
+  `docs/designs/step8/build-notes-8a.md`; the plan `8a-plan.md` beside it.
 
 ## Your own songs (for the owner)
 
@@ -138,13 +154,13 @@ whatever you pick up.
 | `sounds-merge` | `e1003ba` | All on `main` (a fast-forward, 2026-10-17). Linux green at `e108e46` (reviewed; `ci/check.sh --gates` and the recorded tests), macOS owed. Branch and worktree deleted. |
 | `8b-backend` | `c9cc6ad` | All on `main` (a fast-forward, 2026-10-17). Linux green at `a8199ff`, macOS owed. Branch and worktree deleted. |
 | `taste-next` | `22bea45`, then docs | All on `main` (a fast-forward, 2026-10-17). Linux green (reviewed; `ci/check.sh` and `--gates`), macOS owed. Branch and worktree deleted. |
-| `8a` | `bc41693`, then docs only | All on `main` (a fast-forward, 2026-10-17): 8a's offline half, from `main` at `e571a5f` with `main` at `70f9b61` merged in: the pool (`m2-pool`) and the executor, so exports use several cores with the same bits. Live playback stays on one thread until 8a's live half. Reviewed (4 findings, all fixed with tests). Linux green at `bc41693` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Worktree `~/m2-runs/wt/8a` and its `target/` stay for the live half, on the same branch; plan `docs/designs/step8/8a-plan.md`; build notes `docs/designs/step8/build-notes-8a.md`. |
+| `8a` | `c924e0b`, then docs only | The offline half is on `main` (a fast-forward, 2026-10-17, Linux green at `bc41693`): the pool (`m2-pool`) and the executor, so exports use several cores with the same bits. **The live half is ready for `main`** (a merge; `main` at `85b069a` is in it): R1 (a mixer strip runs with its track), live playback on engine threads (real time, the Mac's workgroup), G12 live (`ci/gates.txt`, `ci/sweep.sh`), and the gaps lane (a sound that breaks goes silent alone and is told; out of memory says so). Reviewed (6 findings, all fixed with tests). Linux green at `c924e0b` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Worktree `~/m2-runs/wt/8a` and its `target/` stay until the lead merges. Plans `docs/designs/step8/8a-plan.md` and `8a-live-plan.md`; build notes `build-notes-8a.md` and `build-notes-8a-gaps.md`. |
 | `polish` | `65f59f1`, then docs only | All on `main` (a fast-forward, 2026-10-17): the rest of the top ten, built in four lanes. Linux green at `65f59f1` (reviewed; `ci/check.sh`), macOS owed. Branch and worktree deleted. Plan `docs/designs/step8/polish-plan.md`; build notes `build-notes-polish.md`. |
 | `8b-ui` | `92317ad`, then docs only | All on `main` (a fast-forward, 2026-10-17). 8b's screens: mute and solo, clips and automation, audition, meters. Linux green at `92317ad` (reviewed; `ci/check.sh`), macOS owed. Branch and worktree deleted. |
 | `origin/taste` | `4804247` | All on `main` now (`a0d5f91` and `4804247`, both merged into `taste-next`). Its worktree is deleted. |
 | `origin/sounds` | `916127d` | 22 new std sounds (8 on the polysynth, 4 FM, 10 drums), merged; on `main` since 2026-10-17. |
 | `next` | `1560a19`, then docs only | All on `main` (a fast-forward, 2026-10-17). From `main` at `70f9b61`, with `main` at `8a6d9e1` (8a's offline half) merged in. 8b.7 (heard while dragging: lanes and the tempo), 8b.10 (the metronome, the keyboard piano, a MIDI keyboard through `midir`), no sound device, Settings, undo names, effect bypass, order and the Duck picker, small fixes. Built in four lanes, joined as merge commits. Reviewed (12 findings, all fixed with tests). Linux green at `1560a19` (`ci/check.sh --gates`, nothing passed only on a retry), macOS owed. Branch and worktree deleted. Plan `docs/designs/step8/next-plan.md`; build notes `build-notes-next.md`. |
-| Mac runs owed | — | One `ci/check.sh` on `main` covers every branch above. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 60. |
+| Mac runs owed | — | One `ci/check.sh` on `main` covers every branch above. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 60. Once `8a` is merged: 8a's Mac sweep, one paste (What to do next). |
 
 `taste` and `sounds` start at `8aa301e`, before the platform step. Each has a detached worktree in `~/m2-runs/wt/`
 (`taste`, `sounds`); `sounds`' can go once the tracks in flight land. `origin/wip/step7` (the Mac's half-done step 7,
@@ -164,8 +180,9 @@ Designs, all in `docs/designs/`:
   before step 9. Its notes and sources sit beside it.
 - `platform/design.md` (§8: how later steps add to `m2-os`; §13.3: the merges) and `platform/build-notes.md`.
 - `step8/design-8a.md`, `design-8b.md`, `taste.md` (the look), `audit-ui.md` (98-shot audit).
-- `step8/8a-plan.md` (8a's offline half: its plan, Attack and Decisions) and `build-notes-8a.md` (each slice, the
-  review, the final check, the Mac sweep).
+- `step8/8a-plan.md` (8a's offline half: its plan, Attack and Decisions), `8a-live-plan.md` (the live half's) and
+  `build-notes-8a.md` (each slice, both reviews and final checks, the Mac sweep, the Mac command);
+  `build-notes-8a-gaps.md` (the gaps lane).
 - `step6/`: the Tx and write path (C1–C21, cited by the contract). `workflows/`: old workflow scripts (Mac paths).
 
 The step 7 review: `~/m2-runs/review-b1/findings.json` (19 confirmed findings, 5 dropped, each lens's summary).
@@ -302,6 +319,12 @@ S, about 3 minutes the first time, and G7f plays longer, about 8 minutes a part)
   `nx-undo`, `nx-effects`, `nx-piano`, `nx-midi`, `nx-settings`, `nx-nodevice`, `s8-leases`, `nx-nits` and
   `nx-click`. The suites post MIDI as a keyboard would (`M2_MIDI=inject`), and the check opens no MIDI device
   (`M2_MIDI=none`), so a keyboard plugged into the Mac never plays into it. No render moved.
+- 8a's live half, once merged: 1,404 Rust tests on Linux and one more browser suite (59/59): `sound-stops`, which
+  plays a sound that crashes. The gates row plays G12 live for one minute, muted (about 70 s more). Before the run,
+  set the output to the built-in speakers at 48 kHz (Audio MIDI Setup): at another rate or buffer, G12 says "not
+  the designed set-up" and what to set. The Mac's own real-time code runs its tests for the first time
+  (`an_engine_thread_has_the_time_constraint_policy`, `a_worker_joins_and_leaves_the_default_outputs_workgroup`).
+  No render moved.
 
 **What must pass:** the first line says `music2 check: PASS`. Every row says PASS (the gates row too, not PART),
 with nothing "passed only on a retry". In the gates part:
@@ -452,35 +475,44 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
 | `taste-next`: the look, 8b.1, 8b.2, 8b.3 | `22bea45` (Linux checks), then docs only | owed: the same `ci/check.sh`, then the look-and-listen steps 22 to 31 |
 | 8b's screens (`8b-ui`) | `92317ad` (Linux checks), then docs only | owed: the same `ci/check.sh`, then the by-ear steps 32 to 38 |
 | `polish`: the rest of the top ten | `65f59f1` (Linux checks), then docs only | owed: the same `ci/check.sh`, then the by-ear steps 39 to 50 |
-| 8a's offline half (all CPU cores, offline) | `bc41693` (Linux checks), then docs only | owed: the offline sweep below (about 10 minutes); the same `ci/check.sh` covers its Mac tests |
+| 8a's offline half (all CPU cores, offline) | `bc41693` (Linux checks), then docs only | the offline sweep: done (2026-10-17, at `8a6d9e1`: go). The same `ci/check.sh` covers its Mac tests |
+| 8a's live half (live on several cores, a sound that breaks, G12) | `c924e0b` (Linux checks), then docs only; on `main` once merged | owed: 8a's Mac sweep below, one paste, about 40 minutes. The same `ci/check.sh` covers its Mac tests and G12's minute |
 | `next`: 8b.7, 8b.10, Settings, no sound device, undo names, effect comforts | `1560a19` (Linux checks), then docs only | owed: the same `ci/check.sh`, then the by-ear steps 51 to 60 (a real MIDI keyboard, the metronome against the beat, switching the output) |
 
-**8a's offline sweep (for the owner).** Plugged in, lid open, other apps closed, in
-Terminal on the Mac itself. Type each line and press Return. Then paste back what is in `~/m2-8a-offline.txt`.
+**8a's Mac sweep (for the owner): offline and live, one paste.** Once the lead has merged `8a` into `main`.
+
+**In short:** about 40 minutes. It plays nothing aloud. Paste one line, wait, then paste back what is in
+`~/m2-8a.txt`.
+
+| # | Do this | Why |
+|---|---|---|
+| 1 | Plug the Mac in, keep the lid open, and quit other apps. | The timings need a quiet Mac. |
+| 2 | Set the output to the built-in speakers at 48 kHz (Audio MIDI Setup). | Gate 8 is judged at 48 kHz. |
+| 3 | Open Terminal on the Mac itself, paste the line below, and press Return. | It gets `main` and runs every step, one after another. |
+| 4 | Paste back what is in `~/m2-8a.txt`. | That is all the lead needs. |
 
 ```sh
-cd ~/dev/suite2/music2 && git fetch && git switch main && git pull
-cargo test --locked --release -p m2-pool --features models 2>&1 | tail -5 | tee ~/m2-8a-offline.txt
-cargo run --locked --release -p m2-gates -- realtime --offline --reference 50 2>&1 | tee -a ~/m2-8a-offline.txt
-sysctl hw.perflevel0 hw.perflevel1 | tee -a ~/m2-8a-offline.txt
+cd ~/dev/suite2/music2 && git fetch && git switch main && git pull && ci/sweep.sh
 ```
 
-What it decides, for 8a's live half (the full table is in `build-notes-8a.md`, "The Mac sweep"). S is how many
-times faster 4 threads render a p50 block than 1, by the p99:
+What each step decides (the full table: `build-notes-8a.md`, "The Mac command"):
 
-| It reads | Then |
-|---|---|
-| a FAIL in the bits, or a model fails | stop: a bug, fixed on Linux first |
-| S of 2.5 or more | go: the live half as planned, 4 live threads |
-| S from 2.0 to 2.5 | go, and first each mixer strip joins its track |
-| S under 2.0 | no live half yet: a study first |
-| 1 thread, paced, more than 15% slower by the p99 than back to back | the live half spins between callbacks |
-| 8 threads 10% or more faster than 4 | an export alone uses every fast core on a Mac |
+| Step | About | What it runs | What it decides |
+|---|---|---|---|
+| build | 5 min the first time | `cargo build --release -p m2-gates` | — |
+| 1. models | 1 min | the pool's models (`m2-pool --features models`) | the pool's orderings and its wake on arm64 (one bug can only show there). A FAIL: stop; it is fixed on Linux first |
+| 2. `m2-os` rt | 2 min | `cargo test -p m2-os rt` | the Mac's real-time code, run for the first time: the wake, the time-constraint policy, the output's workgroup joined and left. A FAIL: that code is fixed before anything live is judged |
+| 3. sysctl | seconds | `sysctl hw.model hw.perflevel0 hw.perflevel1` | the counts the rules read: 4 fast cores per L2 (the live count's cap), 8 fast cores (an export's) |
+| 4. offline sweep | 6 min | `m2-gates realtime --offline --reference 50` | after R1, on the Mac: 8 threads against 4 (an export alone keeps every fast core while 8 beat 4 by 10%); the song's tail (310 µs a block before R1); paced 4-thread blocks (8,045 µs p99 before) |
+| 5. live sweep | 10 min | `m2-gates realtime --reference 50 --minutes 1 --sweep 1,2,3,4 --between park,spin` | **the live thread count:** the fewest threads whose p99 is within 5% of the best, with no dropout. **Park or spin:** spin if its p99 at that count is at least 10% lower, with no more dropouts. **The set-up:** every engine thread real time and in the workgroup, or the workgroup code is fixed first |
+| 6. gate 8 | 11 min | `m2-gates realtime --reference 50 --minutes 10` | gate 8 on this Mac: no dropout from Play, p99 at most 1,867 µs (70% of the period), no crash, every engine thread in the workgroup. On an M1 Pro the verdict is provisional (a stand-in for a base M1). A FAIL: the study list of design-8a §16, in its order |
 
 1. **The Mac runs** (above), when the owner has time: `ci/check.sh` on `main` for the `sounds` merge and 8b's back
    ends, and the by-ear steps. Fix what they find on Linux, then ask for one more run.
-2. **The two gaps found on 2026-10-16** (Left for later): fix them before step 9, or with idea 3 if the owner
-   says yes to it.
+2. **Merge `8a` into `main`** (a merge commit: `8a` already has `main` at `85b069a`). Then ask the owner for 8a's
+   Mac sweep (above, one paste). Its step 5 sets two lines in `core/play/src/engines.rs`: the live count
+   (`live_count`) and `BETWEEN` (park or spin). Its step 2 is the first run of the Mac's real-time code: a FAIL
+   there is fixed first.
 3. **The `sounds` merge is on `main`** (`docs/designs/sounds/`). Ask the owner the Space, Return, Space question
    (Open owner decisions).
 4. **`taste-next` and `8b-ui` are on `main`.** What they built, decided and left:
@@ -489,11 +521,8 @@ times faster 4 threads render a p50 block than 1, by the p99:
    Lead's default, the owner may change it: in the export question, Return presses the focused button (at first the
    main one), not always the main one as a Mac alert does.
 5. **`polish` is on `main`.** What it left is in `docs/gaps.md` and its build notes' End.
-6. **8a's offline half is on `main`** (Linux green at `bc41693`). Next, the owner's
-   short offline sweep on the Mac (Mac runs owed, above). Then **8a's live half** (slice 3: live playback on
-   engine threads, with the OS's audio workgroups on a Mac; gate 8's live runs), as the sweep decides, with the two
-   gaps above. Where to start: `design-8a.md` §6 and §16 (its slice 2 is the live half), what `8a-plan.md` leaves
-   for slices 3 and 4, and the build notes' "For the lead".
+6. **8a is done on Linux:** its offline half on `main` (`bc41693`), its live half on `8a` (`c924e0b`, item 2).
+   What it left is in Left for later ("8a's live half") and the build notes' "For the lead" sections.
 7. **8b.7 and 8b.10 are on `main`** (`next`, Linux green at `1560a19`). What it left is in `docs/gaps.md` and its build notes' End. Then **step 9**
    (8b.9's Change track ID… came in `polish`, without the engine's pass). Before
    step 9 freezes kernel ABI v1, the owner decides the kernel layout (Open owner decisions). Each adds its OS pieces
@@ -512,7 +541,7 @@ Platform design §13.3, updated by what step 7 learned. Never take a side on `Ca
 | any | `Cargo.lock` | take `main`'s, then `cargo build` adds the branch's edges; never `cargo update` |
 | `sounds` | done | merged, now on `main`, as these notes said (`docs/designs/sounds/build-notes.md`, slice 1) |
 | `taste` | done | merged as `taste-next`, as these notes said (`docs/designs/step8/build-notes-taste.md`, each slice's conflicts and breaks): WRITE-17 is taste's text with the network-volume words; attention waits for the page before a toast's Undo (D7, `cf3115b`); Inter off the Mac (A2); the engine note became neutral states of the status pill (lead decision T2), and fx-fixes checks them at 1100 and 1280 px, not 960 (no app window is narrower than 1100); `instruments.ts` has taste's `category` and `sounds`' `description`; + Track lists the 22 sounds (T3); std 0.2; `delta.rs` keeps the `sounds` merge's `Op::Time` arm; s8-tracks hears `layout.json` within a second on inotify; README supports Linux |
-| `8a` (live half) | `next` on `main` | `next` added small, separate blocks to `core/play/src/lib.rs` and `core/runtime`: the click (B1), the device's buffer and `fell_back` (C1), `Player::freed` and the stream's end (review NX-S5), and the device thread's `open_on` loop, trying the output chosen then the default (NX-S1). Each is listed in `build-notes-next.md` ("For 8a's merge", by lane and in the review). `Choice` folds into 8a's `Options`; 8a's `Player::close()` can replace `set_output`'s wait for `freed`. `next` already merged `main` at `8a6d9e1` (one import line in `engine.rs`: both kept) |
+| `8a` (live half) | done: `main` with `next` merged in at `739cfc6` (no conflict), `8a-gaps` at `54d1b93` | To land: merge `8a` into `main`. If `next`'s later work in `core/play` (8b.7's lane leases on `Player::swap_lane`, …) lands first, `8a`'s player hooks are short, with the rest in files of their own (`engines.rs`, `timing.rs`). What `next` had added: small, separate blocks to `core/play/src/lib.rs` and `core/runtime`: the click (B1), the device's buffer and `fell_back` (C1), `Player::freed` and the stream's end (review NX-S5), and the device thread's `open_on` loop, trying the output chosen then the default (NX-S1). Each is listed in `build-notes-next.md` ("For 8a's merge", by lane and in the review). `Choice` folds into 8a's `Options`; 8a's `Player::close()` can replace `set_output`'s wait for `freed`. `next` already merged `main` at `8a6d9e1` (one import line in `engine.rs`: both kept) |
 | `8b-ui` | onto `taste-next` | it was planned on `taste`'s screens: rebase or merge onto `taste-next`. Taste's files it will meet: `Mix.tsx` (strips, the lane fader), `SongBar.tsx`, `TopBar.tsx`, `Tracks.tsx`, `SongTimeline.tsx`, `Knob.tsx` (the gesture hook). The browser suites read the Mix strips by `data-knob` ids |
 
 ## Known flakes
@@ -521,9 +550,9 @@ Seen, not fixed:
 
 | Test | What fails | Note |
 |---|---|---|
-| `pl-mix` | "its strip meter still reads as the header's: before the fader": ten samples at the floor | once, in 8a's last check, passed on its retry. The hats are short hits; most samples read the floor in polish's own checks too. Make the check sturdier |
 | G7f part 2's slowest activation block (`arena`) | over its 5,333 µs bound on this server under load (1 of 3 runs beside other agents; 4 of 4 beside 32 busy loops) | Linux timings are information only (PLAT-1); judged on the Mac. In `--gates` here it can fail the gates row. |
 | G3 (a note edit within compile + 20 ms) | p95 16–22 ms at n=10 | near its line under load; judged on the Mac |
+| G5 and G7a through the server (`--server --reference 50 --at 180 add-effect`) | p95 125 ms past the compile (bound 100), 368 ms from the request (bound 200) | once, in 8a live's first final check, at load up to 26: the session's compile took twice as long too. Alone, 3 runs of 3 passed at the usual numbers (about 111 ms). Judged on the Mac |
 | `taste` | the Bass header's click didn't select it within 30 s | once, in a run of three suites at once beside other agents (`taste-next`'s final phase); not seen in its checks |
 | `live3b` | "its release writes db(-32) into song.ts" | once, at load 45–74, before step 7; not seen since; watch for it |
 | `s5-knobs` | page detached after a double-click on a knob at its default (3 of 11 release runs) | from before the platform step; not seen in its checks |
@@ -539,6 +568,13 @@ Fixed in step 7 (of these, only `a_plugin_that_keeps_failing_is_started_again_on
 | G7e's fade-in check | failed 3 of 20 when the hold landed near a kick's attack; the export now starts on a kick's body (`857bd5a`) |
 | `a_plugin_that_keeps_failing_is_started_again_once` | passed only on a retry once (the speed work's first check): its rounds' catch-up did nothing while the actor was busy. They run on the actor now (`a894448`): under a stress run, 33 of 200 runs failed before, 0 of 200 after |
 | `live3b`'s export checks | heard the chord at about -85 dBFS; the lead goes back to its own level first (`987bf0d`) |
+
+Fixed in 8a's live half:
+
+| Test | Cause |
+|---|---|
+| `pl-mix` | "its strip meter still reads as the header's" (once, in 8a's offline check): the hats are short hits, so most samples read the floor. It reads until a hat shows (the gaps lane, `e66e6cd`): 10 runs of 10 pass |
+| `loading_is_published_while_a_plugin_is_created` | failed once in this track's check, and in 8b's, polish's and next's: it read the activity, then the state, and the plugin's load could end between them. It keeps a pair only while both show it (`c924e0b`): with 5 ms between the reads, 10 of 10 failed before and 0 of 10 after |
 
 Fixed in 8a's offline half:
 
@@ -581,17 +617,20 @@ The `sounds` merge:
 - The app's yellow compile bar shows each message on one line, cut at the window's edge. The std hint now comes
   first in its message (the review's D3); other long messages are still cut. Wrapping them is a choice for `taste`.
 
-Step 7:
-- **Gap: a kernel crash stops the song, with no message.** If a kernel traps while the song plays,
-  `core/runtime/src/engine.rs:570-579` drops the error, counts it and stops the transport. Only tests read the
-  count (`Engine::crashes`). Pressing Play plays silence until the next edit that rebuilds the song. It should mute
-  only the part that crashed, rebuild it (HOST-5's path), and tell the user once. No std kernel is known to trap.
-- **Gap: a kernel out of memory doesn't say so.** A kernel whose memory would pass 32 MiB gets a refused grow,
-  and its Rust code then most likely aborts (unverified): "wasm trap: wasm `unreachable` instruction executed".
-  `out_of_memory` (`crates/server/src/graph.rs:382-387`) doesn't match that, so the user isn't told it is memory.
-  No std kernel comes near: at 384 kHz, the highest rate, the largest, `delay`, holds 11.88 MiB, and
-  `every_std_kernel_fits_its_memory_at_the_highest_rate` checks every one (since the `sounds` merge). Other people's
-  kernels could (step 9). The full path is in `kernel-layout/code-map.md` §3.7.
+8a's live half (details in `step8/build-notes-8a.md`, each "For the lead", and `build-notes-8a-gaps.md`):
+- The live thread count and park or spin wait for 8a's Mac sweep: one line each (`live_count`, `BETWEEN` in
+  `core/play/src/engines.rs`).
+- The Mac's real-time code (the Mach semaphore, the workgroup by the device's id, the time-constraint policy) has
+  only been type-checked: it first runs on the owner's Mac. This server refuses real time, so a kept device pool
+  and a granted `SCHED_FIFO` never ran here.
+- A song with plugins renders on the device's thread alone: plugins on worker threads come later.
+- G12 is built without `--server` (live while the song is edited), `--export` (beside an export), `--like-m1`
+  and `--capture resample` (gate 8's row; the plan's cut order).
+- A toast lasts 4 s, short for the three-line stop message (an owner or polish decision, in `web/`).
+- A sound that stops in the few milliseconds before a new plan is taken isn't told.
+- `Engine::crashes()` counts only an error that reaches the engine live; G12 adds the plan's stops to it.
+
+Step 7 (its two gaps, a kernel crash that stopped the song and out of memory not said, are fixed: 8a's gaps lane):
 - **K13:** a note that starts in the very block after a state change doesn't sound in Surge XT (Surge ends its voices when it applies a state).
 - **K14:** a plugin that applies a loaded state later than its next call could still win over the code's values (HOME-5a's revert, with plugin windows, is the real fix).
 - A new plugin instance whose saved state adds latency plays uncompensated, and nothing says so (RENDER-17; found in the finish).
@@ -665,6 +704,6 @@ From the platform step:
 | The desktop app | Only on an invisible Xvfb screen, as the check's app row opens it. Never on a real screen. |
 | Scratch `HOME` | Anything that runs music2 gets a scratch `HOME` and `M2_AUDIO=none`, and then `CARGO_HOME=/home/jerry/.cargo RUSTUP_HOME=/home/jerry/.rustup`. Never the real `~/.music2` or `~/Music`. `ci/check.sh` does this itself. |
 | Scratch copies | `git worktree add --detach ~/m2-runs/scratch-<label>`, with its own `target/`; delete it when done (they once filled 390 GB). The repo's own `target/` is about 140 GB. |
-| Logs | Each check's folder in `~/m2-runs/check-*` (8a's final: `check-8a-fg`, with the gates, at `bc41693`; the `sounds` merge's: `check-sm1c` and `-sm2b` with the gates, `-sm3`, `-sm4`, and the final `-sm-fg` with the gates, at `e108e46`; step 7's last: `check-s7-rv1`, and `-rvg` with the gates; before them `-sp1`, `-sp2` and `-spg`); the `sounds` merge's plan in `~/m2-runs/sounds/plan.md`; the step 7 gate runs in `~/m2-runs/gates-fix/` and `~/m2-runs/xc/g7f/`; the review in `~/m2-runs/review-b1/`. |
+| Logs | Each check's folder in `~/m2-runs/check-*` (8a's live half's final: `check-8a-live`, with the gates, at `c924e0b`; 8a's offline final: `check-8a-fg`, with the gates, at `bc41693`; the `sounds` merge's: `check-sm1c` and `-sm2b` with the gates, `-sm3`, `-sm4`, and the final `-sm-fg` with the gates, at `e108e46`; step 7's last: `check-s7-rv1`, and `-rvg` with the gates; before them `-sp1`, `-sp2` and `-spg`); the `sounds` merge's plan in `~/m2-runs/sounds/plan.md`; the step 7 gate runs in `~/m2-runs/gates-fix/` and `~/m2-runs/xc/g7f/`; the review in `~/m2-runs/review-b1/`. |
 | Tools | Rust 1.99.0 (`rust-toolchain.toml`), Node 24, chrome-headless-shell 133.0.6943.141 (the check installs Rust and Chrome when missing), Xvfb. |
 | MIDI | `/dev/snd/seq` gives `EACCES` here: tests inject notes and never open a device. |
