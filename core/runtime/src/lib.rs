@@ -42,15 +42,21 @@ pub mod data;
 pub mod engine;
 pub mod event;
 mod fade;
+mod fpenv;
+#[doc(hidden)]
+pub mod gauge;
 mod keep;
 mod overlay;
 pub mod packages;
+mod parts;
 mod plan;
 pub mod plugins;
 pub mod sched;
 mod taps;
+pub mod threads;
 pub mod trace;
 pub mod transport;
+mod view;
 
 use std::collections::{HashMap, HashSet};
 use std::ptr::NonNull;
@@ -66,6 +72,7 @@ pub use cells::{CellAt, CellId, CellInfo, CellMap, CellSlots, CellTarget};
 pub use data::{decls, lane_kind};
 pub use engine::{Applied, CallbackStamp, Engine, Envelope, Heard, Msg, Retired};
 pub use event::{Event, Events};
+pub use m2_pool::{Pool, Runner, Setup};
 pub use packages::{Package, PackageSet};
 pub use plan::{Basis, Continues, Count, Keep, LaneInfo, Leftovers, PlanInfo, PluginAt, Shape, Stats};
 pub use plugins::PluginInstance;
@@ -77,9 +84,11 @@ pub use transport::{Cmd, Jump, Loop, MAX_RUNS, Run, Runs, Transport};
 use crate::cells::{Cells, Write};
 use crate::fade::xfade;
 use crate::keep::{Edge, Wiring, used};
+use crate::parts::Schedule;
 use crate::plan::{Entry, LanePlan, LaneSlot, Lanes, Plan};
 use crate::taps::Taps;
 use crate::trace::Trace;
+use crate::view::{GraphView, Local, Own, Reads};
 
 pub const BLOCK: usize = 128;
 
@@ -386,7 +395,7 @@ impl KernelInst {
 impl KernelNode {
     /// Frames `seg` of block `b`: its inputs copied into its memory as they change, the call, and
     /// its outputs copied out. Never allocates.
-    fn process(&mut self, b: &Block, seg: Seg, bufs: &[Vec<Buf>], versions: &[u64], out: &mut [Buf]) -> Result<()> {
+    fn process(&mut self, b: &Block, seg: Seg, r: &impl Reads, out: &mut [Buf]) -> Result<()> {
         let n = seg.n;
         let Some(k) = &mut self.inst else {
             for o in out.iter_mut() {
@@ -399,10 +408,10 @@ impl KernelNode {
         let p = k.ports();
         for ((inp, &ptr), seen) in self.inputs.iter().zip(p.ins).zip(&mut self.seen) {
             if let Input::Port { src, src_channels, channels } = inp {
-                let s = &bufs[src.node][src.port];
+                let s = r.buf(src.node, src.port);
                 // A steady constant is written over the whole block, once per value, so every
                 // later segment finds it in place; anything else is copied for this segment.
-                let version = versions[src.node];
+                let version = r.version(src.node);
                 if version != COPY && *seen == version {
                     continue;
                 }
@@ -559,7 +568,7 @@ fn plugin_events(
     notes: &[Event],
     next: &mut usize,
     params: &mut [(u32, Input, Option<f32>)],
-    bufs: &[Vec<Buf>],
+    r: &impl Reads,
     (lo, hi): (usize, usize),
     keys: &mut Vec<(u32, i16)>,
     out: &mut m2_plugins::Events,
@@ -637,7 +646,7 @@ fn plugin_events(
                 }
                 Input::Unset => {}
                 Input::Port { src, .. } => {
-                    let s = bufs[src.node][src.port][f];
+                    let s = r.buf(src.node, src.port)[f];
                     if *last != Some(s) {
                         out.push(P::Param { time: (f - lo) as u32, id: *id, value: s as f64 });
                         *last = Some(s);
@@ -651,7 +660,7 @@ fn plugin_events(
 }
 
 impl PluginNode {
-    fn process(&mut self, b: &Block, bufs: &[Vec<Buf>], out: &mut Buf, lanes: &[LaneSlot]) -> Result<()> {
+    fn process(&mut self, b: &Block, r: &impl Reads, out: &mut Buf, lanes: &[LaneSlot]) -> Result<()> {
         let Some(inst) = &self.inst else {
             out.fill(0.0);
             return Ok(());
@@ -675,6 +684,8 @@ impl PluginNode {
         }
         if std::mem::take(&mut self.reset_first) {
             host.reset(h);
+            // A plugin may leave the thread flushing subnormals (RENDER-2a).
+            fpenv::canon();
             // With the export's call before it, that ended the notes playback left in it: its live
             // node starts the ones the song still holds again at the resume.
             inst.mark_lent();
@@ -691,7 +702,7 @@ impl PluginNode {
                 notes,
                 &mut next,
                 &mut self.params,
-                bufs,
+                r,
                 (lo, hi),
                 &mut self.keys,
                 &mut self.events,
@@ -707,7 +718,7 @@ impl PluginNode {
             if let Some(Input::Port { src, src_channels, .. }) = &self.audio_in {
                 n_in = (*src_channels as usize).min(2);
                 for (c, x) in ins.iter_mut().enumerate().take(n_in) {
-                    *x = &bufs[src.node][src.port][c * BLOCK + lo..c * BLOCK + hi];
+                    *x = &r.buf(src.node, src.port)[c * BLOCK + lo..c * BLOCK + hi];
                 }
             }
             let split = BLOCK.min(out.len());
@@ -728,6 +739,8 @@ impl PluginNode {
             let mut io = m2_plugins::SharedBuffers { inputs: ins, n_in, outputs, n_out: channels.min(2), frames: run.n };
             self.out.clear();
             self.status = host.process(h, &mut io, &self.events, &mut self.out, &transport);
+            // A plugin may leave the thread flushing subnormals (RENDER-2a).
+            fpenv::canon();
             if self.status == m2_plugins::Status::Error {
                 if b.strict {
                     bail!("{} reported a processing error", self.name);
@@ -756,6 +769,7 @@ impl PluginNode {
         let Some(inst) = &self.inst else { return Ok(()) };
         if !inst.dead() {
             inst.host().reset(inst.handle());
+            fpenv::canon();
         }
         // Within its room (`ended` is as big as `keys`): never allocates on the audio thread.
         for k in self.keys.drain(..) {
@@ -845,6 +859,41 @@ enum Exec {
         cur: f32,
         step: f32,
     },
+}
+
+impl Exec {
+    /// Each node whose output this node reads during a block (8a): what the schedule orders a
+    /// partition after. Lanes, time and constants read only what the pre-pass froze; a feedback
+    /// reads its input after the graph, into next block's ring. A node may be named more than once.
+    fn reads(&self, mut f: impl FnMut(usize)) {
+        let mut port = |i: &Input| {
+            if let Input::Port { src, .. } = i {
+                f(src.node);
+            }
+        };
+        match self {
+            Exec::Kernel(k) => k.inputs.iter().for_each(&mut port),
+            Exec::Plugin(p) => {
+                p.audio_in.iter().for_each(&mut port);
+                p.params.iter().for_each(|(_, i, _)| port(i));
+            }
+            Exec::Missing(input) => input.iter().for_each(&mut port),
+            Exec::Poly(p) => p.captures.iter().for_each(|c| f(c.node)),
+            Exec::Fade { old, new, .. } => {
+                port(old);
+                port(new);
+            }
+            Exec::Overlay { src, .. } => f(src.node),
+            Exec::Feedback { .. }
+            | Exec::Control { .. }
+            | Exec::Audio { .. }
+            | Exec::Notes
+            | Exec::Time(_)
+            | Exec::Const(_)
+            | Exec::NoteField(_)
+            | Exec::Capture(_) => {}
+        }
+    }
 }
 
 #[derive(Default)]
@@ -1086,11 +1135,11 @@ fn floats(data: &mut [u8], ptr: usize, len: usize) -> &mut [f32] {
 /// after it, `new` is copied only when its version changes, and the fade takes that version, so a
 /// steady cell behind it still costs nothing per block (RENDER-22). `had` is its version before;
 /// returns its version now. Never allocates.
-fn fade(b: &Block, (old, new, wait): (&Input, &Input, u32), bufs: &[Vec<Buf>], versions: &[u64], had: u64, out: &mut Buf) -> u64 {
+fn fade(b: &Block, (old, new, wait): (&Input, &Input, u32), r: &impl Reads, had: u64, out: &mut Buf) -> u64 {
     // Channel `c` of an input, a mono one in every channel.
     let read = |i: &Input, c: usize, f: usize| match i {
         Input::Port { src, .. } => {
-            let s = &bufs[src.node][src.port];
+            let s = r.buf(src.node, src.port);
             s[c.min(s.len() / BLOCK - 1) * BLOCK + f]
         }
         Input::Const(v) => *v as f32,
@@ -1110,7 +1159,7 @@ fn fade(b: &Block, (old, new, wait): (&Input, &Input, u32), bufs: &[Vec<Buf>], v
         }
         _ => {
             let v = match new {
-                Input::Port { src, .. } => versions[src.node],
+                Input::Port { src, .. } => r.version(src.node),
                 _ => 0,
             };
             if v == COPY || v != had {
@@ -1123,6 +1172,166 @@ fn fade(b: &Block, (old, new, wait): (&Input, &Input, u32), bufs: &[Vec<Buf>], v
             v
         }
     }
+}
+
+/// One node's frames `seg` of block `b`: what every graph's loop and every partition's task does for
+/// each of its nodes. It writes only `own` and reads other nodes through `r`; a voice's captures
+/// read the graph around its `poly` through `outer`. At the top level (no `outer`) a live block
+/// marks a box whose output went non-finite, or that failed (RENDER-25). Never allocates while it
+/// succeeds.
+fn step<R: Reads>(
+    own: Own,
+    r: &R,
+    b: &Block,
+    seg: Seg,
+    outer: Option<(&dyn Reads, &[PortRef])>,
+    note: Option<VoiceNote>,
+    lanes: &[LaneSlot],
+) -> Result<()> {
+    let Own { exec, out, version, poisoned } = own;
+    let n = seg.n;
+    let done = match &mut *exec {
+        Exec::Control { slot, default } => {
+            let o = &mut out[0][seg.range(0)];
+            match &lanes[*slot] {
+                LaneSlot::Control(Some(lane)) if !lane.is_empty() => {
+                    for (x, &beat) in o.iter_mut().zip(&b.beats64[seg.off..]) {
+                        *x = lane.value_at(beat, *default as f64) as f32;
+                    }
+                }
+                _ => o.fill(*default),
+            }
+            Ok(())
+        }
+        Exec::Audio { slot } => {
+            debug_assert_eq!((seg.off, seg.n), (0, BLOCK), "audio lanes only play at the top level");
+            match &lanes[*slot] {
+                LaneSlot::Audio(Some(p)) => {
+                    let n = out[0].len().min(p.out().len());
+                    out[0][..n].copy_from_slice(&p.out()[..n]);
+                }
+                _ => out[0].fill(0.0),
+            }
+            Ok(())
+        }
+        Exec::Notes | Exec::Const(_) => Ok(()),
+        Exec::Time(TimeOf::Beats) => {
+            out[0][seg.range(0)].copy_from_slice(&b.beats[seg.off..seg.off + n]);
+            Ok(())
+        }
+        Exec::Time(TimeOf::Seconds) => {
+            out[0][seg.range(0)].copy_from_slice(&b.seconds[seg.off..seg.off + n]);
+            Ok(())
+        }
+        // From the block's runs, as plugins are told (HOST-6): 1 where the transport moves.
+        Exec::Time(TimeOf::Playing) => {
+            for run in b.runs.as_slice() {
+                let (lo, hi) = ((run.off as usize).max(seg.off), ((run.off + run.n) as usize).min(seg.off + n));
+                if lo < hi {
+                    out[0][lo..hi].fill(if run.moving { 1.0 } else { 0.0 });
+                }
+            }
+            Ok(())
+        }
+        Exec::Kernel(k) => k.process(b, seg, r, out),
+        Exec::Poly(p) => p.process(b, r, &mut out[0], lanes),
+        Exec::Plugin(p) => p.process(b, r, &mut out[0], lanes),
+        Exec::Missing(input) => {
+            for c in 0..out[0].len() / BLOCK {
+                match input {
+                    Some(Input::Port { src, src_channels, .. }) => {
+                        let sc = if c < *src_channels as usize { c } else { 0 };
+                        out[0][seg.range(c)].copy_from_slice(&r.buf(src.node, src.port)[seg.range(sc)]);
+                    }
+                    _ => out[0][seg.range(c)].fill(0.0),
+                }
+            }
+            Ok(())
+        }
+        Exec::Feedback { ring, .. } => {
+            for c in 0..out[0].len() / BLOCK {
+                for f in 0..n {
+                    let at = (b.engine as usize + seg.off + f) % BLOCK;
+                    out[0][c * BLOCK + seg.off + f] = ring[c * BLOCK + at];
+                }
+            }
+            Ok(())
+        }
+        Exec::NoteField(field) => {
+            let note = note.expect("note fields only run in voices");
+            let o = &mut out[0][seg.range(0)];
+            match field {
+                NoteField::Pitch => o.fill(note.pitch),
+                NoteField::Velocity => o.fill(note.velocity),
+                NoteField::Pressure | NoteField::Timbre => o.fill(0.0),
+                NoteField::Gate => {
+                    // Open from the note's On until its Off, on the engine clock (RENDER-13).
+                    for (k, x) in o.iter_mut().enumerate() {
+                        *x = ((b.engine + (seg.off + k) as u64) < note.off) as u8 as f32;
+                    }
+                }
+            }
+            Ok(())
+        }
+        Exec::Capture(k) => {
+            let (outer, captures) = outer.expect("captures only run in voices");
+            let p = captures[*k];
+            let src = outer.buf(p.node, p.port);
+            for c in 0..out[0].len() / BLOCK {
+                out[0][seg.range(c)].copy_from_slice(&src[seg.range(c.min(src.len() / BLOCK - 1))]);
+            }
+            Ok(())
+        }
+        Exec::Fade { old, new, wait } => {
+            *version = fade(b, (old, new, *wait), r, *version, &mut out[0]);
+            Ok(())
+        }
+        Exec::Overlay { src, target, cur, step } => {
+            overlay::process(r.buf(src.node, src.port), &mut out[0], *target, cur, *step);
+            Ok(())
+        }
+    };
+    // RENDER-25: live, a box whose output went non-finite, or that trapped, is marked; an
+    // activation resets it as it moves it. A finite block clears the mark.
+    if outer.is_none() && !b.strict && matches!(exec, Exec::Kernel(_) | Exec::Poly(_) | Exec::Plugin(_) | Exec::Feedback { .. }) {
+        *poisoned = done.is_err() || out.iter().any(|o| o.iter().fold(false, |a, x| a | !x.is_finite()));
+    }
+    done
+}
+
+/// Block `b`'s graph: each partition of `sched` a task on `runner`, its nodes in plan order. The
+/// error first in plan order, if a node failed: what reads a failed node is skipped, the rest runs.
+/// A panic in a task is raised again here, once the block is done.
+fn run_graph(graph: &mut Graph, sched: &mut Schedule, lanes: &[LaneSlot], b: &Block, runner: &mut Runner) -> Option<anyhow::Error> {
+    let Schedule { tasks, parts } = sched;
+    let view = GraphView::new(graph);
+    let shared = &*parts;
+    let task = |p: u32| run_part(&view, shared, p, b, lanes);
+    if let Err(payload) = runner.run(tasks, &task) {
+        std::panic::resume_unwind(payload);
+    }
+    parts.take_error()
+}
+
+/// Partition `p`'s task: its nodes in plan order, in the one floating-point mode. False when a
+/// node failed, its error kept in `parts`.
+fn run_part(view: &GraphView, parts: &parts::Parts, p: u32, b: &Block, lanes: &[LaneSlot]) -> bool {
+    // Whatever ran on this thread before, this partition computes in the one mode.
+    fpenv::canon();
+    for &i in parts.nodes(p) {
+        let i = i as usize;
+        // SAFETY: partition p's task alone runs its nodes this block, and every node it reads
+        // finished before: earlier in p, or in a partition p waits for (the pool runs a task after
+        // its inputs complete, with Acquire).
+        let own = unsafe { view.own(i) };
+        if let Err(e) = step(own, &view.reader(parts, p, i), b, Seg::WHOLE, None, None, lanes) {
+            // SAFETY: this is partition p's task.
+            unsafe { parts.fail(p, i, e) };
+            return false;
+        }
+    }
+    debug_assert!(fpenv::is_canon(), "partition {p} left the thread in another floating-point mode");
+    true
 }
 
 impl Graph {
@@ -1140,149 +1349,46 @@ impl Graph {
         self.poisoned.push(false);
     }
 
-    /// Process frames `seg` of block `b`. Buffers are indexed by position in the block. A voice graph
-    /// gets the outputs around its `poly` and what its captures read in them.
+    /// Process frames `seg` of block `b`, every node in order on this thread: a voice graph's loop,
+    /// and step 7's loop for the top level (the gates' old-loop switch). Buffers are indexed by
+    /// position in the block. A voice graph gets the outputs around its `poly` and what its
+    /// captures read in them.
     fn process(
         &mut self,
         b: &Block,
         seg: Seg,
-        outer: Option<(&[Vec<Buf>], &[PortRef])>,
+        outer: Option<(&dyn Reads, &[PortRef])>,
         note: Option<VoiceNote>,
         lanes: &[LaneSlot],
     ) -> Result<()> {
-        let n = seg.n;
         for oi in 0..self.order.len() {
             let i = self.order[oi];
             let mut out = std::mem::take(&mut self.bufs[i]);
-            let (bufs, versions) = (&self.bufs, &self.versions);
-            let mut version = None;
-            let done = match &mut self.exec[i] {
-                Exec::Control { slot, default } => {
-                    let o = &mut out[0][seg.range(0)];
-                    match &lanes[*slot] {
-                        LaneSlot::Control(Some(lane)) if !lane.is_empty() => {
-                            for (x, &beat) in o.iter_mut().zip(&b.beats64[seg.off..]) {
-                                *x = lane.value_at(beat, *default as f64) as f32;
-                            }
-                        }
-                        _ => o.fill(*default),
-                    }
-                    Ok(())
-                }
-                Exec::Audio { slot } => {
-                    debug_assert_eq!((seg.off, seg.n), (0, BLOCK), "audio lanes only play at the top level");
-                    match &lanes[*slot] {
-                        LaneSlot::Audio(Some(p)) => {
-                            let n = out[0].len().min(p.out().len());
-                            out[0][..n].copy_from_slice(&p.out()[..n]);
-                        }
-                        _ => out[0].fill(0.0),
-                    }
-                    Ok(())
-                }
-                Exec::Notes | Exec::Const(_) => Ok(()),
-                Exec::Time(TimeOf::Beats) => {
-                    out[0][seg.range(0)].copy_from_slice(&b.beats[seg.off..seg.off + n]);
-                    Ok(())
-                }
-                Exec::Time(TimeOf::Seconds) => {
-                    out[0][seg.range(0)].copy_from_slice(&b.seconds[seg.off..seg.off + n]);
-                    Ok(())
-                }
-                // From the block's runs, as plugins are told (HOST-6): 1 where the transport moves.
-                Exec::Time(TimeOf::Playing) => {
-                    for r in b.runs.as_slice() {
-                        let (lo, hi) = ((r.off as usize).max(seg.off), ((r.off + r.n) as usize).min(seg.off + n));
-                        if lo < hi {
-                            out[0][lo..hi].fill(if r.moving { 1.0 } else { 0.0 });
-                        }
-                    }
-                    Ok(())
-                }
-                Exec::Kernel(k) => k.process(b, seg, bufs, versions, &mut out),
-                Exec::Poly(p) => p.process(b, bufs, &mut out[0], lanes),
-                Exec::Plugin(p) => p.process(b, bufs, &mut out[0], lanes),
-                Exec::Missing(input) => {
-                    for c in 0..out[0].len() / BLOCK {
-                        match input {
-                            Some(Input::Port { src, src_channels, .. }) => {
-                                let sc = if c < *src_channels as usize { c } else { 0 };
-                                out[0][seg.range(c)].copy_from_slice(&bufs[src.node][src.port][seg.range(sc)]);
-                            }
-                            _ => out[0][seg.range(c)].fill(0.0),
-                        }
-                    }
-                    Ok(())
-                }
-                Exec::Feedback { ring, .. } => {
-                    for c in 0..out[0].len() / BLOCK {
-                        for f in 0..n {
-                            let at = (b.engine as usize + seg.off + f) % BLOCK;
-                            out[0][c * BLOCK + seg.off + f] = ring[c * BLOCK + at];
-                        }
-                    }
-                    Ok(())
-                }
-                Exec::NoteField(field) => {
-                    let note = note.expect("note fields only run in voices");
-                    let o = &mut out[0][seg.range(0)];
-                    match field {
-                        NoteField::Pitch => o.fill(note.pitch),
-                        NoteField::Velocity => o.fill(note.velocity),
-                        NoteField::Pressure | NoteField::Timbre => o.fill(0.0),
-                        NoteField::Gate => {
-                            // Open from the note's On until its Off, on the engine clock (RENDER-13).
-                            for (k, x) in o.iter_mut().enumerate() {
-                                *x = ((b.engine + (seg.off + k) as u64) < note.off) as u8 as f32;
-                            }
-                        }
-                    }
-                    Ok(())
-                }
-                Exec::Capture(k) => {
-                    let (outer, captures) = outer.expect("captures only run in voices");
-                    let p = captures[*k];
-                    let src = &outer[p.node][p.port];
-                    for c in 0..out[0].len() / BLOCK {
-                        out[0][seg.range(c)].copy_from_slice(&src[seg.range(c.min(src.len() / BLOCK - 1))]);
-                    }
-                    Ok(())
-                }
-                Exec::Fade { old, new, wait } => {
-                    version = Some(fade(b, (old, new, *wait), bufs, versions, versions[i], &mut out[0]));
-                    Ok(())
-                }
-                Exec::Overlay { src, target, cur, step } => {
-                    overlay::process(&bufs[src.node][src.port], &mut out[0], *target, cur, *step);
-                    Ok(())
-                }
-            };
-            // RENDER-25: live, a box whose output went non-finite, or that trapped, is marked; an
-            // activation resets it as it moves it. A finite block clears the mark.
-            if outer.is_none() && !b.strict && matches!(self.exec[i], Exec::Kernel(_) | Exec::Poly(_) | Exec::Plugin(_) | Exec::Feedback { .. }) {
-                self.poisoned[i] = done.is_err() || out.iter().any(|o| o.iter().fold(false, |a, x| a | !x.is_finite()));
-            }
-            self.bufs[i] = out;
-            if let Some(v) = version {
-                self.versions[i] = v;
-            }
+            let (mut version, mut poisoned) = (self.versions[i], self.poisoned[i]);
+            let own = Own { exec: &mut self.exec[i], out: &mut out, version: &mut version, poisoned: &mut poisoned };
+            let done = step(own, &Local { bufs: &self.bufs, versions: &self.versions }, b, seg, outer, note, lanes);
+            (self.bufs[i], self.versions[i], self.poisoned[i]) = (out, version, poisoned);
             done?;
         }
-        // Feedback stores its input for `BLOCK` samples later.
+        self.feedback(b, seg);
+        Ok(())
+    }
+
+    /// Feedback stores its input for `BLOCK` samples later: after every node ran.
+    fn feedback(&mut self, b: &Block, seg: Seg) {
         for i in 0..self.exec.len() {
             if let Exec::Feedback { input, ring } = &mut self.exec[i] {
                 let src = &self.bufs[input.node][input.port];
                 let src_ch = src.len() / BLOCK;
                 for c in 0..ring.len() / BLOCK {
                     let sc = if c < src_ch { c } else { 0 };
-                    for f in 0..n {
+                    for f in 0..seg.n {
                         let at = (b.engine as usize + seg.off + f) % BLOCK;
                         ring[c * BLOCK + at] = src[sc * BLOCK + seg.off + f];
                     }
                 }
             }
         }
-        Ok(())
     }
 
     /// Back to the state right after building, every mark cleared (RENDER-10).
@@ -1472,7 +1578,7 @@ impl Graph {
 impl PolyNode {
     /// One block. The lane's events say which notes start and end; voices are given notes in
     /// event order, and a voice's graph is split where its note changes. Never allocates.
-    fn process(&mut self, b: &Block, outer: &[Vec<Buf>], out: &mut Buf, lanes: &[LaneSlot]) -> Result<()> {
+    fn process(&mut self, b: &Block, outer: &dyn Reads, out: &mut Buf, lanes: &[LaneSlot]) -> Result<()> {
         let (start, end) = (b.engine, b.engine + BLOCK as u64);
         let events = if self.ghost { &[] } else { lanes[self.slot].events() };
         let PolyNode { out: voice_out, captures, plan, pool, .. } = self;
@@ -1640,6 +1746,43 @@ impl Pending {
 /// Unique per renderer: what `SwapLane` checks it reaches the renderer it was made for.
 static GENERATION: AtomicU64 = AtomicU64::new(1);
 
+/// Each exec node's label, the module its partition is named by (8a, RENDER-2): a plan node its
+/// module; a ghost its old module; an overlay the module of what it reads (a track's mute runs in
+/// the track); a fade the node that reads it (a feedback's ring reads it after the graph, so a
+/// fade only a feedback reads, and the output's fade, take their new side's, else their old
+/// side's). One left without (nothing to follow) is labelled "".
+fn labels(flat: &Flat, w: &Wiring, exec: &[Exec], fades: std::ops::Range<usize>, placed: &overlay::Placed) -> Vec<Box<str>> {
+    let n = flat.nodes.len();
+    let mut label: Vec<Option<&str>> = vec![None; exec.len()];
+    for (i, node) in flat.nodes.iter().enumerate() {
+        label[i] = Some(&node.module);
+    }
+    for (g, (_, node)) in w.ghosts.iter().enumerate() {
+        label[n + g] = Some(&node.module);
+    }
+    for &(i, edge, f) in &w.rewire {
+        if fades.contains(&f) && edge != Edge::Feedback {
+            label[f] = label[i];
+        }
+    }
+    let side = |i: &Input| if let Input::Port { src, .. } = i { Some(src.node) } else { None };
+    let overlays = fades.end..fades.end + placed.nodes.len();
+    // Sides and sources may be labelled only on a later pass: a fade's new side can be an overlay.
+    for _ in 0..3 {
+        for (k, o) in placed.nodes.iter().enumerate() {
+            label[overlays.start + k] = label[overlays.start + k].or(label[o.src.node]);
+        }
+        for f in fades.clone() {
+            if label[f].is_none()
+                && let Exec::Fade { old, new, .. } = &exec[f]
+            {
+                label[f] = side(new).and_then(|j| label[j]).or_else(|| side(old).and_then(|j| label[j]));
+            }
+        }
+    }
+    label.into_iter().map(|l| Box::from(l.unwrap_or(""))).collect()
+}
+
 /// Renders a checked song: one plan, the lanes its nodes read, and the song position.
 pub struct Renderer {
     plan: Plan,
@@ -1664,6 +1807,8 @@ pub struct Renderer {
     broken: bool,
     trace: Option<Trace>,
     dropped: u32,
+    /// The whole order as one partition, made when a gate first asks ([`gauge`]).
+    whole: Option<Box<Schedule>>,
 }
 
 impl Renderer {
@@ -1711,6 +1856,8 @@ impl Renderer {
         basis: Basis,
         mode: m2_plugins::RenderMode,
     ) -> Result<Renderer> {
+        // Each kernel's first state is computed here, by `k_init` and a reset (RENDER-2a).
+        let _mode = fpenv::Canon::enter();
         let tempo = data.tempo().clone();
         let rate = sample_rate as f64;
         let keep = match &basis {
@@ -1760,9 +1907,10 @@ impl Renderer {
         }
         let ghosts = n..n + w.ghosts.len();
         // Window-only overlays run while the ghosts and old sides they carry do.
-        let windowed_overlays = base + placed.sites..base + placed.nodes.len();
-        let order_after: Vec<usize> = w.order.iter().copied().filter(|i| !ghosts.contains(i) && !windowed_overlays.contains(i)).collect();
+        let windowed = base + placed.sites..base + placed.nodes.len();
         graph.order = w.order.clone();
+        let labels = labels(flat, &w, &graph.exec, fades..base, &placed);
+        let schedule = Schedule::build(&graph.order, &graph.exec, &labels)?;
         let window_overlays: Vec<(usize, usize)> =
             placed.nodes.iter().enumerate().skip(placed.sites).filter_map(|(j, o)| Some((base + j, o.follows?))).collect();
         let window_held: Vec<(usize, usize)> =
@@ -1845,7 +1993,7 @@ impl Renderer {
         }
         let swaps = plan::audio_swaps(&lanes.moves);
         let (lane_info, ghost_lanes) = (lanes.info(), plan::ghost_lanes(&lanes.lanes));
-        let windowed = !w.ghosts.is_empty() || !w.fades.is_empty() || swaps > 0;
+        let window = !w.ghosts.is_empty() || !w.fades.is_empty() || swaps > 0;
         let entry = keep.map(|k| {
             // Continued cells, carried at entry (RENDER-22a).
             let old: HashMap<usize, CellId> = cells::cells(k.old)
@@ -1893,10 +2041,11 @@ impl Renderer {
             cells,
             out: w.out,
             entry,
-            leftovers: windowed.then(|| Plan::leftovers(ghosts.len(), ghost_lanes, swaps)),
+            leftovers: window.then(|| Plan::leftovers(ghosts.len(), ghost_lanes, swaps)),
             ghosts,
-            order_after,
-            fade: if windowed { len } else { 0 },
+            windowed,
+            schedule,
+            fade: if window { len } else { 0 },
             wait: if w.fades.iter().any(|f| f.waits) { len } else { 0 },
             faded_from: None,
             stats,
@@ -1923,6 +2072,7 @@ impl Renderer {
             broken: false,
             trace: None,
             dropped: 0,
+            whole: None,
         })
     }
 
@@ -2012,9 +2162,34 @@ impl Renderer {
         b
     }
 
-    /// Render the next block at engine clock `clock`, advancing the transport. The live
-    /// engine's step, and the offline one's. Never allocates while it succeeds (RENDER-28).
+    /// Render the next block at engine clock `clock`, advancing the transport, on this thread
+    /// alone. The live engine's step, and the offline one's. Never allocates while it succeeds
+    /// (RENDER-28).
     pub fn render_block(&mut self, clock: u64) -> Result<&[[f32; 2]; BLOCK]> {
+        self.render_block_on(clock, &mut Runner::one())
+    }
+
+    /// [`Renderer::render_block`] on `runner`'s threads (8a, RENDER-2): the same bits on any
+    /// number. The pre-pass (cells, lanes, the trace, the block's times) runs here; then each
+    /// partition runs as one task, after the partitions it reads; then the post-pass (feedback
+    /// rings, the output, the meters) runs here. A plan that hosts a plugin runs every task here,
+    /// whatever the runner: plugins on worker threads come later. A panic in a task is raised again
+    /// here once the block is done, as a panic in a node always was. Never allocates while it
+    /// succeeds (RENDER-28).
+    pub fn render_block_on(&mut self, clock: u64, runner: &mut Runner) -> Result<&[[f32; 2]; BLOCK]> {
+        // One floating-point mode for the block, and the caller's back after it (RENDER-2a).
+        let _mode = fpenv::Canon::enter();
+        let alone = &mut Runner::one();
+        let runner = if self.plan.plugins { alone } else { runner };
+        let Some(b) = self.pre(clock, runner) else { return Ok(&self.frames) };
+        let failed = run_graph(&mut self.plan.graph, &mut self.plan.schedule, &self.lanes.slots, &b, runner);
+        self.post(&b, failed)?;
+        Ok(&self.frames)
+    }
+
+    /// A block's pre-pass, on this thread: the transport, cell values, lanes, the trace and the
+    /// block's times. None when the renderer is broken: the block is silence.
+    fn pre(&mut self, clock: u64, runner: &mut Runner) -> Option<Block> {
         self.runs = self.transport.advance();
         self.clock = clock + BLOCK as u64;
         // Cell values written since the last block line (RENDER-22, RENDER-28); offline renders
@@ -2022,8 +2197,10 @@ impl Renderer {
         self.plan.cells.apply(&mut self.plan.graph);
         if self.broken {
             self.frames = [[0.0; 2]; BLOCK];
-            return Ok(&self.frames);
+            return None;
         }
+        // Workers wake while the pre-pass runs.
+        runner.wake(self.plan.schedule.tasks.width());
         // Lanes play before the graph, once per block: schedulers fill their events, in slot
         // order, and audio players their block, which every node on the lane copies.
         let runs = self.runs;
@@ -2037,11 +2214,18 @@ impl Renderer {
         if self.trace.is_some() {
             self.record(clock);
         }
-        let b = self.block(clock);
-        if let Err(e) = self.plan.graph.process(&b, Seg::WHOLE, None, None, &self.lanes.slots) {
+        Some(self.block(clock))
+    }
+
+    /// A block's post-pass, on this thread, once the graph ran: feedback rings, the output, the
+    /// meters. When a node `failed`, its error, and nothing more is written for the block, as
+    /// step 7's loop did.
+    fn post(&mut self, b: &Block, failed: Option<anyhow::Error>) -> Result<()> {
+        if let Some(e) = failed {
             self.broken = !self.strict;
             return Err(e);
         }
+        self.plan.graph.feedback(b, Seg::WHOLE);
         let o = &self.plan.graph.bufs[self.plan.out.node][self.plan.out.port];
         let stereo = o.len() >= 2 * BLOCK;
         for f in 0..BLOCK {
@@ -2061,7 +2245,7 @@ impl Renderer {
         if let Some(t) = &self.plan.taps {
             t.write(&self.plan.graph.bufs, &self.frames);
         }
-        Ok(&self.frames)
+        Ok(())
     }
 
     /// Put this block's jumps and notes in the trace.
@@ -2093,9 +2277,14 @@ impl Renderer {
 
     /// Render the next `out.len()` frames, stereo.
     pub fn process(&mut self, out: &mut [[f32; 2]]) -> Result<()> {
+        self.process_on(out, &mut Runner::one())
+    }
+
+    /// [`Renderer::process`] on `runner`'s threads: the same bits.
+    pub fn process_on(&mut self, out: &mut [[f32; 2]], runner: &mut Runner) -> Result<()> {
         for frame in out.iter_mut() {
             if self.pending.is_empty() {
-                self.render_block(self.clock)?;
+                self.render_block_on(self.clock, runner)?;
                 self.pending.load(&self.frames, &self.runs, self.transport.pos());
             }
             *frame = self.pending.pop().0;
@@ -2106,8 +2295,13 @@ impl Renderer {
 
     /// Render `seconds` of audio from the current position.
     pub fn render(&mut self, seconds: f64) -> Result<Vec<[f32; 2]>> {
+        self.render_on(seconds, &mut Runner::one())
+    }
+
+    /// [`Renderer::render`] on `runner`'s threads: the same bits.
+    pub fn render_on(&mut self, seconds: f64, runner: &mut Runner) -> Result<Vec<[f32; 2]>> {
         let mut out = vec![[0.0; 2]; (seconds * self.sample_rate).round() as usize];
-        self.process(&mut out)?;
+        self.process_on(&mut out, runner)?;
         Ok(out)
     }
 
@@ -2127,6 +2321,13 @@ impl Renderer {
     /// Continue from sample `to`, exactly as if everything before it had been rendered.
     /// Implemented by resetting and replaying from 0 (RENDER-1): offline only.
     pub fn seek(&mut self, to: u64) -> Result<()> {
+        self.seek_on(to, &mut Runner::one())
+    }
+
+    /// [`Renderer::seek`], replaying on `runner`'s threads: the same bits.
+    pub fn seek_on(&mut self, to: u64, runner: &mut Runner) -> Result<()> {
+        // The reset runs every kernel and plugin, before any block's mode (RENDER-2a).
+        let _mode = fpenv::Canon::enter();
         self.reset()?;
         self.transport = Transport::new(0, true);
         self.clock = 0;
@@ -2135,7 +2336,7 @@ impl Renderer {
         let mut scratch = vec![[0.0; 2]; 4096];
         while self.delivered < to {
             let n = (to - self.delivered).min(scratch.len() as u64) as usize;
-            self.process(&mut scratch[..n])?;
+            self.process_on(&mut scratch[..n], runner)?;
         }
         Ok(())
     }
@@ -2338,6 +2539,8 @@ impl Renderer {
     /// Panic (RENDER-10): every note off, every instance reset. The next block seeks without
     /// chasing.
     pub fn panic(&mut self) -> Result<()> {
+        // Plugins are reset here, between blocks (RENDER-2a).
+        let _mode = fpenv::Canon::enter();
         self.reset()?;
         self.transport.enter();
         Ok(())
@@ -2361,6 +2564,8 @@ impl Renderer {
     /// top said it sleeps, or that it may stop once quiet and its output is (a plugin's tail is its
     /// own to report).
     pub fn can_idle(&mut self) -> bool {
+        // `k_active` runs a kernel, after the block's mode is gone (RENDER-2a).
+        let _mode = fpenv::Canon::enter();
         !self.in_window()
             && self.active_voices() == 0
             && self.live_notes() == 0

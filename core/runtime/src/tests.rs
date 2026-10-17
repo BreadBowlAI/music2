@@ -8,8 +8,10 @@ use super::*;
 
 mod audition;
 mod cell;
+mod fpenv;
 mod live;
 mod overlay;
+mod parts;
 mod taps;
 
 const SR: u32 = 48_000;
@@ -63,6 +65,35 @@ mod alloc_count {
 
 #[global_allocator]
 static COUNTER: alloc_count::Counter = alloc_count::Counter;
+
+/// One pool at a time in this test binary (8a): each spins its workers, and tests beside them
+/// wait on clocks.
+static POOLS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A pool of `threads` threads in spread mode: every worker woken at each run, the caller kept off
+/// the first tasks, a random spin before each, so tasks surely run on workers.
+pub(crate) struct Spread {
+    pub(crate) runner: Runner,
+    _pool: Pool,
+    _one_at_a_time: Option<std::sync::MutexGuard<'static, ()>>,
+}
+
+fn spread(threads: usize) -> Spread {
+    let [one] = spreads([threads]);
+    one
+}
+
+/// Pools of each of `threads` threads, made together. The last holds the lock, and drops last.
+fn spreads<const N: usize>(threads: [usize; N]) -> [Spread; N] {
+    let mut one = Some(POOLS.lock().unwrap_or_else(|e| e.into_inner()));
+    let mut made = 0;
+    threads.map(|n| {
+        made += 1;
+        let (pool, mut runner) = Pool::new(n, crate::threads::setup(false)).unwrap();
+        runner.spread(true);
+        Spread { runner, _pool: pool, _one_at_a_time: if made == N { one.take() } else { None } }
+    })
+}
 
 fn std_packages() -> PackageSet {
     let mut p = PackageSet::default();

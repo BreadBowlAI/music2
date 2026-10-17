@@ -249,6 +249,15 @@ pub fn probe(dir: &Path) -> Option<File> {
     is_at(&file, &lock_path(dir)).then_some(file)
 }
 
+/// Whether a program holds the lock of the project at `dir` now: the app has it open, and may be
+/// playing (8a: a render then keeps to the cores playback doesn't need). Takes the lock for a
+/// moment and lets it go at once; a writer that wants it then retries for [`RETRY`]. Never makes
+/// `.music2/` or its lock file: a project with neither is free.
+pub fn taken(dir: &Path) -> bool {
+    let Ok(file) = OpenOptions::new().read(true).open(lock_path(dir)) else { return false };
+    matches!(m2_os::fs::try_lock(&file), Ok(false))
+}
+
 /// Who holds the lock at `path`, if its file says.
 pub fn read_holder(path: &Path) -> Option<Holder> {
     let mut text = String::new();
@@ -296,6 +305,20 @@ mod tests {
 
     // WRITE-17: a volume that can't lock, or a `.music2/tx/` on another volume, is read-only with
     // `lock.unsupported`; a network volume is written with the Notice `lock.local`.
+    // 8a: a project whose lock a writer holds is taken; a free one isn't, and stays free after the
+    // look; one with no `.music2/` isn't, and gets none.
+    #[test]
+    fn whether_the_lock_is_taken() {
+        let d = dir("taken");
+        assert!(!taken(&d) && !d.join(LOCAL).exists(), "no .music2/: free, and none is made");
+        let lock = acquire(&d, "music2", RETRY).unwrap();
+        assert!(taken(&d), "held by a writer");
+        drop(lock);
+        assert!(!taken(&d), "let go");
+        let again = acquire(&d, "m2", Duration::ZERO);
+        assert!(again.is_ok(), "the look left it free");
+    }
+
     #[test]
     fn volumes_that_cant_lock() {
         let d = dir("faults");

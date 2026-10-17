@@ -2535,6 +2535,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "m2-pool"
+version = "0.1.0"
+
+[[package]]
 name = "m2-runtime"
 version = "0.1.0"
 dependencies = [
@@ -2546,6 +2550,7 @@ dependencies = [
  "m2-kernel",
  "m2-os",
  "m2-plugins",
+ "m2-pool",
  "m2-song",
  "m2-std-kernels",
  "serde",

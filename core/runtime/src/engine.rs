@@ -31,7 +31,7 @@
 //! renders a block, after the block line's messages, and the engine stamps when it heard them.
 
 use crate::click::Click;
-use crate::{BLOCK, Cmd, LaneSwap, Leftovers, LiveEv, Pending, Renderer};
+use crate::{BLOCK, Cmd, LaneSwap, Leftovers, LiveEv, Pending, Renderer, Runner};
 
 /// A message and its sequence number, which [`Applied`] stamps report.
 pub struct Envelope {
@@ -338,9 +338,21 @@ impl Engine {
         retire: &mut dyn FnMut(Retired) -> Result<(), Retired>,
         stamp: CallbackStamp,
     ) {
+        self.process_on(out, inbox, retire, stamp, &mut Runner::one());
+    }
+
+    /// [`Engine::process`], each block rendered on `runner`'s threads (8a): the same bits.
+    pub fn process_on(
+        &mut self,
+        out: &mut [[f32; 2]],
+        inbox: &mut dyn FnMut() -> Option<Envelope>,
+        retire: &mut dyn FnMut(Retired) -> Result<(), Retired>,
+        stamp: CallbackStamp,
+        runner: &mut Runner,
+    ) {
         for (k, frame) in out.iter_mut().enumerate() {
             if self.out.is_empty() {
-                self.block(inbox, retire, stamp, k as u32);
+                self.block(inbox, retire, stamp, k as u32, runner);
             }
             let (f, next) = self.out.pop();
             *frame = f;
@@ -514,6 +526,7 @@ impl Engine {
         retire: &mut dyn FnMut(Retired) -> Result<(), Retired>,
         stamp: CallbackStamp,
         frame: u32,
+        runner: &mut Runner,
     ) {
         // What waited for room leaves first.
         for i in 0..STASH {
@@ -569,7 +582,7 @@ impl Engine {
                 Some(_) => self.blocked = Some(env),
             }
         }
-        self.render(stamp, frame);
+        self.render(stamp, frame, runner);
     }
 
     /// Stamp cell writes a renderer's last block heard.
@@ -578,7 +591,7 @@ impl Engine {
         self.heard_n += 1;
     }
 
-    fn render(&mut self, stamp: CallbackStamp, frame: u32) {
+    fn render(&mut self, stamp: CallbackStamp, frame: u32, runner: &mut Runner) {
         // Held: nothing runs and the clock stands still (RENDER-6a's exception, RENDER-1). The
         // transport's position, which a seek moves at once, is what the status says.
         if self.is_held() {
@@ -606,7 +619,7 @@ impl Engine {
                 return;
             }
         }
-        let mut frames = match cur.render_block(clock) {
+        let mut frames = match cur.render_block_on(clock, runner) {
             Ok(f) => *f,
             Err(e) => {
                 // A kernel trapped: silence it and stop, as an error can't play (the error

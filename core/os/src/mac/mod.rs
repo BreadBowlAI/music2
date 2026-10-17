@@ -16,7 +16,7 @@ use crate::process::Memory;
 #[cfg(test)]
 pub(crate) use crate::unix::sync_refused;
 pub(crate) use crate::unix::{
-    c_numbers, change_and_inode, cpu_time, file_id, file_id_of, host_name, local_time, make_writable, push, sync_dir, token,
+    c_numbers, change_and_inode, cpu_time, file_id, file_id_of, host_name, load_average, local_time, make_writable, push, sync_dir, token,
 };
 use crate::unix::{check, cpath};
 
@@ -149,6 +149,29 @@ pub(crate) fn interactive() -> io::Result<()> {
     }
 }
 
+/// The background QoS class: the thread runs on the efficiency cores, beside playback.
+pub(crate) fn background() -> io::Result<()> {
+    // SAFETY: sets the calling thread's own QoS class.
+    match unsafe { libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_BACKGROUND, 0) } {
+        0 => Ok(()),
+        e => Err(io::Error::from_raw_os_error(e)),
+    }
+}
+
+/// P-cores and E-cores from `hw.perflevel0` and `hw.perflevel1`, and the P-cores sharing one L2;
+/// a Mac with one kind of core has no perflevels: `hw.physicalcpu`, all in one cache.
+pub(crate) fn cores() -> crate::process::Cores {
+    let fast = sysctl_int(c"hw.perflevel0.physicalcpu").or_else(|| sysctl_int(c"hw.physicalcpu")).unwrap_or(1).max(1);
+    let slow = sysctl_int(c"hw.perflevel1.physicalcpu").unwrap_or(0);
+    let per_cache = sysctl_int(c"hw.perflevel0.cpusperl2").unwrap_or(fast).clamp(1, fast);
+    crate::process::Cores { fast, slow, per_cache }
+}
+
+/// macOS doesn't say how long threads waited for a CPU.
+pub(crate) fn waited() -> Option<std::time::Duration> {
+    None
+}
+
 /// `task_info(TASK_VM_INFO)`: the physical footprint, the address space in use, and the span the
 /// task may map.
 pub(crate) fn memory() -> Option<Memory> {
@@ -183,6 +206,15 @@ pub(crate) fn machine() -> (String, String, String) {
     let system = sysctl(c"kern.osproductversion").map_or_else(|| "macOS".into(), |v| format!("macOS {v}"));
     let cpu = sysctl(c"machdep.cpu.brand_string").unwrap_or_else(|| "unknown CPU".into());
     (model, system, cpu)
+}
+
+/// A number `sysctlbyname` gives, as a count.
+fn sysctl_int(name: &CStr) -> Option<usize> {
+    let mut v: i32 = 0;
+    let mut len = std::mem::size_of::<i32>();
+    // SAFETY: sysctlbyname writes at most `len` bytes into `v`.
+    let got = unsafe { libc::sysctlbyname(name.as_ptr(), (&raw mut v).cast(), &mut len, std::ptr::null_mut(), 0) };
+    (got == 0 && len == std::mem::size_of::<i32>() && v >= 0).then_some(v as usize)
 }
 
 /// A string `sysctlbyname` gives.
@@ -226,6 +258,30 @@ mod tests {
         })
         .join()
         .unwrap();
+    }
+
+    // 8a (§5.2): a background thread gets the background QoS class.
+    #[test]
+    fn a_background_thread_has_background_qos() {
+        std::thread::spawn(|| {
+            crate::thread::background().unwrap();
+            let mut class = libc::qos_class_t::QOS_CLASS_UNSPECIFIED;
+            let mut relative = 0;
+            // SAFETY: reads the calling thread's own class into locals that outlive the call.
+            assert_eq!(unsafe { libc::pthread_get_qos_class_np(libc::pthread_self(), &mut class, &mut relative) }, 0);
+            assert_eq!(class as u32, libc::qos_class_t::QOS_CLASS_BACKGROUND as u32);
+        })
+        .join()
+        .unwrap();
+    }
+
+    // 8a (§5.2): this Mac has P-cores, a cache holds at most all of them, and there are no more
+    // cores than threads.
+    #[test]
+    fn cores_on_this_mac_are_sane() {
+        let c = crate::process::cores();
+        let threads = std::thread::available_parallelism().unwrap().get();
+        assert!(c.fast >= 1 && (1..=c.fast).contains(&c.per_cache) && c.fast + c.slow <= threads, "{c:?}, {threads} threads");
     }
 
     // OS-84: the model is `hw.model` ("MacBookPro18,1"), the OS has its version, the CPU its name.

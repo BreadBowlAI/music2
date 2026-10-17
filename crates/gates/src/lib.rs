@@ -19,6 +19,7 @@ pub mod baseline;
 pub mod gates;
 pub mod paired;
 pub mod plugins;
+pub mod realtime;
 pub mod replay;
 pub mod report;
 pub mod rig;

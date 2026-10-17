@@ -24,7 +24,7 @@ use crate::cells::{CellId, CellMap, CellSlots, Cells};
 use crate::event::Event;
 use crate::sched::{Caps, LaneSwap, NoteScheduler};
 use crate::taps::{TapSlots, Taps};
-use crate::{Exec, Graph, LaneRef, PackageSet, PluginInstance, Renderer, lane_slots, notes_data};
+use crate::{Exec, Graph, LaneRef, PackageSet, PluginInstance, Renderer, fpenv, lane_slots, notes_data};
 
 /// What a box must be to move into a node (RENDER-25): an instance is kept only for a node of the
 /// same shape. Compared whole when a plan is prepared; its [`Shape::hash64`] is stored in the box,
@@ -348,8 +348,12 @@ pub(crate) struct Plan {
     pub(crate) entry: Option<Box<Entry>>,
     /// The exec nodes of its ghosts: replaced nodes playing out the fade window.
     pub(crate) ghosts: Range<usize>,
-    /// The order once the window ends: the ghosts left out.
-    pub(crate) order_after: Vec<usize>,
+    /// The exec nodes of the window's own overlays, which run while the ghosts and old sides they
+    /// carry do.
+    pub(crate) windowed: Range<usize>,
+    /// Its partitions and the tasks that run them (8a): one schedule for the plan's whole life, the
+    /// window's nodes included.
+    pub(crate) schedule: crate::parts::Schedule,
     /// The fade window, in frames: 5 ms when anything fades, else 0.
     pub(crate) fade: u32,
     /// Frames its crossfades wait for new nodes' inputs to fade in: one fade when any do, else 0.
@@ -597,6 +601,8 @@ impl Renderer {
     /// or freed here and whatever a move displaces leaves with `old`. Returns false, with nothing
     /// changed, when this plan wasn't prepared against `old` or a box isn't what it was prepared for.
     pub(crate) fn take_over(&mut self, old: &mut Renderer, clock: u64) -> bool {
+        // A reset below runs a kernel or a plugin, between blocks (RENDER-2a).
+        let _mode = fpenv::Canon::enter();
         if !self.verify(old) {
             return false;
         }
@@ -662,13 +668,18 @@ impl Renderer {
     }
 
     /// At a block line once the window is over: its ghosts, ghost lanes and replaced renders go
-    /// into the leftovers, to leave the audio thread, and the order without ghosts plays on. None
-    /// when it has nothing to retire. Never allocates or frees.
+    /// into the leftovers, to leave the audio thread, and the window's own overlays are dropped (they
+    /// hold no memory). Each slot left is a constant 0 that nothing reads, so the one schedule plays
+    /// on. None when it has nothing to retire. Never allocates or frees.
     pub(crate) fn end_fade(&mut self) -> Option<Box<Leftovers>> {
         self.plan.faded_from = None;
         let l = self.plan.leftovers.as_mut()?;
         for g in self.plan.ghosts.clone() {
             l.exec.push(std::mem::replace(&mut self.plan.graph.exec[g], Exec::Const(0.0)));
+        }
+        for o in self.plan.windowed.clone() {
+            let gone = std::mem::replace(&mut self.plan.graph.exec[o], Exec::Const(0.0));
+            debug_assert!(matches!(gone, Exec::Overlay { .. }), "{o} is a window's overlay");
         }
         let live = self.lanes.live;
         for s in &mut self.lanes.slots[live..] {
@@ -686,7 +697,6 @@ impl Renderer {
                 l.renders.push(r);
             }
         }
-        std::mem::swap(&mut self.plan.graph.order, &mut self.plan.order_after);
         self.plan.leftovers.take()
     }
 

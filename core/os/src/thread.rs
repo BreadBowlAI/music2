@@ -32,6 +32,14 @@ pub fn interactive() -> io::Result<()> {
     os::interactive()
 }
 
+/// Marks the calling thread as background work beside playback (8a: an export's workers while the
+/// app plays): on macOS the background QoS class, which keeps it on the efficiency cores; on Linux
+/// a nice of 10, or the nice it has when that is higher (raising nice needs no rights; lowering it
+/// does). Never fatal: the caller says what it got.
+pub fn background() -> io::Result<()> {
+    os::background()
+}
+
 /// From now on the calling thread reads and writes numbers as C does, with a `.`, whatever locale
 /// the process has. A GTK app takes the user's (`setlocale(LC_ALL, "")`), whose decimal comma
 /// makes the C library's `strtod` read "0.5" as 0, and QuickJS's `JSON.parse` uses it. For a

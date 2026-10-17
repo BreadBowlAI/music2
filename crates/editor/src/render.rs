@@ -11,6 +11,10 @@
 //! A render is written to a hidden part file beside the one asked for and named when it is
 //! complete. The part is locked while it's written, so one left by a render that never
 //! finished (the program was killed) is found unlocked and removed by the next render there.
+//!
+//! A render runs on as many threads as its [`Threads`] say, with the same bits on any number
+//! (RENDER-2). A song that hosts a plugin renders on one for now: plugins on worker threads come
+//! with live playback on all cores.
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -21,7 +25,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result, anyhow, bail};
 use m2_ir::{FOp, Flat};
-use m2_runtime::{PackageSet, PluginInstance, Renderer};
+use m2_os::process::Cores;
+use m2_runtime::{PackageSet, PluginInstance, Pool, Renderer, Runner};
 use m2_song::DataSet;
 
 /// The longest render. A WAV file's sizes are 32-bit, so it can't hold much over 4 hours of
@@ -49,9 +54,65 @@ pub enum Length {
     Seconds(f64),
 }
 
+/// How many threads a render uses (8a). The same bits on any number (RENDER-2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Threads {
+    /// Nothing else plays: the fast cores that share one cache (`Cores::per_cache`). On a CPU
+    /// with two caches, a render over both was no faster than over one (8a's spike).
+    Alone,
+    /// Beside playback: the slow cores (one at least), at background priority.
+    Beside,
+    /// Exactly this many, 1 to 64: `--threads`, `M2_THREADS`, and tests.
+    Exactly(usize),
+}
+
+impl Threads {
+    /// What `M2_THREADS` says, if it is set.
+    pub fn from_env() -> Result<Option<Threads>> {
+        match std::env::var("M2_THREADS") {
+            Ok(v) => Threads::parse(&v).map(Some).with_context(|| format!("M2_THREADS={v}")),
+            Err(std::env::VarError::NotPresent) => Ok(None),
+            Err(e) => Err(anyhow!("M2_THREADS: {e}")),
+        }
+    }
+
+    /// A count of threads, 1 to 64, as `--threads` and `M2_THREADS` give it.
+    pub fn parse(text: &str) -> Result<Threads> {
+        match text.trim().parse::<usize>() {
+            Ok(n @ 1..=Pool::MAX_THREADS) => Ok(Threads::Exactly(n)),
+            _ => bail!("say how many threads a render may use: a number from 1 to 64, not `{}`", text.trim()),
+        }
+    }
+
+    /// How many threads this is on a machine with `cores`: never more than a pool has.
+    pub fn count(self, cores: &Cores) -> usize {
+        match self {
+            Threads::Alone => cores.per_cache.clamp(1, Pool::MAX_THREADS),
+            Threads::Beside => cores.slow.clamp(1, Pool::MAX_THREADS),
+            Threads::Exactly(n) => n,
+        }
+    }
+}
+
+/// The threads to render `renderer` on, as `threads` says: one for a song that hosts a plugin,
+/// and one when the OS won't start more. The pool's workers stop when it drops.
+pub fn threads_for(renderer: &Renderer, threads: Threads) -> (Runner, Option<Pool>) {
+    let n = if renderer.hosts_plugins() { 1 } else { threads.count(&m2_os::process::cores()) };
+    if n <= 1 {
+        return (Runner::one(), None);
+    }
+    match Pool::new(n, m2_runtime::threads::setup(threads == Threads::Beside)) {
+        Ok((pool, runner)) => (runner, Some(pool)),
+        Err(_) => (Runner::one(), None),
+    }
+}
+
 /// A song ready to render: one revision's renderer, at the start of what's rendered.
 pub struct Render {
     renderer: Renderer,
+    /// The threads it renders on; the pool's workers stop when it drops.
+    runner: Runner,
+    _pool: Option<Pool>,
     sample_rate: u32,
     /// The song's frame where the file starts.
     first: u64,
@@ -79,6 +140,10 @@ pub struct Rendered {
     /// Whether the same files render the same bits again: false when the song hosts a plugin
     /// (RENDER-2).
     pub reproducible: bool,
+    /// The threads it rendered on.
+    pub threads: usize,
+    /// Whether it hosts a plugin, so it rendered on one thread.
+    pub hosts_plugins: bool,
 }
 
 impl Rendered {
@@ -128,13 +193,35 @@ fn bounds(data: &DataSet, sample_rate: u32, from: f64, length: Length) -> Result
 
 impl Render {
     /// Render a compiled revision (its graph and the data it plays) from `from` seconds in
-    /// (replaying up to there first): exact (RENDER-1).
-    pub fn new(flat: &Flat, data: &DataSet, packages: &PackageSet, sample_rate: u32, from: f64, length: Length) -> Result<Render> {
+    /// (replaying up to there first), on `threads`: exact (RENDER-1).
+    pub fn new(
+        flat: &Flat,
+        data: &DataSet,
+        packages: &PackageSet,
+        sample_rate: u32,
+        from: f64,
+        length: Length,
+        threads: Threads,
+    ) -> Result<Render> {
         let (first, end) = bounds(data, sample_rate, from, length)?;
         let mut renderer = Renderer::new(flat, data, packages, sample_rate)?;
         renderer.set_strict(false);
-        renderer.seek(first)?;
-        Ok(Render { renderer, sample_rate, first, end, length, stop: Arc::default(), exact: true, reproducible: pure(flat) })
+        let (mut runner, pool) = threads_for(&renderer, threads);
+        renderer.seek_on(first, &mut runner)?;
+        Ok(Render::of(renderer, (runner, pool), sample_rate, (first, end), length, true, pure(flat)))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn of(
+        renderer: Renderer,
+        (runner, pool): (Runner, Option<Pool>),
+        sample_rate: u32,
+        (first, end): (u64, u64),
+        length: Length,
+        exact: bool,
+        reproducible: bool,
+    ) -> Render {
+        Render { renderer, runner, _pool: pool, sample_rate, first, end, length, stop: Arc::default(), exact, reproducible }
     }
 
     /// An export from the song's start, as [`Render::new`] makes one, that plays the live engine's
@@ -149,11 +236,13 @@ impl Render {
         sample_rate: u32,
         length: Length,
         lent: &HashMap<usize, Arc<PluginInstance>>,
+        threads: Threads,
     ) -> Result<Render> {
         let (first, end) = bounds(data, sample_rate, 0.0, length)?;
         let mut renderer = Renderer::lending(flat, data, packages, sample_rate, lent)?;
         renderer.set_strict(false);
-        Ok(Render { renderer, sample_rate, first, end, length, stop: Arc::default(), exact: true, reproducible: pure(flat) })
+        let threads = threads_for(&renderer, threads);
+        Ok(Render::of(renderer, threads, sample_rate, (first, end), length, true, pure(flat)))
     }
 
     /// Play `inst`, a new instance, at node `node` in place of the live one lent to this export
@@ -168,6 +257,7 @@ impl Render {
     /// as a live jump does: notes sounding there aren't chased, and tails from before it are
     /// missing, so it is approximate (RENDER-5). A preroll that reaches the song's start makes it
     /// the exact render. For listening only: an export or a bounce is always exact (RENDER-3).
+    #[allow(clippy::too_many_arguments)]
     pub fn range(
         flat: &Flat,
         data: &DataSet,
@@ -176,6 +266,7 @@ impl Render {
         from: f64,
         preroll: f64,
         length: Length,
+        threads: Threads,
     ) -> Result<Render> {
         if !(preroll >= 0.0 && preroll.is_finite()) {
             bail!("can't start {preroll} seconds before the range");
@@ -183,18 +274,19 @@ impl Render {
         let (first, end) = bounds(data, sample_rate, from, length)?;
         let t0 = first.saturating_sub((preroll * sample_rate as f64).round() as u64);
         if t0 == 0 {
-            return Render::new(flat, data, packages, sample_rate, from, length);
+            return Render::new(flat, data, packages, sample_rate, from, length, threads);
         }
         let mut renderer = Renderer::starting_at(flat, data, packages, sample_rate, t0)?;
         renderer.set_strict(false);
+        let (mut runner, pool) = threads_for(&renderer, threads);
         let mut scratch = vec![[0.0f32; 2]; CHUNK];
         let mut left = first - t0;
         while left > 0 {
             let n = left.min(CHUNK as u64) as usize;
-            renderer.process(&mut scratch[..n])?;
+            renderer.process_on(&mut scratch[..n], &mut runner)?;
             left -= n as u64;
         }
-        Ok(Render { renderer, sample_rate, first, end, length, stop: Arc::default(), exact: false, reproducible: pure(flat) })
+        Ok(Render::of(renderer, (runner, pool), sample_rate, (first, end), length, false, pure(flat)))
     }
 
     /// Whether it renders what an export holds from where it starts (see [`Rendered::exact`]).
@@ -327,6 +419,8 @@ impl Render {
                 out.push(&tail[..(sounding + quiet).min(room)])?;
             }
         }
+        // No block follows soon: the workers sleep now.
+        self.runner.rest();
         let Out { wav, frames, peak } = out;
         wav.finalize()?;
         progress(1.0);
@@ -337,6 +431,8 @@ impl Render {
             non_finite: self.renderer.non_finite(),
             exact: self.exact,
             reproducible: self.reproducible,
+            threads: self.runner.threads(),
+            hosts_plugins: self.renderer.hosts_plugins(),
         };
         Ok((lock, rendered))
     }
@@ -346,7 +442,7 @@ impl Render {
         if self.stop.load(Ordering::Relaxed) {
             bail!("the render was stopped");
         }
-        self.renderer.process(frames)
+        self.renderer.process_on(frames, &mut self.runner)
     }
 
     /// Render `frames` frames straight into the file.
@@ -522,7 +618,10 @@ mod tests {
             let mut packages = std_packages();
             let compiled = m2_session::compile(&project, &mut packages).unwrap_or_else(|e| panic!("{e:?}"));
             let out = self.0.join("out.wav");
-            let r = Render::new(&compiled.flat, &compiled.data, &packages, SAMPLE_RATE, 0.0, length).unwrap().write(&out, |_| {}).unwrap();
+            let r = Render::new(&compiled.flat, &compiled.data, &packages, SAMPLE_RATE, 0.0, length, Threads::Exactly(1))
+                .unwrap()
+                .write(&out, |_| {})
+                .unwrap();
             let mut wav = hound::WavReader::open(&out).unwrap();
             assert_eq!((wav.spec().channels, wav.spec().sample_rate, wav.spec().bits_per_sample), (2, SAMPLE_RATE, 24));
             assert_eq!(wav.duration() as u64, r.frames);
@@ -607,7 +706,10 @@ mod tests {
         let mut packages = std_packages();
         let compiled = m2_session::compile(&project, &mut packages).unwrap();
         for (from, length) in [(0.0, Length::Seconds(0.0)), (0.0, Length::Seconds(f64::NAN)), (-1.0, Length::Song)] {
-            assert!(Render::new(&compiled.flat, &compiled.data, &packages, SAMPLE_RATE, from, length).is_err(), "{from} {length:?}");
+            assert!(
+                Render::new(&compiled.flat, &compiled.data, &packages, SAMPLE_RATE, from, length, Threads::Exactly(1)).is_err(),
+                "{from} {length:?}"
+            );
         }
     }
 
@@ -617,11 +719,11 @@ mod tests {
         let project = Project::open(&dir.0).unwrap();
         let mut packages = std_packages();
         let compiled = m2_session::compile(&project, &mut packages).unwrap();
-        let render = Render::new(&compiled.flat, &compiled.data, &packages, SAMPLE_RATE, 0.0, Length::Song).unwrap();
+        let render = Render::new(&compiled.flat, &compiled.data, &packages, SAMPLE_RATE, 0.0, Length::Song, Threads::Exactly(1)).unwrap();
         let out = dir.0.join("no-such-folder/out.wav");
         assert!(render.write(&out, |_| {}).is_err());
         assert!(!out.exists());
-        let render = Render::new(&compiled.flat, &compiled.data, &packages, SAMPLE_RATE, 0.0, Length::Song).unwrap();
+        let render = Render::new(&compiled.flat, &compiled.data, &packages, SAMPLE_RATE, 0.0, Length::Song, Threads::Exactly(1)).unwrap();
         let out = dir.0.join("out.wav");
         let mut reports = vec![];
         render.write(&out, |p| reports.push(p)).unwrap();
@@ -639,7 +741,7 @@ mod tests {
         let project = Project::open(&dir.0).unwrap();
         let mut packages = std_packages();
         let compiled = m2_session::compile(&project, &mut packages).unwrap();
-        Render::new(&compiled.flat, &compiled.data, &packages, SAMPLE_RATE, 0.0, length)
+        Render::new(&compiled.flat, &compiled.data, &packages, SAMPLE_RATE, 0.0, length, Threads::Exactly(1))
     }
 
     fn parts(dir: &Path) -> Vec<String> {
@@ -748,12 +850,13 @@ mod tests {
             let rendered = r.write(&out, |_| {}).unwrap();
             (rendered, std::fs::read(out).unwrap())
         };
-        let range = |from, preroll| Render::range(&c.flat, &c.data, &packages, SAMPLE_RATE, from, preroll, second).unwrap();
+        let range =
+            |from, preroll| Render::range(&c.flat, &c.data, &packages, SAMPLE_RATE, from, preroll, second, Threads::Exactly(1)).unwrap();
         let (a, a_bytes) = write(range(4.0, 1.0), "a.wav");
         let (b, b_bytes) = write(range(4.0, 1.0), "b.wav");
         assert_eq!((a.exact, a.reproducible, a.frames), (false, true, SR as u64));
         assert!(a == b && a_bytes == b_bytes, "the same bits every time");
-        let exact = || Render::new(&c.flat, &c.data, &packages, SAMPLE_RATE, 4.0, second).unwrap();
+        let exact = || Render::new(&c.flat, &c.data, &packages, SAMPLE_RATE, 4.0, second, Threads::Exactly(1)).unwrap();
         let (x, x_bytes) = write(exact(), "x.wav");
         assert!(x.exact && x_bytes != a_bytes, "the held pad isn't chased, so it differs from the export");
         // A preroll back to the start is the exact render.
@@ -761,7 +864,10 @@ mod tests {
         assert!(e.exact && e_bytes == x_bytes);
         assert!(range(4.0, 9.0).exact());
         for preroll in [-1.0, f64::NAN, f64::INFINITY] {
-            assert!(Render::range(&c.flat, &c.data, &packages, SAMPLE_RATE, 4.0, preroll, second).is_err(), "{preroll}");
+            assert!(
+                Render::range(&c.flat, &c.data, &packages, SAMPLE_RATE, 4.0, preroll, second, Threads::Exactly(1)).is_err(),
+                "{preroll}"
+            );
         }
     }
 
@@ -797,18 +903,82 @@ mod tests {
         let dir = pad_song(r#"{"clips": []}"#);
         let (c, packages) = compiled(&dir);
         let second = Length::Seconds(0.1);
-        let exact = || Render::new(&c.flat, &c.data, &packages, SAMPLE_RATE, 0.0, second).unwrap();
+        let exact = || Render::new(&c.flat, &c.data, &packages, SAMPLE_RATE, 0.0, second, Threads::Exactly(1)).unwrap();
         std::fs::create_dir_all(dir.0.join("assets")).unwrap();
         let wav = dir.0.join("assets/bounce.wav");
         assert!(exact().write_for(&dir.0, &wav, |_| {}).is_ok() && wav.exists(), "made new");
         let before = std::fs::read(&wav).unwrap();
         let again = exact().write_for(&dir.0, &wav, |_| {}).unwrap_err().to_string();
         assert!(again.contains("is there already") && std::fs::read(&wav).unwrap() == before, "{again}");
-        let approximate = Render::range(&c.flat, &c.data, &packages, SAMPLE_RATE, 4.0, 1.0, second).unwrap();
+        let approximate = Render::range(&c.flat, &c.data, &packages, SAMPLE_RATE, 4.0, 1.0, second, Threads::Exactly(1)).unwrap();
         let near = dir.0.join("assets/near.wav");
         assert!(approximate.write_for(&dir.0, &near, |_| {}).is_err() && !near.exists(), "never approximate");
         let elsewhere = dir.0.join("out.wav");
         std::fs::write(&elsewhere, "old").unwrap();
         assert!(exact().write_for(&dir.0, &elsewhere, |_| {}).is_ok() && std::fs::read(&elsewhere).unwrap() == before, "replaced");
+    }
+
+    /// `examples/first-song`, compiled: five tracks and the song, so a render has partitions to
+    /// spread.
+    fn first_song() -> (m2_session::Compiled, PackageSet) {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song");
+        let mut packages = std_packages();
+        let c = m2_session::compile(&Project::open(&dir).unwrap(), &mut packages).unwrap_or_else(|e| panic!("{e:?}"));
+        (c, packages)
+    }
+
+    // RENDER-2 (8a): a render on 4 threads writes the same file as on one, and says how many it
+    // used.
+    #[test]
+    fn a_render_on_4_threads_writes_the_same_file() {
+        let (c, packages) = first_song();
+        let dir = Dir::new(&[]);
+        let write = |threads: usize| {
+            let out = dir.0.join(format!("on{threads}.wav"));
+            let r = Render::new(&c.flat, &c.data, &packages, SAMPLE_RATE, 1.0, Length::Seconds(4.0), Threads::Exactly(threads)).unwrap();
+            let r = r.write(&out, |_| {}).unwrap();
+            (r.threads, std::fs::read(out).unwrap())
+        };
+        let ((one, a), (four, b)) = (write(1), write(4));
+        assert_eq!((one, four), (1, 4));
+        assert!(a == b, "the same bytes");
+    }
+
+    // 8a: a song that hosts a plugin renders on one thread for now, whatever it is asked, and says
+    // so.
+    #[test]
+    fn a_song_with_plugins_renders_on_one_thread() {
+        m2_plugins::test_main_thread();
+        m2_plugins::probe::install();
+        let dir = Dir::new(&[(
+            "song.ts",
+            "import { plugin, song } from '@m2/core';\nimport { osc } from 'std/dsp';\n\
+             export default song(() => plugin('clap:m2.probe', { in: osc.sine(440) }));\n",
+        )]);
+        let mut packages = std_packages();
+        let c = m2_session::compile(&Project::open(&dir.0).unwrap(), &mut packages).unwrap_or_else(|e| panic!("{e:?}"));
+        let r = Render::new(&c.flat, &c.data, &packages, SAMPLE_RATE, 0.0, Length::Seconds(0.1), Threads::Exactly(4)).unwrap();
+        let r = r.write(&dir.0.join("out.wav"), |_| {}).unwrap();
+        assert_eq!((r.threads, r.hosts_plugins), (1, true));
+    }
+
+    // 8a: `M2_THREADS` and `--threads` take 1 to 64, and refuse anything else in plain words; the
+    // defaults count one cache's fast cores alone, and the slow ones (one at least) beside playback,
+    // 64 at most.
+    #[test]
+    fn m2_threads_is_read_and_nonsense_refused() {
+        assert_eq!(Threads::parse("4").unwrap(), Threads::Exactly(4));
+        assert_eq!(Threads::parse(" 64\n").unwrap(), Threads::Exactly(64));
+        for bad in ["0", "65", "x", "", "-1", "2.5"] {
+            let e = Threads::parse(bad).unwrap_err().to_string();
+            assert!(e.contains("a number from 1 to 64"), "{bad}: {e}");
+        }
+        let server = Cores { fast: 16, slow: 0, per_cache: 8 };
+        let mac = Cores { fast: 8, slow: 2, per_cache: 4 };
+        assert_eq!([Threads::Alone, Threads::Beside, Threads::Exactly(3)].map(|t| t.count(&server)), [8, 1, 3]);
+        assert_eq!([Threads::Alone, Threads::Beside].map(|t| t.count(&mac)), [4, 2]);
+        // More cores behind one cache than a pool has threads: as many as it has, never one.
+        let big = Cores { fast: 96, slow: 80, per_cache: 72 };
+        assert_eq!([Threads::Alone, Threads::Beside].map(|t| t.count(&big)), [64, 64]);
     }
 }

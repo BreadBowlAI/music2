@@ -1,0 +1,17 @@
+[package]
+name = "m2-pool"
+description = "A small pool of threads that runs a graph of numbered tasks, each after its inputs, and returns when all are done"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# The models' build: a chaos point (a random yield or short spin) before every atomic step and
+# every park, and the checks the models read (tests/models.rs; ci/check.sh's "pool models" row).
+models = []
+
+[dependencies]
+
+[[test]]
+name = "models"
+required-features = ["models"]

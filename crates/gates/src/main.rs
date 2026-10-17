@@ -58,6 +58,12 @@ GATES (default: all):
   store       G7f part 1 (named only) what one wasmtime Store per kernel instance costs: build,
                   memory, address space, block time and drop; the block time (by the mean) and the
                   build against S measured in the same run (RENDER-32). Needs $M2_GATES_S too
+  realtime    G12 (named only; --offline: live runs come with 8a's next track) a song rendered on
+                  more threads, on the runtime alone: each count of --sweep twice, back to back,
+                  against one thread (mean, p99, speed-up); the same bits on every count and the
+                  pure fixtures matching e2e/renders.sha256 (judged); paced blocks on 1 and 4
+                  threads; each partition timed alone; the executor's own cost against step 7's
+                  loop; long tails 1 s and 5 min after their note (OS-49). p50 unless --reference
 
 OPTIONS:
   --rig R          engine: step 3a's live engine (needs --features engine); replay: HEAD's
@@ -78,6 +84,9 @@ OPTIONS:
   --at S           where G5, G7a and G7b edit, in seconds of the song (default 60; 180 for step 7's
                    recorded runs on p50)
   --seed N         for the random seeks and clocks (default 3)
+  --offline        realtime: render offline (the only mode built)
+  --sweep LIST     realtime: the thread counts, like 1,2,3,4,6,8 (the default; 1 is always in)
+  --seconds S      realtime: seconds timed for each count, each pass (default 20)
   --work DIR       where projects are generated (default: a new folder under the temp dir)
   --keep           keep the work folder afterwards
 ";
@@ -110,6 +119,7 @@ fn run() -> Result<bool> {
     let mut o = Opts::recorded();
     let mut kind = if cfg!(feature = "engine") { Kind::Engine } else { Kind::Replay };
     let (mut via_server, mut keep, mut work, mut seeks, mut arena) = (false, false, None, None, true);
+    let (mut offline, mut sweep, mut reference_given) = (false, m2_gates::realtime::Sweep::default(), false);
     let mut names = vec![];
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -134,7 +144,14 @@ fn run() -> Result<bool> {
                     (q.reference, q.loop_minutes, q.seeks, q.activations, q.edits);
             }
             "--reference" => {
-                o.reference = Reference { tracks: value()?.trim_start_matches('p').parse().context("--reference")?, ..o.reference }
+                o.reference = Reference { tracks: value()?.trim_start_matches('p').parse().context("--reference")?, ..o.reference };
+                reference_given = true;
+            }
+            "--offline" => offline = true,
+            "--sweep" => sweep.counts = m2_gates::realtime::counts(value()?)?,
+            "--seconds" => {
+                sweep.seconds =
+                    value()?.parse().ok().filter(|s: &f64| *s > 0.0 && s.is_finite()).context("--seconds takes a number of seconds")?
             }
             "--stems" => o.reference.stems = value()?.parse().context("--stems")?,
             "--minutes" => o.loop_minutes = value()?.parse().context("--minutes")?,
@@ -190,6 +207,11 @@ fn run() -> Result<bool> {
             (true, "export") => server::export(&mut lab, &o),
             (false, "store") => m2_gates::store::store(&mut lab, &o),
             (false, "arena") => m2_gates::arena::arena(&mut lab, &o),
+            (false, "realtime") if !offline => Err(anyhow::anyhow!("realtime runs --offline only: live runs come with 8a's next track")),
+            (false, "realtime") => {
+                let o = if reference_given { o.clone() } else { Opts { reference: Reference::P50, ..o.clone() } };
+                m2_gates::realtime::realtime(&mut lab, &o, &sweep)
+            }
             _ => gates::run(name, &mut lab, kind, &o),
         };
         match outcome {
@@ -218,6 +240,19 @@ fn run() -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::USAGE;
+
+    // G12 (8a): --help says what realtime --offline measures, and what it judges.
+    #[test]
+    fn the_help_says_what_realtime_offline_measures() {
+        let mut lines = USAGE.lines().skip_while(|l| !l.starts_with("  realtime "));
+        let first = lines.next().unwrap();
+        let rest = lines.take_while(|l| l.starts_with(&" ".repeat(18)));
+        let entry = std::iter::once(first).chain(rest).flat_map(str::split_whitespace).collect::<Vec<_>>().join(" ");
+        for says in ["--offline", "same bits on every count", "e2e/renders.sha256 (judged)", "paced", "step 7's loop", "OS-49"] {
+            assert!(entry.contains(says), "{says}: {entry}");
+        }
+        assert!(USAGE.contains("--sweep LIST") && USAGE.contains("--seconds S"));
+    }
 
     // RENDER-32: --help says what G7f judges, against S measured in the same run, and that both
     // parts need S's runner, which they can't run without.

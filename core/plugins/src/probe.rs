@@ -16,7 +16,9 @@
 //! Its state is `m2probe\0`, the two parameters, then a tag; any other bytes load as the tag
 //! alone. `m2.probe.fails-state` refuses a state that starts with `fail`, and any probe takes
 //! 300 ms to load one that starts with `slow`, as a big patch does. One whose tag starts with
-//! `fails-process` reports an error from every `process` call, as a broken plugin does. With
+//! `fails-process` reports an error from every `process` call, as a broken plugin does; one whose
+//! tag starts with `sets-fz` leaves its thread flushing subnormals to zero after every `process`
+//! call, as some plugins do (RENDER-2a). With
 //! [`Stats::defer_load`] set,
 //! a probe applies the parameters of a state it loads at the end of its next `process` call, after
 //! that call's events, ending every voice, as Surge XT does. With [`Stats::reset_keeps_voices`]
@@ -457,6 +459,8 @@ struct Probe {
     fails_state: bool,
     /// Its state's tag starts with `fails-process`: every `process` call reports an error.
     fails_process: bool,
+    /// Its state's tag starts with `sets-fz`: every `process` call ends by setting flush-to-zero.
+    sets_fz: bool,
     stats: Arc<Stats>,
     rate: f64,
     gain: f64,
@@ -578,6 +582,7 @@ unsafe extern "C" fn create(_: *const clap_plugin_factory, host: *const clap_hos
         checks: None,
         fails_state,
         fails_process: false,
+        sets_fz: false,
         stats: stats.clone(),
         rate: 48_000.0,
         gain: 1.0,
@@ -765,11 +770,36 @@ unsafe extern "C" fn process(p: *const clap_plugin, proc_: *const clap_process) 
         unsafe { f(me.host) };
     }
     st.in_process.store(0, Ordering::Release);
+    if me.sets_fz {
+        flush_to_zero();
+    }
     if st.sleep.load(Ordering::Relaxed) && me.sounding() == 0 {
         st.slept.fetch_add(1, Ordering::Relaxed);
         return CLAP_PROCESS_SLEEP;
     }
     CLAP_PROCESS_CONTINUE
+}
+
+/// Leave the calling thread flushing subnormals to zero, as some plugins do: MXCSR's FZ and DAZ on
+/// x86-64, FPCR's FZ on arm64 (RENDER-2a).
+fn flush_to_zero() {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let mut csr: u32 = 0;
+        // SAFETY: reads MXCSR into a local, then loads it back with FZ (bit 15) and DAZ (bit 6) set.
+        unsafe {
+            std::arch::asm!("stmxcsr [{}]", in(reg) &mut csr, options(nostack, preserves_flags));
+            csr |= 0x8040;
+            std::arch::asm!("ldmxcsr [{}]", in(reg) &csr, options(nostack, readonly, preserves_flags));
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: reads FPCR, then writes it back with FZ (bit 24) set.
+    unsafe {
+        let fpcr: u64;
+        std::arch::asm!("mrs {}, fpcr", out(reg) fpcr, options(nomem, nostack, preserves_flags));
+        std::arch::asm!("msr fpcr, {}", in(reg) fpcr | 1 << 24, options(nomem, nostack, preserves_flags));
+    }
 }
 
 unsafe extern "C" fn get_extension(_: *const clap_plugin, id: *const c_char) -> *const c_void {
@@ -952,6 +982,7 @@ unsafe extern "C" fn load(p: *const clap_plugin, s: *const clap_istream) -> bool
         String::from_utf8_lossy(&bytes).into_owned()
     };
     me.fails_process = tag.starts_with("fails-process");
+    me.sets_fz = tag.starts_with("sets-fz");
     *me.stats.tag.lock().unwrap_or_else(|e| e.into_inner()) = tag;
     true
 }
