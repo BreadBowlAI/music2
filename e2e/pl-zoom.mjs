@@ -196,6 +196,65 @@ check((await follow()) === "false", "and is still off when the song opens again"
 await page.click("[data-testid=follow]");
 await until(() => view().follow === true);
 
+// ---------------------------------------------------------------- B2: track heights
+check(await reopen({ zoom: 24 }), "opened again at 24 px a beat, every track at its usual height");
+const rowH = async (id) => (await box(`[data-lane="${id}"]`)).height;
+const selected = () => page.$$eval("[data-module-tab][aria-selected=true]", (els) => els.map((e) => e.dataset.moduleTab));
+let edge = await box('[data-height-edge="bass"]');
+check(!!edge && near(edge.height, 6) && near(edge.y + edge.height, (await box('[data-lane="bass.notes"]')).y + 44), "Bass's header has an edge to drag: 6 px at its foot");
+const edgeTitle = await page.$eval('[data-height-edge="bass"]', (e) => e.title);
+check(edgeTitle === "Drag to change Bass's height · double-click for the usual height", `its tooltip: ${edgeTitle}`);
+const keysTop = (await box('[data-track="keys"]')).y;
+await drag({ x: edge.x + 100, y: edge.y + 3 }, { x: edge.x + 100, y: edge.y + 3 + 28 });
+check(await until(async () => near(await rowH("bass.notes"), 72)), `dragged down 28 px, Bass's row is 72 px: ${await rowH("bass.notes")}`);
+check(near((await clip("bass.notes")).height, 64), `its clip draws 64 px tall: ${(await clip("bass.notes")).height}`);
+check(near((await box('[data-track="keys"]')).y, keysTop + 28), "the next track moved 28 px down");
+const top = (await box('[data-lane="bass.notes"]')).y;
+const mute = await box('[data-mute="bass"]'), solo = await box('[data-solo="bass"]'), meter = await box('[data-track="bass"] [data-slot="meter"]');
+check(near(mute.y - top, 12) && near(solo.y - top, 12) && near(meter.y - top, 8) && near(meter.height, 28), `M, S and the meter stay in its top 44 px: M ${mute.y - top}, S ${solo.y - top}, meter ${meter.y - top} and ${meter.height} tall`);
+check(await until(() => view().heights?.bass === 72), `kept in view.json: ${JSON.stringify(view().heights)}`);
+edge = await box('[data-height-edge="bass"]');
+await page.mouse.click(edge.x + 100, edge.y + 3, { clickCount: 2 });
+check(await until(async () => near(await rowH("bass.notes"), 44)), `a double-click puts back 44: ${await rowH("bass.notes")}`);
+check(await until(() => view().heights === undefined), "and view.json keeps no height for it");
+
+await page.click('[data-module-tab="kick"]');
+await key("Meta+ArrowDown");
+check(await until(async () => near(await rowH("kick.hits"), 72)) && near(await rowH("hats.hits"), 44), "⌘↓ with Kick selected: Kick is 72 px, Hats stays 44");
+await key("Meta+ArrowUp");
+check(await until(async () => near(await rowH("kick.hits"), 44)), "⌘↑: back to 44");
+await page.click('[data-module-tab="hats"]');
+await key("Meta+ArrowUp");
+await until(async () => near(await rowH("hats.hits"), 28));
+const htop = (await box('[data-lane="hats.hits"]')).y;
+const hm = await box('[data-mute="hats"]'), hmeter = await box('[data-track="hats"] [data-slot="meter"]');
+check(near(await rowH("hats.hits"), 28) && near(hm.y - htop, 4) && near(hmeter.height, 20), `⌘↑ on Hats: 28 px, M centred in it (${hm.y - htop}), the meter 20 tall (${hmeter.height})`);
+await key("Meta+ArrowDown");
+await until(async () => near(await rowH("hats.hits"), 44));
+await key("Escape");
+await key("Escape");
+await until(async () => (await selected()).length === 0);
+await key("Meta+ArrowDown");
+const tall = await Promise.all(["kick.hits", "hats.hits", "bass.notes", "keys.chords"].map(rowH));
+check(tall.every((h) => near(h, 72)), `with no track selected, ⌘↓ makes every track 72 px: ${tall.join(", ")}`);
+await key("Meta+ArrowUp");
+await until(async () => near(await rowH("keys.chords"), 44));
+
+await page.click('[data-fold="bass"]');
+await page.waitForSelector('[data-lane="bass.cutoff"]');
+const le = await box('[data-height-edge="bass.cutoff"]');
+check(!!le && near(await rowH("bass.cutoff"), 32), "an automation lane has the edge too, at 32 px");
+await drag({ x: le.x + 100, y: le.y + 3 }, { x: le.x + 100, y: le.y + 3 + 32 });
+check(await until(async () => near(await rowH("bass.cutoff"), 64)), `dragged down 32 px: 64 (${await rowH("bass.cutoff")})`);
+await page.click('[data-module-tab="bass"]');
+await key("Meta+ArrowDown");
+check(await until(() => view().heights?.bass === 72 && view().heights?.["bass.cutoff"] === 64), `view.json keeps both: ${JSON.stringify(view().heights)}`);
+await lintNow("a tall track and a tall lane");
+await reopen();
+await page.click('[data-fold="bass"]');
+await page.waitForSelector('[data-lane="bass.cutoff"]');
+check(near(await rowH("bass.notes"), 72) && near(await rowH("bass.cutoff"), 64), `opened again, Bass is 72 px and its Cutoff lane 64 (${await rowH("bass.notes")}, ${await rowH("bass.cutoff")})`);
+
 // ---------------------------------------------------------------- a PC page's words
 const pc = await open(1440, 900, { pc: true });
 await pc.page.waitForSelector("[data-testid=view-tools]");

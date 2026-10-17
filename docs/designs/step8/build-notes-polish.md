@@ -118,6 +118,49 @@ need the Mac run. Follow is a plain menu row, not a ticked one.
 
 **Contract.** None beyond the view store's.
 
+### B2. Taller tracks
+
+**In short.** You can make a track taller or shorter. Drag the bottom edge of its name box. Or use
+the keys. Automation lanes have the same edge, so they are easier to draw on.
+
+| Do this | Mac | Linux | What happens |
+|---|---|---|---|
+| Drag a header's bottom edge | | | 28 to 160 px, in 4 px steps |
+| Double-click that edge | | | Back to the usual 44 px (32 for a lane) |
+| Taller / Shorter Tracks | ⌘↓ / ⌘↑ | Ctrl+↓ / Ctrl+↑ | Steps 28, 44, 72, 120: the selected track, or every track when none is selected |
+
+- A track's other notes rows take its height. An automation lane goes from 24 to 160 px.
+- In a row 44 px or taller, the name, ⋯, M, S and the meter stay in its top 44 px, as they were.
+  In a shorter row they are centred, and the meter is the row's height less 8 (X24).
+- Kept per song in `view.json`: `heights: {"bass": 72, "bass.cutoff": 64}`. One at its usual
+  height isn't kept.
+- The Song's row at the foot keeps its usual heights.
+- In the code editor ⌘↑ and ⌘↓ are the editor's own (to the top and foot on a Mac, a line's
+  scroll on Linux); in a text field, to its start and end.
+
+**What changed.** `web/src/lib/heights.ts` (new): the store over `lib/local`, the steps and the
+snap. `SongTimeline.tsx`: each track's rows take their heights; `HeightEdge`, a 6 px
+`row-resize` strip at the foot of a track's header and an automation lane's; `LaneLabel` keeps to
+the row's top; `canvas.height` for ⌘↑ ⌘↓. `TrackHeader.tsx`: its parts in a box the row's top
+44 px tall (X24).
+
+**Tests.** `pl-zoom` grows to 62 checks: the edge (6 px, at the foot, its tooltip); a 28 px drag
+makes Bass 72 px, its clip 64 px tall and Keys 28 px lower; M and S 12 px and the meter 8 px from
+the top, the meter 28 tall (X35); kept in `view.json`; a double-click back to 44, and nothing
+kept; ⌘↓ and ⌘↑ on Kick; ⌘↑ on Hats to 28, M centred, the meter 20 tall; with none selected ⌘↓
+makes every track 72; Bass's Cutoff lane dragged to 64; both kept, and back after a reopen; lint.
+Moved suites green: `s8-mute` 152, `s8-meters` 24, `layout` 39, `s8-clips` 94, `s8-tracks` 75,
+`s8-automation` 45, `taste` 39.
+
+**Red first** (the page of `fddb62e`): `FAIL Bass's header has an edge to drag: 6 px at its foot`,
+then `failed to find element matching selector "[data-height-edge="bass"]"`.
+
+**Left.** The roll's own row height (its vertical zoom) is lane D's and later.
+
+**For gaps.md.** Track heights (#17's thin lanes too) are done.
+
+**Contract.** None beyond the view store's.
+
 ## Lane C
 
 Songs and tracks.

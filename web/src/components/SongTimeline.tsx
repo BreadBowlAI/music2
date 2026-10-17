@@ -30,6 +30,7 @@ import {
 import { beatNow, onFrame } from "../lib/clock";
 import { LANE_MADE, TRACK_MADE } from "../lib/events";
 import { useHeard } from "../lib/graph8b";
+import { heightsNow, laneHeight, setHeights, snapHeight, stepHeight, LANE_HS, TRACK_H, trackHeight, useHeights } from "../lib/heights";
 import { LANE_H, ROW_H, RULER_H } from "../lib/layout";
 import { GRAPHITE, trackColors, type TrackColor } from "../lib/palette";
 import { canvas, useShell } from "../lib/shell";
@@ -72,7 +73,6 @@ const BODY_BOTTOM = 4;
 const beats = (n: number) => Number(n.toFixed(3));
 
 const span = (c: { start: number; length: number }) => `beats ${beats(c.start)}–${beats(c.start + c.length)}`;
-const rowHeight = (lane: TimelineLane) => (lane.kind === "control" ? LANE_H : ROW_H);
 /** The clips drawn here are a track's muted in the song: hatched (taste.md §2.9). */
 const Hatched = createContext(false);
 
@@ -435,10 +435,17 @@ export default function SongTimeline({
     zoomScroll(to, a * to - FIT_PAD);
     fitted.current = { ...was, to };
   };
+  /** ⌘↓ (1) and ⌘↑ (-1): the selected track a step taller or shorter, or every track with none selected. */
+  const height = (dir: 1 | -1) => {
+    const m = useShell.getState().selected;
+    const tracks = m && m !== "song" ? [m] : latest.current.timeline.tracks.filter((t) => t.track && t.module !== "song").map((t) => t.module);
+    const now = heightsNow();
+    setHeights(Object.fromEntries(tracks.map((t) => [t, stepHeight(trackHeight(now, t), dir)])));
+  };
   useEffect(() => {
-    Object.assign(canvas, { zoom: zoomStep, zoomFit, follow: () => setFollow(!followNow()) });
+    Object.assign(canvas, { zoom: zoomStep, zoomFit, follow: () => setFollow(!followNow()), height });
     return () => {
-      for (const k of ["zoom", "zoomFit", "follow"] as const) delete canvas[k];
+      for (const k of ["zoom", "zoomFit", "follow", "height"] as const) delete canvas[k];
     };
   });
   // A pinch, or ⌘-scroll (Ctrl-scroll): around the pointer. Chrome and WebKitGTK send a pinch as a
@@ -1686,12 +1693,16 @@ const TrackRows = memo(function TrackRows({
   // A muted track's clips, or one a solo leaves off, draw faint and grey; muted in the song, hatched too.
   const heard = useHeard(module);
   const { primary, others, controls } = rowsOf(track);
+  // Its rows' heights (Q10): the Song's row, pinned at the foot, keeps the usual ones.
+  const heights = useHeights();
+  const h = last ? ROW_H : trackHeight(heights, module);
+  const laneH = (l: TimelineLane) => (last ? LANE_H : laneHeight(heights, module, l.key));
   /** Where a reference's clip is in `lane`, if it is one of its clips. */
   const at = (ref: ClipRef | null, lane: TimelineLane) => (ref?.lane === lane.key ? clipIndex(lane.clips, ref) : -1);
   const select = () => useShell.getState().select(module);
 
   /** A row: its header (sticky at the left) and its lane. */
-  const row = (lane: TimelineLane | null, header: ReactNode, opts: { first?: boolean; height: number; movable?: boolean }) => (
+  const row = (lane: TimelineLane | null, header: ReactNode, opts: { first?: boolean; height: number; movable?: boolean; edge?: string }) => (
     <div
       key={lane?.key ?? ""}
       data-lane={lane ? `${module}.${lane.key}` : undefined}
@@ -1728,6 +1739,7 @@ const TrackRows = memo(function TrackRows({
         {/* The selected track's edge where it meets its lanes. */}
         {selected && <div className="absolute -right-px inset-y-0 w-0.5 bg-accent" />}
         {header}
+        {opts.edge && <HeightEdge id={opts.edge} height={opts.height} name={opts.first ? moduleName({ key: module, label: track.label }) : laneTitle(lane!)} />}
       </div>
       <div
         // The lane dragged clips would land on is lit; one that can't take them isn't (design-8b §7.5).
@@ -1757,6 +1769,7 @@ const TrackRows = memo(function TrackRows({
               <LaneClips
                 module={module}
                 lane={lane}
+                height={opts.height}
                 color={color}
                 shown={at(shown, lane)}
                 drag={drag}
@@ -1803,11 +1816,11 @@ const TrackRows = memo(function TrackRows({
       {movable && <DropLine before={module} />}
       {row(
         primary,
-        <TrackHeader track={track} folds={controls.length > 0} open={open} selected={selected} song={!!last} issues={issues} />,
-        { first: true, height: ROW_H, movable },
+        <TrackHeader track={track} folds={controls.length > 0} open={open} selected={selected} song={!!last} issues={issues} height={h} />,
+        { first: true, height: h, movable, edge: track.track && !last ? module : undefined },
       )}
-      {others.map((l) => row(l, <LaneLabel lane={l} />, { height: rowHeight(l) }))}
-      {open && controls.map((l) => row(l, <LaneLabel lane={l} />, { height: LANE_H }))}
+      {others.map((l) => row(l, <LaneLabel lane={l} height={h} />, { height: h }))}
+      {open && controls.map((l) => row(l, <LaneLabel lane={l} height={laneH(l)} />, { height: laneH(l), edge: last ? undefined : `${module}.${l.key}` }))}
     </div>
   );
 });
@@ -1822,15 +1835,54 @@ function DropLine({ before }: { before: string }) {
  * A lane's header (taste.md §3.4): its control's label at x = 28; for automation, the value at the
  * playhead on the right in `fg-faint`, with the lane's marker while a clip is what sets it.
  */
-function LaneLabel({ lane }: { lane: TimelineLane }) {
+function LaneLabel({ lane, height }: { lane: TimelineLane; height: number }) {
   const name = laneTitle(lane);
+  // In a taller row, at the top, where it sits at the usual height.
   return (
-    <>
+    <div className="absolute inset-x-0 top-0 flex items-center" style={{ height: Math.min(height, lane.kind === "control" ? LANE_H : ROW_H) }}>
       <span className="absolute left-7 right-[64px] text-sm text-fg-muted truncate" title={name === lane.key ? lane.key : `${name} (${lane.key})`}>
         {name}
       </span>
       {lane.kind === "control" && <LaneValue lane={lane} name={name} />}
-    </>
+    </div>
+  );
+}
+
+/**
+ * A row's bottom edge, on its header (Q10): drag it for a height in 4 px steps, double-click it for
+ * the usual one. `id` is the track's key, or an automation lane's `module.lane`.
+ */
+function HeightEdge({ id, height, name }: { id: string; height: number; name: string }) {
+  const lane = id.includes(".");
+  const range = lane ? LANE_HS : TRACK_H;
+  return (
+    <div
+      data-height-edge={id}
+      aria-hidden
+      title={`Drag to change ${name}'s height · double-click for the usual height`}
+      className="absolute inset-x-0 bottom-0 h-1.5 z-10 cursor-row-resize"
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        // Not a reorder of the track, nor a selection.
+        e.stopPropagation();
+        e.preventDefault();
+        const el = e.currentTarget, pointer = e.pointerId, y0 = e.clientY;
+        el.setPointerCapture(pointer);
+        const move = (ev: PointerEvent) => {
+          if (ev.pointerId === pointer) setHeights({ [id]: snapHeight(height + ev.clientY - y0, range) });
+        };
+        const end = (ev: PointerEvent) => {
+          if (ev.pointerId !== pointer) return;
+          for (const [type, f] of listeners) el.removeEventListener(type, f as EventListener);
+        };
+        const listeners = [["pointermove", move], ["pointerup", end], ["pointercancel", end], ["lostpointercapture", end]] as const;
+        for (const [type, f] of listeners) el.addEventListener(type, f as EventListener);
+      }}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        setHeights({ [id]: null });
+      }}
+    />
   );
 }
 
@@ -1929,6 +1981,7 @@ const involves = (d: Drag, module: string) => d.to?.module === module || d.clips
 function LaneClips({
   module,
   lane,
+  height,
   color,
   shown,
   drag,
@@ -1939,6 +1992,8 @@ function LaneClips({
 }: {
   module: string;
   lane: TimelineLane;
+  /** Its row's height. */
+  height: number;
   color: TrackColor;
   /** Where the clip Notes shows is in the lane's clips, or -1. */
   shown: number;
@@ -1958,7 +2013,6 @@ function LaneClips({
   // A clip is named by its id; one without its own (FMT-12) only by where it is.
   const id = (i: number) => (hasOwnId(lane.clips, i) ? lane.clips[i].id! : "");
   const key = (i: number) => id(i) || `#${i}`;
-  const height = rowHeight(lane);
   const here = (a: LaneAddr) => a.module === module && a.lane === lane.key;
 
   // What a clip of this lane's kind draws inside it.
