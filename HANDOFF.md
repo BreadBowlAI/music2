@@ -23,15 +23,18 @@ whatever you pick up.
 - **One new question for the owner:** after Stop and back to bar 1, should the wobble start again as in the
   export? For now it carries on (Open owner decisions).
 - **Your own songs** (for the owner): a song made before std 0.2 must change one line to build (below).
-- **Step 7 is on `main`** (2026-10-17): Linux green, macOS owed. With its speed work it is done on Linux at
+- **Step 7 is on `main`** (2026-10-17): Linux green, and macOS green at `cbac57c`; its by-ear steps 7 to 17 are
+  still owed. With its speed work it is done on Linux at
   `ffc36aa`, after a review of the speed work's fixes: `ci/check.sh` passes there, every row, with nothing passed
   only on a retry, once without the gates and once with them (912 Rust tests, 29/29 browser suites, 8 of 8
   renders, the old engine S built, the 6 gate runs; `~/m2-runs/check-s7-rv1`, `-rvg`). Before that review it
   passed at `a894448` (`-sp1`, `-sp2`, `-spg`).
-- **macOS:** the owner's Mac run at `ed7fc8e` passed every row but the gates, and the gates failed on one rule:
-  G7f part 2, +328 µs a callback against 320, by the old sum. The owner said "speed it up first". Now the engine is
-  faster and G7f measures S fresh. **One Mac run is owed** for step 7, now on `main` (below). The owner runs it
-  by hand, later.
+- **macOS: green at `cbac57c`** (ci/check.sh on MacBookPro18,1, macOS 26.6.2, 2026-10-17), every row on the first
+  run. G7f, which failed at `ed7fc8e` (+328 µs a callback against 320), now reads −19 µs a block (bound 80) and
+  −196 µs a callback (bound 320) against S, measured in the same run. Its starting line read −184 µs a callback, so
+  about 90 µs of that leans the app's way: still about 400 µs inside the bound. S measured 14% slower than its
+  record of 2026-10-14 (10,169 µs a callback against 8,936). Why is not known; the paired turns judge both sides
+  under the same conditions, and the verdict is far from its bound, so no second run was asked for.
 - `main` has step 7: it fast-forwarded from `0ebc6e6` (the platform step, macOS green at `1750322`).
 - **Two gaps found on 2026-10-16** (Left for later): a kernel that crashes while the song plays stops the whole
   song with no message; and a kernel that runs out of its 32 MiB fails with a message that never says "memory".
@@ -55,16 +58,16 @@ whatever you pick up.
 
 | Branch | Commit | State |
 |---|---|---|
-| `main` | the tip | Steps 1–7, the fast note edits, and the platform layer. Green on Linux and macOS at `1750322` (the platform step). Step 7: green on Linux at `ffc36aa`, macOS owed. |
+| `main` | the tip | Steps 1–7, the fast note edits, and the platform layer. Green on Linux and macOS at `1750322` (the platform step). Step 7: green on Linux at `ffc36aa` and on macOS at `cbac57c`. |
 | `sounds-merge` | `e1003ba` | All on `main` now (a fast-forward, 2026-10-17). Linux green at `e108e46` (reviewed; `ci/check.sh --gates` and the recorded tests), macOS owed. Worktree `~/m2-runs/wt/sm` (its `target/`, about 40 GB). Delete the branch and the worktree once the tracks in flight have landed. |
 | `8b-backend` | `c9cc6ad` | All on `main` now (a fast-forward, 2026-10-17). Linux green at `a8199ff`, macOS owed. Worktree `~/m2-runs/wt/be`. Delete the branch and the worktree once `8b-ui` has landed. |
-| `step7` | `95c8a73` | Step 7's commits, all on `main` now. No worktree now: `~/m2-runs/wt/s7` moved to `~/m2-runs/wt/sm` for the `sounds` merge. Delete the branch and `origin/step7` once the Mac run passes. |
 | `origin/taste` | `4804247` | The new look (T and S); 8b.1 Tracks done (`a0d5f91`); 8b.2 song bar unfinished. |
 | `origin/sounds` | `916127d` | 22 new std sounds (8 on the polysynth, 4 FM, 10 drums), merged; on `main` since 2026-10-17. |
 
 `taste` and `sounds` start at `8aa301e`, before the platform step. Each has a detached worktree in `~/m2-runs/wt/`
-(`taste`, `sounds`); `sounds`' can go once `sounds-merge` lands. `origin/wip/step7` (the Mac's half-done step 7,
-all of it in `step7` as `c8117c3`) and its worktree were deleted when step 7 landed.
+(`taste`, `sounds`); `sounds`' can go once the tracks in flight land. `origin/wip/step7` (the Mac's half-done step 7,
+all of it in `step7` as `c8117c3`) and its worktree were deleted when step 7 landed; `step7` and `origin/step7`
+after the Mac run passed.
 
 Designs, all in `docs/designs/`:
 - `step7/design-7.md` (revision 2, with dated notes from the review; §18 the slices, §19 the owner's questions).
@@ -93,7 +96,7 @@ Step 7, 2026-10-15:
 
 | # | Decision | Where |
 |---|---|---|
-| O1 | The Store layout: each kernel memory reserves 32 MiB, with a 64 KiB guard, no room to grow, and never moves. Cranelift's Spectre guard is off: kernels import nothing, so they have no clock. Revisit before kernels from other people's packages run. The Mac run must confirm its cost. | [RENDER-32](docs/architecture.md#engine-shape-step-7); `Layout::P2` in `core/runtime/src/packages.rs` |
+| O1 | The Store layout: each kernel memory reserves 32 MiB, with a 64 KiB guard, no room to grow, and never moves. Cranelift's Spectre guard is off: kernels import nothing, so they have no clock. Revisit before kernels from other people's packages run. The Mac run at `cbac57c` passed G7f with it. | [RENDER-32](docs/architecture.md#engine-shape-step-7); `Layout::P2` in `core/runtime/src/packages.rs` |
 | O2 | G7f part 2's bound is 3% of a callback: 320 µs at 512 frames. Part 1's stays 80 µs a block (3% of a 2.67 ms block). | RENDER-32. G7f judges the **mean** of 5 pairs, not the p99: see "Open owner decisions". |
 | O3 | std's chorus, phaser and tremolo LFOs run on engine time, so after a stop they differ from the export. Fixed at the `sounds` merge, not in step 7, with std's version bumped. | Fixed on `main` (the `sounds` merge): [RENDER-6](docs/architecture.md#live-engine-and-its-two-clocks), `docs/designs/sounds/design.md` |
 | O4 | A note held across an export plays again after the resume: a note-on at the resume, under the 5 ms fade in. | [RENDER-1](docs/architecture.md#offline) |
@@ -186,27 +189,22 @@ screenshots once per step (step 7's: `~/m2-runs/app-shots/step7-6297c9a/`; the `
 ## The Mac run (for the owner)
 
 About 35 minutes, mostly waiting *(an estimate: 25 at `ed7fc8e`; this time it also builds the old engine
-S, about 3 minutes the first time, and G7f plays longer, about 8 minutes a part)*. Step 7 is on `main`, pushed.
+S, about 3 minutes the first time, and G7f plays longer, about 8 minutes a part)*. All it checks is on `main`, pushed.
 
 | # | Do this | Why |
 |---|---|---|
 | 1 | Plug the Mac in, keep the lid open, and quit other apps. | The speed tests need a quiet Mac. |
 | 2 | Open Terminal on the Mac itself, not over ssh. | One test needs your login session. |
-| 3 | Type `cd ~/dev/suite2/music2`, then `git fetch`, then `git switch main`, then `git pull`. | This gets step 7 (and the `sounds` merge, once it is on `main`). |
+| 3 | Type `cd ~/dev/suite2/music2`, then `git fetch`, then `git switch main`, then `git pull`. | This gets everything on `main`. |
 | 4 | Type `ci/check.sh` and press Return. | It runs every check and the speed tests. |
 | 5 | If one line says `running` for more than 30 minutes, press Ctrl-C once. | It stops that check and still prints the summary. |
 | 6 | Copy the last lines, from `music2 check:` to the `logs` line, and paste them back. | That is all the lead needs. |
 
-**What changed since the last run (`ed7fc8e`, 2026-10-16):**
-- Once the `sounds` merge is on `main`: 22 new std sounds, and std 0.2. Two more renders (10). `std.wasm` is half
-  as big again, so each load of std takes a little longer (+70 ms on Linux) and the check a few minutes more.
-- The engine is faster. Each kernel call now reads its memory straight away, instead of asking its
-  store for it (`444fc66`). No sound changed.
-- G7f measures S, the commit before step 7, in the same run, beside the app. S plays in a small program
-  of its own, which a new row, "old engine (S)", builds first. G7f no longer adds an old recorded number.
-- G7f's turns: no side takes two turns in a row, and the first half second of each turn is not judged.
-- A Mac whose name the records don't hold gets G7f printed, not judged. The gates row says PART, and so does the
-  first line.
+**What the next run adds** (the run at `cbac57c`, 2026-10-17, passed step 7):
+- The `sounds` merge: 22 new std sounds, and std 0.2. Two more renders (10). `std.wasm` is half as big again, so
+  each load of std takes a little longer (+70 ms on Linux) and the check a few minutes more.
+- 8b's back ends: mute, solo, clips, audition and meters, with about 130 more Rust tests (1,039 on Linux). A mute
+  puts a gain node where each track is read, in every plan, so G7f plays a little more.
 
 **What must pass:** the first line says `music2 check: PASS`. Every row says PASS (the gates row too, not PART),
 with nothing "passed only on a retry". In the gates part:
@@ -220,14 +218,8 @@ with nothing "passed only on a retry". In the gates part:
   activation block under 5,333 µs.
 
 **What may fail, and why:**
-- G7f part 2's callback rule. Our guess is about +110 µs (likely +30 to +220), against 320. But on Linux
-  one run of this method can be off by about ±150 µs a callback. If it says more than +170, or it fails,
-  the lead asks for one more run before deciding. If it still fails, cut 3 (one Store per voice pool)
-  goes to the owner: it changes RENDER-32's words.
-- G7f part 1's block rule. Our guess is about +30 µs (likely +10 to +60), against 80. A run can be off by
-  about ±30 µs. Above +50, one more run.
-- The "old engine (S)" row. It builds S on the Mac for the first time (Linux only type-checked it for
-  macOS). If it fails, the gates can't run G7f, and the lead reads `gates-s.log` in the logs.
+- G7f. At `cbac57c` it read −19 µs a block and −196 a callback; on Linux the back ends' gain nodes moved it by
+  less than one run's noise. If either reads within 50 µs of its bound, or fails, the lead asks for one more run.
 - The first line and the gates row say PART, or there is an `info machines:` line: the Mac's name differs from
   the two records written by hand. Nothing else is wrong then. The gates part's first line names the Mac
   (`machine: …`): the lead copies what follows `machine: ` over the `machine=` value of the three record lines
@@ -251,7 +243,7 @@ with nothing "passed only on a retry". In the gates part:
 | 16 | Quit. Type `cargo run -p music2-desktop` (a slower test build), and play With plugins for a minute. | The Terminal never says "the audio thread allocated". |
 | 17 | Tell the lead what you saw and heard at 9 to 16. | |
 
-**Once the `sounds` merge is on `main`, a check by ear of the new sounds** (about 5 minutes):
+**A check by ear of the new sounds** (about 5 minutes):
 
 | # | Do this | You should hear or see |
 |---|---|---|
@@ -300,13 +292,12 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
 
 | Step | On `main` at | Mac run |
 |---|---|---|
-| Step 7 and its speed work | `ffc36aa` (Linux checks), then docs only | owed: the run above, then the by-ear steps 7 to 17 |
-| The `sounds` merge (22 sounds, O3, std 0.2) | `e108e46` (Linux checks), then docs only | owed: the same run (one run covers step 7 too), then the by-ear steps 18 to 21 |
+| Step 7 and its speed work | `ffc36aa` (Linux checks), then docs only | `ci/check.sh` passed at `cbac57c` (2026-10-17); owed: the by-ear steps 7 to 17 |
+| The `sounds` merge (22 sounds, O3, std 0.2) | `e108e46` (Linux checks), then docs only | owed: `ci/check.sh` on `main` (one run covers the back ends below too), then the by-ear steps 18 to 21 |
 | The back ends of 8b.4, 8b.5, 8b.6, 8b.8 | `a8199ff` (Linux checks), then docs only | owed: the same run covers it; by-ear steps come with its screens (`8b-ui`) |
 
-1. **The Mac runs** (above), when the owner has time. Fix what they find on Linux, then ask for one more run. When
-   step 7's passes, write "macOS: green at …" here and in the contract's gates row 7, with G7f's Mac numbers in
-   RENDER-32's *Today*. Then delete the `step7` branch and `origin/step7` (it has no worktree now).
+1. **The Mac runs** (above), when the owner has time: `ci/check.sh` on `main` for the `sounds` merge and 8b's back
+   ends, and the by-ear steps. Fix what they find on Linux, then ask for one more run.
 2. **The two gaps found on 2026-10-16** (Left for later): fix them before step 9, or with idea 3 if the owner
    says yes to it.
 3. **The `sounds` merge is on `main`** (`docs/designs/sounds/`). Ask the owner the Space, Return, Space question
