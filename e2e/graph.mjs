@@ -27,7 +27,8 @@ await page.waitForSelector("[data-testid=graph]", { timeout: 8000 });
 const tabs = await page.$$eval("[data-module-tab]", (els) => els.map((e) => e.dataset.moduleTab));
 // In the mixer's order, as the song mixes them, never alphabetical (D8, taste.md §3.4).
 check(JSON.stringify(tabs) === JSON.stringify(["kick", "hats", "bass", "keys", "song"]), `module headers, by key: ${tabs}`);
-const named = await page.$$eval("[data-module-tab]", (els) => els.map((e) => e.textContent));
+// The name, not the whole header: its M and S buttons have letters too.
+const named = await page.$$eval("[data-module-tab] [data-testid=track-label]", (els) => els.map((e) => e.textContent));
 check(JSON.stringify(named) === JSON.stringify(["Kick", "Hats", "Bass", "Keys", "Song"]), `named by label: ${named}`);
 const show = async (name) => {
   await page.click(`[data-module-tab="${name}"]`);

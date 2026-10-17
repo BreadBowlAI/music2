@@ -11,7 +11,7 @@ check(!(await strip()), "nothing needs attention at first");
 
 // ID-10: a label changed in code changes no address: the same tab, track and lane, no problem.
 write("tracks/kick.ts", read("tracks/kick.ts").replace('{ name: "Kick" }', '{ name: "Big Kick" }'));
-check(await until(async () => (await page.$eval('[data-module-tab="kick"]', (e) => e.textContent).catch(() => "")) === "Big Kick"), "a new label shows on the kick's tab");
+check(await until(async () => (await page.$eval('[data-module-tab="kick"] [data-testid=track-label]', (e) => e.textContent).catch(() => "")) === "Big Kick"), "a new label shows on the kick's tab");
 check(!!(await page.$('[data-lane="kick.hits"] [data-clip]')) && !(await strip()), "its lane keeps its clips, and nothing needs attention");
 const label = await page.$eval('[data-track="kick"] [data-testid=track-label]', (e) => e.textContent);
 check(label === "Big Kick", `the timeline shows the label (${label})`);

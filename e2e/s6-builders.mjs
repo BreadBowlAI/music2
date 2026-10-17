@@ -77,7 +77,7 @@ await page.screenshot({ path: `${S}/s6-renaming.png` });
 await key("Enter");
 check(await until(() => read("tracks/kick.ts") === orig.kick.replace('{ name: "Kick" }', '{ name: "Kick Drum" }')), "Enter writes the name into kick.ts, and nothing else");
 check(await until(async () => (await label("kick")) === "Kick Drum"), "the timeline shows it");
-check(await until(async () => (await page.$eval('[data-module-tab="kick"]', (e) => e.textContent)) === "Kick Drum"), "so does the module's tab");
+check(await until(async () => (await page.$eval('[data-module-tab="kick"] [data-testid=track-label]', (e) => e.textContent)) === "Kick Drum"), "so does the module's tab");
 // The name on screen says it: a rename makes no toast; its Undo is the top bar's (taste.md ST-5).
 check(!(await toasts()).some((t) => t.includes("Renamed")) && (await page.$eval('button[aria-label="Undo"]', (b) => !b.disabled)), "no toast says so: the name does, and Undo is offered");
 const t = (await graph()).timeline.tracks.find((t) => t.module === "kick");
