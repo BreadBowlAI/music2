@@ -5,8 +5,13 @@
 //! Only ⌘ and ⌃ chords are accelerators (taste.md §5.3): a native accelerator fires even while
 //! the producer types in the code editor or a rename field, so single keys, Space, Return and ⌥
 //! chords are the page's, which ignores them while typing. Their items are here without one; the
-//! ⌥K sheet lists every key. Where focus is decides what a chord does (the code editor's own ⌘D),
-//! in the page's `appCommand`.
+//! ⌥K sheet lists every key. Where focus is decides what a chord does (the code editor's own ⌘D,
+//! a field's own ⌘⌫), in the page's `appCommand`.
+//!
+//! One menu bar per OS (OS-54). The Mac's has the app menu (About, Services, Hide, Quit) and a
+//! Window menu. Elsewhere (GTK) those items are greyed out and the app menu isn't a convention:
+//! Quit (Ctrl+Q) ends File, About ends Help, and no Window menu. `CmdOrCtrl` is ⌘ on a Mac and
+//! Ctrl elsewhere.
 
 use tauri::menu::{AboutMetadata, Menu, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Wry};
@@ -17,121 +22,156 @@ use crate::actions;
 /// included: the code editor saves its files.
 const NATIVE: &[&str] = &["open_project", "reveal", "quit"];
 
-/// The menu bar's items, as (menu, id, title, accelerator): the ids are the page's command ids.
-/// `None` for a key the page handles, or an item with no key.
-pub const ITEMS: &[(&str, &str, &str, Option<&str>)] = &[
-    ("music2", "quit", "Quit music2", Some("CmdOrCtrl+Q")),
+/// Whether this build's menu bar is the Mac's.
+const MAC: bool = cfg!(target_os = "macos");
+
+/// The reveal item: Finder on a Mac; elsewhere the system's file manager (OS-55), as the export
+/// toast says it.
+const REVEAL: &str = if MAC { "Show in Finder" } else { "Show in Folder" };
+
+/// The menu bar's items, as (id, title, accelerator): the ids are the page's command ids.
+/// `None` for a key the page handles, or an item with no key. Where each goes: `layout`.
+const ITEMS: &[(&str, &str, Option<&str>)] = &[
+    ("quit", "Quit music2", Some("CmdOrCtrl+Q")),
     // The UI shows the New Song dialog, even with a song open.
-    ("File", "new_song", "New Song…", Some("CmdOrCtrl+N")),
-    ("File", "open_project", "Open Project Folder…", Some("CmdOrCtrl+O")),
+    ("new_song", "New Song…", Some("CmdOrCtrl+N")),
+    ("open_project", "Open Project Folder…", Some("CmdOrCtrl+O")),
     // The UI asks about unsaved code first, then the start screen shows.
-    ("File", "close_song", "Close Song", Some("CmdOrCtrl+W")),
-    ("File", "save", "Save", Some("CmdOrCtrl+S")),
+    ("close_song", "Close Song", Some("CmdOrCtrl+W")),
+    ("save", "Save", Some("CmdOrCtrl+S")),
     // The UI asks for the file (actions.rs `export_path`), then shows the progress. ⌘E is kept for
     // Split, which comes with clip editing.
-    ("File", "export", "Export Audio…", Some("CmdOrCtrl+Shift+E")),
-    ("File", "reveal", "Show in Finder", None),
-    ("Edit", "undo", "Undo", Some("CmdOrCtrl+Z")),
-    ("Edit", "redo", "Redo", Some("CmdOrCtrl+Shift+Z")),
+    ("export", "Export Audio…", Some("CmdOrCtrl+Shift+E")),
+    ("reveal", REVEAL, None),
+    ("undo", "Undo", Some("CmdOrCtrl+Z")),
+    ("redo", "Redo", Some("CmdOrCtrl+Shift+Z")),
     // One item for whatever is selected (the roll's notes today), or the code editor's own ⌘D.
-    ("Edit", "duplicate", "Duplicate", Some("CmdOrCtrl+D")),
+    ("duplicate", "Duplicate", Some("CmdOrCtrl+D")),
     // The instrument list at + Track; the selected track goes, asking first when others read it.
-    ("Track", "new_track", "New Track…", Some("CmdOrCtrl+T")),
-    ("Track", "delete_track", "Delete Track", Some("CmdOrCtrl+Backspace")),
-    ("Track", "rename", "Rename", Some("CmdOrCtrl+R")),
+    ("new_track", "New Track…", Some("CmdOrCtrl+T")),
+    // In a field, the field's own: to the line's start on a Mac, the word before elsewhere.
+    ("delete_track", "Delete Track", Some("CmdOrCtrl+Backspace")),
+    ("rename", "Rename", Some("CmdOrCtrl+R")),
     // ⌥1 to ⌥4, X, A, E: the page's keys.
-    ("View", "view_device", "Device", None),
-    ("View", "view_notes", "Notes", None),
-    ("View", "view_mix", "Mix", None),
-    ("View", "view_code", "Code", None),
-    ("View", "lanes", "Show Automation", None),
-    ("View", "dock", "Show Dock", None),
-    ("View", "browser", "Show Browser", Some("Alt+CmdOrCtrl+B")),
+    ("view_device", "Device", None),
+    ("view_notes", "Notes", None),
+    ("view_mix", "Mix", None),
+    ("view_code", "Code", None),
+    ("lanes", "Show Automation", None),
+    ("dock", "Show Dock", None),
+    ("browser", "Show Browser", Some("Alt+CmdOrCtrl+B")),
     // No Space accelerator: the menu would steal it from text fields. The UI handles Space, Return and C.
-    ("Transport", "play", "Play / Stop", None),
-    ("Transport", "home", "Go to Start", None),
-    ("Transport", "loop", "Loop", None),
-    ("Help", "shortcuts", "Keyboard Shortcuts", None),
+    ("play", "Play / Stop", None),
+    ("home", "Go to Start", None),
+    ("loop", "Loop", None),
+    ("shortcuts", "Keyboard Shortcuts", None),
 ];
 
 /// Window → Close Window, which quits (as the window's close button does): ⌘W is Close Song.
 const CLOSE_WINDOW: &str = "Shift+CmdOrCtrl+W";
 
+/// One row of a menu: an item of `ITEMS` by id, a line, or one the system provides.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Row {
+    Item(&'static str),
+    Line,
+    About,
+    Services,
+    Hide,
+    HideOthers,
+    ShowAll,
+    Cut,
+    Copy,
+    Paste,
+    SelectAll,
+    FullScreen,
+    Minimize,
+    Maximize,
+    CloseWindow,
+}
+
+/// The menu bar, as (menu, rows): the Mac's when `mac`, else the one for GTK (and Windows later).
+fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
+    use Row::*;
+    let file = [Item("new_song"), Item("open_project"), Line, Item("close_song"), Item("save"), Line, Item("export"), Line, Item("reveal")];
+    let track = vec![Item("new_track"), Item("delete_track"), Item("rename")];
+    let views =
+        [Item("view_device"), Item("view_notes"), Item("view_mix"), Item("view_code"), Line, Item("lanes"), Item("dock"), Item("browser")];
+    let transport = vec![Item("play"), Item("home"), Item("loop")];
+    if mac {
+        vec![
+            ("music2", vec![About, Line, Services, Line, Hide, HideOthers, ShowAll, Line, Item("quit")]),
+            ("File", file.to_vec()),
+            // The system's cut, copy and paste, so text fields get them.
+            ("Edit", vec![Item("undo"), Item("redo"), Line, Cut, Copy, Paste, SelectAll, Line, Item("duplicate")]),
+            ("Track", track),
+            ("View", [&views[..], &[Line, FullScreen]].concat()),
+            ("Transport", transport),
+            // ⌘W closes the song (File); closing the window, which quits, is ⇧⌘W.
+            ("Window", vec![Minimize, Maximize, Line, CloseWindow]),
+            ("Help", vec![Item("shortcuts")]),
+        ]
+    } else {
+        // GTK greys out Services, Hide, Full Screen and the Window menu's items, and its Cut,
+        // Copy and Paste rows do nothing here (muda needs libxdo for them): the web view has
+        // those keys itself, so they aren't rows.
+        vec![
+            ("File", [&file[..], &[Line, Item("quit")]].concat()),
+            ("Edit", vec![Item("undo"), Item("redo"), Line, Item("duplicate")]),
+            ("Track", track),
+            ("View", views.to_vec()),
+            ("Transport", transport),
+            ("Help", vec![Item("shortcuts"), Line, About]),
+        ]
+    }
+}
+
 pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
-    let item = |id: &str| {
-        let &(_, id, text, accel) = ITEMS.iter().find(|i| i.1 == id).expect("a menu item");
-        let b = MenuItemBuilder::with_id(id, text);
-        match accel {
-            Some(a) => b.accelerator(a).build(app),
-            None => b.build(app),
+    let mut bar = MenuBuilder::new(app);
+    for (name, rows) in layout(MAC) {
+        let mut menu = SubmenuBuilder::new(app, name);
+        for row in rows {
+            menu = match row {
+                Row::Item(id) => {
+                    let &(id, text, accel) = ITEMS.iter().find(|i| i.0 == id).expect("a menu item");
+                    let b = MenuItemBuilder::with_id(id, text);
+                    menu.item(&match accel {
+                        Some(a) => b.accelerator(a).build(app)?,
+                        None => b.build(app)?,
+                    })
+                }
+                Row::Line => menu.separator(),
+                Row::About => menu.item(&PredefinedMenuItem::about(app, Some("About music2"), Some(about(app)))?),
+                Row::Services => menu.services(),
+                Row::Hide => menu.hide(),
+                Row::HideOthers => menu.hide_others(),
+                Row::ShowAll => menu.show_all(),
+                Row::Cut => menu.cut(),
+                Row::Copy => menu.copy(),
+                Row::Paste => menu.paste(),
+                Row::SelectAll => menu.select_all(),
+                Row::FullScreen => menu.fullscreen(),
+                Row::Minimize => menu.minimize(),
+                Row::Maximize => menu.maximize(),
+                Row::CloseWindow => {
+                    menu.item(&MenuItemBuilder::with_id("close_window", "Close Window").accelerator(CLOSE_WINDOW).build(app)?)
+                }
+            };
         }
-    };
+        bar = bar.item(&menu.build()?);
+    }
+    bar.build()
+}
 
-    let app_menu = SubmenuBuilder::new(app, "music2")
-        .item(&PredefinedMenuItem::about(
-            app,
-            Some("About music2"),
-            Some(AboutMetadata { name: Some("music2".into()), ..Default::default() }),
-        )?)
-        .separator()
-        .services()
-        .separator()
-        .hide()
-        .hide_others()
-        .show_all()
-        .separator()
-        .item(&item("quit")?)
-        .build()?;
-
-    let file = SubmenuBuilder::new(app, "File")
-        .item(&item("new_song")?)
-        .item(&item("open_project")?)
-        .separator()
-        .item(&item("close_song")?)
-        .item(&item("save")?)
-        .separator()
-        .item(&item("export")?)
-        .separator()
-        .item(&item("reveal")?)
-        .build()?;
-
-    let edit = SubmenuBuilder::new(app, "Edit")
-        .item(&item("undo")?)
-        .item(&item("redo")?)
-        .separator()
-        // Native items so text fields get real cut/copy/paste.
-        .cut()
-        .copy()
-        .paste()
-        .select_all()
-        .separator()
-        .item(&item("duplicate")?)
-        .build()?;
-
-    let track = SubmenuBuilder::new(app, "Track").item(&item("new_track")?).item(&item("delete_track")?).item(&item("rename")?).build()?;
-
-    let view = SubmenuBuilder::new(app, "View")
-        .item(&item("view_device")?)
-        .item(&item("view_notes")?)
-        .item(&item("view_mix")?)
-        .item(&item("view_code")?)
-        .separator()
-        .item(&item("lanes")?)
-        .item(&item("dock")?)
-        .item(&item("browser")?)
-        .separator()
-        .fullscreen()
-        .build()?;
-
-    let transport = SubmenuBuilder::new(app, "Transport").item(&item("play")?).item(&item("home")?).item(&item("loop")?).build()?;
-
-    // ⌘W closes the song (File); closing the window, which quits, is ⇧⌘W.
-    let close_window = MenuItemBuilder::with_id("close_window", "Close Window").accelerator(CLOSE_WINDOW).build(app)?;
-    let window = SubmenuBuilder::new(app, "Window").minimize().maximize().separator().item(&close_window).build()?;
-
-    let help = SubmenuBuilder::new(app, "Help").item(&item("shortcuts")?).build()?;
-
-    MenuBuilder::new(app).items(&[&app_menu, &file, &edit, &track, &view, &transport, &window, &help]).build()
+/// What About says: the Mac's panel finds the version and icon in the app's bundle; GTK's dialog
+/// is told them.
+fn about(app: &AppHandle) -> AboutMetadata<'static> {
+    let mut about = AboutMetadata { name: Some("music2".into()), ..Default::default() };
+    if !MAC {
+        about.version = Some(env!("CARGO_PKG_VERSION").into());
+        about.icon = app.default_window_icon().map(|i| i.clone().to_owned());
+    }
+    about
 }
 
 pub fn handle(app: &AppHandle, id: &str) {
@@ -151,7 +191,7 @@ mod tests {
 
     /// The accelerators that are native.
     fn accelerators() -> impl Iterator<Item = &'static str> {
-        ITEMS.iter().filter_map(|i| i.3).chain([CLOSE_WINDOW])
+        ITEMS.iter().filter_map(|i| i.2).chain([CLOSE_WINDOW])
     }
 
     /// taste.md §5.3: a native accelerator fires while typing, so every one is a ⌘ or ⌃ chord.
@@ -166,7 +206,7 @@ mod tests {
 
     #[test]
     fn no_two_items_share_an_id_or_an_accelerator() {
-        let ids: std::collections::BTreeSet<_> = ITEMS.iter().map(|i| i.1).collect();
+        let ids: std::collections::BTreeSet<_> = ITEMS.iter().map(|i| i.0).collect();
         assert_eq!(ids.len(), ITEMS.len());
         let accels: Vec<_> = accelerators().collect();
         let unique: std::collections::BTreeSet<_> = accels.iter().collect();
@@ -176,9 +216,61 @@ mod tests {
     /// Export moved off ⌘E (kept for Split, taste.md §5.1), and ⌘W is Close Song.
     #[test]
     fn export_is_shift_command_e_and_command_w_closes_the_song() {
-        let accel = |id: &str| ITEMS.iter().find(|i| i.1 == id).and_then(|i| i.3);
+        let accel = |id: &str| ITEMS.iter().find(|i| i.0 == id).and_then(|i| i.2);
         assert_eq!(accel("export"), Some("CmdOrCtrl+Shift+E"));
         assert_eq!(accel("close_song"), Some("CmdOrCtrl+W"));
         assert!(!accelerators().any(|a| a == "CmdOrCtrl+E"));
+    }
+
+    /// The items each menu bar holds, by id.
+    fn items(mac: bool) -> Vec<&'static str> {
+        layout(mac).into_iter().flat_map(|(_, rows)| rows).filter_map(|r| if let Row::Item(id) = r { Some(id) } else { None }).collect()
+    }
+
+    /// OS-54: every item is in both menu bars, once.
+    #[test]
+    fn every_item_is_on_each_menu_bar_once() {
+        for mac in [true, false] {
+            let mut on = items(mac);
+            on.sort_unstable();
+            let mut all: Vec<_> = ITEMS.iter().map(|i| i.0).collect();
+            all.sort_unstable();
+            assert_eq!(on, all, "mac: {mac}");
+        }
+    }
+
+    /// The Mac's menu bar as it was: the app menu first, a Window menu, Full Screen.
+    #[test]
+    fn the_mac_keeps_its_app_menu_and_window_menu() {
+        let bar = layout(true);
+        let names: Vec<_> = bar.iter().map(|m| m.0).collect();
+        assert_eq!(names, ["music2", "File", "Edit", "Track", "View", "Transport", "Window", "Help"]);
+        assert_eq!(bar[0].1.first(), Some(&Row::About));
+        assert_eq!(bar[0].1.last(), Some(&Row::Item("quit")));
+        assert!(bar[0].1.contains(&Row::Services) && bar[0].1.contains(&Row::Hide));
+        assert!(bar[2].1.contains(&Row::Copy) && bar[4].1.contains(&Row::FullScreen) && bar[6].1.contains(&Row::CloseWindow));
+    }
+
+    /// OS-54: off the Mac, no app menu; Quit ends File and About ends Help; and no row the system
+    /// greys out or that does nothing there (GTK supports only About and lines of its own).
+    #[test]
+    fn off_the_mac_quit_is_in_file_and_about_in_help() {
+        let bar = layout(false);
+        let names: Vec<_> = bar.iter().map(|m| m.0).collect();
+        assert_eq!(names, ["File", "Edit", "Track", "View", "Transport", "Help"]);
+        assert_eq!(bar[0].1.last(), Some(&Row::Item("quit")));
+        assert_eq!(bar[5].1.last(), Some(&Row::About));
+        for (menu, rows) in &bar {
+            for r in rows {
+                assert!(matches!(r, Row::Item(_) | Row::Line | Row::About), "{menu}: {r:?}");
+            }
+        }
+    }
+
+    /// OS-55: the reveal item names the Mac's Finder only on a Mac.
+    #[test]
+    fn the_reveal_item_says_finder_only_on_a_mac() {
+        let title = ITEMS.iter().find(|i| i.0 == "reveal").map(|i| i.1);
+        assert_eq!(title, Some(if cfg!(target_os = "macos") { "Show in Finder" } else { "Show in Folder" }));
     }
 }
