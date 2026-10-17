@@ -81,7 +81,7 @@ Status: design (2026-10-11), partly built. What exists is listed under [Implemen
 
 - **Song time** is measured in beats.
 - The **tempo map** converts beats to seconds. It is **timeline data**, not code, so time can never depend on the graph.
-- The core gives every module two read-only inputs: `time.beats` (`Control<Beats>`) and `time.seconds`. Both are song position (the transport clock), never engine time ([RENDER-7](architecture.md#live-engine-and-its-two-clocks)).
+- The core gives every module three read-only inputs: `time.beats` (`Control<"beats">`), `time.seconds` (`Control<"seconds">`), and `time.playing` (`Control<"unit01">`: 1 while the song plays, 0 while it is stopped). All three are song time (the transport clock), never engine time ([RENDER-7](architecture.md#live-engine-and-its-two-clocks)). A component's body reads them through `time` from `@m2/core`: std's chorus, phaser and tremolo step their LFOs only while `time.playing` is 1, so stopped they wait ([RENDER-6](architecture.md#live-engine-and-its-two-clocks)).
 - Derived clocks are meant to be ordinary standard-library functions of `time.beats`, such as `every("1/8")`, `swing(0.6)`, `div(3)` and `phase(...)`, so polyrhythm and swing need nothing special in the core. (They belong in `std/time`, which is **Not built yet**.)
 
 ### Signals
@@ -205,7 +205,7 @@ The IR is the compiled form of a song: a JSON graph of nodes. Every graph, howev
 | Op | Meaning |
 |---|---|
 | `lane` | a module's typed timeline input |
-| `time` | `beats` / `seconds` |
+| `time` | `beats` / `seconds` / `playing` |
 | `const` | a typed constant (a number with a unit, or an asset reference) |
 | `kernel` | an instance of a package kernel, with its port connections |
 | `poly` | maps a voice subgraph over `Events<Note>` and sums the results |
@@ -325,7 +325,7 @@ These live elsewhere on purpose:
 
 ## The standard library
 
-`std` is a set of ordinary packages, versioned separately from the app. Today it is one package in `std/`: one WebAssembly module with 29 kernels (`std/kernels/std.wasm`, built from `std/kernels-src`) and the TypeScript modules below (`std/src`).
+`std` is a set of ordinary packages, versioned separately from the app. Today it is one package in `std/`: one WebAssembly module with 36 kernels (`std/kernels/std.wasm`, built from `std/kernels-src`) and the TypeScript modules below (`std/src`).
 
 **Built:**
 
@@ -338,6 +338,9 @@ These live elsewhere on purpose:
 | `std/fx` | `duck`, `delay`, `drive`, `limit`, `reverb`, `chorus`, `phaser`, `tremolo`, `compress`, `eq3`, `bitcrush`, `widen` |
 | `std/mix` | `mixer` (channel gain and pan), `master` (a limiter) |
 | `std/instruments` | `bass`, `kick`, `hat`, `pluck`, `pad` |
+| `std/synth` | one polysynth: `synth.supersaw`, `lead`, `pad`, `pluck`, `sub`, `bass`, `strings`, `custom`; and `mono` |
+| `std/fm` | one FM synth: `fm.keys`, `bell`, `metal`, `custom` |
+| `std/drums` | an 808/909-style drum machine: `drums.kit`, and each drum alone: `kick`, `snare`, `clap`, `hats`, `tom`, `rim`, `cowbell`, `cymbal`, `shaker` |
 
 Seventeen of these are offered by the editor as effects (`[[effect]]` in `std/m2pkg.toml`): the four filters, the `std/fx` effects except `duck`, and `gain` and `pan`. Step 5 rewrites std on [component descriptors](architecture.md#component-descriptors), whose `editor` field replaces `[[effect]]`.
 
@@ -401,7 +404,7 @@ The real format is a little different. The `wasm` file is named once for the who
 ```toml
 [package]
 name = "std"
-version = "0.1.0"
+version = "0.2.0"
 wasm = "kernels/std.wasm"
 
 [[kernel]]
@@ -712,7 +715,7 @@ Agents may keep writing files directly: that is the save path, and every problem
 | Compiling, revisions, the graph view, edits (values, cables, effects, notes lanes, file saves) and undo | `core/session` (`m2-session`) |
 | CLAP plugin hosting | `core/plugins` (`m2-plugins`) |
 | Playback on the audio device | `core/play` (`m2-play`) |
-| The `std` package: manifest, 29 kernels, 17 effects, TypeScript modules | `std/` (kernels built with `std/build.sh`) |
+| The `std` package: manifest, 36 kernels, 17 effects, TypeScript modules | `std/` (kernels built with `std/build.sh`) |
 | CLI: 19 commands (`new`, `check`, `render`, `kernels`, `bounce`, `graph`, `controls`, `set`, `cables`, `connect`, `disconnect`, `effects`, `add-effect`, `remove-effect`, `relink`, `delete-data`, `fix`, `plugins`, `plugin-state`) | `apps/m2` |
 | The app's server: the open project and playback (`graph.rs`), the code editor's files (`files.rs`), new songs (`project.rs`), Export Audio (`export.rs`), the bundled resources (`resources.rs`), the `/api/graph` and `/api/project` routes | `crates/server` (`m2-server`) |
 | The desktop app and its UI: start screen, New Song dialog, timeline, graph, piano roll, code editor, effect browser, Export | `apps/music2-desktop`, `web/` |
@@ -734,10 +737,10 @@ Agents may keep writing files directly: that is the save path, and every problem
 - **Packages** must not import anything, must export the full ABI, and must report the runtime's ABI version.
 
 **Settled while building:**
-- `std` is **one package** whose modules are imported as `std/dsp`, `std/math`, `std/control`, `std/filter`, `std/fx`, `std/mix` and `std/instruments`. Kernel ids are `package:kernel`, e.g. `std:svf`.
+- `std` is **one package** whose modules are imported as `std/dsp`, `std/math`, `std/control`, `std/filter`, `std/fx`, `std/mix`, `std/instruments`, `std/synth`, `std/fm` and `std/drums`. Kernel ids are `package:kernel`, e.g. `std:svf`.
 - Units in TypeScript are functions (`hz(800)`), and plain numbers are untyped literals.
 - `feedback()` declares its kind up front (`feedback("audio<1>")`), and its input is given later with `.set()`.
-- Inside `poly`, a voice can read any signal from its module. Lanes, imports and `time` are always created at module level, so voices never contain them.
+- Inside `poly`, a voice can read any signal from its module. Lanes and imports are always created at module level, so voices never contain them. So is `time` read in a track's own code outside any `key()` frame. Read inside a component call or a `key()` frame, it is made in that frame, one node per frame, and a voice has its own (since the `sounds` merge: [WRITE-8](architecture.md#expectations-and-the-delta)).
 - The sandbox deletes `Date`, `performance`, `WeakRef` and `FinalizationRegistry`, makes `Math.random`, `eval` and the `Function` constructors throw, can only import project files, `@m2/core` and installed packages, and stops a build after 10 s or 256 MB.
 
 **Experiment: hosted plugins (CLAP), done.** `core/plugins` (`m2-plugins`) hosts CLAP plugins, tested with Surge XT, Surge XT Effects and Airwindows Consolidated:

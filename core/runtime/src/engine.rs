@@ -14,8 +14,8 @@
 //! anything that owns memory here (RENDER-28): what can't be retired yet waits in a fixed stash.
 //!
 //! Order: transport commands and panic apply as soon as they are read. Structural messages
-//! (activate, swap, hold) apply in strict order: one that can't apply yet waits at the head, and
-//! the one after it waits in the inbox. Activations never coalesce: each is prepared against the
+//! (activate, swap, hold, live notes) apply in strict order: one that can't apply yet waits at the
+//! head, and the one after it waits in the inbox. So a live note (MON-7) reaches the plan it names. Activations never coalesce: each is prepared against the
 //! plan before it (RENDER-28), and one that doesn't fit what plays is refused whole. A resume
 //! applies as soon as it is read too, as resuming never conflicts with an activation or a swap: it
 //! waits only behind the hold it ends, while that hold waits for a window to end.
@@ -30,7 +30,7 @@
 //! Cell values are never messages (RENDER-28): each renderer reads its own cells' slots as it
 //! renders a block, after the block line's messages, and the engine stamps when it heard them.
 
-use crate::{BLOCK, Cmd, LaneSwap, Leftovers, Pending, Renderer};
+use crate::{BLOCK, Cmd, LaneSwap, Leftovers, LiveEv, Pending, Renderer};
 
 /// A message and its sequence number, which [`Applied`] stamps report.
 pub struct Envelope {
@@ -55,6 +55,13 @@ pub enum Msg {
     Panic,
     /// Pause (true) for an export that borrows the live plugin instances, or resume (RENDER-1).
     Hold(bool),
+    /// A live note for lane `slot` of the renderer with this generation (MON-7). In order behind
+    /// activations, so the plan it names is the one playing when it applies.
+    Live {
+        generation: u64,
+        slot: u32,
+        ev: LiveEv,
+    },
 }
 
 impl Msg {
@@ -125,6 +132,8 @@ pub struct Status {
     pub generation: u64,
     pub loop_refused: bool,
     pub dropped_ons: u32,
+    /// Live notes held (MON-7).
+    pub live: u32,
     /// Held for an export: nothing was processed since its fade out ended, and nothing is until a
     /// resume (RENDER-1).
     pub held: bool,
@@ -153,6 +162,7 @@ pub struct Engine {
     crashes: u64,
     refused_swaps: u64,
     refused_activations: u64,
+    refused_live: u64,
     /// Retired objects forgotten for want of room: unreachable, as room is checked first.
     leaked: u64,
     /// Held or holding for an export: the output fades to silence and stays there (RENDER-1).
@@ -188,6 +198,7 @@ impl Engine {
             crashes: 0,
             refused_swaps: 0,
             refused_activations: 0,
+            refused_live: 0,
             leaked: 0,
             hold: false,
             level: fade_len(rate),
@@ -258,6 +269,12 @@ impl Engine {
         self.refused_activations
     }
 
+    /// Live notes refused (MON-7): for another plan than the one playing, for a slot or a note that
+    /// doesn't fit it, or an On while held for an export.
+    pub fn refused_live(&self) -> u64 {
+        self.refused_live
+    }
+
     /// Retired objects forgotten for want of room: 0, or memory leaked (RENDER-28).
     pub fn leaked(&self) -> u64 {
         self.leaked
@@ -294,6 +311,7 @@ impl Engine {
                 generation: r.generation(),
                 loop_refused: r.transport().loop_refused(),
                 dropped_ons: r.dropped_ons(),
+                live: r.live_notes() as u32,
                 held: self.is_held(),
             },
             None => Status { pos: self.pos, seconds, held: self.is_held(), ..Status::default() },
@@ -414,7 +432,8 @@ impl Engine {
         let ready = match &env.msg {
             Msg::Activate { .. } => !self.in_window() && self.stash_free() >= 3 && !self.hold,
             Msg::Hold(true) => !self.in_window(),
-            Msg::Hold(false) => true,
+            // Retires nothing, so it needs no room (M4).
+            Msg::Hold(false) | Msg::Live { .. } => true,
             _ => self.stash_room(),
         };
         if !ready {
@@ -460,6 +479,16 @@ impl Engine {
                     _ => data,
                 };
                 self.retire_now(Retired::Lane(back), retire);
+            }
+            Msg::Live { generation, slot, ev } => {
+                // Held for an export, nothing renders: an On would sound only once it ends, so it is
+                // refused. An Off or a release waits in its table for the resume (M4).
+                let late = self.hold && matches!(ev, LiveEv::On { .. });
+                let took = match &mut self.current {
+                    Some(r) if r.generation() == generation && !late => r.live(slot as usize, ev),
+                    _ => false,
+                };
+                self.refused_live += u64::from(!took);
             }
             Msg::Hold(true) => self.hold = true,
             Msg::Hold(false) => self.resume(),

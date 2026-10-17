@@ -32,6 +32,8 @@ pub mod timeline;
 pub mod tracks;
 pub mod value;
 pub mod view;
+pub mod mute;
+pub mod clips;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -76,6 +78,8 @@ pub struct Committed {
 pub enum EditError {
     /// No such control in that revision.
     NotFound(String),
+    /// Something the edit names isn't there: a sentence that says what, shown as it is.
+    Missing(String),
     /// The files changed since the edit's revision in a way that touches its target.
     /// List the controls again and retry.
     Stale {
@@ -100,6 +104,7 @@ impl std::fmt::Display for EditError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             EditError::NotFound(id) => write!(f, "no control `{id}` in that revision"),
+            EditError::Missing(what) => write!(f, "{what}"),
             EditError::Stale { current } => {
                 write!(f, "the code changed around this control; it is revision {current} now, list the controls again")
             }

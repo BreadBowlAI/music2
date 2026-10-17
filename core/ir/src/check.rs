@@ -142,6 +142,38 @@ pub struct Flat {
     /// A signal made inside a voice is in that voice's list. Empty when no sidechain input is
     /// used, and the same for the same code.
     pub sidechain: Vec<PortRef>,
+    /// Where monitoring mute and solo act (MON-1): every place a track's audio enters another
+    /// module, other than a sidechain input (MON-2), and the song's output when it reads a track.
+    /// In node order, the output last; the same for the same code. Every plan puts an overlay there.
+    pub overlays: Vec<OverlaySite>,
+    /// The tracks muted in the song (MON-5), by key, sorted: silent in every render.
+    pub muted: Vec<String>,
+}
+
+/// One place a track's audio enters another module (MON-1): where an overlay goes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OverlaySite {
+    /// The track whose audio it carries: its source's module.
+    pub module: String,
+    /// The module that reads it: its consumer's, or the root's for the song's output.
+    pub into: String,
+    /// What it reads.
+    pub src: PortRef,
+    pub consumer: Consumer,
+    /// The source's channels.
+    pub channels: u8,
+}
+
+/// Which input reads an overlay. The same cases as the runtime's edges.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Consumer {
+    /// A kernel's input, or a plugin's main audio input, by its place in the node's inputs.
+    Input { node: usize, input: u16 },
+    /// What a `poly`'s voices read from outside, by the capture's place in node order.
+    Capture { poly: usize, index: u16 },
+    Feedback { node: usize },
+    /// The song's output.
+    Out,
 }
 
 /// Check `ir` against the kernels available.
@@ -509,7 +541,105 @@ impl<'a> Checker<'a> {
         order.retain(|&i| reach[i]);
         let mut nodes = nodes;
         let sidechain = self.sidechains(ir, &mut nodes);
-        Some(Flat { nodes, order, out, out_kind, sidechain })
+        let overlays = self.overlays(ir, &nodes, &reach, out, out_kind);
+        let muted = self.muted(ir);
+        Some(Flat { nodes, order, out, out_kind, sidechain, overlays, muted })
+    }
+
+    /// The tracks muted in the song, sorted. `muted` only on a track: never on the root module,
+    /// which can't be muted (MON-1), nor on any other module, which no overlay would carry.
+    fn muted(&mut self, ir: &'a Ir) -> Vec<String> {
+        let mut muted = vec![];
+        for m in ir.modules.iter().filter(|m| m.muted) {
+            if m.key == ROOT {
+                self.diags.push(diag(m, None, format!("the root module `{ROOT}` can't be muted in the song; mute a track instead")));
+            } else if !m.track {
+                self.diags.push(diag(m, None, format!("`{}` isn't a track: only a track can be muted in the song", m.key)));
+            } else {
+                muted.push(m.key.clone());
+            }
+        }
+        muted.sort();
+        muted
+    }
+
+    /// The signals the sidechain inputs of the frames around `frame` received (PKG-13): what an
+    /// input made inside them reads without being heard, so no overlay acts on it (MON-2). Only
+    /// signals of the song's graph: one made in a voice never leaves its module.
+    fn side_sources(&self, m: &Module, frame: Option<u32>) -> Vec<PortRef> {
+        m.chain(frame).iter().flat_map(|f| &f.sidechain).filter_map(|s| self.resolve(&m.key, &s.source, 0).ok()).collect()
+    }
+
+    /// Where overlays go (MON-1): each input of a node the output reaches, and each capture of a
+    /// voice, that reads the audio of a track other than its own module, unless it is a sidechain
+    /// input (MON-2); then the song's output when it reads a track. A capture that a sidechain
+    /// input reads isn't one: the sidechain hears it unmuted.
+    fn overlays(&self, ir: &'a Ir, nodes: &[FNode], reach: &[bool], out: PortRef, out_kind: Kind) -> Vec<OverlaySite> {
+        let track = |m: &str| self.modules.get(m).is_some_and(|m| m.track);
+        let crosses = |p: PortRef, into: &str| {
+            let n = &nodes[p.node];
+            n.module != into && track(&n.module) && matches!(n.outputs.get(p.port), Some(Kind::Audio(_)))
+        };
+        let site = |p: PortRef, into: &str, consumer: Consumer| {
+            let channels = nodes[p.node].outputs[p.port].channels();
+            OverlaySite { module: nodes[p.node].module.clone(), into: into.to_string(), src: p, consumer, channels }
+        };
+        let mut sites = vec![];
+        for m in &ir.modules {
+            for n in &m.nodes {
+                let Some(&i) = self.slot_of.get(&(m.key.as_str(), n.id.as_str())) else { continue };
+                if !reach[i] {
+                    continue;
+                }
+                let into = m.key.as_str();
+                match &nodes[i].op {
+                    FOp::Kernel { inputs, .. } | FOp::Plugin { inputs, .. } => {
+                        // A plugin's audio inputs other than its main one are sidechain ports (PKG-13).
+                        let main = match &nodes[i].op {
+                            FOp::Plugin { plugin, .. } => self.kernels.plugin(plugin).and_then(|s| s.inputs.iter().position(|p| p.name == "in")),
+                            _ => None,
+                        };
+                        let side = self.side_sources(m, n.frame);
+                        let plugin = matches!(nodes[i].op, FOp::Plugin { .. });
+                        for (k, input) in inputs.iter().enumerate() {
+                            if let Input::Port { src, .. } = input
+                                && crosses(*src, into)
+                                && !side.contains(src)
+                                && (!plugin || main == Some(k))
+                            {
+                                sites.push(site(*src, into, Consumer::Input { node: i, input: k as u16 }));
+                            }
+                        }
+                    }
+                    FOp::Feedback { input, .. } => {
+                        if crosses(*input, into) && !self.side_sources(m, n.frame).contains(input) {
+                            sites.push(site(*input, into, Consumer::Feedback { node: i }));
+                        }
+                    }
+                    FOp::Poly { voice, .. } => {
+                        let Op::Poly { body, .. } = &n.op else { continue };
+                        let captures = voice.nodes.iter().enumerate().filter_map(|(j, v)| if let FOp::Capture(p) = v.op { Some((j, p)) } else { None });
+                        for (index, (j, p)) in captures.enumerate() {
+                            if !crosses(p, into) {
+                                continue;
+                            }
+                            // The voice's nodes are its body's, in order, then its captures.
+                            let heard_as_side = voice.nodes.iter().zip(&body.nodes).any(|(v, b)| {
+                                v.op.deps().contains(&j) || matches!(v.op, FOp::Feedback { input, .. } if input.node == j)
+                            } && self.side_sources(m, b.frame).contains(&p));
+                            if !heard_as_side {
+                                sites.push(site(p, into, Consumer::Capture { poly: i, index: index as u16 }));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if matches!(out_kind, Kind::Audio(_)) && crosses(out, ROOT) {
+            sites.push(site(out, ROOT, Consumer::Out));
+        }
+        sites
     }
 
     /// Resolve a ref in the module keyed `module` to a top-level node, following imports.
@@ -1001,6 +1131,10 @@ fn type_kernel(sig: &KernelSig, conns: &HashMap<&str, (PortRef, Kind)>, plugin: 
         .collect();
     Ok((inputs, channels, outs))
 }
+
+#[cfg(test)]
+#[path = "overlay_tests.rs"]
+mod overlay_tests;
 
 #[cfg(test)]
 mod tests {

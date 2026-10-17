@@ -6,6 +6,10 @@
 //! sounding note and seeks the cursor; notes already sounding at the target are not chased
 //! (RENDER-11). A swap ([`NoteScheduler::swap`]) keeps the sounding notes the new data still
 //! has, reschedules their offs, and ends the rest.
+//!
+//! A scheduler also holds the notes played on its lane live (MON-7): audition today. They aren't
+//! in the data. Each is sent at a block's first frame, and ends only by its Off, its source's
+//! release or a panic: a jump or a swap never touches them.
 
 use std::sync::Arc;
 
@@ -193,6 +197,37 @@ struct Sounding {
     ord: u16,
 }
 
+/// Live notes one lane holds at once (MON-7): more than two hands, few enough to scan each block.
+pub const LIVE: usize = 16;
+/// Its table's room: as many again let go whose Offs wait for the next block, so a key let go and
+/// another struck at one block line never refuse each other. Each sends at most one event a block,
+/// and a consumer holds no more of them.
+pub const LIVE_ROOM: usize = 2 * LIVE;
+
+/// A note played on a lane live, not from its data (MON-7): audition today, a MIDI keyboard
+/// later. Each belongs to a source (a window), which names its own notes by handle.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LiveEv {
+    On { source: u32, handle: u32, pitch: f32, velocity: f32 },
+    Off { source: u32, handle: u32 },
+    /// Every note of the source, on every lane.
+    Release { source: u32 },
+}
+
+/// A live note the scheduler holds, from its On until its Off is sent.
+#[derive(Clone, Copy, Debug)]
+struct LiveNote {
+    source: u32,
+    handle: u32,
+    id: u32,
+    pitch: f32,
+    velocity: f32,
+    /// Its On waits for the next block.
+    on: bool,
+    /// It was let go: its Off waits for the next block.
+    off: bool,
+}
+
 pub struct NoteScheduler {
     data: Arc<NotesData>,
     /// The next note to turn on.
@@ -202,10 +237,12 @@ pub struct NoteScheduler {
     swapped: bool,
     events: Events,
     caps: Caps,
+    /// Notes played live (MON-7). Boxed: a lane slot stays small.
+    live: Box<[Option<LiveNote>; LIVE_ROOM]>,
 }
 
 impl NoteScheduler {
-    /// A scheduler with room for `data` and at least [`Caps::FLOOR`].
+    /// A scheduler with room for `data` and at least [`Caps::FLOOR`], and for live notes.
     pub fn new(data: Arc<NotesData>) -> NoteScheduler {
         let caps = data.needs.max(Caps::FLOOR);
         NoteScheduler {
@@ -213,8 +250,9 @@ impl NoteScheduler {
             cursor: 0,
             sounding: Vec::with_capacity(caps.sounding),
             swapped: false,
-            events: Events::with_capacity(caps.events()),
+            events: Events::with_capacity(caps.events() + LIVE_ROOM),
             caps,
+            live: Box::new([None; LIVE_ROOM]),
         }
     }
 
@@ -231,14 +269,69 @@ impl NoteScheduler {
         self.sounding.len()
     }
 
-    /// Whether note `id` is sounding.
+    /// Whether note `id` is sounding: one of its data's, or one played live.
     pub fn is_sounding(&self, id: u32) -> bool {
-        self.sounding.iter().any(|s| s.id == id)
+        self.sounding.iter().any(|s| s.id == id) || self.live.iter().flatten().any(|n| n.id == id)
+    }
+
+    /// Live notes held: struck, and their Off not yet sent (MON-7).
+    pub fn live_held(&self) -> usize {
+        self.live.iter().flatten().count()
+    }
+
+    /// Take a live note's On or Off, or its source's release (MON-7), sent at the next block's
+    /// first frame. A struck note takes the id `next` holds: the engine's, so a live note's id never
+    /// meets a scheduled one's. A key struck again before its Off ends first. With [`LIVE`] notes
+    /// held, an On is refused and counted with the dropped Ons. Never allocates.
+    pub(crate) fn live(&mut self, ev: LiveEv, next: &mut u32) {
+        match ev {
+            LiveEv::On { source, handle, pitch, velocity } => {
+                self.end_live(|n| n.source == source && n.handle == handle);
+                let held = self.live.iter().flatten().filter(|n| !n.off).count();
+                match self.live.iter_mut().find(|n| n.is_none()).filter(|_| held < LIVE) {
+                    Some(free) => {
+                        let id = *next;
+                        *next = next.checked_add(1).unwrap_or(1);
+                        *free = Some(LiveNote { source, handle, id, pitch, velocity, on: true, off: false });
+                    }
+                    None => self.events.drop_on(),
+                }
+            }
+            LiveEv::Off { source, handle } => self.end_live(|n| n.source == source && n.handle == handle),
+            LiveEv::Release { source } => self.end_live(|n| n.source == source),
+        }
+    }
+
+    /// Let go of the live notes `which` picks.
+    fn end_live(&mut self, which: impl Fn(&LiveNote) -> bool) {
+        for n in self.live.iter_mut().flatten().filter(|n| !n.off && which(n)) {
+            n.off = true;
+        }
+    }
+
+    /// This block's live events, at its first frame: the On of each note struck since the last
+    /// block, and the Off of each let go. One struck and let go since then sends its On now and its
+    /// Off at the next block: at one frame an Off sorts first, and would leave the note on.
+    fn send_live(&mut self) {
+        let Self { live, events, .. } = self;
+        for slot in live.iter_mut() {
+            let Some(n) = slot else { continue };
+            if n.on {
+                n.on = false;
+                events.push(Event::On { frame: 0, id: n.id, pitch: n.pitch, velocity: n.velocity, from_pitch: None });
+            } else if n.off {
+                events.push(Event::Off { frame: 0, id: n.id, velocity: 0.0 });
+                *slot = None;
+            }
+        }
     }
 
     /// The pitch and velocity of note `id` while it sounds, as its data has them now: what starts
     /// it again in a plugin an export borrowed (RENDER-1). Never allocates.
     pub(crate) fn sounding_note(&self, id: u32) -> Option<(f32, f32)> {
+        if let Some(n) = self.live.iter().flatten().find(|n| n.id == id) {
+            return Some((n.pitch, n.velocity));
+        }
         let s = self.sounding.iter().find(|s| s.id == id)?;
         let i = *self.data.group(&s.key).get(s.ord as usize)?;
         let n = &self.data.notes[i as usize];
@@ -247,9 +340,10 @@ impl NoteScheduler {
 
     /// Take over the notes `small` turned on and hasn't turned off, with their ids: this scheduler
     /// replaces it on its lane at an activation, sized for data that outgrew it (RENDER-26a). At its
-    /// first block they are matched against this scheduler's data as a swap's are. Never allocates:
-    /// it is the bigger of the two.
+    /// first block they are matched against this scheduler's data as a swap's are. Its live notes
+    /// come as they are (MON-7). Never allocates: it is the bigger of the two.
     pub(crate) fn take_state(&mut self, small: &NoteScheduler) {
+        *self.live = *small.live;
         for s in &small.sounding {
             if self.sounding.len() == self.sounding.capacity() {
                 debug_assert!(false, "a grown scheduler has less room than the one it replaces");
@@ -271,19 +365,22 @@ impl NoteScheduler {
     }
 
     /// Back to the state after building, without Offs: the voices they would reach were reset.
-    /// Ids are the engine's, so none is reused.
+    /// Live notes end too (a panic, A10). Ids are the engine's, so none is reused.
     pub fn reset(&mut self) {
         self.cursor = 0;
         self.sounding.clear();
+        *self.live = [None; LIVE_ROOM];
         self.swapped = false;
         self.events.clear();
     }
 
     /// Fill this block's events for `runs`, giving each note it starts the id `next` holds and
-    /// counting it on: the engine's, so ids never repeat across lanes or plans (RENDER-26a). Never
-    /// allocates.
+    /// counting it on: the engine's, so ids never repeat across lanes or plans (RENDER-26a). Live
+    /// notes come first, at frame 0, whether the transport moves or not; a jump never ends them
+    /// (MON-7). Never allocates.
     pub fn run(&mut self, runs: &Runs, next: &mut u32) {
         self.events.clear();
+        self.send_live();
         for (i, run) in runs.as_slice().iter().enumerate() {
             if run.jump != Jump::None {
                 // RENDER-9: a jump ends every sounding note, and the cursor seeks. A plan's first

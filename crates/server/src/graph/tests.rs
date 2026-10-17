@@ -6,7 +6,7 @@ use m2_play::{DeviceErrorKind, Driver};
 use super::*;
 use m2_editor::Gestures;
 
-const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n";
+const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.2\"\n";
 
 pub(super) struct Fixture(pub(super) PathBuf);
 
@@ -404,7 +404,12 @@ fn the_published_timeline_is_the_sessions_and_shares_what_didnt_change() {
     let graph = fixture.open();
     let same = |graph: &Graph| {
         let session = graph.inspect(|a| serde_json::to_value(a.open.as_ref().unwrap().session.timeline()).unwrap());
-        assert_eq!(graph.state().unwrap()["timeline"], session, "the published timeline is the session's");
+        // The published one also gives each clip its hash (8b.5).
+        let mut published = graph.state().unwrap()["timeline"].clone();
+        for c in published["tracks"].as_array_mut().unwrap().iter_mut().flat_map(|t| t["lanes"].as_array_mut().unwrap()) {
+            c["clips"].as_array_mut().unwrap().iter_mut().for_each(|c| drop(c.as_object_mut().unwrap().remove("sha")));
+        }
+        assert_eq!(published, session, "the published timeline is the session's");
     };
     let lane = |graph: &Graph, module: &str| {
         let cp = graph.inner.control.lock();
@@ -458,17 +463,17 @@ fn a_track_renamed_and_a_knob_automated_play_and_undo() {
 
     let revision = revision + 1;
     let automated = graph.automate(token, revision, &id).unwrap();
-    assert_eq!((&automated["lane"], &automated["name"]), (&json!({"module": "tone", "lane": "sine-freq"}), &json!("sine freq")));
-    let written = "track('tone', { name: \"Lead Tone\" }, ({ lane }) => osc.sine(lane.control(\"sine-freq\", \"hz\", hz(800))))";
+    assert_eq!((&automated["lane"], &automated["name"]), (&json!({"module": "tone", "lane": "freq"}), &json!("freq")));
+    let written = "track('tone', { name: \"Lead Tone\" }, ({ lane }) => osc.sine(lane.control(\"freq\", \"hz\", hz(800))))";
     assert!(fixture.read("song.ts").contains(written));
     let lane = &tracks(&graph)["lanes"][0];
     let shown = (&lane["kind"], &lane["key"], &lane["default"], &lane["clips"]);
-    assert_eq!(shown, (&json!("control"), &json!("sine-freq"), &json!(800.0), &json!([])));
+    assert_eq!(shown, (&json!("control"), &json!("freq"), &json!(800.0), &json!([])));
     assert!(synced(&graph), "the player plays the automated song");
     assert!(graph.automate(token, revision, &id).is_err(), "the knob is a lane now");
 
     graph.undo(token).unwrap();
-    assert!(!fixture.0.join("data/tone/sine-freq.json").exists() && synced(&graph));
+    assert!(!fixture.0.join("data/tone/freq.json").exists() && synced(&graph));
     graph.undo(token).unwrap();
     assert_eq!(tracks(&graph)["label"], "tone");
     assert!(fixture.read("song.ts").contains("track('tone', () => osc.sine(hz(800)))"));

@@ -512,7 +512,10 @@ fn stopped_the_effects_wait_and_play_on_where_they_were() {
     let pause = 20_003;
     for fx in ALL.iter().filter(|fx| FOLLOW.contains(&fx.name)) {
         for channels in [1, 2] {
-            for pre in [0, 30_000] {
+            // The bitcrusher's clock steps by exactly 1/4 here (12 kHz on 48 kHz), so a stop after
+            // a whole number of 4 samples finds it at 1, where it starts: putting back 1 at Play
+            // couldn't be told from putting back where it was. 30 001 stops it at 1.25.
+            for pre in [0, 30_000, 30_001] {
                 let straight = stopped(fx, channels, pre, 0, 1.0);
                 let free = stopped(fx, channels, pre, pause, 1.0);
                 assert!(free[pre + pause..] != straight[pre..], "{}: what its LFO did while stopped can't be heard", fx.name);
@@ -523,6 +526,43 @@ fn stopped_the_effects_wait_and_play_on_where_they_were() {
                     assert_eq!(diff, None, "{} ({channels} ch), after {pre} samples, stopped with playing {wait}", fx.name);
                 }
             }
+        }
+    }
+}
+
+// Stopped, the bitcrusher's clock runs on, so a tail is still crushed: bit for bit as if the song
+// played, a new held sample every period of its rate. A clock that waited would hold one sample,
+// a DC level. Fresh and stopped from the start, or stopped after playing.
+#[test]
+fn stopped_the_bitcrusher_still_crushes() {
+    let fx = ALL.iter().find(|fx| fx.name == "bitcrush").unwrap();
+    let n = fx.controls.len();
+    // 12 kHz on 48 kHz, all wet: a new held sample every 4 samples.
+    assert_eq!(fx.controls[1..3], [12_000.0, 1.0]);
+    for channels in [1, 2] {
+        for pre in [0, 30_001] {
+            let stop = pre..pre + 20_003;
+            let run = |wait: f32| {
+                (fx.run)(channels, stop.end + 1_000, BLOCK, &|p, c, t| {
+                    if p == 0 {
+                        noise(c, t)
+                    } else if p == n && stop.contains(&t) {
+                        wait
+                    } else {
+                        fx.controls[p - 1]
+                    }
+                })
+            };
+            let (playing, out) = (run(1.0), run(0.0));
+            let diff = out[stop.clone()].iter().zip(&playing[stop.clone()]).position(|(a, b)| a.map(f32::to_bits) != b.map(f32::to_bits));
+            assert_eq!(diff.map(|i| pre + i), None, "bitcrush ({channels} ch), stopped after {pre} samples: not crushed as while playing");
+            // And that is not one held value: with silence in, it would be, and this test would see nothing.
+            let changes = out[stop.clone()].windows(2).filter(|w| w[0] != w[1]).count();
+            assert!(
+                changes >= stop.len() / 4 * 9 / 10,
+                "bitcrush ({channels} ch), stopped after {pre} samples: {changes} new values in {}",
+                stop.len()
+            );
         }
     }
 }

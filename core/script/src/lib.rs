@@ -44,7 +44,7 @@ pub const SDK: &str = include_str!("../sdk/core.ts");
 
 /// The version of `@m2/core` that [`SDK`] is. A project's `[dependencies] "@m2/core"`
 /// requirement is checked against it (FMT-2, FMT-3).
-pub const SDK_VERSION: &str = "1.1.0";
+pub const SDK_VERSION: &str = "1.2.0";
 
 const CORE: &str = "@m2/core";
 
@@ -1015,5 +1015,7 @@ fn frame_at(line: &str) -> Option<String> {
     (c.parse::<u32>().is_ok() && l.parse::<u32>().is_ok()).then(|| format!("{f}:{l}:{c}"))
 }
 
+#[cfg(test)]
+mod mute_tests;
 #[cfg(test)]
 mod tests;

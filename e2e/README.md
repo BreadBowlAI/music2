@@ -63,15 +63,17 @@ they started, which suites compare edits against.
 
 ## Byte-identity of renders
 
-`baseline.sh` renders the pure fixtures (full renders of `examples/first-song`, `examples/resample`,
-`templates/starter`, `templates/empty`, and `--from 4 --seconds 6` of each) into a folder with a
-`SHA256SUMS`:
+`baseline.sh` renders the pure fixtures, ten renders in all (full renders of `examples/first-song`,
+`examples/resample`, `examples/sounds`, `templates/starter`, `templates/empty`, and `--from 4 --seconds 6`
+of each) into a folder with a `SHA256SUMS`:
 
 ```sh
 e2e/baseline.sh 933f4de /tmp/base-head          # builds m2 at that commit in a temporary worktree
 e2e/baseline.sh --tree . /tmp/base-now          # the working tree as it is
 diff /tmp/base-head/SHA256SUMS /tmp/base-now/SHA256SUMS
 ```
+
+A commit from before the `sounds` merge has no `examples/sounds`: the script skips it and says so.
 
 `renders.sha256` is the one record every OS must match (PLAT-4); `ci/check.sh` renders with
 `baseline.sh` and checks against it (`cd <out> && shasum -a 256 -c <repo>/e2e/renders.sha256`).

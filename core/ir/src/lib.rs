@@ -26,7 +26,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-pub use check::{Flat, FNode, FOp, Input, NoteField, PortRef, Voice, check};
+pub use check::{Consumer, Flat, FNode, FOp, Input, NoteField, OverlaySite, PortRef, Voice, check};
 pub use kind::{EventType, Kind, PortKind, Unit};
 pub use sig::{KernelSig, Kernels, PortSig};
 
@@ -59,6 +59,10 @@ pub struct Module {
     /// Whether the module is a track (has rows on the timeline). A host convention.
     #[serde(default)]
     pub track: bool,
+    /// Mute in song (MON-5): the track is silent in every render, its sidechain uses aside. Only a
+    /// track has it. Written only when set, so an IR without it keeps its JSON and hash (ID-11).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub muted: bool,
     #[serde(default)]
     pub lanes: Vec<LaneDecl>,
     pub nodes: Vec<Node>,

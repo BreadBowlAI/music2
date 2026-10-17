@@ -1356,9 +1356,30 @@ Only the Mac's run decides. What we know:
 - If it still fails: cut 3 (one Store per voice pool, about −118 µs a callback more on Linux) goes to the
   owner, as it changes RENDER-32's words.
 
+### The Mac run (2026-10-17)
+
+The owner's `ci/check.sh` at `cbac57c` on MacBookPro18,1 (macOS 26.6.2): `music2 check: PASS`, every row on the
+first run (901 Rust tests, 29/29 browser suites, 8 of 8 renders, the old engine S built there for the first time,
+the 6 gate runs). G7f against the estimate above:
+
+| | Estimate | The Mac | Bound |
+|---|---|---|---|
+| A block, the app's layout over S, by the mean | about +30 µs (likely +10 to +60) | −19 µs (5 pairs, −89 to +13) | 80 |
+| A callback, the same | about +110 µs (likely +30 to +220) | −196 µs (5 pairs, −633 to +298) | 320 |
+| A callback, P1 over S (step 7's own cost) | −140 to −10 µs | −347 µs | printed |
+| A callback, the app's layout over P1 (O1's cost) | +150 to +230 µs | −96 µs | printed |
+
+- Both came in under the estimate's low end. O1 read −96 µs a callback over P1 (5 pairs, −214 to +438), where
+  the old turns had +141; one run can't say more than that it costs little.
+- The starting line read −184 µs a callback, past HANDOFF's −100: S's starts lasted longer on the Mac than half a
+  second covers, so the verdict leans about 90 µs the app's way. That still leaves about 400 µs to the bound.
+- S measured 10,169 µs a callback, 14% over its record of 8,936 (2026-10-14). Why is not known: the Mac may have
+  run slower that night, or S's runner may play slower than S did in the app. The turns are paired, so both sides
+  ran under the same conditions. No second run was asked for, as the verdict is far from its bound.
+
 ### Left, and why
 
-- The Mac run: only it judges G7f.
+- The Mac run: done, green at `cbac57c` (above). Its by-ear steps (HANDOFF 7 to 17) are still owed.
 - Cut 3 and cut 4: held, as above. Cut 2: dropped (`~/m2-runs/speed/build/cut2.diff`).
 - The method's per-process error (the A/A table): G7f could start every side in a fresh process each
   round, so the median samples 5 placements. Not done: it needs a runner for HEAD's engine too, a bigger

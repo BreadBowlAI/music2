@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use m2_ir::{Kind, Module};
-use m2_script::sites::Site;
+use m2_script::sites::{Arg, Site};
 use m2_session::Session;
 use m2_song::tx::{Confined, Declared as Ranges, Expect, Op, Payload, Range, TxPath};
 use m2_song::{DataPath, Key, LaneAddr, LaneData, ROOT};
@@ -32,29 +32,33 @@ pub struct Automated {
     pub edited: Edited,
 }
 
-/// What `c`, a value of module `m`, is called: a dictionary entry's control by its entry and
-/// control (`channels.hats.pan` is `hats pan`), else the call's binding and the control (`lead
-/// cutoff`), else the component and the control (`bass cutoff`). A value no control declares is
-/// named by its call.
-fn name_of(c: &Control, m: &Module, sites: &[Site]) -> String {
+/// What `c`, a value of module `m`, is called, in words, and what goes in front of that when its
+/// lane's key clashes (D6, M7): a declared control by its label (`decay`), in front of which goes
+/// the call's binding, else its component (`pad decay`); a dictionary entry's control by its entry
+/// and control (`channels.hats.pan` is `hats pan`). A value no control declares is named by its
+/// call's binding (or callee) and its argument.
+fn name_of(c: &Control, m: &Module, sites: &[Site]) -> (String, Option<String>) {
     let site_of = |id: u32| sites.iter().find(|s| s.id == id);
     let Some(slot) = c.origin.control.as_ref() else {
         let call = site_of(c.origin.site);
         let by = call.and_then(|s| s.binding.clone()).or_else(|| call.map(|s| s.callee.replace('.', " "))).unwrap_or_default();
         let last = c.origin.arg.last().filter(|a| a.parse::<usize>().is_err());
-        return [Some(by), last.cloned()].into_iter().flatten().collect::<Vec<_>>().join(" ");
+        return ([Some(by), last.cloned()].into_iter().flatten().collect::<Vec<_>>().join(" "), None);
     };
     if let [_, entry, control] = slot.slot.split('.').collect::<Vec<_>>()[..] {
-        return format!("{entry} {control}");
+        return (format!("{entry} {control}"), None);
     }
     let frame = m.frames.get(slot.frame as usize);
     let binding = frame.and_then(|f| site_of(f.site)).and_then(|s| s.binding.clone());
     let component = frame.and_then(|f| f.component.as_deref()).map(|c| c.rsplit(':').next().unwrap_or(c).to_string());
     let label = c.declared.iter().find(|d| d.slot == slot.slot).map_or(slot.slot.as_str(), |d| d.label.as_str());
-    match binding.or(component) {
-        Some(by) => format!("{by} {label}"),
-        None => label.to_string(),
-    }
+    (label.to_string(), binding.or(component))
+}
+
+/// `words` as a lane shows them: the first letter a capital (`Decay`, `Hats pan`).
+fn sentence(words: &str) -> String {
+    let mut chars = words.chars();
+    chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default()
 }
 
 /// The call that made module `m`: its `track()`, or for the root its `song()`.
@@ -131,23 +135,36 @@ pub fn automate(s: &mut Session, at: u64, id: &str) -> Result<Automated, EditErr
     };
 
     // The lane's key: from the knob's name, free among the module's lanes and its files in any
-    // capitals (ID-2).
-    let name = name_of(&c, m, &rev.compiled.sites);
+    // capitals (ID-2). On a clash, the call's binding goes in front, then a number (D6).
+    let (mut name, prefix) = name_of(&c, m, &rev.compiled.sites);
     let module = Key::new(&m.key).map_err(EditError::Rejected)?;
     let taken = |k: &str| {
         let Ok(lane) = Key::new(k) else { return true };
         m.lanes.iter().any(|l| l.key == k)
             || rev.snapshot.taken(&DataPath::lane(&LaneAddr { module: module.clone(), lane }).path()).is_some()
     };
-    let key = match keys::propose(&name, taken) {
-        k if k.is_empty() => keys::propose("lane", taken),
-        k => k,
+    let own = keys::propose(&name, |_| false);
+    let key = match prefix {
+        _ if !own.is_empty() && !taken(&own) => own,
+        Some(p) => {
+            name = format!("{p} {name}");
+            keys::propose(&name, taken)
+        }
+        None => keys::propose(&name, taken),
     };
+    let key = if key.is_empty() { keys::propose("lane", taken) } else { key };
     let addr = LaneAddr { module: module.clone(), lane: Key::new(&key).map_err(EditError::Rejected)? };
+    // The lane shows its key as words (`decay` as "Decay"): the code names it only when that isn't
+    // what the knob is called.
+    let shown = sentence(&name);
+    let named = match sentence(&key.replace('-', " ")) == shown {
+        true => String::new(),
+        false => format!(", {{ name: {} }}", json(&shown)),
+    };
 
     // The value's expression becomes the lane's fallback, as written; an inherited control's
     // default is written into its call as `disconnect` spells it.
-    let read = |fallback: &str| format!("{lane_of}.control({}, {}, {fallback})", json(&key), json(unit.name()));
+    let read = |fallback: &str| format!("{lane_of}.control({}, {}, {fallback}{named})", json(&key), json(unit.name()));
     let mut edits: Vec<(u32, u32, String)> = vec![];
     let mut ranges: Vec<(u32, u32)> = vec![];
     let expression = match c.expression() {
@@ -201,6 +218,114 @@ pub fn automate(s: &mut Session, at: u64, id: &str) -> Result<Automated, EditErr
     })?;
     let edited = Edited { revision: done.number, file: at_file, before: label.0, after: label.1 };
     Ok(Automated { lane: addr, name, edited })
+}
+
+/// Remove automation, the inverse of [`automate`] (HOME-2): the read of control lane `lane` of
+/// `module` (`lane.control("cutoff", "hz", hz(500))`) becomes a literal of what the lane plays at
+/// `beat`, the playhead (its fallback, as written, when none), spelled as its fallback is; and the
+/// lane's file goes. One `Confined` Tx on the read's range and the lane; undo puts both back. The
+/// track function keeps its `lane` parameter. Refused for a lane that isn't automation, or that
+/// isn't read in exactly one place in the project's own code.
+pub fn remove(s: &mut Session, module: &str, lane: &str, beat: Option<f64>) -> Result<Edited, EditError> {
+    ready(s)?;
+    if beat.is_some_and(|b| !b.is_finite()) {
+        return Err(EditError::Rejected("The playhead's beat must be a number.".into()));
+    }
+    let rev = s.accepted();
+    let m = rev.compiled.ir.modules.iter().find(|m| m.key == module);
+    let m = m.ok_or_else(|| EditError::Missing(format!("There's no track `{module}`.")))?;
+    let decl = m.lanes.iter().find(|l| l.key == lane).ok_or_else(|| EditError::Missing(format!("{} has no lane `{lane}`.", m.label())))?;
+    let name = decl.label().to_string();
+    let Kind::Control(unit) = decl.kind else {
+        return Err(EditError::Rejected(format!("{}'s {name} lane isn't an automation lane, so it has no value to put back.", m.label())));
+    };
+    // Where the code reads it: one call, in the project's own files.
+    let mut at = BTreeSet::new();
+    crate::controls::walk(&m.nodes, &mut |n| {
+        if let (m2_ir::Op::Lane { lane: l }, Some(o)) = (&n.op, &n.origin)
+            && l == lane
+        {
+            at.insert(o.site);
+        }
+    });
+    let calls: Vec<&Site> = at.iter().filter_map(|id| rev.compiled.sites.iter().find(|x| x.id == *id)).collect();
+    let site = match calls[..] {
+        [one] if one.in_project => one.clone(),
+        [] | [_] => return Err(EditError::Rejected(format!("{name} isn't read in this song's own code; take the automation out where it is read."))),
+        _ => return Err(EditError::Rejected(format!("{name} is read in {} places; take the automation out in the code.", calls.len()))),
+    };
+    let text = rev.snapshot.files[Path::new(&site.file)].clone();
+    let fallback = site.args.get(2).filter(|_| site.callee.ends_with("control")).map(|a| a.span());
+    let units = &rev.compiled.units;
+    let ctor_of = |span: (u32, u32)| {
+        let call = rev.compiled.sites.iter().find(|x| x.file == site.file && (x.start, x.end) == span)?;
+        units.iter().find(|u| u.name == call.callee && Some(u.unit) == unit)
+    };
+    // What it plays there, in the fallback's spelling (`hz(1250)`, `khz(1.25)`, `0.3`), else in
+    // the unit's own, imported when it isn't yet.
+    let (literal, import) = match (beat, fallback) {
+        (None, Some((a, b))) => (text[a as usize..b as usize].to_string(), None),
+        (beat, fallback) => {
+            let v = match beat {
+                Some(b) => rev.compiled.data.control(module, lane).value_at(b, decl.default.unwrap_or(0.0)),
+                None => decl.default.unwrap_or(0.0),
+            };
+            match fallback.and_then(ctor_of) {
+                Some(c) => (format!("{}({})", c.name, number(v / c.scale)), None),
+                None if fallback.is_some_and(|(a, b)| text[a as usize..b as usize].parse::<f64>().is_ok()) => (number(v), None),
+                None => match unit.and_then(|u| units.iter().find(|c| c.unit == u && c.canonical)) {
+                    Some(c) => {
+                        let d = m2_script::component::Spelled { value: v, spelled: Some(c.name.clone()), written: v / c.scale };
+                        spelled(&d, &imported_names(&text, "@m2/core"), units)
+                    }
+                    None => (number(v), None),
+                },
+            }
+        }
+    };
+    let mut edits = vec![(site.start, site.end, literal.clone())];
+    let mut ranges = vec![(site.start, site.end)];
+    // A read bound to a `const` (`const drop = lane.mask("drop")`) is used by its name, and a plain
+    // number written in its place is made where a call reads that name (PKG-3): those names are
+    // where the graph may change too. Nothing is written there.
+    if let Some(b) = site.binding.as_ref().filter(|_| site.constant) {
+        fn uses(a: &Arg, name: &str, out: &mut Vec<(u32, u32)>) {
+            match a {
+                Arg::Name { start, end, name: n } if n == name => out.push((*start, *end)),
+                Arg::Object { props, .. } => props.iter().for_each(|(_, a)| uses(a, name, out)),
+                _ => {}
+            }
+        }
+        for x in rev.compiled.sites.iter().filter(|x| x.file == site.file) {
+            x.args.iter().for_each(|a| uses(a, b, &mut ranges));
+        }
+    }
+    if let Some((at, line)) = import.and_then(|n| import_insertion(&text, "@m2/core", &n)) {
+        edits.push((at, at, line));
+        ranges.push((at, at));
+    }
+    edits.sort_by_key(|e| e.0);
+    let addr = LaneAddr::new(module, lane).map_err(EditError::Rejected)?;
+    let file = path(&site.file)?;
+    let mut ops = vec![plan::text_edit(&file, &text, &edits)];
+    if rev.snapshot.files.contains_key(&DataPath::lane(&addr).path()) {
+        ops.push(Op::Remove { file: TxPath::lane(&addr) });
+    }
+    let declared = Ranges::Ranges(ranges.iter().map(|&(a, b)| Range::bytes(a, b)).collect());
+    let expect = Expect::Confined(Confined { ranges: [(file, declared)].into(), lanes: vec![addr.clone()], modules: vec![] });
+    let label = (format!("{name} automated"), format!("{name} {literal}"));
+    let tx = plan::planned(s, label.clone(), ops, expect);
+    let said = |why: &str| EditError::Rejected(format!("taking out the {name} automation would change more than its lane ({why})"));
+    let done = plan::run_as(s, tx, said, |s, checked| {
+        plan::unmoved(s, checked)?;
+        // The planner's assertion: the module no longer declares the lane.
+        let candidate = &checked.candidate().compiled;
+        match candidate.ir.modules.iter().find(|x| x.key == module).is_some_and(|x| x.lanes.iter().any(|l| l.key == lane)) {
+            true => Err(EditError::Rejected(format!("the {name} lane would still be read"))),
+            false => Ok(()),
+        }
+    })?;
+    Ok(Edited { revision: done.number, file: site.file.clone(), before: label.0, after: label.1 })
 }
 
 /// `s` as a JSON string, which is a TypeScript string.

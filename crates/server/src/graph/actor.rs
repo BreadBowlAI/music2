@@ -224,6 +224,8 @@ fn value_writes(old: &Flat, new: &Flat) -> Option<Vec<(CellId, f64)>> {
                 n.op = FOp::Const(c.value);
             }
         }
+        // Mute in song is the overlays' cells, not the graph's (MON-5).
+        f.muted.clear();
         for n in &mut f.nodes {
             (n.src, n.origin) = (None, None);
             if let FOp::Poly { voice, .. } = &mut n.op {
@@ -261,7 +263,10 @@ pub(super) struct Reach {
 /// asset a clip plays, the arrangement, an audio lane), keeping every instance that continues.
 pub(super) fn reach_to(from: &Revision, info: &PlanInfo, to: &Revision) -> Option<Reach> {
     let d = m2_session::tx::delta_between(from, to);
-    if d.structural() || !d.states.is_empty() || !d.assets.is_empty() || d.arrangement {
+    // A module muted or unmuted in the song is overlay cells (MON-5, A1): what plays takes it.
+    let nodes = !(d.added.is_empty() && d.removed.is_empty() && d.rewired.is_empty());
+    let modules = d.modules.iter().any(|m| !matches!(m, m2_song::tx::ModuleChange::Muted { .. }));
+    if nodes || modules || !d.states.is_empty() || !d.assets.is_empty() || d.arrangement {
         return None;
     }
     // The same build plays the same constants: nothing to compare.
@@ -695,7 +700,7 @@ impl Open {
                             (TimelineLane::Audio { clips, .. }, Clips::Audio(c)) => *clips = c,
                             _ => unreachable!("taken from this lane"),
                         }
-                        Arc::new(value(&lane))
+                        Arc::new(m2_editor::clips::with_sha(value(&lane), shown.as_deref()))
                     }
                 };
                 super::TimelineLaneJson { key, data: shown, head: rest, json }
@@ -792,9 +797,32 @@ impl Actor {
         let failed = matches!(way, Way::Failed(_) | Way::Unbuilt(_) | Way::Deferred);
         let origins = if failed { o.origins() } else { None };
 
+        // A track renamed in code keeps its mutes and solos (MON-4): the renames from what plays,
+        // looked for only while there are any.
+        let monitored = inner.control.lock().open.as_ref().is_some_and(|p| p.engine.token == token && !p.overlays.set.is_empty());
+        let rekeys: Vec<(String, String)> = match (&o.plays, code_changed && monitored) {
+            (Some(p), true) => m2_session::tx::delta_between(&p.revision, o.session.accepted())
+                .modules
+                .iter()
+                .filter_map(|m| match m {
+                    m2_song::tx::ModuleChange::Rekeyed { from, to } => Some((from.to_string(), to.to_string())),
+                    _ => None,
+                })
+                .collect(),
+            _ => vec![],
+        };
+        // What the overlay state reads of a new revision's code, worked out off the lock.
+        let song = code_changed.then(|| super::overlay::Song::of(o.session.accepted()));
+
         // Phase 1, under the control plane's lock: what `begin` and `update` need, with the
         // engine messages, so every lease's sends reach the queue in order.
         let mut cp = inner.control.lock();
+        if let Some(p) = cp.open.as_mut().filter(|p| p.engine.token == token) {
+            for (from, to) in &rekeys {
+                p.overlays.rekey(from, to);
+            }
+            p.overlays.follow(song, o.session.access().refusal().is_none());
+        }
         let closing = install.as_ref().and_then(|i| i.lease);
         // Each live lease is carried to the accepted code, or ends (WRITE-22): it stays only while
         // its call is untouched and still reads its value.
@@ -828,6 +856,10 @@ impl Actor {
                     r.set_cells(map.cells(&c.origin), l.playing);
                 }
             }
+            // Its overlays where the plan before had them: no glide at entry (MON-1, A7).
+            if let Some(p) = cp.open.as_ref().filter(|p| p.engine.token == token) {
+                r.set_overlays(&super::overlay::plan_values(&r.info(), &p.overlays.set, o.session.accepted()));
+            }
         }
         let sent = (|| -> Result<Sent> {
             match way {
@@ -835,6 +867,13 @@ impl Actor {
                 Way::Reach(generation, reach) => {
                     let d = device.as_ref().map_err(|e| anyhow!("{e:#}"))?;
                     let p = o.plays.as_ref().expect("what plays is reached");
+                    // Muted or unmuted in the song: the overlay cells glide, no rebuild (MON-5).
+                    let (was, now) = (&p.revision.compiled.flat.muted, &o.session.accepted().compiled.flat.muted);
+                    if was != now
+                        && let Some(set) = cp.open.as_ref().filter(|q| q.engine.token == token).map(|q| &q.overlays.set)
+                    {
+                        super::overlay::write_cells(&p.info, p.epoch, d, &super::overlay::tracks(&p.revision), (set, was), (set, now));
+                    }
                     let mut written = vec![];
                     for (cell, value) in reach.cells {
                         let target = CellTarget { slots: p.info.cell_slots.clone(), cells: Arc::from([cell]) };
@@ -900,6 +939,9 @@ impl Actor {
             generation: p.generation,
             slots: p.info.cell_slots.clone(),
             cells: p.cells.clone(),
+            info: p.info.clone(),
+            muted: p.revision.compiled.flat.muted.clone(),
+            tracks: super::overlay::tracks(&p.revision),
             origins: if o.playing == Some(number) {
                 None
             } else if failed {
@@ -1004,6 +1046,10 @@ impl Actor {
     /// nothing until its code does (WRITE-20), and is shown with its problems meanwhile.
     fn play(&mut self, session: Session, before: watcher::Before) -> Result<Value> {
         let device = self.inner.device()?;
+        // The mutes and solos the project before still owes its file, first: it may be this one,
+        // opened again, whose file is read below (MON-4).
+        let owed = self.inner.control.lock().open.as_ref().and_then(|p| p.owed());
+        self.inner.save_owed(owed);
         let token = self.inner.next_session.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         let (number, code_rev) = (session.accepted().number, session.accepted().code_rev);
         let controls = Arc::new(session.controls_by_id());
@@ -1026,9 +1072,13 @@ impl Actor {
             prepared: Prepared::default(),
             timeline: Arc::default(),
         };
+        // The overlays saved for it, which its first renderer plays from its first block (A6).
+        let accepted = o.session.accepted();
+        let monitor = super::overlay::Monitor::open(&accepted.project.dir, o.session.access().refusal().is_none(), accepted);
         let built = match o.session.accepted().has_code() {
             true => {
-                let r = build(&o.session, &mut o.audio, &self.inner.owner, Basis::Fresh)?;
+                let mut r = build(&o.session, &mut o.audio, &self.inner.owner, Basis::Fresh)?;
+                r.set_overlays(&super::overlay::plan_values(&r.info(), &monitor.set, o.session.accepted()));
                 let plays = o.describe(&r, &device);
                 Some((r, plays))
             }
@@ -1050,6 +1100,9 @@ impl Actor {
                     generation: plays.generation,
                     slots: plays.info.cell_slots.clone(),
                     cells: plays.cells.clone(),
+                    info: plays.info.clone(),
+                    muted: plays.revision.compiled.flat.muted.clone(),
+                    tracks: super::overlay::tracks(&plays.revision),
                     origins: None,
                 };
                 o.load(&device, r, plays, 0.0, None)?;
@@ -1063,7 +1116,7 @@ impl Actor {
         let rev = o.session.accepted();
         *self.inner.timing.lock() = Some(Timing { tempo: rev.tempo(), rate: rev.project.sample_rate(), range: None, on: false });
         let shown = Arc::new(o.shown());
-        {
+        let owed = {
             let mut cp = self.inner.control.lock();
             // Every gesture of the project before ends: a fresh engine plays this one's code.
             self.inner.end_all(&mut cp);
@@ -1071,8 +1124,9 @@ impl Actor {
             revs.push(number, code_rev);
             let engine = Arc::new(EngineView { token, revision: number, code_rev, controls, plays: view });
             let aliases = Arc::new(super::Aliases { to: code_rev, ids: HashMap::new() });
-            cp.open = Some(Published { engine, shown, revs, aliases });
-        }
+            cp.open.replace(Published { engine, shown, revs, aliases, overlays: monitor }).and_then(|p| p.owed())
+        };
+        self.inner.save_owed(owed);
         *self.inner.watch.lock() = Some(watcher::Watch::new(token, o.session.accepted(), before));
         self.open = Some(o);
         self.inner.state().context("no project is open")
@@ -1106,11 +1160,13 @@ impl Actor {
     /// instances are destroyed on the plugin main thread before this returns, or 2 s pass (a device
     /// thread that hangs still holds a renderer).
     pub(super) fn close(&mut self) -> super::Teardown {
-        {
+        let owed = {
             let mut cp = self.inner.control.lock();
             self.inner.end_all(&mut cp);
-            cp.open = None;
-        }
+            cp.open.take().and_then(|p| p.owed())
+        };
+        // A mute or solo made since the file was last written is saved before the project goes.
+        self.inner.save_owed(owed);
         if let Some(d) = self.inner.current_device() {
             let _ = d.player.unload();
         }

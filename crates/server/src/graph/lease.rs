@@ -372,6 +372,12 @@ pub struct PlaysView {
     /// Its renderer's cell slots, and which of its cells hold each value of the code it plays.
     pub slots: Arc<CellSlots>,
     pub cells: Arc<CellMap>,
+    /// Its plan: its overlay sites and their cells (MON-1), among the rest.
+    pub info: Arc<m2_runtime::PlanInfo>,
+    /// The tracks muted in the song in what it plays (MON-5).
+    pub muted: Vec<String>,
+    /// The tracks of what it plays: a solo of any other is ignored (MON-4).
+    pub tracks: Vec<String>,
     /// Set only while what plays is built from older code than the accepted revision's (its
     /// build failed): the accepted control id → its constant's origin in what plays.
     pub origins: Option<Arc<HashMap<String, Origin>>>,

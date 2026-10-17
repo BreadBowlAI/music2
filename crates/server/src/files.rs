@@ -303,7 +303,7 @@ mod tests {
             let p = Project(dir);
             p.write(
                 "music2.toml",
-                "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n",
+                "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.2\"\n",
             );
             for (name, text) in files {
                 p.write(name, text);
