@@ -224,6 +224,77 @@ folder in Exports; not yet for a song that plays plugins.
 **Contract:** a stem is the track's own output before its mixer channel, rendered as `m2 bounce <song> x --track <key>`
 renders it, the same bytes (RENDER-3). Stems and Export Audio share one slot: one at a time.
 
+### C3b. The Export dialog
+
+**In short**
+
+| What | Now |
+|---|---|
+| ⇧⌘E, the Export button, File ▸ Export… | A dialog, "Export", with three choices |
+| Song | The whole song as one WAV file, as Export did before. It is chosen, so Return does what Export did |
+| Stems | Each track as its own WAV file (C3a). The Export button says "Exporting stems: Hats (2 of 4)". Then: "Exported 4 stems to first-song stems", with Show in Finder |
+| MIDI | The song's notes as a MIDI file (C1's song export) |
+| A song that plays plugins | Stems is greyed, and says why |
+| Keys | Return goes on, Esc closes, Tab goes round, arrows move the choice. On a PC: Ctrl+Shift+E |
+
+**What changed**
+
+- `web/src/components/ExportDialog.tsx` (new, mounted in `App.tsx` after `<RenameSongDialog />`; ExportAsk lives in
+  the top bar's `OverlayPill`, so "after `<ExportAsk />`" had no place in `App.tsx`): the frame of every page dialog
+  (440 px, `animate-dialog`, `useModalKeys`). Three rows, each a native radio in a label (a click, Space and the arrow
+  keys choose; Return from one goes on), with D34's words. Song is chosen and Export… has the focus. Stems asks
+  `/api/graph/stems/check` as it opens and is greyed with the words. A double-click on a row goes on.
+- `web/src/lib/exporting.ts` (C's): `exportSong()` opens the dialog (or says an export runs, as before);
+  `exportChosen(choice)`: Song is `exportAudio()` (what `exportSong` did: ExportAsk's question while mutes or solos
+  change what you hear, then the save panel in the app); Stems is `exportStems()` (no question, no panel, D23); MIDI
+  is `exportMidi()` (C1). `useExport` gains `stem` (name, number, how many) from the stems' progress events;
+  `onExportEvent` says a stems `done` as "Exported 4 stems to first-song stems" (with Show in Finder in the app; the
+  folder after it in a browser) and an error as "Couldn't export the stems of “first-song”: …".
+- `web/src/components/TopBar.tsx` (one hunk in `ExportButton`, for the integrator: TopBar is B's and D's
+  otherwise): the tooltip says "Export the song, its stems or its notes (⇧⌘E)", and while stems render "Exporting
+  stems: Hats (2 of 4)".
+- `web/src/components/Shortcuts.tsx`: File's row "Export audio" reworded "Export" (in place).
+- `apps/music2-desktop/src/menu.rs`: `export`'s title "Export…"; the test `file_export_opens_the_export_dialog` at
+  the test module's end.
+
+**Tests**
+
+- `menu.rs`: `file_export_opens_the_export_dialog` (the title and ⇧⌘E; in File on both menu bars).
+- `st-stems` grows to 49: the dialog's title, rows and words, Song chosen, Export… focused, the lint, Tab round its
+  five controls, Esc; Return exports the song (`first-song.wav`); Stems from a click then Return, the button's
+  "Exporting stems: …(n of 4)" and the toast "Exported 4 stems to first-song stems 3, in ~/Music/music2/Exports.";
+  MIDI writes `first-song.mid` (five tracks) with "Saved the song as a MIDI file: first-song.mid, in
+  ~/Music/music2/Exports."; a song that plays plugins: Stems greyed with Q40's words, Export… still on, the lint;
+  a PC page's tooltip says Ctrl+Shift+E, which opens it.
+- Moved (their checks' values only, D25; no count changes): `export` (Return in the dialog after each click and
+  ⇧⌘E; the tooltip's words), `fx-fixes` (Return after four clicks; the click while another song exports still says
+  so with no dialog), `s8-mute` (Return before each question: the question comes after the dialog, D23),
+  `pc-keys` (the sheet's row "Export"), `live3b` (Return after its export click; its plugin part runs only with
+  `CLAP_PATH`). `taste` passes unchanged: its "an export under way" state now lints the open dialog (taste.mjs is
+  nobody's to edit, so it doesn't press Return).
+
+**Red first**
+
+- `menu.rs` with the old title: `left: Some(("Export Audio…", …)), right: Some(("Export…", …))`.
+- `st-stems` on the before page (`DIST=` the `85b069a` page, this server): the API part's 25 pass, then
+  `FAIL  ⇧⌘E opens the Export dialog`.
+
+**Guards**
+
+- None.
+
+**What's left**
+
+- Q30, at the End: Export… greyed with "Stop recording first." while recording.
+- `st-tips` places for the dialog (the End joins them; tiplib is P0's).
+- `taste`'s "an export under way" state shows the dialog now, not the ring: the ring is still checked by `export`
+  and `fx-fixes`. The End may teach `taste.mjs` to press Return there.
+
+**For gaps.md:** #36: File ▸ Export… (⇧⌘E) offers Song, Stems and MIDI.
+
+**Contract:** Export (⇧⌘E) is a dialog: Song (the WAV, with the mute question first), Stems, MIDI. Only Song asks the
+question.
+
 ## Lane D
 
 (Lane D's.)

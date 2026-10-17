@@ -20,6 +20,11 @@ import { HOME, PROJ, ROOT, check, done, open, read, sess, sleep, until, write } 
 import { lint as lintlib } from "./lintlib.mjs";
 
 const { browser, page, errors, api, state, toasts, key, box } = await open(1440, 900);
+// The Export dialog (studio C3): Song is chosen and Export… has the focus, so Return goes on to the question.
+const go = async () => {
+  await page.waitForSelector("[data-testid=export-dialog]", { timeout: 5000 });
+  await page.keyboard.press("Enter");
+};
 const post = (p, body) => api(p, { method: "POST", body: JSON.stringify(body) });
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const rgb = (hex) => `rgb(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(", ")})`;
@@ -337,6 +342,7 @@ const answer = (id) => page.$eval(`[data-testid=${id}]`, (b) => b.click());
 await page.click('[data-mute="kick"]');
 await settled(["kick"], []);
 await key("Meta+Shift+e");
+await go();
 check(!!(await page.waitForSelector("[data-testid=export-ask]", { timeout: 3000 }).catch(() => null)), "⇧⌘E with Kick muted asks first");
 check(
   same(await askText(), ["Kick is muted only while you listen", "It will be in the file.", ["Export anyway", "Mute Kick in the song, then export"]]),
@@ -353,6 +359,7 @@ await sleep(500);
 check(!fs.existsSync(exportsDir) || fs.readdirSync(exportsDir).length === 0, "and exports nothing");
 
 await page.click("[data-testid=export]");
+await go();
 await page.waitForSelector("[data-testid=export-ask]", { timeout: 3000 });
 const revM = (await state()).view.revision;
 await answer("export-mute");
@@ -371,6 +378,7 @@ check(same((await overlays()).mute, []), "and doesn't bring back the listening m
 await page.click('[data-mute="kick"]');
 await settled(["kick"], []);
 await key("Meta+Shift+e");
+await go();
 await page.waitForSelector("[data-testid=export-ask]", { timeout: 3000 });
 await answer("export-anyway");
 check(await exported("first-song 2"), "Export anyway exports");
@@ -387,6 +395,7 @@ const beatNow = async () => (await api("/status")).body.beat;
 await post("/seek", { beat: 8 });
 await until(async () => Math.abs((await beatNow()) - 8) < 0.01);
 await key("Meta+Shift+e");
+await go();
 await page.waitForSelector("[data-testid=export-ask]", { timeout: 3000 });
 await page.keyboard.press("m");
 await sleep(400);
@@ -409,6 +418,7 @@ check(read("tracks/kick.ts") === kickTs && same((await overlays()).mute, ["kick"
 check(Math.abs((await beatNow()) - 8) < 0.01, `and the start point stays at beat 8: ${await beatNow()}`);
 await idle();
 await key("Meta+Shift+e");
+await go();
 await page.waitForSelector("[data-testid=export-ask]", { timeout: 3000 });
 await page.keyboard.down("Shift");
 await page.keyboard.press("Tab");
@@ -423,6 +433,7 @@ await page.click('[data-mute="kick"]');
 await page.click('[data-solo="bass"]');
 await settled([], ["bass"]);
 await key("Meta+Shift+e");
+await go();
 await page.waitForSelector("[data-testid=export-ask]", { timeout: 3000 });
 check(
   same(await askText(), ["Only Bass is soloed", "The file will have every track.", ["Cancel", "Export anyway"]]),
@@ -436,6 +447,7 @@ await idle();
 await page.click('[data-mute="kick"]');
 await settled(["kick"], ["bass"]);
 await key("Meta+Shift+e");
+await go();
 await page.waitForSelector("[data-testid=export-ask]", { timeout: 3000 });
 check(
   same(await askText(), ["Kick is muted and only Bass is soloed", "The file will have every track.", ["Cancel", "Export anyway"]]),
@@ -451,6 +463,7 @@ const songTs = read("song.ts");
 write("song.ts", songTs.replace("export default", "export default )"));
 check(await until(async () => (await state()).view.draft_errors.length > 0, 10000), "the code is broken");
 await key("Meta+Shift+e");
+await go();
 await page.waitForSelector("[data-testid=export-ask]", { timeout: 3000 });
 const broken = await askText();
 check(

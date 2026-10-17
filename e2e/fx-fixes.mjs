@@ -32,6 +32,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const text = () => page.evaluate(() => document.body.innerText);
 const exporting = async () => (await api("graph/export", { path: "relative.wav" })).json?.error?.includes("already being exported");
 const idle = () => until(async () => !(await exporting()), 60000);
+// The Export dialog (studio C3): Song is chosen and Export… has the focus, so Return exports the song.
+const go = async () => {
+  await page.waitForSelector("[data-testid=export-dialog]", { timeout: 5000 });
+  await page.keyboard.press("Enter");
+};
 
 // A song that holds a chord for `minutes`: long enough to do things while it exports.
 function longSong(dir, name, minutes) {
@@ -100,6 +105,7 @@ check((await api("graph/open", { path: long })).status === 200, "a 20-minute son
 await until(async () => (await text()).includes("Long one"));
 await sleep(400);
 await page.click("[data-testid=export]");
+await go();
 check(await until(async () => !!(await page.$("[data-testid=export-progress]"))), "its Export button shows progress");
 // Someone else takes the name while it renders: the export gets the next one.
 check(await until(() => fs.readdirSync(exportsDir).some((n) => n.startsWith(".Long one.wav."))), "it renders to a hidden part");
@@ -243,6 +249,7 @@ await page.evaluate(() => { window.__status = null; });
 check(await until(async () => !(await statusPill()), 3000), "the pill goes when the engine is done");
 await page.setViewport({ width: 1100, height: 700, deviceScaleFactor: 2 });
 await page.click("[data-testid=export]");
+await go();
 check(await until(async () => Number(await page.$eval("[data-testid=export-progress]", (e) => e.getAttribute("aria-valuenow")).catch(() => 0)) >= 10, 20000), "exporting it at the smallest window");
 const b = await bar();
 check(b.box[0] >= b.time + 4 && b.box[1] <= b.exp - 4, `the name still clears the wider “Exporting” button (${b.box[1].toFixed(0)} < ${b.exp.toFixed(0)})`);
@@ -266,6 +273,7 @@ check(opened.status === 200 && (opened.json?.problems ?? []).some((p) => p.code 
 await until(async () => (await page.$eval("[data-testid=bar-song-name]", (e) => e.textContent).catch(() => "")) === "No plugin");
 await sleep(300);
 await page.click("[data-testid=export]");
+await go();
 const without = "A plugin isn't installed, so the export plays without it (the problems list says which).";
 const toasts = () => page.$$eval("[data-testid=toast]", (els) => els.map((e) => e.innerText.replace(/\s+/g, " ").trim()));
 check(await until(async () => { const t = await toasts(); return t.length === 1 && t[0].includes("Exported No plugin.wav") && t[0].includes(without); }, 30000), `its one export toast says it after the file: ${(await toasts()).join(" | ")}`);
@@ -280,6 +288,7 @@ check((await api("graph/open", { path: far })).status === 200, "a song with a cl
 await until(async () => (await page.$eval("[data-testid=bar-song-name]", (e) => e.textContent).catch(() => "")) === "first-song");
 await sleep(300);
 await page.click("[data-testid=export]");
+await go();
 const tooLong = "Couldn't export the song: its last clip ends in bar 7501, 4 h 2 min in, past the 3 hours music2 can export. Is a clip far past the rest?";
 check(await until(async () => (await text()).includes(tooLong)), `exporting it says: ${tooLong}`);
 const farToast = await page.evaluate(() => {

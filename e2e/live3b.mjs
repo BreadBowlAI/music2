@@ -382,6 +382,9 @@ async function withPlugins() {
     await sleep(800);
     const playing = median(levels(frames() - RATE / 2, frames()));
     await p2.click('[data-testid="export"]');
+    // The Export dialog (studio C3): Song is chosen and Export… has the focus.
+    await p2.waitForSelector("[data-testid=export-dialog]", { timeout: 5000 });
+    await p2.keyboard.press("Enter");
     check(await until(async () => (await api2("graph/status")).paused === "exporting", 5000), "an export of with-plugins pauses playback");
     // Sampled until it resumes, however long the export takes: each frame count read before the
     // status that says it still holds, so every one is from the pause.

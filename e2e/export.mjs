@@ -1,4 +1,4 @@
-// Export Audio end to end: the button, its progress, the done toast, the WAV in <HOME>/Music/music2/Exports,
+// Export Audio end to end (Song in the Export dialog, Return): the button, its progress, the done toast, the WAV in <HOME>/Music/music2/Exports,
 // a second export's new name, ⇧⌘E, refusals, and that it equals `m2 render`.
 // node export.mjs <scratch> <home> <project> <repo>
 import puppeteer from "puppeteer-core";
@@ -53,6 +53,11 @@ function readWav(file) {
 }
 
 const exportsDir = `${H}/Music/music2/Exports`;
+// The Export dialog (studio C3): Song is chosen and Export… has the focus, so Return exports the song.
+const go = async () => {
+  await page.waitForSelector("[data-testid=export-dialog]", { timeout: 5000 });
+  await page.keyboard.press("Enter");
+};
 // The song: 32 beats at 124 bpm.
 const songEnd = (32 * 60) / 124;
 
@@ -64,7 +69,7 @@ check(!!button, "the top bar has an Export button");
 check((await page.$eval("[data-testid=export]", (e) => e.innerText.trim())) === "Export", "labelled Export");
 const idleWidth = await page.$eval("[data-testid=export]", (e) => e.getBoundingClientRect().width);
 // ⇧⌘E: ⌘E is kept for Split (taste.md §5.1, TB-9).
-check(/Export the song as a WAV audio file \(⇧⌘E\)/.test(await page.$eval("[data-testid=export]", (e) => e.title)), "with a tooltip naming ⇧⌘E");
+check(/Export the song, its stems or its notes \(⇧⌘E\)/.test(await page.$eval("[data-testid=export]", (e) => e.title)), "with a tooltip naming ⇧⌘E");
 check(!fs.existsSync(exportsDir), "no Exports folder before the first export");
 await page.screenshot({ path: `${S}/export-bar.png`, clip: { x: 0, y: 0, width: 1440, height: 44 } });
 
@@ -79,6 +84,7 @@ await page.evaluate(() => {
 });
 const t0 = Date.now();
 await page.click("[data-testid=export]");
+await go();
 // While it renders, the app still answers and plays.
 const st = Date.now();
 const status = await api("graph/status");
@@ -113,6 +119,7 @@ check(Buffer.compare(fs.readFileSync(cli), fs.readFileSync(first)) === 0, "`m2 r
 // ⇧⌘E exports again, to a new name.
 
 await page.keyboard.down("Meta"); await page.keyboard.down("Shift"); await page.keyboard.press("e"); await page.keyboard.up("Shift"); await page.keyboard.up("Meta");
+await go();
 check(await until(async () => (await text()).includes("Exported first-song 2.wav")), "⇧⌘E exports again, as first-song 2.wav");
 const second = `${exportsDir}/first-song 2.wav`;
 check(fs.existsSync(second) && Buffer.compare(fs.readFileSync(second), fs.readFileSync(first)) === 0, "the same audio, and the first file is untouched");
@@ -145,6 +152,7 @@ check((await api("graph/open", { path: long })).status === 200, "a longer song o
 await until(async () => (await text()).includes("first-song"));
 await sleep(500);
 await page.click("[data-testid=export]");
+await go();
 check(await until(async () => Number(await page.$eval("[data-testid=export-progress]", (e) => e.getAttribute("aria-valuenow")).catch(() => 0)) >= 30, 20000), "the ring fills as it goes");
 await page.screenshot({ path: `${S}/export-progress.png` });
 await page.screenshot({ path: `${S}/export-progress-bar.png`, clip: { x: 900, y: 0, width: 540, height: 64 } });

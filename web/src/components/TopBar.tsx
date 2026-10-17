@@ -225,14 +225,15 @@ export default function TopBar({
   );
 }
 
-/** Export Audio (⇧⌘E): the song to a WAV file. While it renders, a ring fills with its progress. Another
- * song's export (one opened before this) shows in a toast instead: see Toasts. */
+/** Export (⇧⌘E): the Export dialog (the song, its stems or its notes). While it renders, a ring fills with
+ * its progress. Another song's export (one opened before this) shows in a toast instead: see Toasts. */
 function ExportButton({ dir }: { dir: string }) {
   const progress = useExport((s) => (s.dir === dir ? s.progress : null));
+  const stem = useExport((s) => (s.dir === dir ? s.stem : null));
   // One width, idle or rendering: Undo and Redo beside it never move while it renders (principle 8).
   if (progress === null) {
     return (
-      <BarButton data-testid="export" onClick={() => void exportSong()} title={`Export the song as a WAV audio file (${chord("E", { shift: true })})`} className="ml-1 w-21">
+      <BarButton data-testid="export" onClick={() => void exportSong()} title={`Export the song, its stems or its notes (${chord("E", { shift: true })})`} className="ml-1 w-21">
         <Download size={14} />
         Export
       </BarButton>
@@ -242,7 +243,7 @@ function ExportButton({ dir }: { dir: string }) {
   // r = 6 in a 16-unit box: the ring's length, for the dash that fills it.
   const length = 2 * Math.PI * 6;
   return (
-    <BarButton data-testid="export" aria-busy title={`Exporting the song… ${percent}%`} className="ml-1 w-21 !text-fg !bg-hover cursor-default">
+    <BarButton data-testid="export" aria-busy title={stem ? `Exporting stems: ${stem.name} (${stem.n} of ${stem.of})` : `Exporting the song… ${percent}%`} className="ml-1 w-21 !text-fg !bg-hover cursor-default">
       <svg
         data-testid="export-progress"
         role="progressbar"
