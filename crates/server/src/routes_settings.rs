@@ -51,7 +51,7 @@ fn shown(s: &AppState, stopped: bool) -> Value {
         "songs": project::songs_dir().ok(),
         "songs_chosen": chosen,
         "songs_default": project::default_songs_dir().ok(),
-        "home": m2_os::dirs::home(),
+        "home": project::home(),
         "exporting": s.exports.running(),
         "stopped": stopped,
     })

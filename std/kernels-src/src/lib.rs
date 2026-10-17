@@ -370,31 +370,88 @@ impl Smooth {
         self.value = target + (self.value - target) * self.coef;
         self.value
     }
+
+    /// Whether a step toward `target` gives back the value it holds, to the bit: it has settled.
+    /// Rounding can stop it a little short of `target`, so this checks the step itself.
+    fn settled(&self, target: f32) -> bool {
+        self.primed && (target + (self.value - target) * self.coef).to_bits() == self.value.to_bits()
+    }
 }
 
 /// Gain in dB, smoothed. Inputs: in, db.
-pub struct Gain(Smooth);
+///
+/// Every mixer channel has one, its fader, whose dB mostly holds still. So a block whose dB holds
+/// still, once the smoother has settled on it, is multiplied by the one gain the smoother holds:
+/// the bits the per-sample loop gives, without a `powf` and a smoother step on every sample.
+pub struct Gain {
+    smooth: Smooth,
+    /// The last dB read, and its gain: `db_to_gain` runs again only when the dB changes.
+    db: f32,
+    gain: f32,
+}
+
+impl Gain {
+    /// The gain of `db`, kept from the last time when it is the same dB.
+    fn target(&mut self, db: f32) -> f32 {
+        if db.to_bits() != self.db.to_bits() {
+            self.db = db;
+            self.gain = db_to_gain(db);
+        }
+        self.gain
+    }
+
+    /// The one gain every sample of this block gets, if there is one: the same dB all block,
+    /// and the smoother settled on its gain.
+    fn steady(&mut self, db: &[f32]) -> Option<f32> {
+        let first = *db.first()?;
+        if db.iter().any(|d| d.to_bits() != first.to_bits()) {
+            return None;
+        }
+        let target = self.target(first);
+        self.smooth.settled(target).then_some(self.smooth.value)
+    }
+
+    /// One block: `l` and `r` times the smoothed gain of `db`. Mono (`r` None) leaves `or` silent.
+    fn block(&mut self, l: &[f32], r: Option<&[f32]>, db: &[f32], ol: &mut [f32], or: &mut [f32]) {
+        if let Some(g) = self.steady(db) {
+            for (o, x) in ol.iter_mut().zip(l) {
+                *o = x * g;
+            }
+            match r {
+                Some(r) => or.iter_mut().zip(r).for_each(|(o, x)| *o = x * g),
+                None => or.fill(0.0),
+            }
+            return;
+        }
+        for i in 0..ol.len() {
+            let target = self.target(db[i]);
+            let g = self.smooth.next(target);
+            ol[i] = l[i] * g;
+            or[i] = r.map_or(0.0, |r| r[i] * g);
+        }
+    }
+}
 
 impl Kernel for Gain {
     const INPUTS: usize = 2;
     const OUTPUTS: usize = 1;
 
     fn new(sample_rate: f32, _: usize) -> Self {
-        Gain(Smooth::new(0.005, sample_rate))
+        // The dB kept starts as NaN, with NaN's own gain, so it always has its gain beside it.
+        Gain { smooth: Smooth::new(0.005, sample_rate), db: f32::NAN, gain: db_to_gain(f32::NAN) }
     }
 
     fn process(&mut self, io: &mut Io) {
         let stereo = io.channels > 1;
         let ([l, r, db], [ol, or]) = io.ports([(0, 0), (0, 1), (1, 0)], [(0, 0), (0, 1)]);
-        for i in 0..ol.len() {
-            let g = self.0.next(db_to_gain(db[i]));
-            ol[i] = l[i] * g;
-            or[i] = if stereo { r[i] * g } else { 0.0 };
-        }
+        self.block(l, stereo.then_some(r), db, ol, or);
     }
 }
 
 export!(gain, Gain);
+
+#[cfg(test)]
+mod tests;
 
 /// Pan, stereo out. Inputs: in, pan (-1..1). A mono input is panned with equal power; a
 /// stereo one (a reverb, a widened sound) is balanced: the far side fades out with equal
