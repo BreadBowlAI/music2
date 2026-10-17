@@ -401,7 +401,7 @@ The real format is a little different. The `wasm` file is named once for the who
 ```toml
 [package]
 name = "std"
-version = "0.1.0"
+version = "0.2.0"
 wasm = "kernels/std.wasm"
 
 [[kernel]]

@@ -210,7 +210,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("data/kick")).unwrap();
         let song = "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
                     const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n";
-        let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n";
+        let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.2\"\n";
         std::fs::write(dir.join("music2.toml"), manifest).unwrap();
         std::fs::write(dir.join("song.ts"), song).unwrap();
         std::fs::write(dir.join("data/kick/old.json"), r#"{"clips": []}"#).unwrap();

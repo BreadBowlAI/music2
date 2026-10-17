@@ -10,7 +10,7 @@
 //!
 //! [dependencies]
 //! "@m2/core" = "1"        # required: the SDK version the code is written against
-//! std = "0.1"             # every package the code imports from must be listed
+//! std = "0.2"             # every package the code imports from must be listed
 //! ```
 
 use std::collections::BTreeMap;
@@ -244,7 +244,7 @@ mod tests {
     use super::*;
 
     const GOOD: &str =
-        "[project]\nname = \"Starter beat\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n";
+        "[project]\nname = \"Starter beat\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.2\"\n";
 
     fn code(text: &str) -> &'static str {
         Manifest::read(text).unwrap_err().code
@@ -289,7 +289,7 @@ mod tests {
             GOOD.replace("\"@m2/core\" = \"1\"\n", ""),
             GOOD.replace("name = \"Starter beat\"", "name = \"x\"\nentry = \"song.js\""),
             GOOD.replace("name = \"Starter beat\"", "name = \"x\"\nentry = \"../song.ts\""),
-            GOOD.replace("std = \"0.1\"", "std = \">=0.1\""),
+            GOOD.replace("std = \"0.2\"", "std = \">=0.2\""),
         ] {
             let e = Manifest::read(&bad).unwrap_err();
             assert_eq!((e.code, e.src.as_deref()), ("manifest.invalid", Some(MANIFEST)), "{bad}");
@@ -349,11 +349,11 @@ mod tests {
                 _ => None,
             }
         };
-        assert!(m.check_dependencies(installed("1.0.0", Some("0.1.4"))).is_empty());
-        let d = m.check_dependencies(installed("2.0.0", Some("0.2.0")));
+        assert!(m.check_dependencies(installed("1.0.0", Some("0.2.4"))).is_empty());
+        let d = m.check_dependencies(installed("2.0.0", Some("0.3.0")));
         assert_eq!(d.iter().map(|d| d.code).collect::<Vec<_>>(), ["sdk.unsatisfied", "pkg.unsatisfied"]);
         assert!(d[0].message.contains("\"1\"") && d[0].message.contains("2.0.0"), "names both versions: {}", d[0].message);
-        assert!(d[1].message.contains("0.1") && d[1].message.contains("0.2.0"), "{}", d[1].message);
+        assert!(d[1].message.contains("\"0.2\"") && d[1].message.contains("0.3.0"), "{}", d[1].message);
         let d = m.check_dependencies(installed("1.0.0", None));
         assert_eq!(d.iter().map(|d| d.code).collect::<Vec<_>>(), ["pkg.unsatisfied"]);
         assert!(d[0].message.contains("isn't installed"));

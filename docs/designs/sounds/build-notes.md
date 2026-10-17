@@ -227,7 +227,7 @@ unchanged. In `ed2e9ec` its labels showed the folded default (`std:chorus[0.6,0.
 `09b2dfd` `playing` is a cable, and the labels are as before.
 
 `common/mod.rs` gains `project(what, files)`: a temp project with std's manifest. The drum beat,
-the effect songs and the tremolo song use it, so slice 3 changes `std = "0.1"` in one place there.
+the effect songs and the tremolo song use it, so slice 3 changes std's version in one place there.
 
 ### Red first
 

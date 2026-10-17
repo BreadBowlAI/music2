@@ -194,7 +194,7 @@ sample_rate = 48000
 
 [dependencies]
 "@m2/core" = "1"
-std = "0.1"
+std = "0.2"
 ```
 
 `arrangement.json` holds `tempo` (a list of `{ "beat", "bpm" }` changes, the first at beat 0) and `meter` (a list of `{ "beat", "beats", "unit" }` time signatures; empty is 4/4). A beat is a quarter note.
