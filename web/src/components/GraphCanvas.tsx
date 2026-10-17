@@ -220,14 +220,15 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
 }
 
 /**
- * Loop the selection (⌘L): from the first selected clip's start to the last one's end, else the bar
- * the playhead is in. It turns looping on.
+ * Loop the selection (⌘L): the selected clip, the one the timeline outlines (the selected track's;
+ * the other tracks' remembered clips aren't selected), else the bar the playhead is in. It turns
+ * looping on.
  */
 function loopSelection(timeline: TimelineView, beat: number, onLoop: (req: { start: number; end: number }) => void) {
-  const picked = Object.values(useShell.getState().clips).flatMap((c) => findNoteClip(timeline, c) ?? []);
-  if (picked.length) {
-    return onLoop({ start: Math.min(...picked.map((c) => c.start)), end: Math.max(...picked.map((c) => c.start + c.length)) });
-  }
+  const s = useShell.getState();
+  const ref = s.selected ? s.clips[s.selected] : undefined;
+  const picked = ref ? findNoteClip(timeline, ref) : undefined;
+  if (picked) return onLoop({ start: picked.start, end: picked.start + picked.length });
   const bar = barAt(timeline.meter, beat);
   onLoop({ start: bar.start, end: bar.start + bar.length });
 }

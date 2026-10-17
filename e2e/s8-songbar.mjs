@@ -339,6 +339,26 @@ check(await until(() => { try { return loopIs(JSON.parse(read(".music2/view.json
 check((await post("/open", { path: PROJ })).status === 200, "the song is opened again");
 check(await until(async () => loopIs((await status()).loop, 0, 32, true)), "with its loop");
 await page.waitForSelector("[data-testid=tempo-field]");
+// ⌘L loops the clip shown as selected, not every track's remembered one: Hats' clip, then a new
+// one-bar clip on Kick at bar 10; then, with nothing selected, the bar at the playhead.
+await page.click('[data-lane="hats.hits"] [data-clip]');
+const kickLane = read("data/kick/hits.json");
+const kl = await box('[data-lane="kick.hits"] > div:last-child');
+await page.mouse.click(kl.x + 37 * 24 + 2, kl.y + kl.height / 2, { count: 2 });
+await until(() => read("data/kick/hits.json") !== kickLane);
+await sleep(300);
+await key("Meta+l");
+check(await until(async () => loopIs((await status()).loop, 36, 40, true)), `⌘L after picking a clip on Hats, then one on Kick, loops Kick's: ${JSON.stringify((await status()).loop)}`);
+await undo();
+await until(() => read("data/kick/hits.json") === kickLane);
+await page.click('[data-lane="hats.hits"] [data-clip]');
+await key("Escape");
+await key("Escape");
+// The double-click on Kick's lane put the playhead at bar 10: the bar it is in, bar 2, is looped.
+await seekRuler(6);
+await until(async () => (await page.$eval("[data-testid=position]", (e) => e.textContent)) === "2.3.1");
+await key("Meta+l");
+check(await until(async () => loopIs((await status()).loop, 4, 8, true)), `with nothing selected, the bar at the playhead: ${JSON.stringify((await status()).loop)}`);
 
 // A tempo too fast for the loop turns it off and says so (RENDER-9a).
 check((await post("/loop", { start: 0, end: 0.012 })).status === 200, "a loop of 0.012 beats: 5.8 ms at 124 BPM");
