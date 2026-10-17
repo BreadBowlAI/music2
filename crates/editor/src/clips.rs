@@ -81,13 +81,16 @@ pub enum Gesture {
     Split { clips: Vec<ClipRef>, at: f64 },
     Join { clips: Vec<ClipRef> },
     /// Copies right after the selection, or after `range` (a marquee's, bar-snapped). `grid` is
-    /// what a span shorter than a bar rounds up to; none rounds nothing.
+    /// what a span shorter than a bar rounds up to; none rounds nothing. `times` copies (Repeat…,
+    /// Q12: 1 to 64), each right after the one before; one when not given.
     Duplicate {
         clips: Vec<ClipRef>,
         #[serde(default)]
         range: Option<(f64, f64)>,
         #[serde(default)]
         grid: Option<f64>,
+        #[serde(default)]
+        times: Option<u32>,
     },
     /// Clips at `at`, keeping their offsets from the earliest: on lane `to` when it fits them all,
     /// else on the lanes they came from.
@@ -145,6 +148,9 @@ pub struct ClipsEdited {
     pub edited: Edited,
     pub made: Vec<(LaneAddr, String)>,
 }
+
+/// The most copies one Repeat… makes (Q12).
+pub const REPEATS: u32 = 64;
 
 /// What `g` makes of the lanes it touches, planned on `rev`: only lanes that change. `mint` gives
 /// a fresh id for a clip on a lane, as often as asked; one the lane has is asked again. Pure: the
@@ -216,7 +222,11 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
                 w.lanes.get_mut(&lane).expect("resolved").keep[i] = None;
             }
         }
-        Gesture::Duplicate { clips, range, grid } => {
+        Gesture::Duplicate { clips, range, grid, times } => {
+            let times = times.unwrap_or(1);
+            if !(1..=REPEATS).contains(&times) {
+                return Err(EditError::Rejected(format!("Repeat 1 to {REPEATS} times")));
+            }
             let refs = w.resolve_all(clips)?;
             let each = || refs.iter().map(|(l, i)| &w.lanes[l].was[*i]);
             let (lo, hi) = match range {
@@ -227,12 +237,14 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
                 return Err(EditError::Rejected("Pick the clips, or the bars, to duplicate.".into()));
             }
             let shift = rounded_up(hi - lo, arr.meter_at(lo).bar(), *grid);
-            for (lane, i) in refs {
-                let l = w.lanes.get_mut(&lane).expect("resolved");
-                let mut c = l.was[i].clone();
-                c.set_start(c.start() + shift);
-                c.set_id(None);
-                l.added.push((c, true));
+            for k in 1..=times {
+                for (lane, i) in &refs {
+                    let l = w.lanes.get_mut(lane).expect("resolved");
+                    let mut c = l.was[*i].clone();
+                    c.set_start(c.start() + shift * k as f64);
+                    c.set_id(None);
+                    l.added.push((c, true));
+                }
             }
         }
         Gesture::Paste { clips, to, at } => {

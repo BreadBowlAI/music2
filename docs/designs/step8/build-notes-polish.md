@@ -228,6 +228,43 @@ bars) are left.
 to 40 characters, written by `POST /api/graph/markers`, not `/api/graph/layout` (X45). WRITE-10's
 route list gains it.
 
+### B4. Repeat a clip
+
+**In short.** You can repeat a clip a few times in one go. Right-click it and pick Repeat…. Say
+how many more times. The copies follow one after another.
+
+| What | How |
+|---|---|
+| Where | The clip menu, after Duplicate |
+| The question | "Repeat [3] more times" and a Repeat button. Return repeats; Esc closes |
+| How many | 1 to 64. Anything else: "Repeat 1 to 64 times", and the button is off |
+| What it makes | Copies right after the clip (or the selected clips, or a marquee's bars), each a new clip with its own ID. They are selected after |
+| Undo | One step for all of them: "Undo repeating a Bass clip". No toast |
+
+**What changed.** `crates/editor/src/clips.rs`: `Gesture::Duplicate` gains `times` (1 to 64,
+`REPEATS`; one when not given); each copy lands right after the one before. `apps/m2/src/edits.rs`:
+`m2 clips duplicate` sends no `times` (one line; `m2` commands for it are left, gaps #37).
+`web/src/lib/clips.ts`: the type. `SongTimeline.tsx`: ⌘D and Repeat… share `copies(times)`; the
+clip menu's Repeat… row; `RepeatPopover`. `e2e/s8-clips.mjs`: its clip menu check names the new
+row.
+
+**Tests.** Rust, `clips_tests.rs`: `duplicate_three_times_puts_three_copies_after` (spans, fresh
+ids, the copies play the first one's notes, one undo), `repeat_of_a_marquee_range_keeps_its_bars`,
+`sixty_five_times_is_refused` (0 and 65 refused, 64 made). `m2-editor` 260 tests pass, `m2`'s pass;
+clippy of `m2-editor`, `m2-server`, `m2` clean. `pl-arrange` grows to 54 checks. Moved suites
+green: `s8-clips` 94, `s4-clips` 28, `taste` 39.
+
+**Red first.** Rust, with `times` ignored (one copy): the three fail, `left: [(0.0, 4.0), (4.0,
+4.0)]`, `right: [(0.0, 4.0), (4.0, 4.0), (8.0, 4.0), (12.0, 4.0)]`. The suite on the page of
+`61bcea4`: `FAIL the clip menu has Repeat… after Duplicate: cut, copy, paste, duplicate, split,
+quantize, delete, loop, open`.
+
+**Left.** No key for Repeat… (⌘D repeats once).
+
+**For gaps.md.** Repeat a clip (#23's loop-a-clip-n-times) is done.
+
+**Contract.** The clips route's `duplicate` gesture takes `times` (1 to 64).
+
 ## Lane C
 
 Songs and tracks.

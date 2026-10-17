@@ -64,7 +64,7 @@ import { Hatch, VLines } from "./draw";
 import GridChip from "./GridChip";
 import PointMenu, { unautomate, type MenuItem } from "./ClipMenu";
 import TrackHeader from "./TrackHeader";
-import { Button, EmptyState, keepFocus } from "./ui";
+import { Button, EmptyState, keepFocus, Popover } from "./ui";
 
 /** A clip sits this far inside its row, inside its 1px border; its drawing this far inside that. */
 const CLIP_INSET = 4;
@@ -107,6 +107,8 @@ interface ClipEdits {
   flush: () => void;
   /** ⌘D: copies of the selected clips right after them (a marquee's: after its bars). False with none selected. */
   duplicate: () => boolean;
+  /** Repeat…: `times` copies of the selected clips, one after another (Q12). */
+  repeat: (times: number) => void;
   /** ⌘E: the selected clips that cross the playhead, else every clip under it on the selected track. */
   split: () => void;
   /** ⌘J: the selected notes clips of one lane, as one. */
@@ -518,6 +520,8 @@ export default function SongTimeline({
   const content = useRef<HTMLDivElement>(null);
   const [marquee, setMarquee] = useState<Marquee | null>(null);
   const [menu, setMenu] = useState<MenuAt | null>(null);
+  // Repeat…'s popover, where the clip menu was.
+  const [repeating, setRepeating] = useState<{ x: number; y: number } | null>(null);
   // An automation point being dragged or painted: what the bubble at the pointer says.
   const [bubble, setBubble] = useState<{ at: { x: number; y: number }; text: string } | null>(null);
   // Beats ← and → have asked for and that wait for the timeline to show the last edit.
@@ -602,6 +606,31 @@ export default function SongTimeline({
     const pick = (done: Done, keep: ClipRef[] = [], range: [number, number] | null = null) => {
       const refs = [...keep, ...done.made.map((m) => ({ module: m.module, lane: m.lane, id: m.id }))];
       if (refs.length) useClipSelection.getState().only(refs, range);
+    };
+    /**
+     * `times` copies of the selected clips, one after another (⌘D: one; Repeat…: more). False with
+     * none selected.
+     */
+    const copies = (times: number) => {
+      const sel = useClipSelection.getState();
+      const picked = chosen();
+      if (!picked.length) return false;
+      const graph = ready();
+      if (!graph) return true;
+      const { timeline } = latest.current;
+      // A span shorter than a bar lands on the next line of the grid (exactly, with snap off).
+      const lo = sel.range?.[0] ?? Math.min(...picked.map((p) => p.clip.start));
+      const g = useGrid.getState().song;
+      const grid = g.on ? stepOf(g, zoomNow(), barAt(timeline.meter, lo).length) : undefined;
+      const range = sel.range;
+      const what = clipsWord(picked.map((p) => p.ref));
+      const gesture: Gesture = { op: "duplicate", clips: picked.map((p) => p.server), ...(range ? { range } : {}), ...(grid ? { grid } : {}), ...(times > 1 ? { times } : {}) };
+      send(graph, gesture, { name: times > 1 ? `repeating ${what}` : `duplicating ${what}` }).then(
+        // The copies are the selection now; a marquee's bars move on with them, so ⌘D again goes on.
+        (done) => pick(done, [], range ? [range[1], range[1] + times * (range[1] - range[0])] : null),
+        toast,
+      );
+      return true;
     };
     /** Delete the selected clips (⌫, or ⌘X after copying them). */
     const remove = (verb: string) => {
@@ -925,25 +954,8 @@ export default function SongTimeline({
         latest.current.onSeek(snapSong(latest.current.timeline.meter, beat, zoomNow()));
       },
       remove: () => remove("deleting"),
-      duplicate() {
-        const sel = useClipSelection.getState();
-        const picked = chosen();
-        if (!picked.length) return false;
-        const graph = ready();
-        if (!graph) return true;
-        const { timeline } = latest.current;
-        // A span shorter than a bar lands on the next line of the grid (exactly, with snap off).
-        const lo = sel.range?.[0] ?? Math.min(...picked.map((p) => p.clip.start));
-        const g = useGrid.getState().song;
-        const grid = g.on ? stepOf(g, zoomNow(), barAt(timeline.meter, lo).length) : undefined;
-        const range = sel.range;
-        send(graph, { op: "duplicate", clips: picked.map((p) => p.server), ...(range ? { range } : {}), ...(grid ? { grid } : {}) }, { name: `duplicating ${clipsWord(picked.map((p) => p.ref))}` }).then(
-          // The copies are the selection now; a marquee's bars move on with them, so ⌘D again goes on.
-          (done) => pick(done, [], range ? [range[1], range[1] + (range[1] - range[0])] : null),
-          toast,
-        );
-        return true;
-      },
+      duplicate: () => copies(1),
+      repeat: (times) => void copies(times),
       split() {
         const graph = ready();
         if (!graph) return;
@@ -1275,7 +1287,8 @@ export default function SongTimeline({
           </>
         )}
         {bubble && <DragBubble at={bubble.at}>{bubble.text}</DragBubble>}
-        {menu && <TimelineMenu at={menu} timeline={timeline} edits={edits} locked={locked} onOpenClip={onOpenClip} onClose={() => setMenu(null)} />}
+        {menu && <TimelineMenu at={menu} timeline={timeline} edits={edits} locked={locked} onOpenClip={onOpenClip} onRepeat={setRepeating} onClose={() => setMenu(null)} />}
+        {repeating && <RepeatPopover at={repeating} onRepeat={(n) => edits.repeat(n)} onClose={() => setRepeating(null)} />}
         {/* The Song's row, Live's Main track: pinned at the foot of the track list, with its own playhead and loop wash. */}
         <div className="sticky bottom-0 z-[26] shrink-0 border-t border-line bg-canvas" data-song-row>
           {looping && loopStart !== null && loopEnd !== null && (
@@ -1955,6 +1968,7 @@ function TimelineMenu({
   edits,
   locked,
   onOpenClip,
+  onRepeat,
   onClose,
 }: {
   at: MenuAt;
@@ -1962,6 +1976,8 @@ function TimelineMenu({
   edits: ClipEdits;
   locked: string | null;
   onOpenClip: (clip: ClipRef) => void;
+  /** Repeat…: its popover opens where the menu was. */
+  onRepeat: (at: { x: number; y: number }) => void;
   onClose: () => void;
 }) {
   const picked = pickedIn(timeline, useClipSelection((s) => s.picked));
@@ -1988,6 +2004,7 @@ function TimelineMenu({
       { id: "copy", label: "Copy", shortcut: chord("C"), run: () => edits.copy(false) },
       { id: "paste", label: "Paste", shortcut: chord("V"), off: none, run: () => edits.paste() },
       { id: "duplicate", label: "Duplicate", shortcut: chord("D"), off, run: () => void edits.duplicate() },
+      { id: "repeat", label: "Repeat…", off, run: () => onRepeat({ x: at.x, y: at.y }) },
       "line",
       { id: "split", label: "Split at playhead", shortcut: chord("E"), off: off ?? (inside ? null : `The playhead (${position(timeline.meter, beat)}) isn't inside ${these}.`), run: edits.split },
       notes.length > 1 ? { id: "join", label: "Join", shortcut: chord("J"), off: off ?? (oneLane && notes.length === picked.length ? null : "Only notes clips of one lane join."), run: edits.join } : null,
@@ -2007,6 +2024,64 @@ function TimelineMenu({
   }
   return <PointMenu at={at} label={at.on === "clip" ? "Clip menu" : `${laneTitle(lane)} lane menu`} items={items} onClose={onClose} />;
 }
+
+/**
+ * Repeat… (Q12): "Repeat [3] more times" and [Repeat], at the clip menu's place. Return repeats; Esc
+ * closes. 1 to 64.
+ */
+function RepeatPopover({ at, onRepeat, onClose }: { at: { x: number; y: number }; onRepeat: (times: number) => void; onClose: () => void }) {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const [draft, setDraft] = useState("3");
+  const input = useRef<HTMLInputElement>(null);
+  const n = Number(draft);
+  const ok = Number.isInteger(n) && n >= 1 && n <= REPEATS;
+  useEffect(() => input.current?.select(), [anchor]);
+  const go = () => {
+    if (!ok) return;
+    onClose();
+    onRepeat(n);
+  };
+  return (
+    <>
+      {createPortal(<span ref={setAnchor} aria-hidden className="fixed size-px pointer-events-none" style={{ left: at.x, top: at.y - 4 }} />, document.body)}
+      {anchor && (
+        <Popover anchor={anchor} onClose={onClose} data-testid="repeat-popover" aria-label="Repeat" className="w-[260px]">
+          <div className="px-2 py-1.5 flex items-center gap-2 text-sm text-fg">
+            <label htmlFor="repeat-times">Repeat</label>
+            <input
+              ref={input}
+              id="repeat-times"
+              data-testid="repeat-times"
+              type="number"
+              min={1}
+              max={REPEATS}
+              value={draft}
+              autoFocus
+              aria-invalid={!ok}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                // Its keys are its own: never the timeline's (⌫ deletes clips there).
+                e.stopPropagation();
+                if (e.key === "Enter") go();
+              }}
+              className={clsx("w-14 h-ctl px-2 rounded-sm bg-raised border text-sm text-fg tabular-nums outline-none", ok ? "border-line-strong focus:border-accent" : "border-danger")}
+            />
+            <span>more times</span>
+          </div>
+          {!ok && <div role="alert" className="px-2 pb-1 text-xs text-danger">Repeat 1 to {REPEATS} times</div>}
+          <div className="px-2 pt-1 pb-1.5 flex justify-end">
+            <Button variant="primary" size="sm" data-testid="repeat-go" disabled={!ok} onClick={go}>
+              Repeat
+            </Button>
+          </div>
+        </Popover>
+      )}
+    </>
+  );
+}
+
+/** The most copies Repeat… makes (Q12), as the server takes them. */
+const REPEATS = 64;
 
 /** Whether a drag moves a clip of track `module`, or onto one of its lanes. */
 const involves = (d: Drag, module: string) => d.to?.module === module || d.clips.some((c) => c.ref.module === module);

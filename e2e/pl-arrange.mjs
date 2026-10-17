@@ -177,6 +177,46 @@ check(await until(async () => (await toasts()).some((t) => t.includes("layout.js
 write("layout.json", kept);
 check(await until(async () => !!(await flag("Chorus")), 5000), "put back, its markers show again");
 
+// ---------------------------------------------------------------- B4: repeat a clip
+const bassStarts = () => JSON.parse(read("data/bass/notes.json")).clips.map((c) => c.start);
+const repeatFrom = async () => {
+  const b = await box('[data-lane="bass.notes"] [data-clip]');
+  await page.mouse.click(b.x + 40, b.y + b.height / 2, { button: "right" });
+  await page.waitForSelector("[data-testid=clip-menu]");
+};
+await repeatFrom();
+const ids = await page.$$eval("[data-testid=clip-menu] [data-menu-item]", (els) => els.map((e) => e.dataset.menuItem));
+check(ids.includes("repeat") && ids.indexOf("repeat") === ids.indexOf("duplicate") + 1, `the clip menu has Repeat… after Duplicate: ${ids.join(", ")}`);
+await page.click('[data-testid=clip-menu] [data-menu-item="repeat"]');
+await page.waitForSelector("[data-testid=repeat-popover]");
+const rv = await page.$eval("[data-testid=repeat-times]", (e) => ({ value: e.value, focused: document.activeElement === e }));
+const words = await page.$eval("[data-testid=repeat-popover]", (e) => e.innerText.replace(/\s+/g, " ").trim());
+check(rv.value === "3" && rv.focused && words === "Repeat more times Repeat", `it asks "Repeat [3] more times", the 3 ready to type over: ${JSON.stringify(rv)} ${words}`);
+await lintNow("the Repeat popover");
+await page.keyboard.press("Enter");
+check(await until(() => same(bassStarts(), [0, 32, 64, 96])), `Return makes three Bass clips after the first, one after another: ${bassStarts()}`);
+check(await until(async () => (await page.$$('[data-lane="bass.notes"] [data-clip][data-picked]')).length === 3), "the copies are selected");
+const ids3 = JSON.parse(read("data/bass/notes.json")).clips.map((c) => c.id);
+check(new Set(ids3).size === 4, `each with an id of its own: ${ids3.join(", ")}`);
+check((await undoTitle()).includes("Undo repeating a Bass clip"), `Undo says: ${await undoTitle()}`);
+await undo();
+check(await until(() => same(bassStarts(), [0])), "one Undo takes all three back");
+await repeatFrom();
+await page.click('[data-testid=clip-menu] [data-menu-item="repeat"]');
+await page.waitForSelector("[data-testid=repeat-popover]");
+await page.keyboard.press("Escape");
+await sleep(400);
+check(!(await page.$("[data-testid=repeat-popover]")) && same(bassStarts(), [0]), "Esc closes it and repeats nothing");
+await repeatFrom();
+await page.click('[data-testid=clip-menu] [data-menu-item="repeat"]');
+await page.waitForSelector("[data-testid=repeat-popover]");
+await page.keyboard.type("65");
+const bad = await page.$eval("[data-testid=repeat-popover]", (e) => ({ say: e.querySelector("[role=alert]")?.textContent, off: e.querySelector("[data-testid=repeat-go]").disabled }));
+await page.keyboard.press("Enter");
+await sleep(300);
+check(bad.say === "Repeat 1 to 64 times" && bad.off && same(bassStarts(), [0]), `65 is refused in words: ${JSON.stringify(bad)}`);
+await page.keyboard.press("Escape");
+
 // ---------------------------------------------------------------- a PC page's words
 const pc = await open(1440, 900, { pc: true });
 await pc.page.waitForSelector('[data-marker-name="Chorus"]');
