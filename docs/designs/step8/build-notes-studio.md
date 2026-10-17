@@ -1668,3 +1668,14 @@ MIDI… showed a native error box, "unknown action save_file", and saved nothing
   each; `the_save_dialog_takes_its_ask_from_the_page`. The Mac lint is clean.
 - Red: `the page asks for actions the app doesn't have: ["save_file"]`.
 - Left: the panel itself is seen only on a Mac (HANDOFF's by-ear steps).
+
+#### F3. Settings on the start screen named no keyboard
+
+Settings' MIDI keyboards read only what an open song had said. On the start screen, with a keyboard plugged in, it
+said "No MIDI keyboard is plugged in."
+
+- `routes_settings.rs`: the settings answer's `midi` names the keyboards plugged in (`devices`), song or none.
+- `SettingsDialog.tsx`: the window takes them from that answer; a plug or unplug later says again, as before.
+- Tests: `settings_name_the_keyboards_with_no_song_open` (`routes_record_tests.rs`); `st-record` closes the song,
+  opens a new window on the start screen and finds the keyboard's row (63 to 66). Green with `nx-settings` (42).
+- Red: `left: Null, right: ["Keys"]` (the answer had only `off`); `FAIL  the keyboard plugged in has its row ()`.

@@ -38,7 +38,12 @@ function Dialog({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     settingsApi
       .get()
-      .then(setS)
+      .then((got) => {
+        setS(got);
+        // The keyboards plugged in, as the server hears them: on the start screen no song has said
+        // (the review's F3). A plug or unplug later says again.
+        if (got.midi?.devices) useMidi.setState({ devices: got.midi.devices });
+      })
       .catch((e) => setError(message(e)));
   }, []);
 

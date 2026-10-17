@@ -105,3 +105,22 @@ fn a_read_only_window_cant_record() {
     drop(held);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// The review's F3: Settings names the MIDI keyboards plugged in with no song open (the start
+// screen), as the server hears them.
+#[test]
+fn settings_name_the_keyboards_with_no_song_open() {
+    let dir = project("kb");
+    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
+    use m2_os::midi::Event;
+    running.state.midi(Event::Plugged("Keys"));
+    let addr = running.url.trim_start_matches("http://");
+    let mut s = std::net::TcpStream::connect(addr).unwrap();
+    s.write_all(format!("GET /api/settings HTTP/1.1\r\nHost: {addr}\r\nx-m2-token: t0k\r\nConnection: close\r\n\r\n").as_bytes()).unwrap();
+    let mut answer = String::new();
+    s.read_to_string(&mut answer).unwrap();
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+    let shown: Value = serde_json::from_str(answer.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(shown["midi"]["devices"], json!(["Keys"]), "{shown:#}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

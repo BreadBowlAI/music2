@@ -7,7 +7,8 @@
 // is written at the wrap and play goes on; R while playing records from now; Esc and Space while
 // counting cancel and nothing plays; nothing played says so; a PC page's R; with the code broken R
 // says so and starts nothing (the review's R1); Settings' MIDI keyboards
-// (one turned off plays and records nothing, the mark says so, one unplugged says "(not connected)");
+// (one turned off plays and records nothing, the mark says so, one unplugged says "(not connected)",
+// one plugged in before the window opened has its row on the start screen: the review's F3);
 // the lint; and on a server of the suite's own that plays into a file, the count's four clicks a beat
 // apart, the first louder, and the song's first beat a bar after the first click.
 //
@@ -326,6 +327,14 @@ await midi([0x80, 60, 0]);
 await inject({ device: "Test Keys", plugged: false });
 await settingsOpen();
 check(await until(() => page.$("[data-testid=settings-midi-none]"), 3000), "none plugged in and none off: “No MIDI keyboard is plugged in.”");
+await settingsClose();
+// The start screen, in a window opened after the keyboard was plugged in.
+await inject({ device: "Test Keys", plugged: true });
+await api("/close", { method: "POST", body: "{}" });
+await page.reload({ waitUntil: "domcontentloaded" });
+check(await until(() => page.$("[data-testid=start]"), 5000), "the song closed: the start screen");
+check(await settingsOpen(), "⌘, opens Settings there");
+check(await until(async () => (await kbRows()).join("|") === "Test KeysPlays ✓", 3000), `the keyboard plugged in has its row (${(await kbRows()).join(" | ")})`);
 await settingsClose();
 
 await heard();

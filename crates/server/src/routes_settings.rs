@@ -29,8 +29,9 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Sen
 /// The settings as the window shows them: what is chosen (an output by its id, and its name: as
 /// listed, or as kept while it isn't connected), the outputs there are (the default first), what
 /// plays now, where new songs go and the default for that, the home folder (the window writes paths
-/// in it as `~/…`), and whether an export runs (the output can't change then). `stopped`: the
-/// change just made stopped playback.
+/// in it as `~/…`), whether an export runs (the output can't change then), and the MIDI keyboards
+/// plugged in and turned off (with no song open too: the review's F3). `stopped`: the change just
+/// made stopped playback.
 fn shown(s: &AppState, stopped: bool) -> Value {
     let choice = s.graph.output_choice();
     let listed = m2_play::outputs();
@@ -57,7 +58,7 @@ fn shown(s: &AppState, stopped: bool) -> Value {
         "exporting": s.exports.running(),
         "stopped": stopped,
         "record": {"count_in": record.count_in, "quantize": record.quantize},
-        "midi": {"off": midi.off},
+        "midi": {"off": midi.off, "devices": s.graph.midi_state()["devices"]},
     })
 }
 

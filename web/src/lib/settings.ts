@@ -53,8 +53,8 @@ export interface Settings {
   stopped: boolean;
   /** Record's options (lane B): count in first, snap the take to Notes' grid. */
   record?: { count_in: boolean; quantize: boolean };
-  /** The MIDI keyboards turned off, by name (lane B): they neither play nor record. */
-  midi?: { off: string[] };
+  /** The MIDI keyboards turned off, by name (lane B): they neither play nor record; and those plugged in. */
+  midi?: { off: string[]; devices?: string[] };
 }
 
 export interface SettingsChange {
