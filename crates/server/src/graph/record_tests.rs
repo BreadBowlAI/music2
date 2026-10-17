@@ -791,3 +791,18 @@ fn a_note_the_grid_moves_later_still_ends_inside_the_clip() {
     assert!(length > 1.2, "its length kept: {c}");
     assert_eq!(c["length"].as_f64(), Some(12.0), "to the bar line after its end: {c}");
 }
+
+// The review's R7: a cancel that lands just after the count's bar, before the take thread has seen
+// it turn into playing, still stops the song (D6).
+#[test]
+fn a_cancel_just_after_the_count_still_stops_the_song() {
+    let mut r = Rig::new();
+    r.anchored(96_000, 0.0);
+    r.start(true, None);
+    r.to(0.03);
+    assert!(r.graph.status().playing, "the count turned into playing");
+    assert_eq!(r.graph.record_cancel(r.token).unwrap(), json!({"cancelled": true}));
+    r.fill(10);
+    assert!(!r.graph.status().playing, "nothing plays");
+    assert!(!r.graph.recording());
+}

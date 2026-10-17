@@ -1619,3 +1619,13 @@ later could end past the clip, and it was cut there.
 - Test: `a_note_the_grid_moves_later_still_ends_inside_the_clip` (held from 6.6 to 7.9, grid 1 beat: 7.0 for 1.3 beats,
   the clip 3 bars).
 - Red: `to the bar line after its end: … left: Some(8.0) right: Some(12.0)`.
+
+#### R7. A cancel right as the count ends
+
+The page shows the count until the take thread says it records (every 100 ms). A cancel in that gap dropped the
+take but left the song playing (against D6).
+
+- `record.rs`' `record_cancel`: it stops the song whenever the take was still counting as the windows were told, not
+  only while the engine's clock was before the downbeat.
+- Test: `a_cancel_just_after_the_count_still_stops_the_song` (cancelled 0.03 beats after the downbeat).
+- Red: `nothing plays`.

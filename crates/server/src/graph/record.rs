@@ -455,14 +455,11 @@ impl Graph {
     /// dropped, and play goes on.
     pub fn record_cancel(&self, token: u64) -> Result<Value> {
         let counting = {
-            let device = self.inner.current_device();
             let mut cp = self.inner.control.lock();
-            let Some(t) = cp.record.take.as_mut().filter(|t| t.token == token) else { return Ok(json!({"cancelled": false})) };
-            let clock = device.as_ref().filter(|d| d.epoch == t.epoch).and_then(|d| {
-                t.resolve(&d.player);
-                d.player.heard_frame().map(|(c, _)| c)
-            });
-            let counting = t.counting(clock);
+            let Some(t) = cp.record.take.as_ref().filter(|t| t.token == token) else { return Ok(json!({"cancelled": false})) };
+            // Counting as the windows were last told, though its bar may have just ended (the
+            // review's R7).
+            let counting = matches!(t.phase, Phase::Count { .. });
             cp.record.drop_take();
             counting
         };
