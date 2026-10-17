@@ -1109,6 +1109,8 @@ judged everywhere (no crash, no non-finite sample, frames exactly as the engine 
   `e2e/renders.sha256` (no record changed), the touched crates' tests (scratch `HOME`, `M2_AUDIO=none`), workspace
   clippy and the Mac lint (`--target aarch64-apple-darwin`), rustfmt on new files. All green, first time.
 - The pool's commit also ran its models in release and their clippy: 6 models and 22 unit tests, green.
+- At the slice's end (`ac34493`), the whole workspace's tests but the desktop shell's, once: **1,373 passed, none
+  failed**, 20:43 to 20:50, load 2.7 to 4.4 (`~/m2-runs/logs/8a-s4-workspace-1017-204307-2790700.log`).
 - `Cargo.lock` unchanged; every build `--locked`. The PLAT-2 test passes: no OS code outside `core/os`.
 - `ci/check.sh` and `ci/sweep.sh` pass `bash -n`. `ci/sweep.sh` can't run here (it is the Mac's); its lines are
   the ones the build notes gave before, in one file.
