@@ -3290,6 +3290,47 @@ fn a_note_held_across_an_export_that_fails_at_once_plays_again() {
     assert!(ex.state.graph.status().playing && ex.engine().crashes() == 0, "playback goes on");
 }
 
+/// The loudest sample of the next `n` blocks the device takes.
+fn loudest(ex: &mut Ex, n: usize) -> f32 {
+    let mut most = 0f32;
+    for _ in 0..n {
+        let mut buf = [0.0f32; 256];
+        ex.driver.fill(&mut buf, 2);
+        drop(ex.driver.drain_retired());
+        most = buf.iter().fold(most, |m, x| m.max(x.abs()));
+    }
+    most
+}
+
+// RENDER-10, RENDER-1 (the plan's risk 16, design-8b §4.3): Stop All Sound (⌘.) while an export
+// holds playback waits for the resume, and applies after the plugins the export lent are told to
+// start again the notes the song holds (O4): it wins, so nothing sounds after the export, and
+// playback goes on. The negative control: an export with no Stop All Sound gives the notes back.
+#[test]
+fn stop_all_sound_during_an_export_stays_silent_after_it() {
+    let mut ex = Ex::tagged("panicked");
+    ex.fill(4);
+    let stats = m2_plugins::probe::stats(ex.handles()[0]).unwrap();
+    assert_eq!(stats.sounding.load(Ordering::Relaxed), 2, "its two long notes sound");
+    assert!(loudest(&mut ex, 8) > 0.1, "and are heard");
+    crate::export::start(&ex.state, Some(ex.fixture.0.join("one.wav"))).unwrap();
+    ex.fill_until("the first export is done", |ex| !ex.state.exports.running());
+    ex.fill(4);
+    assert_eq!(stats.sounding.load(Ordering::Relaxed), 2, "with no Stop All Sound, they play again after an export");
+
+    let (go, there) = ex.stop_inside();
+    crate::export::start(&ex.state, Some(ex.fixture.0.join("two.wav"))).unwrap();
+    ex.fill_until("the export took the instance", |_| there.try_recv().is_ok());
+    ex.state.graph.panic().unwrap();
+    ex.fill(4);
+    go.send(()).unwrap();
+    ex.fill_until("the second export is done", |ex| !ex.state.exports.running());
+    ex.fill(4);
+    assert_eq!(stats.sounding.load(Ordering::Relaxed), 0, "Stop All Sound wins: no note plays again");
+    assert!(loudest(&mut ex, 40) < 1e-4, "silent after the export");
+    assert!(ex.state.graph.status().playing && ex.engine().crashes() == 0, "playback goes on");
+}
+
 // HOST-5: a plugin that fails at every call is started again from its saved settings once. When
 // the new instance fails too, soon after, it is left silent and the user is told once; the song
 // plays on, and no new instance is made for it every 300 ms. One whose new instance failed long
