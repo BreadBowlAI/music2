@@ -8,7 +8,7 @@ only the Mac judges them. Other tracks loaded this server the whole time, so eve
 
 | Row | What failed on the Mac | The cause, as measured | The fix |
 |---|---|---|---|
-| gates, G7f store | "block within S + 80 µs": +135 µs | Not the channel gains: p50 had its 50 `std:gain` before 8b.3, and S plays them too. Linux's "+60 since `22bea45`" didn't come back in paired runs today; what is left of it follows std's rebuild, not new work (below) | `std:gain` skips `powf` while the dB holds still: 5.3 µs a node a block at -12 dB becomes 0.46, the same bits. G7f store on Linux: +119 and +22 µs over S before, -148 and -360 after |
+| gates, G7f store | "block within S + 80 µs": +135 µs | **Not pinned.** Not the channel gains: p50 had its 50 `std:gain` before 8b.3, and S plays them too. Linux's "+60 since `22bea45`" didn't come back in paired runs today. Untested candidates for the Mac: std's rebuild, and 8a's block path (partitions, the FP mode) | `std:gain` skips `powf` while the dB holds still: 5.3 µs a node a block at -12 dB becomes 0.46, the same bits. G7f store on Linux: +119 and +22 µs over S before, -148 and -360 after. It speeds up the app's side only, so the Mac also plays the old gain once (below) |
 | rust tests | `new_songs_go_where_settings_say` | A Mac's temporary folder is a link (`/var` is `/private/var`). A song opens by its real path; the songs folder kept the link's spelling | The songs folder and the home folder are named by their real paths, as songs are |
 
 Every render keeps its bits: `e2e/renders.sha256`, `renders.json`, and G7f's "same music" hash (`22cd1b3810530499`,
@@ -24,14 +24,24 @@ the Mac's own). No std version bump: no render changed (FMT-3). `std.wasm` chang
   So they can't be what moved the line.
 - **Linux's "+60" isn't a clear step.** The checks read `a8199ff` -33 µs and `22bea45` +61, one run each. Run again
   today, paired, `e108e46` read -7 and `22bea45` -20. On this server one run of the line moves by about 100 µs.
-- **What is left of it follows std's rebuild.** Only std reaches G7f store between `a8199ff` and `22bea45`. The
-  master's two new nodes cost +0.4 µs a block. In one process, `85b069a`'s std read +22 to +95 µs over `a8199ff`'s,
-  and swapping only `std.wasm` read +37 to +82; the A/A control read -52 to +24. The kernels' code is the same in
-  both builds: only where code and statics sit moved. I couldn't pin it further here (no hardware counters).
+- **What is left of it is not pinned.** Only std reaches G7f store between `a8199ff` and `22bea45`. The master's
+  two new nodes cost +0.4 µs a block. In one process, `85b069a`'s std read +22 to +95 µs over `a8199ff`'s, and
+  swapping only `std.wasm` read +37 to +82. But the A/A control read -52 to +24, so that is near the noise. And
+  `22bea45` has the same `std.wasm` as `85b069a` (sha256 `3dd1f634…`), yet in the sweep it read -20 µs, against
+  +119 and +22 for `85b069a`'s std on the track's binary. So std's rebuild is a candidate, not shown. I couldn't
+  pin it further here (no hardware counters).
 - **The Mac's +154 since step 7 can't be split on Linux.** On the Mac it sits in what the app and P1 share: P1
-  read +177 over S.
+  read +177 over S, the app's layout -46 over P1. Untested candidates, all between `cbac57c` and `85b069a`: std's
+  rebuilds (std 0.2 with the `sounds` merge; the master's gain and `std:stereo` with 8b.3), and 8a's block path:
+  blocks through partitions (`0fd1b20`) and one floating-point mode on every thread (`2dc89ce`, `7a1d527`). None
+  was measured on its own on the Mac. On Linux 8a's tip read +47 and `next` +46, one run each.
 - **The fix is still `std:gain`.** It is real work every song does, and it is worth far more than the move: G7f
-  store's line on Linux went from +119 and +22 µs over S to -148 and -360, with the same bits. The Mac decides.
+  store's line on Linux went from +119 and +22 µs over S to -148 and -360, with the same bits.
+- **But it would hide the +154.** S plays its own std, with the old gain. So the fast path speeds up the app's
+  layout and P1 alike, by about 250 µs a p50 block on Linux. Then the line no longer shows the Mac's shift, and
+  any layout or engine cost up to about that much reads as a pass. So the owner's next Mac run plays G7f store
+  twice: once as `ci/check.sh` does, and once with `85b069a`'s std (the old gain) on the app's side, as the Linux
+  sweep's "old" runs did ("The Mac's next run", below). The second one keeps the +135 in view.
 
 ### What was measured, and how
 
@@ -124,7 +134,9 @@ either). `std.wasm` rebuilt with `std/build.sh`; `std/build.sh --check` rebuilds
 folder. Its sha256 was `3dd1f634…`, now `699670b4…`: every kernel's hash changed (PLAT-5).
 
 How G7f's S gets its std: its runner plays S's own std (`crates/gates/s/README.md`), whatever `M2_STD` says. So the
-fix speeds up the app's side only. The line then says the app beats S, by about the gains' old cost.
+fix speeds up the app's side only: the app's layout and P1, not S. The line then says the app beats S, by about the
+gains' old cost (about 250 µs a p50 block on Linux). That would hide as much of any other cost, so the Mac also runs
+the gate with the old gain (below).
 
 ### Tests, red first
 
@@ -179,7 +191,34 @@ Every run: "the same music", hash `22cd1b3810530499` (2,880,000 samples), the ap
 the Mac's own hash. New against old: -267 and -382 µs, about the 50 gains' old cost (50 × 5.3 µs).
 
 On the Mac (expected, not measured): its gains cost about as much, so its +135 should land far under the bound.
-The owner's next `ci/check.sh` says.
+The owner's next `ci/check.sh` says. That pass would come from the gains, not the layout, so it can't say whether
+the +135 went away.
+
+### The Mac's next run
+
+Once macfix is on `main`, the owner runs `ci/check.sh` on the Mac, then this, in the same Terminal (about 10
+minutes; S's runner is already built in `~/m2-check/s-8aa301e`):
+
+```sh
+cd ~/dev/suite2/music2
+mkdir -p ~/m2-check/std-85b069a && git archive 85b069a std | tar -x -C ~/m2-check/std-85b069a
+export M2_GATES_S=$(crates/gates/s/build.sh | tail -1)
+M2_STD=~/m2-check/std-85b069a/std cargo run --locked --release -p m2-gates -- store --reference 50 2>&1 | tee ~/m2-g7f-old-gain.txt
+```
+
+It plays G7f store with the app's side on `85b069a`'s std, the old gain, against S as always. What it says:
+
+| "block within S + 80 µs" with the old gain | Then |
+|---|---|
+| about +135 again | the Mac's shift is still there, and still unexplained. The check's pass comes from the gains. Next: the candidates above, one at a time on the Mac |
+| near step 7's -19 | the shift is gone with the old gain too, so the fast path hides nothing. Write it in RENDER-32; nothing more to chase |
+| anything between | run it once more before deciding (one run is good to about ±30 µs a block) |
+
+Tried on Linux (information only), with S's runner built again in `~/m2-runs/smf/s-8aa301e` and the track's
+binary (`~/m2-runs/smf/g7f-archive.sh`, log `mf-g7f-archive-1017-225523-*.log`, load 9 to 6, 11 minutes). The
+archive's `std.wasm` is `3dd1f634…`, the same folder as the sweep's "old". It played the same music
+(`22cd1b3810530499`) and read **-59 µs** over S (5 pairs, -281 to +52); P1 +254 over S, the app's layout -337 over
+P1. This server can't say more than that: one run here moves by about 100 µs.
 
 ## B. The songs folder
 
@@ -251,7 +290,9 @@ All on Linux, in `~/m2-runs/smf/target` (and `target-kernels`, `target-wasm`), H
 
 ## Left
 
-- The Mac run. Only it judges G7f, and only it can say what its +154 since step 7 was made of.
+- The Mac run, with G7f store played once more on the old gain ("The Mac's next run"). Only it judges G7f, and
+  only that second run still shows the +154 since step 7. What it was made of is not pinned: std's rebuilds and 8a's
+  block path (partitions, the FP mode) are untested candidates.
 - std's other per-sample `powf`s: `std:drive` (17 in p50, 137 µs a block in the 8a spike) runs `db_to_gain` and
   two `tanh`s per sample on a dB that mostly holds still. The same kind of fast path would apply. Not done here: it
   isn't what failed, and S pays it too.

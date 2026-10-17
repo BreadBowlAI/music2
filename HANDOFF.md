@@ -477,6 +477,23 @@ times faster 4 threads render a p50 block than 1, by the p99:
 | 1 thread, paced, more than 15% slower by the p99 than back to back | the live half spins between callbacks |
 | 8 threads 10% or more faster than 4 | an export alone uses every fast core on a Mac |
 
+**G7f store once more, on the old gain (for the owner, after the next `ci/check.sh`).** macfix made the app's
+`std:gain` skip its `powf` while its dB holds still. S plays its own std, with the old gain. So G7f store's line now
+favours the app by about 250 µs a p50 block (on Linux), and would hide the Mac's +154 µs since step 7. This run
+puts the old gain back on the app's side, so the shift stays in view. Same Terminal, right after the check (about
+10 minutes):
+
+```sh
+cd ~/dev/suite2/music2
+mkdir -p ~/m2-check/std-85b069a && git archive 85b069a std | tar -x -C ~/m2-check/std-85b069a
+export M2_GATES_S=$(crates/gates/s/build.sh | tail -1)
+M2_STD=~/m2-check/std-85b069a/std cargo run --locked --release -p m2-gates -- store --reference 50 2>&1 | tee ~/m2-g7f-old-gain.txt
+```
+
+Paste back `~/m2-g7f-old-gain.txt`. Its "block within S + 80 µs" line: about +135 again means the shift is still
+there, unexplained; near step 7's −19 means it is gone. What each says, and the candidates (std's rebuilds; 8a's
+blocks through partitions and its floating-point mode): `build-notes-macfix.md`, "The Mac's next run".
+
 1. **The Mac runs** (above), when the owner has time: `ci/check.sh` on `main` for the `sounds` merge and 8b's back
    ends, and the by-ear steps. Fix what they find on Linux, then ask for one more run.
 2. **The two gaps found on 2026-10-16** (Left for later): fix them before step 9, or with idea 3 if the owner
