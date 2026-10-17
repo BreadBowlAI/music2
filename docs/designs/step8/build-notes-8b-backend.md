@@ -16,6 +16,7 @@ The `8b-backend` track builds the back ends of 8b.4 (mute, solo, mute in song), 
 | B9 | Audition in the engine: live notes on a lane (`Msg::Live`), `Player::live`, how many are held | built |
 | B10 | Audition on the server: the WebSocket and `POST /api/graph/audition`, sources, the watchdog, `live` in the status | built |
 | B11 | Meters in the engine: taps on the output and each track; the callback's time; whether the engine idles | built |
+| B12 | Meters on the server: the 30 Hz thread, the `meters` message on its own channel, `load` in the status | built |
 | W1 | The keyed compressor and the gate's third clause | waits for std 0.2 on main |
 
 ---
@@ -365,6 +366,7 @@ the song's output and of each track. Nothing it plays changes.
 - **A sample that isn't finite:** a NaN is passed over; an infinity reads as the largest `f32`.
   So a meter never holds a value JSON can't carry.
 - **A mono node in a stereo track** gives its one channel to both.
+- **A track nothing reads has no meter:** it has no site, and isn't heard either.
 - **`late` counts for good,** from the player's start, like `xruns`. A window that missed a
   meters message still sees a dropout as a larger count.
 - **The callback is timed from its first line to its last,** after it published, so the time
@@ -374,4 +376,50 @@ the song's output and of each track. Nothing it plays changes.
 of `m2-runtime`, `m2-play`, `m2-session` (`renders.json` unchanged: offline renders have no taps).
 
 **Contract:** the Engine shape (`taps`), RENDER-28 *Today* (the timer, `idle`).
+
+---
+
+## B12. Meters on the server
+
+**In short:** every window now gets the meters about 30 times a second while the song plays:
+each track's peak, the song's output, and the DSP load. Nothing is sent while the engine idles.
+
+| Piece | What it does | Where |
+|---|---|---|
+| `Graph::meters()` | Reads and resets the taps of the plan that plays, and reads the load. `None` while nothing plays, while the engine idles (but one last message as it starts to), and while a new plan waits to be taken. | `crates/server/src/graph/meters.rs` (new) |
+| The message | `{"t": "meters", "tracks": {"kick": [l, r], …}, "out": [l, r], "dsp": {"load": 0.23, "dropouts": 0}}`. Peaks linear, to a millionth. | same |
+| `Meters` | The last 30 loads (a second), and whether the engine idled at the last read. One `ControlPlane` field. | same; one line in `graph.rs` |
+| `music2-meters` | A thread: every 33 ms, `meters()`, sent with `send_replace` on `AppState.meters`, a `watch` channel (M1). It reads the load even with no window, so the status stays current; it sends only while a window listens. | `crates/server/src/lib.rs` |
+| `ws_loop` | Also waits on the meters channel, and sends the latest. | `crates/server/src/routes.rs` (one branch) |
+| Status | `load` (the longest callback of the last second, as a share of the period) and `late`, from the meters' reads (M3). In the graph state too. | `Activity` |
+| Taps per plan | Nothing to add: `PlaysView.info` is the plan's `PlanInfo`, which holds its taps (S4, S6). | — |
+
+**Tests:**
+
+| Test | Where | Red first? |
+|---|---|---|
+| `meters_are_sent_while_playing_and_stop_when_idle` (idle at open: one last, then none; playing; stopped: rings, then the last reads silence) | `crates/server/src/graph/meters_tests.rs` (new) | red with no last message as it idles |
+| `a_new_plan_moves_the_taps` (a track added; none while the plan waits) | same | red without the wait for the plan |
+| `muting_the_kick_floors_its_meter_and_the_bass_still_ducks` (`env` fixture) | same | — (the runtime's muted-tap test was red) |
+| `meters_reach_every_window_and_the_status_has_the_load` (two windows, the token, `load` and `late` in the status) | `crates/server/src/routes_8b_tests.rs` | red with `ws_loop` not reading the channel |
+
+The tests were written after the code; each was made red by breaking the code it checks.
+
+**Choices made here:**
+- **`out` has its own field,** not a key in `tracks`: a track may be called `out` (ID-1 allows it).
+- **One last message as the engine starts to idle,** so meters fall to the silence it ended in,
+  rather than freezing on the last loud read. Then none.
+- **No message while a new plan waits to be taken:** its taps read nothing yet, so a message
+  would flash every meter to the floor for one frame at each edit. The window keeps the last.
+- **`dropouts` is a count since the player started** (xruns plus late callbacks), not new ones
+  per message. A window may miss messages (the channel keeps the latest), so it lights its
+  warning when the count grows.
+- **The bass in the ducking test is metered before the duck:** the duck is written in the song,
+  and tracks are tapped at their overlay (Q2). The output's meter shows the duck instead. With
+  8b.3's channel gains, a track's meter moves after its fader.
+
+**Checks:** `cargo check --workspace --all-targets`; clippy on `m2-server`; `m2-server` tests.
+
+**Contract:** the Engine shape (the server's half), the Deferred table (taps and meters built;
+freezing and bounce as a Tx stay), `docs/gaps.md` #20.
 

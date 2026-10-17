@@ -235,3 +235,37 @@ fn mute_in_song_is_refused_read_only() {
     drop(held);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// 8b.8, M1: every window gets the meters over its WebSocket while the song plays, on their own
+// channel, behind the token; the status carries the DSP load the meters read.
+#[test]
+fn meters_reach_every_window_and_the_status_has_the_load() {
+    let dir = std::env::temp_dir().join(format!("m2-routes-8b-meters-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n";
+    std::fs::write(dir.join("music2.toml"), manifest).unwrap();
+    std::fs::write(
+        dir.join("song.ts"),
+        "import { song, track } from '@m2/core';\nimport { osc } from 'std/dsp';\n\
+         const lead = track('lead', () => osc.sine(440));\nexport default song(() => lead.out);\n",
+    )
+    .unwrap();
+    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
+    running.state.graph.open(&dir).unwrap();
+    running.state.graph.transport("play").unwrap();
+    let url = &running.url;
+    let (mut a, mut b) = (Ws::connect(url, "client=w1&token=t0k"), Ws::connect(url, "client=w2&token=t0k"));
+    for ws in [&mut a, &mut b] {
+        let m = ws.next("meters");
+        assert!(m["tracks"]["lead"][0].as_f64().unwrap() > 0.5 && m["out"][0].as_f64().unwrap() > 0.5, "{m}");
+        assert!(m["dsp"]["load"].as_f64().is_some() && m["dsp"]["dropouts"].as_u64().is_some(), "{m}");
+    }
+    let start = Instant::now();
+    while get(url, "/api/graph/status", "t0k")["load"].as_f64().unwrap_or(0.0) <= 0.0 {
+        assert!(start.elapsed() < Duration::from_secs(5), "the status never had a load");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(get(url, "/api/graph/status", "t0k")["late"].as_u64().is_some());
+    let _ = std::fs::remove_dir_all(&dir);
+}

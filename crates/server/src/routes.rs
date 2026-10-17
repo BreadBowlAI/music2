@@ -164,10 +164,11 @@ async fn ws(State(s): S, Query(q): Query<WsQuery>, upgrade: WebSocketUpgrade) ->
     })
 }
 
-/// Forward every event (toasts, `graph`) to one client until it goes away, and take what it sends:
-/// audition, whose answers go to this socket only (`routes_8b::ws_text`).
+/// Forward every event (toasts, `graph`) and the latest meters to one client until it goes away,
+/// and take what it sends: audition, whose answers go to this socket only (`routes_8b::ws_text`).
 async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket, client: Option<String>) {
     let (unheard, mut events) = state.subscribe();
+    let mut meters = state.meters.subscribe();
     for text in unheard {
         if socket.send(Message::Text(text.into())).await.is_err() {
             return;
@@ -175,6 +176,12 @@ async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket, client: Option<Str
     }
     loop {
         tokio::select! {
+            Ok(()) = meters.changed() => {
+                let text = meters.borrow_and_update().clone();
+                if socket.send(Message::Text(text.into())).await.is_err() {
+                    break;
+                }
+            }
             ev = events.recv() => {
                 if let Ok(text) = ev
                     && socket.send(Message::Text(text.into())).await.is_err()

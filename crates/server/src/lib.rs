@@ -19,7 +19,7 @@ use std::time::Duration;
 use anyhow::Result;
 use parking_lot::Mutex;
 use serde_json::json;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 
 /// Startup can't produce more than a few; the newest are kept.
 const MAX_UNHEARD: usize = 8;
@@ -39,12 +39,22 @@ pub struct AppState {
     /// Toasts sent while no window was connected, such as why the folder given at launch
     /// didn't open. The next client to connect gets them.
     unheard: Mutex<Vec<String>>,
+    /// The latest meters message (8b.8), for every window: only the latest is kept, so a window
+    /// that falls behind skips to it (empty until the first).
+    pub meters: watch::Sender<String>,
 }
 
 impl AppState {
     /// The app's state around `graph`, with no server: tests and the gates.
     pub fn new(token: String, graph: graph::Graph) -> AppState {
-        AppState { events: broadcast::channel(256).0, token, graph, exports: Default::default(), unheard: Mutex::default() }
+        AppState {
+            events: broadcast::channel(256).0,
+            token,
+            graph,
+            exports: Default::default(),
+            unheard: Mutex::default(),
+            meters: watch::channel(String::new()).0,
+        }
     }
 
     pub fn toast(&self, msg: impl Into<String>) {
@@ -108,6 +118,7 @@ pub fn start_with(opts: ServeOptions, graph: graph::Graph) -> Result<Running> {
     resources::keep_hashes();
     let state = Arc::new(AppState::new(opts.token, graph));
     spawn_graph_watch(&state);
+    spawn_meters(&state);
 
     let listener = std::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], opts.port)))?;
     listener.set_nonblocking(true)?;
@@ -180,6 +191,30 @@ fn spawn_graph_watch(state: &Arc<AppState>) {
             }
         })
         .expect("spawn the server's notices");
+}
+
+/// How often the meters are read and sent: about 30 times a second.
+const METERS_EVERY: Duration = Duration::from_millis(33);
+
+/// `music2-meters`: every 33 ms, the meters of what plays go to every window (8b.8,
+/// [`graph::Graph::meters`]), on their own channel, never through the session. The load is read
+/// even with no window, so the status's `load` stays current. Ends once the state is dropped.
+fn spawn_meters(state: &Arc<AppState>) {
+    let weak = Arc::downgrade(state);
+    std::thread::Builder::new()
+        .name("music2-meters".into())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(METERS_EVERY);
+                let Some(state) = weak.upgrade() else { return };
+                if let Some(m) = state.graph.meters()
+                    && state.meters.receiver_count() > 0
+                {
+                    state.meters.send_replace(m.to_string());
+                }
+            }
+        })
+        .expect("spawn the meters");
 }
 
 #[cfg(test)]
