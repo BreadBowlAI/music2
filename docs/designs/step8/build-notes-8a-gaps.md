@@ -7,11 +7,21 @@ branch (`8a-gaps`, worktree `~/m2-runs/wt/8a-g`, from `8a` at `98620e7`), with i
 
 ## In short
 
-| Gap | State | What it says |
-|---|---|---|
-| G1: a sound that crashes while the song plays | done | **Only that sound goes silent.** The rest plays on, bit for bit. Before, the whole song stopped. |
-| G3: the app says so | done | **A toast names the sound and its track**, says the rest plays on, and says what starts it again (Stop All Sound). Once for each sound. A browser suite plays a real crash in the app. |
-| G2: a sound over its 32 MB | done | **It says "ran out of memory"**, with the sound and the cap. Before: "wasm trap: unreachable". The app no longer tells the user to close other apps for it. |
+- **A sound that breaks no longer stops the song.** Only that sound goes silent; the rest plays on, bit for bit,
+  on any number of threads. Before, the whole song went silent and stopped, with no word.
+- **The app says so, once:** which sound, on which track, that the rest plays on, and that Transport ▸ Stop All
+  Sound (⌘.) starts it again. A sound over its 32 MB says it ran out of memory.
+- **Exports don't change:** a sound that breaks still fails the export, naming it. No render record changed.
+- **`pl-mix` no longer flakes** on the hats' short hits.
+- Every new test was shown red first, by a small bug or by the code before this lane.
+
+| # | Commit | State | What it says |
+|---|---|---|---|
+| G1 | `9ebc8d4` | done | **Only the sound that crashed goes silent.** The plan marks it; the next activation or Stop All Sound resets it. |
+| G2 | `d77164e` | done | **"bass/delay ran out of memory: a sound may use up to 32 MB"**, live, at a build and in an export. Before: "wasm trap: unreachable". The app no longer tells the user to close other apps for it. |
+| G3 | `6e1d29e` | done | **A toast names the sound and its track**, says the rest plays on and what starts it again. Once for each sound. A browser suite plays a real crash in the app. |
+| G4 | `e66e6cd` | done | **`pl-mix` reads until a hat shows.** 10 runs of 10 pass; the old check would have failed 7 of 10. |
+| G5 | this commit | done | RENDER-25's words and *Today*, `docs/gaps.md`, these notes. |
 
 ## G1: a kernel that crashes while the song plays goes silent alone
 
@@ -210,3 +220,24 @@ toast: `~/m2-runs/s8a/g-red/sound-stops-toast.png`.
 | `pl-mix` (47 checks, as before) | `e2e/pl-mix.mjs` | above | `g-meter-post`: the strip meter reads the song's output (`channels={[OUT]}` in `Mix.tsx`'s `Strip`, past every fader): both meter checks fail, every read a mismatch ("-2/-60 … -1/-60"); the clip dot checks too. The page rebuilt after |
 
 `e2e/README.md`'s `pl-mix` row says the new reads.
+
+## G5: the contract and gaps.md
+
+| Where | What |
+|---|---|
+| `docs/architecture.md`, RENDER-25 | its last sentence: "Live, a node that fails (a kernel's trap, a voice's, a kernel that asks for more than its memory) goes silent alone and stays silent until the next activation or a panic resets it; the rest of the plan plays on, and the app names the sound and its track. Offline the render fails, naming the node." *Today*: how, where, the words, and why a kernel isn't started again on its own, unlike a plugin (HOST-5) |
+| `docs/gaps.md` | "What works today" gains: keep playing when one sound breaks |
+| `HANDOFF.md` | not touched: the track takes the two gap lines out of "Left for later" when it merges this lane |
+
+## For the lead
+
+| # | What | Why it matters |
+|---|---|---|
+| 1 | **Files outside the plan's list.** `core/runtime/src/gauge.rs` (`run_graph` and `run_part` take the `Stopped`; `pre` gives a block, so two `let Some(b)` lines go). `render_block_on`: its `let Some(b) = self.pre(..)` line became `let b = ..`, the line after the runner lines, which the plan gives slice 3. `core/runtime/src/tests/cell.rs` (one test read `broken()`), `core/runtime/src/tests.rs` (the memory test's kernel). `crates/server/src/graph.rs`: D24's line and `mod stopped;`. `crates/server/src/graph/tests.rs`: one test after `running_out_of_memory_is_said_plainly`. `e2e/run.mjs` and `e2e/README.md`: one row each, after `pl-projects` | merge: a conflict, if any, is one line apart |
+| 2 | **The words say Stop All Sound, not "your next change to the code, or Undo".** A value change (a knob, a number) is a cell write: no new plan, so the sound would stay silent. A panic resets every instance (RENDER-10), so it now clears `stopped` too: one action that always works | the plan's Q20 holds: no automatic restart |
+| 3 | **A toast lasts 4 s**, and this one is three lines. Hovering holds it. For a dyslexic owner that may be short; plugin notices have the same 4 s. A longer time for long server notices is a `web/src/lib/store.ts` and `Toasts.tsx` change, outside this lane | an owner decision, or a small polish item |
+| 4 | The notices read the plan **sent** last. In the milliseconds before the engine takes a new plan, a sound that stops in the old one isn't told | rare and short; the old plan leaves at once |
+| 5 | A voice that fails stops the whole `poly`, every voice ("The instrument on Hats") | by design: one box |
+| 6 | `Engine::crashes()` now counts only an error that reaches the engine live, which can't happen today. Only tests read it | could go later |
+| 7 | `HANDOFF.md`'s two gap lines (Left for later, step 6) can go at the merge | the track's job |
+| 8 | Disk: the lane's targets (`target-gaps`, and `target-gaps-base` for the suite's red run) are deleted at the end; the throwaway worktree `wt/8a-g-base` too | L7 |
