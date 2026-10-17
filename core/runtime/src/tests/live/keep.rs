@@ -431,26 +431,132 @@ fn a_transient_inf_keeps_every_instance() {
     assert_eq!(rig.e.current().unwrap().stats().resets, 0, "a stray block costs nothing");
 }
 
-// RENDER-25, RENDER-10: a kernel that trapped silences its plan, as before; the next activation
-// resets it as it moves it, and the new plan plays.
-#[test]
-fn a_trapped_kernel_is_reset_at_the_next_activation() {
-    let pk = t_packages();
-    let (a, b) = (check(&cued("trap", false), &pk).unwrap(), check(&cued("trap", true), &pk).unwrap());
-    let mut rig = playing(&a, &DataSet::empty(), &pk, 1024);
-    cue(&rig, 1.0, 1);
-    rig.run(BLOCK);
-    assert_eq!(rig.e.crashes(), 1);
+/// Two tracks summed in the song: `a`, `t:<kind>` on a cue cell (site 5), and `b`, a sine through
+/// a delay; `edit` adds a gain after `b`'s delay (an edit on the other track).
+fn two_tracks(kind: &str, edit: bool) -> Ir {
+    let a = json!([step_const("cue", 0.0, 5), {"id": "lat", "op": "kernel", "kernel": format!("t:{kind}"), "inputs": {"in": "cue"}}]);
+    let mut b = vec![
+        json!({"id": "fr", "op": "const", "value": 330, "unit": "hz"}),
+        json!({"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "fr"}}),
+        json!({"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "o"}}),
+    ];
+    if edit {
+        b.push(json!({"id": "half", "op": "const", "value": 0.5}));
+        b.push(json!({"id": "g", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "d", "by": "half"}}));
+    }
+    let track = |key: &str, nodes: Value, out: &str| json!({"key": key, "track": true, "nodes": nodes, "exports": {"out": out}});
+    let song = json!([
+        {"id": "a", "op": "import", "module": "a", "export": "out"},
+        {"id": "b", "op": "import", "module": "b", "export": "out"},
+        {"id": "x", "op": "kernel", "kernel": "std:add", "inputs": {"a": "a", "b": "b"}},
+    ]);
+    let modules = json!([track("a", a, "lat"), track("b", Value::Array(b), if edit { "g" } else { "d" }),
+        {"key": "song", "nodes": song, "exports": {"out": "x"}}]);
+    serde_json::from_value(json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"}, "modules": modules})).unwrap()
+}
+
+/// The top-level node of `flat` named `name` (`<module>/<id>`).
+fn named(flat: &Flat, name: &str) -> usize {
+    flat.nodes.iter().position(|n| n.name == name).unwrap_or_else(|| panic!("no node {name}"))
+}
+
+/// What [`two_tracks`] plays for `blocks` blocks, its kernel on `a` made to trap at the second
+/// block when `trap`, on this thread or with `threads` (spread): the output, then `a/lat`'s and
+/// `b/d`'s last block, and the engine.
+fn trapped(pk: &PackageSet, trap: bool, blocks: usize, threads: Option<Spread>) -> (Vec<[f32; 2]>, Vec<f32>, Vec<f32>, Rig) {
+    let f = check(&two_tracks("trap", false), pk).unwrap();
+    let mut rig = Rig::of(&f, &DataSet::empty(), build(&f, &DataSet::empty(), pk, &Owner::discard()));
+    rig.threads = threads;
+    rig.cmd(Cmd::Play);
+    let mut out = rig.run(BLOCK);
+    cue(&rig, if trap { 1.0 } else { 0.0 }, 1);
+    out.extend(rig.run(BLOCK));
     cue(&rig, 0.0, 2);
-    assert!(peak(&rig.run(4 * BLOCK)) == 0.0, "a trap silences the plan");
+    out.extend(rig.run((blocks - 2) * BLOCK));
+    let cur = rig.e.current().unwrap();
+    let (a, b) = (cur.output_of(named(&f, "a/lat")).to_vec(), cur.output_of(named(&f, "b/d")).to_vec());
+    (out, a, b, rig)
+}
+
+// RENDER-25: live, a kernel that traps goes silent alone: the other track plays on bit for bit, the
+// transport plays, nothing counts as a crash, and the plan marks the node for the session to tell.
+#[test]
+fn a_trapped_kernel_goes_silent_alone() {
+    let pk = t_packages();
+    let lat = named(&check(&two_tracks("trap", false), &pk).unwrap(), "a/lat");
+    let (out, a, b, rig) = trapped(&pk, true, 8, None);
+    let (clean, _, clean_b, clean_rig) = trapped(&pk, false, 8, None);
+    let cur = rig.e.current().unwrap();
+    assert!(a.iter().all(|&x| x == 0.0), "its track is silent");
+    assert_eq!(b, clean_b, "the other track plays on bit for bit");
+    assert!(cur.transport().playing() && rig.e.crashes() == 0, "the song plays on");
+    assert_eq!(cur.info().stopped.why(lat), Some(Why::Crashed));
+    assert_eq!(clean_rig.e.current().unwrap().info().stopped.why(lat), None);
+    // The song is the other track alone now, and before the trap both.
+    let last: Vec<f32> = out[out.len() - BLOCK..].iter().map(|f| f[0]).collect();
+    assert_eq!(last, b, "what plays is the other track, exactly");
+    assert_eq!(out[..BLOCK], clean[..BLOCK]);
+}
+
+// RENDER-25, RENDER-10: a stopped kernel is reset as the next activation moves it, and plays again;
+// the new plan has no mark.
+#[test]
+fn a_stopped_kernel_starts_again_at_the_next_activation() {
+    let pk = t_packages();
+    let b = check(&two_tracks("trap", true), &pk).unwrap();
+    let (_, _, _, mut rig) = trapped(&pk, true, 6, None);
     let r = rig.prepare(&b, &DataSet::empty(), &pk);
     rig.send(Msg::Activate { renderer: Box::new(r) });
-    rig.cmd(Cmd::Play);
     let out = rig.run(4 * BLOCK);
     let cur = rig.e.current().unwrap();
-    assert_eq!(cur.stats().resets, 1);
-    assert!(!cur.broken() && cur.output_of(node(&b, "lat")).iter().all(|&x| x == 1.0), "it plays again");
+    assert_eq!(cur.stats().resets, 1, "it was reset as it moved");
+    assert!(cur.output_of(named(&b, "a/lat")).iter().all(|&x| x == 1.0), "it plays again");
+    assert_eq!(cur.info().stopped.why(named(&b, "a/lat")), None, "the new plan has no mark");
     assert!(peak(&out) > 0.5);
+}
+
+// RENDER-25, RENDER-10: Stop All Sound resets every instance, so a stopped kernel plays again, and
+// its mark goes; one that fails again is marked again, and told again.
+#[test]
+fn stop_all_sound_starts_a_stopped_kernel_again() {
+    let pk = t_packages();
+    let f = check(&two_tracks("trap", false), &pk).unwrap();
+    let lat = named(&f, "a/lat");
+    let (_, _, _, mut rig) = trapped(&pk, true, 4, None);
+    let stopped = rig.e.current().unwrap().info().stopped.clone();
+    assert_eq!(stopped.news(), [(lat, Why::Crashed)]);
+    rig.send(Msg::Panic);
+    rig.run(2 * BLOCK);
+    assert!(rig.e.current().unwrap().output_of(lat).iter().all(|&x| x == 1.0), "it plays again");
+    assert_eq!((stopped.why(lat), stopped.news()), (None, vec![]));
+    cue(&rig, 1.0, 3);
+    rig.run(BLOCK);
+    assert_eq!(stopped.news(), [(lat, Why::Crashed)], "stopped again, and told again");
+    assert!(stopped.news().is_empty(), "once");
+}
+
+// RENDER-2, RENDER-25: a trap stops the same node at the same sample on any number of threads, so
+// the same bits come out.
+#[test]
+fn a_trap_on_any_thread_count_gives_the_same_bits() {
+    let pk = t_packages();
+    let lat = named(&check(&two_tracks("trap", false), &pk).unwrap(), "a/lat");
+    let (one, ..) = trapped(&pk, true, 8, None);
+    let (four, _, _, rig) = trapped(&pk, true, 8, Some(spread(4)));
+    assert!(one == four, "the same bits on 1 and 4 threads");
+    assert_eq!(rig.e.current().unwrap().info().stopped.why(lat), Some(Why::Crashed));
+}
+
+// RENDER-25: offline a trap still fails the render, naming the node: an export never leaves a sound
+// out.
+#[test]
+fn a_trap_still_fails_an_export_and_names_the_node() {
+    let pk = t_packages();
+    let mut ir = two_tracks("trap", false);
+    ir.modules[0].nodes[0] = serde_json::from_value(json!({"id": "cue", "op": "const", "value": 1})).unwrap();
+    let f = check(&ir, &pk).unwrap();
+    let e = Renderer::new(&f, &DataSet::empty(), &pk, SR).unwrap().render(0.01).map(drop).unwrap_err();
+    assert!(format!("{e:#}").contains("a/lat crashed"), "{e:#}");
 }
 
 // RENDER-10: a panic resets every box and clears every mark: the activation after it resets
