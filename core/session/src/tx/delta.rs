@@ -319,8 +319,16 @@ impl Side<'_> {
                 segs
             }
             (Op::Lane { lane }, _) => vec![format!("lane:{lane}{called}")],
+            // A module's own time node has no frame: `time:<of>`. One a component call or a `key()`
+            // frame made is named under that frame's chain, so adding a call beside another of its
+            // kind renames neither's.
             (Op::Time { of }, _) => {
-                vec![format!("time:{}", serde_json::to_value(of).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default())]
+                let (mut segs, places, runs) = self.chain(w, n.frame);
+                spans.extend(places);
+                counts = runs;
+                let of = serde_json::to_value(of).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+                segs.push(format!("time:{of}"));
+                segs
             }
             (Op::Import { module, export }, _) => vec![format!("import:{module}.{export}")],
             (op, Some(o)) => {

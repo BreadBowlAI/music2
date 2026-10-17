@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use m2_ir::{Node, Op};
-use m2_song::tx::{Anchor, Edit, Expect, ModuleChange, Op as TxOp, Pos, Range, Spot};
+use m2_song::tx::{Anchor, Confined, Declared, Edit, Expect, ModuleChange, Op as TxOp, Pos, Range, Spot};
 use m2_song::{Key, Sha};
 
 use super::delta::{GraphDelta, Positions, Side};
@@ -368,4 +368,70 @@ fn old_side_names_are_own_offsets() {
             .collect()
     };
     assert_eq!(names(&coords), names(&none));
+}
+
+/// A project component whose body reads song time twice, as std's effects do.
+const WOB: &str = "import { component, kernel, port, signature, time, type Audio } from \"@m2/core\";\n\
+                   export const wob = component(\n  { id: \"wob\", signature: signature<(x: Audio) => Audio>(), inputs: { in: port.audio() }, output: port.audio() },\n  \
+                   (x: Audio) => kernel(\"std:scale\", { in: kernel(\"std:scale\", { in: x, by: time.playing }), by: kernel(\"std:lfo\", { beats: time.beats }) }),\n);\n";
+
+/// One `wob` around a saw.
+const WOBBLED: &str = "import { hz, song } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { wob } from \"./lib/wob\";\n\
+                       export default song(() => wob(osc.saw(hz(110))));\n";
+
+// WRITE-8 (the sounds plan's attack, A): a `time` node a component call makes is named under its
+// frame chain. Adding a call before another of its kind (built first, so a count in the module
+// would give it the other's number) adds only its own nodes, and removing it removes only them:
+// both are confined to the call, as the editor's Add Effect and Remove Effect declare.
+#[test]
+fn a_call_reading_time_added_or_removed_beside_another_renames_nothing() {
+    let d = Dir::with(&[("song.ts", WOBBLED), ("lib/wob.ts", WOB)]);
+    let mut s = d.open();
+    let old: Vec<Vec<String>> = {
+        let rev = s.accepted();
+        let coords = BTreeMap::new();
+        Side { compiled: &rev.compiled, snapshot: &rev.snapshot, at: Positions { coords: &coords, new: false } }
+            .graph()
+            .nodes
+            .into_keys()
+            .collect()
+    };
+    assert_eq!(old.iter().filter(|n| n.iter().any(|x| x.starts_with("time:"))).count(), 2, "{old:?}");
+    // Add: `wob(` and `)` around the saw, confined to it.
+    let text = d.read("song.ts");
+    let (start, end) = (text.find("osc.saw").unwrap(), text.find("hz(110))").unwrap() + "hz(110))".len());
+    let ins = |at: usize, t: &str| Edit { start: Pos::Byte(at as u32), end: Pos::Byte(at as u32), expected: String::new(), text: t.into() };
+    let confined =
+        |r: Range| Expect::Confined(Confined { ranges: [(p("song.ts"), Declared::Ranges(vec![r]))].into(), ..Confined::default() });
+    let op = TxOp::TextEdit { file: p("song.ts"), edits: vec![ins(start, "wob("), ins(end, ")")] };
+    let done = s.commit(based(&d, vec![op], confined(Range::bytes(start as u32, end as u32)))).unwrap_or_else(|e| panic!("{e}"));
+    assert!(d.read("song.ts").contains("wob(wob(osc.saw(hz(110))))"));
+    let delta = &done.delta;
+    assert!(delta.removed.is_empty() && delta.values.is_empty(), "{delta:?}");
+    // Every added node is in the new call's frame, which no old name has.
+    let frame = |n: &[String]| n.iter().find(|x| x.starts_with("wob@")).cloned();
+    let new_frame = frame(&delta.added[0].name).expect("in a wob frame");
+    assert!(old.iter().all(|n| frame(n).as_ref() != Some(&new_frame)), "{new_frame} is new");
+    assert!(delta.added.iter().all(|n| frame(&n.name).as_ref() == Some(&new_frame)), "{:?}", delta.added);
+    assert_eq!(delta.added.iter().filter(|n| n.op["op"] == "time").count(), 2, "{:?}", delta.added);
+    let delta_added = delta.added.len();
+    // Remove the inner call again: `wob(` and its `)`, confined to the call.
+    let text = d.read("song.ts");
+    let at = text.find("wob(osc.saw").unwrap();
+    let close = text.find("hz(110))").unwrap() + "hz(110))".len();
+    let cut = |at: usize, t: &str| Edit {
+        start: Pos::Byte(at as u32),
+        end: Pos::Byte((at + t.len()) as u32),
+        expected: t.into(),
+        text: String::new(),
+    };
+    let op = TxOp::TextEdit { file: p("song.ts"), edits: vec![cut(at, "wob("), cut(close, ")")] };
+    let done = s.commit(based(&d, vec![op], confined(Range::bytes(at as u32, close as u32 + 1)))).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(d.read("song.ts"), WOBBLED);
+    let delta = &done.delta;
+    assert!(delta.added.is_empty() && delta.values.is_empty(), "{delta:?}");
+    // Named on the base's side, by its own offsets: the inner call's `(`.
+    let inner = format!("wob@song.ts:{}#0", at + "wob".len());
+    assert!(delta.removed.iter().all(|n| frame(&n.name).as_ref() == Some(&inner)), "{inner}: {:?}", delta.removed);
+    assert_eq!(delta.removed.len(), delta_added, "{:?}", delta.removed);
 }

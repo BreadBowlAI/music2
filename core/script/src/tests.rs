@@ -1205,6 +1205,61 @@ export default song(() => key("chain", () => echo(twice(kernel("std:saw")), 900)
     assert_eq!(calls, [m.frames[3].site]);
 }
 
+// RENDER-7, WRITE-8: `time` from @m2/core reads song time anywhere. Outside any call it is the
+// module's one node per reading, the same as `ctx.time`'s. Inside a component call it is one node
+// per call, made in its frame, however often the body reads it; a voice inside the call has its own.
+#[test]
+fn time_is_one_node_per_call() {
+    let lib = r#"import { component, kernel, poly, port, signature, time, type Audio, type Events } from "@m2/core";
+export const wob = component(
+  { id: "wob", signature: signature<(x: Audio) => Audio>(), inputs: { in: port.audio() }, output: port.audio() },
+  (x: Audio) => kernel("std:scale", { in: kernel("std:scale", { in: x, by: time.playing }), by: time.playing }),
+);
+export const voiced = component(
+  { id: "voiced", signature: signature<(n: Events) => Audio>(), inputs: { notes: port.notes() }, output: port.audio() },
+  (n: Events) => kernel("std:scale", { in: poly(n, () => kernel("std:scale", { in: kernel("std:saw"), by: time.playing })), by: time.playing }),
+);
+"#;
+    let song = r#"import { kernel, song, time, track } from "@m2/core";
+import { voiced, wob } from "./lib/wob";
+const v = track("v", ({ lane }) => voiced(lane.notes("n")));
+export default song((ctx) => {
+  const a = wob(wob(kernel("std:saw")));
+  const b = kernel("std:scale", { in: a, by: time.playing });
+  return kernel("std:add", { a: kernel("std:scale", { in: b, by: ctx.time.playing }), b: kernel("std:scale", { in: v.out, by: time.beats }) });
+});
+"#;
+    let b = build_full(&options(&[("lib/wob.ts", lib), ("song.ts", song)])).unwrap_or_else(|e| panic!("{e:?}"));
+    // Every `time` node of a module, voices included: (what it reads, its frame, whether in a voice).
+    fn times(ns: &[m2_ir::Node], voice: bool, out: &mut Vec<(String, Option<u32>, bool)>) {
+        for n in ns {
+            match &n.op {
+                Op::Time { of } => out.push((serde_json::to_value(of).unwrap().as_str().unwrap().to_string(), n.frame, voice)),
+                Op::Poly { body, .. } => times(&body.nodes, true, out),
+                _ => {}
+            }
+        }
+    }
+    let of = |key: &str| {
+        let m = b.ir.modules.iter().find(|m| m.key == key).unwrap();
+        let mut out = vec![];
+        times(&m.nodes, false, &mut out);
+        (m, out)
+    };
+    let (m, song_times) = of("song");
+    let wobs: Vec<u32> =
+        m.frames.iter().enumerate().filter(|(_, f)| f.component.as_deref() == Some("wob")).map(|(i, _)| i as u32).collect();
+    assert_eq!(wobs.len(), 2);
+    let playing = |f: Option<u32>| ("playing".to_string(), f, false);
+    // The inner call runs first; each reads twice, and has one node. `time.playing` and
+    // `ctx.time.playing` at the top are one node; `time.beats` is another.
+    assert_eq!(song_times, [playing(Some(wobs[0])), playing(Some(wobs[1])), playing(None), ("beats".to_string(), None, false)]);
+    // In the track, the call's own node, and the voice's own, both in the call's frame.
+    let (m, track_times) = of("v");
+    let voiced = m.frames.iter().position(|f| f.component.as_deref() == Some("voiced")).unwrap() as u32;
+    assert_eq!(track_times, [("playing".to_string(), Some(voiced), true), ("playing".to_string(), Some(voiced), false)]);
+}
+
 // ID-15, D17: a call site belongs only to the call it was set for. A component handed to native
 // code (Array.map, Array.from) takes no site, so it makes no frame and no knob; the calls an
 // arrow makes take theirs.

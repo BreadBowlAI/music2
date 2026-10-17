@@ -185,6 +185,7 @@ class ModuleBuild {
   root: Scope;
   exports: Record<string, string> = {};
   imports = new Map<string, Signal>();
+  /** The module's own time nodes: those read outside any component call or `key()` frame. */
   time = new Map<string, Signal>();
   constructor(
     /** `song`, or the track's key. Code may see it; labels it never sees (ID-10). */
@@ -1465,6 +1466,59 @@ export type LaneOptions = {
   shared?: boolean;
 };
 
+/** Song time: where the song is, and whether it plays. Never the engine's own clock (RENDER-7). */
+export type Time = {
+  /** The song's position in beats. */
+  readonly beats: Control<"beats">;
+  /** The song's position in seconds. */
+  readonly seconds: Control<"seconds">;
+  /** 1 while the song plays, 0 while it is stopped. An LFO that steps only while it is 1 waits while stopped. */
+  readonly playing: Control<"unit01">;
+};
+
+/** Each component call's time nodes, by the scope they are made in, then `<frame>:<what>`. */
+const callTimes = new WeakMap<Scope, Map<string, Signal>>();
+
+/**
+ * The node that reads `of`. Outside any call (a track's or the song's own code), one per module,
+ * as it always was. Inside a component call or a `key()` frame, one per frame, made in the scope
+ * being built (a voice has its own): so the node sits inside the call that reads it, in the graph
+ * view and in the delta's names (WRITE-8), and adding a call beside another renames neither's.
+ */
+function timeNode(of: "beats" | "seconds" | "playing"): Signal {
+  const scope = need(`time.${of}`);
+  const m = scope.module;
+  const unit: Unit = of === "playing" ? "unit01" : of;
+  const open = infoOf(m).open;
+  if (!open.length) {
+    let s = m.time.get(of);
+    if (!s) m.time.set(of, (s = new Signal(push(m.root, { op: "time", of }), m.root, unit)));
+    return s;
+  }
+  let made = callTimes.get(scope);
+  if (!made) callTimes.set(scope, (made = new Map()));
+  const k = `${open[open.length - 1]}:${of}`;
+  let s = made.get(k);
+  if (!s) made.set(k, (s = new Signal(push(scope, { op: "time", of }), scope, unit)));
+  return s;
+}
+
+/**
+ * Song time, for a component's body as for a track's: `time.beats`, `time.seconds` and
+ * `time.playing`. The same as `ctx.time`.
+ */
+export const time: Time = Object.freeze({
+  get beats() {
+    return timeNode("beats") as Control<"beats">;
+  },
+  get seconds() {
+    return timeNode("seconds") as Control<"seconds">;
+  },
+  get playing() {
+    return timeNode("playing") as Control<"unit01">;
+  },
+});
+
 /** What a track or song function receives. */
 export type Ctx = {
   /** The module's key: `song`, or the track's key. Code never sees a label (ID-10). */
@@ -1479,7 +1533,8 @@ export type Ctx = {
     /** Audio clips from the timeline (stereo unless `channels` is 1). */
     audio(key: string, channels?: 1 | 2, opts?: LaneOptions): Audio;
   };
-  time: { readonly beats: Control<"beats">; readonly seconds: Control<"seconds"> };
+  /** Song time: the same as `time` from `@m2/core`. */
+  time: Time;
 };
 
 /** Options in `what`, checked against their allowed types, so a misspelt one isn't ignored. */
@@ -1542,11 +1597,6 @@ function declareLane(m: ModuleBuild, k: string, kind: string, fallback: number |
 
 function ctxFor(m: ModuleBuild): Ctx {
   const laneNode = (id: string, unit?: Unit, site?: number) => new Signal<any>(push(m.root, { op: "lane", lane: id }, at(site)), m.root, unit);
-  const time = (of: "beats" | "seconds") => {
-    let s = m.time.get(of);
-    if (!s) m.time.set(of, (s = new Signal(push(m.root, { op: "time", of }), m.root, of)));
-    return s as any;
-  };
   return {
     key: m.key,
     lane: {
@@ -1572,14 +1622,7 @@ function ctxFor(m: ModuleBuild): Ctx {
         return produced(site, laneNode(key, undefined, site));
       },
     },
-    time: {
-      get beats() {
-        return time("beats");
-      },
-      get seconds() {
-        return time("seconds");
-      },
-    },
+    time,
   };
 }
 

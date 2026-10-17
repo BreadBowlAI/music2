@@ -2,7 +2,7 @@
 // (PKG-1, the step 5 design's D15). A line that should fail carries `@ts-expect-error`, so a
 // type that stops refusing it fails the check too.
 
-import { component, control, each, kernel, port, setting, signature, hz, ms, type Audio, type Control, type Params, type Signal, type Value } from "@m2/core";
+import { component, control, each, kernel, port, setting, signature, hz, ms, time, type Audio, type Control, type Ctx, type Params, type Signal, type Value } from "@m2/core";
 import { osc } from "std/dsp";
 import { mixer } from "std/mix";
 
@@ -126,6 +126,15 @@ export const a: Audio = when(0.5, x);
 export const b: Audio = scale(x, 2);
 export const c: Audio = sum(x, x);
 export const d: Control<"unit01"> = lfo(beats);
+
+// Song time in a component's body, and `ctx.time`, which is the same.
+export const playing: Control<"unit01"> = time.playing;
+export const position: [Control<"beats">, Control<"seconds">] = [time.beats, time.seconds];
+export const same = (ctx: Ctx): Control<"unit01"> => ctx.time.playing;
+// @ts-expect-error playing is 0 or 1, not a position
+export const notBeats: Control<"beats"> = time.playing;
+// @ts-expect-error time is read, never written
+time.playing = side;
 
 // @ts-expect-error an unknown option
 delay(x, { tme: 1 });
