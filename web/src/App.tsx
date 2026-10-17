@@ -22,6 +22,7 @@ import { togglePiano } from "./lib/piano";
 // MIDI keyboards: the window tells the server what they play.
 import "./lib/midi";
 import KeyboardPiano from "./components/KeyboardPiano";
+import { importAudio } from "./lib/audioImport";
 
 /** Fetch the open project. An error means none is open: the start screen shows. */
 const refreshGraph = () =>
@@ -87,6 +88,7 @@ function chord(e: KeyboardEvent): { id: string; always?: boolean; page?: boolean
   if (k === "z") return { id: e.shiftKey ? "redo" : "undo" };
   if (k === "d" && !e.shiftKey) return { id: "duplicate" };
   if (k === "e" && e.shiftKey) return { id: "export" };
+  if (k === "i" && e.shiftKey && !e.altKey) return { id: "import_audio" };
   if (k === "e" && !e.altKey) return { id: "split" };
   if (k === "j" && !e.shiftKey && !e.altKey) return { id: "join" };
   if (k === "w" && !e.shiftKey) return { id: "close_song" };
@@ -411,5 +413,7 @@ export function appCommand(id: string) {
       // View ▸ Keyboard Piano, the desktop app's ⌘K. In a browser lib/piano.ts takes ⌘K itself, before
       // a field or the code editor can.
       return togglePiano();
+    case "import_audio":
+      return void importAudio();
   }
 }

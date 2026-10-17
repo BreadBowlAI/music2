@@ -160,6 +160,12 @@ impl Store {
         self.decodes.load(Ordering::Relaxed)
     }
 
+    /// Whether it holds the peaks of the bytes hashing to `sha` in memory.
+    #[cfg(test)]
+    pub fn holds(&self, sha: Sha) -> bool {
+        self.kept.lock().iter().any(|(s, _)| *s == sha)
+    }
+
     fn file(&self, sha: Sha) -> Option<PathBuf> {
         Some(self.dir.as_ref()?.join(format!("{}.m2pk", sha.hex())))
     }

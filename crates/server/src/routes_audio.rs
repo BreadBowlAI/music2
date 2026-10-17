@@ -1,16 +1,19 @@
 //! Audio in the app (lane A), in a router of its own, merged into the API's: an audio file's
-//! waveform peaks (Q9). A route here that writes the project is in [`WRITES_AUDIO`], and a
-//! read-only window answers it 423 with WRITE-18's message, as `routes.rs` answers its own.
+//! waveform peaks (Q9), and bringing audio files in (A2). A route here that writes the project is
+//! in [`WRITES_AUDIO`], and a read-only window answers it 423 with WRITE-18's message, as
+//! `routes.rs` answers its own.
 
 use std::sync::Arc;
 
-use axum::extract::{Query, State};
-use axum::http::{StatusCode, header};
+use axum::body::Bytes;
+use axum::extract::{DefaultBodyLimit, Query, State};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
+use m2_editor::import::{Source, Target};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::AppState;
 use crate::peaks::Store;
@@ -19,10 +22,16 @@ use crate::routes::ApiError;
 type S = State<Arc<AppState>>;
 
 /// The routes here that write the open project.
-pub const WRITES_AUDIO: &[&str] = &[];
+pub const WRITES_AUDIO: &[&str] = &["/api/graph/audio/import"];
+
+/// The most an uploaded file may be: a 15-minute file of 8 channels of 32 bits at 96 kHz is less.
+const UPLOAD: usize = 1 << 30;
 
 pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
-    Router::new().route("/api/graph/audio/peaks", get(audio_peaks)).route_layer(axum::middleware::from_fn_with_state(state, writes))
+    Router::new()
+        .route("/api/graph/audio/peaks", get(audio_peaks))
+        .route("/api/graph/audio/import", post(audio_import).layer(DefaultBodyLimit::max(UPLOAD)))
+        .route_layer(axum::middleware::from_fn_with_state(state, writes))
 }
 
 /// A write to a project open read-only answers 423 (WRITE-17), as in `routes.rs`.
@@ -56,6 +65,66 @@ async fn audio_peaks(State(s): S, Query(r): Query<PeaksReq>) -> Result<Response,
     })
     .await?;
     Ok(([(header::CONTENT_TYPE, "application/octet-stream"), (header::CACHE_CONTROL, "no-store")], bytes).into_response())
+}
+
+#[derive(Deserialize)]
+struct ImportJson {
+    session: u64,
+    paths: Vec<String>,
+    to: Target,
+}
+
+#[derive(Deserialize)]
+struct ImportQuery {
+    session: Option<u64>,
+    /// The files in the body, in order, as JSON: `[{name, size}]`.
+    files: Option<String>,
+    /// The target, as JSON.
+    to: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Uploaded {
+    name: String,
+    size: usize,
+}
+
+/// Bring audio files in (A2, Q6, Q7), as one undo step: JSON `{session, paths, to}` (the app:
+/// files on this computer, copied by the server), or the files' bytes back to back as the body with
+/// `?session=&files=&to=` (a browser's upload; `files` as JSON, `[{name, size}]` in the body's
+/// order; `to` as JSON). `to` is `{kind: "lane", module, lane, beat}`, `{kind: "track", module,
+/// beat}` or `{kind: "below", beat}`. A write. Answers the edit with `made`, `tracks`, `name` (the
+/// undo step's), `notes` and `assets`.
+async fn audio_import(State(s): S, Query(q): Query<ImportQuery>, headers: HeaderMap, body: Bytes) -> Result<Json<Value>, ApiError> {
+    let json = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|t| t.starts_with("application/json"));
+    let (session, sources, to) = match json {
+        true => {
+            let r: ImportJson = serde_json::from_slice(&body).map_err(anyhow::Error::from)?;
+            (r.session, r.paths.into_iter().map(|p| Source::Path(p.into())).collect(), r.to)
+        }
+        false => {
+            let session = q.session.ok_or_else(|| anyhow::anyhow!("an upload names its session"))?;
+            let files: Vec<Uploaded> =
+                serde_json::from_str(q.files.as_deref().unwrap_or("")).map_err(|e| anyhow::anyhow!("an upload names its files: {e}"))?;
+            let to: Target = serde_json::from_str(q.to.as_deref().unwrap_or("")).map_err(|e| anyhow::anyhow!("where the files go doesn't read: {e}"))?;
+            if files.iter().map(|f| f.size).sum::<usize>() != body.len() {
+                return Err(anyhow::anyhow!("the upload was cut short: try again").into());
+            }
+            let mut at = 0;
+            let sources = files
+                .into_iter()
+                .map(|f| {
+                    at += f.size;
+                    Source::Bytes { name: f.name, bytes: body[at - f.size..at].to_vec() }
+                })
+                .collect();
+            (session, sources, to)
+        }
+    };
+    let state = s.clone();
+    let result = blocking(move || state.graph.import_audio(session, sources, to)).await;
+    s.graph_changed();
+    Ok(Json(result?))
 }
 
 #[cfg(test)]

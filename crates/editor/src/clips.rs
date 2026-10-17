@@ -172,7 +172,7 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
                 }
                 LaneKind::Audio => {
                     return Err(EditError::Rejected(
-                        "An audio clip plays a sound, so an empty one can't be made: bounce a track with `m2 bounce --place`".into(),
+                        "An audio clip plays a sound file. Drop a WAV file here, or use File ▸ Import Audio…".into(),
                     ));
                 }
             };

@@ -96,3 +96,77 @@ fn peaks_never_wait_for_the_actor() {
     assert_eq!(Peaks::read(&body).unwrap().frames, 4_800);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// POST `body` as `kind` to `path` with the token: the status and the JSON answer.
+fn post(url: &str, path: &str, kind: &str, body: &[u8]) -> (u16, serde_json::Value) {
+    let addr = url.trim_start_matches("http://");
+    let mut s = std::net::TcpStream::connect(addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+    let head = format!("POST {path} HTTP/1.1\r\nHost: {addr}\r\nx-m2-token: t0k\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+    s.write_all(head.as_bytes()).unwrap();
+    s.write_all(body).unwrap();
+    let mut answer = vec![];
+    s.read_to_end(&mut answer).unwrap();
+    let text = String::from_utf8_lossy(&answer).to_string();
+    let status = text[9..12].parse().unwrap();
+    let json = text.split_once("\r\n\r\n").map_or(serde_json::Value::Null, |(_, b)| serde_json::from_str(b).unwrap_or(serde_json::Value::Null));
+    (status, json)
+}
+
+fn clips_of(dir: &std::path::Path) -> Vec<serde_json::Value> {
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("data/vox/clips.json")).unwrap()).unwrap();
+    v["clips"].as_array().unwrap().clone()
+}
+
+// A2: a browser uploads files back to back in one body, an app names paths: each is one undo step
+// that lands its clips one after another; the answer names the step and the clips made.
+#[test]
+fn an_upload_and_paths_import_through_the_route() {
+    let dir = project("import");
+    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
+    let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+    let tone = std::fs::read(dir.join("assets/tone.wav")).unwrap();
+    let mut other = tone.clone();
+    *other.last_mut().unwrap() ^= 1;
+    let body = [tone.clone(), other.clone()].concat();
+    let files = format!(r#"[{{"name":"a.wav","size":{}}},{{"name":"b.wav","size":{}}}]"#, tone.len(), other.len());
+    let to = r#"{"kind":"lane","module":"vox","lane":"clips","beat":8}"#;
+    let enc = |s: &str| s.bytes().map(|b| format!("%{b:02X}")).collect::<String>();
+    let path = format!("/api/graph/audio/import?session={session}&files={}&to={}", enc(&files), enc(to));
+    let (status, done) = post(&running.url, &path, "application/octet-stream", &body);
+    assert_eq!(status, 200, "{done:#}");
+    assert_eq!((done["name"].as_str(), done["made"].as_array().map(Vec::len)), (Some("importing 2 files"), Some(2)), "{done:#}");
+    // tone.wav's bytes are there already: used again. b.wav is new.
+    assert_eq!(done["assets"], serde_json::json!(["tone.wav", "b.wav"]));
+    let starts: Vec<f64> = clips_of(&dir).iter().filter(|c| c["start"].as_f64() >= Some(8.0)).map(|c| c["start"].as_f64().unwrap()).collect();
+    // 0.1 s at 120 BPM is 0.2 beats.
+    assert_eq!(starts.len(), 2);
+    assert!((starts[0] - 8.0).abs() < 1e-9 && (starts[1] - 8.2).abs() < 1e-9, "{starts:?}");
+    // The app's paths.
+    let outside = dir.join("outside.wav");
+    std::fs::write(&outside, &other).unwrap();
+    let json = serde_json::json!({"session": session, "paths": [outside], "to": {"kind": "lane", "module": "vox", "lane": "clips", "beat": 12}});
+    let (status, done) = post(&running.url, "/api/graph/audio/import", "application/json", json.to_string().as_bytes());
+    assert_eq!((status, &done["assets"]), (200, &serde_json::json!(["b.wav"])), "{done:#}");
+    // A body cut short is refused.
+    let (status, why) = post(&running.url, &path, "application/octet-stream", &body[..10]);
+    assert!(status == 400 && why["error"].as_str().unwrap().contains("cut short"), "{why:#}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// WRITE-17: a read-only window's import answers 423 in WRITE-18's words.
+#[test]
+fn a_read_only_window_cant_import() {
+    let dir = project("ro");
+    let held = m2_session::lock::acquire(&dir, "m2", m2_session::lock::RETRY).unwrap();
+    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
+    let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+    let json = serde_json::json!({"session": session, "paths": [dir.join("assets/tone.wav")], "to": {"kind": "below", "beat": 0}});
+    let (status, why) = post(&running.url, "/api/graph/audio/import", "application/json", json.to_string().as_bytes());
+    assert_eq!(status, 423, "{why:#}");
+    assert!(why["error"].as_str().unwrap().contains("nothing was changed"), "{why:#}");
+    // Peaks are a read: still answered.
+    assert_eq!(get(&running.url, &format!("/api/graph/audio/peaks?session={session}&asset=tone.wav")).0, 200);
+    drop(held);
+    let _ = std::fs::remove_dir_all(&dir);
+}
