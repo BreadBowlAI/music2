@@ -10,6 +10,7 @@ import { canvas, useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { graphUndo } from "./GraphCanvas";
 import KeyField from "./KeyField";
+import MidiStatus from "./MidiStatus";
 import { MeterField, SongTitle, TempoField } from "./SongBar";
 import OverlayPill from "./OverlayPill";
 import Status from "./Status";
@@ -196,6 +197,8 @@ export default function TopBar({
       >
         <SongTitle session={graph.session} name={graph.name} dir={graph.dir} rate={graph.sample_rate} locked={locked} room={room ?? 0} />
       </div>
+      {/* A MIDI keyboard plugged in (8b.10), before the status pill. */}
+      <MidiStatus graph={graph} />
       <Status graph={graph} status={status} onShowCode={onShowCode} />
       <OverlayPill graph={graph} />
       <Divider />

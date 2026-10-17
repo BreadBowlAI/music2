@@ -50,6 +50,8 @@ pub struct AppState {
     /// The recent songs list (polish C2), when this server keeps one ([`AppState::keep_recent`]):
     /// the app and the headless server do; tests don't, so none writes the real `~/.music2`.
     recent: OnceLock<recent::Recent>,
+    /// Listening to MIDI keyboards (8b.10), unless `M2_MIDI` says not to ([`spawn_midi`]).
+    midi: OnceLock<m2_os::midi::Listening>,
 }
 
 impl AppState {
@@ -63,6 +65,7 @@ impl AppState {
             unheard: Mutex::default(),
             meters: watch::channel(String::new()).0,
             recent: OnceLock::new(),
+            midi: OnceLock::new(),
         }
     }
 
@@ -135,6 +138,25 @@ impl AppState {
     }
 }
 
+/// MIDI keyboards (8b.10): what a listener heard goes to the open song, a keyboard that came or
+/// went is said in a toast, and every window hears the `midi` event.
+impl AppState {
+    pub fn midi(&self, ev: m2_os::midi::Event<'_>) {
+        let plugging = !matches!(ev, m2_os::midi::Event::Bytes(..));
+        if let Some(said) = self.graph.midi(ev) {
+            self.toast(said);
+        }
+        if plugging {
+            self.midi_changed();
+        }
+    }
+
+    /// Tell every window the keyboards plugged in and what they play: `{"t": "midi", "midi": …}`.
+    pub fn midi_changed(&self) {
+        let _ = self.events.send(json!({"t": "midi", "midi": self.graph.midi_state()}).to_string());
+    }
+}
+
 pub struct ServeOptions {
     /// 0 picks a free port.
     pub port: u16,
@@ -163,6 +185,7 @@ pub fn start_with(opts: ServeOptions, graph: graph::Graph) -> Result<Running> {
     let state = Arc::new(AppState::new(opts.token, graph));
     spawn_graph_watch(&state);
     spawn_meters(&state);
+    spawn_midi(&state);
 
     let listener = std::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], opts.port)))?;
     listener.set_nonblocking(true)?;
@@ -259,6 +282,27 @@ fn spawn_meters(state: &Arc<AppState>) {
             }
         })
         .expect("spawn the meters");
+}
+
+/// Listen to every MIDI keyboard (`m2_os::midi`), unless `M2_MIDI` is `none` (a test that must
+/// never open MIDI) or `inject` (the suites: they post what a keyboard would send to
+/// `POST /api/graph/midi/inject` instead). Stops once the state is dropped.
+fn spawn_midi(state: &Arc<AppState>) {
+    if matches!(std::env::var("M2_MIDI").as_deref(), Ok("none" | "inject")) {
+        return;
+    }
+    let weak = Arc::downgrade(state);
+    let listening = m2_os::midi::listen(Arc::new(move |ev| {
+        if let Some(state) = weak.upgrade() {
+            state.midi(ev);
+        }
+    }));
+    let _ = state.midi.set(listening);
+}
+
+/// Whether `POST /api/graph/midi/inject` answers: only with `M2_MIDI=inject`.
+pub(crate) fn midi_injects() -> bool {
+    std::env::var("M2_MIDI").as_deref() == Ok("inject")
 }
 
 #[cfg(test)]

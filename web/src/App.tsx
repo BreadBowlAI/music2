@@ -17,6 +17,8 @@ import { canvas, useShell, VIEWS, type GridOp } from "./lib/shell";
 import { deleteTrack, duplicateTrack, newTrack } from "./components/Tracks";
 import { toggleMetronome } from "./lib/metronome";
 import { togglePiano } from "./lib/piano";
+// MIDI keyboards: the window tells the server what they play.
+import "./lib/midi";
 import KeyboardPiano from "./components/KeyboardPiano";
 
 /** Fetch the open project. An error means none is open: the start screen shows. */

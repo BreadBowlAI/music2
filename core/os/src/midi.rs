@@ -68,7 +68,11 @@ impl Drop for Listening {
     fn drop(&mut self) {
         *self.stop.stopped.lock().unwrap_or_else(|e| e.into_inner()) = true;
         self.stop.wake.notify_all();
-        if let Some(t) = self.thread.take() {
+        // Dropped by what it called (the last owner let go inside an event): the thread ends on its
+        // own once this returns, and can't wait for itself.
+        if let Some(t) = self.thread.take()
+            && t.thread().id() != std::thread::current().id()
+        {
             let _ = t.join();
         }
     }

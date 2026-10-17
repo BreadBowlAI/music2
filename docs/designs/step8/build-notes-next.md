@@ -233,6 +233,83 @@ The web build; `music2-desktop`'s tests, clippy and Mac lint.
 **Contract:** taste §3.5 (Notes' tools: the keyboard piano toggle after Hear notes), §5 (⌘K is the keyboard
 piano, from anywhere; the piano owns its 20 keys while on), the piano card (as built above).
 
+### B3. The MIDI keyboard
+
+**In short**
+
+| What | Now |
+|---|---|
+| Plug it in | Before or while the app runs. A message says "Keystation 49 is connected. It plays the selected track." |
+| The mark | A small keyboard mark shows in the top bar, before the status, while one is plugged in. Its tooltip says "MIDI keyboard: Keystation 49 · plays Bass" |
+| Play | Its keys play the selected track, as hard as you press them. The sustain pedal holds notes |
+| Unplug it | Its notes stop, the mark goes, and a message says it was unplugged |
+| Nothing selected | Keys play nothing. The tooltip says "Select a track with notes to play it" |
+| Recording | Not yet: nothing you play is written |
+
+**What changed**
+
+- `m2_os::midi` (B0): `Listening`'s drop no longer joins its own thread (the last owner let go inside an event).
+- `crates/server/src/graph/midi.rs` (new): `ControlPlane.midi` (`Midi { keyboards, target }`). `Graph::midi(Event)`:
+  `Plugged` joins the list and answers the toast's words; `Unplugged` leaves it, lets go of its notes
+  (`audition_gone("midi:<name>")`, one Release) and answers its words; `Bytes` reads the message (`read`):
+  `0x9n` with velocity > 0 an On (handle `note + 128 × channel`, pitch the note, velocity `v / 127`), `0x8n` or
+  `0x9n` at 0 an Off, held back while the pedal (`0xBn 64`, ≥ 64 down) is down and sent when it lifts; `0xBn 120`
+  or `123` let go of all; the rest nothing (Q5). Ons go to the target through `Graph::audition("midi:<name>", …)`;
+  Offs need no target, so a note struck before the target changed ends where it sounds. `Graph::midi_target`
+  keeps the lane with the song's token: another song opened plays nothing until a window names a lane (X37).
+  `Graph::midi_state`: `{devices, target}`, in the state as `midi`.
+- `graph/audition.rs`: `Source.keyboard` (a `midi:` source); the watchdog skips it (Q6);
+  `expire_auditions_at(now)` for tests.
+- `graph.rs`: `pub mod midi;`, `ControlPlane.midi` at the struct's end, `state["midi"]` in `Inner::state`.
+- `lib.rs`: `AppState.midi: OnceLock<Listening>` at the struct's end; `spawn_midi` in `start_with` (so the app,
+  the headless server and the capture server all listen) unless `M2_MIDI` is `none` or `inject`;
+  `AppState::midi(ev)` toasts and sends every window `{"t": "midi", "midi": …}` when a keyboard comes or goes;
+  `AppState::midi_changed`; `midi_injects()`.
+- `routes_8b.rs`: `POST /api/graph/midi/inject {device, plugged?, bytes?}`, only with `M2_MIDI=inject` (else 404,
+  "no such API"); `ws_text` takes `{"t": "midi", "module", "lane"}` (`module: null` clears) and tells every window.
+- Web: `lib/midi.ts` (new): sends the target from `playTarget.ts` whenever the selection, the clip Notes shows or
+  the song changes, and again on each (re)connect; `useMidi` from the state's `midi` and the `midi` events.
+  `components/MidiStatus.tsx` (new): a 28 px `KeyboardMusic` mark in `fg-muted`, its tooltip naming the keyboards
+  and the track (or "Select a track with notes to play it" when the lane has gone or none is named).
+  `TopBar.tsx`: `<MidiStatus />` before `<Status />`. `App.tsx`: imports `lib/midi`.
+
+**Tests**
+
+| Test | Where | Result |
+|---|---|---|
+| `a_midi_key_plays_the_selected_track`, `note_off_and_velocity_zero_end_it`, `velocity_is_the_keys` (with the channels and what is ignored), `channels_dont_share_a_key`, `the_sustain_pedal_holds_offs_until_it_lifts` (struck again under the pedal too), `all_notes_off_lets_go` (CC 123 and 120), `unplugging_a_keyboard_lets_go_of_its_notes`, `a_held_midi_key_outlives_the_watchdog`, `no_track_selected_plays_nothing` (and a lane that has gone), `a_new_target_leaves_held_notes_where_they_sound`, `the_target_belongs_to_its_song`, `midi_never_waits_for_a_compile`, `an_export_has_no_midi_note` | `crates/server` (`graph/midi_tests.rs`, new) | ok |
+| `nx-midi` (new, after `nx-piano`) | 24 checks on a server of its own with `M2_MIDI=inject` (P0's `env` for suites hadn't landed; this way it needs none), and the 404 on the usual one | ok |
+| `s8-audition` 51, `taste` 39, `nx-piano` 39, `nx-click` 20, `pc-keys` 37 | moves | ok |
+
+All `m2-server` (249) and `m2-os` tests; clippy (`m2-os` with and without `midi`); the Mac lint of `m2-os`,
+`m2-server` and `music2-desktop`; the web build.
+
+**Red first**
+
+- `a_held_midi_key_outlives_the_watchdog` with `Source.keyboard` always false (today's watchdog): "timed out
+  waiting until the quiet window is let go" (both notes went).
+- `nx-midi` on the 70f9b61 server: `FAIL  a keyboard plugged in (404)`, `FAIL  a toast says so: []`,
+  `FAIL  the top bar's mark names it and what it plays: null`,
+  `FAIL  Bass selected, the window tells the server: MIDI plays bass.notes (null)`.
+
+**Guards:** `an_export_has_no_midi_note` (exports never had a live note), `midi_never_waits_for_a_compile` (MIDI
+never took the session).
+
+**What's left**
+
+- Recording what you play, a count-in, quantize on input (gaps #24's rest).
+- A MIDI input picker; pitch bend, the mod wheel, aftertouch, program change, clock (Q5).
+- Notes placed inside a block by their time stamp (`midi_instant`): a note lands at the next block line.
+- The Mac by-ear run: whether CoreMIDI lists a keyboard plugged in while the app runs (`m2-midi` polls from a
+  thread with no run loop; Not checked in the plan).
+
+**For gaps.md:** #24 (playing live): a MIDI keyboard plays the selected track, with velocity and the pedal;
+recording, a count-in and quantize left.
+
+**Contract:** MON-7 (a keyboard is a source, `midi:<name>`, never let go by the watchdog); PLAT-2 (`m2_os::midi`,
+only the server's `midi` feature); the state's `midi` and the `midi` event; `M2_MIDI` (`none`, `inject`) and
+`POST /api/graph/midi/inject`; taste §3.3 (the MIDI mark before the status pill).
+
 ## Lane C
 
 Settings and safety.
