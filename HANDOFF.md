@@ -4,12 +4,13 @@ Written 2026-10-16, at the end of step 7 (the engine), updated after its speed w
 2026-10-17, when step 7 landed on `main`, and again the same day for the `sounds` merge, after its review and final
 check, and when it landed on `main`; again for `taste-next` (taste's look, the song bar and the Mix faders),
 after its review and final checks; for 8b's screens (`8b-ui`), after their review and final check; and once more
-for `polish` (the rest of the top ten), after its review and final check.
+for `polish` (the rest of the top ten), after its review and final check, and when it landed on `main`.
 Read this first, then `docs/architecture.md` (the contract) and the design for
 whatever you pick up.
 
 **In short**
-- **`polish` is ready to land** (2026-10-17): Linux green at `65f59f1`; macOS owed. It is `main` (`d7207d2`) plus:
+- **`polish` is on `main`** (2026-10-17): Linux green at `65f59f1`; macOS owed. `main` fast-forwarded to it. It
+  added:
 
   | You can now | Where |
   |---|---|
@@ -106,16 +107,16 @@ whatever you pick up.
 
 | Branch | Commit | State |
 |---|---|---|
-| `main` | the tip | Steps 1–7, the fast note edits, the platform layer, the `sounds` merge, taste's look with 8b.1 to 8b.3, and 8b.4 to 8b.6 and 8b.8 with their screens. Green on Linux and macOS at `1750322` (the platform step). Step 7: green on Linux at `ffc36aa` and on macOS at `cbac57c`. |
-| `sounds-merge` | `e1003ba` | All on `main` now (a fast-forward, 2026-10-17). Linux green at `e108e46` (reviewed; `ci/check.sh --gates` and the recorded tests), macOS owed. Worktree `~/m2-runs/wt/sm` (its `target/`, about 40 GB). Delete the branch and the worktree once the tracks in flight have landed. |
-| `8b-backend` | `c9cc6ad` | All on `main` now (a fast-forward, 2026-10-17). Linux green at `a8199ff`, macOS owed. Worktree `~/m2-runs/wt/be`. Delete the branch and the worktree once `8b-ui` has landed. |
-| `taste-next` | `22bea45`, then docs | All on `main` now (a fast-forward, 2026-10-17). Linux green (reviewed; `ci/check.sh` and `--gates`), macOS owed. Delete the branch and the worktree `~/m2-runs/wt/tn` (its `target/`, about 96 GB). |
+| `main` | the tip | Steps 1–7, the fast note edits, the platform layer, the `sounds` merge, taste's look with 8b.1 to 8b.3, 8b.4 to 8b.6 and 8b.8 with their screens, and `polish` (the rest of the top ten). Green on Linux and macOS at `1750322` (the platform step). Step 7: green on Linux at `ffc36aa` and on macOS at `cbac57c`. |
+| `sounds-merge` | `e1003ba` | All on `main` (a fast-forward, 2026-10-17). Linux green at `e108e46` (reviewed; `ci/check.sh --gates` and the recorded tests), macOS owed. Branch and worktree deleted. |
+| `8b-backend` | `c9cc6ad` | All on `main` (a fast-forward, 2026-10-17). Linux green at `a8199ff`, macOS owed. Branch and worktree deleted. |
+| `taste-next` | `22bea45`, then docs | All on `main` (a fast-forward, 2026-10-17). Linux green (reviewed; `ci/check.sh` and `--gates`), macOS owed. Branch and worktree deleted. |
 | `8a` | `33885a6`, then docs | Ready to land: 8a's offline half, from `main` at `e571a5f` with `main` at `a660c2b` merged in: the pool (`m2-pool`) and the executor, so exports use several cores with the same bits. Live playback stays on one thread until 8a's live half. Linux green at `33885a6` (`ci/check.sh --gates`), macOS owed. Worktree `~/m2-runs/wt/8a` (its `target/` stays for the live half); plan `~/m2-runs/s8a/plan.md`; build notes `docs/designs/step8/build-notes-8a.md`. |
-| `polish` | `65f59f1`, then docs only | Ready to land: the rest of the top ten, from `8b-ui` at `29430e8` with `main` at `d7207d2` in it, built in four lanes (merged; their branches and worktrees are gone). Linux green at `65f59f1` (reviewed; `ci/check.sh`), macOS owed. Worktree `~/m2-runs/wt/pl` and its `target/`: the lead lands the branch, then removes both. Plan `docs/designs/step8/polish-plan.md`; build notes `build-notes-polish.md`. |
-| Mac runs owed | — | One `ci/check.sh` on `main` covers every branch above. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 38, and `polish`'s 39 to 50 |
-| `8b-ui` | `92317ad`, then docs only | All on `main` now (a fast-forward, 2026-10-17). 8b's screens: mute and solo, clips and automation, audition, meters. Linux green at `92317ad` (reviewed; `ci/check.sh`), macOS owed. Its lane branches are deleted. Delete the branch and the worktree `~/m2-runs/wt/ui` (its `target/`, about 57 GB) once `polish` has landed. |
-| `origin/taste` | `4804247` | All on `main` now (`a0d5f91` and `4804247`, both merged into `taste-next`). Its worktree `~/m2-runs/wt/taste` can go. |
+| `polish` | `65f59f1`, then docs only | All on `main` (a fast-forward, 2026-10-17): the rest of the top ten, built in four lanes. Linux green at `65f59f1` (reviewed; `ci/check.sh`), macOS owed. Branch and worktree deleted. Plan `docs/designs/step8/polish-plan.md`; build notes `build-notes-polish.md`. |
+| `8b-ui` | `92317ad`, then docs only | All on `main` (a fast-forward, 2026-10-17). 8b's screens: mute and solo, clips and automation, audition, meters. Linux green at `92317ad` (reviewed; `ci/check.sh`), macOS owed. Branch and worktree deleted. |
+| `origin/taste` | `4804247` | All on `main` now (`a0d5f91` and `4804247`, both merged into `taste-next`). Its worktree is deleted. |
 | `origin/sounds` | `916127d` | 22 new std sounds (8 on the polysynth, 4 FM, 10 drums), merged; on `main` since 2026-10-17. |
+| Mac runs owed | — | One `ci/check.sh` on `main` covers every branch above. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 50. |
 
 `taste` and `sounds` start at `8aa301e`, before the platform step. Each has a detached worktree in `~/m2-runs/wt/`
 (`taste`, `sounds`); `sounds`' can go once the tracks in flight land. `origin/wip/step7` (the Mac's half-done step 7,
@@ -412,16 +413,13 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
 2. **The two gaps found on 2026-10-16** (Left for later): fix them before step 9, or with idea 3 if the owner
    says yes to it.
 3. **The `sounds` merge is on `main`** (`docs/designs/sounds/`). Ask the owner the Space, Return, Space question
-   (Open owner decisions). Delete the worktree `~/m2-runs/wt/sm` and the detached `~/m2-runs/wt/sounds` once the
-   tracks in flight have landed.
+   (Open owner decisions).
 4. **`taste-next` and `8b-ui` are on `main`.** What they built, decided and left:
    `docs/designs/step8/build-notes-taste.md` and `build-notes-8b-ui.md` (End). Left on the back end: W1 (the keyed
    compressor, a std change). The rest of their screens' list (U12 to U14, the delete dialog's keys) is in `polish`.
    Lead's default, the owner may change it: in the export question, Return presses the focused button (at first the
    main one), not always the main one as a Mac alert does.
-5. **`polish` is ready to land** at `65f59f1` plus docs: fast-forward `main` to it (it has `main` in it), then
-   remove its worktree `~/m2-runs/wt/pl` and its `target/`, and `~/m2-runs/wt/ui`. What it left is in
-   `docs/gaps.md` and its build notes' End.
+5. **`polish` is on `main`.** What it left is in `docs/gaps.md` and its build notes' End.
 6. **`8a` is ready to land** (8a's offline half): merge it into `main`, then the owner's short offline sweep on the
    Mac (four lines in 8a's build notes, "The Mac sweep"), then 8a's live half with the two gaps above.
 7. Then **8b.7, 8b.10**, and **step 9** (8b.9's Change track ID… came in `polish`, without the engine's pass). Before
@@ -587,7 +585,7 @@ From the platform step:
 | Test plugins | `ci/plugins.sh` (once): Surge XT 1.3.4 and Airwindows Consolidated into `~/.local/share/m2-test-plugins/clap`, from the archives in `~/.local/share/m2-test-plugins/dl` (Airwindows' zip is gone upstream: keep that copy). Never into `~/.clap` or `/usr/lib/clap`. |
 | The desktop app | Only on an invisible Xvfb screen, as the check's app row opens it. Never on a real screen. |
 | Scratch `HOME` | Anything that runs music2 gets a scratch `HOME` and `M2_AUDIO=none`, and then `CARGO_HOME=/home/jerry/.cargo RUSTUP_HOME=/home/jerry/.rustup`. Never the real `~/.music2` or `~/Music`. `ci/check.sh` does this itself. |
-| Scratch copies | `git worktree add --detach ~/m2-runs/scratch-<label>`, with its own `target/`; delete it when done (they once filled 390 GB). The repo's own `target/` is about 140 GB, `~/m2-runs/wt/sm`'s about 40 GB (step 7's, moved from `~/m2-runs/wt/s7`, then cleaned and rebuilt). |
+| Scratch copies | `git worktree add --detach ~/m2-runs/scratch-<label>`, with its own `target/`; delete it when done (they once filled 390 GB). The repo's own `target/` is about 140 GB. |
 | Logs | Each check's folder in `~/m2-runs/check-*` (the `sounds` merge's: `check-sm1c` and `-sm2b` with the gates, `-sm3`, `-sm4`, and the final `-sm-fg` with the gates, at `e108e46`; step 7's last: `check-s7-rv1`, and `-rvg` with the gates; before them `-sp1`, `-sp2` and `-spg`); the `sounds` merge's plan in `~/m2-runs/sounds/plan.md`; the step 7 gate runs in `~/m2-runs/gates-fix/` and `~/m2-runs/xc/g7f/`; the review in `~/m2-runs/review-b1/`. |
 | Tools | Rust 1.99.0 (`rust-toolchain.toml`), Node 24, chrome-headless-shell 133.0.6943.141 (the check installs Rust and Chrome when missing), Xvfb. |
 | MIDI | `/dev/snd/seq` gives `EACCES` here: tests inject notes and never open a device. |
