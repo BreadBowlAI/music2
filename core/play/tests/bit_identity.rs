@@ -95,36 +95,31 @@ fn live_after_idle(song: &Song, idle: usize, frames: usize) -> Vec<[f32; 2]> {
 /// A beat on std's drums in a temp project: the kit on one lane (every kind of drum, and the
 /// hats choking each other), a snare roll and the hats on lanes of their own, at 120 bpm.
 fn drum_beat() -> Song {
-    let dir = temp("drums");
-    let write = |rel: &str, text: &str| {
-        let path = dir.join(rel);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, text).unwrap();
-    };
-    write(
-        "music2.toml",
-        r#"[project]
-name = "drums"
-format = 1
-sample_rate = 48000
-
-[dependencies]
-"@m2/core" = "1"
-std = "0.1"
-"#,
-    );
-    write(
-        "song.ts",
-        r#"import { song } from "@m2/core";
+    let lane = |id: &str, notes: Vec<Value>| json!({"clips": [{"id": id, "start": 0, "length": 8, "notes": notes}]}).to_string();
+    let note = |pitch: u32, start: f64, velocity: f64| json!({"pitch": pitch, "start": start, "length": 0.1, "velocity": velocity});
+    // In 8th notes: kick, snare, clap, closed, pedal and open hats, toms, rim, cowbell, crash, ride, shaker.
+    let mut kit = Vec::new();
+    for (k, pitch) in [36, 42, 38, 42, 36, 46, 39, 44, 45, 47, 37, 56, 49, 51, 69, 42].into_iter().enumerate() {
+        kit.push(note(pitch, k as f64 * 0.5, 0.6 + 0.02 * k as f64));
+    }
+    // A 32nd-note snare roll through the second half, rising; 16th-note hats, open every half bar.
+    let roll = (0..32).map(|k| note(38, 4.0 + k as f64 / 8.0, 0.4 + 0.015 * k as f64)).collect();
+    let hats = (0..32).map(|k| note(if k % 8 == 6 { 46 } else { 42 }, k as f64 / 4.0, 0.7)).collect();
+    project(
+        "drums",
+        &[
+            (
+                "song.ts",
+                r#"import { song } from "@m2/core";
 import { mixer } from "std/mix";
 import drums from "./tracks/drums";
 
 export default song(() => mixer({ drums: drums.out }));
 "#,
-    );
-    write(
-        "tracks/drums.ts",
-        r#"import { track } from "@m2/core";
+            ),
+            (
+                "tracks/drums.ts",
+                r#"import { track } from "@m2/core";
 import { drums } from "std/drums";
 import { mixer } from "std/mix";
 
@@ -136,55 +131,76 @@ export default track("drums", ({ lane }) =>
   }),
 );
 "#,
+            ),
+            ("data/arrangement.json", &json!({"tempo": [{"beat": 0, "bpm": 120}], "meter": []}).to_string()),
+            ("data/drums/kit.json", &lane("kitbeat1", kit)),
+            ("data/drums/snare.json", &lane("snaroll1", roll)),
+            ("data/drums/hats.json", &lane("hatline1", hats)),
+        ],
+    )
+}
+
+/// A chord held for 3 seconds at 120 bpm, on std's pad, through `effect`, a call of one of
+/// std/fx's effects on `x`: one song per effect, so each is judged on its own.
+fn held(name: &str, effect: &str) -> Song {
+    let chord: Vec<Value> = [48, 55, 60, 64, 67].iter().map(|p| json!({"pitch": p, "start": 0, "length": 6})).collect();
+    let track = format!(
+        "import {{ track }} from \"@m2/core\";\nimport {{ pad }} from \"std/instruments\";\nimport {{ {name} }} from \"std/fx\";\n\n\
+         export default track(\"held\", ({{ lane }}) => {{\n  const x = pad(lane.notes(\"notes\"));\n  return {effect};\n}});\n"
     );
-    write("data/arrangement.json", &json!({"tempo": [{"beat": 0, "bpm": 120}], "meter": []}).to_string());
-    let lane = |id: &str, notes: Vec<Value>| json!({"clips": [{"id": id, "start": 0, "length": 8, "notes": notes}]}).to_string();
-    let note = |pitch: u32, start: f64, velocity: f64| json!({"pitch": pitch, "start": start, "length": 0.1, "velocity": velocity});
-    // In 8th notes: kick, snare, clap, closed, pedal and open hats, toms, rim, cowbell, crash, ride, shaker.
-    let mut kit = Vec::new();
-    for (k, pitch) in [36, 42, 38, 42, 36, 46, 39, 44, 45, 47, 37, 56, 49, 51, 69, 42].into_iter().enumerate() {
-        kit.push(note(pitch, k as f64 * 0.5, 0.6 + 0.02 * k as f64));
+    project(
+        name,
+        &[
+            (
+                "song.ts",
+                "import { song } from \"@m2/core\";\nimport held from \"./tracks/held\";\n\nexport default song(() => held.out);\n",
+            ),
+            ("tracks/held.ts", &track),
+            ("data/arrangement.json", &json!({"tempo": [{"beat": 0, "bpm": 120}], "meter": []}).to_string()),
+            ("data/held/notes.json", &json!({"clips": [{"id": "chord001", "start": 0, "length": 8, "notes": chord}]}).to_string()),
+        ],
+    )
+}
+
+/// The songs played after the engine sat stopped: std's drums, each of std's effects that follow
+/// the song alone, at rates that make a difference plain, and every pure fixture.
+fn after_idle_songs() -> Vec<(String, Song)> {
+    let mut out = vec![("a drum beat".to_string(), drum_beat())];
+    for (name, effect) in [
+        ("chorus", "chorus(x, { rate: 1.7, depth: 1, mix: 0.5 })"),
+        ("phaser", "phaser(x, { rate: 1.3, depth: 1, feedback: 0.6, mix: 0.5 })"),
+        ("tremolo", "tremolo(x, { rate: 3.3, depth: 1 })"),
+        ("bitcrush", "bitcrush(x, { bits: 6, rate: 7000, mix: 1 })"),
+    ] {
+        out.push((format!("a held chord through {name}"), held(name, effect)));
     }
-    // A 32nd-note snare roll through the second half, rising; 16th-note hats, open every half bar.
-    let roll = (0..32).map(|k| note(38, 4.0 + k as f64 / 8.0, 0.4 + 0.015 * k as f64)).collect();
-    let hats = (0..32).map(|k| note(if k % 8 == 6 { 46 } else { 42 }, k as f64 / 4.0, 0.7)).collect();
-    write("data/drums/kit.json", &lane("kitbeat1", kit));
-    write("data/drums/snare.json", &lane("snaroll1", roll));
-    write("data/drums/hats.json", &lane("hatline1", hats));
-    compile(dir)
+    for name in ["examples/first-song", "examples/resample", "examples/sounds", "templates/starter", "templates/empty"] {
+        out.push((name.to_string(), fixture(name)));
+    }
+    out
 }
 
-/// examples/sounds with only its drums and percussion playing: every std drum, alone and in
-/// the kit, on the song's own lanes. (Its keys and strings go through std's chorus, whose LFO
-/// runs free on the engine's clock, RENDER-6a: after the engine sat stopped they play from
-/// another phase than the export, as the bit-identity test's "fresh" allows.)
-fn sounds_drums() -> Song {
-    let song = r#"import { song } from "@m2/core";
-import { mixer } from "std/mix";
-import drums from "./tracks/drums";
-import perc from "./tracks/perc";
-
-export default song(() => mixer({ drums: drums.out, perc: perc.out }));
-"#;
-    fixture_with("examples/sounds", &[("song.ts", song)])
-}
-
-// RENDER-33 after the engine sat stopped: a song with std's drums, opened and played a few
-// seconds later, is the export bit for bit. Stopped, the engine runs its kernels on so tails
-// decay (RENDER-6a), so a drum's hits must not follow how long it has run: each takes its seed
-// from how many hits its lane has played (std:hitcount), never from the samples processed. A
-// counter of samples made every hit differ from the export, from the first.
+// RENDER-33 after the engine sat stopped: a song opened and played a few seconds later (or a few
+// blocks), from 0, is the export bit for bit. Stopped, the engine runs its kernels on so tails
+// decay (RENDER-6a), so nothing of std's may follow how long the engine has run. A drum's hits take
+// their seed from how many hits its lane has played (std:hitcount), never from the samples
+// processed. Chorus, phaser and tremolo step their LFOs, and the bitcrusher its clock, only while
+// the song plays (`time.playing`). Every song is judged, and every difference named.
 #[test]
-fn drums_play_the_export_after_the_engine_sat_stopped() {
-    for (name, song) in [("a drum beat", drum_beat()), ("examples/sounds' drums", sounds_drums())] {
+fn std_plays_the_export_after_the_engine_sat_stopped() {
+    let mut differs = vec![];
+    for (name, song) in after_idle_songs() {
         let frames = (song.seconds() * song.rate as f64) as usize;
         let export = offline(&song, frames);
-        assert!(peak(&export) > 0.01, "{name} makes sound");
+        assert!(peak(&export) > 0.01 || name.contains("empty"), "{name} makes sound");
         for idle in [2 * SR as usize, 5 * BLOCK] {
             let heard = live_after_idle(&song, idle, frames);
-            assert_eq!(first_diff(&heard, &export), None, "{name}, played after {idle} frames stopped: live differs from the export");
+            if let Some(at) = first_diff(&heard, &export) {
+                differs.push(format!("{name}, played after {idle} frames stopped: from frame {at}"));
+            }
         }
     }
+    assert!(differs.is_empty(), "live differs from the export:\n{}", differs.join("\n"));
 }
 
 /// The 16-track reference project (p16), written into a temp folder.

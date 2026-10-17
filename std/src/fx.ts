@@ -4,8 +4,12 @@
 // writes its `insert` when it is added. A control is `.smooth()` when its kernel reads it
 // every sample without smoothing it, so a step would click (PKG-14); the others' kernels
 // smooth their controls themselves, or read them once per block.
+//
+// Chorus, phaser, tremolo and bitcrush follow the song: each passes `time.playing` to its
+// kernel, so its wobble (or the bitcrusher's sample clock) moves only while the song plays.
+// Stopped, they wait; Play carries on. Played after a stop, a song sounds as its export does.
 
-import { component, control, kernel, port, signature, type Audio, type Params, type Value } from "@m2/core";
+import { component, control, kernel, port, signature, time, type Audio, type Params, type Value } from "@m2/core";
 
 /** Turn `x` down by `depth` dB while `side` is high. Use another track's `follow()` export as `side`. */
 export const duck = component(
@@ -111,7 +115,7 @@ export const chorus = component(
     output: port.audio(),
     editor: { category: "Modulation", description: "Thicker and wider, with a gentle shimmer", insert: { rate: 0.8, depth: 0.5, mix: 0.5 } },
   },
-  (x: Audio, { rate, depth, mix }: Params) => kernel("std:chorus", { in: x, rate, depth, mix }),
+  (x: Audio, { rate, depth, mix }: Params) => kernel("std:chorus", { in: x, rate, depth, mix, playing: time.playing }),
 );
 
 /** Phaser: sweeping notches. `rate` in Hz; `depth`, `feedback` (a sharper sound) and `mix` 0..1, where 0.5 sweeps deepest. */
@@ -130,7 +134,7 @@ export const phaser = component(
     output: port.audio(),
     editor: { category: "Modulation", description: "A swirling, sweeping whoosh", insert: { rate: 0.4, depth: 0.7, feedback: 0.5, mix: 0.5 } },
   },
-  (x: Audio, { rate, depth, feedback, mix }: Params) => kernel("std:phaser", { in: x, rate, depth, feedback, mix }),
+  (x: Audio, { rate, depth, feedback, mix }: Params) => kernel("std:phaser", { in: x, rate, depth, feedback, mix, playing: time.playing }),
 );
 
 /** Tremolo: the volume pulses `rate` times a second, dipping by `depth` (1 is down to silence). */
@@ -144,7 +148,7 @@ export const tremolo = component(
     output: port.audio(),
     editor: { category: "Modulation", description: "Pulses the volume up and down", insert: { rate: 5, depth: 0.5 } },
   },
-  (x: Audio, { rate, depth }: Params) => kernel("std:tremolo", { in: x, rate, depth }),
+  (x: Audio, { rate, depth }: Params) => kernel("std:tremolo", { in: x, rate, depth, playing: time.playing }),
 );
 
 // ---------------------------------------------------------------- dynamics and tone
@@ -215,7 +219,7 @@ export const bitcrush = component(
     output: port.audio(),
     editor: { category: "Distortion", description: "Lo-fi digital crunch, like an old sampler", insert: { bits: 8, rate: 12000, mix: 1 } },
   },
-  (x: Audio, { bits, rate, mix }: Params) => kernel("std:bitcrush", { in: x, bits, rate, mix }),
+  (x: Audio, { bits, rate, mix }: Params) => kernel("std:bitcrush", { in: x, bits, rate, mix, playing: time.playing }),
 );
 
 // ---------------------------------------------------------------- stereo

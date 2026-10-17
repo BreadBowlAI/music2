@@ -250,6 +250,51 @@ fn the_new_effects_knobs_span_what_their_controls_declare() {
     assert_eq!(knob("width"), (Some([0.0, 2.0]), false));
 }
 
+// The sounds plan's O3: std's chorus, phaser, tremolo and bitcrush read song time inside their own
+// calls, so a chain of them shows what it showed before: one node per call, the audio running
+// from each to the next, and only the knobs their controls declare. No `time` node, no cable from
+// one, and no `playing` knob; two choruses in a row too.
+#[test]
+fn effects_that_follow_the_song_show_no_time_node() {
+    let fixture = Fixture::song(
+        "import { song } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\n\
+         import { bitcrush, chorus, phaser, tremolo } from \"std/fx\";\n\
+         export default song(() => bitcrush(tremolo(phaser(chorus(chorus(osc.saw(110)), { rate: 0.8 })))));\n",
+    );
+    let s = fixture.open();
+    let v = s.view();
+    let m = module(&v, "song");
+    consistent(m);
+    let shown: Vec<(&str, &str, Vec<&str>, Vec<String>)> = m
+        .nodes
+        .iter()
+        .filter(|n| n.kind != "export")
+        .map(|n| (n.kind, n.label.as_str(), n.knobs.iter().map(|k| k.label.as_str()).collect(), inputs(n)))
+        .collect();
+    assert!(shown.iter().all(|(kind, ..)| *kind == "call"), "{shown:#?}");
+    let calls: Vec<&str> = shown.iter().map(|(_, label, ..)| *label).collect();
+    let mut sorted = calls.clone();
+    sorted.sort();
+    assert_eq!(sorted, ["bitcrush", "chorus", "chorus", "osc.saw", "phaser", "tremolo"], "{shown:#?}");
+    for (_, label, knobs, _) in &shown {
+        let want: &[&str] = match *label {
+            "chorus" => &["rate", "depth", "mix"],
+            "phaser" => &["rate", "depth", "feedback", "mix"],
+            "tremolo" => &["rate", "depth"],
+            "bitcrush" => &["bits", "rate", "mix"],
+            _ => continue,
+        };
+        let mut have = knobs.clone();
+        have.sort();
+        let mut want = want.to_vec();
+        want.sort();
+        assert_eq!(have, want, "{label}'s knobs");
+    }
+    // The audio runs down the chain to the song's output, and nothing else is cabled.
+    assert_eq!(m.edges.len(), 6, "{:?}", m.edges);
+    assert_eq!(wire(m, "tremolo", "bitcrush").2, "audio");
+}
+
 #[test]
 fn a_name_written_at_two_inputs_of_one_call_is_an_edge_into_each() {
     for (call, labels) in [

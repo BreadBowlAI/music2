@@ -110,6 +110,20 @@ pub fn compile(dir: PathBuf) -> Song {
     Song { flat: c.flat.clone(), data: c.data, packages, rate: project.sample_rate(), dir }
 }
 
+/// A project in a temp folder: a manifest at 48 kHz that asks for std, and `files` (path, text),
+/// compiled.
+pub fn project(what: &str, files: &[(&str, &str)]) -> Song {
+    let dir = temp(what);
+    let manifest =
+        format!("[project]\nname = \"{what}\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.1\"\n");
+    for (rel, text) in [("music2.toml", manifest.as_str())].into_iter().chain(files.iter().copied()) {
+        let path = dir.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    compile(dir)
+}
+
 /// A copy of the repo's fixture `rel`, compiled.
 pub fn fixture(rel: &str) -> Song {
     fixture_with(rel, &[])

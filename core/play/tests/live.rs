@@ -557,6 +557,64 @@ fn tails_decay_after_stop() {
     assert!(p.windows(2).all(|w| db(w[1]) <= db(w[0]) + 1.0), "decaying: {p:?}");
 }
 
+// RENDER-6a, RENDER-9, O3: std's tremolo follows the song. On a steady level (a square at 0 Hz,
+// which holds at 1), stopped, its level holds still, at the export's level where it stopped; Play
+// goes on from there as if it never stopped: the export from that frame, bit for bit. Through loop
+// wraps mid-block and a seek, the wobble keeps its phase and speed: from the first frame to the
+// last, no step is bigger than twice the wobble's own largest (G6's rule).
+#[test]
+fn tremolo_holds_while_stopped_and_never_jumps() {
+    let song = project(
+        "tremolo",
+        &[
+            (
+                "song.ts",
+                "import { kernel, song } from \"@m2/core\";\nimport { tremolo } from \"std/fx\";\n\n\
+                 export default song(() => tremolo(kernel(\"std:square\", { freq: 0 }), { rate: 3, depth: 1 }));\n",
+            ),
+            ("data/arrangement.json", &json!({"tempo": [{"beat": 0, "bpm": 120}], "meter": []}).to_string()),
+        ],
+    );
+    let mut export = vec![[0.0; 2]; 4 * SR as usize];
+    song.renderer().process(&mut export).unwrap();
+    let own = max_step(&export);
+    assert!(peak(&export) > 0.99 && own > 0.0 && own < 1e-3, "a slow wobble from 0 to 1: steps up to {own}");
+    let (player, mut d) = playing(song.renderer(), SR);
+    let lead = fill(&mut d, SR as usize * 6 / 10 + 333);
+    assert!(lead == export[..lead.len()], "playing, the export");
+    let seq = player.transport(m2_runtime::Cmd::Stop).unwrap();
+    let stopped = fill(&mut d, SR as usize / 2);
+    let stop_at = player.applied(seq).unwrap().clock as usize - lead.len();
+    let pos = player.status().pos as usize;
+    assert_eq!(pos, lead.len() + stop_at, "stopped at the block line after the stop was sent");
+    assert!(stopped[..stop_at] == export[lead.len()..pos], "playing until the stop lands");
+    let level = export[pos];
+    assert!(level[0] > 0.05 && level[0] < 0.95, "stopped mid-wobble: {level:?}");
+    let still = stopped[stop_at..].iter().position(|f| *f != level);
+    assert_eq!(still, None, "stopped, the level holds at {level:?}");
+    let seq = player.transport(m2_runtime::Cmd::Play).unwrap();
+    let played = fill(&mut d, SR as usize);
+    let play_at = player.applied(seq).unwrap().clock as usize - lead.len() - stopped.len();
+    assert!(played[..play_at].iter().all(|f| *f == level), "held until the play lands");
+    let resumed = first_diff(&played[play_at..], &export[pos..pos + played.len() - play_at]);
+    assert_eq!(resumed, None, "Play goes on as if it never stopped");
+    // A loop of 1.3 beats at 120 bpm: 31 200 frames, so each wrap falls mid-block. Then a seek.
+    player.seek(0.5).unwrap();
+    player.set_loop(Some((0.0, 1.3))).unwrap();
+    let (mut wraps, mut last) = (0, u64::MAX);
+    let looped = hear(&mut d, 2 * SR as usize, &mut |_, _| {
+        let p = player.status().pos;
+        wraps += (p < last && last != u64::MAX) as usize;
+        last = p;
+    });
+    assert!(wraps >= 3, "{wraps} wraps");
+    player.set_loop(None).unwrap();
+    player.seek(5.1).unwrap();
+    let sought = fill(&mut d, SR as usize / 2);
+    let all: Vec<[f32; 2]> = [lead, stopped, played, looped, sought].concat();
+    assert!(max_step(&all) <= 2.0 * own, "a step of {} against the wobble's own {own}", max_step(&all));
+}
+
 // RENDER-25a, step 3 gate (G5): an activation plays on from where the engine is: the position
 // read after every device buffer never goes back, and the new renderer is heard within a fade.
 #[test]
