@@ -23,6 +23,33 @@ the merge joins them).
 
 **For 8a's merge:** lane C changes nothing in `core/runtime`, `core/play` or `core/os`.
 
+**Where lane C stands**
+
+| Slice | State | Commit |
+|---|---|---|
+| C1. MIDI files read and written; Export as MIDI… | Done | `6aacaa2` |
+| C3a. Stems | Done | `3e39876` |
+| C3b. The Export dialog | Done | `24545dd` |
+| C2a. MIDI files read in; one part into a notes lane | Done | `f26410e` |
+| C2b. New tracks from a MIDI file, Import MIDI…, drops, the tempo question | Left: needs P0 (`tracks::add_tracks`, the drop layer, `open_file`, `droplib.mjs`), which never reached `studio` while lane C ran | — |
+
+C3 came before C2's second half for that reason (the plan's order was C1, C2, C3).
+
+**For the merge with P0** (the integrator): P0's stubs and lane C's files meet at
+- `crates/editor/src/{smf.rs, midifile.rs}`, `crates/server/src/{routes_exchange.rs, stems.rs, graph/exchange.rs}`:
+  P0 makes them empty, lane C fills them: take lane C's.
+- `crates/editor/src/lib.rs` (`pub mod smf; pub mod midifile;` after `rekey`), `crates/server/src/lib.rs`
+  (`mod routes_exchange; pub mod stems;` after `routes_leases`), `routes.rs` (`.merge(routes_exchange)` after
+  `routes_leases`'), `graph.rs` (`pub(crate) mod exchange;` after `tempo_lease`: lane C needs it `pub(crate)` for
+  the route's `MidiSource` and `MidiTarget`). Join P0's neighbouring lines.
+- `crates/editor/src/render.rs`: lane C's `rooted`, `bounce_seconds`, `write_float` and its `float` field; P0's (and
+  lane A's) three `pub(crate)` words on `part_path`, `sweep`, `name_new`.
+- `web/src/App.tsx`: `<ExportDialog />` after `<RenameSongDialog />` and its import at the import list's end.
+  `web/src/components/TopBar.tsx`: one hunk in `ExportButton` (its two titles).
+- `apps/music2-desktop/src/menu.rs`: `export`'s title "Export…" and its test at the module's end; lane A adds
+  `import_audio` near it.
+- `e2e/run.mjs`, `e2e/README.md`: `st-midi` (19) and `st-stems` (49) after `export`.
+
 ### C1. MIDI files, read and written; Export as MIDI…
 
 **In short**
@@ -367,6 +394,9 @@ renders it, the same bytes (RENDER-3). Stems and Export Audio share one slot: on
   `pc-keys` (the sheet's row "Export"), `live3b` (Return after its export click; its plugin part runs only with
   `CLAP_PATH`). `taste` passes unchanged: its "an export under way" state now lints the open dialog (taste.mjs is
   nobody's to edit, so it doesn't press Return).
+
+Checked in the Linux app on the invisible screen `:97` (`app-shot.sh`): Ctrl+Shift+E opens the dialog (Song chosen,
+Export… focused), and the File menu reads "Export…  Shift+Ctrl+E".
 
 **Red first**
 
