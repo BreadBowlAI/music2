@@ -26,12 +26,32 @@ export interface ServerRef extends LaneAddr {
   sha?: string;
 }
 
+/** A clip on the clipboard: the lane it was copied from, and the clip as the lane format writes it. */
+export interface Copied extends LaneAddr {
+  clip: Record<string, unknown>;
+}
+
 /** What the timeline does to clips, in beats (the server's `Gesture`, tagged by `op`). */
 export type Gesture =
   | ({ op: "create"; start: number; length?: number } & LaneAddr)
   | { op: "move"; clips: ServerRef[]; by: number; to?: LaneAddr; copy?: boolean }
   | { op: "resize"; clip: ServerRef; start: number; length: number }
-  | { op: "delete"; clips: ServerRef[] };
+  | { op: "delete"; clips: ServerRef[] }
+  /** Each clip that crosses `at` becomes two there. */
+  | { op: "split"; clips: ServerRef[]; at: number }
+  /** Notes clips of one lane become one. */
+  | { op: "join"; clips: ServerRef[] }
+  /**
+   * Copies right after the selection, or after `range` (a marquee's, on bar lines): a span of a
+   * bar or more lands on the next bar line, a shorter one on the next line of `grid`.
+   */
+  | { op: "duplicate"; clips: ServerRef[]; range?: [number, number]; grid?: number }
+  /** Copied clips at `at`, keeping their distances: onto lane `to` when it takes them all. */
+  | { op: "paste"; clips: Copied[]; to?: LaneAddr; at: number }
+  /** Every note's start onto the nearest line of `grid` beats. */
+  | { op: "quantize"; clips: ServerRef[]; grid: number; ends?: boolean }
+  /** An automation clip's points, `[beat in the clip, value]`, all of them. */
+  | { op: "points"; clip: ServerRef; points: [number, number][] };
 
 /** The server's answer to a gesture: the edit, and the clips it put on a lane they weren't on. */
 export interface Done {
@@ -101,7 +121,9 @@ export async function send(graph: GraphState, gesture: Gesture, step: Step): Pro
     if (!res.ok) throw new Refused(json.error ?? `HTTP ${res.status}`, res.status === 409);
     const done = json as Done;
     q.revision = Math.max(q.revision, done.revision);
-    if (done.before !== done.after) recorded(graph.session, done.revision, step);
+    // A gesture that changed nothing says "no change" on both sides. One whose words read the same
+    // before and after (a quantize: the same clip, its notes moved) is still a step.
+    if (done.before !== done.after || done.before !== "no change") recorded(graph.session, done.revision, step);
     return done;
   } finally {
     q.pending--;
@@ -113,22 +135,61 @@ export async function send(graph: GraphState, gesture: Gesture, step: Step): Pro
 interface Selection {
   /** The selected clips, in the order picked: ⌫ deletes them, a drag moves them together. */
   picked: ClipRef[];
-  /** Only these. */
-  only: (refs: ClipRef[]) => void;
+  /** A marquee's bars, `[start, end)` in beats, while its clips are the selection: ⌘D copies that span. */
+  range: [number, number] | null;
+  /** Only these (a marquee's, with its bars). */
+  only: (refs: ClipRef[], range?: [number, number] | null) => void;
   /** ⇧-click: this one too. */
   add: (ref: ClipRef) => void;
   /** ⌘-click: in or out. */
   toggle: (ref: ClipRef) => void;
   clear: () => void;
+  /** Only the clips `timeline` still has: an edit elsewhere (a join, an undo) may take some away. */
+  prune: (timeline: TimelineView) => void;
 }
 
 export const useClipSelection = create<Selection>((set) => ({
   picked: [],
-  only: (refs) => set({ picked: refs }),
-  add: (ref) => set((s) => (s.picked.some((p) => sameClip(p, ref)) ? s : { picked: [...s.picked, ref] })),
-  toggle: (ref) => set((s) => ({ picked: s.picked.some((p) => sameClip(p, ref)) ? s.picked.filter((p) => !sameClip(p, ref)) : [...s.picked, ref] })),
-  clear: () => set((s) => (s.picked.length ? { picked: [] } : s)),
+  range: null,
+  only: (refs, range = null) => set({ picked: refs, range }),
+  add: (ref) => set((s) => (s.picked.some((p) => sameClip(p, ref)) ? s : { picked: [...s.picked, ref], range: null })),
+  toggle: (ref) =>
+    set((s) => ({ picked: s.picked.some((p) => sameClip(p, ref)) ? s.picked.filter((p) => !sameClip(p, ref)) : [...s.picked, ref], range: null })),
+  clear: () => set((s) => (s.picked.length || s.range ? { picked: [], range: null } : s)),
+  prune: (timeline) =>
+    set((s) => {
+      const kept = s.picked.filter((p) => {
+        const lane = findLane(timeline, p.module, p.lane);
+        return !!lane && clipIndex(lane.clips, p) >= 0;
+      });
+      return kept.length === s.picked.length ? s : { picked: kept };
+    }),
 }));
 
 /** Whether `ref` is selected in the timeline. */
 export const isPicked = (picked: readonly ClipRef[], ref: ClipRef) => picked.some((p) => sameClip(p, ref));
+
+/** The selected clips as the timeline draws them now, each with its lane; gone ones left out. */
+export function pickedIn(timeline: TimelineView, picked: readonly ClipRef[]) {
+  return picked.flatMap((ref) => {
+    const lane = findLane(timeline, ref.module, ref.lane);
+    const i = lane ? clipIndex(lane.clips, ref) : -1;
+    return lane && i >= 0 ? [{ ref, lane, clip: lane.clips[i] as TimelineLane["clips"][number] }] : [];
+  });
+}
+
+// ---------------------------------------------------------------- the clipboard
+
+/**
+ * The clips ⌘C or ⌘X took, as the lane format writes them, in this window (not the system's
+ * clipboard: a copied clip is no text to paste anywhere else). ⌘V puts them at the playhead.
+ */
+export const useClipboard = create<{ copied: Copied[] }>(() => ({ copied: [] }));
+
+/** `picked` as the clipboard keeps them: each clip without its hash, from its lane. */
+export function copiedOf(timeline: TimelineView, picked: readonly ClipRef[]): Copied[] {
+  return pickedIn(timeline, picked).map(({ ref, clip }) => {
+    const { sha: _sha, ...rest } = clip as unknown as Record<string, unknown>;
+    return { module: ref.module, lane: ref.lane, clip: rest };
+  });
+}

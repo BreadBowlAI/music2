@@ -44,16 +44,21 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     // The UI asks about unsaved code first, then the start screen shows.
     ("close_song", "Close Song", Some("CmdOrCtrl+W")),
     ("save", "Save", Some("CmdOrCtrl+S")),
-    // The UI asks for the file (actions.rs `export_path`), then shows the progress. ⌘E is kept for
-    // Split, which comes with clip editing.
+    // The UI asks for the file (actions.rs `export_path`), then shows the progress. ⌘E is Split.
     ("export", "Export Audio…", Some("CmdOrCtrl+Shift+E")),
     ("reveal", REVEAL, None),
     // The song's name in the top bar turns into a field (a double-click there does the same).
     ("rename_song", "Rename Song…", None),
     ("undo", "Undo", Some("CmdOrCtrl+Z")),
     ("redo", "Redo", Some("CmdOrCtrl+Shift+Z")),
-    // One item for whatever is selected (the roll's notes today), or the code editor's own ⌘D.
+    // One item for whatever is selected (the roll's notes, the timeline's clips, the track), or the
+    // code editor's own ⌘D.
     ("duplicate", "Duplicate", Some("CmdOrCtrl+D")),
+    // The timeline's selected clips (8b.5): at the playhead; notes clips of one lane as one; their
+    // notes onto the roll's grid (Q, the page's key). In the code editor ⌘E and ⌘J are its own.
+    ("split", "Split at Playhead", Some("CmdOrCtrl+E")),
+    ("join", "Join Clips", Some("CmdOrCtrl+J")),
+    ("quantize", "Quantize", None),
     // The instrument list at + Track; the selected track goes, asking first when others read it.
     ("new_track", "New Track…", Some("CmdOrCtrl+T")),
     // In a field, the field's own: to the line's start on a Mac, the word before elsewhere.
@@ -128,6 +133,8 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
         Item("reveal"),
         Item("rename_song"),
     ];
+    // What is selected: the roll's notes, the timeline's clips, the track.
+    let selected = [Item("duplicate"), Item("split"), Item("join"), Item("quantize")];
     let track = vec![Item("new_track"), Item("delete_track"), Item("rename"), Line, Item("mute"), Item("solo"), Item("mute_in_song")];
     let views = [
         Item("view_device"),
@@ -150,7 +157,7 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
             ("music2", vec![About, Line, Services, Line, Hide, HideOthers, ShowAll, Line, Item("quit")]),
             ("File", file.to_vec()),
             // The system's cut, copy and paste, so text fields get them.
-            ("Edit", vec![Item("undo"), Item("redo"), Line, Cut, Copy, Paste, SelectAll, Line, Item("duplicate")]),
+            ("Edit", [&[Item("undo"), Item("redo"), Line, Cut, Copy, Paste, SelectAll, Line][..], &selected].concat()),
             ("Track", track),
             ("View", [&views[..], &[Line, FullScreen]].concat()),
             ("Transport", transport),
@@ -164,7 +171,7 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
         // those keys itself, so they aren't rows.
         vec![
             ("File", [&file[..], &[Line, Item("quit")]].concat()),
-            ("Edit", vec![Item("undo"), Item("redo"), Line, Item("duplicate")]),
+            ("Edit", [&[Item("undo"), Item("redo"), Line][..], &selected].concat()),
             ("Track", track),
             ("View", views.to_vec()),
             ("Transport", transport),
@@ -260,13 +267,26 @@ mod tests {
         assert_eq!(unique.len(), accels.len(), "{accels:?}");
     }
 
-    /// Export moved off ⌘E (kept for Split, taste.md §5.1), and ⌘W is Close Song.
+    /// Export moved off ⌘E, which is Split (taste.md §5.1, design-8b §7.4); ⌘J joins; ⌘W is Close Song.
     #[test]
-    fn export_is_shift_command_e_and_command_w_closes_the_song() {
+    fn export_is_shift_command_e_split_is_command_e_and_command_w_closes_the_song() {
         let accel = |id: &str| ITEMS.iter().find(|i| i.0 == id).and_then(|i| i.2);
         assert_eq!(accel("export"), Some("CmdOrCtrl+Shift+E"));
+        assert_eq!(accel("split"), Some("CmdOrCtrl+E"));
+        assert_eq!(accel("join"), Some("CmdOrCtrl+J"));
+        assert_eq!(accel("quantize"), None, "Q is the page's key");
         assert_eq!(accel("close_song"), Some("CmdOrCtrl+W"));
-        assert!(!accelerators().any(|a| a == "CmdOrCtrl+E"));
+    }
+
+    /// The clips' commands sit in Edit on both menu bars, after Duplicate.
+    #[test]
+    fn split_join_and_quantize_are_in_edit() {
+        for mac in [true, false] {
+            let bar = layout(mac);
+            let edit = &bar.iter().find(|m| m.0 == "Edit").expect("an Edit menu").1;
+            let at = edit.iter().position(|r| *r == Row::Item("duplicate")).expect("Duplicate");
+            assert_eq!(edit[at + 1..at + 4], [Row::Item("split"), Row::Item("join"), Row::Item("quantize")], "mac: {mac}");
+        }
     }
 
     /// The items each menu bar holds, by id.

@@ -245,10 +245,12 @@ export function appCommand(id: string) {
       return void graphUndo(graph.session, id);
     case "duplicate": {
       // Focus decides (taste.md §5.3): in the code editor, its own ⌘D; else the roll's selected
-      // notes; else the selected track, when no clip of it is selected (design-8b §2.6).
+      // notes; else the timeline's selected clips; else the selected track, when no clip of it is
+      // selected (design-8b §2.6).
       if (editorHooks.chord?.("duplicate")) return;
       if (editorHooks.duplicate?.()) return;
       if (editing()) return;
+      if (canvas.duplicate?.()) return;
       const m = shell.selected;
       if (m && m !== "song" && !shell.clips[m]) void duplicateTrack(m);
       return;

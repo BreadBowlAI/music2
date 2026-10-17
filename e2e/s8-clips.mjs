@@ -8,13 +8,17 @@
 // to another track's lane, with the bubble, the guide and the lit lane; lanes that can't take it
 // say why; ⇧-click and ⌘-click select, a drag moves every selected clip, ⌫ deletes them; a clip
 // changed elsewhere while held is refused in words.
+// Part 3, clip commands (U6): the clip menu and the lane menu; ⌘D (a verse ending on beat 4 of bar 8
+// lands at bar 9); a marquee whose ⌘D keeps its empty bars; ⌘E and ⌘J; ⌘C ⌘X ⌘V at the playhead,
+// onto the selected track, and the copy events the app's menu runs; Q; ← → and ⇧→; ⌘E in the code
+// editor stays its own; the ⌥K sheet.
 // And a PC page's words.
 //
 //   node e2e/s8-clips.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 
-const { browser, page, errors, posts, api, state, toasts, key, box, drag } = await open(1440, 900);
+const { browser, page, errors, posts, api, state, toasts, key, box, drag, view } = await open(1440, 900);
 const status = async () => (await api("/status")).body;
 const clips = (path) => JSON.parse(read(path)).clips;
 const near = (a, b) => Math.abs(a - b) < 1e-3;
@@ -281,6 +285,187 @@ check(seenIt && (await until(async () => (await toasts()).some((t) => t.includes
 await sleep(300);
 check(read("data/hats/hits.json") === outside, "and the file keeps the outside edit");
 
+// ================================================================ part 3: clip commands (U6)
+/** The example's own file, as the fixture had it. */
+const fixture = (f) => fs.readFileSync(`${process.env.E2E_REPO}/examples/first-song/${f}`, "utf8");
+/** A lane's clips as the server reads them now (pitches as numbers). */
+const shown = async (module, lane) => (await state()).timeline.tracks.find((t) => t.module === module).lanes.find((l) => l.key === lane).clips;
+const starts = (c) => c.map((x) => x.start).join();
+/** The playhead at `beat`, by a click on the ruler (whole beats), once the page's clock shows it. */
+const playAt = async (beat) => {
+  const r = await box("[data-testid=ruler]");
+  await page.mouse.click(r.x + beat * PPB + 1, r.y + r.height / 2);
+  return until(async () => Number(await page.$eval("[data-testid=playhead]", (e) => e.dataset.beat)) === beat);
+};
+const clickClip = async (lane, id, mods = []) => {
+  for (const m of mods) await page.keyboard.down(m);
+  await page.click(`[data-lane="${lane}"] [data-clip="${id}"]`);
+  for (const m of [...mods].reverse()) await page.keyboard.up(m);
+};
+const menuRows = () =>
+  page.$$eval("[data-testid=clip-menu] [role=menuitem]", (els) => els.map((e) => `${e.textContent}${e.disabled ? "(off)" : ""}`));
+const lastGesture = (from) => sent(from).filter((p) => p.url === "/api/graph/clips").map(gestureOf);
+const undoNow = () => page.$eval('button[aria-label="Undo"]', (e) => e.title);
+
+// A known start: Kick's verse ends on beat 4 of bar 8 (0 to 31), Hats and Keys whole bars 1 to 8.
+const kickClip = JSON.parse(fixture("data/kick/hits.json"));
+kickClip.clips[0].length = 31;
+write("data/kick/hits.json", JSON.stringify(kickClip, null, 2));
+write("data/hats/hits.json", fixture("data/hats/hits.json"));
+write("data/keys/chords.json", fixture("data/keys/chords.json"));
+const K = kickClip.clips[0].id, H = JSON.parse(fixture("data/hats/hits.json")).clips[0].id;
+await until(async () => starts(await shown("hats", "hits")) === "0" && (await shown("kick", "hits"))[0]?.length === 31 && (await shown("keys", "chords")).length === 1);
+await key("Escape");
+await key("Escape");
+await playAt(0);
+
+// ---------------------------------------------------------------- the clip menu
+b = await clipBox("kick.hits", K);
+await page.mouse.click(b.x + 40, b.y + b.height / 2, { button: "right" });
+await page.waitForSelector("[data-testid=clip-menu]");
+const kickMenu = await menuRows();
+await page.screenshot({ path: `${ROOT}/s8-clips-menu.png`, clip: { x: 0, y: 0, width: 720, height: 560 }, captureBeyondViewport: false });
+check(
+  // Part 1 left the roll's grid at 1/32: Quantize says so.
+  kickMenu.join(" | ") === "Cut⌘X | Copy⌘C | Paste⌘V(off) | Duplicate⌘D | Split at playhead⌘E(off) | Quantize to 1/32Q | Delete⌫ | Loop this clip⌘L | Open in Notes",
+  `a right-click on a clip opens its menu, each row with its key; Paste waits for a copy, Split for the playhead inside: ${kickMenu.join(" | ")}`,
+);
+check((await pickedIn("kick.hits")).join() === K, "and the clip is the selection");
+await key("Escape");
+check(await until(async () => !(await page.$("[data-testid=clip-menu]"))), "Escape closes it");
+
+// ---------------------------------------------------------------- ⌘D: a verse ending on beat 4 of bar 8 lands at bar 9
+n = posts.length;
+await key("Meta+d");
+check(await until(async () => starts(await shown("kick", "hits")) === "0,32"), `⌘D copies the Kick verse (0 to 31) onto bar 9, not beat 31: ${starts(await shown("kick", "hits"))}`);
+const dup = lastGesture(n);
+check(dup.length === 1 && dup[0].op === "duplicate" && dup[0].clips.length === 1 && !dup[0].range, `one duplicate gesture: ${JSON.stringify(dup)}`);
+const kickCopy = (await shown("kick", "hits")).find((c) => c.id !== K);
+check(await until(async () => (await pickedIn("kick.hits")).join() === kickCopy.id), "the copy is the selection, so ⌘D again goes on");
+check(await until(async () => (await undoNow()).startsWith("Undo duplicating a Kick clip")), `Undo names it: ${await undoNow()}`);
+await key("Meta+z");
+await until(async () => starts(await shown("kick", "hits")) === "0");
+
+// ---------------------------------------------------------------- the marquee keeps its empty bars
+const kickRow = await rowOf("kick.hits");
+const hatsLane = await rowOf("hats.hits");
+const beat0 = (await status()).beat;
+const mq = await hold({ x: kickRow.x + 39 * PPB + 6, y: kickRow.y + kickRow.height / 2 }, { x: hatsLane.x + 3 * PPB, y: hatsLane.y + hatsLane.height / 2 }, {
+  during: async () => ({ bubble: await page.$eval("[data-testid=clip-bubble]", (e) => e.textContent).catch(() => null), box: await box("[data-testid=marquee]") }),
+});
+check(mq.bubble === "Bars 1–10" && Math.abs(mq.box?.x - kickRow.x) <= 1 && Math.abs(mq.box?.width - 40 * PPB) <= 2, `a drag on empty lane space draws a marquee on bar lines, its bubble naming the bars: ${mq.bubble}, ${mq.box?.x} + ${mq.box?.width}`);
+check((await pickedIn("kick.hits")).join() === K && (await pickedIn("hats.hits")).join() === H && (await pickedIn("keys.chords")).length === 0, "the clips it covers, in the lanes it crosses, are the selection");
+await sleep(250);
+check((await status()).beat === beat0 && !(await page.$("[data-testid=marquee]")), `let go, the marquee goes and play's start stays (${(await status()).beat})`);
+n = posts.length;
+await key("Meta+d");
+check(await until(async () => starts(await shown("kick", "hits")) === "0,40" && starts(await shown("hats", "hits")) === "0,40"), `⌘D copies bars 1 to 10, empty bars kept: both copies at bar 11 (${starts(await shown("kick", "hits"))}; ${starts(await shown("hats", "hits"))})`);
+const mdup = lastGesture(n)[0];
+check(mdup?.op === "duplicate" && mdup.range?.join() === "0,40" && mdup.clips.length === 2, `as one gesture with the marquee's bars: ${JSON.stringify(mdup?.range)}`);
+await key("Meta+z");
+await until(async () => starts(await shown("kick", "hits")) === "0" && starts(await shown("hats", "hits")) === "0");
+
+// ---------------------------------------------------------------- ⌘E splits at the playhead, ⌘J joins
+const hatsBefore = JSON.stringify((await shown("hats", "hits"))[0].notes);
+await playAt(16);
+await clickClip("hats.hits", H);
+n = posts.length;
+await key("Meta+e");
+check(await until(async () => starts(await shown("hats", "hits")) === "0,16"), `⌘E splits the Hats clip at the playhead (bar 5): ${starts(await shown("hats", "hits"))}`);
+const halves = await shown("hats", "hits");
+check(halves[0].id === H && halves[0].length === 16 && halves[1].length === 16 && halves[1].id !== H, "the first half keeps the id, the second gets its own");
+check(await until(async () => (await pickedIn("hats.hits")).length === 2), "both halves are the selection");
+check(await until(async () => (await undoNow()).startsWith("Undo splitting a Hats clip")), `Undo names it: ${await undoNow()}`);
+n = posts.length;
+await key("Meta+j");
+check(await until(async () => starts(await shown("hats", "hits")) === "0"), "⌘J joins them into one");
+const joined = (await shown("hats", "hits"))[0];
+check(joined.id === H && joined.length === 32 && JSON.stringify(joined.notes) === hatsBefore, `keeping the first's id and every note in time: ${joined.id}, ${joined.length}`);
+check(lastGesture(n).map((g) => g.op).join() === "join", "one join gesture");
+
+// ---------------------------------------------------------------- ⌘C ⌘V and ⌘X at the playhead
+await playAt(40);
+await clickClip("kick.hits", K);
+await key("Meta+c");
+n = posts.length;
+await key("Meta+v");
+check(await until(async () => starts(await shown("kick", "hits")) === "0,40"), `⌘C then ⌘V puts a copy at the playhead, on the clip's own track: ${starts(await shown("kick", "hits"))}`);
+const pasted = (await shown("kick", "hits")).find((c) => c.id !== K);
+check(lastGesture(n).map((g) => g.op).join() === "paste" && JSON.stringify(pasted.notes) === JSON.stringify((await shown("kick", "hits"))[0].notes), "as one paste gesture, with the same notes and a new id");
+await until(async () => (await pickedIn("kick.hits")).join() === pasted.id);
+await key("Meta+x");
+check(await until(async () => starts(await shown("kick", "hits")) === "0"), "⌘X cuts the pasted clip");
+await page.click('[data-module-tab="hats"]');
+await key("Meta+v");
+check(await until(async () => starts(await shown("hats", "hits")) === "0,40"), `with Hats selected, ⌘V pastes the Kick clip onto the Hats lane: ${starts(await shown("hats", "hits"))}`);
+// In the app the menu bar's Copy runs the web view's command: the page takes its events (M7).
+await clickClip("keys.chords", JSON.parse(fixture("data/keys/chords.json")).clips[0].id);
+const events = await page.evaluate(() => {
+  const fire = (type) => {
+    const e = new Event(type, { bubbles: true, cancelable: true });
+    document.body.dispatchEvent(e);
+    return e.defaultPrevented;
+  };
+  return { before: fire("beforecopy"), copy: fire("copy"), beforepaste: fire("beforepaste") };
+});
+check(events.before && events.copy && events.beforepaste, `with a clip selected the page takes beforecopy, copy and beforepaste, so the app's Copy and Paste are on: ${JSON.stringify(events)}`);
+await playAt(36);
+await page.click('[data-module-tab="keys"]');
+await key("Meta+v");
+check(await until(async () => starts(await shown("keys", "chords")) === "0,36"), `and that copy event copied the Keys clip: ⌘V pastes it at bar 10 (${starts(await shown("keys", "chords"))})`);
+
+// ---------------------------------------------------------------- Q quantizes; ← → nudge
+const loose = JSON.parse(fixture("data/kick/hits.json"));
+loose.clips[0].notes = loose.clips[0].notes.map((x, i) => ({ ...x, start: x.start + (i % 2 ? 0.06 : -0.04 * (x.start > 0)) }));
+write("data/kick/hits.json", JSON.stringify(loose, null, 2));
+await until(async () => Math.abs((await shown("kick", "hits"))[0].notes[1]?.start - 1.06) < 1e-9);
+await clickClip("kick.hits", K);
+n = posts.length;
+await key("q");
+check(await until(async () => (await shown("kick", "hits"))[0].notes.every((x) => Number.isInteger(x.start))), "Q quantizes the selected clip's notes onto the roll's grid (1/32)");
+const q = lastGesture(n)[0];
+check(q?.op === "quantize" && q.grid === 0.125 && (await until(async () => (await undoNow()).startsWith("Undo quantizing a Kick clip to 1/32"))), `as one gesture, named in Undo: ${JSON.stringify({ op: q?.op, grid: q?.grid })}; ${await undoNow()}`);
+await clickClip("hats.hits", H);
+await key("ArrowRight");
+check(await until(async () => (await shown("hats", "hits")).find((c) => c.id === H)?.start === 0.5), "→ moves the selected clip by the grid (an eighth at this zoom)");
+await key("Shift+ArrowRight");
+check(await until(async () => (await shown("hats", "hits")).find((c) => c.id === H)?.start === 4.5), "⇧→ by a bar");
+await key("ArrowLeft");
+await key("ArrowLeft");
+await key("ArrowLeft");
+check(await until(async () => (await shown("hats", "hits")).find((c) => c.id === H)?.start === 3), `three quick ← move it on from where each left it: ${(await shown("hats", "hits")).find((c) => c.id === H)?.start}`);
+
+// ---------------------------------------------------------------- the lane menu
+await page.mouse.click(kickRow.x + 34.3 * PPB, kickRow.y + kickRow.height / 2, { button: "right" });
+await page.waitForSelector("[data-testid=clip-menu]");
+const laneMenu = await menuRows();
+check(laneMenu.join(" | ") === "Add clip | Paste here", `a right-click on a lane's empty space: ${laneMenu.join(" | ")}`);
+await page.click('[data-testid=clip-menu] [data-menu-item="paste"]');
+check(await until(async () => starts(await shown("kick", "hits")) === "0,34.5"), `Paste here puts the copied Keys clip on the Kick lane where the click was, on the grid: ${starts(await shown("kick", "hits"))}`);
+
+// ---------------------------------------------------------------- ⌘E in the code editor stays the editor's
+// The Kick clip selected, under the playhead: ⌘E would split it anywhere else.
+await playAt(1);
+await clickClip("kick.hits", K);
+await view("code");
+await page.waitForSelector("[data-testid=code] .monaco-editor .view-lines");
+await page.click("[data-testid=code] .monaco-editor .view-lines");
+n = posts.length;
+const kickNow = read("data/kick/hits.json");
+await key("Meta+e");
+await sleep(400);
+check(lastGesture(n).length === 0 && read("data/kick/hits.json") === kickNow, "in the code editor ⌘E is the editor's: the selected clip isn't split");
+await view("notes");
+
+// ---------------------------------------------------------------- the ⌥K sheet
+await page.click("[data-testid=timeline]");
+await key("Alt+k");
+await page.waitForSelector("[data-testid=shortcuts]");
+const sheet3 = Object.fromEntries(await page.$$eval("[data-testid=shortcuts] dl > div", (els) => els.map((e) => [e.querySelector("dt").textContent, e.querySelector("dd").textContent])));
+const want3 = { "Split clips at the playhead": "⌘E", "Join clips": "⌘J", "Quantize the selected clips": "Q", "Cut / copy / paste clips": "⌘X / ⌘C / ⌘V", "Move clips by the grid / by a bar": "← → / ⇧← ⇧→" };
+check(Object.entries(want3).every(([k, v]) => sheet3[k] === v), `the shortcuts sheet lists the clip commands: ${Object.keys(want3).map((k) => `${k} = ${sheet3[k]}`).join("; ")}`);
+await key("Escape");
+
 // ---------------------------------------------------------------- a PC page says Ctrl
 const pc = await open(1440, 900, { pc: true });
 await pc.page.waitForSelector("[data-testid=song-grid]");
@@ -288,6 +473,11 @@ const pcWords = await pc.page.evaluate(() => [document.querySelector("[data-test
 check(pcWords.includes("Ctrl+1") && pcWords.includes("Ctrl+4") && pcWords.includes("hold Ctrl") && !pcWords.includes("⌘"), `a PC page's tooltips say Ctrl: ${pcWords.replace(/\n/g, " ")}`);
 const clipWords = await pc.page.$eval('[data-lane="kick.hits"] [data-clip]', (e) => e.title);
 check(clipWords.includes("Alt-drag to copy") && clipWords.includes("drag an edge to resize"), `and a clip's tooltip says Alt-drag: ${clipWords.replace(/\n/g, " | ")}`);
+const pcClip = await pc.page.$('[data-lane="kick.hits"] [data-clip]').then((e) => e.boundingBox());
+await pc.page.mouse.click(pcClip.x + 20, pcClip.y + pcClip.height / 2, { button: "right" });
+await pc.page.waitForSelector("[data-testid=clip-menu]");
+const pcMenu = await pc.page.$$eval("[data-testid=clip-menu] [role=menuitem]", (els) => els.map((e) => e.textContent).join(" | "));
+check(pcMenu.includes("Split at playheadCtrl+E") && pcMenu.includes("CutCtrl+X") && pcMenu.includes("DeleteBackspace") && !pcMenu.includes("⌘"), `and its clip menu says Ctrl+E: ${pcMenu}`);
 await pc.browser.close();
 
 await browser.close();

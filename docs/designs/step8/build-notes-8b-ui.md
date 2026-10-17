@@ -17,6 +17,7 @@ adds its own section here, in the same commit.
 | U0 | Nothing new to see, except the roll's grid control now comes from a shared file. The places the lanes fill are ready | done |
 | U4 (lane B) | The timeline has a grid and snap: a chip in its corner, Auto by default. Dragged clips land on it; hold ⌘ to place one freely. ⌘1 to ⌘4 change the grid of the view you last used | done |
 | U5 (lane B) | Clips by hand: move, copy (⌥-drag), resize from either edge, move to another track, select several, delete. Each is one undo step | done |
+| U6 (lane B) | Clip commands: a menu on each clip, ⌘D, ⌘E split, ⌘J join, ⌘C ⌘X ⌘V, Q, the arrow keys, and a box dragged across lanes to pick the clips in some bars | done |
 
 ## Setup: the merges
 
@@ -289,4 +290,102 @@ which dropped the pointer and cancelled the drop. It is now hidden there but kep
   `8b-ui`.
 - Lane B's cargo target (`~/m2-runs/wt/ui-b/target`) is deleted. Its server stays in
   `~/m2-runs/s8ui/bin/ui-b-5a34189` for the merge's runs; delete it with `~/m2-runs/s8ui/bin` at the End.
+
+## U6: clip commands (lane B)
+
+**In short**
+- Right-click a clip: a menu with what you can do to it, each with its key.
+- Right-click an empty spot in a lane: Add clip, Paste here.
+
+  | To | Press |
+  |---|---|
+  | Copy, cut, paste clips | ⌘C, ⌘X, ⌘V. Paste puts them at the playhead, on the selected track |
+  | Make a copy right after | ⌘D. A song part that ends just before a bar line goes onto the next bar |
+  | Cut a clip in two at the playhead | ⌘E |
+  | Glue clips of one lane into one | ⌘J |
+  | Put the notes on the grid | Q (the grid Notes uses, 1/16 at first) |
+  | Move clips a little | ← →. With ⇧, a bar |
+  | Pick the clips in some bars | drag on an empty spot: a box shows, on bar lines |
+
+- After a box, ⌘D copies the whole bars of the box, empty bars too.
+- Each one is a single undo step. No toast: you see the result.
+- The same commands are in the Edit menu of the app: Split at Playhead, Join Clips, Quantize.
+- Checks: the web build, `s8-clips` (now 90 checks), 20 suites it could move, the menu tests, and
+  copy and paste in the Linux app.
+
+### What changed
+
+| File | What |
+|---|---|
+| `web/src/lib/clips.ts` | The gestures `split`, `join`, `duplicate` (with a marquee's bars and the grid), `paste`, `quantize` and `points`. The selection keeps a marquee's bars (`range`) and drops clips an edit took away (`prune`). The clipboard: the copied clips as the lane format writes them, in this window. A quantize whose words read the same before and after is still named in Undo |
+| `web/src/components/SongTimeline.tsx` | The commands, and their `canvas` hooks (⌘D, ⌘E, ⌘J, Quantize, ⌘C ⌘X ⌘V). Q and ← → (⇧: a bar) are the timeline's keys. Nudges asked for while an edit is on its way add up and go out as one move. The marquee on empty lane space (a click there still moves the start point). The clip menu and the lane menu. In the app, `beforecopy`, `copy`, `beforecut`, `cut`, `beforepaste` and `paste` are taken while clips are picked (or copied) and no field has the keyboard (M7). A click on a clip keeps the keyboard in the timeline, though Notes opens on it; a double-click gives it to Notes. Edits at the playhead read it to the 960th of a beat |
+| `web/src/components/ClipMenu.tsx` (new) | A menu at the pointer: rows with their keys; a row that can't run is greyed and its tooltip says why |
+| `web/src/App.tsx` | ⌘D's order: the code editor, the roll's notes, the timeline's clips, then the track |
+| `web/src/lib/shell.ts` | `canvas.duplicate` |
+| `web/src/components/GraphCanvas.tsx` | ⌘L loops a marquee's bars or the picked clips, before the clip Notes shows |
+| `web/src/components/Shortcuts.tsx` | Edit: cut, copy, paste, the marquee, duplicate, split, join, quantize, move clips |
+| `apps/music2-desktop/src/menu.rs` | Edit, on both menu bars, after Duplicate: Split at Playhead ⌘E, Join Clips ⌘J, Quantize (Q is the page's key). The test that said no item is ⌘E now says Split is (W7); a new test puts the three after Duplicate |
+| `e2e/s8-clips.mjs`, `e2e/run.mjs`, `e2e/README.md` | Part 3 (35 checks): 90 in all |
+
+### Where things go
+
+| Command | Acts on | Then picked |
+|---|---|---|
+| ⌘D | the picked clips; after a marquee, its bars | the copies (after a marquee, the next bars too, so ⌘D again goes on) |
+| ⌘E | the picked clips under the playhead; with none picked, every clip under it on the selected track, in the lanes it shows | both halves |
+| ⌘J | the picked notes clips of one lane | the joined clip |
+| ⌘V | the selected track's lane of the clips' kind (their own lane on their own track), else the lanes they came from | the pasted clips |
+| Paste here (lane menu) | that lane, where the right-click was, on the grid | the pasted clips |
+| Q | the picked notes clips, onto Notes' grid | the same |
+
+### Checks
+
+| Check | Result |
+|---|---|
+| `cd web && npm run build` (type-checks) | ok |
+| `s8-clips` | 90 of 90 |
+| `taste`, `s4-clips`, `notes`, `fixes-notes`, `s8-songbar`, `gestures`, `layout` | 39, 28, 52, 37, 68, 30, 39 |
+| `views`, `pc-keys`, `s8-tracks`, `s6-write`, `s4-meter`, `attention`, `g11-play` | 30, 37, 75, 36, 8, 57, 24 |
+| `live3a`, `s6-builders`, `s4-problems`, `s4-attn`, `newsong`, `code` | 49, 55, 18, 13, 71, 58 |
+| Server | `~/m2-runs/s8ui/bin/ui-b-5a34189` (B6, B7, B8), serving a copy of this page through `M2_WEB` |
+| `cargo test --locked -p music2-desktop` (in `wt/ui-b`, its own target) | 8 passed; clippy `-D warnings` clean; `Cargo.lock` unchanged |
+| In the Linux app on Xvfb `:98` (lane B's build) | Kick clip clicked, Ctrl+C, the ruler clicked at bar 10, Ctrl+V: the file has a copy at beat 36 (M7). The playhead at bar 5, the clip clicked, Ctrl+E (the menu bar's): two clips, 0–16 and 16–32 |
+| Logs | `~/m2-runs/logs/ui-b-u6-suites-*.log`, `ui-b-u6-menu-*.log`; suite logs in `~/m2-runs/s8ui/scratch/e2e/ui-b-u6s` |
+| Pictures | `~/m2-runs/s8ui/shots/lane-b/ui-u6-menu.png` (the clip menu in the Linux app), `ui-u6-paste.png` (the pasted copy at bar 10); `s8-clips-menu.png` in the suite's folder |
+
+Captions for the owner:
+- `ui-u6-menu.png`: right-click on a clip shows what you can do to it, with the keys.
+- `ui-u6-paste.png`: the Kick clip, copied and pasted at bar 10.
+- This is the Linux version. On your Mac it uses the Mac's own font and ⌘ keys.
+
+**Red first:**
+- `s8-clips` on U5's page (the same server): parts 1 and 2 pass, then no clip menu opens on a
+  right-click and it stops there (`~/m2-runs/s8ui/scratch/e2e/ui-b-u6-red/s8-clips-fix.log`).
+- The menu tests on the old `menu.rs` with the new tests: the two new ones fail, no Split item and
+  no rows after Duplicate (`~/m2-runs/logs/ui-b-menu-red-*.log`).
+
+**Found while building:**
+- A right-click (or click) on a clip, with Notes showing nothing, opened the roll, which took the
+  keyboard: ⌘D, Q and the arrows then went to the roll. The click now opens the roll first and takes
+  the keyboard back.
+- The engine counts in samples, so a playhead put on beat 40 read 39.99999: a paste landed there.
+
+### Choices
+
+| Choice | Why |
+|---|---|
+| Q quantizes to Notes' grid, not the timeline's | Notes' grid is the one notes are placed on. The menu row says which: "Quantize to 1/16" |
+| ⌘V onto the selected track | As Logic. Clips copied from several lanes go back to their own lanes |
+| No toast on copy | Paste in the menus turns on; a toast for every copy is noise |
+| The clip menu has no icons | The ruler's menu has none; Copy and Duplicate would want the same icon |
+| The marquee is always on bar lines | design-8b §7.4; ⌘D then keeps the song's bars |
+
+### Left
+
+- The marquee doesn't scroll the timeline when it reaches an edge.
+- "Clear lane…" (design-8b §7.5) isn't in the lane menu: the plan's rows are Add clip, Paste, Hide.
+- Copied clips stay in this window only: not in the system's clipboard, not across windows.
+- Hide automation folds the track's automation, not one lane (there is no per-lane fold).
+- A dragged or nudged clip is heard only when it lands (Q10).
+- Lane B's cargo target is deleted at the end of the lane.
 
