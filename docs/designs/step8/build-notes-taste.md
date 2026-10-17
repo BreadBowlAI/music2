@@ -485,7 +485,7 @@ everywhere. The fields have fixed widths, so the font changes little.
 | `1d87d7e` | A click on empty lane space, while stopped, moves the playhead there (below). taste §5.1 and §5.2, design-8b §4.3. |
 | `149fdd1` | `e2e/s8-songbar.mjs` (68), in `run.mjs` and `e2e/README.md`. newsong's Tempo (65 to 71). pc-keys: the song bar's tooltips and the sheet's transport rows (36 to 37). |
 | `c988572` | Contract: WRITE-10's rows and 8b.2's *Today*; RENDER-1's *Today* said the pause shows under the name (it is the pill since A1); `d7e2602` had doubled a sentence of RENDER-29's *Today*. `docs/gaps.md`: #6, #7, #8, #37, the loop lines, What works today, and the Space, Space loose end (T8). README: the song bar, the transport keys, `m2 tempo`, `meter`, `title`, the routes. |
-| this commit | design-8b's "Loop turned off" words as built; these notes. |
+| `f195138` | design-8b's "Loop turned off" words as built; these notes. |
 
 ### The new suite: `s8-songbar`
 
@@ -572,7 +572,7 @@ The name's field, open with a long name, in a page laid out as the Mac app's bar
 |---|---|
 | `9ae5521` | `std/src/mix.ts`: the mixer's `db` isn't optional, the master gets `db`, both doc comments say "−96 dB or lower is silence". `std:stereo` (kernel, `m2pkg.toml`, `std.wasm` rebuilt; `std/build.sh --check` gives the same bytes). Tests: `the_mixer_and_master_gains_change_no_bit`, `a_first_pan_in_a_mono_mix_keeps_the_masters_gain_and_limiter`; `std_defaults_are_todays` checks the three new faders; `std_calls_keep_their_forms`, the mixer's view and the gate-5 knob test follow; `forms.ts` has the master's two new forms (tsc passes). s5-knobs (101 to 106). Contract PKG-5. README's std line, gaps #4, design-8b §5.1. |
 | `57050c3` | `mix::mixer` follows the graph (ID-18). `mix_tests.rs`, 6 tests. Duplicate refuses a channel that doesn't name its track. Contract ID-18 and PKG-13's *Today*; design-8b §2.3. |
-| this commit | These notes. |
+| `5da5eff` | These notes. |
 
 ### How the tests know
 
@@ -649,7 +649,7 @@ The name's field, open with a long name, in a page laid out as the Mac app's bar
 |---|---|
 | `c01b2c9` | `Insertion::plan` learns dictionary entries (`lens.rs`): a property in an object entry, or a wrap of a bare one that keeps its text, in the dictionary's style. Edits are a list now (`Control::planned`), so a cable and an automation lane go into an entry too. History shows the entry. `mix::view` and `mix::insert` with the by-channel assertion (`mix.rs`). A shorthand channel (`{ saws }`) reads as a property. Tests: 13 in `mix_tests.rs`; `forms.ts` gains 28 forms (a fader and a cable into each of 7 entries, a first pan into each, and the `db(…)` style), and tsc passes. s5-knobs: the two faders are knobs (117). Contract PKG-3, ID-14, WRITE-10's fader row; design-8b §5.2. |
 | `8da57a9` | `mix` in the graph state; the route, in `WRITES`. Server tests: the state and the route; a read-only window writes nothing; the two live first-pan tests. s5-knobs: the route (120). Contract WRITE-10; design-8b §5.3, §5.4. |
-| this commit | These notes. |
+| `28ded90`, `6c8aeea` | These notes. |
 
 ### Decisions made in the slice
 
@@ -721,7 +721,7 @@ The name's field, open with a long name, in a page laid out as the Mac app's bar
 | Commit | What |
 |---|---|
 | `de85438` | `web/src/components/Knob.tsx`: KnobControl's gesture as a hook (`useKnobGesture`: preview, lease keepalive, commit, cancel, steps), the knob's drag, the small knob (now any size, and with `vertical`, deaf to a sideways scroll), its menu, the home marker, and one value bubble for the knobs and the song bar. No behaviour change. |
-| this commit | `Mix.tsx` (strips, faders, pans, Master, the strip's menu, a strip with no fader); `mix` in the page's state and `graphApi.mixInsert`; the `MixSoon` placeholder and the shell's `reveal` go; the shell's `codeAt` (Edit in code at a line) and `renaming` that says where (a header or a strip). `e2e/s8-mix.mjs` in `run.mjs` and `e2e/README.md`; views and taste read the Mix view. README's Mix, gaps #4, design-8b §5.5 and §5.7. These notes. |
+| `e0f0039` | `Mix.tsx` (strips, faders, pans, Master, the strip's menu, a strip with no fader); `mix` in the page's state and `graphApi.mixInsert`; the `MixSoon` placeholder and the shell's `reveal` go; the shell's `codeAt` (Edit in code at a line) and `renaming` that says where (a header or a strip). `e2e/s8-mix.mjs` in `run.mjs` and `e2e/README.md`; views and taste read the Mix view. README's Mix, gaps #4, design-8b §5.5 and §5.7. These notes. |
 
 ### Decisions made in the slice
 
@@ -786,7 +786,7 @@ The name's field, open with a long name, in a page laid out as the Mac app's bar
 
 | Commit | What |
 |---|---|
-| this commit | `compactMixer` and the card's row in `NodeGraph.tsx`; `focusNext` in `Knob.tsx`, shared by every type-in; the Mix's type-ins (`knob-type-in`, Tab, the error line), a fader's double-click, levels with their unit; `controlLabel`'s Volume. The 8 suites; `s8-mix`'s card checks and its screenshot of the Song's Device view; `run.mjs` and `e2e/README.md`. README (the Song's mixer card), design-8b §5.5 and §5.7. These notes. |
+| `7b28dc3` | `compactMixer` and the card's row in `NodeGraph.tsx`; `focusNext` in `Knob.tsx`, shared by every type-in; the Mix's type-ins (`knob-type-in`, Tab, the error line), a fader's double-click, levels with their unit; `controlLabel`'s Volume. The 8 suites; `s8-mix`'s card checks and its screenshot of the Song's Device view; `run.mjs` and `e2e/README.md`. README (the Song's mixer card), design-8b §5.5 and §5.7. These notes. |
 
 ### Decisions made in the slice
 
@@ -842,6 +842,8 @@ pass again: 67, 30, 39, 60.
   merged first, so each fix lands on what goes to `main`.
 - The review confirmed 17 findings (16 problems: UI-6 and W5 are the same). Each is fixed below, with a
   test that failed before, or in the docs.
+- `ci/check.sh` and `ci/check.sh --gates` pass at `22bea45`: every row, nothing passed only on a retry
+  (1,130 Rust tests, 35/35 browser suites, 10 of 10 renders, the 6 gate runs). No render record moved.
 
 ### The merge of `main` (`143f63d`)
 
@@ -873,9 +875,122 @@ pass again: 67, 30, 39, 60.
 | W4 | `eefbe63` | PLAT-2 says every way the web UI differs by OS: its keys and labels, Ctrl+Backspace, its font (`data-os`), and in the Mac app (`data-app`) the top bar's inset, the time's breakpoint and the name's clearance. | doc |
 | W7 | `a6d0edd` | README: a pan has Automate once it's written (one in grey has the strip's menu); the browser's three instrument groups; the top bar starts with the browser's toggle; outside changes are heard from the system (FSEvents on a Mac, inotify on Linux). `Browser.tsx`'s comment names the three groups. | doc |
 | W8 | `395fc63` | `gaps.md`: the Track inspector's volume and pan are back in the Mix view. `song-as-program.md` and `e2e/README.md` (s6-builders, s4-attn): Needs attention is in the status pill's popover, not a strip. | doc |
+| W9 | this commit | The HANDOFF: `taste-next` in its In short and branch table, its Mac run owed with look-and-listen steps 22 to 31, the merge notes' `taste` rows done (960 px is 1100 now: no app window is narrower) and a row for `8b-ui`, and `attention-attn` out of the known flakes (fixed by `cf3115b`). | doc |
 
 ### The final checks
 
 | Run | Commit | Result |
 |---|---|---|
 | `ci/check.sh` (`check-tn-f1`) | `395fc63` | PASS, but `gestures` passed only on a retry: "a drag on its value turns it too" wrote nothing. A knob is disabled while its last value is being written, and under the check's load the press came before the write before it had answered. The suite now waits until a control takes a press again (`aria-disabled`) before each drag. Not a defect of the app: a press during a save is refused by design. |
+| `ci/check.sh` (`check-tn-f2`) | `22bea45`, with the suite's wait | PASS: every row the first time, nothing on a retry. 12 min |
+| `ci/check.sh --gates` (`check-tn-fg`) | `22bea45` | PASS: every row the first time, the 6 gate runs included. 29 min, load under 3 at its start |
+
+`check-tn-f1`, as it printed:
+
+```
+music2 check: PASS; 1 passed only on a retry
+commit   395fc6338297 on taste-next (clean)
+machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
+tools    rustc 1.99.0, node v24.21.0, 13 min
+plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+
+toolchain        PASS  rustc 1.99.0
+web build        PASS  
+build            PASS  
+app              PASS  the UI connected: first-song in 1 s, with-plugins in 1 s
+rust tests       PASS  1130 passed, 0 failed
+clippy           PASS  
+std kernels      PASS  tests and clippy
+std.wasm         PASS  rebuilt to the same bytes in another folder
+mac lint         PASS  the macOS code type-checks and lints
+browser suites   PASS  34/35 suites ok, 1 failed; passed on a retry
+renders          PASS  10 of 10 match e2e/renders.sha256
+repo unchanged   PASS  
+
+passed only on a retry:
+  suite gestures-fix
+
+logs     /home/jerry/m2-runs/check-tn-f1.tgz
+```
+
+`check-tn-f2`, as it printed:
+
+```
+music2 check: PASS
+commit   22bea45dd32a on taste-next (clean)
+machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
+tools    rustc 1.99.0, node v24.21.0, 12 min
+plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+
+toolchain        PASS  rustc 1.99.0
+web build        PASS  
+build            PASS  
+app              PASS  the UI connected: first-song in 1 s, with-plugins in 1 s
+rust tests       PASS  1130 passed, 0 failed
+clippy           PASS  
+std kernels      PASS  tests and clippy
+std.wasm         PASS  rebuilt to the same bytes in another folder
+mac lint         PASS  the macOS code type-checks and lints
+browser suites   PASS  35/35 suites ok
+renders          PASS  10 of 10 match e2e/renders.sha256
+repo unchanged   PASS  
+
+logs     /home/jerry/m2-runs/check-tn-f2.tgz
+```
+
+`check-tn-fg`, as it printed (its gates part, with G7f's numbers, is in `~/m2-runs/logs/check-tn-fg-*.log`
+and `~/m2-runs/check-tn-fg.tgz`):
+
+```
+music2 check: PASS
+commit   22bea45dd32a on taste-next (clean)
+machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
+tools    rustc 1.99.0, node v24.21.0, 29 min
+plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+
+toolchain        PASS  rustc 1.99.0
+web build        PASS  
+build            PASS  
+app              PASS  the UI connected: first-song in 1 s, with-plugins in 1 s
+rust tests       PASS  1130 passed, 0 failed
+clippy           PASS  
+std kernels      PASS  tests and clippy
+std.wasm         PASS  rebuilt to the same bytes in another folder
+mac lint         PASS  the macOS code type-checks and lints
+browser suites   PASS  35/35 suites ok
+renders          PASS  10 of 10 match e2e/renders.sha256
+old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
+gates            PASS  the 6 runs ci/gates.txt names
+repo unchanged   PASS  
+```
+
+Numbers (Linux, information only, PLAT-1): G11 tx-data p95 9.2 ms to the first block that plays it
+(bound 20), the watcher 0.10% of a core (bound 1%); G7a heard p95 111.7 ms (bound 200); G7f would pass:
+a block +61 µs over S by the mean (bound 80), a callback −110 µs (bound 320), the slowest activation block
+3,069 µs (bound 5,333).
+
+### Pictures for the owner
+
+The app on an invisible Xvfb screen (1600 × 1000, the window 1440 × 900), at `22bea45`, with a scratch
+HOME and no sound: `~/m2-runs/app-shots/taste-22bea45/`. This is the Linux version: on the Mac it uses the
+Mac's own font and ⌘ keys.
+
+| File | What it shows |
+|---|---|
+| `1-the-new-look.png` | first-song open: one top bar (play, 124 BPM, 4/4, the name, Export), the browser on the left, the tracks, a tempo change at bar 9 on the ruler, and Kick's Device view in the dock |
+| `2-add-track-list.png` | + Track's list (Ctrl+T): Drums first, each sound with a line that says what it is |
+| `3-song-bar.png` | the song bar: a click on 4/4 opens the time signature picker (beats in a bar, each beat 2, 4, 8 or 16) |
+| `4-mix-first-song.png` | the Mix view (Alt+3): a strip per track with its pan and fader, a level the code leaves out in grey, Master on the right |
+| `5-mix-pop-sounds.png` | the Mix view of Pop sounds: 12 strips and Master |
+
+### Left
+
+| What | Where |
+|---|---|
+| On the ruler, a change's mark at a bar line sits under that bar's number and touches it ("9" and "♩128" in `1-the-new-look.png`) | 8b-ui, by eye |
+| A first options object in a call written over several lines lands on the last argument's line (`}), { db: -4.8 },`): right, but not how a person would lay it out | B4's `Insertion::plan`; not in the review's findings |
+| Off the Mac, a mouse scrolls sideways with Shift+wheel: not checked whether WebKitGTK sends that to a fader as sideways (the strips move) or up and down | T6, by hand on Linux |
+| `taste` once timed out waiting for the Bass header's selection, in a run of three suites at once beside other agents; not in any check | the HANDOFF's known flakes |
+| M and S, mute in song, a meter per strip, the sidechain row | 8b.4, 8b.8 (`8b-ui`) |
+| The Mac run: `ci/check.sh`, then the look-and-listen steps 22 to 31 | the HANDOFF |
+| Scratch: deleted (`~/m2-runs/tn-scratch/`). Logs: `~/m2-runs/logs/tn-merge-*`, `check-tn-f1*`, `check-tn-f2*`, `check-tn-fg*`; `~/m2-runs/check-tn-f1.tgz`, `-f2.tgz`, `-fg.tgz`. | — |
