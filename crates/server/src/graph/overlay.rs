@@ -166,9 +166,12 @@ impl Monitor {
         Monitor { set: read(dir), version: 0, written: 0, dir: dir.to_path_buf(), writer, song: Arc::new(Song::of(rev)) }
     }
 
-    /// The accepted revision is `rev` now, and this window may write or not.
-    pub(super) fn follow(&mut self, rev: &m2_session::Revision, writer: bool) {
-        self.song = Arc::new(Song::of(rev));
+    /// The accepted revision is `song` now (None: its code didn't change), and this window may
+    /// write or not.
+    pub(super) fn follow(&mut self, song: Option<Song>, writer: bool) {
+        if let Some(song) = song {
+            self.song = Arc::new(song);
+        }
         self.writer = writer;
     }
 

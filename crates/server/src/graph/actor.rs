@@ -803,6 +803,8 @@ impl Actor {
                 .collect(),
             _ => vec![],
         };
+        // What the overlay state reads of a new revision's code, worked out off the lock.
+        let song = code_changed.then(|| super::overlay::Song::of(o.session.accepted()));
 
         // Phase 1, under the control plane's lock: what `begin` and `update` need, with the
         // engine messages, so every lease's sends reach the queue in order.
@@ -811,7 +813,7 @@ impl Actor {
             for (from, to) in &rekeys {
                 p.overlays.rekey(from, to);
             }
-            p.overlays.follow(o.session.accepted(), o.session.access().refusal().is_none());
+            p.overlays.follow(song, o.session.access().refusal().is_none());
         }
         let closing = install.as_ref().and_then(|i| i.lease);
         // Each live lease is carried to the accepted code, or ends (WRITE-22): it stays only while

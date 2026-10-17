@@ -144,6 +144,8 @@ track's export changes.
   be cleared.
 - `saved` in the state means "this window saves them" (false when read-only), for the pill's tooltip.
 - `heard` is `silenced` only for a track whose every site is off by a solo. A track with no sites is `heard`.
+- What the overlay state reads of the song (tracks, sites, muted, feeds) is worked out off the control lock, and
+  only when the code changed, so a knob drag never waits for it (a follow-up commit after B5).
 
 **Checks:** `cargo check --workspace --all-targets`; clippy on `m2-server`; `m2-server` tests.
 
