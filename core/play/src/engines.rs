@@ -119,6 +119,10 @@ impl Engines {
     }
 }
 
+/// Debug builds run every engine thread under the allocation trap, as the device's own callback
+/// is (RENDER-28): each worker from its start to its stop. A release build marks nothing.
+const TRAP: Option<fn(bool)> = if cfg!(debug_assertions) { Some(crate::alloc::set_in_callback) } else { None };
+
 /// How long the player's thread waits for the device's first callback, and for its workers to
 /// start: then it plays on one thread, and says so.
 const WAIT: Duration = Duration::from_secs(1);
@@ -180,12 +184,12 @@ pub(crate) fn for_clock(frames: usize, rate: u32, live: LiveThreads, report: &Re
     let period = Duration::from_secs_f64(frames.max(1) as f64 / rate.max(1) as f64);
     let group = Arc::new(Group::none(Some(period)));
     let count = live_count(live.count, &m2_os::process::cores(), None, false);
-    made(count, group, live.between, None, report)
+    made(count, group, live.between, report)
 }
 
 /// A pool of `count` threads for `group`'s engine threads; one thread when `count` is 1 or the
 /// OS won't start them. Reported in `report`.
-fn made(count: usize, group: Arc<Group>, between: Between, mark: Option<fn(bool)>, report: &Report) -> Engines {
+fn made(count: usize, group: Arc<Group>, between: Between, report: &Report) -> Engines {
     let one = |group: Arc<Group>, missing: Option<String>| {
         report.made(1, None, between, missing);
         Engines::alone(group, between)
@@ -193,7 +197,7 @@ fn made(count: usize, group: Arc<Group>, between: Between, mark: Option<fn(bool)
     if count <= 1 {
         return one(group, None);
     }
-    let (setup, joins) = m2_runtime::threads::live(group.clone(), between == Between::Spin, mark);
+    let (setup, joins) = m2_runtime::threads::live(group.clone(), between == Between::Spin, TRAP);
     match Pool::new(count, setup) {
         Ok((pool, runner)) => {
             report.made(count, Some(&joins), between, None);
@@ -228,7 +232,7 @@ pub(crate) fn for_device(uid: Option<&str>, rate: u32, live: LiveThreads, first:
         report.made(1, None, live.between, group.missing().map(str::to_string));
         return Engines::alone(group, live.between);
     }
-    let (setup, joins) = m2_runtime::threads::live(group.clone(), live.between == Between::Spin, None);
+    let (setup, joins) = m2_runtime::threads::live(group.clone(), live.between == Between::Spin, TRAP);
     let (pool, runner) = match Pool::new(count, setup) {
         Ok(made) => made,
         Err(e) => return one(format!("one thread: the OS wouldn't start {} more ({e})", count - 1)),
