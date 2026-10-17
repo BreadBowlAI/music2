@@ -105,7 +105,8 @@ await key("Meta+1");
 // The kick's lane selects the kick, so the roll has gone: its grid is read where it is kept, the
 // song's view settings (polish C1).
 const rollGrid = async () => (await state()).local?.grid?.notes?.pick;
-check(await until(async () => (await chip())?.grid === "1/2") && (await rollGrid()) === 0.125, `after a click in the timeline, ⌘1 is the timeline's again: ${(await chip())?.grid}, the roll's ${await rollGrid()}`);
+// The settings are sent a moment after the last change (lib/local): wait for the roll's to land.
+check(await until(async () => (await chip())?.grid === "1/2" && (await rollGrid()) === 0.125), `after a click in the timeline, ⌘1 is the timeline's again: ${(await chip())?.grid}, the roll's ${await rollGrid()}`);
 
 // Notes gone from the screen, its grid isn't the keys' any more: the timeline's is the only one shown.
 const rollSnap = async () => (await state()).local?.grid?.notes?.on;
@@ -126,7 +127,7 @@ for (const [how, away] of [["E hides the dock", "e"], ["⌥3 shows Mix there", "
 await clickLane(45);
 if (tabWas) await page.click(`[data-view-tab="${tabWas}"]`).catch(() => {});
 
-// ---------------------------------------------------------------- kept over a reload (in a browser; the app starts over)
+// ---------------------------------------------------------------- kept over a reload (with the song's view settings)
 await page.reload({ waitUntil: "domcontentloaded" });
 await page.waitForSelector("[data-testid=song-grid]");
 check((await chip()).grid === "1/2", `a reload keeps the timeline's grid: ${(await chip()).grid}`);
@@ -135,6 +136,8 @@ check((await chip()).grid === "1/2", `a reload keeps the timeline's grid: ${(awa
 await page.click("[data-testid=song-grid]");
 await page.click('[role=menu][aria-label=Grid] [data-grid="Auto"]');
 await until(async () => (await chip()).grid === "Auto");
+// Kept with the song's view settings a moment later: not a post of the click below.
+await until(async () => (await state()).local?.grid?.song?.pick === "auto");
 const rev = (await state()).view.revision;
 const kickFile = read("data/kick/hits.json");
 const writes = posts.length;

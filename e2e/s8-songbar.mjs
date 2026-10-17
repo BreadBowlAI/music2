@@ -112,7 +112,7 @@ await page.keyboard.type("7");
 await page.keyboard.press("Enter");
 await until(() => same(arrangement().meter, [{ beat: 0, beats: 7, unit: 4 }]));
 await page.click('[data-testid=meter-picker] [data-unit="8"]');
-check(await until(() => same(arrangement().meter, [{ beat: 0, beats: 7, unit: 8 }])) && (await meterText()) === "7/8", `7 beats, each an eighth: 7/8 (${JSON.stringify(arrangement().meter)})`);
+check(await until(async () => same(arrangement().meter, [{ beat: 0, beats: 7, unit: 8 }]) && (await meterText()) === "7/8"), `7 beats, each an eighth: 7/8 (${JSON.stringify(arrangement().meter)}, ${await meterText()})`);
 const bars = await page.$$eval("[data-testid=ruler] > span", (els) => els.map((e) => [e.textContent, Math.round(parseFloat(e.style.left))]));
 // A 7/8 bar is 3.5 beats, 84 px: bar 2 starts at 84 (its number 6 px in).
 check(same(bars.slice(0, 3), [["1", 6], ["2", 90], ["3", 174]]), `the ruler is re-barred: ${JSON.stringify(bars.slice(0, 4))}`);

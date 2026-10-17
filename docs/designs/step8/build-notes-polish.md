@@ -1203,6 +1203,55 @@ FAIL  a line under Bass's lanes says so: null
 
 The lead's merges of the four lanes.
 
+**In short.** All four lanes are now in `polish`. Every lane was green, so each was merged whole.
+Two lanes had built the same thing (the place view settings are kept): one was kept. A few tests
+needed a small change to match.
+
+| Step | What |
+|---|---|
+| `main` | `d7207d2` (docs only) was already in every lane; `polish` moved up to it first |
+| Lane A, `5836e8c` | Merged as it is |
+| Lane D, `208c886` | Both lanes' `mod` lines and router merges kept. NoteView takes A's row names and D's grid name |
+| Lane C, `8f5b181` | The view store: see below. Both lanes' menu tests kept |
+| Lane B, `2e3461d` | The timeline publishes `markers` (B) and `key` (D). A track's rows use B's heights and D's hidden lanes. B's `routes_view.rs` (the view route and markers). `editorHooks.zoom` was declared by both B and D: kept once |
+
+**The view store: lane B's is kept.** Lanes A and D had already taken B's commit `2a6d3c1`, and
+lane C had built its own with the same calls (`useLocal`, `getLocal`, `setLocal`, `flushLocal`,
+`POST /api/graph/view`).
+
+| Lane C's part | Now |
+|---|---|
+| `view_file.rs`, `Inner.local`, `local_stamp` | Dropped: B's `Published.local` holds the settings |
+| `POST /api/graph/view` in `routes_project.rs` | Dropped: B's route in `routes_view.rs` (two routes on one path would stop the server) |
+| `view_file_tests.rs` | B's two tests kept; C's one test dropped (B's cover the same: merge, null, refused loop and names, another session, reopen, read only) |
+| `web/src/lib/local.ts` | B's, with its store exported as `useLocalStore`, which C's `grid.ts` and `audition.ts` follow |
+| `local_stamp` | Not needed: lane A's ID change moves `heights` and `hidden` in the page (`lib/rekey.ts`), with B's and D's key shapes (`bass`, `bass.cutoff`) |
+
+B's store sends a change 300 ms after the last one, where C's sent it at once. Two `s8-clips` checks
+that C wrote read the state's `local` straight after a change. They now wait for it to land. Red
+in the first sweep: `FAIL after a click in the timeline, ⌘1 is the timeline's again: 1/2, the
+roll's 0.25` and `FAIL and writes nothing: /api/graph/seek,/api/graph/view`. Green after: 94/94.
+`s8-songbar`'s "7 beats, each an eighth" now waits for the field to say 7/8 too, not only the file:
+on a busy machine the page heard of the change after the check read it (failed once in five runs).
+
+**Also.** `TrackIdDialog` uses `useModalKeys` (X14), as every other dialog does now.
+
+**Checks** (the server and `m2` built from `98e3b11`, copied to `bin/pl-98e3b11`):
+- Rust: `cargo test --locked --no-fail-fast` of `m2-script` (56, 1, 8), `m2-editor` (280),
+  `m2-server` (232), `m2` (its tests), `m2-session` (154), `music2-desktop` (12). Clippy
+  `-D warnings` on all six: clean. Log `~/m2-runs/logs/pl-rust1-*`.
+- The web build (it type-checks): green.
+- Every browser suite but `live3b` (it needs plugins: the End's), twice: four batches at once,
+  then two. All passed but `s8-clips` (the two checks above), and three that passed when run again:
+  `pl-mix` 46/47 once (a meter read silence, −60, while playing, as the Rust tests ran beside it),
+  `newsong` once (⌘N right after a new song opened found no dialog in 30 s), and `s8-songbar`.
+  Logs `~/m2-runs/logs/pl-suites-*`, `pl-sweep2-*`, `pl-flaky*`.
+
+**Left for the End.** `live3b`; the Linux app on `:96`; `ci/check.sh`; the docs each lane listed.
+`canvas.renameSong` (set in `SongBar.tsx`, declared in `shell.ts`) is no longer called: File ▸
+Rename Song… opens lane C's dialog, and a double-click on the name still renames in place. The End
+can drop it.
+
 ## End
 
 The lead's last check, docs and pictures.
