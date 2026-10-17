@@ -79,6 +79,7 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
       ["Zoom in / out", `${chord("=")} / ${chord("−")}`],
       ["Zoom around the pointer", `${mod.cmd}-scroll, or pinch`],
       ["Zoom to the selected clips or the song; again: back", "Z"],
+      ["Taller / shorter tracks", `${chord("↓")} / ${chord("↑")}`],
     ],
   },
   {
