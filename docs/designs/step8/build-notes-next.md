@@ -670,8 +670,8 @@ P0's `env` rows in `run.mjs`.
   open): `panicked at output_tests.rs:46:28: the song opens: no audio output device`.
 - With `came_back` never taking over: `panicked at output_tests.rs:119:5: the next action loads the song into the
   new player`; `the_silent_player_says_so_once`: `left: 1, right: 2` (never tried again).
-- `core/play`, with `silent_pick` ignoring the choice: `outputs_tests.rs:45`: `left: ("Speakers", false), right:
-  ("Headphones", false)`; `outputs_tests.rs:59`: `left: Some(480), right: Some(256)`.
+- `core/play`, with `silent_pick` ignoring the choice: `outputs/tests.rs:45`: `left: ("Speakers", false), right:
+  ("Headphones", false)`; `outputs/tests.rs:59`: `left: Some(480), right: Some(256)`.
 - `nx-nodevice` on the new server with `DIST=` the page before (plan X19: no older server runs with
   `M2_AUDIO=fail`): 3 of 9 passed, then it stopped. `FAIL  the status pill says "No sound output": undefined
   (undefined)`; `FAIL  in warn, with the VolumeX mark: undefined`.
@@ -1179,7 +1179,35 @@ command for it (Q35).
 
 ## Merge
 
-The lead joins the lanes here.
+**In short**
+
+| What | Now |
+|---|---|
+| The four lanes | Joined on `next`, as merge commits, smallest first: D, C, B, A |
+| What clashed | Only the lines each lane added at the same place. Both sides were kept |
+| What the join broke | Listed below, each fixed in its own commit |
+
+**How the shared files were joined.** P0 never landed, so each lane made its own seams and this file. Each lane's
+section above is its own branch's, word for word.
+
+| File | Joined |
+|---|---|
+| `crates/server/src/lib.rs` | `mod routes_fx;` (D), `mod routes_settings; pub mod settings;` (C), `mod routes_leases;` (A), in that order after `mod routes_view;`. `AppState`'s fields: C's `settings`, then B's `midi`, at the struct's end and in `new` |
+| `crates/server/src/routes.rs` | The `.merge(…)` lines of D, C and A after `routes_view`'s |
+| `crates/server/src/graph.rs` | The `mod` lines of D (`fx`), C (`output`, `steps`), B (`midi`) and A (`lanes`, `tempo_lease`). `ControlPlane`'s fields: B's `midi`, then A's `lanes` and `tempo` |
+| `apps/music2-desktop/src/menu.rs` | C's two tests, then B's two; git joined `ITEMS` and the rows itself |
+| `web/src/components/TopBar.tsx` | B's `useMetronome()` line, with C's `next(graph, …)` undo names (C changed `next`'s signature) |
+| `web/src/App.tsx`, `Shortcuts.tsx`, `SongTimeline.tsx`, `NoteView.tsx`, `e2e/run.mjs`, `e2e/README.md`, `s8-songbar.mjs`, `graph/actor.rs`, `core/play/src/lib.rs` | Joined by git with no clash |
+| `Cargo.lock` | Lane B's: midir's entries only (main hasn't moved) |
+
+**Fixes the join needed**
+
+- `core/play/src/outputs_tests.rs` moved to `core/play/src/outputs/tests.rs`, and its `#[path]` line went.
+  `m2-runtime`'s `host_math` test walks `core/play/src` by its `mod` lines and can't follow a `#[path]` (lane B met
+  the same and put its click tests in `click/tests.rs`). Lane C ran `m2-play`'s tests but not `m2-runtime`'s, so it
+  didn't see it. Red: `host_math_goes_through_libm` panicked, `…/play/src/outputs/tests/mod.rs: No such file or
+  directory`. After: 1 passed; `m2-play`'s 22 lib tests pass, the three `outputs::tests` among them.
+  **For 8a's merge:** only the test file's place and the `mod tests;` line at `outputs.rs`'s end changed.
 
 ## End
 

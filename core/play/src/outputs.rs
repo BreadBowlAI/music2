@@ -180,5 +180,4 @@ pub(crate) fn buffer(frames: Option<u32>, supported: &SupportedBufferSize) -> Bu
 }
 
 #[cfg(test)]
-#[path = "outputs_tests.rs"]
 mod tests;
