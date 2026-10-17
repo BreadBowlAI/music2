@@ -26,6 +26,8 @@ use crate::path::{DataPath, MANIFEST};
 pub const FORMAT: u32 = 1;
 /// The dependency every project lists: the SDK.
 pub const SDK: &str = "@m2/core";
+/// The package the app bundles, one version of it (FMT-3).
+const STD: &str = "std";
 
 /// The rates a project may run at. Outside this, a typo (`4800`) would silently run the
 /// whole engine at a rate no device or file uses.
@@ -86,7 +88,9 @@ impl Manifest {
 
     /// Check every `[dependencies]` entry against what is installed (FMT-3): an unmet
     /// `@m2/core` is `sdk.unsatisfied`, any other package `pkg.unsatisfied`. `installed` gives
-    /// the version of a package, or `None` when it isn't installed.
+    /// the version of a package, or `None` when it isn't installed. A song that asks for an older
+    /// std is also told how to move to the one the app has; never for a newer std, or another
+    /// package.
     pub fn check_dependencies(&self, installed: impl Fn(&str) -> Option<Version>) -> Vec<Diagnostic> {
         let mut out = vec![];
         for (name, req) in &self.dependencies {
@@ -96,6 +100,15 @@ impl Manifest {
                 continue;
             }
             let message = match have {
+                Some(v) if name == STD && v >= req.upper() => {
+                    let now = Requirement::admitting(v);
+                    format!(
+                        "{MANIFEST} asks for {name} \"{req}\" (at least {}, below {}), but {v} is installed. This app has std {now}. \
+                         To use it, change this line to std = \"{now}\". The song may sound a little different",
+                        req.0,
+                        req.upper()
+                    )
+                }
                 Some(v) => {
                     format!("{MANIFEST} asks for {name} \"{req}\" (at least {}, below {}), but {v} is installed", req.0, req.upper())
                 }
@@ -213,6 +226,14 @@ impl Requirement {
 
     pub fn matches(&self, v: Version) -> bool {
         v >= self.0 && v < self.upper()
+    }
+
+    /// The shortest requirement that admits `v`: `"0.2"` for 0.2.0, `"1"` for 1.4.2.
+    fn admitting(v: Version) -> Requirement {
+        match v {
+            Version(0, b, _) => Requirement(Version(0, b, 0), 2),
+            Version(a, _, _) => Requirement(Version(a, 0, 0), 1),
+        }
     }
 }
 
@@ -334,6 +355,10 @@ mod tests {
             assert!(Requirement::parse(bad).is_err(), "{bad}");
         }
         assert_eq!(req("0.1").to_string(), "0.1");
+        for (version, shortest) in [("0.2.0", "0.2"), ("0.2.7", "0.2"), ("0.0.3", "0.0"), ("1.4.2", "1"), ("12.0.0", "12")] {
+            let r = Requirement::admitting(v(version));
+            assert_eq!((r.to_string(), r.matches(v(version))), (shortest.to_string(), true), "{version}");
+        }
         assert_eq!(Version::parse("0.1.0"), Some(Version(0, 1, 0)));
         assert_eq!(Version::parse("1.2"), None);
     }
@@ -354,6 +379,24 @@ mod tests {
         assert_eq!(d.iter().map(|d| d.code).collect::<Vec<_>>(), ["sdk.unsatisfied", "pkg.unsatisfied"]);
         assert!(d[0].message.contains("\"1\"") && d[0].message.contains("2.0.0"), "names both versions: {}", d[0].message);
         assert!(d[1].message.contains("\"0.2\"") && d[1].message.contains("0.3.0"), "{}", d[1].message);
+        // A song for an older std is told how to move (L7); a newer SDK says nothing of the kind.
+        assert!(
+            d[1].message.ends_with(
+                "but 0.3.0 is installed. This app has std 0.3. To use it, change this line to std = \"0.3\". The song may sound a little different"
+            ),
+            "{}",
+            d[1].message
+        );
+        assert!(!d[0].message.contains("change this line"), "{}", d[0].message);
+        // A std older than the song asks for needs a newer music2, so no such hint.
+        let d = m.check_dependencies(installed("1.0.0", Some("0.1.9")));
+        assert_eq!(d.iter().map(|d| d.code).collect::<Vec<_>>(), ["pkg.unsatisfied"]);
+        assert!(!d[0].message.contains("change this line"), "{}", d[0].message);
+        // Only std: another package asked for at an older version gets none.
+        let drums = Manifest::read(&GOOD.replace("[dependencies]", "[dependencies]\ndrums = \"1\"")).unwrap();
+        let d = drums.check_dependencies(|name: &str| Version::parse(if name == SDK { "1.0.0" } else if name == STD { "0.2.0" } else { "2.0.0" }));
+        assert_eq!(d.iter().map(|d| d.code).collect::<Vec<_>>(), ["pkg.unsatisfied"]);
+        assert!(d[0].message.contains("drums") && !d[0].message.contains("change this line"), "{}", d[0].message);
         let d = m.check_dependencies(installed("1.0.0", None));
         assert_eq!(d.iter().map(|d| d.code).collect::<Vec<_>>(), ["pkg.unsatisfied"]);
         assert!(d[0].message.contains("isn't installed"));

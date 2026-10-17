@@ -325,13 +325,27 @@ export default song(() => v.out);
         std::fs::remove_dir_all(dir).ok();
     }
 
-    // FMT-3: an unmet dependency is refused before any code runs.
+    /// [`MANIFEST`], asking for std `req`.
+    fn asking_for_std(req: &str) -> String {
+        MANIFEST.lines().map(|l| if l.starts_with("std = ") { format!("std = \"{req}\"\n") } else { format!("{l}\n") }).collect()
+    }
+
+    // FMT-3: an unmet dependency is refused before any code runs. A song asking for an older std
+    // is told how to move to the one bundled (L7); one asking for a newer std is not.
     #[test]
     fn unmet_dependencies_block() {
         let dir = project(&[("song.ts", SONG)]);
-        std::fs::write(dir.join("music2.toml"), MANIFEST.replace("std = \"0.2\"", "std = \"9\"")).unwrap();
+        std::fs::write(dir.join("music2.toml"), asking_for_std("9")).unwrap();
         let e = compile_dir(&dir).err().unwrap();
         assert_eq!(e.iter().map(|d| d.code).collect::<Vec<_>>(), ["pkg.unsatisfied"]);
+        assert!(!e[0].message.contains("change this line"), "{}", e[0].message);
+        std::fs::write(dir.join("music2.toml"), asking_for_std("0.0")).unwrap();
+        let e = compile_dir(&dir).err().unwrap();
+        assert_eq!(e.iter().map(|d| d.code).collect::<Vec<_>>(), ["pkg.unsatisfied"]);
+        // std is 0.x, so a song asks for it by its first two numbers.
+        let Version(major, minor, _) = Version::parse(&std_packages().get("std").unwrap().version).unwrap();
+        let hint = format!("This app has std {major}.{minor}. To use it, change this line to std = \"{major}.{minor}\". The song");
+        assert!(e[0].message.contains(&hint), "{}", e[0].message);
         std::fs::write(dir.join("music2.toml"), MANIFEST.replace("\"@m2/core\" = \"1\"", "\"@m2/core\" = \"2\"")).unwrap();
         let e = compile_dir(&dir).err().unwrap();
         assert_eq!(e.iter().map(|d| d.code).collect::<Vec<_>>(), ["sdk.unsatisfied"]);
