@@ -2,15 +2,16 @@
 
 Written 2026-10-16, at the end of step 7 (the engine), updated after its speed work the same day, again on
 2026-10-17, when step 7 landed on `main`, and again the same day for the `sounds` merge (on the branch
-`sounds-merge`). Read this first, then `docs/architecture.md` (the contract) and the design for whatever you pick up.
+`sounds-merge`), last after its review and final check. Read this first, then `docs/architecture.md` (the contract) and the design for whatever you pick up.
 
 **In short**
-- **The `sounds` merge is built on `sounds-merge`** (2026-10-17), not on `main` yet. It brings 22 new std sounds
-  (a polysynth, FM keys and bells, a drum machine), fixes O3 (std's chorus, phaser and tremolo wobble only while
-  the song plays), and moves std to 0.2. No existing render changed. Each of its 4 slices passed `ci/check.sh` on
-  Linux, with nothing passed only on a retry. At the tip: 922 Rust tests, 29/29 browser suites, 10 of 10 renders
-  (slices 1 and 2 had 915 and 921 tests). Next for it: a review, the skeptic, fixes, and a final
-  `ci/check.sh --gates`. Then it lands on `main`, and its Mac run is owed (below).
+- **The `sounds` merge: Linux green at `e108e46`; macOS owed.** It is on `sounds-merge` (2026-10-17), not on
+  `main` yet. It brings 22 new std sounds (a polysynth, FM keys and bells, a drum machine), fixes O3 (std's chorus,
+  phaser and tremolo wobble only while the song plays), and moves std to 0.2. No existing render changed. A review's
+  12 confirmed findings (8 problems) are all fixed: one test, one hint moved first in its message, the rest docs.
+  Then `ci/check.sh --gates` passed at `e108e46`: every row, nothing passed only on a retry (922 Rust tests, 29/29
+  browser suites, 10 of 10 renders, the 6 gate runs). So did the recorded tests, 5 of 5. Next: the lead lands it on
+  `main`; then its Mac run is owed (below).
 - **One new question for the owner:** after Stop and back to bar 1, should the wobble start again as in the
   export? For now it carries on (Open owner decisions).
 - **Your own songs** (for the owner): a song made before std 0.2 must change one line to build (below).
@@ -29,7 +30,7 @@ Written 2026-10-16, at the end of step 7 (the engine), updated after its speed w
 - **A layout to decide before step 9:** idea 3, one sandbox per box (`docs/designs/kernel-layout/report.md`).
   Research only; it is in Open owner decisions.
 - The owner decided O1 to O5 on 2026-10-15 (below), and std's bump to 0.2 with O3's fix. That question is closed.
-- Next: review the `sounds` merge and land it, then `taste`; then 8a, 8b and step 9. The Mac runs are owed and
+- Next: land the `sounds` merge (reviewed, Linux green), then `taste`; then 8a, 8b and step 9. The Mac runs are owed and
   listed below.
 
 ## Your own songs (for the owner)
@@ -48,7 +49,7 @@ Written 2026-10-16, at the end of step 7 (the engine), updated after its speed w
 | Branch | Commit | State |
 |---|---|---|
 | `main` | the tip | Steps 1–7, the fast note edits, and the platform layer. Green on Linux and macOS at `1750322` (the platform step). Step 7: green on Linux at `ffc36aa`, macOS owed. |
-| `sounds-merge` | the tip | `sounds` merged onto `main` at `cbac57c`, O3 fixed, std 0.2, and the docs. Worktree `~/m2-runs/wt/sm` (its `target/`, about 40 GB: step 7's was moved here, then cleaned and rebuilt in slice 1). Not pushed yet. It lands on `main` as a fast-forward, after the review and the final check. |
+| `sounds-merge` | the tip | `sounds` merged onto `main` at `cbac57c`, O3 fixed, std 0.2, and the docs. Worktree `~/m2-runs/wt/sm` (its `target/`, about 40 GB: step 7's was moved here, then cleaned and rebuilt in slice 1). Linux green at `e108e46` (reviewed; `ci/check.sh --gates` and the recorded tests), macOS owed. Not pushed yet. It lands on `main` as a fast-forward. |
 | `step7` | `95c8a73` | Step 7's commits, all on `main` now. No worktree now: `~/m2-runs/wt/s7` moved to `~/m2-runs/wt/sm` for the `sounds` merge. Delete the branch and `origin/step7` once the Mac run passes. |
 | `origin/taste` | `4804247` | The new look (T and S); 8b.1 Tracks done (`a0d5f91`); 8b.2 song bar unfinished. |
 | `origin/sounds` | `916127d` | 22 new std sounds (8 on the polysynth, 4 FM, 10 drums), merged on `sounds-merge`. |
@@ -159,7 +160,7 @@ The gates (`ci/gates.txt`, one `m2-gates` run a line, all in release):
 Recorded tests, too long for the check (`#[ignore]`): G7c on all of p16 and of p50, p16 looping ten minutes, and the
 churn test's 200 edits on p16 (within +20 MB). Run them with `cargo test -p m2-play --release --test bit_identity
 --test live --test churn -- --ignored --nocapture` (about 10 minutes; all 5 passed at `18966cd`, after the kept
-memory address).
+memory address, and at `e108e46`, the `sounds` merge's tip).
 
 **On the server** (about 10 minutes with a warm `target/` on a quiet server; about 30 with `--gates`, since the
 `sounds` merge):
@@ -171,7 +172,8 @@ TW_WAIT=3500 ~/m2-runs/tw check-<label> 'M2_CHECK_OUT=$HOME/m2-runs/check-<label
 
 `M2_CHECK_OUT` must be a new folder. It gets `summary.txt`, every log, and the app's two screenshots
 (`app-first-song.png`, `app-with-plugins.png`); all logs are also packed in `<folder>.tgz`. Send the owner the
-screenshots once per step (this step's: `~/m2-runs/app-shots/step7-6297c9a/`).
+screenshots once per step (step 7's: `~/m2-runs/app-shots/step7-6297c9a/`; the `sounds` merge's: Pop sounds in
+`~/m2-runs/app-shots/sounds-e108e46/pop-sounds.png`, and the check's two in `~/m2-runs/check-sm-fg/`).
 
 ## The Mac run (for the owner)
 
@@ -291,19 +293,17 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
 | Step | On `main` at | Mac run |
 |---|---|---|
 | Step 7 and its speed work | `ffc36aa` (Linux checks), then docs only | owed: the run above, then the by-ear steps 7 to 17 |
-| The `sounds` merge (22 sounds, O3, std 0.2) | not yet: on `sounds-merge`, until its review and final `--gates` | owed: the same run once it lands (one run then covers step 7 too), and the by-ear steps 18 to 21 |
+| The `sounds` merge (22 sounds, O3, std 0.2) | not yet: `sounds-merge`, Linux green at `e108e46`, reviewed; the lead lands it | owed: the same run once it lands (one run then covers step 7 too), and the by-ear steps 18 to 21 |
 
 1. **The Mac runs** (above), when the owner has time. Fix what they find on Linux, then ask for one more run. When
    step 7's passes, write "macOS: green at …" here and in the contract's gates row 7, with G7f's Mac numbers in
    RENDER-32's *Today*. Then delete the `step7` branch and `origin/step7` (it has no worktree now).
 2. **The two gaps found on 2026-10-16** (Left for later): fix them before step 9, or with idea 3 if the owner
    says yes to it.
-3. **Finish the `sounds` merge** (`sounds-merge`, built in 4 slices; `docs/designs/sounds/`): a review with several
-   lenses (the merge, O3 and the bitcrusher's rules, the tests, the contract against the code, plain words), the
-   skeptic, fixes with their checks, then a final `ci/check.sh --gates` at the tip with nothing passed only on a
-   retry. Write "Linux green at …; macOS owed" here, push the branch, and fast-forward `main`. Then delete the
-   worktree `~/m2-runs/wt/sm` with its `target/`, and the detached `~/m2-runs/wt/sounds`. Ask the owner the
-   Space, Return, Space question (Open owner decisions).
+3. **Land the `sounds` merge** (`sounds-merge`; `docs/designs/sounds/`). Linux green at `e108e46`, after its review
+   and fixes (the build notes' last section): push the branch, and fast-forward `main`. Then delete the worktree
+   `~/m2-runs/wt/sm` with its `target/`, and the detached `~/m2-runs/wt/sounds`. Ask the owner the Space, Return,
+   Space question (Open owner decisions).
 4. **Merge `taste`**: finish 8b.2 (song bar) and build 8b.3 (Mix faders) per design-8b, then merge (notes below):
    bundle Inter for Linux, D7's attention fix, re-run s8-tracks. Mac run before it lands.
 5. Then **8a** (all CPU cores), **8b.4–8b.10**, and **step 9**. Before step 9 freezes kernel ABI v1, the owner
@@ -381,6 +381,8 @@ The `sounds` merge:
 - A `target/` moved between worktrees keeps paths to the old one, and some tests then look for the repo there. If
   one moves, `cargo clean` it first. Tests that find the repo's files from where they were built were not all read;
   only the fixtures test passed quietly, and it now fails instead.
+- The app's yellow compile bar shows each message on one line, cut at the window's edge. The std hint now comes
+  first in its message (the review's D3); other long messages are still cut. Wrapping them is a choice for `taste`.
 
 Step 7:
 - **Gap: a kernel crash stops the song, with no message.** If a kernel traps while the song plays,
@@ -466,6 +468,6 @@ From the platform step:
 | The desktop app | Only on an invisible Xvfb screen, as the check's app row opens it. Never on a real screen. |
 | Scratch `HOME` | Anything that runs music2 gets a scratch `HOME` and `M2_AUDIO=none`, and then `CARGO_HOME=/home/jerry/.cargo RUSTUP_HOME=/home/jerry/.rustup`. Never the real `~/.music2` or `~/Music`. `ci/check.sh` does this itself. |
 | Scratch copies | `git worktree add --detach ~/m2-runs/scratch-<label>`, with its own `target/`; delete it when done (they once filled 390 GB). The repo's own `target/` is about 140 GB, `~/m2-runs/wt/sm`'s about 40 GB (step 7's, moved from `~/m2-runs/wt/s7`, then cleaned and rebuilt). |
-| Logs | Each check's folder in `~/m2-runs/check-*` (the `sounds` merge's: `check-sm1c` and `-sm2b` with the gates, `-sm3`, `-sm4`; step 7's last: `check-s7-rv1`, and `-rvg` with the gates; before them `-sp1`, `-sp2` and `-spg`); the `sounds` merge's plan in `~/m2-runs/sounds/plan.md`; the step 7 gate runs in `~/m2-runs/gates-fix/` and `~/m2-runs/xc/g7f/`; the review in `~/m2-runs/review-b1/`. |
+| Logs | Each check's folder in `~/m2-runs/check-*` (the `sounds` merge's: `check-sm1c` and `-sm2b` with the gates, `-sm3`, `-sm4`, and the final `-sm-fg` with the gates, at `e108e46`; step 7's last: `check-s7-rv1`, and `-rvg` with the gates; before them `-sp1`, `-sp2` and `-spg`); the `sounds` merge's plan in `~/m2-runs/sounds/plan.md`; the step 7 gate runs in `~/m2-runs/gates-fix/` and `~/m2-runs/xc/g7f/`; the review in `~/m2-runs/review-b1/`. |
 | Tools | Rust 1.99.0 (`rust-toolchain.toml`), Node 24, chrome-headless-shell 133.0.6943.141 (the check installs Rust and Chrome when missing), Xvfb. |
 | MIDI | `/dev/snd/seq` gives `EACCES` here: tests inject notes and never open a device. |

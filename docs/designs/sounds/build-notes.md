@@ -481,3 +481,148 @@ changed render.
 - For the owner: L2 (Space, Enter, Space). It is in HANDOFF's open owner decisions, with its default:
   the wobble carries on.
 - The Mac run, with the by-ear steps 18 to 21: owed, by hand, after the merge lands.
+
+## After the slices: the review, the fixes, and the final checks
+
+**In short**
+- A review with several lenses (the merge's tests, the engine's contract, the docs) gave 12 findings that the
+  skeptic confirmed. Some were the same problem seen by two or three lenses: 8 problems in all.
+- One was a test that could not see what it claimed to test (F1). One was a hint the app hid (D3). The rest were
+  docs that said more, or less, than the code does.
+- All are fixed, in 7 commits: one new test, one code change with its tests, five doc fixes (D2 and D4 share one).
+- The full `ci/check.sh --gates` at `e108e46`, the last fix, passes: every row, nothing passed only on a retry. So
+  do the recorded tests, 5 of 5. The commit after it changes these notes, HANDOFF and the contract's *Today*
+  lines only.
+- A screenshot of **Pop sounds** in the app, on an invisible screen:
+  `~/m2-runs/app-shots/sounds-e108e46/pop-sounds.png`.
+
+### The review's findings, and what was done
+
+| Finding | Severity | What was wrong | Fix | Test or check |
+|---|---|---|---|---|
+| F1 | medium | `stopped_the_effects_wait_and_play_on_where_they_were` could not see the bitcrusher's two stop rules. Its stops landed where the clock is exactly 1, its start value, and it fed silence while stopped. | `8b8a907`: one more stop, after 30,001 samples; a new test, `stopped_the_bitcrusher_still_crushes` (stopped, it crushes noise bit for bit as while playing, and never holds one value) | red first, below |
+| D3 | low | The `pkg.unsatisfied` hint came at the end of a 189-character message. The app shows it on one line, cut at the window's edge: at 1440 px about 143 characters show, so the hint was cut off. | `bb2f981`: the hint comes first. HANDOFF, FMT-3 and `design.md` quote the new message; HANDOFF also says to hold the mouse over it to read all of it. | `unmet_dependencies`, `unmet_dependencies_block`: they now check the message starts with the hint. Red first, below |
+| F2, ENG-2, D5 | low | `song-as-program.md`: "`time` read in a track's own code" is made at module level. Not inside a `key()` frame: there it is made in that frame, and can sit in a voice. | `9c6c54f` | doc; read against `timeNode` (`core/script/sdk/core.ts`) |
+| F3, ENG-1, D1 | low (D1 was medium; the skeptic lowered it) | RENDER-6's *Today* said "nothing of std's that sounds follows the engine clock". README, `gaps.md` and `design.md` said a song you open sounds like its export however long it sat. Not so for an oscillator or `noise` at a track's top level: it runs on while stopped. | `14fd0d8`: each now says std's effects and drums, and what still runs on. Also the after-idle test's comment and `fx.rs`' module doc. | doc; comments only in code: `std/build.sh --check` gives the same bytes |
+| ENG-3 | low | RENDER-16, the Deferred list and order of work item 9 said mono, legato and glide are built later. std's `mono()` does them since the merge. | `4deb78c`: RENDER-16's *Today* says how `mono()` is built; its *Why*, the Deferred row and item 9 keep only what is deferred, the `poly` op's own options. The row's early trigger (808 slides) is marked as met in std. | doc |
+| D7 | low | RENDER-33's *Today* and README said `examples/sounds` plays every synth, FM sound and drum. It never calls `fm.custom`. | `b801724`: both name what it plays. Adding an `fm.custom` call would move its render records. | doc |
+| D2 | low (was medium; the skeptic lowered it) | The Mac's by-ear steps 18 to 20: step 18 started the app while step 16's still ran; step 19 could fall after the song's end (about 27 s); step 20 said Enter, not the Mac's Return. | `e108e46`: step 18 quits first; step 19 stops in the first 20 seconds; step 20, and the open question, say Return | doc |
+| D4 | low | HANDOFF said this worktree's `target/` is about 70 GB, step 7's. Slice 1 cleaned and rebuilt it: 40 GB. | `e108e46` | doc; `du -sh` |
+
+### Red first
+
+The bitcrusher's code is right today, so F1's test is shown red on two broken copies of it. Each ran on a
+copy of `std/` in the scratchpad, never in the worktree: `cargo test --locked --release --workspace`.
+
+| Test | Run against | Result |
+|---|---|---|
+| the old tests | (a) `self.kept = self.clock` taken out, so Play always puts the clock back to 1 | 110 of 110 pass: blind |
+| the old tests | (b) the clock steps only while playing, so stopped it holds one sample | 110 of 110 pass: blind |
+| the stop test with 30,001 | (a) | fails: "bitcrush (1 ch), after 30001 samples, stopped with playing 0", left `Some(0)` |
+| `stopped_the_bitcrusher_still_crushes` | (b) | fails: "bitcrush (1 ch), stopped after 0 samples: not crushed as while playing", left `Some(4)` |
+| the new tests | the real code | 111 of 111 pass |
+| `unmet_dependencies` | the old message, hint last | fails at `manifest.rs:384`, and prints the message: "music2.toml asks for std "0.2" (…), but 0.3.0 is installed. This app has std 0.3. …" |
+| `unmet_dependencies_block` | the old message | fails at `lib.rs:348`, the same way |
+| both | the new message | pass |
+
+### The final checks
+
+| Run | Result |
+|---|---|
+| `ci/check.sh --gates` at `e108e46` (`~/m2-runs/check-sm-fg`, 29 min) | **PASS**, every row: 922 Rust tests, 0 failed (as at slice 4); clippy; std kernels (111 tests, 110 before F1's); std.wasm; mac lint; 29/29 browser suites; 10 of 10 renders; old engine (S); the gates, all 6 runs; repo unchanged. Nothing passed only on a retry: `failed` and `flaky` are empty. The run's log: `~/m2-runs/logs/check-sm-fg-1017-051929-4107515.log`. |
+| The recorded tests at `e108e46`, `cargo test --locked -p m2-play --release --test bit_identity --test live --test churn -- --ignored --nocapture` (`~/m2-runs/logs/sm-recorded-fg-1017-054825-118021.log`, 9 min) | **PASS**, 5 of 5. They last ran at slice 2; slice 3 moved the std line in their `common/mod.rs`. |
+| Before each fix's commit | F1: the kernel crate's tests (111 of 111), clippy, `cargo fmt --check`, `std/build.sh --check` (the same bytes). D3: `m2-song`'s 75 tests, the session's dependency tests, clippy. F3: `std/build.sh --check` (a comment changed in `fx.rs`), `bit_identity` built. |
+
+The summary, verbatim:
+
+```
+music2 check: PASS
+commit   e108e46ff7c5 on sounds-merge (clean)
+machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
+tools    rustc 1.99.0, node v24.21.0, 29 min
+plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+
+toolchain        PASS  rustc 1.99.0
+web build        PASS  
+build            PASS  
+app              PASS  the UI connected: first-song in 1 s, with-plugins in 1 s
+rust tests       PASS  922 passed, 0 failed
+clippy           PASS  
+std kernels      PASS  tests and clippy
+std.wasm         PASS  rebuilt to the same bytes in another folder
+mac lint         PASS  the macOS code type-checks and lints
+browser suites   PASS  29/29 suites ok
+renders          PASS  10 of 10 match e2e/renders.sha256
+old engine (S)   PASS  built for G7f from a clean copy of 8aa301e, in /home/jerry/.cache/m2-check/s-8aa301e
+gates            PASS  the 6 runs ci/gates.txt names
+repo unchanged   PASS  
+```
+
+Its gate lines, verbatim:
+
+```
+PASS  G11 tx-data (PLANE-5, PLANE-1, WRITE-15) on server on p16
+PASS  G11 watcher (WRITE-19) on server on p16 with 5,000 files in assets/
+PASS  G5 and G7a add effect, through the server (RENDER-8, RENDER-25, RENDER-25a) on server on p50 from 180 s
+PASS  G5 add effect (RENDER-25, 25a, 8) on engine (step 7) on p50
+PASS  G7b tails of untouched tracks (RENDER-25, 25a) on engine (step 7) on p50
+PASS  G7e export (RENDER-1, RENDER-6a, HOME-4, HOME-6) on server on examples/with-plugins, real time
+PASS  G7f store (RENDER-32) on the runtime on p50
+PASS  G7f the arena's callback (RENDER-32, RENDER-25) on the player on p50 from 180 s
+ok    the same music: every renderer's timed blocks the same bits: the same 2880000 samples (hash 22cd1b3810530499) from the app's layout, P1 and S in every round, peak -1.0 dB
+skip  block within S + 80 µs, by the mean: would pass: -25 µs (5 pairs, -51 to +9) over S, measured here (bound 80). p99, not judged: -226 µs (5 pairs, -407 to +1204); not judged off the reference Mac (PLAT-1)
+ok    the same music: every player's timed callbacks the same bits: the same 2856960 samples (hash cdb85ca0bbb29381) from the app's layout, P1 and S in every round, peak -1.0 dB
+skip  callback within S's + 320 µs, by the mean: would pass: -166 µs (5 pairs, -775 to +125) over S, measured here (bound 320). p99, not judged: -1709 µs (5 pairs, -9226 to +6201); not judged off the reference M
+ok    the slowest activation block under half the device buffer's period: 3427 µs, p50 1892; the block before it p50 2700, max 4179 (bound 5333 µs; the run's p99 callback 20885)
+```
+
+The recorded tests, verbatim:
+
+```
+test a_no_op_activation_on_p50 ... ok
+test live_is_the_export_on_all_of_p16 ... ok
+test live_is_the_export_on_p50 ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 384.54s
+p16, 283 activations: footprint 183.4 MB after 70 edits, then 177.4 MB (-5.9 MB)
+test p16_churns_200_edits_within_20_mb ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 16.26s
+p16, 10 minutes of a loop: 79 laps, 504 Ons each, rendered in 117.4s (release)
+test p16_loops_ten_minutes_without_drift ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 117.64s
+```
+
+G7f beside slice 2's (information on Linux, PLAT-1). This is the first `--gates` run since slice 3, where S's runner
+began to set each project's std line to S's own std (`a3214f6`). Other agents' jobs ran on the server before the
+check (load average about 5.5), so the callbacks spread wider than at slice 2; I ran nothing else during the gates.
+
+| | Slice 2, `09b2dfd` | Final, `e108e46` |
+|---|---|---|
+| A block, the app's layout against S (bound 80) | +2 µs (−9 to +8) | −25 µs (−51 to +9) |
+| A callback, the same (bound 320) | +52 µs (+29 to +87) | −166 µs (−775 to +125) |
+| P1 against S: block, callback | −2, +26 | −29, −273 |
+| The app's layout against P1: block, callback | +3, +25 | +23, −11 |
+| The full build (S's) | 217 ms (185) | 221 ms (185) |
+| The slowest activation block (bound 5,333) | 3,060 µs | 3,427 µs |
+| Footprint of one renderer of p50 | 203 MB | 203 MB |
+| The same music | blocks `22cd1b3810530499`, callbacks `cdb85ca0bbb29381` | the same hashes |
+
+### For the owner: a screenshot
+
+`~/m2-runs/app-shots/sounds-e108e46/pop-sounds.png`: the debug app at `e108e46` with **Pop sounds**
+(`examples/sounds`) open, on an invisible Xvfb screen, as the check's app row opens it (a copy of the song, a
+scratch `HOME`, no sound). It shows the timeline with the song's tracks, the track tabs, and the Arp track's
+graph: `synth.pluck` with its knobs. The check's own two screenshots are in `~/m2-runs/check-sm-fg/`
+(`app-first-song.png`, `app-with-plugins.png`).
+
+### Left, and why
+
+- The lead lands it: push `sounds-merge`, and fast-forward `main` (no agent pushed). Then delete the worktree
+  `~/m2-runs/wt/sm` with its `target/` (about 40 GB) and the detached `~/m2-runs/wt/sounds`.
+- The Mac run, with the by-ear steps 18 to 21: owed, by hand, after it lands. One run then covers step 7 too.
+- For the owner: L2 (Space, Return, Space). It is in HANDOFF's open owner decisions, with its default: the
+  wobble carries on.
+- The compile bar still cuts other long messages at the window's edge (D3 moved only the std hint first). Wrapping
+  them belongs with `taste`'s redraw of the UI.
+- Scratch: the scratch `HOME`s under `~/m2-runs/sm-scratch` are deleted. What is left there is small evidence the
+  slices' notes cite: the renders of slices 1, 3 and 4 (30 MB each), copies of the old and S's `std.wasm`, and a
+  few logs.
