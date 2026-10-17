@@ -665,12 +665,16 @@ struct TempoReq {
     add: bool,
     #[serde(default)]
     remove: bool,
+    /// With `remove`, the time signature change at `at` goes too, in the same step (a ruler mark's
+    /// Remove these changes).
+    #[serde(default)]
+    meter: bool,
 }
 
 /// The song bar's tempo field and the ruler's tempo marks (design-8b §4): one undo step each.
 async fn graph_tempo(State(s): S, Json(r): Json<TempoReq>) -> ApiResult {
     let state = s.clone();
-    let result = blocking(move || state.graph.tempo(r.session, r.at, r.bpm, r.add, r.remove)).await;
+    let result = blocking(move || state.graph.tempo(r.session, r.at, r.bpm, r.add, r.remove, r.meter)).await;
     s.graph_changed();
     Ok(Json(result?))
 }

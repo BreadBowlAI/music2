@@ -210,6 +210,35 @@ fn every_channel_has_a_fader() {
     assert!(master.db.unwrap().ends_with("/@db") && master.ceiling.unwrap().ends_with("/@ceiling"));
 }
 
+// taste.md §2.10, KN-2: a level or a pan an automation lane drives keeps its strip's control, read
+// only, and the strip names the lane ("Follows the Hats volume lane", Show lane, Remove automation);
+// the master's too. A level that is some other signal names none.
+#[test]
+fn a_level_a_lane_drives_names_the_lane() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let v = s.mix();
+    let (hats, master) = (strip(&v, "hats"), v.master.clone().unwrap());
+    assert!(hats.db_lane.is_none() && hats.pan_lane.is_none() && master.db_lane.is_none());
+    s.automate(s.accepted().number, hats.db.as_deref().unwrap()).unwrap();
+    s.automate(s.accepted().number, hats.pan.as_deref().unwrap()).unwrap();
+    s.automate(s.accepted().number, master.db.as_deref().unwrap()).unwrap();
+    let v = s.mix();
+    let (hats, master) = (strip(&v, "hats"), v.master.clone().unwrap());
+    let lane = |l: &str| Some(crate::view::LaneRef { module: "song".into(), lane: l.into() });
+    assert_eq!((hats.db.as_deref(), hats.db_lane, hats.pan.as_deref(), hats.pan_lane), (None, lane("hats-volume"), None, lane("hats-pan")));
+    assert_eq!((master.db.as_deref(), master.db_lane), (None, lane("master-volume")));
+    let json = serde_json::to_value(&v).unwrap();
+    assert_eq!(json["strips"][1]["db_lane"], serde_json::json!({"module": "song", "lane": "hats-volume"}));
+    assert_eq!(json["strips"][0]["db_lane"], serde_json::Value::Null);
+    // A signal that isn't a lane names none.
+    let (_, s) = song(
+        "export default song(({ time }) => master(mixer({\n  kick: { in: kick.out, db: range(lfo(time.beats), -6, 0) },\n  keys: keys.out,\n})));\n",
+    );
+    let kick = strip(&s.mix(), "kick");
+    assert_eq!((kick.db.as_deref(), kick.db_lane), (None, None));
+}
+
 // design-8b §2.3, §5.4: a channel two tracks reach is one strip, named for both; a track in no
 // channel, or in two, has a strip with no fader that says why. A channel no track reaches comes
 // after the tracks', named by its key.
@@ -499,7 +528,7 @@ fn a_cable_into_a_left_out_fader_wraps_its_entry() {
     let db = strip(&s.mix(), "bass").db.unwrap();
     let done = s.automate(s.accepted().number, &db).unwrap();
     assert!(
-        f.read("song.ts").contains("bass: { in: bass.out, db: lane.control(\"bass-db\", \"db\", db(0)) }"),
+        f.read("song.ts").contains("bass: { in: bass.out, db: lane.control(\"bass-volume\", \"db\", db(0)) }"),
         "{}\n{done:?}",
         f.read("song.ts")
     );

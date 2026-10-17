@@ -153,6 +153,67 @@ await undo();
 await undo();
 check(await until(() => read("data/arrangement.json") === orig.arrangement), "undo takes the three back");
 
+// A mark with a tempo and a time signature change: Remove these changes is one step (WRITE-21).
+const session = (await state()).session;
+await post("/tempo", { session, at: 16, bpm: 140, add: true });
+await post("/meter", { session, at: 16, beats: 3, unit: 4, add: true });
+const both = read("data/arrangement.json");
+await until(async () => !!(await page.$('[data-testid=ruler] [data-mark="16"]')));
+await page.click('[data-testid=ruler] [data-mark="16"]');
+await page.waitForSelector("[data-testid=mark-remove]", { timeout: 2000 }).catch(() => null);
+const removeBoth = await page.$eval("[data-testid=mark-remove]", (e) => e.textContent).catch(() => null);
+await page.click("[data-testid=mark-remove]").catch(() => {});
+check(removeBoth === "Remove these changes" && (await until(() => same(tempos(), [[0, 124]]) && arrangement().meter.every((m) => m.beat === 0))), `"${removeBoth}" takes both out`);
+check(await until(async () => (await page.$eval('button[aria-label="Undo"]', (e) => e.title)) === "Undo removing the changes at bar 5 (⌘Z)"), `as one step: ${await page.$eval('button[aria-label="Undo"]', (e) => e.title)}`);
+await undo();
+check(await until(() => read("data/arrangement.json") === both), "one undo brings both back");
+await undo();
+await undo();
+check(await until(() => read("data/arrangement.json") === orig.arrangement), "and the song is as it was");
+
+// A change from bar 12: the tooltips say bar 12, not "the start2".
+await post("/tempo", { session, at: 44, bpm: 140, add: true });
+await post("/meter", { session, at: 44, beats: 3, unit: 4, add: true });
+// By the route: a click at bar 12 on the ruler would land on its mark.
+await post("/seek", { beat: 46 });
+await until(async () => at((await status()).beat, 46));
+check(await until(async () => (await field()).title.startsWith("Tempo from bar 12: 140 BPM")), `the tempo's tooltip: ${(await field()).title.split("\n")[0]}`);
+check(await until(async () => (await page.$eval("[data-testid=meter-field]", (e) => e.title)).startsWith("Time signature from bar 12: 3/4")), `the time signature's: ${(await page.$eval("[data-testid=meter-field]", (e) => e.title)).split("\n")[0]}`);
+await post("/seek", { beat: 4 });
+check(await until(async () => (await field()).title.startsWith("Tempo from the start: 124 BPM")), "and before it, the start");
+await undo();
+await undo();
+check(await until(() => read("data/arrangement.json") === orig.arrangement), "two undos take them out");
+
+// An edit goes to the tempo it began on, wherever the playhead is when it ends: a drag, and a typed
+// tempo, begun before bar 5's 140 and finished after the playhead crossed it.
+await post("/tempo", { session, at: 16, bpm: 140, add: true });
+await post("/seek", { beat: 14 });
+await until(async () => (await field()).bpm === 124);
+await dragTempo(24, {
+  during: async () => {
+    await post("/seek", { beat: 20 });
+    await until(async () => at((await status()).beat, 20));
+    await sleep(300);
+  },
+});
+check(await until(() => same(tempos(), [[0, 130], [16, 140]])), `a drag sets the tempo it began on: ${JSON.stringify(tempos())}`);
+await post("/seek", { beat: 14 });
+await until(async () => (await field()).bpm === 130);
+const tb = await box("[data-testid=tempo-field]");
+await page.mouse.click(tb.x + tb.width / 2, tb.y + tb.height / 2, { count: 2 });
+await page.waitForSelector("[data-testid=tempo-field-input]", { timeout: 2000 }).catch(() => null);
+await post("/seek", { beat: 20 });
+await until(async () => at((await status()).beat, 20));
+await sleep(300);
+await page.$eval("[data-testid=tempo-field-input]", (e) => e.select()).catch(() => {});
+await page.keyboard.type("128");
+await page.keyboard.press("Enter");
+check(await until(() => same(tempos(), [[0, 128], [16, 140]])), `and so does a typed one: ${JSON.stringify(tempos())}`);
+check(await until(async () => (await field()).bpm === 140), "the field shows the tempo at the playhead again");
+for (let i = 0; i < 3; i++) await undo();
+check(await until(() => read("data/arrangement.json") === orig.arrangement), "three undos put the song back");
+
 // ---------------------------------------------------------------- the song's name (design-8b §4.4)
 
 const name = await box("[data-testid=bar-song-name]");
@@ -278,6 +339,26 @@ check(await until(() => { try { return loopIs(JSON.parse(read(".music2/view.json
 check((await post("/open", { path: PROJ })).status === 200, "the song is opened again");
 check(await until(async () => loopIs((await status()).loop, 0, 32, true)), "with its loop");
 await page.waitForSelector("[data-testid=tempo-field]");
+// ⌘L loops the clip shown as selected, not every track's remembered one: Hats' clip, then a new
+// one-bar clip on Kick at bar 10; then, with nothing selected, the bar at the playhead.
+await page.click('[data-lane="hats.hits"] [data-clip]');
+const kickLane = read("data/kick/hits.json");
+const kl = await box('[data-lane="kick.hits"] > div:last-child');
+await page.mouse.click(kl.x + 37 * 24 + 2, kl.y + kl.height / 2, { count: 2 });
+await until(() => read("data/kick/hits.json") !== kickLane);
+await sleep(300);
+await key("Meta+l");
+check(await until(async () => loopIs((await status()).loop, 36, 40, true)), `⌘L after picking a clip on Hats, then one on Kick, loops Kick's: ${JSON.stringify((await status()).loop)}`);
+await undo();
+await until(() => read("data/kick/hits.json") === kickLane);
+await page.click('[data-lane="hats.hits"] [data-clip]');
+await key("Escape");
+await key("Escape");
+// The double-click on Kick's lane put the playhead at bar 10: the bar it is in, bar 2, is looped.
+await seekRuler(6);
+await until(async () => (await page.$eval("[data-testid=position]", (e) => e.textContent)) === "2.3.1");
+await key("Meta+l");
+check(await until(async () => loopIs((await status()).loop, 4, 8, true)), `with nothing selected, the bar at the playhead: ${JSON.stringify((await status()).loop)}`);
 
 // A tempo too fast for the loop turns it off and says so (RENDER-9a).
 check((await post("/loop", { start: 0, end: 0.012 })).status === 200, "a loop of 0.012 beats: 5.8 ms at 124 BPM");

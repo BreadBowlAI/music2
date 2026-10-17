@@ -1175,13 +1175,13 @@ fn a_tempo_too_fast_for_the_loop_turns_it_off() {
     let token = graph.state().unwrap()["session"].as_u64().unwrap();
     // 0.012 beats: 6 ms at 120 BPM, just over the shortest loop at 48 kHz (two blocks, 256 frames).
     graph.set_loop(Some((0.0, 0.012)), None).unwrap();
-    let v = graph.tempo(token, 0.0, Some(121.0), false, false).unwrap();
+    let v = graph.tempo(token, 0.0, Some(121.0), false, false, false).unwrap();
     assert_eq!((&v["loop_off"], &v["before"], &v["after"]), (&json!(false), &json!("120 BPM"), &json!("121 BPM")));
     assert_eq!(graph.status().looping, Some(Loop { start: 0.0, end: 0.012, on: true }));
-    let v = graph.tempo(token, 0.0, Some(240.0), false, false).unwrap();
+    let v = graph.tempo(token, 0.0, Some(240.0), false, false, false).unwrap();
     assert_eq!(v["loop_off"], json!(true));
     assert_eq!(graph.status().looping, Some(Loop { start: 0.0, end: 0.012, on: false }));
-    let v = graph.tempo(token, 0.0, Some(250.0), false, false).unwrap();
+    let v = graph.tempo(token, 0.0, Some(250.0), false, false, false).unwrap();
     assert!(v.get("loop_off").is_none(), "{v}");
     assert!(graph.set_loop(None, Some(true)).is_err(), "too short to turn on again at 250 BPM");
 }
@@ -3354,7 +3354,7 @@ fn during_an_export_a_tempo_edit_turns_the_loop_off_and_the_playhead_keeps_the_t
     crate::export::start(&ex.state, Some(ex.fixture.0.join("out.wav"))).unwrap();
     ex.fill_until("the export took the instance", |_| there.try_recv().is_ok());
     let graph = &ex.state.graph;
-    let v = graph.tempo(token, 0.0, Some(240.0), false, false).unwrap();
+    let v = graph.tempo(token, 0.0, Some(240.0), false, false, false).unwrap();
     assert_eq!((&v["loop_off"], &v["after"]), (&json!(true), &json!("240 BPM")), "{v}");
     assert_eq!(graph.status().looping, Some(Loop { start: 32.0, end: 32.012, on: false }));
     assert_eq!(graph.state().unwrap()["timeline"]["tempo"], json!([{"beat": 0.0, "bpm": 240.0}]), "accepted");

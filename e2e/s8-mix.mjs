@@ -218,6 +218,20 @@ check(await songIs(entry("kick: kick.out,", "kick: { in: kick.out, pan: 0 },")),
 await undo();
 check(await songIs(orig.song), "a second ⌘Z takes `pan: 0` out: `kick: kick.out` again");
 check(await until(async () => (await panOf("kick")).dflt), "and the pan reads C in grey again");
+// The wheel on a pan the code doesn't write yet (T6): `pan: 0`, then the notches as one gesture,
+// however long they last: two undos put the entry back.
+const kw = await box(`${pan("kick")} svg`);
+await page.mouse.move(kw.x + kw.width / 2, kw.y + kw.height / 2);
+for (let i = 0; i < 8; i++) {
+  await page.mouse.wheel({ deltaY: -40 });
+  await sleep(90);
+}
+check(await until(() => /kick: \{ in: kick\.out, pan: 0\.16 \},/.test(read("song.ts"))), `eight notches up write R 16: ${read("song.ts").match(/kick: .*,/)?.[0]}`);
+await sleep(700);
+await undo();
+check(await songIs(entry("kick: kick.out,", "kick: { in: kick.out, pan: 0 },")), "one undo puts the pan back at the centre");
+await undo();
+check(await songIs(orig.song), "a second takes `pan: 0` out");
 
 // ---------------------------------------------------------------- Master (MX-5)
 
@@ -228,6 +242,36 @@ const masterDb = Number(read("song.ts").match(mastered)?.[1]);
 check(masterDb === dbAt(0.75 - 20 / room), `as a plain number, on the fader's law: ${masterDb}`);
 await undo();
 check(await songIs(orig.song), "undone");
+
+// ---------------------------------------------------------------- a level a lane sets (taste.md §2.10, KN-2)
+
+await page.click(thumb("hats"), { button: "right" });
+await page.waitForSelector('[data-testid=knob-menu] [data-menu-item="automate"]');
+await page.click('[data-testid=knob-menu] [data-menu-item="automate"]');
+check(await songIs(entry("db: db(-6)", 'db: lane.control("hats-volume", "db", db(-6))').replace("song(() =>", "song(({ lane }) =>")), "Automate on Hats' fader reads its level from a new lane, Hats volume");
+check(await until(async () => (await toasts()).some((t) => t.includes("Automating Hats volume in a new lane"))), `a toast says so in words: ${await toasts()}`);
+const laneFader = `${strip("hats")} [data-lane-fader="song.hats-volume"]`;
+check(await until(async () => !!(await page.$(laneFader))), "the strip keeps its fader, following the lane");
+const followed = await page.$eval(strip("hats"), (e) => ({
+  text: e.textContent,
+  level: e.querySelector("[data-testid=fader-level]")?.textContent,
+  title: e.querySelector("[data-testid=fader-level]")?.title,
+  marker: !!e.querySelector("[data-testid=lane-marker]"),
+}));
+check(followed.level === "−6.0 dB" && followed.marker && followed.title === "Follows the Hats volume lane." && !followed.text.includes("set in code"), `it reads the lane's value with its marker: ${JSON.stringify(followed)}`);
+await page.screenshot({ path: `${ROOT}/s8-mix-lane.png` });
+const before = posts.length;
+await dragBy(`${laneFader} [data-testid=fader-thumb]`, 30);
+check(posts.slice(before).every((p) => !/preview|set|lease/.test(p.url)), "a drag on it changes nothing");
+await page.click(`${laneFader} [data-testid=fader-thumb]`, { button: "right" });
+const laneRows = await page.waitForSelector("[data-testid=lane-fader-menu]", { timeout: 2000 }).then(() => page.$$eval("[data-testid=lane-fader-menu] [role=menuitem]", (els) => els.map((e) => e.textContent))).catch(() => []);
+check(laneRows[0] === "Show Hats volume lane" && laneRows[1] === "Remove automation" && laneRows[2]?.startsWith("Edit in code"), `its menu: ${laneRows}`);
+await page.$$eval("[data-testid=lane-fader-menu] [role=menuitem]", (els) => els[1].click());
+check(await songIs(entry("db: db(-6)", "db: db(-6)").replace("song(() =>", "song(({ lane }) =>")), "Remove automation writes the lane's value back into the code");
+check(await until(async () => !!(await page.$(`${fader("hats")}[data-knob-id]`))), "and the fader moves again");
+await undo();
+await undo();
+check(await songIs(orig.song), "two undos put the song back");
 
 // ---------------------------------------------------------------- track headers (taste.md §3.4)
 

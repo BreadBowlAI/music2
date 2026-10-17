@@ -28,6 +28,7 @@ use crate::layout::LayoutView;
 use crate::lens::{self, Insertion};
 use crate::plan::{self, path, unmoved};
 use crate::sites::{Property, properties};
+use crate::view::LaneRef;
 use crate::{EditError, Edited, ready};
 
 /// A read of another module's export inside the song: which, and where it is written.
@@ -373,6 +374,11 @@ pub struct Strip {
     pub pan_insert: bool,
     /// Why a track has no fader: "Not in the mixer", or "In 2 channels: set its level in code".
     pub why: Option<String>,
+    /// The automation lane its level follows, when one is read there (taste.md §2.10): the fader
+    /// shows it, read only, with Show lane and Remove automation (KN-2).
+    pub db_lane: Option<LaneRef>,
+    /// The automation lane its pan follows, likewise.
+    pub pan_lane: Option<LaneRef>,
 }
 
 /// std's master: the knob ids of its fader and its ceiling.
@@ -380,6 +386,21 @@ pub struct Strip {
 pub struct MasterStrip {
     pub db: Option<String>,
     pub ceiling: Option<String>,
+    /// The automation lane its level follows, when one is read there.
+    pub db_lane: Option<LaneRef>,
+}
+
+/// The automation lane read as `arg`, a mixer or master argument written in `file`: a
+/// `lane.control("hats-volume", …)` call written there, of a control lane the song declares.
+fn lane_read(rev: &Revision, song: &Module, file: &str, arg: Option<&Arg>) -> Option<LaneRef> {
+    let (start, end) = arg?.span();
+    let text = rev.snapshot.files.get(Path::new(file))?;
+    let read = rev.compiled.sites.iter().find(|x| x.file == file && x.start == start && x.end == end && x.callee.ends_with(".control"))?;
+    let (a, b) = read.args.first()?.span();
+    let quoted = text.get(a as usize..b as usize)?.trim();
+    let key = ['"', '\''].iter().find_map(|q| quoted.strip_prefix(*q)?.strip_suffix(*q))?;
+    let declared = song.lanes.iter().any(|l| l.key == key && matches!(l.kind, Kind::Control(_)));
+    declared.then(|| LaneRef { module: song.key.clone(), lane: key.to_string() })
 }
 
 /// The knob id of each declared control of the song's frames `frames`, by frame and slot.
@@ -413,7 +434,14 @@ pub fn view(s: &Session, layout: &LayoutView) -> MixView {
     }
     let ids = knobs(s, song, &frames);
     let master = match masters[..] {
-        [f] => Some(MasterStrip { db: ids.get(&(f, "db".into())).cloned(), ceiling: ids.get(&(f, "ceiling".into())).cloned() }),
+        [f] => {
+            let db = ids.get(&(f, "db".into())).cloned();
+            let frame = &song.frames[f as usize];
+            let call = rev.compiled.sites.iter().find(|x| x.id == frame.site && x.in_project);
+            let options = call.zip(frame.options).and_then(|(c, o)| Some((c, c.args.get(o as usize)?)));
+            let db_lane = db.is_none().then(|| options.and_then(|(c, o)| lane_read(rev, song, &c.file, o.at(&["db".to_string()])))).flatten();
+            Some(MasterStrip { db, ceiling: ids.get(&(f, "ceiling".into())).cloned(), db_lane })
+        }
         _ => None,
     };
     let alone = |k: &str, why: Option<String>| Strip {
@@ -425,6 +453,8 @@ pub fn view(s: &Session, layout: &LayoutView) -> MixView {
         pan: None,
         pan_insert: false,
         why,
+        db_lane: None,
+        pan_lane: None,
     };
     let word = match &mixing {
         Mixing::One(_) => "ok",
@@ -437,16 +467,20 @@ pub fn view(s: &Session, layout: &LayoutView) -> MixView {
         let strips = layout.order.iter().map(|k| alone(k, None)).collect();
         return MixView { mixer: word, message, strips, master };
     };
+    let channels = m.site(rev).and_then(|x| x.args.first());
+    let lane = |c: &Channel, control: &str| lane_read(rev, song, &m.file, channels.and_then(|o| o.at(&[c.key.clone(), control.to_string()])));
     let strip = |c: &Channel| {
         let db = ids.get(&(m.frame, format!("channels.{}.db", c.key))).cloned();
         let pan = ids.get(&(m.frame, format!("channels.{}.pan", c.key))).cloned();
+        let db_lane = db.is_none().then(|| lane(c, "db")).flatten();
+        let pan_lane = pan.is_none().then(|| lane(c, "pan")).flatten();
         let pan_insert = pan.is_none() && planned(rev, m, &c.key, "pan").is_ok();
         let label = match c.tracks.is_empty() {
             true => c.key.clone(),
             false => c.tracks.iter().map(|t| label(t)).collect::<Vec<_>>().join(" + "),
         };
         let colour = c.tracks.first().map_or_else(|| "graphite".to_string(), |t| colour(t));
-        Strip { modules: c.tracks.clone(), channel: Some(c.key.clone()), label, colour, db, pan, pan_insert, why: None }
+        Strip { modules: c.tracks.clone(), channel: Some(c.key.clone()), label, colour, db, pan, pan_insert, why: None, db_lane, pan_lane }
     };
     let mut strips = vec![];
     let mut shown: BTreeSet<&str> = BTreeSet::new();

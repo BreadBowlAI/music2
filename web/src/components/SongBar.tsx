@@ -73,26 +73,37 @@ export function TempoField({
 }) {
   const toast = useStore((s) => s.toast);
   const entry = tempoAt(timeline, at);
-  const [pending, setPending] = useState<number | null>(null);
+  // A tempo sent and not yet in the graph, by the beat of the entry it went to.
+  const [pending, setPending] = useState<{ beat: number; bpm: number } | null>(null);
   const [drag, setDrag] = useState<{ value: number; x: number; y: number } | null>(null);
   const [draft, setDraft] = useState<string | null>(typing ? bpmText(entry.bpm) : null);
   const [error, setError] = useState<string | null>(null);
-  const held = useRef<{ pointer: number; y: number; tenths: number; start: number; value: number } | null>(null);
+  // The entry an edit began on: a drag or a typed tempo goes to it, wherever the playhead has gone
+  // by the time it ends.
+  const target = useRef<{ beat: number; bpm: number }>(entry);
+  const held = useRef<{ pointer: number; y: number; tenths: number; start: number; at: number; value: number } | null>(null);
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    if (pending !== null && Math.abs(entry.bpm - pending) < 1e-9) setPending(null);
-  }, [entry.bpm, pending]);
+    if (pending === null) return;
+    const now = timeline.tempo.find((t) => t.beat === pending.beat);
+    if (!now || Math.abs(now.bpm - pending.bpm) < 1e-9) setPending(null);
+  }, [timeline.tempo, pending]);
   const editing = draft !== null;
   useEffect(() => {
     if (editing) input.current?.select();
   }, [editing]);
-  const shown = drag?.value ?? pending ?? entry.bpm;
+  const shown = drag?.value ?? (pending?.beat === entry.beat ? pending.bpm : entry.bpm);
+  /** Open it to type, for the entry in effect now. */
+  const openDraft = () => {
+    target.current = { beat: entry.beat, bpm: entry.bpm };
+    setDraft(bpmText(shown));
+  };
 
-  const commit = (bpm: number) => {
-    if (Math.abs(bpm - entry.bpm) < 1e-9) return;
-    setPending(bpm);
+  const commit = (bpm: number, to: { beat: number; bpm: number }) => {
+    if (Math.abs(bpm - to.bpm) < 1e-9) return;
+    setPending({ beat: to.beat, bpm });
     graphApi
-      .tempo(session, { at: entry.beat, bpm }, { name: "Tempo" })
+      .tempo(session, { at: to.beat, bpm }, { name: "Tempo" })
       .then((r) => r.loop_off && toast(`Loop turned off: it's too short to play at ${bpmText(bpm)} BPM`))
       .catch((e) => {
         setPending(null);
@@ -109,14 +120,14 @@ export function TempoField({
     }
     setDraft(null);
     setError(null);
-    commit(bpm);
+    commit(bpm, target.current);
   };
 
   const many = timeline.tempo.length > 1;
   const title = locked
     ? `Tempo: ${bpmText(shown)} BPM\n${locked}`
     : [
-        many ? `Tempo from ${placeOf(timeline.meter, entry.beat).replace("bar 1", "the start")}: ${bpmText(shown)} BPM` : "Tempo",
+        many ? `Tempo from ${entry.beat === 0 ? "the start" : placeOf(timeline.meter, entry.beat)}: ${bpmText(shown)} BPM` : "Tempo",
         `Drag up or down (${mod.shift} for fine), or double-click to type. Heard when you let go`,
         HOME,
       ].join("\n");
@@ -182,7 +193,7 @@ export function TempoField({
         // ⌥-click does nothing here: no reset of the song's tempo (taste.md §5.2).
         if (locked || e.button !== 0 || e.altKey || held.current) return;
         e.currentTarget.setPointerCapture(e.pointerId);
-        held.current = { pointer: e.pointerId, y: e.clientY, tenths: 0, start: entry.bpm, value: entry.bpm };
+        held.current = { pointer: e.pointerId, y: e.clientY, tenths: 0, start: entry.bpm, at: entry.beat, value: entry.bpm };
       }}
       onPointerMove={(e) => {
         const h = held.current;
@@ -198,18 +209,18 @@ export function TempoField({
         if (!h || h.pointer !== e.pointerId) return;
         held.current = null;
         setDrag(null);
-        if (h.value !== h.start) commit(h.value);
+        if (h.value !== h.start) commit(h.value, { beat: h.at, bpm: h.start });
       }}
       onPointerCancel={() => {
         held.current = null;
         setDrag(null);
       }}
-      onDoubleClick={() => !locked && setDraft(bpmText(shown))}
+      onDoubleClick={() => !locked && openDraft()}
       onKeyDown={(e) => {
         if (e.key !== "Enter" || locked) return;
         e.preventDefault();
         e.stopPropagation();
-        setDraft(bpmText(shown));
+        openDraft();
       }}
     >
       <span className="inline-flex items-baseline gap-1">
@@ -317,6 +328,8 @@ export function MeterPicker({ session, timeline, at, locked }: { session: number
 export function MeterField({ session, timeline, at, locked }: { session: number; timeline: TimelineView; at: number; locked: string | null }) {
   const m = meterAt(timeline, at);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  // The change the picker opened on: it edits that one, wherever the playhead goes meanwhile.
+  const [opened, setOpened] = useState(0);
   const many = timeline.meter.length > 1;
   return (
     <>
@@ -326,8 +339,12 @@ export function MeterField({ session, timeline, at, locked }: { session: number;
         aria-expanded={!!anchor}
         aria-disabled={!!locked}
         onMouseDown={(e) => e.preventDefault()}
-        onClick={(e) => !locked && setAnchor(anchor ? null : e.currentTarget)}
-        title={[many ? `Time signature from ${placeOf(timeline.meter, m.beat).replace("bar 1", "the start")}: ${m.beats}/${m.unit}` : "Time signature", locked ?? "Click to change it", HOME].join("\n")}
+        onClick={(e) => {
+          if (locked) return;
+          setOpened(m.beat);
+          setAnchor(anchor ? null : e.currentTarget);
+        }}
+        title={[many ? `Time signature from ${m.beat === 0 ? "the start" : placeOf(timeline.meter, m.beat)}: ${m.beats}/${m.unit}` : "Time signature", locked ?? "Click to change it", HOME].join("\n")}
         className={clsx(
           "w-10 h-ctl rounded-sm text-base text-fg tabular-nums transition-colors duration-80 ease-linear",
           locked ? "cursor-default" : "cursor-pointer hover:bg-hover",
@@ -339,7 +356,7 @@ export function MeterField({ session, timeline, at, locked }: { session: number;
       {anchor && (
         <Popover anchor={anchor} onClose={() => setAnchor(null)} aria-label="Time signature">
           <div className="px-2 pt-1 text-sm font-medium text-fg">Time signature</div>
-          <MeterPicker session={session} timeline={timeline} at={m.beat} locked={locked} />
+          <MeterPicker session={session} timeline={timeline} at={opened} locked={locked} />
         </Popover>
       )}
     </>
@@ -469,8 +486,10 @@ export function MarkPopover({
   const remove = async () => {
     onClose();
     try {
-      if (tempo) await graphApi.tempo(session, { at: beat, remove: true }, { name: "removing a tempo change" });
-      if (meter) await graphApi.meter(session, { at: beat, remove: true }, { name: "removing a time signature change" });
+      // Both at once are one step: one undo brings both back.
+      if (tempo && meter) await graphApi.tempo(session, { at: beat, remove: true, meter: true }, { name: `removing the changes at ${placeOf(timeline.meter, beat)}` });
+      else if (tempo) await graphApi.tempo(session, { at: beat, remove: true }, { name: "removing a tempo change" });
+      else if (meter) await graphApi.meter(session, { at: beat, remove: true }, { name: "removing a time signature change" });
     } catch (e) {
       toast(message(e));
     }
