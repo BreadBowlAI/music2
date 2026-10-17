@@ -659,12 +659,14 @@ impl Open {
     fn timeline(&self) -> super::Timeline {
         use m2_editor::{TimelineLane, TimelineTrack};
         let data = &self.session.accepted().compiled.data;
-        let view = self.session.timeline();
+        // Every field but the tracks, each named: a field the view gains can't be left out of
+        // what is published (as `home` once was), since this no longer compiles.
+        let m2_editor::TimelineView { tempo, meter, home, end, tracks } = self.session.timeline();
         let mut head = serde_json::Map::new();
-        for (k, v) in [("tempo", value(&view.tempo)), ("meter", value(&view.meter)), ("end", value(&view.end))] {
+        for (k, v) in [("tempo", value(&tempo)), ("meter", value(&meter)), ("home", value(&home)), ("end", value(&end))] {
             head.insert(k.into(), v);
         }
-        let tracks = view.tracks.into_iter().map(|TimelineTrack { module, label, track, colour, lanes }| {
+        let tracks = tracks.into_iter().map(|TimelineTrack { module, label, track, colour, lanes }| {
             let lanes = lanes.into_iter().map(|mut lane| {
                 let key = lane.key().to_string();
                 let shown = data.lane(&module, &key).cloned();

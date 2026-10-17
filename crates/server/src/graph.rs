@@ -214,7 +214,7 @@ struct Shown {
 /// note of the song's (the G11 fix's A.8).
 #[derive(Default)]
 pub(crate) struct Timeline {
-    /// `tempo`, `meter` and `end`.
+    /// `tempo`, `meter`, `home` and `end`.
     head: serde_json::Map<String, Value>,
     tracks: Vec<TimelineRow>,
 }

@@ -184,8 +184,8 @@ export interface TimelineView {
   tempo: { beat: number; bpm: number }[];
   /** The time signatures; empty is 4/4 throughout. Bars are counted from them (`barAt`, `bars`). */
   meter: Meter[];
-  /** Where the tempo and time signatures live (HOME-1): `data/arrangement.json`. Absent from older servers. */
-  home?: Home;
+  /** Where the tempo and time signatures live (HOME-1): `data/arrangement.json`. */
+  home: Home;
   /** Where the last clip ends, at least one bar. */
   end: number;
   tracks: TimelineTrack[];
