@@ -3381,6 +3381,92 @@ fn tracks_are_added_duplicated_and_deleted_and_the_player_follows() {
     assert!(fixture.0.join("tracks/kick.ts").exists() && synced(&graph));
 }
 
+/// The largest step from one sample to the next.
+fn max_step(x: &[f32]) -> f32 {
+    x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max)
+}
+
+fn rms(x: &[f32]) -> f32 {
+    (x.iter().map(|v| v * v).sum::<f32>() / x.len().max(1) as f32).sqrt()
+}
+
+// 8b.1 on step 7's engine (break 10 of the taste merge): adding a track while a pad's tail rings,
+// then deleting another, are activations that keep it ringing. Before step 7 each made a new
+// renderer and cut every tail. The delete takes out the first channel, so the pad's gain after it
+// is renumbered (ID-14) and made new: allowed, as a crossfade between equal signals (design-7 Q9).
+// Each shows no step in the output bigger than twice the tail's own, and the tail after it is as
+// loud as the same song's with no edit, within 1 dB.
+#[test]
+fn adding_and_deleting_a_track_keeps_a_ringing_tail() {
+    /// The song, open in a driven player and playing, 1.2 s in: the chord has ended and rings.
+    fn ringing() -> (Dc, u64) {
+        let fixture = Fixture::new();
+        fixture.put(
+            "song.ts",
+            "import { song } from '@m2/core';\nimport { master, mixer } from 'std/mix';\nimport keys from './tracks/keys';\n\
+             import pad from './tracks/pad';\n\
+             export default song(() => master(mixer({ keys: { in: keys.out, db: -6 }, pad: { in: pad.out, db: -3 } })));\n",
+        );
+        fixture.put(
+            "tracks/keys.ts",
+            "import { track } from '@m2/core';\nimport { fm } from 'std/fm';\n\
+             export default track('keys', { name: 'Keys' }, ({ lane }) => fm.keys(lane.notes('notes')));\n",
+        );
+        fixture.put(
+            "tracks/pad.ts",
+            "import { track } from '@m2/core';\nimport { synth } from 'std/synth';\n\
+             export default track('pad', { name: 'Pad' }, ({ lane }) => synth.pad(lane.notes('notes')));\n",
+        );
+        fixture.put("data/keys/notes.json", "{\"clips\": []}\n");
+        // A chord for the first 2 beats (1 s at 120 BPM); its release rings on for 1.6 s.
+        let notes: Vec<String> =
+            ["C4", "E4", "G4"].iter().map(|p| format!("{{\"pitch\": \"{p}\", \"start\": 0, \"length\": 2, \"velocity\": 0.8}}")).collect();
+        fixture.put("data/pad/notes.json", &format!("{{\"clips\": [{{\"id\": \"chord\", \"start\": 0, \"length\": 8, \"notes\": [{}]}}]}}\n", notes.join(", ")));
+        let (p, driver) = Player::driven(48_000);
+        let graph = Graph::with_player(p);
+        graph.open(&fixture.0).unwrap();
+        let token = graph.state().unwrap()["session"].as_u64().unwrap();
+        let mut dc = Dc { fixture, graph, driver };
+        dc.graph.transport("play").unwrap();
+        dc.frames(450);
+        (dc, token)
+    }
+    let (mut dc, token) = ringing();
+    let mut heard: Vec<f32> = vec![];
+    let mut checked: Vec<(&str, std::ops::Range<usize>)> = vec![];
+    let edits: [(&str, &dyn Fn(&Graph)); 2] = [
+        ("adding a track", &|g| drop(g.add_track(token, "std:synth-pluck", None, None, None).unwrap())),
+        ("deleting the first channel's track", &|g| assert_eq!(g.delete_track(token, "keys", false).unwrap().0, 200)),
+    ];
+    for (what, edit) in edits {
+        let before = dc.frames(19);
+        let own = max_step(&before);
+        heard.extend(&before);
+        let (from, generation) = (heard.len() - 1, dc.generation());
+        edit(&dc.graph);
+        // Until the activation lands, then the 100 ms after it, its crossfade included.
+        for _ in 0..400 {
+            heard.extend(dc.frames(1));
+            if dc.generation() != generation {
+                break;
+            }
+        }
+        assert_ne!(dc.generation(), generation, "{what}: an activation");
+        heard.extend(dc.frames(38));
+        let step = max_step(&heard[from..]);
+        assert!(step <= 2.0 * own, "{what}: a step of {step} against the tail's own {own}");
+        checked.push((what, heard.len() - 19 * 128..heard.len()));
+    }
+    // The same song with no edit, for as long.
+    let (mut plain, _) = ringing();
+    let alone = plain.frames(heard.len() / 128);
+    for (what, at) in checked {
+        let (edited, unedited) = (rms(&heard[at.clone()]), rms(&alone[at]));
+        assert!(unedited > 1e-3, "{what}: the tail still rings ({unedited})");
+        assert!((20.0 * (edited / unedited).log10()).abs() < 1.0, "{what}: the tail rings on: {edited} against {unedited} with no edit");
+    }
+}
+
 // FMT-19, PLANE-3: an edit of layout.json from outside (an agent, git) is published with no
 // revision once it holds still; a layout write planned before it conflicts rather than writing
 // over it, since its base was read from the disk.
