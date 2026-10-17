@@ -10,6 +10,7 @@ import { create } from "zustand";
 import { undoAction } from "../components/GraphCanvas";
 import { lockReason, moduleName, readJson, type ClipRef, type GraphState } from "./graph";
 import { recorded } from "./history";
+import { getLocal, setLocal } from "./local";
 import { token } from "./native";
 import { useShell } from "./shell";
 import { useStore } from "./store";
@@ -82,8 +83,27 @@ export async function changeId(module: string, id: string): Promise<string | nul
   }
 }
 
-/** The window follows a track from ID `from` to `to`: what is selected, shown, its selected clip and its open lanes. */
+/** `id` (a track's, or a lane's `bass.cutoff`) with the track's ID `from` changed to `to`. */
+const moved = (id: string, from: string, to: string) => (id === from ? to : id.startsWith(`${from}.`) ? `${to}${id.slice(from.length)}` : id);
+
+/**
+ * The song's view settings follow a track from ID `from` to `to` (X20): its height and its lanes'
+ * (`heights`, by ID), and its hidden lanes (`hidden`), kept in `.music2/view.json`.
+ */
+function followView(from: string, to: string) {
+  const heights = getLocal<Record<string, unknown> | null>("heights", null);
+  if (heights && typeof heights === "object" && Object.keys(heights).some((k) => moved(k, from, to) !== k)) {
+    setLocal("heights", Object.fromEntries(Object.entries(heights).map(([k, v]) => [moved(k, from, to), v])));
+  }
+  const hidden = getLocal<unknown>("hidden", null);
+  if (Array.isArray(hidden) && hidden.some((h) => typeof h === "string" && moved(h, from, to) !== h)) {
+    setLocal("hidden", hidden.map((h) => (typeof h === "string" ? moved(h, from, to) : h)));
+  }
+}
+
+/** The window follows a track from ID `from` to `to`: what is selected, shown, its selected clip and its open lanes, and its view settings. */
 function follow(from: string, to: string) {
+  followView(from, to);
   const s = useShell.getState();
   const swap = (k: string | null) => (k === from ? to : k);
   const clips: Record<string, ClipRef> = {};

@@ -297,14 +297,41 @@ rekey against a stub that refuses:  test result: FAILED. 0 passed; 5 failed
 FAIL  a right-click on tracks/bass.ts offers Change Bass's track ID… ()
 ```
 
-**What's left (part 2, after P0b-2):** the track's height and hidden lanes in `.music2/view.json` follow its new ID
-(the server, on any `Rekeyed` delta, X20), and the dialog on `useModalKeys`.
+**What's left:** see part 2.
 
 **For gaps.md:** #10's rest is done: a track's ID can be changed from the Code view, one undo step. Left: Restore
 (DIAG-6), and keeping a re-keyed track's sounds playing (design-8b §11.3).
 
 **Contract:** ID-17's Today: the key rename is built (Code view, "Change track ID…"). WRITE-10: a row for it, with
 the expectation above (Confined, or checked and committed as seen when a file reading it isn't edited).
+
+### A5, part 2: a track's view settings follow its new ID
+
+**In short:** a track keeps its height, its lanes' heights and its hidden lanes when its ID changes, and again when
+that is undone.
+
+**What changed**
+
+- Lane B's view store (`2a6d3c1`, the same commit lane D took) is in this branch, as there was no P0b-2.
+- `web/src/lib/rekey.ts`: when the window follows a track from one ID to another (the change, its undo, a rename by
+  hand), it also renames the track's entries in the view settings: `heights` (`bass`, `bass.cutoff`) and `hidden`
+  (`bass.cutoff`), through `setLocal`, so `.music2/view.json` follows within 300 ms. **This differs from X20**, which
+  put the follow in the server's actor with a `local_stamp` for the page to seed again: the page owns these
+  settings (it writes them, 300 ms after a change), so a server-side rename would be written back over by the
+  page's own copy unless `local.ts` (lane B's) learned to seed again. Following in the page covers the same three
+  cases with no change to lane B's store. What it doesn't cover: a re-key while no window has the song open (an
+  agent's Tx): `view.json` then keeps the old ID's settings, which simply stop applying.
+- The dialog keeps its own modal keys: lane C's `useModalKeys` (`web/src/lib/modal.ts`) has the same rules. After the
+  merge, `TrackIdDialog` can take it in a line.
+
+**Tests:** `pl-ids` 3 more checks (38): the song opens again with Bass's height (72), its Cutoff lane's (64) and that
+lane hidden, from `view.json`; after the change `view.json` has them under `low`, after Undo under `bass` again.
+
+**Red first** (on the page from before, `837150f`):
+
+```
+FAIL  its height, its lane's and its hidden lane follow it in view.json ({"heights":{"bass":72,"bass.cutoff":64,"kick":120},"hidden":["bass.cutoff"]})
+```
 
 ## Lane B
 

@@ -3,8 +3,9 @@
 // track ID…"; the dialog holds the ID in a mono field and checks it as you type, in ID words; Space
 // and M in it never reach the page; Tab goes round it; Esc writes nothing. Changing bass to low
 // rewrites its track() call and its channel, moves data/bass/ to data/low/ and layout.json's entry,
-// with a toast; Bass keeps its name, colour, mute and selection; one Undo puts every byte back and
-// the selection follows back. The header menu has no ID row, and no words call an ID a key.
+// with a toast; Bass keeps its name, colour, mute, selection, height and hidden lane (view.json);
+// one Undo puts every byte back and they follow back. The header menu has no ID row, and no words
+// call an ID a key.
 //
 //   node e2e/pl-ids.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -41,6 +42,21 @@ const linted = async (sel, what) => {
   check(bad.length === 0, `the lint finds nothing in ${what}${bad.length ? `: ${bad.slice(0, 6).join(" | ")}` : ""}`);
 };
 
+// Bass's height and its Cutoff lane's, and that lane hidden, as the view settings keep them (lanes
+// B and D): read when the song opens.
+const viewFile = `${PROJ}/.music2/view.json`;
+const viewOf = () => {
+  try {
+    return JSON.parse(fs.readFileSync(viewFile, "utf8"));
+  } catch {
+    return {};
+  }
+};
+fs.mkdirSync(path.dirname(viewFile), { recursive: true });
+fs.writeFileSync(viewFile, JSON.stringify({ ...viewOf(), heights: { bass: 72, "bass.cutoff": 64, kick: 120 }, hidden: ["bass.cutoff"] }, null, 2));
+check((await post("/close", {})).status === 200 && (await post("/open", { path: PROJ })).status === 200, "the song opens again with Bass's view settings");
+await until(async () => (await state()).local?.hidden?.[0] === "bass.cutoff");
+await page.waitForSelector('[data-module-tab="bass"] [data-testid=track-label]');
 // Bass gets a colour of its own (layout.json) and is muted while listening, so both can be seen to follow.
 const session = (await state()).session;
 check((await post("/layout", { session, colour: { module: "bass", colour: "green" } })).status === 200, "Bass is coloured green (layout.json)");
@@ -127,6 +143,12 @@ check(same(after.overlays.mute, ["low"]), `its mute while listening follows it (
 await view("graph");
 check(await until(async () => (await page.$eval('[data-track="low"]', (e) => e.dataset.selected).catch(() => null)) === "true"), "and it is still the selected track");
 check(!(await toasts()).some((t) => /\bkey\b/i.test(t)), "nor does its toast");
+const followed = (k) => {
+  const v = viewOf();
+  const sorted = (o) => JSON.stringify(Object.entries(o ?? {}).sort());
+  return sorted(v.heights) === sorted({ [k]: 72, [`${k}.cutoff`]: 64, kick: 120 }) && same(v.hidden, [`${k}.cutoff`]);
+};
+check(await until(() => followed("low"), 3000), `its height, its lane's and its hidden lane follow it in view.json (${JSON.stringify(viewOf())})`);
 
 // ---------------------------------------------------------------- undo
 
@@ -134,6 +156,7 @@ await key("Meta+z");
 check(await until(() => same(files(), before)), "one Undo puts every byte back: code, data and layout");
 check(await until(async () => (await page.$eval('[data-track="bass"]', (e) => e.dataset.selected).catch(() => null)) === "true"), "and the selection follows Bass back");
 check(await until(async () => same((await state()).overlays.mute, ["bass"])), "and its mute");
+check(await until(() => followed("bass"), 3000), `and its view settings (${JSON.stringify(viewOf())})`);
 
 // ---------------------------------------------------------------- the header menu
 
