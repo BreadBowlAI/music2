@@ -10,8 +10,9 @@ import { muteInSongCall } from "../lib/overlays";
 import { DEFAULT_ORDER, TRACK_COLORS, type TrackColorName } from "../lib/palette";
 import { canvas, useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
+import DeleteDialog from "./DeleteDialog";
 import { undoAction } from "./GraphCanvas";
-import { Button, MenuRow, Popover } from "./ui";
+import { MenuRow, Popover } from "./ui";
 
 // Tracks (design-8b §3, taste.md §3.4, TL-2, TL-3): + Track and its instrument list, the header
 // menu, duplicate, delete with its dialog, reorder by dragging a header, and colours by name.
@@ -28,7 +29,7 @@ const DELETE_KEY = chord("Backspace");
 let lastAdded: string | null = null;
 
 /** A delete that asks first: other code reads the track. */
-interface Asking {
+export interface Asking {
   module: string;
   name: string;
   dependents: Dependent[];
@@ -146,7 +147,7 @@ export async function duplicateTrack(module: string) {
 }
 
 /** "2 Ducks", "the Duck": what a cascade takes off with the track. */
-function what(deps: Dependent[]) {
+export function what(deps: Dependent[]) {
   const names = [...new Set(deps.map((d) => d.component))];
   if (deps.length === 1) return `its ${names[0]}`;
   return names.length === 1 ? `${deps.length} ${names[0]}s` : `${deps.length} effects`;
@@ -541,82 +542,6 @@ function TrackMenu({ graph, module, anchor, onClose }: { graph: GraphState; modu
       </MenuRow>
       {colours && <Colours module={module} current={track?.colour} anchor={colours} onClose={() => (setColours(null), onClose())} />}
     </Popover>
-  );
-}
-
-/** "Bass and Chords", from the tracks the reads are in. */
-function joined(names: string[]) {
-  return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : (names[0] ?? "");
-}
-
-/** What the delete dialog says (design-8b §3.5), in words: who reads the track, and what goes with it. */
-function said({ name, dependents, blocked }: Asking) {
-  const readers = [...new Set(dependents.map((d) => d.label))];
-  const many = readers.length > 1;
-  if (blocked) {
-    const d = dependents[0];
-    return `${joined(readers)} ${many ? "read" : "reads"} it in ${many ? "their" : "its"} code (${d?.file}, line ${d?.line}).`;
-  }
-  const these = dependents.length === 1 ? "that" : "those";
-  const off = what(dependents).replace(/^its /, "");
-  if (dependents.every((d) => d.component === "Duck")) return `${joined(readers)} ${many ? "duck" : "ducks"} to ${name}. Deleting ${name} also takes off ${these} ${off}.`;
-  return `${joined(readers)} ${many ? "read" : "reads"} ${name} through ${off}. Deleting ${name} also takes ${these} off.`;
-}
-
-/** The delete dialog (taste.md §2.14): the ducks a delete takes off too, or why it can't. Enter confirms, Esc cancels. */
-function DeleteDialog({ asking, onClose }: { asking: Asking; onClose: () => void }) {
-  const { module, name, dependents, blocked } = asking;
-  const confirm = () => {
-    onClose();
-    if (!blocked) void deleteTrack(module, true);
-  };
-  const show = () => {
-    onClose();
-    const d = dependents[0];
-    if (d) useShell.getState().select(d.module);
-    useShell.getState().setView("code");
-  };
-  useEffect(() => {
-    const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-      else if (e.key === "Enter") (blocked ? onClose : confirm)();
-      else return;
-      e.preventDefault();
-      e.stopPropagation();
-    };
-    window.addEventListener("keydown", key, true);
-    return () => window.removeEventListener("keydown", key, true);
-  });
-  return (
-    <div className="fixed inset-0 z-[70] grid place-items-center p-4 bg-fg-strong/20" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div role="alertdialog" aria-modal aria-labelledby="delete-title" data-testid="delete-dialog" className="w-[440px] max-w-full p-6 rounded-md bg-raised shadow-pop animate-dialog cursor-default">
-        <h2 id="delete-title" className="text-lg font-semibold text-fg-strong">
-          {blocked ? `${name} can't be deleted from here` : `Delete ${name}?`}
-        </h2>
-        <p className="mt-2 text-base text-fg-muted">{said(asking)}</p>
-        <div className="mt-6 flex justify-end gap-2">
-          {blocked ? (
-            <>
-              <Button variant="secondary" size="lg" onClick={show}>
-                Show in code
-              </Button>
-              <Button variant="primary" size="lg" autoFocus onClick={onClose}>
-                Close
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button variant="secondary" size="lg" onClick={onClose}>
-                Cancel
-              </Button>
-              <Button variant="danger" size="lg" autoFocus data-testid="delete-confirm" onClick={confirm}>
-                {`Delete ${name} and ${dependents.length === 1 ? `the ${dependents[0].component}` : what(dependents)}`}
-              </Button>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
   );
 }
 

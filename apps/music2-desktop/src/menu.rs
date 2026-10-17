@@ -1,4 +1,5 @@
-//! The menu bar. Opening a project folder, Show in Finder and Quit run here in Rust (dialogs);
+//! The menu bar. Opening a project folder, Open Recent, Show in Finder and Quit run here in Rust
+//! (dialogs);
 //! everything about the UI (save in the code editor, undo in a text field vs. the project,
 //! transport) is forwarded to the web view as a `menu` event with the item's id.
 //!
@@ -14,13 +15,20 @@
 //! Ctrl elsewhere.
 
 use tauri::menu::{AboutMetadata, Menu, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
-use tauri::{AppHandle, Emitter, Wry};
+use tauri::{AppHandle, Emitter, Manager, Wry};
 
-use crate::actions;
+use crate::{Native, actions};
 
 /// Item ids handled natively (see `actions::run`); every other id goes to the UI, Save
-/// included: the code editor saves its files.
-const NATIVE: &[&str] = &["open_project", "reveal", "quit"];
+/// included: the code editor saves its files. Open Recent's songs (`open_recent:<folder>`) too.
+const NATIVE: &[&str] = &["open_project", "reveal", "quit", CLEAR_RECENT];
+
+/// File ▸ Open Recent ▸ a song: the id is this and the song's folder.
+pub const OPEN_RECENT: &str = "open_recent:";
+/// File ▸ Open Recent ▸ Clear Menu.
+const CLEAR_RECENT: &str = "clear_recent";
+/// How many songs Open Recent shows (the start screen shows all the list keeps).
+const RECENT_SHOWN: usize = 10;
 
 /// Whether this build's menu bar is the Mac's.
 const MAC: bool = cfg!(target_os = "macos");
@@ -44,10 +52,12 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     // The UI asks about unsaved code first, then the start screen shows.
     ("close_song", "Close Song", Some("CmdOrCtrl+W")),
     ("save", "Save", Some("CmdOrCtrl+S")),
+    // A copy under a new name, which opens (polish C3); the song stays as it was.
+    ("save_as", "Save As…", Some("CmdOrCtrl+Shift+S")),
     // The UI asks for the file (actions.rs `export_path`), then shows the progress. ⌘E is Split.
     ("export", "Export Audio…", Some("CmdOrCtrl+Shift+E")),
     ("reveal", REVEAL, None),
-    // The song's name in the top bar turns into a field (a double-click there does the same).
+    // The name, and its folder too (polish C3); the top bar's double-click renames the name only.
     ("rename_song", "Rename Song…", None),
     ("undo", "Undo", Some("CmdOrCtrl+Z")),
     ("redo", "Redo", Some("CmdOrCtrl+Shift+Z")),
@@ -105,6 +115,8 @@ const CLOSE_WINDOW: &str = "Shift+CmdOrCtrl+W";
 enum Row {
     Item(&'static str),
     Line,
+    /// File ▸ Open Recent ▸, built from the recent songs list ([`recent_rows`]).
+    Recent,
     About,
     Services,
     Hide,
@@ -126,9 +138,11 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
     let file = [
         Item("new_song"),
         Item("open_project"),
+        Recent,
         Line,
         Item("close_song"),
         Item("save"),
+        Item("save_as"),
         Line,
         Item("export"),
         Line,
@@ -191,6 +205,34 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
     }
 }
 
+/// A row of File ▸ Open Recent ▸.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RecentRow {
+    /// A song: its item id (`open_recent:<folder>`) and its name.
+    Song(String, String),
+    Line,
+    /// Clear Menu, which does something only while there is a song to clear.
+    Clear { enabled: bool },
+}
+
+/// File ▸ Open Recent ▸'s rows for `songs` (folder, name), newest first: up to ten songs, a line,
+/// and Clear Menu. With none, only Clear Menu, greyed out.
+fn recent_rows(songs: &[(std::path::PathBuf, String)]) -> Vec<RecentRow> {
+    let mut rows: Vec<RecentRow> =
+        songs.iter().take(RECENT_SHOWN).map(|(dir, name)| RecentRow::Song(format!("{OPEN_RECENT}{}", dir.display()), name.clone())).collect();
+    if !rows.is_empty() {
+        rows.push(RecentRow::Line);
+    }
+    rows.push(RecentRow::Clear { enabled: !songs.is_empty() });
+    rows
+}
+
+/// The recent songs as Open Recent lists them: folder and name, newest first.
+fn recent_songs(app: &AppHandle) -> Vec<(std::path::PathBuf, String)> {
+    let Some(native) = app.try_state::<Native>() else { return vec![] };
+    native.server.recent().map(|r| r.list().into_iter().map(|s| (s.path, s.name)).collect()).unwrap_or_default()
+}
+
 pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let mut bar = MenuBuilder::new(app);
     for (name, rows) in layout(MAC) {
@@ -206,6 +248,19 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
                     })
                 }
                 Row::Line => menu.separator(),
+                Row::Recent => {
+                    let mut sub = SubmenuBuilder::new(app, "Open Recent");
+                    for row in recent_rows(&recent_songs(app)) {
+                        sub = match row {
+                            RecentRow::Song(id, name) => sub.item(&MenuItemBuilder::with_id(id, name).build(app)?),
+                            RecentRow::Line => sub.separator(),
+                            RecentRow::Clear { enabled } => {
+                                sub.item(&MenuItemBuilder::with_id(CLEAR_RECENT, "Clear Menu").enabled(enabled).build(app)?)
+                            }
+                        };
+                    }
+                    menu.item(&sub.build()?)
+                }
                 Row::About => menu.item(&PredefinedMenuItem::about(app, Some("About music2"), Some(about(app)))?),
                 Row::Services => menu.services(),
                 Row::Hide => menu.hide(),
@@ -243,7 +298,7 @@ pub fn handle(app: &AppHandle, id: &str) {
     if id == "close_window" {
         // Closing the window quits: ask about unsaved code first, as its close button does.
         actions::run(app, "quit");
-    } else if NATIVE.contains(&id) {
+    } else if NATIVE.contains(&id) || id.starts_with(OPEN_RECENT) {
         actions::run(app, id);
     } else {
         let _ = app.emit("menu", id);
@@ -340,7 +395,7 @@ mod tests {
         assert_eq!(bar[5].1.last(), Some(&Row::About));
         for (menu, rows) in &bar {
             for r in rows {
-                assert!(matches!(r, Row::Item(_) | Row::Line | Row::About), "{menu}: {r:?}");
+                assert!(matches!(r, Row::Item(_) | Row::Line | Row::About | Row::Recent), "{menu}: {r:?}");
             }
         }
     }
@@ -354,6 +409,37 @@ mod tests {
             let track = &bar.iter().find(|m| m.0 == "Track").expect("Track").1;
             let at = track.iter().position(|r| *r == Row::Item("rename")).expect("Rename");
             assert_eq!(track[at + 1], Row::Item("change_instrument"), "mac: {mac}");
+        }
+    }
+
+    /// Polish C3: File ▸ Save As… (⇧⌘S, Ctrl+Shift+S) sits after Save on both menu bars.
+    #[test]
+    fn save_as_is_shift_command_s_after_save() {
+        assert_eq!(ITEMS.iter().find(|i| i.0 == "save_as").map(|i| (i.1, i.2)), Some(("Save As…", Some("CmdOrCtrl+Shift+S"))));
+        for mac in [true, false] {
+            let bar = layout(mac);
+            let file = &bar.iter().find(|m| m.0 == "File").expect("a File menu").1;
+            let at = file.iter().position(|r| *r == Row::Item("save")).expect("Save");
+            assert_eq!(file[at + 1], Row::Item("save_as"), "mac: {mac}");
+        }
+    }
+
+    /// Polish C2: File ▸ Open Recent ▸ lists the ten newest songs by name, a line, and Clear Menu;
+    /// with none, only Clear Menu, greyed out. It sits after Open Project Folder… on both menu bars.
+    #[test]
+    fn open_recent_lists_ten_and_clear_menu() {
+        let songs: Vec<_> = (0..12).map(|n| (std::path::PathBuf::from(format!("/songs/Song {n}")), format!("Song {n}"))).collect();
+        let rows = recent_rows(&songs);
+        assert_eq!(rows.len(), 12, "{rows:?}");
+        assert_eq!(rows[0], RecentRow::Song("open_recent:/songs/Song 0".into(), "Song 0".into()));
+        assert_eq!(rows[9], RecentRow::Song("open_recent:/songs/Song 9".into(), "Song 9".into()));
+        assert_eq!(rows[10..], [RecentRow::Line, RecentRow::Clear { enabled: true }]);
+        assert_eq!(recent_rows(&[]), [RecentRow::Clear { enabled: false }]);
+        for mac in [true, false] {
+            let bar = layout(mac);
+            let file = &bar.iter().find(|m| m.0 == "File").expect("a File menu").1;
+            let at = file.iter().position(|r| *r == Row::Item("open_project")).expect("Open Project Folder…");
+            assert_eq!(file[at + 1], Row::Recent, "mac: {mac}");
         }
     }
 

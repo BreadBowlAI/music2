@@ -28,7 +28,8 @@ interface Local {
   values: Record<string, unknown>;
 }
 
-const useValues = create<Local>(() => ({ session: null, values: {} }));
+/** The open song's settings: grid.ts and audition.ts follow it to read theirs again when another song opens. */
+export const useLocalStore = create<Local>(() => ({ session: null, values: {} }));
 /** Set, not sent yet: by key, null to take one out. */
 let waiting: Record<string, unknown> = {};
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -37,11 +38,11 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 function seed() {
   const graph = useStore.getState().graph;
   const session = graph?.session ?? null;
-  if (session === useValues.getState().session) return;
+  if (session === useLocalStore.getState().session) return;
   waiting = {};
   if (timer) clearTimeout(timer);
   timer = null;
-  useValues.setState({ session, values: { ...(graph?.local ?? {}) } });
+  useLocalStore.setState({ session, values: { ...(graph?.local ?? {}) } });
 }
 useStore.subscribe(seed);
 seed();
@@ -50,7 +51,7 @@ seed();
 export function flushLocal(): Promise<void> {
   if (timer) clearTimeout(timer);
   timer = null;
-  const { session } = useValues.getState();
+  const { session } = useLocalStore.getState();
   const set = waiting;
   waiting = {};
   if (session === null || Object.keys(set).length === 0) return Promise.resolve();
@@ -70,23 +71,23 @@ window.addEventListener("pagehide", () => void flushLocal());
 
 /** The setting `key` of the open song, or `fallback` while none is kept. */
 export function useLocal<T>(key: string, fallback: T): T {
-  return useValues((s) => (key in s.values ? (s.values[key] as T) : fallback));
+  return useLocalStore((s) => (key in s.values ? (s.values[key] as T) : fallback));
 }
 
 /** The setting `key` now, outside React. */
 export function getLocal<T>(key: string, fallback: T): T {
-  const { values } = useValues.getState();
+  const { values } = useLocalStore.getState();
   return key in values ? (values[key] as T) : fallback;
 }
 
 /** Set `key` (null takes it out): shown at once, kept for the next time the song opens. */
 export function setLocal(key: string, value: unknown) {
-  const { values } = useValues.getState();
+  const { values } = useLocalStore.getState();
   if (JSON.stringify(values[key] ?? null) === JSON.stringify(value)) return;
   const next = { ...values };
   if (value === null) delete next[key];
   else next[key] = value;
-  useValues.setState({ values: next });
+  useLocalStore.setState({ values: next });
   waiting[key] = value;
   if (timer) clearTimeout(timer);
   timer = setTimeout(() => void flushLocal(), WAIT);

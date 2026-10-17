@@ -6,6 +6,9 @@
 //!
 //!   music2-desktop [project-folder/]
 //!   MUSIC2_DEV_URL=http://localhost:5173 music2-desktop   # load the UI from Vite (server on :4100)
+//!
+//! With no folder given, it opens the song that was open when it last quit (polish Q18), from the
+//! recent songs list in `~/.music2/recent.json`.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -17,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use m2_server::recent::Reopen;
 use m2_server::{AppState, ServeOptions};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
@@ -56,6 +60,7 @@ fn main() {
                 token: token(),
             })?;
             let server = running.state.clone();
+            server.keep_recent(home().join(".music2").join("recent.json"));
             publish_session(&running.url, &server.token);
             // No window is connected yet: the server keeps these toasts for the first one.
             // They name the folder, not its whole path, so the reason fits. Opened off the main
@@ -65,6 +70,8 @@ fn main() {
                     eprintln!("music2: couldn't open {}: {e:#}", dir.display());
                     server.toast(format!("Couldn't open {}: {e:#}", name(dir)));
                 });
+            } else {
+                reopen(&server);
             }
             for a in &unknown {
                 eprintln!("music2: `{a}` is not a project folder (a folder with song.ts)");
@@ -107,6 +114,41 @@ fn main() {
         .expect("failed to start music2");
 }
 
+/// At a launch with no folder given: the song that was open when the app quit (Q18, X22), off the
+/// main thread. Unless the last launch closed while opening it: then the start screen says why it
+/// didn't open, and it isn't tried again.
+fn reopen(server: &Arc<AppState>) {
+    let Some(recent) = server.recent() else { return };
+    match recent.to_reopen() {
+        Reopen::Song(dir) => {
+            if let Err(e) = recent.reopening(&dir) {
+                eprintln!("music2: couldn't keep the recent songs list: {e:#}");
+            }
+            let server = server.clone();
+            std::thread::spawn(move || {
+                let opened = plugin_host::open_project(&server, &dir);
+                if let Some(Err(e)) = server.recent().map(|r| r.reopened()) {
+                    eprintln!("music2: couldn't keep the recent songs list: {e:#}");
+                }
+                if let Err(e) = opened {
+                    eprintln!("music2: couldn't open {}: {e:#}", dir.display());
+                    server.toast(format!("Couldn't open {}: {e:#}", name(&dir)));
+                }
+            });
+        }
+        Reopen::Crashed(dir) => {
+            let song = recent.list().into_iter().find(|s| s.path == dir).map_or_else(|| name(&dir), |s| s.name);
+            server.toast(format!("music2 closed while opening {song} last time, so it didn't open it again."));
+        }
+        Reopen::Nothing => {}
+    }
+}
+
+/// The user's home folder.
+fn home() -> PathBuf {
+    dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
+}
+
 /// A path's last part (`my-song` for `~/Music/my-song`), or the whole path when it has none.
 fn name(path: &Path) -> String {
     path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned())
@@ -130,7 +172,7 @@ fn web_dir(app: &tauri::AppHandle) -> PathBuf {
 /// token, in `~/.music2/session.json`, readable only by this user. Web pages can't read
 /// it, which is what the token protects against.
 fn publish_session(url: &str, token: &str) {
-    let path = dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".music2").join("session.json");
+    let path = home().join(".music2").join("session.json");
     let body = serde_json::json!({"url": url, "token": token, "pid": std::process::id()});
     let write = || -> std::io::Result<()> {
         std::fs::create_dir_all(path.parent().unwrap_or(&path))?;
@@ -151,11 +193,22 @@ fn token() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Window title follows the open project.
+/// Window title follows the open project, and File ▸ Open Recent ▸ the recent songs list: the
+/// menu is built again when its file changes.
 fn keep_title_in_sync(window: tauri::WebviewWindow, server: Arc<AppState>) {
+    let app = window.app_handle().clone();
     std::thread::spawn(move || {
         let mut last = String::new();
+        let stamp = || server.recent().and_then(|r| std::fs::metadata(r.file()).and_then(|m| m.modified()).ok());
+        let mut listed = stamp();
         loop {
+            let now = stamp();
+            if now != listed {
+                listed = now;
+                if let Err(e) = menu::build(&app).and_then(|m| app.set_menu(m)) {
+                    eprintln!("music2: couldn't show the recent songs in the menu: {e}");
+                }
+            }
             // No "— Edited": edits are written to the project's files at once (the code editor
             // asks before unsaved code is lost).
             let title = server.graph.name().unwrap_or_else(|| "music2".into());

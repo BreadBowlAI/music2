@@ -10,6 +10,7 @@
 import { create } from "zustand";
 import { CLOSED, on, send } from "./events";
 import type { AuditionIn, AuditionOut } from "./graph8b";
+import { setLocal, useLocalStore } from "./local";
 import { onMenu } from "./native";
 import { useStore } from "./store";
 
@@ -21,8 +22,6 @@ export const PAINT_MS = 250;
 const KEEPALIVE_MS = 2000;
 /** A lane the server said was silent stays so until a strike on it goes unanswered this long. */
 const SILENT_CHECK_MS = 600;
-/** Where the toggle is kept in this browser (it is on again at each app launch: the page's address changes). */
-const STORE_KEY = "m2.audition";
 
 /** A note this window holds: its lane and its pitch. */
 export interface Held {
@@ -32,7 +31,7 @@ export interface Held {
 }
 
 interface Audition {
-  /** The toggle (NT-2): on unless turned off here. */
+  /** The toggle (NT-2): on unless turned off for this song. */
   on: boolean;
   /** What this window holds now, by handle. A new map at each change, so views redraw. */
   held: ReadonlyMap<number, Held>;
@@ -40,15 +39,17 @@ interface Audition {
   silent: ReadonlySet<string>;
 }
 
-const readOn = () => {
-  try {
-    return localStorage.getItem(STORE_KEY) !== "off";
-  } catch {
-    return true;
-  }
-};
+export const useAudition = create<Audition>(() => ({ on: true, held: new Map(), silent: new Set() }));
 
-export const useAudition = create<Audition>(() => ({ on: readOn(), held: new Map(), silent: new Set() }));
+// The toggle is kept with the song's view settings (`local.audition`, polish Q16): off stays off
+// when the song opens again. Another song open: its own.
+useLocalStore.subscribe((s, before) => {
+  if (s.values.audition === before.values.audition) return;
+  const on = s.values.audition !== false;
+  if (on === useAudition.getState().on) return;
+  useAudition.setState({ on });
+  if (!on) releaseAll();
+});
 
 let nextHandle = 0;
 let keepalive: ReturnType<typeof setInterval> | null = null;
@@ -150,9 +151,7 @@ export function releaseAll() {
 
 /** Turn the toggle on or off; off lets go of everything held. */
 export function setAudition(on: boolean) {
-  try {
-    localStorage.setItem(STORE_KEY, on ? "on" : "off");
-  } catch {}
+  setLocal("audition", on ? null : false);
   useAudition.setState({ on });
   if (!on) releaseAll();
 }

@@ -102,12 +102,13 @@ await key("Meta+1");
 check(await until(async () => (await chip("notes")).grid === "1/32") && (await chip()).grid === "Bar", `after a click in Notes, ⌘1 changes the roll's grid, not the timeline's: ${(await chip("notes")).grid}, ${(await chip()).grid}`);
 await clickLane(45);
 await key("Meta+1");
-// The kick's lane selects the kick, so the roll has gone: its grid is read where it is kept.
-const rollGrid = () => page.evaluate(() => localStorage.getItem("m2.notes.grid"));
-check(await until(async () => (await chip())?.grid === "1/2") && (await rollGrid()) === "0.125", `after a click in the timeline, ⌘1 is the timeline's again: ${(await chip())?.grid}, the roll's ${await rollGrid()}`);
+// The kick's lane selects the kick, so the roll has gone: its grid is read where it is kept, the
+// song's view settings (polish C1).
+const rollGrid = async () => (await state()).local?.grid?.notes?.pick;
+check(await until(async () => (await chip())?.grid === "1/2") && (await rollGrid()) === 0.125, `after a click in the timeline, ⌘1 is the timeline's again: ${(await chip())?.grid}, the roll's ${await rollGrid()}`);
 
 // Notes gone from the screen, its grid isn't the keys' any more: the timeline's is the only one shown.
-const rollSnap = () => page.evaluate(() => localStorage.getItem("m2.notes.snap"));
+const rollSnap = async () => (await state()).local?.grid?.notes?.on;
 const tabWas = await page.$eval("[role=tablist][aria-label=Views] [aria-selected=true]", (e) => e.dataset.viewTab).catch(() => null);
 for (const [how, away] of [["E hides the dock", "e"], ["⌥3 shows Mix there", "Alt+3"]]) {
   const bc = await box('[data-lane="bass.notes"] [data-clip]');
