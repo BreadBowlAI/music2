@@ -82,6 +82,14 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     ("grid_wider", "Wider Grid", Some("CmdOrCtrl+2")),
     ("grid_triplet", "Triplet Grid", Some("CmdOrCtrl+3")),
     ("grid_snap", "Snap to Grid", Some("CmdOrCtrl+4")),
+    // The timeline's zoom, around the playhead or the view's middle (the roll's own while it has
+    // the keyboard). ⇧⌘= is the page's too. Z, the page's key, fits the selected clips or the song.
+    ("zoom_in", "Zoom In", Some("CmdOrCtrl+=")),
+    ("zoom_out", "Zoom Out", Some("CmdOrCtrl+-")),
+    ("zoom_fit", "Zoom to Fit", None),
+    // The selected track's height, or every track's (in the code editor, its own ⌘↓ and ⌘↑).
+    ("taller", "Taller Tracks", Some("CmdOrCtrl+Down")),
+    ("shorter", "Shorter Tracks", Some("CmdOrCtrl+Up")),
     // No Space accelerator: the menu would steal it from text fields. The UI handles Space, Return and C.
     ("play", "Play / Stop", None),
     // ⇧Space, the page's: from where it stopped, not where play started.
@@ -90,6 +98,12 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     ("loop", "Loop", None),
     // The selected clip's span, else the bar at the playhead.
     ("loop_selection", "Loop Selection", Some("CmdOrCtrl+L")),
+    // The timeline pages to keep the playhead in view while it plays.
+    ("follow", "Follow Playhead", Some("CmdOrCtrl+Shift+F")),
+    // At the playhead's bar; ⌥← and ⌥→, the page's, move play's start to the marker before or after.
+    ("add_marker", "Add Marker", None),
+    ("prev_marker", "Previous Marker", None),
+    ("next_marker", "Next Marker", None),
     // Panic (RENDER-10): every note off, every instance reset.
     ("panic", "Stop All Sound", Some("CmdOrCtrl+Period")),
     ("shortcuts", "Keyboard Shortcuts", None),
@@ -137,6 +151,12 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
     let selected = [Item("duplicate"), Item("split"), Item("join"), Item("quantize")];
     let track = vec![Item("new_track"), Item("delete_track"), Item("rename"), Line, Item("mute"), Item("solo"), Item("mute_in_song")];
     let views = [
+        Item("zoom_in"),
+        Item("zoom_out"),
+        Item("zoom_fit"),
+        Item("taller"),
+        Item("shorter"),
+        Line,
         Item("view_device"),
         Item("view_notes"),
         Item("view_mix"),
@@ -151,7 +171,21 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
         Item("grid_triplet"),
         Item("grid_snap"),
     ];
-    let transport = vec![Item("play"), Item("continue"), Item("home"), Line, Item("loop"), Item("loop_selection"), Line, Item("panic")];
+    let transport = vec![
+        Item("play"),
+        Item("continue"),
+        Item("home"),
+        Line,
+        Item("loop"),
+        Item("loop_selection"),
+        Item("follow"),
+        Line,
+        Item("add_marker"),
+        Item("prev_marker"),
+        Item("next_marker"),
+        Line,
+        Item("panic"),
+    ];
     if mac {
         vec![
             ("music2", vec![About, Line, Services, Line, Hide, HideOthers, ShowAll, Line, Item("quit")]),
@@ -331,6 +365,33 @@ mod tests {
             for r in rows {
                 assert!(matches!(r, Row::Item(_) | Row::Line | Row::About), "{menu}: {r:?}");
             }
+        }
+    }
+
+    /// The timeline's rows (polish B): zoom and heights lead View, follow and the markers are in
+    /// Transport, on both menu bars, with ⌘ chords only where the page has no key of its own.
+    #[test]
+    fn zoom_heights_follow_and_markers_have_their_rows() {
+        let accel = |id: &str| ITEMS.iter().find(|i| i.0 == id).and_then(|i| i.2);
+        assert_eq!(accel("zoom_in"), Some("CmdOrCtrl+="));
+        assert_eq!(accel("zoom_out"), Some("CmdOrCtrl+-"));
+        assert_eq!(accel("zoom_fit"), None, "Z is the page's key");
+        assert_eq!(accel("taller"), Some("CmdOrCtrl+Down"));
+        assert_eq!(accel("shorter"), Some("CmdOrCtrl+Up"));
+        assert_eq!(accel("follow"), Some("CmdOrCtrl+Shift+F"));
+        for id in ["add_marker", "prev_marker", "next_marker"] {
+            assert_eq!(accel(id), None, "{id}: ⌥← and ⌥→ are the page's keys");
+        }
+        for mac in [true, false] {
+            let bar = layout(mac);
+            let menu = |name: &str| bar.iter().find(|m| m.0 == name).expect(name).1.clone();
+            let view = menu("View");
+            assert_eq!(view[..6], [Row::Item("zoom_in"), Row::Item("zoom_out"), Row::Item("zoom_fit"), Row::Item("taller"), Row::Item("shorter"), Row::Line]);
+            let transport = menu("Transport");
+            let at = transport.iter().position(|r| *r == Row::Item("loop_selection")).expect("Loop Selection");
+            assert_eq!(transport[at + 1], Row::Item("follow"), "mac: {mac}");
+            let at = transport.iter().position(|r| *r == Row::Item("add_marker")).expect("Add Marker");
+            assert_eq!(transport[at - 1..at + 4], [Row::Line, Row::Item("add_marker"), Row::Item("prev_marker"), Row::Item("next_marker"), Row::Line]);
         }
     }
 

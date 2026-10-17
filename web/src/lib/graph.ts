@@ -613,6 +613,8 @@ export const editorHooks: {
   undo?: (redo: boolean) => boolean;
   /** A menu command whose chord the code editor binds (⌘D): its own action while it has the keyboard. */
   chord?: (id: string) => boolean;
+  /** View ▸ Zoom In (1) and Zoom Out (-1) while the roll has the keyboard: its own zoom. */
+  zoom?: (dir: 1 | -1) => boolean;
   unsaved?: () => number;
 } = {};
 

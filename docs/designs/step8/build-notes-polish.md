@@ -62,6 +62,62 @@ with their keys. A song opened from the desktop's Open while a setting waits its
 **Contract.** FMT-20 and the HOME table: `view.json` also keeps `zoom`, `follow`, `heights`,
 `hidden`, `grid`, `audition`, set through `POST /api/graph/view`.
 
+### B1 and B3. Zoom, and follow the playhead
+
+**In short.** You can zoom the timeline in and out. While a song plays, the view moves along with
+the playhead. You can turn that off. Both are kept with the song.
+
+| Do this | Mac | Linux | What happens |
+|---|---|---|---|
+| Zoom in or out | ⌘= / ⌘− (⇧⌘= too) | Ctrl+= / Ctrl+− | Around the playhead when you can see it; else around the middle |
+| Zoom around the pointer | pinch, or ⌘-scroll | Ctrl-scroll | The beat under the pointer stays under it |
+| Zoom to fit | Z | Z | The selected clips fill the view; with none selected, the whole song. Z again goes back |
+| The buttons | right end of the ruler | same | Follow, Zoom out, Zoom in. They stay in view as you scroll |
+| Follow the playhead | ⇧⌘F | Ctrl+Shift+F | When the playhead passes 85% of the view, the view jumps so it sits at 15% |
+
+- The zoom goes from 2 to 192 px a beat. Each step is ×1.5. It starts at 24.
+- Bar numbers thin out when bars get narrow: every 2nd, 4th or 8th bar under 40, 20 and 10 px.
+  Beat lines go under 6 px a beat; bar lines stay.
+- The grid's Auto follows the zoom: 1/8 at 24 px a beat, 1/16 at 54.
+- Scrolling sideways by hand while it plays pauses following. It starts again when play starts
+  again, or when the playhead comes back into view.
+- In the Notes roll (lane D's part), ⌘= and ⌘− ask the roll first (`editorHooks.zoom`).
+
+**What changed**
+
+- `web/src/lib/zoom.ts` (new): the zoom and the follow flag, over `lib/local` (`zoom`, `follow`).
+- `SongTimeline.tsx`: `PPB` (24, used in 49 places) is the zoom now, read with `useZoom()` in each
+  component and `zoomNow()` in the edits. `zoomTo` keeps a beat in place; the lanes keep room for
+  it (`spare`), so a zoom near the song's end still holds the beat. A wheel with ⌘ or Ctrl, and
+  WebKit's `gesture*` events (with `preventDefault`), zoom around the pointer. `ViewTools`: the
+  ruler's group, `sticky right-0` with its own 1 px edge (X25). Following pages on each frame from
+  the clock; the lanes are a view wider while it follows, so a page can always put the playhead
+  at 15%.
+- Keys and rows (P0a's, for lane B's ids): `App.tsx` `chord()` (=, +, −, ↑, ↓, ⇧F) and `key()` (Z,
+  ⌥←, ⌥→ with `preventDefault`); `appCommand` cases; `shell.ts` `canvas.zoom`, `zoomFit`,
+  `follow`, `height`, `marker`; `graph.ts` `editorHooks.zoom`; `CodeView.tsx`'s two Monaco names
+  for ⌘↑ ⌘↓ (X5); `menu.rs` rows Zoom In, Zoom Out, Zoom to Fit, Taller Tracks, Shorter Tracks
+  (View, first), Follow Playhead, Add Marker, Previous Marker, Next Marker (Transport), and a test.
+  `Shortcuts.tsx`: rows for zoom and follow.
+- `e2e/lintlib.mjs`: the taste lint as a function (P0b-1's), for the new suites.
+
+**Tests.** Suite `pl-zoom` (kind `fix`, 43 checks, after `s8-automation`). The menu rows:
+`music2-desktop` `zoom_heights_follow_and_markers_have_their_rows` (9 menu tests pass). Moved
+suites, all green with their counts: `taste` 39, `s8-clips` 94, `s4-clips` 28, `s8-automation` 45,
+`s8-songbar` 82, `layout` 39, `views` 30, `gestures` 30, `pc-keys` 37, `code` 58. Clippy of
+`m2-server` and `music2-desktop`: clean.
+
+**Red first** (the page and server of `29430e8`):
+`FAIL the ruler has Zoom in and Zoom out`, `FAIL ⌘= zooms in: clip width 766 → 766`, then
+`No element found for selector: [data-testid=zoom-in]`.
+
+**Left.** A trackpad pinch is checked only as Chrome's Ctrl-wheel; the Mac's `gesture*` events
+need the Mac run. Follow is a plain menu row, not a ticked one.
+
+**For gaps.md.** Zoom (#9) and follow the playhead are done.
+
+**Contract.** None beyond the view store's.
+
 ## Lane C
 
 Songs and tracks.
