@@ -1706,19 +1706,44 @@ fn window_edit() -> (Ir, Ir) {
     };
     let before = ir(vec![
         kick,
-        module("a", json!([]), json!([hz("f", 220.0), k("o", "std:sine", json!({"freq": "f"})),
-            {"id": "t", "op": "const", "value": 0.01, "unit": "seconds"}, k("d", "std:delay", json!({"in": "o", "time": "t"}))]), "d"),
-        module("b", notes.clone(), json!([{"id": "n", "op": "lane", "lane": "n"}, poly.clone(), import("a"),
-            k("af", "std:follow", json!({"in": "a"})), k("bd", "std:duck", json!({"in": "v", "side": "af"}))]), "bd"),
-        module("c", lvl.clone(), json!([hz("f", 330.0), k("o", "std:sine", json!({"freq": "f"})), {"id": "l", "op": "lane", "lane": "lvl"},
-            k("g", "std:scale", json!({"in": "o", "by": "l"}))]), "g"),
+        module(
+            "a",
+            json!([]),
+            json!([hz("f", 220.0), k("o", "std:sine", json!({"freq": "f"})),
+            {"id": "t", "op": "const", "value": 0.01, "unit": "seconds"}, k("d", "std:delay", json!({"in": "o", "time": "t"}))]),
+            "d",
+        ),
+        module(
+            "b",
+            notes.clone(),
+            json!([{"id": "n", "op": "lane", "lane": "n"}, poly.clone(), import("a"),
+            k("af", "std:follow", json!({"in": "a"})), k("bd", "std:duck", json!({"in": "v", "side": "af"}))]),
+            "bd",
+        ),
+        module(
+            "c",
+            lvl.clone(),
+            json!([hz("f", 330.0), k("o", "std:sine", json!({"freq": "f"})), {"id": "l", "op": "lane", "lane": "lvl"},
+            k("g", "std:scale", json!({"in": "o", "by": "l"}))]),
+            "g",
+        ),
         json!({"key": "song", "nodes": [import("kick"), import("a"), import("b"), import("c"), c("half", 0.5),
             k("g", "std:scale", json!({"in": "kick", "by": "half"})), k("m", "std:add", json!({"a": "g", "b": "a"})),
             k("n2", "std:add", json!({"a": "b", "b": "c"})), k("mix", "std:add", json!({"a": "m", "b": "n2"}))], "exports": {"out": "mix"}}),
     ]);
     let after = ir(vec![
-        module("a", json!([]), json!([hz("f", 220.0), k("o", "std:sine", json!({"freq": "f"})), import("b"),
-            k("bf", "std:follow", json!({"in": "b"})), k("du", "std:duck", json!({"in": "o", "side": "bf"}))]), "du"),
+        module(
+            "a",
+            json!([]),
+            json!([
+                hz("f", 220.0),
+                k("o", "std:sine", json!({"freq": "f"})),
+                import("b"),
+                k("bf", "std:follow", json!({"in": "b"})),
+                k("du", "std:duck", json!({"in": "o", "side": "bf"}))
+            ]),
+            "du",
+        ),
         module("b", notes, json!([{"id": "n", "op": "lane", "lane": "n"}, poly]), "v"),
         module("c", lvl, json!([hz("f", 330.0), k("o", "std:sine", json!({"freq": "f"}))]), "o"),
         json!({"key": "song", "nodes": [import("a"), import("b"), import("c"), c("q", 0.25),
@@ -1770,7 +1795,10 @@ fn window_on(threads: Option<usize>) -> (Vec<[f32; 2]>, Rig, Vec<(String, u16)>)
 #[test]
 fn an_edit_window_renders_the_same_bits_on_1_and_n_threads() {
     let (one, _, labels) = window_on(None);
-    assert!(labels.iter().any(|(l, d)| l == "a" && *d > 0) && labels.iter().any(|(l, d)| l == "b" && *d > 0), "a and b split by depth: {labels:?}");
+    assert!(
+        labels.iter().any(|(l, d)| l == "a" && *d > 0) && labels.iter().any(|(l, d)| l == "b" && *d > 0),
+        "a and b split by depth: {labels:?}"
+    );
     assert!(peak(&one) > 0.1);
     let (four, rig, _) = window_on(Some(4));
     let t = rig.threads.as_ref().unwrap().runner.spread_report();

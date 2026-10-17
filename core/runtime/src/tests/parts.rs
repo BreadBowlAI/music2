@@ -503,7 +503,11 @@ fn random_convex_partitions_give_the_same_bits() {
             let mut r = Renderer::new(&f, &DataSet::empty(), &pk, SR).unwrap();
             shuffle_and_cut(&mut r, seed);
             let before = t.runner.spread_report();
-            assert!(r.render_on(seconds, &mut t.runner).unwrap() == reference, "seed {seed}: the same bits on {} threads", t.runner.threads());
+            assert!(
+                r.render_on(seconds, &mut t.runner).unwrap() == reference,
+                "seed {seed}: the same bits on {} threads",
+                t.runner.threads()
+            );
             let on = t.runner.spread_report().tasks_on_workers - before.tasks_on_workers;
             assert!(on > 0, "seed {seed}, {parts} partitions: tasks ran on workers");
         }
@@ -540,9 +544,12 @@ fn crossings() -> (Ir, DataSet) {
     ir.modules[1].lanes = serde_json::from_value(json!([{"key": "notes", "kind": "events<note>"}])).unwrap();
     let notes: Vec<Value> = (0..16).map(|k| json!({"pitch": 48 + (k * 5) % 24, "start": k as f64 * 0.25, "length": 0.5})).collect();
     let notes = json!({"clips": [{"start": 0, "length": 8, "notes": notes}]});
-    let data = DataSet::with_lanes(super::live::at_bpm(120.0), [(m2_song::LaneAddr::new("pad", "notes").unwrap(), {
-        m2_song::LaneData::read(&notes.to_string(), &m2_song::LaneKind::Notes).unwrap()
-    })]);
+    let data = DataSet::with_lanes(
+        super::live::at_bpm(120.0),
+        [(m2_song::LaneAddr::new("pad", "notes").unwrap(), {
+            m2_song::LaneData::read(&notes.to_string(), &m2_song::LaneKind::Notes).unwrap()
+        })],
+    );
     (ir, data)
 }
 
@@ -574,9 +581,17 @@ fn a_song_with_a_plugin_runs_no_task_on_a_worker() {
     let mut pk = std_packages();
     let ((k, _), (h, _)) = (sine_track(55.0, 1), sine_track(440.0, 1));
     let mut ir = tracks(
-        &[("kick", k, "out"), ("hat", h, "out"), ("fx", json!([
+        &[
+            ("kick", k, "out"),
+            ("hat", h, "out"),
+            (
+                "fx",
+                json!([
             {"id": "k", "op": "import", "module": "kick", "export": "out"},
-            {"id": "p", "op": "plugin", "plugin": "clap:m2.probe", "inputs": {"in": "k"}}]), "p")],
+            {"id": "p", "op": "plugin", "plugin": "clap:m2.probe", "inputs": {"in": "k"}}]),
+                "p",
+            ),
+        ],
         json!([
             {"id": "a", "op": "kernel", "kernel": "std:add", "inputs": {"a": "hat", "b": "fx"}},
             {"id": "m", "op": "kernel", "kernel": "std:add", "inputs": {"a": "kick", "b": "a"}}]),

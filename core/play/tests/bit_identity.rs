@@ -453,4 +453,3 @@ fn p50_renders_the_same_bits_on_1_and_8_threads() {
     assert_eq!(diff, None, "the same bits on 8 threads");
     assert!(on_workers > 0 && crossed > 0, "{on_workers} tasks on workers, {crossed} reads across threads");
 }
-
