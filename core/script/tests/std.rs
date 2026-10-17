@@ -151,6 +151,46 @@ fn std_is_declared_with_descriptors() {
     assert!(!manifest.contains("[[effect]]") && !manifest.contains("args ="), "effects are descriptors, not manifest entries (PKG-2)");
 }
 
+// Polish A4: the drum kit names the notes it plays, for the piano roll's rows: the General MIDI
+// notes the `std:drum` kernel maps (std/kernels-src/src/drums/tests.rs, KIT); the hats name their
+// pedal and open notes. No other std instrument names its notes.
+#[test]
+fn the_drum_kit_names_its_notes() {
+    let catalog = describe(&[("std".into(), std_dir())]);
+    let names = |id: &str| -> Vec<(u8, &str)> { catalog.components[id].editor.notes.iter().map(|(k, v)| (*k, v.as_str())).collect() };
+    assert_eq!(
+        names("std:drum-kit"),
+        [
+            (36, "Kick"),
+            (37, "Rim"),
+            (38, "Snare"),
+            (39, "Clap"),
+            (41, "Tom 1"),
+            (42, "Closed hat"),
+            (43, "Tom 2"),
+            (44, "Pedal hat"),
+            (45, "Tom 3"),
+            (46, "Open hat"),
+            (47, "Tom 4"),
+            (48, "Tom 5"),
+            (49, "Crash"),
+            (50, "Tom 6"),
+            (51, "Ride"),
+            (54, "Tambourine"),
+            (56, "Cowbell"),
+            (69, "Shaker"),
+            (70, "Shaker 2"),
+            (75, "Claves"),
+        ]
+    );
+    assert_eq!(names("std:drum-hats"), [(42, "Closed hat"), (44, "Pedal hat"), (46, "Open hat")]);
+    for (id, _, _) in INSTRUMENTS {
+        if id != "std:drum-kit" && id != "std:drum-hats" {
+            assert!(catalog.components[id].editor.notes.is_empty(), "{id} names no notes");
+        }
+    }
+}
+
 // PKG-8, PKG-6: every declared control is found by its slot, whatever its place among the controls
 // (a lookup once found only each component's first), a dictionary entry's by
 // `<slot>.<key>.<control>`, and a value in the declared unit gets the declared range and log.

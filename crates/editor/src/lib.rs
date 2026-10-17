@@ -35,6 +35,7 @@ pub mod view;
 pub mod mute;
 pub mod clips;
 pub mod swap;
+pub mod note_names;
 
 use std::collections::HashMap;
 use std::path::Path;

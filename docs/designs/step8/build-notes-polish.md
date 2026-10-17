@@ -148,6 +148,48 @@ when code computes a setting, for sounds built from parts, two instruments or a 
 **Contract:** WRITE-10's builder list gains change instrument (`m2_editor::swap`, `POST /api/graph/track/instrument`).
 taste.md §2.12 gains `ArrowLeftRight` for change instrument.
 
+### A4, part 1: an instrument names its notes
+
+**In short:** the drum kit now says which drum each note plays (36 is Kick, 38 is Snare). The timeline passes those
+names to the page. Part 2 shows them in Notes.
+
+**What changed**
+
+- `core/script/sdk/core.ts`: a descriptor's `editor.notes` (`{ 36: "Kick" }`), checked where it is declared: notes
+  are whole numbers 0 to 127 (written as such: `"1.5"` and `"-1"` are refused), each name one line of 1 to 24
+  characters. Emitted in the descriptor's JSON. `core/script/src/component.rs`: `Editor.notes: BTreeMap<u8, String>`
+  (`serde(default)`).
+- `std/src/drums.ts`: the kit names the 20 notes of the plan, each checked against the `std:drum` kernel's General
+  MIDI map (`std/kernels-src/src/drums/tests.rs`, `KIT`): 36 Kick, 37 Rim, 38 Snare, 39 Clap, 41 Tom 1, 42 Closed
+  hat, 43 Tom 2, 44 Pedal hat, 45 Tom 3, 46 Open hat, 47 Tom 4, 48 Tom 5, 49 Crash, 50 Tom 6, 51 Ride, 54
+  Tambourine, 56 Cowbell, 69 Shaker, 70 Shaker 2, 75 Claves. The kernel also plays 35, 40, 57 and 59 (a second kick,
+  snare, crash and ride, the same sounds): left unnamed, so no two rows say the same. `drums.hats` names its closed,
+  pedal and open notes (42, 44, 46). Kernels don't change, so `std.wasm` doesn't.
+- `crates/editor/src/note_names.rs`: `of(rev, module, lane)`: the nodes that read the lane (a `poly`'s events, a
+  kernel's or a plugin's input, voices included), each one's outermost frame whose component names its notes; the
+  names when every reader is of that one component, else none. So a kit inside a project's own wrapper still names
+  them, and a lane read by a kit and a pluck names none.
+- `crates/editor/src/timeline.rs`: `TimelineLane::Notes` gains `names` (left out of the JSON when empty). P0a's line,
+  made here before P0a landed.
+
+**Tests**
+
+| Test | Result |
+|---|---|
+| `core/script` `editor_notes_are_read_and_checked` (a read, no names, eight refusals) | ok |
+| `core/script/tests/std.rs` `the_drum_kit_names_its_notes` (the 20 names, the hats' 3, no other instrument names any) | ok |
+| `crates/editor` `a_drum_kit_lane_names_its_notes`, `a_pluck_lane_has_no_names` | ok |
+| `cargo test -p m2-script -p m2-editor`; clippy of both | ok |
+| `notes` 52, `s8-audition` 51, `s6-builders` 56, `s8-tracks` 75, `taste` 39 | ok |
+
+**Red first**
+
+```
+editor_notes_are_read_and_checked: component "kit" at lib/c.ts:2:18: editor has no field "notes" (fields: category, description, insert)
+the_drum_kit_names_its_notes:      left: []  right: [(36, "Kick"), (37, "Rim"), …]
+a_drum_kit_lane_names_its_notes:   assertion `left == right` failed: []  left: 0  right: 20
+```
+
 ## Lane B
 
 Timeline.

@@ -127,6 +127,9 @@ pub struct Editor {
     pub description: String,
     /// What adding it writes, in order.
     pub insert: Vec<Insert>,
+    /// What an instrument's notes play, by MIDI note (`36: "Kick"`): the piano roll's row names.
+    #[serde(default)]
+    pub notes: BTreeMap<u8, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
