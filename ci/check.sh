@@ -6,9 +6,9 @@
 # renders; on a Mac it also times the gates ci/gates.txt names. First it builds the old engine
 # G7f compares with (S), in a folder of its own: ~/m2-check/s-8aa301e on a Mac,
 # ~/.cache/m2-check/s-8aa301e on Linux. Then it prints a short summary to paste back. It changes
-# nothing in the repo, never opens the app on a screen you can see, never plays sound, and never
-# touches your ~/Music or ~/.music2. If one line says "running" for over 30 minutes, press Ctrl-C
-# once: it stops and prints the summary anyway.
+# nothing in the repo, never opens the app on a screen you can see, never plays sound (G12 opens the
+# Mac's output muted: it plays zeros), and never touches your ~/Music or ~/.music2. If one line says
+# "running" for over 30 minutes, press Ctrl-C once: it stops and prints the summary anyway.
 #
 #   ci/check.sh             everything (on a Mac, the timing gates too)
 #   ci/check.sh --gates     on Linux, the timing gates too (recorded for information, PLAT-1)
@@ -25,6 +25,9 @@
 #                     check made is ever replaced.
 # Exit status: 0 when every check passed, all of it judged, with the test plugins; 1 when not; 2 when
 # it couldn't start.
+#
+# On a Mac, set the output to the built-in speakers at 48 kHz first (Audio MIDI Setup): G12 plays
+# there, muted, and judges that set-up.
 #
 # Needs rustup and Node 24. The first run installs Rust 1.99.0 (rust-toolchain.toml) and
 # chrome-headless-shell 133.0.6943.141. On a Mac, run it in Terminal on the Mac itself, not over
@@ -567,7 +570,7 @@ if [ -n "$GATES" ]; then
     record "old engine (S)" FAIL "it didn't build, so G7f can't run: see gates-s.log"
     echo "old engine (S): $(grep -m1 -E '^build\.sh: |^error' "$OUT/gates-s.log" | cut -c1-140)" >> "$OUT/failed"
   fi
-  begin gates "22 min"
+  begin gates "23 min"
   # ci/gates.txt: one m2-gates run a line; # starts a comment.
   grep -v -e '^#' -e '^[[:space:]]*$' ci/gates.txt > "$SCR/gates"
   bad=
@@ -601,8 +604,9 @@ if [ -n "$GATES" ]; then
   # (step 7 with wasmtime's default layout), the app's layout against P1, and what starting a turn
   # cost each side (the steps it leaves out, and whether any is left in the judged ones); S measured
   # now beside S's record (on the reference Mac only: if the two differ by much, doubt the runner
-  # first); and the build and footprint checks, whose ok lines have no p99.
-  { grep -m1 '^machine: ' "$OUT/gates.log"; grep -E '^=== |^(PASS|FAIL|SKIP)  |^      FAIL  |^      ok    .*(p95|p99|of a core)|^      skip  .*\(PLAT-1\)|^      info  machines: |^      ok    the same music|^      info  (block|callback), (P1 against S|the app.s layout against P1|starting a turn)|^      info  S as recorded: |^      ok    (full build within|footprint within) ' "$OUT/gates.log"; } 2> /dev/null |
+  # first); the build and footprint checks, whose ok lines have no p99; and G12's live set-up and
+  # dropouts, and its note when this Mac only stands in for gate 8's.
+  { grep -m1 '^machine: ' "$OUT/gates.log"; grep -E '^=== |^(PASS|FAIL|SKIP)  |^      FAIL  |^      ok    .*(p95|p99|of a core)|^      skip  .*\(PLAT-1\)|^      info  machines: |^      ok    the same music|^      info  (block|callback), (P1 against S|the app.s layout against P1|starting a turn)|^      info  S as recorded: |^      ok    (full build within|footprint within) |^      ok    .*: (set-up|dropouts): |^      info  gate 8: ' "$OUT/gates.log"; } 2> /dev/null |
     cut -c1-220 > "$OUT/gates.sum"
 fi
 
