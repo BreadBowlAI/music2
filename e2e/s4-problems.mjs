@@ -7,7 +7,8 @@ import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixl
 
 const { browser, page, errors, state, toasts, status } = await open();
 // What needs attention is in the status pill's popover (taste.md ST-1).
-const rows = async () => (await status(), page.$$eval("[data-testid=attention] [data-problem]", (els) => els.map((e) => ({ code: e.dataset.problem, severity: e.dataset.severity, src: e.dataset.src, text: e.innerText }))));
+// `text` holds Details too: a problem in plain words keeps its own message there (the studio plan's D2).
+const rows = async () => (await status(), page.$$eval("[data-testid=attention] [data-problem]", (els) => els.map((e) => ({ code: e.dataset.problem, severity: e.dataset.severity, src: e.dataset.src, text: e.textContent }))));
 const clips = (lane) => page.$$eval(`[data-lane="${lane}"] [data-clip]`, (els) => els.length).catch(() => 0);
 const issue = (track) => page.$eval(`[data-track="${track}"] [data-testid=track-issues]`, (e) => ({ severity: e.dataset.severity, title: e.title })).catch(() => null);
 

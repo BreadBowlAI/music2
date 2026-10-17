@@ -4,6 +4,8 @@ import { useRef, useState, type ReactNode } from "react";
 import { attention, graphApi, lockReason, type GraphState, type GraphStatus, type Problem, type ReadOnly } from "../lib/graph";
 import { usePill } from "../lib/overlays";
 import { openSettings } from "../lib/settings";
+import { placeOf, technical, Words } from "../lib/plain";
+import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import Attention from "./Attention";
 import { Button, Details, keepFocus, Popover } from "./ui";
@@ -231,14 +233,25 @@ function Compile({ graph, state, onShow }: { graph: GraphState; state: State; on
   const problems: Problem[] = graph.diagnostics.length
     ? graph.diagnostics
     : graph.view.draft_errors.map((message): Problem => ({ file: null, line: null, col: null, message, code: "code.build", severity: "error" }));
-  const codes = [...new Set(problems.map((p) => p.code).filter((c) => c !== "code.build"))];
+  // The codes of those not in plain words: each in plain words has its own Details.
+  const codes = [...new Set(problems.filter((p) => !p.plain).map((p) => p.code).filter((c) => c !== "code.build"))];
   return (
     <div data-testid="compile-banner">
       <Item
         state={state}
         title="The code doesn't compile right now"
         action={
-          <Button variant="secondary" size="sm" onClick={() => onShow(problems[0])} className="shrink-0">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => {
+              // At its line, marked: your own line, for a mistake made through std (the studio plan's Q46).
+              const p = problems[0];
+              onShow(p);
+              if (p.file && p.line != null) useShell.getState().set({ codeAt: { file: p.file, line: p.line } });
+            }}
+            className="shrink-0"
+          >
             <CodeXml size={14} />
             Show in code
           </Button>
@@ -249,17 +262,34 @@ function Compile({ graph, state, onShow }: { graph: GraphState; state: State; on
           : "Playing the last version that did; editing waits until it compiles."}
       </Item>
       <ul className="px-2 pb-2 pl-8 space-y-1">
-        {problems.slice(0, 3).map((p, i) => (
-          <li key={i} className="text-sm text-fg select-text break-words">
-            {p.file && (
-              <span data-code className="font-mono text-xs text-fg-muted">
-                {p.file}
-                {p.line != null && `:${p.line}${p.col != null ? `:${p.col}` : ""}`}{" "}
+        {problems.slice(0, 3).map((p, i) =>
+          // In plain words (the studio plan's D2): what went wrong, where in your code, and the
+          // fix; the problem's own words, its code and the place inside a package under Details.
+          p.plain ? (
+            <li key={i} data-plain className="text-sm text-fg select-text break-words">
+              <span className="font-semibold">
+                <Words text={p.plain} />
               </span>
-            )}
-            {p.message}
-          </li>
-        ))}
+              {p.file && !p.plain.includes(p.file) && <span className="text-fg-muted"> {placeOf(p)}.</span>}
+              {p.fix && (
+                <>
+                  {" "}
+                  <Words text={p.fix} />
+                </>
+              )}
+              <Details>
+                <div data-code className="mt-1 font-mono select-text break-words">
+                  {technical(p)}
+                </div>
+              </Details>
+            </li>
+          ) : (
+            <li key={i} className="text-sm text-fg select-text break-words">
+              {p.file && <span className="text-fg-muted">{placeOf(p)}: </span>}
+              {p.message}
+            </li>
+          ),
+        )}
         {problems.length > 3 && <li className="text-xs text-fg-muted">and {problems.length - 3} more, in the code view</li>}
         {codes.length > 0 && (
           <li>

@@ -11,7 +11,8 @@ import { openTrackId, tracksIn } from "../lib/rekey";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import TrackIdDialog from "./TrackIdDialog";
-import { Button, MenuRow, Popover } from "./ui";
+import { technical, Words } from "../lib/plain";
+import { Button, Details, MenuRow, Popover } from "./ui";
 
 type Kit = typeof import("../lib/codeMonaco");
 
@@ -604,19 +605,44 @@ function Problems({
           const at = where(p.file, p.line);
           const local = !!p.file && canOpen(p.file);
           return (
-            <button
-              key={i}
-              disabled={!local}
-              onClick={() => local && onReveal(p.file!, p.line, p.col)}
-              className={clsx("w-full px-3 pl-8 min-h-6 py-0.5 flex items-baseline gap-2 text-left text-sm enabled:cursor-pointer", silent ? "enabled:hover:bg-danger/10" : "enabled:hover:bg-warn/10")}
-            >
-              {at && <span data-code className="font-mono shrink-0">{at}</span>}
-              {p.module && !local && <span className="shrink-0">in {name(p.module)}</span>}
-              <span className="break-words min-w-0">{p.message}</span>
-              {p.code !== "code.build" && (
-                <span data-code className="ml-auto pl-2 shrink-0 font-mono text-xs opacity-70" title="The problem's code">{p.code}</span>
+            <div key={i} data-plain={p.plain ? "" : undefined}>
+              <button
+                disabled={!local}
+                onClick={() => local && onReveal(p.file!, p.line, p.col)}
+                className={clsx("w-full px-3 pl-8 min-h-6 py-0.5 flex items-baseline gap-2 text-left text-sm enabled:cursor-pointer", silent ? "enabled:hover:bg-danger/10" : "enabled:hover:bg-warn/10")}
+              >
+                {at && <span data-code className="font-mono shrink-0">{at}</span>}
+                {p.module && !local && <span className="shrink-0">in {name(p.module)}</span>}
+                {/* In plain words, with the fix, where a rule knows it (the studio plan's D2); its own words under Details. */}
+                <span className="break-words min-w-0">
+                  {p.plain ? (
+                    <>
+                      <Words text={p.plain} />
+                      {p.fix && (
+                        <>
+                          {" "}
+                          <Words text={p.fix} />
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    p.message
+                  )}
+                </span>
+                {p.code !== "code.build" && !p.plain && (
+                  <span data-code className="ml-auto pl-2 shrink-0 font-mono text-xs opacity-70" title="The problem's code">{p.code}</span>
+                )}
+              </button>
+              {p.plain && (
+                <div className="px-3 pl-8 pb-0.5">
+                  <Details>
+                    <div data-code className="mt-0.5 font-mono select-text break-words">
+                      {technical(p)}
+                    </div>
+                  </Details>
+                </div>
               )}
-            </button>
+            </div>
           );
         })}
       </div>

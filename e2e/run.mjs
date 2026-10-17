@@ -83,6 +83,7 @@ export const SUITES = [
   ["fixes-graph", "fix", { expect: 42 }],
   ["fixes-notes", "fix", { expect: 37 }],
   ["attention", "attn", { expect: 57 }],
+  ["st-errors", "fix", { expect: 34 }],
   ["newsong", "none", { expect: 71 }],
   ["pl-projects", "none", { expect: 66 }],
   ["nx-settings", "none", { expect: 42 }],

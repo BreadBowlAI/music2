@@ -94,7 +94,7 @@ check((await page.$$('[data-module="song"] [data-node]')).length > 0, "and the l
 await page.click("[data-status]");
 await page.waitForSelector("[data-testid=compile-banner]");
 const bannerText = await page.$eval("[data-testid=compile-banner]", (e) => e.innerText).catch(() => "");
-check(/song\.ts:\d+/.test(bannerText) && !bannerText.includes(proj), `naming the place relative to the project (${bannerText.replace(/\n/g, " | ")})`);
+check(/line \d+ of song\.ts|song\.ts, line \d+/.test(bannerText) && !bannerText.includes(proj), `naming the place relative to the project (${bannerText.replace(/\n/g, " | ")})`);
 await page.click("[data-testid=compile-banner] button");
 check(
   await until(async () => (await page.$eval('[data-view-tab="code"]', (e) => e.getAttribute("aria-selected"))) === "true" &&

@@ -355,12 +355,17 @@ pub struct Diagnostic {
     /// `file:line:col`, or a file.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub src: Option<String>,
+    /// For an error `src` places at a call in the project, where inside a package it happened
+    /// (`std/src/filter.ts:26:21`): the technical place, for the Details (the studio plan's Q46).
+    /// Boxed, so a `Result` carrying a diagnostic stays small.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inner: Option<Box<String>>,
 }
 
 impl Diagnostic {
     /// An Error with a code from the contract's table.
     pub fn error(code: &'static str, message: impl Into<String>) -> Diagnostic {
-        Diagnostic { severity: Severity::Error, code, message: message.into(), module: None, node: None, src: None }
+        Diagnostic { severity: Severity::Error, code, message: message.into(), module: None, node: None, src: None, inner: None }
     }
 
     pub fn module(mut self, key: impl Into<String>) -> Diagnostic {

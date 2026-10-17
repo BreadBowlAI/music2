@@ -109,7 +109,7 @@ function Issues({ issues }: { issues: Diagnostic[] }) {
       data-testid="track-issues"
       data-severity={error ? "error" : warning ? "warning" : "notice"}
       className={clsx("shrink-0 inline-flex", error ? "text-danger" : warning ? "text-warn" : "text-fg-faint")}
-      title={issues.map((d) => d.message).join("\n\n")}
+      title={issues.map((d) => (d.plain ? `${d.plain}${d.fix ? ` ${d.fix}` : ""}\n(${d.message})` : d.message)).join("\n\n")}
     >
       <Icon size={14} />
     </span>

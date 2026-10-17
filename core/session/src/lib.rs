@@ -188,9 +188,37 @@ pub fn build_code(project: &Project, packages: &mut PackageSet) -> Result<Arc<Co
     if !blocking.is_empty() {
         return Err(blocking);
     }
-    let flat = m2_ir::check(&ir, packages)?;
+    let flat = m2_ir::check(&ir, packages).map_err(|e| e.into_iter().map(|d| at_project_call(d, &ir, &sites, project)).collect::<Vec<_>>())?;
     let decls = m2_runtime::decls(&ir);
     Ok(Arc::new(Code { ir, flat, sites: sites.into(), outputs, package_files, components, units: units.into(), decls, kept }))
+}
+
+/// A graph-check error at a node made inside a package, placed at the innermost call in the
+/// project whose frames made it, with the package's place kept as `inner` (the studio plan's Q46):
+/// `lowpass(x, db(-3))` is a mistake on your own line, not in `std/src/filter.ts`. An error
+/// already in the project, or one whose frames reach no call in it, keeps its place.
+fn at_project_call(mut d: Diagnostic, ir: &Ir, sites: &[m2_script::sites::Site], project: &Project) -> Diagnostic {
+    let ours = |src: &str| src.rsplitn(3, ':').nth(2).is_some_and(|file| project.code.contains_key(file));
+    if d.code != "code.check" || d.src.as_deref().is_some_and(ours) {
+        return d;
+    }
+    let (Some(module), Some(node)) = (d.module.as_deref(), d.node.as_deref()) else { return d };
+    let Some(m) = ir.modules.iter().find(|m| m.key == module) else { return d };
+    let Some(n) = m.nodes.iter().find(|n| n.id == node) else { return d };
+    let call = m.chain(n.frame).into_iter().rev().find_map(|f| sites.iter().find(|s| s.id == f.site && s.in_project));
+    let Some(site) = call else { return d };
+    // The column, in characters, from the call's first byte in its file.
+    let col = project.code.get(&site.file).and_then(|text| {
+        let start = (site.start as usize).min(text.len());
+        let line = text[..start].rfind('\n').map_or(0, |i| i + 1);
+        text.get(line..start).map(|s| s.chars().count() as u32 + 1)
+    });
+    d.inner = d.src.take().map(Box::new);
+    d.src = Some(match col {
+        Some(col) => format!("{}:{}:{col}", site.file, site.line),
+        None => format!("{}:{}:1", site.file, site.line),
+    });
+    d
 }
 
 /// Read a project's data against `code`'s declarations: every declared lane and plugin state,
@@ -418,6 +446,53 @@ export default song(() => sum(k.out, s.out));
         let found: Vec<_> = c.problems.iter().map(|d| (d.severity, d.code, d.module.as_deref())).collect();
         assert_eq!(found, [(m2_song::Severity::Error, "plugin.missing", Some("synth"))]);
         assert!(c.problems[0].src.as_deref().is_some_and(|s| s.starts_with("song.ts:6:")), "{:?}", c.problems[0]);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // Q46 (the studio plan): a graph-check error points at the call in the project that made
+    // the node, never inside a package; the place inside the package is its `inner`. Through a
+    // component of the song's own in lib/, it is the innermost call in the project.
+    #[test]
+    fn a_check_error_points_at_the_call_in_the_project() {
+        let song = r#"import { song } from "@m2/core";
+import bass from "./tracks/bass";
+export default song(() => bass.out);
+"#;
+        let bass = r#"import { db, track } from "@m2/core";
+import { bass } from "std/instruments";
+import { lowpass } from "std/filter";
+
+export default track("bass", ({ lane }) => {
+  return lowpass(bass(lane.notes("notes")), db(-3));
+});
+"#;
+        let dir = project(&[("song.ts", song), ("tracks/bass.ts", bass)]);
+        let e = compile_dir(&dir).err().expect("db(-3) as a cutoff doesn't check");
+        assert_eq!(e.iter().map(|d| d.code).collect::<Vec<_>>(), ["code.check"], "{e:?}");
+        assert!(e[0].message.contains("expects control<hz>, got control<db>"), "{}", e[0]);
+        assert_eq!(e[0].src.as_deref(), Some("tracks/bass.ts:6:10"), "{e:?}");
+        assert!(e[0].inner.as_deref().is_some_and(|s| s.contains("filter.ts:")), "{e:?}");
+        std::fs::remove_dir_all(dir).ok();
+
+        // Through the song's own component: at its call of lowpass, in lib/dark.ts.
+        let dark = r#"import { component, db, port, signature, type Audio } from "@m2/core";
+import { lowpass } from "std/filter";
+
+export const dark = component(
+  { id: "dark", label: "Dark", signature: signature<(x: Audio) => Audio>(), inputs: { in: port.audio() }, controls: {}, output: port.audio() },
+  (x: Audio) => lowpass(x, db(-3)),
+);
+"#;
+        let bass = r#"import { track } from "@m2/core";
+import { bass } from "std/instruments";
+import { dark } from "../lib/dark";
+
+export default track("bass", ({ lane }) => dark(bass(lane.notes("notes"))));
+"#;
+        let dir = project(&[("song.ts", song), ("tracks/bass.ts", bass), ("lib/dark.ts", dark)]);
+        let e = compile_dir(&dir).err().expect("db(-3) as a cutoff doesn't check");
+        assert_eq!(e[0].src.as_deref(), Some("lib/dark.ts:6:17"), "{e:?}");
+        assert!(e[0].inner.as_deref().is_some_and(|s| s.contains("filter.ts:")), "{e:?}");
         std::fs::remove_dir_all(dir).ok();
     }
 }

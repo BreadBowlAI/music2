@@ -182,7 +182,7 @@ check(/Code doesn't compile/.test(pill), `the status pill says the code doesn't 
 await page.click("[data-status]");
 await page.waitForSelector("[data-testid=compile-banner]");
 const bannerText = await page.$eval("[data-testid=compile-banner]", (e) => e.innerText).catch(() => "");
-check(/tracks\/bass\.ts:\d+/.test(bannerText) && !bannerText.includes(proj), `and names the place relative to the project (${bannerText.replace(/\n/g, " | ")})`);
+check(/line \d+ of tracks\/bass\.ts|tracks\/bass\.ts, line \d+/.test(bannerText) && !bannerText.includes(proj), `and names the place relative to the project (${bannerText.replace(/\n/g, " | ")})`);
 await key("Escape");
 await page.click("[data-testid=code] .view-lines");
 check((await dirty()).length === 0, "and the file is saved (clean)");

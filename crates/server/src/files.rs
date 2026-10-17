@@ -51,11 +51,31 @@ pub struct Problem {
     /// The key of the module whose graph the problem is in, if it is about one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub module: Option<String>,
+    /// What went wrong in plain words, for a problem a rule knows (`m2_editor::explain`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plain: Option<String>,
+    /// What to do about it, in plain words.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fix: Option<String>,
+    /// Where inside a package it happened, when `file` is the call in the project (Q46).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inner: Option<String>,
 }
 
 impl Default for Problem {
     fn default() -> Problem {
-        Problem { code: "code.build", severity: Severity::Error, file: None, line: None, col: None, message: String::new(), module: None }
+        Problem {
+            code: "code.build",
+            severity: Severity::Error,
+            file: None,
+            line: None,
+            col: None,
+            message: String::new(),
+            module: None,
+            plain: None,
+            fix: None,
+            inner: None,
+        }
     }
 }
 
@@ -197,6 +217,19 @@ pub fn diagnostics(session: &Session) -> Vec<Problem> {
         PathBuf::from(format!("{from}{}", &file[to.len()..]))
     };
     let mut problems: Vec<Problem> = session.draft_errors.iter().map(|d| problem(d, &relative, dir)).collect();
+    // Each in plain words, where a rule knows it (the studio plan's D2), from its place in the
+    // file as the compiler counts it: in characters.
+    let song = if problems.is_empty() { Default::default() } else { m2_editor::explain::Song::of(session) };
+    for p in &mut problems {
+        let text = p.file.as_deref().zip(p.line).and_then(|(file, line)| {
+            let text = std::fs::read_to_string(absolute(file)).ok()?;
+            text.lines().nth(line.checked_sub(1)? as usize).map(str::to_string)
+        });
+        let at = m2_editor::explain::At { file: p.file.as_deref(), line: p.line, col: p.col, text: text.as_deref(), module: p.module.as_deref() };
+        if let Some(plain) = m2_editor::explain::explain(p.code, &p.message, &song, &at) {
+            (p.plain, p.fix) = (Some(plain.words), plain.fix);
+        }
+    }
     for p in &mut problems {
         if let (Some(file), Some(line), Some(col)) = (&p.file, p.line, p.col)
             && let Ok(text) = std::fs::read_to_string(absolute(file))
@@ -205,6 +238,34 @@ pub fn diagnostics(session: &Session) -> Vec<Problem> {
         }
     }
     problems
+}
+
+/// The revision's problems as the window shows them (DIAG-4), each with its words in plain words
+/// and a fix (`plain`, `fix`) when a rule knows it (the studio plan's D2).
+pub fn plain_problems(session: &Session, problems: &[m2_song::Diagnostic]) -> Vec<Value> {
+    if problems.is_empty() {
+        return vec![];
+    }
+    let song = m2_editor::explain::Song::of(session);
+    problems
+        .iter()
+        .map(|d| {
+            let mut v = serde_json::to_value(d).expect("a diagnostic is JSON");
+            let src = d.src.as_deref();
+            let (file, line, col) = match src.and_then(located) {
+                Some((file, line, col)) => (Some(file), Some(line), Some(col)),
+                None => (src.map(str::to_string), None, None),
+            };
+            let at = m2_editor::explain::At { file: file.as_deref(), line, col, text: None, module: d.module.as_deref() };
+            if let Some(plain) = m2_editor::explain::explain(d.code, &d.message, &song, &at) {
+                v["plain"] = plain.words.into();
+                if let Some(fix) = plain.fix {
+                    v["fix"] = fix.into();
+                }
+            }
+            v
+        })
+        .collect()
 }
 
 /// A 1-based column counted in characters on 1-based `line` of `text`, counted in UTF-16 code units.
@@ -218,7 +279,7 @@ fn utf16_col(text: &str, line: u32, col: u32) -> u32 {
 
 fn problem(d: &Diagnostic, relative: &impl Fn(&str) -> String, dir: &Path) -> Problem {
     let message = relative(&d.message);
-    let mut p = Problem { code: d.code, severity: d.severity, module: d.module.clone(), ..Default::default() };
+    let mut p = Problem { code: d.code, severity: d.severity, module: d.module.clone(), inner: d.inner.as_deref().map(|i| relative(i)), ..Default::default() };
     // A parse error names its place in the message: `Error loading module '…': tracks/bass.ts:3:1: Expected …`.
     if let Some((at, rest)) = find_location(&message) {
         let (file, line, col) = at;
@@ -514,7 +575,9 @@ mod tests {
             "import { hz, track } from '@m2/core';\nimport { osc, vca } from 'std/dsp';\nexport default track('lead', () => vca(osc.sine(hz(300)), osc.sine(hz(3))));\n",
         );
         assert_eq!(graph[0].module.as_deref(), Some("lead"));
-        assert!(graph[0].file.as_deref().is_some_and(|f| f.starts_with("std/src/")), "{:?}", graph[0]);
+        // At the call in the project that made the node (the studio plan's Q46); the package line as `inner`.
+        assert_eq!((graph[0].file.as_deref(), graph[0].line), (Some("tracks/lead.ts"), Some(3)), "{:?}", graph[0]);
+        assert!(graph[0].inner.as_deref().is_some_and(|f| f.starts_with("std/src/")), "{:?}", graph[0]);
         assert!(graph[0].message.contains("expects control<gain>"), "{}", graph[0].message);
 
         // Columns count as an editor does: each emoji before the error is two.
@@ -537,5 +600,41 @@ mod tests {
         let none = problems(&p, &LEAD.replace("export default", "throw 1;\nexport default"));
         assert_eq!((none[0].file.as_deref(), none[0].line), (None, None));
         assert!(none[0].message.starts_with("the song threw"), "{}", none[0].message);
+    }
+
+    // The studio plan's D2: a problem a rule knows carries plain words and a fix beside its own
+    // message, at the call in the project, with the place inside std as `inner`; one no rule
+    // knows has none of them. The revision's problems get theirs too.
+    #[test]
+    fn diagnostics_carry_plain_words_and_the_technical_text() {
+        let p = lead();
+        let unit = problems(
+            &p,
+            "import { db, hz, track } from '@m2/core';\nimport { osc } from 'std/dsp';\nimport { lowpass } from 'std/filter';\nexport default track('lead', () => lowpass(osc.sine(hz(110)), db(-3)));\n",
+        );
+        assert_eq!((unit[0].file.as_deref(), unit[0].line, unit[0].col), (Some("tracks/lead.ts"), Some(4), Some(36)), "{:?}", unit[0]);
+        assert_eq!(unit[0].plain.as_deref(), Some("Cutoff wants a frequency (Hz), but gets a level (dB)."));
+        assert_eq!(unit[0].fix.as_deref(), Some("Write it in Hz, such as hz(800)."));
+        assert_eq!(unit[0].message, "input `cutoff` expects control<hz>, got control<db>");
+        assert!(unit[0].inner.as_deref().is_some_and(|i| i.starts_with("std/src/filter.ts:")), "{:?}", unit[0]);
+        let json = serde_json::to_value(&unit[0]).unwrap();
+        assert!(["plain", "fix", "inner", "message", "code"].iter().all(|k| json.get(k).is_some()), "{json}");
+
+        let none = problems(&p, &LEAD.replace("export default", "throw 1;\nexport default"));
+        assert_eq!((none[0].plain.as_deref(), none[0].fix.as_deref(), none[0].inner.as_deref()), (None, None, None));
+        let json = serde_json::to_value(&none[0]).unwrap();
+        assert!(json.get("plain").is_none() && json.get("fix").is_none() && json.get("inner").is_none(), "{json}");
+
+        // A revision's problem: a clip's file isn't in assets/.
+        let vox = Project::new(&[
+            ("song.ts", "import { song, track } from '@m2/core';\nconst v = track('vox', { name: 'Vox' }, ({ lane }) => lane.audio('takes'));\nexport default song(() => v.out);\n"),
+            ("data/vox/takes.json", r#"{"clips": [{"id": "a", "start": 0, "length": 4, "asset": "vox.wav"}]}"#),
+        ]);
+        let s = vox.session();
+        let shown = plain_problems(&s, s.problems());
+        let missing = shown.iter().find(|v| v["code"] == "asset.missing").unwrap_or_else(|| panic!("{shown:?}"));
+        assert_eq!(missing["plain"], "vox.wav isn't in the song's assets folder, so its clip plays nothing.");
+        assert_eq!(missing["fix"], "Put the file back, or delete the clip.");
+        assert!(missing["message"].as_str().is_some_and(|m| m.contains("`vox.wav` isn't in assets/")), "{missing}");
     }
 }

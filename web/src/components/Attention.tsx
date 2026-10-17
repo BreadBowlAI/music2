@@ -4,6 +4,7 @@ import { useState } from "react";
 import { attention, graphApi, type Diagnostic, type Fix, type GraphState, type Severity } from "../lib/graph";
 import { useStore } from "../lib/store";
 import { undoAction } from "./GraphCanvas";
+import { Words } from "../lib/plain";
 import { Details, MenuRow, Popover } from "./ui";
 
 export const LOOK: Record<Severity, { Icon: typeof CircleAlert; color: string; word: string }> = {
@@ -85,9 +86,15 @@ function Row({ problem, disabled, why, onFix }: { problem: Diagnostic; disabled:
     <li data-problem={problem.code} data-severity={problem.severity} data-src={problem.src ?? undefined} className="px-2 py-2 flex items-start gap-2">
       <Icon size={14} className={clsx("mt-0.5 shrink-0", color)} aria-label={word} />
       <div className="flex-1 min-w-0 space-y-1.5">
-        <p data-testid="problem-message" className="select-text break-words">
-          {problem.message}
+        {/* In plain words, with a fix, where a rule knows it (the studio plan's D2); its own words under Details. */}
+        <p data-testid="problem-message" data-plain={problem.plain ? "" : undefined} className="select-text break-words">
+          {problem.plain ? <Words text={problem.plain} /> : problem.message}
         </p>
+        {problem.fix && (
+          <p data-testid="problem-fix" className="text-sm text-fg-muted select-text break-words">
+            <Words text={problem.fix} />
+          </p>
+        )}
         {fixes.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5">
             {/* In one row: the plain fix, the other places, and Delete as just its icon (named in its tooltip). */}
@@ -142,6 +149,7 @@ function Row({ problem, disabled, why, onFix }: { problem: Diagnostic; disabled:
         {/* The problem's code and its file: literal, for agents and power users. */}
         <Details>
           <div className="mt-1 space-y-0.5 select-text">
+            {problem.plain && <div className="break-words">{problem.message}</div>}
             <div data-code className="font-mono" title="The problem's code">{problem.code}</div>
             {src && <div data-code className="font-mono break-all">{src}</div>}
           </div>

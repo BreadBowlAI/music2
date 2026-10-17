@@ -640,7 +640,8 @@ impl Open {
         let diagnostics = files::diagnostics(s);
         let read_only = read_only(s.access());
         // A `layout.json` that doesn't read is a problem of its own, with Reset layout (FMT-19).
-        let problems = [s.problems(), &m2_editor::layout::problems(s)[..]].concat();
+        // Each in plain words too, where a rule knows it (the studio plan's D2).
+        let problems = files::plain_problems(s, &[s.problems(), &m2_editor::layout::problems(s)[..]].concat());
         Shown {
             revision: rev.number,
             timeline: self.timeline.clone(),
