@@ -607,3 +607,20 @@ fn stopping_never_waits_for_a_compile() {
     r.written();
     assert_eq!(r.clips().len(), 1);
 }
+
+// A jump the audio thread hasn't taken yet: R says to press again, rather than record from where
+// the song was.
+#[test]
+fn r_right_after_a_jump_asks_again() {
+    let mut r = Rig::new();
+    r.graph.transport("play").unwrap();
+    r.fill(10);
+    r.graph.seek(8.0).unwrap();
+    let e = r.graph.record_start(r.token, "bass", "notes", Options::default()).unwrap_err();
+    assert_eq!(e.to_string(), "The song is moving to another place. Press Record again.");
+    assert!(!r.graph.recording());
+    // Once the speakers play the new place (two buffers on), R records from there.
+    r.fill(5);
+    let shown = r.start(false, None);
+    assert_eq!(shown["start"], json!(8.0), "taken: from bar 3");
+}

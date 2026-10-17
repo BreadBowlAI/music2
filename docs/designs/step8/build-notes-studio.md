@@ -334,6 +334,31 @@ with #25).
 **Contract:** FMT-20: `settings.json` `midi: {off: [names]}` (by the names `m2_os::midi` gives); taste.md §3.9:
 Settings' MIDI keyboards row.
 
+### B2 fix. R right after a jump
+
+**In short**
+
+| What | Now |
+|---|---|
+| R pressed while the song is still jumping to a new place (a few milliseconds) | "The song is moving to another place. Press Record again." Nothing records from the old place |
+
+**What changed:** `Graph::record_start` refuses while playing with a seek the audio thread hasn't taken
+(`status().pending`): the place it would record from is about to change.
+
+**Tests:** `r_right_after_a_jump_asks_again` (a driven player: play, seek with no callback between, R; then two
+buffers on, R records from the new bar).
+
+**Red first** (the refusal taken out):
+
+```
+called `Result::unwrap_err()` on an `Ok` value: Object {"count_in": Null, "from": Number(0.16004166666666667), … "phase": String("take"), "start": Number(0.0) …}
+```
+
+**Checks:** `cargo test -p m2-server` (328 and 1), its clippy.
+
+**What's left:** right after a jump, for two buffers, the speakers still play the old place, so a take started then
+starts at the bar before the new place.
+
 ## Lane C
 
 MIDI files and stems: written by lane C.

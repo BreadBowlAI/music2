@@ -382,7 +382,11 @@ impl Graph {
             held: BTreeMap::new(),
             began: Instant::now(),
         };
-        if st.playing && st.pending.is_none() {
+        if st.playing && st.pending.is_some() {
+            // A jump the audio thread hasn't taken yet: where it is heard is about to change.
+            bail!("The song is moving to another place. Press Record again.");
+        }
+        if st.playing {
             // From now, with no count.
             let (clock, pos) = player.heard_frame().context("the sound output hasn't started yet")?;
             take.from = take.tempo.beat_at(pos as f64 / rate);
