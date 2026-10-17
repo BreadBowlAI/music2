@@ -1,8 +1,8 @@
 # 8a's offline half: build notes
 
-What each slice of 8a's offline half did, what it measured, and where the logs are. The plan is
-`~/m2-runs/s8a/plan.md` (its Attack and Decisions win). The design is `design-8a.md`. Linux timings here are
-information only: only the owner's Mac judges timings (PLAT-1).
+What each slice of 8a's offline half did, what it measured, and where the logs are. The plan is `8a-plan.md`
+beside this file (written as `~/m2-runs/s8a/plan.md`; its Attack and Decisions win). The design is `design-8a.md`.
+Linux timings here are information only: only the owner's Mac judges timings (PLAT-1).
 
 ## In short
 
@@ -11,7 +11,8 @@ information only: only the owner's Mac judges timings (PLAT-1).
 | 0: the spike (thrown away) | done | **Go.** p50 on 4 threads is 2.75 to 2.99 times faster than step 7's loop by the mean, 3.3 to 4.2 times by the p99. The rule needs 2.5 and 2.0. Same bits on every thread count. |
 | 1: the pool (`m2-pool`) | done | **Built and green**, nothing uses it yet. 17 unit tests, a grep test and 5 models (34,000 cases), about 4 s in all. Four models and 12 unit tests shown red by mutants of the pool. M5 (orderings too weak) stays green on x86, as planned: the Mac can catch it. Renders unchanged. |
 | 2: the executor, offline | done | **Built and green.** Every offline render runs on many threads with the same bits; live playback through the same executor on one. On this server p50 renders 2.86 times faster on 4 threads by the mean, 3.41 by the p99; the executor costs nothing seen on one thread. |
-| The last check | passed | `ci/check.sh --gates` at `33885a6`, after main (`a660c2b`) was merged: every row; polish's `pl-mix` passed on its retry. |
+| The review | done | **4 findings, all fixed**, each with a test shown red before its fix. The last check found a fifth: gate G10's timing passed only on its retry. Fixed too. No render changed. |
+| The final check | passed | `ci/check.sh --gates` at `bc41693`: **every row, nothing passed only on a retry** (1,241 Rust tests, 49/49 browser suites, 10 of 10 renders, the 6 gate runs). |
 | The Mac sweep | owed | four lines for the owner, once `8a` is on `main` (below). |
 
 ## Slice 0: the spike
@@ -342,7 +343,7 @@ deliberate bug, made in a scratch copy of the crate.
 | Mutant | The bug | Caught by | How |
 |---|---|---|---|
 | M1 | a consumer is queued at its first input's end | `each_task_once_after_its_inputs` (and the unit test) | case 0: 3 tasks ran before their inputs |
-| M2 | `run` returns without waiting for workers to leave | `nothing_touches_a_job_after_run_returns` | the binary crashed (SIGSEGV), twice: a worker read the run from a stack `run` had already left. That is the use-after-free the rule prevents |
+| M2 | `run` returns without waiting for workers to leave | `nothing_touches_a_job_after_run_returns` | the binary crashed (SIGSEGV), twice: a worker read the run from a stack `run` had already left. That is the use-after-free the rule prevents. The review found the model's own check could never fire; since `1be5e31` it fails on its own message (The review) |
 | M3 | a worker parks without looking again after setting its flag | `no_lost_wake` | hung, 4 runs out of 4: at cases 273, 699, 1,142 and 1,159 of 4,000 |
 | M4 | no skip for a failed task's consumers | `skips_are_exactly_the_descendants` (and the unit test) | case 1: task 5 Failed, not Skipped |
 | M5 | the queue slots and input counts made `Relaxed` | — | **passed**, as the plan expected: x86 keeps stores in order. The Mac's check runs the same row on arm64 |
@@ -603,7 +604,7 @@ same bits, 28.6 s.
 | The gate's first run (p16, a short sweep) | `~/m2-runs/logs/8a-gate-smoke-1017-133112-3616369.log` |
 | The gate, held on CCD1 and not held | `~/m2-runs/logs/8a-offline-ccd1-1017-141710-3902468.log`, `8a-offline-free-1017-142032-3918668.log` (copies in `~/m2-runs/s8a/s2-gate/`) |
 | p50 on 8 threads | `~/m2-runs/logs/8a-p50-bits-1017-142400-3935706.log` |
-| The last check | `~/m2-runs/logs/check-8a-1017-134212-3696229.log`; its logs `~/m2-runs/8a-scratch/check/` (`check.tgz` beside it) |
+| The last check | `~/m2-runs/logs/check-8a-1017-134212-3696229.log`; its logs `~/m2-runs/check-8a-33885a6.tgz` |
 
 ### For the lead
 
@@ -619,21 +620,80 @@ same bits, 28.6 s.
   on first-song's hats, which are short hits: in polish's own checks most samples read the floor too
   (`~/m2-runs/check-polish-2`, `-3`). A suite to make sturdier, not an 8a change.
 
-## The last check
+## The review
 
-`ci/check.sh --gates` from `~/m2-runs/wt/8a` at `33885a6` (`main` at `a660c2b` merged in first), with
-`M2_CHECK_OUT=/home/jerry/m2-runs/8a-scratch/check`, 35 minutes, load 1 to 9: **PASS**, with one browser suite
-passing only on its retry.
+### In short
+
+- **A review of 8a's offline half confirmed 4 findings.** All 4 are fixed, each in its own commit with a test that
+  failed before the fix and passes after.
+- **The last check found one more:** gate G10's timing passed only on its retry. That is fixed too.
+- **No render changed.** 10 of 10 renders match `e2e/renders.sha256`. Live playback is still on one thread.
+- **Then the final check passed** at `bc41693`: every row, nothing passed only on a retry (below).
+
+### The findings
+
+| Finding | Severity | What was wrong | The fix | Commit |
+|---|---|---|---|---|
+| det-2 | low | Outside a block, some kernel and plugin calls ran without the one floating-point mode (RENDER-2a). A poisoned plugin's reset at an activation left an audio device's thread in the one mode for good. A kernel's reset, the idle check, a seek and a build computed in the calling thread's own mode | `Canon::enter()` at the top of `Renderer::take_over`, `can_idle`, `seek_on` and `build`, as `panic` had. RENDER-2a and `fpenv.rs` say so | `7a1d527` |
+| pool-model-seal-moved | medium | The model `nothing_touches_a_job_after_run_returns` sealed a moved copy of the run state. A late worker read the old address, so the model's own check could never fail: a pool that returned early only crashed | The caller owns each case's tasks, so they never move. `Case::run` seals them the moment the run returns. Every case checks for breaches | `1be5e31` |
+| bounce-place-sees-own-lock | low | `m2 bounce --place` took the project lock, then chose its threads. `lock::taken` saw its own lock as the app's, so it rendered beside playback: one thread here | The threads are chosen before the lock. The bounce line now says how many threads it used, as `m2 render`'s does | `aba8744` |
+| alone-over-64-falls-to-one | low | With more than 64 cores behind one cache, the default asked for more threads than a pool has. `Pool::new` refused, and every default render quietly ran on one thread | `Threads::count` stops at `Pool::MAX_THREADS` (64), the one limit `--threads` and `M2_THREADS` use | `de3da0f` |
+| G10 in the check | — | `the_live_engine_passes_every_gate` passed only on its retry: G10 compares one wall-clock timing of a range render from bar 64 with one from bar 1, within 10%. Load from other work fails it on its own | Each render is timed on a CPU (the wall clock less the time the process waited for one, where Linux says), the best of three of each, in turns | `bc41693` |
+
+### Red before, green after
+
+| Finding | Test | Before the fix | After |
+|---|---|---|---|
+| det-2 | `between_blocks_kernels_and_plugins_compute_in_the_one_mode` (`core/runtime/src/tests/live/keep.rs`), with a new hand-written kernel `t:tiny` that keeps a subnormal | each of the four guards taken out alone fails at its own line: the build, the activation, the idle check, the seek. All four out: fails at the build | passes |
+| pool-model-seal-moved | `nothing_touches_a_job_after_run_returns`, against slice 1's mutant M2 (`run` returns without waiting for workers) | SIGSEGV, 3 runs of 3: never the model's own message | "case 1: the pool touched a run after it returned", 5 runs of 5. M1, M3 and M4 still caught; the pool unmutated green |
+| bounce-place-sees-own-lock | `a_bounce_that_places_its_clip_isnt_beside_itself` (`apps/m2/tests/threads.rs`) | placed: 1 thread, not placed: 8 | the same count |
+| alone-over-64-falls-to-one | `m2_threads_is_read_and_nonsense_refused` (`crates/editor/src/render.rs`), now with 72 cores behind one cache | 72 and 80 threads, which `Pool::new` refuses | 64 and 64 |
+| G10 | `m2-gates --rig engine --quick range`, the debug build, before and after in turns | 2 of 8 runs failed on the server at load 6 to 22 (bar 64: 1.70 s against 0.95). Pinned to CPU 31 beside bursts of a busy loop there (0.3 to 1.5 s on, then off): 5 of 10 failed, then 2 of 10 | quiet: 10 of 10. Beside the same bursts: 10 of 10, bar 64 within 2% of bar 1 (0.81 to 0.87 s each). The best of three by the wall clock alone wasn't enough: 4 of 10 failed beside the bursts |
+
+Each commit's own check (`~/m2-runs/s8a/s2-check.sh`: the debug `m2`, 10 of 10 renders, the crates' tests, clippy
+on Linux and for the Mac) passed before it was made.
+
+### Logs
+
+| What | Where |
+|---|---|
+| det-2: the test, its red runs (`det2.py`), the commit's check | `~/m2-runs/logs/8a-r1-det2-*.log`, `8a-r1-det2-red-*.log`, `8a-r1-det2-check-*.log` |
+| The model: M2 before and after, the other mutants (`run.sh`, a copy of slice 1's) | `~/m2-runs/s8a/review-red/` (`M2-before1..3.log`, `M2-after1..5.log`, `M1-after.log`, `M3-after.log`, `M4-after.log`, `results.txt`); `~/m2-runs/logs/8a-r2-*.log` |
+| The bounce: red and green (`bounce.py`), the commit's check | `~/m2-runs/logs/8a-r3-*.log` |
+| The thread count: red and green (`count.py`), the commit's check | `~/m2-runs/logs/8a-r4-*.log` |
+| G10: before and after, quiet and beside bursts; the commit's check | `~/m2-runs/logs/8a-g10-*.log`, `8a-r5-g10-check-*.log` |
+| The first final check (G10 passed only on its retry) | `~/m2-runs/logs/check-8a-fg-1017-151507-229683.log`; its logs `~/m2-runs/check-8a-fg-run1.tgz` |
+
+## The final check
+
+`ci/check.sh --gates` from `~/m2-runs/wt/8a` at `bc41693`, with `M2_CHECK_OUT=~/m2-runs/check-8a-fg`, 33 minutes,
+load 4.0 at the start and 1.9 at the end: **PASS, every row, nothing passed only on a retry.** `main` (`70f9b61`) was
+already merged in (`f0dc7ab`): it hasn't moved since.
 
 | Row | Result |
 |---|---|
-| toolchain, web build, build, app | PASS (the UI connected: first-song in 1 s, with-plugins in 1 s) |
-| rust tests | PASS: 1,239 passed, 0 failed |
-| clippy, pool models (23), std kernels, std.wasm, mac lint | PASS |
-| browser suites | PASS: 48 of 49 at once; `pl-mix` passed on its retry (see "For the lead") |
-| renders | PASS: 10 of 10 match `e2e/renders.sha256`, the debug `m2` now rendering on one cache's cores (8 here) |
-| old engine (S), gates | PASS: the 6 runs `ci/gates.txt` names (G7f's numbers above) |
+| toolchain, web build, build | PASS |
+| app | PASS: the UI connected, first-song in 1 s, with-plugins in 1 s |
+| rust tests | PASS: 1,241 passed, 0 failed |
+| clippy, std kernels, std.wasm, mac lint | PASS (std.wasm rebuilt to the same bytes in another folder) |
+| pool models | PASS: 23 passed, 0 failed |
+| browser suites | PASS: 49/49 |
+| renders | PASS: 10 of 10 match `e2e/renders.sha256` |
+| old engine (S), gates | PASS: the 6 runs `ci/gates.txt` names |
 | repo unchanged | PASS |
+
+G7f (not judged here, PLAT-1): the app against S, by the mean, +47 µs a block (bound 80) and +78 µs a callback
+(bound 320); the slowest activation block 3,493 µs (bound 5,333).
+
+The first final check, at `de3da0f` (15:15, load 22 at the start), passed every row, but
+`the_live_engine_passes_every_gate` passed only on its retry: G10, "bar 64 takes no longer than the same rendered
+length from bar 1: 1.19 s against 0.85 s". That is the fifth fix above (`bc41693`); then the check ran again.
+
+| What | Where |
+|---|---|
+| The final check | `~/m2-runs/logs/check-8a-fg-1017-161554-749344.log`; its logs `~/m2-runs/check-8a-fg/` (`check-8a-fg.tgz` beside it) |
+| The first one | `~/m2-runs/logs/check-8a-fg-1017-151507-229683.log`; its logs `~/m2-runs/check-8a-fg-run1.tgz` |
+| The check before the review, at `33885a6` (every row; polish's `pl-mix` passed on its retry) | `~/m2-runs/logs/check-8a-1017-134212-3696229.log`; its logs `~/m2-runs/check-8a-33885a6.tgz` |
 
 ## The Mac sweep (owed)
 
