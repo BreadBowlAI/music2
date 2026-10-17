@@ -1609,3 +1609,13 @@ held became 1/64 beat long.
   whose player is gone, or that has no heard frame, ends there.
 - Test: `a_new_player_ends_the_take_where_it_was_last_heard` (a note held from beat 1, the output changed at 2.5).
 - Red: `held to where it was last heard (2.5): 1.0000416666666667 + 0.015625`.
+
+#### R6. A note the grid moved later was cut at the clip's end
+
+With "Snap notes to the grid" on, the clip's end came from the notes' starts only. A held note that the grid moved
+later could end past the clip, and it was cut there.
+
+- `record.rs`' `Take::end`: the clip reaches the bar line after the latest note's end, as snapped.
+- Test: `a_note_the_grid_moves_later_still_ends_inside_the_clip` (held from 6.6 to 7.9, grid 1 beat: 7.0 for 1.3 beats,
+  the clip 3 bars).
+- Red: `to the bar line after its end: … left: Some(8.0) right: Some(12.0)`.

@@ -772,3 +772,22 @@ fn a_new_player_ends_the_take_where_it_was_last_heard() {
     assert!(on.has(start), "{on:?}: {start}");
     assert!((start + length - last).abs() < 0.05, "held to where it was last heard ({last}): {start} + {length}");
 }
+
+// The review's R6: snapped to the grid, a held note moved later still ends inside the clip: the
+// clip reaches the bar line after the note's end.
+#[test]
+fn a_note_the_grid_moves_later_still_ends_inside_the_clip() {
+    let mut r = Rig::new();
+    r.anchored(0, 0.0);
+    r.start(false, Some(1.0));
+    r.to(6.6);
+    r.key(&[0x90, 60, 100]);
+    r.to(7.9);
+    r.graph.transport("stop").unwrap();
+    r.written();
+    let c = &r.clips()[0];
+    let (_, start, length, _) = note(c, 0);
+    assert_eq!(start, 7.0, "on the grid: {c}");
+    assert!(length > 1.2, "its length kept: {c}");
+    assert_eq!(c["length"].as_f64(), Some(12.0), "to the bar line after its end: {c}");
+}

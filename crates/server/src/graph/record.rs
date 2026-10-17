@@ -223,7 +223,8 @@ impl Take {
     }
 
     /// The take, ended at `beat`: held notes end there, and the clip spans whole bars, at least
-    /// one.
+    /// one, to the bar line after its last note's end (a note the grid moved later too: the
+    /// review's R6).
     fn end(mut self, beat: f64) -> Ended {
         let beat = self.until.map_or(beat, |u| beat.min(u)).max(self.from);
         for key in self.held.keys().copied().collect::<Vec<_>>() {
@@ -236,7 +237,7 @@ impl Take {
             if let Some(grid) = self.quantize {
                 quantized(&mut placed, self.start, grid);
             }
-            let last = placed.iter().map(|(s, _)| self.start + s + SHORTEST).fold(beat, f64::max);
+            let last = placed.iter().map(|(s, l)| self.start + s + l.max(SHORTEST)).fold(beat, f64::max);
             let end = bar_after(&self.arrangement, last).max(self.start + self.arrangement.meter_at(self.start).bar());
             let notes: Vec<Value> = notes
                 .iter()
