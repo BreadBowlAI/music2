@@ -10,6 +10,12 @@ The `next` track (plan: `/home/jerry/m2-runs/s8n/plan.md`). Each part writes und
 
 Hear it while you drag (8b.7): lane leases, then the tempo lease. Branch `next-a`.
 
+**For 8a's merge:** lane A changed nothing in `core/runtime`, `core/play` or `core/os` (A4 isn't built, X3). In
+`crates/server/src/graph/actor.rs` its blocks are `Plays.tempo`, `way()`'s tempo argument and its two lines,
+`build()`'s `data` argument, `settle`'s first lines (the tempo drag read), the `Timing` map line, the two calls after
+the engine view's publish, `settle_as`'s phase-2 return, and `tempo_preview`; none is in `render` or `export`, the
+two functions 8a changes there. `core/song/src/data.rs` gains `with_arrangement` only.
+
 ### A1. Lane leases on the server
 
 **In short**
@@ -153,7 +159,7 @@ mid-drag (its lease gone in a few ms); stopped (no begin, one `clips` write); a 
 (begin, updates, commit, "Undo moving a Cutoff point"); a note dragged in Notes while playing (a commit with
 `op: "notes"`, no `/api/graph/lane`, "Undo Bass notes"); the taste lint of the timeline mid-drag; a PC page's Esc.
 The suites it moves, all green: `taste` 39, `s8-clips` 94, `s8-automation` 45, `pl-notes` 102, `notes` 52,
-`gestures` 30, `g11-play` 24. The web build type-checks. Server copy `bin/a-d5083a1` (A1's), page this commit's.
+`gestures` 30, `g11-play` 24. The web build type-checks. The server built at A1's commit; the page this commit's.
 
 **Red first.** `s8-leases` on the page from before (`DIST=scratch/a-dist-before`, the same server): 20 FAIL, 19
 pass, for example:
@@ -237,8 +243,7 @@ while the session is busy: one activation, carrying the 50th value), `the_tempo_
 `a_song_with_audio_hears_the_tempo_on_release`. `routes_leases_tests.rs`: `a_tempo_lease_through_the_routes`, and
 the read-only test covers the tempo routes. `core/song`: `with_arrangement_keeps_every_lane`.
 m2-server 264, m2-editor 283, m2-song pass; clippy `-D warnings` clean on the three; the renders 10 of 10. `s8-leases` 55 of 55; moved and
-green: `s8-songbar` 82, `fx-fixes` 75, `taste` 39, `pc-keys` 37. The web build type-checks. Server copy
-`bin/a-a3wip`.
+green: `s8-songbar` 82, `fx-fixes` 75, `taste` 39, `pc-keys` 37. The web build type-checks. The server built from this commit's tree.
 
 **Measured** (design-8b §9.5, information only, Linux under other tracks' load): a tempo preview's prepare, p50 of
 21, on the test's one-track song: 0.08 ms.
