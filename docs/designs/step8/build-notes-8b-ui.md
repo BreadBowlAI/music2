@@ -287,5 +287,6 @@ which dropped the pointer and cancelled the drop. It is now hidden there but kep
 - A dragged clip is heard only when dropped (Q10).
 - The app shots `ui-u4-grid.png` and `ui-u5-select.png` (Xvfb `:98`) are for after the merge into
   `8b-ui`.
-- When lane B ends: delete `~/m2-runs/wt/ui-b/target` and `~/m2-runs/s8ui/bin/ui-b-5a34189`.
+- Lane B's cargo target (`~/m2-runs/wt/ui-b/target`) is deleted. Its server stays in
+  `~/m2-runs/s8ui/bin/ui-b-5a34189` for the merge's runs; delete it with `~/m2-runs/s8ui/bin` at the End.
 
