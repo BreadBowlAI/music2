@@ -74,11 +74,13 @@ pub(super) struct Rig {
     seq: u64,
     /// The plan last sent, and what it was made from: what the next is prepared against.
     pub(super) last: Option<(Flat, DataSet, Arc<PlanInfo>)>,
+    /// Threads to render on (8a); none: this one alone.
+    pub(super) threads: Option<Spread>,
 }
 
 impl Rig {
     pub(super) fn new(r: Renderer) -> Rig {
-        Rig { e: Engine::with(Box::new(r)), inbox: VecDeque::new(), retired: vec![], refuse: false, seq: 0, last: None }
+        Rig { e: Engine::with(Box::new(r)), inbox: VecDeque::new(), retired: vec![], refuse: false, seq: 0, last: None, threads: None }
     }
 
     /// An engine playing `r`, made from `flat` and `data`, which plans can be prepared against.
@@ -118,7 +120,7 @@ impl Rig {
 
     pub(super) fn run(&mut self, frames: usize) -> Vec<[f32; 2]> {
         let mut out = vec![[0.0; 2]; frames];
-        let Rig { e, inbox, retired, refuse, .. } = self;
+        let Rig { e, inbox, retired, refuse, threads, .. } = self;
         let mut retire = |r: Retired| {
             if *refuse {
                 return Err(r);
@@ -126,7 +128,10 @@ impl Rig {
             retired.push(r);
             Ok(())
         };
-        e.process(&mut out, &mut || inbox.pop_front(), &mut retire, CallbackStamp::default());
+        match threads {
+            Some(t) => e.process_on(&mut out, &mut || inbox.pop_front(), &mut retire, CallbackStamp::default(), &mut t.runner),
+            None => e.process(&mut out, &mut || inbox.pop_front(), &mut retire, CallbackStamp::default()),
+        }
         out
     }
 

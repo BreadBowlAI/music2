@@ -397,15 +397,24 @@ fn first_block(ir: &Ir, runner: &mut Runner) -> (Result<(), String>, Renderer, F
 }
 
 // RENDER-2 (8a): when two nodes fail in one block, the error names the one first in plan order,
-// whichever ran first. Here `b`'s track is heavier, so it is taken first.
+// whichever ran first and on whichever thread. Here `b`'s track is heavier, so it is taken first.
 #[test]
-fn strict_names_the_first_failing_node_on_one_thread() {
-    let (said, r, f) = first_block(&two((100_000.0, 1), (100_000.0, 6)), &mut Runner::one());
-    assert!(at(&f, &r, "a/hz") < at(&f, &r, "b/hz"), "a is first in plan order");
-    let roots: Vec<&str> = r.plan.schedule.tasks.roots().iter().map(|&q| r.plan.schedule.parts.label(q).0).collect();
-    assert_eq!(roots[0], "b", "b is taken first");
-    let e = said.unwrap_err();
-    assert!(e.contains("a/hz produced inf"), "{e}");
+fn strict_names_the_first_failing_node_on_any_thread_count() {
+    let ir = two((100_000.0, 1), (100_000.0, 6));
+    for threads in [1, 4, 7] {
+        let mut t = (threads > 1).then(|| spread(threads));
+        let mut one = Runner::one();
+        let runner = t.as_mut().map_or(&mut one, |t| &mut t.runner);
+        let (said, r, f) = first_block(&ir, runner);
+        assert!(at(&f, &r, "a/hz") < at(&f, &r, "b/hz"), "a is first in plan order");
+        let roots: Vec<&str> = r.plan.schedule.tasks.roots().iter().map(|&q| r.plan.schedule.parts.label(q).0).collect();
+        assert_eq!(roots[0], "b", "b is taken first");
+        let e = said.unwrap_err();
+        assert!(e.contains("a/hz produced inf"), "{threads} threads: {e}");
+        if let Some(t) = &t {
+            assert!(t.runner.spread_report().tasks_on_workers > 0, "{threads} threads: tasks ran on workers");
+        }
+    }
 }
 
 // RENDER-2 (8a): a failing node stops only what reads it: the other track still runs that block,
@@ -476,16 +485,109 @@ fn shuffle_and_cut(r: &mut Renderer, seed: u64) -> usize {
 }
 
 // RENDER-2 (8a): any order that keeps reads after what they read, cut into any runs, renders the
-// same bits as the plan's own schedule: 200 random songs with a feedback, 64 blocks each.
+// same bits as the plan's own schedule on one thread, on 1, 4 and 7 threads: 200 random songs with
+// a feedback, 64 blocks each. With more than one thread, tasks ran on workers in every render, and
+// over the whole test some read a producer that ran on another thread.
 #[test]
 fn random_convex_partitions_give_the_same_bits() {
     let pk = std_packages();
+    let seconds = 64.0 * BLOCK as f64 / SR as f64;
+    let mut pools = spreads([4, 7]);
     for seed in 0..200u64 {
         let f = check(&random_song(seed), &pk).unwrap_or_else(|e| panic!("{e:?}"));
-        let reference = Renderer::new(&f, &DataSet::empty(), &pk, SR).unwrap().render(64.0 * BLOCK as f64 / SR as f64).unwrap();
+        let reference = Renderer::new(&f, &DataSet::empty(), &pk, SR).unwrap().render(seconds).unwrap();
         let mut r = Renderer::new(&f, &DataSet::empty(), &pk, SR).unwrap();
-        shuffle_and_cut(&mut r, seed);
-        let out = r.render(64.0 * BLOCK as f64 / SR as f64).unwrap();
-        assert!(out == reference, "seed {seed}: the same bits");
+        let parts = shuffle_and_cut(&mut r, seed);
+        assert!(r.render(seconds).unwrap() == reference, "seed {seed}: the same bits on one thread");
+        for t in &mut pools {
+            let mut r = Renderer::new(&f, &DataSet::empty(), &pk, SR).unwrap();
+            shuffle_and_cut(&mut r, seed);
+            let before = t.runner.spread_report();
+            assert!(r.render_on(seconds, &mut t.runner).unwrap() == reference, "seed {seed}: the same bits on {} threads", t.runner.threads());
+            let on = t.runner.spread_report().tasks_on_workers - before.tasks_on_workers;
+            assert!(on > 0, "seed {seed}, {parts} partitions: tasks ran on workers");
+        }
     }
+    for t in &pools {
+        assert!(t.runner.spread_report().edges_across > 0, "{} threads: some read crossed threads", t.runner.threads());
+    }
+}
+
+/// A kick; a pad whose voices capture the kick and duck under it (`follow`); the song mixing both,
+/// plus a feedback from the pad's output (read after the graph, in another partition).
+fn crossings() -> (Ir, DataSet) {
+    let (k, _) = sine_track(55.0, 0);
+    let pad = json!([
+        {"id": "k", "op": "import", "module": "kick", "export": "out"},
+        {"id": "n", "op": "lane", "lane": "notes"},
+        {"id": "v", "op": "poly", "events": "n", "voices": 4, "body": {"out": "x", "nodes": [
+            {"id": "p", "op": "lane", "lane": "pitch"},
+            {"id": "hz", "op": "kernel", "kernel": "std:mtof", "inputs": {"pitch": "p"}},
+            {"id": "o", "op": "kernel", "kernel": "std:saw", "inputs": {"freq": "hz"}},
+            {"id": "x", "op": "kernel", "kernel": "std:add", "inputs": {"a": "o", "b": "k"}}]}},
+        {"id": "f", "op": "kernel", "kernel": "std:follow", "inputs": {"in": "k"}},
+        {"id": "d", "op": "kernel", "kernel": "std:duck", "inputs": {"in": "v", "side": "f"}}]);
+    let mut ir = tracks(
+        &[("kick", k, "out"), ("pad", pad, "d")],
+        json!([
+            {"id": "fb", "op": "feedback", "kind": "audio<1>", "input": "pad"},
+            {"id": "h", "op": "const", "value": 0.3},
+            {"id": "e", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "fb", "by": "h"}},
+            {"id": "a", "op": "kernel", "kernel": "std:add", "inputs": {"a": "kick", "b": "pad"}},
+            {"id": "m", "op": "kernel", "kernel": "std:add", "inputs": {"a": "a", "b": "e"}}]),
+        "m",
+    );
+    ir.modules[1].lanes = serde_json::from_value(json!([{"key": "notes", "kind": "events<note>"}])).unwrap();
+    let notes: Vec<Value> = (0..16).map(|k| json!({"pitch": 48 + (k * 5) % 24, "start": k as f64 * 0.25, "length": 0.5})).collect();
+    let notes = json!({"clips": [{"start": 0, "length": 8, "notes": notes}]});
+    let data = DataSet::with_lanes(super::live::at_bpm(120.0), [(m2_song::LaneAddr::new("pad", "notes").unwrap(), {
+        m2_song::LaneData::read(&notes.to_string(), &m2_song::LaneKind::Notes).unwrap()
+    })]);
+    (ir, data)
+}
+
+// RENDER-2 (8a): reads across tracks give the same bits on 4 and 7 threads as on one: a voice's
+// capture of another track, a sidechain (`follow` of the kick), and a feedback whose input runs in
+// another partition.
+#[test]
+fn cross_module_feedback_captures_and_sidechains_on_n_threads() {
+    let pk = std_packages();
+    let (ir, data) = crossings();
+    let f = check(&ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
+    let one = Renderer::new(&f, &data, &pk, SR).unwrap().render(4.0).unwrap();
+    assert!(peak(&one) > 0.1);
+    for threads in [4, 7] {
+        let mut t = spread(threads);
+        let out = Renderer::new(&f, &data, &pk, SR).unwrap().render_on(4.0, &mut t.runner).unwrap();
+        assert!(out == one, "{threads} threads: the same bits");
+        let s = t.runner.spread_report();
+        assert!(s.tasks_on_workers > 0 && s.edges_across > 0, "{threads} threads: {s:?}");
+    }
+}
+
+// 8a (Decision 22): a song that hosts a plugin renders every task on the calling thread, whatever
+// runner it is given: plugins on worker threads come with live playback on all cores.
+#[test]
+fn a_song_with_a_plugin_runs_no_task_on_a_worker() {
+    m2_plugins::test_main_thread();
+    m2_plugins::probe::install();
+    let mut pk = std_packages();
+    let ((k, _), (h, _)) = (sine_track(55.0, 1), sine_track(440.0, 1));
+    let mut ir = tracks(
+        &[("kick", k, "out"), ("hat", h, "out"), ("fx", json!([
+            {"id": "k", "op": "import", "module": "kick", "export": "out"},
+            {"id": "p", "op": "plugin", "plugin": "clap:m2.probe", "inputs": {"in": "k"}}]), "p")],
+        json!([
+            {"id": "a", "op": "kernel", "kernel": "std:add", "inputs": {"a": "hat", "b": "fx"}},
+            {"id": "m", "op": "kernel", "kernel": "std:add", "inputs": {"a": "kick", "b": "a"}}]),
+        "m",
+    );
+    assert!(pk.bind_plugins(&mut ir).is_empty());
+    let f = check(&ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
+    let mut t = spread(4);
+    let mut r = Renderer::new(&f, &DataSet::empty(), &pk, SR).unwrap();
+    assert!(r.hosts_plugins() && r.plan.schedule.tasks.width() > 1);
+    r.render_on(0.25, &mut t.runner).unwrap();
+    let workers: u64 = t.runner.counters()[1..].iter().map(|c| c.tasks).sum();
+    assert_eq!((t.runner.spread_report().tasks_on_workers, workers), (0, 0), "every task ran on the caller");
 }

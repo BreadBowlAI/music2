@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use common::*;
 use m2_play::Player;
-use m2_runtime::{BLOCK, Cmd, Continues, LaneSwap, PlanInfo, Renderer, notes_data};
+use m2_runtime::{BLOCK, Cmd, Continues, LaneSwap, PlanInfo, Pool, Renderer, Runner, notes_data};
 use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
 
@@ -380,3 +380,77 @@ fn a_flush_to_zero_left_by_a_plugin_changes_no_bit() {
     assert!(m2_plugins::probe::tagged("sets-fz").iter().any(|s| s.process.load(std::sync::atomic::Ordering::Relaxed) > 0), "the probe ran");
     assert_eq!(first_diff(&a, &b), None, "the same bits after a plugin that sets flush-to-zero");
 }
+
+/// One pool at a time in this test binary (8a): each spins its workers.
+static POOLS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// `song` offline for `frames`, on `runner`.
+fn offline_on(song: &Song, frames: usize, runner: &mut Runner) -> Vec<[f32; 2]> {
+    let mut out = vec![[0.0; 2]; frames];
+    song.renderer().process_on(&mut out, runner).unwrap();
+    out
+}
+
+/// What each thread count renders of `song` for `frames` against one thread: the first frame that
+/// differs, the tasks run on workers, and the reads that crossed threads. In spread mode: every
+/// worker woken at each block, the caller kept off the first tasks.
+fn on_threads(song: &Song, frames: usize, counts: &[usize], one: &[[f32; 2]]) -> Vec<(usize, Option<usize>, u64, u64)> {
+    let _one_at_a_time = POOLS.lock().unwrap_or_else(|e| e.into_inner());
+    counts
+        .iter()
+        .map(|&n| {
+            let (_pool, mut runner) = Pool::new(n, m2_runtime::threads::setup(false)).unwrap();
+            runner.spread(true);
+            let out = offline_on(song, frames, &mut runner);
+            let s = runner.spread_report();
+            (n, first_diff(&out, one), s.tasks_on_workers, s.edges_across)
+        })
+        .collect()
+}
+
+// RENDER-2 (8a): every pure fixture, its whole song and a second past it, offline, renders the same
+// bits on 2, 3, 4 and 7 threads as on one. Each render ran tasks on worker threads; over all of
+// them, some read a producer that ran on another thread.
+#[test]
+fn every_pure_fixture_renders_the_same_bits_on_1_and_n_threads() {
+    let t = std::time::Instant::now();
+    let mut across = 0;
+    for name in ["examples/first-song", "examples/resample", "examples/sounds", "templates/starter", "templates/empty"] {
+        let song = fixture(name);
+        let frames = (song.seconds() * song.rate as f64) as usize;
+        let one = offline(&song, frames);
+        for (n, diff, on_workers, crossed) in on_threads(&song, frames, &[2, 3, 4, 7], &one) {
+            assert_eq!(diff, None, "{name} on {n} threads: the same bits");
+            assert!(on_workers > 0, "{name} on {n} threads: tasks ran on workers");
+            across += crossed;
+        }
+    }
+    assert!(across > 0, "some reads crossed threads");
+    eprintln!("every pure fixture on 1, 2, 3, 4 and 7 threads: {:.1} s", t.elapsed().as_secs_f64());
+}
+
+// RENDER-2 (8a): 30 s of p16 render the same bits on 4 threads as on one, with tasks on workers
+// and reads across threads.
+#[test]
+fn p16_renders_the_same_bits_on_1_and_4_threads() {
+    let song = p16();
+    let frames = 30 * song.rate as usize;
+    let one = offline(&song, frames);
+    let [(_, diff, on_workers, crossed)] = on_threads(&song, frames, &[4], &one)[..] else { unreachable!() };
+    assert_eq!(diff, None, "the same bits on 4 threads");
+    assert!(on_workers > 0 && crossed > 0, "{on_workers} tasks on workers, {crossed} reads across threads");
+}
+
+// RENDER-2 (8a): the same for 30 s of p50 on 8 threads. Long in a debug build: run by hand
+// (`--ignored`), and recorded in the build notes.
+#[test]
+#[ignore]
+fn p50_renders_the_same_bits_on_1_and_8_threads() {
+    let song = reference(&m2_session::reference::Reference::P50);
+    let frames = 30 * song.rate as usize;
+    let one = offline(&song, frames);
+    let [(_, diff, on_workers, crossed)] = on_threads(&song, frames, &[8], &one)[..] else { unreachable!() };
+    assert_eq!(diff, None, "the same bits on 8 threads");
+    assert!(on_workers > 0 && crossed > 0, "{on_workers} tasks on workers, {crossed} reads across threads");
+}
+

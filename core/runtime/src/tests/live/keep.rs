@@ -1679,3 +1679,116 @@ fn panic_during_a_window_resets_ghosts_and_ends_on_time() {
     assert!(!rig.e.in_window(), "over at the next block line");
     assert_eq!(rig.retired.iter().filter(|r| matches!(r, Retired::Nodes(_))).count(), 1);
 }
+
+// ---------------------------------------------------------------- 8a: the window on many threads
+
+/// A song before and after an edit whose window has every kind of node step 7 and 8b made: the
+/// kick, muted, deleted (its consumer a ghost that reads it through an overlay held at the old
+/// mute); track `a`'s delay removed (a ghost) and a sidechain from `b` added, while `b`'s sidechain
+/// from `a` goes (ghosts): so `a` and `b` read each other only in the window; `b`'s poly kept; `c`'s
+/// control lane read only by a ghost (a ghost lane); and a new node in the song reading `a` (a
+/// fade-in, which the changed edges wait for).
+fn window_edit() -> (Ir, Ir) {
+    let c = |id: &str, v: f64| json!({"id": id, "op": "const", "value": v});
+    let hz = |id: &str, v: f64| json!({"id": id, "op": "const", "value": v, "unit": "hz"});
+    let k = |id: &str, kernel: &str, inputs: Value| json!({"id": id, "op": "kernel", "kernel": kernel, "inputs": inputs});
+    let import = |id: &str| json!({"id": id, "op": "import", "module": id, "export": "out"});
+    let module = |key: &str, lanes: Value, nodes: Value, out: &str| json!({"key": key, "track": true, "lanes": lanes, "nodes": nodes, "exports": {"out": out}});
+    let poly = json!({"id": "v", "op": "poly", "events": "n", "voices": 4, "body": {"out": "o", "nodes": [
+        {"id": "p", "op": "lane", "lane": "pitch"},
+        {"id": "hz", "op": "kernel", "kernel": "std:mtof", "inputs": {"pitch": "p"}},
+        {"id": "o", "op": "kernel", "kernel": "std:saw", "inputs": {"freq": "hz"}}]}});
+    let notes = json!([{"key": "n", "kind": "events<note>"}]);
+    let lvl = json!([{"key": "lvl", "kind": "control<gain>", "default": 0}]);
+    let kick = module("kick", json!([]), json!([hz("f", 55.0), k("o", "std:sine", json!({"freq": "f"}))]), "o");
+    let ir = |modules: Vec<Value>| -> Ir {
+        serde_json::from_value(json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"}, "modules": modules})).unwrap()
+    };
+    let before = ir(vec![
+        kick,
+        module("a", json!([]), json!([hz("f", 220.0), k("o", "std:sine", json!({"freq": "f"})),
+            {"id": "t", "op": "const", "value": 0.01, "unit": "seconds"}, k("d", "std:delay", json!({"in": "o", "time": "t"}))]), "d"),
+        module("b", notes.clone(), json!([{"id": "n", "op": "lane", "lane": "n"}, poly.clone(), import("a"),
+            k("af", "std:follow", json!({"in": "a"})), k("bd", "std:duck", json!({"in": "v", "side": "af"}))]), "bd"),
+        module("c", lvl.clone(), json!([hz("f", 330.0), k("o", "std:sine", json!({"freq": "f"})), {"id": "l", "op": "lane", "lane": "lvl"},
+            k("g", "std:scale", json!({"in": "o", "by": "l"}))]), "g"),
+        json!({"key": "song", "nodes": [import("kick"), import("a"), import("b"), import("c"), c("half", 0.5),
+            k("g", "std:scale", json!({"in": "kick", "by": "half"})), k("m", "std:add", json!({"a": "g", "b": "a"})),
+            k("n2", "std:add", json!({"a": "b", "b": "c"})), k("mix", "std:add", json!({"a": "m", "b": "n2"}))], "exports": {"out": "mix"}}),
+    ]);
+    let after = ir(vec![
+        module("a", json!([]), json!([hz("f", 220.0), k("o", "std:sine", json!({"freq": "f"})), import("b"),
+            k("bf", "std:follow", json!({"in": "b"})), k("du", "std:duck", json!({"in": "o", "side": "bf"}))]), "du"),
+        module("b", notes, json!([{"id": "n", "op": "lane", "lane": "n"}, poly]), "v"),
+        module("c", lvl, json!([hz("f", 330.0), k("o", "std:sine", json!({"freq": "f"}))]), "o"),
+        json!({"key": "song", "nodes": [import("a"), import("b"), import("c"), c("q", 0.25),
+            k("a2", "std:scale", json!({"in": "a", "by": "q"})), k("m", "std:add", json!({"a": "a2", "b": "a"})),
+            k("n2", "std:add", json!({"a": "b", "b": "c"})), k("mix", "std:add", json!({"a": "m", "b": "n2"}))], "exports": {"out": "mix"}}),
+    ]);
+    (before, after)
+}
+
+/// [`window_edit`] played live on `threads` threads (spread) or this one alone: 8 blocks, the edit,
+/// then 24 blocks, its window included. What it played, the rig, and the edit's plan's facts.
+fn window_on(threads: Option<usize>) -> (Vec<[f32; 2]>, Rig, Vec<(String, u16)>) {
+    let pk = std_packages();
+    let (before, after) = window_edit();
+    let notes: Vec<Value> = (0..12).map(|i| json!({"pitch": 48 + (i * 7) % 24, "start": i as f64 * 0.25, "length": 0.4})).collect();
+    let (data, dir) = timeline_for(
+        &before,
+        &[
+            ("data/b/n.json", json!({"clips": [{"start": 0, "length": 8, "notes": notes}]})),
+            ("data/c/lvl.json", json!({"unit": "gain", "clips": [{"start": 0, "length": 8, "points": [[0, 0.5], [8, 0.9]]}]})),
+        ],
+    );
+    let (old, new) = (flat(&before), flat(&after));
+    let mut r = build(&old, &data, &pk, &Owner::discard());
+    r.set_overlays(&old.overlays.iter().map(|s| if s.module == "kick" { 0.0 } else { 1.0 }).collect::<Vec<_>>());
+    let mut rig = Rig::of(&old, &data, r);
+    rig.threads = threads.map(spread);
+    rig.cmd(Cmd::Play);
+    let mut out = rig.run(8 * BLOCK);
+    let mut next = rig.prepare(&new, &data, &pk);
+    next.set_overlays(&vec![1.0; new.overlays.len()]);
+    let parts = &next.plan.schedule.parts;
+    let labels = (0..parts.len() as u32).map(|q| (parts.label(q).0.to_string(), parts.label(q).1)).collect();
+    let s = next.stats().clone();
+    assert!(s.ghosts >= 4 && next.plan.wait > 0 && s.kept.polys == 1, "ghosts, a waiting fade and a kept poly: {s:?}");
+    assert!(next.lanes.slots.len() > next.lanes.live, "a ghost lane");
+    assert!(!next.plan.window_held.is_empty() && !next.plan.windowed.is_empty(), "the window's own overlays, one held at the kick's mute");
+    rig.send(Msg::Activate { renderer: Box::new(next) });
+    out.extend(rig.run(24 * BLOCK));
+    assert!(!rig.e.in_window(), "the window is over");
+    std::fs::remove_dir_all(dir).ok();
+    (out, rig, labels)
+}
+
+// RENDER-2 (8a): an edit's window renders the same bits on 4 threads as on one, through the
+// activation and after it: ghosts, fades waiting for fade-ins, a kept poly, a ghost lane, a muted
+// track deleted while muted, and two tracks that read each other only in the window, split by
+// depth.
+#[test]
+fn an_edit_window_renders_the_same_bits_on_1_and_n_threads() {
+    let (one, _, labels) = window_on(None);
+    assert!(labels.iter().any(|(l, d)| l == "a" && *d > 0) && labels.iter().any(|(l, d)| l == "b" && *d > 0), "a and b split by depth: {labels:?}");
+    assert!(peak(&one) > 0.1);
+    let (four, rig, _) = window_on(Some(4));
+    let t = rig.threads.as_ref().unwrap().runner.spread_report();
+    assert!(t.tasks_on_workers > 0 && t.edges_across > 0, "{t:?}");
+    assert!(four == one, "the same bits on 4 threads");
+}
+
+// RENDER-25a (8a): once the window is over, its ghosts and its own overlays are constant zeros
+// that nothing reads, the one schedule plays on, and only the ghosts left the audio thread.
+#[test]
+fn ghosts_and_window_overlays_go_quiet_after_the_window() {
+    let (_, rig, _) = window_on(None);
+    let r = rig.e.current().unwrap();
+    for i in r.plan.ghosts.clone().chain(r.plan.windowed.clone()) {
+        assert!(matches!(r.plan.graph.exec[i], Exec::Const(0.0)), "node {i} is a constant zero");
+    }
+    let left: Vec<&Leftovers> = rig.retired.iter().filter_map(|r| if let Retired::Nodes(l) = r { Some(&**l) } else { None }).collect();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].exec.len(), r.plan.ghosts.len(), "only the ghosts left");
+    assert!(left[0].exec.iter().all(|e| !matches!(e, Exec::Overlay { .. })));
+}

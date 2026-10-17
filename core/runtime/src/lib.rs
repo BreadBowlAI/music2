@@ -50,6 +50,7 @@ mod plan;
 pub mod plugins;
 pub mod sched;
 mod taps;
+pub mod threads;
 pub mod trace;
 pub mod transport;
 mod view;
@@ -2250,9 +2251,14 @@ impl Renderer {
 
     /// Render the next `out.len()` frames, stereo.
     pub fn process(&mut self, out: &mut [[f32; 2]]) -> Result<()> {
+        self.process_on(out, &mut Runner::one())
+    }
+
+    /// [`Renderer::process`] on `runner`'s threads: the same bits.
+    pub fn process_on(&mut self, out: &mut [[f32; 2]], runner: &mut Runner) -> Result<()> {
         for frame in out.iter_mut() {
             if self.pending.is_empty() {
-                self.render_block(self.clock)?;
+                self.render_block_on(self.clock, runner)?;
                 self.pending.load(&self.frames, &self.runs, self.transport.pos());
             }
             *frame = self.pending.pop().0;
@@ -2263,8 +2269,13 @@ impl Renderer {
 
     /// Render `seconds` of audio from the current position.
     pub fn render(&mut self, seconds: f64) -> Result<Vec<[f32; 2]>> {
+        self.render_on(seconds, &mut Runner::one())
+    }
+
+    /// [`Renderer::render`] on `runner`'s threads: the same bits.
+    pub fn render_on(&mut self, seconds: f64, runner: &mut Runner) -> Result<Vec<[f32; 2]>> {
         let mut out = vec![[0.0; 2]; (seconds * self.sample_rate).round() as usize];
-        self.process(&mut out)?;
+        self.process_on(&mut out, runner)?;
         Ok(out)
     }
 
@@ -2284,6 +2295,11 @@ impl Renderer {
     /// Continue from sample `to`, exactly as if everything before it had been rendered.
     /// Implemented by resetting and replaying from 0 (RENDER-1): offline only.
     pub fn seek(&mut self, to: u64) -> Result<()> {
+        self.seek_on(to, &mut Runner::one())
+    }
+
+    /// [`Renderer::seek`], replaying on `runner`'s threads: the same bits.
+    pub fn seek_on(&mut self, to: u64, runner: &mut Runner) -> Result<()> {
         self.reset()?;
         self.transport = Transport::new(0, true);
         self.clock = 0;
@@ -2292,7 +2308,7 @@ impl Renderer {
         let mut scratch = vec![[0.0; 2]; 4096];
         while self.delivered < to {
             let n = (to - self.delivered).min(scratch.len() as u64) as usize;
-            self.process(&mut scratch[..n])?;
+            self.process_on(&mut scratch[..n], runner)?;
         }
         Ok(())
     }
