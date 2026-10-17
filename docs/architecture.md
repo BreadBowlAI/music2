@@ -314,7 +314,7 @@ The default MUST reproduce today's output bit for bit. A `poly` is kept or repla
 ### Engine shape (step 7)
 
 ```rust
-Renderer { plan: Plan { graph, order_after, cells, out, entry, info }, lanes: Lanes,
+Renderer { plan: Plan { graph, order_after, cells, out, entry, info, taps }, lanes: Lanes,
            tempo, arrangement, transport, clock, next_note }
 DataSet  { arrangement, lanes: Map<LaneAddr, Arc<LaneData>> }
 Engine   { current: Renderer, clock, … }
@@ -326,6 +326,8 @@ enum Msg { Activate(Box<Renderer>), SwapLane(generation, slot, LaneSwap), Transp
 ```
 
 The arena is the boxes in the playing plan's stateful nodes; they move at activation by a move list computed off the audio thread. No RuntimeId reaches the audio thread.
+
+A live plan's `taps` are its meters (8b.8): the song's output, and each track where its audio enters another module, read at its overlay (after mute and solo, before what it feeds). After each block the plan raises each channel's largest `|x|` into an atomic slot (`fetch_max` on the bits of a non-negative `f32`), which the server reads and resets (`TapSlots` in `core/runtime/src/taps.rs`, `PlanInfo.taps`). They read buffers only, so they change no bit, and offline renders have none (`taps_change_no_bit`, `a_tap_reports_its_blocks_peak`, `a_muted_tracks_tap_reads_silence` in `core/runtime/src/tests/taps.rs`).
 
 **RENDER-32.** Store layout: one wasmtime `Store` per kernel instance. Each kernel memory reserves 32 MiB with a 64 KiB guard, keeps no room to grow and never moves, so every access is checked against a fixed bound, and Cranelift's Spectre guard on those checks is off. That guard goes back on, or the layout is measured again, before a kernel from a package other than std runs ([Deferred](#deferred-with-triggers)). Never a `Store` shared across plans, which keeps every replaced instance's memory until it drops. G7f judges a layout against S, the commit before step 7 (one `Store` per renderer, no arena), measured fresh in every run: S plays in a process of its own, taking turns with the app over the same music, in 5 rounds; no side takes two turns in a row, and the first half second of each turn is not judged. By the mean, a p50 block MUST cost at most 80 µs more than S's (3% of a 2.67 ms block), and a 512-frame callback at most 320 µs more than S's (3% of a callback). Against S, p50's footprint MUST grow by at most 64 MB and its build by at most half, and two p50 renderers MUST build side by side within 25% of the process's address space. An activation's block MUST take under half the device period (5.3 ms at 512 frames). The layout and the bounds are the owner's (2026-10-15; design-7 §11.3).
 - *Why:* per-instance stores make instances movable between plans, and free a replaced instance's memory when it drops. wasmtime's default reserves 4 GiB a memory, so only about 5 copies of p50 fit in one process, and an export holds two. Kernels import nothing, so they have no clock to time a speculative read with, and the guard cost 6% to 10% of block time (Linux, the Mac). The mean is judged, not the p99: even paired, the p99's difference moves by hundreds of µs a block from one pair to the next, which 5 pairs can't settle, while the mean's stays within about 12 µs.

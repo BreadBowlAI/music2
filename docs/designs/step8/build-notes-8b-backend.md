@@ -15,6 +15,7 @@ The `8b-backend` track builds the back ends of 8b.4 (mute, solo, mute in song), 
 | B5 | Gate 8's ducking clauses on `env` and `follow`; live equals offline on them | built |
 | B9 | Audition in the engine: live notes on a lane (`Msg::Live`), `Player::live`, how many are held | built |
 | B10 | Audition on the server: the WebSocket and `POST /api/graph/audition`, sources, the watchdog, `live` in the status | built |
+| B11 | Meters in the engine: taps on the output and each track; the callback's time; whether the engine idles | built |
 | W1 | The keyed compressor and the gate's third clause | waits for std 0.2 on main |
 
 ---
@@ -330,3 +331,33 @@ is busy. Step 7's test; left as it is.
 
 **Contract:** MON-7 *Today* (the server half), RENDER-29 *Today*, `docs/gaps.md` #8. The Planes
 table already lists audition in the control row.
+
+---
+
+## B11. Meters in the engine
+
+**In short:** a live plan now measures itself. After each block it keeps the loudest sample of
+the song's output and of each track. Nothing it plays changes.
+
+| Piece | What it does | Where |
+|---|---|---|
+| `TapSlots` | One atomic slot per channel: the output's two, then each track's. `take()` reads them and sets them back to 0. | `core/runtime/src/taps.rs` (new) |
+| `Taps` | The audio thread's side. After each block, each channel's largest `\|x\|` is raised into its slot with `fetch_max` (a non-negative `f32` orders as its bits do). No lock, no allocation. | same |
+| What is tapped | The output, and every overlay node with a cell, by its track (S4: fixed when the plan is built, no `set_taps`). A track read in two places is one meter, the larger. | `Renderer::build` |
+| `PlanInfo.taps` | The slots, for the server. Only a live plan (`Renderer::prepare`) has them; `new`, `lending` and `starting_at` don't. | `core/runtime/src/plan.rs` |
+
+**Tests** (`core/runtime/src/tests/taps.rs`, new):
+
+| Test | Red first? |
+|---|---|
+| `taps_change_no_bit` (a live plan against an offline render, to the bit) | — |
+| `a_tap_reports_its_blocks_peak` (over 1, 3 and 7 blocks; taken, then 0) | red before the block wrote them |
+| `a_muted_tracks_tap_reads_silence` (muted in the song, and while listening) | red before the block wrote them |
+
+**Choices made here:**
+- **Where a track is tapped:** at its overlay, after its mute (Q2). So a muted track's meter
+  falls to the floor. Post-fader meters come with 8b.3's channel gains.
+- **A sample that isn't finite:** a NaN is passed over; an infinity reads as the largest `f32`.
+  So a meter never holds a value JSON can't carry.
+- **A mono node in a stereo track** gives its one channel to both.
+

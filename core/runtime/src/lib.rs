@@ -47,6 +47,7 @@ pub mod packages;
 mod plan;
 pub mod plugins;
 pub mod sched;
+mod taps;
 pub mod trace;
 pub mod transport;
 
@@ -68,6 +69,7 @@ pub use packages::{Package, PackageSet};
 pub use plan::{Basis, Continues, Count, Keep, LaneInfo, Leftovers, PlanInfo, PluginAt, Shape, Stats};
 pub use plugins::PluginInstance;
 pub use sched::{Caps, LaneSwap, LiveEv, NotesData};
+pub use taps::{Peaks, TapSlots};
 pub use trace::{TraceEntry, TraceKind};
 pub use transport::{Cmd, Jump, Loop, MAX_RUNS, Run, Runs, Transport};
 
@@ -75,6 +77,7 @@ use crate::cells::{Cells, Write};
 use crate::fade::xfade;
 use crate::keep::{Edge, Wiring, used};
 use crate::plan::{Entry, LanePlan, LaneSlot, Lanes, Plan};
+use crate::taps::Taps;
 use crate::trace::Trace;
 
 pub const BLOCK: usize = 128;
@@ -1846,6 +1849,12 @@ impl Renderer {
         });
         let id = GENERATION.fetch_add(1, Ordering::Relaxed);
         let overlays = flat.overlays.iter().enumerate().map(|(k, s)| (s.module.clone(), s.into.clone(), cells.overlay(k))).collect();
+        // A live plan's meters (8b.8): its output, and each celled overlay by its track.
+        let taps = (mode == m2_plugins::RenderMode::Realtime).then(|| {
+            let sites: Vec<(usize, &str, u8)> =
+                flat.overlays.iter().enumerate().map(|(k, s)| (base + k, s.module.as_str(), placed.nodes[k].channels)).collect();
+            Taps::new(&sites)
+        });
         let info = Arc::new(PlanInfo {
             id,
             rate: sample_rate,
@@ -1855,6 +1864,7 @@ impl Renderer {
             cell_slots: cells.slots().clone(),
             cell_map: cells.map().clone(),
             overlays,
+            taps: taps.as_ref().map(|t| t.slots().clone()),
         });
         let plan = Plan {
             id,
@@ -1873,6 +1883,7 @@ impl Renderer {
             stats,
             info,
             window_overlays,
+            taps,
         };
         Ok(Renderer {
             plan,
@@ -2025,6 +2036,10 @@ impl Renderer {
                 }
             }
             self.frames[f] = frame;
+        }
+        // The meters (8b.8): read after the graph ran, so they change no bit.
+        if let Some(t) = &self.plan.taps {
+            t.write(&self.plan.graph.bufs, &self.frames);
         }
         Ok(&self.frames)
     }
