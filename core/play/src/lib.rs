@@ -252,6 +252,11 @@ struct Shared {
     seeks_sent: AtomicU64,
     seeks_applied: AtomicU64,
     seek_target: AtomicU64,
+    /// Plays and stops the same way: until the audio thread takes the last, it says whether
+    /// playback plays.
+    plays_sent: AtomicU64,
+    plays_applied: AtomicU64,
+    play_target: AtomicBool,
     loads_sent: AtomicU64,
     loads_applied: AtomicU64,
     load_pos: AtomicU64,
@@ -319,6 +324,7 @@ struct Callback {
     published_heard: u64,
     refused: u64,
     seeks: u64,
+    plays: u64,
     loads: u64,
 }
 
@@ -339,6 +345,7 @@ impl Callback {
             published_heard: 0,
             refused: 0,
             seeks: 0,
+            plays: 0,
             loads: 0,
         }
     }
@@ -441,6 +448,7 @@ impl Callback {
                         EngineMsg::Activate { renderer } => self.retire(Gone::Engine(Retired::Renderer(renderer))),
                         EngineMsg::SwapLane { data, .. } => self.retire(Gone::Engine(Retired::Lane(data))),
                         EngineMsg::Transport(Cmd::Seek(_)) => self.seeks += 1,
+                        EngineMsg::Transport(Cmd::Play | Cmd::Stop) => self.plays += 1,
                         EngineMsg::Transport(_) | EngineMsg::Panic | EngineMsg::Hold(_) => {}
                     }
                 }
@@ -458,7 +466,7 @@ impl Callback {
     }
 
     fn render(&mut self, n: usize, stamp: CallbackStamp) {
-        let Callback { live, fade, held, rx, retired, a, b, seeks, .. } = self;
+        let Callback { live, fade, held, rx, retired, a, b, seeks, plays, .. } = self;
         let mut retire = |r: Retired| match retired.try_send(Gone::Engine(r)) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(Gone::Engine(r)) | TrySendError::Disconnected(Gone::Engine(r))) => Err(r),
@@ -473,8 +481,10 @@ impl Callback {
                     match rx.try_recv() {
                         Ok(Msg::Engine(env)) => {
                             // Transport commands apply as soon as the engine reads them.
-                            if matches!(env.msg, EngineMsg::Transport(Cmd::Seek(_))) {
-                                *seeks += 1;
+                            match env.msg {
+                                EngineMsg::Transport(Cmd::Seek(_)) => *seeks += 1,
+                                EngineMsg::Transport(Cmd::Play | Cmd::Stop) => *plays += 1,
+                                _ => {}
                             }
                             Some(env)
                         }
@@ -581,8 +591,10 @@ impl Callback {
         }
         s.loop_refused.store(st.loop_refused, Ordering::Relaxed);
         s.dropped_ons.store(st.dropped_ons as u64, Ordering::Relaxed);
-        // After the position: a reader that sees a seek or a load taken sees where it went.
+        // After the position: a reader that sees a seek, a play or a stop, or a load taken sees
+        // where it went.
         s.seeks_applied.store(self.seeks, Ordering::Release);
+        s.plays_applied.store(self.plays, Ordering::Release);
         s.loads_applied.store(self.loads, Ordering::Release);
     }
 }
@@ -891,17 +903,28 @@ impl Player {
     }
 
     /// A transport command, applied at the next block line (RENDER-9). Never waits for an edit.
+    /// Until the audio thread takes it, [`Self::status`] reports a seek, a play or a stop as done.
     pub fn transport(&self, cmd: Cmd) -> Result<u64> {
-        let seek = matches!(cmd, Cmd::Seek(_));
-        if let Cmd::Seek(beat) = cmd {
-            self.shared.seek_target.store(beat.max(0.0).to_bits(), Ordering::Relaxed);
-            self.shared.seeks_sent.fetch_add(1, Ordering::Release);
+        let s = &self.shared;
+        let sent = match cmd {
+            Cmd::Seek(beat) => {
+                s.seek_target.store(beat.max(0.0).to_bits(), Ordering::Relaxed);
+                Some(&s.seeks_sent)
+            }
+            Cmd::Play | Cmd::Stop => {
+                s.play_target.store(cmd == Cmd::Play, Ordering::Relaxed);
+                Some(&s.plays_sent)
+            }
+            Cmd::Loop(_) => None,
+        };
+        if let Some(n) = sent {
+            n.fetch_add(1, Ordering::Release);
         }
-        let sent = self.envelope(EngineMsg::Transport(cmd));
-        if seek && sent.is_err() {
-            self.shared.seeks_sent.fetch_sub(1, Ordering::Release);
+        let result = self.envelope(EngineMsg::Transport(cmd));
+        if let (Some(n), Err(_)) = (sent, &result) {
+            n.fetch_sub(1, Ordering::Release);
         }
-        sent
+        result
     }
 
     /// Move playback to `beat`, playing or stopped. Notes sounding there aren't chased.
@@ -987,8 +1010,9 @@ impl Player {
         }
     }
 
-    /// Where playback is. Never waits for anything: a project loaded or a seek sent that the
-    /// audio thread hasn't taken yet is reported as where it goes.
+    /// Where playback is. Never waits for anything: a project loaded, or a seek, a play or a stop
+    /// sent, that the audio thread hasn't taken yet is reported as where it goes. So a stop then a
+    /// seek back reads stopped there at once, never playing on from there for a block.
     pub fn status(&self) -> Status {
         let s = &self.shared;
         let mut st = self.published();
@@ -1005,6 +1029,9 @@ impl Player {
         }
         if s.seeks_sent.load(Ordering::Acquire) > s.seeks_applied.load(Ordering::Acquire) {
             st.pending = Some(f64::from_bits(s.seek_target.load(Ordering::Relaxed)));
+        }
+        if s.plays_sent.load(Ordering::Acquire) > s.plays_applied.load(Ordering::Acquire) {
+            st.playing = s.play_target.load(Ordering::Relaxed);
         }
         st
     }

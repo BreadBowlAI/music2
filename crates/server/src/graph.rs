@@ -1506,6 +1506,21 @@ impl Graph {
         Ok(())
     }
 
+    /// Stop, and go back to `to`, where play started (taste.md §5.1): the stop, then a seek, sent
+    /// together, so the status says it stopped there at once ([`Player::status`] reports both as
+    /// done until the audio thread takes them). Answers where it stopped, for ⇧Space to continue
+    /// from: where playback was as the stop was sent, a block before it took it at most. Never
+    /// waits for an edit (RENDER-29).
+    pub fn stop_to(&self, to: f64) -> Result<f64> {
+        if !to.is_finite() {
+            bail!("can't go back to beat {to}");
+        }
+        let at = self.status().beat;
+        self.transport("stop")?;
+        self.seek(to)?;
+        Ok(at)
+    }
+
     /// One tick of the watcher (WRITE-19): what file system events named, or a stat walk of the
     /// open project (see [`watcher`]), fed to the settle rule. A batch that settled (no tracked file
     /// changed for 150 ms, each the same on two polls, git not writing) is read once and taken in

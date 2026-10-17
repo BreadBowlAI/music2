@@ -1079,7 +1079,13 @@ fn stopping_freezes_the_transport_and_the_engine_runs_on() {
     graph.transport("play").unwrap();
     eventually("it plays", || graph.status().beat > 0.5);
     graph.transport("toggle").unwrap();
-    eventually("it stops", || !graph.status().playing);
+    // Stopped at once in the status; the engine takes it at its next block, and stays there.
+    assert!(!graph.status().playing, "a stop sent is what the status says");
+    eventually("the engine takes it", || {
+        let beat = graph.status().beat;
+        std::thread::sleep(Duration::from_millis(20));
+        graph.status().beat == beat
+    });
     let (beat, p) = (graph.status().beat, player(&graph));
     let clock = p.clock();
     std::thread::sleep(Duration::from_millis(100));
@@ -1173,6 +1179,35 @@ fn a_tempo_too_fast_for_the_loop_turns_it_off() {
     let v = graph.tempo(token, 0.0, Some(250.0), false, false).unwrap();
     assert!(v.get("loop_off").is_none(), "{v}");
     assert!(graph.set_loop(None, Some(true)).is_err(), "too short to turn on again at 250 BPM");
+}
+
+// taste.md §5.1, design-8b §4.3: Stop with `to` (the song bar's Space) stops and goes back to where
+// play started, and answers where it stopped, for ⇧Space to continue from. The status says it
+// stopped there at once, so no read after it sees it play on from there, or still where it
+// stopped: the stop and the seek are both reported as done until the engine takes them. The beat
+// it answers is where playback was as the stop was sent, a block before the engine took it at most.
+#[test]
+fn stop_with_to_goes_back_and_answers_where_it_stopped() {
+    let fixture = Fixture::new();
+    let graph = fixture.open();
+    graph.seek(2.0).unwrap();
+    graph.transport("play").unwrap();
+    eventually("it plays past beat 3", || graph.status().beat > 3.0);
+    let before = graph.status().beat;
+    let at = graph.stop_to(2.0).unwrap();
+    let s = graph.status();
+    assert_eq!((s.playing, s.beat), (false, 2.0), "stopped back where play started, at once");
+    // A block of 256 frames at 120 BPM and 48 kHz is 0.011 beats.
+    assert!(at >= before && at < before + 0.25, "where it stopped: {at} (it was at {before})");
+    eventually("the engine took both", || player(&graph).status().pending.is_none());
+    std::thread::sleep(Duration::from_millis(50));
+    let s = graph.status();
+    assert!(!s.playing && (s.beat - 2.0).abs() < 1e-6, "and stays there: {s:?}");
+    // ⇧Space: on from where it stopped.
+    graph.seek(at).unwrap();
+    graph.transport("play").unwrap();
+    eventually("it plays on from there", || graph.status().beat > at + 0.1);
+    assert!(graph.stop_to(f64::NAN).is_err());
 }
 
 /// A bass holding one note for 16 bars.

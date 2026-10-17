@@ -240,6 +240,35 @@ fn a_seek_reports_its_target_until_taken() {
     assert!(player.applied(1).is_some_and(|a| a.clock == 128 && a.frame == 0), "{:?}", player.applied(1));
 }
 
+// RENDER-9, taste.md §5.1: a play or a stop is what the status says at once, as a seek is. So Stop
+// then a seek back to where play started (the song bar's Space) never reads as playing on from
+// there until the audio thread's next block; before, a poll in that block saw it play.
+#[test]
+fn a_play_or_stop_reports_its_state_until_taken() {
+    let (player, mut d) = Player::driven(48_000);
+    player.open(sine(48_000)).unwrap();
+    let mut data = vec![0.0; 256];
+    d.fill(&mut data, 2);
+    player.play();
+    assert!(player.status().playing, "playing as soon as it is sent");
+    d.fill(&mut data, 2);
+    let s = player.status();
+    assert!(s.playing && s.beats > 0.0, "{s:?}");
+    player.stop();
+    player.seek(1.0).unwrap();
+    let s = player.status();
+    assert_eq!((s.playing, s.pending), (false, Some(1.0)), "stopped back there before the audio thread takes either");
+    d.fill(&mut data, 2);
+    let s = player.status();
+    assert_eq!((s.playing, s.pending, s.beats), (false, None, 1.0), "and once it has");
+    // Taken in order: the last one sent is what it reads.
+    player.play();
+    player.stop();
+    assert!(!player.status().playing);
+    d.fill(&mut data, 2);
+    assert!(!player.status().playing);
+}
+
 // RENDER-31: a rate change replaces the engine and keeps the beat, the play state and the loop;
 // the new engine's frames count at its rate.
 #[test]

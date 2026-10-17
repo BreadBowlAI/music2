@@ -782,13 +782,9 @@ struct GraphTransportReq {
 /// The answer says where a stop with `to` stopped (`at`), for ⇧Space to continue from.
 async fn graph_transport(State(s): S, Json(r): Json<GraphTransportReq>) -> ApiResult {
     let state = s.clone();
-    let at = blocking(move || {
-        let at = state.graph.status().beat;
-        state.graph.transport(&r.action)?;
-        match (r.action.as_str(), r.to) {
-            ("stop", Some(to)) => state.graph.seek(to).map(|()| Some(at)),
-            _ => Ok(None),
-        }
+    let at = blocking(move || match (r.action.as_str(), r.to) {
+        ("stop", Some(to)) => state.graph.stop_to(to).map(Some),
+        _ => state.graph.transport(&r.action).map(|()| None),
     })
     .await?;
     Ok(Json(json!({"at": at})))
