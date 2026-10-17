@@ -321,6 +321,12 @@ export function appCommand(id: string) {
       if (!m || m === "song") return;
       return id === "mute" ? canvas.mute?.(m) : id === "solo" ? canvas.solo?.(m) : canvas.muteInSong?.(m);
     }
+    case "change_instrument": {
+      // The selected track's (polish A3); not the Song row's.
+      const m = shell.selected;
+      if (!m || m === "song") return;
+      return canvas.changeInstrument?.(m);
+    }
     case "grid_narrower":
     case "grid_wider":
     case "grid_triplet":

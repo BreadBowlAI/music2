@@ -45,6 +45,30 @@ const TOM_TUNE = control.hz(130).range(60, 300).log();
 const DRIVE = control.db(0).range(0, 24);
 const LEVEL = (what: string) => control.db(0).range(-24, 12).label(`${what} level`);
 
+/** What the hats play on their named notes: closed on every other. */
+const HAT_NOTES = { 42: "Closed hat", 44: "Pedal hat", 46: "Open hat" };
+/** The kit's notes by name, for the piano roll's rows: the General MIDI notes `std:drum` plays (see above). */
+const KIT_NOTES = {
+  36: "Kick",
+  37: "Rim",
+  38: "Snare",
+  39: "Clap",
+  41: "Tom 1",
+  ...HAT_NOTES,
+  43: "Tom 2",
+  45: "Tom 3",
+  47: "Tom 4",
+  48: "Tom 5",
+  49: "Crash",
+  50: "Tom 6",
+  51: "Ride",
+  54: "Tambourine",
+  56: "Cowbell",
+  69: "Shaker",
+  70: "Shaker 2",
+  75: "Claves",
+};
+
 export const drums = {
   /** The whole drum machine on one notes lane, each drum on its General MIDI note (see above). */
   kit: component(
@@ -74,7 +98,7 @@ export const drums = {
       },
       settings: { voices: setting.int(16) },
       output: port.audio(),
-      editor: { category: "Drums", description: "An 808/909 drum machine: kick, snare, clap, hats, toms and more, one per note" },
+      editor: { category: "Drums", description: "An 808/909 drum machine: kick, snare, clap, hats, toms and more, one per note", notes: KIT_NOTES },
     },
     (notes: Events, p: Params): Audio =>
       machine(notes, MODEL.kit, p.voices, true, {
@@ -153,7 +177,7 @@ export const drums = {
       controls: { decay: HAT_DECAY, openDecay: OPEN_DECAY.label("open decay"), tone: HAT_TONE },
       settings: { voices: setting.int(6) },
       output: port.audio(),
-      editor: { category: "Drums", description: "808 hi-hats: closed, pedal (G#2) and open (A#2), metallic and crisp" },
+      editor: { category: "Drums", description: "808 hi-hats: closed, pedal (G#2) and open (A#2), metallic and crisp", notes: HAT_NOTES },
     },
     (notes: Events, { decay, openDecay, tone, voices }: Params): Audio =>
       machine(notes, MODEL.hats, voices, true, { hat_decay: decay, open_decay: openDecay, hat_tone: tone }),

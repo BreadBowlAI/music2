@@ -1124,7 +1124,8 @@ impl Actor {
             revs.push(number, code_rev);
             let engine = Arc::new(EngineView { token, revision: number, code_rev, controls, plays: view });
             let aliases = Arc::new(super::Aliases { to: code_rev, ids: HashMap::new() });
-            cp.open.replace(Published { engine, shown, revs, aliases, overlays: monitor }).and_then(|p| p.owed())
+            let local = super::view_file::local(&shown.dir);
+            cp.open.replace(Published { engine, shown, revs, aliases, overlays: monitor, local }).and_then(|p| p.owed())
         };
         self.inner.save_owed(owed);
         *self.inner.watch.lock() = Some(watcher::Watch::new(token, o.session.accepted(), before));

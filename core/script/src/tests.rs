@@ -1532,6 +1532,45 @@ fn descriptors_are_checked_where_declared() {
     }
 }
 
+// Polish A4: an instrument names what its notes play (`editor.notes`), for the piano roll's rows: a
+// drum kit's say "Kick", "Snare". Whole MIDI notes only, each name one line of 1 to 24 characters.
+#[test]
+fn editor_notes_are_read_and_checked() {
+    let lib = |notes: &str| {
+        format!(
+            "import {{ component, port, kernel }} from \"@m2/core\";\nexport const c = component({{ id: \"kit\", inputs: {{ notes: port.notes() }}, output: port.audio(), editor: {{ category: \"Drums\", notes: {notes} }} }}, (n: any) => kernel(\"std:sine\"));\n"
+        )
+    };
+    let song =
+        "import { song } from \"@m2/core\";\nimport { c } from \"./lib/c\";\nexport default song(({ lane }) => c(lane.notes(\"hits\")));\n";
+    let b = build_full(&options(&[("lib/c.ts", &lib("{ 36: \"Kick\", 38: \"Snare\", 0: \"Low\" }")), ("song.ts", song)]))
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    let kit = b.components.iter().find(|d| d.id == "kit").expect("the kit's descriptor");
+    let want: BTreeMap<u8, String> = [(0, "Low"), (36, "Kick"), (38, "Snare")].into_iter().map(|(k, v)| (k, v.to_string())).collect();
+    assert_eq!(kit.editor.notes, want);
+    // A component that names none has none.
+    let plain = "import { component, port, kernel } from \"@m2/core\";\nexport const c = component({ id: \"kit\", inputs: { notes: port.notes() }, output: port.audio(), editor: { category: \"Drums\" } }, (n: any) => kernel(\"std:sine\"));\n";
+    let b = build_full(&options(&[("lib/c.ts", plain), ("song.ts", song)])).unwrap_or_else(|e| panic!("{e:?}"));
+    assert!(b.components[0].editor.notes.is_empty());
+    for (notes, want) in [
+        ("{ 128: \"High\" }", "editor.notes names the note 128: notes are whole numbers 0 to 127"),
+        ("{ \"1.5\": \"Half\" }", "editor.notes names the note 1.5"),
+        ("{ \"-1\": \"Below\" }", "editor.notes names the note -1"),
+        ("{ 36: \"Kick\\ndrum\" }", "editor.notes' name of 36 must be one line of 1 to 24 characters"),
+        ("{ 36: \" \" }", "editor.notes' name of 36 must be one line"),
+        ("{ 36: \"A very long name for a kick\" }", "editor.notes' name of 36 must be one line of 1 to 24 characters"),
+        ("{ 36: 5 }", "editor.notes' name of 36 must be one line"),
+        ("[\"Kick\"]", "editor.notes must be an object"),
+    ] {
+        let mut e = build(&options(&[("lib/c.ts", &lib(notes)), ("song.ts", song)])).expect_err(notes);
+        assert_eq!(e.len(), 1, "{e:?}");
+        let e = e.remove(0);
+        assert_eq!(e.code, "code.build", "{notes}: {e}");
+        assert!(e.message.contains(want), "{notes}: {e}");
+        assert!(e.src.as_deref().unwrap_or("").starts_with("lib/c.ts:2:"), "{notes}: {:?}", e.src);
+    }
+}
+
 // PKG-9, D15: one definition site with one descriptor is one component, however often it runs
 // (a factory); the same id from two sites, or one site declaring two descriptors, is an error.
 #[test]

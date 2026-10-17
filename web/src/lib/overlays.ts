@@ -124,11 +124,17 @@ export function toggleMute(module: string, name: string) {
 
 export const toggleSolo = (module: string) => setSolo([module], !isSoloed(module));
 
-/** ⌥-click on S: only this track soloed; on the only solo, no solo at all. */
-export function soloOnly(module: string) {
+/**
+ * ⌥-click on S: only these tracks soloed (a strip's may be several: "Kick + Snare"); when they are
+ * the only solos already, no solo at all.
+ */
+export function soloOnly(modules: string[]) {
   const s = sets();
-  if (s.solo.length === 1 && s.solo[0] === module) return setSolo([module], false);
-  ask({ exclusive: module }, { ...s, solo: [module] });
+  const only = [...new Set(modules)].sort();
+  if (!only.length) return;
+  if (s.solo.length === only.length && only.every((k) => s.solo.includes(k))) return setSolo(only, false);
+  const [first, ...rest] = only;
+  ask({ exclusive: first, solo: each(rest, true) }, { ...s, solo: only });
 }
 
 /** The pill's ×: the track's mute and solo both off. */
