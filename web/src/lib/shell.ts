@@ -181,13 +181,14 @@ export const canvas: {
   play?: () => void;
   continue?: () => void;
   home?: () => void;
-  renameSong?: () => void;
   /** M, Track ▸ Mute (⌃M on a Mac): mute or unmute track `module` while listening. */
   mute?: (module: string) => void;
   /** S, Track ▸ Solo (⌃S on a Mac). */
   solo?: (module: string) => void;
   /** Track ▸ Mute in Song: one undo step. */
   muteInSong?: (module: string) => void;
+  /** Track ▸ Change Instrument…: the instrument list for track `module` (polish A3). */
+  changeInstrument?: (module: string) => void;
   grid?: (op: GridOp) => void;
   /** ⌘D on the selected clips, after the roll's notes: false when none is selected. */
   duplicate?: () => boolean;
@@ -198,4 +199,14 @@ export const canvas: {
   /** Whether ⌘C, ⌘X and ⌘V are the timeline's now (clips are selected), not the page's. */
   takesClipboard?: () => boolean;
   clipboard?: (op: "copy" | "cut" | "paste") => void;
+  /** View ▸ Zoom In (1) and Zoom Out (-1): the timeline's, around the playhead or the view's middle. */
+  zoom?: (dir: 1 | -1) => void;
+  /** Z, View ▸ Zoom to Fit: the selected clips, or the whole song; again, back. */
+  zoomFit?: () => void;
+  /** Transport ▸ Follow Playhead: on or off. */
+  follow?: () => void;
+  /** View ▸ Taller (1) and Shorter (-1) Tracks: the selected track, or every track. */
+  height?: (dir: 1 | -1) => void;
+  /** Transport ▸ Add Marker (at the playhead's bar), Previous and Next Marker. */
+  marker?: (op: "add" | "prev" | "next") => void;
 } = {};

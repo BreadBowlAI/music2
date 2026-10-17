@@ -67,13 +67,14 @@ Things to try:
 
 ### The top bar
 
-From left to right: the browser's toggle, back to the start, play/stop, loop, where the song is (bar.beat.sixteenth, then minutes and seconds), the tempo and time signature, the song's name, the status pill (only when something needs saying: see [Saving and undo](#saving-and-undo)), undo, redo, and **Export** (it shows how far along an export is). File → Close Song (⌘W) goes back to the start screen.
+From left to right: the browser's toggle, back to the start, play/stop, loop, where the song is (bar.beat.sixteenth, then minutes and seconds), the tempo, time signature and key, the song's name, the status pill (only when something needs saying: see [Saving and undo](#saving-and-undo)), undo, redo, and **Export** (it shows how far along an export is). File → Close Song (⌘W) goes back to the start screen.
 
 | To | Do this |
 |---|---|
 | Change the tempo | Drag it up or down: 1 BPM for every 4 pixels, a tenth with ⇧. Or double-click it and type `128`, `128.5` or `128 bpm` (20 to 999). You hear the new tempo when you let go. |
 | Change the time signature | Click it, then pick the beats in a bar (1 to 16 with the buttons, up to 64 typed) and the note a beat is (2, 4, 8 or 16). |
-| Rename the song | Double-click its name (or File → Rename Song…), type, then Enter. Escape cancels. The folder keeps its name. |
+| Set the song's key | Click **Key** after the time signature, then pick the root (C to B) and Major or Minor; **No key** takes it away. Notes then shades the rows not in the key. It is kept in `layout.json`, and changes nothing you hear. |
+| Rename the song | Double-click its name, type, then Enter. Escape cancels. The folder keeps its name. **File → Rename Song…** renames its folder too ("Also rename its folder", on at first): the song closes and opens again from there, so Undo can't go back past it. With unsaved code in the editor it says so first. |
 
 Both fields change the tempo or time signature in effect where the playhead is. Each change is one Undo step, written in `data/arrangement.json` (the song's name in `music2.toml`). There is no Alt-click reset on the tempo: one stray click shouldn't change the song.
 
@@ -87,11 +88,15 @@ Stop ends the notes, and echoes and reverb ring out as they would on a real inst
 - Tracks are listed in the order the song mixes them, until you move one. Drag a track's name up or down to move it; its colour stays its own. Both are kept in `layout.json`, which never changes the sound (see [The folder](#the-folder)).
 - Click a track's row to select it: the dock below shows that track. Selecting never changes which view the dock is in.
 - **+ Track** (⌘T) adds a track playing one of std's sounds: the drums first (the whole kit, then each drum), then the instruments, then the two synths with every knob, under Sound design. Typing filters the list, ↑↓ move, Enter adds; the list opens on the instrument you added last, so ⌘T then Enter adds another of the same. The new track goes below the selected one, in the first colour no other track has. It writes `tracks/<its key>.ts`, an empty notes lane in `data/`, and two lines in `song.ts`: its import, and its channel at the end of the mixer. One Undo takes it all back.
-- Right-click a track's name (or click ⋯ beside it) for its menu: Rename, Duplicate (⌘D), Delete (⌘⌫), Colour, its automation, and Edit in code. Duplicate copies the track's code, its clips, its plugins' saved settings and its mixer channel (a duck stays a duck), below it in its colour. Delete takes out its file, its import, its channel and its data. When another track's effect listens to it (the bass ducking to the kick), it asks first, and takes that effect off with it.
+- Right-click a track's name (or click ⋯ beside it) for its menu: Rename, Change instrument…, Duplicate (⌘D), Delete (⌘⌫), Colour, its automation, and Edit in code. **Change instrument…** (also Track → Change Instrument…) opens the + Track list for that track: the one you pick replaces its instrument in its code, starting at its own settings, as one undo step. When code works out one of the old instrument's settings, it says so and leaves the code as it is. Duplicate copies the track's code, its clips, its plugins' saved settings and its mixer channel (a duck stays a duck), below it in its colour. Delete takes out its file, its import, its channel and its data. When another track's effect listens to it (the bass ducking to the kick), it asks first, and takes that effect off with it.
+- Zoom with ⌘= and ⌘− (around the playhead), a pinch or ⌘-scroll (around the pointer), or the two buttons at the right end of the ruler. Z fits the selected clips, or the whole song; Z again goes back.
+- Make a track taller or shorter: drag the bottom edge of its name (28 to 160 pixels), or press ⌘↓ and ⌘↑ (the selected track, or every track with none selected). A double-click on the edge puts it back. An automation lane has the same edge. **Hide this lane** in a lane's menu hides one lane; the line "1 hidden lane · Show" under the track brings it back.
+- While the song plays, the view follows the playhead a page at a time. Scrolling by hand pauses it until play starts again. The Follow button at the right end of the ruler (⇧⌘F) turns it off. The zoom, the heights, Follow and hidden lanes are kept per song, in `.music2/view.json`.
+- **Markers** (Intro, Verse, Chorus…): right-click the ruler, **Add marker**, or Transport → Add Marker at the playhead's bar. Type a name or pick one from the list. Click a marker to go there, drag it to move it (hold ⌘ to place it off the grid), double-click it to rename it, and right-click it to delete it or loop to the next one. ⌥← and ⌥→ go to the marker before or after. They are kept in `layout.json`.
 - Click the ruler to move the playhead there. Drag across the ruler to loop those beats: playback goes round them until you turn the loop off with the loop button or C (it keeps the range, also when the song is opened again). With no loop set, the loop button loops the 4 bars from the playhead. ⌘L loops the selected clips (with none, the bar the playhead is in).
 - While stopped, a click on an empty spot in a lane moves the playhead there too. While playing it doesn't, so a click to deselect never makes the song jump.
 - The tempo and time signature changes are marks on the ruler. Click one to change it or remove it. Right-click the ruler to add a tempo change, or a time signature change at the start of that bar.
-- Double-click an empty spot in a notes lane to add a one-bar clip. Drag a clip to move it along its lane. Click a clip and press Delete to remove it.
+- Double-click an empty spot in a notes lane to add a one-bar clip. Drag a clip to move it along its lane. Click a clip and press Delete to remove it. **Repeat…** in a clip's menu makes copies one after another (1 to 64), as one undo step.
 - Click a notes clip to select it (Notes shows it); double-click it to open it in Notes.
 - Double-click a track's name (or press ⌘R) to rename it: type, then press Enter (or click away) to save, or Escape to cancel. This changes only the name the app shows (the track's label, written in its `track()` call); its key, its data and its sound stay as they are, and Undo takes it back.
 - Automation and audio clips are shown, but they can't be edited in the app yet.
@@ -117,20 +122,22 @@ It shows the selected track (or the Song) in one of four views, picked with the 
   - **+** on a box that makes sound opens the effect browser: 17 effects in seven groups (Filter, EQ, Dynamics, Distortion, Delay & Reverb, Modulation, Utility), as the effects themselves declare them. Type to search, then press Enter or click. The bin icon on an effect removes it.
   - Zoom with ⌘ and scroll, or pinch. The buttons at the bottom right zoom and fit the graph to the panel.
 - **Mix** (⌥3, or X): a strip for each track, in the timeline's order, and Master on the right.
-  - Each strip has the track's colour and name, a pan knob, and a fader with its level under it. Mute and solo come later, in the empty row above the fader.
+  - Each strip has the track's colour and name, a pan knob, **M** and **S** (as on the track's header; a strip shared by two tracks acts on both), and a fader with its level under it. Beside the fader, two bars (left and right) show how loud the track is. They read the track before its fader, as the header's meter does. A small red dot over them means the track went over the top: click it to clear it. Master's meter is the whole song.
   - Drag a fader to hear it; let go to write it into the code. 0 dB sits three quarters of the way up. Hold ⇧ to fine-tune; ⌥-click puts it back at 0 dB; the very bottom is silence ("−∞", written as −96 dB). Scroll up or down over a fader to move it 0.1 dB a notch (scrolling sideways moves the strips). Double-click the level to type one: `-3`, `-3 dB` or `-inf`. A fader you've clicked or tabbed to also takes ↑ and ↓ (with ⇧, 1 dB) and Return to type.
   - A level in grey is one the code leaves out: it plays at 0 dB, and the fader's first move writes it into the mixer, in the style the mixer already uses (`kick: kick.out` becomes `kick: { in: kick.out, db: db(-3) }`).
   - A pan reads "C", "L 20" or "R 35". In grey, it isn't in the code yet: the first drag writes `pan: 0` into the channel once it has moved 4 pixels, then goes on, and letting go writes the pan. Undo once puts it back at C; undo again takes it out of the code.
   - Click a strip to select its track. Right-click it to rename or recolour the track, or for **Edit in code**, which opens `song.ts` at its channel. Right-click a fader, or a pan once it's written, for **Automate** and **Reset to default** (a pan in grey has the strip's menu).
   - **Automate** on a fader gives it a lane under the Song in the timeline, "Hats volume". The fader then follows the lane: it moves with playback, shows the lane's dot, and can't be dragged. Right-click it for **Show Hats volume lane** or **Remove automation**, which writes the level at the playhead back into the code.
   - A track that doesn't reach the mixer gets a strip that says so, with **Edit in code**. So does a song that mixes its tracks its own way.
-- **Code:** the selected track's TypeScript, with type checks. The list on the left shows the song's files. ⌘-click a name to jump to where it's defined, even inside std (std's files open read-only). ⌘S (or the Save button) saves. When the code has an error, the last working version keeps playing, and the status pill in the top bar says so; its popover offers **Show in code**. A song whose code doesn't compile when you open it still opens: in its code, at the error, with its tracks and clips greyed in the timeline and nothing to play until a save makes it compile, and then it plays.
+- **Code:** the selected track's TypeScript, with type checks. The list on the left shows the song's files. Right-click a track's file for **Change track ID…**: the ID is the name code and files use (`track("bass", …)`, `data/bass/`). Changing it moves both, and the track's view settings, as one undo step; the track's sounds restart. ⌘-click a name to jump to where it's defined, even inside std (std's files open read-only). ⌘S (or the Save button) saves. When the code has an error, the last working version keeps playing, and the status pill in the top bar says so; its popover offers **Show in code**. A song whose code doesn't compile when you open it still opens: in its code, at the error, with its tracks and clips greyed in the timeline and nothing to play until a save makes it compile, and then it plays.
 - **Notes:** the selected clip in a piano roll; with none selected, it says how to pick one.
   - Pick a snap grid (1/4 to 1/32, or off): new notes are a grid step long. A click selects; a double-click adds a note; a drag across empty space selects with a box. In Draw mode (B, or the pencil) a click adds a note and a drag paints them. Drag a note to move it, its right edge to resize it.
   - The strip at the bottom sets velocity (how hard each note is played).
   - Set the clip's length in bars in the dock's header.
   - While the clip's data file doesn't read (the status pill lists it), the piano roll is read only, with a note in the dock's header saying which file: it shows the notes the lane played before, and editing them would overwrite the file. Fix the file and it can be edited again.
-  - ⌘A selects all notes, ⌘D duplicates the selection, the arrow keys move it (with ⇧, by an octave or a bar), and Delete removes it.
+  - ⌘A selects all notes, ⌘D duplicates the selection, the arrow keys move it (with ⇧, by an octave or a bar), and Delete removes it. ⌘= and ⌘− zoom the roll while it has the keyboard.
+  - Right-click a note (or empty grid) for the note menu: up or down a semitone or an octave, **Quantize** (Q: onto the grid), **Legato** (each note lasts until the next starts), **Humanize** (timing and loudness a little off, so it sounds played), **Swing** (Light, Medium, Heavy: every second note a little later), Duplicate and Delete. It acts on the selected notes, or with none, on every note of the clip, as one undo step.
+  - A drum kit's rows say their drum (Kick, Snare, Closed hat) instead of C2, and so do its notes. With the song's key set, the rows not in the key are shaded (never on a drum kit).
 
 ## New songs, the songs folder and export
 
@@ -138,6 +145,8 @@ It shows the selected track (or the Song) in one of four views, picked with the 
   - **Starter beat**: six tracks (kick, clap, hats, bass, chords and a hook), 8 bars at 116 BPM, ready to play and change.
   - **Empty**: no tracks yet, so it plays silence. Its timeline offers **Add a track**. `song.ts` also has a drum track ready, switched off: delete the `//` in front of its two lines and save, and a Drums lane appears.
 - New songs go in the **songs folder**, `~/Music/music2`, each in a folder named after the song. If the name is taken, the new one gets a number ("My song 2"): nothing is ever replaced. `Exports` there is taken by exports, so a song called "Exports" becomes "Exports 2". In the app, **Choose Folder…** in the New Song dialog saves it somewhere else.
+- The start screen lists the songs you opened last, newest first, with their tempo and when you opened them; so does File → Open Recent. A click opens one. A song whose folder was moved or deleted says so, with × to take it off the list. The song that was open when you quit opens again at the next launch (not after Close Song, ⌘W).
+- **Save As…** (File → Save As…, ⇧⌘S) saves a copy of the song under a new name and opens the copy; the song itself stays as it was. The copy has the song's files, but not its `.music2/` (mutes, view settings, undo). **Choose Folder…** puts it somewhere else (not inside the song's own folder).
 - **Open an Example** on the start screen copies an example into the songs folder and opens the copy. An example that needs plugins you don't have (With plugins) says which, and nothing is copied.
 - **Export** (the button in the top bar, or File → Export Audio…, ⇧⌘E) writes the song to a WAV file: 24-bit, stereo, at the song's sample rate (48 kHz unless its `music2.toml` says otherwise). It starts at bar 1 and goes to the end of the last clip, then on until the sound has died away (silent for half a second, at most 10 seconds more). A song longer than 3 hours (most likely a clip far past the rest) isn't exported: the message says in which bar the last clip ends.
   - The app asks where to save it, starting at `~/Music/music2/Exports/<song>.wav`. Opened in a browser, it saves there straight away, adding " 2", " 3"… rather than replacing a file, even one that appeared while it was exporting.
@@ -177,6 +186,7 @@ Every key is listed in the app too: Help → Keyboard Shortcuts (⌥K on a Mac, 
 | ⌘O | Ctrl+O | Open a song folder |
 | ⌘W | Ctrl+W | Close the song |
 | ⌘S | Ctrl+S | Save the code editor's files |
+| ⇧⌘S | Ctrl+Shift+S | Save a copy of the song (Save As) |
 | ⇧⌘E | Ctrl+Shift+E | Export the song as a WAV file |
 | ⌘Q | Ctrl+Q | Quit (on Linux, File → Quit) |
 | ⌘T | Ctrl+T | New track |
@@ -187,6 +197,12 @@ Every key is listed in the app too: Help → Keyboard Shortcuts (⌥K on a Mac, 
 | Arrow keys (⇧: further) | Arrow keys (Shift: further) | Move the selected notes (further: by an octave or a bar) |
 | Delete | Backspace | Remove the selected clip or notes |
 | Escape | Escape | Deselect |
+| ⌘= / ⌘− | Ctrl+= / Ctrl+− | Zoom in / out: the timeline, or the roll while it has the keyboard |
+| Z | Z | Fit the selected clips, or the song; again to go back |
+| ⌘↓ / ⌘↑ | Ctrl+↓ / Ctrl+↑ | Taller / shorter tracks: the selected one, or all |
+| ⇧⌘F | Ctrl+Shift+F | Follow the playhead on or off |
+| ⌥← / ⌥→ | Alt+← / Alt+→ | Go to the marker before / after |
+| Q | Q | Quantize: in Notes the selected notes (or with none, every note), else the selected clips' notes |
 | B | B | Draw mode in Notes |
 | A | A | Show or hide the selected track's automation (every track's, with none selected) |
 | ⌥1 / ⌥2 / ⌥3 / ⌥4 | Alt+1 / Alt+2 / Alt+3 / Alt+4 | Device / Notes / Mix / Code (X: Mix) |

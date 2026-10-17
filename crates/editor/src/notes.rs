@@ -245,8 +245,37 @@ pub fn describe(before: &[NoteClip], after: &[NoteClip], arrangement: &Arrangeme
             was += &format!(", velocity {}%", number((a.velocity * 100.0).round()));
             is += &format!(", velocity {}%", number((b.velocity * 100.0).round()));
         }
+    } else if gone.len() > 1 && was == is {
+        // As many notes either side ("4 notes"): what tells them apart, so the two sides never read
+        // the same when something changed (the page names an undo step only then).
+        let (x, y) = apart(&gone, &new, arrangement);
+        was += &x;
+        is += &y;
     }
     (was, is)
+}
+
+/// A note and where its clip starts.
+type Placed = (f64, Note);
+/// Something about some notes, in words.
+type Summary<'a> = dyn Fn(&[Placed]) -> String + 'a;
+
+/// What tells two sets of notes apart, beside their count: their pitches, where the first plays,
+/// their lengths, their velocities; the first of these that differs, or `", changed"` after.
+fn apart(a: &[Placed], b: &[Placed], arrangement: &Arrangement) -> (String, String) {
+    let span = |ns: &[Placed], f: &dyn Fn(&Placed) -> f64| {
+        let lo = ns.iter().map(f).fold(f64::INFINITY, f64::min);
+        let hi = ns.iter().map(f).fold(f64::NEG_INFINITY, f64::max);
+        (lo, hi)
+    };
+    let range =
+        |(lo, hi): (f64, f64), show: &dyn Fn(f64) -> String| if lo == hi { show(lo) } else { format!("{} to {}", show(lo), show(hi)) };
+    let pitches = |ns: &[Placed]| format!(", {}", range(span(ns, &|(_, n)| n.pitch), &|p| pitch_name(p).unwrap_or_else(|| number(p))));
+    let first = |ns: &[Placed]| format!(" from {}", place(arrangement, span(ns, &|(s, n)| s + n.start).0));
+    let lengths = |ns: &[Placed]| format!(", {} beats long", range(span(ns, &|(_, n)| n.length), &number));
+    let velocities = |ns: &[Placed]| format!(", velocity {}%", range(span(ns, &|(_, n)| n.velocity), &|v| number((v * 100.0).round())));
+    let sides: [&Summary<'_>; 4] = [&pitches, &first, &lengths, &velocities];
+    sides.iter().map(|f| (f(a), f(b))).find(|(x, y)| x != y).unwrap_or_else(|| (String::new(), ", changed".into()))
 }
 
 #[cfg(test)]
@@ -669,6 +698,23 @@ mod tests {
             d(&one, &[clip(4.0, 8.0, vec![c4.clone(), note(60.0, 1.5, 0.25, 0.8), note(64.0, 1.5, 0.25, 0.8)])]),
             "no note → 2 notes"
         );
+        // As many notes either side: what tells them apart, never the same words (the page names
+        // an undo step only when the two sides differ).
+        let run = |f: &dyn Fn(usize) -> Note| [clip(4.0, 8.0, (0..4).map(f).collect())];
+        let plain = run(&|k| note(33.0 + k as f64, k as f64 * 0.25, 0.25, 0.8));
+        assert_eq!(d(&plain, &run(&|k| note(45.0 + k as f64, k as f64 * 0.25, 0.25, 0.8))), "4 notes, A1 to C2 → 4 notes, A2 to C3");
+        assert_eq!(
+            d(&plain, &run(&|k| note(33.0 + k as f64, k as f64 * 0.25 + 0.5, 0.25, 0.8))),
+            "4 notes from bar 2 beat 1 → 4 notes from bar 2 beat 1.5"
+        );
+        assert_eq!(
+            d(&plain, &run(&|k| note(33.0 + k as f64, k as f64 * 0.25, 1.0 - k as f64 * 0.25, 0.8))),
+            "3 notes, 0.25 beats long → 3 notes, 0.5 to 1 beats long"
+        );
+        let louder = run(&|k| note(33.0 + k as f64, k as f64 * 0.25, 0.25, 0.9));
+        assert_eq!(d(&plain, &louder), "4 notes, velocity 80% → 4 notes, velocity 90%");
+        let swapped = |a: f64, b: f64| run(&|k| note(33.0 + k as f64, k as f64 * 0.25, 0.25, if k % 2 == 0 { a } else { b }));
+        assert_eq!(d(&swapped(0.5, 0.8), &swapped(0.8, 0.5)), "4 notes → 4 notes, changed");
         assert_eq!(d(&[], &one), "no clip → clip at bar 2 (2 bars)");
         assert_eq!(d(&one, &[clip(36.0, 8.0, vec![c4.clone()])]), "clip at bar 2 (2 bars) → clip at bar 10 (2 bars)");
         assert_eq!(d(&one, &[clip(4.0, 4.0, vec![c4])]), "clip at bar 2 (2 bars) → clip at bar 2 (1 bar)");

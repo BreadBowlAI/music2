@@ -3,11 +3,34 @@
 Written 2026-10-16, at the end of step 7 (the engine), updated after its speed work the same day, again on
 2026-10-17, when step 7 landed on `main`, and again the same day for the `sounds` merge, after its review and final
 check, and when it landed on `main`; again for `taste-next` (taste's look, the song bar and the Mix faders),
-after its review and final checks; and once more for 8b's screens (`8b-ui`), after their review and final check.
+after its review and final checks; for 8b's screens (`8b-ui`), after their review and final check; and once more
+for `polish` (the rest of the top ten), after its review and final check.
 Read this first, then `docs/architecture.md` (the contract) and the design for
 whatever you pick up.
 
 **In short**
+- **`polish` is ready to land** (2026-10-17): Linux green at `65f59f1`; macOS owed. It is `main` (`d7207d2`) plus:
+
+  | You can now | Where |
+  |---|---|
+  | Mute, solo and see the level of each track in the Mix view | M, S and a meter on every strip; a red dot when it gets too loud |
+  | Change a track's instrument | Track → Change Instrument…, or the track's menu |
+  | See drum names in Notes | Kick, Snare, Closed hat on a drum kit's rows |
+  | Zoom the timeline, make tracks taller, follow the playhead | ⌘= ⌘−, a pinch, Z; drag a track's bottom edge; on while playing |
+  | Put markers on the ruler | right-click the ruler, Add marker; ⌥← ⌥→ |
+  | Repeat a clip | Repeat… in its menu |
+  | Open recent songs; the last one opens at launch | the start screen, File → Open Recent |
+  | Save a copy, rename a song and its folder | File → Save As… (⇧⌘S), File → Rename Song… |
+  | Change a track's ID | the Code view, right-click its file |
+  | Edit notes with a menu | right-click a note: transpose, Quantize, Legato, Humanize, Swing |
+  | Set the song's key | Key, after the time signature; Notes shades the rows not in it |
+  | Draw a filter sweep on a log scale; hide one automation lane | the lane's menu |
+
+  Your view settings (zoom, heights, grids) are kept per song now. Nothing you hear changed: every render is the
+  same. A review found 9 things (one twice). All 8 are fixed, each with a test; so are three more that the
+  pictures, a sweep and the first full check found. Then `ci/check.sh` passed: every row, nothing passed only on a retry (1,184 Rust tests,
+  49/49 browser suites, 10 of 10 renders). Pictures: `~/m2-runs/app-shots/polish-c3dd95a/`. What was built
+  and checked: `docs/designs/step8/build-notes-polish.md`; the plan: `polish-plan.md` beside it.
 - **`taste-next` is on `main`** (2026-10-17): Linux green at `22bea45`; macOS owed. Taste's new look (one top bar, the
   dock with Device, Notes, Mix and Code, the side browser, Inter off the Mac), 8b.1 (+ Track with the 22 new sounds,
   duplicate, delete, reorder, recolour), 8b.2 (the song bar: tempo, time signature, the ruler's changes, the name, the
@@ -63,10 +86,7 @@ whatever you pick up.
   Research only; it is in Open owner decisions.
 - The owner decided O1 to O5 on 2026-10-15 (below), and std's bump to 0.2 with O3's fix. That question is closed.
 - **In flight** (2026-10-17): `8a`, 8a's offline half (the engine on all CPU cores, exports first;
-  `~/m2-runs/wt/8a`), and `polish`, the rest of the top ten (M, S and meters on the Mix strips, swap an
-  instrument, drum names, zoom, track heights, following the playhead, markers, repeat a clip, recent projects,
-  Save As, rename a track's key, note tools, key and scale; `~/m2-runs/wt/pl`). Then 8a's live half, and step 9.
-  The Mac runs are owed and listed below.
+  `~/m2-runs/wt/8a`). Then 8a's live half, and step 9. The Mac runs are owed and listed below.
 
 ## Your own songs (for the owner)
 
@@ -88,7 +108,8 @@ whatever you pick up.
 | `8b-backend` | `c9cc6ad` | All on `main` now (a fast-forward, 2026-10-17). Linux green at `a8199ff`, macOS owed. Worktree `~/m2-runs/wt/be`. Delete the branch and the worktree once `8b-ui` has landed. |
 | `taste-next` | `22bea45`, then docs | All on `main` now (a fast-forward, 2026-10-17). Linux green (reviewed; `ci/check.sh` and `--gates`), macOS owed. Delete the branch and the worktree `~/m2-runs/wt/tn` (its `target/`, about 96 GB). |
 | `8a` | in flight | 8a's offline half, from `main` at `e571a5f`: the pool (`m2-pool`) and the executor offline, so exports use every core with the same bits. Live playback stays on one thread until 8a's live half. Worktree `~/m2-runs/wt/8a`; plan `~/m2-runs/s8a/plan.md`. |
-| `polish` | in flight | The rest of the top ten, from `8b-ui` at `29430e8`, in four lanes (`polish-a` to `-d`, worktrees `~/m2-runs/wt/pl-a` to `-d`). Worktree `~/m2-runs/wt/pl`; plan `~/m2-runs/s8c/plan.md`. |
+| `polish` | `65f59f1`, then docs only | Ready to land: the rest of the top ten, from `8b-ui` at `29430e8` with `main` at `d7207d2` in it, built in four lanes (merged; their branches and worktrees are gone). Linux green at `65f59f1` (reviewed; `ci/check.sh`), macOS owed. Worktree `~/m2-runs/wt/pl` and its `target/`: the lead lands the branch, then removes both. Plan `docs/designs/step8/polish-plan.md`; build notes `build-notes-polish.md`. |
+| Mac runs owed | — | One `ci/check.sh` on `main` covers every branch above. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 38, and `polish`'s 39 to 50 |
 | `8b-ui` | `92317ad`, then docs only | All on `main` now (a fast-forward, 2026-10-17). 8b's screens: mute and solo, clips and automation, audition, meters. Linux green at `92317ad` (reviewed; `ci/check.sh`), macOS owed. Its lane branches are deleted. Delete the branch and the worktree `~/m2-runs/wt/ui` (its `target/`, about 57 GB) once `polish` has landed. |
 | `origin/taste` | `4804247` | All on `main` now (`a0d5f91` and `4804247`, both merged into `taste-next`). Its worktree `~/m2-runs/wt/taste` can go. |
 | `origin/sounds` | `916127d` | 22 new std sounds (8 on the polysynth, 4 FM, 10 drums), merged; on `main` since 2026-10-17. |
@@ -240,6 +261,9 @@ S, about 3 minutes the first time, and G7f plays longer, about 8 minutes a part)
   a gain, which changes no bit (no render moved).
 - `8b-ui`: 8b's screens, with 2 more Rust tests (1,132 on Linux) and 5 more browser suites (40): `s8-mute`,
   `s8-audition`, `s8-meters`, `s8-clips` and `s8-automation`.
+- `polish`: the rest of the top ten, with 52 more Rust tests (1,184 on Linux) and 9 more browser suites
+  (49): `pl-mix`, `pl-sounds`, `pl-ids`, `pl-zoom`, `pl-arrange`, `pl-tracks`, `pl-projects`, `pl-notes` and
+  `pl-lanes`. No render moved.
 
 **What must pass:** the first line says `music2 check: PASS`. Every row says PASS (the gates row too, not PART),
 with nothing "passed only on a retry". In the gates part:
@@ -314,6 +338,24 @@ with nothing "passed only on a retry". In the gates part:
 | 37 | Press Space. Watch the thin bars at the right edge of each track's name, and the Song row's. Press Space again. | They move with the sound, and fall to nothing within about a second after Stop. |
 | 38 | Tell the lead what you heard at 33 to 37. | |
 
+**A look and a listen at `polish`** (about 15 minutes). These are what only a Mac can show: its trackpad, its menu
+bar, its Ctrl-click, and the sound.
+
+| # | Do this | You should hear or see |
+|---|---|---|
+| 39 | Quit the app. Type `cargo run --release -p music2-desktop`. Open **First song**. Press ⌥3, then Space. | The Mix view. Each strip has M, S and two thin bars beside its fader that move with the sound. |
+| 40 | While it plays, click **M** on the Keys strip, then **S** on the Bass strip. Click each again. | Keys goes quiet; then only the bass plays. The second clicks bring them back. The headers' M and S light up too. |
+| 41 | Drag the Hats fader down a lot. | The hats get quieter, but the Hats strip's bars don't move: they show the track before its fader. |
+| 42 | Press Space to stop. On the trackpad, pinch out over the timeline, then pinch in. | The timeline zooms in and out around your fingers. The window itself never zooms. |
+| 43 | Press ⌘= twice, then Space. Watch the timeline. | It zooms in around the playhead; while it plays, the view pages along with it. Scroll by hand: it stops following until you play again. |
+| 44 | Right-click Hats' name, **Change instrument…**, type `kit`, Return. Press Space. | Hats plays the drum kit now, and a message says so. ⌘Z puts the old hat back. |
+| 45 | Double-click the Kick's clip, then Ctrl-click a note in Notes. | The note menu opens, and the note doesn't move. Pick **Humanize**: the kick sounds a little less stiff. ⌘Z. |
+| 46 | Right-click the ruler at bar 5, **Add marker**, type Chorus, Return. Then Ctrl-click the Chorus marker. | Chorus sits on the ruler. The Ctrl-click opens its menu, and the playhead doesn't jump there. |
+| 47 | Press ⇧⌘S. | Save As, with the song's name and a 2 after it. Press Return: the copy opens, and a message says the first one is kept. |
+| 48 | Open the **File** menu, then **Open Recent**. | Both songs are listed, the copy first. |
+| 49 | Quit the app (⌘Q) and start it again with step 39's command. | The song you had open opens again by itself. |
+| 50 | Tell the lead what you saw and heard at 39 to 49. | |
+
 After a green run the lead writes here: "macOS: green at <commit> (ci/check.sh on <model>, <date>)", with G7f's
 numbers. If a row fails, the lead fixes it on Linux, checks the mac lint, and asks for one more run. The logs are in
 `~/m2-check/<commit>.tgz` on the Mac if needed.
@@ -360,6 +402,7 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
 | The back ends of 8b.4, 8b.5, 8b.6, 8b.8 | `a8199ff` (Linux checks), then docs only | owed: the same run covers it; by-ear steps come with its screens (`8b-ui`) |
 | `taste-next`: the look, 8b.1, 8b.2, 8b.3 | `22bea45` (Linux checks), then docs only | owed: the same `ci/check.sh`, then the look-and-listen steps 22 to 31 |
 | 8b's screens (`8b-ui`) | `92317ad` (Linux checks), then docs only | owed: the same `ci/check.sh`, then the by-ear steps 32 to 38 |
+| `polish`: the rest of the top ten | `65f59f1` (Linux checks), then docs only | owed: the same `ci/check.sh`, then the by-ear steps 39 to 50 |
 
 1. **The Mac runs** (above), when the owner has time: `ci/check.sh` on `main` for the `sounds` merge and 8b's back
    ends, and the by-ear steps. Fix what they find on Linux, then ask for one more run.
@@ -373,9 +416,12 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
    compressor, a std change). The rest of their screens' list (U12 to U14, the delete dialog's keys) is in `polish`.
    Lead's default, the owner may change it: in the export question, Return presses the focused button (at first the
    main one), not always the main one as a Mac alert does.
-5. **In flight:** `8a` (8a's offline half), then the owner's short offline sweep on the Mac (its command comes with
-   8a's build notes), then 8a's live half with the two gaps above. `polish` beside it.
-6. Then **8b.7, 8b.10**, and **step 9** (8b.9's Change track ID… comes in `polish`, without the engine's pass). Before
+5. **`polish` is ready to land** at `65f59f1` plus docs: fast-forward `main` to it (it has `main` in it), then
+   remove its worktree `~/m2-runs/wt/pl` and its `target/`, and `~/m2-runs/wt/ui`. What it left is in
+   `docs/gaps.md` and its build notes' End.
+6. **In flight:** `8a` (8a's offline half), then the owner's short offline sweep on the Mac (its command comes with
+   8a's build notes), then 8a's live half with the two gaps above.
+7. Then **8b.7, 8b.10**, and **step 9** (8b.9's Change track ID… came in `polish`, without the engine's pass). Before
    step 9 freezes kernel ABI v1, the owner decides the kernel layout (Open owner decisions). Each adds its OS pieces
    to `m2-os` as platform design §8 says (8a's `rt.rs` becomes `mac/rt.rs` and `linux/rt.rs`; 8b.10's MIDI uses
    `midir`). Mac run at the end of each.
@@ -422,6 +468,13 @@ Fixed in step 7 (of these, only `a_plugin_that_keeps_failing_is_started_again_on
 ## Left for later
 
 One line each; the details are in `sounds/build-notes.md`, `step7/build-notes.md` and `platform/build-notes.md`.
+
+From `polish` (details in `docs/gaps.md` and `step8/build-notes-polish.md`):
+- Meters after the fader need taps in `core/runtime` (8a's area); about a day once 8a lands.
+- Curves between automation points need a lane format field and interpolation in the engine.
+- A re-keyed track restarts its sounds; Restore (DIAG-6) isn't built.
+- `m2` commands for change instrument, markers, the key, a track ID and Save As (gaps #37).
+- `s8-mute` still has its own copy of the taste lint.
 
 The `sounds` merge:
 - **Stop, back to bar 1, Play is a seek** (its plan's risk 2): std's LFO phases and the drums' hit counts carry on,

@@ -39,11 +39,16 @@
 mod actor;
 pub mod audition;
 pub mod clips;
+mod instrument;
+mod rekey;
 mod events;
 pub mod lease;
+mod markers;
 pub mod meters;
 pub mod overlay;
 mod preview;
+mod projects;
+mod songkey;
 mod view_file;
 mod watcher;
 
@@ -282,6 +287,9 @@ struct Published {
     aliases: Arc<Aliases>,
     /// Monitoring mute and solo (MON-4): made new at each open.
     overlays: overlay::Monitor,
+    /// The page's view settings (`view_file::KEYS`), as read at the open and set since: the
+    /// state's `local`.
+    local: serde_json::Map<String, Value>,
 }
 
 /// What `begin`, `update`, `cancel` and every read use, behind one short lock. The actor holds it
@@ -622,14 +630,14 @@ impl Inner {
     /// above a dragged knob gives it a new id, and the page finds its drag's knob by its lease
     /// (WRITE-22).
     fn state(&self) -> Option<Value> {
-        let (shown, leases, overlays) = {
+        let (shown, leases, overlays, local) = {
             let cp = self.control.lock();
             let p = cp.open.as_ref()?;
             let now = Instant::now();
             let token = p.engine.token;
             let leases: Vec<LeaseInfo> =
                 cp.leases.live.iter().filter(|l| l.token == token).filter_map(|l| l.seen_at(p.shown.revision, now)).collect();
-            (p.shown.clone(), leases, p.overlays.state())
+            (p.shown.clone(), leases, p.overlays.state(), Value::Object(p.local.clone()))
         };
         let status = self.status();
         let mut state = shown.state.clone();
@@ -642,6 +650,7 @@ impl Inner {
         self.activity().put(&mut state);
         state["leases"] = json!(leases);
         state["overlays"] = overlays;
+        state["local"] = local;
         Some(state)
     }
 

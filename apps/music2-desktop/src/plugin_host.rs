@@ -25,10 +25,10 @@ pub fn install() -> anyhow::Result<()> {
     m2_plugins::use_app_main_thread()
 }
 
-/// Open a song project folder and tell the UI to show it. Never on the main thread: opening
-/// creates the song's plugins there.
+/// Open a song project folder, put it first in the recent songs list, and tell the UI to show it.
+/// Never on the main thread: opening creates the song's plugins there.
 pub fn open_project(server: &AppState, dir: &Path) -> anyhow::Result<()> {
-    server.graph.open(dir)?;
+    server.open_song(dir)?;
     server.graph_changed();
     Ok(())
 }

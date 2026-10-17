@@ -7,6 +7,8 @@ import GraphCanvas, { closeSong, graphUndo } from "./components/GraphCanvas";
 import Shortcuts from "./components/Shortcuts";
 import StartScreen from "./components/StartScreen";
 import NewSongDialog, { openNewSong } from "./components/NewSongDialog";
+import RenameSongDialog, { openRenameSong } from "./components/RenameSongDialog";
+import SaveAsDialog, { openSaveAs } from "./components/SaveAsDialog";
 import { exportSong, onExportEvent } from "./lib/exporting";
 import { CutOff, editorHooks, graphApi } from "./lib/graph";
 import { isMac, native, nativeAction, onMenu } from "./lib/native";
@@ -40,6 +42,8 @@ function key(e: KeyboardEvent): string | null {
     // By the key's place: ⌥1 types ¡ on a Mac.
     const n = /^Digit([1-4])$/.exec(e.code);
     if (n) return `view_${VIEWS[Number(n[1]) - 1]}`;
+    // ⌥← and ⌥→: Transport ▸ Previous and Next Marker.
+    if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.shiftKey) return e.key === "ArrowLeft" ? "prev_marker" : "next_marker";
     return e.code === "KeyK" ? "shortcuts" : null;
   }
   if (e.code === "Space") return e.shiftKey ? "continue" : "play";
@@ -48,14 +52,17 @@ function key(e: KeyboardEvent): string | null {
   if (e.key === "Enter" || e.key === "Home") return "home";
   if (e.key === "Escape") return "deselect";
   if (e.shiftKey) return null;
-  return ({ c: "loop", a: "lanes", e: "dock", x: "view_mix", b: "draw", m: "mute", s: "solo" } as Record<string, string>)[e.key.toLowerCase()] ?? null;
+  return ({ c: "loop", a: "lanes", e: "dock", x: "view_mix", b: "draw", m: "mute", s: "solo", z: "zoom_fit" } as Record<string, string>)[e.key.toLowerCase()] ?? null;
 }
 
 /** ⌘1 to ⌘4, View's grid rows: the command ids, in order. */
 const GRID_IDS = ["grid_narrower", "grid_wider", "grid_triplet", "grid_snap"];
 
-/** A ⌘ or ⌃ chord as the menu bar would take it, in a browser; `always`: even while typing (⌘S, ⌘N). */
-function chord(e: KeyboardEvent): { id: string; always?: boolean } | null {
+/**
+ * A ⌘ or ⌃ chord as the menu bar would take it, in a browser; `always`: even while typing (⌘S, ⌘N);
+ * `page`: the page's even in the app, where no menu row has it (⇧⌘=).
+ */
+function chord(e: KeyboardEvent): { id: string; always?: boolean; page?: boolean } | null {
   if (!(e.metaKey || e.ctrlKey)) return null;
   const k = e.key.toLowerCase();
   // ⌃M and ⌃S on a Mac, where ⌘S saves: Track ▸ Mute and Solo. Elsewhere Ctrl is ⌘.
@@ -68,6 +75,7 @@ function chord(e: KeyboardEvent): { id: string; always?: boolean } | null {
     return { id: ({ c: "copy", x: "cut", v: "paste" } as const)[k] };
   }
   if (k === "s" && !e.shiftKey) return { id: "save", always: true };
+  if (k === "s" && e.shiftKey && !e.altKey) return { id: "save_as", always: true };
   if (k === "n" && !e.shiftKey) return { id: "new_song", always: true };
   if (k === "z") return { id: e.shiftKey ? "redo" : "undo" };
   if (k === "d" && !e.shiftKey) return { id: "duplicate" };
@@ -82,6 +90,13 @@ function chord(e: KeyboardEvent): { id: string; always?: boolean } | null {
   if (e.key === "." && !e.shiftKey) return { id: "panic", always: true };
   if (e.key === "Backspace" && !e.shiftKey) return { id: "delete_track" };
   if (e.code === "KeyB" && e.altKey) return { id: "browser" };
+  // View ▸ Zoom In and Zoom Out (⌘= and ⌘−, and ⇧⌘= that types +), Taller and Shorter Tracks
+  // (⌘↓ and ⌘↑); Transport ▸ Follow Playhead (⇧⌘F).
+  if (e.key === "+" && !e.altKey) return { id: "zoom_in", page: true };
+  if (e.key === "=" && !e.altKey && !e.shiftKey) return { id: "zoom_in" };
+  if (e.key === "-" && !e.altKey && !e.shiftKey) return { id: "zoom_out" };
+  if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.altKey && !e.shiftKey) return { id: e.key === "ArrowUp" ? "shorter" : "taller" };
+  if (k === "f" && e.shiftKey && !e.altKey) return { id: "follow" };
   return null;
 }
 
@@ -112,7 +127,7 @@ export default function App() {
       const c = chord(e);
       if (c) {
         // In the desktop app the menu bar owns ⌘ chords (they arrive via onMenu).
-        if (native) return;
+        if (native && !c.page) return;
         if (!c.always && (editing() || field(e.target) || e.defaultPrevented)) return;
         e.preventDefault();
         return appCommand(c.id);
@@ -125,7 +140,8 @@ export default function App() {
       if (e.key === "Enter" && e.target instanceof HTMLButtonElement) return;
       const id = key(e);
       if (!id) return;
-      if (id === "play" || id === "continue" || id.startsWith("view_") || id === "shortcuts") e.preventDefault();
+      // ⌥← and ⌥→ never go back a page in WebKitGTK.
+      if (id === "play" || id === "continue" || id.startsWith("view_") || id === "shortcuts" || id.endsWith("_marker")) e.preventDefault();
       appCommand(id);
     };
     // Off the Mac, Ctrl+Backspace in a field deletes the word before, by the code the app's menu
@@ -169,6 +185,8 @@ export default function App() {
       <div className="h-full">
         {graph ? <GraphCanvas key={graph.session} graph={graph} /> : <StartScreen />}
         <NewSongDialog />
+        <SaveAsDialog />
+        <RenameSongDialog />
         <Shortcuts />
         <Toasts />
         {/* With a song open, the top bar's status pill says it; on the start screen, this one does. */}
@@ -289,8 +307,10 @@ export function appCommand(id: string) {
     case "panic":
       if (editorHooks.chord?.("panic")) return;
       return void graphApi.panic().catch((error) => st.toast(error instanceof Error ? error.message : String(error)));
+    case "save_as":
+      return void openSaveAs();
     case "rename_song":
-      return canvas.renameSong?.();
+      return openRenameSong();
     case "export":
       return void exportSong();
     case "close_song":
@@ -321,6 +341,12 @@ export function appCommand(id: string) {
       if (!m || m === "song") return;
       return id === "mute" ? canvas.mute?.(m) : id === "solo" ? canvas.solo?.(m) : canvas.muteInSong?.(m);
     }
+    case "change_instrument": {
+      // The selected track's (polish A3); not the Song row's.
+      const m = shell.selected;
+      if (!m || m === "song") return;
+      return canvas.changeInstrument?.(m);
+    }
     case "grid_narrower":
     case "grid_wider":
     case "grid_triplet":
@@ -332,11 +358,40 @@ export function appCommand(id: string) {
       if (editorHooks.chord?.(id) || editing()) return;
       return id === "split" ? canvas.split?.() : canvas.join?.();
     case "quantize":
-      if (editing()) return;
+      // The roll's notes while it has the keyboard (X2); else the timeline's selected clips.
+      if (editing() || editorHooks.quantize?.()) return;
       return canvas.quantize?.();
     case "copy":
     case "cut":
     case "paste":
       return canvas.clipboard?.(id);
+    case "zoom_in":
+    case "zoom_out": {
+      // Focus decides (taste.md §5.3): the roll's own zoom while it has the keyboard, else the timeline's.
+      const dir = id === "zoom_in" ? 1 : -1;
+      if (editorHooks.zoom?.(dir) || editing()) return;
+      return canvas.zoom?.(dir);
+    }
+    case "zoom_fit":
+      return canvas.zoomFit?.();
+    case "follow":
+      return canvas.follow?.();
+    case "taller":
+    case "shorter": {
+      // In the code editor, its own ⌘↑ and ⌘↓; in a text field, to its start or end (the app's
+      // menu takes the chord before the field sees it).
+      if (editorHooks.chord?.(id)) return;
+      const el = document.activeElement;
+      if (textField(el)) {
+        const at = id === "shorter" ? 0 : el.value.length;
+        return el.setSelectionRange(at, at);
+      }
+      if (editing()) return;
+      return canvas.height?.(id === "taller" ? 1 : -1);
+    }
+    case "add_marker":
+    case "prev_marker":
+    case "next_marker":
+      return canvas.marker?.(id === "add_marker" ? "add" : id === "prev_marker" ? "prev" : "next");
   }
 }

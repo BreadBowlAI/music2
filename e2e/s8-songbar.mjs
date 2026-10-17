@@ -112,7 +112,7 @@ await page.keyboard.type("7");
 await page.keyboard.press("Enter");
 await until(() => same(arrangement().meter, [{ beat: 0, beats: 7, unit: 4 }]));
 await page.click('[data-testid=meter-picker] [data-unit="8"]');
-check(await until(() => same(arrangement().meter, [{ beat: 0, beats: 7, unit: 8 }])) && (await meterText()) === "7/8", `7 beats, each an eighth: 7/8 (${JSON.stringify(arrangement().meter)})`);
+check(await until(async () => same(arrangement().meter, [{ beat: 0, beats: 7, unit: 8 }]) && (await meterText()) === "7/8"), `7 beats, each an eighth: 7/8 (${JSON.stringify(arrangement().meter)}, ${await meterText()})`);
 const bars = await page.$$eval("[data-testid=ruler] > span", (els) => els.map((e) => [e.textContent, Math.round(parseFloat(e.style.left))]));
 // A 7/8 bar is 3.5 beats, 84 px: bar 2 starts at 84 (its number 6 px in).
 check(same(bars.slice(0, 3), [["1", 6], ["2", 90], ["3", 174]]), `the ruler is re-barred: ${JSON.stringify(bars.slice(0, 4))}`);
@@ -128,7 +128,7 @@ const r = await ruler();
 await page.mouse.click(r.x + 16 * 24 + 2, r.y + r.height / 2, { button: "right" });
 const menu = await page.waitForSelector("[data-testid=ruler-menu]", { timeout: 2000 }).catch(() => null);
 const rows = menu ? await page.$$eval("[data-testid=ruler-menu] [role=menuitem]", (els) => els.map((e) => e.textContent)) : [];
-check(same(rows, ["Add tempo change at 5.1", "Add time signature change at bar 5"]), `a right-click on bar 5 offers a change there: ${rows.join(" | ")}`);
+check(same(rows, ["Add tempo change at 5.1", "Add time signature change at bar 5", "Add marker at bar 5"]), `a right-click on bar 5 offers a change there: ${rows.join(" | ")}`);
 await page.$$eval("[data-testid=ruler-menu] [role=menuitem]", (els) => els[0].click());
 check(await until(() => same(tempos(), [[0, 124], [16, 124]])), `Add tempo change writes a second entry at beat 16: ${JSON.stringify(tempos())}`);
 const typing = await page.waitForSelector("[data-testid=mark-tempo-input]", { timeout: 3000 }).catch(() => null);

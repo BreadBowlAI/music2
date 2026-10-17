@@ -1,16 +1,18 @@
 import clsx from "clsx";
-import { Check, CodeXml, Copy, Ellipsis, Pencil, Search, SlidersHorizontal, Trash2, VolumeX } from "lucide-react";
+import { ArrowLeftRight, Check, CodeXml, Copy, Ellipsis, Pencil, Search, SlidersHorizontal, Trash2, VolumeX } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
 import { graphApi, lockReason, moduleName, type Dependent, type GraphState, type Instrument } from "../lib/graph";
 import { trackMade } from "../lib/events";
+import { changeInstrument, currentInstrument, notesLane } from "../lib/instrument";
 import { chord, opt } from "../lib/native";
 import { muteInSongCall } from "../lib/overlays";
 import { DEFAULT_ORDER, TRACK_COLORS, type TrackColorName } from "../lib/palette";
-import { useShell } from "../lib/shell";
+import { canvas, useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
+import DeleteDialog from "./DeleteDialog";
 import { undoAction } from "./GraphCanvas";
-import { Button, MenuRow, Popover } from "./ui";
+import { MenuRow, Popover } from "./ui";
 
 // Tracks (design-8b §3, taste.md §3.4, TL-2, TL-3): + Track and its instrument list, the header
 // menu, duplicate, delete with its dialog, reorder by dragging a header, and colours by name.
@@ -27,7 +29,7 @@ const DELETE_KEY = chord("Backspace");
 let lastAdded: string | null = null;
 
 /** A delete that asks first: other code reads the track. */
-interface Asking {
+export interface Asking {
   module: string;
   name: string;
   dependents: Dependent[];
@@ -35,8 +37,11 @@ interface Asking {
 }
 
 interface TracksUi {
-  /** The instrument list, anchored to what opened it, and the track the new one goes below. */
-  picker: { anchor: HTMLElement; after: string | null } | null;
+  /**
+   * The instrument list, anchored to what opened it, and the track the new one goes below; or, to
+   * change a track's instrument (`swap`), that track.
+   */
+  picker: { anchor: HTMLElement; after: string | null; swap?: string } | null;
   /** A track's header menu, anchored to its ⋯. */
   menu: { module: string; anchor: HTMLElement } | null;
   asking: Asking | null;
@@ -87,6 +92,19 @@ export function openInstruments(anchor: HTMLElement, after: string | null) {
   useTracksUi.setState({ picker: { anchor, after }, menu: null });
 }
 
+/** Change instrument…: the list, at `anchor`, to change `module`'s instrument (polish A3). */
+export function openChangeInstrument(module: string, anchor: HTMLElement) {
+  const graph = writable();
+  if (!graph || module === "song") return;
+  useTracksUi.setState({ picker: { anchor, after: null, swap: module }, menu: null });
+}
+
+// Track ▸ Change Instrument… (App sends it here): the list at the selected track's header.
+canvas.changeInstrument = (module) => {
+  const anchor = document.querySelector<HTMLElement>(`[data-track-menu="${module}"]`) ?? document.querySelector<HTMLElement>(`[data-module-tab="${module}"]`);
+  if (anchor) openChangeInstrument(module, anchor);
+};
+
 /** ⌘T: the list, at + Track, for a track below the selected one. */
 export function newTrack() {
   const anchor = document.querySelector<HTMLElement>("[data-testid=add-track]");
@@ -129,7 +147,7 @@ export async function duplicateTrack(module: string) {
 }
 
 /** "2 Ducks", "the Duck": what a cascade takes off with the track. */
-function what(deps: Dependent[]) {
+export function what(deps: Dependent[]) {
   const names = [...new Set(deps.map((d) => d.component))];
   if (deps.length === 1) return `its ${names[0]}`;
   return names.length === 1 ? `${deps.length} ${names[0]}s` : `${deps.length} effects`;
@@ -267,13 +285,29 @@ export function instrumentGroups(list: Instrument[], query: string) {
  * The instrument list (TL-3, BR-1, taste.md §3.6): the browser's Instruments as a popover at + Track.
  * Typing filters, ↑↓ move, Enter adds the keyboard-active row: the instrument added last in this
  * window, else the first. The foot shows the code it writes.
+ *
+ * To change a track's instrument (`swap`, polish A3): titled for the track, the instrument it plays
+ * ticked and active, and Enter changes it.
  */
-function InstrumentPicker({ graph, anchor, after, onClose }: { graph: GraphState; anchor: HTMLElement; after: string | null; onClose: () => void }) {
+function InstrumentPicker({
+  graph,
+  anchor,
+  after,
+  swap,
+  onClose,
+}: {
+  graph: GraphState;
+  anchor: HTMLElement;
+  after: string | null;
+  swap?: string;
+  onClose: () => void;
+}) {
   const [query, setQuery] = useState("");
   const all = graph.instruments ?? [];
   const groups = useMemo(() => instrumentGroups(all, query), [all, query]);
   const flat = groups.flatMap((g) => g.items);
-  const [active, setActive] = useState(() => Math.max(0, all.findIndex((i) => i.component === lastAdded)));
+  const playing = swap ? currentInstrument(graph, swap) : undefined;
+  const [active, setActive] = useState(() => Math.max(0, all.findIndex((i) => i.component === (swap ? playing?.component : lastAdded))));
   const current = flat[Math.min(active, flat.length - 1)];
   const list = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLInputElement>(null);
@@ -283,21 +317,37 @@ function InstrumentPicker({ graph, anchor, after, onClose }: { graph: GraphState
   // Typing filters at once, and Enter adds, however soon after it opens.
   useLayoutEffect(() => field.current?.focus(), []);
   const taken = new Set(graph.view.modules.map((m) => m.key));
+  const name = swap ? nameOf(graph, swap) : "";
   const pick = (i: Instrument | undefined) => {
     if (!i) return;
     onClose();
-    void addTrack(i, after);
+    if (!swap) return void addTrack(i, after);
+    // The one it plays: nothing to change.
+    if (i.component !== playing?.component) void changeInstrument(swap, i);
   };
   const step = (by: number) => setActive((a) => (flat.length ? (Math.min(a, flat.length - 1) + by + flat.length) % flat.length : 0));
   let index = 0;
   return (
-    <Popover anchor={anchor} onClose={onClose} role="dialog" aria-label="Add a track" data-testid="instrument-list" className="w-[280px] !p-0 flex flex-col">
+    <Popover
+      anchor={anchor}
+      onClose={onClose}
+      role="dialog"
+      aria-label={swap ? `Change ${name}'s instrument` : "Add a track"}
+      data-testid="instrument-list"
+      data-swap={swap}
+      className="w-[280px] !p-0 flex flex-col"
+    >
+      {swap && (
+        <div data-testid="instrument-list-title" className="h-8 shrink-0 flex items-center px-3 border-b border-line text-sm font-semibold text-fg-strong truncate">
+          {`Change ${name}'s instrument`}
+        </div>
+      )}
       <div className="h-10 shrink-0 flex items-center gap-2 px-3 border-b border-line">
         <Search size={14} className="shrink-0 text-fg-faint" />
         <input
           ref={field}
           value={query}
-          placeholder="Add a track…"
+          placeholder={swap ? "Find an instrument…" : "Add a track…"}
           aria-label="Search instruments"
           role="combobox"
           aria-expanded
@@ -327,20 +377,26 @@ function InstrumentPicker({ graph, anchor, after, onClose }: { graph: GraphState
             {g.items.map((i) => {
               const k = index++;
               const on = i === current;
+              const ticked = !!swap && i.component === playing?.component;
               return (
                 <div
                   key={i.component}
                   id={`instrument-${i.component}`}
                   role="option"
                   aria-selected={on}
+                  aria-checked={swap ? ticked : undefined}
                   data-instrument={i.component}
                   data-active={on || undefined}
-                  className={clsx("min-h-ctl px-2 py-1 rounded-sm cursor-pointer transition-colors duration-80 ease-linear", on && "bg-accent-soft")}
+                  className={clsx("min-h-ctl px-2 py-1 rounded-sm cursor-pointer transition-colors duration-80 ease-linear flex gap-2", on && "bg-accent-soft")}
                   onPointerMove={() => k !== active && setActive(k)}
                   onClick={() => pick(i)}
                 >
-                  <span className="block text-sm text-fg">{i.label}</span>
-                  {i.description && <span className="block text-xs text-fg-muted truncate">{i.description}</span>}
+                  {/* What it plays now: a check at the left, as a menu's chosen row (taste.md §2.9). */}
+                  {swap && <span className="w-3.5 shrink-0 mt-[3px] text-fg">{ticked && <Check size={14} strokeWidth={1.5} absoluteStrokeWidth />}</span>}
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-sm text-fg">{i.label}</span>
+                    {i.description && <span className="block text-xs text-fg-muted truncate">{i.description}</span>}
+                  </span>
                 </div>
               );
             })}
@@ -350,8 +406,10 @@ function InstrumentPicker({ graph, anchor, after, onClose }: { graph: GraphState
       {/* Literally code: what adding it writes (BR-5). */}
       {current && (
         <div className="h-ctl shrink-0 flex items-center px-3 border-t border-line bg-chrome rounded-b-md text-xs text-fg-muted">
-          <span data-code className="flex-1 min-w-0 truncate font-mono" title="What adding it writes in your code">
-            {`tracks/${proposed(current.label, taken)}.ts · ${current.name}(lane.notes("${current.lane}"))`}
+          <span data-code data-testid="instrument-code" className="flex-1 min-w-0 truncate font-mono" title={swap ? "What changing it writes in your code" : "What adding it writes in your code"}>
+            {swap
+              ? `${fileOf(graph, swap) ?? "its code"} · ${current.name}(lane.notes("${notesLane(graph, swap)}"))`
+              : `tracks/${proposed(current.label, taken)}.ts · ${current.name}(lane.notes("${current.lane}"))`}
           </span>
         </div>
       )}
@@ -437,6 +495,15 @@ function TrackMenu({ graph, module, anchor, onClose }: { graph: GraphState; modu
       >
         Rename
       </MenuRow>
+      <MenuRow
+        icon={<ArrowLeftRight size={14} />}
+        disabled={!!locked}
+        title={locked ?? undefined}
+        data-testid="change-instrument"
+        onClick={() => openChangeInstrument(module, anchor)}
+      >
+        Change instrument…
+      </MenuRow>
       <MenuRow icon={<Copy size={14} />} shortcut={chord("D")} disabled={!!locked} onClick={run(() => void duplicateTrack(module))}>
         Duplicate
       </MenuRow>
@@ -478,82 +545,6 @@ function TrackMenu({ graph, module, anchor, onClose }: { graph: GraphState; modu
   );
 }
 
-/** "Bass and Chords", from the tracks the reads are in. */
-function joined(names: string[]) {
-  return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : (names[0] ?? "");
-}
-
-/** What the delete dialog says (design-8b §3.5), in words: who reads the track, and what goes with it. */
-function said({ name, dependents, blocked }: Asking) {
-  const readers = [...new Set(dependents.map((d) => d.label))];
-  const many = readers.length > 1;
-  if (blocked) {
-    const d = dependents[0];
-    return `${joined(readers)} ${many ? "read" : "reads"} it in ${many ? "their" : "its"} code (${d?.file}, line ${d?.line}).`;
-  }
-  const these = dependents.length === 1 ? "that" : "those";
-  const off = what(dependents).replace(/^its /, "");
-  if (dependents.every((d) => d.component === "Duck")) return `${joined(readers)} ${many ? "duck" : "ducks"} to ${name}. Deleting ${name} also takes off ${these} ${off}.`;
-  return `${joined(readers)} ${many ? "read" : "reads"} ${name} through ${off}. Deleting ${name} also takes ${these} off.`;
-}
-
-/** The delete dialog (taste.md §2.14): the ducks a delete takes off too, or why it can't. Enter confirms, Esc cancels. */
-function DeleteDialog({ asking, onClose }: { asking: Asking; onClose: () => void }) {
-  const { module, name, dependents, blocked } = asking;
-  const confirm = () => {
-    onClose();
-    if (!blocked) void deleteTrack(module, true);
-  };
-  const show = () => {
-    onClose();
-    const d = dependents[0];
-    if (d) useShell.getState().select(d.module);
-    useShell.getState().setView("code");
-  };
-  useEffect(() => {
-    const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-      else if (e.key === "Enter") (blocked ? onClose : confirm)();
-      else return;
-      e.preventDefault();
-      e.stopPropagation();
-    };
-    window.addEventListener("keydown", key, true);
-    return () => window.removeEventListener("keydown", key, true);
-  });
-  return (
-    <div className="fixed inset-0 z-[70] grid place-items-center p-4 bg-fg-strong/20" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div role="alertdialog" aria-modal aria-labelledby="delete-title" data-testid="delete-dialog" className="w-[440px] max-w-full p-6 rounded-md bg-raised shadow-pop animate-dialog cursor-default">
-        <h2 id="delete-title" className="text-lg font-semibold text-fg-strong">
-          {blocked ? `${name} can't be deleted from here` : `Delete ${name}?`}
-        </h2>
-        <p className="mt-2 text-base text-fg-muted">{said(asking)}</p>
-        <div className="mt-6 flex justify-end gap-2">
-          {blocked ? (
-            <>
-              <Button variant="secondary" size="lg" onClick={show}>
-                Show in code
-              </Button>
-              <Button variant="primary" size="lg" autoFocus onClick={onClose}>
-                Close
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button variant="secondary" size="lg" onClick={onClose}>
-                Cancel
-              </Button>
-              <Button variant="danger" size="lg" autoFocus data-testid="delete-confirm" onClick={confirm}>
-                {`Delete ${name} and ${dependents.length === 1 ? `the ${dependents[0].component}` : what(dependents)}`}
-              </Button>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /** Where the track popovers and the delete dialog show: mounted once with the song. */
 export function TracksUi({ graph }: { graph: GraphState }) {
   const { picker, menu, asking } = useTracksUi();
@@ -562,7 +553,7 @@ export function TracksUi({ graph }: { graph: GraphState }) {
   useEffect(() => () => useTracksUi.setState({ picker: null, menu: null, asking: null }), [graph.session]);
   return (
     <>
-      {picker && <InstrumentPicker graph={graph} anchor={picker.anchor} after={picker.after} onClose={close} />}
+      {picker && <InstrumentPicker graph={graph} anchor={picker.anchor} after={picker.after} swap={picker.swap} onClose={close} />}
       {menu && <TrackMenu graph={graph} module={menu.module} anchor={menu.anchor} onClose={close} />}
       {asking && <DeleteDialog asking={asking} onClose={() => useTracksUi.setState({ asking: null })} />}
     </>

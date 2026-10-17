@@ -668,9 +668,16 @@ impl Open {
         let data = &self.session.accepted().compiled.data;
         // Every field but the tracks, each named: a field the view gains can't be left out of
         // what is published (as `home` once was), since this no longer compiles.
-        let m2_editor::TimelineView { tempo, meter, home, end, tracks } = self.session.timeline();
+        let m2_editor::TimelineView { tempo, meter, home, end, tracks, markers, key } = self.session.timeline();
         let mut head = serde_json::Map::new();
-        for (k, v) in [("tempo", value(&tempo)), ("meter", value(&meter)), ("home", value(&home)), ("end", value(&end))] {
+        for (k, v) in [
+            ("tempo", value(&tempo)),
+            ("meter", value(&meter)),
+            ("home", value(&home)),
+            ("end", value(&end)),
+            ("markers", value(&markers)),
+            ("key", value(&key)),
+        ] {
             head.insert(k.into(), v);
         }
         let tracks = tracks.into_iter().map(|TimelineTrack { module, label, track, colour, lanes }| {
@@ -1124,7 +1131,8 @@ impl Actor {
             revs.push(number, code_rev);
             let engine = Arc::new(EngineView { token, revision: number, code_rev, controls, plays: view });
             let aliases = Arc::new(super::Aliases { to: code_rev, ids: HashMap::new() });
-            cp.open.replace(Published { engine, shown, revs, aliases, overlays: monitor }).and_then(|p| p.owed())
+            let local = super::view_file::local(&shown.dir);
+            cp.open.replace(Published { engine, shown, revs, aliases, overlays: monitor, local }).and_then(|p| p.owed())
         };
         self.inner.save_owed(owed);
         *self.inner.watch.lock() = Some(watcher::Watch::new(token, o.session.accepted(), before));

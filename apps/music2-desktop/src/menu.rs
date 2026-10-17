@@ -1,4 +1,5 @@
-//! The menu bar. Opening a project folder, Show in Finder and Quit run here in Rust (dialogs);
+//! The menu bar. Opening a project folder, Open Recent, Show in Finder and Quit run here in Rust
+//! (dialogs);
 //! everything about the UI (save in the code editor, undo in a text field vs. the project,
 //! transport) is forwarded to the web view as a `menu` event with the item's id.
 //!
@@ -14,13 +15,20 @@
 //! Ctrl elsewhere.
 
 use tauri::menu::{AboutMetadata, Menu, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
-use tauri::{AppHandle, Emitter, Wry};
+use tauri::{AppHandle, Emitter, Manager, Wry};
 
-use crate::actions;
+use crate::{Native, actions};
 
 /// Item ids handled natively (see `actions::run`); every other id goes to the UI, Save
-/// included: the code editor saves its files.
-const NATIVE: &[&str] = &["open_project", "reveal", "quit"];
+/// included: the code editor saves its files. Open Recent's songs (`open_recent:<folder>`) too.
+const NATIVE: &[&str] = &["open_project", "reveal", "quit", CLEAR_RECENT];
+
+/// File ▸ Open Recent ▸ a song: the id is this and the song's folder.
+pub const OPEN_RECENT: &str = "open_recent:";
+/// File ▸ Open Recent ▸ Clear Menu.
+const CLEAR_RECENT: &str = "clear_recent";
+/// How many songs Open Recent shows (the start screen shows all the list keeps).
+const RECENT_SHOWN: usize = 10;
 
 /// Whether this build's menu bar is the Mac's.
 const MAC: bool = cfg!(target_os = "macos");
@@ -44,10 +52,12 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     // The UI asks about unsaved code first, then the start screen shows.
     ("close_song", "Close Song", Some("CmdOrCtrl+W")),
     ("save", "Save", Some("CmdOrCtrl+S")),
+    // A copy under a new name, which opens (polish C3); the song stays as it was.
+    ("save_as", "Save As…", Some("CmdOrCtrl+Shift+S")),
     // The UI asks for the file (actions.rs `export_path`), then shows the progress. ⌘E is Split.
     ("export", "Export Audio…", Some("CmdOrCtrl+Shift+E")),
     ("reveal", REVEAL, None),
-    // The song's name in the top bar turns into a field (a double-click there does the same).
+    // The name, and its folder too (polish C3); the top bar's double-click renames the name only.
     ("rename_song", "Rename Song…", None),
     ("undo", "Undo", Some("CmdOrCtrl+Z")),
     ("redo", "Redo", Some("CmdOrCtrl+Shift+Z")),
@@ -64,6 +74,8 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     // In a field, the field's own: to the line's start on a Mac, the word before elsewhere.
     ("delete_track", "Delete Track", Some("CmdOrCtrl+Backspace")),
     ("rename", "Rename", Some("CmdOrCtrl+R")),
+    // The selected track's instrument, from + Track's list (polish A3). No chord.
+    ("change_instrument", "Change Instrument…", None),
     // While listening, on the selected track (not undo steps); M and S are the page's keys.
     ("mute", "Mute", MUTE_KEY),
     ("solo", "Solo", SOLO_KEY),
@@ -82,6 +94,14 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     ("grid_wider", "Wider Grid", Some("CmdOrCtrl+2")),
     ("grid_triplet", "Triplet Grid", Some("CmdOrCtrl+3")),
     ("grid_snap", "Snap to Grid", Some("CmdOrCtrl+4")),
+    // The timeline's zoom, around the playhead or the view's middle (the roll's own while it has
+    // the keyboard). ⇧⌘= is the page's too. Z, the page's key, fits the selected clips or the song.
+    ("zoom_in", "Zoom In", Some("CmdOrCtrl+=")),
+    ("zoom_out", "Zoom Out", Some("CmdOrCtrl+-")),
+    ("zoom_fit", "Zoom to Fit", None),
+    // The selected track's height, or every track's (in the code editor, its own ⌘↓ and ⌘↑).
+    ("taller", "Taller Tracks", Some("CmdOrCtrl+Down")),
+    ("shorter", "Shorter Tracks", Some("CmdOrCtrl+Up")),
     // No Space accelerator: the menu would steal it from text fields. The UI handles Space, Return and C.
     ("play", "Play / Stop", None),
     // ⇧Space, the page's: from where it stopped, not where play started.
@@ -90,6 +110,12 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     ("loop", "Loop", None),
     // The selected clip's span, else the bar at the playhead.
     ("loop_selection", "Loop Selection", Some("CmdOrCtrl+L")),
+    // The timeline pages to keep the playhead in view while it plays.
+    ("follow", "Follow Playhead", Some("CmdOrCtrl+Shift+F")),
+    // At the playhead's bar; ⌥← and ⌥→, the page's, move play's start to the marker before or after.
+    ("add_marker", "Add Marker", None),
+    ("prev_marker", "Previous Marker", None),
+    ("next_marker", "Next Marker", None),
     // Panic (RENDER-10): every note off, every instance reset.
     ("panic", "Stop All Sound", Some("CmdOrCtrl+Period")),
     ("shortcuts", "Keyboard Shortcuts", None),
@@ -103,6 +129,8 @@ const CLOSE_WINDOW: &str = "Shift+CmdOrCtrl+W";
 enum Row {
     Item(&'static str),
     Line,
+    /// File ▸ Open Recent ▸, built from the recent songs list ([`recent_rows`]).
+    Recent,
     About,
     Services,
     Hide,
@@ -124,9 +152,11 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
     let file = [
         Item("new_song"),
         Item("open_project"),
+        Recent,
         Line,
         Item("close_song"),
         Item("save"),
+        Item("save_as"),
         Line,
         Item("export"),
         Line,
@@ -135,8 +165,23 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
     ];
     // What is selected: the roll's notes, the timeline's clips, the track.
     let selected = [Item("duplicate"), Item("split"), Item("join"), Item("quantize")];
-    let track = vec![Item("new_track"), Item("delete_track"), Item("rename"), Line, Item("mute"), Item("solo"), Item("mute_in_song")];
+    let track = vec![
+        Item("new_track"),
+        Item("delete_track"),
+        Item("rename"),
+        Item("change_instrument"),
+        Line,
+        Item("mute"),
+        Item("solo"),
+        Item("mute_in_song"),
+    ];
     let views = [
+        Item("zoom_in"),
+        Item("zoom_out"),
+        Item("zoom_fit"),
+        Item("taller"),
+        Item("shorter"),
+        Line,
         Item("view_device"),
         Item("view_notes"),
         Item("view_mix"),
@@ -151,7 +196,21 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
         Item("grid_triplet"),
         Item("grid_snap"),
     ];
-    let transport = vec![Item("play"), Item("continue"), Item("home"), Line, Item("loop"), Item("loop_selection"), Line, Item("panic")];
+    let transport = vec![
+        Item("play"),
+        Item("continue"),
+        Item("home"),
+        Line,
+        Item("loop"),
+        Item("loop_selection"),
+        Item("follow"),
+        Line,
+        Item("add_marker"),
+        Item("prev_marker"),
+        Item("next_marker"),
+        Line,
+        Item("panic"),
+    ];
     if mac {
         vec![
             ("music2", vec![About, Line, Services, Line, Hide, HideOthers, ShowAll, Line, Item("quit")]),
@@ -180,6 +239,34 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
     }
 }
 
+/// A row of File ▸ Open Recent ▸.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RecentRow {
+    /// A song: its item id (`open_recent:<folder>`) and its name.
+    Song(String, String),
+    Line,
+    /// Clear Menu, which does something only while there is a song to clear.
+    Clear { enabled: bool },
+}
+
+/// File ▸ Open Recent ▸'s rows for `songs` (folder, name), newest first: up to ten songs, a line,
+/// and Clear Menu. With none, only Clear Menu, greyed out.
+fn recent_rows(songs: &[(std::path::PathBuf, String)]) -> Vec<RecentRow> {
+    let mut rows: Vec<RecentRow> =
+        songs.iter().take(RECENT_SHOWN).map(|(dir, name)| RecentRow::Song(format!("{OPEN_RECENT}{}", dir.display()), name.clone())).collect();
+    if !rows.is_empty() {
+        rows.push(RecentRow::Line);
+    }
+    rows.push(RecentRow::Clear { enabled: !songs.is_empty() });
+    rows
+}
+
+/// The recent songs as Open Recent lists them: folder and name, newest first.
+fn recent_songs(app: &AppHandle) -> Vec<(std::path::PathBuf, String)> {
+    let Some(native) = app.try_state::<Native>() else { return vec![] };
+    native.server.recent().map(|r| r.list().into_iter().map(|s| (s.path, s.name)).collect()).unwrap_or_default()
+}
+
 pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let mut bar = MenuBuilder::new(app);
     for (name, rows) in layout(MAC) {
@@ -195,6 +282,19 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
                     })
                 }
                 Row::Line => menu.separator(),
+                Row::Recent => {
+                    let mut sub = SubmenuBuilder::new(app, "Open Recent");
+                    for row in recent_rows(&recent_songs(app)) {
+                        sub = match row {
+                            RecentRow::Song(id, name) => sub.item(&MenuItemBuilder::with_id(id, name).build(app)?),
+                            RecentRow::Line => sub.separator(),
+                            RecentRow::Clear { enabled } => {
+                                sub.item(&MenuItemBuilder::with_id(CLEAR_RECENT, "Clear Menu").enabled(enabled).build(app)?)
+                            }
+                        };
+                    }
+                    menu.item(&sub.build()?)
+                }
                 Row::About => menu.item(&PredefinedMenuItem::about(app, Some("About music2"), Some(about(app)))?),
                 Row::Services => menu.services(),
                 Row::Hide => menu.hide(),
@@ -232,7 +332,7 @@ pub fn handle(app: &AppHandle, id: &str) {
     if id == "close_window" {
         // Closing the window quits: ask about unsaved code first, as its close button does.
         actions::run(app, "quit");
-    } else if NATIVE.contains(&id) {
+    } else if NATIVE.contains(&id) || id.starts_with(OPEN_RECENT) {
         actions::run(app, id);
     } else {
         let _ = app.emit("menu", id);
@@ -329,8 +429,78 @@ mod tests {
         assert_eq!(bar[5].1.last(), Some(&Row::About));
         for (menu, rows) in &bar {
             for r in rows {
-                assert!(matches!(r, Row::Item(_) | Row::Line | Row::About), "{menu}: {r:?}");
+                assert!(matches!(r, Row::Item(_) | Row::Line | Row::About | Row::Recent), "{menu}: {r:?}");
             }
+        }
+    }
+
+    /// Polish A3: Track ▸ Change Instrument… comes right after Rename, on both menu bars, with no chord.
+    #[test]
+    fn change_instrument_follows_rename_in_track() {
+        assert_eq!(ITEMS.iter().find(|i| i.0 == "change_instrument").map(|i| (i.1, i.2)), Some(("Change Instrument…", None)));
+        for mac in [true, false] {
+            let bar = layout(mac);
+            let track = &bar.iter().find(|m| m.0 == "Track").expect("Track").1;
+            let at = track.iter().position(|r| *r == Row::Item("rename")).expect("Rename");
+            assert_eq!(track[at + 1], Row::Item("change_instrument"), "mac: {mac}");
+        }
+    }
+
+    /// Polish C3: File ▸ Save As… (⇧⌘S, Ctrl+Shift+S) sits after Save on both menu bars.
+    #[test]
+    fn save_as_is_shift_command_s_after_save() {
+        assert_eq!(ITEMS.iter().find(|i| i.0 == "save_as").map(|i| (i.1, i.2)), Some(("Save As…", Some("CmdOrCtrl+Shift+S"))));
+        for mac in [true, false] {
+            let bar = layout(mac);
+            let file = &bar.iter().find(|m| m.0 == "File").expect("a File menu").1;
+            let at = file.iter().position(|r| *r == Row::Item("save")).expect("Save");
+            assert_eq!(file[at + 1], Row::Item("save_as"), "mac: {mac}");
+        }
+    }
+
+    /// Polish C2: File ▸ Open Recent ▸ lists the ten newest songs by name, a line, and Clear Menu;
+    /// with none, only Clear Menu, greyed out. It sits after Open Project Folder… on both menu bars.
+    #[test]
+    fn open_recent_lists_ten_and_clear_menu() {
+        let songs: Vec<_> = (0..12).map(|n| (std::path::PathBuf::from(format!("/songs/Song {n}")), format!("Song {n}"))).collect();
+        let rows = recent_rows(&songs);
+        assert_eq!(rows.len(), 12, "{rows:?}");
+        assert_eq!(rows[0], RecentRow::Song("open_recent:/songs/Song 0".into(), "Song 0".into()));
+        assert_eq!(rows[9], RecentRow::Song("open_recent:/songs/Song 9".into(), "Song 9".into()));
+        assert_eq!(rows[10..], [RecentRow::Line, RecentRow::Clear { enabled: true }]);
+        assert_eq!(recent_rows(&[]), [RecentRow::Clear { enabled: false }]);
+        for mac in [true, false] {
+            let bar = layout(mac);
+            let file = &bar.iter().find(|m| m.0 == "File").expect("a File menu").1;
+            let at = file.iter().position(|r| *r == Row::Item("open_project")).expect("Open Project Folder…");
+            assert_eq!(file[at + 1], Row::Recent, "mac: {mac}");
+        }
+    }
+
+    /// The timeline's rows (polish B): zoom and heights lead View, follow and the markers are in
+    /// Transport, on both menu bars, with ⌘ chords only where the page has no key of its own.
+    #[test]
+    fn zoom_heights_follow_and_markers_have_their_rows() {
+        let accel = |id: &str| ITEMS.iter().find(|i| i.0 == id).and_then(|i| i.2);
+        assert_eq!(accel("zoom_in"), Some("CmdOrCtrl+="));
+        assert_eq!(accel("zoom_out"), Some("CmdOrCtrl+-"));
+        assert_eq!(accel("zoom_fit"), None, "Z is the page's key");
+        assert_eq!(accel("taller"), Some("CmdOrCtrl+Down"));
+        assert_eq!(accel("shorter"), Some("CmdOrCtrl+Up"));
+        assert_eq!(accel("follow"), Some("CmdOrCtrl+Shift+F"));
+        for id in ["add_marker", "prev_marker", "next_marker"] {
+            assert_eq!(accel(id), None, "{id}: ⌥← and ⌥→ are the page's keys");
+        }
+        for mac in [true, false] {
+            let bar = layout(mac);
+            let menu = |name: &str| bar.iter().find(|m| m.0 == name).expect(name).1.clone();
+            let view = menu("View");
+            assert_eq!(view[..6], [Row::Item("zoom_in"), Row::Item("zoom_out"), Row::Item("zoom_fit"), Row::Item("taller"), Row::Item("shorter"), Row::Line]);
+            let transport = menu("Transport");
+            let at = transport.iter().position(|r| *r == Row::Item("loop_selection")).expect("Loop Selection");
+            assert_eq!(transport[at + 1], Row::Item("follow"), "mac: {mac}");
+            let at = transport.iter().position(|r| *r == Row::Item("add_marker")).expect("Add Marker");
+            assert_eq!(transport[at - 1..at + 4], [Row::Line, Row::Item("add_marker"), Row::Item("prev_marker"), Row::Item("next_marker"), Row::Line]);
         }
     }
 

@@ -23,6 +23,10 @@ pub struct TimelineView {
     pub end: f64,
     /// Modules with rows: tracks, and any other module that declares a lane.
     pub tracks: Vec<TimelineTrack>,
+    /// The ruler's markers, by beat, from `layout.json` (Q13): none while it doesn't read.
+    pub markers: Vec<crate::markers::Marker>,
+    /// The song's key, from `layout.json` (the polish plan's D2): None when it says none.
+    pub key: Option<crate::songkey::SongKey>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -48,6 +52,10 @@ pub enum TimelineLane {
         key: String,
         label: String,
         clips: Vec<NoteClip>,
+        /// What the instrument that plays it calls its notes, by MIDI note (`36: "Kick"`): the
+        /// piano roll's row names (polish A4). Empty when it names none.
+        #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+        names: BTreeMap<u8, String>,
     },
     Control {
         key: String,
@@ -107,13 +115,15 @@ pub fn timeline(s: &Session) -> TimelineView {
             label: m.label().to_string(),
             track: m.track,
             colour: colour_of(&layout, &m.key, m.track),
-            lanes: m.lanes.iter().map(|l| lane(data, &m.key, l)).collect(),
+            lanes: m.lanes.iter().map(|l| lane(rev, data, &m.key, l)).collect(),
         })
         .collect();
     in_order(&mut tracks, &layout);
     let a = &rev.project.arrangement;
     let bar = a.meter_at(0.0).bar();
-    TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), home: Home::Arrangement, end: data.end().max(bar), tracks }
+    let markers = crate::markers::on_disk(&rev.project.dir);
+    let key = crate::songkey::of(&rev.project.dir);
+    TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), home: Home::Arrangement, end: data.end().max(bar), tracks, markers, key }
 }
 
 /// A module's colour by name: a track's from the layout, else graphite.
@@ -138,7 +148,17 @@ fn in_order(tracks: &mut [TimelineTrack], layout: &crate::layout::LayoutView) {
 fn last_known(rev: &Revision) -> TimelineView {
     let Ok(project) = Project::from_snapshot(&rev.snapshot) else {
         let a = &rev.project.arrangement;
-        return TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), home: Home::Arrangement, end: a.meter_at(0.0).bar(), tracks: vec![] };
+        let markers = crate::markers::on_disk(&rev.project.dir);
+        let key = crate::songkey::of(&rev.project.dir);
+        return TimelineView {
+            tempo: a.tempo.clone(),
+            meter: a.meter.clone(),
+            home: Home::Arrangement,
+            end: a.meter_at(0.0).bar(),
+            tracks: vec![],
+            markers,
+            key,
+        };
     };
     let mut modules: BTreeMap<String, Vec<TimelineLane>> = BTreeMap::new();
     let mut end: f64 = 0.0;
@@ -147,7 +167,7 @@ fn last_known(rev: &Revision) -> TimelineView {
         let (key, label) = (addr.lane.to_string(), sentence(addr.lane.as_str()));
         // Read as notes, as automation in any unit, then as audio: the first that fits is what it holds.
         let lane = if let Ok(LaneData::Notes(clips)) = LaneData::read(text, &LaneKind::Notes) {
-            TimelineLane::Notes { key, label, clips }
+            TimelineLane::Notes { key, label, clips, names: BTreeMap::new() }
         } else if let Ok(LaneData::Control { unit, clips }) = LaneData::read(text, &LaneKind::Control { unit: None }) {
             let unit = unit.and_then(|u| u.parse::<Unit>().ok());
             let (min, max) = range(unit, None, &clips);
@@ -172,7 +192,17 @@ fn last_known(rev: &Revision) -> TimelineView {
         .collect();
     in_order(&mut tracks, &layout);
     let a = &project.arrangement;
-    TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), home: Home::Arrangement, end: end.max(a.meter_at(0.0).bar()), tracks }
+    let markers = crate::markers::on_disk(&rev.project.dir);
+    let key = crate::songkey::of(&rev.project.dir);
+    TimelineView {
+        tempo: a.tempo.clone(),
+        meter: a.meter.clone(),
+        home: Home::Arrangement,
+        end: end.max(a.meter_at(0.0).bar()),
+        tracks,
+        markers,
+        key,
+    }
 }
 
 /// `kick` → `Kick`.
@@ -195,13 +225,14 @@ fn lane_end(lane: &TimelineLane) -> f64 {
 /// A declared lane and the clips it plays, in canonical order (by start, then id), which is
 /// also the order they win in where they overlap, so the last is drawn on top. A lane whose
 /// file failed shows what it plays: its last accepted data, or nothing (FMT-9).
-fn lane(data: &DataSet, module: &str, decl: &LaneDecl) -> TimelineLane {
+fn lane(rev: &Revision, data: &DataSet, module: &str, decl: &LaneDecl) -> TimelineLane {
     let (key, label) = (decl.key.clone(), decl.label().to_string());
     let lane = data.lane(module, &key).map(|d| &**d);
     match decl.kind {
         Kind::Events(_) => {
             let clips = if let Some(LaneData::Notes(c)) = lane { c.clone() } else { vec![] };
-            TimelineLane::Notes { key, label, clips }
+            let names = crate::note_names::of(rev, module, &key);
+            TimelineLane::Notes { key, label, clips, names }
         }
         Kind::Control(unit) => {
             let clips = if let Some(LaneData::Control { clips, .. }) = lane { clips.clone() } else { vec![] };

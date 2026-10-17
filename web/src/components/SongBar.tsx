@@ -3,7 +3,6 @@ import { Minus, Plus } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { barAt, graphApi, type Meter, type TimelineView } from "../lib/graph";
 import { mod } from "../lib/native";
-import { canvas } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { Bubble } from "./Knob";
 import { Button, MenuRow, Popover, Segment } from "./ui";
@@ -368,7 +367,22 @@ export function MeterField({ session, timeline, at, locked }: { session: number;
  * place. Enter writes it into music2.toml, Esc puts it back; an empty one is refused in the
  * field's error style (taste.md §2.9). The folder keeps its own name.
  */
-export function SongTitle({ session, name, dir, rate, locked }: { session: number; name: string; dir: string; rate?: number; locked: string | null }) {
+export function SongTitle({
+  session,
+  name,
+  dir,
+  rate,
+  locked,
+  room,
+}: {
+  session: number;
+  name: string;
+  dir: string;
+  rate?: number;
+  locked: string | null;
+  /** How wide the name may be in the bar, as measured there (Q23): the field keeps to it too. */
+  room: number;
+}) {
   const toast = useStore((s) => s.toast);
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -377,14 +391,18 @@ export function SongTitle({ session, name, dir, rate, locked }: { session: numbe
   useEffect(() => {
     if (pending !== null && name === pending) setPending(null);
   }, [name, pending]);
-  useEffect(() => {
-    canvas.renameSong = () => !locked && setDraft(pending ?? name);
-    return () => void delete canvas.renameSong;
-  }, [name, pending, locked]);
   const editing = draft !== null;
+  // The room when typing began. The field keeps at least that width while it is typed in, also
+  // when the room goes for a moment (a status pill shows in a small window): it is drawn over its
+  // neighbours then, so what is typed stays in sight (review PL-T1).
+  const [began, setBegan] = useState(room);
   useLayoutEffect(() => {
-    if (editing) input.current?.select();
+    if (!editing) return;
+    setBegan(room);
+    input.current?.select();
+    // Only when typing begins: later changes of the room are what the field must outlast.
   }, [editing]);
+  const wide = Math.max(room, began);
   const commit = (value: string, leaving: boolean) => {
     const next = value.trim();
     if (!next) {
@@ -430,11 +448,11 @@ export function SongTitle({ session, name, dir, rate, locked }: { session: numbe
             }
           }}
           onBlur={() => commit(draft, true)}
-          style={{ width: `${Math.max(12, draft.length + 2)}ch` }}
+          // As wide as the name's place in the bar may be (TopBar), 160 to 480 px when there is room;
+          // never narrower than when typing began.
+          style={{ width: `${Math.max(12, draft.length + 2)}ch`, minWidth: Math.min(160, wide), maxWidth: Math.min(480, wide) }}
           className={clsx(
-            // As wide as the name's place in the bar may be (TopBar): in the Mac app, once the time shows, narrower.
-            "max-w-[min(480px,calc(100vw-960px))] [:root[data-app=mac]_&]:min-[1280px]:max-w-[min(480px,calc(100vw-1096px))]",
-            "min-w-40 h-ctl px-2 rounded-sm bg-raised border text-center text-base font-semibold text-fg-strong outline-none",
+            "h-ctl px-2 rounded-sm bg-raised border text-center text-base font-semibold text-fg-strong outline-none",
             error ? "border-danger" : "border-accent",
           )}
         />
@@ -514,7 +532,10 @@ export function MarkPopover({
   );
 }
 
-/** The ruler's right-click menu: a tempo change at the beat clicked, or a time signature change at its bar. */
+/**
+ * The ruler's right-click menu: a tempo change at the beat clicked, a time signature change at its
+ * bar, or a marker at the bar line nearest it (Q13).
+ */
 export function RulerMenu({
   session,
   timeline,
@@ -523,6 +544,7 @@ export function RulerMenu({
   locked,
   onClose,
   onMade,
+  onMarker,
 }: {
   session: number;
   timeline: TimelineView;
@@ -532,10 +554,16 @@ export function RulerMenu({
   onClose: () => void;
   /** Where the change was made, to open it. */
   onMade: (beat: number) => void;
+  /** Add a marker at `beat`: its name field opens there. */
+  onMarker?: (beat: number) => void;
 }) {
   const toast = useStore((s) => s.toast);
   const bar = barAt(timeline.meter, beat);
   const at = `${bar.bar + 1}.${Math.floor(beat - bar.start + 1e-9) + 1}`;
+  // The bar line nearest the click, and whether a marker is there.
+  const line = beat - bar.start > bar.length / 2 ? bar.start + bar.length : bar.start;
+  const lineBar = barAt(timeline.meter, line).bar + 1;
+  const taken = (timeline.markers ?? []).some((m) => Math.abs(m.beat - line) < 1e-6);
   const add = (p: Promise<unknown>, where: number) => {
     onClose();
     p.then(() => onMade(where), (e) => toast(message(e)));
@@ -557,6 +585,19 @@ export function RulerMenu({
       >
         Add time signature change at bar {bar.bar + 1}
       </MenuRow>
+      {onMarker && (
+        <MenuRow
+          data-menu-item="add-marker"
+          disabled={!!locked || taken}
+          title={locked ? `${locked}.` : taken ? `A marker is at bar ${lineBar} already` : undefined}
+          onClick={() => {
+            onClose();
+            onMarker(line);
+          }}
+        >
+          Add marker at bar {lineBar}
+        </MenuRow>
+      )}
     </Popover>
   );
 }

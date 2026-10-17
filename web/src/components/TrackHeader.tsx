@@ -2,6 +2,7 @@ import clsx from "clsx";
 import { ChevronRight, CircleAlert, Info, TriangleAlert } from "lucide-react";
 import { moduleName, type Diagnostic, type TimelineTrack } from "../lib/graph";
 import { useHeard } from "../lib/graph8b";
+import { ROW_H } from "../lib/layout";
 import { useShell } from "../lib/shell";
 import MuteSolo from "./MuteSolo";
 import TrackMeter from "./TrackMeter";
@@ -13,7 +14,9 @@ import TrackName from "./TrackName";
  * 200 px headers of a small window too: the fold chevron at x = 12, the name from x = 28, M and S
  * 60 and 38 px in from the right, the meter 9 px in. The ⋯ shows on hover, just left of M. The
  * Song row has no M or S (MON-1); its meter is the song's output. Offsets from the right count
- * from inside the header's 1 px right border: at 240 px, M is at x = 180.
+ * from inside the header's 1 px right border: at 240 px, M is at x = 180. In a row taller than 44
+ * px they keep to its top 44 px, the meter 28 px tall from 8 px down; in a shorter one they are
+ * centred in it, the meter its height less 8 (X24).
  */
 export default function TrackHeader({
   track,
@@ -22,6 +25,7 @@ export default function TrackHeader({
   selected,
   song,
   issues,
+  height = ROW_H,
 }: {
   track: TimelineTrack;
   /** It has automation lanes to show or hide. */
@@ -32,6 +36,8 @@ export default function TrackHeader({
   /** The Song's row, at the foot. */
   song: boolean;
   issues: Diagnostic[] | undefined;
+  /** The row's height. */
+  height?: number;
 }) {
   const module = track.module;
   const name = moduleName({ key: module, label: track.label });
@@ -42,7 +48,7 @@ export default function TrackHeader({
   const tone =
     heard === "muted-in-song" ? "text-fg-muted line-through" : heard === "muted" ? "text-fg-muted" : heard === "silenced" ? "text-fg-faint" : selected ? "text-fg-strong" : "text-fg";
   return (
-    <>
+    <div className="absolute inset-x-0 top-0 flex items-center" style={{ height: Math.min(height, ROW_H) }}>
       {folds && (
         <button
           data-fold={module}
@@ -85,11 +91,11 @@ export default function TrackHeader({
         </>
       )}
       {(mine || song) && (
-        <div data-slot="meter" className="absolute right-[5px] top-2 bottom-2 w-[3px]">
+        <div data-slot="meter" className={clsx("absolute right-[5px] w-[3px]", height >= ROW_H ? "top-2 bottom-2" : "top-1 bottom-1")}>
           <TrackMeter module={module} name={name} />
         </div>
       )}
-    </>
+    </div>
   );
 }
 

@@ -8,5 +8,5 @@ import Meter from "./Meter";
  * meter stays empty (Q21).
  */
 export default function TrackMeter({ module, name }: { module: string; name: string }) {
-  return <Meter id={module === "song" ? OUT : module} label={`${name} level`} className="w-full h-full" />;
+  return <Meter channels={[module === "song" ? OUT : module]} label={`${name} level`} className="w-full h-full" />;
 }

@@ -185,14 +185,17 @@ check(await songIs(entry("kick: kick.out,", "kick: { in: kick.out, db: db(-96) }
 await undo();
 await undo();
 await songIs(orig.song);
-// Tab: in a strip, its pan, then its fader, then the next strip's pan.
+// Tab: in a strip, its pan, its M and S, then its fader, then the next strip's pan.
 await page.$eval(`${pan("kick")} svg`, (e) => e.focus());
 const focused = [];
-for (let i = 0; i < 2; i++) {
+for (let i = 0; i < 4; i++) {
   await key("Tab");
-  focused.push(await page.evaluate(() => { const e = document.activeElement; return `${e?.closest("[data-strip]")?.dataset.strip}:${e?.closest("[data-knob]")?.dataset.knob}`; }));
+  focused.push(await page.evaluate(() => {
+    const e = document.activeElement;
+    return `${e?.closest("[data-strip]")?.dataset.strip}:${e?.dataset.stripMute ? "M" : e?.dataset.stripSolo ? "S" : e?.closest("[data-knob]")?.dataset.knob}`;
+  }));
 }
-check(same(focused, ["kick:kick.db", "hats:hats.pan"]), `Tab goes from Kick's pan to its fader, then to Hats' pan: ${focused}`);
+check(same(focused, ["kick:M", "kick:S", "kick:kick.db", "hats:hats.pan"]), `Tab goes from Kick's pan to its M, S and fader, then to Hats' pan: ${focused}`);
 
 // ---------------------------------------------------------------- the first pan (design-8b §5.3)
 
@@ -290,9 +293,12 @@ check(await until(async () => !!(await page.$(`${strip("bass")}[data-selected]`)
 check(!!(await page.$('[data-view-tab="mix"][aria-selected="true"]')), "and the dock stays on Mix");
 await page.click(`${strip("keys")} [data-testid=strip-name]`, { button: "right" });
 const items = await page.waitForSelector("[data-testid=strip-menu]", { timeout: 2000 }).then(() => page.$$eval("[data-testid=strip-menu] [role=menuitem]", (els) => els.map((e) => e.textContent))).catch(() => []);
-check(items.length === 3 && items[0] === "Rename" && items[1].startsWith("Colour") && items[2].startsWith("Edit in code"), `a right-click opens its menu: ${items}`);
+check(
+  items.length === 5 && items[0] === "Rename" && items[1] === "Change instrument…" && items[2].startsWith("Colour") && items[3].startsWith("Mute in song") && items[4].startsWith("Edit in code"),
+  `a right-click opens its menu: ${items}`,
+);
 // Its Edit in code opens song.ts at the channel, which ⌥4 doesn't: the row names no key.
-check(items[2] === "Edit in codesong.ts:18", `Edit in code shows where, and no key that does something else: ${items[2]}`);
+check(items.at(-1) === "Edit in codesong.ts:18", `Edit in code shows where, and no key that does something else: ${items.at(-1)}`);
 await page.click("[data-testid=strip-menu] [data-testid=colour-row]");
 await page.click('[data-testid=colours] [data-colour="green"]');
 const colour = (k) => { try { return JSON.parse(read("layout.json")).tracks[k]?.colour; } catch { return null; } };

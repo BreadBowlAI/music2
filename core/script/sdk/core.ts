@@ -769,9 +769,10 @@ export type Descriptor = {
    * What an editor offers: `category`, a free string the UI groups (PKG-7), lists it as an
    * effect when it takes audio first, or as an instrument a new track can play when it takes
    * notes first; `insert` is written when the effect is added, each value in its control's
-   * spelling.
+   * spelling; `notes` names what an instrument's notes play, by MIDI note (`{ 36: "Kick" }`), for
+   * the piano roll's rows: whole numbers 0 to 127, each name one line of 1 to 24 characters.
    */
-  editor?: { category?: string; description?: string; insert?: Record<string, number> };
+  editor?: { category?: string; description?: string; insert?: Record<string, number>; notes?: Record<number, string> };
 };
 
 /** What a component's body receives after its inputs: a signal per control, a value per setting. */
@@ -1113,7 +1114,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
   // Editor metadata.
   const editor = desc.editor ?? {};
   if (typeof editor !== "object" || editor === null) fail("editor must be an object");
-  for (const k of Object.keys(editor)) if (!["category", "description", "insert"].includes(k)) fail(`editor has no field "${k}" (fields: category, description, insert)`);
+  for (const k of Object.keys(editor)) if (!["category", "description", "insert", "notes"].includes(k)) fail(`editor has no field "${k}" (fields: category, description, insert, notes)`);
   if (editor.category !== undefined && (typeof editor.category !== "string" || !editor.category)) fail("editor.category must be a non-empty string");
   if (editor.description !== undefined && typeof editor.description !== "string") fail("editor.description must be a string");
   const insert = record("editor.insert", editor.insert).map(([slot, v]) => {
@@ -1124,6 +1125,13 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     if (s.strict && s.range && !((v as number) >= s.range[0] && (v as number) <= s.range[1])) fail(`editor.insert's "${slot}" ${v} is outside its strict range`);
     return { slot, ...spelled(s, v as number) };
   });
+  // The names of an instrument's notes, by MIDI note: what the roll's rows say ("Kick").
+  const notes: Record<string, string> = {};
+  for (const [k, v] of record("editor.notes", editor.notes)) {
+    if (!/^(0|[1-9]\d{0,2})$/.test(k) || Number(k) > 127) fail(`editor.notes names the note ${k}: notes are whole numbers 0 to 127`);
+    if (typeof v !== "string" || !v.trim() || /[\r\n]/.test(v) || v.length > 24) fail(`editor.notes' name of ${k} must be one line of 1 to 24 characters, not ${shown(v)}`);
+    notes[k] = v as string;
+  }
   // A category on a component that takes notes and makes audio lists it as an instrument, which
   // a new track plays as `<name>(lane.notes(…))`, so it must build from its notes alone.
   const instrument = editor.category !== undefined && inputs[0]?.spec.kind === "notes";
@@ -1178,7 +1186,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     settings: settings.map((s) => ({ name: s.name, kind: s.spec.kind, default: s.spec.default ?? null, options: s.spec.options ?? null })),
     output: output ? portJson(output) : null,
     positional: [...positional],
-    editor: { category: editor.category ?? null, description: editor.description ?? "", insert },
+    editor: { category: editor.category ?? null, description: editor.description ?? "", insert, notes },
   });
   return { id: desc.id, cid, inputs, controls, settings, params, at, json };
 }

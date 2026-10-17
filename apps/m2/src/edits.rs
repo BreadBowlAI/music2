@@ -96,7 +96,7 @@ fn clips(args: &[String]) -> Result<()> {
             let length = f.number("--length")?.ok_or_else(|| anyhow!("say how long, in beats: --length 4"))?;
             Gesture::Resize { clip: clip.clone(), start: place(&f.need("--start")?)?, length }
         }
-        "duplicate" => Gesture::Duplicate { clips: refs(&f)?, range: None, grid: f.number("--grid")? },
+        "duplicate" => Gesture::Duplicate { clips: refs(&f)?, range: None, grid: f.number("--grid")?, times: None },
         "split" => Gesture::Split { clips: refs(&f)?, at: place(&f.need("--at")?)? },
         "join" => Gesture::Join { clips: refs(&f)? },
         "quantize" => {

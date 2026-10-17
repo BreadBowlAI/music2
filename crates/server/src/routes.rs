@@ -90,6 +90,10 @@ pub fn router(state: Arc<AppState>, web_dir: &Path) -> Router {
         .route("/api/graph/unsaved", post(graph_unsaved))
         .route("/api/graph/export", post(graph_export))
         .merge(crate::routes_8b::router(state.clone()))
+        .merge(crate::routes_mix::router(state.clone()))
+        .merge(crate::routes_notes::router(state.clone()))
+        .merge(crate::routes_project::router(state.clone()))
+        .merge(crate::routes_view::router(state.clone()))
         .route("/api/project/templates", get(project_templates))
         .route("/api/project/new", post(project_new))
         // An unknown API path is a clear error, not the UI's index.html.
@@ -233,7 +237,12 @@ async fn project_templates() -> ApiResult {
 /// Make a new song from a template or an example, and open it.
 async fn project_new(State(s): S, Json(r): Json<crate::project::NewSong>) -> ApiResult {
     let state = s.clone();
-    let v = blocking(move || crate::project::new_song(&state.graph, &r)).await?;
+    let v = blocking(move || {
+        let v = crate::project::new_song(&state.graph, &r)?;
+        state.opened();
+        Ok(v)
+    })
+    .await?;
     s.graph_changed();
     Ok(Json(v))
 }
@@ -253,7 +262,7 @@ struct GraphOpenReq {
 
 async fn graph_open(State(s): S, Json(r): Json<GraphOpenReq>) -> ApiResult {
     let state = s.clone();
-    let v = blocking(move || state.graph.open(&r.path)).await?;
+    let v = blocking(move || state.open_song(&r.path)).await?;
     s.graph_changed();
     Ok(Json(v))
 }
@@ -262,6 +271,7 @@ async fn graph_close(State(s): S) -> ApiResult {
     let state = s.clone();
     blocking(move || {
         state.graph.close();
+        state.closed();
         Ok(())
     })
     .await?;

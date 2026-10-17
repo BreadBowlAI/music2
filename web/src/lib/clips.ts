@@ -54,7 +54,7 @@ export type Gesture =
    * Copies right after the selection, or after `range` (a marquee's, on bar lines): a span of a
    * bar or more lands on the next bar line, a shorter one on the next line of `grid`.
    */
-  | { op: "duplicate"; clips: ServerRef[]; range?: [number, number]; grid?: number }
+  | { op: "duplicate"; clips: ServerRef[]; range?: [number, number]; grid?: number; times?: number }
   /** Copied clips at `at`, keeping their distances: onto lane `to` when it takes them all. */
   | { op: "paste"; clips: Copied[]; to?: LaneAddr; at: number }
   /** Every note's start onto the nearest line of `grid` beats. */

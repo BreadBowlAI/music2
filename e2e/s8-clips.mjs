@@ -102,12 +102,14 @@ await key("Meta+1");
 check(await until(async () => (await chip("notes")).grid === "1/32") && (await chip()).grid === "Bar", `after a click in Notes, ⌘1 changes the roll's grid, not the timeline's: ${(await chip("notes")).grid}, ${(await chip()).grid}`);
 await clickLane(45);
 await key("Meta+1");
-// The kick's lane selects the kick, so the roll has gone: its grid is read where it is kept.
-const rollGrid = () => page.evaluate(() => localStorage.getItem("m2.notes.grid"));
-check(await until(async () => (await chip())?.grid === "1/2") && (await rollGrid()) === "0.125", `after a click in the timeline, ⌘1 is the timeline's again: ${(await chip())?.grid}, the roll's ${await rollGrid()}`);
+// The kick's lane selects the kick, so the roll has gone: its grid is read where it is kept, the
+// song's view settings (polish C1).
+const rollGrid = async () => (await state()).local?.grid?.notes?.pick;
+// The settings are sent a moment after the last change (lib/local): wait for the roll's to land.
+check(await until(async () => (await chip())?.grid === "1/2" && (await rollGrid()) === 0.125), `after a click in the timeline, ⌘1 is the timeline's again: ${(await chip())?.grid}, the roll's ${await rollGrid()}`);
 
 // Notes gone from the screen, its grid isn't the keys' any more: the timeline's is the only one shown.
-const rollSnap = () => page.evaluate(() => localStorage.getItem("m2.notes.snap"));
+const rollSnap = async () => (await state()).local?.grid?.notes?.on;
 const tabWas = await page.$eval("[role=tablist][aria-label=Views] [aria-selected=true]", (e) => e.dataset.viewTab).catch(() => null);
 for (const [how, away] of [["E hides the dock", "e"], ["⌥3 shows Mix there", "Alt+3"]]) {
   const bc = await box('[data-lane="bass.notes"] [data-clip]');
@@ -125,7 +127,7 @@ for (const [how, away] of [["E hides the dock", "e"], ["⌥3 shows Mix there", "
 await clickLane(45);
 if (tabWas) await page.click(`[data-view-tab="${tabWas}"]`).catch(() => {});
 
-// ---------------------------------------------------------------- kept over a reload (in a browser; the app starts over)
+// ---------------------------------------------------------------- kept over a reload (with the song's view settings)
 await page.reload({ waitUntil: "domcontentloaded" });
 await page.waitForSelector("[data-testid=song-grid]");
 check((await chip()).grid === "1/2", `a reload keeps the timeline's grid: ${(await chip()).grid}`);
@@ -134,6 +136,8 @@ check((await chip()).grid === "1/2", `a reload keeps the timeline's grid: ${(awa
 await page.click("[data-testid=song-grid]");
 await page.click('[role=menu][aria-label=Grid] [data-grid="Auto"]');
 await until(async () => (await chip()).grid === "Auto");
+// Kept with the song's view settings a moment later: not a post of the click below.
+await until(async () => (await state()).local?.grid?.song?.pick === "auto");
 const rev = (await state()).view.revision;
 const kickFile = read("data/kick/hits.json");
 const writes = posts.length;
@@ -348,7 +352,7 @@ const kickMenu = await menuRows();
 await page.screenshot({ path: `${ROOT}/s8-clips-menu.png`, clip: { x: 0, y: 0, width: 720, height: 560 }, captureBeyondViewport: false });
 check(
   // Part 1 left the roll's grid at 1/32: Quantize says so.
-  kickMenu.join(" | ") === "Cut⌘X | Copy⌘C | Paste⌘V(off) | Duplicate⌘D | Split at playhead⌘E(off) | Quantize to 1/32Q | Delete⌫ | Loop this clip⌘L | Open in Notes",
+  kickMenu.join(" | ") === "Cut⌘X | Copy⌘C | Paste⌘V(off) | Duplicate⌘D | Repeat… | Split at playhead⌘E(off) | Quantize to 1/32Q | Delete⌫ | Loop this clip⌘L | Open in Notes",
   `a right-click on a clip opens its menu, each row with its key; Paste waits for a copy, Split for the playhead inside: ${kickMenu.join(" | ")}`,
 );
 check((await pickedIn("kick.hits")).join() === K, "and the clip is the selection");

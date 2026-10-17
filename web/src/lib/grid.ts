@@ -1,9 +1,11 @@
 // The grid and snap of each view that has one: the timeline's (`song`) and the roll's (`notes`),
-// drawn by one control (`GridChip`). Each is kept in this browser's storage, as the dock's view
-// is. The app's page gets a new address at each launch, so there they start over each time.
+// drawn by one control (`GridChip`). Each is kept with the song's view settings (`local.grid`, in
+// its `.music2/view.json`: polish Q16), so they are as you left them when the song opens again,
+// also after quitting the app. A new song starts with the defaults.
 
 import { create } from "zustand";
 import { barAt, type Meter } from "./graph";
+import { setLocal, useLocalStore } from "./local";
 import type { GridOp } from "./shell";
 
 /** The views with a grid. */
@@ -93,33 +95,17 @@ export const skipsSnap = (e: { metaKey: boolean; ctrlKey: boolean }) => e.metaKe
 /** Each view's grid until one is chosen: the timeline's Auto, the roll's sixteenths. */
 const START: Record<GridView, GridPick> = { song: "auto", notes: 0.25 };
 
-/**
- * Where each view's choice is kept: `grid` is the choice, `snap` is "0" while snap is off, and
- * `triplet` is "1" in triplets. The roll's first two keys are the ones it had.
- */
-const KEYS: Record<GridView, { snap: string; grid: string; triplet: string }> = {
-  song: { snap: "m2.song.snap", grid: "m2.song.grid", triplet: "m2.song.triplet" },
-  notes: { snap: "m2.notes.snap", grid: "m2.notes.grid", triplet: "m2.notes.triplet" },
-};
+/** Each view's grid as the song's view settings keep it: `{song: {pick, triplet, on}, notes: {…}}`. */
+type Kept = Partial<Record<GridView, { pick?: unknown; triplet?: unknown; on?: unknown }>>;
 
 /** A grid with its step worked out (for Auto and Bar, as at 24 px a beat in 4/4: see `step`). */
 const grid = (pick: GridPick, triplet: boolean, on: boolean): Grid => ({ pick, triplet, on, step: stepOfPick(pick, triplet, 24, 4) });
 
-function read(view: GridView): Grid {
-  const load = (key: string) => {
-    try {
-      return localStorage.getItem(key);
-    } catch {
-      return null;
-    }
-  };
-  const parse = (x: string | null): GridPick | null => {
-    if (x === null) return null;
-    const p = x === "auto" || x === "bar" ? x : Number(x);
-    return PICKS[view].includes(p) ? p : null;
-  };
-  const snap = load(KEYS[view].snap);
-  return grid(parse(load(KEYS[view].grid)) ?? parse(snap) ?? START[view], load(KEYS[view].triplet) === "1", snap !== "0");
+/** `view`'s grid as kept, or its start where nothing (or nothing it knows) is. */
+function read(view: GridView, kept: Kept | undefined): Grid {
+  const k = kept?.[view];
+  const pick = PICKS[view].find((p) => p === k?.pick) ?? START[view];
+  return grid(pick, k?.triplet === true, k?.on !== false);
 }
 
 interface Grids extends Record<GridView, Grid> {
@@ -129,19 +115,23 @@ interface Grids extends Record<GridView, Grid> {
   set: (view: GridView, grid: Omit<Grid, "step">) => void;
 }
 
-export const useGrid = create<Grids>((set) => ({
-  song: read("song"),
-  notes: read("notes"),
+export const useGrid = create<Grids>((set, get) => ({
+  song: read("song", undefined),
+  notes: read("notes", undefined),
   last: "song",
   set: (view, g) => {
-    try {
-      localStorage.setItem(KEYS[view].grid, String(g.pick));
-      localStorage.setItem(KEYS[view].snap, g.on ? String(g.pick) : "0");
-      localStorage.setItem(KEYS[view].triplet, g.triplet ? "1" : "0");
-    } catch {}
     set({ [view]: grid(g.pick, g.triplet, g.on) } as Pick<Grids, GridView>);
+    const keep = ({ pick, triplet, on }: Grid) => ({ pick, triplet, on });
+    setLocal("grid", { song: keep(get().song), notes: keep(get().notes) });
   },
 }));
+
+// Another song open (or the same one again): its grids, as it keeps them.
+useLocalStore.subscribe((s, before) => {
+  if (s.values.grid === before.values.grid) return;
+  const kept = s.values.grid as Kept | undefined;
+  useGrid.setState({ song: read("song", kept), notes: read("notes", kept) });
+});
 
 /**
  * ⌘1 to ⌘4 on `view`'s grid: a step narrower or wider through its fixed choices (from Auto, the

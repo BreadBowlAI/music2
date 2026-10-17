@@ -442,6 +442,8 @@ each marker means something. The markers and the `fg-muted` default text replace
   - ghost notes `Layers`;
   - snap `Magnet`;
   - zoom `ZoomIn` and `ZoomOut`;
+  - follow the playhead `ArrowRightFromLine`;
+  - change a track's instrument `ArrowLeftRight`;
   - metronome `Metronome`;
   - dock views: Device `SlidersHorizontal`, Notes `Piano`, Mix `SlidersVertical`, Code `CodeXml`;
   - fold `ChevronRight`.
@@ -727,8 +729,8 @@ Keep these rules that already follow the block in `index.css`, with these change
 | 336 | Divider | |
 | 348 | Tempo | A field 76 px wide: "124" in `text-base` 500 plus "BPM" in `text-xs` `fg-faint`. Drag up and down: 1 BPM per 4 px, or 0.1 with ⇧. Double-click to type. No ⌥-click reset and no tap tempo (§5.2). While a lease is live (RENDER-27a) the number is `accent`. Lands with 8b's tempo bar. |
 | 428 | Meter (time signature) | A field 40 px wide, "4/4". Click opens a picker (beats 1–16, unit 2/4/8/16). Lands with the tempo bar. |
-| (472) | Key | It appears when key and scale have a home (gaps #6 and #16; the contract has none yet). |
-| centre | Song name | `text-base` 600 `fg-strong`, centred in the window. At most `100% − 2×480 px` wide, cut with an ellipsis. Its tooltip has the folder and sample rate (keep). |
+| 472 | Key | Built by polish (D2), right after the time signature: a 28 px ghost field in `text-base`, "Key" in `fg-faint` while none is set, else "A minor" in `fg`. A click opens a picker: twelve roots in two rows of six (C, C♯, D, E♭, E, F, F♯, G, A♭, A, B♭, B), Major · Minor, and No key. It is kept in `layout.json` (`key`). In Notes, rows not in the key are shaded instead of the black keys' (never on a drum kit's lane). |
+| centre | Song name | `text-base` 600 `fg-strong`, centred in the window. As polish built it (Q23), it keeps clear of the measured groups on either side (not a fixed 480 px), is cut with an ellipsis, and goes when under 56 px are left. While it is being typed in it keeps its width and stays, over its neighbours. Its tooltip has the folder and sample rate (keep). |
 | right − 520 | Status pill | One pill, and only when something needs saying (§4 ST-1). |
 | | Overlay pill | "2 muted · 1 solo", while any monitoring overlay or latch is on. `accent-soft` fill, `accent-strong` text. A click opens its popover: each muted or soloed track with its own ×, and Clear all at the foot. The pill has no × of its own, since overlays aren't undoable and one stray click mustn't wipe a mute and solo set. Lands with 8b's mixer. |
 | right − 300 | DSP | "DSP 23%" in `text-xs` plus a 24×4 px bar. It shows the highest callback load in the last second. It turns `warn` at 70% or more (gate 8's budget) and shows a `danger` dot for 3 s after a dropout. Clicking opens Audio settings (gaps #31). Lands with 8a. |
@@ -1124,7 +1126,7 @@ new says "(new)".
 | # | Do | What | Spec | Shots | Lands with |
 |---|---|---|---|---|---|
 | SS-1 | REMOVE | The logo tile, the "music2" heading and the gradient New Song button | | `a01` | T |
-| SS-2 | CHANGE (new) | Recent songs | A 560 px column. Each row is 44 px: name (`text-base` 500), "124 BPM · opened yesterday" (`text-xs` `fg-muted`) and a 96×28 px arrangement thumbnail in `bar` colours. Enter opens the newest. | `a01` | later #12 (small: pull it into step 8) |
+| SS-2 | CHANGE (new) | Recent songs | A 560 px column. Each row is 44 px: name (`text-base` 500), "124 BPM · opened yesterday" (`text-xs` `fg-muted`) and a 96×28 px arrangement thumbnail in `bar` colours. Enter opens the newest. | `a01` | Built by polish (C2) without the thumbnail (gaps #12). A row is `accent-soft` under the pointer and with the keyboard's focus; a folder that is gone says "Moved or deleted", with × to forget it. Return opens the newest only when no button has the focus (X43) |
 | SS-3 | CHANGE | Three actions in a row above the list | New Song… (primary, ⌘N), Open… (secondary, ⌘O; native only), Examples ▾ (menu). The folder hint goes underneath in `text-xs` `fg-faint`. | `a01`, `a03` | T |
 | SS-4 | KEEP | The examples' copy-first sentence, their descriptions, and the With plugins refusal | Their 28 px icon tiles go. | `a03`, `g01` | — |
 
