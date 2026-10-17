@@ -6,6 +6,7 @@ import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { category, NoMatch, search } from "./EffectBrowser";
 import { undoAction } from "./GraphCanvas";
+import Guide from "./Guide";
 import { addTrack, INSTRUMENT_DRAG, instrumentGroups } from "./Tracks";
 
 /** A row of the browser's one keyboard list: an instrument or an effect. */
@@ -135,6 +136,8 @@ export default function Browser({ graph, module }: { graph: GraphState; module: 
   let index = 0;
   return (
     <aside data-browser aria-label="Browser" className="w-side shrink-0 flex flex-col bg-chrome border-r border-line min-h-0">
+      {/* Make Your First Song, when open (the studio plan's Q47): first, above the search. */}
+      <Guide />
       <div className="p-2 shrink-0">
         <label className="h-ctl px-2 flex items-center gap-2 rounded-sm bg-raised border border-line-strong hover:not-focus-within:border-fg-off focus-within:border-accent has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent has-[:focus-visible]:outline-offset-1 transition-colors duration-80 ease-linear">
           <Search size={14} className="shrink-0 text-fg-faint" />

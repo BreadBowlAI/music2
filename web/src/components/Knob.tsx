@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { display, graphApi, type Home, type Knob as KnobInfo } from "../lib/graph";
 import { useStore } from "../lib/store";
+import { guideDid } from "../lib/guide";
 
 // What every knob and fader shares (taste.md §5.2, KN-1, KN-2): a drag heard while it moves and
 // written once when it is let go (WRITE-22's leases), the drag itself, the small rotary knob, its
@@ -206,6 +207,7 @@ export function useKnobGesture({
       // The control shows the value, so a change makes no toast (taste.md §2.14); one that waits for the code to compile says so.
       if (change.pending) toast(`${label} is saved once the code compiles again`);
       refresh();
+      guideDid("sound");
     } catch (error) {
       // Rejections restore audio on the server. An owner-checked cancellation
       // also covers a lost response without targeting another gesture's preview.

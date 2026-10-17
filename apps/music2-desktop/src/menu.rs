@@ -126,6 +126,8 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     // included: the code editor's own ⌘K chords give way to it (X15).
     ("piano", "Keyboard Piano", Some("CmdOrCtrl+K")),
     ("shortcuts", "Keyboard Shortcuts", None),
+    // Make Your First Song (the studio plan's Q47): the guide's seven steps, in the side browser.
+    ("guide", "Make Your First Song", None),
     // This machine's settings (gaps #31): the sound output, the buffer size, where new songs go.
     // In the app menu on a Mac, after About; in File elsewhere, above Quit.
     ("settings", "Settings…", Some("CmdOrCtrl+Comma")),
@@ -276,7 +278,7 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
             ("Transport", transport),
             // ⌘W closes the song (File); closing the window, which quits, is ⇧⌘W.
             ("Window", vec![Minimize, Maximize, Line, CloseWindow]),
-            ("Help", vec![Item("shortcuts")]),
+            ("Help", vec![Item("guide"), Item("shortcuts")]),
         ]
     } else {
         // GTK greys out Services, Hide, Full Screen and the Window menu's items, and its Cut,
@@ -288,7 +290,7 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
             ("Track", track),
             ("View", views.to_vec()),
             ("Transport", transport),
-            ("Help", vec![Item("shortcuts"), Line, About]),
+            ("Help", vec![Item("guide"), Item("shortcuts"), Line, About]),
         ]
     }
 }
@@ -626,5 +628,17 @@ mod tests {
     fn the_reveal_item_says_finder_only_on_a_mac() {
         let title = ITEMS.iter().find(|i| i.0 == "reveal").map(|i| i.1);
         assert_eq!(title, Some(if cfg!(target_os = "macos") { "Show in Finder" } else { "Show in Folder" }));
+    }
+
+    /// The studio plan's Q47: Help ▸ Make Your First Song is Help's first row, with no chord, on
+    /// both menu bars.
+    #[test]
+    fn make_your_first_song_is_first_in_help() {
+        assert_eq!(ITEMS.iter().find(|i| i.0 == "guide").map(|i| (i.1, i.2)), Some(("Make Your First Song", None)));
+        for mac in [true, false] {
+            let bar = layout(mac);
+            let help = &bar.iter().find(|m| m.0 == "Help").expect("Help").1;
+            assert_eq!(help[..2], [Row::Item("guide"), Row::Item("shortcuts")], "mac: {mac}");
+        }
     }
 }

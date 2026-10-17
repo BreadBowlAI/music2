@@ -281,6 +281,11 @@ const app = await appPage();
 await app.evaluate(() => window.__menu("rename_song"));
 await app.waitForSelector("[data-testid=rename-song-dialog]");
 await place("[data-testid=rename-song-dialog]", "the Rename Song dialog", MAC, app);
+await app.keyboard.press("Escape");
+// Help ▸ Make Your First Song: the guide's card.
+await app.evaluate(() => window.__menu("guide"));
+await app.waitForSelector("[data-testid=guide]");
+await place("[data-testid=guide]", "the first-song guide", MAC, app);
 await app.close();
 
 // ---------------------------------------------------------------- a PC's words, and the lint

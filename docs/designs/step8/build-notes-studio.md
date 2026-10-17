@@ -198,6 +198,78 @@ points at your own line.
 (core's words unchanged); `m2_ir::Diagnostic.inner` holds the place inside a package when a check error's `src` is
 the call in the project that made the node (`core/session`'s `build_code`).
 
+### D3. Make your first song
+
+**In short**
+
+| What | Now |
+|---|---|
+| Help ▸ Make Your First Song | A card at the top of the side browser: seven steps to a first song. The browser opens for it |
+| The start screen | "New to making music? Make your first song": New Song on Empty, then the card |
+| Each step | Ticks itself as you do it: drums, a beat, a bass, bass notes, a listen, a sound changed, an export |
+| The step to do now | In bold, with what to press under it. Done steps get a check |
+| All seven | "You made a song. It is in your Exports folder." (Show in Finder in the app) |
+| The chevron, × | One line, "Your first song · 3 of 7"; × closes it, and its ticks stay |
+| Next time | The card and its ticks are kept with the song, on this computer |
+
+**What changed**
+
+- `crates/server/src/graph/view_file.rs`: `KEYS` gains `"guide"` (D's line). Test (`view_file_tests.rs`, at its
+  end): `the_guide_is_kept_per_song`.
+- `apps/music2-desktop/src/menu.rs`: `ITEMS` `("guide", "Make Your First Song", None)` after `shortcuts`; Help
+  starts with it on both menu bars. Test at the module's end: `make_your_first_song_is_first_in_help`.
+- `web/src/lib/guide.ts` (new): `STEPS` (D3's words, with D14's: "double-click"; keys by `chord()` and `opt()`),
+  `seen(graph)` (a track playing a Drums-group instrument; 4 notes or more in its lanes; a track playing
+  `std:synth-bass` or `std:synth-sub`; 3 notes or more), `openGuide`, `closeGuide`, `foldGuide`, `guideDid("sound")`,
+  `useGuide`. Kept with `setLocal("guide", {open, folded, done})` (`folded` beside the plan's two). It ticks for as
+  long as the page is open: the store's graph as it changes, the clock every 250 ms (Listen: played while the guide
+  is open), and `on("export")` for this song's export (no edit to `exporting.ts`). A song opened with its guide open
+  shows the browser.
+- `web/src/components/Guide.tsx` (new): the card, 240 px (the browser's, less its 8 px margins), `raised`, 1 px
+  `line`, `rounded-md`; the current step `fg` 600 with its hint, done `fg-muted` with a `CircleCheck` in `accent`, the
+  rest `fg-faint`; the fold and × (tooltips); the done line; the foot, "Start from an empty song…".
+- `Browser.tsx`: `<Guide />` first in the column. `StartScreen.tsx`: the link (and the New Song button calls
+  `openNewSong()` with no event). `App.tsx`: `case "guide"` at the switch's end, and its import.
+  `NewSongDialog.tsx` (not in the plan's list; nobody else's): `openNewSong({template, after})`, the dialog starting
+  on that template and running `after` once the new song opens. `Knob.tsx`: `guideDid("sound")` after a knob's
+  commit. `lib/instrument.ts` (where `changeInstrument` lives, not `Tracks.tsx`): `guideDid("sound")` after a change.
+- `e2e/st-guide.mjs` (new, kind `none`, 36 checks), its `run.mjs` row after `start`'s `empty` row, its README row.
+  `st-tips` gains the guide's card (an app page's Help ▸ Make Your First Song): 45.
+
+**Tests.** `st-guide` 36 of 36: an Empty song through the API; on an app page, `__menu("guide")` shows the browser
+and the card first in it, seven steps, none ticked, the first current with "Press ⌘T and pick Drum kit.", kept in
+`view.json`; then a page does each step as a person does (⌘T Drum kit; a clip and four notes by double-click; ⌘T
+Synth bass; three notes; Space; a Device knob dragged; ⇧⌘E, with the Export dialog's Return when lane C's is
+there), each step ticking; the done line; `view.json` keeps seven; a reload keeps them; the fold ("Your first song ·
+7 of 7", kept) and back; × closes, its ticks kept; the start screen's link opens New Song on Empty, then the new
+song with the card, nothing ticked; the card never covers the timeline; a PC page says "Ctrl+T"; the taste and
+tooltip lints on the card three times and on the start screen. Rust: `make_your_first_song_is_first_in_help`,
+`the_guide_is_kept_per_song`; `cargo test -p music2-desktop` 18, its clippy and the mac lint clean; `m2-server`'s
+clippy clean. Moved: `start` 24, `newsong` 71, `pl-projects` 66, `taste` 39, `s5-knobs` 120, `gestures` 30,
+`s8-tracks` 75, `s8-mix` 80, `pl-sounds` 45: all ok (`pl-sounds` failed once in a batch beside another, at "one
+revision, and song.ts as it was", which reads the revision right after the file; it passed twice alone).
+
+**Red first.** `st-guide` on `dist-before` and the server at `85b069a`: 2 of 36, then it stops:
+
+```
+FAIL  Help ▸ Make Your First Song shows the browser, the guide at its top
+FAIL  seven steps, none ticked, the first the current one, with what to do: undefined
+```
+
+`make_your_first_song_is_first_in_help` with Help's rows the other way round: `left: [Item("shortcuts"),
+Item("guide")] right: [Item("guide"), Item("shortcuts")]`. `the_guide_is_kept_per_song` with `guide` out of `KEYS`:
+`guide isn't a view setting` (the `set_view` unwrap).
+
+**Left.** Show in Finder on the done line only for an export made while this window was open (after a reload the
+line has no button). The guide's steps don't follow a song whose drums or bass are written in code by other names
+(a custom component). The desktop app on `:97` (Help ▸ Make Your First Song) isn't checked by eye here: the menu row
+is tested in `menu.rs`, and the End's pictures take it.
+
+**For gaps.md:** #11: Help ▸ Make Your First Song, seven steps that tick themselves, in the side browser.
+
+**Contract:** FMT-20's homes: `view.json` gains `guide: {open, folded, done}`. taste.md §5.3: the Help menu lists Make
+Your First Song first, then Keyboard Shortcuts.
+
 ## Merge
 
 The lead joins the lanes.

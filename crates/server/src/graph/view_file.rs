@@ -22,7 +22,7 @@ use super::Graph;
 /// (px a beat), whether it follows the playhead, track and lane heights by key, the automation
 /// lanes hidden, each view's grid and snap, the audition toggle, and the metronome (gaps #19),
 /// which the player follows ([`metronome`]). `loop` has its own route.
-pub const KEYS: [&str; 7] = ["zoom", "follow", "heights", "hidden", "grid", "audition", "metronome"];
+pub const KEYS: [&str; 8] = ["zoom", "follow", "heights", "hidden", "grid", "audition", "metronome", "guide"];
 
 /// Held over each write's read, change and rename.
 static WRITING: Mutex<()> = parking_lot::const_mutex(());

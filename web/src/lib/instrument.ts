@@ -8,6 +8,7 @@
 
 import { undoAction } from "../components/GraphCanvas";
 import { lockReason, moduleName, readJson, type GraphState, type Instrument } from "./graph";
+import { guideDid } from "./guide";
 import { recorded } from "./history";
 import { token } from "./native";
 import { useShell } from "./shell";
@@ -74,6 +75,7 @@ export async function changeInstrument(module: string, instrument: Instrument) {
     const r = data as Edited;
     recorded(session, r.revision, { name: `changing ${name}'s instrument`, structural: true });
     toast(`${name} plays ${instrument.label} now`, undoAction(session, r.revision));
+    guideDid("sound");
   } catch (error) {
     const words = message(error);
     toast(words, /in code\.$|in the Code view\.$/.test(words) ? { label: "Show code", run: () => showCode(module) } : undefined);

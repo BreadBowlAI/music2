@@ -22,6 +22,7 @@ import { togglePiano } from "./lib/piano";
 // MIDI keyboards: the window tells the server what they play.
 import "./lib/midi";
 import KeyboardPiano from "./components/KeyboardPiano";
+import { openGuide } from "./lib/guide";
 
 /** Fetch the open project. An error means none is open: the start screen shows. */
 const refreshGraph = () =>
@@ -411,5 +412,8 @@ export function appCommand(id: string) {
       // View ▸ Keyboard Piano, the desktop app's ⌘K. In a browser lib/piano.ts takes ⌘K itself, before
       // a field or the code editor can.
       return togglePiano();
+    case "guide":
+      // Help ▸ Make Your First Song (the studio plan's Q47).
+      return openGuide();
   }
 }
