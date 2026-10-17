@@ -626,6 +626,8 @@ impl Open {
                 "name": rev.project.manifest.project.name,
                 "dir": rev.project.dir,
                 "view": s.view(),
+                // The Mix view's strips and master, by the view's knob ids (design-8b §5.4).
+                "mix": s.mix(),
                 "can_undo": s.can_undo(),
                 "can_redo": s.can_redo(),
                 "effects": s.effects(),

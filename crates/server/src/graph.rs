@@ -1353,6 +1353,19 @@ impl Graph {
         })
     }
 
+    /// A mixer channel's first pan (design-8b §5.3): write optional control `control` (`pan`) of
+    /// channel `channel` as `value` into its entry. The answer names the new knob: `control`, its id
+    /// in the revision the answer gives, which the drag's lease then names.
+    pub fn mix_insert(&self, token: u64, channel: &str, control: &str, value: f64) -> Result<Value> {
+        let (channel, control) = (channel.to_string(), control.to_string());
+        self.call(move |a| {
+            a.edit_and(token, |s| {
+                let done = s.mix_insert(&channel, &control, value)?;
+                Ok((done.edited, json!({"control": done.control})))
+            })
+        })
+    }
+
     /// Duplicate track `module`: its code, data and channel, below it in its colour.
     pub fn duplicate_track(&self, token: u64, module: &str) -> Result<Value> {
         let module = module.to_string();

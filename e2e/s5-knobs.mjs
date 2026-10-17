@@ -12,11 +12,12 @@
 //   alias    `import { delay as echo }`, saved by another editor, is the Delay effect with delay's three
 //            knobs, and removing it unwraps the call (PKG-9).
 //   mix      the kick's fader, left out of its bare mixer entry, is written into it on its first turn,
-//            in the style of the mixer's other entries (design-8b §5.2).
+//            in the style of the mixer's other entries; a channel's first pan through the route writes
+//            `pan: 0` into its entry and names the new knob (design-8b §5.2, §5.3).
 //   node run.mjs s5-knobs fix
 import { ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 
-const { browser, page, errors, state, toasts, show, box } = await open(1440, 900);
+const { browser, page, errors, api, state, toasts, show, box } = await open(1440, 900);
 
 /** The view's knobs, each with its module and node: `{ module, node, k }`. */
 const knobs = async () =>
@@ -226,6 +227,15 @@ const level = Number(read("song.ts").match(wrapped)?.[1]);
 check(level < 0 && read("song.ts").replace(wrapped, "kick: kick.out,") === songFile, `down from 0 dB to ${level}, and nothing else changed`);
 await undo();
 check(await until(() => read("song.ts") === songFile), "undo puts the bare entry back");
+// The first pan, as the Mix view's drag asks for it.
+const session = (await state()).session;
+const panned = await api("/mix/insert", { method: "POST", body: JSON.stringify({ session, channel: "bass", control: "pan", value: 0 }) });
+const bassPanned = "bass: { in: duck(bass.out, kick.env, { depth: db(-9) }), pan: 0 },";
+check(panned.status === 200 && read("song.ts") === songFile.replace("bass: duck(bass.out, kick.env, { depth: db(-9) }),", bassPanned), `POST /mix/insert writes the bass's first pan (${panned.status}: ${read("song.ts").match(/bass: .*,/)?.[0]})`);
+const bassStrip = (await state()).mix.strips.find((x) => x.channel === "bass");
+check(bassStrip?.pan === panned.body.control && !bassStrip.pan_insert, `and names the new knob, which the Mix view's strip has (${panned.body.control})`);
+await undo();
+check(await until(() => read("song.ts") === songFile), "undo takes the pan out");
 
 // ------------------------------------------------------------------ alias
 const echo = `import { track } from "@m2/core";\nimport { delay as echo } from "std/fx";\nimport { pluck } from "std/instruments";\n\nexport default track("keys", { name: "Keys" }, ({ lane }) => echo(pluck(lane.notes("chords"))));\n`;

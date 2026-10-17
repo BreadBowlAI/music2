@@ -899,6 +899,16 @@ it is.
   mono one (`cos(π/4)·√2`, `std/kernels-src/src/lib.rs:414-419`), so the revision that adds it changes nothing anyone
   hears. Making `pan` non-optional instead would change renders (`renders.json`) for every mono channel.
 
+**Built (B4):** `mix::insert(s, channel, control, value)` and `POST /api/graph/mix/insert`
+`{session, channel, control, value}`. The channel is named by its key, so the builder plans on the accepted revision and
+takes no revision. The answer names the new knob (`control`), which the drag then leases. The planner's assertion is by
+channel (lead decision T4): keying each strip by its channel would make two mixers in one module with a channel key in
+common `key.duplicate`, since `key()`'s keys are unique per key frame, not per component call (tried). Measured
+inaudible: offline, first-song renders within 1.1e-6 of before (the limiter carries the panner's 1e-7 on); live, through
+the activation, within about 1e-6 (−120 dBFS) of the same song with no edit, on first-song and in a mix that is mono
+all the way. Every
+instrument + Track offers is stereo since T3, so that mix's two tracks are written in code.
+
 ### 5.4 The view: `mix` in the graph state
 
 `m2_editor::mix::view(s, &layout) -> MixView` is sent in the graph state beside `view` and `timeline`:
@@ -920,6 +930,15 @@ it is.
 - Strips come in the effective track order (§2.1). `feeds` drives MON-2's row (§6.7), and `muted_in_song` the struck
   name (8b.4).
 - `every_value_names_its_home` covers the strip: faders `code`, colours `layout`.
+
+**Built (B4):** `mix::view` (`crates/editor/src/mix.rs`), sent as the state's `mix`, with these changes to the JSON above:
+- `modules` (a list) instead of `module`: a strip shared by tracks names each, in the order its channel reads them.
+- A channel no track reaches gets a strip after the tracks', named by its key, in graphite.
+- `mixer` is `ok`, `none`, `several` or `unwritten` (its channels aren't an object in the code), and `message` says, in
+  words, why the levels are in code when it isn't `ok`.
+- `db` is null when code sets the level (a signal); `why` says "Not in the mixer" or "In 2 channels: set its level in
+  code".
+- `feeds` and `muted_in_song` come with 8b.4, which uses them.
 
 ### 5.5 UI (taste §3.5 Mix, MX-1, MX-2, MX-5, MX-6, TL-1, §5.2)
 
