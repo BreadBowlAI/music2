@@ -1,9 +1,11 @@
-// MIDI files (studio lane C, Q37, Q38): the clip menu's Export as MIDI… writes the clip's notes
-// to a MIDI file in the songs folder's Exports (a browser page: no save panel), which reads back
-// to the clip's notes, with a free name for the next; only one notes clip offers it.
+// MIDI files (studio lane C, Q36, Q37, Q38): the clip menu's Export as MIDI… writes the clip's
+// notes to a MIDI file in the songs folder's Exports (a browser page: no save panel), which reads
+// back to the clip's notes, with a free name for the next; only one notes clip offers it. A
+// one-part MIDI file brought into Bass's notes lane (as a browser uploads it) is one clip and one
+// undo step named "importing riff.mid"; a text file named .mid is refused in words.
 // node st-midi.mjs <root> <home> <project>
 import fs from "node:fs";
-import { check, done, HOME, open, read, ROOT, until } from "./fixlib.mjs";
+import { check, done, HOME, open, read, ROOT, sess, until } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
 const exportsDir = `${HOME}/Music/music2/Exports`;
@@ -57,6 +59,26 @@ const keyOf = (p) => {
   const m = /^([A-G])(#|b)?(-?\d+)$/.exec(p);
   return (Number(m[3]) + 1) * 12 + NAMES[m[1]] + (m[2] === "#" ? 1 : m[2] === "b" ? -1 : 0);
 };
+
+/** A Standard MIDI File, format 1 at 96 ticks a beat: each track `{name, notes: [[key, start, length, velocity, channel]]}` (beats). */
+function smfBytes(tracks) {
+  const vlq = (v) => { const out = [v & 0x7f]; while ((v >>= 7)) out.unshift((v & 0x7f) | 0x80); return out; };
+  const chunks = [Buffer.from([0x4d, 0x54, 0x68, 0x64, 0, 0, 0, 6, 0, 1, 0, tracks.length, 0, 96])];
+  for (const t of tracks) {
+    const ev = [];
+    for (const [k, start, length, v = 100, ch = 0] of t.notes) {
+      ev.push([Math.round(start * 96), 1, [0x90 | ch, k, v]], [Math.round((start + length) * 96), 0, [0x80 | ch, k, 0]]);
+    }
+    ev.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const body = t.name ? [0, 0xff, 3, ...vlq(t.name.length), ...Buffer.from(t.name)] : [];
+    let now = 0;
+    for (const [tick, , bytes] of ev) { body.push(...vlq(tick - now), ...bytes); now = tick; }
+    body.push(0, 0xff, 0x2f, 0);
+    const len = Buffer.alloc(4); len.writeUInt32BE(body.length);
+    chunks.push(Buffer.from("MTrk"), len, Buffer.from(body));
+  }
+  return Buffer.concat(chunks);
+}
 
 const { page, errors, toasts, box, key } = await open(1440, 900);
 const menuIds = () => page.$$eval("[data-testid=clip-menu] [data-menu-item]", (els) => els.map((e) => e.dataset.menuItem));
@@ -114,5 +136,33 @@ await page.mouse.click(hats.x + 40, hats.y + hats.height / 2, { button: "right" 
 await page.waitForSelector("[data-testid=clip-menu]");
 check(!(await menuIds()).includes("export-midi"), `two clips picked: no Export as MIDI…: ${(await menuIds()).join(", ")}`);
 await key("Escape");
+
+// ---------------------------------------------------------------- a MIDI file into a notes lane
+/** Upload `bytes` as a browser does: the file's bytes, its name and where it goes in the query. */
+const upload = (name, bytes, to) =>
+  page.evaluate(
+    async (token, name, bytes, to) => {
+      const q = `session=${(await (await fetch("/api/graph", { headers: { "x-m2-token": token } })).json()).session}&name=${encodeURIComponent(name)}&to=${encodeURIComponent(JSON.stringify(to))}`;
+      const r = await fetch(`/api/graph/midifile/import?${q}`, { method: "POST", headers: { "x-m2-token": token, "content-type": "application/octet-stream" }, body: new Uint8Array(bytes) });
+      return { status: r.status, body: await r.json().catch(() => ({})) };
+    },
+    sess.token,
+    name,
+    [...bytes],
+    to,
+  );
+const to = { kind: "lane", module: "bass", lane: "notes", beat: 32 };
+const riff = smfBytes([{ name: "Riff", notes: [[40, 0, 1], [45, 4, 2]] }]);
+const clipsAt = (beat) => JSON.parse(read("data/bass/notes.json")).clips.filter((c) => c.start === beat);
+const done1 = await upload("riff.mid", riff, to);
+check(done1.status === 200 && done1.body.name === "importing riff.mid", `riff.mid comes into Bass's notes at bar 9: ${JSON.stringify(done1.body).slice(0, 160)}`);
+const placed = clipsAt(32);
+check(placed.length === 1 && placed[0].length === 8 && placed[0].notes.length === 2, `one clip of two bars with its two notes: ${JSON.stringify(placed[0] ?? null).slice(0, 160)}`);
+const undoTitle = () => page.$eval('button[aria-label="Undo"]', (e) => e.title);
+check(await until(async () => (await undoTitle()).startsWith("Undo importing riff.mid")), `Undo names it: ${await undoTitle()}`);
+await key("Meta+z");
+check(await until(() => clipsAt(32).length === 0), "⌘Z takes it back");
+const text = await upload("notes.mid", Buffer.from("these are not notes"), to);
+check(text.status === 400 && text.body.error === "notes.mid isn't a MIDI file: it doesn't start with MThd.", `a text file named .mid says so: ${JSON.stringify(text.body)}`);
 
 done(errors);

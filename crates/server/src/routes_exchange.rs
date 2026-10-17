@@ -1,5 +1,6 @@
 //! Swapping files with other music apps (studio lane C), in a router of its own merged into the
-//! API's: the song or a clip written as a MIDI file, and the song's stems (`crate::stems`). A route here that writes the open project is
+//! API's: the song or a clip written as a MIDI file, a MIDI file brought in, and the song's stems
+//! (`crate::stems`). A route here that writes the open project is
 //! in [`WRITES_EXCHANGE`], and a read-only window answers it 423 with WRITE-18's message, as
 //! `routes.rs` answers its own. A MIDI file goes to the songs folder's Exports (a new name), or to
 //! a file the user picked (replaced, as Export Audio replaces one), never into the project.
@@ -9,8 +10,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use axum::extract::State;
-use axum::http::StatusCode;
+use axum::body::Bytes;
+use axum::extract::{DefaultBodyLimit, Query, State};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
@@ -19,18 +21,20 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::AppState;
+use crate::graph::exchange::{MidiSource, MidiTarget};
 use crate::routes::ApiError;
 
 type S = State<Arc<AppState>>;
 type ApiResult = Result<Json<Value>, ApiError>;
 
 /// The routes here that write the open project.
-pub const WRITES_EXCHANGE: &[&str] = &[];
+pub const WRITES_EXCHANGE: &[&str] = &["/api/graph/midifile/import"];
 
 pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/graph/midifile/where", post(midifile_where))
         .route("/api/graph/midifile/export", post(midifile_export))
+        .route("/api/graph/midifile/import", post(midifile_import).layer(DefaultBodyLimit::max(m2_editor::smf::MAX_BYTES + 1024)))
         .route("/api/graph/stems", post(stems_start))
         .route("/api/graph/stems/check", post(stems_check))
         .route_layer(axum::middleware::from_fn_with_state(state, writes))
@@ -173,6 +177,46 @@ async fn midifile_export(State(s): S, Json(r): Json<ExportReq>) -> ApiResult {
     })
     .await?;
     Ok(Json(json!({"path": path})))
+}
+
+#[derive(Deserialize)]
+struct ImportJson {
+    session: u64,
+    path: PathBuf,
+    to: MidiTarget,
+}
+
+#[derive(Deserialize)]
+struct ImportQuery {
+    session: Option<u64>,
+    /// The file's name.
+    name: Option<String>,
+    /// Where it goes, as JSON.
+    to: Option<String>,
+}
+
+/// Bring a MIDI file in (C2, Q36, D11), as one undo step: JSON `{session, path, to}` (the app: a
+/// file on this computer, read by the server), or the file's bytes as the body with
+/// `?session=&name=&to=` (a browser's upload, up to 16 MB). `to` is `{kind: "lane", module, lane,
+/// beat}`. A write. Answers the edit with `made`, `name` (the undo step's) and `undo_name`.
+async fn midifile_import(State(s): S, Query(q): Query<ImportQuery>, headers: HeaderMap, body: Bytes) -> ApiResult {
+    let json = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|t| t.starts_with("application/json"));
+    let (session, source, to) = match json {
+        true => {
+            let r: ImportJson = serde_json::from_slice(&body).map_err(anyhow::Error::from)?;
+            (r.session, MidiSource::Path(r.path), r.to)
+        }
+        false => {
+            let session = q.session.ok_or_else(|| anyhow::anyhow!("an upload names its session"))?;
+            let name = q.name.filter(|n| !n.is_empty()).ok_or_else(|| anyhow::anyhow!("an upload names its file"))?;
+            let to: MidiTarget = serde_json::from_str(q.to.as_deref().unwrap_or("")).map_err(|e| anyhow::anyhow!("where the file goes doesn't read: {e}"))?;
+            (session, MidiSource::Bytes { name, bytes: body.to_vec() }, to)
+        }
+    };
+    let state = s.clone();
+    let result = blocking(move || state.graph.import_midi(session, source, to)).await;
+    s.graph_changed();
+    Ok(Json(result?))
 }
 
 #[derive(Deserialize)]

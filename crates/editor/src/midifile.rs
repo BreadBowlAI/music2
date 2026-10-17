@@ -1,6 +1,7 @@
 //! MIDI files and songs (studio lane C, gaps #36): the std sound a MIDI part plays and the program
-//! a track is written with (Q33, one table for both ways), and a song or one clip written as a MIDI
-//! file for other music apps (Q37).
+//! a track is written with (Q33, one table for both ways), a song or one clip written as a MIDI
+//! file for other music apps (Q37), and a MIDI file brought in as parts, its tempo map and its time
+//! signatures (Q32–Q36, D10, D11).
 //!
 //! A song's file is format 1 at 960 ticks a beat. Its first track holds the song's name, its tempo
 //! map and its time signatures. Then one track for each notes lane with notes, in the tracks'
@@ -14,9 +15,9 @@
 use m2_ir::{Node, Op, split_ref};
 use m2_script::component::PortKind;
 use m2_session::{Revision, Session};
-use m2_song::{Arrangement, NoteClip};
+use m2_song::{Arrangement, Meter, Note, NoteClip, Tempo};
 
-use crate::smf::{self, Event, Smf, SmfTrack};
+use crate::smf::{self, Event, Smf, SmfNote, SmfTrack};
 use crate::timeline::{self, TimelineLane};
 use crate::EditError;
 
@@ -261,6 +262,252 @@ pub fn export_clip(s: &Session, module: &str, lane: &str, id: &str) -> Result<(V
     tempo.events.retain(|e| e.0 < tick(clip.length) || e.0 == 0);
     let bytes = smf::write(&Smf { format: 1, ppq: TICKS, tracks: vec![tempo, notes] });
     Ok((bytes, t.label.clone()))
+}
+
+// ---------------------------------------------------------------- bringing a MIDI file in
+
+/// The most parts a file may bring in (Q32).
+pub const MAX_PARTS: usize = 32;
+/// The last bar a note may reach (D10).
+pub const LAST_BAR: u64 = 9_999;
+/// The shortest note brought in, in beats (D10).
+pub const SHORTEST: f64 = 1.0 / 64.0;
+
+/// A part of a MIDI file: one track's notes on one channel (Q32), what becomes a track.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Part {
+    /// The track's name, or the sound's label when the track has none or makes several parts.
+    pub label: String,
+    /// The std sound it plays (Q33).
+    pub component: String,
+    /// Its notes, in beats from the file's start, by start.
+    pub notes: Vec<Note>,
+}
+
+impl Part {
+    /// Where its last note ends, in beats from the file's start.
+    pub fn end(&self) -> f64 {
+        self.notes.iter().map(|n| n.start + n.length).fold(0.0, f64::max)
+    }
+}
+
+/// A MIDI file as music2 brings it in: its parts, in file order, and its tempo map and time
+/// signatures as an arrangement (in range, D10).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Brought {
+    pub parts: Vec<Part>,
+    pub arrangement: Arrangement,
+}
+
+/// A tempo as the file says it, in range (D10) and to a hundredth of a BPM: 483871 µs a beat is
+/// 124 BPM, as music2 wrote it.
+fn bpm_of(us: u32) -> f64 {
+    let bpm = 60_000_000.0 / us.max(1) as f64;
+    ((bpm * 100.0).round() / 100.0).clamp(20.0, 999.0)
+}
+
+/// The file's tempo map and time signatures (Q35, D10): every track's, by tick, the last at one
+/// tick winning. No tempo is 120 (SMF's); none at the start is 120 until the first. A meter
+/// music2 can't hold (1 to 64 beats over 1 to 32) or not on a bar line of the one before is
+/// skipped; with none at the start, 4/4.
+fn arrangement_of(file: &Smf) -> Arrangement {
+    let ppq = file.ppq.max(1) as f64;
+    let mut tempos: Vec<(u64, f64)> = vec![];
+    let mut meters: Vec<(u64, Meter)> = vec![];
+    let mut events: Vec<(u64, Event)> = file.tracks.iter().flat_map(|t| t.events.iter().copied()).collect();
+    events.sort_by_key(|e| e.0);
+    for (tick, e) in events {
+        match e {
+            Event::Tempo(us) => match tempos.last_mut() {
+                Some(last) if last.0 == tick => last.1 = bpm_of(us),
+                _ => tempos.push((tick, bpm_of(us))),
+            },
+            Event::Meter { beats, unit_pow } if (1..=64).contains(&beats) && unit_pow <= 5 => {
+                let m = Meter { beat: tick as f64 / ppq, beats: beats as u32, unit: 1 << unit_pow };
+                match meters.last_mut() {
+                    Some(last) if last.0 == tick => last.1 = m,
+                    _ => meters.push((tick, m)),
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut tempo: Vec<Tempo> = vec![];
+    for (tick, bpm) in tempos {
+        let beat = tick as f64 / ppq;
+        if tempo.is_empty() && tick > 0 {
+            tempo.push(Tempo { beat: 0.0, bpm: 120.0 });
+        }
+        if tempo.last().is_none_or(|t| t.bpm != bpm) {
+            tempo.push(Tempo { beat, bpm });
+        }
+    }
+    if tempo.is_empty() {
+        tempo.push(Tempo { beat: 0.0, bpm: 120.0 });
+    }
+    let mut meter: Vec<Meter> = vec![];
+    for (_, m) in meters {
+        let prev = meter.last().copied().unwrap_or(Meter::COMMON);
+        if meter.is_empty() && m.beat == 0.0 {
+            meter.push(m);
+            continue;
+        }
+        // On a bar line of the one before, put exactly there; else skipped.
+        let bars = (m.beat - prev.beat) / prev.bar();
+        if (bars - bars.round()).abs() > 1e-6 || bars.round() < 1.0 || (m.beats == prev.beats && m.unit == prev.unit) {
+            continue;
+        }
+        if meter.is_empty() {
+            meter.push(Meter::COMMON);
+        }
+        meter.push(Meter { beat: prev.beat + bars.round() * prev.bar(), ..m });
+    }
+    if meter.len() == 1 && meter[0] == Meter::COMMON {
+        meter.clear();
+    }
+    Arrangement { tempo, meter }
+}
+
+/// Bring `file`, called `name` ("groove.mid"), in as parts (Q32–Q34, D10): every pair of a track
+/// and a channel with notes, in file order (a format 0 file splits by channel). The name: the
+/// track's, else the sound's label (`label_of` a component), a repeated one numbered. Notes: beats
+/// by the file's division, velocity `v / 127` (to a thousandth), at least 1/64 beat. Refused in words: no notes, over
+/// 32 parts, a note past bar 9,999.
+pub fn bring(file: &Smf, name: &str, label_of: &dyn Fn(&str) -> String) -> Result<Brought, String> {
+    let arrangement = arrangement_of(file);
+    let ppq = file.ppq.max(1) as f64;
+    let mut parts: Vec<Part> = vec![];
+    for t in &file.tracks {
+        let notes = t.notes();
+        // The channels in the order their first notes come.
+        let mut channels: Vec<u8> = vec![];
+        for n in &notes {
+            if !channels.contains(&n.channel) {
+                channels.push(n.channel);
+            }
+        }
+        for &ch in &channels {
+            let mine: Vec<&SmfNote> = notes.iter().filter(|n| n.channel == ch).collect();
+            // Its program: the first this track sets on the channel, else the first any track does.
+            let program = |events: &[(u64, Event)]| {
+                events.iter().find_map(|e| match e.1 {
+                    Event::Program { channel, program } if channel == ch => Some(program),
+                    _ => None,
+                })
+            };
+            let program = program(&t.events).or_else(|| file.tracks.iter().find_map(|o| program(&o.events)));
+            let average = mine.iter().map(|n| n.key as f64).sum::<f64>() / mine.len() as f64;
+            let component = sound_for(ch == DRUM_CHANNEL, program, average).to_string();
+            let named = t.name.clone().filter(|n| !n.is_empty() && channels.len() == 1);
+            let notes = mine
+                .iter()
+                .map(|n| Note {
+                    pitch: n.key as f64,
+                    start: n.start as f64 / ppq,
+                    length: ((n.end - n.start) as f64 / ppq).max(SHORTEST),
+                    // To a thousandth: a tidy file, and `round(v × 127)` gives the same velocity back.
+                    velocity: (n.velocity as f64 / 127.0 * 1000.0).round() / 1000.0,
+                })
+                .collect();
+            parts.push(Part { label: named.unwrap_or_else(|| label_of(&component)), component, notes });
+        }
+    }
+    if parts.is_empty() {
+        return Err(format!("{name} has no notes."));
+    }
+    if parts.len() > MAX_PARTS {
+        return Err(format!("{name} has {} parts: music2 brings in {MAX_PARTS} at most.", parts.len()));
+    }
+    if parts.iter().any(|p| arrangement.bar_at(p.end()).0 >= LAST_BAR) {
+        return Err(format!("{name} has a note past bar {}: music2 brings in notes up to there.", "9,999"));
+    }
+    // A name twice: "Piano", "Piano 2".
+    let mut seen: Vec<String> = vec![];
+    for p in &mut parts {
+        let base = p.label.clone();
+        let mut n = 1;
+        while seen.iter().any(|s| s.eq_ignore_ascii_case(&p.label)) {
+            n += 1;
+            p.label = format!("{base} {n}");
+        }
+        seen.push(p.label.clone());
+    }
+    Ok(Brought { parts, arrangement })
+}
+
+/// Where a part's clip ends, `from` its start at beat `at`: the bar line at or after its last note
+/// (at least a bar on), by `a`'s time signatures.
+pub fn clip_length(a: &Arrangement, at: f64, end: f64) -> f64 {
+    let last = at + end;
+    let (_, into) = a.bar_at(last);
+    let line = if into <= 1e-9 { last - into } else { last - into + a.meter_at(last).bar() };
+    (line - at).max(a.meter_at(at).bar())
+}
+
+/// What the tempo question answered (Q35): keep the song's tempo, or use the file's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TempoChoice {
+    Keep,
+    Use,
+}
+
+/// The tempo question (Q35): the file's first tempo and the song's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Asks {
+    pub file_bpm: f64,
+    pub song_bpm: f64,
+}
+
+/// What a MIDI import writes into `data/arrangement.json` (Q35): into an empty song (no lane has
+/// a clip), the file's tempo map and time signatures; else nothing when the tempos are the same or
+/// the answer is Keep, the file's tempo map (the song's time signatures kept) when it is Use, and
+/// the question when there is no answer yet.
+pub fn tempo_plan(song_empty: bool, song: &Arrangement, file: &Arrangement, choice: Option<TempoChoice>) -> Result<Option<Arrangement>, Asks> {
+    if song_empty {
+        return Ok((song != file).then(|| file.clone()));
+    }
+    if song.tempo == file.tempo {
+        return Ok(None);
+    }
+    match choice {
+        None => Err(Asks { file_bpm: file.tempo[0].bpm, song_bpm: song.tempo[0].bpm }),
+        Some(TempoChoice::Keep) => Ok(None),
+        Some(TempoChoice::Use) => Ok(Some(Arrangement { tempo: file.tempo.clone(), meter: song.meter.clone() })),
+    }
+}
+
+/// The sounds' labels, as + Track lists them, by component.
+fn labels(s: &Session) -> impl Fn(&str) -> String + use<> {
+    let list: Vec<(String, String)> = crate::tracks::instruments(s).into_iter().map(|i| (i.component, i.label)).collect();
+    move |c: &str| list.iter().find(|(id, _)| id == c).map_or_else(|| c.rsplit(':').next().unwrap_or(c).to_string(), |(_, l)| l.clone())
+}
+
+/// Bring a one-part MIDI file in onto notes lane `lane` of track `module`, at beat `at` (Q36, D11):
+/// one clip from `at` to the bar line after its last note, by the song's tempo and time signatures
+/// (its notes go by beats; no question). One `Clips` Tx, one undo step. Refused in words when the
+/// file has more than one part, or the lane isn't a notes lane.
+pub fn import_into(s: &mut Session, file: &Smf, name: &str, module: &str, lane: &str, at: f64) -> Result<crate::clips::ClipsEdited, EditError> {
+    if !(at >= 0.0 && at.is_finite()) {
+        return Err(EditError::Rejected(format!("can't bring {name} in at beat {at}")));
+    }
+    let brought = bring(file, name, &labels(s)).map_err(EditError::Rejected)?;
+    let view = timeline::timeline(s);
+    let t = view.tracks.iter().find(|t| t.module == module).ok_or_else(|| EditError::Missing("That track isn't there any more.".into()))?;
+    if !matches!(t.lanes.iter().find(|l| l.key() == lane), Some(TimelineLane::Notes { .. })) {
+        return Err(EditError::Rejected(format!("{} has no notes lane {lane} to bring {name} into.", t.label)));
+    }
+    let [part] = brought.parts.as_slice() else {
+        return Err(EditError::Rejected(format!(
+            "{name} has {} parts: drop it below the tracks to bring each in as a track of its own.",
+            brought.parts.len()
+        )));
+    };
+    let length = clip_length(&s.accepted().project.arrangement, at, part.end());
+    let clip = NoteClip { id: None, other_id: None, start: at, length, notes: part.notes.clone() };
+    let lane = m2_song::LaneAddr { module: m2_song::Key::new(module).map_err(EditError::Rejected)?, lane: m2_song::Key::new(lane).map_err(EditError::Rejected)? };
+    let put = serde_json::to_value(&clip).map_err(|e| EditError::Io(e.to_string()))?;
+    crate::clips::edit(s, &crate::clips::Gesture::Set { lane, put: vec![put], delete: vec![] })
 }
 
 #[cfg(test)]

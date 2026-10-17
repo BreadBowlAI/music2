@@ -103,3 +103,64 @@ fn a_new_midi_file_never_replaces_one() {
     assert!(picked(dir.join("no-such/x.mid")).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A one-track MIDI file, 96 ticks a beat: E2 for a beat, then A2 for two, from beat 4.
+fn riff() -> Vec<u8> {
+    use m2_editor::smf::{Event, Smf, SmfTrack};
+    let on = |key| Event::NoteOn { channel: 0, key, velocity: 100 };
+    let off = |key| Event::NoteOff { channel: 0, key };
+    let events = vec![(0, on(40)), (96, off(40)), (384, on(45)), (576, off(45))];
+    m2_editor::smf::write(&Smf { format: 1, ppq: 96, tracks: vec![SmfTrack { name: Some("Riff".into()), events, end: 576 }] })
+}
+
+/// `POST path?query` with raw `bytes` and the token: the status and the JSON answer.
+fn upload(url: &str, path: &str, bytes: &[u8]) -> (u16, Value) {
+    let addr = url.trim_start_matches("http://");
+    let mut s = std::net::TcpStream::connect(addr).unwrap();
+    let head = format!(
+        "POST {path} HTTP/1.1\r\nHost: {addr}\r\nx-m2-token: t0k\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        bytes.len()
+    );
+    s.write_all(head.as_bytes()).unwrap();
+    s.write_all(bytes).unwrap();
+    let mut answer = String::new();
+    s.read_to_string(&mut answer).unwrap();
+    let status = answer[9..12].parse().unwrap();
+    let json = answer.split_once("\r\n\r\n").map_or(Value::Null, |(_, b)| serde_json::from_str(b).unwrap_or(Value::Null));
+    (status, json)
+}
+
+// C2, Q36, D11: a one-part MIDI file into Bass's notes lane, as a path (the app) and as bytes (a
+// browser): one clip, one undo step named on the server; what isn't a MIDI file is refused in words.
+#[test]
+fn a_midi_file_comes_into_a_notes_lane_as_one_undo_step() {
+    let dir = project("import");
+    let running = start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t0k".into() }, Graph::silent()).unwrap();
+    let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+    let url = &running.url;
+    std::fs::write(dir.join("riff.mid"), riff()).unwrap();
+    let to = json!({"kind": "lane", "module": "bass", "lane": "notes", "beat": 8});
+    let (status, done) = post(url, "/api/graph/midifile/import", &json!({"session": session, "path": dir.join("riff.mid"), "to": to}));
+    assert_eq!(status, 200, "{done:#}");
+    assert_eq!((done["name"].as_str(), done["undo_name"]["name"].as_str()), (Some("importing riff.mid"), Some("importing riff.mid")), "{done:#}");
+    let id = done["made"][0]["id"].as_str().unwrap().to_string();
+    let lane: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("data/bass/notes.json")).unwrap()).unwrap();
+    let clip = lane["clips"].as_array().unwrap().iter().find(|c| c["id"] == id.as_str()).unwrap().clone();
+    assert_eq!((clip["start"].as_f64(), clip["length"].as_f64(), clip["notes"].as_array().map(Vec::len)), (Some(8.0), Some(8.0), Some(2)), "{clip}");
+    // Bytes, as a browser sends them.
+    let q = format!("/api/graph/midifile/import?session={session}&name=riff%202.mid&to={}", urlencode(&to.to_string()));
+    let (status, done) = upload(url, &q, &riff());
+    assert_eq!((status, done["name"].as_str()), (200, Some("importing riff 2.mid")), "{done:#}");
+    // Not a MIDI file: words, nothing written.
+    let before = std::fs::read_to_string(dir.join("data/bass/notes.json")).unwrap();
+    let q = format!("/api/graph/midifile/import?session={session}&name=notes.mid&to={}", urlencode(&to.to_string()));
+    let (status, why) = upload(url, &q, b"hello, this is text");
+    assert_eq!((status, why["error"].as_str()), (400, Some("notes.mid isn't a MIDI file: it doesn't start with MThd.")));
+    assert_eq!(std::fs::read_to_string(dir.join("data/bass/notes.json")).unwrap(), before);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `text` for a query string.
+fn urlencode(text: &str) -> String {
+    text.bytes().map(|b| if b.is_ascii_alphanumeric() { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}

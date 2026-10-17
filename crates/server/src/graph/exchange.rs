@@ -1,7 +1,7 @@
-//! Files for other music apps, from the open song (studio lane C): the song or one clip as a MIDI
-//! file's bytes ([`m2_editor::midifile`]), and its stems' renders, each made on the actor from the
-//! accepted revision, as every view is. Files are written off the actor: by the route, or by
-//! `crate::stems`' thread.
+//! Files from and for other music apps (studio lane C): the song or one clip as a MIDI file's bytes
+//! ([`m2_editor::midifile`]), and its stems' renders, each made on the actor from the accepted
+//! revision, as every view is; files are written off the actor, by the route or by `crate::stems`'
+//! thread. And a MIDI file brought in: read off the actor, then one actor job.
 
 use std::sync::Arc;
 
@@ -10,6 +10,7 @@ use m2_editor::midifile::ClipAt;
 use m2_editor::render::{Length, Render, Threads};
 use m2_ir::{FOp, Flat};
 use m2_session::Revision;
+use serde_json::{Value, json};
 
 use super::Graph;
 
@@ -124,5 +125,65 @@ impl Graph {
             Render::new(&flat, data, &o.session.packages, rev.project.sample_rate(), 0.0, Length::Seconds(seconds), threads)
                 .map_err(super::plainly)
         })
+    }
+}
+
+/// A MIDI file to bring in: its path on this computer (the app), or its bytes (a browser), with
+/// its name.
+pub enum MidiSource {
+    Path(std::path::PathBuf),
+    Bytes { name: String, bytes: Vec<u8> },
+}
+
+/// Where a MIDI file goes (Q36): into a notes lane at a beat (a one-part file dropped on a notes
+/// track's row, D11).
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum MidiTarget {
+    Lane { module: String, lane: String, beat: f64 },
+}
+
+/// A MIDI file's name and bytes, read: refused in words over 16 MB (D10), before reading it whole.
+fn midi_bytes(source: MidiSource) -> Result<(String, Vec<u8>)> {
+    let (name, bytes) = match source {
+        MidiSource::Path(p) => {
+            let name = p.file_name().map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into_owned());
+            let size = std::fs::metadata(&p).map_err(|e| anyhow!("{name} can't be read: {e}"))?.len();
+            if size > m2_editor::smf::MAX_BYTES as u64 {
+                bail!("{name} is over 16 MB: music2 brings in MIDI files up to 16 MB.");
+            }
+            let bytes = std::fs::read(&p).map_err(|e| anyhow!("{name} can't be read: {e}"))?;
+            (name, bytes)
+        }
+        MidiSource::Bytes { name, bytes } => (name, bytes),
+    };
+    Ok((name, bytes))
+}
+
+impl Graph {
+    /// Bring a MIDI file into the open song at `target` (Q36, D11): read on the calling thread
+    /// (refused in words when it isn't one music2 reads), then one actor job, one undo step named
+    /// "importing groove.mid" on the server. Answers the edit with `made` (the clip, to select),
+    /// `name` and `undo_name`.
+    pub fn import_midi(&self, token: u64, source: MidiSource, target: MidiTarget) -> Result<Value> {
+        let (name, bytes) = midi_bytes(source)?;
+        let file = m2_editor::smf::read(&bytes).map_err(|e| anyhow!("{name} {e}"))?;
+        let step = format!("importing {name}");
+        let mut done = self.call(move |a| {
+            a.edit_and(token, |s| match &target {
+                MidiTarget::Lane { module, lane, beat } => {
+                    let done = m2_editor::midifile::import_into(s, &file, &name, module, lane, *beat)?;
+                    let made: Vec<Value> =
+                        done.made.iter().map(|(l, id)| json!({"module": l.module.as_str(), "lane": l.lane.as_str(), "id": id})).collect();
+                    Ok((done.edited, json!({"made": made, "tracks": []})))
+                }
+            })
+        })?;
+        if let Some(revision) = done["revision"].as_u64() {
+            let named = self.name_step(token, revision, step.clone(), false)?;
+            done["undo_name"] = named["undo_name"].clone();
+        }
+        done["name"] = json!(step);
+        Ok(done)
     }
 }

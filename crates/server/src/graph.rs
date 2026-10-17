@@ -57,7 +57,7 @@ mod steps;
 pub mod midi;
 mod lanes;
 mod tempo_lease;
-mod exchange;
+pub(crate) mod exchange;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};

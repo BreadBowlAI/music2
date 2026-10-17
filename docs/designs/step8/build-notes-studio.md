@@ -125,6 +125,101 @@ drums on channel 10.
 **Contract:** `smf.rs` reads SMF formats 0 and 1 in ticks a beat and refuses the rest in words; music2 writes format 1
 at 960 ticks a beat. A MIDI file is written outside the song only (Exports, or a picked file).
 
+### C2a. MIDI files read in; one part into a notes lane
+
+C2 needs P0's `tracks::add_tracks` (new tracks in one Tx), drop layer, `open_file` and `droplib.mjs`, none of which is
+on `studio` yet. This half is what needs none of them: the file read into parts with their sounds, its tempo map
+and time signatures, the tempo question's rule, and a one-part file brought into a notes lane, with its route. The
+rest is C2b (What's left).
+
+**In short**
+
+| What | Now |
+|---|---|
+| A MIDI file from another app | music2 reads it: each part (a track's notes on one channel) with a fitting sound |
+| Drums (channel 10) | The Drum kit |
+| Other parts | By their General MIDI sound: pianos play FM keys, basses Synth bass, strings Strings… With no sound named: Synth bass for low parts, else FM keys |
+| A one-part file onto a notes lane | One clip there, to the bar line after its last note, one Undo step: "Undo importing riff.mid". The song's tempo stays |
+| Not a MIDI file, no notes, over 32 parts, past bar 9,999 | Refused, in words. Nothing is changed |
+
+The app reaches this with C2b's drop. Until then, the route does (`st-midi` uploads as a browser does).
+
+**What changed**
+
+- `crates/editor/src/midifile.rs` (C's):
+  - `bring(file, name, label_of) -> Brought { parts, arrangement }` (Q32–Q34, D10): every pair of a track and a
+    channel with notes, in file order, the channels in the order their first notes come (a format 0 file splits by
+    channel); the sound by `sound_for` (channel 10, else the first program the track, then any track, sets on the
+    channel, else the average pitch); the name: the track's when it makes one part, else the sound's label, a repeat
+    numbered ("Piano 2"); notes in beats by the division, velocity `v / 127` to a thousandth (so `round(v × 127)`
+    gives it back), at least 1/64 beat. Refused in words: no notes, over 32 parts, a note past bar 9,999.
+  - `arrangement_of` (D10): every track's tempos and meters by tick, the last at one tick winning; tempos to a
+    hundredth of a BPM (483871 µs is 124, as music2 writes it) and clamped into 20 to 999; 120 until the first; a
+    meter outside 1 to 64 over 1 to 32, or not on a bar line of the one before, skipped, and one on a bar line put
+    exactly there; 4/4 alone is none written. What comes out passes `Arrangement::read`.
+  - `tempo_plan(song_empty, song, file, choice)` (Q35): into an empty song, the file's tempo map and time signatures;
+    else nothing when the tempos are the same or the answer is Keep, the file's tempo map (the song's meters kept)
+    for Use, and `Asks { file_bpm, song_bpm }` with no answer. C2b's Tx writes what it says.
+  - `clip_length(a, at, end)`: from `at` to the bar line at or after its last note, a bar at least.
+  - `import_into(s, file, name, module, lane, at)` (Q36, D11): a one-part file onto a notes lane at `at`, as one
+    `Gesture::Set` (one `Clips` Tx), by the song's own tempo and meter (no question). Refused in words: more than one
+    part ("groove.mid has 3 parts: drop it below the tracks to bring each in as a track of its own."), a lane that
+    isn't notes.
+- `crates/server/src/graph/exchange.rs`: `Graph::import_midi(token, source, target)`: the file read off the actor
+  (a path over 16 MB refused before it is read), then one actor job, the step named "importing riff.mid" on the
+  server. `MidiSource` (a path, or bytes with a name) and `MidiTarget` (`{kind: "lane", module, lane, beat}`;
+  C2b adds `{kind: "below", beat}`). `graph.rs`' line is `pub(crate) mod exchange;` so the route names them.
+- `crates/server/src/routes_exchange.rs`: `POST /api/graph/midifile/import`: JSON `{session, path, to}` (the app) or
+  the bytes with `?session=&name=&to=` (a browser), its body limit 16 MB (D10). A write: a read-only window gets 423.
+
+**Tests**
+
+- `midifile_tests.rs` (11 more): `each_track_and_channel_becomes_a_track`, `channel_10_plays_the_drum_kit`,
+  `programs_pick_std_sounds` (one program of each family, and a program set on another track),
+  `no_program_picks_by_pitch`, `notes_shorter_than_a_64th_get_a_64th`, `odd_tempos_and_meters_stay_in_range` (10 and
+  60,000,000 BPM, two tempos at one tick, a 0-beat meter, a unit of 512, a meter off the bar line; the result reads
+  as an arrangement), `more_than_32_parts_is_refused` (and 32 taken; no notes; bar 9,999 and 10,000),
+  `an_exported_song_imports_as_the_same_notes` (first-song written by C1, read back: the names, the sounds, 124 BPM,
+  every note as beats), `an_empty_song_takes_the_files_tempo`, `a_song_with_clips_asks_then_keeps_or_takes_the_tempo`,
+  `a_one_track_file_dropped_on_a_notes_lane_goes_into_it` (a two-bar clip at bar 9 by beats, no tempo written, one
+  undo step back to the same bytes; two parts and an automation lane refused in words).
+- `routes_exchange_tests.rs`: `a_midi_file_comes_into_a_notes_lane_as_one_undo_step` (a path and an upload; the
+  step's name; a text file refused with nothing written).
+- `st-midi` grows to 19: an upload of a one-part file into Bass at bar 9 (its answer, the two-bar clip of two notes,
+  "Undo importing riff.mid", ⌘Z), and a text file named `.mid`. Its MIDI files are made in node by `smfBytes`, which
+  moves to `droplib.mjs`' `smf()` with C2b.
+
+**Red first**
+
+- Against stubs (`bring` bringing nothing, `tempo_plan` writing nothing): 11 of the 11 new editor tests fail, e.g.
+  `midifile_tests.rs:291` (no parts), `:420` (the empty song's tempo), `:444` (`import_into` refused); the route test
+  `left: 400, right: 200` at `routes_exchange_tests.rs:144`.
+- `st-midi` on C3's server (no import route): `FAIL  riff.mid comes into Bass's notes at bar 9: {"error":"no such API"}`,
+  `FAIL  Undo names it: Undo (⌘Z)`, `FAIL  a text file named .mid says so: {"error":"no such API"}`.
+
+**Guards**
+
+- None.
+
+**What's left** (C2b, after P0 lands on `studio`)
+
+- New tracks: `import_new` building P0's `NewTrack { play: Play::Instrument(part.component), label, key, clips }` for
+  each part (one clip from the bar, `clip_length` long, by the arrangement in effect) and one
+  `tracks::add_tracks(…, tempo_plan's arrangement)`: one Tx, one undo step "importing groove.mid"; the route's
+  `{kind: "below", beat}` and its `{asks: {file_bpm, song_bpm}}` answer, and `tempo: "keep" | "use"`.
+- `components/MidiTempoAsk.tsx` (the question as a page dialog: "groove.mid is at 128 BPM. The song is at 120 BPM."
+  [Keep 120] [Use 128], D34's second line), File ▸ Import MIDI… (`menu.rs`' `import_midi` after A's `import_audio`;
+  P0's `open_file` in the app, a file input in a browser), `App.tsx`' `case "import_midi"`, and `lib/midiFiles.ts`
+  registering `.mid` and `.midi` with P0's drop layer (hints "groove.mid: 3 tracks · bar 1", "Into Bass · bar 3").
+- `st-midi`'s import part through the menu and a drop (D11), `smf()` in `droplib.mjs`, the toast "Imported
+  groove.mid: Drums, Bass and Keys" with Undo.
+
+**For gaps.md:** #36: MIDI files read (formats 0 and 1); a one-part file goes into a notes lane. New tracks from a
+MIDI file wait for C2b.
+
+**Contract:** a MIDI part is a track and a channel with notes; channel 10 plays the Drum kit, others by General MIDI's
+families (Q33). An import into a lane keeps the song's tempo (D11).
+
 ### C3a. Stems
 
 **In short**
