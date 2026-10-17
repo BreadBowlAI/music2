@@ -1,6 +1,6 @@
 //! The routes of 8b's back ends, in a router of their own, merged into the API's (G5): mute and
-//! solo. A route here that writes the project is in [`WRITES_8B`], and a read-only window answers
-//! it 423 with WRITE-18's message, as `routes.rs` answers its own.
+//! solo, and audition. A route here that writes the project is in [`WRITES_8B`], and a read-only
+//! window answers it 423 with WRITE-18's message, as `routes.rs` answers its own.
 
 use std::sync::Arc;
 
@@ -13,6 +13,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::AppState;
+use crate::graph::audition::Audition;
 use crate::graph::overlay::Change;
 use crate::routes::ApiError;
 
@@ -26,6 +27,7 @@ pub fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/graph/overlay", post(graph_overlay))
         .route("/api/graph/track/mute", post(track_mute))
+        .route("/api/graph/audition", post(graph_audition))
         .route_layer(axum::middleware::from_fn_with_state(state, writes))
 }
 
@@ -74,6 +76,22 @@ async fn track_mute(State(s): S, Json(r): Json<MuteReq>) -> ApiResult {
     let result = blocking(move || state.graph.mute_in_song(r.session, r.modules, r.muted)).await;
     s.graph_changed();
     Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct AuditionReq {
+    /// The window, or the agent, playing: its notes are its own.
+    client: String,
+    #[serde(flatten)]
+    audition: Audition,
+}
+
+/// Play or let go of notes on a lane (MON-7): `{client, module, lane, on: [{h, pitch, velocity}],
+/// off: [h], keep: [h]}`. Not a write: it works read-only, and never waits for the session.
+/// Answers `{}`, or `{"t": "audition", "silent": …}` when nothing plays the lane.
+async fn graph_audition(State(s): S, Json(r): Json<AuditionReq>) -> ApiResult {
+    let answer = blocking(move || s.graph.audition(&r.client, r.audition)).await?;
+    Ok(Json(answer.unwrap_or_else(|| json!({}))))
 }
 
 #[cfg(test)]

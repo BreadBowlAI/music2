@@ -137,7 +137,8 @@ const TELL_EVERY: Duration = Duration::from_millis(300);
 ///   busy for seconds: a compile, or a commit the disk is slow to make durable.
 /// - `music2-tell` every 300 ms ends the knob drags nobody moves any more (C6) and says what
 ///   ended or was saved on its own, and a commit heard as its preview that isn't saved yet
-///   (PLANE-5). It never waits for the actor.
+///   (PLANE-5); and lets go of the notes of a window that went quiet (MON-7). It never waits for
+///   the actor.
 ///
 /// Both end once the state is dropped.
 fn spawn_graph_watch(state: &Arc<AppState>) {
@@ -168,6 +169,7 @@ fn spawn_graph_watch(state: &Arc<AppState>) {
                 let Some(state) = weak.upgrade() else { return };
                 let said = state.graph.expire();
                 state.graph.save_overlays();
+                state.graph.expire_auditions();
                 for s in &said {
                     state.toast(s.clone());
                 }

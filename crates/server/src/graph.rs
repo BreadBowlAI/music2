@@ -37,6 +37,7 @@
 //! counts at that rate.
 
 mod actor;
+pub mod audition;
 mod events;
 pub mod lease;
 pub mod overlay;
@@ -168,6 +169,8 @@ pub struct Activity {
     /// The device's other errors since the player started. A change of output device, or a
     /// device that is gone, lets the player go; the rest are only counted.
     pub device_errors: u64,
+    /// Live notes sounding: audition's (MON-7).
+    pub live: u32,
 }
 
 impl Activity {
@@ -276,6 +279,8 @@ struct Published {
 struct ControlPlane {
     open: Option<Published>,
     leases: Leases,
+    /// The windows that play notes live (MON-7).
+    audition: audition::Sources,
 }
 
 /// How a control named at a revision is found without the session.
@@ -550,12 +555,13 @@ impl Inner {
     fn activity(&self) -> Activity {
         let device = self.current_device();
         let held = device.as_ref().is_some_and(|d| d.player.held());
-        let e = device.map(|d| d.player.device_errors()).unwrap_or_default();
+        let e = device.as_ref().map(|d| d.player.device_errors()).unwrap_or_default();
         Activity {
             paused: held.then_some("exporting"),
             loading: self.owner.loading(),
             xruns: e.xruns,
             device_errors: e.changes + e.gone + e.other,
+            live: device.as_ref().map_or(0, |d| d.player.live_notes()),
         }
     }
 
@@ -1094,6 +1100,7 @@ impl Graph {
     /// The window `client` closed (its WebSocket went away): its live leases end, and their code
     /// values play again. Its pending commits stay: it let go, so it meant to save.
     pub fn client_gone(&self, client: &str) {
+        self.audition_gone(client);
         let device = self.inner.current_device();
         let mut cp = self.inner.control.lock();
         let mut i = 0;
