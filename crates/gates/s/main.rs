@@ -4,7 +4,9 @@
 //! Built only in a copy of S, as an example of S's m2-gates (`build.sh` in this folder), so it uses
 //! S's API alone: `Lab::compile`, `Renderer::new`, `set_strict`, `set_transport`, `render_block`,
 //! `Player::driven`, `open`, `seek`, `play`, `Driver::fill` and `drain_retired`, each as m2-gates
-//! calls the same thing on HEAD's side. Its kernels are S's own std's.
+//! calls the same thing on HEAD's side. Its kernels are S's own std's. So it compiles a copy of
+//! each project, its manifest asking for S's std: the projects m2-gates writes ask for the app's
+//! newer std, which S's build would refuse (FMT-3). G7f checks that the sides play the same music.
 //!
 //!   s_runner <work folder>
 //!
@@ -53,10 +55,31 @@ fn say(e: anyhow::Error) -> String {
 impl S {
     fn song(&mut self, dir: &Path) -> Result<Song, String> {
         if !self.songs.contains_key(dir) {
-            let song = self.lab.compile(dir).map_err(say)?;
+            let song = self.lab.compile(&self.asking_for_own_std(dir)?).map_err(say)?;
             self.songs.insert(dir.to_path_buf(), song);
         }
         Ok(self.songs[dir].clone())
+    }
+
+    /// A copy of the project in `dir`, in the runner's own folder, whose manifest asks for S's std.
+    fn asking_for_own_std(&self, dir: &Path) -> Result<PathBuf, String> {
+        let std = &self.lab.packages.get("std").ok_or("S has no std")?.version;
+        let to = self.lab.dir(&format!("{}-s", dir.file_name().unwrap_or_default().to_string_lossy()));
+        copy(dir, &to).map_err(|e| format!("copying {} to {}: {e}", dir.display(), to.display()))?;
+        let manifest = to.join("music2.toml");
+        let text = std::fs::read_to_string(&manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
+        let mut deps = false;
+        let mut out = String::new();
+        for line in text.lines() {
+            if line.starts_with('[') {
+                deps = line.trim() == "[dependencies]";
+            }
+            let std_line = deps && line.split('=').next().is_some_and(|k| k.trim() == "std");
+            out += &if std_line { format!("std = \"{std}\"") } else { line.to_string() };
+            out.push('\n');
+        }
+        std::fs::write(&manifest, out).map_err(|e| format!("{}: {e}", manifest.display()))?;
+        Ok(to)
     }
 
     /// One callback or block, timed in µs; what it played is then added to `heard`, and what the
@@ -134,6 +157,21 @@ impl wire::Deck for S {
         self.plays = Plays::Nothing;
         t.elapsed().as_secs_f64() * 1e3
     }
+}
+
+/// `from`'s files and folders, copied into `to`.
+fn copy(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for e in std::fs::read_dir(from)? {
+        let e = e?;
+        let (f, t) = (e.path(), to.join(e.file_name()));
+        if e.file_type()?.is_dir() {
+            copy(&f, &t)?;
+        } else {
+            std::fs::copy(&f, &t)?;
+        }
+    }
+    Ok(())
 }
 
 /// Kernel instances a renderer of `nodes` builds, counted as m2-gates counts them.

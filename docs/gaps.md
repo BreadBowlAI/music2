@@ -36,6 +36,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 - Play CLAP plugins such as Surge XT, with automation and saved settings. A plugin is added by writing it into a track's code (#32). A song whose plugin isn't installed still plays: only that plugin's node is silent, or passes its audio through.
 - Play audio clips with offset, gain, fades, reverse, pitch and warp (written by hand in JSON).
 - Play pop sounds from std: a supersaw, a gliding lead, a pad, a pluck, an 808 sub, a synth bass and strings on one polysynth (`std/synth`), FM keys, bells and metal (`std/fm`), and an 808/909 drum machine whose kit plays kick, snare, clap, hats, toms and more from one lane by General MIDI note, with an open hat cut off by the next hat and a level for each group of drums (`std/drums`). Each has a few named knobs; `synth.custom` and `fm.custom` have every one. One note at a time, a note still held sounds again when the one over it ends, as on a monosynth ([Sounds and effects](../README.md#sounds-and-effects-std)).
+- Hear a song as it exports. std's chorus, phaser and tremolo wobble only while the song plays, and the drums' noise follows the hits, so they sound as in the export when you press Play, however long the song sat first. An oscillator or noise written straight into a track's code, outside a voice, or a plugin, may still run on while stopped. Going back to bar 1 after playing is a jump: the wobble and the drums' noise carry on from where they were, so that play may differ a little from the export.
 
 ## The top ten
 

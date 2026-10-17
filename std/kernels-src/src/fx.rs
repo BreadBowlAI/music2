@@ -13,7 +13,7 @@
 //! Chorus, phaser, tremolo and the bitcrusher follow the song, not the engine: their last input,
 //! `playing`, is 1 while the song plays (std/fx passes `time.playing`; left out it is 1). Stopped,
 //! the LFOs wait where they are, and the bitcrusher's clock is put back at Play to where it was at
-//! Stop. So a song played after the engine sat stopped is the export, bit for bit (RENDER-33).
+//! Stop. So after the engine sat stopped they play the export, bit for bit (RENDER-33).
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 

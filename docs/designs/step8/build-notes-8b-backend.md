@@ -21,7 +21,8 @@ The `8b-backend` track builds the back ends of 8b.4 (mute, solo, mute in song), 
 | B10 | Audition on the server: the WebSocket and `POST /api/graph/audition`, sources, the watchdog, `live` in the status | built |
 | B11 | Meters in the engine: taps on the output and each track; the callback's time; whether the engine idles | built |
 | B12 | Meters on the server: the 30 Hz thread, the `meters` message on its own channel, `load` in the status | built |
-| W1 | The keyed compressor and the gate's third clause | waits for std 0.2 on main |
+| W1 | The keyed compressor and the gate's third clause | waits: std 0.2 has no keyed compressor |
+| M1 | Main's sounds merge (std 0.2) merged in | merged |
 
 ---
 
@@ -607,3 +608,17 @@ The tests were written after the code. Three were made red by breaking the code 
 **Contract:** the Engine shape (the server's half), the Deferred table (taps and meters built;
 freezing and bounce as a Tx stay), `docs/gaps.md` #20.
 
+---
+
+## M1. Main's sounds merge
+
+**In short:** main (`1e5afe3`) is merged in. It brings std 0.2. Every test project here now asks for
+std 0.2.
+
+| What | How |
+|---|---|
+| `docs/architecture.md` | The one conflict: gate 7's row is main's (passed again with the sounds merge); gate 8's row keeps 8b's clauses. W1 now says what it waits for: std 0.2 has no keyed compressor. |
+| Test manifests | `routes_8b_tests.rs` (7) and the `sidechain` fixtures asked for std 0.1. Main's `every_shipped_manifest_is_met` would fail on the fixtures. All now say `0.2`. |
+| `std.wasm` | Unchanged on both sides: nothing to rebuild. |
+
+**Checks:** tests of `m2-session`, `m2-play`, `m2-server`.

@@ -194,7 +194,7 @@ sample_rate = 48000
 
 [dependencies]
 "@m2/core" = "1"
-std = "0.1"
+std = "0.2"
 ```
 
 `arrangement.json` holds `tempo` (a list of `{ "beat", "bpm" }` changes, the first at beat 0) and `meter` (a list of `{ "beat", "beats", "unit" }` time signatures; empty is 4/4). A beat is a quarter note.
@@ -284,7 +284,7 @@ A number in the code can carry a unit, written as a function. Plugging a value w
 | `song(fn)` | the root module in `song.ts`, with the key `song`: whatever it returns is what you hear |
 | `lane.notes(key)`, `lane.control(key, unit, fallback)`, `lane.mask(key)`, `lane.audio(key)` | the timeline lanes, each with an optional last argument `{ name, shared }` |
 | `key(k, fn)` | runs `fn` in a frame named `k`, which files the saved settings of the plugins built inside it under `k` |
-| `time.beats`, `time.seconds` | the song's position |
+| `time.beats`, `time.seconds`, `time.playing` | the song's position, and 1 while it plays (0 while stopped). A track gets `time` in its `fn`; a component's body imports it from `@m2/core` |
 | `poly(notes, voice, { voices })` | plays a voice for each note at once |
 | `feedback(kind)` | a loop with a short delay; give its input later with `.set()` |
 | `kernel(id, inputs)` | one kernel, such as `kernel("std:svf", { … })` |
@@ -386,7 +386,7 @@ std is an ordinary package in `std/`: TypeScript in `std/src`, kernels in `std/k
   A hit cuts off the drum before it, as on a drum machine: a kick the kick still ringing, a closed hat an open one. Toms, rim, cowbell, ride and shakers ring on. No two hits are quite the same, as on an analog machine (each catches its noise and metal at a new place), yet every render of a song is. The kit's knobs are `kickTune`, `kickDecay`, `punch` (from a deep 808 boom to a hard 909 thump), `snareTune`, `snap`, `hatDecay`, `openDecay`, `hatTone`, `tomTune`, `drive`, and a level in dB for each group: `kickLevel`, `snareLevel` (with the clap and rim), `hatLevel`, `tomLevel` and `percLevel` (cymbals and the rest). Each drum is also an instrument of its own, on every note: `drums.kick`, `drums.snare`, `drums.clap`, `drums.hats` (closed, with G#2 pedal and A#2 open), `drums.tom` (tuned by the note: A2 plays at its `tune`), `drums.rim`, `drums.cowbell`, `drums.cymbal` and `drums.shaker`. The kit comes out as one sound, so a drum you want to treat on its own (a kick for the bass to duck under, a snare with a reverb of its own) goes on a lane of its own, played by that drum alone, as `examples/sounds` does with its kick.
 - **The first instruments** (`std/instruments`): `bass`, `kick`, `hat`, `pluck` and `pad`, simple versions built from the building blocks below, short enough to read and copy. For a song, the ones above sound fuller: `synth.bass` or `synth.sub`, `drums.kick`, `drums.hats`, `synth.pluck` and `synth.pad`. The templates still start new songs with the first ones.
 
-[`examples/sounds`](examples/sounds) plays every synth, FM sound and drum in a short pop song, mastered near -11.5 LUFS.
+[`examples/sounds`](examples/sounds) plays every synth and drum, and the FM keys, bell and metal, in a short pop song, mastered near -11.5 LUFS.
 
 **Effects**, as the effect browser groups them:
 
@@ -399,6 +399,8 @@ std is an ordinary package in `std/`: TypeScript in `std/src`, kernels in `std/k
 | Delay & Reverb | `delay`, `reverb` |
 | Modulation | `chorus`, `phaser`, `tremolo` |
 | Utility | `gain`, `pan`, `widen` |
+
+Chorus, phaser and tremolo move only while the song plays. Stopped, they wait, and Play carries them on from there. The bitcrusher keeps crushing a tail after Stop, and at Play it picks up where it stopped. So these effects, and std's drums, sound as in the export when you press Play, however long the song sat first. Going back to bar 1 after playing is a jump: the wobble carries on from where it stopped, so that play may differ a little from the export. An oscillator or `noise` written straight into a track's code, outside a voice, runs on while the song is stopped, so it may start from another place than in the export. A plugin may run on too.
 
 **`duck`** (`std/fx`) is the sidechain: `duck(bass.out, kick.env)` turns the bass down while the kick plays. It needs a second signal, so it's written in code rather than added from the browser.
 
