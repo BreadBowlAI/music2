@@ -193,6 +193,94 @@ Stop and a jump never wait for a compile, the take thread writes; WRITE-10: a ta
 |---|---|
 | `core/play/src/lib.rs` | `Player::heard_frame` and `heard_frame_at`, right after `Player::frames` |
 
+### B3. The Record button and the take on screen
+
+**In short**
+
+| What | Now |
+|---|---|
+| The Record button | In the top bar right after Play. A red circle. Tooltip: "Record (R) · right-click for options" |
+| R, or the button, when stopped | One bar of clicks. The button counts 4, 3, 2, 1. Then the song plays and recording starts |
+| R when playing | Recording starts at once, from the bar you are in |
+| While recording | The button is red with a white circle. A red-edged clip grows in the track, with your notes |
+| Space | Stops the song and the take. The new clip is selected. "Undo recording on Bass" |
+| R while recording | Stops the take. The song plays on |
+| Esc, Space, Return or R while counting | Stops the count. Nothing plays |
+| Right-click the button | "Count in first (one bar of clicks)", "Snap notes to the grid", "MIDI keyboards…". Kept on this computer |
+| The keyboard piano | Records too. Its card says "Plays Bass · recording" |
+| Clicking a key in Notes | Heard, not recorded |
+| Nothing played | "Nothing was played, so nothing was recorded." |
+| Close Song while recording | The take is written first |
+| Transport ▸ Record | In the app's menu bar, after Go to Start |
+
+**What changed**
+
+- `web/src/lib/record.ts` (new): the take as the server says it (the state's `record`, then `{"t": "take"}`
+  messages); `toggleRecord` (start, stop, or cancel the count), `startRecording` (the play target's lane, the
+  options from `settings.json`, Notes' grid in beats when snapping), `stopRecording`, `cancelRecording`, `stopThen`
+  (Close Song); the count's beats left from the answer's `{beats, ms}` and the page's clock; a capture-phase key
+  listener while counting (Space, Return, Esc, R cancel; D6); the written clip selected once the timeline has it;
+  the toasts for `empty` and `error`. Stopped, play's start point moves to where recording starts, so Space goes
+  back there.
+- `components/RecordButton.tsx` (new): Q17's button (a ghost with a `danger` circle; counting, `danger-soft` with
+  the beats left in `danger-strong`; recording, `danger` with a white circle; no animation) and Q18's menu, with
+  D34's words. `TopBar.tsx`: it after Play; the time readout now shows from 1212 px (1312 px in the Mac app),
+  32 px later, as D39 says.
+- `components/Take.tsx` (new): the growing clip, from its bar to the playhead (clamped to the loop's end), a
+  1.5 px `danger` outline, `danger-soft` body, "Recording", the notes (a held one grows), drawn every frame from
+  `clock.ts`. `SongTimeline.tsx`: one line in `LaneClips`, and `Notes` exported.
+- `lib/playTarget.ts`: `holdTarget`: while a take runs, what keys play is its lane (D8). `lib/audition.ts`:
+  `strike(…, { record })` marks a strike for the take; `lib/piano.ts`: the piano's strikes carry it.
+  `KeyboardPiano.tsx`: "· recording". `lib/settings.ts`: the `record` and `midi` fields.
+- `App.tsx`: `r: "record"` in `key()`, `case "record"`, and Close Song stops the take first (D35).
+  `Shortcuts.tsx`: Transport "Record what you play: R".
+- `apps/music2-desktop/src/menu.rs`: `record` ("Record", no accelerator) after `metronome` in `ITEMS`; Transport:
+  after Go to Start; `record_is_in_transport`.
+- `e2e/st-record.mjs` (new, 50 checks) and its rows in `run.mjs` and `e2e/README.md`.
+- Moved suites (values only, their counts kept, D25): `fx-fixes` and `s8-songbar` (in the Mac app the name also
+  goes at 1180 px now; it shows again from about 1200 px), `nx-click` (the Mac app's name checked at 1280 px, not
+  1180).
+
+**Tests**
+
+- `st-record` (50 checks): the button's place, size, tooltip and rest look; its menu's rows, checks kept in
+  `settings.json` and left out at their defaults, MIDI keyboards… opens Settings, the lint; R: the server counts
+  in, the button says 4 then 1, then plays and records; injected keys make a growing take ("Recording", its
+  colours); Space writes one clip over whole bars, with the notes at their velocity, one Tx, selected, "Undo
+  recording on Bass", ⌘Z takes it back; count-in off kept; the piano records ("Plays Bass · recording") and R
+  stops the take with play going on; Notes' key clicks aren't recorded (the toast); snapped to 1/16 and written at
+  a loop's wrap, play going on; R while playing records from the bar; Esc and Space while counting cancel and
+  nothing plays; a PC page's R; on a capture server, the count's four clicks 24,000 frames apart, the first
+  louder, then the song's accented downbeat a bar after the first.
+- `menu.rs`: `record_is_in_transport`.
+- Moved and green: `taste`, `s8-songbar`, `fx-fixes`, `pc-keys`, `nx-piano`, `nx-midi`, `s8-audition`, `nx-click`.
+
+**Red first**
+
+```
+st-record on the page and server before (d-dist-before, bin/d-85b069a):
+FAIL  Record sits right after Play, 28 px, and Loop moved 32 px on (play 97+28, record undefined undefined×undefined, loop 129)
+FAIL  its tooltip says what it does, its key and its menu: undefined
+FAIL  at rest a ghost with a red circle (null)
+record_is_in_transport with the rows taken out:
+assertion `left == right` failed  left: None  right: Some(("Record", None))
+```
+
+**Checks:** the web build; `cargo test -p music2-desktop` and its clippy; the mac lint of `music2-desktop`,
+`m2-server`, `m2-play`, `m2-runtime`; the suites above.
+
+**What's left**
+
+- `tips()` (P0's `tiplib.mjs`) isn't in `st-record` yet: P0 wasn't on `studio`. The End's `st-tips` adds the
+  Record button and its menu.
+- The Play button clicked while counting plays at once with no take (only the keys cancel, D6).
+
+**For gaps.md:** #24: Record in the app (R, the button, Transport ▸ Record); #19: a count-in before recording.
+
+**Contract:** taste.md §3.3 (Record after Play at 144, everything right of it 32 px further), §2.6 (`danger` marks
+recording, D18), §3.8 (the time shows from 1212 px, 1312 in the Mac app; there the name goes up to about 1200
+px), §5.1 (R is Record), §5.3 (Transport ▸ Record).
+
 ## Lane C
 
 MIDI files and stems: written by lane C.

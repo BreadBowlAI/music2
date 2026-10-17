@@ -15,6 +15,7 @@ import { MeterField, SongTitle, TempoField } from "./SongBar";
 import OverlayPill from "./OverlayPill";
 import Status from "./Status";
 import { Button, keepFocus } from "./ui";
+import RecordButton from "./RecordButton";
 
 /** `bars 5–8`, or the beats when the loop isn't on bar lines. */
 function loopName(meter: Meter[], l: Loop) {
@@ -142,6 +143,8 @@ export default function TopBar({
       >
         {status.playing ? <Square size={14} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
       </button>
+      {/* Record (R), right after Play / Stop (lane B): everything to its right moves 32 px. */}
+      <RecordButton />
       <BarButton
         data-testid="loop-toggle"
         aria-label="Loop"
@@ -170,8 +173,9 @@ export default function TopBar({
           digits stay put as it counts (5.3.2 → 10.1.1). */}
       <div className="flex items-baseline">
         <span data-testid="position" className="w-18 text-right text-lg font-medium text-fg" title="Bar, beat and sixteenth">{at}</span>
-        {/* It goes first as the window narrows (§3.8); in the Mac app, whose bar starts further in, sooner. */}
-        <span className="w-13 ml-3 text-sm text-fg-muted max-[1180px]:hidden [:root[data-app=mac]_&]:max-[1280px]:hidden" title="Time">
+        {/* It goes first as the window narrows (§3.8); in the Mac app, whose bar starts further in, sooner.
+            From 1212 px (1312 in the Mac app): Record took 32 px more of the bar (lane B, D39). */}
+        <span className="w-13 ml-3 text-sm text-fg-muted max-[1212px]:hidden [:root[data-app=mac]_&]:max-[1312px]:hidden" title="Time">
           {time}
         </span>
       </div>

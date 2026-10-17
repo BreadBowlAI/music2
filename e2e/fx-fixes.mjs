@@ -167,9 +167,10 @@ for (const mac of [false, true]) {
     await page.setViewport({ width: w, height: h, deviceScaleFactor: 2 });
     await sleep(300);
     const b = await bar();
-    // The Mac app's smallest bar leaves the name under 56 px once the metronome takes its 32 (the
-    // next track): it goes (§3.8: the time first, then the name).
-    if (mac && w === 1100) {
+    // The Mac app's bar leaves the name under 56 px at 1100 px once the metronome takes its 32 (the
+    // next track), and at 1180 once Record takes 32 more (studio lane B): it goes (§3.8: the time
+    // first, then the name).
+    if (mac && w <= 1180) {
       check(b.box[1] - b.box[0] === 0 && b.time < b.exp, `${w}px in the Mac app: the name goes, with too little room beside the tempo (…${b.time.toFixed(0)})`);
       continue;
     }

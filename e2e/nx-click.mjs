@@ -121,11 +121,12 @@ const nameRoom = async (w, mac) => {
 };
 const web = await nameRoom(1100, false);
 const mac = await nameRoom(1100, true);
-const mac1180 = await nameRoom(1180, true);
+// Record took 32 px more (studio lane B): in the Mac app the name comes back from about 1200 px.
+const mac1280 = await nameRoom(1280, true);
 const clears = (r) => !!r.field && r.field.left >= r.left + 4 && r.field.right <= r.right - 4;
 check(
-  clears(web) && mac.gone && mac.left < mac.right && clears(mac1180),
-  `the song's name keeps its room: at 1100 px its field (${web.field?.left?.toFixed(0)}–${web.field?.right?.toFixed(0)}) clears the tempo (…${web.left?.toFixed(0)}) and Undo (${web.right?.toFixed(0)}…); in the Mac app it goes at 1100 px (${JSON.stringify(mac)}) and clears them again at 1180 (${mac1180.field?.left?.toFixed(0)}–${mac1180.field?.right?.toFixed(0)})`,
+  clears(web) && mac.gone && mac.left < mac.right && clears(mac1280),
+  `the song's name keeps its room: at 1100 px its field (${web.field?.left?.toFixed(0)}–${web.field?.right?.toFixed(0)}) clears the tempo (…${web.left?.toFixed(0)}) and Undo (${web.right?.toFixed(0)}…); in the Mac app it goes at 1100 px (${JSON.stringify(mac)}) and clears them again at 1280 (${mac1280.field?.left?.toFixed(0)}–${mac1280.field?.right?.toFixed(0)})`,
 );
 await page.evaluate(() => delete document.documentElement.dataset.app);
 await page.setViewport({ width: 1440, height: 900 });

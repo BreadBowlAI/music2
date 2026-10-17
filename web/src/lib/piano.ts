@@ -106,7 +106,8 @@ function down(e: KeyboardEvent) {
   const pitch = pitchOf(e.code, usePiano.getState().octave);
   const t = currentTarget();
   // With no track to play, the key is still the piano's: it plays nothing.
-  handles.set(e.code, t ? strike(t.module, t.lane, pitch, KEY_VELOCITY, { always: true }) : null);
+  // A take records what it plays (lane B).
+  handles.set(e.code, t ? strike(t.module, t.lane, pitch, KEY_VELOCITY, { always: true, record: true }) : null);
   setHeld(e.code, pitch);
 }
 

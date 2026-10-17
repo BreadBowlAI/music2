@@ -240,14 +240,15 @@ check(await until(() => read("music2.toml") === orig.manifest), "undo puts the n
 
 // In the Mac app the bar starts 80 px in (taste.md §3.8): the field keeps clear of the tempo and the
 // buttons, as the name does. Laid out as the app's (`data-app`), at its smallest window and around
-// where the time shows. At its smallest, with the metronome's 32 px (the next track), the name has
-// under 56 px and goes (§3.8's order: the time, then the name), so there is nothing to type in.
+// where the time shows. Up to 1180 px, with the metronome's and Record's 32 px each (the next track,
+// studio lane B), the name has under 56 px and goes (§3.8's order: the time, then the name), so there
+// is nothing to type in.
 await page.evaluate(() => (document.documentElement.dataset.app = "mac"));
 for (const [w, h] of [[1100, 700], [1180, 800], [1280, 800]]) {
   await page.setViewport({ width: w, height: h });
   await sleep(300);
   const n = await box("[data-testid=bar-song-name]");
-  if (w === 1100) {
+  if (w <= 1180) {
     check(!n, `${w}px in the Mac app: the name goes, with too little room beside the tempo`);
     continue;
   }

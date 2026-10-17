@@ -1,0 +1,45 @@
+// The take while it records (lane B, Q24): a clip growing in its lane from the bar it starts on to
+// the playhead, a 1.5 px `danger` outline round a `danger-soft` body, the notes as the timeline draws
+// notes (a key still down grows with the playhead), and "Recording" in its corner. `danger` marks
+// recording as well as problems (D18). Drawn from the playhead's own clock on every frame: the server
+// says the take only when its notes change.
+
+import { useEffect, useState } from "react";
+import { onFrame } from "../lib/clock";
+import type { TrackColor } from "../lib/palette";
+import { useRecord } from "../lib/record";
+import { useZoom } from "../lib/zoom";
+import { Notes } from "./SongTimeline";
+
+/** The take in lane `module.lane`, if one records there. */
+export default function Take({ module, lane, color }: { module: string; lane: string; color: TrackColor }) {
+  const take = useRecord((s) => (s.take?.phase === "take" && s.take.module === module && s.take.lane === lane ? s.take : null));
+  const ppb = useZoom();
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => (take ? onFrame(setNow) : undefined), [take]);
+  if (!take || now === null) return null;
+  // To the playhead; never past the loop's end, where the take ends; never before where it started.
+  const end = Math.max(take.from, take.until === null ? now : Math.min(now, take.until));
+  const length = Math.max(end - take.start, 1 / 64);
+  const notes = take.notes.map((n) => ({
+    pitch: n.pitch,
+    start: n.start - take.start,
+    length: n.held ? Math.max(end - n.start, 1 / 64) : n.length,
+    velocity: n.velocity,
+  }));
+  return (
+    <div
+      data-testid="take"
+      data-start={take.start}
+      data-notes={take.notes.length}
+      className="absolute rounded-sm overflow-hidden pointer-events-none z-10 bg-danger-soft outline-[1.5px] outline-danger -outline-offset-[1.5px]"
+      style={{ top: 4, bottom: 4, left: take.start * ppb + 1, width: Math.max(length * ppb - 2, 4) }}
+    >
+      <span className="absolute left-1.5 top-0.5 text-xs font-medium text-danger-strong whitespace-nowrap">Recording</span>
+      {/* Below the word, so a high note never runs through it. */}
+      <div className="absolute inset-x-0 top-3 bottom-0">
+        <Notes notes={notes} length={length} color={color} />
+      </div>
+    </div>
+  );
+}

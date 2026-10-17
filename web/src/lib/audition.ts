@@ -14,6 +14,13 @@ import { setLocal, useLocalStore } from "./local";
 import { onMenu } from "./native";
 import { useStore } from "./store";
 
+declare module "./graph8b" {
+  interface AuditionOut {
+    /** A take records these Ons (lane B): the keyboard piano's. */
+    record?: boolean;
+  }
+}
+
 /** What a key on the keyboard plays at (Q17): the server's own default. Notes play at theirs. */
 export const KEY_VELOCITY = 0.8;
 /** A painted note sounds for its length, or this long if that is shorter (ms). */
@@ -102,10 +109,11 @@ function recheck(key: string) {
  * toggle is off, or no connection). `always`: whatever the toggle says (the keyboard piano plays an
  * instrument; the toggle is about hearing the notes you edit).
  */
-export function strike(module: string, lane: string, pitch: number, velocity = KEY_VELOCITY, { always = false } = {}): number | null {
+export function strike(module: string, lane: string, pitch: number, velocity = KEY_VELOCITY, { always = false, record = false } = {}): number | null {
   if (!always && !useAudition.getState().on) return null;
   const h = ++nextHandle;
-  if (!say({ module, lane, on: [{ h, pitch, velocity: clampVelocity(velocity) }] })) return null;
+  // `record`: a take keeps it (the keyboard piano's; lane B). Notes' own clicks never are.
+  if (!say({ module, lane, on: [{ h, pitch, velocity: clampVelocity(velocity) }], ...(record ? { record } : {}) })) return null;
   recheck(laneKey(module, lane));
   setHeld(new Map(useAudition.getState().held).set(h, { module, lane, pitch }));
   return h;
