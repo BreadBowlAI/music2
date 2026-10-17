@@ -14,9 +14,11 @@ owner's Mac judges timings (PLAT-1).
 | 2: the executor, offline | done | **Built and green.** Every offline render runs on many threads with the same bits; live playback through the same executor on one. On this server p50 renders 2.86 times faster on 4 threads by the mean, 3.41 by the p99; the executor costs nothing seen on one thread. |
 | The review | done | **4 findings, all fixed**, each with a test shown red before its fix. The last check found a fifth: gate G10's timing passed only on its retry. Fixed too. No render changed. |
 | The final check | passed | `ci/check.sh --gates` at `bc41693`: **every row, nothing passed only on a retry** (1,241 Rust tests, 49/49 browser suites, 10 of 10 renders, the 6 gate runs). |
-| The Mac sweep | owed | four lines for the owner, once `8a` is on `main` (below). |
+| The Mac sweep, offline | done | **Go, and two changes built.** On the owner's M1 Pro, 4 threads are 2.92 times faster than 1 by the p99. 8 threads beat 4 by 22%, so an export alone now uses every fast core on a Mac. Paced 4-thread blocks were slow: the live run decides park or spin. |
 | R1: a mixer strip runs with its track | done | **Built and green, the same bits.** p50's song partition went from 154 nodes to 52, its time from about 300 to about 50 µs a block, the critical path from about 400 to about 160 µs; 4 threads about 15% faster (Linux, a busy server). |
 | 3: live playback on engine threads | done | **Built and green.** Live playback renders on a pool of engine threads with the same bits as one thread: every pure fixture on 2, 4 and 7 threads, edits and a resampled song. Real time and the Mac's workgroup are asked for; this server refuses real time, so a device here plays on one thread. Nothing allocates. Every test shown red. |
+| 4: gate G12 live | done | **Built and green.** `m2-gates realtime` plays p50 live and judges every callback: on a Mac on its device (the bounds of gate 8), here on the silent clock (information). One minute of it is in the Mac's check (about 70 s more). Every new test shown red. |
+| The Mac command, live | owed | one script, `ci/sweep.sh`, about 40 minutes (below). |
 
 ## Slice 0: the spike
 
@@ -940,13 +942,12 @@ That is 520 test runs, each comparing bits on 1 and N threads, or checking a wor
 - **Slice 4 next:** the record (`timing.rs`), G12 live, `ci/gates.txt`, and the owner's Mac script (D23). The
   player already has what G12's set-up line needs: `Player::engine_threads()` (count, workers real time and
   joined, the device thread's own report, what is missing, `between`, the device thread's FP register as found).
-- **The offline Mac sweep owed above** stays owed; D23 folds it into slice 4's `ci/sweep.sh`.
+- **The offline Mac sweep owed above** came in while slice 4 was built: "The Mac sweep" below.
 
 ### For the owner's Mac (what slice 3 needs)
 
-**In short:** once the lead has merged `8a` into `main`. About 15 minutes. Plugged in, lid open, other apps
-closed, in Terminal on the Mac itself. It plays nothing aloud. Paste back `~/m2-8a.txt`. Slice 4 adds the live
-run (G12) and puts every line into one script (`ci/sweep.sh`, D23); until then these lines stand alone.
+**Folded into `ci/sweep.sh` by slice 4** (below, "The Mac command"): run that instead. Kept here for what each line
+decided when slice 3 was written.
 
 ```sh
 cd ~/dev/suite2/music2 && git fetch && git switch main && git pull
@@ -963,40 +964,238 @@ cargo run --locked --release -p m2-gates -- realtime --offline --reference 50 2>
 | `sysctl` | seconds | `hw.perflevel0.cpusperl2` caps the live count: the P-cores of one L2 (4 on the M1 Pro, *estimate*) |
 | offline sweep | 13 min with the build | S = 1-thread p99 ÷ 4-thread p99 (D23): S under 2.5 is a note to the owner that the base M1 is at risk; 8 threads 10% or more faster than 4 means an export alone uses every P-core; a partition's p99 over 667 µs is the trigger for voices across threads; the executor's own cost over 40 µs a block is trimmed before G7f's next run. The live count comes from slice 4's live sweep, not from this |
 
-## The Mac sweep (owed)
+## Slice 4: gate G12 live
 
-For the owner, once the lead has merged `8a` into `main`. About 10 minutes. Plugged in, lid open, other apps
-closed, in Terminal on the Mac itself.
+### In short
+
+- **G12 now plays live.** `m2-gates realtime` (without `--offline`) plays p50 on the player's engine threads,
+  muted, and judges every callback. On a Mac it opens the output device whatever `M2_AUDIO` says. Here it plays
+  the silent clock, never a device: its timings are information (PLAT-1).
+- **What it judges on a Mac:** no dropout from the first callback after Play (the device's overloads, late
+  callbacks, gaps over 1.5 periods); the callback's p99 at most 70% of the period from 5 s on; every engine
+  thread real time and in the output's workgroup, at 48 kHz and the frames asked. **Everywhere:** no crash, no
+  non-finite sample, and the engine rendered what the device took.
+- **The Mac's check grows by about 70 s:** one line in `ci/gates.txt`, one minute of p50 (64 s here in all).
+- **The owner's sweep is in** (`8a6d9e1`, below). Two decisions from it are built: an export alone uses every
+  fast core on a Mac, and G12 prints what the Mac's live run needs to choose park or spin (each count's live p99
+  beside its back-to-back p99, and how late workers come into a block).
+- **The Mac command is one script now:** `ci/sweep.sh`, about 40 minutes (below, "The Mac command").
+- **Shown red:** 14 bugs, each caught by the test it was made for.
+- **Run here as information** (the silent clock, plain threads, a busy server): the ci line's minute takes 64 s.
+  p50 on 8 threads: p50 496 µs a callback, p99 3,248; frames exactly as the engine clock. The sweep's p50s
+  scale as offline (1, 2, 4 threads: 2,536, 1,340, about 780 µs); the tails are the server's load.
+
+### Commits
+
+| Commit | What |
+|---|---|
+| `5b66dca` | The pool times how late each worker enters a run (and a `Meter` reads its counters from another thread) |
+| `fbeb82f` | An export alone uses every fast core on a Mac (the owner's sweep) |
+| `b20266a` | The player keeps a record of every callback's time |
+| `953c30c` | m2-gates realtime plays live: G12 on the device, or the silent clock here |
+| `566c014` | G12 says "over 8192 µs" for a quantile past its histogram (the first run here showed the longest as the p99) |
+| `abc6ced` | G12's set-up line says what the workgroup advises |
+| `026ed8e` | G12 in the check: one minute of p50 live, muted; the owner's `ci/sweep.sh` |
+| this one | Contract: gate 8's live words; build notes: slice 4 and the Mac run |
+
+### What was built
+
+| Where | What |
+|---|---|
+| `core/pool` | each worker counts how long after a run started it entered it, by powers of two of µs (`Counters.entry`, `entry_bucket`): one clock read a worker a run, none on the caller's path but one a run. `Pool::meter()` gives a `Meter` that reads the counters from any thread, during a run and after the pool drops |
+| `core/os` | `Cores.per_last_cache`: the fast cores that share the last cache before memory. Every fast core on a Mac, `per_cache` on Linux |
+| `crates/editor` | `Threads::Alone` (an export with nothing else playing) counts `per_last_cache`: 8 on the M1 Pro, 8 here as before |
+| `core/play/src/timing.rs` (new) | the record: a histogram of callback times (2,048 buckets of 4 µs), the longest, gaps (one callback's start to the next's over 1.5 periods), device frames, and the playing engine's crashes and non-finite samples. Relaxed atomics only. `Player::timing()` copies it with 8b.8's late count, the device's xruns, the engine clock, `crashed` and the pool's counters. `Timing::since`, `quantile`, `dropouts`. `Player::mute_output` |
+| `core/play/src/lib.rs` | short hooks: `muted` and `timing` last in `Shared`; one line in `fill` (zeros when muted), one in `fill_in` (after 8b.8's load lines, so both use one clock read), one in `publish`; `start_device(frames, live)`, the default output whatever `M2_AUDIO` says (`next`'s `start_in` keeps its shape, and calls a new `start_live`) |
+| `core/play/src/engines.rs` | the report keeps the pool's meter, says when the callback took its engine threads (`EngineThreads.taken`), and what the output's workgroup advises (`advice`) |
+| `crates/gates/src/realtime/live.rs` (new) | the live run, its options, `verdict` (a pure function of the run: D17), `place` (a Mac plays its device, anything else the silent clock), the table |
+| `crates/gates/src/main.rs`, `README.md` | the options (`--frames`, `--threads`, `--between`, `--audible`, `--song`; `--sweep` for live; `--minutes` refuses 0), the help |
+| `ci/gates.txt`, `ci/check.sh` | one line: `realtime --reference 50 --minutes 1`. The gates row's estimate 22 → 23 min; its summary keeps G12's set-up and dropouts lines, and the stand-in note |
+| `ci/sweep.sh` (new) | the owner's Mac run, one script (D23) |
+
+How a live run goes:
+
+1. Open the player: on a Mac `Player::start_device(128, live)`, here `Player::silent_with(128, live)`. Muted.
+2. Wait until the callback took its engine threads (`EngineThreads.taken`).
+3. Open the song, looping it whole (p50: 512 beats, 4:02). Let it sit stopped 2 s: what no one hears isn't counted
+   (D16).
+4. Play. Copies of the record at the first callback after Play, at 5 s and at the end. Dropouts count from Play,
+   the callback's times from 5 s on.
+5. Stop, unload, let go, and wait until the device is free before the next run.
+6. After the runs: each count's back-to-back p99 (10 s, offline, plain threads), beside its live p99.
+
+### Where it differs from the plan
+
+| Plan | Built | Why |
+|---|---|---|
+| G12 on Linux at the live rule's count (1 off a device) | the count a device would get (`live_count(None, cores, None, true)`: one cache's cores, 8 here) | so the check's run here exercises the engine threads; the silent clock's workers are plain threads, and it is information anyway |
+| `late` and `gaps` in the record | `late` is 8b.8's count (D13); the record calls from the same place in `fill_in`, with the same clock reads | one measurement, two readers |
+| `Timing.max` | the longest since the start; a window's is the top bucket (to 4 µs) unless the longest came in it | a window max needs no reset, so `timing()` has no side effect |
+| `non_finite` from `publish` | the same, with the engine's `crashes` beside it | a kernel's error stops the song (until the gaps lane lands): G12 judges it |
+| `start_in(Device, &Choice)` changed to take the threads | `start_in` keeps its shape and calls `start_live(audio, choice, live)` | `next`'s tests call `start_in`; nothing of theirs changes |
+| `--sweep` live without 1 | the same parse as offline: 1 is always in | one rule for one option; a count of 1 plays once whatever `--between` says (D26) |
+| the frames line "within one block" | within one block, one callback's frames and 8 (D18) | two atomics read while the callback runs can be a callback apart |
+| `a_slow_block_is_counted_late`: 2 s paced | 1 s paced (375 callbacks), the block held 50 ms by a helper thread | enough for one late callback; the test asserts fewer than 100 late, so a period computed wrong (every callback late) fails it |
+| the lead's addition: the paced p99 beside the back-to-back p99, and a worker's wake latency | the live p99 of each count and mode beside a 10 s back-to-back pass at that count (plain threads, from 3:00); how long after a block's run started each worker entered it, as p50 and p99 | live is always paced; the entry time shows whether parked workers come late |
+| the lead's addition: `Threads::Alone` counts `fast` on macOS, `per_cache` elsewhere | `Cores.per_last_cache`: the fast cores that share the last cache before memory, which `m2-os` reads per OS (every fast core on a Mac) | no OS word outside `core/os` (PLAT-2); the editor's rule stays one line |
+| `--capture resample` (cut order 3) | left | `the_callback_mixes_in_the_one_mode` and the set-up line's FP register stand in (§4.4) |
+| `--server`, `--export`, `--like-m1` (cut order 4) | left | gate 8's row says so |
+
+### Tests
+
+Each shown red once by a small deliberate bug (`~/m2-runs/s8a/s4-red/<name>.diff` and `.log`, made by `mutate.py`,
+which puts the file back). Each red run failed on its test's assertion, not on a build error.
+
+| Test | Where | Proves | Red by |
+|---|---|---|---|
+| `a_workers_entry_is_timed_from_its_runs_start` | `core/pool/src/tests.rs` | a worker let in 20 ms into a run counts one entry, in the last bucket (16 ms or more); the meter reads what the pool reads; the bucket edges | `s4-entry-origin` (timed from its own entry: bucket 0) |
+| `m2_threads_is_read_and_nonsense_refused` (extended) | `crates/editor/src/render.rs` | an export alone on a Mac takes 8 threads (every fast core), here 8 (one die) | `s4-alone-one-cache` (`per_cache`: 4 on the Mac) |
+| `a_late_callback_and_a_gap_are_counted` | `core/play/src/timing.rs` | a block held 50 ms at 128 frames: late, a gap, the longest over 40 ms | `s4-no-gaps` (gaps never counted), `s4-timing-late` (`timing()` reads no late) |
+| `the_histogram_counts_each_callback_once` | same | 7 callbacks of mixed sizes: 7 in the histogram, their frames, the engine ahead by under a block; a copy since itself is empty | `s4-hist-twice` |
+| `a_muted_player_renders_and_the_device_hears_zeros` | same | muted: zeros, and the engine clock moved; unmuted: sound | `s4-mute-ignored` |
+| `a_player_let_go_joins_its_workers` (extended) | `core/play/tests/engine_threads.rs` | the callback took its engine threads; `timing()` reads the pool's 4 threads, tasks on workers | `s4-no-meter` (no meter kept), `s4-not-taken` |
+| `a_device_without_real_time_plays_on_one_thread` (extended) | `core/play/src/engines.rs` | the workgroup's advice, as read, reaches the report (none here) | `s4-advice-lost` |
+| `each_cause_fails_the_live_verdict` | `crates/gates/src/realtime/live.rs` | a p99 past the histogram said as "over 8192", not as the longest; an xrun, a late callback, a gap, a p99 of 70.05%, a worker not real time, one not in the workgroup, the device's thread not real time, 44.1 kHz, 256 frames, no workgroup, a crash, an engine crash, non-finite samples, frames short: each alone fails, and is named. On Linux only the last four fail | `s4-verdict-gaps` (dropouts without gaps), `s4-over-as-max` |
+| `a_clean_record_passes` | same | judged: every check passes; not judged: the Mac's lines say "not judged on Linux (PLAT-1)", two checks pass | — |
+| `no_device_fails_on_a_mac_and_plays_the_clock_on_linux` | same | a Mac plays its device (a Mac with none fails, as the device won't open), anything else the silent clock; a base M1 isn't a stand-in, an M1 Pro is | `s4-no-device` (a Mac plays the clock) |
+| `a_slow_block_is_counted_late` | same | a real driven player paced for a second, one block held 50 ms: 1 to 99 late, and the judged verdict fails on dropouts naming them | `s4-late-ms` (8b.8's period in µs: every callback late) |
+| `live_options_are_read_and_nonsense_refused` | same | `--minutes 0`, `--frames 0` and `8192`, `--between x`, `--threads 65` refused in plain words | `s4-parse` (`--frames 0` taken) |
+| `the_help_says_what_realtime_measures_live` | `crates/gates/src/main.rs` | the help's words: where it plays, what it judges where, the options | — |
+
+Times (debug, Linux): the timing tests 0.4 s; the gate's live tests 1.7 s (the slow-block test is a second of paced
+callbacks); the pool test 0.02 s.
+
+### Numbers (Linux, information only: PLAT-1)
+
+The release `m2-gates` of `566c014`, scratch `HOME`, `M2_AUDIO=none`: the silent clock, 128 frames, plain threads
+(this server refuses real time). Other tracks built and tested all along. Judge nothing here: only the owner's Mac
+does (PLAT-1). What this run shows is that the live path works end to end on N threads: every run passed what is
+judged everywhere (no crash, no non-finite sample, frames exactly as the engine clock: +0 in every run).
+
+**As `ci/check.sh` runs it** (`realtime --reference 50 --minutes 1`, every core, load 7.36): 64.4 s in all.
+
+| Threads | p50 | p99 | p99.9 | max | Dropouts from Play (late, gaps) | Tasks on workers | Workers came, p99 | Back to back, p99 |
+|---|---|---|---|---|---|---|---|---|
+| 8, park (the rule's count a device would get: one die) | 496 µs | 3,248 | 6,032 | 12,265 | 411 of 22,417 (271, 140) | 87% | under 16 µs | 589 |
+
+**The sweep, held on CCD1** (`taskset -c 8-15`; `--sweep 1,2,4 --between park,spin`; load 6.19 at the start,
+8.14 at the end), µs a callback from 5 s after Play:
+
+| Threads, between | p50 | p99 | max | Dropouts from Play (late, gaps) | Workers came, p99 | The device's thread dozed | Back to back, p99 |
+|---|---|---|---|---|---|---|---|
+| 1 | 2,536 | 6,032 | 17,010 | 10,640 (8,714, 1,926) | — | — | 6,425 |
+| 2, park | 1,340 | 2,296 | 7,668 | 103 (80, 23) | under 16 µs | 0 | 2,223 |
+| 2, spin | 1,436 | 5,460 | 30,134 | 1,165 (735, 430) | under 1 µs | 2 | 2,223 |
+| 4, park | 788 | 4,256 | 17,005 | 1,315 (807, 508) | under 512 µs | 42 | 1,000 |
+| 4, spin | 776 | 3,088 | 12,018 | 598 (373, 225) | under 1 µs | 41 | 1,000 |
+
+- **The p50s scale as offline does:** 2,536, 1,340 and about 780 µs on 1, 2 and 4 threads.
+- **The tails are the server's:** a p99 two to four times its back-to-back p99, while other work shared the die.
+  One thread can't play p50 here at all (its back-to-back p99 is 6,425 µs, over twice the period).
+- **The new entry counts work:** spinning workers come into a block within 1 µs; parked ones within 16 µs at
+  p99 on 2 threads, and up to 512 µs on 4 under this load. This is the number the Mac's run reads for park or spin.
+- **The first run** (20:22, load 22 while this track's own check built and tested on the same die) printed the
+  longest callback as the p99 when over 1% of callbacks passed the histogram's 8.2 ms. Fixed (`566c014`). Its
+  4-thread runs, at load about 6 by then: park p99 1,272 µs, spin 1,080, 3 dropouts each, back to back 818.
+
+| Log | |
+|---|---|
+| As the check runs it, then the sweep | `~/m2-runs/logs/8a-s4-g12-info-1017-203023-2701484.log` |
+| The first run | `~/m2-runs/logs/8a-s4-g12-sweep-1017-202215-2628380.log` |
+
+### Checks
+
+- Each commit's check (`~/m2-runs/s8a/s2-check.sh`): the debug `m2`, 10 of 10 renders against
+  `e2e/renders.sha256` (no record changed), the touched crates' tests (scratch `HOME`, `M2_AUDIO=none`), workspace
+  clippy and the Mac lint (`--target aarch64-apple-darwin`), rustfmt on new files. All green, first time.
+- The pool's commit also ran its models in release and their clippy: 6 models and 22 unit tests, green.
+- `Cargo.lock` unchanged; every build `--locked`. The PLAT-2 test passes: no OS code outside `core/os`.
+- `ci/check.sh` and `ci/sweep.sh` pass `bash -n`. `ci/sweep.sh` can't run here (it is the Mac's); its lines are
+  the ones the build notes gave before, in one file.
+
+| Commit | Log (`~/m2-runs/logs/`) |
+|---|---|
+| `5b66dca` the pool (and its models) | `8a-s4-c8-check-1017-200450-2409692.log` |
+| `fbeb82f` the export count | `8a-s4-c9-check-1017-200828-2466931.log` |
+| `b20266a` the record | `8a-s4-c10-check-1017-201514-2552071.log` |
+| `953c30c` the live gate | `8a-s4-c11-check-1017-202132-2616721.log` |
+| `566c014` "over 8192" | `8a-s4-c11b-check-1017-202857-2692365.log` |
+| `abc6ced` the workgroup's advice | `8a-s4-c11c-check-1017-203734-2749619.log` |
+| the red runs | `~/m2-runs/s8a/s4-red/` |
+
+Disk at the slice's end: `df -h /` 2.3 TB free; this worktree's `target/` 114 GB, kept for the lead's final check (delete it after).
+
+### For the lead
+
+- **The Mac's live code still first runs on the owner's Mac** (risk L1): `ci/sweep.sh` step 2 runs its tests, and
+  G12's set-up line says what the device got (workers real time and in the workgroup, the device's thread, the
+  workgroup's advice, the rate and frames, the FP register).
+- **The Mac's check now plays the output device, muted.** `ci/check.sh` says to set the built-in speakers at
+  48 kHz first: at another rate or buffer, G12 fails as "not the designed set-up" and says what to set (D19).
+- **Merge `8a-gaps`** (the gaps lane, done at `8a3d70a` in its own worktree): not merged here. The plan's §5.7
+  merges it before the final check; then `ci/check.sh --gates`, HANDOFF, and delete `~/m2-runs/wt/8a-g` and its
+  target.
+- **Left, in the plan's cut order:** `--capture resample` (the callback FZ test and the FP register line stand in),
+  then `--server`, `--export` and `--like-m1`, as gate 8's row says.
+- **The live default count and `BETWEEN`** wait for `ci/sweep.sh`'s step 5. Each is one line
+  (`live_count`, `BETWEEN` in `core/play/src/engines.rs`).
+
+## The Mac sweep (offline: done)
+
+### In short
+
+- **The owner ran 8a's offline sweep** on the reference Mac (MacBookPro18,1, M1 Pro) at `main` `8a6d9e1`, before R1,
+  on 2026-10-17. Word for word: `~/m2-runs/mac-runs/8a-offline-8a6d9e1.txt`.
+- **Go for the live half as planned:** 4 threads are 2.92 times faster than 1 by the p99 (the rule needs 2.5).
+- **Two things came out of it, both built in slice 4:** an export alone now uses every fast core on a Mac (8
+  threads were 22% faster than 4), and G12 now shows what decides park or spin on the Mac.
+- **One worry, for the live run to answer:** paced blocks on 4 plain threads had a p99 5.8 times their
+  back-to-back p99. In that run the workers are plain threads (normal priority, not background: `threads(n,
+  false)`) that park between blocks; live workers are real-time threads in the audio workgroup. The live sweep (`ci/sweep.sh`, step 5) measures the live ones.
+
+| Line | Read | Decision |
+|---|---|---|
+| models | passed (cargo stopped at no binary; `tail -5` showed only the doc-tests) | none. `ci/sweep.sh` keeps each `test result` line instead |
+| bits | every count the same bits; 10 of 10 renders on 8 threads | none |
+| `cpusperl2` | 4 (8 fast cores, 2 slow) | the live count's cap stays 4 |
+| S (p99, 1 ÷ 4 threads) | 4048 ÷ 1385 = 2.92 | at least 2.5: keep the live default |
+| 8 against 4 | mean 720 against 929 µs: 8 threads 22% faster (p99 1558 against 1385, worse) | at least 10%: **an export alone uses every fast core on a Mac.** Built (`fbeb82f`): `Cores.per_last_cache`, which `Threads::Alone` counts |
+| partitions | the slowest p99 is the song's 392 µs | under 667: no voices across threads |
+| the executor's cost | −53 µs a block | under 40: nothing to trim |
+| paced, 1 thread | p99 4180 against 4048 back to back: +3% | under 15%: no pointer to spinning by itself |
+| **paced, 4 threads** | mean 1682 against 929 back to back (+81%); **p99 8045 against 1385 (5.8 times)**; max 52 ms; 501 of 7500 blocks over the period | not in the rule, and the worst number of the run. Those workers were plain threads (the lead's note said background; the gate asks for none). The live sweep decides, on real-time workers. Built: G12's live table prints each count's live p99 beside its back-to-back p99, and how late workers came into a block (p50, p99), for park and for spin |
+| the song's tail | 310 µs a block, 11% of the work (33% of a 4-thread block) | R1 was worth it: built in slice 3's first commit (`c8ce2bc`) |
+| load | 19.75 at the start (the build just before) | information. `ci/sweep.sh` waits up to 2 minutes for the load to fall under 3 before each run, and prints it |
+
+## The Mac command (the live half)
+
+**In short:** once the lead has merged `8a` into `main`. About 40 minutes. Plug the Mac in, close other apps, and
+set the output to the built-in speakers at 48 kHz (Audio MIDI Setup). In Terminal on the Mac itself. It plays
+nothing aloud. Then paste back what is in `~/m2-8a.txt`.
 
 | # | Do this | Why |
 |---|---|---|
-| 1 | Type the first line below and press Return | gets 8a's offline half from `main` |
-| 2 | Type the second line and press Return | checks the pool on the Mac's own CPU (about 1 minute) |
-| 3 | Type the third line and press Return | builds the gates (about 2 minutes), then the sweep (about 8) |
-| 4 | Type the fourth line and press Return | the core counts, to check what the gate read |
-| 5 | Paste back what is in `~/m2-8a-offline.txt` | that is all the lead needs |
+| 1 | Type the first line below and press Return | gets the new code |
+| 2 | Type the second line and press Return | runs every measurement, one after another |
+| 3 | Paste back what is in `~/m2-8a.txt` | that is all the lead needs |
 
 ```sh
 cd ~/dev/suite2/music2 && git fetch && git switch main && git pull
-cargo test --locked --release -p m2-pool --features models 2>&1 | tail -5 | tee ~/m2-8a-offline.txt
-cargo run --locked --release -p m2-gates -- realtime --offline --reference 50 2>&1 | tee -a ~/m2-8a-offline.txt
-sysctl hw.perflevel0 hw.perflevel1 | tee -a ~/m2-8a-offline.txt
+ci/sweep.sh
 ```
 
-What it decides (the plan's §6). S = 1-thread p99 ÷ 4-thread p99, back to back, the median of the two passes:
+What `ci/sweep.sh` runs, and what each step decides:
 
-| Reading | Decision |
-|---|---|
-| A bits line says FAIL, or the models fail | Stop: a bug, fixed on Linux first |
-| S ≥ 2.5 | Go: 8a's live half as planned, 4 live threads |
-| 2.0 ≤ S < 2.5 | Go, with "a mixer strip joins its track" first (the spike's R1) |
-| S < 2.0 | No live half: a study first, and a note to the owner |
-| A count under 4 beats 4 | the live default is that count |
-| Paced 1-thread p99 more than 15% above back to back | "spin between callbacks" moves into the live half |
-| `hw.perflevel0.cpusperl2` isn't 4 | the live count rule changes to match |
-| A partition's p99 over 667 µs | voices across threads |
-| The executor's own cost over 40 µs a block | trimmed before G7f's next Mac run |
-| 8 threads beat 4 by 10% or more | an export alone uses every P-core on a Mac (`fast`), not one L2's |
+| Step | About | What it runs | What it decides |
+|---|---|---|---|
+| build | 5 min the first time | `cargo build --locked --release -p m2-gates` | — |
+| 1. models | 1 min | `cargo test --locked --release -p m2-pool --features models` | the pool's orderings, the caller's `Wake` and the new entry counters on arm64 (M5 can only fail there). A FAIL: stop; the bug is fixed on Linux first |
+| 2. `m2-os` rt | 2 min | `cargo test --locked -p m2-os rt` | the Mac's own real-time code, run for the first time: the Mach semaphore wake, the time-constraint policy read back, the default output's workgroup joined and left. A FAIL: that code is fixed before anything live is judged |
+| 3. sysctl | seconds | `sysctl hw.model hw.perflevel0 hw.perflevel1` | the counts the rules read: 4 fast cores per L2 (the live count's cap), 8 fast cores (an export's) |
+| 4. offline | 6 min | `m2-gates realtime --offline --reference 50` | after R1, on the Mac: the song's tail (310 µs before), 8 against 4 threads (the export count stays every fast core while 8 beat 4 by 10%), the paced 4-thread p99 (8045 µs before). The live count doesn't come from here |
+| 5. live sweep | 10 min | `m2-gates realtime --reference 50 --minutes 1 --sweep 1,2,3,4 --between park,spin` | **the live default count:** the fewest threads whose p99 is within 5% of the best, with no dropout. **`BETWEEN`:** `Spin` if spin's p99 at that count is at least 10% lower than park's, with no more dropouts (one line in `core/play/src/engines.rs`; macOS may demote a spinning worker, which the run shows). **The set-up:** every worker real time and in the workgroup, or "not the designed set-up": then the workgroup code is fixed first. The table's "back to back" and "workers came" show whether parked workers wake late |
+| 6. gate 8 | 11 min | `m2-gates realtime --reference 50 --minutes 10` | gate 8 on this Mac: no dropout from Play, p99 at most 1,867 µs, no crash, every worker in the workgroup. On an M1 Pro the verdict is provisional (a stand-in, design-8a Q1). A FAIL: the study list of design-8a §16, in its order |
 
-The Mac's full `ci/check.sh` is owed too before the live half: it runs the new Mac tests (`cores_on_this_mac_are_sane`,
-`a_background_thread_has_background_qos`) and `fpenv`'s arm64 code under every test.
+The Mac's full `ci/check.sh` is owed as well (about 50 minutes, a separate run). It now also runs G12's one minute
+(the gates row grows by about 70 s) and the Mac's new tests (`m2-os`'s real-time code, `cores_on_this_mac_are_sane`
+with the new count).
