@@ -75,7 +75,7 @@ export const SUITES = [
   ["fixes-graph", "fix", { expect: 42 }],
   ["fixes-notes", "fix", { expect: 37 }],
   ["attention", "attn", { expect: 57 }],
-  ["newsong", "none", { expect: 65 }],
+  ["newsong", "none", { expect: 71 }],
   ["export", "export", { expect: 37 }],
   ["fx-fixes", "none", { expect: 75 }],
   ["s4-clips", "fix", { expect: 28 }],
@@ -92,7 +92,8 @@ export const SUITES = [
   ["gestures", "fix", { expect: 30 }],
   ["g11-play", "fix", { expect: 24 }],
   ["s8-tracks", "fix", { expect: 75 }],
-  ["pc-keys", "fix", { expect: 36 }],
+  ["s8-songbar", "fix", { expect: 68 }],
+  ["pc-keys", "fix", { expect: 37 }],
 ];
 const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export"];
 
