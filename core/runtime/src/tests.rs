@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use super::*;
 
+mod audition;
 mod cell;
 mod live;
 mod overlay;

@@ -441,7 +441,7 @@ impl Callback {
                         EngineMsg::Activate { renderer } => self.retire(Gone::Engine(Retired::Renderer(renderer))),
                         EngineMsg::SwapLane { data, .. } => self.retire(Gone::Engine(Retired::Lane(data))),
                         EngineMsg::Transport(Cmd::Seek(_)) => self.seeks += 1,
-                        EngineMsg::Transport(_) | EngineMsg::Panic | EngineMsg::Hold(_) => {}
+                        EngineMsg::Transport(_) | EngineMsg::Panic | EngineMsg::Hold(_) | EngineMsg::Live { .. } => {}
                     }
                 }
             }

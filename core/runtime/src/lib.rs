@@ -67,7 +67,7 @@ pub use event::{Event, Events};
 pub use packages::{Package, PackageSet};
 pub use plan::{Basis, Continues, Count, Keep, LaneInfo, Leftovers, PlanInfo, PluginAt, Shape, Stats};
 pub use plugins::PluginInstance;
-pub use sched::{Caps, LaneSwap, NotesData};
+pub use sched::{Caps, LaneSwap, LiveEv, NotesData};
 pub use trace::{TraceEntry, TraceKind};
 pub use transport::{Cmd, Jump, Loop, MAX_RUNS, Run, Runs, Transport};
 
@@ -962,7 +962,7 @@ impl Builder<'_> {
                     _ => None,
                 };
                 let captures = voice.nodes.iter().filter_map(|n| if let FOp::Capture(p) = n.op { Some(p) } else { None }).collect();
-                let plan = Vec::with_capacity(if ghost { 0 } else { 2 * self.caps(slot).ons });
+                let plan = Vec::with_capacity(if ghost { 0 } else { 2 * self.caps(slot).ons + sched::LIVE_ROOM });
                 Exec::Poly(Box::new(PolyNode { slot, out: voice.out, captures, plan, pool, ghost }))
             }
             FOp::Feedback { input, channels } => Exec::Feedback { input: *input, ring: vec![0.0; *channels as usize * BLOCK] },
@@ -1020,10 +1020,11 @@ impl Builder<'_> {
         // a NoteOff for every note it holds, a NoteOff for every note it lets go, and a NoteOn and
         // a Tuning for every note it starts again after an export, as many as its lane's room holds
         // or the node it took its instance from held.
+        // Live notes too (MON-7): as many more held, and a NoteOn and a Tuning for each struck.
         let caps = notes.map_or(Caps::default(), |s| self.caps(s));
-        let held = |c: Caps| c.sounding + 2 * c.ons + 8;
+        let held = |c: Caps| c.sounding + 2 * c.ons + 8 + sched::LIVE_ROOM;
         let held = held(caps).max(room.map_or(0, held));
-        let events = caps.events() + caps.ons + (BLOCK / PARAM_STEP) * params.len() + 8 + 5 * held;
+        let events = caps.events() + caps.ons + 2 * sched::LIVE_ROOM + (BLOCK / PARAM_STEP) * params.len() + 8 + 5 * held;
         Ok(PluginNode {
             name: n.name.clone(),
             inst,
@@ -2240,6 +2241,37 @@ impl Renderer {
         self.lanes.slots.iter().map(|l| if let LaneSlot::Notes(Some(s)) = l { s.held() } else { 0 }).sum()
     }
 
+    /// A live note's On or Off, or its source's release (MON-7), for lane `slot`: its consumers get
+    /// it at the next block's first frame. A release reaches every lane, whatever its slot. False,
+    /// and nothing taken, for a slot that isn't one of its notes lanes, or a pitch outside 0 to 127
+    /// or a velocity outside 0 to 1 (R2). Never allocates.
+    pub fn live(&mut self, slot: usize, ev: LiveEv) -> bool {
+        let (lanes, next) = (&mut self.lanes.slots[..self.lanes.live], &mut self.next_note);
+        match ev {
+            LiveEv::Release { .. } => {
+                for l in lanes {
+                    if let LaneSlot::Notes(Some(s)) = l {
+                        s.live(ev, next);
+                    }
+                }
+                true
+            }
+            LiveEv::On { pitch, velocity, .. } if !(0.0..=127.0).contains(&pitch) || !(0.0..=1.0).contains(&velocity) => false,
+            _ => match lanes.get_mut(slot) {
+                Some(LaneSlot::Notes(Some(s))) => {
+                    s.live(ev, next);
+                    true
+                }
+                _ => false,
+            },
+        }
+    }
+
+    /// Live notes held, across every lane (MON-7).
+    pub fn live_notes(&self) -> usize {
+        self.lanes.slots.iter().map(|l| if let LaneSlot::Notes(Some(s)) = l { s.live_held() } else { 0 }).sum()
+    }
+
     /// Whether every voice with an open gate plays a note its scheduler holds: a gated voice
     /// nobody will turn off is a stuck note.
     pub fn gates_are_owned(&self) -> bool {
@@ -2289,7 +2321,11 @@ impl Renderer {
     /// top said it sleeps, or that it may stop once quiet and its output is (a plugin's tail is its
     /// own to report).
     pub fn can_idle(&mut self) -> bool {
-        !self.in_window() && self.active_voices() == 0 && self.plugins_sleep() && !self.plan.graph.active().unwrap_or(true)
+        !self.in_window()
+            && self.active_voices() == 0
+            && self.live_notes() == 0
+            && self.plugins_sleep()
+            && !self.plan.graph.active().unwrap_or(true)
     }
 
     fn plugins_sleep(&self) -> bool {
