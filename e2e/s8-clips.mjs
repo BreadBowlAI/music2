@@ -235,7 +235,9 @@ check(onto.bubble === "Automation only" && onto.lit === false, `over an automati
 const cut = lanes("data/bass/cutoff.json")[0];
 b = await clipBox("bass.cutoff", cut.id);
 const drop = await rowOf("bass.drop");
-const units = await hold(mid(b), { x: mid(b).x, y: drop.y + drop.height / 2 }, { during: () => looks("bass.drop") });
+// Grabbed by its top strip, away from the curve (on the curve a drag moves a point, U7).
+const grab = { x: b.x + 30, y: b.y + 2 };
+const units = await hold(grab, { x: grab.x, y: drop.y + drop.height / 2 }, { during: () => looks("bass.drop") });
 check(units.bubble === "Only 0–1 automation", `an automation clip over a lane of another unit: ${units.bubble}`);
 await sleep(400);
 check(sent(n).length === 0 && changed(before, snapshot()).length === 0, "let go there, nothing is sent or changed");

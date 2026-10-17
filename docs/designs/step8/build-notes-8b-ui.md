@@ -18,6 +18,7 @@ adds its own section here, in the same commit.
 | U4 (lane B) | The timeline has a grid and snap: a chip in its corner, Auto by default. Dragged clips land on it; hold ⌘ to place one freely. ⌘1 to ⌘4 change the grid of the view you last used | done |
 | U5 (lane B) | Clips by hand: move, copy (⌥-drag), resize from either edge, move to another track, select several, delete. Each is one undo step | done |
 | U6 (lane B) | Clip commands: a menu on each clip, ⌘D, ⌘E split, ⌘J join, ⌘C ⌘X ⌘V, Q, the arrow keys, and a box dragged across lanes to pick the clips in some bars | done |
+| U7 (lane B) | Automation drawn on the timeline: make a clip, add, move and delete points, paint with B; Remove automation from the lane or from the Device view | done |
 
 ## Setup: the merges
 
@@ -388,4 +389,92 @@ Captions for the owner:
 - Hide automation folds the track's automation, not one lane (there is no per-lane fold).
 - A dragged or nudged clip is heard only when it lands (Q10).
 - Lane B's cargo target is deleted at the end of the lane.
+
+## U7: automation in place (lane B)
+
+**In short**
+- You can draw automation right on the timeline now.
+
+  | To | Do |
+  |---|---|
+  | Make an automation clip | double-click an empty spot in an automation lane |
+  | Add a point | click on the line |
+  | Move a point | drag it. A small label says its value and where it is |
+  | Delete a point | click it, then ⌫ |
+  | Draw freely | press B, then drag across the clip. B again to stop |
+  | Pick or move the whole clip | click or drag its thin strip above or below the line |
+  | Take the automation out | right-click the lane's name: Remove automation |
+
+- Remove automation writes the value at the playhead back into the code, and the lane goes. A toast
+  says so, with Undo.
+- In the Device view, a control that follows a lane has a small blue dot. Right-click it: Show lane,
+  or Remove automation.
+- A new lane is named after its control: "Decay", not "out-decay".
+- Each edit is one undo step.
+- Checks: the web build, the new `s8-automation` suite (43 checks), and 25 suites it could move.
+
+### What changed
+
+| File | What |
+|---|---|
+| `web/src/lib/points.ts` (new) | What a press on a curve hits (a point within 6 px, else the line within 6 px, else the clip's body), and the points a click, a drag or a paint make. Values keep to what the unit allows (a time or a frequency never below 0; 0–1 and −1–1 amounts in range). The picked point, kept with where it was, so an undo that moves the points unpicks it; the points being edited, drawn until the timeline shows them |
+| `web/src/components/SongTimeline.tsx` | On an automation clip: a press near a point picks it and a drag moves it; on the line a point is added (and can be dragged on); in Draw mode a drag paints a point on each grid line, filling in between. A point wins over the clip's edge; the line doesn't. ⌫ deletes the picked point; Esc unpicks it. A double-click on an automation lane's empty space makes a clip, holding the lane's value. The lane's header has a menu: Remove automation, Hide automation. Draw mode shows a crosshair over automation clips. The selected point is `fg-strong` in a 2 px white ring |
+| `web/src/lib/clips.ts` | `removeAutomation` (`POST /api/graph/automate/remove`, one undo step), `playhead()` shared, `InputPort.lane` |
+| `web/src/components/ClipMenu.tsx` | `unautomate`: Remove automation with its toast and Undo, for the timeline and the Device view |
+| `web/src/components/NodeGraph.tsx` | An input a lane drives: the lane's dot, a tooltip, and a right-click menu: Show Decay lane, Remove automation (KN-2) |
+| `web/src/components/Shortcuts.tsx` | "Draw mode: notes and automation B" |
+| `e2e/s8-automation.mjs` (new), `e2e/run.mjs`, `e2e/README.md` | The suite (43 checks), its row after `s8-clips` |
+| `e2e/notes.mjs` | A double-click on an automation lane makes a clip now (it made none); the clip is picked by its top strip, away from its curve. Same count |
+| `e2e/s8-clips.mjs` | The automation clip dragged over another unit's lane is grabbed by its top strip. Same count |
+
+### Checks
+
+| Check | Result |
+|---|---|
+| `cd web && npm run build` (type-checks) | ok |
+| `s8-automation` (new) | 43 of 43 |
+| `s8-clips`, `notes`, `taste`, `pc-keys`, `s4-clips` (on the final page) | 90, 52, 39, 37, 28 |
+| `fixes-notes`, `s6-builders`, `s5-knobs`, `ports`, `graph`, `cables`, `undo`, `effects` | 37, 55, 101, 46, 19, 12, 10, 12 |
+| `views`, `layout`, `gestures`, `s8-tracks`, `s6-write`, `s6-fixes`, `attention` | 30, 39, 30, 75, 36, 19, 57 |
+| `live3a`, `g11-play`, `code`, `s8-songbar`, `fixes-graph` | 49, 24, 58, 68, 42 |
+| In the Linux app on Xvfb `:98` | Bass unfolded, a click on the Cutoff line at bar 3 and a drag: the file has a point at beat 9, 2638 Hz |
+| Server | `~/m2-runs/s8ui/bin/ui-b-5a34189` (B8: Automate's names, Remove automation, `InputPort.lane`) |
+| Logs | `~/m2-runs/logs/ui-b-u7-suites-*.log`, `ui-b-u7-suites2-*.log`; suite logs in `~/m2-runs/s8ui/scratch/e2e/ui-b-u7s`, `ui-b-u7s2` |
+| Pictures | `~/m2-runs/s8ui/shots/lane-b/ui-u7-automation.png`; `s8-automation.png` in the suite's folder |
+
+Captions for the owner:
+- `ui-u7-automation.png`: Bass unfolded; a point added on the Cutoff line and dragged up. The dark
+  dot with a white ring is the picked point.
+- This is the Linux version. On your Mac it uses the Mac's own font and ⌘ keys.
+
+**Red first:** `s8-automation` on U6's page (the same server): Automate and the "Decay" name pass
+(B8), then the Device view has no input that follows the lane, and it stops there
+(`~/m2-runs/s8ui/scratch/e2e/ui-b-u7-red/s8-automation-fix.log`).
+
+**Found while building:**
+- A drawing range is what the lane's values span (the server's rule). Painting near the bottom of a
+  new Decay lane wrote negative seconds. Values now keep to what the unit allows, and may go past
+  the drawn range: the next drawing widens.
+- The app (not the browser) serves the page copied into `target/debug/web` when it was built. Lane
+  B's app checks now set `MUSIC2_WEB_DIR` to the lane's page. U6's menu picture was taken again
+  from the final page. At the merge, rebuild the app or set `MUSIC2_WEB_DIR` before the shots.
+
+### Choices
+
+| Choice | Why |
+|---|---|
+| A point wins over the clip's edge; the line doesn't | A clip's end points sit on its edges. Grabbing the edge above or below the line still resizes |
+| A click on a point or the line unpicks the clips | Then ⌫ deletes the point, never the clip behind it |
+| Draw mode is the roll's B | One mode for both. Over automation clips the pointer is a crosshair |
+| Remove automation writes the value at the playhead | design-8b HOME-2; at the start of the song it is the fallback, as written |
+
+### Left
+
+- Automation lanes are 32 px, so a clip's drawing is 14 px tall: away from the line, only thin
+  strips pick or move the clip. Taller lanes (U13) would help.
+- The drawing range follows the values (the server's rule), so the curve redraws after an edit that
+  widens it. A frequency is drawn on a straight scale, not a log one.
+- No curve bends (⌥-drag): that needs a field in the lane format (FMT-2).
+- The lane's own node in the Device view has no menu; the input it drives does.
+- Hide automation folds the track's automation lanes, not one lane.
 

@@ -8,7 +8,6 @@ import {
   clipIndex,
   clipRef,
   findLane,
-  findNoteClip,
   formatValue,
   hasOwnId,
   laneTitle,
@@ -21,13 +20,14 @@ import {
   type ClipRef,
   type ControlClip,
   type Diagnostic,
+  type GraphState,
   type Meter,
   type NoteClip,
   type TimelineLane,
   type TimelineTrack,
   type TimelineView,
 } from "../lib/graph";
-import { beatNow, onFrame } from "../lib/clock";
+import { onFrame } from "../lib/clock";
 import { LANE_MADE, TRACK_MADE } from "../lib/events";
 import { useHeard } from "../lib/graph8b";
 import { LANE_H, ROW_H, RULER_H } from "../lib/layout";
@@ -38,6 +38,7 @@ import {
   copiedOf,
   isPicked,
   pickedIn,
+  playhead,
   refIn,
   send,
   serverRef,
@@ -49,6 +50,7 @@ import {
   type ServerRef,
 } from "../lib/clips";
 import { clean, gridOp, pickName, skipsSnap, snapSong, stepOf, useGrid, type Grid as GridSetting } from "../lib/grid";
+import { added, bounded, hit, line, moved, painted, pickedIn as pointIn, rounded, usePoints, type Point } from "../lib/points";
 import { chord, keyName, mod, opt } from "../lib/native";
 import { useStore } from "../lib/store";
 import { addEffectTo, dragsEffect, EFFECT_DRAG } from "./Browser";
@@ -56,7 +58,7 @@ import { addTrack, END, INSTRUMENT_DRAG, openInstruments, openTrackMenu, startRe
 import { MarkPopover, placeOf, RulerMenu } from "./SongBar";
 import { Hatch, VLines } from "./draw";
 import GridChip from "./GridChip";
-import PointMenu, { type MenuItem } from "./ClipMenu";
+import PointMenu, { unautomate, type MenuItem } from "./ClipMenu";
 import TrackHeader from "./TrackHeader";
 import { Button, EmptyState, keepFocus } from "./ui";
 
@@ -69,11 +71,7 @@ const BODY_TOP = 4;
 const BODY_BOTTOM = 4;
 
 const beats = (n: number) => Number(n.toFixed(3));
-/**
- * Where the playhead is, for an edit there (⌘E, ⌘V): to the 960th of a beat, as sequencers count
- * ticks. The engine counts in samples, so a playhead put on beat 40 reads 39.99999 there.
- */
-const playhead = () => clean(Math.round(beatNow() * 960) / 960);
+
 const span = (c: { start: number; length: number }) => `beats ${beats(c.start)}–${beats(c.start + c.length)}`;
 const rowHeight = (lane: TimelineLane) => (lane.kind === "control" ? LANE_H : ROW_H);
 /** The clips drawn here are a track's muted in the song: hatched (taste.md §2.9). */
@@ -90,7 +88,7 @@ interface Made { revision: number; clip: ClipRef }
 interface ClipEdits {
   /** A press on a clip: on its body or (`data-edge`) one of its edges. */
   down: (clip: ClipRef, e: React.PointerEvent<HTMLElement>) => void;
-  /** A double-click on empty space in a notes lane (module and lane keys), at `beat`. */
+  /** A double-click on empty space in a notes or automation lane (module and lane keys), at `beat`. */
   create: (module: string, lane: string, beat: number) => void;
   unpick: (module: string) => void;
   /** A press in a lane: on its empty space (not on a clip), the start of a click that may place play's start. */
@@ -122,18 +120,22 @@ interface ClipEdits {
   paste: (beat?: number, to?: LaneAddr) => void;
   /** Loop over the selected clips (the clip menu's Loop this clip). */
   loop: () => void;
-  /** A right-click on a clip (`clip`) or a lane's empty space, at `beat`: its menu. */
-  menu: (e: React.MouseEvent, module: string, lane: string, beat: number, clip?: ClipRef) => void;
+  /** A right-click on a clip (`clip`), a lane's empty space at `beat`, or (`header`) an automation lane's header: its menu. */
+  menu: (e: React.MouseEvent, module: string, lane: string, beat: number, clip?: ClipRef | "header") => void;
+  /** Remove automation: the lane's value at the playhead goes back into the code, its file goes. */
+  unautomate: (module: string, lane: string) => void;
+  /** ⌫ with an automation point selected: it goes. False with none. */
+  unpoint: () => boolean;
 }
 
-/** A menu open on a clip or on a lane's empty space: where the pointer was, and the lane and beat. */
+/** A menu open on a clip, a lane's empty space or an automation lane's header: where the pointer was, the lane and the beat. */
 interface MenuAt {
   x: number;
   y: number;
   module: string;
   lane: string;
   beat: number;
-  clip: boolean;
+  on: "clip" | "lane" | "header";
 }
 
 /** A marquee being dragged (design-8b §7.4): its box in the content's pixels, and the bars it covers. */
@@ -360,23 +362,28 @@ export default function SongTimeline({
   const content = useRef<HTMLDivElement>(null);
   const [marquee, setMarquee] = useState<Marquee | null>(null);
   const [menu, setMenu] = useState<MenuAt | null>(null);
+  // An automation point being dragged or painted: what the bubble at the pointer says.
+  const [bubble, setBubble] = useState<{ at: { x: number; y: number }; text: string } | null>(null);
   // Beats ← and → have asked for and that wait for the timeline to show the last edit.
   const nudged = useRef(0);
 
-  /** Once the graph shows the gesture that made a clip, select it and open it. */
+  /** Once the graph shows the gesture that made a clip, select it, and open a notes clip in Notes. */
   const settle = () => {
     const m = made.current;
     const graph = useStore.getState().graph;
     if (!m || !graph || graph.view.revision < m.revision) return;
     made.current = null;
-    if (!findNoteClip(graph.timeline, m.clip)) return;
+    const lane = findLane(graph.timeline, m.clip.module, m.clip.lane);
+    if (!lane || clipIndex(lane.clips, m.clip) < 0) return;
     useClipSelection.getState().only([m.clip]);
-    latest.current.onOpenClip(m.clip);
+    if (lane.kind === "notes") latest.current.onOpenClip(m.clip);
   };
   useEffect(settle, [timeline]);
-  // A dropped drag is drawn where it went until the timeline shows the edit.
+  // A dropped drag is drawn where it went until the timeline shows the edit; so are edited points.
   useEffect(() => {
     if (drag?.landed !== undefined && revision >= drag.landed) setDrag(null);
+    const editing = usePoints.getState().editing;
+    if (editing?.landed !== undefined && revision >= editing.landed) usePoints.setState({ editing: null });
   }, [revision, drag]);
   // A new song starts with nothing selected; the second Esc (the track deselected) clears it too.
   useEffect(() => {
@@ -501,6 +508,7 @@ export default function SongTimeline({
           return (lane?.clips ?? []).flatMap((cl: AnyClip, i) => (cl.start < range[1] && cl.start + cl.length > range[0] ? [clipRef(module, key, lane!.clips, i)] : []));
         });
         useClipSelection.getState().only(picked, range);
+        usePoints.setState({ picked: null });
         const y1 = rows.length ? Math.min(...rows.map((x) => x.r.top)) : top, y2 = rows.length ? Math.max(...rows.map((x) => x.r.bottom)) : bottom;
         setMarquee({
           left: headerW + range[0] * PPB,
@@ -522,6 +530,101 @@ export default function SongTimeline({
       window.addEventListener("pointerup", end);
       window.addEventListener("pointercancel", end);
     };
+    /** An automation clip's new points: one gesture, drawn as sent until the timeline shows it. */
+    const sendPoints = (graph: GraphState, clip: ClipRef, server: ServerRef, points: Point[], step: string) => {
+      usePoints.setState({ editing: { clip, points, landed: Infinity } });
+      send(graph, { op: "points", clip: server, points }, { name: step }).then(
+        (done) => usePoints.setState((s) => (s.editing?.clip === clip ? { editing: { ...s.editing, landed: done.revision } } : s)),
+        (error) => {
+          usePoints.setState((s) => (s.editing?.clip === clip ? { editing: null } : s));
+          toast(error);
+        },
+      );
+    };
+    /**
+     * A press on an automation clip's curve (TL-6): on a point, it is picked and a drag moves it; on
+     * the line, a point is added there and a drag moves it; in Draw mode (B), a drag paints a point
+     * on each line of the grid it crosses. One gesture when let go.
+     */
+    const pointsFrom = (ref: ClipRef, lane: Extract<TimelineLane, { kind: "control" }>, clip: ControlClip, r: DOMRect, e: React.PointerEvent<HTMLElement>, on: number | null) => {
+      const graph = ready();
+      const server = serverRef(lane, ref);
+      if (!graph || !server) return;
+      // A point is the selection now, not the clip.
+      useClipSelection.getState().clear();
+      scroller.current?.focus({ preventScroll: true });
+      const el = e.currentTarget, pointer = e.pointerId, x0 = e.clientX, y0 = e.clientY;
+      el.setPointerCapture(pointer);
+      const { meter } = latest.current.timeline;
+      const range = lane.max - lane.min || 1;
+      const title = laneTitle(lane);
+      // The lane's drawing spans the values it has (the server's range): a point dragged past the
+      // clip's top or bottom goes on past them, as far as the unit allows. The next drawing widens.
+      const valueAt = (y: number) => rounded(bounded(lane.unit, lane.min + (1 - (y - r.top) / r.height) * range), range);
+      const beatAt = (x: number, free: boolean) => {
+        const b = clip.start + ((x - r.left) / r.width) * clip.length;
+        return Math.min(clip.length, Math.max(0, clean(snapSong(meter, b, PPB, free) - clip.start)));
+      };
+      const say = (ev: { clientX: number; clientY: number }, p: Point) =>
+        setBubble({ at: { x: ev.clientX, y: ev.clientY }, text: `${formatValue(lane.unit, p[1], lane.key)} · ${position(meter, clip.start + p[0])}` });
+      const draw = useShell.getState().draw;
+      let points: Point[] = clip.points;
+      let index = on ?? -1;
+      let step = `moving a ${title} point`;
+      let changed = false;
+      // Draw mode: the value painted on each line of the grid, filled in between moves.
+      const cells = new Map<number, number>();
+      let last: Point | null = null;
+      const paint = (ev: { clientX: number; clientY: number }) => {
+        const p: Point = [beatAt(ev.clientX, false), valueAt(ev.clientY)];
+        const grid = stepOf(useGrid.getState().song, PPB, barAt(meter, clip.start + p[0]).length);
+        if (last && Math.abs(p[0] - last[0]) > grid) {
+          const dir = Math.sign(p[0] - last[0]);
+          for (let b = last[0] + dir * grid; dir * (p[0] - b) > 1e-9; b += dir * grid) cells.set(clean(b), rounded(last[1] + ((p[1] - last[1]) * (b - last[0])) / (p[0] - last[0]), range));
+        }
+        cells.set(p[0], p[1]);
+        last = p;
+        points = painted(clip.points, cells);
+        changed = true;
+        usePoints.setState({ editing: { clip: ref, points } });
+        say(ev, p);
+      };
+      if (draw) {
+        step = `drawing ${title} automation`;
+        paint(e);
+      } else if (on === null) {
+        // On the line: a point there, picked.
+        const p: Point = [beatAt(e.clientX, skipsSnap(e)), valueAt(e.clientY)];
+        ({ points, index } = added(points, p));
+        step = `adding a ${title} point`;
+        changed = true;
+        usePoints.setState({ editing: { clip: ref, points } });
+      }
+      if (index >= 0) usePoints.setState({ picked: { clip: ref, index, at: points[index] } });
+      let moving = false;
+      const move = (ev: PointerEvent) => {
+        if (ev.pointerId !== pointer) return;
+        if (draw) return paint(ev);
+        if (!moving && Math.abs(ev.clientX - x0) < 3 && Math.abs(ev.clientY - y0) < 3) return;
+        moving = true;
+        const p: Point = [beatAt(ev.clientX, skipsSnap(ev)), valueAt(ev.clientY)];
+        points = moved(points, index, p);
+        changed = true;
+        usePoints.setState({ editing: { clip: ref, points } });
+        say(ev, points[index]);
+      };
+      const end = (ev: PointerEvent) => {
+        if (ev.pointerId !== pointer) return;
+        for (const [type, f] of listeners) el.removeEventListener(type, f as EventListener);
+        setBubble(null);
+        if (ev.type !== "pointerup" || !changed) return usePoints.setState({ editing: null });
+        // The point picked is where it was let go.
+        if (index >= 0 && !draw) usePoints.setState({ picked: { clip: ref, index, at: points[index] } });
+        sendPoints(graph, ref, server, points, step);
+      };
+      const listeners = [["pointermove", move], ["pointerup", end], ["pointercancel", end], ["lostpointercapture", end]] as const;
+      for (const [type, f] of listeners) el.addEventListener(type, f as EventListener);
+    };
     return {
       down(ref, e) {
         if (e.button !== 0) return;
@@ -533,6 +636,22 @@ export default function SongTimeline({
         // ⇧-click adds a clip, ⌘-click (Ctrl) toggles one when let go; a click picks only it, unless
         // it is picked already: then a drag moves every picked clip (design-8b §7.4).
         const add = e.shiftKey, toggle = e.metaKey || e.ctrlKey;
+        const onEdge = !!(e.target as HTMLElement).closest("[data-edge]");
+        // On an automation clip's curve, or anywhere on it in Draw mode: its points (TL-6). A point
+        // wins over an edge; the line doesn't.
+        if (lane.kind === "control" && !latest.current.locked && !add && !toggle) {
+          // The drawing (`Body`), from the clip's own box: inside its border, 4px in at top and foot.
+          const box = e.currentTarget.getBoundingClientRect();
+          const r = new DOMRect(box.left + BORDER, box.top + BORDER + BODY_TOP, box.width - 2 * BORDER, box.height - 2 * BORDER - BODY_TOP - BODY_BOTTOM);
+          if (r.width > 0 && r.height > 0) {
+            const level = (v: number) => (v - lane.min) / (lane.max - lane.min || 1);
+            const at = hit((c as ControlClip).points, c.length, level, r.width, r.height, e.clientX - r.left, e.clientY - r.top);
+            const draw = useShell.getState().draw;
+            const point = at?.point ?? null;
+            if (draw || point !== null || (at && !onEdge)) return pointsFrom(ref, lane, c as ControlClip, r, e, point);
+          }
+        }
+        usePoints.setState({ picked: null });
         const sel = useClipSelection.getState();
         if (add) sel.add(ref);
         else if (!toggle && !isPicked(sel.picked, ref)) sel.only([ref]);
@@ -605,7 +724,7 @@ export default function SongTimeline({
       create(module, key, beat) {
         const lane = findLane(latest.current.timeline, module, key);
         const graph = ready();
-        if (lane?.kind !== "notes" || !graph) return;
+        if (!lane || lane.kind === "audio" || !graph) return;
         // The bar clicked, after any clip before it and up to the next; one bar at most.
         const bar = barAt(latest.current.timeline.meter, beat);
         const before = Math.max(0, ...lane.clips.filter((c) => c.start + c.length <= beat).map((c) => c.start + c.length));
@@ -616,7 +735,8 @@ export default function SongTimeline({
         // The server gives it a new id (FMT-12); it is selected and opens once the timeline shows it.
         const m: Made = { revision: Infinity, clip: { module, lane: key, id: "" } };
         made.current = m;
-        send(graph, { op: "create", module, lane: key, start, length }, { name: `adding a ${named(module)} clip` }).then(
+        const what = lane.kind === "control" ? `${laneTitle(lane)} automation` : named(module);
+        send(graph, { op: "create", module, lane: key, start, length }, { name: `adding a ${what} clip` }).then(
           (done) => {
             const id = done.made.find((x) => x.module === module && x.lane === key)?.id;
             if (made.current !== m || !id) return;
@@ -633,6 +753,7 @@ export default function SongTimeline({
       unpick(module) {
         useShell.getState().setClip(module, null);
         useClipSelection.getState().clear();
+        usePoints.setState({ picked: null });
       },
       press(e) {
         pressed.current = e && e.button === 0 ? { pointer: e.pointerId, x: e.clientX } : null;
@@ -752,6 +873,7 @@ export default function SongTimeline({
       loop: () => canvas.loopSelection?.(),
       menu(e, module, lane, beat, clip) {
         e.preventDefault();
+        if (clip === "header") return setMenu({ x: e.clientX, y: e.clientY, module, lane, beat, on: "header" });
         if (clip) {
           // A right-click on a clip that isn't selected picks it alone, as a click would.
           const sel = useClipSelection.getState();
@@ -760,7 +882,26 @@ export default function SongTimeline({
           flushSync(() => useShell.getState().select(clip.module, l?.kind === "notes" ? clip : undefined));
           scroller.current?.focus({ preventScroll: true });
         }
-        setMenu({ x: e.clientX, y: e.clientY, module, lane, beat, clip: !!clip });
+        setMenu({ x: e.clientX, y: e.clientY, module, lane, beat, on: clip ? "clip" : "lane" });
+      },
+      unautomate: (module, key) => !latest.current.locked && unautomate({ module, lane: key }),
+      unpoint() {
+        const { picked } = usePoints.getState();
+        if (!picked) return false;
+        const graph = ready();
+        const lane = findLane(latest.current.timeline, picked.clip.module, picked.clip.lane);
+        const i = lane ? clipIndex(lane.clips, picked.clip) : -1;
+        const c = lane?.kind === "control" ? lane.clips[i] : undefined;
+        const server = lane && c ? serverRef(lane, picked.clip) : null;
+        if (!lane || !c || !server || pointIn(picked, c.points, false) < 0) {
+          usePoints.setState({ picked: null });
+          return false;
+        }
+        if (!graph) return true;
+        const points = c.points.filter((_, k) => k !== picked.index);
+        sendPoints(graph, picked.clip, server, points, `deleting a ${laneTitle(lane)} point`);
+        usePoints.setState({ picked: null });
+        return true;
       },
       flush,
     };
@@ -855,9 +996,13 @@ export default function SongTimeline({
     const sel = useClipSelection.getState();
     const shown = s.selected ? s.clips[s.selected] : undefined;
     const plain = !e.metaKey && !e.ctrlKey && !e.altKey;
-    if ((e.key === "Delete" || e.key === "Backspace") && !e.metaKey && !e.ctrlKey && sel.picked.length) edits.remove();
+    // A point picked is the selection while no clip is.
+    const point = sel.picked.length ? null : usePoints.getState().picked;
+    if ((e.key === "Delete" || e.key === "Backspace") && !e.metaKey && !e.ctrlKey && point) edits.unpoint();
+    else if ((e.key === "Delete" || e.key === "Backspace") && !e.metaKey && !e.ctrlKey && sel.picked.length) edits.remove();
     else if (e.key.toLowerCase() === "q" && plain && !e.shiftKey && sel.picked.length) edits.quantize();
     else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && plain && sel.picked.length) edits.nudge(e.key === "ArrowLeft" ? -1 : 1, e.shiftKey);
+    else if (e.key === "Escape" && point) usePoints.setState({ picked: null });
     else if (e.key === "Escape" && (sel.picked.length || shown)) {
       sel.clear();
       if (shown) s.deselect();
@@ -970,6 +1115,7 @@ export default function SongTimeline({
             <DragBubble at={marquee.at}>{marquee.text}</DragBubble>
           </>
         )}
+        {bubble && <DragBubble at={bubble.at}>{bubble.text}</DragBubble>}
         {menu && <TimelineMenu at={menu} timeline={timeline} edits={edits} locked={locked} onOpenClip={onOpenClip} onClose={() => setMenu(null)} />}
         {/* The Song's row, Live's Main track: pinned at the foot of the track list, with its own playhead and loop wash. */}
         <div className="sticky bottom-0 z-[26] shrink-0 border-t border-line bg-canvas" data-song-row>
@@ -1384,7 +1530,10 @@ const TrackRows = memo(function TrackRows({
                 const dots = e.currentTarget.querySelector<HTMLElement>("[data-track-menu]");
                 if (dots) openTrackMenu(module, dots);
               }
-            : undefined
+            : // An automation lane's header: Remove automation, Hide automation.
+              lane?.kind === "control" && !waiting
+              ? (e) => edits.menu(e, module, lane.key, 0, "header")
+              : undefined
         }
       >
         {/* The colour bar runs down every row of the track, at 40% beside its lanes. */}
@@ -1397,7 +1546,7 @@ const TrackRows = memo(function TrackRows({
         // The lane dragged clips would land on is lit; one that can't take them isn't (design-8b §7.5).
         className={clsx("relative overflow-hidden", !opts.first && "border-t border-hover", (selected || (lane && drag?.to?.module === module && drag.to.lane === lane.key)) && "bg-accent-wash")}
         style={{ width }}
-        title={lane?.kind === "notes" && !locked ? "Double-click to add a one-bar clip" : undefined}
+        title={lane && lane.kind !== "audio" && !locked ? "Double-click to add a one-bar clip" : undefined}
         onPointerDown={(e) => {
           const empty = !(e.target as HTMLElement).closest("[data-clip]");
           if (empty) edits.unpick(module);
@@ -1405,7 +1554,7 @@ const TrackRows = memo(function TrackRows({
         }}
         onPointerUp={(e) => edits.place(e, (e.clientX - e.currentTarget.getBoundingClientRect().left) / PPB)}
         onDoubleClick={(e) => {
-          if (lane?.kind !== "notes" || (e.target as HTMLElement).closest("[data-clip]")) return;
+          if (!lane || lane.kind === "audio" || (e.target as HTMLElement).closest("[data-clip]")) return;
           edits.create(module, lane.key, (e.clientX - e.currentTarget.getBoundingClientRect().left) / PPB);
         }}
         // A right-click on a clip opens the clip's menu (its own handler); on empty space, the lane's.
@@ -1551,7 +1700,12 @@ function TimelineMenu({
   const off = locked ? `${locked}.` : null;
   const none = off ?? (copied ? null : "Copy or cut a clip first.");
   let items: (MenuItem | "line" | null)[];
-  if (at.clip) {
+  if (at.on === "header") {
+    items = [
+      { id: "unautomate", label: "Remove automation", off: off ?? (lane.kind === "control" ? null : "Only an automation lane can be removed."), run: () => edits.unautomate(at.module, at.lane) },
+      { id: "hide", label: "Hide automation", shortcut: "A", run: () => useShell.getState().toggleLanes(at.module, []) },
+    ];
+  } else if (at.on === "clip") {
     const beat = playhead();
     const inside = picked.some((p) => p.clip.start < beat && beat < p.clip.start + p.clip.length);
     const notes = picked.filter((p) => p.lane.kind === "notes");
@@ -1574,12 +1728,12 @@ function TimelineMenu({
   } else {
     const taken = lane.clips.some((c: AnyClip) => c.start <= at.beat && at.beat < c.start + c.length);
     items = [
-      lane.kind === "notes" ? { id: "add", label: "Add clip", off: off ?? (taken ? "A clip is here already." : null), run: () => edits.create(at.module, at.lane, at.beat) } : null,
+      lane.kind !== "audio" ? { id: "add", label: "Add clip", off: off ?? (taken ? "A clip is here already." : null), run: () => edits.create(at.module, at.lane, at.beat) } : null,
       { id: "paste", label: "Paste here", off: none, run: () => edits.paste(snapSong(timeline.meter, at.beat, PPB), { module: at.module, lane: at.lane }) },
       lane.kind === "control" ? { id: "hide", label: "Hide automation", shortcut: "A", run: () => useShell.getState().toggleLanes(at.module, []) } : null,
     ];
   }
-  return <PointMenu at={at} label={at.clip ? "Clip menu" : `${laneTitle(lane)} lane menu`} items={items} onClose={onClose} />;
+  return <PointMenu at={at} label={at.on === "clip" ? "Clip menu" : `${laneTitle(lane)} lane menu`} items={items} onClose={onClose} />;
 }
 
 /** Whether a drag moves a clip of track `module`, or onto one of its lanes. */
@@ -1609,6 +1763,11 @@ function LaneClips({
   onMenu: (ref: ClipRef, e: React.MouseEvent<HTMLElement>) => void;
 }) {
   const picked = useClipSelection((s) => s.picked);
+  // An automation point picked, and points being edited: drawn in place of the clip's own.
+  const point = usePoints((s) => (s.picked && s.picked.clip.module === module && s.picked.clip.lane === lane.key ? s.picked : null));
+  const editing = usePoints((s) => (s.editing && s.editing.clip.module === module && s.editing.clip.lane === lane.key ? s.editing : null));
+  // Draw mode (B) paints on automation clips: the pointer says so there.
+  const painting = useShell((s) => s.draw) && lane.kind === "control" && editable;
   // A clip is named by its id; one without its own (FMT-12) only by where it is.
   const id = (i: number) => (hasOwnId(lane.clips, i) ? lane.clips[i].id! : "");
   const key = (i: number) => id(i) || `#${i}`;
@@ -1619,11 +1778,11 @@ function LaneClips({
   const range = lane.kind === "control" ? lane.max - lane.min || 1 : 1;
   // 0 at the bottom of a clip's drawing, 1 at its top.
   const level = (v: number) => (lane.kind === "control" ? (v - lane.min) / range : 0);
-  const inside = (c: AnyClip, tone: TrackColor) =>
+  const inside = (c: AnyClip, tone: TrackColor, pickedPoint = -1) =>
     "notes" in c ? (
       <Notes notes={audible(c)} length={c.length} color={tone} />
     ) : "points" in c ? (
-      <Curve clip={c} level={level} color={tone} />
+      <Curve clip={c} level={level} color={tone} picked={pickedPoint} />
     ) : (
       <div className="absolute inset-x-0 bottom-0 flex items-center gap-1.5 px-2 text-xs font-medium" style={{ top: BODY_TOP, color: tone.ink }}>
         <AudioWaveform size={14} className="shrink-0" />
@@ -1633,7 +1792,7 @@ function LaneClips({
   const words = (c: AnyClip) => {
     const how = editable ? `drag to move · ${mod.alt}-drag to copy · drag an edge to resize · Delete removes` : "";
     if ("notes" in c) return `${audible(c).length} notes, ${span(c)}\nDouble-click to edit the notes${how ? ` · ${how}` : ""}`;
-    if ("points" in c) return `${span(c)}${how ? `\n${how[0].toUpperCase()}${how.slice(1)}` : ""}`;
+    if ("points" in c) return `${span(c)}${editable ? `\nClick the line to add a point · drag a point to move it · B to draw · drag elsewhere to move the clip · ${mod.alt}-drag to copy` : ""}`;
     return `${c.asset}, ${span(c)}${how ? `\n${how[0].toUpperCase()}${how.slice(1)}` : ""}`;
   };
 
@@ -1646,6 +1805,7 @@ function LaneClips({
     const d = drag?.clips.find((x) => sameClip(x.ref, ref));
     let drawn: AnyClip = c;
     let hidden = false;
+    if (editing && "points" in c && sameClip(editing.clip, ref)) drawn = { ...c, points: editing.points };
     if (d && drag) {
       if (drag.kind === "move" && !drag.copy) {
         // Gone to another lane: hidden here, but kept, so the drag keeps the pointer it captured.
@@ -1666,11 +1826,12 @@ function LaneClips({
         dragged={lifted}
         hidden={hidden}
         editable={editable}
+        painting={painting}
         onDoubleClick={lane.kind === "notes" ? () => onOpen(i) : undefined}
         onPointerDown={(e) => onDown(ref, e)}
         onContextMenu={(e) => onMenu(ref, e)}
       >
-        {inside(drawn, color)}
+        {inside(drawn, color, point && sameClip(point.clip, ref) && "points" in drawn ? pointIn(point, drawn.points, !!editing && sameClip(editing.clip, ref)) : -1)}
       </Clip>
     );
   });
@@ -1710,6 +1871,7 @@ function Clip({
   picked,
   dragged,
   editable,
+  painting,
   onDoubleClick,
   onPointerDown,
   onContextMenu,
@@ -1730,6 +1892,8 @@ function Clip({
   picked?: boolean;
   dragged?: boolean;
   editable?: boolean;
+  /** Draw mode on an automation clip: a drag paints its points. */
+  painting?: boolean;
   onDoubleClick?: () => void;
   /** Given, the clip can be selected (and, editable, dragged by its body or either edge). */
   onPointerDown?: (e: React.PointerEvent<HTMLElement>) => void;
@@ -1754,7 +1918,7 @@ function Clip({
         ghost && "pointer-events-none",
         hidden && "invisible",
         dragged ? "z-10 shadow-lift opacity-90" : handles && "hover:border-(--clip-ink)",
-        handles && (dragged ? "cursor-grabbing" : "cursor-grab"),
+        handles && (painting ? "cursor-crosshair" : dragged ? "cursor-grabbing" : "cursor-grab"),
       )}
       onDoubleClick={onDoubleClick}
       onPointerDown={onPointerDown}
@@ -1784,10 +1948,11 @@ function Clip({
   );
 }
 
-/** The clip's own drawing area: beats across, 0..100 down. */
-function Body({ length, children }: { length: number; children: ReactNode }) {
+/** The clip's own drawing area: beats across, 0..100 down. `curve`: an automation clip's, where a press edits points. */
+function Body({ length, curve, children }: { length: number; curve?: boolean; children: ReactNode }) {
   return (
     <svg
+      data-curve={curve || undefined}
       className="absolute left-0 w-full"
       style={{ top: BODY_TOP, height: `calc(100% - ${BODY_TOP + BODY_BOTTOM}px)` }}
       viewBox={`0 0 ${length} 100`}
@@ -1824,23 +1989,31 @@ function Notes({ notes, length, color }: { notes: NoteClip["notes"]; length: num
   );
 }
 
-/** The automation curve, its points marked; values hold before the first point and after the last. */
-function Curve({ clip, level, color }: { clip: ControlClip; level: (v: number) => number; color: TrackColor }) {
+/**
+ * The automation curve, its points marked; values hold before the first point and after the last.
+ * The point `picked` is `fg-strong` in a 2px white ring (taste.md §2.8).
+ */
+function Curve({ clip, level, color, picked }: { clip: ControlClip; level: (v: number) => number; color: TrackColor; picked: number }) {
   const { points } = clip;
-  if (points.length === 0) return null;
-  const first = points[0], last = points[points.length - 1];
-  const line = [...(first[0] > 0 ? [[0, first[1]]] : []), ...points, ...(last[0] < clip.length ? [[clip.length, last[1]]] : [])];
-  const xy = line.map(([b, v]) => `${b},${(1 - level(v)) * 100}`).join(" ");
+  if (points.length === 0) return <Body length={clip.length} curve>{null}</Body>;
+  const drawn = line(points, clip.length);
+  const xy = drawn.map(([b, v]) => `${b},${(1 - level(v)) * 100}`).join(" ");
   return (
     <>
-      <Body length={clip.length}>
-        <polygon points={`${xy} ${line[line.length - 1][0]},100 ${line[0][0]},100`} fill={color.ink} fillOpacity={0.1} />
+      <Body length={clip.length} curve>
+        <polygon points={`${xy} ${drawn[drawn.length - 1][0]},100 ${drawn[0][0]},100`} fill={color.ink} fillOpacity={0.1} />
         <polyline points={xy} fill="none" stroke={color.ink} strokeWidth={1.5} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
       </Body>
       {/* Circles stay round: drawn over the stretched drawing, not in it. */}
       <div aria-hidden className="absolute left-0 w-full pointer-events-none" style={{ top: BODY_TOP, height: `calc(100% - ${BODY_TOP + BODY_BOTTOM}px)` }}>
         {points.map(([b, v], i) => (
-          <span key={i} className="absolute size-1.5 -ml-[3px] -mt-[3px] rounded-full" style={{ left: `${(b / clip.length) * 100}%`, top: `${(1 - level(v)) * 100}%`, background: color.ink }} />
+          <span
+            key={i}
+            data-point={i}
+            data-picked={i === picked || undefined}
+            className={clsx("absolute size-1.5 -ml-[3px] -mt-[3px] rounded-full", i === picked && "bg-fg-strong ring-2 ring-white")}
+            style={{ left: `${(b / clip.length) * 100}%`, top: `${(1 - level(v)) * 100}%`, background: i === picked ? undefined : color.ink }}
+          />
         ))}
       </div>
     </>

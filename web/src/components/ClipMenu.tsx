@@ -4,7 +4,26 @@
 
 import { useState } from "react";
 import { createPortal } from "react-dom";
+import { playhead, removeAutomation, type LaneAddr } from "../lib/clips";
+import { findLane, laneTitle } from "../lib/graph";
+import { useStore } from "../lib/store";
+import { undoAction } from "./GraphCanvas";
 import { keepFocus, MenuRow, Popover } from "./ui";
+
+/**
+ * Remove automation (HOME-2), from the lane's header or the input it drives: the value it plays at
+ * the playhead goes back into the code, and its file goes. A toast says so, with Undo.
+ */
+export function unautomate(addr: LaneAddr) {
+  const { graph, toast } = useStore.getState();
+  if (!graph) return;
+  const lane = findLane(graph.timeline, addr.module, addr.lane);
+  const name = lane ? laneTitle(lane) : addr.lane;
+  removeAutomation(graph, addr, playhead(), name).then(
+    (done) => toast(`Removed the ${name} automation`, undoAction(graph.session, done.revision)),
+    (error) => toast(error instanceof Error ? error.message : String(error)),
+  );
+}
 
 /** A row of the menu. In a menu's list, "line" is a line between groups, and null a row left out. */
 export interface MenuItem {

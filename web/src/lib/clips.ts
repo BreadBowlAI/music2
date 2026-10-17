@@ -8,6 +8,8 @@
 
 import { create } from "zustand";
 import { clipIndex, findLane, hasOwnId, laneWriting, sameClip, type ClipRef, type GraphState, type TimelineLane, type TimelineView } from "./graph";
+import { beatNow } from "./clock";
+import { clean } from "./grid";
 import { recorded, type Step } from "./history";
 import { token } from "./native";
 
@@ -15,6 +17,13 @@ import { token } from "./native";
 export interface LaneAddr {
   module: string;
   lane: string;
+}
+
+declare module "./graph" {
+  // The automation lane that drives an input (8b.5): "Follows the Cutoff lane", Show lane.
+  interface InputPort {
+    lane?: LaneAddr;
+  }
 }
 
 /** A clip as a gesture names it (the server's `ClipRef`). */
@@ -81,6 +90,12 @@ export function refIn(timeline: TimelineView, ref: ClipRef) {
   const lane = findLane(timeline, ref.module, ref.lane);
   return lane ? serverRef(lane, ref) : null;
 }
+
+/**
+ * Where the playhead is, for an edit there (⌘E, ⌘V, Remove automation): to the 960th of a beat, as
+ * sequencers count ticks. The engine counts in samples, so a playhead put on beat 40 reads 39.99999.
+ */
+export const playhead = () => clean(Math.round(beatNow() * 960) / 960);
 
 /** Gestures of the open project on their way, and the newest revision one made. */
 let sent = { session: 0, revision: 0, pending: 0 };
@@ -192,4 +207,24 @@ export function copiedOf(timeline: TimelineView, picked: readonly ClipRef[]): Co
     const { sha: _sha, ...rest } = clip as unknown as Record<string, unknown>;
     return { module: ref.module, lane: ref.lane, clip: rest };
   });
+}
+
+// ---------------------------------------------------------------- remove automation
+
+/**
+ * Remove automation (HOME-2): the lane's read in the code becomes what it plays at `beat` (the
+ * playhead), and its file goes. One undo step, named "removing the Cutoff automation". Refused,
+ * it throws the server's words.
+ */
+export async function removeAutomation(graph: GraphState, addr: LaneAddr, beat: number, name: string) {
+  const res = await fetch("/api/graph/automate/remove", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) },
+    body: JSON.stringify({ session: graph.session, module: addr.module, lane: addr.lane, beat }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+  const done = json as { file: string; before: string; after: string; revision: number };
+  if (done.before !== done.after) recorded(graph.session, done.revision, { name: `removing the ${name} automation`, structural: true });
+  return done;
 }
