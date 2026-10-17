@@ -151,3 +151,87 @@ Both G11 gates pass. The machine was shared (load 12 to 15), so the p95s say lit
   as the app's.
 - Scratch: `~/m2-runs/tn-scratch` (the suite runner `suite.sh`, suite logs, renders). Logs:
   `~/m2-runs/logs/tn-a1-*`.
+
+## A2: fonts
+
+**In short**
+- Off the Mac, the app's UI is now in Inter. Before, Linux showed DejaVu Sans, a wide fallback.
+- The Mac keeps its own font (SF). Nothing changes there.
+- Inter ships with the app, in `web/public/fonts/`, with its licence (`OFL.txt`) beside it. Nothing
+  is fetched from the network.
+- The taste suite checks the font each page draws in: 39 checks, 4 new.
+- The app on an invisible screen (Xvfb) draws its UI in Inter: a before and after picture below.
+- Checks: the web build, taste 39/39, fx-fixes 75/75. No Rust changed. No render record moved.
+
+### What was built
+
+| File | What |
+|---|---|
+| `web/public/fonts/InterVariable.woff2` | Inter 4.1's variable font, from the rsms/inter release (`Inter-4.1.zip`, `web/InterVariable.woff2`), unchanged. 352,240 bytes, sha256 `693b77d4…429a8e3`. |
+| `web/public/fonts/OFL.txt` | The release's `LICENSE.txt`: Inter's copyright line and the SIL Open Font License 1.1. It names no Reserved Font Name, so the file ships as it is. |
+| `web/src/index.css` | An `@font-face` for "Inter Variable" (weights 100 to 900), with the version and sha256 in a comment. `--font-sans` is `"Inter Variable", sans-serif`. `:root[data-os="mac"]` keeps taste's `system-ui, -apple-system, "Helvetica Neue", sans-serif`. Mono is as it was (code only). |
+| `web/src/main.tsx` | Sets `data-os="mac"` on the root on a Mac (`isMac`), before the first render. |
+| `e2e/taste.mjs` | 4 checks (below). `run.mjs` and `e2e/README.md`: 35 becomes 39. |
+| Docs | `taste.md` §2.1 (the font per OS, a table), its §2.15 token line and §0's lint list. Platform design OS-76: built. README: a Credits section (Inter, OFL). |
+
+Vite copies `web/public/` into `web/dist/` as it is, so the font and its licence reach the app's
+bundle (`tauri.conf.json` takes all of `web/dist/`). The attack's point: a licence in
+`web/src/assets/` would never have reached it.
+
+### The new checks in `taste.mjs`
+
+| Check | How |
+|---|---|
+| A Mac page keeps the system font | `data-os` is `mac`; the body's font list starts with `system-ui`; Inter's FontFace was never loaded; and the text was drawn in a system font, not the page's own file. |
+| A Linux page loads Inter | A second page, given `platform: "linux"`. Its FontFace "Inter Variable" has status `loaded` (T8). |
+| A Linux page draws its text in Inter | Its font list starts with Inter, and Chrome's DevTools protocol (`CSS.getPlatformFontsForNode`) says the text was drawn in Inter, from the page's own file. The attack's point: `document.fonts.check()` says true for a font the page never loaded. |
+| Inter's figures are tabular | "0000" and "1111" are both 32.00 px wide. Without `tabular-nums` they are 32.00 and 20.00, so the check can tell. |
+
+Tried once with the font file taken out of `web/dist`: the three Linux checks fail (the FontFace
+says `error`, the text is drawn in Liberation Sans, the figures differ), and the Mac check passes.
+
+What the checks printed: the Mac page's "BPM" was drawn in DejaVu Sans (the system's, on this
+machine); the Linux page's in Inter Variable (the page's own file). On the Mac run, the Mac page
+should say the Mac's system font.
+
+### The app on Linux
+
+The worktree's `music2-desktop` (debug), opened on first-song on an invisible Xvfb screen (a scratch
+HOME, `M2_AUDIO=none`), once with this slice's `web/dist` and once with the commit before's
+(`MUSIC2_WEB_DIR`). WebKitGTK draws the UI in Inter: narrower letters than DejaVu Sans, Inter's
+shapes. The GTK menu bar keeps the system's font (A3 rebuilds that menu). Pictures:
+`~/m2-runs/tn-scratch/a2/` (`before/`, `after/`, and `cmp-list.png`, the browser's list enlarged,
+before on top).
+
+### Decisions made in the slice
+
+| What | Decided | Why |
+|---|---|---|
+| Which file | The release's `InterVariable.woff2` as it is, not cut down to Latin | The plan's "latin" is read as the upright face (no italic: taste uses none). Unchanged, its sha256 matches the release, so anyone can check it. It also has Greek and Cyrillic, for song names. 352 KB beside Monaco's several MB. |
+| The family name | "Inter Variable", as the plan says | The release's own CSS calls it "InterVariable". Only our CSS and the check use the name. |
+| `font-display` | `block` | The file is local, so it loads at once. `block` avoids a flash of DejaVu Sans as the window opens. |
+| `data-os` off the Mac | Not set | Only the Mac needs a rule; every other OS takes the default, Inter. |
+| The font's URL | `/fonts/InterVariable.woff2` | The app's server and the headless one both serve `web/dist` at the root. |
+
+### Checks
+
+| Check | Result |
+|---|---|
+| Web build (`npm run build`: tsc, the SDK's check, the forms' tsc, vite) | passes; `web/dist/fonts/` holds both files |
+| `taste` | 39 of 39, twice; 36 of 39 with the font file taken out (the 3 Linux checks, as they should) |
+| `fx-fixes` (the top bar's fit checks, as a guard) | 75 of 75 |
+| Rust | nothing changed; `music2-desktop` rebuilt for the pictures |
+| `renders.sha256`, `renders.json`, `std.wasm`, `Cargo.lock` | unchanged |
+
+Every other browser suite gives its page `platform: "macos"`, so it keeps the system font as before:
+this slice changes nothing they see.
+
+### Left
+
+- The full `ci/check.sh` at the end of step A. Its app row's `app-first-song.png` should show Inter, as
+  the pictures above do.
+- HANDOFF's merge-notes row "the font" is done now. Left for A-end's HANDOFF edit, with A1's rows.
+- The Mac run: the app should look as it did before this slice (SF), since the Mac's WebKit page has
+  `data-os="mac"`.
+- Code (Monaco, `[data-code]`) on Linux stays in the system's monospace (DejaVu Sans Mono). The plan
+  keeps mono as it is.
