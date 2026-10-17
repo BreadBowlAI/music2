@@ -9,7 +9,7 @@ information only: only the owner's Mac judges timings (PLAT-1).
 | Slice | State | What it says |
 |---|---|---|
 | 0: the spike (thrown away) | done | **Go.** p50 on 4 threads is 2.75 to 2.99 times faster than step 7's loop by the mean, 3.3 to 4.2 times by the p99. The rule needs 2.5 and 2.0. Same bits on every thread count. |
-| 1: the pool (`m2-pool`) | — | — |
+| 1: the pool (`m2-pool`) | done | **Built and green**, nothing uses it yet. 17 unit tests, a grep test and 5 models (34,000 cases), about 4 s in all. Four models and 12 unit tests shown red by mutants of the pool. M5 (orderings too weak) stays green on x86, as planned: the Mac can catch it. Renders unchanged. |
 | 2: the executor, offline | — | — |
 | The last check | — | — |
 | The Mac sweep | owed | after slice 2 |
@@ -248,7 +248,143 @@ All in `~/m2-runs/s8a/spike/`, with `run.sh` (each step's command) and `spike.di
 
 ## Slice 1: the pool
 
-(to come)
+### In short
+
+- **The pool is built:** `core/pool`, the crate `m2-pool`, with no dependencies. Nothing uses it yet. Slice 2's
+  executor will.
+- **What it does:** it runs a graph of numbered tasks on the calling thread and a few workers. Each task runs once,
+  after every task it reads. A failed task skips what reads it; the rest still runs.
+- **All green:** 17 unit tests, a grep test and 5 models. About 4 s from an empty target.
+- **Shown red:** four of the five models, and 12 unit tests, each by a mutant of the pool (a small deliberate bug).
+  The fifth model has no mutant of its own. The one mutant that stays green is M5, the orderings made too weak. The
+  plan expected that: x86 keeps stores in order, so only an arm64 Mac can catch it. The Mac's check runs the same
+  row.
+- **Nothing else changed:** 10 of 10 renders match `e2e/renders.sha256`, and `no_alloc` passes.
+- **Main was merged into 8a first** (the plan's Decision 1), as `acf15f2`.
+
+### Commits
+
+| Commit | What |
+|---|---|
+| `acf15f2` | Merge `main` (`d7207d2`) into `8a` |
+| `f17e777` | The pool (`m2-pool`), its unit tests and the grep test. Tested alone: the staged tree, exported to a scratch folder |
+| `cac8284` | The models, and their row in `ci/check.sh` |
+| this one | These notes |
+
+### What was built
+
+| File | What |
+|---|---|
+| `core/pool/src/lib.rs` | "In short"; `Setup`, `Pool`, `Runner`, `Counters`, `Spread`; the models' hooks |
+| `core/pool/src/tasks.rs` | `Tasks::new`: sorts the edges, counts inputs, finds a topological order (or a `Cycle`), bottom levels, roots and consumers (most critical first), the width. Sizes the run state |
+| `core/pool/src/run.rs` | the block path: `wake`, `run`, `rest`, a run on many threads, `help`, `pop`, `complete`, the workers' loop, sleeping, the abort guard, and the run state's own steps |
+| `core/pool/src/sync.rs` | std's atomics and `park`; with `--features models`, the same with a chaos point before each step |
+| `core/pool/src/tests.rs` | 17 unit tests |
+| `core/pool/tests/no_blocking.rs` | the grep test over `run.rs` |
+| `core/pool/tests/models.rs` | the 5 models |
+| `Cargo.toml`, `Cargo.lock` | the crate; `opt-level = 3` in the dev build (it will run on the audio thread). The lock gained only the `m2-pool` entry |
+| `ci/check.sh` | row 6b, "pool models" |
+
+### How a run works
+
+1. `Tasks::new` is built once, off the audio thread. It holds the run state too, so a run allocates nothing.
+2. `run` resets the state and queues the roots. With workers, and a graph wider than 1 (or spread on), it publishes
+   the run, wakes up to `width − 1` sleeping workers, and works too.
+3. Every thread takes the next ready task. When a task finishes, each consumer whose last input it was is queued.
+4. The caller stays until every task is done. Then it closes the run and waits until no worker is inside it.
+5. A worker leaves a run when nothing it could take is left. It spins a moment (`patience`, 50 µs offline), then
+   parks. Only a waker that takes its `parked` flag signals it, so a worker that slept through many wakes wakes once.
+
+### Where it differs from the plan
+
+| Plan | Built | Why |
+|---|---|---|
+| `run(&mut self, tasks: &Tasks, …)` | `tasks: &mut Tasks` | The run state lives in `Tasks`. `&mut` stops two runs of one graph at once, and lets the reset be plain writes. Slice 2's task closure can still borrow the schedule's other fields beside it |
+| `Tasks::new(…) -> Tasks` | `-> Result<Tasks, Cycle>` in every build; `Cycle` names the tasks on one circle | Decision 21 |
+| `wake` at the block line | `run` also wakes, after it publishes the run | A sleeper sets its flag, then looks for a run; a waker publishes, then takes the flag. A wake *before* the publish can miss a worker on its way to sleep. M3 shows the hang |
+| `Runner::counters` | also `Pool::counters`, readable during a run | Decision 8 |
+| models: 2,000 cases | 34,000 in all, 4,000 to 10,000 a model | They take 2.3 s. More cases are more chances on the Mac |
+| `run.rs` holds the block path | it also holds the run state's steps (reset, outcomes, panic slots, the spread count) | So the grep test sees the whole block path |
+| — | `Tasks::roots()` and `is_empty()` | for tests and slice 2 |
+| sticky placement, if chosen | not built | The spike chose FIFO |
+
+The Decisions on the pool are all in: the abort guard only with workers, and `Setup.start` inside it (20, 10);
+spread waits stop when the pool is dropped (10); the spread spin comes before each pop (9); one pool at a time in a
+test binary, 60 s watchdogs that only catch hangs (11).
+
+### Tests
+
+No test has a time bound. Each waits on counters or events, under a 60 s watchdog.
+
+| Test | Proves | Shown red by |
+|---|---|---|
+| `every_task_runs_once_after_its_inputs` | 500 random graphs (2 to 40 tasks) on `Runner::one()` and 1 to 8 threads, spread off and on: each task once, after its inputs; with spread, tasks ran on workers | M1 |
+| `a_failed_task_skips_what_reads_it_and_the_rest_run` | random failures on 0 to 7 threads: the outcomes equal a serial reckoning | M4 |
+| `a_panicking_task_finishes_the_run_then_is_raised` | two tasks panic, one on a worker: the rest ran or were skipped; `run` returns task 3's payload; the pool works after | U3 (the test binary aborts) |
+| `a_panic_in_pool_code_aborts` | a child process with a panic in `complete`: it aborts | U4 (the child hangs: the watchdog fails it) |
+| `on_one_thread_a_panic_in_pool_code_unwinds` | on `Runner::one()` the same panic unwinds (Decision 20) | — |
+| `idle_workers_sleep_while_a_task_blocks` | while one task blocks, every other worker parks | U5 (hang) |
+| `rest_sends_workers_to_sleep_at_once` | `patience` of an hour; after `rest()` every worker parks | U6 (hang) |
+| `a_worker_held_off_wakes_once` | 1,000 wakes while a worker is busy: no worker gets more signals than its parks + 1 | U7 |
+| `a_chain_wakes_nobody` | a chain (width 1) signals no worker and runs on the caller | U8 |
+| `a_runner_outlives_its_pool` | after the pool is dropped, the runner runs everything itself, spread on | U9 (hang) |
+| `dropping_a_pool_joins_every_worker` | after the drop, no worker is alive | U10 |
+| `spread_puts_every_root_on_a_worker` | with spread, no root runs on the caller | U11 |
+| `the_same_graph_builds_the_same_tasks` | edges shuffled and repeated give the same tasks | U12 |
+| `the_most_critical_go_first_and_width_is_the_widest_layer`, `a_cycle_is_refused_and_named`, `a_pool_has_1_to_64_threads`, `an_empty_graph_runs_at_once` | the build's rules | — |
+| `the_block_path_never_blocks` (grep) | `run.rs` has no allocation, lock, channel, thread-local or I/O | a `Vec::with_capacity` put in `pop` |
+
+### The models and their mutants
+
+The models run with a random yield or short spin before every atomic step and every park. Each mutant is a small
+deliberate bug, made in a scratch copy of the crate.
+
+| Mutant | The bug | Caught by | How |
+|---|---|---|---|
+| M1 | a consumer is queued at its first input's end | `each_task_once_after_its_inputs` (and the unit test) | case 0: 3 tasks ran before their inputs |
+| M2 | `run` returns without waiting for workers to leave | `nothing_touches_a_job_after_run_returns` | the binary crashed (SIGSEGV), twice: a worker read the run from a stack `run` had already left. That is the use-after-free the rule prevents |
+| M3 | a worker parks without looking again after setting its flag | `no_lost_wake` | hung, 4 runs out of 4: at cases 273, 699, 1,142 and 1,159 of 4,000 |
+| M4 | no skip for a failed task's consumers | `skips_are_exactly_the_descendants` (and the unit test) | case 1: task 5 Failed, not Skipped |
+| M5 | the queue slots and input counts made `Relaxed` | — | **passed**, as the plan expected: x86 keeps stores in order. The Mac's check runs the same row on arm64 |
+
+`back_to_back_runs_with_rest_between` has no mutant of its own. It runs 5,000 cases in 20 pools, waking and resting
+at random between runs.
+
+### Numbers (Linux, information only: PLAT-1)
+
+Load (1 minute) 1.9 when timed.
+
+| What | Time |
+|---|---|
+| The "pool models" row from an empty target (build, 17 + 5 + 1 tests, the models build's lint) | 4.5 s, 11 MB |
+| The 5 models alone (34,000 cases) | 2.3 s |
+| The unit tests | 1.1 s |
+
+### Checks
+
+- `cargo test --locked -p m2-pool`: 17 and 1 green. In release with `--features models`: 17, 5 and 1 green.
+- `cargo clippy --locked -p m2-pool --all-targets`, with and without `models`: no warnings.
+- `f17e777` tested alone, before the models were added.
+- The row's shell code run with `check.sh`'s own helpers: a pass, and a made-up failure that "what failed" names.
+- Renders: 10 of 10 match `e2e/renders.sha256` with the debug `m2`. `no_alloc`: 9 of 9.
+- `Cargo.lock`: one build without `--locked` (`cargo check --offline -p m2-pool`, Decision 28) added only the
+  `m2-pool` entry. Every other build was `--locked`.
+- Scratch targets deleted afterwards. `df -h /`: 2.4 TB free.
+
+### Logs
+
+| What | Where |
+|---|---|
+| The mutants: each one's change (`.diff`), its run (`.log`), `results.txt`, `run.sh`, `mutate.py` | `~/m2-runs/s8a/mutants/` |
+| The first run of M1 to M5, against the models at 2,000 cases (same verdicts) | `~/m2-runs/s8a/mutants/models-draft-2000-cases/` |
+| Debug build; renders, `no_alloc`, tests and lints | `~/m2-runs/logs/8a-s1-build-1017-114455-2806073.log`, `8a-s1-checks-1017-120750-2997791.log` |
+| The mutant runs | `~/m2-runs/logs/8a-s1-mutants-1017-120427-2972920.log`, `8a-s1-mutants2-1017-120957-3012654.log`, `8a-s1-m3x3-1017-121122-3020767.log` |
+
+### For slice 2
+
+- `Schedule::build` turns a `Cycle` into a failed prepare (Decision 21).
+- The task closure calls `fpenv::canon()` itself. `Setup.start` does wasmtime's per-thread set-up and
+  `background_thread()`. The pool knows nothing of them.
 
 ## Slice 2: the executor offline
 
