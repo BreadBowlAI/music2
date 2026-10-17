@@ -1,5 +1,21 @@
 # Step 8a design: partitions on a thread pool
 
+> **As built (offline half, branch `8a`).** The partitions, the pool (`core/pool`, `m2-pool`) and the executor are
+> built, and every offline render uses them; live playback renders through the same executor on one thread. Six
+> decisions differ from this design (the plan is `~/m2-runs/s8a/plan.md`; the build notes are `build-notes-8a.md`):
+>
+> | # | This design | As built |
+> |---|---|---|
+> | 1 | the device thread parks on a `Wake` | the caller of a run never parks: it spins, and sleeps in short steps only when a task is stuck. No `Wake`, no device-thread park |
+> | 2 | loom models | loom isn't in the offline registry: the models use a small sync shim that yields and spins at random, with std threads, many times over, each shown red against a mutant |
+> | 3 | an overlay goes with its consumer | an overlay goes with the track it carries; a fade with the node that reads it |
+> | 4 | a panic in a task breaks the plan | it is caught, the block finishes, and it is raised again on the caller, so the player crashes and is replaced, as before |
+> | 5 | edges from `Wiring`'s kept inputs | edges from `Exec::reads()`, what each built node reads |
+> | 6 | plugins on worker threads | a song with plugins renders on one thread for now; plugins on workers come with live playback on all cores |
+>
+> Also from the spike: FIFO placement (sticky was within 2%), and an export alone uses one cache's fast cores
+> (`Cores.per_cache`).
+
 Revision 2. This design is checked against `docs/architecture.md` (normative) at HEAD `cbf5eb9`. It sits on top of the
 step 7 design (`.git/m2-step7/design-7.md`, revision 2), which is built first. It uses the survey `understand-8a.md` in
 this folder, and it departs from the survey wherever a simpler choice does the job; §11 lists where. Revision 2 answers
