@@ -219,7 +219,7 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 | Import Audio | Audio in the app (#18) |
 | Export as WAV | Back as Export Audio (File → Export Audio…, ⇧⌘E) |
 | Settings | A Settings window (#31) |
-| The Track inspector (volume, pan, output, sends, effects, sidechain) | The mixer panel (#4), sends and buses (#27), effect comforts (#21) |
+| The Track inspector (volume, pan, output, sends, effects, sidechain) | Volume and pan: back in the Mix view. Output, sends and the sidechain: sends and buses (#27), effect comforts (#21) |
 | A level meter on each track | Level meters (#20) |
 | The Sounds panel | Audio in the app (#18), the sampler (#22) |
 | Drawing automation | Draw automation (#14) |

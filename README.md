@@ -4,7 +4,7 @@ music2 is a music studio for the Mac: a DAW (digital audio workstation), the kin
 
 The app shows that folder as a timeline, a graph of knobs and cables, a piano roll (a grid for drawing notes) and a code editor. Every change you make there is written into the files right away.
 
-There's no AI inside the app. Scripts and AI agents (such as a Claude Code session) use the same files, and a local API (a way for programs on your Mac to talk to the app). music2 is part of **suite2**, alongside film2 and dj2. Status: early. A lot is missing: there's no sampler, and no mixer panel yet. See [What music2 can't do yet](docs/gaps.md).
+There's no AI inside the app. Scripts and AI agents (such as a Claude Code session) use the same files, and a local API (a way for programs on your Mac to talk to the app). music2 is part of **suite2**, alongside film2 and dj2. Status: early. A lot is missing: there's no sampler, and no mute or solo yet. See [What music2 can't do yet](docs/gaps.md).
 
 ## Run the app
 
@@ -67,7 +67,7 @@ Things to try:
 
 ### The top bar
 
-From left to right: back to the start, play/stop, loop, where the song is (bar.beat.sixteenth, then minutes and seconds), the tempo and time signature, the song's name, the status pill (only when something needs saying: see [Saving and undo](#saving-and-undo)), undo, redo, and **Export** (it shows how far along an export is). File → Close Song (⌘W) goes back to the start screen.
+From left to right: the browser's toggle, back to the start, play/stop, loop, where the song is (bar.beat.sixteenth, then minutes and seconds), the tempo and time signature, the song's name, the status pill (only when something needs saying: see [Saving and undo](#saving-and-undo)), undo, redo, and **Export** (it shows how far along an export is). File → Close Song (⌘W) goes back to the start screen.
 
 | To | Do this |
 |---|---|
@@ -98,7 +98,7 @@ Stop ends the notes, and echoes and reverb ring out as they would on a real inst
 
 ### The browser
 
-Down the left (⌥⌘B shows or hides it): the instruments (Drums, Instruments) and the effects, by group. Type to search. Enter or a double-click on an instrument adds a track with it below the selected one, and one dragged onto the space below the tracks adds it there. Enter or a double-click on an effect adds it to the end of the selected track's sound, and an effect dragged onto a track or the Device view goes at the end of that sound.
+Down the left (⌥⌘B shows or hides it): the instruments (Drums, Instruments, Sound design) and the effects, by group. Type to search. Enter or a double-click on an instrument adds a track with it below the selected one, and one dragged onto the space below the tracks adds it there. Enter or a double-click on an effect adds it to the end of the selected track's sound, and an effect dragged onto a track or the Device view goes at the end of that sound.
 
 ### The dock below the timeline
 
@@ -121,7 +121,7 @@ It shows the selected track (or the Song) in one of four views, picked with the 
   - Drag a fader to hear it; let go to write it into the code. 0 dB sits three quarters of the way up. Hold ⇧ to fine-tune; ⌥-click puts it back at 0 dB; the very bottom is silence ("−∞", written as −96 dB). Scroll up or down over a fader to move it 0.1 dB a notch (scrolling sideways moves the strips). Double-click the level to type one: `-3`, `-3 dB` or `-inf`. A fader you've clicked or tabbed to also takes ↑ and ↓ (with ⇧, 1 dB) and Return to type.
   - A level in grey is one the code leaves out: it plays at 0 dB, and the fader's first move writes it into the mixer, in the style the mixer already uses (`kick: kick.out` becomes `kick: { in: kick.out, db: db(-3) }`).
   - A pan reads "C", "L 20" or "R 35". In grey, it isn't in the code yet: the first drag writes `pan: 0` into the channel once it has moved 4 pixels, then goes on, and letting go writes the pan. Undo once puts it back at C; undo again takes it out of the code.
-  - Click a strip to select its track. Right-click it to rename or recolour the track, or for **Edit in code**, which opens `song.ts` at its channel. Right-click a fader or a pan for **Automate** and **Reset to default**.
+  - Click a strip to select its track. Right-click it to rename or recolour the track, or for **Edit in code**, which opens `song.ts` at its channel. Right-click a fader, or a pan once it's written, for **Automate** and **Reset to default** (a pan in grey has the strip's menu).
   - **Automate** on a fader gives it a lane under the Song in the timeline, "Hats volume". The fader then follows the lane: it moves with playback, shows the lane's dot, and can't be dragged. Right-click it for **Show Hats volume lane** or **Remove automation**, which writes the level at the playhead back into the code.
   - A track that doesn't reach the mixer gets a strip that says so, with **Edit in code**. So does a song that mixes its tracks its own way.
 - **Code:** the selected track's TypeScript, with type checks. The list on the left shows the song's files. ⌘-click a name to jump to where it's defined, even inside std (std's files open read-only). ⌘S (or the Save button) saves. When the code has an error, the last working version keeps playing, and the status pill in the top bar says so; its popover offers **Show in code**. A song whose code doesn't compile when you open it still opens: in its code, at the error, with its tracks and clips greyed in the timeline and nothing to play until a save makes it compile, and then it plays.
@@ -154,7 +154,7 @@ It shows the selected track (or the Song) in one of four views, picked with the 
 - A note edit is heard at once, while it's being written to disk. If the disk refuses it (it's full, say, or another program replaced the file at that moment), the edit is taken back and a message says why; if the disk is slow to answer, a message says the edit isn't saved yet, and another says when it is. The same goes for an edit an agent sends while the song plays: the app says when it was taken back.
 - Every edit made in the app is checked before it's written: the app works out what the change does to the song and refuses it if it would do anything else. An edit that touches several files (automating a knob writes its code and a new lane file) is written as one, all or nothing.
 - Undo (⌘Z) and redo (⇧⌘Z) cover knobs, cables, effects, notes, renames, automation, fixes and code saves. The history ends when you close the app. Undo is refused only when what it would put back has changed since (the same number, or the same clip, edited elsewhere); a change somewhere else in the file doesn't block it.
-- Changes made in another editor, or by a script or git, show up once the other program has stopped writing for a moment (150 milliseconds, so usually within a quarter of a second). A file caught half-written never plays: a lane keeps the notes it had until its file reads again, and a code change that doesn't compile yet holds back the data saved with it, so a lane never plays empty in between. The app hears of changes from macOS, so an open song nobody is changing costs next to nothing, however many samples it has. On a network drive, which doesn't report other computers' changes, it reads the song's folder instead: every 50 milliseconds for a small song, less often for one with thousands of files, and at least once a second.
+- Changes made in another editor, or by a script or git, show up once the other program has stopped writing for a moment (150 milliseconds, so usually within a quarter of a second). A file caught half-written never plays: a lane keeps the notes it had until its file reads again, and a code change that doesn't compile yet holds back the data saved with it, so a lane never plays empty in between. The app hears of changes from the system (FSEvents on a Mac, inotify on Linux), so an open song nobody is changing costs next to nothing, however many samples it has. On a network drive, which doesn't report other computers' changes, it reads the song's folder instead: every 50 milliseconds for a small song, less often for one with thousands of files, and at least once a second.
 - If another program changes a clip while you're editing it in the piano roll, your edit of that clip is refused, saying which clip, and the other program's version stays. Edits to different clips of one lane both stay.
 - One program writes a song at a time. While the app has a song open, `m2` commands that write it stop without changing anything and say so; ones that only read it, render it or bounce a track work. A song that's open for writing elsewhere (another music2 window, say) opens read-only: the status pill says **Read only**, and its popover says where it is open, with **Retry** to take it over once it's free. You can play it and see its changes; nothing offers to edit it meanwhile.
 - The lock and the edits being written live in the song's `.music2/` folder, which git ignores. If the app or the Mac stops in the middle of writing an edit, the status pill says so when the song opens next, with **Finish** and **Discard**: either leaves every file as it was before the edit or after it, never half.
@@ -565,7 +565,7 @@ curl -s -H "$H" -H 'content-type: application/json' $URL/api/tx/commit -d "{\"tx
 
 | Route | What it does |
 |---|---|
-| `GET /api/graph` | The open song: name, folder, `session`, the graph view (with `revision` and every knob's id), the timeline, the effects, problems, where playback is, and the knob drags in progress (`leases`, each with its knob's id in that view). `has_code` is false while the song opened with code that doesn't compile; `read_only` is null, or `{why, message, holder}` when another program holds the song |
+| `GET /api/graph` | The open song: name, folder, `session`, the graph view (with `revision` and every knob's id), the timeline, the Mix view (`mix`: a strip per track with its fader's and pan's knob ids, `pan_insert` when its first pan can be written, and the lane a level follows), the effects, the instruments + Track offers (`instruments`), what is muted or soloed while listening (`overlays`), problems, where playback is, and the knob drags in progress (`leases`, each with its knob's id in that view). `has_code` is false while the song opened with code that doesn't compile; `read_only` is null, or `{why, message, holder}` when another program holds the song |
 | `POST /api/graph/open` `{path}` | Open a song folder |
 | `POST /api/graph/close` | Close it |
 | `GET /api/graph/status` | Playing or not, seconds and beat, the tempo playing there (`bpm`), and the loop (`{start, end, on}` in beats, or null). A play, a stop or a seek just sent reads as done |
@@ -582,6 +582,16 @@ curl -s -H "$H" -H 'content-type: application/json' $URL/api/tx/commit -d "{\"tx
 | `POST /api/graph/data/delete` `{session, revision, file}` | Delete data no lane or plugin reads |
 | `POST /api/graph/label` `{session, module, label}` | Rename a track's label (its key stays) |
 | `POST /api/graph/automate` `{session, revision, id}` | Give a knob an automation lane; answers with the `lane` it made |
+| `POST /api/graph/automate/remove` `{session, module, lane, beat?}` | Remove automation: the lane's value at `beat` (the playhead; else its fallback) goes back into the code where it was read, and the lane's file goes |
+| `POST /api/graph/track/add` `{session, component, label?, key?, after?}` | Add a track playing an instrument from `instruments` (`std:synth-pluck`): its file, its import and mixer channel, its lane, and its place below `after` (else last). Answers with the new track's `module` and `label` |
+| `POST /api/graph/track/duplicate` `{session, module}` | Duplicate a track: its code, clips (with new ids), plugin settings and channel, below it in its colour |
+| `POST /api/graph/track/delete` `{session, module, cascade?}` | Delete a track: its file, import, channel, data and layout. When other code reads it, nothing is written and the answer is 409 with the reads (`dependents`, and `blocked` when they can't be taken out from here); with `cascade`, an effect that only listens to it (a duck) goes too |
+| `POST /api/graph/track/mute` `{session, modules, muted}` | Mute tracks in the song, written in their code (or unmute them) |
+| `POST /api/graph/overlay` `{session, mute?, solo?, exclusive?, clear?}` | Mute or solo tracks while listening (`{kick: true}`). Not a write: it changes nothing in the song, and works read-only |
+| `POST /api/graph/layout` `{session, order? \| colour? \| reset?}` | Reorder the tracks (`order`: every track, top to bottom), recolour one (`colour: {module, colour}`), or write the defaults over a `layout.json` that doesn't read. Writes `layout.json` only, with no revision |
+| `POST /api/graph/mix/insert` `{session, channel, control, value}` | Write a mixer channel's first pan (`control: "pan"`) into its entry; answers with the new knob's id (`control`) |
+| `POST /api/graph/clips` `{session, gesture}` | A clip gesture (create, move, resize, split, join, duplicate, paste, delete, quantize), by clip id; 409 when a clip it names changed since |
+| `POST /api/graph/audition` `{client, module, lane, on?, off?, keep?}` | Play or let go of notes on a lane, as a window does. Not a write |
 | `POST /api/tx/check` `{session?, tx}` | Check a Tx: `{checked: {delta, hash, diagnostics}}`, writing nothing (409 when a file it's based on changed, 422 when it would do something else) |
 | `POST /api/tx/commit` `{session?, tx}` | Write a Tx: `{committed: {revision, delta, hash, …}}`, or `{conflict}`, `{rejected}` or `{io}`. With `"expect": {"seen": hash}` it is written only while it makes the change its check showed |
 | `POST /api/graph/lock/retry` `{session}` | Try again to take a song that opened read-only; answers like `GET /api/graph` |

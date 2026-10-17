@@ -291,6 +291,8 @@ check(!!(await page.$('[data-view-tab="mix"][aria-selected="true"]')), "and the 
 await page.click(`${strip("keys")} [data-testid=strip-name]`, { button: "right" });
 const items = await page.waitForSelector("[data-testid=strip-menu]", { timeout: 2000 }).then(() => page.$$eval("[data-testid=strip-menu] [role=menuitem]", (els) => els.map((e) => e.textContent))).catch(() => []);
 check(items.length === 3 && items[0] === "Rename" && items[1].startsWith("Colour") && items[2].startsWith("Edit in code"), `a right-click opens its menu: ${items}`);
+// Its Edit in code opens song.ts at the channel, which ⌥4 doesn't: the row names no key.
+check(items[2] === "Edit in codesong.ts:18", `Edit in code shows where, and no key that does something else: ${items[2]}`);
 await page.click("[data-testid=strip-menu] [data-testid=colour-row]");
 await page.click('[data-testid=colours] [data-colour="green"]');
 const colour = (k) => { try { return JSON.parse(read("layout.json")).tracks[k]?.colour; } catch { return null; } };
