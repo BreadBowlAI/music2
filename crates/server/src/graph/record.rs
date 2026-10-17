@@ -9,7 +9,8 @@
 //!   (`Player::heard_frame`, D4). Its time is the engine's clock, which never wraps, placed through
 //!   the tempo map that plays from the take's anchor: the clock where the transport was at the
 //!   take's start. A note at least 1/64 beat long. A note struck in the count's last beat lands on
-//!   the take's first beat; earlier ones are heard, not kept (D27).
+//!   the take's first beat; earlier ones are heard, not kept (D27). The count's beat is measured in
+//!   time, as its clicks are, whatever the tempo before the start (the review's R4).
 //! - **First pass only** (Q27, D5): a note heard past the loop's end isn't kept, and the take ends
 //!   there. A loop turned on, moved or turned off while it records moves that end (the review's
 //!   R2). A Stop, R, a jump, or a new player ends it where it is heard.
@@ -88,7 +89,8 @@ struct Take {
     /// The bar line the clip starts on, and where recording starts.
     start: f64,
     from: f64,
-    /// How far before `from` a note still lands on it: the count's last beat.
+    /// How long before the anchor a note still lands on `from`: the count's last beat, in engine
+    /// frames.
     lead: f64,
     quantize: Option<f64>,
     tempo: TempoMap,
@@ -185,18 +187,18 @@ impl Take {
         matches!(self.phase, Phase::Count { .. }) && !matches!((self.anchor, clock), (Some(a), Some(c)) if c >= a)
     }
 
-    /// A note's start heard at `beat`: on the take's start if it came in the count's last beat;
-    /// None when it came before that.
-    fn admit(&self, beat: f64) -> Option<f64> {
+    /// A note's start heard at engine clock `clock`, beat `beat`: on the take's start if it came in
+    /// the count's last beat, by the clock; None when it came before that.
+    fn admit(&self, clock: u64, beat: f64) -> Option<f64> {
         if beat >= self.from {
-            Some(beat)
-        } else {
-            (self.from - beat <= self.lead + 1e-9).then_some(self.from)
+            return Some(beat);
         }
+        let early = self.anchor.map_or(f64::INFINITY, |a| a as f64 - clock as f64);
+        (early <= self.lead + 1.0).then_some(self.from)
     }
 
-    fn on(&mut self, key: (u32, u32), pitch: f64, velocity: f64, beat: f64) -> bool {
-        let Some(start) = self.admit(beat) else { return false };
+    fn on(&mut self, key: (u32, u32), pitch: f64, velocity: f64, (clock, beat): (u64, f64)) -> bool {
+        let Some(start) = self.admit(clock, beat) else { return false };
         self.off(key, beat);
         self.held.insert(key, (start, pitch, velocity));
         true
@@ -270,12 +272,12 @@ impl Recorder {
             return;
         };
         t.resolve(&device.player);
-        let Some(beat) = device.player.heard_frame().and_then(|h| t.beat_of(h)) else { return };
+        let Some((heard, beat)) = device.player.heard_frame().and_then(|h| Some((h, t.beat_of(h)?))) else { return };
         if t.until.is_some_and(|u| beat >= u) {
             self.end_at(beat);
             return;
         }
-        self.changed |= t.on(key, pitch, velocity, beat);
+        self.changed |= t.on(key, pitch, velocity, (heard.0, beat));
     }
 
     /// A note let go, as audition sends its Off.
@@ -410,7 +412,7 @@ impl Graph {
                 let bar = (meter.beats as f64 * frames_per_beat).round().max(1.0) as u64;
                 let frames = bar.div_ceil(m2_runtime::BLOCK as u64) * m2_runtime::BLOCK as u64;
                 take.phase = Phase::Count { seq, frames, beats: meter.beats, ms: bar as f64 / rate * 1000.0 };
-                take.lead = beat;
+                take.lead = frames_per_beat;
             } else {
                 take.phase = Phase::Play { seq: player.transport(m2_runtime::Cmd::Play)? };
             }

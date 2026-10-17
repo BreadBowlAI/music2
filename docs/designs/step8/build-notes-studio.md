@@ -1587,3 +1587,15 @@ turned off still ended the take at the old end.
   while the song is still before it (a song past it plays on, as the engine does), or none with no loop.
 - Tests: `a_loop_turned_on_during_a_take_ends_it_at_the_loops_end`, `a_loop_turned_off_during_a_take_lets_it_go_on`.
 - Red: both `no take was written` (the first never ended; the second ended empty at the old end, before the note).
+
+#### R4. The count's last beat, across a tempo change
+
+Whether a note came in the count's last beat was worked out in song beats, back through the tempo before the start.
+Where the tempo changes at the start point, a note in the last click could be dropped, or one from an earlier click
+kept (against D27).
+
+- `record.rs`: the take keeps the count's beat in engine frames (`lead`); a note before the downbeat lands on it when
+  it came at most that long before it, by the clock.
+- Test: `the_counts_last_beat_is_measured_in_time` (120 BPM before beat 8, 60 from it: a note 0.9 s early lands on
+  the first beat, one 1.1 s early isn't kept). `Rig::with` puts extra files in the test song.
+- Red: `index out of bounds: the len is 0 but the index is 0` (both notes dropped: the take was empty).

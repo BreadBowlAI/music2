@@ -56,8 +56,16 @@ impl Heard {
 
 impl Rig {
     fn new() -> Rig {
+        Rig::with(&[])
+    }
+
+    /// A rig whose song also has `files` (a path in the project, and its text).
+    fn with(files: &[(&str, &str)]) -> Rig {
         let fixture = Fixture::new();
         fixture.put("song.ts", SONG);
+        for (path, text) in files {
+            fixture.put(path, text);
+        }
         let (p, d) = Player::driven(48_000);
         let graph = Graph::with_player(p);
         let token = graph.open(&fixture.0).unwrap()["session"].as_u64().unwrap();
@@ -712,4 +720,33 @@ fn a_loop_turned_off_during_a_take_lets_it_go_on() {
     let c = &r.clips()[0];
     assert_eq!((c["start"].as_f64(), c["length"].as_f64()), (Some(0.0), Some(8.0)), "{c}");
     assert!(on.has(note(c, 0).1), "heard at {on:?}: {c}");
+}
+
+// The review's R4: the count's last beat is one beat of the count's own clicks, even where the tempo
+// changes at the start point. 120 BPM before beat 8, 60 from it: the count clicks once a second.
+#[test]
+fn the_counts_last_beat_is_measured_in_time() {
+    let tempo = "{\"tempo\": [{\"beat\": 0, \"bpm\": 120}, {\"beat\": 8, \"bpm\": 60}], \"meter\": []}\n";
+    let mut r = Rig::with(&[("data/arrangement.json", tempo)]);
+    r.graph.seek(8.0).unwrap();
+    r.fill(2);
+    // The count: four clicks of 48,000 frames. The rig's beats are 24,000 frames (120 BPM), so the
+    // downbeat is "beat 8" and a second before it "beat 6".
+    r.anchored(192_000, 8.0);
+    r.start(true, None);
+    // 1.1 s before the downbeat: in the third click. Heard, not kept.
+    r.to(8.0 - 2.2);
+    r.key(&[0x90, 50, 100]);
+    r.key(&[0x80, 50, 100]);
+    // 0.9 s before: in the last click. On the take's first beat.
+    r.to(8.0 - 1.8);
+    r.key(&[0x90, 60, 100]);
+    r.key(&[0x80, 60, 100]);
+    r.to(8.5);
+    r.graph.transport("stop").unwrap();
+    r.written();
+    let c = &r.clips()[0];
+    assert_eq!(c["notes"].as_array().unwrap().len(), 1, "only the last click's note: {c}");
+    let (pitch, start, _, _) = note(c, 0);
+    assert_eq!((pitch, start), (60.0, 0.0), "on the first beat: {c}");
 }
