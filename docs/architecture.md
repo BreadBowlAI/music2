@@ -816,11 +816,11 @@ The CLI's commands sort like this:
 - `check` (and its alias `build`), `render`, `graph`, `controls`, `cables` and `effects` only read. They never take the lock, and open their own session.
 - `kernels` and `plugins` open no project, and `new` creates a new folder. None needs the lock.
 - `bounce` without `--place` only creates a new asset and its provenance, with create-only semantics ([FMT-14](#assets-and-hashes)). That can't race, so it needs no lock and works while the app is open.
-- Every other command that changes a project takes the lock: `set`, `connect`, `disconnect`, `add-effect`, `remove-effect`, `bounce --place`, `plugin-state`, `relink`, `delete-data`, `tx`, `automate`, `label`, `add-track`, `duplicate-track`, `delete-track` and `layout`. The message for `bounce --place` also names the lane file, and says the clip can be added by writing that file directly.
+- Every other command that changes a project takes the lock: `set`, `connect`, `disconnect`, `add-effect`, `remove-effect`, `bounce --place`, `plugin-state`, `relink`, `delete-data`, `tx`, `automate`, `label`, `add-track`, `duplicate-track`, `delete-track`, `layout`, `tempo`, `meter` and `title`. The message for `bounce --place` also names the lane file, and says the clip can be added by writing that file directly.
 
 Forwarding writes to the holder is [deferred](#deferred-with-triggers).
 - *Why:* owner decision 10: the lock now, forwarding when a workflow needs it. While raw file writes are allowed (owner decision 5), the safest writer must not be the one blocked.
-- *Today:* matches since step 6 (`apps/m2/src/main.rs`; `apps/m2/tests/lock.rs`), with `automate` and `label` among the writers, and from 8b.1 `add-track`, `duplicate-track`, `delete-track` and `layout`, and readers taking the lock for a journal scan when it is free, never while they read (the step 6 design's C19).
+- *Today:* matches since step 6 (`apps/m2/src/main.rs`; `apps/m2/tests/lock.rs`), with `automate` and `label` among the writers, from 8b.1 `add-track`, `duplicate-track`, `delete-track` and `layout`, and from 8b.2 `tempo`, `meter` and `title` (`a_write_while_another_process_holds_the_lock_fails_and_changes_nothing`), and readers taking the lock for a journal scan when it is free, never while they read (the step 6 design's C19).
 
 ### Outside writers
 
@@ -1043,11 +1043,12 @@ export const delay = component({
 | **Lanes** | values that change over time | `data/bass/cutoff.json` |
 | **Plugin state blob** | a plugin's internals | `data/lead/lead.state` |
 | **`layout.json`** | shared presentation: track order and colour (a palette name), keyed by track key; markers | `{"tracks": {"kick": {"colour": "rose"}}}` |
+| **`data/arrangement.json`** | the tempo and the time signature, each from a beat ([FMT-13](#arrangement)) | `{"tempo": [{"beat": 0, "bpm": 120}], "meter": []}` |
 | **`.music2/`** | local state: mute and solo, override latches, loop range, zoom, selection | `.music2/overlays.json` |
 
-**HOME-1.** Every value MUST have exactly one home, and the UI MUST show which. Every value that `controls()`, the view and leases return carries `home: code | lane | state | layout | local`, and a test checks it for every control of every fixture.
+**HOME-1.** Every value MUST have exactly one home, and the UI MUST show which. Every value that `controls()`, the view and leases return carries `home: code | lane | state | layout | arrangement | local`, and a test checks it for every control of every fixture.
 - *Why:* each new feature (mixer, reorder and colour, automation, plugins) would otherwise pick its own convention.
-- *Today:* matches since step 5: `m2_session::Home` is on every `Control`, knob, read-only value, lease (`LeaseInfo`) and lease begin (`Begun`), and is `code` for each (a literal, or a declared default whose edit writes the code) until lanes, latches and plugin state have knobs. `every_value_names_its_home` (`core/session/src/gate5_tests.rs`) checks the view as it is sent, for the five fixtures and a song that calls every std component.
+- *Today:* matches since step 5: `m2_session::Home` is on every `Control`, knob, read-only value, lease (`LeaseInfo`) and lease begin (`Begun`), and is `code` for each (a literal, or a declared default whose edit writes the code) until lanes, latches and plugin state have knobs. `every_value_names_its_home` (`core/session/src/gate5_tests.rs`) checks the view as it is sent, for the five fixtures and a song that calls every std component. Since 8b.2 the timeline carries `home: arrangement` for its tempo and time signatures, as the server publishes it (`m2_editor::TimelineView`; `the_published_timeline_is_the_sessions_and_shares_what_didnt_change`), and the song bar's tooltips say "Saved in data/arrangement.json".
 
 **HOME-2.** "Automate this knob" MUST be a `Confined` Tx that replaces the literal with `lane.control(key, unit, <the old literal>)` and creates an empty lane file. Dragging a knob that a lane or a cable drives sets an override latch ([MON-6](#monitoring-overlays-and-mute-in-song)); it never edits the fallback, the lane or the cable.
 - *Why:* the fallback keeps the song sounding the same where no clip is, and a drag must not quietly rewrite automation.
