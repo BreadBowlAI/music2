@@ -628,3 +628,72 @@ The name's field, open with a long name, in a page laid out as the Mac app's bar
 | The timed gates with the new nodes (p16 and p50 gain the master's gain and `std:stereo`) | final phase |
 | When the `sounds` merge's slice 3 lands: rebuild `std.wasm` (`std/build.sh`, then `--check`), never take a side | the merge |
 | Scratch: `~/m2-runs/tn-scratch/e2e-all-062703/`, `renders-b3/`. Logs: `~/m2-runs/logs/tn-b3-*`. | — |
+
+## B4: 8b.3b, the builders
+
+**In short**
+- A channel's fader that the channel leaves out is now a knob. Its first move writes `db` into the
+  channel's entry: `kick: kick.out` becomes `kick: { in: kick.out, db: db(-3) }`. One undo step.
+- The value follows the mixer's style: `db(-3)` where other channels write `db(…)`, else `-3`.
+- A channel's first pan writes `pan: 0` into its entry (`mix::insert`, `POST /api/graph/mix/insert`).
+  The answer names the new pan knob, which the Mix view's drag will lease (B5).
+- The graph state carries `mix`: a strip per track, in track order, with knob ids, and the master.
+- The first pan is heard as nothing: live, the song plays within about 1e-6 of the same song with
+  no edit, on first-song and in a mix that is mono all the way.
+- Checks: the crates touched pass, clippy is clean, 15 browser suites pass (live3b with the test
+  plugins), and 10 of 10 renders match. No render record moved.
+
+### What was built
+
+| Commit | What |
+|---|---|
+| `c01b2c9` | `Insertion::plan` learns dictionary entries (`lens.rs`): a property in an object entry, or a wrap of a bare one that keeps its text, in the dictionary's style. Edits are a list now (`Control::planned`), so a cable and an automation lane go into an entry too. History shows the entry. `mix::view` and `mix::insert` with the by-channel assertion (`mix.rs`). A shorthand channel (`{ saws }`) reads as a property. Tests: 12 in `mix_tests.rs`; `forms.ts` gains 42 forms (fader, cable, first pan, and `db(…)` style), and tsc passes. s5-knobs: the two faders are knobs (117). Contract PKG-3, ID-14, WRITE-10's fader row; design-8b §5.2. |
+| `8da57a9` | `mix` in the graph state; the route, in `WRITES`. Server tests: the state and the route; a read-only window writes nothing; the two live first-pan tests. s5-knobs: the route (120). Contract WRITE-10; design-8b §5.3, §5.4. |
+| this commit | These notes. |
+
+### Decisions made in the slice
+
+| What | Decided | Why |
+|---|---|---|
+| Key each strip by its channel (T4's first choice) | Not done; the first pan asserts by channel | Tried: with `key()` in std's mixer, two mixers in one module with a channel key in common are `key.duplicate`. `key()`'s keys are unique per key frame, not per component call. T4 says to fall back then. |
+| The by-channel assertion | Every channel keeps its tracks and its controls' values and their readers; this one gains only the pan, read by its new panner; the graph gains that constant and that panner, net; no value changes | The attack's three points, plus a net node count by kind, so a filter slipped in beside the pan is refused (tested). |
+| The style rule's reach | Dictionary entries only | Design §5.2's rule is about the mixer object. Options objects keep their plain numbers, so no existing insertion changes. |
+| The value's spelling | Only unit calls in base units (`db`, not `ms`), imported under their own name | Then the number written is the one played, with no scale. |
+| History's words | The entry, not the call: `kick: kick.out` → `kick: { in: kick.out, db: db(-3) }`; past 60 characters its old value is `…` (`bass: …` → `bass: { in: …, db: db(-3) }`) | The mixer call is long; the entry is what changed. Same 60-character rule as a call. |
+| `mix::insert`'s revision | None: the channel is named by its key | The builder plans on the accepted revision, as the track builders do. The route ignores a `revision`. |
+| The Mix view's JSON | `modules` (a list) for `module`; a strip for a channel no track reaches, named by its key; `mixer` can be `unwritten`; `message` gives the words; `feeds` and `muted_in_song` wait for 8b.4 | A shared channel ("Kick + Snare") has several tracks; 8b.4 is the slice that uses the other two. Design §5.4 says so. |
+| The mono-mix live test | Two tracks written in code with std's first `bass` and `kick` | Every instrument + Track offers is stereo since T3, so + Track can't make a mix that is mono all the way any more. |
+| The bound for "inaudible" | 1e-5 (−100 dBFS) against the same song with no edit, sample for sample | Stronger than "no step bigger than twice Kick's own": any cut or click is far above it. Measured: offline 1.1e-6 (first-song's limiter carries the panner's 1e-7 on), live 8.3e-7 and 1.0e-6. The design's 1e-6 was an estimate. |
+| An entry the first pan can't take | Refused in words: "Can't add a pan to Hats: its entry names it already."; with no single mixer, the Mix view's own message | The Mix view offers the first pan only where `pan_insert` is true. |
+
+### Checks
+
+| Check | Result |
+|---|---|
+| `cargo test` of `m2-editor`, `-server`, `m2`, `-gates` | all pass: editor 209 (13 new), server 183 (3 new), m2's, gates 33 + harness 6. The harness's `the_live_engine_passes_every_gate` failed once while other test binaries ran beside it, then passed run alone (load, as in B3). |
+| The first commit alone (server changes stashed) | editor 209, server, m2: pass; clippy clean; s5-knobs 117 of 117 |
+| `cargo clippy --workspace --all-targets -D warnings` | clean |
+| `tsc -p crates/editor/tests/forms` | passes (and fails on a planted `db("x")`) |
+| Browser suites (`run.mjs`, four at a time, with the test plugins) | 15 of 15 ok: graph 19, views 30, start 24, start (empty) 14, fixes-graph 42, s6-builders 55, s6-fixes 19, taste 39, gestures 30, s8-tracks 75, s5-knobs 120, effects 12, live3b 60, layout 39, newsong 71 |
+| The renders (`e2e/baseline.sh --tree .`, debug `m2`) | 10 of 10 match `e2e/renders.sha256` |
+| `renders.sha256`, `renders.json` | unchanged |
+
+### Numbers (Linux, information only)
+
+| What | Value |
+|---|---|
+| `mix::view`, per state (dev build, under load) | first-song 89 µs, `examples/sounds` 386 µs; the graph view beside it 382 µs and 2.08 ms |
+| The first pan, offline render against before (first-song, 4 s) | 1.1e-6 at most (−119 dBFS) |
+| The first pan, live against no edit, through the activation (0.5 s after) | first-song 8.3e-7; the mono mix 1.0e-6 |
+
+### Left
+
+| What | Where |
+|---|---|
+| The Mix view itself: strips, faders, the drag that calls the first pan, then leases the new knob | B5a |
+| `feeds` and `muted_in_song` in the Mix view's strips | 8b.4 |
+| The style rule for options objects (`master(…, { ceiling: db(-2) })` then gets `db: -3`, not `db(-3)`) | later, if it reads badly |
+| A strip whose fader is a signal shows no fader (`db` null); B5 decides its words | B5a |
+| The timed gates with the new state field (`mix` adds a view's walk to each state) | final phase |
+| When the `sounds` merge's slice 3 lands: rebuild `std.wasm` (`std/build.sh`, then `--check`), never take a side; `forms.ts` may need recording again | the merge |
+| Scratch: `~/m2-runs/tn-scratch/b4/`. Logs: `~/m2-runs/logs/tn-b4-*`. | — |
