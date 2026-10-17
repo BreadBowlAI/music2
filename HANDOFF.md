@@ -85,8 +85,11 @@ whatever you pick up.
 - **A layout to decide before step 9:** idea 3, one sandbox per box (`docs/designs/kernel-layout/report.md`).
   Research only; it is in Open owner decisions.
 - The owner decided O1 to O5 on 2026-10-15 (below), and std's bump to 0.2 with O3's fix. That question is closed.
-- **In flight** (2026-10-17): `8a`, 8a's offline half (the engine on all CPU cores, exports first;
-  `~/m2-runs/wt/8a`). Then 8a's live half, and step 9. The Mac runs are owed and listed below.
+- **`8a`'s offline half is ready to land** (2026-10-17): Linux green at `33885a6` (`ci/check.sh --gates`, with
+  `main` at `a660c2b` merged in). Exports, `m2 render` and `m2 bounce` use several cores with the same bits
+  (`--threads N` or `M2_THREADS` to choose); live playback still uses one; a song with plugins renders on one thread
+  for now. Owed after it lands: the owner's short Mac sweep (four lines, in `docs/designs/step8/build-notes-8a.md`,
+  "The Mac sweep"), and the Mac's full check before 8a's live half. Then 8a's live half, and step 9.
 
 ## Your own songs (for the owner)
 
@@ -107,7 +110,7 @@ whatever you pick up.
 | `sounds-merge` | `e1003ba` | All on `main` now (a fast-forward, 2026-10-17). Linux green at `e108e46` (reviewed; `ci/check.sh --gates` and the recorded tests), macOS owed. Worktree `~/m2-runs/wt/sm` (its `target/`, about 40 GB). Delete the branch and the worktree once the tracks in flight have landed. |
 | `8b-backend` | `c9cc6ad` | All on `main` now (a fast-forward, 2026-10-17). Linux green at `a8199ff`, macOS owed. Worktree `~/m2-runs/wt/be`. Delete the branch and the worktree once `8b-ui` has landed. |
 | `taste-next` | `22bea45`, then docs | All on `main` now (a fast-forward, 2026-10-17). Linux green (reviewed; `ci/check.sh` and `--gates`), macOS owed. Delete the branch and the worktree `~/m2-runs/wt/tn` (its `target/`, about 96 GB). |
-| `8a` | in flight | 8a's offline half, from `main` at `e571a5f`: the pool (`m2-pool`) and the executor offline, so exports use every core with the same bits. Live playback stays on one thread until 8a's live half. Worktree `~/m2-runs/wt/8a`; plan `~/m2-runs/s8a/plan.md`. |
+| `8a` | `33885a6`, then docs | Ready to land: 8a's offline half, from `main` at `e571a5f` with `main` at `a660c2b` merged in: the pool (`m2-pool`) and the executor, so exports use several cores with the same bits. Live playback stays on one thread until 8a's live half. Linux green at `33885a6` (`ci/check.sh --gates`), macOS owed. Worktree `~/m2-runs/wt/8a` (its `target/` stays for the live half); plan `~/m2-runs/s8a/plan.md`; build notes `docs/designs/step8/build-notes-8a.md`. |
 | `polish` | `65f59f1`, then docs only | Ready to land: the rest of the top ten, from `8b-ui` at `29430e8` with `main` at `d7207d2` in it, built in four lanes (merged; their branches and worktrees are gone). Linux green at `65f59f1` (reviewed; `ci/check.sh`), macOS owed. Worktree `~/m2-runs/wt/pl` and its `target/`: the lead lands the branch, then removes both. Plan `docs/designs/step8/polish-plan.md`; build notes `build-notes-polish.md`. |
 | Mac runs owed | — | One `ci/check.sh` on `main` covers every branch above. Then the by-ear steps in [The Mac run](#the-mac-run-for-the-owner): 7 to 38, and `polish`'s 39 to 50 |
 | `8b-ui` | `92317ad`, then docs only | All on `main` now (a fast-forward, 2026-10-17). 8b's screens: mute and solo, clips and automation, audition, meters. Linux green at `92317ad` (reviewed; `ci/check.sh`), macOS owed. Its lane branches are deleted. Delete the branch and the worktree `~/m2-runs/wt/ui` (its `target/`, about 57 GB) once `polish` has landed. |
@@ -419,12 +422,12 @@ and reviewed, and its Mac run is owed. **Mac runs owed:**
 5. **`polish` is ready to land** at `65f59f1` plus docs: fast-forward `main` to it (it has `main` in it), then
    remove its worktree `~/m2-runs/wt/pl` and its `target/`, and `~/m2-runs/wt/ui`. What it left is in
    `docs/gaps.md` and its build notes' End.
-6. **In flight:** `8a` (8a's offline half), then the owner's short offline sweep on the Mac (its command comes with
-   8a's build notes), then 8a's live half with the two gaps above.
+6. **`8a` is ready to land** (8a's offline half): merge it into `main`, then the owner's short offline sweep on the
+   Mac (four lines in 8a's build notes, "The Mac sweep"), then 8a's live half with the two gaps above.
 7. Then **8b.7, 8b.10**, and **step 9** (8b.9's Change track ID… came in `polish`, without the engine's pass). Before
    step 9 freezes kernel ABI v1, the owner decides the kernel layout (Open owner decisions). Each adds its OS pieces
-   to `m2-os` as platform design §8 says (8a's `rt.rs` becomes `mac/rt.rs` and `linux/rt.rs`; 8b.10's MIDI uses
-   `midir`). Mac run at the end of each.
+   to `m2-os` as platform design §8 says (8a's offline half put cores and priorities in `process` and `thread`,
+   Linux's in `linux/cores.rs`; 8b.10's MIDI uses `midir`). Mac run at the end of each.
 
 ## Merge notes
 
@@ -446,6 +449,7 @@ Seen, not fixed:
 
 | Test | What fails | Note |
 |---|---|---|
+| `pl-mix` | "its strip meter still reads as the header's: before the fader": ten samples at the floor | once, in 8a's last check, passed on its retry. The hats are short hits; most samples read the floor in polish's own checks too. Make the check sturdier |
 | G7f part 2's slowest activation block (`arena`) | over its 5,333 µs bound on this server under load (1 of 3 runs beside other agents; 4 of 4 beside 32 busy loops) | Linux timings are information only (PLAT-1); judged on the Mac. In `--gates` here it can fail the gates row. |
 | G10 in `the_live_engine_passes_every_gate` | "bar 64 takes no longer than the same length from bar 1" (1.48 s against 1.31 s) | timing, under load only; passes on its retry. Left alone (PLAT-1). |
 | G3 (a note edit within compile + 20 ms) | p95 16–22 ms at n=10 | near its line under load; judged on the Mac |
@@ -538,7 +542,7 @@ Step 7:
 - `machine()`'s thread count follows `taskset` and cgroups on Linux, so a pinned run names another machine.
 - Linux's footprint leaves out shared memory (`RssShmem`), so it isn't the Mac's `phys_footprint`.
 - `store-S.txt` and `callback-S.txt` hold one record each; a Linux record beside the Mac's needs the reader to pick by machine.
-- 8a's `machine()` gains topology: old records then stop matching; re-record or compare only the first parts.
+- `machine()` stays as it is: 8a's gates print the cores on a `cores:` line of their own, so old records still match.
 - Platform design §3's rows OS-82, 83 and 84 still say "Designed (§8)"; they are built.
 - The web shows neither device count (`xruns`, `device_errors`) yet (8b.8).
 - The latency warning is a toast, not an entry in the problems list.

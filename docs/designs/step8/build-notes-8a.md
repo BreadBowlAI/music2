@@ -10,9 +10,9 @@ information only: only the owner's Mac judges timings (PLAT-1).
 |---|---|---|
 | 0: the spike (thrown away) | done | **Go.** p50 on 4 threads is 2.75 to 2.99 times faster than step 7's loop by the mean, 3.3 to 4.2 times by the p99. The rule needs 2.5 and 2.0. Same bits on every thread count. |
 | 1: the pool (`m2-pool`) | done | **Built and green**, nothing uses it yet. 17 unit tests, a grep test and 5 models (34,000 cases), about 4 s in all. Four models and 12 unit tests shown red by mutants of the pool. M5 (orderings too weak) stays green on x86, as planned: the Mac can catch it. Renders unchanged. |
-| 2: the executor, offline | — | — |
-| The last check | — | — |
-| The Mac sweep | owed | after slice 2 |
+| 2: the executor, offline | done | **Built and green.** Every offline render runs on many threads with the same bits; live playback through the same executor on one. On this server p50 renders 2.86 times faster on 4 threads by the mean, 3.41 by the p99; the executor costs nothing seen on one thread. |
+| The last check | passed | `ci/check.sh --gates` at `33885a6`, after main (`a660c2b`) was merged: every row; polish's `pl-mix` passed on its retry. |
+| The Mac sweep | owed | four lines for the owner, once `8a` is on `main` (below). |
 
 ## Slice 0: the spike
 
@@ -388,12 +388,287 @@ Load (1 minute) 1.9 when timed.
 
 ## Slice 2: the executor offline
 
-(to come)
+### In short
+
+- **Every offline render runs on many threads, with the same bits.** `m2 render`, `m2 bounce` and the app's
+  Export Audio split the song into partitions (one per track, and the song) and run them on a pool of threads.
+  Each pure fixture renders the same bits on 1, 2, 3, 4 and 7 threads; so do 30 s of p16 on 4, and 30 s of p50
+  on 8.
+- **Live playback still renders on one thread**, through the same code (`Runner::one()`: no thread, no heap).
+  Every live test, `no_alloc` included, is unchanged.
+- **How many threads:** `--threads N`, else `M2_THREADS`, else one cache's fast cores when nothing else plays
+  (8 on this server, the spike's choice), and the slow cores (at least one) beside playback. A song with
+  plugins renders on one thread for now.
+- **One floating-point mode on every thread that renders** (RENDER-2a, new): subnormals kept, set at each
+  block, each partition and after each plugin call. A plugin that leaves flush-to-zero set changes no bit.
+- **The new gate, `m2-gates realtime --offline`,** times p50 on 1 to 8 threads and judges only the bits. On
+  this server (information only, PLAT-1), held on CCD1: 4 threads render a p50 block 2.86 times faster than one
+  by the mean, 3.41 times by the p99; 8 threads 3.91 and 4.68. The spike read 2.88 and 3.70 at 4. On one thread
+  the executor costs nothing seen against step 7's loop: −9 µs a block (pairs from −72 to +55).
+- **Found:** std 0.2's `svf`, `delay` and `follow` let subnormal numbers through in a long tail (OS-49). A
+  runtime test names them; a long delay's block is 1.7 times slower 5 minutes after its note. That is std's to
+  fix, not 8a's.
+- **Main was merged** (polish's end, `a660c2b`) before the last check. `ci/check.sh --gates` passed at
+  `33885a6`: every row, 1,239 Rust tests, 10 of 10 renders. One browser suite of polish's, `pl-mix`, passed only
+  on its retry: not 8a's (below).
+
+### Commits
+
+| Commit | What |
+|---|---|
+| `5d19a37` | m2-os: `process::cores()`, `thread::background()`, `process::load_average()`, `process::waited()` |
+| `0fd1b20` | Blocks render through partitions, on one thread: `Exec::reads`, labels, `parts.rs`, `view.rs`, `step()`, `render_block_on`; one schedule for a plan's whole life |
+| `2dc89ce` | One floating-point mode on every thread that renders (RENDER-2a): `fpenv.rs`, the probe's `sets-fz` tag, two tests |
+| `8d5dabe` | Offline renders on many threads give the same bits: `process_on`, `render_on`, `seek_on`, `Engine::process_on`, `threads.rs`, the 1-vs-N tests |
+| `2bfc709` | rustfmt over the tests above (no test changed) |
+| `e4588be` | `m2 render --threads`, `M2_THREADS`, `Threads` in `Render`, `lock::taken`, the export's choice |
+| `d3c3e26` | `m2-gates realtime --offline`; the block split into pre-pass, graph and post-pass; `gauge.rs`; the OS-49 test |
+| `bfe5873` | Contract: RENDER-2, RENDER-2a (new), RENDER-28, RENDER-32, gate 8's row; design-8a's as-built note |
+| `3b0f504` | Merge `main` (`a660c2b`, polish's end) into `8a`. No conflict |
+| `33885a6` | The grep test over `view.rs` and `fpenv.rs` |
+| this one | These notes, and HANDOFF |
+
+### What was built
+
+| File | What |
+|---|---|
+| `core/runtime/src/parts.rs` | `Schedule` (a `m2_pool::Tasks` and `Parts`): one partition per module; where modules read each other both ways (Tarjan over modules), nodes split by module crossings in plan order; edges from `Exec::reads`; costs (kernel 2, plugin 40, a poly its voices' kernels, fades, overlays and copies 1); each partition's error with its place in plan order. Debug builds check every read is earlier in its partition or in one it waits for |
+| `core/runtime/src/view.rs` | `Reads` (a node's reads), `Local` (a voice graph's), `GraphView` (raw pointers to the graph's per-node vectors; only one element ever borrowed), `Own`, `Reader` (debug builds check every read against the schedule). A compile-time check that `Exec: Send` |
+| `core/runtime/src/fpenv.rs` | `canon()`, `is_canon()`, `Canon` (enter the one mode; the caller's back on drop, unwinding too); `asm!` on x86-64 and arm64, `compile_error!` elsewhere |
+| `core/runtime/src/threads.rs` | `setup(background)`: each worker's start (wasmtime's thread state, the one mode, the background priority if asked); `background_refused()` |
+| `core/runtime/src/gauge.rs` | gates only: `gauge_block` (a block's passes timed; its graph as the partitions, one partition, or step 7's loop), `profile_block` (each partition alone, timed), `parts()`, `width()`, `last_block()` |
+| `core/runtime/src/lib.rs` | `Exec::reads`; `step()` (the old loop's body, for every graph); `Graph::process` over `step()` (voices, and the gates' old loop); `render_block_on` = pre-pass, `run_graph`, post-pass; `labels()`; `process_on`, `render_on`, `seek_on`; `canon()` after plugin calls and resets; `panic()` inside `Canon` |
+| `core/runtime/src/plan.rs` | `order_after` gone; `end_fade` makes ghosts and the window's own overlays `Const(0.0)` in place |
+| `core/runtime/src/engine.rs` | `Engine::process_on` |
+| `core/os` | `process::Cores`, `cores()` (Linux: `linux/cores.rs`, sysfs inside the affinity mask and the cgroup quota; Mac: `hw.perflevel*`), `thread::background()`, `load_average()`, `waited()` |
+| `core/plugins/src/probe.rs` | the `sets-fz` state tag: flush-to-zero set at the end of every `process` |
+| `core/session/src/lock.rs` | `taken(dir)`: whether a writer holds the project (never makes `.music2/`) |
+| `crates/editor/src/render.rs` | `Threads` (`Alone`, `Beside`, `Exactly`), `from_env`, `parse`, `count`; `threads_for`; `Render::new`, `lending`, `range` take a `Threads`; `Rendered.threads`, `hosts_plugins` |
+| `apps/m2/src/main.rs` | `--threads` for `render` and `bounce`; the choice; "on N threads" in the output |
+| `crates/server` | `export::export_threads`; the export and the reference render pass a choice |
+| `crates/gates/src/realtime.rs` | `realtime --offline` |
+| `docs/architecture.md`, `design-8a.md` | the contract edits; the as-built note |
+
+### How a block runs now
+
+1. **Pre-pass**, on the calling thread: the transport, cell values, lanes, the trace, the block's times. The
+   workers are woken first, so they wake while it runs.
+2. **The graph:** each partition is one task. A task runs its nodes in plan order. It waits for the partitions it
+   reads. The pool runs ready tasks on the caller and its workers. A failed node stops its partition; what reads
+   it is skipped; the rest runs. A panic is caught and raised again after the block.
+3. **Post-pass**, on the calling thread: feedback rings, the output, the meters. On an error it writes nothing
+   and returns the error first in plan order, as step 7's loop did.
+
+A song with plugins runs every task on the caller, whatever runner it is given.
+
+### Where it differs from the plan
+
+| Plan | Built | Why |
+|---|---|---|
+| `Renderer::time_phases(bool)`, `last_phases()`, `profile_parts(blocks)`, `one_partition(bool)` | `gauge_block(clock, runner, How)` (`Parts`, `One`, `Old`), `profile_block`, `parts`, `width`, `last_block` | Nothing on the block path: the gates call their own block, made of the same pre-pass, graph and post-pass |
+| `#[cfg(test)] Schedule::from_cuts` | `Schedule::cut`, not test-only | The gates' one partition is the order with no cut |
+| `m2_os::rt` / `lock::held` | `thread::background`, `process::cores` (Decision 38); `lock::taken` | `lock::held` is already WRITE-18's message |
+| `Threads::Alone` counts `fast` | counts `per_cache` | the spike's run D. On the M1 Pro `per_cache` is `hw.perflevel0.cpusperl2` (4, *estimate*): see "For the lead" |
+| `export_threads(pure, idle, lending)` | `export_threads(env, idle, lending)` | `M2_THREADS` passed in keeps it pure. A song with plugins needs no flag: `Render` picks one thread for it (Decision 42) |
+| `Render::lending` | takes a `Threads` too | one rule for every render; it always hosts plugins, so one thread |
+| The OS-49 test passes at 0 subnormals | it names the kernels that make them: `std:delay`, `std:follow`, `std:svf` | They do. The test fails when a std bump fixes them, and then shrinks to none |
+| G10's range render | on one thread | its records are step 7's, on one thread |
+| `render_takes_threads_and_says_how_many` in `apps/m2/tests/render.rs` | `apps/m2/tests/threads.rs` | `render.rs`'s one test sets the environment, safely only alone |
+| `p50_…` on 4 threads | on 8 | the export count here |
+| §5.4's `p50-sends` | not built | Decision 32 |
+
+Labels as built: a plan node its module; a ghost its old module; an overlay the module of the node it reads; a fade
+the module of the node that reads it (a feedback doesn't count, Decision 23); a fade nobody reads (the output's)
+its new side's, else its old side's; anything left, a label of its own (`""`).
+
+Known limits, for slice 3 (Decision 41 and the spike):
+- An export's thread count is chosen as it starts: Play pressed during an `Alone` export leaves it on its cores.
+- Plugins render on one thread; a plugin song's plan never wakes a worker.
+
+### Tests
+
+Every test below was shown red once by a small deliberate bug (a mutant), its change and run kept in
+`~/m2-runs/s8a/s2-red/` (`<name>.diff`, `<name>.log`; `mutate.py` puts the file back afterwards).
+
+| Test | Where | Proves | Red by |
+|---|---|---|---|
+| `a_track_is_one_partition`, `modules_that_read_each_other_split_by_depth`, `every_edge_goes_forward` (500 random graphs), `the_schedule_is_the_same_for_the_same_plan`, `the_most_critical_partitions_go_first`, `a_chain_has_width_one` | `core/runtime/src/tests/parts.rs` | the build | `rt-depth` (no depth split: 2 tests), `rt-cost` (no costs), `rt-edges` (no edges: all 11) |
+| `ghosts_fades_and_overlays_take_their_labels` | same | each label as §5.1 says, in a window with a ghost, fades, a fade-in and the window's own overlays | `rt-labels` |
+| `reads_lists_every_read` | same | a voice capture, a missing plugin and kernels read across tracks; debug builds check every read | `rt-reads` (a poly's captures left out of `reads()`) |
+| `a_failing_node_stops_only_what_reads_it` | same | the other track runs that block | `rt-old-loop` (step 7's loop) |
+| `strict_names_the_first_failing_node_on_any_thread_count` | same | the error first in plan order, on 1, 4 and 7 threads, though the other is taken first | `rt-first-error` |
+| `random_convex_partitions_give_the_same_bits` | same | 200 random songs with a feedback, any order cut into any runs, 64 blocks on 1, 4 and 7 threads | `rt-edges` |
+| `cross_module_feedback_captures_and_sidechains_on_n_threads` | same | a capture, a sidechain and a feedback across tracks on 4 and 7 threads | (the same edges) |
+| `a_song_with_a_plugin_runs_no_task_on_a_worker` | same | Decision 22 | `ed-plugins` shows the editor's side |
+| `an_edit_window_renders_the_same_bits_on_1_and_n_threads` | `core/runtime/src/tests/live/keep.rs` | an edit's window on 4 threads: 5 ghosts, fades waiting for fade-ins, a kept poly, a ghost lane, a muted track deleted while muted, two tracks that read each other only in the window | `rt-fade-reads` |
+| `ghosts_and_window_overlays_go_quiet_after_the_window` | same | `Const(0.0)` after the window; only the ghosts left the audio thread | `rt-end-fade` |
+| `a_flush_to_zero_set_by_the_caller_changes_no_bit` | `core/runtime/src/tests/fpenv.rs` | a thread that flushes renders the same bits, and flushes again after | `fz-no-enter`, `fz-no-canon` |
+| `a_flush_to_zero_left_by_a_plugin_changes_no_bit` | `core/play/tests/bit_identity.rs` | the probe's `sets-fz` | `fz-plugin` |
+| `canon_enters_the_one_mode_and_leaves_the_threads_own` | `fpenv.rs` | `Canon` | — |
+| `which_std_kernels_make_subnormals_in_a_five_minute_tail` | `tests/fpenv.rs` | OS-49 counted | `os49-found` (expecting none: the three kernels) |
+| `the_executor_view_and_fpenv_never_block` | `core/runtime/tests/no_blocking.rs` | grep: no allocation, lock, channel, thread-local or I/O | `rt-no-blocking` (a `vec!` in `view.rs`) |
+| `every_pure_fixture_renders_the_same_bits_on_1_and_n_threads` | `bit_identity.rs` | 5 fixtures whole on 2, 3, 4, 7 threads, spread; tasks on workers in each; reads across threads | `play-no-edges` (in release, where the debug check is off: first-song on 3 threads differs at frame 384) |
+| `p16_renders_the_same_bits_on_1_and_4_threads`; `p50_…_1_and_8_threads` (`#[ignore]`) | same | 30 s each | — |
+| `cores_are_read_from_sysfs`, `the_affinity_mask_and_quota_cut_them`, `cores_here_are_sane` | `core/os/src/linux/cores.rs` | a fake sysfs shaped like this CPU | `os-cores` |
+| `a_background_thread_is_nice_10`, `waits_for_a_cpu_are_read`, `the_load_average_is_three_numbers` | `core/os` | | `os-nice` |
+| `a_background_thread_has_background_qos`, `cores_on_this_mac_are_sane` | `core/os/src/mac/mod.rs` | the Mac's own (its check runs them) | — |
+| `whether_the_lock_is_taken` | `core/session/src/lock.rs` | | `lock-taken` |
+| `a_render_on_4_threads_writes_the_same_file`, `a_song_with_plugins_renders_on_one_thread`, `m2_threads_is_read_and_nonsense_refused` | `crates/editor/src/render.rs` | | `ed-threads`, `ed-plugins`, `ed-parse` |
+| `render_takes_threads_and_says_how_many` | `apps/m2/tests/threads.rs` | `--threads 1` and `4` the same file; `M2_THREADS`; the flag wins; nonsense refused | `cli-flag` |
+| `an_export_picks_its_threads` | `crates/server/src/export.rs` | §5.3's table | `srv-lending` |
+| `the_sweep_fails_when_a_count_renders_other_bits`, `a_sweep_list_is_read_and_nonsense_refused`, `the_help_says_what_realtime_offline_measures` | `crates/gates` | | `gate-bits`, `gate-sweep`, `gate-help` |
+
+Every existing test passes unchanged: the live engine now renders through the executor on one thread (`no_alloc`:
+9 of 9; `live.rs`, `mute.rs`, the audition, overlay and tap tests).
+
+Time (debug, Linux): `bit_identity` 35 to 38 s with the new tests (load 6 to 24); the OS-49 test 10 s; the
+runtime's lib tests 10 to 12 s.
+
+### Numbers (Linux, information only: PLAT-1)
+
+The machine: AMD Ryzen 9 7950X3D. CCD0 is CPUs `0-7,16-23` (96 MB L3), CCD1 `8-15,24-31` (32 MB L3). The gate's
+`cores:` line read "16 fast (8 per cache), 0 slow" not held, and "8 fast (8 per cache)" held on `8-15` (the
+affinity mask counts). Both runs at `33885a6`, release, the server quiet after the last check.
+
+**The sweep** (`m2-gates realtime --offline --reference 50`): p50 from 3:00, 1 s untimed, then 20 s (7,500
+blocks) back to back, each count twice, the second pass in reverse order; medians of the two passes. µs a block.
+
+| Threads | Held on CCD1 (`taskset -c 8-15`; load 1.2): mean / p50 / p99 / max | by mean, by p99 | Not held (load 1.8) | by mean, by p99 | tasks on workers |
+|---|---|---|---|---|---|
+| 1 | 1,754 / 1,714 / 3,059 / 4,927 | 1, 1 | 1,787 / 1,737 / 3,455 / 5,960 | 1, 1 | 0% |
+| 2 | 979 / 962 / 1,589 / 2,417 | 1.79, 1.92 | 995 / 967 / 1,729 / 2,527 | 1.80, 2.00 | 48% |
+| 3 | 732 / 725 / 1,107 / 1,515 | 2.40, 2.76 | 748 / 731 / 1,212 / 1,859 | 2.39, 2.85 | 64% |
+| 4 | 614 / 607 / 898 / 2,533 | **2.86, 3.41** | 620 / 610 / 944 / 1,284 | 2.88, 3.66 | 73% |
+| 6 | 496 / 491 / 712 / 1,432 | 3.54, 4.30 | 538 / 540 / 826 / 1,583 | 3.32, 4.18 | 82% |
+| 8 | 449 / 446 / 653 / 838 | 3.91, 4.68 | 512 / 499 / 777 / 1,263 | 3.49, 4.45 | 86 to 87% |
+| 16 | — | — | 499 / 490 / 655 / 1,223 | 3.58, 5.27 | 93% |
+
+- **The same bits on every count**, both runs (`81dd175f739e5d71` over 1,920,000 samples); the pure fixtures through
+  `Render` on 8 threads (held) and 16 (not held) match `e2e/renders.sha256`, 10 of 10.
+- **The passes:** the pre-pass grows with the threads it wakes, 2.6 µs on 1 thread to 7.9 on 8 and 16.6 on 16;
+  the post-pass is 0.9 to 1.1 µs.
+- **Waits for a CPU:** under 3 µs a block, but 45.6 at 8 threads held on 8 CPUs (the gate's own threads share
+  them) and 11.8 at 16 not held.
+- **Across dies, as the spike found:** not held, 8 threads were 14% slower than 8 held on one die (512 against
+  449), and 16 no faster than 8 on one die by the mean (499).
+
+**Paced**, a block every 2,667 µs, the workers sent to sleep after each (as live will):
+
+| Threads | Held: mean / p99 / max, blocks over the period | Not held |
+|---|---|---|
+| 1 | 1,807 / 3,170 / 5,738; 275 of 7,500 | 1,860 / 3,732 / 5,416; 466 |
+| 4 | 685 / 1,114 / 3,042; 1 | 730 / 1,141 / 1,515; 0 |
+
+Against back to back, held: one thread +3% by the mean and +4% by the p99; four threads +12% and +24%, as the
+spike's run E (+12.5% and +24%). So on Linux the 1-thread paced p99 is within 15% of back to back here (the spike's
+was disturbed), and 4 threads pay for waking each block. The Mac decides.
+
+**Partitions** (each alone, 2,000 blocks): 51 partitions, 50 at once at most; the work 1,789 µs a block; the critical
+path 279 µs; the bound on 2, 4 and 8 threads 895, 447 and 279 µs. The slowest: the song, 228 µs (p99 272); each
+track 49 to 51 µs (p99 95 to 98). The song's tail is 13% of the work, 37% of the 4-thread block (228 of 614). No
+partition's p99 is near 667 µs.
+
+**The executor's own cost on one thread**, in turns over the same music (12 pairs, by the mean):
+
+| | Held | Not held |
+|---|---|---|
+| step 7's loop | 1,753 µs a block | 1,775 |
+| the partitions, over it | −9 µs (−72 to +55) | +13 (−65 to +147) |
+| one partition, over it | −10 (−50 to +65) | −33 (−91 to +41) |
+| the partitions over one partition | +6 (−63 to +55) | +28 (−36 to +171) |
+
+Within the noise both times, and under the 40 µs budget.
+
+**G7f in the last check** (not held): the app against S, by the mean, +63 µs a block (bound 80) and +192 µs a
+callback (bound 320); step 7's Linux check read +20 and +86 at `ffc36aa`, −25 and −166 at `e108e46`. Both runs of
+the gate above put the executor itself at about 0 against step 7's loop, in the same binary over the same music, so
+the rise isn't the executor's. Where it comes from wasn't looked into: main has changed much since `e108e46` (8b.3's
+51 mixer gains among it), and one G7f run moves by tens of µs. Linux numbers aren't judged (PLAT-1): the Mac's next
+G7f run decides.
+
+**Tails (OS-49):** a long delay's block takes 1.8 µs 1 s after its note and 3.0 µs 5 min after: 1.7 times, in both
+runs. A long reverb's stays the same (1.02 to 1.06). The runtime test counts subnormal samples instead: std 0.2's
+`svf` (84 million over 5 minutes in its three outputs), `delay` (18.8 million) and `follow` (13.9 million) make them;
+none of the other stateful kernels does. A std bump that flushes their state is the fix (std's, deferred).
+
+**p50 on 8 threads, bit for bit** (`p50_renders_the_same_bits_on_1_and_8_threads`, `#[ignore]`, release): 30 s, the
+same bits, 28.6 s.
+
+### Logs
+
+| What | Where |
+|---|---|
+| The red runs: each mutant's change and run | `~/m2-runs/s8a/s2-red/` (`<name>.diff`, `<name>.log`, `mutate.py`) |
+| Each commit's check (renders, tests, clippy, the Mac lint) | `~/m2-runs/logs/8a-s2-c{2,3,4,5,6}-1017-*.log`; the script `~/m2-runs/s8a/s2-check.sh` |
+| The gate's first run (p16, a short sweep) | `~/m2-runs/logs/8a-gate-smoke-1017-133112-3616369.log` |
+| The gate, held on CCD1 and not held | `~/m2-runs/logs/8a-offline-ccd1-1017-141710-3902468.log`, `8a-offline-free-1017-142032-3918668.log` (copies in `~/m2-runs/s8a/s2-gate/`) |
+| p50 on 8 threads | `~/m2-runs/logs/8a-p50-bits-1017-142400-3935706.log` |
+| The last check | `~/m2-runs/logs/check-8a-1017-134212-3696229.log`; its logs `~/m2-runs/8a-scratch/check/` (`check.tgz` beside it) |
+
+### For the lead
+
+- **Exports alone on the Mac.** `Threads::Alone` counts `Cores.per_cache`, as the spike chose here. On an M1 Pro
+  that is `hw.perflevel0.cpusperl2`, 4 (*estimate*), not its 8 P-cores. The Mac sweep's "8 against 4" line decides:
+  if 8 beat 4 by 10% or more there, `Alone` should count `fast` on a Mac (`m2-os` could report it as a field).
+- **The song's tail is 37% of the 4-thread block.** R1 ("a mixer strip joins the track it reads") would move the
+  51 gains into their tracks: about +1 to the speed-up at 4 threads (*estimate*, the spike's).
+- **OS-49 is std's:** `svf`, `delay` and `follow` let subnormals through; a long delay's block is 1.7 times slower
+  5 minutes into its tail on x86.
+- **`pl-mix`** (polish's suite) failed once and passed on its retry: "its strip meter still reads as the header's:
+  before the fader", all ten samples at the floor. Its check needs one of ten samples, 150 ms apart, above −24 dB
+  on first-song's hats, which are short hits: in polish's own checks most samples read the floor too
+  (`~/m2-runs/check-polish-2`, `-3`). A suite to make sturdier, not an 8a change.
 
 ## The last check
 
-(to come)
+`ci/check.sh --gates` from `~/m2-runs/wt/8a` at `33885a6` (`main` at `a660c2b` merged in first), with
+`M2_CHECK_OUT=/home/jerry/m2-runs/8a-scratch/check`, 35 minutes, load 1 to 9: **PASS**, with one browser suite
+passing only on its retry.
+
+| Row | Result |
+|---|---|
+| toolchain, web build, build, app | PASS (the UI connected: first-song in 1 s, with-plugins in 1 s) |
+| rust tests | PASS: 1,239 passed, 0 failed |
+| clippy, pool models (23), std kernels, std.wasm, mac lint | PASS |
+| browser suites | PASS: 48 of 49 at once; `pl-mix` passed on its retry (see "For the lead") |
+| renders | PASS: 10 of 10 match `e2e/renders.sha256`, the debug `m2` now rendering on one cache's cores (8 here) |
+| old engine (S), gates | PASS: the 6 runs `ci/gates.txt` names (G7f's numbers above) |
+| repo unchanged | PASS |
 
 ## The Mac sweep (owed)
 
-(to come)
+For the owner, once the lead has merged `8a` into `main`. About 10 minutes. Plugged in, lid open, other apps
+closed, in Terminal on the Mac itself.
+
+| # | Do this | Why |
+|---|---|---|
+| 1 | Type the first line below and press Return | gets 8a's offline half from `main` |
+| 2 | Type the second line and press Return | checks the pool on the Mac's own CPU (about 1 minute) |
+| 3 | Type the third line and press Return | builds the gates (about 2 minutes), then the sweep (about 8) |
+| 4 | Type the fourth line and press Return | the core counts, to check what the gate read |
+| 5 | Paste back what is in `~/m2-8a-offline.txt` | that is all the lead needs |
+
+```sh
+cd ~/dev/suite2/music2 && git fetch && git switch main && git pull
+cargo test --locked --release -p m2-pool --features models 2>&1 | tail -5 | tee ~/m2-8a-offline.txt
+cargo run --locked --release -p m2-gates -- realtime --offline --reference 50 2>&1 | tee -a ~/m2-8a-offline.txt
+sysctl hw.perflevel0 hw.perflevel1 | tee -a ~/m2-8a-offline.txt
+```
+
+What it decides (the plan's §6). S = 1-thread p99 ÷ 4-thread p99, back to back, the median of the two passes:
+
+| Reading | Decision |
+|---|---|
+| A bits line says FAIL, or the models fail | Stop: a bug, fixed on Linux first |
+| S ≥ 2.5 | Go: 8a's live half as planned, 4 live threads |
+| 2.0 ≤ S < 2.5 | Go, with "a mixer strip joins its track" first (the spike's R1) |
+| S < 2.0 | No live half: a study first, and a note to the owner |
+| A count under 4 beats 4 | the live default is that count |
+| Paced 1-thread p99 more than 15% above back to back | "spin between callbacks" moves into the live half |
+| `hw.perflevel0.cpusperl2` isn't 4 | the live count rule changes to match |
+| A partition's p99 over 667 µs | voices across threads |
+| The executor's own cost over 40 µs a block | trimmed before G7f's next Mac run |
+| 8 threads beat 4 by 10% or more | an export alone uses every P-core on a Mac (`fast`), not one L2's |
+
+The Mac's full `ci/check.sh` is owed too before the live half: it runs the new Mac tests (`cores_on_this_mac_are_sane`,
+`a_background_thread_has_background_qos`) and `fpenv`'s arm64 code under every test.
