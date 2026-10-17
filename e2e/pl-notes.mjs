@@ -146,8 +146,9 @@ check(bad.length === 0, `the menu passes the taste lint${bad.length ? `: ${[...n
 let rev = await revision();
 await pick("octave_up");
 check(await until(async () => (await bassClip()).notes.filter((x, i) => i !== 3).length === 47 && (await shown())[3]?.pitch === before3.pitch + 12), `Up an octave moves the note from ${before3.pitch} to ${before3.pitch + 12}`);
-const after = await bassClip();
-check(after.notes.length === 48 && after.notes.some((x) => x.pitch === before3.pitch + 12 && x.start === before3.start), "the file has it an octave up");
+// The roll draws the move at once; the server's state may land a moment later.
+const raised = (c) => c.notes.length === 48 && c.notes.some((x) => x.pitch === before3.pitch + 12 && x.start === before3.start);
+check(await until(async () => raised(await bassClip())), "the file has it an octave up");
 check(await oneStep(rev), "one write, so one undo step");
 check(await until(async () => (await undoTitle()).startsWith("Undo transposing Bass notes")), `Undo names it: ${await undoTitle()}`);
 check(await page.evaluate(() => !!document.activeElement?.closest("[data-testid=notes]")), "the roll keeps the keyboard after a row");

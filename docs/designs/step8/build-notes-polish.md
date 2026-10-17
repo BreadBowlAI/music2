@@ -1424,3 +1424,9 @@ column still says the whole name.
 | Suite | `pl-sounds` (45 now): the roll zoomed out until a hat is about 50 px long; every note's name is one line, inside its note |
 | Red first (this page before the fix) | `FAIL a hat 52 px long keeps its name on one line, inside it: Closed hat 46×22 in 52×12 \| Closed hat 46×22 in 52×12` |
 | Green | `PASS a hat 52 px long keeps its name on one line, inside it: every name fits`; `taste` 39/39 |
+
+#### Also: a race in `pl-notes`
+
+`pl-notes` failed `the file has it an octave up` once in the End's sweep. The roll draws a move at
+once, so the check before it passed on the page, and this one then read the server's state a moment
+too early. It now waits for the state to say so. Green twice at once after (102/102 each).
