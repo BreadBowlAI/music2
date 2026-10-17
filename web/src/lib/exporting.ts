@@ -90,9 +90,10 @@ export async function onExportEvent(msg: {
   const loud = (msg.peak_db ?? 0) > 0.05 ? " It's louder than a file can hold, so the loudest moments are clipped." : "";
   const text = `Exported ${file} (${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")})`;
   const reveal = () => void nativeAction("reveal_file", msg.path).catch((error) => toast(message(error)));
-  if (native) toast(`${text}.${loud}`, { label: isMac ? "Show in Finder" : "Show in Folder", run: reveal });
-  else toast(`${text} to ${folder}.${loud}`);
-  // What the file carries that the user should know, after it.
+  // What the file carries that the user should know goes in the same toast, after it: a second
+  // would replace the first, and its Show action with it (one toast at a time, taste.md §2.14).
   const notes = exportNotes(msg.problems ?? []);
-  if (notes) toast(notes);
+  const after = `${loud}${notes ? ` ${notes}` : ""}`;
+  if (native) toast(`${text}.${after}`, { label: isMac ? "Show in Finder" : "Show in Folder", run: reveal });
+  else toast(`${text} to ${folder}.${after}`);
 }

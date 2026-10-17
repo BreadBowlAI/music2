@@ -248,7 +248,8 @@ await idle();
 
 // ---------------------------------------------------------------- an export's problems are said plainly
 // FMT-18a, RENDER-1 (fit-5 of the step 7 review): a song whose plugin isn't installed exports, and
-// after the done toast the app says plainly that the file plays without it.
+// the done toast says plainly, after the file, that it plays without it: in that one toast, since
+// a second would replace it (one at a time).
 const nop = `${S}/no-plugin`;
 fs.rmSync(nop, { recursive: true, force: true });
 fs.mkdirSync(nop, { recursive: true });
@@ -260,7 +261,8 @@ await until(async () => (await page.$eval("[data-testid=bar-song-name]", (e) => 
 await sleep(300);
 await page.click("[data-testid=export]");
 const without = "A plugin isn't installed, so the export plays without it (the problems list says which).";
-check(await until(async () => { const t = await text(); return t.includes("Exported No plugin.wav") && t.includes(without); }, 30000), `its export's toasts say: ${without}`);
+const toasts = () => page.$$eval("[data-testid=toast]", (els) => els.map((e) => e.innerText.replace(/\s+/g, " ").trim()));
+check(await until(async () => { const t = await toasts(); return t.length === 1 && t[0].includes("Exported No plugin.wav") && t[0].includes(without); }, 30000), `its one export toast says it after the file: ${(await toasts()).join(" | ")}`);
 await idle();
 
 // ---------------------------------------------------------------- a song too long for a WAV file is refused plainly
