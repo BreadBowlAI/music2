@@ -1273,6 +1273,17 @@ can drop it.
 
 The lead's last check, docs and pictures.
 
+### The End, in short
+
+| | |
+|---|---|
+| Review | 9 findings, two lenses. PL-T2 is PL-R4 again, so 8 fixes. All fixed, each with a test that failed first |
+| Also | Three things the pictures, the sweep and the first full check found: a drum's name spilling out of a short note, a race in `pl-notes`, and the headless server reading `HOME` outside `m2-os`. All fixed, each with a test that failed first. The unused `canvas.renameSong` is gone |
+| `main` | Still `d7207d2`: already in `polish`, so no merge |
+| The full check | `ci/check.sh` at `65f59f1`: PASS, every row, nothing passed only on a retry (1,184 Rust tests, 49/49 browser suites, 10 of 10 renders). The run before, at `c3dd95a`, failed one Rust test: see "Also: the headless server read HOME itself" below |
+| Pictures | `~/m2-runs/app-shots/polish-c3dd95a/`, four, with `captions.txt` |
+| Docs | `docs/gaps.md`, `README.md`, `docs/architecture.md` (FMT-19, FMT-20, ID-17, WRITE-10, the homes table), `taste.md` (§2.12, §3.3, SS-2), `HANDOFF.md`, and this plan as `polish-plan.md` |
+
 ### Review fixes
 
 The End's review read the tip with two lenses: how it behaves, and its tests, docs and taste. It
@@ -1441,3 +1452,105 @@ it now asks `m2_os::dirs::home()`. The merge's Rust runs had left out `m2-os`; t
 |---|---|
 | Red (the full check at `c3dd95a`, `~/m2-runs/check-polish-2`) | `rust tests FAIL 1183 passed, 1 failed` with `crates/server/examples/headless.rs:40: var_os("HOME"): if let Some(home) = std::env::var_os("HOME") {` |
 | Green | `cargo test -p m2-os --test one_place`: 3 passed; clippy of the example clean. Every other row of that check passed: 49/49 browser suites, 10 of 10 renders |
+
+### The review, finding by finding
+
+| Finding | What was wrong | Fix | Test (red first, then green) |
+|---|---|---|---|
+| PL-R1 (high) | Rename Song with its folder closed the song and lost unsaved code without a word | The dialog warns and says Rename Anyway; the route refuses without `anyway` | `rename_with_its_folder_asks_about_unsaved_code`; `pl-projects` C3, 7 checks |
+| PL-R2 | Save As into the song's own folder copied itself about 285 levels deep | Refused before anything is made: "Pick a folder outside Night Drive's own folder." | `save_as_refuses_a_folder_inside_the_song` |
+| PL-R3 | A marker moved inside one bar had no Undo name, so Undo's names went one step off | The move's words say the beats ("bar 9 beat 1" → "bar 9 beat 2.5") | `a_move_inside_one_bar_says_the_beats`; `pl-arrange`'s Undo name after the ⌘ move |
+| PL-R4, PL-T2 | A Ctrl-click on a marker on a Mac also moved the playhead; a Ctrl-drag moved the marker | The flag ignores a press with Ctrl on a Mac, as the roll does (X7) | `pl-arrange`, on its Mac page: 2 checks |
+| PL-T1 | The song's name field shrank to 18 px while typed in, when its room went | It keeps its width from when typing began, over its neighbours | `pl-notes`: the width after the room goes |
+| PL-T3 | X3 and X26 had no test | Checks only | `pl-notes` (⌘= zooms the roll, 2 checks) and `pl-sounds` (a key never shades a kit, 3 checks), red on a page with each line taken out |
+| PL-T4 | Four suites ran weaker copies of the lint (no text fields) | They run `e2e/lintlib.mjs` | the old copy and lintlib on a 14 px field: `[]` against `["font-size 14px at <input>"]` |
+| PL-T5 | The track ID field had its own ring; recent rows showed focus as grey hover, a gone song's not at all | The one ring; rows `accent-soft` under the pointer and with focus | `pl-projects` C2 and `pl-ids`, 1 check each |
+
+### The last sweep before the full check
+
+On the tip's page and server (`bin/pl-12b8cc5`, the Rust unchanged since), three batches at once:
+
+| Suite | Checks |
+|---|---|
+| `pl-projects` | 66/66 |
+| `pl-tracks` | 20/20 |
+| `pl-lanes` | 28/28 |
+| `start` | 24/24 |
+| `pl-notes` | 102/102 (and twice more at once after its race fix) |
+| `s8-songbar` | 82/82 |
+| `fx-fixes` | 75/75 |
+| `taste` | 39/39 |
+| `pl-arrange` | 57/57 |
+| `pl-sounds` | 44/44, then 45 with the label check |
+| `pl-ids` | 39/39 |
+
+Rust, per fix: `m2-server` `project::` 31/31, `m2-editor` `markers::` 7/7, clippy `-D warnings` on both: clean.
+
+### The full check
+
+`TW_WAIT=3600 ~/m2-runs/tw check-polish 'cd ~/m2-runs/wt/pl && M2_CHECK_OUT=$HOME/m2-runs/check-polish-3 ci/check.sh'` (log `~/m2-runs/logs/check-polish-1017-*.log`), verbatim:
+
+```
+music2 check: PASS
+commit   65f59f11b36f on polish (clean)
+machine  Ubuntu 24.04.3 LTS, x86_64, 32 threads
+tools    rustc 1.99.0, node v24.21.0, 14 min
+plugins  /home/jerry/.local/share/m2-test-plugins/clap (the builds ci/plugins.sha256 records)
+
+toolchain        PASS  rustc 1.99.0
+web build        PASS  
+build            PASS  
+app              PASS  the UI connected: first-song in 1 s, with-plugins in 1 s
+rust tests       PASS  1184 passed, 0 failed
+clippy           PASS  
+std kernels      PASS  tests and clippy
+std.wasm         PASS  rebuilt to the same bytes in another folder
+mac lint         PASS  the macOS code type-checks and lints
+browser suites   PASS  49/49 suites ok
+renders          PASS  10 of 10 match e2e/renders.sha256
+repo unchanged   PASS  
+
+logs     /home/jerry/m2-runs/check-polish-3.tgz
+```
+
+Nothing is listed as flaky (`~/m2-runs/check-polish-3/flaky` is empty). Two earlier runs: `check-polish`, stopped by the lead to fix the note label the pictures showed; `check-polish-2`, at `c3dd95a`, FAIL on `os_code_lives_in_m2_os` only (fixed above).
+
+### Pictures
+
+`~/m2-runs/app-shots/polish-c3dd95a/`, from the desktop app on the invisible screen `:96`, each state written into
+a copy of the song first (or sent to the app's own server from a hook):
+
+| Picture | How it was made |
+|---|---|
+| `1-mix-playing.png` | first-song; Keys muted and play started through the app's API; a click on the Mix tab |
+| `2-timeline-zoomed-markers.png` | `view.json` `{"zoom": 36, "heights": {"bass": 96}}` and four markers in `layout.json` |
+| `3-start-recent.png` | a HOME seeded with three songs and `recent.json` (one folder gone); no song given |
+| `4-notes-drums-menu.png` | a Drum kit track and a beat added through the API; a double-click on its clip, a right-click on a Snare note |
+
+`tools/app-shot.sh` (polish's copy) now uses `:96` and `s8c/scratch` by default, and takes `SEED=` (files for the
+scratch HOME), `HOOK=` (a script run after the first shot) and `-` for no song.
+
+### The Linux app on `:96`
+
+The debug desktop app, on the invisible screen `:96`, a scratch HOME, `M2_AUDIO=none`; keys sent with `xkey`
+(the plan's §9 step 5). Pictures in `~/m2-runs/s8c/scratch/shots/linux-*` (deleted with the scratch folder).
+
+| Did | Saw |
+|---|---|
+| Ctrl+= twice | the timeline at 54 px a beat (a bar 216 px) |
+| Alt+→ | the playhead on the Verse marker (3.1.1); the page didn't go back |
+| Ctrl+↓ on the selected Kick | Kick 72 px tall |
+| Ctrl+Shift+F | Follow off (`view.json`: `"follow": false`) |
+| Ctrl+− | back to 36 px a beat (`view.json`: `"zoom": 36`, `"heights": {"kick": 72}`) |
+| Ctrl+Shift+S | the Save As dialog, its name selected, with the one focus ring |
+| A second launch with the same HOME and no song | first-song opened by itself (`recent.json`: `"open": true`) |
+| File menu | Open Recent ▸ (first-song, Clear Menu), Save As… Shift+Ctrl+S, Rename Song… |
+
+### Left
+
+- The Mac runs: `ci/check.sh`, then the by-ear steps in HANDOFF (a pinch, Open Recent, reopen at launch, ⇧⌘S, the
+  Mac's Ctrl-click on a marker, the strips' meters and M and S while playing, Change Instrument…, the note tools).
+- `s8-mute` (8b's suite) still has its own copy of the lint.
+- What each lane left is in `docs/gaps.md`: meters after the fader, curves between points, the recent list's
+  pictures, drum rows folded to the drums used, Restore and keeping a re-keyed track's sounds, dropping a folder on
+  the window, `m2` commands for the new edits, sections, copying notes between clips, other scales.

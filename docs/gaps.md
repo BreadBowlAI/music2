@@ -16,9 +16,10 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 ## What works today
 
 - Start a new song from a template, **Starter beat** (six tracks, ready to play) or **Empty**, with **New Song…** on the start screen or File → New Song… (⌘N). Songs go in `~/Music/music2`. **Open an Example** opens a copy of an example there.
-- Open a song folder (File → Open Project Folder…, ⌘O) and play it.
+- Open a song folder (File → Open Project Folder…, ⌘O) and play it. The start screen and File → Open Recent list the songs you opened last, newest first; a song whose folder is gone says "Moved or deleted". The song open when you quit opens again at the next launch.
+- Keep versions of a song: **Save As…** (⇧⌘S) saves a copy under a new name and opens it, and **Rename Song…** renames the song and its folder. Both ask first when the code editor has unsaved edits.
 - See every track on a timeline: notes, automation, masks and audio clips, with the tempo shown above the tracks and bars counted by the song's time signatures (written in `data/arrangement.json`).
-- Draw, move, resize and nudge notes in the piano roll, and set how hard each one is played. Its grid goes from 1/4 to 1/64, with triplets. Every clip has an id, so an edit always lands on the clip it was made on.
+- Draw, move, resize and nudge notes in the piano roll, and set how hard each one is played. Its grid goes from 1/4 to 1/64, with triplets. Every clip has an id, so an edit always lands on the clip it was made on. Right-click a note for its menu: up or down a semitone or an octave, Quantize (Q), Legato, Humanize, Swing (Light, Medium, Heavy), Duplicate and Delete, on the selected notes or, with none, the whole clip. A drum kit's rows say their drum (Kick, Snare, Closed hat) instead of C2.
 - Edit clips on the timeline. Double-click empty lane space to make one. Drag a clip to move it (onto another track too), ⌥-drag to copy it, and drag either edge to resize it. ⇧-click, ⌘-click or drag a box to pick several, and ⌫ deletes them. ⌘D duplicates, ⌘E splits at the playhead, ⌘J joins, ⌘C ⌘X ⌘V copy and paste at the playhead, Q quantizes a notes clip's notes, and ← → nudge. Each clip has a right-click menu. The timeline has its own grid and snap, in its corner: Auto, Bar to 1/64, and triplets; ⌘1 to ⌘4 change it, and holding ⌘ places a clip off the grid. Each edit is one undo step; the same from `m2 clips`.
 - Hear notes as you click, drag or draw them in the piano roll, and play the keys at its left. A speaker button in Notes turns this off. When a mute or a solo keeps the track silent, Notes says so ("Silenced by the Bass solo · audition is silent").
 - Drag a number written directly at an input (`0.3`, `hz(800)`, `{ pan: 0.3 }`) as a knob: you hear the change at once, even while the song compiles, and letting go writes it into the code. Saves to other files during the drag (another editor, an agent) don't interrupt it, and nor do saves to its own file that leave its line alone. A number held in a variable, or worked out from other numbers, shows **edit in code** instead (#35).
@@ -27,16 +28,20 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 - Write your own instruments and effects in TypeScript, with knobs, defaults and ranges, the way std's are written ([Your own components](../README.md#your-own-components)).
 - Edit the code in the app, with type checks. When the code breaks, the last working version keeps playing. A song whose code doesn't compile when it's opened still opens, in its code, and plays once a save makes it compile.
 - Undo and redo every edit made in the app. An edit is refused, rather than written, when it would change anything but what it says, and an undo is refused only when what it puts back was changed since.
-- Add a track without writing code: **+ Track** (⌘T) lists std's 22 sounds: the drums first, then the instruments, then the two synths with every knob. It adds the one you pick below the selected track. It writes `tracks/<key>.ts`, imports it in `song.ts`, gives it the mixer's last channel and an empty notes lane, as one edit Undo takes back. Duplicate a track (⌘D), with its clips, its plugins' saved settings and its mixer channel; delete one (⌘⌫), which asks first when another track's effect listens to it. Drag a track's name to reorder, and pick its colour from its menu: both are kept by name in `layout.json`, so colours never shift when tracks come and go. The same from `m2 add-track`, `duplicate-track`, `delete-track` and `layout`.
-- Mute and solo while you listen: **M** and **S** on every track's header. Click them, ⌥-click S to hear only that track, drag across several, or press M or S for the selected track. A pill in the top bar counts them ("1 muted · 1 solo"); click it for the list and Clear all. They change only what you hear: the export still has every track, so Export asks first while one is on. **Mute in song**, in a track's menu (or `m2 mute-in-song`), writes `muted: true` into the track's code, so the export leaves it out too: its name is struck through and its clips are hatched. That is one undo step.
-- See how loud it is: a level meter in every track's header and one on the Song row (the whole song), with a peak hold, amber from −6 dB and red at 0 dB. They read each track before its fader. While the song plays, the status pill says **Heavy load** when the computer is close to its limit, and **Sound dropped out** after a gap in the sound.
+- Change a track's instrument: Track → Change Instrument…, or the track's or its strip's menu, opens the same list and writes the new instrument into the track's code as one undo step. It is refused, in words, when code works out one of the old instrument's settings.
+- Add a track without writing code: **+ Track** (⌘T) lists std's 22 sounds: the drums first, then the instruments, then the two synths with every knob. It adds the one you pick below the selected track. It writes `tracks/<key>.ts`, imports it in `song.ts`, gives it the mixer's last channel and an empty notes lane, as one edit Undo takes back. Duplicate a track (⌘D), with its clips, its plugins' saved settings and its mixer channel; delete one (⌘⌫), which asks first when another track's effect listens to it. Drag a track's name to reorder, and pick its colour from its menu: both are kept by name in `layout.json`, so colours never shift when tracks come and go. Change a track's ID (the name code and files use) from the Code view: right-click its file, **Change track ID…**; its code, its data folder and its view settings follow, as one undo step. The same from `m2 add-track`, `duplicate-track`, `delete-track` and `layout`.
+- Mute and solo while you listen: **M** and **S** on every track's header and on every strip of the Mix view (a strip shared by two tracks acts on both, and shows a dash when they differ). Click them, ⌥-click S to hear only that track, drag across several, or press M or S for the selected track. A pill in the top bar counts them ("1 muted · 1 solo"); click it for the list and Clear all. They change only what you hear: the export still has every track, so Export asks first while one is on. **Mute in song**, in a track's menu (or `m2 mute-in-song`), writes `muted: true` into the track's code, so the export leaves it out too: its name is struck through and its clips are hatched. That is one undo step.
+- See how loud it is: a level meter in every track's header, one on the Song row (the whole song), and two bars (left and right) beside every fader in the Mix view and on Master, with a peak hold, amber from −6 dB and red at 0 dB. They read each track before its fader. A small red dot over a strip's meter says it went over the top; click it to clear it. While the song plays, the status pill says **Heavy load** when the computer is close to its limit, and **Sound dropped out** after a gap in the sound.
 - Mix with faders: the Mix view (⌥3) has a strip for each track, with its pan and a fader, and Master's fader. Drag a fader to hear it, let go to write it; the bottom is silence. A level or a pan the code leaves out is written into the mixer on its first move, as one edit Undo takes back.
 - Rename a track's label without moving or silencing anything: double-click its name in the timeline (or the dock's header), or press ⌘R, or write `track("kick", { name: "Big Kick" }, …)`. Data is filed under the track's key.
-- Automate a knob: right-click it, **Automate**. It gets an automation lane of its own, named after the control ("Decay"), which plays the knob's old value until it has points. Draw them on the timeline: double-click the lane to make a clip, click its line to add a point, drag a point to move it, ⌫ deletes it, and B paints. **Remove automation** (in the lane's menu, or the input's in the Device view) writes the value playing at the playhead back into the code; the same from `m2 unautomate`.
+- Automate a knob: right-click it, **Automate**. It gets an automation lane of its own, named after the control ("Decay"), which plays the knob's old value until it has points. Draw them on the timeline: double-click the lane to make a clip, click its line to add a point, drag a point to move it, ⌫ deletes it, and B paints. A frequency (a lane in Hz) is drawn on a log scale, as you hear it. **Hide this lane** in a lane's menu hides one lane; a line under the track says "1 hidden lane · Show". **Remove automation** (in the lane's menu, or the input's in the Device view) writes the value playing at the playhead back into the code; the same from `m2 unautomate`.
 - See what needs attention. When a track's or a lane's key is renamed in code, its notes or automation stop playing; the status pill in the top bar says so, and its popover says it in plain words and offers to move the data where it belongs now (a renamed track's whole folder in one click), or to delete it. Undo takes either back. It also lists a data file that doesn't read (its lane keeps playing what it had), clips without ids, and a missing sample or plugin, each with its code and fixes. Every `m2` command that opens the song prints the same, with the commands that fix it (`m2 relink`, `m2 delete-data`, `m2 fix`).
 - Edit the files in any other editor, from a script or with git. The app takes a change in once it has settled (no file changed for 150 ms), so a file caught half-written never plays and a lane never plays empty. Agents can also send checked edits (Tx) over HTTP or with `m2 tx`, written as one undo step.
 - One program writes a song at a time: `m2` commands that write a song the app has open stop without changing anything, and a second window opens it read-only, with Retry. An edit cut off by a crash is offered back as Finish or Discard when the song opens next.
-- Set the tempo and the time signature in the top bar. Drag the tempo up or down (⇧ for fine) or double-click it and type; click the time signature to pick it. Each changes the one in effect where the playhead is, and you hear a new tempo when you let go. Right-click the ruler to add a tempo or time signature change there, and click its mark to change or remove it. Double-click the song's name to rename it. New Song asks for the tempo too. Each is one edit Undo takes back; the same from `m2 tempo`, `meter` and `title`.
+- Set the tempo and the time signature in the top bar. Drag the tempo up or down (⇧ for fine) or double-click it and type; click the time signature to pick it. Each changes the one in effect where the playhead is, and you hear a new tempo when you let go. Right-click the ruler to add a tempo or time signature change there, and click its mark to change or remove it. Click **Key** after the time signature to set the song's key (major or minor): Notes then shades the rows not in it, and it is kept in `layout.json`. Double-click the song's name to rename it. New Song asks for the tempo too. Each is one edit Undo takes back; the same from `m2 tempo`, `meter` and `title`.
+- Zoom the timeline: ⌘= and ⌘−, a pinch or ⌘-scroll, the buttons at the right end of the ruler, or Z to fit the selected clips or the song (Z again goes back). In Notes, ⌘= and ⌘− zoom the roll. Make a track taller by dragging the bottom edge of its name, or with ⌘↓ and ⌘↑; an automation lane the same. While the song plays the view follows the playhead; scrolling by hand pauses it, and the ruler's Follow button (⇧⌘F) turns it off. The zoom, the heights, Follow, hidden lanes, each view's grid and snap and the audition toggle are kept per song, in `.music2/view.json`.
+- Put markers on the ruler (Intro, Verse, Chorus…): right-click the ruler, **Add marker**, or Transport → Add Marker at the playhead's bar. Click one to go there, drag it to move it (⌘ held: off the grid), double-click to rename it, and ⌥← and ⌥→ go from one to the next. Its menu loops to the next marker. They are kept in `layout.json`.
+- Repeat a clip: **Repeat…** in its menu makes 1 to 64 copies one after another, as one undo step.
 - Play and stop like Live: Space stops back where play started, and ⇧Space goes on from where it stopped. Click the ruler, or an empty spot in a lane while stopped, to start somewhere else. Loop with the loop button or C, a drag across the ruler, or ⌘L for the selected clips; the loop is kept for next time. ⌘. (Transport → Stop All Sound) stops every note at once.
 - Export the song as a WAV file (the Export button, or File → Export Audio…, ⇧⌘E), then Show in Finder. Files go in `~/Music/music2/Exports` unless you pick another place. It's the same file `m2 render` writes. Quitting during an export asks first.
 - From the command line (`m2`): make a new song, render a WAV, bounce a track to audio, and make the same edits as the app.
@@ -48,16 +53,16 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 ## The top ten
 
-1. **Swap a track's instrument** (adding a track without code works now). (small)
+1. ~~Swap a track's instrument~~: done (see What works today).
 2. ~~More instruments~~: done, in `std/synth` and `std/fm` (see What works today).
-3. **Drum names in the piano roll** for the drum kit, the part of it that's left. (medium)
-4. **Mute and solo on the Mix view's strips** (M and S work in the track headers, and the strips' faders and pans work). (small)
+3. ~~Drum names in the piano roll~~: done. Showing only the drums a clip uses is left (#3).
+4. ~~Mute and solo on the Mix view's strips~~: done, with a meter on each strip.
 5. **Fast seeking and fast edits** in a full-length song. (large)
-6. **Key and scale** in the top bar (the tempo, the time signature and the song's name work now). (small)
+6. ~~Key and scale~~: the song's key is done, major and minor. Other scales come with scale help (#16).
 7. ~~Loop~~: done (see What works today).
 8. ~~Hear notes as you draw them~~: done (see What works today).
-9. ~~Clip editing~~: done (see What works today). Repeating a clip N times is left (#9).
-10. **Rename a track's key** from the app (delete, duplicate, reorder and recolour work now). (small)
+9. ~~Clip editing~~: done, repeating a clip too (see What works today).
+10. ~~Rename a track's key~~: done, as **Change track ID…** in the Code view.
 
 ## Everything, by area
 
@@ -65,8 +70,8 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 12 | **Recent projects** on the start screen and in File → Open Recent, and reopen the last project at launch. A list in `~/.music2/recent.json` is updated whenever a project opens. | Without it, reopening a song means finding its folder with Open Project Folder… after every launch. | Yes (the Song Library) | small |
-| 28 | **Save As or Duplicate Project, Rename Project**, and opening a project by dropping its folder on the window or the Dock. | These let you keep versions of a song. (File → Show in Finder already opens the project folder.) | Yes | small |
+| 12 | **A picture of each song in the recent list** (taste.md SS-2). The list itself, File → Open Recent and reopening at launch are done (`~/.music2/recent.json`). | A small picture of each song's arrangement helps find the right one. | Yes (the Song Library) | small |
+| 28 | **Open a song by dropping its folder** on the window or the Dock. (Save As and Rename Song, with its folder, are done.) | Finding a song in the Finder is how many people open it. | Yes | small |
 
 ### Packages
 
@@ -84,14 +89,14 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 1 | **Swap a track's instrument** later. (Adding a track without code works: see [What works today](#what-works-today).) Adding one to a song that mixes its tracks without std's mixer, or picking a CLAP instrument (#32), still needs code. | Changing your mind about a sound shouldn't mean a new track. | Yes | small |
-| 10 | **Rename a track's key** from the app. (Renaming its label, deleting, duplicating, reordering and recolouring work: see [What works today](#what-works-today).) | Keeping a song tidy. A key is changed in `track()` today; after that, **Needs attention** offers to move the track's whole data folder to its new key. | Yes | small |
+| 1 | **The rest of changing an instrument**: a track whose instrument is built from parts, has two instruments or a plugin, or whose settings code works out, is refused in words and changed in code. Adding a track to a song that mixes its tracks without std's mixer, or picking a CLAP instrument (#32), still needs code. (Change Instrument… and + Track work: see [What works today](#what-works-today).) | Changing your mind about a sound shouldn't mean a new track. | Yes | small |
+| 10 | **The rest of changing a track's ID**: a track with a new ID restarts its sounds (its plugins' and instruments' state isn't carried over, design-8b §11.3), and the status popover has no Restore for a rename done by hand in code (DIAG-6). (Change track ID… works: see [What works today](#what-works-today).) | A rename shouldn't cut a sound that is playing. | Yes | small |
 
 ### Sounds
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 3 | **Drum names in the piano roll**: `drums.kit` plays each drum on its General MIDI note, but the piano roll shows those notes as C2, D2, F#2 rather than kick, snare, closed hat. A component would declare its note names in its descriptor, and the piano roll would show them. | Drawing a beat by note name means knowing the General MIDI map. | Yes | medium |
+| 3 | **Drum rows folded to the drums a clip uses**, and the piano roll's zoom up and down (taste.md NT-5). The names are done: an instrument names its notes in its descriptor (`editor.notes`), and Notes shows them. | A kit has 30 rows; a beat uses five. | Yes | small |
 | 22 | **A sampler**: play a recording or a one-shot as an instrument, with a root note, plus drum samples. Kernels can't read assets yet, so the core needs work first. | Sampled drums and vocal chops are pop staples. | Yes | large |
 | 26 | **Presets**: save and load an instrument's or an effect's settings by name, a preset browser, and presets for CLAP plugins. | Beginners start from presets, not from blank knobs. | No | medium |
 
@@ -99,15 +104,14 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 4 | **Mute and solo in the Mix view**: its strips' faders and pans work now, and so does Master's fader, but the strips have no M and S yet. Mute and solo themselves are built (8b.4): M and S on every track's header, and a pill in the top bar that counts them. They are engine monitoring overlays that work on any track and never change the export. "Mute in song" is a track option written in code, `track("kick", { muted: true }, fn)`, set from a track's menu or `m2 mute-in-song` ([Monitoring overlays](architecture.md#monitoring-overlays-and-mute-in-song)). | Hearing one part alone, or the mix without it, is how parts are balanced. Today that is done in the timeline's track headers only. | Yes | small |
-| 20 | **Level meters**: the loudness for export, meters after the fader, and meters on the Mix view's strips. A meter in every track header and one on the Song row (the song's output) are built (8b.8), with a peak hold and red above 0 dB. They read each track before its fader. | Without meters you can't see whether the mix is too loud or clipping. | Partly (a meter on each track) | medium |
+| 20 | **Level meters**: the loudness for export, and meters after the fader. A meter in every track header, on the Song row and on every Mix strip and Master is built, with a peak hold and red above 0 dB. They read each track before its fader, so a fader move doesn't move them: after-fader taps need the engine (`core/runtime`). | Without meters after the fader you can't see what a fader does to a track's level. | Partly (a meter on each track) | medium |
 | 27 | **Sends and buses** in the UI: a shared reverb bus, group buses, and sending a track to a bus. | It's standard mixing practice, such as one reverb shared by every track. Each change is a structural code edit in `song.ts`. | Yes | large |
 
 ### Song settings
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 6 | **Key and scale** in the top bar. (The tempo, the time signature and the song's name work: see [What works today](#what-works-today).) A key and scale have no home in the song's files yet; the field comes when they do, and scale help (#16) builds on it. | A key tells you which notes fit. | Yes | small |
+| 6 | **More scales** than major and minor (dorian, pentatonic…). The song's key is done: the top bar's Key field, kept in `layout.json` as `key`, and Notes shades the rows not in it. Scale help (#16) builds on it. | A key tells you which notes fit. | Yes | small |
 
 ### Playback
 
@@ -120,22 +124,21 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 9 | **The rest of clip editing**: repeat a clip N times; a box drag that scrolls the timeline at its edge; copied clips in the system's clipboard, so they paste into another window. (Making, moving, copying, resizing, splitting, joining, pasting and quantizing clips work: see [What works today](#what-works-today). Audio clips come with #18.) | Pop songs are built by copying parts, and repeating a part is a common shortcut. | Yes | small |
-| 17 | **Timeline zoom** (⌘= and ⌘−, pinch), taller tracks, the timeline following the playhead, and a **right-click menu on notes** in the piano roll. (Clips, lanes and track headers have their menus.) | At a fixed 24 pixels per beat, a 3-minute song takes a lot of scrolling, and automation lanes are thin to draw on. Right-click menus are how beginners find options. | Yes | small |
-| 23 | **Sections**: name the parts (intro, verse, chorus), show markers on the ruler, copy or move a whole section across all tracks, and insert or delete bars. | Pop songs are arranged in sections, and copying a chorus is one gesture in other DAWs. Sections are designed but not built. Even markers aren't: `layout.json` has room for them and keeps whatever is there, but nothing reads or writes them yet. Inserting bars touches every lane and the tempo. | No | large |
+| 9 | **The rest of clip editing**: a box drag that scrolls the timeline at its edge; copied clips in the system's clipboard, so they paste into another window; a flag on the ruler where the song ends (taste.md TL-12). (Making, moving, copying, resizing, splitting, joining, pasting, quantizing and repeating clips work: see [What works today](#what-works-today). Audio clips come with #18.) | Pop songs are built by copying parts. | Yes | small |
+| 23 | **Sections**: copy or move a whole section (a chorus) across all tracks, and insert or delete bars. Markers on the ruler are done. | Pop songs are arranged in sections, and copying a chorus is one gesture in other DAWs. Sections are designed but not built. Inserting bars touches every lane and the tempo. | No | large |
 
 ### Notes
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 15 | **Note tools**: transpose a clip, humanize, swing, legato, copy/paste notes between clips, and holding ⌘ to place a note off the grid. (Triplet snap, 1/64 and quantize work: the roll's grid has Triplets, ⌘3, and Q quantizes a clip's notes to it.) | These clean up a drawn or played part. | Partly (humanize, and octave up and down) | small |
-| 16 | **Scale help**: choose a key and scale, highlight or lock the notes in the key, chord stamps and an arpeggiator. `std/theory` and `std/gen` are designed but not built. | Beginners write better melodies and chords with a scale guide. | Partly (a key and scale, and showing only in-key notes) | medium |
+| 15 | **The rest of the note tools**: copy and paste notes between clips, holding ⌘ to place a note off the grid, swing amounts other than Light, Medium and Heavy, and groove templates. (The note menu's transpose, Quantize, Legato, Humanize and Swing work: see [What works today](#what-works-today).) | These clean up a drawn or played part. | Partly (humanize, and octave up and down) | small |
+| 16 | **Scale help**: lock the notes to the key, chord stamps and an arpeggiator. (Choosing the key and shading the rows not in it work: #6.) `std/theory` and `std/gen` are designed but not built. | Beginners write better melodies and chords with a scale guide. | Partly (a key and scale, and showing only in-key notes) | medium |
 
 ### Automation
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 14 | **Automation comforts**: curves between points (an ⌥-drag, which needs a field in the lane's file format), a frequency drawn on a log scale, and hiding one automation lane at a time. (Drawing automation works: see [What works today](#what-works-today).) | Sweeps sound smoother on a curve, and a filter's low notes are squeezed on a straight scale. | Partly (drawing points) | small |
+| 14 | **Automation comforts**: curves between points (an ⌥-drag, which needs a field in the lane's file format and new interpolation in the engine), a log scale for other units than Hz (times), and typing a point's value. (Drawing, a frequency on a log scale, and hiding one lane work: see [What works today](#what-works-today).) | Sweeps sound smoother on a curve. | Partly (drawing points) | medium |
 
 ### Audio
 
@@ -170,7 +173,7 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
 | 13 | **Open a project without an audio device**: fall back to the silent player and say so. | Opening a project fails with "no audio output device", so an unplugged audio interface locks you out of your song. | Yes | small |
-| 31 | **A Settings window**: choose the audio output and buffer size, show the current device and its rate, and set where new projects go. The engine already runs at each project's `sample_rate` (in `music2.toml`), converting at the device when the device runs at another rate ([RENDER-31](architecture.md#sample-rate)), so the sample rate is a project setting, not an app one. | People with an audio interface or headphones need to pick the output. Today the player always uses the system default. | Partly (it showed the device and the folders, with nothing to choose) | medium |
+| 31 | **A Settings window**: choose the audio output and buffer size, show the current device and its rate, set where new projects go, and view settings that hold for every song (today zoom, grids and the audition toggle are kept per song). The engine already runs at each project's `sample_rate` (in `music2.toml`), converting at the device when the device runs at another rate ([RENDER-31](architecture.md#sample-rate)), so the sample rate is a project setting, not an app one. | People with an audio interface or headphones need to pick the output. Today the player always uses the system default. | Partly (it showed the device and the folders, with nothing to choose) | medium |
 
 ### Help
 
@@ -194,12 +197,12 @@ The column "Did the old app have it?" says **Yes**, **No**, or **Partly**, with 
 
 | # | What's missing | Why it matters | Did the old app have it? | Size |
 |---|---|---|---|---|
-| 37 | **CLI basics**: `m2 import <wav>`. (`m2 tempo`, `meter`, `title` and `add-track` work.) | Scripts and agents need the same basics as the app. Each is small once the matching session edit exists. | Yes (in `music2-cli`) | small |
+| 37 | **CLI basics**: `m2 import <wav>`, and `m2` commands for what the app's polish added: change instrument, markers, the song's key, a track's ID, Save As. Agents can send these as JSON to the app's routes, or as a Tx. (`m2 tempo`, `meter`, `title` and `add-track` work.) | Scripts and agents need the same basics as the app. Each is small once the matching session edit exists. | Yes (in `music2-cli`) | small |
 | 38 | **A self-describing API**: every `/api/graph` operation listed with a JSON Schema, a short summary of the song, and MCP. (Export over HTTP is there: `POST /api/graph/export`; so are checked edits of any files as one undo step: `POST /api/tx/check` and `/api/tx/commit`.) | The old command API let Claude Code drive the app. The new routes work, but an agent has to read the README or the source code to learn them, and a Tx's JSON by the [architecture contract](architecture.md#the-two-write-primitives). | Yes | medium |
 
 ## Never in either version
 
-Every row marked **No** above was missing from the old app too. Of the rows marked **Partly**, the old app also lacked: swing, legato and copying notes between clips (#15), chord stamps and an arpeggiator (#16), loudness and meters after the fader (#20), undo that survives closing (#29) and choosing the audio device (#31).
+Every row marked **No** above was missing from the old app too. Of the rows marked **Partly**, the old app also lacked: copying notes between clips (#15), chord stamps and an arpeggiator (#16), loudness and meters after the fader (#20), undo that survives closing (#29) and choosing the audio device (#31).
 
 ## Loose ends
 
@@ -211,7 +214,9 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 - **A missing plugin reads technically**: ``no CLAP plugin `org.surge-synth-team.surge-xt` is installed (looked in [...])``. It no longer silences the song: only that plugin's node is silent, or passes its audio through ([FMT-18a](architecture.md#plugin-state-and-parameters)). Open an Example still names missing plugins plainly, from the example's `example.toml`, and refuses to copy the example (#11).
 - **An error in the browser console with no project open.** `GET /api/graph` answers 400 when nothing is open, which is how the window knows to show the start screen. The browser logs that request as an error even though nothing is wrong. Answering "no project" without an error status would be quieter.
 - **The browser suites** live in `e2e/` (puppeteer, with its own `package.json`), rebuilt after a reboot wiped their old scratch folder.
-- **View settings start over at each launch of the app**: the timeline's and the piano roll's grid and snap, and the audition toggle. The app's page gets a new address each time it opens, so the browser storage that keeps them starts empty (Q7 of the 8b-ui plan). In a browser window they are kept.
+- **The dock and the browser panel start over at each launch of the app** (which view the dock shows, and its height). They are kept in the browser's storage, which starts empty since the app's page gets a new address each time. Every other view setting is kept per song in `.music2/view.json`.
+- **Renaming a song's folder starts Undo over**: the song closes and opens again from the new folder (Rename Song… says so). Renaming only the name is one undo step.
+- **Checks owed on a Mac**: a trackpad pinch to zoom, Open Recent in the menu bar, reopening at launch, ⇧⌘S, and a Ctrl-click on a marker (a right-click there). They are checked on Linux and in the browser suites (see HANDOFF).
 - **A dragged or nudged clip is heard only once it lands**, not while it moves (Q10 of the 8b-ui plan).
 - **Space, then Space again, jumps back** to where play started. std's chorus, phaser and tremolo, and the drums' noise, then carry on from where they were rather than starting over, so that second play may differ a little from the export. The export is always right.
 
@@ -219,19 +224,19 @@ Every row marked **No** above was missing from the old app too. Of the rows mark
 
 | What was removed | Where it comes back |
 |---|---|
-| New Song, Open and Save of `.m2song` files | A song is now a folder, and every change is written at once. New Song… is back (File → New Song…, ⌘N) and makes a song folder from a template. Old `.m2song` files can't be opened. Recent projects are #12, Save As #28. |
-| The Song Library | Recent projects (#12) |
+| New Song, Open and Save of `.m2song` files | A song is now a folder, and every change is written at once. New Song… is back (File → New Song…, ⌘N) and makes a song folder from a template. Old `.m2song` files can't be opened. Recent songs and Save As are back (File → Open Recent, File → Save As…, ⇧⌘S). |
+| The Song Library | Back as the recent list on the start screen and File → Open Recent. A picture of each song is #12 |
 | Import Audio | Audio in the app (#18) |
 | Export as WAV | Back as Export Audio (File → Export Audio…, ⇧⌘E) |
 | Settings | A Settings window (#31) |
 | The Track inspector (volume, pan, output, sends, effects, sidechain) | Volume and pan: back in the Mix view. Output, sends and the sidechain: sends and buses (#27), effect comforts (#21) |
-| A level meter on each track | Back: a meter in every track header, and one on the Song row. Meters after the fader and loudness are #20 |
+| A level meter on each track | Back: a meter in every track header, on the Song row and on every Mix strip. Meters after the fader and loudness are #20 |
 | The Sounds panel | Audio in the app (#18), the sampler (#22) |
-| Drawing automation | Back: drawn on the timeline. Curves are #14 |
+| Drawing automation | Back: drawn on the timeline, a frequency on a log scale. Curves are #14 |
 | Loop | Back: the loop button or C, a drag across the ruler, or ⌘L for the selected clips |
 | Hearing notes as you draw them | Back: audition in Notes |
-| Triplet snap (1/8T, 1/16T), quantize, humanize, and octave up and down in the piano roll | Triplet snap and quantize are back. Humanize and octave up and down are note tools (#15) |
-| The key and scale picker, and showing only in-key notes | Scale help (#16) |
+| Triplet snap (1/8T, 1/16T), quantize, humanize, and octave up and down in the piano roll | Back: triplet snap, and the note menu's Quantize, Humanize and octave up and down |
+| The key and scale picker, and showing only in-key notes | The key is back (major and minor), and Notes shades the rows not in it. Other scales are #6, locking notes to the key #16 |
 | The command API: `/api/commands`, `/api/describe`, `/api/exec`, `/api/steps` | A self-describing API (#38) |
 | `music2-cli` | `m2` replaces it; the missing commands are #37 |
 | Installing sounds from GitHub (`music2-cli plugin add github:…`) and the Plugins folder | Shared sound packages (#39) |
