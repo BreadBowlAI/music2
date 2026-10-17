@@ -23,6 +23,8 @@ adds its own section here, in the same commit.
 | U5 (lane B) | Clips by hand: move, copy (⌥-drag), resize from either edge, move to another track, select several, delete. Each is one undo step | done |
 | U6 (lane B) | Clip commands: a menu on each clip, ⌘D, ⌘E split, ⌘J join, ⌘C ⌘X ⌘V, Q, the arrow keys, and a box dragged across lanes to pick the clips in some bars | done |
 | U7 (lane B) | Automation drawn on the timeline: make a clip, add, move and delete points, paint with B; Remove automation from the lane or from the Device view | done |
+| U9 (lane C) | You hear notes as you click, drag or draw them in Notes. The piano keys play. A toggle turns it off. A hint says when you won't hear anything | done |
+| U10 (lane C) | A level meter in every track header and on the Song row. It shows how loud each track is, and the whole song, while it plays | done |
 
 ## Setup: the merges
 
@@ -735,3 +737,155 @@ Captions for the owner:
 - The lane's own node in the Device view has no menu; the input it drives does.
 - Hide automation folds the track's automation lanes, not one lane.
 
+
+## U9: audition in Notes (lane C)
+
+**In short**
+- In Notes, you now hear a note when you press it, drag it or draw it.
+- The piano keys on the left play too. Press one, or drag along them.
+- A key that sounds turns grey. A selected note's key keeps the track's colour, so you can tell them apart.
+- The speaker button in the Notes header turns this on or off. It starts on.
+- When you won't hear anything, a short line says why: "Muted · audition is silent", "Silenced by the
+  Bass solo · audition is silent", or "Nothing plays this lane".
+- A note never gets stuck. Letting go, ⌘., Space, the toggle, leaving Notes or closing the window all stop it.
+- Checks: a new suite (49 checks, red before the change) and nine suites that use Notes, all green.
+
+### What changed
+
+| File | What |
+|---|---|
+| `web/src/lib/audition.ts` (new) | The notes this window holds, by handle. `strike`, `retune` (an Off and an On in one message), `release`, `pulse` (a painted note), `releaseAll`. A keepalive every 2 s while anything is held. The toggle, kept in this browser's storage. The server's `silent` answers, by lane |
+| `web/src/components/AuditionTools.tsx` (new) | The toggle (`Volume2`, `accent-soft` while on, never takes focus) and the hint before it, in `text-xs` `fg-muted`. The tooltip says "⌘. stops all sound" (Ctrl+. on a PC) |
+| `web/src/components/NoteView.tsx` | A press on a note sounds it at its own velocity until the pointer is up. A drag up or down plays each pitch it crosses. A double-click's second press sounds the note it adds. Draw mode sounds each painted note for its length or 250 ms, the shorter. The keys play at 0.8 and a drag along them plays each key. A sounding key is drawn in `press`. The toggle sits before the zoom buttons |
+| `e2e/s8-audition.mjs` (new), `e2e/run.mjs`, `e2e/README.md` | The suite and its rows, after `notes` |
+
+### What lets go of a held note
+
+| What | How |
+|---|---|
+| Pointer up, cancel, lost capture | the roll's own handlers |
+| The window loses focus, or is hidden | `blur`, `visibilitychange` |
+| The toggle goes off | `setAudition(false)` |
+| ⌘. (Stop All Sound) | a key listener in a browser; the menu's `panic` in the app. The server ends live notes too |
+| Space with no pointer down | a key listener; it counts pointers down. With one down, a held key plays on through play and stop |
+| Leaving Notes, or another clip opening | the roll unmounts (its key is the clip) and lets go |
+| The socket closes | the server lets go (`client_gone`); the page forgets its handles |
+
+### How the hint is chosen
+
+| Order | When | Words |
+|---|---|---|
+| 1 | The server answered `silent` for this lane | Nothing plays this lane |
+| 2 | `heard` is `muted-in-song` | Muted in the song · audition is silent |
+| 3 | `heard` is `muted` | Muted · audition is silent |
+| 4 | `heard` is `silenced` | Silenced by the Bass solo · audition is silent (names from `overlays.solo`; "Bass and Keys solos" for two) |
+
+- "Nothing plays this lane" is only known from the server's answer to a strike. A strike on a lane marked
+  silent starts a 600 ms timer: if the server says `silent` again, it stays; if not, the hint goes. So an
+  edit that gives the lane a reader clears it at the next press, with no flicker.
+- No hint while the toggle is off: nothing would be heard anyway.
+
+### Checks
+
+| Check | Result |
+|---|---|
+| `cd web && npm run build` (type-checks) | ok |
+| `s8-audition` (new) | 49 of 49 |
+| `taste` | 39 of 39 |
+| `notes`, `fixes-notes`, `pc-keys`, `views` | 52, 37, 37, 30 |
+| `s4-clips`, `g11-play`, `live3a`, `s4-meter` | 28, 24, 49, 8 |
+| Server | `bin/fba5147` (U0's); no Rust changed |
+| Logs | `~/m2-runs/s8ui/scratch/e2e/c/u9` (the suite), `…/u9-moves` (the nine), `~/m2-runs/logs/c-u9-*.log` |
+
+**Red first:** the suite on U0's web (the same server) fails 32 of its 49 checks and runs to the end
+(`~/m2-runs/s8ui/scratch/e2e/c/u9-red`). The 17 that pass there are the ones about the roll itself or
+about nothing sounding (for example "with it off, a press sends nothing").
+
+What the suite checks, in short: `live` goes to 1 on a press and 0 on letting go; the page's WebSocket
+frames (read over CDP) show 3 Ons and 3 Offs for a drag across three pitches, and velocity 0.8 for a
+key; the sounding key's colour is `press`; the toggle sends nothing when off and is kept over a reload;
+the toggle, ⌘. and Space (no pointer down) let go; a held key plays on through play and stop; a closed
+page lets go within a second (18 ms here); a read-only roll still sounds; the four hints; a PC page's
+tooltip says Ctrl+.; on a server of its own that plays into a file, a key held while stopped is heard
+(−240 dB before, −6 dB held).
+
+### Left
+
+- Shots `ui-u9-roll.png` and `ui-u9-hint.png`: from the desktop app on Xvfb `:98`, after the merge into
+  `8b-ui` (they need the `wt/ui` build).
+- The ⌥K sheet has no row for audition: it has no key of its own. ⌘. is already there.
+- The toggle resets at each app launch (the page's address changes): the line for `docs/gaps.md` at the End.
+- A key's velocity is always 0.8 (Q17). The design's "velocity by where you click the key" is not built.
+
+## U10: meters (lane C)
+
+**In short**
+- Every track header now has a thin level meter at its right edge. The Song row has one too: it shows
+  the whole song.
+- The bar is grey while quiet, amber when loud (from −6 dB), red at 0 dB or more.
+- A small dark tick shows the loudest moment. It stays 1.5 seconds, then slides down.
+- When the song stops, the meters drop to empty within a second.
+- A muted track's meter stays empty.
+- Checks: a new suite (22 checks, red before the change) and twelve suites that read the headers or
+  Notes, all green.
+
+### What changed
+
+| File | What |
+|---|---|
+| `web/src/lib/meters.ts` (new) | The latest peak and the peak hold of every meter, outside React and the store. Listens to `meters` while a meter is shown; floors every meter when the socket closes. One `requestAnimationFrame` loop draws every meter, and only redraws one whose picture changed. Sizes come from a ResizeObserver, so the loop never reads layout |
+| `web/src/components/Meter.tsx` (new) | One canvas, `role="meter"`, `aria-label` ("Kick level"), `aria-valuemin` −60, `aria-valuemax` 6. The loop sets `aria-valuenow` (dB, rounded) and `aria-valuetext` at most 10 times a second |
+| `web/src/components/TrackMeter.tsx` | Fills U0's slot: the track's meter, or the output's on the Song row |
+| `e2e/s8-meters.mjs` (new), `e2e/run.mjs`, `e2e/README.md` | The suite and its rows, after `ports` |
+
+### How a meter is drawn
+
+| Part | Look |
+|---|---|
+| Trough | `line`, the whole 3 × 28 px |
+| Fill | from the bottom to the level: `fg-muted` up to −6 dB, `warn` from −6 to 0, `danger` above 0 |
+| Peak hold | a 1 px `fg-strong` tick; held 1.5 s, then falls 12 dB a second; never below the level |
+| Scale | −60 to +6 dBFS, linear in dB. Silence and anything under −60 is empty |
+| A track with no tap (nothing reads it, Q21) | the trough only |
+| Stereo | one bar, the louder side (Q22). A mono track sends one peak; that is used |
+
+- The level is the latest message's peak, never eased (taste.md §1.8). Messages come about 30 a second
+  and the loop runs at the screen's rate, so a level shows for two frames.
+- The server sends its last messages as the engine idles (the tail of the sound, then silence), so the
+  meters fall on their own. No timer (M1).
+
+### Checks
+
+| Check | Result |
+|---|---|
+| `cd web && npm run build` (type-checks) | ok |
+| `s8-meters` (new) | 22 of 22 |
+| `s8-audition` (U9) | 49 of 49 |
+| `taste` | 39 of 39 |
+| `s8-tracks`, `layout`, `views`, `gestures`, `s4-clips`, `pc-keys` | 75, 39, 30, 30, 28, 37 |
+| `notes`, `fixes-notes`, `live3a` | 52, 37, 49 |
+| Server | `bin/fba5147` (U0's); no Rust changed |
+| Logs | `~/m2-runs/s8ui/scratch/e2e/c/u10` (the suite), `…/u10-moves` (the twelve), `~/m2-runs/logs/c-u10-*.log` |
+
+**Red first:** the suite on U0's web fails 16 of its 22 checks (`~/m2-runs/s8ui/scratch/e2e/c/u10-red`).
+The 6 that pass there check the server's messages (their rate, shape and the silence at the end),
+which U10 doesn't change, and that the page has no console errors.
+
+**The load, for U11 (information only):** on this server (debug build, `M2_AUDIO=none`), first-song
+playing showed a load of 6 to 11% and 0 late callbacks, 0 xruns. So a real "Heavy load" (70%) won't
+show in the suites by accident.
+
+What the suite checks, in short: five meters, named, where taste.md puts them, at 1440 and 1100 px;
+all at the floor at rest; 30 messages a second while playing (20 to 40 allowed); Kick, Bass and the
+Song move; the Song meter's canvas has grey and amber rows (it sits near the −1 dB ceiling of
+`master()`); Kick muted stays at the floor while Bass moves; a second after the stop all five read the
+floor and the server has gone quiet; the hold tick stays, then falls; closing the socket floors all
+five at once, and they move again once it reopens.
+
+### Left
+
+- No PC page in this suite: meters have no words or keys.
+- Shot `ui-u10-meters.png`: from the desktop app on Xvfb `:98` after the merge into `8b-ui`.
+- Meters read before the fader (Q6): a fader move doesn't move its track's meter. Bass's pre-fader peak
+  passes 0 dB in first-song, so its meter shows red now and then. The master never does (−1 dB limiter).
+- No clip dots (Q9), no strip meters (U12, with the Mix view).
