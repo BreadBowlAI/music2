@@ -845,10 +845,13 @@ impl Player {
             outputs::Audio::Device => {}
         }
         let choice = choice.clone();
+        let live = LiveThreads::from_env()?;
         let (ready_tx, ready) = bounded::<Result<Player>>(1);
         std::thread::Builder::new().name("m2-play".into()).spawn(move || {
-            let open_on = |device: cpal::Device, fell_back: bool| -> Result<(cpal::Stream, Player, Receiver<Gone>)> {
+            type Opened = (cpal::Stream, Player, Receiver<Gone>, Option<String>);
+            let open_on = |device: cpal::Device, fell_back: bool| -> Result<Opened> {
                 let name = outputs::name_of(&device).unwrap_or_else(|| "output".into());
+                let uid = device.id().ok().map(|id| id.id().to_string());
                 let supported = device.default_output_config()?;
                 let mut config = supported.config();
                 config.buffer_size = outputs::buffer(choice.frames, supported.buffer_size());
@@ -864,7 +867,7 @@ impl Player {
                 )?;
                 stream.play()?;
                 player.shared.device.store(true, Ordering::Relaxed);
-                Ok((stream, player, retired))
+                Ok((stream, player, retired, uid))
             };
             // The output chosen, else the default when it is gone or won't open (NX-S1).
             let open = || {
@@ -878,11 +881,21 @@ impl Player {
                 Err(failed)
             };
             match open() {
-                Ok((stream, player, retired)) => {
+                Ok((stream, player, retired, uid)) => {
                     let (shared, alive) = (player.shared.clone(), Arc::downgrade(&player.alive));
+                    // Engine threads once the device calls back, handed over before any project
+                    // (8a's live half). A cancelled workgroup asks for a new player.
+                    let first = || shared.frames.load(Ordering::Relaxed);
+                    let engines = engines::for_device(uid.as_deref(), player.device_rate, live, &first, &shared.engines);
+                    if engines.cancelled {
+                        shared.device_errors[DeviceEvent::Changed as usize].fetch_add(1, Ordering::Relaxed);
+                    }
+                    let _ = player.send(Msg::Threads(engines.handover));
                     let _ = ready_tx.send(Ok(player));
                     drop_retired(retired);
-                    serve(stream, shared, alive);
+                    // The stream stops first, then the pool joins its workers (each leaving the
+                    // workgroup), then the device is free.
+                    serve((stream, engines.pool), shared, alive);
                 }
                 Err(e) => {
                     let _ = ready_tx.send(Err(e));

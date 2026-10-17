@@ -17,7 +17,7 @@
 
 use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use m2_os::process::Cores;
@@ -107,7 +107,21 @@ pub struct Handover {
 pub(crate) struct Engines {
     pub(crate) pool: Option<Pool>,
     pub(crate) handover: Box<Handover>,
+    /// The output's workgroup refused a worker as cancelled: the output changed under it, so a
+    /// new player should take over.
+    pub(crate) cancelled: bool,
 }
+
+impl Engines {
+    /// One thread: the device's own.
+    fn alone(group: Arc<Group>, between: Between) -> Engines {
+        Engines { pool: None, handover: Box::new(Handover { runner: Runner::one(), group, between }), cancelled: false }
+    }
+}
+
+/// How long the player's thread waits for the device's first callback, and for its workers to
+/// start: then it plays on one thread, and says so.
+const WAIT: Duration = Duration::from_secs(1);
 
 /// What a player says of its engine threads: written as they are made, and by the callback.
 #[derive(Default)]
@@ -174,7 +188,7 @@ pub(crate) fn for_clock(frames: usize, rate: u32, live: LiveThreads, report: &Re
 fn made(count: usize, group: Arc<Group>, between: Between, mark: Option<fn(bool)>, report: &Report) -> Engines {
     let one = |group: Arc<Group>, missing: Option<String>| {
         report.made(1, None, between, missing);
-        Engines { pool: None, handover: Box::new(Handover { runner: Runner::one(), group, between }) }
+        Engines::alone(group, between)
     };
     if count <= 1 {
         return one(group, None);
@@ -183,10 +197,103 @@ fn made(count: usize, group: Arc<Group>, between: Between, mark: Option<fn(bool)
     match Pool::new(count, setup) {
         Ok((pool, runner)) => {
             report.made(count, Some(&joins), between, None);
-            Engines { pool: Some(pool), handover: Box::new(Handover { runner, group, between }) }
+            Engines { pool: Some(pool), handover: Box::new(Handover { runner, group, between }), cancelled: false }
         }
         Err(e) => one(group, Some(format!("one thread: the OS wouldn't start {} more ({e})", count - 1))),
     }
+}
+
+/// Engine threads of the output whose stream just started, `uid` its device id (None: the default
+/// output), at the device's `rate`. Off the audio thread, on the player's own. The period is the
+/// first callback's frames at `rate` (`first` says them: 0 before it); then the output's group
+/// is read (macOS: its IO thread's workgroup, which exists once IO runs), and the pool made at the
+/// rule's count. The pool is kept only when every worker started and runs as real time
+/// ([`judged`]); else one thread, and [`EngineThreads::missing`] says why.
+pub(crate) fn for_device(uid: Option<&str>, rate: u32, live: LiveThreads, first: &dyn Fn() -> u32, report: &Report) -> Engines {
+    let one = |missing: String| {
+        report.made(1, None, live.between, Some(missing));
+        Engines::alone(Arc::new(Group::none(None)), live.between)
+    };
+    let start = Instant::now();
+    let frames = loop {
+        match first() {
+            0 if start.elapsed() < WAIT => std::thread::sleep(Duration::from_millis(1)),
+            0 => return one("one thread: the device didn't call back within a second".into()),
+            n => break n,
+        }
+    };
+    let group = Arc::new(Group::of_output(uid, Duration::from_secs_f64(f64::from(frames) / f64::from(rate.max(1)))));
+    let count = live_count(live.count, &m2_os::process::cores(), group.recommends(), true);
+    if count <= 1 {
+        report.made(1, None, live.between, group.missing().map(str::to_string));
+        return Engines::alone(group, live.between);
+    }
+    let (setup, joins) = m2_runtime::threads::live(group.clone(), live.between == Between::Spin, None);
+    let (pool, runner) = match Pool::new(count, setup) {
+        Ok(made) => made,
+        Err(e) => return one(format!("one thread: the OS wouldn't start {} more ({e})", count - 1)),
+    };
+    let workers = count - 1;
+    let start = Instant::now();
+    while joins.started.load(Ordering::SeqCst) < workers && start.elapsed() < WAIT {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let n = |c: &AtomicUsize| c.load(Ordering::SeqCst);
+    let said = Said {
+        workers,
+        started: n(&joins.started),
+        real_time: n(&joins.real_time),
+        joined: n(&joins.joined),
+        cancelled: n(&joins.cancelled),
+    };
+    let (keep, missing) = judged(&said, group.recommends().is_some());
+    let missing = missing.or_else(|| group.missing().map(str::to_string));
+    if !keep {
+        // Its workers leave and are joined here, off the audio thread.
+        drop(pool);
+        let mut e = one(missing.unwrap_or_default());
+        e.cancelled = said.cancelled > 0;
+        return e;
+    }
+    report.made(count, Some(&joins), live.between, missing);
+    Engines { pool: Some(pool), handover: Box::new(Handover { runner, group, between: live.between }), cancelled: false }
+}
+
+/// What a device's workers said as they started.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Said {
+    pub(crate) workers: usize,
+    pub(crate) started: usize,
+    pub(crate) real_time: usize,
+    pub(crate) joined: usize,
+    pub(crate) cancelled: usize,
+}
+
+/// Whether a device's pool is kept (D4): only when every worker started and runs as real time. A
+/// worker that isn't real time can be preempted inside a block while the device's thread waits for
+/// it, which is worse than one thread. A worker that didn't join a workgroup the output has plays
+/// on, and is said. What is missing, in plain words.
+pub(crate) fn judged(s: &Said, has_workgroup: bool) -> (bool, Option<String>) {
+    let of = |n: usize| format!("{n} of {}", s.workers);
+    if s.started < s.workers {
+        return (false, Some(format!("one thread: {} engine threads didn't start within a second", of(s.workers - s.started))));
+    }
+    if s.cancelled > 0 {
+        return (false, Some("one thread: the output's workgroup was cancelled, as the output changed".into()));
+    }
+    if s.real_time < s.workers {
+        return (
+            false,
+            Some(format!(
+                "one thread: {} engine threads were refused real time (this user may not run real-time threads)",
+                of(s.workers - s.real_time)
+            )),
+        );
+    }
+    if has_workgroup && s.joined < s.workers {
+        return (true, Some(format!("{} engine threads didn't join the output's workgroup", of(s.workers - s.joined))));
+    }
+    (true, None)
 }
 
 /// After each callback: with [`Between::Park`], workers sleep at once.
@@ -215,5 +322,56 @@ mod tests {
         assert_eq!(live_count(None, &server, None, true), 8, "one die here");
         let tiny = Cores { fast: 1, slow: 0, per_cache: 1 };
         assert_eq!(live_count(None, &tiny, Some(4), true), 1);
+    }
+
+    // RENDER-28a (8a's live half, D4): a device's pool is kept only when every worker started and
+    // runs as real time; else one thread, said in plain words. A worker outside a workgroup the
+    // output has plays on, and is said.
+    #[test]
+    fn a_device_pool_is_kept_only_when_every_worker_is_real_time() {
+        let all = Said { workers: 3, started: 3, real_time: 3, joined: 3, cancelled: 0 };
+        assert_eq!(judged(&all, true), (true, None));
+        assert_eq!(judged(&Said { joined: 0, ..all }, false), (true, None), "no workgroup here to join");
+        let cases = [
+            (Said { started: 2, ..all }, true, "1 of 3 engine threads didn't start"),
+            (Said { real_time: 2, ..all }, false, "1 of 3 engine threads were refused real time"),
+            (Said { real_time: 0, joined: 0, ..all }, false, "3 of 3 engine threads were refused real time"),
+            (Said { cancelled: 1, ..all }, false, "the output's workgroup was cancelled"),
+        ];
+        for (said, has, words) in cases {
+            let (keep, missing) = judged(&said, has);
+            assert!(
+                !keep && missing.as_deref().is_some_and(|m| m.starts_with("one thread: ") && m.contains(words)),
+                "{said:?}: {missing:?}"
+            );
+        }
+        let (keep, missing) = judged(&Said { joined: 1, ..all }, true);
+        assert!(keep && missing.as_deref() == Some("2 of 3 engine threads didn't join the output's workgroup"), "{missing:?}");
+    }
+
+    // RENDER-28a (8a's live half): on this machine, a device's engine threads are made as a
+    // device's are (its first callback's period, its group, real time asked for), and kept only
+    // when real time was granted: here, a user with no rtprio limit gets one thread, and says why.
+    #[test]
+    fn a_device_without_real_time_plays_on_one_thread() {
+        let report = Report::default();
+        let live = LiveThreads { count: Some(4), between: Between::Park };
+        let e = for_device(None, 48_000, live, &|| 128, &report);
+        let probe = std::thread::spawn(|| {
+            let j = m2_os::rt::engine_thread(&Group::of_output(None, Duration::from_millis(3)));
+            m2_os::rt::end_engine_thread();
+            j.real_time
+        });
+        let granted = probe.join().unwrap();
+        let said = report.read();
+        match granted {
+            true => assert!(e.pool.is_some() && said.count == 4 && said.real_time == 3, "{said:?}"),
+            false => assert!(
+                e.pool.is_none() && said.count == 1 && said.missing.as_deref().is_some_and(|m| m.contains("refused real time")),
+                "{said:?}"
+            ),
+        }
+        let no_callback = for_device(None, 48_000, live, &|| 0, &Report::default());
+        assert!(no_callback.pool.is_none());
     }
 }
