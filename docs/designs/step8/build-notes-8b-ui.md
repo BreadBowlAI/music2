@@ -16,6 +16,7 @@ adds its own section here, in the same commit.
 | Setup | Nothing new to see. The back ends of 8b-backend are merged in. A deleted track no longer leaves its mute behind | done |
 | U0 | Nothing new to see, except the roll's grid control now comes from a shared file. The places the lanes fill are ready | done |
 | U4 (lane B) | The timeline has a grid and snap: a chip in its corner, Auto by default. Dragged clips land on it; hold ⌘ to place one freely. ⌘1 to ⌘4 change the grid of the view you last used | done |
+| U5 (lane B) | Clips by hand: move, copy (⌥-drag), resize from either edge, move to another track, select several, delete. Each is one undo step | done |
 
 ## Setup: the merges
 
@@ -208,4 +209,83 @@ before it stopped at the missing chip (`~/m2-runs/s8ui/scratch/e2e/ui-b-u4-red/s
   get Triplets and 1/64 from the shared menu, and ⌘3 works there.
 - The grid resets at each app launch (Q7): the line in `docs/gaps.md` comes at the End.
 - The drag's value bubble and guide line come with U5.
+
+## U5: clip gestures (lane B)
+
+**In short**
+- You can now edit clips on the timeline with the mouse:
+
+  | To | Do |
+  |---|---|
+  | Move a clip | drag it. It lands on the grid |
+  | Copy it | hold ⌥ (Alt on Linux) and drag |
+  | Make it shorter or longer | drag its left or right edge |
+  | Move it to another track | drag it onto that track's lane |
+  | Pick more clips | ⇧-click adds one, ⌘-click (Ctrl) takes one in or out |
+  | Move several | pick them, then drag one: they all move |
+  | Delete | ⌫ |
+
+- While you drag, a small label shows where the clip lands ("9.3.1"), and the track's name when it
+  goes to another track. A dashed line marks the spot. The lane it will land on lights up.
+- A lane that can't take the clip says why ("Automation only") and doesn't light up. Letting go
+  there does nothing.
+- Each edit is one undo step. There is no toast: you see the clip where it went.
+- If another window or an agent changed that clip while you held it, the edit is refused and a
+  toast says so in plain words.
+- Automation clips can be picked, moved, copied, resized and deleted like notes clips now.
+- Checks: the web build, `s8-clips` (now 55 checks), and 20 suites that touch clips or lanes.
+
+### What changed
+
+| File | What |
+|---|---|
+| `web/src/lib/clips.ts` (new) | The gestures (`create`, `move`, `resize`, `delete`) sent to `POST /api/graph/clips`, one undo step each, named for the Undo tooltip ("moving a Hats clip"). A clip is named by its id, or by its start and rank (Q11), always with the `sha` the window drew it with (B7): one changed since is refused with 409 and the server's words. `busy`: a gesture waits until the timeline shows the last edit. `useClipSelection`: the selected clips, across tracks |
+| `web/src/components/SongTimeline.tsx` | The timeline's edits are gestures now (no whole-lane writes). A drag moves every selected clip by the grabbed clip's snapped distance; onto the lane under the pointer when they come from one lane and it takes them; ⌥ copies. Either edge (6 px, `ew-resize`) resizes. The value bubble (`clip-bubble`) and the dashed guide (`clip-guide`). The target lane lit with `accent-wash`. A dropped drag stays drawn where it went until the timeline shows the edit (no jump back). ⇧-click, ⌘-click, ⌫, Esc. Automation and audio clips take the same gestures. A new clip gets its id from the server and opens in Notes as before |
+| `web/src/components/Shortcuts.tsx` | Edit: "Select more clips / one in or out ⇧-click / ⌘-click", "Copy a clip ⌥-drag" |
+| `e2e/s8-clips.mjs` | Part 2 (32 checks) |
+| `e2e/notes.mjs` | Its last timeline check said automation clips can't be picked. Now: one picked is deleted by Delete, undo brings it back, and a double-click on the lane still makes no clip. Same count (52) |
+
+### Checks
+
+| Check | Result |
+|---|---|
+| `cd web && npm run build` (type-checks) | ok |
+| `s8-clips` | 55 of 55, three runs |
+| `taste`, `s4-clips`, `notes`, `fixes-notes`, `s8-songbar`, `gestures` | 39, 28, 52, 37, 68, 30 |
+| `layout`, `views`, `pc-keys`, `s8-tracks`, `s6-write`, `s4-meter` | 39, 30, 37, 75, 36, 8 |
+| `attention`, `g11-play`, `live3a`, `s6-builders`, `s4-problems`, `s4-attn`, `newsong` | 57, 24, 49, 55, 18, 13, 71 |
+| Server | `~/m2-runs/s8ui/bin/ui-b-5a34189` (B6, B7, B8) |
+| Logs | `~/m2-runs/logs/ui-b-u5-suites2-*.log`; suite logs in `~/m2-runs/s8ui/scratch/e2e/ui-b-u5b` |
+| Pictures (headless page, not the app) | `~/m2-runs/s8ui/scratch/e2e/ui-b-u5-shot/s8-clips-fix/`: `s8-clips-grid.png` (the grid menu), `s8-clips-across.png` (a Kick clip dragged onto Hats), `s8-clips-select.png` (two clips selected across tracks) |
+
+**Red first:** part 2 on U4's page (the same server): no bubble or guide, the move went out as a
+whole-lane write (`/api/graph/lane`), not a gesture, and the clip had no edges; it stopped there
+(3 failed; `~/m2-runs/s8ui/scratch/e2e/ui-b-u5-red/s8-clips-fix.log`).
+
+**Found while building:** a clip moved to another lane was taken out of its own lane while dragged,
+which dropped the pointer and cancelled the drop. It is now hidden there but kept.
+
+### Choices
+
+| Choice | Why |
+|---|---|
+| A click on a picked clip keeps the selection until you let go | So a drag moves them all; a plain click then picks only it (as Live and Logic) |
+| Several clips go to another lane only when they come from one lane | `move` has one `to`. Clips from several tracks move in time only |
+| Letting go over a lane that can't take the clips does nothing | Moving them in time instead would surprise. The bubble said why |
+| No toast for a gesture | design-8b §2.4; the Undo tooltip names it |
+
+### Left
+
+- U6 can start: B7 (split, join, quantize) is on 8b-backend and merged here. ⌘D, ⌘C ⌘X ⌘V,
+  ⌘E, ⌘J, Q, the arrows, the marquee and the clip menu are U6.
+- Until U6, ⌘D with only an automation clip selected duplicates its track (`App.tsx`'s order gets
+  the clips step in U6), and ⌘L loops over the clip Notes shows, not over the selection
+  (`GraphCanvas.tsx`).
+- An anonymous clip (no id of its own, only in a hand-written file) moved along its lane gets its id
+  from the server, so the selection and Notes lose it.
+- Automation points and a double-click that makes an automation clip: U7.
+- A dragged clip is heard only when dropped (Q10).
+- The app shots `ui-u4-grid.png` and `ui-u5-select.png` (Xvfb `:98`) are for after the merge into
+  `8b-ui`.
+- When lane B ends: delete `~/m2-runs/wt/ui-b/target` and `~/m2-runs/s8ui/bin/ui-b-5a34189`.
 

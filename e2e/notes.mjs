@@ -223,16 +223,23 @@ for (let k = 0; k < 3; k++) {
 check(await until(async () => fs.readFileSync(FILE, "utf8") === original), "undoing the move, the note and the new clip leaves the original file");
 check(await until(async () => (await page.$$('[data-lane="bass.notes"] [data-clip]')).length === 1), "and one clip in the lane");
 
-// A control lane's clips aren't notes clips: no picking, no double-click clips. (Automation is folded under its track.)
+// A control lane's clips are clips too (design-8b §7.2): a click picks one and Delete removes it, one
+// undo step. A double-click on its empty space makes no clip: no notes clip there, and automation drawn
+// in place comes later. (Automation is folded under its track.)
 await page.click('[data-fold="bass"]');
 await page.waitForSelector('[data-lane="bass.cutoff"]');
+const cutoffFile = `${proj}/data/bass/cutoff.json`;
+const cutoffWas = fs.readFileSync(cutoffFile, "utf8");
 const cutoff = await box('[data-lane="bass.cutoff"] :nth-child(1 of [data-clip])');
 await page.mouse.click(cutoff.x + 30, cutoff.y + cutoff.height / 2);
 await page.keyboard.press("Delete");
+const gone = await until(() => JSON.parse(fs.readFileSync(cutoffFile, "utf8")).clips.length === 0);
+await undo();
+const back = await until(() => fs.readFileSync(cutoffFile, "utf8") === cutoffWas);
 const empty = await box('[data-lane="bass.cutoff"] > div:last-child');
 await page.mouse.click(empty.x + 40 * PPB, empty.y + empty.height / 2, { count: 2 });
 await sleep(600);
-check(!fs.existsSync(`${proj}/data/bass/cutoff.json`) || JSON.parse(fs.readFileSync(`${proj}/data/bass/cutoff.json`, "utf8")).clips.length === 1, "automation clips are left alone");
+check(gone && back && fs.readFileSync(cutoffFile, "utf8") === cutoffWas, `an automation clip picked is deleted by Delete and undo brings it back; a double-click on its lane makes no clip (${gone}, ${back})`);
 check(errors.length === 0, `no console errors ${errors.join(" | ")}`);
 void ppb3;
 console.log(`\n${pass} passed, ${fail} failed`);

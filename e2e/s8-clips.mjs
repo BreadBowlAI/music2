@@ -1,13 +1,20 @@
-// 8b.5 The timeline as an editor (design-8b §7, taste.md §3.4, §5): part 1, its grid and snap (U4):
-// the grid chip in the corner (Auto, the menu, triplets), a drag that lands on the grid, ⌘ held to
-// place a clip freely, ⌘1 to ⌘4 on the view last pointed at (the timeline or Notes), the choice kept
-// over a reload, a click on empty lane space that moves where play starts and writes nothing, and
-// a PC page's words.
+// 8b.5 The timeline as an editor (design-8b §7, taste.md §3.4, §5).
+// Part 1, its grid and snap (U4): the grid chip in the corner (Auto, the menu, triplets), a drag
+// that lands on the grid, ⌘ held to place a clip freely, ⌘1 to ⌘4 on the view last pointed at (the
+// timeline or Notes), the choice kept over a reload, a click on empty lane space that moves where
+// play starts and writes nothing.
+// Part 2, clip gestures (U5): each edit one `clips` gesture and one undo step, nothing else on
+// disk, no toast; either edge resized with the notes kept in time; ⌥-drag copies; a clip dragged
+// to another track's lane, with the bubble, the guide and the lit lane; lanes that can't take it
+// say why; ⇧-click and ⌘-click select, a drag moves every selected clip, ⌫ deletes them; a clip
+// changed elsewhere while held is refused in words.
+// And a PC page's words.
 //
 //   node e2e/s8-clips.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
-import { ROOT, check, done, open, read, sleep, until } from "./fixlib.mjs";
+import fs from "node:fs";
+import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 
-const { browser, page, errors, posts, api, state, key, box, drag } = await open(1440, 900);
+const { browser, page, errors, posts, api, state, toasts, key, box, drag } = await open(1440, 900);
 const status = async () => (await api("/status")).body;
 const clips = (path) => JSON.parse(read(path)).clips;
 const near = (a, b) => Math.abs(a - b) < 1e-3;
@@ -117,13 +124,170 @@ await key("Alt+k");
 await page.waitForSelector("[data-testid=shortcuts]");
 const sheet = await page.$eval("[data-testid=shortcuts]", (e) => e.innerText);
 check(sheet.includes("Narrower / wider grid") && sheet.includes("⌘1 / ⌘2") && sheet.includes("Triplet grid") && sheet.includes("hold ⌘ while dragging"), "the shortcuts sheet lists the grid's keys");
+check(sheet.includes("Copy a clip") && sheet.includes("⌥-drag") && sheet.includes("⇧-click / ⌘-click"), "and the clips' gestures");
 await key("Escape");
+
+// ================================================================ part 2: clip gestures (U5)
+const lanes = (path) => JSON.parse(read(path)).clips;
+const sent = (from) => posts.slice(from);
+const gestureOf = (p) => JSON.parse(p.body).gesture;
+/** Every file of the song but `.music2/`'s, as text. */
+const snapshot = () =>
+  Object.fromEntries(
+    fs
+      .readdirSync(PROJ, { recursive: true })
+      .filter((f) => !f.startsWith(".music2") && fs.statSync(`${PROJ}/${f}`).isFile())
+      .map((f) => [f, fs.readFileSync(`${PROJ}/${f}`, "utf8")]),
+  );
+const changed = (a, b) => Object.keys({ ...a, ...b }).filter((f) => a[f] !== b[f]);
+const clipBox = (lane, id) => box(`[data-lane="${lane}"] [data-clip="${id}"]`);
+const mid = (b) => ({ x: b.x + 30, y: b.y + b.height / 2 });
+const rowOf = (lane) => box(`[data-lane="${lane}"] > div:last-child`);
+const pickedIn = (lane) => page.$$eval(`[data-lane="${lane}"] [data-clip][data-picked]`, (els) => els.map((e) => e.dataset.clip));
+/** Press at `from`, move to `to` (holding `mods`), look with `during`, let go; answers what `during` saw. */
+const hold = async (from, to, { mods = [], during } = {}) => {
+  for (const m of mods) await page.keyboard.down(m);
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(to.x, to.y, { steps: 10 });
+  const seen = during ? await during() : null;
+  await page.mouse.up();
+  for (const m of [...mods].reverse()) await page.keyboard.up(m);
+  return seen;
+};
+const looks = async (lane) => ({
+  bubble: await page.$eval("[data-testid=clip-bubble]", (e) => e.textContent).catch(() => null),
+  guide: await box("[data-testid=clip-guide]"),
+  lit: lane ? await page.$eval(`[data-lane="${lane}"] > div:last-child`, (e) => e.className.includes("bg-accent-wash")) : null,
+});
+
+// ---------------------------------------------------------------- a move: one gesture, nothing else
+const hatsId = lanes("data/hats/hits.json")[0].id;
+let n = posts.length;
+let before = snapshot();
+let b = await clipBox("hats.hits", hatsId);
+const moved = await hold(mid(b), { x: mid(b).x + 4 * PPB, y: mid(b).y }, { during: () => looks() });
+check(await until(() => lanes("data/hats/hits.json")[0].start === 8), `a drag moves the hats clip a bar right: ${lanes("data/hats/hits.json")[0].start}`);
+const lane0 = await rowOf("hats.hits");
+check(moved.bubble === "3.1.1" && Math.abs(moved.guide?.x - (lane0.x + 8 * PPB)) <= 1, `while dragged, the bubble says where it lands and a guide marks it: ${moved.bubble}, ${moved.guide?.x}`);
+const g1 = sent(n);
+const move1 = g1[0] && gestureOf(g1[0]);
+check(g1.length === 1 && g1[0].url === "/api/graph/clips" && move1.op === "move" && move1.by === 4, `as one move gesture, and nothing else sent: ${g1.map((p) => `${p.url} ${p.body.slice(0, 80)}`)}`);
+check(move1?.clips[0].id === hatsId && /^[0-9a-f]{16}$/.test(move1.clips[0].sha ?? ""), `naming the clip by its id, with the hash the window drew: ${JSON.stringify(move1?.clips[0])}`);
+await sleep(300);
+check(changed(before, snapshot()).join() === "data/hats/hits.json", `only the hats lane changed on disk: ${changed(before, snapshot())}`);
+check((await toasts()).length === 0, "no toast: the clip shows where it went");
+const undoTitle = await page.$eval('button[aria-label="Undo"]', (e) => e.title);
+check(undoTitle.startsWith("Undo moving a Hats clip"), `Undo names it: ${undoTitle}`);
+
+// ---------------------------------------------------------------- either edge; the notes stay in time
+const hatsNow = () => lanes("data/hats/hits.json").find((c) => c.id === hatsId);
+const heardAt = () => hatsNow().notes.map((x) => Number((hatsNow().start + x.start).toFixed(6))).join();
+const times = heardAt();
+const edgeCursor = await page.$eval(`[data-lane="hats.hits"] [data-clip="${hatsId}"] [data-edge=right]`, (e) => getComputedStyle(e).cursor);
+check(edgeCursor === "ew-resize", `each edge has a resize cursor: ${edgeCursor}`);
+b = await clipBox("hats.hits", hatsId);
+const right = { x: b.x + b.width - 3, y: b.y + b.height / 2 };
+const r = await hold(right, { x: right.x - 4 * PPB, y: right.y }, { during: () => looks() });
+check(await until(() => hatsNow().length === 28) && hatsNow().start === 8, `the right edge dragged a bar left: ${hatsNow().start}+${hatsNow().length}; the bubble said ${r.bubble}`);
+check(heardAt() === times && r.bubble === "10.1.1", "every note stays where it plays");
+b = await clipBox("hats.hits", hatsId);
+const trimmed = read("data/hats/hits.json");
+const left = { x: b.x + 3, y: b.y + b.height / 2 };
+await hold(left, { x: left.x + 4 * PPB, y: left.y });
+check(await until(() => hatsNow().start === 12) && hatsNow().length === 24, `the left edge dragged a bar right: ${hatsNow().start}+${hatsNow().length}`);
+check(heardAt() === times && hatsNow().notes.length === 32, "the notes keep their place in time; those before the edge stay in the file, silent");
+await key("Meta+z");
+check(await until(() => read("data/hats/hits.json") === trimmed), "one undo puts the left edge back, byte for byte");
+
+// ---------------------------------------------------------------- ⌥-drag copies
+const kick0 = lanes("data/kick/hits.json")[0];
+b = await clipBox("kick.hits", kick0.id);
+await hold(mid(b), { x: mid(b).x + 40 * PPB, y: mid(b).y }, { mods: ["Alt"] });
+check(await until(() => lanes("data/kick/hits.json").length === 2), "⌥-drag copies the kick clip");
+const copy = lanes("data/kick/hits.json").find((c) => c.id !== kick0.id);
+const orig = lanes("data/kick/hits.json").find((c) => c.id === kick0.id);
+check(copy?.start === 40 && /^[0-9a-z]{8}$/.test(copy.id) && JSON.stringify(copy.notes) === JSON.stringify(kick0.notes) && orig?.start === 0, `with a new id at bar 11, the original where it was: ${copy?.id} at ${copy?.start}`);
+check(await until(async () => (await pickedIn("kick.hits")).join() === copy.id), "the copy is selected, not the original");
+
+// ---------------------------------------------------------------- to another track's lane
+b = await clipBox("kick.hits", copy.id);
+const hatsRow = await rowOf("hats.hits");
+const shot = (name) => page.screenshot({ path: `${ROOT}/${name}.png`, captureBeyondViewport: false });
+const across = await hold(mid(b), { x: mid(b).x, y: hatsRow.y + hatsRow.height / 2 }, { during: async () => (await shot("s8-clips-across"), looks("hats.hits")) });
+check(across.bubble === "11.1.1 · Hats" && across.lit && Math.abs(across.guide?.x - (hatsRow.x + 40 * PPB)) <= 1, `dragged over Hats: the bubble names it, its lane is lit, the guide at bar 11: ${JSON.stringify({ ...across, guide: across.guide?.x })}`);
+check(await until(() => lanes("data/kick/hits.json").length === 1 && lanes("data/hats/hits.json").some((c) => c.id === copy.id && c.start === 40)), "let go, the clip moves from Kick's lane to Hats', keeping its id");
+check(await until(async () => (await pickedIn("hats.hits")).join() === copy.id), "and stays selected there");
+
+// ---------------------------------------------------------------- lanes that can't take it
+await page.click('[data-fold="bass"]');
+await page.waitForSelector('[data-lane="bass.cutoff"]');
+n = posts.length;
+before = snapshot();
+const cutoff = await rowOf("bass.cutoff");
+b = await clipBox("hats.hits", hatsId);
+const onto = await hold(mid(b), { x: mid(b).x, y: cutoff.y + cutoff.height / 2 }, { during: () => looks("bass.cutoff") });
+check(onto.bubble === "Automation only" && onto.lit === false, `over an automation lane the bubble says why, and the lane isn't lit: ${onto.bubble}`);
+const cut = lanes("data/bass/cutoff.json")[0];
+b = await clipBox("bass.cutoff", cut.id);
+const drop = await rowOf("bass.drop");
+const units = await hold(mid(b), { x: mid(b).x, y: drop.y + drop.height / 2 }, { during: () => looks("bass.drop") });
+check(units.bubble === "Only 0–1 automation", `an automation clip over a lane of another unit: ${units.bubble}`);
+await sleep(400);
+check(sent(n).length === 0 && changed(before, snapshot()).length === 0, "let go there, nothing is sent or changed");
+
+// ---------------------------------------------------------------- selecting several; a drag moves them all; ⌫
+const keysId = lanes("data/keys/chords.json")[0].id;
+await page.click(`[data-lane="hats.hits"] [data-clip="${hatsId}"]`);
+await page.keyboard.down("Shift");
+await page.click(`[data-lane="keys.chords"] [data-clip="${keysId}"]`);
+await page.keyboard.up("Shift");
+const both = async () => [...(await pickedIn("hats.hits")), ...(await pickedIn("keys.chords"))].join();
+check((await both()) === `${hatsId},${keysId}`, `⇧-click adds a clip of another track: ${await both()}`);
+await shot("s8-clips-select");
+await page.keyboard.down("Meta");
+await page.click(`[data-lane="keys.chords"] [data-clip="${keysId}"]`);
+const toggled = await both();
+await page.click(`[data-lane="keys.chords"] [data-clip="${keysId}"]`);
+await page.keyboard.up("Meta");
+check(toggled === hatsId && (await both()) === `${hatsId},${keysId}`, `⌘-click takes one out, and puts it back: ${toggled}`);
+n = posts.length;
+b = await clipBox("hats.hits", hatsId);
+await hold(mid(b), { x: mid(b).x + 2 * PPB, y: mid(b).y });
+check(await until(() => hatsNow().start === 10 && lanes("data/keys/chords.json")[0].start === 2), `a drag moves both by 2 beats: ${hatsNow().start}, ${lanes("data/keys/chords.json")[0].start}`);
+check(sent(n).length === 1 && gestureOf(sent(n)[0]).clips.length === 2, "in one gesture");
+const kept = { hats: read("data/hats/hits.json"), keys: read("data/keys/chords.json") };
+n = posts.length;
+await key("Backspace");
+check(await until(() => !lanes("data/hats/hits.json").some((c) => c.id === hatsId) && lanes("data/keys/chords.json").length === 0), "⌫ deletes both");
+check(sent(n).length === 1 && gestureOf(sent(n)[0]).op === "delete" && gestureOf(sent(n)[0]).clips.length === 2, "in one gesture");
+await key("Meta+z");
+check(await until(() => read("data/hats/hits.json") === kept.hats && read("data/keys/chords.json") === kept.keys), "one undo brings both back");
+
+// ---------------------------------------------------------------- a clip changed elsewhere while held
+await until(async () => !!(await clipBox("hats.hits", hatsId)));
+b = await clipBox("hats.hits", hatsId);
+await page.mouse.move(mid(b).x, mid(b).y);
+await page.mouse.down();
+await page.mouse.move(mid(b).x + 2 * PPB, mid(b).y, { steps: 6 });
+const file = JSON.parse(read("data/hats/hits.json"));
+file.clips.find((c) => c.id === hatsId).notes[0].velocity = 0.31;
+write("data/hats/hits.json", JSON.stringify(file, null, 2));
+const seenIt = await until(async () => (await state()).timeline.tracks.find((t) => t.module === "hats").lanes[0].clips.find((c) => c.id === hatsId)?.notes[0].velocity === 0.31);
+const outside = read("data/hats/hits.json");
+await page.mouse.move(mid(b).x + 4 * PPB, mid(b).y, { steps: 4 });
+await page.mouse.up();
+check(seenIt && (await until(async () => (await toasts()).some((t) => t.includes("changed in another window or by an agent")))), `an outside edit while it was held: the drop is refused in words: ${(await toasts()).join(" | ")}`);
+await sleep(300);
+check(read("data/hats/hits.json") === outside, "and the file keeps the outside edit");
 
 // ---------------------------------------------------------------- a PC page says Ctrl
 const pc = await open(1440, 900, { pc: true });
 await pc.page.waitForSelector("[data-testid=song-grid]");
 const pcWords = await pc.page.evaluate(() => [document.querySelector("[data-testid=song-grid]").title, document.querySelector("[data-testid=song-snap]").title].join(" | "));
 check(pcWords.includes("Ctrl+1") && pcWords.includes("Ctrl+4") && pcWords.includes("hold Ctrl") && !pcWords.includes("⌘"), `a PC page's tooltips say Ctrl: ${pcWords.replace(/\n/g, " ")}`);
+const clipWords = await pc.page.$eval('[data-lane="kick.hits"] [data-clip]', (e) => e.title);
+check(clipWords.includes("Alt-drag to copy") && clipWords.includes("drag an edge to resize"), `and a clip's tooltip says Alt-drag: ${clipWords.replace(/\n/g, " | ")}`);
 await pc.browser.close();
 
 await browser.close();

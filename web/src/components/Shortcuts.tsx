@@ -23,7 +23,9 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
     name: "Edit",
     keys: [
       ["Undo / redo", `${chord("Z")} / ${chord("Z", { shift: true })}`],
-      ["Delete the selected clip or notes", keyName("Backspace")],
+      ["Delete the selected clips or notes", keyName("Backspace")],
+      ["Select more clips / one in or out", `${mod.shift}-click / ${mod.cmd}-click`],
+      ["Copy a clip", `${mod.alt}-drag`],
       ["Duplicate the selected notes or track", chord("D")],
       ["Select all notes", chord("A")],
       ["Deselect", "Esc"],
