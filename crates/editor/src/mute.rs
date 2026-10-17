@@ -88,6 +88,11 @@ pub fn mute_in_song(s: &mut Session, modules: &[String], muted: bool) -> Result<
         let site = track_call(&rev.compiled.sites, &rev.snapshot.files, m).ok_or_else(in_code)?;
         let text = &rev.snapshot.files[Path::new(&site.file)];
         first.get_or_insert_with(|| site.file.clone());
+        // Already as asked, however its options say so (`muted: false`, a const): the graph
+        // wouldn't change, so nothing is written or declared.
+        if m.muted == muted {
+            continue;
+        }
         if let Some(e) = option_edit(text, site, m, muted)? {
             edits.entry(site.file.clone()).or_default().push(e);
             changes.push(ModuleChange::Muted { module: m2_song::Key::new(key).map_err(EditError::Rejected)?, muted });

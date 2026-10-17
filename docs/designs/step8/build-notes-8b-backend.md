@@ -171,7 +171,7 @@ options, as one undo step. The state also says what each track still drives when
 
 | Piece | What it does | Where |
 |---|---|---|
-| `mute_in_song(s, modules, muted)` | One `Confined` Tx: each edited range (or the point after the key), each module's `Muted`. The planner asserts each track is as asked. "Kick → Kick, muted in song"; "Kick and Bass". A track already so is skipped; with none left, nothing is written. | `crates/editor/src/mute.rs` |
+| `mute_in_song(s, modules, muted)` | One `Confined` Tx: each edited range (or the point after the key), each module's `Muted`. The planner asserts each track is as asked. "Kick → Kick, muted in song"; "Kick and Bass". A track already so in the graph (however its options say it) is skipped; with none left, nothing is written. | `crates/editor/src/mute.rs` |
 | The option edit | Its own small edit over `sites::properties` (G7): append `muted: true`, replace its value, or take it out (and the object when it held nothing else). `track(k, fn)` gets `, { muted: true }` after the key. | same |
 | `feeds(rev)` | For each track: each module and component that reads it through a sidechain input or a control export. A node in `song` is named `song` (Q6). | same |
 | `state.overlays.feeds` | The feeds, for the strip's "Still drives Duck on Bass". | `crates/server/src/graph/overlay.rs` |
@@ -667,5 +667,21 @@ clip or note), Remove automation and mute in song use it. Mute in song says "The
 | `the_song_and_missing_tracks_are_refused`, `remove_automation_refuses_what_it_cant_take_out`, `kinds_and_units_never_mix` (a missing clip, track and lane), `quantize_to_sixteenths_and_triplets` (a missing note): the whole message | red: "no control `…` in that revision" |
 | `remove_automation_over_http`, `clip_gestures_over_http`: the route's whole `error` | red |
 | `clip_gestures_from_the_terminal`, `unautomate_from_the_terminal`, `mute_in_song_writes_the_option_and_takes_the_lock`: the whole `error:` line | red |
+
+**Checks:** tests of `m2-editor`, `m2-server`, `m2`; clippy on them.
+
+### S2. Mute in song leaves a track alone when it is already as asked
+
+**What was wrong:** mute in song read the code's text, not the graph, to tell whether a track was
+already as asked. With `{ muted: false }` written, asking "off" took the option out and declared a
+`Muted` change the graph never made. `Confined` then refused the edit, with Rust debug text as
+the reason. A const (`muted: quiet`) asked for the state it already gives did the same.
+
+**The fix:** a track whose graph already has the state asked is skipped: nothing written, nothing
+declared.
+
+| Test | Red first? |
+|---|---|
+| `a_track_already_as_asked_is_left_alone` (`muted: false` asked off; a const that is true asked on; then both on, which writes only the first) | red: "its modules change as {}, not as declared" |
 
 **Checks:** tests of `m2-editor`, `m2-server`, `m2`; clippy on them.

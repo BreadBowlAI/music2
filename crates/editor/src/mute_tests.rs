@@ -59,6 +59,26 @@ fn every_way_a_track_call_is_written() {
     assert!(now.contains("track('a', () =>") && now.contains("track('b', () =>"), "{now}");
 }
 
+// MON-5: a track already as asked is left alone, however its options say so: `muted: false` asked
+// off, or a const that is true asked on. Nothing is written, and nothing is refused.
+#[test]
+fn a_track_already_as_asked_is_left_alone() {
+    let f = Fixture::new();
+    f.write("music2.toml", MANIFEST);
+    let song = "import { song, track } from '@m2/core';\nimport { osc } from 'std/dsp';\nimport { mixer } from 'std/mix';\n\
+                const quiet = true;\nconst a = track('a', { muted: false }, () => osc.sine(220));\n\
+                const b = track('b', { muted: quiet }, () => osc.saw(110));\n\
+                export default song(() => mixer({ a: a.out, b: b.out }));\n";
+    f.write("song.ts", song);
+    let mut s = f.open();
+    let n = s.accepted().number;
+    mute_in_song(&mut s, &keys(&["a"]), false).unwrap();
+    mute_in_song(&mut s, &keys(&["b"]), true).unwrap();
+    mute_in_song(&mut s, &keys(&["a", "b"]), true).unwrap();
+    assert_eq!(f.read("song.ts"), song.replace("{ muted: false }", "{ muted: true }"), "only `a` changed");
+    assert_eq!((s.accepted().number, muted(&s)), (n + 1, vec!["a".to_string(), "b".to_string()]));
+}
+
 // MON-5, WRITE-21: several tracks muted in one Tx are one undo step; undo puts every option back.
 #[test]
 fn several_tracks_mute_in_one_tx_and_undo_puts_the_options_back() {
