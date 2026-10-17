@@ -80,7 +80,7 @@ export const SUITES = [
   ["fixes-notes", "fix", { expect: 37 }],
   ["attention", "attn", { expect: 57 }],
   ["newsong", "none", { expect: 71 }],
-  ["pl-projects", "none", { expect: 58 }],
+  ["pl-projects", "none", { expect: 65 }],
   ["export", "export", { expect: 37 }],
   ["fx-fixes", "none", { expect: 75 }],
   ["s4-clips", "fix", { expect: 28 }],

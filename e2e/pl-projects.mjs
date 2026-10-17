@@ -21,6 +21,7 @@ import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { exe } from "./chrome.mjs";
 import { HEADLESS, REPO } from "./env.mjs";
+import { lint as lintIn } from "./lintlib.mjs";
 
 const [ROOT, HOME] = process.argv.slice(2);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -101,26 +102,8 @@ async function pageOn(s, { pc = false } = {}) {
   return page;
 }
 
-/** The taste lint (e2e/taste.mjs) over what is inside `sel`: font sizes, radii, gradients, backdrop filters, mono text. */
-const lint = (page, sel) =>
-  page.evaluate((sel) => {
-    const bad = [];
-    for (const root of document.querySelectorAll(sel))
-      for (const e of [root, ...root.querySelectorAll("*")]) {
-        if (!e.getClientRects().length) continue;
-        const s = getComputedStyle(e);
-        const texty = [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
-        if (texty && e.namespaceURI === "http://www.w3.org/1999/xhtml" && ![11, 12, 13, 15].includes(parseFloat(s.fontSize))) bad.push(`font-size ${s.fontSize}`);
-        if (texty && /mono|menlo|courier/i.test(s.fontFamily) && !e.closest("[data-code]")) bad.push("mono font");
-        for (const c of ["borderTopLeftRadius", "borderTopRightRadius", "borderBottomRightRadius", "borderBottomLeftRadius"]) {
-          const r = parseFloat(s[c]);
-          if (![0, 2, 4, 8].includes(r) && r < 9999) bad.push(`radius ${s[c]}`);
-        }
-        if (/gradient/.test(s.backgroundImage)) bad.push("gradient");
-        if (s.backdropFilter && s.backdropFilter !== "none") bad.push("backdrop-filter");
-      }
-    return [...new Set(bad)];
-  }, sel);
+/** The taste lint over what is inside `sel` (e2e/lintlib.mjs, as taste.mjs runs it). */
+const lint = (page, sel) => page.evaluate(lintIn, sel);
 
 /**
  * A page as the desktop app's (`native`), on server `s`: its menu bar's commands are sent with

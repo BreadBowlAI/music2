@@ -6,6 +6,7 @@
 //   node e2e/pl-tracks.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sleep, until } from "./fixlib.mjs";
+import { lint as lintIn } from "./lintlib.mjs";
 
 const { page, errors, api, state, toasts, key } = await open(1440, 900);
 const exists = (f) => fs.existsSync(`${PROJ}/${f}`);
@@ -22,26 +23,8 @@ const shiftTab = async () => {
   await page.keyboard.up("Shift");
 };
 
-/** The taste lint (e2e/taste.mjs) over what is inside `sel`: font sizes, radii, gradients, backdrop filters, mono text. */
-const lint = (sel) =>
-  page.evaluate((sel) => {
-    const bad = [];
-    for (const root of document.querySelectorAll(sel))
-      for (const e of [root, ...root.querySelectorAll("*")]) {
-        if (!e.getClientRects().length) continue;
-        const s = getComputedStyle(e);
-        const texty = [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
-        if (texty && e.namespaceURI === "http://www.w3.org/1999/xhtml" && ![11, 12, 13, 15].includes(parseFloat(s.fontSize))) bad.push(`font-size ${s.fontSize}`);
-        if (texty && /mono|menlo|courier/i.test(s.fontFamily) && !e.closest("[data-code]")) bad.push("mono font");
-        for (const c of ["borderTopLeftRadius", "borderTopRightRadius", "borderBottomRightRadius", "borderBottomLeftRadius"]) {
-          const r = parseFloat(s[c]);
-          if (![0, 2, 4, 8].includes(r) && r < 9999) bad.push(`radius ${s[c]}`);
-        }
-        if (/gradient/.test(s.backgroundImage)) bad.push("gradient");
-        if (s.backdropFilter && s.backdropFilter !== "none") bad.push("backdrop-filter");
-      }
-    return [...new Set(bad)];
-  }, sel);
+/** The taste lint over what is inside `sel` (e2e/lintlib.mjs, as taste.mjs runs it). */
+const lint = (sel) => page.evaluate(lintIn, sel);
 
 /** Ask to delete Kick from its header menu: Bass ducks to it, so the question opens. */
 const ask = async () => {

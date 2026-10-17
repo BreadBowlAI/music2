@@ -1371,3 +1371,18 @@ checks now. No code changed: each check was shown red on a page built with its l
 | `pl-sounds` (44 now) | With the Drum kit's clip in Notes and E minor written into layout.json: its rows stay shaded as the black keys' (`1,3,6,8,10`); Keys' roll is shaded by E minor (`1,3,5,8,10`), so the key did land |
 | Red first (a page with `editorHooks.zoom?.(dir) \|\|` and `!drums` taken out) | `FAIL with the roll focused, ⌘= makes its notes 1.5 times wider and leaves the timeline: note 9.5 → 9.5 px, clip 766 → 1150 px` and `FAIL the Drum kit's rows stay shaded as the black keys', not by E minor: 1,3,5,8,10` |
 | Green | `pl-notes`, `pl-sounds` (see the last run below) |
+
+#### PL-T4. Four suites ran weaker copies of the taste lint
+
+`pl-projects`, `pl-tracks`, `pl-lanes` and `pl-notes` each had their own copy of the lint. The
+copies in `pl-projects` and `pl-tracks` never looked at text fields, so the Save As and Rename Song
+name fields were never checked for font size. `pl-lanes` checked two corners and no mono or
+backdrop rule; none checked `::before` and `::after`. All four now run `e2e/lintlib.mjs`, as
+`taste.mjs`, `pl-mix`, `pl-ids`, `pl-sounds`, `pl-zoom` and `pl-arrange` do (plan 1.3, X16).
+
+| | |
+|---|---|
+| Red first | The old copy and lintlib on one page: a Save As dialog whose name field is 14 px. `old inline lint: []`, `lintlib: ["font-size 14px at <input>"]` |
+| Green | On the tip, every state these suites lint passes lintlib: `pl-tracks` 20/20, `pl-lanes` 28/28, `pl-notes` 102/102, `pl-projects` 65 |
+| Also | `pl-projects`' count goes 58 → 65 here: PL-R1's commit added 7 checks and missed it |
+| Left | `s8-mute` (8b's suite) still has its own copy |

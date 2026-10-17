@@ -8,35 +8,15 @@
 //   node e2e/pl-notes.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
+import { lint as lintIn } from "./lintlib.mjs";
 
 const { browser, page, errors, api, state, box, key } = await open(1440, 900);
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
 
 const FILE = "data/bass/notes.json";
 const ROW = 14;
-/** The taste lint (e2e/taste.mjs) over what is inside `sel`: font sizes, radii, gradients, backdrop filters, mono text. */
-const lint = (sel) =>
-  page.evaluate((sel) => {
-    const SIZES = new Set([11, 12, 13, 15]);
-    const RADII = new Set([0, 2, 4, 8]);
-    const bad = [];
-    const root = document.querySelector(sel);
-    if (!root) return [`nothing at ${sel}`];
-    for (const e of [root, ...root.querySelectorAll("*")]) {
-      if (!e.getClientRects().length) continue;
-      const s = getComputedStyle(e);
-      const texty = [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) || /^(INPUT|TEXTAREA|SELECT)$/.test(e.tagName);
-      if (texty && e.namespaceURI === "http://www.w3.org/1999/xhtml" && !SIZES.has(parseFloat(s.fontSize))) bad.push(`font-size ${s.fontSize}`);
-      if (texty && /mono|menlo|courier|sf mono/i.test(s.fontFamily) && !e.closest("[data-code]")) bad.push("mono font");
-      for (const c of ["borderTopLeftRadius", "borderTopRightRadius", "borderBottomRightRadius", "borderBottomLeftRadius"]) {
-        const v = s[c], r = parseFloat(v);
-        if (v.endsWith("%") ? r !== 0 && r < 50 : !RADII.has(r) && r < 9999) bad.push(`border-radius ${v}`);
-      }
-      if (/gradient/.test(s.backgroundImage)) bad.push("gradient");
-      if (s.backdropFilter && s.backdropFilter !== "none") bad.push("backdrop-filter");
-    }
-    return bad;
-  }, sel);
+/** The taste lint over what is inside `sel` (e2e/lintlib.mjs, as taste.mjs runs it). */
+const lint = (sel) => page.evaluate(lintIn, sel);
 
 /** The Bass clip's notes as the server has them (pitches as numbers). */
 const bassClip = async () => (await state()).timeline.tracks.find((t) => t.module === "bass").lanes.find((l) => l.key === "notes").clips[0];

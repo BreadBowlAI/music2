@@ -4,6 +4,7 @@
 //
 //   node e2e/pl-lanes.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import { check, done, open, read, sleep, until, write } from "./fixlib.mjs";
+import { lint } from "./lintlib.mjs";
 
 const { browser, page, errors, api, state, key } = await open(1440, 900);
 
@@ -92,17 +93,8 @@ const lineBox = await page.$eval('[data-testid=hidden-lanes][data-module="bass"]
 });
 check(lineBox.h === 20 && lineBox.under, `20 px tall, right under the Cutoff lane (${JSON.stringify(lineBox)})`);
 check(await until(() => JSON.stringify(viewHidden()) === '["bass.drop"]'), `kept in .music2/view.json: hidden ${JSON.stringify(viewHidden())}`);
-const bad = await page.$eval('[data-testid=hidden-lanes][data-module="bass"]', (root) => {
-  const out = [];
-  for (const e of [root, ...root.querySelectorAll("*")]) {
-    const s = getComputedStyle(e);
-    const texty = [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
-    if (texty && ![11, 12, 13, 15].includes(parseFloat(s.fontSize))) out.push(`font-size ${s.fontSize}`);
-    if (/gradient/.test(s.backgroundImage)) out.push("gradient");
-    for (const c of ["borderTopLeftRadius", "borderBottomRightRadius"]) if (![0, 2, 4, 8].includes(parseFloat(s[c])) && parseFloat(s[c]) < 9999) out.push(`radius ${s[c]}`);
-  }
-  return out;
-});
+// The taste lint (e2e/lintlib.mjs, as taste.mjs runs it) over the line.
+const bad = await page.evaluate(lint, '[data-testid=hidden-lanes][data-module="bass"]');
 check(bad.length === 0, `the line passes the taste lint${bad.length ? `: ${bad.join("; ")}` : ""}`);
 
 // Folded, the line goes with the lanes (X44); unfolded (or A), Drop stays hidden.
