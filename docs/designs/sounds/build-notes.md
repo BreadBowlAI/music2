@@ -301,3 +301,118 @@ Every change is inside one run's noise (about ±30 µs a block, ±150 µs a call
   only: the chorus's delay lines and the phaser's filters hold the tail, the bitcrusher a sample of
   it.
 - The std bump to 0.2 (slice 3).
+
+## Slice 3: the bump, std 0.1 to 0.2
+
+**In short**
+- std is now 0.2.0. Every project the repo ships, every manifest written in code, and the doc
+  examples ask for std "0.2". `git grep -nE 'std = \\?"0\.1'` finds nothing.
+- No render changed. `renders.json` differs only in its `"std"` line. The 10 e2e records match.
+- A new test reads every `music2.toml` the repo ships and checks the bundled std meets it. So the
+  next bump needs no grep.
+- A song that asks for an older std now gets one more sentence in its error: "This app has std
+  0.2. To use it, change this line to std = "0.2". The song may sound a little different." Only for
+  std, and only when the app's std is newer (L7).
+- Found: G7f would have failed at the final check. S's runner builds the projects m2-gates writes,
+  and S's own std is 0.1.0, so S refused them. The runner now builds a copy that asks for S's
+  std. Both G7f parts pass by hand, with the same music as before.
+- `ci/check.sh` passes at `b790a63`: every row, nothing passed only on a retry.
+
+### What was built
+
+| Commit | What |
+|---|---|
+| `a3214f6` | S's runner (`crates/gates/s/main.rs`) compiles a copy of each project, in its own folder, with the manifest's std line set to S's std. Its README says so. Below, "Found". |
+| `6591ecd` | The bump. `std/m2pkg.toml` 0.2.0. The 9 project files. The manifests in code: the desktop app's test, `core/play`'s `common/mod.rs` (one place since slice 2), `core/session` (`MANIFEST`, p16 and p50), `core/song` (data tests, `GOOD` and its `>=` case), the editor's tests, the gates' songs, the server (export, files, graph tests, lib, project ×2), `e2e/fx-fixes.mjs` ×2. `renders.json`: `"std": "0.2.0"`. Doc examples: README, `core/song`'s doc comments, `architecture.md` (RENDER-2's *Why*, the layout, the manifest example), `song-as-program.md` (`m2pkg.toml`). The tests below. |
+| `b790a63` | The `pkg.unsatisfied` hint (L7). `core/song/src/manifest.rs`: only for `std`, only when the installed std is past what the song admits. It names the shortest requirement that admits the app's std (`Requirement::admitting`: `"0.2"` for 0.2.0). |
+
+Left as they are, on purpose (plan 4.2): `@m2/core = "1"`, `format = 1`, `IR_VERSION`, the Rust
+crates' own versions, and the caret-rule cases in `manifest.rs` (they test the rule, not std). One
+line of slice 2's notes named the old requirement; it now says "std's version".
+
+### Tests
+
+| Test | Where | Proves |
+|---|---|---|
+| `every_shipped_manifest_is_met` (new) | `core/session/src/lib.rs` | every `music2.toml` under `examples`, `templates`, `core/session/tests/fixtures` and `e2e/fixtures` is met by the bundled std and the SDK, through the same check a build runs. Each folder must hold at least one, or it fails: a test built where the repo no longer is would check nothing. |
+| `unmet_dependencies` (moved, L4) | `core/song/src/manifest.rs` | with `GOOD` on "0.2": std 0.2.4 is met, 0.3.0 is not, and the message names "0.2" and 0.3.0. Then the hint: there for std 0.3.0; not for the SDK, not for a std older than asked (0.1.9), not for another package. |
+| `caret_requirements` (one more loop) | same | `Requirement::admitting` gives "0.2" for 0.2.0 and 0.2.7, "0.0" for 0.0.3, "1" for 1.4.2, "12" for 12.0.0, and each admits its version |
+| `unmet_dependencies_block` | `core/session/src/lib.rs` | a song asking for std "9" (newer): no hint. Asking for "0.0" (older): the hint names the bundled std's own numbers, read from `std/m2pkg.toml`. The test writes the std line itself, so the next bump can't leave it testing nothing. |
+| `fixture_renders_change_only_with_stds_version` | `core/session/src/gate_tests.rs` | as before. Now it first says which fixture doesn't build, and why. Before, a fixture left behind at a bump rendered nothing and panicked deep in the engine (`index out of bounds`). |
+
+### Red first
+
+| Test | Run without the change | Result |
+|---|---|---|
+| `every_shipped_manifest_is_met` | written on `30739f3` (green), then only `std/m2pkg.toml` moved to 0.2.0 | failed, naming all 9 projects: `examples/with-plugins/music2.toml: music2.toml asks for std "0.1" (at least 0.1.0, below 0.2.0), but 0.2.0 is installed`, and the same for the other 8 |
+| the renders test, at the same point | before its change | panicked in `core/runtime/src/lib.rs` (`index out of bounds: the len is 0`); after it: `examples/first-song doesn't build with std 0.2.0: [… pkg.unsatisfied …]` |
+| `unmet_dependencies` (attack, claim 3) | after the sweep, before moving it | failed: `m.check_dependencies(installed("1.0.0", Some("0.1.4"))).is_empty()` |
+| the hint, both tests | the hint's arm switched off | `manifest.rs`: the message ended at "but 0.3.0 is installed". Session: `asks for std "0.0" (at least 0.0.0, below 0.1.0), but 0.2.0 is installed`, with no hint |
+| G7f with the bump | `m2-gates store --reference 50`, S's runner as it was | `FAIL store: couldn't run: S's runner: /tmp/m2-gates-…/p50-0 doesn't compile: [… pkg.unsatisfied … asks for std "0.2" (at least 0.2.0, below 0.3.0), but 0.1.0 is installed …]` |
+
+### Found: G7f's S can't build the app's projects after a bump
+
+- G7f (RENDER-32) times S, HEAD `8aa301e`, beside the app. m2-gates writes p50 and hands the folder
+  to S's runner. The runner builds it with S's own code and S's own std, 0.1.0.
+- S checks dependencies too (FMT-3, since step 4). After the bump, p50 asks for std "0.2", so S
+  refused it, and G7f couldn't run. Neither the plan nor the attack saw this: the attack only said the
+  final `--gates` run would cover the gates' manifests. This slice's check has no gates, so it would
+  have shown up only at the final check.
+- The fix keeps what G7f already did: S plays its own std. The runner copies the project into its own
+  folder and sets the std line to S's version. p50 uses none of std's new kernels, so all three
+  sides still play the same music, and G7f checks that.
+- Run by hand on the bumped tree (`~/m2-runs/logs/sm3-g7f-1017-035254-3363279.log`), S's runner
+  built in a scratch cache:
+
+| | Slice 2, `09b2dfd` (in the check) | Slice 3, by hand |
+|---|---|---|
+| Verdict, both parts | PASS | PASS |
+| A block, the app's layout against S (bound 80) | +2 µs (−9 to +8) | −15 µs (−162 to +21) |
+| A callback, the same (bound 320) | +52 µs (+29 to +87) | −76 µs (−407 to −66) |
+| P1 against S: block, callback | −2, +26 | −26, +4 |
+| The full build (S's) | 217 ms (185) | 223 ms (189) |
+| The slowest activation block (bound 5,333) | 3,060 µs | 2,783 µs |
+| Footprint of one renderer of p50 | 203 MB | 203 MB |
+| The same music | blocks `22cd1b3810530499`, callbacks `cdb85ca0bbb29381` | the same hashes |
+
+Information only (PLAT-1). The server was not quiet: another agent's job ran beside parts of both
+runs. The point is that G7f runs again and hears the same music. The final `--gates` run builds the
+runner again in its usual cache (`~/.cache/m2-check/s-8aa301e`): its code changed, so `build.sh`
+takes its copy of S again.
+
+### Found: the renders test needs its copy until the render ends
+
+My first version of the renders test's change opened each fixture with `let s = fixture(n).open();`.
+That drops the copied folder at the end of the line. `examples/resample` plays an audio file from
+that folder, so its render came out different (`8658f49d…` instead of `b3daee50…`), and the test
+failed: "a pure fixture renders other bits while std is still 0.2.0". The fixture now lives until the
+render is done, and the record is back to `b3daee50…`. Never committed. It shows the test catches a
+changed render.
+
+### The records
+
+| Record | Result |
+|---|---|
+| `core/session/tests/renders.json` | only `"std": "0.1.0"` → `"0.2.0"`; the 5 hashes the same |
+| `e2e/renders.sha256` | unchanged; 10 of 10 match in the check |
+
+### The check
+
+| Run | Result |
+|---|---|
+| `ci/check.sh` at `b790a63`, the slice's code (`~/m2-runs/check-sm3`, 10 min) | **PASS**, every row: 922 Rust tests, 0 failed (921 at slice 2, and the new manifest test); clippy; std kernels; std.wasm; mac lint; 29/29 browser suites; 10 of 10 renders; repo unchanged. Nothing passed only on a retry (`failed` and `flaky` empty). No gates: no kernel changed, and G7f was run by hand above. |
+| Before each commit | `6591ecd`: `cargo test --locked --workspace`, every test passed but the renders test, which my own mistake above broke; after its fix it passed; clippy clean. `b790a63`: `m2-song`'s 76 tests, the session's dependency tests, clippy clean. |
+
+### Left, and why
+
+- Docs (slice 4): FMT-3's bullet and *Today* (the hint; the trigger's wording, L6), the
+  `pkg.unsatisfied` row of the diagnostics table ("for an older std, says how to move"), the
+  Deferred row, HANDOFF's note for the owner. Write the owner's line without the literal old
+  requirement, or the done grep finds it, for example "change the std line to std = "0.2"".
+- The final `ci/check.sh --gates` judges G7f and runs the other gates on the moved manifests
+  (`crates/gates/src/songs.rs`, `core/session/src/reference.rs`).
+- For the lead: `a3214f6` is a choice the plan didn't name. It keeps S on its own std, as before
+  (risk 17, L5). The other way, S playing the app's std, can't work: the app's std/fx reads
+  `time.playing`, which S's IR doesn't have.
+- Scratch: `~/m2-runs/sm-scratch/s-cache` (S's runner, about 1 GB) is deleted after this slice. The
+  check's logs are in `~/m2-runs/check-sm3`.
