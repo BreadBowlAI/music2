@@ -1,11 +1,17 @@
-// MIDI files (studio lane C, Q36, Q37, Q38): the clip menu's Export as MIDI… writes the clip's
+// MIDI files (studio lane C, Q32 to Q38): the clip menu's Export as MIDI… writes the clip's
 // notes to a MIDI file in the songs folder's Exports (a browser page: no save panel), which reads
 // back to the clip's notes, with a free name for the next; only one notes clip offers it. A
 // one-part MIDI file brought into Bass's notes lane (as a browser uploads it) is one clip and one
 // undo step named "importing riff.mid"; a text file named .mid is refused in words.
+// C2b: a three-part file dropped below the tracks asks the tempo question (the song has clips);
+// Return keeps 124 and makes three tracks, one Undo takes them all back; "Use 128" writes the
+// file's tempo from that bar; Esc writes nothing. A one-part file dropped on Bass goes into it, with
+// no question; a text file named .mid says its words. Then, in an empty song, File ▸ Import MIDI…
+// through the app's file chooser: Drums plays the Drum kit and Low the Synth bass, the song takes
+// the file's 128, and one Undo takes it all back.
 // node st-midi.mjs <root> <home> <project>
 import fs from "node:fs";
-import { check, done, HOME, open, read, ROOT, sess, until } from "./fixlib.mjs";
+import { check, done, HOME, open, read, ROOT, sess, sleep, until } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
 const exportsDir = `${HOME}/Music/music2/Exports`;
@@ -60,7 +66,7 @@ const keyOf = (p) => {
   return (Number(m[3]) + 1) * 12 + NAMES[m[1]] + (m[2] === "#" ? 1 : m[2] === "b" ? -1 : 0);
 };
 
-/** A Standard MIDI File, format 1 at 96 ticks a beat: each track `{name, notes: [[key, start, length, velocity, channel]]}` (beats). */
+/** A Standard MIDI File, format 1 at 96 ticks a beat: each track `{name, bpm?, program?: [channel, program], notes: [[key, start, length, velocity, channel]]}` (beats). */
 function smfBytes(tracks) {
   const vlq = (v) => { const out = [v & 0x7f]; while ((v >>= 7)) out.unshift((v & 0x7f) | 0x80); return out; };
   const chunks = [Buffer.from([0x4d, 0x54, 0x68, 0x64, 0, 0, 0, 6, 0, 1, 0, tracks.length, 0, 96])];
@@ -71,6 +77,11 @@ function smfBytes(tracks) {
     }
     ev.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
     const body = t.name ? [0, 0xff, 3, ...vlq(t.name.length), ...Buffer.from(t.name)] : [];
+    if (t.bpm) {
+      const us = Math.round(60_000_000 / t.bpm);
+      body.push(0, 0xff, 0x51, 3, (us >> 16) & 0xff, (us >> 8) & 0xff, us & 0xff);
+    }
+    if (t.program) body.push(0, 0xc0 | t.program[0], t.program[1]);
     let now = 0;
     for (const [tick, , bytes] of ev) { body.push(...vlq(tick - now), ...bytes); now = tick; }
     body.push(0, 0xff, 0x2f, 0);
@@ -164,5 +175,140 @@ await key("Meta+z");
 check(await until(() => clipsAt(32).length === 0), "⌘Z takes it back");
 const text = await upload("notes.mid", Buffer.from("these are not notes"), to);
 check(text.status === 400 && text.body.error === "notes.mid isn't a MIDI file: it doesn't start with MThd.", `a text file named .mid says so: ${JSON.stringify(text.body)}`);
+
+// ---------------------------------------------------------------- C2b: new tracks from a MIDI file
+const ppb = 24;
+const lintIn = async (pg, sel, what) => {
+  const bad = await pg.evaluate(lint, sel);
+  check(bad.length === 0, `lint: ${what}${bad.length ? `: ${bad.slice(0, 3).join(" | ")}` : ""}`);
+};
+/** Drag `bytes` named `name` over (`x`, `y`) as a browser does, then drop them there; the hint said while over. */
+const dropBytes = (x, y, name, bytes) =>
+  page.evaluate(
+    async (x, y, name, bytes) => {
+      const dt = new DataTransfer();
+      dt.items.add(new File([new Uint8Array(bytes)], name, { type: "audio/midi" }));
+      const at = document.elementFromPoint(x, y) ?? document.body;
+      const fire = (type) => at.dispatchEvent(new DragEvent(type, { dataTransfer: dt, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+      fire("dragenter");
+      fire("dragover");
+      await new Promise((r) => setTimeout(r, 120));
+      const hint = document.querySelector("[data-testid=drop-hint]")?.textContent ?? null;
+      const outline = document.querySelector("[data-testid=drop-outline]")?.dataset.kind ?? null;
+      fire("drop");
+      return { hint, outline };
+    },
+    x,
+    y,
+    name,
+    [...bytes],
+  );
+const groove = smfBytes([
+  { name: "Tempo", bpm: 128, notes: [] },
+  { name: "Drums", notes: [[36, 0, 0.25, 100, 9], [38, 1, 0.25, 100, 9]] },
+  { name: "Low", program: [0, 33], notes: [[40, 0, 1], [43, 2, 1]] },
+  { name: "Keys", program: [1, 0], notes: [[72, 0, 2, 90, 1]] },
+]);
+await page.evaluate(() => document.querySelector("[data-testid=timeline]").scrollTo({ left: 0 }));
+await sleep(200);
+const ruler = await box("[data-testid=ruler]");
+const xAt = (beat) => ruler.x + beat * ppb + 6;
+const yBelow = async () => {
+  const rows = await page.$$eval("[data-track]", (els) => els.filter((e) => e.dataset.track !== "song").map((e) => e.getBoundingClientRect().bottom));
+  return Math.max(...rows) + 20;
+};
+const tracksNow = () => page.evaluate(async (token) => (await (await fetch("/api/graph", { headers: { "x-m2-token": token } })).json()).timeline.tracks.filter((t) => t.track).map((t) => t.label), sess.token);
+const tempo = () => JSON.parse(read("data/arrangement.json")).tempo;
+const askShown = () => page.$eval("[data-testid=midi-ask]", (e) => e.textContent).catch(() => null);
+const before = await tracksNow();
+
+// Below the tracks at bar 3, in a song with clips: the question, and nothing written yet.
+const below = await dropBytes(xAt(9), await yBelow(), "groove.mid", groove);
+check(below.hint === "New tracks · bar 3" && below.outline === "below", `the hint below the tracks: ${JSON.stringify(below)}`);
+check(await until(async () => (await askShown()) === "groove.mid is at 128 BPM. The song is at 124 BPM.Keep 124: the notes play at your song's speed.CancelUse 128Keep 124"), `the tempo question: ${await askShown()}`);
+await lintIn(page, "[data-testid=midi-ask]", "the tempo question");
+if (process.env.ST_SHOT) await page.screenshot({ path: `${process.env.ST_SHOT}/midi-ask.png` });
+check(JSON.stringify(await tracksNow()) === JSON.stringify(before), "nothing written while it asks");
+await key("Enter");
+check(await until(async () => (await tracksNow()).length === before.length + 3), `Return keeps 124 and makes three tracks: ${await tracksNow()}`);
+check(JSON.stringify((await tracksNow()).slice(-3)) === JSON.stringify(["Drums", "Low", "Keys 2"]) && JSON.stringify(tempo()) === JSON.stringify([{ beat: 0, bpm: 124 }]), `Drums, Low and Keys 2 at the end, the tempo kept: ${await tracksNow()} ${JSON.stringify(tempo())}`);
+check(await until(async () => (await toasts()).some((t) => t.startsWith("Imported groove.mid: Drums, Low and Keys 2"))), `a toast says what came in: ${(await toasts()).join(" | ")}`);
+check(await until(async () => (await undoTitle()).startsWith("Undo importing groove.mid")), `Undo names it: ${await undoTitle()}`);
+await key("Meta+z");
+check(await until(async () => JSON.stringify(await tracksNow()) === JSON.stringify(before)), `one ⌘Z takes all three back: ${await tracksNow()}`);
+// Use 128: the file's tempo from bar 3, the song's before it.
+await dropBytes(xAt(9), await yBelow(), "groove.mid", groove);
+await page.waitForSelector("[data-testid=midi-use]");
+await page.click("[data-testid=midi-use]");
+check(await until(() => JSON.stringify(tempo()) === JSON.stringify([{ beat: 0, bpm: 124 }, { beat: 8, bpm: 128 }])), `"Use 128" writes it from bar 3: ${JSON.stringify(tempo())}`);
+await key("Meta+z");
+check(await until(() => JSON.stringify(tempo()) === JSON.stringify([{ beat: 0, bpm: 124 }])), "and ⌘Z takes the tempo back with the tracks");
+// Esc: nothing.
+const revAsk = await page.$eval("[data-revision]", (e) => e.dataset.revision);
+await dropBytes(xAt(9), await yBelow(), "groove.mid", groove);
+await page.waitForSelector("[data-testid=midi-ask]");
+await key("Escape");
+await sleep(300);
+check(!(await askShown()) && (await page.$eval("[data-revision]", (e) => e.dataset.revision)) === revAsk, "Esc writes nothing");
+// One part on Bass's notes at bar 3: into it, no question.
+const bassRow = await box('[data-lane="bass.notes"]');
+const onBass = await dropBytes(xAt(9), bassRow.y + bassRow.height / 2, "low.mid", smfBytes([{ name: "Low", bpm: 128, notes: [[40, 0, 1]] }]));
+check(onBass.hint === "Into Bass · bar 3" && onBass.outline === "lane", `the hint on Bass: ${JSON.stringify(onBass)}`);
+check(await until(() => clipsAt(8).length === 1) && !(await askShown()), `a one-part file goes into Bass at bar 3, with no question: ${JSON.stringify(clipsAt(8)).slice(0, 120)}`);
+check(await until(async () => (await toasts()).some((t) => t.startsWith("Imported low.mid into Bass"))), `its toast: ${(await toasts()).join(" | ")}`);
+// A text file named .mid.
+await dropBytes(xAt(9), await yBelow(), "notes.mid", Buffer.from("these are not notes"));
+check(await until(async () => (await toasts()).includes("Nothing was added to the song: notes.mid isn't a MIDI file: it doesn't start with MThd.")), `a text file named .mid says so: ${(await toasts()).join(" | ")}`);
+
+// ---------------------------------------------------------------- File ▸ Import MIDI… in an empty song (the app)
+const empty = `${ROOT}/empty-song`;
+fs.cpSync(`${process.env.E2E_REPO ?? new URL("..", import.meta.url).pathname}/templates/empty`, empty, { recursive: true });
+fs.rmSync(`${empty}/template.toml`, { force: true });
+fs.writeFileSync(`${ROOT}/groove.mid`, groove);
+const app = await page.browser().createBrowserContext().then((c) => c.newPage());
+await app.setViewport({ width: 1440, height: 900 });
+app.on("pageerror", (e) => errors.push(String(e)));
+await app.evaluateOnNewDocument(
+  (token, picked) => {
+    window.__M2__ = { native: true, token, platform: "macos" };
+    const callbacks = new Map();
+    const menu = [];
+    let next = 1;
+    window.__TAURI_INTERNALS__ = {
+      invoke: async (cmd, args) => {
+        if (cmd === "plugin:event|listen" && args?.event === "menu") menu.push(args.handler);
+        return cmd === "action" && args?.id === "open_file" ? JSON.stringify([picked]) : null;
+      },
+      transformCallback: (cb) => {
+        callbacks.set(next, cb);
+        return next++;
+      },
+      unregisterCallback: (id) => callbacks.delete(id),
+    };
+    window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
+    window.__menu = (id) => menu.forEach((h) => callbacks.get(h)?.({ event: "menu", id: 0, payload: id }));
+  },
+  sess.token,
+  `${ROOT}/groove.mid`,
+);
+const opened = await page.evaluate(
+  async (token, path) => (await fetch("/api/graph/open", { method: "POST", headers: { "x-m2-token": token, "content-type": "application/json" }, body: JSON.stringify({ path }) })).status,
+  sess.token,
+  empty,
+);
+await app.goto(sess.url, { waitUntil: "domcontentloaded" });
+check(opened === 200 && !!(await app.waitForSelector("[data-testid=timeline]", { timeout: 10000 }).catch(() => null)), `an empty song opens in an app page: ${opened}`);
+await app.evaluate(() => window.__menu("import_midi"));
+const emptyTracks = () => !fs.existsSync(`${empty}/tracks`) ? [] : fs.readdirSync(`${empty}/tracks`, { withFileTypes: true }).filter((e) => e.isFile()).map((e) => e.name).sort();
+check(await until(() => emptyTracks().length === 3), `File ▸ Import MIDI… makes three tracks: ${emptyTracks()}`);
+const drumsTs = fs.readFileSync(`${empty}/tracks/drums.ts`, "utf8"), lowTs = fs.readFileSync(`${empty}/tracks/low.ts`, "utf8");
+check(/drums\.kit|drumKit/.test(drumsTs) && /synth\.bass|synthBass/.test(lowTs), `Drums plays the Drum kit and Low the Synth bass: ${drumsTs.split("\n").at(-2)} | ${lowTs.split("\n").at(-2)}`);
+const emptyTempo = () => JSON.parse(fs.readFileSync(`${empty}/data/arrangement.json`, "utf8")).tempo;
+check(JSON.stringify(emptyTempo()) === JSON.stringify([{ beat: 0, bpm: 128 }]) && !(await app.$("[data-testid=midi-ask]")), `the empty song takes the file's 128, with no question: ${JSON.stringify(emptyTempo())}`);
+const lowClips = JSON.parse(fs.readFileSync(`${empty}/data/low/notes.json`, "utf8")).clips;
+check(lowClips.length === 1 && lowClips[0].start === 0 && lowClips[0].notes.length === 2, `Low's notes in one clip from bar 1: ${JSON.stringify(lowClips).slice(0, 120)}`);
+if (process.env.ST_SHOT) await app.screenshot({ path: `${process.env.ST_SHOT}/midi-tracks.png` });
+await app.evaluate(() => window.__menu("undo"));
+check(await until(() => emptyTracks().length === 0 && JSON.stringify(emptyTempo()) === JSON.stringify([{ beat: 0, bpm: 120 }])), `one Undo takes the tracks and the tempo back: ${emptyTracks()} ${JSON.stringify(emptyTempo())}`);
 
 done(errors);
