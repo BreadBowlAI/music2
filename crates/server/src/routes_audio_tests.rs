@@ -231,7 +231,7 @@ fn a_wav_dropped_on_a_sampler_sets_its_file_through_the_route() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-fn copy(from: &std::path::Path, to: &std::path::Path) {
+pub(crate) fn copy(from: &std::path::Path, to: &std::path::Path) {
     std::fs::create_dir_all(to).unwrap();
     for e in std::fs::read_dir(from).unwrap().flatten() {
         let (f, t) = (e.path(), to.join(e.file_name()));

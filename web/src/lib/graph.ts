@@ -149,6 +149,8 @@ export interface AudioClip {
   fade_out?: number;
   reverse?: boolean;
   pitch?: number;
+  /** Warp markers, `[file's second, beat in the clip]`: set by Follow tempo (the sx plan's D11). */
+  warp?: [number, number][];
 }
 
 /** A declared lane: `key` addresses it within its module (ID-4, ID-6), `label` is its `name`, or the key. */

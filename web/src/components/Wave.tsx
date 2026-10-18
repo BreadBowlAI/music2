@@ -59,13 +59,31 @@ function shapeOf(c: AudioClip, tempo: Tempo, ppb: number): Shape {
   const volume = 10 ** ((c.gain_db ?? 0) / 20);
   const fadeIn = c.fade_in ?? 0;
   const fadeOut = c.fade_out ?? 0;
+  const warp = c.warp ?? [];
   return {
     at: (x) => secondsAt(tempo, c.start + (x + INSET) / ppb) - t0,
-    // A reversed clip plays its placed span backwards (`render_clip`).
-    source: (s) => offset + (c.reverse ? seconds - s : s) * rate,
+    // A reversed clip plays its placed span backwards (`render_clip`); a warped one (Follow tempo)
+    // plays its file by its markers, whatever its pitch.
+    source: (s) => {
+      const t = c.reverse ? seconds - s : s;
+      return warp.length > 0 ? warpedAt(warp, beatAt(tempo, t0 + t) - c.start, c.start, tempo) : offset + t * rate;
+    },
     gain: (s) => volume * (fadeIn > 0 && s < fadeIn ? curve(s / fadeIn) : 1) * (fadeOut > 0 && seconds - s < fadeOut ? curve((seconds - s) / fadeOut) : 1),
     seconds,
   };
+}
+
+/**
+ * The file's second a warped clip plays `b` beats in (the runtime's `time_map`): in a line between
+ * its markers, and past them the nearest two go on; one marker pins a moment, and the file runs at
+ * its own speed around it.
+ */
+function warpedAt(w: [number, number][], b: number, start: number, tempo: Tempo): number {
+  if (w.length === 1) return w[0][0] + secondsAt(tempo, start + b) - secondsAt(tempo, start + w[0][1]);
+  const after = w.findIndex((m) => m[1] > b);
+  const i = Math.min(Math.max(after < 0 ? w.length : after, 1), w.length - 1);
+  const [a, z] = [w[i - 1], w[i]];
+  return a[0] + ((b - a[1]) * (z[0] - a[0])) / (z[1] - a[1]);
 }
 
 /** The loudest sample of the file between seconds `a` and `b`, 0 to 1, over every channel. */
@@ -202,10 +220,12 @@ export const Wave = memo(function Wave({ clip, color, edit }: { clip: AudioClip;
   const fadeIn = fading?.which === "in" ? fading.seconds : (clip.fade_in ?? 0);
   const fadeOut = fading?.which === "out" ? fading.seconds : (clip.fade_out ?? 0);
   const { start, length, offset, reverse, pitch, gain_db } = clip;
+  // Its markers by value: each graph update brings a new array.
+  const warp = JSON.stringify(clip.warp ?? []);
   // Made again only when what it shows changes, so a tile redraws only then.
   const shape = useMemo(
-    () => shapeOf({ asset: "", start, length, offset, reverse, pitch, gain_db, fade_in: fadeIn, fade_out: fadeOut }, tempo, ppb),
-    [start, length, offset, reverse, pitch, gain_db, fadeIn, fadeOut, tempo, ppb],
+    () => shapeOf({ asset: "", start, length, offset, reverse, pitch, gain_db, fade_in: fadeIn, fade_out: fadeOut, warp: JSON.parse(warp) }, tempo, ppb),
+    [start, length, offset, reverse, pitch, gain_db, fadeIn, fadeOut, warp, tempo, ppb],
   );
   const fades = useMemo<[number, number]>(() => [fadeIn, fadeOut], [fadeIn, fadeOut]);
   // A fade let go of shows as written once the clip says it.
@@ -352,12 +372,13 @@ const useVolume = create<{ at: { x: number; y: number }; lane: TimelineLane; ref
 
 /**
  * The clip menu's rows for one audio clip (Q11, Q12, A3), after Split: Volume…, Reverse (checked
- * while on) and Remove fades (greyed with none). `off`: why nothing can be edited now.
+ * while on), Follow tempo (checked while on, sx's D11) and Remove fades (greyed with none). `off`: why nothing can be edited now.
  */
 export function audioRows(picked: { ref: ClipRef; lane: TimelineLane; clip: unknown }[], at: { x: number; y: number }, off: string | null): (MenuItem | null)[] {
   if (picked.length !== 1 || picked[0].lane.kind !== "audio") return [];
   const { ref, lane } = picked[0];
   const c = picked[0].clip as AudioClip;
+  const following = (c.warp?.length ?? 0) > 0;
   return [
     { id: "volume", label: "Volume…", off, run: () => useVolume.setState({ at, lane, ref }) },
     {
@@ -366,6 +387,14 @@ export function audioRows(picked: { ref: ClipRef; lane: TimelineLane; clip: unkn
       checked: !!c.reverse,
       off,
       run: () => void sendAudio(lane, ref, { reverse: !c.reverse }, (t) => (c.reverse ? `playing the ${t} clip forwards` : `reversing the ${t} clip`)),
+    },
+    {
+      id: "follow",
+      label: "Follow tempo",
+      checked: following,
+      detail: "Stretch this clip with the song's tempo. Its pitch stays the same.",
+      off,
+      run: () => void sendAudio(lane, ref, { follow: !following }, () => (following ? "Follow tempo off" : "Follow tempo")),
     },
     {
       id: "unfade",

@@ -713,10 +713,16 @@ struct Settings {
     fade_in: Option<f64>,
     fade_out: Option<f64>,
     reverse: Option<bool>,
+    follow: Option<bool>,
+}
+
+fn set_on(lane: &str, id: &str, o: Settings) -> Gesture {
+    let clip = by_id(lane, id);
+    Gesture::Audio { clip, gain_db: o.gain_db, fade_in: o.fade_in, fade_out: o.fade_out, reverse: o.reverse, follow: o.follow }
 }
 
 fn set(id: &str, o: Settings) -> Gesture {
-    Gesture::Audio { clip: by_id("chops/clips", id), gain_db: o.gain_db, fade_in: o.fade_in, fade_out: o.fade_out, reverse: o.reverse }
+    set_on("chops/clips", id, o)
 }
 
 /// The resample example's whole song, 3 s of it, at 48 kHz.
@@ -799,7 +805,7 @@ fn gain_stays_in_its_range() {
 fn only_an_audio_clip_takes_audio_settings() {
     let f = fixture("examples/first-song");
     let mut s = f.open();
-    let why = refused(&mut s, Gesture::Audio { clip: by_id("bass/notes", "db9f9t5s"), gain_db: Some(-6.0), fade_in: None, fade_out: None, reverse: None });
+    let why = refused(&mut s, set_on("bass/notes", "db9f9t5s", Settings { gain_db: Some(-6.0), ..Settings::default() }));
     assert!(why.contains("Only an audio clip"), "{why}");
 }
 
@@ -901,4 +907,58 @@ fn a_warped_pitched_clips_left_edge_still_refuses() {
     let why = refused(&mut s, Gesture::Resize { clip: by_id("chops/clips", "cdayrg4g"), start: 13.0, length: 3.0 });
     assert!(why.contains("pitch"), "{why}");
     go(&mut s, Gesture::Resize { clip: by_id("chops/clips", "cdayrg4g"), start: 12.0, length: 3.0 });
+}
+
+/// How loud `a` is over how far `b` is from it, in dB, over frames `from..to` of both channels.
+fn clean_db(a: &[[f32; 2]], b: &[[f32; 2]], from: usize, to: usize) -> f64 {
+    let (mut sig, mut err) = (0.0f64, 0.0f64);
+    for (x, y) in a[from..to].iter().zip(&b[from..to]) {
+        for c in 0..2 {
+            sig += (x[c] as f64).powi(2);
+            err += (x[c] as f64 - y[c] as f64).powi(2);
+        }
+    }
+    10.0 * (sig / err.max(1e-30)).log10()
+}
+
+// The sx plan, D11: Follow tempo. On, a clip gets warp markers at its start, its end and each tempo
+// change inside it, from the tempo now: each beat plays the moment of its file it played, so it
+// sounds the same (a stretch at its own speed is its file, within 40 dB). The markers are in beats,
+// so after a tempo change it keeps them: it no longer plays at its own speed. Again on, nothing
+// changes; one step each, and undo takes them back; off, it plays at its own speed again.
+#[test]
+fn follow_tempo_keeps_the_clip_where_it_plays_and_undo_takes_it_back() {
+    let f = fixture("examples/resample");
+    let mut s = f.open();
+    // The first clip is 2 beats from 0: at 120 BPM, then 90 from beat 1, it plays 0 s to 1.17 s.
+    crate::song::tempo_change(&mut s, 1.0, 90.0).unwrap();
+    let was = audio(&s, "a3s9vpxb");
+    let (plain, n) = (rendered(&s), s.accepted().number);
+    go(&mut s, set("a3s9vpxb", Settings { follow: Some(true), ..Settings::default() }));
+    assert_eq!(s.accepted().number, n + 1, "one step");
+    let on = audio(&s, "a3s9vpxb");
+    let want = [(0.0, 0.0), (0.5, 1.0), (0.5 + 60.0 / 90.0, 2.0)];
+    assert!(on.warp.len() == 3 && on.warp.iter().zip(want).all(|(m, w)| (m.0 - w.0).abs() < 1e-9 && m.1 == w.1), "{:?}", on.warp);
+    assert_eq!(audio(&s, "a3s9vpxb"), m2_song::AudioClip { warp: on.warp.clone(), ..was.clone() }, "only its markers");
+    let followed = rendered(&s);
+    let end = (1.1667 * 48_000.0) as usize;
+    let clean = clean_db(&plain, &followed, 2_400, end - 2_400);
+    assert!(clean > 40.0, "on, the clip sounds as it did: {clean:.1} dB");
+    // Again on: nothing changes.
+    go(&mut s, set("a3s9vpxb", Settings { follow: Some(true), ..Settings::default() }));
+    assert_eq!(s.accepted().number, n + 1, "on again is no change");
+    // The song slows to 60 BPM: the clip keeps its markers, so its beats.
+    crate::song::tempo(&mut s, 0.0, 60.0).unwrap();
+    assert_eq!(audio(&s, "a3s9vpxb").warp, on.warp, "its markers are in beats");
+    let slow = rendered(&s);
+    go(&mut s, set("a3s9vpxb", Settings { follow: Some(false), ..Settings::default() }));
+    assert_eq!(audio(&s, "a3s9vpxb"), m2_song::AudioClip { warp: vec![], ..was.clone() }, "off: no markers");
+    let own = rendered(&s);
+    let end = (1.667 * 48_000.0) as usize;
+    assert!(clean_db(&slow, &own, 2_400, end) < 10.0, "slowed, the clip followed the tempo, not its own speed");
+    for _ in 0..3 {
+        crate::undo(&mut s).unwrap();
+    }
+    assert_eq!(audio(&s, "a3s9vpxb"), was, "three undos: off, the tempo and on, taken back");
+    assert_eq!(s.accepted().compiled.data.tempo().segments().len(), 2);
 }

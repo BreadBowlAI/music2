@@ -128,6 +128,7 @@ export const SUITES = [
   ["pl-ids", "fix", { expect: 39 }],
   ["pc-keys", "fix", { expect: 37 }],
   ["ab-sampler", "export", { expect: 23 }],
+  ["sx-follow", "fix", { expect: 22 }],
 ];
 const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export"];
 
