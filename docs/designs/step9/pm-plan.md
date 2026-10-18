@@ -113,7 +113,7 @@ pedal stays where it is: the server holds Offs back (MON-7).
 | Step | What | Files |
 |---|---|---|
 | 2a | Server: `read()` takes pitch bend (0xE0), CC 1 (the wheel) and CC 121 (reset controllers), and sends each to the target lane as a live event. When a keyboard lets go (unplugged, All Notes Off, ⌘., the song closed, another target), its lane gets the bend centred and the wheel at 0 | `crates/server/src/graph/midi.rs`, `audition.rs` |
-| 2b | Runtime: `LiveEv::Midi { source, bytes }`. The scheduler keeps the latest bend and wheel per lane (fixed slots) and merges them at the block's first frame, before the notes (RENDER-14, MON-7). Refused while an export holds, as an On is | `core/runtime/src/sched.rs`, `event.rs`, `lib.rs` (`Renderer::live`), `core/play` (`Player::live`) |
+| 2b | Runtime: `LiveEv::Midi { source, bytes }`. The scheduler keeps the latest bend and wheel per lane (fixed slots) and merges them at the block's first frame, before the notes (RENDER-14, MON-7). ~~Refused while an export holds, as an On is~~ Built: kept while an export holds, as an Off is (see below) | `core/runtime/src/sched.rs`, `event.rs`, `lib.rs` (`Renderer::live`), `core/play` (`Player::live`) |
 | 2c | Poly: reads `Midi` in its lane. Pitch = the note's pitch (+ glide) + bend × 2 semitones; `NoteField::ModWheel`. The lane's bend and wheel live in its pool and reset with it. With no bend, pitch is filled exactly as today | `core/runtime/src/poly.rs`, `lib.rs`; `core/ir/src/lib.rs` (`NoteField::ModWheel`); `core/script/sdk/core.ts` (`Note.modWheel`) |
 | 2d | Plugins: `m2_plugins::Event::Midi { time, bytes }`, sent as `CLAP_EVENT_MIDI` | `core/plugins/src/lib.rs`, `host.rs`; `core/runtime/src/lib.rs` (`plugin_events`) |
 | 2e | std: the polysynth's vibrato deepens with the wheel, by up to half a semitone. `std:synth` gets a `wheel` input; at 0 no bit changes | `std/kernels-src/src/synth.rs`, `std/m2pkg.toml`, `std/src/synth.ts` |
@@ -124,14 +124,26 @@ pedal stays where it is: the server holds Offs back (MON-7).
 | Test | Where | Red on |
 |---|---|---|
 | `a_bend_reaches_every_voice_in_its_lane`, `the_mod_wheel_is_a_note_field`, `bend_and_wheel_reset_with_the_pool` | `core/runtime/src/tests/poly.rs` | `Midi` ignored |
-| `a_live_bend_merges_before_the_notes`, `a_bend_is_refused_while_an_export_holds` | `core/runtime/src/tests/audition.rs` | no `LiveEv::Midi` |
-| `a_plugin_hears_the_bend_as_midi` | `core/runtime/src/tests.rs` (the fake host) | no `Event::Midi` |
+| `a_live_bend_merges_before_the_notes`, `held_for_an_export_a_wheel_waits_for_the_resume` | `core/runtime/src/tests/audition.rs` | no `LiveEv::Midi` |
+| `a_plugin_hears_the_bend_as_midi` | `core/runtime/src/tests/audition.rs` (the probe plugin, beside its helper) | no `Event::Midi` |
 | `a_keyboards_bend_reaches_its_lane`, `a_keyboard_let_go_centres_its_bend` (`M2_MIDI=inject`, waiting on the graph status, never on a sleep) | `crates/server/src/graph/midi_tests.rs` | `read()` drops 0xE0 |
 | `the_wheel_deepens_the_synths_vibrato` | `std/kernels-src/src/synth/tests.rs` | no `wheel` input |
 
 Kept green: all 12 renders (no render has a controller), bit identity, the no-allocation tests.
 
 **Done when** these pass, the 12 renders keep their bits, and the contract's Today lines say what is built.
+
+**Built, and where it differs from the plan above.**
+
+| What | Why |
+|---|---|
+| Held for an export, a wheel waits in its slot for the resume, as an Off does; it is not refused | refused, a wheel let go during an export would leave the lane bent. The slot holds only the latest, so nothing queues |
+| A source's release and a panic put its wheels back at rest in the engine, so unplugging, All Notes Off, Settings and ⌘. need nothing more from the server. The server centres only a lane left by a new target (CC 121 there) | one rule, in one place, for every way a keyboard lets go |
+| A new plan's consumers, and plugins an export lent, hear the lane's wheels again; an export puts a borrowed plugin's wheels at rest first | a new pool or plugin would otherwise play unbent while the wheel is held; the export must never hear a keyboard (RENDER-1) |
+| The status carries `wheels`: lanes whose wheels are away from rest | what the server tests wait on, as `live` is for notes |
+| `Note.modWheel` makes its node only when a voice reads it | a voice that doesn't read it keeps the IR it had |
+| The std synth's wheel vibrato is there at once, not faded in as `vibrato` is | a wheel is a hand on the sound now |
+| The server tests call `Graph::midi` with the bytes, as `M2_MIDI=inject`'s route does | the same path, without a browser |
 
 ## Slice 3: MIDI files in the app
 

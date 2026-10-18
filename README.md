@@ -84,7 +84,7 @@ Play and stop work as in Live: Space plays from the playhead, and Space again st
 ### Playing live
 
 - **The keyboard piano:** ⌘K (Ctrl+K off the Mac), from anywhere, or View → Keyboard Piano, or the keyboard button in Notes. The computer's keys then play the selected track: A S D F G H J K L ; ' are the white keys, W E T Y U O P the black ones, and A is middle C at first. Z goes down an octave, X up. A card at the lower right of the timeline shows the keys and what plays. While it is on, those keys only play notes (Space, C and M work as always); typing in a field never plays. ⌘K again turns it off.
-- **A MIDI keyboard:** plug one in, before or while the app runs. A message says it is connected, and a small keyboard mark shows in the top bar. Its keys play the selected track, as hard as you press them, and the sustain pedal holds notes. Unplugged, its notes stop and a message says so.
+- **A MIDI keyboard:** plug one in, before or while the app runs. A message says it is connected, and a small keyboard mark shows in the top bar. Its keys play the selected track, as hard as you press them, and the sustain pedal holds notes. The pitch wheel bends the track's notes, up to 2 semitones each way; the mod wheel adds vibrato to the polysynth's sounds, and plugins hear both. Unplugged, its notes stop, the wheels go back to rest, and a message says so.
 - Nothing you play is recorded yet.
 
 Stop ends the notes, and echoes and reverb ring out as they would on a real instrument. Moving the playhead, looping, editing notes and adding an effect all happen while the song plays, without it starting over or jumping back. Notes already sounding where the playhead lands aren't picked up: playback starts with the next note.
