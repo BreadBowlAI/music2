@@ -41,6 +41,8 @@ declare module "./graph" {
     late?: number;
     /** Dropouts the device reported since the player started. */
     xruns?: number;
+    /** For 10 s after an audio lane missed its audio: what to say (RENDER-30). */
+    disk?: string;
     /** The device's other errors since the player started. */
     device_errors?: number;
   }

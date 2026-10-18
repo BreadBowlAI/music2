@@ -337,7 +337,7 @@ impl Recorder {
 }
 
 /// The track's name as the timeline shows it, for the undo step.
-fn label_of(cp: &ControlPlane, module: &str) -> String {
+pub(super) fn label_of(cp: &ControlPlane, module: &str) -> String {
     cp.open
         .as_ref()
         .and_then(|p| p.shown.timeline.tracks.iter().find(|t| t.module == module).and_then(|t| t.head.get("label")?.as_str().map(String::from)))

@@ -695,7 +695,7 @@ fn run() -> Result<()> {
             let words = |e: m2_editor::EditError| anyhow!("{}", e.to_string().trim_start_matches("edit rejected: "));
             let mut imported = vec![];
             for f in files {
-                let (i, _) = m2_editor::import::audio(&dir, m2_editor::import::Source::Path(f)).map_err(words)?;
+                let i = m2_editor::import::audio(&dir, m2_editor::import::Source::Path(f), &mut |_| {}).map_err(words)?;
                 if i.dropped_channels > 0 {
                     eprintln!("{} has {} channels: music2 plays the first two.", i.name, i.dropped_channels + 2);
                 }
