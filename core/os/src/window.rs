@@ -2,8 +2,13 @@
 //!
 //! In short: [`Window::open`] makes a top-level window on the main loop's thread and gives its
 //! [`Native`] handle, which CLAP's `gui.set_parent` takes. When the person closes it (the title
-//! bar's close button), `closed` runs on that thread; the caller then drops it. A program that
-//! never opens one never loads the OS's window library.
+//! bar's close button), `closed` runs on that thread, later, never inside an OS call; the caller
+//! then drops it. A program that never opens one never loads the OS's window library.
+//!
+//! A window is this process's alone. Everything asked of it, tests' questions included
+//! ([`Window::shown`], [`Window::ask_to_close`]), is asked of the [`Window`] by the process that
+//! opened it; another process asks that one (the plugin host's `WindowCall`s). A [`Native`]
+//! handle is never used in another process: on macOS it is a pointer into this one.
 //!
 //! | OS | Window | The person's close | Events |
 //! |---|---|---|---|
@@ -20,7 +25,8 @@ use crate::os;
 pub const API: &str = os::window::API;
 
 /// A window's handle as a plugin takes it: an X11 window id, an `NSView` pointer (the window's
-/// content view), or an `HWND`.
+/// content view), or an `HWND`. Meaningful only in the process that opened the window; another
+/// process may compare it, never use it.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Native(pub u64);
 
@@ -46,20 +52,22 @@ impl Window {
     pub fn resize(&self, width: u32, height: u32) {
         self.0.resize(width.max(1), height.max(1))
     }
+
+    /// Tests: whether it is shown on the screen now. On its loop's thread, in the process that
+    /// opened it (as every call here).
+    pub fn shown(&self) -> bool {
+        self.0.shown()
+    }
+
+    /// Tests: ask it to close, as the person's close button does (the window manager's message,
+    /// or AppKit's `performClose:`). Its `closed` runs after, on its loop's thread, as for the
+    /// person's close. On its loop's thread, in the process that opened it.
+    pub fn ask_to_close(&self) {
+        self.0.ask_to_close()
+    }
 }
 
 /// Whether this process could open a window now, and in plain words why not (no screen).
 pub fn available() -> Result<(), String> {
     os::window::available()
-}
-
-/// Tests: whether `w`, a window of any process on this screen, exists, and if so whether it is
-/// shown. None when it doesn't exist (any more).
-pub fn shown(w: Native) -> Option<bool> {
-    os::window::shown(w)
-}
-
-/// Tests: ask `w` to close, as the person's close button does (the window manager's message).
-pub fn ask_to_close(w: Native) {
-    os::window::ask_to_close(w)
 }

@@ -302,7 +302,7 @@ pub(crate) fn available() -> Result<(), String> {
     Ok(())
 }
 
-/// The connection the tests' questions go on, apart from the main one.
+/// The connection the tests' questions about this process's windows go on, apart from the main one.
 struct Probe(Dpy);
 // SAFETY: Xlib is initialised for threads; the questions are single requests.
 unsafe impl Send for Probe {}
@@ -318,31 +318,36 @@ fn probe() -> Option<(&'static X, Dpy)> {
     Some((x, PROBE.get()?.0))
 }
 
-pub(crate) fn shown(w: Native) -> Option<bool> {
-    let (x, dpy) = probe()?;
-    // SAFETY: a zeroed struct for Xlib to fill; a window that doesn't exist is an error, counted.
-    unsafe {
-        let mut a: Attributes = std::mem::zeroed();
-        ((x.get_window_attributes)(dpy, w.0 as Xid, &mut a) != 0).then_some(a.map_state == IS_VIEWABLE)
+impl Window {
+    /// Asked on the probe connection: a round trip on the main one could read the person's close
+    /// into Xlib's queue, where its fd's watch never sees it.
+    pub(crate) fn shown(&self) -> bool {
+        let Some((x, dpy)) = probe() else { return false };
+        // SAFETY: a zeroed struct for Xlib to fill, about a window of this process's that exists.
+        unsafe {
+            let mut a: Attributes = std::mem::zeroed();
+            (x.get_window_attributes)(dpy, self.id, &mut a) != 0 && a.map_state == IS_VIEWABLE
+        }
     }
-}
 
-pub(crate) fn ask_to_close(w: Native) {
-    let Some((x, dpy)) = probe() else { return };
-    // SAFETY: the window manager's message, as ICCCM spells it, sent to the window itself.
-    unsafe {
-        let mut e: XEvent = std::mem::zeroed();
-        e.client = ClientMessage {
-            type_: CLIENT_MESSAGE,
-            serial: 0,
-            send_event: 1,
-            display: dpy,
-            window: w.0 as Xid,
-            message_type: (x.intern_atom)(dpy, c"WM_PROTOCOLS".as_ptr(), 0),
-            format: 32,
-            data: [(x.intern_atom)(dpy, c"WM_DELETE_WINDOW".as_ptr(), 0) as c_long, 0, 0, 0, 0],
-        };
-        (x.send_event)(dpy, w.0 as Xid, 0, 0, &mut e);
-        (x.flush)(dpy);
+    /// The window manager's message, sent on the probe connection; the main one reads it.
+    pub(crate) fn ask_to_close(&self) {
+        let Some((x, dpy)) = probe() else { return };
+        // SAFETY: the window manager's message, as ICCCM spells it, sent to the window itself.
+        unsafe {
+            let mut e: XEvent = std::mem::zeroed();
+            e.client = ClientMessage {
+                type_: CLIENT_MESSAGE,
+                serial: 0,
+                send_event: 1,
+                display: dpy,
+                window: self.id,
+                message_type: (x.intern_atom)(dpy, c"WM_PROTOCOLS".as_ptr(), 0),
+                format: 32,
+                data: [(x.intern_atom)(dpy, c"WM_DELETE_WINDOW".as_ptr(), 0) as c_long, 0, 0, 0, 0],
+            };
+            (x.send_event)(dpy, self.id, 0, 0, &mut e);
+            (x.flush)(dpy);
+        }
     }
 }

@@ -12,10 +12,28 @@ pub(super) struct Fixture(pub(super) PathBuf);
 
 impl Fixture {
     pub(super) fn new() -> Self {
+        Self::made(false)
+    }
+
+    /// One reached through a link, as every folder in a Mac's temporary folder is (/var is
+    /// /private/var): its path is not its real path.
+    pub(super) fn linked() -> Self {
+        Self::made(true)
+    }
+
+    fn made(linked: bool) -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!("m2-graph-server-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("music2.toml"), MANIFEST).unwrap();
+        let dir = if linked {
+            let mut link = dir.clone().into_os_string();
+            link.push("-link");
+            std::os::unix::fs::symlink(&dir, &link).unwrap();
+            PathBuf::from(link)
+        } else {
+            dir
+        };
         let fixture = Self(dir);
         fixture.write("export default song(() => osc.sine(hz(800)));\n");
         fixture
@@ -45,8 +63,13 @@ impl Fixture {
 }
 
 impl Drop for Fixture {
+    /// The folder, and the link to it when it has one.
     fn drop(&mut self) {
+        let real = self.0.canonicalize();
         let _ = std::fs::remove_dir_all(&self.0);
+        if let Ok(real) = real {
+            let _ = std::fs::remove_dir_all(real);
+        }
     }
 }
 
