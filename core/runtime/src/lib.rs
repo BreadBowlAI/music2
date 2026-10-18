@@ -1663,8 +1663,18 @@ impl Graph {
     fn release(&mut self, i: usize, clock: u64) {
         match &mut self.exec[i] {
             Exec::Poly(p) => {
-                for n in p.pool.iter_mut().flat_map(|pool| &mut pool.voices).filter_map(|v| v.note.as_mut()) {
+                let Some(pool) = p.pool.as_deref_mut() else { return };
+                for n in pool.voices.iter_mut().filter_map(|v| v.note.as_mut()) {
                     n.off = n.off.min(clock);
+                }
+                // A one-note pool's held notes are its own: dropped, so none sounds again.
+                if let Some(m) = &mut pool.mono {
+                    m.release();
+                }
+                // The old lane's wheels stay with it; the new lane sends its own (a ghost keeps
+                // them through its release).
+                if !p.ghost {
+                    pool.wheels = poly::Wheels::default();
                 }
             }
             Exec::Plugin(p) => {
@@ -1912,6 +1922,16 @@ impl PolyNode {
             segment(v, Seg { off: at, n: BLOCK - at }, Voiced::Cv(&m.cv, wheels), &mut peak, out, sandboxes)?;
             v.dirty = true;
             v.last_peak = peak;
+            // The voice's note, as a poly voice holds one: what a release and the stuck-note
+            // checks read (RENDER-26a). Open while the gate is; then until it rings out.
+            v.note = match (m.sounding(), v.note) {
+                (Some((id, pitch, velocity)), n) => {
+                    let on = n.filter(|n| n.id == id).map_or(start, |n| n.on);
+                    Some(VoiceNote { id, pitch, velocity, on, off: u64::MAX })
+                }
+                (None, Some(n)) if peak >= QUIET || v.graph.active_in(sandboxes)? => Some(VoiceNote { off: n.off.min(start), ..n }),
+                (None, _) => None,
+            };
             return Ok(());
         }
 

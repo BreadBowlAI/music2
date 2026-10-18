@@ -133,6 +133,18 @@ impl Mono {
         *self = Mono::new(self.sr as f64);
     }
 
+    /// Let go of every note held (RENDER-26a): the gate falls at the next frame, and no older note
+    /// comes back.
+    pub(crate) fn release(&mut self) {
+        self.count = 0;
+    }
+
+    /// The note sounding at the end of the block, while the gate is open: its id, and the pitch
+    /// and velocity the voice plays.
+    pub(crate) fn sounding(&self) -> Option<(u32, f32, f32)> {
+        self.top().filter(|_| self.gate).map(|t| (t.id, self.pitch, self.velocity))
+    }
+
     /// The note sounding: the newest kept.
     fn top(&self) -> Option<Held> {
         self.held[..self.count].iter().rev().find(|h| h.kept).copied()
