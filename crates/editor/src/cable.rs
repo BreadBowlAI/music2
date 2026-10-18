@@ -188,8 +188,9 @@ pub(crate) fn refs(
             match &mut n.op {
                 Op::Kernel { inputs, .. } | Op::Plugin { inputs, .. } => inputs.values_mut().for_each(swap),
                 Op::Feedback { input, .. } => swap(input),
-                Op::Poly { events, body, .. } => {
+                Op::Poly { events, glide, body, .. } => {
                     swap(events);
+                    glide.iter_mut().for_each(swap);
                     visit(&mut body.nodes, each, swap);
                     swap(&mut body.out);
                 }
@@ -253,7 +254,7 @@ fn declared_default(ir: &Ir, consts: &[(String, String, f64)], packages: &Packag
                     }
                 }
                 Op::Feedback { input, .. } => other |= reads(input),
-                Op::Poly { events, body, .. } => other |= reads(events) || reads(&body.out),
+                Op::Poly { events, glide, body, .. } => other |= reads(events) || glide.as_ref().is_some_and(reads) || reads(&body.out),
                 _ => {}
             }
         });

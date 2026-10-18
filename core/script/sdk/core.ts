@@ -368,14 +368,75 @@ export function plugin(id: string, inputs: { key?: string; [port: string]: Value
 }
 
 /**
+ * How `poly` gives notes voices (RENDER-16). Each is today's way when left out.
+ * - `voices`: how many notes sound at once (16). Not with `"mono"` or `"legato"`, which have one.
+ * - `mode`: `"poly"`, a voice for each note; `"mono"`, one note at a time, each starting again,
+ *   sliding from the last over `glide`; `"legato"`, one note at a time, where a note played while
+ *   another is held slides to it over `glide` without starting again. In both, when the note
+ *   sounding ends while older ones are held, the newest of them sounds again.
+ * - `retrigger`: a voice given a new note starts fresh (`true`), or carries on with its gate
+ *   falling for one sample, so envelopes start again from where they are (`false`).
+ * - `steal`: when every voice is busy, the note stops the `"oldest"`, the `"quietest"`, or
+ *   `"none"` (the new note isn't played).
+ * - `glide`: the slide's time, in seconds (`ms(70)`), read where a slide starts: a knob turns it
+ *   without a rebuild. Nothing in `"poly"` mode.
+ */
+export type PolyOptions = {
+  voices?: number;
+  mode?: "poly" | "mono" | "legato";
+  retrigger?: boolean;
+  steal?: "oldest" | "quietest" | "none";
+  glide?: Value;
+};
+
+const POLY_OPTIONS = ["voices", "mode", "retrigger", "steal", "glide"];
+
+/** `opts` checked: the IR's `voices`, its `alloc` (only what isn't the default) and its glide, if any. */
+function polyOptions(opts: PolyOptions): { voices: number; alloc?: Record<string, unknown>; glide?: Value } {
+  const bad = (what: string) => new Error(`poly: ${what}`);
+  if (typeof opts !== "object" || opts === null) throw bad(`its options must be an object, not ${shown(opts)}`);
+  for (const k of Object.keys(opts)) if (!POLY_OPTIONS.includes(k)) throw bad(`no option ${JSON.stringify(k)} (options: ${POLY_OPTIONS.join(", ")})`);
+  const { voices, mode = "poly", retrigger = true, steal = "oldest", glide } = opts;
+  const one = (v: unknown, of: readonly string[]) => typeof v === "string" && of.includes(v);
+  const words = (of: readonly string[]) => of.map((x) => JSON.stringify(x)).join(", ").replace(/, ([^,]*)$/, " or $1");
+  if (!one(mode, ["poly", "mono", "legato"])) throw bad(`mode must be ${words(["poly", "mono", "legato"])}, not ${shown(mode)}`);
+  if (typeof retrigger !== "boolean") throw bad(`retrigger must be true or false, not ${shown(retrigger)}`);
+  if (!one(steal, ["oldest", "quietest", "none"])) throw bad(`steal must be ${words(["oldest", "quietest", "none"])}, not ${shown(steal)}`);
+  if (voices !== undefined) {
+    if (mode !== "poly") throw bad(`${JSON.stringify(mode)} plays one note at a time, so it takes no voices: leave voices out`);
+    if (typeof voices !== "number" || !Number.isInteger(voices) || voices < 1 || voices > 128) {
+      throw bad(`voices must be a whole number from 1 to 128, not ${shown(voices)}`);
+    }
+  }
+  if (glide !== undefined) {
+    const unit = glide instanceof Signal || glide instanceof Quantity ? glide.unit : undefined;
+    if (unit !== undefined && unit !== "seconds") throw bad(`glide is a time, like ms(70), not ${unit}`);
+    const n = typeof glide === "number" ? glide : glide instanceof Quantity ? amounts.get(glide)! : 0;
+    if (!(n >= 0)) throw bad(`glide must be 0 or more seconds, not ${shown(typeof glide === "number" ? glide : n)}`);
+  }
+  // Only what differs from today's way is written, so a poly without options keeps its IR (ID-11).
+  const alloc: Record<string, unknown> = {};
+  if (mode !== "poly") alloc.mode = mode;
+  if (!retrigger) alloc.retrigger = false;
+  if (steal !== "oldest") alloc.steal = steal;
+  return {
+    voices: mode === "poly" ? (voices ?? 16) : 1,
+    ...(Object.keys(alloc).length > 0 ? { alloc } : {}),
+    ...(glide !== undefined && glide !== 0 ? { glide } : {}),
+  };
+}
+
+/**
  * Run `voice` once per sounding note and sum the results. Inside the voice, `note`
  * holds that note's pitch, gate and velocity, and every signal from outside is
- * still readable.
+ * still readable. `opts` says how notes are given voices: see {@link PolyOptions}.
  */
-export function poly(notes: Events, voice: (note: Note) => Audio, opts: { voices?: number } = {}): Audio {
+export function poly(notes: Events, voice: (note: Note) => Audio, opts: PolyOptions = {}): Audio {
   const site = takeSite(arguments);
   const outer = need("poly");
   const events = ref(notes, "poly notes");
+  const { voices, alloc, glide: glideValue } = polyOptions(opts);
+  const glide = glideValue === undefined ? undefined : ref(glideValue, "poly glide");
   const body = new Scope(outer.module, outer);
   const field = (lane: string, unit: Unit) => {
     const id = `n${outer.module.counter++}`;
@@ -398,7 +459,8 @@ export function poly(notes: Events, voice: (note: Note) => Audio, opts: { voices
   } finally {
     current = outer;
   }
-  const id = push(outer, { op: "poly", events, voices: opts.voices ?? 16, body: { nodes: body.nodes, out } }, at(site));
+  const op = { op: "poly", events, voices, ...(alloc ? { alloc } : {}), ...(glide ? { glide } : {}), body: { nodes: body.nodes, out } };
+  const id = push(outer, op, at(site));
   return produced(site, new Signal<AudioKind>(id, outer));
 }
 

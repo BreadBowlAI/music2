@@ -821,7 +821,10 @@ pub fn view(session: &Session) -> GraphView {
             let to = group_of(n);
             let refs: Vec<(&str, &str)> = match &n.op {
                 Op::Kernel { inputs, .. } | Op::Plugin { inputs, .. } => inputs.iter().map(|(p, r)| (p.as_str(), r.as_str())).collect(),
-                Op::Poly { events, body, .. } => vec![("notes", events.as_str()), ("voice", body.out.as_str())],
+                Op::Poly { events, glide, body, .. } => {
+                    let glide = glide.iter().map(|g| ("glide", g.as_str()));
+                    [("notes", events.as_str()), ("voice", body.out.as_str())].into_iter().chain(glide).collect()
+                }
                 Op::Feedback { input, .. } => vec![("feedback", input.as_str())],
                 _ => vec![],
             };

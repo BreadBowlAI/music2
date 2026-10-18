@@ -255,8 +255,19 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         values: Vec<f64>,
     },
-    /// One copy of `body` per sounding note of `events`, summed.
-    Poly { events: String, voices: u32, body: Body },
+    /// One copy of `body` per sounding note of `events`, summed, given voices by `alloc`
+    /// (RENDER-16). `glide` is a ref to a node outside the body, read where a slide starts. Both
+    /// are written only when they aren't the default, so a poly without them keeps its JSON and
+    /// hash (ID-11).
+    Poly {
+        events: String,
+        voices: u32,
+        #[serde(default, skip_serializing_if = "Alloc::is_default")]
+        alloc: Alloc,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        glide: Option<String>,
+        body: Body,
+    },
     /// The value of `input` one block ago. The only way to close a loop.
     Feedback { kind: Kind, input: String },
     /// Another module's export, by module key.
@@ -275,6 +286,69 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         frames: Vec<String>,
     },
+}
+
+/// How a `poly` gives notes voices (RENDER-16): each field is written only when it isn't the
+/// default, today's policy.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct Alloc {
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub mode: Mode,
+    /// A voice given a new note is reset; `false`: its gate falls for one sample instead, if it
+    /// was open, so envelopes start again from where they are.
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub retrigger: bool,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub steal: Steal,
+}
+
+impl Default for Alloc {
+    fn default() -> Alloc {
+        Alloc { mode: Mode::Poly, retrigger: true, steal: Steal::Oldest }
+    }
+}
+
+impl Alloc {
+    pub fn is_default(&self) -> bool {
+        *self == Alloc::default()
+    }
+}
+
+/// How many notes a `poly` plays at once.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    /// A voice for each note.
+    #[default]
+    Poly,
+    /// One voice: every note starts again, sliding from the last over the glide.
+    Mono,
+    /// One voice: a note that starts while another is held slides to it without starting again.
+    Legato,
+}
+
+/// Which sounding note stops when a note finds no free voice.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum Steal {
+    #[default]
+    Oldest,
+    /// The voice with the lowest peak over its last block; a tie goes to the oldest.
+    Quietest,
+    /// None: the new note isn't played.
+    None,
+}
+
+fn is_default<T: Default + PartialEq>(x: &T) -> bool {
+    *x == T::default()
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn is_yes(x: &bool) -> bool {
+    *x
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

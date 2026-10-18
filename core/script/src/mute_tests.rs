@@ -33,7 +33,7 @@ fn muted_is_a_track_option() {
         // Only when true: an IR without it keeps its bytes (ID-11).
         assert!(!serde_json::to_string(&off).unwrap().contains("muted"), "{opts}");
     }
-    assert_eq!(SDK_VERSION, "1.3.0", "additions to @m2/core (FMT-2): muted in 1.2.0, kernel settings in 1.3.0");
+    assert_eq!(SDK_VERSION, "1.4.0", "additions to @m2/core (FMT-2): muted in 1.2.0, kernel settings in 1.3.0, poly options in 1.4.0");
 }
 
 #[test]
