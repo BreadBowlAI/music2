@@ -72,6 +72,7 @@ use wasmtime::{Instance, Memory, ResourceLimiter, Store, TypedFunc};
 
 pub use cells::{CellAt, CellId, CellInfo, CellMap, CellSlots, CellTarget};
 pub use data::{decls, lane_kind};
+pub use audio::LiveInput;
 pub use engine::{Applied, CallbackStamp, Engine, Envelope, Heard, Msg, Retired};
 pub use event::{Event, Events};
 pub use m2_pool::{Counters, ENTRY_BUCKETS, Meter, Pool, Runner, Setup, Trip};
@@ -1861,6 +1862,11 @@ impl Pending {
         self.read == self.len
     }
 
+    /// Frames not yet handed out.
+    pub(crate) fn left(&self) -> usize {
+        self.len - self.read
+    }
+
     /// Take a block's frames; `runs` gives each its transport position, and `after` is where the
     /// transport is after the block. The position after a run's last frame is where the next frame
     /// plays: a loop's start after its end, never the end itself.
@@ -2735,6 +2741,34 @@ impl Renderer {
         }
     }
 
+    /// Hear `input` on audio lane `slot` (MON-8), or with None stop hearing on every lane: Ok with
+    /// what was heard before, to retire; Err with `input` back for a slot that isn't one of its
+    /// audio lanes. Only one lane hears at a time. Never allocates.
+    #[allow(clippy::type_complexity)]
+    pub fn hear(&mut self, slot: usize, input: Option<Arc<dyn LiveInput>>) -> Result<Option<Arc<dyn LiveInput>>, Option<Arc<dyn LiveInput>>> {
+        let lanes = &mut self.lanes.slots[..self.lanes.live];
+        if input.is_some() && !matches!(lanes.get(slot), Some(LaneSlot::Audio(Some(_)))) {
+            return Err(input);
+        }
+        let mut old = None;
+        for l in lanes.iter_mut() {
+            if let LaneSlot::Audio(Some(p)) = l
+                && p.hearing()
+            {
+                old = p.hear(None);
+            }
+        }
+        if let Some(LaneSlot::Audio(Some(p))) = lanes.get_mut(slot).filter(|_| input.is_some()) {
+            p.hear(input);
+        }
+        Ok(old)
+    }
+
+    /// Whether an audio lane hears a live input (MON-8).
+    pub fn hearing(&self) -> bool {
+        self.lanes.slots.iter().any(|l| matches!(l, LaneSlot::Audio(Some(p)) if p.hearing()))
+    }
+
     /// Live notes held, across every lane (MON-7).
     pub fn live_notes(&self) -> usize {
         self.lanes.slots.iter().map(|l| if let LaneSlot::Notes(Some(s)) = l { s.live_held() } else { 0 }).sum()
@@ -2797,6 +2831,7 @@ impl Renderer {
         !self.in_window()
             && self.active_voices() == 0
             && self.live_notes() == 0
+            && !self.hearing()
             && self.plugins_sleep()
             && !self.plan.graph.active().unwrap_or(true)
     }

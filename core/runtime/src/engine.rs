@@ -30,8 +30,10 @@
 //! Cell values are never messages (RENDER-28): each renderer reads its own cells' slots as it
 //! renders a block, after the block line's messages, and the engine stamps when it heard them.
 
+use std::sync::Arc;
+
 use crate::click::Click;
-use crate::{BLOCK, Cmd, LaneSwap, Leftovers, LiveEv, Pending, Renderer, Runner};
+use crate::{BLOCK, Cmd, LaneSwap, Leftovers, LiveEv, LiveInput, Pending, Renderer, Runner};
 
 /// A message and its sequence number, which [`Applied`] stamps report.
 pub struct Envelope {
@@ -67,6 +69,13 @@ pub enum Msg {
     /// silent meanwhile; the transport plays from the block after the bar. Applied at once, as a
     /// transport command is; a Play, a Stop, a seek or a hold cancels it.
     CountIn { beats: u32, frames_per_beat: f64 },
+    /// Hear a live input on audio lane `slot` of the renderer with this generation while a take
+    /// records (MON-8), or with None stop hearing it. In order behind activations, as `Live` is.
+    Hear {
+        generation: u64,
+        slot: u32,
+        input: Option<Arc<dyn LiveInput>>,
+    },
 }
 
 impl Msg {
@@ -81,6 +90,8 @@ pub enum Retired {
     Lane(LaneSwap),
     /// A plan's ghosts, ghost lanes and replaced renders, once its fade window is over.
     Nodes(Box<Leftovers>),
+    /// A live input no longer heard (MON-8), or one refused.
+    Input(Arc<dyn LiveInput>),
 }
 
 /// When a message took effect: the engine clock of the block it applied at, the callback that
@@ -239,6 +250,12 @@ impl Engine {
 
     pub fn clock(&self) -> u64 {
         self.clock
+    }
+
+    /// The engine clock of the next frame it hands out: [`Self::clock`] less what its last block
+    /// still holds. What an injected input stamps its frames by (RENDER-30a).
+    pub fn out_clock(&self) -> u64 {
+        self.clock.saturating_sub(self.out.left() as u64)
     }
 
     pub fn current(&self) -> Option<&Renderer> {
@@ -523,6 +540,21 @@ impl Engine {
                     _ => false,
                 };
                 self.refused_live += u64::from(!took);
+            }
+            Msg::Hear { generation, slot, input } => {
+                let back = match &mut self.current {
+                    // None stops hearing whatever plan plays.
+                    Some(r) if r.generation() == generation || input.is_none() => r.hear(slot as usize, input),
+                    _ => Err(input),
+                };
+                let (gone, refused) = match back {
+                    Ok(old) => (old, false),
+                    Err(input) => (input, true),
+                };
+                self.refused_live += u64::from(refused);
+                if let Some(i) = gone {
+                    self.retire_now(Retired::Input(i), retire);
+                }
             }
             Msg::Hold(true) => {
                 self.hold = true;

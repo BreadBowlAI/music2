@@ -561,6 +561,8 @@ impl Callback {
                     match env.msg {
                         EngineMsg::Activate { renderer } => self.retire(Gone::Engine(Retired::Renderer(renderer))),
                         EngineMsg::SwapLane { data, .. } => self.retire(Gone::Engine(Retired::Lane(data))),
+                        EngineMsg::Hear { input: Some(i), .. } => self.retire(Gone::Engine(Retired::Input(i))),
+                        EngineMsg::Hear { input: None, .. } => {}
                         EngineMsg::Transport(Cmd::Seek(_)) => self.seeks += 1,
                         EngineMsg::Transport(Cmd::Play | Cmd::Stop) => self.plays += 1,
                         EngineMsg::Transport(_) | EngineMsg::Panic | EngineMsg::Hold(_) | EngineMsg::Live { .. } => {}
@@ -637,6 +639,7 @@ impl Callback {
             Msg::Replace { live, .. } => Some(Gone::Live(live)),
             Msg::Engine(Envelope { msg: EngineMsg::Activate { renderer }, .. }) => Some(Gone::Engine(Retired::Renderer(renderer))),
             Msg::Engine(Envelope { msg: EngineMsg::SwapLane { data, .. }, .. }) => Some(Gone::Engine(Retired::Lane(data))),
+            Msg::Engine(Envelope { msg: EngineMsg::Hear { input: Some(i), .. }, .. }) => Some(Gone::Engine(Retired::Input(i))),
             Msg::Threads(h) => Some(Gone::Runner(h)),
             Msg::Engine(_) | Msg::Unload => None,
         }

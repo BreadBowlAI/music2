@@ -99,6 +99,49 @@ fn wav_to(file: &std::fs::File, channels: &[Vec<f32>], sample_rate: u32) -> Resu
     Ok(())
 }
 
+/// A live sound input the engine hears on an audio lane (MON-8, RENDER-30a): its frames at the
+/// engine's rate, numbered as they came, written by the input's callback. Read on the audio thread:
+/// neither call allocates, locks or waits.
+pub trait LiveInput: Send + Sync {
+    /// Frames written so far, and the last write's length (the input's buffer).
+    fn head(&self) -> (u64, u32);
+    /// Frames from number `at` into `out`, those written: how many. A frame gone is silence.
+    fn read(&self, at: u64, out: &mut [[f32; 2]]) -> usize;
+}
+
+/// An input heard on a lane: where its reader is.
+struct Hearing {
+    input: Arc<dyn LiveInput>,
+    at: Option<u64>,
+}
+
+impl Hearing {
+    /// Add this block of the input to `out` (channel-major, `channels × BLOCK`): about one input
+    /// buffer and one block behind the input, so a late callback still finds its frames. A reader
+    /// that falls further behind (the input's clock is faster) or ahead jumps back to that lag;
+    /// frames not there yet are silence.
+    fn add(&mut self, out: &mut [f32], channels: usize) {
+        let (head, buffer) = self.input.head();
+        let lag = buffer as u64 + BLOCK as u64;
+        let at = match self.at {
+            Some(a) if a <= head && head - a <= lag + 4 * (buffer as u64 + BLOCK as u64) => a,
+            _ => head.saturating_sub(lag),
+        };
+        let mut block = [[0.0f32; 2]; BLOCK];
+        let n = self.input.read(at, &mut block);
+        self.at = Some(at + n as u64);
+        for (f, x) in block.iter().enumerate() {
+            match channels {
+                1 => out[f] += 0.5 * (x[0] + x[1]),
+                _ => {
+                    out[f] += x[0];
+                    out[BLOCK + f] += x[1];
+                }
+            }
+        }
+    }
+}
+
 /// A clip rendered at the song's rate: one buffer per channel, from the clip's start.
 pub type RenderedClip = Vec<Vec<f32>>;
 
@@ -485,6 +528,10 @@ pub(crate) struct AudioPlayer {
     /// Frames since the swap.
     since: u32,
     decl: Declick,
+    /// The live input heard on this lane while a take records (MON-8): added to its block, so the
+    /// track's effects and fader play it. Only a player's engine is ever sent one, so no export
+    /// has it.
+    hearing: Option<Hearing>,
     /// This block, channel-major, `channels × BLOCK`.
     out: Box<[f32]>,
     /// `prev`'s side of the block, while it fades out.
@@ -494,7 +541,7 @@ pub(crate) struct AudioPlayer {
 impl AudioPlayer {
     pub(crate) fn new(lane: Arc<AudioLane>, sample_rate: f64) -> AudioPlayer {
         let out = vec![0.0; lane.channels * BLOCK].into_boxed_slice();
-        AudioPlayer { old: out.clone(), out, cur: lane, prev: None, shift: 0, since: 0, decl: Declick::new(sample_rate) }
+        AudioPlayer { old: out.clone(), out, cur: lane, prev: None, shift: 0, since: 0, decl: Declick::new(sample_rate), hearing: None }
     }
 
     /// This block, for `runs`. During a swap's window both renders play the same runs, `prev`
@@ -515,9 +562,25 @@ impl AudioPlayer {
                 }
             }
             self.since += BLOCK as u32;
-            return;
+        } else {
+            self.decl.process(&self.cur, runs, &mut self.out);
         }
-        self.decl.process(&self.cur, runs, &mut self.out);
+        if let Some(h) = &mut self.hearing {
+            h.add(&mut self.out, self.cur.channels);
+        }
+    }
+
+    /// Hear `input` on this lane from the next block, or stop hearing: what it heard before, to
+    /// retire. Never allocates.
+    pub(crate) fn hear(&mut self, input: Option<Arc<dyn LiveInput>>) -> Option<Arc<dyn LiveInput>> {
+        let old = self.hearing.take().map(|h| h.input);
+        self.hearing = input.map(|input| Hearing { input, at: None });
+        old
+    }
+
+    /// Whether it hears an input: the engine never idles then.
+    pub(crate) fn hearing(&self) -> bool {
+        self.hearing.is_some()
     }
 
     /// Work out on this thread what this block of `runs` reads that the ring doesn't hold: an
