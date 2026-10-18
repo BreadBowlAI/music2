@@ -29,7 +29,7 @@ whatever you pick up.
   ([kernel-abi.md](docs/kernel-abi.md): v0 refused by name, one import `m2.asset_read`, at most 3,999 sound parts
   a renderer). std 0.2.1, `@m2/core` 1.3.0. No existing render changed: 12 of 12 (2 new, the example's).
   `ci/check.sh --gates` passed at `69350c1`: every row, nothing passed only on a retry (1,580 Rust tests, 67/67
-  browser suites, 12 of 12 renders, the 7 gate runs; 43 minutes). Its first run failed one check of
+  browser suites, 12 of 12 renders, the 7 gate runs; 34 minutes). Its first run failed one check of
   `sound-stops`: the suite loaded std.wasm in Node without the new import; fixed (`69350c1`). Pictures:
   `~/m2-runs/app-shots/ab-sampler/`. Build notes `docs/designs/step9/build-notes-ab.md`; the plan `ab-plan.md`
   beside it. Owed: a review; the Mac's check, with G7f's run of the new layout (its footprint and address space).
