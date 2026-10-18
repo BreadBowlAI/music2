@@ -329,10 +329,10 @@ fn every_std_kernel_fits_its_memory_at_the_highest_rate() {
         };
         let id = &sig.id;
         let mut k = KernelInst::new(&pk, &node, id, 2, &inputs, RATE, 0).unwrap_or_else(|e| panic!("{id}: {e:#}"));
-        k.prewarm().unwrap_or_else(|e| panic!("{id}: {e:#}"));
-        k.process(BLOCK).unwrap_or_else(|e| panic!("{id}: {e:#}"));
-        k.reset().unwrap_or_else(|e| panic!("{id}: {e:#}"));
-        held.push((k.sandbox.size(), id.clone()));
+        k.prewarm(&mut []).unwrap_or_else(|e| panic!("{id}: {e:#}"));
+        k.process(&mut [], BLOCK).unwrap_or_else(|e| panic!("{id}: {e:#}"));
+        k.reset(&mut []).unwrap_or_else(|e| panic!("{id}: {e:#}"));
+        held.push((k.own.as_ref().unwrap().size(), id.clone()));
     }
     assert!(held.len() >= 20, "{held:?}");
     held.sort();
@@ -364,16 +364,16 @@ fn every_std_kernel_resets_in_a_sealed_sandbox() {
     assert!(ids.len() >= 20, "{ids:?}");
     for id in ids {
         let mut k = std_kernel(&pk, &id, SR as f64);
-        let sealed = k.sandbox.size();
+        let sealed = k.own.as_ref().unwrap().size();
         let play = |k: &mut KernelInst| -> Vec<u8> {
-            k.process(BLOCK).unwrap_or_else(|e| panic!("{id}: {e:#}"));
-            let p = k.ports();
+            k.process(&mut [], BLOCK).unwrap_or_else(|e| panic!("{id}: {e:#}"));
+            let p = k.ports(&mut []);
             p.outs.iter().flat_map(|&at| p.data[at..at + PORT_BYTES].to_vec()).collect()
         };
         let first = play(&mut k);
-        k.reset().unwrap_or_else(|e| panic!("{id}: its reset in a sealed sandbox: {e:#}"));
+        k.reset(&mut []).unwrap_or_else(|e| panic!("{id}: its reset in a sealed sandbox: {e:#}"));
         assert!(play(&mut k) == first, "{id}: a reset doesn't start over");
-        assert_eq!(k.sandbox.size(), sealed, "{id}: its memory grew");
+        assert_eq!(k.own.as_ref().unwrap().size(), sealed, "{id}: its memory grew");
     }
 }
 
@@ -402,7 +402,7 @@ fn play_state(sb: &mut sandbox::Sandbox, s: &sandbox::State, blocks: usize, x: i
 #[test]
 fn two_states_in_one_instance_play_independently() {
     let pk = std_packages();
-    let (module, prefix) = pk.module_for("std:delay").unwrap();
+    let (module, prefix, _) = pk.module_for("std:delay").unwrap();
     let born = |sb: &mut sandbox::Sandbox| sb.state(prefix, 4, 1, &[1; 5], 1, SR as f64).unwrap();
     let sound = |seed: usize| move |t: usize| ((t * (7 + seed)) as f32 * 0.01).sin() * if seed == 0 { 0.8 } else { 0.3 };
     let controls = [0.01, 0.5, 0.5];
@@ -720,26 +720,24 @@ fn a_sealed_sandbox_never_grows() {
         "k",
         json!([]),
     );
-    for layout in [packages::Layout::P2, packages::Layout::P1] {
-        let mut pk = PackageSet::laid_out(layout);
-        pk.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
-        pk.load(&dir).unwrap();
-        let mut r = Renderer::new(&check(&ir, &pk).unwrap(), &DataSet::empty(), &pk, SR).unwrap();
-        // Where the kernel's memory is and how big: what its store says, and what it kept.
-        let at = |r: &Renderer| {
-            let k = r.plan.graph.exec.iter().find_map(|e| match e {
-                Exec::Kernel(KernelNode { inst: Some(k), .. }) if k.name == "song/k" => Some(k),
-                _ => None,
-            });
-            let k = k.expect("the kernel");
-            (k.sandbox.memory_at(), k.sandbox.size())
-        };
-        let sealed = at(&r);
-        assert_eq!(sealed.0.0, sealed.0.1, "{layout:?}: it keeps its memory's address");
-        let e = r.render(0.01).map(drop).unwrap_err();
-        assert_eq!(format!("{e:#}"), "song/k ran out of memory: a sound may use up to 32 MB", "{layout:?}");
-        assert_eq!(at(&r), sealed, "{layout:?}: its memory didn't grow or move");
-    }
+    let mut pk = PackageSet::default();
+    pk.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
+    pk.load(&dir).unwrap();
+    let mut r = Renderer::new(&check(&ir, &pk).unwrap(), &DataSet::empty(), &pk, SR).unwrap();
+    // Where the kernel's memory is and how big: what its store says, and what it kept.
+    let at = |r: &Renderer| {
+        let k = r.plan.graph.exec.iter().find_map(|e| match e {
+            Exec::Kernel(KernelNode { inst: Some(k), .. }) if k.name == "song/k" => Some(k),
+            _ => None,
+        });
+        let k = k.expect("the kernel");
+        (k.own.as_ref().unwrap().memory_at(), k.own.as_ref().unwrap().size())
+    };
+    let sealed = at(&r);
+    assert_eq!(sealed.0.0, sealed.0.1, "it keeps its memory's address");
+    let e = r.render(0.01).map(drop).unwrap_err();
+    assert_eq!(format!("{e:#}"), "song/k ran out of memory: a sound may use up to 32 MB");
+    assert_eq!(at(&r), sealed, "its memory didn't grow or move");
     std::fs::remove_dir_all(dir).ok();
 }
 

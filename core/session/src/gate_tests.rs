@@ -497,3 +497,18 @@ fn compile_never_opens_an_asset() {
     let c = compile_sources(&project, &mut std_packages(), &Default::default(), None).unwrap_or_else(|d| panic!("{d:?}"));
     assert_eq!(c.problems.iter().map(|d| d.code).collect::<Vec<_>>(), ["asset.unpinned"]);
 }
+
+// RENDER-32: one sandbox a box (report §2.2). p50, the 50-track reference song, builds 202: one
+// for each kernel outside an instrument (152: the report counted 150, before std's master gained its
+// `stereo` and its gain), and one for each poly's voices (50), which share it. One a kernel state
+// was 6,060.
+#[test]
+fn p50_builds_202_sandboxes() {
+    let f = Fixture::new();
+    crate::reference::write(&f.0, &crate::reference::Reference::P50).unwrap();
+    let s = f.open();
+    let rev = s.accepted();
+    let boxes = rev.compiled.flat.nodes.iter().filter(|n| matches!(n.op, FOp::Kernel { .. } | FOp::Poly { .. })).count();
+    let r = Renderer::new(&rev.compiled.flat, &rev.compiled.data, &s.packages, rev.project.sample_rate()).unwrap();
+    assert_eq!((r.sandboxes(), boxes), (202, 202));
+}

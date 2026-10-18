@@ -2,8 +2,8 @@
 //! measured on the runtime itself, with no server and no device, and the store layout judged by a
 //! rule written down before anything was measured (RENDER-32).
 //!
-//! The app's layout is the owner's (`m2_runtime::packages::Layout::P2`: 32 MiB reserved per
-//! memory, bounds-checked). Its build and memory are measured once. Its block time is measured in 5
+//! The app's layout is one sandbox a box, each memory with wasmtime's 4 GiB reservation, unchecked
+//! (RENDER-32); "P1" below is the same layout now, printed only. Its build and memory are measured once. Its block time is measured in 5
 //! rounds of three renderers taking turns over the same music: the app's layout and step 7's first
 //! layout, P1 (4 GiB reserved per memory, unchecked), in this process, and S, HEAD `8aa301e`, one
 //! `Store` per renderer, in its runner's (`baseline`), which also times S's first build. No renderer
@@ -41,7 +41,6 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, bail};
 use m2_ir::{FNode, FOp};
 use m2_os::process::{self, Memory};
-use m2_runtime::packages::Layout;
 use m2_runtime::{BLOCK, Renderer, Transport};
 
 use crate::baseline::{Runner, wire::Heard};
@@ -359,7 +358,8 @@ pub fn store(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
 
     // Block time and the drop, in rounds: the app's layout and P1 here and S in its runner, in turns
     // over the same music, so what disturbs one disturbs the others alike (RENDER-32).
-    let p1 = crate::load_std_laid_out(Layout::P1)?;
+    // P1 is the app's layout now, one sandbox a box with wasmtime's 4 GiB: its side is printed only.
+    let p1 = crate::load_std()?;
     let (mut runs, mut heard): ([Vec<Vec<f64>>; 3], Vec<[Heard; 3]>) = Default::default();
     let mut peak = 0.0f32;
     let mut drops: [Vec<Dropped>; 2] = Default::default();

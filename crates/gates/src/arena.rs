@@ -3,8 +3,8 @@
 //!
 //! - **The callback, playing:** 30 s from `o.at` (3:00 for the recorded run, after a second of
 //!   warm-up) with no edit, every callback timed, in 5 rounds of three players taking turns over
-//!   the same music: the app's layout (`m2_runtime::packages::Layout::P2`) and step 7's first, P1,
-//!   in this process, and S, HEAD `8aa301e`, the commit before step 7, in its runner's
+//!   the same music: the app's layout (one sandbox a box, RENDER-32) and "P1", which is the same
+//!   layout now and printed only, in this process, and S, HEAD `8aa301e`, the commit before step 7, in its runner's
 //!   (`baseline`). No player takes two turns in a row, and each turn's first callbacks, which meet
 //!   the caches the player before left, are timed apart and not judged. Each round, the three play
 //!   the same bits, and not silence, which the gate checks. Every run prints its own record line (`callback-record …`, the app's layout's
@@ -29,7 +29,6 @@ use std::time::Instant;
 use anyhow::{Context, Result, anyhow};
 use m2_editor::Gestures;
 use m2_play::{Driver, Player};
-use m2_runtime::packages::Layout;
 use m2_runtime::{BLOCK, Basis, Keep, PackageSet, Renderer};
 
 use crate::baseline::{Runner, wire::Heard};
@@ -143,7 +142,8 @@ pub fn arena(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     );
     // The callback, playing, in rounds: the app's layout and P1 here, and S in its runner, in turns
     // over the same music (RENDER-32). One run's p99 varies by far more than the bound between runs.
-    let p1 = crate::load_std_laid_out(Layout::P1)?;
+    // P1 is the app's layout now, one sandbox a box with wasmtime's 4 GiB: its side is printed only.
+    let p1 = crate::load_std()?;
     let mut s = Runner::start(&lab.work)?;
     out.info("S", s.about());
     let per_second = song.rate as usize / FRAMES;

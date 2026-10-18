@@ -552,6 +552,7 @@ fn prewarming_keeps_kernel_memory_flat() {
         caps: &[Caps::FLOOR],
         owner: &owner,
         mode: m2_plugins::RenderMode::Offline,
+        pool: vec![],
     }
     .graph(&flat.nodes, &flat.order, false, &|_| Make::New(0), &HashMap::new())
     .unwrap();
