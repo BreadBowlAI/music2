@@ -1,0 +1,11 @@
+{
+  "m2preset": 1,
+  "name": "Soft",
+  "sound": "std:synth-pluck",
+  "values": {
+    "brightness": 1800,
+    "decay": 0.6,
+    "spread": 0.6,
+    "velSens": 0.6
+  }
+}

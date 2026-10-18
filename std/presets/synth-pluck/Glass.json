@@ -1,0 +1,11 @@
+{
+  "m2preset": 1,
+  "name": "Glass",
+  "sound": "std:synth-pluck",
+  "values": {
+    "brightness": 9000,
+    "decay": 0.3,
+    "spread": 0.95,
+    "velSens": 0.4
+  }
+}

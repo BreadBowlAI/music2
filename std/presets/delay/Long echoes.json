@@ -1,0 +1,10 @@
+{
+  "m2preset": 1,
+  "name": "Long echoes",
+  "sound": "std:delay",
+  "values": {
+    "feedback": 0.55,
+    "mix": 0.3,
+    "time": 0.5
+  }
+}

@@ -51,6 +51,8 @@ pub struct Control {
     /// Every declared control this value feeds, each `(component, slot)` once: several when one
     /// literal reaches several slots (`const g = frac(0.3)` given to `feedback` and `mix`).
     pub declared: Vec<Declared>,
+    /// The sites of the component instances' calls whose declared controls it feeds, each once.
+    pub(crate) calls: Vec<u32>,
     pub(crate) edit: Edit,
 }
 
@@ -223,6 +225,7 @@ fn control(rev: &Revision, sites: &HashMap<u32, &Site>, m: &Module, origin: &Ori
         written: !origin.arg.is_empty(),
         home: Home::Code,
         declared: declared(&rev.compiled, m, origin, unit).into_iter().collect(),
+        calls: origin.control.as_ref().and_then(|c| m.frames.get(c.frame as usize)).map(|f| f.site).into_iter().collect(),
         edit,
     })
 }
@@ -269,6 +272,11 @@ pub fn controls(s: &Session) -> Vec<Control> {
                     for d in c.declared {
                         if !k.declared.iter().any(|x| x.component == d.component && x.slot == d.slot) {
                             k.declared.push(d);
+                        }
+                    }
+                    for call in c.calls {
+                        if !k.calls.contains(&call) {
+                            k.calls.push(call);
                         }
                     }
                 }

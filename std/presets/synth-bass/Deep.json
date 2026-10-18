@@ -1,0 +1,12 @@
+{
+  "m2preset": 1,
+  "name": "Deep",
+  "sound": "std:synth-bass",
+  "values": {
+    "bite": 1.5,
+    "cutoff": 220,
+    "decay": 0.3,
+    "glide": 0.06,
+    "velSens": 0.3
+  }
+}
