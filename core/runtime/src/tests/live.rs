@@ -453,12 +453,7 @@ fn plugin_events_merge_as_a_stable_sort_did() {
         before.push(P::Param { time: f, id: 11, value: (f / 32) as f64 });
     }
     before.push(P::Param { time: 0, id: 10, value: 0.5 });
-    let time = |e: &P| match *e {
-        P::NoteOn { time, .. } | P::NoteOff { time, .. } | P::NoteChoke { time, .. } | P::Tuning { time, .. } | P::Param { time, .. } => {
-            time
-        }
-    };
-    before.sort_by_key(time);
+    before.sort_by_key(P::time);
     assert_eq!(out.iter().collect::<Vec<_>>(), before);
     assert_eq!(keys, [(5, 61), (7, 64)], "held: the notes that started and didn't end");
     // RENDER-10, RENDER-26a: what a plugin held when a panic reset it is choked and let go first,

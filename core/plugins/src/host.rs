@@ -232,6 +232,7 @@ pub(crate) union Raw {
     note: clap_event_note,
     expr: clap_event_note_expression,
     param: clap_event_param_value,
+    midi: clap_event_midi,
 }
 
 fn header(size: usize, time: u32, type_: u16) -> clap_event_header {
@@ -270,6 +271,9 @@ fn raw(e: &Event) -> Raw {
                 value,
             },
         },
+        Event::Midi { time, bytes } => {
+            Raw { midi: clap_event_midi { header: header(size_of::<clap_event_midi>(), time, CLAP_EVENT_MIDI), port_index: 0, data: bytes } }
+        }
     }
 }
 
@@ -300,6 +304,10 @@ pub(crate) unsafe fn decode(h: *const clap_event_header) -> Option<Event> {
         CLAP_EVENT_PARAM_VALUE => {
             let p = unsafe { &*(h as *const clap_event_param_value) };
             Some(Event::Param { time, id: p.param_id, value: p.value })
+        }
+        CLAP_EVENT_MIDI => {
+            let m = unsafe { &*(h as *const clap_event_midi) };
+            Some(Event::Midi { time, bytes: m.data })
         }
         _ => None,
     }

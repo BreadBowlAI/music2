@@ -246,6 +246,9 @@ pub enum Event {
     /// Tuning in semitones for one note (for pitches between keys).
     Tuning { time: u32, id: i32, key: i16, semitones: f64 },
     Param { time: u32, id: u32, value: f64 },
+    /// A MIDI message, sent as `CLAP_EVENT_MIDI` on the note port: the lane's pitch wheel and mod
+    /// wheel (RENDER-14's `Midi`).
+    Midi { time: u32, bytes: [u8; 3] },
 }
 
 impl Event {
@@ -255,7 +258,8 @@ impl Event {
             | Event::NoteOff { time, .. }
             | Event::NoteChoke { time, .. }
             | Event::Tuning { time, .. }
-            | Event::Param { time, .. } => time,
+            | Event::Param { time, .. }
+            | Event::Midi { time, .. } => time,
         }
     }
 }

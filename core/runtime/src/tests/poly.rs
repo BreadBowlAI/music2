@@ -1,9 +1,8 @@
 //! The `poly` op's allocator (RENDER-16): `mode`, `retrigger`, `steal` and `glide`, on any voice
 //! graph. The voice here is a probe that plays its note fields as sound (left: the pitch while the
 //! gate is open, right: the gate), so what these tests hold is the allocator's, whatever the voice.
-//! They port std's `notes/tests.rs` (`std:mono`), which they replace.
-
-use std::collections::HashSet;
+//! They port std's `notes/tests.rs` (`std:mono`), which they replace. And the lane's wheels
+//! (RENDER-14's `Midi`): the bend on every voice's pitch, the mod wheel a note field.
 
 use super::live::{Rig, at_bpm, with_notes};
 use super::*;
@@ -48,7 +47,11 @@ fn packages() -> PackageSet {
 /// (if any) the cell `gl` of `glide` seconds. The probe's left is the pitch times the gate, or the
 /// velocity times the gate when `velocity`.
 fn probed(opts: Value, glide: f64, velocity: bool) -> Flat {
-    let field = if velocity { "velocity" } else { "pitch" };
+    probed_field(opts, glide, if velocity { "velocity" } else { "pitch" })
+}
+
+/// [`probed`], the probe's left `field` times the gate.
+fn probed_field(opts: Value, glide: f64, field: &str) -> Flat {
     let mut v = json!({"id": "v", "op": "poly", "events": "n", "voices": 1, "body": {"out": "o", "nodes": [
         {"id": "f", "op": "lane", "lane": field},
         {"id": "g", "op": "lane", "lane": "gate"},
@@ -216,22 +219,28 @@ fn steal_none_drops_the_note() {
     assert_eq!(third_note("none"), 70.0 + 40.0);
 }
 
-/// A rig playing `f` over `data` from 0 for `frames`, with `next` activated at `edit`.
-fn edited(f: &Flat, data: &DataSet, frames: usize, edit: usize, next: &Flat) -> (Vec<[f32; 2]>, Rig) {
-    let pk = packages();
-    let mut r = Renderer::prepare(f, data, &pk, SR, &mut audio::Cache::default(), &m2_plugins::Owner::discard(), Basis::Fresh).unwrap();
+/// A live engine playing `f` over `data` from 0, and its renderer's generation.
+fn live_rig(f: &Flat, data: &DataSet) -> (Rig, u64) {
+    let mut r = Renderer::prepare(f, data, &packages(), SR, &mut audio::Cache::default(), &m2_plugins::Owner::discard(), Basis::Fresh).unwrap();
     r.set_strict(false);
     r.set_transport(Transport::new(0, false));
+    let g = r.generation();
     let mut rig = Rig::of(f, data, r);
     rig.cmd(Cmd::Play);
-    let mut out = rig.run(edit);
-    let (old, old_data, info) = rig.last.as_ref().unwrap();
-    let cont = Continues::named(old, next);
-    let restarts = HashSet::new();
-    let keep = Keep { old, old_data, info, cont: &cont, restarts: &restarts };
-    let mut r = Renderer::prepare(next, data, &pk, SR, &mut audio::Cache::default(), &m2_plugins::Owner::discard(), Basis::Keep(keep)).unwrap();
-    r.set_strict(false);
+    (rig, g)
+}
+
+/// `next` activated in `rig`, prepared against what it plays: a pool of the same shape moves whole.
+fn activate(rig: &mut Rig, next: &Flat, data: &DataSet) {
+    let r = rig.prepare(next, data, &packages());
     rig.send(Msg::Activate { renderer: Box::new(r) });
+}
+
+/// A rig playing `f` over `data` from 0 for `frames`, with `next` activated at `edit`.
+fn edited(f: &Flat, data: &DataSet, frames: usize, edit: usize, next: &Flat) -> (Vec<[f32; 2]>, Rig) {
+    let (mut rig, _) = live_rig(f, data);
+    let mut out = rig.run(edit);
+    activate(&mut rig, next, data);
     out.extend(rig.run(frames - edit));
     (out, rig)
 }
@@ -276,4 +285,85 @@ fn a_mono_pool_moves_whole_across_an_activation() {
     let (_, rig) = edited(&f, &data, frames, at(0.75), &mono);
     let s = rig.e.current().unwrap().stats().clone();
     assert_eq!(s.fresh, Count { polys: 1, ..Count::default() }, "{s:?}");
+}
+
+/// A wheel moved on the notes lane of the plan `g`, by source 1.
+fn wheel(g: u64, bytes: [u8; 3]) -> Msg {
+    Msg::Live { generation: g, slot: 0, ev: LiveEv::Midi { source: 1, bytes } }
+}
+
+/// Whether the probe's left is `v` on every frame of `out`.
+fn all(out: &[[f32; 2]], v: f32) -> bool {
+    out.iter().all(|f| f[0] == v)
+}
+
+// RENDER-14, D8: a live pitch bend moves the pitch of every voice its lane plays, 2 semitones at
+// either end, on any channel, from the next block line; centred, each pitch is its note's again.
+// A legato pool's pitch, slides and all, hears it the same way.
+#[test]
+fn a_bend_reaches_every_voice_in_its_lane() {
+    let two = probed(json!({"voices": 2}), 0.0, false);
+    let (mut rig, g) = live_rig(&two, &notes(&[(60.0, 0.0, 4.0, 0.8), (64.0, 0.0, 4.0, 0.8)]));
+    assert!(all(&rig.run(8 * BLOCK)[BLOCK..], 124.0), "two voices: 60 and 64");
+    rig.send(wheel(g, [0xE0, 0x7F, 0x7F]));
+    assert!(all(&rig.run(8 * BLOCK), 128.0), "each 2 semitones up, from the block line");
+    rig.send(wheel(g, [0xE5, 0, 0]));
+    assert!(all(&rig.run(8 * BLOCK), 120.0), "and down, on channel 6");
+    rig.send(wheel(g, [0xE0, 0, 0x40]));
+    assert!(all(&rig.run(8 * BLOCK), 124.0), "centred");
+    // Legato, through a slide: each frame the pitch it plays unbent, plus 2.
+    let data = notes(&[(60.0, 0.0, 1.0, 0.8), (64.0, 0.5, 1.0, 0.8)]);
+    let plain = play(&legato(0.01), &data, 2.0);
+    let (mut rig, g) = live_rig(&legato(0.01), &data);
+    rig.send(wheel(g, [0xE0, 0x7F, 0x7F]));
+    let bent = rig.run(at(2.0));
+    let want: Vec<f32> = plain.iter().map(|f| if f[1] == 1.0 { f[0] + 2.0 } else { 0.0 }).collect();
+    assert!(bent.iter().map(|f| f[0]).eq(want), "the pool's pitch, bent");
+    assert!(plain[at(0.5)..at(0.5) + 480].windows(2).any(|w| w[0][0] != w[1][0]), "it slides");
+}
+
+// RENDER-14, D8: the mod wheel is a note field, 0 to 1, the same in every voice of its lane, from
+// the next block line and on any channel; CC 121 (reset all controllers) puts it back at 0. In a
+// poly of voices and in a legato pool.
+#[test]
+fn the_mod_wheel_is_a_note_field() {
+    // Two notes: in a poly, two voices, each hearing the wheel; legato, one.
+    for (opts, voices) in [(json!({"voices": 2}), 2.0), (json!({"alloc": {"mode": "legato", "retrigger": false}}), 1.0)] {
+        let f = probed_field(opts, 0.0, "modWheel");
+        let (mut rig, g) = live_rig(&f, &notes(&[(60.0, 0.0, 8.0, 0.8), (64.0, 0.0, 8.0, 0.8)]));
+        assert!(all(&rig.run(4 * BLOCK), 0.0), "at rest");
+        rig.send(wheel(g, [0xB0, 1, 127]));
+        assert!(all(&rig.run(4 * BLOCK), voices), "all the way up, in each voice");
+        rig.send(wheel(g, [0xB3, 1, 64]));
+        assert!(all(&rig.run(4 * BLOCK), voices * (64.0 / 127.0)), "halfway, on channel 4");
+        rig.send(wheel(g, [0xB0, 121, 0]));
+        assert!(all(&rig.run(4 * BLOCK), 0.0), "reset");
+    }
+}
+
+// RENDER-14, RENDER-16, RENDER-10: a lane's wheels live in its pool, as its notes do. A pool moved
+// whole into the next plan keeps the bend; a new pool hears the lane's bend at its first block; a
+// panic resets the pool, and the lane is back at rest.
+#[test]
+fn bend_and_wheel_reset_with_the_pool() {
+    let f = legato(0.0);
+    let data = notes(&[(60.0, 0.0, 1.0, 0.8), (60.0, 1.25, 1.0, 0.8), (60.0, 2.5, 1.0, 0.8)]);
+    let (mut rig, g) = live_rig(&f, &data);
+    rig.send(wheel(g, [0xE0, 0x7F, 0x7F]));
+    rig.send(wheel(g, [0xB0, 1, 127]));
+    assert!(all(&rig.run(at(0.5)), 62.0));
+    assert_eq!(rig.e.status().wheels, 1, "one lane's wheels are away from rest");
+    activate(&mut rig, &f, &data);
+    let out = rig.run(at(0.5));
+    assert_eq!(rig.e.current().unwrap().stats().kept.polys, 1);
+    assert!(all(&out, 62.0), "kept with the pool");
+    let mono = probed(json!({"alloc": {"mode": "mono", "retrigger": false}}), 0.0, false);
+    activate(&mut rig, &mono, &data);
+    let out = rig.run(at(1.0));
+    assert_eq!(rig.e.current().unwrap().stats().fresh.polys, 1, "a new pool");
+    assert!(all(&out[out.len() - at(0.5)..], 62.0), "its next note hears the lane's bend");
+    rig.send(Msg::Panic);
+    let out = rig.run(at(1.0));
+    assert_eq!(rig.e.status().wheels, 0, "the lane is at rest");
+    assert!(all(&out[out.len() - at(0.5)..], 60.0), "and so is the pool");
 }

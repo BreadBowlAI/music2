@@ -30,15 +30,18 @@ pub enum NoteField {
     Velocity,
     Pressure,
     Timbre,
+    /// The lane's mod wheel, 0 to 1, the same for every voice (RENDER-14's `Midi`, from live input).
+    ModWheel,
 }
 
 impl NoteField {
-    pub const ALL: [(&'static str, NoteField); 5] = [
+    pub const ALL: [(&'static str, NoteField); 6] = [
         ("pitch", NoteField::Pitch),
         ("gate", NoteField::Gate),
         ("velocity", NoteField::Velocity),
         ("pressure", NoteField::Pressure),
         ("timbre", NoteField::Timbre),
+        ("modWheel", NoteField::ModWheel),
     ];
 
     pub fn kind(self) -> Kind {
@@ -251,7 +254,7 @@ impl<'a> Scope<'a> for VoiceScope<'a, '_> {
         let (_, f) = NoteField::ALL
             .iter()
             .find(|(n, _)| *n == lane)
-            .ok_or_else(|| format!("inside poly, lanes are note fields (pitch, gate, velocity, pressure, timbre), not `{lane}`"))?;
+            .ok_or_else(|| format!("inside poly, lanes are note fields (pitch, gate, velocity, pressure, timbre, modWheel), not `{lane}`"))?;
         Ok((FOp::NoteField(*f), f.kind()))
     }
 

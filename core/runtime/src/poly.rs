@@ -1,6 +1,7 @@
 //! The `poly` op's allocator (RENDER-16): which voice a note gets, as `steal` says, and in
 //! `"mono"` and `"legato"` the one voice's pitch, gate and velocity at every frame, as std's
-//! `std:mono` kernel played them, kept by note id. Fixed sizes: nothing here allocates once built.
+//! `std:mono` kernel played them, kept by note id; and the lane's wheels, as its voices hear them.
+//! Fixed sizes: nothing here allocates once built.
 
 use m2_ir::{Alloc, Mode, Steal};
 
@@ -12,6 +13,37 @@ const HELD: usize = 8;
 
 /// The longest slide, in seconds.
 const GLIDE_MAX: f32 = 10.0;
+
+/// The bend at the pitch wheel's ends, in semitones (General MIDI's).
+pub(crate) const BEND_RANGE: f32 = 2.0;
+
+/// A lane's pitch wheel and mod wheel as its voices hear them (RENDER-14's `Midi`, D8 of track pm):
+/// the bend in semitones, added to every voice's pitch, and the mod wheel, 0 to 1, a note field.
+/// Kept in the pool, and reset with it.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Wheels {
+    pub(crate) bend: f32,
+    pub(crate) wheel: f32,
+}
+
+impl Wheels {
+    /// Take a block's wheel events: the latest of each holds for the whole block, as they come at
+    /// its first frame. A bend at either end is exactly [`BEND_RANGE`]; centred, exactly 0.
+    pub(crate) fn read(&mut self, events: &[Event]) {
+        for e in events {
+            let Event::Midi { bytes: [status, d1, d2], .. } = *e else { continue };
+            match (status & 0xF0, d1) {
+                (0xE0, _) => {
+                    let v = (u16::from(d1 & 0x7F) | u16::from(d2 & 0x7F) << 7) as f32 - 8192.0;
+                    self.bend = BEND_RANGE * v / if v < 0.0 { 8192.0 } else { 8191.0 };
+                }
+                (0xB0, 1) => self.wheel = f32::from(d2 & 0x7F) / 127.0,
+                (0xB0, 121) => *self = Wheels::default(),
+                _ => {}
+            }
+        }
+    }
+}
 
 /// The voice a note starting at engine sample `t` gets, or none (`steal: "none"` and every voice
 /// busy): a free voice, else the one `steal` names. A voice given a note this block is taken last.

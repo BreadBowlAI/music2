@@ -469,11 +469,11 @@ struct VoiceNote {
 }
 
 /// What a voice's note fields read: its note, or in a one-note poly (`"mono"`, `"legato"`) the
-/// pool's pitch, gate and velocity at each frame of the block.
+/// pool's pitch, gate and velocity at each frame of the block; and its lane's wheels.
 #[derive(Clone, Copy)]
 enum Voiced<'a> {
-    Note(VoiceNote),
-    Cv(&'a poly::Cv),
+    Note(VoiceNote, poly::Wheels),
+    Cv(&'a poly::Cv, poly::Wheels),
 }
 
 struct VoiceSlot {
@@ -507,6 +507,8 @@ struct VoicePool {
     alloc: Alloc,
     /// `"mono"` and `"legato"`: the one note at a time its one voice plays.
     mono: Option<Box<poly::Mono>>,
+    /// Its lane's pitch wheel and mod wheel, as the lane last sent them: reset with the pool.
+    wheels: poly::Wheels,
     /// Its voices' kernel states, one sandbox for each package they use (RENDER-32): born with the
     /// pool, sealed, and dropped with it.
     sandboxes: Vec<Sandbox>,
@@ -661,6 +663,10 @@ fn plugin_events(
                 out.push(P::NoteOff { time: frame - lo as u32, id: id as i32, key });
                 (offs, last) = (offs + 1, Some(frame - lo as u32));
             }
+        }
+        // The lane's wheels, as CLAP MIDI (D8 of track pm).
+        Event::Midi { frame, bytes } => {
+            out.push(P::Midi { time: frame - lo as u32, bytes });
         }
         _ => {}
     };
@@ -1122,7 +1128,7 @@ impl Builder<'_> {
                             sb.seal().with_context(|| n.name.clone())?;
                         }
                         let mono = (alloc.mode != Mode::Poly).then(|| Box::new(poly::Mono::new(self.sample_rate)));
-                        Some(Box::new(VoicePool { voices: slots, alloc: *alloc, mono, sandboxes, born: 0, shape, stopped: false }))
+                        Some(Box::new(VoicePool { voices: slots, alloc: *alloc, mono, wheels: poly::Wheels::default(), sandboxes, born: 0, shape, stopped: false }))
                     }
                     _ => None,
                 };
@@ -1201,11 +1207,12 @@ impl Builder<'_> {
         // a NoteOff for every note it holds, a NoteOff for every note it lets go, and a NoteOn and
         // a Tuning for every note it starts again after an export, as many as its lane's room holds
         // or the node it took its instance from held.
-        // Live notes too (MON-7): as many more held, and a NoteOn and a Tuning for each struck.
+        // Live notes too (MON-7): as many more held, and a NoteOn and a Tuning for each struck; and
+        // the lane's wheels.
         let caps = notes.map_or(Caps::default(), |s| self.caps(s));
         let held = |c: Caps| c.sounding + 2 * c.ons + 8 + sched::LIVE_ROOM;
         let held = held(caps).max(room.map_or(0, held));
-        let events = caps.events() + caps.ons + 2 * sched::LIVE_ROOM + (BLOCK / PARAM_STEP) * params.len() + 8 + 5 * held;
+        let events = caps.events() + caps.ons + 2 * sched::LIVE_ROOM + sched::WHEELS + (BLOCK / PARAM_STEP) * params.len() + 8 + 5 * held;
         Ok(PluginNode {
             name: n.name.clone(),
             inst,
@@ -1389,20 +1396,24 @@ fn step<R: Reads>(
         }
         Exec::NoteField(field) => {
             let o = &mut out[0][seg.range(0)];
-            match note.expect("note fields only run in voices") {
-                Voiced::Cv(cv) => {
+            let voiced = note.expect("note fields only run in voices");
+            let (Voiced::Cv(_, wheels) | Voiced::Note(_, wheels)) = voiced;
+            match voiced {
+                Voiced::Cv(cv, _) => {
                     let at = seg.off..seg.off + n;
                     match field {
                         NoteField::Pitch => o.copy_from_slice(&cv.pitch[at]),
                         NoteField::Gate => o.copy_from_slice(&cv.gate[at]),
                         NoteField::Velocity => o.copy_from_slice(&cv.velocity[at]),
                         NoteField::Pressure | NoteField::Timbre => o.fill(0.0),
+                        NoteField::ModWheel => o.fill(wheels.wheel),
                     }
                 }
-                Voiced::Note(note) => match field {
+                Voiced::Note(note, _) => match field {
                     NoteField::Pitch => o.fill(note.pitch),
                     NoteField::Velocity => o.fill(note.velocity),
                     NoteField::Pressure | NoteField::Timbre => o.fill(0.0),
+                    NoteField::ModWheel => o.fill(wheels.wheel),
                     NoteField::Gate => {
                         // Open from the note's On until its Off, on the engine clock (RENDER-13).
                         for (k, x) in o.iter_mut().enumerate() {
@@ -1411,6 +1422,11 @@ fn step<R: Reads>(
                         }
                     }
                 },
+            }
+            // The lane's bend, on top of the note's pitch and its slide. Centred, nothing is added:
+            // the pitch is the note's, bit for bit.
+            if *field == NoteField::Pitch && wheels.bend != 0.0 {
+                o.iter_mut().for_each(|x| *x += wheels.bend);
             }
             Ok(())
         }
@@ -1830,6 +1846,7 @@ impl PolyNode {
             if let Some(m) = &mut pool.mono {
                 m.reset();
             }
+            pool.wheels = poly::Wheels::default();
         }
         Ok(())
     }
@@ -1845,8 +1862,11 @@ impl PolyNode {
             out.fill(0.0);
             return Ok(());
         };
-        let VoicePool { voices, born, sandboxes, alloc, mono, .. } = pool;
+        let VoicePool { voices, born, sandboxes, alloc, mono, wheels, .. } = pool;
         let alloc = *alloc;
+        // The lane's wheels, for the whole block: they come at its first frame (D8).
+        wheels.read(events);
+        let wheels = *wheels;
         out.fill(0.0);
         let out_ch = out.len() / BLOCK;
         let glide = glide.map(|g| &outer.buf(g.node, g.port)[..BLOCK]);
@@ -1880,7 +1900,7 @@ impl PolyNode {
             for &f in &m.starts[..m.n_starts] {
                 let f = f as usize;
                 if f > at {
-                    segment(v, Seg { off: at, n: f - at }, Voiced::Cv(&m.cv), &mut peak, out, sandboxes)?;
+                    segment(v, Seg { off: at, n: f - at }, Voiced::Cv(&m.cv, wheels), &mut peak, out, sandboxes)?;
                     v.dirty = true;
                 }
                 if v.dirty {
@@ -1889,7 +1909,7 @@ impl PolyNode {
                 }
                 at = f;
             }
-            segment(v, Seg { off: at, n: BLOCK - at }, Voiced::Cv(&m.cv), &mut peak, out, sandboxes)?;
+            segment(v, Seg { off: at, n: BLOCK - at }, Voiced::Cv(&m.cv, wheels), &mut peak, out, sandboxes)?;
             v.dirty = true;
             v.last_peak = peak;
             return Ok(());
@@ -1954,7 +1974,7 @@ impl PolyNode {
                 if let Some(c) = current
                     && off > at
                 {
-                    segment(v, Seg { off: at, n: off - at }, Voiced::Note(c), &mut peak, out, sandboxes)?;
+                    segment(v, Seg { off: at, n: off - at }, Voiced::Note(c, wheels), &mut peak, out, sandboxes)?;
                 }
                 if alloc.retrigger {
                     if v.dirty {
@@ -1974,7 +1994,7 @@ impl PolyNode {
                 at = off;
             }
             if let Some(c) = current {
-                segment(v, Seg { off: at, n: BLOCK - at }, Voiced::Note(c), &mut peak, out, sandboxes)?;
+                segment(v, Seg { off: at, n: BLOCK - at }, Voiced::Note(c, wheels), &mut peak, out, sandboxes)?;
             }
             v.last_peak = peak;
             if let Some(n) = v.note
@@ -2870,10 +2890,10 @@ impl Renderer {
         self.lanes.slots.iter().map(|l| if let LaneSlot::Notes(Some(s)) = l { s.held() } else { 0 }).sum()
     }
 
-    /// A live note's On or Off, or its source's release (MON-7), for lane `slot`: its consumers get
-    /// it at the next block's first frame. A release reaches every lane, whatever its slot. False,
-    /// and nothing taken, for a slot that isn't one of its notes lanes, or a pitch outside 0 to 127
-    /// or a velocity outside 0 to 1 (R2). Never allocates.
+    /// A live note's On or Off, a wheel, or its source's release (MON-7), for lane `slot`: its
+    /// consumers get it at the next block's first frame. A release reaches every lane, whatever its
+    /// slot. False, and nothing taken, for a slot that isn't one of its notes lanes, a pitch outside
+    /// 0 to 127 or a velocity outside 0 to 1 (R2), or bytes that aren't a wheel. Never allocates.
     pub fn live(&mut self, slot: usize, ev: LiveEv) -> bool {
         let (lanes, next) = (&mut self.lanes.slots[..self.lanes.live], &mut self.next_note);
         match ev {
@@ -2886,6 +2906,7 @@ impl Renderer {
                 true
             }
             LiveEv::On { pitch, velocity, .. } if !(0.0..=127.0).contains(&pitch) || !(0.0..=1.0).contains(&velocity) => false,
+            LiveEv::Midi { bytes, .. } if !sched::is_wheel(bytes) => false,
             _ => match lanes.get_mut(slot) {
                 Some(LaneSlot::Notes(Some(s))) => {
                     s.live(ev, next);
@@ -2927,6 +2948,17 @@ impl Renderer {
     /// Live notes held, across every lane (MON-7).
     pub fn live_notes(&self) -> usize {
         self.lanes.slots.iter().map(|l| if let LaneSlot::Notes(Some(s)) = l { s.live_held() } else { 0 }).sum()
+    }
+
+    /// Lanes whose pitch wheel or mod wheel live input left away from rest.
+    pub fn live_wheels(&self) -> usize {
+        self.lanes.slots.iter().filter(|l| matches!(l, LaneSlot::Notes(Some(s)) if s.wheels_moved())).count()
+    }
+
+    /// Lane `slot`'s events in the last block (tests).
+    #[cfg(test)]
+    pub(crate) fn lane_events(&self, slot: usize) -> &[Event] {
+        self.lanes.slots[slot].events()
     }
 
     /// Whether every voice with an open gate plays a note its scheduler holds: a gated voice
@@ -2972,6 +3004,12 @@ impl Renderer {
                 && p.inst.as_ref().is_some_and(|i| i.take_lent())
             {
                 p.again = true;
+            }
+        }
+        // An export put a borrowed plugin's wheels at rest: each lane's are sent again.
+        for l in &mut self.lanes.slots {
+            if let LaneSlot::Notes(Some(s)) = l {
+                s.resend_wheels();
             }
         }
     }

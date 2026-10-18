@@ -150,6 +150,8 @@ pub struct Status {
     pub dropped_ons: u32,
     /// Live notes held (MON-7).
     pub live: u32,
+    /// Lanes whose pitch wheel or mod wheel live input left away from rest.
+    pub wheels: u32,
     /// Held for an export: nothing was processed since its fade out ended, and nothing is until a
     /// resume (RENDER-1).
     pub held: bool,
@@ -347,6 +349,7 @@ impl Engine {
                 loop_refused: r.transport().loop_refused(),
                 dropped_ons: r.dropped_ons(),
                 live: r.live_notes() as u32,
+                wheels: r.live_wheels() as u32,
                 held: self.is_held(),
             },
             None => Status { pos: self.pos, seconds, held: self.is_held(), ..Status::default() },
@@ -536,7 +539,8 @@ impl Engine {
             }
             Msg::Live { generation, slot, ev } => {
                 // Held for an export, nothing renders: an On would sound only once it ends, so it is
-                // refused. An Off or a release waits in its table for the resume (M4).
+                // refused. An Off or a release waits in its table for the resume (M4), and a wheel in
+                // its slot: refused, one let go would stay bent.
                 let late = self.hold && matches!(ev, LiveEv::On { .. });
                 let took = match &mut self.current {
                     Some(r) if r.generation() == generation && !late => r.live(slot as usize, ev),

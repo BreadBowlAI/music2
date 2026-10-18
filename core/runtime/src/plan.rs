@@ -676,6 +676,10 @@ impl Renderer {
                 // The small one goes back with `old`, into the empty slot the first swap left.
                 std::mem::swap(&mut old.lanes.slots[from], &mut slot);
             }
+            // A new consumer of the lane hears its wheels where they are (D8 of track pm).
+            if let LaneSlot::Notes(Some(s)) = &mut self.lanes.slots[to] {
+                s.resend_wheels();
+            }
         }
         self.plan.cells.carry(&self.plan.graph, &old.plan.cells, &e.cells, &e.voice_cells);
         // A window overlay with no new site keeps its old site's gain: a track muted, then deleted
